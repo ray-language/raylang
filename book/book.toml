@@ -1,0 +1,16 @@
+[book]
+title = "Construyendo raylang"
+authors = ["Roberto Ayala"]
+description = "El diario de construir un lenguaje de programación desde cero, fase por fase."
+language = "es"
+src = "src"
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/"
+edit-url-template = ""
+
+[output.html.fold]
+enable = true
+level = 1

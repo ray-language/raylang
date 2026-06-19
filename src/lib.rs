@@ -1,11 +1,12 @@
 //! raylang — la librería del compilador/intérprete.
 //!
-//! Aquí viven las fases del pipeline (DESIGN.md §2). De momento solo el front-end
-//! empieza a tomar forma:
+//! Fases del pipeline (DESIGN.md §2). Front-end en construcción:
 //!
-//!   fuente → [lexer] → tokens → … (el resto de fases vendrá después)
+//!   fuente → [lexer] → tokens → [parser] → AST → … (checker e intérprete vendrán después)
 //!
-//! El binario (`src/main.rs`) será un cliente delgado de esta librería.
+//! El binario (`src/main.rs`) es un cliente delgado de esta librería.
 
+pub mod ast;
 pub mod lexer;
+pub mod parser;
 pub mod token;

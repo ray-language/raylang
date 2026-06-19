@@ -21,3 +21,9 @@
 - [Bytecode y la pila](m2/bytecode-y-pila.md)
 - [Control de flujo](m2/control-de-flujo.md)
 - [Variables y llamadas](m2/variables-y-llamadas.md)
+
+# M3 — Datos compuestos
+
+- [Datos compuestos](m3/intro.md)
+- [Arreglos](m3/arreglos.md)
+- [Structs](m3/structs.md)

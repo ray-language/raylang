@@ -22,6 +22,7 @@
 | **Tooling de editor** (coloreado / LSP) | No | Front-end (reutiliza el checker) | coloreado ✅ ya / LSP M8 | 🔧 parcial |
 | **Anotaciones** (`@test`, `@derive`, …) | No (solo reservar `@`) | Parser + fase que las consume | integradas M5–M7 / macros lejano | 📌 dirección fijada |
 | **API de runtime / I/O** (`args`, `input`, `env`) | No | Builtins / stdlib | input pronto / argv con arreglos (M3), stdlib M7 | 📌 dirección fijada |
+| **Optimización de la VM** | No | `bytecode`/`compiler`/`vm` | continuo, tras M2 | 🚀 hoja de ruta de rendimiento |
 
 ---
 
@@ -233,6 +234,36 @@ Superficie prevista (se declararían como `@builtin`, ver §9):
 
 **Impacto en el diseño actual:** ninguno; es puramente aditivo (más builtins). Solo
 fija la decisión de mantener `main` sin parámetros.
+
+## 11. Optimización de la VM
+
+**Línea base (M2):** la VM corre ~3x más rápido que el intérprete en `fib(32)`
+(`benchmarks/bench.sh`), con mucha menos varianza. El ~3x es el techo de la
+arquitectura *actual*, no de la idea: ambos motores comparten el mismo `Value` (que
+se clona) y la misma `apply_binary`. Estas optimizaciones, de mayor a menor impacto
+esperado, llevarían la VM bastante más allá. Medir cada cambio con el benchmark.
+
+- **Evitar clones de `Value`** (victoria fácil). Hoy `GetLocal` y `Constant` hacen
+  `.clone()`. Para `int/float/bool` (que son `Copy`) el clon es barato, pero para
+  `string` copia el `String` entero. Pasar a un `Value` con strings compartidos
+  (`Rc<str>`) abarata el clon a incrementar un contador.
+- **Locales en la pila de operandos** (estilo clox). Hoy las locales viven en un
+  `Vec` aparte por marco. Ponerlas en la propia pila de operandos (con un *base
+  pointer* por marco) evita una indirección y un arreglo extra por llamada.
+- **Despacho más rápido.** El bucle hace `match` sobre `OpCode` clonado por
+  instrucción. Opciones: no clonar la instrucción (resolver el préstamo de otra
+  forma), *direct threading* / *computed goto* (no disponible en Rust estable de
+  forma directa; se aproxima con un `match` bien ordenado o tablas de saltos).
+- **Bytecode empaquetado en bytes.** Pasar de `Vec<OpCode>` (un enum por
+  instrucción) a bytes mejora la densidad de caché —el sentido original de
+  "bytecode". Cuesta legibilidad; es una optimización tardía.
+- **Constantes deduplicadas.** `add_constant` hoy siempre agrega; deduplicar
+  reduce la tabla y mejora la localidad.
+- **Peephole / plegado de constantes** en el compilador (`1 + 2` → `3`), e
+  *inline caching* para llamadas. Más avanzado.
+
+**Impacto en el diseño:** ninguno en el lenguaje; es trabajo interno de la VM. No
+bloquea nada y se hace de forma incremental, midiendo con `benchmarks/`.
 
 ---
 

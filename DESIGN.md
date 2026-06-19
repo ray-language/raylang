@@ -290,6 +290,9 @@ Registradas para no construir nada que las bloquee:
 ## 11. Decisiones pendientes (menores; las cerramos al llegar)
 
 - ¿`main` obligatoria, o permitir top-level? → propuesta: `main` obligatoria.
+- Argumentos de CLI / I/O: **no** se meten en la firma de `main`; se exponen por
+  funciones de la API de runtime (`args()`, `input()`, `env()`, stderr), estilo
+  Go/Python. Ver `IDEAS.md` §10.
 - `int / int` → entera truncada; `float / float` → flotante. Mezcla = error.
 - `string + string` (concatenación) → sí, en M7 con la stdlib; en M1 solo se
   imprime.

@@ -21,6 +21,7 @@
 | **Self-hosting** (raylang en raylang) | No | Capstone: requiere casi todo el lenguaje | post-M7 | 🎯 meta-objetivo |
 | **Tooling de editor** (coloreado / LSP) | No | Front-end (reutiliza el checker) | coloreado ✅ ya / LSP M8 | 🔧 parcial |
 | **Anotaciones** (`@test`, `@derive`, …) | No (solo reservar `@`) | Parser + fase que las consume | integradas M5–M7 / macros lejano | 📌 dirección fijada |
+| **API de runtime / I/O** (`args`, `input`, `env`) | No | Builtins / stdlib | input pronto / argv con arreglos (M3), stdlib M7 | 📌 dirección fijada |
 
 ---
 
@@ -201,6 +202,37 @@ rendimiento. Candidatas:
 **reservar `@`** (hoy el lexer lo marca como carácter inesperado); ya anotado como
 reservado en `DESIGN.md` §3.5. Se implementa cuando aporte: `@test` puede llegar
 pronto; el resto, junto a structs/enums (M5–M7).
+
+## 10. API de runtime / I/O (cómo raylang habla con el exterior)
+
+Hoy raylang tiene un único cable hacia afuera: `print` (stdout) y el código de
+salida que devuelve `main`. Para escribir apps de verdad (CLI, interactivas) hace
+falta una **API de runtime**: funciones que expongan lo que el host (Rust) ya tiene.
+
+**Decisión de diseño: los argumentos y la I/O NO van en la firma de `main`.**
+`main` queda como `main() -> int` (punto de entrada + código de salida). El acceso
+al exterior se hace por **funciones builtin/stdlib**, estilo Go (`os.Args`) y
+Python (`sys.argv`) — no estilo C (`main(argc, argv)`). Razón: no especializa la
+firma de `main`, y la capacidad queda disponible en *cualquier* función, no solo en
+la entrada. Encaja con cómo ya funciona `print` (un builtin).
+
+Superficie prevista (se declararían como `@builtin`, ver §9):
+
+- `args() -> [string]` — argumentos de la línea de comandos.
+- `input()` / `read_line() -> string`, `read_int() -> int` — entrada estándar.
+- `eprint(...)` — escribir a stderr (hoy `print` solo va a stdout).
+- `env(nombre) -> string` — variables de entorno.
+- I/O de archivos (leer/escribir) — más adelante.
+
+**Matiz de orden** (dos capacidades distintas):
+
+- **Interactivo (stdin)**: un builtin de lectura solo necesita strings/enteros, que
+  ya existen → **podría llegar relativamente pronto**.
+- **Por argumentos (argv)**: `args()` devuelve `[string]`, así que necesita
+  **arreglos (M3)** + indexar + `len`. Es de la época de la stdlib (**M7**).
+
+**Impacto en el diseño actual:** ninguno; es puramente aditivo (más builtins). Solo
+fija la decisión de mantener `main` sin parámetros.
 
 ---
 

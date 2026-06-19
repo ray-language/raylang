@@ -23,6 +23,7 @@
 | **Anotaciones** (`@test`, `@derive`, …) | No (solo reservar `@`) | Parser + fase que las consume | integradas M5–M7 / macros lejano | 📌 dirección fijada |
 | **API de runtime / I/O** (`args`, `input`, `env`) | No | Builtins / stdlib | input pronto / argv con arreglos (M3), stdlib M7 | 📌 dirección fijada |
 | **Optimización de la VM** | No | `bytecode`/`compiler`/`vm` | continuo, tras M2 | 🚀 hoja de ruta de rendimiento |
+| **Asperezas de M3** (coma final, inferencia de `[]`) | Sí (front-end) | Parser + checker | M4 | 🩹 dos arreglos chicos pendientes |
 
 ---
 
@@ -264,6 +265,34 @@ esperado, llevarían la VM bastante más allá. Medir cada cambio con el benchma
 
 **Impacto en el diseño:** ninguno en el lenguaje; es trabajo interno de la VM. No
 bloquea nada y se hace de forma incremental, midiendo con `benchmarks/`.
+
+## 12. Asperezas de M3 (a pulir en M4)
+
+Dos límites pequeños del front-end que afloraron al escribir ejemplos con arreglos
+y structs (`examples/pila.ray`, `examples/inventario.ray`). No son bugs —el
+lenguaje es consistente— sino refinamientos de ergonomía. Se difieren a **M4**
+(cuando ya toquemos checker y parser para closures) para no abrir trabajo de
+front-end fuera de fase.
+
+- **Coma final en literales de arreglo.** Hoy el parser acepta coma final en los
+  campos de un `struct` (`{ x: int, }`) pero **no** en un literal de arreglo
+  (`[1, 2, 3,]` → error de sintaxis). Es una inconsistencia de ergonomía: la coma
+  final facilita los diffs y reordenar elementos. Arreglo chico y local en
+  `array_literal()` (aceptar `]` justo después de una coma). Conviene unificar el
+  criterio en todas las listas separadas por coma (argumentos, campos, elementos).
+
+- **Inferencia del `[]` vacío en posición de campo.** El checker infiere el tipo
+  del arreglo vacío desde la **anotación de un `let`** (`let xs: [int] = [];`), pero
+  **no** lo propaga al construir un struct: `Pila { datos: [], tope: 0 }` falla
+  ("no se puede inferir el tipo de []"), aunque el tipo del campo `datos` es
+  conocido. El workaround hoy es un `let` anotado intermedio. El arreglo de fondo es
+  **propagación del tipo esperado** (*expected type* / bidirectional checking):
+  empujar el tipo del campo —y, en general, el tipo de destino— hacia la expresión.
+  Es un primer paso del trabajo de inferencia que §8/M8 generaliza; en M4 basta el
+  caso puntual del literal de struct (y, por simetría, argumentos de llamada).
+
+**Impacto**: bajo y aditivo; ningún cambio de semántica del lenguaje, solo acepta
+más programas que hoy se rechazan. No bloquea nada.
 
 ---
 

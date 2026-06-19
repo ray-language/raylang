@@ -94,7 +94,8 @@ Reservadas para el futuro (el lexer puede ya conocerlas): `enum match struct`.
 ->                    flecha de tipo de retorno
 ```
 Reservados para el futuro: `|>` (pipeline), `.` (UFCS), `?` (propagación),
-`<` `>` también delimitarán argumentos genéricos.
+`@` (anotaciones, p. ej. `@test`/`@derive`), `<` `>` también delimitarán
+argumentos genéricos.
 
 ### 3.6 Espacios en blanco
 Separan tokens y por lo demás se ignoran (la sintaxis usa `;` y `{}`, no la

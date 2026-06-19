@@ -20,6 +20,7 @@
 | Visibilidad (`pub` vs mayúscula) | No | Sistema de módulos | cuando haya módulos | 📌 recomendación fijada |
 | **Self-hosting** (raylang en raylang) | No | Capstone: requiere casi todo el lenguaje | post-M7 | 🎯 meta-objetivo |
 | **Tooling de editor** (coloreado / LSP) | No | Front-end (reutiliza el checker) | coloreado ✅ ya / LSP M8 | 🔧 parcial |
+| **Anotaciones** (`@test`, `@derive`, …) | No (solo reservar `@`) | Parser + fase que las consume | integradas M5–M7 / macros lejano | 📌 dirección fijada |
 
 ---
 
@@ -153,6 +154,42 @@ Soporte de los archivos `.ray` en editores. Tiene dos mitades muy distintas:
     "más editores": una vez el LSP existe, agregar un editor es casi gratis.
   - Punto intermedio (si se quiere antes): un lint "casero" que al guardar corre el
     binario `raylang` y parsea su salida `error ... en L:C: msg`.
+
+## 9. Anotaciones (`@test`, `@derive`, …)
+
+Metadatos adheridos a declaraciones (`@nombre` o `@nombre(args)` antes de una
+función/tipo/campo). El eje que define la complejidad es **quién las consume**.
+
+**Dirección decidida: empezar por anotaciones *integradas* (conjunto cerrado que
+el compilador conoce).** Es la primera aproximación: barata, didáctica y de buen
+rendimiento. Candidatas:
+
+- `@test` — marca funciones de prueba; base de un framework de tests para `.ray`
+  (el win que motiva arrancar por aquí).
+- `@deprecated("...")` — el checker advierte al usarla.
+- `@inline` — pista para la VM (M2+).
+- `@builtin` / `@extern` — la implementación vive en el host (Rust). Permitiría
+  **limpiar deuda**: `print` dejaría de ser un caso especial y sería
+  `@builtin fn print(...)`.
+- `@derive(Eq, Show)` — autogenera igualdad/impresión para `struct`/`enum`. Su caso
+  de uso natural aparece **cuando existan structs/enums** (M3/M5), que es lo que las
+  motiva de verdad.
+
+**Lo que NO hacemos por ahora:**
+
+- **Anotaciones definidas por el usuario que "hacen algo"** = un **sistema de
+  macros / metaprogramación** (transformar o generar código). Es de lo más difícil
+  del diseño de lenguajes (higiene, fases, manipular el propio AST; conecta con
+  reflection §3 y con self-hosting §7). Queda como **capstone de muy largo plazo**,
+  opcional, con su propio hito.
+- **Retención en runtime + reflexión** (estilo Java `@Retention(RUNTIME)`): atada al
+  ítem de introspección §3.
+
+**Impacto en el diseño actual:** casi nulo. La sintaxis `@nombre[(args)]` es
+**aditiva** (un pequeño cambio en el parser). Lo único "para no bloquear" es
+**reservar `@`** (hoy el lexer lo marca como carácter inesperado); ya anotado como
+reservado en `DESIGN.md` §3.5. Se implementa cuando aporte: `@test` puede llegar
+pronto; el resto, junto a structs/enums (M5–M7).
 
 ---
 

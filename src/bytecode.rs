@@ -43,6 +43,18 @@ pub enum OpCode {
     Greater,
     GreaterEqual,
 
+    // --- Pila y control de flujo ---
+    /// Descarta el valor de la cima.
+    Pop,
+    /// Empuja el valor unit `()`.
+    Unit,
+    /// Salta incondicionalmente a la instrucción en el índice dado.
+    Jump(usize),
+    /// Si la cima es `false`, salta al índice dado. **No** saca la condición de la
+    /// pila (la "ojea"); el compilador emite un `Pop` explícito donde corresponde.
+    /// Esto es lo que permite el cortocircuito de `&&`/`||`.
+    JumpIfFalse(usize),
+
     /// Termina la ejecución del chunk; el valor de retorno es la cima de la pila.
     Return,
 }

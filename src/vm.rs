@@ -39,12 +39,19 @@ impl Vm {
     }
 
     fn run(&mut self, chunk: &Chunk) -> Result<Value, RuntimeError> {
-        for (ip, op) in chunk.code.iter().enumerate() {
+        // El instruction pointer (ip) es un índice manipulable: los saltos lo
+        // mueven. Por eso es un bucle `while` con `ip` explícito, no un `for`.
+        let mut ip = 0;
+        while ip < chunk.code.len() {
             let (line, col) = chunk.lines[ip];
-            match op {
+            match &chunk.code[ip] {
                 OpCode::Constant(idx) => self.push(chunk.constants[*idx].clone()),
                 OpCode::True => self.push(Value::Bool(true)),
                 OpCode::False => self.push(Value::Bool(false)),
+                OpCode::Unit => self.push(Value::Unit),
+                OpCode::Pop => {
+                    self.pop();
+                }
 
                 OpCode::Negate => {
                     let v = self.pop();
@@ -64,7 +71,7 @@ impl Vm {
 
                 // Operadores binarios: sacan derecha y luego izquierda (la derecha
                 // está en la cima porque se compiló al final).
-                OpCode::Add
+                op @ (OpCode::Add
                 | OpCode::Sub
                 | OpCode::Mul
                 | OpCode::Div
@@ -74,15 +81,29 @@ impl Vm {
                 | OpCode::Less
                 | OpCode::LessEqual
                 | OpCode::Greater
-                | OpCode::GreaterEqual => {
+                | OpCode::GreaterEqual) => {
                     let right = self.pop();
                     let left = self.pop();
                     let result = apply_binary(op, left, right, line, col)?;
                     self.push(result);
                 }
 
+                // Saltos: mueven el ip. `continue` evita el `ip += 1` del final.
+                OpCode::Jump(target) => {
+                    ip = *target;
+                    continue;
+                }
+                OpCode::JumpIfFalse(target) => {
+                    // Ojea la condición sin sacarla (el compilador emite el Pop).
+                    if matches!(self.peek(), Value::Bool(false)) {
+                        ip = *target;
+                        continue;
+                    }
+                }
+
                 OpCode::Return => return Ok(self.pop()),
             }
+            ip += 1;
         }
         // Si el chunk no terminó en Return (no debería ocurrir), devolvemos lo que
         // haya en la cima, o Unit.
@@ -95,6 +116,10 @@ impl Vm {
 
     fn pop(&mut self) -> Value {
         self.stack.pop().expect("pila vacía: bytecode mal formado")
+    }
+
+    fn peek(&self) -> &Value {
+        self.stack.last().expect("pila vacía: bytecode mal formado")
     }
 }
 
@@ -226,5 +251,42 @@ mod tests {
         assert!(text.contains("Constant"));
         assert!(text.contains("Add"));
         assert!(text.contains("Return"));
+    }
+
+    // ----- M2.2: control de flujo -----
+
+    #[test]
+    fn if_como_expresion_coincide_con_el_interprete() {
+        oracle_int("if (3 < 5) { 10 } else { 20 }");
+        oracle_int("if (3 > 5) { 10 } else { 20 }");
+        oracle_int("if (1 < 2) { if (2 < 3) { 1 } else { 2 } } else { 3 }");
+        oracle_int("if (1 < 2 && 3 < 4) { 7 } else { 8 }");
+    }
+
+    #[test]
+    fn if_sin_else_es_unit() {
+        assert_eq!(run_vm("if (true) { }"), Value::Unit);
+        assert_eq!(run_vm("if (false) { }"), Value::Unit);
+    }
+
+    #[test]
+    fn logicos_y_su_cortocircuito() {
+        assert_eq!(run_vm("true && true"), Value::Bool(true));
+        assert_eq!(run_vm("true && false"), Value::Bool(false));
+        assert_eq!(run_vm("false || true"), Value::Bool(true));
+        assert_eq!(run_vm("false || false"), Value::Bool(false));
+
+        // Cortocircuito: la división por cero de la derecha NUNCA se ejecuta.
+        assert_eq!(run_vm("false && (1 / 0 == 0)"), Value::Bool(false));
+        assert_eq!(run_vm("true || (1 / 0 == 0)"), Value::Bool(true));
+    }
+
+    #[test]
+    fn bloque_con_sentencias_y_valor_final() {
+        // Las sentencias-de-expresión se ejecutan y descartan; el valor final manda.
+        assert_eq!(run_vm("{ 1; 2; 3 }"), Value::Int(3));
+        assert_eq!(run_vm("{ 1 + 1 }"), Value::Int(2));
+        // Bloque sin valor final → unit.
+        assert_eq!(run_vm("{ 1; }"), Value::Unit);
     }
 }

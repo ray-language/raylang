@@ -20,25 +20,27 @@
 /// Nota de diseño: este enum está pensado para **crecer** (futuros structs, enums,
 /// `Option<T>`, `Result<T,E>` añadirán una variante tipo `Named(String, Vec<Type>)`),
 /// como dice la nota de arquitectura de DESIGN.md §4.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
     Float,
     Bool,
     String,
     Unit,
+    /// Arreglo dinámico de un tipo de elemento: `[T]`. Tipado estructural (M3).
+    Array(Box<Type>),
 }
 
 impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Type::Int => "int",
-            Type::Float => "float",
-            Type::Bool => "bool",
-            Type::String => "string",
-            Type::Unit => "unit",
-        };
-        f.write_str(s)
+        match self {
+            Type::Int => f.write_str("int"),
+            Type::Float => f.write_str("float"),
+            Type::Bool => f.write_str("bool"),
+            Type::String => f.write_str("string"),
+            Type::Unit => f.write_str("unit"),
+            Type::Array(elem) => write!(f, "[{}]", elem),
+        }
     }
 }
 
@@ -97,8 +99,9 @@ pub enum StmtKind {
         value: Expr,
         mutable: bool,
     },
-    /// `x = e;` — reasignación de una variable existente.
-    Assign { name: String, value: Expr },
+    /// Asignación a un *lvalue*: `x = e;`, `a[i] = e;`, `p.x = e;` (M3.2).
+    /// `target` es una expresión asignable (`Ident`, `Index`, o `Field`).
+    Assign { target: Expr, value: Expr },
     /// `return e;` o `return;`.
     Return { value: Option<Expr> },
     /// Una expresión usada como sentencia: su valor se descarta. P. ej.
@@ -138,6 +141,12 @@ pub enum ExprKind {
     /// Llamada: `f(a, b)`. `callee` es lo que se llama (en M1, casi siempre un
     /// `Ident`, pero lo dejamos general para el futuro UFCS/closures).
     Call { callee: Box<Expr>, args: Vec<Expr> },
+
+    /// Literal de arreglo: `[1, 2, 3]` (o `[]` vacío). (M3)
+    ArrayLit(Vec<Expr>),
+
+    /// Indexación: `a[i]`. (M3)
+    Index { array: Box<Expr>, index: Box<Expr> },
 
     // --- Expresiones con bloque (producen valor, DESIGN.md §6) ---
     /// `if (cond) { then } else { ... }`. `else_branch`, si existe, es otro `Expr`

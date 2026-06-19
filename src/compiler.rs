@@ -183,11 +183,22 @@ impl<'a> FnCompiler<'a> {
                 let slot = self.declare_local(name);
                 self.emit(OpCode::SetLocal(slot), line, col);
             }
-            StmtKind::Assign { name, value } => {
-                self.emit_expr(value)?;
-                let slot = self.resolve_local(name).expect("el checker garantiza la variable");
-                self.emit(OpCode::SetLocal(slot), line, col);
-            }
+            StmtKind::Assign { target, value } => match &target.kind {
+                // x = e  → guardar en el slot local.
+                ExprKind::Ident(name) => {
+                    self.emit_expr(value)?;
+                    let slot = self.resolve_local(name).expect("el checker garantiza la variable");
+                    self.emit(OpCode::SetLocal(slot), line, col);
+                }
+                // a[i] = e  → arreglo, índice, valor, SetIndex (consume los tres).
+                ExprKind::Index { array, index } => {
+                    self.emit_expr(array)?;
+                    self.emit_expr(index)?;
+                    self.emit_expr(value)?;
+                    self.emit(OpCode::SetIndex, line, col);
+                }
+                _ => unreachable!("el checker garantiza un lvalue"),
+            },
             StmtKind::Return { value } => {
                 match value {
                     Some(e) => self.emit_expr(e)?,
@@ -312,20 +323,33 @@ impl<'a> FnCompiler<'a> {
 
             ExprKind::Block(b) => self.emit_block(b)?,
 
+            ExprKind::ArrayLit(elems) => {
+                for e in elems {
+                    self.emit_expr(e)?;
+                }
+                self.emit(OpCode::MakeArray(elems.len()), line, col);
+            }
+
+            ExprKind::Index { array, index } => {
+                self.emit_expr(array)?;
+                self.emit_expr(index)?;
+                self.emit(OpCode::Index, line, col);
+            }
+
             ExprKind::Call { callee, args } => {
                 for arg in args {
                     self.emit_expr(arg)?;
                 }
                 match &callee.kind {
-                    ExprKind::Ident(name) if name == "print" => {
-                        self.emit(OpCode::Print, line, col);
-                    }
+                    ExprKind::Ident(name) if name == "print" => self.emit(OpCode::Print, line, col),
+                    ExprKind::Ident(name) if name == "len" => self.emit(OpCode::Len, line, col),
+                    ExprKind::Ident(name) if name == "push" => self.emit(OpCode::Push, line, col),
                     ExprKind::Ident(name) => {
                         let idx = *self.indices.get(name).expect("el checker garantiza la función");
-                        self.emit(OpCode::Call(idx, args.len()), line, col);
+                        self.emit(OpCode::Call(idx, args.len()), line, col)
                     }
                     _ => unreachable!("el checker garantiza llamada por nombre"),
-                }
+                };
             }
         }
         Ok(())

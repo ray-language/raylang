@@ -65,6 +65,19 @@ pub enum OpCode {
     /// Builtin `print`: saca un valor, lo imprime, y empuja unit.
     Print,
 
+    // --- Arreglos (M3) ---
+    /// Saca `n` valores de la pila y construye un arreglo con ellos (en orden);
+    /// empuja el arreglo.
+    MakeArray(usize),
+    /// Saca el índice y el arreglo; empuja el elemento (chequea límites).
+    Index,
+    /// Saca valor, índice y arreglo; asigna `arreglo[índice] = valor`.
+    SetIndex,
+    /// Saca un arreglo; empuja su longitud (int). Builtin `len`.
+    Len,
+    /// Saca valor y arreglo; agrega el valor al final; empuja unit. Builtin `push`.
+    Push,
+
     /// Termina la ejecución del chunk; el valor de retorno es la cima de la pila.
     Return,
 }

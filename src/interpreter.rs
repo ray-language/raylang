@@ -22,8 +22,10 @@
 //!    Return(v))` que se propaga hacia arriba (con `?`) hasta que la llamada a la
 //!    función lo "atrapa" y lo convierte en el valor de retorno.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem;
+use std::rc::Rc;
 
 use crate::ast::*;
 
@@ -35,6 +37,11 @@ pub enum Value {
     Bool(bool),
     Str(String),
     Unit,
+    /// Arreglo (M3). `Rc` da la **semántica de referencia** (clonar el `Value`
+    /// comparte el mismo arreglo); `RefCell` permite mutarlo. La GC de M4
+    /// reemplazará el `Rc` para manejar ciclos. La igualdad (`==`) derivada es
+    /// **estructural** (compara los elementos).
+    Array(Rc<RefCell<Vec<Value>>>),
 }
 
 impl std::fmt::Display for Value {
@@ -45,6 +52,11 @@ impl std::fmt::Display for Value {
             Value::Bool(v) => write!(f, "{}", v),
             Value::Str(v) => write!(f, "{}", v),
             Value::Unit => write!(f, "()"),
+            Value::Array(rc) => {
+                let elems = rc.borrow();
+                let parts: Vec<String> = elems.iter().map(|v| v.to_string()).collect();
+                write!(f, "[{}]", parts.join(", "))
+            }
         }
     }
 }
@@ -166,9 +178,19 @@ impl<'a> Interpreter<'a> {
                 self.define(name, v);
                 Ok(())
             }
-            StmtKind::Assign { name, value } => {
+            StmtKind::Assign { target, value } => {
                 let v = self.eval_expr(value)?;
-                self.assign(name, v);
+                match &target.kind {
+                    ExprKind::Ident(name) => self.assign(name, v),
+                    ExprKind::Index { array, index } => {
+                        let rc = self.eval_array(array)?;
+                        let i = self.eval_int(index)?;
+                        let len = rc.borrow().len();
+                        let idx = check_bounds(i, len, index.line, index.col)?;
+                        rc.borrow_mut()[idx] = v;
+                    }
+                    _ => unreachable!("el checker garantiza un lvalue"),
+                }
                 Ok(())
             }
             StmtKind::Return { value } => {
@@ -212,6 +234,23 @@ impl<'a> Interpreter<'a> {
 
             ExprKind::Call { callee, args } => self.eval_call(callee, args),
 
+            ExprKind::ArrayLit(elems) => {
+                let mut vec = Vec::with_capacity(elems.len());
+                for e in elems {
+                    vec.push(self.eval_expr(e)?);
+                }
+                Ok(Value::Array(Rc::new(RefCell::new(vec))))
+            }
+
+            ExprKind::Index { array, index } => {
+                let rc = self.eval_array(array)?;
+                let i = self.eval_int(index)?;
+                let len = rc.borrow().len();
+                let idx = check_bounds(i, len, index.line, index.col)?;
+                let v = rc.borrow()[idx].clone();
+                Ok(v)
+            }
+
             ExprKind::If { cond, then_branch, else_branch } => {
                 if self.eval_bool(cond)? {
                     self.exec_block(then_branch)
@@ -250,6 +289,24 @@ impl<'a> Interpreter<'a> {
         // 'print' es un builtin: imprime su único argumento y devuelve unit.
         if name == "print" {
             println!("{}", values[0]);
+            return Ok(Value::Unit);
+        }
+
+        // 'len(a)': longitud de un arreglo.
+        if name == "len" {
+            let len = match &values[0] {
+                Value::Array(rc) => rc.borrow().len() as i64,
+                _ => unreachable!("el checker garantiza un arreglo"),
+            };
+            return Ok(Value::Int(len));
+        }
+
+        // 'push(a, x)': agrega x al final del arreglo (lo muta) y devuelve unit.
+        if name == "push" {
+            match &values[0] {
+                Value::Array(rc) => rc.borrow_mut().push(values[1].clone()),
+                _ => unreachable!("el checker garantiza un arreglo"),
+            }
             return Ok(Value::Unit);
         }
 
@@ -339,6 +396,23 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    /// Evalúa una expresión que el checker garantizó `int`.
+    fn eval_int(&mut self, expr: &'a Expr) -> Result<i64, Flow> {
+        match self.eval_expr(expr)? {
+            Value::Int(n) => Ok(n),
+            _ => unreachable!("el checker garantiza un int"),
+        }
+    }
+
+    /// Evalúa una expresión que el checker garantizó arreglo y devuelve su `Rc`
+    /// (compartido: mutar a través de él afecta a todos los alias).
+    fn eval_array(&mut self, expr: &'a Expr) -> Result<Rc<RefCell<Vec<Value>>>, Flow> {
+        match self.eval_expr(expr)? {
+            Value::Array(rc) => Ok(rc),
+            _ => unreachable!("el checker garantiza un arreglo"),
+        }
+    }
+
     fn define(&mut self, name: &str, value: Value) {
         self.scopes
             .last_mut()
@@ -368,6 +442,14 @@ impl<'a> Interpreter<'a> {
 
 fn runtime_error(line: usize, col: usize, msg: &str) -> Flow {
     Flow::Error(RuntimeError { msg: msg.to_string(), line, col })
+}
+
+/// Comprueba que `i` es un índice válido en `0..len`; si no, error de ejecución.
+fn check_bounds(i: i64, len: usize, line: usize, col: usize) -> Result<usize, Flow> {
+    if i < 0 || (i as usize) >= len {
+        return Err(runtime_error(line, col, &format!("índice {} fuera de rango (longitud {})", i, len)));
+    }
+    Ok(i as usize)
 }
 
 // =====================================================================

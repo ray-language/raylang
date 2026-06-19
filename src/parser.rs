@@ -110,14 +110,21 @@ impl Parser {
         Ok(params)
     }
 
-    /// type = 'int' | 'bool' | 'float' | 'string'
+    /// type = 'int' | 'bool' | 'float' | 'string' | '[' type ']'
     fn parse_type(&mut self) -> Result<Type, ParseError> {
+        // Arreglo: [T]
+        if self.check(&TokenKind::LBracket) {
+            self.advance();
+            let elem = self.parse_type()?;
+            self.expect(&TokenKind::RBracket, "']' para cerrar el tipo de arreglo")?;
+            return Ok(Type::Array(Box::new(elem)));
+        }
         let ty = match self.peek_kind() {
             TokenKind::IntType => Type::Int,
             TokenKind::FloatType => Type::Float,
             TokenKind::BoolType => Type::Bool,
             TokenKind::StringType => Type::String,
-            _ => return Err(self.error_here("se esperaba un tipo (int, float, bool o string)".into())),
+            _ => return Err(self.error_here("se esperaba un tipo (int, float, bool, string o [T])".into())),
         };
         self.advance();
         Ok(ty)
@@ -143,19 +150,24 @@ impl Parser {
                 statements.push(self.return_stmt()?);
                 continue;
             }
-            // Asignación `IDENT = ...`: distinguible de una expresión con un
-            // lookahead de 2 tokens (Ident seguido de '='). Ojo: '==' es otro
-            // token (EqEq), así que `x == y` NO se confunde con asignación.
-            if self.is_assignment() {
-                statements.push(self.assign_stmt()?);
+            // Parseamos una expresión. Puede ser el lado izquierdo de una
+            // asignación, una sentencia-de-expresión, o el valor final del bloque.
+            let expr = self.expression()?;
+            let (line, col) = (expr.line, expr.col);
+
+            // Asignación: `lvalue '=' value ';'`. Como `==` es otro token (EqEq),
+            // `x == y` ya se consumió como expresión y no se confunde con esto.
+            if self.eat(&TokenKind::Eq) {
+                if !is_lvalue(&expr) {
+                    return Err(self.error_here("el lado izquierdo de '=' no es asignable".into()));
+                }
+                let value = self.expression()?;
+                self.expect(&TokenKind::Semicolon, "';' al final de la asignación")?;
+                statements.push(Stmt { kind: StmtKind::Assign { target: expr, value }, line, col });
                 continue;
             }
 
-            // Si no, es una expresión: o sentencia-de-expresión, o el valor final.
-            let expr = self.expression()?;
-            let (line, col) = (expr.line, expr.col);
             let with_block = expr_has_block(&expr);
-
             if self.eat(&TokenKind::Semicolon) {
                 // `expr ;` → sentencia de expresión (valor descartado).
                 statements.push(Stmt { kind: StmtKind::Expr(expr), line, col });
@@ -197,19 +209,6 @@ impl Parser {
             kind: StmtKind::Let { name, ty, value, mutable },
             line: kw.line,
             col: kw.col,
-        })
-    }
-
-    /// assignStmt = IDENT '=' expression ';'
-    fn assign_stmt(&mut self) -> Result<Stmt, ParseError> {
-        let (name, line, col) = self.expect_ident("el nombre de la variable")?;
-        self.expect(&TokenKind::Eq, "'='")?;
-        let value = self.expression()?;
-        self.expect(&TokenKind::Semicolon, "';' al final de la asignación")?;
-        Ok(Stmt {
-            kind: StmtKind::Assign { name, value },
-            line,
-            col,
         })
     }
 
@@ -346,23 +345,39 @@ impl Parser {
         }
     }
 
-    /// call = primary { '(' [ args ] ')' }
+    /// call = primary { '(' [ args ] ')' | '[' expression ']' }
+    ///
+    /// Postfijos encadenables: llamadas `f(...)` e indexación `a[i]`. Así
+    /// `f()[i]` o `a[i][j]` se parsean de izquierda a derecha.
     fn call(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.primary()?;
-        while self.check(&TokenKind::LParen) {
-            self.advance(); // '('
-            let args = if self.check(&TokenKind::RParen) {
-                Vec::new()
-            } else {
-                self.args()?
-            };
-            self.expect(&TokenKind::RParen, "')' para cerrar la llamada")?;
+        loop {
             let (line, col) = (expr.line, expr.col);
-            expr = Expr {
-                kind: ExprKind::Call { callee: Box::new(expr), args },
-                line,
-                col,
-            };
+            if self.check(&TokenKind::LParen) {
+                self.advance(); // '('
+                let args = if self.check(&TokenKind::RParen) {
+                    Vec::new()
+                } else {
+                    self.args()?
+                };
+                self.expect(&TokenKind::RParen, "')' para cerrar la llamada")?;
+                expr = Expr {
+                    kind: ExprKind::Call { callee: Box::new(expr), args },
+                    line,
+                    col,
+                };
+            } else if self.check(&TokenKind::LBracket) {
+                self.advance(); // '['
+                let index = self.expression()?;
+                self.expect(&TokenKind::RBracket, "']' para cerrar la indexación")?;
+                expr = Expr {
+                    kind: ExprKind::Index { array: Box::new(expr), index: Box::new(index) },
+                    line,
+                    col,
+                };
+            } else {
+                break;
+            }
         }
         Ok(expr)
     }
@@ -391,6 +406,7 @@ impl Parser {
                 let b = self.block()?;
                 return Ok(Expr { line: b.line, col: b.col, kind: ExprKind::Block(b) });
             }
+            TokenKind::LBracket => return self.array_literal(),
             _ => {}
         }
 
@@ -462,6 +478,22 @@ impl Parser {
         })
     }
 
+    /// arrayLiteral = '[' [ expression { ',' expression } ] ']'
+    fn array_literal(&mut self) -> Result<Expr, ParseError> {
+        let open = self.expect(&TokenKind::LBracket, "'['")?;
+        let mut elems = Vec::new();
+        if !self.check(&TokenKind::RBracket) {
+            loop {
+                elems.push(self.expression()?);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        self.expect(&TokenKind::RBracket, "']' para cerrar el arreglo")?;
+        Ok(Expr { kind: ExprKind::ArrayLit(elems), line: open.line, col: open.col })
+    }
+
     // =================================================================
     // Primitivas del cursor de tokens
     // =================================================================
@@ -524,15 +556,6 @@ impl Parser {
         }
     }
 
-    /// Lookahead de 2: ¿el token actual es `IDENT` y el siguiente es `=`?
-    fn is_assignment(&self) -> bool {
-        matches!(self.peek_kind(), TokenKind::Ident(_))
-            && matches!(
-                self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                Some(TokenKind::Eq)
-            )
-    }
-
     /// Construye un error apuntando al token actual.
     fn error_here(&self, msg: String) -> ParseError {
         let t = self.peek();
@@ -563,6 +586,12 @@ fn expr_has_block(e: &Expr) -> bool {
         e.kind,
         ExprKind::If { .. } | ExprKind::While { .. } | ExprKind::Block(_)
     )
+}
+
+/// ¿Es una expresión a la que se puede asignar (un *lvalue*)? En M3.1, un nombre
+/// o una indexación. El acceso a campo (`p.x`) se sumará en M3.2.
+fn is_lvalue(e: &Expr) -> bool {
+    matches!(e.kind, ExprKind::Ident(_) | ExprKind::Index { .. })
 }
 
 // =====================================================================
@@ -602,6 +631,11 @@ mod tests {
                 let a: Vec<String> = args.iter().map(sx).collect();
                 format!("(call {} [{}])", sx(callee), a.join(" "))
             }
+            ExprKind::ArrayLit(elems) => {
+                let e: Vec<String> = elems.iter().map(sx).collect();
+                format!("[{}]", e.join(", "))
+            }
+            ExprKind::Index { array, index } => format!("(index {} {})", sx(array), sx(index)),
             ExprKind::If { cond, then_branch, else_branch } => {
                 let els = else_branch
                     .as_ref()
@@ -628,7 +662,7 @@ mod tests {
                 let kw = if *mutable { "var" } else { "let" };
                 format!("{} {} = {}", kw, name, sx(value))
             }
-            StmtKind::Assign { name, value } => format!("{} = {}", name, sx(value)),
+            StmtKind::Assign { target, value } => format!("{} = {}", sx(target), sx(value)),
             StmtKind::Return { value } => match value {
                 Some(v) => format!("return {}", sx(v)),
                 None => "return".to_string(),
@@ -691,6 +725,23 @@ mod tests {
         assert_eq!(sx(&parse_expr("f()")), "(call f [])");
         assert_eq!(sx(&parse_expr("f(1, 2 + 3)")), "(call f [1 (+ 2 3)])");
         assert_eq!(sx(&parse_expr("g(h(x))")), "(call g [(call h [x])])");
+    }
+
+    #[test]
+    fn arreglos_literal_e_indice() {
+        assert_eq!(sx(&parse_expr("[1, 2, 3]")), "[1, 2, 3]");
+        assert_eq!(sx(&parse_expr("[]")), "[]");
+        assert_eq!(sx(&parse_expr("a[0]")), "(index a 0)");
+        assert_eq!(sx(&parse_expr("a[i + 1]")), "(index a (+ i 1))");
+        assert_eq!(sx(&parse_expr("m[0][1]")), "(index (index m 0) 1)");
+    }
+
+    #[test]
+    fn asignacion_a_indice() {
+        assert_eq!(
+            sx(&parse_expr("{ a[0] = 9; a[0] }")),
+            "{(index a 0) = 9; (index a 0)}"
+        );
     }
 
     #[test]

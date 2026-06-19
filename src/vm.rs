@@ -15,6 +15,9 @@
 //! como las primeras locales del nuevo marco. Un `Return` saca el valor de
 //! retorno, descarta el marco, y lo empuja a la pila para el llamador.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use crate::bytecode::{Chunk, CompiledFn, CompiledProgram, OpCode};
 use crate::interpreter::{RuntimeError, Value};
 
@@ -154,6 +157,43 @@ impl<'a> Vm<'a> {
                     self.push(Value::Unit);
                 }
 
+                // --- Arreglos (M3) ---
+                OpCode::MakeArray(n) => {
+                    let mut elems = Vec::with_capacity(*n);
+                    for _ in 0..*n {
+                        elems.push(self.pop());
+                    }
+                    elems.reverse(); // se sacaron en orden inverso
+                    self.push(Value::Array(Rc::new(RefCell::new(elems))));
+                }
+                OpCode::Index => {
+                    let i = self.pop_int();
+                    let rc = self.pop_array();
+                    let len = rc.borrow().len();
+                    let idx = bounds_check(i, len, line, col)?;
+                    let v = rc.borrow()[idx].clone();
+                    self.push(v);
+                }
+                OpCode::SetIndex => {
+                    let v = self.pop();
+                    let i = self.pop_int();
+                    let rc = self.pop_array();
+                    let len = rc.borrow().len();
+                    let idx = bounds_check(i, len, line, col)?;
+                    rc.borrow_mut()[idx] = v;
+                }
+                OpCode::Len => {
+                    let rc = self.pop_array();
+                    let len = rc.borrow().len() as i64;
+                    self.push(Value::Int(len));
+                }
+                OpCode::Push => {
+                    let v = self.pop();
+                    let rc = self.pop_array();
+                    rc.borrow_mut().push(v);
+                    self.push(Value::Unit);
+                }
+
                 OpCode::Call(idx, argc) => {
                     if self.frames.len() >= MAX_FRAMES {
                         return Err(runtime_error(line, col, "desbordamiento de pila (recursión demasiado profunda)"));
@@ -189,6 +229,20 @@ impl<'a> Vm<'a> {
 
     fn peek(&self) -> &Value {
         self.stack.last().expect("pila vacía: bytecode mal formado")
+    }
+
+    fn pop_int(&mut self) -> i64 {
+        match self.pop() {
+            Value::Int(n) => n,
+            _ => unreachable!("el checker garantiza un int"),
+        }
+    }
+
+    fn pop_array(&mut self) -> Rc<RefCell<Vec<Value>>> {
+        match self.pop() {
+            Value::Array(rc) => rc,
+            _ => unreachable!("el checker garantiza un arreglo"),
+        }
     }
 }
 
@@ -234,6 +288,14 @@ fn apply_binary(op: &OpCode, left: Value, right: Value, line: usize, col: usize)
 
 fn runtime_error(line: usize, col: usize, msg: &str) -> RuntimeError {
     RuntimeError { msg: msg.to_string(), line, col }
+}
+
+/// Comprueba que `i` es un índice válido en `0..len`; si no, error de ejecución.
+fn bounds_check(i: i64, len: usize, line: usize, col: usize) -> Result<usize, RuntimeError> {
+    if i < 0 || (i as usize) >= len {
+        return Err(runtime_error(line, col, &format!("índice {} fuera de rango (longitud {})", i, len)));
+    }
+    Ok(i as usize)
 }
 
 // =====================================================================
@@ -390,5 +452,49 @@ mod tests {
     fn programa_con_print() {
         // print va a stdout; se compara el valor de retorno de main.
         oracle_program("fn main() -> int { print(42); print(true); 0 }");
+    }
+
+    // ----- M3.1: arreglos -----
+
+    #[test]
+    fn arreglos_indexar_len_y_suma() {
+        oracle_program("fn main() -> int { let a: [int] = [10, 20, 30]; a[0] + a[2] }");
+        oracle_program("fn main() -> int { let a: [int] = [1, 2, 3, 4]; len(a) }");
+    }
+
+    #[test]
+    fn arreglos_mutacion_y_push() {
+        oracle_program("fn main() -> int { var a: [int] = [1, 2, 3]; a[1] = 99; a[1] }");
+        oracle_program(
+            "fn main() -> int { let a: [int] = []; push(a, 5); push(a, 7); a[0] + a[1] }",
+        );
+    }
+
+    #[test]
+    fn arreglos_son_por_referencia() {
+        // 'b = a' comparte el arreglo: mutar b se ve en a (aliasing).
+        oracle_program("fn main() -> int { let a: [int] = [1, 2, 3]; let b: [int] = a; b[0] = 9; a[0] }");
+    }
+
+    #[test]
+    fn suma_de_un_arreglo_con_while() {
+        oracle_program(
+            "fn suma(a: [int]) -> int {
+                var s: int = 0; var i: int = 0;
+                while (i < len(a)) { s = s + a[i]; i = i + 1; }
+                s
+             }
+             fn main() -> int { suma([5, 10, 15, 20]) }",
+        );
+    }
+
+    #[test]
+    fn indice_fuera_de_rango_es_error() {
+        let prog_src = "fn main() -> int { let a: [int] = [1, 2]; a[5] }";
+        let tokens = crate::lexer::lex(prog_src).unwrap();
+        let prog = crate::parser::parse(tokens).unwrap();
+        crate::checker::check(&prog).unwrap();
+        let compiled = compile_program(&prog).unwrap();
+        assert!(run_program(&compiled).unwrap_err().msg.contains("fuera de rango"));
     }
 }

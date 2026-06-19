@@ -90,8 +90,8 @@ impl Checker {
                 return Err(self.err(f.line, f.col, format!("función '{}' declarada dos veces", f.name)));
             }
             let sig = FnSig {
-                params: f.params.iter().map(|p| p.ty).collect(),
-                ret: f.return_type,
+                params: f.params.iter().map(|p| p.ty.clone()).collect(),
+                ret: f.return_type.clone(),
             };
             self.functions.insert(f.name.clone(), sig);
         }
@@ -117,12 +117,12 @@ impl Checker {
     }
 
     fn check_function(&mut self, f: &Function) -> Result<(), TypeError> {
-        self.current_return = f.return_type;
+        self.current_return = f.return_type.clone();
         self.push_scope();
 
         // Los parámetros son inmutables (no hay 'var' para ellos).
         for p in &f.params {
-            self.declare(&p.name, p.ty, false);
+            self.declare(&p.name, p.ty.clone(), false);
         }
 
         // El cuerpo se verifica como un bloque; su valor es el retorno implícito.
@@ -159,39 +159,30 @@ impl Checker {
     fn check_stmt(&mut self, stmt: &Stmt) -> Result<(), TypeError> {
         match &stmt.kind {
             StmtKind::Let { name, ty, value, mutable } => {
-                let vt = self.check_expr(value)?;
+                // Caso especial: `[]` adopta el tipo de arreglo declarado (no hay
+                // de dónde inferir el tipo de elemento de un arreglo vacío).
+                let vt = if matches!(&value.kind, ExprKind::ArrayLit(e) if e.is_empty()) {
+                    if matches!(ty, Type::Array(_)) {
+                        ty.clone()
+                    } else {
+                        return Err(self.err(value.line, value.col, format!(
+                            "'{}' se declara como {} pero se inicializa con un arreglo vacío",
+                            name, ty
+                        )));
+                    }
+                } else {
+                    self.check_expr(value)?
+                };
                 if vt != *ty {
                     return Err(self.err(value.line, value.col, format!(
                         "'{}' se declara como {} pero se inicializa con {}",
                         name, ty, vt
                     )));
                 }
-                self.declare(name, *ty, *mutable);
+                self.declare(name, ty.clone(), *mutable);
                 Ok(())
             }
-            StmtKind::Assign { name, value } => {
-                // La variable debe existir y ser mutable; el tipo debe coincidir.
-                let (var_ty, mutable) = match self.lookup(name) {
-                    Some(v) => (v.ty, v.mutable),
-                    None => {
-                        return Err(self.err(stmt.line, stmt.col, format!("variable '{}' no declarada", name)))
-                    }
-                };
-                if !mutable {
-                    return Err(self.err(stmt.line, stmt.col, format!(
-                        "no se puede asignar a '{}': es inmutable (declarada con 'let'; usa 'var')",
-                        name
-                    )));
-                }
-                let vt = self.check_expr(value)?;
-                if vt != var_ty {
-                    return Err(self.err(value.line, value.col, format!(
-                        "'{}' es {} pero se le asigna {}",
-                        name, var_ty, vt
-                    )));
-                }
-                Ok(())
-            }
+            StmtKind::Assign { target, value } => self.check_assign(target, value, stmt.line, stmt.col),
             StmtKind::Return { value } => {
                 let vt = match value {
                     Some(e) => self.check_expr(e)?,
@@ -214,6 +205,55 @@ impl Checker {
         }
     }
 
+    /// Verifica una asignación a un lvalue.
+    fn check_assign(&mut self, target: &Expr, value: &Expr, line: usize, col: usize) -> Result<(), TypeError> {
+        match &target.kind {
+            // x = e  — requiere que la variable exista y sea mutable ('var').
+            ExprKind::Ident(name) => {
+                let (var_ty, mutable) = match self.lookup(name) {
+                    Some(v) => (v.ty.clone(), v.mutable),
+                    None => return Err(self.err(target.line, target.col, format!("variable '{}' no declarada", name))),
+                };
+                if !mutable {
+                    return Err(self.err(line, col, format!(
+                        "no se puede asignar a '{}': es inmutable (declarada con 'let'; usa 'var')",
+                        name
+                    )));
+                }
+                let vt = self.check_expr(value)?;
+                if vt != var_ty {
+                    return Err(self.err(value.line, value.col, format!("'{}' es {} pero se le asigna {}", name, var_ty, vt)));
+                }
+                Ok(())
+            }
+            // a[i] = e  — mutar el contenido NO requiere 'var' (DESIGN §12.3): la
+            // inmutabilidad de `let` ata la variable, no congela el objeto.
+            ExprKind::Index { array, index } => {
+                let elem = self.check_index(array, index)?;
+                let vt = self.check_expr(value)?;
+                if vt != elem {
+                    return Err(self.err(value.line, value.col, format!("el elemento es {} pero se le asigna {}", elem, vt)));
+                }
+                Ok(())
+            }
+            _ => Err(self.err(target.line, target.col, "el lado izquierdo no es asignable".into())),
+        }
+    }
+
+    /// Verifica `a[i]` y devuelve el tipo de elemento. Reusado por la indexación
+    /// como expresión y como destino de asignación.
+    fn check_index(&mut self, array: &Expr, index: &Expr) -> Result<Type, TypeError> {
+        let at = self.check_expr(array)?;
+        let it = self.check_expr(index)?;
+        if it != Type::Int {
+            return Err(self.err(index.line, index.col, format!("el índice debe ser int, no {}", it)));
+        }
+        match at {
+            Type::Array(elem) => Ok(*elem),
+            other => Err(self.err(array.line, array.col, format!("no se puede indexar un {} (no es un arreglo)", other))),
+        }
+    }
+
     // ----- Expresiones (devuelven su tipo) -----
 
     fn check_expr(&mut self, expr: &Expr) -> Result<Type, TypeError> {
@@ -224,7 +264,7 @@ impl Checker {
             ExprKind::Str(_) => Ok(Type::String),
 
             ExprKind::Ident(name) => match self.lookup(name) {
-                Some(v) => Ok(v.ty),
+                Some(v) => Ok(v.ty.clone()),
                 None => Err(self.err(expr.line, expr.col, format!("nombre '{}' no declarado", name))),
             },
 
@@ -241,6 +281,25 @@ impl Checker {
             ExprKind::Binary { op, left, right } => self.check_binary(*op, left, right, expr.line, expr.col),
 
             ExprKind::Call { callee, args } => self.check_call(callee, args, expr.line, expr.col),
+
+            ExprKind::ArrayLit(elems) => {
+                if elems.is_empty() {
+                    return Err(self.err(expr.line, expr.col,
+                        "no se puede inferir el tipo de [] aquí; anótalo (p. ej. let xs: [int] = [];)".into()));
+                }
+                let first = self.check_expr(&elems[0])?;
+                for e in &elems[1..] {
+                    let t = self.check_expr(e)?;
+                    if t != first {
+                        return Err(self.err(e.line, e.col, format!(
+                            "los elementos del arreglo deben ser del mismo tipo: {} y {}", first, t
+                        )));
+                    }
+                }
+                Ok(Type::Array(Box::new(first)))
+            }
+
+            ExprKind::Index { array, index } => self.check_index(array, index),
 
             ExprKind::If { cond, then_branch, else_branch } => {
                 let ct = self.check_expr(cond)?;
@@ -315,7 +374,7 @@ impl Checker {
         use BinaryOp::*;
         match op {
             // Aritméticos: ambos int → int, ambos float → float. Sin mezclas.
-            Add | Sub | Mul | Div | Rem => match (lt, rt) {
+            Add | Sub | Mul | Div | Rem => match (&lt, &rt) {
                 (Type::Int, Type::Int) => Ok(Type::Int),
                 (Type::Float, Type::Float) => Ok(Type::Float),
                 _ => Err(self.err(line, col, format!(
@@ -324,7 +383,7 @@ impl Checker {
                 ))),
             },
             // Orden: solo números, del mismo tipo → bool.
-            Lt | Le | Gt | Ge => match (lt, rt) {
+            Lt | Le | Gt | Ge => match (&lt, &rt) {
                 (Type::Int, Type::Int) | (Type::Float, Type::Float) => Ok(Type::Bool),
                 _ => Err(self.err(line, col, format!(
                     "el operador '{}' compara números del mismo tipo, no {} y {}",
@@ -333,7 +392,7 @@ impl Checker {
             },
             // Igualdad: mismo tipo y comparable → bool.
             Eq | Ne => {
-                if lt == rt && is_comparable(lt) {
+                if lt == rt && is_comparable(&lt) {
                     Ok(Type::Bool)
                 } else {
                     Err(self.err(line, col, format!(
@@ -376,8 +435,36 @@ impl Checker {
                 return Err(self.err(line, col, format!("print espera 1 argumento, se le pasaron {}", args.len())));
             }
             let at = self.check_expr(&args[0])?;
-            if !is_printable(at) {
+            if !is_printable(&at) {
                 return Err(self.err(args[0].line, args[0].col, format!("print no puede imprimir un {}", at)));
+            }
+            return Ok(Type::Unit);
+        }
+
+        // 'len(a) -> int': longitud de un arreglo.
+        if name == "len" {
+            if args.len() != 1 {
+                return Err(self.err(line, col, format!("len espera 1 argumento, se le pasaron {}", args.len())));
+            }
+            let at = self.check_expr(&args[0])?;
+            if !matches!(at, Type::Array(_)) {
+                return Err(self.err(args[0].line, args[0].col, format!("len espera un arreglo, no {}", at)));
+            }
+            return Ok(Type::Int);
+        }
+
+        // 'push(a, x) -> unit': agrega x al final del arreglo a (lo muta).
+        if name == "push" {
+            if args.len() != 2 {
+                return Err(self.err(line, col, format!("push espera 2 argumentos (arreglo, valor), se le pasaron {}", args.len())));
+            }
+            let elem = match self.check_expr(&args[0])? {
+                Type::Array(e) => *e,
+                other => return Err(self.err(args[0].line, args[0].col, format!("push espera un arreglo como primer argumento, no {}", other))),
+            };
+            let vt = self.check_expr(&args[1])?;
+            if vt != elem {
+                return Err(self.err(args[1].line, args[1].col, format!("push: el arreglo es de {} pero se empuja {}", elem, vt)));
             }
             return Ok(Type::Unit);
         }
@@ -386,7 +473,7 @@ impl Checker {
         // Clonamos la firma para soltar el préstamo de `self` antes de verificar
         // los argumentos (que vuelven a tomar `self` prestado mutable).
         let (param_types, ret) = match self.functions.get(&name) {
-            Some(sig) => (sig.params.clone(), sig.ret),
+            Some(sig) => (sig.params.clone(), sig.ret.clone()),
             None => return Err(self.err(line, col, format!("función '{}' no declarada", name))),
         };
 
@@ -438,14 +525,14 @@ impl Checker {
 
 // ----- Auxiliares libres -----
 
-/// ¿Pueden compararse con == / != valores de este tipo?
-fn is_comparable(t: Type) -> bool {
-    matches!(t, Type::Int | Type::Float | Type::Bool | Type::String)
+/// ¿Pueden compararse con == / != valores de este tipo? (Arreglos: estructural.)
+fn is_comparable(t: &Type) -> bool {
+    matches!(t, Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_))
 }
 
 /// ¿Puede `print` imprimir este tipo?
-fn is_printable(t: Type) -> bool {
-    matches!(t, Type::Int | Type::Float | Type::Bool | Type::String)
+fn is_printable(t: &Type) -> bool {
+    matches!(t, Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_))
 }
 
 fn bin_op_str(op: BinaryOp) -> &'static str {
@@ -635,5 +722,27 @@ fn main() -> int {
     #[test]
     fn funcion_no_declarada_dos_veces() {
         err_contains("fn f() {} fn f() {} fn main() {}", "declarada dos veces");
+    }
+
+    // ----- M3.1: arreglos -----
+
+    #[test]
+    fn arreglos_validos() {
+        assert!(check_src("fn main() -> int { let a: [int] = [1, 2, 3]; a[0] }").is_ok());
+        assert!(check_src("fn main() -> int { let a: [int] = []; push(a, 1); len(a) }").is_ok());
+        assert!(check_src("fn main() { var a: [int] = [1]; a[0] = 9; }").is_ok());
+        // Arreglos anidados.
+        assert!(check_src("fn main() -> int { let m: [[int]] = [[1, 2], [3, 4]]; m[1][0] }").is_ok());
+    }
+
+    #[test]
+    fn arreglos_errores_de_tipo() {
+        err_contains("fn main() -> int { let a: [int] = [1, true]; a[0] }", "mismo tipo");
+        err_contains("fn main() -> int { let a: [int] = [1]; a[true] }", "índice debe ser int");
+        err_contains("fn main() -> int { let x: int = 5; x[0] }", "no es un arreglo");
+        err_contains("fn main() { let x: int = []; }", "arreglo vacío");
+        err_contains("fn main() -> int { let a: [int] = [1]; a[0] = true; a[0] }", "se le asigna bool");
+        err_contains("fn main() -> int { len(5) }", "len espera un arreglo");
+        err_contains("fn main() { let a: [int] = [1]; push(a, true); }", "se empuja bool");
     }
 }

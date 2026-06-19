@@ -297,3 +297,54 @@ Registradas para no construir nada que las bloquee:
 - `string + string` (concatenación) → sí, en M7 con la stdlib; en M1 solo se
   imprime.
 - Comentarios de bloque `/* */` → más adelante.
+
+## 12. M3 — Datos compuestos (arreglos y structs)
+
+Hito que da a raylang sus primeros tipos compuestos. Decisiones cerradas:
+**semántica de referencia** (los compuestos viven en el *heap*, compartidos) y
+**arreglos dinámicos** (listas que crecen). La memoria se gestiona con conteo de
+referencias hasta que la GC de M4 la sustituya (y resuelva los ciclos).
+
+### 12.1 Arreglos
+- **Tipo**: `[T]` — p. ej. `[int]`, `[[bool]]`. Tipado **estructural**
+  (`[int]` ≡ `[int]`).
+- **Literal**: `[1, 2, 3]`. El vacío necesita anotación: `let xs: [int] = [];`.
+- **Indexar**: `a[i]` con `i: int`. Fuera de rango → error de ejecución.
+- **Asignar elemento**: `a[i] = x;`.
+- **Builtins**: `len(a) -> int`, `push(a, x)` (muta, devuelve unit).
+
+### 12.2 Structs
+- **Declaración** (nivel superior, como las funciones):
+  `struct Punto { x: int, y: int }`
+- **Literal**: `Punto { x: 1, y: 2 }` (todos los campos, nombrados).
+- **Acceso**: `p.x`. **Asignación de campo**: `p.x = 5;`.
+- **Tipado nominal**: `Punto` es un tipo distinto; dos structs con los mismos
+  campos pero distinto nombre **no** son intercambiables.
+- En M3 los structs son solo datos; los métodos llegan con UFCS/traits (M7).
+
+### 12.3 Mutabilidad (importante)
+`let`/`var` controlan **reasignar la variable**, no el contenido del objeto
+apuntado. Con `let a: [int] = [1, 2];` no puedes `a = [3]` (rebind), pero sí
+`a[0] = 9` o `push(a, 3)` (mutar el objeto compartido). Es el modelo de Python/JS
+(`const` ata la variable, no congela el objeto). La inmutabilidad profunda queda
+como posible refinamiento futuro.
+
+### 12.4 Sistema de tipos
+- `Type` crece con `Array(Box<Type>)` y `Struct(nombre)` — las variantes que
+  anticipamos en §4. El checker registra las definiciones de struct en una
+  pre-pasada (como las funciones).
+- Igualdad `==`: **estructural** (elemento a elemento / campo a campo) para
+  compuestos.
+
+### 12.5 Runtime (intérprete y VM)
+- `Value` crece con `Array(Rc<RefCell<Vec<Value>>>)` y un struct análogo: `Rc` da
+  el compartir (referencia), `RefCell` la mutación interior. La GC de M4
+  reemplazará el `Rc` para manejar ciclos.
+
+### 12.6 Léxico/sintaxis nuevos
+- Tokens nuevos: `[` `]` y `.` (acceso a campo; el mismo `.` servirá para UFCS).
+- `struct` pasa a ser palabra reservada.
+
+### 12.7 Sub-fases
+- **M3.1**: arreglos (tipo, literal, indexar, asignar, `len`/`push`).
+- **M3.2**: structs (declaración, literal, acceso, asignación de campo).

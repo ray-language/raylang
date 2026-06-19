@@ -1,0 +1,27 @@
+# --- Rust / Cargo ---
+# Artefactos de compilación (binarios, objetos, caché de incremental).
+/target/
+debug/
+
+# NOTA: Cargo.lock SÍ se versiona en este proyecto, porque raylang es una
+# aplicación (tiene un binario), no solo una librería. Eso fija versiones
+# reproducibles de las dependencias. Por eso NO lo ignoramos.
+# Ref: https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
+
+# Backups que genera rustfmt.
+**/*.rs.bk
+
+# Información de depuración de builds MSVC (Windows).
+*.pdb
+
+# --- macOS ---
+.DS_Store
+
+# --- Editores / IDE ---
+.idea/
+*.swp
+*.swo
+# VS Code: se versiona la config compartida pero no la local.
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json

@@ -2,14 +2,14 @@
 //!
 //! Uso: `raylang <archivo.ray>`
 //!
-//! En esta fase (parser) el CLI tokeniza y parsea el archivo, y vuelca el AST
-//! resultante con el Debug "bonito". Es una herramienta para ver el front-end.
+//! En esta fase (checker) el CLI tokeniza, parsea y verifica los tipos del
+//! archivo, e informa si el programa es válido.
 
 use std::env;
 use std::fs;
 use std::process;
 
-use raylang::{lexer, parser};
+use raylang::{checker, lexer, parser};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -27,7 +27,7 @@ fn main() {
         }
     };
 
-    // Fase 1: lexer (texto → tokens).
+    // Fase 1: lexer.
     let tokens = match lexer::lex(&src) {
         Ok(tokens) => tokens,
         Err(e) => {
@@ -36,9 +36,20 @@ fn main() {
         }
     };
 
-    // Fase 2: parser (tokens → AST).
-    match parser::parse(tokens) {
-        Ok(program) => println!("{:#?}", program),
+    // Fase 2: parser.
+    let program = match parser::parse(tokens) {
+        Ok(program) => program,
+        Err(e) => {
+            eprintln!("{}", e);
+            process::exit(65);
+        }
+    };
+
+    // Fase 3: checker (análisis semántico / tipos).
+    match checker::check(&program) {
+        Ok(()) => {
+            println!("✓ {}: {} función(es), tipos verificados", path, program.functions.len());
+        }
         Err(e) => {
             eprintln!("{}", e);
             process::exit(65);

@@ -1,0 +1,12 @@
+// Benchmark de raylang: fib recursivo (exponencial → muchísimas llamadas).
+// Se usa para comparar el intérprete (M1) contra la VM (M2).
+//
+//   benchmarks/bench.sh
+fn fib(n: int) -> int {
+    if (n < 2) { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() -> int {
+    fib(32); // el valor se descarta; lo que medimos es el cómputo
+    0
+}

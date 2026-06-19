@@ -78,6 +78,15 @@ pub enum OpCode {
     /// Saca valor y arreglo; agrega el valor al final; empuja unit. Builtin `push`.
     Push,
 
+    // --- Structs (M3.2) ---
+    /// Construye el struct definido en `structs[idx]`: saca tantos valores como
+    /// campos tenga (estaban en orden de declaración) y empuja el struct.
+    MakeStruct(usize),
+    /// Saca un struct; empuja el valor de su campo (buscado por nombre).
+    GetField(String),
+    /// Saca valor y struct; asigna `struct.campo = valor` (por nombre).
+    SetField(String),
+
     /// Termina la ejecución del chunk; el valor de retorno es la cima de la pila.
     Return,
 }
@@ -141,9 +150,17 @@ pub struct CompiledFn {
     pub chunk: Chunk,
 }
 
-/// Un programa compilado: sus funciones (indexadas) y el índice de `main`.
+/// La definición de un struct, compilada: su nombre y sus campos en orden.
+#[derive(Debug)]
+pub struct CompiledStruct {
+    pub name: String,
+    pub fields: Vec<String>,
+}
+
+/// Un programa compilado: sus structs, funciones (indexadas) y el índice de `main`.
 #[derive(Debug)]
 pub struct CompiledProgram {
     pub functions: Vec<CompiledFn>,
+    pub structs: Vec<CompiledStruct>,
     pub main: usize,
 }

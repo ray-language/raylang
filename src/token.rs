@@ -31,6 +31,7 @@ pub enum TokenKind {
     While,
     True,
     False,
+    Struct,
 
     // --- Palabras clave de tipo ---
     IntType,    // int
@@ -65,6 +66,7 @@ pub enum TokenKind {
     Comma,     // ,
     Semicolon, // ;
     Colon,     // :
+    Dot,       // .
     Arrow,     // ->
 
     // --- Marca de fin de entrada ---

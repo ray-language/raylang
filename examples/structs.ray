@@ -1,0 +1,31 @@
+// Demostración de structs (M3.2).
+struct Punto {
+    x: int,
+    y: int,
+}
+
+struct Rect {
+    origen: Punto,
+    ancho: int,
+    alto: int,
+}
+
+fn area(r: Rect) -> int {
+    r.ancho * r.alto
+}
+
+fn main() -> int {
+    let p: Punto = Punto { x: 3, y: 4 };
+    print(p);              // Punto { x: 3, y: 4 }
+    print(p.x + p.y);      // 7
+
+    var r: Rect = Rect { origen: p, ancho: 10, alto: 5 };
+    print(area(r));        // 50
+    r.ancho = 20;          // mutar un campo
+    print(area(r));        // 100
+
+    // Semántica de referencia: r.origen comparte con p.
+    r.origen.x = 99;
+    print(p.x);            // 99 (aliasing)
+    0
+}

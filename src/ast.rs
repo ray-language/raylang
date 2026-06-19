@@ -29,6 +29,9 @@ pub enum Type {
     Unit,
     /// Arreglo dinámico de un tipo de elemento: `[T]`. Tipado estructural (M3).
     Array(Box<Type>),
+    /// Un struct nominal, por su nombre: `Punto`. Tipado **nominal** (M3.2): la
+    /// igualdad de tipos compara el nombre.
+    Struct(String),
 }
 
 impl std::fmt::Display for Type {
@@ -40,14 +43,26 @@ impl std::fmt::Display for Type {
             Type::String => f.write_str("string"),
             Type::Unit => f.write_str("unit"),
             Type::Array(elem) => write!(f, "[{}]", elem),
+            Type::Struct(name) => f.write_str(name),
         }
     }
 }
 
-/// Un programa completo: una lista de funciones de nivel superior.
+/// Un programa completo: definiciones de struct y funciones de nivel superior.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub functions: Vec<Function>,
+    pub structs: Vec<StructDef>,
+}
+
+/// Definición de un struct: `struct Nombre { campo: Tipo, ... }` (M3.2). Los campos
+/// se guardan **en orden de declaración**.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<(String, Type)>,
+    pub line: usize,
+    pub col: usize,
 }
 
 /// Una función: `fn nombre(params) -> retorno { cuerpo }`.
@@ -147,6 +162,12 @@ pub enum ExprKind {
 
     /// Indexación: `a[i]`. (M3)
     Index { array: Box<Expr>, index: Box<Expr> },
+
+    /// Literal de struct: `Punto { x: 1, y: 2 }`. (M3.2)
+    StructLit { name: String, fields: Vec<(String, Expr)> },
+
+    /// Acceso a campo: `p.x`. (M3.2)
+    Field { object: Box<Expr>, name: String },
 
     // --- Expresiones con bloque (producen valor, DESIGN.md §6) ---
     /// `if (cond) { then } else { ... }`. `else_branch`, si existe, es otro `Expr`

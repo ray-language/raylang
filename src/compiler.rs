@@ -18,8 +18,12 @@
 use std::collections::HashMap;
 
 use crate::ast::*;
-use crate::bytecode::{Chunk, CompiledFn, CompiledProgram, OpCode};
+use crate::bytecode::{Chunk, CompiledFn, CompiledProgram, CompiledStruct, OpCode};
 use crate::interpreter::Value;
+
+/// Mapa de structs para el compilador: nombre → (índice en la tabla, nombres de
+/// campo en orden de declaración).
+type StructDefs = HashMap<String, (usize, Vec<String>)>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompileError {
@@ -45,15 +49,24 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
     }
     let main = *indices.get("main").expect("el checker garantiza 'main'");
 
+    // Tabla de structs + mapa nombre → (índice, nombres de campo en orden).
+    let mut struct_table = Vec::new();
+    let mut struct_defs: StructDefs = HashMap::new();
+    for (i, s) in program.structs.iter().enumerate() {
+        let field_names: Vec<String> = s.fields.iter().map(|(n, _)| n.clone()).collect();
+        struct_defs.insert(s.name.clone(), (i, field_names.clone()));
+        struct_table.push(CompiledStruct { name: s.name.clone(), fields: field_names });
+    }
+
     let mut functions = Vec::new();
     for f in &program.functions {
-        functions.push(compile_function(f, &indices)?);
+        functions.push(compile_function(f, &indices, &struct_defs)?);
     }
-    Ok(CompiledProgram { functions, main })
+    Ok(CompiledProgram { functions, structs: struct_table, main })
 }
 
-fn compile_function(f: &Function, indices: &HashMap<String, usize>) -> Result<CompiledFn, CompileError> {
-    let mut c = FnCompiler::new(indices);
+fn compile_function(f: &Function, indices: &HashMap<String, usize>, structs: &StructDefs) -> Result<CompiledFn, CompileError> {
+    let mut c = FnCompiler::new(indices, structs);
     // Los parámetros son las primeras locales (slots 0..arity).
     for p in &f.params {
         c.declare_local(&p.name);
@@ -74,7 +87,8 @@ fn compile_function(f: &Function, indices: &HashMap<String, usize>) -> Result<Co
 /// en los tests de expresiones puras.
 pub fn compile_expr(expr: &Expr) -> Result<Chunk, CompileError> {
     let empty = HashMap::new();
-    let mut c = FnCompiler::new(&empty);
+    let empty_structs = HashMap::new();
+    let mut c = FnCompiler::new(&empty, &empty_structs);
     c.emit_expr(expr)?;
     c.emit(OpCode::Return, expr.line, expr.col);
     Ok(c.chunk)
@@ -97,10 +111,11 @@ struct FnCompiler<'a> {
     max_slots: usize,
     scope_depth: usize,
     indices: &'a HashMap<String, usize>,
+    structs: &'a StructDefs,
 }
 
 impl<'a> FnCompiler<'a> {
-    fn new(indices: &'a HashMap<String, usize>) -> Self {
+    fn new(indices: &'a HashMap<String, usize>, structs: &'a StructDefs) -> Self {
         FnCompiler {
             chunk: Chunk::new(),
             locals: Vec::new(),
@@ -108,6 +123,7 @@ impl<'a> FnCompiler<'a> {
             max_slots: 0,
             scope_depth: 0,
             indices,
+            structs,
         }
     }
 
@@ -196,6 +212,12 @@ impl<'a> FnCompiler<'a> {
                     self.emit_expr(index)?;
                     self.emit_expr(value)?;
                     self.emit(OpCode::SetIndex, line, col);
+                }
+                // p.x = e  → struct, valor, SetField.
+                ExprKind::Field { object, name } => {
+                    self.emit_expr(object)?;
+                    self.emit_expr(value)?;
+                    self.emit(OpCode::SetField(name.clone()), line, col);
                 }
                 _ => unreachable!("el checker garantiza un lvalue"),
             },
@@ -334,6 +356,28 @@ impl<'a> FnCompiler<'a> {
                 self.emit_expr(array)?;
                 self.emit_expr(index)?;
                 self.emit(OpCode::Index, line, col);
+            }
+
+            ExprKind::StructLit { name, fields } => {
+                let (idx, field_names) = self.structs.get(name).expect("el checker registró el struct");
+                let idx = *idx;
+                let field_names = field_names.clone(); // suelta el préstamo de self
+                // Emitimos los valores en ORDEN DE DECLARACIÓN (así MakeStruct los
+                // empareja con los nombres de campo de la tabla).
+                for fname in &field_names {
+                    let value_expr = fields
+                        .iter()
+                        .find(|(n, _)| n == fname)
+                        .map(|(_, e)| e)
+                        .expect("el checker garantiza el campo");
+                    self.emit_expr(value_expr)?;
+                }
+                self.emit(OpCode::MakeStruct(idx), line, col);
+            }
+
+            ExprKind::Field { object, name } => {
+                self.emit_expr(object)?;
+                self.emit(OpCode::GetField(name.clone()), line, col);
             }
 
             ExprKind::Call { callee, args } => {

@@ -42,6 +42,17 @@ pub enum Value {
     /// reemplazará el `Rc` para manejar ciclos. La igualdad (`==`) derivada es
     /// **estructural** (compara los elementos).
     Array(Rc<RefCell<Vec<Value>>>),
+    /// Un struct (M3.2). Mismas propiedades que `Array`: referencia + mutación.
+    Struct(Rc<RefCell<StructInstance>>),
+}
+
+/// Instancia de un struct en tiempo de ejecución. Los campos se guardan en **orden
+/// de declaración**, para que la igualdad estructural y la impresión sean
+/// consistentes entre el intérprete y la VM.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructInstance {
+    pub name: String,
+    pub fields: Vec<(String, Value)>,
 }
 
 impl std::fmt::Display for Value {
@@ -56,6 +67,11 @@ impl std::fmt::Display for Value {
                 let elems = rc.borrow();
                 let parts: Vec<String> = elems.iter().map(|v| v.to_string()).collect();
                 write!(f, "[{}]", parts.join(", "))
+            }
+            Value::Struct(rc) => {
+                let s = rc.borrow();
+                let parts: Vec<String> = s.fields.iter().map(|(n, v)| format!("{}: {}", n, v)).collect();
+                write!(f, "{} {{ {} }}", s.name, parts.join(", "))
             }
         }
     }
@@ -100,6 +116,8 @@ struct Interpreter<'a> {
     /// Todas las funciones del programa, por nombre (las referencias viven mientras
     /// viva el `program`, de ahí el lifetime `'a`).
     functions: HashMap<String, &'a Function>,
+    /// Definiciones de struct, por nombre (para construir literales en orden).
+    structs: HashMap<String, &'a StructDef>,
     /// Pila de ámbitos de la función en ejecución. El último es el más interno.
     scopes: Vec<HashMap<String, Value>>,
 }
@@ -110,7 +128,11 @@ impl<'a> Interpreter<'a> {
         for f in &program.functions {
             functions.insert(f.name.clone(), f);
         }
-        Interpreter { functions, scopes: Vec::new() }
+        let mut structs = HashMap::new();
+        for s in &program.structs {
+            structs.insert(s.name.clone(), s);
+        }
+        Interpreter { functions, structs, scopes: Vec::new() }
     }
 
     fn run_main(&mut self) -> Result<Value, RuntimeError> {
@@ -189,6 +211,13 @@ impl<'a> Interpreter<'a> {
                         let idx = check_bounds(i, len, index.line, index.col)?;
                         rc.borrow_mut()[idx] = v;
                     }
+                    ExprKind::Field { object, name } => {
+                        let rc = self.eval_struct(object)?;
+                        let mut s = rc.borrow_mut();
+                        let slot = s.fields.iter_mut().find(|(n, _)| n == name)
+                            .expect("el checker garantiza el campo");
+                        slot.1 = v;
+                    }
                     _ => unreachable!("el checker garantiza un lvalue"),
                 }
                 Ok(())
@@ -248,6 +277,43 @@ impl<'a> Interpreter<'a> {
                 let len = rc.borrow().len();
                 let idx = check_bounds(i, len, index.line, index.col)?;
                 let v = rc.borrow()[idx].clone();
+                Ok(v)
+            }
+
+            ExprKind::StructLit { name, fields } => {
+                // Construimos (y evaluamos) los campos en ORDEN DE DECLARACIÓN, para
+                // que la igualdad y la impresión coincidan con la VM.
+                let field_names: Vec<String> = self
+                    .structs
+                    .get(name.as_str())
+                    .expect("el checker registró el struct")
+                    .fields
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect();
+                let mut built = Vec::with_capacity(field_names.len());
+                for fname in &field_names {
+                    let value_expr = fields
+                        .iter()
+                        .find(|(n, _)| n == fname)
+                        .map(|(_, e)| e)
+                        .expect("el checker garantiza que el campo está presente");
+                    let v = self.eval_expr(value_expr)?;
+                    built.push((fname.clone(), v));
+                }
+                let inst = StructInstance { name: name.clone(), fields: built };
+                Ok(Value::Struct(Rc::new(RefCell::new(inst))))
+            }
+
+            ExprKind::Field { object, name } => {
+                let rc = self.eval_struct(object)?;
+                let v = rc
+                    .borrow()
+                    .fields
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, v)| v.clone())
+                    .expect("el checker garantiza el campo");
                 Ok(v)
             }
 
@@ -410,6 +476,14 @@ impl<'a> Interpreter<'a> {
         match self.eval_expr(expr)? {
             Value::Array(rc) => Ok(rc),
             _ => unreachable!("el checker garantiza un arreglo"),
+        }
+    }
+
+    /// Evalúa una expresión que el checker garantizó struct y devuelve su `Rc`.
+    fn eval_struct(&mut self, expr: &'a Expr) -> Result<Rc<RefCell<StructInstance>>, Flow> {
+        match self.eval_expr(expr)? {
+            Value::Struct(rc) => Ok(rc),
+            _ => unreachable!("el checker garantiza un struct"),
         }
     }
 

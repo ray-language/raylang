@@ -67,6 +67,8 @@ pub fn check(program: &Program) -> Result<(), TypeError> {
 struct Checker {
     /// Firmas de todas las funciones (llenada en la pre-pasada).
     functions: HashMap<String, FnSig>,
+    /// Definiciones de struct: nombre → campos (en orden). Pre-pasada.
+    structs: HashMap<String, Vec<(String, Type)>>,
     /// Pila de ámbitos de variables. El último es el más interno.
     scopes: Vec<HashMap<String, VarInfo>>,
     /// Tipo de retorno de la función que estamos verificando ahora mismo, para
@@ -78,12 +80,28 @@ impl Checker {
     fn new() -> Self {
         Checker {
             functions: HashMap::new(),
+            structs: HashMap::new(),
             scopes: Vec::new(),
             current_return: Type::Unit,
         }
     }
 
     fn check_program(&mut self, program: &Program) -> Result<(), TypeError> {
+        // --- Pre-pasada: registrar structs (antes que las funciones, que pueden
+        // usarlos en sus tipos) ---
+        for s in &program.structs {
+            if self.structs.contains_key(&s.name) {
+                return Err(self.err(s.line, s.col, format!("struct '{}' declarado dos veces", s.name)));
+            }
+            self.structs.insert(s.name.clone(), s.fields.clone());
+        }
+        // Validar que los tipos de los campos existen (p. ej. structs referenciados).
+        for s in &program.structs {
+            for (_, ty) in &s.fields {
+                self.ensure_type(ty, s.line, s.col)?;
+            }
+        }
+
         // --- Pre-pasada: registrar firmas ---
         for f in &program.functions {
             if self.functions.contains_key(&f.name) {
@@ -117,6 +135,10 @@ impl Checker {
     }
 
     fn check_function(&mut self, f: &Function) -> Result<(), TypeError> {
+        for p in &f.params {
+            self.ensure_type(&p.ty, p.line, p.col)?;
+        }
+        self.ensure_type(&f.return_type, f.line, f.col)?;
         self.current_return = f.return_type.clone();
         self.push_scope();
 
@@ -159,6 +181,7 @@ impl Checker {
     fn check_stmt(&mut self, stmt: &Stmt) -> Result<(), TypeError> {
         match &stmt.kind {
             StmtKind::Let { name, ty, value, mutable } => {
+                self.ensure_type(ty, stmt.line, stmt.col)?;
                 // Caso especial: `[]` adopta el tipo de arreglo declarado (no hay
                 // de dónde inferir el tipo de elemento de un arreglo vacío).
                 let vt = if matches!(&value.kind, ExprKind::ArrayLit(e) if e.is_empty()) {
@@ -236,6 +259,15 @@ impl Checker {
                 }
                 Ok(())
             }
+            // p.x = e  — mutar un campo (no requiere 'var', como el índice).
+            ExprKind::Field { object, name } => {
+                let fty = self.check_field(object, name)?;
+                let vt = self.check_expr(value)?;
+                if vt != fty {
+                    return Err(self.err(value.line, value.col, format!("el campo '{}' es {} pero se le asigna {}", name, fty, vt)));
+                }
+                Ok(())
+            }
             _ => Err(self.err(target.line, target.col, "el lado izquierdo no es asignable".into())),
         }
     }
@@ -251,6 +283,65 @@ impl Checker {
         match at {
             Type::Array(elem) => Ok(*elem),
             other => Err(self.err(array.line, array.col, format!("no se puede indexar un {} (no es un arreglo)", other))),
+        }
+    }
+
+    /// Verifica que un tipo es válido: los structs referenciados deben existir.
+    fn ensure_type(&self, ty: &Type, line: usize, col: usize) -> Result<(), TypeError> {
+        match ty {
+            Type::Array(elem) => self.ensure_type(elem, line, col),
+            Type::Struct(name) if !self.structs.contains_key(name) => {
+                Err(self.err(line, col, format!("tipo desconocido: struct '{}' no declarado", name)))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Verifica un literal de struct `Nombre { campo: valor, ... }`: el struct debe
+    /// existir y los campos deben coincidir exactamente (mismos nombres y tipos).
+    fn check_struct_lit(&mut self, name: &str, fields: &[(String, Expr)], line: usize, col: usize) -> Result<Type, TypeError> {
+        let declared = match self.structs.get(name) {
+            Some(d) => d.clone(), // clonamos para soltar el préstamo de self
+            None => return Err(self.err(line, col, format!("struct '{}' no declarado", name))),
+        };
+        // No debe haber campos desconocidos.
+        for (fname, fexpr) in fields {
+            if !declared.iter().any(|(dname, _)| dname == fname) {
+                return Err(self.err(fexpr.line, fexpr.col, format!("'{}' no tiene un campo '{}'", name, fname)));
+            }
+        }
+        // Cada campo declarado debe estar presente exactamente una vez y con su tipo.
+        for (dname, dty) in &declared {
+            let matches: Vec<&(String, Expr)> = fields.iter().filter(|(fname, _)| fname == dname).collect();
+            match matches.as_slice() {
+                [] => return Err(self.err(line, col, format!("falta el campo '{}' en el literal de '{}'", dname, name))),
+                [(_, value)] => {
+                    let vt = self.check_expr(value)?;
+                    if vt != *dty {
+                        return Err(self.err(value.line, value.col, format!(
+                            "campo '{}' de '{}': se esperaba {}, se dio {}", dname, name, dty, vt
+                        )));
+                    }
+                }
+                _ => return Err(self.err(line, col, format!("campo '{}' de '{}' repetido", dname, name))),
+            }
+        }
+        Ok(Type::Struct(name.to_string()))
+    }
+
+    /// Verifica `obj.name` y devuelve el tipo del campo. Reusado por el acceso como
+    /// expresión y como destino de asignación.
+    fn check_field(&mut self, object: &Expr, name: &str) -> Result<Type, TypeError> {
+        let ot = self.check_expr(object)?;
+        match ot {
+            Type::Struct(sname) => {
+                let fields = self.structs.get(&sname).expect("el checker registró el struct");
+                match fields.iter().find(|(fname, _)| fname == name) {
+                    Some((_, fty)) => Ok(fty.clone()),
+                    None => Err(self.err(object.line, object.col, format!("el struct '{}' no tiene un campo '{}'", sname, name))),
+                }
+            }
+            other => Err(self.err(object.line, object.col, format!("no se puede acceder a '.{}' en un {} (no es un struct)", name, other))),
         }
     }
 
@@ -300,6 +391,10 @@ impl Checker {
             }
 
             ExprKind::Index { array, index } => self.check_index(array, index),
+
+            ExprKind::StructLit { name, fields } => self.check_struct_lit(name, fields, expr.line, expr.col),
+
+            ExprKind::Field { object, name } => self.check_field(object, name),
 
             ExprKind::If { cond, then_branch, else_branch } => {
                 let ct = self.check_expr(cond)?;
@@ -525,14 +620,14 @@ impl Checker {
 
 // ----- Auxiliares libres -----
 
-/// ¿Pueden compararse con == / != valores de este tipo? (Arreglos: estructural.)
+/// ¿Pueden compararse con == / != valores de este tipo? (Compuestos: estructural.)
 fn is_comparable(t: &Type) -> bool {
-    matches!(t, Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_))
+    matches!(t, Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_) | Type::Struct(_))
 }
 
 /// ¿Puede `print` imprimir este tipo?
 fn is_printable(t: &Type) -> bool {
-    matches!(t, Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_))
+    matches!(t, Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_) | Type::Struct(_))
 }
 
 fn bin_op_str(op: BinaryOp) -> &'static str {
@@ -744,5 +839,31 @@ fn main() -> int {
         err_contains("fn main() -> int { let a: [int] = [1]; a[0] = true; a[0] }", "se le asigna bool");
         err_contains("fn main() -> int { len(5) }", "len espera un arreglo");
         err_contains("fn main() { let a: [int] = [1]; push(a, true); }", "se empuja bool");
+    }
+
+    // ----- M3.2: structs -----
+
+    #[test]
+    fn structs_validos() {
+        assert!(check_src("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 1, y: 2 }; p.x + p.y }").is_ok());
+        assert!(check_src("struct P { x: int } fn main() { var p: P = P { x: 1 }; p.x = 9; }").is_ok());
+        // Campos en otro orden: válido.
+        assert!(check_src("struct P { x: int, y: int } fn main() -> int { let p: P = P { y: 2, x: 1 }; p.x }").is_ok());
+        // Structs anidados y como parámetro.
+        assert!(check_src(
+            "struct P { x: int } struct L { a: P, b: P }
+             fn f(l: L) -> int { l.a.x } fn main() -> int { f(L { a: P { x: 1 }, b: P { x: 2 } }) }"
+        ).is_ok());
+    }
+
+    #[test]
+    fn structs_errores() {
+        err_contains("fn main() { let p: Foo = Foo { x: 1 }; }", "no declarado");
+        err_contains("struct P { x: int } fn main() -> int { let p: P = P { x: true }; p.x }", "se esperaba int");
+        err_contains("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 1 }; p.x }", "falta el campo");
+        err_contains("struct P { x: int } fn main() -> int { let p: P = P { x: 1, z: 2 }; p.x }", "no tiene un campo");
+        err_contains("struct P { x: int } fn main() -> int { let p: P = P { x: 1 }; p.y }", "no tiene un campo");
+        err_contains("struct P { x: int } fn main() -> int { let n: int = 5; n.x }", "no es un struct");
+        err_contains("struct P {} struct P {} fn main() {}", "declarado dos veces");
     }
 }

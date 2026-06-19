@@ -56,13 +56,38 @@ impl Parser {
     // Reglas de la gramática
     // =================================================================
 
-    /// program = { function }
+    /// program = { struct_def | function }
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut functions = Vec::new();
+        let mut structs = Vec::new();
         while !self.is_at_end() {
-            functions.push(self.function()?);
+            if self.check(&TokenKind::Struct) {
+                structs.push(self.struct_def()?);
+            } else {
+                functions.push(self.function()?);
+            }
         }
-        Ok(Program { functions })
+        Ok(Program { functions, structs })
+    }
+
+    /// struct_def = 'struct' IDENT '{' [ field { ',' field } [ ',' ] ] '}'
+    /// field      = IDENT ':' type
+    fn struct_def(&mut self) -> Result<StructDef, ParseError> {
+        let kw = self.expect(&TokenKind::Struct, "'struct'")?;
+        let (name, _, _) = self.expect_ident("el nombre del struct")?;
+        self.expect(&TokenKind::LBrace, "'{' tras el nombre del struct")?;
+        let mut fields = Vec::new();
+        while !self.check(&TokenKind::RBrace) {
+            let (fname, _, _) = self.expect_ident("el nombre de un campo")?;
+            self.expect(&TokenKind::Colon, "':' tras el nombre del campo")?;
+            let ty = self.parse_type()?;
+            fields.push((fname, ty));
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RBrace, "'}' para cerrar el struct")?;
+        Ok(StructDef { name, fields, line: kw.line, col: kw.col })
     }
 
     /// function = 'fn' IDENT '(' [ params ] ')' [ '->' type ] block
@@ -119,12 +144,18 @@ impl Parser {
             self.expect(&TokenKind::RBracket, "']' para cerrar el tipo de arreglo")?;
             return Ok(Type::Array(Box::new(elem)));
         }
+        // Nombre de struct (un identificador es un tipo).
+        if let TokenKind::Ident(name) = self.peek_kind() {
+            let name = name.clone();
+            self.advance();
+            return Ok(Type::Struct(name));
+        }
         let ty = match self.peek_kind() {
             TokenKind::IntType => Type::Int,
             TokenKind::FloatType => Type::Float,
             TokenKind::BoolType => Type::Bool,
             TokenKind::StringType => Type::String,
-            _ => return Err(self.error_here("se esperaba un tipo (int, float, bool, string o [T])".into())),
+            _ => return Err(self.error_here("se esperaba un tipo (int, float, bool, string, [T] o un struct)".into())),
         };
         self.advance();
         Ok(ty)
@@ -375,6 +406,14 @@ impl Parser {
                     line,
                     col,
                 };
+            } else if self.check(&TokenKind::Dot) {
+                self.advance(); // '.'
+                let (name, _, _) = self.expect_ident("el nombre del campo tras '.'")?;
+                expr = Expr {
+                    kind: ExprKind::Field { object: Box::new(expr), name },
+                    line,
+                    col,
+                };
             } else {
                 break;
             }
@@ -417,7 +456,15 @@ impl Parser {
             TokenKind::Str(s) => ExprKind::Str(s),
             TokenKind::True => ExprKind::Bool(true),
             TokenKind::False => ExprKind::Bool(false),
-            TokenKind::Ident(name) => ExprKind::Ident(name),
+            TokenKind::Ident(name) => {
+                // `Nombre { ... }` es un literal de struct. (Las condiciones de
+                // if/while van entre paréntesis, así que no hay ambigüedad con los
+                // bloques.)
+                if self.check(&TokenKind::LBrace) {
+                    return self.struct_literal(name, tok.line, tok.col);
+                }
+                ExprKind::Ident(name)
+            }
             TokenKind::LParen => {
                 // Agrupación: el paréntesis no deja rastro en el AST, solo afecta
                 // el orden de parseo. Conservamos la posición del '('.
@@ -492,6 +539,24 @@ impl Parser {
         }
         self.expect(&TokenKind::RBracket, "']' para cerrar el arreglo")?;
         Ok(Expr { kind: ExprKind::ArrayLit(elems), line: open.line, col: open.col })
+    }
+
+    /// structLiteral = IDENT '{' [ fieldInit { ',' fieldInit } [ ',' ] ] '}'
+    /// fieldInit     = IDENT ':' expression
+    fn struct_literal(&mut self, name: String, line: usize, col: usize) -> Result<Expr, ParseError> {
+        self.expect(&TokenKind::LBrace, "'{'")?;
+        let mut fields = Vec::new();
+        while !self.check(&TokenKind::RBrace) {
+            let (fname, _, _) = self.expect_ident("el nombre de un campo")?;
+            self.expect(&TokenKind::Colon, "':' tras el nombre del campo")?;
+            let value = self.expression()?;
+            fields.push((fname, value));
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RBrace, "'}' para cerrar el literal de struct")?;
+        Ok(Expr { kind: ExprKind::StructLit { name, fields }, line, col })
     }
 
     // =================================================================
@@ -591,7 +656,7 @@ fn expr_has_block(e: &Expr) -> bool {
 /// ¿Es una expresión a la que se puede asignar (un *lvalue*)? En M3.1, un nombre
 /// o una indexación. El acceso a campo (`p.x`) se sumará en M3.2.
 fn is_lvalue(e: &Expr) -> bool {
-    matches!(e.kind, ExprKind::Ident(_) | ExprKind::Index { .. })
+    matches!(e.kind, ExprKind::Ident(_) | ExprKind::Index { .. } | ExprKind::Field { .. })
 }
 
 // =====================================================================
@@ -636,6 +701,11 @@ mod tests {
                 format!("[{}]", e.join(", "))
             }
             ExprKind::Index { array, index } => format!("(index {} {})", sx(array), sx(index)),
+            ExprKind::StructLit { name, fields } => {
+                let fs: Vec<String> = fields.iter().map(|(n, e)| format!("{}: {}", n, sx(e))).collect();
+                format!("{} {{{}}}", name, fs.join(", "))
+            }
+            ExprKind::Field { object, name } => format!("(field {} {})", sx(object), name),
             ExprKind::If { cond, then_branch, else_branch } => {
                 let els = else_branch
                     .as_ref()
@@ -745,6 +815,14 @@ mod tests {
     }
 
     #[test]
+    fn structs_literal_y_campo() {
+        assert_eq!(sx(&parse_expr("Punto { x: 1, y: 2 }")), "Punto {x: 1, y: 2}");
+        assert_eq!(sx(&parse_expr("p.x")), "(field p x)");
+        assert_eq!(sx(&parse_expr("p.pos.x")), "(field (field p pos) x)");
+        assert_eq!(sx(&parse_expr("a[0].x")), "(field (index a 0) x)");
+    }
+
+    #[test]
     fn if_como_expresion() {
         assert_eq!(
             sx(&parse_expr("if (x < 0) { -x } else { x }")),
@@ -820,8 +898,8 @@ fn main() -> int {
         assert!(bad("fn main() { let x = 1; }").is_err());
         // paréntesis sin cerrar
         assert!(bad("fn main() { f(1 }").is_err());
-        // tipo de retorno inválido
-        assert!(bad("fn main() -> foo { 0 }").is_err());
+        // falta el tipo de retorno tras '->'
+        assert!(bad("fn main() -> { 0 }").is_err());
         // expresión incompleta
         assert!(bad("fn main() { 1 + }").is_err());
     }

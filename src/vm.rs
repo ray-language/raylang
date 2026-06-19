@@ -19,7 +19,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::bytecode::{Chunk, CompiledFn, CompiledProgram, OpCode};
-use crate::interpreter::{RuntimeError, Value};
+use crate::interpreter::{RuntimeError, StructInstance, Value};
 
 /// Límite de marcos para detectar recursión infinita en vez de colgarse.
 const MAX_FRAMES: usize = 1024;
@@ -39,6 +39,7 @@ pub fn run(chunk: &Chunk) -> Result<Value, RuntimeError> {
             num_locals: 0,
             chunk: chunk.clone(),
         }],
+        structs: Vec::new(),
         main: 0,
     };
     run_program(&program)
@@ -194,6 +195,33 @@ impl<'a> Vm<'a> {
                     self.push(Value::Unit);
                 }
 
+                // --- Structs (M3.2) ---
+                OpCode::MakeStruct(idx) => {
+                    // Clonamos nombre y campos para soltar el préstamo de program.
+                    let sname = self.program.structs[*idx].name.clone();
+                    let field_names: Vec<String> = self.program.structs[*idx].fields.clone();
+                    let mut values = Vec::with_capacity(field_names.len());
+                    for _ in 0..field_names.len() {
+                        values.push(self.pop());
+                    }
+                    values.reverse(); // orden de declaración
+                    let fields: Vec<(String, Value)> = field_names.into_iter().zip(values).collect();
+                    self.push(Value::Struct(Rc::new(RefCell::new(StructInstance { name: sname, fields }))));
+                }
+                OpCode::GetField(name) => {
+                    let rc = self.pop_struct();
+                    let v = rc.borrow().fields.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
+                        .expect("el checker garantiza el campo");
+                    self.push(v);
+                }
+                OpCode::SetField(name) => {
+                    let v = self.pop();
+                    let rc = self.pop_struct();
+                    let mut s = rc.borrow_mut();
+                    let slot = s.fields.iter_mut().find(|(n, _)| n == name).expect("el checker garantiza el campo");
+                    slot.1 = v;
+                }
+
                 OpCode::Call(idx, argc) => {
                     if self.frames.len() >= MAX_FRAMES {
                         return Err(runtime_error(line, col, "desbordamiento de pila (recursión demasiado profunda)"));
@@ -242,6 +270,13 @@ impl<'a> Vm<'a> {
         match self.pop() {
             Value::Array(rc) => rc,
             _ => unreachable!("el checker garantiza un arreglo"),
+        }
+    }
+
+    fn pop_struct(&mut self) -> Rc<RefCell<StructInstance>> {
+        match self.pop() {
+            Value::Struct(rc) => rc,
+            _ => unreachable!("el checker garantiza un struct"),
         }
     }
 }
@@ -496,5 +531,38 @@ mod tests {
         crate::checker::check(&prog).unwrap();
         let compiled = compile_program(&prog).unwrap();
         assert!(run_program(&compiled).unwrap_err().msg.contains("fuera de rango"));
+    }
+
+    // ----- M3.2: structs -----
+
+    #[test]
+    fn structs_acceso_y_orden_de_campos() {
+        oracle_program("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 3, y: 4 }; p.x + p.y }");
+        // El orden del literal no afecta el resultado.
+        oracle_program("struct P { x: int, y: int } fn main() -> int { let p: P = P { y: 4, x: 3 }; p.x - p.y }");
+    }
+
+    #[test]
+    fn structs_mutacion_de_campo() {
+        oracle_program("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 1, y: 2 }; p.x = 9; p.x + p.y }");
+    }
+
+    #[test]
+    fn structs_son_por_referencia() {
+        oracle_program("struct C { v: int } fn main() -> int { let a: C = C { v: 1 }; let b: C = a; b.v = 9; a.v }");
+    }
+
+    #[test]
+    fn structs_anidados_y_con_arreglos() {
+        oracle_program(
+            "struct P { x: int, y: int }
+             struct L { a: P, b: P }
+             fn dx(l: L) -> int { l.b.x - l.a.x }
+             fn main() -> int { dx(L { a: P { x: 1, y: 0 }, b: P { x: 5, y: 0 } }) }",
+        );
+        oracle_program(
+            "struct Pila { datos: [int] }
+             fn main() -> int { let s: Pila = Pila { datos: [10, 20] }; push(s.datos, 30); s.datos[2] }",
+        );
     }
 }

@@ -112,6 +112,7 @@ impl Lexer {
             ',' => TokenKind::Comma,
             ';' => TokenKind::Semicolon,
             ':' => TokenKind::Colon,
+            '.' => TokenKind::Dot,
 
             // Operadores que pueden tener una segunda parte.
             '=' => {
@@ -336,6 +337,7 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "while" => TokenKind::While,
         "true" => TokenKind::True,
         "false" => TokenKind::False,
+        "struct" => TokenKind::Struct,
         "int" => TokenKind::IntType,
         "float" => TokenKind::FloatType,
         "bool" => TokenKind::BoolType,
@@ -374,11 +376,12 @@ mod tests {
 
     #[test]
     fn punto_sin_decimal_no_es_flotante() {
-        // "1.foo" debe ser Int(1) Dot... pero aún no hay '.', así que en M1 esto
-        // produce Int(1) y luego un error de carácter '.' inesperado. Verificamos
-        // que al menos el número no se traga el punto.
-        let toks = lex("1 .").err();
-        assert!(toks.is_some(), "'.' suelto aún no es un token válido en M1");
+        // El número no se traga el punto si no le sigue un dígito: "1.x" debe ser
+        // Int(1), Dot, Ident("x") (acceso a campo), no un flotante.
+        assert_eq!(
+            kinds("1.x"),
+            vec![TokenKind::Int(1), TokenKind::Dot, TokenKind::Ident("x".into()), TokenKind::Eof]
+        );
         // Y que "12.5" sí es flotante.
         assert_eq!(kinds("12.5"), vec![TokenKind::Float(12.5), TokenKind::Eof]);
     }

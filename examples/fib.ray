@@ -1,0 +1,22 @@
+// Programa-objetivo de M1 (ver DESIGN.md §9).
+// Calcula los primeros 10 números de Fibonacci.
+//
+// Por ahora solo lo usamos para alimentar al lexer:
+//   cargo run -- examples/fib.ray
+
+fn fib(n: int) -> int {
+    if (n < 2) {
+        n
+    } else {
+        fib(n - 1) + fib(n - 2)
+    }
+}
+
+fn main() -> int {
+    var i: int = 0;
+    while (i < 10) {
+        print(fib(i));
+        i = i + 1;
+    }
+    0
+}

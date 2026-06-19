@@ -1,0 +1,10 @@
+// Máximo común divisor por el algoritmo de Euclides (recursivo).
+fn gcd(a: int, b: int) -> int {
+    if (b == 0) { a } else { gcd(b, a % b) }
+}
+
+fn main() -> int {
+    print(gcd(48, 36));
+    print(gcd(1071, 462));
+    0
+}

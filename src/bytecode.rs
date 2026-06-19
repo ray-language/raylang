@@ -55,13 +55,23 @@ pub enum OpCode {
     /// Esto es lo que permite el cortocircuito de `&&`/`||`.
     JumpIfFalse(usize),
 
+    // --- Variables locales y llamadas (M2.3) ---
+    /// Empuja a la pila el valor del slot local `slot` del marco actual.
+    GetLocal(usize),
+    /// Saca la cima y la guarda en el slot local `slot` del marco actual.
+    SetLocal(usize),
+    /// Llama a `functions[idx]` tomando `argc` argumentos de la pila.
+    Call(usize, usize),
+    /// Builtin `print`: saca un valor, lo imprime, y empuja unit.
+    Print,
+
     /// Termina la ejecución del chunk; el valor de retorno es la cima de la pila.
     Return,
 }
 
 /// Un bloque de bytecode compilado: las instrucciones, la tabla de constantes, y
 /// la posición fuente de cada instrucción (para errores con ubicación).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Chunk {
     pub code: Vec<OpCode>,
     pub constants: Vec<Value>,
@@ -106,4 +116,21 @@ impl Chunk {
         }
         out
     }
+}
+
+/// Una función compilada a bytecode.
+#[derive(Debug)]
+pub struct CompiledFn {
+    pub name: String,
+    pub arity: usize,
+    /// Tamaño del arreglo de slots locales que necesita un marco de esta función.
+    pub num_locals: usize,
+    pub chunk: Chunk,
+}
+
+/// Un programa compilado: sus funciones (indexadas) y el índice de `main`.
+#[derive(Debug)]
+pub struct CompiledProgram {
+    pub functions: Vec<CompiledFn>,
+    pub main: usize,
 }

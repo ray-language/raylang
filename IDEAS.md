@@ -85,6 +85,12 @@ Inspeccionar tipos y valores en tiempo de ejecución.
   clases con herencia. Despacho estático por defecto; *trait objects* (despacho
   dinámico) como opción posterior. Encaja limpio con UFCS y genéricos.
 - **Cuándo**: decidir al llegar a M5/M6. No afecta M1.
+- **Es la primitiva de desacople.** Programar contra un trait (no contra un tipo
+  concreto) es lo que permite *delegar/intercambiar implementaciones*. Las
+  anotaciones (§9) no desacoplan por sí solas: a lo sumo generan el reenvío
+  (`@delegate`/`by` estilo Kotlin) encima de un trait. La DI por reflexión
+  (estilo Spring) queda **fuera del camino principal** (runtime + reflexión; el
+  trait logra el mismo desacople sin magia y con seguridad de tipos).
 
 ## 5. Hot code reloading
 
@@ -174,6 +180,11 @@ rendimiento. Candidatas:
 - `@derive(Eq, Show)` — autogenera igualdad/impresión para `struct`/`enum`. Su caso
   de uso natural aparece **cuando existan structs/enums** (M3/M5), que es lo que las
   motiva de verdad.
+- `@delegate` / keyword `by` — autogenera el **reenvío** de los métodos de un trait
+  a un campo (`struct App impl Saludo by saludo`). Es *sugar* sobre traits (§4): la
+  anotación genera el reenvío, pero el desacople lo da el trait, no la anotación.
+  La inyección de dependencias por anotación (`@inject` + contenedor/reflexión)
+  queda **fuera del camino principal**.
 
 **Lo que NO hacemos por ahora:**
 

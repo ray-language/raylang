@@ -1,0 +1,33 @@
+// Enum RECURSIVO: una variante puede portar el propio tipo del enum. Es lo que
+// hace a los tipos suma tan potentes: listas, árboles, expresiones...
+//
+// Como el tipo es nominal y el valor vive en el heap (Rc en el intérprete,
+// handle + GC en la VM), no hay problema de "tamaño infinito".
+//
+// Nota: en M5.1 podemos CONSTRUIR e imprimir la lista; recorrerla (calcular su
+// longitud, sumarla...) necesita `match`, que llega en M5.2.
+
+// Una lista de enteros es: o bien una celda (cabeza + resto), o bien vacía.
+enum Lista {
+    Cons(int, Lista),
+    Nil,
+}
+
+// Construye la lista [n, n-1, ..., 1] recursivamente. Cada Cons envuelve al resto.
+fn rango_desc(n: int) -> Lista {
+    if (n == 0) {
+        Lista.Nil
+    } else {
+        Lista.Cons(n, rango_desc(n - 1))
+    }
+}
+
+fn main() {
+    // Construcción manual, anidando variantes.
+    let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Cons(3, Lista.Nil)));
+    print(xs);   // Lista.Cons(1, Lista.Cons(2, Lista.Cons(3, Lista.Nil)))
+
+    // Construcción recursiva.
+    let ys: Lista = rango_desc(5);
+    print(ys);   // Lista.Cons(5, ... Lista.Cons(1, Lista.Nil) ...)
+}

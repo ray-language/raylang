@@ -1,0 +1,45 @@
+// Tipos suma (enum): una variante de varias, cada una con su payload posicional.
+// M5.1 permite CONSTRUIR, pasar e imprimir variantes; consumirlas con `match`
+// llega en M5.2. Las variantes se nombran cualificadas: Enum.Variante.
+
+// Una figura es UNA de estas formas. El payload va entre paréntesis (posicional);
+// `Punto` no lleva datos (variante unit).
+enum Figura {
+    Circulo(float),
+    Rect(float, float),
+    Punto,
+}
+
+// Un evento de UI: variantes con distinto payload (y una sin él). Muestra que el
+// payload puede ser de cualquier tipo, incluso string.
+enum Evento {
+    Click(int, int),
+    Tecla(string),
+    Cerrar,
+}
+
+// Una función puede recibir y devolver enums como cualquier valor.
+fn reflejar(e: Evento) -> Evento {
+    e
+}
+
+fn main() {
+    // Construir variantes con y sin payload.
+    let c: Figura = Figura.Circulo(2.0);
+    let r: Figura = Figura.Rect(3.0, 4.0);
+    let p: Figura = Figura.Punto;
+
+    print(c);   // Figura.Circulo(2)
+    print(r);   // Figura.Rect(3, 4)
+    print(p);   // Figura.Punto
+
+    // Un arreglo de eventos: enums como elementos de [T].
+    let eventos: [Evento] = [
+        Evento.Click(10, 20),
+        Evento.Tecla("Enter"),
+        Evento.Cerrar
+    ];
+    print(eventos[0]);          // Evento.Click(10, 20)
+    print(reflejar(eventos[1])); // Evento.Tecla(Enter)
+    print(eventos[2]);          // Evento.Cerrar
+}

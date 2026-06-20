@@ -72,7 +72,7 @@ Este documento especifica **M1** en detalle y fija el norte de lo posterior.
 let  var  fn  return  if  else  while  true  false
 int  bool  float  string
 ```
-Reservadas para el futuro (el lexer puede ya conocerlas): `enum match struct`.
+Activadas después: `struct` (M3), `enum` y `match` (M5).
 
 ### 3.3 Identificadores
 `[a-zA-Z_][a-zA-Z0-9_]*` — no pueden coincidir con una palabra clave.
@@ -461,3 +461,148 @@ fn contador() -> fn() -> int {
   en el intérprete).
 - **M4.3**: GC mark-and-sweep en la VM (heap, raíces, marca/barrido, disparo y modo
   de estrés); reemplaza el `Rc` de la VM.
+
+## 14. M5 — Tipos suma (`enum`) y pattern matching (`match`)
+
+M5 introduce las **uniones etiquetadas** (tipos suma) y su forma de consumo,
+`match`, con **exhaustividad** verificada por el checker —la lección central del
+hito—. Es la base sobre la que M6 montará `Option<T>`/`Result<T,E>` al sumarle
+genéricos.
+
+### 14.0 Decisiones de diseño (cerradas)
+
+Cuatro decisiones fijan el sabor de M5 (las demás las fuerza el norte del lenguaje):
+
+1. **Payload posicional.** Una variante lleva datos como una tupla:
+   `Circulo(float)`, `Rect(float, float)`. Sin datos = variante *unit*: `Punto`.
+   Variantes con campos nombrados (`Circulo { r: float }`) se **defieren**.
+2. **Variantes cualificadas.** Se construyen y se matchean con el nombre del enum
+   delante: `Figura.Circulo(2.0)`. Reusa el token `.`; sin colisiones entre enums.
+3. **`match` solo sobre enums** (más `_` y *binding*). Patrones de variante, comodín
+   y ligar el valor completo a un nombre. Literales en `int`/`bool` se **defieren**.
+4. **Patrones planos** (un nivel). El payload se liga a nombres simples o `_`:
+   `Circulo(r)`, `Rect(w, h)`. Subpatrones anidados (`Ok(Circulo(r))`) se **defieren**.
+
+Forzado por el norte del lenguaje (no son decisiones abiertas):
+- **`enum` es nominal**, como `struct`: la igualdad de tipos compara el nombre.
+- **`match` es una expresión**: produce un valor; todos los brazos convergen a un
+  mismo tipo (unificado como en `if`/bloques, DESIGN §8).
+- **Exhaustividad obligatoria**: sin `null` y siendo `match` una expresión que debe
+  producir valor en todo camino, el checker exige cubrir **todas** las variantes o
+  incluir un comodín/binding. Es *la* prueba de M5.
+
+### 14.1 Sintaxis nueva
+
+```
+// Declaración (nivel superior, junto a struct y fn)
+enum Figura {
+    Circulo(float),
+    Rect(float, float),
+    Punto,            // variante unit
+}
+
+// Construcción (cualificada)
+let a = Figura.Circulo(2.0);
+let b = Figura.Punto;
+
+// Consumo (match es una expresión)
+let area = match figura {
+    Figura.Circulo(r)  => 3.14159 * r * r,
+    Figura.Rect(w, h)  => w * h,
+    Figura.Punto       => 0.0,
+};
+```
+
+- **`enum` y `match` pasan a ser palabras clave** (ya reservadas en DESIGN §3.2). El
+  lexer las reconoce desde M5.1.
+- **Coma final permitida** tanto en la lista de variantes como en la de brazos.
+- El cuerpo de un brazo es una **expresión** (puede ser un bloque `{ ...; valor }`).
+- **Enums recursivos permitidos**: `enum Lista { Cons(int, Lista), Nil }`. El tipo es
+  nominal (un nombre), así que no hay problema de tamaño infinito: el valor vive
+  en el heap (Rc en el intérprete, handle en la VM).
+
+### 14.2 Patrones (planos, M5)
+
+Dentro de un brazo, un patrón es una de tres formas —el parser las distingue sin
+ambigüedad porque las variantes van **cualificadas**—:
+
+| Patrón | Forma | Liga | Cubre |
+|--------|-------|------|-------|
+| Variante | `Figura.Circulo(r)`, `Figura.Punto` | sus sub-bindings | esa variante |
+| Sub-binding | un `Ident` o `_` dentro de la variante | nombre ↦ payload (o nada) | — |
+| Comodín / binding | `_` o un `Ident` suelto | nada / valor completo ↦ nombre | **todo lo restante** |
+
+- La **aridad** del patrón de variante debe igualar la del payload (el checker lo
+  comprueba): `Rect(w, h)` sí, `Rect(w)` error.
+- Un `Ident` suelto (no cualificado) es un **binding catch-all**: liga el escrutinio
+  entero y, por sí solo, hace exhaustivo el `match`. `_` igual pero sin ligar.
+- Las variables ligadas por un patrón son **inmutables** (como los parámetros) y
+  viven solo en el cuerpo de su brazo.
+
+### 14.3 Sistema de tipos
+
+- **Tipo nuevo `Type::Enum(String)`** (calca `Type::Struct`): nominal, por nombre.
+- `Program` gana `enums: Vec<EnumDef>`; `EnumDef { name, variants, .. }` y
+  `VariantDef { name, payload: Vec<Type>, .. }`. Pasada 1 del checker registra las
+  firmas de enum (junto a structs y funciones); pasada 2 chequea cuerpos.
+- **Construcción** `Figura.Circulo(args)`: el tipo del literal es `Enum("Figura")`;
+  los `args` deben tipar contra el payload de la variante (aridad y tipos).
+- **`match`**: el escrutinio debe ser un `Enum`; cada patrón de variante debe
+  pertenecer a ese enum; los cuerpos de los brazos se **unifican** a un tipo común,
+  que es el tipo del `match`.
+- **Exhaustividad**: el conjunto de variantes cubiertas debe ser **todas** las del
+  enum, salvo que exista un comodín/binding. Variante repetida o inalcanzable
+  (después de un catch-all) = error. Mensajes con la(s) variante(s) que faltan.
+- **No comparables con `==`** (como las funciones): los enums pueden ser recursivos
+  y portar funciones; su igualdad estructural se deja para un `@derive(Eq)` futuro.
+  Se consumen por `match`, no por `==`. **Imprimibles**: `print` los muestra como
+  `Figura.Circulo(2.0)` (unit: `Figura.Punto`).
+
+### 14.4 Resolución de la construcción (front-end compartido)
+
+`Figura.Circulo(2.0)` y `p.x` tienen la **misma forma sintáctica** (`Ident . Ident`
+[`( args )`]): el parser no puede distinguirlas porque no sabe aún qué nombres son
+enums. Por eso el parser emite los nodos genéricos de siempre (`Field`/`Call`), y una
+**resolución** —parte del front-end, dentro del checker tras registrar las firmas—
+**reescribe** los `Field`/`Call` cuya cabeza es un nombre de **tipo enum** a un nodo
+explícito `ExprKind::EnumLit { enum_name, variant, args }`.
+
+Así la ambigüedad se resuelve **una sola vez** y el intérprete y la VM reciben un AST
+con `EnumLit` explícito —sin duplicar la regla en cada motor—. (Los patrones, en
+cambio, se parsean directos: solo aparecen bajo `match`, sin ambigüedad.) El checker
+pasa a tomar `&mut Program` para esta reescritura.
+
+### 14.5 Runtime
+
+- **Intérprete**: `Value::Enum(Rc<EnumValue>)` con `EnumValue { enum_name,
+  variant, payload: Vec<Value> }`. Construcción evalúa los `args` y arma el valor;
+  `match` prueba la variante, liga el payload en un ámbito nuevo y evalúa el brazo.
+- **VM**: nuevo `Obj::Enum(VmEnum { variant, payload: Vec<HeapValue> })` en el heap,
+  **trazado por el GC** (sus hijos son los handles del payload) — extiende M4.3 con
+  un tipo de objeto más. `match` baja a bytecode: leer el *tag* de la variante,
+  comparar, extraer el payload a locales, saltar al brazo o al siguiente. Opcodes
+  nuevos para leer tag y payload; la cadena de decisión usa los saltos existentes.
+  Como el checker garantiza exhaustividad, el "ningún brazo" es inalcanzable (se deja
+  un trap defensivo).
+- El **oráculo** (intérprete vs VM) cubre M5, incluido el **modo estrés del GC** con
+  valores enum vivos.
+
+### 14.6 Léxico/sintaxis nuevos
+- Palabras clave **`enum`** y **`match`** (ya reservadas en §3.2; el lexer las activa).
+- Token `=>` (flecha gruesa) para los brazos de `match`. El `.` y los `()` se reusan.
+
+### 14.7 Sub-fases
+- **M5.1 — enums y construcción**: `enum`, `Type::Enum`, resolución de
+  `Enum.Variante(args)` → `EnumLit`, chequeo de construcción, valores enum en
+  intérprete y VM (con GC). Ya se pueden construir, pasar e imprimir enums. Sin
+  `match` todavía.
+- **M5.2 — `match` y exhaustividad (intérprete)**: `match`, patrones planos, binding
+  y `_`; exhaustividad en el checker; ejecución en el intérprete (oráculo de M5.3).
+- **M5.3 — `match` en la VM**: bajada a bytecode (tag, payload, saltos); oráculo
+  verde, incluido el modo estrés.
+
+### 14.8 Deferido (a M6+ o a un hito de patrones)
+- Variantes con **campos nombrados** (`Circulo { r: float }`).
+- **Patrones anidados** (`Ok(Circulo(r))`) y **literales** (`0 => ...`, `true => ...`).
+- **Enums genéricos** → `Option<T>`/`Result<T,E>` y el operador `?` (M6).
+- **`==`/`@derive(Eq, Show)`** para enums.

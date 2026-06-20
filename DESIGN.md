@@ -348,3 +348,102 @@ como posible refinamiento futuro.
 ### 12.7 Sub-fases
 - **M3.1**: arreglos (tipo, literal, indexar, asignar, `len`/`push`).
 - **M3.2**: structs (declaración, literal, acceso, asignación de campo).
+
+## 13. M4 — Closures y recolección de basura
+
+Hito doble en el que **una feature obliga a la otra**. Las closures permiten que un
+valor capturado **sobreviva al marco de pila** que lo creó: ese valor debe escapar
+al heap, y una vez en el heap los valores capturados se referencian libremente y
+forman **ciclos** que el `Rc` de M3 no sabe liberar. Por eso M4 introduce un
+**recolector de basura trazador** (mark-and-sweep) que sustituye al `Rc`.
+
+### 13.0 Las dos decisiones de captura/memoria
+
+- **Captura por referencia (upvalues).** Una closure comparte la *celda* de la
+  variable capturada, no una copia: puede **leer y mutar** un `var` capturado, y el
+  cambio se ve fuera de la closure. Es la closure "de verdad" (clox/JS).
+- **El GC vive en la VM, no en el intérprete.** El intérprete es un *tree-walker*:
+  sus valores vivos están dispersos en la pila de llamadas de Rust, raíces
+  imposibles de enumerar → **se queda con `Rc`** (representa el entorno como cadena
+  de ámbitos compartidos). La VM tiene su estado reificado (pila, marcos, locales):
+  sus raíces son explícitas y enumerables → **aquí vive el mark-and-sweep**. El
+  oráculo compara resultados observables, no memoria, así que ambos motores siguen
+  debiendo coincidir.
+
+### 13.1 Funciones de primera clase
+- **Tipo función**: `fn(T1, T2) -> R` — p. ej. `fn() -> int`, `fn(int, int) -> int`.
+  Es la variante `Type::Fn(params, ret)` anticipada en §4.
+- **Función anónima** (expresión): misma firma que una nombrada **sin el nombre**:
+  `fn(x: int) -> int { x + 1 }`. Reutiliza la gramática de `fn`; en posición de
+  expresión, `fn` abre una función anónima. Sin ambigüedad: la `fn` de nivel
+  superior lleva nombre; la de expresión va seguida de `(`.
+- Las funciones se pueden **pasar como argumento, devolver y guardar** en variables,
+  arreglos y campos.
+- **Igualdad/impresión**: las funciones **no** son comparables (`==`); se imprimen
+  como un marcador opaco `<fn>`. (No tienen identidad estructural.)
+
+### 13.2 Closures (captura de entorno)
+- Una función anónima que referencia variables de un ámbito envolvente es una
+  **closure**: empaqueta el código más sus **upvalues** (las celdas capturadas).
+- **Upvalues en la VM** (el mecanismo central): mientras la variable capturada sigue
+  en la pila, el upvalue está **abierto** (apunta a la ranura de la pila); cuando su
+  marco se descarta, el upvalue se **cierra** (el valor se mueve al heap, dentro del
+  objeto upvalue). La VM mantiene una lista de upvalues abiertos para compartir la
+  misma celda entre varias closures.
+- **En el intérprete**: el entorno se representa como una cadena de ámbitos
+  compartidos (`Rc`), y la closure captura una referencia a esa cadena. Misma
+  semántica observable, sin trazado.
+
+### 13.3 Mutabilidad y captura
+La captura por referencia respeta el modelo de §5/§12.3: capturar **no** reata la
+variable. Una closure puede mutar un `var` capturado (su celda es compartida); un
+`let` capturado se lee pero no se reasigna. Ejemplo canónico (contador con estado):
+
+```rust
+fn contador() -> fn() -> int {
+    var n: int = 0;
+    fn() -> int { n = n + 1; n }   // captura y muta n
+}
+// let c = contador(); c() -> 1; c() -> 2; c() -> 3   (n persiste en el heap)
+```
+
+### 13.4 Sistema de tipos
+- `Type` crece con `Fn(Vec<Type>, Box<Type>)`. El checker tipa la función anónima
+  como su firma, valida el cuerpo igual que una función nombrada (incluido el
+  análisis de divergencia para el retorno implícito) y comprueba la aridad/tipos en
+  la llamada de un valor-función.
+- La captura se valida en el checker: una variable referenciada de un ámbito
+  envolvente queda marcada como **capturada** (información que el compilador usa
+  para emitir upvalues).
+
+### 13.5 Runtime
+- **Intérprete**: `Value::Closure` con el cuerpo (referencia al AST) y el entorno
+  capturado (`Rc` de la cadena de ámbitos). Las variables pasan a vivir en celdas
+  compartidas (`Rc<RefCell<Value>>`) para que la captura por referencia funcione.
+- **VM**: objetos gestionados por el **heap del GC** (no `Rc`): arreglos, structs,
+  closures y celdas de upvalue. Un `Value` compuesto referencia un objeto del heap
+  por **handle**. Las funciones compiladas (`CompiledFn`) son datos estáticos del
+  programa, **no** se recolectan; una closure referencia su `CompiledFn` + sus
+  upvalues.
+
+### 13.6 El recolector (mark-and-sweep, solo VM)
+- **Raíces**: la pila de operandos, las locales de todos los marcos, la lista de
+  upvalues abiertos. (Las funciones compiladas y constantes son estáticas.)
+- **Marca**: desde las raíces, marca recursivamente todo lo alcanzable.
+- **Barrido**: recorre el heap, libera lo no marcado, limpia las marcas de los
+  sobrevivientes. **Los ciclos se liberan** (a diferencia del `Rc`).
+- **Disparo**: cuando el tamaño del heap cruza un umbral que **crece** tras cada
+  recolección (estilo clox `nextGC`). Un **modo de estrés** (recolectar en cada
+  asignación) se usa en tests para destapar bugs de raíces faltantes.
+
+### 13.7 Léxico/sintaxis nuevos
+- **Ninguna palabra clave nueva**: `fn` ya existe; solo gana un uso en posición de
+  expresión. El tipo `fn(...) -> R` reutiliza tokens existentes.
+
+### 13.8 Sub-fases
+- **M4.1**: funciones de primera clase (tipo `Fn`, función anónima sin captura,
+  pasar/retornar/guardar). Sin upvalues ni GC todavía.
+- **M4.2**: closures (captura por referencia; upvalues en la VM, entorno compartido
+  en el intérprete).
+- **M4.3**: GC mark-and-sweep en la VM (heap, raíces, marca/barrido, disparo y modo
+  de estrés); reemplaza el `Rc` de la VM.

@@ -65,6 +65,13 @@ pub enum OpCode {
     /// Builtin `print`: saca un valor, lo imprime, y empuja unit.
     Print,
 
+    // --- Funciones de primera clase (M4.1) ---
+    /// Empuja un valor-función: `functions[idx]` como dato (sin llamarla).
+    Function(usize),
+    /// Llamada indirecta: en la pila están el valor-función y luego `argc`
+    /// argumentos encima. Saca los argumentos y la función, y empuja un marco.
+    CallValue(usize),
+
     // --- Arreglos (M3) ---
     /// Saca `n` valores de la pila y construye un arreglo con ellos (en orden);
     /// empuja el arreglo.

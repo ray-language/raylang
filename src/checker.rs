@@ -74,6 +74,10 @@ struct Checker {
     /// Tipo de retorno de la función que estamos verificando ahora mismo, para
     /// validar las sentencias `return`.
     current_return: Type,
+    /// Nombres visibles desde el entorno **envolvente** mientras verificamos el
+    /// cuerpo de una función anónima (M4.1). Solo se usa para dar un mensaje claro
+    /// cuando se intenta capturar una variable (la captura llega en M4.2).
+    enclosing_names: Vec<String>,
 }
 
 impl Checker {
@@ -83,6 +87,7 @@ impl Checker {
             structs: HashMap::new(),
             scopes: Vec::new(),
             current_return: Type::Unit,
+            enclosing_names: Vec::new(),
         }
     }
 
@@ -139,41 +144,59 @@ impl Checker {
             self.ensure_type(&p.ty, p.line, p.col)?;
         }
         self.ensure_type(&f.return_type, f.line, f.col)?;
-        self.current_return = f.return_type.clone();
-        self.push_scope();
+        self.check_fn_body(&f.params, &f.return_type, &f.body, f.line, f.col, &format!("'{}'", f.name))
+    }
 
+    /// Verifica el cuerpo de una función (nombrada o anónima): declara los
+    /// parámetros en un ámbito nuevo, comprueba el bloque y exige que su tipo-valor
+    /// (el retorno implícito) coincida con el declarado, salvo que el cuerpo
+    /// diverja (retorne por todos los caminos). `label` se usa en los mensajes.
+    fn check_fn_body(
+        &mut self,
+        params: &[Param],
+        return_type: &Type,
+        body: &Block,
+        line: usize,
+        col: usize,
+        label: &str,
+    ) -> Result<(), TypeError> {
+        self.current_return = return_type.clone();
+        self.push_scope();
         // Los parámetros son inmutables (no hay 'var' para ellos).
-        for p in &f.params {
+        for p in params {
             self.declare(&p.name, p.ty.clone(), false);
         }
 
-        // El cuerpo se verifica como un bloque; su valor es el retorno implícito.
-        let body_ty = self.check_block(&f.body)?;
-        let diverges = block_diverges(&f.body);
+        let body_ty = self.check_block(body)?;
+        let diverges = block_diverges(body);
 
         // Posición para el posible error: la expresión final si existe, si no la fn.
-        let (eline, ecol) = match &f.body.tail {
+        let (eline, ecol) = match &body.tail {
             Some(t) => (t.line, t.col),
-            None => (f.line, f.col),
+            None => (line, col),
         };
 
-        if f.return_type == Type::Unit {
+        let result = if *return_type == Type::Unit {
             // Una función unit no debe terminar produciendo un valor.
             if body_ty != Type::Unit && !diverges {
-                return Err(self.err(eline, ecol, format!(
-                    "'{}' no declara retorno (unit), pero su cuerpo produce {}",
-                    f.name, body_ty
-                )));
+                Err(self.err(eline, ecol, format!(
+                    "{} no declara retorno (unit), pero su cuerpo produce {}",
+                    label, body_ty
+                )))
+            } else {
+                Ok(())
             }
-        } else if !(body_ty == f.return_type || diverges) {
-            return Err(self.err(eline, ecol, format!(
-                "'{}' declara devolver {}, pero su cuerpo produce {}",
-                f.name, f.return_type, body_ty
-            )));
-        }
+        } else if body_ty == *return_type || diverges {
+            Ok(())
+        } else {
+            Err(self.err(eline, ecol, format!(
+                "{} declara devolver {}, pero su cuerpo produce {}",
+                label, return_type, body_ty
+            )))
+        };
 
         self.pop_scope();
-        Ok(())
+        result
     }
 
     // ----- Sentencias -----
@@ -293,6 +316,12 @@ impl Checker {
             Type::Struct(name) if !self.structs.contains_key(name) => {
                 Err(self.err(line, col, format!("tipo desconocido: struct '{}' no declarado", name)))
             }
+            Type::Fn(params, ret) => {
+                for p in params {
+                    self.ensure_type(p, line, col)?;
+                }
+                self.ensure_type(ret, line, col)
+            }
             _ => Ok(()),
         }
     }
@@ -354,10 +383,27 @@ impl Checker {
             ExprKind::Bool(_) => Ok(Type::Bool),
             ExprKind::Str(_) => Ok(Type::String),
 
-            ExprKind::Ident(name) => match self.lookup(name) {
-                Some(v) => Ok(v.ty.clone()),
-                None => Err(self.err(expr.line, expr.col, format!("nombre '{}' no declarado", name))),
-            },
+            ExprKind::Ident(name) => {
+                // Una variable tapa a una función con el mismo nombre.
+                if let Some(v) = self.lookup(name) {
+                    return Ok(v.ty.clone());
+                }
+                // Un nombre de función de nivel superior es un valor de primera
+                // clase: su tipo es el tipo función correspondiente (M4.1).
+                if let Some(sig) = self.functions.get(name) {
+                    return Ok(Type::Fn(sig.params.clone(), Box::new(sig.ret.clone())));
+                }
+                // No es ni variable ni función. Si el nombre existe en el entorno
+                // envolvente de una fn-expr, es un intento de captura (M4.2).
+                if self.enclosing_names.iter().any(|n| n == name) {
+                    Err(self.err(expr.line, expr.col, format!(
+                        "captura de '{}' aún no soportada (las closures llegan en M4.2)",
+                        name
+                    )))
+                } else {
+                    Err(self.err(expr.line, expr.col, format!("nombre '{}' no declarado", name)))
+                }
+            }
 
             ExprKind::Unary { op, expr: inner } => {
                 let t = self.check_expr(inner)?;
@@ -395,6 +441,39 @@ impl Checker {
             ExprKind::StructLit { name, fields } => self.check_struct_lit(name, fields, expr.line, expr.col),
 
             ExprKind::Field { object, name } => self.check_field(object, name),
+
+            ExprKind::Func(fe) => {
+                for p in &fe.params {
+                    self.ensure_type(&p.ty, p.line, p.col)?;
+                }
+                self.ensure_type(&fe.return_type, fe.line, fe.col)?;
+
+                // M4.1: sin captura. Verificamos el cuerpo en un entorno AISLADO
+                // (solo sus parámetros + las funciones globales), guardando los
+                // ámbitos envolventes para restaurarlos. Los nombres visibles del
+                // entorno se recuerdan solo para dar un buen mensaje si se intenta
+                // capturarlos.
+                let saved_scopes = std::mem::take(&mut self.scopes);
+                let saved_names = std::mem::take(&mut self.enclosing_names);
+                let mut names = saved_names.clone();
+                for sc in &saved_scopes {
+                    names.extend(sc.keys().cloned());
+                }
+                self.enclosing_names = names;
+                let saved_ret = self.current_return.clone();
+
+                let r = self.check_fn_body(&fe.params, &fe.return_type, &fe.body, fe.line, fe.col, "la función anónima");
+
+                self.current_return = saved_ret;
+                self.scopes = saved_scopes;
+                self.enclosing_names = saved_names;
+                r?;
+
+                Ok(Type::Fn(
+                    fe.params.iter().map(|p| p.ty.clone()).collect(),
+                    Box::new(fe.return_type.clone()),
+                ))
+            }
 
             ExprKind::If { cond, then_branch, else_branch } => {
                 let ct = self.check_expr(cond)?;
@@ -517,10 +596,14 @@ impl Checker {
         line: usize,
         col: usize,
     ) -> Result<Type, TypeError> {
-        // En M1 solo se puede llamar a una función por su nombre.
+        // Si el callee no es un nombre, debe ser una expresión de tipo función
+        // (p. ej. `(fn(x: int) -> int { x })(3)` o `dame_fn()(3)`). (M4.1)
         let name = match &callee.kind {
             ExprKind::Ident(n) => n.clone(),
-            _ => return Err(self.err(line, col, "solo se pueden llamar funciones por su nombre".into())),
+            _ => {
+                let ty = self.check_expr(callee)?;
+                return self.call_type(ty, args, line, col);
+            }
         };
 
         // 'print' es un builtin que el checker conoce (DESIGN.md §7): acepta un
@@ -564,26 +647,49 @@ impl Checker {
             return Ok(Type::Unit);
         }
 
-        // Función definida por el usuario: comprobamos aridad y tipos.
-        // Clonamos la firma para soltar el préstamo de `self` antes de verificar
-        // los argumentos (que vuelven a tomar `self` prestado mutable).
-        let (param_types, ret) = match self.functions.get(&name) {
-            Some(sig) => (sig.params.clone(), sig.ret.clone()),
-            None => return Err(self.err(line, col, format!("función '{}' no declarada", name))),
-        };
+        // Una variable local que guarda una función: llamada indirecta (M4.1).
+        // (Tapa a una función global con el mismo nombre.)
+        if let Some(v) = self.lookup(&name) {
+            let ty = v.ty.clone();
+            return self.call_type(ty, args, line, col);
+        }
 
-        if args.len() != param_types.len() {
+        // Función de nivel superior: llamada directa. Comprobamos aridad y tipos.
+        if let Some(sig) = self.functions.get(&name) {
+            let (params, ret) = (sig.params.clone(), sig.ret.clone());
+            return self.check_args(&params, ret, args, &format!("'{}'", name), line, col);
+        }
+
+        Err(self.err(line, col, format!("función '{}' no declarada", name)))
+    }
+
+    /// Verifica una llamada cuyo *callee* es un valor (no un nombre directo): su
+    /// tipo debe ser una función, y los argumentos deben encajar con su firma.
+    fn call_type(&mut self, ty: Type, args: &[Expr], line: usize, col: usize) -> Result<Type, TypeError> {
+        match ty {
+            Type::Fn(params, ret) => self.check_args(&params, *ret, args, "la función", line, col),
+            other => Err(self.err(line, col, format!(
+                "no se puede llamar un valor de tipo {} (no es una función)",
+                other
+            ))),
+        }
+    }
+
+    /// Comprueba aridad y tipos de los argumentos contra una firma `(params -> ret)`
+    /// y devuelve `ret`. Compartido por las llamadas directas y las indirectas.
+    fn check_args(&mut self, params: &[Type], ret: Type, args: &[Expr], label: &str, line: usize, col: usize) -> Result<Type, TypeError> {
+        if args.len() != params.len() {
             return Err(self.err(line, col, format!(
-                "'{}' espera {} argumento(s), se le pasaron {}",
-                name, param_types.len(), args.len()
+                "{} espera {} argumento(s), se le pasaron {}",
+                label, params.len(), args.len()
             )));
         }
-        for (i, (arg, expected)) in args.iter().zip(param_types.iter()).enumerate() {
+        for (i, (arg, expected)) in args.iter().zip(params.iter()).enumerate() {
             let at = self.check_expr(arg)?;
             if at != *expected {
                 return Err(self.err(arg.line, arg.col, format!(
-                    "argumento {} de '{}': se esperaba {}, se pasó {}",
-                    i + 1, name, expected, at
+                    "argumento {} de {}: se esperaba {}, se pasó {}",
+                    i + 1, label, expected, at
                 )));
             }
         }
@@ -621,13 +727,22 @@ impl Checker {
 // ----- Auxiliares libres -----
 
 /// ¿Pueden compararse con == / != valores de este tipo? (Compuestos: estructural.)
+/// Las funciones **no** son comparables (no tienen identidad estructural); un
+/// arreglo lo es solo si su elemento lo es.
 fn is_comparable(t: &Type) -> bool {
-    matches!(t, Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_) | Type::Struct(_))
+    match t {
+        Type::Int | Type::Float | Type::Bool | Type::String | Type::Struct(_) => true,
+        Type::Array(elem) => is_comparable(elem),
+        Type::Unit | Type::Fn(_, _) => false,
+    }
 }
 
-/// ¿Puede `print` imprimir este tipo?
+/// ¿Puede `print` imprimir este tipo? Las funciones se imprimen como `<fn>`.
 fn is_printable(t: &Type) -> bool {
-    matches!(t, Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_) | Type::Struct(_))
+    matches!(
+        t,
+        Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_) | Type::Struct(_) | Type::Fn(_, _)
+    )
 }
 
 fn bin_op_str(op: BinaryOp) -> &'static str {
@@ -865,5 +980,72 @@ fn main() -> int {
         err_contains("struct P { x: int } fn main() -> int { let p: P = P { x: 1 }; p.y }", "no tiene un campo");
         err_contains("struct P { x: int } fn main() -> int { let n: int = 5; n.x }", "no es un struct");
         err_contains("struct P {} struct P {} fn main() {}", "declarado dos veces");
+    }
+
+    // ----- M4.1: funciones de primera clase -----
+
+    #[test]
+    fn funciones_primera_clase_validas() {
+        // Anónima en variable, con su tipo función.
+        assert!(check_src("fn main() -> int { let f: fn(int) -> int = fn(x: int) -> int { x + 1 }; f(2) }").is_ok());
+        // De orden superior: recibe y aplica una función.
+        assert!(check_src(
+            "fn aplicar(f: fn(int) -> int, x: int) -> int { f(x) }
+             fn main() -> int { aplicar(fn(n: int) -> int { n * n }, 3) }"
+        ).is_ok());
+        // Un nombre de función es un valor de tipo función.
+        assert!(check_src(
+            "fn inc(n: int) -> int { n + 1 }
+             fn main() -> int { let g: fn(int) -> int = inc; g(4) }"
+        ).is_ok());
+        // Devolver una función.
+        assert!(check_src(
+            "fn dame() -> fn(int) -> int { fn(n: int) -> int { n } }
+             fn main() -> int { let f: fn(int) -> int = dame(); f(5) }"
+        ).is_ok());
+        // Sin argumentos y retorno unit.
+        assert!(check_src("fn main() { let f: fn() = fn() { print(1); }; f() }").is_ok());
+    }
+
+    #[test]
+    fn funciones_primera_clase_errores() {
+        // Tipo de la anónima no coincide con la anotación.
+        err_contains(
+            "fn main() { let f: fn(int) -> int = fn(x: bool) -> int { 0 }; }",
+            "se inicializa con",
+        );
+        // Aridad incorrecta en una llamada indirecta.
+        err_contains(
+            "fn main() -> int { let f: fn(int) -> int = fn(x: int) -> int { x }; f(1, 2) }",
+            "espera 1 argumento",
+        );
+        // Tipo de argumento incorrecto en una llamada indirecta.
+        err_contains(
+            "fn main() -> int { let f: fn(int) -> int = fn(x: int) -> int { x }; f(true) }",
+            "se esperaba int, se pasó bool",
+        );
+        // Llamar a algo que no es función.
+        err_contains("fn main() -> int { let x: int = 3; x(1) }", "no es una función");
+        // El cuerpo de la anónima no respeta su tipo de retorno.
+        err_contains(
+            "fn main() { let f: fn() -> int = fn() -> int { true }; }",
+            "produce bool",
+        );
+    }
+
+    #[test]
+    fn captura_aun_no_soportada_da_mensaje_claro() {
+        err_contains(
+            "fn main() -> int { let b: int = 10; let f: fn(int) -> int = fn(x: int) -> int { x + b }; f(1) }",
+            "captura de 'b' aún no soportada",
+        );
+    }
+
+    #[test]
+    fn funciones_no_son_comparables() {
+        err_contains(
+            "fn inc(n: int) -> int { n } fn main() -> int { if (inc == inc) { 1 } else { 0 } }",
+            "mismo tipo comparable",
+        );
     }
 }

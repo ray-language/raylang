@@ -44,6 +44,10 @@ pub enum Value {
     Array(Rc<RefCell<Vec<Value>>>),
     /// Un struct (M3.2). Mismas propiedades que `Array`: referencia + mutación.
     Struct(Rc<RefCell<StructInstance>>),
+    /// Una función como valor (M4.1). El `usize` es un índice en la **tabla de
+    /// funciones** del motor: `0..N` son las nombradas (por orden de declaración),
+    /// y `N + id` son las anónimas (por su `id`). Sin captura todavía (M4.2).
+    Function(usize),
 }
 
 /// Instancia de un struct en tiempo de ejecución. Los campos se guardan en **orden
@@ -73,6 +77,8 @@ impl std::fmt::Display for Value {
                 let parts: Vec<String> = s.fields.iter().map(|(n, v)| format!("{}: {}", n, v)).collect();
                 write!(f, "{} {{ {} }}", s.name, parts.join(", "))
             }
+            // Las funciones no tienen una representación textual útil: marcador opaco.
+            Value::Function(_) => write!(f, "<fn>"),
         }
     }
 }
@@ -116,6 +122,13 @@ struct Interpreter<'a> {
     /// Todas las funciones del programa, por nombre (las referencias viven mientras
     /// viva el `program`, de ahí el lifetime `'a`).
     functions: HashMap<String, &'a Function>,
+    /// Las funciones nombradas, en orden de declaración (para resolver un
+    /// `Value::Function(idx)` con `idx < N`).
+    named: &'a [Function],
+    /// Nombre de función → su índice en `named` (para usar el nombre como valor).
+    named_index: HashMap<String, usize>,
+    /// Las funciones anónimas, indexadas por su `id` (M4.1).
+    anon: Vec<&'a FnExpr>,
     /// Definiciones de struct, por nombre (para construir literales en orden).
     structs: HashMap<String, &'a StructDef>,
     /// Pila de ámbitos de la función en ejecución. El último es el más interno.
@@ -125,14 +138,23 @@ struct Interpreter<'a> {
 impl<'a> Interpreter<'a> {
     fn new(program: &'a Program) -> Self {
         let mut functions = HashMap::new();
-        for f in &program.functions {
+        let mut named_index = HashMap::new();
+        for (i, f) in program.functions.iter().enumerate() {
             functions.insert(f.name.clone(), f);
+            named_index.insert(f.name.clone(), i);
         }
         let mut structs = HashMap::new();
         for s in &program.structs {
             structs.insert(s.name.clone(), s);
         }
-        Interpreter { functions, structs, scopes: Vec::new() }
+        Interpreter {
+            functions,
+            named: &program.functions,
+            named_index,
+            anon: collect_fn_exprs(program),
+            structs,
+            scopes: Vec::new(),
+        }
     }
 
     fn run_main(&mut self) -> Result<Value, RuntimeError> {
@@ -146,18 +168,36 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    /// Ejecuta una función con sus argumentos ya evaluados.
+    /// Ejecuta una función nombrada con sus argumentos ya evaluados.
     fn call_function(&mut self, func: &'a Function, args: Vec<Value>) -> EvalResult {
+        self.call_body(&func.params, &func.body, args)
+    }
+
+    /// Despacha una llamada a través de un índice de la tabla de funciones: `idx`
+    /// menor que el número de funciones nombradas es una nombrada; el resto, una
+    /// anónima (`idx - N`). (M4.1)
+    fn call_index(&mut self, idx: usize, args: Vec<Value>) -> EvalResult {
+        let n = self.named.len();
+        if idx < n {
+            self.call_body(&self.named[idx].params, &self.named[idx].body, args)
+        } else {
+            let fe = self.anon[idx - n];
+            self.call_body(&fe.params, &fe.body, args)
+        }
+    }
+
+    /// Ejecuta el cuerpo de una función (nombrada o anónima) con sus argumentos.
+    fn call_body(&mut self, params: &'a [Param], body: &'a Block, args: Vec<Value>) -> EvalResult {
         // Scoping léxico: la función arranca con una pila de ámbitos NUEVA, no la
-        // de quien llama. Guardamos la actual y la restauramos al volver.
+        // de quien llama (M4.1: sin captura). Guardamos la actual y la restauramos.
         let saved = mem::take(&mut self.scopes);
         self.scopes.push(HashMap::new()); // ámbito base: los parámetros
 
-        for (param, arg) in func.params.iter().zip(args.into_iter()) {
+        for (param, arg) in params.iter().zip(args.into_iter()) {
             self.define(&param.name, arg);
         }
 
-        let result = self.exec_block(&func.body);
+        let result = self.exec_block(body);
         self.scopes = saved; // restaurar el entorno de quien llama
 
         match result {
@@ -245,7 +285,14 @@ impl<'a> Interpreter<'a> {
             ExprKind::Bool(v) => Ok(Value::Bool(*v)),
             ExprKind::Str(v) => Ok(Value::Str(v.clone())),
 
-            ExprKind::Ident(name) => Ok(self.lookup(name)),
+            ExprKind::Ident(name) => match self.lookup_opt(name) {
+                Some(v) => Ok(v),
+                // No es una variable: es un nombre de función usado como valor.
+                None => {
+                    let idx = *self.named_index.get(name).expect("el checker garantiza el nombre");
+                    Ok(Value::Function(idx))
+                }
+            },
 
             ExprKind::Unary { op, expr: inner } => {
                 let v = self.eval_expr(inner)?;
@@ -317,6 +364,12 @@ impl<'a> Interpreter<'a> {
                 Ok(v)
             }
 
+            ExprKind::Func(fe) => {
+                // El valor de un literal de función es su índice en la tabla: las
+                // anónimas viven en `N + id` (M4.1).
+                Ok(Value::Function(self.named.len() + fe.id))
+            }
+
             ExprKind::If { cond, then_branch, else_branch } => {
                 if self.eval_bool(cond)? {
                     self.exec_block(then_branch)
@@ -341,45 +394,64 @@ impl<'a> Interpreter<'a> {
     }
 
     fn eval_call(&mut self, callee: &'a Expr, args: &'a [Expr]) -> EvalResult {
-        let name = match &callee.kind {
-            ExprKind::Ident(n) => n,
-            _ => unreachable!("el checker garantiza que se llama por nombre"),
-        };
+        // Camino directo: el callee es un nombre que NO está tapado por una variable
+        // local — un builtin o una función global. Es la vía eficiente (no se
+        // construye un valor-función intermedio).
+        if let ExprKind::Ident(name) = &callee.kind {
+            let is_local = self.lookup_opt(name).is_some();
+            if !is_local {
+                // Builtins: evalúan sus argumentos y operan directamente.
+                if name == "print" || name == "len" || name == "push" {
+                    let mut values = Vec::with_capacity(args.len());
+                    for arg in args {
+                        values.push(self.eval_expr(arg)?);
+                    }
+                    return Ok(self.eval_builtin(name, values));
+                }
+                // Función de nivel superior: llamada directa.
+                if let Some(&idx) = self.named_index.get(name.as_str()) {
+                    let mut values = Vec::with_capacity(args.len());
+                    for arg in args {
+                        values.push(self.eval_expr(arg)?);
+                    }
+                    return self.call_index(idx, values);
+                }
+            }
+        }
 
-        // Evaluamos los argumentos de izquierda a derecha.
+        // Camino indirecto: el callee es una expresión que produce un valor-función
+        // (una variable, un literal `fn`, el resultado de otra llamada...). (M4.1)
+        let idx = match self.eval_expr(callee)? {
+            Value::Function(i) => i,
+            _ => unreachable!("el checker garantiza una función"),
+        };
         let mut values = Vec::with_capacity(args.len());
         for arg in args {
             values.push(self.eval_expr(arg)?);
         }
+        self.call_index(idx, values)
+    }
 
-        // 'print' es un builtin: imprime su único argumento y devuelve unit.
-        if name == "print" {
-            println!("{}", values[0]);
-            return Ok(Value::Unit);
-        }
-
-        // 'len(a)': longitud de un arreglo.
-        if name == "len" {
-            let len = match &values[0] {
-                Value::Array(rc) => rc.borrow().len() as i64,
-                _ => unreachable!("el checker garantiza un arreglo"),
-            };
-            return Ok(Value::Int(len));
-        }
-
-        // 'push(a, x)': agrega x al final del arreglo (lo muta) y devuelve unit.
-        if name == "push" {
-            match &values[0] {
-                Value::Array(rc) => rc.borrow_mut().push(values[1].clone()),
-                _ => unreachable!("el checker garantiza un arreglo"),
+    /// Ejecuta un builtin (`print`/`len`/`push`) con sus argumentos ya evaluados.
+    fn eval_builtin(&self, name: &str, values: Vec<Value>) -> Value {
+        match name {
+            "print" => {
+                println!("{}", values[0]);
+                Value::Unit
             }
-            return Ok(Value::Unit);
+            "len" => match &values[0] {
+                Value::Array(rc) => Value::Int(rc.borrow().len() as i64),
+                _ => unreachable!("el checker garantiza un arreglo"),
+            },
+            "push" => {
+                match &values[0] {
+                    Value::Array(rc) => rc.borrow_mut().push(values[1].clone()),
+                    _ => unreachable!("el checker garantiza un arreglo"),
+                }
+                Value::Unit
+            }
+            _ => unreachable!("builtin desconocido"),
         }
-
-        // Copiamos la referencia a la función (es `&'a`, independiente de `self`),
-        // lo que suelta el préstamo de `self.functions` antes de la llamada mutable.
-        let func = *self.functions.get(name).expect("el checker garantiza la función");
-        self.call_function(func, values)
     }
 
     fn eval_binary(
@@ -494,13 +566,15 @@ impl<'a> Interpreter<'a> {
             .insert(name.to_string(), value);
     }
 
-    fn lookup(&self, name: &str) -> Value {
+    /// Busca una variable de dentro hacia afuera; `None` si no es una variable (en
+    /// ese caso, en `eval` el nombre se interpreta como una función).
+    fn lookup_opt(&self, name: &str) -> Option<Value> {
         for scope in self.scopes.iter().rev() {
             if let Some(v) = scope.get(name) {
-                return v.clone();
+                return Some(v.clone());
             }
         }
-        unreachable!("el checker garantiza que '{}' está declarada", name)
+        None
     }
 
     fn assign(&mut self, name: &str, value: Value) {

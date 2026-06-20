@@ -45,11 +45,13 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    /// Contador para asignar un id único a cada función anónima (M4.1).
+    next_fn_id: usize,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0 }
+        Parser { tokens, pos: 0, next_fn_id: 0 }
     }
 
     // =================================================================
@@ -136,6 +138,7 @@ impl Parser {
     }
 
     /// type = 'int' | 'bool' | 'float' | 'string' | '[' type ']'
+    ///      | 'fn' '(' [ type { ',' type } ] ')' [ '->' type ]
     fn parse_type(&mut self) -> Result<Type, ParseError> {
         // Arreglo: [T]
         if self.check(&TokenKind::LBracket) {
@@ -143,6 +146,27 @@ impl Parser {
             let elem = self.parse_type()?;
             self.expect(&TokenKind::RBracket, "']' para cerrar el tipo de arreglo")?;
             return Ok(Type::Array(Box::new(elem)));
+        }
+        // Tipo función: fn(T1, T2) -> R  (el '-> R' es opcional; ausente = unit).
+        if self.check(&TokenKind::Fn) {
+            self.advance();
+            self.expect(&TokenKind::LParen, "'(' tras 'fn' en un tipo función")?;
+            let mut params = Vec::new();
+            if !self.check(&TokenKind::RParen) {
+                loop {
+                    params.push(self.parse_type()?);
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            self.expect(&TokenKind::RParen, "')' para cerrar el tipo función")?;
+            let ret = if self.eat(&TokenKind::Arrow) {
+                self.parse_type()?
+            } else {
+                Type::Unit
+            };
+            return Ok(Type::Fn(params, Box::new(ret)));
         }
         // Nombre de struct (un identificador es un tipo).
         if let TokenKind::Ident(name) = self.peek_kind() {
@@ -446,6 +470,9 @@ impl Parser {
                 return Ok(Expr { line: b.line, col: b.col, kind: ExprKind::Block(b) });
             }
             TokenKind::LBracket => return self.array_literal(),
+            // `fn(...) { ... }` en posición de expresión es una función anónima.
+            // No hay ambigüedad: la `fn` de nivel superior lleva nombre.
+            TokenKind::Fn => return self.fn_expr(),
             _ => {}
         }
 
@@ -506,6 +533,43 @@ impl Parser {
 
         Ok(Expr {
             kind: ExprKind::If { cond: Box::new(cond), then_branch, else_branch },
+            line: kw.line,
+            col: kw.col,
+        })
+    }
+
+    /// fnExpr = 'fn' '(' [ params ] ')' [ '->' type ] block   (M4.1)
+    ///
+    /// Una función anónima. Reutiliza `params()` y `block()` de la función nombrada.
+    fn fn_expr(&mut self) -> Result<Expr, ParseError> {
+        let kw = self.expect(&TokenKind::Fn, "'fn'")?;
+        // El id se asigna en pre-orden: una fn-expr exterior recibe un id menor que
+        // las anidadas en su cuerpo. Eso da ids densos 0..n.
+        let id = self.next_fn_id;
+        self.next_fn_id += 1;
+
+        self.expect(&TokenKind::LParen, "'(' tras 'fn'")?;
+        let params = if self.check(&TokenKind::RParen) {
+            Vec::new()
+        } else {
+            self.params()?
+        };
+        self.expect(&TokenKind::RParen, "')'")?;
+        let return_type = if self.eat(&TokenKind::Arrow) {
+            self.parse_type()?
+        } else {
+            Type::Unit
+        };
+        let body = self.block()?;
+        Ok(Expr {
+            kind: ExprKind::Func(Box::new(FnExpr {
+                id,
+                params,
+                return_type,
+                body,
+                line: kw.line,
+                col: kw.col,
+            })),
             line: kw.line,
             col: kw.col,
         })
@@ -706,6 +770,10 @@ mod tests {
                 format!("{} {{{}}}", name, fs.join(", "))
             }
             ExprKind::Field { object, name } => format!("(field {} {})", sx(object), name),
+            ExprKind::Func(fe) => {
+                let ps: Vec<String> = fe.params.iter().map(|p| p.name.clone()).collect();
+                format!("(fn [{}] {})", ps.join(" "), sblock(&fe.body))
+            }
             ExprKind::If { cond, then_branch, else_branch } => {
                 let els = else_branch
                     .as_ref()
@@ -820,6 +888,24 @@ mod tests {
         assert_eq!(sx(&parse_expr("p.x")), "(field p x)");
         assert_eq!(sx(&parse_expr("p.pos.x")), "(field (field p pos) x)");
         assert_eq!(sx(&parse_expr("a[0].x")), "(field (index a 0) x)");
+    }
+
+    #[test]
+    fn funcion_anonima_se_parsea() {
+        assert_eq!(sx(&parse_expr("fn(x: int) -> int { x + 1 }")), "(fn [x] {(+ x 1)})");
+        assert_eq!(sx(&parse_expr("fn() { print(1); }")), "(fn [] {(call print [1])})");
+        // Llamarla directamente: Call sobre una expresión Func.
+        assert_eq!(sx(&parse_expr("(fn(x: int) -> int { x })(3)")), "(call (fn [x] {x}) [3])");
+    }
+
+    #[test]
+    fn tipo_funcion_se_parsea() {
+        let prog = parse_prog("fn aplica(f: fn(int) -> int, x: int) -> int { f(x) } fn main() {}");
+        let f = &prog.functions[0];
+        assert_eq!(f.params[0].ty, Type::Fn(vec![Type::Int], Box::new(Type::Int)));
+        // fn sin '->' es retorno unit.
+        let prog2 = parse_prog("fn t(c: fn()) { } fn main() {}");
+        assert_eq!(prog2.functions[0].params[0].ty, Type::Fn(vec![], Box::new(Type::Unit)));
     }
 
     #[test]

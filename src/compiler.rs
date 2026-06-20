@@ -58,15 +58,21 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
         struct_table.push(CompiledStruct { name: s.name.clone(), fields: field_names });
     }
 
+    // Las funciones nombradas ocupan los índices 0..N; las anónimas, N + id (M4.1).
+    let n_named = program.functions.len();
     let mut functions = Vec::new();
     for f in &program.functions {
-        functions.push(compile_function(f, &indices, &struct_defs)?);
+        functions.push(compile_function(f, &indices, &struct_defs, n_named)?);
+    }
+    // Funciones anónimas, en orden de id (collect_fn_exprs las devuelve así).
+    for fe in collect_fn_exprs(program) {
+        functions.push(compile_fn_expr(fe, &indices, &struct_defs, n_named)?);
     }
     Ok(CompiledProgram { functions, structs: struct_table, main })
 }
 
-fn compile_function(f: &Function, indices: &HashMap<String, usize>, structs: &StructDefs) -> Result<CompiledFn, CompileError> {
-    let mut c = FnCompiler::new(indices, structs);
+fn compile_function(f: &Function, indices: &HashMap<String, usize>, structs: &StructDefs, n_named: usize) -> Result<CompiledFn, CompileError> {
+    let mut c = FnCompiler::new(indices, structs, n_named);
     // Los parámetros son las primeras locales (slots 0..arity).
     for p in &f.params {
         c.declare_local(&p.name);
@@ -83,12 +89,30 @@ fn compile_function(f: &Function, indices: &HashMap<String, usize>, structs: &St
     })
 }
 
+/// Compila una función anónima a su propia `CompiledFn` (M4.1). Es igual que una
+/// nombrada salvo el nombre sintético.
+fn compile_fn_expr(fe: &FnExpr, indices: &HashMap<String, usize>, structs: &StructDefs, n_named: usize) -> Result<CompiledFn, CompileError> {
+    let mut c = FnCompiler::new(indices, structs, n_named);
+    for p in &fe.params {
+        c.declare_local(&p.name);
+    }
+    c.emit_block(&fe.body)?;
+    c.emit(OpCode::Return, fe.line, fe.col);
+
+    Ok(CompiledFn {
+        name: format!("<fn#{}>", fe.id),
+        arity: fe.params.len(),
+        num_locals: c.max_slots,
+        chunk: c.chunk,
+    })
+}
+
 /// Compila una expresión suelta a un `Chunk` (sin variables ni llamadas). Se usa
 /// en los tests de expresiones puras.
 pub fn compile_expr(expr: &Expr) -> Result<Chunk, CompileError> {
     let empty = HashMap::new();
     let empty_structs = HashMap::new();
-    let mut c = FnCompiler::new(&empty, &empty_structs);
+    let mut c = FnCompiler::new(&empty, &empty_structs, 0);
     c.emit_expr(expr)?;
     c.emit(OpCode::Return, expr.line, expr.col);
     Ok(c.chunk)
@@ -112,10 +136,12 @@ struct FnCompiler<'a> {
     scope_depth: usize,
     indices: &'a HashMap<String, usize>,
     structs: &'a StructDefs,
+    /// Número de funciones nombradas: las anónimas viven en `n_named + id` (M4.1).
+    n_named: usize,
 }
 
 impl<'a> FnCompiler<'a> {
-    fn new(indices: &'a HashMap<String, usize>, structs: &'a StructDefs) -> Self {
+    fn new(indices: &'a HashMap<String, usize>, structs: &'a StructDefs, n_named: usize) -> Self {
         FnCompiler {
             chunk: Chunk::new(),
             locals: Vec::new(),
@@ -124,6 +150,7 @@ impl<'a> FnCompiler<'a> {
             scope_depth: 0,
             indices,
             structs,
+            n_named,
         }
     }
 
@@ -261,8 +288,13 @@ impl<'a> FnCompiler<'a> {
             }
 
             ExprKind::Ident(name) => {
-                let slot = self.resolve_local(name).expect("el checker garantiza la variable");
-                self.emit(OpCode::GetLocal(slot), line, col);
+                if let Some(slot) = self.resolve_local(name) {
+                    self.emit(OpCode::GetLocal(slot), line, col);
+                } else {
+                    // No es una variable: es un nombre de función usado como valor.
+                    let idx = *self.indices.get(name).expect("el checker garantiza el nombre");
+                    self.emit(OpCode::Function(idx), line, col);
+                }
             }
 
             ExprKind::Unary { op, expr: inner } => {
@@ -380,22 +412,54 @@ impl<'a> FnCompiler<'a> {
                 self.emit(OpCode::GetField(name.clone()), line, col);
             }
 
-            ExprKind::Call { callee, args } => {
-                for arg in args {
-                    self.emit_expr(arg)?;
-                }
-                match &callee.kind {
-                    ExprKind::Ident(name) if name == "print" => self.emit(OpCode::Print, line, col),
-                    ExprKind::Ident(name) if name == "len" => self.emit(OpCode::Len, line, col),
-                    ExprKind::Ident(name) if name == "push" => self.emit(OpCode::Push, line, col),
-                    ExprKind::Ident(name) => {
-                        let idx = *self.indices.get(name).expect("el checker garantiza la función");
-                        self.emit(OpCode::Call(idx, args.len()), line, col)
-                    }
-                    _ => unreachable!("el checker garantiza llamada por nombre"),
+            ExprKind::Func(fe) => {
+                // Un literal de función es un valor: su índice es N + id (M4.1).
+                self.emit(OpCode::Function(self.n_named + fe.id), line, col);
+            }
+
+            ExprKind::Call { callee, args } => self.emit_call(callee, args, line, col)?,
+        }
+        Ok(())
+    }
+
+    /// Emite una llamada. Distingue el camino **directo** (un builtin o una función
+    /// global, identificada por nombre y no tapada por una variable) del **indirecto**
+    /// (un valor-función en la pila), que usa `CallValue` (M4.1).
+    fn emit_call(&mut self, callee: &Expr, args: &[Expr], line: usize, col: usize) -> Result<(), CompileError> {
+        if let ExprKind::Ident(name) = &callee.kind {
+            // Solo es directo si el nombre NO está tapado por una variable local.
+            if self.resolve_local(name).is_none() {
+                // Builtins.
+                let builtin = match name.as_str() {
+                    "print" => Some(OpCode::Print),
+                    "len" => Some(OpCode::Len),
+                    "push" => Some(OpCode::Push),
+                    _ => None,
                 };
+                if let Some(op) = builtin {
+                    for arg in args {
+                        self.emit_expr(arg)?;
+                    }
+                    self.emit(op, line, col);
+                    return Ok(());
+                }
+                // Función de nivel superior: llamada directa.
+                if let Some(&idx) = self.indices.get(name) {
+                    for arg in args {
+                        self.emit_expr(arg)?;
+                    }
+                    self.emit(OpCode::Call(idx, args.len()), line, col);
+                    return Ok(());
+                }
             }
         }
+
+        // Indirecto: primero el valor-función, luego los argumentos, luego CallValue.
+        self.emit_expr(callee)?;
+        for arg in args {
+            self.emit_expr(arg)?;
+        }
+        self.emit(OpCode::CallValue(args.len()), line, col);
         Ok(())
     }
 }

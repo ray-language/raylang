@@ -1,0 +1,51 @@
+// Funciones de primera clase (M4.1): las funciones son valores que se pueden
+// guardar, pasar y devolver. Todavía SIN captura de entorno (eso llega en M4.2),
+// así que estas funciones solo usan sus parámetros.
+
+// De orden superior: recibe una función y la aplica.
+fn aplicar(f: fn(int) -> int, x: int) -> int {
+    f(x)
+}
+
+// Aplica una función a cada elemento de un arreglo (lo muta in situ).
+fn mapear(a: [int], f: fn(int) -> int) {
+    var i: int = 0;
+    while (i < len(a)) {
+        a[i] = f(a[i]);
+        i = i + 1;
+    }
+}
+
+// Devuelve una función (un valor): elige el operador según un flag.
+fn operador(doblar: bool) -> fn(int) -> int {
+    if (doblar) {
+        fn(n: int) -> int { n + n }
+    } else {
+        fn(n: int) -> int { n * n }
+    }
+}
+
+fn main() -> int {
+    // Guardar una función anónima en una variable y llamarla.
+    let cuadrado: fn(int) -> int = fn(n: int) -> int { n * n };
+    print(cuadrado(9));            // 81
+
+    // Pasar una función como argumento.
+    print(aplicar(cuadrado, 5));  // 25
+
+    // Una función nombrada también es un valor.
+    print(aplicar(cuadrado, 7));  // 49
+
+    // Devolver una función y usarla.
+    let f: fn(int) -> int = operador(true);
+    print(f(20));                 // 40
+
+    // Mapear sobre un arreglo.
+    var xs: [int] = [1, 2, 3, 4];
+    mapear(xs, cuadrado);
+    print(xs);                    // [1, 4, 9, 16]
+
+    // Imprimir una función: marcador opaco.
+    print(cuadrado);              // <fn>
+    0
+}

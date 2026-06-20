@@ -235,6 +235,30 @@ impl<'a> Vm<'a> {
                     self.frames.push(CallFrame { function: *idx, ip: 0, locals });
                 }
 
+                // --- Funciones de primera clase (M4.1) ---
+                OpCode::Function(idx) => self.push(Value::Function(*idx)),
+                OpCode::CallValue(argc) => {
+                    if self.frames.len() >= MAX_FRAMES {
+                        return Err(runtime_error(line, col, "desbordamiento de pila (recursión demasiado profunda)"));
+                    }
+                    // En la pila: [valor-función, arg0, ..., arg{argc-1}]. Sacamos
+                    // primero los argumentos, y debajo queda el valor-función.
+                    let mut args_rev = Vec::with_capacity(*argc);
+                    for _ in 0..*argc {
+                        args_rev.push(self.pop());
+                    }
+                    let idx = match self.pop() {
+                        Value::Function(i) => i,
+                        _ => unreachable!("el checker garantiza una función"),
+                    };
+                    let mut locals = vec![Value::Unit; self.program.functions[idx].num_locals];
+                    // args_rev está en orden inverso: el último que se sacó es arg0.
+                    for (j, val) in args_rev.into_iter().enumerate() {
+                        locals[*argc - 1 - j] = val;
+                    }
+                    self.frames.push(CallFrame { function: idx, ip: 0, locals });
+                }
+
                 OpCode::Return => {
                     let result = self.pop();
                     self.frames.pop();
@@ -563,6 +587,69 @@ mod tests {
         oracle_program(
             "struct Pila { datos: [int] }
              fn main() -> int { let s: Pila = Pila { datos: [10, 20] }; push(s.datos, 30); s.datos[2] }",
+        );
+    }
+
+    // ----- M4.1: funciones de primera clase -----
+
+    #[test]
+    fn funcion_anonima_en_variable() {
+        oracle_program("fn main() -> int { let f: fn(int) -> int = fn(x: int) -> int { x * x }; f(9) }");
+    }
+
+    #[test]
+    fn de_orden_superior_recibe_funcion() {
+        oracle_program(
+            "fn aplicar(f: fn(int) -> int, x: int) -> int { f(x) }
+             fn main() -> int { aplicar(fn(n: int) -> int { n + 1 }, 41) }",
+        );
+    }
+
+    #[test]
+    fn nombre_de_funcion_como_valor() {
+        oracle_program(
+            "fn inc(n: int) -> int { n + 1 }
+             fn aplicar(f: fn(int) -> int, x: int) -> int { f(x) }
+             fn main() -> int { aplicar(inc, 10) }",
+        );
+    }
+
+    #[test]
+    fn devolver_una_funcion() {
+        oracle_program(
+            "fn elegir(b: bool) -> fn(int) -> int {
+                 if (b) { fn(n: int) -> int { n + n } } else { fn(n: int) -> int { n * n } }
+             }
+             fn main() -> int { let f: fn(int) -> int = elegir(true); f(21) }",
+        );
+    }
+
+    #[test]
+    fn llamar_un_literal_de_funcion_directo() {
+        oracle_program("fn main() -> int { (fn(x: int) -> int { x + x })(21) }");
+    }
+
+    #[test]
+    fn variable_tapa_a_funcion_global() {
+        // 'f' local (una función) tapa a la global 'f': la llamada es indirecta.
+        oracle_program(
+            "fn f(x: int) -> int { x * 100 }
+             fn main() -> int { let f: fn(int) -> int = fn(x: int) -> int { x + 1 }; f(41) }",
+        );
+    }
+
+    #[test]
+    fn mapear_sobre_arreglo_con_funcion() {
+        oracle_program(
+            "fn mapear(a: [int], f: fn(int) -> int) {
+                 var i: int = 0;
+                 while (i < len(a)) { a[i] = f(a[i]); i = i + 1; }
+             }
+             fn main() -> int {
+                 var xs: [int] = [1, 2, 3, 4];
+                 mapear(xs, fn(n: int) -> int { n * n });
+                 xs[0] + xs[1] + xs[2] + xs[3]
+             }",
         );
     }
 }

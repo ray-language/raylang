@@ -32,6 +32,10 @@ pub enum Type {
     /// Un struct nominal, por su nombre: `Punto`. Tipado **nominal** (M3.2): la
     /// igualdad de tipos compara el nombre.
     Struct(String),
+    /// Un tipo función: `fn(T1, T2) -> R` (M4.1). Las funciones son valores de
+    /// primera clase: se pueden pasar, devolver y guardar. Tipado **estructural**
+    /// (dos `fn(int) -> int` son el mismo tipo).
+    Fn(Vec<Type>, Box<Type>),
 }
 
 impl std::fmt::Display for Type {
@@ -44,6 +48,10 @@ impl std::fmt::Display for Type {
             Type::Unit => f.write_str("unit"),
             Type::Array(elem) => write!(f, "[{}]", elem),
             Type::Struct(name) => f.write_str(name),
+            Type::Fn(params, ret) => {
+                let ps: Vec<String> = params.iter().map(|p| p.to_string()).collect();
+                write!(f, "fn({}) -> {}", ps.join(", "), ret)
+            }
         }
     }
 }
@@ -69,6 +77,22 @@ pub struct StructDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Type, // Unit si se omitió el `-> ...`
+    pub body: Block,
+    pub line: usize,
+    pub col: usize,
+}
+
+/// Una función **anónima** usada como expresión: `fn(x: int) -> int { x + 1 }`
+/// (M4.1). Comparte la forma de una función nombrada salvo el nombre.
+///
+/// `id` es un identificador único asignado por el parser (un contador global de
+/// fn-exprs). Sirve para que el intérprete y el compilador asocien cada literal de
+/// función con su entrada en la tabla de funciones, sin depender de punteros.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FnExpr {
+    pub id: usize,
     pub params: Vec<Param>,
     pub return_type: Type, // Unit si se omitió el `-> ...`
     pub body: Block,
@@ -169,6 +193,9 @@ pub enum ExprKind {
     /// Acceso a campo: `p.x`. (M3.2)
     Field { object: Box<Expr>, name: String },
 
+    /// Función anónima como valor: `fn(x: int) -> int { x + 1 }`. (M4.1)
+    Func(Box<FnExpr>),
+
     // --- Expresiones con bloque (producen valor, DESIGN.md §6) ---
     /// `if (cond) { then } else { ... }`. `else_branch`, si existe, es otro `Expr`
     /// que será un `Block` o (en cadenas `else if`) otro `If`.
@@ -181,6 +208,94 @@ pub enum ExprKind {
     While { cond: Box<Expr>, body: Block },
     /// Un bloque usado como expresión: `{ ...; valor }`.
     Block(Block),
+}
+
+/// Recolecta todas las funciones anónimas (`FnExpr`) del programa, **indexadas por
+/// su `id`**: el resultado en la posición `i` es la fn-expr con `id == i`. (M4.1)
+///
+/// Tanto el intérprete como el compilador necesitan una tabla de funciones que
+/// incluya las anónimas; este recorrido del AST la construye una sola vez. Como el
+/// parser asigna ids densos (`0..n`), el vector queda completo y sin huecos.
+pub fn collect_fn_exprs(program: &Program) -> Vec<&FnExpr> {
+    let mut acc: Vec<&FnExpr> = Vec::new();
+    for f in &program.functions {
+        walk_block(&f.body, &mut acc);
+    }
+    // Colocar cada fn-expr en la posición de su id.
+    let mut by_id: Vec<Option<&FnExpr>> = (0..acc.len()).map(|_| None).collect();
+    for fe in acc {
+        by_id[fe.id] = Some(fe);
+    }
+    by_id.into_iter().map(|o| o.expect("ids de fn-expr densos")).collect()
+}
+
+fn walk_block<'a>(block: &'a Block, acc: &mut Vec<&'a FnExpr>) {
+    for s in &block.statements {
+        match &s.kind {
+            StmtKind::Let { value, .. } => walk_expr(value, acc),
+            StmtKind::Assign { target, value } => {
+                walk_expr(target, acc);
+                walk_expr(value, acc);
+            }
+            StmtKind::Return { value } => {
+                if let Some(e) = value {
+                    walk_expr(e, acc);
+                }
+            }
+            StmtKind::Expr(e) => walk_expr(e, acc),
+        }
+    }
+    if let Some(t) = &block.tail {
+        walk_expr(t, acc);
+    }
+}
+
+fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
+    match &expr.kind {
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Ident(_) => {}
+        ExprKind::Unary { expr, .. } => walk_expr(expr, acc),
+        ExprKind::Binary { left, right, .. } => {
+            walk_expr(left, acc);
+            walk_expr(right, acc);
+        }
+        ExprKind::Call { callee, args } => {
+            walk_expr(callee, acc);
+            for a in args {
+                walk_expr(a, acc);
+            }
+        }
+        ExprKind::ArrayLit(elems) => {
+            for e in elems {
+                walk_expr(e, acc);
+            }
+        }
+        ExprKind::Index { array, index } => {
+            walk_expr(array, acc);
+            walk_expr(index, acc);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                walk_expr(e, acc);
+            }
+        }
+        ExprKind::Field { object, .. } => walk_expr(object, acc),
+        ExprKind::Func(fe) => {
+            acc.push(fe);
+            walk_block(&fe.body, acc); // fn-exprs anidadas
+        }
+        ExprKind::If { cond, then_branch, else_branch } => {
+            walk_expr(cond, acc);
+            walk_block(then_branch, acc);
+            if let Some(e) = else_branch {
+                walk_expr(e, acc);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            walk_expr(cond, acc);
+            walk_block(body, acc);
+        }
+        ExprKind::Block(b) => walk_block(b, acc),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

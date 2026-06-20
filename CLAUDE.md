@@ -73,14 +73,21 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Estado actual
 
-- **M1 COMPLETO** (lexer + parser + checker + intérprete; 49 tests verdes).
-- **Siguiente: M2** (bytecode + VM), usando el intérprete actual como oráculo.
-  Antes de M2 hay que **decidir la dirección de concurrencia** (la VM necesitará
-  stack explícito propio — ver `IDEAS.md` §1).
+- **M1–M4 COMPLETOS** (101 tests verdes):
+  - **M1**: lexer + parser + checker + intérprete.
+  - **M2**: bytecode + VM (pila y marcos explícitos). El intérprete es el **oráculo**.
+  - **M3**: datos compuestos — arreglos `[T]` y structs (semántica de referencia).
+  - **M4**: closures (captura por referencia/upvalues) + **GC mark-and-sweep en la
+    VM** (heap propio con handles en `src/gc.rs`; el intérprete sigue con `Rc`).
+- **Siguiente: M5** (tipos suma `enum` + pattern matching `match`).
+- Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
+  incluido un modo **estrés** del GC.
 
 ## Gotchas
 
 - `source "$HOME/.cargo/env"` antes de `cargo` (PATH).
 - `print` es un **builtin**, no palabra clave: un argumento de tipo imprimible.
-- `enum`, `struct`, `match` **aún no son palabras reservadas** (se lexan como
-  identificadores); se reservarán en M5.
+- `struct` y `fn` (también como expresión: función anónima) **ya son palabras
+  clave**. `enum` y `match` aún no se reservan; llegan en M5.
+- La VM tiene su **propio valor** (`gc::HeapValue`, con handles), distinto del
+  `Value` del intérprete (con `Rc`). Se convierte en el borde (`to_value`).

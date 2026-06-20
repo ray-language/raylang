@@ -12,6 +12,7 @@ pub mod ast;
 pub mod bytecode;
 pub mod checker;
 pub mod compiler;
+pub mod gc;
 pub mod interpreter;
 pub mod lexer;
 pub mod parser;

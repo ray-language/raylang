@@ -1,32 +1,37 @@
-//! La máquina virtual (VM) de raylang (M2).
+//! La máquina virtual (VM) de raylang (M2, con GC en M4.3).
 //!
 //! Ejecuta bytecode sobre una **pila de operandos** y una **pila de marcos de
 //! llamada** explícita (no la pila de Rust). Reificar los marcos así es lo que
-//! mantiene abierta la puerta a la concurrencia (ver IDEAS.md §1).
+//! mantiene abierta la puerta a la concurrencia (ver IDEAS.md §1) y, ahora, lo que
+//! hace **enumerables las raíces** del recolector de basura.
 //!
-//! ## Modelo de ejecución
+//! ## Memoria (M4.3)
 //!
-//! - **Pila de operandos** (`stack`): valores temporales que las instrucciones
-//!   consumen y producen. Es compartida por todos los marcos.
-//! - **Pila de marcos** (`frames`): cada llamada empuja un `CallFrame` con su
-//!   `ip` (instruction pointer) y su propio arreglo de **slots locales**.
+//! Los datos compuestos (arreglos, structs, closures y celdas) viven en un **heap
+//! propio** (`gc::Heap`) y se referencian por *handle*. Un recolector
+//! **mark-and-sweep** los libera —incluidos los ciclos, que el `Rc` del intérprete
+//! no puede—. El intérprete se queda con `Rc` y hace de oráculo.
 //!
-//! Una llamada (`Call`) saca los argumentos de la pila de operandos y los coloca
-//! como las primeras locales del nuevo marco. Un `Return` saca el valor de
-//! retorno, descarta el marco, y lo empuja a la pila para el llamador.
+//! El GC se dispara solo en **puntos seguros**: al inicio del bucle de
+//! instrucciones, cuando todos los valores vivos están en la pila o los marcos (no
+//! hay temporales a medio ensamblar en variables de Rust). Así marcar desde la pila
+//! y los marcos es correcto sin más cuidado.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::bytecode::{Chunk, CompiledFn, CompiledProgram, OpCode, UpvalueSource};
-use crate::interpreter::{Cell, Closure, RuntimeError, StructInstance, Value};
+use crate::gc::{Handle, Heap, HeapValue, Obj, VmClosure, VmStruct};
+use crate::interpreter::{RuntimeError, StructInstance, Value};
 
 /// Límite de marcos para detectar recursión infinita en vez de colgarse.
 const MAX_FRAMES: usize = 1024;
 
 /// Ejecuta un programa compilado (empezando por `main`) y devuelve su resultado.
 pub fn run_program(program: &CompiledProgram) -> Result<Value, RuntimeError> {
-    Vm::new(program).run()
+    let mut vm = Vm::new(program);
+    let result = vm.run()?;
+    Ok(to_value(&vm.heap, &result))
 }
 
 /// Ejecuta un `Chunk` suelto (una expresión compilada). Lo envuelve como una
@@ -48,39 +53,45 @@ pub fn run(chunk: &Chunk) -> Result<Value, RuntimeError> {
 }
 
 /// Un slot local. Normalmente guarda el valor directamente (`Plain`); si la variable
-/// es capturada por una closure, vive **boxeada** en una celda compartida (`Boxed`)
-/// para que la closure y el dueño compartan la misma referencia (M4.2).
+/// es capturada por una closure, vive **boxeada** en una celda del heap (`Boxed`),
+/// referenciada por handle, para que la closure y el dueño la compartan (M4.2/M4.3).
 enum Local {
-    Plain(Value),
-    Boxed(Cell),
+    Plain(HeapValue),
+    Boxed(Handle),
 }
 
 struct CallFrame {
     function: usize,
     ip: usize,
     locals: Vec<Local>,
-    /// Upvalues de la closure en ejecución (vacío si no es una closure). (M4.2)
-    upvalues: Vec<(String, Cell)>,
+    /// Upvalues de la closure en ejecución (handles a celdas); vacío si no lo es.
+    upvalues: Vec<Handle>,
 }
 
 struct Vm<'a> {
     program: &'a CompiledProgram,
     frames: Vec<CallFrame>,
-    stack: Vec<Value>,
+    stack: Vec<HeapValue>,
+    heap: Heap,
 }
 
 impl<'a> Vm<'a> {
     fn new(program: &'a CompiledProgram) -> Self {
-        Vm { program, frames: Vec::new(), stack: Vec::new() }
+        Vm { program, frames: Vec::new(), stack: Vec::new(), heap: Heap::new() }
     }
 
-    fn run(&mut self) -> Result<Value, RuntimeError> {
+    fn run(&mut self) -> Result<HeapValue, RuntimeError> {
         // Marco inicial: main, con su arreglo de locales (sin argumentos).
         let main = self.program.main;
         let locals = self.new_locals(main);
         self.frames.push(CallFrame { function: main, ip: 0, locals, upvalues: Vec::new() });
 
         loop {
+            // --- Punto seguro del GC ---
+            if self.heap.should_collect() {
+                self.collect();
+            }
+
             let fi = self.frames.len() - 1;
             let func = self.frames[fi].function;
             let ip = self.frames[fi].ip;
@@ -89,9 +100,9 @@ impl<'a> Vm<'a> {
             if ip >= self.program.functions[func].chunk.code.len() {
                 self.frames.pop();
                 if self.frames.is_empty() {
-                    return Ok(Value::Unit);
+                    return Ok(HeapValue::Unit);
                 }
-                self.stack.push(Value::Unit);
+                self.stack.push(HeapValue::Unit);
                 continue;
             }
 
@@ -103,12 +114,12 @@ impl<'a> Vm<'a> {
 
             match &op {
                 OpCode::Constant(idx) => {
-                    let v = self.program.functions[func].chunk.constants[*idx].clone();
+                    let v = const_to_heap(&self.program.functions[func].chunk.constants[*idx]);
                     self.push(v);
                 }
-                OpCode::True => self.push(Value::Bool(true)),
-                OpCode::False => self.push(Value::Bool(false)),
-                OpCode::Unit => self.push(Value::Unit),
+                OpCode::True => self.push(HeapValue::Bool(true)),
+                OpCode::False => self.push(HeapValue::Bool(false)),
+                OpCode::Unit => self.push(HeapValue::Unit),
                 OpCode::Pop => {
                     self.pop();
                 }
@@ -116,15 +127,15 @@ impl<'a> Vm<'a> {
                 OpCode::Negate => {
                     let v = self.pop();
                     self.push(match v {
-                        Value::Int(n) => Value::Int(-n),
-                        Value::Float(x) => Value::Float(-x),
+                        HeapValue::Int(n) => HeapValue::Int(-n),
+                        HeapValue::Float(x) => HeapValue::Float(-x),
                         _ => unreachable!("el checker garantiza un número"),
                     });
                 }
                 OpCode::Not => {
                     let v = self.pop();
                     self.push(match v {
-                        Value::Bool(b) => Value::Bool(!b),
+                        HeapValue::Bool(b) => HeapValue::Bool(!b),
                         _ => unreachable!("el checker garantiza un bool"),
                     });
                 }
@@ -142,7 +153,7 @@ impl<'a> Vm<'a> {
                 | OpCode::GreaterEqual) => {
                     let right = self.pop();
                     let left = self.pop();
-                    let result = apply_binary(bin, left, right, line, col)?;
+                    let result = self.apply_binary(bin, left, right, line, col)?;
                     self.push(result);
                 }
 
@@ -150,18 +161,18 @@ impl<'a> Vm<'a> {
                     self.frames[fi].ip = *target;
                 }
                 OpCode::JumpIfFalse(target) => {
-                    if matches!(self.peek(), Value::Bool(false)) {
+                    if matches!(self.peek(), HeapValue::Bool(false)) {
                         self.frames[fi].ip = *target;
                     }
                 }
 
                 OpCode::GetLocal(slot) => {
-                    let v = get_slot(&self.frames[fi].locals, *slot);
+                    let v = self.get_local(fi, *slot);
                     self.push(v);
                 }
                 OpCode::SetLocal(slot) => {
                     let v = self.pop();
-                    set_slot(&mut self.frames[fi].locals, *slot, v);
+                    self.set_local(fi, *slot, v);
                 }
                 OpCode::InitLocal(slot) => {
                     // Declaración: si el slot está boxeado, estrena celda (shadowing
@@ -169,24 +180,26 @@ impl<'a> Vm<'a> {
                     let v = self.pop();
                     let boxed = self.program.functions[func].captured.get(*slot).copied().unwrap_or(false);
                     self.frames[fi].locals[*slot] = if boxed {
-                        Local::Boxed(Rc::new(RefCell::new(v)))
+                        Local::Boxed(self.heap.allocate(Obj::Cell(v)))
                     } else {
                         Local::Plain(v)
                     };
                 }
                 OpCode::GetUpvalue(i) => {
-                    let v = self.frames[fi].upvalues[*i].1.borrow().clone();
+                    let h = self.frames[fi].upvalues[*i];
+                    let v = self.cell_get(h);
                     self.push(v);
                 }
                 OpCode::SetUpvalue(i) => {
                     let v = self.pop();
-                    *self.frames[fi].upvalues[*i].1.borrow_mut() = v;
+                    let h = self.frames[fi].upvalues[*i];
+                    self.cell_set(h, v);
                 }
 
                 OpCode::Print => {
                     let v = self.pop();
-                    println!("{}", v);
-                    self.push(Value::Unit);
+                    println!("{}", format_value(&self.heap, &v));
+                    self.push(HeapValue::Unit);
                 }
 
                 // --- Arreglos (M3) ---
@@ -196,39 +209,40 @@ impl<'a> Vm<'a> {
                         elems.push(self.pop());
                     }
                     elems.reverse(); // se sacaron en orden inverso
-                    self.push(Value::Array(Rc::new(RefCell::new(elems))));
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
                 }
                 OpCode::Index => {
                     let i = self.pop_int();
-                    let rc = self.pop_array();
-                    let len = rc.borrow().len();
-                    let idx = bounds_check(i, len, line, col)?;
-                    let v = rc.borrow()[idx].clone();
+                    let h = self.pop_obj();
+                    let idx = {
+                        let arr = self.as_array(h);
+                        bounds_check(i, arr.len(), line, col)?
+                    };
+                    let v = self.as_array(h)[idx].clone();
                     self.push(v);
                 }
                 OpCode::SetIndex => {
                     let v = self.pop();
                     let i = self.pop_int();
-                    let rc = self.pop_array();
-                    let len = rc.borrow().len();
-                    let idx = bounds_check(i, len, line, col)?;
-                    rc.borrow_mut()[idx] = v;
+                    let h = self.pop_obj();
+                    let idx = bounds_check(i, self.as_array(h).len(), line, col)?;
+                    self.as_array_mut(h)[idx] = v;
                 }
                 OpCode::Len => {
-                    let rc = self.pop_array();
-                    let len = rc.borrow().len() as i64;
-                    self.push(Value::Int(len));
+                    let h = self.pop_obj();
+                    let len = self.as_array(h).len() as i64;
+                    self.push(HeapValue::Int(len));
                 }
                 OpCode::Push => {
                     let v = self.pop();
-                    let rc = self.pop_array();
-                    rc.borrow_mut().push(v);
-                    self.push(Value::Unit);
+                    let h = self.pop_obj();
+                    self.as_array_mut(h).push(v);
+                    self.push(HeapValue::Unit);
                 }
 
                 // --- Structs (M3.2) ---
                 OpCode::MakeStruct(idx) => {
-                    // Clonamos nombre y campos para soltar el préstamo de program.
                     let sname = self.program.structs[*idx].name.clone();
                     let field_names: Vec<String> = self.program.structs[*idx].fields.clone();
                     let mut values = Vec::with_capacity(field_names.len());
@@ -236,19 +250,20 @@ impl<'a> Vm<'a> {
                         values.push(self.pop());
                     }
                     values.reverse(); // orden de declaración
-                    let fields: Vec<(String, Value)> = field_names.into_iter().zip(values).collect();
-                    self.push(Value::Struct(Rc::new(RefCell::new(StructInstance { name: sname, fields }))));
+                    let fields: Vec<(String, HeapValue)> = field_names.into_iter().zip(values).collect();
+                    let h = self.heap.allocate(Obj::Struct(VmStruct { name: sname, fields }));
+                    self.push(HeapValue::Obj(h));
                 }
                 OpCode::GetField(name) => {
-                    let rc = self.pop_struct();
-                    let v = rc.borrow().fields.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
+                    let h = self.pop_obj();
+                    let v = self.as_struct(h).fields.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
                         .expect("el checker garantiza el campo");
                     self.push(v);
                 }
                 OpCode::SetField(name) => {
                     let v = self.pop();
-                    let rc = self.pop_struct();
-                    let mut s = rc.borrow_mut();
+                    let h = self.pop_obj();
+                    let s = self.as_struct_mut(h);
                     let slot = s.fields.iter_mut().find(|(n, _)| n == name).expect("el checker garantiza el campo");
                     slot.1 = v;
                 }
@@ -257,59 +272,58 @@ impl<'a> Vm<'a> {
                     if self.frames.len() >= MAX_FRAMES {
                         return Err(runtime_error(line, col, "desbordamiento de pila (recursión demasiado profunda)"));
                     }
-                    // Los argumentos están en la cima: los movemos a las primeras
-                    // locales del nuevo marco (param 0 = primer argumento).
                     let mut locals = self.new_locals(*idx);
                     for i in (0..*argc).rev() {
                         let v = self.pop();
-                        set_slot(&mut locals, i, v);
+                        self.put_arg(&mut locals, i, v);
                     }
                     self.frames.push(CallFrame { function: *idx, ip: 0, locals, upvalues: Vec::new() });
                 }
 
                 // --- Funciones de primera clase (M4.1) ---
-                OpCode::Function(idx) => self.push(Value::Function(*idx)),
+                OpCode::Function(idx) => self.push(HeapValue::Function(*idx)),
                 OpCode::CallValue(argc) => {
                     if self.frames.len() >= MAX_FRAMES {
                         return Err(runtime_error(line, col, "desbordamiento de pila (recursión demasiado profunda)"));
                     }
-                    // En la pila: [valor-función, arg0, ..., arg{argc-1}]. Sacamos
-                    // primero los argumentos, y debajo queda el valor-función.
                     let mut args_rev = Vec::with_capacity(*argc);
                     for _ in 0..*argc {
                         args_rev.push(self.pop());
                     }
                     let (fn_idx, upvalues) = match self.pop() {
-                        Value::Function(i) => (i, Vec::new()),
-                        Value::Closure(c) => (c.index, c.upvalues.clone()),
+                        HeapValue::Function(i) => (i, Vec::new()),
+                        HeapValue::Obj(h) => match self.heap.get(h) {
+                            Obj::Closure(c) => (c.index, c.upvalues.clone()),
+                            _ => unreachable!("el checker garantiza una función"),
+                        },
                         _ => unreachable!("el checker garantiza una función"),
                     };
                     let mut locals = self.new_locals(fn_idx);
-                    // args_rev está en orden inverso: el último que se sacó es arg0.
                     for (j, val) in args_rev.into_iter().enumerate() {
-                        set_slot(&mut locals, *argc - 1 - j, val);
+                        self.put_arg(&mut locals, *argc - 1 - j, val);
                     }
                     self.frames.push(CallFrame { function: fn_idx, ip: 0, locals, upvalues });
                 }
 
                 // --- Closures (M4.2) ---
                 OpCode::Closure(idx) => {
-                    // Construimos el arreglo de upvalues tomando las celdas que indica
-                    // la función, del marco actual (un local boxeado, o un upvalue
-                    // propio para la captura transitiva).
+                    // Armamos el arreglo de upvalues tomando las celdas que indica la
+                    // función, del marco actual (un local boxeado, o un upvalue propio
+                    // para la captura transitiva).
                     let descs = self.program.functions[*idx].upvalues.clone();
                     let mut upvalues = Vec::with_capacity(descs.len());
                     for d in &descs {
                         let cell = match d.source {
                             UpvalueSource::Local(slot) => match &self.frames[fi].locals[slot] {
-                                Local::Boxed(c) => c.clone(),
+                                Local::Boxed(h) => *h,
                                 Local::Plain(_) => unreachable!("un local capturado debe estar boxeado"),
                             },
-                            UpvalueSource::Upvalue(u) => self.frames[fi].upvalues[u].1.clone(),
+                            UpvalueSource::Upvalue(u) => self.frames[fi].upvalues[u],
                         };
-                        upvalues.push((d.name.clone(), cell));
+                        upvalues.push(cell);
                     }
-                    self.push(Value::Closure(Rc::new(Closure { index: *idx, upvalues })));
+                    let h = self.heap.allocate(Obj::Closure(VmClosure { index: *idx, upvalues }));
+                    self.push(HeapValue::Obj(h));
                 }
 
                 OpCode::Return => {
@@ -324,110 +338,290 @@ impl<'a> Vm<'a> {
         }
     }
 
+    // ----- Recolección de basura (mark-and-sweep) -----
+
+    /// Recolecta: marca desde las raíces (pila + locales + upvalues de los marcos),
+    /// propaga y barre. Solo se llama en puntos seguros del bucle.
+    fn collect(&mut self) {
+        // Reunimos las raíces (handles) primero, para no tomar prestado `self.stack`
+        // y `self.heap` a la vez.
+        let mut roots: Vec<Handle> = Vec::new();
+        for v in &self.stack {
+            if let Some(h) = v.handle() {
+                roots.push(h);
+            }
+        }
+        for frame in &self.frames {
+            for slot in &frame.locals {
+                match slot {
+                    Local::Plain(v) => {
+                        if let Some(h) = v.handle() {
+                            roots.push(h);
+                        }
+                    }
+                    Local::Boxed(h) => roots.push(*h),
+                }
+            }
+            roots.extend(frame.upvalues.iter().copied());
+        }
+
+        for h in roots {
+            self.heap.mark(h);
+        }
+        self.heap.trace();
+        self.heap.sweep();
+    }
+
+    // ----- Locales (con boxing) -----
+
     /// Crea el arreglo de locales de un marco nuevo: cada slot capturado nace
-    /// **boxeado** (en su celda), los demás como `Plain(Unit)`.
-    fn new_locals(&self, fn_idx: usize) -> Vec<Local> {
-        let cf = &self.program.functions[fn_idx];
-        (0..cf.num_locals)
+    /// **boxeado** (su celda en el heap), los demás como `Plain(Unit)`.
+    fn new_locals(&mut self, fn_idx: usize) -> Vec<Local> {
+        let n = self.program.functions[fn_idx].num_locals;
+        (0..n)
             .map(|s| {
-                if cf.captured.get(s).copied().unwrap_or(false) {
-                    Local::Boxed(Rc::new(RefCell::new(Value::Unit)))
+                if self.program.functions[fn_idx].captured.get(s).copied().unwrap_or(false) {
+                    Local::Boxed(self.heap.allocate(Obj::Cell(HeapValue::Unit)))
                 } else {
-                    Local::Plain(Value::Unit)
+                    Local::Plain(HeapValue::Unit)
                 }
             })
             .collect()
     }
 
-    fn push(&mut self, v: Value) {
+    /// Coloca un argumento en un slot recién creado (respeta el boxing).
+    fn put_arg(&mut self, locals: &mut [Local], slot: usize, v: HeapValue) {
+        match &locals[slot] {
+            Local::Boxed(h) => self.cell_set(*h, v),
+            Local::Plain(_) => locals[slot] = Local::Plain(v),
+        }
+    }
+
+    fn get_local(&self, fi: usize, slot: usize) -> HeapValue {
+        match &self.frames[fi].locals[slot] {
+            Local::Plain(v) => v.clone(),
+            Local::Boxed(h) => self.cell_get(*h),
+        }
+    }
+
+    fn set_local(&mut self, fi: usize, slot: usize, v: HeapValue) {
+        match &self.frames[fi].locals[slot] {
+            Local::Boxed(h) => {
+                let h = *h;
+                self.cell_set(h, v);
+            }
+            Local::Plain(_) => self.frames[fi].locals[slot] = Local::Plain(v),
+        }
+    }
+
+    fn cell_get(&self, h: Handle) -> HeapValue {
+        match self.heap.get(h) {
+            Obj::Cell(v) => v.clone(),
+            _ => unreachable!("se esperaba una celda"),
+        }
+    }
+
+    fn cell_set(&mut self, h: Handle, v: HeapValue) {
+        match self.heap.get_mut(h) {
+            Obj::Cell(slot) => *slot = v,
+            _ => unreachable!("se esperaba una celda"),
+        }
+    }
+
+    // ----- Acceso a objetos del heap -----
+
+    fn as_array(&self, h: Handle) -> &Vec<HeapValue> {
+        match self.heap.get(h) {
+            Obj::Array(v) => v,
+            _ => unreachable!("el checker garantiza un arreglo"),
+        }
+    }
+
+    fn as_array_mut(&mut self, h: Handle) -> &mut Vec<HeapValue> {
+        match self.heap.get_mut(h) {
+            Obj::Array(v) => v,
+            _ => unreachable!("el checker garantiza un arreglo"),
+        }
+    }
+
+    fn as_struct(&self, h: Handle) -> &VmStruct {
+        match self.heap.get(h) {
+            Obj::Struct(s) => s,
+            _ => unreachable!("el checker garantiza un struct"),
+        }
+    }
+
+    fn as_struct_mut(&mut self, h: Handle) -> &mut VmStruct {
+        match self.heap.get_mut(h) {
+            Obj::Struct(s) => s,
+            _ => unreachable!("el checker garantiza un struct"),
+        }
+    }
+
+    // ----- Pila de operandos -----
+
+    fn push(&mut self, v: HeapValue) {
         self.stack.push(v);
     }
 
-    fn pop(&mut self) -> Value {
+    fn pop(&mut self) -> HeapValue {
         self.stack.pop().expect("pila vacía: bytecode mal formado")
     }
 
-    fn peek(&self) -> &Value {
+    fn peek(&self) -> &HeapValue {
         self.stack.last().expect("pila vacía: bytecode mal formado")
     }
 
     fn pop_int(&mut self) -> i64 {
         match self.pop() {
-            Value::Int(n) => n,
+            HeapValue::Int(n) => n,
             _ => unreachable!("el checker garantiza un int"),
         }
     }
 
-    fn pop_array(&mut self) -> Rc<RefCell<Vec<Value>>> {
+    fn pop_obj(&mut self) -> Handle {
         match self.pop() {
-            Value::Array(rc) => rc,
-            _ => unreachable!("el checker garantiza un arreglo"),
+            HeapValue::Obj(h) => h,
+            _ => unreachable!("el checker garantiza un objeto"),
         }
     }
 
-    fn pop_struct(&mut self) -> Rc<RefCell<StructInstance>> {
-        match self.pop() {
-            Value::Struct(rc) => rc,
-            _ => unreachable!("el checker garantiza un struct"),
+    /// Aplica un operador binario. Misma semántica que el intérprete de M1 (esa es la
+    /// idea del oráculo: deben coincidir). La igualdad es **estructural** para los
+    /// compuestos, por lo que necesita el heap.
+    fn apply_binary(&self, op: &OpCode, left: HeapValue, right: HeapValue, line: usize, col: usize) -> Result<HeapValue, RuntimeError> {
+        use HeapValue::*;
+        use OpCode::*;
+        // Igualdad: estructural, mirando el heap.
+        match op {
+            Equal => return Ok(Bool(values_equal(&self.heap, &left, &right))),
+            NotEqual => return Ok(Bool(!values_equal(&self.heap, &left, &right))),
+            _ => {}
         }
-    }
-}
-
-/// Aplica un operador binario. Misma semántica que el intérprete de M1 (esa es la
-/// idea del oráculo: deben coincidir).
-fn apply_binary(op: &OpCode, left: Value, right: Value, line: usize, col: usize) -> Result<Value, RuntimeError> {
-    use OpCode::*;
-    use Value::*;
-    Ok(match (op, left, right) {
-        (Add, Int(a), Int(b)) => Int(a + b),
-        (Sub, Int(a), Int(b)) => Int(a - b),
-        (Mul, Int(a), Int(b)) => Int(a * b),
-        (Div, Int(a), Int(b)) => {
-            if b == 0 {
-                return Err(runtime_error(line, col, "división entera por cero"));
+        Ok(match (op, left, right) {
+            (Add, Int(a), Int(b)) => Int(a + b),
+            (Sub, Int(a), Int(b)) => Int(a - b),
+            (Mul, Int(a), Int(b)) => Int(a * b),
+            (Div, Int(a), Int(b)) => {
+                if b == 0 {
+                    return Err(runtime_error(line, col, "división entera por cero"));
+                }
+                Int(a / b)
             }
-            Int(a / b)
-        }
-        (Rem, Int(a), Int(b)) => {
-            if b == 0 {
-                return Err(runtime_error(line, col, "módulo por cero"));
+            (Rem, Int(a), Int(b)) => {
+                if b == 0 {
+                    return Err(runtime_error(line, col, "módulo por cero"));
+                }
+                Int(a % b)
             }
-            Int(a % b)
-        }
-        (Add, Float(a), Float(b)) => Float(a + b),
-        (Sub, Float(a), Float(b)) => Float(a - b),
-        (Mul, Float(a), Float(b)) => Float(a * b),
-        (Div, Float(a), Float(b)) => Float(a / b),
-        (Rem, Float(a), Float(b)) => Float(a % b),
-        (Less, Int(a), Int(b)) => Bool(a < b),
-        (LessEqual, Int(a), Int(b)) => Bool(a <= b),
-        (Greater, Int(a), Int(b)) => Bool(a > b),
-        (GreaterEqual, Int(a), Int(b)) => Bool(a >= b),
-        (Less, Float(a), Float(b)) => Bool(a < b),
-        (LessEqual, Float(a), Float(b)) => Bool(a <= b),
-        (Greater, Float(a), Float(b)) => Bool(a > b),
-        (GreaterEqual, Float(a), Float(b)) => Bool(a >= b),
-        (Equal, a, b) => Bool(a == b),
-        (NotEqual, a, b) => Bool(a != b),
-        _ => unreachable!("combinación operador/operandos que el checker debió rechazar"),
-    })
-}
-
-/// Lee un slot local, deshaciendo el boxing si lo hay.
-fn get_slot(locals: &[Local], slot: usize) -> Value {
-    match &locals[slot] {
-        Local::Plain(v) => v.clone(),
-        Local::Boxed(cell) => cell.borrow().clone(),
+            (Add, Float(a), Float(b)) => Float(a + b),
+            (Sub, Float(a), Float(b)) => Float(a - b),
+            (Mul, Float(a), Float(b)) => Float(a * b),
+            (Div, Float(a), Float(b)) => Float(a / b),
+            (Rem, Float(a), Float(b)) => Float(a % b),
+            (Less, Int(a), Int(b)) => Bool(a < b),
+            (LessEqual, Int(a), Int(b)) => Bool(a <= b),
+            (Greater, Int(a), Int(b)) => Bool(a > b),
+            (GreaterEqual, Int(a), Int(b)) => Bool(a >= b),
+            (Less, Float(a), Float(b)) => Bool(a < b),
+            (LessEqual, Float(a), Float(b)) => Bool(a <= b),
+            (Greater, Float(a), Float(b)) => Bool(a > b),
+            (GreaterEqual, Float(a), Float(b)) => Bool(a >= b),
+            _ => unreachable!("combinación operador/operandos que el checker debió rechazar"),
+        })
     }
 }
 
-/// Escribe un slot local **respetando** el boxing: si está boxeado, muta su celda
-/// (visible para las closures que la capturaron); si no, reemplaza el valor.
-fn set_slot(locals: &mut [Local], slot: usize, v: Value) {
-    if let Local::Boxed(cell) = &locals[slot] {
-        *cell.borrow_mut() = v;
-    } else {
-        locals[slot] = Local::Plain(v);
+/// Convierte una constante del chunk (un `Value` del intérprete, siempre primitivo)
+/// al valor de la VM.
+fn const_to_heap(v: &Value) -> HeapValue {
+    match v {
+        Value::Int(n) => HeapValue::Int(*n),
+        Value::Float(x) => HeapValue::Float(*x),
+        Value::Bool(b) => HeapValue::Bool(*b),
+        Value::Str(s) => HeapValue::Str(s.clone()),
+        Value::Unit => HeapValue::Unit,
+        _ => unreachable!("las constantes del chunk son primitivas"),
+    }
+}
+
+/// Igualdad estructural entre valores de la VM (mira el heap). Las funciones y
+/// closures se comparan por identidad (el checker prohíbe `==` sobre ellas).
+fn values_equal(heap: &Heap, a: &HeapValue, b: &HeapValue) -> bool {
+    use HeapValue as H;
+    match (a, b) {
+        (H::Int(x), H::Int(y)) => x == y,
+        (H::Float(x), H::Float(y)) => x == y,
+        (H::Bool(x), H::Bool(y)) => x == y,
+        (H::Str(x), H::Str(y)) => x == y,
+        (H::Unit, H::Unit) => true,
+        (H::Function(x), H::Function(y)) => x == y,
+        (H::Obj(x), H::Obj(y)) => match (heap.get(*x), heap.get(*y)) {
+            (Obj::Array(va), Obj::Array(vb)) => {
+                va.len() == vb.len() && va.iter().zip(vb).all(|(p, q)| values_equal(heap, p, q))
+            }
+            (Obj::Struct(sa), Obj::Struct(sb)) => {
+                sa.name == sb.name
+                    && sa.fields.len() == sb.fields.len()
+                    && sa.fields.iter().zip(&sb.fields).all(|((n1, v1), (n2, v2))| n1 == n2 && values_equal(heap, v1, v2))
+            }
+            // Closures: identidad (mismo handle).
+            (Obj::Closure(_), Obj::Closure(_)) => x == y,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Formatea un valor de la VM como texto (siguiendo handles en el heap). Debe
+/// coincidir con el `Display` del `Value` del intérprete, para que `print` sea igual.
+fn format_value(heap: &Heap, v: &HeapValue) -> String {
+    match v {
+        HeapValue::Int(n) => n.to_string(),
+        HeapValue::Float(x) => x.to_string(),
+        HeapValue::Bool(b) => b.to_string(),
+        HeapValue::Str(s) => s.clone(),
+        HeapValue::Unit => "()".to_string(),
+        HeapValue::Function(_) => "<fn>".to_string(),
+        HeapValue::Obj(h) => match heap.get(*h) {
+            Obj::Array(elems) => {
+                let parts: Vec<String> = elems.iter().map(|e| format_value(heap, e)).collect();
+                format!("[{}]", parts.join(", "))
+            }
+            Obj::Struct(s) => {
+                let parts: Vec<String> = s.fields.iter().map(|(n, v)| format!("{}: {}", n, format_value(heap, v))).collect();
+                format!("{} {{ {} }}", s.name, parts.join(", "))
+            }
+            Obj::Closure(_) => "<fn>".to_string(),
+            Obj::Cell(_) => "<cell>".to_string(), // no debería imprimirse directamente
+        },
+    }
+}
+
+/// Convierte un valor de la VM al `Value` del intérprete (para el resultado final y
+/// el oráculo). Los compuestos se reconstruyen siguiendo el heap.
+fn to_value(heap: &Heap, v: &HeapValue) -> Value {
+    match v {
+        HeapValue::Int(n) => Value::Int(*n),
+        HeapValue::Float(x) => Value::Float(*x),
+        HeapValue::Bool(b) => Value::Bool(*b),
+        HeapValue::Str(s) => Value::Str(s.clone()),
+        HeapValue::Unit => Value::Unit,
+        HeapValue::Function(i) => Value::Function(*i),
+        HeapValue::Obj(h) => match heap.get(*h) {
+            Obj::Array(elems) => {
+                let v: Vec<Value> = elems.iter().map(|e| to_value(heap, e)).collect();
+                Value::Array(Rc::new(RefCell::new(v)))
+            }
+            Obj::Struct(s) => {
+                let fields: Vec<(String, Value)> = s.fields.iter().map(|(n, v)| (n.clone(), to_value(heap, v))).collect();
+                Value::Struct(Rc::new(RefCell::new(StructInstance { name: s.name.clone(), fields })))
+            }
+            // Una closure como resultado: la representamos como función (su identidad
+            // no se observa; se imprime <fn>).
+            Obj::Closure(c) => Value::Function(c.index),
+            Obj::Cell(inner) => to_value(heap, inner),
+        },
     }
 }
 
@@ -485,6 +679,23 @@ mod tests {
         let compiled = compile_program(&prog).expect("compila");
         let vm = run_program(&compiled).expect("vm ok");
         assert_eq!(interp, vm, "VM y intérprete difieren");
+    }
+
+    /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
+    /// punto seguro) y exige que el resultado coincida con el intérprete. Es la
+    /// prueba clave del GC: si una raíz faltara, un valor vivo se liberaría y el
+    /// resultado cambiaría o reventaría.
+    fn oracle_stress(src: &str) {
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&prog).expect("check ok");
+        let interp = crate::interpreter::run(&prog).expect("intérprete ok");
+        let compiled = compile_program(&prog).expect("compila");
+        let mut vm = Vm::new(&compiled);
+        vm.heap.stress = true;
+        let result = vm.run().expect("vm ok");
+        let vm_result = to_value(&vm.heap, &result);
+        assert_eq!(interp, vm_result, "VM (estrés) y intérprete difieren en:\n{}", src);
     }
 
     // ----- M2.1 / M2.2: expresiones -----
@@ -595,7 +806,6 @@ mod tests {
 
     #[test]
     fn programa_con_print() {
-        // print va a stdout; se compara el valor de retorno de main.
         oracle_program("fn main() -> int { print(42); print(true); 0 }");
     }
 
@@ -617,7 +827,6 @@ mod tests {
 
     #[test]
     fn arreglos_son_por_referencia() {
-        // 'b = a' comparte el arreglo: mutar b se ve en a (aliasing).
         oracle_program("fn main() -> int { let a: [int] = [1, 2, 3]; let b: [int] = a; b[0] = 9; a[0] }");
     }
 
@@ -648,7 +857,6 @@ mod tests {
     #[test]
     fn structs_acceso_y_orden_de_campos() {
         oracle_program("struct P { x: int, y: int } fn main() -> int { let p: P = P { x: 3, y: 4 }; p.x + p.y }");
-        // El orden del literal no afecta el resultado.
         oracle_program("struct P { x: int, y: int } fn main() -> int { let p: P = P { y: 4, x: 3 }; p.x - p.y }");
     }
 
@@ -717,7 +925,6 @@ mod tests {
 
     #[test]
     fn variable_tapa_a_funcion_global() {
-        // 'f' local (una función) tapa a la global 'f': la llamada es indirecta.
         oracle_program(
             "fn f(x: int) -> int { x * 100 }
              fn main() -> int { let f: fn(int) -> int = fn(x: int) -> int { x + 1 }; f(41) }",
@@ -754,7 +961,6 @@ mod tests {
 
     #[test]
     fn contador_con_estado_mutable() {
-        // La celda 'n' sobrevive a 'contador' y persiste entre llamadas.
         oracle_program(
             "fn contador() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
              fn main() -> int { let c: fn() -> int = contador(); c(); c(); c() }",
@@ -785,7 +991,6 @@ mod tests {
 
     #[test]
     fn closures_hermanas_comparten_celda() {
-        // 'inc' y 'get' capturan la MISMA 'n': mutar por una se ve por la otra.
         oracle_program(
             "struct Par { inc: fn(), get: fn() -> int }
              fn hacer() -> Par {
@@ -805,5 +1010,57 @@ mod tests {
                  aplica_dos(fn(n: int) -> int { n + k }, 10)
              }",
         );
+    }
+
+    // ----- M4.3: recolección de basura -----
+
+    #[test]
+    fn el_gc_no_rompe_programas_en_modo_estres() {
+        // Si el GC liberara algo vivo (raíz faltante), estos resultados cambiarían.
+        oracle_stress("fn fib(n: int) -> int { if (n < 2) { n } else { fib(n-1) + fib(n-2) } } fn main() -> int { fib(12) }");
+        oracle_stress(
+            "fn main() -> int {
+                 var xs: [int] = [];
+                 var i: int = 0;
+                 while (i < 30) { push(xs, i * i); i = i + 1; }
+                 var s: int = 0; var j: int = 0;
+                 while (j < len(xs)) { s = s + xs[j]; j = j + 1; }
+                 s
+             }",
+        );
+        oracle_stress(
+            "struct P { x: int, y: int }
+             fn main() -> int { var p: P = P { x: 1, y: 2 }; p.x = 10; p.x + p.y }",
+        );
+        oracle_stress(
+            "fn contador() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
+             fn main() -> int { let c: fn() -> int = contador(); c(); c(); c(); c() }",
+        );
+    }
+
+    #[test]
+    fn el_gc_libera_ciclos() {
+        // Cada 'make_cycle' crea un ciclo (celda <-> closure) que queda inalcanzable
+        // al retornar. Con conteo de referencias se filtrarían (~200 objetos); el
+        // mark-and-sweep los libera, así que el heap queda acotado.
+        let src = r#"
+            fn make_cycle() {
+                var f: fn() = fn() {};
+                f = fn() { f(); };
+            }
+            fn main() -> int {
+                var i: int = 0;
+                while (i < 100) { make_cycle(); i = i + 1; }
+                0
+            }
+        "#;
+        let tokens = crate::lexer::lex(src).unwrap();
+        let prog = crate::parser::parse(tokens).unwrap();
+        crate::checker::check(&prog).unwrap();
+        let compiled = compile_program(&prog).unwrap();
+        let mut vm = Vm::new(&compiled);
+        vm.run().expect("vm ok");
+        // Sin GC habría ~200 objetos vivos; con mark-and-sweep, muy pocos.
+        assert!(vm.heap.live() < 80, "el heap no se acotó: {} objetos vivos", vm.heap.live());
     }
 }

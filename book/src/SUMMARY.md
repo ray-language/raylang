@@ -27,3 +27,10 @@
 - [Datos compuestos](m3/intro.md)
 - [Arreglos](m3/arreglos.md)
 - [Structs](m3/structs.md)
+
+# M4 — Funciones, closures y memoria
+
+- [Funciones, closures y memoria](m4/intro.md)
+- [Funciones de primera clase](m4/primera-clase.md)
+- [Closures: capturar el entorno](m4/closures.md)
+- [El recolector de basura](m4/recoleccion-de-basura.md)

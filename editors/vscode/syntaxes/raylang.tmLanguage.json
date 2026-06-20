@@ -5,11 +5,13 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#strings" },
+    { "include": "#struct-definition" },
     { "include": "#function-definition" },
     { "include": "#keywords-control" },
     { "include": "#storage" },
     { "include": "#builtins" },
     { "include": "#types" },
+    { "include": "#user-types" },
     { "include": "#booleans" },
     { "include": "#numbers" },
     { "include": "#function-call" },
@@ -31,6 +33,13 @@
         }
       ]
     },
+    "struct-definition": {
+      "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.struct.raylang" },
+        "2": { "name": "entity.name.type.raylang" }
+      }
+    },
     "function-definition": {
       "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
       "captures": {
@@ -44,7 +53,7 @@
     },
     "storage": {
       "name": "storage.type.raylang",
-      "match": "\\b(let|var|fn)\\b"
+      "match": "\\b(let|var|fn|struct)\\b"
     },
     "builtins": {
       "name": "support.function.builtin.raylang",
@@ -53,6 +62,10 @@
     "types": {
       "name": "support.type.primitive.raylang",
       "match": "\\b(int|float|bool|string)\\b"
+    },
+    "user-types": {
+      "name": "entity.name.type.raylang",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
     },
     "booleans": {
       "name": "constant.language.boolean.raylang",

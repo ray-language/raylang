@@ -118,6 +118,8 @@ impl Lexer {
             '=' => {
                 if self.match_char('=') {
                     TokenKind::EqEq
+                } else if self.match_char('>') {
+                    TokenKind::FatArrow // => (brazos de match, M5)
                 } else {
                     TokenKind::Eq
                 }
@@ -338,6 +340,8 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "true" => TokenKind::True,
         "false" => TokenKind::False,
         "struct" => TokenKind::Struct,
+        "enum" => TokenKind::Enum,
+        "match" => TokenKind::Match,
         "int" => TokenKind::IntType,
         "float" => TokenKind::FloatType,
         "bool" => TokenKind::BoolType,
@@ -404,6 +408,21 @@ mod tests {
                 TokenKind::IntType,
                 TokenKind::Ident("while123".into()), // no es la keyword 'while'
                 TokenKind::Ident("ifx".into()),      // ni 'if'
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn palabras_clave_de_m5() {
+        // `enum` y `match` son palabras clave (M5); `=>` es un token propio.
+        assert_eq!(
+            kinds("enum match => enumx"),
+            vec![
+                TokenKind::Enum,
+                TokenKind::Match,
+                TokenKind::FatArrow,
+                TokenKind::Ident("enumx".into()), // no es la keyword 'enum'
                 TokenKind::Eof,
             ]
         );

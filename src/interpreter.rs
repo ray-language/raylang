@@ -66,6 +66,11 @@ pub enum Value {
     Function(usize),
     /// Una **closure**: una función con su entorno capturado (M4.2).
     Closure(Rc<Closure>),
+    /// Un valor de enum (tipo suma, M5): la variante y su payload. `Rc` da
+    /// semántica de referencia (como struct/array) y permite enums recursivos sin
+    /// tamaño infinito. Es **inmutable** (no hay asignación a su payload), de ahí que
+    /// no lleve `RefCell`.
+    Enum(Rc<EnumInstance>),
 }
 
 /// `PartialEq` de `Value` escrito a mano (no derivado) por dos razones:
@@ -88,9 +93,23 @@ impl PartialEq for Value {
             (Struct(a), Struct(b)) => *a.borrow() == *b.borrow(),
             (Function(a), Function(b)) => a == b,
             (Closure(a), Closure(b)) => Rc::ptr_eq(a, b),
+            // Estructural (variante + payload). El checker prohíbe `==` sobre enums,
+            // así que esto está por robustez (y no se ejercita en programas válidos).
+            (Enum(a), Enum(b)) => {
+                a.enum_name == b.enum_name && a.variant == b.variant && a.payload == b.payload
+            }
             _ => false,
         }
     }
+}
+
+/// Instancia de un enum en tiempo de ejecución (M5): qué variante es y su payload
+/// posicional. El nombre del enum se guarda para imprimir y para el oráculo.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumInstance {
+    pub enum_name: String,
+    pub variant: String,
+    pub payload: Vec<Value>,
 }
 
 /// Instancia de un struct en tiempo de ejecución. Los campos se guardan en **orden
@@ -122,6 +141,14 @@ impl std::fmt::Display for Value {
             }
             // Las funciones no tienen una representación textual útil: marcador opaco.
             Value::Function(_) | Value::Closure(_) => write!(f, "<fn>"),
+            Value::Enum(rc) => {
+                if rc.payload.is_empty() {
+                    write!(f, "{}.{}", rc.enum_name, rc.variant)
+                } else {
+                    let parts: Vec<String> = rc.payload.iter().map(|v| v.to_string()).collect();
+                    write!(f, "{}.{}({})", rc.enum_name, rc.variant, parts.join(", "))
+                }
+            }
         }
     }
 }
@@ -409,6 +436,20 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Struct(Rc::new(RefCell::new(inst))))
             }
 
+            ExprKind::EnumLit { enum_name, variant, args } => {
+                // Evaluamos el payload en orden y armamos el valor de enum.
+                let mut payload = Vec::with_capacity(args.len());
+                for a in args {
+                    payload.push(self.eval_expr(a)?);
+                }
+                let inst = EnumInstance {
+                    enum_name: enum_name.clone(),
+                    variant: variant.clone(),
+                    payload,
+                };
+                Ok(Value::Enum(Rc::new(inst)))
+            }
+
             ExprKind::Field { object, name } => {
                 let rc = self.eval_struct(object)?;
                 let v = rc
@@ -692,15 +733,15 @@ mod tests {
 
     fn run_ok(src: &str) -> Value {
         let tokens = crate::lexer::lex(src).expect("lex ok");
-        let prog = crate::parser::parse(tokens).expect("parse ok");
-        crate::checker::check(&prog).expect("check ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
         run(&prog).expect("ejecución sin error")
     }
 
     fn run_err(src: &str) -> RuntimeError {
         let tokens = crate::lexer::lex(src).expect("lex ok");
-        let prog = crate::parser::parse(tokens).expect("parse ok");
-        crate::checker::check(&prog).expect("check ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
         run(&prog).expect_err("debería fallar en ejecución")
     }
 
@@ -709,8 +750,8 @@ mod tests {
     /// El fuente debe incluir esa función y un `main` (que el checker exige).
     fn run_named(src: &str, name: &str) -> Value {
         let tokens = crate::lexer::lex(src).expect("lex ok");
-        let prog = crate::parser::parse(tokens).expect("parse ok");
-        crate::checker::check(&prog).expect("check ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
         // Construimos el intérprete a mano para llamar a la función elegida.
         // Como los tests viven en el mismo módulo, accedemos a sus internos.
         let prog_ref: &'static Program = Box::leak(Box::new(prog));

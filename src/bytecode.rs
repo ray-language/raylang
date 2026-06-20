@@ -110,6 +110,12 @@ pub enum OpCode {
     /// Saca valor y struct; asigna `struct.campo = valor` (por nombre).
     SetField(String),
 
+    // --- Enums (M5) ---
+    /// Construye una variante de enum: `(enum_id, variant_id)` indexan
+    /// `program.enums`. Saca de la pila tantos valores como aridad tenga la variante
+    /// (el payload, en orden) y empuja el valor de enum.
+    MakeEnum(usize, usize),
+
     /// Termina la ejecución del chunk; el valor de retorno es la cima de la pila.
     Return,
 }
@@ -204,10 +210,27 @@ pub struct CompiledStruct {
     pub fields: Vec<String>,
 }
 
-/// Un programa compilado: sus structs, funciones (indexadas) y el índice de `main`.
+/// La definición de un enum, compilada: su nombre y sus variantes **en orden**. El
+/// índice de una variante en `variants` es su *tag* (lo usará el `match` de M5.3).
+#[derive(Debug)]
+pub struct CompiledEnum {
+    pub name: String,
+    pub variants: Vec<CompiledVariant>,
+}
+
+/// Una variante compilada: su nombre y su aridad (cuántos valores de payload lleva).
+#[derive(Debug)]
+pub struct CompiledVariant {
+    pub name: String,
+    pub arity: usize,
+}
+
+/// Un programa compilado: sus structs, enums, funciones (indexadas) y el índice de
+/// `main`.
 #[derive(Debug)]
 pub struct CompiledProgram {
     pub functions: Vec<CompiledFn>,
     pub structs: Vec<CompiledStruct>,
+    pub enums: Vec<CompiledEnum>,
     pub main: usize,
 }

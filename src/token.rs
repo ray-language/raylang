@@ -32,6 +32,8 @@ pub enum TokenKind {
     True,
     False,
     Struct,
+    Enum,  // M5
+    Match, // M5
 
     // --- Palabras clave de tipo ---
     IntType,    // int
@@ -68,6 +70,7 @@ pub enum TokenKind {
     Colon,     // :
     Dot,       // .
     Arrow,     // ->
+    FatArrow,  // =>  (brazos de match, M5)
 
     // --- Marca de fin de entrada ---
     // El parser se apoya en este token centinela para saber dónde termina todo

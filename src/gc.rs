@@ -68,11 +68,22 @@ pub struct VmClosure {
     pub upvalues: Vec<Handle>,
 }
 
-/// Un objeto del heap. Las cuatro formas compuestas que el GC gestiona.
+/// Un valor de enum en el heap (M5): el *tag* de la variante (su índice en el enum)
+/// y el payload posicional. `enum_id` indexa la tabla de enums del programa; juntos
+/// dan el nombre del enum y de la variante para imprimir y para el oráculo.
+pub struct VmEnum {
+    pub enum_id: usize,
+    pub tag: usize,
+    pub payload: Vec<HeapValue>,
+}
+
+/// Un objeto del heap. Las formas compuestas que el GC gestiona.
 pub enum Obj {
     Array(Vec<HeapValue>),
     Struct(VmStruct),
     Closure(VmClosure),
+    /// Un enum: variante + payload (M5). El GC traza su payload.
+    Enum(VmEnum),
     /// Una **celda**: una variable *boxeada* (un local capturado o un upvalue). Es
     /// lo que comparten una closure y el dueño de la variable (M4.2).
     Cell(HeapValue),
@@ -179,6 +190,7 @@ impl Heap {
             Obj::Array(v) => v.iter().filter_map(HeapValue::handle).collect(),
             Obj::Struct(s) => s.fields.iter().filter_map(|(_, v)| v.handle()).collect(),
             Obj::Closure(c) => c.upvalues.clone(),
+            Obj::Enum(e) => e.payload.iter().filter_map(HeapValue::handle).collect(),
             Obj::Cell(v) => v.handle().into_iter().collect(),
         }
     }

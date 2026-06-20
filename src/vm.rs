@@ -20,9 +20,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::bytecode::{Chunk, CompiledFn, CompiledProgram, OpCode, UpvalueSource};
-use crate::gc::{Handle, Heap, HeapValue, Obj, VmClosure, VmStruct};
-use crate::interpreter::{RuntimeError, StructInstance, Value};
+use crate::bytecode::{Chunk, CompiledEnum, CompiledFn, CompiledProgram, OpCode, UpvalueSource};
+use crate::gc::{Handle, Heap, HeapValue, Obj, VmClosure, VmEnum, VmStruct};
+use crate::interpreter::{EnumInstance, RuntimeError, StructInstance, Value};
 
 /// Límite de marcos para detectar recursión infinita en vez de colgarse.
 const MAX_FRAMES: usize = 1024;
@@ -31,7 +31,7 @@ const MAX_FRAMES: usize = 1024;
 pub fn run_program(program: &CompiledProgram) -> Result<Value, RuntimeError> {
     let mut vm = Vm::new(program);
     let result = vm.run()?;
-    Ok(to_value(&vm.heap, &result))
+    Ok(to_value(&vm.heap, &program.enums, &result))
 }
 
 /// Ejecuta un `Chunk` suelto (una expresión compilada). Lo envuelve como una
@@ -47,6 +47,7 @@ pub fn run(chunk: &Chunk) -> Result<Value, RuntimeError> {
             chunk: chunk.clone(),
         }],
         structs: Vec::new(),
+        enums: Vec::new(),
         main: 0,
     };
     run_program(&program)
@@ -198,7 +199,7 @@ impl<'a> Vm<'a> {
 
                 OpCode::Print => {
                     let v = self.pop();
-                    println!("{}", format_value(&self.heap, &v));
+                    println!("{}", format_value(&self.heap, &self.program.enums, &v));
                     self.push(HeapValue::Unit);
                 }
 
@@ -252,6 +253,17 @@ impl<'a> Vm<'a> {
                     values.reverse(); // orden de declaración
                     let fields: Vec<(String, HeapValue)> = field_names.into_iter().zip(values).collect();
                     let h = self.heap.allocate(Obj::Struct(VmStruct { name: sname, fields }));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::MakeEnum(enum_id, tag) => {
+                    // La aridad la da la tabla; sacamos ese tanto de payload.
+                    let arity = self.program.enums[*enum_id].variants[*tag].arity;
+                    let mut payload = Vec::with_capacity(arity);
+                    for _ in 0..arity {
+                        payload.push(self.pop());
+                    }
+                    payload.reverse(); // orden de declaración
+                    let h = self.heap.allocate(Obj::Enum(VmEnum { enum_id: *enum_id, tag: *tag, payload }));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::GetField(name) => {
@@ -573,9 +585,16 @@ fn values_equal(heap: &Heap, a: &HeapValue, b: &HeapValue) -> bool {
     }
 }
 
+/// Resuelve `(enum_id, tag)` de un enum a `(nombre_enum, nombre_variante)` usando la
+/// tabla de enums del programa.
+fn enum_names<'a>(enums: &'a [CompiledEnum], enum_id: usize, tag: usize) -> (&'a str, &'a str) {
+    let e = &enums[enum_id];
+    (e.name.as_str(), e.variants[tag].name.as_str())
+}
+
 /// Formatea un valor de la VM como texto (siguiendo handles en el heap). Debe
 /// coincidir con el `Display` del `Value` del intérprete, para que `print` sea igual.
-fn format_value(heap: &Heap, v: &HeapValue) -> String {
+fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> String {
     match v {
         HeapValue::Int(n) => n.to_string(),
         HeapValue::Float(x) => x.to_string(),
@@ -585,12 +604,21 @@ fn format_value(heap: &Heap, v: &HeapValue) -> String {
         HeapValue::Function(_) => "<fn>".to_string(),
         HeapValue::Obj(h) => match heap.get(*h) {
             Obj::Array(elems) => {
-                let parts: Vec<String> = elems.iter().map(|e| format_value(heap, e)).collect();
+                let parts: Vec<String> = elems.iter().map(|e| format_value(heap, enums, e)).collect();
                 format!("[{}]", parts.join(", "))
             }
             Obj::Struct(s) => {
-                let parts: Vec<String> = s.fields.iter().map(|(n, v)| format!("{}: {}", n, format_value(heap, v))).collect();
+                let parts: Vec<String> = s.fields.iter().map(|(n, v)| format!("{}: {}", n, format_value(heap, enums, v))).collect();
                 format!("{} {{ {} }}", s.name, parts.join(", "))
+            }
+            Obj::Enum(e) => {
+                let (ename, vname) = enum_names(enums, e.enum_id, e.tag);
+                if e.payload.is_empty() {
+                    format!("{}.{}", ename, vname)
+                } else {
+                    let parts: Vec<String> = e.payload.iter().map(|v| format_value(heap, enums, v)).collect();
+                    format!("{}.{}({})", ename, vname, parts.join(", "))
+                }
             }
             Obj::Closure(_) => "<fn>".to_string(),
             Obj::Cell(_) => "<cell>".to_string(), // no debería imprimirse directamente
@@ -600,7 +628,7 @@ fn format_value(heap: &Heap, v: &HeapValue) -> String {
 
 /// Convierte un valor de la VM al `Value` del intérprete (para el resultado final y
 /// el oráculo). Los compuestos se reconstruyen siguiendo el heap.
-fn to_value(heap: &Heap, v: &HeapValue) -> Value {
+fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
     match v {
         HeapValue::Int(n) => Value::Int(*n),
         HeapValue::Float(x) => Value::Float(*x),
@@ -610,17 +638,26 @@ fn to_value(heap: &Heap, v: &HeapValue) -> Value {
         HeapValue::Function(i) => Value::Function(*i),
         HeapValue::Obj(h) => match heap.get(*h) {
             Obj::Array(elems) => {
-                let v: Vec<Value> = elems.iter().map(|e| to_value(heap, e)).collect();
+                let v: Vec<Value> = elems.iter().map(|e| to_value(heap, enums, e)).collect();
                 Value::Array(Rc::new(RefCell::new(v)))
             }
             Obj::Struct(s) => {
-                let fields: Vec<(String, Value)> = s.fields.iter().map(|(n, v)| (n.clone(), to_value(heap, v))).collect();
+                let fields: Vec<(String, Value)> = s.fields.iter().map(|(n, v)| (n.clone(), to_value(heap, enums, v))).collect();
                 Value::Struct(Rc::new(RefCell::new(StructInstance { name: s.name.clone(), fields })))
+            }
+            Obj::Enum(e) => {
+                let (ename, vname) = enum_names(enums, e.enum_id, e.tag);
+                let payload: Vec<Value> = e.payload.iter().map(|v| to_value(heap, enums, v)).collect();
+                Value::Enum(Rc::new(EnumInstance {
+                    enum_name: ename.to_string(),
+                    variant: vname.to_string(),
+                    payload,
+                }))
             }
             // Una closure como resultado: la representamos como función (su identidad
             // no se observa; se imprime <fn>).
             Obj::Closure(c) => Value::Function(c.index),
-            Obj::Cell(inner) => to_value(heap, inner),
+            Obj::Cell(inner) => to_value(heap, enums, inner),
         },
     }
 }
@@ -662,8 +699,8 @@ mod tests {
     fn oracle_int(src: &str) {
         let prog_src = format!("fn main() -> int {{ {} }}", src);
         let tokens = crate::lexer::lex(&prog_src).expect("lex ok");
-        let prog = crate::parser::parse(tokens).expect("parse ok");
-        crate::checker::check(&prog).expect("check ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
         let interp = crate::interpreter::run(&prog).expect("intérprete ok");
         let vm = run_vm(src);
         assert_eq!(interp, vm, "VM y intérprete difieren en `{}`", src);
@@ -673,8 +710,8 @@ mod tests {
     /// en la VM y en el intérprete, y exige que el resultado coincida.
     fn oracle_program(src: &str) {
         let tokens = crate::lexer::lex(src).expect("lex ok");
-        let prog = crate::parser::parse(tokens).expect("parse ok");
-        crate::checker::check(&prog).expect("check ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
         let interp = crate::interpreter::run(&prog).expect("intérprete ok");
         let compiled = compile_program(&prog).expect("compila");
         let vm = run_program(&compiled).expect("vm ok");
@@ -687,14 +724,14 @@ mod tests {
     /// resultado cambiaría o reventaría.
     fn oracle_stress(src: &str) {
         let tokens = crate::lexer::lex(src).expect("lex ok");
-        let prog = crate::parser::parse(tokens).expect("parse ok");
-        crate::checker::check(&prog).expect("check ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
         let interp = crate::interpreter::run(&prog).expect("intérprete ok");
         let compiled = compile_program(&prog).expect("compila");
         let mut vm = Vm::new(&compiled);
         vm.heap.stress = true;
         let result = vm.run().expect("vm ok");
-        let vm_result = to_value(&vm.heap, &result);
+        let vm_result = to_value(&vm.heap, &compiled.enums, &result);
         assert_eq!(interp, vm_result, "VM (estrés) y intérprete difieren en:\n{}", src);
     }
 
@@ -846,8 +883,8 @@ mod tests {
     fn indice_fuera_de_rango_es_error() {
         let prog_src = "fn main() -> int { let a: [int] = [1, 2]; a[5] }";
         let tokens = crate::lexer::lex(prog_src).unwrap();
-        let prog = crate::parser::parse(tokens).unwrap();
-        crate::checker::check(&prog).unwrap();
+        let mut prog = crate::parser::parse(tokens).unwrap();
+        crate::checker::check(&mut prog).unwrap();
         let compiled = compile_program(&prog).unwrap();
         assert!(run_program(&compiled).unwrap_err().msg.contains("fuera de rango"));
     }
@@ -1012,6 +1049,65 @@ mod tests {
         );
     }
 
+    // ----- M5.1: enums (tipos suma) y construcción -----
+
+    #[test]
+    fn enum_construccion_oraculo() {
+        // Ambos motores construyen variantes (con y sin payload) y coinciden en el
+        // resultado. El payload se evalúa en orden antes de MakeEnum.
+        oracle_program(
+            "enum E { A(int, int), B }
+             fn main() -> int { let x: E = E.A(2, 3); let y: E = E.B; print(x); print(y); 0 }",
+        );
+    }
+
+    #[test]
+    fn enum_recursivo_oraculo() {
+        oracle_program(
+            "enum Lista { Cons(int, Lista), Nil }
+             fn main() -> int { let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Nil)); print(xs); 0 }",
+        );
+    }
+
+    #[test]
+    fn enums_en_modo_estres() {
+        // Construir enums (incl. recursivos) con el GC recolectando en cada punto
+        // seguro: si el trazado del payload faltara, un valor vivo se liberaría.
+        oracle_stress(
+            "enum Lista { Cons(int, Lista), Nil }
+             fn construir(n: int) -> Lista {
+                 if (n == 0) { Lista.Nil } else { Lista.Cons(n, construir(n - 1)) }
+             }
+             fn main() -> int { let xs: Lista = construir(20); print(xs); 0 }",
+        );
+    }
+
+    #[test]
+    fn el_gc_libera_enums_inalcanzables() {
+        // Cada llamada construye una lista enlazada que queda inalcanzable al
+        // retornar. El mark-and-sweep debe barrer esos objetos de enum: el heap
+        // queda acotado en vez de crecer sin parar.
+        let src = r#"
+            enum Lista { Cons(int, Lista), Nil }
+            fn construir(n: int) -> Lista {
+                if (n == 0) { Lista.Nil } else { Lista.Cons(n, construir(n - 1)) }
+            }
+            fn main() -> int {
+                var i: int = 0;
+                while (i < 50) { let xs: Lista = construir(10); i = i + 1; }
+                0
+            }
+        "#;
+        let tokens = crate::lexer::lex(src).unwrap();
+        let mut prog = crate::parser::parse(tokens).unwrap();
+        crate::checker::check(&mut prog).unwrap();
+        let compiled = compile_program(&prog).unwrap();
+        let mut vm = Vm::new(&compiled);
+        vm.run().expect("vm ok");
+        // Sin GC habría ~550 objetos vivos; con barrido, muy pocos.
+        assert!(vm.heap.live() < 80, "el heap no se acotó: {} objetos vivos", vm.heap.live());
+    }
+
     // ----- M4.3: recolección de basura -----
 
     #[test]
@@ -1055,8 +1151,8 @@ mod tests {
             }
         "#;
         let tokens = crate::lexer::lex(src).unwrap();
-        let prog = crate::parser::parse(tokens).unwrap();
-        crate::checker::check(&prog).unwrap();
+        let mut prog = crate::parser::parse(tokens).unwrap();
+        crate::checker::check(&mut prog).unwrap();
         let compiled = compile_program(&prog).unwrap();
         let mut vm = Vm::new(&compiled);
         vm.run().expect("vm ok");

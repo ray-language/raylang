@@ -73,13 +73,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Estado actual
 
-- **M1–M4 COMPLETOS** (101 tests verdes):
+- **M1–M4 COMPLETOS** + **M5.1** (117 tests verdes):
   - **M1**: lexer + parser + checker + intérprete.
   - **M2**: bytecode + VM (pila y marcos explícitos). El intérprete es el **oráculo**.
   - **M3**: datos compuestos — arreglos `[T]` y structs (semántica de referencia).
   - **M4**: closures (captura por referencia/upvalues) + **GC mark-and-sweep en la
     VM** (heap propio con handles en `src/gc.rs`; el intérprete sigue con `Rc`).
-- **Siguiente: M5** (tipos suma `enum` + pattern matching `match`).
+  - **M5.1**: enums (tipos suma) `Type::Enum`, construcción `Enum.Variante(args)`,
+    valores enum en ambos motores (`Obj::Enum` trazado por el GC). El checker
+    **resuelve** la construcción (reescribe `Field`/`Call`→`EnumLit`) y toma
+    `&mut Program`. Sin `match` todavía.
+- **Siguiente: M5.2** (`match` + exhaustividad en el checker + intérprete), luego
+  **M5.3** (`match` en la VM).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 
@@ -87,7 +92,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 - `source "$HOME/.cargo/env"` antes de `cargo` (PATH).
 - `print` es un **builtin**, no palabra clave: un argumento de tipo imprimible.
-- `struct` y `fn` (también como expresión: función anónima) **ya son palabras
-  clave**. `enum` y `match` aún no se reservan; llegan en M5.
+- `struct`, `fn` (también como expresión: función anónima) y `enum` **ya son
+  palabras clave**; `match` también se reserva (M5.1) pero aún no se parsea (M5.2).
+- **Construcción de enum** `Enum.Variante` es sintácticamente igual a un acceso a
+  campo: el parser emite `Field`/`Call` y el **checker los reescribe a `EnumLit`**
+  (`resolve_enum_construction`). Por eso `check` toma `&mut Program`.
+- Un identificador en posición de **tipo** llega del parser como `Type::Struct`; el
+  checker lo **normaliza** a `Type::Enum` si el nombre es un enum (`resolve_type`).
 - La VM tiene su **propio valor** (`gc::HeapValue`, con handles), distinto del
   `Value` del intérprete (con `Rc`). Se convierte en el borde (`to_value`).

@@ -40,14 +40,16 @@ fn main() {
             process::exit(65);
         }
     };
-    let program = match parser::parse(tokens) {
+    let mut program = match parser::parse(tokens) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("{}", e);
             process::exit(65);
         }
     };
-    if let Err(e) = checker::check(&program) {
+    // El checker resuelve la construcción de enums sobre el AST (lo muta), así que
+    // el intérprete y la VM reciben un programa ya resuelto.
+    if let Err(e) = checker::check(&mut program) {
         eprintln!("{}", e);
         process::exit(65);
     }

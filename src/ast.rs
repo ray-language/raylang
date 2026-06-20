@@ -32,6 +32,12 @@ pub enum Type {
     /// Un struct nominal, por su nombre: `Punto`. Tipado **nominal** (M3.2): la
     /// igualdad de tipos compara el nombre.
     Struct(String),
+    /// Un enum (tipo suma) nominal, por su nombre: `Figura`. Tipado **nominal**
+    /// (M5), igual que un struct: la igualdad de tipos compara el nombre. Como un
+    /// identificador en posición de tipo puede ser un struct **o** un enum, el
+    /// parser produce siempre `Struct(name)` y el checker reclasifica a `Enum` al
+    /// resolver el nombre contra la tabla de tipos.
+    Enum(String),
     /// Un tipo función: `fn(T1, T2) -> R` (M4.1). Las funciones son valores de
     /// primera clase: se pueden pasar, devolver y guardar. Tipado **estructural**
     /// (dos `fn(int) -> int` son el mismo tipo).
@@ -48,6 +54,7 @@ impl std::fmt::Display for Type {
             Type::Unit => f.write_str("unit"),
             Type::Array(elem) => write!(f, "[{}]", elem),
             Type::Struct(name) => f.write_str(name),
+            Type::Enum(name) => f.write_str(name),
             Type::Fn(params, ret) => {
                 let ps: Vec<String> = params.iter().map(|p| p.to_string()).collect();
                 write!(f, "fn({}) -> {}", ps.join(", "), ret)
@@ -56,11 +63,13 @@ impl std::fmt::Display for Type {
     }
 }
 
-/// Un programa completo: definiciones de struct y funciones de nivel superior.
+/// Un programa completo: definiciones de tipos (struct/enum) y funciones de nivel
+/// superior.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub functions: Vec<Function>,
     pub structs: Vec<StructDef>,
+    pub enums: Vec<EnumDef>,
 }
 
 /// Definición de un struct: `struct Nombre { campo: Tipo, ... }` (M3.2). Los campos
@@ -69,6 +78,26 @@ pub struct Program {
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<(String, Type)>,
+    pub line: usize,
+    pub col: usize,
+}
+
+/// Definición de un enum (tipo suma): `enum Nombre { Variante(tipos...), ... }`
+/// (M5). Las variantes se guardan **en orden de declaración**. Una variante lleva
+/// un *payload* posicional (cero o más tipos); sin tipos es una variante *unit*.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<VariantDef>,
+    pub line: usize,
+    pub col: usize,
+}
+
+/// Una variante de enum: su nombre y su payload posicional (`Vec` vacío = unit).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VariantDef {
+    pub name: String,
+    pub payload: Vec<Type>,
     pub line: usize,
     pub col: usize,
 }
@@ -193,6 +222,16 @@ pub enum ExprKind {
     /// Acceso a campo: `p.x`. (M3.2)
     Field { object: Box<Expr>, name: String },
 
+    /// Construcción de una variante de enum: `Figura.Circulo(2.0)` o, sin payload,
+    /// `Figura.Punto` (`args` vacío). (M5)
+    ///
+    /// El parser **no** produce este nodo: `Enum.Variante` es sintácticamente igual
+    /// a un acceso a campo `obj.campo`. Lo genera la **resolución** del checker, que
+    /// reescribe los `Field`/`Call` cuya cabeza es un nombre de enum (ver
+    /// `checker::resolve_enum_construction`). Así la ambigüedad se decide una sola
+    /// vez y los dos motores reciben un AST explícito.
+    EnumLit { enum_name: String, variant: String, args: Vec<Expr> },
+
     /// Función anónima como valor: `fn(x: int) -> int { x + 1 }`. (M4.1)
     Func(Box<FnExpr>),
 
@@ -279,6 +318,11 @@ fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
             }
         }
         ExprKind::Field { object, .. } => walk_expr(object, acc),
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                walk_expr(a, acc);
+            }
+        }
         ExprKind::Func(fe) => {
             acc.push(fe);
             walk_block(&fe.body, acc); // fn-exprs anidadas

@@ -62,14 +62,49 @@ impl Parser {
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut functions = Vec::new();
         let mut structs = Vec::new();
+        let mut enums = Vec::new();
         while !self.is_at_end() {
             if self.check(&TokenKind::Struct) {
                 structs.push(self.struct_def()?);
+            } else if self.check(&TokenKind::Enum) {
+                enums.push(self.enum_def()?);
             } else {
                 functions.push(self.function()?);
             }
         }
-        Ok(Program { functions, structs })
+        Ok(Program { functions, structs, enums })
+    }
+
+    /// enum_def = 'enum' IDENT '{' [ variant { ',' variant } [ ',' ] ] '}'
+    /// variant  = IDENT [ '(' type { ',' type } ')' ]
+    ///
+    /// El payload entre paréntesis es **posicional** (M5): cero o más tipos. Sin
+    /// paréntesis, la variante es *unit*.
+    fn enum_def(&mut self) -> Result<EnumDef, ParseError> {
+        let kw = self.expect(&TokenKind::Enum, "'enum'")?;
+        let (name, _, _) = self.expect_ident("el nombre del enum")?;
+        self.expect(&TokenKind::LBrace, "'{' tras el nombre del enum")?;
+        let mut variants = Vec::new();
+        while !self.check(&TokenKind::RBrace) {
+            let (vname, vline, vcol) = self.expect_ident("el nombre de una variante")?;
+            let mut payload = Vec::new();
+            if self.eat(&TokenKind::LParen) {
+                // Lista de tipos del payload; al menos uno (un '()' vacío no aporta).
+                loop {
+                    payload.push(self.parse_type()?);
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+                self.expect(&TokenKind::RParen, "')' para cerrar el payload de la variante")?;
+            }
+            variants.push(VariantDef { name: vname, payload, line: vline, col: vcol });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RBrace, "'}' para cerrar el enum")?;
+        Ok(EnumDef { name, variants, line: kw.line, col: kw.col })
     }
 
     /// struct_def = 'struct' IDENT '{' [ field { ',' field } [ ',' ] ] '}'
@@ -770,6 +805,10 @@ mod tests {
                 format!("{} {{{}}}", name, fs.join(", "))
             }
             ExprKind::Field { object, name } => format!("(field {} {})", sx(object), name),
+            ExprKind::EnumLit { enum_name, variant, args } => {
+                let a: Vec<String> = args.iter().map(sx).collect();
+                format!("(enum {}.{} [{}])", enum_name, variant, a.join(" "))
+            }
             ExprKind::Func(fe) => {
                 let ps: Vec<String> = fe.params.iter().map(|p| p.name.clone()).collect();
                 format!("(fn [{}] {})", ps.join(" "), sblock(&fe.body))
@@ -888,6 +927,20 @@ mod tests {
         assert_eq!(sx(&parse_expr("p.x")), "(field p x)");
         assert_eq!(sx(&parse_expr("p.pos.x")), "(field (field p pos) x)");
         assert_eq!(sx(&parse_expr("a[0].x")), "(field (index a 0) x)");
+    }
+
+    #[test]
+    fn enum_se_parsea() {
+        // Variantes con payload posicional, con un solo tipo y unit; coma final ok.
+        let prog = parse_prog("enum Figura { Circulo(float), Rect(float, float), Punto, } fn main() {}");
+        assert_eq!(prog.enums.len(), 1);
+        let e = &prog.enums[0];
+        assert_eq!(e.name, "Figura");
+        assert_eq!(e.variants.len(), 3);
+        assert_eq!(e.variants[0].name, "Circulo");
+        assert_eq!(e.variants[0].payload, vec![Type::Float]);
+        assert_eq!(e.variants[1].payload, vec![Type::Float, Type::Float]);
+        assert_eq!(e.variants[2].payload, Vec::<Type>::new()); // unit
     }
 
     #[test]

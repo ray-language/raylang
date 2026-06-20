@@ -27,7 +27,7 @@
 //! hacemos un pequeño análisis de **divergencia**: si todos los caminos del bloque
 //! terminan en `return`, el bloque "diverge" y no necesita valor final.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
 
@@ -60,7 +60,21 @@ struct VarInfo {
 }
 
 /// Punto de entrada de la fase: verifica un programa completo.
-pub fn check(program: &Program) -> Result<(), TypeError> {
+///
+/// Recibe el programa por **referencia mutable** porque, antes de verificar,
+/// **reescribe** los `Field`/`Call` que en realidad son construcción de variantes de
+/// enum (`Enum.Variante(args)`) en nodos `EnumLit` explícitos (M5). Esa resolución
+/// es parte del front-end compartido: el intérprete y la VM reciben el AST ya
+/// resuelto, sin duplicar la regla.
+pub fn check(program: &mut Program) -> Result<(), TypeError> {
+    // Paso 0: resolver la construcción de enums sobre el AST.
+    let enum_names: HashSet<String> = program.enums.iter().map(|e| e.name.clone()).collect();
+    if !enum_names.is_empty() {
+        for f in &mut program.functions {
+            resolve_block(&mut f.body, &enum_names);
+        }
+    }
+    // Pasos 1–2: pre-pasada y verificación.
     Checker::new().check_program(program)
 }
 
@@ -69,6 +83,12 @@ struct Checker {
     functions: HashMap<String, FnSig>,
     /// Definiciones de struct: nombre → campos (en orden). Pre-pasada.
     structs: HashMap<String, Vec<(String, Type)>>,
+    /// Definiciones de enum: nombre → variantes (nombre, payload), en orden.
+    /// Pre-pasada (M5).
+    enums: HashMap<String, Vec<(String, Vec<Type>)>>,
+    /// Solo los nombres de enum, para `resolve_type` (reclasificar `Struct`→`Enum`)
+    /// y para validar tipos. Se llena antes que cualquier resolución de tipos.
+    enum_names: HashSet<String>,
     /// Pila de ámbitos de variables. El último es el más interno.
     scopes: Vec<HashMap<String, VarInfo>>,
     /// Tipo de retorno de la función que estamos verificando ahora mismo, para
@@ -81,35 +101,71 @@ impl Checker {
         Checker {
             functions: HashMap::new(),
             structs: HashMap::new(),
+            enums: HashMap::new(),
+            enum_names: HashSet::new(),
             scopes: Vec::new(),
             current_return: Type::Unit,
         }
     }
 
     fn check_program(&mut self, program: &Program) -> Result<(), TypeError> {
+        // --- Pre-pasada: nombres de los tipos nominales (enum y struct) ---
+        // Los nombres de enum se necesitan antes de normalizar cualquier tipo, para
+        // reclasificar `Struct(nombre)`→`Enum(nombre)` (`resolve_type`).
+        for e in &program.enums {
+            if !self.enum_names.insert(e.name.clone()) {
+                return Err(self.err(e.line, e.col, format!("enum '{}' declarado dos veces", e.name)));
+            }
+        }
+        for s in &program.structs {
+            if self.enum_names.contains(&s.name) {
+                return Err(self.err(s.line, s.col, format!("'{}' ya es un enum; no puede ser también un struct", s.name)));
+            }
+        }
+
+        // --- Pre-pasada: registrar enums (variantes con payload normalizado) ---
+        for e in &program.enums {
+            let mut seen = HashSet::new();
+            let mut variants = Vec::new();
+            for v in &e.variants {
+                if !seen.insert(v.name.clone()) {
+                    return Err(self.err(v.line, v.col, format!("variante '{}' repetida en el enum '{}'", v.name, e.name)));
+                }
+                let payload: Vec<Type> = v.payload.iter().map(|t| self.resolve_type(t)).collect();
+                for t in &payload {
+                    self.ensure_type(t, v.line, v.col)?;
+                }
+                variants.push((v.name.clone(), payload));
+            }
+            self.enums.insert(e.name.clone(), variants);
+        }
+
         // --- Pre-pasada: registrar structs (antes que las funciones, que pueden
         // usarlos en sus tipos) ---
         for s in &program.structs {
             if self.structs.contains_key(&s.name) {
                 return Err(self.err(s.line, s.col, format!("struct '{}' declarado dos veces", s.name)));
             }
-            self.structs.insert(s.name.clone(), s.fields.clone());
+            let fields: Vec<(String, Type)> =
+                s.fields.iter().map(|(n, t)| (n.clone(), self.resolve_type(t))).collect();
+            self.structs.insert(s.name.clone(), fields);
         }
-        // Validar que los tipos de los campos existen (p. ej. structs referenciados).
+        // Validar que los tipos de los campos existen (p. ej. structs/enums referenciados).
         for s in &program.structs {
-            for (_, ty) in &s.fields {
+            let fields = self.structs.get(&s.name).expect("recién registrado").clone();
+            for (_, ty) in &fields {
                 self.ensure_type(ty, s.line, s.col)?;
             }
         }
 
-        // --- Pre-pasada: registrar firmas ---
+        // --- Pre-pasada: registrar firmas (con tipos normalizados) ---
         for f in &program.functions {
             if self.functions.contains_key(&f.name) {
                 return Err(self.err(f.line, f.col, format!("función '{}' declarada dos veces", f.name)));
             }
             let sig = FnSig {
-                params: f.params.iter().map(|p| p.ty.clone()).collect(),
-                ret: f.return_type.clone(),
+                params: f.params.iter().map(|p| self.resolve_type(&p.ty)).collect(),
+                ret: self.resolve_type(&f.return_type),
             };
             self.functions.insert(f.name.clone(), sig);
         }
@@ -155,11 +211,17 @@ impl Checker {
         col: usize,
         label: &str,
     ) -> Result<(), TypeError> {
+        // Normaliza el tipo de retorno (`: Figura` llega como `Struct`, puede ser
+        // `Enum`) y úsalo en TODA esta función: tanto para validar los `return` como
+        // para comparar con el tipo del cuerpo. Comparar contra el tipo crudo daría
+        // un falso negativo `Enum` vs `Struct` con el mismo nombre.
+        let return_type = self.resolve_type(return_type);
         self.current_return = return_type.clone();
         self.push_scope();
         // Los parámetros son inmutables (no hay 'var' para ellos).
         for p in params {
-            self.declare(&p.name, p.ty.clone(), false);
+            let ty = self.resolve_type(&p.ty);
+            self.declare(&p.name, ty, false);
         }
 
         let body_ty = self.check_block(body)?;
@@ -171,7 +233,7 @@ impl Checker {
             None => (line, col),
         };
 
-        let result = if *return_type == Type::Unit {
+        let result = if return_type == Type::Unit {
             // Una función unit no debe terminar produciendo un valor.
             if body_ty != Type::Unit && !diverges {
                 Err(self.err(eline, ecol, format!(
@@ -181,7 +243,7 @@ impl Checker {
             } else {
                 Ok(())
             }
-        } else if body_ty == *return_type || diverges {
+        } else if body_ty == return_type || diverges {
             Ok(())
         } else {
             Err(self.err(eline, ecol, format!(
@@ -200,6 +262,8 @@ impl Checker {
         match &stmt.kind {
             StmtKind::Let { name, ty, value, mutable } => {
                 self.ensure_type(ty, stmt.line, stmt.col)?;
+                // La anotación puede nombrar un enum (llega como `Struct`): normaliza.
+                let ty = self.resolve_type(ty);
                 // Caso especial: `[]` adopta el tipo de arreglo declarado (no hay
                 // de dónde inferir el tipo de elemento de un arreglo vacío).
                 let vt = if matches!(&value.kind, ExprKind::ArrayLit(e) if e.is_empty()) {
@@ -214,13 +278,13 @@ impl Checker {
                 } else {
                     self.check_expr(value)?
                 };
-                if vt != *ty {
+                if vt != ty {
                     return Err(self.err(value.line, value.col, format!(
                         "'{}' se declara como {} pero se inicializa con {}",
                         name, ty, vt
                     )));
                 }
-                self.declare(name, ty.clone(), *mutable);
+                self.declare(name, ty, *mutable);
                 Ok(())
             }
             StmtKind::Assign { target, value } => self.check_assign(target, value, stmt.line, stmt.col),
@@ -308,8 +372,17 @@ impl Checker {
     fn ensure_type(&self, ty: &Type, line: usize, col: usize) -> Result<(), TypeError> {
         match ty {
             Type::Array(elem) => self.ensure_type(elem, line, col),
-            Type::Struct(name) if !self.structs.contains_key(name) => {
-                Err(self.err(line, col, format!("tipo desconocido: struct '{}' no declarado", name)))
+            // Un identificador en posición de tipo llega como `Struct(name)` desde el
+            // parser; aquí ya puede referirse a un struct **o** a un enum.
+            Type::Struct(name) => {
+                if self.structs.contains_key(name) || self.enum_names.contains(name) {
+                    Ok(())
+                } else {
+                    Err(self.err(line, col, format!("tipo desconocido: '{}' no declarado", name)))
+                }
+            }
+            Type::Enum(name) if !self.enum_names.contains(name) => {
+                Err(self.err(line, col, format!("tipo desconocido: enum '{}' no declarado", name)))
             }
             Type::Fn(params, ret) => {
                 for p in params {
@@ -318,6 +391,22 @@ impl Checker {
                 self.ensure_type(ret, line, col)
             }
             _ => Ok(()),
+        }
+    }
+
+    /// Normaliza un tipo proveniente de una anotación: el parser produce
+    /// `Struct(name)` para cualquier identificador, pero el nombre puede ser un
+    /// **enum**. Reclasifica `Struct`→`Enum` (recursivamente bajo `[T]` y `fn`) para
+    /// que las comparaciones de tipos cuadren con el tipo de `EnumLit` (`Enum`).
+    fn resolve_type(&self, ty: &Type) -> Type {
+        match ty {
+            Type::Struct(name) if self.enum_names.contains(name) => Type::Enum(name.clone()),
+            Type::Array(elem) => Type::Array(Box::new(self.resolve_type(elem))),
+            Type::Fn(params, ret) => Type::Fn(
+                params.iter().map(|p| self.resolve_type(p)).collect(),
+                Box::new(self.resolve_type(ret)),
+            ),
+            other => other.clone(),
         }
     }
 
@@ -351,6 +440,34 @@ impl Checker {
             }
         }
         Ok(Type::Struct(name.to_string()))
+    }
+
+    /// Verifica la construcción de una variante de enum `Enum.Variante(args)`: el
+    /// enum y la variante deben existir, y los argumentos deben coincidir con el
+    /// payload (aridad y tipos). Devuelve `Enum(enum_name)`.
+    fn check_enum_lit(&mut self, enum_name: &str, variant: &str, args: &[Expr], line: usize, col: usize) -> Result<Type, TypeError> {
+        let payload = match self.enums.get(enum_name) {
+            Some(variants) => match variants.iter().find(|(vname, _)| vname == variant) {
+                Some((_, payload)) => payload.clone(), // clonar para soltar el préstamo de self
+                None => return Err(self.err(line, col, format!("el enum '{}' no tiene la variante '{}'", enum_name, variant))),
+            },
+            None => return Err(self.err(line, col, format!("enum '{}' no declarado", enum_name))),
+        };
+        if args.len() != payload.len() {
+            return Err(self.err(line, col, format!(
+                "la variante '{}.{}' espera {} argumento(s), se dieron {}",
+                enum_name, variant, payload.len(), args.len()
+            )));
+        }
+        for (arg, expected) in args.iter().zip(&payload) {
+            let at = self.check_expr(arg)?;
+            if at != *expected {
+                return Err(self.err(arg.line, arg.col, format!(
+                    "'{}.{}': se esperaba {}, se dio {}", enum_name, variant, expected, at
+                )));
+            }
+        }
+        Ok(Type::Enum(enum_name.to_string()))
     }
 
     /// Verifica `obj.name` y devuelve el tipo del campo. Reusado por el acceso como
@@ -428,6 +545,10 @@ impl Checker {
 
             ExprKind::Field { object, name } => self.check_field(object, name),
 
+            ExprKind::EnumLit { enum_name, variant, args } => {
+                self.check_enum_lit(enum_name, variant, args, expr.line, expr.col)
+            }
+
             ExprKind::Func(fe) => {
                 for p in &fe.params {
                     self.ensure_type(&p.ty, p.line, p.col)?;
@@ -446,8 +567,8 @@ impl Checker {
                 r?;
 
                 Ok(Type::Fn(
-                    fe.params.iter().map(|p| p.ty.clone()).collect(),
-                    Box::new(fe.return_type.clone()),
+                    fe.params.iter().map(|p| self.resolve_type(&p.ty)).collect(),
+                    Box::new(self.resolve_type(&fe.return_type)),
                 ))
             }
 
@@ -709,7 +830,9 @@ fn is_comparable(t: &Type) -> bool {
     match t {
         Type::Int | Type::Float | Type::Bool | Type::String | Type::Struct(_) => true,
         Type::Array(elem) => is_comparable(elem),
-        Type::Unit | Type::Fn(_, _) => false,
+        // Los enums (M5) no se comparan con ==: pueden ser recursivos y portar
+        // funciones; se consumen por `match`. (Un `@derive(Eq)` futuro lo abriría.)
+        Type::Unit | Type::Fn(_, _) | Type::Enum(_) => false,
     }
 }
 
@@ -717,7 +840,8 @@ fn is_comparable(t: &Type) -> bool {
 fn is_printable(t: &Type) -> bool {
     matches!(
         t,
-        Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_) | Type::Struct(_) | Type::Fn(_, _)
+        Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_)
+            | Type::Struct(_) | Type::Fn(_, _) | Type::Enum(_)
     )
 }
 
@@ -759,6 +883,127 @@ fn expr_diverges(expr: &Expr) -> bool {
 }
 
 // =====================================================================
+// Resolución de la construcción de enums (M5)
+// =====================================================================
+//
+// `Enum.Variante(args)` y `obj.campo` comparten forma sintáctica, así que el parser
+// no puede distinguirlos. Conocidos los nombres de enum, estas funciones recorren el
+// AST y **reescriben** los `Field`/`Call` cuya cabeza es un enum en nodos `EnumLit`.
+// Se ejecuta una vez, antes de verificar; los dos motores reciben el AST resuelto.
+
+fn resolve_block(block: &mut Block, enums: &HashSet<String>) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } => resolve_expr(value, enums),
+            StmtKind::Assign { target, value } => {
+                resolve_expr(target, enums);
+                resolve_expr(value, enums);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    resolve_expr(v, enums);
+                }
+            }
+            StmtKind::Expr(e) => resolve_expr(e, enums),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        resolve_expr(t, enums);
+    }
+}
+
+fn resolve_expr(expr: &mut Expr, enums: &HashSet<String>) {
+    // Detectar la construcción de enum ANTES de recorrer los hijos. Si no, el `Field`
+    // de la cabeza (`Enum.Variante`) se reescribiría como variante *nullary* antes de
+    // que el `Call` que lo envuelve lo viera, perdiendo el payload.
+
+    // Caso 1: `Enum.Variante(args)` — un Call cuyo callee es un Field con cabeza enum.
+    if let ExprKind::Call { callee, args } = &mut expr.kind {
+        if let ExprKind::Field { object, name } = &callee.kind {
+            if is_enum_head(object, enums) {
+                let enum_name = ident_name(object);
+                let variant = name.clone();
+                let mut args = std::mem::take(args);
+                for a in &mut args {
+                    resolve_expr(a, enums); // el payload sí se resuelve
+                }
+                expr.kind = ExprKind::EnumLit { enum_name, variant, args };
+                return;
+            }
+        }
+    }
+    // Caso 2: `Enum.Variante` sin payload — un Field con cabeza enum.
+    if let ExprKind::Field { object, name } = &expr.kind {
+        if is_enum_head(object, enums) {
+            expr.kind = ExprKind::EnumLit {
+                enum_name: ident_name(object),
+                variant: name.clone(),
+                args: Vec::new(),
+            };
+            return;
+        }
+    }
+
+    // Caso general: recorrer los sub-nodos.
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } => resolve_expr(inner, enums),
+        ExprKind::Binary { left, right, .. } => {
+            resolve_expr(left, enums);
+            resolve_expr(right, enums);
+        }
+        ExprKind::Call { callee, args } => {
+            resolve_expr(callee, enums);
+            for a in args {
+                resolve_expr(a, enums);
+            }
+        }
+        ExprKind::ArrayLit(elems) => {
+            for e in elems {
+                resolve_expr(e, enums);
+            }
+        }
+        ExprKind::Index { array, index } => {
+            resolve_expr(array, enums);
+            resolve_expr(index, enums);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                resolve_expr(e, enums);
+            }
+        }
+        ExprKind::Field { object, .. } => resolve_expr(object, enums),
+        ExprKind::Func(fe) => resolve_block(&mut fe.body, enums),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            resolve_expr(cond, enums);
+            resolve_block(then_branch, enums);
+            if let Some(e) = else_branch {
+                resolve_expr(e, enums);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            resolve_expr(cond, enums);
+            resolve_block(body, enums);
+        }
+        ExprKind::Block(b) => resolve_block(b, enums),
+        // Literales, Ident, EnumLit: nada que recorrer.
+        _ => {}
+    }
+}
+
+/// ¿Es `expr` un identificador que nombra un enum?
+fn is_enum_head(expr: &Expr, enums: &HashSet<String>) -> bool {
+    matches!(&expr.kind, ExprKind::Ident(n) if enums.contains(n))
+}
+
+/// Extrae el nombre de un `ExprKind::Ident` (precondición: `is_enum_head` fue cierto).
+fn ident_name(expr: &Expr) -> String {
+    match &expr.kind {
+        ExprKind::Ident(n) => n.clone(),
+        _ => unreachable!("ident_name exige un Ident"),
+    }
+}
+
+// =====================================================================
 // Tests
 // =====================================================================
 #[cfg(test)]
@@ -768,8 +1013,8 @@ mod tests {
     /// Lexea, parsea y verifica un fuente completo.
     fn check_src(src: &str) -> Result<(), TypeError> {
         let tokens = crate::lexer::lex(src).expect("lex ok");
-        let prog = crate::parser::parse(tokens).expect("parse ok");
-        check(&prog)
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        check(&mut prog)
     }
 
     /// Atajo: ¿el mensaje de error contiene esta subcadena?
@@ -1044,5 +1289,76 @@ fn main() -> int {
             "fn inc(n: int) -> int { n } fn main() -> int { if (inc == inc) { 1 } else { 0 } }",
             "mismo tipo comparable",
         );
+    }
+
+    // ----- M5.1: enums (tipos suma) y construcción -----
+
+    #[test]
+    fn enum_construccion_valida() {
+        let src = r#"
+enum Figura { Circulo(float), Rect(float, float), Punto }
+fn area(f: Figura) -> Figura { f }
+fn main() {
+    let a: Figura = Figura.Circulo(2.0);
+    let b: Figura = Figura.Rect(3.0, 4.0);
+    let c: Figura = Figura.Punto;
+    print(a); print(b); print(c); print(area(a));
+}
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn enum_recursivo_es_valido() {
+        // Un enum puede portar su propio tipo: el norte de M5 (listas, árboles).
+        let src = r#"
+enum Lista { Cons(int, Lista), Nil }
+fn main() { let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Nil)); print(xs); }
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn enum_variante_inexistente() {
+        err_contains("enum E { A, B } fn main() { let x: E = E.C; print(x); }", "no tiene la variante 'C'");
+    }
+
+    #[test]
+    fn enum_aridad_incorrecta() {
+        err_contains("enum E { A(int) } fn main() { let x: E = E.A(1, 2); print(x); }", "espera 1 argumento");
+    }
+
+    #[test]
+    fn enum_tipo_de_payload_incorrecto() {
+        err_contains("enum E { A(int) } fn main() { let x: E = E.A(true); print(x); }", "se esperaba int, se dio bool");
+    }
+
+    #[test]
+    fn enum_no_es_comparable() {
+        err_contains(
+            "enum E { A, B } fn main() -> int { let x: E = E.A; if (x == E.B) { 1 } else { 0 } }",
+            "mismo tipo comparable",
+        );
+    }
+
+    #[test]
+    fn enum_y_struct_no_comparten_nombre() {
+        err_contains("enum E { A } struct E { x: int } fn main() {}", "no puede ser también un struct");
+    }
+
+    #[test]
+    fn enum_variante_repetida() {
+        err_contains("enum E { A, A } fn main() {}", "variante 'A' repetida");
+    }
+
+    #[test]
+    fn enum_declarado_dos_veces() {
+        err_contains("enum E { A } enum E { B } fn main() {}", "declarado dos veces");
+    }
+
+    #[test]
+    fn enum_como_tipo_desconocido() {
+        // Anotar con un nombre que no es ni struct ni enum.
+        err_contains("fn main() { let x: NoExiste = 1; print(x); }", "no declarado");
     }
 }

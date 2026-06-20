@@ -27,12 +27,19 @@
 use std::collections::HashMap;
 
 use crate::ast::*;
-use crate::bytecode::{Chunk, CompiledFn, CompiledProgram, CompiledStruct, OpCode, UpvalueRef, UpvalueSource};
+use crate::bytecode::{
+    Chunk, CompiledEnum, CompiledFn, CompiledProgram, CompiledStruct, CompiledVariant, OpCode,
+    UpvalueRef, UpvalueSource,
+};
 use crate::interpreter::Value;
 
 /// Mapa de structs para el compilador: nombre → (índice en la tabla, nombres de
 /// campo en orden de declaración).
 type StructDefs = HashMap<String, (usize, Vec<String>)>;
+
+/// Mapa de enums para el compilador: nombre del enum → (`enum_id`, mapa variante →
+/// (`tag`, aridad)). Resuelve un `EnumLit` a los índices que necesita `MakeEnum`.
+type EnumDefs = HashMap<String, (usize, HashMap<String, (usize, usize)>)>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompileError {
@@ -67,6 +74,21 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
         struct_table.push(CompiledStruct { name: s.name.clone(), fields: field_names });
     }
 
+    // Tabla de enums + mapa nombre → (enum_id, variante → (tag, aridad)). El orden de
+    // las variantes fija su tag.
+    let mut enum_table = Vec::new();
+    let mut enum_defs: EnumDefs = HashMap::new();
+    for (ei, e) in program.enums.iter().enumerate() {
+        let mut variant_map = HashMap::new();
+        let mut variants = Vec::new();
+        for (vi, v) in e.variants.iter().enumerate() {
+            variant_map.insert(v.name.clone(), (vi, v.payload.len()));
+            variants.push(CompiledVariant { name: v.name.clone(), arity: v.payload.len() });
+        }
+        enum_defs.insert(e.name.clone(), (ei, variant_map));
+        enum_table.push(CompiledEnum { name: e.name.clone(), variants });
+    }
+
     // Las funciones nombradas ocupan los índices 0..N; las anónimas, N + id (M4.1).
     // Al compilar el cuerpo de cada nombrada, las fn-exprs anidadas se compilan en
     // línea (recursivamente), así que basta recorrer las nombradas.
@@ -76,6 +98,7 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
     let mut c = Compiler {
         indices: &indices,
         structs: &struct_defs,
+        enums: &enum_defs,
         n_named,
         functions: (0..total).map(|_| None).collect(),
         scopes: Vec::new(),
@@ -85,7 +108,7 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
     }
 
     let functions = c.functions.into_iter().map(|o| o.expect("toda función quedó compilada")).collect();
-    Ok(CompiledProgram { functions, structs: struct_table, main })
+    Ok(CompiledProgram { functions, structs: struct_table, enums: enum_table, main })
 }
 
 /// Compila una expresión suelta a un `Chunk` (sin variables ni llamadas). Se usa
@@ -93,7 +116,8 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
 pub fn compile_expr(expr: &Expr) -> Result<Chunk, CompileError> {
     let indices = HashMap::new();
     let structs = HashMap::new();
-    let mut c = Compiler { indices: &indices, structs: &structs, n_named: 0, functions: Vec::new(), scopes: Vec::new() };
+    let enums = HashMap::new();
+    let mut c = Compiler { indices: &indices, structs: &structs, enums: &enums, n_named: 0, functions: Vec::new(), scopes: Vec::new() };
     c.scopes.push(FnScope::new());
     c.emit_expr(expr)?;
     c.emit(OpCode::Return, expr.line, expr.col);
@@ -142,6 +166,7 @@ impl FnScope {
 struct Compiler<'a> {
     indices: &'a HashMap<String, usize>,
     structs: &'a StructDefs,
+    enums: &'a EnumDefs,
     /// Número de funciones nombradas: las anónimas viven en `n_named + id` (M4.1).
     n_named: usize,
     functions: Vec<Option<CompiledFn>>,
@@ -505,6 +530,17 @@ impl<'a> Compiler<'a> {
                     self.emit_expr(value_expr)?;
                 }
                 self.emit(OpCode::MakeStruct(idx), line, col);
+            }
+
+            ExprKind::EnumLit { enum_name, variant, args } => {
+                let (enum_id, variant_map) = self.enums.get(enum_name).expect("el checker registró el enum");
+                let enum_id = *enum_id;
+                let (tag, _arity) = *variant_map.get(variant).expect("el checker validó la variante");
+                // Emitimos el payload en orden; MakeEnum saca esos valores y arma el enum.
+                for a in args {
+                    self.emit_expr(a)?;
+                }
+                self.emit(OpCode::MakeEnum(enum_id, tag), line, col);
             }
 
             ExprKind::Field { object, name } => {

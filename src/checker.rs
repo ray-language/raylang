@@ -74,10 +74,6 @@ struct Checker {
     /// Tipo de retorno de la función que estamos verificando ahora mismo, para
     /// validar las sentencias `return`.
     current_return: Type,
-    /// Nombres visibles desde el entorno **envolvente** mientras verificamos el
-    /// cuerpo de una función anónima (M4.1). Solo se usa para dar un mensaje claro
-    /// cuando se intenta capturar una variable (la captura llega en M4.2).
-    enclosing_names: Vec<String>,
 }
 
 impl Checker {
@@ -87,7 +83,6 @@ impl Checker {
             structs: HashMap::new(),
             scopes: Vec::new(),
             current_return: Type::Unit,
-            enclosing_names: Vec::new(),
         }
     }
 
@@ -393,16 +388,7 @@ impl Checker {
                 if let Some(sig) = self.functions.get(name) {
                     return Ok(Type::Fn(sig.params.clone(), Box::new(sig.ret.clone())));
                 }
-                // No es ni variable ni función. Si el nombre existe en el entorno
-                // envolvente de una fn-expr, es un intento de captura (M4.2).
-                if self.enclosing_names.iter().any(|n| n == name) {
-                    Err(self.err(expr.line, expr.col, format!(
-                        "captura de '{}' aún no soportada (las closures llegan en M4.2)",
-                        name
-                    )))
-                } else {
-                    Err(self.err(expr.line, expr.col, format!("nombre '{}' no declarado", name)))
-                }
+                Err(self.err(expr.line, expr.col, format!("nombre '{}' no declarado", name)))
             }
 
             ExprKind::Unary { op, expr: inner } => {
@@ -448,25 +434,15 @@ impl Checker {
                 }
                 self.ensure_type(&fe.return_type, fe.line, fe.col)?;
 
-                // M4.1: sin captura. Verificamos el cuerpo en un entorno AISLADO
-                // (solo sus parámetros + las funciones globales), guardando los
-                // ámbitos envolventes para restaurarlos. Los nombres visibles del
-                // entorno se recuerdan solo para dar un buen mensaje si se intenta
-                // capturarlos.
-                let saved_scopes = std::mem::take(&mut self.scopes);
-                let saved_names = std::mem::take(&mut self.enclosing_names);
-                let mut names = saved_names.clone();
-                for sc in &saved_scopes {
-                    names.extend(sc.keys().cloned());
-                }
-                self.enclosing_names = names;
+                // M4.2: con captura. El cuerpo se verifica con los ámbitos
+                // envolventes VISIBLES (los parámetros se apilan encima), así que
+                // puede referenciar variables externas — una closure. La
+                // mutabilidad se respeta (capturar no reata: asignar a un `let`
+                // capturado sigue siendo error). Solo guardamos/restauramos el tipo
+                // de retorno, que cambia al de esta función.
                 let saved_ret = self.current_return.clone();
-
                 let r = self.check_fn_body(&fe.params, &fe.return_type, &fe.body, fe.line, fe.col, "la función anónima");
-
                 self.current_return = saved_ret;
-                self.scopes = saved_scopes;
-                self.enclosing_names = saved_names;
                 r?;
 
                 Ok(Type::Fn(
@@ -1033,11 +1009,32 @@ fn main() -> int {
         );
     }
 
+    // ----- M4.2: closures (captura de entorno) -----
+
     #[test]
-    fn captura_aun_no_soportada_da_mensaje_claro() {
+    fn closures_capturan_el_entorno() {
+        // Captura de un `let` externo (lectura).
+        assert!(check_src(
+            "fn main() -> int { let b: int = 10; let f: fn(int) -> int = fn(x: int) -> int { x + b }; f(1) }"
+        ).is_ok());
+        // Captura de un `var` externo y su mutación.
+        assert!(check_src(
+            "fn contador() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
+             fn main() -> int { let c: fn() -> int = contador(); c() }"
+        ).is_ok());
+        // Captura transitiva (dos niveles).
+        assert!(check_src(
+            "fn sumador(x: int) -> fn(int) -> int { fn(y: int) -> int { x + y } }
+             fn main() -> int { let add5: fn(int) -> int = sumador(5); add5(10) }"
+        ).is_ok());
+    }
+
+    #[test]
+    fn closure_no_puede_reasignar_un_let_capturado() {
+        // Capturar no reata: asignar a un `let` externo sigue siendo error.
         err_contains(
-            "fn main() -> int { let b: int = 10; let f: fn(int) -> int = fn(x: int) -> int { x + b }; f(1) }",
-            "captura de 'b' aún no soportada",
+            "fn main() { let b: int = 1; let f: fn() = fn() { b = 2; }; f() }",
+            "es inmutable",
         );
     }
 

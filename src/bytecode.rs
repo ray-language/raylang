@@ -60,17 +60,33 @@ pub enum OpCode {
     GetLocal(usize),
     /// Saca la cima y la guarda en el slot local `slot` del marco actual.
     SetLocal(usize),
+    /// **Declara** un slot local (M4.2): saca la cima y la guarda inicializando el
+    /// slot. Distinto de `SetLocal` porque si el slot está *boxeado* (capturado por
+    /// una closure), crea una **celda nueva** — cada declaración estrena celda, lo
+    /// que hace seguro el shadowing.
+    InitLocal(usize),
     /// Llama a `functions[idx]` tomando `argc` argumentos de la pila.
     Call(usize, usize),
     /// Builtin `print`: saca un valor, lo imprime, y empuja unit.
     Print,
 
     // --- Funciones de primera clase (M4.1) ---
-    /// Empuja un valor-función: `functions[idx]` como dato (sin llamarla).
+    /// Empuja un valor-función: `functions[idx]` como dato (sin llamarla). Solo para
+    /// funciones **sin** captura.
     Function(usize),
     /// Llamada indirecta: en la pila están el valor-función y luego `argc`
     /// argumentos encima. Saca los argumentos y la función, y empuja un marco.
     CallValue(usize),
+
+    // --- Closures (M4.2) ---
+    /// Construye una closure de `functions[idx]`: arma su arreglo de upvalues
+    /// tomando las celdas que indica `functions[idx].upvalues` del marco actual, y
+    /// empuja el valor closure.
+    Closure(usize),
+    /// Empuja el valor del upvalue `i` de la closure en ejecución (lee su celda).
+    GetUpvalue(usize),
+    /// Saca la cima y la escribe en el upvalue `i` (muta su celda compartida).
+    SetUpvalue(usize),
 
     // --- Arreglos (M3) ---
     /// Saca `n` valores de la pila y construye un arreglo con ellos (en orden);
@@ -147,6 +163,25 @@ impl Chunk {
     }
 }
 
+/// De dónde sale la celda de un upvalue al construir una closure (M4.2). La
+/// resolución la hace el compilador al estilo clox.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UpvalueSource {
+    /// Una variable **local** del marco que crea la closure, en este slot.
+    Local(usize),
+    /// Un **upvalue** del marco que crea la closure (captura transitiva), en este
+    /// índice de su propio arreglo de upvalues.
+    Upvalue(usize),
+}
+
+/// Un upvalue de una función: su nombre (para el intérprete/depuración) y de dónde
+/// tomar su celda en el marco que la cierra.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpvalueRef {
+    pub name: String,
+    pub source: UpvalueSource,
+}
+
 /// Una función compilada a bytecode.
 #[derive(Debug)]
 pub struct CompiledFn {
@@ -154,6 +189,11 @@ pub struct CompiledFn {
     pub arity: usize,
     /// Tamaño del arreglo de slots locales que necesita un marco de esta función.
     pub num_locals: usize,
+    /// `captured[s] == true` si el slot local `s` es capturado por alguna closure
+    /// anidada y, por tanto, debe **boxearse** (vivir en una celda) (M4.2).
+    pub captured: Vec<bool>,
+    /// Los upvalues de esta función: cómo construir su entorno al crearla (M4.2).
+    pub upvalues: Vec<UpvalueRef>,
     pub chunk: Chunk,
 }
 

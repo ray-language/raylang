@@ -385,14 +385,27 @@ forman **ciclos** que el `Rc` de M3 no sabe liberar. Por eso M4 introduce un
 ### 13.2 Closures (captura de entorno)
 - Una función anónima que referencia variables de un ámbito envolvente es una
   **closure**: empaqueta el código más sus **upvalues** (las celdas capturadas).
-- **Upvalues en la VM** (el mecanismo central): mientras la variable capturada sigue
-  en la pila, el upvalue está **abierto** (apunta a la ranura de la pila); cuando su
-  marco se descarta, el upvalue se **cierra** (el valor se mueve al heap, dentro del
-  objeto upvalue). La VM mantiene una lista de upvalues abiertos para compartir la
-  misma celda entre varias closures.
-- **En el intérprete**: el entorno se representa como una cadena de ámbitos
-  compartidos (`Rc`), y la closure captura una referencia a esa cadena. Misma
-  semántica observable, sin trazado.
+- **Upvalues en la VM por *boxing* de las variables capturadas.** Una variable que
+  alguna closure anidada captura se guarda, desde el inicio, en una **celda
+  compartida** (`Rc<RefCell<Value>>`) en vez de directamente en la ranura local. La
+  closure captura un clon de esa celda; leer/escribir el upvalue va a la misma
+  celda, así que la mutación es visible para el dueño y para las closures hermanas, y
+  la celda sobrevive al marco (vive mientras alguna closure la referencie).
+  - El **compilador resuelve los upvalues** al estilo clox: cuando el cuerpo de una
+    función nombra una variable que no es local suya, la busca en la función
+    envolvente (un upvalue **local**) o, transitivamente, entre los upvalues de
+    aquélla (un upvalue **de upvalue**). Esa resolución es la pieza central, y marca
+    qué locales del marco envolvente deben *boxearse*.
+  - **Por qué boxing y no el clásico abierto/cerrado.** En clox las locales viven en
+    la pila de operandos, así que un upvalue *abierto* apunta a una ranura y se
+    *cierra* (copia al heap) al salir del marco. En raylang las locales viven en un
+    **arreglo aparte por marco** (decisión de M2.3): no hay ranura de pila a la que
+    apuntar, y boxear la variable capturada desde el inicio es lo natural. Es el
+    mismo concepto (la variable escapa al heap) sin la optimización de retrasar la
+    copia; un refinamiento posible más adelante.
+- **En el intérprete**: el entorno se representa con variables en celdas compartidas
+  (`Rc<RefCell<Value>>`); la closure **captura las celdas visibles** en su punto de
+  definición. Misma semántica observable, sin trazado.
 
 ### 13.3 Mutabilidad y captura
 La captura por referencia respeta el modelo de §5/§12.3: capturar **no** reata la
@@ -427,8 +440,9 @@ fn contador() -> fn() -> int {
   upvalues.
 
 ### 13.6 El recolector (mark-and-sweep, solo VM)
-- **Raíces**: la pila de operandos, las locales de todos los marcos, la lista de
-  upvalues abiertos. (Las funciones compiladas y constantes son estáticas.)
+- **Raíces**: la pila de operandos y las locales de todos los marcos (incluidas las
+  celdas *boxeadas*); los objetos closure alcanzables arrastran sus upvalues. (Las
+  funciones compiladas y constantes son estáticas.)
 - **Marca**: desde las raíces, marca recursivamente todo lo alcanzable.
 - **Barrido**: recorre el heap, libera lo no marcado, limpia las marcas de los
   sobrevivientes. **Los ciclos se liberan** (a diferencia del `Rc`).

@@ -18,8 +18,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::bytecode::{Chunk, CompiledFn, CompiledProgram, OpCode};
-use crate::interpreter::{RuntimeError, StructInstance, Value};
+use crate::bytecode::{Chunk, CompiledFn, CompiledProgram, OpCode, UpvalueSource};
+use crate::interpreter::{Cell, Closure, RuntimeError, StructInstance, Value};
 
 /// Límite de marcos para detectar recursión infinita en vez de colgarse.
 const MAX_FRAMES: usize = 1024;
@@ -37,6 +37,8 @@ pub fn run(chunk: &Chunk) -> Result<Value, RuntimeError> {
             name: "<expr>".to_string(),
             arity: 0,
             num_locals: 0,
+            captured: Vec::new(),
+            upvalues: Vec::new(),
             chunk: chunk.clone(),
         }],
         structs: Vec::new(),
@@ -45,10 +47,20 @@ pub fn run(chunk: &Chunk) -> Result<Value, RuntimeError> {
     run_program(&program)
 }
 
+/// Un slot local. Normalmente guarda el valor directamente (`Plain`); si la variable
+/// es capturada por una closure, vive **boxeada** en una celda compartida (`Boxed`)
+/// para que la closure y el dueño compartan la misma referencia (M4.2).
+enum Local {
+    Plain(Value),
+    Boxed(Cell),
+}
+
 struct CallFrame {
     function: usize,
     ip: usize,
-    locals: Vec<Value>,
+    locals: Vec<Local>,
+    /// Upvalues de la closure en ejecución (vacío si no es una closure). (M4.2)
+    upvalues: Vec<(String, Cell)>,
 }
 
 struct Vm<'a> {
@@ -65,8 +77,8 @@ impl<'a> Vm<'a> {
     fn run(&mut self) -> Result<Value, RuntimeError> {
         // Marco inicial: main, con su arreglo de locales (sin argumentos).
         let main = self.program.main;
-        let locals = vec![Value::Unit; self.program.functions[main].num_locals];
-        self.frames.push(CallFrame { function: main, ip: 0, locals });
+        let locals = self.new_locals(main);
+        self.frames.push(CallFrame { function: main, ip: 0, locals, upvalues: Vec::new() });
 
         loop {
             let fi = self.frames.len() - 1;
@@ -144,12 +156,31 @@ impl<'a> Vm<'a> {
                 }
 
                 OpCode::GetLocal(slot) => {
-                    let v = self.frames[fi].locals[*slot].clone();
+                    let v = get_slot(&self.frames[fi].locals, *slot);
                     self.push(v);
                 }
                 OpCode::SetLocal(slot) => {
                     let v = self.pop();
-                    self.frames[fi].locals[*slot] = v;
+                    set_slot(&mut self.frames[fi].locals, *slot, v);
+                }
+                OpCode::InitLocal(slot) => {
+                    // Declaración: si el slot está boxeado, estrena celda (shadowing
+                    // seguro); si no, guarda el valor directamente.
+                    let v = self.pop();
+                    let boxed = self.program.functions[func].captured.get(*slot).copied().unwrap_or(false);
+                    self.frames[fi].locals[*slot] = if boxed {
+                        Local::Boxed(Rc::new(RefCell::new(v)))
+                    } else {
+                        Local::Plain(v)
+                    };
+                }
+                OpCode::GetUpvalue(i) => {
+                    let v = self.frames[fi].upvalues[*i].1.borrow().clone();
+                    self.push(v);
+                }
+                OpCode::SetUpvalue(i) => {
+                    let v = self.pop();
+                    *self.frames[fi].upvalues[*i].1.borrow_mut() = v;
                 }
 
                 OpCode::Print => {
@@ -228,11 +259,12 @@ impl<'a> Vm<'a> {
                     }
                     // Los argumentos están en la cima: los movemos a las primeras
                     // locales del nuevo marco (param 0 = primer argumento).
-                    let mut locals = vec![Value::Unit; self.program.functions[*idx].num_locals];
+                    let mut locals = self.new_locals(*idx);
                     for i in (0..*argc).rev() {
-                        locals[i] = self.pop();
+                        let v = self.pop();
+                        set_slot(&mut locals, i, v);
                     }
-                    self.frames.push(CallFrame { function: *idx, ip: 0, locals });
+                    self.frames.push(CallFrame { function: *idx, ip: 0, locals, upvalues: Vec::new() });
                 }
 
                 // --- Funciones de primera clase (M4.1) ---
@@ -247,16 +279,37 @@ impl<'a> Vm<'a> {
                     for _ in 0..*argc {
                         args_rev.push(self.pop());
                     }
-                    let idx = match self.pop() {
-                        Value::Function(i) => i,
+                    let (fn_idx, upvalues) = match self.pop() {
+                        Value::Function(i) => (i, Vec::new()),
+                        Value::Closure(c) => (c.index, c.upvalues.clone()),
                         _ => unreachable!("el checker garantiza una función"),
                     };
-                    let mut locals = vec![Value::Unit; self.program.functions[idx].num_locals];
+                    let mut locals = self.new_locals(fn_idx);
                     // args_rev está en orden inverso: el último que se sacó es arg0.
                     for (j, val) in args_rev.into_iter().enumerate() {
-                        locals[*argc - 1 - j] = val;
+                        set_slot(&mut locals, *argc - 1 - j, val);
                     }
-                    self.frames.push(CallFrame { function: idx, ip: 0, locals });
+                    self.frames.push(CallFrame { function: fn_idx, ip: 0, locals, upvalues });
+                }
+
+                // --- Closures (M4.2) ---
+                OpCode::Closure(idx) => {
+                    // Construimos el arreglo de upvalues tomando las celdas que indica
+                    // la función, del marco actual (un local boxeado, o un upvalue
+                    // propio para la captura transitiva).
+                    let descs = self.program.functions[*idx].upvalues.clone();
+                    let mut upvalues = Vec::with_capacity(descs.len());
+                    for d in &descs {
+                        let cell = match d.source {
+                            UpvalueSource::Local(slot) => match &self.frames[fi].locals[slot] {
+                                Local::Boxed(c) => c.clone(),
+                                Local::Plain(_) => unreachable!("un local capturado debe estar boxeado"),
+                            },
+                            UpvalueSource::Upvalue(u) => self.frames[fi].upvalues[u].1.clone(),
+                        };
+                        upvalues.push((d.name.clone(), cell));
+                    }
+                    self.push(Value::Closure(Rc::new(Closure { index: *idx, upvalues })));
                 }
 
                 OpCode::Return => {
@@ -269,6 +322,21 @@ impl<'a> Vm<'a> {
                 }
             }
         }
+    }
+
+    /// Crea el arreglo de locales de un marco nuevo: cada slot capturado nace
+    /// **boxeado** (en su celda), los demás como `Plain(Unit)`.
+    fn new_locals(&self, fn_idx: usize) -> Vec<Local> {
+        let cf = &self.program.functions[fn_idx];
+        (0..cf.num_locals)
+            .map(|s| {
+                if cf.captured.get(s).copied().unwrap_or(false) {
+                    Local::Boxed(Rc::new(RefCell::new(Value::Unit)))
+                } else {
+                    Local::Plain(Value::Unit)
+                }
+            })
+            .collect()
     }
 
     fn push(&mut self, v: Value) {
@@ -343,6 +411,24 @@ fn apply_binary(op: &OpCode, left: Value, right: Value, line: usize, col: usize)
         (NotEqual, a, b) => Bool(a != b),
         _ => unreachable!("combinación operador/operandos que el checker debió rechazar"),
     })
+}
+
+/// Lee un slot local, deshaciendo el boxing si lo hay.
+fn get_slot(locals: &[Local], slot: usize) -> Value {
+    match &locals[slot] {
+        Local::Plain(v) => v.clone(),
+        Local::Boxed(cell) => cell.borrow().clone(),
+    }
+}
+
+/// Escribe un slot local **respetando** el boxing: si está boxeado, muta su celda
+/// (visible para las closures que la capturaron); si no, reemplaza el valor.
+fn set_slot(locals: &mut [Local], slot: usize, v: Value) {
+    if let Local::Boxed(cell) = &locals[slot] {
+        *cell.borrow_mut() = v;
+    } else {
+        locals[slot] = Local::Plain(v);
+    }
 }
 
 fn runtime_error(line: usize, col: usize, msg: &str) -> RuntimeError {
@@ -649,6 +735,74 @@ mod tests {
                  var xs: [int] = [1, 2, 3, 4];
                  mapear(xs, fn(n: int) -> int { n * n });
                  xs[0] + xs[1] + xs[2] + xs[3]
+             }",
+        );
+    }
+
+    // ----- M4.2: closures (captura de entorno) -----
+
+    #[test]
+    fn closure_captura_un_let() {
+        oracle_program(
+            "fn main() -> int {
+                 let base: int = 1000;
+                 let f: fn(int) -> int = fn(d: int) -> int { base + d };
+                 f(7)
+             }",
+        );
+    }
+
+    #[test]
+    fn contador_con_estado_mutable() {
+        // La celda 'n' sobrevive a 'contador' y persiste entre llamadas.
+        oracle_program(
+            "fn contador() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
+             fn main() -> int { let c: fn() -> int = contador(); c(); c(); c() }",
+        );
+    }
+
+    #[test]
+    fn instancias_de_closure_son_independientes() {
+        oracle_program(
+            "fn contador() -> fn() -> int { var n: int = 0; fn() -> int { n = n + 1; n } }
+             fn main() -> int {
+                 let a: fn() -> int = contador();
+                 let b: fn() -> int = contador();
+                 a(); a(); a();   // n de a -> 3
+                 b();             // n de b -> 1 (su propia celda, independiente)
+                 a() + b()        // a()->4, b()->2 => 6
+             }",
+        );
+    }
+
+    #[test]
+    fn captura_transitiva_dos_niveles() {
+        oracle_program(
+            "fn sumador(x: int) -> fn(int) -> int { fn(y: int) -> int { x + y } }
+             fn main() -> int { let add5: fn(int) -> int = sumador(5); add5(10) + add5(100) }",
+        );
+    }
+
+    #[test]
+    fn closures_hermanas_comparten_celda() {
+        // 'inc' y 'get' capturan la MISMA 'n': mutar por una se ve por la otra.
+        oracle_program(
+            "struct Par { inc: fn(), get: fn() -> int }
+             fn hacer() -> Par {
+                 var n: int = 0;
+                 Par { inc: fn() { n = n + 1; }, get: fn() -> int { n } }
+             }
+             fn main() -> int { let p: Par = hacer(); p.inc(); p.inc(); p.inc(); p.get() }",
+        );
+    }
+
+    #[test]
+    fn closure_en_arreglo_y_orden_superior() {
+        oracle_program(
+            "fn aplica_dos(f: fn(int) -> int, x: int) -> int { f(f(x)) }
+             fn main() -> int {
+                 let k: int = 3;
+                 aplica_dos(fn(n: int) -> int { n + k }, 10)
              }",
         );
     }

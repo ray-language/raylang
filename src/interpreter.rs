@@ -29,8 +29,23 @@ use std::rc::Rc;
 
 use crate::ast::*;
 
+/// Una **celda**: una variable en el heap, compartible. Es lo que hace posible la
+/// captura por referencia (M4.2): una closure que captura una variable comparte su
+/// celda, y mutarla por un lado se ve por el otro. `Rc` da el compartir; `RefCell`,
+/// la mutación interior.
+pub type Cell = Rc<RefCell<Value>>;
+
+/// Una closure: una función más su **entorno capturado** (M4.2). `index` es el
+/// índice en la tabla de funciones del motor (como `Value::Function`); `captured`
+/// son las celdas que tomó del entorno donde se creó, por nombre.
+#[derive(Debug, Clone)]
+pub struct Closure {
+    pub index: usize,
+    pub upvalues: Vec<(String, Cell)>,
+}
+
 /// Un valor en tiempo de ejecución.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
     Float(f64),
@@ -44,10 +59,38 @@ pub enum Value {
     Array(Rc<RefCell<Vec<Value>>>),
     /// Un struct (M3.2). Mismas propiedades que `Array`: referencia + mutación.
     Struct(Rc<RefCell<StructInstance>>),
-    /// Una función como valor (M4.1). El `usize` es un índice en la **tabla de
-    /// funciones** del motor: `0..N` son las nombradas (por orden de declaración),
-    /// y `N + id` son las anónimas (por su `id`). Sin captura todavía (M4.2).
+    /// Una función como valor **sin entorno capturado** (M4.1): una función de
+    /// nivel superior usada como valor, o una anónima que no captura nada. El
+    /// `usize` es un índice en la **tabla de funciones** del motor: `0..N` son las
+    /// nombradas (por orden de declaración), y `N + id` son las anónimas.
     Function(usize),
+    /// Una **closure**: una función con su entorno capturado (M4.2).
+    Closure(Rc<Closure>),
+}
+
+/// `PartialEq` de `Value` escrito a mano (no derivado) por dos razones:
+///   - las funciones/closures **no** tienen igualdad estructural — se comparan por
+///     identidad (las closures, por puntero), lo que además evita una recursión
+///     infinita si una closure se captura a sí misma (ciclo);
+///   - el resto es estructural, como antes.
+/// El checker prohíbe `==` sobre funciones, así que estas reglas casi nunca se
+/// ejercitan; están por robustez.
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        use Value::*;
+        match (self, other) {
+            (Int(a), Int(b)) => a == b,
+            (Float(a), Float(b)) => a == b,
+            (Bool(a), Bool(b)) => a == b,
+            (Str(a), Str(b)) => a == b,
+            (Unit, Unit) => true,
+            (Array(a), Array(b)) => *a.borrow() == *b.borrow(),
+            (Struct(a), Struct(b)) => *a.borrow() == *b.borrow(),
+            (Function(a), Function(b)) => a == b,
+            (Closure(a), Closure(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
 }
 
 /// Instancia de un struct en tiempo de ejecución. Los campos se guardan en **orden
@@ -78,7 +121,7 @@ impl std::fmt::Display for Value {
                 write!(f, "{} {{ {} }}", s.name, parts.join(", "))
             }
             // Las funciones no tienen una representación textual útil: marcador opaco.
-            Value::Function(_) => write!(f, "<fn>"),
+            Value::Function(_) | Value::Closure(_) => write!(f, "<fn>"),
         }
     }
 }
@@ -132,7 +175,9 @@ struct Interpreter<'a> {
     /// Definiciones de struct, por nombre (para construir literales en orden).
     structs: HashMap<String, &'a StructDef>,
     /// Pila de ámbitos de la función en ejecución. El último es el más interno.
-    scopes: Vec<HashMap<String, Value>>,
+    /// Cada variable es una **celda** compartible (M4.2): así una closure puede
+    /// capturarla por referencia.
+    scopes: Vec<HashMap<String, Cell>>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -168,31 +213,43 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    /// Ejecuta una función nombrada con sus argumentos ya evaluados.
+    /// Ejecuta una función nombrada con sus argumentos ya evaluados (sin entorno
+    /// capturado).
     fn call_function(&mut self, func: &'a Function, args: Vec<Value>) -> EvalResult {
-        self.call_body(&func.params, &func.body, args)
+        self.call_body(&func.params, &func.body, args, &[])
     }
 
     /// Despacha una llamada a través de un índice de la tabla de funciones: `idx`
     /// menor que el número de funciones nombradas es una nombrada; el resto, una
-    /// anónima (`idx - N`). (M4.1)
-    fn call_index(&mut self, idx: usize, args: Vec<Value>) -> EvalResult {
+    /// anónima (`idx - N`). `captured` es el entorno de la closure (vacío si es una
+    /// función sin captura). (M4.1/M4.2)
+    fn call_index(&mut self, idx: usize, args: Vec<Value>, captured: &[(String, Cell)]) -> EvalResult {
         let n = self.named.len();
         if idx < n {
-            self.call_body(&self.named[idx].params, &self.named[idx].body, args)
+            self.call_body(&self.named[idx].params, &self.named[idx].body, args, captured)
         } else {
             let fe = self.anon[idx - n];
-            self.call_body(&fe.params, &fe.body, args)
+            self.call_body(&fe.params, &fe.body, args, captured)
         }
     }
 
-    /// Ejecuta el cuerpo de una función (nombrada o anónima) con sus argumentos.
-    fn call_body(&mut self, params: &'a [Param], body: &'a Block, args: Vec<Value>) -> EvalResult {
-        // Scoping léxico: la función arranca con una pila de ámbitos NUEVA, no la
-        // de quien llama (M4.1: sin captura). Guardamos la actual y la restauramos.
+    /// Ejecuta el cuerpo de una función (nombrada o anónima) con sus argumentos y su
+    /// entorno capturado.
+    fn call_body(&mut self, params: &'a [Param], body: &'a Block, args: Vec<Value>, captured: &[(String, Cell)]) -> EvalResult {
+        // Scoping léxico: la función arranca con una pila de ámbitos NUEVA, no la de
+        // quien llama. Guardamos la actual y la restauramos al volver.
         let saved = mem::take(&mut self.scopes);
-        self.scopes.push(HashMap::new()); // ámbito base: los parámetros
 
+        // Ámbito base: las celdas capturadas (compartidas con su origen). Una closure
+        // lee y muta estas celdas; una función sin captura recibe un mapa vacío.
+        let mut base: HashMap<String, Cell> = HashMap::new();
+        for (name, cell) in captured {
+            base.insert(name.clone(), cell.clone());
+        }
+        self.scopes.push(base);
+
+        // Ámbito de los parámetros, encima (tapan capturas con el mismo nombre).
+        self.scopes.push(HashMap::new());
         for (param, arg) in params.iter().zip(args.into_iter()) {
             self.define(&param.name, arg);
         }
@@ -365,9 +422,23 @@ impl<'a> Interpreter<'a> {
             }
 
             ExprKind::Func(fe) => {
-                // El valor de un literal de función es su índice en la tabla: las
-                // anónimas viven en `N + id` (M4.1).
-                Ok(Value::Function(self.named.len() + fe.id))
+                let index = self.named.len() + fe.id;
+                // Capturamos por referencia las celdas visibles en este punto
+                // (M4.2). Snapshot de todos los ámbitos, de fuera hacia dentro para
+                // que una variable interior tape a una exterior del mismo nombre.
+                let mut map: HashMap<String, Cell> = HashMap::new();
+                for scope in &self.scopes {
+                    for (name, cell) in scope {
+                        map.insert(name.clone(), cell.clone());
+                    }
+                }
+                if map.is_empty() {
+                    // Sin nada que capturar: una función simple (más barata).
+                    Ok(Value::Function(index))
+                } else {
+                    let upvalues: Vec<(String, Cell)> = map.into_iter().collect();
+                    Ok(Value::Closure(Rc::new(Closure { index, upvalues })))
+                }
             }
 
             ExprKind::If { cond, then_branch, else_branch } => {
@@ -414,22 +485,29 @@ impl<'a> Interpreter<'a> {
                     for arg in args {
                         values.push(self.eval_expr(arg)?);
                     }
-                    return self.call_index(idx, values);
+                    return self.call_index(idx, values, &[]);
                 }
             }
         }
 
         // Camino indirecto: el callee es una expresión que produce un valor-función
-        // (una variable, un literal `fn`, el resultado de otra llamada...). (M4.1)
-        let idx = match self.eval_expr(callee)? {
-            Value::Function(i) => i,
-            _ => unreachable!("el checker garantiza una función"),
-        };
+        // (una variable, un literal `fn`, el resultado de otra llamada...). Puede ser
+        // una función simple o una closure con su entorno. (M4.1/M4.2)
+        let callee_val = self.eval_expr(callee)?;
         let mut values = Vec::with_capacity(args.len());
         for arg in args {
             values.push(self.eval_expr(arg)?);
         }
-        self.call_index(idx, values)
+        match callee_val {
+            Value::Function(idx) => self.call_index(idx, values, &[]),
+            Value::Closure(c) => {
+                // Clonamos el entorno capturado (clona los `Rc` de las celdas, las
+                // comparte) para soltar el préstamo del valor antes de la llamada.
+                let captured = c.upvalues.clone();
+                self.call_index(c.index, values, &captured)
+            }
+            _ => unreachable!("el checker garantiza una función"),
+        }
     }
 
     /// Ejecuta un builtin (`print`/`len`/`push`) con sus argumentos ya evaluados.
@@ -559,28 +637,33 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    /// Declara una variable: una **celda nueva**. Como cada declaración crea su
+    /// propia celda, el shadowing es seguro aunque una closure haya capturado la
+    /// celda anterior (se queda con la vieja).
     fn define(&mut self, name: &str, value: Value) {
         self.scopes
             .last_mut()
             .expect("siempre hay un ámbito activo")
-            .insert(name.to_string(), value);
+            .insert(name.to_string(), Rc::new(RefCell::new(value)));
     }
 
     /// Busca una variable de dentro hacia afuera; `None` si no es una variable (en
     /// ese caso, en `eval` el nombre se interpreta como una función).
     fn lookup_opt(&self, name: &str) -> Option<Value> {
         for scope in self.scopes.iter().rev() {
-            if let Some(v) = scope.get(name) {
-                return Some(v.clone());
+            if let Some(cell) = scope.get(name) {
+                return Some(cell.borrow().clone());
             }
         }
         None
     }
 
+    /// Asigna a una variable **mutando su celda** (no reemplazándola): así el cambio
+    /// se ve a través de cualquier closure que la haya capturado.
     fn assign(&mut self, name: &str, value: Value) {
-        for scope in self.scopes.iter_mut().rev() {
-            if scope.contains_key(name) {
-                scope.insert(name.to_string(), value);
+        for scope in self.scopes.iter().rev() {
+            if let Some(cell) = scope.get(name) {
+                *cell.borrow_mut() = value;
                 return;
             }
         }

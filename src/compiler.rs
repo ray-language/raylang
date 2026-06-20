@@ -1,4 +1,4 @@
-//! Compilador de raylang: AST → bytecode (M2).
+//! Compilador de raylang: AST → bytecode (M2, ampliado en M4).
 //!
 //! Recorre el AST (ya verificado por el checker) y *emite* instrucciones. Es un
 //! recorrido en **post-orden**: para un nodo binario, primero compila sus hijos
@@ -6,11 +6,20 @@
 //!
 //! ## Variables locales (M2.3)
 //!
-//! Cada variable se asigna a un **slot** dentro del marco de su función. El
-//! compilador lleva la cuenta de los slots y resuelve cada nombre a su slot. A
+//! Cada variable se asigna a un **slot** dentro del marco de su función. A
 //! diferencia de clox (que guarda las locales en la pila de operandos), aquí las
 //! locales viven en un arreglo aparte por marco; la pila de operandos solo guarda
-//! temporales. Es una simplificación didáctica: separa con claridad ambos roles.
+//! temporales.
+//!
+//! ## Closures y upvalues (M4.2)
+//!
+//! Para compilar funciones anidadas y resolver la **captura de entorno**, el
+//! compilador mantiene una **cadena de ámbitos de función** (`scopes`): el último
+//! es la función que se compila ahora; los anteriores, sus envolventes. Cuando el
+//! cuerpo nombra una variable que no es local suya, se busca como *upvalue* en la
+//! función envolvente (o, transitivamente, entre los upvalues de aquélla). Esa
+//! resolución —al estilo clox— marca qué locales del marco envolvente deben
+//! *boxearse* (vivir en una celda compartida).
 //!
 //! Como el intérprete, el compilador asume entrada verificada: confía en los tipos
 //! y en que toda variable/función existe.
@@ -18,7 +27,7 @@
 use std::collections::HashMap;
 
 use crate::ast::*;
-use crate::bytecode::{Chunk, CompiledFn, CompiledProgram, CompiledStruct, OpCode};
+use crate::bytecode::{Chunk, CompiledFn, CompiledProgram, CompiledStruct, OpCode, UpvalueRef, UpvalueSource};
 use crate::interpreter::Value;
 
 /// Mapa de structs para el compilador: nombre → (índice en la tabla, nombres de
@@ -59,63 +68,36 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
     }
 
     // Las funciones nombradas ocupan los índices 0..N; las anónimas, N + id (M4.1).
+    // Al compilar el cuerpo de cada nombrada, las fn-exprs anidadas se compilan en
+    // línea (recursivamente), así que basta recorrer las nombradas.
     let n_named = program.functions.len();
-    let mut functions = Vec::new();
-    for f in &program.functions {
-        functions.push(compile_function(f, &indices, &struct_defs, n_named)?);
+    let total = n_named + collect_fn_exprs(program).len();
+
+    let mut c = Compiler {
+        indices: &indices,
+        structs: &struct_defs,
+        n_named,
+        functions: (0..total).map(|_| None).collect(),
+        scopes: Vec::new(),
+    };
+    for (i, f) in program.functions.iter().enumerate() {
+        c.compile_function(i, &f.params, &f.body, f.line, f.col, f.name.clone())?;
     }
-    // Funciones anónimas, en orden de id (collect_fn_exprs las devuelve así).
-    for fe in collect_fn_exprs(program) {
-        functions.push(compile_fn_expr(fe, &indices, &struct_defs, n_named)?);
-    }
+
+    let functions = c.functions.into_iter().map(|o| o.expect("toda función quedó compilada")).collect();
     Ok(CompiledProgram { functions, structs: struct_table, main })
-}
-
-fn compile_function(f: &Function, indices: &HashMap<String, usize>, structs: &StructDefs, n_named: usize) -> Result<CompiledFn, CompileError> {
-    let mut c = FnCompiler::new(indices, structs, n_named);
-    // Los parámetros son las primeras locales (slots 0..arity).
-    for p in &f.params {
-        c.declare_local(&p.name);
-    }
-    // El cuerpo deja su valor (el retorno implícito) en la pila; lo retornamos.
-    c.emit_block(&f.body)?;
-    c.emit(OpCode::Return, f.line, f.col);
-
-    Ok(CompiledFn {
-        name: f.name.clone(),
-        arity: f.params.len(),
-        num_locals: c.max_slots,
-        chunk: c.chunk,
-    })
-}
-
-/// Compila una función anónima a su propia `CompiledFn` (M4.1). Es igual que una
-/// nombrada salvo el nombre sintético.
-fn compile_fn_expr(fe: &FnExpr, indices: &HashMap<String, usize>, structs: &StructDefs, n_named: usize) -> Result<CompiledFn, CompileError> {
-    let mut c = FnCompiler::new(indices, structs, n_named);
-    for p in &fe.params {
-        c.declare_local(&p.name);
-    }
-    c.emit_block(&fe.body)?;
-    c.emit(OpCode::Return, fe.line, fe.col);
-
-    Ok(CompiledFn {
-        name: format!("<fn#{}>", fe.id),
-        arity: fe.params.len(),
-        num_locals: c.max_slots,
-        chunk: c.chunk,
-    })
 }
 
 /// Compila una expresión suelta a un `Chunk` (sin variables ni llamadas). Se usa
 /// en los tests de expresiones puras.
 pub fn compile_expr(expr: &Expr) -> Result<Chunk, CompileError> {
-    let empty = HashMap::new();
-    let empty_structs = HashMap::new();
-    let mut c = FnCompiler::new(&empty, &empty_structs, 0);
+    let indices = HashMap::new();
+    let structs = HashMap::new();
+    let mut c = Compiler { indices: &indices, structs: &structs, n_named: 0, functions: Vec::new(), scopes: Vec::new() };
+    c.scopes.push(FnScope::new());
     c.emit_expr(expr)?;
     c.emit(OpCode::Return, expr.line, expr.col);
-    Ok(c.chunk)
+    Ok(c.scopes.pop().unwrap().chunk)
 }
 
 /// Una variable local activa: su nombre, su slot y la profundidad de ámbito.
@@ -125,8 +107,8 @@ struct Local {
     depth: usize,
 }
 
-/// Estado de compilación de una función.
-struct FnCompiler<'a> {
+/// Estado de compilación de **una función**: su chunk, sus locales y sus upvalues.
+struct FnScope {
     chunk: Chunk,
     locals: Vec<Local>,
     /// Próximo slot libre (crece al declarar, se recupera al cerrar un ámbito).
@@ -134,65 +116,172 @@ struct FnCompiler<'a> {
     /// Marca de agua: el mayor `next_slot` alcanzado = slots que necesita el marco.
     max_slots: usize,
     scope_depth: usize,
-    indices: &'a HashMap<String, usize>,
-    structs: &'a StructDefs,
-    /// Número de funciones nombradas: las anónimas viven en `n_named + id` (M4.1).
-    n_named: usize,
+    /// Upvalues de esta función, en el orden en que se descubren.
+    upvalues: Vec<UpvalueRef>,
+    /// `captured_slots[s] == true` si el slot `s` es capturado por una closure
+    /// anidada (debe boxearse). Crece a demanda; se rellena hasta `max_slots`.
+    captured_slots: Vec<bool>,
 }
 
-impl<'a> FnCompiler<'a> {
-    fn new(indices: &'a HashMap<String, usize>, structs: &'a StructDefs, n_named: usize) -> Self {
-        FnCompiler {
+impl FnScope {
+    fn new() -> Self {
+        FnScope {
             chunk: Chunk::new(),
             locals: Vec::new(),
             next_slot: 0,
             max_slots: 0,
             scope_depth: 0,
-            indices,
-            structs,
-            n_named,
+            upvalues: Vec::new(),
+            captured_slots: Vec::new(),
         }
+    }
+}
+
+/// El compilador: una pila de ámbitos de función (el último es el que se compila
+/// ahora) y la tabla de funciones que va llenando.
+struct Compiler<'a> {
+    indices: &'a HashMap<String, usize>,
+    structs: &'a StructDefs,
+    /// Número de funciones nombradas: las anónimas viven en `n_named + id` (M4.1).
+    n_named: usize,
+    functions: Vec<Option<CompiledFn>>,
+    scopes: Vec<FnScope>,
+}
+
+impl<'a> Compiler<'a> {
+    // ----- Compilación de una función -----
+
+    /// Compila una función (nombrada o anónima) y la deposita en `functions[idx]`.
+    /// Las fn-exprs anidadas en su cuerpo se compilan en línea (recursivamente).
+    fn compile_function(
+        &mut self,
+        idx: usize,
+        params: &[Param],
+        body: &Block,
+        line: usize,
+        col: usize,
+        name: String,
+    ) -> Result<(), CompileError> {
+        self.scopes.push(FnScope::new());
+        // Los parámetros son las primeras locales (slots 0..arity).
+        for p in params {
+            self.declare_local(&p.name);
+        }
+        self.emit_block(body)?;
+        self.emit(OpCode::Return, line, col);
+
+        let mut scope = self.scopes.pop().expect("acabamos de empujar el ámbito");
+        scope.captured_slots.resize(scope.max_slots, false);
+        self.functions[idx] = Some(CompiledFn {
+            name,
+            arity: params.len(),
+            num_locals: scope.max_slots,
+            captured: scope.captured_slots,
+            upvalues: scope.upvalues,
+            chunk: scope.chunk,
+        });
+        Ok(())
+    }
+
+    // ----- Acceso al ámbito actual -----
+
+    fn cur(&mut self) -> &mut FnScope {
+        self.scopes.last_mut().expect("siempre hay un ámbito de función activo")
     }
 
     fn emit(&mut self, op: OpCode, line: usize, col: usize) -> usize {
-        self.chunk.emit(op, line, col)
+        self.cur().chunk.emit(op, line, col)
     }
 
-    // ----- Manejo de slots y ámbitos -----
+    // ----- Manejo de slots y ámbitos de bloque -----
 
     fn declare_local(&mut self, name: &str) -> usize {
-        let slot = self.next_slot;
-        self.next_slot += 1;
-        if self.next_slot > self.max_slots {
-            self.max_slots = self.next_slot;
+        let s = self.cur();
+        let slot = s.next_slot;
+        s.next_slot += 1;
+        if s.next_slot > s.max_slots {
+            s.max_slots = s.next_slot;
         }
-        self.locals.push(Local { name: name.to_string(), slot, depth: self.scope_depth });
+        let depth = s.scope_depth;
+        s.locals.push(Local { name: name.to_string(), slot, depth });
         slot
     }
 
+    /// Resuelve un nombre a un slot local de la **función actual**.
     fn resolve_local(&self, name: &str) -> Option<usize> {
-        // De dentro hacia afuera, para que el shadowing funcione.
-        self.locals.iter().rev().find(|l| l.name == name).map(|l| l.slot)
+        let s = self.scopes.last().expect("ámbito activo");
+        s.locals.iter().rev().find(|l| l.name == name).map(|l| l.slot)
     }
 
-    /// Abre un ámbito. Devuelve el `next_slot` a restaurar al cerrarlo.
+    /// Resuelve un nombre a un slot local de la función en el índice de ámbito dado.
+    fn resolve_local_at(&self, scope_idx: usize, name: &str) -> Option<usize> {
+        self.scopes[scope_idx].locals.iter().rev().find(|l| l.name == name).map(|l| l.slot)
+    }
+
+    /// ¿El nombre es una variable (local de alguna función de la cadena)? Pura, sin
+    /// efectos: sirve para decidir entre llamada directa (a una global) e indirecta.
+    fn name_is_variable(&self, name: &str) -> bool {
+        self.scopes.iter().any(|s| s.locals.iter().any(|l| l.name == name))
+    }
+
+    /// Resuelve un nombre como **upvalue** de la función en `depth` (al estilo clox):
+    /// lo busca como local de la envolvente (upvalue *local*) o, recursivamente,
+    /// entre los upvalues de la envolvente (upvalue *de upvalue*). Devuelve el índice
+    /// del upvalue en la función `depth`, y marca como capturado el slot de origen.
+    fn resolve_upvalue(&mut self, depth: usize, name: &str) -> Option<usize> {
+        if depth == 0 {
+            return None; // la función más externa no tiene envolvente
+        }
+        let enclosing = depth - 1;
+        if let Some(slot) = self.resolve_local_at(enclosing, name) {
+            self.mark_captured(enclosing, slot);
+            return Some(self.add_upvalue(depth, name, UpvalueSource::Local(slot)));
+        }
+        if let Some(up) = self.resolve_upvalue(enclosing, name) {
+            return Some(self.add_upvalue(depth, name, UpvalueSource::Upvalue(up)));
+        }
+        None
+    }
+
+    fn mark_captured(&mut self, scope_idx: usize, slot: usize) {
+        let cs = &mut self.scopes[scope_idx].captured_slots;
+        if cs.len() <= slot {
+            cs.resize(slot + 1, false);
+        }
+        cs[slot] = true;
+    }
+
+    fn add_upvalue(&mut self, depth: usize, name: &str, source: UpvalueSource) -> usize {
+        let ups = &mut self.scopes[depth].upvalues;
+        if let Some(i) = ups.iter().position(|u| u.source == source) {
+            return i; // ya registrado: mismo upvalue
+        }
+        ups.push(UpvalueRef { name: name.to_string(), source });
+        ups.len() - 1
+    }
+
     fn begin_scope(&mut self) -> usize {
-        self.scope_depth += 1;
-        self.next_slot
+        let s = self.cur();
+        s.scope_depth += 1;
+        s.next_slot
     }
 
     fn end_scope(&mut self, saved_slot: usize) {
-        self.scope_depth -= 1;
-        self.locals.retain(|l| l.depth <= self.scope_depth);
-        // Recuperamos los slots del ámbito para reutilizarlos (los marcos
-        // dimensionan según max_slots).
-        self.next_slot = saved_slot;
+        let s = self.cur();
+        s.scope_depth -= 1;
+        let d = s.scope_depth;
+        s.locals.retain(|l| l.depth <= d);
+        // Recuperamos los slots del ámbito para reutilizarlos. (Las marcas de
+        // 'capturado' NO se borran: el slot, si se reusa, sigue boxeado, lo cual es
+        // conservador pero correcto.)
+        s.next_slot = saved_slot;
     }
 
     /// Parchea un salto previamente emitido para que apunte al final actual.
     fn patch_jump(&mut self, at: usize) {
-        let target = self.chunk.code.len();
-        self.chunk.code[at] = match self.chunk.code[at] {
+        let s = self.cur();
+        let target = s.chunk.code.len();
+        s.chunk.code[at] = match s.chunk.code[at] {
             OpCode::Jump(_) => OpCode::Jump(target),
             OpCode::JumpIfFalse(_) => OpCode::JumpIfFalse(target),
             _ => unreachable!("patch_jump sobre una instrucción que no es salto"),
@@ -221,17 +310,23 @@ impl<'a> FnCompiler<'a> {
         match &stmt.kind {
             StmtKind::Let { name, value, .. } => {
                 // Compilamos el inicializador ANTES de declarar (para que no se vea
-                // a sí misma), luego guardamos en su slot.
+                // a sí misma), luego inicializamos su slot (InitLocal estrena celda
+                // si el slot está boxeado).
                 self.emit_expr(value)?;
                 let slot = self.declare_local(name);
-                self.emit(OpCode::SetLocal(slot), line, col);
+                self.emit(OpCode::InitLocal(slot), line, col);
             }
             StmtKind::Assign { target, value } => match &target.kind {
-                // x = e  → guardar en el slot local.
+                // x = e  → a un local, a un upvalue, según resuelva el nombre.
                 ExprKind::Ident(name) => {
                     self.emit_expr(value)?;
-                    let slot = self.resolve_local(name).expect("el checker garantiza la variable");
-                    self.emit(OpCode::SetLocal(slot), line, col);
+                    if let Some(slot) = self.resolve_local(name) {
+                        self.emit(OpCode::SetLocal(slot), line, col);
+                    } else {
+                        let depth = self.scopes.len() - 1;
+                        let up = self.resolve_upvalue(depth, name).expect("el checker garantiza la variable");
+                        self.emit(OpCode::SetUpvalue(up), line, col);
+                    }
                 }
                 // a[i] = e  → arreglo, índice, valor, SetIndex (consume los tres).
                 ExprKind::Index { array, index } => {
@@ -269,15 +364,15 @@ impl<'a> FnCompiler<'a> {
         let (line, col) = (expr.line, expr.col);
         match &expr.kind {
             ExprKind::Int(v) => {
-                let idx = self.chunk.add_constant(Value::Int(*v));
+                let idx = self.cur().chunk.add_constant(Value::Int(*v));
                 self.emit(OpCode::Constant(idx), line, col);
             }
             ExprKind::Float(v) => {
-                let idx = self.chunk.add_constant(Value::Float(*v));
+                let idx = self.cur().chunk.add_constant(Value::Float(*v));
                 self.emit(OpCode::Constant(idx), line, col);
             }
             ExprKind::Str(s) => {
-                let idx = self.chunk.add_constant(Value::Str(s.clone()));
+                let idx = self.cur().chunk.add_constant(Value::Str(s.clone()));
                 self.emit(OpCode::Constant(idx), line, col);
             }
             ExprKind::Bool(true) => {
@@ -291,9 +386,14 @@ impl<'a> FnCompiler<'a> {
                 if let Some(slot) = self.resolve_local(name) {
                     self.emit(OpCode::GetLocal(slot), line, col);
                 } else {
-                    // No es una variable: es un nombre de función usado como valor.
-                    let idx = *self.indices.get(name).expect("el checker garantiza el nombre");
-                    self.emit(OpCode::Function(idx), line, col);
+                    let depth = self.scopes.len() - 1;
+                    if let Some(up) = self.resolve_upvalue(depth, name) {
+                        self.emit(OpCode::GetUpvalue(up), line, col);
+                    } else {
+                        // No es variable ni upvalue: un nombre de función como valor.
+                        let idx = *self.indices.get(name).expect("el checker garantiza el nombre");
+                        self.emit(OpCode::Function(idx), line, col);
+                    }
                 }
             }
 
@@ -363,7 +463,7 @@ impl<'a> FnCompiler<'a> {
             }
 
             ExprKind::While { cond, body } => {
-                let loop_start = self.chunk.code.len();
+                let loop_start = self.cur().chunk.code.len();
                 self.emit_expr(cond)?;
                 let exit = self.emit(OpCode::JumpIfFalse(0), line, col);
                 self.emit(OpCode::Pop, line, col); // cond true → descartarla
@@ -413,8 +513,17 @@ impl<'a> FnCompiler<'a> {
             }
 
             ExprKind::Func(fe) => {
-                // Un literal de función es un valor: su índice es N + id (M4.1).
-                self.emit(OpCode::Function(self.n_named + fe.id), line, col);
+                // Compilamos la función anónima en línea (en su propio ámbito, que ve
+                // a los envolventes para resolver upvalues), y emitimos un Closure si
+                // capturó algo, o un Function simple si no.
+                let fn_index = self.n_named + fe.id;
+                self.compile_function(fn_index, &fe.params, &fe.body, fe.line, fe.col, format!("<fn#{}>", fe.id))?;
+                let has_upvalues = !self.functions[fn_index].as_ref().unwrap().upvalues.is_empty();
+                if has_upvalues {
+                    self.emit(OpCode::Closure(fn_index), line, col);
+                } else {
+                    self.emit(OpCode::Function(fn_index), line, col);
+                }
             }
 
             ExprKind::Call { callee, args } => self.emit_call(callee, args, line, col)?,
@@ -427,9 +536,8 @@ impl<'a> FnCompiler<'a> {
     /// (un valor-función en la pila), que usa `CallValue` (M4.1).
     fn emit_call(&mut self, callee: &Expr, args: &[Expr], line: usize, col: usize) -> Result<(), CompileError> {
         if let ExprKind::Ident(name) = &callee.kind {
-            // Solo es directo si el nombre NO está tapado por una variable local.
-            if self.resolve_local(name).is_none() {
-                // Builtins.
+            // Solo es directo si el nombre NO es una variable (local o upvalue).
+            if !self.name_is_variable(name) {
                 let builtin = match name.as_str() {
                     "print" => Some(OpCode::Print),
                     "len" => Some(OpCode::Len),
@@ -443,7 +551,6 @@ impl<'a> FnCompiler<'a> {
                     self.emit(op, line, col);
                     return Ok(());
                 }
-                // Función de nivel superior: llamada directa.
                 if let Some(&idx) = self.indices.get(name) {
                     for arg in args {
                         self.emit_expr(arg)?;

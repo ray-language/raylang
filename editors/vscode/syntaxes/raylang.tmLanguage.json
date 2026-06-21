@@ -6,6 +6,7 @@
     { "include": "#comments" },
     { "include": "#strings" },
     { "include": "#struct-definition" },
+    { "include": "#enum-definition" },
     { "include": "#function-definition" },
     { "include": "#keywords-control" },
     { "include": "#storage" },
@@ -40,6 +41,13 @@
         "2": { "name": "entity.name.type.raylang" }
       }
     },
+    "enum-definition": {
+      "match": "\\b(enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.enum.raylang" },
+        "2": { "name": "entity.name.type.raylang" }
+      }
+    },
     "function-definition": {
       "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
       "captures": {
@@ -49,11 +57,11 @@
     },
     "keywords-control": {
       "name": "keyword.control.raylang",
-      "match": "\\b(if|else|while|return)\\b"
+      "match": "\\b(if|else|while|return|match)\\b"
     },
     "storage": {
       "name": "storage.type.raylang",
-      "match": "\\b(let|var|fn|struct)\\b"
+      "match": "\\b(let|var|fn|struct|enum)\\b"
     },
     "builtins": {
       "name": "support.function.builtin.raylang",
@@ -91,7 +99,7 @@
     },
     "operators": {
       "name": "keyword.operator.raylang",
-      "match": "->|==|!=|<=|>=|&&|\\|\\||[-+*/%<>!=:]"
+      "match": "=>|->|==|!=|<=|>=|&&|\\|\\||[-+*/%<>!=:]"
     }
   }
 }

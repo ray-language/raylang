@@ -11,26 +11,34 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 
 | Categoría | Ejemplos | Scope TextMate |
 |-----------|----------|----------------|
-| Palabras clave de control | `if else while return` | `keyword.control` |
-| Declaración / storage | `let var fn struct` | `storage.type` |
+| Palabras clave de control | `if else while return match` | `keyword.control` |
+| Declaración / storage | `let var fn struct enum` | `storage.type` |
 | Tipos primitivos | `int float bool string` | `support.type.primitive` |
-| Tipos de usuario | `Punto`, `Pila` (structs) | `entity.name.type` |
+| Tipos de usuario | `Punto` (struct), `Figura` (enum) | `entity.name.type` |
 | Booleanos | `true false` | `constant.language.boolean` |
 | Números | `42`, `3.14` | `constant.numeric` |
 | Cadenas y escapes | `"hola\n"` | `string.quoted.double` |
 | Comentarios | `// ...` | `comment.line` |
 | Builtin | `print(...)` | `support.function.builtin` |
 | Definición de struct | `struct Punto` | `entity.name.type` |
+| Definición de enum | `enum Figura` | `entity.name.type` |
+| Variante de enum | `Figura.Circulo`, `Lista.Nil` | `entity.name.type` |
 | Definición de función | `fn fib` | `entity.name.function` |
 | Función anónima / tipo función | `fn(n: int) -> int`, `fn(int) -> int` | `storage.type` + tipos |
 | Llamadas | `fib(...)` | `entity.name.function` |
-| Operadores | `+ - == && ->` ... | `keyword.operator` |
+| Operadores | `+ - == && -> =>` ... | `keyword.operator` |
 
 > El **tipo función** `fn(...) -> R` y la **función anónima** `fn(n: int) { ... }`
 > de M4 no necesitaron reglas nuevas: la `fn` la pinta `storage.type` y sus
 > parámetros/retorno caen en las reglas de tipos. Los **nombres de tipo de usuario**
 > se reconocen por convención (identificador que empieza en mayúscula), así que tanto
 > `struct Punto { ... }` como su uso `Punto { x: 1, y: 2 }` o `: Punto` se colorean.
+
+> **M5 (enums).** `enum Figura { ... }` se colorea como su análogo `struct`. Las
+> **variantes** (`Figura.Circulo`, `Lista.Nil`) caen en la misma convención de
+> mayúscula, así que se pintan como tipo tanto al construirlas como en (futuro) `match`.
+> `match` y `=>` ya se reservan en el lexer; se colorean aunque su sintaxis completa
+> llegue en M5.2.
 
 > Nota: la gramática TextMate (`syntaxes/raylang.tmLanguage.json`) es una
 > **reescritura en regex** de las reglas léxicas de `DESIGN.md` §3. Es independiente
@@ -45,7 +53,7 @@ de extensiones de VSCode y recarga.
 
 ```sh
 # macOS / Linux
-ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.2.0
+ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.3.0
 
 # Luego: recarga VSCode (Cmd/Ctrl+Shift+P → "Developer: Reload Window")
 ```
@@ -60,7 +68,7 @@ Para generar un `.vsix` instalable o publicarlo:
 
 ```sh
 npm install -g @vscode/vsce
-vsce package        # genera raylang-0.2.0.vsix
+vsce package        # genera raylang-0.3.0.vsix
 # Instalar el .vsix: Cmd/Ctrl+Shift+P → "Extensions: Install from VSIX..."
 ```
 

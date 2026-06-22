@@ -23,6 +23,11 @@ fn norma1(p: Punto) -> int { p.x + p.y }
 // Genérica: el receptor cuenta para la inferencia como cualquier argumento (M6).
 fn cabeza<T>(xs: [T]) -> T { xs[0] }
 
+// La regla "campo gana sobre función libre", en acción. Hay una función libre 'op'...
+fn op(a: int, b: int) -> int { a - b }
+// ...y un struct con un CAMPO 'op' (de tipo función). En `m.op(x)` gana el campo.
+struct Maquina { op: fn(int) -> int }
+
 fn main() -> int {
     let xs: [int] = [10, 20, 30];
     let n: int = xs.len();             // builtin como método -> len(xs) = 3
@@ -37,6 +42,11 @@ fn main() -> int {
 
     let mezcla: int = v.suma(n);       // suma(5, 3) = 8
 
-    // 3 + 10 + 22 + 13 + 7 + 8 = 63
-    n + primero + encadenado + m + campo + mezcla
+    // 'op' es campo del struct: gana sobre la función libre 'op'. Se llama al campo,
+    // NO op(maq, 41). Sería 'maq - 41' si ganara la libre, lo cual ni siquiera tiparía.
+    let maq: Maquina = Maquina { op: fn(x: int) -> int { x + 1 } };
+    let r: int = maq.op(41);           // (maq.op)(41) = 42
+
+    // 3 + 10 + 22 + 13 + 7 + 8 + 42 = 105
+    n + primero + encadenado + m + campo + mezcla + r
 }

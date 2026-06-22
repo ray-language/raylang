@@ -114,6 +114,7 @@ impl Lexer {
             ':' => TokenKind::Colon,
             '.' => TokenKind::Dot,
             '?' => TokenKind::Question,
+            '@' => TokenKind::At, // reservado para anotaciones (M10); el parser aún no lo usa
 
             // Operadores que pueden tener una segunda parte.
             '=' => {
@@ -437,6 +438,12 @@ mod tests {
     }
 
     #[test]
+    fn token_arroba_reservado() {
+        // '@' se lexea como token (reservado para anotaciones, M10); ya no es error.
+        assert_eq!(kinds("@test"), vec![TokenKind::At, TokenKind::Ident("test".into()), TokenKind::Eof]);
+    }
+
+    #[test]
     fn token_pipeline_y_or() {
         // '|>' (pipeline, M7.2) y '||' (or) se distinguen; un '|' suelto es error.
         assert_eq!(
@@ -506,8 +513,8 @@ mod tests {
 
     #[test]
     fn errores_lexicos() {
-        // carácter inesperado
-        let e = lex("@").unwrap_err();
+        // carácter inesperado ('@' ya está reservado para anotaciones; usamos '#')
+        let e = lex("#").unwrap_err();
         assert_eq!((e.line, e.col), (1, 1));
         assert!(e.msg.contains("inesperado"));
 

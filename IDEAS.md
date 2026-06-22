@@ -23,11 +23,11 @@
 | Visibilidad (`pub` vs mayúscula) | Sistema de módulos | **M11** | 📌 recomendación fijada (`pub` explícito) |
 | **Self-hosting** (raylang en raylang) | Capstone: requiere módulos + I/O | transversal (post-M11) | 🎯 meta-objetivo, ya habilitado por el lenguaje |
 | **Tooling de editor** (coloreado / LSP) | Front-end (reutiliza el checker) | coloreado ✅ / **LSP M10** | 🔧 parcial (LSP pendiente) |
-| **Anotaciones** (`@test`, `@derive`, …) | Parser + fase que las consume | **M10** | 📌 dirección fijada; ⚠️ `@` **aún NO** reservado en el lexer |
+| **Anotaciones** (`@test`, `@derive`, …) | Parser + fase que las consume | **M10** | 📌 dirección fijada; `@` ✅ reservado en el lexer (`TokenKind::At`); falta el parser |
 | **API de runtime / I/O** (`args`, `input`, `env`) | Builtins / stdlib | **M11** | 📌 dirección fijada |
 | **stdlib** (orden superior / string / I/O) | prelude + builtins | parcial | 🟡 `map`/`filter`/`fold`+`len`/`push` ✅ (M7.3); string/I/O → M11 |
 | **Optimización de la VM** | `bytecode`/`compiler`/`vm` | transversal | 🚀 línea base ~3×; optimizaciones de §11 sin aplicar |
-| **Asperezas de M3** | Parser + checker | limpieza | 🩹 `[]` en campo de struct ✅ resuelto (M6.2); coma final en arreglos ❌ pendiente |
+| **Asperezas de M3** | Parser + checker | hecho | ✅ `[]` en campo de struct (M6.2) y coma final en arreglos (limpieza) resueltos |
 
 ---
 
@@ -213,10 +213,9 @@ rendimiento. Candidatas:
   ítem de introspección §3.
 
 **Impacto en el diseño actual:** casi nulo. La sintaxis `@nombre[(args)]` es
-**aditiva** (un pequeño cambio en el parser). ⚠️ **Pendiente de la fase de limpieza**:
-hoy el lexer **rechaza `@`** ("carácter inesperado"); aunque `DESIGN.md` §3.5 lo lista
-como reservado, todavía no hay un token para él. Reservarlo (emitir un `TokenKind::At`)
-es el primer paso, antes de M10. `@derive`/`@delegate` además dependen de **traits (M9)**.
+**aditiva** (un pequeño cambio en el parser). ✅ El lexer ya **reserva `@`**
+(`TokenKind::At`, fase de limpieza post-M8); el parser todavía no lo consume, así que un
+`@` da error de sintaxis hasta M10. `@derive`/`@delegate` además dependen de **traits (M9)**.
 
 ## 10. API de runtime / I/O (cómo raylang habla con el exterior)
 
@@ -285,11 +284,9 @@ Dos límites pequeños del front-end que afloraron al escribir ejemplos con arre
 y structs (`examples/pila.ray`, `examples/inventario.ray`). No son bugs —el
 lenguaje es consistente— sino refinamientos de ergonomía.
 
-- **Coma final en literales de arreglo.** ❌ **Pendiente** (fase de limpieza). El
-  parser acepta coma final en los campos de un `struct` (`{ x: int, }`) pero **no** en
-  un literal de arreglo (`[1, 2, 3,]` → error de sintaxis). Arreglo chico y local en
-  el literal de arreglo (aceptar `]` justo después de una coma). Conviene unificar el
-  criterio en todas las listas separadas por coma (argumentos, campos, elementos).
+- **Coma final en literales de arreglo.** ✅ **Resuelto** (fase de limpieza post-M8).
+  `[1, 2, 3,]` ya se acepta, como la coma final en los campos de un `struct`
+  (`array_literal` corta el bucle si tras una coma viene `]`).
 
 - **Inferencia del `[]` vacío en posición de campo.** ✅ **Resuelto en M6.2.** El
   **chequeo bidireccional** (`check_expr_expected`) propaga el tipo esperado del campo

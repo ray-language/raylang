@@ -781,6 +781,10 @@ impl Parser {
                 if !self.eat(&TokenKind::Comma) {
                     break;
                 }
+                // Coma final permitida (`[1, 2, 3,]`), como en los campos de struct.
+                if self.check(&TokenKind::RBracket) {
+                    break;
+                }
             }
         }
         self.expect(&TokenKind::RBracket, "']' para cerrar el arreglo")?;
@@ -1277,6 +1281,15 @@ fn main() -> int {
         // El '+' hereda la posición de su operando izquierdo '1' (col 1).
         let e = parse_expr("1 + 2");
         assert_eq!((e.line, e.col), (1, 1));
+    }
+
+    #[test]
+    fn coma_final_en_arreglo() {
+        // Limpieza: `[1, 2, 3,]` ahora se acepta (como la coma final en structs).
+        assert_eq!(sx(&parse_expr("[1, 2, 3,]")), "[1, 2, 3]");
+        assert_eq!(sx(&parse_expr("[1,]")), "[1]");
+        // El arreglo vacío sigue válido y la doble coma sigue siendo error.
+        assert_eq!(sx(&parse_expr("[]")), "[]");
     }
 
     // ----- M8.1: anotación de tipo opcional en let/var -----

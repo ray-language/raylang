@@ -77,7 +77,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Estado actual
 
-- **M1–M8 COMPLETOS** (220 tests + integración CLI verdes):
+- **M1–M8 COMPLETOS + limpieza** (222 tests + integración CLI verdes):
   - **M1**: lexer + parser + checker + intérprete.
   - **M2**: bytecode + VM (pila y marcos explícitos). El intérprete es el **oráculo**.
   - **M3**: datos compuestos — arreglos `[T]` y structs (semántica de referencia).
@@ -135,7 +135,10 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     Módulo `src/diagnostic.rs` (`render`), **solo presentación**: antepone el `Display` del
     error y dibuja la línea + cursor. Reusa `(línea, col)` —**sin spans**— y es texto
     plano. Lo usan `main.rs` (las 4 fases) y el REPL (contra su fuente sintetizada).
-- **Siguiente: M9+** (ver hoja de ruta / IDEAS.md).
+  - **Limpieza** (post-M8): `@` reservado en el lexer (`TokenKind::At`, para anotaciones de
+    M10; el parser aún no lo usa) y **coma final** permitida en literales de arreglo
+    (`[1, 2, 3,]`). La aspereza del `[]` en campo de struct ya estaba resuelta (M6.2).
+- **Siguiente: M9** (traits). Ver hoja de ruta (DESIGN §2) / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

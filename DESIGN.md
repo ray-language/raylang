@@ -936,3 +936,88 @@ de la stdlib.
   → no hay módulos aún; toda función libre en ámbito es candidata.
 - **Operador `.` encadenado con `?`** (`x.f()?`) ya funciona por composición; sin azúcar
   extra.
+
+## 17. M8 — Inferencia local, REPL y mejores errores
+
+M8 mira hacia la **comodidad de quien escribe** raylang, no hacia el sistema de tipos.
+Son tres mejoras de *tooling* y ergonomía que cierran la hoja de ruta: inferir el tipo
+de las variables locales, un REPL interactivo, y mensajes de error más útiles.
+
+### 17.0 Decisiones de diseño (cerradas)
+
+1. **Inferencia solo de locales.** La anotación de `let`/`var` se vuelve **opcional**: si
+   falta, el tipo de la variable se **infiere del inicializador**. Los **parámetros y el
+   retorno** de las funciones siguen siendo **obligatorios** (decisión fundacional §0:
+   firmas explícitas, sin inferencia global). Esto mantiene el checker simple —cada firma
+   da su tipo sin resolver un sistema de ecuaciones— y conserva la documentación que una
+   firma anotada aporta.
+2. **Empezar por la inferencia** (M8.1), luego REPL (M8.2) y mejores errores (M8.3): la
+   inferencia es lo fundacional y reusa la maquinaria de M6; el REPL y los errores se
+   apoyan en un lenguaje ya completo.
+
+### 17.1 Inferencia local (`let x = 3`)
+
+```rust
+let x = 3;                       // infiere int
+let nombre = "ana";              // infiere string
+let xs = [1, 2, 3];              // infiere [int]
+let p = Punto { x: 1, y: 2 };    // infiere Punto
+let c = Caja.Llena(7);           // infiere Caja<int> (de los genéricos de M6)
+var total = 0;                   // var también; sigue siendo mutable
+```
+
+**AST**: el campo `ty` de `StmtKind::Let` pasa de `Type` a `Option<Type>` —`None` cuando
+no hubo anotación—.
+
+**Parser**: la anotación `: tipo` tras el nombre se vuelve **opcional**. `let x = e;`
+(sin `:`) es ahora válido; `let x: T = e;` sigue igual. Desaparece el error "el tipo es
+obligatorio".
+
+**Checker** (`StmtKind::Let`):
+- **Con anotación** (`Some(T)`): como hasta ahora —el tipo declarado es el **esperado**
+  del inicializador (chequeo bidireccional de M6.2), se valida la igualdad, y la variable
+  se declara con `T`—.
+- **Sin anotación** (`None`): se **infiere** tipando el inicializador sin tipo esperado
+  (`check_expr`), y la variable se declara con el tipo resultante.
+
+**Lo que no se puede inferir.** Algunos inicializadores no determinan su tipo por sí
+solos —el arreglo vacío `[]`, `Option.None`, `Caja.Vacia`—: necesitan el tipo esperado
+que solo daba la anotación. Sin ella, `check_expr` ya falla con un mensaje que **pide la
+anotación** ("no se puede inferir el tipo de [] aquí; anótalo…"). La regla es simple: se
+infiere lo que el valor determina; lo que no, se anota. La inferencia es **local** (de la
+expresión a la izquierda), nunca de uso posterior.
+
+**Runtime**: **sin cambios**. Los tipos se borran antes de ejecutar (como los genéricos);
+una variable inferida es, en runtime, una variable como cualquier otra. La inferencia es,
+una vez más, **solo del checker**.
+
+> **Por qué no rompe §0.** El norte pedía "un type checker real sin el coste de la
+> inferencia global". Inferir `let x = 3` es inferencia **local y trivial** —el tipo está
+> *ahí mismo*, en el inicializador—; no hay variables de tipo que propagar entre
+> sentencias ni un sistema que resolver. Las firmas siguen explícitas, que es donde la
+> anotación documenta y ancla la inferencia. Es la línea exacta que separa "comodidad
+> barata" de "inferencia global".
+
+### 17.2 REPL (futuro, M8.2)
+
+Un *read-eval-print loop*: leer una sentencia o expresión, verificarla y ejecutarla,
+mostrar el resultado, y mantener el entorno entre líneas. Reusa el front-end y un motor
+(el intérprete). Decisiones a cerrar al llegar: cómo acumular declaraciones entre
+entradas, si se permite redefinir, qué motor usar.
+
+### 17.3 Mejores errores (futuro, M8.3)
+
+Mensajes con más contexto: la línea de fuente, un subrayado de la posición (`^^^`),
+quizá sugerencias. Transversal a todas las fases; gana cuando el lenguaje ya está
+completo y los errores nuevos (inferencia, REPL) existen.
+
+### 17.4 Sub-fases
+- **M8.1 — Inferencia local**: `ty` opcional en el AST, anotación opcional en el parser,
+  inferencia desde el inicializador en el checker. Solo locales; firmas intactas.
+- **M8.2 — REPL**: bucle interactivo sobre el front-end + intérprete.
+- **M8.3 — Mejores errores**: contexto de fuente y subrayado en los diagnósticos.
+
+### 17.5 Deferido
+- **Inferencia de retornos/parámetros** → no; §0 fija firmas explícitas.
+- **Inferencia con flujo** (deducir el `T` de `[]` por un `push` posterior) → no; la
+  inferencia es local al inicializador.

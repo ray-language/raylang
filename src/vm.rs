@@ -1365,4 +1365,76 @@ mod tests {
         // Sin GC habría ~200 objetos vivos; con mark-and-sweep, muy pocos.
         assert!(vm.heap.live() < 80, "el heap no se acotó: {} objetos vivos", vm.heap.live());
     }
+
+    // ----- M7.1: UFCS (azúcar de front-end; ambos motores ven la llamada ya bajada) -----
+
+    #[test]
+    fn ufcs_oraculo() {
+        // Función del usuario y builtin (len) usados como métodos.
+        oracle_program(r#"
+            fn suma(a: int, b: int) -> int { a + b }
+            fn main() -> int {
+                let xs: [int] = [1, 2, 3, 4];
+                let n: int = xs.len();      // len(xs) = 4
+                let v: int = 10;
+                v.suma(n)                    // suma(10, 4) = 14
+            }
+        "#);
+    }
+
+    #[test]
+    fn ufcs_encadenado_oraculo() {
+        oracle_program(r#"
+            fn doble(x: int) -> int { x * 2 }
+            fn inc(x: int) -> int { x + 1 }
+            fn main() -> int {
+                let v: int = 5;
+                v.doble().inc().doble()      // doble(inc(doble(5))) = 22
+            }
+        "#);
+    }
+
+    #[test]
+    fn ufcs_sobre_struct_oraculo() {
+        // 'norma1' no es campo de Punto -> UFCS; 'p.x' sigue siendo acceso a campo.
+        oracle_program(r#"
+            struct Punto { x: int, y: int }
+            fn norma1(p: Punto) -> int { p.x + p.y }
+            fn main() -> int {
+                let p: Punto = Punto { x: 7, y: 6 };
+                p.norma1() + p.x             // 13 + 7 = 20
+            }
+        "#);
+    }
+
+    #[test]
+    fn ufcs_campo_funcion_oraculo() {
+        // 'op' ES un campo de tipo función: c.op(x) llama al campo, no es UFCS.
+        oracle_program(r#"
+            struct Caja { op: fn(int) -> int }
+            fn main() -> int {
+                let c: Caja = Caja { op: fn(x: int) -> int { x + 100 } };
+                c.op(41)                     // (c.op)(41) = 141
+            }
+        "#);
+    }
+
+    #[test]
+    fn ufcs_en_modo_estres() {
+        // El receptor y los argumentos viven en el heap: el GC en estrés no debe
+        // romper la llamada UFCS bajada.
+        oracle_stress(r#"
+            fn cabeza(xs: [int]) -> int { xs[0] }
+            fn cola_suma(xs: [int]) -> int {
+                var s: int = 0;
+                var i: int = 1;
+                while (i < len(xs)) { s = s + xs[i]; i = i + 1; }
+                s
+            }
+            fn main() -> int {
+                let xs: [int] = [10, 20, 30, 40];
+                xs.cabeza() + xs.cola_suma()   // 10 + 90 = 100
+            }
+        "#);
+    }
 }

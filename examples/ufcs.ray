@@ -1,0 +1,42 @@
+// M7.1 — UFCS (Uniform Function Call Syntax)
+//
+// `recv.f(args)` es azúcar para `f(recv, args)`: el receptor pasa a ser el primer
+// argumento. Así una función libre se puede llamar "como método", sin declarar nada
+// especial. La resolución vive en el checker (necesita el tipo del receptor) y se
+// reescribe a una llamada ordinaria: ni el intérprete ni la VM saben de UFCS.
+//
+// Regla de desambiguación: si el receptor es un struct con un CAMPO con ese nombre,
+// gana el campo; si no, se busca una función libre. Ejecuta con:
+//   cargo run --quiet -- examples/ufcs.ray
+//   cargo run --quiet -- --vm examples/ufcs.ray
+// (ambos motores devuelven el mismo código de salida)
+
+fn doble(x: int) -> int { x * 2 }
+fn inc(x: int) -> int { x + 1 }
+fn suma(a: int, b: int) -> int { a + b }
+
+struct Punto { x: int, y: int }
+
+// 'norma1' no es un campo de Punto: `p.norma1()` se resuelve como UFCS -> norma1(p).
+fn norma1(p: Punto) -> int { p.x + p.y }
+
+// Genérica: el receptor cuenta para la inferencia como cualquier argumento (M6).
+fn cabeza<T>(xs: [T]) -> T { xs[0] }
+
+fn main() -> int {
+    let xs: [int] = [10, 20, 30];
+    let n: int = xs.len();             // builtin como método -> len(xs) = 3
+    let primero: int = xs.cabeza();    // genérica vía UFCS -> cabeza(xs), T = int = 10
+
+    let v: int = 5;
+    let encadenado: int = v.doble().inc().doble();  // doble(inc(doble(5))) = 22
+
+    let p: Punto = Punto { x: 7, y: 6 };
+    let m: int = p.norma1();           // UFCS (no es campo) -> norma1(p) = 13
+    let campo: int = p.x;              // sigue siendo acceso a campo = 7
+
+    let mezcla: int = v.suma(n);       // suma(5, 3) = 8
+
+    // 3 + 10 + 22 + 13 + 7 + 8 = 63
+    n + primero + encadenado + m + campo + mezcla
+}

@@ -82,7 +82,12 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
         resolve_block(&mut f.body, &enum_names);
     }
     // Pasos 2–3: pre-pasada y verificación.
-    Checker::new().check_program(program)
+    let mut checker = Checker::new();
+    checker.check_program(program)?;
+    // Paso 4 (M7.1): bajar las llamadas UFCS detectadas (`recv.f(args)`) a llamadas
+    // ordinarias (`f(recv, args)`), para que el intérprete y la VM solo vean llamadas.
+    lower_ufcs(program, &checker.ufcs_sites);
+    Ok(())
 }
 
 struct Checker {
@@ -109,6 +114,14 @@ struct Checker {
     /// registra o verifica (M6). `resolve_type` los reclasifica de `Struct(name)` a
     /// `Var(name)`, y `ensure_type` los acepta como tipos válidos.
     type_params: HashSet<String>,
+    /// Sitios de **llamada UFCS** detectados durante la verificación (M7.1):
+    /// `recv.f(args)` donde `f` no es un campo del receptor, sino una función libre.
+    /// Se identifican por `(línea, columna, nombre)` del nodo `Call`: la posición sola
+    /// no basta porque el `Call` y su receptor comparten posición (el parser arranca el
+    /// `Call` en el callee), así que el nombre del método desambigua en una cadena
+    /// `a.f().g()`. Tras verificar, una pasada `&mut` (`lower_ufcs`) los reescribe a
+    /// `f(recv, args)`, de modo que el intérprete y la VM solo ven llamadas ordinarias.
+    ufcs_sites: HashSet<(usize, usize, String)>,
 }
 
 impl Checker {
@@ -123,6 +136,7 @@ impl Checker {
             scopes: Vec::new(),
             current_return: Type::Unit,
             type_params: HashSet::new(),
+            ufcs_sites: HashSet::new(),
         }
     }
 
@@ -1101,16 +1115,79 @@ impl Checker {
         line: usize,
         col: usize,
     ) -> Result<Type, TypeError> {
-        // Si el callee no es un nombre, debe ser una expresión de tipo función
-        // (p. ej. `(fn(x: int) -> int { x })(3)` o `dame_fn()(3)`). (M4.1)
-        let name = match &callee.kind {
-            ExprKind::Ident(n) => n.clone(),
+        match &callee.kind {
+            // Llamada directa por nombre: `f(a, b)`.
+            ExprKind::Ident(n) => self.check_named_call(&n.clone(), args, line, col),
+
+            // UFCS (M7.1): `recv.f(args)`. Si `f` es un **campo** del struct receptor,
+            // es una llamada al valor de ese campo (semántica de M3/M4); si **no**, se
+            // reescribe a la función libre `f(recv, args)`. La decisión necesita el
+            // tipo del receptor —por eso vive aquí y no en una pre-pasada—; el nodo se
+            // baja a una llamada ordinaria tras verificar (`lower_ufcs`).
+            ExprKind::Field { object, name } => {
+                let recv_ty = self.check_expr(object)?;
+                if let Type::Struct(sname, targs) = &recv_ty {
+                    if let Some(fty) = self.struct_field_type(sname, targs, name) {
+                        return self.call_type(fty, args, line, col);
+                    }
+                }
+                self.check_ufcs(name, &recv_ty, object, args, line, col)
+            }
+
+            // El callee es una expresión de tipo función (p. ej. `(fn(x: int) -> int
+            // { x })(3)` o `dame_fn()(3)`). (M4.1)
             _ => {
                 let ty = self.check_expr(callee)?;
-                return self.call_type(ty, args, line, col);
+                self.call_type(ty, args, line, col)
             }
-        };
+        }
+    }
 
+    /// Tipo del campo `fname` de un struct `sname` con argumentos de tipo `targs`, ya
+    /// sustituido (M6). `None` si el struct no tiene ese campo. Compartido por el acceso
+    /// a campo en posición de llamada y la resolución UFCS (M7.1).
+    fn struct_field_type(&self, sname: &str, targs: &[Type], fname: &str) -> Option<Type> {
+        let fields = self.structs.get(sname)?;
+        let fty = fields.iter().find(|(n, _)| n == fname).map(|(_, t)| t.clone())?;
+        let tparams = self.struct_tparams.get(sname).cloned().unwrap_or_default();
+        let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs.iter().cloned()).collect();
+        Some(subst(&fty, &sigma))
+    }
+
+    /// Verifica una llamada UFCS `recv.f(args)` reescrita conceptualmente a
+    /// `f(recv, args)` (M7.1): el receptor pasa a ser el **primer argumento**. Reusa la
+    /// resolución de llamada por nombre (builtins, variable local, función libre,
+    /// genéricos) y registra el sitio `(línea, columna, nombre)` para que `lower_ufcs`
+    /// baje el nodo a una llamada ordinaria tras la verificación.
+    fn check_ufcs(&mut self, name: &str, recv_ty: &Type, object: &Expr, args: &[Expr], line: usize, col: usize) -> Result<Type, TypeError> {
+        // Si el nombre no resuelve a nada llamable, el error debe hablar de UFCS (no es
+        // ni campo del receptor ni función libre), mencionando el tipo del receptor.
+        if !self.name_is_callable(name) {
+            return Err(self.err(line, col, format!(
+                "no existe campo ni función '{}' aplicable a {}", name, recv_ty
+            )));
+        }
+        let mut all_args = Vec::with_capacity(args.len() + 1);
+        all_args.push(object.clone());
+        all_args.extend_from_slice(args);
+        let ty = self.check_named_call(name, &all_args, line, col)?;
+        self.ufcs_sites.insert((line, col, name.to_string()));
+        Ok(ty)
+    }
+
+    /// ¿`name` nombra algo llamable? (builtin, variable local de función, o función de
+    /// nivel superior). Lo usa UFCS para dar un error específico cuando un `recv.f(...)`
+    /// no es ni campo ni función.
+    fn name_is_callable(&self, name: &str) -> bool {
+        matches!(name, "print" | "len" | "push")
+            || self.lookup(name).is_some()
+            || self.functions.contains_key(name)
+    }
+
+    /// Resolución de una llamada por **nombre** (`name(args)`): builtins conocidos,
+    /// variable local que tape una función global, función de nivel superior (directa o
+    /// genérica). Compartida por la llamada directa y por UFCS.
+    fn check_named_call(&mut self, name: &str, args: &[Expr], line: usize, col: usize) -> Result<Type, TypeError> {
         // 'print' es un builtin que el checker conoce (DESIGN.md §7): acepta un
         // único argumento de un tipo imprimible y devuelve unit.
         if name == "print" {
@@ -1154,13 +1231,13 @@ impl Checker {
 
         // Una variable local que guarda una función: llamada indirecta (M4.1).
         // (Tapa a una función global con el mismo nombre.)
-        if let Some(v) = self.lookup(&name) {
+        if let Some(v) = self.lookup(name) {
             let ty = v.ty.clone();
             return self.call_type(ty, args, line, col);
         }
 
         // Función de nivel superior: llamada directa.
-        if let Some(sig) = self.functions.get(&name) {
+        if let Some(sig) = self.functions.get(name) {
             let (type_params, params, ret) = (sig.type_params.clone(), sig.params.clone(), sig.ret.clone());
             let label = format!("'{}'", name);
             if type_params.is_empty() {
@@ -1558,6 +1635,136 @@ fn ident_name(expr: &Expr) -> String {
     match &expr.kind {
         ExprKind::Ident(n) => n.clone(),
         _ => unreachable!("ident_name exige un Ident"),
+    }
+}
+
+// =====================================================================
+// Bajada de UFCS (M7.1)
+// =====================================================================
+//
+// `recv.f(args)` y `(recv.f)(args)` comparten forma (`Call` con callee `Field`). El
+// checker, que conoce el tipo del receptor, decidió cuáles son UFCS (`f` no es campo)
+// y registró su `(línea, columna)`. Estas funciones recorren el AST y **reescriben**
+// esos nodos a `f(recv, args)`: el receptor pasa a ser el primer argumento y el callee
+// se vuelve un `Ident`. Tras esto, el intérprete y la VM solo ven llamadas ordinarias.
+
+fn lower_ufcs(program: &mut Program, sites: &HashSet<(usize, usize, String)>) {
+    if sites.is_empty() {
+        return;
+    }
+    for f in &mut program.functions {
+        lower_ufcs_block(&mut f.body, sites);
+    }
+}
+
+fn lower_ufcs_block(block: &mut Block, sites: &HashSet<(usize, usize, String)>) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } => lower_ufcs_expr(value, sites),
+            StmtKind::Assign { target, value } => {
+                lower_ufcs_expr(target, sites);
+                lower_ufcs_expr(value, sites);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    lower_ufcs_expr(v, sites);
+                }
+            }
+            StmtKind::Expr(e) => lower_ufcs_expr(e, sites),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        lower_ufcs_expr(t, sites);
+    }
+}
+
+fn lower_ufcs_expr(expr: &mut Expr, sites: &HashSet<(usize, usize, String)>) {
+    // ¿Este `Call(Field)` es un sitio UFCS registrado? La clave incluye el nombre del
+    // método porque el `Call` y su receptor comparten `(línea, columna)`. Reescribir
+    // ANTES de recorrer los hijos, para que la recursión baje también el receptor y los
+    // argumentos (p. ej. `a.f().g()`).
+    let is_site = match &expr.kind {
+        ExprKind::Call { callee, .. } => match &callee.kind {
+            ExprKind::Field { name, .. } => sites.contains(&(expr.line, expr.col, name.clone())),
+            _ => false,
+        },
+        _ => false,
+    };
+    if is_site {
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+        if let ExprKind::Call { callee, mut args } = taken {
+            let (cl, cc) = (callee.line, callee.col);
+            if let ExprKind::Field { object, name } = callee.kind {
+                let mut new_args = Vec::with_capacity(args.len() + 1);
+                new_args.push(*object); // el receptor pasa a ser el primer argumento
+                new_args.append(&mut args);
+                expr.kind = ExprKind::Call {
+                    callee: Box::new(Expr { kind: ExprKind::Ident(name), line: cl, col: cc }),
+                    args: new_args,
+                };
+            } else {
+                unreachable!("el guard is_site garantiza Call con callee Field");
+            }
+        } else {
+            unreachable!("el guard is_site garantiza un Call");
+        }
+    }
+
+    // Recorrer los sub-nodos (incluye los argumentos ya reescritos).
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } => lower_ufcs_expr(inner, sites),
+        ExprKind::Binary { left, right, .. } => {
+            lower_ufcs_expr(left, sites);
+            lower_ufcs_expr(right, sites);
+        }
+        ExprKind::Call { callee, args } => {
+            lower_ufcs_expr(callee, sites);
+            for a in args {
+                lower_ufcs_expr(a, sites);
+            }
+        }
+        ExprKind::ArrayLit(elems) => {
+            for e in elems {
+                lower_ufcs_expr(e, sites);
+            }
+        }
+        ExprKind::Index { array, index } => {
+            lower_ufcs_expr(array, sites);
+            lower_ufcs_expr(index, sites);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                lower_ufcs_expr(e, sites);
+            }
+        }
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                lower_ufcs_expr(a, sites);
+            }
+        }
+        ExprKind::Field { object, .. } => lower_ufcs_expr(object, sites),
+        ExprKind::Func(fe) => lower_ufcs_block(&mut fe.body, sites),
+        ExprKind::Match { scrutinee, arms } => {
+            lower_ufcs_expr(scrutinee, sites);
+            for arm in arms {
+                lower_ufcs_expr(&mut arm.body, sites);
+            }
+        }
+        ExprKind::Try(inner) => lower_ufcs_expr(inner, sites),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            lower_ufcs_expr(cond, sites);
+            lower_ufcs_block(then_branch, sites);
+            if let Some(e) = else_branch {
+                lower_ufcs_expr(e, sites);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            lower_ufcs_expr(cond, sites);
+            lower_ufcs_block(body, sites);
+        }
+        ExprKind::Block(b) => lower_ufcs_block(b, sites),
+        // Literales, Ident: nada que recorrer.
+        _ => {}
     }
 }
 
@@ -2195,5 +2402,94 @@ fn main() {}
             "fn d() -> Result<int, string> { Result.Ok(1) } fn f() -> Result<int, bool> { let x: int = d()?; Result.Ok(x) } fn main() {}",
             "Result<_, string>",
         );
+    }
+
+    // ----- UFCS (M7.1) -----
+
+    #[test]
+    fn ufcs_funcion_libre_como_metodo() {
+        // recv.f(args) ≡ f(recv, args). Builtin (len) y función del usuario (suma).
+        let src = r#"
+fn suma(a: int, b: int) -> int { a + b }
+fn main() -> int {
+    let xs: [int] = [1, 2, 3];
+    let n: int = xs.len();      // len(xs)
+    let v: int = 10;
+    v.suma(n)                    // suma(10, 3)
+}
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn ufcs_no_es_campo_usa_funcion() {
+        // 'doble' no es campo de Punto: se resuelve como UFCS doble(p).
+        let src = r#"
+struct Punto { x: int, y: int }
+fn doble(p: Punto) -> int { (p.x + p.y) * 2 }
+fn main() -> int {
+    let p: Punto = Punto { x: 3, y: 4 };
+    p.doble()
+}
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn ufcs_campo_funcion_gana_sobre_libre() {
+        // 'op' ES un campo (de tipo función): c.op(x) llama al campo, no es UFCS, aunque
+        // exista una función libre 'op' homónima con otra firma.
+        let src = r#"
+fn op(a: int, b: int) -> int { a - b }
+struct Caja { op: fn(int) -> int }
+fn main() -> int {
+    let c: Caja = Caja { op: fn(x: int) -> int { x + 1 } };
+    c.op(41)                     // (c.op)(41) = 42, NO op(c, 41)
+}
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn ufcs_encadenado() {
+        let src = r#"
+fn doble(x: int) -> int { x * 2 }
+fn inc(x: int) -> int { x + 1 }
+fn main() -> int {
+    let v: int = 5;
+    v.doble().inc().doble()      // doble(inc(doble(5)))
+}
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn ufcs_metodo_inexistente() {
+        err_contains(
+            "fn main() -> int { let v: int = 5; v.frobnicate() }",
+            "no existe campo ni función 'frobnicate' aplicable a int",
+        );
+    }
+
+    #[test]
+    fn ufcs_receptor_de_tipo_incorrecto() {
+        // El receptor se inserta como primer argumento: si su tipo no encaja, error.
+        err_contains(
+            "fn doble(x: int) -> int { x * 2 } fn main() -> int { let b: bool = true; b.doble() }",
+            "se esperaba int, se pasó bool",
+        );
+    }
+
+    #[test]
+    fn ufcs_generico_infiere_desde_receptor() {
+        // El receptor cuenta para la inferencia de genéricos (M6) como cualquier arg.
+        let src = r#"
+fn primero<T>(xs: [T]) -> T { xs[0] }
+fn main() -> int {
+    let xs: [int] = [7, 8, 9];
+    xs.primero()                 // primero(xs) con T = int
+}
+"#;
+        assert!(check_src(src).is_ok());
     }
 }

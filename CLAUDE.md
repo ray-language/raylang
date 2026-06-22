@@ -74,7 +74,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Estado actual
 
-- **M1–M5 COMPLETOS** (138 tests verdes):
+- **M1–M6 COMPLETOS, M7 en curso** (184 tests verdes):
   - **M1**: lexer + parser + checker + intérprete.
   - **M2**: bytecode + VM (pila y marcos explícitos). El intérprete es el **oráculo**.
   - **M3**: datos compuestos — arreglos `[T]` y structs (semántica de referencia).
@@ -100,7 +100,13 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     inyectados en `check`; `src/prelude.rs`) + operador **`?`** (`ExprKind::Try`).
     Único toque de runtime: el intérprete reusa `Flow::Return`; la VM baja `?` a un
     temp local + `EnumTagEq(0)`/`GetEnumField(0)` + `Return` (sin opcode nuevo).
-- **Siguiente: M7** (UFCS `.` + pipelines `|>` + stdlib).
+  - **M7.1**: **UFCS** (`recv.f(args)` ≡ `f(recv, args)`). Azúcar de **front-end**:
+    el checker resuelve `Call(Field)` (necesita el tipo del receptor) —campo del struct
+    gana sobre función libre— y registra los sitios (`(línea, col, nombre)`); una pasada
+    `&mut` (`lower_ufcs`) los **reescribe a llamadas ordinarias** tras verificar. El
+    receptor cuenta para la inferencia de genéricos. Runtime intacto.
+- **Siguiente: M7.2** (pipelines `|>`) y **M7.3** (stdlib: `push`/`split`/`trim` + `map`/
+  `filter`/`fold` en prelude).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 
@@ -114,6 +120,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 - **Construcción de enum** `Enum.Variante` es sintácticamente igual a un acceso a
   campo: el parser emite `Field`/`Call` y el **checker los reescribe a `EnumLit`**
   (`resolve_enum_construction`). Por eso `check` toma `&mut Program`.
+- **UFCS (M7.1)** `recv.f(args)` también llega como `Call(Field)`. A diferencia de la
+  construcción de enums (pre-pasada sin tipos), UFCS **necesita el tipo del receptor**
+  (campo-vs-función), así que se resuelve **durante** el checado: se registra el sitio
+  `(línea, col, nombre)` y se baja después con `lower_ufcs`. La clave lleva el **nombre**
+  porque el `Call` y su receptor comparten `(línea, col)` (el parser arranca el `Call`
+  en el callee), y la posición sola los confunde en cadenas `a.f().g()`.
 - Un identificador en posición de **tipo** llega del parser como `Type::Struct`; el
   checker lo **normaliza** (`resolve_type`) a `Type::Enum` si es un enum, o a
   `Type::Var` si es un **parámetro de tipo** en ámbito (M6). `self.type_params` se pone

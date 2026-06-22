@@ -7,8 +7,11 @@
     { "include": "#strings" },
     { "include": "#struct-definition" },
     { "include": "#enum-definition" },
+    { "include": "#trait-definition" },
+    { "include": "#impl-definition" },
     { "include": "#function-definition" },
     { "include": "#keywords-control" },
+    { "include": "#self" },
     { "include": "#storage" },
     { "include": "#builtins" },
     { "include": "#types" },
@@ -49,6 +52,23 @@
         "2": { "name": "entity.name.type.raylang" }
       }
     },
+    "trait-definition": {
+      "match": "\\b(trait)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.trait.raylang" },
+        "2": { "name": "entity.name.type.raylang" }
+      }
+    },
+    "impl-definition": {
+      "comment": "`impl Trait for Tipo`: 'for' es contextual (no es palabra clave global), solo se colorea aquí.",
+      "match": "\\b(impl)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s+(for)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.impl.raylang" },
+        "2": { "name": "entity.name.type.raylang" },
+        "3": { "name": "keyword.control.raylang" },
+        "4": { "name": "entity.name.type.raylang" }
+      }
+    },
     "function-definition": {
       "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
       "captures": {
@@ -60,9 +80,14 @@
       "name": "keyword.control.raylang",
       "match": "\\b(if|else|while|return|match)\\b"
     },
+    "self": {
+      "comment": "El receptor 'self' y el tipo 'Self' dentro de un trait/impl (M9).",
+      "name": "variable.language.self.raylang",
+      "match": "\\b(self|Self)\\b"
+    },
     "storage": {
       "name": "storage.type.raylang",
-      "match": "\\b(let|var|fn|struct|enum)\\b"
+      "match": "\\b(let|var|fn|struct|enum|trait|impl)\\b"
     },
     "builtins": {
       "name": "support.function.builtin.raylang",

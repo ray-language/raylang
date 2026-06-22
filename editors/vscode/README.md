@@ -12,7 +12,8 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 | Categoría | Ejemplos | Scope TextMate |
 |-----------|----------|----------------|
 | Palabras clave de control | `if else while return match` | `keyword.control` |
-| Declaración / storage | `let var fn struct enum` | `storage.type` |
+| Declaración / storage | `let var fn struct enum trait impl` | `storage.type` |
+| Receptor / tipo propio | `self`, `Self` | `variable.language.self` |
 | Tipos primitivos | `int float bool string` | `support.type.primitive` |
 | Tipos de usuario | `Punto` (struct), `Figura` (enum) | `entity.name.type` |
 | Booleanos | `true false` | `constant.language.boolean` |
@@ -22,6 +23,8 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 | Builtins y stdlib | `print len push map filter fold` | `support.function.builtin` |
 | Definición de struct | `struct Punto` | `entity.name.type` |
 | Definición de enum | `enum Figura` | `entity.name.type` |
+| Definición de trait | `trait Mostrable` | `entity.name.type` |
+| Bloque impl | `impl Mostrable for Punto` | `entity.name.type` + `keyword.control` |
 | Variante de enum | `Figura.Circulo`, `Lista.Nil` | `entity.name.type` |
 | Definición de función | `fn fib` | `entity.name.function` |
 | Función anónima / tipo función | `fn(n: int) -> int`, `fn(int) -> int` | `storage.type` + tipos |
@@ -64,6 +67,14 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 > de builtin). Caso límite: un builtin desnudo tras `|>` (p. ej. `x |> len`) queda sin
 > color —raro, porque `filter`/`fold`/`map` siempre llevan argumentos—.
 
+> **M9 (traits).** Se añaden las palabras clave `trait` e `impl` (a `storage.type`) y
+> reglas de definición que colorean el **nombre del trait** y, en `impl Trait for Tipo`,
+> también el `for` (contextual: no es palabra clave global del lenguaje, solo se colorea
+> dentro del `impl`) y el tipo destino. El receptor **`self`** y el tipo **`Self`** se
+> pintan como `variable.language`. Los **métodos** dentro de un `impl` caen en las reglas
+> ya existentes (definición de función y llamadas); su despacho es cosa del checker,
+> invisible al coloreado.
+
 > Nota: la gramática TextMate (`syntaxes/raylang.tmLanguage.json`) es una
 > **reescritura en regex** de las reglas léxicas de `DESIGN.md` §3. Es independiente
 > de nuestro lexer en Rust; mantener ambos en sincronía es la pequeña deuda
@@ -77,7 +88,7 @@ de extensiones de VSCode y recarga.
 
 ```sh
 # macOS / Linux
-ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.6.1
+ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.7.0
 
 # Luego: recarga VSCode (Cmd/Ctrl+Shift+P → "Developer: Reload Window")
 ```
@@ -92,7 +103,7 @@ Para generar un `.vsix` instalable o publicarlo:
 
 ```sh
 npm install -g @vscode/vsce
-vsce package        # genera raylang-0.6.1.vsix
+vsce package        # genera raylang-0.7.0.vsix
 # Instalar el .vsix: Cmd/Ctrl+Shift+P → "Extensions: Install from VSIX..."
 ```
 

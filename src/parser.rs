@@ -127,10 +127,12 @@ impl Parser {
         Ok(StructDef { name, fields, line: kw.line, col: kw.col })
     }
 
-    /// function = 'fn' IDENT '(' [ params ] ')' [ '->' type ] block
+    /// function = 'fn' IDENT [ '<' IDENT { ',' IDENT } '>' ] '(' [ params ] ')'
+    ///            [ '->' type ] block
     fn function(&mut self) -> Result<Function, ParseError> {
         let kw = self.expect(&TokenKind::Fn, "'fn'")?;
         let (name, _, _) = self.expect_ident("el nombre de la función")?;
+        let type_params = self.type_params()?;
         self.expect(&TokenKind::LParen, "'(' tras el nombre de la función")?;
         let params = if self.check(&TokenKind::RParen) {
             Vec::new()
@@ -149,12 +151,31 @@ impl Parser {
         let body = self.block()?;
         Ok(Function {
             name,
+            type_params,
             params,
             return_type,
             body,
             line: kw.line,
             col: kw.col,
         })
+    }
+
+    /// Lista opcional de parámetros de tipo: `< IDENT { ',' IDENT } >` (M6). Devuelve
+    /// un `Vec` vacío si no hay `<`. Reusa los tokens `Lt`/`Gt` (en posición de tipo
+    /// no hay ambigüedad con la comparación).
+    fn type_params(&mut self) -> Result<Vec<String>, ParseError> {
+        let mut params = Vec::new();
+        if self.eat(&TokenKind::Lt) {
+            loop {
+                let (name, _, _) = self.expect_ident("el nombre de un parámetro de tipo")?;
+                params.push(name);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::Gt, "'>' para cerrar los parámetros de tipo")?;
+        }
+        Ok(params)
     }
 
     /// params = param { ',' param } ;  param = IDENT ':' type
@@ -1019,6 +1040,19 @@ mod tests {
         assert_eq!(sx(&parse_expr("p.x")), "(field p x)");
         assert_eq!(sx(&parse_expr("p.pos.x")), "(field (field p pos) x)");
         assert_eq!(sx(&parse_expr("a[0].x")), "(field (index a 0) x)");
+    }
+
+    #[test]
+    fn funcion_generica_se_parsea() {
+        let prog = parse_prog("fn mapear<T, U>(xs: [T], f: fn(T) -> U) -> [U] { xs } fn main() {}");
+        let f = &prog.functions[0];
+        assert_eq!(f.type_params, vec!["T".to_string(), "U".to_string()]);
+        // El parser deja los parámetros de tipo como Struct(name); el checker los
+        // reclasifica a Var. Aquí solo comprobamos que se parsean en su lugar.
+        assert_eq!(f.params[0].ty, Type::Array(Box::new(Type::Struct("T".into()))));
+        assert_eq!(f.return_type, Type::Array(Box::new(Type::Struct("U".into()))));
+        // Una función sin <...> no tiene parámetros de tipo.
+        assert!(prog.functions[1].type_params.is_empty());
     }
 
     #[test]

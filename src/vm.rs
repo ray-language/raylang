@@ -1213,6 +1213,35 @@ mod tests {
         );
     }
 
+    // ----- M6.1: funciones genéricas (erasure: ambos motores coinciden) -----
+
+    #[test]
+    fn generica_identidad_oraculo() {
+        // Con borrado de tipos, una función genérica solo mueve valores: el resultado
+        // debe coincidir en intérprete y VM sin que el runtime sepa nada de T.
+        oracle_program(
+            "fn identidad<T>(x: T) -> T { x }
+             fn main() -> int { let b: bool = identidad(true); let n: int = identidad(7); if (b) { n } else { 0 } }",
+        );
+    }
+
+    #[test]
+    fn generica_de_orden_superior_oraculo() {
+        oracle_program(
+            "fn aplicar<T, U>(f: fn(T) -> U, x: T) -> U { f(x) }
+             fn doble(n: int) -> int { n * 2 }
+             fn main() -> int { aplicar(doble, 21) }",
+        );
+    }
+
+    #[test]
+    fn generica_sobre_arreglos_oraculo() {
+        oracle_program(
+            "fn par<T>(a: T, b: T) -> [T] { [a, b] }
+             fn main() -> int { let xs: [int] = par(10, 32); xs[0] + xs[1] }",
+        );
+    }
+
     // ----- M4.3: recolección de basura -----
 
     #[test]

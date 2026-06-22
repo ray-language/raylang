@@ -743,11 +743,15 @@ hay tipo esperado que lo fije, es error ("no se pudo inferir T").
   tokens `Lt`/`Gt`).
 
 ### 15.7 Sub-fases
-- **M6.1 — Funciones genéricas e inferencia**: `Type::Var`, parámetros de tipo en
-  funciones, sustitución, unificación desde argumentos y **tipo esperado**
-  (bidireccional; arregla el `[]` vacío de paso). Sin tipos genéricos del usuario aún.
-- **M6.2 — Tipos genéricos (enums/structs)**: argumentos de tipo en `Struct`/`Enum`,
-  construcción/campo/`match` con sustitución e inferencia.
+- **M6.1 — Funciones genéricas e inferencia desde argumentos**: `Type::Var`, parámetros
+  de tipo en funciones, **sustitución** y **unificación desde los argumentos** (`subst`,
+  `unify`). Cubre genéricos sobre `T`, `[T]`, `fn(T)->U`. Sin tipos genéricos del
+  usuario ni tipo esperado todavía: si un parámetro de tipo no lo fijan los argumentos,
+  es error.
+- **M6.2 — Tipos genéricos (enums/structs) y chequeo bidireccional**: argumentos de
+  tipo en `Struct`/`Enum`, construcción/campo/`match` con sustitución e inferencia, y el
+  **tipo esperado** (bidireccional) que fija los parámetros que los argumentos no
+  determinan (`Caja.Vacia`, `[]`) —arregla la aspereza del `[]` vacío de paso—.
 - **M6.3 — `Option`/`Result` y `?`**: prelude autoinyectado y el operador `?` (Result y
   Option), validado contra el retorno y ejecutado nativamente reusando `return`.
 

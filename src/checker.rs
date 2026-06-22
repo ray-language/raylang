@@ -47,8 +47,10 @@ impl std::fmt::Display for TypeError {
 
 impl std::error::Error for TypeError {}
 
-/// Firma de una función: tipos de parámetros y tipo de retorno.
+/// Firma de una función: parámetros de tipo (genéricos), tipos de parámetros y tipo
+/// de retorno. `type_params` vacío = no genérica.
 struct FnSig {
+    type_params: Vec<String>,
     params: Vec<Type>,
     ret: Type,
 }
@@ -94,6 +96,10 @@ struct Checker {
     /// Tipo de retorno de la función que estamos verificando ahora mismo, para
     /// validar las sentencias `return`.
     current_return: Type,
+    /// Parámetros de tipo en ámbito ahora mismo: los `<T, U>` de la función que se
+    /// registra o verifica (M6). `resolve_type` los reclasifica de `Struct(name)` a
+    /// `Var(name)`, y `ensure_type` los acepta como tipos válidos.
+    type_params: HashSet<String>,
 }
 
 impl Checker {
@@ -105,6 +111,7 @@ impl Checker {
             enum_names: HashSet::new(),
             scopes: Vec::new(),
             current_return: Type::Unit,
+            type_params: HashSet::new(),
         }
     }
 
@@ -163,12 +170,17 @@ impl Checker {
             if self.functions.contains_key(&f.name) {
                 return Err(self.err(f.line, f.col, format!("función '{}' declarada dos veces", f.name)));
             }
+            // Los parámetros de tipo de ESTA función están en ámbito al resolver su
+            // firma: así `x: T` se normaliza a `Var("T")` en vez de `Struct("T")`.
+            self.type_params = f.type_params.iter().cloned().collect();
             let sig = FnSig {
+                type_params: f.type_params.clone(),
                 params: f.params.iter().map(|p| self.resolve_type(&p.ty)).collect(),
                 ret: self.resolve_type(&f.return_type),
             };
             self.functions.insert(f.name.clone(), sig);
         }
+        self.type_params.clear();
 
         // 'main' es obligatoria (DESIGN.md §11): sin parámetros y con retorno int o unit.
         match self.functions.get("main") {
@@ -191,11 +203,22 @@ impl Checker {
     }
 
     fn check_function(&mut self, f: &Function) -> Result<(), TypeError> {
+        // Los parámetros de tipo de la función entran en ámbito mientras se verifica
+        // su firma y su cuerpo (M6): `Var("T")` es un tipo válido y opaco aquí.
+        let mut seen = HashSet::new();
+        for tp in &f.type_params {
+            if !seen.insert(tp.clone()) {
+                return Err(self.err(f.line, f.col, format!("parámetro de tipo '{}' repetido en '{}'", tp, f.name)));
+            }
+        }
+        self.type_params = seen;
         for p in &f.params {
             self.ensure_type(&p.ty, p.line, p.col)?;
         }
         self.ensure_type(&f.return_type, f.line, f.col)?;
-        self.check_fn_body(&f.params, &f.return_type, &f.body, f.line, f.col, &format!("'{}'", f.name))
+        let r = self.check_fn_body(&f.params, &f.return_type, &f.body, f.line, f.col, &format!("'{}'", f.name));
+        self.type_params.clear();
+        r
     }
 
     /// Verifica el cuerpo de una función (nombrada o anónima): declara los
@@ -373,9 +396,13 @@ impl Checker {
         match ty {
             Type::Array(elem) => self.ensure_type(elem, line, col),
             // Un identificador en posición de tipo llega como `Struct(name)` desde el
-            // parser; aquí ya puede referirse a un struct **o** a un enum.
+            // parser; aquí ya puede referirse a un struct, a un enum o a un parámetro
+            // de tipo en ámbito (M6).
             Type::Struct(name) => {
-                if self.structs.contains_key(name) || self.enum_names.contains(name) {
+                if self.structs.contains_key(name)
+                    || self.enum_names.contains(name)
+                    || self.type_params.contains(name)
+                {
                     Ok(())
                 } else {
                     Err(self.err(line, col, format!("tipo desconocido: '{}' no declarado", name)))
@@ -383,6 +410,10 @@ impl Checker {
             }
             Type::Enum(name) if !self.enum_names.contains(name) => {
                 Err(self.err(line, col, format!("tipo desconocido: enum '{}' no declarado", name)))
+            }
+            // Un parámetro de tipo (M6) es válido si está en ámbito.
+            Type::Var(name) if !self.type_params.contains(name) => {
+                Err(self.err(line, col, format!("parámetro de tipo '{}' fuera de ámbito", name)))
             }
             Type::Fn(params, ret) => {
                 for p in params {
@@ -394,13 +425,24 @@ impl Checker {
         }
     }
 
-    /// Normaliza un tipo proveniente de una anotación: el parser produce
-    /// `Struct(name)` para cualquier identificador, pero el nombre puede ser un
-    /// **enum**. Reclasifica `Struct`→`Enum` (recursivamente bajo `[T]` y `fn`) para
-    /// que las comparaciones de tipos cuadren con el tipo de `EnumLit` (`Enum`).
+    /// Normaliza un tipo proveniente de una anotación. El parser produce
+    /// `Struct(name)` para cualquier identificador; aquí se reclasifica según qué sea
+    /// el nombre, recursivamente bajo `[T]` y `fn`:
+    ///   - un **parámetro de tipo** en ámbito → `Var` (M6; tapa a los nombres de tipo);
+    ///   - un **enum** → `Enum` (M5);
+    ///   - en otro caso, se queda como `Struct`.
+    /// Así las comparaciones de tipos cuadran con el tipo que produce cada expresión.
     fn resolve_type(&self, ty: &Type) -> Type {
         match ty {
-            Type::Struct(name) if self.enum_names.contains(name) => Type::Enum(name.clone()),
+            Type::Struct(name) => {
+                if self.type_params.contains(name) {
+                    Type::Var(name.clone())
+                } else if self.enum_names.contains(name) {
+                    Type::Enum(name.clone())
+                } else {
+                    Type::Struct(name.clone())
+                }
+            }
             Type::Array(elem) => Type::Array(Box::new(self.resolve_type(elem))),
             Type::Fn(params, ret) => Type::Fn(
                 params.iter().map(|p| self.resolve_type(p)).collect(),
@@ -627,8 +669,15 @@ impl Checker {
                     return Ok(v.ty.clone());
                 }
                 // Un nombre de función de nivel superior es un valor de primera
-                // clase: su tipo es el tipo función correspondiente (M4.1).
+                // clase: su tipo es el tipo función correspondiente (M4.1). Una
+                // función **genérica** no puede tomarse como valor (su tipo no es un
+                // `fn(...)` concreto): hay que llamarla directamente (M6.1).
                 if let Some(sig) = self.functions.get(name) {
+                    if !sig.type_params.is_empty() {
+                        return Err(self.err(expr.line, expr.col, format!(
+                            "no se puede usar la función genérica '{}' como valor; llámala directamente", name
+                        )));
+                    }
                     return Ok(Type::Fn(sig.params.clone(), Box::new(sig.ret.clone())));
                 }
                 Err(self.err(expr.line, expr.col, format!("nombre '{}' no declarado", name)))
@@ -879,10 +928,16 @@ impl Checker {
             return self.call_type(ty, args, line, col);
         }
 
-        // Función de nivel superior: llamada directa. Comprobamos aridad y tipos.
+        // Función de nivel superior: llamada directa.
         if let Some(sig) = self.functions.get(&name) {
-            let (params, ret) = (sig.params.clone(), sig.ret.clone());
-            return self.check_args(&params, ret, args, &format!("'{}'", name), line, col);
+            let (type_params, params, ret) = (sig.type_params.clone(), sig.params.clone(), sig.ret.clone());
+            let label = format!("'{}'", name);
+            if type_params.is_empty() {
+                // No genérica: aridad y tipos exactos.
+                return self.check_args(&params, ret, args, &label, line, col);
+            }
+            // Genérica: inferir los argumentos de tipo unificando con los argumentos.
+            return self.check_generic_call(&type_params, &params, &ret, args, &label, line, col);
         }
 
         Err(self.err(line, col, format!("función '{}' no declarada", name)))
@@ -919,6 +974,46 @@ impl Checker {
             }
         }
         Ok(ret)
+    }
+
+    /// Verifica una llamada a una función **genérica** (M6.1): infiere sus argumentos
+    /// de tipo unificando los tipos de los parámetros con los de los argumentos, y
+    /// devuelve el tipo de retorno ya sustituido. Si algún parámetro de tipo no queda
+    /// determinado por los argumentos, es error (M6.1 no usa el tipo esperado).
+    fn check_generic_call(
+        &mut self,
+        type_params: &[String],
+        params: &[Type],
+        ret: &Type,
+        args: &[Expr],
+        label: &str,
+        line: usize,
+        col: usize,
+    ) -> Result<Type, TypeError> {
+        if args.len() != params.len() {
+            return Err(self.err(line, col, format!(
+                "{} espera {} argumento(s), se le pasaron {}",
+                label, params.len(), args.len()
+            )));
+        }
+        // σ: parámetro de tipo → tipo concreto inferido.
+        let mut sigma: HashMap<String, Type> = HashMap::new();
+        for (i, (arg, param)) in args.iter().zip(params.iter()).enumerate() {
+            let at = self.check_expr(arg)?;
+            unify(param, &at, &mut sigma).map_err(|reason| self.err(arg.line, arg.col, format!(
+                "argumento {} de {}: {}", i + 1, label, reason
+            )))?;
+        }
+        // Todos los parámetros de tipo deben haber quedado determinados.
+        for tp in type_params {
+            if !sigma.contains_key(tp) {
+                return Err(self.err(line, col, format!(
+                    "no se pudo inferir el parámetro de tipo '{}' de {} (no aparece en los argumentos)",
+                    tp, label
+                )));
+            }
+        }
+        Ok(subst(ret, &sigma))
     }
 
     // ----- Manejo de ámbitos -----
@@ -960,17 +1055,69 @@ fn is_comparable(t: &Type) -> bool {
         Type::Array(elem) => is_comparable(elem),
         // Los enums (M5) no se comparan con ==: pueden ser recursivos y portar
         // funciones; se consumen por `match`. (Un `@derive(Eq)` futuro lo abriría.)
-        Type::Unit | Type::Fn(_, _) | Type::Enum(_) => false,
+        // Un parámetro de tipo (M6) es opaco: podría ser una función o un enum, así
+        // que no se puede comparar dentro de código genérico.
+        Type::Unit | Type::Fn(_, _) | Type::Enum(_) | Type::Var(_) => false,
     }
 }
 
-/// ¿Puede `print` imprimir este tipo? Las funciones se imprimen como `<fn>`.
+/// ¿Puede `print` imprimir este tipo? Las funciones se imprimen como `<fn>`. Todo
+/// valor concreto es imprimible, así que un parámetro de tipo (M6) también lo es.
 fn is_printable(t: &Type) -> bool {
     matches!(
         t,
         Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_)
-            | Type::Struct(_) | Type::Fn(_, _) | Type::Enum(_)
+            | Type::Struct(_) | Type::Fn(_, _) | Type::Enum(_) | Type::Var(_)
     )
+}
+
+/// **Sustitución** (M6): reemplaza cada `Var(n)` por `σ[n]`, recursivamente. Es cómo
+/// se instancia un tipo genérico una vez inferidos sus parámetros: `subst([U], {U↦int})
+/// = [int]`.
+fn subst(ty: &Type, sigma: &HashMap<String, Type>) -> Type {
+    match ty {
+        Type::Var(n) => sigma.get(n).cloned().unwrap_or_else(|| ty.clone()),
+        Type::Array(e) => Type::Array(Box::new(subst(e, sigma))),
+        Type::Fn(ps, r) => Type::Fn(
+            ps.iter().map(|p| subst(p, sigma)).collect(),
+            Box::new(subst(r, sigma)),
+        ),
+        // Primitivos, Struct y Enum: sin argumentos de tipo en M6.1, nada que sustituir.
+        other => other.clone(),
+    }
+}
+
+/// **Unificación** (M6), asimétrica: `param` viene de la firma de la función llamada
+/// (sus `Var` son las **incógnitas** a inferir); `arg` viene del contexto del llamador
+/// (sus `Var`, si los hay, son **rígidos**/opacos). Liga las incógnitas en `σ` y exige
+/// consistencia; cualquier desacuerdo es un error con su razón.
+fn unify(param: &Type, arg: &Type, sigma: &mut HashMap<String, Type>) -> Result<(), String> {
+    // Incógnita del lado de la firma: ligarla (o exigir que coincida con lo ya ligado).
+    if let Type::Var(n) = param {
+        if let Some(prev) = sigma.get(n) {
+            if prev != arg {
+                return Err(format!("'{}' no puede ser {} y {} a la vez", n, prev, arg));
+            }
+        } else {
+            sigma.insert(n.clone(), arg.clone());
+        }
+        return Ok(());
+    }
+    match (param, arg) {
+        (Type::Array(a), Type::Array(b)) => unify(a, b, sigma),
+        (Type::Fn(p1, r1), Type::Fn(p2, r2)) => {
+            if p1.len() != p2.len() {
+                return Err(format!("se esperaba {}, se pasó {}", param, arg));
+            }
+            for (a, b) in p1.iter().zip(p2) {
+                unify(a, b, sigma)?;
+            }
+            unify(r1, r2, sigma)
+        }
+        // Resto (primitivos, Struct, Enum, Var rígido del llamador): igualdad exacta.
+        _ if param == arg => Ok(()),
+        _ => Err(format!("se esperaba {}, se pasó {}", param, arg)),
+    }
 }
 
 fn bin_op_str(op: BinaryOp) -> &'static str {
@@ -1583,5 +1730,73 @@ fn main() -> int { suma(Lista.Cons(1, Lista.Nil)) }
         // El binding del payload debe estar disponible (y bien tipado) en el cuerpo.
         let src = "enum Caja { Con(int), Vacia } fn val(c: Caja) -> int { match (c) { Caja.Con(n) => n + 1, Caja.Vacia => 0 } } fn main() {}";
         assert!(check_src(src).is_ok());
+    }
+
+    // ----- M6.1: funciones genéricas e inferencia -----
+
+    #[test]
+    fn generica_identidad_y_uso() {
+        let src = r#"
+fn identidad<T>(x: T) -> T { x }
+fn main() -> int {
+    let a: int = identidad(5);
+    let b: bool = identidad(true);
+    if (b) { a } else { 0 }
+}
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn generica_infiere_de_varios_argumentos() {
+        // [T] y fn(T)->U determinan T y U a la vez.
+        let src = r#"
+fn aplicar<T, U>(f: fn(T) -> U, x: T) -> U { f(x) }
+fn doble(n: int) -> int { n * 2 }
+fn main() -> int { aplicar(doble, 21) }
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn generica_T_inconsistente() {
+        err_contains(
+            "fn par<T>(a: T, b: T) -> T { a } fn main() -> int { par(1, true) }",
+            "no puede ser int y bool",
+        );
+    }
+
+    #[test]
+    fn generica_T_no_inferible() {
+        err_contains(
+            "fn vacio<T>() -> int { 0 } fn main() -> int { vacio() }",
+            "no se pudo inferir el parámetro de tipo 'T'",
+        );
+    }
+
+    #[test]
+    fn generica_como_valor_es_error() {
+        err_contains(
+            "fn id<T>(x: T) -> T { x } fn main() -> int { let f: fn(int) -> int = id; f(3) }",
+            "función genérica 'id' como valor",
+        );
+    }
+
+    #[test]
+    fn generica_no_se_puede_comparar_un_parametro_de_tipo() {
+        err_contains(
+            "fn ig<T>(a: T, b: T) -> bool { a == b } fn main() {}",
+            "mismo tipo comparable",
+        );
+    }
+
+    #[test]
+    fn parametro_de_tipo_repetido() {
+        err_contains("fn f<T, T>(x: T) -> T { x } fn main() {}", "parámetro de tipo 'T' repetido");
+    }
+
+    #[test]
+    fn tipo_desconocido_no_es_parametro() {
+        err_contains("fn f(x: Desconocido) -> int { 0 } fn main() {}", "'Desconocido' no declarado");
     }
 }

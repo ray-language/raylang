@@ -87,7 +87,13 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       bindings, `_`, binding suelto). **Exhaustividad** en el checker.
     - **M5.3**: `match` en la VM — bajada a bytecode (`EnumTagEq`/`GetEnumField` +
       saltos; escrutinio en un local temporal). Oráculo VM↔intérprete, incl. estrés.
-- **Siguiente: M6** (genéricos → `Option<T>`/`Result<T,E>` + operador `?`).
+  - **M6.1**: funciones genéricas (`fn id<T>(x: T) -> T`). `Type::Var`,
+    `Function.type_params`. Inferencia **desde argumentos** por unificación (`subst`,
+    `unify` en el checker). **Erasure**: el runtime NO cambia (los tests oráculo pasan
+    sin tocar intérprete/VM). Sin tipo esperado aún: un `T` no fijado por los
+    argumentos es error. Funciones genéricas no usables como valor.
+- **Siguiente: M6.2** (tipos genéricos del usuario `enum/struct<T>` + chequeo
+  bidireccional), luego **M6.3** (`Option`/`Result` + `?`).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 
@@ -102,6 +108,11 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   campo: el parser emite `Field`/`Call` y el **checker los reescribe a `EnumLit`**
   (`resolve_enum_construction`). Por eso `check` toma `&mut Program`.
 - Un identificador en posición de **tipo** llega del parser como `Type::Struct`; el
-  checker lo **normaliza** a `Type::Enum` si el nombre es un enum (`resolve_type`).
+  checker lo **normaliza** (`resolve_type`) a `Type::Enum` si es un enum, o a
+  `Type::Var` si es un **parámetro de tipo** en ámbito (M6). `self.type_params` se pone
+  en ámbito al registrar/verificar cada función.
+- **Genéricos = solo checker** (erasure): el intérprete y la VM no saben de `T`. La
+  inferencia es `unify(param_de_la_firma, tipo_del_argumento, σ)` —asimétrica: los
+  `Var` de la firma son incógnitas; los del llamador son rígidos— y `subst(retorno, σ)`.
 - La VM tiene su **propio valor** (`gc::HeapValue`, con handles), distinto del
   `Value` del intérprete (con `Rc`). Se convierte en el borde (`to_value`).

@@ -42,6 +42,12 @@ pub enum Type {
     /// primera clase: se pueden pasar, devolver y guardar. Tipado **estructural**
     /// (dos `fn(int) -> int` son el mismo tipo).
     Fn(Vec<Type>, Box<Type>),
+    /// Un **parámetro de tipo** genérico: la `T` dentro de `fn id<T>(x: T) -> T`
+    /// (M6). Es opaco: dos `Var` solo son iguales si tienen el mismo nombre. El
+    /// parser produce `Struct(name)` para cualquier identificador en posición de
+    /// tipo; el checker lo reclasifica a `Var` si el nombre es un parámetro de tipo
+    /// en ámbito (igual que reclasifica a `Enum`).
+    Var(String),
 }
 
 impl std::fmt::Display for Type {
@@ -59,6 +65,7 @@ impl std::fmt::Display for Type {
                 let ps: Vec<String> = params.iter().map(|p| p.to_string()).collect();
                 write!(f, "fn({}) -> {}", ps.join(", "), ret)
             }
+            Type::Var(name) => f.write_str(name),
         }
     }
 }
@@ -102,10 +109,13 @@ pub struct VariantDef {
     pub col: usize,
 }
 
-/// Una función: `fn nombre(params) -> retorno { cuerpo }`.
+/// Una función: `fn nombre<params de tipo>(params) -> retorno { cuerpo }`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     pub name: String,
+    /// Parámetros de tipo: los `T, U` de `fn mapear<T, U>(...)` (M6). Vacío = no
+    /// genérica. Dentro del cuerpo, cada nombre está en ámbito como `Type::Var`.
+    pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub return_type: Type, // Unit si se omitió el `-> ...`
     pub body: Block,

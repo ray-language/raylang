@@ -138,7 +138,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   - **Limpieza** (post-M8): `@` reservado en el lexer (`TokenKind::At`, para anotaciones de
     M10; el parser aún no lo usa) y **coma final** permitida en literales de arreglo
     (`[1, 2, 3,]`). La aspereza del `[]` en campo de struct ya estaba resuelta (M6.2).
-- **Siguiente: M9** (traits). Ver hoja de ruta (DESIGN §2) / IDEAS.md.
+- **M9.1 COMPLETO** (237 tests + integración CLI verdes): **traits** (`trait`/`impl Trait
+  for Tipo`) con **despacho estático** sobre tipos concretos. `Type::SelfType` (`Self`);
+  `self` receptor implícito. **Front-end puro / erasure**: cada método de impl se baja a una
+  función ordinaria con nombre **manglado** (`Tipo#metodo`, vía `mangle`/`type_key_of`/
+  `subst_self`) e inyectada en `program.functions` (`check`, paso 0c); la validación
+  (cobertura + firmas, `register_traits_impls`) y la tabla de resolución `(tipo,método)→
+  manglado` van en `check_program`. La resolución por punto en `check_call` es **campo →
+  método de trait → función libre (UFCS)**; `ufcs_sites` pasó a **mapa** `(línea,col,nombre)
+  → nombre_destino` y un único `lower_ufcs` baja ambos. **Runtime intacto** (cero opcodes;
+  oráculo VM↔intérprete sin tocar). Impls genéricos / bounds / trait objects → diferidos.
+- **Siguiente: M9.2** (bounds `T: Trait` en genéricos; decisión de despacho —diccionarios
+  vs. monomorfización vs. tipo en runtime—). Ver hoja de ruta (DESIGN §2, §18) / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 
@@ -158,6 +169,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   `(línea, col, nombre)` y se baja después con `lower_ufcs`. La clave lleva el **nombre**
   porque el `Call` y su receptor comparten `(línea, col)` (el parser arranca el `Call`
   en el callee), y la posición sola los confunde en cadenas `a.f().g()`.
+- **Métodos de trait (M9.1)** reusan ese mismo mecanismo: `recv.m(args)` resuelve en
+  `check_call` con prioridad **campo → método de trait → función libre**, y comparte el
+  lowering. Por eso `ufcs_sites` es un **mapa** sitio→**nombre destino**: para UFCS de
+  función libre el destino es el mismo nombre; para un método de trait, el **manglado**
+  `Tipo#metodo` (que el usuario no puede escribir). Los métodos se inyectan como funciones
+  ordinarias en `program.functions`, así que el intérprete/VM no saben de traits (erasure).
 - Un identificador en posición de **tipo** llega del parser como `Type::Struct`; el
   checker lo **normaliza** (`resolve_type`) a `Type::Enum` si es un enum, o a
   `Type::Var` si es un **parámetro de tipo** en ámbito (M6). `self.type_params` se pone

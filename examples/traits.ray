@@ -1,0 +1,62 @@
+// M9.1 — Traits: comportamiento polimórfico con despacho estático.
+//
+// Un `trait` declara un contrato (firmas de métodos); un `impl Trait for Tipo` lo
+// implementa. En `valor.metodo()` el checker conoce el tipo concreto del receptor,
+// resuelve el `impl` y reescribe a una llamada ordinaria: despacho estático, sin
+// coste en runtime (los traits se borran como los genéricos).
+
+trait Valor {
+    fn valor(self) -> int;     // 'self' es el receptor; su tipo es el implementador
+}
+
+// Un trait se puede implementar para un struct...
+struct Punto { x: int, y: int }
+
+impl Valor for Punto {
+    fn valor(self) -> int { self.x + self.y }
+}
+
+// ...para un enum (con pattern matching dentro del método)...
+enum Moneda { Cara, Cruz }
+
+impl Valor for Moneda {
+    fn valor(self) -> int {
+        match (self) {
+            Moneda.Cara => 1,
+            Moneda.Cruz => 0,
+        }
+    }
+}
+
+// ...y hasta para un primitivo.
+impl Valor for int {
+    fn valor(self) -> int { self }
+}
+
+// Un trait con `Self` en el retorno y un método que llama a otro del mismo impl.
+trait Punteable {
+    fn sumar(self, otro: Punto) -> Punto;
+    fn doble(self) -> Self;            // 'Self' = el tipo implementador
+}
+
+impl Punteable for Punto {
+    fn sumar(self, otro: Punto) -> Punto {
+        Punto { x: self.x + otro.x, y: self.y + otro.y }
+    }
+    fn doble(self) -> Self { self.sumar(self) }
+}
+
+fn main() -> int {
+    let p = Punto { x: 3, y: 4 };
+
+    // Despacho estático sobre tres tipos distintos, todos vía `.valor()`.
+    print(p.valor());              // 7
+    print(Moneda.Cara.valor());   // 1
+    print(42.valor());            // 42
+
+    // `doble()` devuelve un Punto (Self) y se encadena con otro método.
+    let q = p.doble();            // (6, 8)
+    print(q.valor());             // 14
+
+    q.valor()                     // código de salida: 14
+}

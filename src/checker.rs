@@ -89,6 +89,34 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
         prelude_fns.append(&mut program.functions);
         program.functions = prelude_fns;
     }
+    // Paso 0c (M9.1): bajar los métodos de cada `impl` a funciones ordinarias con
+    // nombre manglado (`Tipo#metodo`) y `self` de tipo concreto. Es el truco que hace a
+    // M9.1 *front-end puro*: un método es una función con un primer parámetro `self`, así
+    // que el resto del pipeline (registro de firmas, chequeo de cuerpos, lowering de UFCS,
+    // intérprete y VM) los procesa sin código especial. La **validación** (cobertura y
+    // coincidencia de firmas) y la tabla de resolución se construyen luego, ya con los
+    // tipos registrados (`check_program`).
+    for imp in &program.impls {
+        let key = match type_key_of(&imp.target) {
+            Some(k) => k,
+            None => continue, // objetivo inválido: el error se da en la validación
+        };
+        for m in &imp.methods {
+            let params = m.params.iter()
+                .map(|p| Param { ty: subst_self(&p.ty, &imp.target), ..p.clone() })
+                .collect();
+            program.functions.push(Function {
+                name: mangle(&key, &m.name),
+                type_params: Vec::new(),
+                params,
+                return_type: subst_self(&m.return_type, &imp.target),
+                body: m.body.clone(),
+                line: m.line,
+                col: m.col,
+            });
+        }
+    }
+
     // Paso 1: resolver la construcción de enums sobre el AST.
     let enum_names: HashSet<String> = program.enums.iter().map(|e| e.name.clone()).collect();
     for f in &mut program.functions {
@@ -127,14 +155,30 @@ struct Checker {
     /// registra o verifica (M6). `resolve_type` los reclasifica de `Struct(name)` a
     /// `Var(name)`, y `ensure_type` los acepta como tipos válidos.
     type_params: HashSet<String>,
-    /// Sitios de **llamada UFCS** detectados durante la verificación (M7.1):
-    /// `recv.f(args)` donde `f` no es un campo del receptor, sino una función libre.
-    /// Se identifican por `(línea, columna, nombre)` del nodo `Call`: la posición sola
-    /// no basta porque el `Call` y su receptor comparten posición (el parser arranca el
-    /// `Call` en el callee), así que el nombre del método desambigua en una cadena
-    /// `a.f().g()`. Tras verificar, una pasada `&mut` (`lower_ufcs`) los reescribe a
-    /// `f(recv, args)`, de modo que el intérprete y la VM solo ven llamadas ordinarias.
-    ufcs_sites: HashSet<(usize, usize, String)>,
+    /// Sitios de **llamada por punto** detectados durante la verificación que hay que
+    /// bajar a una llamada ordinaria: UFCS de función libre (M7.1) y métodos de trait
+    /// (M9.1). Se identifican por `(línea, columna, nombre)` del nodo `Call`: la posición
+    /// sola no basta porque el `Call` y su receptor comparten posición (el parser arranca
+    /// el `Call` en el callee), así que el nombre del método desambigua en una cadena
+    /// `a.f().g()`. El **valor** es el nombre de la función destino: para UFCS de función
+    /// libre es el mismo nombre; para un método de trait, el nombre **manglado**
+    /// (`Tipo#metodo`). Tras verificar, `lower_ufcs` reescribe `recv.f(args)` a
+    /// `destino(recv, args)`, de modo que el intérprete y la VM solo ven llamadas.
+    ufcs_sites: HashMap<(usize, usize, String), String>,
+    /// Traits declarados (M9): nombre → firmas de sus métodos (con `self`/`Self` aún sin
+    /// sustituir). Llenado en la pre-pasada, antes de validar los impls.
+    traits: HashMap<String, Vec<MethodSig>>,
+    /// Tabla de resolución de métodos de trait (M9): `(clave_de_tipo, método)` → nombre
+    /// manglado de la función que lo implementa. La clave de tipo es el nombre del
+    /// struct/enum o el primitivo (ver `type_key`). Un mismo `(tipo, método)` solo puede
+    /// tener un impl (si no, ambigüedad → error).
+    methods: HashMap<(String, String), String>,
+    /// Para cada función manglada de impl (M9): su tipo implementador. Permite poner
+    /// `current_self` en ámbito al verificar el cuerpo (para anotaciones `Self` internas).
+    impl_fn_self: HashMap<String, Type>,
+    /// El tipo `Self` en ámbito ahora mismo: el tipo implementador del `impl` cuyo método
+    /// se está resolviendo/verificando (M9). `None` fuera de un impl.
+    current_self: Option<Type>,
 }
 
 impl Checker {
@@ -149,7 +193,11 @@ impl Checker {
             scopes: Vec::new(),
             current_return: Type::Unit,
             type_params: HashSet::new(),
-            ufcs_sites: HashSet::new(),
+            ufcs_sites: HashMap::new(),
+            traits: HashMap::new(),
+            methods: HashMap::new(),
+            impl_fn_self: HashMap::new(),
+            current_self: None,
         }
     }
 
@@ -225,6 +273,13 @@ impl Checker {
         }
         self.type_params.clear();
 
+        // --- Pre-pasada (M9): registrar traits y validar impls ---
+        // Debe ir tras registrar los tipos (para validar el objetivo del impl y comparar
+        // firmas con `resolve_type`) y ANTES de registrar las firmas de funciones (los
+        // métodos manglados ya están en `program.functions`) y de verificar cuerpos (que
+        // pueden llamar métodos de trait vía la tabla `methods`).
+        self.register_traits_impls(program)?;
+
         // --- Pre-pasada: registrar firmas (con tipos normalizados) ---
         for f in &program.functions {
             if self.functions.contains_key(&f.name) {
@@ -272,13 +327,139 @@ impl Checker {
             }
         }
         self.type_params = seen;
+        // M9: si es un método de impl (manglado), pon su tipo implementador como `Self`
+        // en ámbito mientras se verifica el cuerpo (para anotaciones `Self` internas).
+        self.current_self = self.impl_fn_self.get(&f.name).cloned();
         for p in &f.params {
             self.ensure_type(&p.ty, p.line, p.col)?;
         }
         self.ensure_type(&f.return_type, f.line, f.col)?;
         let r = self.check_fn_body(&f.params, &f.return_type, &f.body, f.line, f.col, &format!("'{}'", f.name));
+        self.current_self = None;
         self.type_params.clear();
         r
+    }
+
+    /// Registra los traits y valida los impls (M9.1). Construye `self.traits` (firmas),
+    /// `self.methods` (`(tipo, método)` → función manglada, para la resolución por punto)
+    /// e `self.impl_fn_self` (función manglada → tipo implementador, para `current_self`).
+    fn register_traits_impls(&mut self, program: &Program) -> Result<(), TypeError> {
+        // 1) Traits: nombres únicos (no chocan con tipos ni funciones) y métodos únicos.
+        for t in &program.traits {
+            if self.structs.contains_key(&t.name) || self.enum_names.contains(&t.name) {
+                return Err(self.err(t.line, t.col, format!("'{}' ya es un tipo; no puede ser también un trait", t.name)));
+            }
+            if self.traits.contains_key(&t.name) {
+                return Err(self.err(t.line, t.col, format!("trait '{}' declarado dos veces", t.name)));
+            }
+            let mut seen = HashSet::new();
+            for m in &t.methods {
+                if !seen.insert(m.name.clone()) {
+                    return Err(self.err(m.line, m.col, format!("método '{}' repetido en el trait '{}'", m.name, t.name)));
+                }
+            }
+            self.traits.insert(t.name.clone(), t.methods.clone());
+        }
+
+        // 2) Impls: validar contra su trait y poblar las tablas de resolución.
+        for imp in &program.impls {
+            let trait_methods = match self.traits.get(&imp.trait_name) {
+                Some(ms) => ms.clone(),
+                None => return Err(self.err(imp.line, imp.col, format!("trait '{}' no declarado", imp.trait_name))),
+            };
+            let target = self.resolve_type(&imp.target);
+            self.ensure_impl_target(&target, imp.line, imp.col)?;
+            let key = type_key_of(&target).expect("objetivo validado tiene clave");
+
+            // Nombres del impl sin repetir.
+            let mut impl_names = HashSet::new();
+            for m in &imp.methods {
+                if !impl_names.insert(m.name.clone()) {
+                    return Err(self.err(m.line, m.col, format!("método '{}' implementado dos veces", m.name)));
+                }
+            }
+            // Cobertura exacta: no faltan métodos del trait...
+            for tm in &trait_methods {
+                if !impl_names.contains(&tm.name) {
+                    return Err(self.err(imp.line, imp.col, format!(
+                        "el impl de '{}' para {} no implementa el método '{}'", imp.trait_name, target, tm.name
+                    )));
+                }
+            }
+            // ...ni sobran (cada método del impl pertenece al trait), y las firmas casan.
+            for m in &imp.methods {
+                let tm = match trait_methods.iter().find(|tm| tm.name == m.name) {
+                    Some(tm) => tm,
+                    None => return Err(self.err(m.line, m.col, format!(
+                        "el trait '{}' no declara un método '{}'", imp.trait_name, m.name
+                    ))),
+                };
+                self.check_method_sig(tm, m, &target)?;
+                let mangled = mangle(&key, &m.name);
+                if self.methods.contains_key(&(key.clone(), m.name.clone())) {
+                    return Err(self.err(m.line, m.col, format!(
+                        "método '{}' ambiguo para {}: ya hay un impl que lo provee", m.name, target
+                    )));
+                }
+                self.methods.insert((key.clone(), m.name.clone()), mangled.clone());
+                self.impl_fn_self.insert(mangled, target.clone());
+            }
+        }
+        Ok(())
+    }
+
+    /// El objetivo de un `impl` debe ser un tipo concreto conocido —struct, enum o
+    /// primitivo— **sin** parámetros de tipo (los impls genéricos se difieren a M9.2).
+    fn ensure_impl_target(&self, target: &Type, line: usize, col: usize) -> Result<(), TypeError> {
+        match target {
+            Type::Int | Type::Float | Type::Bool | Type::String => Ok(()),
+            Type::Struct(name, args) => {
+                if !args.is_empty() || self.struct_tparams.get(name).is_some_and(|t| !t.is_empty()) {
+                    return Err(self.err(line, col, format!("M9.1 no admite impls para tipos genéricos como '{}'", name)));
+                }
+                if self.structs.contains_key(name) {
+                    Ok(())
+                } else {
+                    Err(self.err(line, col, format!("no se puede implementar para un tipo desconocido: '{}'", name)))
+                }
+            }
+            Type::Enum(name, args) => {
+                if !args.is_empty() || self.enum_tparams.get(name).is_some_and(|t| !t.is_empty()) {
+                    return Err(self.err(line, col, format!("M9.1 no admite impls para tipos genéricos como '{}'", name)));
+                }
+                Ok(())
+            }
+            _ => Err(self.err(line, col, "solo se puede implementar un trait para un struct, enum o primitivo".into())),
+        }
+    }
+
+    /// Comprueba que la firma de un método de impl coincide con la del trait, tras
+    /// sustituir `Self` por el tipo implementador en ambas (M9.1).
+    fn check_method_sig(&self, tm: &MethodSig, m: &Function, target: &Type) -> Result<(), TypeError> {
+        if tm.params.len() != m.params.len() {
+            return Err(self.err(m.line, m.col, format!(
+                "el método '{}' toma {} parámetro(s) (incluido self), pero el trait pide {}",
+                m.name, m.params.len(), tm.params.len()
+            )));
+        }
+        for (i, (tp, ip)) in tm.params.iter().zip(&m.params).enumerate() {
+            let want = self.resolve_type(&subst_self(&tp.ty, target));
+            let got = self.resolve_type(&subst_self(&ip.ty, target));
+            if want != got {
+                return Err(self.err(ip.line, ip.col, format!(
+                    "el parámetro {} del método '{}' es {}, pero el trait pide {}",
+                    i + 1, m.name, got, want
+                )));
+            }
+        }
+        let want_ret = self.resolve_type(&subst_self(&tm.return_type, target));
+        let got_ret = self.resolve_type(&subst_self(&m.return_type, target));
+        if want_ret != got_ret {
+            return Err(self.err(m.line, m.col, format!(
+                "el método '{}' devuelve {}, pero el trait pide {}", m.name, got_ret, want_ret
+            )));
+        }
+        Ok(())
     }
 
     /// Verifica el cuerpo de una función (nombrada o anónima): declara los
@@ -473,6 +654,11 @@ impl Checker {
     fn ensure_type(&self, ty: &Type, line: usize, col: usize) -> Result<(), TypeError> {
         match ty {
             Type::Array(elem) => self.ensure_type(elem, line, col),
+            // `Self` (M9) llega como `Struct("Self")` sin resolver; fuera de un impl no
+            // tiene un tipo implementador al que referirse.
+            Type::Struct(name, _) if name == "Self" => {
+                Err(self.err(line, col, "'Self' solo es válido dentro de un trait o impl".into()))
+            }
             // Un identificador en posición de tipo llega como `Struct(name, args)`
             // desde el parser; aquí puede ser un struct, un enum o un parámetro de
             // tipo en ámbito (M6).
@@ -498,6 +684,10 @@ impl Checker {
             Type::Var(name) if !self.type_params.contains(name) => {
                 Err(self.err(line, col, format!("parámetro de tipo '{}' fuera de ámbito", name)))
             }
+            // `Self` solo tiene sentido dentro de un trait/impl; aquí ya se habría
+            // reclasificado al tipo implementador. Si llega `SelfType`, es un uso fuera
+            // de lugar (M9).
+            Type::SelfType => Err(self.err(line, col, "'Self' solo es válido dentro de un trait o impl".into())),
             Type::Fn(params, ret) => {
                 for p in params {
                     self.ensure_type(p, line, col)?;
@@ -528,6 +718,14 @@ impl Checker {
     ///   - un **enum** → `Enum` (M5); en otro caso, se queda como `Struct`.
     fn resolve_type(&self, ty: &Type) -> Type {
         match ty {
+            // `Self` (M9): dentro de un `impl`, denota el tipo implementador
+            // (`current_self`). El parser lo trae como `Struct("Self")` (en una
+            // anotación) o ya como `SelfType` (el `self` receptor). Fuera de un impl
+            // queda como `SelfType` y `ensure_type` lo rechaza.
+            Type::SelfType => self.current_self.clone().unwrap_or(Type::SelfType),
+            Type::Struct(name, args) if name == "Self" && args.is_empty() => {
+                self.current_self.clone().unwrap_or(Type::SelfType)
+            }
             Type::Struct(name, args) => {
                 if self.type_params.contains(name) {
                     Type::Var(name.clone())
@@ -1154,6 +1352,19 @@ impl Checker {
                         return self.call_type(fty, args, line, col);
                     }
                 }
+                // M9.1: ¿es un método de trait del tipo concreto del receptor? Tiene
+                // prioridad sobre la función libre (UFCS), pero no sobre un campo del
+                // struct. El sitio se registra apuntando a la función **manglada**.
+                let trait_method = type_key_of(&recv_ty)
+                    .and_then(|key| self.methods.get(&(key, name.clone())).cloned());
+                if let Some(mangled) = trait_method {
+                    let mut all = Vec::with_capacity(args.len() + 1);
+                    all.push((**object).clone());
+                    all.extend_from_slice(args);
+                    let ty = self.check_named_call(&mangled, &all, line, col)?;
+                    self.ufcs_sites.insert((line, col, name.clone()), mangled);
+                    return Ok(ty);
+                }
                 self.check_ufcs(name, &recv_ty, object, args, line, col)
             }
 
@@ -1194,7 +1405,8 @@ impl Checker {
         all_args.push(object.clone());
         all_args.extend_from_slice(args);
         let ty = self.check_named_call(name, &all_args, line, col)?;
-        self.ufcs_sites.insert((line, col, name.to_string()));
+        // UFCS de función libre: el destino es el mismo nombre.
+        self.ufcs_sites.insert((line, col, name.to_string()), name.to_string());
         Ok(ty)
     }
 
@@ -1390,7 +1602,9 @@ fn is_comparable(t: &Type) -> bool {
         // funciones; se consumen por `match`. (Un `@derive(Eq)` futuro lo abriría.)
         // Un parámetro de tipo (M6) es opaco: podría ser una función o un enum, así
         // que no se puede comparar dentro de código genérico.
-        Type::Unit | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_) => false,
+        // `Self` (M9) no debería llegar aquí (se sustituye por el tipo concreto), pero
+        // como tipo abstracto no es comparable.
+        Type::Unit | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_) | Type::SelfType => false,
     }
 }
 
@@ -1662,16 +1876,67 @@ fn ident_name(expr: &Expr) -> String {
 }
 
 // =====================================================================
-// Bajada de UFCS (M7.1)
+// Auxiliares de traits (M9)
+// =====================================================================
+
+/// Nombre manglado de un método de impl: `Tipo#metodo`. El `#` impide colisión con
+/// cualquier nombre que el usuario pueda escribir, así el método vive como una función
+/// libre más sin chocar con las suyas.
+fn mangle(type_key: &str, method: &str) -> String {
+    format!("{}#{}", type_key, method)
+}
+
+/// Clave de tipo para la tabla de métodos: el nombre del struct/enum o el primitivo.
+/// `None` para los tipos que no pueden recibir un impl en M9.1 (arreglos, funciones,
+/// unit, parámetros de tipo, `Self`).
+fn type_key_of(ty: &Type) -> Option<String> {
+    Some(match ty {
+        Type::Int => "int".into(),
+        Type::Float => "float".into(),
+        Type::Bool => "bool".into(),
+        Type::String => "string".into(),
+        Type::Struct(n, _) | Type::Enum(n, _) => n.clone(),
+        _ => return None,
+    })
+}
+
+/// Sustituye `Self` por el tipo implementador (M9). Cubre las dos formas con que `Self`
+/// llega del parser: `Type::SelfType` (el receptor `self`) y `Struct("Self")` (en una
+/// anotación como `-> Self`).
+fn subst_self(ty: &Type, target: &Type) -> Type {
+    match ty {
+        Type::SelfType => target.clone(),
+        Type::Struct(n, args) if n == "Self" && args.is_empty() => target.clone(),
+        Type::Array(e) => Type::Array(Box::new(subst_self(e, target))),
+        Type::Fn(ps, r) => Type::Fn(
+            ps.iter().map(|p| subst_self(p, target)).collect(),
+            Box::new(subst_self(r, target)),
+        ),
+        Type::Struct(n, args) => {
+            Type::Struct(n.clone(), args.iter().map(|a| subst_self(a, target)).collect())
+        }
+        Type::Enum(n, args) => {
+            Type::Enum(n.clone(), args.iter().map(|a| subst_self(a, target)).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+// =====================================================================
+// Bajada de llamadas por punto (UFCS M7.1 + métodos de trait M9.1)
 // =====================================================================
 //
 // `recv.f(args)` y `(recv.f)(args)` comparten forma (`Call` con callee `Field`). El
-// checker, que conoce el tipo del receptor, decidió cuáles son UFCS (`f` no es campo)
-// y registró su `(línea, columna)`. Estas funciones recorren el AST y **reescriben**
-// esos nodos a `f(recv, args)`: el receptor pasa a ser el primer argumento y el callee
-// se vuelve un `Ident`. Tras esto, el intérprete y la VM solo ven llamadas ordinarias.
+// checker, que conoce el tipo del receptor, decidió cuáles hay que bajar —UFCS de
+// función libre o método de trait— y registró cada sitio `(línea, columna, nombre)`
+// junto a su **función destino** (el mismo nombre, o el manglado `Tipo#metodo`). Estas
+// funciones recorren el AST y **reescriben** esos nodos a `destino(recv, args)`: el
+// receptor pasa a ser el primer argumento y el callee se vuelve un `Ident`. Tras esto,
+// el intérprete y la VM solo ven llamadas ordinarias.
 
-fn lower_ufcs(program: &mut Program, sites: &HashSet<(usize, usize, String)>) {
+type SiteMap = HashMap<(usize, usize, String), String>;
+
+fn lower_ufcs(program: &mut Program, sites: &SiteMap) {
     if sites.is_empty() {
         return;
     }
@@ -1680,7 +1945,7 @@ fn lower_ufcs(program: &mut Program, sites: &HashSet<(usize, usize, String)>) {
     }
 }
 
-fn lower_ufcs_block(block: &mut Block, sites: &HashSet<(usize, usize, String)>) {
+fn lower_ufcs_block(block: &mut Block, sites: &SiteMap) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
             StmtKind::Let { value, .. } => lower_ufcs_expr(value, sites),
@@ -1701,35 +1966,36 @@ fn lower_ufcs_block(block: &mut Block, sites: &HashSet<(usize, usize, String)>) 
     }
 }
 
-fn lower_ufcs_expr(expr: &mut Expr, sites: &HashSet<(usize, usize, String)>) {
-    // ¿Este `Call(Field)` es un sitio UFCS registrado? La clave incluye el nombre del
-    // método porque el `Call` y su receptor comparten `(línea, columna)`. Reescribir
-    // ANTES de recorrer los hijos, para que la recursión baje también el receptor y los
-    // argumentos (p. ej. `a.f().g()`).
-    let is_site = match &expr.kind {
+fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
+    // ¿Este `Call(Field)` es un sitio registrado? La clave incluye el nombre del método
+    // porque el `Call` y su receptor comparten `(línea, columna)`; el valor es la función
+    // **destino** (el mismo nombre para UFCS de función libre, el manglado para un método
+    // de trait). Reescribir ANTES de recorrer los hijos, para que la recursión baje
+    // también el receptor y los argumentos (p. ej. `a.f().g()`).
+    let target = match &expr.kind {
         ExprKind::Call { callee, .. } => match &callee.kind {
-            ExprKind::Field { name, .. } => sites.contains(&(expr.line, expr.col, name.clone())),
-            _ => false,
+            ExprKind::Field { name, .. } => sites.get(&(expr.line, expr.col, name.clone())).cloned(),
+            _ => None,
         },
-        _ => false,
+        _ => None,
     };
-    if is_site {
+    if let Some(target) = target {
         let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
         if let ExprKind::Call { callee, mut args } = taken {
             let (cl, cc) = (callee.line, callee.col);
-            if let ExprKind::Field { object, name } = callee.kind {
+            if let ExprKind::Field { object, .. } = callee.kind {
                 let mut new_args = Vec::with_capacity(args.len() + 1);
                 new_args.push(*object); // el receptor pasa a ser el primer argumento
                 new_args.append(&mut args);
                 expr.kind = ExprKind::Call {
-                    callee: Box::new(Expr { kind: ExprKind::Ident(name), line: cl, col: cc }),
+                    callee: Box::new(Expr { kind: ExprKind::Ident(target), line: cl, col: cc }),
                     args: new_args,
                 };
             } else {
-                unreachable!("el guard is_site garantiza Call con callee Field");
+                unreachable!("el guard de sitio garantiza Call con callee Field");
             }
         } else {
-            unreachable!("el guard is_site garantiza un Call");
+            unreachable!("el guard de sitio garantiza un Call");
         }
     }
 
@@ -2633,6 +2899,127 @@ fn main() -> int {
         err_contains(
             "fn main() -> int { let x: int = true; x }",
             "se inicializa con bool",
+        );
+    }
+
+    // ----- M9.1: traits -----
+
+    #[test]
+    fn trait_e_impl_validos() {
+        check_src(r#"
+            trait Mostrable { fn mostrar(self) -> string; }
+            struct Punto { x: int, y: int }
+            impl Mostrable for Punto { fn mostrar(self) -> string { "p" } }
+            fn main() -> int { let p = Punto { x: 1, y: 2 }; print(p.mostrar()); 0 }
+        "#).expect("trait/impl válidos");
+    }
+
+    #[test]
+    fn trait_para_enum_y_primitivo() {
+        check_src(r#"
+            trait Valor { fn valor(self) -> int; }
+            enum Moneda { Cara, Cruz }
+            impl Valor for Moneda { fn valor(self) -> int { match (self) { Moneda.Cara => 1, Moneda.Cruz => 0 } } }
+            impl Valor for int { fn valor(self) -> int { self } }
+            fn main() -> int { Moneda.Cara.valor() + 5.valor() }
+        "#).expect("impl para enum y primitivo");
+    }
+
+    #[test]
+    fn self_en_retorno_y_metodo_interno() {
+        check_src(r#"
+            trait P { fn sumar(self, o: Punto) -> Punto; fn doble(self) -> Self; }
+            struct Punto { x: int, y: int }
+            impl P for Punto {
+                fn sumar(self, o: Punto) -> Punto { Punto { x: self.x + o.x, y: self.y + o.y } }
+                fn doble(self) -> Self { self.sumar(self) }
+            }
+            fn main() -> int { let p = Punto { x: 1, y: 2 }; let q = p.doble(); q.x }
+        "#).expect("Self en retorno y self.metodo() interno");
+    }
+
+    #[test]
+    fn campo_gana_sobre_metodo_de_trait() {
+        // Un campo función del struct tiene prioridad sobre un método de trait homónimo.
+        check_src(r#"
+            trait T { fn f(self) -> int; }
+            struct S { f: fn() -> int, x: int }
+            impl T for S { fn f(self) -> int { self.x } }
+            fn cero() -> int { 0 }
+            fn main() -> int { let s = S { f: cero, x: 9 }; s.f() }
+        "#).expect("el campo 'f' gana: se invoca el valor del campo, no el método");
+    }
+
+    #[test]
+    fn impl_no_cubre_todos_los_metodos() {
+        err_contains(
+            r#"trait T { fn a(self) -> int; fn b(self) -> int; }
+               struct S { x: int }
+               impl T for S { fn a(self) -> int { self.x } }
+               fn main() -> int { 0 }"#,
+            "no implementa el método 'b'",
+        );
+    }
+
+    #[test]
+    fn impl_con_firma_distinta() {
+        err_contains(
+            r#"trait T { fn a(self) -> int; }
+               struct S { x: int }
+               impl T for S { fn a(self) -> bool { true } }
+               fn main() -> int { 0 }"#,
+            "devuelve bool, pero el trait pide int",
+        );
+    }
+
+    #[test]
+    fn metodo_ambiguo_entre_dos_traits() {
+        err_contains(
+            r#"trait A { fn f(self) -> int; }
+               trait B { fn f(self) -> int; }
+               struct S { x: int }
+               impl A for S { fn f(self) -> int { 1 } }
+               impl B for S { fn f(self) -> int { 2 } }
+               fn main() -> int { 0 }"#,
+            "ambiguo",
+        );
+    }
+
+    #[test]
+    fn impl_de_trait_inexistente() {
+        err_contains(
+            r#"struct S { x: int }
+               impl NoExiste for S { fn f(self) -> int { 1 } }
+               fn main() -> int { 0 }"#,
+            "trait 'NoExiste' no declarado",
+        );
+    }
+
+    #[test]
+    fn impl_generico_diferido() {
+        err_contains(
+            r#"trait T { fn f(self) -> int; }
+               struct Caja<A> { v: A }
+               impl T for Caja { fn f(self) -> int { 1 } }
+               fn main() -> int { 0 }"#,
+            "no admite impls para tipos genéricos",
+        );
+    }
+
+    #[test]
+    fn self_fuera_de_impl_es_error() {
+        err_contains(
+            "fn f(x: Self) -> int { 1 } fn main() -> int { 0 }",
+            "'Self' solo es válido dentro de un trait o impl",
+        );
+    }
+
+    #[test]
+    fn metodo_inexistente_no_es_campo_ni_funcion() {
+        err_contains(
+            r#"struct S { x: int }
+               fn main() -> int { let s = S { x: 1 }; s.noexiste() }"#,
+            "no existe campo ni función",
         );
     }
 }

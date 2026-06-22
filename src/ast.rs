@@ -49,6 +49,11 @@ pub enum Type {
     /// tipo; el checker lo reclasifica a `Var` si el nombre es un parámetro de tipo
     /// en ámbito (igual que reclasifica a `Enum`).
     Var(String),
+    /// El tipo `Self` dentro de un `trait`/`impl` (M9): denota el tipo implementador.
+    /// Como `Var`/`Enum`, el parser produce `Struct("Self")` y el checker lo
+    /// reclasifica a `SelfType` cuando hay un tipo implementador en ámbito; al
+    /// verificar un `impl`, `Self` se sustituye por el tipo destino concreto.
+    SelfType,
 }
 
 impl std::fmt::Display for Type {
@@ -73,6 +78,7 @@ impl std::fmt::Display for Type {
                 write!(f, "fn({}) -> {}", ps.join(", "), ret)
             }
             Type::Var(name) => f.write_str(name),
+            Type::SelfType => f.write_str("Self"),
         }
     }
 }
@@ -84,6 +90,10 @@ pub struct Program {
     pub functions: Vec<Function>,
     pub structs: Vec<StructDef>,
     pub enums: Vec<EnumDef>,
+    /// Declaraciones de trait: contratos de comportamiento (M9). Solo firmas.
+    pub traits: Vec<TraitDef>,
+    /// Bloques `impl Trait for Tipo` que implementan un trait para un tipo (M9).
+    pub impls: Vec<ImplBlock>,
 }
 
 /// Definición de un struct: `struct Nombre { campo: Tipo, ... }` (M3.2). Los campos
@@ -118,6 +128,41 @@ pub struct EnumDef {
 pub struct VariantDef {
     pub name: String,
     pub payload: Vec<Type>,
+    pub line: usize,
+    pub col: usize,
+}
+
+/// Declaración de un **trait** (M9): un contrato de comportamiento. Lista las
+/// **firmas** de los métodos que un tipo debe proveer para "ser" un `Trait`. No
+/// tiene cuerpos (los métodos por defecto se difieren a M9.3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitDef {
+    pub name: String,
+    pub methods: Vec<MethodSig>,
+    pub line: usize,
+    pub col: usize,
+}
+
+/// La **firma** de un método de trait (M9): `fn nombre(self, p: T, ...) -> R;`.
+/// `params` incluye `self` como **primer** parámetro (su `ty` es `Type::SelfType`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MethodSig {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Type, // Unit si se omitió el `-> ...`
+    pub line: usize,
+    pub col: usize,
+}
+
+/// Un bloque **`impl Trait for Tipo { ... }`** (M9): da los cuerpos de los métodos
+/// del trait para un tipo concreto. `target` es el tipo implementador (en M9.1 sin
+/// parámetros de tipo). Cada método es una `Function` ordinaria cuyo primer
+/// parámetro es `self` (de tipo `Self`, que el checker sustituye por `target`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplBlock {
+    pub trait_name: String,
+    pub target: Type,
+    pub methods: Vec<Function>,
     pub line: usize,
     pub col: usize,
 }

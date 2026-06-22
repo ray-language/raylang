@@ -1565,4 +1565,50 @@ mod tests {
             }
         "#);
     }
+
+    // ----- M9.1: traits (erasure; ambos motores ven funciones y llamadas ordinarias) -----
+
+    #[test]
+    fn traits_despacho_estatico_oraculo() {
+        // Un trait implementado para un struct, un enum y un primitivo: los métodos se
+        // bajan a funciones mangladas y las llamadas por punto a llamadas ordinarias,
+        // así que la VM y el intérprete deben coincidir sin tocar el runtime.
+        oracle_program(r#"
+            trait Valor { fn valor(self) -> int; }
+            struct Punto { x: int, y: int }
+            enum Moneda { Cara, Cruz }
+            impl Valor for Punto { fn valor(self) -> int { self.x + self.y } }
+            impl Valor for Moneda {
+                fn valor(self) -> int { match (self) { Moneda.Cara => 1, Moneda.Cruz => 0 } }
+            }
+            impl Valor for int { fn valor(self) -> int { self } }
+            fn main() -> int {
+                let p = Punto { x: 3, y: 4 };
+                p.valor() + Moneda.Cara.valor() + 10.valor()   // 7 + 1 + 10 = 18
+            }
+        "#);
+    }
+
+    #[test]
+    fn traits_self_y_metodos_internos_oraculo() {
+        // `Self` en el retorno, parámetros extra, y un método que llama a otro del mismo
+        // impl (`self.sumar(self)`): bajo estrés del GC para validar las raíces.
+        oracle_stress(r#"
+            trait Punteable {
+                fn sumar(self, otro: Punto) -> Punto;
+                fn doble(self) -> Self;
+                fn norma(self) -> int;
+            }
+            struct Punto { x: int, y: int }
+            impl Punteable for Punto {
+                fn sumar(self, otro: Punto) -> Punto { Punto { x: self.x + otro.x, y: self.y + otro.y } }
+                fn doble(self) -> Self { self.sumar(self) }
+                fn norma(self) -> int { self.x * self.x + self.y * self.y }
+            }
+            fn main() -> int {
+                let p = Punto { x: 3, y: 4 };
+                p.doble().norma()   // (6,8) -> 36 + 64 = 100
+            }
+        "#);
+    }
 }

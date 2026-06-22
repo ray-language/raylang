@@ -346,6 +346,8 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "struct" => TokenKind::Struct,
         "enum" => TokenKind::Enum,
         "match" => TokenKind::Match,
+        "trait" => TokenKind::Trait,
+        "impl" => TokenKind::Impl,
         "int" => TokenKind::IntType,
         "float" => TokenKind::FloatType,
         "bool" => TokenKind::BoolType,

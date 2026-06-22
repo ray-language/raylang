@@ -58,21 +58,27 @@ impl Parser {
     // Reglas de la gramática
     // =================================================================
 
-    /// program = { struct_def | function }
+    /// program = { struct_def | enum_def | trait_def | impl_block | function }
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut functions = Vec::new();
         let mut structs = Vec::new();
         let mut enums = Vec::new();
+        let mut traits = Vec::new();
+        let mut impls = Vec::new();
         while !self.is_at_end() {
             if self.check(&TokenKind::Struct) {
                 structs.push(self.struct_def()?);
             } else if self.check(&TokenKind::Enum) {
                 enums.push(self.enum_def()?);
+            } else if self.check(&TokenKind::Trait) {
+                traits.push(self.trait_def()?);
+            } else if self.check(&TokenKind::Impl) {
+                impls.push(self.impl_block()?);
             } else {
                 functions.push(self.function()?);
             }
         }
-        Ok(Program { functions, structs, enums })
+        Ok(Program { functions, structs, enums, traits, impls })
     }
 
     /// enum_def = 'enum' IDENT '{' [ variant { ',' variant } [ ',' ] ] '}'
@@ -160,6 +166,124 @@ impl Parser {
             line: kw.line,
             col: kw.col,
         })
+    }
+
+    /// trait_def = 'trait' IDENT '{' { method_sig } '}'  (M9)
+    ///
+    /// Un trait lista **firmas** de métodos (sin cuerpo, terminadas en ';'). Los
+    /// métodos por defecto (con cuerpo) se difieren a M9.3.
+    fn trait_def(&mut self) -> Result<TraitDef, ParseError> {
+        let kw = self.expect(&TokenKind::Trait, "'trait'")?;
+        let (name, _, _) = self.expect_ident("el nombre del trait")?;
+        self.expect(&TokenKind::LBrace, "'{' tras el nombre del trait")?;
+        let mut methods = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            methods.push(self.method_sig()?);
+        }
+        self.expect(&TokenKind::RBrace, "'}' para cerrar el trait")?;
+        Ok(TraitDef { name, methods, line: kw.line, col: kw.col })
+    }
+
+    /// method_sig = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] ';'  (M9)
+    fn method_sig(&mut self) -> Result<MethodSig, ParseError> {
+        let kw = self.expect(&TokenKind::Fn, "'fn' en una firma de método")?;
+        let (name, _, _) = self.expect_ident("el nombre del método")?;
+        self.expect(&TokenKind::LParen, "'(' tras el nombre del método")?;
+        let params = self.method_params()?;
+        self.expect(&TokenKind::RParen, "')'")?;
+        let return_type = if self.eat(&TokenKind::Arrow) {
+            self.parse_type()?
+        } else {
+            Type::Unit
+        };
+        self.expect(&TokenKind::Semicolon, "';' para cerrar la firma del método")?;
+        Ok(MethodSig { name, params, return_type, line: kw.line, col: kw.col })
+    }
+
+    /// impl_block = 'impl' IDENT 'for' type '{' { impl_method } '}'  (M9)
+    ///
+    /// `for` no es palabra clave reservada del lenguaje: se reconoce **contextualmente**
+    /// aquí (como un identificador con ese nombre), para no quitarle el nombre al usuario.
+    fn impl_block(&mut self) -> Result<ImplBlock, ParseError> {
+        let kw = self.expect(&TokenKind::Impl, "'impl'")?;
+        let (trait_name, _, _) = self.expect_ident("el nombre del trait")?;
+        let (kw_for, fline, fcol) = self.expect_ident("'for' tras el nombre del trait")?;
+        if kw_for != "for" {
+            return Err(ParseError {
+                msg: format!("se esperaba 'for', no '{}'", kw_for),
+                line: fline,
+                col: fcol,
+            });
+        }
+        let target = self.parse_type()?;
+        self.expect(&TokenKind::LBrace, "'{' para abrir el cuerpo del impl")?;
+        let mut methods = Vec::new();
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            methods.push(self.impl_method()?);
+        }
+        self.expect(&TokenKind::RBrace, "'}' para cerrar el impl")?;
+        Ok(ImplBlock { trait_name, target, methods, line: kw.line, col: kw.col })
+    }
+
+    /// impl_method = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] block  (M9)
+    ///
+    /// Como `function()` pero con `method_params` (admite `self`) y sin parámetros de
+    /// tipo propios (los métodos genéricos se difieren a M9.2).
+    fn impl_method(&mut self) -> Result<Function, ParseError> {
+        let kw = self.expect(&TokenKind::Fn, "'fn' en un método de impl")?;
+        let (name, _, _) = self.expect_ident("el nombre del método")?;
+        self.expect(&TokenKind::LParen, "'(' tras el nombre del método")?;
+        let params = self.method_params()?;
+        self.expect(&TokenKind::RParen, "')'")?;
+        let return_type = if self.eat(&TokenKind::Arrow) {
+            self.parse_type()?
+        } else {
+            Type::Unit
+        };
+        let body = self.block()?;
+        Ok(Function {
+            name,
+            type_params: Vec::new(),
+            params,
+            return_type,
+            body,
+            line: kw.line,
+            col: kw.col,
+        })
+    }
+
+    /// Parámetros de un método (M9): como `params()`, pero admite un **primer**
+    /// parámetro `self` sin anotación (su tipo es `Type::SelfType`, que el checker
+    /// sustituye por el tipo implementador). El resto son parámetros normales.
+    fn method_params(&mut self) -> Result<Vec<Param>, ParseError> {
+        let mut params = Vec::new();
+        if self.check(&TokenKind::RParen) {
+            return Ok(params);
+        }
+        // ¿El primer parámetro es 'self'? (un IDENT con ese nombre, sin anotación).
+        if matches!(self.peek_kind(), TokenKind::Ident(n) if n == "self") {
+            let tok = self.advance();
+            params.push(Param {
+                name: "self".into(),
+                ty: Type::SelfType,
+                line: tok.line,
+                col: tok.col,
+            });
+            if !self.eat(&TokenKind::Comma) {
+                return Ok(params);
+            }
+        }
+        // Resto: param { ',' param }, igual que `params()`.
+        loop {
+            let (name, line, col) = self.expect_ident("el nombre de un parámetro")?;
+            self.expect(&TokenKind::Colon, "':' tras el nombre del parámetro")?;
+            let ty = self.parse_type()?;
+            params.push(Param { name, ty, line, col });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        Ok(params)
     }
 
     /// Lista opcional de parámetros de tipo: `< IDENT { ',' IDENT } >` (M6). Devuelve
@@ -1342,5 +1466,43 @@ fn main() -> int {
             sx(&parse_expr("x.doble() |> inc")),
             "(call inc [(call (field x doble) [])])"
         );
+    }
+
+    // ----- M9: traits -----
+
+    #[test]
+    fn parse_trait_y_impl() {
+        let prog = parse_prog(r#"
+            trait Mostrable { fn mostrar(self) -> string; fn n(self, k: int) -> int; }
+            struct Punto { x: int }
+            impl Mostrable for Punto {
+                fn mostrar(self) -> string { "p" }
+                fn n(self, k: int) -> int { k }
+            }
+            fn main() -> int { 0 }
+        "#);
+        // El trait quedó con dos firmas; la primera tiene un solo parámetro: self.
+        assert_eq!(prog.traits.len(), 1);
+        let t = &prog.traits[0];
+        assert_eq!(t.name, "Mostrable");
+        assert_eq!(t.methods.len(), 2);
+        assert_eq!(t.methods[0].params.len(), 1);
+        assert_eq!(t.methods[0].params[0].name, "self");
+        assert_eq!(t.methods[0].params[0].ty, Type::SelfType);
+        // El impl apunta a Punto y replica los métodos como funciones con cuerpo.
+        assert_eq!(prog.impls.len(), 1);
+        let im = &prog.impls[0];
+        assert_eq!(im.trait_name, "Mostrable");
+        assert_eq!(im.target, Type::Struct("Punto".into(), vec![]));
+        assert_eq!(im.methods.len(), 2);
+        assert_eq!(im.methods[1].params[0].ty, Type::SelfType);
+        assert_eq!(im.methods[1].params[1].name, "k");
+    }
+
+    #[test]
+    fn impl_sin_for_es_error() {
+        let tokens = crate::lexer::lex("impl T S { } fn main() -> int { 0 }").expect("lex ok");
+        let err = parse(tokens).expect_err("falta 'for'");
+        assert!(err.msg.contains("se esperaba 'for'"), "mensaje: {}", err.msg);
     }
 }

@@ -34,6 +34,8 @@ pub enum TokenKind {
     Struct,
     Enum,  // M5
     Match, // M5
+    Trait, // M9
+    Impl,  // M9
 
     // --- Palabras clave de tipo ---
     IntType,    // int

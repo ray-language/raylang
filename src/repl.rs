@@ -29,7 +29,7 @@
 use std::io::{self, BufRead, Write};
 
 use crate::ast::{ExprKind, Program, StmtKind};
-use crate::{checker, interpreter, lexer, parser};
+use crate::{checker, diagnostic, interpreter, lexer, parser};
 
 /// Arranca el bucle interactivo leyendo de la entrada estándar.
 pub fn run() {
@@ -161,8 +161,9 @@ impl Session {
                     Some(n) => self.show(&n),
                     None => {
                         // Asignación a índice/campo: ejecutar el historial, sin eco.
-                        let prog = self.check_program(&self.synth(None))?;
-                        interpreter::run(&prog).map_err(|e| e.to_string())?;
+                        let src = self.synth(None);
+                        let prog = self.check_program(&src)?;
+                        run_prog(&prog, &src)?;
                         Ok(Outcome::Quiet)
                     }
                 }
@@ -177,7 +178,7 @@ impl Session {
         let with_print = self.synth(Some(&format!("print({});", expr)));
         match self.check_program(&with_print) {
             Ok(prog) => {
-                interpreter::run(&prog).map_err(|e| e.to_string())?;
+                run_prog(&prog, &with_print)?;
                 Ok(Outcome::Printed)
             }
             // No tipó con `print(...)`: quizá `expr` es unit. Reintentar como sentencia;
@@ -185,7 +186,7 @@ impl Session {
             Err(_) => {
                 let as_stmt = self.synth(Some(&format!("{};", expr)));
                 let prog = self.check_program(&as_stmt)?;
-                interpreter::run(&prog).map_err(|e| e.to_string())?;
+                run_prog(&prog, &as_stmt)?;
                 Ok(Outcome::Quiet)
             }
         }
@@ -206,8 +207,12 @@ impl Session {
     }
 
     fn check_program(&self, src: &str) -> Result<Program, String> {
-        let mut prog = parse_src(src)?;
-        checker::check(&mut prog).map_err(|e| e.to_string())?;
+        // Errores renderizados con su contexto de fuente (M8.3), contra la fuente
+        // sintetizada `src`: el `^` apunta al token ofensor (que contiene el código del
+        // usuario). El número de línea es el de la fuente sintetizada.
+        let tokens = lexer::lex(src).map_err(|e| diagnostic::render(src, e.line, e.col, &e.to_string()))?;
+        let mut prog = parser::parse(tokens).map_err(|e| diagnostic::render(src, e.line, e.col, &e.to_string()))?;
+        checker::check(&mut prog).map_err(|e| diagnostic::render(src, e.line, e.col, &e.to_string()))?;
         Ok(prog)
     }
 
@@ -242,6 +247,13 @@ impl Session {
             Ok(Entry::Expr { src: strip_semi(line) })
         }
     }
+}
+
+/// Ejecuta el programa y renderiza un posible error de ejecución con su contexto.
+fn run_prog(prog: &Program, src: &str) -> Result<(), String> {
+    interpreter::run(prog)
+        .map(|_| ())
+        .map_err(|e| diagnostic::render(src, e.line, e.col, &e.to_string()))
 }
 
 fn wrap(line: &str) -> String {

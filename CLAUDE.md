@@ -41,6 +41,7 @@ fuente → [lexer] → tokens → [parser] → AST → [checker] → [interprete
 | `src/ast.rs`, `src/parser.rs` | sintaxis | descenso recursivo; precedencia por jerarquía de reglas |
 | `src/checker.rs` | semántica | tipos; dos pasadas (firmas + cuerpos), pila de ámbitos, análisis de divergencia |
 | `src/interpreter.rs` | ejecución | tree-walking; valores en runtime; `return` como señal de flujo |
+| `src/diagnostic.rs` | presentación | M8.3: `render` añade la línea de fuente y un `^` bajo la posición. Solo presentación; no toca las fases |
 | `src/repl.rs` | cliente externo | REPL (M8.2): acumula y re-ejecuta `fn main` vía la API pública; muestra el valor con `print`. No toca el core |
 | `src/lib.rs`, `src/main.rs` | librería + CLI | el binario es un cliente delgado (sin archivo → REPL) |
 
@@ -76,7 +77,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Estado actual
 
-- **M1–M7 COMPLETOS, M8 en curso** (216 tests verdes):
+- **M1–M8 COMPLETOS** (220 tests + integración CLI verdes):
   - **M1**: lexer + parser + checker + intérprete.
   - **M2**: bytecode + VM (pila y marcos explícitos). El intérprete es el **oráculo**.
   - **M3**: datos compuestos — arreglos `[T]` y structs (semántica de referencia).
@@ -130,7 +131,11 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     Entradas de tipo unit → *fallback* a ejecutar sin `print`. Una entrada con error se
     descarta (no contamina el estado). Tests: unitarios (estado/rollback) + integración
     por subproceso (`tests/repl_cli.rs`).
-- **Siguiente: M8.3** (mejores errores).
+  - **M8.3**: **mejores errores** — diagnósticos con **contexto de fuente** (línea + `^`).
+    Módulo `src/diagnostic.rs` (`render`), **solo presentación**: antepone el `Display` del
+    error y dibuja la línea + cursor. Reusa `(línea, col)` —**sin spans**— y es texto
+    plano. Lo usan `main.rs` (las 4 fases) y el REPL (contra su fuente sintetizada).
+- **Siguiente: M9+** (ver hoja de ruta / IDEAS.md).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

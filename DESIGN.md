@@ -1033,18 +1033,39 @@ reemplaza a la anterior. Una entrada que no verifica/ejecuta se **descarta**.
 > intacto y demuestra que el front-end ya expone lo suficiente para construir herramientas
 > encima. La lección: una herramienta de *tooling* no debería ensuciar el lenguaje.
 
-### 17.3 Mejores errores (futuro, M8.3)
+### 17.3 Mejores errores (M8.3)
 
-Mensajes con más contexto: la línea de fuente, un subrayado de la posición (`^^^`),
-quizá sugerencias. Transversal a todas las fases; gana cuando el lenguaje ya está
-completo y los errores nuevos (inferencia, REPL) existen.
+Los errores ahora se muestran con **contexto de fuente**: la línea y un `^` bajo la
+posición.
+
+```text
+error de tipos en 2:13: el operador '+' requiere ambos operandos int o ambos float
+  2 |     let x = 1 + true;
+    |             ^
+```
+
+**Decisiones (cerradas):** un solo `^` en `(línea, columna)` —que todo token/nodo/error
+ya lleva, así que **no hizo falta añadir spans** al AST ni a los errores— y **texto
+plano** (sin ANSI: portable y fácil de testear).
+
+**Solo presentación.** Un módulo nuevo `src/diagnostic.rs` con una función `render(source,
+line, col, headline)` que antepone la cabecera del error (su `Display` de siempre) y le
+añade la línea de fuente y el cursor. No toca el lexer, el parser, el checker ni el
+intérprete: cada fase sigue reportando `(línea, columna)`; el renderizador dibuja el
+contexto. Lo usan el runner de archivos (`main.rs`, en las cuatro fases: léxico, sintaxis,
+tipos, ejecución) y el REPL (que renderiza contra su fuente sintetizada: el `^` apunta al
+token ofensor; el número de línea es el de esa fuente, una limitación conocida).
+
+> Spans (`^^^^` sobre el token/expresión entero) y color quedan como mejora futura:
+> exigirían añadir rangos a tokens/nodos/errores, un cambio que cruza todo el front-end.
 
 ### 17.4 Sub-fases
 - **M8.1 — Inferencia local**: `ty` opcional en el AST, anotación opcional en el parser,
   inferencia desde el inicializador en el checker. Solo locales; firmas intactas.
 - **M8.2 — REPL**: bucle interactivo, **cliente externo** del front-end + intérprete
   (cero cambios al core); muestra el valor vía `print`.
-- **M8.3 — Mejores errores**: contexto de fuente y subrayado en los diagnósticos.
+- **M8.3 — Mejores errores**: contexto de fuente (línea + `^`) en los diagnósticos.
+  Módulo `diagnostic`, solo presentación; cero spans (reusa `(línea, col)`).
 
 ### 17.5 Deferido
 - **Inferencia de retornos/parámetros** → no; §0 fija firmas explícitas.

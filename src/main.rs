@@ -12,7 +12,7 @@ use std::fs;
 use std::process;
 
 use raylang::interpreter::Value;
-use raylang::{checker, compiler, interpreter, lexer, parser, repl, vm};
+use raylang::{checker, compiler, diagnostic, interpreter, lexer, parser, repl, vm};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -42,25 +42,26 @@ fn main() {
         }
     };
 
-    // Front-end: lexer → parser → checker.
+    // Front-end: lexer → parser → checker. Cada error se muestra con su contexto de
+    // fuente (M8.3): la línea y un `^` bajo la posición.
     let tokens = match lexer::lex(&src) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("{}", e);
+            eprintln!("{}", diagnostic::render(&src, e.line, e.col, &e.to_string()));
             process::exit(65);
         }
     };
     let mut program = match parser::parse(tokens) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("{}", e);
+            eprintln!("{}", diagnostic::render(&src, e.line, e.col, &e.to_string()));
             process::exit(65);
         }
     };
     // El checker resuelve la construcción de enums sobre el AST (lo muta), así que
     // el intérprete y la VM reciben un programa ya resuelto.
     if let Err(e) = checker::check(&mut program) {
-        eprintln!("{}", e);
+        eprintln!("{}", diagnostic::render(&src, e.line, e.col, &e.to_string()));
         process::exit(65);
     }
 
@@ -69,7 +70,7 @@ fn main() {
         match compiler::compile_program(&program) {
             Ok(compiled) => vm::run_program(&compiled),
             Err(e) => {
-                eprintln!("{}", e);
+                eprintln!("{}", diagnostic::render(&src, e.line, e.col, &e.to_string()));
                 process::exit(65);
             }
         }
@@ -81,7 +82,7 @@ fn main() {
         Ok(Value::Int(code)) => process::exit((code & 0xFF) as i32),
         Ok(_) => process::exit(0),
         Err(e) => {
-            eprintln!("{}", e);
+            eprintln!("{}", diagnostic::render(&src, e.line, e.col, &e.to_string()));
             process::exit(70); // EX_SOFTWARE
         }
     }

@@ -48,3 +48,10 @@
 - [Funciones genéricas e inferencia](m6/funciones-genericas.md)
 - [Tipos genéricos y chequeo bidireccional](m6/tipos-genericos.md)
 - [Option, Result y el operador `?`](m6/option-result.md)
+
+# M7 — UFCS, pipelines y stdlib
+
+- [UFCS, pipelines y stdlib](m7/intro.md)
+- [UFCS: funciones como métodos](m7/ufcs.md)
+- [Pipelines: el operador `|>`](m7/pipelines.md)
+- [La stdlib en el propio lenguaje](m7/stdlib.md)

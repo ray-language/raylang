@@ -62,3 +62,8 @@
 - [Inferencia local: `let x = 3`](m8/inferencia-local.md)
 - [El REPL: un cliente externo](m8/repl.md)
 - [Mejores errores: contexto de fuente](m8/errores.md)
+
+# M9 — Traits
+
+- [Traits: comportamiento polimórfico](m9/intro.md)
+- [trait e impl: despacho estático](m9/traits.md)

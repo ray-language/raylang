@@ -55,3 +55,10 @@
 - [UFCS: funciones como métodos](m7/ufcs.md)
 - [Pipelines: el operador `|>`](m7/pipelines.md)
 - [La stdlib en el propio lenguaje](m7/stdlib.md)
+
+# M8 — Inferencia local, REPL y mejores errores
+
+- [Inferencia local, REPL y mejores errores](m8/intro.md)
+- [Inferencia local: `let x = 3`](m8/inferencia-local.md)
+- [El REPL: un cliente externo](m8/repl.md)
+- [Mejores errores: contexto de fuente](m8/errores.md)

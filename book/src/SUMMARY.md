@@ -41,3 +41,10 @@
 - [Enums: uniones etiquetadas](m5/enums.md)
 - [match: consumir por casos](m5/match.md)
 - [match en la máquina virtual](m5/match-en-la-vm.md)
+
+# M6 — Genéricos, Option y Result
+
+- [Genéricos, Option y Result](m6/intro.md)
+- [Funciones genéricas e inferencia](m6/funciones-genericas.md)
+- [Tipos genéricos y chequeo bidireccional](m6/tipos-genericos.md)
+- [Option, Result y el operador `?`](m6/option-result.md)

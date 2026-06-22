@@ -4,8 +4,8 @@
 // Como el tipo es nominal y el valor vive en el heap (Rc en el intérprete,
 // handle + GC en la VM), no hay problema de "tamaño infinito".
 //
-// Nota: en M5.1 podemos CONSTRUIR e imprimir la lista; recorrerla (calcular su
-// longitud, sumarla...) necesita `match`, que llega en M5.2.
+// Este ejemplo se centra en CONSTRUIR e imprimir la lista. Recorrerla (longitud,
+// suma, búsqueda...) se hace con `match`: ver examples/lista_recorrido.ray.
 
 // Una lista de enteros es: o bien una celda (cabeza + resto), o bien vacía.
 enum Lista {

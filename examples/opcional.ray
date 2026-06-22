@@ -1,0 +1,33 @@
+// Sin `null`: la ausencia de valor se modela con un enum. Es el germen de Option<T>,
+// que con genéricos llegará en M6; aquí va la versión monomórfica (solo int).
+// match obliga a tratar AMBOS casos, así que "olvidar el caso vacío" es un error de
+// tipos, no un fallo en ejecución.
+// (M5.2 — corre con el intérprete.)
+
+enum OpInt {
+    Algun(int),
+    Ninguno,
+}
+
+// División segura: `Ninguno` si el divisor es 0 (en vez de reventar).
+fn dividir(a: int, b: int) -> OpInt {
+    if (b == 0) {
+        OpInt.Ninguno
+    } else {
+        OpInt.Algun(a / b)
+    }
+}
+
+// Desempaqueta el opcional con un valor por defecto.
+fn o_defecto(o: OpInt, def: int) -> int {
+    match (o) {
+        OpInt.Algun(v) => v,
+        OpInt.Ninguno  => def,
+    }
+}
+
+fn main() -> int {
+    print(o_defecto(dividir(10, 2), -1));   // 5
+    print(o_defecto(dividir(10, 0), -1));   // -1 (división por cero evitada)
+    o_defecto(dividir(84, 2), 0)            // código de salida 42
+}

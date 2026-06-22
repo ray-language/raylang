@@ -16,5 +16,6 @@ pub mod gc;
 pub mod interpreter;
 pub mod lexer;
 pub mod parser;
+pub mod prelude;
 pub mod token;
 pub mod vm;

@@ -1,0 +1,46 @@
+// Errores como valores, sin `null` (M6): Result<T, E> y el operador `?`.
+// Una operación que puede fallar devuelve un Result; `?` propaga el error hacia
+// arriba o desempaqueta el valor. Option<T> modela la ausencia de valor.
+// (Option y Result vienen del prelude: son enums genéricos, no tipos incrustados.)
+
+fn dividir(a: int, b: int) -> Result<int, string> {
+    if (b == 0) {
+        Result.Err("división por cero")
+    } else {
+        Result.Ok(a / b)
+    }
+}
+
+// `?` encadena pasos falibles sin anidar ifs: si cualquiera falla, `evaluar`
+// retorna ese Err; si todos van bien, sigue con los valores desempaquetados.
+fn evaluar(a: int, b: int, c: int) -> Result<int, string> {
+    let p: int = dividir(a, b)?;   // Err -> return Err; si no, p = a/b
+    let q: int = dividir(p, c)?;   // Err -> return Err; si no, q = p/c
+    Result.Ok(q + 1)
+}
+
+// Consumir un Result con match (no hay forma de "olvidar" el caso de error).
+fn mostrar(r: Result<int, string>) -> int {
+    match (r) {
+        Result.Ok(v)  => v,
+        Result.Err(_) => -1,
+    }
+}
+
+// Option<T>: el primer elemento de un arreglo, o None si está vacío.
+fn primero(xs: [int]) -> Option<int> {
+    if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) }
+}
+
+fn main() -> int {
+    print(mostrar(evaluar(100, 5, 2)));   // 100/5=20, 20/2=10 -> Ok(11)  -> 11
+    print(mostrar(evaluar(100, 0, 2)));   // Err en el primer paso        -> -1
+    print(mostrar(evaluar(100, 5, 0)));   // Err en el segundo paso       -> -1
+
+    match (primero([7, 8, 9])) {
+        Option.Some(v) => print(v),       // 7
+        Option.None    => print(-1),
+    }
+
+    mostrar(evaluar(100, 5, 2))           // código de salida 11
+}

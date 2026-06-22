@@ -113,6 +113,7 @@ impl Lexer {
             ';' => TokenKind::Semicolon,
             ':' => TokenKind::Colon,
             '.' => TokenKind::Dot,
+            '?' => TokenKind::Question,
 
             // Operadores que pueden tener una segunda parte.
             '=' => {
@@ -426,6 +427,11 @@ mod tests {
                 TokenKind::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn token_de_interrogacion() {
+        assert_eq!(kinds("x?"), vec![TokenKind::Ident("x".into()), TokenKind::Question, TokenKind::Eof]);
     }
 
     #[test]

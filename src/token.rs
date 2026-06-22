@@ -71,6 +71,7 @@ pub enum TokenKind {
     Dot,       // .
     Arrow,     // ->
     FatArrow,  // =>  (brazos de match, M5)
+    Question,  // ?   (propagación de errores, M6)
 
     // --- Marca de fin de entrada ---
     // El parser se apoya en este token centinela para saber dónde termina todo

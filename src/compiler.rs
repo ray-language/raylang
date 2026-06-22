@@ -408,6 +408,36 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    /// Baja el operador `expr?` a bytecode (M6.3). Guarda el Result/Option en un local
+    /// temporal; si su tag es 0 (`Ok`/`Some`) desempaqueta el payload, si no
+    /// (`Err`/`None`) **retorna** ese valor de la función. Reusa los opcodes de enum y
+    /// el `Return`; no hace falta uno nuevo.
+    fn emit_try(&mut self, inner: &Expr, line: usize, col: usize) -> Result<(), CompileError> {
+        self.emit_expr(inner)?;
+        let saved = self.begin_scope();
+        let slot = self.declare_local("$try");
+        self.emit(OpCode::InitLocal(slot), line, col);
+
+        // ¿Es el caso de éxito (tag 0)? El prelude declara Ok/Some primero.
+        self.emit(OpCode::GetLocal(slot), line, col);
+        self.emit(OpCode::EnumTagEq(0), line, col);
+        let to_err = self.emit(OpCode::JumpIfFalse(0), line, col);
+        // Éxito: desempaquetar el payload[0].
+        self.emit(OpCode::Pop, line, col); // descartar el bool true
+        self.emit(OpCode::GetLocal(slot), line, col);
+        self.emit(OpCode::GetEnumField(0), line, col);
+        let to_end = self.emit(OpCode::Jump(0), line, col);
+        // Error: retornar el Err/None tal cual desde la función.
+        self.patch_jump(to_err);
+        self.emit(OpCode::Pop, line, col); // descartar el bool false
+        self.emit(OpCode::GetLocal(slot), line, col);
+        self.emit(OpCode::Return, line, col);
+
+        self.patch_jump(to_end);
+        self.end_scope(saved);
+        Ok(())
+    }
+
     fn emit_stmt(&mut self, stmt: &Stmt) -> Result<(), CompileError> {
         let (line, col) = (stmt.line, stmt.col);
         match &stmt.kind {
@@ -581,6 +611,8 @@ impl<'a> Compiler<'a> {
             ExprKind::Block(b) => self.emit_block(b)?,
 
             ExprKind::Match { scrutinee, arms } => self.emit_match(scrutinee, arms, line, col)?,
+
+            ExprKind::Try(inner) => self.emit_try(inner, line, col)?,
 
             ExprKind::ArrayLit(elems) => {
                 for e in elems {

@@ -515,6 +515,13 @@ impl Parser {
                     line,
                     col,
                 };
+            } else if self.check(&TokenKind::Question) {
+                self.advance(); // '?' postfijo (propagación de errores, M6.3)
+                expr = Expr {
+                    kind: ExprKind::Try(Box::new(expr)),
+                    line,
+                    col,
+                };
             } else {
                 break;
             }
@@ -940,6 +947,7 @@ mod tests {
                 let a: Vec<String> = arms.iter().map(|arm| format!("{} => {}", spat(&arm.pattern), sx(&arm.body))).collect();
                 format!("(match {} [{}])", sx(scrutinee), a.join(", "))
             }
+            ExprKind::Try(inner) => format!("(try {})", sx(inner)),
         }
     }
 
@@ -1061,6 +1069,13 @@ mod tests {
         assert_eq!(sx(&parse_expr("p.x")), "(field p x)");
         assert_eq!(sx(&parse_expr("p.pos.x")), "(field (field p pos) x)");
         assert_eq!(sx(&parse_expr("a[0].x")), "(field (index a 0) x)");
+    }
+
+    #[test]
+    fn operador_try_se_parsea() {
+        // `?` es postfijo y se encadena con llamadas/campos.
+        assert_eq!(sx(&parse_expr("f(x)?")), "(try (call f [x]))");
+        assert_eq!(sx(&parse_expr("a?.b")), "(field (try a) b)");
     }
 
     #[test]

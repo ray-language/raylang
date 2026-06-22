@@ -69,14 +69,19 @@ struct VarInfo {
 /// es parte del front-end compartido: el intérprete y la VM reciben el AST ya
 /// resuelto, sin duplicar la regla.
 pub fn check(program: &mut Program) -> Result<(), TypeError> {
-    // Paso 0: resolver la construcción de enums sobre el AST.
-    let enum_names: HashSet<String> = program.enums.iter().map(|e| e.name.clone()).collect();
-    if !enum_names.is_empty() {
-        for f in &mut program.functions {
-            resolve_block(&mut f.body, &enum_names);
-        }
+    // Paso 0: inyectar el prelude (Option/Result) si no está ya. Sus enums se
+    // anteponen, así forman parte del AST que también ven el intérprete y la VM.
+    if !program.enums.iter().any(|e| e.name == "Option" || e.name == "Result") {
+        let mut all = crate::prelude::enums();
+        all.append(&mut program.enums);
+        program.enums = all;
     }
-    // Pasos 1–2: pre-pasada y verificación.
+    // Paso 1: resolver la construcción de enums sobre el AST.
+    let enum_names: HashSet<String> = program.enums.iter().map(|e| e.name.clone()).collect();
+    for f in &mut program.functions {
+        resolve_block(&mut f.body, &enum_names);
+    }
+    // Pasos 2–3: pre-pasada y verificación.
     Checker::new().check_program(program)
 }
 
@@ -679,6 +684,39 @@ impl Checker {
         Ok(result_ty.expect("hay al menos un brazo"))
     }
 
+    /// Verifica el operador de propagación `expr?` (M6.3). El operando debe ser un
+    /// `Result<T, E>` o un `Option<T>`; el resultado es el valor desempaquetado `T`.
+    /// La función envolvente debe declarar un retorno **compatible** con lo que `?`
+    /// propagaría: `Result<_, E>` con la misma `E`, o `Option<_>`.
+    fn check_try(&mut self, inner: &Expr, line: usize, col: usize) -> Result<Type, TypeError> {
+        let it = self.check_expr(inner)?;
+        match &it {
+            Type::Enum(name, args) if name == "Result" && args.len() == 2 => {
+                let (ok_ty, err_ty) = (args[0].clone(), args[1].clone());
+                match &self.current_return {
+                    Type::Enum(rn, rargs) if rn == "Result" && rargs.len() == 2 && rargs[1] == err_ty => Ok(ok_ty),
+                    other => Err(self.err(line, col, format!(
+                        "'?' sobre {} requiere que la función devuelva Result<_, {}>, pero devuelve {}",
+                        it, err_ty, other
+                    ))),
+                }
+            }
+            Type::Enum(name, args) if name == "Option" && args.len() == 1 => {
+                let some_ty = args[0].clone();
+                match &self.current_return {
+                    Type::Enum(rn, rargs) if rn == "Option" && rargs.len() == 1 => Ok(some_ty),
+                    other => Err(self.err(line, col, format!(
+                        "'?' sobre {} requiere que la función devuelva Option<_>, pero devuelve {}",
+                        it, other
+                    ))),
+                }
+            }
+            other => Err(self.err(inner.line, inner.col, format!(
+                "'?' requiere un Result o un Option, no {}", other
+            ))),
+        }
+    }
+
     /// Comprueba un patrón contra el enum del escrutinio. Devuelve las variables que
     /// liga (nombre, tipo) para declararlas en el cuerpo del brazo. Actualiza el
     /// conjunto de variantes cubiertas y marca si el patrón es catch-all.
@@ -916,6 +954,8 @@ impl Checker {
             }
 
             ExprKind::Match { scrutinee, arms } => self.check_match(scrutinee, arms, None, expr.line, expr.col),
+
+            ExprKind::Try(inner) => self.check_try(inner, expr.line, expr.col),
 
             ExprKind::Func(fe) => {
                 for p in &fe.params {
@@ -1490,6 +1530,7 @@ fn resolve_expr(expr: &mut Expr, enums: &HashSet<String>) {
                 resolve_expr(&mut arm.body, enums);
             }
         }
+        ExprKind::Try(inner) => resolve_expr(inner, enums),
         ExprKind::If { cond, then_branch, else_branch } => {
             resolve_expr(cond, enums);
             resolve_block(then_branch, enums);
@@ -2097,5 +2138,62 @@ fn main() -> int {
     fn arreglo_vacio_adopta_el_tipo_esperado() {
         // El chequeo bidireccional arregla la aspereza histórica del [] vacío.
         assert!(check_src("fn main() -> int { let xs: [int] = []; len(xs) }").is_ok());
+    }
+
+    // ----- M6.3: Option/Result (prelude) y el operador ? -----
+
+    #[test]
+    fn prelude_option_result_disponibles() {
+        // Sin declararlos, Option y Result existen (vienen del prelude).
+        let src = r#"
+fn f() -> Result<int, string> { Result.Ok(1) }
+fn g() -> Option<int> { Option.None }
+fn main() {}
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn try_result_y_option_validos() {
+        let src = r#"
+fn d(a: int, b: int) -> Result<int, string> {
+    if (b == 0) { Result.Err("cero") } else { Result.Ok(a / b) }
+}
+fn calc(x: int, y: int) -> Result<int, string> {
+    let q: int = d(x, y)?;
+    Result.Ok(q + 1)
+}
+fn raw(xs: [int]) -> Option<int> { if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) } }
+fn primero(xs: [int]) -> Option<int> {
+    let v: int = raw(xs)?;
+    Option.Some(v)
+}
+fn main() {}
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn try_requiere_result_u_option() {
+        err_contains(
+            "fn f() -> Result<int, string> { let x: int = 5?; Result.Ok(x) } fn main() {}",
+            "requiere un Result o un Option",
+        );
+    }
+
+    #[test]
+    fn try_funcion_debe_devolver_compatible() {
+        err_contains(
+            "fn d() -> Result<int, string> { Result.Ok(1) } fn g() -> int { let x: int = d()?; x } fn main() {}",
+            "requiere que la función devuelva Result",
+        );
+    }
+
+    #[test]
+    fn try_result_con_E_distinto() {
+        err_contains(
+            "fn d() -> Result<int, string> { Result.Ok(1) } fn f() -> Result<int, bool> { let x: int = d()?; Result.Ok(x) } fn main() {}",
+            "Result<_, string>",
+        );
     }
 }

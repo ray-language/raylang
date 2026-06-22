@@ -35,6 +35,7 @@ fuente → [lexer] → tokens → [parser] → AST → [checker] → [interprete
 
 | Archivo | Fase | Notas |
 |---------|------|-------|
+| `src/prelude.rs` | front-end | Option/Result (enums en raylang), inyectados en `check` (M6.3) |
 | `src/token.rs`, `src/lexer.rs` | léxico | texto → tokens; cada token con (línea, col) |
 | `src/ast.rs`, `src/parser.rs` | sintaxis | descenso recursivo; precedencia por jerarquía de reglas |
 | `src/checker.rs` | semántica | tipos; dos pasadas (firmas + cuerpos), pila de ámbitos, análisis de divergencia |
@@ -95,7 +96,11 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     Inferencia en construcción + **chequeo bidireccional** (`check_expr_expected`: un
     tipo esperado opcional que fija `Caja.Vacia`, `[]`, etc.). `check_field`/`match`
     **sustituyen** los argumentos de tipo. Runtime sin cambios (erasure).
-- **Siguiente: M6.3** (`Option`/`Result` en un prelude + operador `?`).
+  - **M6.3**: `Option<T>`/`Result<T,E>` en un **prelude** (enums genéricos en raylang,
+    inyectados en `check`; `src/prelude.rs`) + operador **`?`** (`ExprKind::Try`).
+    Único toque de runtime: el intérprete reusa `Flow::Return`; la VM baja `?` a un
+    temp local + `EnumTagEq(0)`/`GetEnumField(0)` + `Return` (sin opcode nuevo).
+- **Siguiente: M7** (UFCS `.` + pipelines `|>` + stdlib).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

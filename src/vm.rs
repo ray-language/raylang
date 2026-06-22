@@ -1268,6 +1268,40 @@ mod tests {
         );
     }
 
+    // ----- M6.3: Option/Result y el operador ? (oráculo) -----
+
+    #[test]
+    fn try_result_oraculo() {
+        oracle_program(
+            "fn d(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } }
+             fn calc(x: int, y: int, z: int) -> Result<int, string> { let q1: int = d(x, y)?; let q2: int = d(q1, z)?; Result.Ok(q1 + q2) }
+             fn desemp(r: Result<int, string>) -> int { match (r) { Result.Ok(v) => v, Result.Err(_) => -1 } }
+             fn main() -> int { desemp(calc(100, 5, 2)) * 100 + desemp(calc(100, 0, 2)) }",
+        );
+    }
+
+    #[test]
+    fn try_option_oraculo() {
+        oracle_program(
+            "fn primero(xs: [int]) -> Option<int> { if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) } }
+             fn mas_uno(xs: [int]) -> Option<int> { let v: int = primero(xs)?; Option.Some(v + 1) }
+             fn desemp(o: Option<int>) -> int { match (o) { Option.Some(v) => v, Option.None => -99 } }
+             fn main() -> int { desemp(mas_uno([41])) * 100 + desemp(mas_uno([])) }",
+        );
+    }
+
+    #[test]
+    fn try_en_modo_estres() {
+        // El ? construye/propaga valores de enum (Result) bajo el GC en cada punto
+        // seguro: el escrutinio del ? vive en su local temporal y queda rooteado.
+        oracle_stress(
+            "fn d(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } }
+             fn cadena(n: int) -> Result<int, string> { let a: int = d(n, 2)?; let b: int = d(a, 1)?; Result.Ok(a + b) }
+             fn desemp(r: Result<int, string>) -> int { match (r) { Result.Ok(v) => v, Result.Err(_) => -1 } }
+             fn main() -> int { desemp(cadena(40)) }",
+        );
+    }
+
     #[test]
     fn enum_generico_recursivo_en_estres() {
         // Lista genérica construida con un tipo concreto, recorrida con match, bajo el

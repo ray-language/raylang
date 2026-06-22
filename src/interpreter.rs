@@ -523,6 +523,20 @@ impl<'a> Interpreter<'a> {
                 }))
             }
 
+            ExprKind::Try(inner) => {
+                // `?`: desempaqueta Ok/Some, o propaga Err/None como un `return` de la
+                // función. El checker garantiza que el valor es un Result o un Option.
+                let value = self.eval_expr(inner)?;
+                match &value {
+                    Value::Enum(e) if e.variant == "Ok" || e.variant == "Some" => {
+                        Ok(e.payload[0].clone())
+                    }
+                    // Err(e) / None: retornar ese mismo valor desde la función actual.
+                    Value::Enum(_) => Err(Flow::Return(value)),
+                    _ => unreachable!("el checker garantiza un Result o un Option"),
+                }
+            }
+
             ExprKind::Block(b) => self.exec_block(b),
         }
     }
@@ -997,6 +1011,36 @@ fn n(e: E) -> int { match (e) { E.Uno => 1, E.Dos => 2, otro => 99 } }
 fn main() -> int { n(E.Dos) * 100 + n(E.Otro) }
 "#;
         assert_eq!(run_ok(src), Value::Int(299)); // 2*100 + 99
+    }
+
+    #[test]
+    fn try_propaga_y_desempaqueta() {
+        let src = r#"
+fn d(a: int, b: int) -> Result<int, string> {
+    if (b == 0) { Result.Err("cero") } else { Result.Ok(a / b) }
+}
+fn calc(x: int, y: int, z: int) -> Result<int, string> {
+    let q1: int = d(x, y)?;
+    let q2: int = d(q1, z)?;
+    Result.Ok(q1 + q2)
+}
+fn desemp(r: Result<int, string>) -> int { match (r) { Result.Ok(v) => v, Result.Err(_) => -1 } }
+fn main() -> int {
+    desemp(calc(100, 5, 2)) * 100 + desemp(calc(100, 0, 2))   // 30*100 + (-1)
+}
+"#;
+        assert_eq!(run_ok(src), Value::Int(2999));
+    }
+
+    #[test]
+    fn try_option_none_propaga() {
+        let src = r#"
+fn primero(xs: [int]) -> Option<int> { if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) } }
+fn mas_uno(xs: [int]) -> Option<int> { let v: int = primero(xs)?; Option.Some(v + 1) }
+fn desemp(o: Option<int>) -> int { match (o) { Option.Some(v) => v, Option.None => -99 } }
+fn main() -> int { desemp(mas_uno([41])) * 100 + desemp(mas_uno([])) }
+"#;
+        assert_eq!(run_ok(src), Value::Int(4101)); // 42*100 + (-99)
     }
 
     #[test]

@@ -262,6 +262,12 @@ pub enum ExprKind {
     /// produce el valor del brazo que casa. Los brazos se prueban en orden.
     Match { scrutinee: Box<Expr>, arms: Vec<MatchArm> },
 
+    /// Operador de propagación `expr?` (M6.3). Sobre un `Result<T, E>` o un
+    /// `Option<T>`: si es `Ok(v)`/`Some(v)`, vale `v`; si es `Err(e)`/`None`, hace
+    /// que la función **retorne** ese valor. La función envolvente debe declarar un
+    /// retorno compatible (lo valida el checker).
+    Try(Box<Expr>),
+
     // --- Expresiones con bloque (producen valor, DESIGN.md §6) ---
     /// `if (cond) { then } else { ... }`. `else_branch`, si existe, es otro `Expr`
     /// que será un `Block` o (en cadenas `else if`) otro `If`.
@@ -394,6 +400,7 @@ fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
                 walk_expr(&arm.body, acc);
             }
         }
+        ExprKind::Try(inner) => walk_expr(inner, acc),
         ExprKind::If { cond, then_branch, else_branch } => {
             walk_expr(cond, acc);
             walk_block(then_branch, acc);

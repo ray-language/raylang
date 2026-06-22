@@ -73,7 +73,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Estado actual
 
-- **M1–M4 COMPLETOS** + **M5.1** (117 tests verdes):
+- **M1–M4 COMPLETOS** + **M5.1/M5.2** (132 tests verdes):
   - **M1**: lexer + parser + checker + intérprete.
   - **M2**: bytecode + VM (pila y marcos explícitos). El intérprete es el **oráculo**.
   - **M3**: datos compuestos — arreglos `[T]` y structs (semántica de referencia).
@@ -82,9 +82,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   - **M5.1**: enums (tipos suma) `Type::Enum`, construcción `Enum.Variante(args)`,
     valores enum en ambos motores (`Obj::Enum` trazado por el GC). El checker
     **resuelve** la construcción (reescribe `Field`/`Call`→`EnumLit`) y toma
-    `&mut Program`. Sin `match` todavía.
-- **Siguiente: M5.2** (`match` + exhaustividad en el checker + intérprete), luego
-  **M5.3** (`match` en la VM).
+    `&mut Program`.
+  - **M5.2**: `match (e) { patrón => cuerpo, ... }` (patrones planos: variante con
+    bindings, `_`, binding suelto). Exhaustividad en el checker. **Solo intérprete**;
+    el compilador a VM aún devuelve error para `match`.
+- **Siguiente: M5.3** (`match` en la VM: bajada a bytecode + oráculo, incl. estrés
+  del GC).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 
@@ -92,8 +95,9 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 - `source "$HOME/.cargo/env"` antes de `cargo` (PATH).
 - `print` es un **builtin**, no palabra clave: un argumento de tipo imprimible.
-- `struct`, `fn` (también como expresión: función anónima) y `enum` **ya son
-  palabras clave**; `match` también se reserva (M5.1) pero aún no se parsea (M5.2).
+- `struct`, `fn` (también como expresión: función anónima), `enum` y `match` **ya
+  son palabras clave** y se parsean. El escrutinio de `match` va **entre paréntesis**
+  (`match (e) { ... }`), como if/while: evita la ambigüedad con el literal de struct.
 - **Construcción de enum** `Enum.Variante` es sintácticamente igual a un acceso a
   campo: el parser emite `Field`/`Call` y el **checker los reescribe a `EnumLit`**
   (`resolve_enum_construction`). Por eso `check` toma `&mut Program`.

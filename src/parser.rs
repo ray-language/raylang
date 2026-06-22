@@ -508,6 +508,7 @@ impl Parser {
             // `fn(...) { ... }` en posición de expresión es una función anónima.
             // No hay ambigüedad: la `fn` de nivel superior lleva nombre.
             TokenKind::Fn => return self.fn_expr(),
+            TokenKind::Match => return self.match_expr(),
             _ => {}
         }
 
@@ -622,6 +623,77 @@ impl Parser {
             line: kw.line,
             col: kw.col,
         })
+    }
+
+    /// matchExpr = 'match' '(' expression ')' '{' [ arm { ',' arm } [ ',' ] ] '}'
+    /// arm       = pattern '=>' expression
+    ///
+    /// El escrutinio va entre paréntesis (como las condiciones de if/while): evita la
+    /// ambigüedad con el literal de struct `Nombre { ... }` y es consistente.
+    fn match_expr(&mut self) -> Result<Expr, ParseError> {
+        let kw = self.expect(&TokenKind::Match, "'match'")?;
+        self.expect(&TokenKind::LParen, "'(' tras 'match'")?;
+        let scrutinee = self.expression()?;
+        self.expect(&TokenKind::RParen, "')' tras la expresión de match")?;
+        self.expect(&TokenKind::LBrace, "'{' para abrir los brazos del match")?;
+        let mut arms = Vec::new();
+        while !self.check(&TokenKind::RBrace) {
+            arms.push(self.match_arm()?);
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RBrace, "'}' para cerrar el match")?;
+        Ok(Expr {
+            kind: ExprKind::Match { scrutinee: Box::new(scrutinee), arms },
+            line: kw.line,
+            col: kw.col,
+        })
+    }
+
+    /// Un brazo: `patrón => expresión`.
+    fn match_arm(&mut self) -> Result<MatchArm, ParseError> {
+        let pattern = self.pattern()?;
+        let (line, col) = (pattern.line, pattern.col);
+        self.expect(&TokenKind::FatArrow, "'=>' tras el patrón")?;
+        let body = self.expression()?;
+        Ok(MatchArm { pattern, body, line, col })
+    }
+
+    /// pattern = '_' | IDENT | IDENT '.' IDENT [ '(' subpat { ',' subpat } ')' ]
+    /// subpat  = '_' | IDENT
+    ///
+    /// Como las variantes van **cualificadas** (`Enum.Variante`), no hay ambigüedad:
+    /// un identificador seguido de `.` es una variante; uno suelto, un binding; `_`,
+    /// el comodín.
+    fn pattern(&mut self) -> Result<Pattern, ParseError> {
+        let (name, line, col) = self.expect_ident("un patrón (variante, nombre o '_')")?;
+        // Comodín.
+        if name == "_" {
+            return Ok(Pattern { kind: PatternKind::Wildcard, line, col });
+        }
+        // Variante cualificada: `Enum.Variante[(sub-bindings)]`.
+        if self.eat(&TokenKind::Dot) {
+            let (variant, _, _) = self.expect_ident("el nombre de la variante")?;
+            let mut bindings = Vec::new();
+            if self.eat(&TokenKind::LParen) {
+                loop {
+                    let (b, _, _) = self.expect_ident("un sub-patrón (nombre o '_')")?;
+                    bindings.push(if b == "_" { None } else { Some(b) });
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+                self.expect(&TokenKind::RParen, "')' para cerrar el patrón de variante")?;
+            }
+            return Ok(Pattern {
+                kind: PatternKind::Variant { enum_name: name, variant, bindings },
+                line,
+                col,
+            });
+        }
+        // Identificador suelto: binding catch-all.
+        Ok(Pattern { kind: PatternKind::Binding(name), line, col })
     }
 
     /// arrayLiteral = '[' [ expression { ',' expression } ] ']'
@@ -748,7 +820,7 @@ fn make_binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 fn expr_has_block(e: &Expr) -> bool {
     matches!(
         e.kind,
-        ExprKind::If { .. } | ExprKind::While { .. } | ExprKind::Block(_)
+        ExprKind::If { .. } | ExprKind::While { .. } | ExprKind::Block(_) | ExprKind::Match { .. }
     )
 }
 
@@ -822,6 +894,26 @@ mod tests {
             }
             ExprKind::While { cond, body } => format!("(while {} {})", sx(cond), sblock(body)),
             ExprKind::Block(b) => sblock(b),
+            ExprKind::Match { scrutinee, arms } => {
+                let a: Vec<String> = arms.iter().map(|arm| format!("{} => {}", spat(&arm.pattern), sx(&arm.body))).collect();
+                format!("(match {} [{}])", sx(scrutinee), a.join(", "))
+            }
+        }
+    }
+
+    /// Renderiza un patrón de forma compacta para los tests.
+    fn spat(p: &Pattern) -> String {
+        match &p.kind {
+            PatternKind::Wildcard => "_".to_string(),
+            PatternKind::Binding(n) => n.clone(),
+            PatternKind::Variant { enum_name, variant, bindings } => {
+                let bs: Vec<String> = bindings.iter().map(|b| b.clone().unwrap_or_else(|| "_".to_string())).collect();
+                if bs.is_empty() {
+                    format!("{}.{}", enum_name, variant)
+                } else {
+                    format!("{}.{}({})", enum_name, variant, bs.join(", "))
+                }
+            }
         }
     }
 
@@ -941,6 +1033,24 @@ mod tests {
         assert_eq!(e.variants[0].payload, vec![Type::Float]);
         assert_eq!(e.variants[1].payload, vec![Type::Float, Type::Float]);
         assert_eq!(e.variants[2].payload, Vec::<Type>::new()); // unit
+    }
+
+    #[test]
+    fn match_se_parsea() {
+        // Escrutinio entre paréntesis; patrones de variante con bindings, comodín y
+        // binding suelto; coma final permitida.
+        assert_eq!(
+            sx(&parse_expr("match (xs) { Lista.Cons(h, t) => h, Lista.Nil => 0, }")),
+            "(match xs [Lista.Cons(h, t) => h, Lista.Nil => 0])"
+        );
+        assert_eq!(
+            sx(&parse_expr("match (f) { Figura.Punto => 0, _ => 1 }")),
+            "(match f [Figura.Punto => 0, _ => 1])"
+        );
+        assert_eq!(
+            sx(&parse_expr("match (e) { E.A(_, x) => x, otra => 9 }")),
+            "(match e [E.A(_, x) => x, otra => 9])"
+        );
     }
 
     #[test]

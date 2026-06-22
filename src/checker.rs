@@ -470,6 +470,132 @@ impl Checker {
         Ok(Type::Enum(enum_name.to_string()))
     }
 
+    /// Verifica un `match (escrutinio) { patrón => cuerpo, ... }` (M5.2):
+    ///   - el escrutinio debe ser un enum;
+    ///   - cada patrón debe pertenecer a ese enum y ligar el payload con la aridad
+    ///     correcta; los brazos producen un tipo común (como las ramas de un `if`);
+    ///   - debe ser **exhaustivo**: cubrir todas las variantes o tener un catch-all.
+    fn check_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], line: usize, col: usize) -> Result<Type, TypeError> {
+        let scrut_ty = self.check_expr(scrutinee)?;
+        let enum_name = match &scrut_ty {
+            Type::Enum(n) => n.clone(),
+            other => return Err(self.err(scrutinee.line, scrutinee.col, format!(
+                "match requiere un enum, pero el escrutinio es {}", other
+            ))),
+        };
+        if arms.is_empty() {
+            return Err(self.err(line, col, "un match no puede estar vacío".into()));
+        }
+        // Variantes del enum (clonadas para soltar el préstamo de self).
+        let variants = self.enums.get(&enum_name).expect("el checker registró el enum").clone();
+
+        let mut covered: HashSet<String> = HashSet::new();
+        let mut catchall = false;
+        let mut result_ty: Option<Type> = None;
+
+        for arm in arms {
+            // Un brazo tras un catch-all nunca se alcanza.
+            if catchall {
+                return Err(self.err(arm.line, arm.col,
+                    "brazo inalcanzable: un brazo anterior ya cubre todos los casos".into()));
+            }
+            // Comprueba el patrón y obtiene las variables a ligar en el cuerpo.
+            let binds = self.check_pattern(&arm.pattern, &scrut_ty, &enum_name, &variants, &mut covered, &mut catchall)?;
+            // Verifica el cuerpo con esas variables en un ámbito propio.
+            self.push_scope();
+            for (name, ty) in binds {
+                self.declare(&name, ty, false);
+            }
+            let body_ty = self.check_expr(&arm.body);
+            self.pop_scope();
+            let body_ty = body_ty?;
+            // Todos los brazos convergen a un mismo tipo (el tipo del match).
+            match &result_ty {
+                None => result_ty = Some(body_ty),
+                Some(prev) if *prev != body_ty => {
+                    return Err(self.err(arm.body.line, arm.body.col, format!(
+                        "los brazos del match producen tipos distintos: {} y {}", prev, body_ty
+                    )));
+                }
+                _ => {}
+            }
+        }
+
+        // Exhaustividad: sin catch-all, deben estar TODAS las variantes.
+        if !catchall {
+            let missing: Vec<&str> = variants
+                .iter()
+                .map(|(v, _)| v.as_str())
+                .filter(|v| !covered.contains(*v))
+                .collect();
+            if !missing.is_empty() {
+                return Err(self.err(line, col, format!(
+                    "match no exhaustivo en '{}': faltan las variantes: {}",
+                    enum_name, missing.join(", ")
+                )));
+            }
+        }
+
+        Ok(result_ty.expect("hay al menos un brazo"))
+    }
+
+    /// Comprueba un patrón contra el enum del escrutinio. Devuelve las variables que
+    /// liga (nombre, tipo) para declararlas en el cuerpo del brazo. Actualiza el
+    /// conjunto de variantes cubiertas y marca si el patrón es catch-all.
+    fn check_pattern(
+        &self,
+        pat: &Pattern,
+        scrut_ty: &Type,
+        enum_name: &str,
+        variants: &[(String, Vec<Type>)],
+        covered: &mut HashSet<String>,
+        catchall: &mut bool,
+    ) -> Result<Vec<(String, Type)>, TypeError> {
+        match &pat.kind {
+            PatternKind::Wildcard => {
+                *catchall = true;
+                Ok(Vec::new())
+            }
+            PatternKind::Binding(name) => {
+                // Liga el escrutinio completo; cubre todo lo restante.
+                *catchall = true;
+                Ok(vec![(name.clone(), scrut_ty.clone())])
+            }
+            PatternKind::Variant { enum_name: pat_enum, variant, bindings } => {
+                if pat_enum != enum_name {
+                    return Err(self.err(pat.line, pat.col, format!(
+                        "el patrón es del enum '{}', pero el escrutinio es '{}'", pat_enum, enum_name
+                    )));
+                }
+                let payload = match variants.iter().find(|(v, _)| v == variant) {
+                    Some((_, p)) => p,
+                    None => return Err(self.err(pat.line, pat.col, format!(
+                        "el enum '{}' no tiene la variante '{}'", enum_name, variant
+                    ))),
+                };
+                if bindings.len() != payload.len() {
+                    return Err(self.err(pat.line, pat.col, format!(
+                        "el patrón '{}.{}' liga {} valor(es), pero la variante tiene {}",
+                        enum_name, variant, bindings.len(), payload.len()
+                    )));
+                }
+                if !covered.insert(variant.clone()) {
+                    return Err(self.err(pat.line, pat.col, format!(
+                        "la variante '{}' ya está cubierta por un brazo anterior", variant
+                    )));
+                }
+                // Solo los sub-bindings nombrados (no `_`) ligan una variable.
+                let mut binds = Vec::new();
+                for (b, ty) in bindings.iter().zip(payload) {
+                    if let Some(name) = b {
+                        binds.push((name.clone(), ty.clone()));
+                    }
+                }
+                Ok(binds)
+            }
+        }
+    }
+
     /// Verifica `obj.name` y devuelve el tipo del campo. Reusado por el acceso como
     /// expresión y como destino de asignación.
     fn check_field(&mut self, object: &Expr, name: &str) -> Result<Type, TypeError> {
@@ -548,6 +674,8 @@ impl Checker {
             ExprKind::EnumLit { enum_name, variant, args } => {
                 self.check_enum_lit(enum_name, variant, args, expr.line, expr.col)
             }
+
+            ExprKind::Match { scrutinee, arms } => self.check_match(scrutinee, arms, expr.line, expr.col),
 
             ExprKind::Func(fe) => {
                 for p in &fe.params {
@@ -878,6 +1006,9 @@ fn expr_diverges(expr: &Expr) -> bool {
             block_diverges(then_branch) && expr_diverges(els)
         }
         ExprKind::Block(b) => block_diverges(b),
+        // Un match diverge si TODOS sus brazos divergen (el checker garantiza que es
+        // exhaustivo, así que siempre se toma alguno).
+        ExprKind::Match { arms, .. } => !arms.is_empty() && arms.iter().all(|a| expr_diverges(&a.body)),
         _ => false,
     }
 }
@@ -973,6 +1104,12 @@ fn resolve_expr(expr: &mut Expr, enums: &HashSet<String>) {
         }
         ExprKind::Field { object, .. } => resolve_expr(object, enums),
         ExprKind::Func(fe) => resolve_block(&mut fe.body, enums),
+        ExprKind::Match { scrutinee, arms } => {
+            resolve_expr(scrutinee, enums);
+            for arm in arms {
+                resolve_expr(&mut arm.body, enums);
+            }
+        }
         ExprKind::If { cond, then_branch, else_branch } => {
             resolve_expr(cond, enums);
             resolve_block(then_branch, enums);
@@ -1360,5 +1497,91 @@ fn main() { let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Nil)); print(xs); 
     fn enum_como_tipo_desconocido() {
         // Anotar con un nombre que no es ni struct ni enum.
         err_contains("fn main() { let x: NoExiste = 1; print(x); }", "no declarado");
+    }
+
+    // ----- M5.2: match y exhaustividad -----
+
+    #[test]
+    fn match_exhaustivo_es_valido() {
+        let src = r#"
+enum Lista { Cons(int, Lista), Nil }
+fn suma(xs: Lista) -> int {
+    match (xs) {
+        Lista.Cons(h, t) => h + suma(t),
+        Lista.Nil => 0,
+    }
+}
+fn main() -> int { suma(Lista.Cons(1, Lista.Nil)) }
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn match_con_comodin_es_exhaustivo() {
+        let src = "enum E { A, B, C } fn f(e: E) -> int { match (e) { E.A => 1, _ => 0 } } fn main() {}";
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn match_no_exhaustivo() {
+        err_contains(
+            "enum E { A, B, C } fn f(e: E) -> int { match (e) { E.A => 1, E.B => 2 } } fn main() {}",
+            "no exhaustivo",
+        );
+    }
+
+    #[test]
+    fn match_brazos_de_tipos_distintos() {
+        err_contains(
+            "enum E { A, B } fn f(e: E) -> int { match (e) { E.A => 1, E.B => true } } fn main() {}",
+            "tipos distintos",
+        );
+    }
+
+    #[test]
+    fn match_variante_repetida() {
+        err_contains(
+            "enum E { A, B } fn f(e: E) -> int { match (e) { E.A => 1, E.A => 2, E.B => 3 } } fn main() {}",
+            "ya está cubierta",
+        );
+    }
+
+    #[test]
+    fn match_brazo_inalcanzable_tras_catchall() {
+        err_contains(
+            "enum E { A, B } fn f(e: E) -> int { match (e) { otra => 0, E.A => 1 } } fn main() {}",
+            "inalcanzable",
+        );
+    }
+
+    #[test]
+    fn match_aridad_de_binding_incorrecta() {
+        err_contains(
+            "enum E { A(int) } fn f(e: E) -> int { match (e) { E.A => 1 } } fn main() {}",
+            "liga 0 valor(es), pero la variante tiene 1",
+        );
+    }
+
+    #[test]
+    fn match_sobre_no_enum() {
+        err_contains(
+            "fn f(n: int) -> int { match (n) { _ => 0 } } fn main() {}",
+            "match requiere un enum",
+        );
+    }
+
+    #[test]
+    fn match_patron_de_otro_enum() {
+        err_contains(
+            "enum E { A } enum F { B } fn f(e: E) -> int { match (e) { F.B => 1, _ => 0 } } fn main() {}",
+            "es del enum 'F'",
+        );
+    }
+
+    #[test]
+    fn match_liga_payload_para_el_cuerpo() {
+        // El binding del payload debe estar disponible (y bien tipado) en el cuerpo.
+        let src = "enum Caja { Con(int), Vacia } fn val(c: Caja) -> int { match (c) { Caja.Con(n) => n + 1, Caja.Vacia => 0 } } fn main() {}";
+        assert!(check_src(src).is_ok());
     }
 }

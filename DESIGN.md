@@ -502,11 +502,13 @@ enum Figura {
 }
 
 // Construcción (cualificada)
-let a = Figura.Circulo(2.0);
-let b = Figura.Punto;
+let a: Figura = Figura.Circulo(2.0);
+let b: Figura = Figura.Punto;
 
-// Consumo (match es una expresión)
-let area = match figura {
+// Consumo (match es una expresión). El escrutinio va ENTRE PARÉNTESIS, como las
+// condiciones de if/while: es la convención de raylang y evita la ambigüedad con el
+// literal de struct `Nombre { ... }`.
+let area: float = match (figura) {
     Figura.Circulo(r)  => 3.14159 * r * r,
     Figura.Rect(w, h)  => w * h,
     Figura.Punto       => 0.0,
@@ -590,6 +592,9 @@ pasa a tomar `&mut Program` para esta reescritura.
 ### 14.6 Léxico/sintaxis nuevos
 - Palabras clave **`enum`** y **`match`** (ya reservadas en §3.2; el lexer las activa).
 - Token `=>` (flecha gruesa) para los brazos de `match`. El `.` y los `()` se reusan.
+- **`match (e) { ... }`**: el escrutinio va entre paréntesis (como if/while), lo que
+  evita la ambigüedad con el literal de struct y es consistente con el lenguaje. Los
+  brazos se separan con `,` (coma final permitida).
 
 ### 14.7 Sub-fases
 - **M5.1 — enums y construcción**: `enum`, `Type::Enum`, resolución de

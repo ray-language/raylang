@@ -501,6 +501,28 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Unit)
             }
 
+            ExprKind::Match { scrutinee, arms } => {
+                let value = self.eval_expr(scrutinee)?;
+                // Los brazos se prueban en orden; el checker garantiza que alguno
+                // casa (exhaustividad), así que el error final es inalcanzable.
+                for arm in arms {
+                    if let Some(binds) = match_pattern(&arm.pattern, &value) {
+                        self.scopes.push(HashMap::new());
+                        for (name, v) in binds {
+                            self.define(&name, v);
+                        }
+                        let result = self.eval_expr(&arm.body);
+                        self.scopes.pop();
+                        return result;
+                    }
+                }
+                Err(Flow::Error(RuntimeError {
+                    msg: "ningún brazo del match casó (no debería ocurrir)".into(),
+                    line: scrutinee.line,
+                    col: scrutinee.col,
+                }))
+            }
+
             ExprKind::Block(b) => self.exec_block(b),
         }
     }
@@ -724,6 +746,33 @@ fn check_bounds(i: i64, len: usize, line: usize, col: usize) -> Result<usize, Fl
     Ok(i as usize)
 }
 
+/// Intenta casar un patrón (M5.2) contra un valor. Si casa, devuelve las variables a
+/// ligar `(nombre, valor)`; si no, `None`. El checker garantiza que la variante y la
+/// aridad son consistentes, así que aquí solo se compara la etiqueta y se reparte el
+/// payload.
+fn match_pattern(pat: &Pattern, value: &Value) -> Option<Vec<(String, Value)>> {
+    match &pat.kind {
+        PatternKind::Wildcard => Some(Vec::new()),
+        PatternKind::Binding(name) => Some(vec![(name.clone(), value.clone())]),
+        PatternKind::Variant { variant, bindings, .. } => {
+            let e = match value {
+                Value::Enum(e) => e,
+                _ => return None, // el checker lo impide; por robustez
+            };
+            if e.variant != *variant {
+                return None;
+            }
+            let mut binds = Vec::new();
+            for (b, v) in bindings.iter().zip(&e.payload) {
+                if let Some(name) = b {
+                    binds.push((name.clone(), v.clone()));
+                }
+            }
+            Some(binds)
+        }
+    }
+}
+
 // =====================================================================
 // Tests
 // =====================================================================
@@ -901,5 +950,65 @@ fn main() -> int {
         assert!(e.msg.contains("división"));
         let e = run_err("fn main() -> int { 10 % 0 }");
         assert!(e.msg.contains("módulo"));
+    }
+
+    // ----- M5.2: match (ejecución en el intérprete) -----
+
+    #[test]
+    fn match_recorre_lista_recursiva() {
+        let src = r#"
+enum Lista { Cons(int, Lista), Nil }
+fn longitud(xs: Lista) -> int {
+    match (xs) { Lista.Cons(_, t) => 1 + longitud(t), Lista.Nil => 0 }
+}
+fn suma(xs: Lista) -> int {
+    match (xs) { Lista.Cons(h, t) => h + suma(t), Lista.Nil => 0 }
+}
+fn main() -> int {
+    let xs: Lista = Lista.Cons(10, Lista.Cons(20, Lista.Cons(30, Lista.Nil)));
+    longitud(xs) * 100 + suma(xs)
+}
+"#;
+        assert_eq!(run_ok(src), Value::Int(360)); // 3*100 + 60
+    }
+
+    #[test]
+    fn match_selecciona_el_brazo_correcto() {
+        let src = r#"
+enum Figura { Circulo(int), Rect(int, int), Punto }
+fn area(f: Figura) -> int {
+    match (f) {
+        Figura.Circulo(r) => 3 * r * r,
+        Figura.Rect(w, h) => w * h,
+        Figura.Punto => 0,
+    }
+}
+fn main() -> int { area(Figura.Rect(4, 5)) + area(Figura.Circulo(2)) + area(Figura.Punto) }
+"#;
+        assert_eq!(run_ok(src), Value::Int(32)); // 20 + 12 + 0
+    }
+
+    #[test]
+    fn match_con_binding_catchall() {
+        // El binding suelto liga el valor completo del escrutinio.
+        let src = r#"
+enum E { Uno, Dos, Otro }
+fn n(e: E) -> int { match (e) { E.Uno => 1, E.Dos => 2, otro => 99 } }
+fn main() -> int { n(E.Dos) * 100 + n(E.Otro) }
+"#;
+        assert_eq!(run_ok(src), Value::Int(299)); // 2*100 + 99
+    }
+
+    #[test]
+    fn match_cuerpo_construye_enum() {
+        // El cuerpo de un brazo puede construir otra variante (resolución dentro del
+        // brazo): comprobamos la cadena completa devolviendo un int derivado.
+        let src = r#"
+enum Sem { Rojo, Verde }
+fn opuesto(s: Sem) -> Sem { match (s) { Sem.Rojo => Sem.Verde, Sem.Verde => Sem.Rojo } }
+fn a_int(s: Sem) -> int { match (s) { Sem.Rojo => 0, Sem.Verde => 1 } }
+fn main() -> int { a_int(opuesto(Sem.Rojo)) }
+"#;
+        assert_eq!(run_ok(src), Value::Int(1));
     }
 }

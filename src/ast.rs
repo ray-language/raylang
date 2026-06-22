@@ -235,6 +235,10 @@ pub enum ExprKind {
     /// Función anónima como valor: `fn(x: int) -> int { x + 1 }`. (M4.1)
     Func(Box<FnExpr>),
 
+    /// `match (escrutinio) { patrón => cuerpo, ... }` (M5.2). Es una **expresión**:
+    /// produce el valor del brazo que casa. Los brazos se prueban en orden.
+    Match { scrutinee: Box<Expr>, arms: Vec<MatchArm> },
+
     // --- Expresiones con bloque (producen valor, DESIGN.md §6) ---
     /// `if (cond) { then } else { ... }`. `else_branch`, si existe, es otro `Expr`
     /// que será un `Block` o (en cadenas `else if`) otro `If`.
@@ -247,6 +251,40 @@ pub enum ExprKind {
     While { cond: Box<Expr>, body: Block },
     /// Un bloque usado como expresión: `{ ...; valor }`.
     Block(Block),
+}
+
+/// Un brazo de `match`: un patrón y el cuerpo (una expresión) que se evalúa si casa.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Expr,
+    pub line: usize,
+    pub col: usize,
+}
+
+/// Un patrón de `match` (M5.2). Patrones **planos** (un nivel): variante, comodín o
+/// binding. Lleva ubicación para los errores de exhaustividad/aridad.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pattern {
+    pub kind: PatternKind,
+    pub line: usize,
+    pub col: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PatternKind {
+    /// `_`: descarta, no liga. Cubre **todo** lo restante (catch-all).
+    Wildcard,
+    /// Un identificador suelto: liga el escrutinio completo a ese nombre. También
+    /// catch-all (cubre todo lo restante).
+    Binding(String),
+    /// `Enum.Variante(sub-bindings)`: casa con esa variante. Cada sub-binding liga
+    /// una posición del payload a un nombre, o lo descarta si es `None` (`_`).
+    Variant {
+        enum_name: String,
+        variant: String,
+        bindings: Vec<Option<String>>,
+    },
 }
 
 /// Recolecta todas las funciones anónimas (`FnExpr`) del programa, **indexadas por
@@ -326,6 +364,12 @@ fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
         ExprKind::Func(fe) => {
             acc.push(fe);
             walk_block(&fe.body, acc); // fn-exprs anidadas
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            walk_expr(scrutinee, acc);
+            for arm in arms {
+                walk_expr(&arm.body, acc);
+            }
         }
         ExprKind::If { cond, then_branch, else_branch } => {
             walk_expr(cond, acc);

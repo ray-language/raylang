@@ -502,6 +502,16 @@ impl<'a> Compiler<'a> {
 
             ExprKind::Block(b) => self.emit_block(b)?,
 
+            // `match` aún no se compila a bytecode: llega en M5.3. El intérprete sí
+            // lo ejecuta (M5.2), así que un programa con match corre sin `--vm`.
+            ExprKind::Match { .. } => {
+                return Err(CompileError {
+                    msg: "match aún no está soportado en la VM (llega en M5.3); usa el intérprete".into(),
+                    line,
+                    col,
+                });
+            }
+
             ExprKind::ArrayLit(elems) => {
                 for e in elems {
                     self.emit_expr(e)?;

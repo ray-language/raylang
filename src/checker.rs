@@ -347,19 +347,29 @@ impl Checker {
     fn check_stmt(&mut self, stmt: &Stmt) -> Result<(), TypeError> {
         match &stmt.kind {
             StmtKind::Let { name, ty, value, mutable } => {
-                self.ensure_type(ty, stmt.line, stmt.col)?;
-                // La anotación puede nombrar un enum (llega como `Struct`): normaliza.
-                let ty = self.resolve_type(ty);
-                // El tipo declarado es el tipo ESPERADO del valor (chequeo
-                // bidireccional, M6.2): fija el `[]` vacío, `Caja.Vacia`, `None`, etc.
-                let vt = self.check_expr_expected(value, &ty)?;
-                if vt != ty {
-                    return Err(self.err(value.line, value.col, format!(
-                        "'{}' se declara como {} pero se inicializa con {}",
-                        name, ty, vt
-                    )));
-                }
-                self.declare(name, ty, *mutable);
+                let var_ty = match ty {
+                    // Con anotación: el tipo declarado es el tipo ESPERADO del valor
+                    // (chequeo bidireccional, M6.2): fija el `[]` vacío, `Caja.Vacia`,
+                    // `None`, etc.
+                    Some(ty) => {
+                        self.ensure_type(ty, stmt.line, stmt.col)?;
+                        // La anotación puede nombrar un enum (llega como `Struct`): normaliza.
+                        let ty = self.resolve_type(ty);
+                        let vt = self.check_expr_expected(value, &ty)?;
+                        if vt != ty {
+                            return Err(self.err(value.line, value.col, format!(
+                                "'{}' se declara como {} pero se inicializa con {}",
+                                name, ty, vt
+                            )));
+                        }
+                        ty
+                    }
+                    // Sin anotación (M8.1): se infiere del inicializador. Si el valor no
+                    // determina su tipo por sí solo (`[]`, `None`, `Caja.Vacia`),
+                    // `check_expr` ya falla pidiendo la anotación.
+                    None => self.check_expr(value)?,
+                };
+                self.declare(name, var_ty, *mutable);
                 Ok(())
             }
             StmtKind::Assign { target, value } => self.check_assign(target, value, stmt.line, stmt.col),
@@ -2555,5 +2565,74 @@ fn map(x: int) -> int { x + 1 }
 fn main() -> int { map(41) }
 "#;
         assert!(check_src(src).is_ok());
+    }
+
+    // ----- M8.1: inferencia local (let/var sin anotación) -----
+
+    #[test]
+    fn infiere_primitivos_y_compuestos() {
+        let src = r#"
+struct Punto { x: int, y: int }
+enum Caja<T> { Llena(T), Vacia }
+fn main() -> int {
+    let x = 3;                      // int
+    let f = 2.5;                    // float
+    let b = x > 1;                  // bool
+    let s = "hola";                 // string
+    let xs = [10, 20, 30];          // [int]
+    let p = Punto { x: 7, y: 6 };   // Punto
+    let c = Caja.Llena(5);          // Caja<int> (genéricos M6)
+    let cv = p.x + p.y;             // int, del campo inferido
+    let dentro = match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 };  // int
+    x + xs[0] + cv + dentro
+}
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn variable_inferida_conserva_su_tipo() {
+        // Una inferida como int no puede luego usarse como bool.
+        err_contains(
+            "fn main() -> int { let x = 3; if (x) { 0 } else { 1 } }",
+            "condición del if debe ser bool",
+        );
+    }
+
+    #[test]
+    fn var_inferida_es_mutable_y_tipada() {
+        // 'var t = 0' infiere int y es mutable; asignarle bool falla.
+        assert!(check_src("fn main() -> int { var t = 0; t = t + 1; t }").is_ok());
+        err_contains(
+            "fn main() -> int { var t = 0; t = true; t }",
+            "es int pero se le asigna bool",
+        );
+    }
+
+    #[test]
+    fn let_inferida_sigue_siendo_inmutable() {
+        // La inferencia no cambia la mutabilidad: un 'let' inferido no se puede reasignar.
+        err_contains(
+            "fn main() -> int { let x = 3; x = 4; x }",
+            "inmutable",
+        );
+    }
+
+    #[test]
+    fn inferencia_no_aplica_a_lo_indeterminado() {
+        // Sin anotación, '[]' no se puede inferir: pide la anotación.
+        err_contains(
+            "fn main() -> int { let xs = []; len(xs) }",
+            "no se puede inferir el tipo de []",
+        );
+    }
+
+    #[test]
+    fn anotacion_sigue_validandose() {
+        // Con anotación, un inicializador incompatible sigue siendo error.
+        err_contains(
+            "fn main() -> int { let x: int = true; x }",
+            "se inicializa con bool",
+        );
     }
 }

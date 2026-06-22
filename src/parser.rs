@@ -326,14 +326,20 @@ impl Parser {
         })
     }
 
-    /// letDecl = 'let' IDENT ':' type '=' expression ';'
+    /// letDecl = 'let' IDENT [ ':' type ] '=' expression ';'
     /// varDecl = 'var' ... (igual, pero mutable)
+    ///
+    /// La anotación de tipo es **opcional** (M8.1): si se omite, el checker infiere el
+    /// tipo del inicializador.
     fn let_stmt(&mut self) -> Result<Stmt, ParseError> {
         let kw = self.advance(); // 'let' o 'var'
         let mutable = kw.kind == TokenKind::Var;
         let (name, _, _) = self.expect_ident("el nombre de la variable")?;
-        self.expect(&TokenKind::Colon, "':' (el tipo es obligatorio en M1)")?;
-        let ty = self.parse_type()?;
+        let ty = if self.eat(&TokenKind::Colon) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
         self.expect(&TokenKind::Eq, "'=' en la declaración")?;
         let value = self.expression()?;
         self.expect(&TokenKind::Semicolon, "';' al final de la declaración")?;
@@ -1254,8 +1260,10 @@ fn main() -> int {
         };
         // falta ';'
         assert!(bad("fn main() { let x: int = 1 }").is_err());
-        // falta el tipo
-        assert!(bad("fn main() { let x = 1; }").is_err());
+        // 'let x = 1;' (sin anotación) es VÁLIDO desde M8.1; pero ':' sin tipo no
+        assert!(bad("fn main() { let x: = 1; }").is_err());
+        // falta el '=' / inicializador
+        assert!(bad("fn main() { let x; }").is_err());
         // paréntesis sin cerrar
         assert!(bad("fn main() { f(1 }").is_err());
         // falta el tipo de retorno tras '->'
@@ -1269,6 +1277,21 @@ fn main() -> int {
         // El '+' hereda la posición de su operando izquierdo '1' (col 1).
         let e = parse_expr("1 + 2");
         assert_eq!((e.line, e.col), (1, 1));
+    }
+
+    // ----- M8.1: anotación de tipo opcional en let/var -----
+
+    #[test]
+    fn let_con_y_sin_anotacion() {
+        let prog = parse_prog("fn main() { let a: int = 1; let b = 2; var c = 3; }");
+        let stmts = &prog.functions[0].body.statements;
+        let ty_of = |s: &Stmt| match &s.kind {
+            StmtKind::Let { ty, .. } => ty.clone(),
+            _ => panic!("se esperaba un let"),
+        };
+        assert!(ty_of(&stmts[0]).is_some(), "'let a: int' lleva anotación");
+        assert!(ty_of(&stmts[1]).is_none(), "'let b' no lleva anotación");
+        assert!(ty_of(&stmts[2]).is_none(), "'var c' no lleva anotación");
     }
 
     // ----- M7.2: pipelines (desugaring a Call) -----

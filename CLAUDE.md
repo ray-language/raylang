@@ -74,7 +74,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Estado actual
 
-- **M1–M7 COMPLETOS** (200 tests verdes):
+- **M1–M7 COMPLETOS, M8 en curso** (208 tests verdes):
   - **M1**: lexer + parser + checker + intérprete.
   - **M2**: bytecode + VM (pila y marcos explícitos). El intérprete es el **oráculo**.
   - **M3**: datos compuestos — arreglos `[T]` y structs (semántica de referencia).
@@ -114,7 +114,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     redefina → override). Reusa `len`/`push` + genéricos + closures: **front-end puro**,
     cero opcodes nuevos. Builtins de string (`trim`/`split`/`to_string`) **diferidos**
     (necesitan un opcode por builtin en la VM; DESIGN §16.4/§16.8).
-- **Siguiente: M8** (inferencia local `let x = 3`, REPL, mejores errores).
+  - **M8.1**: **inferencia local** (`let x = 3` sin anotación). `StmtKind::Let.ty` pasa a
+    `Option<Type>`; la anotación es opcional en el parser; el checker, si falta, **infiere
+    del inicializador** (`check_expr` sin tipo esperado). Lo indeterminado (`[]`, `None`,
+    `Caja.Vacia`) sigue pidiendo anotación. Solo locales: firmas explícitas (§0). Runtime
+    intacto (los tipos se borran).
+- **Siguiente: M8.2** (REPL) y **M8.3** (mejores errores).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

@@ -184,9 +184,12 @@ pub struct Stmt {
 #[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {
     /// `let x: T = e;` (mutable=false) o `var x: T = e;` (mutable=true).
+    ///
+    /// `ty` es **opcional** (M8.1): si la anotación se omite (`let x = e;`), el tipo de
+    /// la variable se infiere del inicializador en el checker.
     Let {
         name: String,
-        ty: Type,
+        ty: Option<Type>,
         value: Expr,
         mutable: bool,
     },

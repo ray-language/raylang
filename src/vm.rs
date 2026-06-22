@@ -1542,4 +1542,27 @@ mod tests {
             }
         "#);
     }
+
+    // ----- M8.1: inferencia local (solo checker; el runtime no cambia) -----
+
+    #[test]
+    fn inferencia_local_oraculo() {
+        // Variables inferidas (int, [int], struct, enum genérico) deben dar el mismo
+        // resultado en ambos motores: la inferencia se borra antes de ejecutar.
+        oracle_program(r#"
+            struct Punto { x: int, y: int }
+            enum Caja<T> { Llena(T), Vacia }
+            fn doble(x: int) -> int { x * 2 }
+            fn main() -> int {
+                let x = 3;
+                let xs = [10, 20, 30];
+                let p = Punto { x: 7, y: 6 };
+                let c = Caja.Llena(5);
+                var total = 0;
+                total = total + x.doble();
+                let dentro = match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 };
+                total + xs[0] + p.x + p.y + dentro   // 6 + 10 + 7 + 6 + 5 = 34
+            }
+        "#);
+    }
 }

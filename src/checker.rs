@@ -69,17 +69,6 @@ struct VarInfo {
 /// es parte del front-end compartido: el intérprete y la VM reciben el AST ya
 /// resuelto, sin duplicar la regla.
 pub fn check(program: &mut Program) -> Result<(), TypeError> {
-    check_internal(program, None).map(|_| ())
-}
-
-/// Verifica un programa de **REPL** (M8.2) y devuelve el tipo de la cola del cuerpo de la
-/// función `entry` (p. ej. `__repl__`), sin exigir que case con su retorno declarado.
-/// Reusa toda la tubería de `check`. Es lo que permite mostrar `valor : tipo`.
-pub fn check_repl(program: &mut Program, entry: &str) -> Result<Type, TypeError> {
-    Ok(check_internal(program, Some(entry))?.unwrap_or(Type::Unit))
-}
-
-fn check_internal(program: &mut Program, repl_entry: Option<&str>) -> Result<Option<Type>, TypeError> {
     // Paso 0: inyectar el prelude (Option/Result) si no está ya. Sus enums se
     // anteponen, así forman parte del AST que también ven el intérprete y la VM.
     if !program.enums.iter().any(|e| e.name == "Option" || e.name == "Result") {
@@ -107,12 +96,11 @@ fn check_internal(program: &mut Program, repl_entry: Option<&str>) -> Result<Opt
     }
     // Pasos 2–3: pre-pasada y verificación.
     let mut checker = Checker::new();
-    checker.repl_entry = repl_entry.map(|s| s.to_string());
     checker.check_program(program)?;
     // Paso 4 (M7.1): bajar las llamadas UFCS detectadas (`recv.f(args)`) a llamadas
     // ordinarias (`f(recv, args)`), para que el intérprete y la VM solo vean llamadas.
     lower_ufcs(program, &checker.ufcs_sites);
-    Ok(checker.repl_type)
+    Ok(())
 }
 
 struct Checker {
@@ -147,11 +135,6 @@ struct Checker {
     /// `a.f().g()`. Tras verificar, una pasada `&mut` (`lower_ufcs`) los reescribe a
     /// `f(recv, args)`, de modo que el intérprete y la VM solo ven llamadas ordinarias.
     ufcs_sites: HashSet<(usize, usize, String)>,
-    /// REPL (M8.2): nombre de la función "entry" cuyo cuerpo se verifica **sin** exigir
-    /// que su tipo case con el retorno declarado, capturando el tipo de su cola en
-    /// `repl_type`. `None` en una verificación normal.
-    repl_entry: Option<String>,
-    repl_type: Option<Type>,
 }
 
 impl Checker {
@@ -167,8 +150,6 @@ impl Checker {
             current_return: Type::Unit,
             type_params: HashSet::new(),
             ufcs_sites: HashSet::new(),
-            repl_entry: None,
-            repl_type: None,
         }
     }
 
@@ -262,17 +243,14 @@ impl Checker {
         self.type_params.clear();
 
         // 'main' es obligatoria (DESIGN.md §11): sin parámetros y con retorno int o unit.
-        // En el REPL (M8.2) la entrada es `__repl__`, no `main`: se omite esta exigencia.
-        if self.repl_entry.is_none() {
-            match self.functions.get("main") {
-                None => return Err(self.err(1, 1, "falta la función de entrada 'main'".into())),
-                Some(sig) => {
-                    if !sig.params.is_empty() {
-                        return Err(self.err(1, 1, "'main' no debe recibir parámetros".into()));
-                    }
-                    if sig.ret != Type::Int && sig.ret != Type::Unit {
-                        return Err(self.err(1, 1, format!("'main' debe devolver int o unit, no {}", sig.ret)));
-                    }
+        match self.functions.get("main") {
+            None => return Err(self.err(1, 1, "falta la función de entrada 'main'".into())),
+            Some(sig) => {
+                if !sig.params.is_empty() {
+                    return Err(self.err(1, 1, "'main' no debe recibir parámetros".into()));
+                }
+                if sig.ret != Type::Int && sig.ret != Type::Unit {
+                    return Err(self.err(1, 1, format!("'main' debe devolver int o unit, no {}", sig.ret)));
                 }
             }
         }
@@ -298,23 +276,7 @@ impl Checker {
             self.ensure_type(&p.ty, p.line, p.col)?;
         }
         self.ensure_type(&f.return_type, f.line, f.col)?;
-        let r = if self.repl_entry.as_deref() == Some(f.name.as_str()) {
-            // REPL (M8.2): el entry no compara su cuerpo contra el retorno declarado;
-            // se captura el tipo de su cola (lo que el REPL mostrará como `: tipo`).
-            self.push_scope();
-            for p in &f.params {
-                let ty = self.resolve_type(&p.ty);
-                self.declare(&p.name, ty, false);
-            }
-            self.current_return = Type::Unit;
-            let body_ty = self.check_block(&f.body);
-            self.pop_scope();
-            body_ty.map(|t| {
-                self.repl_type = Some(t);
-            })
-        } else {
-            self.check_fn_body(&f.params, &f.return_type, &f.body, f.line, f.col, &format!("'{}'", f.name))
-        };
+        let r = self.check_fn_body(&f.params, &f.return_type, &f.body, f.line, f.col, &format!("'{}'", f.name));
         self.type_params.clear();
         r
     }

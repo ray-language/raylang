@@ -41,7 +41,7 @@ fuente → [lexer] → tokens → [parser] → AST → [checker] → [interprete
 | `src/ast.rs`, `src/parser.rs` | sintaxis | descenso recursivo; precedencia por jerarquía de reglas |
 | `src/checker.rs` | semántica | tipos; dos pasadas (firmas + cuerpos), pila de ámbitos, análisis de divergencia |
 | `src/interpreter.rs` | ejecución | tree-walking; valores en runtime; `return` como señal de flujo |
-| `src/repl.rs` | front-end+ejec. | REPL (M8.2): acumula y re-ejecuta `fn __repl__`; reusa `check_repl`/`run_named` |
+| `src/repl.rs` | cliente externo | REPL (M8.2): acumula y re-ejecuta `fn main` vía la API pública; muestra el valor con `print`. No toca el core |
 | `src/lib.rs`, `src/main.rs` | librería + CLI | el binario es un cliente delgado (sin archivo → REPL) |
 
 El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
@@ -122,11 +122,14 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `Caja.Vacia`) sigue pidiendo anotación. Solo locales: firmas explícitas (§0). Runtime
     intacto (los tipos se borran).
   - **M8.2**: **REPL** interactivo (`src/repl.rs`; `raylang` sin archivo, o `--repl`).
-    Estrategia **re-ejecutar el preámbulo**: acumula definiciones y sentencias y, por
-    entrada, reconstruye `fn __repl__() { <historial> <entrada-como-cola> }` y lo
-    verifica/ejecuta. Muestra `valor : tipo`. Reusa el pipeline vía `checker::check_repl`
-    (devuelve el tipo de la cola, sin exigir retorno) e `interpreter::run_named` (ejecuta
-    `__repl__`). Una entrada con error se descarta (no contamina el estado).
+    **Cliente 100% externo**: usa solo la API pública (`lex`/`parse`/`check`/`run` + el
+    builtin `print`); **cero cambios** en checker/interpreter. Estrategia **re-ejecutar el
+    preámbulo**: acumula definiciones y sentencias y, por entrada, reconstruye
+    `fn main() { <historial> print(<entrada>); }` y lo verifica/ejecuta. Muestra el
+    **valor** (vía `print`; el tipo exigiría una API del checker que no se quiso añadir).
+    Entradas de tipo unit → *fallback* a ejecutar sin `print`. Una entrada con error se
+    descarta (no contamina el estado). Tests: unitarios (estado/rollback) + integración
+    por subproceso (`tests/repl_cli.rs`).
 - **Siguiente: M8.3** (mejores errores).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.

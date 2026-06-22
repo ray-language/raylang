@@ -998,12 +998,40 @@ una vez más, **solo del checker**.
 > anotación documenta y ancla la inferencia. Es la línea exacta que separa "comodidad
 > barata" de "inferencia global".
 
-### 17.2 REPL (futuro, M8.2)
+### 17.2 REPL (M8.2)
 
-Un *read-eval-print loop*: leer una sentencia o expresión, verificarla y ejecutarla,
-mostrar el resultado, y mantener el entorno entre líneas. Reusa el front-end y un motor
-(el intérprete). Decisiones a cerrar al llegar: cómo acumular declaraciones entre
-entradas, si se permite redefinir, qué motor usar.
+Un *read-eval-print loop*: leer una sentencia/expresión, verificarla, ejecutarla y mostrar
+el resultado, manteniendo el estado entre líneas.
+
+**Decisión clave: un cliente 100% externo.** El REPL (`src/repl.rs`) usa **solo la API
+pública** —`lexer::lex`, `parser::parse`, `checker::check`, `interpreter::run` y el builtin
+`print`—; **no añade ni una línea al checker ni al intérprete**. El precio de esa pureza es
+que muestra el **valor**, no el tipo: obtener el tipo estático exigiría una API del checker
+(que devuelva el tipo de una expresión), y se prefirió no incrustar lógica de REPL en el
+core por una comodidad de presentación.
+
+**Estrategia: re-ejecutar el preámbulo.** No hay entorno vivo entre líneas. El REPL
+**acumula** las definiciones (`fn`/`struct`/`enum`) y las sentencias (`let`/`var`/asignación)
+y, en cada entrada, **reconstruye un programa completo** y lo verifica y ejecuta:
+
+```text
+  <definiciones acumuladas>
+  fn main() { <sentencias acumuladas>  print(<entrada>); }
+```
+
+El valor se imprime haciendo que el `main` sintetizado llame a `print` sobre la entrada. Si
+la entrada es de tipo `unit` (p. ej. `print(x)` o un `while`), `print(...)` no tiparía: se
+reintenta ejecutándola como sentencia, sin envolver. El estado "vive" en el historial de
+fuente que se re-ejecuta (coste: recomputar el historial; aceptable). Redefinir un nombre se
+resuelve solo: la última `let` gana al re-ejecutar (shadowing), y una definición homónima
+reemplaza a la anterior. Una entrada que no verifica/ejecuta se **descarta**.
+
+> **Por qué externo y no integrado.** Una primera versión integró dos ganchos en el core
+> (`check_repl` para devolver el tipo de la cola; `run_named` para ejecutar una función
+> que no fuera `main`). Funcionaba y mostraba `valor : tipo`, pero metía conceptos de REPL
+> en el checker y el intérprete. Revertirlos a favor de un cliente externo deja el core
+> intacto y demuestra que el front-end ya expone lo suficiente para construir herramientas
+> encima. La lección: una herramienta de *tooling* no debería ensuciar el lenguaje.
 
 ### 17.3 Mejores errores (futuro, M8.3)
 
@@ -1014,7 +1042,8 @@ completo y los errores nuevos (inferencia, REPL) existen.
 ### 17.4 Sub-fases
 - **M8.1 — Inferencia local**: `ty` opcional en el AST, anotación opcional en el parser,
   inferencia desde el inicializador en el checker. Solo locales; firmas intactas.
-- **M8.2 — REPL**: bucle interactivo sobre el front-end + intérprete.
+- **M8.2 — REPL**: bucle interactivo, **cliente externo** del front-end + intérprete
+  (cero cambios al core); muestra el valor vía `print`.
 - **M8.3 — Mejores errores**: contexto de fuente y subrayado en los diagnósticos.
 
 ### 17.5 Deferido

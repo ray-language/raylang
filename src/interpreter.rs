@@ -188,18 +188,6 @@ pub fn run(program: &Program) -> Result<Value, RuntimeError> {
     Interpreter::new(program).run_main()
 }
 
-/// Ejecuta una función **por nombre** (sin argumentos) y devuelve su valor. Lo usa el
-/// REPL (M8.2), que ejecuta una función `__repl__` sintetizada en vez de `main`.
-pub fn run_named(program: &Program, name: &str) -> Result<Value, RuntimeError> {
-    let mut interp = Interpreter::new(program);
-    let f = *interp.functions.get(name).expect("la función a ejecutar existe");
-    match interp.call_function(f, Vec::new()) {
-        Ok(v) => Ok(v),
-        Err(Flow::Error(e)) => Err(e),
-        Err(Flow::Return(v)) => Ok(v),
-    }
-}
-
 struct Interpreter<'a> {
     /// Todas las funciones del programa, por nombre (las referencias viven mientras
     /// viva el `program`, de ahí el lifetime `'a`).

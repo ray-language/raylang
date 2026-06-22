@@ -1,25 +1,30 @@
 //! REPL — *read-eval-print loop* interactivo (M8.2).
 //!
+//! ## Un cliente externo, sin tocar el core
+//!
+//! El REPL es **puramente un cliente** del front-end y el intérprete: usa solo su API
+//! pública (`lexer::lex`, `parser::parse`, `checker::check`, `interpreter::run` y el
+//! builtin `print`). No hay ni una línea del REPL en el checker ni en el intérprete.
+//!
 //! ## Estrategia: re-ejecutar el preámbulo acumulado
 //!
-//! El REPL no mantiene un entorno vivo del intérprete entre líneas. En su lugar,
-//! **acumula** lo escrito y, en cada entrada, **reconstruye un programa completo** y lo
-//! verifica y ejecuta con el mismo `checker` e `interpreter` de siempre:
+//! No mantiene un entorno vivo entre líneas. En su lugar **acumula** lo escrito y, en
+//! cada entrada, **reconstruye un programa completo** y lo verifica y ejecuta:
 //!
 //! ```text
 //!   <definiciones acumuladas (fn/struct/enum)>
-//!   fn __repl__() { <sentencias acumuladas (let/var/asignación)>  <entrada como cola> }
+//!   fn main() { <sentencias acumuladas>  print(<entrada>); }
 //! ```
 //!
-//! La **cola** del cuerpo es lo que se muestra como `valor : tipo`. El tipo viene del
-//! checker (`check_repl`, que devuelve el tipo de esa cola); el valor, del intérprete
-//! (`run_named`, que ejecuta `__repl__`).
+//! El valor se muestra haciendo que el `main` sintetizado **imprima** la entrada con el
+//! builtin `print` (de ahí que el REPL muestre el *valor*, no el tipo: obtener el tipo
+//! exigiría una API del checker que no queremos añadir solo para esto). Si la entrada es
+//! de tipo `unit` (p. ej. `print(x)` o un `while`), `print(...)` no tiparía: se reintenta
+//! ejecutándola como sentencia, sin envolver.
 //!
-//! Es una estrategia deliberadamente simple: reusa todo el pipeline sin tocarlo, y el
-//! estado entre líneas "vive" en el historial de fuente que se re-ejecuta. El coste es
-//! recomputar el historial en cada entrada (aceptable en un REPL pedagógico) y que un
-//! efecto secundario dentro de un inicializador (`let x = print(1);`) se repita. Una
-//! entrada que no verifica/ejecuta se **descarta** (no contamina el historial).
+//! El estado entre líneas "vive" en el historial de fuente que se re-ejecuta. El coste es
+//! recomputarlo en cada entrada (aceptable en un REPL pedagógico). Una entrada que no
+//! verifica/ejecuta se **descarta** (no contamina el estado).
 
 use std::io::{self, BufRead, Write};
 
@@ -61,7 +66,8 @@ pub fn run() {
             _ => {}
         }
         match session.eval(line) {
-            Ok(out) if !out.is_empty() => println!("{}", out),
+            Ok(Outcome::Defined(name)) => println!("definida '{}'", name),
+            // El valor (si lo hubo) ya lo imprimió el intérprete vía `print`.
             Ok(_) => {}
             Err(e) => eprintln!("{}", e),
         }
@@ -70,8 +76,8 @@ pub fn run() {
 
 fn print_help() {
     println!("Entradas posibles:");
-    println!("  - una expresión:        1 + 2          -> muestra  3 : int");
-    println!("  - un let/var:           let x = 3      -> muestra  x : int");
+    println!("  - una expresión:        1 + 2          -> imprime  3");
+    println!("  - un let/var:           let x = 3      -> imprime  3");
     println!("  - una asignación:       x = 4          (requiere 'var')");
     println!("  - una definición:       fn f(n: int) -> int {{ n + 1 }}");
     println!("El estado persiste entre líneas. ':quit' para salir.");
@@ -85,14 +91,21 @@ struct Item {
 
 /// Cómo clasificamos una línea del REPL tras parsearla.
 enum Entry {
-    /// `fn`/`struct`/`enum`: definición de nivel superior.
     Def { name: String, src: String },
-    /// `let`/`var x = e;`: liga una variable (se persiste; se muestra `x : tipo`).
     Bind { name: String, src: String },
-    /// `lhs = e;`: asignación (se persiste). `show` es el nombre a mostrar si es simple.
     Assign { show: Option<String>, src: String },
-    /// Una expresión suelta: se evalúa una vez y se muestra `valor : tipo`.
     Expr { src: String },
+}
+
+/// Resultado de procesar una línea (lo que el bucle debe mostrar él mismo).
+#[derive(Debug, PartialEq)]
+enum Outcome {
+    /// El intérprete ya imprimió el valor (vía `print`).
+    Printed,
+    /// Una definición; el bucle imprime la confirmación.
+    Defined(String),
+    /// Nada que mostrar (entrada de tipo unit, o asignación a índice/campo).
+    Quiet,
 }
 
 /// El estado acumulado de una sesión de REPL.
@@ -112,16 +125,13 @@ impl Session {
         Session { items: Vec::new(), stmts: Vec::new() }
     }
 
-    /// Procesa una línea y devuelve el texto a mostrar (`valor : tipo`, `x : tipo`,
-    /// `definida 'f'`…) o un mensaje de error. El estado solo se modifica si la entrada
-    /// verifica y ejecuta sin error.
-    pub fn eval(&mut self, line: &str) -> Result<String, String> {
+    /// Procesa una línea. El estado solo se modifica si la entrada verifica y ejecuta.
+    fn eval(&mut self, line: &str) -> Result<Outcome, String> {
         let line = line.trim();
         if line.is_empty() {
-            return Ok(String::new());
+            return Ok(Outcome::Quiet);
         }
         let entry = self.classify(line)?;
-        // Instantánea para deshacer si la entrada no verifica/ejecuta.
         let snap_items: Vec<Item> = self.items.iter().map(|i| Item { name: i.name.clone(), src: i.src.clone() }).collect();
         let snap_stmts = self.stmts.clone();
         let result = self.apply(entry);
@@ -132,61 +142,77 @@ impl Session {
         result
     }
 
-    fn apply(&mut self, entry: Entry) -> Result<String, String> {
+    fn apply(&mut self, entry: Entry) -> Result<Outcome, String> {
         match entry {
             Entry::Def { name, src } => {
-                // Redefinir: reemplaza una definición homónima previa.
-                self.items.retain(|it| it.name != name);
+                self.items.retain(|it| it.name != name); // redefinir reemplaza
                 self.items.push(Item { name: name.clone(), src });
-                self.run_entry("0")?; // valida con una cola trivial
-                Ok(format!("definida '{}'", name))
+                // Validar (solo verificar) reconstruyendo el programa con un main vacío.
+                self.check_program(&self.synth(None))?;
+                Ok(Outcome::Defined(name))
             }
             Entry::Bind { name, src } => {
                 self.stmts.push(src);
-                let (_, ty) = self.run_entry(&name)?;
-                Ok(format!("{} : {}", name, ty))
+                self.show(&name)
             }
             Entry::Assign { show, src } => {
                 self.stmts.push(src);
                 match show {
-                    Some(n) => {
-                        let (_, ty) = self.run_entry(&n)?;
-                        Ok(format!("{} : {}", n, ty))
-                    }
+                    Some(n) => self.show(&n),
                     None => {
-                        self.run_entry("0")?;
-                        Ok("ok".to_string())
+                        // Asignación a índice/campo: ejecutar el historial, sin eco.
+                        let prog = self.check_program(&self.synth(None))?;
+                        interpreter::run(&prog).map_err(|e| e.to_string())?;
+                        Ok(Outcome::Quiet)
                     }
                 }
             }
-            Entry::Expr { src } => {
-                let (val, ty) = self.run_entry(&src)?;
-                Ok(format!("{} : {}", val, ty))
+            Entry::Expr { src } => self.show(&src),
+        }
+    }
+
+    /// Evalúa y muestra `expr`: intenta imprimirlo con `print(expr)`; si eso no tipa
+    /// (p. ej. `expr` es de tipo unit), lo ejecuta como sentencia sin imprimir.
+    fn show(&self, expr: &str) -> Result<Outcome, String> {
+        let with_print = self.synth(Some(&format!("print({});", expr)));
+        match self.check_program(&with_print) {
+            Ok(prog) => {
+                interpreter::run(&prog).map_err(|e| e.to_string())?;
+                Ok(Outcome::Printed)
+            }
+            // No tipó con `print(...)`: quizá `expr` es unit. Reintentar como sentencia;
+            // si tampoco tipa, ese error (sin el envoltorio `print`) es el de verdad.
+            Err(_) => {
+                let as_stmt = self.synth(Some(&format!("{};", expr)));
+                let prog = self.check_program(&as_stmt)?;
+                interpreter::run(&prog).map_err(|e| e.to_string())?;
+                Ok(Outcome::Quiet)
             }
         }
     }
 
-    /// Reconstruye el programa (preámbulo + `tail` como cola de `__repl__`), lo verifica
-    /// y lo ejecuta, devolviendo `(valor, tipo)`.
-    fn run_entry(&self, tail: &str) -> Result<(String, String), String> {
+    /// Construye la fuente del programa: las definiciones, y un `main` con el historial
+    /// de sentencias y, opcionalmente, una sentencia de cola (`tail`).
+    fn synth(&self, tail: Option<&str>) -> String {
         let items: String = self.items.iter().map(|i| i.src.as_str()).collect::<Vec<_>>().join("\n");
         let mut body = self.stmts.join("\n");
-        if !body.is_empty() {
-            body.push('\n');
+        if let Some(t) = tail {
+            if !body.is_empty() {
+                body.push('\n');
+            }
+            body.push_str(t);
         }
-        body.push_str(tail);
-        let src = format!("{}\nfn __repl__() {{\n{}\n}}\n", items, body);
-
-        let mut prog = parse_src(&src)?;
-        let ty = checker::check_repl(&mut prog, "__repl__").map_err(|e| e.to_string())?;
-        let val = interpreter::run_named(&prog, "__repl__").map_err(|e| e.to_string())?;
-        Ok((val.to_string(), ty.to_string()))
+        format!("{}\nfn main() {{\n{}\n}}\n", items, body)
     }
 
-    /// Decide qué clase de entrada es la línea, parseándola de forma aislada.
+    fn check_program(&self, src: &str) -> Result<Program, String> {
+        let mut prog = parse_src(src)?;
+        checker::check(&mut prog).map_err(|e| e.to_string())?;
+        Ok(prog)
+    }
+
+    /// Clasifica la línea parseándola de forma aislada.
     fn classify(&self, line: &str) -> Result<Entry, String> {
-        // Definición: empieza por una palabra clave de declaración. Una definición sola
-        // es un programa válido, así que se parsea directamente.
         if starts_with_word(line, "fn") || starts_with_word(line, "struct") || starts_with_word(line, "enum") {
             let prog = parse_src(line)?;
             let name = def_name(&prog).ok_or_else(|| "no se reconoció la definición".to_string())?;
@@ -213,7 +239,6 @@ impl Session {
                 StmtKind::Return { .. } => Err("'return' no tiene sentido en el REPL".to_string()),
             }
         } else {
-            // Sin sentencias: el cuerpo es solo una expresión (la cola).
             Ok(Entry::Expr { src: strip_semi(line) })
         }
     }
@@ -241,14 +266,12 @@ fn def_name(p: &Program) -> Option<String> {
     None
 }
 
-/// ¿`line` empieza por la palabra `kw` seguida de un separador (no es un identificador
-/// más largo como `function` o `enumeracion`)?
+/// ¿`line` empieza por la palabra `kw` (y no por un identificador más largo)?
 fn starts_with_word(line: &str, kw: &str) -> bool {
-    let rest = match line.strip_prefix(kw) {
-        Some(r) => r,
-        None => return false,
-    };
-    rest.is_empty() || rest.starts_with(|c: char| !c.is_alphanumeric() && c != '_')
+    match line.strip_prefix(kw) {
+        Some(rest) => rest.is_empty() || rest.starts_with(|c: char| !c.is_alphanumeric() && c != '_'),
+        None => false,
+    }
 }
 
 fn ensure_semi(s: &str) -> String {
@@ -268,70 +291,80 @@ fn strip_semi(s: &str) -> String {
 mod tests {
     use super::*;
 
+    // El valor se imprime por stdout (vía el builtin `print`), así que aquí asertamos
+    // el *resultado* (Ok/Err y la variante de Outcome) y el estado de la sesión. El
+    // texto exacto impreso se prueba por subproceso en `tests/repl_cli.rs`.
+
     #[test]
-    fn expresiones_muestran_valor_y_tipo() {
+    fn expresion_imprime() {
         let mut s = Session::new();
-        assert_eq!(s.eval("1 + 2").unwrap(), "3 : int");
-        assert_eq!(s.eval("[1, 2, 3]").unwrap(), "[1, 2, 3] : [int]");
-        assert_eq!(s.eval("3 > 1").unwrap(), "true : bool");
+        assert_eq!(s.eval("1 + 2").unwrap(), Outcome::Printed);
+        assert_eq!(s.eval("[1, 2, 3]").unwrap(), Outcome::Printed);
     }
 
     #[test]
     fn let_persiste_entre_lineas() {
         let mut s = Session::new();
-        assert_eq!(s.eval("let x = 3").unwrap(), "x : int");
-        assert_eq!(s.eval("x + 1").unwrap(), "4 : int");
-        assert_eq!(s.eval("x * x").unwrap(), "9 : int");
+        assert_eq!(s.eval("let x = 3").unwrap(), Outcome::Printed);
+        assert_eq!(s.eval("x + 1").unwrap(), Outcome::Printed);
+        // Si 'x' no hubiera persistido, esto sería Err.
+        assert!(s.eval("x * x").is_ok());
     }
 
     #[test]
     fn var_y_asignacion_persisten() {
         let mut s = Session::new();
-        assert_eq!(s.eval("var t = 0").unwrap(), "t : int");
-        assert_eq!(s.eval("t = t + 5").unwrap(), "t : int");
-        assert_eq!(s.eval("t = t + 5").unwrap(), "t : int");
-        assert_eq!(s.eval("t").unwrap(), "10 : int");
+        assert_eq!(s.eval("var t = 0").unwrap(), Outcome::Printed);
+        assert!(s.eval("t = t + 5").is_ok());
+        assert!(s.eval("t = t + 5").is_ok());
+        // El valor (10) se imprime; aquí basta con que no falle.
+        assert_eq!(s.eval("t").unwrap(), Outcome::Printed);
     }
 
     #[test]
     fn definiciones_y_su_uso() {
         let mut s = Session::new();
-        assert_eq!(s.eval("fn doble(n: int) -> int { n * 2 }").unwrap(), "definida 'doble'");
-        assert_eq!(s.eval("let x = 21").unwrap(), "x : int");
-        assert_eq!(s.eval("doble(x)").unwrap(), "42 : int");
-        // UFCS y pipeline también funcionan en el REPL.
-        assert_eq!(s.eval("x.doble()").unwrap(), "42 : int");
-        assert_eq!(s.eval("x |> doble").unwrap(), "42 : int");
+        assert_eq!(s.eval("fn doble(n: int) -> int { n * 2 }").unwrap(), Outcome::Defined("doble".into()));
+        assert!(s.eval("let x = 21").is_ok());
+        assert!(s.eval("doble(x)").is_ok()); // llamada normal
+        assert!(s.eval("x.doble()").is_ok()); // UFCS
+        assert!(s.eval("x |> doble").is_ok()); // pipeline
     }
 
     #[test]
     fn struct_y_enum_en_repl() {
         let mut s = Session::new();
-        assert_eq!(s.eval("struct Punto { x: int, y: int }").unwrap(), "definida 'Punto'");
-        assert_eq!(s.eval("let p = Punto { x: 7, y: 6 }").unwrap(), "p : Punto");
-        assert_eq!(s.eval("p.x + p.y").unwrap(), "13 : int");
-        assert_eq!(s.eval("enum Caja<T> { Llena(T), Vacia }").unwrap(), "definida 'Caja'");
-        assert_eq!(s.eval("Caja.Llena(5)").unwrap(), "Caja.Llena(5) : Caja<int>");
+        assert_eq!(s.eval("struct Punto { x: int, y: int }").unwrap(), Outcome::Defined("Punto".into()));
+        assert!(s.eval("let p = Punto { x: 7, y: 6 }").is_ok());
+        assert!(s.eval("p.x + p.y").is_ok());
+        assert_eq!(s.eval("enum Caja<T> { Llena(T), Vacia }").unwrap(), Outcome::Defined("Caja".into()));
+        assert!(s.eval("Caja.Llena(5)").is_ok());
+    }
+
+    #[test]
+    fn expresion_unit_no_falla() {
+        // `print(x)` es de tipo unit: `print(print(x))` no tiparía, pero el REPL lo
+        // reintenta como sentencia y lo ejecuta (Quiet).
+        let mut s = Session::new();
+        s.eval("let x = 3").unwrap();
+        assert_eq!(s.eval("print(x)").unwrap(), Outcome::Quiet);
     }
 
     #[test]
     fn redefinir_una_variable() {
         let mut s = Session::new();
         s.eval("let x = 3").unwrap();
-        // Redefinir con otro tipo: la última gana (shadowing al re-ejecutar).
-        assert_eq!(s.eval("let x = true").unwrap(), "x : bool");
-        assert_eq!(s.eval("x").unwrap(), "true : bool");
+        assert!(s.eval("let x = true").is_ok()); // la última gana (shadowing al re-ejecutar)
+        assert!(s.eval("x").is_ok());
     }
 
     #[test]
     fn una_entrada_con_error_no_contamina_el_estado() {
         let mut s = Session::new();
         s.eval("let x = 3").unwrap();
-        // Tipo mal: error, y NO se añade al historial.
-        assert!(s.eval("let y = x + true").is_err());
-        // 'y' no existe; 'x' sigue intacto.
-        assert!(s.eval("y").is_err());
-        assert_eq!(s.eval("x").unwrap(), "3 : int");
+        assert!(s.eval("let y = x + true").is_err()); // error de tipos
+        assert!(s.eval("y").is_err()); // 'y' no se añadió
+        assert!(s.eval("x").is_ok()); // 'x' sigue intacto
     }
 
     #[test]

@@ -24,6 +24,7 @@ expresiones, sintaxis de llaves.
 
 - Tests: `cargo test`
 - Ejecutar un programa: `cargo run --quiet -- examples/fib.ray`
+- REPL interactivo (M8.2): `cargo run --quiet` (sin archivo) o `--repl`
 - Binario release: `cargo build --release` → `./target/release/raylang prog.ray`
 - El código de salida del runner es el `int` que devuelve `main` (0 si es unit).
 
@@ -40,7 +41,8 @@ fuente → [lexer] → tokens → [parser] → AST → [checker] → [interprete
 | `src/ast.rs`, `src/parser.rs` | sintaxis | descenso recursivo; precedencia por jerarquía de reglas |
 | `src/checker.rs` | semántica | tipos; dos pasadas (firmas + cuerpos), pila de ámbitos, análisis de divergencia |
 | `src/interpreter.rs` | ejecución | tree-walking; valores en runtime; `return` como señal de flujo |
-| `src/lib.rs`, `src/main.rs` | librería + CLI | el binario es un cliente delgado |
+| `src/repl.rs` | front-end+ejec. | REPL (M8.2): acumula y re-ejecuta `fn __repl__`; reusa `check_repl`/`run_named` |
+| `src/lib.rs`, `src/main.rs` | librería + CLI | el binario es un cliente delgado (sin archivo → REPL) |
 
 El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 *backend* de ejecución como bytecode + VM, reutilizándolo.
@@ -74,7 +76,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Estado actual
 
-- **M1–M7 COMPLETOS, M8 en curso** (208 tests verdes):
+- **M1–M7 COMPLETOS, M8 en curso** (216 tests verdes):
   - **M1**: lexer + parser + checker + intérprete.
   - **M2**: bytecode + VM (pila y marcos explícitos). El intérprete es el **oráculo**.
   - **M3**: datos compuestos — arreglos `[T]` y structs (semántica de referencia).
@@ -119,7 +121,13 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     del inicializador** (`check_expr` sin tipo esperado). Lo indeterminado (`[]`, `None`,
     `Caja.Vacia`) sigue pidiendo anotación. Solo locales: firmas explícitas (§0). Runtime
     intacto (los tipos se borran).
-- **Siguiente: M8.2** (REPL) y **M8.3** (mejores errores).
+  - **M8.2**: **REPL** interactivo (`src/repl.rs`; `raylang` sin archivo, o `--repl`).
+    Estrategia **re-ejecutar el preámbulo**: acumula definiciones y sentencias y, por
+    entrada, reconstruye `fn __repl__() { <historial> <entrada-como-cola> }` y lo
+    verifica/ejecuta. Muestra `valor : tipo`. Reusa el pipeline vía `checker::check_repl`
+    (devuelve el tipo de la cola, sin exigir retorno) e `interpreter::run_named` (ejecuta
+    `__repl__`). Una entrada con error se descarta (no contamina el estado).
+- **Siguiente: M8.3** (mejores errores).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

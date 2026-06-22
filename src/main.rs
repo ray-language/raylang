@@ -1,6 +1,7 @@
 //! CLI de raylang.
 //!
-//! Uso: `raylang [--vm] <archivo.ray>`
+//! Uso: `raylang [--vm] <archivo.ray>`  — ejecuta un archivo.
+//!      `raylang`  (o `raylang --repl`)  — arranca el REPL interactivo (M8.2).
 //!
 //! Corre el pipeline: lexer → parser → checker, y luego ejecuta el programa con el
 //! **intérprete** (por defecto) o con la **máquina virtual** (`--vm`). El código de
@@ -11,15 +12,24 @@ use std::fs;
 use std::process;
 
 use raylang::interpreter::Value;
-use raylang::{checker, compiler, interpreter, lexer, parser, vm};
+use raylang::{checker, compiler, interpreter, lexer, parser, repl, vm};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     let (use_vm, path) = match args.len() {
+        // Sin archivo: REPL interactivo (M8.2).
+        1 => {
+            repl::run();
+            return;
+        }
+        2 if args[1] == "--repl" => {
+            repl::run();
+            return;
+        }
         2 => (false, args[1].clone()),
         3 if args[1] == "--vm" => (true, args[2].clone()),
         _ => {
-            eprintln!("uso: raylang [--vm] <archivo.ray>");
+            eprintln!("uso: raylang [--vm] <archivo.ray>   |   raylang [--repl]");
             process::exit(64); // EX_USAGE
         }
     };

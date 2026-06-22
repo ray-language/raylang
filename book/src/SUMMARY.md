@@ -34,3 +34,10 @@
 - [Funciones de primera clase](m4/primera-clase.md)
 - [Closures: capturar el entorno](m4/closures.md)
 - [El recolector de basura](m4/recoleccion-de-basura.md)
+
+# M5 — Tipos suma y pattern matching
+
+- [Tipos suma y pattern matching](m5/intro.md)
+- [Enums: uniones etiquetadas](m5/enums.md)
+- [match: consumir por casos](m5/match.md)
+- [match en la máquina virtual](m5/match-en-la-vm.md)

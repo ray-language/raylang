@@ -759,3 +759,172 @@ hay tipo esperado que lo fije, es error ("no se pudo inferir T").
 - **Inferencia de locales** (`let x = 3` sin anotación) → M8.
 - **Bounds/traits** sobre genéricos → idea futura (IDEAS.md).
 - **`?` definido por el usuario** (un *trait* `Try`) → no; `?` conoce `Result`/`Option`.
+
+## 16. M7 — UFCS (`.`), pipelines (`|>`) y stdlib
+
+M7 añade **azúcar sobre la llamada de función** —UFCS y pipelines— y la primera
+**biblioteca estándar** de verdad. No introduce conceptos nuevos de tipos ni de
+runtime: es el hito que **unifica** "método", "pipeline" y "función libre" en un solo
+mecanismo (DESIGN §0), y la prueba de que con genéricos ya se puede escribir librería
+útil (`map`, `filter`) **en el propio lenguaje**.
+
+La lección central: **UFCS y `|>` son reescrituras del front-end.** Igual que la
+construcción de enums (M5) o los genéricos (M6) no llegan al runtime, aquí `s.trim()`
+y `x |> f(a)` se **reescriben a llamadas ordinarias** antes de ejecutar. El intérprete
+y la VM no aprenden nada nuevo.
+
+### 16.0 Decisiones de diseño (cerradas)
+
+1. **UFCS: campo primero, luego función libre.** En `recv.nombre(args)`, si el tipo de
+   `recv` es un struct con un **campo** `nombre`, es acceso a campo (y se llama si el
+   campo es una función): `(recv.nombre)(args)`. Si **no** hay tal campo, se reescribe
+   a la **función libre** `nombre(recv, args)` (UFCS). El campo gana en caso de colisión;
+   la regla es total y sin ambigüedad. Es una resolución **del checker** (necesita el
+   tipo de `recv`), análoga a `resolve_enum_construction` de M5.
+2. **`|>` inserta como primer argumento.** `x |> f(a, b)` ≡ `f(x, a, b)`; `x |> f` ≡
+   `f(x)`. Coherente con UFCS (el receptor es el **primer** parámetro), así que
+   `xs.map(f)` y `xs |> map(f)` significan lo mismo. Sin *placeholder* `_`. Es una
+   reescritura **del parser** (puramente sintáctica, no depende de tipos).
+3. **stdlib mixta: builtins + prelude en raylang.** Lo que necesita el runtime
+   (mutar `[T]`, manipular `string`) son **builtins** nativos (`push`, `split`, `trim`,
+   …); lo de **orden superior** (`map`, `filter`, `fold`) se escribe **en raylang** en
+   el prelude, reusando genéricos. Demuestra ambas técnicas y que la maquinaria de M6
+   basta para una librería real.
+
+Forzado por las decisiones (no abierto):
+- **UFCS solo en posición de llamada.** `recv.f(args)` puede ser UFCS; `recv.f` a secas
+  es **solo** acceso a campo (no hay "método como valor" sin llamarlo). Mantiene la
+  regla total y evita el currying implícito.
+- **Orden de resolución de `X.nombre(args)`** en el checker: (1) construcción de enum
+  (`Color.Rojo`, ya en M5); (2) campo de struct; (3) UFCS a función libre; (4) error.
+
+### 16.1 Sintaxis nueva
+
+```rust
+// UFCS: recv.f(args) ≡ f(recv, args)  (si f no es campo de recv)
+let s: string = "  hola  ";
+let limpio: string = s.trim();              // ≡ trim(s)
+let n: int = nums.len();                    // ≡ len(nums)
+let r: [int] = nums.map(doble).filter(par); // encadena: filter(map(nums, doble), par)
+
+// Pipeline: x |> f(args) ≡ f(x, args)
+let total: int =
+    nums
+    |> map(doble)
+    |> filter(par)
+    |> fold(0, suma);
+
+// Coexisten con el acceso a campo (campo gana):
+struct Caja { valor: int }
+let c: Caja = Caja { valor: 10 };
+let v: int = c.valor;        // campo (no UFCS)
+let d: int = c.doble();      // no hay campo 'doble' -> doble(c)  [UFCS]
+```
+
+- El **`.`** ya se parsea para acceso a campo (M3); UFCS **no cambia el parser**: el
+  checker reescribe el nodo cuando `recv.nombre(args)` no es un campo.
+- El **`|>`** es un operador binario nuevo, de **precedencia mínima** y asociativo a la
+  izquierda (`a |> f |> g` ≡ `g(f(a))`). El parser lo **desazucara** directamente a la
+  llamada con el receptor como primer argumento.
+
+### 16.2 UFCS — resolución de método (checker)
+
+`recv.nombre(args)` llega del parser como `Call(Field(recv, nombre), args)`. El checker:
+
+1. **¿Construcción de enum?** Si `recv` nombra un enum y `nombre` una variante, ya lo
+   resuelve `resolve_enum_construction` (M5) → `EnumLit`. No es UFCS.
+2. **¿Campo?** Se tipa `recv`; si es `Struct S` y `S` tiene campo `nombre`, es acceso a
+   campo. Se mantiene `Call(Field(recv, nombre), args)`: se llama al **valor del campo**
+   (que debe ser de tipo función).
+3. **UFCS.** Si no es campo, se busca una **función libre** `nombre`. Se **reescribe** el
+   nodo a `Call(Ident(nombre), [recv, ...args])` y se tipa como una llamada normal (con
+   inferencia de genéricos de M6 incluida). El receptor pasa a ser el primer argumento.
+4. Si no hay ni campo ni función, **error con posición**: *"no existe campo ni función
+   'nombre' aplicable a `T`"*.
+
+Un **`recv.nombre` sin llamada** (no en posición de `Call`) sigue siendo solo acceso a
+campo: si `nombre` no es campo, es error (no hay UFCS sin paréntesis). La reescritura
+es **bottom-up**, así que las cadenas `a.f().g()` se resuelven receptor a receptor.
+
+> Como en M5/M6, la reescritura toma `&mut` del AST: el nodo UFCS se sustituye por una
+> llamada ordinaria, de modo que **intérprete y VM ven solo llamadas**. Cero runtime.
+
+### 16.3 Pipelines (`|>`) — desugaring (parser)
+
+`|>` es puramente sintáctico y **no depende de tipos**, así que se resuelve en el
+parser (a diferencia de UFCS). En la jerarquía de precedencia ocupa el nivel **más
+bajo**:
+
+```
+pipeline   = igualdad ( "|>" llamada )* ;     // asociativo a la izquierda
+```
+
+Para cada `izq |> rhs`:
+- si `rhs` es una llamada `f(a, b)` → se emite `f(izq, a, b)` (receptor primero);
+- si `rhs` es una expresión llamable `f` (sin paréntesis) → se emite `f(izq)`.
+
+No hay nodo de AST nuevo: el parser construye directamente el `Call`. Por eso `|>`
+compone con UFCS y con genéricos sin esfuerzo —al checker le llegan llamadas normales—.
+
+### 16.4 stdlib inicial
+
+**Builtins nuevos (Rust)** — operaciones que tocan el runtime:
+
+| Builtin | Tipo | Notas |
+|---------|------|-------|
+| `len(xs)` | `[T] -> int`, `string -> int` | ya existía; se documenta como stdlib |
+| `push(xs, x)` | `([T], T) -> unit` | muta el arreglo (semántica de referencia, M3) |
+| `trim(s)` | `string -> string` | recorta espacios |
+| `split(s, sep)` | `(string, string) -> [string]` | parte por separador |
+| `concat(a, b)` | `(string, string) -> string` | concatena (o `+` sobre string, a decidir) |
+| `to_string(x)` | `int/float/bool -> string` | conversión a texto |
+
+Los builtins se tipan con un **esquema** (pueden ser polimórficos, p. ej. `push`), no
+como una función raylang concreta; el checker los conoce por nombre. El conjunto exacto
+se fija en M7.3.
+
+**Prelude en raylang** — orden superior, escrito en el propio lenguaje:
+
+```rust
+fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
+    var out: [U] = [];
+    var i: int = 0;
+    while (i < len(xs)) { push(out, f(xs[i])); i = i + 1; }
+    out
+}
+fn filter<T>(xs: [T], pred: fn(T) -> bool) -> [T] { /* análogo */ }
+fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A { /* análogo */ }
+```
+
+Se inyectan como el prelude de M6 (junto a `Option`/`Result`). Aprovechan `push`/`len`
+y los genéricos: son la demostración de que M6 era suficiente para escribir librería.
+
+### 16.5 Runtime
+
+- **UFCS y `|>`**: **no tocan el runtime**. Tras la reescritura (checker / parser) solo
+  quedan llamadas ordinarias.
+- **Builtins**: el intérprete y la VM ya despachan builtins (`print`, `len`); M7 añade
+  más entradas a esa tabla. Es el único toque de runtime, y es aditivo.
+- El **oráculo** (intérprete ↔ VM) cubre UFCS, pipelines y la stdlib, incl. modo estrés
+  del GC (los arreglos que crea `map`/`filter` viven en el heap).
+
+### 16.6 Léxico/sintaxis nuevos
+- Token **`|>`** (pipeline). El `.` y los paréntesis de llamada ya existen.
+- Regla de precedencia nueva para `|>` (la más baja, asociativa a la izquierda).
+
+### 16.7 Sub-fases
+- **M7.1 — UFCS (`.`)**: resolución de método en el checker (campo primero, luego
+  función libre) con reescritura a llamada normal. Testeable con funciones libres y
+  structs existentes; sin runtime nuevo.
+- **M7.2 — Pipelines (`|>`)**: token, precedencia y *desugaring* en el parser (receptor
+  como primer argumento). Compone con UFCS y genéricos.
+- **M7.3 — stdlib**: builtins nuevos (`push`, `trim`, `split`, …) + prelude de orden
+  superior (`map`, `filter`, `fold`) en raylang. Cierra M7 y deja el lenguaje "usable".
+
+### 16.8 Deferido
+- **Métodos como valor** (`recv.f` sin llamar) / *method references* → idea futura.
+- **`|>` con placeholder** (`x |> f(a, _, b)`) → no en M7; primer argumento basta.
+- **UFCS sobre primitivos definido por el usuario con resolución por módulos/imports**
+  → no hay módulos aún; toda función libre en ámbito es candidata.
+- **Operador `.` encadenado con `?`** (`x.f()?`) ya funciona por composición; sin azúcar
+  extra.

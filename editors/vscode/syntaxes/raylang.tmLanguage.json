@@ -65,7 +65,7 @@
     },
     "builtins": {
       "name": "support.function.builtin.raylang",
-      "match": "\\b(print)\\b(?=\\s*\\()"
+      "match": "\\b(print|len|push|map|filter|fold)\\b(?=\\s*\\()"
     },
     "types": {
       "name": "support.type.primitive.raylang",

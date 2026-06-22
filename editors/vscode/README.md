@@ -19,7 +19,7 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 | Números | `42`, `3.14` | `constant.numeric` |
 | Cadenas y escapes | `"hola\n"` | `string.quoted.double` |
 | Comentarios | `// ...` | `comment.line` |
-| Builtin | `print(...)` | `support.function.builtin` |
+| Builtins y stdlib | `print len push map filter fold` | `support.function.builtin` |
 | Definición de struct | `struct Punto` | `entity.name.type` |
 | Definición de enum | `enum Figura` | `entity.name.type` |
 | Variante de enum | `Figura.Circulo`, `Lista.Nil` | `entity.name.type` |
@@ -48,10 +48,13 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 > `keyword.operator`. La inferencia de genéricos es cosa del checker, invisible al
 > coloreado.
 
-> **M7 (UFCS y pipelines).** UFCS (`s.trim()`) no necesita reglas: el `.` ya se colorea
-> y el método cae en la regla de llamadas. El **pipeline `|>`** sí se añadió a los
+> **M7 (UFCS, pipelines y stdlib).** UFCS (`s.trim()`) no necesita reglas: el `.` ya se
+> colorea y el método cae en la regla de llamadas. El **pipeline `|>`** se añadió a los
 > operadores. Ambos son azúcar (UFCS en el checker, `|>` en el parser): el coloreado no
-> distingue una llamada UFCS/pipeline de una normal, y no falta hacerlo.
+> distingue una llamada UFCS/pipeline de una normal, y no falta hacerlo. La **stdlib**
+> (`map`/`filter`/`fold`, junto a `len`/`push`) se colorea como `support.function`, igual
+> que `print`: aunque `map`/`filter`/`fold` están escritas en raylang (en el prelude), al
+> usuario se le presentan como funciones de librería.
 
 > Nota: la gramática TextMate (`syntaxes/raylang.tmLanguage.json`) es una
 > **reescritura en regex** de las reglas léxicas de `DESIGN.md` §3. Es independiente
@@ -66,7 +69,7 @@ de extensiones de VSCode y recarga.
 
 ```sh
 # macOS / Linux
-ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.5.0
+ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.6.0
 
 # Luego: recarga VSCode (Cmd/Ctrl+Shift+P → "Developer: Reload Window")
 ```
@@ -81,7 +84,7 @@ Para generar un `.vsix` instalable o publicarlo:
 
 ```sh
 npm install -g @vscode/vsce
-vsce package        # genera raylang-0.5.0.vsix
+vsce package        # genera raylang-0.6.0.vsix
 # Instalar el .vsix: Cmd/Ctrl+Shift+P → "Extensions: Install from VSIX..."
 ```
 

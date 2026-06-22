@@ -1,6 +1,6 @@
 // Recorrer un enum RECURSIVO con match: el caso estrella de los tipos suma. Cada
 // función casa sobre la lista, liga (cabeza, resto) y recurre sobre el resto.
-// (M5.2 — corre con el intérprete.)
+// (M5 — corre igual con el intérprete y con la VM: `--vm`.)
 
 enum Lista {
     Cons(int, Lista),

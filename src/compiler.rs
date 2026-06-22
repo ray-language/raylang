@@ -330,6 +330,84 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    /// Baja un `match` a bytecode (M5.3): guarda el escrutinio en un local temporal y
+    /// emite una **cadena de decisión** —probar el tag de cada variante, ligar su
+    /// payload, ejecutar el cuerpo y saltar al final—. El valor del brazo que casa
+    /// queda en la pila (el `match` es una expresión).
+    fn emit_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], line: usize, col: usize) -> Result<(), CompileError> {
+        // El escrutinio se evalúa UNA vez y se guarda en un local temporal: así se lee
+        // su tag y su payload sin reevaluarlo, y queda rooteado para el GC mientras
+        // dura el match. El nombre `$match` no es un identificador válido, no choca.
+        self.emit_expr(scrutinee)?;
+        let saved = self.begin_scope();
+        let scrut_slot = self.declare_local("$match");
+        self.emit(OpCode::InitLocal(scrut_slot), line, col);
+
+        let mut to_end: Vec<usize> = Vec::new();
+        let mut has_catchall = false;
+
+        for arm in arms {
+            let (aline, acol) = (arm.line, arm.col);
+            match &arm.pattern.kind {
+                PatternKind::Variant { enum_name, variant, bindings } => {
+                    // Tag de esta variante (de la tabla de enums del compilador).
+                    let (_, vmap) = self.enums.get(enum_name).expect("el checker registró el enum");
+                    let (tag, _arity) = *vmap.get(variant).expect("el checker validó la variante");
+                    // ¿Es esta la variante? Si no, al siguiente brazo.
+                    self.emit(OpCode::GetLocal(scrut_slot), aline, acol);
+                    self.emit(OpCode::EnumTagEq(tag), aline, acol);
+                    let to_next = self.emit(OpCode::JumpIfFalse(0), aline, acol);
+                    self.emit(OpCode::Pop, aline, acol); // casó → descartar el bool true
+                    // Ligar el payload en un ámbito propio del brazo (InitLocal boxea
+                    // el slot si una closure del cuerpo lo captura).
+                    let arm_saved = self.begin_scope();
+                    for (i, b) in bindings.iter().enumerate() {
+                        if let Some(name) = b {
+                            self.emit(OpCode::GetLocal(scrut_slot), aline, acol);
+                            self.emit(OpCode::GetEnumField(i), aline, acol);
+                            let slot = self.declare_local(name);
+                            self.emit(OpCode::InitLocal(slot), aline, acol);
+                        }
+                    }
+                    self.emit_expr(&arm.body)?;
+                    self.end_scope(arm_saved);
+                    to_end.push(self.emit(OpCode::Jump(0), aline, acol));
+                    // Etiqueta del siguiente brazo: descartar el bool false.
+                    self.patch_jump(to_next);
+                    self.emit(OpCode::Pop, aline, acol);
+                }
+                PatternKind::Wildcard => {
+                    // Catch-all sin ligar: sin test, siempre se ejecuta.
+                    has_catchall = true;
+                    self.emit_expr(&arm.body)?;
+                    to_end.push(self.emit(OpCode::Jump(0), aline, acol));
+                }
+                PatternKind::Binding(name) => {
+                    // Catch-all que liga el escrutinio completo.
+                    has_catchall = true;
+                    let arm_saved = self.begin_scope();
+                    self.emit(OpCode::GetLocal(scrut_slot), aline, acol);
+                    let slot = self.declare_local(name);
+                    self.emit(OpCode::InitLocal(slot), aline, acol);
+                    self.emit_expr(&arm.body)?;
+                    self.end_scope(arm_saved);
+                    to_end.push(self.emit(OpCode::Jump(0), aline, acol));
+                }
+            }
+        }
+
+        // Sin catch-all, el checker probó que las variantes cubren todo; si aun así no
+        // casara ninguna (un bug), el trap lo señala en vez de corromper la pila.
+        if !has_catchall {
+            self.emit(OpCode::MatchFail, line, col);
+        }
+        for j in to_end {
+            self.patch_jump(j);
+        }
+        self.end_scope(saved);
+        Ok(())
+    }
+
     fn emit_stmt(&mut self, stmt: &Stmt) -> Result<(), CompileError> {
         let (line, col) = (stmt.line, stmt.col);
         match &stmt.kind {
@@ -502,15 +580,7 @@ impl<'a> Compiler<'a> {
 
             ExprKind::Block(b) => self.emit_block(b)?,
 
-            // `match` aún no se compila a bytecode: llega en M5.3. El intérprete sí
-            // lo ejecuta (M5.2), así que un programa con match corre sin `--vm`.
-            ExprKind::Match { .. } => {
-                return Err(CompileError {
-                    msg: "match aún no está soportado en la VM (llega en M5.3); usa el intérprete".into(),
-                    line,
-                    col,
-                });
-            }
+            ExprKind::Match { scrutinee, arms } => self.emit_match(scrutinee, arms, line, col)?,
 
             ExprKind::ArrayLit(elems) => {
                 for e in elems {

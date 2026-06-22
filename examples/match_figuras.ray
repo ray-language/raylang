@@ -1,6 +1,6 @@
 // match: consumir un enum por casos. El checker EXIGE cubrir todas las variantes
 // (o un comodín), así que no se puede olvidar un caso.
-// (M5.2 — corre con el intérprete; el match en la VM llega en M5.3.)
+// (M5 — corre igual con el intérprete y con la VM: `--vm`.)
 
 enum Figura {
     Circulo(float),

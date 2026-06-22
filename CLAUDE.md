@@ -73,21 +73,21 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Estado actual
 
-- **M1–M4 COMPLETOS** + **M5.1/M5.2** (132 tests verdes):
+- **M1–M5 COMPLETOS** (138 tests verdes):
   - **M1**: lexer + parser + checker + intérprete.
   - **M2**: bytecode + VM (pila y marcos explícitos). El intérprete es el **oráculo**.
   - **M3**: datos compuestos — arreglos `[T]` y structs (semántica de referencia).
   - **M4**: closures (captura por referencia/upvalues) + **GC mark-and-sweep en la
     VM** (heap propio con handles en `src/gc.rs`; el intérprete sigue con `Rc`).
-  - **M5.1**: enums (tipos suma) `Type::Enum`, construcción `Enum.Variante(args)`,
-    valores enum en ambos motores (`Obj::Enum` trazado por el GC). El checker
-    **resuelve** la construcción (reescribe `Field`/`Call`→`EnumLit`) y toma
-    `&mut Program`.
-  - **M5.2**: `match (e) { patrón => cuerpo, ... }` (patrones planos: variante con
-    bindings, `_`, binding suelto). Exhaustividad en el checker. **Solo intérprete**;
-    el compilador a VM aún devuelve error para `match`.
-- **Siguiente: M5.3** (`match` en la VM: bajada a bytecode + oráculo, incl. estrés
-  del GC).
+  - **M5**: tipos suma (`enum`) + pattern matching (`match`), en ambos motores.
+    - **M5.1**: enums `Type::Enum`, construcción `Enum.Variante(args)`; `Obj::Enum`
+      trazado por el GC. El checker **resuelve** la construcción (reescribe
+      `Field`/`Call`→`EnumLit`) y toma `&mut Program`.
+    - **M5.2**: `match (e) { patrón => cuerpo, ... }` (patrones planos: variante con
+      bindings, `_`, binding suelto). **Exhaustividad** en el checker.
+    - **M5.3**: `match` en la VM — bajada a bytecode (`EnumTagEq`/`GetEnumField` +
+      saltos; escrutinio en un local temporal). Oráculo VM↔intérprete, incl. estrés.
+- **Siguiente: M6** (genéricos → `Option<T>`/`Result<T,E>` + operador `?`).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

@@ -266,6 +266,19 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Enum(VmEnum { enum_id: *enum_id, tag: *tag, payload }));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::EnumTagEq(tag) => {
+                    let h = self.pop_obj();
+                    let matches = self.as_enum(h).tag == *tag;
+                    self.push(HeapValue::Bool(matches));
+                }
+                OpCode::GetEnumField(i) => {
+                    let h = self.pop_obj();
+                    let v = self.as_enum(h).payload[*i].clone();
+                    self.push(v);
+                }
+                OpCode::MatchFail => {
+                    return Err(runtime_error(line, col, "ningún brazo del match casó (no debería ocurrir)"));
+                }
                 OpCode::GetField(name) => {
                     let h = self.pop_obj();
                     let v = self.as_struct(h).fields.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
@@ -467,6 +480,13 @@ impl<'a> Vm<'a> {
         match self.heap.get_mut(h) {
             Obj::Struct(s) => s,
             _ => unreachable!("el checker garantiza un struct"),
+        }
+    }
+
+    fn as_enum(&self, h: Handle) -> &VmEnum {
+        match self.heap.get(h) {
+            Obj::Enum(e) => e,
+            _ => unreachable!("el checker garantiza un enum"),
         }
     }
 
@@ -1106,6 +1126,91 @@ mod tests {
         vm.run().expect("vm ok");
         // Sin GC habría ~550 objetos vivos; con barrido, muy pocos.
         assert!(vm.heap.live() < 80, "el heap no se acotó: {} objetos vivos", vm.heap.live());
+    }
+
+    // ----- M5.3: match en la VM (oráculo VM<->intérprete) -----
+
+    #[test]
+    fn match_recorrido_oraculo() {
+        // Recorrer un enum recursivo con match: longitud y suma, en ambos motores.
+        oracle_program(
+            "enum Lista { Cons(int, Lista), Nil }
+             fn longitud(xs: Lista) -> int { match (xs) { Lista.Cons(_, t) => 1 + longitud(t), Lista.Nil => 0 } }
+             fn suma(xs: Lista) -> int { match (xs) { Lista.Cons(h, t) => h + suma(t), Lista.Nil => 0 } }
+             fn main() -> int {
+                 let xs: Lista = Lista.Cons(10, Lista.Cons(20, Lista.Cons(30, Lista.Nil)));
+                 longitud(xs) * 100 + suma(xs)
+             }",
+        );
+    }
+
+    #[test]
+    fn match_selecciona_brazo_oraculo() {
+        // Variantes con distinta aridad de payload; cada brazo liga lo suyo.
+        oracle_program(
+            "enum Figura { Circulo(int), Rect(int, int), Punto }
+             fn area(f: Figura) -> int {
+                 match (f) { Figura.Circulo(r) => 3 * r * r, Figura.Rect(w, h) => w * h, Figura.Punto => 0 }
+             }
+             fn main() -> int { area(Figura.Rect(4, 5)) + area(Figura.Circulo(2)) + area(Figura.Punto) }",
+        );
+    }
+
+    #[test]
+    fn match_comodin_y_binding_oraculo() {
+        // Comodín `_` (dentro de variante y suelto) y binding catch-all.
+        oracle_program(
+            "enum E { Uno, Dos, Otro }
+             fn n(e: E) -> int { match (e) { E.Uno => 1, otro => 99 } }
+             fn main() -> int { n(E.Uno) * 100 + n(E.Dos) }",
+        );
+    }
+
+    #[test]
+    fn match_en_modo_estres() {
+        // La prueba clave de M5.3: con el GC recolectando en CADA punto seguro, el
+        // escrutinio guardado en el local temporal y el payload extraído deben seguir
+        // rooteados. Si faltara una raíz, recorrer la lista reventaría o cambiaría.
+        oracle_stress(
+            "enum Lista { Cons(int, Lista), Nil }
+             fn construir(n: int) -> Lista { if (n == 0) { Lista.Nil } else { Lista.Cons(n, construir(n - 1)) } }
+             fn suma(xs: Lista) -> int { match (xs) { Lista.Cons(h, t) => h + suma(t), Lista.Nil => 0 } }
+             fn main() -> int { suma(construir(15)) }",
+        );
+    }
+
+    #[test]
+    fn match_binding_capturado_por_closure_oraculo() {
+        // Interacción fina: un binding de match capturado por una closure debe
+        // BOXEARSE (vivir en una celda). InitLocal sobre el slot del binding lo
+        // maneja, igual que con un `let`. Ambos motores deben coincidir.
+        oracle_program(
+            "enum E { A(int), B(int), C }
+             fn sumador(e: E) -> fn(int) -> int {
+                 match (e) {
+                     E.A(n) => fn(x: int) -> int { x + n },
+                     E.B(n) => fn(x: int) -> int { x * n },
+                     E.C    => fn(x: int) -> int { x },
+                 }
+             }
+             fn main() -> int {
+                 let f: fn(int) -> int = sumador(E.A(10));
+                 let g: fn(int) -> int = sumador(E.B(3));
+                 f(5) + g(5)
+             }",
+        );
+    }
+
+    #[test]
+    fn match_anidado_en_expresiones_oraculo() {
+        // match como expresión: su valor alimenta otra operación, y el cuerpo de un
+        // brazo construye otra variante (resolución dentro del brazo).
+        oracle_program(
+            "enum Sem { Rojo, Verde }
+             fn opuesto(s: Sem) -> Sem { match (s) { Sem.Rojo => Sem.Verde, Sem.Verde => Sem.Rojo } }
+             fn a_int(s: Sem) -> int { match (s) { Sem.Rojo => 0, Sem.Verde => 1 } }
+             fn main() -> int { a_int(opuesto(Sem.Rojo)) + a_int(opuesto(Sem.Verde)) * 10 }",
+        );
     }
 
     // ----- M4.3: recolección de basura -----

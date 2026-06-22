@@ -2,7 +2,7 @@
 // que con genéricos llegará en M6; aquí va la versión monomórfica (solo int).
 // match obliga a tratar AMBOS casos, así que "olvidar el caso vacío" es un error de
 // tipos, no un fallo en ejecución.
-// (M5.2 — corre con el intérprete.)
+// (M5 — corre igual con el intérprete y con la VM: `--vm`.)
 
 enum OpInt {
     Algun(int),

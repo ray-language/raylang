@@ -116,6 +116,18 @@ pub enum OpCode {
     /// (el payload, en orden) y empuja el valor de enum.
     MakeEnum(usize, usize),
 
+    // --- match (M5.3) ---
+    /// Saca un enum de la pila y empuja `Bool(tag == arg)`: ¿es esta la variante?
+    /// La cadena de brazos compara con esto y salta con `JumpIfFalse`.
+    EnumTagEq(usize),
+    /// Saca un enum y empuja el valor en la posición `i` de su payload (para ligar
+    /// los sub-patrones de un brazo).
+    GetEnumField(usize),
+    /// El `match` no casó ningún brazo: error de ejecución. Es un **trap defensivo**:
+    /// el checker garantiza exhaustividad, así que es inalcanzable en programas
+    /// válidos.
+    MatchFail,
+
     /// Termina la ejecución del chunk; el valor de retorno es la cima de la pila.
     Return,
 }

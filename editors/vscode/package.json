@@ -2,7 +2,7 @@
   "name": "raylang",
   "displayName": "raylang",
   "description": "Resaltado de sintaxis para el lenguaje raylang (.ray)",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "rayala",
   "engines": {
     "vscode": "^1.75.0"

@@ -26,7 +26,7 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 | Definición de función | `fn fib` | `entity.name.function` |
 | Función anónima / tipo función | `fn(n: int) -> int`, `fn(int) -> int` | `storage.type` + tipos |
 | Llamadas | `fib(...)` | `entity.name.function` |
-| Operadores | `+ - == && -> => ?` ... | `keyword.operator` |
+| Operadores | `+ - == && -> => ? \|>` ... | `keyword.operator` |
 | Genéricos | `<T>`, `Caja<int>`, `Par<A, B>` | `entity.name.type` + `keyword.operator` |
 
 > El **tipo función** `fn(...) -> R` y la **función anónima** `fn(n: int) { ... }`
@@ -48,6 +48,11 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 > `keyword.operator`. La inferencia de genéricos es cosa del checker, invisible al
 > coloreado.
 
+> **M7 (UFCS y pipelines).** UFCS (`s.trim()`) no necesita reglas: el `.` ya se colorea
+> y el método cae en la regla de llamadas. El **pipeline `|>`** sí se añadió a los
+> operadores. Ambos son azúcar (UFCS en el checker, `|>` en el parser): el coloreado no
+> distingue una llamada UFCS/pipeline de una normal, y no falta hacerlo.
+
 > Nota: la gramática TextMate (`syntaxes/raylang.tmLanguage.json`) es una
 > **reescritura en regex** de las reglas léxicas de `DESIGN.md` §3. Es independiente
 > de nuestro lexer en Rust; mantener ambos en sincronía es la pequeña deuda
@@ -61,7 +66,7 @@ de extensiones de VSCode y recarga.
 
 ```sh
 # macOS / Linux
-ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.4.0
+ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.5.0
 
 # Luego: recarga VSCode (Cmd/Ctrl+Shift+P → "Developer: Reload Window")
 ```
@@ -76,7 +81,7 @@ Para generar un `.vsix` instalable o publicarlo:
 
 ```sh
 npm install -g @vscode/vsce
-vsce package        # genera raylang-0.4.0.vsix
+vsce package        # genera raylang-0.5.0.vsix
 # Instalar el .vsix: Cmd/Ctrl+Shift+P → "Extensions: Install from VSIX..."
 ```
 

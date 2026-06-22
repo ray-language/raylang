@@ -1437,4 +1437,52 @@ mod tests {
             }
         "#);
     }
+
+    // ----- M7.2: pipelines (azúcar de parser; ambos motores ven la llamada bajada) -----
+
+    #[test]
+    fn pipeline_oraculo() {
+        oracle_program(r#"
+            fn doble(x: int) -> int { x * 2 }
+            fn inc(x: int) -> int { x + 1 }
+            fn suma(a: int, b: int) -> int { a + b }
+            fn main() -> int {
+                let v: int = 5;
+                let a: int = v |> doble |> inc;   // inc(doble(5)) = 11
+                let b: int = v |> suma(100);       // suma(5, 100) = 105
+                a + b                               // 116
+            }
+        "#);
+    }
+
+    #[test]
+    fn pipeline_y_ufcs_oraculo() {
+        // `.f()` (UFCS) y `|> f` (pipeline) componen sobre el mismo valor.
+        oracle_program(r#"
+            fn doble(x: int) -> int { x * 2 }
+            fn inc(x: int) -> int { x + 1 }
+            fn main() -> int {
+                let v: int = 5;
+                v.doble() |> inc |> doble           // doble(inc(doble(5))) = 22
+            }
+        "#);
+    }
+
+    #[test]
+    fn pipeline_en_modo_estres() {
+        // El valor que fluye por el pipeline es un arreglo en el heap.
+        oracle_stress(r#"
+            fn suma_todo(xs: [int]) -> int {
+                var s: int = 0;
+                var i: int = 0;
+                while (i < len(xs)) { s = s + xs[i]; i = i + 1; }
+                s
+            }
+            fn con_extra(xs: [int], x: int) -> [int] { push(xs, x); xs }
+            fn main() -> int {
+                let xs: [int] = [1, 2, 3];
+                xs |> con_extra(4) |> suma_todo     // suma_todo(con_extra(xs, 4)) = 10
+            }
+        "#);
+    }
 }

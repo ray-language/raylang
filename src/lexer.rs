@@ -157,8 +157,10 @@ impl Lexer {
             '|' => {
                 if self.match_char('|') {
                     TokenKind::PipePipe
+                } else if self.match_char('>') {
+                    TokenKind::PipeArrow // |> (pipeline, M7.2)
                 } else {
-                    return Err(self.error("se esperaba '||' (el pipeline '|>' llega en M7)".into()));
+                    return Err(self.error("se esperaba '||' o '|>' (¿olvidaste un '|'?)".into()));
                 }
             }
 
@@ -432,6 +434,23 @@ mod tests {
     #[test]
     fn token_de_interrogacion() {
         assert_eq!(kinds("x?"), vec![TokenKind::Ident("x".into()), TokenKind::Question, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn token_pipeline_y_or() {
+        // '|>' (pipeline, M7.2) y '||' (or) se distinguen; un '|' suelto es error.
+        assert_eq!(
+            kinds("a |> b || c"),
+            vec![
+                TokenKind::Ident("a".into()),
+                TokenKind::PipeArrow,
+                TokenKind::Ident("b".into()),
+                TokenKind::PipePipe,
+                TokenKind::Ident("c".into()),
+                TokenKind::Eof,
+            ]
+        );
+        assert!(lex("a | b").is_err());
     }
 
     #[test]

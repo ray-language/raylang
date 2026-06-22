@@ -74,7 +74,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Estado actual
 
-- **M1–M6 COMPLETOS, M7 en curso** (184 tests verdes):
+- **M1–M6 COMPLETOS, M7 en curso** (192 tests verdes):
   - **M1**: lexer + parser + checker + intérprete.
   - **M2**: bytecode + VM (pila y marcos explícitos). El intérprete es el **oráculo**.
   - **M3**: datos compuestos — arreglos `[T]` y structs (semántica de referencia).
@@ -105,8 +105,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     gana sobre función libre— y registra los sitios (`(línea, col, nombre)`); una pasada
     `&mut` (`lower_ufcs`) los **reescribe a llamadas ordinarias** tras verificar. El
     receptor cuenta para la inferencia de genéricos. Runtime intacto.
-- **Siguiente: M7.2** (pipelines `|>`) y **M7.3** (stdlib: `push`/`split`/`trim` + `map`/
-  `filter`/`fold` en prelude).
+  - **M7.2**: **pipelines** `|>` (`x |> f(a)` ≡ `f(x, a)`, receptor como primer
+    argumento). Token `PipeArrow`; puro **desugaring del parser** (`make_pipeline`):
+    precedencia mínima, asociativo a la izquierda, operando derecho a nivel `call`. No
+    toca checker ni runtime. Compone con UFCS.
+- **Siguiente: M7.3** (stdlib: `split`/`trim`/`to_string` builtins + `map`/`filter`/
+  `fold` en prelude). (`push`/`len` ya son builtins.)
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

@@ -362,9 +362,29 @@ impl Parser {
 
     // ----- Expresiones (por precedencia, de menor a mayor) -----
 
-    /// expression = logic_or  (las expresiones-con-bloque se reconocen en `primary`)
+    /// expression = pipeline  (las expresiones-con-bloque se reconocen en `primary`)
     fn expression(&mut self) -> Result<Expr, ParseError> {
-        self.logic_or()
+        self.pipeline()
+    }
+
+    /// pipeline = logic_or { '|>' call }
+    ///
+    /// Azúcar de M7.2: `x |> f(a)` ≡ `f(x, a)` —el receptor se inserta como **primer
+    /// argumento**—; `x |> f` (sin paréntesis) ≡ `f(x)`. Es la precedencia **más baja**
+    /// y **asociativo a la izquierda**: `x |> f |> g` ≡ `g(f(x))`. Se desazucara aquí
+    /// mismo a un `Call` ordinario, así que el checker y los dos motores no ven `|>`.
+    ///
+    /// El operando derecho se parsea a nivel de `call` (un objetivo de llamada: `f`,
+    /// `f(args)`, `m.f(args)`), no una expresión completa: para operar sobre el
+    /// resultado de un pipeline hay que parentizar (`(x |> f) + 1`).
+    fn pipeline(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.logic_or()?;
+        while self.check(&TokenKind::PipeArrow) {
+            self.advance(); // '|>'
+            let rhs = self.call()?;
+            left = make_pipeline(left, rhs);
+        }
+        Ok(left)
     }
 
     /// logic_or = logic_and { '||' logic_and }
@@ -864,6 +884,27 @@ fn make_binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     }
 }
 
+/// Desazucara `recv |> rhs` (M7.2): inserta `recv` como **primer argumento** de la
+/// llamada `rhs`. Si `rhs` ya es una llamada `f(args)`, el resultado es `f(recv, args)`;
+/// si es cualquier otra expresión llamable `f`, es `f(recv)`. El nodo resultante es un
+/// `Call` ordinario, posicionado en el `rhs` (donde está la función llamada).
+fn make_pipeline(recv: Expr, rhs: Expr) -> Expr {
+    let (line, col) = (rhs.line, rhs.col);
+    let kind = match rhs.kind {
+        ExprKind::Call { callee, mut args } => {
+            let mut new_args = Vec::with_capacity(args.len() + 1);
+            new_args.push(recv);
+            new_args.append(&mut args);
+            ExprKind::Call { callee, args: new_args }
+        }
+        other => ExprKind::Call {
+            callee: Box::new(Expr { kind: other, line, col }),
+            args: vec![recv],
+        },
+    };
+    Expr { kind, line, col }
+}
+
 /// ¿Es una expresión "con bloque" (if/while/{})? Determina si puede usarse como
 /// sentencia sin `;` (DESIGN.md §6).
 fn expr_has_block(e: &Expr) -> bool {
@@ -1228,5 +1269,42 @@ fn main() -> int {
         // El '+' hereda la posición de su operando izquierdo '1' (col 1).
         let e = parse_expr("1 + 2");
         assert_eq!((e.line, e.col), (1, 1));
+    }
+
+    // ----- M7.2: pipelines (desugaring a Call) -----
+
+    #[test]
+    fn pipeline_inserta_receptor_como_primer_arg() {
+        // `x |> f` ≡ f(x); `x |> f(a)` ≡ f(x, a).
+        assert_eq!(sx(&parse_expr("x |> f")), "(call f [x])");
+        assert_eq!(sx(&parse_expr("x |> f(a)")), "(call f [x a])");
+        assert_eq!(sx(&parse_expr("x |> f(a, b)")), "(call f [x a b])");
+    }
+
+    #[test]
+    fn pipeline_es_asociativo_a_la_izquierda() {
+        // `x |> f |> g` ≡ g(f(x)).
+        assert_eq!(sx(&parse_expr("x |> f |> g")), "(call g [(call f [x])])");
+        assert_eq!(
+            sx(&parse_expr("x |> f(a) |> g(b)")),
+            "(call g [(call f [x a]) b])"
+        );
+    }
+
+    #[test]
+    fn pipeline_tiene_precedencia_minima() {
+        // El operando izquierdo es una expresión completa: `2 + 3 |> f` ≡ f(2 + 3).
+        assert_eq!(sx(&parse_expr("2 + 3 |> f")), "(call f [(+ 2 3)])");
+        // Para operar sobre el resultado hay que parentizar.
+        assert_eq!(sx(&parse_expr("(x |> f) + 1")), "(+ (call f [x]) 1)");
+    }
+
+    #[test]
+    fn pipeline_compone_con_ufcs() {
+        // `.f()` (UFCS, se resuelve en el checker) y `|> f` (pipeline, aquí) conviven.
+        assert_eq!(
+            sx(&parse_expr("x.doble() |> inc")),
+            "(call inc [(call (field x doble) [])])"
+        );
     }
 }

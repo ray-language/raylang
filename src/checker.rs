@@ -76,6 +76,19 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
         all.append(&mut program.enums);
         program.enums = all;
     }
+    // Paso 0b (M7.3): inyectar las funciones del prelude (map/filter/fold). Se saltan
+    // las que el usuario ya definió con ese nombre —permite override y hace la inyección
+    // idempotente si se vuelve a verificar—. Como los enums, quedan en el AST que
+    // también compilan/ejecutan el intérprete y la VM.
+    let definidas: HashSet<String> = program.functions.iter().map(|f| f.name.clone()).collect();
+    let mut prelude_fns: Vec<Function> = crate::prelude::functions()
+        .into_iter()
+        .filter(|f| !definidas.contains(&f.name))
+        .collect();
+    if !prelude_fns.is_empty() {
+        prelude_fns.append(&mut program.functions);
+        program.functions = prelude_fns;
+    }
     // Paso 1: resolver la construcción de enums sobre el AST.
     let enum_names: HashSet<String> = program.enums.iter().map(|e| e.name.clone()).collect();
     for f in &mut program.functions {
@@ -2489,6 +2502,57 @@ fn main() -> int {
     let xs: [int] = [7, 8, 9];
     xs.primero()                 // primero(xs) con T = int
 }
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    // ----- M7.3: stdlib (prelude de orden superior: map/filter/fold) -----
+
+    #[test]
+    fn prelude_map_filter_fold_tipan() {
+        // Disponibles sin declararlas; se infieren los genéricos en cada uso.
+        let src = r#"
+fn doble(x: int) -> int { x * 2 }
+fn par(x: int) -> bool { x % 2 == 0 }
+fn suma(a: int, b: int) -> int { a + b }
+fn main() -> int {
+    let xs: [int] = [1, 2, 3, 4];
+    let ys: [int] = xs.map(doble).filter(par);
+    ys.fold(0, suma)
+}
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn prelude_fold_a_tipo_distinto() {
+        // fold<T, A>: el acumulador A puede diferir del elemento T (aquí bool).
+        let src = r#"
+fn main() -> int {
+    let xs: [int] = [2, 4, 6];
+    let todos: bool = xs.fold(true, fn(acc: bool, x: int) -> bool { acc && (x % 2 == 0) });
+    if (todos) { 1 } else { 0 }
+}
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn prelude_map_exige_funcion_compatible() {
+        // map<T,U>(xs:[T], f:fn(T)->U): una f con dominio incompatible hace que el
+        // parámetro de tipo T se exija int (por xs) y bool (por f) a la vez: error.
+        err_contains(
+            "fn f(b: bool) -> int { 1 } fn main() -> int { let xs: [int] = [1]; let ys: [int] = xs.map(f); ys[0] }",
+            "no puede ser int y bool",
+        );
+    }
+
+    #[test]
+    fn prelude_usuario_puede_redefinir() {
+        // Si el usuario define 'map', el del prelude se omite (override).
+        let src = r#"
+fn map(x: int) -> int { x + 1 }
+fn main() -> int { map(41) }
 "#;
         assert!(check_src(src).is_ok());
     }

@@ -868,22 +868,11 @@ compone con UFCS y con genéricos sin esfuerzo —al checker le llegan llamadas 
 
 ### 16.4 stdlib inicial
 
-**Builtins nuevos (Rust)** — operaciones que tocan el runtime:
+El corazón de la stdlib de M7.3 es **orden superior escrito en el propio raylang**, en
+el prelude. No toca el runtime: se apoya en los builtins que ya existían (`len`, `push`),
+los genéricos (M6) y los closures (M4).
 
-| Builtin | Tipo | Notas |
-|---------|------|-------|
-| `len(xs)` | `[T] -> int`, `string -> int` | ya existía; se documenta como stdlib |
-| `push(xs, x)` | `([T], T) -> unit` | muta el arreglo (semántica de referencia, M3) |
-| `trim(s)` | `string -> string` | recorta espacios |
-| `split(s, sep)` | `(string, string) -> [string]` | parte por separador |
-| `concat(a, b)` | `(string, string) -> string` | concatena (o `+` sobre string, a decidir) |
-| `to_string(x)` | `int/float/bool -> string` | conversión a texto |
-
-Los builtins se tipan con un **esquema** (pueden ser polimórficos, p. ej. `push`), no
-como una función raylang concreta; el checker los conoce por nombre. El conjunto exacto
-se fija en M7.3.
-
-**Prelude en raylang** — orden superior, escrito en el propio lenguaje:
+**Prelude en raylang** (`src/prelude.rs`, junto a `Option`/`Result`):
 
 ```rust
 fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
@@ -892,19 +881,33 @@ fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
     while (i < len(xs)) { push(out, f(xs[i])); i = i + 1; }
     out
 }
-fn filter<T>(xs: [T], pred: fn(T) -> bool) -> [T] { /* análogo */ }
-fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A { /* análogo */ }
+fn filter<T>(xs: [T], pred: fn(T) -> bool) -> [T] { /* análogo, con if */ }
+fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A { /* acumula desde init */ }
 ```
 
-Se inyectan como el prelude de M6 (junto a `Option`/`Result`). Aprovechan `push`/`len`
-y los genéricos: son la demostración de que M6 era suficiente para escribir librería.
+Se **inyectan** como el prelude de M6: en `check()`, las funciones del prelude se
+anteponen a las del usuario (saltando las que el usuario ya definió con ese nombre, lo
+que da **override** e idempotencia). Quedan en el AST que también compilan el intérprete
+y la VM. Son la demostración de que M6 + M4 bastaban para escribir librería real, y
+**lucen** con UFCS (`xs.map(f).filter(g)`) y pipelines (`xs |> map(f) |> filter(g)`).
+
+**Builtins que ya existen** y cuentan como stdlib: `len(xs)` (`[T] -> int`),
+`push(xs, x)` (`([T], T) -> unit`, muta), `print`.
+
+**Builtins de string** (`trim`, `split`, `to_string`, `concat`/`+`): se **difieren**
+(ver §16.8). A diferencia del prelude, cada uno necesita un **opcode nuevo** en la VM
+(los builtins de la VM son opcodes dedicados: `Print`/`Len`/`Push`) más su manejo en el
+intérprete y su tipado en el checker; `split` además aloja un `[string]` en el heap. Es
+trabajo de runtime independiente del azúcar de M7, y se aborda como una expansión futura
+de la stdlib.
 
 ### 16.5 Runtime
 
-- **UFCS y `|>`**: **no tocan el runtime**. Tras la reescritura (checker / parser) solo
-  quedan llamadas ordinarias.
-- **Builtins**: el intérprete y la VM ya despachan builtins (`print`, `len`); M7 añade
-  más entradas a esa tabla. Es el único toque de runtime, y es aditivo.
+- **UFCS, `|>` y el prelude**: **no tocan el runtime**. Tras la reescritura (checker /
+  parser) solo quedan llamadas ordinarias; `map`/`filter`/`fold` son funciones raylang
+  normales. M7, tal como se entregó, es **front-end puro**: cero opcodes nuevos.
+- (Si en el futuro se añaden builtins de string, *ahí* sí habría toque de runtime —un
+  opcode por builtin—; ver §16.4 y §16.8.)
 - El **oráculo** (intérprete ↔ VM) cubre UFCS, pipelines y la stdlib, incl. modo estrés
   del GC (los arreglos que crea `map`/`filter` viven en el heap).
 
@@ -918,10 +921,15 @@ y los genéricos: son la demostración de que M6 era suficiente para escribir li
   structs existentes; sin runtime nuevo.
 - **M7.2 — Pipelines (`|>`)**: token, precedencia y *desugaring* en el parser (receptor
   como primer argumento). Compone con UFCS y genéricos.
-- **M7.3 — stdlib**: builtins nuevos (`push`, `trim`, `split`, …) + prelude de orden
-  superior (`map`, `filter`, `fold`) en raylang. Cierra M7 y deja el lenguaje "usable".
+- **M7.3 — stdlib**: prelude de orden superior (`map`, `filter`, `fold`) escrito en
+  raylang e inyectado. Front-end puro (reusa `len`/`push` + genéricos + closures). Cierra
+  M7 dejando el lenguaje "usable" y demostrando "la librería es raylang". Los builtins de
+  string se difieren (§16.4, §16.8).
 
 ### 16.8 Deferido
+- **Builtins de string** (`trim`, `split`, `to_string`, `concat`) → expansión futura de
+  la stdlib: requieren un opcode nuevo por builtin en la VM (más intérprete y checker);
+  es trabajo de runtime, ortogonal al azúcar de M7.
 - **Métodos como valor** (`recv.f` sin llamar) / *method references* → idea futura.
 - **`|>` con placeholder** (`x |> f(a, _, b)`) → no en M7; primer argumento basta.
 - **UFCS sobre primitivos definido por el usuario con resolución por módulos/imports**

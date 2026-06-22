@@ -1485,4 +1485,61 @@ mod tests {
             }
         "#);
     }
+
+    // ----- M7.3: stdlib (prelude map/filter/fold escrito en raylang) -----
+
+    #[test]
+    fn prelude_map_filter_fold_oraculo() {
+        oracle_program(r#"
+            fn doble(x: int) -> int { x * 2 }
+            fn par(x: int) -> bool { x % 2 == 0 }
+            fn suma(a: int, b: int) -> int { a + b }
+            fn main() -> int {
+                let xs: [int] = [1, 2, 3, 4, 5];
+                let ys: [int] = xs.map(doble).filter(par);  // [2,4,6,8,10]
+                ys.fold(0, suma)                             // 30
+            }
+        "#);
+    }
+
+    #[test]
+    fn prelude_pipeline_oraculo() {
+        // El mismo cálculo, en estilo pipeline.
+        oracle_program(r#"
+            fn doble(x: int) -> int { x * 2 }
+            fn par(x: int) -> bool { x % 2 == 0 }
+            fn suma(a: int, b: int) -> int { a + b }
+            fn main() -> int {
+                let xs: [int] = [1, 2, 3, 4, 5];
+                xs |> filter(par) |> map(doble) |> fold(0, suma)  // [2,4]->[4,8]->12
+            }
+        "#);
+    }
+
+    #[test]
+    fn prelude_con_closures_oraculo() {
+        // map/fold con funciones anónimas inline.
+        oracle_program(r#"
+            fn main() -> int {
+                let xs: [int] = [1, 2, 3, 4];
+                let cuadrados: [int] = xs |> map(fn(x: int) -> int { x * x });  // [1,4,9,16]
+                cuadrados.fold(0, fn(a: int, x: int) -> int { a + x })           // 30
+            }
+        "#);
+    }
+
+    #[test]
+    fn prelude_en_modo_estres() {
+        // map y filter alojan arreglos nuevos en el heap: el GC en estrés debe
+        // mantenerlos vivos durante toda la cadena.
+        oracle_stress(r#"
+            fn inc(x: int) -> int { x + 1 }
+            fn pos(x: int) -> bool { x > 3 }
+            fn suma(a: int, b: int) -> int { a + b }
+            fn main() -> int {
+                let xs: [int] = [1, 2, 3, 4, 5, 6];
+                xs.map(inc).filter(pos).fold(0, suma)   // [2..7]->[4,5,6,7]->22
+            }
+        "#);
+    }
 }

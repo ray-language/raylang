@@ -35,7 +35,7 @@ fuente → [lexer] → tokens → [parser] → AST → [checker] → [interprete
 
 | Archivo | Fase | Notas |
 |---------|------|-------|
-| `src/prelude.rs` | front-end | Option/Result (enums en raylang), inyectados en `check` (M6.3) |
+| `src/prelude.rs` | front-end | stdlib en raylang: Option/Result (M6.3) + map/filter/fold (M7.3), inyectados en `check` |
 | `src/token.rs`, `src/lexer.rs` | léxico | texto → tokens; cada token con (línea, col) |
 | `src/ast.rs`, `src/parser.rs` | sintaxis | descenso recursivo; precedencia por jerarquía de reglas |
 | `src/checker.rs` | semántica | tipos; dos pasadas (firmas + cuerpos), pila de ámbitos, análisis de divergencia |
@@ -74,7 +74,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Estado actual
 
-- **M1–M6 COMPLETOS, M7 en curso** (192 tests verdes):
+- **M1–M7 COMPLETOS** (200 tests verdes):
   - **M1**: lexer + parser + checker + intérprete.
   - **M2**: bytecode + VM (pila y marcos explícitos). El intérprete es el **oráculo**.
   - **M3**: datos compuestos — arreglos `[T]` y structs (semántica de referencia).
@@ -109,8 +109,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     argumento). Token `PipeArrow`; puro **desugaring del parser** (`make_pipeline`):
     precedencia mínima, asociativo a la izquierda, operando derecho a nivel `call`. No
     toca checker ni runtime. Compone con UFCS.
-- **Siguiente: M7.3** (stdlib: `split`/`trim`/`to_string` builtins + `map`/`filter`/
-  `fold` en prelude). (`push`/`len` ya son builtins.)
+  - **M7.3**: **stdlib** de orden superior (`map`/`filter`/`fold`) **escrita en raylang**
+    en el prelude (`src/prelude.rs`) e inyectada en `check` (se saltan las que el usuario
+    redefina → override). Reusa `len`/`push` + genéricos + closures: **front-end puro**,
+    cero opcodes nuevos. Builtins de string (`trim`/`split`/`to_string`) **diferidos**
+    (necesitan un opcode por builtin en la VM; DESIGN §16.4/§16.8).
+- **Siguiente: M8** (inferencia local `let x = 3`, REPL, mejores errores).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

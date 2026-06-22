@@ -611,3 +611,147 @@ pasa a tomar `&mut Program` para esta reescritura.
 - **Patrones anidados** (`Ok(Circulo(r))`) y **literales** (`0 => ...`, `true => ...`).
 - **Enums genéricos** → `Option<T>`/`Result<T,E>` y el operador `?` (M6).
 - **`==`/`@derive(Eq, Show)`** para enums.
+
+## 15. M6 — Genéricos, `Option`/`Result` y `?`
+
+M6 añade **polimorfismo paramétrico** (genéricos) y, sobre él, el modelo de manejo de
+errores del lenguaje: `Option<T>`, `Result<T, E>` y el operador `?`. Es el hito que
+cumple el norte de §0 —**errores como valores, sin `null`**— y el que más toca el
+sistema de tipos desde M1.
+
+### 15.0 Decisiones de diseño (cerradas)
+
+1. **Borrado de tipos (*type erasure*).** Los genéricos viven **solo en el checker**.
+   Los valores de raylang ya son uniformes (cargan su etiqueta en runtime), así que una
+   función genérica solo mueve valores: el intérprete y la VM **no cambian** por los
+   genéricos. La lección: *los genéricos son una característica del type checker.*
+2. **Inferencia desde los argumentos.** Los argumentos de tipo se **infieren** por
+   unificación local (`Option.Some(5)` ⇒ `T = int`); no hay *turbofish*. Para los casos
+   que los argumentos no determinan (p. ej. `Option.None`, o `[]`), se usa el **tipo
+   esperado** del contexto (chequeo **bidireccional**).
+3. **`Option`/`Result` en un *prelude*.** Son enums genéricos **definidos en raylang**
+   y autoinyectados; el lenguaje no los trata especial salvo por `?`. El mecanismo
+   (enums genéricos) es general: el usuario puede definir su propio `Either<A, B>`.
+4. **`?` sobre `Result` y `Option`.** `e?` desempaqueta el valor o **retorna temprano**
+   el `Err(e)`/`None`. La función que lo usa debe declarar un retorno compatible.
+
+Forzado por el norte (no son decisiones abiertas):
+- **Genéricos no acotados**: sin *traits*/bounds. El código genérico solo hace cosas
+  agnósticas al tipo (pasar, guardar, construir/`match` enums conocidos). No puede,
+  p. ej., `==` sobre un `T` cualquiera. Los *bounds* son idea futura (IDEAS.md).
+
+### 15.1 Sintaxis nueva
+
+```rust
+// Funciones genéricas: parámetros de tipo entre <…> tras el nombre.
+fn identidad<T>(x: T) -> T { x }
+fn mapear<T, U>(xs: [T], f: fn(T) -> U) -> [U] { /* ... */ }
+
+// Enums y structs genéricos.
+enum Caja<T> { Llena(T), Vacia }
+struct Par<A, B> { primero: A, segundo: B }
+
+// Uso: los argumentos de tipo se INFIEREN; no se escriben en la llamada.
+let n: int = identidad(5);                 // T = int, inferido
+let c: Caja<int> = Caja.Llena(3);          // T = int, inferido del argumento
+let v: Caja<int> = Caja.Vacia;             // T = int, del tipo ESPERADO
+
+// Option/Result (del prelude) y el operador ?.
+fn dividir(a: int, b: int) -> Result<int, string> {
+    if (b == 0) { Result.Err("división por cero") } else { Result.Ok(a / b) }
+}
+fn calcular(x: int, y: int) -> Result<int, string> {
+    let q: int = dividir(x, y)?;   // Err -> retorna Err; si no, desempaqueta a int
+    Result.Ok(q + 1)
+}
+```
+
+- Los `<…>` aparecen **solo en posición de tipo** (declaración de parámetros de tipo,
+  o anotaciones como `Option<int>`): no hay ambigüedad con `<`/`>` de comparación, que
+  viven en posición de **expresión**. Como los argumentos se infieren, no hay `<…>` en
+  las llamadas ni en las construcciones.
+- El operador **`?`** es *postfix*: `expr?`. Token nuevo: `?`.
+
+### 15.2 Sistema de tipos
+
+- **Parámetro de tipo**: nueva variante `Type::Var(String)` —una `T` dentro de una
+  definición genérica—. Es opaca: dos `Var` solo son iguales si tienen el mismo nombre.
+- **Aplicación de tipo**: `Type::Struct` y `Type::Enum` pasan a llevar **argumentos**:
+  `Struct(String, Vec<Type>)`, `Enum(String, Vec<Type>)` (vacío = no genérico). Así
+  `Option<int>` es `Enum("Option", [Int])`. (Es la `Named(nombre, Vec<Type>)` que §1
+  anticipó, conservando la distinción struct/enum que el checker ya usa.)
+- **Definiciones genéricas**: `Function`, `EnumDef`, `StructDef` ganan
+  `type_params: Vec<String>`. Al verificar su cuerpo, esos nombres están en ámbito como
+  `Type::Var`.
+- **Buena formación** (`ensure_type`): `Option<int>` exige que `Option` exista con la
+  **aridad** correcta de parámetros de tipo, y valida cada argumento.
+
+### 15.3 Sustitución, unificación e inferencia
+
+Tres operaciones, todas en el checker:
+
+- **Sustitución** `subst(ty, σ)`: reemplaza cada `Var(name)` por `σ[name]`, recursivo
+  bajo `[T]`, `fn(...)`, `Enum/Struct<...>`. Instanciar el payload de `Some(T)` para
+  `Option<int>` es `subst(T, {T↦int}) = int`.
+- **Unificación** `unify(declarado, real, σ)`: recorre ambos en paralelo; cuando
+  `declarado` es `Var(n)`, liga `σ[n] = real` (o exige consistencia si ya estaba);
+  cuando ambos son constructores (`Array`, `Enum`, `Fn`, …) recurre en sus componentes;
+  desacuerdo = error. Es la inferencia: de `(T) ↔ (int)` sale `T = int`.
+- **Chequeo bidireccional**: `check_expr` gana un **tipo esperado** opcional. La mayoría
+  de las expresiones lo ignoran; la **construcción** (`EnumLit`/`StructLit`) y los casos
+  sin argumentos (`Option.None`, `[]`) lo usan para fijar los parámetros que los
+  argumentos no determinan. Esto **subsume** la aspereza del `[]` vacío (IDEAS §12).
+
+**Llamada genérica** `mapear(nums, aTexto)`: se toman frescas las variables de tipo de
+`mapear` (`T`, `U`), se **unifican** los tipos de los parámetros con los de los
+argumentos (`[T] ↔ [int]`, `fn(T)->U ↔ fn(int)->string`) llenando `σ`, y el tipo del
+resultado es `subst([U], σ) = [string]`. Si algún parámetro queda sin determinar y no
+hay tipo esperado que lo fije, es error ("no se pudo inferir T").
+
+### 15.4 `Option`/`Result` y el operador `?`
+
+- **Prelude**: una cadena fuente de raylang, **inyectada antes** del programa del
+  usuario en el front-end. Contiene:
+  ```rust
+  enum Option<T> { Some(T), None }
+  enum Result<T, E> { Ok(T), Err(E) }
+  ```
+  El checker, el intérprete y la VM las tratan como enums genéricos normales.
+- **`?`** (`ExprKind::Try`): `e?` con `e: Result<T, E>` o `e: Option<T>`.
+  - **Tipo**: el valor desempaquetado, `T`.
+  - **Contexto**: la función envolvente debe retornar un tipo **compatible**:
+    `Result<_, E>` (misma `E`) para `?` sobre `Result`; `Option<_>` para `Option`. El
+    checker lo valida.
+  - **Semántica**: si es `Ok(v)`/`Some(v)`, el valor es `v`; si es `Err(e)`/`None`,
+    **retorna** ese mismo valor de la función. Con erasure, el valor `Err(e)`/`None`
+    *es* del tipo de retorno (no guarda argumentos de tipo), así que propagarlo es
+    devolverlo tal cual.
+
+### 15.5 Runtime (erasure)
+
+- **Genéricos**: el intérprete y la VM **no cambian**. Un enum genérico es un enum; una
+  función genérica es una función. Los argumentos de tipo no existen en runtime.
+- **`?`**: se ejecuta **nativo** en ambos motores (no se puede *desugar* a un brazo de
+  `match` porque `return` es sentencia, no expresión). El intérprete reusa su señal
+  `Flow::Return`; la VM inspecciona el *tag* (Ok/Some = 0, Err/None = 1) y, en el caso
+  de error, **retorna** el valor en la cima. Es el único toque de runtime de M6.
+- El **oráculo** cubre genéricos, `Option`/`Result` y `?`, incluido el modo estrés.
+
+### 15.6 Léxico/sintaxis nuevos
+- Token **`?`** (operador postfix de propagación).
+- `<` y `>` en **posición de tipo** delimitan argumentos/parámetros de tipo (reusan los
+  tokens `Lt`/`Gt`).
+
+### 15.7 Sub-fases
+- **M6.1 — Funciones genéricas e inferencia**: `Type::Var`, parámetros de tipo en
+  funciones, sustitución, unificación desde argumentos y **tipo esperado**
+  (bidireccional; arregla el `[]` vacío de paso). Sin tipos genéricos del usuario aún.
+- **M6.2 — Tipos genéricos (enums/structs)**: argumentos de tipo en `Struct`/`Enum`,
+  construcción/campo/`match` con sustitución e inferencia.
+- **M6.3 — `Option`/`Result` y `?`**: prelude autoinyectado y el operador `?` (Result y
+  Option), validado contra el retorno y ejecutado nativamente reusando `return`.
+
+### 15.8 Deferido
+- **Inferencia de locales** (`let x = 3` sin anotación) → M8.
+- **Bounds/traits** sobre genéricos → idea futura (IDEAS.md).
+- **`?` definido por el usuario** (un *trait* `Try`) → no; `?` conoce `Result`/`Option`.

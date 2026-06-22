@@ -26,6 +26,7 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 | Definición de función | `fn fib` | `entity.name.function` |
 | Función anónima / tipo función | `fn(n: int) -> int`, `fn(int) -> int` | `storage.type` + tipos |
 | Llamadas | `fib(...)` | `entity.name.function` |
+| Objetivo de pipeline | `doble` en `x \|> doble` | `entity.name.function` |
 | Operadores | `+ - == && -> => ? \|>` ... | `keyword.operator` |
 | Genéricos | `<T>`, `Caja<int>`, `Par<A, B>` | `entity.name.type` + `keyword.operator` |
 
@@ -55,6 +56,13 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 > (`map`/`filter`/`fold`, junto a `len`/`push`) se colorea como `support.function`, igual
 > que `print`: aunque `map`/`filter`/`fold` están escritas en raylang (en el prelude), al
 > usuario se le presentan como funciones de librería.
+>
+> **Objetivo de un pipeline desnudo.** En `x |> doble`, `doble` no lleva paréntesis, así
+> que la regla general de llamadas (que exige `(`) no lo casa. Una regla específica
+> colorea el identificador que sigue a `|>` como función. Excluye los builtins, porque en
+> `x |> map(...)` el paréntesis ya los colorea como tales (y así `map` conserva su color
+> de builtin). Caso límite: un builtin desnudo tras `|>` (p. ej. `x |> len`) queda sin
+> color —raro, porque `filter`/`fold`/`map` siempre llevan argumentos—.
 
 > Nota: la gramática TextMate (`syntaxes/raylang.tmLanguage.json`) es una
 > **reescritura en regex** de las reglas léxicas de `DESIGN.md` §3. Es independiente
@@ -69,7 +77,7 @@ de extensiones de VSCode y recarga.
 
 ```sh
 # macOS / Linux
-ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.6.0
+ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.6.1
 
 # Luego: recarga VSCode (Cmd/Ctrl+Shift+P → "Developer: Reload Window")
 ```
@@ -84,7 +92,7 @@ Para generar un `.vsix` instalable o publicarlo:
 
 ```sh
 npm install -g @vscode/vsce
-vsce package        # genera raylang-0.6.0.vsix
+vsce package        # genera raylang-0.6.1.vsix
 # Instalar el .vsix: Cmd/Ctrl+Shift+P → "Extensions: Install from VSIX..."
 ```
 

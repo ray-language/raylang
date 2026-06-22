@@ -16,6 +16,7 @@
     { "include": "#booleans" },
     { "include": "#numbers" },
     { "include": "#function-call" },
+    { "include": "#pipeline-target" },
     { "include": "#operators" }
   ],
   "repository": {
@@ -95,6 +96,14 @@
       "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()",
       "captures": {
         "1": { "name": "entity.name.function.raylang" }
+      }
+    },
+    "pipeline-target": {
+      "comment": "El objetivo de un pipeline desnudo (`x |> doble`) es una función aunque no lleve '('. Se excluyen los builtins: en `|> map(...)` el paréntesis ya los colorea como tales.",
+      "match": "(\\|>)\\s*(?!(?:print|len|push|map|filter|fold)\\b)([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.operator.raylang" },
+        "2": { "name": "entity.name.function.raylang" }
       }
     },
     "operators": {

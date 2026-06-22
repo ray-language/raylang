@@ -46,16 +46,30 @@ Principios de diseño:
 El front-end (lexer, parser, checker) se comparte. Los hitos M3+ son features del
 lenguaje; el orden puede flexibilizarse al avanzar.
 
-| Hito | Contenido | Aprendes |
-|------|-----------|----------|
-| **M1** | lexer + parser + checker + **intérprete**; expresiones, primitivos, funciones | pipeline completo, type checking, orientación a expresiones |
-| **M2** | reescribir backend como **bytecode + VM** (mismo front-end) | diseño de VM, stack frames |
-| **M3** | structs + arreglos | layout de datos en memoria |
-| **M4** | closures + **garbage collector** | captura de entorno, GC |
-| **M5** | **tipos suma (`enum`) + pattern matching (`match`)** | uniones etiquetadas, exhaustividad |
-| **M6** | **genéricos** → habilita `Option<T>` / `Result<T,E>` + operador `?` | tipos paramétricos, propagación de errores |
-| **M7** | **UFCS (`.`) + pipelines (`\|>`) + stdlib** (`trim`, `len`, `split`…) | azúcar sobre llamada, resolución de métodos |
-| **M8** | inferencia local (`let x = 3`), REPL, mejores errores | unificación básica, tooling |
+**M1–M8 están COMPLETOS.** A partir de M9 hay dos ejes que se alternan: *lenguaje* (lo
+que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
+
+| Hito | Contenido | Aprendes | Estado |
+|------|-----------|----------|--------|
+| **M1** | lexer + parser + checker + **intérprete**; expresiones, primitivos, funciones | pipeline completo, type checking, orientación a expresiones | ✅ |
+| **M2** | reescribir backend como **bytecode + VM** (mismo front-end) | diseño de VM, stack frames | ✅ |
+| **M3** | structs + arreglos | layout de datos en memoria | ✅ |
+| **M4** | closures + **garbage collector** | captura de entorno, GC | ✅ |
+| **M5** | **tipos suma (`enum`) + pattern matching (`match`)** | uniones etiquetadas, exhaustividad | ✅ |
+| **M6** | **genéricos** → habilita `Option<T>` / `Result<T,E>` + operador `?` | tipos paramétricos, propagación de errores | ✅ |
+| **M7** | **UFCS (`.`) + pipelines (`\|>`) + stdlib** (`map`/`filter`/`fold`) | azúcar sobre llamada, resolución de métodos | ✅ |
+| **M8** | inferencia local (`let x = 3`), REPL, mejores errores | unificación básica, tooling | ✅ |
+| **Limpieza** | reservar `@` (lexer), coma final en arreglos, sincronizar IDEAS | deuda de front-end y de documentación | ⏳ |
+| **M9** | **traits / interfaces** (estilo Rust) → polimorfismo + *bounds* de genéricos | despacho estático vs. dinámico, abstracción | ⏳ |
+| **M10** | **tooling**: LSP (reusa el checker) + anotaciones (`@test`, `@derive`, `@builtin`) | language servers, metadatos en el AST | ⏳ |
+| **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ⏳ |
+| **M12** | **concurrencia** (dirección probable: goroutines + channels) | scheduler, green threads, suspensión | ⏳ |
+| **Transversal** | optimización de la VM (incremental, midiendo) y **self-hosting** (capstone) | rendimiento, bootstrapping | ⏳ |
+
+> El detalle y la clasificación de impacto de los hitos M9+ viven en
+> [IDEAS.md](IDEAS.md) hasta que cada uno se especifique en su propia sección al
+> arrancarlo. Dependencias clave: `@derive`/`@delegate` (M10) necesitan **traits** (M9);
+> el self-hosting necesita **módulos + I/O de archivos** (M11).
 
 Este documento especifica **M1** en detalle y fija el norte de lo posterior.
 

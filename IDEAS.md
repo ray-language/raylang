@@ -10,20 +10,24 @@
 
 ## Resumen de impacto
 
-| Idea | ¿Afecta M1? | ¿Dónde pega? | Cuándo | Estado |
-|------|-------------|--------------|--------|--------|
-| Concurrencia (goroutines / async / suspend) | No | **Arquitectura de la VM (M2)** | pre-M2 | ⚠️ decidir dirección antes de M2 |
-| Null safety | No | Sistema de tipos | ya | ✅ decidido (no hay null) |
-| Introspección / reflection | No | Modelo de valores de la VM | post-M6 | 💤 solo no cerrar la puerta |
-| Structs vs interfaces/traits | No | Sistema de tipos / polimorfismo | M5–M6 | 📌 recomendación fijada |
-| Hot code reloading | No | Indirección de llamadas en la VM | tardío | 💤 acomodable |
-| Visibilidad (`pub` vs mayúscula) | No | Sistema de módulos | cuando haya módulos | 📌 recomendación fijada |
-| **Self-hosting** (raylang en raylang) | No | Capstone: requiere casi todo el lenguaje | post-M7 | 🎯 meta-objetivo |
-| **Tooling de editor** (coloreado / LSP) | No | Front-end (reutiliza el checker) | coloreado ✅ ya / LSP M8 | 🔧 parcial |
-| **Anotaciones** (`@test`, `@derive`, …) | No (solo reservar `@`) | Parser + fase que las consume | integradas M5–M7 / macros lejano | 📌 dirección fijada |
-| **API de runtime / I/O** (`args`, `input`, `env`) | No | Builtins / stdlib | input pronto / argv con arreglos (M3), stdlib M7 | 📌 dirección fijada |
-| **Optimización de la VM** | No | `bytecode`/`compiler`/`vm` | continuo, tras M2 | 🚀 hoja de ruta de rendimiento |
-| **Asperezas de M3** (coma final, inferencia de `[]`) | Sí (front-end) | Parser + checker | M4 | 🩹 dos arreglos chicos pendientes |
+> **Estado tras M8** (hitos M1–M8 completos). La columna *Cuándo* refleja la hoja de
+> ruta M9+ acordada (ver [DESIGN.md](DESIGN.md) §2).
+
+| Idea | ¿Dónde pega? | Cuándo | Estado |
+|------|--------------|--------|--------|
+| Concurrencia (goroutines / async / suspend) | **Arquitectura de la VM** | **M12** | ✅ **desbloqueada**: la VM tiene stack/marcos explícitos (`frames`/`stack` en `vm.rs`); falta elegir dirección |
+| Null safety | Sistema de tipos | hecho | ✅ no hay `null` (`Option<T>`, M6) |
+| Introspección / reflection | Modelo de valores de la VM | post-M11 | 💤 puerta abierta (los valores cargan tipo en runtime) |
+| Structs vs interfaces/**traits** | Sistema de tipos / polimorfismo | **M9** | 📌 recomendación fijada (traits estilo Rust) |
+| Hot code reloading | Indirección de llamadas en la VM | tardío | 💤 acomodable |
+| Visibilidad (`pub` vs mayúscula) | Sistema de módulos | **M11** | 📌 recomendación fijada (`pub` explícito) |
+| **Self-hosting** (raylang en raylang) | Capstone: requiere módulos + I/O | transversal (post-M11) | 🎯 meta-objetivo, ya habilitado por el lenguaje |
+| **Tooling de editor** (coloreado / LSP) | Front-end (reutiliza el checker) | coloreado ✅ / **LSP M10** | 🔧 parcial (LSP pendiente) |
+| **Anotaciones** (`@test`, `@derive`, …) | Parser + fase que las consume | **M10** | 📌 dirección fijada; ⚠️ `@` **aún NO** reservado en el lexer |
+| **API de runtime / I/O** (`args`, `input`, `env`) | Builtins / stdlib | **M11** | 📌 dirección fijada |
+| **stdlib** (orden superior / string / I/O) | prelude + builtins | parcial | 🟡 `map`/`filter`/`fold`+`len`/`push` ✅ (M7.3); string/I/O → M11 |
+| **Optimización de la VM** | `bytecode`/`compiler`/`vm` | transversal | 🚀 línea base ~3×; optimizaciones de §11 sin aplicar |
+| **Asperezas de M3** | Parser + checker | limpieza | 🩹 `[]` en campo de struct ✅ resuelto (M6.2); coma final en arreglos ❌ pendiente |
 
 ---
 
@@ -51,9 +55,16 @@ representan filosofías que compiten:
 > stack de Rust). Esa es la decisión de arquitectura que esto impone *cuando
 > diseñemos la VM*, no antes.
 
-**Pendiente**: elegir la *dirección* antes de arrancar M2. Inclinación inicial:
-goroutines + channels (más simple de usar, sin function coloring, enseña a
-construir un scheduler) — o async/await si te atrae más la máquina de estados.
+**Estado tras M2**: ✅ la restricción **se respetó**. La VM (`src/vm.rs`) ejecuta sobre
+un stack de operandos y una **pila de marcos explícita** (`frames: Vec<CallFrame>`,
+`stack`), en un bucle iterativo — no usa el stack de Rust para los marcos del lenguaje.
+Así que la concurrencia **no está bloqueada arquitectónicamente**; se puede abordar en
+**M12**.
+
+**Pendiente para M12**: elegir la *dirección*. Inclinación inicial: goroutines + channels
+(más simple de usar, sin function coloring, enseña a construir un scheduler) — o
+async/await si atrae más la máquina de estados. (Un modelo *stackful* podría querer un
+stack por goroutine; conviene revisar el bucle de la VM al diseñarlo.)
 
 ## 2. Null safety
 
@@ -159,8 +170,10 @@ Soporte de los archivos `.ray` en editores. Tiene dos mitades muy distintas:
   - Implementación sugerida: crate `tower-lsp` o `lsp-server`, un binario
     `raylang-lsp` que ante cada cambio de documento corre lexer→parser→checker y
     devuelve los errores como `Diagnostic`.
-  - **Cuándo**: hito de tooling, **M8**. Es la forma correcta y barata de soportar
-    "más editores": una vez el LSP existe, agregar un editor es casi gratis.
+  - **Cuándo**: hito de tooling, **M10** (junto a las anotaciones). M8.3 ya dejó el
+    renderizador de diagnósticos (`src/diagnostic.rs`), que el LSP puede aprovechar. Es
+    la forma correcta y barata de soportar "más editores": una vez el LSP existe,
+    agregar un editor es casi gratis.
   - Punto intermedio (si se quiere antes): un lint "casero" que al guardar corre el
     binario `raylang` y parsea su salida `error ... en L:C: msg`.
 
@@ -200,10 +213,10 @@ rendimiento. Candidatas:
   ítem de introspección §3.
 
 **Impacto en el diseño actual:** casi nulo. La sintaxis `@nombre[(args)]` es
-**aditiva** (un pequeño cambio en el parser). Lo único "para no bloquear" es
-**reservar `@`** (hoy el lexer lo marca como carácter inesperado); ya anotado como
-reservado en `DESIGN.md` §3.5. Se implementa cuando aporte: `@test` puede llegar
-pronto; el resto, junto a structs/enums (M5–M7).
+**aditiva** (un pequeño cambio en el parser). ⚠️ **Pendiente de la fase de limpieza**:
+hoy el lexer **rechaza `@`** ("carácter inesperado"); aunque `DESIGN.md` §3.5 lo lista
+como reservado, todavía no hay un token para él. Reservarlo (emitir un `TokenKind::At`)
+es el primer paso, antes de M10. `@derive`/`@delegate` además dependen de **traits (M9)**.
 
 ## 10. API de runtime / I/O (cómo raylang habla con el exterior)
 
@@ -266,30 +279,23 @@ esperado, llevarían la VM bastante más allá. Medir cada cambio con el benchma
 **Impacto en el diseño:** ninguno en el lenguaje; es trabajo interno de la VM. No
 bloquea nada y se hace de forma incremental, midiendo con `benchmarks/`.
 
-## 12. Asperezas de M3 (a pulir en M4)
+## 12. Asperezas de M3
 
 Dos límites pequeños del front-end que afloraron al escribir ejemplos con arreglos
 y structs (`examples/pila.ray`, `examples/inventario.ray`). No son bugs —el
-lenguaje es consistente— sino refinamientos de ergonomía. Se difieren a **M4**
-(cuando ya toquemos checker y parser para closures) para no abrir trabajo de
-front-end fuera de fase.
+lenguaje es consistente— sino refinamientos de ergonomía.
 
-- **Coma final en literales de arreglo.** Hoy el parser acepta coma final en los
-  campos de un `struct` (`{ x: int, }`) pero **no** en un literal de arreglo
-  (`[1, 2, 3,]` → error de sintaxis). Es una inconsistencia de ergonomía: la coma
-  final facilita los diffs y reordenar elementos. Arreglo chico y local en
-  `array_literal()` (aceptar `]` justo después de una coma). Conviene unificar el
+- **Coma final en literales de arreglo.** ❌ **Pendiente** (fase de limpieza). El
+  parser acepta coma final en los campos de un `struct` (`{ x: int, }`) pero **no** en
+  un literal de arreglo (`[1, 2, 3,]` → error de sintaxis). Arreglo chico y local en
+  el literal de arreglo (aceptar `]` justo después de una coma). Conviene unificar el
   criterio en todas las listas separadas por coma (argumentos, campos, elementos).
 
-- **Inferencia del `[]` vacío en posición de campo.** El checker infiere el tipo
-  del arreglo vacío desde la **anotación de un `let`** (`let xs: [int] = [];`), pero
-  **no** lo propaga al construir un struct: `Pila { datos: [], tope: 0 }` falla
-  ("no se puede inferir el tipo de []"), aunque el tipo del campo `datos` es
-  conocido. El workaround hoy es un `let` anotado intermedio. El arreglo de fondo es
-  **propagación del tipo esperado** (*expected type* / bidirectional checking):
-  empujar el tipo del campo —y, en general, el tipo de destino— hacia la expresión.
-  Es un primer paso del trabajo de inferencia que §8/M8 generaliza; en M4 basta el
-  caso puntual del literal de struct (y, por simetría, argumentos de llamada).
+- **Inferencia del `[]` vacío en posición de campo.** ✅ **Resuelto en M6.2.** El
+  **chequeo bidireccional** (`check_expr_expected`) propaga el tipo esperado del campo
+  hacia la expresión, así que `Pila { datos: [], tope: 0 }` ya tipa sin un `let`
+  intermedio. Era, como se anticipó aquí, un primer caso del trabajo de inferencia que
+  M6.2/M8 generalizaron.
 
 **Impacto**: bajo y aditivo; ningún cambio de semántica del lenguaje, solo acepta
 más programas que hoy se rechazan. No bloquea nada.

@@ -89,11 +89,13 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       saltos; escrutinio en un local temporal). Oráculo VM↔intérprete, incl. estrés.
   - **M6.1**: funciones genéricas (`fn id<T>(x: T) -> T`). `Type::Var`,
     `Function.type_params`. Inferencia **desde argumentos** por unificación (`subst`,
-    `unify` en el checker). **Erasure**: el runtime NO cambia (los tests oráculo pasan
-    sin tocar intérprete/VM). Sin tipo esperado aún: un `T` no fijado por los
-    argumentos es error. Funciones genéricas no usables como valor.
-- **Siguiente: M6.2** (tipos genéricos del usuario `enum/struct<T>` + chequeo
-  bidireccional), luego **M6.3** (`Option`/`Result` + `?`).
+    `unify` en el checker). **Erasure**: el runtime NO cambia.
+  - **M6.2**: tipos genéricos del usuario `enum Caja<T>` / `struct Par<A,B>`.
+    `Type::Struct`/`Enum` llevan `Vec<Type>` de argumentos; `enum/struct.type_params`.
+    Inferencia en construcción + **chequeo bidireccional** (`check_expr_expected`: un
+    tipo esperado opcional que fija `Caja.Vacia`, `[]`, etc.). `check_field`/`match`
+    **sustituyen** los argumentos de tipo. Runtime sin cambios (erasure).
+- **Siguiente: M6.3** (`Option`/`Result` en un prelude + operador `?`).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

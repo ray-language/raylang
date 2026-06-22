@@ -29,15 +29,16 @@ pub enum Type {
     Unit,
     /// Arreglo dinámico de un tipo de elemento: `[T]`. Tipado estructural (M3).
     Array(Box<Type>),
-    /// Un struct nominal, por su nombre: `Punto`. Tipado **nominal** (M3.2): la
-    /// igualdad de tipos compara el nombre.
-    Struct(String),
-    /// Un enum (tipo suma) nominal, por su nombre: `Figura`. Tipado **nominal**
-    /// (M5), igual que un struct: la igualdad de tipos compara el nombre. Como un
-    /// identificador en posición de tipo puede ser un struct **o** un enum, el
-    /// parser produce siempre `Struct(name)` y el checker reclasifica a `Enum` al
-    /// resolver el nombre contra la tabla de tipos.
-    Enum(String),
+    /// Un struct nominal, con sus **argumentos de tipo**: `Punto` es
+    /// `Struct("Punto", [])`; `Par<int, bool>` es `Struct("Par", [Int, Bool])` (M6).
+    /// Tipado **nominal** (M3.2): la igualdad compara nombre y argumentos.
+    Struct(String, Vec<Type>),
+    /// Un enum (tipo suma) nominal, con sus argumentos de tipo: `Figura` es
+    /// `Enum("Figura", [])`; `Option<int>` es `Enum("Option", [Int])` (M5/M6). Como
+    /// un identificador en posición de tipo puede ser un struct **o** un enum, el
+    /// parser produce siempre `Struct(name, args)` y el checker reclasifica a `Enum`
+    /// al resolver el nombre contra la tabla de tipos.
+    Enum(String, Vec<Type>),
     /// Un tipo función: `fn(T1, T2) -> R` (M4.1). Las funciones son valores de
     /// primera clase: se pueden pasar, devolver y guardar. Tipado **estructural**
     /// (dos `fn(int) -> int` son el mismo tipo).
@@ -59,8 +60,14 @@ impl std::fmt::Display for Type {
             Type::String => f.write_str("string"),
             Type::Unit => f.write_str("unit"),
             Type::Array(elem) => write!(f, "[{}]", elem),
-            Type::Struct(name) => f.write_str(name),
-            Type::Enum(name) => f.write_str(name),
+            Type::Struct(name, args) | Type::Enum(name, args) => {
+                f.write_str(name)?;
+                if !args.is_empty() {
+                    let ps: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+                    write!(f, "<{}>", ps.join(", "))?;
+                }
+                Ok(())
+            }
             Type::Fn(params, ret) => {
                 let ps: Vec<String> = params.iter().map(|p| p.to_string()).collect();
                 write!(f, "fn({}) -> {}", ps.join(", "), ret)
@@ -84,6 +91,9 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
     pub name: String,
+    /// Parámetros de tipo: los `A, B` de `struct Par<A, B> { ... }` (M6). Vacío = no
+    /// genérico. En los tipos de los campos, esos nombres aparecen como `Type::Var`.
+    pub type_params: Vec<String>,
     pub fields: Vec<(String, Type)>,
     pub line: usize,
     pub col: usize,
@@ -95,6 +105,9 @@ pub struct StructDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDef {
     pub name: String,
+    /// Parámetros de tipo: los `T` de `enum Option<T> { ... }` (M6). Vacío = no
+    /// genérico. En las variantes, esos nombres aparecen como `Type::Var`.
+    pub type_params: Vec<String>,
     pub variants: Vec<VariantDef>,
     pub line: usize,
     pub col: usize,

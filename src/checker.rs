@@ -86,11 +86,15 @@ struct Checker {
     /// Definiciones de struct: nombre → campos (en orden). Pre-pasada.
     structs: HashMap<String, Vec<(String, Type)>>,
     /// Definiciones de enum: nombre → variantes (nombre, payload), en orden.
-    /// Pre-pasada (M5).
+    /// Pre-pasada (M5). Los payloads pueden contener `Type::Var` (M6).
     enums: HashMap<String, Vec<(String, Vec<Type>)>>,
     /// Solo los nombres de enum, para `resolve_type` (reclasificar `Struct`→`Enum`)
     /// y para validar tipos. Se llena antes que cualquier resolución de tipos.
     enum_names: HashSet<String>,
+    /// Parámetros de tipo de cada enum/struct genérico (M6): nombre → `[T, U, ...]`.
+    /// Dan la aridad (para validar `Caja<int>`) y los nombres (para sustituir).
+    enum_tparams: HashMap<String, Vec<String>>,
+    struct_tparams: HashMap<String, Vec<String>>,
     /// Pila de ámbitos de variables. El último es el más interno.
     scopes: Vec<HashMap<String, VarInfo>>,
     /// Tipo de retorno de la función que estamos verificando ahora mismo, para
@@ -109,6 +113,8 @@ impl Checker {
             structs: HashMap::new(),
             enums: HashMap::new(),
             enum_names: HashSet::new(),
+            enum_tparams: HashMap::new(),
+            struct_tparams: HashMap::new(),
             scopes: Vec::new(),
             current_return: Type::Unit,
             type_params: HashSet::new(),
@@ -130,8 +136,20 @@ impl Checker {
             }
         }
 
-        // --- Pre-pasada: registrar enums (variantes con payload normalizado) ---
+        // --- Pre-pasada: parámetros de tipo de cada enum/struct (aridad conocida
+        // antes de resolver/validar cualquier tipo que los referencie) ---
         for e in &program.enums {
+            self.check_unique_tparams(&e.type_params, &e.name, e.line, e.col)?;
+            self.enum_tparams.insert(e.name.clone(), e.type_params.clone());
+        }
+        for s in &program.structs {
+            self.check_unique_tparams(&s.type_params, &s.name, s.line, s.col)?;
+            self.struct_tparams.insert(s.name.clone(), s.type_params.clone());
+        }
+
+        // --- Pre-pasada: registrar enums (payload normalizado con T en ámbito) ---
+        for e in &program.enums {
+            self.type_params = e.type_params.iter().cloned().collect();
             let mut seen = HashSet::new();
             let mut variants = Vec::new();
             for v in &e.variants {
@@ -139,31 +157,41 @@ impl Checker {
                     return Err(self.err(v.line, v.col, format!("variante '{}' repetida en el enum '{}'", v.name, e.name)));
                 }
                 let payload: Vec<Type> = v.payload.iter().map(|t| self.resolve_type(t)).collect();
-                for t in &payload {
-                    self.ensure_type(t, v.line, v.col)?;
-                }
                 variants.push((v.name.clone(), payload));
             }
             self.enums.insert(e.name.clone(), variants);
         }
 
-        // --- Pre-pasada: registrar structs (antes que las funciones, que pueden
-        // usarlos en sus tipos) ---
+        // --- Pre-pasada: registrar structs (campos con T en ámbito) ---
         for s in &program.structs {
             if self.structs.contains_key(&s.name) {
                 return Err(self.err(s.line, s.col, format!("struct '{}' declarado dos veces", s.name)));
             }
+            self.type_params = s.type_params.iter().cloned().collect();
             let fields: Vec<(String, Type)> =
                 s.fields.iter().map(|(n, t)| (n.clone(), self.resolve_type(t))).collect();
             self.structs.insert(s.name.clone(), fields);
         }
-        // Validar que los tipos de los campos existen (p. ej. structs/enums referenciados).
+
+        // --- Validar los tipos referenciados (ahora que todos están registrados con
+        // su aridad), con los parámetros de cada definición en ámbito ---
+        for e in &program.enums {
+            self.type_params = e.type_params.iter().cloned().collect();
+            let variants = self.enums.get(&e.name).expect("recién registrado").clone();
+            for (_, payload) in &variants {
+                for t in payload {
+                    self.ensure_type(t, e.line, e.col)?;
+                }
+            }
+        }
         for s in &program.structs {
+            self.type_params = s.type_params.iter().cloned().collect();
             let fields = self.structs.get(&s.name).expect("recién registrado").clone();
             for (_, ty) in &fields {
                 self.ensure_type(ty, s.line, s.col)?;
             }
         }
+        self.type_params.clear();
 
         // --- Pre-pasada: registrar firmas (con tipos normalizados) ---
         for f in &program.functions {
@@ -247,7 +275,10 @@ impl Checker {
             self.declare(&p.name, ty, false);
         }
 
-        let body_ty = self.check_block(body)?;
+        // El tipo de retorno es el tipo ESPERADO del valor del cuerpo (M6.2): se
+        // propaga a la expresión final (y al `if`/`match` que sea) para fijar
+        // construcciones como `Lista.Nil` o `None`.
+        let body_ty = self.check_block_expected(body, &return_type)?;
         let diverges = block_diverges(body);
 
         // Posición para el posible error: la expresión final si existe, si no la fn.
@@ -287,20 +318,9 @@ impl Checker {
                 self.ensure_type(ty, stmt.line, stmt.col)?;
                 // La anotación puede nombrar un enum (llega como `Struct`): normaliza.
                 let ty = self.resolve_type(ty);
-                // Caso especial: `[]` adopta el tipo de arreglo declarado (no hay
-                // de dónde inferir el tipo de elemento de un arreglo vacío).
-                let vt = if matches!(&value.kind, ExprKind::ArrayLit(e) if e.is_empty()) {
-                    if matches!(ty, Type::Array(_)) {
-                        ty.clone()
-                    } else {
-                        return Err(self.err(value.line, value.col, format!(
-                            "'{}' se declara como {} pero se inicializa con un arreglo vacío",
-                            name, ty
-                        )));
-                    }
-                } else {
-                    self.check_expr(value)?
-                };
+                // El tipo declarado es el tipo ESPERADO del valor (chequeo
+                // bidireccional, M6.2): fija el `[]` vacío, `Caja.Vacia`, `None`, etc.
+                let vt = self.check_expr_expected(value, &ty)?;
                 if vt != ty {
                     return Err(self.err(value.line, value.col, format!(
                         "'{}' se declara como {} pero se inicializa con {}",
@@ -313,7 +333,11 @@ impl Checker {
             StmtKind::Assign { target, value } => self.check_assign(target, value, stmt.line, stmt.col),
             StmtKind::Return { value } => {
                 let vt = match value {
-                    Some(e) => self.check_expr(e)?,
+                    // El retorno declarado es el tipo esperado (propaga a `None`, etc.).
+                    Some(e) => {
+                        let expected = self.current_return.clone();
+                        self.check_expr_expected(e, &expected)?
+                    }
                     None => Type::Unit,
                 };
                 if vt != self.current_return {
@@ -391,26 +415,43 @@ impl Checker {
         }
     }
 
-    /// Verifica que un tipo es válido: los structs referenciados deben existir.
+    /// Comprueba que una lista de parámetros de tipo no tenga repetidos.
+    fn check_unique_tparams(&self, params: &[String], owner: &str, line: usize, col: usize) -> Result<(), TypeError> {
+        let mut seen = HashSet::new();
+        for tp in params {
+            if !seen.insert(tp) {
+                return Err(self.err(line, col, format!("parámetro de tipo '{}' repetido en '{}'", tp, owner)));
+            }
+        }
+        Ok(())
+    }
+
+    /// Verifica que un tipo es válido: los nombres referenciados deben existir y, si
+    /// son genéricos, llevar la **aridad** correcta de argumentos de tipo.
     fn ensure_type(&self, ty: &Type, line: usize, col: usize) -> Result<(), TypeError> {
         match ty {
             Type::Array(elem) => self.ensure_type(elem, line, col),
-            // Un identificador en posición de tipo llega como `Struct(name)` desde el
-            // parser; aquí ya puede referirse a un struct, a un enum o a un parámetro
-            // de tipo en ámbito (M6).
-            Type::Struct(name) => {
-                if self.structs.contains_key(name)
-                    || self.enum_names.contains(name)
-                    || self.type_params.contains(name)
-                {
-                    Ok(())
-                } else {
-                    Err(self.err(line, col, format!("tipo desconocido: '{}' no declarado", name)))
+            // Un identificador en posición de tipo llega como `Struct(name, args)`
+            // desde el parser; aquí puede ser un struct, un enum o un parámetro de
+            // tipo en ámbito (M6).
+            Type::Struct(name, args) => {
+                if self.type_params.contains(name) {
+                    if !args.is_empty() {
+                        return Err(self.err(line, col, format!("el parámetro de tipo '{}' no recibe argumentos", name)));
+                    }
+                    return Ok(());
+                }
+                let arity = self.struct_tparams.get(name)
+                    .or_else(|| self.enum_tparams.get(name));
+                match arity {
+                    Some(tparams) => self.ensure_type_args(name, tparams.len(), args, line, col),
+                    None => Err(self.err(line, col, format!("tipo desconocido: '{}' no declarado", name))),
                 }
             }
-            Type::Enum(name) if !self.enum_names.contains(name) => {
-                Err(self.err(line, col, format!("tipo desconocido: enum '{}' no declarado", name)))
-            }
+            Type::Enum(name, args) => match self.enum_tparams.get(name) {
+                Some(tparams) => self.ensure_type_args(name, tparams.len(), args, line, col),
+                None => Err(self.err(line, col, format!("tipo desconocido: enum '{}' no declarado", name))),
+            },
             // Un parámetro de tipo (M6) es válido si está en ámbito.
             Type::Var(name) if !self.type_params.contains(name) => {
                 Err(self.err(line, col, format!("parámetro de tipo '{}' fuera de ámbito", name)))
@@ -425,23 +466,40 @@ impl Checker {
         }
     }
 
+    /// Comprueba la aridad de los argumentos de tipo y valida cada uno.
+    fn ensure_type_args(&self, name: &str, arity: usize, args: &[Type], line: usize, col: usize) -> Result<(), TypeError> {
+        if args.len() != arity {
+            return Err(self.err(line, col, format!(
+                "'{}' espera {} argumento(s) de tipo, se le dieron {}", name, arity, args.len()
+            )));
+        }
+        for a in args {
+            self.ensure_type(a, line, col)?;
+        }
+        Ok(())
+    }
+
     /// Normaliza un tipo proveniente de una anotación. El parser produce
-    /// `Struct(name)` para cualquier identificador; aquí se reclasifica según qué sea
-    /// el nombre, recursivamente bajo `[T]` y `fn`:
+    /// `Struct(name, args)` para cualquier identificador; aquí se reclasifica el
+    /// nombre (y se resuelven los argumentos), recursivamente:
     ///   - un **parámetro de tipo** en ámbito → `Var` (M6; tapa a los nombres de tipo);
-    ///   - un **enum** → `Enum` (M5);
-    ///   - en otro caso, se queda como `Struct`.
-    /// Así las comparaciones de tipos cuadran con el tipo que produce cada expresión.
+    ///   - un **enum** → `Enum` (M5); en otro caso, se queda como `Struct`.
     fn resolve_type(&self, ty: &Type) -> Type {
         match ty {
-            Type::Struct(name) => {
+            Type::Struct(name, args) => {
                 if self.type_params.contains(name) {
                     Type::Var(name.clone())
-                } else if self.enum_names.contains(name) {
-                    Type::Enum(name.clone())
                 } else {
-                    Type::Struct(name.clone())
+                    let rargs: Vec<Type> = args.iter().map(|a| self.resolve_type(a)).collect();
+                    if self.enum_names.contains(name) {
+                        Type::Enum(name.clone(), rargs)
+                    } else {
+                        Type::Struct(name.clone(), rargs)
+                    }
                 }
+            }
+            Type::Enum(name, args) => {
+                Type::Enum(name.clone(), args.iter().map(|a| self.resolve_type(a)).collect())
             }
             Type::Array(elem) => Type::Array(Box::new(self.resolve_type(elem))),
             Type::Fn(params, ret) => Type::Fn(
@@ -452,42 +510,46 @@ impl Checker {
         }
     }
 
-    /// Verifica un literal de struct `Nombre { campo: valor, ... }`: el struct debe
-    /// existir y los campos deben coincidir exactamente (mismos nombres y tipos).
-    fn check_struct_lit(&mut self, name: &str, fields: &[(String, Expr)], line: usize, col: usize) -> Result<Type, TypeError> {
+    /// Verifica un literal de struct `Nombre { campo: valor, ... }`. Para structs
+    /// **genéricos** infiere los argumentos de tipo de los valores de los campos (y
+    /// del tipo esperado, si los valores no bastan). Devuelve `Struct(name, args)`.
+    fn check_struct_lit(&mut self, name: &str, fields: &[(String, Expr)], expected: Option<&Type>, line: usize, col: usize) -> Result<Type, TypeError> {
         let declared = match self.structs.get(name) {
             Some(d) => d.clone(), // clonamos para soltar el préstamo de self
             None => return Err(self.err(line, col, format!("struct '{}' no declarado", name))),
         };
+        let tparams = self.struct_tparams.get(name).cloned().unwrap_or_default();
         // No debe haber campos desconocidos.
         for (fname, fexpr) in fields {
             if !declared.iter().any(|(dname, _)| dname == fname) {
                 return Err(self.err(fexpr.line, fexpr.col, format!("'{}' no tiene un campo '{}'", name, fname)));
             }
         }
-        // Cada campo declarado debe estar presente exactamente una vez y con su tipo.
+        // σ: parámetro de tipo → tipo inferido. Se siembra del tipo esperado.
+        let mut sigma = seed_sigma_from_expected(expected, name, &tparams);
+        // Cada campo declarado debe estar presente exactamente una vez; su valor
+        // determina (unifica) los parámetros de tipo del struct.
         for (dname, dty) in &declared {
             let matches: Vec<&(String, Expr)> = fields.iter().filter(|(fname, _)| fname == dname).collect();
             match matches.as_slice() {
                 [] => return Err(self.err(line, col, format!("falta el campo '{}' en el literal de '{}'", dname, name))),
                 [(_, value)] => {
-                    let vt = self.check_expr(value)?;
-                    if vt != *dty {
-                        return Err(self.err(value.line, value.col, format!(
-                            "campo '{}' de '{}': se esperaba {}, se dio {}", dname, name, dty, vt
-                        )));
-                    }
+                    let vt = self.check_value_against(value, dty, &sigma)?;
+                    unify(dty, &vt, &mut sigma).map_err(|reason| self.err(value.line, value.col, format!(
+                        "campo '{}' de '{}': {}", dname, name, reason
+                    )))?;
                 }
                 _ => return Err(self.err(line, col, format!("campo '{}' de '{}' repetido", dname, name))),
             }
         }
-        Ok(Type::Struct(name.to_string()))
+        let targs = self.finalize_type_args(&tparams, &sigma, &format!("el struct '{}'", name), line, col)?;
+        Ok(Type::Struct(name.to_string(), targs))
     }
 
-    /// Verifica la construcción de una variante de enum `Enum.Variante(args)`: el
-    /// enum y la variante deben existir, y los argumentos deben coincidir con el
-    /// payload (aridad y tipos). Devuelve `Enum(enum_name)`.
-    fn check_enum_lit(&mut self, enum_name: &str, variant: &str, args: &[Expr], line: usize, col: usize) -> Result<Type, TypeError> {
+    /// Verifica la construcción de una variante de enum `Enum.Variante(args)`. Para
+    /// enums **genéricos** infiere los argumentos de tipo del payload (y del tipo
+    /// esperado, p. ej. para `Caja.Vacia`). Devuelve `Enum(enum_name, args)`.
+    fn check_enum_lit(&mut self, enum_name: &str, variant: &str, args: &[Expr], expected: Option<&Type>, line: usize, col: usize) -> Result<Type, TypeError> {
         let payload = match self.enums.get(enum_name) {
             Some(variants) => match variants.iter().find(|(vname, _)| vname == variant) {
                 Some((_, payload)) => payload.clone(), // clonar para soltar el préstamo de self
@@ -495,21 +557,49 @@ impl Checker {
             },
             None => return Err(self.err(line, col, format!("enum '{}' no declarado", enum_name))),
         };
+        let tparams = self.enum_tparams.get(enum_name).cloned().unwrap_or_default();
         if args.len() != payload.len() {
             return Err(self.err(line, col, format!(
                 "la variante '{}.{}' espera {} argumento(s), se dieron {}",
                 enum_name, variant, payload.len(), args.len()
             )));
         }
-        for (arg, expected) in args.iter().zip(&payload) {
-            let at = self.check_expr(arg)?;
-            if at != *expected {
-                return Err(self.err(arg.line, arg.col, format!(
-                    "'{}.{}': se esperaba {}, se dio {}", enum_name, variant, expected, at
-                )));
+        let mut sigma = seed_sigma_from_expected(expected, enum_name, &tparams);
+        for (arg, pty) in args.iter().zip(&payload) {
+            let at = self.check_value_against(arg, pty, &sigma)?;
+            unify(pty, &at, &mut sigma).map_err(|reason| self.err(arg.line, arg.col, format!(
+                "'{}.{}': {}", enum_name, variant, reason
+            )))?;
+        }
+        let targs = self.finalize_type_args(&tparams, &sigma, &format!("la variante '{}.{}'", enum_name, variant), line, col)?;
+        Ok(Type::Enum(enum_name.to_string(), targs))
+    }
+
+    /// Verifica el valor de un campo/payload propagándole como **tipo esperado** el
+    /// tipo declarado ya sustituido con lo inferido hasta ahora (`σ`) —pero solo si
+    /// ese tipo es concreto (sin `Var`); si todavía tiene incógnitas, no aporta—.
+    fn check_value_against(&mut self, value: &Expr, declared: &Type, sigma: &HashMap<String, Type>) -> Result<Type, TypeError> {
+        let exp = subst(declared, sigma);
+        if type_has_var(&exp) {
+            self.check_expr(value)
+        } else {
+            self.check_expr_expected(value, &exp)
+        }
+    }
+
+    /// Para cada parámetro de tipo, recupera lo inferido en `σ` (en orden), o error si
+    /// quedó sin determinar (ni de los argumentos ni del tipo esperado).
+    fn finalize_type_args(&self, tparams: &[String], sigma: &HashMap<String, Type>, label: &str, line: usize, col: usize) -> Result<Vec<Type>, TypeError> {
+        let mut targs = Vec::with_capacity(tparams.len());
+        for tp in tparams {
+            match sigma.get(tp) {
+                Some(t) => targs.push(t.clone()),
+                None => return Err(self.err(line, col, format!(
+                    "no se pudo inferir el parámetro de tipo '{}' de {}; anota el tipo", tp, label
+                ))),
             }
         }
-        Ok(Type::Enum(enum_name.to_string()))
+        Ok(targs)
     }
 
     /// Verifica un `match (escrutinio) { patrón => cuerpo, ... }` (M5.2):
@@ -517,10 +607,10 @@ impl Checker {
     ///   - cada patrón debe pertenecer a ese enum y ligar el payload con la aridad
     ///     correcta; los brazos producen un tipo común (como las ramas de un `if`);
     ///   - debe ser **exhaustivo**: cubrir todas las variantes o tener un catch-all.
-    fn check_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], line: usize, col: usize) -> Result<Type, TypeError> {
+    fn check_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], expected: Option<&Type>, line: usize, col: usize) -> Result<Type, TypeError> {
         let scrut_ty = self.check_expr(scrutinee)?;
-        let enum_name = match &scrut_ty {
-            Type::Enum(n) => n.clone(),
+        let (enum_name, targs) = match &scrut_ty {
+            Type::Enum(n, args) => (n.clone(), args.clone()),
             other => return Err(self.err(scrutinee.line, scrutinee.col, format!(
                 "match requiere un enum, pero el escrutinio es {}", other
             ))),
@@ -530,6 +620,10 @@ impl Checker {
         }
         // Variantes del enum (clonadas para soltar el préstamo de self).
         let variants = self.enums.get(&enum_name).expect("el checker registró el enum").clone();
+        // σ del enum: liga sus parámetros de tipo con los argumentos del escrutinio,
+        // para sustituir los payloads (`Some(T)` sobre `Option<int>` liga `T = int`).
+        let enum_tparams = self.enum_tparams.get(&enum_name).cloned().unwrap_or_default();
+        let enum_sigma: HashMap<String, Type> = enum_tparams.into_iter().zip(targs).collect();
 
         let mut covered: HashSet<String> = HashSet::new();
         let mut catchall = false;
@@ -541,14 +635,18 @@ impl Checker {
                 return Err(self.err(arm.line, arm.col,
                     "brazo inalcanzable: un brazo anterior ya cubre todos los casos".into()));
             }
-            // Comprueba el patrón y obtiene las variables a ligar en el cuerpo.
-            let binds = self.check_pattern(&arm.pattern, &scrut_ty, &enum_name, &variants, &mut covered, &mut catchall)?;
-            // Verifica el cuerpo con esas variables en un ámbito propio.
+            // Comprueba el patrón y obtiene las variables a ligar (payload sustituido).
+            let binds = self.check_pattern(&arm.pattern, &scrut_ty, &enum_name, &variants, &enum_sigma, &mut covered, &mut catchall)?;
+            // Verifica el cuerpo con esas variables en un ámbito propio, propagando el
+            // tipo esperado del match a cada brazo (para construcciones como `None`).
             self.push_scope();
             for (name, ty) in binds {
                 self.declare(&name, ty, false);
             }
-            let body_ty = self.check_expr(&arm.body);
+            let body_ty = match expected {
+                Some(exp) => self.check_expr_expected(&arm.body, exp),
+                None => self.check_expr(&arm.body),
+            };
             self.pop_scope();
             let body_ty = body_ty?;
             // Todos los brazos convergen a un mismo tipo (el tipo del match).
@@ -590,6 +688,7 @@ impl Checker {
         scrut_ty: &Type,
         enum_name: &str,
         variants: &[(String, Vec<Type>)],
+        enum_sigma: &HashMap<String, Type>,
         covered: &mut HashSet<String>,
         catchall: &mut bool,
     ) -> Result<Vec<(String, Type)>, TypeError> {
@@ -626,11 +725,13 @@ impl Checker {
                         "la variante '{}' ya está cubierta por un brazo anterior", variant
                     )));
                 }
-                // Solo los sub-bindings nombrados (no `_`) ligan una variable.
+                // Cada sub-binding nombrado liga el payload, ya sustituido con los
+                // argumentos de tipo del escrutinio (`x` en `Some(x)` sobre
+                // `Option<int>` es un `int`).
                 let mut binds = Vec::new();
                 for (b, ty) in bindings.iter().zip(payload) {
                     if let Some(name) = b {
-                        binds.push((name.clone(), ty.clone()));
+                        binds.push((name.clone(), subst(ty, enum_sigma)));
                     }
                 }
                 Ok(binds)
@@ -638,23 +739,113 @@ impl Checker {
         }
     }
 
-    /// Verifica `obj.name` y devuelve el tipo del campo. Reusado por el acceso como
-    /// expresión y como destino de asignación.
+    /// Verifica `obj.name` y devuelve el tipo del campo. Para un struct genérico, el
+    /// tipo del campo se **sustituye** con los argumentos de tipo del objeto: el campo
+    /// `primero: A` de `Par<int, bool>` es un `int`.
     fn check_field(&mut self, object: &Expr, name: &str) -> Result<Type, TypeError> {
         let ot = self.check_expr(object)?;
         match ot {
-            Type::Struct(sname) => {
+            Type::Struct(sname, targs) => {
                 let fields = self.structs.get(&sname).expect("el checker registró el struct");
-                match fields.iter().find(|(fname, _)| fname == name) {
-                    Some((_, fty)) => Ok(fty.clone()),
-                    None => Err(self.err(object.line, object.col, format!("el struct '{}' no tiene un campo '{}'", sname, name))),
-                }
+                let fty = match fields.iter().find(|(fname, _)| fname == name) {
+                    Some((_, fty)) => fty.clone(),
+                    None => return Err(self.err(object.line, object.col, format!("el struct '{}' no tiene un campo '{}'", sname, name))),
+                };
+                let tparams = self.struct_tparams.get(&sname).cloned().unwrap_or_default();
+                let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs).collect();
+                Ok(subst(&fty, &sigma))
             }
             other => Err(self.err(object.line, object.col, format!("no se puede acceder a '.{}' en un {} (no es un struct)", name, other))),
         }
     }
 
     // ----- Expresiones (devuelven su tipo) -----
+
+    /// Verifica una expresión con un **tipo esperado** del contexto (chequeo
+    /// bidireccional, M6.2). Solo unos pocos nodos lo aprovechan —la construcción de
+    /// enums/structs, el arreglo vacío `[]`, y las formas "transparentes" que lo
+    /// propagan (`if`/`match`/bloque)—; el resto delega en `check_expr` (que lo
+    /// ignora). El llamador compara igualmente el resultado con lo que necesita.
+    fn check_expr_expected(&mut self, expr: &Expr, expected: &Type) -> Result<Type, TypeError> {
+        match &expr.kind {
+            ExprKind::StructLit { name, fields } => {
+                self.check_struct_lit(name, fields, Some(expected), expr.line, expr.col)
+            }
+            ExprKind::EnumLit { enum_name, variant, args } => {
+                self.check_enum_lit(enum_name, variant, args, Some(expected), expr.line, expr.col)
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.check_match(scrutinee, arms, Some(expected), expr.line, expr.col)
+            }
+            ExprKind::Block(b) => self.check_block_expected(b, expected),
+            // Arreglo: con un tipo esperado `[T]`, el vacío adopta `[T]` (arregla la
+            // aspereza histórica) y los elementos se chequean contra `T`.
+            ExprKind::ArrayLit(elems) => match expected {
+                Type::Array(elem_exp) => {
+                    for e in elems {
+                        let t = self.check_expr_expected(e, elem_exp)?;
+                        if t != **elem_exp {
+                            return Err(self.err(e.line, e.col, format!(
+                                "los elementos del arreglo deben ser {}, no {}", elem_exp, t
+                            )));
+                        }
+                    }
+                    Ok(Type::Array(elem_exp.clone()))
+                }
+                _ => self.check_expr(expr),
+            },
+            ExprKind::If { cond, then_branch, else_branch } => {
+                let ct = self.check_expr(cond)?;
+                if ct != Type::Bool {
+                    return Err(self.err(cond.line, cond.col, format!("la condición del if debe ser bool, no {}", ct)));
+                }
+                let then_ty = self.check_block_expected(then_branch, expected)?;
+                match else_branch {
+                    None => {
+                        if then_ty != Type::Unit {
+                            return Err(self.err(expr.line, expr.col, format!(
+                                "un if sin else tiene tipo unit, pero su rama produce {} (añade un else)", then_ty
+                            )));
+                        }
+                        Ok(Type::Unit)
+                    }
+                    Some(else_e) => {
+                        let else_ty = self.check_expr_expected(else_e, expected)?;
+                        if then_ty != else_ty {
+                            return Err(self.err(expr.line, expr.col, format!(
+                                "las ramas del if tienen tipos distintos: {} y {}", then_ty, else_ty
+                            )));
+                        }
+                        Ok(then_ty)
+                    }
+                }
+            }
+            // El tipo esperado no aporta a las demás formas: chequeo normal.
+            _ => self.check_expr(expr),
+        }
+    }
+
+    /// Como `check_block`, pero el valor final (la *tail*) se verifica con un tipo
+    /// esperado, que se propaga al `match`/`if` que sea esa expresión final.
+    fn check_block_expected(&mut self, block: &Block, expected: &Type) -> Result<Type, TypeError> {
+        self.push_scope();
+        let mut err = None;
+        for stmt in &block.statements {
+            if let Err(e) = self.check_stmt(stmt) {
+                err = Some(e);
+                break;
+            }
+        }
+        let result = match err {
+            Some(e) => Err(e),
+            None => match &block.tail {
+                Some(e) => self.check_expr_expected(e, expected),
+                None => Ok(Type::Unit),
+            },
+        };
+        self.pop_scope();
+        result
+    }
 
     fn check_expr(&mut self, expr: &Expr) -> Result<Type, TypeError> {
         match &expr.kind {
@@ -716,15 +907,15 @@ impl Checker {
 
             ExprKind::Index { array, index } => self.check_index(array, index),
 
-            ExprKind::StructLit { name, fields } => self.check_struct_lit(name, fields, expr.line, expr.col),
+            ExprKind::StructLit { name, fields } => self.check_struct_lit(name, fields, None, expr.line, expr.col),
 
             ExprKind::Field { object, name } => self.check_field(object, name),
 
             ExprKind::EnumLit { enum_name, variant, args } => {
-                self.check_enum_lit(enum_name, variant, args, expr.line, expr.col)
+                self.check_enum_lit(enum_name, variant, args, None, expr.line, expr.col)
             }
 
-            ExprKind::Match { scrutinee, arms } => self.check_match(scrutinee, arms, expr.line, expr.col),
+            ExprKind::Match { scrutinee, arms } => self.check_match(scrutinee, arms, None, expr.line, expr.col),
 
             ExprKind::Func(fe) => {
                 for p in &fe.params {
@@ -965,7 +1156,9 @@ impl Checker {
             )));
         }
         for (i, (arg, expected)) in args.iter().zip(params.iter()).enumerate() {
-            let at = self.check_expr(arg)?;
+            // El tipo del parámetro es el esperado del argumento (propaga a `None`,
+            // `[]`, `Caja.Vacia`...).
+            let at = self.check_expr_expected(arg, expected)?;
             if at != *expected {
                 return Err(self.err(arg.line, arg.col, format!(
                     "argumento {} de {}: se esperaba {}, se pasó {}",
@@ -1051,13 +1244,13 @@ impl Checker {
 /// arreglo lo es solo si su elemento lo es.
 fn is_comparable(t: &Type) -> bool {
     match t {
-        Type::Int | Type::Float | Type::Bool | Type::String | Type::Struct(_) => true,
+        Type::Int | Type::Float | Type::Bool | Type::String | Type::Struct(_, _) => true,
         Type::Array(elem) => is_comparable(elem),
         // Los enums (M5) no se comparan con ==: pueden ser recursivos y portar
         // funciones; se consumen por `match`. (Un `@derive(Eq)` futuro lo abriría.)
         // Un parámetro de tipo (M6) es opaco: podría ser una función o un enum, así
         // que no se puede comparar dentro de código genérico.
-        Type::Unit | Type::Fn(_, _) | Type::Enum(_) | Type::Var(_) => false,
+        Type::Unit | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_) => false,
     }
 }
 
@@ -1067,8 +1260,35 @@ fn is_printable(t: &Type) -> bool {
     matches!(
         t,
         Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_)
-            | Type::Struct(_) | Type::Fn(_, _) | Type::Enum(_) | Type::Var(_)
+            | Type::Struct(_, _) | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_)
     )
+}
+
+/// ¿El tipo contiene algún parámetro de tipo `Var` sin resolver? (M6.2: si lo tiene,
+/// no sirve como tipo "esperado" concreto.)
+fn type_has_var(t: &Type) -> bool {
+    match t {
+        Type::Var(_) => true,
+        Type::Array(e) => type_has_var(e),
+        Type::Fn(ps, r) => ps.iter().any(type_has_var) || type_has_var(r),
+        Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(type_has_var),
+        _ => false,
+    }
+}
+
+/// Siembra `σ` a partir del tipo esperado (M6.2): si se espera `Nombre<a, b, ...>` con
+/// la aridad correcta, liga cada parámetro de tipo con su argumento esperado. Así
+/// `Caja.Vacia` con tipo esperado `Caja<int>` fija `T = int`.
+fn seed_sigma_from_expected(expected: Option<&Type>, name: &str, tparams: &[String]) -> HashMap<String, Type> {
+    let mut sigma = HashMap::new();
+    if let Some(Type::Struct(en, eargs) | Type::Enum(en, eargs)) = expected {
+        if en == name && eargs.len() == tparams.len() {
+            for (tp, ea) in tparams.iter().zip(eargs) {
+                sigma.insert(tp.clone(), ea.clone());
+            }
+        }
+    }
+    sigma
 }
 
 /// **Sustitución** (M6): reemplaza cada `Var(n)` por `σ[n]`, recursivamente. Es cómo
@@ -1082,7 +1302,10 @@ fn subst(ty: &Type, sigma: &HashMap<String, Type>) -> Type {
             ps.iter().map(|p| subst(p, sigma)).collect(),
             Box::new(subst(r, sigma)),
         ),
-        // Primitivos, Struct y Enum: sin argumentos de tipo en M6.1, nada que sustituir.
+        // Tipos nominales: sustituir sus argumentos de tipo (M6.2).
+        Type::Struct(n, args) => Type::Struct(n.clone(), args.iter().map(|a| subst(a, sigma)).collect()),
+        Type::Enum(n, args) => Type::Enum(n.clone(), args.iter().map(|a| subst(a, sigma)).collect()),
+        // Primitivos: nada que sustituir.
         other => other.clone(),
     }
 }
@@ -1114,7 +1337,17 @@ fn unify(param: &Type, arg: &Type, sigma: &mut HashMap<String, Type>) -> Result<
             }
             unify(r1, r2, sigma)
         }
-        // Resto (primitivos, Struct, Enum, Var rígido del llamador): igualdad exacta.
+        // Tipos nominales: mismo nombre y unificar sus argumentos de tipo (M6.2), p.
+        // ej. `Caja<T>` contra `Caja<int>` liga `T = int`.
+        (Type::Struct(n1, a1), Type::Struct(n2, a2)) | (Type::Enum(n1, a1), Type::Enum(n2, a2))
+            if n1 == n2 && a1.len() == a2.len() =>
+        {
+            for (a, b) in a1.iter().zip(a2) {
+                unify(a, b, sigma)?;
+            }
+            Ok(())
+        }
+        // Resto (primitivos, Var rígido del llamador): igualdad exacta.
         _ if param == arg => Ok(()),
         _ => Err(format!("se esperaba {}, se pasó {}", param, arg)),
     }
@@ -1452,10 +1685,10 @@ fn main() -> int {
 
     #[test]
     fn arreglos_errores_de_tipo() {
-        err_contains("fn main() -> int { let a: [int] = [1, true]; a[0] }", "mismo tipo");
+        err_contains("fn main() -> int { let a: [int] = [1, true]; a[0] }", "deben ser int");
         err_contains("fn main() -> int { let a: [int] = [1]; a[true] }", "índice debe ser int");
         err_contains("fn main() -> int { let x: int = 5; x[0] }", "no es un arreglo");
-        err_contains("fn main() { let x: int = []; }", "arreglo vacío");
+        err_contains("fn main() { let x: int = []; }", "no se puede inferir");
         err_contains("fn main() -> int { let a: [int] = [1]; a[0] = true; a[0] }", "se le asigna bool");
         err_contains("fn main() -> int { len(5) }", "len espera un arreglo");
         err_contains("fn main() { let a: [int] = [1]; push(a, true); }", "se empuja bool");
@@ -1614,7 +1847,7 @@ fn main() { let xs: Lista = Lista.Cons(1, Lista.Cons(2, Lista.Nil)); print(xs); 
 
     #[test]
     fn enum_tipo_de_payload_incorrecto() {
-        err_contains("enum E { A(int) } fn main() { let x: E = E.A(true); print(x); }", "se esperaba int, se dio bool");
+        err_contains("enum E { A(int) } fn main() { let x: E = E.A(true); print(x); }", "se esperaba int, se pasó bool");
     }
 
     #[test]
@@ -1798,5 +2031,71 @@ fn main() -> int { aplicar(doble, 21) }
     #[test]
     fn tipo_desconocido_no_es_parametro() {
         err_contains("fn f(x: Desconocido) -> int { 0 } fn main() {}", "'Desconocido' no declarado");
+    }
+
+    // ----- M6.2: tipos genéricos del usuario y chequeo bidireccional -----
+
+    #[test]
+    fn enum_generico_construccion_y_match() {
+        let src = r#"
+enum Caja<T> { Llena(T), Vacia }
+fn val(c: Caja<int>, def: int) -> int {
+    match (c) { Caja.Llena(v) => v, Caja.Vacia => def }
+}
+fn main() -> int {
+    let a: Caja<int> = Caja.Llena(7);   // T=int del argumento
+    let b: Caja<int> = Caja.Vacia;       // T=int del tipo esperado
+    val(a, 0) + val(b, 35)
+}
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn struct_generico_campo_sustituido() {
+        let src = r#"
+struct Par<A, B> { primero: A, segundo: B }
+fn main() -> int {
+    let p: Par<int, bool> = Par { primero: 10, segundo: true };
+    if (p.segundo) { p.primero } else { 0 }
+}
+"#;
+        assert!(check_src(src).is_ok());
+    }
+
+    #[test]
+    fn generico_mismatch_de_argumento_de_tipo() {
+        err_contains(
+            "enum Caja<T> { Llena(T), Vacia } fn main() { let b: Caja<bool> = Caja.Llena(7); print(b); }",
+            "no puede ser bool y int",
+        );
+    }
+
+    #[test]
+    fn generico_aridad_de_args_de_tipo() {
+        err_contains(
+            "enum Caja<T> { Llena(T), Vacia } fn main() { let b: Caja<int, bool> = Caja.Vacia; print(b); }",
+            "espera 1 argumento(s) de tipo",
+        );
+    }
+
+    #[test]
+    fn generico_vacio_no_inferible_sin_contexto() {
+        // Sin tipo esperado ni argumentos, T queda sin determinar.
+        err_contains(
+            "enum Caja<T> { Llena(T), Vacia } fn main() { print(Caja.Vacia); }",
+            "no se pudo inferir",
+        );
+    }
+
+    #[test]
+    fn parametro_de_tipo_de_enum_repetido() {
+        err_contains("enum E<T, T> { A(T) } fn main() {}", "parámetro de tipo 'T' repetido");
+    }
+
+    #[test]
+    fn arreglo_vacio_adopta_el_tipo_esperado() {
+        // El chequeo bidireccional arregla la aspereza histórica del [] vacío.
+        assert!(check_src("fn main() -> int { let xs: [int] = []; len(xs) }").is_ok());
     }
 }

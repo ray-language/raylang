@@ -83,6 +83,7 @@ impl Parser {
     fn enum_def(&mut self) -> Result<EnumDef, ParseError> {
         let kw = self.expect(&TokenKind::Enum, "'enum'")?;
         let (name, _, _) = self.expect_ident("el nombre del enum")?;
+        let type_params = self.type_params()?;
         self.expect(&TokenKind::LBrace, "'{' tras el nombre del enum")?;
         let mut variants = Vec::new();
         while !self.check(&TokenKind::RBrace) {
@@ -104,7 +105,7 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace, "'}' para cerrar el enum")?;
-        Ok(EnumDef { name, variants, line: kw.line, col: kw.col })
+        Ok(EnumDef { name, type_params, variants, line: kw.line, col: kw.col })
     }
 
     /// struct_def = 'struct' IDENT '{' [ field { ',' field } [ ',' ] ] '}'
@@ -112,6 +113,7 @@ impl Parser {
     fn struct_def(&mut self) -> Result<StructDef, ParseError> {
         let kw = self.expect(&TokenKind::Struct, "'struct'")?;
         let (name, _, _) = self.expect_ident("el nombre del struct")?;
+        let type_params = self.type_params()?;
         self.expect(&TokenKind::LBrace, "'{' tras el nombre del struct")?;
         let mut fields = Vec::new();
         while !self.check(&TokenKind::RBrace) {
@@ -124,7 +126,7 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace, "'}' para cerrar el struct")?;
-        Ok(StructDef { name, fields, line: kw.line, col: kw.col })
+        Ok(StructDef { name, type_params, fields, line: kw.line, col: kw.col })
     }
 
     /// function = 'fn' IDENT [ '<' IDENT { ',' IDENT } '>' ] '(' [ params ] ')'
@@ -178,6 +180,23 @@ impl Parser {
         Ok(params)
     }
 
+    /// Lista opcional de argumentos de tipo: `< type { ',' type } >` (M6). Como
+    /// `type_params`, pero los elementos son **tipos** (`Caja<int>`, `Par<A, [int]>`),
+    /// no nombres. Vacío si no hay `<`.
+    fn type_args(&mut self) -> Result<Vec<Type>, ParseError> {
+        let mut args = Vec::new();
+        if self.eat(&TokenKind::Lt) {
+            loop {
+                args.push(self.parse_type()?);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::Gt, "'>' para cerrar los argumentos de tipo")?;
+        }
+        Ok(args)
+    }
+
     /// params = param { ',' param } ;  param = IDENT ':' type
     fn params(&mut self) -> Result<Vec<Param>, ParseError> {
         let mut params = Vec::new();
@@ -224,11 +243,13 @@ impl Parser {
             };
             return Ok(Type::Fn(params, Box::new(ret)));
         }
-        // Nombre de struct (un identificador es un tipo).
+        // Nombre de struct/enum, con argumentos de tipo opcionales: `Caja<int>`.
+        // (Un identificador suelto es `Struct(name, [])`; el checker lo reclasifica.)
         if let TokenKind::Ident(name) = self.peek_kind() {
             let name = name.clone();
             self.advance();
-            return Ok(Type::Struct(name));
+            let args = self.type_args()?;
+            return Ok(Type::Struct(name, args));
         }
         let ty = match self.peek_kind() {
             TokenKind::IntType => Type::Int,
@@ -1049,8 +1070,8 @@ mod tests {
         assert_eq!(f.type_params, vec!["T".to_string(), "U".to_string()]);
         // El parser deja los parámetros de tipo como Struct(name); el checker los
         // reclasifica a Var. Aquí solo comprobamos que se parsean en su lugar.
-        assert_eq!(f.params[0].ty, Type::Array(Box::new(Type::Struct("T".into()))));
-        assert_eq!(f.return_type, Type::Array(Box::new(Type::Struct("U".into()))));
+        assert_eq!(f.params[0].ty, Type::Array(Box::new(Type::Struct("T".into(), vec![]))));
+        assert_eq!(f.return_type, Type::Array(Box::new(Type::Struct("U".into(), vec![]))));
         // Una función sin <...> no tiene parámetros de tipo.
         assert!(prog.functions[1].type_params.is_empty());
     }

@@ -1242,6 +1242,44 @@ mod tests {
         );
     }
 
+    // ----- M6.2: tipos genéricos del usuario (erasure: ambos motores coinciden) -----
+
+    #[test]
+    fn enum_generico_oraculo() {
+        oracle_program(
+            "enum Caja<T> { Llena(T), Vacia }
+             fn val(c: Caja<int>, def: int) -> int { match (c) { Caja.Llena(v) => v, Caja.Vacia => def } }
+             fn main() -> int {
+                 let a: Caja<int> = Caja.Llena(7);
+                 let b: Caja<int> = Caja.Vacia;
+                 val(a, 0) + val(b, 35)
+             }",
+        );
+    }
+
+    #[test]
+    fn struct_generico_oraculo() {
+        oracle_program(
+            "struct Par<A, B> { primero: A, segundo: B }
+             fn main() -> int {
+                 let p: Par<int, bool> = Par { primero: 10, segundo: true };
+                 if (p.segundo) { p.primero } else { 0 }
+             }",
+        );
+    }
+
+    #[test]
+    fn enum_generico_recursivo_en_estres() {
+        // Lista genérica construida con un tipo concreto, recorrida con match, bajo el
+        // GC en modo estrés: los valores de enum genérico se trazan como cualquier enum.
+        oracle_stress(
+            "enum Lista<T> { Cons(T, Lista<T>), Nil }
+             fn suma(xs: Lista<int>) -> int { match (xs) { Lista.Cons(h, t) => h + suma(t), Lista.Nil => 0 } }
+             fn construir(n: int) -> Lista<int> { if (n == 0) { Lista.Nil } else { Lista.Cons(n, construir(n - 1)) } }
+             fn main() -> int { suma(construir(15)) }",
+        );
+    }
+
     // ----- M4.3: recolección de basura -----
 
     #[test]

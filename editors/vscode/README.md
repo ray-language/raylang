@@ -26,7 +26,8 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 | Definición de función | `fn fib` | `entity.name.function` |
 | Función anónima / tipo función | `fn(n: int) -> int`, `fn(int) -> int` | `storage.type` + tipos |
 | Llamadas | `fib(...)` | `entity.name.function` |
-| Operadores | `+ - == && -> =>` ... | `keyword.operator` |
+| Operadores | `+ - == && -> => ?` ... | `keyword.operator` |
+| Genéricos | `<T>`, `Caja<int>`, `Par<A, B>` | `entity.name.type` + `keyword.operator` |
 
 > El **tipo función** `fn(...) -> R` y la **función anónima** `fn(n: int) { ... }`
 > de M4 no necesitaron reglas nuevas: la `fn` la pinta `storage.type` y sus
@@ -39,6 +40,13 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 > mayúscula, así que se pintan como tipo tanto al construirlas como en (futuro) `match`.
 > `match` y `=>` ya se reservan en el lexer; se colorean aunque su sintaxis completa
 > llegue en M5.2.
+
+> **M6 (genéricos).** Los **parámetros y argumentos de tipo** no necesitaron reglas
+> nuevas: en `fn id<T>`, `enum Caja<T>` o `Caja<int>`, el nombre de tipo (mayúscula o
+> primitivo) ya se reconoce y los `<` `>` caen en operadores. Lo único que se añadió
+> fue el operador de propagación **`?`** (`dividir(a, b)?`), que ahora se colorea como
+> `keyword.operator`. La inferencia de genéricos es cosa del checker, invisible al
+> coloreado.
 
 > Nota: la gramática TextMate (`syntaxes/raylang.tmLanguage.json`) es una
 > **reescritura en regex** de las reglas léxicas de `DESIGN.md` §3. Es independiente
@@ -53,7 +61,7 @@ de extensiones de VSCode y recarga.
 
 ```sh
 # macOS / Linux
-ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.3.0
+ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.4.0
 
 # Luego: recarga VSCode (Cmd/Ctrl+Shift+P → "Developer: Reload Window")
 ```
@@ -68,7 +76,7 @@ Para generar un `.vsix` instalable o publicarlo:
 
 ```sh
 npm install -g @vscode/vsce
-vsce package        # genera raylang-0.3.0.vsix
+vsce package        # genera raylang-0.4.0.vsix
 # Instalar el .vsix: Cmd/Ctrl+Shift+P → "Extensions: Install from VSIX..."
 ```
 

@@ -1085,3 +1085,147 @@ token ofensor; el número de línea es el de esa fuente, una limitación conocid
 - **Inferencia de retornos/parámetros** → no; §0 fija firmas explícitas.
 - **Inferencia con flujo** (deducir el `T` de `[]` por un `push` posterior) → no; la
   inferencia es local al inicializador.
+
+## 18. M9 — Traits (interfaces + comportamiento)
+
+M9 es el salto de **polimorfismo** de raylang. Hasta aquí los structs son **datos** y las
+funciones (más UFCS) dan los "métodos", pero no hay forma de programar **contra una
+abstracción**: de decir "cualquier tipo que sepa *mostrarse*" y escribir código que sirva
+para todos. Eso es un **trait** (la *interfaz* / *typeclass* de otros lenguajes). La
+decisión de fondo —fijada desde IDEAS §4— es **structs (datos) + traits estilo Rust
+(comportamiento)**, no clases con herencia: composición sobre herencia, despacho estático
+por defecto, e integración limpia con UFCS y genéricos.
+
+### 18.0 Decisiones de diseño (cerradas)
+
+1. **Traits estilo Rust, no clases.** Un `trait` declara **firmas** de métodos; un bloque
+   `impl Trait for Tipo` las **implementa** para un tipo concreto. El dato (struct/enum) y
+   el comportamiento (impl) viven **separados**: un mismo tipo puede implementar varios
+   traits, y un trait puede implementarse para tipos que no controlas. Sin herencia.
+2. **Despacho estático primero (M9.1).** En `recv.metodo(args)` con `recv` de tipo
+   **concreto conocido**, el checker resuelve el `impl` en tiempo de chequeo y **reescribe**
+   la llamada a una función ordinaria —igual que UFCS (§16)—. Es **front-end puro**: el
+   runtime no cambia (erasure, como los genéricos). El despacho **dinámico** (*trait
+   objects*) se difiere a M9.3.
+3. **`self` como receptor.** El primer parámetro de un método es `self`, sin anotación: su
+   tipo es el tipo implementador. En las firmas, el tipo **`Self`** denota ese mismo tipo
+   (p. ej. `fn duplicar(self) -> Self`). Es la única forma nueva de "tipo".
+4. **Sub-fases.** M9.1 trait + impl + despacho estático concreto; **M9.2** *bounds* de
+   genéricos (`T: Trait`); **M9.3** métodos por defecto y trait objects. Una a una.
+
+### 18.1 Sintaxis (M9.1)
+
+```rust
+trait Mostrable {
+    fn mostrar(self) -> string;       // firma: cuerpo ausente, termina en ';'
+}
+
+struct Punto { x: int, y: int }
+
+impl Mostrable for Punto {
+    fn mostrar(self) -> string {       // 'self' es el Punto receptor
+        "punto"
+    }
+}
+
+fn main() -> int {
+    let p = Punto { x: 1, y: 2 };
+    print(p.mostrar());                // UFCS: resuelve al método del impl
+    0
+}
+```
+
+- Un `trait` lista **firmas** (`fn nombre(self, ...) -> R;`). El `self` es siempre el
+  primer parámetro; puede haber más parámetros normales tras él.
+- `impl Trait for Tipo { ... }` da el **cuerpo** de cada método. M9.1 exige que el impl
+  cubra **exactamente** las firmas del trait (mismos nombres, mismos tipos con
+  `self`/`Self` = `Tipo`); ni de menos (falta cobertura) ni con firma distinta.
+- `Tipo` puede ser un struct, un enum o un primitivo (`impl Mostrable for int`). M9.1 no
+  admite **impls genéricos** (`impl Mostrable for Caja<T>`): se difiere a M9.2.
+
+### 18.2 AST
+
+- **`Type::SelfType`** — el tipo `Self`. Extiende el `Type` (diseñado abierto, §0). Como
+  con `Var`/`Enum`, el parser produce `Struct("Self")` para el identificador en posición de
+  tipo y el checker lo **reclasifica** (`resolve_type`) a `SelfType` cuando hay un tipo
+  implementador en ámbito.
+- **`TraitDef { name, methods: Vec<MethodSig>, line, col }`** y
+  **`MethodSig { name, params, return_type, line, col }`** — `params` incluye `self` como
+  primero (su `ty` es `SelfType`).
+- **`ImplBlock { trait_name, target: Type, methods: Vec<Function>, line, col }`** — `target`
+  es el tipo implementador (concreto en M9.1).
+- `Program` gana `traits: Vec<TraitDef>` e `impls: Vec<ImplBlock>`.
+
+### 18.3 Parser
+
+- Tokens nuevos `trait` e `impl` (palabras clave). `self` se reconoce como **primer
+  parámetro especial** en las firmas/métodos: sin `: tipo`, su tipo se fija a `SelfType`.
+- `trait` y `impl` son **ítems de nivel superior** (como `fn`/`struct`/`enum`). El cuerpo de
+  un `trait` son firmas terminadas en `;`; el de un `impl`, funciones completas.
+
+### 18.4 Checker — el núcleo de M9.1
+
+La idea clave: un método de `impl` **es** una función ordinaria con un primer parámetro
+`self` de tipo concreto. Por eso M9.1 no necesita maquinaria de runtime nueva —**reusa**
+toda la de funciones—:
+
+1. **Registro.** Se registran los traits (nombre → firmas) y los impls. Cada impl se
+   **valida** contra su trait: el tipo destino existe; cubre exactamente las firmas (mismos
+   nombres, y al sustituir `Self` = destino, mismos tipos de parámetros y retorno).
+2. **Bajada a funciones libres.** Cada método de `impl` se inyecta en `program.functions`
+   con un **nombre desambiguado** (*mangling*) `«Tipo#metodo»` (p. ej. `Punto#mostrar`) y su
+   `self` convertido en un parámetro concreto `self: Tipo`. Como el usuario no puede
+   escribir `#`, no hay colisión de nombres. A partir de aquí, el chequeo de cuerpos, la
+   inferencia y el lowering de UFCS **ya existentes** las procesan sin código especial.
+3. **Tabla de resolución de métodos.** `(Tipo, metodo) → «Tipo#metodo»`. M9.1 **prohíbe**
+   que un mismo tipo reciba dos métodos homónimos de traits distintos (sería ambiguo):
+   error en el registro.
+4. **Resolución en UFCS.** En `recv.metodo(args)` el orden es: (1) **campo** del struct
+   receptor (M3/M4); si no, (2) **método de trait** del tipo concreto del receptor (nuevo);
+   si no, (3) **función libre** (UFCS de M7.1). El método de trait se baja igual que UFCS,
+   reescribiendo el `Call(Field)` a `Call(Ident("«Tipo#metodo»"), [recv, ...args])`.
+
+Para (4), `ufcs_sites` se generaliza de un conjunto de `(línea, col, nombre)` a un **mapa**
+`(línea, col, nombre) → nombre_destino`: para UFCS de función libre el destino es el mismo
+nombre; para un método de trait, el nombre *manglado*. Un único `lower_ufcs` baja ambos.
+
+### 18.5 Runtime: sin cambios
+
+M9.1 es **erasure** como los genéricos: traits e impls se borran antes de ejecutar. Lo que
+llega al intérprete y a la VM son funciones ordinarias (`Punto#mostrar(self: Punto)`) y
+llamadas ordinarias. **Cero opcodes nuevos, cero cambios en los dos motores.** El oráculo
+VM↔intérprete sigue valiendo sin tocar `vm.rs`.
+
+> **Por qué encaja tan limpio.** El despacho estático sobre tipos concretos es,
+> literalmente, "elige la función correcta en tiempo de chequeo y llámala directo". raylang
+> ya hace exactamente eso con UFCS. Un trait añade el **contrato** (qué métodos, qué firmas)
+> y la **agrupación** (varios impls para varios tipos), pero el mecanismo de despacho es el
+> mismo. El polimorfismo *de verdad* —resolver el método sin conocer el tipo concreto—
+> llega con los bounds (M9.2) y los trait objects (M9.3), y es ahí donde el runtime entra
+> en juego.
+
+### 18.6 M9.2 — Bounds de genéricos (esbozo; decisión al arrancar)
+
+Un *bound* acota un parámetro de tipo: `fn imprimir_todo<T: Mostrable>(xs: [T])` permite
+llamar `x.mostrar()` dentro del cuerpo, porque `T` **garantiza** implementar `Mostrable`.
+El reto: con **erasure**, `T` no existe en runtime, así que dentro del genérico no se puede
+"elegir la función en tiempo de chequeo" —hay un solo cuerpo compilado para todos los `T`—.
+Las tres salidas clásicas, **a decidir al arrancar M9.2**:
+
+- **Paso de diccionarios** (estilo Haskell): pasar la tabla de métodos del impl como
+  argumento oculto. Conserva erasure; coste: una indirección y plomería en el front-end.
+- **Monomorfización** (estilo Rust): generar una copia del genérico por cada tipo concreto
+  usado. Despacho estático puro; coste: duplicación de código, sigue siendo front-end.
+- **Despacho por tipo en runtime**: el valor lleva su tipo (los `Obj::Struct`/`Enum` ya lo
+  llevan) y la llamada busca el impl por ese tipo. Simple y uniforme; es de facto despacho
+  dinámico, y roza la frontera de "estático por defecto".
+
+### 18.7 Deferido (más allá de M9.1)
+- **Bounds `T: Trait`** → M9.2 (con su decisión de despacho).
+- **Métodos por defecto** en el trait (cuerpo en la firma) → M9.3.
+- **Trait objects / despacho dinámico** (`[Mostrable]`, parámetros `dyn`) → M9.3.
+- **Impls genéricos** (`impl Trait for Caja<T>`) → M9.2 (requieren parámetros de tipo en el
+  impl).
+- **Traits con `Self` en posición de argumento** que exija dos receptores del mismo tipo
+  (p. ej. `fn igual(self, otro: Self) -> bool`) → soportado por M9.1 (ambos = destino), pero
+  sin la garantía de igualdad estructural que daría un trait `Eq` del prelude (futuro).

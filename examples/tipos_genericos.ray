@@ -1,0 +1,45 @@
+// Tipos genéricos del usuario (M6): enums y structs parametrizados. Los argumentos de
+// tipo se infieren al construir (o salen del tipo esperado, como en `Caja.Vacia`); al
+// hacer `match` o acceder a un campo, se SUSTITUYEN por los tipos concretos.
+
+// Un par heterogéneo: dos parámetros de tipo distintos.
+struct Par<A, B> { primero: A, segundo: B }
+
+// Una "caja" que puede estar llena (con un T dentro) o vacía.
+enum Caja<T> { Llena(T), Vacia }
+
+// La lista enlazada de M5, ahora GENÉRICA: el mismo tipo sirve para int, string, ...
+enum Lista<T> { Cons(T, Lista<T>), Nil }
+
+// Y su recorrido también es genérico sobre el tipo de elemento.
+fn longitud<T>(xs: Lista<T>) -> int {
+    match (xs) {
+        Lista.Cons(_, resto) => 1 + longitud(resto),
+        Lista.Nil            => 0,
+    }
+}
+
+fn contenido(c: Caja<int>, def: int) -> int {
+    match (c) {
+        Caja.Llena(v) => v,        // v es int: el payload T se sustituyó por int
+        Caja.Vacia    => def,
+    }
+}
+
+fn main() -> int {
+    // Struct genérico: A=int, B=bool inferidos de los valores de los campos.
+    let p: Par<int, bool> = Par { primero: 7, segundo: true };
+    print(p.segundo);                  // true  (campo de tipo B = bool)
+
+    // Enum genérico: T=int del argumento; para `Vacia`, T=int del tipo esperado.
+    let llena: Caja<int> = Caja.Llena(35);
+    let vacia: Caja<int> = Caja.Vacia;
+
+    // Lista genérica de strings: una sola definición, cualquier elemento.
+    let nombres: Lista<string> =
+        Lista.Cons("ana", Lista.Cons("beto", Lista.Cons("caro", Lista.Nil)));
+    print(longitud(nombres));          // 3
+
+    p.primero + contenido(llena, 0) + contenido(vacia, 0) + longitud(nombres)
+    // 7 + 35 + 0 + 3 = 45
+}

@@ -676,6 +676,28 @@ impl<'a> Interpreter<'a> {
                 let items = program_args().iter().map(|a| Value::Str(a.clone())).collect();
                 Value::Array(Rc::new(RefCell::new(items)))
             }
+            // M11.2c: lee un archivo → arreglo etiquetado ["ok", contenido] o ["err", msg].
+            "__read_file" => {
+                let arr = match &values[0] {
+                    Value::Str(path) => match std::fs::read_to_string(path) {
+                        Ok(c) => vec![Value::Str("ok".to_string()), Value::Str(c)],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
+                    },
+                    _ => unreachable!("el checker garantiza un string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M11.2c: escribe un archivo → ["ok"] o ["err", msg].
+            "__write_file" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(path), Value::Str(contents)) => match std::fs::write(path, contents) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
+                    },
+                    _ => unreachable!("el checker garantiza dos strings"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             _ => unreachable!("builtin desconocido"),
         }
     }

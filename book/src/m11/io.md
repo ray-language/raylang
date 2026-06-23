@@ -86,12 +86,52 @@ entorno, de los argumentos). Por eso se prueba en dos capas:
 - lo **interactivo** (stdin, stderr, argv, entorno) con **tests de integración por subproceso**, que
   alimentan stdin, capturan stderr y pasan args/env reales.
 
+## Archivos: el truco del `[T]` crece a `Result` (M11.2c)
+
+Leer y escribir archivos puede fallar, así que devuelven **`Result`** —el otro productor natural de
+errores-como-valores—. Pero `Result` carga **dos** payloads (el valor en `Ok`, el mensaje en `Err`),
+y el truco del `[T]` (vacío/único) solo distinguía "hay valor / no hay". La solución: un **arreglo
+etiquetado**, cuyo **primer elemento es la etiqueta**:
+
+```rust
+read_file(ruta)            -> Result<string, string>   // Ok(contenido) | Err(mensaje)
+write_file(ruta, contenido) -> Result<int, string>     // Ok(nº de caracteres) | Err(mensaje)
+```
+
+El primitivo `__read_file` devuelve `["ok", contenido]` o `["err", mensaje]`; el envoltorio del
+prelude mira `r[0]`:
+
+```rust
+fn read_file(ruta: string) -> Result<string, string> {
+  let r = __read_file(ruta);
+  if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+}
+```
+
+`write_file` usa `["ok"]` / `["err", msg]` y el prelude pone `Result.Ok(len(contenido))` —los
+caracteres escritos— en el caso bueno (devolver `int` evita necesitar un literal *unit*). El runtime,
+una vez más, **no sabe qué es `Result`**: solo devuelve arreglos de strings; el prelude pone el tipo.
+
+Con archivos, raylang ya puede **leer sus propias fuentes** — el último cimiento que faltaba para
+encarar el self-hosting.
+
+## Dos motores, otra vez el oráculo
+
+Como M11.1, esto **toca el runtime** (los primitivos son opcodes), así que vuelve la disciplina del
+**oráculo** VM↔intérprete. Pero hay un matiz: la I/O **no es determinista** (depende de stdin, del
+entorno, de los argumentos, del disco). Por eso se prueba en dos capas:
+
+- lo **determinista** (`parse_int`, `args()`/`env()` "vacíos" en el test, leer un archivo
+  **inexistente** → `Err`) con el oráculo, exigiendo que ambos motores coincidan, incluido el estrés
+  del GC (el `[T]` y el `Option`/`Result` son objetos del heap);
+- lo **interactivo/real** (stdin, stderr, argv, entorno, ida y vuelta de archivos) con **tests de
+  integración por subproceso**, que alimentan stdin, capturan stderr y usan archivos temporales.
+
 ## Lo que queda fuera
 
-La **I/O de archivos** (`read_file`/`write_file`) se difiere: querría `Result<string, string>`, y el
-truco del `[T]` no cubre bien **dos** payloads (el valor y el mensaje de error). Construir `Result`
-desde un builtin —o un primitivo de "dos arreglos"— es un paso aparte, para cuando el self-hosting
-lo pida de verdad.
+De archivos: *append*, borrado, `exists`, listar directorios, y *streaming* (es lectura/escritura
+del archivo **completo**). Son aditivos; llegarán cuando hagan falta. Lo que hay es lo justo para
+apps de CLI y para leer/escribir fuentes `.ray`.
 
 > M11.2 cierra un círculo abierto en M6.3: los tipos `Option`/`Result` existían desde entonces, pero
 > hasta ahora casi todo el que los producía era el propio usuario. La I/O es su hábitat natural —el

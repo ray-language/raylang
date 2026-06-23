@@ -153,6 +153,19 @@ static BUILTINS: &[Builtin] = &[
         nullary(a, "args")?;
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // __read_file(path) -> [string] (M11.2c): ["ok", contenido] o ["err", msg]. Prelude → Result.
+    Builtin { name: "__read_file", opcode: OpCode::ReadFile, check: |a| {
+        arity(a, 1, "__read_file", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__read_file espera un string (la ruta), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __write_file(path, contenido) -> [string] (M11.2c): ["ok"] o ["err", msg]. Prelude → Result.
+    Builtin { name: "__write_file", opcode: OpCode::WriteFile, check: |a| {
+        arity(a, 2, "__write_file", " (ruta, contenido)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__write_file espera un string (la ruta), no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__write_file espera un string (el contenido), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
 ];
 
 #[cfg(test)]

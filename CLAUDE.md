@@ -292,6 +292,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `args() -> [string]` (opcode `Args` + almacén de proceso `OnceLock` en `interpreter.rs`,
     `set_program_args`/`program_args`, leído por ambos motores). `main.rs` acepta `raylang
     [--vm|--test] <archivo> [args...]` y deja los args tras la ruta en el almacén.
+  - **M11.2c** (I/O de archivos, devuelve **`Result`**): `read_file(ruta) -> Result<string,string>`,
+    `write_file(ruta,cont) -> Result<int,string>`. El truco del `[T]` se generaliza a un **arreglo
+    etiquetado**: el primitivo (`__read_file -> [string]` opcode `ReadFile`; `__write_file` opcode
+    `WriteFile`) devuelve `["ok", payload]` / `["err", msg]`, y el prelude lo traduce a `Result` →
+    runtime sigue sin saber de `Result`. **Tras L1, añadir el builtin fue solo una fila en la tabla
+    `BUILTINS` + opcode + impl por motor + envoltorio** (cero cambios en checker/compilador).
 - **Limpieza post-M11 L1 COMPLETO** (300 tests + integración verdes): **registro único de builtins**
   (`src/builtins.rs`). Antes cada builtin (`print`/`len`/`split`/`args`/…, ya ~13) se repetía en
   ~4 sitios (checker ×2, intérprete, compilador). Ahora una tabla `BUILTINS` con `name` + `opcode`
@@ -319,11 +325,10 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   modules: Vec<LoadedModule{name,source,start_line}> }`; `main.rs` localiza un error global por su
   banda y lo renderiza contra **su archivo** con la **línea local**, prefijado `[módulo]` (solo si
   hay >1 módulo; archivo único sin cambios). Runtime intacto (las posiciones se borran al ejecutar).
-- **Siguiente: track de limpieza cerrado** (L1+L2+L3). M11 cerrado salvo diferidos. Pendientes:
-  **I/O de archivos** (`read_file`/`write_file`
-  con `Result` — el truco del `[T]` no cubre dos payloads); **cruzar tipos entre módulos**
-  (`from M import Punto`, `M.Punto`, `M.Color.Rojo` — namespacar tipos). Capstone: **self-hosting**
-  (ya habilitado: módulos + I/O). Ver hoja de ruta (DESIGN §2, §20) / IDEAS.md.
+- **M11 + limpieza completos.** Pendientes/diferidos: **cruzar tipos entre módulos**
+  (`from M import Punto`, `M.Punto`, `M.Color.Rojo` — namespacar tipos); más string/archivos
+  aditivos (`replace`/`contains`, `append`/`exists`…); **M12 concurrencia**; optimización de la VM.
+  Capstone: **self-hosting** (ya habilitado: módulos + I/O de archivos). Ver DESIGN §2/§20 / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

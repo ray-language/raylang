@@ -96,6 +96,21 @@ fn env(nombre: string) -> Option<string> {
     let r = __env(nombre);
     if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
 }
+
+// --- Archivos (M11.2c): el primitivo devuelve un arreglo ETIQUETADO (primer elemento "ok"/"err");
+// aquí se traduce a Result. Así el runtime tampoco sabe de Result (como con Option). ---
+
+// Lee el archivo completo; Ok(contenido) u Err(mensaje del sistema).
+fn read_file(ruta: string) -> Result<string, string> {
+    let r = __read_file(ruta);
+    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+}
+
+// Escribe el contenido en el archivo (lo crea/sobrescribe); Ok(nº de caracteres) u Err(mensaje).
+fn write_file(ruta: string, contenido: string) -> Result<int, string> {
+    let r = __write_file(ruta, contenido);
+    if (r[0] == "ok") { Result.Ok(len(contenido)) } else { Result.Err(r[1]) }
+}
 "#;
 
 /// Parsea el prelude una vez. El `expect` no puede fallar: el fuente es una constante

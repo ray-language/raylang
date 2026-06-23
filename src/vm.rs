@@ -321,6 +321,32 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Array(items));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::ReadFile => {
+                    // Arreglo etiquetado ["ok", contenido] o ["err", msg]. El prelude → Result.
+                    let elems = match self.pop() {
+                        HeapValue::Str(path) => match std::fs::read_to_string(path.as_str()) {
+                            Ok(c) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(c)],
+                            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                        },
+                        _ => unreachable!("el checker garantiza un string"),
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::WriteFile => {
+                    // El contenido está encima de la ruta (orden de los argumentos).
+                    let contents = self.pop();
+                    let path = self.pop();
+                    let (HeapValue::Str(path), HeapValue::Str(contents)) = (path, contents) else {
+                        unreachable!("el checker garantiza dos strings");
+                    };
+                    let elems = match std::fs::write(path.as_str(), contents.as_str()) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
 
                 // --- Structs (M3.2) ---
                 OpCode::MakeStruct(idx) => {
@@ -1918,6 +1944,20 @@ mod tests {
                     Option.None => 0,
                 };
                 n + e                                      // 0
+            }
+        "#);
+    }
+
+    #[test]
+    fn read_file_inexistente_es_err_oraculo() {
+        // Leer un archivo inexistente es determinista (misma llamada a std::fs en ambos motores) →
+        // oráculo. Construye Result en el prelude vía el arreglo etiquetado; debe coincidir.
+        oracle_program(r#"
+            fn main() -> int {
+                match (read_file("/raylang_no_existe_xyz_123.txt")) {
+                    Result.Ok(_) => 0,
+                    Result.Err(_) => 1,
+                }
             }
         "#);
     }

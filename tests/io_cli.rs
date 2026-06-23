@@ -115,6 +115,54 @@ fn args_y_env_en_ambos_motores() {
     }
 }
 
+const FILE_PROG: &str = r#"
+fn cuerpo(r: Result<string, string>) -> string {
+  match (r) {
+    Result.Ok(s) => s,
+    Result.Err(e) => "ERR:" + e,
+  }
+}
+fn main() -> int {
+  let ruta = args()[0];
+  match (write_file(ruta, "hola\nmundo")) {
+    Result.Ok(n) => print("escritos:" + n.to_string()),
+    Result.Err(e) => print("err:" + e),
+  }
+  print(cuerpo(read_file(ruta)));
+  match (read_file(ruta + ".noexiste")) {
+    Result.Ok(_) => print("inesperado"),
+    Result.Err(_) => print("err-al-leer-inexistente"),
+  }
+  0
+}
+"#;
+
+#[test]
+fn read_write_file_ida_y_vuelta_en_ambos_motores() {
+    let mut prog = std::env::temp_dir();
+    prog.push("ray_file_prog.ray");
+    std::fs::File::create(&prog).unwrap().write_all(FILE_PROG.as_bytes()).unwrap();
+
+    for (i, vm) in [false, true].into_iter().enumerate() {
+        let mut datos = std::env::temp_dir();
+        datos.push(format!("ray_file_datos_{i}.txt"));
+        let _ = std::fs::remove_file(&datos);
+
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
+        if vm {
+            cmd.arg("--vm");
+        }
+        let out = cmd.arg(&prog).arg(&datos).output().expect("ejecuta raylang");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+
+        assert!(stdout.contains("escritos:10"), "write_file devuelve nº de caracteres (vm={vm})\n{stdout}");
+        assert!(stdout.contains("hola\nmundo"), "read_file recupera el contenido escrito (vm={vm})\n{stdout}");
+        assert!(stdout.contains("err-al-leer-inexistente"), "leer inexistente es Err (vm={vm})\n{stdout}");
+        // Y el archivo existe de verdad en disco con el contenido correcto.
+        assert_eq!(std::fs::read_to_string(&datos).unwrap(), "hola\nmundo", "el archivo en disco (vm={vm})");
+    }
+}
+
 #[test]
 fn env_no_definida_da_none() {
     let mut path = std::env::temp_dir();

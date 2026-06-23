@@ -62,7 +62,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **Limpieza** | reservar `@` (lexer), coma final en arreglos, sincronizar IDEAS | deuda de front-end y de documentación | ✅ |
 | **M9** | **traits / interfaces** (estilo Rust) → polimorfismo + *bounds* de genéricos | despacho estático vs. dinámico, abstracción | ✅ (M9.1 trait+impl · M9.2 bounds · M9.2b impls genéricos · M9.3 defectos + trait objects) |
 | **M10** | **tooling**: LSP (reusa el checker) + anotaciones (`@test`, `@derive`, `@builtin`) | language servers, metadatos en el AST | ✅ M10.1 (anotaciones) · M10.2 (LSP: diagnósticos, JSON-RPC a mano) · M10.2b (hover/ir-a-definición) |
-| **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ✅ M11.1 stdlib de string (`+`/`len`/`to_string`/`trim`/`split`) · M11.2 I/O (`eprint`/`input`/`parse_int`/`read_int`/`env`/`args`; archivos diferidos) · M11.3 módulos (`import M;`+`M.f`, `from M import a as b`, `pub`) |
+| **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ✅ M11.1 stdlib de string (`+`/`len`/`to_string`/`trim`/`split`) · M11.2 I/O (`eprint`/`input`/`parse_int`/`read_int`/`env`/`args`/`read_file`/`write_file`) · M11.3 módulos (`import M;`+`M.f`, `from M import a as b`, `pub`) |
 | **M12** | **concurrencia** (dirección probable: goroutines + channels) | scheduler, green threads, suspensión | ⏳ |
 | **Transversal** | optimización de la VM (incremental, midiendo) y **self-hosting** (capstone) | rendimiento, bootstrapping | ⏳ |
 
@@ -1731,11 +1731,25 @@ subproceso** (alimentando stdin / capturando stderr / pasando env y args), como 
     almacén de proceso (`OnceLock`) que ambos motores leen; los clientes sin args (REPL, tests,
     runner de `@test`) ven `[]`. No cambia la firma de `run`.
 
-**Lo que NO incluye M11.2** (diferido): **I/O de archivos** (`read_file`/`write_file`, que querrían
-`Result<string, string>` y por tanto construir `Result` en runtime —la pieza que el truco del `[T]`
-no cubre bien con dos payloads—) → futuro, cuando se aborde construir `Result` desde un builtin (o
-con un primitivo de dos arreglos). `read_int`/`input` no hacen *prompting* ni *buffering* elaborado;
-es lectura de líneas, lo justo para apps de CLI y para alimentar el camino al self-hosting.
+- **M11.2c — I/O de archivos** (cierra el diferido): leer y escribir archivos, devolviendo
+  **`Result`** (el otro productor natural de errores-como-valores; abre la puerta al self-hosting,
+  que necesita leer fuentes). El reto era construir `Result` —con *dos* payloads— sin acoplar el
+  runtime al enum. Se resuelve **generalizando el truco del `[T]`** a un **arreglo etiquetado**: el
+  primitivo devuelve `[string]` cuyo **primer elemento es la etiqueta** (`"ok"`/`"err"`) y el resto
+  el payload; el envoltorio del prelude lo traduce a `Result.Ok`/`Result.Err`. El runtime sigue sin
+  saber qué es `Result`.
+  - **`read_file(path) -> Result<string, string>`** — primitivo `__read_file(path) -> [string]`
+    (opcode `ReadFile`): `["ok", contenido]` o `["err", mensaje]`.
+  - **`write_file(path, contenido) -> Result<int, string>`** — primitivo `__write_file(path,
+    contenido) -> [string]` (opcode `WriteFile`): `["ok"]` o `["err", mensaje]`; el envoltorio da
+    `Result.Ok(len(contenido))` (caracteres escritos). `Result<int, …>` evita necesitar un literal
+    unit.
+  - Determinista (leer un archivo inexistente → `Err`) → **oráculo**; el ida y vuelta real (escribir
+    y releer) → **integración por subproceso** (archivos temporales).
+
+**Lo que NO incluye M11.2** (diferido): *append*/borrado/`exists`/listar directorios, *buffering* o
+streaming (es lectura/escritura del archivo completo), y *prompting* en `input`. Lo justo para apps
+de CLI y para alimentar el camino al self-hosting (leer y escribir fuentes `.ray`).
 
 ### 20.3 M11.3 — Módulos y `pub`
 

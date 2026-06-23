@@ -126,6 +126,12 @@ pub enum OpCode {
     /// No saca nada; empuja un `[string]` con los **argumentos del programa** (sin el binario ni
     /// las flags de raylang). Builtin `args`. Los args vienen de un almacén de proceso.
     Args,
+    /// Saca un string (la ruta); empuja un `[string]` **etiquetado**: `["ok", contenido]` si se
+    /// pudo leer, `["err", mensaje]` si no. Primitivo `__read_file`; el prelude → `Result`.
+    ReadFile,
+    /// Saca el contenido y la ruta; escribe el archivo y empuja un `[string]` etiquetado: `["ok"]`
+    /// si se pudo, `["err", mensaje]` si no. Primitivo `__write_file`; el prelude → `Result`.
+    WriteFile,
 
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como

@@ -60,7 +60,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M7** | **UFCS (`.`) + pipelines (`\|>`) + stdlib** (`map`/`filter`/`fold`) | azúcar sobre llamada, resolución de métodos | ✅ |
 | **M8** | inferencia local (`let x = 3`), REPL, mejores errores | unificación básica, tooling | ✅ |
 | **Limpieza** | reservar `@` (lexer), coma final en arreglos, sincronizar IDEAS | deuda de front-end y de documentación | ✅ |
-| **M9** | **traits / interfaces** (estilo Rust) → polimorfismo + *bounds* de genéricos | despacho estático vs. dinámico, abstracción | ✅ (M9.1 trait+impl · M9.2 bounds · M9.3 defectos + trait objects) |
+| **M9** | **traits / interfaces** (estilo Rust) → polimorfismo + *bounds* de genéricos | despacho estático vs. dinámico, abstracción | ✅ (M9.1 trait+impl · M9.2 bounds · M9.2b impls genéricos · M9.3 defectos + trait objects) |
 | **M10** | **tooling**: LSP (reusa el checker) + anotaciones (`@test`, `@derive`, `@builtin`) | language servers, metadatos en el AST | ✅ M10.1 (anotaciones: `@test`, `@derive(Eq)`) · M10.2 (LSP: diagnósticos en vivo, JSON-RPC a mano) |
 | **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ⏳ |
 | **M12** | **concurrencia** (dirección probable: goroutines + channels) | scheduler, green threads, suspensión | ⏳ |

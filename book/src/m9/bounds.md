@@ -111,8 +111,8 @@ elegido. La lección de M9.2 es bonita: las **funciones de primera clase** de M4
 por sí solas, para construir polimorfismo acotado encima —sin añadir ni una primitiva nueva
 al lenguaje ni al runtime—.
 
-## Lo que falta
+## Lo que sigue
 
-- **Impls genéricos** (`impl Mostrable for Caja<T>`): el diccionario de `Caja<int>` necesitaría
-  a su vez el de `int` —diccionarios *anidados*—. Se difiere a M9.2b.
+- **Impls genéricos** (`impl<T: Mostrable> Mostrable for Caja<T>`): el diccionario de `Caja<int>`
+  necesita a su vez el de `int` —diccionarios *anidados*—. Es M9.2b (capítulo siguiente).
 - **Métodos por defecto** y **trait objects** (despacho dinámico) → M9.3.

@@ -160,7 +160,19 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   del impl concreto o **reenviando** el diccionario propio cuando `T` resuelve a un parámetro
   acotado del llamador. La inferencia (`σ` de M6) decide qué diccionario va. **Runtime
   intacto**: los diccionarios son valores función (M4); cero opcodes, oráculo sin tocar.
-  Impls genéricos (diccionarios anidados) → M9.2b.
+- **M9.2b COMPLETO** (287 tests + integración CLI verdes): **impls genéricos** (`impl<T: B>
+  Trait for Caja<T>`). Idea central: un método de impl genérico **es una función genérica
+  acotada** —en el paso 0c el método manglado **hereda `type_params`/`bounds` del impl** (antes
+  ambos vacíos)—, así `append_dict_params`/`resolve_bound_method` lo manejan **sin código nuevo**.
+  Resolución por **constructor** (`type_key_of(Caja<T>) = "Caja"`); solo impls **plenamente
+  genéricos** (`Caja<T>`, no `Caja<int>`), uno por `(constructor, trait)`. Caso nuevo:
+  **diccionarios anidados** — pasar `Caja<int>` a otro genérico acotado necesita un **closure**
+  que capture el diccionario interno (recursivo para `Caja<Caja<int>>`). Por eso `dict_for`
+  devuelve `Expr` (antes `String`) y `synth_dict_closure` arma el closure. `ImplBlock` gana
+  `type_params`/`bounds`; `ensure_impl_target` valida el objetivo genérico; `generic_impls` mapea
+  `(clave, trait)`→datos del impl. **`renumber_fn_exprs`** reasigna ids densos a los closures
+  inyectados (intérprete/VM los exigen). Runtime intacto (closures de M4). Diferido: instancias
+  solapadas/especializadas, `dyn` sobre impls genéricos.
 - **M9.3a COMPLETO** (252 tests + integración CLI verdes): **métodos por defecto**. Una
   firma de trait puede traer cuerpo (`MethodSig.default_body: Option<Block>`; el parser acepta
   `;` o un bloque). Front-end puro (erasure): un método del trait con defecto no redefinido por
@@ -210,8 +222,9 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   (toggle `//`). Diagnósticos: se conecta `raylang --lsp` declarándolo en el paquete **LSP**
   (sublimelsp) — **solo config, sin compilar** (su soporte LSP es un paquete externo, como
   Neovim/Helix). Solo VSCode necesita compilar un cliente propio. README con instalación + config.
-- **Siguiente: M9.2b** (impls genéricos / diccionarios anidados) o **M10.2b** (hover/definición en
-  el LSP). Ver hoja de ruta (DESIGN §2, §19) / IDEAS.md.
+- **Siguiente: M10.2b** (hover/definición en el LSP) u otra. Ver hoja de ruta (DESIGN §2, §19) /
+  IDEAS.md. Diferidos de M9.2b: instancias solapadas/especializadas, bounds en params de
+  struct/enum, `dyn` sobre impls genéricos.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

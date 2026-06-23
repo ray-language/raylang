@@ -68,6 +68,7 @@
 - [Traits: comportamiento polimórfico](m9/intro.md)
 - [trait e impl: despacho estático](m9/traits.md)
 - [Bounds: genéricos que exigen comportamiento](m9/bounds.md)
+- [Impls genéricos: diccionarios anidados](m9/impls-genericos.md)
 - [Métodos por defecto](m9/defaults.md)
 - [Trait objects: despacho dinámico](m9/trait-objects.md)
 

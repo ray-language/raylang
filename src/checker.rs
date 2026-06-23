@@ -92,6 +92,18 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
         prelude_fns.append(&mut program.functions);
         program.functions = prelude_fns;
     }
+    // Paso 0b2 (M10.1): inyectar los traits del prelude (`Eq`), salvo que el usuario
+    // defina uno homónimo. Necesario antes de generar las derivaciones de `@derive(Eq)`.
+    if !program.traits.iter().any(|t| t.name == "Eq") {
+        let mut all = crate::prelude::traits();
+        all.append(&mut program.traits);
+        program.traits = all;
+    }
+    // Paso 0b3 (M10.1): generar los `impl` de `@derive(Eq)` sobre struct/enum. Genera el
+    // AST de un `impl Eq for T { fn igual(...) }` y lo añade a `program.impls`; de ahí en
+    // adelante lo procesa M9 (la bajada de impls del paso 0c). Antes del paso 0c.
+    generate_eq_derives(program)?;
+
     // Paso 0c (M9.1 + M9.3a): bajar los métodos de cada `impl` a funciones ordinarias con
     // nombre manglado (`Tipo#metodo`) y `self` de tipo concreto. Es el truco que hace a
     // M9.1 *front-end puro*: un método es una función con un primer parámetro `self`, así
@@ -415,6 +427,8 @@ impl Checker {
                             )));
                         }
                     }
+                    // `@derive` solo tiene sentido sobre tipos (genera su `impl`).
+                    "derive" => return Err(self.err(a.line, a.col, "'@derive' solo se permite sobre struct o enum".into())),
                     other => return Err(self.err(a.line, a.col, format!("anotación desconocida: '@{}'", other))),
                 }
             }
@@ -424,6 +438,9 @@ impl Checker {
         for anns in tipos {
             for a in anns {
                 match a.name.as_str() {
+                    // `@derive` ya se validó y generó en `generate_eq_derives` (antes de
+                    // `check_program`); aquí solo se acepta como conocida.
+                    "derive" => {}
                     "test" => return Err(self.err(a.line, a.col, "'@test' solo se permite sobre funciones".into())),
                     other => return Err(self.err(a.line, a.col, format!("anotación desconocida: '@{}'", other))),
                 }
@@ -2254,6 +2271,99 @@ fn type_key_of(ty: &Type) -> Option<String> {
     })
 }
 
+// =====================================================================
+// Derivación de `@derive(Eq)` (M10.1)
+// =====================================================================
+
+/// Genera los `impl Eq` de las declaraciones con `@derive(Eq)`. Para cada struct/enum
+/// anotado, construye el **fuente** de `impl Eq for T { fn igual(self, otro: Self) -> bool
+/// { ... } }`, lo parsea y lo añade a `program.impls`; el resto (bajada a `T#igual`,
+/// registro) lo hace M9. Generar fuente y parsearlo evita armar el AST a mano.
+fn generate_eq_derives(program: &mut Program) -> Result<(), TypeError> {
+    let mut nuevos: Vec<ImplBlock> = Vec::new();
+    for s in &program.structs {
+        for a in &s.annotations {
+            if a.name != "derive" {
+                continue;
+            }
+            validate_eq_derive(a, &s.name, &s.type_params)?;
+            nuevos.push(parse_impl_eq(&s.name, &struct_eq_body(&s.fields)));
+        }
+    }
+    for e in &program.enums {
+        for a in &e.annotations {
+            if a.name != "derive" {
+                continue;
+            }
+            validate_eq_derive(a, &e.name, &e.type_params)?;
+            nuevos.push(parse_impl_eq(&e.name, &enum_eq_body(&e.name, &e.variants)));
+        }
+    }
+    program.impls.extend(nuevos);
+    Ok(())
+}
+
+/// Valida `@derive(...)` sobre un tipo: argumentos no vacíos, todos derivables (solo `Eq`
+/// en M10.1), y el tipo no genérico (M9.1 no admite impls genéricos).
+fn validate_eq_derive(a: &Annotation, name: &str, type_params: &[String]) -> Result<(), TypeError> {
+    if a.args.is_empty() {
+        return Err(TypeError { msg: "'@derive' requiere al menos un trait (p. ej. @derive(Eq))".into(), line: a.line, col: a.col });
+    }
+    for arg in &a.args {
+        if arg != "Eq" {
+            return Err(TypeError { msg: format!("no se sabe derivar '{}' (por ahora solo Eq)", arg), line: a.line, col: a.col });
+        }
+    }
+    if !type_params.is_empty() {
+        return Err(TypeError { msg: format!("no se puede derivar Eq para el tipo genérico '{}'", name), line: a.line, col: a.col });
+    }
+    Ok(())
+}
+
+/// Cuerpo de `igual` para un struct: conjunción de la igualdad de cada campo (sin campos →
+/// `true`).
+fn struct_eq_body(fields: &[(String, Type)]) -> String {
+    if fields.is_empty() {
+        return "        true".into();
+    }
+    let cmps: Vec<String> = fields.iter().map(|(n, _)| format!("self.{n} == otro.{n}")).collect();
+    format!("        {}", cmps.join(" && "))
+}
+
+/// Cuerpo de `igual` para un enum: `match` sobre `self`; por variante, `match` sobre `otro`
+/// (misma variante → comparar payload posición a posición; otra → `false`).
+fn enum_eq_body(name: &str, variants: &[VariantDef]) -> String {
+    let mut arms = String::new();
+    for v in variants {
+        let k = v.payload.len();
+        if k == 0 {
+            arms.push_str(&format!(
+                "            {name}.{v} => match (otro) {{ {name}.{v} => true, _ => false }},\n",
+                v = v.name
+            ));
+        } else {
+            let a: Vec<String> = (0..k).map(|i| format!("a{i}")).collect();
+            let b: Vec<String> = (0..k).map(|i| format!("b{i}")).collect();
+            let cmp: Vec<String> = (0..k).map(|i| format!("a{i} == b{i}")).collect();
+            arms.push_str(&format!(
+                "            {name}.{v}({a}) => match (otro) {{ {name}.{v}({b}) => {cmp}, _ => false }},\n",
+                v = v.name, a = a.join(", "), b = b.join(", "), cmp = cmp.join(" && ")
+            ));
+        }
+    }
+    format!("        match (self) {{\n{arms}        }}")
+}
+
+/// Construye y parsea `impl Eq for <name> {{ fn igual(self, otro: Self) -> bool {{ body }} }}`.
+fn parse_impl_eq(name: &str, body: &str) -> ImplBlock {
+    let src = format!(
+        "impl Eq for {name} {{\n    fn igual(self, otro: Self) -> bool {{\n{body}\n    }}\n}}"
+    );
+    let toks = crate::lexer::lex(&src).expect("el impl Eq derivado lexea");
+    let mut prog = crate::parser::parse(toks).expect("el impl Eq derivado parsea");
+    prog.impls.remove(0)
+}
+
 /// Nombre del parámetro-diccionario para un método de un trait acotado (M9.2):
 /// `T#Trait#metodo`. Como el `#` es ilegal en identificadores, no choca con locales del
 /// usuario; vive como un parámetro función más.
@@ -4035,6 +4145,50 @@ fn main() -> int {
         err_contains(
             "@test struct S { x: int } fn main() -> int { 0 }",
             "'@test' solo se permite sobre funciones",
+        );
+    }
+
+    #[test]
+    fn derive_eq_struct_y_enum() {
+        check_src(r#"
+            @derive(Eq)
+            struct Punto { x: int, y: int }
+            @derive(Eq)
+            enum Color { Rojo, Verde, Azul }
+            @derive(Eq)
+            enum Forma { Circulo(int), Rect(int, int) }
+            fn main() -> int {
+                let p = Punto { x: 1, y: 2 };
+                let c = Color.Rojo;
+                let f = Forma.Rect(1, 2);
+                if (p.igual(p)) { 0 } else { 1 }
+            }
+        "#).expect("@derive(Eq) para struct y enum (unit y con payload)");
+    }
+
+    #[test]
+    fn derive_eq_compone_con_bound() {
+        check_src(r#"
+            @derive(Eq)
+            enum Color { Rojo, Verde }
+            fn iguales<T: Eq>(a: T, b: T) -> bool { a.igual(b) }
+            fn main() -> int { if (iguales(Color.Rojo, Color.Rojo)) { 0 } else { 1 } }
+        "#).expect("un tipo derivado satisface el bound T: Eq");
+    }
+
+    #[test]
+    fn derive_trait_no_soportado() {
+        err_contains(
+            "@derive(Show) struct P { x: int } fn main() -> int { 0 }",
+            "no se sabe derivar 'Show'",
+        );
+    }
+
+    #[test]
+    fn derive_en_tipo_generico_es_error() {
+        err_contains(
+            "@derive(Eq) struct Caja<T> { v: T } fn main() -> int { 0 }",
+            "tipo genérico",
         );
     }
 }

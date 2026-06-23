@@ -14,13 +14,20 @@
 //!   puede escribir librería útil **dentro del lenguaje**, sin tocar el runtime. Lucen
 //!   con UFCS (`xs.map(f)`) y pipelines (`xs |> map(f)`).
 
-use crate::ast::{EnumDef, Function};
+use crate::ast::{EnumDef, Function, TraitDef};
 
 /// El código fuente del prelude. Se parsea una vez; sus enums y funciones se anteponen
 /// a los del programa del usuario.
 pub const SOURCE: &str = r#"
 enum Option<T> { Some(T), None }
 enum Result<T, E> { Ok(T), Err(E) }
+
+// Igualdad estructural (M10.1). `@derive(Eq)` genera el `impl` para un struct/enum.
+// Usa `Self` en posición de argumento, así que no es invocable sobre un `dyn Eq`
+// (object safety): se compara entre valores concretos, `a.igual(b)`.
+trait Eq {
+    fn igual(self, otro: Self) -> bool;
+}
 
 // Aplica `f` a cada elemento, devolviendo un arreglo nuevo con los resultados.
 fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
@@ -72,4 +79,9 @@ pub fn enums() -> Vec<EnumDef> {
 /// Las funciones del prelude (`map`/`filter`/`fold`), ya parseadas.
 pub fn functions() -> Vec<Function> {
     parse().functions
+}
+
+/// Los traits del prelude (`Eq`), ya parseados (M10.1).
+pub fn traits() -> Vec<TraitDef> {
+    parse().traits
 }

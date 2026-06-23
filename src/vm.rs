@@ -1757,4 +1757,31 @@ mod tests {
             }
         "#);
     }
+
+    // ----- M10.1: @derive(Eq) -----
+
+    #[test]
+    fn derive_eq_oraculo() {
+        // El impl generado por @derive(Eq) baja a una función ordinaria (M9): ambos motores
+        // deben coincidir, para struct, enum unit y enum con payload.
+        oracle_program(r#"
+            @derive(Eq)
+            struct Punto { x: int, y: int }
+            @derive(Eq)
+            enum Color { Rojo, Verde, Azul }
+            @derive(Eq)
+            enum Forma { Circulo(int), Rect(int, int) }
+            fn b2i(b: bool) -> int { if (b) { 1 } else { 0 } }
+            fn main() -> int {
+                let p = Punto { x: 1, y: 2 };
+                let q = Punto { x: 1, y: 2 };
+                let r = Punto { x: 9, y: 2 };
+                let e1 = b2i(p.igual(q)) + b2i(p.igual(r));               // 1 + 0
+                let e2 = b2i(Color.Verde.igual(Color.Verde)) + b2i(Color.Rojo.igual(Color.Azul)); // 1 + 0
+                let f = Forma.Rect(3, 4);
+                let e3 = b2i(f.igual(Forma.Rect(3, 4))) + b2i(f.igual(Forma.Circulo(3)));         // 1 + 0
+                e1 + e2 + e3   // 3
+            }
+        "#);
+    }
 }

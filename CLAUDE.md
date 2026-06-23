@@ -177,8 +177,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   Lowering en `lower_dyn`. **Gotcha resuelto**: los cuerpos de métodos por defecto (M9.3a) se
   **clonan** por impl; sus posiciones se **renumeran** (`freshen_positions`) para que las
   bajadas por posición no colisionen entre clones.
-- **M9 COMPLETO.** **Siguiente: M10** (tooling: LSP + anotaciones) o **M9.2b** (impls genéricos)
-  / pendientes de M9. Ver hoja de ruta (DESIGN §2, §18) / IDEAS.md.
+- **M9 COMPLETO.**
+- **M10.1 COMPLETO** (272 tests + integración CLI verdes): **anotaciones**. `@nombre[(args)]`
+  sobre fn/struct/enum; `Annotation { name, args }` en cada ítem; conjunto **cerrado**
+  conocido por el compilador (`check_annotations`). **`@test`** (función `() -> bool`) +
+  runner `--test` (cliente externo `src/test_runner.rs` que sintetiza un `main` y devuelve
+  el número de fallos como código de salida). **`@derive(Eq)`** sobre struct/enum no genérico:
+  el checker **genera el `impl Eq`** (sintetiza el fuente `impl Eq for T { fn igual(...) }`,
+  lo parsea y lo añade a `program.impls`; M9 lo baja) — `generate_eq_derives`. Trait `Eq` en
+  el prelude (`igual(self, otro: Self) -> bool`). Igualdad: struct = `&&` de campos; enum =
+  `match` anidado, payload con `==`. Compone con bounds (`T: Eq`). Runtime intacto (erasure).
+- **Siguiente: M10.2** (LSP: servidor que reusa el checker; decisión JSON-RPC a mano vs.
+  crate) o **M9.2b** (impls genéricos). Ver hoja de ruta (DESIGN §2, §19) / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

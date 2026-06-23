@@ -1,4 +1,4 @@
-# @test y @derive(Eq)
+# @test y @derive (Eq, Show)
 
 M10.1 añade la **infraestructura** de anotaciones (parsearlas y adjuntarlas a las
 declaraciones) más dos integradas. Todo es front-end; el runtime no cambia.
@@ -93,9 +93,30 @@ fn iguales<T: Eq>(a: T, b: T) -> bool { a.igual(b) }
 iguales(Color.Rojo, Color.Verde)   // false — funciona porque Color deriva Eq
 ```
 
-**Límites de M10.1** (diferidos): solo se deriva `Eq`; las comparaciones hoja usan `==`, así
-que un payload que sea **otro enum** no es comparable (derivación recursiva, futura); y
-`@derive` sobre un tipo **genérico** no se admite (M9.1 no tiene impls genéricos).
+**Límites de M10.1** (diferidos): las comparaciones hoja de `Eq` usan `==`, así que un payload
+que sea **otro enum** no es comparable (derivación recursiva, futura); y `@derive` sobre un tipo
+**genérico** no se admite (M9.1 no tiene impls genéricos).
+
+### `@derive(Show)` (añadido en L2)
+
+La consolidación post-M11 amplió el mecanismo a un segundo trait, `Show`, que genera
+`mostrar(self) -> string` —una representación textual—. La generalización fue mínima
+(`generate_derives`/`validate_derive` pasan a aceptar ambos), y `@derive(Eq, Show)` genera los
+dos impls:
+
+```rust
+trait Show { fn mostrar(self) -> string; }   // en el prelude
+
+@derive(Show)
+struct Punto { x: int, y: int }
+// "Punto { x: 3, y: 4 }"   ──  p.mostrar()
+```
+
+El cuerpo renderiza **por tipo**: primitivos vía `to_string`, struct/enum vía `mostrar()`
+recursivo (los anidados deben implementar Show). Por eso `Show` **sí funciona con enums
+recursivos** (una lista enlazada se imprime entera) donde `Eq` no llegaba: la recursión vive en
+los datos, no impide la llamada a `mostrar`. Se difieren los campos de tipo arreglo/función
+(error claro) y los tipos genéricos, como en `Eq`.
 
 > **La lección.** `@derive(Eq)` ronda las ~60 líneas de checker, no porque hagamos trampa,
 > sino porque cada capa previa carga su peso: el parser parsea el `impl` generado, M9 lo baja

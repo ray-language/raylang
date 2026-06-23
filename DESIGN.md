@@ -1519,6 +1519,16 @@ de M9: una anotación que **genera código** sobre traits. Mecánica:
 > igualdad **explícita** (`a.igual(b)`) para enums, demostrando codegen sobre traits sin
 > tocar la semántica de `==` (sobrecarga de operadores queda fuera de alcance).
 
+**`@derive(Show)`** (limpieza post-M11, L2) — sobre un struct/enum **no genérico**, genera su
+`impl Show` con `mostrar(self) -> string` (trait `Show { fn mostrar(self) -> string; }` en el
+prelude). Misma mecánica que `@derive(Eq)` (sintetiza el `ImplBlock`, lo baja M9); se generaliza
+`generate_derives`/`validate_derive` para ambos traits, y `@derive(Eq, Show)` genera los dos. El
+cuerpo de `mostrar` renderiza por tipo de cada campo/payload: primitivos vía `to_string`;
+struct/enum vía `mostrar()` recursivo (los anidados deben implementar Show). A diferencia de `Eq`,
+**Show sí funciona para enums recursivos** (la recursión está en los datos, no impide `mostrar()`).
+Se difieren campos de tipo arreglo/función/etc. (error claro) y los tipos genéricos. Formato:
+`Nombre { campo: v, … }` para structs, `Nombre.Variante(v0, …)` para enums.
+
 **Runtime: sin cambios.** Las anotaciones son metadatos del front-end; `@test` lo consume un
 cliente externo y `@derive` se reduce a un `impl` que M9 ya sabe bajar. Erasure, una vez más.
 

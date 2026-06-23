@@ -1172,6 +1172,24 @@ mod tests {
     }
 
     #[test]
+    fn derive_show_oraculo() {
+        // `@derive(Show)` genera `mostrar` (front-end → impls normales): el intérprete y la VM
+        // deben producir la **misma** cadena. Se compara vía `len` (el oráculo mira el retorno).
+        oracle_program(
+            "@derive(Show)
+             enum Color { Rojo, RGB(int, int, int) }
+             @derive(Show)
+             struct Punto { x: int, y: int }
+             fn main() -> int {
+                 let p = Punto { x: 3, y: 40 };
+                 print(p.mostrar());
+                 print(Color.RGB(1, 2, 3).mostrar());
+                 len(p.mostrar()) + len(Color.RGB(1, 2, 3).mostrar())
+             }",
+        );
+    }
+
+    #[test]
     fn enums_en_modo_estres() {
         // Construir enums (incl. recursivos) con el GC recolectando en cada punto
         // seguro: si el trazado del payload faltara, un valor vivo se liberaría.

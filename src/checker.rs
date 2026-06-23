@@ -153,17 +153,21 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
         prelude_fns.append(&mut program.functions);
         program.functions = prelude_fns;
     }
-    // Paso 0b2 (M10.1): inyectar los traits del prelude (`Eq`), salvo que el usuario
-    // defina uno homónimo. Necesario antes de generar las derivaciones de `@derive(Eq)`.
-    if !program.traits.iter().any(|t| t.name == "Eq") {
-        let mut all = crate::prelude::traits();
-        all.append(&mut program.traits);
-        program.traits = all;
+    // Paso 0b2 (M10.1, L2): inyectar los traits del prelude (`Eq`, `Show`) que el usuario no
+    // haya redefinido (homónimos), uno a uno. Necesario antes de generar las derivaciones.
+    let traits_usuario: HashSet<String> = program.traits.iter().map(|t| t.name.clone()).collect();
+    let mut prelude_traits: Vec<TraitDef> = crate::prelude::traits()
+        .into_iter()
+        .filter(|t| !traits_usuario.contains(&t.name))
+        .collect();
+    if !prelude_traits.is_empty() {
+        prelude_traits.append(&mut program.traits);
+        program.traits = prelude_traits;
     }
-    // Paso 0b3 (M10.1): generar los `impl` de `@derive(Eq)` sobre struct/enum. Genera el
-    // AST de un `impl Eq for T { fn igual(...) }` y lo añade a `program.impls`; de ahí en
-    // adelante lo procesa M9 (la bajada de impls del paso 0c). Antes del paso 0c.
-    generate_eq_derives(program)?;
+    // Paso 0b3 (M10.1, L2): generar los `impl` de `@derive(Eq)` / `@derive(Show)` sobre
+    // struct/enum. Genera el AST de un `impl Trait for T { ... }` y lo añade a `program.impls`;
+    // de ahí en adelante lo procesa M9 (la bajada de impls del paso 0c). Antes del paso 0c.
+    generate_derives(program)?;
 
     // Paso 0c (M9.1 + M9.3a): bajar los métodos de cada `impl` a funciones ordinarias con
     // nombre manglado (`Tipo#metodo`) y `self` de tipo concreto. Es el truco que hace a
@@ -2507,19 +2511,25 @@ fn type_key_of(ty: &Type) -> Option<String> {
 // Derivación de `@derive(Eq)` (M10.1)
 // =====================================================================
 
-/// Genera los `impl Eq` de las declaraciones con `@derive(Eq)`. Para cada struct/enum
-/// anotado, construye el **fuente** de `impl Eq for T { fn igual(self, otro: Self) -> bool
-/// { ... } }`, lo parsea y lo añade a `program.impls`; el resto (bajada a `T#igual`,
-/// registro) lo hace M9. Generar fuente y parsearlo evita armar el AST a mano.
-fn generate_eq_derives(program: &mut Program) -> Result<(), TypeError> {
+/// Genera los `impl` de `@derive(...)` (`Eq`, `Show`) de las declaraciones anotadas. Para cada
+/// trait pedido construye el **fuente** del `impl Trait for T { ... }`, lo parsea y lo añade a
+/// `program.impls`; el resto (bajada a `T#metodo`, registro) lo hace M9. Generar fuente y
+/// parsearlo evita armar el AST a mano.
+fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
     let mut nuevos: Vec<ImplBlock> = Vec::new();
     for s in &program.structs {
         for a in &s.annotations {
             if a.name != "derive" {
                 continue;
             }
-            validate_eq_derive(a, &s.name, &s.type_params)?;
-            nuevos.push(parse_impl_eq(&s.name, &struct_eq_body(&s.fields)));
+            validate_derive(a, &s.name, &s.type_params)?;
+            for trait_arg in &a.args {
+                match trait_arg.as_str() {
+                    "Eq" => nuevos.push(parse_derived_impl("Eq", &s.name, "fn igual(self, otro: Self) -> bool", &struct_eq_body(&s.fields))),
+                    "Show" => nuevos.push(parse_derived_impl("Show", &s.name, "fn mostrar(self) -> string", &struct_show_body(a, &s.name, &s.fields)?)),
+                    _ => unreachable!("validate_derive garantiza un trait conocido"),
+                }
+            }
         }
     }
     for e in &program.enums {
@@ -2527,29 +2537,97 @@ fn generate_eq_derives(program: &mut Program) -> Result<(), TypeError> {
             if a.name != "derive" {
                 continue;
             }
-            validate_eq_derive(a, &e.name, &e.type_params)?;
-            nuevos.push(parse_impl_eq(&e.name, &enum_eq_body(&e.name, &e.variants)));
+            validate_derive(a, &e.name, &e.type_params)?;
+            for trait_arg in &a.args {
+                match trait_arg.as_str() {
+                    "Eq" => nuevos.push(parse_derived_impl("Eq", &e.name, "fn igual(self, otro: Self) -> bool", &enum_eq_body(&e.name, &e.variants))),
+                    "Show" => nuevos.push(parse_derived_impl("Show", &e.name, "fn mostrar(self) -> string", &enum_show_body(a, &e.name, &e.variants)?)),
+                    _ => unreachable!("validate_derive garantiza un trait conocido"),
+                }
+            }
         }
     }
     program.impls.extend(nuevos);
     Ok(())
 }
 
-/// Valida `@derive(...)` sobre un tipo: argumentos no vacíos, todos derivables (solo `Eq`
-/// en M10.1), y el tipo no genérico (M9.1 no admite impls genéricos).
-fn validate_eq_derive(a: &Annotation, name: &str, type_params: &[String]) -> Result<(), TypeError> {
+/// Valida `@derive(...)` sobre un tipo: argumentos no vacíos, todos derivables (`Eq`/`Show`),
+/// y el tipo no genérico (M9.1 no admite impls genéricos).
+fn validate_derive(a: &Annotation, name: &str, type_params: &[String]) -> Result<(), TypeError> {
     if a.args.is_empty() {
         return Err(TypeError { msg: "'@derive' requiere al menos un trait (p. ej. @derive(Eq))".into(), line: a.line, col: a.col });
     }
     for arg in &a.args {
-        if arg != "Eq" {
-            return Err(TypeError { msg: format!("no se sabe derivar '{}' (por ahora solo Eq)", arg), line: a.line, col: a.col });
+        if arg != "Eq" && arg != "Show" {
+            return Err(TypeError { msg: format!("no se sabe derivar '{}' (por ahora Eq y Show)", arg), line: a.line, col: a.col });
         }
     }
     if !type_params.is_empty() {
-        return Err(TypeError { msg: format!("no se puede derivar Eq para el tipo genérico '{}'", name), line: a.line, col: a.col });
+        return Err(TypeError { msg: format!("no se puede derivar para el tipo genérico '{}'", name), line: a.line, col: a.col });
     }
     Ok(())
+}
+
+/// Cómo renderizar un valor a string según su tipo (M11.2/L2): primitivos vía `to_string`;
+/// struct/enum vía `mostrar()` (Show recursivo). Arrays/funciones/etc. no son derivables aún.
+/// `a` aporta la posición del `@derive` para ubicar el error.
+fn render_to_string(a: &Annotation, expr: &str, ty: &Type) -> Result<String, TypeError> {
+    match ty {
+        Type::Int | Type::Float | Type::Bool | Type::String => Ok(format!("to_string({expr})")),
+        // En esta fase un tipo de usuario llega como `Struct` (el checker aún no lo resolvió a
+        // `Enum`); ambos se imprimen con su propio `mostrar` (deben implementar Show).
+        Type::Struct(_, _) | Type::Enum(_, _) => Ok(format!("{expr}.mostrar()")),
+        otro => Err(TypeError {
+            msg: format!("no se puede derivar Show para un campo de tipo {} (por ahora primitivos, struct y enum)", otro),
+            line: a.line,
+            col: a.col,
+        }),
+    }
+}
+
+/// Cuerpo de `mostrar` para un struct: `"Nombre { campo: <v>, … }"` (sin campos → `"Nombre"`).
+fn struct_show_body(a: &Annotation, name: &str, fields: &[(String, Type)]) -> Result<String, TypeError> {
+    if fields.is_empty() {
+        return Ok(format!("        \"{name}\""));
+    }
+    let mut partes: Vec<String> = Vec::new();
+    for (n, ty) in fields {
+        partes.push(format!("\"{n}: \" + {}", render_to_string(a, &format!("self.{n}"), ty)?));
+    }
+    Ok(format!("        \"{name} {{ \" + {} + \" }}\"", partes.join(" + \", \" + ")))
+}
+
+/// Cuerpo de `mostrar` para un enum: `match` sobre `self`; por variante, `"Nombre.Variante"`
+/// (unit) o `"Nombre.Variante(<v0>, <v1>)"` (con payload).
+fn enum_show_body(a: &Annotation, name: &str, variants: &[VariantDef]) -> Result<String, TypeError> {
+    let mut arms = String::new();
+    for v in variants {
+        let k = v.payload.len();
+        if k == 0 {
+            arms.push_str(&format!("            {name}.{v} => \"{name}.{v}\",\n", v = v.name));
+        } else {
+            let binds: Vec<String> = (0..k).map(|i| format!("a{i}")).collect();
+            let mut piezas: Vec<String> = Vec::new();
+            for (i, ty) in v.payload.iter().enumerate() {
+                piezas.push(render_to_string(a, &format!("a{i}"), ty)?);
+            }
+            arms.push_str(&format!(
+                "            {name}.{v}({b}) => \"{name}.{v}(\" + {p} + \")\",\n",
+                v = v.name, b = binds.join(", "), p = piezas.join(" + \", \" + ")
+            ));
+        }
+    }
+    Ok(format!("        match (self) {{\n{arms}        }}"))
+}
+
+/// Construye y parsea `impl Trait for <name> {{ <firma> {{ body }} }}` para un derive.
+fn parse_derived_impl(trait_name: &str, name: &str, firma: &str, body: &str) -> ImplBlock {
+    let src = format!(
+        "impl {trait_name} for {name} {{\n    {firma} {{\n{body}\n    }}\n}}"
+    );
+    let toks = crate::lexer::lex(&src).expect("el impl derivado lexea");
+    let mut prog = crate::parser::parse(toks).expect("el impl derivado parsea");
+    prog.impls.remove(0)
 }
 
 /// Cuerpo de `igual` para un struct: conjunción de la igualdad de cada campo (sin campos →
@@ -2584,16 +2662,6 @@ fn enum_eq_body(name: &str, variants: &[VariantDef]) -> String {
         }
     }
     format!("        match (self) {{\n{arms}        }}")
-}
-
-/// Construye y parsea `impl Eq for <name> {{ fn igual(self, otro: Self) -> bool {{ body }} }}`.
-fn parse_impl_eq(name: &str, body: &str) -> ImplBlock {
-    let src = format!(
-        "impl Eq for {name} {{\n    fn igual(self, otro: Self) -> bool {{\n{body}\n    }}\n}}"
-    );
-    let toks = crate::lexer::lex(&src).expect("el impl Eq derivado lexea");
-    let mut prog = crate::parser::parse(toks).expect("el impl Eq derivado parsea");
-    prog.impls.remove(0)
 }
 
 /// Nombre del parámetro-diccionario para un método de un trait acotado (M9.2):
@@ -4548,8 +4616,8 @@ fn main() -> int {
     #[test]
     fn derive_trait_no_soportado() {
         err_contains(
-            "@derive(Show) struct P { x: int } fn main() -> int { 0 }",
-            "no se sabe derivar 'Show'",
+            "@derive(Ord) struct P { x: int } fn main() -> int { 0 }",
+            "no se sabe derivar 'Ord'",
         );
     }
 
@@ -4558,6 +4626,40 @@ fn main() -> int {
         err_contains(
             "@derive(Eq) struct Caja<T> { v: T } fn main() -> int { 0 }",
             "tipo genérico",
+        );
+    }
+
+    #[test]
+    fn derive_show_struct_y_enum() {
+        check_src(r#"
+            @derive(Show)
+            struct Punto { x: int, y: int }
+            @derive(Show)
+            enum Color { Rojo, RGB(int, int, int) }
+            @derive(Show)
+            struct Etiqueta { nombre: string, donde: Punto, color: Color }
+            fn main() -> int {
+                let e = Etiqueta { nombre: "o", donde: Punto { x: 1, y: 2 }, color: Color.Rojo };
+                print(e.mostrar());
+                0
+            }
+        "#).expect("@derive(Show) para struct, enum y struct anidado");
+    }
+
+    #[test]
+    fn derive_eq_y_show_juntos() {
+        check_src(r#"
+            @derive(Eq, Show)
+            struct P { x: int }
+            fn main() -> int { if (P { x: 1 }.igual(P { x: 1 })) { 0 } else { 1 } }
+        "#).expect("@derive(Eq, Show) genera ambos impls");
+    }
+
+    #[test]
+    fn derive_show_campo_no_soportado_es_error() {
+        err_contains(
+            "@derive(Show) struct S { xs: [int] } fn main() -> int { 0 }",
+            "no se puede derivar Show para un campo de tipo [int]",
         );
     }
 }

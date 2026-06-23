@@ -301,8 +301,16 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   `match` por opcode (VM) —son código, no metadatos—. Mensajes/posiciones idénticos. Se eligió
   tabla en Rust (opción B) frente a `@builtin fn` porque 4 builtins son **ad-hoc polimórficos**
   (`print`/`eprint`/`len`/`to_string`) y no tendrían firma raylang ordinaria.
-- **Siguiente** (track de limpieza): **L2** `@derive(Show)` y **L3** errores multi-archivo en el
-  loader. Luego, M11 cerrado salvo diferidos. Pendientes: **I/O de archivos** (`read_file`/`write_file`
+- **Limpieza post-M11 L2 COMPLETO** (303 tests + integración verdes): **`@derive(Show)`**. Segundo
+  trait derivable, en paralelo a `@derive(Eq)` (M10.1): genera `impl Show { fn mostrar(self) ->
+  string }` (trait `Show` en el prelude). `generate_derives`/`validate_derive` se generalizan a
+  ambos; `@derive(Eq, Show)` genera los dos. El cuerpo renderiza **por tipo**: primitivos vía
+  `to_string`, struct/enum vía `mostrar()` recursivo → **Show sí va con enums recursivos** (a
+  diferencia de Eq). Formato `Nombre { c: v, … }` / `Nombre.Variante(v0, …)`. Difiere arrays/
+  funciones (error claro) y genéricos. Inyección de traits del prelude pasó a **per-trait** (Show
+  se inyecta aunque el usuario redefina Eq). Front-end puro (M9 baja el impl); runtime intacto.
+- **Siguiente** (track de limpieza): **L3** errores multi-archivo en el loader. Luego, M11 cerrado
+  salvo diferidos. Pendientes: **I/O de archivos** (`read_file`/`write_file`
   con `Result` — el truco del `[T]` no cubre dos payloads); **cruzar tipos entre módulos**
   (`from M import Punto`, `M.Punto`, `M.Color.Rojo` — namespacar tipos). Capstone: **self-hosting**
   (ya habilitado: módulos + I/O). Ver hoja de ruta (DESIGN §2, §20) / IDEAS.md.

@@ -29,6 +29,12 @@ trait Eq {
     fn igual(self, otro: Self) -> bool;
 }
 
+// Representación textual (limpieza post-M11, L2). `@derive(Show)` genera el `impl` para un
+// struct/enum. No usa `Self` fuera del receptor, así que sí es object-safe (`dyn Show`).
+trait Show {
+    fn mostrar(self) -> string;
+}
+
 // Aplica `f` a cada elemento, devolviendo un arreglo nuevo con los resultados.
 fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
     var out: [U] = [];

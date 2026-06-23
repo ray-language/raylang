@@ -69,10 +69,16 @@ impl Parser {
         let mut traits = Vec::new();
         let mut impls = Vec::new();
         let mut imports = Vec::new();
+        let mut from_imports = Vec::new();
         while !self.is_at_end() {
             // M11.3: `import M;` precede a todo (sin anotaciones ni `pub`).
             if self.check(&TokenKind::Import) {
                 imports.push(self.import_decl()?);
+                continue;
+            }
+            // M11.3b: `from M import a [as b]{, …};` trae nombres al ámbito.
+            if self.check(&TokenKind::From) {
+                from_imports.push(self.import_from_decl()?);
                 continue;
             }
             // M10.1: las anotaciones (`@nombre[(args)]`) preceden a la declaración.
@@ -105,7 +111,7 @@ impl Parser {
                 functions.push(f);
             }
         }
-        Ok(Program { functions, structs, enums, traits, impls, imports })
+        Ok(Program { functions, structs, enums, traits, impls, imports, from_imports })
     }
 
     /// import_decl = 'import' IDENT ';'  (M11.3)
@@ -114,6 +120,29 @@ impl Parser {
         let (module, _, _) = self.expect_ident("el nombre del módulo a importar")?;
         self.expect(&TokenKind::Semicolon, "';' tras 'import M'")?;
         Ok(ImportDecl { module, line: kw.line, col: kw.col })
+    }
+
+    /// from_import_decl = 'from' IDENT 'import' name { ',' name } ';'   (M11.3b)
+    /// name            = IDENT [ 'as' IDENT ]
+    fn import_from_decl(&mut self) -> Result<FromImport, ParseError> {
+        let kw = self.expect(&TokenKind::From, "'from'")?;
+        let (module, _, _) = self.expect_ident("el nombre del módulo en 'from M import …'")?;
+        self.expect(&TokenKind::Import, "'import' tras 'from M'")?;
+        let mut names = Vec::new();
+        loop {
+            let (name, line, col) = self.expect_ident("un nombre a importar")?;
+            let alias = if self.eat(&TokenKind::As) {
+                Some(self.expect_ident("el alias tras 'as'")?.0)
+            } else {
+                None
+            };
+            names.push(ImportName { name, alias, line, col });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::Semicolon, "';' para cerrar el 'from M import …'")?;
+        Ok(FromImport { module, names, line: kw.line, col: kw.col })
     }
 
     /// Error si hay `pub` donde M11.3a no lo admite (struct/enum/trait/impl).
@@ -1209,6 +1238,21 @@ mod tests {
     fn parse_prog(src: &str) -> Program {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         parse(tokens).expect("parse ok")
+    }
+
+    #[test]
+    fn from_import_se_parsea_con_alias_y_varios_nombres() {
+        let prog = parse_prog("from mates import doble, triple as tri;\nfn main() -> int { 0 }\n");
+        assert_eq!(prog.from_imports.len(), 1);
+        let fi = &prog.from_imports[0];
+        assert_eq!(fi.module, "mates");
+        assert_eq!(fi.names.len(), 2);
+        assert_eq!(fi.names[0].name, "doble");
+        assert_eq!(fi.names[0].alias, None);
+        assert_eq!(fi.names[0].local(), "doble");
+        assert_eq!(fi.names[1].name, "triple");
+        assert_eq!(fi.names[1].alias.as_deref(), Some("tri"));
+        assert_eq!(fi.names[1].local(), "tri");
     }
 
     /// Renderiza una expresión como S-expression para asertar su forma de forma

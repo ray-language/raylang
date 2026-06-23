@@ -9,8 +9,13 @@
 //!
 //! Alcance de M11.3a: solo se **namespacan funciones** (`modulo::fn`) y se cruzan funciones
 //! `pub` vía acceso calificado `M.f(...)`. Los tipos/enums/traits siguen en un espacio global
-//! único (un choque de nombres entre módulos es error); cruzar tipos → M11.3b. Por eso el
+//! único (un choque de nombres entre módulos es error); cruzar tipos → diferido. Por eso el
 //! resolutor solo reescribe referencias a **funciones** (no a tipos ni patrones).
+//!
+//! M11.3b añade `from M import a [as b];`: trae **funciones `pub`** de `M` al ámbito del módulo
+//! (sin calificar), con renombrado opcional. Es la misma resolución de -a: el nombre local (el
+//! alias, o el original) se inyecta en el mapa `own` apuntando al nombre global `M::a`. Importar
+//! *tipos* sigue diferido (no se namespacan); el loader lo reporta con claridad.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -56,14 +61,17 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
             message: format!("no se pudo leer el módulo '{}' ({}): {}", name, path.display(), e),
         })?;
         let program = parse_source(&name, &source)?;
-        for imp in &program.imports {
-            if !visitados.contains(&imp.module) {
-                let mp = root.join(format!("{}.ray", imp.module));
+        // Dependencias del módulo: tanto `import M;` como `from M import …;` cargan `M`.
+        let deps = program.imports.iter().map(|i| (&i.module, i.line, i.col))
+            .chain(program.from_imports.iter().map(|f| (&f.module, f.line, f.col)));
+        for (dep, line, col) in deps {
+            if !visitados.contains(dep) {
+                let mp = root.join(format!("{}.ray", dep));
                 if !mp.exists() {
-                    return Err(render(&source, imp.line, imp.col, &name,
-                        &format!("no se encuentra el módulo '{}' (se esperaba {})", imp.module, mp.display())));
+                    return Err(render(&source, line, col, &name,
+                        &format!("no se encuentra el módulo '{}' (se esperaba {})", dep, mp.display())));
                 }
-                pendientes.push((imp.module.clone(), mp, false));
+                pendientes.push((dep.clone(), mp, false));
             }
         }
         modules.push(Module { name, is_entry, program, source });
@@ -74,13 +82,14 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
 
     // --- Fase 3: namespacing + resolución de referencias a funciones ---
     let pub_fns = recolectar_pub_fns(&modules);
+    let tipos = recolectar_tipos(&modules); // para diagnosticar `from M import <Tipo>` (diferido)
     let mut fusionado = Program {
         functions: Vec::new(), structs: Vec::new(), enums: Vec::new(),
-        traits: Vec::new(), impls: Vec::new(), imports: Vec::new(),
+        traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
     };
     let entry_source = modules.iter().find(|m| m.is_entry).map(|m| m.source.clone()).unwrap_or_default();
     for mut m in modules {
-        let mut resolver = Resolver::new(&m, &pub_fns)?;
+        let mut resolver = Resolver::new(&m, &pub_fns, &tipos)?;
         resolver.resolve_module(&mut m)?;
         let prefix = if m.is_entry { None } else { Some(m.name.clone()) };
         // Renombrar las definiciones de función a su nombre global y fusionar.
@@ -155,25 +164,84 @@ fn recolectar_pub_fns(modules: &[Module]) -> HashMap<String, HashSet<String>> {
     map
 }
 
+/// Por módulo, el conjunto de nombres de tipos (struct/enum/trait). Solo se usa para dar un
+/// mensaje claro cuando un `from M import X` apunta a un tipo (importar tipos está diferido).
+fn recolectar_tipos(modules: &[Module]) -> HashMap<String, HashSet<String>> {
+    let mut map: HashMap<String, HashSet<String>> = HashMap::new();
+    for m in modules {
+        let set = map.entry(m.name.clone()).or_default();
+        set.extend(m.program.structs.iter().map(|s| s.name.clone()));
+        set.extend(m.program.enums.iter().map(|e| e.name.clone()));
+        set.extend(m.program.traits.iter().map(|t| t.name.clone()));
+    }
+    map
+}
+
+/// Resuelve un nombre de un `from M import a [as b]` al nombre global `M::a`, verificando que `a`
+/// sea una **función `pub`** de `M`. Si `a` es un **tipo** de `M`, da un error de "diferido"; si no
+/// existe como función pública, un error de no-exporta.
+fn resolver_from_import(
+    src: &str,
+    module: &str,
+    fi: &crate::ast::FromImport,
+    name: &crate::ast::ImportName,
+    pub_fns: &HashMap<String, HashSet<String>>,
+    tipos: &HashMap<String, HashSet<String>>,
+) -> Result<String, LoadError> {
+    let from = &fi.module;
+    if pub_fns.get(from).is_some_and(|s| s.contains(&name.name)) {
+        return Ok(format!("{}::{}", from, name.name));
+    }
+    // No es una función pública: ¿es un tipo? (importar tipos está diferido).
+    if tipos.get(from).is_some_and(|s| s.contains(&name.name)) {
+        return Err(render(src, name.line, name.col, module, &format!(
+            "'{}' es un tipo del módulo '{}'; importar tipos entre módulos está diferido — los tipos son globales, referéncialo por su nombre",
+            name.name, from
+        )));
+    }
+    Err(render(src, name.line, name.col, module, &format!(
+        "el módulo '{}' no exporta una función '{}' (¿falta 'pub'?)", from, name.name
+    )))
+}
+
 /// Reescribe, *consciente de ámbitos*, las referencias a funciones de un módulo a sus nombres
 /// globales: las propias (`foo` → `modulo::foo`) y las calificadas (`M.f` → `M::f`, con `pub`).
 struct Resolver<'a> {
-    /// Funciones propias del módulo: nombre local → nombre global.
+    /// Nombres de nivel superior visibles **sin calificar** en este módulo: las funciones propias
+    /// y las traídas por `from M import …` (con su alias). Mapea nombre local → nombre global.
     own: HashMap<String, String>,
-    /// Módulos importados por este módulo (para el acceso calificado `M.item`).
+    /// Módulos importados con `import M;` (para el acceso calificado `M.item`). Los módulos que
+    /// solo aparecen en `from M import …` **no** entran aquí (estilo Python: no traen `M`).
     imports: HashSet<String>,
-    /// Funciones `pub` por módulo (de todo el programa), para verificar `M.f`.
+    /// Funciones `pub` por módulo (de todo el programa), para verificar `M.f` y los from-imports.
     pub_fns: &'a HashMap<String, HashSet<String>>,
     /// Pila de ámbitos locales: nombres que tapan a las funciones de nivel superior.
     scopes: Vec<HashSet<String>>,
 }
 
 impl<'a> Resolver<'a> {
-    fn new(m: &Module, pub_fns: &'a HashMap<String, HashSet<String>>) -> Result<Self, LoadError> {
+    fn new(
+        m: &Module,
+        pub_fns: &'a HashMap<String, HashSet<String>>,
+        tipos: &HashMap<String, HashSet<String>>,
+    ) -> Result<Self, LoadError> {
         let prefix = if m.is_entry { None } else { Some(m.name.clone()) };
         let mut own = HashMap::new();
         for f in &m.program.functions {
             own.insert(f.name.clone(), global_fn(&prefix, &f.name));
+        }
+        // M11.3b: inyectar los `from M import a [as b]` como nombres locales → `M::a`.
+        for fi in &m.program.from_imports {
+            for n in &fi.names {
+                let target = resolver_from_import(&m.source, &m.name, fi, n, pub_fns, tipos)?;
+                let local = n.local().to_string();
+                if own.insert(local.clone(), target).is_some() {
+                    return Err(render(&m.source, n.line, n.col, &m.name, &format!(
+                        "el nombre '{}' ya está definido o importado en este módulo; usa 'as' para renombrarlo",
+                        local
+                    )));
+                }
+            }
         }
         let imports = m.program.imports.iter().map(|i| i.module.clone()).collect();
         Ok(Resolver { own, imports, pub_fns, scopes: Vec::new() })

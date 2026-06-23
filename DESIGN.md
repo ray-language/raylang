@@ -62,7 +62,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **Limpieza** | reservar `@` (lexer), coma final en arreglos, sincronizar IDEAS | deuda de front-end y de documentación | ✅ |
 | **M9** | **traits / interfaces** (estilo Rust) → polimorfismo + *bounds* de genéricos | despacho estático vs. dinámico, abstracción | ✅ (M9.1 trait+impl · M9.2 bounds · M9.2b impls genéricos · M9.3 defectos + trait objects) |
 | **M10** | **tooling**: LSP (reusa el checker) + anotaciones (`@test`, `@derive`, `@builtin`) | language servers, metadatos en el AST | ✅ M10.1 (anotaciones) · M10.2 (LSP: diagnósticos, JSON-RPC a mano) · M10.2b (hover/ir-a-definición) |
-| **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | 🚧 M11.1 ✅ (stdlib de string: `+`/`len`/`to_string`/`trim`/`split`) · M11.2 I/O ⏳ · M11.3 módulos ⏳ |
+| **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | 🚧 M11.1 ✅ (stdlib de string: `+`/`len`/`to_string`/`trim`/`split`) · M11.3 módulos ✅ (`import M;`+`M.f`, `from M import a as b`, `pub`) · M11.2 I/O ⏳ |
 | **M12** | **concurrencia** (dirección probable: goroutines + channels) | scheduler, green threads, suspensión | ⏳ |
 | **Transversal** | optimización de la VM (incremental, midiendo) y **self-hosting** (capstone) | rendimiento, bootstrapping | ⏳ |
 
@@ -1680,8 +1680,9 @@ arquitectónica de M11 (y un prerrequisito del self-hosting).
   - `import math;` — trae el módulo como **espacio de nombres**; se usa **calificado**:
     `math.doble(21)`. Reusa `.` (no se añade `::`): el checker **desambigua** —si la cabeza es un
     módulo importado, es una ruta; si una variable local la tapa, es campo/UFCS—.
-  - `from math import doble [as d] {, otro [as o]};` — trae nombres **al ámbito** (sin calificar),
-    con **renombrado opcional** (`as`) para evitar colisiones.
+  - `from math import doble [as d] {, otro [as o]};` — trae **funciones `pub`** al **ámbito** del
+    módulo (sin calificar), con **renombrado opcional** (`as`) para evitar colisiones. (Cruzar
+    *tipos* con `from` está diferido: los tipos ya son globales —ver abajo—.)
 
 **Arquitectura — flatten en el front-end, núcleo intacto.** Igual que UFCS/diccionarios/`dyn`, los
 módulos se resuelven **antes** del checker y se borran: el intérprete y la VM nunca saben de
@@ -1713,9 +1714,14 @@ módulos. Tres fases nuevas, todas en el front-end:
   se cruzan **funciones `pub`**. Los **tipos/enums/traits** siguen en un **espacio global único**
   (deben tener nombre único entre módulos; un choque es error) —cruzar tipos entre módulos es -b/
   diferido—, así el resolutor solo reescribe referencias a *funciones* (no tipos ni patrones).
-- **M11.3b** — **`from M import a [as b]`**: trae nombres al ámbito del módulo, con alias. Reusa el
-  loader/namespacing/`pub` de -a; añade inyectar nombres en el mapa de resolución (con su
-  renombrado) y, según haga falta, namespacing de tipos para poder importarlos.
+- **M11.3b** — **`from M import a [as b]{, …}`**: trae **funciones `pub`** al ámbito del módulo, con
+  alias. Reusa el loader/namespacing/`pub` de -a; lo único nuevo es **inyectar esos nombres en el
+  mapa de resolución** del módulo (con su renombrado) durante la pasada *scope-aware*: una referencia
+  a `d` (o a `doble`) se reescribe a `math::doble` salvo que una local la tape. Un `as` resuelve
+  colisiones (con una función propia o con otro import). El módulo importado se vuelve dependencia del
+  loader igual que con `import M;`. **Importar un tipo** con `from` queda **diferido** (los tipos no
+  se namespacan; ya son globales, así que se referencian por su nombre tal cual): si el nombre
+  importado no es una función `pub` pero sí un tipo del módulo, el loader lo dice explícitamente.
 
 **Desambiguación de `.`** (el punto delicado): `math.doble(21)` llega como `Call(Field(Ident
 "math", "doble"), ...)`, igual que UFCS y que la construcción de enums. La regla, en orden: si hay
@@ -1725,10 +1731,11 @@ método → función libre). Es el mismo estilo de desambiguación por contexto 
 
 **Alcance y diferido:**
 - ✅ -a: `import M;` + `M.f(...)` (funciones `pub`), visibilidad, multi-archivo, ciclos seguros.
-- ✅ -b: `from M import a [as b]` (funciones y tipos `pub` al ámbito, con alias).
-- ⏳ **Tipo calificado en posición de tipo** (`M.Punto` como anotación) → diferido: los tipos de
-  otro módulo se traen con `from M import Punto [as P]`. Igual la **construcción de enum calificada**
-  (`M.Color.Rojo`) → usar `from M import Color`.
+- ✅ -b: `from M import a [as b]{, …}` (funciones `pub` al ámbito, con alias).
+- ⏳ **Importar tipos entre módulos** (`from M import Punto [as P]`, `M.Punto` como anotación,
+  construcción de enum calificada `M.Color.Rojo`) → diferido: requiere **namespacar tipos** y
+  reescribir las posiciones de tipo/patrón. Hoy los tipos son globales-únicos, así que un tipo de
+  otro módulo se referencia por su nombre directamente (sin encapsulamiento de tipos).
 - ⏳ Submódulos / jerarquía de directorios, `pub` granular (campos), re-exports → futuro.
 
 **Runtime: sin cambios.** Los módulos se borran en el front-end; el programa fusionado es uno solo

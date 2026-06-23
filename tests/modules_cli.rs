@@ -53,6 +53,45 @@ fn import_transitivo() {
 }
 
 #[test]
+fn from_import_con_alias_en_ambos_motores() {
+    // `from M import a as b` trae funciones `pub` al ámbito (sin calificar), con alias para
+    // evitar colisiones con una función propia homónima (M11.3b).
+    let files = &[
+        ("mates", "pub fn doble(n: int) -> int { n + n }\npub fn triple(n: int) -> int { n + n + n }\n"),
+        ("app", "from mates import doble as md, triple as tri;\nfn doble(x: int) -> int { x + 1 }\nfn main() -> int { print(doble(10)); print(md(10)); print(tri(10)); md(10) + tri(10) }\n"),
+    ];
+    for vm in [false, true] {
+        let (out, code) = run_modules("ray_from_alias", "app", files, vm);
+        assert!(out.contains("11"), "la local doble(10)=11 (vm={vm})\n{out}");
+        assert!(out.contains("20"), "md = mates.doble, md(10)=20 (vm={vm})\n{out}");
+        assert!(out.contains("30"), "tri = mates.triple, tri(10)=30 (vm={vm})\n{out}");
+        assert_eq!(code, 50, "exit = md(10) + tri(10) = 50 (vm={vm})");
+    }
+}
+
+#[test]
+fn from_import_colision_sin_alias_es_error() {
+    // Importar un nombre que ya existe en el módulo (sin `as`) es error: pide renombrar.
+    let files = &[
+        ("mates", "pub fn doble(n: int) -> int { n + n }\n"),
+        ("app", "from mates import doble;\nfn doble(x: int) -> int { x + 1 }\nfn main() -> int { doble(1) }\n"),
+    ];
+    let (_, code) = run_modules("ray_from_colision", "app", files, false);
+    assert_ne!(code, 0, "una colisión de nombre importado sin alias debe fallar");
+}
+
+#[test]
+fn from_import_de_tipo_es_error_diferido() {
+    // Importar un tipo con `from` está diferido (los tipos son globales); error claro.
+    let files = &[
+        ("lib", "pub fn f() -> int { 1 }\nstruct Punto { x: int, y: int }\n"),
+        ("app", "from lib import Punto;\nfn main() -> int { 0 }\n"),
+    ];
+    let (_, code) = run_modules("ray_from_tipo", "app", files, false);
+    assert_ne!(code, 0, "importar un tipo con 'from' debe fallar (diferido)");
+}
+
+#[test]
 fn llamar_funcion_privada_es_error() {
     let files = &[
         ("lib", "pub fn publica() -> int { 1 }\nfn privada() -> int { 2 }\n"),

@@ -113,6 +113,9 @@ pub struct Program {
     /// Declaraciones `import M;` del archivo (M11.3). Las consume el *loader*, que carga y
     /// fusiona los módulos; tras esa fase el `Program` fusionado las deja vacías.
     pub imports: Vec<ImportDecl>,
+    /// Declaraciones `from M import a [as b];` del archivo (M11.3b). También las consume el
+    /// loader: traen funciones `pub` de `M` al ámbito del módulo (sin calificar), con alias.
+    pub from_imports: Vec<FromImport>,
 }
 
 /// Una declaración `import M;` (M11.3): importa el módulo `M` (archivo `M.ray`) como espacio
@@ -122,6 +125,33 @@ pub struct ImportDecl {
     pub module: String,
     pub line: usize,
     pub col: usize,
+}
+
+/// Una declaración `from M import a [as b]{, c [as d]};` (M11.3b): trae nombres `pub` del módulo
+/// `M` al ámbito del módulo actual, sin calificar, con renombrado opcional (`as`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FromImport {
+    pub module: String,
+    pub names: Vec<ImportName>,
+    pub line: usize,
+    pub col: usize,
+}
+
+/// Un nombre traído por un `from`-import: el nombre original en el módulo origen y, opcionalmente,
+/// el alias local con el que se usará (`as b`). `local()` devuelve el nombre efectivo en ámbito.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportName {
+    pub name: String,
+    pub alias: Option<String>,
+    pub line: usize,
+    pub col: usize,
+}
+
+impl ImportName {
+    /// El nombre con el que el ítem queda en ámbito: el alias si lo hay, si no el original.
+    pub fn local(&self) -> &str {
+        self.alias.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// Definición de un struct: `struct Nombre { campo: Tipo, ... }` (M3.2). Los campos

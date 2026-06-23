@@ -74,12 +74,12 @@ contexts:
         2: entity.name.function.raylang
 
   keywords:
-    - match: '\b(if|else|while|return|match)\b'
+    - match: '\b(if|else|while|return|match|import|from|as)\b'
       scope: keyword.control.raylang
     # El receptor 'self' y el tipo 'Self' (M9). Antes de 'types' porque Self es mayúscula.
     - match: '\b(self|Self)\b'
       scope: variable.language.self.raylang
-    - match: '\b(let|var|fn|struct|enum|trait|impl|dyn)\b'
+    - match: '\b(let|var|fn|struct|enum|trait|impl|dyn|pub)\b'
       scope: storage.type.raylang
     # Builtins/stdlib seguidos de '(' : antes de la regla de llamadas para conservar su color.
     - match: '\b({{builtins}})\b(?=\s*\()'

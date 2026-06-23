@@ -84,7 +84,7 @@
     },
     "keywords-control": {
       "name": "keyword.control.raylang",
-      "match": "\\b(if|else|while|return|match)\\b"
+      "match": "\\b(if|else|while|return|match|import|from|as)\\b"
     },
     "self": {
       "comment": "El receptor 'self' y el tipo 'Self' dentro de un trait/impl (M9).",
@@ -93,7 +93,7 @@
     },
     "storage": {
       "name": "storage.type.raylang",
-      "match": "\\b(let|var|fn|struct|enum|trait|impl|dyn)\\b"
+      "match": "\\b(let|var|fn|struct|enum|trait|impl|dyn|pub)\\b"
     },
     "builtins": {
       "name": "support.function.builtin.raylang",

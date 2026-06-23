@@ -259,8 +259,27 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   repr que `print` → cuadra el oráculo). **-b**: `trim` (opcode `Trim`), `split(s,sep) -> [string]`
   (opcode `Split`; único que asigna en el heap). Diferido: tipo `char`/indexar string,
   `parse_int` (→ M11.2), `replace`/`contains`/etc.
-- **Siguiente: M11.2** (I/O: `args`/`input`/`read_int`/`eprint`/`env`/archivos) o **M11.3**
-  (módulos + `pub`). Ver hoja de ruta (DESIGN §2, §20) / IDEAS.md.
+- **M11.3a COMPLETO** (integración `tests/modules_cli.rs`): **módulos multi-archivo** (DESIGN §20.3).
+  Módulo = archivo (su *stem*). **Arquitectura: aplanar en el front-end** — un *loader*
+  (`src/loader.rs`, cliente host-side como REPL/runner/LSP) carga la entrada y sus `import`
+  (transitivos, ciclos seguros: BFS con `visitados`), **namespaca** las funciones de módulos
+  no-entrada a `modulo::fn` (`::` ilegal en identificadores, como el `#` de M9) y **fusiona** todo
+  en un `Program` plano → checker/intérprete/VM **intactos**. `import M;` + uso **calificado**
+  `M.f(...)` (reusa el `.`; el resolutor *scope-aware* desambigua: local tapa módulo → campo/UFCS;
+  módulo importado → ruta `M::f`). **`pub`** explícito; referenciar un ítem no-`pub` de otro módulo
+  es error. **Tipos globales-únicos** (no se namespacan; un choque es error). Tokens `Pub`/`Import`;
+  `Program.imports`; `Function.is_pub`.
+- **M11.3b COMPLETO** (294 tests + 6 en `tests/modules_cli.rs`): **`from M import a [as b]{, …};`**.
+  Trae **funciones `pub`** al ámbito del módulo (sin calificar), con **alias** para evitar
+  colisiones. Tokens `From`/`As`; `Program.from_imports: Vec<FromImport>` (`ImportName { name,
+  alias }`, `local()`). El loader sigue también estos imports como dependencias; el `Resolver`
+  **inyecta** cada nombre local (alias u original) en su mapa `own` apuntando al global `M::a` (con
+  chequeo `pub`). Colisión sin `as` → error que pide renombrar. **Importar un tipo** con `from`
+  queda **diferido** (los tipos no se namespacan; el loader da un error claro). Estilo Python: `from
+  M import x` **no** trae `M` (solo `x`). Runtime intacto.
+- **Siguiente: M11.2** (I/O: `args`/`input`/`read_int`/`eprint`/`env`/archivos). Cruzar **tipos**
+  entre módulos (`from M import Punto`, `M.Punto`, `M.Color.Rojo`) queda diferido (namespacar
+  tipos). Ver hoja de ruta (DESIGN §2, §20) / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

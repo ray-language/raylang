@@ -58,6 +58,20 @@ struct FnSig {
     bounds: Vec<(String, String)>,
 }
 
+/// Datos de un **impl genérico** (M9.2b) —`impl<T: B> Trait for Caja<T>`— que `dict_for`
+/// necesita para sintetizar el diccionario anidado: los parámetros de tipo, el tipo objetivo
+/// (`Caja<T>`, con los `T` como `Var`) y los bounds del impl.
+#[derive(Clone)]
+struct GenImpl {
+    // `type_params` y `target` se usan en M9.2b-2 (síntesis del diccionario anidado); en
+    // M9.2b-1 solo se consulta `bounds` (para diferir el caso acotado).
+    #[allow(dead_code)]
+    type_params: Vec<String>,
+    #[allow(dead_code)]
+    target: Type,
+    bounds: Vec<(String, String)>,
+}
+
 /// Información de una variable en un ámbito.
 struct VarInfo {
     ty: Type,
@@ -122,7 +136,11 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
             Some(k) => k,
             None => continue, // objetivo inválido: el error se da en la validación
         };
-        // Métodos provistos por el impl.
+        // Métodos provistos por el impl. M9.2b: un impl genérico (`impl<T: B> Trait for
+        // Caja<T>`) baja sus métodos a funciones **genéricas acotadas** (heredan los
+        // `type_params`/`bounds` del impl); de ahí, `append_dict_params` y
+        // `resolve_bound_method` los tratan como cualquier función con bounds. Para un impl
+        // concreto (M9.1) ambos son vacíos → función ordinaria, como antes.
         for m in &imp.methods {
             let params = m.params.iter()
                 .map(|p| Param { ty: subst_self(&p.ty, &imp.target), ..p.clone() })
@@ -130,8 +148,8 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
             program.functions.push(Function {
                 annotations: Vec::new(),
                 name: mangle(&key, &m.name),
-                type_params: Vec::new(),
-                bounds: Vec::new(),
+                type_params: imp.type_params.clone(),
+                bounds: imp.bounds.clone(),
                 params,
                 return_type: subst_self(&m.return_type, &imp.target),
                 body: m.body.clone(),
@@ -156,8 +174,8 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
             program.functions.push(Function {
                 annotations: Vec::new(),
                 name: mangle(&key, &tm.name),
-                type_params: Vec::new(),
-                bounds: Vec::new(),
+                type_params: imp.type_params.clone(),
+                bounds: imp.bounds.clone(),
                 params,
                 return_type: subst_self(&tm.return_type, &imp.target),
                 body,
@@ -238,6 +256,10 @@ struct Checker {
     /// Qué `(clave_de_tipo, trait)` tiene un impl (M9): para verificar bounds —que un tipo
     /// concreto realmente implemente el trait pedido— al elegir su diccionario (M9.2).
     impl_traits: HashSet<(String, String)>,
+    /// Impls **genéricos** (M9.2b), por `(clave_de_tipo, trait)`: sus parámetros de tipo, el
+    /// tipo objetivo (`Caja<T>`) y sus bounds. Lo usa `dict_for` para distinguir un impl
+    /// genérico de uno concreto y, si está acotado, sintetizar su **diccionario anidado**.
+    generic_impls: HashMap<(String, String), GenImpl>,
     /// El tipo `Self` en ámbito ahora mismo: el tipo implementador del `impl` cuyo método
     /// se está resolviendo/verificando (M9). `None` fuera de un impl.
     current_self: Option<Type>,
@@ -275,6 +297,7 @@ impl Checker {
             methods: HashMap::new(),
             impl_fn_self: HashMap::new(),
             impl_traits: HashSet::new(),
+            generic_impls: HashMap::new(),
             current_self: None,
             current_fn_bounds: Vec::new(),
             dict_calls: HashMap::new(),
@@ -521,9 +544,21 @@ impl Checker {
                 Some(ms) => ms.clone(),
                 None => return Err(self.err(imp.line, imp.col, format!("trait '{}' no declarado", imp.trait_name))),
             };
+            // M9.2b: los parámetros de tipo del impl entran en ámbito mientras se resuelve el
+            // objetivo y se comparan las firmas, para que `Caja<T>` y un parámetro `x: T`
+            // normalicen `T` a `Var` (en vez de `Struct("T")`). Se limpia al terminar el bucle.
+            self.type_params = imp.type_params.iter().cloned().collect();
+            self.check_impl_bounds(imp)?;
             let target = self.resolve_type(&imp.target);
-            self.ensure_impl_target(&target, imp.line, imp.col)?;
+            self.ensure_impl_target(&target, &imp.type_params, imp.line, imp.col)?;
             let key = type_key_of(&target).expect("objetivo validado tiene clave");
+            // Registrar el impl genérico (para `dict_for`: diccionarios anidados).
+            if !imp.type_params.is_empty() {
+                self.generic_impls.insert(
+                    (key.clone(), imp.trait_name.clone()),
+                    GenImpl { type_params: imp.type_params.clone(), target: target.clone(), bounds: imp.bounds.clone() },
+                );
+            }
 
             // Nombres del impl sin repetir.
             let mut impl_names = HashSet::new();
@@ -576,32 +611,77 @@ impl Checker {
             // Registrar que este tipo implementa este trait (M9.2: verificación de bounds).
             self.impl_traits.insert((key, imp.trait_name.clone()));
         }
+        self.type_params.clear();
         Ok(())
     }
 
-    /// El objetivo de un `impl` debe ser un tipo concreto conocido —struct, enum o
-    /// primitivo— **sin** parámetros de tipo (los impls genéricos se difieren a M9.2).
-    fn ensure_impl_target(&self, target: &Type, line: usize, col: usize) -> Result<(), TypeError> {
-        match target {
-            Type::Int | Type::Float | Type::Bool | Type::String => Ok(()),
-            Type::Struct(name, args) => {
-                if !args.is_empty() || self.struct_tparams.get(name).is_some_and(|t| !t.is_empty()) {
-                    return Err(self.err(line, col, format!("M9.1 no admite impls para tipos genéricos como '{}'", name)));
-                }
-                if self.structs.contains_key(name) {
-                    Ok(())
-                } else {
-                    Err(self.err(line, col, format!("no se puede implementar para un tipo desconocido: '{}'", name)))
-                }
+    /// Valida los bounds de un **impl genérico** (M9.2b): cada bound acota un parámetro de
+    /// tipo declarado por el impl con un trait existente. (Reusa la idea de `check_bounds`
+    /// para funciones, pero sobre los parámetros del impl.)
+    fn check_impl_bounds(&self, imp: &ImplBlock) -> Result<(), TypeError> {
+        for (tp, trait_name) in &imp.bounds {
+            if !imp.type_params.contains(tp) {
+                return Err(self.err(imp.line, imp.col, format!(
+                    "el bound '{}: {}' menciona un parámetro de tipo que el impl no declara", tp, trait_name
+                )));
             }
-            Type::Enum(name, args) => {
-                if !args.is_empty() || self.enum_tparams.get(name).is_some_and(|t| !t.is_empty()) {
-                    return Err(self.err(line, col, format!("M9.1 no admite impls para tipos genéricos como '{}'", name)));
-                }
-                Ok(())
+            if !self.traits.contains_key(trait_name) {
+                return Err(self.err(imp.line, imp.col, format!(
+                    "el bound '{}: {}' usa un trait no declarado", tp, trait_name
+                )));
             }
-            _ => Err(self.err(line, col, "solo se puede implementar un trait para un struct, enum o primitivo".into())),
         }
+        Ok(())
+    }
+
+    /// Valida el objetivo de un `impl` (`target` ya resuelto) según sus parámetros de tipo:
+    /// - **concreto** (`type_params` vacío, M9.1): struct/enum/primitivo conocido **no
+    ///   genérico** (las instancias especializadas como `Caja<int>` se difieren);
+    /// - **genérico** (M9.2b): `Caja<T>` cuyos argumentos son **exactamente** los parámetros
+    ///   de tipo del impl (cada uno un `Var` distinto), y cuya aridad casa con la del tipo.
+    fn ensure_impl_target(&self, target: &Type, type_params: &[String], line: usize, col: usize) -> Result<(), TypeError> {
+        // Primitivos: solo como objetivo concreto.
+        if matches!(target, Type::Int | Type::Float | Type::Bool | Type::String) {
+            if type_params.is_empty() {
+                return Ok(());
+            }
+            return Err(self.err(line, col, "un tipo primitivo no es genérico: no admite parámetros de tipo en el impl".into()));
+        }
+        let (name, args) = match target {
+            Type::Struct(n, a) | Type::Enum(n, a) => (n, a),
+            _ => return Err(self.err(line, col, "solo se puede implementar un trait para un struct, enum o primitivo".into())),
+        };
+        // Un struct desconocido sigue siendo `Struct` tras resolver (un enum conocido ya sería
+        // `Enum`); rechazarlo aquí.
+        if matches!(target, Type::Struct(_, _)) && !self.structs.contains_key(name) {
+            return Err(self.err(line, col, format!("no se puede implementar para un tipo desconocido: '{}'", name)));
+        }
+        let arity = self.struct_tparams.get(name).or_else(|| self.enum_tparams.get(name)).map_or(0, Vec::len);
+        if type_params.is_empty() {
+            // Impl concreto: el tipo objetivo no puede ser genérico.
+            if arity != 0 {
+                return Err(self.err(line, col, format!(
+                    "'{name}' es genérico: declara sus parámetros en el impl, p. ej. 'impl<T> ... for {name}<T>' (M9.2b)"
+                )));
+            }
+            return Ok(());
+        }
+        // Impl genérico (M9.2b): aridad y forma del objetivo.
+        if arity != type_params.len() {
+            return Err(self.err(line, col, format!(
+                "'{}' espera {} parámetro(s) de tipo, el impl declara {}", name, arity, type_params.len()
+            )));
+        }
+        let mut vistos = HashSet::new();
+        let bien = args.len() == type_params.len()
+            && args.iter().all(|a| matches!(a, Type::Var(n) if type_params.contains(n) && vistos.insert(n.clone())));
+        if !bien {
+            return Err(self.err(line, col, format!(
+                "el impl genérico debe aplicarse a '{}<{}>' (sus propios parámetros de tipo, distintos)",
+                name, type_params.join(", ")
+            )));
+        }
+        Ok(())
     }
 
     /// Comprueba que la firma de un método de impl coincide con la del trait, tras
@@ -1923,13 +2003,26 @@ impl Checker {
         let key = type_key_of(concrete).ok_or_else(|| self.err(line, col, format!(
             "{} no puede implementar el trait '{}'", concrete, trait_name
         )))?;
-        if self.impl_traits.contains(&(key.clone(), trait_name.to_string())) {
-            Ok(mangle(&key, method))
-        } else {
-            Err(self.err(line, col, format!(
+        if !self.impl_traits.contains(&(key.clone(), trait_name.to_string())) {
+            return Err(self.err(line, col, format!(
                 "{} no implementa '{}' (requerido por la llamada)", concrete, trait_name
-            )))
+            )));
         }
+        // M9.2b: si el impl es **genérico y acotado**, su función manglada lleva sus propios
+        // parámetros-diccionario, así que no se puede pasar plana: necesita un diccionario
+        // **anidado** (un closure que capture los internos). Eso es M9.2b-2; por ahora, error
+        // explícito en vez de emitir código con aridad incorrecta.
+        let acotado = self.generic_impls.get(&(key.clone(), trait_name.to_string()))
+            .is_some_and(|gi| !gi.bounds.is_empty());
+        if acotado {
+            return Err(self.err(line, col, format!(
+                "pasar un '{}' como diccionario de '{}' requiere diccionarios anidados (M9.2b-2, aún no soportado)",
+                concrete, trait_name
+            )));
+        }
+        // Impl no genérico, o genérico **sin** bounds: la función manglada tiene la aridad
+        // justa (solo el receptor + params), así que se pasa como valor plano.
+        Ok(mangle(&key, method))
     }
 
     // ----- Manejo de ámbitos -----
@@ -3909,13 +4002,38 @@ fn main() -> int {
     }
 
     #[test]
-    fn impl_generico_diferido() {
+    fn impl_concreto_sobre_tipo_generico_es_error() {
+        // `impl T for Caja` sin declarar los parámetros de tipo: M9.2b pide `impl<A> T for
+        // Caja<A>`. El error guía hacia esa forma.
         err_contains(
             r#"trait T { fn f(self) -> int; }
                struct Caja<A> { v: A }
                impl T for Caja { fn f(self) -> int { 1 } }
                fn main() -> int { 0 }"#,
-            "no admite impls para tipos genéricos",
+            "es genérico: declara sus parámetros en el impl",
+        );
+    }
+
+    #[test]
+    fn impl_generico_valido() {
+        // M9.2b-1: `impl<A> T for Caja<A>` con un método que no usa A.
+        assert!(check_src(
+            r#"trait T { fn f(self) -> int; }
+               struct Caja<A> { v: A }
+               impl<A> T for Caja<A> { fn f(self) -> int { 1 } }
+               fn main() -> int { let c = Caja { v: 9 }; c.f() }"#,
+        ).is_ok());
+    }
+
+    #[test]
+    fn impl_generico_objetivo_mal_formado_es_error() {
+        // El objetivo de un impl genérico debe ser `Caja<A>` con sus propios parámetros.
+        err_contains(
+            r#"trait T { fn f(self) -> int; }
+               struct Caja<A> { v: A }
+               impl<A> T for Caja<int> { fn f(self) -> int { 1 } }
+               fn main() -> int { 0 }"#,
+            "debe aplicarse a 'Caja<A>'",
         );
     }
 

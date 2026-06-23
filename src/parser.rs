@@ -268,6 +268,9 @@ impl Parser {
     /// aquí (como un identificador con ese nombre), para no quitarle el nombre al usuario.
     fn impl_block(&mut self) -> Result<ImplBlock, ParseError> {
         let kw = self.expect(&TokenKind::Impl, "'impl'")?;
+        // Parámetros de tipo del impl (M9.2b): `impl<T: A + B> Trait for Caja<T>`. Sin `<`,
+        // ambos quedan vacíos (impl concreto de M9.1).
+        let (type_params, bounds) = self.type_params_with_bounds()?;
         let (trait_name, _, _) = self.expect_ident("el nombre del trait")?;
         let (kw_for, fline, fcol) = self.expect_ident("'for' tras el nombre del trait")?;
         if kw_for != "for" {
@@ -284,7 +287,7 @@ impl Parser {
             methods.push(self.impl_method()?);
         }
         self.expect(&TokenKind::RBrace, "'}' para cerrar el impl")?;
-        Ok(ImplBlock { trait_name, target, methods, line: kw.line, col: kw.col })
+        Ok(ImplBlock { trait_name, type_params, bounds, target, methods, line: kw.line, col: kw.col })
     }
 
     /// impl_method = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] block  (M9)

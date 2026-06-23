@@ -1651,6 +1651,41 @@ mod tests {
         "#);
     }
 
+    // ----- M9.2b: impls genéricos -----
+
+    #[test]
+    fn impl_generico_sin_bounds_oraculo() {
+        // `impl<T> Trait for Caja<T>` cuyo método no usa T: el método manglado es genérico
+        // pero sin diccionarios. Despacha igual para Caja<int> y Caja<string>.
+        oracle_program(r#"
+            struct Caja<T> { contenido: T }
+            trait Contar { fn contar(self) -> int; }
+            impl<T> Contar for Caja<T> { fn contar(self) -> int { 1 } }
+            fn main() -> int {
+                let c = Caja { contenido: 42 };
+                let s = Caja { contenido: "hola" };
+                c.contar() + s.contar()   // 1 + 1 = 2
+            }
+        "#);
+    }
+
+    #[test]
+    fn impl_generico_acotado_llamada_directa_oraculo() {
+        // `impl<T: Mostrable> Mostrable for Caja<T>`: el cuerpo usa T.mostrar() (vía el
+        // diccionario interno). Llamada directa sobre Caja<int> → el dict interno es el de
+        // int (plano). Es M9.2b-1: el caso anidado (pasar Caja a otro genérico) es -2.
+        oracle_stress(r#"
+            struct Caja<T> { contenido: T }
+            trait Medir { fn medir(self) -> int; }
+            impl Medir for int { fn medir(self) -> int { self } }
+            impl<T: Medir> Medir for Caja<T> { fn medir(self) -> int { self.contenido.medir() + 1 } }
+            fn main() -> int {
+                let c = Caja { contenido: 41 };
+                c.medir()   // 41 + 1 = 42
+            }
+        "#);
+    }
+
     // ----- M9.3a: métodos por defecto -----
 
     #[test]

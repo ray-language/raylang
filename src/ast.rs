@@ -178,12 +178,20 @@ pub struct MethodSig {
 }
 
 /// Un bloque **`impl Trait for Tipo { ... }`** (M9): da los cuerpos de los métodos
-/// del trait para un tipo concreto. `target` es el tipo implementador (en M9.1 sin
-/// parámetros de tipo). Cada método es una `Function` ordinaria cuyo primer
-/// parámetro es `self` (de tipo `Self`, que el checker sustituye por `target`).
+/// del trait para un tipo. `target` es el tipo implementador. Cada método es una
+/// `Function` ordinaria cuyo primer parámetro es `self` (de tipo `Self`, que el checker
+/// sustituye por `target`).
+///
+/// `type_params`/`bounds` (M9.2b) habilitan **impls genéricos**: `impl<T: Mostrable>
+/// Trait for Caja<T>`. Vacíos = impl concreto (M9.1). Cuando hay parámetros de tipo,
+/// `target` los menciona (`Caja<T>`) y cada método se baja a una función genérica acotada.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplBlock {
     pub trait_name: String,
+    /// Parámetros de tipo del impl (M9.2b): los `T` de `impl<T> Trait for Caja<T>`.
+    pub type_params: Vec<String>,
+    /// Bounds de esos parámetros (M9.2b): `impl<T: A + B> ...`. Pares `(parámetro, trait)`.
+    pub bounds: Vec<(String, String)>,
     pub target: Type,
     pub methods: Vec<Function>,
     pub line: usize,

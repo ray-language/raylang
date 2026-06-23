@@ -84,6 +84,12 @@ fn read_int() -> Option<int> {
     let s = input()?;
     parse_int(s)
 }
+
+// Valor de una variable de entorno; None si no está definida.
+fn env(nombre: string) -> Option<string> {
+    let r = __env(nombre);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
 "#;
 
 /// Parsea el prelude una vez. El `expect` no puede fallar: el fuente es una constante

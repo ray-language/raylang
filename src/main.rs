@@ -18,29 +18,42 @@ use raylang::{checker, compiler, diagnostic, interpreter, loader, lsp, repl, tes
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let (use_vm, test_mode, path) = match args.len() {
-        // Sin archivo: REPL interactivo (M8.2).
-        1 => {
-            repl::run();
-            return;
-        }
-        2 if args[1] == "--repl" => {
-            repl::run();
-            return;
-        }
+    let rest = &args[1..]; // sin el nombre del binario
+
+    // Modos sin archivo: REPL interactivo (M8.2) y LSP (M10.2).
+    if rest.is_empty() || (rest.len() == 1 && rest[0] == "--repl") {
+        repl::run();
+        return;
+    }
+    if rest.len() == 1 && rest[0] == "--lsp" {
         // Language Server (M10.2): habla LSP por stdin/stdout hasta `exit`.
-        2 if args[1] == "--lsp" => {
-            lsp::run();
-            return;
+        lsp::run();
+        return;
+    }
+
+    // Forma general: raylang [--vm | --test] <archivo.ray> [args del programa...].
+    // Una flag opcional al principio, luego la ruta; todo lo que siga son los argumentos del
+    // programa (M11.2b), accesibles desde raylang con el builtin `args()`.
+    let mut idx = 0;
+    let (mut use_vm, mut test_mode) = (false, false);
+    match rest[0].as_str() {
+        "--vm" => {
+            use_vm = true;
+            idx = 1;
         }
-        2 => (false, false, args[1].clone()),
-        3 if args[1] == "--vm" => (true, false, args[2].clone()),
-        3 if args[1] == "--test" => (false, true, args[2].clone()),
-        _ => {
-            eprintln!("uso: raylang [--vm | --test] <archivo.ray>   |   raylang [--repl | --lsp]");
-            process::exit(64); // EX_USAGE
+        "--test" => {
+            test_mode = true;
+            idx = 1;
         }
-    };
+        _ => {}
+    }
+    if idx >= rest.len() {
+        eprintln!("uso: raylang [--vm | --test] <archivo.ray> [args...]   |   raylang [--repl | --lsp]");
+        process::exit(64); // EX_USAGE
+    }
+    let path = rest[idx].clone();
+    // Los argumentos del programa son lo que sigue a la ruta; se dejan en el almacén de proceso.
+    interpreter::set_program_args(rest[idx + 1..].to_vec());
 
     // Modo prueba (M10.1): corre las funciones `@test` vía un cliente externo (single-file).
     if test_mode {

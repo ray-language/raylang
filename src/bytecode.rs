@@ -120,6 +120,12 @@ pub enum OpCode {
     /// No saca nada; lee una línea de **stdin** (sin el `\n`) y empuja un `[string]` con **0 o
     /// 1** elementos: vacío en EOF. Primitivo `__read_line`; el prelude lo envuelve en `Option`.
     ReadLine,
+    /// Saca un string (el nombre); empuja un `[string]` con **0 o 1** elementos: el valor de la
+    /// variable de entorno, o vacío si no existe. Primitivo `__env`; el prelude → `Option<string>`.
+    Env,
+    /// No saca nada; empuja un `[string]` con los **argumentos del programa** (sin el binario ni
+    /// las flags de raylang). Builtin `args`. Los args vienen de un almacén de proceso.
+    Args,
 
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como

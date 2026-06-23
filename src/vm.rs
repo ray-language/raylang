@@ -300,6 +300,27 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::Env => {
+                    // Primitivo: [] si no existe, [valor] si sí. El prelude → Option<string>.
+                    let elems = match self.pop() {
+                        HeapValue::Str(name) => match std::env::var(name.as_str()) {
+                            Ok(v) => vec![HeapValue::Str(v)],
+                            Err(_) => vec![],
+                        },
+                        _ => unreachable!("el checker garantiza un string"),
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::Args => {
+                    // Argumentos del programa (del almacén de proceso); arreglo de strings.
+                    let items: Vec<HeapValue> = crate::interpreter::program_args()
+                        .iter()
+                        .map(|a| HeapValue::Str(a.clone()))
+                        .collect();
+                    let h = self.heap.allocate(Obj::Array(items));
+                    self.push(HeapValue::Obj(h));
+                }
 
                 // --- Structs (M3.2) ---
                 OpCode::MakeStruct(idx) => {
@@ -1863,6 +1884,22 @@ mod tests {
                 let b = valor(parse_int("  -7 "), 0);     // -7 (trim)
                 let c = valor(parse_int("xyz"), 100);     // 100 (None)
                 a + b + c                                 // 135
+            }
+        "#);
+    }
+
+    #[test]
+    fn args_y_env_oraculo() {
+        // En el proceso de test no se fijan args (→ []) y la variable no existe (→ None): ambos
+        // motores deben coincidir. (El comportamiento "real" se prueba por subproceso en io_cli.)
+        oracle_program(r#"
+            fn main() -> int {
+                let n = len(args());                       // 0
+                let e = match (env("RAYLANG_NO_EXISTE_XYZ")) {
+                    Option.Some(_) => 1,
+                    Option.None => 0,
+                };
+                n + e                                      // 0
             }
         "#);
     }

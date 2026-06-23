@@ -696,6 +696,8 @@ impl<'a> Compiler<'a> {
                     "eprint" => Some(OpCode::EPrint),          // M11.2a
                     "__parse_int" => Some(OpCode::ParseInt),   // M11.2a
                     "__read_line" => Some(OpCode::ReadLine),   // M11.2a
+                    "__env" => Some(OpCode::Env),              // M11.2b
+                    "args" => Some(OpCode::Args),              // M11.2b
                     _ => None,
                 };
                 if let Some(op) = builtin {

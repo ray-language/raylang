@@ -1822,7 +1822,7 @@ impl Checker {
     /// no es ni campo ni función.
     fn name_is_callable(&self, name: &str) -> bool {
         matches!(name, "print" | "len" | "push" | "to_string" | "trim" | "split"
-            | "eprint" | "__parse_int" | "__read_line")
+            | "eprint" | "__parse_int" | "__read_line" | "__env" | "args")
             || self.lookup(name).is_some()
             || self.functions.contains_key(name)
     }
@@ -1942,6 +1942,27 @@ impl Checker {
         if name == "__read_line" {
             if !args.is_empty() {
                 return Err(self.err(line, col, format!("__read_line no espera argumentos, se le pasaron {}", args.len())));
+            }
+            return Ok(Type::Array(Box::new(Type::String)));
+        }
+
+        // Primitivo '__env(s) -> [string]' (M11.2b): [] si la variable no existe, [valor] si sí.
+        // El prelude lo envuelve en Option<string> (env).
+        if name == "__env" {
+            if args.len() != 1 {
+                return Err(self.err(line, col, format!("__env espera 1 argumento, se le pasaron {}", args.len())));
+            }
+            let at = self.check_expr(&args[0])?;
+            if at != Type::String {
+                return Err(self.err(args[0].line, args[0].col, format!("__env espera un string, no {}", at)));
+            }
+            return Ok(Type::Array(Box::new(Type::String)));
+        }
+
+        // 'args() -> [string]' (M11.2b): argumentos de la línea de comandos del programa.
+        if name == "args" {
+            if !args.is_empty() {
+                return Err(self.err(line, col, format!("args no espera argumentos, se le pasaron {}", args.len())));
             }
             return Ok(Type::Array(Box::new(Type::String)));
         }

@@ -75,3 +75,58 @@ fn read_int_con_texto_no_entero_da_none() {
     assert!(out.contains("hola, x"), "input() leyó 'x'\n{out}");
     assert_eq!(code, 255, "read_int() de 'abc' es None -> -1");
 }
+
+const ARGS_ENV_PROG: &str = r#"
+fn main() -> int {
+  let xs = args();
+  var i = 0;
+  while (i < len(xs)) { print(xs[i]); i = i + 1; }
+  match (env("RAY_TEST_VAR")) {
+    Option.Some(v) => print("env=" + v),
+    Option.None => print("env=?"),
+  }
+  len(xs)
+}
+"#;
+
+#[test]
+fn args_y_env_en_ambos_motores() {
+    let mut path = std::env::temp_dir();
+    path.push("ray_args_env.ray");
+    std::fs::File::create(&path).unwrap().write_all(ARGS_ENV_PROG.as_bytes()).unwrap();
+
+    for vm in [false, true] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
+        if vm {
+            cmd.arg("--vm");
+        }
+        // raylang [--vm] <archivo> uno dos   con RAY_TEST_VAR=hola en el entorno.
+        let out = cmd
+            .arg(&path)
+            .arg("uno")
+            .arg("dos")
+            .env("RAY_TEST_VAR", "hola")
+            .output()
+            .expect("ejecuta raylang");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("uno") && stdout.contains("dos"), "args() ve los CLI args (vm={vm})\n{stdout}");
+        assert!(stdout.contains("env=hola"), "env() lee la variable (vm={vm})\n{stdout}");
+        assert_eq!(out.status.code(), Some(2), "len(args) = 2 (vm={vm})");
+    }
+}
+
+#[test]
+fn env_no_definida_da_none() {
+    let mut path = std::env::temp_dir();
+    path.push("ray_args_env2.ray");
+    std::fs::File::create(&path).unwrap().write_all(ARGS_ENV_PROG.as_bytes()).unwrap();
+    // Sin args ni la variable: args() = [] y env() = None.
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg(&path)
+        .env_remove("RAY_TEST_VAR")
+        .output()
+        .expect("ejecuta raylang");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("env=?"), "env() de una variable ausente es None\n{stdout}");
+    assert_eq!(out.status.code(), Some(0), "len(args) = 0 sin argumentos");
+}

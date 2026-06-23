@@ -188,6 +188,21 @@ pub fn run(program: &Program) -> Result<Value, RuntimeError> {
     Interpreter::new(program).run_main()
 }
 
+/// Almacén de proceso para los **argumentos del programa** (M11.2b). El runner (`main.rs`) los
+/// fija antes de ejecutar; el builtin `args()` los lee en ambos motores. Los clientes que no los
+/// fijan (REPL, runner de `@test`, tests) ven `[]`. Es estado de proceso, como `std::env::args`.
+static PROGRAM_ARGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+/// Fija los argumentos del programa (idempotente: solo la primera vez tiene efecto).
+pub fn set_program_args(args: Vec<String>) {
+    let _ = PROGRAM_ARGS.set(args);
+}
+
+/// Los argumentos del programa fijados por el runner; `&[]` si no se fijaron.
+pub fn program_args() -> &'static [String] {
+    PROGRAM_ARGS.get().map(Vec::as_slice).unwrap_or(&[])
+}
+
 struct Interpreter<'a> {
     /// Todas las funciones del programa, por nombre (las referencias viven mientras
     /// viva el `program`, de ahí el lifetime `'a`).
@@ -550,7 +565,7 @@ impl<'a> Interpreter<'a> {
             if !is_local {
                 // Builtins: evalúan sus argumentos y operan directamente.
                 if matches!(name.as_str(), "print" | "len" | "push" | "to_string" | "trim" | "split"
-                    | "eprint" | "__parse_int" | "__read_line") {
+                    | "eprint" | "__parse_int" | "__read_line" | "__env" | "args") {
                     let mut values = Vec::with_capacity(args.len());
                     for arg in args {
                         values.push(self.eval_expr(arg)?);
@@ -647,6 +662,19 @@ impl<'a> Interpreter<'a> {
                     }
                     Err(_) => Value::Array(Rc::new(RefCell::new(vec![]))),
                 }
+            }
+            // M11.2b: primitivo de entorno → [] si no existe, [valor] si sí.
+            "__env" => match &values[0] {
+                Value::Str(name) => match std::env::var(name) {
+                    Ok(v) => Value::Array(Rc::new(RefCell::new(vec![Value::Str(v)]))),
+                    Err(_) => Value::Array(Rc::new(RefCell::new(vec![]))),
+                },
+                _ => unreachable!("el checker garantiza un string"),
+            },
+            // M11.2b: argumentos del programa (del almacén de proceso; [] si no se fijaron).
+            "args" => {
+                let items = program_args().iter().map(|a| Value::Str(a.clone())).collect();
+                Value::Array(Rc::new(RefCell::new(items)))
             }
             _ => unreachable!("builtin desconocido"),
         }

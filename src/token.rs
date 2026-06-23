@@ -37,6 +37,8 @@ pub enum TokenKind {
     Trait, // M9
     Impl,  // M9
     Dyn,   // M9.3b (dyn Trait: trait object)
+    Pub,    // M11.3 (visibilidad: exporta un ítem del módulo)
+    Import, // M11.3 (import M; — importa un módulo como espacio de nombres)
 
     // --- Palabras clave de tipo ---
     IntType,    // int

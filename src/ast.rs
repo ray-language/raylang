@@ -110,6 +110,18 @@ pub struct Program {
     pub traits: Vec<TraitDef>,
     /// Bloques `impl Trait for Tipo` que implementan un trait para un tipo (M9).
     pub impls: Vec<ImplBlock>,
+    /// Declaraciones `import M;` del archivo (M11.3). Las consume el *loader*, que carga y
+    /// fusiona los módulos; tras esa fase el `Program` fusionado las deja vacías.
+    pub imports: Vec<ImportDecl>,
+}
+
+/// Una declaración `import M;` (M11.3): importa el módulo `M` (archivo `M.ray`) como espacio
+/// de nombres; sus ítems `pub` se acceden calificados (`M.f(...)`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportDecl {
+    pub module: String,
+    pub line: usize,
+    pub col: usize,
 }
 
 /// Definición de un struct: `struct Nombre { campo: Tipo, ... }` (M3.2). Los campos
@@ -203,6 +215,8 @@ pub struct ImplBlock {
 pub struct Function {
     /// Anotaciones de la declaración (M10.1), p. ej. `@test`. Vacío si no hay.
     pub annotations: Vec<Annotation>,
+    /// `pub` (M11.3): la función se exporta de su módulo. Sin `pub`, privada al módulo.
+    pub is_pub: bool,
     pub name: String,
     /// Parámetros de tipo: los `T, U` de `fn mapear<T, U>(...)` (M6). Vacío = no
     /// genérica. Dentro del cuerpo, cada nombre está en ámbito como `Type::Var`.

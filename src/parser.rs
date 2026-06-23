@@ -61,37 +61,71 @@ impl Parser {
     // Reglas de la gramática
     // =================================================================
 
-    /// program = { struct_def | enum_def | trait_def | impl_block | function }
+    /// program = { import | [anns] [pub] (struct_def | enum_def | trait_def | impl_block | function) }
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut functions = Vec::new();
         let mut structs = Vec::new();
         let mut enums = Vec::new();
         let mut traits = Vec::new();
         let mut impls = Vec::new();
+        let mut imports = Vec::new();
         while !self.is_at_end() {
+            // M11.3: `import M;` precede a todo (sin anotaciones ni `pub`).
+            if self.check(&TokenKind::Import) {
+                imports.push(self.import_decl()?);
+                continue;
+            }
             // M10.1: las anotaciones (`@nombre[(args)]`) preceden a la declaración.
             let anns = self.annotations()?;
+            // M11.3: `pub` exporta el ítem. En M11.3a solo se admite ante una función
+            // (tipos/enums/traits son globales por ahora).
+            let pub_tok = if self.check(&TokenKind::Pub) { Some(self.advance()) } else { None };
             if self.check(&TokenKind::Struct) {
+                self.no_pub(&pub_tok, "un struct")?;
                 let mut s = self.struct_def()?;
                 s.annotations = anns;
                 structs.push(s);
             } else if self.check(&TokenKind::Enum) {
+                self.no_pub(&pub_tok, "un enum")?;
                 let mut e = self.enum_def()?;
                 e.annotations = anns;
                 enums.push(e);
             } else if self.check(&TokenKind::Trait) {
+                self.no_pub(&pub_tok, "un trait")?;
                 self.no_annotations(&anns, "un trait")?;
                 traits.push(self.trait_def()?);
             } else if self.check(&TokenKind::Impl) {
+                self.no_pub(&pub_tok, "un impl")?;
                 self.no_annotations(&anns, "un impl")?;
                 impls.push(self.impl_block()?);
             } else {
                 let mut f = self.function()?;
                 f.annotations = anns;
+                f.is_pub = pub_tok.is_some();
                 functions.push(f);
             }
         }
-        Ok(Program { functions, structs, enums, traits, impls })
+        Ok(Program { functions, structs, enums, traits, impls, imports })
+    }
+
+    /// import_decl = 'import' IDENT ';'  (M11.3)
+    fn import_decl(&mut self) -> Result<ImportDecl, ParseError> {
+        let kw = self.expect(&TokenKind::Import, "'import'")?;
+        let (module, _, _) = self.expect_ident("el nombre del módulo a importar")?;
+        self.expect(&TokenKind::Semicolon, "';' tras 'import M'")?;
+        Ok(ImportDecl { module, line: kw.line, col: kw.col })
+    }
+
+    /// Error si hay `pub` donde M11.3a no lo admite (struct/enum/trait/impl).
+    fn no_pub(&self, pub_tok: &Option<crate::token::Token>, donde: &str) -> Result<(), ParseError> {
+        match pub_tok {
+            None => Ok(()),
+            Some(t) => Err(ParseError {
+                msg: format!("M11.3a: 'pub' solo se admite en funciones, no en {} (los tipos son globales por ahora)", donde),
+                line: t.line,
+                col: t.col,
+            }),
+        }
     }
 
     /// Recoge las anotaciones que preceden a una declaración (M10.1):
@@ -210,6 +244,7 @@ impl Parser {
         let body = self.block()?;
         Ok(Function {
             annotations: Vec::new(),
+            is_pub: false, // lo fija `parse_program` si vino precedido de `pub`
             name,
             type_params,
             bounds,
@@ -308,6 +343,7 @@ impl Parser {
         let body = self.block()?;
         Ok(Function {
             annotations: Vec::new(),
+            is_pub: false, // los métodos de impl no llevan `pub` propio
             name,
             type_params: Vec::new(),
             bounds: Vec::new(),

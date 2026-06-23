@@ -1709,10 +1709,13 @@ módulos. Tres fases nuevas, todas en el front-end:
 
 **Sub-pasos:**
 - **M11.3a** — loader + namespacing + resolución + `pub` + **`import M;`** con llamadas calificadas
-  `M.f(...)`. Es el núcleo; la superficie mínima (solo funciones calificadas).
-- **M11.3b** — **`from M import a [as b]`**: trae nombres (funciones y tipos) al ámbito del módulo,
-  con alias. Reusa el loader/namespacing/`pub` de -a; añade inyectar nombres en el mapa de
-  resolución (con su renombrado).
+  `M.f(...)`. Núcleo, con la superficie mínima: **solo se namespacan funciones** (`modulo::fn`) y
+  se cruzan **funciones `pub`**. Los **tipos/enums/traits** siguen en un **espacio global único**
+  (deben tener nombre único entre módulos; un choque es error) —cruzar tipos entre módulos es -b/
+  diferido—, así el resolutor solo reescribe referencias a *funciones* (no tipos ni patrones).
+- **M11.3b** — **`from M import a [as b]`**: trae nombres al ámbito del módulo, con alias. Reusa el
+  loader/namespacing/`pub` de -a; añade inyectar nombres en el mapa de resolución (con su
+  renombrado) y, según haga falta, namespacing de tipos para poder importarlos.
 
 **Desambiguación de `.`** (el punto delicado): `math.doble(21)` llega como `Call(Field(Ident
 "math", "doble"), ...)`, igual que UFCS y que la construcción de enums. La regla, en orden: si hay

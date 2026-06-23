@@ -194,6 +194,7 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
                 .collect();
             program.functions.push(Function {
                 annotations: Vec::new(),
+                is_pub: false,
                 name: mangle(&key, &m.name),
                 type_params: imp.type_params.clone(),
                 bounds: imp.bounds.clone(),
@@ -220,6 +221,7 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
             freshen_positions(&mut body, &mut fresh_pos);
             program.functions.push(Function {
                 annotations: Vec::new(),
+                is_pub: false,
                 name: mangle(&key, &tm.name),
                 type_params: imp.type_params.clone(),
                 bounds: imp.bounds.clone(),

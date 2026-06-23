@@ -14,7 +14,7 @@ use std::fs;
 use std::process;
 
 use raylang::interpreter::Value;
-use raylang::{checker, compiler, diagnostic, interpreter, lexer, lsp, parser, repl, test_runner, vm};
+use raylang::{checker, compiler, diagnostic, interpreter, loader, lsp, repl, test_runner, vm};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -42,35 +42,31 @@ fn main() {
         }
     };
 
-    let src = match fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("no se pudo leer '{}': {}", path, e);
-            process::exit(66); // EX_NOINPUT
-        }
-    };
-
-    // Modo prueba (M10.1): corre las funciones `@test` vía un cliente externo.
+    // Modo prueba (M10.1): corre las funciones `@test` vía un cliente externo (single-file).
     if test_mode {
+        let src = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("no se pudo leer '{}': {}", path, e);
+                process::exit(66); // EX_NOINPUT
+            }
+        };
         process::exit(test_runner::run(&src));
     }
 
-    // Front-end: lexer → parser → checker. Cada error se muestra con su contexto de
-    // fuente (M8.3): la línea y un `^` bajo la posición.
-    let tokens = match lexer::lex(&src) {
-        Ok(t) => t,
+    // M11.3: el loader carga el archivo de entrada y sus `import` (transitivos), y devuelve
+    // el `Program` fusionado (módulos ya borrados). Los errores de carga vienen renderizados.
+    let loaded = match loader::load(std::path::Path::new(&path)) {
+        Ok(l) => l,
         Err(e) => {
-            eprintln!("{}", diagnostic::render(&src, e.line, e.col, &e.to_string()));
+            eprintln!("{}", e.message);
             process::exit(65);
         }
     };
-    let mut program = match parser::parse(tokens) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{}", diagnostic::render(&src, e.line, e.col, &e.to_string()));
-            process::exit(65);
-        }
-    };
+    let mut program = loaded.program;
+    // Fuente de entrada para renderizar errores posteriores del checker/runtime (M8.3).
+    let src = loaded.entry_source;
+
     // El checker resuelve la construcción de enums sobre el AST (lo muta), así que
     // el intérprete y la VM reciben un programa ya resuelto.
     if let Err(e) = checker::check(&mut program) {

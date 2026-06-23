@@ -349,6 +349,8 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "trait" => TokenKind::Trait,
         "impl" => TokenKind::Impl,
         "dyn" => TokenKind::Dyn,
+        "pub" => TokenKind::Pub,
+        "import" => TokenKind::Import,
         "int" => TokenKind::IntType,
         "float" => TokenKind::FloatType,
         "bool" => TokenKind::BoolType,

@@ -61,7 +61,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M8** | inferencia local (`let x = 3`), REPL, mejores errores | unificación básica, tooling | ✅ |
 | **Limpieza** | reservar `@` (lexer), coma final en arreglos, sincronizar IDEAS | deuda de front-end y de documentación | ✅ |
 | **M9** | **traits / interfaces** (estilo Rust) → polimorfismo + *bounds* de genéricos | despacho estático vs. dinámico, abstracción | ✅ (M9.1 trait+impl · M9.2 bounds · M9.3 defectos + trait objects) |
-| **M10** | **tooling**: LSP (reusa el checker) + anotaciones (`@test`, `@derive`, `@builtin`) | language servers, metadatos en el AST | ⏳ |
+| **M10** | **tooling**: LSP (reusa el checker) + anotaciones (`@test`, `@derive`, `@builtin`) | language servers, metadatos en el AST | 🚧 M10.1 en curso (anotaciones: `@test`, `@derive(Eq)`) |
 | **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ⏳ |
 | **M12** | **concurrencia** (dirección probable: goroutines + channels) | scheduler, green threads, suspensión | ⏳ |
 | **Transversal** | optimización de la VM (incremental, midiendo) y **self-hosting** (capstone) | rendimiento, bootstrapping | ⏳ |
@@ -1375,3 +1375,85 @@ funciones", sobre las piezas que ya existían (structs + funciones de primera cl
 - **Traits con `Self` en posición de argumento** que exija dos receptores del mismo tipo
   (p. ej. `fn igual(self, otro: Self) -> bool`) → soportado por M9.1 (ambos = destino), pero
   sin la garantía de igualdad estructural que daría un trait `Eq` del prelude (futuro).
+
+## 19. M10 — Tooling: anotaciones y LSP
+
+M10 mira hacia las **herramientas** alrededor del lenguaje, no al lenguaje en sí. Dos
+piezas independientes: **anotaciones** (`@nombre`, metadatos sobre declaraciones) y un
+**Language Server (LSP)** que reusa el checker para dar diagnósticos en vivo a cualquier
+editor. Se abordan por separado: **M10.1** anotaciones (front-end puro, sin dependencias),
+**M10.2** LSP (su propia spec y decisión de implementación al arrancarla).
+
+### 19.1 M10.1 — Anotaciones
+
+Una **anotación** es un metadato adherido a una declaración: `@nombre` o `@nombre(arg, …)`
+antes de una función, struct o enum. La dirección (IDEAS §9) es **conjunto cerrado que el
+compilador conoce** —barato, didáctico, sin macros de usuario—. M10.1 implementa la
+infraestructura más dos anotaciones: `@test` y `@derive(Eq)`.
+
+**Sintaxis y AST.** `@` ya está reservado (`TokenKind::At`). Una declaración puede llevar
+cero o más anotaciones; los argumentos (entre paréntesis) son **identificadores**.
+
+```rust
+@test
+fn suma_ok() -> bool { 1 + 1 == 2 }
+
+@derive(Eq)
+enum Color { Rojo, Verde, Azul }
+```
+
+- `Annotation { name, args: Vec<String>, line, col }`.
+- `Function`, `StructDef` y `EnumDef` ganan `annotations: Vec<Annotation>`.
+- **Parser**: en el bucle de nivel superior se recogen las anotaciones que preceden a un
+  ítem y se adjuntan. Anotar un `trait`/`impl` es error en M10.1.
+- **Checker**: valida que cada anotación sea **conocida** y esté bien colocada (nombre del
+  conjunto cerrado; `@test` solo en funciones, `@derive` solo en struct/enum). Una
+  anotación desconocida es error.
+
+**`@test`** — marca una función de prueba. La firma debe ser `() -> bool` (pasa si devuelve
+`true`). No cambia la ejecución normal (es una función más, ignorada salvo en modo test). El
+**runner** (`raylang prog.ray --test`) es un **cliente** (como el REPL): lee las funciones
+`@test` del AST, sintetiza un `main` que las llama e imprime `ok`/`FALLO` por cada una, y
+ejecuta. **Cero cambios** en checker/intérprete por el runner (solo la validación de firma).
+
+**`@derive(Eq)`** — sobre un struct/enum **no genérico**, genera su `impl Eq`. Es el "pago"
+de M9: una anotación que **genera código** sobre traits. Mecánica:
+- El prelude aporta `trait Eq { fn igual(self, otro: Self) -> bool; }` (inyectado como los
+  enums/funciones del prelude; se salta si el usuario define `Eq`).
+- Por cada tipo con `@derive(Eq)`, el checker **sintetiza un `ImplBlock`** `impl Eq for T`
+  con el método `igual`, y lo añade a `program.impls`. **El resto lo hace M9** (la bajada de
+  M9.1 lo convierte en `T#igual`, etc.): `@derive` solo *genera el AST del impl*.
+- El cuerpo de `igual`:
+  - **struct**: conjunción de los campos, `self.f1 == otro.f1 && … && self.fn == otro.fn`
+    (struct sin campos → `true`).
+  - **enum**: `match` sobre `self`; por cada variante, `match` sobre `otro`: misma variante
+    → comparar el payload posición a posición con `==` (variante *unit* → `true`); otra
+    variante → `false`.
+- Las comparaciones hoja usan `==`, así que los campos/payload deben ser **comparables**
+  (primitivos, string, bool, struct, arreglos de esos). Un payload que sea **otro enum** no
+  es comparable con `==` (limitación conocida: la derivación recursiva de `Eq` para enums
+  anidados se difiere). `@derive(Eq)` sobre un tipo **genérico** también se difiere (M9.1 no
+  admite impls genéricos).
+
+> **Por qué `igual` y no `==` para enums.** `==` ya compara structs estructuralmente, pero
+> **no** enums (pueden ser recursivos / portar funciones; §M5). `@derive(Eq)` da una
+> igualdad **explícita** (`a.igual(b)`) para enums, demostrando codegen sobre traits sin
+> tocar la semántica de `==` (sobrecarga de operadores queda fuera de alcance).
+
+**Runtime: sin cambios.** Las anotaciones son metadatos del front-end; `@test` lo consume un
+cliente externo y `@derive` se reduce a un `impl` que M9 ya sabe bajar. Erasure, una vez más.
+
+### 19.2 M10.2 — LSP (esbozo; decisión al arrancar)
+
+Un **Language Server** que, ante cada cambio de documento, corre lexer→parser→checker y
+devuelve los errores como `Diagnostic` (reusa `(línea, col)` y el renderizador de M8.3). Se
+escribe **una vez** y sirve a todos los editores (VSCode, Neovim, Helix…). Decisión abierta
+para M10.2: **JSON-RPC a mano** (mantiene la pureza cero-dependencias del proyecto) vs. un
+**crate** (`lsp-server`/`tower-lsp`), y el alcance (solo diagnósticos vs. hover/definición).
+
+### 19.3 Deferido (más allá de M10.1)
+- **LSP** → M10.2 (su spec y decisión).
+- `@builtin`/`@extern` (limpiar el *special-casing* de `print`/`len`/`push`), `@deprecated`,
+  `@inline`, `@delegate` → anotaciones futuras.
+- **Derivación recursiva** (`Eq` de enums con payload-enum) y **derive genérico** → futuro.
+- **Anotaciones definidas por el usuario que transforman código** (macros) → capstone.

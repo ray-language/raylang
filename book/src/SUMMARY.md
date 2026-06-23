@@ -70,3 +70,8 @@
 - [Bounds: genéricos que exigen comportamiento](m9/bounds.md)
 - [Métodos por defecto](m9/defaults.md)
 - [Trait objects: despacho dinámico](m9/trait-objects.md)
+
+# M10 — Tooling: anotaciones y LSP
+
+- [Tooling: anotaciones y LSP](m10/intro.md)
+- [@test y @derive(Eq)](m10/anotaciones.md)

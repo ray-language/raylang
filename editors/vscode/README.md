@@ -14,6 +14,7 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 | Palabras clave de control | `if else while return match` | `keyword.control` |
 | Declaración / storage | `let var fn struct enum trait impl dyn` | `storage.type` |
 | Receptor / tipo propio | `self`, `Self` | `variable.language.self` |
+| Anotaciones | `@test`, `@derive(Eq)` | `storage.modifier.annotation` |
 | Tipos primitivos | `int float bool string` | `support.type.primitive` |
 | Tipos de usuario | `Punto` (struct), `Figura` (enum) | `entity.name.type` |
 | Booleanos | `true false` | `constant.language.boolean` |
@@ -85,6 +86,11 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 > palabra clave **`dyn`** (`dyn Figura`) a `storage.type`; el nombre del trait que la sigue
 > (mayúscula) ya se colorea como tipo. El despacho dinámico se realiza como un struct
 > sintetizado en el checker, invisible al coloreado.
+>
+> **M10.1 (anotaciones).** Una anotación `@nombre` (`@test`, `@derive`) se colorea como
+> `storage.modifier.annotation`. Los argumentos (`@derive(Eq)`) caen en sus propias reglas
+> (el nombre de trait, en mayúscula, como tipo de usuario). El runner `--test` y la
+> generación de `@derive` viven en el front-end, invisibles al coloreado.
 
 > Nota: la gramática TextMate (`syntaxes/raylang.tmLanguage.json`) es una
 > **reescritura en regex** de las reglas léxicas de `DESIGN.md` §3. Es independiente
@@ -99,7 +105,7 @@ de extensiones de VSCode y recarga.
 
 ```sh
 # macOS / Linux
-ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.8.0
+ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.9.0
 
 # Luego: recarga VSCode (Cmd/Ctrl+Shift+P → "Developer: Reload Window")
 ```
@@ -114,7 +120,7 @@ Para generar un `.vsix` instalable o publicarlo:
 
 ```sh
 npm install -g @vscode/vsce
-vsce package        # genera raylang-0.8.0.vsix
+vsce package        # genera raylang-0.9.0.vsix
 # Instalar el .vsix: Cmd/Ctrl+Shift+P → "Extensions: Install from VSIX..."
 ```
 

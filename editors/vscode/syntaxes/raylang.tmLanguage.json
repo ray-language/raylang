@@ -5,6 +5,7 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#strings" },
+    { "include": "#annotation" },
     { "include": "#struct-definition" },
     { "include": "#enum-definition" },
     { "include": "#trait-definition" },
@@ -37,6 +38,11 @@
           "match": "\\\\."
         }
       ]
+    },
+    "annotation": {
+      "comment": "Anotación @nombre (M10.1): @test, @derive, ... Los argumentos (p. ej. @derive(Eq)) caen en sus propias reglas (tipos de usuario).",
+      "match": "@[A-Za-z_][A-Za-z0-9_]*",
+      "name": "storage.modifier.annotation.raylang"
     },
     "struct-definition": {
       "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)",

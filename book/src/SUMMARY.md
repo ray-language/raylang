@@ -77,3 +77,4 @@
 - [Tooling: anotaciones y LSP](m10/intro.md)
 - [@test y @derive(Eq)](m10/anotaciones.md)
 - [El LSP: diagnósticos en vivo](m10/lsp.md)
+- [Hover e ir-a-definición](m10/hover-definicion.md)

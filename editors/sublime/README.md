@@ -80,5 +80,6 @@ sin compilar un cliente.
 
 ## Alcance
 
-Diagnósticos (M10.2). Hover e ir-a-definición quedan para un futuro M10.2b (exigirían exponer una
-API de tipos del checker y un índice de símbolos).
+Diagnósticos (M10.2), **hover** e **ir-a-definición** (M10.2b). El paquete LSP de Sublime invoca
+hover (`K` / al pasar el ratón) y "Goto Definition" sin configuración extra una vez declarado el
+cliente. *Completion*, *rename* y *find-references* quedan para el futuro.

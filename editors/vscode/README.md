@@ -179,5 +179,7 @@ capítulo "El LSP" del libro).
 > diagnósticos a los subrayados de VSCode. Es el único código JS de la extensión; la lógica de
 > análisis vive toda en el binario de Rust (cero duplicación).
 
-> Alcance de M10.2: **solo diagnósticos** (un error a la vez, *fail-fast*). Hover e
-> ir-a-definición quedan para un futuro M10.2b.
+> Alcance: **diagnósticos** (un error a la vez, *fail-fast*), **hover** (el tipo bajo el cursor)
+> e **ir-a-definición** (M10.2b). El cliente `vscode-languageclient` ya soporta hover y definición
+> sin código extra: basta con que el servidor los anuncie. *Completion*, *rename* y *find-references*
+> quedan para el futuro.

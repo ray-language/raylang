@@ -222,9 +222,20 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   (toggle `//`). Diagnósticos: se conecta `raylang --lsp` declarándolo en el paquete **LSP**
   (sublimelsp) — **solo config, sin compilar** (su soporte LSP es un paquete externo, como
   Neovim/Helix). Solo VSCode necesita compilar un cliente propio. README con instalación + config.
-- **Siguiente: M10.2b** (hover/definición en el LSP) u otra. Ver hoja de ruta (DESIGN §2, §19) /
-  IDEAS.md. Diferidos de M9.2b: instancias solapadas/especializadas, bounds en params de
-  struct/enum, `dyn` sobre impls genéricos.
+- **M10.2b COMPLETO** (288 tests + integración CLI verdes): **hover e ir-a-definición** en el LSP.
+  El checker pasa de *validador* a **consultable**: `semantic_index(program)` (en `checker.rs`)
+  corre un front-end factorizado (`prepare_program` + `check_program`) con un flag `gather` que
+  recolecta un `SemanticIndex` —`hovers` (posición→tipo) y `defs` (uso→posición de declaración)—
+  **antes de cualquier lowering** (posiciones de la fuente original). `check` no cambia su firma
+  (coste cero salvo `gather`). Para los defs, `VarInfo` lleva su posición y hay un mapa
+  `fn_defs`. Granularidad: **identificadores** (variables, params, funciones); métodos/tipos
+  diferidos. El **LSP guarda documentos** (hover/def traen solo uri+posición), anuncia
+  `hoverProvider`/`definitionProvider`, y `hover_at`/`definition_at` consultan el índice. Sin
+  spans: el rango es `[col, col+largo_nombre)`; la def de un `let` apunta al `let` (degradación
+  honesta). Introspección pura: runtime y semántica intactos.
+- **Siguiente:** sin hito asignado. Candidatos: M9.2b avanzado (instancias solapadas, bounds en
+  params de struct/enum, `dyn` sobre impls genéricos), o LSP avanzado (completion, rename,
+  find-references). Ver hoja de ruta (DESIGN §2, §19) / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

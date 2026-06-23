@@ -25,10 +25,10 @@ El LSP traía dos decisiones de enfoque, y las dos se resolvieron *fieles al pro
    escribimos el *framing* y un mini-JSON nosotros. Es más plomería, pero el punto es
    pedagógico: se *ve* el protocolo por dentro. (En un proyecto de producción usarías un crate
    sin pensarlo; aquí el objetivo es entenderlo.)
-2. **Alcance: solo diagnósticos.** `initialize` + abrir/cambiar/cerrar documento →
-   publicar errores. Sin *hover* (mostrar el tipo bajo el cursor) ni *ir-a-definición*: ambos
-   exigirían exponer una API de tipos del checker (que evitamos ya en el REPL) y un índice de
-   símbolos. Quedan para un futuro M10.2b. Los diagnósticos son el 80% del valor.
+2. **Alcance inicial: solo diagnósticos.** `initialize` + abrir/cambiar/cerrar documento →
+   publicar errores. *Hover* (el tipo bajo el cursor) e *ir-a-definición* —que exigen exponer
+   los tipos del checker, lo que evitamos en el REPL— llegan en **M10.2b** (capítulo siguiente);
+   los diagnósticos por sí solos ya son el 80% del valor.
 
 ## Fiel al patrón: un cliente externo
 

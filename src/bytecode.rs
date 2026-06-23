@@ -111,6 +111,16 @@ pub enum OpCode {
     /// `split`. (El arreglo es un objeto del heap → lo traza el GC.)
     Split,
 
+    // --- I/O y API de runtime (M11.2) ---
+    /// Saca un valor primitivo; lo escribe a **stderr** y empuja unit. Builtin `eprint`.
+    EPrint,
+    /// Saca un string; empuja un arreglo `[int]` con **0 o 1** elementos: el entero parseado,
+    /// o vacío si no parsea. Primitivo `__parse_int`; el prelude lo envuelve en `Option<int>`.
+    ParseInt,
+    /// No saca nada; lee una línea de **stdin** (sin el `\n`) y empuja un `[string]` con **0 o
+    /// 1** elementos: vacío en EOF. Primitivo `__read_line`; el prelude lo envuelve en `Option`.
+    ReadLine,
+
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como
     /// campos tenga (estaban en orden de declaración) y empuja el struct.

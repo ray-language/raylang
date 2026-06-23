@@ -549,7 +549,8 @@ impl<'a> Interpreter<'a> {
             let is_local = self.lookup_opt(name).is_some();
             if !is_local {
                 // Builtins: evalúan sus argumentos y operan directamente.
-                if matches!(name.as_str(), "print" | "len" | "push" | "to_string" | "trim" | "split") {
+                if matches!(name.as_str(), "print" | "len" | "push" | "to_string" | "trim" | "split"
+                    | "eprint" | "__parse_int" | "__read_line") {
                     let mut values = Vec::with_capacity(args.len());
                     for arg in args {
                         values.push(self.eval_expr(arg)?);
@@ -622,6 +623,31 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza dos strings"),
             },
+            // M11.2a: como print, pero a stderr.
+            "eprint" => {
+                eprintln!("{}", values[0]);
+                Value::Unit
+            }
+            // M11.2a: primitivo de parseo → [] o [n]. El prelude lo envuelve en Option.
+            "__parse_int" => match &values[0] {
+                Value::Str(s) => match s.trim().parse::<i64>() {
+                    Ok(n) => Value::Array(Rc::new(RefCell::new(vec![Value::Int(n)]))),
+                    Err(_) => Value::Array(Rc::new(RefCell::new(vec![]))),
+                },
+                _ => unreachable!("el checker garantiza un string"),
+            },
+            // M11.2a: primitivo de lectura de línea → [] en EOF, [linea] si no (sin el '\n').
+            "__read_line" => {
+                let mut line = String::new();
+                match std::io::stdin().read_line(&mut line) {
+                    Ok(0) => Value::Array(Rc::new(RefCell::new(vec![]))), // EOF
+                    Ok(_) => {
+                        let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
+                        Value::Array(Rc::new(RefCell::new(vec![Value::Str(trimmed)])))
+                    }
+                    Err(_) => Value::Array(Rc::new(RefCell::new(vec![]))),
+                }
+            }
             _ => unreachable!("builtin desconocido"),
         }
     }

@@ -272,6 +272,35 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
 
+                // --- I/O y API de runtime (M11.2) ---
+                OpCode::EPrint => {
+                    let v = self.pop();
+                    eprintln!("{}", format_value(&self.heap, &self.program.enums, &v));
+                    self.push(HeapValue::Unit);
+                }
+                OpCode::ParseInt => {
+                    // Primitivo: [] o [n]; el prelude lo envuelve en Option<int>.
+                    let elems = match self.pop() {
+                        HeapValue::Str(s) => match s.trim().parse::<i64>() {
+                            Ok(n) => vec![HeapValue::Int(n)],
+                            Err(_) => vec![],
+                        },
+                        _ => unreachable!("el checker garantiza un string"),
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::ReadLine => {
+                    // Primitivo: [] en EOF, [linea] si no (sin el '\n'). El prelude → Option<string>.
+                    let mut line = String::new();
+                    let elems = match std::io::stdin().read_line(&mut line) {
+                        Ok(0) | Err(_) => vec![],
+                        Ok(_) => vec![HeapValue::Str(line.trim_end_matches(['\n', '\r']).to_string())],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+
                 // --- Structs (M3.2) ---
                 OpCode::MakeStruct(idx) => {
                     let sname = self.program.structs[*idx].name.clone();
@@ -1814,6 +1843,47 @@ mod tests {
                 let total = len(partes) + len(partes[0]) + len(partes[3]);
                 print(partes[2]);                  // tres
                 total                              // 4 + 3 + 6 = 13
+            }
+        "#);
+    }
+
+    #[test]
+    fn parse_int_oraculo() {
+        // parse_int es determinista (no toca stdin) → oráculo VM↔intérprete. Construye Option
+        // en el prelude (raylang); el resultado debe coincidir en ambos motores.
+        oracle_program(r#"
+            fn valor(o: Option<int>, def: int) -> int {
+                match (o) {
+                    Option.Some(n) => n,
+                    Option.None => def,
+                }
+            }
+            fn main() -> int {
+                let a = valor(parse_int("42"), 0);        // 42
+                let b = valor(parse_int("  -7 "), 0);     // -7 (trim)
+                let c = valor(parse_int("xyz"), 100);     // 100 (None)
+                a + b + c                                 // 135
+            }
+        "#);
+    }
+
+    #[test]
+    fn parse_int_option_construido_en_el_heap_estres_gc() {
+        // El [int] del primitivo y el Option que arma el prelude son objetos del heap. Bajo
+        // estrés del GC: si una raíz faltara, el valor vivo se liberaría.
+        oracle_stress(r#"
+            fn main() -> int {
+                let xs = ["1", "2", "no", "4"];
+                var suma = 0;
+                var i = 0;
+                while (i < len(xs)) {
+                    match (parse_int(xs[i])) {
+                        Option.Some(n) => { suma = suma + n; },
+                        Option.None => {},
+                    }
+                    i = i + 1;
+                }
+                suma                               // 1 + 2 + 4 = 7
             }
         "#);
     }

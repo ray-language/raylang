@@ -1821,7 +1821,8 @@ impl Checker {
     /// nivel superior). Lo usa UFCS para dar un error específico cuando un `recv.f(...)`
     /// no es ni campo ni función.
     fn name_is_callable(&self, name: &str) -> bool {
-        matches!(name, "print" | "len" | "push" | "to_string" | "trim" | "split")
+        matches!(name, "print" | "len" | "push" | "to_string" | "trim" | "split"
+            | "eprint" | "__parse_int" | "__read_line")
             || self.lookup(name).is_some()
             || self.functions.contains_key(name)
     }
@@ -1907,6 +1908,40 @@ impl Checker {
             let sep = self.check_expr(&args[1])?;
             if sep != Type::String {
                 return Err(self.err(args[1].line, args[1].col, format!("split espera un string como separador, no {}", sep)));
+            }
+            return Ok(Type::Array(Box::new(Type::String)));
+        }
+
+        // 'eprint(x) -> unit' (M11.2a): como print, pero a stderr.
+        if name == "eprint" {
+            if args.len() != 1 {
+                return Err(self.err(line, col, format!("eprint espera 1 argumento, se le pasaron {}", args.len())));
+            }
+            let at = self.check_expr(&args[0])?;
+            if !is_printable(&at) {
+                return Err(self.err(args[0].line, args[0].col, format!("eprint no puede imprimir un {}", at)));
+            }
+            return Ok(Type::Unit);
+        }
+
+        // Primitivo '__parse_int(s) -> [int]' (M11.2a): [] si no parsea, [n] si sí. El prelude lo
+        // envuelve en Option<int> (parse_int). No suele llamarse directo.
+        if name == "__parse_int" {
+            if args.len() != 1 {
+                return Err(self.err(line, col, format!("__parse_int espera 1 argumento, se le pasaron {}", args.len())));
+            }
+            let at = self.check_expr(&args[0])?;
+            if at != Type::String {
+                return Err(self.err(args[0].line, args[0].col, format!("__parse_int espera un string, no {}", at)));
+            }
+            return Ok(Type::Array(Box::new(Type::Int)));
+        }
+
+        // Primitivo '__read_line() -> [string]' (M11.2a): [] en EOF, [linea] si no. El prelude lo
+        // envuelve en Option<string> (input).
+        if name == "__read_line" {
+            if !args.is_empty() {
+                return Err(self.err(line, col, format!("__read_line no espera argumentos, se le pasaron {}", args.len())));
             }
             return Ok(Type::Array(Box::new(Type::String)));
         }

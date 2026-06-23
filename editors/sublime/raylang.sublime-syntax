@@ -19,7 +19,7 @@ scope: source.raylang
 variables:
   ident: '[A-Za-z_][A-Za-z0-9_]*'
   user_type: '[A-Z][A-Za-z0-9_]*'
-  builtins: 'print|len|push|map|filter|fold'
+  builtins: 'print|len|push|map|filter|fold|to_string|trim|split|eprint|input|read_int|parse_int'
 
 contexts:
   main:

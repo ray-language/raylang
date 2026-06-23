@@ -97,7 +97,7 @@
     },
     "builtins": {
       "name": "support.function.builtin.raylang",
-      "match": "\\b(print|len|push|map|filter|fold)\\b(?=\\s*\\()"
+      "match": "\\b(print|len|push|map|filter|fold|to_string|trim|split|eprint|input|read_int|parse_int)\\b(?=\\s*\\()"
     },
     "types": {
       "name": "support.type.primitive.raylang",
@@ -131,7 +131,7 @@
     },
     "pipeline-target": {
       "comment": "El objetivo de un pipeline desnudo (`x |> doble`) es una función aunque no lleve '('. Se excluyen los builtins: en `|> map(...)` el paréntesis ya los colorea como tales.",
-      "match": "(\\|>)\\s*(?!(?:print|len|push|map|filter|fold)\\b)([A-Za-z_][A-Za-z0-9_]*)",
+      "match": "(\\|>)\\s*(?!(?:print|len|push|map|filter|fold|to_string|trim|split|eprint|input|read_int|parse_int)\\b)([A-Za-z_][A-Za-z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.operator.raylang" },
         "2": { "name": "entity.name.function.raylang" }

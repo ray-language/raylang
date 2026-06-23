@@ -693,6 +693,9 @@ impl<'a> Compiler<'a> {
                     "to_string" => Some(OpCode::ToString), // M11.1a
                     "trim" => Some(OpCode::Trim),          // M11.1b
                     "split" => Some(OpCode::Split),        // M11.1b
+                    "eprint" => Some(OpCode::EPrint),          // M11.2a
+                    "__parse_int" => Some(OpCode::ParseInt),   // M11.2a
+                    "__read_line" => Some(OpCode::ReadLine),   // M11.2a
                     _ => None,
                 };
                 if let Some(op) = builtin {

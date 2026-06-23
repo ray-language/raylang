@@ -62,6 +62,28 @@ fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A {
     }
     acc
 }
+
+// --- I/O (M11.2): envoltorios sobre primitivos builtin que devuelven [T] (vacío/único) ---
+// El runtime no sabe de Option: los primitivos devuelven un arreglo de 0 o 1 elementos y aquí,
+// en raylang, se traducen a Option con Some/None corrientes (el patrón de la stdlib, M7.3).
+
+// Parsea un entero; None si el texto no es un entero válido.
+fn parse_int(s: string) -> Option<int> {
+    let r = __parse_int(s);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+// Lee una línea de stdin (sin el salto de línea); None en fin de entrada (EOF).
+fn input() -> Option<string> {
+    let r = __read_line();
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+// Lee una línea y la parsea como entero; None en EOF o si no es un entero.
+fn read_int() -> Option<int> {
+    let s = input()?;
+    parse_int(s)
+}
 "#;
 
 /// Parsea el prelude una vez. El `expect` no puede fallar: el fuente es una constante

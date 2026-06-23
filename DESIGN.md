@@ -1204,28 +1204,85 @@ VM↔intérprete sigue valiendo sin tocar `vm.rs`.
 > llega con los bounds (M9.2) y los trait objects (M9.3), y es ahí donde el runtime entra
 > en juego.
 
-### 18.6 M9.2 — Bounds de genéricos (esbozo; decisión al arrancar)
+### 18.6 M9.2 — Bounds de genéricos (paso de diccionarios)
 
 Un *bound* acota un parámetro de tipo: `fn imprimir_todo<T: Mostrable>(xs: [T])` permite
-llamar `x.mostrar()` dentro del cuerpo, porque `T` **garantiza** implementar `Mostrable`.
-El reto: con **erasure**, `T` no existe en runtime, así que dentro del genérico no se puede
-"elegir la función en tiempo de chequeo" —hay un solo cuerpo compilado para todos los `T`—.
-Las tres salidas clásicas, **a decidir al arrancar M9.2**:
+llamar `x.mostrar()` dentro del cuerpo, porque `T` **garantiza** implementar `Mostrable`. El
+reto es que, con **erasure**, `T` no existe en runtime: hay **un solo cuerpo** compilado
+para todos los `T`, así que dentro del genérico no se puede "elegir la función en tiempo de
+chequeo". Tres salidas clásicas: paso de diccionarios, monomorfización y despacho por tipo
+en runtime (ver historia de la decisión más abajo).
 
-- **Paso de diccionarios** (estilo Haskell): pasar la tabla de métodos del impl como
-  argumento oculto. Conserva erasure; coste: una indirección y plomería en el front-end.
-- **Monomorfización** (estilo Rust): generar una copia del genérico por cada tipo concreto
-  usado. Despacho estático puro; coste: duplicación de código, sigue siendo front-end.
-- **Despacho por tipo en runtime**: el valor lleva su tipo (los `Obj::Struct`/`Enum` ya lo
-  llevan) y la llamada busca el impl por ese tipo. Simple y uniforme; es de facto despacho
-  dinámico, y roza la frontera de "estático por defecto".
+**Decisión (cerrada): paso de diccionarios.** Es la única que conserva las dos invariantes
+del proyecto a la vez —*erasure* (una sola copia) y **runtime intacto**— y además **reusa
+las funciones de primera clase** que ya existen. La idea: lo que un bound aporta es "saber
+cómo llamar los métodos del trait para `T`". Eso es un **diccionario**: el conjunto de
+funciones del impl. raylang ya sabe pasar funciones como valores, así que un bound se baja a
+**parámetros ocultos de tipo función**, uno por cada método de cada trait acotado.
 
-### 18.7 Deferido (más allá de M9.1)
-- **Bounds `T: Trait`** → M9.2 (con su decisión de despacho).
+**Cómo se baja** (todo front-end, *erasure*):
+
+1. **Parámetros ocultos.** Una función con bounds gana, al final de su lista de parámetros,
+   un parámetro función por cada `(parámetro de tipo, trait, método)`. Su nombre lleva `#`
+   (no colisiona con nombres del usuario): `T#Mostrable#mostrar`. Su tipo es la firma del
+   método con `Self → T` (p. ej. `fn(T) -> string`).
+
+   ```rust
+   fn imprimir<T: Mostrable>(x: T) { ... x.mostrar() ... }
+           │
+           ▼  (parámetro oculto añadido en el checker)
+   fn imprimir<T>(x: T, «T#Mostrable#mostrar»: fn(T) -> string) { ... }
+   ```
+
+2. **Llamada de método sobre `T`.** Dentro del cuerpo, `x.mostrar()` con `x: T` acotado se
+   resuelve al **parámetro-diccionario** y se baja como una llamada a ese valor función:
+   `x.mostrar()` → `«T#Mostrable#mostrar»(x)`. Reusa exactamente el lowering de UFCS/M9.1
+   (el destino registrado es el nombre del diccionario en vez de un `Tipo#metodo`).
+
+3. **Sitio de llamada.** Al llamar `imprimir(p)`, la inferencia ya calcula `σ` (M6); con él
+   sabemos a qué tipo resolvió cada parámetro acotado. Por cada `(parámetro, trait, método)`
+   del llamado se **añade un argumento** tras los del usuario:
+   - si `σ[T]` es un **tipo concreto** `C`: se pasa `«C#metodo»` (el método del impl de
+     M9.1). Aquí se **verifica el bound**: si `C` no implementa el trait, error.
+   - si `σ[T]` es un **parámetro de tipo del llamador** `U` (rígido): el llamador **debe**
+     tener el mismo bound `U: Trait`; se **reenvía** su propio parámetro-diccionario. Esto
+     es lo que hace componer a los genéricos acotados entre sí.
+
+   ```rust
+   imprimir(p)            // σ: T = Punto  →  imprimir(p, «Punto#mostrar»)
+   // dentro de fn g<U: Mostrable>(u: U):
+   imprimir(u)            // σ: T = U      →  imprimir(u, «U#Mostrable#mostrar»)  (reenvío)
+   ```
+
+El orden de los parámetros y de los argumentos ocultos es el **mismo** (bounds en orden, y
+por bound los métodos del trait en orden), así casan posicionalmente.
+
+**Runtime: sin cambios.** Los diccionarios son **valores función** que el intérprete y la
+VM ya saben pasar y llamar (M4, primera clase). Cero opcodes, cero cambios en los motores;
+el oráculo VM↔intérprete sigue valiendo. El despacho sigue siendo, en esencia, **estático**:
+*qué* función concreta viaja en cada diccionario se decide en tiempo de chequeo en el sitio
+de llamada; en runtime solo se llama el valor que ya se eligió.
+
+> **Por qué diccionarios y no las otras dos.** *Monomorfización* (una copia del genérico por
+> tipo) daría despacho estático puro, pero **rompe la invariante de una-sola-copia** de los
+> genéricos y obliga a recolectar todas las instanciaciones del programa. *Despacho por tipo
+> en runtime* es el más simple en el front-end, pero es **despacho dinámico de facto** y
+> exige tocar **ambos motores** (tabla global de métodos + un mecanismo de llamada por tipo),
+> rompiendo el "runtime intacto" que se ha mantenido desde M6. El paso de diccionarios es el
+> único que respeta las dos invariantes y, de paso, demuestra que las funciones de primera
+> clase de M4 bastan para construir polimorfismo acotado encima, sin magia nueva.
+
+**Alcance de M9.2 y lo diferido a M9.2b / M9.3:**
+- ✅ Bounds en **funciones** (`fn f<T: A + B>(...)`), con varios bounds por parámetro.
+- ✅ Reenvío de diccionarios entre genéricos acotados.
+- ⏳ **Impls genéricos** (`impl Mostrable for Caja<T>`): un diccionario que a su vez necesita
+  otro diccionario (el de `T`). Se difiere; requiere construir diccionarios *anidados*.
+- ⏳ Bounds en parámetros de tipo de **struct/enum** → más adelante.
+
+### 18.7 Deferido (más allá de M9.2)
 - **Métodos por defecto** en el trait (cuerpo en la firma) → M9.3.
 - **Trait objects / despacho dinámico** (`[Mostrable]`, parámetros `dyn`) → M9.3.
-- **Impls genéricos** (`impl Trait for Caja<T>`) → M9.2 (requieren parámetros de tipo en el
-  impl).
+- **Impls genéricos** (`impl Trait for Caja<T>`) → M9.2b (diccionarios anidados).
 - **Traits con `Self` en posición de argumento** que exija dos receptores del mismo tipo
   (p. ej. `fn igual(self, otro: Self) -> bool`) → soportado por M9.1 (ambos = destino), pero
   sin la garantía de igualdad estructural que daría un trait `Eq` del prelude (futuro).

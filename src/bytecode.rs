@@ -105,6 +105,11 @@ pub enum OpCode {
     // --- Stdlib de string (M11.1) ---
     /// Saca un valor primitivo; empuja su representación textual (string). Builtin `to_string`.
     ToString,
+    /// Saca un string; empuja el mismo sin espacio en blanco en los extremos. Builtin `trim`.
+    Trim,
+    /// Saca el separador y el string; empuja un arreglo de strings con los trozos. Builtin
+    /// `split`. (El arreglo es un objeto del heap → lo traza el GC.)
+    Split,
 
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como

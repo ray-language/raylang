@@ -254,6 +254,23 @@ impl<'a> Vm<'a> {
                     let s = format_value(&self.heap, &self.program.enums, &v);
                     self.push(HeapValue::Str(s));
                 }
+                OpCode::Trim => match self.pop() {
+                    HeapValue::Str(s) => self.push(HeapValue::Str(s.trim().to_string())),
+                    _ => unreachable!("el checker garantiza un string"),
+                },
+                OpCode::Split => {
+                    // El separador está encima del string (orden de los argumentos).
+                    let sep = self.pop();
+                    let s = self.pop();
+                    let (HeapValue::Str(s), HeapValue::Str(sep)) = (s, sep) else {
+                        unreachable!("el checker garantiza dos strings");
+                    };
+                    let parts: Vec<HeapValue> =
+                        s.split(sep.as_str()).map(|p| HeapValue::Str(p.to_string())).collect();
+                    // El arreglo es un objeto del heap; los Str son inline, sin handles que rootear.
+                    let h = self.heap.allocate(Obj::Array(parts));
+                    self.push(HeapValue::Obj(h));
+                }
 
                 // --- Structs (M3.2) ---
                 OpCode::MakeStruct(idx) => {
@@ -1770,6 +1787,33 @@ mod tests {
                 let s = "raylang";
                 print(s.len().to_string());   // 7
                 s.len()
+            }
+        "#);
+    }
+
+    #[test]
+    fn string_trim_split_oraculo() {
+        oracle_program(r#"
+            fn main() -> int {
+                let limpio = trim("  hola  ");
+                print("[" + limpio + "]");        // [hola]
+                let campos = split("a,bb,ccc", ",");
+                print(campos[1]);                  // bb
+                len(campos) + len(limpio)          // 3 + 4 = 7
+            }
+        "#);
+    }
+
+    #[test]
+    fn string_split_estres_gc() {
+        // split asigna un arreglo (objeto del heap). Bajo estrés del GC: si una raíz faltara,
+        // el arreglo recién creado se liberaría y el resultado cambiaría.
+        oracle_stress(r#"
+            fn main() -> int {
+                let partes = "uno:dos:tres:cuatro".trim().split(":");
+                let total = len(partes) + len(partes[0]) + len(partes[3]);
+                print(partes[2]);                  // tres
+                total                              // 4 + 3 + 6 = 13
             }
         "#);
     }

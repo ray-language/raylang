@@ -1819,7 +1819,7 @@ impl Checker {
     /// nivel superior). Lo usa UFCS para dar un error específico cuando un `recv.f(...)`
     /// no es ni campo ni función.
     fn name_is_callable(&self, name: &str) -> bool {
-        matches!(name, "print" | "len" | "push" | "to_string")
+        matches!(name, "print" | "len" | "push" | "to_string" | "trim" | "split")
             || self.lookup(name).is_some()
             || self.functions.contains_key(name)
     }
@@ -1879,6 +1879,34 @@ impl Checker {
                 return Err(self.err(args[1].line, args[1].col, format!("push: el arreglo es de {} pero se empuja {}", elem, vt)));
             }
             return Ok(Type::Unit);
+        }
+
+        // 'trim(s) -> string' (M11.1b): quita el espacio en blanco de los extremos.
+        if name == "trim" {
+            if args.len() != 1 {
+                return Err(self.err(line, col, format!("trim espera 1 argumento, se le pasaron {}", args.len())));
+            }
+            let at = self.check_expr(&args[0])?;
+            if at != Type::String {
+                return Err(self.err(args[0].line, args[0].col, format!("trim espera un string, no {}", at)));
+            }
+            return Ok(Type::String);
+        }
+
+        // 'split(s, sep) -> [string]' (M11.1b): parte s por el separador sep.
+        if name == "split" {
+            if args.len() != 2 {
+                return Err(self.err(line, col, format!("split espera 2 argumentos (string, separador), se le pasaron {}", args.len())));
+            }
+            let st = self.check_expr(&args[0])?;
+            if st != Type::String {
+                return Err(self.err(args[0].line, args[0].col, format!("split espera un string como primer argumento, no {}", st)));
+            }
+            let sep = self.check_expr(&args[1])?;
+            if sep != Type::String {
+                return Err(self.err(args[1].line, args[1].col, format!("split espera un string como separador, no {}", sep)));
+            }
+            return Ok(Type::Array(Box::new(Type::String)));
         }
 
         // Una variable local que guarda una función: llamada indirecta (M4.1).

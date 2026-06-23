@@ -549,7 +549,7 @@ impl<'a> Interpreter<'a> {
             let is_local = self.lookup_opt(name).is_some();
             if !is_local {
                 // Builtins: evalúan sus argumentos y operan directamente.
-                if name == "print" || name == "len" || name == "push" || name == "to_string" {
+                if matches!(name.as_str(), "print" | "len" | "push" | "to_string" | "trim" | "split") {
                     let mut values = Vec::with_capacity(args.len());
                     for arg in args {
                         values.push(self.eval_expr(arg)?);
@@ -609,6 +609,19 @@ impl<'a> Interpreter<'a> {
             }
             // M11.1a: representación textual de un primitivo (la misma que `print`/Display).
             "to_string" => Value::Str(format!("{}", values[0])),
+            // M11.1b: recorta los extremos.
+            "trim" => match &values[0] {
+                Value::Str(s) => Value::Str(s.trim().to_string()),
+                _ => unreachable!("el checker garantiza un string"),
+            },
+            // M11.1b: parte por el separador → arreglo de strings.
+            "split" => match (&values[0], &values[1]) {
+                (Value::Str(s), Value::Str(sep)) => {
+                    let parts: Vec<Value> = s.split(sep.as_str()).map(|p| Value::Str(p.to_string())).collect();
+                    Value::Array(Rc::new(RefCell::new(parts)))
+                }
+                _ => unreachable!("el checker garantiza dos strings"),
+            },
             _ => unreachable!("builtin desconocido"),
         }
     }

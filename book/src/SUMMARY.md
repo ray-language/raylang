@@ -78,3 +78,7 @@
 - [@test y @derive(Eq)](m10/anotaciones.md)
 - [El LSP: diagnósticos en vivo](m10/lsp.md)
 - [Hover e ir-a-definición](m10/hover-definicion.md)
+
+# M11 — Módulos, I/O y stdlib
+
+- [La stdlib de string](m11/strings.md)

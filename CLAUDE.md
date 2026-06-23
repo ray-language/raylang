@@ -233,9 +233,17 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   `hoverProvider`/`definitionProvider`, y `hover_at`/`definition_at` consultan el índice. Sin
   spans: el rango es `[col, col+largo_nombre)`; la def de un `let` apunta al `let` (degradación
   honesta). Introspección pura: runtime y semántica intactos.
-- **Siguiente:** sin hito asignado. Candidatos: M9.2b avanzado (instancias solapadas, bounds en
-  params de struct/enum, `dyn` sobre impls genéricos), o LSP avanzado (completion, rename,
-  find-references). Ver hoja de ruta (DESIGN §2, §19) / IDEAS.md.
+- **M11.1 COMPLETO** (293 tests + integración CLI verdes): **stdlib de string** (DESIGN §20.1).
+  Los strings dejan de ser opacos. **Primer cambio de runtime desde M6.3** → oráculo
+  VM↔intérprete (incl. estrés del GC para `split`). Operaciones como **builtins** (estilo
+  `print`/`len`/`push`) → **UFCS gratis** (`s.len()`, `s.trim().split(",")`). **-a**: `+`
+  concatena (reusa el opcode `Add`; checker permite `string+string`), `len` acepta string (nº de
+  caracteres, extiende `Len`), `to_string(int/float/bool/string)` (opcode nuevo `ToString`, misma
+  repr que `print` → cuadra el oráculo). **-b**: `trim` (opcode `Trim`), `split(s,sep) -> [string]`
+  (opcode `Split`; único que asigna en el heap). Diferido: tipo `char`/indexar string,
+  `parse_int` (→ M11.2), `replace`/`contains`/etc.
+- **Siguiente: M11.2** (I/O: `args`/`input`/`read_int`/`eprint`/`env`/archivos) o **M11.3**
+  (módulos + `pub`). Ver hoja de ruta (DESIGN §2, §20) / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

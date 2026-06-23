@@ -1666,6 +1666,67 @@ sin nada extra —solo añadir el nombre a la lista de invocables—.
 `parse_int`/`int_of_string` (va con I/O, M11.2); `replace`/`contains`/`to_upper`… (aditivos,
 cuando hagan falta). El conjunto mínimo es *concatenar + medir + convertir + recortar + partir*.
 
+### 20.2 M11.2 — I/O y API de runtime
+
+Hoy raylang tiene **un único cable hacia afuera**: `print` (stdout) y el código de salida de `main`.
+M11.2 abre el resto —**leer entrada, parsear, escribir a stderr, argumentos, entorno**— para poder
+escribir apps de verdad (CLI, interactivas). Es lo que IDEAS §10 fijó como "API de runtime".
+
+**Decisión 1 — `main` sigue sin parámetros** (§0/§11, IDEAS §10). El acceso al exterior se hace por
+**builtins**, estilo Go/Python (`args()`, no `main(argc, argv)`): no especializa la firma de `main`
+y la capacidad está en *cualquier* función. Encaja con cómo ya funciona `print`.
+
+**Decisión 2 — la I/O falible devuelve `Option`/`Result`** (el norte de diseño "errores como
+valores, sin null"). Leer entrada puede llegar a EOF; parsear puede fallar; una variable de entorno
+puede no existir. En vez de un valor centinela (`-1`, `""`) o de abortar, esas operaciones devuelven
+`Option<T>` (M6.3). Aquí es donde el prelude de M6.3 **paga**: por fin hay productores naturales de
+`Option`.
+
+**Decisión 3 — primitivos mínimos + envoltorios en el prelude** (el patrón de M7.3). Construir un
+`Option` en la VM exigiría que el runtime conociera el `enum_id`/tags de `Option` (acoplamiento
+feo). Se evita: cada operación falible se parte en (a) un **primitivo builtin** que devuelve un
+**`[T]`** (vacío = "nada", un elemento = "el valor") —una representación que el runtime ya sabe
+construir (como `split`)— y (b) un **envoltorio en el prelude, escrito en raylang**, que lo traduce
+a `Option` con `Option.Some(r[0])`/`Option.None` corrientes. Así el intérprete y la VM **siguen sin
+saber qué es `Option`**: solo devuelven arreglos; el prelude pone la ergonomía.
+
+```raylang
+// en el prelude (raylang), sobre el primitivo __parse_int(s) -> [int]:
+fn parse_int(s: string) -> Option<int> {
+  let r = __parse_int(s);
+  if len(r) == 0 { Option.None } else { Option.Some(r[0]) }
+}
+```
+
+**Cambio de runtime → oráculo.** Como M11.1, esto toca los dos motores (los primitivos son
+opcodes). Lo **determinista** (`parse_int`, `to_string` ida y vuelta) se prueba con el **oráculo**
+VM↔intérprete; lo **interactivo** (stdin, stderr, argv, entorno) con **tests de integración por
+subproceso** (alimentando stdin / capturando stderr / pasando env y args), como `tests/repl_cli.rs`.
+
+**Operaciones (dos sub-pasos):**
+
+- **M11.2a — salida de error + entrada interactiva:**
+  - **`eprint(x)`** — como `print` pero a **stderr**; devuelve unit. Opcode `EPrint`.
+  - **`parse_int(s) -> Option<int>`** — primitivo `__parse_int(s) -> [int]` (opcode `ParseInt`) +
+    envoltorio del prelude. **Determinista → oráculo.**
+  - **`input() -> Option<string>`** — lee una línea de stdin (sin el `\n`); `None` en EOF. Primitivo
+    `__read_line() -> [string]` (opcode `ReadLine`) + envoltorio.
+  - **`read_int() -> Option<int>`** — azúcar del prelude: `input()` y luego `parse_int` (pura
+    composición en raylang, sin primitivo nuevo).
+- **M11.2b — entorno + argumentos:**
+  - **`env(nombre) -> Option<string>`** — variable de entorno; `None` si no existe. Primitivo
+    `__env(s) -> [string]` (opcode `Env`) + envoltorio.
+  - **`args() -> [string]`** — argumentos de la línea de comandos del programa (sin el binario ni
+    las flags de raylang). Opcode `Args`. El runner (`main.rs`) deja los args del programa en un
+    almacén de proceso (`OnceLock`) que ambos motores leen; los clientes sin args (REPL, tests,
+    runner de `@test`) ven `[]`. No cambia la firma de `run`.
+
+**Lo que NO incluye M11.2** (diferido): **I/O de archivos** (`read_file`/`write_file`, que querrían
+`Result<string, string>` y por tanto construir `Result` en runtime —la pieza que el truco del `[T]`
+no cubre bien con dos payloads—) → futuro, cuando se aborde construir `Result` desde un builtin (o
+con un primitivo de dos arreglos). `read_int`/`input` no hacen *prompting* ni *buffering* elaborado;
+es lectura de líneas, lo justo para apps de CLI y para alimentar el camino al self-hosting.
+
 ### 20.3 M11.3 — Módulos y `pub`
 
 Hasta M10 un programa raylang es **un solo archivo**. M11.3 lo escala a varios, con

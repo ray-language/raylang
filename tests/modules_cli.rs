@@ -92,6 +92,45 @@ fn from_import_de_tipo_es_error_diferido() {
 }
 
 #[test]
+fn colision_de_posiciones_entre_modulos() {
+    // Dos llamadas a método en la MISMA (línea, col) de módulos distintos: antes colisionaban en
+    // el lowering por posición de M9 y el programa crasheaba en ambos motores. L3 las desambigua
+    // dando a cada módulo una banda de líneas distinta. Ambas llamadas caen en (línea 5, col 1).
+    let files = &[
+        ("m1", "struct A { v: int }\ntrait T { fn dup(self) -> int; }\nimpl T for A { fn dup(self) -> int { self.v + self.v } }\npub fn run_a() -> int {\nA { v: 10 }.dup()\n}\n"),
+        ("main", "import m1;\nstruct B { w: int }\ntrait U { fn dup(self) -> int; }\nimpl U for B { fn dup(self) -> int { self.w } } fn run_b() -> int {\nB { w: 7 }.dup()\n}\nfn main() -> int { m1.run_a() + run_b() }\n"),
+    ];
+    for vm in [false, true] {
+        let (_, code) = run_modules("ray_colision_pos", "main", files, vm);
+        assert_eq!(code, 27, "20 + 7 = 27 sin colisión de posiciones (vm={vm})");
+    }
+}
+
+#[test]
+fn error_en_modulo_no_entrada_se_atribuye() {
+    // Un error de tipos en un módulo importado debe renderizarse contra ESE archivo, con su línea
+    // LOCAL (2, no la global) y prefijado con `[mates]`.
+    let mut base = std::env::temp_dir();
+    base.push("ray_attr_err");
+    std::fs::create_dir_all(&base).unwrap();
+    for (name, src) in [
+        ("mates", "pub fn doble(n: int) -> int {\n  n + \"x\"\n}\n"),
+        ("app", "import mates;\nfn main() -> int { mates.doble(5) }\n"),
+    ] {
+        let mut p = base.clone();
+        p.push(format!("{name}.ray"));
+        std::fs::File::create(&p).unwrap().write_all(src.as_bytes()).unwrap();
+    }
+    let mut entry = base.clone();
+    entry.push("app.ray");
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang")).arg(&entry).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(0), "el error de tipos debe fallar");
+    assert!(err.contains("[mates]"), "atribuido al módulo mates\n{err}");
+    assert!(err.contains("en 2:"), "con su línea local (2), no la global\n{err}");
+}
+
+#[test]
 fn llamar_funcion_privada_es_error() {
     let files = &[
         ("lib", "pub fn publica() -> int { 1 }\nfn privada() -> int { 2 }\n"),

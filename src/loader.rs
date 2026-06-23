@@ -29,11 +29,37 @@ pub struct LoadError {
     pub message: String,
 }
 
-/// El resultado de cargar: el `Program` fusionado (listo para `check`) y la fuente del
-/// archivo de entrada (para renderizar errores posteriores del checker/runtime).
+/// El resultado de cargar: el `Program` fusionado (listo para `check`) y los **módulos** con su
+/// **banda de líneas** en el espacio de posiciones global, para atribuir y renderizar los errores
+/// posteriores del checker/runtime contra el archivo y la línea **local** correctos.
 pub struct Loaded {
     pub program: Program,
-    pub entry_source: String,
+    /// Ordenados por `start_line` ascendente. La banda del módulo `i` es `[start_line_i, …)` hasta
+    /// el `start_line` del siguiente.
+    pub modules: Vec<LoadedModule>,
+}
+
+/// Un módulo cargado, con su fuente y la línea global donde empieza su banda (L3).
+pub struct LoadedModule {
+    pub name: String,
+    pub source: String,
+    pub start_line: usize,
+}
+
+impl Loaded {
+    /// ¿El programa abarca más de un módulo? (Para decidir si prefijar errores con `[módulo]`.)
+    pub fn multi_modulo(&self) -> bool {
+        self.modules.len() > 1
+    }
+
+    /// Localiza una línea **global** del programa fusionado: devuelve `(módulo, fuente, línea
+    /// local)`. La línea local renumera respecto al inicio de la banda del módulo, así un error
+    /// se renderiza contra el archivo correcto con su número de línea real.
+    pub fn locate(&self, line: usize) -> (&str, &str, usize) {
+        let m = self.modules.iter().rev().find(|m| m.start_line <= line)
+            .unwrap_or_else(|| &self.modules[0]);
+        (&m.name, &m.source, line - m.start_line + 1)
+    }
 }
 
 /// Un módulo cargado: su nombre, si es el de entrada, su AST y su fuente.
@@ -80,29 +106,200 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
     // --- Fase 2: tipos globales únicos (en M11.3a los tipos no se namespacan) ---
     comprobar_tipos_unicos(&modules)?;
 
-    // --- Fase 3: namespacing + resolución de referencias a funciones ---
+    // --- Fase 3: namespacing + resolución + desambiguación de posiciones (L3) ---
     let pub_fns = recolectar_pub_fns(&modules);
     let tipos = recolectar_tipos(&modules); // para diagnosticar `from M import <Tipo>` (diferido)
     let mut fusionado = Program {
         functions: Vec::new(), structs: Vec::new(), enums: Vec::new(),
         traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
     };
-    let entry_source = modules.iter().find(|m| m.is_entry).map(|m| m.source.clone()).unwrap_or_default();
+
+    // El módulo de **entrada** se fusiona primero, en `delta` 0 (sus líneas coinciden con su
+    // archivo): un programa de un solo archivo queda **idéntico** a antes. Cada módulo siguiente
+    // ocupa una **banda de líneas distinta** del espacio de posiciones global → posiciones
+    // globalmente únicas (el lowering por posición de M9 no colisiona entre módulos) y errores
+    // que renderizan contra el archivo y la línea local correctos. `sort_by_key` es estable.
+    modules.sort_by_key(|m| !m.is_entry);
+
+    let mut loaded_modules: Vec<LoadedModule> = Vec::new();
+    let mut next_start = 1usize; // primera línea libre del espacio global
     for mut m in modules {
         let mut resolver = Resolver::new(&m, &pub_fns, &tipos)?;
         resolver.resolve_module(&mut m)?;
+
+        // Banda de este módulo: empieza en `next_start`; sus posiciones se desplazan por `delta`.
+        let start = next_start;
+        shift_program(&mut m.program, start - 1);
+        next_start = start + m.source.lines().count().max(1) + 1; // +1 de holgura entre bandas
+
         let prefix = if m.is_entry { None } else { Some(m.name.clone()) };
         // Renombrar las definiciones de función a su nombre global y fusionar.
-        for mut f in m.program.functions {
+        for mut f in std::mem::take(&mut m.program.functions) {
             f.name = global_fn(&prefix, &f.name);
             fusionado.functions.push(f);
         }
-        fusionado.structs.extend(m.program.structs);
-        fusionado.enums.extend(m.program.enums);
-        fusionado.traits.extend(m.program.traits);
-        fusionado.impls.extend(m.program.impls);
+        fusionado.structs.append(&mut m.program.structs);
+        fusionado.enums.append(&mut m.program.enums);
+        fusionado.traits.append(&mut m.program.traits);
+        fusionado.impls.append(&mut m.program.impls);
+
+        loaded_modules.push(LoadedModule { name: m.name, source: m.source, start_line: start });
     }
-    Ok(Loaded { program: fusionado, entry_source })
+    loaded_modules.sort_by_key(|m| m.start_line);
+    Ok(Loaded { program: fusionado, modules: loaded_modules })
+}
+
+/// Desplaza **todas** las posiciones (línea) de un módulo por `delta` (L3). La columna se conserva.
+/// Aplicar el mismo `delta` a cada nodo preserva las posiciones **relativas** dentro del módulo
+/// (de las que dependen las pre-pasadas del checker, p. ej. que un `Call` comparta posición con su
+/// receptor) y, con bandas disjuntas, vuelve las posiciones **únicas entre módulos**. Con `delta`
+/// 0 es un no-op (el caso de un solo archivo).
+fn shift_program(program: &mut Program, delta: usize) {
+    if delta == 0 {
+        return;
+    }
+    for f in &mut program.functions {
+        shift_function(f, delta);
+    }
+    for s in &mut program.structs {
+        s.line += delta;
+        for a in &mut s.annotations {
+            a.line += delta;
+        }
+    }
+    for e in &mut program.enums {
+        e.line += delta;
+        for a in &mut e.annotations {
+            a.line += delta;
+        }
+        for v in &mut e.variants {
+            v.line += delta;
+        }
+    }
+    for t in &mut program.traits {
+        t.line += delta;
+        for m in &mut t.methods {
+            m.line += delta;
+            for p in &mut m.params {
+                p.line += delta;
+            }
+            if let Some(b) = &mut m.default_body {
+                shift_block(b, delta);
+            }
+        }
+    }
+    for imp in &mut program.impls {
+        imp.line += delta;
+        for m in &mut imp.methods {
+            shift_function(m, delta);
+        }
+    }
+}
+
+fn shift_function(f: &mut Function, delta: usize) {
+    f.line += delta;
+    for a in &mut f.annotations {
+        a.line += delta;
+    }
+    for p in &mut f.params {
+        p.line += delta;
+    }
+    shift_block(&mut f.body, delta);
+}
+
+fn shift_block(b: &mut Block, delta: usize) {
+    b.line += delta;
+    for s in &mut b.statements {
+        shift_stmt(s, delta);
+    }
+    if let Some(t) = &mut b.tail {
+        shift_expr(t, delta);
+    }
+}
+
+fn shift_stmt(s: &mut Stmt, delta: usize) {
+    s.line += delta;
+    match &mut s.kind {
+        StmtKind::Let { value, .. } => shift_expr(value, delta),
+        StmtKind::Assign { target, value } => {
+            shift_expr(target, delta);
+            shift_expr(value, delta);
+        }
+        StmtKind::Return { value } => {
+            if let Some(v) = value {
+                shift_expr(v, delta);
+            }
+        }
+        StmtKind::Expr(e) => shift_expr(e, delta),
+    }
+}
+
+fn shift_expr(e: &mut Expr, delta: usize) {
+    e.line += delta;
+    match &mut e.kind {
+        ExprKind::Unary { expr, .. } => shift_expr(expr, delta),
+        ExprKind::Binary { left, right, .. } => {
+            shift_expr(left, delta);
+            shift_expr(right, delta);
+        }
+        ExprKind::Call { callee, args } => {
+            shift_expr(callee, delta);
+            for a in args {
+                shift_expr(a, delta);
+            }
+        }
+        ExprKind::ArrayLit(elems) => {
+            for x in elems {
+                shift_expr(x, delta);
+            }
+        }
+        ExprKind::Index { array, index } => {
+            shift_expr(array, delta);
+            shift_expr(index, delta);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, x) in fields {
+                shift_expr(x, delta);
+            }
+        }
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                shift_expr(a, delta);
+            }
+        }
+        ExprKind::Field { object, .. } => shift_expr(object, delta),
+        ExprKind::Func(fe) => shift_fn_expr(fe, delta),
+        ExprKind::Match { scrutinee, arms } => {
+            shift_expr(scrutinee, delta);
+            for arm in arms {
+                arm.line += delta;
+                arm.pattern.line += delta;
+                shift_expr(&mut arm.body, delta);
+            }
+        }
+        ExprKind::Try(inner) => shift_expr(inner, delta),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            shift_expr(cond, delta);
+            shift_block(then_branch, delta);
+            if let Some(x) = else_branch {
+                shift_expr(x, delta);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            shift_expr(cond, delta);
+            shift_block(body, delta);
+        }
+        ExprKind::Block(b) => shift_block(b, delta),
+        _ => {}
+    }
+}
+
+fn shift_fn_expr(fe: &mut FnExpr, delta: usize) {
+    fe.line += delta;
+    for p in &mut fe.params {
+        p.line += delta;
+    }
+    shift_block(&mut fe.body, delta);
 }
 
 /// El nombre de módulo de una ruta: su *stem* (`dir/math.ray` → `math`).

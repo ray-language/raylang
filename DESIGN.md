@@ -1800,9 +1800,20 @@ una **variable local** `math` en ámbito → campo/UFCS sobre ese valor; si `mat
 importado** → ruta calificada `math::doble`; si no, sigue la resolución actual (campo de struct →
 método → función libre). Es el mismo estilo de desambiguación por contexto que ya usa el `.`.
 
+**Desambiguación de posiciones entre módulos (L3).** El lowering de M9 (UFCS, diccionarios, `dyn`)
+indexa sus tablas por la posición `(línea, col)` del nodo. Sobre el programa **fusionado**, dos
+sitios de módulos distintos en la misma `(línea, col)` **colisionarían** (bug real: crash en ambos
+motores). El loader lo evita dando a cada módulo una **banda de líneas disjunta**: desplaza todas
+las posiciones del módulo por un `delta` (el de entrada en `delta` 0 → un solo archivo es idéntico
+a antes; cada módulo siguiente en una banda superior). Así las posiciones son **globalmente únicas**
+y, de paso, un error del checker/runtime se **renderiza contra su archivo** con su **línea local**,
+prefijado `[módulo]`. La columna y las posiciones *relativas* dentro de un módulo se conservan (de
+ellas dependen las pre-pasadas, p. ej. que un `Call` comparta posición con su receptor).
+
 **Alcance y diferido:**
 - ✅ -a: `import M;` + `M.f(...)` (funciones `pub`), visibilidad, multi-archivo, ciclos seguros.
 - ✅ -b: `from M import a [as b]{, …}` (funciones `pub` al ámbito, con alias).
+- ✅ L3: desambiguación de posiciones entre módulos (sin colisiones) + errores atribuidos al módulo.
 - ⏳ **Importar tipos entre módulos** (`from M import Punto [as P]`, `M.Punto` como anotación,
   construcción de enum calificada `M.Color.Rojo`) → diferido: requiere **namespacar tipos** y
   reescribir las posiciones de tipo/patrón. Hoy los tipos son globales-únicos, así que un tipo de

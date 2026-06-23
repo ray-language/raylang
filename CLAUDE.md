@@ -309,8 +309,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   diferencia de Eq). Formato `Nombre { c: v, … }` / `Nombre.Variante(v0, …)`. Difiere arrays/
   funciones (error claro) y genéricos. Inyección de traits del prelude pasó a **per-trait** (Show
   se inyecta aunque el usuario redefina Eq). Front-end puro (M9 baja el impl); runtime intacto.
-- **Siguiente** (track de limpieza): **L3** errores multi-archivo en el loader. Luego, M11 cerrado
-  salvo diferidos. Pendientes: **I/O de archivos** (`read_file`/`write_file`
+- **Limpieza post-M11 L3 COMPLETO** (305 tests + integración verdes): **desambiguación de posiciones
+  entre módulos + errores multi-archivo** (`src/loader.rs`). Descubierto un **bug real**: el lowering
+  por posición de M9 (UFCS/dicts/`dyn`) indexa por `(línea,col)`; sobre el programa fusionado, dos
+  sitios de módulos distintos en la misma `(línea,col)` **colisionaban → crash en ambos motores**.
+  Fix: el loader da a cada módulo una **banda de líneas disjunta** (desplaza todas sus posiciones por
+  un `delta`; el de entrada en `delta` 0 → un solo archivo idéntico a antes). Posiciones globalmente
+  únicas. `shift_program`/`shift_*` recorren todo el AST del módulo. `Loaded` pasa a `{ program,
+  modules: Vec<LoadedModule{name,source,start_line}> }`; `main.rs` localiza un error global por su
+  banda y lo renderiza contra **su archivo** con la **línea local**, prefijado `[módulo]` (solo si
+  hay >1 módulo; archivo único sin cambios). Runtime intacto (las posiciones se borran al ejecutar).
+- **Siguiente: track de limpieza cerrado** (L1+L2+L3). M11 cerrado salvo diferidos. Pendientes:
+  **I/O de archivos** (`read_file`/`write_file`
   con `Result` — el truco del `[T]` no cubre dos payloads); **cruzar tipos entre módulos**
   (`from M import Punto`, `M.Punto`, `M.Color.Rojo` — namespacar tipos). Capstone: **self-hosting**
   (ya habilitado: módulos + I/O). Ver hoja de ruta (DESIGN §2, §20) / IDEAS.md.
@@ -333,6 +343,9 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   `(línea, col, nombre)` y se baja después con `lower_ufcs`. La clave lleva el **nombre**
   porque el `Call` y su receptor comparten `(línea, col)` (el parser arranca el `Call`
   en el callee), y la posición sola los confunde en cadenas `a.f().g()`.
+  - **Multi-módulo (L3)**: estas tablas por posición operan sobre el programa **fusionado**; dos
+    módulos en la misma `(línea, col)` colisionarían. El **loader** lo evita dando a cada módulo una
+    **banda de líneas disjunta** (`shift_program`), así las posiciones son globalmente únicas.
 - **Métodos de trait (M9.1)** reusan ese mismo mecanismo: `recv.m(args)` resuelve en
   `check_call` con prioridad **campo → método de trait → función libre**, y comparte el
   lowering. Por eso `ufcs_sites` es un **mapa** sitio→**nombre destino**: para UFCS de

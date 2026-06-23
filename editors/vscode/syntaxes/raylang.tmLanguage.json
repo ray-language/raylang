@@ -87,7 +87,7 @@
     },
     "storage": {
       "name": "storage.type.raylang",
-      "match": "\\b(let|var|fn|struct|enum|trait|impl)\\b"
+      "match": "\\b(let|var|fn|struct|enum|trait|impl|dyn)\\b"
     },
     "builtins": {
       "name": "support.function.builtin.raylang",

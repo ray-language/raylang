@@ -12,7 +12,7 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 | Categoría | Ejemplos | Scope TextMate |
 |-----------|----------|----------------|
 | Palabras clave de control | `if else while return match` | `keyword.control` |
-| Declaración / storage | `let var fn struct enum trait impl` | `storage.type` |
+| Declaración / storage | `let var fn struct enum trait impl dyn` | `storage.type` |
 | Receptor / tipo propio | `self`, `Self` | `variable.language.self` |
 | Tipos primitivos | `int float bool string` | `support.type.primitive` |
 | Tipos de usuario | `Punto` (struct), `Figura` (enum) | `entity.name.type` |
@@ -79,6 +79,12 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 > necesitaron reglas nuevas: el `:` y el `+` caen en operadores y los nombres de trait
 > (mayúscula) en tipos de usuario. El paso de diccionarios es una reescritura del checker,
 > invisible al coloreado.
+>
+> **M9.3 (defectos y trait objects).** Los **métodos por defecto** (una firma de trait con
+> cuerpo) caen en las reglas de función ya existentes. Para los **trait objects** se añade la
+> palabra clave **`dyn`** (`dyn Figura`) a `storage.type`; el nombre del trait que la sigue
+> (mayúscula) ya se colorea como tipo. El despacho dinámico se realiza como un struct
+> sintetizado en el checker, invisible al coloreado.
 
 > Nota: la gramática TextMate (`syntaxes/raylang.tmLanguage.json`) es una
 > **reescritura en regex** de las reglas léxicas de `DESIGN.md` §3. Es independiente
@@ -93,7 +99,7 @@ de extensiones de VSCode y recarga.
 
 ```sh
 # macOS / Linux
-ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.7.0
+ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.8.0
 
 # Luego: recarga VSCode (Cmd/Ctrl+Shift+P → "Developer: Reload Window")
 ```
@@ -108,7 +114,7 @@ Para generar un `.vsix` instalable o publicarlo:
 
 ```sh
 npm install -g @vscode/vsce
-vsce package        # genera raylang-0.7.0.vsix
+vsce package        # genera raylang-0.8.0.vsix
 # Instalar el .vsix: Cmd/Ctrl+Shift+P → "Extensions: Install from VSIX..."
 ```
 

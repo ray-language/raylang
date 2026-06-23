@@ -348,6 +348,7 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "match" => TokenKind::Match,
         "trait" => TokenKind::Trait,
         "impl" => TokenKind::Impl,
+        "dyn" => TokenKind::Dyn,
         "int" => TokenKind::IntType,
         "float" => TokenKind::FloatType,
         "bool" => TokenKind::BoolType,

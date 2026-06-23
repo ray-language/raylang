@@ -36,6 +36,7 @@ pub enum TokenKind {
     Match, // M5
     Trait, // M9
     Impl,  // M9
+    Dyn,   // M9.3b (dyn Trait: trait object)
 
     // --- Palabras clave de tipo ---
     IntType,    // int

@@ -166,8 +166,19 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   defecto, `Self`→destino) en el paso 0c de `check`; `register_traits_impls` relaja la cobertura
   (falta solo si no hay defecto) y registra los defects en la tabla de métodos. Compone con
   bounds (el defecto está en la lista del trait). Runtime intacto.
-- **Siguiente: M9.3b** (trait objects / despacho dinámico — toca el runtime, con su decisión de
-  representación), o **M9.2b** (impls genéricos). Ver hoja de ruta (DESIGN §2, §18) / IDEAS.md.
+- **M9.3b COMPLETO** (260 tests + integración CLI verdes): **trait objects** (`dyn Trait`,
+  despacho dinámico). `Type::Dyn(String)` (keyword `dyn`). **Realización: struct sintetizado**
+  `__dyn_Trait { data, métodos... }` (el fat value/vtable) → reusa structs + funciones de
+  primera clase, **runtime intacto** (cero opcodes, cero GC nuevo). La **coerción** concreto→
+  objeto (en `check_expr_expected`, registrada en `dyn_coercions`) baja a construir el struct;
+  el **despacho** `obj.m(args)` (en `check_call`, `dispatch_dyn_method`, registrado en
+  `dyn_dispatch`) baja a `{ let r = obj; (r.m)(r.data, args) }` (evita doble evaluación).
+  *Object safety*: un método que usa `Self` fuera del receptor no es invocable sobre el objeto.
+  Lowering en `lower_dyn`. **Gotcha resuelto**: los cuerpos de métodos por defecto (M9.3a) se
+  **clonan** por impl; sus posiciones se **renumeran** (`freshen_positions`) para que las
+  bajadas por posición no colisionen entre clones.
+- **M9 COMPLETO.** **Siguiente: M10** (tooling: LSP + anotaciones) o **M9.2b** (impls genéricos)
+  / pendientes de M9. Ver hoja de ruta (DESIGN §2, §18) / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

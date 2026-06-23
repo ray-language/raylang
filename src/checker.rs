@@ -102,6 +102,9 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     let trait_sigs: HashMap<String, Vec<MethodSig>> = program.traits.iter()
         .map(|t| (t.name.clone(), t.methods.clone()))
         .collect();
+    // Contador para renumerar las posiciones de cada cuerpo por defecto clonado (M9.3a):
+    // cada clon recibe posiciones únicas para que las bajadas por posición no colisionen.
+    let mut fresh_pos = 0usize;
     for imp in &program.impls {
         let key = match type_key_of(&imp.target) {
             Some(k) => k,
@@ -134,13 +137,16 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
             let params = tm.params.iter()
                 .map(|p| Param { ty: subst_self(&p.ty, &imp.target), ..p.clone() })
                 .collect();
+            // Clonar el cuerpo del defecto y renumerar sus posiciones (únicas por impl).
+            let mut body = body.clone();
+            freshen_positions(&mut body, &mut fresh_pos);
             program.functions.push(Function {
                 name: mangle(&key, &tm.name),
                 type_params: Vec::new(),
                 bounds: Vec::new(),
                 params,
                 return_type: subst_self(&tm.return_type, &imp.target),
-                body: body.clone(),
+                body,
                 line: tm.line,
                 col: tm.col,
             });
@@ -164,6 +170,9 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // el runtime no cambia.
     append_dict_params(program);
     lower_dict_calls(program, &checker.dict_calls);
+    // Paso 6 (M9.3b): bajar los trait objects — coerciones concreto→objeto a la
+    // construcción del struct sintetizado, y los despachos dinámicos a `(r.m)(r.data, ...)`.
+    lower_dyn(program, &checker.dyn_coercions, &checker.dyn_dispatch);
     Ok(())
 }
 
@@ -226,6 +235,13 @@ struct Checker {
     /// `(línea, col, nombre)` → nombres de los valores función (diccionarios) a pasar como
     /// argumentos extra, en orden. `lower_dict_calls` los añade tras verificar.
     dict_calls: DictSites,
+    /// Coerciones concreto→`dyn Trait` (M9.3b): `(línea, col)` de la expresión → `(trait,
+    /// clave_del_tipo_concreto)`. `lower_dyn` envuelve esa expresión en el struct
+    /// sintetizado del trait object.
+    dyn_coercions: HashMap<(usize, usize), (String, String)>,
+    /// Sitios de **despacho dinámico** (M9.3b): `(línea, col, método)` de un `obj.m(args)`
+    /// con `obj: dyn Trait`. `lower_dyn` los baja al bloque `{ let r = obj; (r.m)(r.data, ...) }`.
+    dyn_dispatch: HashSet<(usize, usize, String)>,
 }
 
 impl Checker {
@@ -248,6 +264,8 @@ impl Checker {
             current_self: None,
             current_fn_bounds: Vec::new(),
             dict_calls: HashMap::new(),
+            dyn_coercions: HashMap::new(),
+            dyn_dispatch: HashSet::new(),
         }
     }
 
@@ -781,6 +799,14 @@ impl Checker {
             // reclasificado al tipo implementador. Si llega `SelfType`, es un uso fuera
             // de lugar (M9).
             Type::SelfType => Err(self.err(line, col, "'Self' solo es válido dentro de un trait o impl".into())),
+            // `dyn Trait` (M9.3b): el trait debe existir.
+            Type::Dyn(trait_name) => {
+                if self.traits.contains_key(trait_name) {
+                    Ok(())
+                } else {
+                    Err(self.err(line, col, format!("trait '{}' no declarado (en 'dyn {}')", trait_name, trait_name)))
+                }
+            }
             Type::Fn(params, ret) => {
                 for p in params {
                     self.ensure_type(p, line, col)?;
@@ -1133,6 +1159,16 @@ impl Checker {
     /// propagan (`if`/`match`/bloque)—; el resto delega en `check_expr` (que lo
     /// ignora). El llamador compara igualmente el resultado con lo que necesita.
     fn check_expr_expected(&mut self, expr: &Expr, expected: &Type) -> Result<Type, TypeError> {
+        // M9.3b: si se espera un `dyn Trait`, un valor **concreto** que implemente el trait
+        // se **coerciona** al trait object. Las formas que propagan el tipo esperado
+        // (`if`/`match`/`bloque`) NO se interceptan aquí: dejan que la coerción ocurra en
+        // sus hojas (cada rama por separado), igual que el resto del chequeo bidireccional.
+        if let Type::Dyn(trait_name) = expected {
+            let propaga = matches!(expr.kind, ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::Block(_));
+            if !propaga {
+                return self.coerce_to_dyn(expr, &trait_name.clone(), expr.line, expr.col);
+            }
+        }
         match &expr.kind {
             ExprKind::StructLit { name, fields } => {
                 self.check_struct_lit(name, fields, Some(expected), expr.line, expr.col)
@@ -1189,6 +1225,28 @@ impl Checker {
             // El tipo esperado no aporta a las demás formas: chequeo normal.
             _ => self.check_expr(expr),
         }
+    }
+
+    /// Coerciona una expresión a `dyn Trait` (M9.3b): un valor concreto que implemente el
+    /// trait se envuelve (en el lowering) en el struct sintetizado del trait object. Si ya
+    /// es un `dyn Trait` del mismo trait, no hay coerción. Registra el sitio y devuelve
+    /// `dyn Trait` como tipo.
+    fn coerce_to_dyn(&mut self, expr: &Expr, trait_name: &str, line: usize, col: usize) -> Result<Type, TypeError> {
+        let actual = self.check_expr(expr)?;
+        // Ya es el mismo trait object: nada que coercionar.
+        if matches!(&actual, Type::Dyn(t) if t == trait_name) {
+            return Ok(actual);
+        }
+        let key = type_key_of(&actual).ok_or_else(|| self.err(line, col, format!(
+            "no se puede convertir {} en 'dyn {}'", actual, trait_name
+        )))?;
+        if !self.impl_traits.contains(&(key.clone(), trait_name.to_string())) {
+            return Err(self.err(line, col, format!(
+                "{} no implementa '{}': no puede usarse como 'dyn {}'", actual, trait_name, trait_name
+            )));
+        }
+        self.dyn_coercions.insert((line, col), (trait_name.to_string(), key));
+        Ok(Type::Dyn(trait_name.to_string()))
     }
 
     /// Como `check_block`, pero el valor final (la *tail*) se verifica con un tipo
@@ -1440,6 +1498,11 @@ impl Checker {
             // baja a una llamada ordinaria tras verificar (`lower_ufcs`).
             ExprKind::Field { object, name } => {
                 let recv_ty = self.check_expr(object)?;
+                // M9.3b: receptor `dyn Trait` → despacho dinámico por la vtable del objeto.
+                if let Type::Dyn(trait_name) = &recv_ty {
+                    let trait_name = trait_name.clone();
+                    return self.dispatch_dyn_method(&trait_name, name, args, line, col);
+                }
                 if let Type::Struct(sname, targs) = &recv_ty {
                     if let Some(fty) = self.struct_field_type(sname, targs, name) {
                         return self.call_type(fty, args, line, col);
@@ -1720,6 +1783,48 @@ impl Checker {
         Ok(Some((dict_param_name(tp, trait_name, method), ret)))
     }
 
+    /// Despacha `obj.metodo(args)` con `obj: dyn Trait` (M9.3b): el método se resuelve en
+    /// runtime por la vtable del objeto. Verifica que el trait declara el método, que es
+    /// *object-safe* (no usa `Self` fuera del receptor) y que los argumentos casan. Registra
+    /// el sitio para que `lower_dyn` lo baje al bloque `{ let r = obj; (r.m)(r.data, ...) }`.
+    fn dispatch_dyn_method(&mut self, trait_name: &str, method: &str, args: &[Expr], line: usize, col: usize)
+        -> Result<Type, TypeError>
+    {
+        let sig = match self.traits.get(trait_name).and_then(|ms| ms.iter().find(|m| m.name == method)) {
+            Some(m) => m.clone(),
+            None => return Err(self.err(line, col, format!(
+                "el trait '{}' no declara un método '{}'", trait_name, method
+            ))),
+        };
+        // *Object safety*: la vtable no puede llevar métodos que dependan del tipo concreto
+        // borrado. Si `Self` aparece fuera del receptor (en un parámetro o en el retorno),
+        // el método no es invocable sobre un trait object.
+        let usa_self = sig.params.iter().skip(1).any(|p| type_uses_self(&p.ty)) || type_uses_self(&sig.return_type);
+        if usa_self {
+            return Err(self.err(line, col, format!(
+                "el método '{}' usa 'Self': no es invocable sobre 'dyn {}'", method, trait_name
+            )));
+        }
+        // Argumentos (sin el receptor, que es el propio objeto).
+        let expected: Vec<Type> = sig.params.iter().skip(1).map(|p| self.resolve_type(&p.ty)).collect();
+        if args.len() != expected.len() {
+            return Err(self.err(line, col, format!(
+                "el método '{}' espera {} argumento(s) (sin contar el receptor), se le pasaron {}",
+                method, expected.len(), args.len()
+            )));
+        }
+        for (i, (arg, exp)) in args.iter().zip(&expected).enumerate() {
+            let at = self.check_expr_expected(arg, exp)?;
+            if at != *exp {
+                return Err(self.err(arg.line, arg.col, format!(
+                    "argumento {} del método '{}': se esperaba {}, se pasó {}", i + 1, method, exp, at
+                )));
+            }
+        }
+        self.dyn_dispatch.insert((line, col, method.to_string()));
+        Ok(self.resolve_type(&sig.return_type))
+    }
+
     /// Registra los diccionarios a pasar en un sitio de llamada a una función con bounds
     /// (M9.2). Por cada `(parámetro, trait)` y cada método del trait, elige el diccionario
     /// según a qué tipo resolvió el parámetro (`σ`): el método manglado de un impl concreto,
@@ -1809,8 +1914,8 @@ fn is_comparable(t: &Type) -> bool {
         // Un parámetro de tipo (M6) es opaco: podría ser una función o un enum, así
         // que no se puede comparar dentro de código genérico.
         // `Self` (M9) no debería llegar aquí (se sustituye por el tipo concreto), pero
-        // como tipo abstracto no es comparable.
-        Type::Unit | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_) | Type::SelfType => false,
+        // como tipo abstracto no es comparable. Un trait object (M9.3b) tampoco.
+        Type::Unit | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_) | Type::SelfType | Type::Dyn(_) => false,
     }
 }
 
@@ -2121,6 +2226,118 @@ fn method_fn_type(m: &MethodSig, self_ty: &Type) -> Type {
     Type::Fn(params, Box::new(subst_self(&m.return_type, self_ty)))
 }
 
+/// Renumera las posiciones `(línea, col)` de todos los nodos de un bloque a un rango
+/// **sintético único** (M9.3a). Un cuerpo de método **por defecto** se clona una vez por
+/// impl que lo hereda; como las bajadas (UFCS, despacho, diccionarios, coerciones) se
+/// indexan por posición, dos clones con las posiciones originales del trait colisionarían
+/// y se resolverían al mismo destino. Darle a cada clon posiciones únicas (y mayores que
+/// cualquier línea real, base 1_000_000) las separa. Las posiciones sintéticas degradan el
+/// contexto de fuente de un eventual error dentro del defecto (raro), no la corrección.
+fn freshen_positions(block: &mut Block, next: &mut usize) {
+    freshen_block(block, next);
+}
+
+fn freshen_block(block: &mut Block, next: &mut usize) {
+    for stmt in &mut block.statements {
+        *next += 1;
+        stmt.line = 1_000_000 + *next;
+        stmt.col = 1;
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } => freshen_expr(value, next),
+            StmtKind::Assign { target, value } => {
+                freshen_expr(target, next);
+                freshen_expr(value, next);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    freshen_expr(v, next);
+                }
+            }
+            StmtKind::Expr(e) => freshen_expr(e, next),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        freshen_expr(t, next);
+    }
+    *next += 1;
+    block.line = 1_000_000 + *next;
+    block.col = 1;
+}
+
+fn freshen_expr(expr: &mut Expr, next: &mut usize) {
+    *next += 1;
+    expr.line = 1_000_000 + *next;
+    expr.col = 1;
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } => freshen_expr(inner, next),
+        ExprKind::Binary { left, right, .. } => {
+            freshen_expr(left, next);
+            freshen_expr(right, next);
+        }
+        ExprKind::Call { callee, args } => {
+            freshen_expr(callee, next);
+            for a in args {
+                freshen_expr(a, next);
+            }
+        }
+        ExprKind::ArrayLit(elems) => {
+            for e in elems {
+                freshen_expr(e, next);
+            }
+        }
+        ExprKind::Index { array, index } => {
+            freshen_expr(array, next);
+            freshen_expr(index, next);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                freshen_expr(e, next);
+            }
+        }
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                freshen_expr(a, next);
+            }
+        }
+        ExprKind::Field { object, .. } => freshen_expr(object, next),
+        ExprKind::Func(fe) => freshen_block(&mut fe.body, next),
+        ExprKind::Match { scrutinee, arms } => {
+            freshen_expr(scrutinee, next);
+            for arm in arms {
+                freshen_expr(&mut arm.body, next);
+            }
+        }
+        ExprKind::Try(inner) => freshen_expr(inner, next),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            freshen_expr(cond, next);
+            freshen_block(then_branch, next);
+            if let Some(e) = else_branch {
+                freshen_expr(e, next);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            freshen_expr(cond, next);
+            freshen_block(body, next);
+        }
+        ExprKind::Block(b) => freshen_block(b, next),
+        _ => {}
+    }
+}
+
+/// ¿El tipo menciona `Self` (M9.3b)? Cubre `SelfType` y `Struct("Self")`, recursivamente.
+/// Lo usa la *object safety*: un método cuya firma (fuera del receptor) usa `Self` no es
+/// invocable sobre un trait object.
+fn type_uses_self(ty: &Type) -> bool {
+    match ty {
+        Type::SelfType => true,
+        Type::Struct(n, _) if n == "Self" => true,
+        Type::Array(e) => type_uses_self(e),
+        Type::Fn(ps, r) => ps.iter().any(type_uses_self) || type_uses_self(r),
+        Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(type_uses_self),
+        _ => false,
+    }
+}
+
 /// Sustituye `Self` por el tipo implementador (M9). Cubre las dos formas con que `Self`
 /// llega del parser: `Type::SelfType` (el receptor `self`) y `Struct("Self")` (en una
 /// anotación como `-> Self`).
@@ -2419,6 +2636,183 @@ fn lower_dict_calls_expr(expr: &mut Expr, sites: &DictSites) {
         for d in dicts {
             args.push(Expr { kind: ExprKind::Ident(d), line, col });
         }
+    }
+}
+
+// =====================================================================
+// Bajada de trait objects (M9.3b)
+// =====================================================================
+//
+// Un `dyn Trait` se realiza como un **struct sintetizado** `__dyn_Trait { data, métodos... }`
+// (el fat value / vtable). La **coerción** concreto→objeto construye ese struct; el
+// **despacho** `obj.m(args)` baja a `{ let r = obj; (r.m)(r.data, args) }`. Reusa structs +
+// funciones de primera clase: el intérprete y la VM no saben de trait objects.
+
+type CoercionMap = HashMap<(usize, usize), (String, String)>;
+type DispatchSet = HashSet<(usize, usize, String)>;
+
+/// Nombre del struct sintetizado que realiza `dyn Trait` en runtime.
+fn dyn_struct_name(trait_name: &str) -> String {
+    format!("__dyn_{}", trait_name)
+}
+
+fn ident_expr(name: &str, line: usize, col: usize) -> Expr {
+    Expr { kind: ExprKind::Ident(name.to_string()), line, col }
+}
+
+fn lower_dyn(program: &mut Program, coercions: &CoercionMap, dispatch: &DispatchSet) {
+    if coercions.is_empty() && dispatch.is_empty() {
+        return;
+    }
+    // Mapa trait → nombres de métodos (en orden), para construir vtables.
+    let trait_methods: HashMap<String, Vec<String>> = program.traits.iter()
+        .map(|t| (t.name.clone(), t.methods.iter().map(|m| m.name.clone()).collect()))
+        .collect();
+    // Structs sintetizados: uno por trait, con `data` + un campo función por método (la
+    // vtable). Los tipos de campo son irrelevantes en runtime (erasure); el motor solo usa
+    // los nombres y el orden.
+    for t in &program.traits {
+        let mut fields = vec![("data".to_string(), Type::Unit)];
+        for m in &t.methods {
+            fields.push((m.name.clone(), Type::Unit));
+        }
+        program.structs.push(StructDef {
+            name: dyn_struct_name(&t.name),
+            type_params: Vec::new(),
+            fields,
+            line: t.line,
+            col: t.col,
+        });
+    }
+    let mut counter = 0usize;
+    for f in &mut program.functions {
+        lower_dyn_block(&mut f.body, coercions, dispatch, &trait_methods, &mut counter);
+    }
+}
+
+fn lower_dyn_block(block: &mut Block, coercions: &CoercionMap, dispatch: &DispatchSet, tm: &HashMap<String, Vec<String>>, counter: &mut usize) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } => lower_dyn_expr(value, coercions, dispatch, tm, counter),
+            StmtKind::Assign { target, value } => {
+                lower_dyn_expr(target, coercions, dispatch, tm, counter);
+                lower_dyn_expr(value, coercions, dispatch, tm, counter);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    lower_dyn_expr(v, coercions, dispatch, tm, counter);
+                }
+            }
+            StmtKind::Expr(e) => lower_dyn_expr(e, coercions, dispatch, tm, counter),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        lower_dyn_expr(t, coercions, dispatch, tm, counter);
+    }
+}
+
+fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchSet, tm: &HashMap<String, Vec<String>>, counter: &mut usize) {
+    // Recorrer los sub-nodos primero (post-orden): así los despachos/coerciones anidados
+    // (en el receptor y los argumentos) ya están bajados cuando reescribimos este nodo.
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } => lower_dyn_expr(inner, coercions, dispatch, tm, counter),
+        ExprKind::Binary { left, right, .. } => {
+            lower_dyn_expr(left, coercions, dispatch, tm, counter);
+            lower_dyn_expr(right, coercions, dispatch, tm, counter);
+        }
+        ExprKind::Call { callee, args } => {
+            lower_dyn_expr(callee, coercions, dispatch, tm, counter);
+            for a in args.iter_mut() {
+                lower_dyn_expr(a, coercions, dispatch, tm, counter);
+            }
+        }
+        ExprKind::ArrayLit(elems) => {
+            for e in elems {
+                lower_dyn_expr(e, coercions, dispatch, tm, counter);
+            }
+        }
+        ExprKind::Index { array, index } => {
+            lower_dyn_expr(array, coercions, dispatch, tm, counter);
+            lower_dyn_expr(index, coercions, dispatch, tm, counter);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                lower_dyn_expr(e, coercions, dispatch, tm, counter);
+            }
+        }
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                lower_dyn_expr(a, coercions, dispatch, tm, counter);
+            }
+        }
+        ExprKind::Field { object, .. } => lower_dyn_expr(object, coercions, dispatch, tm, counter),
+        ExprKind::Func(fe) => lower_dyn_block(&mut fe.body, coercions, dispatch, tm, counter),
+        ExprKind::Match { scrutinee, arms } => {
+            lower_dyn_expr(scrutinee, coercions, dispatch, tm, counter);
+            for arm in arms {
+                lower_dyn_expr(&mut arm.body, coercions, dispatch, tm, counter);
+            }
+        }
+        ExprKind::Try(inner) => lower_dyn_expr(inner, coercions, dispatch, tm, counter),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            lower_dyn_expr(cond, coercions, dispatch, tm, counter);
+            lower_dyn_block(then_branch, coercions, dispatch, tm, counter);
+            if let Some(e) = else_branch {
+                lower_dyn_expr(e, coercions, dispatch, tm, counter);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            lower_dyn_expr(cond, coercions, dispatch, tm, counter);
+            lower_dyn_block(body, coercions, dispatch, tm, counter);
+        }
+        ExprKind::Block(b) => lower_dyn_block(b, coercions, dispatch, tm, counter),
+        _ => {}
+    }
+
+    let (line, col) = (expr.line, expr.col);
+
+    // Despacho dinámico: `obj.m(args)` → `{ let r = obj; (r.m)(r.data, args) }`.
+    let dispatch_method = match &expr.kind {
+        ExprKind::Call { callee, .. } => match &callee.kind {
+            ExprKind::Field { name, .. } if dispatch.contains(&(line, col, name.clone())) => Some(name.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    if dispatch_method.is_some() {
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+        let ExprKind::Call { callee, mut args } = taken else { unreachable!("sitio de despacho es un Call") };
+        let ExprKind::Field { object, name } = callee.kind else { unreachable!("el callee de un despacho es un Field") };
+        let tmp = format!("__dynrecv#{}", *counter);
+        *counter += 1;
+        let let_stmt = Stmt {
+            kind: StmtKind::Let { name: tmp.clone(), ty: None, value: *object, mutable: false },
+            line, col,
+        };
+        // (r.name)(r.data, ...args)
+        let method_field = Expr {
+            kind: ExprKind::Field { object: Box::new(ident_expr(&tmp, line, col)), name },
+            line, col,
+        };
+        let mut new_args = Vec::with_capacity(args.len() + 1);
+        new_args.push(Expr {
+            kind: ExprKind::Field { object: Box::new(ident_expr(&tmp, line, col)), name: "data".into() },
+            line, col,
+        });
+        new_args.append(&mut args);
+        let call = Expr { kind: ExprKind::Call { callee: Box::new(method_field), args: new_args }, line, col };
+        expr.kind = ExprKind::Block(Block { statements: vec![let_stmt], tail: Some(Box::new(call)), line, col });
+    }
+
+    // Coerción concreto→`dyn Trait`: envolver en el struct sintetizado (la vtable).
+    if let Some((trait_name, key)) = coercions.get(&(line, col)) {
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+        let inner = Expr { kind: taken, line, col };
+        let mut fields = vec![("data".to_string(), inner)];
+        for m in tm.get(trait_name).into_iter().flatten() {
+            fields.push((m.clone(), ident_expr(&mangle(key, m), line, col)));
+        }
+        expr.kind = ExprKind::StructLit { name: dyn_struct_name(trait_name), fields };
     }
 }
 
@@ -3503,5 +3897,57 @@ fn main() -> int {
             fn usar<T: Saludo>(x: T) -> int { x.doble() }
             fn main() -> int { let p = P { v: 1 }; usar(p) }
         "#).expect("defecto invocado vía bound");
+    }
+
+    // ----- M9.3b: trait objects -----
+
+    #[test]
+    fn trait_object_coercion_y_despacho() {
+        check_src(r#"
+            trait Figura { fn area(self) -> int; }
+            struct Cuadrado { lado: int }
+            impl Figura for Cuadrado { fn area(self) -> int { self.lado * self.lado } }
+            struct Rect { ancho: int, alto: int }
+            impl Figura for Rect { fn area(self) -> int { self.ancho * self.alto } }
+            fn total(xs: [dyn Figura]) -> int {
+                var s = 0; var i = 0;
+                while (i < len(xs)) { s = s + xs[i].area(); i = i + 1; }
+                s
+            }
+            fn main() -> int {
+                let fs: [dyn Figura] = [Cuadrado { lado: 2 }, Rect { ancho: 3, alto: 4 }];
+                total(fs)
+            }
+        "#).expect("arreglo heterogéneo de trait objects + despacho");
+    }
+
+    #[test]
+    fn trait_object_tipo_no_implementa() {
+        err_contains(
+            r#"trait Figura { fn area(self) -> int; }
+               struct P { x: int }
+               fn main() -> int { let f: dyn Figura = P { x: 1 }; 0 }"#,
+            "no implementa 'Figura'",
+        );
+    }
+
+    #[test]
+    fn trait_object_object_safety() {
+        err_contains(
+            r#"trait Clon { fn copia(self) -> Self; }
+               struct P { x: int }
+               impl Clon for P { fn copia(self) -> Self { P { x: self.x } } }
+               fn usar(p: dyn Clon) -> int { let q = p.copia(); 0 }
+               fn main() -> int { 0 }"#,
+            "usa 'Self': no es invocable sobre 'dyn Clon'",
+        );
+    }
+
+    #[test]
+    fn dyn_de_trait_inexistente() {
+        err_contains(
+            "fn f(x: dyn NoExiste) -> int { 0 } fn main() -> int { 0 }",
+            "trait 'NoExiste' no declarado",
+        );
     }
 }

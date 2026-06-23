@@ -383,6 +383,11 @@ impl Parser {
     /// type = 'int' | 'bool' | 'float' | 'string' | '[' type ']'
     ///      | 'fn' '(' [ type { ',' type } ] ')' [ '->' type ]
     fn parse_type(&mut self) -> Result<Type, ParseError> {
+        // Trait object: dyn Trait (M9.3b).
+        if self.eat(&TokenKind::Dyn) {
+            let (name, _, _) = self.expect_ident("el nombre del trait tras 'dyn'")?;
+            return Ok(Type::Dyn(name));
+        }
         // Arreglo: [T]
         if self.check(&TokenKind::LBracket) {
             self.advance();
@@ -1548,6 +1553,18 @@ fn main() -> int {
         let tokens = crate::lexer::lex("impl T S { } fn main() -> int { 0 }").expect("lex ok");
         let err = parse(tokens).expect_err("falta 'for'");
         assert!(err.msg.contains("se esperaba 'for'"), "mensaje: {}", err.msg);
+    }
+
+    #[test]
+    fn parse_dyn_trait_object() {
+        let prog = parse_prog(r#"
+            trait Figura { fn area(self) -> int; }
+            fn f(x: dyn Figura) -> int { 0 }
+            fn main() -> int { 0 }
+        "#);
+        // El parámetro x tiene tipo Type::Dyn("Figura").
+        let f = &prog.functions[0];
+        assert_eq!(f.params[0].ty, Type::Dyn("Figura".to_string()));
     }
 
     #[test]

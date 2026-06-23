@@ -1692,4 +1692,69 @@ mod tests {
             fn main() -> int { let p = P { v: 21 }; usar(p) }   // 42
         "#);
     }
+
+    // ----- M9.3b: trait objects (despacho dinámico) -----
+
+    #[test]
+    fn trait_objects_despacho_dinamico_oraculo() {
+        // Arreglo heterogéneo de trait objects + despacho por valor. El trait object se
+        // realiza como un struct sintetizado (la vtable); ambos motores deben coincidir.
+        oracle_program(r#"
+            trait Figura { fn area(self) -> int; }
+            struct Cuadrado { lado: int }
+            impl Figura for Cuadrado { fn area(self) -> int { self.lado * self.lado } }
+            struct Rect { ancho: int, alto: int }
+            impl Figura for Rect { fn area(self) -> int { self.ancho * self.alto } }
+            fn total(xs: [dyn Figura]) -> int {
+                var s = 0; var i = 0;
+                while (i < len(xs)) { s = s + xs[i].area(); i = i + 1; }
+                s
+            }
+            fn main() -> int {
+                let figuras: [dyn Figura] = [Cuadrado{lado:3}, Rect{ancho:4,alto:5}, Cuadrado{lado:2}];
+                total(figuras)   // 9 + 20 + 4 = 33
+            }
+        "#);
+    }
+
+    #[test]
+    fn defecto_con_self_heredado_por_dos_impls() {
+        // Regresión: un método por defecto que llama a `self.m()` y es heredado por DOS
+        // impls. Cada cuerpo clonado debe resolver a SUS métodos (no compartir destino).
+        oracle_program(r#"
+            trait Animal {
+                fn sonido(self) -> int;
+                fn doble_sonido(self) -> int { self.sonido() + self.sonido() }   // defecto
+            }
+            struct Perro { v: int }
+            impl Animal for Perro { fn sonido(self) -> int { self.v } }            // hereda
+            struct Gato { v: int }
+            impl Animal for Gato { fn sonido(self) -> int { self.v * 10 } }        // hereda
+            fn main() -> int {
+                let p = Perro { v: 3 };
+                let g = Gato { v: 4 };
+                p.doble_sonido() + g.doble_sonido()   // (3+3) + (40+40) = 6 + 80 = 86
+            }
+        "#);
+    }
+
+    #[test]
+    fn trait_objects_estres_gc() {
+        // El struct sintetizado (vtable) y el dato viven en el heap de la VM: el GC debe
+        // trazar ambos. Bajo estrés (recolecta en cada punto seguro), un fallo de raíz
+        // cambiaría el resultado o reventaría.
+        oracle_stress(r#"
+            trait Valor { fn valor(self) -> int; fn doble(self) -> int { self.valor() + self.valor() } }
+            struct A { n: int }
+            impl Valor for A { fn valor(self) -> int { self.n } }
+            struct B { n: int }
+            impl Valor for B { fn valor(self) -> int { self.n + 1 } fn doble(self) -> int { self.n } }
+            fn usar(x: dyn Valor) -> int { x.valor() + x.doble() }
+            fn main() -> int {
+                let a: dyn Valor = A { n: 10 };
+                let b: dyn Valor = B { n: 20 };
+                usar(a) + usar(b)   // (10+20) + (21+20) = 30 + 41 = 71
+            }
+        "#);
+    }
 }

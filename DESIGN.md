@@ -1443,13 +1443,45 @@ de M9: una anotación que **genera código** sobre traits. Mecánica:
 **Runtime: sin cambios.** Las anotaciones son metadatos del front-end; `@test` lo consume un
 cliente externo y `@derive` se reduce a un `impl` que M9 ya sabe bajar. Erasure, una vez más.
 
-### 19.2 M10.2 — LSP (esbozo; decisión al arrancar)
+### 19.2 M10.2 — LSP (diagnósticos en vivo)
 
-Un **Language Server** que, ante cada cambio de documento, corre lexer→parser→checker y
-devuelve los errores como `Diagnostic` (reusa `(línea, col)` y el renderizador de M8.3). Se
-escribe **una vez** y sirve a todos los editores (VSCode, Neovim, Helix…). Decisión abierta
-para M10.2: **JSON-RPC a mano** (mantiene la pureza cero-dependencias del proyecto) vs. un
-**crate** (`lsp-server`/`tower-lsp`), y el alcance (solo diagnósticos vs. hover/definición).
+Un **Language Server** (LSP) que, ante cada cambio de documento, corre lexer→parser→checker y
+devuelve los errores como `Diagnostic` al editor. Se escribe **una vez** y sirve a todos los
+editores (VSCode, Neovim, Helix…) que hablen LSP.
+
+**Decisiones (tomadas al arrancar M10.2):**
+
+- **Transporte: JSON-RPC a mano.** Nada de `lsp-server`/`tower-lsp`/`serde`. Mantiene la
+  invariante del proyecto —**cero dependencias de Cargo**— y, fiel al espíritu pedagógico, nos
+  hace *ver el protocolo por dentro*: el *framing* (`Content-Length: N\r\n\r\n` + N bytes) y un
+  **mini-parser/serializador JSON** propios (`mod json` dentro de `src/lsp.rs`).
+- **Alcance: solo diagnósticos.** `initialize` + `textDocument/didOpen`/`didChange`/`didClose`
+  → `textDocument/publishDiagnostics`. Sin `hover` ni `definition` (exigirían exponer una API de
+  tipos del checker —que evitamos ya en el REPL— y un índice de símbolos). Quedan para un futuro
+  M10.2b.
+
+**Realización: cliente externo, cero cambios en el núcleo** (como el REPL —M8.2— y el runner de
+`@test` —M10.1—). `src/lsp.rs` usa solo la API pública:
+
+- `analizar(src)` corre `lex` → `parse` → `check` (**solo el front-end**, no ejecuta) y devuelve
+  el **primer** error como `(línea, col, mensaje)`, reusando el `Display` de cada fase. Nuestro
+  compilador es *fail-fast* (devuelve el primer error), así que se publica **un** diagnóstico por
+  documento; reportar *todos* exigiría recolección de errores en cada fase (futuro).
+- **Coordenadas:** nuestras fases dan `(línea, col)` **1-basadas**; LSP las quiere **0-basadas**
+  (`line`, `character`). El `range` del diagnóstico va de `(línea-1, col-1)` al **fin de esa
+  línea** (subrayado visible); si la columna cae fuera, se subraya un solo carácter.
+- **Presentación:** el mensaje es el `to_string()` del error (la cabecera), **no** el render de
+  M8.3 (línea + `^`): en un editor el subrayado lo dibuja el cliente, no nosotros. Es el mismo
+  `(línea, col)` y el mismo mensaje que el terminal, con otra presentación.
+
+**Protocolo mínimo soportado:** `initialize` (responde `capabilities.textDocumentSync = 1`, o
+sea *Full sync*), `initialized` (se ignora), `shutdown` (responde `null`), `exit` (termina),
+`textDocument/didOpen`/`didChange`/`didClose` (analiza y publica; `didClose` limpia con una
+lista vacía). Una petición desconocida con `id` recibe un error JSON-RPC `-32601`.
+
+**Conexión desde editores** (sin npm, demostrando la pureza): se lanza `raylang --lsp` y se le
+apunta el cliente LSP del editor a archivos `.ray` (Neovim/Helix: un par de líneas de config; ver
+`editors/vscode/README.md` para VSCode). El binario es el mismo de siempre, con un modo más.
 
 ### 19.3 Deferido (más allá de M10.1)
 - **LSP** → M10.2 (su spec y decisión).

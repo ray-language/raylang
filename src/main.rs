@@ -2,6 +2,7 @@
 //!
 //! Uso: `raylang [--vm] <archivo.ray>`  — ejecuta un archivo.
 //!      `raylang --test <archivo.ray>`  — corre las funciones `@test` (M10.1).
+//!      `raylang --lsp`                  — arranca el Language Server (M10.2).
 //!      `raylang`  (o `raylang --repl`)  — arranca el REPL interactivo (M8.2).
 //!
 //! Corre el pipeline: lexer → parser → checker, y luego ejecuta el programa con el
@@ -13,7 +14,7 @@ use std::fs;
 use std::process;
 
 use raylang::interpreter::Value;
-use raylang::{checker, compiler, diagnostic, interpreter, lexer, parser, repl, test_runner, vm};
+use raylang::{checker, compiler, diagnostic, interpreter, lexer, lsp, parser, repl, test_runner, vm};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -27,11 +28,16 @@ fn main() {
             repl::run();
             return;
         }
+        // Language Server (M10.2): habla LSP por stdin/stdout hasta `exit`.
+        2 if args[1] == "--lsp" => {
+            lsp::run();
+            return;
+        }
         2 => (false, false, args[1].clone()),
         3 if args[1] == "--vm" => (true, false, args[2].clone()),
         3 if args[1] == "--test" => (false, true, args[2].clone()),
         _ => {
-            eprintln!("uso: raylang [--vm | --test] <archivo.ray>   |   raylang [--repl]");
+            eprintln!("uso: raylang [--vm | --test] <archivo.ray>   |   raylang [--repl | --lsp]");
             process::exit(64); // EX_USAGE
         }
     };

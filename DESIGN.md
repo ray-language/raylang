@@ -1665,3 +1665,68 @@ sin nada extra —solo añadir el nombre a la lista de invocables—.
 **Lo que NO incluye M11.1** (diferido): tipo `char` / indexar un string (raylang no tiene `char`);
 `parse_int`/`int_of_string` (va con I/O, M11.2); `replace`/`contains`/`to_upper`… (aditivos,
 cuando hagan falta). El conjunto mínimo es *concatenar + medir + convertir + recortar + partir*.
+
+### 20.3 M11.3 — Módulos y `pub`
+
+Hasta M10 un programa raylang es **un solo archivo**. M11.3 lo escala a varios, con
+**encapsulamiento**: cada archivo es un módulo, y `pub` controla qué exporta. Es la pieza
+arquitectónica de M11 (y un prerrequisito del self-hosting).
+
+**Decisiones (cerradas):**
+- **Módulo = archivo.** El nombre del módulo es el *stem* del archivo: `math.ray` → módulo `math`.
+- **Visibilidad `pub` explícita** (IDEAS §6): un ítem de nivel superior (`fn`/`struct`/`enum`/`trait`)
+  es **privado a su módulo** salvo que lleve `pub`. (No por mayúscula, estilo Go.)
+- **Dos formas de importar, estilo Python:**
+  - `import math;` — trae el módulo como **espacio de nombres**; se usa **calificado**:
+    `math.doble(21)`. Reusa `.` (no se añade `::`): el checker **desambigua** —si la cabeza es un
+    módulo importado, es una ruta; si una variable local la tapa, es campo/UFCS—.
+  - `from math import doble [as d] {, otro [as o]};` — trae nombres **al ámbito** (sin calificar),
+    con **renombrado opcional** (`as`) para evitar colisiones.
+
+**Arquitectura — flatten en el front-end, núcleo intacto.** Igual que UFCS/diccionarios/`dyn`, los
+módulos se resuelven **antes** del checker y se borran: el intérprete y la VM nunca saben de
+módulos. Tres fases nuevas, todas en el front-end:
+
+1. **Loader** (`src/loader.rs`, *cliente* host-side): desde el archivo de entrada, parsea, lee sus
+   `import`/`from`, resuelve cada módulo a `<dir>/<nombre>.ray`, lo lee y parsea, y **recurre** por
+   sus imports. Carga **cada módulo una vez** (los ciclos del grafo de imports no son problema: se
+   cargan una vez y las referencias cruzadas se resuelven tras fusionar). Produce los módulos
+   parseados + su grafo de imports. (Único I/O de archivos de M11.3, y es del *host* en Rust, no un
+   builtin de raylang.)
+2. **Namespacing + fusión:** los ítems de nivel superior de cada módulo **no-entrada** se renombran
+   a nombres globales únicos `modulo::nombre` (el `::` es ilegal en identificadores → no colisiona
+   con nombres del usuario, como el `#` del *mangling* de traits). El módulo de **entrada** (el del
+   `fn main`) **no** se renombra (sus nombres ya son globales; `main` debe seguir llamándose `main`).
+   Todo se fusiona en un único `Program`.
+3. **Resolución de referencias** (pasada *scope-aware*): por cada módulo se arma un mapa
+   `nombre local → nombre global` —sus propias defs + lo que importó— y se **reescribe** cada
+   referencia a un nombre de nivel superior a su global, **respetando los ámbitos locales** (una
+   variable/parámetro que tape un nombre global no se reescribe). El acceso calificado `math.item`
+   (un `Field`/`Call` cuya cabeza es un módulo importado) se reescribe a `math::item`. **Aquí se
+   aplica `pub`:** referenciar un ítem no-`pub` de otro módulo es error. Tras esta pasada el
+   `Program` es **plano** (nombres únicos, referencias resueltas) → el checker/intérprete/VM corren
+   sin cambios.
+
+**Sub-pasos:**
+- **M11.3a** — loader + namespacing + resolución + `pub` + **`import M;`** con llamadas calificadas
+  `M.f(...)`. Es el núcleo; la superficie mínima (solo funciones calificadas).
+- **M11.3b** — **`from M import a [as b]`**: trae nombres (funciones y tipos) al ámbito del módulo,
+  con alias. Reusa el loader/namespacing/`pub` de -a; añade inyectar nombres en el mapa de
+  resolución (con su renombrado).
+
+**Desambiguación de `.`** (el punto delicado): `math.doble(21)` llega como `Call(Field(Ident
+"math", "doble"), ...)`, igual que UFCS y que la construcción de enums. La regla, en orden: si hay
+una **variable local** `math` en ámbito → campo/UFCS sobre ese valor; si `math` es un **módulo
+importado** → ruta calificada `math::doble`; si no, sigue la resolución actual (campo de struct →
+método → función libre). Es el mismo estilo de desambiguación por contexto que ya usa el `.`.
+
+**Alcance y diferido:**
+- ✅ -a: `import M;` + `M.f(...)` (funciones `pub`), visibilidad, multi-archivo, ciclos seguros.
+- ✅ -b: `from M import a [as b]` (funciones y tipos `pub` al ámbito, con alias).
+- ⏳ **Tipo calificado en posición de tipo** (`M.Punto` como anotación) → diferido: los tipos de
+  otro módulo se traen con `from M import Punto [as P]`. Igual la **construcción de enum calificada**
+  (`M.Color.Rojo`) → usar `from M import Color`.
+- ⏳ Submódulos / jerarquía de directorios, `pub` granular (campos), re-exports → futuro.
+
+**Runtime: sin cambios.** Los módulos se borran en el front-end; el programa fusionado es uno solo
+con nombres únicos. Oráculo VM↔intérprete intacto.

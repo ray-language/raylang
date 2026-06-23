@@ -1479,9 +1479,12 @@ sea *Full sync*), `initialized` (se ignora), `shutdown` (responde `null`), `exit
 `textDocument/didOpen`/`didChange`/`didClose` (analiza y publica; `didClose` limpia con una
 lista vacía). Una petición desconocida con `id` recibe un error JSON-RPC `-32601`.
 
-**Conexión desde editores** (sin npm, demostrando la pureza): se lanza `raylang --lsp` y se le
-apunta el cliente LSP del editor a archivos `.ray` (Neovim/Helix: un par de líneas de config; ver
-`editors/vscode/README.md` para VSCode). El binario es el mismo de siempre, con un modo más.
+**Conexión desde editores:** se lanza `raylang --lsp` y se le apunta el cliente LSP del editor a
+archivos `.ray`. **Neovim/Helix**: un par de líneas de config, sin npm (demuestra la pureza del
+servidor). **VSCode** (M10.2c): la extensión `editors/vscode/` incluye un cliente
+(`src/extension.ts` sobre `vscode-languageclient`) que lanza el servidor; eso sí trae deps de
+**npm**, pero **del lado del editor** —el binario de raylang sigue sin dependencias—. Ver
+`editors/vscode/README.md`. El binario es el mismo de siempre, con un modo más.
 
 ### 19.3 Deferido (más allá de M10.1)
 - **LSP** → M10.2 (su spec y decisión).

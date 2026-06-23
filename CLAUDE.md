@@ -198,8 +198,13 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   y devuelve el **primer** error (*fail-fast* → un diagnóstico por documento); **cero cambios en
   el núcleo**. Traduce `(línea, col)` 1-basado → 0-basado de LSP; el mensaje es el `Display` del
   error (el subrayado lo pinta el editor, no M8.3). `serve` es genérico sobre los flujos → se
-  prueba en memoria con un `Cursor` + subproceso real (`tests/lsp_cli.rs`). VSCode necesitaría un
-  *language client* (npm, del lado del editor); Neovim/Helix lo usan directo.
+  prueba en memoria con un `Cursor` + subproceso real (`tests/lsp_cli.rs`). Neovim/Helix lo usan
+  directo (un par de líneas de config, sin npm).
+- **M10.2c COMPLETO**: **cliente LSP de VSCode**. La extensión `editors/vscode/` pasó de
+  *solo-declarativa* (gramática) a *con código*: `src/extension.ts` (sobre `vscode-languageclient`)
+  lanza `raylang --lsp` por stdio y conecta sus diagnósticos a la UI (build TS→JS con `tsc`;
+  ajustes `raylang.serverPath`/`raylang.enableLsp`; v0.10.0). Trae deps de **npm** pero **del lado
+  del editor** —raylang (Rust) sigue cero-dependencias—. `node_modules`/`out` en `.gitignore`.
 - **Siguiente: M9.2b** (impls genéricos / diccionarios anidados) o **M10.2b** (hover/definición en
   el LSP). Ver hoja de ruta (DESIGN §2, §19) / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,

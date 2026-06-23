@@ -1,11 +1,13 @@
 # Extensión de VSCode para raylang
 
-Resaltado de sintaxis (syntax highlighting) para archivos `.ray`.
+Soporte para archivos `.ray`: **resaltado de sintaxis** + **cliente del Language Server**
+(diagnósticos en vivo, M10.2c).
 
-Esto es **solo coloreado**: clasifica palabras clave, tipos, literales, comentarios,
-operadores, definiciones y llamadas a funciones para que el tema de color de tu
-editor las pinte. No valida tipos ni detecta errores — esa parte (diagnostics en
-vivo) la da el **Language Server** (`raylang --lsp`, M10.2; ver la sección al final).
+El **coloreado** clasifica palabras clave, tipos, literales, comentarios, operadores,
+definiciones y llamadas a funciones para que el tema de color de tu editor las pinte; es
+estático (no entiende el programa). La **validación real** —errores de léxico, sintaxis y
+tipos subrayados mientras escribes— la da el **Language Server** (`raylang --lsp`), al que esta
+extensión se conecta como cliente (ver "Diagnósticos en vivo" al final).
 
 ## Qué colorea
 
@@ -134,21 +136,48 @@ algún elemento no se colorea como esperas.
 
 El coloreado es estático; la **validación real** (errores de léxico, sintaxis y tipos
 subrayados mientras escribes) la da el **Language Server**, que reusa el checker de Rust
-una sola vez para todos los editores. Se arranca con:
+una sola vez para todos los editores. El servidor es el propio binario de raylang:
 
 ```sh
 raylang --lsp        # habla LSP por stdin/stdout hasta recibir 'exit'
 ```
 
-Es un binario que habla **LSP** (JSON-RPC sobre stdin/stdout), sin dependencias. Cualquier
-editor lo consume apuntándolo a los archivos `.ray`:
+No tiene dependencias: el *framing* y el JSON están escritos a mano (DESIGN §19.2). Cualquier
+editor que hable LSP lo consume apuntándolo a los archivos `.ray`. Para **VSCode**, esta
+extensión incluye el **cliente** (`src/extension.ts`, sobre `vscode-languageclient`); para
+**Neovim/Helix** basta un par de líneas de config (`cmd = { "raylang", "--lsp" }`; ver el
+capítulo "El LSP" del libro).
 
-- **Neovim / Helix**: directo, con un par de líneas de config (`cmd = { "raylang", "--lsp" }`).
-  Ver el capítulo "El LSP" del libro (`book/src/m10/lsp.md`).
-- **VSCode**: requiere un *language client* (un `extension.js` que lance `raylang --lsp` con
-  `vscode-languageclient`, lo que sí trae dependencias de **npm** —del lado del editor, no de
-  raylang—). Esta extensión es **solo gramática** por ahora; el cliente LSP de VSCode queda como
-  trabajo aparte. Neovim/Helix son la vía sin npm para probar el servidor hoy.
+### Cómo usarlo en VSCode
+
+1. **Compila el binario** de raylang y ponlo en el PATH (o anota su ruta):
+
+   ```sh
+   cargo build --release      # genera ./target/release/raylang
+   ```
+
+2. **Compila el cliente** de la extensión (TypeScript → JavaScript):
+
+   ```sh
+   cd editors/vscode
+   npm install                # trae vscode-languageclient (deps de npm, lado del editor)
+   npm run compile            # genera out/extension.js
+   ```
+
+3. **Enlaza e instala** la extensión (igual que para el coloreado):
+
+   ```sh
+   ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.10.0
+   # recarga VSCode: Cmd/Ctrl+Shift+P → "Developer: Reload Window"
+   ```
+
+4. Abre un `.ray`. Si `raylang` no está en el PATH, indica su ruta en los ajustes:
+   **`raylang.serverPath`** (p. ej. `/ruta/a/target/release/raylang`). El ajuste
+   **`raylang.enableLsp`** permite desactivar el cliente y quedarse en solo-coloreado.
+
+> El cliente arranca el servidor (`raylang --lsp`) al abrir el primer `.ray` y conecta sus
+> diagnósticos a los subrayados de VSCode. Es el único código JS de la extensión; la lógica de
+> análisis vive toda en el binario de Rust (cero duplicación).
 
 > Alcance de M10.2: **solo diagnósticos** (un error a la vez, *fail-fast*). Hover e
 > ir-a-definición quedan para un futuro M10.2b.

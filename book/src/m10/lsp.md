@@ -135,7 +135,16 @@ vim.api.nvim_create_autocmd("FileType", {
 ```
 
 En **Helix** (`languages.toml`) es igual de breve. Sin npm, sin nada: el binario de siempre con un
-modo más. Ver `editors/vscode/README.md` para la nota de VSCode.
+modo más.
+
+**VSCode** es el caso pesado. Hasta ahora su extensión era *solo declarativa* (la gramática
+TextMate): VSCode leía el `package.json` y coloreaba sin ejecutar código. Para hablar LSP, una
+extensión tiene que **ejecutar código** que lance el servidor y traduzca el protocolo a su UI, y
+eso se apoya en `vscode-languageclient` —una dependencia de **npm**, del lado del editor; el
+binario de raylang sigue sin dependencias—. El cliente cabe en ~25 líneas (`editors/vscode/src/extension.ts`):
+arranca `raylang --lsp` por stdio y le declara que se aplica a los documentos `raylang`. Por eso
+Neovim/Helix son la vía sin build, y VSCode pide compilar un pequeño cliente TypeScript. Ver
+`editors/vscode/README.md` para los pasos.
 
 > **La lección de M10.** Las dos caras del *tooling* comparten una raíz: **reutilizar el
 > front-end**. `@derive(Eq)` genera fuente y deja que el compilador la baje; el LSP corre el

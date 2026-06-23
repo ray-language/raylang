@@ -1,14 +1,18 @@
 {
   "name": "raylang",
   "displayName": "raylang",
-  "description": "Resaltado de sintaxis para el lenguaje raylang (.ray)",
-  "version": "0.9.0",
+  "description": "Soporte para el lenguaje raylang (.ray): resaltado de sintaxis + cliente del Language Server (diagnósticos en vivo).",
+  "version": "0.10.0",
   "publisher": "rayala",
   "engines": {
     "vscode": "^1.75.0"
   },
   "categories": [
     "Programming Languages"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:raylang"
   ],
   "contributes": {
     "languages": [
@@ -30,6 +34,34 @@
         "scopeName": "source.raylang",
         "path": "./syntaxes/raylang.tmLanguage.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "raylang",
+      "properties": {
+        "raylang.serverPath": {
+          "type": "string",
+          "default": "raylang",
+          "description": "Ruta al binario de raylang que provee el Language Server. Por defecto 'raylang' (se busca en el PATH). El cliente lo lanza con '--lsp'."
+        },
+        "raylang.enableLsp": {
+          "type": "boolean",
+          "default": true,
+          "description": "Activa el cliente del Language Server (diagnósticos en vivo). Si se desactiva, la extensión solo colorea."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.4.0"
   }
 }

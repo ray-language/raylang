@@ -96,10 +96,15 @@ pub enum OpCode {
     Index,
     /// Saca valor, índice y arreglo; asigna `arreglo[índice] = valor`.
     SetIndex,
-    /// Saca un arreglo; empuja su longitud (int). Builtin `len`.
+    /// Saca un arreglo **o string**; empuja su longitud (int). Builtin `len`. (M11.1a: string
+    /// → nº de caracteres.)
     Len,
     /// Saca valor y arreglo; agrega el valor al final; empuja unit. Builtin `push`.
     Push,
+
+    // --- Stdlib de string (M11.1) ---
+    /// Saca un valor primitivo; empuja su representación textual (string). Builtin `to_string`.
+    ToString,
 
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como

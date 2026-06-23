@@ -1663,9 +1663,11 @@ impl Checker {
         use BinaryOp::*;
         match op {
             // Aritméticos: ambos int → int, ambos float → float. Sin mezclas.
+            // M11.1a: `+` también concatena dos strings → string.
             Add | Sub | Mul | Div | Rem => match (&lt, &rt) {
                 (Type::Int, Type::Int) => Ok(Type::Int),
                 (Type::Float, Type::Float) => Ok(Type::Float),
+                (Type::String, Type::String) if op == Add => Ok(Type::String),
                 _ => Err(self.err(line, col, format!(
                     "el operador '{}' requiere ambos operandos int o ambos float, no {} y {}",
                     bin_op_str(op), lt, rt
@@ -1817,7 +1819,7 @@ impl Checker {
     /// nivel superior). Lo usa UFCS para dar un error específico cuando un `recv.f(...)`
     /// no es ni campo ni función.
     fn name_is_callable(&self, name: &str) -> bool {
-        matches!(name, "print" | "len" | "push")
+        matches!(name, "print" | "len" | "push" | "to_string")
             || self.lookup(name).is_some()
             || self.functions.contains_key(name)
     }
@@ -1839,16 +1841,28 @@ impl Checker {
             return Ok(Type::Unit);
         }
 
-        // 'len(a) -> int': longitud de un arreglo.
+        // 'len(a) -> int': longitud de un arreglo o de un string (M11.1a: nº de caracteres).
         if name == "len" {
             if args.len() != 1 {
                 return Err(self.err(line, col, format!("len espera 1 argumento, se le pasaron {}", args.len())));
             }
             let at = self.check_expr(&args[0])?;
-            if !matches!(at, Type::Array(_)) {
-                return Err(self.err(args[0].line, args[0].col, format!("len espera un arreglo, no {}", at)));
+            if !matches!(at, Type::Array(_) | Type::String) {
+                return Err(self.err(args[0].line, args[0].col, format!("len espera un arreglo o un string, no {}", at)));
             }
             return Ok(Type::Int);
+        }
+
+        // 'to_string(x) -> string' (M11.1a): representación textual de un primitivo imprimible.
+        if name == "to_string" {
+            if args.len() != 1 {
+                return Err(self.err(line, col, format!("to_string espera 1 argumento, se le pasaron {}", args.len())));
+            }
+            let at = self.check_expr(&args[0])?;
+            if !matches!(at, Type::Int | Type::Float | Type::Bool | Type::String) {
+                return Err(self.err(args[0].line, args[0].col, format!("to_string solo convierte int/float/bool/string, no {}", at)));
+            }
+            return Ok(Type::String);
         }
 
         // 'push(a, x) -> unit': agrega x al final del arreglo a (lo muta).

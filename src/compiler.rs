@@ -690,6 +690,7 @@ impl<'a> Compiler<'a> {
                     "print" => Some(OpCode::Print),
                     "len" => Some(OpCode::Len),
                     "push" => Some(OpCode::Push),
+                    "to_string" => Some(OpCode::ToString), // M11.1a
                     _ => None,
                 };
                 if let Some(op) = builtin {

@@ -549,7 +549,7 @@ impl<'a> Interpreter<'a> {
             let is_local = self.lookup_opt(name).is_some();
             if !is_local {
                 // Builtins: evalúan sus argumentos y operan directamente.
-                if name == "print" || name == "len" || name == "push" {
+                if name == "print" || name == "len" || name == "push" || name == "to_string" {
                     let mut values = Vec::with_capacity(args.len());
                     for arg in args {
                         values.push(self.eval_expr(arg)?);
@@ -596,7 +596,9 @@ impl<'a> Interpreter<'a> {
             }
             "len" => match &values[0] {
                 Value::Array(rc) => Value::Int(rc.borrow().len() as i64),
-                _ => unreachable!("el checker garantiza un arreglo"),
+                // M11.1a: len de string = nº de caracteres (Unicode scalar values).
+                Value::Str(s) => Value::Int(s.chars().count() as i64),
+                _ => unreachable!("el checker garantiza un arreglo o string"),
             },
             "push" => {
                 match &values[0] {
@@ -605,6 +607,8 @@ impl<'a> Interpreter<'a> {
                 }
                 Value::Unit
             }
+            // M11.1a: representación textual de un primitivo (la misma que `print`/Display).
+            "to_string" => Value::Str(format!("{}", values[0])),
             _ => unreachable!("builtin desconocido"),
         }
     }
@@ -641,6 +645,8 @@ impl<'a> Interpreter<'a> {
         let r = self.eval_expr(right)?;
         use Value::*;
         Ok(match (op, l, r) {
+            // Concatenación de strings (M11.1a): `+` sobre dos strings.
+            (Add, Str(a), Str(b)) => Str(a + &b),
             // Aritmética entera.
             (Add, Int(a), Int(b)) => Int(a + b),
             (Sub, Int(a), Int(b)) => Int(a - b),

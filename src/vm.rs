@@ -231,8 +231,12 @@ impl<'a> Vm<'a> {
                     self.as_array_mut(h)[idx] = v;
                 }
                 OpCode::Len => {
-                    let h = self.pop_obj();
-                    let len = self.as_array(h).len() as i64;
+                    // M11.1a: len de arreglo (objeto del heap) o de string (nº de caracteres).
+                    let len = match self.pop() {
+                        HeapValue::Str(s) => s.chars().count() as i64,
+                        HeapValue::Obj(h) => self.as_array(h).len() as i64,
+                        _ => unreachable!("el checker garantiza un arreglo o string"),
+                    };
                     self.push(HeapValue::Int(len));
                 }
                 OpCode::Push => {
@@ -240,6 +244,15 @@ impl<'a> Vm<'a> {
                     let h = self.pop_obj();
                     self.as_array_mut(h).push(v);
                     self.push(HeapValue::Unit);
+                }
+
+                // --- Stdlib de string (M11.1) ---
+                OpCode::ToString => {
+                    // Representación textual (la misma que `print`): coincide con el `Display`
+                    // que usa el intérprete en `to_string`.
+                    let v = self.pop();
+                    let s = format_value(&self.heap, &self.program.enums, &v);
+                    self.push(HeapValue::Str(s));
                 }
 
                 // --- Structs (M3.2) ---
@@ -531,6 +544,8 @@ impl<'a> Vm<'a> {
             _ => {}
         }
         Ok(match (op, left, right) {
+            // M11.1a: `+` concatena dos strings.
+            (Add, Str(a), Str(b)) => Str(a + &b),
             (Add, Int(a), Int(b)) => Int(a + b),
             (Sub, Int(a), Int(b)) => Int(a - b),
             (Mul, Int(a), Int(b)) => Int(a * b),
@@ -1716,6 +1731,45 @@ mod tests {
             fn main() -> int {
                 let c2 = Caja { contenido: Caja { contenido: 100 } };
                 c2.medir() + medir_uno(c2)   // 102 + 102 = 204
+            }
+        "#);
+    }
+
+    // ----- M11.1: stdlib de string -----
+
+    #[test]
+    fn string_concat_len_oraculo() {
+        // Concatenación con `+`, len de string y to_string; el resultado es un int.
+        oracle_program(r#"
+            fn main() -> int {
+                let s = "hola, " + "mundo";       // concat
+                let etiqueta = "n=" + to_string(len(s));
+                print(etiqueta);                   // n=11
+                len(s) + len("123")               // 11 + 3 = 14
+            }
+        "#);
+    }
+
+    #[test]
+    fn string_to_string_de_varios_tipos_oraculo() {
+        oracle_program(r#"
+            fn main() -> int {
+                print(to_string(42));      // 42
+                print(to_string(true));    // true
+                print(to_string("ya"));    // ya (identidad)
+                len(to_string(true)) + len(to_string(false))   // 4 + 5 = 9
+            }
+        "#);
+    }
+
+    #[test]
+    fn string_ufcs_oraculo() {
+        // UFCS sobre los builtins de string (s.len(), n.to_string()).
+        oracle_program(r#"
+            fn main() -> int {
+                let s = "raylang";
+                print(s.len().to_string());   // 7
+                s.len()
             }
         "#);
     }

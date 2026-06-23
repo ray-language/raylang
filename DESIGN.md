@@ -1319,18 +1319,58 @@ defecto. Un impl que sí lo da **redefine** (gana sobre el defecto). Como todo l
 los bounds (M9.2): el método por defecto está en la lista del trait, así que un genérico
 `T: Saludo` puede llamarlo y el diccionario recibe la versión sintetizada.
 
-#### 18.7b Trait objects / despacho dinámico (toca el runtime) → sub-fase aparte
+#### 18.7b Trait objects / despacho dinámico (M9.3b)
 
 Un **trait object** es un valor cuyo tipo concreto **no se conoce estáticamente**: una
-`[Mostrable]` con `Punto`s y `Color`es mezclados, o un parámetro `dyn Mostrable`. El método
-se despacha **en runtime** según el valor. Es el único punto de M9 donde el despacho deja de
-ser estático y, por tanto, donde **el runtime entra en juego**. Trae su propia decisión de
-representación (probable: un *fat value* `(valor, diccionario)` reusando los diccionarios de
-M9.2), nueva sintaxis (`dyn Trait`), coerción de concreto→objeto y trazado en el GC de la VM.
-Se especifica y decide al **arrancar M9.3b**.
+`[dyn Mostrable]` con `Punto`s y `Color`es mezclados. El método se despacha **en runtime**
+según el valor. Es el único punto de M9 donde el despacho deja de ser estático.
 
-### 18.8 Deferido (más allá de M9.3a)
-- **Trait objects / despacho dinámico** → M9.3b (su propia spec y decisión de representación).
+**Sintaxis y tipo.** Una palabra clave `dyn` introduce el tipo `dyn Trait` (`Type::Dyn`).
+Vale en posición de tipo (parámetros, anotaciones, elementos de arreglo, campos, retorno).
+
+```rust
+fn dibujar_todo(xs: [dyn Dibujable]) {
+    var i = 0;
+    while (i < len(xs)) { xs[i].dibujar(); i = i + 1; }   // despacho por valor
+}
+```
+
+**Representación (decisión cerrada): un *fat value* `(dato, vtable)`.** El objeto carga su
+propia tabla de métodos (la vtable), reusando los diccionarios de M9.2. La realización elegida
+—que mantiene el **runtime intacto**, fiel a todo M9— es representar ese fat value como un
+**struct sintetizado**: un `dyn Trait` es, en runtime, un struct `«__dyn_Trait»` con un campo
+`data` (el valor subyacente) y un campo función por cada método del trait (la vtable). Así se
+reusa toda la maquinaria de structs —construcción, acceso a campo, **trazado del GC**— sin una
+variante de valor ni opcodes ni cambios en el GC: cero runtime nuevo.
+
+**Coerción concreto → objeto.** Donde un valor concreto `C` (que implementa `Trait`) fluye a
+una posición `dyn Trait` (argumento, elemento de arreglo, `let` anotado, retorno), el checker
+inserta una coerción que **construye el struct**: `«__dyn_Trait» { data: c, m0: «C#m0», ... }`.
+Las funciones de método son las mangladas de M9.1 (incluidos los defectos de M9.3a). La vtable
+se fija **en la coerción**, donde el tipo concreto aún se conoce: el despacho es dinámico, pero
+*qué* funciones viajan se decide estáticamente.
+
+**Despacho.** `obj.m(args)` con `obj: dyn Trait` baja a llamar el campo-método con el `data`
+como receptor: conceptualmente `(obj.m)(obj.data, args)`. Para no evaluar `obj` dos veces, se
+baja a un bloque con un temporal: `{ let r = obj; (r.m)(r.data, args) }`. Todo son accesos a
+campo y llamadas ordinarias: el intérprete y la VM no saben de trait objects.
+
+**Seguridad de objeto (*object safety*).** Una vtable no puede llevar métodos que dependan del
+tipo concreto borrado: si `m` usa `Self` fuera del receptor (p. ej. `-> Self` o `otro: Self`),
+**no es invocable** sobre un `dyn Trait` (error en el sitio de llamada). El resto de métodos
+—los de firma concreta— sí.
+
+**Runtime: sin cambios.** El trait object es un struct; el despacho, acceso a campo + llamada.
+Cero opcodes, cero cambios en los motores ni en el GC; el oráculo VM↔intérprete sigue valiendo.
+La lección de M9.3b: incluso el despacho *dinámico* se reduce a "un struct que lleva sus
+funciones", sobre las piezas que ya existían (structs + funciones de primera clase).
+
+**Alcance de M9.3b y diferido:**
+- ✅ `dyn Trait` como tipo; coerción concreto→objeto; despacho dinámico; arreglos heterogéneos.
+- ⏳ `dyn` con métodos que usan `Self` (no *object-safe*) → no invocables sobre el objeto.
+- ⏳ *Upcasting* entre traits, `dyn A + B` (varios traits en un objeto) → futuro.
+
+### 18.8 Deferido (más allá de M9.3)
 - **Impls genéricos** (`impl Trait for Caja<T>`) → M9.2b (diccionarios anidados).
 - **Traits con `Self` en posición de argumento** que exija dos receptores del mismo tipo
   (p. ej. `fn igual(self, otro: Self) -> bool`) → soportado por M9.1 (ambos = destino), pero

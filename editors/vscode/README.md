@@ -74,6 +74,11 @@ vivo) llegará con el **Language Server** (ver `IDEAS.md`, sección de tooling/L
 > pintan como `variable.language`. Los **métodos** dentro de un `impl` caen en las reglas
 > ya existentes (definición de función y llamadas); su despacho es cosa del checker,
 > invisible al coloreado.
+>
+> **M9.2 (bounds).** Los *bounds* de genéricos (`fn f<T: Valor + Etiqueta>(...)`) no
+> necesitaron reglas nuevas: el `:` y el `+` caen en operadores y los nombres de trait
+> (mayúscula) en tipos de usuario. El paso de diccionarios es una reescritura del checker,
+> invisible al coloreado.
 
 > Nota: la gramática TextMate (`syntaxes/raylang.tmLanguage.json`) es una
 > **reescritura en regex** de las reglas léxicas de `DESIGN.md` §3. Es independiente

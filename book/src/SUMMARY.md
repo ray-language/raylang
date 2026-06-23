@@ -67,3 +67,4 @@
 
 - [Traits: comportamiento polimórfico](m9/intro.md)
 - [trait e impl: despacho estático](m9/traits.md)
+- [Bounds: genéricos que exigen comportamiento](m9/bounds.md)

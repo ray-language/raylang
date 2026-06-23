@@ -76,6 +76,9 @@ struct GenImpl {
 struct VarInfo {
     ty: Type,
     mutable: bool,
+    /// Posición de su declaración (M10.2b: ir-a-definición). `(línea, col)` 1-basado del
+    /// `let`/`var`, del parámetro o del brazo de `match` que la liga.
+    def: (usize, usize),
 }
 
 /// Punto de entrada de la fase: verifica un programa completo.
@@ -86,6 +89,50 @@ struct VarInfo {
 /// es parte del front-end compartido: el intérprete y la VM reciben el AST ya
 /// resuelto, sin duplicar la regla.
 pub fn check(program: &mut Program) -> Result<(), TypeError> {
+    // Pasos 0–1: inyectar el prelude, generar derivaciones, bajar los métodos de impl y
+    // resolver la construcción de enums (compartido con `semantic_index`).
+    prepare_program(program)?;
+    // Pasos 2–3: pre-pasada y verificación.
+    let mut checker = Checker::new();
+    checker.check_program(program)?;
+    // Paso 4 (M7.1 + M9): bajar las llamadas por punto (`recv.f(args)`) a llamadas
+    // ordinarias (`f(recv, args)`); incluye UFCS, métodos de trait (M9.1) y métodos sobre
+    // un tipo acotado, que bajan a una llamada al parámetro-diccionario (M9.2).
+    lower_ufcs(program, &checker.ufcs_sites);
+    // Paso 5 (M9.2): añadir los parámetros-diccionario a las funciones con bounds y los
+    // argumentos correspondientes en cada sitio de llamada. Diccionarios = valores función;
+    // el runtime no cambia.
+    append_dict_params(program);
+    lower_dict_calls(program, &checker.dict_calls);
+    // Paso 6 (M9.3b): bajar los trait objects — coerciones concreto→objeto a la
+    // construcción del struct sintetizado, y los despachos dinámicos a `(r.m)(r.data, ...)`.
+    lower_dyn(program, &checker.dyn_coercions, &checker.dyn_dispatch);
+    // Paso 7 (M9.2b): renumerar los `id` de los fn-exprs. El lowering pudo **inyectar**
+    // closures sintéticos (diccionarios anidados) con `id` provisional; el intérprete y la VM
+    // exigen ids **densos** (`collect_fn_exprs`). Esta pasada final los reasigna en orden.
+    renumber_fn_exprs(program);
+    Ok(())
+}
+
+/// Recolecta el **índice semántico** (M10.2b): corre el front-end hasta `check_program` con el
+/// `Checker` en modo `gather` (que apunta tipos y posiciones de declaración por identificador) y
+/// devuelve el índice. **Tolera errores**: un programa a medio escribir devuelve la info parcial
+/// recolectada hasta el fallo (útil para hover/definición mientras se teclea). No corre los
+/// *lowerings* (mutarían posiciones y no hacen falta). Lo usa el LSP (`src/lsp.rs`).
+pub fn semantic_index(program: &mut Program) -> SemanticIndex {
+    if prepare_program(program).is_err() {
+        return SemanticIndex::default();
+    }
+    let mut checker = Checker::new();
+    checker.gather = true;
+    let _ = checker.check_program(program); // best-effort: el índice parcial igual sirve
+    checker.index
+}
+
+/// Pasos 0–1 del front-end, compartidos por `check` y `semantic_index`: inyección del prelude,
+/// derivaciones de `@derive`, bajada de los métodos de impl a funciones mangladas y resolución
+/// de la construcción de enums. Muta `program`.
+fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
     // Paso 0: inyectar el prelude (Option/Result) si no está ya. Sus enums se
     // anteponen, así forman parte del AST que también ven el intérprete y la VM.
     if !program.enums.iter().any(|e| e.name == "Option" || e.name == "Result") {
@@ -190,26 +237,38 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     for f in &mut program.functions {
         resolve_block(&mut f.body, &enum_names);
     }
-    // Pasos 2–3: pre-pasada y verificación.
-    let mut checker = Checker::new();
-    checker.check_program(program)?;
-    // Paso 4 (M7.1 + M9): bajar las llamadas por punto (`recv.f(args)`) a llamadas
-    // ordinarias (`f(recv, args)`); incluye UFCS, métodos de trait (M9.1) y métodos sobre
-    // un tipo acotado, que bajan a una llamada al parámetro-diccionario (M9.2).
-    lower_ufcs(program, &checker.ufcs_sites);
-    // Paso 5 (M9.2): añadir los parámetros-diccionario a las funciones con bounds y los
-    // argumentos correspondientes en cada sitio de llamada. Diccionarios = valores función;
-    // el runtime no cambia.
-    append_dict_params(program);
-    lower_dict_calls(program, &checker.dict_calls);
-    // Paso 6 (M9.3b): bajar los trait objects — coerciones concreto→objeto a la
-    // construcción del struct sintetizado, y los despachos dinámicos a `(r.m)(r.data, ...)`.
-    lower_dyn(program, &checker.dyn_coercions, &checker.dyn_dispatch);
-    // Paso 7 (M9.2b): renumerar los `id` de los fn-exprs. El lowering pudo **inyectar**
-    // closures sintéticos (diccionarios anidados) con `id` provisional; el intérprete y la VM
-    // exigen ids **densos** (`collect_fn_exprs`). Esta pasada final los reasigna en orden.
-    renumber_fn_exprs(program);
     Ok(())
+}
+
+/// Índice semántico del programa (M10.2b): lo que el LSP necesita para hover e
+/// ir-a-definición. Se recolecta durante `check_program` (posiciones de la fuente original,
+/// antes de cualquier *lowering*). Granularidad: por identificador resuelto.
+#[derive(Default)]
+pub struct SemanticIndex {
+    /// Hover: por cada uso de un identificador, su rango y el texto a mostrar (su tipo).
+    pub hovers: Vec<HoverEntry>,
+    /// Ir-a-definición (M10.2b-2): por cada uso, el rango del uso y la posición de su
+    /// declaración.
+    pub defs: Vec<DefEntry>,
+}
+
+/// Una entrada de hover: el identificador en `(line, col)` (1-basado) de largo `len` muestra
+/// `text` (p. ej. `x: int`).
+pub struct HoverEntry {
+    pub line: usize,
+    pub col: usize,
+    pub len: usize,
+    pub text: String,
+}
+
+/// Una entrada de ir-a-definición (M10.2b-2): el uso en `(line, col)` de largo `len` se declara
+/// en `(def_line, def_col)`.
+pub struct DefEntry {
+    pub line: usize,
+    pub col: usize,
+    pub len: usize,
+    pub def_line: usize,
+    pub def_col: usize,
 }
 
 struct Checker {
@@ -282,6 +341,14 @@ struct Checker {
     /// Sitios de **despacho dinámico** (M9.3b): `(línea, col, método)` de un `obj.m(args)`
     /// con `obj: dyn Trait`. `lower_dyn` los baja al bloque `{ let r = obj; (r.m)(r.data, ...) }`.
     dyn_dispatch: HashSet<(usize, usize, String)>,
+    /// M10.2b: si está activo, el checker **recolecta** el índice semántico (tipos y posiciones
+    /// de declaración por identificador) en `index`. Solo lo enciende `semantic_index`; en una
+    /// verificación normal queda en `false` (coste cero).
+    gather: bool,
+    /// El índice semántico recolectado (M10.2b). Vacío si `gather` es `false`.
+    index: SemanticIndex,
+    /// Posición de declaración de cada función de nivel superior (M10.2b: ir-a-definición).
+    fn_defs: HashMap<String, (usize, usize)>,
 }
 
 impl Checker {
@@ -307,6 +374,9 @@ impl Checker {
             dict_calls: HashMap::new(),
             dyn_coercions: HashMap::new(),
             dyn_dispatch: HashSet::new(),
+            gather: false,
+            index: SemanticIndex::default(),
+            fn_defs: HashMap::new(),
         }
     }
 
@@ -407,6 +477,10 @@ impl Checker {
                 bounds: f.bounds.clone(),
             };
             self.functions.insert(f.name.clone(), sig);
+            // M10.2b: posición de declaración (para ir-a-definición). Solo al recolectar.
+            if self.gather {
+                self.fn_defs.insert(f.name.clone(), (f.line, f.col));
+            }
         }
         self.type_params.clear();
 
@@ -740,7 +814,7 @@ impl Checker {
         // Los parámetros son inmutables (no hay 'var' para ellos).
         for p in params {
             let ty = self.resolve_type(&p.ty);
-            self.declare(&p.name, ty, false);
+            self.declare(&p.name, ty, false, (p.line, p.col));
         }
 
         // El tipo de retorno es el tipo ESPERADO del valor del cuerpo (M6.2): se
@@ -805,7 +879,7 @@ impl Checker {
                     // `check_expr` ya falla pidiendo la anotación.
                     None => self.check_expr(value)?,
                 };
-                self.declare(name, var_ty, *mutable);
+                self.declare(name, var_ty, *mutable, (stmt.line, stmt.col));
                 Ok(())
             }
             StmtKind::Assign { target, value } => self.check_assign(target, value, stmt.line, stmt.col),
@@ -1144,7 +1218,7 @@ impl Checker {
             // tipo esperado del match a cada brazo (para construcciones como `None`).
             self.push_scope();
             for (name, ty) in binds {
-                self.declare(&name, ty, false);
+                self.declare(&name, ty, false, (arm.line, arm.col));
             }
             let body_ty = match expected {
                 Some(exp) => self.check_expr_expected(&arm.body, exp),
@@ -1425,7 +1499,10 @@ impl Checker {
             ExprKind::Ident(name) => {
                 // Una variable tapa a una función con el mismo nombre.
                 if let Some(v) = self.lookup(name) {
-                    return Ok(v.ty.clone());
+                    let ty = v.ty.clone();
+                    let def = v.def;
+                    self.record_ident(expr.line, expr.col, name, &ty, Some(def)); // M10.2b
+                    return Ok(ty);
                 }
                 // Un nombre de función de nivel superior es un valor de primera
                 // clase: su tipo es el tipo función correspondiente (M4.1). Una
@@ -1437,7 +1514,10 @@ impl Checker {
                             "no se puede usar la función genérica '{}' como valor; llámala directamente", name
                         )));
                     }
-                    return Ok(Type::Fn(sig.params.clone(), Box::new(sig.ret.clone())));
+                    let ty = Type::Fn(sig.params.clone(), Box::new(sig.ret.clone()));
+                    let def = self.fn_defs.get(name).copied();
+                    self.record_ident(expr.line, expr.col, name, &ty, def); // M10.2b
+                    return Ok(ty);
                 }
                 Err(self.err(expr.line, expr.col, format!("nombre '{}' no declarado", name)))
             }
@@ -1633,7 +1713,20 @@ impl Checker {
     ) -> Result<Type, TypeError> {
         match &callee.kind {
             // Llamada directa por nombre: `f(a, b)`.
-            ExprKind::Ident(n) => self.check_named_call(&n.clone(), args, line, col),
+            ExprKind::Ident(n) => {
+                let n = n.clone();
+                // M10.2b: hover/def sobre el nombre llamado, si es una función conocida (no un
+                // builtin ni una variable-función, que ya pasan por la rama de `check_expr`).
+                let fn_ty = self.gather
+                    .then(|| self.functions.get(&n))
+                    .flatten()
+                    .map(|sig| Type::Fn(sig.params.clone(), Box::new(sig.ret.clone())));
+                if let Some(ty) = fn_ty {
+                    let def = self.fn_defs.get(&n).copied();
+                    self.record_ident(callee.line, callee.col, &n, &ty, def);
+                }
+                self.check_named_call(&n, args, line, col)
+            }
 
             // UFCS (M7.1): `recv.f(args)`. Si `f` es un **campo** del struct receptor,
             // es una llamada al valor de ese campo (semántica de M3/M4); si **no**, se
@@ -2098,11 +2191,26 @@ impl Checker {
     }
 
     /// Declara una variable en el ámbito más interno (permite shadowing del exterior).
-    fn declare(&mut self, name: &str, ty: Type, mutable: bool) {
+    /// `def` es la posición de su declaración (M10.2b: ir-a-definición).
+    fn declare(&mut self, name: &str, ty: Type, mutable: bool, def: (usize, usize)) {
         self.scopes
             .last_mut()
             .expect("siempre hay un ámbito activo al declarar")
-            .insert(name.to_string(), VarInfo { ty, mutable });
+            .insert(name.to_string(), VarInfo { ty, mutable, def });
+    }
+
+    /// Registra el índice semántico de un uso de identificador (M10.2b): su tipo (hover) y, si
+    /// se conoce, la posición de su declaración (ir-a-definición). No hace nada salvo en modo
+    /// `gather`, así que la verificación normal no paga nada.
+    fn record_ident(&mut self, line: usize, col: usize, name: &str, ty: &Type, def: Option<(usize, usize)>) {
+        if !self.gather {
+            return;
+        }
+        let len = name.chars().count();
+        self.index.hovers.push(HoverEntry { line, col, len, text: format!("{}: {}", name, ty) });
+        if let Some((def_line, def_col)) = def {
+            self.index.defs.push(DefEntry { line, col, len, def_line, def_col });
+        }
     }
 
     /// Busca una variable de dentro hacia afuera.
@@ -4171,6 +4279,21 @@ fn main() -> int {
                fn main() -> int { 0 }"#,
             "es genérico: declara sus parámetros en el impl",
         );
+    }
+
+    #[test]
+    fn indice_semantico_hover_de_variable() {
+        // M10.2b: el índice registra el tipo de un uso de identificador.
+        let src = "fn main() -> int {\n  let x = 5;\n  x\n}";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        let idx = semantic_index(&mut prog);
+        let h = idx.hovers.iter().find(|h| h.line == 3 && h.col == 3).expect("hover de x");
+        assert_eq!(h.text, "x: int");
+        assert_eq!(h.len, 1);
+        // Y registra su definición (el `let` de la línea 2).
+        let d = idx.defs.iter().find(|d| d.line == 3 && d.col == 3).expect("def de x");
+        assert_eq!((d.def_line, d.def_col), (2, 3));
     }
 
     #[test]

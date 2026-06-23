@@ -36,6 +36,18 @@ fn responde_initialize_con_capacidades() {
     assert!(out.contains("\"id\":1"), "eco del id\n{out}");
     assert!(out.contains("\"capabilities\""), "anuncia capacidades\n{out}");
     assert!(out.contains("\"textDocumentSync\":1"), "Full sync\n{out}");
+    assert!(out.contains("\"hoverProvider\":true"), "anuncia hover (M10.2b)\n{out}");
+}
+
+#[test]
+fn hover_muestra_el_tipo_de_una_variable() {
+    // didOpen un programa y pide hover sobre el uso de `x` (línea 2, carácter 2, 0-basado).
+    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int {\n  let x = 5;\n  x\n}"}}}"#;
+    let hover = r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":2}}}"#;
+    let entrada = frame(open) + &frame(hover) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("\"id\":2"), "responde a la petición de hover\n{out}");
+    assert!(out.contains("x: int"), "muestra el tipo de x\n{out}");
 }
 
 #[test]

@@ -15,6 +15,7 @@
 //! → `publishDiagnostics`. Sin hover ni go-to-definition (futuros; exigirían exponer una API
 //! de tipos del checker y un índice de símbolos). DESIGN §19.2.
 
+use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 
 use crate::{checker, lexer, parser};
@@ -33,7 +34,11 @@ pub fn run() {
 ///
 /// Lee un mensaje, lo despacha por su `method` y, cuando corresponde, analiza el documento
 /// y publica diagnósticos. Termina al recibir `exit` o al cerrarse la entrada (EOF).
+///
+/// Guarda los documentos abiertos (M10.2b): una petición `hover`/`definition` trae solo la
+/// `uri` y la posición, no el texto, así que el servidor debe recordarlo.
 fn serve<R: BufRead, W: Write>(reader: &mut R, out: &mut W) {
+    let mut docs: HashMap<String, String> = HashMap::new();
     while let Some(raw) = read_message(reader) {
         let Ok(msg) = json::parse(&raw) else {
             continue; // mensaje ilegible: lo ignoramos (un servidor robusto no se cae)
@@ -54,18 +59,26 @@ fn serve<R: BufRead, W: Write>(reader: &mut R, out: &mut W) {
             "textDocument/didOpen" => {
                 if let Some((uri, text)) = open_params(&msg) {
                     send(out, &diagnosticos(&uri, &text));
+                    docs.insert(uri, text);
                 }
             }
             "textDocument/didChange" => {
                 if let Some((uri, text)) = change_params(&msg) {
                     send(out, &diagnosticos(&uri, &text));
+                    docs.insert(uri, text);
                 }
             }
             "textDocument/didClose" => {
                 if let Some(uri) = close_uri(&msg) {
+                    docs.remove(&uri);
                     // Limpiamos los diagnósticos del editor con una lista vacía.
                     send(out, &publish(&uri, vec![]));
                 }
+            }
+            // M10.2b: hover — el tipo del identificador bajo el cursor.
+            "textDocument/hover" => {
+                let id = msg.get("id").cloned().unwrap_or(Json::Null);
+                send(out, &resultado(id, hover_result(&msg, &docs)));
             }
             // Petición desconocida (lleva `id`) → error JSON-RPC. Notificación → se ignora.
             _ => {
@@ -138,6 +151,56 @@ fn close_uri(msg: &Json) -> Option<String> {
     Some(msg.get("params")?.get("textDocument")?.get("uri")?.as_str()?.to_string())
 }
 
+/// `(uri, línea, carácter)` (0-basados) de una petición posicional (`hover`/`definition`):
+/// `params.textDocument.uri` + `params.position.{line,character}`.
+fn pos_params(msg: &Json) -> Option<(String, usize, usize)> {
+    let params = msg.get("params")?;
+    let uri = params.get("textDocument")?.get("uri")?.as_str()?.to_string();
+    let pos = params.get("position")?;
+    let line = as_usize(pos.get("line")?)?;
+    let character = as_usize(pos.get("character")?)?;
+    Some((uri, line, character))
+}
+
+// ── Hover (M10.2b) ───────────────────────────────────────────────────────────────────
+
+/// El `result` de un `textDocument/hover`: el tipo del identificador bajo el cursor, o `null`.
+fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+    let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
+    let Some(src) = docs.get(&uri) else { return Json::Null };
+    let Some((info, start, end)) = hover_at(src, line0, char0) else { return Json::Null };
+    obj(vec![
+        ("contents", obj(vec![("kind", text("plaintext")), ("value", Json::Str(info))])),
+        ("range", rango(line0, start, end)),
+    ])
+}
+
+/// Busca el identificador en `(line0, char0)` (0-basado) y devuelve `(texto, col_ini, col_fin)`
+/// (columnas 0-basadas en esa línea). Corre el front-end recolectando el índice semántico.
+fn hover_at(src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
+    let tokens = lexer::lex(src).ok()?;
+    let mut program = parser::parse(tokens).ok()?;
+    let idx = checker::semantic_index(&mut program);
+    // El índice usa posiciones 1-basadas (como las fases); el cursor llega 0-basado.
+    let (qline, qcol) = (line0 + 1, char0 + 1);
+    let e = idx.hovers.iter().find(|h| h.line == qline && qcol >= h.col && qcol < h.col + h.len)?;
+    Some((e.text.clone(), e.col - 1, e.col - 1 + e.len))
+}
+
+/// Un `range` LSP en una sola línea (0-basada), de la columna `start` a `end` (0-basadas).
+fn rango(line0: usize, start: usize, end: usize) -> Json {
+    let pos = |ch: usize| obj(vec![("line", num(line0 as i64)), ("character", num(ch as i64))]);
+    obj(vec![("start", pos(start)), ("end", pos(end))])
+}
+
+/// Lee un `Json::Num` como `usize` (las posiciones LSP son enteros).
+fn as_usize(j: &Json) -> Option<usize> {
+    match j {
+        Json::Num(n) => Some(*n as usize),
+        _ => None,
+    }
+}
+
 // ── Análisis: el puente con el compilador ────────────────────────────────────────────
 
 /// Un diagnóstico del front-end: posición **1-basada** (como reportan las fases) y el
@@ -173,9 +236,10 @@ pub fn analizar(src: &str) -> Option<Diag> {
 /// La respuesta a `initialize`: anuncia las capacidades del servidor.
 fn respuesta_initialize(id: Json) -> Json {
     let capabilities = obj(vec![
-        // 1 = Full sync: el cliente reenvía el documento entero en cada cambio (por eso no
-        // mantenemos estado del documento en el servidor: cada `didChange` trae todo).
+        // 1 = Full sync: el cliente reenvía el documento entero en cada cambio.
         ("textDocumentSync", num(1)),
+        // M10.2b: el servidor responde hover (el tipo bajo el cursor).
+        ("hoverProvider", Json::Bool(true)),
     ]);
     let result = obj(vec![
         ("capabilities", capabilities),
@@ -674,7 +738,7 @@ mod tests {
 
     #[test]
     fn serve_metodo_desconocido_con_id_da_error() {
-        let body = r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/hover","params":{}}"#;
+        let body = r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/completion","params":{}}"#;
         let mut entrada = frame(body);
         entrada.push_str(&frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
 

@@ -19,5 +19,6 @@ pub mod lexer;
 pub mod parser;
 pub mod prelude;
 pub mod repl;
+pub mod test_runner;
 pub mod token;
 pub mod vm;

@@ -69,19 +69,66 @@ impl Parser {
         let mut traits = Vec::new();
         let mut impls = Vec::new();
         while !self.is_at_end() {
+            // M10.1: las anotaciones (`@nombre[(args)]`) preceden a la declaración.
+            let anns = self.annotations()?;
             if self.check(&TokenKind::Struct) {
-                structs.push(self.struct_def()?);
+                let mut s = self.struct_def()?;
+                s.annotations = anns;
+                structs.push(s);
             } else if self.check(&TokenKind::Enum) {
-                enums.push(self.enum_def()?);
+                let mut e = self.enum_def()?;
+                e.annotations = anns;
+                enums.push(e);
             } else if self.check(&TokenKind::Trait) {
+                self.no_annotations(&anns, "un trait")?;
                 traits.push(self.trait_def()?);
             } else if self.check(&TokenKind::Impl) {
+                self.no_annotations(&anns, "un impl")?;
                 impls.push(self.impl_block()?);
             } else {
-                functions.push(self.function()?);
+                let mut f = self.function()?;
+                f.annotations = anns;
+                functions.push(f);
             }
         }
         Ok(Program { functions, structs, enums, traits, impls })
+    }
+
+    /// Recoge las anotaciones que preceden a una declaración (M10.1):
+    /// `{ '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] }`. Devuelve `[]` si no hay ninguna.
+    fn annotations(&mut self) -> Result<Vec<Annotation>, ParseError> {
+        let mut anns = Vec::new();
+        while self.check(&TokenKind::At) {
+            let at = self.advance();
+            let (name, _, _) = self.expect_ident("el nombre de la anotación tras '@'")?;
+            let mut args = Vec::new();
+            if self.eat(&TokenKind::LParen) {
+                if !self.check(&TokenKind::RParen) {
+                    loop {
+                        let (a, _, _) = self.expect_ident("un argumento de la anotación")?;
+                        args.push(a);
+                        if !self.eat(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                self.expect(&TokenKind::RParen, "')' para cerrar los argumentos de la anotación")?;
+            }
+            anns.push(Annotation { name, args, line: at.line, col: at.col });
+        }
+        Ok(anns)
+    }
+
+    /// Error si hay anotaciones donde M10.1 no las admite (trait/impl).
+    fn no_annotations(&self, anns: &[Annotation], donde: &str) -> Result<(), ParseError> {
+        match anns.first() {
+            None => Ok(()),
+            Some(a) => Err(ParseError {
+                msg: format!("no se permiten anotaciones sobre {}", donde),
+                line: a.line,
+                col: a.col,
+            }),
+        }
     }
 
     /// enum_def = 'enum' IDENT '{' [ variant { ',' variant } [ ',' ] ] '}'
@@ -114,7 +161,7 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace, "'}' para cerrar el enum")?;
-        Ok(EnumDef { name, type_params, variants, line: kw.line, col: kw.col })
+        Ok(EnumDef { annotations: Vec::new(), name, type_params, variants, line: kw.line, col: kw.col })
     }
 
     /// struct_def = 'struct' IDENT '{' [ field { ',' field } [ ',' ] ] '}'
@@ -135,7 +182,7 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace, "'}' para cerrar el struct")?;
-        Ok(StructDef { name, type_params, fields, line: kw.line, col: kw.col })
+        Ok(StructDef { annotations: Vec::new(), name, type_params, fields, line: kw.line, col: kw.col })
     }
 
     /// function = 'fn' IDENT [ '<' tparam { ',' tparam } '>' ] '(' [ params ] ')'
@@ -162,6 +209,7 @@ impl Parser {
 
         let body = self.block()?;
         Ok(Function {
+            annotations: Vec::new(),
             name,
             type_params,
             bounds,
@@ -256,6 +304,7 @@ impl Parser {
         };
         let body = self.block()?;
         Ok(Function {
+            annotations: Vec::new(),
             name,
             type_params: Vec::new(),
             bounds: Vec::new(),
@@ -1553,6 +1602,33 @@ fn main() -> int {
         let tokens = crate::lexer::lex("impl T S { } fn main() -> int { 0 }").expect("lex ok");
         let err = parse(tokens).expect_err("falta 'for'");
         assert!(err.msg.contains("se esperaba 'for'"), "mensaje: {}", err.msg);
+    }
+
+    #[test]
+    fn parse_anotaciones() {
+        let prog = parse_prog(r#"
+            @test
+            fn t() -> bool { true }
+
+            @derive(Eq)
+            struct P { x: int }
+
+            fn main() -> int { 0 }
+        "#);
+        let t = prog.functions.iter().find(|f| f.name == "t").unwrap();
+        assert_eq!(t.annotations.len(), 1);
+        assert_eq!(t.annotations[0].name, "test");
+        assert!(t.annotations[0].args.is_empty());
+        let p = &prog.structs[0];
+        assert_eq!(p.annotations[0].name, "derive");
+        assert_eq!(p.annotations[0].args, vec!["Eq".to_string()]);
+    }
+
+    #[test]
+    fn parse_anotacion_sobre_impl_es_error() {
+        let tokens = crate::lexer::lex("@test\ntrait T { fn f(self) -> int; }").expect("lex ok");
+        let err = parse(tokens).expect_err("anotación sobre trait");
+        assert!(err.msg.contains("no se permiten anotaciones"), "mensaje: {}", err.msg);
     }
 
     #[test]

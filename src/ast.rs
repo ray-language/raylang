@@ -88,6 +88,17 @@ impl std::fmt::Display for Type {
     }
 }
 
+/// Una **anotación** (M10.1): un metadato `@nombre` o `@nombre(arg, …)` adherido a una
+/// declaración. Los argumentos son identificadores (p. ej. `@derive(Eq)`). El conjunto de
+/// nombres válidos es **cerrado** (lo conoce el compilador); el checker rechaza los demás.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Annotation {
+    pub name: String,
+    pub args: Vec<String>,
+    pub line: usize,
+    pub col: usize,
+}
+
 /// Un programa completo: definiciones de tipos (struct/enum) y funciones de nivel
 /// superior.
 #[derive(Debug, Clone, PartialEq)]
@@ -105,6 +116,8 @@ pub struct Program {
 /// se guardan **en orden de declaración**.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
+    /// Anotaciones de la declaración (M10.1), p. ej. `@derive(Eq)`. Vacío si no hay.
+    pub annotations: Vec<Annotation>,
     pub name: String,
     /// Parámetros de tipo: los `A, B` de `struct Par<A, B> { ... }` (M6). Vacío = no
     /// genérico. En los tipos de los campos, esos nombres aparecen como `Type::Var`.
@@ -119,6 +132,8 @@ pub struct StructDef {
 /// un *payload* posicional (cero o más tipos); sin tipos es una variante *unit*.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDef {
+    /// Anotaciones de la declaración (M10.1), p. ej. `@derive(Eq)`. Vacío si no hay.
+    pub annotations: Vec<Annotation>,
     pub name: String,
     /// Parámetros de tipo: los `T` de `enum Option<T> { ... }` (M6). Vacío = no
     /// genérico. En las variantes, esos nombres aparecen como `Type::Var`.
@@ -178,6 +193,8 @@ pub struct ImplBlock {
 /// Una función: `fn nombre<params de tipo>(params) -> retorno { cuerpo }`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
+    /// Anotaciones de la declaración (M10.1), p. ej. `@test`. Vacío si no hay.
+    pub annotations: Vec<Annotation>,
     pub name: String,
     /// Parámetros de tipo: los `T, U` de `fn mapear<T, U>(...)` (M6). Vacío = no
     /// genérica. Dentro del cuerpo, cada nombre está en ámbito como `Type::Var`.

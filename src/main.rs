@@ -1,6 +1,7 @@
 //! CLI de raylang.
 //!
 //! Uso: `raylang [--vm] <archivo.ray>`  — ejecuta un archivo.
+//!      `raylang --test <archivo.ray>`  — corre las funciones `@test` (M10.1).
 //!      `raylang`  (o `raylang --repl`)  — arranca el REPL interactivo (M8.2).
 //!
 //! Corre el pipeline: lexer → parser → checker, y luego ejecuta el programa con el
@@ -12,11 +13,11 @@ use std::fs;
 use std::process;
 
 use raylang::interpreter::Value;
-use raylang::{checker, compiler, diagnostic, interpreter, lexer, parser, repl, vm};
+use raylang::{checker, compiler, diagnostic, interpreter, lexer, parser, repl, test_runner, vm};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let (use_vm, path) = match args.len() {
+    let (use_vm, test_mode, path) = match args.len() {
         // Sin archivo: REPL interactivo (M8.2).
         1 => {
             repl::run();
@@ -26,10 +27,11 @@ fn main() {
             repl::run();
             return;
         }
-        2 => (false, args[1].clone()),
-        3 if args[1] == "--vm" => (true, args[2].clone()),
+        2 => (false, false, args[1].clone()),
+        3 if args[1] == "--vm" => (true, false, args[2].clone()),
+        3 if args[1] == "--test" => (false, true, args[2].clone()),
         _ => {
-            eprintln!("uso: raylang [--vm] <archivo.ray>   |   raylang [--repl]");
+            eprintln!("uso: raylang [--vm | --test] <archivo.ray>   |   raylang [--repl]");
             process::exit(64); // EX_USAGE
         }
     };
@@ -41,6 +43,11 @@ fn main() {
             process::exit(66); // EX_NOINPUT
         }
     };
+
+    // Modo prueba (M10.1): corre las funciones `@test` vía un cliente externo.
+    if test_mode {
+        process::exit(test_runner::run(&src));
+    }
 
     // Front-end: lexer → parser → checker. Cada error se muestra con su contexto de
     // fuente (M8.3): la línea y un `^` bajo la posición.

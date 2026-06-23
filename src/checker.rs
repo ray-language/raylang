@@ -116,6 +116,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
                 .map(|p| Param { ty: subst_self(&p.ty, &imp.target), ..p.clone() })
                 .collect();
             program.functions.push(Function {
+                annotations: Vec::new(),
                 name: mangle(&key, &m.name),
                 type_params: Vec::new(),
                 bounds: Vec::new(),
@@ -141,6 +142,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
             let mut body = body.clone();
             freshen_positions(&mut body, &mut fresh_pos);
             program.functions.push(Function {
+                annotations: Vec::new(),
                 name: mangle(&key, &tm.name),
                 type_params: Vec::new(),
                 bounds: Vec::new(),
@@ -382,9 +384,50 @@ impl Checker {
             }
         }
 
+        // --- M10.1: validar las anotaciones (conjunto cerrado conocido) ---
+        self.check_annotations(program)?;
+
         // --- Verificación de cada función ---
         for f in &program.functions {
             self.check_function(f)?;
+        }
+        Ok(())
+    }
+
+    /// Valida las anotaciones (M10.1): cada una debe ser **conocida** y estar bien
+    /// colocada. `@test` solo en funciones `() -> bool`. (`@derive` se añade en M10.1b.)
+    fn check_annotations(&self, program: &Program) -> Result<(), TypeError> {
+        for f in &program.functions {
+            for a in &f.annotations {
+                match a.name.as_str() {
+                    "test" => {
+                        if !a.args.is_empty() {
+                            return Err(self.err(a.line, a.col, "'@test' no recibe argumentos".into()));
+                        }
+                        if !f.params.is_empty() {
+                            return Err(self.err(a.line, a.col, format!(
+                                "la función de prueba '@test' '{}' no debe recibir parámetros", f.name
+                            )));
+                        }
+                        if self.resolve_type(&f.return_type) != Type::Bool {
+                            return Err(self.err(a.line, a.col, format!(
+                                "una función '@test' debe devolver bool, no {}", f.return_type
+                            )));
+                        }
+                    }
+                    other => return Err(self.err(a.line, a.col, format!("anotación desconocida: '@{}'", other))),
+                }
+            }
+        }
+        let tipos = program.structs.iter().map(|s| &s.annotations)
+            .chain(program.enums.iter().map(|e| &e.annotations));
+        for anns in tipos {
+            for a in anns {
+                match a.name.as_str() {
+                    "test" => return Err(self.err(a.line, a.col, "'@test' solo se permite sobre funciones".into())),
+                    other => return Err(self.err(a.line, a.col, format!("anotación desconocida: '@{}'", other))),
+                }
+            }
         }
         Ok(())
     }
@@ -2677,6 +2720,7 @@ fn lower_dyn(program: &mut Program, coercions: &CoercionMap, dispatch: &Dispatch
             fields.push((m.name.clone(), Type::Unit));
         }
         program.structs.push(StructDef {
+            annotations: Vec::new(),
             name: dyn_struct_name(&t.name),
             type_params: Vec::new(),
             fields,
@@ -3948,6 +3992,49 @@ fn main() -> int {
         err_contains(
             "fn f(x: dyn NoExiste) -> int { 0 } fn main() -> int { 0 }",
             "trait 'NoExiste' no declarado",
+        );
+    }
+
+    // ----- M10.1: anotaciones -----
+
+    #[test]
+    fn test_valido() {
+        check_src(r#"
+            @test
+            fn ok() -> bool { 1 + 1 == 2 }
+            fn main() -> int { 0 }
+        "#).expect("@test con firma () -> bool");
+    }
+
+    #[test]
+    fn test_firma_incorrecta() {
+        err_contains(
+            "@test fn malo() -> int { 1 } fn main() -> int { 0 }",
+            "debe devolver bool",
+        );
+    }
+
+    #[test]
+    fn test_con_parametros() {
+        err_contains(
+            "@test fn malo(x: int) -> bool { true } fn main() -> int { 0 }",
+            "no debe recibir parámetros",
+        );
+    }
+
+    #[test]
+    fn anotacion_desconocida() {
+        err_contains(
+            "@magia fn f() -> bool { true } fn main() -> int { 0 }",
+            "anotación desconocida: '@magia'",
+        );
+    }
+
+    #[test]
+    fn test_sobre_struct_es_error() {
+        err_contains(
+            "@test struct S { x: int } fn main() -> int { 0 }",
+            "'@test' solo se permite sobre funciones",
         );
     }
 }

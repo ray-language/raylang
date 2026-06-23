@@ -43,6 +43,8 @@ fuente → [lexer] → tokens → [parser] → AST → [checker] → [interprete
 | `src/interpreter.rs` | ejecución | tree-walking; valores en runtime; `return` como señal de flujo |
 | `src/diagnostic.rs` | presentación | M8.3: `render` añade la línea de fuente y un `^` bajo la posición. Solo presentación; no toca las fases |
 | `src/repl.rs` | cliente externo | REPL (M8.2): acumula y re-ejecuta `fn main` vía la API pública; muestra el valor con `print`. No toca el core |
+| `src/test_runner.rs` | cliente externo | runner `@test` (M10.1): sintetiza un `main` que corre las pruebas; código de salida = nº de fallos. No toca el core |
+| `src/lsp.rs` | cliente externo | LSP (M10.2): `raylang --lsp`. JSON-RPC a mano (`mod json` + framing) + diagnósticos; `analizar` reusa lex/parse/check. No toca el core |
 | `src/lib.rs`, `src/main.rs` | librería + CLI | el binario es un cliente delgado (sin archivo → REPL) |
 
 El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
@@ -187,8 +189,19 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   lo parsea y lo añade a `program.impls`; M9 lo baja) — `generate_eq_derives`. Trait `Eq` en
   el prelude (`igual(self, otro: Self) -> bool`). Igualdad: struct = `&&` de campos; enum =
   `match` anidado, payload con `==`. Compone con bounds (`T: Eq`). Runtime intacto (erasure).
-- **Siguiente: M10.2** (LSP: servidor que reusa el checker; decisión JSON-RPC a mano vs.
-  crate) o **M9.2b** (impls genéricos). Ver hoja de ruta (DESIGN §2, §19) / IDEAS.md.
+- **M10.2 COMPLETO** (281 tests + integración CLI verdes, incl. `tests/lsp_cli.rs`): **LSP**
+  (Language Server, diagnósticos en vivo). `raylang --lsp` habla **LSP por stdin/stdout**.
+  **Decisiones**: transporte **JSON-RPC a mano** (mantiene la invariante **cero dependencias de
+  Cargo**: `mod json` propio —parser+serializador en std— y framing `Content-Length` en
+  `src/lsp.rs`) + alcance **solo diagnósticos** (sin hover/definición → M10.2b). **Cliente
+  externo** como el REPL/`--test`: `analizar(src)` corre lexer→parser→checker (**sin ejecutar**)
+  y devuelve el **primer** error (*fail-fast* → un diagnóstico por documento); **cero cambios en
+  el núcleo**. Traduce `(línea, col)` 1-basado → 0-basado de LSP; el mensaje es el `Display` del
+  error (el subrayado lo pinta el editor, no M8.3). `serve` es genérico sobre los flujos → se
+  prueba en memoria con un `Cursor` + subproceso real (`tests/lsp_cli.rs`). VSCode necesitaría un
+  *language client* (npm, del lado del editor); Neovim/Helix lo usan directo.
+- **Siguiente: M9.2b** (impls genéricos / diccionarios anidados) o **M10.2b** (hover/definición en
+  el LSP). Ver hoja de ruta (DESIGN §2, §19) / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

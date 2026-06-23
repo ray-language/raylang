@@ -38,4 +38,10 @@ Las dos de M10.1 muestran las **dos caras** de las anotaciones:
   a partir de una marca, el compilador sintetiza un `impl`.
 
 Ambas son **erasure**: metadatos del front-end que no llegan al runtime. Las dos páginas
-siguientes las detallan; el LSP (M10.2) se especifica al arrancarlo.
+siguientes las detallan.
+
+## El LSP: un cliente del checker
+
+La tercera página cubre **M10.2**, el *Language Server*: un servidor que reusa el checker para
+dar diagnósticos en vivo a cualquier editor. Como el REPL, es un **cliente externo** (cero
+cambios en el núcleo), y —fiel a la invariante de *cero dependencias*— habla **JSON-RPC a mano**.

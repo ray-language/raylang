@@ -205,6 +205,11 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   lanza `raylang --lsp` por stdio y conecta sus diagnósticos a la UI (build TS→JS con `tsc`;
   ajustes `raylang.serverPath`/`raylang.enableLsp`; v0.10.0). Trae deps de **npm** pero **del lado
   del editor** —raylang (Rust) sigue cero-dependencias—. `node_modules`/`out` en `.gitignore`.
+- **M10.2d COMPLETO**: **paquete de Sublime Text 4** (`editors/sublime/`). Coloreado
+  `raylang.sublime-syntax` (port del grammar de VSCode, **mismos scopes**) + `Comments.tmPreferences`
+  (toggle `//`). Diagnósticos: se conecta `raylang --lsp` declarándolo en el paquete **LSP**
+  (sublimelsp) — **solo config, sin compilar** (su soporte LSP es un paquete externo, como
+  Neovim/Helix). Solo VSCode necesita compilar un cliente propio. README con instalación + config.
 - **Siguiente: M9.2b** (impls genéricos / diccionarios anidados) o **M10.2b** (hover/definición en
   el LSP). Ver hoja de ruta (DESIGN §2, §19) / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,

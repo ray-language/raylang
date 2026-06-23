@@ -1481,10 +1481,13 @@ lista vacía). Una petición desconocida con `id` recibe un error JSON-RPC `-326
 
 **Conexión desde editores:** se lanza `raylang --lsp` y se le apunta el cliente LSP del editor a
 archivos `.ray`. **Neovim/Helix**: un par de líneas de config, sin npm (demuestra la pureza del
-servidor). **VSCode** (M10.2c): la extensión `editors/vscode/` incluye un cliente
+servidor). **Sublime Text 4** (M10.2d): el paquete `editors/sublime/` aporta el coloreado
+(`raylang.sublime-syntax`) y se conecta al servidor declarándolo en el paquete **LSP** (solo
+config, sin compilar). **VSCode** (M10.2c): la extensión `editors/vscode/` incluye un cliente
 (`src/extension.ts` sobre `vscode-languageclient`) que lanza el servidor; eso sí trae deps de
-**npm**, pero **del lado del editor** —el binario de raylang sigue sin dependencias—. Ver
-`editors/vscode/README.md`. El binario es el mismo de siempre, con un modo más.
+**npm**, pero **del lado del editor** —el binario de raylang sigue sin dependencias—. Ver el
+`README.md` de cada carpeta. Solo VSCode necesita compilar un cliente; los demás son config
+porque su soporte LSP es externo (paquete/built-in del editor). El binario es el mismo de siempre, con un modo más.
 
 ### 19.3 Deferido (más allá de M10.1)
 - **LSP** → M10.2 (su spec y decisión).

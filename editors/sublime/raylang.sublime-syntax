@@ -1,0 +1,117 @@
+%YAML 1.2
+---
+# Sintaxis de raylang para Sublime Text 4 (.sublime-syntax).
+#
+# Es un *port* de la gramática TextMate de la extensión de VSCode
+# (editors/vscode/syntaxes/raylang.tmLanguage.json): mismas reglas, **mismos scopes**, para que
+# cualquier tema de color las pinte igual en ambos editores. Es coloreado **estático** (no
+# entiende el programa); la validación real (errores subrayados) la da el Language Server
+# `raylang --lsp` vía el paquete LSP. Ver README.md.
+#
+# El orden de las reglas importa: en cada posición gana la primera que casa. Se replica el orden
+# de la gramática de VSCode (definiciones y palabras clave antes que los identificadores
+# genéricos; `self`/`Self` y builtins antes que la regla de tipos/llamadas).
+name: raylang
+file_extensions:
+  - ray
+scope: source.raylang
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_]*'
+  user_type: '[A-Z][A-Za-z0-9_]*'
+  builtins: 'print|len|push|map|filter|fold'
+
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: annotations
+    - include: definitions
+    - include: keywords
+    - include: types
+    - include: literals
+    - include: calls
+    - include: operators
+
+  comments:
+    - match: '//.*$'
+      scope: comment.line.double-slash.raylang
+
+  strings:
+    # Una cadena con escapes; se entra a un contexto propio hasta la comilla de cierre.
+    - match: '"'
+      scope: punctuation.definition.string.begin.raylang
+      push:
+        - meta_scope: string.quoted.double.raylang
+        - match: '\\.'
+          scope: constant.character.escape.raylang
+        - match: '"'
+          scope: punctuation.definition.string.end.raylang
+          pop: true
+
+  annotations:
+    # @nombre (M10.1): @test, @derive, ... El argumento (@derive(Eq)) cae luego en 'types'.
+    - match: '@{{ident}}'
+      scope: storage.modifier.annotation.raylang
+
+  definitions:
+    # `struct Punto` / `enum Figura` / `trait Mostrable`: la palabra clave + el nombre de tipo.
+    - match: '\b(struct|enum|trait)\s+({{user_type}})'
+      captures:
+        1: storage.type.raylang
+        2: entity.name.type.raylang
+    # `impl Mostrable for Punto`: 'for' es contextual (no es palabra clave global), solo aquí.
+    - match: '\b(impl)\s+({{user_type}})\s+(for)\s+({{user_type}})'
+      captures:
+        1: storage.type.raylang
+        2: entity.name.type.raylang
+        3: keyword.control.raylang
+        4: entity.name.type.raylang
+    # `fn fib`: definición de función.
+    - match: '\b(fn)\s+({{ident}})'
+      captures:
+        1: storage.type.function.raylang
+        2: entity.name.function.raylang
+
+  keywords:
+    - match: '\b(if|else|while|return|match)\b'
+      scope: keyword.control.raylang
+    # El receptor 'self' y el tipo 'Self' (M9). Antes de 'types' porque Self es mayúscula.
+    - match: '\b(self|Self)\b'
+      scope: variable.language.self.raylang
+    - match: '\b(let|var|fn|struct|enum|trait|impl|dyn)\b'
+      scope: storage.type.raylang
+    # Builtins/stdlib seguidos de '(' : antes de la regla de llamadas para conservar su color.
+    - match: '\b({{builtins}})\b(?=\s*\()'
+      scope: support.function.builtin.raylang
+
+  types:
+    - match: '\b(int|float|bool|string)\b'
+      scope: support.type.primitive.raylang
+    # Nombre de tipo de usuario por convención (empieza en mayúscula): struct/enum/variante/etc.
+    - match: '\b{{user_type}}\b'
+      scope: entity.name.type.raylang
+
+  literals:
+    - match: '\b(true|false)\b'
+      scope: constant.language.boolean.raylang
+    - match: '\b[0-9]+\.[0-9]+\b'
+      scope: constant.numeric.float.raylang
+    - match: '\b[0-9]+\b'
+      scope: constant.numeric.integer.raylang
+
+  calls:
+    # Llamada ordinaria: identificador seguido de '('.
+    - match: '\b({{ident}})(?=\s*\()'
+      captures:
+        1: entity.name.function.raylang
+    # Objetivo de un pipeline desnudo (`x |> doble`): función aunque no lleve '('. Se excluyen
+    # los builtins, que en `|> map(...)` ya colorea el paréntesis.
+    - match: '(\|>)\s*(?!(?:{{builtins}})\b)({{ident}})'
+      captures:
+        1: keyword.operator.raylang
+        2: entity.name.function.raylang
+
+  operators:
+    - match: '=>|->|\|>|==|!=|<=|>=|&&|\|\||[-+*/%<>!=:?]'
+      scope: keyword.operator.raylang

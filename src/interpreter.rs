@@ -563,9 +563,9 @@ impl<'a> Interpreter<'a> {
         if let ExprKind::Ident(name) = &callee.kind {
             let is_local = self.lookup_opt(name).is_some();
             if !is_local {
-                // Builtins: evalúan sus argumentos y operan directamente.
-                if matches!(name.as_str(), "print" | "len" | "push" | "to_string" | "trim" | "split"
-                    | "eprint" | "__parse_int" | "__read_line" | "__env" | "args") {
+                // Builtins: evalúan sus argumentos y operan directamente. La membresía la da el
+                // registro único (`src/builtins.rs`); la implementación vive en `eval_builtin`.
+                if crate::builtins::is_builtin(name) {
                     let mut values = Vec::with_capacity(args.len());
                     for arg in args {
                         values.push(self.eval_expr(arg)?);

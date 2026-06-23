@@ -36,7 +36,8 @@ fuente → [lexer] → tokens → [parser] → AST → [checker] → [interprete
 
 | Archivo | Fase | Notas |
 |---------|------|-------|
-| `src/prelude.rs` | front-end | stdlib en raylang: Option/Result (M6.3) + map/filter/fold (M7.3), inyectados en `check` |
+| `src/prelude.rs` | front-end | stdlib en raylang: Option/Result (M6.3) + map/filter/fold (M7.3) + I/O (parse_int/input/read_int/env, M11.2), inyectados en `check` |
+| `src/builtins.rs` | front-end | **registro único** de builtins (L1): nombre + opcode + regla de tipado. Lo consultan checker/compilador/intérprete (la *impl* de ejecución sigue en `eval_builtin`/VM) |
 | `src/token.rs`, `src/lexer.rs` | léxico | texto → tokens; cada token con (línea, col) |
 | `src/ast.rs`, `src/parser.rs` | sintaxis | descenso recursivo; precedencia por jerarquía de reglas |
 | `src/checker.rs` | semántica | tipos; dos pasadas (firmas + cuerpos), pila de ámbitos, análisis de divergencia |
@@ -291,7 +292,17 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `args() -> [string]` (opcode `Args` + almacén de proceso `OnceLock` en `interpreter.rs`,
     `set_program_args`/`program_args`, leído por ambos motores). `main.rs` acepta `raylang
     [--vm|--test] <archivo> [args...]` y deja los args tras la ruta en el almacén.
-- **Siguiente: M11 cerrado** salvo diferidos. Pendientes: **I/O de archivos** (`read_file`/`write_file`
+- **Limpieza post-M11 L1 COMPLETO** (300 tests + integración verdes): **registro único de builtins**
+  (`src/builtins.rs`). Antes cada builtin (`print`/`len`/`split`/`args`/…, ya ~13) se repetía en
+  ~4 sitios (checker ×2, intérprete, compilador). Ahora una tabla `BUILTINS` con `name` + `opcode`
+  + `check` (regla de tipado: `fn(&[Type]) -> Result<Type, (Option<usize> arg_culpable, String)>`).
+  La consultan `check_named_call`/`name_is_callable` (checker), `emit_call` (compilador) y el
+  despacho del intérprete; las *impls* de ejecución siguen en `eval_builtin` (intérprete) y el
+  `match` por opcode (VM) —son código, no metadatos—. Mensajes/posiciones idénticos. Se eligió
+  tabla en Rust (opción B) frente a `@builtin fn` porque 4 builtins son **ad-hoc polimórficos**
+  (`print`/`eprint`/`len`/`to_string`) y no tendrían firma raylang ordinaria.
+- **Siguiente** (track de limpieza): **L2** `@derive(Show)` y **L3** errores multi-archivo en el
+  loader. Luego, M11 cerrado salvo diferidos. Pendientes: **I/O de archivos** (`read_file`/`write_file`
   con `Result` — el truco del `[T]` no cubre dos payloads); **cruzar tipos entre módulos**
   (`from M import Punto`, `M.Punto`, `M.Color.Rojo` — namespacar tipos). Capstone: **self-hosting**
   (ya habilitado: módulos + I/O). Ver hoja de ruta (DESIGN §2, §20) / IDEAS.md.

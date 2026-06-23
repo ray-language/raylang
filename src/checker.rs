@@ -1821,8 +1821,7 @@ impl Checker {
     /// nivel superior). Lo usa UFCS para dar un error específico cuando un `recv.f(...)`
     /// no es ni campo ni función.
     fn name_is_callable(&self, name: &str) -> bool {
-        matches!(name, "print" | "len" | "push" | "to_string" | "trim" | "split"
-            | "eprint" | "__parse_int" | "__read_line" | "__env" | "args")
+        crate::builtins::is_builtin(name)
             || self.lookup(name).is_some()
             || self.functions.contains_key(name)
     }
@@ -1831,140 +1830,20 @@ impl Checker {
     /// variable local que tape una función global, función de nivel superior (directa o
     /// genérica). Compartida por la llamada directa y por UFCS.
     fn check_named_call(&mut self, name: &str, args: &[Expr], line: usize, col: usize) -> Result<Type, TypeError> {
-        // 'print' es un builtin que el checker conoce (DESIGN.md §7): acepta un
-        // único argumento de un tipo imprimible y devuelve unit.
-        if name == "print" {
-            if args.len() != 1 {
-                return Err(self.err(line, col, format!("print espera 1 argumento, se le pasaron {}", args.len())));
+        // Builtins (DESIGN.md §7): su firma vive en el **registro único** (`src/builtins.rs`), no
+        // dispersa aquí. Se comprueban antes que una local/función homónima (un builtin no se tapa).
+        // Se tipan los argumentos por el camino normal y la regla del builtin valida y da el tipo.
+        if let Some(b) = crate::builtins::lookup(name) {
+            let mut arg_types = Vec::with_capacity(args.len());
+            for a in args {
+                arg_types.push(self.check_expr(a)?);
             }
-            let at = self.check_expr(&args[0])?;
-            if !is_printable(&at) {
-                return Err(self.err(args[0].line, args[0].col, format!("print no puede imprimir un {}", at)));
-            }
-            return Ok(Type::Unit);
-        }
-
-        // 'len(a) -> int': longitud de un arreglo o de un string (M11.1a: nº de caracteres).
-        if name == "len" {
-            if args.len() != 1 {
-                return Err(self.err(line, col, format!("len espera 1 argumento, se le pasaron {}", args.len())));
-            }
-            let at = self.check_expr(&args[0])?;
-            if !matches!(at, Type::Array(_) | Type::String) {
-                return Err(self.err(args[0].line, args[0].col, format!("len espera un arreglo o un string, no {}", at)));
-            }
-            return Ok(Type::Int);
-        }
-
-        // 'to_string(x) -> string' (M11.1a): representación textual de un primitivo imprimible.
-        if name == "to_string" {
-            if args.len() != 1 {
-                return Err(self.err(line, col, format!("to_string espera 1 argumento, se le pasaron {}", args.len())));
-            }
-            let at = self.check_expr(&args[0])?;
-            if !matches!(at, Type::Int | Type::Float | Type::Bool | Type::String) {
-                return Err(self.err(args[0].line, args[0].col, format!("to_string solo convierte int/float/bool/string, no {}", at)));
-            }
-            return Ok(Type::String);
-        }
-
-        // 'push(a, x) -> unit': agrega x al final del arreglo a (lo muta).
-        if name == "push" {
-            if args.len() != 2 {
-                return Err(self.err(line, col, format!("push espera 2 argumentos (arreglo, valor), se le pasaron {}", args.len())));
-            }
-            let elem = match self.check_expr(&args[0])? {
-                Type::Array(e) => *e,
-                other => return Err(self.err(args[0].line, args[0].col, format!("push espera un arreglo como primer argumento, no {}", other))),
+            return match (b.check)(&arg_types) {
+                Ok(t) => Ok(t),
+                // El índice señala el argumento culpable (para el cursor); `None` → el sitio de llamada.
+                Err((Some(i), msg)) => Err(self.err(args[i].line, args[i].col, msg)),
+                Err((None, msg)) => Err(self.err(line, col, msg)),
             };
-            let vt = self.check_expr(&args[1])?;
-            if vt != elem {
-                return Err(self.err(args[1].line, args[1].col, format!("push: el arreglo es de {} pero se empuja {}", elem, vt)));
-            }
-            return Ok(Type::Unit);
-        }
-
-        // 'trim(s) -> string' (M11.1b): quita el espacio en blanco de los extremos.
-        if name == "trim" {
-            if args.len() != 1 {
-                return Err(self.err(line, col, format!("trim espera 1 argumento, se le pasaron {}", args.len())));
-            }
-            let at = self.check_expr(&args[0])?;
-            if at != Type::String {
-                return Err(self.err(args[0].line, args[0].col, format!("trim espera un string, no {}", at)));
-            }
-            return Ok(Type::String);
-        }
-
-        // 'split(s, sep) -> [string]' (M11.1b): parte s por el separador sep.
-        if name == "split" {
-            if args.len() != 2 {
-                return Err(self.err(line, col, format!("split espera 2 argumentos (string, separador), se le pasaron {}", args.len())));
-            }
-            let st = self.check_expr(&args[0])?;
-            if st != Type::String {
-                return Err(self.err(args[0].line, args[0].col, format!("split espera un string como primer argumento, no {}", st)));
-            }
-            let sep = self.check_expr(&args[1])?;
-            if sep != Type::String {
-                return Err(self.err(args[1].line, args[1].col, format!("split espera un string como separador, no {}", sep)));
-            }
-            return Ok(Type::Array(Box::new(Type::String)));
-        }
-
-        // 'eprint(x) -> unit' (M11.2a): como print, pero a stderr.
-        if name == "eprint" {
-            if args.len() != 1 {
-                return Err(self.err(line, col, format!("eprint espera 1 argumento, se le pasaron {}", args.len())));
-            }
-            let at = self.check_expr(&args[0])?;
-            if !is_printable(&at) {
-                return Err(self.err(args[0].line, args[0].col, format!("eprint no puede imprimir un {}", at)));
-            }
-            return Ok(Type::Unit);
-        }
-
-        // Primitivo '__parse_int(s) -> [int]' (M11.2a): [] si no parsea, [n] si sí. El prelude lo
-        // envuelve en Option<int> (parse_int). No suele llamarse directo.
-        if name == "__parse_int" {
-            if args.len() != 1 {
-                return Err(self.err(line, col, format!("__parse_int espera 1 argumento, se le pasaron {}", args.len())));
-            }
-            let at = self.check_expr(&args[0])?;
-            if at != Type::String {
-                return Err(self.err(args[0].line, args[0].col, format!("__parse_int espera un string, no {}", at)));
-            }
-            return Ok(Type::Array(Box::new(Type::Int)));
-        }
-
-        // Primitivo '__read_line() -> [string]' (M11.2a): [] en EOF, [linea] si no. El prelude lo
-        // envuelve en Option<string> (input).
-        if name == "__read_line" {
-            if !args.is_empty() {
-                return Err(self.err(line, col, format!("__read_line no espera argumentos, se le pasaron {}", args.len())));
-            }
-            return Ok(Type::Array(Box::new(Type::String)));
-        }
-
-        // Primitivo '__env(s) -> [string]' (M11.2b): [] si la variable no existe, [valor] si sí.
-        // El prelude lo envuelve en Option<string> (env).
-        if name == "__env" {
-            if args.len() != 1 {
-                return Err(self.err(line, col, format!("__env espera 1 argumento, se le pasaron {}", args.len())));
-            }
-            let at = self.check_expr(&args[0])?;
-            if at != Type::String {
-                return Err(self.err(args[0].line, args[0].col, format!("__env espera un string, no {}", at)));
-            }
-            return Ok(Type::Array(Box::new(Type::String)));
-        }
-
-        // 'args() -> [string]' (M11.2b): argumentos de la línea de comandos del programa.
-        if name == "args" {
-            if !args.is_empty() {
-                return Err(self.err(line, col, format!("args no espera argumentos, se le pasaron {}", args.len())));
-            }
-            return Ok(Type::Array(Box::new(Type::String)));
         }
 
         // Una variable local que guarda una función: llamada indirecta (M4.1).
@@ -2340,16 +2219,6 @@ fn is_comparable(t: &Type) -> bool {
         // como tipo abstracto no es comparable. Un trait object (M9.3b) tampoco.
         Type::Unit | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_) | Type::SelfType | Type::Dyn(_) => false,
     }
-}
-
-/// ¿Puede `print` imprimir este tipo? Las funciones se imprimen como `<fn>`. Todo
-/// valor concreto es imprimible, así que un parámetro de tipo (M6) también lo es.
-fn is_printable(t: &Type) -> bool {
-    matches!(
-        t,
-        Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_)
-            | Type::Struct(_, _) | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_)
-    )
 }
 
 /// ¿El tipo contiene algún parámetro de tipo `Var` sin resolver? (M6.2: si lo tiene,

@@ -9,6 +9,7 @@
 //! El binario (`src/main.rs`) es un cliente delgado de esta librería.
 
 pub mod ast;
+pub mod builtins;
 pub mod bytecode;
 pub mod checker;
 pub mod compiler;

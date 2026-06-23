@@ -686,25 +686,12 @@ impl<'a> Compiler<'a> {
         if let ExprKind::Ident(name) = &callee.kind {
             // Solo es directo si el nombre NO es una variable (local o upvalue).
             if !self.name_is_variable(name) {
-                let builtin = match name.as_str() {
-                    "print" => Some(OpCode::Print),
-                    "len" => Some(OpCode::Len),
-                    "push" => Some(OpCode::Push),
-                    "to_string" => Some(OpCode::ToString), // M11.1a
-                    "trim" => Some(OpCode::Trim),          // M11.1b
-                    "split" => Some(OpCode::Split),        // M11.1b
-                    "eprint" => Some(OpCode::EPrint),          // M11.2a
-                    "__parse_int" => Some(OpCode::ParseInt),   // M11.2a
-                    "__read_line" => Some(OpCode::ReadLine),   // M11.2a
-                    "__env" => Some(OpCode::Env),              // M11.2b
-                    "args" => Some(OpCode::Args),              // M11.2b
-                    _ => None,
-                };
-                if let Some(op) = builtin {
+                // Builtin: el opcode lo da el registro único (`src/builtins.rs`).
+                if let Some(b) = crate::builtins::lookup(name) {
                     for arg in args {
                         self.emit_expr(arg)?;
                     }
-                    self.emit(op, line, col);
+                    self.emit(b.opcode.clone(), line, col);
                     return Ok(());
                 }
                 if let Some(&idx) = self.indices.get(name) {

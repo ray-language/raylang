@@ -1279,9 +1279,58 @@ de llamada; en runtime solo se llama el valor que ya se eligió.
   otro diccionario (el de `T`). Se difiere; requiere construir diccionarios *anidados*.
 - ⏳ Bounds en parámetros de tipo de **struct/enum** → más adelante.
 
-### 18.7 Deferido (más allá de M9.2)
-- **Métodos por defecto** en el trait (cuerpo en la firma) → M9.3.
-- **Trait objects / despacho dinámico** (`[Mostrable]`, parámetros `dyn`) → M9.3.
+### 18.7 M9.3 — Métodos por defecto y trait objects
+
+M9.3 cierra la historia de polimorfismo con dos piezas de naturaleza opuesta.
+
+#### 18.7a Métodos por defecto (front-end, *erasure*)
+
+Una firma de trait puede traer **cuerpo**: el comportamiento por defecto que un impl hereda
+si no lo redefine.
+
+```rust
+trait Saludo {
+    fn nombre(self) -> string;            // requerido (sin cuerpo)
+    fn saludar(self) -> string {          // por defecto: puede usar otros métodos
+        self.nombre()
+    }
+}
+
+impl Saludo for Persona {
+    fn nombre(self) -> string { self.n }
+    // 'saludar' no se implementa → se usa el cuerpo por defecto
+}
+```
+
+**AST**: `MethodSig` gana `default_body: Option<Block>` —`Some` para un método por defecto—.
+
+**Parser**: una firma de método termina en `;` (requerido) **o** lleva un bloque (defecto).
+
+**Checker**: es una extensión natural de la bajada de M9.1. Para cada `impl`, un método del
+trait que **no** está en el impl pero **tiene** cuerpo por defecto se **sintetiza** como un
+método más del impl: su cuerpo es el del defecto, con `Self → Tipo`. Se baja como cualquier
+método (función manglada `Tipo#metodo`, inyectada en `program.functions`; entrada en la tabla
+de métodos; `current_self = Tipo` al verificar el cuerpo). Así un defecto puede llamar otros
+métodos del trait sobre `self` —se resuelven por el tipo concreto como cualquier otro—.
+
+La **cobertura** se relaja: falta un método solo si no está en el impl **y** no tiene
+defecto. Un impl que sí lo da **redefine** (gana sobre el defecto). Como todo lo de M9, es
+*erasure*: el método sintetizado es una función ordinaria; **runtime intacto**. Compone con
+los bounds (M9.2): el método por defecto está en la lista del trait, así que un genérico
+`T: Saludo` puede llamarlo y el diccionario recibe la versión sintetizada.
+
+#### 18.7b Trait objects / despacho dinámico (toca el runtime) → sub-fase aparte
+
+Un **trait object** es un valor cuyo tipo concreto **no se conoce estáticamente**: una
+`[Mostrable]` con `Punto`s y `Color`es mezclados, o un parámetro `dyn Mostrable`. El método
+se despacha **en runtime** según el valor. Es el único punto de M9 donde el despacho deja de
+ser estático y, por tanto, donde **el runtime entra en juego**. Trae su propia decisión de
+representación (probable: un *fat value* `(valor, diccionario)` reusando los diccionarios de
+M9.2), nueva sintaxis (`dyn Trait`), coerción de concreto→objeto y trazado en el GC de la VM.
+Se especifica y decide al **arrancar M9.3b**.
+
+### 18.8 Deferido (más allá de M9.3a)
+- **Trait objects / despacho dinámico** → M9.3b (su propia spec y decisión de representación).
 - **Impls genéricos** (`impl Trait for Caja<T>`) → M9.2b (diccionarios anidados).
 - **Traits con `Self` en posición de argumento** que exija dos receptores del mismo tipo
   (p. ej. `fn igual(self, otro: Self) -> bool`) → soportado por M9.1 (ambos = destino), pero

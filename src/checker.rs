@@ -53,6 +53,9 @@ struct FnSig {
     type_params: Vec<String>,
     params: Vec<Type>,
     ret: Type,
+    /// Bounds de los parámetros de tipo (M9.2): pares `(parámetro, trait)`. Vacío = sin
+    /// bounds. Para verificar la llamada (los diccionarios a pasar) y para reenviarlos.
+    bounds: Vec<(String, String)>,
 }
 
 /// Información de una variable en un ámbito.
@@ -108,6 +111,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
             program.functions.push(Function {
                 name: mangle(&key, &m.name),
                 type_params: Vec::new(),
+                bounds: Vec::new(),
                 params,
                 return_type: subst_self(&m.return_type, &imp.target),
                 body: m.body.clone(),
@@ -125,9 +129,15 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // Pasos 2–3: pre-pasada y verificación.
     let mut checker = Checker::new();
     checker.check_program(program)?;
-    // Paso 4 (M7.1): bajar las llamadas UFCS detectadas (`recv.f(args)`) a llamadas
-    // ordinarias (`f(recv, args)`), para que el intérprete y la VM solo vean llamadas.
+    // Paso 4 (M7.1 + M9): bajar las llamadas por punto (`recv.f(args)`) a llamadas
+    // ordinarias (`f(recv, args)`); incluye UFCS, métodos de trait (M9.1) y métodos sobre
+    // un tipo acotado, que bajan a una llamada al parámetro-diccionario (M9.2).
     lower_ufcs(program, &checker.ufcs_sites);
+    // Paso 5 (M9.2): añadir los parámetros-diccionario a las funciones con bounds y los
+    // argumentos correspondientes en cada sitio de llamada. Diccionarios = valores función;
+    // el runtime no cambia.
+    append_dict_params(program);
+    lower_dict_calls(program, &checker.dict_calls);
     Ok(())
 }
 
@@ -176,9 +186,20 @@ struct Checker {
     /// Para cada función manglada de impl (M9): su tipo implementador. Permite poner
     /// `current_self` en ámbito al verificar el cuerpo (para anotaciones `Self` internas).
     impl_fn_self: HashMap<String, Type>,
+    /// Qué `(clave_de_tipo, trait)` tiene un impl (M9): para verificar bounds —que un tipo
+    /// concreto realmente implemente el trait pedido— al elegir su diccionario (M9.2).
+    impl_traits: HashSet<(String, String)>,
     /// El tipo `Self` en ámbito ahora mismo: el tipo implementador del `impl` cuyo método
     /// se está resolviendo/verificando (M9). `None` fuera de un impl.
     current_self: Option<Type>,
+    /// Bounds de la función que se está verificando ahora (M9.2): pares `(parámetro,
+    /// trait)`. Sirven para resolver `x.metodo()` con `x: T` acotado y para reenviar
+    /// diccionarios al llamar a otro genérico acotado con un `T` rígido.
+    current_fn_bounds: Vec<(String, String)>,
+    /// Diccionarios a añadir en cada **sitio de llamada** a una función con bounds (M9.2):
+    /// `(línea, col, nombre)` → nombres de los valores función (diccionarios) a pasar como
+    /// argumentos extra, en orden. `lower_dict_calls` los añade tras verificar.
+    dict_calls: DictSites,
 }
 
 impl Checker {
@@ -197,7 +218,10 @@ impl Checker {
             traits: HashMap::new(),
             methods: HashMap::new(),
             impl_fn_self: HashMap::new(),
+            impl_traits: HashSet::new(),
             current_self: None,
+            current_fn_bounds: Vec::new(),
+            dict_calls: HashMap::new(),
         }
     }
 
@@ -288,10 +312,14 @@ impl Checker {
             // Los parámetros de tipo de ESTA función están en ámbito al resolver su
             // firma: así `x: T` se normaliza a `Var("T")` en vez de `Struct("T")`.
             self.type_params = f.type_params.iter().cloned().collect();
+            // M9.2: validar los bounds —cada uno acota un parámetro de tipo real con un
+            // trait existente—. La firma guarda los bounds para verificar las llamadas.
+            self.check_bounds(f)?;
             let sig = FnSig {
                 type_params: f.type_params.clone(),
                 params: f.params.iter().map(|p| self.resolve_type(&p.ty)).collect(),
                 ret: self.resolve_type(&f.return_type),
+                bounds: f.bounds.clone(),
             };
             self.functions.insert(f.name.clone(), sig);
         }
@@ -330,14 +358,36 @@ impl Checker {
         // M9: si es un método de impl (manglado), pon su tipo implementador como `Self`
         // en ámbito mientras se verifica el cuerpo (para anotaciones `Self` internas).
         self.current_self = self.impl_fn_self.get(&f.name).cloned();
+        // M9.2: los bounds de esta función en ámbito, para resolver `x.metodo()` con
+        // `x: T` acotado y para reenviar diccionarios.
+        self.current_fn_bounds = f.bounds.clone();
         for p in &f.params {
             self.ensure_type(&p.ty, p.line, p.col)?;
         }
         self.ensure_type(&f.return_type, f.line, f.col)?;
         let r = self.check_fn_body(&f.params, &f.return_type, &f.body, f.line, f.col, &format!("'{}'", f.name));
         self.current_self = None;
+        self.current_fn_bounds = Vec::new();
         self.type_params.clear();
         r
+    }
+
+    /// Valida los bounds de una función (M9.2): cada `(parámetro, trait)` debe acotar un
+    /// parámetro de tipo declarado por la función, con un trait existente.
+    fn check_bounds(&self, f: &Function) -> Result<(), TypeError> {
+        for (tp, tr) in &f.bounds {
+            if !f.type_params.contains(tp) {
+                return Err(self.err(f.line, f.col, format!(
+                    "el bound '{}: {}' no acota a ningún parámetro de tipo de '{}'", tp, tr, f.name
+                )));
+            }
+            if !self.traits.contains_key(tr) {
+                return Err(self.err(f.line, f.col, format!(
+                    "trait '{}' no declarado (en el bound de '{}')", tr, f.name
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Registra los traits y valida los impls (M9.1). Construye `self.traits` (firmas),
@@ -404,6 +454,8 @@ impl Checker {
                 self.methods.insert((key.clone(), m.name.clone()), mangled.clone());
                 self.impl_fn_self.insert(mangled, target.clone());
             }
+            // Registrar que este tipo implementa este trait (M9.2: verificación de bounds).
+            self.impl_traits.insert((key, imp.trait_name.clone()));
         }
         Ok(())
     }
@@ -1365,6 +1417,16 @@ impl Checker {
                     self.ufcs_sites.insert((line, col, name.clone()), mangled);
                     return Ok(ty);
                 }
+                // M9.2: ¿es un método de un trait que **acota** al tipo del receptor?
+                // (`x.metodo()` con `x: T` y `T: Trait` en ámbito). Se resuelve al
+                // **parámetro-diccionario** y se baja como una llamada a ese valor función.
+                if let Type::Var(tp) = &recv_ty {
+                    let tp = tp.clone();
+                    if let Some((dict_name, ret)) = self.resolve_bound_method(&tp, name, args, line, col)? {
+                        self.ufcs_sites.insert((line, col, name.clone()), dict_name);
+                        return Ok(ret);
+                    }
+                }
                 self.check_ufcs(name, &recv_ty, object, args, line, col)
             }
 
@@ -1473,14 +1535,22 @@ impl Checker {
 
         // Función de nivel superior: llamada directa.
         if let Some(sig) = self.functions.get(name) {
-            let (type_params, params, ret) = (sig.type_params.clone(), sig.params.clone(), sig.ret.clone());
+            let (type_params, params, ret, bounds) =
+                (sig.type_params.clone(), sig.params.clone(), sig.ret.clone(), sig.bounds.clone());
             let label = format!("'{}'", name);
             if type_params.is_empty() {
                 // No genérica: aridad y tipos exactos.
                 return self.check_args(&params, ret, args, &label, line, col);
             }
             // Genérica: inferir los argumentos de tipo unificando con los argumentos.
-            return self.check_generic_call(&type_params, &params, &ret, args, &label, line, col);
+            let (ret_ty, sigma) =
+                self.check_generic_call(&type_params, &params, &ret, args, &label, line, col)?;
+            // M9.2: si la función tiene bounds, registrar los diccionarios a pasar en este
+            // sitio (verificando que cada tipo inferido cumple su bound).
+            if !bounds.is_empty() {
+                self.record_dict_args(name, &bounds, &sigma, line, col)?;
+            }
+            return Ok(ret_ty);
         }
 
         Err(self.err(line, col, format!("función '{}' no declarada", name)))
@@ -1534,7 +1604,7 @@ impl Checker {
         label: &str,
         line: usize,
         col: usize,
-    ) -> Result<Type, TypeError> {
+    ) -> Result<(Type, HashMap<String, Type>), TypeError> {
         if args.len() != params.len() {
             return Err(self.err(line, col, format!(
                 "{} espera {} argumento(s), se le pasaron {}",
@@ -1558,7 +1628,102 @@ impl Checker {
                 )));
             }
         }
-        Ok(subst(ret, &sigma))
+        // M9.2 devuelve también σ: el sitio de llamada lo necesita para saber a qué tipo
+        // resolvió cada parámetro acotado y así elegir el diccionario a pasar.
+        Ok((subst(ret, &sigma), sigma))
+    }
+
+    /// Resuelve `x.metodo(args)` con `x: T` cuando `T` está **acotado** (M9.2). Devuelve
+    /// el nombre del parámetro-diccionario al que baja la llamada y el tipo de retorno (con
+    /// `Self → T`). `None` si ningún trait acotado de `T` declara ese método (deja que la
+    /// resolución siga su curso). Error si varios lo declaran (ambiguo).
+    fn resolve_bound_method(&mut self, tp: &str, method: &str, args: &[Expr], line: usize, col: usize)
+        -> Result<Option<(String, Type)>, TypeError>
+    {
+        let hits: Vec<String> = self.current_fn_bounds.iter()
+            .filter(|(bp, _)| bp == tp)
+            .filter(|(_, tr)| self.traits.get(tr).is_some_and(|ms| ms.iter().any(|m| m.name == method)))
+            .map(|(_, tr)| tr.clone())
+            .collect();
+        if hits.is_empty() {
+            return Ok(None);
+        }
+        if hits.len() > 1 {
+            return Err(self.err(line, col, format!(
+                "método '{}' ambiguo para '{}': lo declaran varios traits acotados ({})",
+                method, tp, hits.join(", ")
+            )));
+        }
+        let trait_name = &hits[0];
+        let sig = self.traits.get(trait_name).unwrap().iter().find(|m| m.name == method).unwrap().clone();
+        let self_ty = Type::Var(tp.to_string());
+        // El receptor ya casó con `self` (es `T`); comprobar los argumentos restantes.
+        let expected: Vec<Type> = sig.params.iter().skip(1)
+            .map(|p| self.resolve_type(&subst_self(&p.ty, &self_ty)))
+            .collect();
+        if args.len() != expected.len() {
+            return Err(self.err(line, col, format!(
+                "el método '{}' espera {} argumento(s) (sin contar el receptor), se le pasaron {}",
+                method, expected.len(), args.len()
+            )));
+        }
+        for (i, (arg, exp)) in args.iter().zip(&expected).enumerate() {
+            let at = self.check_expr_expected(arg, exp)?;
+            if at != *exp {
+                return Err(self.err(arg.line, arg.col, format!(
+                    "argumento {} del método '{}': se esperaba {}, se pasó {}", i + 1, method, exp, at
+                )));
+            }
+        }
+        let ret = self.resolve_type(&subst_self(&sig.return_type, &self_ty));
+        Ok(Some((dict_param_name(tp, trait_name, method), ret)))
+    }
+
+    /// Registra los diccionarios a pasar en un sitio de llamada a una función con bounds
+    /// (M9.2). Por cada `(parámetro, trait)` y cada método del trait, elige el diccionario
+    /// según a qué tipo resolvió el parámetro (`σ`): el método manglado de un impl concreto,
+    /// o el reenvío del diccionario propio si resolvió a un parámetro acotado del llamador.
+    fn record_dict_args(&mut self, callee: &str, bounds: &[(String, String)], sigma: &HashMap<String, Type>, line: usize, col: usize)
+        -> Result<(), TypeError>
+    {
+        let mut dicts: Vec<String> = Vec::new();
+        for (tp, trait_name) in bounds {
+            let concrete = sigma.get(tp).cloned().unwrap_or_else(|| Type::Var(tp.clone()));
+            let methods = self.traits.get(trait_name).cloned().unwrap_or_default();
+            for m in &methods {
+                dicts.push(self.dict_for(&concrete, trait_name, &m.name, line, col)?);
+            }
+        }
+        self.dict_calls.insert((line, col, callee.to_string()), dicts);
+        Ok(())
+    }
+
+    /// Elige el diccionario (nombre de la función o del parámetro a pasar) para un método
+    /// de un trait, según el tipo `concrete` al que resolvió el parámetro acotado (M9.2).
+    fn dict_for(&self, concrete: &Type, trait_name: &str, method: &str, line: usize, col: usize)
+        -> Result<String, TypeError>
+    {
+        if let Type::Var(u) = concrete {
+            // Resolvió a un parámetro de tipo rígido del llamador: debe tener el mismo
+            // bound, y se **reenvía** su diccionario.
+            if self.current_fn_bounds.iter().any(|(bp, tr)| bp == u && tr == trait_name) {
+                return Ok(dict_param_name(u, trait_name, method));
+            }
+            return Err(self.err(line, col, format!(
+                "el parámetro de tipo '{}' no está acotado por '{}' (requerido por la llamada)", u, trait_name
+            )));
+        }
+        // Tipo concreto: debe implementar el trait → usar el método manglado del impl.
+        let key = type_key_of(concrete).ok_or_else(|| self.err(line, col, format!(
+            "{} no puede implementar el trait '{}'", concrete, trait_name
+        )))?;
+        if self.impl_traits.contains(&(key.clone(), trait_name.to_string())) {
+            Ok(mangle(&key, method))
+        } else {
+            Err(self.err(line, col, format!(
+                "{} no implementa '{}' (requerido por la llamada)", concrete, trait_name
+            )))
+        }
     }
 
     // ----- Manejo de ámbitos -----
@@ -1900,6 +2065,21 @@ fn type_key_of(ty: &Type) -> Option<String> {
     })
 }
 
+/// Nombre del parámetro-diccionario para un método de un trait acotado (M9.2):
+/// `T#Trait#metodo`. Como el `#` es ilegal en identificadores, no choca con locales del
+/// usuario; vive como un parámetro función más.
+fn dict_param_name(tparam: &str, trait_name: &str, method: &str) -> String {
+    format!("{}#{}#{}", tparam, trait_name, method)
+}
+
+/// Tipo función de un método visto desde fuera (M9.2): incluye `self` como primer
+/// parámetro. Con `Self → self_ty` (un `Var(T)` para un diccionario, un tipo concreto en
+/// otros usos). P. ej. `mostrar(self) -> string` con `self_ty = T` da `fn(T) -> string`.
+fn method_fn_type(m: &MethodSig, self_ty: &Type) -> Type {
+    let params: Vec<Type> = m.params.iter().map(|p| subst_self(&p.ty, self_ty)).collect();
+    Type::Fn(params, Box::new(subst_self(&m.return_type, self_ty)))
+}
+
 /// Sustituye `Self` por el tipo implementador (M9). Cubre las dos formas con que `Self`
 /// llega del parser: `Type::SelfType` (el receptor `self`) y `Struct("Self")` (en una
 /// anotación como `-> Self`).
@@ -2054,6 +2234,150 @@ fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
         ExprKind::Block(b) => lower_ufcs_block(b, sites),
         // Literales, Ident: nada que recorrer.
         _ => {}
+    }
+}
+
+// =====================================================================
+// Bajada de bounds: diccionarios (M9.2)
+// =====================================================================
+//
+// Un bound `T: Trait` se baja a **paso de diccionarios**: la función gana un parámetro
+// función por método del trait, y cada sitio de llamada pasa el diccionario adecuado
+// (el método de un impl concreto, o el reenvío del diccionario propio). Todo son valores
+// función que el runtime ya sabe pasar/llamar (M4): cero cambios en los motores.
+
+/// Añade a cada función con bounds sus **parámetros-diccionario** (M9.2), al final de la
+/// lista de parámetros, en el orden canónico (bounds en orden; por bound, los métodos del
+/// trait en orden) que casa con el de los argumentos en los sitios de llamada.
+fn append_dict_params(program: &mut Program) {
+    let trait_sigs: HashMap<String, Vec<MethodSig>> = program.traits.iter()
+        .map(|t| (t.name.clone(), t.methods.clone()))
+        .collect();
+    for f in &mut program.functions {
+        if f.bounds.is_empty() {
+            continue;
+        }
+        for (tp, trait_name) in &f.bounds {
+            let Some(methods) = trait_sigs.get(trait_name) else { continue };
+            let self_ty = Type::Var(tp.clone());
+            for m in methods {
+                f.params.push(Param {
+                    name: dict_param_name(tp, trait_name, &m.name),
+                    ty: method_fn_type(m, &self_ty),
+                    line: f.line,
+                    col: f.col,
+                });
+            }
+        }
+    }
+}
+
+/// Sitios de llamada a funciones con bounds → diccionarios a añadir como argumentos.
+type DictSites = HashMap<(usize, usize, String), Vec<String>>;
+
+/// Añade en cada **sitio de llamada** a una función con bounds los argumentos-diccionario
+/// registrados (M9.2). Reescribe `f(args)` → `f(args, dicts...)`. Corre **tras** `lower_ufcs`
+/// (el callee ya es un `Ident`), reusando la clave `(línea, col, nombre)`.
+fn lower_dict_calls(program: &mut Program, sites: &DictSites) {
+    if sites.is_empty() {
+        return;
+    }
+    for f in &mut program.functions {
+        lower_dict_calls_block(&mut f.body, sites);
+    }
+}
+
+fn lower_dict_calls_block(block: &mut Block, sites: &DictSites) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } => lower_dict_calls_expr(value, sites),
+            StmtKind::Assign { target, value } => {
+                lower_dict_calls_expr(target, sites);
+                lower_dict_calls_expr(value, sites);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    lower_dict_calls_expr(v, sites);
+                }
+            }
+            StmtKind::Expr(e) => lower_dict_calls_expr(e, sites),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        lower_dict_calls_expr(t, sites);
+    }
+}
+
+fn lower_dict_calls_expr(expr: &mut Expr, sites: &DictSites) {
+    // Recorrer primero los hijos (el receptor y los argumentos pueden ser otras llamadas).
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } => lower_dict_calls_expr(inner, sites),
+        ExprKind::Binary { left, right, .. } => {
+            lower_dict_calls_expr(left, sites);
+            lower_dict_calls_expr(right, sites);
+        }
+        ExprKind::Call { callee, args } => {
+            lower_dict_calls_expr(callee, sites);
+            for a in args.iter_mut() {
+                lower_dict_calls_expr(a, sites);
+            }
+        }
+        ExprKind::ArrayLit(elems) => {
+            for e in elems {
+                lower_dict_calls_expr(e, sites);
+            }
+        }
+        ExprKind::Index { array, index } => {
+            lower_dict_calls_expr(array, sites);
+            lower_dict_calls_expr(index, sites);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                lower_dict_calls_expr(e, sites);
+            }
+        }
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                lower_dict_calls_expr(a, sites);
+            }
+        }
+        ExprKind::Field { object, .. } => lower_dict_calls_expr(object, sites),
+        ExprKind::Func(fe) => lower_dict_calls_block(&mut fe.body, sites),
+        ExprKind::Match { scrutinee, arms } => {
+            lower_dict_calls_expr(scrutinee, sites);
+            for arm in arms {
+                lower_dict_calls_expr(&mut arm.body, sites);
+            }
+        }
+        ExprKind::Try(inner) => lower_dict_calls_expr(inner, sites),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            lower_dict_calls_expr(cond, sites);
+            lower_dict_calls_block(then_branch, sites);
+            if let Some(e) = else_branch {
+                lower_dict_calls_expr(e, sites);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            lower_dict_calls_expr(cond, sites);
+            lower_dict_calls_block(body, sites);
+        }
+        ExprKind::Block(b) => lower_dict_calls_block(b, sites),
+        _ => {}
+    }
+    // Tras recorrer los hijos, si este nodo es una llamada por nombre a una función con
+    // bounds registrada en este sitio, añadir los diccionarios como argumentos extra.
+    let (line, col) = (expr.line, expr.col);
+    let dicts: Option<Vec<String>> = match &expr.kind {
+        ExprKind::Call { callee, .. } => match &callee.kind {
+            ExprKind::Ident(name) => sites.get(&(line, col, name.clone())).cloned(),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let (Some(dicts), ExprKind::Call { args, .. }) = (dicts, &mut expr.kind) {
+        for d in dicts {
+            args.push(Expr { kind: ExprKind::Ident(d), line, col });
+        }
     }
 }
 
@@ -3020,6 +3344,77 @@ fn main() -> int {
             r#"struct S { x: int }
                fn main() -> int { let s = S { x: 1 }; s.noexiste() }"#,
             "no existe campo ni función",
+        );
+    }
+
+    // ----- M9.2: bounds de genéricos -----
+
+    #[test]
+    fn bound_concreto_y_reenvio() {
+        check_src(r#"
+            trait Valor { fn valor(self) -> int; }
+            struct Punto { x: int }
+            impl Valor for Punto { fn valor(self) -> int { self.x } }
+            impl Valor for int { fn valor(self) -> int { self } }
+            fn doble<T: Valor>(x: T) -> int { x.valor() + x.valor() }
+            fn pasar<T: Valor>(x: T) -> int { doble(x) }
+            fn main() -> int {
+                let p = Punto { x: 5 };
+                doble(p) + doble(9) + pasar(p)
+            }
+        "#).expect("bound concreto + reenvío");
+    }
+
+    #[test]
+    fn bounds_multiples() {
+        check_src(r#"
+            trait A { fn a(self) -> int; }
+            trait B { fn b(self) -> int; }
+            struct S { x: int }
+            impl A for S { fn a(self) -> int { self.x } }
+            impl B for S { fn b(self) -> int { self.x } }
+            fn usar<T: A + B>(x: T) -> int { x.a() + x.b() }
+            fn main() -> int { let s = S { x: 1 }; usar(s) }
+        "#).expect("T: A + B");
+    }
+
+    #[test]
+    fn bound_tipo_no_implementa() {
+        err_contains(
+            r#"trait Valor { fn valor(self) -> int; }
+               struct Punto { x: int }
+               fn usar<T: Valor>(x: T) -> int { x.valor() }
+               fn main() -> int { let p = Punto { x: 1 }; usar(p) }"#,
+            "Punto no implementa 'Valor'",
+        );
+    }
+
+    #[test]
+    fn bound_metodo_fuera_del_trait() {
+        err_contains(
+            r#"trait Valor { fn valor(self) -> int; }
+               fn usar<T: Valor>(x: T) -> int { x.otro() }
+               fn main() -> int { 0 }"#,
+            "no existe campo ni función 'otro'",
+        );
+    }
+
+    #[test]
+    fn reenvio_sin_bound_es_error() {
+        err_contains(
+            r#"trait Valor { fn valor(self) -> int; }
+               fn usar<T: Valor>(x: T) -> int { x.valor() }
+               fn intermediario<U>(y: U) -> int { usar(y) }
+               fn main() -> int { 0 }"#,
+            "no está acotado por 'Valor'",
+        );
+    }
+
+    #[test]
+    fn bound_a_trait_inexistente() {
+        err_contains(
+            "fn usar<T: NoExiste>(x: T) -> int { 0 } fn main() -> int { 0 }",
+            "trait 'NoExiste' no declarado",
         );
     }
 }

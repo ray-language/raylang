@@ -148,8 +148,19 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   método de trait → función libre (UFCS)**; `ufcs_sites` pasó a **mapa** `(línea,col,nombre)
   → nombre_destino` y un único `lower_ufcs` baja ambos. **Runtime intacto** (cero opcodes;
   oráculo VM↔intérprete sin tocar). Impls genéricos / bounds / trait objects → diferidos.
-- **Siguiente: M9.2** (bounds `T: Trait` en genéricos; decisión de despacho —diccionarios
-  vs. monomorfización vs. tipo en runtime—). Ver hoja de ruta (DESIGN §2, §18) / IDEAS.md.
+- **M9.2 COMPLETO** (246 tests + integración CLI verdes): **bounds** de genéricos
+  (`fn f<T: A + B>(...)`) vía **paso de diccionarios**. `Function.bounds: Vec<(String,String)>`;
+  el parser los parsea en `type_params_with_bounds`. Un bound se baja a **parámetros ocultos
+  de tipo función** (uno por método del trait, nombre `T#Trait#metodo`, añadidos en
+  `append_dict_params`); `x.metodo()` con `x: T` acotado baja a una llamada al diccionario
+  (reusa `ufcs_sites`/`lower_ufcs`); cada sitio de llamada añade los diccionarios como
+  argumentos (`record_dict_args`/`dict_for`/`lower_dict_calls`), eligiendo el método manglado
+  del impl concreto o **reenviando** el diccionario propio cuando `T` resuelve a un parámetro
+  acotado del llamador. La inferencia (`σ` de M6) decide qué diccionario va. **Runtime
+  intacto**: los diccionarios son valores función (M4); cero opcodes, oráculo sin tocar.
+  Impls genéricos (diccionarios anidados) → M9.2b.
+- **Siguiente: M9.3** (métodos por defecto en el trait + trait objects / despacho dinámico),
+  o **M9.2b** (impls genéricos). Ver hoja de ruta (DESIGN §2, §18) / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 
@@ -175,6 +186,13 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   función libre el destino es el mismo nombre; para un método de trait, el **manglado**
   `Tipo#metodo` (que el usuario no puede escribir). Los métodos se inyectan como funciones
   ordinarias en `program.functions`, así que el intérprete/VM no saben de traits (erasure).
+- **Bounds (M9.2)**: el checker trabaja con **firmas limpias** (solo params de usuario) —
+  `x.metodo()` con `x: T` acotado se verifica contra la firma del trait, no contra ningún
+  param—. Toda la plomería de diccionarios es **lowering post-check**: `append_dict_params`
+  añade los params ocultos `T#Trait#metodo` a las funciones con bounds, y `lower_dict_calls`
+  añade los argumentos en los sitios. Por eso los params-diccionario NO están en `FnSig`
+  (si lo estuvieran, una llamada `f(x)` del usuario fallaría por aridad). El runtime los ve
+  como funciones más (valores de primera clase, M4).
 - Un identificador en posición de **tipo** llega del parser como `Type::Struct`; el
   checker lo **normaliza** (`resolve_type`) a `Type::Enum` si es un enum, o a
   `Type::Var` si es un **parámetro de tipo** en ámbito (M6). `self.type_params` se pone

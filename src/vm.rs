@@ -1611,4 +1611,43 @@ mod tests {
             }
         "#);
     }
+
+    // ----- M9.2: bounds vía paso de diccionarios -----
+
+    #[test]
+    fn bounds_diccionarios_oraculo() {
+        // Genérico acotado sobre struct y primitivo + reenvío entre genéricos. Los
+        // diccionarios son valores función; ambos motores deben coincidir.
+        oracle_program(r#"
+            trait Valor { fn valor(self) -> int; }
+            struct Punto { x: int, y: int }
+            impl Valor for Punto { fn valor(self) -> int { self.x + self.y } }
+            impl Valor for int { fn valor(self) -> int { self } }
+            fn doble_valor<T: Valor>(x: T) -> int { x.valor() + x.valor() }
+            fn suma_tres<T: Valor>(a: T, b: T, c: T) -> int {
+                doble_valor(a) + b.valor() + c.valor()   // reenvío del diccionario
+            }
+            fn main() -> int {
+                let p = Punto { x: 3, y: 4 };
+                doble_valor(p) + doble_valor(10) + suma_tres(p, p, p)   // 14 + 20 + 28 = 62
+            }
+        "#);
+    }
+
+    #[test]
+    fn bounds_multiples_oraculo() {
+        // T: A + B — dos diccionarios. Bajo estrés del GC.
+        oracle_stress(r#"
+            trait Nombre { fn largo(self) -> int; }
+            trait Doble { fn doble(self) -> int; }
+            struct Cosa { n: int }
+            impl Nombre for Cosa { fn largo(self) -> int { self.n } }
+            impl Doble for Cosa { fn doble(self) -> int { self.n + self.n } }
+            fn usar<T: Nombre + Doble>(x: T) -> int { x.largo() + x.doble() }
+            fn main() -> int {
+                let c = Cosa { n: 5 };
+                usar(c)   // 5 + 10 = 15
+            }
+        "#);
+    }
 }

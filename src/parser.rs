@@ -49,6 +49,9 @@ pub struct Parser {
     next_fn_id: usize,
 }
 
+/// Parámetros de tipo y sus bounds (M9.2): `(nombres, pares (parámetro, trait))`.
+type TypeParamsAndBounds = (Vec<String>, Vec<(String, String)>);
+
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
         Parser { tokens, pos: 0, next_fn_id: 0 }
@@ -135,12 +138,13 @@ impl Parser {
         Ok(StructDef { name, type_params, fields, line: kw.line, col: kw.col })
     }
 
-    /// function = 'fn' IDENT [ '<' IDENT { ',' IDENT } '>' ] '(' [ params ] ')'
+    /// function = 'fn' IDENT [ '<' tparam { ',' tparam } '>' ] '(' [ params ] ')'
     ///            [ '->' type ] block
+    /// tparam   = IDENT [ ':' IDENT { '+' IDENT } ]    (el bound, M9.2)
     fn function(&mut self) -> Result<Function, ParseError> {
         let kw = self.expect(&TokenKind::Fn, "'fn'")?;
         let (name, _, _) = self.expect_ident("el nombre de la función")?;
-        let type_params = self.type_params()?;
+        let (type_params, bounds) = self.type_params_with_bounds()?;
         self.expect(&TokenKind::LParen, "'(' tras el nombre de la función")?;
         let params = if self.check(&TokenKind::RParen) {
             Vec::new()
@@ -160,6 +164,7 @@ impl Parser {
         Ok(Function {
             name,
             type_params,
+            bounds,
             params,
             return_type,
             body,
@@ -244,6 +249,7 @@ impl Parser {
         Ok(Function {
             name,
             type_params: Vec::new(),
+            bounds: Vec::new(),
             params,
             return_type,
             body,
@@ -284,6 +290,35 @@ impl Parser {
             }
         }
         Ok(params)
+    }
+
+    /// Como `type_params`, pero cada parámetro puede llevar **bounds** (M9.2):
+    /// `<T: Mostrable, U: A + B>`. Devuelve los nombres y los pares `(parámetro, trait)`.
+    /// Solo lo usan las funciones; struct/enum siguen con `type_params` (sin bounds).
+    fn type_params_with_bounds(&mut self) -> Result<TypeParamsAndBounds, ParseError> {
+        let mut params = Vec::new();
+        let mut bounds = Vec::new();
+        if self.eat(&TokenKind::Lt) {
+            loop {
+                let (name, _, _) = self.expect_ident("el nombre de un parámetro de tipo")?;
+                // Bound opcional: ': Trait { + Trait }'.
+                if self.eat(&TokenKind::Colon) {
+                    loop {
+                        let (tr, _, _) = self.expect_ident("el nombre de un trait en el bound")?;
+                        bounds.push((name.clone(), tr));
+                        if !self.eat(&TokenKind::Plus) {
+                            break;
+                        }
+                    }
+                }
+                params.push(name);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::Gt, "'>' para cerrar los parámetros de tipo")?;
+        }
+        Ok((params, bounds))
     }
 
     /// Lista opcional de parámetros de tipo: `< IDENT { ',' IDENT } >` (M6). Devuelve
@@ -1504,5 +1539,24 @@ fn main() -> int {
         let tokens = crate::lexer::lex("impl T S { } fn main() -> int { 0 }").expect("lex ok");
         let err = parse(tokens).expect_err("falta 'for'");
         assert!(err.msg.contains("se esperaba 'for'"), "mensaje: {}", err.msg);
+    }
+
+    #[test]
+    fn parse_bounds_de_genericos() {
+        let prog = parse_prog(r#"
+            fn f<T: Mostrable, U: A + B>(x: T, y: U) -> int { 0 }
+            fn main() -> int { 0 }
+        "#);
+        let f = &prog.functions[0];
+        assert_eq!(f.type_params, vec!["T", "U"]);
+        // Bounds en orden: (T, Mostrable), (U, A), (U, B).
+        assert_eq!(
+            f.bounds,
+            vec![
+                ("T".to_string(), "Mostrable".to_string()),
+                ("U".to_string(), "A".to_string()),
+                ("U".to_string(), "B".to_string()),
+            ]
+        );
     }
 }

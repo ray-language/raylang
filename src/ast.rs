@@ -174,6 +174,10 @@ pub struct Function {
     /// Parámetros de tipo: los `T, U` de `fn mapear<T, U>(...)` (M6). Vacío = no
     /// genérica. Dentro del cuerpo, cada nombre está en ámbito como `Type::Var`.
     pub type_params: Vec<String>,
+    /// Bounds de los parámetros de tipo (M9.2): pares `(parámetro, trait)` de
+    /// `fn f<T: A + B>(...)`. Vacío = sin bounds. Cada bound exige que `T` implemente el
+    /// trait, y habilita llamar sus métodos sobre un valor de tipo `T` dentro del cuerpo.
+    pub bounds: Vec<(String, String)>,
     pub params: Vec<Param>,
     pub return_type: Type, // Unit si se omitió el `-> ...`
     pub body: Block,

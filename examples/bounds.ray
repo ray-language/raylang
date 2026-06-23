@@ -1,0 +1,54 @@
+// M9.2 — Bounds de genéricos: polimorfismo acotado vía paso de diccionarios.
+//
+// Un bound `T: Trait` acota un parámetro de tipo: el código genérico puede llamar los
+// métodos del trait sobre un valor de tipo T. Como T se borra en runtime (erasure), el
+// despacho se resuelve pasando el impl concreto como un valor función oculto (un
+// "diccionario"). Todo es front-end; el runtime no cambia.
+
+trait Valor {
+    fn valor(self) -> int;
+}
+
+struct Punto { x: int, y: int }
+impl Valor for Punto {
+    fn valor(self) -> int { self.x + self.y }
+}
+
+// Un trait se puede implementar para un primitivo: ahora int "es" Valor.
+impl Valor for int {
+    fn valor(self) -> int { self }
+}
+
+// Genérico acotado: dentro del cuerpo, x.valor() es legal porque T: Valor lo garantiza.
+// Sirve para CUALQUIER tipo con impl de Valor: Punto, int, los que vengan.
+fn doble_valor<T: Valor>(x: T) -> int {
+    x.valor() + x.valor()
+}
+
+// Reenvío de diccionario: 'resumen' es genérico acotado y llama a otro genérico acotado
+// (doble_valor) con su propio T. El diccionario de T se reenvía sin que el código lo note.
+fn resumen<T: Valor>(a: T, b: T) -> int {
+    doble_valor(a) + b.valor()
+}
+
+// Varios bounds a la vez: T: A + B exige dos impls.
+trait Etiqueta { fn etiqueta(self) -> string; }
+impl Etiqueta for Punto {
+    fn etiqueta(self) -> string { "punto" }
+}
+
+fn describir<T: Valor + Etiqueta>(x: T) -> int {
+    print(x.etiqueta());
+    x.valor()
+}
+
+fn main() -> int {
+    let p = Punto { x: 3, y: 4 };
+
+    print(doble_valor(p));    // 14   (Punto)
+    print(doble_valor(10));   // 20   (int — el mismo genérico, otro tipo)
+    print(resumen(p, p));     // 14 + 7 = 21  (con reenvío de diccionario)
+    print(describir(p));      // imprime "punto", devuelve 7
+
+    resumen(p, p)             // código de salida: 21
+}

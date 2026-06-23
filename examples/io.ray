@@ -1,0 +1,45 @@
+// I/O y API de runtime (M11.2).
+//
+// Modo interactivo (lee de stdin):
+//   echo "7" | cargo run --quiet -- examples/io.ray
+// Modo por argumentos (suma los que reciba como CLI args):
+//   cargo run --quiet -- examples/io.ray 3 4 no 10
+// Variable de entorno opcional que cambia el saludo:
+//   RAY_NOMBRE=Ada cargo run --quiet -- examples/io.ray 1 2
+
+// Suma los argumentos que sean enteros; ignora (avisando por stderr) los que no.
+fn sumar_args(xs: [string]) -> int {
+  var total = 0;
+  var i = 0;
+  while (i < len(xs)) {
+    match (parse_int(xs[i])) {
+      Option.Some(n) => { total = total + n; },
+      Option.None => { eprint("ignoro (no es entero): " + xs[i]); },
+    }
+    i = i + 1;
+  }
+  total
+}
+
+fn main() -> int {
+  // Saludo personalizable por entorno.
+  let nombre = match (env("RAY_NOMBRE")) {
+    Option.Some(n) => n,
+    Option.None => "mundo",
+  };
+  print("hola, " + nombre);
+
+  let xs = args();
+  if (len(xs) > 0) {
+    // Modo CLI: sumar los argumentos.
+    let total = sumar_args(xs);
+    print("suma de args = " + total.to_string());
+    total
+  } else {
+    // Modo interactivo: leer un entero de stdin.
+    match (read_int()) {
+      Option.Some(n) => { print("leí " + n.to_string()); n },
+      Option.None => { print("sin entrada válida"); 0 },
+    }
+  }
+}

@@ -82,4 +82,5 @@
 # M11 — Módulos, I/O y stdlib
 
 - [La stdlib de string](m11/strings.md)
+- [I/O y la API de runtime](m11/io.md)
 - [Módulos y `pub`](m11/modulos.md)

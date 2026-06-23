@@ -277,9 +277,24 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   chequeo `pub`). Colisión sin `as` → error que pide renombrar. **Importar un tipo** con `from`
   queda **diferido** (los tipos no se namespacan; el loader da un error claro). Estilo Python: `from
   M import x` **no** trae `M` (solo `x`). Runtime intacto.
-- **Siguiente: M11.2** (I/O: `args`/`input`/`read_int`/`eprint`/`env`/archivos). Cruzar **tipos**
-  entre módulos (`from M import Punto`, `M.Punto`, `M.Color.Rojo`) queda diferido (namespacar
-  tipos). Ver hoja de ruta (DESIGN §2, §20) / IDEAS.md.
+- **M11.2 COMPLETO** (297 tests lib + `tests/io_cli.rs`): **I/O y API de runtime** (DESIGN §20.2).
+  `main` sigue sin parámetros (§0); el exterior se toca por **builtins**. **La I/O falible devuelve
+  `Option`** (norte "errores como valores"). **Patrón** (como M7.3): primitivos builtin que devuelven
+  **`[T]`** (vacío/único) + **envoltorios en el prelude (raylang)** que arman el `Option` con
+  `Some/None` corrientes → el runtime **no sabe de `Option`** (cero maquinaria de enums nueva). Toca
+  los dos motores → oráculo (determinista) + integración por subproceso (stdin/stderr/argv/env).
+  - **M11.2a**: `eprint(x)` (opcode `EPrint`, stderr); `parse_int(s) -> Option<int>` (primitivo
+    `__parse_int -> [int]`, opcode `ParseInt`); `input() -> Option<string>` (primitivo
+    `__read_line -> [string]`, opcode `ReadLine`); `read_int() -> Option<int>` (composición pura en
+    el prelude, usa `?`).
+  - **M11.2b**: `env(s) -> Option<string>` (primitivo `__env -> [string]`, opcode `Env`);
+    `args() -> [string]` (opcode `Args` + almacén de proceso `OnceLock` en `interpreter.rs`,
+    `set_program_args`/`program_args`, leído por ambos motores). `main.rs` acepta `raylang
+    [--vm|--test] <archivo> [args...]` y deja los args tras la ruta en el almacén.
+- **Siguiente: M11 cerrado** salvo diferidos. Pendientes: **I/O de archivos** (`read_file`/`write_file`
+  con `Result` — el truco del `[T]` no cubre dos payloads); **cruzar tipos entre módulos**
+  (`from M import Punto`, `M.Punto`, `M.Color.Rojo` — namespacar tipos). Capstone: **self-hosting**
+  (ya habilitado: módulos + I/O). Ver hoja de ruta (DESIGN §2, §20) / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

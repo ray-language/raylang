@@ -62,7 +62,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **Limpieza** | reservar `@` (lexer), coma final en arreglos, sincronizar IDEAS | deuda de front-end y de documentación | ✅ |
 | **M9** | **traits / interfaces** (estilo Rust) → polimorfismo + *bounds* de genéricos | despacho estático vs. dinámico, abstracción | ✅ (M9.1 trait+impl · M9.2 bounds · M9.2b impls genéricos · M9.3 defectos + trait objects) |
 | **M10** | **tooling**: LSP (reusa el checker) + anotaciones (`@test`, `@derive`, `@builtin`) | language servers, metadatos en el AST | ✅ M10.1 (anotaciones) · M10.2 (LSP: diagnósticos, JSON-RPC a mano) · M10.2b (hover/ir-a-definición) |
-| **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | 🚧 M11.1 ✅ (stdlib de string: `+`/`len`/`to_string`/`trim`/`split`) · M11.3 módulos ✅ (`import M;`+`M.f`, `from M import a as b`, `pub`) · M11.2 I/O ⏳ |
+| **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ✅ M11.1 stdlib de string (`+`/`len`/`to_string`/`trim`/`split`) · M11.2 I/O (`eprint`/`input`/`parse_int`/`read_int`/`env`/`args`; archivos diferidos) · M11.3 módulos (`import M;`+`M.f`, `from M import a as b`, `pub`) |
 | **M12** | **concurrencia** (dirección probable: goroutines + channels) | scheduler, green threads, suspensión | ⏳ |
 | **Transversal** | optimización de la VM (incremental, midiendo) y **self-hosting** (capstone) | rendimiento, bootstrapping | ⏳ |
 

@@ -63,12 +63,12 @@ struct FnSig {
 /// (`Caja<T>`, con los `T` como `Var`) y los bounds del impl.
 #[derive(Clone)]
 struct GenImpl {
-    // `type_params` y `target` se usan en M9.2b-2 (síntesis del diccionario anidado); en
-    // M9.2b-1 solo se consulta `bounds` (para diferir el caso acotado).
+    /// Parámetros de tipo del impl (no usados directamente hoy, pero documentan su forma).
     #[allow(dead_code)]
     type_params: Vec<String>,
-    #[allow(dead_code)]
+    /// Tipo objetivo `Caja<T>` (con los `T` como `Var`): se casa con el concreto para σ_impl.
     target: Type,
+    /// Bounds del impl: deciden si el diccionario es plano o un closure anidado.
     bounds: Vec<(String, String)>,
 }
 
@@ -205,6 +205,10 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // Paso 6 (M9.3b): bajar los trait objects — coerciones concreto→objeto a la
     // construcción del struct sintetizado, y los despachos dinámicos a `(r.m)(r.data, ...)`.
     lower_dyn(program, &checker.dyn_coercions, &checker.dyn_dispatch);
+    // Paso 7 (M9.2b): renumerar los `id` de los fn-exprs. El lowering pudo **inyectar**
+    // closures sintéticos (diccionarios anidados) con `id` provisional; el intérprete y la VM
+    // exigen ids **densos** (`collect_fn_exprs`). Esta pasada final los reasigna en orden.
+    renumber_fn_exprs(program);
     Ok(())
 }
 
@@ -1972,7 +1976,7 @@ impl Checker {
     fn record_dict_args(&mut self, callee: &str, bounds: &[(String, String)], sigma: &HashMap<String, Type>, line: usize, col: usize)
         -> Result<(), TypeError>
     {
-        let mut dicts: Vec<String> = Vec::new();
+        let mut dicts: Vec<Expr> = Vec::new();
         for (tp, trait_name) in bounds {
             let concrete = sigma.get(tp).cloned().unwrap_or_else(|| Type::Var(tp.clone()));
             let methods = self.traits.get(trait_name).cloned().unwrap_or_default();
@@ -1984,16 +1988,21 @@ impl Checker {
         Ok(())
     }
 
-    /// Elige el diccionario (nombre de la función o del parámetro a pasar) para un método
-    /// de un trait, según el tipo `concrete` al que resolvió el parámetro acotado (M9.2).
+    /// Elige la **expresión-diccionario** a pasar para un método de un trait, según el tipo
+    /// `concrete` al que resolvió el parámetro acotado (M9.2 / M9.2b). Tres casos:
+    /// - `Var(U)` rígido del llamador con el mismo bound → **reenvía** su diccionario (`Ident`);
+    /// - tipo concreto con impl **no genérico** (o genérico **sin** bounds) → el método manglado
+    ///   como valor plano (`Ident`);
+    /// - tipo concreto con impl **genérico acotado** (`Caja<int>`) → un **closure anidado**
+    ///   (`synth_dict_closure`) que captura los diccionarios internos.
     fn dict_for(&self, concrete: &Type, trait_name: &str, method: &str, line: usize, col: usize)
-        -> Result<String, TypeError>
+        -> Result<Expr, TypeError>
     {
         if let Type::Var(u) = concrete {
             // Resolvió a un parámetro de tipo rígido del llamador: debe tener el mismo
             // bound, y se **reenvía** su diccionario.
             if self.current_fn_bounds.iter().any(|(bp, tr)| bp == u && tr == trait_name) {
-                return Ok(dict_param_name(u, trait_name, method));
+                return Ok(ident_expr(&dict_param_name(u, trait_name, method), line, col));
             }
             return Err(self.err(line, col, format!(
                 "el parámetro de tipo '{}' no está acotado por '{}' (requerido por la llamada)", u, trait_name
@@ -2009,20 +2018,73 @@ impl Checker {
             )));
         }
         // M9.2b: si el impl es **genérico y acotado**, su función manglada lleva sus propios
-        // parámetros-diccionario, así que no se puede pasar plana: necesita un diccionario
-        // **anidado** (un closure que capture los internos). Eso es M9.2b-2; por ahora, error
-        // explícito en vez de emitir código con aridad incorrecta.
-        let acotado = self.generic_impls.get(&(key.clone(), trait_name.to_string()))
-            .is_some_and(|gi| !gi.bounds.is_empty());
-        if acotado {
-            return Err(self.err(line, col, format!(
-                "pasar un '{}' como diccionario de '{}' requiere diccionarios anidados (M9.2b-2, aún no soportado)",
-                concrete, trait_name
-            )));
+        // parámetros-diccionario, así que no se puede pasar plana: hay que envolverla en un
+        // **closure** que rellene los diccionarios internos (anidados).
+        let gi_acotado = self.generic_impls.get(&(key.clone(), trait_name.to_string()))
+            .filter(|gi| !gi.bounds.is_empty())
+            .cloned();
+        if let Some(gi) = gi_acotado {
+            let sig = self.traits.get(trait_name)
+                .and_then(|ms| ms.iter().find(|m| m.name == method))
+                .cloned()
+                .expect("el método pertenece al trait (impl validado)");
+            return self.synth_dict_closure(&gi, &key, &sig, concrete, line, col);
         }
         // Impl no genérico, o genérico **sin** bounds: la función manglada tiene la aridad
         // justa (solo el receptor + params), así que se pasa como valor plano.
-        Ok(mangle(&key, method))
+        Ok(ident_expr(&mangle(&key, method), line, col))
+    }
+
+    /// Sintetiza el **diccionario anidado** (M9.2b) de un método de un impl genérico acotado:
+    /// un closure que adapta la aridad. `Caja#mostrar` espera `(self, dicts_internos...)`, pero
+    /// el llamador lo invocará con solo el receptor; el closure captura los diccionarios
+    /// internos y los rellena:
+    ///
+    /// ```text
+    /// fn(__d0: Caja<int>) -> string { Caja#mostrar(__d0, int#mostrar) }
+    /// ```
+    ///
+    /// El `id` del fn-expr es provisional (0): `renumber_fn_exprs`, al final del lowering, le da
+    /// uno denso. Reusa closures (M4): cero cambios de runtime.
+    fn synth_dict_closure(&self, gi: &GenImpl, key: &str, sig: &MethodSig, concrete: &Type, line: usize, col: usize)
+        -> Result<Expr, TypeError>
+    {
+        // σ_impl: parámetros de tipo del impl → argumentos concretos (casar `Caja<T>` con
+        // `Caja<int>` → T=int).
+        let mut sigma_impl: HashMap<String, Type> = HashMap::new();
+        let _ = unify(&gi.target, concrete, &mut sigma_impl);
+        // Parámetros del closure: `self: concrete`, luego el resto del método (Self→concrete).
+        let mut params = Vec::new();
+        let mut fwd_args = Vec::new();
+        for (i, p) in sig.params.iter().enumerate() {
+            let name = format!("__d{}", i);
+            let ty = if i == 0 { concrete.clone() } else { subst_self(&p.ty, concrete) };
+            params.push(Param { name: name.clone(), ty, line, col });
+            fwd_args.push(ident_expr(&name, line, col));
+        }
+        // Diccionarios internos: en el MISMO orden que `append_dict_params` los añadió a la
+        // función manglada (bounds del impl en orden; por bound, los métodos del trait en orden).
+        let mut inner = Vec::new();
+        for (tp, bound_trait) in &gi.bounds {
+            let inner_concrete = sigma_impl.get(tp).cloned().unwrap_or_else(|| Type::Var(tp.clone()));
+            let bmethods = self.traits.get(bound_trait).cloned().unwrap_or_default();
+            for bm in &bmethods {
+                inner.push(self.dict_for(&inner_concrete, bound_trait, &bm.name, line, col)?);
+            }
+        }
+        // Cuerpo: `Caja#metodo(self, params..., dicts_internos...)`.
+        let mut call_args = fwd_args;
+        call_args.extend(inner);
+        let call = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(ident_expr(&mangle(key, &sig.name), line, col)),
+                args: call_args,
+            },
+            line, col,
+        };
+        let body = Block { statements: Vec::new(), tail: Some(Box::new(call)), line, col };
+        let fe = FnExpr { id: 0, params, return_type: subst_self(&sig.return_type, concrete), body, line, col };
+        Ok(Expr { kind: ExprKind::Func(Box::new(fe)), line, col })
     }
 
     // ----- Manejo de ámbitos -----
@@ -2570,6 +2632,102 @@ fn freshen_expr(expr: &mut Expr, next: &mut usize) {
     }
 }
 
+/// Reasigna los `id` de todos los fn-exprs del programa a un rango denso `0..N` (M9.2b).
+/// El lowering pudo inyectar closures sintéticos (diccionarios anidados) con `id` provisional;
+/// el intérprete y la VM indexan la tabla de funciones por `id` y `collect_fn_exprs` exige que
+/// sean densos. Recorre el AST en el mismo orden que `collect_fn_exprs` y numera al vuelo. El
+/// orden concreto da igual (ambos motores reconstruyen por `id`), basta con que sea una
+/// biyección sobre todos los fn-exprs alcanzables.
+fn renumber_fn_exprs(program: &mut Program) {
+    let mut next = 0usize;
+    for f in &mut program.functions {
+        renumber_block(&mut f.body, &mut next);
+    }
+}
+
+fn renumber_block(block: &mut Block, next: &mut usize) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } => renumber_expr(value, next),
+            StmtKind::Assign { target, value } => {
+                renumber_expr(target, next);
+                renumber_expr(value, next);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    renumber_expr(v, next);
+                }
+            }
+            StmtKind::Expr(e) => renumber_expr(e, next),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        renumber_expr(t, next);
+    }
+}
+
+fn renumber_expr(expr: &mut Expr, next: &mut usize) {
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } => renumber_expr(inner, next),
+        ExprKind::Binary { left, right, .. } => {
+            renumber_expr(left, next);
+            renumber_expr(right, next);
+        }
+        ExprKind::Call { callee, args } => {
+            renumber_expr(callee, next);
+            for a in args {
+                renumber_expr(a, next);
+            }
+        }
+        ExprKind::ArrayLit(elems) => {
+            for e in elems {
+                renumber_expr(e, next);
+            }
+        }
+        ExprKind::Index { array, index } => {
+            renumber_expr(array, next);
+            renumber_expr(index, next);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                renumber_expr(e, next);
+            }
+        }
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                renumber_expr(a, next);
+            }
+        }
+        ExprKind::Field { object, .. } => renumber_expr(object, next),
+        // Pre-orden (igual que `collect_fn_exprs`): el fn-expr toma su id antes de recursar.
+        ExprKind::Func(fe) => {
+            fe.id = *next;
+            *next += 1;
+            renumber_block(&mut fe.body, next);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            renumber_expr(scrutinee, next);
+            for arm in arms {
+                renumber_expr(&mut arm.body, next);
+            }
+        }
+        ExprKind::Try(inner) => renumber_expr(inner, next),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            renumber_expr(cond, next);
+            renumber_block(then_branch, next);
+            if let Some(e) = else_branch {
+                renumber_expr(e, next);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            renumber_expr(cond, next);
+            renumber_block(body, next);
+        }
+        ExprKind::Block(b) => renumber_block(b, next),
+        _ => {}
+    }
+}
+
 /// ¿El tipo menciona `Self` (M9.3b)? Cubre `SelfType` y `Struct("Self")`, recursivamente.
 /// Lo usa la *object safety*: un método cuya firma (fuera del receptor) usa `Self` no es
 /// invocable sobre un trait object.
@@ -2776,8 +2934,10 @@ fn append_dict_params(program: &mut Program) {
     }
 }
 
-/// Sitios de llamada a funciones con bounds → diccionarios a añadir como argumentos.
-type DictSites = HashMap<(usize, usize, String), Vec<String>>;
+/// Sitios de llamada a funciones con bounds → **expresiones**-diccionario a añadir como
+/// argumentos (M9.2b). En M9.2 eran simples nombres (`Ident`); con impls genéricos acotados un
+/// diccionario puede ser un **closure** que captura los diccionarios internos (anidados).
+type DictSites = HashMap<(usize, usize, String), Vec<Expr>>;
 
 /// Añade en cada **sitio de llamada** a una función con bounds los argumentos-diccionario
 /// registrados (M9.2). Reescribe `f(args)` → `f(args, dicts...)`. Corre **tras** `lower_ufcs`
@@ -2871,17 +3031,16 @@ fn lower_dict_calls_expr(expr: &mut Expr, sites: &DictSites) {
     // Tras recorrer los hijos, si este nodo es una llamada por nombre a una función con
     // bounds registrada en este sitio, añadir los diccionarios como argumentos extra.
     let (line, col) = (expr.line, expr.col);
-    let dicts: Option<Vec<String>> = match &expr.kind {
+    let dicts: Option<Vec<Expr>> = match &expr.kind {
         ExprKind::Call { callee, .. } => match &callee.kind {
             ExprKind::Ident(name) => sites.get(&(line, col, name.clone())).cloned(),
             _ => None,
         },
         _ => None,
     };
+    // Los diccionarios (M9.2b: posiblemente closures anidados) se añaden ya construidos.
     if let (Some(dicts), ExprKind::Call { args, .. }) = (dicts, &mut expr.kind) {
-        for d in dicts {
-            args.push(Expr { kind: ExprKind::Ident(d), line, col });
-        }
+        args.extend(dicts);
     }
 }
 

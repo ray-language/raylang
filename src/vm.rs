@@ -1686,6 +1686,40 @@ mod tests {
         "#);
     }
 
+    #[test]
+    fn impl_generico_diccionario_anidado_oraculo() {
+        // M9.2b-2: pasar un Caja<int> a otro genérico acotado. El diccionario de Caja<int> es
+        // un **closure** que captura el de int. Ambos motores deben coincidir.
+        oracle_program(r#"
+            struct Caja<T> { contenido: T }
+            trait Medir { fn medir(self) -> int; }
+            impl Medir for int { fn medir(self) -> int { self } }
+            impl<T: Medir> Medir for Caja<T> { fn medir(self) -> int { self.contenido.medir() + 1 } }
+            fn medir_dos<X: Medir>(a: X, b: X) -> int { a.medir() + b.medir() }
+            fn main() -> int {
+                let c = Caja { contenido: 10 };
+                medir_dos(c, c)   // (10+1) * 2 = 22
+            }
+        "#);
+    }
+
+    #[test]
+    fn impl_generico_anidado_profundo_estres() {
+        // Caja<Caja<int>>: un diccionario anidado que contiene otro. Bajo estrés del GC,
+        // porque los closures-diccionario son objetos del heap (sus raíces deben trazarse).
+        oracle_stress(r#"
+            struct Caja<T> { contenido: T }
+            trait Medir { fn medir(self) -> int; }
+            impl Medir for int { fn medir(self) -> int { self } }
+            impl<T: Medir> Medir for Caja<T> { fn medir(self) -> int { self.contenido.medir() + 1 } }
+            fn medir_uno<X: Medir>(x: X) -> int { x.medir() }
+            fn main() -> int {
+                let c2 = Caja { contenido: Caja { contenido: 100 } };
+                c2.medir() + medir_uno(c2)   // 102 + 102 = 204
+            }
+        "#);
+    }
+
     // ----- M9.3a: métodos por defecto -----
 
     #[test]

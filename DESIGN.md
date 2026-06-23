@@ -1824,14 +1824,39 @@ y, de paso, un error del checker/runtime se **renderiza contra su archivo** con 
 prefijado `[módulo]`. La columna y las posiciones *relativas* dentro de un módulo se conservan (de
 ellas dependen las pre-pasadas, p. ej. que un `Call` comparta posición con su receptor).
 
+**Tipos por módulo (M11.3c).** Hasta -b los **tipos** (`struct`/`enum`/`trait`) eran globales-únicos
+(un choque de nombres entre módulos era error; sin encapsulamiento). M11.3c los pone **por módulo**,
+igual que las funciones: los tipos de un módulo no-entrada se **namespacan** a `modulo::Tipo` (el de
+entrada no, así un solo archivo no cambia), y `pub` controla su exportación. Dos módulos ya pueden
+reusar un nombre (`Node`, `Error`…); un tipo es **privado a su módulo** salvo `pub` + importado.
+
+El reto frente a las funciones: una referencia de tipo aparece en **muchas posiciones** —anotaciones
+(params, retorno, `let`), campos de struct, payloads de variante, objetivo/trait de un `impl`,
+bounds, `dyn Trait`— **y** en expresiones que nombran tipos: literal de struct (`Punto { … }`),
+construcción de enum (`Color.Rojo`, que llega como `Field`), y patrones de `match` (`Color.Rojo(x)`).
+El loader las reescribe todas. Complicación clave: el parser emite `Type::Struct(name)` para
+**cualquier** identificador en posición de tipo —incluidos los **parámetros de tipo** `T` (que el
+checker reclasifica a `Var` luego)—. Por eso el reescritor de tipos es *scope-aware* sobre los
+**params de tipo** del `fn`/`impl`/`struct`/`enum` envolvente: un nombre ligado por `<…>` se deja
+intacto; un tipo propio del módulo → `modulo::Tipo`; uno importado (`from M import Punto`) → su
+global; un primitivo (no es `Struct`) o un desconocido → intacto (el checker lo resuelve/erra). Es la
+encapsulación: una referencia *bare* a un tipo de otro módulo no resuelve (hay que importarlo).
+
+**Sub-pasos:**
+- **M11.3c-1** — `pub` en tipos (relaja `no_pub`); namespacing de los tipos de módulos no-entrada +
+  el **reescritor de referencias de tipo** completo (posiciones de tipo + expresiones que nombran
+  tipos), *scope-aware* sobre params de tipo; `comprobar_tipos_unicos` deja de exigir unicidad global
+  (cada módulo usa sus propios tipos; dos módulos pueden reusar un nombre).
+- **M11.3c-2** — **`from M import Tipo [as T]`**: trae un **tipo `pub`** de otro módulo al ámbito
+  (reusa el mapa del reescritor de -1 + la plomería de `from` de -b). Cierra el cruce de tipos.
+
 **Alcance y diferido:**
 - ✅ -a: `import M;` + `M.f(...)` (funciones `pub`), visibilidad, multi-archivo, ciclos seguros.
 - ✅ -b: `from M import a [as b]{, …}` (funciones `pub` al ámbito, con alias).
 - ✅ L3: desambiguación de posiciones entre módulos (sin colisiones) + errores atribuidos al módulo.
-- ⏳ **Importar tipos entre módulos** (`from M import Punto [as P]`, `M.Punto` como anotación,
-  construcción de enum calificada `M.Color.Rojo`) → diferido: requiere **namespacar tipos** y
-  reescribir las posiciones de tipo/patrón. Hoy los tipos son globales-únicos, así que un tipo de
-  otro módulo se referencia por su nombre directamente (sin encapsulamiento de tipos).
+- 🚧 -c: tipos por módulo (`pub` en tipos, namespacing + reescritor) + `from M import Tipo [as T]`.
+- ⏳ **Tipo calificado en posición de tipo** (`M.Punto` como anotación) y **construcción calificada**
+  (`M.Color.Rojo`) → diferido: piden gramática de tipo/constructor calificado. Se usa `from M import`.
 - ⏳ Submódulos / jerarquía de directorios, `pub` granular (campos), re-exports → futuro.
 
 **Runtime: sin cambios.** Los módulos se borran en el front-end; el programa fusionado es uno solo

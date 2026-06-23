@@ -61,7 +61,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M8** | inferencia local (`let x = 3`), REPL, mejores errores | unificación básica, tooling | ✅ |
 | **Limpieza** | reservar `@` (lexer), coma final en arreglos, sincronizar IDEAS | deuda de front-end y de documentación | ✅ |
 | **M9** | **traits / interfaces** (estilo Rust) → polimorfismo + *bounds* de genéricos | despacho estático vs. dinámico, abstracción | ✅ (M9.1 trait+impl · M9.2 bounds · M9.2b impls genéricos · M9.3 defectos + trait objects) |
-| **M10** | **tooling**: LSP (reusa el checker) + anotaciones (`@test`, `@derive`, `@builtin`) | language servers, metadatos en el AST | ✅ M10.1 (anotaciones: `@test`, `@derive(Eq)`) · M10.2 (LSP: diagnósticos en vivo, JSON-RPC a mano) |
+| **M10** | **tooling**: LSP (reusa el checker) + anotaciones (`@test`, `@derive`, `@builtin`) | language servers, metadatos en el AST | ✅ M10.1 (anotaciones) · M10.2 (LSP: diagnósticos, JSON-RPC a mano) · M10.2b 🚧 (hover/definición) |
 | **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ⏳ |
 | **M12** | **concurrencia** (dirección probable: goroutines + channels) | scheduler, green threads, suspensión | ⏳ |
 | **Transversal** | optimización de la VM (incremental, midiendo) y **self-hosting** (capstone) | rendimiento, bootstrapping | ⏳ |
@@ -1568,8 +1568,55 @@ config, sin compilar). **VSCode** (M10.2c): la extensión `editors/vscode/` incl
 `README.md` de cada carpeta. Solo VSCode necesita compilar un cliente; los demás son config
 porque su soporte LSP es externo (paquete/built-in del editor). El binario es el mismo de siempre, con un modo más.
 
+### 19.2b M10.2b — Hover e ir-a-definición
+
+M10.2 da **diagnósticos** corriendo el front-end y traduciendo el primer error. M10.2b añade las
+dos features de IDE que faltan: **hover** (el tipo bajo el cursor) e **ir-a-definición** (saltar
+del uso a la declaración).
+
+**El cambio de fondo: el checker pasa de *validador* a *consultable*.** Hasta hoy `check`
+devuelve `Result<(), TypeError>` y **tira** los tipos que calcula (mentalidad *erasure*). Hover y
+definición necesitan que el checker **exponga** lo que sabe: un mapa `(línea, col) → tipo` y otro
+`uso → posición de la declaración`. Es justo la "API de tipos" que evitamos en el REPL (M8.2); aquí
+se abre, pero **contenida**: un índice que se *recolecta* durante una pasada de chequeo, sin cambiar
+la semántica ni el runtime (sigue siendo introspección pura).
+
+**Realización — un `SemanticIndex` recolectado al vuelo:**
+- Se factoriza el front-end (`run_frontend`) para poder correrlo con un flag `gather`. Con él, el
+  `Checker` puebla, **durante `check_program`** (antes de cualquier *lowering*, así las posiciones
+  son las de la fuente original), dos listas: *hovers* `(línea, col, largo, texto)` y *defs*
+  `(línea, col, largo, línea_def, col_def)`. Una función pública nueva, `semantic_index(program)`,
+  corre esa pasada y devuelve el índice (tolerando errores: un programa a medio escribir aún da
+  info parcial). `check` no cambia su firma —sigue sirviendo a main/REPL/runner/VM—.
+- **Granularidad: identificadores.** Se registra por cada `Ident` que resuelve (variable, parámetro,
+  función, tipo): su **tipo** (para hover) y su **posición de declaración** (para definición). Esto
+  exige que `VarInfo` lleve la posición de su `let`/parámetro, y sendos mapas `nombre→posición` para
+  funciones y tipos. El *largo* del identificador da el rango que el editor subraya.
+- **Colisiones con el prelude.** El prelude se antepone a `program.functions`, y el código de
+  usuario se verifica **después**: en un mapa por posición, las entradas del usuario **sobrescriben**
+  las del prelude que colisionen. Suficiente en la práctica; los cuerpos sintéticos (defectos
+  renumerados, closures de M9.2b) tienen posiciones fuera de rango y no estorban.
+
+**El LSP gana estado y capacidades:**
+- Ahora **guarda los documentos** (`didOpen`/`didChange` → texto; `didClose` → lo olvida): una
+  petición `hover`/`definition` trae solo `uri` + posición, no el texto. (Los diagnósticos no lo
+  necesitaban; por eso M10.2 era *stateless*.)
+- `initialize` anuncia `hoverProvider` y `definitionProvider`.
+- `textDocument/hover`: construye el índice del documento, busca la entrada cuyo rango contiene el
+  cursor y responde el tipo. `textDocument/definition`: igual, responde una `Location` (uri + rango
+  de la declaración). Coordenadas 1-basadas (fases) ↔ 0-basadas (LSP), como en los diagnósticos.
+
+**Sub-pasos:** **M10.2b-1** hover (tipos); **M10.2b-2** ir-a-definición (posiciones de declaración).
+
+**Alcance y diferido.** Solo identificadores (no toda sub-expresión); el tipo mostrado es el del
+checker (con *erasure*). Ir-a-definición cubre nombres con declaración conocida (locales, parámetros,
+funciones, tipos); métodos/UFCS quedan limitados. *Completion*, *find-references*, *rename* y
+*signature help* → futuro. **Runtime y semántica intactos**: M10.2b es introspección; no cambia qué
+programas son válidos ni qué significan.
+
 ### 19.3 Deferido (más allá de M10.1)
-- **LSP** → M10.2 (su spec y decisión).
+- **LSP**: diagnósticos (M10.2 §19.2) + hover/definición (M10.2b §19.2b). *Completion*,
+  *find-references*, *rename*, *signature help* → futuro.
 - `@builtin`/`@extern` (limpiar el *special-casing* de `print`/`len`/`push`), `@deprecated`,
   `@inline`, `@delegate` → anotaciones futuras.
 - **Derivación recursiva** (`Eq` de enums con payload-enum) y **derive genérico** → futuro.

@@ -1621,3 +1621,47 @@ programas son válidos ni qué significan.
   `@inline`, `@delegate` → anotaciones futuras.
 - **Derivación recursiva** (`Eq` de enums con payload-enum) y **derive genérico** → futuro.
 - **Anotaciones definidas por el usuario que transforman código** (macros) → capstone.
+
+## 20. M11 — Módulos, I/O y stdlib
+
+M11 conecta el lenguaje con el mundo y lo escala a varios archivos. Tres piezas independientes,
+que se abordan por separado: **stdlib de string** (§20.1), **I/O / API de runtime** (§20.2,
+*args*/*input*/*env*/archivos) y **módulos + `pub`** (§20.3, la pieza arquitectónica). Cada una
+se especifica al arrancarla.
+
+### 20.1 M11.1 — stdlib de string
+
+Hasta M10 los **strings son casi opacos**: se imprimen y se comparan con `==`, pero no se pueden
+concatenar, medir ni transformar. M11.1 salda esa deuda (diferida desde M7.3, §16.8) con un puñado
+de operaciones foundational. Sin ellas no hay forma de construir mensajes, ni de parsear lo que se
+lea en M11.2, ni de avanzar hacia el self-hosting.
+
+**Primer cambio de runtime desde M6.3.** A diferencia de casi todo M7–M10 (front-end / *erasure*),
+las operaciones de string **tocan los dos motores**: el intérprete y la VM han de saber operar
+sobre el `String` en tiempo de ejecución. Se vuelve, pues, a la disciplina de **oráculo**
+(VM↔intérprete, incluido estrés del GC, ya que los strings nuevos son objetos del heap en la VM).
+
+**Cómo se exponen: como builtins** (igual que `print`/`len`/`push`; DESIGN §16.4). El checker los
+conoce, valida sus tipos y devuelve el resultado; el compilador emite un **opcode** por builtin y
+la VM lo ejecuta. **Bonus de UFCS:** como `recv.f(args)` se reescribe a `f(recv, args)` (§16.1),
+definirlos como builtins les da **sintaxis de método gratis** (`s.trim()`, `"a,b".split(",")`),
+sin nada extra —solo añadir el nombre a la lista de invocables—.
+
+**Operaciones (dos sub-pasos):**
+
+- **M11.1a — construir:**
+  - **Concatenación** `s1 + s2 -> string`. Se **extiende el operador `+`** (no un builtin): el
+    checker permite `string + string → string`; el intérprete y la VM extienden su `Add` para
+    concatenar (reusa el opcode `Add`, sin uno nuevo).
+  - **`len(s) -> int`**: se extiende el builtin/opcode `Len` para aceptar también un string;
+    devuelve el número de **caracteres** (Unicode scalar values), consistente con `len` de arreglo.
+  - **`to_string(x) -> string`**: convierte un primitivo imprimible (`int`/`float`/`bool`/`string`)
+    a su representación textual (la misma que `print`). Opcode nuevo `ToString`.
+- **M11.1b — descomponer:**
+  - **`trim(s) -> string`**: quita el espacio en blanco de los extremos (Unicode). Opcode `Trim`.
+  - **`split(s, sep) -> [string]`**: parte `s` por el separador `sep` (substring no vacío) y
+    devuelve los trozos. Opcode `Split`. Construye un arreglo en runtime (objeto del heap).
+
+**Lo que NO incluye M11.1** (diferido): tipo `char` / indexar un string (raylang no tiene `char`);
+`parse_int`/`int_of_string` (va con I/O, M11.2); `replace`/`contains`/`to_upper`… (aditivos,
+cuando hagan falta). El conjunto mínimo es *concatenar + medir + convertir + recortar + partir*.

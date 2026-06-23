@@ -1275,9 +1275,86 @@ de llamada; en runtime solo se llama el valor que ya se eligió.
 **Alcance de M9.2 y lo diferido a M9.2b / M9.3:**
 - ✅ Bounds en **funciones** (`fn f<T: A + B>(...)`), con varios bounds por parámetro.
 - ✅ Reenvío de diccionarios entre genéricos acotados.
-- ⏳ **Impls genéricos** (`impl Mostrable for Caja<T>`): un diccionario que a su vez necesita
-  otro diccionario (el de `T`). Se difiere; requiere construir diccionarios *anidados*.
+- ✅ **Impls genéricos** (`impl<T> Trait for Caja<T>`) → **M9.2b** (§18.6b).
 - ⏳ Bounds en parámetros de tipo de **struct/enum** → más adelante.
+
+### 18.6b M9.2b — Impls genéricos (diccionarios anidados)
+
+Hasta M9.2 un `impl` solo cubre un tipo **concreto** (`impl Mostrable for Punto`). M9.2b habilita
+implementar un trait para un **constructor de tipos** —toda una familia `Caja<T>`—, opcionalmente
+**condicionado** a que `T` también cumpla un trait:
+
+```rust
+impl<T> Contar for Caja<T> { fn contar(self) -> int { 1 } }      // para cualquier T
+impl<T: Mostrable> Mostrable for Caja<T> {                       // si T es Mostrable
+    fn mostrar(self) -> string { self.contenido.mostrar() }
+}
+```
+
+Es lo que vuelve los traits **composicionales** sobre contenedores. La sorpresa de diseño: casi
+todo se reduce a maquinaria que ya existe.
+
+**Idea central — un método de impl genérico *es* una función genérica acotada.** En el paso 0c,
+cada método de `impl<T: B> Trait for Caja<T>` se baja a una función manglada `Caja#metodo` que
+**hereda los `type_params` y `bounds` del impl** (hasta M9.2 se bajaban con ambos vacíos). Con
+eso:
+
+- `append_dict_params` le añade sus parámetros-diccionario `T#B#m` (M9.2) **automáticamente**;
+- dentro del cuerpo, `self.contenido.metodo()` con `self: Caja<T>` y `T: B` acotado resuelve por
+  `resolve_bound_method` al diccionario, **igual que en una función con bounds**;
+- el `self` se tipa sustituyendo `Self → Caja<T>` (con `T` como `Var`, no concreto).
+
+**Resolución de instancia.** La clave de la tabla de métodos sigue siendo el **constructor**
+(`type_key_of(Caja<T>) = "Caja"`). Por eso `caja.mostrar()` con `caja: Caja<int>` despacha a
+`Caja#mostrar`; como ahora es genérica, `check_generic_call` infiere `T=int` y el sitio registra
+el diccionario interno que necesita. *Alcance:* solo impls **plenamente genéricos** (los args del
+objetivo son exactamente los parámetros de tipo del impl: `Caja<T>`, no `Caja<int>`), **un impl
+por `(constructor, trait)`** — sin instancias solapadas ni especializadas (se difieren).
+
+**El punto genuinamente nuevo — diccionarios anidados.** Al pasar un `Caja<int>` a *otro*
+genérico acotado, su diccionario ya **no es una función plana**:
+
+```rust
+fn imprime<X: Mostrable>(x: X) { ... x.mostrar() ... }
+imprime(caja)        // caja: Caja<int>; σ: X = Caja<int>
+```
+
+`Caja#mostrar` espera `(self, «int#mostrar»)` —dos argumentos—, pero dentro de `imprime` se le
+llamará con uno (`X#Mostrable#mostrar(x)`). La solución es pasar un **closure que captura el
+diccionario interno** y presenta la aridad que el llamador espera:
+
+```rust
+imprime(caja, fn(c: Caja<int>) -> string { Caja#mostrar(c, int#mostrar) })
+//                                          └── el dict interno, capturado
+```
+
+Ese closure-que-cierra-sobre-otros-diccionarios **es** el diccionario anidado. Y, una vez más,
+**los closures de M4 ya hacen exactamente eso**: cero opcodes, runtime intacto, oráculo válido.
+
+**Cómo se construye.** El argumento-diccionario de un sitio de llamada pasa de ser un *nombre*
+(`Vec<String>`) a una *expresión* (`Vec<Expr>`). `dict_for(tipo, trait, método)`:
+- `Var(U)` rígido del llamador con el mismo bound → **reenvía** `Ident(U#Trait#m)` (M9.2);
+- tipo concreto con impl **no genérico** → `Ident(C#m)` (M9.1, función plana);
+- tipo concreto con impl **genérico** (p. ej. `Caja<int>`) → **sintetiza el closure**:
+  liga los parámetros del impl al instanciar (`T=int`), y por cada `(bound, método)` del impl
+  rellena el argumento interno llamando recursivamente a `dict_for` (`int#mostrar`, que a su vez
+  podría ser otro closure si `int` tuviera un impl genérico — la recursión sigue la estructura del
+  tipo). El cuerpo del closure llama a `Caja#m(self, params..., dicts_internos...)`.
+
+Todo es **lowering post-check** (los argumentos-diccionario se inyectan tras verificar; el
+programa no se re-chequea), así que estas funciones/closure sintéticos no necesitan pasar el
+checker: solo importan en runtime, donde *erasure* los reduce a valores función.
+
+**Sub-pasos de implementación:**
+- **M9.2b-1** — impls genéricos **sin bounds del impl** (`impl<T> Contar for Caja<T>`, métodos que
+  no usan `T`). Solo: parsear `<...>` en el `impl`, llevar `type_params` en el paso 0c, relajar
+  `ensure_impl_target`, registrar el impl genérico. Sin closures (la función manglada no tiene
+  parámetros-diccionario, así que pasarla plana es correcto).
+- **M9.2b-2** — **bounds del impl + diccionarios anidados** (`impl<T: Mostrable> ...`): argumentos
+  -diccionario como expresiones y síntesis del closure en `dict_for`.
+
+**Runtime: sin cambios** (igual que M9.2). Diferido a más allá de M9.2b: instancias solapadas /
+especializadas, bounds en parámetros de struct/enum, y `dyn Trait` sobre impls genéricos.
 
 ### 18.7 M9.3 — Métodos por defecto y trait objects
 
@@ -1371,7 +1448,9 @@ funciones", sobre las piezas que ya existían (structs + funciones de primera cl
 - ⏳ *Upcasting* entre traits, `dyn A + B` (varios traits en un objeto) → futuro.
 
 ### 18.8 Deferido (más allá de M9.3)
-- **Impls genéricos** (`impl Trait for Caja<T>`) → M9.2b (diccionarios anidados).
+- **Impls genéricos** (`impl Trait for Caja<T>`) → ✅ M9.2b (§18.6b, diccionarios anidados).
+- **Instancias solapadas/especializadas** (`impl Trait for Caja<int>` junto a `Caja<T>`) y
+  **`dyn Trait` sobre impls genéricos** → diferidos más allá de M9.2b.
 - **Traits con `Self` en posición de argumento** que exija dos receptores del mismo tipo
   (p. ej. `fn igual(self, otro: Self) -> bool`) → soportado por M9.1 (ambos = destino), pero
   sin la garantía de igualdad estructural que daría un trait `Eq` del prelude (futuro).

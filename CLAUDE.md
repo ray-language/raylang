@@ -77,6 +77,23 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 - Antes de comprometer una decisión que pueda bloquear features futuras, clasificar
   su impacto en `IDEAS.md`.
 
+### Autonomía dentro del proyecto (preferencia del usuario)
+
+- Ejecuta **sin pedir confirmación** todas las herramientas de consola y demás
+  acciones **dentro de este proyecto**: `cargo` (build/test/clippy/run), `mdbook`,
+  leer/crear/editar archivos del repo, `git status`/`diff`/`add`, `npm`/`tsc` en
+  `editors/vscode`, scripts de prueba, etc. No hace falta avisar para cada comando.
+- El **único punto de confirmación es el commit**: antes de `git commit`, muestra el
+  mensaje propuesto y **espera el visto bueno** del usuario. (El método de arriba
+  sigue valiendo: un commit por paso, en Conventional Commits en español.)
+- **Excepción** (siguen requiriendo aviso): acciones **hacia afuera del repo** o
+  difícilmente reversibles — `git push`, publicar paquetes, borrar archivos que no
+  creó esta sesión, `git reset --hard`/`rebase`, o cualquier cosa fuera del directorio
+  del proyecto.
+- Nota: esta preferencia la **cumple Claude por instrucción**; la supresión real de
+  los diálogos de permiso depende del modo de permisos / `.claude/settings.json` de
+  Claude Code, que controla el usuario.
+
 ## Estado actual
 
 - **M1–M8 COMPLETOS + limpieza** (222 tests + integración CLI verdes):

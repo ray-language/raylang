@@ -51,6 +51,19 @@ fn hover_muestra_el_tipo_de_una_variable() {
 }
 
 #[test]
+fn definicion_salta_a_la_declaracion() {
+    // Ir-a-definición del uso de `x` (línea 2) → su `let` (línea 1).
+    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int {\n  let x = 5;\n  x\n}"}}}"#;
+    let def = r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":2}}}"#;
+    let entrada = frame(open) + &frame(def) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("\"id\":3"), "responde a la petición de definición\n{out}");
+    assert!(out.contains("file:///t.ray"), "devuelve una Location\n{out}");
+    // La declaración está en la línea 1 (0-basado): el `let`.
+    assert!(out.contains("\"line\":1"), "apunta a la línea del let\n{out}");
+}
+
+#[test]
 fn publica_diagnostico_ante_un_error() {
     let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int { 1 + true }"}}}"#;
     let entrada = frame(open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);

@@ -80,6 +80,11 @@ fn serve<R: BufRead, W: Write>(reader: &mut R, out: &mut W) {
                 let id = msg.get("id").cloned().unwrap_or(Json::Null);
                 send(out, &resultado(id, hover_result(&msg, &docs)));
             }
+            // M10.2b: ir-a-definición — salta del uso a su declaración.
+            "textDocument/definition" => {
+                let id = msg.get("id").cloned().unwrap_or(Json::Null);
+                send(out, &resultado(id, definition_result(&msg, &docs)));
+            }
             // Petición desconocida (lleva `id`) → error JSON-RPC. Notificación → se ignora.
             _ => {
                 if let Some(id) = msg.get("id") {
@@ -193,6 +198,32 @@ fn rango(line0: usize, start: usize, end: usize) -> Json {
     obj(vec![("start", pos(start)), ("end", pos(end))])
 }
 
+// ── Ir-a-definición (M10.2b) ─────────────────────────────────────────────────────────
+
+/// El `result` de un `textDocument/definition`: una `Location` (uri + rango de la
+/// declaración) en el mismo documento, o `null` si el identificador no tiene una declaración
+/// conocida (p. ej. un método, un builtin o un tipo).
+fn definition_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+    let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
+    let Some(src) = docs.get(&uri) else { return Json::Null };
+    let Some((def_line0, def_col0, len)) = definition_at(src, line0, char0) else { return Json::Null };
+    obj(vec![
+        ("uri", Json::Str(uri)),
+        ("range", rango(def_line0, def_col0, def_col0 + len)),
+    ])
+}
+
+/// Busca el identificador en `(line0, char0)` (0-basado) y devuelve la posición de su
+/// declaración `(def_line0, def_col0, largo)` (0-basadas). Como hover, corre el front-end.
+fn definition_at(src: &str, line0: usize, char0: usize) -> Option<(usize, usize, usize)> {
+    let tokens = lexer::lex(src).ok()?;
+    let mut program = parser::parse(tokens).ok()?;
+    let idx = checker::semantic_index(&mut program);
+    let (qline, qcol) = (line0 + 1, char0 + 1);
+    let d = idx.defs.iter().find(|d| d.line == qline && qcol >= d.col && qcol < d.col + d.len)?;
+    Some((d.def_line - 1, d.def_col - 1, d.len))
+}
+
 /// Lee un `Json::Num` como `usize` (las posiciones LSP son enteros).
 fn as_usize(j: &Json) -> Option<usize> {
     match j {
@@ -238,8 +269,9 @@ fn respuesta_initialize(id: Json) -> Json {
     let capabilities = obj(vec![
         // 1 = Full sync: el cliente reenvía el documento entero en cada cambio.
         ("textDocumentSync", num(1)),
-        // M10.2b: el servidor responde hover (el tipo bajo el cursor).
+        // M10.2b: el servidor responde hover (el tipo bajo el cursor) e ir-a-definición.
         ("hoverProvider", Json::Bool(true)),
+        ("definitionProvider", Json::Bool(true)),
     ]);
     let result = obj(vec![
         ("capabilities", capabilities),

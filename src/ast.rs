@@ -150,6 +150,9 @@ pub struct MethodSig {
     pub name: String,
     pub params: Vec<Param>,
     pub return_type: Type, // Unit si se omitió el `-> ...`
+    /// Cuerpo **por defecto** (M9.3a): `Some` si la firma trae un bloque en vez de `;`.
+    /// Un impl que no redefina el método hereda este cuerpo (con `Self` = el tipo destino).
+    pub default_body: Option<Block>,
     pub line: usize,
     pub col: usize,
 }

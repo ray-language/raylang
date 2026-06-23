@@ -1650,4 +1650,46 @@ mod tests {
             }
         "#);
     }
+
+    // ----- M9.3a: métodos por defecto -----
+
+    #[test]
+    fn metodos_por_defecto_oraculo() {
+        // Defecto heredado, defecto que llama a otro método, y redefinición. El método
+        // sintetizado es una función ordinaria: ambos motores deben coincidir.
+        oracle_program(r#"
+            trait Valor {
+                fn base(self) -> int;
+                fn doble(self) -> int { self.base() + self.base() }   // defecto usa otro
+                fn diez(self) -> int { 10 }                            // defecto constante
+            }
+            struct A { n: int }
+            impl Valor for A { fn base(self) -> int { self.n } }       // hereda doble y diez
+            struct B { n: int }
+            impl Valor for B {
+                fn base(self) -> int { self.n }
+                fn doble(self) -> int { self.n * 100 }                 // redefine doble
+            }
+            fn main() -> int {
+                let a = A { n: 3 };
+                let b = B { n: 4 };
+                a.doble() + a.diez() + b.doble() + b.diez()   // 6 + 10 + 400 + 10 = 426
+            }
+        "#);
+    }
+
+    #[test]
+    fn metodos_por_defecto_via_bound_oraculo() {
+        // Un método por defecto invocado desde un genérico acotado (M9.2 + M9.3a).
+        oracle_stress(r#"
+            trait Saludo {
+                fn nombre(self) -> int;
+                fn doble_nombre(self) -> int { self.nombre() + self.nombre() }
+            }
+            struct P { v: int }
+            impl Saludo for P { fn nombre(self) -> int { self.v } }
+            fn usar<T: Saludo>(x: T) -> int { x.doble_nombre() }
+            fn main() -> int { let p = P { v: 21 }; usar(p) }   // 42
+        "#);
+    }
 }

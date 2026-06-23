@@ -159,8 +159,15 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   acotado del llamador. La inferencia (`σ` de M6) decide qué diccionario va. **Runtime
   intacto**: los diccionarios son valores función (M4); cero opcodes, oráculo sin tocar.
   Impls genéricos (diccionarios anidados) → M9.2b.
-- **Siguiente: M9.3** (métodos por defecto en el trait + trait objects / despacho dinámico),
-  o **M9.2b** (impls genéricos). Ver hoja de ruta (DESIGN §2, §18) / IDEAS.md.
+- **M9.3a COMPLETO** (252 tests + integración CLI verdes): **métodos por defecto**. Una
+  firma de trait puede traer cuerpo (`MethodSig.default_body: Option<Block>`; el parser acepta
+  `;` o un bloque). Front-end puro (erasure): un método del trait con defecto no redefinido por
+  el impl se **sintetiza** como un método más (función manglada `Tipo#metodo` con el cuerpo del
+  defecto, `Self`→destino) en el paso 0c de `check`; `register_traits_impls` relaja la cobertura
+  (falta solo si no hay defecto) y registra los defects en la tabla de métodos. Compone con
+  bounds (el defecto está en la lista del trait). Runtime intacto.
+- **Siguiente: M9.3b** (trait objects / despacho dinámico — toca el runtime, con su decisión de
+  representación), o **M9.2b** (impls genéricos). Ver hoja de ruta (DESIGN §2, §18) / IDEAS.md.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

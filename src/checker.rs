@@ -92,18 +92,22 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
         prelude_fns.append(&mut program.functions);
         program.functions = prelude_fns;
     }
-    // Paso 0c (M9.1): bajar los métodos de cada `impl` a funciones ordinarias con
+    // Paso 0c (M9.1 + M9.3a): bajar los métodos de cada `impl` a funciones ordinarias con
     // nombre manglado (`Tipo#metodo`) y `self` de tipo concreto. Es el truco que hace a
     // M9.1 *front-end puro*: un método es una función con un primer parámetro `self`, así
     // que el resto del pipeline (registro de firmas, chequeo de cuerpos, lowering de UFCS,
     // intérprete y VM) los procesa sin código especial. La **validación** (cobertura y
     // coincidencia de firmas) y la tabla de resolución se construyen luego, ya con los
     // tipos registrados (`check_program`).
+    let trait_sigs: HashMap<String, Vec<MethodSig>> = program.traits.iter()
+        .map(|t| (t.name.clone(), t.methods.clone()))
+        .collect();
     for imp in &program.impls {
         let key = match type_key_of(&imp.target) {
             Some(k) => k,
             None => continue, // objetivo inválido: el error se da en la validación
         };
+        // Métodos provistos por el impl.
         for m in &imp.methods {
             let params = m.params.iter()
                 .map(|p| Param { ty: subst_self(&p.ty, &imp.target), ..p.clone() })
@@ -117,6 +121,28 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
                 body: m.body.clone(),
                 line: m.line,
                 col: m.col,
+            });
+        }
+        // M9.3a: métodos por defecto no redefinidos → se sintetizan desde el cuerpo del
+        // trait (con `Self` = el tipo destino). El impl los hereda como funciones propias.
+        let provistos: HashSet<&str> = imp.methods.iter().map(|m| m.name.as_str()).collect();
+        for tm in trait_sigs.get(&imp.trait_name).into_iter().flatten() {
+            let Some(body) = &tm.default_body else { continue };
+            if provistos.contains(tm.name.as_str()) {
+                continue; // el impl lo redefine: gana el del impl
+            }
+            let params = tm.params.iter()
+                .map(|p| Param { ty: subst_self(&p.ty, &imp.target), ..p.clone() })
+                .collect();
+            program.functions.push(Function {
+                name: mangle(&key, &tm.name),
+                type_params: Vec::new(),
+                bounds: Vec::new(),
+                params,
+                return_type: subst_self(&tm.return_type, &imp.target),
+                body: body.clone(),
+                line: tm.line,
+                col: tm.col,
             });
         }
     }
@@ -428,9 +454,10 @@ impl Checker {
                     return Err(self.err(m.line, m.col, format!("método '{}' implementado dos veces", m.name)));
                 }
             }
-            // Cobertura exacta: no faltan métodos del trait...
+            // Cobertura: no faltan métodos del trait... salvo los que tienen cuerpo por
+            // defecto (M9.3a), que se heredan.
             for tm in &trait_methods {
-                if !impl_names.contains(&tm.name) {
+                if !impl_names.contains(&tm.name) && tm.default_body.is_none() {
                     return Err(self.err(imp.line, imp.col, format!(
                         "el impl de '{}' para {} no implementa el método '{}'", imp.trait_name, target, tm.name
                     )));
@@ -453,6 +480,20 @@ impl Checker {
                 }
                 self.methods.insert((key.clone(), m.name.clone()), mangled.clone());
                 self.impl_fn_self.insert(mangled, target.clone());
+            }
+            // M9.3a: los métodos por defecto no redefinidos también van a la tabla de
+            // resolución (su función sintetizada se inyectó en el paso 0c).
+            for tm in &trait_methods {
+                if tm.default_body.is_some() && !impl_names.contains(&tm.name) {
+                    let mangled = mangle(&key, &tm.name);
+                    if self.methods.contains_key(&(key.clone(), tm.name.clone())) {
+                        return Err(self.err(imp.line, imp.col, format!(
+                            "método '{}' ambiguo para {}: ya hay un impl que lo provee", tm.name, target
+                        )));
+                    }
+                    self.methods.insert((key.clone(), tm.name.clone()), mangled.clone());
+                    self.impl_fn_self.insert(mangled, target.clone());
+                }
             }
             // Registrar que este tipo implementa este trait (M9.2: verificación de bounds).
             self.impl_traits.insert((key, imp.trait_name.clone()));
@@ -3416,5 +3457,51 @@ fn main() -> int {
             "fn usar<T: NoExiste>(x: T) -> int { 0 } fn main() -> int { 0 }",
             "trait 'NoExiste' no declarado",
         );
+    }
+
+    // ----- M9.3a: métodos por defecto -----
+
+    #[test]
+    fn metodo_por_defecto_heredado_y_redefinido() {
+        check_src(r#"
+            trait Valor {
+                fn base(self) -> int;
+                fn doble(self) -> int { self.base() + self.base() }
+            }
+            struct A { n: int }
+            impl Valor for A { fn base(self) -> int { self.n } }
+            struct B { n: int }
+            impl Valor for B { fn base(self) -> int { self.n } fn doble(self) -> int { 0 } }
+            fn main() -> int {
+                let a = A { n: 1 };
+                let b = B { n: 2 };
+                a.doble() + b.doble()
+            }
+        "#).expect("defecto heredado por A, redefinido por B");
+    }
+
+    #[test]
+    fn metodo_requerido_sin_defecto_sigue_obligatorio() {
+        err_contains(
+            r#"trait T { fn req(self) -> int; fn opt(self) -> int { 0 } }
+               struct S { x: int }
+               impl T for S { fn opt(self) -> int { self.x } }
+               fn main() -> int { 0 }"#,
+            "no implementa el método 'req'",
+        );
+    }
+
+    #[test]
+    fn metodo_por_defecto_via_bound() {
+        check_src(r#"
+            trait Saludo {
+                fn nombre(self) -> int;
+                fn doble(self) -> int { self.nombre() + self.nombre() }
+            }
+            struct P { v: int }
+            impl Saludo for P { fn nombre(self) -> int { self.v } }
+            fn usar<T: Saludo>(x: T) -> int { x.doble() }
+            fn main() -> int { let p = P { v: 1 }; usar(p) }
+        "#).expect("defecto invocado vía bound");
     }
 }

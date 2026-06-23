@@ -189,7 +189,10 @@ impl Parser {
         Ok(TraitDef { name, methods, line: kw.line, col: kw.col })
     }
 
-    /// method_sig = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] ';'  (M9)
+    /// method_sig = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] ( ';' | block )  (M9)
+    ///
+    /// Termina en `;` (método **requerido**) o en un bloque (método **por defecto**,
+    /// M9.3a): el cuerpo que un impl hereda si no lo redefine.
     fn method_sig(&mut self) -> Result<MethodSig, ParseError> {
         let kw = self.expect(&TokenKind::Fn, "'fn' en una firma de método")?;
         let (name, _, _) = self.expect_ident("el nombre del método")?;
@@ -201,8 +204,14 @@ impl Parser {
         } else {
             Type::Unit
         };
-        self.expect(&TokenKind::Semicolon, "';' para cerrar la firma del método")?;
-        Ok(MethodSig { name, params, return_type, line: kw.line, col: kw.col })
+        // ';' → requerido;  '{ ... }' → cuerpo por defecto (M9.3a).
+        let default_body = if self.check(&TokenKind::LBrace) {
+            Some(self.block()?)
+        } else {
+            self.expect(&TokenKind::Semicolon, "';' o un cuerpo '{ ... }' para el método")?;
+            None
+        };
+        Ok(MethodSig { name, params, return_type, default_body, line: kw.line, col: kw.col })
     }
 
     /// impl_block = 'impl' IDENT 'for' type '{' { impl_method } '}'  (M9)
@@ -1539,6 +1548,21 @@ fn main() -> int {
         let tokens = crate::lexer::lex("impl T S { } fn main() -> int { 0 }").expect("lex ok");
         let err = parse(tokens).expect_err("falta 'for'");
         assert!(err.msg.contains("se esperaba 'for'"), "mensaje: {}", err.msg);
+    }
+
+    #[test]
+    fn parse_metodo_por_defecto() {
+        let prog = parse_prog(r#"
+            trait T {
+                fn req(self) -> int;
+                fn opt(self) -> int { 42 }
+            }
+            fn main() -> int { 0 }
+        "#);
+        let t = &prog.traits[0];
+        assert_eq!(t.methods.len(), 2);
+        assert!(t.methods[0].default_body.is_none(), "req es requerido (sin cuerpo)");
+        assert!(t.methods[1].default_body.is_some(), "opt tiene cuerpo por defecto");
     }
 
     #[test]

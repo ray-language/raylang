@@ -20,7 +20,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::ast::{Block, Expr, ExprKind, FnExpr, Function, Program, Stmt, StmtKind};
+use crate::ast::{Block, Expr, ExprKind, FnExpr, Function, MethodSig, PatternKind, Program, Stmt, StmtKind, Type};
 use crate::diagnostic;
 
 /// Un error de carga, ya **renderizado** con su contexto de fuente (la línea + `^`), listo
@@ -103,7 +103,7 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         modules.push(Module { name, is_entry, program, source });
     }
 
-    // --- Fase 2: tipos globales únicos (en M11.3a los tipos no se namespacan) ---
+    // --- Fase 2: tipos únicos **dentro de cada módulo** (M11.3c: ya no globales) ---
     comprobar_tipos_unicos(&modules)?;
 
     // --- Fase 3: namespacing + resolución + desambiguación de posiciones (L3) ---
@@ -124,16 +124,32 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
     let mut loaded_modules: Vec<LoadedModule> = Vec::new();
     let mut next_start = 1usize; // primera línea libre del espacio global
     for mut m in modules {
+        let prefix = if m.is_entry { None } else { Some(m.name.clone()) };
+
+        // 1. `@derive` (M11.3c): se expande **aquí**, con los nombres **locales** (re-lexables),
+        //    antes de namespacar; los `impl` generados se namespacan luego como los demás. El
+        //    checker la reejecuta sobre el programa fusionado, pero es idempotente y los salta.
+        crate::checker::generate_derives(&mut m.program)
+            .map_err(|e| render(&m.source, e.line, e.col, &m.name, &e.to_string()))?;
+
+        // 2. Resolución de **valores** (funciones propias, `from`-imports, acceso calificado `M.f`).
         let mut resolver = Resolver::new(&m, &pub_fns, &tipos)?;
         resolver.resolve_module(&mut m)?;
 
-        // Banda de este módulo: empieza en `next_start`; sus posiciones se desplazan por `delta`.
+        // 3. Namespacing de **tipos** (M11.3c): renombrar las definiciones de este módulo a su
+        //    nombre global (`modulo::Tipo`) y **reescribir** todas las referencias de tipo —en
+        //    posiciones de tipo y en expresiones que nombran tipos (struct lit, `Color.Rojo`,
+        //    patrones)—, sin tocar los parámetros de tipo en ámbito.
+        let own_types = build_own_types(&m.program, &prefix);
+        rename_type_defs(&mut m.program, &own_types);
+        TypeRewriter::new(&own_types).rewrite_program(&mut m.program);
+
+        // 4. Banda de este módulo: empieza en `next_start`; sus posiciones se desplazan por `delta`.
         let start = next_start;
         shift_program(&mut m.program, start - 1);
         next_start = start + m.source.lines().count().max(1) + 1; // +1 de holgura entre bandas
 
-        let prefix = if m.is_entry { None } else { Some(m.name.clone()) };
-        // Renombrar las definiciones de función a su nombre global y fusionar.
+        // 5. Renombrar las definiciones de función a su nombre global y fusionar.
         for mut f in std::mem::take(&mut m.program.functions) {
             f.name = global_fn(&prefix, &f.name);
             fusionado.functions.push(f);
@@ -307,12 +323,47 @@ fn module_name(path: &Path) -> String {
     path.file_stem().and_then(|s| s.to_str()).unwrap_or("main").to_string()
 }
 
-/// Nombre global de una función: `modulo::fn` para un módulo importado; el propio nombre para
-/// el módulo de entrada (sus nombres ya son globales; `main` debe seguir siendo `main`).
+/// Nombre global de una función **o tipo**: `modulo::nombre` para un módulo importado; el propio
+/// nombre para el de entrada (sus nombres ya son globales; `main` debe seguir siendo `main`).
 fn global_fn(prefix: &Option<String>, name: &str) -> String {
     match prefix {
         Some(m) => format!("{}::{}", m, name),
         None => name.to_string(),
+    }
+}
+
+/// Mapa `nombre local → nombre global` de los **tipos** (struct/enum/trait) de un módulo (M11.3c).
+fn build_own_types(program: &Program, prefix: &Option<String>) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for s in &program.structs {
+        map.insert(s.name.clone(), global_fn(prefix, &s.name));
+    }
+    for e in &program.enums {
+        map.insert(e.name.clone(), global_fn(prefix, &e.name));
+    }
+    for t in &program.traits {
+        map.insert(t.name.clone(), global_fn(prefix, &t.name));
+    }
+    map
+}
+
+/// Renombra las **definiciones** de tipo de un módulo a su nombre global (M11.3c). Las
+/// *referencias* las reescribe `TypeRewriter`.
+fn rename_type_defs(program: &mut Program, own_types: &HashMap<String, String>) {
+    for s in &mut program.structs {
+        if let Some(g) = own_types.get(&s.name) {
+            s.name = g.clone();
+        }
+    }
+    for e in &mut program.enums {
+        if let Some(g) = own_types.get(&e.name) {
+            e.name = g.clone();
+        }
+    }
+    for t in &mut program.traits {
+        if let Some(g) = own_types.get(&t.name) {
+            t.name = g.clone();
+        }
     }
 }
 
@@ -327,19 +378,18 @@ fn render(source: &str, line: usize, col: usize, module: &str, msg: &str) -> Loa
     LoadError { message: diagnostic::render(source, line, col, &headline) }
 }
 
-/// Tipos/enums/traits no se namespacan en M11.3a: deben tener nombre único entre todos los
-/// módulos. Un choque es error (en otro caso se fusionarían dos definiciones homónimas).
+/// Los tipos (struct/enum/trait) se namespacan por módulo (M11.3c), así que dos **módulos** pueden
+/// reusar un nombre. Pero **dentro** de un módulo siguen debiendo ser únicos (dos `Foo` colisionan).
 fn comprobar_tipos_unicos(modules: &[Module]) -> Result<(), LoadError> {
-    let mut visto: HashMap<String, String> = HashMap::new(); // nombre de tipo → módulo
     for m in modules {
+        let mut visto: HashSet<String> = HashSet::new();
         let nombres = m.program.structs.iter().map(|s| (s.name.clone(), s.line, s.col))
             .chain(m.program.enums.iter().map(|e| (e.name.clone(), e.line, e.col)))
             .chain(m.program.traits.iter().map(|t| (t.name.clone(), t.line, t.col)));
         for (name, line, col) in nombres {
-            if let Some(otro) = visto.insert(name.clone(), m.name.clone()) {
+            if !visto.insert(name.clone()) {
                 return Err(render(&m.source, line, col, &m.name, &format!(
-                    "el tipo '{}' ya está definido en el módulo '{}'; en M11.3a los tipos son globales y deben tener nombre único",
-                    name, otro
+                    "el tipo '{}' ya está definido en este módulo", name
                 )));
             }
         }
@@ -621,6 +671,237 @@ impl<'a> Resolver<'a> {
             )));
         }
         Ok(Some(format!("{}::{}", m, name)))
+    }
+}
+
+/// Reescribe las **referencias de tipo** de un módulo a su nombre global (M11.3c), respetando los
+/// **parámetros de tipo** en ámbito. Pasada separada de `Resolver` (que resuelve *valores*): aquí se
+/// tocan las posiciones de tipo (anotaciones, campos, payloads, objetivo/trait de `impl`, bounds,
+/// `dyn`) y las expresiones que **nombran** tipos (literal de struct, construcción de enum
+/// `Tipo.Variante`, patrones de `match`). Un `Ident` *bare* en posición de valor lo deja `Resolver`.
+struct TypeRewriter<'a> {
+    /// Nombre local de tipo → nombre global (propios del módulo; en -2, también importados).
+    types: &'a HashMap<String, String>,
+    /// Pila de conjuntos de parámetros de tipo en ámbito (los `<…>` de fn/impl/struct/enum).
+    tparams: Vec<HashSet<String>>,
+}
+
+impl<'a> TypeRewriter<'a> {
+    fn new(types: &'a HashMap<String, String>) -> Self {
+        TypeRewriter { types, tparams: Vec::new() }
+    }
+
+    fn en_ambito(&self, name: &str) -> bool {
+        self.tparams.iter().any(|s| s.contains(name))
+    }
+
+    /// Reescribe un nombre de tipo/trait si es propio del módulo y **no** es un parámetro de tipo.
+    fn rewrite_name(&self, name: &mut String) {
+        if self.en_ambito(name) {
+            return; // es un parámetro de tipo (`T`), no un tipo nominal
+        }
+        if let Some(g) = self.types.get(name) {
+            *name = g.clone();
+        }
+    }
+
+    fn rewrite_type(&self, ty: &mut Type) {
+        match ty {
+            // El parser emite `Struct` para cualquier identificador en posición de tipo; el
+            // checker reclasifica a `Enum`/`Var` luego. Aquí se cubren ambos por si acaso.
+            Type::Struct(name, args) | Type::Enum(name, args) => {
+                self.rewrite_name(name);
+                for a in args {
+                    self.rewrite_type(a);
+                }
+            }
+            Type::Array(elem) => self.rewrite_type(elem),
+            Type::Fn(params, ret) => {
+                for p in params {
+                    self.rewrite_type(p);
+                }
+                self.rewrite_type(ret);
+            }
+            Type::Dyn(trait_name) => self.rewrite_name(trait_name),
+            _ => {} // Int/Float/Bool/String/Unit/Var/SelfType
+        }
+    }
+
+    fn rewrite_program(&mut self, program: &mut Program) {
+        for s in &mut program.structs {
+            self.tparams.push(s.type_params.iter().cloned().collect());
+            for (_, ty) in &mut s.fields {
+                self.rewrite_type(ty);
+            }
+            self.tparams.pop();
+        }
+        for e in &mut program.enums {
+            self.tparams.push(e.type_params.iter().cloned().collect());
+            for v in &mut e.variants {
+                for ty in &mut v.payload {
+                    self.rewrite_type(ty);
+                }
+            }
+            self.tparams.pop();
+        }
+        for t in &mut program.traits {
+            self.tparams.push(HashSet::new()); // los traits no llevan parámetros de tipo
+            for m in &mut t.methods {
+                self.rewrite_method(m);
+            }
+            self.tparams.pop();
+        }
+        for f in &mut program.functions {
+            self.tparams.push(f.type_params.iter().cloned().collect());
+            self.rewrite_function(f);
+            self.tparams.pop();
+        }
+        for imp in &mut program.impls {
+            self.tparams.push(imp.type_params.iter().cloned().collect());
+            self.rewrite_type(&mut imp.target);
+            self.rewrite_name(&mut imp.trait_name);
+            for (_, tr) in &mut imp.bounds {
+                self.rewrite_name(tr);
+            }
+            for method in &mut imp.methods {
+                self.tparams.push(method.type_params.iter().cloned().collect());
+                self.rewrite_function(method);
+                self.tparams.pop();
+            }
+            self.tparams.pop();
+        }
+    }
+
+    fn rewrite_function(&self, f: &mut Function) {
+        for p in &mut f.params {
+            self.rewrite_type(&mut p.ty);
+        }
+        self.rewrite_type(&mut f.return_type);
+        for (_, tr) in &mut f.bounds {
+            self.rewrite_name(tr);
+        }
+        self.rewrite_block(&mut f.body);
+    }
+
+    fn rewrite_method(&self, m: &mut MethodSig) {
+        for p in &mut m.params {
+            self.rewrite_type(&mut p.ty);
+        }
+        self.rewrite_type(&mut m.return_type);
+        if let Some(b) = &mut m.default_body {
+            self.rewrite_block(b);
+        }
+    }
+
+    fn rewrite_block(&self, b: &mut Block) {
+        for stmt in &mut b.statements {
+            self.rewrite_stmt(stmt);
+        }
+        if let Some(t) = &mut b.tail {
+            self.rewrite_expr(t);
+        }
+    }
+
+    fn rewrite_stmt(&self, s: &mut Stmt) {
+        match &mut s.kind {
+            StmtKind::Let { ty, value, .. } => {
+                if let Some(t) = ty {
+                    self.rewrite_type(t);
+                }
+                self.rewrite_expr(value);
+            }
+            StmtKind::Assign { target, value } => {
+                self.rewrite_expr(target);
+                self.rewrite_expr(value);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    self.rewrite_expr(v);
+                }
+            }
+            StmtKind::Expr(e) => self.rewrite_expr(e),
+        }
+    }
+
+    fn rewrite_expr(&self, expr: &mut Expr) {
+        match &mut expr.kind {
+            // Literal de struct: el nombre es un tipo.
+            ExprKind::StructLit { name, fields } => {
+                self.rewrite_name(name);
+                for (_, v) in fields {
+                    self.rewrite_expr(v);
+                }
+            }
+            // Construcción de enum `Tipo.Variante`: la cabeza, si es un tipo, se reescribe. Un
+            // valor *bare* (`p.x`) no casa con ningún tipo, así que `rewrite_name` lo deja igual.
+            ExprKind::Field { object, .. } => {
+                if let ExprKind::Ident(name) = &mut object.kind {
+                    self.rewrite_name(name);
+                } else {
+                    self.rewrite_expr(object);
+                }
+            }
+            ExprKind::Call { callee, args } => {
+                self.rewrite_expr(callee);
+                for a in args {
+                    self.rewrite_expr(a);
+                }
+            }
+            // (En la fase del loader la construcción de enum aún es `Field`/`Call`, pero por si
+            // acaso se cubre también el nodo resuelto.)
+            ExprKind::EnumLit { enum_name, args, .. } => {
+                self.rewrite_name(enum_name);
+                for a in args {
+                    self.rewrite_expr(a);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.rewrite_expr(scrutinee);
+                for arm in arms {
+                    if let PatternKind::Variant { enum_name, .. } = &mut arm.pattern.kind {
+                        self.rewrite_name(enum_name);
+                    }
+                    self.rewrite_expr(&mut arm.body);
+                }
+            }
+            ExprKind::Unary { expr: inner, .. } => self.rewrite_expr(inner),
+            ExprKind::Binary { left, right, .. } => {
+                self.rewrite_expr(left);
+                self.rewrite_expr(right);
+            }
+            ExprKind::ArrayLit(elems) => {
+                for e in elems {
+                    self.rewrite_expr(e);
+                }
+            }
+            ExprKind::Index { array, index } => {
+                self.rewrite_expr(array);
+                self.rewrite_expr(index);
+            }
+            ExprKind::Func(fe) => self.rewrite_fn_expr(fe),
+            ExprKind::Try(inner) => self.rewrite_expr(inner),
+            ExprKind::If { cond, then_branch, else_branch } => {
+                self.rewrite_expr(cond);
+                self.rewrite_block(then_branch);
+                if let Some(e) = else_branch {
+                    self.rewrite_expr(e);
+                }
+            }
+            ExprKind::While { cond, body } => {
+                self.rewrite_expr(cond);
+                self.rewrite_block(body);
+            }
+            ExprKind::Block(b) => self.rewrite_block(b),
+            _ => {} // Int/Float/Bool/Str/Ident(bare valor)
+        }
+    }
+
+    fn rewrite_fn_expr(&self, fe: &mut FnExpr) {
+        for p in &mut fe.params {
+            self.rewrite_type(&mut p.ty);
+        }
+        self.rewrite_type(&mut fe.return_type);
+        self.rewrite_block(&mut fe.body);
     }
 }
 

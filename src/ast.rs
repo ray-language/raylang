@@ -160,6 +160,8 @@ impl ImportName {
 pub struct StructDef {
     /// Anotaciones de la declaración (M10.1), p. ej. `@derive(Eq)`. Vacío si no hay.
     pub annotations: Vec<Annotation>,
+    /// `pub` (M11.3c): el tipo se exporta de su módulo. Sin `pub`, privado al módulo.
+    pub is_pub: bool,
     pub name: String,
     /// Parámetros de tipo: los `A, B` de `struct Par<A, B> { ... }` (M6). Vacío = no
     /// genérico. En los tipos de los campos, esos nombres aparecen como `Type::Var`.
@@ -176,6 +178,8 @@ pub struct StructDef {
 pub struct EnumDef {
     /// Anotaciones de la declaración (M10.1), p. ej. `@derive(Eq)`. Vacío si no hay.
     pub annotations: Vec<Annotation>,
+    /// `pub` (M11.3c): el tipo se exporta de su módulo. Sin `pub`, privado al módulo.
+    pub is_pub: bool,
     pub name: String,
     /// Parámetros de tipo: los `T` de `enum Option<T> { ... }` (M6). Vacío = no
     /// genérico. En las variantes, esos nombres aparecen como `Type::Var`.
@@ -199,6 +203,8 @@ pub struct VariantDef {
 /// tiene cuerpos (los métodos por defecto se difieren a M9.3).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitDef {
+    /// `pub` (M11.3c): el trait se exporta de su módulo. Sin `pub`, privado al módulo.
+    pub is_pub: bool,
     pub name: String,
     pub methods: Vec<MethodSig>,
     pub line: usize,

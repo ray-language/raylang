@@ -87,19 +87,20 @@ impl Parser {
             // (tipos/enums/traits son globales por ahora).
             let pub_tok = if self.check(&TokenKind::Pub) { Some(self.advance()) } else { None };
             if self.check(&TokenKind::Struct) {
-                self.no_pub(&pub_tok, "un struct")?;
                 let mut s = self.struct_def()?;
                 s.annotations = anns;
+                s.is_pub = pub_tok.is_some();
                 structs.push(s);
             } else if self.check(&TokenKind::Enum) {
-                self.no_pub(&pub_tok, "un enum")?;
                 let mut e = self.enum_def()?;
                 e.annotations = anns;
+                e.is_pub = pub_tok.is_some();
                 enums.push(e);
             } else if self.check(&TokenKind::Trait) {
-                self.no_pub(&pub_tok, "un trait")?;
                 self.no_annotations(&anns, "un trait")?;
-                traits.push(self.trait_def()?);
+                let mut t = self.trait_def()?;
+                t.is_pub = pub_tok.is_some();
+                traits.push(t);
             } else if self.check(&TokenKind::Impl) {
                 self.no_pub(&pub_tok, "un impl")?;
                 self.no_annotations(&anns, "un impl")?;
@@ -145,12 +146,13 @@ impl Parser {
         Ok(FromImport { module, names, line: kw.line, col: kw.col })
     }
 
-    /// Error si hay `pub` donde M11.3a no lo admite (struct/enum/trait/impl).
+    /// Error si hay `pub` donde no se admite (hoy: un `impl`, que no se exporta por sí mismo;
+    /// se exporta el trait y el tipo).
     fn no_pub(&self, pub_tok: &Option<crate::token::Token>, donde: &str) -> Result<(), ParseError> {
         match pub_tok {
             None => Ok(()),
             Some(t) => Err(ParseError {
-                msg: format!("M11.3a: 'pub' solo se admite en funciones, no en {} (los tipos son globales por ahora)", donde),
+                msg: format!("'pub' no se admite en {} (exporta el trait/tipo, no el impl)", donde),
                 line: t.line,
                 col: t.col,
             }),
@@ -224,7 +226,7 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace, "'}' para cerrar el enum")?;
-        Ok(EnumDef { annotations: Vec::new(), name, type_params, variants, line: kw.line, col: kw.col })
+        Ok(EnumDef { annotations: Vec::new(), is_pub: false, name, type_params, variants, line: kw.line, col: kw.col })
     }
 
     /// struct_def = 'struct' IDENT '{' [ field { ',' field } [ ',' ] ] '}'
@@ -245,7 +247,7 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace, "'}' para cerrar el struct")?;
-        Ok(StructDef { annotations: Vec::new(), name, type_params, fields, line: kw.line, col: kw.col })
+        Ok(StructDef { annotations: Vec::new(), is_pub: false, name, type_params, fields, line: kw.line, col: kw.col })
     }
 
     /// function = 'fn' IDENT [ '<' tparam { ',' tparam } '>' ] '(' [ params ] ')'
@@ -298,7 +300,7 @@ impl Parser {
             methods.push(self.method_sig()?);
         }
         self.expect(&TokenKind::RBrace, "'}' para cerrar el trait")?;
-        Ok(TraitDef { name, methods, line: kw.line, col: kw.col })
+        Ok(TraitDef { is_pub: false, name, methods, line: kw.line, col: kw.col })
     }
 
     /// method_sig = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] ( ';' | block )  (M9)

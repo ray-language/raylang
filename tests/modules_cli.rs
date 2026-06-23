@@ -92,6 +92,42 @@ fn from_import_de_tipo_es_error_diferido() {
 }
 
 #[test]
+fn tipos_por_modulo_reusan_nombre() {
+    // Dos módulos definen `struct Node` y `enum Estado` (distintos) sin colisionar: los tipos se
+    // namespacan por módulo (M11.3c). Cada uno usa los suyos (incl. @derive, match, construcción).
+    let files = &[
+        ("a", "@derive(Show)\nstruct Node { v: int }\nenum Estado { On, Off }\npub fn f() -> int {\n  let n = Node { v: 7 };\n  let e = Estado.On;\n  print(n.mostrar());\n  match (e) { Estado.On => n.v + 100, Estado.Off => 0, }\n}\n"),
+        ("main", "import a;\nstruct Node { propio: bool }\nfn main() -> int {\n  let n = Node { propio: true };\n  a.f()\n}\n"),
+    ];
+    for vm in [false, true] {
+        let (out, code) = run_modules("ray_tipos_modulo", "main", files, vm);
+        assert!(out.contains("Node { v: 7 }"), "@derive(Show) en módulo no-entrada usa el nombre local (vm={vm})\n{out}");
+        assert_eq!(code, 107, "7 + 100 = 107 (vm={vm})");
+    }
+}
+
+#[test]
+fn tipo_de_otro_modulo_sin_importar_es_error() {
+    // Un tipo es privado a su módulo: referenciarlo bare desde otro (sin importar) no resuelve.
+    let files = &[
+        ("lib", "pub struct Punto { x: int, y: int }\n"),
+        ("uso", "import lib;\nfn main() -> int { let p: Punto = Punto { x: 1, y: 2 }; p.x }\n"),
+    ];
+    let (_, code) = run_modules("ray_tipo_encaps", "uso", files, false);
+    assert_ne!(code, 0, "referenciar un tipo de otro módulo sin importarlo debe fallar");
+}
+
+#[test]
+fn tipo_duplicado_en_un_modulo_es_error() {
+    let files = &[
+        ("dup", "struct Foo { a: int }\nstruct Foo { b: int }\n"),
+        ("main", "import dup;\nfn main() -> int { 0 }\n"),
+    ];
+    let (_, code) = run_modules("ray_tipo_dup", "main", files, false);
+    assert_ne!(code, 0, "dos tipos homónimos en un módulo es error");
+}
+
+#[test]
 fn colision_de_posiciones_entre_modulos() {
     // Dos llamadas a método en la MISMA (línea, col) de módulos distintos: antes colisionaban en
     // el lowering por posición de M9 y el programa crasheaba en ambos motores. L3 las desambigua

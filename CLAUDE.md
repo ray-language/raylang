@@ -278,6 +278,20 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   chequeo `pub`). Colisión sin `as` → error que pide renombrar. **Importar un tipo** con `from`
   queda **diferido** (los tipos no se namespacan; el loader da un error claro). Estilo Python: `from
   M import x` **no** trae `M` (solo `x`). Runtime intacto.
+- **M11.3c-1 COMPLETO** (308 tests + 11 en `tests/modules_cli.rs`): **tipos por módulo** (DESIGN §20.3).
+  Los tipos (`struct`/`enum`/`trait`) dejan de ser globales-únicos: se **namespacan** a `modulo::Tipo`
+  (el de entrada no → un solo archivo idéntico). `pub` en tipos (relaja `no_pub`, `is_pub` en
+  Struct/Enum/TraitDef). Dos módulos pueden **reusar un nombre** (`Node`); un tipo es **privado** salvo
+  importado (-2). Pieza central: el **`TypeRewriter`** (`src/loader.rs`) reescribe **todas** las
+  referencias de tipo —posiciones de tipo (anotaciones, campos, payloads, `impl` target/trait, bounds,
+  `dyn`) y expresiones que nombran tipos (struct lit, `Color.Rojo` que es `Field`, patrones)— *scope-
+  aware* sobre los **params de tipo** (no reescribe `T`; el parser emite `Type::Struct` para todo,
+  incl. `T`). **Gotcha `@derive`**: los nombres namespacados llevan `::`, **no re-lexables** por
+  `generate_derives` (que genera fuente y la parsea). Solución: el loader **expande `@derive` por
+  módulo con nombres locales** (re-lexables) antes de namespacar, y `generate_derives` se hizo **pub +
+  idempotente** (salta `(trait,tipo)` ya implementados) para que el checker la reejecute sin duplicar
+  ni intentar lexar `::`. Bonus: el `mostrar` de Show muestra el nombre **local** (el `::` no entra en
+  los string literals). Runtime intacto.
 - **M11.2 COMPLETO** (297 tests lib + `tests/io_cli.rs`): **I/O y API de runtime** (DESIGN §20.2).
   `main` sigue sin parámetros (§0); el exterior se toca por **builtins**. **La I/O falible devuelve
   `Option`** (norte "errores como valores"). **Patrón** (como M7.3): primitivos builtin que devuelven

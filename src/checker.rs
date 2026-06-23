@@ -2515,7 +2515,19 @@ fn type_key_of(ty: &Type) -> Option<String> {
 /// trait pedido construye el **fuente** del `impl Trait for T { ... }`, lo parsea y lo añade a
 /// `program.impls`; el resto (bajada a `T#metodo`, registro) lo hace M9. Generar fuente y
 /// parsearlo evita armar el AST a mano.
-fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
+///
+/// **Idempotente** (M11.3c): si ya existe un `impl Trait for T` no lo regenera. El *loader* la
+/// llama por módulo con nombres **locales** (re-lexables) antes de namespacar los tipos; luego el
+/// checker la vuelve a llamar sobre el programa fusionado (nombres ya namespacados, con `::`, que
+/// no se podrían re-lexar) y, gracias a la idempotencia, **salta** los ya generados —sin intentar
+/// generar fuente con `::`—. Los caminos sin loader (REPL, runner de `@test`) la usan normal.
+pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
+    // Pares (trait, nombre-de-tipo) ya implementados, para no regenerar.
+    let mut existentes: HashSet<(String, String)> = program
+        .impls
+        .iter()
+        .filter_map(|i| impl_target_name(&i.target).map(|n| (i.trait_name.clone(), n.to_string())))
+        .collect();
     let mut nuevos: Vec<ImplBlock> = Vec::new();
     for s in &program.structs {
         for a in &s.annotations {
@@ -2524,6 +2536,9 @@ fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
             }
             validate_derive(a, &s.name, &s.type_params)?;
             for trait_arg in &a.args {
+                if !existentes.insert((trait_arg.clone(), s.name.clone())) {
+                    continue; // ya existe ese impl → idempotente
+                }
                 match trait_arg.as_str() {
                     "Eq" => nuevos.push(parse_derived_impl("Eq", &s.name, "fn igual(self, otro: Self) -> bool", &struct_eq_body(&s.fields))),
                     "Show" => nuevos.push(parse_derived_impl("Show", &s.name, "fn mostrar(self) -> string", &struct_show_body(a, &s.name, &s.fields)?)),
@@ -2539,6 +2554,9 @@ fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
             }
             validate_derive(a, &e.name, &e.type_params)?;
             for trait_arg in &a.args {
+                if !existentes.insert((trait_arg.clone(), e.name.clone())) {
+                    continue;
+                }
                 match trait_arg.as_str() {
                     "Eq" => nuevos.push(parse_derived_impl("Eq", &e.name, "fn igual(self, otro: Self) -> bool", &enum_eq_body(&e.name, &e.variants))),
                     "Show" => nuevos.push(parse_derived_impl("Show", &e.name, "fn mostrar(self) -> string", &enum_show_body(a, &e.name, &e.variants)?)),
@@ -2549,6 +2567,14 @@ fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
     }
     program.impls.extend(nuevos);
     Ok(())
+}
+
+/// El nombre del tipo objetivo de un `impl` (`Struct`/`Enum`), si lo tiene.
+fn impl_target_name(t: &Type) -> Option<&str> {
+    match t {
+        Type::Struct(n, _) | Type::Enum(n, _) => Some(n),
+        _ => None,
+    }
 }
 
 /// Valida `@derive(...)` sobre un tipo: argumentos no vacíos, todos derivables (`Eq`/`Show`),
@@ -3228,6 +3254,7 @@ fn lower_dyn(program: &mut Program, coercions: &CoercionMap, dispatch: &Dispatch
         }
         program.structs.push(StructDef {
             annotations: Vec::new(),
+            is_pub: false,
             name: dyn_struct_name(&t.name),
             type_params: Vec::new(),
             fields,

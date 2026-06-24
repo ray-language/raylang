@@ -2174,6 +2174,30 @@ mod tests {
     }
 
     #[test]
+    fn dyn_multi_trait_oraculo() {
+        // M9.5a: `dyn A + B` — un objeto que satisface dos traits; despacho a métodos de ambos.
+        // El orden del conjunto es canónico (dyn Nombre + Area == dyn Area + Nombre).
+        oracle_program(r#"
+            trait Area { fn area(self) -> int; }
+            trait Nombre { fn nombre(self) -> string; }
+            struct Cuadrado { lado: int }
+            impl Area for Cuadrado { fn area(self) -> int { self.lado * self.lado } }
+            impl Nombre for Cuadrado { fn nombre(self) -> string { "cuad" } }
+            struct Circ { r: int }
+            impl Area for Circ { fn area(self) -> int { 3 * self.r * self.r } }
+            impl Nombre for Circ { fn nombre(self) -> string { "circ" } }
+            fn describe(x: dyn Nombre + Area) -> int { len(x.nombre()) + x.area() }
+            fn main() -> int {
+                let xs: [dyn Area + Nombre] = [Cuadrado{lado:4}, Circ{r:2}];
+                var s = 0; var i = 0;
+                while (i < len(xs)) { s = s + describe(xs[i]); i = i + 1; }
+                // (4 + 16) + (4 + 12) = 20 + 16 = 36
+                s
+            }
+        "#);
+    }
+
+    #[test]
     fn dyn_sobre_impl_generico_oraculo() {
         // M9.4: coercionar a `dyn Trait` un tipo cuyo impl es genérico acotado (Caja<T>): la vtable
         // lleva un closure anidado (como un diccionario), no el método manglado plano. Incluye

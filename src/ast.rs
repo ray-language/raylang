@@ -55,10 +55,11 @@ pub enum Type {
     /// reclasifica a `SelfType` cuando hay un tipo implementador en ámbito; al
     /// verificar un `impl`, `Self` se sustituye por el tipo destino concreto.
     SelfType,
-    /// Un **trait object** `dyn Trait` (M9.3b): un valor cuyo tipo concreto se borra,
-    /// pero que carga su vtable para despachar los métodos del trait en runtime. En
-    /// runtime se realiza como un struct sintetizado `__dyn_Trait { data, métodos... }`.
-    Dyn(String),
+    /// Un **trait object** `dyn A + B` (M9.3b/M9.5): un valor cuyo tipo concreto se borra,
+    /// pero que carga su vtable para despachar los métodos en runtime. El `Vec` es el conjunto
+    /// de traits, **canónico** (ordenado y sin duplicados); `dyn A` es `Dyn(["A"])`. En runtime
+    /// se realiza como un struct sintetizado `__dyn_A+B { data, métodos de la unión... }`.
+    Dyn(Vec<String>),
 }
 
 impl std::fmt::Display for Type {
@@ -85,7 +86,7 @@ impl std::fmt::Display for Type {
             }
             Type::Var(name) => f.write_str(name),
             Type::SelfType => f.write_str("Self"),
-            Type::Dyn(trait_name) => write!(f, "dyn {}", trait_name),
+            Type::Dyn(traits) => write!(f, "dyn {}", traits.join(" + ")),
         }
     }
 }

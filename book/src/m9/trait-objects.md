@@ -136,3 +136,26 @@ describe(Caja { v: Caja { v: N {} } });   // "Caja(Caja(N))" — coerción de un
 
 Cero runtime nuevo, otra vez: la vtable es un struct y sus métodos son closures que el motor ya sabe
 llamar desde M4.
+
+## `dyn A + B`: varios traits en un objeto (M9.5)
+
+Un trait object puede pedir **varios** traits a la vez: `dyn Area + Nombre` es un valor que implementa
+**ambos**. El tipo `Type::Dyn` pasa de un trait a un **conjunto** de traits, guardado **canónico**
+(ordenado, sin duplicados), así que `dyn A + B` y `dyn B + A` son el mismo tipo.
+
+```rust
+trait Area { fn area(self) -> int; }
+trait Nombre { fn nombre(self) -> string; }
+struct Cuadrado { lado: int }
+impl Area for Cuadrado { fn area(self) -> int { self.lado * self.lado } }
+impl Nombre for Cuadrado { fn nombre(self) -> string { "cuadrado" } }
+
+fn describe(x: dyn Area + Nombre) -> string { x.nombre() + ":" + to_string(x.area()) }
+describe(Cuadrado { lado: 4 });   // "cuadrado:16"
+```
+
+La realización es la misma idea: un struct con `data` + un campo por método de la **unión** de los
+traits (en orden canónico). La coerción exige que el tipo concreto implemente **todos** los traits;
+el despacho `x.m()` busca `m` entre todos ellos. Dos reglas para que no haya ambigüedad: un nombre de
+método **repetido** entre los traits del conjunto es error (no se sabría a cuál despachar), y `lower_dyn`
+genera un struct por **conjunto distinto** que aparezca (no uno por trait).

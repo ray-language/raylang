@@ -1481,6 +1481,27 @@ funciones", sobre las piezas que ya existían (structs + funciones de primera cl
 - ⏳ `dyn` con métodos que usan `Self` (no *object-safe*) → no invocables sobre el objeto.
 - ⏳ *Upcasting* entre traits, `dyn A + B` (varios traits en un objeto) → futuro.
 
+### 18.7c M9.5 — Trait objects multi-trait (`dyn A + B`) y upcasting
+
+M9.3b realizó `dyn Trait` (un solo trait). M9.5 lo generaliza a **varios traits** en un objeto y al
+**upcasting** entre conjuntos. Sigue siendo *erasure*: un trait object es un struct sintetizado.
+
+`Type::Dyn` pasa de `String` a **`Vec<String>`** —el conjunto de traits, **canónico** (ordenado y sin
+duplicados)— así que `dyn A + B` y `dyn B + A` son el mismo tipo. El parser lee `dyn A + B + …`. El
+struct sintetizado de un conjunto tiene `data` + **un campo por método** de la unión de los traits (en
+orden canónico: traits ordenados, métodos en orden de declaración). Nombres de método **duplicados**
+entre los traits del conjunto son error (no se sabría a cuál despachar).
+
+- **M9.5a — `dyn A + B`**: la coerción concreto→`dyn {A,B}` exige que el tipo implemente **todos** los
+  traits; la vtable se arma con `dict_for` por cada método de la unión (reusa M9.4 → vale también con
+  impls genéricos). El despacho `obj.m()` busca `m` entre **todos** los traits del conjunto. `lower_dyn`
+  genera un struct por **conjunto distinto** que aparezca en una coerción (no uno por trait).
+- **M9.5b — upcasting**: coercionar un valor `dyn S1` a `dyn S2` cuando **S2 ⊆ S1** (olvidar traits).
+  Se baja a reconstruir el struct menor proyectando los campos del mayor: `{ let r = <obj>; __dyn_S2 {
+  data: r.data, m: r.m, … } }` (solo los métodos de S2). Sin supertraits: el upcast es por subconjunto.
+
+**Runtime: sin cambios** (structs + funciones de primera clase). Object safety por método, como M9.3b.
+
 ### 18.8 Deferido (más allá de M9.3)
 - **Impls genéricos** (`impl Trait for Caja<T>`) → ✅ M9.2b (§18.6b, diccionarios anidados).
 - **`dyn Trait` sobre impls genéricos** → ✅ M9.4 (§18.6c): la vtable de la coerción se arma con

@@ -225,6 +225,15 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   el checker con **`dict_for`** (plano-vs-closure-anidado, como los diccionarios) y se guarda en
   `dyn_coercions` (ahora `(trait, Vec<Expr>)` en vez de `(trait, clave)`); `lower_dyn` solo la coloca.
   Funciona anidado (`Caja<Caja<N>>`). Closures sintéticos renumerados por `renumber_fn_exprs`.
+- **M9.5a COMPLETO** (321 tests lib): **trait objects multi-trait `dyn A + B`**. `Type::Dyn(String)` →
+  `Type::Dyn(Vec<String>)` (conjunto **canónico**: ordenado, sin duplicados → `dyn A+B` == `dyn B+A`).
+  Parser lee `dyn A + B + …`. El struct sintetizado lleva `data` + un campo por método de la **unión**
+  (orden canónico: traits ordenados × métodos en orden de decl). Coerción: el concreto implementa
+  **todos** los traits; vtable vía `dict_for` por método (compone con M9.4). Despacho busca el método
+  entre todos los traits del conjunto. **Reglas**: método repetido entre traits del conjunto = error
+  (ambiguo, en `ensure_type`); `lower_dyn` genera un struct por **conjunto** distinto (no por trait),
+  `dyn_struct_name(set)`/`dyn_method_names(set)`. `dyn_coercions` lleva `(Vec<String>, Vec<Expr>)`.
+  Tocó ~8 sitios de `Dyn` (todos front-end; runtime nunca ve `dyn`). Falta 3c-2 (upcasting).
 - **M10.1 COMPLETO** (272 tests + integración CLI verdes): **anotaciones**. `@nombre[(args)]`
   sobre fn/struct/enum; `Annotation { name, args }` en cada ítem; conjunto **cerrado**
   conocido por el compilador (`check_annotations`). **`@test`** (función `() -> bool`) +

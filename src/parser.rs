@@ -484,10 +484,20 @@ impl Parser {
     /// type = 'int' | 'bool' | 'float' | 'string' | '[' type ']'
     ///      | 'fn' '(' [ type { ',' type } ] ')' [ '->' type ]
     fn parse_type(&mut self) -> Result<Type, ParseError> {
-        // Trait object: dyn Trait (M9.3b).
+        // Trait object: dyn A [+ B + ...] (M9.3b / M9.5). El conjunto se guarda canónico
+        // (ordenado y sin duplicados) para que `dyn A + B` y `dyn B + A` sean el mismo tipo.
         if self.eat(&TokenKind::Dyn) {
-            let (name, _, _) = self.expect_ident("el nombre del trait tras 'dyn'")?;
-            return Ok(Type::Dyn(name));
+            let mut traits = Vec::new();
+            loop {
+                let (name, _, _) = self.expect_ident("el nombre del trait tras 'dyn'")?;
+                traits.push(name);
+                if !self.eat(&TokenKind::Plus) {
+                    break;
+                }
+            }
+            traits.sort();
+            traits.dedup();
+            return Ok(Type::Dyn(traits));
         }
         // Arreglo: [T]
         if self.check(&TokenKind::LBracket) {
@@ -1768,9 +1778,21 @@ fn main() -> int {
             fn f(x: dyn Figura) -> int { 0 }
             fn main() -> int { 0 }
         "#);
-        // El parámetro x tiene tipo Type::Dyn("Figura").
+        // El parámetro x tiene tipo Type::Dyn(["Figura"]).
         let f = &prog.functions[0];
-        assert_eq!(f.params[0].ty, Type::Dyn("Figura".to_string()));
+        assert_eq!(f.params[0].ty, Type::Dyn(vec!["Figura".to_string()]));
+    }
+
+    #[test]
+    fn parse_dyn_multi_trait_es_canonico() {
+        // `dyn B + A` se guarda ordenado (canónico): igual a `dyn A + B`. (M9.5)
+        let prog = parse_prog(r#"
+            trait A { fn a(self) -> int; }
+            trait B { fn b(self) -> int; }
+            fn f(x: dyn B + A) -> int { 0 }
+            fn main() -> int { 0 }
+        "#);
+        assert_eq!(prog.functions[0].params[0].ty, Type::Dyn(vec!["A".to_string(), "B".to_string()]));
     }
 
     #[test]

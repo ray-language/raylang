@@ -817,7 +817,11 @@ impl<'a> TypeRewriter<'a> {
                 }
                 self.rewrite_type(ret);
             }
-            Type::Dyn(trait_name) => self.rewrite_name(trait_name),
+            Type::Dyn(traits) => {
+                for tr in traits.iter_mut() {
+                    self.rewrite_name(tr);
+                }
+            }
             _ => {} // Int/Float/Bool/String/Unit/Var/SelfType
         }
     }

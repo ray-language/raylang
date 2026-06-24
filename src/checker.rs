@@ -349,7 +349,7 @@ struct Checker {
     /// object, usando las expresiones-vtable como sus métodos. Cada método se resuelve con `dict_for`
     /// (M9.4): el método manglado plano para un impl concreto/genérico sin bounds, o un **closure
     /// anidado** para un impl genérico acotado (`Caja<int>`) → habilita `dyn` sobre impls genéricos.
-    dyn_coercions: HashMap<(usize, usize), (String, Vec<Expr>)>,
+    dyn_coercions: HashMap<(usize, usize), (Vec<String>, Vec<Expr>)>,
     /// Sitios de **despacho dinámico** (M9.3b): `(línea, col, método)` de un `obj.m(args)`
     /// con `obj: dyn Trait`. `lower_dyn` los baja al bloque `{ let r = obj; (r.m)(r.data, ...) }`.
     dyn_dispatch: HashSet<(usize, usize, String)>,
@@ -1083,12 +1083,23 @@ impl Checker {
             // de lugar (M9).
             Type::SelfType => Err(self.err(line, col, "'Self' solo es válido dentro de un trait o impl".into())),
             // `dyn Trait` (M9.3b): el trait debe existir.
-            Type::Dyn(trait_name) => {
-                if self.traits.contains_key(trait_name) {
-                    Ok(())
-                } else {
-                    Err(self.err(line, col, format!("trait '{}' no declarado (en 'dyn {}')", trait_name, trait_name)))
+            Type::Dyn(traits) => {
+                // Cada trait del conjunto debe existir, y ningún nombre de método puede repetirse
+                // entre los traits (no se sabría a cuál despachar `obj.m()`).
+                let mut metodos: HashSet<String> = HashSet::new();
+                for tr in traits {
+                    let Some(ms) = self.traits.get(tr) else {
+                        return Err(self.err(line, col, format!("trait '{}' no declarado (en 'dyn {}')", tr, traits.join(" + "))));
+                    };
+                    for m in ms {
+                        if !metodos.insert(m.name.clone()) {
+                            return Err(self.err(line, col, format!(
+                                "el método '{}' aparece en más de un trait de 'dyn {}': es ambiguo", m.name, traits.join(" + ")
+                            )));
+                        }
+                    }
                 }
+                Ok(())
             }
             Type::Fn(params, ret) => {
                 for p in params {
@@ -1470,10 +1481,10 @@ impl Checker {
         // se **coerciona** al trait object. Las formas que propagan el tipo esperado
         // (`if`/`match`/`bloque`) NO se interceptan aquí: dejan que la coerción ocurra en
         // sus hojas (cada rama por separado), igual que el resto del chequeo bidireccional.
-        if let Type::Dyn(trait_name) = expected {
+        if let Type::Dyn(traits) = expected {
             let propaga = matches!(expr.kind, ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::Block(_));
             if !propaga {
-                return self.coerce_to_dyn(expr, &trait_name.clone(), expr.line, expr.col);
+                return self.coerce_to_dyn(expr, &traits.clone(), expr.line, expr.col);
             }
         }
         match &expr.kind {
@@ -1538,30 +1549,36 @@ impl Checker {
     /// trait se envuelve (en el lowering) en el struct sintetizado del trait object. Si ya
     /// es un `dyn Trait` del mismo trait, no hay coerción. Registra el sitio y devuelve
     /// `dyn Trait` como tipo.
-    fn coerce_to_dyn(&mut self, expr: &Expr, trait_name: &str, line: usize, col: usize) -> Result<Type, TypeError> {
+    fn coerce_to_dyn(&mut self, expr: &Expr, traits: &[String], line: usize, col: usize) -> Result<Type, TypeError> {
         let actual = self.check_expr(expr)?;
-        // Ya es el mismo trait object: nada que coercionar.
-        if matches!(&actual, Type::Dyn(t) if t == trait_name) {
+        // Ya es exactamente el mismo trait object: nada que coercionar. (El upcasting a un
+        // subconjunto, `dyn S1` → `dyn S2` con S2 ⊆ S1, lo añade M9.5b.)
+        if matches!(&actual, Type::Dyn(t) if t.as_slice() == traits) {
             return Ok(actual);
         }
         let key = type_key_of(&actual).ok_or_else(|| self.err(line, col, format!(
-            "no se puede convertir {} en 'dyn {}'", actual, trait_name
+            "no se puede convertir {} en 'dyn {}'", actual, traits.join(" + ")
         )))?;
-        if !self.impl_traits.contains(&(key.clone(), trait_name.to_string())) {
-            return Err(self.err(line, col, format!(
-                "{} no implementa '{}': no puede usarse como 'dyn {}'", actual, trait_name, trait_name
-            )));
+        // El tipo concreto debe implementar **todos** los traits del conjunto.
+        for tr in traits {
+            if !self.impl_traits.contains(&(key.clone(), tr.clone())) {
+                return Err(self.err(line, col, format!(
+                    "{} no implementa '{}': no puede usarse como 'dyn {}'", actual, tr, traits.join(" + ")
+                )));
+            }
         }
-        // La vtable: un valor función por método del trait. `dict_for` elige el método manglado
-        // plano (impl concreto, o genérico sin bounds) o un closure anidado (impl genérico acotado,
-        // p. ej. `Caja<int>`), exactamente como para los diccionarios de bounds (M9.4 → dyn genérico).
-        let methods = self.traits.get(trait_name).cloned().unwrap_or_default();
-        let mut vtable = Vec::with_capacity(methods.len());
-        for m in &methods {
-            vtable.push(self.dict_for(&actual, trait_name, &m.name, line, col)?);
+        // La vtable: un valor función por método de la **unión** (orden canónico: traits del
+        // conjunto, métodos en orden de declaración). `dict_for` elige el método manglado plano
+        // (impl concreto/genérico sin bounds) o un closure anidado (impl genérico acotado, M9.4).
+        let mut vtable = Vec::new();
+        for tr in traits {
+            let methods = self.traits.get(tr).cloned().unwrap_or_default();
+            for m in &methods {
+                vtable.push(self.dict_for(&actual, tr, &m.name, line, col)?);
+            }
         }
-        self.dyn_coercions.insert((line, col), (trait_name.to_string(), vtable));
-        Ok(Type::Dyn(trait_name.to_string()))
+        self.dyn_coercions.insert((line, col), (traits.to_vec(), vtable));
+        Ok(Type::Dyn(traits.to_vec()))
     }
 
     /// Como `check_block`, pero el valor final (la *tail*) se verifica con un tipo
@@ -1835,10 +1852,10 @@ impl Checker {
             // baja a una llamada ordinaria tras verificar (`lower_ufcs`).
             ExprKind::Field { object, name } => {
                 let recv_ty = self.check_expr(object)?;
-                // M9.3b: receptor `dyn Trait` → despacho dinámico por la vtable del objeto.
-                if let Type::Dyn(trait_name) = &recv_ty {
-                    let trait_name = trait_name.clone();
-                    return self.dispatch_dyn_method(&trait_name, name, args, line, col);
+                // M9.3b/M9.5: receptor `dyn A + B` → despacho dinámico por la vtable del objeto.
+                if let Type::Dyn(traits) = &recv_ty {
+                    let traits = traits.clone();
+                    return self.dispatch_dyn_method(&traits, name, args, line, col);
                 }
                 if let Type::Struct(sname, targs) = &recv_ty {
                     if let Some(fty) = self.struct_field_type(sname, targs, name) {
@@ -2099,13 +2116,17 @@ impl Checker {
     /// runtime por la vtable del objeto. Verifica que el trait declara el método, que es
     /// *object-safe* (no usa `Self` fuera del receptor) y que los argumentos casan. Registra
     /// el sitio para que `lower_dyn` lo baje al bloque `{ let r = obj; (r.m)(r.data, ...) }`.
-    fn dispatch_dyn_method(&mut self, trait_name: &str, method: &str, args: &[Expr], line: usize, col: usize)
+    fn dispatch_dyn_method(&mut self, traits: &[String], method: &str, args: &[Expr], line: usize, col: usize)
         -> Result<Type, TypeError>
     {
-        let sig = match self.traits.get(trait_name).and_then(|ms| ms.iter().find(|m| m.name == method)) {
+        // Busca el método entre **todos** los traits del conjunto (la unicidad ya la garantizó
+        // `ensure_type`: ningún método se repite entre los traits de un `dyn A + B`).
+        let sig = match traits.iter()
+            .find_map(|tr| self.traits.get(tr).and_then(|ms| ms.iter().find(|m| m.name == method)))
+        {
             Some(m) => m.clone(),
             None => return Err(self.err(line, col, format!(
-                "el trait '{}' no declara un método '{}'", trait_name, method
+                "'dyn {}' no declara un método '{}'", traits.join(" + "), method
             ))),
         };
         // *Object safety*: la vtable no puede llevar métodos que dependan del tipo concreto
@@ -2114,7 +2135,7 @@ impl Checker {
         let usa_self = sig.params.iter().skip(1).any(|p| type_uses_self(&p.ty)) || type_uses_self(&sig.return_type);
         if usa_self {
             return Err(self.err(line, col, format!(
-                "el método '{}' usa 'Self': no es invocable sobre 'dyn {}'", method, trait_name
+                "el método '{}' usa 'Self': no es invocable sobre 'dyn {}'", method, traits.join(" + ")
             )));
         }
         // Argumentos (sin el receptor, que es el propio objeto).
@@ -3317,12 +3338,27 @@ fn lower_dict_calls_expr(expr: &mut Expr, sites: &DictSites) {
 // **despacho** `obj.m(args)` baja a `{ let r = obj; (r.m)(r.data, args) }`. Reusa structs +
 // funciones de primera clase: el intérprete y la VM no saben de trait objects.
 
-type CoercionMap = HashMap<(usize, usize), (String, Vec<Expr>)>;
+type CoercionMap = HashMap<(usize, usize), (Vec<String>, Vec<Expr>)>;
 type DispatchSet = HashSet<(usize, usize, String)>;
 
-/// Nombre del struct sintetizado que realiza `dyn Trait` en runtime.
-fn dyn_struct_name(trait_name: &str) -> String {
-    format!("__dyn_{}", trait_name)
+/// Nombre del struct sintetizado que realiza `dyn A + B` en runtime. El conjunto viene canónico
+/// (ordenado), así que el nombre es único por conjunto. El `+` es ilegal en identificadores de
+/// usuario, igual que el prefijo `__dyn_`, así que no colisiona con nada escribible.
+fn dyn_struct_name(traits: &[String]) -> String {
+    format!("__dyn_{}", traits.join("+"))
+}
+
+/// Nombres de los métodos de la vtable de un `dyn A + B`, en orden canónico: por cada trait del
+/// conjunto (ya ordenado), sus métodos en orden de declaración. Coincide con el orden en que
+/// `coerce_to_dyn` armó las expresiones-vtable.
+fn dyn_method_names(traits: &[String], tm: &HashMap<String, Vec<String>>) -> Vec<String> {
+    let mut names = Vec::new();
+    for tr in traits {
+        if let Some(ms) = tm.get(tr) {
+            names.extend(ms.iter().cloned());
+        }
+    }
+    names
 }
 
 fn ident_expr(name: &str, line: usize, col: usize) -> Expr {
@@ -3337,23 +3373,26 @@ fn lower_dyn(program: &mut Program, coercions: &CoercionMap, dispatch: &Dispatch
     let trait_methods: HashMap<String, Vec<String>> = program.traits.iter()
         .map(|t| (t.name.clone(), t.methods.iter().map(|m| m.name.clone()).collect()))
         .collect();
-    // Structs sintetizados: uno por trait, con `data` + un campo función por método (la
-    // vtable). Los tipos de campo son irrelevantes en runtime (erasure); el motor solo usa
-    // los nombres y el orden.
-    for t in &program.traits {
+    // Structs sintetizados: uno por **conjunto** distinto que aparezca en una coerción, con `data`
+    // + un campo función por método de la unión (la vtable). Los tipos de campo son irrelevantes en
+    // runtime (erasure); el motor solo usa los nombres y el orden.
+    let mut sets: Vec<Vec<String>> = coercions.values().map(|(set, _)| set.clone()).collect();
+    sets.sort();
+    sets.dedup();
+    for set in &sets {
         let mut fields = vec![("data".to_string(), Type::Unit)];
-        for m in &t.methods {
-            fields.push((m.name.clone(), Type::Unit));
+        for m in dyn_method_names(set, &trait_methods) {
+            fields.push((m, Type::Unit));
         }
         program.structs.push(StructDef {
             annotations: Vec::new(),
             is_pub: false,
-            name: dyn_struct_name(&t.name),
+            name: dyn_struct_name(set),
             type_params: Vec::new(),
             bounds: Vec::new(),
             fields,
-            line: t.line,
-            col: t.col,
+            line: 0,
+            col: 0,
         });
     }
     let mut counter = 0usize;
@@ -3480,15 +3519,15 @@ fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
     // función de la vtable los calculó el checker con `dict_for` (M9.4) — método manglado plano o
     // closure anidado para un impl genérico acotado—, así que `dyn` funciona también sobre impls
     // genéricos. Van en el orden de los métodos del trait, igual que `tm`.
-    if let Some((trait_name, vtable)) = coercions.get(&(line, col)) {
+    if let Some((set, vtable)) = coercions.get(&(line, col)) {
         let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
         let inner = Expr { kind: taken, line, col };
         let mut fields = vec![("data".to_string(), inner)];
-        let names = tm.get(trait_name).cloned().unwrap_or_default();
+        let names = dyn_method_names(set, tm);
         for (m, vexpr) in names.iter().zip(vtable) {
             fields.push((m.clone(), vexpr.clone()));
         }
-        expr.kind = ExprKind::StructLit { name: dyn_struct_name(trait_name), fields };
+        expr.kind = ExprKind::StructLit { name: dyn_struct_name(set), fields };
     }
 }
 

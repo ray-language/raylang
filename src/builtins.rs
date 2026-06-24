@@ -217,11 +217,11 @@ static BUILTINS: &[Builtin] = &[
         if !printable(&a[0]) { return Err((Some(0), format!("print no puede imprimir un {}", a[0]))); }
         Ok(Type::Unit)
     } },
-    // len(a) -> int: longitud de un arreglo o de un string (M11.1a: nº de caracteres).
+    // len(a) -> int: longitud de un arreglo, un string (M11.1a: nº de caracteres) o un Map (M13.1).
     Builtin { name: "len", opcode: OpCode::Len, check: |a| {
         arity(a, 1, "len", "")?;
-        if !matches!(a[0], Type::Array(_) | Type::String) {
-            return Err((Some(0), format!("len espera un arreglo o un string, no {}", a[0])));
+        if !matches!(a[0], Type::Array(_) | Type::String | Type::Map(_, _)) {
+            return Err((Some(0), format!("len espera un arreglo, un string o un Map, no {}", a[0])));
         }
         Ok(Type::Int)
     } },
@@ -371,6 +371,46 @@ static BUILTINS: &[Builtin] = &[
         }
         Ok(Type::Array(Box::new(Type::Int)))
     } },
+    // --- Mapas Map<K,V> (M13.1) ---
+    // map_new() -> Map<K,V>: mapa vacío. Su tipo es INDETERMINADO (como `[]`/`None`): lo fija el
+    // tipo esperado en `check_expr_expected`. Por eso esta regla (sin tipo esperado) es un error;
+    // el camino normal lo intercepta antes de llegar aquí.
+    Builtin { name: "map_new", opcode: OpCode::MapNew, check: |a| {
+        arity(a, 0, "map_new", "")?;
+        Err((None, "no se puede inferir el tipo de map_new; anótalo, p. ej. 'let m: Map<string, int> = map_new()'".into()))
+    } },
+    // insert(m, k, v) -> unit: inserta/actualiza la clave k con el valor v en el mapa m (lo muta).
+    Builtin { name: "insert", opcode: OpCode::MapInsert, check: |a| {
+        arity(a, 3, "insert", " (mapa, clave, valor)")?;
+        let (kt, vt) = match &a[0] {
+            Type::Map(k, v) => ((**k).clone(), (**v).clone()),
+            other => return Err((Some(0), format!("insert espera un Map como primer argumento, no {}", other))),
+        };
+        if a[1] != kt { return Err((Some(1), format!("insert: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
+        if a[2] != vt { return Err((Some(2), format!("insert: el valor del Map es {} pero se pasó {}", vt, a[2]))); }
+        Ok(Type::Unit)
+    } },
+    // contains_key(m, k) -> bool: ¿está la clave k en el mapa m?
+    Builtin { name: "contains_key", opcode: OpCode::MapContainsKey, check: |a| {
+        arity(a, 2, "contains_key", " (mapa, clave)")?;
+        let kt = match &a[0] {
+            Type::Map(k, _) => (**k).clone(),
+            other => return Err((Some(0), format!("contains_key espera un Map como primer argumento, no {}", other))),
+        };
+        if a[1] != kt { return Err((Some(1), format!("contains_key: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
+        Ok(Type::Bool)
+    } },
+    // __map_get(m, k) -> [V]: [] si la clave no está, [v] si está. El prelude → Option<V>.
+    Builtin { name: "__map_get", opcode: OpCode::MapGet, check: |a| {
+        arity(a, 2, "__map_get", " (mapa, clave)")?;
+        let (kt, vt) = match &a[0] {
+            Type::Map(k, v) => ((**k).clone(), (**v).clone()),
+            other => return Err((Some(0), format!("__map_get espera un Map como primer argumento, no {}", other))),
+        };
+        if a[1] != kt { return Err((Some(1), format!("__map_get: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
+        Ok(Type::Array(Box::new(vt)))
+    } },
+
     // panic(msg) -> unit (M13.2a): aborta la ejecución con `msg`. Lo usan `assert`/`assert_eq` del
     // prelude; es el único primitivo de runtime de M13.2 (el resto vive en raylang). Diverge (nunca
     // retorna), lo que aprovecha el análisis de divergencia del checker.

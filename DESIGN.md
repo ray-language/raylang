@@ -2202,9 +2202,18 @@ usuario (vía trait `Hash` + dicts, como M9.2) → **diferido**.
   por operación es bajo; lo caro es el primer `Obj::Map` (tipo + heap obj + tracing).
 
 **Sub-fases:**
-- **M13.1a — núcleo**: `map_new`, `insert(m,k,v)`, `get(m,k) -> Option<V>` (primitivo que devuelve
-  `[V]` + envoltorio en el prelude, patrón M11.2), `contains_key(m,k) -> bool`, `len` **extendido**
-  a mapas (ya cubre arreglos+strings). UFCS gratis: `m.insert(k,v)`, `m.get(k)`.
+- **M13.1a — núcleo** ✅ **COMPLETO** (341 tests lib): `Type::Map(Box<Type>, Box<Type>)` (el parser
+  lo trae como `Struct("Map", [K, V])`; `resolve_type` lo reclasifica, como `Enum`/`Var`).
+  **Runtime**: `Value::Map(Rc<RefCell<HashMap<MapKey, Value>>>)` (intérprete) y `Obj::Map(HashMap<
+  MapKey, HeapValue>)` (VM, **trazado por el GC** — solo los valores; las claves son primitivos
+  *inline*). `MapKey` = enum hashable (Int/Str/Char/Bool; **no** float). Builtins (opcodes `MapNew`/
+  `MapInsert`/`MapContainsKey`/`MapGet`): `map_new`, `insert(m,k,v)`, `contains_key(m,k) -> bool`,
+  `__map_get(m,k) -> [V]` (+ envoltorio `get(m,k) -> Option<V>` en el prelude, patrón M11.2); `len`
+  **extendido** a mapas. UFCS gratis: `m.insert(k,v)`, `m.get(k)`, `m.contains_key(k)`. `map_new()`
+  es **indeterminado** (como `[]`/`None`): su tipo lo fija el esperado (`check_expr_expected`); sin
+  anotación → error claro. **Clave hashable** validada en `ensure_type` (`Map<float,_>` se rechaza).
+  Oráculo `map_basico/claves_variadas` + `map_estres_gc` (estrés del GC). `print` de un Map
+  **diferido** (no es *printable*; Display ordena por clave → determinista). Ejemplo `examples/mapa.ray`.
 - **M13.1b — recorrido**: `remove(m,k) -> Option<V>`, `keys(m) -> [K]`, `values(m) -> [V]` (ambos
   asignan heap). Para el oráculo, `keys`/`values` se devuelven **ordenadas** (como `list_dir` en
   M11.7c) → determinista pese a que el `HashMap` interno no lo sea.

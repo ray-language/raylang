@@ -151,6 +151,18 @@ pub enum OpCode {
     /// ocurrencia de `x` (por igualdad estructural), o vacío. Primitivo `__position`; prelude → `Option`.
     Position,
 
+    // --- Mapas Map<K,V> (M13.1) ---
+    /// No saca nada; asigna un **mapa vacío** en el heap y lo empuja. Builtin `map_new`.
+    MapNew,
+    /// Saca valor, clave y mapa; **inserta** (clave→valor) mutando el mapa, y empuja unit.
+    /// Builtin `insert`.
+    MapInsert,
+    /// Saca clave y mapa; empuja un arreglo `[V]` con **0 o 1** elementos (el valor asociado,
+    /// o vacío). Primitivo `__map_get`; el prelude lo envuelve en `Option<V>`.
+    MapGet,
+    /// Saca clave y mapa; empuja un `bool`: si la clave está presente. Builtin `contains_key`.
+    MapContainsKey,
+
     // --- Aserciones (M13.2a) ---
     /// Saca un string (el mensaje) y **aborta** la ejecución con un error de runtime que lo lleva,
     /// en la posición de la llamada. Builtin `panic`; el prelude lo usa para `assert`/`assert_eq`.

@@ -26,6 +26,9 @@
 //! 3. **Disparo**: se recolecta cuando el número de objetos vivos cruza un umbral
 //!    que **crece** tras cada recolección (estilo clox `nextGC`).
 
+use crate::interpreter::MapKey;
+use std::collections::HashMap;
+
 /// Un *handle*: la referencia a un objeto del heap (su índice de ranura).
 pub type Handle = usize;
 
@@ -88,6 +91,9 @@ pub enum Obj {
     /// Una **celda**: una variable *boxeada* (un local capturado o un upvalue). Es
     /// lo que comparten una closure y el dueño de la variable (M4.2).
     Cell(HeapValue),
+    /// Un mapa `Map<K, V>` (M13.1): clave hashable → valor. El GC traza los **valores**
+    /// (las claves son primitivos *inline*, sin handles).
+    Map(HashMap<MapKey, HeapValue>),
 }
 
 /// Una ranura del heap: un objeto y su bit de marca.
@@ -193,6 +199,8 @@ impl Heap {
             Obj::Closure(c) => c.upvalues.clone(),
             Obj::Enum(e) => e.payload.iter().filter_map(HeapValue::handle).collect(),
             Obj::Cell(v) => v.handle().into_iter().collect(),
+            // M13.1: las claves son primitivos (sin handles); solo se trazan los valores.
+            Obj::Map(m) => m.values().filter_map(HeapValue::handle).collect(),
         }
     }
 

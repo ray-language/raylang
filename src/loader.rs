@@ -961,6 +961,10 @@ impl<'a> TypeRewriter<'a> {
                 }
             }
             Type::Array(elem) => self.rewrite_type(elem),
+            Type::Map(k, v) => {
+                self.rewrite_type(k);
+                self.rewrite_type(v);
+            }
             Type::Fn(params, ret) => {
                 for p in params {
                     self.rewrite_type(p);

@@ -553,6 +553,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     (antes: un único `main` con todas → un panic abortaba todo). (3) Reporte por test + resumen; código
     de salida = nº de fallos (compat). (4) Filtro por subcadena del nombre (`--test archivo.ray patron`).
     **M13.2 COMPLETO.**
+  - **M13.1a COMPLETO** (341 tests lib): **`Map<K,V>` (núcleo)** — primer tipo compuesto nuevo desde
+    M5, **objeto del heap en ambos motores** (no almacén del host: las claves/valores son `Value`, que
+    difiere por motor). `Type::Map(Box<Type>, Box<Type>)` (el parser lo trae como `Struct("Map",[K,V])`;
+    `resolve_type` lo reclasifica como a `Enum`/`Var`; reflejado en subst/unify/ensure_type/etc.).
+    Runtime: `Value::Map(Rc<RefCell<HashMap<MapKey,Value>>>)` (intérprete) y `Obj::Map(HashMap<MapKey,
+    HeapValue>)` (VM, **trazado por el GC**: solo valores; las claves son primitivos inline). `MapKey` =
+    enum hashable Int/Str/Char/Bool (**no** float). Builtins (opcodes `MapNew`/`MapInsert`/
+    `MapContainsKey`/`MapGet`): `map_new`, `insert`, `contains_key`, `__map_get -> [V]` (+ envoltorio
+    `get -> Option<V>` en el prelude); `len` extendido. UFCS gratis. `map_new()` es **indeterminado**
+    (como `[]`/`None`): su tipo lo fija el esperado (`check_expr_expected`); clave hashable validada en
+    `ensure_type` (`Map<float,_>` se rechaza). Oráculo + estrés de GC. `print` de Map **diferido** (no
+    printable). Ejemplo `examples/mapa.ray`. Falta **M13.1b**: `remove`/`keys`/`values`.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

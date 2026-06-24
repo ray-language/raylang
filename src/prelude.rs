@@ -78,6 +78,17 @@ fn sort<T: Ord>(a: [T]) -> [T] {
     out
 }
 
+// --- Mapas Map<K,V> (M13.1) ---
+// `get` envuelve el primitivo `__map_get` (que devuelve [V]) en un Option, como los demás
+// envoltorios. Las claves son hashables (int/string/char/bool); el checker lo garantiza al
+// instanciar K. `map_new`/`insert`/`contains_key`/`len` son builtins (operan directo).
+
+// Valor asociado a la clave `k`, o None si no está.
+fn get<K, V>(m: Map<K, V>, k: K) -> Option<V> {
+    let r = __map_get(m, k);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
 // --- Aserciones (M13.2a) ---
 // Sobre el primitivo `panic` (el único toque de runtime). No hay sobrecarga, así que en vez de
 // `assert(cond)` y `assert(cond, msg)` se ofrece `assert(cond)` (mensaje genérico), `assert_eq`

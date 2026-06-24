@@ -30,6 +30,11 @@ pub enum Type {
     Unit,
     /// Arreglo dinámico de un tipo de elemento: `[T]`. Tipado estructural (M3).
     Array(Box<Type>),
+    /// Un mapa/diccionario `Map<K, V>` (M13.1): claves `K` (primitivo hashable:
+    /// int/string/char/bool) → valores `V`. Semántica de referencia (objeto del heap, como
+    /// los arreglos). El parser lo produce como `Struct("Map", [K, V])`; el checker lo
+    /// reclasifica aquí (igual que `Enum`/`Var`).
+    Map(Box<Type>, Box<Type>),
     /// Un struct nominal, con sus **argumentos de tipo**: `Punto` es
     /// `Struct("Punto", [])`; `Par<int, bool>` es `Struct("Par", [Int, Bool])` (M6).
     /// Tipado **nominal** (M3.2): la igualdad compara nombre y argumentos.
@@ -72,6 +77,7 @@ impl std::fmt::Display for Type {
             Type::Char => f.write_str("char"),
             Type::Unit => f.write_str("unit"),
             Type::Array(elem) => write!(f, "[{}]", elem),
+            Type::Map(k, v) => write!(f, "Map<{}, {}>", k, v),
             Type::Struct(name, args) | Type::Enum(name, args) => {
                 f.write_str(name)?;
                 if !args.is_empty() {

@@ -72,6 +72,43 @@ pub enum Value {
     /// tamaño infinito. Es **inmutable** (no hay asignación a su payload), de ahí que
     /// no lleve `RefCell`.
     Enum(Rc<EnumInstance>),
+    /// Un mapa `Map<K, V>` (M13.1). Como el arreglo: `Rc<RefCell<...>>` da semántica de
+    /// referencia + mutación. La clave es un `MapKey` (primitivo hashable).
+    Map(Rc<RefCell<HashMap<MapKey, Value>>>),
+}
+
+/// La **clave** de un `Map` en runtime (M13.1): un primitivo hashable. No incluye `float`
+/// (no implementa `Hash`/`Eq` de forma fiable) ni tipos compuestos. El checker garantiza
+/// que solo lleguen estos tipos como clave.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MapKey {
+    Int(i64),
+    Str(String),
+    Char(char),
+    Bool(bool),
+}
+
+impl MapKey {
+    /// Convierte un valor del intérprete en una clave (el checker garantiza el tipo).
+    pub fn from_value(v: &Value) -> MapKey {
+        match v {
+            Value::Int(n) => MapKey::Int(*n),
+            Value::Str(s) => MapKey::Str(s.clone()),
+            Value::Char(c) => MapKey::Char(*c),
+            Value::Bool(b) => MapKey::Bool(*b),
+            _ => unreachable!("el checker garantiza una clave hashable (int/string/char/bool)"),
+        }
+    }
+
+    /// Reconstruye el valor del intérprete a partir de la clave (para `keys`, M13.1b).
+    pub fn to_value(&self) -> Value {
+        match self {
+            MapKey::Int(n) => Value::Int(*n),
+            MapKey::Str(s) => Value::Str(s.clone()),
+            MapKey::Char(c) => Value::Char(*c),
+            MapKey::Bool(b) => Value::Bool(*b),
+        }
+    }
 }
 
 /// `PartialEq` de `Value` escrito a mano (no derivado) por dos razones:
@@ -100,6 +137,9 @@ impl PartialEq for Value {
             (Enum(a), Enum(b)) => {
                 a.enum_name == b.enum_name && a.variant == b.variant && a.payload == b.payload
             }
+            // Mapas (M13.1): igualdad estructural, independiente del orden (HashMap). El checker
+            // no permite `==` sobre Map en programas; esto es para el oráculo y por robustez.
+            (Map(a), Map(b)) => *a.borrow() == *b.borrow(),
             _ => false,
         }
     }
@@ -151,6 +191,14 @@ impl std::fmt::Display for Value {
                     let parts: Vec<String> = rc.payload.iter().map(|v| v.to_string()).collect();
                     write!(f, "{}.{}({})", rc.enum_name, rc.variant, parts.join(", "))
                 }
+            }
+            // M13.1: el `print` de un Map está diferido (no es printable en el checker), pero
+            // Display debe ser total; se ordena por clave para que sea determinista.
+            Value::Map(rc) => {
+                let m = rc.borrow();
+                let mut parts: Vec<String> = m.iter().map(|(k, v)| format!("{}: {}", k.to_value(), v)).collect();
+                parts.sort();
+                write!(f, "Map{{{}}}", parts.join(", "))
             }
         }
     }
@@ -667,7 +715,35 @@ impl<'a> Interpreter<'a> {
                 Value::Array(rc) => Value::Int(rc.borrow().len() as i64),
                 // M11.1a: len de string = nº de caracteres (Unicode scalar values).
                 Value::Str(s) => Value::Int(s.chars().count() as i64),
-                _ => unreachable!("el checker garantiza un arreglo o string"),
+                // M13.1: len de un Map = nº de entradas.
+                Value::Map(rc) => Value::Int(rc.borrow().len() as i64),
+                _ => unreachable!("el checker garantiza un arreglo, string o Map"),
+            },
+            // --- Mapas (M13.1) ---
+            "map_new" => Value::Map(Rc::new(RefCell::new(HashMap::new()))),
+            "insert" => {
+                match &values[0] {
+                    Value::Map(rc) => {
+                        rc.borrow_mut().insert(MapKey::from_value(&values[1]), values[2].clone());
+                    }
+                    _ => unreachable!("el checker garantiza un Map"),
+                }
+                Value::Unit
+            }
+            "contains_key" => match &values[0] {
+                Value::Map(rc) => Value::Bool(rc.borrow().contains_key(&MapKey::from_value(&values[1]))),
+                _ => unreachable!("el checker garantiza un Map"),
+            },
+            // Primitivo: [] o [v]; el prelude lo envuelve en Option<V>.
+            "__map_get" => match &values[0] {
+                Value::Map(rc) => {
+                    let elems = match rc.borrow().get(&MapKey::from_value(&values[1])) {
+                        Some(v) => vec![v.clone()],
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("el checker garantiza un Map"),
             },
             "push" => {
                 match &values[0] {

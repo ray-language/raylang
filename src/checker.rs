@@ -1083,6 +1083,27 @@ impl Checker {
     fn ensure_type(&self, ty: &Type, line: usize, col: usize) -> Result<(), TypeError> {
         match ty {
             Type::Array(elem) => self.ensure_type(elem, line, col),
+            // `Map<K, V>` (M13.1): la clave debe ser hashable (int/string/char/bool, o un
+            // parámetro de tipo genérico). Llega ya como `Type::Map` (resuelto) o como
+            // `Struct("Map", args)` (sin resolver, p. ej. en un contexto que no pasó por
+            // `resolve_type`); se cubren ambas formas.
+            Type::Map(k, v) => {
+                if !is_hashable_key(k) {
+                    return Err(self.err(line, col, format!(
+                        "la clave de un Map debe ser int/string/char/bool, no {}", k
+                    )));
+                }
+                self.ensure_type(k, line, col)?;
+                self.ensure_type(v, line, col)
+            }
+            Type::Struct(name, args) if name == "Map" => {
+                if args.len() != 2 {
+                    return Err(self.err(line, col, format!(
+                        "Map espera 2 argumentos de tipo (clave y valor), no {}", args.len()
+                    )));
+                }
+                self.ensure_type(&Type::Map(Box::new(self.resolve_type(&args[0])), Box::new(self.resolve_type(&args[1]))), line, col)
+            }
             // `Self` (M9) llega como `Struct("Self")` sin resolver; fuera de un impl no
             // tiene un tipo implementador al que referirse.
             Type::Struct(name, _) if name == "Self" => {
@@ -1173,6 +1194,14 @@ impl Checker {
             Type::SelfType => self.current_self.clone().unwrap_or(Type::SelfType),
             Type::Struct(name, args) if name == "Self" && args.is_empty() => {
                 self.current_self.clone().unwrap_or(Type::SelfType)
+            }
+            // `Map<K, V>` (M13.1) llega como `Struct("Map", [K, V])`; se reclasifica a `Type::Map`
+            // (igual que `Enum`/`Var`). La validación de la clave hashable va en `ensure_type`.
+            Type::Struct(name, args) if name == "Map" && args.len() == 2 => {
+                Type::Map(Box::new(self.resolve_type(&args[0])), Box::new(self.resolve_type(&args[1])))
+            }
+            Type::Map(k, v) => {
+                Type::Map(Box::new(self.resolve_type(k)), Box::new(self.resolve_type(v)))
             }
             Type::Struct(name, args) => {
                 if self.type_params.contains(name) {
@@ -1533,6 +1562,20 @@ impl Checker {
             }
         }
         match &expr.kind {
+            // M13.1: `map_new()` es indeterminado (como `[]`/`None`); su tipo lo fija el esperado.
+            ExprKind::Call { callee, args }
+                if matches!(&callee.kind, ExprKind::Ident(n) if n == "map_new") =>
+            {
+                if !args.is_empty() {
+                    return Err(self.err(expr.line, expr.col, "map_new no recibe argumentos".into()));
+                }
+                match expected {
+                    Type::Map(_, _) => Ok(expected.clone()),
+                    _ => Err(self.err(expr.line, expr.col, format!(
+                        "map_new produce un Map, pero aquí se espera {}", expected
+                    ))),
+                }
+            }
             ExprKind::StructLit { name, fields } => {
                 self.check_struct_lit(name, fields, Some(expected), expr.line, expr.col)
             }
@@ -2411,10 +2454,19 @@ impl Checker {
 /// ¿Pueden compararse con == / != valores de este tipo? (Compuestos: estructural.)
 /// Las funciones **no** son comparables (no tienen identidad estructural); un
 /// arreglo lo es solo si su elemento lo es.
+/// ¿Es `t` un tipo válido como **clave** de un `Map` (M13.1)? Primitivos hashables
+/// (int/string/char/bool; **no** float — no es hashable de forma fiable), o un parámetro de
+/// tipo genérico (la restricción real se comprueba al instanciarlo con un tipo concreto).
+fn is_hashable_key(t: &Type) -> bool {
+    matches!(t, Type::Int | Type::String | Type::Char | Type::Bool | Type::Var(_))
+}
+
 fn is_comparable(t: &Type) -> bool {
     match t {
         Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Struct(_, _) => true,
         Type::Array(elem) => is_comparable(elem),
+        // Un Map (M13.1) no se compara con == por ahora (como los enums); se consulta.
+        Type::Map(_, _) => false,
         // Los enums (M5) no se comparan con ==: pueden ser recursivos y portar
         // funciones; se consumen por `match`. (Un `@derive(Eq)` futuro lo abriría.)
         // Un parámetro de tipo (M6) es opaco: podría ser una función o un enum, así
@@ -2431,6 +2483,7 @@ fn type_has_var(t: &Type) -> bool {
     match t {
         Type::Var(_) => true,
         Type::Array(e) => type_has_var(e),
+        Type::Map(k, v) => type_has_var(k) || type_has_var(v),
         Type::Fn(ps, r) => ps.iter().any(type_has_var) || type_has_var(r),
         Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(type_has_var),
         _ => false,
@@ -2459,6 +2512,7 @@ fn subst(ty: &Type, sigma: &HashMap<String, Type>) -> Type {
     match ty {
         Type::Var(n) => sigma.get(n).cloned().unwrap_or_else(|| ty.clone()),
         Type::Array(e) => Type::Array(Box::new(subst(e, sigma))),
+        Type::Map(k, v) => Type::Map(Box::new(subst(k, sigma)), Box::new(subst(v, sigma))),
         Type::Fn(ps, r) => Type::Fn(
             ps.iter().map(|p| subst(p, sigma)).collect(),
             Box::new(subst(r, sigma)),
@@ -2489,6 +2543,10 @@ fn unify(param: &Type, arg: &Type, sigma: &mut HashMap<String, Type>) -> Result<
     }
     match (param, arg) {
         (Type::Array(a), Type::Array(b)) => unify(a, b, sigma),
+        (Type::Map(k1, v1), Type::Map(k2, v2)) => {
+            unify(k1, k2, sigma)?;
+            unify(v1, v2, sigma)
+        }
         (Type::Fn(p1, r1), Type::Fn(p2, r2)) => {
             if p1.len() != p2.len() {
                 return Err(format!("se esperaba {}, se pasó {}", param, arg));
@@ -3113,6 +3171,7 @@ fn type_uses_self(ty: &Type) -> bool {
         Type::SelfType => true,
         Type::Struct(n, _) if n == "Self" => true,
         Type::Array(e) => type_uses_self(e),
+        Type::Map(k, v) => type_uses_self(k) || type_uses_self(v),
         Type::Fn(ps, r) => ps.iter().any(type_uses_self) || type_uses_self(r),
         Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(type_uses_self),
         _ => false,
@@ -3127,6 +3186,7 @@ fn subst_self(ty: &Type, target: &Type) -> Type {
         Type::SelfType => target.clone(),
         Type::Struct(n, args) if n == "Self" && args.is_empty() => target.clone(),
         Type::Array(e) => Type::Array(Box::new(subst_self(e, target))),
+        Type::Map(k, v) => Type::Map(Box::new(subst_self(k, target)), Box::new(subst_self(v, target))),
         Type::Fn(ps, r) => Type::Fn(
             ps.iter().map(|p| subst_self(p, target)).collect(),
             Box::new(subst_self(r, target)),

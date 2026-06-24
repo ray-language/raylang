@@ -21,8 +21,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::bytecode::{Chunk, CompiledEnum, CompiledFn, CompiledProgram, OpCode, UpvalueSource};
+use std::collections::HashMap;
+
 use crate::gc::{Handle, Heap, HeapValue, Obj, VmClosure, VmEnum, VmStruct};
-use crate::interpreter::{EnumInstance, RuntimeError, StructInstance, Value};
+use crate::interpreter::{EnumInstance, MapKey, RuntimeError, StructInstance, Value};
 
 /// Límite de marcos para detectar recursión infinita en vez de colgarse. Es el
 /// **mismo** que el del intérprete (`interpreter::MAX_CALL_DEPTH`, M13.3a) para que
@@ -254,13 +256,55 @@ impl<'a> Vm<'a> {
                     self.as_array_mut(h)[idx] = v;
                 }
                 OpCode::Len => {
-                    // M11.1a: len de arreglo (objeto del heap) o de string (nº de caracteres).
+                    // M11.1a: len de arreglo o string; M13.1: len de Map (nº de entradas).
                     let len = match self.pop() {
                         HeapValue::Str(s) => s.chars().count() as i64,
-                        HeapValue::Obj(h) => self.as_array(h).len() as i64,
-                        _ => unreachable!("el checker garantiza un arreglo o string"),
+                        HeapValue::Obj(h) => match self.heap.get(h) {
+                            Obj::Array(v) => v.len() as i64,
+                            Obj::Map(m) => m.len() as i64,
+                            _ => unreachable!("el checker garantiza un arreglo o Map"),
+                        },
+                        _ => unreachable!("el checker garantiza un arreglo, string o Map"),
                     };
                     self.push(HeapValue::Int(len));
+                }
+                // --- Mapas Map<K,V> (M13.1) ---
+                OpCode::MapNew => {
+                    let h = self.heap.allocate(Obj::Map(HashMap::new()));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::MapInsert => {
+                    let v = self.pop();
+                    let k = heap_to_key(&self.pop());
+                    let h = self.pop_obj();
+                    match self.heap.get_mut(h) {
+                        Obj::Map(m) => { m.insert(k, v); }
+                        _ => unreachable!("el checker garantiza un Map"),
+                    }
+                    self.push(HeapValue::Unit);
+                }
+                OpCode::MapContainsKey => {
+                    let k = heap_to_key(&self.pop());
+                    let h = self.pop_obj();
+                    let presente = match self.heap.get(h) {
+                        Obj::Map(m) => m.contains_key(&k),
+                        _ => unreachable!("el checker garantiza un Map"),
+                    };
+                    self.push(HeapValue::Bool(presente));
+                }
+                OpCode::MapGet => {
+                    // Primitivo: [] o [v]; el prelude lo envuelve en Option<V>.
+                    let k = heap_to_key(&self.pop());
+                    let h = self.pop_obj();
+                    let elems = match self.heap.get(h) {
+                        Obj::Map(m) => match m.get(&k) {
+                            Some(v) => vec![v.clone()],
+                            None => vec![],
+                        },
+                        _ => unreachable!("el checker garantiza un Map"),
+                    };
+                    let arr = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(arr));
                 }
                 OpCode::Push => {
                     let v = self.pop();
@@ -1014,6 +1058,14 @@ fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> String {
             }
             Obj::Closure(_) => "<fn>".to_string(),
             Obj::Cell(_) => "<cell>".to_string(), // no debería imprimirse directamente
+            // M13.1: el print de un Map está diferido; se ordena por clave (determinista).
+            Obj::Map(m) => {
+                let mut parts: Vec<String> = m.iter()
+                    .map(|(k, v)| format!("{}: {}", k.to_value(), format_value(heap, enums, v)))
+                    .collect();
+                parts.sort();
+                format!("Map{{{}}}", parts.join(", "))
+            }
         },
     }
 }
@@ -1051,12 +1103,31 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
             // no se observa; se imprime <fn>).
             Obj::Closure(c) => Value::Function(c.index),
             Obj::Cell(inner) => to_value(heap, enums, inner),
+            // M13.1: reconstruye el Map del intérprete (igual igualdad estructural → oráculo).
+            Obj::Map(m) => {
+                let mut hm: HashMap<MapKey, Value> = HashMap::with_capacity(m.len());
+                for (k, val) in m {
+                    hm.insert(k.clone(), to_value(heap, enums, val));
+                }
+                Value::Map(Rc::new(RefCell::new(hm)))
+            }
         },
     }
 }
 
 fn runtime_error(line: usize, col: usize, msg: &str) -> RuntimeError {
     RuntimeError { msg: msg.to_string(), line, col }
+}
+
+/// Convierte un valor de la VM en una clave de Map (M13.1). El checker garantiza el tipo.
+fn heap_to_key(v: &HeapValue) -> MapKey {
+    match v {
+        HeapValue::Int(n) => MapKey::Int(*n),
+        HeapValue::Str(s) => MapKey::Str(s.clone()),
+        HeapValue::Char(c) => MapKey::Char(*c),
+        HeapValue::Bool(b) => MapKey::Bool(*b),
+        _ => unreachable!("el checker garantiza una clave hashable (int/string/char/bool)"),
+    }
 }
 
 /// Comprueba que `i` es un índice válido en `0..len`; si no, error de ejecución.
@@ -1280,6 +1351,65 @@ mod tests {
             assert_eq!(interp.msg, esperado, "intérprete: {}", src);
             assert_eq!(vm.msg, esperado, "vm: {}", src);
         }
+    }
+
+    /// M13.1: Map en el oráculo. Las operaciones básicas dan el mismo resultado en ambos motores.
+    #[test]
+    fn map_basico_oraculo() {
+        oracle_program(
+            "fn main() -> int {
+                let m: Map<string, int> = map_new();
+                insert(m, \"a\", 1);
+                insert(m, \"b\", 2);
+                insert(m, \"a\", 10);
+                let total = match (m.get(\"a\")) { Option.Some(v) => v, Option.None => 0 };
+                total + len(m)
+             }",
+        );
+    }
+
+    /// M13.1: el Map asigna en el heap y guarda valores → estrés del GC (recolecta en cada paso).
+    /// Si una raíz faltara, los valores guardados se liberarían y el resultado cambiaría.
+    #[test]
+    fn map_estres_gc_oraculo() {
+        oracle_stress(
+            "fn celda(n: int) -> [int] { [n, n * 2] }
+             fn main() -> int {
+                let m: Map<int, [int]> = map_new();
+                var i = 0;
+                while (i < 30) { insert(m, i, celda(i)); i = i + 1; }
+                var suma = 0;
+                var j = 0;
+                while (j < 30) {
+                    match (m.get(j)) {
+                        Option.Some(par) => { suma = suma + par[0] + par[1]; },
+                        Option.None => { suma = suma - 1; },
+                    }
+                    j = j + 1;
+                }
+                suma + len(m)
+             }",
+        );
+    }
+
+    /// M13.1: claves de distintos tipos primitivos hashables.
+    #[test]
+    fn map_claves_variadas_oraculo() {
+        oracle_program(
+            "fn main() -> int {
+                let porInt: Map<int, int> = map_new();
+                insert(porInt, 7, 70);
+                let porChar: Map<char, int> = map_new();
+                insert(porChar, 'z', 100);
+                let porBool: Map<bool, int> = map_new();
+                insert(porBool, true, 1);
+                insert(porBool, false, 2);
+                let a = match (porInt.get(7)) { Option.Some(v) => v, Option.None => 0 };
+                let b = match (porChar.get('z')) { Option.Some(v) => v, Option.None => 0 };
+                let c = match (porBool.get(true)) { Option.Some(v) => v, Option.None => 0 };
+                a + b + c + len(porBool)
+             }",
+        );
     }
 
     #[test]

@@ -1,0 +1,49 @@
+// Map<K, V> — diccionarios (M13.1).
+//
+// Un Map asocia claves hashables (int/string/char/bool) con valores. Es la estructura
+// que faltaba para tablas de símbolos, contadores, índices… (camino al self-hosting).
+//
+// Operaciones: map_new() (necesita anotación de tipo, como `[]`), insert(m, k, v),
+// get(m, k) -> Option<V>, contains_key(m, k) -> bool, len(m). Lucen con UFCS:
+// m.insert(k, v), m.get(k), m.contains_key(k).
+
+// Cuenta cuántas veces aparece cada palabra en un texto.
+fn contar_palabras(texto: string) -> Map<string, int> {
+    let cuenta: Map<string, int> = map_new();
+    let palabras = texto.split(" ");
+    var i = 0;
+    while (i < len(palabras)) {
+        let p = palabras[i];
+        let previo = match (cuenta.get(p)) {
+            Option.Some(n) => n,
+            Option.None => 0,
+        };
+        cuenta.insert(p, previo + 1);
+        i = i + 1;
+    }
+    cuenta
+}
+
+fn main() -> int {
+    let cuenta = contar_palabras("el perro y el gato y el pez");
+
+    // "el" aparece 3 veces, "y" 2, los demás 1.
+    assert_eq(cuenta.get("el").unwrap_or(0), 3);
+    assert_eq(cuenta.get("y").unwrap_or(0), 2);
+    assert_eq(cuenta.get("gato").unwrap_or(0), 1);
+    assert(!cuenta.contains_key("loro"));
+
+    print("palabras distintas:");
+    print(len(cuenta));   // 5: el, perro, y, gato, pez
+
+    // El código de salida es el total de palabras distintas.
+    len(cuenta)
+}
+
+// Pequeño envoltorio local: Option<int> con valor por defecto (el prelude no trae unwrap_or).
+fn unwrap_or(o: Option<int>, def: int) -> int {
+    match (o) {
+        Option.Some(v) => v,
+        Option.None => def,
+    }
+}

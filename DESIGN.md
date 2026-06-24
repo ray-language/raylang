@@ -1963,8 +1963,72 @@ intacto**):
   nombres a un **mapa leaf → ruta**: `circulo.area`/`circulo.Tipo` busca el leaf, valida `pub` contra
   la ruta y baja a `geo::formas::circulo::…`. Un solo archivo o una carpeta plana quedan **idénticos**
   (sin `/`, `ns_prefix` es la identidad y el leaf es el propio nombre).
-- ⏳ Diferido aún: **imports relativos** (`import ./util;`), `mod.ray`/directorio-como-módulo,
-  `pub` granular (campos), re-exports.
+- ⏳ Diferido aún: **imports relativos** (`import ./util;`), `pub` granular (campos).
+
+**Aislamiento de módulos: la cápsula `mod.ray` (M11.6).** Tras M11.5, `pub` es **binario**: un ítem
+es privado a su archivo o alcanzable desde **todo el proyecto** por su ruta; no hay un nivel
+intermedio "público dentro de `geo/`, invisible fuera", y un directorio **no es direccionable**.
+M11.6 cierra ese hueco con un modelo de **cápsula** (estrategia elegida frente a `internal/`-estilo-Go
+y al árbol explícito estilo Rust `mod x;`+`pub(crate)`, descartado por duplicar el sistema de
+archivos —raylang sostiene "el filesystem **es** la estructura"—).
+
+**La idea**: la **presencia de un `mod.ray`** conmuta un directorio de *transparente* a *cápsula*.
+- **Directorio sin `mod.ray`** → transparente (lo de hoy, compat total): sus archivos se alcanzan por
+  ruta con `pub`.
+- **Directorio `geo/` con `geo/mod.ray`** → cápsula:
+  - Se vuelve **direccionable**: `import geo;` carga `geo/mod.ray` (módulo de identidad `geo`,
+    prefijo `geo`, ítems `geo::…`). Desde fuera solo se ven sus ítems `pub`.
+  - `mod.ray` arma su **cara pública reexportando** de sus submódulos, con una única sintaxis nueva:
+    `pub from geo/formas/circulo import Circulo, area;` — un `from`-import marcado `pub` que, además
+    de traer los nombres al ámbito de `mod.ray`, los **añade a la superficie pública** de `geo`.
+  - Los submódulos internos (`geo/formas/circulo`) quedan **inalcanzables desde fuera**: un
+    `import geo/formas/circulo;` externo es **error** (M11.6b). *Dentro* de `geo/`, los submódulos se
+    importan entre sí por ruta como hoy.
+
+`pub` conserva su significado (exportar de un archivo); lo nuevo es que **cruzar el borde de una
+cápsula obliga a pasar por su `mod.ray`** (Go `paquete`+`internal/`, pero gobernado por un archivo
+explícito en vez de un nombre mágico). Sigue siendo **front-end puro**: el loader ya conoce cada ruta
+y cada arista de `import`; el aislamiento es una **comprobación de rutas en las aristas** + reusar la
+clasificación valor-vs-tipo de M11.3c para el reexport. Runtime intacto.
+
+**Diseño de implementación (dos sub-pasos):**
+
+*M11.6a — directorios direccionables + reexport (fachada, sin enforcement):*
+1. **Resolución de módulo**: `resolve_module_path(root, P)` prueba `P.ray`, y si no, `P/mod.ray`
+   (error si **ambos** existen → una sola forma canónica, evitando el lío histórico de Rust). La
+   identidad del módulo sigue siendo la ruta `P` (prefijo `ns_prefix(P)`). Así `import geo;` resuelve
+   `geo/mod.ray` y sus ítems quedan `geo::…`.
+2. **AST/Parser**: `FromImport.is_pub: bool`; el parser acepta `pub from … import …;` (lookahead
+   `Pub`+`From` en el bucle de `parse`, antes del camino `[anns][pub] item`).
+3. **Superficie pública con globals**. Hoy `recolectar_pub_fns/tipos` devuelve `módulo → {nombres}` y
+   `qualified_field`/`clasificar_from_name` **recomputan** el global como `ns_prefix(ruta)::nombre`
+   —válido solo si el ítem se **define** ahí—. Para reexportar (el ítem se define en *otro* módulo)
+   eso no sirve. Refactor: una **`Surface { values: Map<nombre,global>, types: Map<nombre,global> }`
+   por módulo**, que **lleva el nombre global de destino**:
+   - ítem `pub` **definido** en `m` → `global_fn(prefix(m), nombre)` (lo de hoy);
+   - `pub from P import a as b` → el global **resuelto** de `a` en `Surface[P]` (recursivo, con guarda
+     de visitados para las cadenas reexport-de-reexport; el caso común —reexportar un `pub` definido—
+     es un solo salto). `Surface[m][b] = ese global`.
+   `qualified_field`/`clasificar_from_name`/la clasificación de `from` pasan a **consultar `Surface`**
+   (en vez de recomputar). Unifica definido-pub y reexport; compat hacia atrás exacta (para un ítem
+   definido, `Surface` da el mismo global que antes).
+
+*M11.6b — enforcement de la cápsula:*
+1. Descubrir las **cápsulas**: los directorios `C` tales que existe `C/mod.ray` (se sabe durante el
+   BFS de carga).
+2. **Regla de visibilidad** en cada arista `import` (importador `I` → objetivo `T`, ya recorridas en
+   el BFS): sea `C` el **ancestro-directorio estricto más cercano** de `T` que es cápsula. Si no hay
+   `C` → `T` es global (hoy). Si hay `C` → se exige que `I == C` **o** `I` esté bajo `C/`; si no,
+   **error** ("`T` es interno al módulo '`C`'; impórtalo con `import C;`"). Componen las cápsulas
+   anidadas (estar en la interior implica estar en la exterior). Las aristas de `from … import` se
+   comprueban igual.
+
+**Compat hacia atrás**: sin ningún `mod.ray`, no hay cápsulas → toda arista es libre y la `Surface`
+da los mismos globals → **idéntico a M11.5**.
+
+**Diferido de M11.6**: reexport que *renombra el submódulo entero* (`pub import geo/x as y;`), `pub`
+granular por campo, imports relativos. (Detalle abierto a confirmar: la sintaxis del reexport —
+`pub from … import …` recomendada vs un `pub use …` separado.)
 
 **Runtime: sin cambios.** Los módulos se borran en el front-end; el programa fusionado es uno solo
 con nombres únicos. Oráculo VM↔intérprete intacto.

@@ -1,0 +1,8 @@
+// Submódulo interno: examples/capsula/geo/formas/circulo.ray
+// Usa otro submódulo de la cápsula por su ruta absoluta desde la raíz.
+
+import geo/util;
+
+pub struct Circulo { radio: int }
+
+pub fn area(c: Circulo) -> int { 3 * util.cuadrado(c.radio) }

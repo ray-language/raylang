@@ -142,12 +142,15 @@ impl ImportDecl {
     }
 }
 
-/// Una declaración `from M import a [as b]{, c [as d]};` (M11.3b): trae nombres `pub` del módulo
-/// `M` al ámbito del módulo actual, sin calificar, con renombrado opcional (`as`).
+/// Una declaración `[pub] from M import a [as b]{, c [as d]};` (M11.3b / M11.6a): trae nombres `pub`
+/// del módulo `M` al ámbito del módulo actual, sin calificar, con renombrado opcional (`as`). Si
+/// lleva `pub` (**reexport**, M11.6a), los nombres traídos pasan también a la **superficie pública**
+/// de este módulo —se usa en un `mod.ray` para construir la cara pública de su directorio/cápsula—.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FromImport {
     pub module: String,
     pub names: Vec<ImportName>,
+    pub is_pub: bool,
     pub line: usize,
     pub col: usize,
 }

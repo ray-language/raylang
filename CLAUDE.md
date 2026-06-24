@@ -376,6 +376,22 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   leaf, validan `pub` contra la ruta y bajan a `ns_prefix(ruta)::nombre`. Compatible hacia atrás: sin
   `/`, `ns_prefix` es la identidad y el leaf es el propio nombre. Runtime intacto. Diferido: imports
   relativos, `mod.ray`/directorio-como-módulo, `pub` granular por campo, re-exports.
+- **M11.6a COMPLETO** (331 tests lib + 26 en `tests/modules_cli.rs`): **aislamiento de módulos — la
+  cápsula `mod.ray`** (DESIGN §20.3; estrategia elegida frente a `internal/`-Go y `mod x;`/`pub(crate)`-
+  Rust). **Regla**: la presencia de `geo/mod.ray` vuelve `geo/` una **cápsula** *direccionable*
+  (`import geo;` carga `geo/mod.ray`, identidad `geo`). Sintaxis nueva: **`pub from … import …`**
+  (reexport; `FromImport.is_pub`, parser con lookahead `Pub`+`From` vía `check_next`) — un from-import
+  que además añade los nombres a la **cara pública** de la cápsula. **Pieza central**: la superficie
+  pública pasa de `módulo → {nombres}` (recolectar_pub_fns/tipos, **eliminados**) a **`Surface {
+  values, types }` = nombre → global de destino** (`build_surfaces`): un `pub` definido → `ns_prefix(m)
+  ::nombre`; un reexport → el global **resuelto en el origen** (a punto fijo, para cadenas). Esto era
+  necesario porque un reexport apunta a un ítem definido en *otro* módulo (no vale recomputar
+  `ns_prefix(este)::n`). `qualified_field`/`clasificar_from_name`/`rewrite_name` consultan `Surface`.
+  Resolución de módulo: `resolve_module_path` prueba `P.ray` y si no `P/mod.ray` (error si ambos →
+  forma canónica única). Compat hacia atrás exacta (sin `mod.ray`, idéntico a M11.5; para ítems
+  definidos `Surface` da el mismo global). **Front-end puro, runtime intacto.** Falta M11.6b: el
+  *enforcement* (importar un submódulo interno desde fuera de la cápsula = error). Diferido: imports
+  relativos, `pub` granular por campo.
 - **M11.4 — cierre de diferidos aditivos de la stdlib** (DESIGN §20.4). Tocan runtime → oráculo
   (con estrés del GC para los que asignan heap). Tras L1, cada builtin = fila en `BUILTINS` + opcode
   + impl por motor; checker/compilador sin cambios.

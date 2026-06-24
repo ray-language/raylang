@@ -318,3 +318,60 @@ fn from_import_por_directorio() {
     let (_, code) = run_modules("ray_dir_from", "app", files, false);
     assert_eq!(code, 48, "from a/b/c import trae la función sin calificar");
 }
+
+// --- M11.6a: cápsula direccionable (mod.ray) + reexport (pub from) ----------------------------
+
+#[test]
+fn mod_ray_direccionable_con_reexport() {
+    // `import geo;` carga geo/mod.ray, que reexporta una función y un tipo `pub` de un submódulo.
+    let files = &[
+        ("geo/formas/circulo",
+         "pub struct Circulo { radio: int }\npub fn area(c: Circulo) -> int { 3 * c.radio * c.radio }\n"),
+        ("geo/mod", "pub from geo/formas/circulo import Circulo, area;\n"),
+        ("app",
+         "import geo;\nfn main() -> int {\n  let c = geo.Circulo { radio: 4 };\n  geo.area(c)\n}\n"),
+    ];
+    for vm in [false, true] {
+        let (_, code) = run_modules("ray_modray_basico", "app", files, vm);
+        assert_eq!(code, 48, "geo.area(Circulo{{radio:4}}) = 48 vía la fachada (vm={vm})");
+    }
+}
+
+#[test]
+fn from_capsula_trae_los_reexportados() {
+    // Un `from geo import …` trae al ámbito lo que la cápsula reexporta (sin calificar).
+    let files = &[
+        ("geo/formas/circulo", "pub fn area(r: int) -> int { 3 * r * r }\n"),
+        ("geo/mod", "pub from geo/formas/circulo import area;\n"),
+        ("app", "from geo import area;\nfn main() -> int { area(4) }\n"),
+    ];
+    let (_, code) = run_modules("ray_modray_from", "app", files, false);
+    assert_eq!(code, 48, "from geo import area (reexportado) = 48");
+}
+
+#[test]
+fn reexport_en_cadena_entre_capsulas() {
+    // Reexport de un reexport: a/mod reexporta de a/b (que a su vez reexporta de a/b/leaf).
+    let files = &[
+        ("a/b/leaf", "pub fn val() -> int { 7 }\n"),
+        ("a/b/mod", "pub from a/b/leaf import val;\n"),
+        ("a/mod", "pub from a/b import val;\n"),
+        ("app", "import a;\nfn main() -> int { a.val() + 35 }\n"),
+    ];
+    for vm in [false, true] {
+        let (_, code) = run_modules("ray_modray_cadena", "app", files, vm);
+        assert_eq!(code, 42, "7 + 35 = 42 vía reexport en cadena (vm={vm})");
+    }
+}
+
+#[test]
+fn modulo_archivo_y_directorio_homonimos_es_ambiguo() {
+    // Una sola forma canónica: si existen geo.ray Y geo/mod.ray, el módulo `geo` es ambiguo.
+    let files = &[
+        ("geo", "pub fn f() -> int { 1 }\n"),
+        ("geo/mod", "pub fn f() -> int { 2 }\n"),
+        ("app", "import geo;\nfn main() -> int { geo.f() }\n"),
+    ];
+    let (_, code) = run_modules("ray_modray_ambiguo", "app", files, false);
+    assert_ne!(code, 0, "geo.ray + geo/mod.ray a la vez debe fallar (ambiguo)");
+}

@@ -96,12 +96,14 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
             .chain(program.from_imports.iter().map(|f| (&f.module, f.line, f.col)));
         for (dep, line, col) in deps {
             if !visitados.contains(dep) {
-                let mp = root.join(format!("{}.ray", dep));
-                if !mp.exists() {
-                    return Err(render(&source, line, col, &name,
-                        &format!("no se encuentra el módulo '{}' (se esperaba {})", dep, mp.display())));
+                match resolve_module_path(&root, dep) {
+                    Err(msg) => return Err(render(&source, line, col, &name, &msg)),
+                    Ok(Some(mp)) => pendientes.push((dep.clone(), mp, false)),
+                    Ok(None) => return Err(render(&source, line, col, &name, &format!(
+                        "no se encuentra el módulo '{}' (se esperaba {}/{}.ray o {}/{}/mod.ray)",
+                        dep, root.display(), dep, root.display(), dep
+                    ))),
                 }
-                pendientes.push((dep.clone(), mp, false));
             }
         }
         modules.push(Module { name, is_entry, program, source });
@@ -111,8 +113,10 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
     comprobar_tipos_unicos(&modules)?;
 
     // --- Fase 3: namespacing + resolución + desambiguación de posiciones (L3) ---
-    let pub_fns = recolectar_pub_fns(&modules);
-    let pub_types = recolectar_pub_tipos(&modules); // tipos exportables (M11.3c-2)
+    // La **superficie pública** por módulo: nombre exportado → nombre global de destino (M11.6a).
+    // Unifica ítems `pub` definidos y reexports (`pub from …`); la consultan el Resolver, el
+    // TypeRewriter y la clasificación de `from`-imports.
+    let surfaces = build_surfaces(&modules);
     let tipos = recolectar_tipos(&modules); // todos los tipos: para distinguir "privado" de "no existe"
     let mut fusionado = Program {
         functions: Vec::new(), structs: Vec::new(), enums: Vec::new(),
@@ -140,13 +144,13 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         // 2. Clasificar los `from M import …` (M11.3b/-2): funciones `pub` → mapa de **valores**
         //    (al `own` del Resolver); tipos `pub` → mapa de **tipos** (al TypeRewriter).
         let (from_values, from_types) =
-            clasificar_from_imports(&m, &pub_fns, &pub_types, &tipos)?;
+            clasificar_from_imports(&m, &surfaces, &tipos)?;
 
         // 3. Resolución de **valores** (funciones propias, `from`-imports de función, `c.f`,
         //    construcción de enum calificada `c.Color.Rojo`). El `import_map` (leaf → ruta, M11.5)
         //    lo comparten el Resolver y el TypeRewriter.
         let import_map = build_import_map(&m)?;
-        let mut resolver = Resolver::new(&m, &pub_fns, &pub_types, &from_values, &import_map);
+        let mut resolver = Resolver::new(&m, &surfaces, &from_values, &import_map);
         resolver.resolve_module(&mut m)?;
 
         // 4. Namespacing de **tipos** (M11.3c): renombrar las definiciones de este módulo a su
@@ -158,7 +162,7 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         rename_type_defs(&mut m.program, &own_types);
         let mut type_refs = own_types;
         type_refs.extend(from_types);
-        TypeRewriter::new(&type_refs, &import_map, &pub_types).rewrite_program(&mut m.program);
+        TypeRewriter::new(&type_refs, &import_map, &surfaces).rewrite_program(&mut m.program);
 
         // 5. Banda de este módulo: empieza en `next_start`; sus posiciones se desplazan por `delta`.
         let start = next_start;
@@ -339,6 +343,25 @@ fn module_name(path: &Path) -> String {
     path.file_stem().and_then(|s| s.to_str()).unwrap_or("main").to_string()
 }
 
+/// Resuelve la **ruta de módulo** `dep` (p. ej. `geo/formas/circulo` o `geo`) a un archivo bajo
+/// `root` (M11.6a). Prueba primero `dep.ray` (módulo-archivo) y, si no, `dep/mod.ray` (módulo-
+/// directorio: el `mod.ray` *es* el módulo de identidad `dep`). Una sola forma canónica: si **ambos**
+/// existen, es ambiguo (error) —evita el lío histórico de `foo.rs`-vs-`foo/mod.rs`—. `None` si no
+/// existe ninguno.
+fn resolve_module_path(root: &Path, dep: &str) -> Result<Option<PathBuf>, String> {
+    let as_file = root.join(format!("{}.ray", dep));
+    let as_dir = root.join(dep).join("mod.ray");
+    match (as_file.exists(), as_dir.exists()) {
+        (true, true) => Err(format!(
+            "el módulo '{}' es ambiguo: existen '{}' y '{}'; deja solo uno",
+            dep, as_file.display(), as_dir.display()
+        )),
+        (true, false) => Ok(Some(as_file)),
+        (false, true) => Ok(Some(as_dir)),
+        (false, false) => Ok(None),
+    }
+}
+
 /// Prefijo de namespacing de una **ruta** de módulo (M11.5): los separadores de directorio `/` se
 /// traducen al separador interno `::` (`geo/formas/circulo` → `geo::formas::circulo`). Para una ruta
 /// de un solo segmento (carpeta plana, M11.3) es la identidad. El `::` es ilegal en identificadores
@@ -427,31 +450,88 @@ fn comprobar_tipos_unicos(modules: &[Module]) -> Result<(), LoadError> {
     Ok(())
 }
 
-/// Por módulo, el conjunto de nombres de funciones `pub` (para verificar el acceso calificado).
-fn recolectar_pub_fns(modules: &[Module]) -> HashMap<String, HashSet<String>> {
-    let mut map: HashMap<String, HashSet<String>> = HashMap::new();
+/// La **superficie pública** de un módulo (M11.6a): por cada nombre exportado, el **nombre global de
+/// destino**. Se separa en `values` (funciones) y `types` (struct/enum/trait) porque el acceso los
+/// trata distinto (valor vs posición de tipo). A diferencia de M11.3, guarda el global en vez de solo
+/// el nombre: así un **reexport** (`pub from P import a`) apunta al global del ítem en `P` —que se
+/// define en *otro* módulo, no aquí—, no a un `ns_prefix(este_módulo)::a` inexistente.
+#[derive(Default)]
+struct Surface {
+    values: HashMap<String, String>,
+    types: HashMap<String, String>,
+}
+
+/// La superficie pública de **cada** módulo, por su nombre (ruta).
+type Surfaces = HashMap<String, Surface>;
+
+/// Calcula la superficie pública de todos los módulos (M11.6a). Dos pasadas:
+/// 1. **Ítems `pub` definidos**: su global es `ns_prefix(módulo)::nombre` (lo de M11.3c).
+/// 2. **Reexports** (`pub from P import a as b`): el global es el ya **resuelto** de `a` en la
+///    superficie de `P`. Punto fijo: se repite hasta que una pasada no añade nada, para cubrir las
+///    cadenas reexport-de-reexport (el caso común —reexportar un `pub` definido— converge en una).
+fn build_surfaces(modules: &[Module]) -> Surfaces {
+    let mut surfaces: Surfaces = HashMap::new();
+    // Pasada 1: ítems pub definidos.
     for m in modules {
-        let set = map.entry(m.name.clone()).or_default();
+        let prefix = module_prefix(m);
+        let s = surfaces.entry(m.name.clone()).or_default();
         for f in &m.program.functions {
             if f.is_pub {
-                set.insert(f.name.clone());
+                s.values.insert(f.name.clone(), global_fn(&prefix, &f.name));
+            }
+        }
+        for st in &m.program.structs {
+            if st.is_pub {
+                s.types.insert(st.name.clone(), global_fn(&prefix, &st.name));
+            }
+        }
+        for e in &m.program.enums {
+            if e.is_pub {
+                s.types.insert(e.name.clone(), global_fn(&prefix, &e.name));
+            }
+        }
+        for t in &m.program.traits {
+            if t.is_pub {
+                s.types.insert(t.name.clone(), global_fn(&prefix, &t.name));
             }
         }
     }
-    map
-}
-
-/// Por módulo, el conjunto de nombres de tipos **`pub`** (struct/enum/trait): los exportables vía
-/// `from M import Tipo` (M11.3c-2). Análogo a `recolectar_pub_fns`.
-fn recolectar_pub_tipos(modules: &[Module]) -> HashMap<String, HashSet<String>> {
-    let mut map: HashMap<String, HashSet<String>> = HashMap::new();
-    for m in modules {
-        let set = map.entry(m.name.clone()).or_default();
-        set.extend(m.program.structs.iter().filter(|s| s.is_pub).map(|s| s.name.clone()));
-        set.extend(m.program.enums.iter().filter(|e| e.is_pub).map(|e| e.name.clone()));
-        set.extend(m.program.traits.iter().filter(|t| t.is_pub).map(|t| t.name.clone()));
+    // Pasada 2: reexports, a punto fijo.
+    loop {
+        // (módulo destino, nombre local, global, es_tipo)
+        let mut additions: Vec<(String, String, String, bool)> = Vec::new();
+        for m in modules {
+            for fi in m.program.from_imports.iter().filter(|f| f.is_pub) {
+                let from = surfaces.get(&fi.module);
+                let actual = surfaces.get(&m.name);
+                for n in &fi.names {
+                    let local = n.local().to_string();
+                    let Some(fs) = from else { continue };
+                    if let Some(g) = fs.values.get(&n.name)
+                        && actual.is_none_or(|s| !s.values.contains_key(&local))
+                    {
+                        additions.push((m.name.clone(), local, g.clone(), false));
+                    } else if let Some(g) = fs.types.get(&n.name)
+                        && actual.is_none_or(|s| !s.types.contains_key(&local))
+                    {
+                        additions.push((m.name.clone(), local, g.clone(), true));
+                    }
+                }
+            }
+        }
+        if additions.is_empty() {
+            break;
+        }
+        for (module, local, global, es_tipo) in additions {
+            let s = surfaces.entry(module).or_default();
+            if es_tipo {
+                s.types.insert(local, global);
+            } else {
+                s.values.insert(local, global);
+            }
+        }
     }
-    map
+    surfaces
 }
 
 /// Por módulo, el conjunto de **todos** los nombres de tipos (struct/enum/trait, `pub` o no). Sirve
@@ -510,8 +590,7 @@ enum FromTarget {
 /// entre los propios imports): una colisión pide renombrar con `as`.
 fn clasificar_from_imports(
     m: &Module,
-    pub_fns: &HashMap<String, HashSet<String>>,
-    pub_types: &HashMap<String, HashSet<String>>,
+    surfaces: &Surfaces,
     tipos: &HashMap<String, HashSet<String>>,
 ) -> Result<(NameMap, NameMap), LoadError> {
     // Nombres ya ocupados en el módulo: funciones y tipos propios (para detectar colisiones).
@@ -524,7 +603,7 @@ fn clasificar_from_imports(
     for fi in &m.program.from_imports {
         let from = &fi.module;
         for n in &fi.names {
-            let target = clasificar_from_name(&m.source, &m.name, from, n, pub_fns, pub_types, tipos)?;
+            let target = clasificar_from_name(&m.source, &m.name, from, n, surfaces, tipos)?;
             let local = n.local().to_string();
             if !locales.insert(local.clone()) {
                 return Err(render(&m.source, n.line, n.col, &m.name, &format!(
@@ -548,15 +627,14 @@ fn clasificar_from_name(
     module: &str,
     from: &str,
     name: &crate::ast::ImportName,
-    pub_fns: &HashMap<String, HashSet<String>>,
-    pub_types: &HashMap<String, HashSet<String>>,
+    surfaces: &Surfaces,
     tipos: &HashMap<String, HashSet<String>>,
 ) -> Result<FromTarget, LoadError> {
-    if pub_fns.get(from).is_some_and(|s| s.contains(&name.name)) {
-        return Ok(FromTarget::Funcion(format!("{}::{}", ns_prefix(from), name.name)));
+    if let Some(g) = surfaces.get(from).and_then(|s| s.values.get(&name.name)) {
+        return Ok(FromTarget::Funcion(g.clone()));
     }
-    if pub_types.get(from).is_some_and(|s| s.contains(&name.name)) {
-        return Ok(FromTarget::Tipo(format!("{}::{}", ns_prefix(from), name.name)));
+    if let Some(g) = surfaces.get(from).and_then(|s| s.types.get(&name.name)) {
+        return Ok(FromTarget::Tipo(g.clone()));
     }
     // No exporta el nombre: ¿existe como tipo privado? (mensaje más preciso que "no existe").
     if tipos.get(from).is_some_and(|s| s.contains(&name.name)) {
@@ -579,10 +657,9 @@ struct Resolver<'a> {
     /// calificado `circulo.item`. Los módulos que solo aparecen en `from M import …` **no** entran
     /// aquí (estilo Python: no traen el leaf).
     imports: ImportMap,
-    /// Funciones `pub` por módulo (de todo el programa), para verificar `M.f` y los from-imports.
-    pub_fns: &'a HashMap<String, HashSet<String>>,
-    /// Tipos `pub` por módulo, para la construcción de enum calificada `M.Color.Rojo` (M11.3c-3).
-    pub_types: &'a HashMap<String, HashSet<String>>,
+    /// Superficie pública por módulo (M11.6a): para resolver `M.f` / `M.Color.Rojo` al global de
+    /// destino (que con reexports puede no ser `ns_prefix(M)::f`).
+    surfaces: &'a Surfaces,
     /// Pila de ámbitos locales: nombres que tapan a las funciones de nivel superior.
     scopes: Vec<HashSet<String>>,
 }
@@ -592,8 +669,7 @@ impl<'a> Resolver<'a> {
     /// y la validación `pub` las hizo `clasificar_from_imports`, así que aquí solo se vuelcan.
     fn new(
         m: &Module,
-        pub_fns: &'a HashMap<String, HashSet<String>>,
-        pub_types: &'a HashMap<String, HashSet<String>>,
+        surfaces: &'a Surfaces,
         from_values: &NameMap,
         import_map: &ImportMap,
     ) -> Self {
@@ -606,7 +682,7 @@ impl<'a> Resolver<'a> {
         for (local, global) in from_values {
             own.insert(local.clone(), global.clone());
         }
-        Resolver { own, imports: import_map.clone(), pub_fns, pub_types, scopes: Vec::new() }
+        Resolver { own, imports: import_map.clone(), surfaces, scopes: Vec::new() }
     }
 
     fn resolve_module(&mut self, m: &mut Module) -> Result<(), LoadError> {
@@ -784,14 +860,14 @@ impl<'a> Resolver<'a> {
         let Some(ruta) = self.imports.get(leaf) else {
             return Ok(None); // no es un módulo importado (su leaf)
         };
-        let exporta = self.pub_fns.get(ruta).is_some_and(|s| s.contains(name))
-            || self.pub_types.get(ruta).is_some_and(|s| s.contains(name));
-        if !exporta {
-            return Err(render(src, object.line, object.col, module, &format!(
+        let surf = self.surfaces.get(ruta);
+        let global = surf.and_then(|s| s.values.get(name).or_else(|| s.types.get(name)));
+        match global {
+            Some(g) => Ok(Some(g.clone())),
+            None => Err(render(src, object.line, object.col, module, &format!(
                 "el módulo '{}' no exporta '{}' (¿falta 'pub'?)", ruta, name
-            )));
+            ))),
         }
-        Ok(Some(format!("{}::{}", ns_prefix(ruta), name)))
     }
 }
 
@@ -805,8 +881,8 @@ struct TypeRewriter<'a> {
     types: &'a NameMap,
     /// Módulos importados (leaf → ruta, M11.5) en este módulo, para resolver `c.Tipo` calificado.
     imports: &'a ImportMap,
-    /// Tipos `pub` por módulo (de todo el programa), para validar `M.Tipo` calificado.
-    pub_types: &'a HashMap<String, HashSet<String>>,
+    /// Superficie pública por módulo (M11.6a), para validar `c.Tipo` calificado y dar su global.
+    surfaces: &'a Surfaces,
     /// Pila de conjuntos de parámetros de tipo en ámbito (los `<…>` de fn/impl/struct/enum).
     tparams: Vec<HashSet<String>>,
 }
@@ -815,9 +891,9 @@ impl<'a> TypeRewriter<'a> {
     fn new(
         types: &'a NameMap,
         imports: &'a ImportMap,
-        pub_types: &'a HashMap<String, HashSet<String>>,
+        surfaces: &'a Surfaces,
     ) -> Self {
-        TypeRewriter { types, imports, pub_types, tparams: Vec::new() }
+        TypeRewriter { types, imports, surfaces, tparams: Vec::new() }
     }
 
     fn en_ambito(&self, name: &str) -> bool {
@@ -833,9 +909,9 @@ impl<'a> TypeRewriter<'a> {
     fn rewrite_name(&self, name: &mut String) {
         if let Some((leaf, ty)) = name.split_once('.') {
             if let Some(ruta) = self.imports.get(leaf)
-                && self.pub_types.get(ruta).is_some_and(|s| s.contains(ty))
+                && let Some(g) = self.surfaces.get(ruta).and_then(|s| s.types.get(ty))
             {
-                *name = format!("{}::{}", ns_prefix(ruta), ty);
+                *name = g.clone();
             }
             return; // calificado: resuelto o dejado para que el checker lo rechace
         }

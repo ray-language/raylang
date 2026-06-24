@@ -1,0 +1,22 @@
+// Ejecuta con:  cargo run --quiet -- examples/capsula/main.ray
+//
+// Cápsulas de módulo con mod.ray (M11.6a). El proyecto:
+//
+//   examples/capsula/
+//     ├── main.ray
+//     └── geo/                       <- CÁPSULA (tiene mod.ray)
+//         ├── mod.ray                <- la cara pública: reexporta de los submódulos
+//         ├── util.ray               <- interno
+//         └── formas/circulo.ray     <- interno
+//
+// Desde fuera solo se ve la cápsula `geo` y lo que su mod.ray reexporta:
+//   - geo.Circulo (struct reexportado)
+//   - geo.area    (función reexportada)
+// La estructura interna (geo/formas/circulo, geo/util) queda oculta tras la fachada.
+
+import geo;
+
+fn main() -> int {
+  let c = geo.Circulo { radio: 4 };   // tipo reexportado por la cápsula
+  geo.area(c)                          // 3 * 16 = 48  -> código de salida
+}

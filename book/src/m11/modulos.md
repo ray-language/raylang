@@ -193,10 +193,51 @@ nombres a un **mapa leaf → ruta**. Un solo archivo, o una carpeta plana, queda
 `/`, la traducción es la identidad y el leaf es el propio nombre). El intérprete y la VM siguen sin
 enterarse: ven nombres planos con `::`.
 
+## Aislar módulos: la cápsula `mod.ray` (M11.6a)
+
+M11.5 organiza por carpetas, pero `pub` sigue siendo **binario**: un ítem es privado a su archivo o
+alcanzable desde **todo** el proyecto por su ruta. No hay forma de decir *"esto es interno a `geo/`"*,
+ni un directorio es **direccionable** (`geo/` no es nada, solo un prefijo). M11.6 lo arregla con un
+modelo de **cápsula**, y la pieza es un archivo: **`mod.ray`**.
+
+La regla: **la presencia de `geo/mod.ray` convierte `geo/` en una cápsula**.
+
+```rust
+// geo/formas/circulo.ray   (submódulo interno)
+import geo/util;
+pub struct Circulo { radio: int }
+pub fn area(c: Circulo) -> int { 3 * util.cuadrado(c.radio) }
+
+// geo/mod.ray   (la cara pública de la cápsula)
+pub from geo/formas/circulo import Circulo, area;
+
+// main.ray
+import geo;                       // direccionable: carga geo/mod.ray
+fn main() -> int {
+  let c = geo.Circulo { radio: 4 };   // solo lo que mod.ray reexporta
+  geo.area(c)
+}
+```
+
+`import geo;` carga `geo/mod.ray` (su módulo de identidad es `geo`). La novedad de sintaxis es una
+sola: **`pub from … import …`** — un `from`-import marcado `pub` que, además de traer los nombres al
+ámbito de `mod.ray`, los **añade a la superficie pública** de `geo`. Así la cápsula expone una
+**fachada** (`geo.Circulo`, `geo.area`) y oculta su estructura interna (`geo/formas/circulo`,
+`geo/util`).
+
+La pieza de implementación que lo hace posible: la **superficie pública** de cada módulo deja de ser
+un *conjunto de nombres* y pasa a ser un mapa **nombre → global de destino**. Para un `pub`
+**definido**, el global es el de siempre (`geo::formas::circulo::area`). Para un **reexport**, el
+global es el del ítem **en su módulo de origen** —que se define en *otro* sitio—, resuelto a punto
+fijo para encadenar reexports. Al acceder `geo.area`, el resolutor consulta esa superficie y baja
+directo al global real. Todo en el loader; el runtime no se entera.
+
+> M11.6a trae la **fachada** (direccionar + reexportar). El *enforcement* —que importar un submódulo
+> interno desde fuera de la cápsula sea **error**— es M11.6b.
+
 ## Lo que queda fuera (a propósito)
 
-- **Imports relativos** (`import ./util;`), **`mod.ray`** (directorio-como-módulo), `pub` granular
-  (por campo), *re-exports* → futuro.
+- **Imports relativos** (`import ./util;`), `pub` granular (por campo) → futuro.
 
 > La lección de M11.3 es que una *feature* que parece muy de "sistema" —cargar archivos, espacios
 > de nombres, visibilidad— cabe entera en el front-end si ya tienes la disciplina del **erasure**.

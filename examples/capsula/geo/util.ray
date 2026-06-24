@@ -1,0 +1,4 @@
+// Submódulo interno de la cápsula `geo`: examples/capsula/geo/util.ray
+// Lo usa circulo.ray; no forma parte de la cara pública de `geo` (no se reexporta en mod.ray).
+
+pub fn cuadrado(n: int) -> int { n * n }

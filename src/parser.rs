@@ -78,7 +78,13 @@ impl Parser {
             }
             // M11.3b: `from M import a [as b]{, …};` trae nombres al ámbito.
             if self.check(&TokenKind::From) {
-                from_imports.push(self.import_from_decl()?);
+                from_imports.push(self.import_from_decl(false)?);
+                continue;
+            }
+            // M11.6a: `pub from M import …;` reexporta (construye la cara pública de un `mod.ray`).
+            if self.check(&TokenKind::Pub) && self.check_next(&TokenKind::From) {
+                self.advance(); // 'pub'
+                from_imports.push(self.import_from_decl(true)?);
                 continue;
             }
             // M10.1: las anotaciones (`@nombre[(args)]`) preceden a la declaración.
@@ -143,9 +149,10 @@ impl Parser {
         Ok((path, line, col))
     }
 
-    /// from_import_decl = 'from' module_path 'import' name { ',' name } ';'   (M11.3b / M11.5)
+    /// from_import_decl = [ 'pub' ] 'from' module_path 'import' name { ',' name } ';'  (M11.3b/.5/.6a)
     /// name            = IDENT [ 'as' IDENT ]
-    fn import_from_decl(&mut self) -> Result<FromImport, ParseError> {
+    /// `is_pub` (M11.6a): el `pub` ya lo consumió el bucle de `parse_program` (reexport).
+    fn import_from_decl(&mut self, is_pub: bool) -> Result<FromImport, ParseError> {
         let kw = self.expect(&TokenKind::From, "'from'")?;
         let (module, _, _) = self.module_path()?;
         self.expect(&TokenKind::Import, "'import' tras 'from M'")?;
@@ -163,7 +170,7 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::Semicolon, "';' para cerrar el 'from M import …'")?;
-        Ok(FromImport { module, names, line: kw.line, col: kw.col })
+        Ok(FromImport { module, names, is_pub, line: kw.line, col: kw.col })
     }
 
     /// Error si hay `pub` donde no se admite (hoy: un `impl`, que no se exporta por sí mismo;
@@ -1161,6 +1168,12 @@ impl Parser {
         self.peek_kind() == kind
     }
 
+    /// `true` si el **siguiente** token (uno por delante del actual) es `kind`. Para el lookahead de
+    /// `pub from …` (M11.6a), que hay que distinguir de `pub fn`/`pub struct`/etc.
+    fn check_next(&self, kind: &TokenKind) -> bool {
+        self.tokens.get(self.pos + 1).map(|t| &t.kind) == Some(kind)
+    }
+
     /// Consume y devuelve el token actual (clonado). No avanza más allá de `Eof`.
     fn advance(&mut self) -> Token {
         let tok = self.tokens[self.pos].clone();
@@ -1304,6 +1317,16 @@ mod tests {
     fn from_import_admite_ruta_de_directorios() {
         let prog = parse_prog("from geo/formas import area;\nfn main() -> int { 0 }\n");
         assert_eq!(prog.from_imports[0].module, "geo/formas");
+        assert!(!prog.from_imports[0].is_pub, "un 'from' normal no es reexport");
+    }
+
+    #[test]
+    fn pub_from_marca_reexport() {
+        // M11.6a: `pub from M import …` es un reexport (cara pública de un mod.ray).
+        let prog = parse_prog("pub from geo/formas/circulo import area, Circulo;\nfn main() -> int { 0 }\n");
+        assert_eq!(prog.from_imports.len(), 1);
+        assert!(prog.from_imports[0].is_pub, "el 'pub from' marca is_pub");
+        assert_eq!(prog.from_imports[0].names.len(), 2);
     }
 
     #[test]

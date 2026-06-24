@@ -1,0 +1,7 @@
+// mod.ray: el archivo que convierte el directorio `geo/` en una CÁPSULA (M11.6a).
+//
+// Su presencia hace que `geo/` sea direccionable: desde fuera se escribe `import geo;`.
+// Aquí se arma la CARA PÚBLICA de la cápsula reexportando ítems de los submódulos internos
+// con `pub from … import …`. Lo que NO se reexporte (p. ej. geo/util.cuadrado) queda interno.
+
+pub from geo/formas/circulo import Circulo, area;

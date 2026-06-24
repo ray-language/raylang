@@ -1459,6 +1459,10 @@ fn check_ufcs(c: Checker, name: string, recv_ty: Type, obj: Expr, cargs: [Expr],
 // ¿`name` nombra un builtin que el checker auto-alojado conoce? (Los mismos que `check_named_call`.)
 fn is_known_builtin(name: string) -> bool {
     name == "print" || name == "eprint" || name == "len" || name == "push"
+        || name == "to_string" || name == "trim" || name == "split" || name == "chars"
+        || name == "contains" || name == "replace" || name == "starts_with" || name == "ends_with"
+        || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat"
+        || name == "join"
 }
 
 // ¿`name` nombra algo llamable? (builtin, variable local de función, o función de nivel superior.)
@@ -1490,6 +1494,19 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
     }
     if (name == "len") { return check_len(c, cargs, line, col); }
     if (name == "push") { return check_push(c, cargs, line, col); }
+    if (name == "to_string") { return check_to_string(c, cargs, line, col); }
+    if (name == "trim") { return check_trim(c, cargs, line, col); }
+    if (name == "to_upper") { return check_to_upper(c, cargs, line, col); }
+    if (name == "to_lower") { return check_to_lower(c, cargs, line, col); }
+    if (name == "chars") { return check_chars(c, cargs, line, col); }
+    if (name == "split") { return check_split(c, cargs, line, col); }
+    if (name == "replace") { return check_replace(c, cargs, line, col); }
+    if (name == "starts_with") { return check_starts_with(c, cargs, line, col); }
+    if (name == "ends_with") { return check_ends_with(c, cargs, line, col); }
+    if (name == "substring") { return check_substring(c, cargs, line, col); }
+    if (name == "repeat") { return check_repeat(c, cargs, line, col); }
+    if (name == "join") { return check_join(c, cargs, line, col); }
+    if (name == "contains") { return check_contains(c, cargs, line, col); }
     match (lookup(c, name)) {
         Option.Some(v) => { return call_type(c, v.ty, cargs, line, col); },
         Option.None => {},
@@ -1630,6 +1647,160 @@ fn check_push(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, Ty
         },
         _ => Result.Err(terr(cargs[0].line, cargs[0].col, "push espera un arreglo como primer argumento, no " + type_str(a0))),
     }
+}
+
+// =====================================================================
+// Builtins de string (M14.6a): to_string/trim/split/chars/contains/replace/starts_with/ends_with/
+// to_upper/to_lower/substring/repeat/join. Reglas y mensajes idénticos a `src/builtins.rs`.
+// =====================================================================
+
+// Mensaje de aridad idéntico al helper `arity` de Rust.
+fn b_arity(name: string, n: int, det: string, got: int, line: int, col: int) -> Result<int, TypeError> {
+    if (got != n) {
+        let plural = if (n == 1) { "argumento" } else { "argumentos" };
+        return Result.Err(terr(line, col, name + " espera " + to_string(n) + " " + plural + det + ", se le pasaron " + to_string(got)));
+    }
+    Result.Ok(0)
+}
+
+// Tipa todos los argumentos (como hace Rust antes de aplicar la regla del builtin).
+fn check_args_types(c: Checker, cargs: [Expr]) -> Result<[Type], TypeError> {
+    var ts: [Type] = [];
+    var i = 0;
+    while (i < len(cargs)) {
+        let t = check_expr(c, cargs[i])?;
+        push(ts, t);
+        i = i + 1;
+    }
+    Result.Ok(ts)
+}
+
+// Exige que el argumento `i` sea string; `msg` termina en "no " (se le añade el tipo encontrado).
+fn want_string(a: [Type], cargs: [Expr], i: int, msg: string) -> Result<int, TypeError> {
+    if (!type_eq(a[i], Type.TString)) {
+        return Result.Err(terr(cargs[i].line, cargs[i].col, msg + type_str(a[i])));
+    }
+    Result.Ok(0)
+}
+
+fn want_int(a: [Type], cargs: [Expr], i: int, msg: string) -> Result<int, TypeError> {
+    if (!type_eq(a[i], Type.TInt)) {
+        return Result.Err(terr(cargs[i].line, cargs[i].col, msg + type_str(a[i])));
+    }
+    Result.Ok(0)
+}
+
+fn check_to_string(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("to_string", 1, "", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    if (!(type_eq(a[0], Type.TInt) || type_eq(a[0], Type.TFloat) || type_eq(a[0], Type.TBool) || type_eq(a[0], Type.TString) || type_eq(a[0], Type.TChar))) {
+        return Result.Err(terr(cargs[0].line, cargs[0].col, "to_string solo convierte int/float/bool/string/char, no " + type_str(a[0])));
+    }
+    Result.Ok(Type.TString)
+}
+
+fn check_trim(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("trim", 1, "", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "trim espera un string, no ")?;
+    Result.Ok(Type.TString)
+}
+
+fn check_to_upper(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("to_upper", 1, "", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "to_upper espera un string, no ")?;
+    Result.Ok(Type.TString)
+}
+
+fn check_to_lower(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("to_lower", 1, "", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "to_lower espera un string, no ")?;
+    Result.Ok(Type.TString)
+}
+
+fn check_chars(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("chars", 1, "", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "chars espera un string, no ")?;
+    Result.Ok(Type.TArray(Type.TChar))
+}
+
+fn check_split(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("split", 2, " (string, separador)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "split espera un string como primer argumento, no ")?;
+    want_string(a, cargs, 1, "split espera un string como separador, no ")?;
+    Result.Ok(Type.TArray(Type.TString))
+}
+
+fn check_replace(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("replace", 3, " (string, de, a)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "replace espera un string como primer argumento, no ")?;
+    want_string(a, cargs, 1, "replace espera un string en 'de', no ")?;
+    want_string(a, cargs, 2, "replace espera un string en 'a', no ")?;
+    Result.Ok(Type.TString)
+}
+
+fn check_starts_with(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("starts_with", 2, " (string, prefijo)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "starts_with espera un string como primer argumento, no ")?;
+    want_string(a, cargs, 1, "starts_with espera un string como prefijo, no ")?;
+    Result.Ok(Type.TBool)
+}
+
+fn check_ends_with(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("ends_with", 2, " (string, sufijo)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "ends_with espera un string como primer argumento, no ")?;
+    want_string(a, cargs, 1, "ends_with espera un string como sufijo, no ")?;
+    Result.Ok(Type.TBool)
+}
+
+fn check_substring(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("substring", 3, " (string, inicio, fin)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "substring espera un string como primer argumento, no ")?;
+    want_int(a, cargs, 1, "substring espera un int como inicio, no ")?;
+    want_int(a, cargs, 2, "substring espera un int como fin, no ")?;
+    Result.Ok(Type.TString)
+}
+
+fn check_repeat(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("repeat", 2, " (string, veces)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "repeat espera un string como primer argumento, no ")?;
+    want_int(a, cargs, 1, "repeat espera un int como nº de veces, no ")?;
+    Result.Ok(Type.TString)
+}
+
+fn check_join(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("join", 2, " (arreglo de string, separador)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    if (!type_eq(a[0], Type.TArray(Type.TString))) {
+        return Result.Err(terr(cargs[0].line, cargs[0].col, "join espera un [string] como primer argumento, no " + type_str(a[0])));
+    }
+    want_string(a, cargs, 1, "join espera un string como separador, no ")?;
+    Result.Ok(Type.TString)
+}
+
+// contains(x, y) -> bool: ad-hoc polimórfico. String: ¿subcadena? Arreglo: ¿pertenencia (mismo elem)?
+fn check_contains(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("contains", 2, " (string/arreglo, valor)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    match (a[0]) {
+        Type.TString => { want_string(a, cargs, 1, "contains espera un string como subcadena, no ")?; },
+        Type.TArray(elem) => {
+            if (!type_eq(a[1], elem)) {
+                return Result.Err(terr(cargs[1].line, cargs[1].col, "contains: el arreglo es de " + type_str(elem) + " pero se busca " + type_str(a[1])));
+            }
+        },
+        _ => { return Result.Err(terr(cargs[0].line, cargs[0].col, "contains espera un string o un arreglo, no " + type_str(a[0]))); },
+    }
+    Result.Ok(Type.TBool)
 }
 
 fn call_type(c: Checker, ty: Type, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {

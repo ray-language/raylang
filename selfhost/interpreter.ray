@@ -521,6 +521,10 @@ fn eval_bool(c: Interp, e: Expr) -> Result<bool, Flow> {
 fn is_builtin(name: string) -> bool {
     name == "print" || name == "eprint" || name == "to_string" || name == "panic"
         || name == "len" || name == "push"
+        || name == "trim" || name == "split" || name == "chars" || name == "contains"
+        || name == "replace" || name == "starts_with" || name == "ends_with"
+        || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat"
+        || name == "join"
 }
 
 // `len` de un arreglo o un string (nº de caracteres). Map → M14.4c/d.
@@ -529,6 +533,54 @@ fn builtin_len(v: Value) -> int {
         Value.VArray(elems) => len(elems),
         Value.VStr(s) => len(s),
         _ => panic("len: se esperaba un arreglo o string"),
+    }
+}
+
+// Envuelve un `[char]`/`[string]` del host en un `VArray` de `VChar`/`VStr` (para chars/split).
+fn chars_to_value(cs: [char]) -> Value {
+    var out: [Value] = [];
+    var i = 0;
+    while (i < len(cs)) { push(out, Value.VChar(cs[i])); i = i + 1; }
+    Value.VArray(out)
+}
+
+fn strs_to_value(ss: [string]) -> Value {
+    var out: [Value] = [];
+    var i = 0;
+    while (i < len(ss)) { push(out, Value.VStr(ss[i])); i = i + 1; }
+    Value.VArray(out)
+}
+
+// join(arr, sep): une un arreglo de strings con el separador (manual, sobre `[Value]` de `VStr`).
+fn builtin_join(arrv: Value, sep: string) -> string {
+    match (arrv) {
+        Value.VArray(elems) => {
+            var s = "";
+            var i = 0;
+            while (i < len(elems)) {
+                if (i > 0) { s = s + sep; }
+                s = s + as_str(elems[i]);
+                i = i + 1;
+            }
+            s
+        },
+        _ => panic("join: se esperaba un arreglo"),
+    }
+}
+
+// contains(x, y): ad-hoc — subcadena (string) o pertenencia por igualdad estructural (arreglo).
+fn builtin_contains(x: Value, y: Value) -> bool {
+    match (x) {
+        Value.VStr(s) => contains(s, as_str(y)),
+        Value.VArray(elems) => {
+            var i = 0;
+            while (i < len(elems)) {
+                if (values_equal(elems[i], y)) { return true; }
+                i = i + 1;
+            }
+            false
+        },
+        _ => panic("contains: se esperaba string o arreglo"),
     }
 }
 
@@ -572,13 +624,25 @@ fn dispatch_builtin(c: Interp, name: string, vals: [Value], line: int, col: int)
     }
     if (name == "push") {
         // push(arr, x): muta el arreglo compartido (semántica de referencia del host).
-        match (vals[0]) {
+        return match (vals[0]) {
             Value.VArray(elems) => { push(elems, vals[1]); Result.Ok(Value.VUnit) },
             _ => panic("push: se esperaba un arreglo"),
-        }
-    } else {
-        panic("builtin no implementado en M14.4b: " + name)
+        };
     }
+    // --- Builtins de string (M14.6a): delegan en los del host ---
+    if (name == "trim") { return Result.Ok(Value.VStr(trim(as_str(vals[0])))); }
+    if (name == "to_upper") { return Result.Ok(Value.VStr(to_upper(as_str(vals[0])))); }
+    if (name == "to_lower") { return Result.Ok(Value.VStr(to_lower(as_str(vals[0])))); }
+    if (name == "chars") { return Result.Ok(chars_to_value(chars(as_str(vals[0])))); }
+    if (name == "split") { return Result.Ok(strs_to_value(split(as_str(vals[0]), as_str(vals[1])))); }
+    if (name == "replace") { return Result.Ok(Value.VStr(replace(as_str(vals[0]), as_str(vals[1]), as_str(vals[2])))); }
+    if (name == "starts_with") { return Result.Ok(Value.VBool(starts_with(as_str(vals[0]), as_str(vals[1])))); }
+    if (name == "ends_with") { return Result.Ok(Value.VBool(ends_with(as_str(vals[0]), as_str(vals[1])))); }
+    if (name == "substring") { return Result.Ok(Value.VStr(substring(as_str(vals[0]), as_int(vals[1]), as_int(vals[2])))); }
+    if (name == "repeat") { return Result.Ok(Value.VStr(repeat(as_str(vals[0]), as_int(vals[1])))); }
+    if (name == "join") { return Result.Ok(Value.VStr(builtin_join(vals[0], as_str(vals[1])))); }
+    if (name == "contains") { return Result.Ok(Value.VBool(builtin_contains(vals[0], vals[1]))); }
+    panic("builtin no implementado: " + name)
 }
 
 // La clave de tipo de un VALOR en runtime (para el despacho de métodos): el nombre del tipo nominal o

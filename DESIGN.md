@@ -2812,3 +2812,24 @@ Tras el intérprete, el self-hosting está **cerrado** (raylang lexea/parsea/che
   punta — el self-hosting está cerrado.** Diferido (fuera del corpus, como en el checker): builtins de
   string/IO/Map en el intérprete auto-alojado, TCO/`MAX_CALL_DEPTH`, `assert`/`sort`/resto del prelude.
   Siguiente hito posible: **M14.5** (la VM auto-alojada, capstone-del-capstone opcional).
+
+#### M14.6 — diferidos aditivos hacia la META-CIRCULARIDAD
+
+Norte: que el intérprete auto-alojado ejecute el **propio compilador auto-alojado** (lexer/parser/
+checker corriendo sobre sí mismos). El compilador usa builtins que el checker/intérprete auto-alojados
+aún no soportan (`to_string`/`chars`, `Map`, `parse_int`/`parse_float`, `panic`, …); cada grupo es un
+diferido aditivo (fila en el checker + impl en el intérprete, como M11.4).
+
+- **M14.6a COMPLETO** — **builtins de string** (checker + intérprete). El **checker auto-alojado** gana
+  `to_string`/`trim`/`split`/`chars`/`contains`/`replace`/`starts_with`/`ends_with`/`to_upper`/
+  `to_lower`/`substring`/`repeat`/`join` (reglas y mensajes byte-idénticos a `src/builtins.rs`; helpers
+  `b_arity`/`check_args_types`/`want_string`/`want_int` + una `check_*` por builtin, registradas en
+  `is_known_builtin`/`check_named_call`). El **intérprete auto-alojado** los implementa **delegando en
+  los del host** (`is_builtin`/`dispatch_builtin`; `chars`/`split` envuelven `[char]`/`[string]` en
+  `VArray`, `join`/`contains` van a mano sobre `[Value]`). **Gotcha cazado por el host checker**: al
+  reescribir la rama de `push` con `return` dentro del `match`, sus dos brazos quedaron **divergentes**
+  (`return` + `panic`) y el checker no podía calcular el tipo del `match` ("hay al menos un brazo") → se
+  arregló devolviendo el `match` (`return match {...}`) con el brazo normal cediendo el valor. Oráculo
+  (19 tests): snippet con toda la familia (UFCS + directa) + `chars`/indexar-string/recorrido → mismo
+  stdout + exit que Rust. Pendiente hacia meta-circularidad: `Map` (checker + intérprete), `panic` en el
+  checker, `parse_int`/`parse_float`, y luego ejecutar `selfhost/lex_dump.ray` sobre el intérprete.

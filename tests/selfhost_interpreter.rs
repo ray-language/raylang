@@ -325,6 +325,32 @@ fn map_filter_fold_snippets() {
 }
 
 #[test]
+fn string_builtins() {
+    // M14.6a: familia de string (to_string/to_upper/to_lower/len/starts_with/ends_with/contains/
+    // replace/substring/repeat/trim/split/join/chars) por UFCS y llamada directa.
+    comparar_fuente(
+        "fn main() -> int { \
+            let s = \"Hola, Mundo\"; \
+            print(to_string(42) + \"-\" + to_string(3.5) + \"-\" + to_string(true)); \
+            print(s.to_upper()); print(s.to_lower()); print(s.len()); \
+            print(s.starts_with(\"Hola\")); print(s.ends_with(\"do\")); print(s.contains(\"Mun\")); \
+            print(s.replace(\"o\", \"0\")); print(s.substring(0, 4)); print(\"ab\".repeat(3)); \
+            print(\"  x  \".trim()); \
+            let parts = \"a,b,c\".split(\",\"); print(parts); print(parts.len()); print(join(parts, \"-\")); \
+            let cs = chars(\"xyz\"); print(cs); print(cs[1]); \
+            print([1, 2, 3].contains(2)); \
+            0 \
+        }",
+        "in_strings.ray",
+    );
+    // chars + indexar string + recorrido.
+    comparar_fuente(
+        "fn main() -> int { let s = \"abc\"; var i = 0; while (i < s.len()) { print(s[i]); i = i + 1; } 0 }",
+        "in_str_idx.ray",
+    );
+}
+
+#[test]
 fn codigo_de_salida() {
     // El código de salida del runner es el int que devuelve main (0 si es unit).
     comparar_fuente("fn main() -> int { 42 }", "in_exit42.ray");

@@ -880,6 +880,17 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     raylang de punta a punta — self-hosting CERRADO.** Diferido (fuera del corpus): builtins string/IO/Map
     en el intérprete, TCO/`MAX_CALL_DEPTH`, resto del prelude (assert/sort). Siguiente posible: **M14.5**
     (VM auto-alojada, opcional).
+  - **M14.6 — diferidos hacia la META-CIRCULARIDAD** (que el intérprete auto-alojado ejecute el PROPIO
+    compilador auto-alojado). Cada grupo = fila en el checker + impl en el intérprete (como M11.4).
+    - **M14.6a COMPLETO** (347 lib + 19 en `tests/selfhost_interpreter.rs`; checker oráculo 24 intacto):
+      **builtins de string** (checker + intérprete). El **checker auto-alojado** acepta `to_string`/`trim`/
+      `split`/`chars`/`contains`/`replace`/`starts_with`/`ends_with`/`to_upper`/`to_lower`/`substring`/
+      `repeat`/`join` (reglas/mensajes byte-idénticos a `src/builtins.rs`; helpers `b_arity`/`want_string`/
+      `want_int` + `check_*` por builtin). El **intérprete** los implementa delegando en los del host.
+      **Gotcha (cazado por el host checker)**: un `match` con TODAS las ramas divergentes (`return`+`panic`,
+      al reescribir `push`) no tipa ("hay al menos un brazo") → `return match {...}` con el brazo normal
+      cediendo el valor. Pendiente: `Map`, `panic` en el checker, `parse_int`/`parse_float` → luego correr
+      `selfhost/lex_dump.ray` sobre el intérprete.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

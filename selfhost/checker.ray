@@ -20,7 +20,7 @@
 // `TNamed(nombre, args)`; se distinguen por en qué tabla —`structs`/`enums`— está el nombre). Los
 // ámbitos y las tablas de tipos usan `Map<K,V>`.
 
-from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind;
+from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind, FnExpr;
 
 // Error de tipos con ubicación (espejo de `TypeError` en Rust).
 pub struct TypeError { msg: string, line: int, col: int }
@@ -836,8 +836,30 @@ fn check_expr(c: Checker, e: Expr) -> Result<Type, TypeError> {
         EKind.EStructLit(name, fields) => check_struct_lit(c, name, fields, Option.None, e.line, e.col),
         EKind.EMatch(scrut, arms) => check_match(c, scrut, arms, Option.None, e.line, e.col),
         EKind.ETry(inner) => check_try(c, inner, e.line, e.col),
-        _ => Result.Err(terr(e.line, e.col, "expresión aún no soportada por el checker auto-alojado (funciones anónimas → fase posterior)")),
+        EKind.EFunc(fe) => check_func_expr(c, fe),
+        _ => Result.Err(terr(e.line, e.col, "expresión aún no soportada por el checker auto-alojado")),
     }
+}
+
+// Una función anónima `fn(params) -> R { cuerpo }` (M4.2, con captura): el cuerpo se verifica con los
+// ámbitos envolventes visibles (los parámetros encima), así que puede referenciar variables externas.
+// Solo se guarda/restaura el retorno en curso. Devuelve su tipo función.
+fn check_func_expr(c: Checker, fe: FnExpr) -> Result<Type, TypeError> {
+    var pi = 0;
+    while (pi < len(fe.params)) {
+        let p = fe.params[pi];
+        ensure_type(c, p.ty, p.line, p.col)?;
+        pi = pi + 1;
+    }
+    ensure_type(c, fe.ret, fe.line, fe.col)?;
+    let saved = c.current_return;
+    let r = check_fn_body(c, fe.params, fe.ret, fe.body, fe.line, fe.col, "la función anónima");
+    c.current_return = saved;
+    r?;
+    var ps: [Type] = [];
+    pi = 0;
+    while (pi < len(fe.params)) { push(ps, resolve_type(fe.params[pi].ty)); pi = pi + 1; }
+    Result.Ok(Type.TFn(ps, resolve_type(fe.ret)))
 }
 
 // El operador de propagación `expr?` (M6.3). El operando debe ser un `Result<T, E>` o un `Option<T>`;
@@ -991,9 +1013,11 @@ fn check_call(c: Checker, callee: Expr, cargs: [Expr], expected: Option<Type>, l
     }
 }
 
-// `obj.name(args)`. Si `obj` nombra un enum → construcción de variante con payload (el esperado fija
-// sus args de tipo). Si no, es una llamada al campo `name` del struct `obj` (que debe ser función).
+// `obj.name(args)`. Por orden: (1) construcción de enum `Enum.Variante(args)`; (2) llamada al CAMPO
+// `name` del struct receptor (de tipo función) —gana sobre UFCS—; (3) **UFCS** (M7.1): `name(recv,
+// args)`, el receptor como primer argumento. (Métodos de trait / bound / `dyn` → M14.3d-2/3/4.)
 fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
+    // (1) ¿el receptor nombra un enum? → construcción de variante.
     match (obj.kind) {
         EKind.EIdent(en) => {
             if (is_enum(c, en)) {
@@ -1002,8 +1026,59 @@ fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], expected
         },
         _ => {},
     }
-    let ty = check_field(c, obj, name)?;
-    call_type(c, ty, cargs, line, col)
+    let recv_ty = check_expr(c, obj)?;
+    // (2) ¿un campo del struct receptor con ese nombre (de tipo función)? Gana sobre la función libre.
+    match (recv_ty) {
+        Type.TNamed(sname, targs) => {
+            match (struct_field_type(c, sname, targs, name)) {
+                Option.Some(fty) => { return call_type(c, fty, cargs, line, col); },
+                Option.None => {},
+            }
+        },
+        _ => {},
+    }
+    // (3) UFCS: `name(recv, args)`.
+    check_ufcs(c, name, recv_ty, obj, cargs, line, col)
+}
+
+// El tipo del campo `fname` de un struct `sname` con args de tipo `targs`, ya sustituido (`None` si
+// no es un struct o no tiene ese campo). Compartido por el acceso a campo y la resolución UFCS.
+fn struct_field_type(c: Checker, sname: string, targs: [Type], fname: string) -> Option<Type> {
+    match (get(c.structs, sname)) {
+        Option.Some(fields) => {
+            match (find_field(fields, fname)) {
+                Option.Some(fty) => Option.Some(subst(fty, build_sigma(struct_tparams(c, sname), targs))),
+                Option.None => Option.None,
+            }
+        },
+        Option.None => Option.None,
+    }
+}
+
+// UFCS `recv.f(args)` ≡ `f(recv, args)`: el receptor pasa a ser el primer argumento. Reusa la
+// resolución de llamada por nombre (builtins, variable local, función libre, genéricos). Si `name` no
+// es llamable, el error habla de UFCS (no es ni campo ni función), mencionando el tipo del receptor.
+fn check_ufcs(c: Checker, name: string, recv_ty: Type, obj: Expr, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    if (!name_is_callable(c, name)) {
+        return Result.Err(terr(line, col, "no existe campo ni función '" + name + "' aplicable a " + type_str(recv_ty)));
+    }
+    var all: [Expr] = [];
+    push(all, obj);
+    var i = 0;
+    while (i < len(cargs)) { push(all, cargs[i]); i = i + 1; }
+    check_named_call(c, name, all, line, col)
+}
+
+// ¿`name` nombra un builtin que el checker auto-alojado conoce? (Los mismos que `check_named_call`.)
+fn is_known_builtin(name: string) -> bool {
+    name == "print" || name == "eprint" || name == "len" || name == "push"
+}
+
+// ¿`name` nombra algo llamable? (builtin, variable local de función, o función de nivel superior.)
+fn name_is_callable(c: Checker, name: string) -> bool {
+    if (is_known_builtin(name)) { return true; }
+    match (lookup(c, name)) { Option.Some(_) => { return true; }, Option.None => {}, }
+    contains_key(c.funcs, name)
 }
 
 // `obj.name` como expresión: construcción de variante de enum sin payload (`Enum.Variante`; el

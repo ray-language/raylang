@@ -726,6 +726,15 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     debe ser `Result<T,E>`/`Option<T>` y la función envolvente declarar retorno compatible (mensajes
     byte-idénticos). Oráculo: 4 válidos + 5 errores + `errores.ray`. **Queda M14.3d**: traits/impls/bounds/
     `@derive`/`dyn`/UFCS-métodos + resto del prelude (Eq/Show/Ord, map/filter/fold). DESIGN §23.4.
+  - **M14.3d-1 COMPLETO** (347 lib + 13 en `tests/selfhost_checker.rs`): **checker auto-alojado — UFCS +
+    funciones anónimas**. `check_call_field` resuelve `recv.f(args)` por orden: (1) construcción de enum,
+    (2) **campo** del struct receptor de tipo función (gana sobre UFCS), (3) **UFCS** (`check_ufcs`):
+    `f(recv, args)` con el receptor como primer arg, reusando `check_named_call` (builtins/libre/genérica
+    → el receptor cuenta para la inferencia). Si `name` no es llamable → `no existe campo ni función '…'
+    aplicable a …`. Helpers `struct_field_type`/`name_is_callable`/`is_known_builtin`. Funciones anónimas
+    (`check_func_expr`, nodo `EFunc`): cierre con captura (cuerpo ve ámbitos envolventes; `current_return`
+    guardado/restaurado) → `fn(params) -> R`. Oráculo: 6 válidos + 3 errores + `ufcs.ray`/`closures.ray`.
+    Diferido a d-2 (traits/impls), d-3 (bounds), d-4 (dyn/@derive/resto prelude). DESIGN §23.4.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

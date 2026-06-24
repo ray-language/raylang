@@ -224,13 +224,35 @@ fn errores_prelude_y_try() {
     comparar("fn f() -> int { let r = Result.Ok(5); 0 } fn main() -> int { 0 }", "scpe_uninf.ray");
 }
 
+#[test]
+fn ufcs_y_closures_validos() {
+    // UFCS: función libre como método (encadenada), receptor como primer argumento.
+    comparar("fn doble(x: int) -> int { x * 2 } fn main() -> int { let v = 5; v.doble().doble() }", "scu_ufcs.ray");
+    // Builtin como método.
+    comparar("fn main() -> int { let xs: [int] = [1, 2, 3]; xs.len() }", "scu_builtin.ray");
+    // Campo de struct (de tipo función) gana sobre la función libre homónima.
+    comparar("struct M { op: fn(int) -> int } fn op(a: int, b: int) -> int { a - b } fn main() -> int { let m = M { op: fn(x: int) -> int { x + 1 } }; m.op(41) }", "scu_field.ray");
+    // UFCS sobre una función genérica: el receptor cuenta para la inferencia.
+    comparar("fn cabeza<T>(xs: [T]) -> T { xs[0] } fn main() -> int { let xs: [int] = [10, 20]; xs.cabeza() }", "scu_gen.ray");
+    // Función anónima como valor + captura del entorno (closure).
+    comparar("fn aplica(f: fn(int) -> int, x: int) -> int { f(x) } fn main() -> int { let g = fn(n: int) -> int { n + 1 }; aplica(g, 41) }", "scu_closure.ray");
+    comparar("fn main() -> int { let base = 10; let f = fn(x: int) -> int { x + base }; f(5) }", "scu_capture.ray");
+}
+
+#[test]
+fn errores_ufcs_y_closures() {
+    comparar("fn main() -> int { let v = 5; v.inexistente() }", "scue_noufcs.ray");
+    comparar("fn doble(x: int) -> int { x * 2 } fn main() -> int { let b = true; b.doble() }", "scue_ufcsty.ray");
+    comparar("fn main() -> int { let f = fn(x: int) -> int { true }; 0 }", "scue_anonret.ray");
+}
+
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
 fn ejemplos_reales_validos() {
     let archivos = ["examples/fib.ray", "examples/fizzbuzz.ray", "examples/gcd.ray", "examples/primes.ray",
         "examples/structs.ray", "examples/match_figuras.ray", "examples/enums.ray", "examples/arrays.ray",
         "examples/matriz.ray", "examples/genericos.ray", "examples/tipos_genericos.ray", "examples/opcional.ray",
-        "examples/errores.ray"];
+        "examples/errores.ray", "examples/ufcs.ray", "examples/closures.ray"];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);

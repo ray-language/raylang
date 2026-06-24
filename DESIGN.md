@@ -2551,3 +2551,13 @@ Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el
   devuelve el valor desempaquetado (mensajes byte-idénticos). Oráculo: 4 válidos + 5 errores +
   `errores.ray`. Diferido a M14.3d: traits/impls/bounds/`@derive`/`dyn`/UFCS-métodos y el resto del
   prelude (Eq/Show/Ord, map/filter/fold).
+- **M14.3d-1 COMPLETO** — UFCS + funciones anónimas. `check_call_field` resuelve `recv.f(args)` por
+  orden: (1) construcción de enum, (2) **campo** del struct receptor de tipo función (gana sobre UFCS),
+  (3) **UFCS** (`check_ufcs`): `f(recv, args)` con el receptor como primer argumento, reusando
+  `check_named_call` (builtins/función libre/genérica → el receptor cuenta para la inferencia). Si
+  `name` no es llamable, el error habla de UFCS (`no existe campo ni función '…' aplicable a …`).
+  Helpers `struct_field_type` (campo sustituido, o `None`), `name_is_callable`/`is_known_builtin`.
+  Funciones anónimas (`check_func_expr`, nodo `EFunc`): cierre con captura (el cuerpo ve los ámbitos
+  envolventes; `current_return` se guarda/restaura), devuelve `fn(params) -> R`. Oráculo: 6 válidos +
+  3 errores + `ufcs.ray`/`closures.ray`. Diferido a d-2: traits/impls (despacho estático, `Self`,
+  métodos por defecto).

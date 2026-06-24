@@ -111,6 +111,12 @@ fn write_file(ruta: string, contenido: string) -> Result<int, string> {
     let r = __write_file(ruta, contenido);
     if (r[0] == "ok") { Result.Ok(len(contenido)) } else { Result.Err(r[1]) }
 }
+
+// Añade el contenido al final del archivo (lo crea si no existe); Ok(nº de caracteres) u Err(mensaje).
+fn append_file(ruta: string, contenido: string) -> Result<int, string> {
+    let r = __append_file(ruta, contenido);
+    if (r[0] == "ok") { Result.Ok(len(contenido)) } else { Result.Err(r[1]) }
+}
 "#;
 
 /// Parsea el prelude una vez. El `expect` no puede fallar: el fuente es una constante

@@ -48,6 +48,15 @@ pub fn is_builtin(name: &str) -> bool {
     lookup(name).is_some()
 }
 
+/// Añade `contents` al final del archivo `path` (lo crea si no existe). Helper compartido por ambos
+/// motores para el primitivo `__append_file` (M11.4b); la *impl* de ejecución no es metadato, pero
+/// es idéntica en los dos motores, así que vive aquí para no duplicarse.
+pub fn append_to_file(path: &str, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    f.write_all(contents.as_bytes())
+}
+
 // --- Helpers de las reglas ---
 
 /// Error de aridad "espera N argumento(s), se le pasaron M".
@@ -179,6 +188,19 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__write_file", " (ruta, contenido)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__write_file espera un string (la ruta), no {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__write_file espera un string (el contenido), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // exists(ruta) -> bool (M11.4b): ¿existe la ruta? Total (no falla).
+    Builtin { name: "exists", opcode: OpCode::Exists, check: |a| {
+        arity(a, 1, "exists", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("exists espera un string (la ruta), no {}", a[0]))); }
+        Ok(Type::Bool)
+    } },
+    // __append_file(path, contenido) -> [string] (M11.4b): ["ok"] o ["err", msg]. Prelude → Result.
+    Builtin { name: "__append_file", opcode: OpCode::AppendFile, check: |a| {
+        arity(a, 2, "__append_file", " (ruta, contenido)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__append_file espera un string (la ruta), no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__append_file espera un string (el contenido), no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
 ];

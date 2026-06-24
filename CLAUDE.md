@@ -320,6 +320,11 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   - **M11.4a COMPLETO** (309 tests lib): **más string** — `contains(s, sub) -> bool` (opcode
     `Contains`) y `replace(s, de, a) -> string` (opcode `Replace`, asigna heap). UFCS gratis
     (`s.contains(...)`, `s.replace(...)`). Oráculo `string_contains_replace_oraculo` (estrés GC).
+  - **M11.4b COMPLETO** (309 tests lib + 7 en `tests/io_cli.rs`): **I/O de archivos aditiva** —
+    `exists(ruta) -> bool` (opcode `Exists`, total) y `append_file(ruta, cont) -> Result<int,string>`
+    (primitivo `__append_file` opcode `AppendFile` + arreglo etiquetado `["ok"]`/`["err",msg]` +
+    envoltorio en el prelude, como M11.2c). Helper `builtins::append_to_file` compartido por ambos
+    motores (`OpenOptions::append`). I/O no determinista → integración por subproceso, no oráculo.
 - **M11.2 COMPLETO** (297 tests lib + `tests/io_cli.rs`): **I/O y API de runtime** (DESIGN §20.2).
   `main` sigue sin parámetros (§0); el exterior se toca por **builtins**. **La I/O falible devuelve
   `Option`** (norte "errores como valores"). **Patrón** (como M7.3): primitivos builtin que devuelven

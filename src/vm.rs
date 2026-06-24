@@ -366,6 +366,24 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::Exists => match self.pop() {
+                    HeapValue::Str(path) => self.push(HeapValue::Bool(std::path::Path::new(path.as_str()).exists())),
+                    _ => unreachable!("el checker garantiza un string"),
+                },
+                OpCode::AppendFile => {
+                    // El contenido está encima de la ruta (orden de los argumentos).
+                    let contents = self.pop();
+                    let path = self.pop();
+                    let (HeapValue::Str(path), HeapValue::Str(contents)) = (path, contents) else {
+                        unreachable!("el checker garantiza dos strings");
+                    };
+                    let elems = match crate::builtins::append_to_file(path.as_str(), contents.as_str()) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
 
                 // --- Structs (M3.2) ---
                 OpCode::MakeStruct(idx) => {

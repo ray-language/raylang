@@ -137,6 +137,11 @@ pub enum OpCode {
     /// Saca el contenido y la ruta; escribe el archivo y empuja un `[string]` etiquetado: `["ok"]`
     /// si se pudo, `["err", mensaje]` si no. Primitivo `__write_file`; el prelude → `Result`.
     WriteFile,
+    /// Saca una ruta; empuja un `bool`: ¿existe esa ruta? Builtin `exists` (total, no falla).
+    Exists,
+    /// Saca el contenido y la ruta; **añade** al final del archivo (lo crea si no existe) y empuja un
+    /// `[string]` etiquetado `["ok"]`/`["err", mensaje]`. Primitivo `__append_file`; el prelude → `Result`.
+    AppendFile,
 
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como

@@ -710,6 +710,22 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M11.4b: ¿existe la ruta? (total, no falla).
+            "exists" => match &values[0] {
+                Value::Str(path) => Value::Bool(std::path::Path::new(path).exists()),
+                _ => unreachable!("el checker garantiza un string"),
+            },
+            // M11.4b: añade al final del archivo (lo crea si no existe) → ["ok"] o ["err", msg].
+            "__append_file" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(path), Value::Str(contents)) => match crate::builtins::append_to_file(path, contents) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
+                    },
+                    _ => unreachable!("el checker garantiza dos strings"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             _ => unreachable!("builtin desconocido"),
         }
     }

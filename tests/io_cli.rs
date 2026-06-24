@@ -163,6 +163,46 @@ fn read_write_file_ida_y_vuelta_en_ambos_motores() {
     }
 }
 
+const APPEND_PROG: &str = r#"
+fn n_de(r: Result<int, string>) -> int {
+  match (r) { Result.Ok(n) => n, Result.Err(e) => 0 - 1, }
+}
+fn main() -> int {
+  let ruta = args()[0];
+  print(if (exists(ruta)) { "existe" } else { "no-existe" });   // no-existe
+  let a = n_de(append_file(ruta, "uno\n"));
+  let b = n_de(append_file(ruta, "dos\n"));
+  print(if (exists(ruta)) { "existe" } else { "no-existe" });   // existe
+  a + b
+}
+"#;
+
+#[test]
+fn exists_y_append_file_en_ambos_motores() {
+    let mut prog = std::env::temp_dir();
+    prog.push("ray_append_prog.ray");
+    std::fs::File::create(&prog).unwrap().write_all(APPEND_PROG.as_bytes()).unwrap();
+
+    for (i, vm) in [false, true].into_iter().enumerate() {
+        let mut datos = std::env::temp_dir();
+        datos.push(format!("ray_append_datos_{i}.txt"));
+        let _ = std::fs::remove_file(&datos);
+
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
+        if vm {
+            cmd.arg("--vm");
+        }
+        let out = cmd.arg(&prog).arg(&datos).output().expect("ejecuta raylang");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+
+        assert!(stdout.contains("no-existe"), "exists() es false antes de crear (vm={vm})\n{stdout}");
+        assert!(stdout.contains("existe"), "exists() es true tras append (vm={vm})\n{stdout}");
+        assert_eq!(out.status.code(), Some(8), "append_file devuelve nº de caracteres: 4+4 (vm={vm})");
+        // append acumula (no sobrescribe): dos líneas en disco.
+        assert_eq!(std::fs::read_to_string(&datos).unwrap(), "uno\ndos\n", "el archivo en disco (vm={vm})");
+    }
+}
+
 #[test]
 fn env_no_definida_da_none() {
     let mut path = std::env::temp_dir();

@@ -115,6 +115,15 @@ una vez más, **no sabe qué es `Result`**: solo devuelve arreglos de strings; e
 Con archivos, raylang ya puede **leer sus propias fuentes** — el último cimiento que faltaba para
 encarar el self-hosting.
 
+**Aditivos (M11.4b):** `exists(ruta) -> bool` (total, no falla) y `append_file(ruta, cont) ->
+Result<int, string>` (añade al final, crea si no existe). `append_file` reusa exactamente el patrón:
+primitivo `__append_file` con arreglo etiquetado + envoltorio en el prelude que arma el `Result`.
+
+```rust
+if (exists(ruta)) { … }                     // bool, directo
+append_file("log.txt", "una línea\n");      // acumula; no sobrescribe
+```
+
 ## Dos motores, otra vez el oráculo
 
 Como M11.1, esto **toca el runtime** (los primitivos son opcodes), así que vuelve la disciplina del
@@ -129,9 +138,10 @@ entorno, de los argumentos, del disco). Por eso se prueba en dos capas:
 
 ## Lo que queda fuera
 
-De archivos: *append*, borrado, `exists`, listar directorios, y *streaming* (es lectura/escritura
-del archivo **completo**). Son aditivos; llegarán cuando hagan falta. Lo que hay es lo justo para
-apps de CLI y para leer/escribir fuentes `.ray`.
+De archivos: borrado, listar directorios y *streaming* (es lectura/escritura del archivo
+**completo**). Son aditivos; llegarán cuando hagan falta. (`append` y `exists`, que estaban en esta
+lista, se saldaron en M11.4b.) Lo que hay es lo justo para apps de CLI y para leer/escribir fuentes
+`.ray`.
 
 > M11.2 cierra un círculo abierto en M6.3: los tipos `Option`/`Result` existían desde entonces, pero
 > hasta ahora casi todo el que los producía era el propio usuario. La I/O es su hábitat natural —el

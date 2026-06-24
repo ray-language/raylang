@@ -291,6 +291,26 @@ fn errores_bounds() {
     comparar(&format!("{t}fn dv<T: V>(x: T) -> int {{ x.otro() }} fn main() -> int {{ 0 }}"), "scbe_nomethod.ray");
 }
 
+#[test]
+fn impls_genericos_validos() {
+    let m = "struct C<T> { v: T } trait M { fn medir(self) -> int; } impl M for int { fn medir(self) -> int { self } } impl<T: M> M for C<T> { fn medir(self) -> int { self.v.medir() + 1 } } ";
+    // Impl genérico SIN bounds (el método no usa T): vale para cualquier C<T>.
+    comparar("struct C<T> { v: T } trait Cont { fn contar(self) -> int; } impl<T> Cont for C<T> { fn contar(self) -> int { 1 } } fn main() -> int { let ci = C { v: 42 }; let cs = C { v: \"x\" }; ci.contar() + cs.contar() }", "scgi_nobound.ray");
+    // Impl genérico ACOTADO (el cuerpo usa T.medir()).
+    comparar(&format!("{m}fn main() -> int {{ let c = C {{ v: 10 }}; c.medir() }}"), "scgi_bound.ray");
+    // Caja<Caja<int>>: diccionario anidado (satisfacción recursiva, validada en el sitio).
+    comparar(&format!("{m}fn main() -> int {{ let c2 = C {{ v: C {{ v: 100 }} }}; c2.medir() }}"), "scgi_nested.ray");
+    // Pasar un Caja<int> a otro genérico acotado.
+    comparar(&format!("{m}fn md<X: M>(a: X) -> int {{ a.medir() }} fn main() -> int {{ let c = C {{ v: 10 }}; md(c) }}"), "scgi_pass.ray");
+}
+
+#[test]
+fn errores_impls_genericos() {
+    comparar("struct C<T> { v: T } trait V { fn f(self) -> int; } impl<T, U> V for C<T> { fn f(self) -> int { 0 } } fn main() -> int { 0 }", "scgie_arity.ray");
+    comparar("struct C<T> { v: T } trait V { fn f(self) -> int; } impl<T> V for C<int> { fn f(self) -> int { 0 } } fn main() -> int { 0 }", "scgie_shape.ray");
+    comparar("struct C<T> { v: T } trait V { fn f(self) -> int; } impl<T: NoExiste> V for C<T> { fn f(self) -> int { 0 } } fn main() -> int { 0 }", "scgie_implbnd.ray");
+}
+
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
 fn ejemplos_reales_validos() {
@@ -298,7 +318,7 @@ fn ejemplos_reales_validos() {
         "examples/structs.ray", "examples/match_figuras.ray", "examples/enums.ray", "examples/arrays.ray",
         "examples/matriz.ray", "examples/genericos.ray", "examples/tipos_genericos.ray", "examples/opcional.ray",
         "examples/errores.ray", "examples/ufcs.ray", "examples/closures.ray", "examples/traits.ray",
-        "examples/bounds.ray", "examples/metodos_por_defecto.ray"];
+        "examples/bounds.ray", "examples/metodos_por_defecto.ray", "examples/impls_genericos.ray"];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);

@@ -2587,3 +2587,16 @@ Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el
   satisfacción (el veredicto). Oráculo: 4 válidos + 4 errores + `bounds.ray`/`metodos_por_defecto.ray`.
   Limitación: un cuerpo de método por defecto INVÁLIDO reporta su posición original (Rust renumera el
   clon) — solo afecta a errores contrived (colisión campo/método). Diferido a d-3b: impls genéricos.
+- **M14.3d-3b COMPLETO — M14.3d-3 COMPLETO** — impls genéricos (`impl<T: B> Trait for Caja<T>`).
+  `ensure_generic_impl_target` valida el objetivo genérico (aridad + el objetivo aplicado EXACTAMENTE a
+  los propios parámetros del impl, `Var` distintos). Idea central (como Rust): el método de un impl
+  genérico **es una función genérica acotada** — `method_fnsig` hereda `type_params`/`bounds` del impl,
+  así su FnSig (`Caja#medir<T: Medir>(self: Caja<T>)`) se resuelve con la misma `check_generic_call`
+  (inferencia + satisfacción de bounds) que cualquier función genérica — cero código nuevo de
+  resolución. `call_method` ramifica: concreto → `check_args`, genérico → `check_generic_call`.
+  `check_impl_bounds` valida los bounds del impl; `check_impl_bodies` pone `type_params`/`bounds` del
+  impl en ámbito (el cuerpo usa `T`: `self.contenido.medir()` con `T: Medir`). La satisfacción anidada
+  (`Caja<Caja<int>>`, pasar `Caja<int>` a otro genérico) la cubre el `impl_traits` por constructor
+  (shallow) — el diccionario anidado (closure) es lowering, omitido; el corpus válido no genera falsos
+  positivos. **M14.3d-3 COMPLETO.** Oráculo: 4 válidos + 3 errores + `impls_genericos.ray`. Diferido a
+  d-4: dyn + @derive + resto del prelude (Eq/Show/Ord, map/filter/fold).

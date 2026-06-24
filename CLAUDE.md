@@ -759,6 +759,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     OMITE; solo la satisfacción (veredicto). Oráculo: 4 válidos + 4 errores + `bounds.ray`/
     `metodos_por_defecto.ray`. Limitación: un cuerpo de defecto INVÁLIDO reporta su posición original
     (Rust renumera el clon; solo errores contrived). Diferido a d-3b (impls genéricos), d-4. DESIGN §23.4.
+  - **M14.3d-3b COMPLETO → M14.3d-3 COMPLETO** (347 lib + 19 en `tests/selfhost_checker.rs`): **checker
+    auto-alojado — impls genéricos** (`impl<T: B> Trait for Caja<T>`). `ensure_generic_impl_target` valida
+    el objetivo (aridad + aplicado exactamente a los propios params del impl, Var distintos). Idea central
+    (como Rust): el método de un impl genérico **es una función genérica acotada** — `method_fnsig` hereda
+    `type_params`/`bounds` del impl → su FnSig (`Caja#medir<T: Medir>(self: Caja<T>)`) se resuelve con la
+    misma `check_generic_call` (inferencia + bounds), cero código nuevo. `call_method` ramifica (concreto→
+    `check_args`, genérico→`check_generic_call`). `check_impl_bounds` valida los bounds del impl;
+    `check_impl_bodies` pone `type_params`/`bounds` del impl en ámbito. La satisfacción anidada (`Caja<
+    Caja<int>>`, pasar `Caja<int>` a otro genérico) la cubre `impl_traits` por constructor (shallow; el
+    diccionario anidado es lowering, omitido; el corpus válido no da falsos positivos). Oráculo: 4 válidos
+    + 3 errores + `impls_genericos.ray`. Diferido a d-4: dyn + @derive + resto del prelude (Eq/Show/Ord,
+    map/filter/fold). DESIGN §23.4.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

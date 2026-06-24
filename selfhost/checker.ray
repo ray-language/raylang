@@ -1154,12 +1154,18 @@ fn trait_has_method(ms: [MethodSig], method: string) -> bool {
 
 // Verifica una llamada a método `recv.m(args)` contra su firma (con `self` como primer argumento). El
 // `label` manglado (`Tipo#m`) aparece en un posible error de aridad/tipo de argumento (como en Rust).
+// Para un método de impl GENÉRICO la firma es genérica acotada → se infieren sus params y se chequean
+// sus bounds (igual que una función genérica).
 fn call_method(c: Checker, sig: FnSig, label: string, obj: Expr, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     var all: [Expr] = [];
     push(all, obj);
     var i = 0;
     while (i < len(cargs)) { push(all, cargs[i]); i = i + 1; }
-    check_args(c, sig.params, sig.ret, all, "'" + label + "'", line, col)
+    if (len(sig.type_params) == 0) {
+        check_args(c, sig.params, sig.ret, all, "'" + label + "'", line, col)
+    } else {
+        check_generic_call(c, sig.type_params, sig.params, sig.ret, sig.bounds, all, "'" + label + "'", line, col)
+    }
 }
 
 // El tipo del campo `fname` de un struct `sname` con args de tipo `targs`, ya sustituido (`None` si
@@ -1953,13 +1959,14 @@ fn impl_overrides(imp: ImplBlock, name: string) -> bool {
     false
 }
 
-// La FnSig de un método (params con Self→target, self incluido; ret con Self→target). El método de
-// un impl concreto es monomórfico (type_params vacío). Reusada por el método del impl y por el defecto.
-fn method_fnsig(params: [Param], ret: Type, target: Type) -> FnSig {
+// La FnSig de un método (params con Self→target, self incluido; ret con Self→target). Un impl concreto
+// pasa type_params/bounds vacíos; un impl genérico (M9.2b) pasa los suyos → el método ES una función
+// genérica acotada (`Caja#medir<T: Medir>(self: Caja<T>)`), resuelta con la misma inferencia/bounds.
+fn method_fnsig(params: [Param], ret: Type, target: Type, type_params: [string], bounds: [Bound]) -> FnSig {
     var ps: [Type] = [];
     var i = 0;
     while (i < len(params)) { push(ps, resolve_type(subst_self(params[i].ty, target))); i = i + 1; }
-    FnSig { params: ps, ret: resolve_type(subst_self(ret, target)), type_params: no_tparams(), bounds: no_bounds() }
+    FnSig { params: ps, ret: resolve_type(subst_self(ret, target)), type_params: type_params, bounds: bounds }
 }
 
 // Registra los traits (firmas) y valida + tabula los impls. M14.3d-2: solo impls CONCRETOS (genéricos
@@ -2002,6 +2009,9 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
         Option.Some(ms) => ms,
         Option.None => { return Result.Err(terr(imp.line, imp.col, "trait '" + imp.trait_name + "' no declarado")); },
     };
+    // M9.2b: los parámetros de tipo del impl entran en ámbito (`Caja<T>` y `x: T` válidos).
+    c.tparams = imp.type_params;
+    check_impl_bounds(c, imp)?;
     let target = resolve_type(imp.target);
     ensure_impl_target(c, target, imp.type_params, imp.line, imp.col)?;
     let key = type_key_str(target);
@@ -2038,7 +2048,7 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
                 if (contains_key(c.methods, mangled)) {
                     return Result.Err(terr(m.line, m.col, "método '" + m.name + "' ambiguo para " + type_str(target) + ": ya hay un impl que lo provee"));
                 }
-                insert(c.methods, mangled, method_fnsig(m.params, m.ret, target));
+                insert(c.methods, mangled, method_fnsig(m.params, m.ret, target, imp.type_params, imp.bounds));
             },
         }
         mi = mi + 1;
@@ -2052,12 +2062,30 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
             if (contains_key(c.methods, mangled)) {
                 return Result.Err(terr(imp.line, imp.col, "método '" + tm.name + "' ambiguo para " + type_str(target) + ": ya hay un impl que lo provee"));
             }
-            insert(c.methods, mangled, method_fnsig(tm.params, tm.ret, target));
+            insert(c.methods, mangled, method_fnsig(tm.params, tm.ret, target, imp.type_params, imp.bounds));
         }
         tj = tj + 1;
     }
     // Registrar que este tipo implementa este trait (M14.3d-3: satisfacción de bounds).
     insert(c.impl_traits, mangle(key, imp.trait_name), true);
+    c.tparams = no_tparams();
+    Result.Ok(0)
+}
+
+// Valida los bounds de un impl genérico: cada bound acota un parámetro de tipo que el impl declara,
+// con un trait existente. (Análogo a `check_bounds` para funciones.)
+fn check_impl_bounds(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
+    var i = 0;
+    while (i < len(imp.bounds)) {
+        let b = imp.bounds[i];
+        if (!contains_str(imp.type_params, b.param)) {
+            return Result.Err(terr(imp.line, imp.col, "el bound '" + b.param + ": " + b.trait_name + "' menciona un parámetro de tipo que el impl no declara"));
+        }
+        if (!contains_key(c.traits, b.trait_name)) {
+            return Result.Err(terr(imp.line, imp.col, "el bound '" + b.param + ": " + b.trait_name + "' usa un trait no declarado"));
+        }
+        i = i + 1;
+    }
     Result.Ok(0)
 }
 
@@ -2074,7 +2102,7 @@ fn ensure_impl_target(c: Checker, target: Type, type_params: [string], line: int
         return Result.Err(terr(line, col, "un tipo primitivo no es genérico: no admite parámetros de tipo en el impl"));
     }
     match (target) {
-        Type.TNamed(n, _) => {
+        Type.TNamed(n, args) => {
             if (!contains_key(c.structs, n) && !contains_key(c.enums, n)) {
                 return Result.Err(terr(line, col, "no se puede implementar para un tipo desconocido: '" + n + "'"));
             }
@@ -2085,11 +2113,38 @@ fn ensure_impl_target(c: Checker, target: Type, type_params: [string], line: int
                 }
                 Result.Ok(0)
             } else {
-                Result.Err(terr(line, col, "impls genéricos aún no soportados por el checker auto-alojado (M14.3d-3)"))
+                ensure_generic_impl_target(n, args, type_params, arity, line, col)
             }
         },
         _ => Result.Err(terr(line, col, "solo se puede implementar un trait para un struct, enum o primitivo")),
     }
+}
+
+// Impl genérico (M9.2b): la aridad casa y el objetivo se aplica EXACTAMENTE a los propios parámetros
+// de tipo del impl (cada uno un `Var` distinto): `impl<T> ... for Caja<T>`.
+fn ensure_generic_impl_target(n: string, args: [Type], type_params: [string], arity: int, line: int, col: int) -> Result<int, TypeError> {
+    if (arity != len(type_params)) {
+        return Result.Err(terr(line, col, "'" + n + "' espera " + to_string(arity)
+            + " parámetro(s) de tipo, el impl declara " + to_string(len(type_params))));
+    }
+    var bien = len(args) == len(type_params);
+    var vistos: [string] = [];
+    var i = 0;
+    while (bien && i < len(args)) {
+        match (args[i]) {
+            Type.TNamed(an, aargs) => {
+                if (len(aargs) != 0 || !contains_str(type_params, an) || contains_str(vistos, an)) { bien = false; }
+                else { push(vistos, an); }
+            },
+            _ => { bien = false; },
+        }
+        i = i + 1;
+    }
+    if (!bien) {
+        return Result.Err(terr(line, col, "el impl genérico debe aplicarse a '" + n + "<" + join_comma(type_params)
+            + ">' (sus propios parámetros de tipo, distintos)"));
+    }
+    Result.Ok(0)
 }
 
 // Comprueba que la firma de un método de impl coincide con la del trait, tras sustituir `Self` por el
@@ -2124,6 +2179,10 @@ fn check_impl_bodies(c: Checker, prog: Program) -> Result<int, TypeError> {
     var ii = 0;
     while (ii < len(prog.impls)) {
         let imp = prog.impls[ii];
+        // Para un impl genérico, sus parámetros de tipo y bounds entran en ámbito (el cuerpo del método
+        // usa `T`, p. ej. `self.contenido.medir()` con `T: Medir`).
+        c.tparams = imp.type_params;
+        c.bounds = imp.bounds;
         let target = resolve_type(imp.target);
         let key = type_key_str(target);
         var mi = 0;
@@ -2145,6 +2204,8 @@ fn check_impl_bodies(c: Checker, prog: Program) -> Result<int, TypeError> {
             }
             tj = tj + 1;
         }
+        c.tparams = no_tparams();
+        c.bounds = no_bounds();
         ii = ii + 1;
     }
     Result.Ok(0)

@@ -15,7 +15,8 @@
 
 | Idea | ¿Dónde pega? | Cuándo | Estado |
 |------|--------------|--------|--------|
-| Concurrencia (goroutines / async / suspend) | **Arquitectura de la VM** | **M12** | ✅ **desbloqueada**: la VM tiene stack/marcos explícitos (`frames`/`stack` en `vm.rs`); falta elegir dirección |
+| Concurrencia (goroutines / async / suspend) | **Arquitectura de la VM** | **M12** | 📌 dirección fijada (DESIGN §21): **CSP sobre la VM** — green threads cooperativos M:1, canales tipados acotados (backpressure), structured concurrency; data-race freedom **vía CSP** (no ownership); scheduler determinista para el oráculo; intérprete = oráculo secuencial. Diferido: algebraic effects (intérprete a pila explícita), M:N paralelo (GC thread-safe). Descartado para raylang: ownership/regiones |
+| **raylang de producción** (cambio de norte) | Todo el runtime | **rama aparte** | 💭 DESIGN §21.1: dejar de ser pedagógico → un solo motor (VM), ownership/actores, GC concurrente + M:N paralelo, algebraic effects, gestor de paquetes, FFI. No es una fase; vive en otra rama |
 | Null safety | Sistema de tipos | hecho | ✅ no hay `null` (`Option<T>`, M6) |
 | Introspección / reflection | Modelo de valores de la VM | post-M11 | 💤 puerta abierta (los valores cargan tipo en runtime) |
 | Structs vs interfaces/**traits** | Sistema de tipos / polimorfismo | **M9** | 📌 recomendación fijada (traits estilo Rust) |

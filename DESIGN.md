@@ -2104,3 +2104,50 @@ GC**: el handle es un `int` y los archivos abiertos viven en un **almacén de pr
 motores. Builtins: `open(ruta, modo) -> Result<int,string>`, `read_line_handle(h) ->
 Option<string>`, `write_handle(h, s) -> Result<int,string>`, `close(h) -> int`. No determinista →
 integración por subproceso.
+
+## 21. M12 — Concurrencia (dirección propuesta)
+
+Se analizó el "stack ideal" de un lenguaje moderno —*algebraic effects* (concurrencia *colorless*
+componible) + *structured concurrency* + ownership/regiones (data-race freedom) + runtime **M:N**
+preemptivo + backpressure *demand-driven*—. Como visión es el estado del arte; como M12 de raylang,
+**el stack completo no encaja** sin abandonar tres pilares del proyecto: el **oráculo de dos motores**,
+el **GC mono-hilo** y el modelo **GC'd con mutabilidad compartida**. La decisión es tomar las ideas
+**probadas que encajan** y diferir/descartar las research-grade, con razones.
+
+**Tensiones de fondo** (el *por qué*, no solo el *qué*):
+1. **Continuaciones vs. el intérprete.** Effects/async-colorless necesitan capturar y reanudar la
+   pila (continuaciones delimitadas). El **intérprete tree-walking recurre sobre la pila de Rust** →
+   no puede suspenderse sin reescribirse a una máquina de pila explícita (CPS). La **VM sí** puede
+   (tiene `frames`). ⇒ **la concurrencia vive en la VM; el intérprete queda como oráculo secuencial**.
+2. **No-determinismo vs. el oráculo.** Los interleavings rompen la comparación de salidas exactas. ⇒
+   **scheduler determinista** (mismo orden de planificación) y tests con interleaving fijado.
+3. **Paralelismo vs. GC mono-hilo.** M:N *paralelo* exige GC thread-safe y valores `Send` (hoy el
+   intérprete usa `Rc`, `!Send`; el heap de la VM es mono-hilo). ⇒ **scheduler cooperativo M:1** (un
+   hilo): concurrencia, no paralelismo. Con un solo hilo **no hay carreras de memoria por
+   construcción** → no hacen falta ni regiones ni GC concurrente.
+
+**Dirección propuesta — CSP/actores sobre la VM:** `spawn` de *green threads* + **canales tipados**
+(`send`/`recv`), con **structured concurrency** (un *scope* que posee y hace *join* de sus tareas) y
+**canales acotados** para el backpressure. Scheduler **cooperativo M:1** (fibra = pila de `frames`
+guardada en la VM; *yield* en puntos definidos: `recv`/`send`/`yield`). La **data-race freedom viene
+de la disciplina CSP** —*comparte comunicando*, el canal es el único punto de paso—, no de ownership.
+Es el modelo Go/Erlang: el grueso del valor pedagógico ("concurrencia segura") sin el coste de
+ownership + GC concurrente.
+
+**Veredicto:**
+- ✅ **Adoptar**: green threads cooperativos (M:1) en la VM · canales tipados · structured concurrency
+  · backpressure (canales acotados) · data-race freedom **vía CSP**.
+- 🔬 **Diferir** (puertas abiertas): **algebraic effects** (requiere reescribir el intérprete a pila
+  explícita) · **M:N paralelo preemptivo** (requiere GC thread-safe + valores `Send`).
+- ❌ **Descartar para raylang**: **ownership/regiones** (contradice el modelo GC'd con mutabilidad
+  compartida; "sería otro lenguaje").
+
+### 21.1 raylang de producción (rama futura)
+
+Las cosas descartadas/diferidas arriba no son "malas": son **las correctas para un lenguaje nuevo de
+producción**, y chocan solo porque raylang **eligió** ser pedagógico (dos motores, GC mono-hilo,
+mutabilidad compartida, cero dependencias). Queda anotada la idea de, **en otra rama**, dejar de ser
+pedagógico y perseguir producción: un único motor (la VM, jubilando el oráculo), **ownership/regiones**
+o aislamiento por actores para data-race freedom, **GC concurrente** + runtime **M:N paralelo**,
+**algebraic effects** sobre una VM de pila explícita, gestor de paquetes y FFI. Es un cambio de
+*norte* (no una fase más), por eso vive en una rama aparte y no en la hoja de ruta principal.

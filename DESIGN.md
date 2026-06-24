@@ -2515,3 +2515,15 @@ Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el
   31 errores (struct/arreglo/enum/match, incl. tipos duplicados que el checker detecta directamente) +
   9 ejemplos reales (añade structs/match_figuras/enums/arrays/matriz). UFCS/métodos, `Map` en el
   checker, genéricos y `dyn` siguen diferidos a M14.3c/d.
+- **M14.3c-1 COMPLETO** — genéricos: funciones. `selfhost/checker.ray` gana funciones genéricas
+  (`fn id<T>(x: T) -> T`): `FnSig.type_params`; `Checker.tparams` lleva los parámetros de tipo rígidos
+  en ámbito (un `TNamed(T, [])` con `T` ahí es un tipo VÁLIDO, no desconocido —`ensure_type` lo
+  acepta—); `unify`/`subst`/`unify_list` (la maquinaria de inferencia: las incógnitas son las variables
+  de tipo de la firma llamada, pasadas como `holes`); `check_generic_call` infiere los parámetros
+  unificando params↔args y devuelve el retorno sustituido (mensajes byte-idénticos: inferencia fallida,
+  inconsistencia `'T' no puede ser X y Y a la vez`, aridad). `check_unique_tparams` rechaza parámetros
+  repetidos; `type_arity` valida la aridad de args de tipo en `ensure_type`. El `Type` del parser
+  **dobla** como variable de tipo (`TNamed(T,[])`): dos `T` son iguales por nombre (`type_eq`), así los
+  cuerpos genéricos (`[a, b]`, `f(x)`, `xs[i]`) cuadran sin código nuevo. Oráculo: 4 válidos + 5 errores
+  + `genericos.ray`. Diferido a c-2: tipos genéricos (structs/enums) + bidireccional completo; a c-3:
+  prelude Option/Result + `?`.

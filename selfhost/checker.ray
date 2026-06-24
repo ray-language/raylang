@@ -28,8 +28,9 @@ pub struct TypeError { msg: string, line: int, col: int }
 // Información de una variable en un ámbito.
 struct VarInfo { ty: Type, mutable: bool, dline: int, dcol: int }
 
-// Firma de una función (M14.3a: sin genéricos/bounds, que llegan en M14.3c/d).
-struct FnSig { params: [Type], ret: Type }
+// Firma de una función. `type_params` son sus parámetros de tipo (M14.3c); `bounds` queda guardado
+// pero su validación (diccionarios) es de M14.3d.
+struct FnSig { params: [Type], ret: Type, type_params: [string] }
 
 // Una variable ligada por un patrón de `match`: su nombre y el tipo que recibe.
 struct Bind { name: string, ty: Type }
@@ -38,13 +39,19 @@ struct Bind { name: string, ty: Type }
 struct MatchState { covered: [string], catchall: bool }
 
 // El estado del checker: firmas de funciones, tablas de tipos nominales (structs/enums, con los
-// campos/variantes ya resueltos), pila de ámbitos y el retorno de la función en curso.
+// campos/variantes ya resueltos, y sus parámetros de tipo para la aridad/sustitución), pila de
+// ámbitos, el retorno de la función en curso y los parámetros de tipo en ámbito (M14.3c: los `T`
+// rígidos de la función/método actual; un `TNamed(T, [])` con `T` aquí es un tipo válido, no
+// desconocido).
 struct Checker {
     funcs: Map<string, FnSig>,
     structs: Map<string, [FieldDef]>,
     enums: Map<string, [VariantDef]>,
+    struct_tparams: Map<string, [string]>,
+    enum_tparams: Map<string, [string]>,
     scopes: [Map<string, VarInfo>],
     current_return: Type,
+    tparams: [string],
 }
 
 fn terr(line: int, col: int, msg: string) -> TypeError {
@@ -236,7 +243,20 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
             ensure_type(c, r, line, col)
         },
         Type.TNamed(name, args) => {
+            // Un parámetro de tipo en ámbito (M14.3c) es un tipo válido; no recibe argumentos.
+            if (contains_str(c.tparams, name)) {
+                if (len(args) != 0) {
+                    return Result.Err(terr(line, col, "el parámetro de tipo '" + name + "' no recibe argumentos"));
+                }
+                return Result.Ok(0);
+            }
+            // Un struct/enum: la aridad de argumentos de tipo debe casar con sus parámetros.
             if (contains_key(c.structs, name) || contains_key(c.enums, name)) {
+                let arity = type_arity(c, name);
+                if (len(args) != arity) {
+                    return Result.Err(terr(line, col, "'" + name + "' espera " + to_string(arity)
+                        + " argumento(s) de tipo, se le dieron " + to_string(len(args))));
+                }
                 var i = 0;
                 while (i < len(args)) { ensure_type(c, args[i], line, col)?; i = i + 1; }
                 Result.Ok(0)
@@ -249,8 +269,23 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
     }
 }
 
+// La aridad (nº de parámetros de tipo) de un struct/enum registrado.
+fn type_arity(c: Checker, name: string) -> int {
+    match (get(c.struct_tparams, name)) {
+        Option.Some(tps) => len(tps),
+        Option.None => match (get(c.enum_tparams, name)) {
+            Option.Some(tps) => len(tps),
+            Option.None => 0,
+        },
+    }
+}
+
 // ¿`name` nombra un enum registrado? (Distingue construcción de enum de acceso a campo.)
 fn is_enum(c: Checker, name: string) -> bool { contains_key(c.enums, name) }
+
+// Un arreglo de strings vacío, ya tipado (para reiniciar `c.tparams`: asignar `[]` directamente a un
+// campo no infiere el tipo, pero el retorno de esta función sí lo fija).
+fn no_tparams() -> [string] { [] }
 
 // ¿`xs` contiene la cadena `s`?
 fn contains_str(xs: [string], s: string) -> bool {
@@ -272,6 +307,105 @@ fn join_comma(xs: [string]) -> string {
         i = i + 1;
     }
     s
+}
+
+// =====================================================================
+// Genéricos: unificación y sustitución (M14.3c)
+// =====================================================================
+
+// **Sustitución**: reemplaza cada variable de tipo `TNamed(n, [])` con `n` en `sigma` por `sigma[n]`,
+// recursivamente. Instancia un tipo genérico una vez inferidos sus parámetros (`subst([U], {U↦int})
+// = [int]`). `sigma` solo contiene los nombres-incógnita, así que un nombre nominal (struct/enum
+// monomórfico) nunca se sustituye.
+fn subst(ty: Type, sigma: Map<string, Type>) -> Type {
+    match (ty) {
+        Type.TNamed(n, args) => {
+            if (len(args) == 0) {
+                match (get(sigma, n)) { Option.Some(t) => t, Option.None => ty }
+            } else {
+                var ra: [Type] = [];
+                var i = 0;
+                while (i < len(args)) { push(ra, subst(args[i], sigma)); i = i + 1; }
+                Type.TNamed(n, ra)
+            }
+        },
+        Type.TArray(e) => Type.TArray(subst(e, sigma)),
+        Type.TFn(ps, r) => {
+            var rps: [Type] = [];
+            var i = 0;
+            while (i < len(ps)) { push(rps, subst(ps[i], sigma)); i = i + 1; }
+            Type.TFn(rps, subst(r, sigma))
+        },
+        _ => ty,
+    }
+}
+
+// **Unificación**, asimétrica: `param` viene de la firma de la función llamada (sus variables de tipo
+// —las que están en `holes`— son las INCÓGNITAS a inferir); `arg` viene del llamador (sus variables,
+// si las hay, son rígidas). Liga las incógnitas en `sigma` y exige consistencia; un desacuerdo es un
+// error con su razón (texto idéntico al de Rust).
+fn unify(param: Type, arg: Type, sigma: Map<string, Type>, holes: [string]) -> Result<int, string> {
+    match (param) {
+        Type.TNamed(n, pargs) => {
+            // Incógnita del lado de la firma: ligarla (o exigir que coincida con lo ya ligado).
+            if (len(pargs) == 0 && contains_str(holes, n)) {
+                match (get(sigma, n)) {
+                    Option.Some(prev) => {
+                        if (!type_eq(prev, arg)) {
+                            Result.Err("'" + n + "' no puede ser " + type_str(prev) + " y " + type_str(arg) + " a la vez")
+                        } else { Result.Ok(0) }
+                    },
+                    Option.None => { insert(sigma, n, arg); Result.Ok(0) },
+                }
+            } else {
+                // Tipo nominal (o variable rígida): mismo nombre, misma aridad, unificar argumentos.
+                match (arg) {
+                    Type.TNamed(an, aargs) => {
+                        if (n == an && len(pargs) == len(aargs)) {
+                            unify_list(pargs, aargs, sigma, holes)
+                        } else {
+                            Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg))
+                        }
+                    },
+                    _ => Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg)),
+                }
+            }
+        },
+        Type.TArray(pe) => {
+            match (arg) {
+                Type.TArray(ae) => unify(pe, ae, sigma, holes),
+                _ => Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg)),
+            }
+        },
+        Type.TFn(pps, pr) => {
+            match (arg) {
+                Type.TFn(aps, ar) => {
+                    if (len(pps) != len(aps)) {
+                        Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg))
+                    } else {
+                        unify_list(pps, aps, sigma, holes)?;
+                        unify(pr, ar, sigma, holes)
+                    }
+                },
+                _ => Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg)),
+            }
+        },
+        // Primitivos (y variable rígida vs lo que sea): igualdad exacta.
+        _ => {
+            if (type_eq(param, arg)) { Result.Ok(0) }
+            else { Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg)) }
+        },
+    }
+}
+
+// Unifica dos listas de tipos posición a posición (propaga la primera razón de fallo).
+fn unify_list(ps: [Type], bs: [Type], sigma: Map<string, Type>, holes: [string]) -> Result<int, string> {
+    var i = 0;
+    while (i < len(ps)) {
+        unify(ps[i], bs[i], sigma, holes)?;
+        i = i + 1;
+    }
+    Result.Ok(0)
 }
 
 // =====================================================================
@@ -389,6 +523,7 @@ fn register_types(c: Checker, prog: Program) -> Result<int, TypeError> {
             vi = vi + 1;
         }
         insert(c.enums, e.name, variants);
+        insert(c.enum_tparams, e.name, e.type_params);
         ei = ei + 1;
     }
     // --- Registrar structs (campos resueltos; no reusar nombre de enum, ni repetirse) ---
@@ -409,12 +544,15 @@ fn register_types(c: Checker, prog: Program) -> Result<int, TypeError> {
             fj = fj + 1;
         }
         insert(c.structs, s.name, rf);
+        insert(c.struct_tparams, s.name, s.type_params);
         si = si + 1;
     }
-    // --- Validar los tipos referenciados (ya están todos registrados) ---
+    // --- Validar los tipos referenciados (ya están todos registrados), con los parámetros de tipo
+    //     de cada definición en ámbito (un payload `Caja<T>` referencia el `T` propio) ---
     var ev = 0;
     while (ev < len(prog.enums)) {
         let e = prog.enums[ev];
+        c.tparams = e.type_params;
         let variants = enum_variants(c, e.name);
         var vi = 0;
         while (vi < len(variants)) {
@@ -428,11 +566,13 @@ fn register_types(c: Checker, prog: Program) -> Result<int, TypeError> {
     var sv = 0;
     while (sv < len(prog.structs)) {
         let s = prog.structs[sv];
+        c.tparams = s.type_params;
         let fields = struct_fields(c, s.name);
         var fi = 0;
         while (fi < len(fields)) { ensure_type(c, fields[fi].ty, s.line, s.col)?; fi = fi + 1; }
         sv = sv + 1;
     }
+    c.tparams = no_tparams();
     Result.Ok(0)
 }
 
@@ -455,10 +595,11 @@ fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
         if (contains_key(c.funcs, f.name)) {
             return Result.Err(terr(f.line, f.col, "función '" + f.name + "' declarada dos veces"));
         }
+        check_unique_tparams(f.type_params, f.name, f.line, f.col)?;
         var ps: [Type] = [];
         var pi = 0;
         while (pi < len(f.params)) { push(ps, resolve_type(f.params[pi].ty)); pi = pi + 1; }
-        insert(c.funcs, f.name, FnSig { params: ps, ret: resolve_type(f.ret) });
+        insert(c.funcs, f.name, FnSig { params: ps, ret: resolve_type(f.ret), type_params: f.type_params });
         fi = fi + 1;
     }
     // 'main' es obligatoria: sin parámetros, retorno int o unit.
@@ -482,6 +623,8 @@ fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
 }
 
 fn check_function(c: Checker, f: Func) -> Result<int, TypeError> {
+    // Los parámetros de tipo de ESTA función están en ámbito (rígidos): `x: T` es válido.
+    c.tparams = f.type_params;
     var pi = 0;
     while (pi < len(f.params)) {
         let p = f.params[pi];
@@ -489,7 +632,25 @@ fn check_function(c: Checker, f: Func) -> Result<int, TypeError> {
         pi = pi + 1;
     }
     ensure_type(c, f.ret, f.line, f.col)?;
-    check_fn_body(c, f.params, f.ret, f.body, f.line, f.col, "'" + f.name + "'")
+    let r = check_fn_body(c, f.params, f.ret, f.body, f.line, f.col, "'" + f.name + "'");
+    c.tparams = no_tparams();
+    r
+}
+
+// Comprueba que una lista de parámetros de tipo no tenga repetidos.
+fn check_unique_tparams(params: [string], owner: string, line: int, col: int) -> Result<int, TypeError> {
+    var i = 0;
+    while (i < len(params)) {
+        var j = 0;
+        while (j < i) {
+            if (params[i] == params[j]) {
+                return Result.Err(terr(line, col, "parámetro de tipo '" + params[i] + "' repetido en '" + owner + "'"));
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    Result.Ok(0)
 }
 
 // Verifica el cuerpo: declara los parámetros, comprueba el bloque y exige que su tipo-valor coincida
@@ -788,9 +949,48 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
         Option.None => {},
     }
     match (get(c.funcs, name)) {
-        Option.Some(sig) => check_args(c, sig.params, sig.ret, cargs, "'" + name + "'", line, col),
+        Option.Some(sig) => {
+            if (len(sig.type_params) == 0) {
+                check_args(c, sig.params, sig.ret, cargs, "'" + name + "'", line, col)
+            } else {
+                check_generic_call(c, sig.type_params, sig.params, sig.ret, cargs, "'" + name + "'", line, col)
+            }
+        },
         Option.None => Result.Err(terr(line, col, "función '" + name + "' no declarada")),
     }
+}
+
+// Una llamada a una función GENÉRICA (M14.3c). Infiere los parámetros de tipo unificando los tipos
+// de los parámetros con los de los argumentos, y devuelve el retorno ya sustituido. Si algún
+// parámetro de tipo no queda determinado por los argumentos, es error (M6.1 no usa el tipo esperado).
+fn check_generic_call(c: Checker, type_params: [string], params: [Type], ret: Type, cargs: [Expr], label: string, line: int, col: int) -> Result<Type, TypeError> {
+    if (len(cargs) != len(params)) {
+        return Result.Err(terr(line, col,
+            label + " espera " + to_string(len(params)) + " argumento(s), se le pasaron " + to_string(len(cargs))));
+    }
+    let sigma: Map<string, Type> = map_new();
+    var i = 0;
+    while (i < len(cargs)) {
+        let at = check_expr(c, cargs[i])?;
+        match (unify(params[i], at, sigma, type_params)) {
+            Result.Ok(_) => {},
+            Result.Err(reason) => {
+                return Result.Err(terr(cargs[i].line, cargs[i].col,
+                    "argumento " + to_string(i + 1) + " de " + label + ": " + reason));
+            },
+        }
+        i = i + 1;
+    }
+    // Todos los parámetros de tipo deben haber quedado determinados.
+    var ti = 0;
+    while (ti < len(type_params)) {
+        if (!contains_key(sigma, type_params[ti])) {
+            return Result.Err(terr(line, col,
+                "no se pudo inferir el parámetro de tipo '" + type_params[ti] + "' de " + label + " (no aparece en los argumentos)"));
+        }
+        ti = ti + 1;
+    }
+    Result.Ok(subst(ret, sigma))
 }
 
 // El builtin print/eprint: 1 argumento imprimible → unit.
@@ -1220,6 +1420,10 @@ fn check_pattern(c: Checker, pat: Pattern, scrut_ty: Type, enum_name: string, va
 
 // Punto de entrada: valida un programa (o devuelve el primer TypeError).
 pub fn check(prog: Program) -> Result<int, TypeError> {
-    let c = Checker { funcs: map_new(), structs: map_new(), enums: map_new(), scopes: [], current_return: Type.TUnit };
+    let c = Checker {
+        funcs: map_new(), structs: map_new(), enums: map_new(),
+        struct_tparams: map_new(), enum_tparams: map_new(),
+        scopes: [], current_return: Type.TUnit, tparams: [],
+    };
     check_program(c, prog)
 }

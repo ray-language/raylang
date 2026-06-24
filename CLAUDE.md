@@ -694,6 +694,17 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     pasa a recibir `c`. Oráculo: 8 datos válidos + 31 errores + 9 ejemplos reales (añade structs/
     match_figuras/enums/arrays/matriz). Diferido: UFCS/métodos, `Map`, genéricos (M14.3c), traits/dyn
     (M14.3d). DESIGN §23.4.
+  - **M14.3c-1 COMPLETO** (347 lib + 7 en `tests/selfhost_checker.rs`): **checker auto-alojado —
+    funciones genéricas**. `FnSig.type_params`; `Checker.tparams` (params de tipo rígidos en ámbito: un
+    `TNamed(T,[])` con `T` ahí es tipo VÁLIDO, lo acepta `ensure_type`); `unify`/`subst`/`unify_list`
+    (incógnitas = variables de la firma llamada, pasadas como `holes`); `check_generic_call` infiere
+    params↔args y devuelve el retorno sustituido (mensajes byte-idénticos: inferencia fallida,
+    `'T' no puede ser X y Y a la vez`, aridad). `check_unique_tparams`; `type_arity` valida aridad de
+    args de tipo. El `Type` del parser **dobla** como variable de tipo: dos `T` iguales por nombre
+    (`type_eq`), así los cuerpos genéricos cuadran sin código nuevo. Gotcha: `c.tparams = []` y
+    `let m = map_new()` son indeterminados → helper `no_tparams()` y anotación. Oráculo: 4 válidos +
+    5 errores + `genericos.ray`. Diferido a c-2 (tipos genéricos + bidireccional), c-3 (Option/Result +
+    `?`). DESIGN §23.4.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

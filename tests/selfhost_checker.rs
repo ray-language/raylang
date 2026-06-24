@@ -163,12 +163,32 @@ fn errores_de_datos() {
     comparar("enum E { A, A } fn main() -> int { 0 }", "scde_repvariant.ray");
 }
 
+#[test]
+fn genericos_validos() {
+    // Función genérica mínima; inferencia de T desde el argumento.
+    comparar("fn id<T>(x: T) -> T { x } fn main() -> int { let a: int = id(5); a }", "scg_id.ray");
+    // Genérica de orden superior (tipo función con T, U).
+    comparar("fn ap<T, U>(f: fn(T) -> U, x: T) -> U { f(x) } fn doble(n: int) -> int { n * 2 } fn main() -> int { ap(doble, 21) }", "scg_ap.ray");
+    // Genérica sobre arreglos.
+    comparar("fn ultimo<T>(xs: [T]) -> T { xs[len(xs) - 1] } fn main() -> int { ultimo([1, 2, 3]) }", "scg_last.ray");
+    comparar("fn par<T>(a: T, b: T) -> [T] { [a, b] } fn main() -> int { let xs: [int] = par(10, 20); xs[0] }", "scg_par.ray");
+}
+
+#[test]
+fn errores_genericos() {
+    comparar("fn id<T>(x: T) -> T { x } fn main() -> int { id(1, 2) }", "scge_arity.ray");
+    comparar("fn par<T>(a: T, b: T) -> [T] { [a, b] } fn main() -> int { let xs = par(1, true); 0 }", "scge_consist.ray");
+    comparar("fn raro<T>(x: int) -> int { x } fn main() -> int { raro(3) }", "scge_uninfer.ray");
+    comparar("fn f<T, T>(x: T) -> T { x } fn main() -> int { 0 }", "scge_duptp.ray");
+    comparar("fn ap<T, U>(f: fn(T) -> U, x: T) -> U { f(x) } fn negar(b: bool) -> bool { !b } fn main() -> int { ap(negar, 3) }", "scge_fnarg.ray");
+}
+
 /// El test fuerte: los ejemplos reales monomórficos deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
 fn ejemplos_reales_validos() {
     let archivos = ["examples/fib.ray", "examples/fizzbuzz.ray", "examples/gcd.ray", "examples/primes.ray",
         "examples/structs.ray", "examples/match_figuras.ray", "examples/enums.ray", "examples/arrays.ray",
-        "examples/matriz.ray"];
+        "examples/matriz.ray", "examples/genericos.ray"];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);

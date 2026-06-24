@@ -2198,6 +2198,26 @@ mod tests {
     }
 
     #[test]
+    fn dyn_upcasting_oraculo() {
+        // M9.5b: upcasting `dyn A + B` -> `dyn A` (olvidar traits, S2 ⊆ S1). Se reconstruye el
+        // struct menor proyectando los campos del mayor.
+        oracle_program(r#"
+            trait Area { fn area(self) -> int; }
+            trait Nombre { fn nombre(self) -> string; }
+            struct Cuadrado { lado: int }
+            impl Area for Cuadrado { fn area(self) -> int { self.lado * self.lado } }
+            impl Nombre for Cuadrado { fn nombre(self) -> string { "cuad" } }
+            fn solo_area(a: dyn Area) -> int { a.area() }
+            fn main() -> int {
+                let ab: dyn Area + Nombre = Cuadrado { lado: 5 };
+                let v1 = solo_area(ab);        // upcast en el argumento: 25
+                let a: dyn Area = ab;          // upcast en el let
+                v1 + a.area()                  // 25 + 25 = 50
+            }
+        "#);
+    }
+
+    #[test]
     fn dyn_sobre_impl_generico_oraculo() {
         // M9.4: coercionar a `dyn Trait` un tipo cuyo impl es genérico acotado (Caja<T>): la vtable
         // lleva un closure anidado (como un diccionario), no el método manglado plano. Incluye

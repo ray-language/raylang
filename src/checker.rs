@@ -106,7 +106,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     lower_dict_calls(program, &checker.dict_calls);
     // Paso 6 (M9.3b): bajar los trait objects — coerciones concreto→objeto a la
     // construcción del struct sintetizado, y los despachos dinámicos a `(r.m)(r.data, ...)`.
-    lower_dyn(program, &checker.dyn_coercions, &checker.dyn_dispatch);
+    lower_dyn(program, &checker.dyn_coercions, &checker.dyn_dispatch, &checker.dyn_upcasts);
     // Paso 7 (M9.2b): renumerar los `id` de los fn-exprs. El lowering pudo **inyectar**
     // closures sintéticos (diccionarios anidados) con `id` provisional; el intérprete y la VM
     // exigen ids **densos** (`collect_fn_exprs`). Esta pasada final los reasigna en orden.
@@ -353,6 +353,10 @@ struct Checker {
     /// Sitios de **despacho dinámico** (M9.3b): `(línea, col, método)` de un `obj.m(args)`
     /// con `obj: dyn Trait`. `lower_dyn` los baja al bloque `{ let r = obj; (r.m)(r.data, ...) }`.
     dyn_dispatch: HashSet<(usize, usize, String)>,
+    /// Sitios de **upcasting** (M9.5b): `(línea, col)` de un valor `dyn S1` coercionado a `dyn S2`
+    /// con S2 ⊆ S1 → el conjunto destino S2. `lower_dyn` lo baja a reconstruir el struct menor
+    /// proyectando los campos del mayor.
+    dyn_upcasts: HashMap<(usize, usize), Vec<String>>,
     /// M10.2b: si está activo, el checker **recolecta** el índice semántico (tipos y posiciones
     /// de declaración por identificador) en `index`. Solo lo enciende `semantic_index`; en una
     /// verificación normal queda en `false` (coste cero).
@@ -388,6 +392,7 @@ impl Checker {
             dict_calls: HashMap::new(),
             dyn_coercions: HashMap::new(),
             dyn_dispatch: HashSet::new(),
+            dyn_upcasts: HashMap::new(),
             gather: false,
             index: SemanticIndex::default(),
             fn_defs: HashMap::new(),
@@ -1551,10 +1556,20 @@ impl Checker {
     /// `dyn Trait` como tipo.
     fn coerce_to_dyn(&mut self, expr: &Expr, traits: &[String], line: usize, col: usize) -> Result<Type, TypeError> {
         let actual = self.check_expr(expr)?;
-        // Ya es exactamente el mismo trait object: nada que coercionar. (El upcasting a un
-        // subconjunto, `dyn S1` → `dyn S2` con S2 ⊆ S1, lo añade M9.5b.)
-        if matches!(&actual, Type::Dyn(t) if t.as_slice() == traits) {
-            return Ok(actual);
+        // El origen ya es un trait object: misma identidad (nada que hacer) o **upcasting** a un
+        // subconjunto (M9.5b: olvidar traits, `dyn S1` → `dyn S2` con S2 ⊆ S1).
+        if let Type::Dyn(source) = &actual {
+            if source.as_slice() == traits {
+                return Ok(actual);
+            }
+            if traits.iter().all(|t| source.contains(t)) {
+                self.dyn_upcasts.insert((line, col), traits.to_vec());
+                return Ok(Type::Dyn(traits.to_vec()));
+            }
+            return Err(self.err(line, col, format!(
+                "no se puede convertir 'dyn {}' en 'dyn {}': solo se puede upcastear a un subconjunto de traits",
+                source.join(" + "), traits.join(" + ")
+            )));
         }
         let key = type_key_of(&actual).ok_or_else(|| self.err(line, col, format!(
             "no se puede convertir {} en 'dyn {}'", actual, traits.join(" + ")
@@ -3340,6 +3355,7 @@ fn lower_dict_calls_expr(expr: &mut Expr, sites: &DictSites) {
 
 type CoercionMap = HashMap<(usize, usize), (Vec<String>, Vec<Expr>)>;
 type DispatchSet = HashSet<(usize, usize, String)>;
+type UpcastMap = HashMap<(usize, usize), Vec<String>>;
 
 /// Nombre del struct sintetizado que realiza `dyn A + B` en runtime. El conjunto viene canónico
 /// (ordenado), así que el nombre es único por conjunto. El `+` es ilegal en identificadores de
@@ -3365,18 +3381,20 @@ fn ident_expr(name: &str, line: usize, col: usize) -> Expr {
     Expr { kind: ExprKind::Ident(name.to_string()), line, col }
 }
 
-fn lower_dyn(program: &mut Program, coercions: &CoercionMap, dispatch: &DispatchSet) {
-    if coercions.is_empty() && dispatch.is_empty() {
+fn lower_dyn(program: &mut Program, coercions: &CoercionMap, dispatch: &DispatchSet, upcasts: &UpcastMap) {
+    if coercions.is_empty() && dispatch.is_empty() && upcasts.is_empty() {
         return;
     }
     // Mapa trait → nombres de métodos (en orden), para construir vtables.
     let trait_methods: HashMap<String, Vec<String>> = program.traits.iter()
         .map(|t| (t.name.clone(), t.methods.iter().map(|m| m.name.clone()).collect()))
         .collect();
-    // Structs sintetizados: uno por **conjunto** distinto que aparezca en una coerción, con `data`
-    // + un campo función por método de la unión (la vtable). Los tipos de campo son irrelevantes en
-    // runtime (erasure); el motor solo usa los nombres y el orden.
-    let mut sets: Vec<Vec<String>> = coercions.values().map(|(set, _)| set.clone()).collect();
+    // Structs sintetizados: uno por **conjunto** distinto que aparezca en una coerción **o como
+    // destino de un upcast**, con `data` + un campo función por método de la unión (la vtable). Los
+    // tipos de campo son irrelevantes en runtime (erasure); el motor solo usa los nombres y el orden.
+    let mut sets: Vec<Vec<String>> = coercions.values().map(|(set, _)| set.clone())
+        .chain(upcasts.values().cloned())
+        .collect();
     sets.sort();
     sets.dedup();
     for set in &sets {
@@ -3397,86 +3415,86 @@ fn lower_dyn(program: &mut Program, coercions: &CoercionMap, dispatch: &Dispatch
     }
     let mut counter = 0usize;
     for f in &mut program.functions {
-        lower_dyn_block(&mut f.body, coercions, dispatch, &trait_methods, &mut counter);
+        lower_dyn_block(&mut f.body, coercions, dispatch, upcasts, &trait_methods, &mut counter);
     }
 }
 
-fn lower_dyn_block(block: &mut Block, coercions: &CoercionMap, dispatch: &DispatchSet, tm: &HashMap<String, Vec<String>>, counter: &mut usize) {
+fn lower_dyn_block(block: &mut Block, coercions: &CoercionMap, dispatch: &DispatchSet, upcasts: &UpcastMap, tm: &HashMap<String, Vec<String>>, counter: &mut usize) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
-            StmtKind::Let { value, .. } => lower_dyn_expr(value, coercions, dispatch, tm, counter),
+            StmtKind::Let { value, .. } => lower_dyn_expr(value, coercions, dispatch, upcasts, tm, counter),
             StmtKind::Assign { target, value } => {
-                lower_dyn_expr(target, coercions, dispatch, tm, counter);
-                lower_dyn_expr(value, coercions, dispatch, tm, counter);
+                lower_dyn_expr(target, coercions, dispatch, upcasts, tm, counter);
+                lower_dyn_expr(value, coercions, dispatch, upcasts, tm, counter);
             }
             StmtKind::Return { value } => {
                 if let Some(v) = value {
-                    lower_dyn_expr(v, coercions, dispatch, tm, counter);
+                    lower_dyn_expr(v, coercions, dispatch, upcasts, tm, counter);
                 }
             }
-            StmtKind::Expr(e) => lower_dyn_expr(e, coercions, dispatch, tm, counter),
+            StmtKind::Expr(e) => lower_dyn_expr(e, coercions, dispatch, upcasts, tm, counter),
         }
     }
     if let Some(t) = &mut block.tail {
-        lower_dyn_expr(t, coercions, dispatch, tm, counter);
+        lower_dyn_expr(t, coercions, dispatch, upcasts, tm, counter);
     }
 }
 
-fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchSet, tm: &HashMap<String, Vec<String>>, counter: &mut usize) {
+fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchSet, upcasts: &UpcastMap, tm: &HashMap<String, Vec<String>>, counter: &mut usize) {
     // Recorrer los sub-nodos primero (post-orden): así los despachos/coerciones anidados
     // (en el receptor y los argumentos) ya están bajados cuando reescribimos este nodo.
     match &mut expr.kind {
-        ExprKind::Unary { expr: inner, .. } => lower_dyn_expr(inner, coercions, dispatch, tm, counter),
+        ExprKind::Unary { expr: inner, .. } => lower_dyn_expr(inner, coercions, dispatch, upcasts, tm, counter),
         ExprKind::Binary { left, right, .. } => {
-            lower_dyn_expr(left, coercions, dispatch, tm, counter);
-            lower_dyn_expr(right, coercions, dispatch, tm, counter);
+            lower_dyn_expr(left, coercions, dispatch, upcasts, tm, counter);
+            lower_dyn_expr(right, coercions, dispatch, upcasts, tm, counter);
         }
         ExprKind::Call { callee, args } => {
-            lower_dyn_expr(callee, coercions, dispatch, tm, counter);
+            lower_dyn_expr(callee, coercions, dispatch, upcasts, tm, counter);
             for a in args.iter_mut() {
-                lower_dyn_expr(a, coercions, dispatch, tm, counter);
+                lower_dyn_expr(a, coercions, dispatch, upcasts, tm, counter);
             }
         }
         ExprKind::ArrayLit(elems) => {
             for e in elems {
-                lower_dyn_expr(e, coercions, dispatch, tm, counter);
+                lower_dyn_expr(e, coercions, dispatch, upcasts, tm, counter);
             }
         }
         ExprKind::Index { array, index } => {
-            lower_dyn_expr(array, coercions, dispatch, tm, counter);
-            lower_dyn_expr(index, coercions, dispatch, tm, counter);
+            lower_dyn_expr(array, coercions, dispatch, upcasts, tm, counter);
+            lower_dyn_expr(index, coercions, dispatch, upcasts, tm, counter);
         }
         ExprKind::StructLit { fields, .. } => {
             for (_, e) in fields {
-                lower_dyn_expr(e, coercions, dispatch, tm, counter);
+                lower_dyn_expr(e, coercions, dispatch, upcasts, tm, counter);
             }
         }
         ExprKind::EnumLit { args, .. } => {
             for a in args {
-                lower_dyn_expr(a, coercions, dispatch, tm, counter);
+                lower_dyn_expr(a, coercions, dispatch, upcasts, tm, counter);
             }
         }
-        ExprKind::Field { object, .. } => lower_dyn_expr(object, coercions, dispatch, tm, counter),
-        ExprKind::Func(fe) => lower_dyn_block(&mut fe.body, coercions, dispatch, tm, counter),
+        ExprKind::Field { object, .. } => lower_dyn_expr(object, coercions, dispatch, upcasts, tm, counter),
+        ExprKind::Func(fe) => lower_dyn_block(&mut fe.body, coercions, dispatch, upcasts, tm, counter),
         ExprKind::Match { scrutinee, arms } => {
-            lower_dyn_expr(scrutinee, coercions, dispatch, tm, counter);
+            lower_dyn_expr(scrutinee, coercions, dispatch, upcasts, tm, counter);
             for arm in arms {
-                lower_dyn_expr(&mut arm.body, coercions, dispatch, tm, counter);
+                lower_dyn_expr(&mut arm.body, coercions, dispatch, upcasts, tm, counter);
             }
         }
-        ExprKind::Try(inner) => lower_dyn_expr(inner, coercions, dispatch, tm, counter),
+        ExprKind::Try(inner) => lower_dyn_expr(inner, coercions, dispatch, upcasts, tm, counter),
         ExprKind::If { cond, then_branch, else_branch } => {
-            lower_dyn_expr(cond, coercions, dispatch, tm, counter);
-            lower_dyn_block(then_branch, coercions, dispatch, tm, counter);
+            lower_dyn_expr(cond, coercions, dispatch, upcasts, tm, counter);
+            lower_dyn_block(then_branch, coercions, dispatch, upcasts, tm, counter);
             if let Some(e) = else_branch {
-                lower_dyn_expr(e, coercions, dispatch, tm, counter);
+                lower_dyn_expr(e, coercions, dispatch, upcasts, tm, counter);
             }
         }
         ExprKind::While { cond, body } => {
-            lower_dyn_expr(cond, coercions, dispatch, tm, counter);
-            lower_dyn_block(body, coercions, dispatch, tm, counter);
+            lower_dyn_expr(cond, coercions, dispatch, upcasts, tm, counter);
+            lower_dyn_block(body, coercions, dispatch, upcasts, tm, counter);
         }
-        ExprKind::Block(b) => lower_dyn_block(b, coercions, dispatch, tm, counter),
+        ExprKind::Block(b) => lower_dyn_block(b, coercions, dispatch, upcasts, tm, counter),
         _ => {}
     }
 
@@ -3528,6 +3546,30 @@ fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
             fields.push((m.clone(), vexpr.clone()));
         }
         expr.kind = ExprKind::StructLit { name: dyn_struct_name(set), fields };
+    }
+
+    // Upcasting `dyn S1` → `dyn S2` (S2 ⊆ S1, M9.5b): reconstruir el struct menor proyectando los
+    // campos del mayor. Necesita un temp porque el origen se referencia varias veces:
+    // `{ let __dynup = <obj>; __dyn_S2 { data: __dynup.data, m: __dynup.m, … } }`.
+    if let Some(target) = upcasts.get(&(line, col)) {
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+        let source = Expr { kind: taken, line, col };
+        let tmp = format!("__dynup#{}", *counter);
+        *counter += 1;
+        let let_stmt = Stmt {
+            kind: StmtKind::Let { name: tmp.clone(), ty: None, value: source, mutable: false },
+            line, col,
+        };
+        let mut fields = Vec::new();
+        for field in std::iter::once("data".to_string()).chain(dyn_method_names(target, tm)) {
+            let proj = Expr {
+                kind: ExprKind::Field { object: Box::new(ident_expr(&tmp, line, col)), name: field.clone() },
+                line, col,
+            };
+            fields.push((field, proj));
+        }
+        let lit = Expr { kind: ExprKind::StructLit { name: dyn_struct_name(target), fields }, line, col };
+        expr.kind = ExprKind::Block(Block { statements: vec![let_stmt], tail: Some(Box::new(lit)), line, col });
     }
 }
 

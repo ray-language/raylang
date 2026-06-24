@@ -1479,7 +1479,7 @@ funciones", sobre las piezas que ya existían (structs + funciones de primera cl
 **Alcance de M9.3b y diferido:**
 - ✅ `dyn Trait` como tipo; coerción concreto→objeto; despacho dinámico; arreglos heterogéneos.
 - ⏳ `dyn` con métodos que usan `Self` (no *object-safe*) → no invocables sobre el objeto.
-- ⏳ *Upcasting* entre traits, `dyn A + B` (varios traits en un objeto) → futuro.
+- ✅ `dyn A + B` (varios traits en un objeto) y *upcasting* a un subconjunto → **M9.5** (§18.7c).
 
 ### 18.7c M9.5 — Trait objects multi-trait (`dyn A + B`) y upcasting
 

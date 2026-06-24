@@ -233,7 +233,14 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   entre todos los traits del conjunto. **Reglas**: método repetido entre traits del conjunto = error
   (ambiguo, en `ensure_type`); `lower_dyn` genera un struct por **conjunto** distinto (no por trait),
   `dyn_struct_name(set)`/`dyn_method_names(set)`. `dyn_coercions` lleva `(Vec<String>, Vec<Expr>)`.
-  Tocó ~8 sitios de `Dyn` (todos front-end; runtime nunca ve `dyn`). Falta 3c-2 (upcasting).
+  Tocó ~8 sitios de `Dyn` (todos front-end; runtime nunca ve `dyn`).
+- **M9.5b COMPLETO** (322 tests lib): **upcasting** `dyn S1` → `dyn S2` con **S2 ⊆ S1** (olvidar
+  traits; no se pueden añadir). `coerce_to_dyn` detecta `actual = Dyn(source)`: idéntico → no-op;
+  subconjunto → registra en `dyn_upcasts`; si no es subconjunto → error. `lower_dyn` baja el upcast a
+  reconstruir el struct menor proyectando los campos del mayor (`{ let r = obj; __dyn_S2 { data:
+  r.data, m: r.m, … } }`; temp para no doble-evaluar). Los structs destino de upcasts se generan junto
+  a los de coerciones. **M9.5 COMPLETO. Cluster 3 (traits/genéricos) COMPLETO** (M9.4 + M9.5; se
+  descartó instancias solapadas/especializadas por research-grade). Runtime intacto.
 - **M10.1 COMPLETO** (272 tests + integración CLI verdes): **anotaciones**. `@nombre[(args)]`
   sobre fn/struct/enum; `Annotation { name, args }` en cada ítem; conjunto **cerrado**
   conocido por el compilador (`check_annotations`). **`@test`** (función `() -> bool`) +

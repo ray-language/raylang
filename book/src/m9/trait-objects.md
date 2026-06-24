@@ -159,3 +159,16 @@ traits (en orden canónico). La coerción exige que el tipo concreto implemente 
 el despacho `x.m()` busca `m` entre todos ellos. Dos reglas para que no haya ambigüedad: un nombre de
 método **repetido** entre los traits del conjunto es error (no se sabría a cuál despachar), y `lower_dyn`
 genera un struct por **conjunto distinto** que aparezca (no uno por trait).
+
+**Upcasting** (M9.5b): un `dyn A + B` se puede convertir a `dyn A` —olvidar traits—, siempre que el
+destino sea un **subconjunto** del origen (no se pueden *añadir* traits, eso exigiría el tipo concreto):
+
+```rust
+fn solo_area(a: dyn Area) -> int { a.area() }
+let ab: dyn Area + Nombre = Cuadrado { lado: 5 };
+solo_area(ab);          // upcast dyn Area+Nombre -> dyn Area
+```
+
+Se baja a reconstruir el struct menor proyectando los campos del mayor: `{ let r = ab; __dyn_Area {
+data: r.data, area: r.area } }`. Sin supertraits ni jerarquías: el upcast es, simplemente, quedarse con
+un subconjunto de la vtable.

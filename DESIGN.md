@@ -2347,6 +2347,23 @@ sobre literales de carácter → cadenas `if/else`; el fin de entrada se maneja 
 `if`). Sin esto, `match (o) { Some(v) => v, None => panic("…") }` no tipaba —y el lexer lo usa por
 todas partes—.
 
-**Próximas fases:** errores del lexer como valores (`Result` + oráculo sobre entradas inválidas),
-luego el **parser** (AST en raylang, oráculo sobre un volcado canónico del AST), el **checker**, y
-finalmente ejecutar. Cada una, su oráculo.
+### 23.2 M14.1b — Errores del lexer como valores
+
+El lexer de M14.1a cubría el **camino feliz**: ante una entrada inválida hacía `panic` (abortaba). En
+M14.1b se vuelve robusto **igual que el de Rust**: `lex` devuelve `Result<[Token], LexError>` y un
+`struct LexError { msg, line, col }` (espejo del de Rust). Cada función reconocedora (`number`,
+`string_lit`, `char_lit`, `next_token`) devuelve `Result<TokKind, LexError>`; `lex` propaga el primer
+error con el operador **`?`** (M6.3) y el helper `lex_error(lx, msg)` fija la posición al **inicio del
+token** (no al carácter ofensor), como el `self.error(...)` del original.
+
+**Lo importante para el oráculo:** los mensajes se construyen *idénticos* a los de Rust, incluyendo el
+fragmento ofensor (`carácter inesperado '#'`, `secuencia de escape inválida '\q'`, …). El driver
+`lex_dump.ray` imprime el error con el mismo formato que el `Display` de `LexError`
+(`error léxico en <l>:<c>: <msg>`), y el oráculo (`canonical`) hace `format!("{e}")` cuando el lexer de
+Rust falla → la comparación cubre **también las entradas inválidas** (carácter inesperado, cadena/
+carácter sin cerrar, salto de línea en cadena, escape inválido, `&`/`|` sueltos, char vacío/multi).
+**Nota de tipos:** `parse_int`/`parse_float` devuelven `Option`, así que `?` no cruza Option→Result; se
+desenvuelven con `match` y se reempaquetan como `Result.Err(lex_error(...))`. **M14.1 COMPLETO.**
+
+**Próximas fases:** el **parser** (AST en raylang, oráculo sobre un volcado canónico del AST), el
+**checker**, y finalmente ejecutar. Cada una, su oráculo.

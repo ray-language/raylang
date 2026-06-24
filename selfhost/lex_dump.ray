@@ -9,7 +9,7 @@
 // Las cadenas/caracteres se re-escapan (\\ \n \t \r \") para caber en una línea; el lexer de Rust
 // hace el mismo escape, así que las salidas coinciden carácter a carácter.
 
-from lexer import lex, TokKind;
+from lexer import lex, TokKind, LexError;
 
 // Re-escapa una cadena para imprimirla en una sola línea, de forma idéntica al oráculo.
 fn escape(s: string) -> string {
@@ -95,6 +95,25 @@ fn kind_str(k: TokKind) -> string {
     }
 }
 
+// Volcado canónico del resultado del lexer. En el caso feliz, un token por línea; ante un
+// error léxico, una sola línea con el mismo formato que el `Display` de `LexError` en Rust
+// (`error léxico en <l>:<c>: <msg>`), para que el oráculo compare también los errores.
+fn dump(src: string) {
+    match (lex(src)) {
+        Result.Ok(toks) => {
+            var i = 0;
+            while (i < len(toks)) {
+                let t = toks[i];
+                print(kind_str(t.kind) + "@" + to_string(t.line) + ":" + to_string(t.col));
+                i = i + 1;
+            }
+        },
+        Result.Err(e) => {
+            print("error léxico en " + to_string(e.line) + ":" + to_string(e.col) + ": " + e.msg);
+        },
+    }
+}
+
 fn main() -> int {
     let argv = args();
     if (len(argv) == 0) {
@@ -103,13 +122,7 @@ fn main() -> int {
     }
     match (read_file(argv[0])) {
         Result.Ok(src) => {
-            let toks = lex(src);
-            var i = 0;
-            while (i < len(toks)) {
-                let t = toks[i];
-                print(kind_str(t.kind) + "@" + to_string(t.line) + ":" + to_string(t.col));
-                i = i + 1;
-            }
+            dump(src);
             0
         },
         Result.Err(msg) => {

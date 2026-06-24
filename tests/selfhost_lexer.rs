@@ -97,14 +97,18 @@ fn kind_str(k: &TokenKind) -> String {
     }
 }
 
-/// La salida canónica del lexer de Rust (el oráculo) para una fuente.
+/// La salida canónica del lexer de Rust (el oráculo) para una fuente. En el caso feliz, los
+/// tokens (uno por línea); ante un error léxico, el `Display` de `LexError`
+/// (`error léxico en <l>:<c>: <msg>`) — exactamente lo que imprime `lex_dump.ray`.
 fn canonical(src: &str) -> String {
-    let tokens = raylang::lexer::lex(src).expect("el oráculo (lexer de Rust) lexea sin error");
-    tokens
-        .iter()
-        .map(|t| format!("{}@{}:{}", kind_str(&t.kind), t.line, t.col))
-        .collect::<Vec<_>>()
-        .join("\n")
+    match raylang::lexer::lex(src) {
+        Ok(tokens) => tokens
+            .iter()
+            .map(|t| format!("{}@{}:{}", kind_str(&t.kind), t.line, t.col))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(e) => format!("{e}"),
+    }
 }
 
 /// Ruta a un archivo del repo (relativa a la raíz del crate).
@@ -185,6 +189,23 @@ fn comentarios_se_ignoran() {
 #[test]
 fn posiciones_multilinea() {
     comparar("let x\n  42\n    foo", "sh_pos.ray");
+}
+
+/// M14.1b: errores como valores. Ante una entrada inválida, el lexer auto-alojado debe
+/// producir el MISMO mensaje y ubicación que el de Rust (no abortar con `panic`).
+#[test]
+fn errores_lexicos_igual_que_el_oraculo() {
+    comparar("#", "sh_err_inesperado.ray"); // carácter inesperado '#'
+    comparar("\"sin cerrar", "sh_err_str_abierta.ray"); // cadena sin cerrar
+    comparar("\"rota\nlinea\"", "sh_err_str_nl.ray"); // salto de línea en cadena
+    comparar("\"mal\\q\"", "sh_err_escape.ray"); // secuencia de escape inválida '\q'
+    comparar("a & b", "sh_err_amp.ray"); // '&' suelto
+    comparar("a | b", "sh_err_pipe.ray"); // '|' suelto
+    comparar("''", "sh_err_char_vacio.ray"); // literal de carácter vacío
+    comparar("'ab'", "sh_err_char_multi.ray"); // más de un carácter
+    comparar("'a", "sh_err_char_abierto.ray"); // carácter sin cerrar
+    // El error apunta al INICIO del token, no al carácter ofensor: aquí, columna 5.
+    comparar("let x #", "sh_err_pos.ray");
 }
 
 /// El test más fuerte: lexar archivos REALES (los ejemplos y el propio lexer auto-alojado) y

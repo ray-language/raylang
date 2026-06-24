@@ -602,6 +602,16 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     y **escape `\r`** (lexer de Rust + auto-alojado). **Huecos de divergencia cerrados**: un brazo de
     `match` que termina en `panic`/`return` cede el tipo a los demás (extiende M13.2a, que solo cubría
     `if`) — el lexer lo usa por doquier. DESIGN §23.
+  - **M14.1b COMPLETO** (347 lib + 9 en `tests/selfhost_lexer.rs`): **errores del lexer como valores**.
+    `lex` pasa de `[Token]` (camino feliz con `panic`) a **`Result<[Token], LexError>`** + `struct
+    LexError { msg, line, col }` (espejo del de Rust). `number`/`string_lit`/`char_lit`/`next_token`
+    devuelven `Result<TokKind, LexError>`; `lex` propaga con **`?`**; `lex_error(lx, msg)` fija la
+    posición al **inicio del token**. Los mensajes se construyen **idénticos** a los de Rust (incluido
+    el fragmento ofensor: `carácter inesperado '#'`, `secuencia de escape inválida '\q'`…). El driver
+    imprime el error con el formato del `Display` de `LexError` (`error léxico en <l>:<c>: <msg>`) y el
+    oráculo (`canonical`) hace `format!("{e}")` al fallar → cubre **también entradas inválidas**.
+    Gotcha: `parse_int`/`parse_float` devuelven `Option` → `?` no cruza Option→Result; se desenvuelven
+    con `match`. El único `panic` que queda marca código inalcanzable. **M14.1 COMPLETO.** DESIGN §23.2.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

@@ -111,6 +111,34 @@ elegido. La lección de M9.2 es bonita: las **funciones de primera clase** de M4
 por sí solas, para construir polimorfismo acotado encima —sin añadir ni una primitiva nueva
 al lenguaje ni al runtime—.
 
+## Bounds en struct/enum (M9.4)
+
+Hasta aquí solo las **funciones** y los **impls** acotaban sus parámetros de tipo. M9.4 lo lleva a
+los **tipos del usuario**: `struct Caja<T: Show> { v: T }`, `enum Lista<T: Eq> { … }`.
+
+La diferencia clave con las funciones: **un struct/enum es datos, no llama a nada**. El bound no
+dispara ningún método, así que **no hay diccionarios que pasar** —ni *lowering*, ni opcodes—. El
+bound es una **promesa que el checker verifica en cada construcción**:
+
+```rust
+struct Caja<T: Show> { v: T }
+let c = Caja { v: 5 };        // OK si int: Show; error si no
+```
+
+Tras inferir `T = typeof(v)`, ese tipo debe **satisfacer** el bound. La comprobación reusa la misma
+lógica de satisfacción que los diccionarios de M9.2 (`satisfies_bound`): un impl concreto del trait,
+o un parámetro de tipo del llamador que ya declara el mismo bound. De ahí sale la **propagación
+gratis**:
+
+```rust
+fn env<U>(x: U) -> Caja<U> { Caja { v: x } }       // error: U podría no ser Show
+fn env<U: Show>(x: U) -> Caja<U> { Caja { v: x } } // OK: U lleva el bound, se reenvía
+```
+
+Construir `Caja<U>` exige que `U` lleve el bound; si no, `U` no lo satisface y falla. (No se exige en
+una función que solo *recibe* un `Caja<U>` sin construirlo: el `impl<T: Show> … for Caja<T>` ya
+reexige `T: Show` al llamar a sus métodos, así que no hay agujero.) **Runtime intacto, erasure total.**
+
 ## Lo que sigue
 
 - **Impls genéricos** (`impl<T: Mostrable> Mostrable for Caja<T>`): el diccionario de `Caja<int>`

@@ -1356,6 +1356,27 @@ checker: solo importan en runtime, donde *erasure* los reduce a valores función
 **Runtime: sin cambios** (igual que M9.2). Diferido a más allá de M9.2b: instancias solapadas /
 especializadas, bounds en parámetros de struct/enum, y `dyn Trait` sobre impls genéricos.
 
+### 18.6c M9.4 — Bounds en parámetros de tipo de struct/enum
+
+Hasta aquí solo las **funciones** y los **impls** podían acotar sus parámetros de tipo (`fn f<T: A>`,
+`impl<T: A> …`). M9.4 lo extiende a los **tipos del usuario**: `struct Caja<T: Show> { v: T }` y
+`enum Lista<T: Eq> { … }`. La sintaxis reusa `type_params_with_bounds` (el mismo parser de los `<…>`
+acotados); `StructDef`/`EnumDef` ganan un `bounds: Vec<(String, String)>`.
+
+**Semántica: comprobación en la construcción** (no hay runtime). Un struct/enum es **datos**: el bound
+no dispara ningún método, así que no hay diccionarios que pasar —cero *lowering*, cero opcodes—. El
+bound es una **promesa que el checker verifica en cada construcción**: al construir `Caja { v: x }`,
+tras inferir `T = typeof(x)`, ese tipo debe **satisfacer** el bound (implementar el trait, o ser un
+parámetro de tipo del llamador que ya lo declara). La verificación reusa la misma lógica que los
+diccionarios de M9.2 (`satisfies_bound`: impl concreto, o `Var` rígido con el mismo bound en ámbito).
+
+Esto da la **propagación gratis**: construir `Caja<U>` dentro de `fn g<U>(…)` exige que `U` lleve el
+bound (si no, `U` no lo satisface → error), así que `fn g<U: Show>` es lo único que compila. No se
+exige el bound en una función que solo *recibe* un `Caja<U>` sin construirlo (regla más laxa que Rust,
+defendible aquí: el `impl<T: Show> Show for Caja<T>` ya reexige `T: Show` al llamar a sus métodos, así
+que no hay agujero). `check_bounds` se generaliza para validar también los bounds de struct/enum (cada
+uno acota un parámetro real con un trait existente). **Runtime intacto** (erasure total).
+
 ### 18.7 M9.3 — Métodos por defecto y trait objects
 
 M9.3 cierra la historia de polimorfismo con dos piezas de naturaleza opuesta.

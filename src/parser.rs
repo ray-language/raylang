@@ -204,7 +204,7 @@ impl Parser {
     fn enum_def(&mut self) -> Result<EnumDef, ParseError> {
         let kw = self.expect(&TokenKind::Enum, "'enum'")?;
         let (name, _, _) = self.expect_ident("el nombre del enum")?;
-        let type_params = self.type_params()?;
+        let (type_params, bounds) = self.type_params_with_bounds()?; // M9.4: bounds en `<T: Trait>`
         self.expect(&TokenKind::LBrace, "'{' tras el nombre del enum")?;
         let mut variants = Vec::new();
         while !self.check(&TokenKind::RBrace) {
@@ -226,7 +226,7 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace, "'}' para cerrar el enum")?;
-        Ok(EnumDef { annotations: Vec::new(), is_pub: false, name, type_params, variants, line: kw.line, col: kw.col })
+        Ok(EnumDef { annotations: Vec::new(), is_pub: false, name, type_params, bounds, variants, line: kw.line, col: kw.col })
     }
 
     /// struct_def = 'struct' IDENT '{' [ field { ',' field } [ ',' ] ] '}'
@@ -234,7 +234,7 @@ impl Parser {
     fn struct_def(&mut self) -> Result<StructDef, ParseError> {
         let kw = self.expect(&TokenKind::Struct, "'struct'")?;
         let (name, _, _) = self.expect_ident("el nombre del struct")?;
-        let type_params = self.type_params()?;
+        let (type_params, bounds) = self.type_params_with_bounds()?; // M9.4: bounds en `<T: Trait>`
         self.expect(&TokenKind::LBrace, "'{' tras el nombre del struct")?;
         let mut fields = Vec::new();
         while !self.check(&TokenKind::RBrace) {
@@ -247,7 +247,7 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace, "'}' para cerrar el struct")?;
-        Ok(StructDef { annotations: Vec::new(), is_pub: false, name, type_params, fields, line: kw.line, col: kw.col })
+        Ok(StructDef { annotations: Vec::new(), is_pub: false, name, type_params, bounds, fields, line: kw.line, col: kw.col })
     }
 
     /// function = 'fn' IDENT [ '<' tparam { ',' tparam } '>' ] '(' [ params ] ')'
@@ -447,24 +447,6 @@ impl Parser {
             self.expect(&TokenKind::Gt, "'>' para cerrar los parámetros de tipo")?;
         }
         Ok((params, bounds))
-    }
-
-    /// Lista opcional de parámetros de tipo: `< IDENT { ',' IDENT } >` (M6). Devuelve
-    /// un `Vec` vacío si no hay `<`. Reusa los tokens `Lt`/`Gt` (en posición de tipo
-    /// no hay ambigüedad con la comparación).
-    fn type_params(&mut self) -> Result<Vec<String>, ParseError> {
-        let mut params = Vec::new();
-        if self.eat(&TokenKind::Lt) {
-            loop {
-                let (name, _, _) = self.expect_ident("el nombre de un parámetro de tipo")?;
-                params.push(name);
-                if !self.eat(&TokenKind::Comma) {
-                    break;
-                }
-            }
-            self.expect(&TokenKind::Gt, "'>' para cerrar los parámetros de tipo")?;
-        }
-        Ok(params)
     }
 
     /// Lista opcional de argumentos de tipo: `< type { ',' type } >` (M6). Como

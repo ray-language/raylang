@@ -292,6 +292,10 @@ struct Checker {
     /// Dan la aridad (para validar `Caja<int>`) y los nombres (para sustituir).
     enum_tparams: HashMap<String, Vec<String>>,
     struct_tparams: HashMap<String, Vec<String>>,
+    /// Bounds de los parámetros de tipo de cada struct/enum (M9.4): nombre → `[(T, Trait), ...]`.
+    /// Se verifican en la construcción del valor (no hay runtime).
+    struct_bounds: HashMap<String, Vec<(String, String)>>,
+    enum_bounds: HashMap<String, Vec<(String, String)>>,
     /// Pila de ámbitos de variables. El último es el más interno.
     scopes: Vec<HashMap<String, VarInfo>>,
     /// Tipo de retorno de la función que estamos verificando ahora mismo, para
@@ -366,6 +370,8 @@ impl Checker {
             enum_names: HashSet::new(),
             enum_tparams: HashMap::new(),
             struct_tparams: HashMap::new(),
+            struct_bounds: HashMap::new(),
+            enum_bounds: HashMap::new(),
             scopes: Vec::new(),
             current_return: Type::Unit,
             type_params: HashSet::new(),
@@ -406,10 +412,12 @@ impl Checker {
         for e in &program.enums {
             self.check_unique_tparams(&e.type_params, &e.name, e.line, e.col)?;
             self.enum_tparams.insert(e.name.clone(), e.type_params.clone());
+            self.enum_bounds.insert(e.name.clone(), e.bounds.clone());
         }
         for s in &program.structs {
             self.check_unique_tparams(&s.type_params, &s.name, s.line, s.col)?;
             self.struct_tparams.insert(s.name.clone(), s.type_params.clone());
+            self.struct_bounds.insert(s.name.clone(), s.bounds.clone());
         }
 
         // --- Pre-pasada: registrar enums (payload normalizado con T en ámbito) ---
@@ -464,6 +472,15 @@ impl Checker {
         // métodos manglados ya están en `program.functions`) y de verificar cuerpos (que
         // pueden llamar métodos de trait vía la tabla `methods`).
         self.register_traits_impls(program)?;
+
+        // M9.4: validar los bounds de los parámetros de tipo de struct/enum (ya conocidos los
+        // traits). Cada bound debe acotar un parámetro real con un trait existente.
+        for s in &program.structs {
+            self.check_type_def_bounds(&s.name, &s.type_params, &s.bounds, "struct", s.line, s.col)?;
+        }
+        for e in &program.enums {
+            self.check_type_def_bounds(&e.name, &e.type_params, &e.bounds, "enum", e.line, e.col)?;
+        }
 
         // --- Pre-pasada: registrar firmas (con tipos normalizados) ---
         for f in &program.functions {
@@ -599,6 +616,39 @@ impl Checker {
             }
         }
         Ok(())
+    }
+
+    /// Valida los bounds de un struct/enum (M9.4): cada `(parámetro, trait)` debe acotar un
+    /// parámetro de tipo declarado por el tipo, con un trait existente. (Análogo a `check_bounds`.)
+    fn check_type_def_bounds(&self, name: &str, type_params: &[String], bounds: &[(String, String)],
+        kind: &str, line: usize, col: usize) -> Result<(), TypeError>
+    {
+        for (tp, tr) in bounds {
+            if !type_params.contains(tp) {
+                return Err(self.err(line, col, format!(
+                    "el bound '{}: {}' no acota a ningún parámetro de tipo del {} '{}'", tp, tr, kind, name
+                )));
+            }
+            if !self.traits.contains_key(tr) {
+                return Err(self.err(line, col, format!(
+                    "trait '{}' no declarado (en el bound del {} '{}')", tr, kind, name
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// ¿El tipo `concrete` satisface el bound `trait_name`? (M9.2/M9.4). Dos vías: un parámetro de
+    /// tipo rígido del llamador que ya declara el mismo bound, o un tipo concreto con impl del trait.
+    /// Es la misma lógica de satisfacción que usa `dict_for` para elegir el diccionario.
+    fn satisfies_bound(&self, concrete: &Type, trait_name: &str) -> bool {
+        if let Type::Var(u) = concrete {
+            return self.current_fn_bounds.iter().any(|(bp, tr)| bp == u && tr == trait_name);
+        }
+        match type_key_of(concrete) {
+            Some(key) => self.impl_traits.contains(&(key, trait_name.to_string())),
+            None => false,
+        }
     }
 
     /// Registra los traits y valida los impls (M9.1). Construye `self.traits` (firmas),
@@ -1133,7 +1183,28 @@ impl Checker {
             }
         }
         let targs = self.finalize_type_args(&tparams, &sigma, &format!("el struct '{}'", name), line, col)?;
+        // M9.4: cada parámetro acotado debe resolver a un tipo que satisfaga su bound.
+        let bounds = self.struct_bounds.get(name).cloned().unwrap_or_default();
+        self.check_construction_bounds(name, &tparams, &targs, &bounds, line, col)?;
         Ok(Type::Struct(name.to_string(), targs))
+    }
+
+    /// M9.4: en la construcción de un struct/enum genérico acotado, verifica que cada parámetro de
+    /// tipo acotado resolvió a un tipo que **satisface** su bound. `targs` está en el orden de
+    /// `tparams`. Es solo una comprobación (no genera diccionarios: un valor de datos no llama métodos).
+    fn check_construction_bounds(&self, name: &str, tparams: &[String], targs: &[Type],
+        bounds: &[(String, String)], line: usize, col: usize) -> Result<(), TypeError>
+    {
+        for (tp, trait_name) in bounds {
+            let Some(pos) = tparams.iter().position(|p| p == tp) else { continue };
+            let concrete = &targs[pos];
+            if !self.satisfies_bound(concrete, trait_name) {
+                return Err(self.err(line, col, format!(
+                    "'{}' requiere que '{}' sea '{}', pero {} no lo implementa", name, tp, trait_name, concrete
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Verifica la construcción de una variante de enum `Enum.Variante(args)`. Para
@@ -1162,6 +1233,9 @@ impl Checker {
             )))?;
         }
         let targs = self.finalize_type_args(&tparams, &sigma, &format!("la variante '{}.{}'", enum_name, variant), line, col)?;
+        // M9.4: cada parámetro acotado debe resolver a un tipo que satisfaga su bound.
+        let bounds = self.enum_bounds.get(enum_name).cloned().unwrap_or_default();
+        self.check_construction_bounds(enum_name, &tparams, &targs, &bounds, line, col)?;
         Ok(Type::Enum(enum_name.to_string(), targs))
     }
 
@@ -3266,6 +3340,7 @@ fn lower_dyn(program: &mut Program, coercions: &CoercionMap, dispatch: &Dispatch
             is_pub: false,
             name: dyn_struct_name(&t.name),
             type_params: Vec::new(),
+            bounds: Vec::new(),
             fields,
             line: t.line,
             col: t.col,
@@ -3426,6 +3501,46 @@ mod tests {
             e.msg,
             needle
         );
+    }
+
+    // M9.4: bounds en parámetros de tipo de struct/enum (verificados en la construcción).
+    const BOUND_PRELUDE: &str = r#"
+trait Show2 { fn ver(self) -> string; }
+struct P { n: int }
+impl Show2 for P { fn ver(self) -> string { "P" } }
+struct Q { n: int }
+"#;
+
+    #[test]
+    fn bound_struct_ok_con_impl() {
+        let src = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn main() -> int {{ let c = Caja {{ v: P {{ n: 1 }} }}; c.v.ver(); 0 }}\n", BOUND_PRELUDE);
+        check_src(&src).expect("P implementa Show2");
+    }
+
+    #[test]
+    fn bound_struct_falla_sin_impl() {
+        let src = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn main() -> int {{ let c = Caja {{ v: Q {{ n: 1 }} }}; 0 }}\n", BOUND_PRELUDE);
+        err_contains(&src, "requiere que 'T' sea 'Show2'");
+    }
+
+    #[test]
+    fn bound_struct_propaga_a_funcion_generica() {
+        // Construir Caja<U> exige que U lleve el bound: sin él, error; con él, OK.
+        let malo = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn env<U>(x: U) -> Caja<U> {{ Caja {{ v: x }} }}\nfn main() -> int {{ 0 }}\n", BOUND_PRELUDE);
+        err_contains(&malo, "requiere que 'T' sea 'Show2'");
+        let bueno = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn env<U: Show2>(x: U) -> Caja<U> {{ Caja {{ v: x }} }}\nfn main() -> int {{ 0 }}\n", BOUND_PRELUDE);
+        check_src(&bueno).expect("con U: Show2 la propagación se satisface");
+    }
+
+    #[test]
+    fn bound_enum_falla_sin_impl() {
+        let src = format!("{}enum Opt<T: Show2> {{ Nada, Algo(T) }}\nfn main() -> int {{ let x = Opt.Algo(Q {{ n: 1 }}); 0 }}\n", BOUND_PRELUDE);
+        err_contains(&src, "requiere que 'T' sea 'Show2'");
+    }
+
+    #[test]
+    fn bound_struct_trait_inexistente_es_error() {
+        err_contains("struct Caja<T: NoExiste> { v: T }\nfn main() -> int { 0 }\n", "trait 'NoExiste' no declarado");
     }
 
     #[test]

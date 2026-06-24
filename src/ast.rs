@@ -168,6 +168,9 @@ pub struct StructDef {
     /// Parámetros de tipo: los `A, B` de `struct Par<A, B> { ... }` (M6). Vacío = no
     /// genérico. En los tipos de los campos, esos nombres aparecen como `Type::Var`.
     pub type_params: Vec<String>,
+    /// Bounds de los parámetros de tipo: los `T: Show` de `struct Caja<T: Show>` (M9.4). Vacío =
+    /// sin bounds. Se verifican en la **construcción** del struct (no hay runtime).
+    pub bounds: Vec<(String, String)>,
     pub fields: Vec<(String, Type)>,
     pub line: usize,
     pub col: usize,
@@ -186,6 +189,9 @@ pub struct EnumDef {
     /// Parámetros de tipo: los `T` de `enum Option<T> { ... }` (M6). Vacío = no
     /// genérico. En las variantes, esos nombres aparecen como `Type::Var`.
     pub type_params: Vec<String>,
+    /// Bounds de los parámetros de tipo: los `T: Eq` de `enum Lista<T: Eq>` (M9.4). Vacío = sin
+    /// bounds. Se verifican en la **construcción** de una variante (no hay runtime).
+    pub bounds: Vec<(String, String)>,
     pub variants: Vec<VariantDef>,
     pub line: usize,
     pub col: usize,

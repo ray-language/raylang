@@ -828,6 +828,9 @@ impl<'a> TypeRewriter<'a> {
             for (_, ty) in &mut s.fields {
                 self.rewrite_type(ty);
             }
+            for (_, tr) in &mut s.bounds {
+                self.rewrite_name(tr); // M9.4: el trait del bound se namespaca como cualquier tipo
+            }
             self.tparams.pop();
         }
         for e in &mut program.enums {
@@ -836,6 +839,9 @@ impl<'a> TypeRewriter<'a> {
                 for ty in &mut v.payload {
                     self.rewrite_type(ty);
                 }
+            }
+            for (_, tr) in &mut e.bounds {
+                self.rewrite_name(tr); // M9.4
             }
             self.tparams.pop();
         }

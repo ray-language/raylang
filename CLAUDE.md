@@ -210,6 +210,15 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   **clonan** por impl; sus posiciones se **renumeran** (`freshen_positions`) para que las
   bajadas por posición no colisionen entre clones.
 - **M9 COMPLETO.**
+- **M9.4 COMPLETO** (318 tests lib): **bounds en parámetros de tipo de struct/enum** (`struct
+  Caja<T: Show>`, `enum Lista<T: Eq>`). Cierra el diferido de M9.2 (DESIGN §18.6c). `StructDef`/
+  `EnumDef` ganan `bounds`; el parser reusa `type_params_with_bounds` (se elimina el ya-redundante
+  `type_params`). **Semántica: comprobación en construcción, cero runtime** (un struct es datos, no
+  llama métodos → sin diccionarios). Tras inferir los args, `check_construction_bounds` exige que
+  cada param acotado satisfaga su bound vía `satisfies_bound` (extraído de la lógica de `dict_for`:
+  impl concreto, o `Var` del llamador con el mismo bound). Esto da **propagación gratis**: construir
+  `Caja<U>` dentro de `fn g<U>` exige `U: Show`. `check_type_def_bounds` valida los bounds (param
+  real + trait existente). El `TypeRewriter` del loader namespaca el trait del bound. Erasure total.
 - **M10.1 COMPLETO** (272 tests + integración CLI verdes): **anotaciones**. `@nombre[(args)]`
   sobre fn/struct/enum; `Annotation { name, args }` en cada ítem; conjunto **cerrado**
   conocido por el compilador (`check_annotations`). **`@test`** (función `() -> bool`) +

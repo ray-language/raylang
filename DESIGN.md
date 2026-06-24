@@ -2228,12 +2228,17 @@ expuesto al usuario.
   (`match (x) { Some(v) => v, None => panic("…") }` cuadra). *Limitación honesta*: el error de un
   `assert` apunta a la línea del prelude donde está el `panic` (no al sitio de la aserción; raylang
   no tiene backtraces); el mensaje sí es descriptivo.
-- **M13.2b — runner mejorado** (cliente externo `test_runner.rs`, **no toca el core**):
-  - `@test` admite también `() -> unit`: **pasa si no dispara ningún `assert`** (modelo más natural
-    que devolver `bool`).
-  - Reporte por test: nombre + ✓/✗ + el mensaje del `assert` que falló; resumen final
-    (`N passed, M failed`).
-  - Filtrado por nombre (`raylang --test archivo.ray patron`).
+- **M13.2b — runner mejorado** ✅ **COMPLETO** (cliente externo `test_runner.rs`, **no toca el
+  core**; 338 tests lib + 6 en `tests/test_cli.rs`):
+  - `@test` admite también `() -> unit`: **pasa si no dispara ningún `assert`/`panic`** (el checker
+    relaja la firma a `bool` *o* `unit`; el runner detecta el tipo del AST y decide el criterio).
+  - **Aislamiento por prueba**: cada test corre en su **propia** ejecución del intérprete (se clona
+    el programa base y se le sintetiza un `main` que llama solo a esa prueba). Así un `panic`/aserción
+    que falle aborta *esa* ejecución, **no la batería**, y se captura su mensaje. (Antes: un único
+    `main` con todas → un panic abortaba todo.)
+  - Reporte por test: `ok NAME` / `FALLO NAME` + el mensaje del fallo; resumen final
+    (`N de M prueba(s) fallaron`). Código de salida = nº de fallos (compat hacia atrás).
+  - Filtrado por nombre (subcadena): `raylang --test archivo.ray patron`.
 
 **Diferido:** setup/teardown, *property testing*, timing por test.
 

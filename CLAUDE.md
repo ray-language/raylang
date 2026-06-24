@@ -543,7 +543,16 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     bounds→dicts M9.2). Sin sobrecarga → no hay `assert(cond, msg)`; para mensaje a medida, `panic("…")`.
     Habilitadores: `impl Eq`/`impl Show` para **primitivos** en el prelude (los pedía `assert_eq`) y
     **`panic` diverge** (`expr_diverges` lo reconoce → una rama que termina en panic cede el tipo a la
-    otra). Falta **M13.2b**: runner mejorado (`@test` unit, aislamiento por test, reporte, filtro).
+    otra).
+  - **M13.2b COMPLETO** (338 tests lib + 6 en `tests/test_cli.rs`): **runner de `@test` mejorado**
+    (cliente externo `test_runner.rs`, no toca el core). (1) `@test` admite `() -> unit` además de
+    `() -> bool` (el checker relaja la firma; el runner lee el tipo del AST: bool pasa si `true`, unit
+    pasa si no dispara `assert`/`panic`). (2) **Aislamiento por prueba**: cada test corre en su propia
+    ejecución del intérprete (clona el programa base + `main` sintético que llama solo a esa prueba),
+    así un `panic`/aserción que falla aborta *esa* ejecución y no la batería, y se captura su mensaje
+    (antes: un único `main` con todas → un panic abortaba todo). (3) Reporte por test + resumen; código
+    de salida = nº de fallos (compat). (4) Filtro por subcadena del nombre (`--test archivo.ray patron`).
+    **M13.2 COMPLETO.**
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

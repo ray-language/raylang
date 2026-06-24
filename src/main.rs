@@ -64,6 +64,7 @@ fn run() {
     interpreter::set_program_args(rest[idx + 1..].to_vec());
 
     // Modo prueba (M10.1): corre las funciones `@test` vía un cliente externo (single-file).
+    // M13.2b: un argumento tras la ruta filtra las pruebas por nombre (subcadena).
     if test_mode {
         let src = match fs::read_to_string(&path) {
             Ok(s) => s,
@@ -72,7 +73,8 @@ fn run() {
                 process::exit(66); // EX_NOINPUT
             }
         };
-        process::exit(test_runner::run(&src));
+        let filtro = rest.get(idx + 1).map(|s| s.as_str());
+        process::exit(test_runner::run(&src, filtro));
     }
 
     // M11.3: el loader carga el archivo de entrada y sus `import` (transitivos), y devuelve

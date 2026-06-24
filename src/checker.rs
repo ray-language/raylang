@@ -565,7 +565,7 @@ impl Checker {
     }
 
     /// Valida las anotaciones (M10.1): cada una debe ser **conocida** y estar bien
-    /// colocada. `@test` solo en funciones `() -> bool`. (`@derive` se añade en M10.1b.)
+    /// colocada. `@test` solo en funciones `() -> bool` o `() -> unit` (M13.2b). (`@derive` en M10.1b.)
     fn check_annotations(&self, program: &Program) -> Result<(), TypeError> {
         for f in &program.functions {
             for a in &f.annotations {
@@ -579,9 +579,12 @@ impl Checker {
                                 "la función de prueba '@test' '{}' no debe recibir parámetros", f.name
                             )));
                         }
-                        if self.resolve_type(&f.return_type) != Type::Bool {
+                        // M13.2b: una prueba puede devolver `bool` (pasa si es `true`) o `unit`
+                        // (pasa si no dispara ningún `assert`/`panic`). El runner distingue ambos.
+                        let ret = self.resolve_type(&f.return_type);
+                        if ret != Type::Bool && ret != Type::Unit {
                             return Err(self.err(a.line, a.col, format!(
-                                "una función '@test' debe devolver bool, no {}", f.return_type
+                                "una función '@test' debe devolver bool o unit, no {}", f.return_type
                             )));
                         }
                     }

@@ -19,8 +19,8 @@ bien colocada (`@test` solo en funciones, `@derive` solo en tipos); una desconoc
 ## `@test`: metadato leído por una herramienta
 
 `@test` marca una función de prueba. Su firma debe ser `() -> bool` (pasa si devuelve
-`true`). No cambia la ejecución normal —es una función más, que se ignora salvo en modo
-prueba—.
+`true`) —o, desde M13.2b, `() -> unit` (pasa si no dispara un `assert`/`panic`; ver más abajo)—.
+No cambia la ejecución normal —es una función más, que se ignora salvo en modo prueba—.
 
 ```rust
 @test
@@ -45,6 +45,43 @@ resultado: 1 fallo(s) ✗
 El código de salida es el **número de fallos** (0 = todas pasaron), útil en CI. El único
 toque al núcleo fue la *validación* de la firma `@test`; el runner vive aparte
 (`src/test_runner.rs`).
+
+### Aserciones y un runner con dientes (M13.2)
+
+M10.1 dejó las pruebas en lo mínimo: devolver un `bool`. M13.2 las vuelve usables para validar
+algo serio (camino al self-hosting):
+
+- **`assert` / `assert_eq` / `panic`** (M13.2a). `panic(msg)` es el único primitivo nuevo de
+  runtime: aborta con un mensaje. Sobre él, el prelude define `assert(cond)` y
+  `assert_eq<T: Eq + Show>(a, b)` (que muestra ambos valores al fallar). Una prueba ya no necesita
+  enhebrar un `bool` a mano: afirma y, si algo no cuadra, aborta.
+- **`@test` puede devolver `unit`** (M13.2b): pasa si **no dispara** ningún `assert`/`panic`. Es el
+  modelo natural cuando usas aserciones.
+
+  ```rust
+  @test fn cuadrado_ok() { assert_eq(cuadrado(3), 9); }   // unit: pasa si no aborta
+  ```
+
+- **Aislamiento por prueba** (M13.2b). El runner ya no mete todas las pruebas en un solo `main`
+  (donde el primer `panic` mataba la batería entera): **corre cada una en su propia ejecución**
+  del intérprete. Una que aborte se reporta con su mensaje, y las demás siguen.
+
+  ```text
+  corriendo 3 prueba(s)
+
+  ok    cuadrado_ok
+  FALLO suma_falla
+          assert_eq falló: 4 != 5
+  ok    otra_mas
+
+  resultado: 1 de 3 prueba(s) fallaron ✗
+  ```
+
+- **Filtro por nombre**: `raylang --test archivo.ray suma` corre solo las pruebas cuyo nombre
+  contiene `suma`.
+
+Todo esto, salvo `panic`, sigue siendo **cliente externo + prelude**: el runner crece, el núcleo
+casi no se entera.
 
 ## `@derive(Eq)`: una anotación que genera código
 

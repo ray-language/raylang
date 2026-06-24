@@ -219,6 +219,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   impl concreto, o `Var` del llamador con el mismo bound). Esto da **propagación gratis**: construir
   `Caja<U>` dentro de `fn g<U>` exige `U: Show`. `check_type_def_bounds` valida los bounds (param
   real + trait existente). El `TypeRewriter` del loader namespaca el trait del bound. Erasure total.
+  **(b) `dyn Trait` sobre impls genéricos** (319 tests lib): coercionar `Caja<int>` (impl genérico
+  acotado) a `dyn Trait`. La *vtable* del trait object (M9.3b) necesitaba el método manglado plano,
+  que no vale para un impl genérico acotado (lleva params-diccionario). Fix: la vtable se calcula en
+  el checker con **`dict_for`** (plano-vs-closure-anidado, como los diccionarios) y se guarda en
+  `dyn_coercions` (ahora `(trait, Vec<Expr>)` en vez de `(trait, clave)`); `lower_dyn` solo la coloca.
+  Funciona anidado (`Caja<Caja<N>>`). Closures sintéticos renumerados por `renumber_fn_exprs`.
 - **M10.1 COMPLETO** (272 tests + integración CLI verdes): **anotaciones**. `@nombre[(args)]`
   sobre fn/struct/enum; `Annotation { name, args }` en cada ítem; conjunto **cerrado**
   conocido por el compilador (`check_annotations`). **`@test`** (función `() -> bool`) +

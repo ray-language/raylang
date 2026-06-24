@@ -345,9 +345,11 @@ struct Checker {
     /// argumentos extra, en orden. `lower_dict_calls` los añade tras verificar.
     dict_calls: DictSites,
     /// Coerciones concreto→`dyn Trait` (M9.3b): `(línea, col)` de la expresión → `(trait,
-    /// clave_del_tipo_concreto)`. `lower_dyn` envuelve esa expresión en el struct
-    /// sintetizado del trait object.
-    dyn_coercions: HashMap<(usize, usize), (String, String)>,
+    /// expresiones-vtable)`. `lower_dyn` envuelve esa expresión en el struct sintetizado del trait
+    /// object, usando las expresiones-vtable como sus métodos. Cada método se resuelve con `dict_for`
+    /// (M9.4): el método manglado plano para un impl concreto/genérico sin bounds, o un **closure
+    /// anidado** para un impl genérico acotado (`Caja<int>`) → habilita `dyn` sobre impls genéricos.
+    dyn_coercions: HashMap<(usize, usize), (String, Vec<Expr>)>,
     /// Sitios de **despacho dinámico** (M9.3b): `(línea, col, método)` de un `obj.m(args)`
     /// con `obj: dyn Trait`. `lower_dyn` los baja al bloque `{ let r = obj; (r.m)(r.data, ...) }`.
     dyn_dispatch: HashSet<(usize, usize, String)>,
@@ -1550,7 +1552,15 @@ impl Checker {
                 "{} no implementa '{}': no puede usarse como 'dyn {}'", actual, trait_name, trait_name
             )));
         }
-        self.dyn_coercions.insert((line, col), (trait_name.to_string(), key));
+        // La vtable: un valor función por método del trait. `dict_for` elige el método manglado
+        // plano (impl concreto, o genérico sin bounds) o un closure anidado (impl genérico acotado,
+        // p. ej. `Caja<int>`), exactamente como para los diccionarios de bounds (M9.4 → dyn genérico).
+        let methods = self.traits.get(trait_name).cloned().unwrap_or_default();
+        let mut vtable = Vec::with_capacity(methods.len());
+        for m in &methods {
+            vtable.push(self.dict_for(&actual, trait_name, &m.name, line, col)?);
+        }
+        self.dyn_coercions.insert((line, col), (trait_name.to_string(), vtable));
         Ok(Type::Dyn(trait_name.to_string()))
     }
 
@@ -3307,7 +3317,7 @@ fn lower_dict_calls_expr(expr: &mut Expr, sites: &DictSites) {
 // **despacho** `obj.m(args)` baja a `{ let r = obj; (r.m)(r.data, args) }`. Reusa structs +
 // funciones de primera clase: el intérprete y la VM no saben de trait objects.
 
-type CoercionMap = HashMap<(usize, usize), (String, String)>;
+type CoercionMap = HashMap<(usize, usize), (String, Vec<Expr>)>;
 type DispatchSet = HashSet<(usize, usize, String)>;
 
 /// Nombre del struct sintetizado que realiza `dyn Trait` en runtime.
@@ -3466,13 +3476,17 @@ fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
         expr.kind = ExprKind::Block(Block { statements: vec![let_stmt], tail: Some(Box::new(call)), line, col });
     }
 
-    // Coerción concreto→`dyn Trait`: envolver en el struct sintetizado (la vtable).
-    if let Some((trait_name, key)) = coercions.get(&(line, col)) {
+    // Coerción concreto→`dyn Trait`: envolver en el struct sintetizado (la vtable). Los valores
+    // función de la vtable los calculó el checker con `dict_for` (M9.4) — método manglado plano o
+    // closure anidado para un impl genérico acotado—, así que `dyn` funciona también sobre impls
+    // genéricos. Van en el orden de los métodos del trait, igual que `tm`.
+    if let Some((trait_name, vtable)) = coercions.get(&(line, col)) {
         let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
         let inner = Expr { kind: taken, line, col };
         let mut fields = vec![("data".to_string(), inner)];
-        for m in tm.get(trait_name).into_iter().flatten() {
-            fields.push((m.clone(), ident_expr(&mangle(key, m), line, col)));
+        let names = tm.get(trait_name).cloned().unwrap_or_default();
+        for (m, vexpr) in names.iter().zip(vtable) {
+            fields.push((m.clone(), vexpr.clone()));
         }
         expr.kind = ExprKind::StructLit { name: dyn_struct_name(trait_name), fields };
     }

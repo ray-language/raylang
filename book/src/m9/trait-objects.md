@@ -113,3 +113,26 @@ Con los trait objects, raylang completa su historia de polimorfismo:
 carga sus funciones.* Esa es la lección de M9 — desde los impls hasta el despacho dinámico,
 el polimorfismo se construyó enteramente sobre genéricos *erasure*, structs y funciones de
 primera clase, sin una sola primitiva nueva en los motores de ejecución.
+
+## `dyn` sobre impls genéricos (M9.4)
+
+Un cabo suelto de M9.3b: ¿se puede coercionar a `dyn Trait` un valor cuyo impl es **genérico**, como
+un `Caja<int>` con `impl<T: Show> Show for Caja<T>`? La vtable necesita, para cada método, un valor
+función. Para un impl concreto es el método manglado tal cual (`Punto#mostrar`). Pero el método de un
+impl genérico **acotado** lleva parámetros-diccionario ocultos (M9.2b), así que no se puede meter
+plano en la vtable —es exactamente el mismo problema que pasar `Caja<int>` a otro genérico acotado—.
+
+La solución reusa la pieza de los bounds: la vtable se arma con `dict_for`, que ya sabe elegir entre
+el método plano y un **closure anidado** que rellena los diccionarios internos. Así:
+
+```rust
+trait Mostrar { fn mostrar(self) -> string; }
+struct Caja<T> { v: T }
+impl<T: Mostrar> Mostrar for Caja<T> { fn mostrar(self) -> string { "Caja(" + self.v.mostrar() + ")" } }
+
+fn describe(d: dyn Mostrar) -> string { d.mostrar() }
+describe(Caja { v: Caja { v: N {} } });   // "Caja(Caja(N))" — coerción de un impl genérico anidado
+```
+
+Cero runtime nuevo, otra vez: la vtable es un struct y sus métodos son closures que el motor ya sabe
+llamar desde M4.

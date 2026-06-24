@@ -1353,10 +1353,13 @@ checker: solo importan en runtime, donde *erasure* los reduce a valores función
 - **M9.2b-2** — **bounds del impl + diccionarios anidados** (`impl<T: Mostrable> ...`): argumentos
   -diccionario como expresiones y síntesis del closure en `dict_for`.
 
-**Runtime: sin cambios** (igual que M9.2). Diferido a más allá de M9.2b: instancias solapadas /
-especializadas, bounds en parámetros de struct/enum, y `dyn Trait` sobre impls genéricos.
+**Runtime: sin cambios** (igual que M9.2). Bounds en parámetros de struct/enum → **M9.4** (§18.6c);
+`dyn Trait` sobre impls genéricos → **M9.4** (§18.6c, vtable vía `dict_for`). Diferido a futuro:
+instancias solapadas / especializadas (coherencia/especialización; research-grade).
 
-### 18.6c M9.4 — Bounds en parámetros de tipo de struct/enum
+### 18.6c M9.4 — Bounds en struct/enum y `dyn` sobre impls genéricos
+
+M9.4 cierra dos diferidos de genéricos que comparten una pieza (`satisfies_bound`/`dict_for`).
 
 Hasta aquí solo las **funciones** y los **impls** podían acotar sus parámetros de tipo (`fn f<T: A>`,
 `impl<T: A> …`). M9.4 lo extiende a los **tipos del usuario**: `struct Caja<T: Show> { v: T }` y
@@ -1376,6 +1379,16 @@ exige el bound en una función que solo *recibe* un `Caja<U>` sin construirlo (r
 defendible aquí: el `impl<T: Show> Show for Caja<T>` ya reexige `T: Show` al llamar a sus métodos, así
 que no hay agujero). `check_bounds` se generaliza para validar también los bounds de struct/enum (cada
 uno acota un parámetro real con un trait existente). **Runtime intacto** (erasure total).
+
+**`dyn Trait` sobre impls genéricos.** La realización de M9.3b construye, en la coerción concreto→
+objeto, un struct sintetizado (la *vtable*): `data` + un valor función por método. Para un impl
+**concreto** ese valor es el método manglado plano (`Punto#m`); para un impl **genérico acotado**
+(`impl<T: Show> Show for Caja<T>`) el método manglado lleva parámetros-diccionario ocultos y no se
+puede pasar plano: hace falta el mismo **closure anidado** que arma `dict_for`. La solución reusa eso:
+la vtable se calcula en el checker con `dict_for(&actual, trait, m)` —que ya elige plano-vs-closure
+según el impl— y se guarda en `dyn_coercions`; `lower_dyn` solo la coloca. Así `Caja<int>` (o anidado,
+`Caja<Caja<N>>`) coacciona a `dyn Show` sin runtime nuevo. Los closures sintéticos los renumera la
+pasada final `renumber_fn_exprs`, como los de M9.2b.
 
 ### 18.7 M9.3 — Métodos por defecto y trait objects
 
@@ -1470,8 +1483,10 @@ funciones", sobre las piezas que ya existían (structs + funciones de primera cl
 
 ### 18.8 Deferido (más allá de M9.3)
 - **Impls genéricos** (`impl Trait for Caja<T>`) → ✅ M9.2b (§18.6b, diccionarios anidados).
-- **Instancias solapadas/especializadas** (`impl Trait for Caja<int>` junto a `Caja<T>`) y
-  **`dyn Trait` sobre impls genéricos** → diferidos más allá de M9.2b.
+- **`dyn Trait` sobre impls genéricos** → ✅ M9.4 (§18.6c): la vtable de la coerción se arma con
+  `dict_for`, así un `Caja<int>` (impl genérico acotado) coacciona a `dyn Trait` con un closure anidado.
+- **Instancias solapadas/especializadas** (`impl Trait for Caja<int>` junto a `Caja<T>`) → futuro
+  (coherencia/especialización; research-grade, no se hará a la ligera).
 - **Traits con `Self` en posición de argumento** que exija dos receptores del mismo tipo
   (p. ej. `fn igual(self, otro: Self) -> bool`) → soportado por M9.1 (ambos = destino), pero
   sin la garantía de igualdad estructural que daría un trait `Eq` del prelude (futuro).

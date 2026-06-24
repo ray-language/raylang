@@ -2174,6 +2174,30 @@ mod tests {
     }
 
     #[test]
+    fn dyn_sobre_impl_generico_oraculo() {
+        // M9.4: coercionar a `dyn Trait` un tipo cuyo impl es genérico acotado (Caja<T>): la vtable
+        // lleva un closure anidado (como un diccionario), no el método manglado plano. Incluye
+        // anidamiento Caja<Caja<N>> y un impl concreto en el mismo arreglo heterogéneo.
+        oracle_program(r#"
+            trait Mostrar { fn mostrar(self) -> string; }
+            struct N { x: int }
+            impl Mostrar for N { fn mostrar(self) -> string { "N" } }
+            struct Caja<T> { v: T }
+            impl<T: Mostrar> Mostrar for Caja<T> {
+                fn mostrar(self) -> string { "Caja(" + self.v.mostrar() + ")" }
+            }
+            fn describe(d: dyn Mostrar) -> string { d.mostrar() }
+            fn main() -> int {
+                let xs: [dyn Mostrar] = [N{x:1}, Caja{v:N{x:2}}, Caja{v:Caja{v:N{x:3}}}];
+                var total = 0; var i = 0;
+                while (i < len(xs)) { total = total + len(describe(xs[i])); i = i + 1; }
+                // len("N")=1, len("Caja(N)")=7, len("Caja(Caja(N))")=13 -> 21
+                total
+            }
+        "#);
+    }
+
+    #[test]
     fn defecto_con_self_heredado_por_dos_impls() {
         // Regresión: un método por defecto que llama a `self.m()` y es heredado por DOS
         // impls. Cada cuerpo clonado debe resolver a SUS métodos (no compartir destino).

@@ -788,6 +788,19 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     (`xs.map(f)`), pipelines (`xs |> map(f)`; el receptor cuenta para la inferencia) y closures inline.
     Oráculo: 4 válidos + 1 error + `stdlib.ray`. Diferido a d-4c: Eq/Show/Ord + impls de primitivos +
     `@derive` + anotaciones (cierra M14.3). DESIGN §23.4.
+  - **M14.3d-4c COMPLETO → M14.3d COMPLETO → M14.3 COMPLETO** (347 lib + 24 en `tests/selfhost_checker.rs`):
+    **checker auto-alojado — @derive + Eq/Show/Ord + anotaciones**. `inject_prelude_traits` registra
+    `Eq`/`Show`/`Ord` (firmas) + impls de primitivos (`int#igual`/`int#mostrar`/… en `methods`+
+    `impl_traits`). **`@derive(Eq, Show)`** (`generate_derives`/`validate_derive`) sobre struct/enum no
+    genérico: registra los métodos derivados (`igual`/`mostrar`) + `impl_traits`, idempotente; NO chequea
+    el cuerpo (codegen conocido; un campo no derivable no se detecta: limitación). **`check_annotations`**:
+    `@test` solo en funciones `()->bool`/`()->unit`, `@derive` solo en tipos, otras desconocidas (mensajes
+    byte-idénticos). Un tipo derivado satisface `T: Eq` y responde a `.igual()`/`.mostrar()`. Oráculo:
+    6 válidos + 8 errores + `anotaciones.ray`. **El checker auto-alojado valida el LENGUAJE COMPLETO**
+    (núcleo+datos+genéricos+traits/impls/bounds/dyn+prelude+derive), byte-idéntico a Rust sobre 22
+    ejemplos reales + ~80 casos. Diferidos (fuera del corpus): `Map` en el checker, bounds anidados
+    profundos, posición de cuerpos de defecto inválidos, prelude más allá de map/filter/fold. **Siguiente
+    gran hito: el back-end (ejecución/lowering) para cerrar el self-hosting.** DESIGN §23.4.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

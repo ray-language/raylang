@@ -349,6 +349,34 @@ fn prelude_map_filter_fold() {
     comparar("fn negar(b: bool) -> bool { !b } fn main() -> int { let xs: [int] = [1, 2]; let ys = xs.map(negar); 0 }", "scpre_mapty.ray");
 }
 
+#[test]
+fn derive_y_anotaciones_validos() {
+    // @derive(Eq): .igual() sobre struct.
+    comparar("@derive(Eq) struct P { x: int } fn main() -> int { let a = P { x: 1 }; let b = P { x: 1 }; if (a.igual(b)) { 1 } else { 0 } }", "scan_eq.ray");
+    // @derive(Show): .mostrar() sobre enum.
+    comparar("@derive(Show) enum C { Rojo, Azul } fn main() -> int { print(C.Rojo.mostrar()); 0 }", "scan_show.ray");
+    // @derive(Eq, Show) a la vez.
+    comparar("@derive(Eq, Show) struct P { x: int, y: int } fn main() -> int { let p = P { x: 1, y: 2 }; print(p.mostrar()); if (p.igual(p)) { 1 } else { 0 } }", "scan_both.ray");
+    // El tipo derivado satisface un bound T: Eq.
+    comparar("@derive(Eq) enum C { A, B } fn ci<T: Eq>(a: T, b: T) -> int { if (a.igual(b)) { 1 } else { 0 } } fn main() -> int { ci(C.A, C.A) }", "scan_bound.ray");
+    // Eq/Show del prelude sobre primitivos.
+    comparar("fn main() -> int { print(42.mostrar()); if (1.igual(1)) { 0 } else { 1 } }", "scan_prim.ray");
+    // @test (función de prueba).
+    comparar("@test fn t() -> bool { true } fn main() -> int { 0 }", "scan_test.ray");
+}
+
+#[test]
+fn errores_derive_y_anotaciones() {
+    comparar("@frobnicate fn f() -> int { 0 } fn main() -> int { 0 }", "scane_unk.ray");
+    comparar("@test fn t(x: int) -> bool { true } fn main() -> int { 0 }", "scane_testpar.ray");
+    comparar("@test fn t() -> int { 0 } fn main() -> int { 0 }", "scane_testret.ray");
+    comparar("@derive(Eq) fn f() -> int { 0 } fn main() -> int { 0 }", "scane_derfn.ray");
+    comparar("@test struct S {} fn main() -> int { 0 }", "scane_testty.ray");
+    comparar("@derive(Frob) struct S { x: int } fn main() -> int { 0 }", "scane_derunk.ray");
+    comparar("@derive(Eq) struct C<T> { v: T } fn main() -> int { 0 }", "scane_dergen.ray");
+    comparar("@derive() struct S { x: int } fn main() -> int { 0 }", "scane_derempty.ray");
+}
+
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
 fn ejemplos_reales_validos() {
@@ -357,7 +385,7 @@ fn ejemplos_reales_validos() {
         "examples/matriz.ray", "examples/genericos.ray", "examples/tipos_genericos.ray", "examples/opcional.ray",
         "examples/errores.ray", "examples/ufcs.ray", "examples/closures.ray", "examples/traits.ray",
         "examples/bounds.ray", "examples/metodos_por_defecto.ray", "examples/impls_genericos.ray",
-        "examples/trait_objects.ray", "examples/stdlib.ray"];
+        "examples/trait_objects.ray", "examples/stdlib.ray", "examples/anotaciones.ray"];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);

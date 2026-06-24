@@ -2617,3 +2617,17 @@ Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el
   redefina (override). Compone con UFCS (`xs.map(f)`) y pipelines (`xs |> map(f)`) — el receptor cuenta
   para la inferencia genérica — y con closures inline. Oráculo: 4 válidos + 1 error + `stdlib.ray`.
   Diferido a d-4c: Eq/Show/Ord + impls de primitivos + `@derive` + anotaciones.
+- **M14.3d-4c COMPLETO — M14.3d COMPLETO — M14.3 COMPLETO** — `@derive` + Eq/Show/Ord + anotaciones.
+  `inject_prelude_traits` registra los traits `Eq`/`Show`/`Ord` (firmas) y sus impls para primitivos
+  (`int#igual`, `int#mostrar`, …, en `methods`+`impl_traits`). **`@derive(Eq, Show)`** (`generate_derives`/
+  `validate_derive`): sobre struct/enum no genérico, registra los métodos derivados (`igual`/`mostrar`) +
+  `impl_traits` (idempotente: no pisa un impl existente); NO genera/chequea el cuerpo (es codegen
+  conocido → un campo no derivable, p. ej. función, no se detecta: limitación). **`check_annotations`**:
+  `@test` solo en funciones `() -> bool`/`() -> unit` (sin args/params), `@derive` solo en tipos, otras
+  son desconocidas (mensajes byte-idénticos). Así un tipo derivado satisface `T: Eq` y responde a
+  `.igual()`/`.mostrar()`. Oráculo: 6 válidos + 8 errores + `anotaciones.ray`. **El checker auto-alojado
+  valida el LENGUAJE COMPLETO** (núcleo + datos + genéricos + traits/impls/bounds/dyn + prelude + derive),
+  con veredicto byte-idéntico a Rust sobre 22 ejemplos reales + ~80 casos. Diferidos (no en el corpus):
+  `Map` en el checker, satisfacción de bounds anidada profunda, posición de cuerpos de defecto inválidos,
+  prelude más allá de map/filter/fold (sort/assert/get/parse_int). **Siguiente: el back-end (ejecución/
+  lowering) para cerrar el self-hosting.**

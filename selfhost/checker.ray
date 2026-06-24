@@ -20,7 +20,7 @@
 // `TNamed(nombre, args)`; se distinguen por en qué tabla —`structs`/`enums`— está el nombre). Los
 // ámbitos y las tablas de tipos usan `Map<K,V>`.
 
-from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind, FnExpr, TraitDef, MethodSig, ImplBlock, Bound;
+from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind, FnExpr, TraitDef, MethodSig, ImplBlock, Bound, Annotation;
 
 // Error de tipos con ubicación (espejo de `TypeError` en Rust).
 pub struct TypeError { msg: string, line: int, col: int }
@@ -544,6 +544,61 @@ fn inject_prelude(c: Checker, prog: Program) {
         insert(c.enum_tparams, "Result", ["T", "E"]);
     }
     inject_prelude_fns(c, prog);
+    inject_prelude_traits(c, prog);
+}
+
+// Inyecta los traits del prelude (Eq/Show/Ord) y sus impls para primitivos (M14.3d-4c). En Rust se
+// parsean del prelude; el validador registra sus firmas + la tabla de métodos. Solo si el usuario no
+// redefine el trait (override).
+fn inject_prelude_traits(c: Checker, prog: Program) {
+    if (!user_declares_trait(prog, "Eq")) {
+        insert(c.traits, "Eq", [eq_sig()]);
+        inject_prim_eq(c, Type.TInt, "int");
+        inject_prim_eq(c, Type.TFloat, "float");
+        inject_prim_eq(c, Type.TString, "string");
+        inject_prim_eq(c, Type.TBool, "bool");
+        inject_prim_eq(c, Type.TChar, "char");
+    }
+    if (!user_declares_trait(prog, "Show")) {
+        insert(c.traits, "Show", [show_sig()]);
+        inject_prim_show(c, Type.TInt, "int");
+        inject_prim_show(c, Type.TFloat, "float");
+        inject_prim_show(c, Type.TString, "string");
+        inject_prim_show(c, Type.TBool, "bool");
+        inject_prim_show(c, Type.TChar, "char");
+    }
+    if (!user_declares_trait(prog, "Ord")) {
+        insert(c.traits, "Ord", [ord_sig()]);
+        inject_prim_ord(c, Type.TInt, "int");
+        inject_prim_ord(c, Type.TFloat, "float");
+        inject_prim_ord(c, Type.TString, "string");
+        inject_prim_ord(c, Type.TChar, "char");
+    }
+}
+
+fn self_param() -> Param { Param { name: "self", ty: Type.TNamed("Self", []), line: 0, col: 0 } }
+fn otro_param() -> Param { Param { name: "otro", ty: Type.TNamed("Self", []), line: 0, col: 0 } }
+fn eq_sig() -> MethodSig { MethodSig { name: "igual", params: [self_param(), otro_param()], ret: Type.TBool, default_body: Option.None, line: 0, col: 0 } }
+fn show_sig() -> MethodSig { MethodSig { name: "mostrar", params: [self_param()], ret: Type.TString, default_body: Option.None, line: 0, col: 0 } }
+fn ord_sig() -> MethodSig { MethodSig { name: "menor", params: [self_param(), otro_param()], ret: Type.TBool, default_body: Option.None, line: 0, col: 0 } }
+
+// Registra un método de impl del prelude (FnSig monomórfica) + la marca en `impl_traits`.
+fn inject_method_impl(c: Checker, key: string, trait_name: string, method: string, params: [Type], ret: Type) {
+    insert(c.methods, mangle(key, method), FnSig { params: params, ret: ret, type_params: no_tparams(), bounds: no_bounds() });
+    insert(c.impl_traits, mangle(key, trait_name), true);
+}
+fn inject_prim_eq(c: Checker, ty: Type, key: string) { inject_method_impl(c, key, "Eq", "igual", [ty, ty], Type.TBool); }
+fn inject_prim_show(c: Checker, ty: Type, key: string) { inject_method_impl(c, key, "Show", "mostrar", [ty], Type.TString); }
+fn inject_prim_ord(c: Checker, ty: Type, key: string) { inject_method_impl(c, key, "Ord", "menor", [ty, ty], Type.TBool); }
+
+// ¿El usuario declara un trait con ese nombre?
+fn user_declares_trait(prog: Program, name: string) -> bool {
+    var i = 0;
+    while (i < len(prog.traits)) {
+        if (prog.traits[i].name == name) { return true; }
+        i = i + 1;
+    }
+    false
 }
 
 // Inyecta las funciones genéricas de orden superior del prelude (M7.3): map/filter/fold. En Rust
@@ -702,6 +757,8 @@ fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
         fi = fi + 1;
     }
     register_traits_impls(c, prog)?;
+    generate_derives(c, prog)?;
+    check_annotations(c, prog)?;
     // 'main' es obligatoria: sin parámetros, retorno int o unit.
     match (get(c.funcs, "main")) {
         Option.None => { return Result.Err(terr(1, 1, "falta la función de entrada 'main'")); },
@@ -2295,6 +2352,132 @@ fn check_impl_bounds(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
 // La clave de tipo de un objetivo de impl ya validado (siempre existe).
 fn type_key_str(t: Type) -> string {
     match (type_key_of(t)) { Option.Some(k) => k, Option.None => "" }
+}
+
+// =====================================================================
+// @derive y anotaciones (M14.3d-4c)
+// =====================================================================
+
+// Genera los impls de `@derive(Eq, Show)` sobre struct/enum no genérico: registra los métodos
+// derivados (`igual`/`mostrar`) y la marca en `impl_traits`. En Rust se genera el FUENTE del impl y se
+// baja con M9; el validador solo necesita las firmas (no chequea el cuerpo: es codegen conocido).
+fn generate_derives(c: Checker, prog: Program) -> Result<int, TypeError> {
+    var si = 0;
+    while (si < len(prog.structs)) {
+        let s = prog.structs[si];
+        generate_derives_for(c, s.annotations, s.name, s.type_params)?;
+        si = si + 1;
+    }
+    var ei = 0;
+    while (ei < len(prog.enums)) {
+        let e = prog.enums[ei];
+        generate_derives_for(c, e.annotations, e.name, e.type_params)?;
+        ei = ei + 1;
+    }
+    Result.Ok(0)
+}
+
+fn generate_derives_for(c: Checker, annotations: [Annotation], name: string, type_params: [string]) -> Result<int, TypeError> {
+    var i = 0;
+    while (i < len(annotations)) {
+        let a = annotations[i];
+        if (a.name == "derive") {
+            validate_derive(a, name, type_params)?;
+            var j = 0;
+            while (j < len(a.args)) {
+                register_derived_impl(c, name, a.args[j]);
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    Result.Ok(0)
+}
+
+// Valida `@derive(...)`: argumentos no vacíos, todos derivables (Eq/Show), tipo no genérico.
+fn validate_derive(a: Annotation, name: string, type_params: [string]) -> Result<int, TypeError> {
+    if (len(a.args) == 0) {
+        return Result.Err(terr(a.line, a.col, "'@derive' requiere al menos un trait (p. ej. @derive(Eq))"));
+    }
+    var i = 0;
+    while (i < len(a.args)) {
+        if (a.args[i] != "Eq" && a.args[i] != "Show") {
+            return Result.Err(terr(a.line, a.col, "no se sabe derivar '" + a.args[i] + "' (por ahora Eq y Show)"));
+        }
+        i = i + 1;
+    }
+    if (len(type_params) != 0) {
+        return Result.Err(terr(a.line, a.col, "no se puede derivar para el tipo genérico '" + name + "'"));
+    }
+    Result.Ok(0)
+}
+
+// Registra el impl derivado de un trait (`Eq`→`igual`, `Show`→`mostrar`) para un tipo. Idempotente:
+// si ya hay un impl (del usuario o derivado), no lo pisa.
+fn register_derived_impl(c: Checker, type_name: string, trait_name: string) {
+    if (contains_key(c.impl_traits, mangle(type_name, trait_name))) { return; }
+    let target = Type.TNamed(type_name, []);
+    if (trait_name == "Eq") {
+        insert(c.methods, mangle(type_name, "igual"), FnSig { params: [target, target], ret: Type.TBool, type_params: no_tparams(), bounds: no_bounds() });
+    }
+    if (trait_name == "Show") {
+        insert(c.methods, mangle(type_name, "mostrar"), FnSig { params: [target], ret: Type.TString, type_params: no_tparams(), bounds: no_bounds() });
+    }
+    insert(c.impl_traits, mangle(type_name, trait_name), true);
+}
+
+// Valida las anotaciones: `@test` solo en funciones `() -> bool`/`() -> unit`; `@derive` solo en tipos;
+// cualquier otra es desconocida.
+fn check_annotations(c: Checker, prog: Program) -> Result<int, TypeError> {
+    var fi = 0;
+    while (fi < len(prog.funcs)) {
+        let f = prog.funcs[fi];
+        var ai = 0;
+        while (ai < len(f.annotations)) {
+            let a = f.annotations[ai];
+            if (a.name == "test") {
+                if (len(a.args) != 0) { return Result.Err(terr(a.line, a.col, "'@test' no recibe argumentos")); }
+                if (len(f.params) != 0) { return Result.Err(terr(a.line, a.col, "la función de prueba '@test' '" + f.name + "' no debe recibir parámetros")); }
+                let ret = resolve_type(f.ret);
+                if (!type_eq(ret, Type.TBool) && !type_eq(ret, Type.TUnit)) {
+                    return Result.Err(terr(a.line, a.col, "una función '@test' debe devolver bool o unit, no " + type_str(f.ret)));
+                }
+            } else if (a.name == "derive") {
+                return Result.Err(terr(a.line, a.col, "'@derive' solo se permite sobre struct o enum"));
+            } else {
+                return Result.Err(terr(a.line, a.col, "anotación desconocida: '@" + a.name + "'"));
+            }
+            ai = ai + 1;
+        }
+        fi = fi + 1;
+    }
+    var si = 0;
+    while (si < len(prog.structs)) {
+        check_type_annotations(prog.structs[si].annotations)?;
+        si = si + 1;
+    }
+    var ei = 0;
+    while (ei < len(prog.enums)) {
+        check_type_annotations(prog.enums[ei].annotations)?;
+        ei = ei + 1;
+    }
+    Result.Ok(0)
+}
+
+fn check_type_annotations(annotations: [Annotation]) -> Result<int, TypeError> {
+    var i = 0;
+    while (i < len(annotations)) {
+        let a = annotations[i];
+        if (a.name == "derive") {
+            // ok: ya validada/generada en generate_derives.
+        } else if (a.name == "test") {
+            return Result.Err(terr(a.line, a.col, "'@test' solo se permite sobre funciones"));
+        } else {
+            return Result.Err(terr(a.line, a.col, "anotación desconocida: '@" + a.name + "'"));
+        }
+        i = i + 1;
+    }
+    Result.Ok(0)
 }
 
 // Valida el objetivo de un `impl`. M14.3d-2: solo objetivos CONCRETOS (struct/enum no genérico, o

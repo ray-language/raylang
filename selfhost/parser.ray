@@ -55,6 +55,28 @@ pub enum EKind {
     EIf(Expr, Block, Option<Expr>),  // cond, then, else (bloque-expr u otro if)
     EWhile(Expr, Block),
     EBlock(Block),
+    EStructLit(string, [FieldInit]),  // Nombre { campo: valor, ... }  (M14.2b)
+    EFunc(FnExpr),                    // función anónima fn(...) { ... }  (M14.2b)
+    EMatch(Expr, [MatchArm]),         // match (e) { patrón => cuerpo, ... }  (M14.2b)
+}
+
+// Inicialización de un campo en un literal de struct: `campo: valor`.
+pub struct FieldInit { name: string, value: Expr }
+
+// Una función anónima como valor (M14.2b). `id` es único (contador del parser) y sirve para que
+// los motores asocien el literal con su entrada en la tabla de funciones.
+pub struct FnExpr { id: int, params: [Param], ret: Type, body: Block, line: int, col: int }
+
+// Un brazo de `match`: un patrón y la expresión-cuerpo que se evalúa si casa.
+pub struct MatchArm { pat: Pattern, body: Expr, line: int, col: int }
+
+// Un patrón (plano, un nivel): comodín, binding suelto o variante de enum.
+pub struct Pattern { kind: PKind, line: int, col: int }
+
+pub enum PKind {
+    PWild,                                       // _
+    PBind(string),                               // un nombre suelto (catch-all)
+    PVariant(string, string, [Option<string>]),  // Enum.Variante(sub-bindings); None = '_'
 }
 
 // Un parámetro formal `nombre: tipo`.
@@ -75,11 +97,23 @@ pub enum SKind {
 // Una función de nivel superior.
 pub struct Func { name: string, params: [Param], ret: Type, body: Block, line: int, col: int }
 
-// Un programa: por ahora (M14.2a) solo funciones.
-pub struct Program { funcs: [Func] }
+// Un campo de un struct: `nombre: tipo`.
+pub struct FieldDef { name: string, ty: Type }
 
-// El estado del parser: la cinta de tokens y el cursor.
-struct Parser { toks: [Token], pos: int }
+// Definición de struct: `struct Nombre { campo: Tipo, ... }` (M14.2b; sin genéricos aún).
+pub struct StructDef { name: string, fields: [FieldDef], line: int, col: int }
+
+// Una variante de enum: su nombre y su payload posicional (vacío = variante unit).
+pub struct VariantDef { name: string, payload: [Type], line: int, col: int }
+
+// Definición de enum: `enum Nombre { Variante(tipos...), ... }` (M14.2b; sin genéricos aún).
+pub struct EnumDef { name: string, variants: [VariantDef], line: int, col: int }
+
+// Un programa: funciones + definiciones de tipos (M14.2b).
+pub struct Program { funcs: [Func], structs: [StructDef], enums: [EnumDef] }
+
+// El estado del parser: la cinta de tokens, el cursor y el contador de funciones anónimas.
+struct Parser { toks: [Token], pos: int, next_fn_id: int }
 
 // =====================================================================
 // Nombre canónico de un token: única fuente de verdad para check/eat/expect.
@@ -191,13 +225,66 @@ fn expect_ident(p: Parser, what: string) -> string {
 // Reglas de la gramática
 // =====================================================================
 
-// program = { function }   (M14.2a: solo funciones)
+// program = { struct_def | enum_def | function }   (M14.2b; pub/anotaciones/imports → M14.2c)
 fn parse_program(p: Parser) -> Program {
     var funcs: [Func] = [];
+    var structs: [StructDef] = [];
+    var enums: [EnumDef] = [];
     while (!at_end(p)) {
-        push(funcs, function(p));
+        if (check(p, "struct")) {
+            push(structs, struct_def(p));
+        } else if (check(p, "enum")) {
+            push(enums, enum_def(p));
+        } else {
+            push(funcs, function(p));
+        }
     }
-    Program { funcs: funcs }
+    Program { funcs: funcs, structs: structs, enums: enums }
+}
+
+// struct_def = 'struct' IDENT '{' [ field { ',' field } [ ',' ] ] '}'   ;  field = IDENT ':' type
+fn struct_def(p: Parser) -> StructDef {
+    let kw = expect(p, "struct", "'struct'");
+    let name = expect_ident(p, "el nombre del struct");
+    expect(p, "{", "'{' tras el nombre del struct");
+    var fields: [FieldDef] = [];
+    var done = false;
+    while (!done && !check(p, "}")) {
+        let fname = expect_ident(p, "el nombre de un campo");
+        expect(p, ":", "':' tras el nombre del campo");
+        let ty = parse_type(p);
+        push(fields, FieldDef { name: fname, ty: ty });
+        if (!eat(p, ",")) { done = true; }
+    }
+    expect(p, "}", "'}' para cerrar el struct");
+    StructDef { name: name, fields: fields, line: kw.line, col: kw.col }
+}
+
+// enum_def = 'enum' IDENT '{' [ variant { ',' variant } [ ',' ] ] '}'
+// variant  = IDENT [ '(' type { ',' type } ')' ]
+fn enum_def(p: Parser) -> EnumDef {
+    let kw = expect(p, "enum", "'enum'");
+    let name = expect_ident(p, "el nombre del enum");
+    expect(p, "{", "'{' tras el nombre del enum");
+    var variants: [VariantDef] = [];
+    var done = false;
+    while (!done && !check(p, "}")) {
+        let vt = cur_tok(p);
+        let vname = expect_ident(p, "el nombre de una variante");
+        var payload: [Type] = [];
+        if (eat(p, "(")) {
+            var seguir = true;
+            while (seguir) {
+                push(payload, parse_type(p));
+                if (!eat(p, ",")) { seguir = false; }
+            }
+            expect(p, ")", "')' para cerrar el payload de la variante");
+        }
+        push(variants, VariantDef { name: vname, payload: payload, line: vt.line, col: vt.col });
+        if (!eat(p, ",")) { done = true; }
+    }
+    expect(p, "}", "'}' para cerrar el enum");
+    EnumDef { name: name, variants: variants, line: kw.line, col: kw.col }
 }
 
 // function = 'fn' IDENT '(' [ params ] ')' [ '->' type ] block
@@ -473,7 +560,8 @@ fn primary(p: Parser) -> Expr {
         return Expr { kind: EKind.EBlock(b), line: b.line, col: b.col };
     }
     if (check(p, "[")) { return array_literal(p); }
-    // (fn-expr y match → M14.2b; literal de struct → M14.2b)
+    if (check(p, "fn")) { return fn_expr(p); }
+    if (check(p, "match")) { return match_expr(p); }
     let t = cur_tok(p);
     match (t.kind) {
         TokKind.Int(v) => { advance(p); Expr { kind: EKind.EInt(v), line: t.line, col: t.col } },
@@ -482,7 +570,13 @@ fn primary(p: Parser) -> Expr {
         TokKind.Char(c) => { advance(p); Expr { kind: EKind.EChar(c), line: t.line, col: t.col } },
         TokKind.True => { advance(p); Expr { kind: EKind.EBool(true), line: t.line, col: t.col } },
         TokKind.False => { advance(p); Expr { kind: EKind.EBool(false), line: t.line, col: t.col } },
-        TokKind.Ident(name) => { advance(p); Expr { kind: EKind.EIdent(name), line: t.line, col: t.col } },
+        TokKind.Ident(name) => {
+            advance(p);
+            // `Nombre { ... }` es un literal de struct (las condiciones de if/while/match van entre
+            // paréntesis, así que no hay ambigüedad con los bloques).
+            if (check(p, "{")) { struct_literal(p, name, t.line, t.col) }
+            else { Expr { kind: EKind.EIdent(name), line: t.line, col: t.col } }
+        },
         TokKind.LParen => {
             advance(p);
             let inner = expression(p);
@@ -539,6 +633,101 @@ fn array_literal(p: Parser) -> Expr {
     Expr { kind: EKind.EArray(elems), line: open.line, col: open.col }
 }
 
+// fnExpr = 'fn' '(' [ params ] ')' [ '->' type ] block   (función anónima, M14.2b)
+//
+// El id se asigna en PRE-ORDEN (antes de parsear cuerpo): una fn-expr exterior recibe un id menor
+// que las anidadas en su cuerpo → ids densos 0..n, igual que el parser de Rust.
+fn fn_expr(p: Parser) -> Expr {
+    let kw = expect(p, "fn", "'fn'");
+    let id = p.next_fn_id;
+    p.next_fn_id = p.next_fn_id + 1;
+    expect(p, "(", "'(' tras 'fn'");
+    var params: [Param] = [];
+    if (!check(p, ")")) { params = parse_params(p); }
+    expect(p, ")", "')'");
+    var ret = Type.TUnit;
+    if (eat(p, "->")) { ret = parse_type(p); }
+    let body = block(p);
+    let fe = FnExpr { id: id, params: params, ret: ret, body: body, line: kw.line, col: kw.col };
+    Expr { kind: EKind.EFunc(fe), line: kw.line, col: kw.col }
+}
+
+// matchExpr = 'match' '(' expression ')' '{' [ arm { ',' arm } [ ',' ] ] '}'
+//
+// El escrutinio va entre paréntesis (como if/while): evita la ambigüedad con el literal de struct.
+fn match_expr(p: Parser) -> Expr {
+    let kw = expect(p, "match", "'match'");
+    expect(p, "(", "'(' tras 'match'");
+    let scrut = expression(p);
+    expect(p, ")", "')' tras la expresión de match");
+    expect(p, "{", "'{' para abrir los brazos del match");
+    var arms: [MatchArm] = [];
+    var done = false;
+    while (!done && !check(p, "}")) {
+        push(arms, match_arm(p));
+        if (!eat(p, ",")) { done = true; }
+    }
+    expect(p, "}", "'}' para cerrar el match");
+    Expr { kind: EKind.EMatch(scrut, arms), line: kw.line, col: kw.col }
+}
+
+// arm = pattern '=>' expression
+fn match_arm(p: Parser) -> MatchArm {
+    let pat = pattern(p);
+    let body_pos_line = pat.line;
+    let body_pos_col = pat.col;
+    expect(p, "=>", "'=>' tras el patrón");
+    let body = expression(p);
+    MatchArm { pat: pat, body: body, line: body_pos_line, col: body_pos_col }
+}
+
+// pattern = '_' | IDENT | IDENT '.' IDENT [ '(' subpat { ',' subpat } ')' ]   ;  subpat = '_' | IDENT
+//
+// Como las variantes van cualificadas (`Enum.Variante`), no hay ambigüedad: un identificador
+// seguido de `.` es una variante; uno suelto, un binding; `_`, el comodín.
+fn pattern(p: Parser) -> Pattern {
+    let t = cur_tok(p);
+    let name = expect_ident(p, "un patrón (variante, nombre o '_')");
+    if (name == "_") {
+        return Pattern { kind: PKind.PWild, line: t.line, col: t.col };
+    }
+    if (eat(p, ".")) {
+        let variant = expect_ident(p, "el nombre de la variante");
+        var bindings: [Option<string>] = [];
+        if (eat(p, "(")) {
+            var seguir = true;
+            while (seguir) {
+                let b = expect_ident(p, "un sub-patrón (nombre o '_')");
+                // El tipo declarado de `bv` fija el `Option.None` (no inferible suelto).
+                var bv: Option<string> = Option.None;
+                if (b != "_") { bv = Option.Some(b); }
+                push(bindings, bv);
+                if (!eat(p, ",")) { seguir = false; }
+            }
+            expect(p, ")", "')' para cerrar el patrón de variante");
+        }
+        return Pattern { kind: PKind.PVariant(name, variant, bindings), line: t.line, col: t.col };
+    }
+    Pattern { kind: PKind.PBind(name), line: t.line, col: t.col }
+}
+
+// structLiteral = IDENT '{' [ fieldInit { ',' fieldInit } [ ',' ] ] '}'   ;  fieldInit = IDENT ':' expr
+// El '{' lo confirma el llamador (primary); aquí lo consumimos.
+fn struct_literal(p: Parser, name: string, line: int, col: int) -> Expr {
+    expect(p, "{", "'{'");
+    var fields: [FieldInit] = [];
+    var done = false;
+    while (!done && !check(p, "}")) {
+        let fname = expect_ident(p, "el nombre de un campo");
+        expect(p, ":", "':' tras el nombre del campo");
+        let value = expression(p);
+        push(fields, FieldInit { name: fname, value: value });
+        if (!eat(p, ",")) { done = true; }
+    }
+    expect(p, "}", "'}' para cerrar el literal de struct");
+    Expr { kind: EKind.EStructLit(name, fields), line: line, col: col }
+}
+
 // ----- Auxiliares -----
 
 // Crea un nodo binario heredando la posición del operando izquierdo.
@@ -552,6 +741,7 @@ fn expr_has_block(e: Expr) -> bool {
         EKind.EIf(_, _, _) => true,
         EKind.EWhile(_, _) => true,
         EKind.EBlock(_) => true,
+        EKind.EMatch(_, _) => true,
         _ => false,
     }
 }
@@ -568,6 +758,6 @@ fn is_lvalue(e: Expr) -> bool {
 
 // Punto de entrada: parsea una cinta de tokens (la salida del lexer) a un Program.
 pub fn parse(toks: [Token]) -> Program {
-    let p = Parser { toks: toks, pos: 0 };
+    let p = Parser { toks: toks, pos: 0, next_fn_id: 0 };
     parse_program(p)
 }

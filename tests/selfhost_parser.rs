@@ -113,8 +113,80 @@ fn dump_expr(e: &Expr) -> String {
         }
         ExprKind::While { cond, body } => format!("(while {} {}){}", dump_expr(cond), dump_block(body), pp),
         ExprKind::Block(b) => dump_block(b),
-        other => panic!("M14.2a no cubre la expresión {:?}", other),
+        ExprKind::StructLit { name, fields } => {
+            let inits: String = fields
+                .iter()
+                .map(|(n, e)| format!(" (init {} {})", n, dump_expr(e)))
+                .collect();
+            format!("(struct-lit {}{}){}", name, inits, pp)
+        }
+        ExprKind::Func(fe) => dump_fnexpr(fe),
+        ExprKind::Match { scrutinee, arms } => {
+            let body: String = arms
+                .iter()
+                .map(|a| {
+                    format!(
+                        " (arm {} {}){}",
+                        dump_pattern(&a.pattern),
+                        dump_expr(&a.body),
+                        pos(a.line, a.col)
+                    )
+                })
+                .collect();
+            format!("(match {}{}){}", dump_expr(scrutinee), body, pp)
+        }
+        other => panic!("M14.2b no cubre la expresión {:?}", other),
     }
+}
+
+fn dump_fnexpr(fe: &FnExpr) -> String {
+    format!(
+        "(fn-expr {} (params{}) {} {}){}",
+        fe.id,
+        dump_params(&fe.params),
+        dump_type(&fe.return_type),
+        dump_block(&fe.body),
+        pos(fe.line, fe.col)
+    )
+}
+
+fn dump_pattern(pat: &Pattern) -> String {
+    let pp = pos(pat.line, pat.col);
+    match &pat.kind {
+        PatternKind::Wildcard => format!("(wild){}", pp),
+        PatternKind::Binding(n) => format!("(bind {}){}", n, pp),
+        PatternKind::Variant { enum_name, variant, bindings } => {
+            let binds: String = bindings
+                .iter()
+                .map(|o| match o {
+                    Some(n) => format!(" {}", n),
+                    None => " _".into(),
+                })
+                .collect();
+            format!("(variant {} {}{}){}", enum_name, variant, binds, pp)
+        }
+    }
+}
+
+fn dump_struct(s: &StructDef) -> String {
+    let inner: String = s
+        .fields
+        .iter()
+        .map(|(n, t)| format!(" (field {} {})", n, dump_type(t)))
+        .collect();
+    format!("(struct {} (fields{})){}", s.name, inner, pos(s.line, s.col))
+}
+
+fn dump_enum(e: &EnumDef) -> String {
+    let inner: String = e
+        .variants
+        .iter()
+        .map(|v| {
+            let payload: String = v.payload.iter().map(|t| format!(" {}", dump_type(t))).collect();
+            format!(" (variant {}{}){}", v.name, payload, pos(v.line, v.col))
+        })
+        .collect();
+    format!("(enum {}{}){}", e.name, inner, pos(e.line, e.col))
 }
 
 /// Cada expresión precedida de un espacio (listas: args, elementos de arreglo).
@@ -186,16 +258,26 @@ fn dump_func(f: &Function) -> String {
     )
 }
 
-/// El volcado canónico de un Program (el oráculo): una función por línea. M14.2a solo cubre
-/// funciones; si el programa trae otros ítems, es un fallo del corpus de prueba.
+/// El volcado canónico de un Program (el oráculo). Orden fijo: funciones, structs, enums (el driver
+/// raylang usa el mismo). M14.2b cubre esos tres; traits/impls/genéricos/imports → M14.2c, así que el
+/// corpus no debe traerlos (red de seguridad).
 fn dump_program(prog: &Program) -> String {
-    assert!(prog.structs.is_empty(), "M14.2a: el corpus no debe tener structs");
-    assert!(prog.enums.is_empty(), "M14.2a: el corpus no debe tener enums");
-    assert!(prog.traits.is_empty(), "M14.2a: el corpus no debe tener traits");
-    assert!(prog.impls.is_empty(), "M14.2a: el corpus no debe tener impls");
-    assert!(prog.imports.is_empty(), "M14.2a: el corpus no debe tener imports");
-    assert!(prog.from_imports.is_empty(), "M14.2a: el corpus no debe tener from-imports");
-    prog.functions.iter().map(dump_func).collect::<Vec<_>>().join("\n")
+    assert!(prog.traits.is_empty(), "M14.2b: el corpus no debe tener traits");
+    assert!(prog.impls.is_empty(), "M14.2b: el corpus no debe tener impls");
+    assert!(prog.imports.is_empty(), "M14.2b: el corpus no debe tener imports");
+    assert!(prog.from_imports.is_empty(), "M14.2b: el corpus no debe tener from-imports");
+    // Las definiciones de tipo de M14.2b no llevan genéricos/anotaciones/pub (→ M14.2c).
+    for s in &prog.structs {
+        assert!(s.type_params.is_empty() && s.annotations.is_empty() && !s.is_pub, "M14.2b: struct simple");
+    }
+    for e in &prog.enums {
+        assert!(e.type_params.is_empty() && e.annotations.is_empty() && !e.is_pub, "M14.2b: enum simple");
+    }
+    let mut out: Vec<String> = Vec::new();
+    out.extend(prog.functions.iter().map(dump_func));
+    out.extend(prog.structs.iter().map(dump_struct));
+    out.extend(prog.enums.iter().map(dump_enum));
+    out.join("\n")
 }
 
 /// La salida canónica del parser de Rust (el oráculo) para una fuente.
@@ -303,11 +385,51 @@ fn varias_funciones() {
     );
 }
 
-/// El test fuerte: parsear archivos REALES (los ejemplos que solo usan features de M14.2a) y exigir
+#[test]
+fn structs_y_enums() {
+    comparar("struct Punto { x: int, y: int }", "sp_struct.ray");
+    comparar("struct Vacio { }", "sp_struct0.ray");
+    comparar("enum Color { Rojo, Verde, Azul }", "sp_enum_unit.ray");
+    comparar("enum Figura { Circulo(float), Rect(float, float), Nada }", "sp_enum_payload.ray");
+}
+
+#[test]
+fn literal_de_struct() {
+    comparar("fn f() -> Punto { Punto { x: 1, y: 2 } }", "sp_structlit.ray");
+    comparar("fn f() -> Vacio { Vacio { } }", "sp_structlit0.ray");
+    comparar("fn f() -> Caja { Caja { v: g(1) + 2 } }", "sp_structlit_expr.ray");
+}
+
+#[test]
+fn funciones_anonimas() {
+    comparar("fn f() -> int { let g = fn(x: int) -> int { x + 1 }; g(2) }", "sp_fnexpr.ray");
+    // Anidadas: los ids son densos en pre-orden (exterior < interior).
+    comparar("fn f() { let h = fn() { let k = fn() { 0 }; k() }; }", "sp_fnexpr_nested.ray");
+    comparar("fn f() { let g = fn() { }; }", "sp_fnexpr_unit.ray");
+}
+
+#[test]
+fn match_y_patrones() {
+    comparar(
+        "fn f(o: Figura) -> float { match (o) { Figura.Circulo(r) => r, Figura.Nada => 0.0, _ => 1.0 } }",
+        "sp_match.ray",
+    );
+    comparar(
+        "fn f(o: Par) -> int { match (o) { Par.Dos(a, _) => a, x => 0 } }",
+        "sp_match_bind.ray",
+    );
+}
+
+/// El test fuerte: parsear archivos REALES (los ejemplos que solo usan features de M14.2a/b) y exigir
 /// que el parser en raylang coincida con el de Rust nodo a nodo (posiciones incluidas).
 #[test]
 fn parsea_archivos_reales_igual_que_el_oraculo() {
-    let archivos = ["examples/fib.ray", "examples/fizzbuzz.ray"];
+    let archivos = [
+        "examples/fib.ray",
+        "examples/fizzbuzz.ray",
+        "examples/enums.ray",
+        "examples/match_figuras.ray",
+    ];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);

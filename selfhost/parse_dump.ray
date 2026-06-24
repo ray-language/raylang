@@ -13,6 +13,7 @@
 
 from lexer import lex, Token, LexError;
 from parser import parse, Program, Func, Param, Type, Expr, EKind, Stmt, SKind, Block, BinOp, UnOp;
+from parser import StructDef, FieldDef, EnumDef, VariantDef, FieldInit, FnExpr, MatchArm, Pattern, PKind;
 
 // Re-escapa una cadena para una sola línea, idéntico al oráculo (y al lexer-dump).
 fn escape(s: string) -> string {
@@ -103,7 +104,62 @@ fn dump_expr(e: Expr) -> string {
         EKind.EIf(c, then_b, alt) => "(if " + dump_expr(c) + " " + dump_block(then_b) + dump_opt_expr(alt) + ")" + pp,
         EKind.EWhile(c, body) => "(while " + dump_expr(c) + " " + dump_block(body) + ")" + pp,
         EKind.EBlock(b) => dump_block(b),
+        EKind.EStructLit(name, fields) => "(struct-lit " + name + dump_inits(fields) + ")" + pp,
+        EKind.EFunc(fe) => dump_fnexpr(fe),
+        EKind.EMatch(scrut, arms) => "(match " + dump_expr(scrut) + dump_arms(arms) + ")" + pp,
     }
+}
+
+// Inicializaciones de campo de un literal de struct, cada una precedida de un espacio.
+fn dump_inits(fields: [FieldInit]) -> string {
+    var s = "";
+    var i = 0;
+    while (i < len(fields)) {
+        let fi = fields[i];
+        s = s + " (init " + fi.name + " " + dump_expr(fi.value) + ")";
+        i = i + 1;
+    }
+    s
+}
+
+fn dump_fnexpr(fe: FnExpr) -> string {
+    "(fn-expr " + to_string(fe.id) + " (params" + dump_params(fe.params) + ") "
+        + dump_type(fe.ret) + " " + dump_block(fe.body) + ")" + pos(fe.line, fe.col)
+}
+
+// Brazos de match, cada uno precedido de un espacio.
+fn dump_arms(arms: [MatchArm]) -> string {
+    var s = "";
+    var i = 0;
+    while (i < len(arms)) {
+        let a = arms[i];
+        s = s + " (arm " + dump_pattern(a.pat) + " " + dump_expr(a.body) + ")" + pos(a.line, a.col);
+        i = i + 1;
+    }
+    s
+}
+
+fn dump_pattern(pat: Pattern) -> string {
+    let pp = pos(pat.line, pat.col);
+    match (pat.kind) {
+        PKind.PWild => "(wild)" + pp,
+        PKind.PBind(n) => "(bind " + n + ")" + pp,
+        PKind.PVariant(en, va, binds) => "(variant " + en + " " + va + dump_binds(binds) + ")" + pp,
+    }
+}
+
+// Sub-bindings de un patrón de variante: cada nombre (o '_' para None) precedido de un espacio.
+fn dump_binds(binds: [Option<string>]) -> string {
+    var s = "";
+    var i = 0;
+    while (i < len(binds)) {
+        match (binds[i]) {
+            Option.Some(n) => { s = s + " " + n; },
+            Option.None => { s = s + " _"; },
+        }
+        i = i + 1;
+    }
+    s
 }
 
 // Cada expresión precedida de un espacio (para listas: args, elementos de arreglo).
@@ -165,6 +221,31 @@ fn dump_func(f: Func) -> string {
         + dump_type(f.ret) + " " + dump_block(f.body) + ")" + pos(f.line, f.col)
 }
 
+fn dump_struct(s: StructDef) -> string {
+    var inner = "";
+    var i = 0;
+    while (i < len(s.fields)) {
+        let fd = s.fields[i];
+        inner = inner + " (field " + fd.name + " " + dump_type(fd.ty) + ")";
+        i = i + 1;
+    }
+    "(struct " + s.name + " (fields" + inner + "))" + pos(s.line, s.col)
+}
+
+fn dump_enum(e: EnumDef) -> string {
+    var inner = "";
+    var i = 0;
+    while (i < len(e.variants)) {
+        let v = e.variants[i];
+        var payload = "";
+        var j = 0;
+        while (j < len(v.payload)) { payload = payload + " " + dump_type(v.payload[j]); j = j + 1; }
+        inner = inner + " (variant " + v.name + payload + ")" + pos(v.line, v.col);
+        i = i + 1;
+    }
+    "(enum " + e.name + inner + ")" + pos(e.line, e.col)
+}
+
 // Desenvuelve el lexer (M14.2a parsea entradas válidas; un error léxico aquí es excepcional).
 fn lex_or_die(src: string) -> [Token] {
     match (lex(src)) {
@@ -182,11 +263,13 @@ fn main() -> int {
     match (read_file(argv[0])) {
         Result.Ok(src) => {
             let prog = parse(lex_or_die(src));
+            // Orden de volcado: funciones, structs, enums (fijo; el oráculo usa el mismo).
             var i = 0;
-            while (i < len(prog.funcs)) {
-                print(dump_func(prog.funcs[i]));
-                i = i + 1;
-            }
+            while (i < len(prog.funcs)) { print(dump_func(prog.funcs[i])); i = i + 1; }
+            var s = 0;
+            while (s < len(prog.structs)) { print(dump_struct(prog.structs[s])); s = s + 1; }
+            var e = 0;
+            while (e < len(prog.enums)) { print(dump_enum(prog.enums[e])); e = e + 1; }
             0
         },
         Result.Err(msg) => {

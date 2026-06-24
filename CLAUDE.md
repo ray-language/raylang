@@ -626,6 +626,16 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     del token para `check`/`eat`/`expect` (sin números mágicos). Camino feliz con `panic`. Diferido:
     M14.2b (structs/enums/match/fn-anónimas), M14.2c (traits/impls/genéricos/dyn/Map/`?`/pipelines/
     anotaciones/imports). DESIGN §23.3.
+  - **M14.2b COMPLETO** (347 lib + 13 en `tests/selfhost_parser.rs`): **parser auto-alojado — datos y
+    control**. Añade al parser EN raylang: definiciones `struct`/`enum` (sin genéricos), literal de
+    struct `Nombre { campo: valor }`, funciones anónimas `fn(..){..}` (`id` denso en pre-orden, igual
+    que Rust → casa en el dump) y `match`/patrones (`_`, binding, `Enum.Variante(sub-bindings)`). El AST
+    crece con `StructDef`/`EnumDef`/`VariantDef`/`FnExpr`/`MatchArm`/`Pattern` y tres variantes de
+    `EKind` (`EStructLit`/`EFunc`/`EMatch`); `Program` pasa a `funcs`+`structs`+`enums` (orden de volcado
+    fijo: funciones, structs, enums; el oráculo usa el mismo). Corpus: snippets + `examples/enums.ray` y
+    `match_figuras.ray` reales. **Gotcha**: `push(binds, Option.None)` no infiere `T` → se materializa
+    en `var bv: Option<string> = Option.None;` (el tipo declarado fija el `None`). Diferido: M14.2c
+    (traits/impls/genéricos/dyn/Map/`?`/pipelines/anotaciones/imports/`pub`). DESIGN §23.3.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

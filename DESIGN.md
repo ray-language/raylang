@@ -2393,8 +2393,16 @@ canónica del token: `"("`, `"->"`, `"let"`; nombre simbólico para los que carg
 - **M14.2a COMPLETO** — núcleo: expresiones (toda la cadena de precedencia: `logic_or`→…→`primary`),
   sentencias (let/var, asignación, return, expr), tipos básicos (primitivos, `[T]`, `fn(..)->R`,
   nombre), bloques y funciones de nivel superior. Cubre fib/fizzbuzz. Oráculo: snippets + los archivos
-  reales que solo usan estas features. Diferido: M14.2b (structs/enums/match/fn-anónimas), M14.2c
-  (traits/impls/genéricos/dyn/Map/`?`/pipelines/anotaciones/imports).
+  reales que solo usan estas features.
+- **M14.2b COMPLETO** — datos y control: definiciones `struct`/`enum` (sin genéricos), literal de
+  struct `Nombre { campo: valor }`, funciones anónimas `fn(..) { .. }` (con `id` denso en pre-orden,
+  como el parser de Rust) y `match`/patrones (comodín, binding, `Enum.Variante(sub-bindings)`). El AST
+  crece con structs/enums propios y tres variantes de `EKind` (`EStructLit`/`EFunc`/`EMatch`); el
+  `Program` ahora lleva `funcs`+`structs`+`enums` (orden de volcado fijo: funciones, structs, enums).
+  Oráculo: snippets + `examples/enums.ray` y `examples/match_figuras.ray` reales. **Gotcha**: un
+  `Option.None` suelto en argumento de builtin (`push(binds, Option.None)`) no infiere su `T`; se
+  materializa en una `var` tipada (`var bv: Option<string> = Option.None;`) cuyo tipo declarado fija el
+  `None`. Diferido: M14.2c (traits/impls/genéricos/dyn/Map/`?`/pipelines/anotaciones/imports/`pub`).
 
-**Próximas fases:** completar el parser (M14.2b/c), el **checker**, y finalmente ejecutar. Cada una,
+**Próximas fases:** completar el parser (M14.2c), el **checker**, y finalmente ejecutar. Cada una,
 su oráculo.

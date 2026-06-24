@@ -67,6 +67,10 @@ pub enum OpCode {
     InitLocal(usize),
     /// Llama a `functions[idx]` tomando `argc` argumentos de la pila.
     Call(usize, usize),
+    /// **Llamada en cola** (M13.3b): como `Call`, pero **reutiliza el marco actual** en vez de
+    /// apilar uno nuevo (recursión de cola en O(1) marcos). Lo emite un *peephole* del compilador
+    /// cuando una llamada va seguida —directa o vía saltos— de un `Return`.
+    TailCall(usize, usize),
     /// Builtin `print`: saca un valor, lo imprime, y empuja unit.
     Print,
 
@@ -77,6 +81,8 @@ pub enum OpCode {
     /// Llamada indirecta: en la pila están el valor-función y luego `argc`
     /// argumentos encima. Saca los argumentos y la función, y empuja un marco.
     CallValue(usize),
+    /// **Llamada indirecta en cola** (M13.3b): como `CallValue`, pero reutiliza el marco actual.
+    TailCallValue(usize),
 
     // --- Closures (M4.2) ---
     /// Construye una closure de `functions[idx]`: arma su arreglo de upvalues

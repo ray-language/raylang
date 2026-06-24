@@ -2272,12 +2272,29 @@ Rust**; la **VM ya es robusta** (marcos en el heap).
      error** ("desbordamiento de pila (recursión demasiado profunda)") en los dos. El intérprete
      reporta en la posición del cuerpo de la función; la VM, en el sitio de llamada (el mensaje es
      idéntico, que es lo que el oráculo compara). Test `overflow_recursion_oraculo`.
-- **M13.3b — TCO en la VM** (*opcional, candidato a diferir*): detectar llamada en posición de cola
-  y **reutilizar el marco** ⇒ recursión de cola en O(1) marcos. Pedagógicamente jugoso pero más
-  invasivo; se decide tras 13.3a.
+- **M13.3b — TCO en AMBOS motores** ✅ **COMPLETO** (346 tests lib): recursión de cola en O(1) de
+  pila. Se hizo en **los dos motores** (no solo la VM) para no romper el oráculo: con TCO solo en la
+  VM, una recursión de cola profunda correría en la VM pero el intérprete cortaría en
+  `MAX_CALL_DEPTH` → divergencia. La detección de posición de cola usa **reglas estructurales
+  idénticas** en ambos (cuerpo de función, ramas de `if`/`match`, tail de bloque, valor de `return`),
+  así coinciden por construcción.
+  - **VM**: *peephole* `optimize_tail_calls` sobre el bytecode ya emitido — un `Call`/`CallValue`
+    cuya continuación es un `Return` (directo o vía saltos incondicionales, `returns_immediately`) se
+    convierte en `TailCall`/`TailCallValue`, que **reutilizan el marco actual** en vez de apilar uno.
+    No hay que tocar la emisión (el compilador ya genera ese patrón de forma natural).
+  - **Intérprete**: **trampolín** — `Flow::TailCall { index, args, captured }`; `call_body` es un
+    **bucle** que, al recibir una `TailCall`, reemplaza la función actual y reitera (no recurre, no
+    crece `depth`). `eval_tail`/`eval_tail_block` evalúan en posición de cola (una llamada ahí produce
+    `TailCall`; `if`/`match`/bloque propagan; el resto delega en `eval_expr`); `return e` evalúa `e`
+    en cola. Los builtins (incl. `panic`) NO son tail (son hoja).
+  - **Gotcha**: el viejo test `overflow_recursion_oraculo` usaba `bucle(n+1)` (cola) esperando
+    desbordar; con TCO eso es un **bucle infinito legítimo** (como `while(true)`). Se cambió a
+    recursión **no de cola** (`1 + bucle(...)`) para seguir probando el límite. Verificado: 1 000 000
+    de llamadas en cola y recursión mutua profunda corren en O(1) marcos y **coinciden** VM↔intérprete.
 
-**Diferido:** reescribir el intérprete a pila explícita/trampolín (gran obra; choca con "intérprete
-simple = oráculo"; solo valdría la pena en la rama de producción de §21.1).
+**Diferido:** reescribir el intérprete a pila explícita/CPS (gran obra; el trampolín de M13.3b ya
+cubre la recursión de cola, que es el caso que importa; solo valdría la pena el CPS completo para
+*algebraic effects* en la rama de producción de §21.1).
 
 ### 22.4 Resumen de impacto
 

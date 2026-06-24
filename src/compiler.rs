@@ -195,6 +195,11 @@ impl<'a> Compiler<'a> {
         self.emit_block(body)?;
         self.emit(OpCode::Return, line, col);
 
+        // M13.3b: optimización de llamadas en cola. Toda llamada cuya continuación es un `Return`
+        // (directo o a través de saltos incondicionales) se convierte en `TailCall`, que reutiliza
+        // el marco en vez de apilar uno nuevo → recursión de cola en O(1) marcos.
+        optimize_tail_calls(&mut self.cur().chunk);
+
         let mut scope = self.scopes.pop().expect("acabamos de empujar el ámbito");
         scope.captured_slots.resize(scope.max_slots, false);
         self.functions[idx] = Some(CompiledFn {
@@ -716,4 +721,42 @@ impl<'a> Compiler<'a> {
         self.emit(OpCode::CallValue(args.len()), line, col);
         Ok(())
     }
+}
+
+/// Optimización de **llamadas en cola** (M13.3b): un *peephole* que convierte cada `Call`/`CallValue`
+/// cuya continuación es un `Return` en `TailCall`/`TailCallValue`. Si tras la llamada el control va
+/// directo a `Return` —o a saltos incondicionales que acaban en `Return`—, el valor de la llamada se
+/// retorna **tal cual**: es una llamada en cola, y reutilizar el marco no cambia el resultado.
+///
+/// El compilador ya emite ese patrón de forma natural: la rama-else de un `if` cae al `Return` final
+/// de la función, una rama-then salta a él, un `return e` lo emite tras `e`. Por eso basta con
+/// reconocer el patrón en el bytecode ya generado, sin tocar la emisión.
+fn optimize_tail_calls(chunk: &mut Chunk) {
+    for i in 0..chunk.code.len() {
+        let nuevo = match &chunk.code[i] {
+            OpCode::Call(idx, argc) if returns_immediately(chunk, i + 1) => {
+                Some(OpCode::TailCall(*idx, *argc))
+            }
+            OpCode::CallValue(argc) if returns_immediately(chunk, i + 1) => {
+                Some(OpCode::TailCallValue(*argc))
+            }
+            _ => None,
+        };
+        if let Some(op) = nuevo {
+            chunk.code[i] = op;
+        }
+    }
+}
+
+/// ¿La ejecución desde `j` llega a un `Return` sin tocar la pila (solo saltos incondicionales)?
+/// Sigue la cadena de `Jump` con un tope de saltos para no ciclar (un `while` salta hacia atrás).
+fn returns_immediately(chunk: &Chunk, mut j: usize) -> bool {
+    for _ in 0..=chunk.code.len() {
+        match chunk.code.get(j) {
+            Some(OpCode::Return) => return true,
+            Some(OpCode::Jump(t)) => j = *t,
+            _ => return false,
+        }
+    }
+    false
 }

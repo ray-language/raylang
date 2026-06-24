@@ -569,8 +569,21 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     Option<V>` en el prelude), `keys -> [K]`, `values -> [V]` (opcodes `MapRemove`/`MapKeys`/
     `MapValues`; asignan heap → estrés de GC). `MapKey` gana `Ord`: `keys` ordenada y `values` en ese
     mismo orden de clave (casan posición a posición) → **determinista** pese al `HashMap` (oráculo).
-    Libro `m13/mapas.md`. **M13.1 COMPLETO. M13 COMPLETO** (13.1 + 13.2 + 13.3a; diferido 13.3b TCO).
-    Habilitadores de self-hosting listos; siguiente gran hito: **self-hosting** (capstone) o **M12**.
+    Libro `m13/mapas.md`. **M13.1 COMPLETO.**
+  - **M13.3b COMPLETO** (346 tests lib): **TCO (recursión de cola en O(1) de pila) en AMBOS motores**
+    —no solo la VM— para no romper el oráculo (con TCO solo en la VM, una recursión de cola profunda
+    correría en la VM y el intérprete cortaría en `MAX_CALL_DEPTH` → divergencia). Detección de
+    posición de cola con **reglas estructurales idénticas** en ambos (cuerpo de fn, ramas if/match,
+    tail de bloque, valor de `return`). **VM**: peephole `optimize_tail_calls` (un `Call`/`CallValue`
+    cuya continuación es `Return` —directo o vía saltos, `returns_immediately`— → `TailCall`/
+    `TailCallValue`, que **reutilizan el marco**; no toca la emisión). **Intérprete**: trampolín —
+    `Flow::TailCall`, `call_body` es un bucle que reemplaza la función actual y reitera (no recurre,
+    no crece `depth`); `eval_tail`/`eval_tail_block` evalúan en cola; `return e` evalúa `e` en cola;
+    builtins (incl. `panic`) NO son tail. **Gotcha**: el viejo `overflow_recursion_oraculo` usaba
+    `bucle(n+1)` (cola) esperando desbordar; con TCO eso es bucle infinito legítimo → se cambió a
+    no-cola (`1 + bucle(...)`). Verificado: 1M llamadas en cola + mutua profunda corren en O(1) y
+    coinciden. **M13 COMPLETO** (13.1 + 13.2 + 13.3a + 13.3b). Habilitadores de self-hosting listos;
+    siguiente gran hito: **self-hosting** (capstone) o **M12**.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

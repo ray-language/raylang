@@ -232,6 +232,12 @@ impl std::error::Error for RuntimeError {}
 enum Flow {
     Return(Value),
     Error(RuntimeError),
+    /// Una **llamada en cola** (M13.3b): en vez de recurrir, se propaga hasta `call_body`, que la
+    /// ejecuta en un **bucle** (trampolín) reutilizando el marco lógico → recursión de cola en O(1)
+    /// de pila de Rust. Es el análogo del opcode `TailCall` de la VM (mismo criterio de posición de
+    /// cola, así los dos motores coinciden). Lleva el índice de la función, los argumentos ya
+    /// evaluados y el entorno capturado (vacío salvo para una closure).
+    TailCall { index: usize, args: Vec<Value>, captured: Vec<(String, Cell)> },
 }
 
 /// Resultado de evaluar una expresión: un valor, o una interrupción de flujo.
@@ -320,6 +326,8 @@ impl<'a> Interpreter<'a> {
             Err(Flow::Error(e)) => Err(e),
             // Un 'return' nunca debería escapar de call_function, pero por si acaso.
             Err(Flow::Return(v)) => Ok(v),
+            // Una llamada en cola siempre la consume el trampolín de call_body; no escapa.
+            Err(Flow::TailCall { .. }) => unreachable!("una llamada en cola no escapa de call_body"),
         }
     }
 
@@ -364,28 +372,153 @@ impl<'a> Interpreter<'a> {
         // quien llama. Guardamos la actual y la restauramos al volver.
         let saved = mem::take(&mut self.scopes);
 
-        // Ámbito base: las celdas capturadas (compartidas con su origen). Una closure
-        // lee y muta estas celdas; una función sin captura recibe un mapa vacío.
-        let mut base: HashMap<String, Cell> = HashMap::new();
-        for (name, cell) in captured {
-            base.insert(name.clone(), cell.clone());
-        }
-        self.scopes.push(base);
+        // Trampolín de llamadas en cola (M13.3b): el cuerpo se evalúa en posición de cola
+        // (`eval_tail_block`). Si su resultado es una `Flow::TailCall`, en vez de recurrir se
+        // **reemplaza** la función actual y se vuelve a iterar → la recursión de cola no crece la
+        // pila de Rust ni `depth`. Es el análogo del opcode `TailCall` de la VM (que reutiliza el
+        // marco). Una función sin llamadas en cola itera una sola vez.
+        let mut cur_params = params;
+        let mut cur_body = body;
+        let mut cur_captured: Vec<(String, Cell)> = captured.to_vec();
+        let mut cur_args = args;
 
-        // Ámbito de los parámetros, encima (tapan capturas con el mismo nombre).
-        self.scopes.push(HashMap::new());
-        for (param, arg) in params.iter().zip(args.into_iter()) {
-            self.define(&param.name, arg);
-        }
+        let result = loop {
+            self.scopes.clear();
+            // Ámbito base: las celdas capturadas (compartidas con su origen).
+            let mut base: HashMap<String, Cell> = HashMap::new();
+            for (name, cell) in &cur_captured {
+                base.insert(name.clone(), cell.clone());
+            }
+            self.scopes.push(base);
+            // Ámbito de los parámetros, encima (tapan capturas con el mismo nombre).
+            self.scopes.push(HashMap::new());
+            for (param, arg) in cur_params.iter().zip(mem::take(&mut cur_args)) {
+                self.define(&param.name, arg);
+            }
 
-        let result = self.exec_block(body);
+            match self.eval_tail_block(cur_body) {
+                Ok(v) => break Ok(v),                          // el cuerpo cayó a su valor final
+                Err(Flow::Return(v)) => break Ok(v),           // un 'return' temprano: ese es el valor
+                Err(e @ Flow::Error(_)) => break Err(e),       // un error real se propaga
+                // Llamada en cola: reemplaza la función actual y reitera (no recurre).
+                Err(Flow::TailCall { index, args, captured }) => {
+                    let (p, b) = self.params_body_of(index);
+                    cur_params = p;
+                    cur_body = b;
+                    cur_captured = captured;
+                    cur_args = args;
+                }
+            }
+        };
+
         self.scopes = saved; // restaurar el entorno de quien llama
         self.depth -= 1; // salimos de esta llamada
+        result
+    }
 
-        match result {
-            Ok(v) => Ok(v),                         // el cuerpo cayó hasta su valor final
-            Err(Flow::Return(v)) => Ok(v),          // un 'return' temprano: ese es el valor
-            Err(e @ Flow::Error(_)) => Err(e),      // un error real sigue propagándose
+    /// Los parámetros y el cuerpo de la función con índice `index` (M13.3b, para el trampolín).
+    /// `index < N` es una función nombrada; el resto, una anónima (`index - N`).
+    fn params_body_of(&self, index: usize) -> (&'a [Param], &'a Block) {
+        let n = self.named.len();
+        if index < n {
+            let named: &'a [Function] = self.named;
+            (&named[index].params, &named[index].body)
+        } else {
+            let fe: &'a FnExpr = self.anon[index - n];
+            (&fe.params, &fe.body)
+        }
+    }
+
+    /// Evalúa un bloque en **posición de cola** (M13.3b): igual que `exec_block`, pero su
+    /// expresión final se evalúa con `eval_tail` (una llamada ahí produce `Flow::TailCall`).
+    fn eval_tail_block(&mut self, block: &'a Block) -> EvalResult {
+        self.scopes.push(HashMap::new());
+        let mut interrupted: Option<Flow> = None;
+        for stmt in &block.statements {
+            if let Err(flow) = self.exec_stmt(stmt) {
+                interrupted = Some(flow);
+                break;
+            }
+        }
+        let result = match interrupted {
+            Some(flow) => Err(flow),
+            None => match &block.tail {
+                Some(tail) => self.eval_tail(tail),
+                None => Ok(Value::Unit),
+            },
+        };
+        self.scopes.pop();
+        result
+    }
+
+    /// Evalúa una expresión en **posición de cola** (M13.3b). Una llamada a función/closure aquí
+    /// produce `Flow::TailCall` (la ejecuta el trampolín de `call_body` sin recurrir); `if`/`match`/
+    /// bloque propagan la posición de cola a sus ramas; lo demás delega en `eval_expr`. Las reglas
+    /// son las MISMAS que el *peephole* de la VM (un `Call` seguido de `Return`), así los dos
+    /// motores coinciden en qué es una llamada en cola.
+    fn eval_tail(&mut self, expr: &'a Expr) -> EvalResult {
+        match &expr.kind {
+            ExprKind::Call { callee, args } => {
+                // Camino directo por nombre (como `eval_call`), pero en cola.
+                if let ExprKind::Ident(name) = &callee.kind {
+                    let is_local = self.lookup_opt(name).is_some();
+                    if !is_local {
+                        // Los builtins son hoja (no recurren): se ejecutan normal (incl. `panic`).
+                        if crate::builtins::is_builtin(name) {
+                            return self.eval_call(callee, args);
+                        }
+                        if let Some(&idx) = self.named_index.get(name.as_str()) {
+                            let mut values = Vec::with_capacity(args.len());
+                            for arg in args {
+                                values.push(self.eval_expr(arg)?);
+                            }
+                            return Err(Flow::TailCall { index: idx, args: values, captured: Vec::new() });
+                        }
+                    }
+                }
+                // Camino indirecto: el callee produce un valor-función.
+                let callee_val = self.eval_expr(callee)?;
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval_expr(arg)?);
+                }
+                match callee_val {
+                    Value::Function(idx) => Err(Flow::TailCall { index: idx, args: values, captured: Vec::new() }),
+                    Value::Closure(c) => Err(Flow::TailCall { index: c.index, args: values, captured: c.upvalues.clone() }),
+                    _ => unreachable!("el checker garantiza una función"),
+                }
+            }
+            ExprKind::If { cond, then_branch, else_branch } => {
+                if self.eval_bool(cond)? {
+                    self.eval_tail_block(then_branch)
+                } else if let Some(else_e) = else_branch {
+                    self.eval_tail(else_e)
+                } else {
+                    Ok(Value::Unit)
+                }
+            }
+            ExprKind::Block(b) => self.eval_tail_block(b),
+            ExprKind::Match { scrutinee, arms } => {
+                let value = self.eval_expr(scrutinee)?;
+                for arm in arms {
+                    if let Some(binds) = match_pattern(&arm.pattern, &value) {
+                        self.scopes.push(HashMap::new());
+                        for (name, v) in binds {
+                            self.define(&name, v);
+                        }
+                        let result = self.eval_tail(&arm.body);
+                        self.scopes.pop();
+                        return result;
+                    }
+                }
+                Err(Flow::Error(RuntimeError {
+                    msg: "ningún brazo del match casó (no debería ocurrir)".into(),
+                    line: scrutinee.line,
+                    col: scrutinee.col,
+                }))
+            }
+            // Cualquier otra forma no es una llamada en cola: evaluación normal.
+            _ => self.eval_expr(expr),
         }
     }
 
@@ -445,12 +578,16 @@ impl<'a> Interpreter<'a> {
                 Ok(())
             }
             StmtKind::Return { value } => {
-                let v = match value {
-                    Some(e) => self.eval_expr(e)?,
-                    None => Value::Unit,
-                };
-                // Lanzamos la señal de retorno: desenrolla hasta call_function.
-                Err(Flow::Return(v))
+                // M13.3b: el valor de un `return` está en posición de cola → `eval_tail`. Si es una
+                // llamada en cola, propaga `Flow::TailCall` (el trampolín la ejecuta); si es un valor
+                // normal, lo envuelve en `Flow::Return` (desenrolla hasta `call_body`).
+                match value {
+                    Some(e) => match self.eval_tail(e) {
+                        Ok(v) => Err(Flow::Return(v)),
+                        Err(flow) => Err(flow), // TailCall o Error se propagan tal cual
+                    },
+                    None => Err(Flow::Return(Value::Unit)),
+                }
             }
             StmtKind::Expr(e) => {
                 self.eval_expr(e)?; // se evalúa por su efecto; el valor se descarta
@@ -1277,6 +1414,7 @@ mod tests {
             Ok(v) => v,
             Err(Flow::Return(v)) => v,
             Err(Flow::Error(e)) => panic!("error de ejecución inesperado: {}", e),
+            Err(Flow::TailCall { .. }) => unreachable!("una llamada en cola no escapa de call_body"),
         }
     }
 

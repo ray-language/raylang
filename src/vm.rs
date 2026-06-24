@@ -746,6 +746,21 @@ impl<'a> Vm<'a> {
                     }
                     self.frames.push(CallFrame { function: *idx, ip: 0, locals, upvalues: Vec::new() });
                 }
+                // M13.3b: llamada en cola — REUTILIZA el marco actual (no crece la pila de marcos).
+                // En posición de cola, el valor de esta llamada es el de la función actual, así que
+                // el resultado caerá en la misma posición de la pila. No hay límite que comprobar:
+                // ese es justo el punto (recursión de cola en O(1) marcos).
+                OpCode::TailCall(idx, argc) => {
+                    let mut locals = self.new_locals(*idx);
+                    for i in (0..*argc).rev() {
+                        let v = self.pop();
+                        self.put_arg(&mut locals, i, v);
+                    }
+                    self.frames[fi].function = *idx;
+                    self.frames[fi].ip = 0;
+                    self.frames[fi].locals = locals;
+                    self.frames[fi].upvalues = Vec::new();
+                }
 
                 // --- Funciones de primera clase (M4.1) ---
                 OpCode::Function(idx) => self.push(HeapValue::Function(*idx)),
@@ -770,6 +785,29 @@ impl<'a> Vm<'a> {
                         self.put_arg(&mut locals, *argc - 1 - j, val);
                     }
                     self.frames.push(CallFrame { function: fn_idx, ip: 0, locals, upvalues });
+                }
+                // M13.3b: llamada indirecta en cola — reutiliza el marco actual.
+                OpCode::TailCallValue(argc) => {
+                    let mut args_rev = Vec::with_capacity(*argc);
+                    for _ in 0..*argc {
+                        args_rev.push(self.pop());
+                    }
+                    let (fn_idx, upvalues) = match self.pop() {
+                        HeapValue::Function(i) => (i, Vec::new()),
+                        HeapValue::Obj(h) => match self.heap.get(h) {
+                            Obj::Closure(c) => (c.index, c.upvalues.clone()),
+                            _ => unreachable!("el checker garantiza una función"),
+                        },
+                        _ => unreachable!("el checker garantiza una función"),
+                    };
+                    let mut locals = self.new_locals(fn_idx);
+                    for (j, val) in args_rev.into_iter().enumerate() {
+                        self.put_arg(&mut locals, *argc - 1 - j, val);
+                    }
+                    self.frames[fi].function = fn_idx;
+                    self.frames[fi].ip = 0;
+                    self.frames[fi].locals = locals;
+                    self.frames[fi].upvalues = upvalues;
                 }
 
                 // --- Closures (M4.2) ---
@@ -1351,11 +1389,13 @@ mod tests {
     /// desbordamiento, en vez de colgarse o reventar la pila. Es el oráculo del
     /// límite compartido (`MAX_CALL_DEPTH` == `MAX_FRAMES`). Corre dentro del hilo de
     /// pila grande para que el intérprete alcance el tope sin desbordar la pila del
-    /// hilo de test (que es pequeña por defecto).
+    /// hilo de test (que es pequeña por defecto). **La recursión es NO de cola**
+    /// (`1 + bucle(...)`): la de cola, con el TCO de M13.3b, sería un bucle infinito
+    /// legítimo (O(1) marcos) y nunca desbordaría —ese es justo el punto del TCO—.
     #[test]
     fn overflow_recursion_oraculo() {
         let (interp_msg, vm_msg) = crate::with_big_stack(|| {
-            let src = "fn bucle(n: int) -> int { bucle(n + 1) }
+            let src = "fn bucle(n: int) -> int { 1 + bucle(n + 1) }
                        fn main() -> int { bucle(0) }";
             let tokens = crate::lexer::lex(src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");
@@ -1501,6 +1541,42 @@ mod tests {
                 }
                 total + quitados + len(m)
              }",
+        );
+    }
+
+    /// M13.3b: recursión de cola PROFUNDA (más allá de MAX_FRAMES) funciona en ambos motores
+    /// gracias al TCO, y coinciden. Sin TCO, ambos cortarían en 1024 con desbordamiento.
+    #[test]
+    fn tco_recursion_de_cola_profunda_oraculo() {
+        // 5000 > MAX_FRAMES (1024): solo pasa si la llamada en cola reutiliza el marco.
+        oracle_program(
+            "fn cuenta(n: int, acc: int) -> int {
+                if (n == 0) { acc } else { cuenta(n - 1, acc + 1) }
+             }
+             fn main() -> int { cuenta(5000, 0) }",
+        );
+    }
+
+    /// M13.3b: recursión mutua en cola + `return` en cola, también profunda.
+    #[test]
+    fn tco_mutua_y_return_en_cola_oraculo() {
+        oracle_program(
+            "fn par(n: int) -> bool { if (n == 0) { true } else { return impar(n - 1); } }
+             fn impar(n: int) -> bool { if (n == 0) { false } else { par(n - 1) } }
+             fn main() -> int { if (par(4000)) { 1 } else { 0 } }",
+        );
+    }
+
+    /// M13.3b: una llamada que NO está en cola (su valor se usa en `n + ...`) sigue recurriendo de
+    /// verdad —el TCO no debe convertirla— y da el mismo resultado en ambos motores. La profundidad
+    /// es modesta porque el intérprete recurre sobre la pila de Rust (el hilo de test es pequeño; el
+    /// binario real corre con pila grande, M13.3a). Que la recursión de cola SÍ se optimiza lo
+    /// prueban `tco_recursion_de_cola_profunda_oraculo` (5000) y `tco_mutua_*` (4000).
+    #[test]
+    fn tco_no_aplica_a_llamada_no_en_cola_oraculo() {
+        oracle_program(
+            "fn suma_hasta(n: int) -> int { if (n == 0) { 0 } else { n + suma_hasta(n - 1) } }
+             fn main() -> int { suma_hasta(30) }",
         );
     }
 

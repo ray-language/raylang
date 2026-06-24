@@ -665,7 +665,13 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     de `TokenKind` con `tok_debug(k)` (nombres de variante: `Semicolon`, `LParen`…). Se añade el
     enforcement de `parse_program` (anotaciones/`pub` sobre trait/impl). Oráculo cubre **entradas
     inválidas** (11 casos). **M14.2 COMPLETO** (parser auto-alojado, con errores como valores).
-    Próximo gran hito: el **checker**. DESIGN §23.3.
+    DESIGN §23.3.
+  - **M14.3 — el checker (DISEÑO fijado, DESIGN §23.4)**: el checker auto-alojado será un **validador**
+    (produce solo el veredicto `ok`/`error de tipos en L:C: msg`, byte-idéntico a Rust; **sin** el
+    lowering de M9, que queda para el back-end). Oráculo de **veredicto** (misma fuente por ambos
+    pipelines; corpus válido + inválido). Reusa el AST del parser; `Map` para ámbitos; prelude diferido.
+    Sub-fases: a (núcleo monomórfico) → b (datos: arrays/structs/enums/match) → c (genéricos) → d
+    (traits/impls/dyn). Errores como valores inherentes. Pendiente de implementar.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

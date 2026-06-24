@@ -2437,5 +2437,55 @@ canónica del token: `"("`, `"->"`, `"let"`; nombre simbólico para los que carg
   (parser: lexer→parser auto-alojados, ambos con errores como valores, validados sobre todo el corpus
   + auto-aplicación).
 
-**Próximas fases:** el **checker** (la fase grande que queda: tipos, inferencia, resolución), y
-finalmente ejecutar. Cada una, su oráculo.
+**Próximas fases:** el **checker** (§23.4), y finalmente ejecutar. Cada una, su oráculo.
+
+### 23.4 M14.3 — El checker (diseño)
+
+La fase más compleja del compilador. El checker de Rust (`src/checker.rs`, ~5000 líneas incl. tests)
+hace dos trabajos separables que el diseño aprovecha. Mirando `check()`:
+
+```
+prepare_program  → inyecta prelude + genera @derive + baja métodos de impl + resuelve enums
+check_program    → LA VALIDACIÓN (dos pasadas: firmas → cuerpos)        ← produce el veredicto
+lower_ufcs / append_dict_params / lower_dict_calls / lower_dyn / renumber ← reescrituras para el back-end
+```
+
+El **veredicto** (¿type-checkea?, ¿qué error?) sale de `check_program` (+ la resolución de `prepare`).
+Todo el *lowering* de M9 (UFCS→llamada, paso de diccionarios, síntesis de structs `dyn`, inyección de
+funciones mangladas, renumerado de fn-exprs) son reescrituras del AST **para el back-end**, no para el
+veredicto.
+
+**Decisión de alcance (validador).** El checker auto-alojado es un **validador**: consume el AST (del
+parser auto-alojado) y produce un veredicto —`ok` o `error de tipos en L:C: msg` byte-idéntico al de
+Rust—. **No** reproduce el lowering de M9 (queda para una fase de back-end posterior). Sí incluye la
+*resolución necesaria para validar* (reconocer construcción de enums, resolver métodos/UFCS para
+obtener su tipo, inferencia de genéricos); solo se omiten el registro de sitios y las pasadas
+post-check. Esto acota M14.3 a algo tratable.
+
+**Decisión de oráculo (solo veredicto).** Misma filosofía que lexer/parser: la misma fuente por los dos
+pipelines (Rust: `lex→parse→check`; raylang: `self-lex→self-parse→self-check`), comparar el veredicto
+(`ok` / `error de tipos en L:C: msg`). Corpus = programas **válidos** (los 35 ejemplos + los fuentes del
+self-hosting) **e inválidos** (errores de tipo). El corpus inválido caza la sobre-aceptación; los
+mensajes de error son idénticos a los de Rust.
+
+**Reutilización y habilitadores.** El checker reusa el `Type`/`Expr`/AST del parser auto-alojado; el
+`Type` del parser **dobla** como representación del tipo inferido. Ámbitos y firmas con **`Map<K,V>`**
+(habilitador de M13.1 — por eso vino antes). **Builtins** vía una tabla (espejo de `builtins.rs`). El
+**prelude** (Option/Result/Eq/Show/Ord/map/filter/fold) se inyecta cuando haga falta (parseando el
+fuente compartido) — diferido hasta genéricos/traits. Los **errores como valores** son inherentes (el
+checker devuelve `Result<_, TypeError>` desde el inicio; no hay sub-fase `d` aparte como en el parser).
+
+**Sub-fases.**
+- **M14.3a — núcleo monomórfico**: dos pasadas (firmas → cuerpos), pila de ámbitos, literales,
+  operadores (reglas de tipo de aritmética/comparación/lógica), variables (`let`/`var`, mutabilidad,
+  ámbito), llamadas (aridad + tipos de args), `if`/`while`/`block`/`return`, anotaciones de tipo,
+  análisis de divergencia, builtin `print`. Cubre fib/fizzbuzz. La más grande (sienta el armazón).
+- **M14.3b — datos**: arreglos (`[T]`, índice, `len`/`push`), structs (def, literal, acceso a campo),
+  enums (resolución de construcción, `match` + exhaustividad + patrones, tipos recursivos).
+- **M14.3c — genéricos**: parámetros de tipo, `unify`/`subst`, llamadas genéricas, structs/enums
+  genéricos, chequeo bidireccional (tipo esperado), `Option`/`Result` + inyección del prelude, `?`.
+- **M14.3d — traits/impls**: registro de trait/impl, resolución de métodos (UFCS + métodos de trait),
+  bounds, registro de `@derive`, `dyn` (solo validación). La más difícil.
+
+Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el checker queda el
+**back-end** (ejecución / lowering) para cerrar el self-hosting.

@@ -95,6 +95,14 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         let deps = program.imports.iter().map(|i| (&i.module, i.line, i.col))
             .chain(program.from_imports.iter().map(|f| (&f.module, f.line, f.col)));
         for (dep, line, col) in deps {
+            // M11.6b: la arista de import debe respetar el borde de cápsula (aunque `dep` ya
+            // esté visitado: cada sitio que importa un submódulo interno desde fuera es ilegal).
+            if let Some(c) = capsula_violada(&root, &name, dep) {
+                return Err(render(&source, line, col, &name, &format!(
+                    "el módulo '{}' es interno a la cápsula '{}'; impórtalo con 'import {};'",
+                    dep, c, c
+                )));
+            }
             if !visitados.contains(dep) {
                 match resolve_module_path(&root, dep) {
                     Err(msg) => return Err(render(&source, line, col, &name, &msg)),
@@ -341,6 +349,25 @@ fn shift_fn_expr(fe: &mut FnExpr, delta: usize) {
 /// El nombre de módulo de una ruta: su *stem* (`dir/math.ray` → `math`).
 fn module_name(path: &Path) -> String {
     path.file_stem().and_then(|s| s.to_str()).unwrap_or("main").to_string()
+}
+
+/// Enforcement de la cápsula (M11.6b). Una importación del módulo `target` por `importer` **cruza el
+/// borde de una cápsula** si `target` es interno a una cápsula `C` que no contiene a `importer`. `C`
+/// es el **ancestro-directorio estricto más cercano** de `target` con un `mod.ray` (de ahí que se
+/// itere de la ruta más profunda a la más superficial). `importer` está **dentro** de `C` si es la
+/// propia cápsula (`importer == C`, su `mod.ray`) o vive bajo `C/`. Devuelve `Some(C)` si la viola.
+/// Las cápsulas anidadas componen: estar dentro de la interior implica estar dentro de la exterior,
+/// así que basta comprobar la más cercana.
+fn capsula_violada(root: &Path, importer: &str, target: &str) -> Option<String> {
+    let segs: Vec<&str> = target.split('/').collect();
+    for k in (1..segs.len()).rev() {
+        let c = segs[..k].join("/");
+        if root.join(&c).join("mod.ray").exists() {
+            let dentro = importer == c || importer.starts_with(&format!("{}/", c));
+            return if dentro { None } else { Some(c) };
+        }
+    }
+    None
 }
 
 /// Resuelve la **ruta de módulo** `dep` (p. ej. `geo/formas/circulo` o `geo`) a un archivo bajo

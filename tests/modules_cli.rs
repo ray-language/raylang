@@ -375,3 +375,62 @@ fn modulo_archivo_y_directorio_homonimos_es_ambiguo() {
     let (_, code) = run_modules("ray_modray_ambiguo", "app", files, false);
     assert_ne!(code, 0, "geo.ray + geo/mod.ray a la vez debe fallar (ambiguo)");
 }
+
+// --- M11.6b: enforcement de la cápsula -------------------------------------------------------
+
+#[test]
+fn import_directo_de_submodulo_interno_es_error() {
+    // Desde fuera de la cápsula, importar un submódulo interno por ruta es ilegal: hay que
+    // pasar por la fachada `import geo;`.
+    let files = &[
+        ("geo/formas/circulo", "pub fn area(r: int) -> int { 3 * r * r }\n"),
+        ("geo/mod", "pub from geo/formas/circulo import area;\n"),
+        ("app", "import geo/formas/circulo;\nfn main() -> int { circulo.area(4) }\n"),
+    ];
+    let (out, code) = run_modules("ray_cap_enf_dir", "app", files, false);
+    assert_ne!(code, 0, "import directo de un submódulo interno debe fallar\n{out}");
+}
+
+#[test]
+fn from_de_submodulo_interno_es_error() {
+    // Lo mismo con `from`: la arista cruza el borde de la cápsula.
+    let files = &[
+        ("geo/formas/circulo", "pub fn area(r: int) -> int { 3 * r * r }\n"),
+        ("geo/mod", "pub from geo/formas/circulo import area;\n"),
+        ("app", "from geo/formas/circulo import area;\nfn main() -> int { area(4) }\n"),
+    ];
+    let (_, code) = run_modules("ray_cap_enf_from", "app", files, false);
+    assert_ne!(code, 0, "from de un submódulo interno desde fuera debe fallar");
+}
+
+#[test]
+fn acceso_interno_a_la_capsula_sigue_permitido() {
+    // Dentro de la cápsula, los submódulos se importan entre sí por ruta sin restricción.
+    let files = &[
+        ("geo/util", "pub fn cuadrado(n: int) -> int { n * n }\n"),
+        ("geo/formas/circulo",
+         "import geo/util;\npub fn area(r: int) -> int { 3 * util.cuadrado(r) }\n"),
+        ("geo/mod", "pub from geo/formas/circulo import area;\n"),
+        ("app", "import geo;\nfn main() -> int { geo.area(4) }\n"),
+    ];
+    for vm in [false, true] {
+        let (_, code) = run_modules("ray_cap_interno_ok", "app", files, vm);
+        assert_eq!(code, 48, "acceso interno (circulo usa util) permitido (vm={vm})");
+    }
+}
+
+#[test]
+fn capsulas_anidadas_respetan_el_borde_mas_cercano() {
+    // `a/b` es una cápsula dentro de `a` (también cápsula). Un módulo que vive en `a` pero NO en
+    // `a/b` no puede alcanzar el interior de `a/b`.
+    let files = &[
+        ("a/b/leaf", "pub fn val() -> int { 7 }\n"),
+        ("a/b/mod", "pub from a/b/leaf import val;\n"),
+        // a/otro está dentro de `a` pero fuera de `a/b`: importar a/b/leaf es ilegal.
+        ("a/otro", "import a/b/leaf;\npub fn f() -> int { leaf.val() }\n"),
+        ("a/mod", "pub from a/otro import f;\n"),
+        ("app", "import a;\nfn main() -> int { a.f() }\n"),
+    ];
+    let (out, code) = run_modules("ray_cap_anidada", "app", files, false);
+    assert_ne!(code, 0, "a/otro no puede entrar al interior de la cápsula a/b\n{out}");
+}

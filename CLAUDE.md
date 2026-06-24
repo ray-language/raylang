@@ -392,6 +392,14 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   definidos `Surface` da el mismo global). **Front-end puro, runtime intacto.** Falta M11.6b: el
   *enforcement* (importar un submódulo interno desde fuera de la cápsula = error). Diferido: imports
   relativos, `pub` granular por campo.
+- **M11.6b COMPLETO** (331 tests lib + 30 en `tests/modules_cli.rs`): **enforcement de la cápsula**.
+  Cierra M11.6: ahora la fachada es una **barrera**, no solo ergonomía. `capsula_violada(root, I, T)`
+  (en `loader.rs`) busca el **ancestro-directorio estricto más cercano** de `T` con un `mod.ray`
+  (filesystem: prefijos de `T` de profundo a superficial); si lo hay, exige que el importador `I` sea
+  esa cápsula (`I == C`) o viva bajo `C/`, si no → error ("'`T`' es interno a la cápsula '`C`';
+  impórtalo con 'import `C`;'"). Se llama en cada arista del BFS de `load` (imports + from-imports),
+  **aunque `T` ya esté visitado** (cada sitio cuenta). Las cápsulas anidadas componen (basta la más
+  cercana). Coste cero sin `mod.ray`. **M11.6 COMPLETO.** Runtime intacto.
 - **M11.4 — cierre de diferidos aditivos de la stdlib** (DESIGN §20.4). Tocan runtime → oráculo
   (con estrés del GC para los que asignan heap). Tras L1, cada builtin = fila en `BUILTINS` + opcode
   + impl por motor; checker/compilador sin cambios.

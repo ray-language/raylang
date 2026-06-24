@@ -1917,7 +1917,9 @@ encapsulación: una referencia *bare* a un tipo de otro módulo no resuelve (hay
   campo, payload, `dyn M.T`, bounds), `M.Punto { … }` (**literal de struct** calificado),
   `M.Color.Rojo[(…)]` (**construcción de enum** calificada) y `M.Color.Rojo` en **patrones**.
 - ✅ M11.5: **módulos por directorios** (`import geo/formas/circulo;`, leaf-binding, `as`).
-- ⏳ Imports relativos, `mod.ray`/directorio-como-módulo, `pub` granular (campos), re-exports → futuro.
+- ✅ M11.6: **cápsula `mod.ray`** — directorio direccionable + reexport (`pub from … import …`, -a) +
+  **enforcement** del borde (importar un submódulo interno desde fuera = error, -b).
+- ⏳ Imports relativos, `pub` granular (campos) → futuro.
 
 **Referencias calificadas (M11.3c-3).** Cierra el cruce de tipos por la vía calificada (la otra es
 `from M import`). El **parser** produce nombres con un `.` interno: `Type::Struct("M.Punto")` (posición
@@ -2013,15 +2015,14 @@ clasificación valor-vs-tipo de M11.3c para el reexport. Runtime intacto.
    (en vez de recomputar). Unifica definido-pub y reexport; compat hacia atrás exacta (para un ítem
    definido, `Surface` da el mismo global que antes).
 
-*M11.6b — enforcement de la cápsula:*
-1. Descubrir las **cápsulas**: los directorios `C` tales que existe `C/mod.ray` (se sabe durante el
-   BFS de carga).
-2. **Regla de visibilidad** en cada arista `import` (importador `I` → objetivo `T`, ya recorridas en
-   el BFS): sea `C` el **ancestro-directorio estricto más cercano** de `T` que es cápsula. Si no hay
-   `C` → `T` es global (hoy). Si hay `C` → se exige que `I == C` **o** `I` esté bajo `C/`; si no,
-   **error** ("`T` es interno al módulo '`C`'; impórtalo con `import C;`"). Componen las cápsulas
-   anidadas (estar en la interior implica estar en la exterior). Las aristas de `from … import` se
-   comprueban igual.
+*M11.6b — enforcement de la cápsula* (✅): por cada arista `import` (importador `I` → objetivo `T`,
+ya recorridas en el BFS), `capsula_violada(root, I, T)` busca el **ancestro-directorio estricto más
+cercano** de `T` con un `mod.ray` (filesystem: itera los prefijos de `T` de profundo a superficial,
+`root/C/mod.ray`). Si no hay cápsula → `T` es libre (hoy). Si la hay → se exige `I == C` **o** `I`
+bajo `C/`; si no, **error** ("el módulo '`T`' es interno a la cápsula '`C`'; impórtalo con
+`import C;`"). Basta la más cercana porque las cápsulas anidadas componen (estar en la interior
+implica estar en la exterior). Se comprueba **aunque `T` ya esté visitado** (cada sitio cuenta), y las
+aristas de `from … import` igual. Cero coste sin `mod.ray` (ninguna cápsula).
 
 **Compat hacia atrás**: sin ningún `mod.ray`, no hay cápsulas → toda arista es libre y la `Surface`
 da los mismos globals → **idéntico a M11.5**.

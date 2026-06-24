@@ -232,8 +232,25 @@ global es el del ítem **en su módulo de origen** —que se define en *otro* si
 fijo para encadenar reexports. Al acceder `geo.area`, el resolutor consulta esa superficie y baja
 directo al global real. Todo en el loader; el runtime no se entera.
 
-> M11.6a trae la **fachada** (direccionar + reexportar). El *enforcement* —que importar un submódulo
-> interno desde fuera de la cápsula sea **error**— es M11.6b.
+### El borde que aísla (M11.6b)
+
+Hasta aquí la fachada es **ergonomía**: nada impide que alguien de fuera escriba todavía
+`import geo/formas/circulo;` y se salte el `mod.ray`. M11.6b lo convierte en una **barrera**: importar
+un submódulo **interno** desde fuera de su cápsula es un **error**.
+
+```text
+$ raylang app.ray
+[app] el módulo 'geo/formas/circulo' es interno a la cápsula 'geo'; impórtalo con 'import geo;'
+  1 | import geo/formas/circulo;
+    | ^
+```
+
+La regla, por cada arista de `import`: se busca el **directorio-ancestro más cercano** del objetivo
+que tenga un `mod.ray` (la cápsula `C` que lo envuelve); si el importador no está **dentro** de `C`
+(no es la propia cápsula ni vive bajo `C/`), se rechaza. *Dentro* de la cápsula los submódulos se
+siguen importando entre sí por ruta sin restricción. Las cápsulas anidadas componen solas: estar
+dentro de la interior implica estar dentro de la exterior, así que basta comprobar la más cercana.
+Todo es una comparación de rutas en el loader —el runtime nunca ve un módulo—.
 
 ## Lo que queda fuera (a propósito)
 

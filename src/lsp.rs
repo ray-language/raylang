@@ -85,6 +85,16 @@ fn serve<R: BufRead, W: Write>(reader: &mut R, out: &mut W) {
                 let id = msg.get("id").cloned().unwrap_or(Json::Null);
                 send(out, &resultado(id, definition_result(&msg, &docs)));
             }
+            // M10.2c-LSP (cluster 4): find-references — todos los usos (y la declaración).
+            "textDocument/references" => {
+                let id = msg.get("id").cloned().unwrap_or(Json::Null);
+                send(out, &resultado(id, references_result(&msg, &docs)));
+            }
+            // Cluster 4: rename — renombra el símbolo en todas sus apariciones.
+            "textDocument/rename" => {
+                let id = msg.get("id").cloned().unwrap_or(Json::Null);
+                send(out, &resultado(id, rename_result(&msg, &docs)));
+            }
             // Petición desconocida (lleva `id`) → error JSON-RPC. Notificación → se ignora.
             _ => {
                 if let Some(id) = msg.get("id") {
@@ -224,6 +234,122 @@ fn definition_at(src: &str, line0: usize, char0: usize) -> Option<(usize, usize,
     Some((d.def_line - 1, d.def_col - 1, d.len))
 }
 
+// ── Find-references y rename (cluster 4) ─────────────────────────────────────────────
+//
+// Ambos se construyen sobre el índice semántico (`defs`: uso → posición de su declaración) más
+// la **fuente**. Una declaración se identifica por su *clave* `(def_line, def_col)`; todos los
+// usos con la misma clave son el mismo símbolo (los ámbitos ya están resueltos: dos `x` distintos
+// tienen claves distintas). El rango del *nombre* de la declaración se localiza escaneando la
+// línea de la declaración (la del `let`/`fn`, o ya el nombre en un parámetro). Es un cliente
+// externo: cero cambios en el núcleo (igual que el resto del LSP).
+
+fn is_ident_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Un rango en una línea: `(line0, col0, len)`, todo 0-basado.
+type Span = (usize, usize, usize);
+
+/// El símbolo bajo el cursor: su nombre, el rango de su **declaración** (si se localiza) y los
+/// rangos de todos sus **usos**. `None` si no hay símbolo.
+fn symbol_occurrences(src: &str, line0: usize, char0: usize) -> Option<(String, Option<Span>, Vec<Span>)> {
+    let tokens = lexer::lex(src).ok()?;
+    let mut program = parser::parse(tokens).ok()?;
+    let idx = checker::semantic_index(&mut program);
+    let lines: Vec<&str> = src.lines().collect();
+    let (qline, qcol) = (line0 + 1, char0 + 1);
+
+    // El texto (nombre) de un uso, leído de la fuente en su rango.
+    let use_name = |d: &checker::DefEntry| -> Option<String> {
+        let chars: Vec<char> = lines.get(d.line - 1)?.chars().collect();
+        let start = d.col - 1;
+        (start + d.len <= chars.len()).then(|| chars[start..start + d.len].iter().collect())
+    };
+    // Rango del nombre de una declaración: el primer `name` como palabra entera desde su posición
+    // (un `let`/`fn` apunta al keyword → escanea hasta el nombre; un parámetro ya está en el nombre).
+    let decl_range = |def_line: usize, def_col: usize, name: &str| -> Option<Span> {
+        let chars: Vec<char> = lines.get(def_line - 1)?.chars().collect();
+        let nm: Vec<char> = name.chars().collect();
+        let mut i = def_col.saturating_sub(1);
+        while i + nm.len() <= chars.len() {
+            let antes = i == 0 || !is_ident_char(chars[i - 1]);
+            let despues = i + nm.len() == chars.len() || !is_ident_char(chars[i + nm.len()]);
+            if antes && despues && chars[i..i + nm.len()] == nm[..] {
+                return Some((def_line - 1, i, nm.len()));
+            }
+            i += 1;
+        }
+        None
+    };
+
+    // Clave de la declaración objetivo: (a) el cursor está sobre un uso, o (b) sobre el nombre de
+    // una declaración (que tenga al menos un uso, del que se toma el nombre).
+    let mut target: Option<(usize, usize, String)> = idx.defs.iter()
+        .find(|d| d.line == qline && qcol >= d.col && qcol < d.col + d.len)
+        .and_then(|d| use_name(d).map(|n| (d.def_line, d.def_col, n)));
+    if target.is_none() {
+        for d in &idx.defs {
+            let Some(name) = use_name(d) else { continue };
+            let sobre_decl = decl_range(d.def_line, d.def_col, &name)
+                .is_some_and(|(dl, dc, len)| dl + 1 == qline && qcol > dc && qcol - 1 < dc + len);
+            if sobre_decl {
+                target = Some((d.def_line, d.def_col, name));
+                break;
+            }
+        }
+    }
+    let (tdl, tdc, name) = target?;
+
+    let decl = decl_range(tdl, tdc, &name);
+    let mut usos: Vec<(usize, usize, usize)> = idx.defs.iter()
+        .filter(|d| d.def_line == tdl && d.def_col == tdc)
+        .map(|d| (d.line - 1, d.col - 1, d.len))
+        .collect();
+    usos.sort();
+    usos.dedup();
+    Some((name, decl, usos))
+}
+
+/// El `result` de `textDocument/references`: una lista de `Location` (uso, y la declaración si el
+/// cliente pide `includeDeclaration`). Lista vacía si no hay símbolo.
+fn references_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+    let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Arr(vec![]) };
+    let Some(src) = docs.get(&uri) else { return Json::Arr(vec![]) };
+    let incluir_decl = msg.get("params").and_then(|p| p.get("context"))
+        .and_then(|c| c.get("includeDeclaration"))
+        .map(|b| matches!(b, Json::Bool(true)))
+        .unwrap_or(true);
+    let Some((_, decl, usos)) = symbol_occurrences(src, line0, char0) else { return Json::Arr(vec![]) };
+    let mut locs: Vec<Json> = Vec::new();
+    if let Some((l, c, len)) = decl.filter(|_| incluir_decl) {
+        locs.push(obj(vec![("uri", Json::Str(uri.clone())), ("range", rango(l, c, c + len))]));
+    }
+    for (l, c, len) in usos {
+        locs.push(obj(vec![("uri", Json::Str(uri.clone())), ("range", rango(l, c, c + len))]));
+    }
+    Json::Arr(locs)
+}
+
+/// El `result` de `textDocument/rename`: un `WorkspaceEdit` que sustituye el símbolo (declaración
+/// + usos) por el nuevo nombre. `null` si no hay símbolo o falta `newName`.
+fn rename_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+    let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
+    let Some(src) = docs.get(&uri) else { return Json::Null };
+    let Some(new_name) = msg.get("params").and_then(|p| p.get("newName")).and_then(|n| n.as_str()) else {
+        return Json::Null;
+    };
+    let Some((_, decl, usos)) = symbol_occurrences(src, line0, char0) else { return Json::Null };
+    let mut rangos: Vec<(usize, usize, usize)> = decl.into_iter().chain(usos).collect();
+    rangos.sort();
+    rangos.dedup();
+    let edits: Vec<Json> = rangos.into_iter().map(|(l, c, len)| obj(vec![
+        ("range", rango(l, c, c + len)),
+        ("newText", Json::Str(new_name.to_string())),
+    ])).collect();
+    let changes = obj(vec![(uri.as_str(), Json::Arr(edits))]);
+    obj(vec![("changes", changes)])
+}
+
 /// Lee un `Json::Num` como `usize` (las posiciones LSP son enteros).
 fn as_usize(j: &Json) -> Option<usize> {
     match j {
@@ -272,6 +398,9 @@ fn respuesta_initialize(id: Json) -> Json {
         // M10.2b: el servidor responde hover (el tipo bajo el cursor) e ir-a-definición.
         ("hoverProvider", Json::Bool(true)),
         ("definitionProvider", Json::Bool(true)),
+        // Cluster 4: find-references y rename (sobre el índice semántico + la fuente).
+        ("referencesProvider", Json::Bool(true)),
+        ("renameProvider", Json::Bool(true)),
     ]);
     let result = obj(vec![
         ("capabilities", capabilities),
@@ -707,6 +836,57 @@ mod tests {
     #[test]
     fn analiza_programa_valido_sin_errores() {
         assert!(analizar("fn main() -> int { 1 + 2 }").is_none());
+    }
+
+    #[test]
+    fn referencias_de_variable_local() {
+        // `let x = 1; x + x` → declaración + 2 usos.
+        let src = "fn main() -> int {\n  let x = 1;\n  x + x\n}\n";
+        // Cursor sobre el primer uso de `x` (línea 3 → 0-based 2, col 2).
+        let (name, decl, usos) = symbol_occurrences(src, 2, 2).expect("hay símbolo");
+        assert_eq!(name, "x");
+        assert_eq!(decl, Some((1, 6, 1)), "la declaración apunta al NOMBRE x, no al 'let'");
+        assert_eq!(usos.len(), 2, "x + x son dos usos");
+        // Y desde el nombre de la declaración (línea 2 → 0-based 1, col 6) da lo mismo.
+        let (n2, d2, u2) = symbol_occurrences(src, 1, 6).expect("símbolo desde la declaración");
+        assert_eq!((n2, d2, u2.len()), ("x".to_string(), Some((1, 6, 1)), 2));
+    }
+
+    #[test]
+    fn referencias_distinguen_ambitos() {
+        // Dos `x` en funciones distintas no se mezclan (claves de declaración distintas).
+        let src = "fn f(a: int) -> int {\n  let x = a;\n  x + x\n}\nfn main() -> int {\n  let x = 9;\n  x\n}\n";
+        // El `x` de `f` (línea 3 → 0-based 2): 2 usos.
+        let (_, _, uf) = symbol_occurrences(src, 2, 2).unwrap();
+        assert_eq!(uf.len(), 2);
+        // El `x` de `main` (línea 7 → 0-based 6): 1 uso.
+        let (_, _, um) = symbol_occurrences(src, 6, 2).unwrap();
+        assert_eq!(um.len(), 1);
+    }
+
+    #[test]
+    fn referencias_de_funcion() {
+        // Una función llamada dos veces: declaración + 2 usos.
+        let src = "fn doble(n: int) -> int { n + n }\nfn main() -> int {\n  doble(1) + doble(2)\n}\n";
+        // Cursor sobre la primera llamada `doble` (línea 3 → 0-based 2, col 2).
+        let (name, decl, usos) = symbol_occurrences(src, 2, 2).expect("hay símbolo");
+        assert_eq!(name, "doble");
+        assert_eq!(decl, Some((0, 3, 5)), "la declaración apunta al nombre 'doble' tras 'fn '");
+        assert_eq!(usos.len(), 2);
+    }
+
+    #[test]
+    fn rename_produce_workspace_edit() {
+        let src = "fn main() -> int {\n  let x = 1;\n  x + x\n}\n";
+        let msg = json::parse(
+            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":2},"newName":"y"}}"#
+        ).unwrap();
+        let mut docs = HashMap::new();
+        docs.insert("file:///t.ray".to_string(), src.to_string());
+        let res = rename_result(&msg, &docs);
+        let edits = res.get("changes").unwrap().get("file:///t.ray").unwrap().as_array().unwrap();
+        assert_eq!(edits.len(), 3, "declaración + 2 usos");
+        assert_eq!(edits[0].get("newText"), Some(&Json::Str("y".to_string())));
     }
 
     #[test]

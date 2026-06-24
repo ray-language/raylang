@@ -37,6 +37,8 @@ fn responde_initialize_con_capacidades() {
     assert!(out.contains("\"capabilities\""), "anuncia capacidades\n{out}");
     assert!(out.contains("\"textDocumentSync\":1"), "Full sync\n{out}");
     assert!(out.contains("\"hoverProvider\":true"), "anuncia hover (M10.2b)\n{out}");
+    assert!(out.contains("\"referencesProvider\":true"), "anuncia find-references\n{out}");
+    assert!(out.contains("\"renameProvider\":true"), "anuncia rename\n{out}");
 }
 
 #[test]
@@ -61,6 +63,30 @@ fn definicion_salta_a_la_declaracion() {
     assert!(out.contains("file:///t.ray"), "devuelve una Location\n{out}");
     // La declaración está en la línea 1 (0-basado): el `let`.
     assert!(out.contains("\"line\":1"), "apunta a la línea del let\n{out}");
+}
+
+#[test]
+fn referencias_lista_los_usos() {
+    // find-references del uso de `x` (línea 2) → declaración + los dos usos en `x + x`.
+    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int {\n  let x = 5;\n  x + x\n}"}}}"#;
+    let refs = r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":2},"context":{"includeDeclaration":true}}}"#;
+    let entrada = frame(open) + &frame(refs) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("\"id\":4"), "responde a la petición de referencias\n{out}");
+    // Tres Locations: la declaración (línea 1) y los dos usos (línea 2).
+    assert!(out.contains("\"line\":1"), "incluye la declaración\n{out}");
+    assert!(out.contains("\"line\":2"), "incluye los usos\n{out}");
+}
+
+#[test]
+fn rename_devuelve_un_workspace_edit() {
+    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int {\n  let x = 5;\n  x + x\n}"}}}"#;
+    let rn = r#"{"jsonrpc":"2.0","id":5,"method":"textDocument/rename","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":2},"newName":"y"}}"#;
+    let entrada = frame(open) + &frame(rn) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("\"id\":5"), "responde al rename\n{out}");
+    assert!(out.contains("\"changes\""), "devuelve un WorkspaceEdit\n{out}");
+    assert!(out.contains("\"newText\":\"y\""), "renombra a y\n{out}");
 }
 
 #[test]

@@ -77,11 +77,30 @@ del nombre por separado), así que el salto cae en la línea correcta con un sub
 Es una **degradación honesta**, no un error: la promesa "todo nodo lleva su posición" da el 90% de
 la ergonomía sin el coste de un sistema de spans.
 
+## Find-references y rename (cluster 4)
+
+El mismo índice `defs` da, casi gratis, dos features más. Una declaración se identifica por su
+*clave* `(def_line, def_col)`; **todos los usos con la misma clave son el mismo símbolo** (los
+ámbitos ya están resueltos por el checker: dos `x` en funciones distintas tienen claves distintas).
+Así:
+
+- **find-references**: dado el cursor, halla la clave del símbolo (por el uso bajo el cursor, o por
+  el nombre de su declaración) y devuelve todos los usos con esa clave (y la declaración, si el
+  cliente pide `includeDeclaration`).
+- **rename**: las mismas posiciones, pero como un `WorkspaceEdit` que sustituye cada una por el
+  nuevo nombre.
+
+El único matiz es el de siempre —sin spans—: para *renombrar* la declaración necesitamos el rango
+del **nombre**, no el del `let`/`fn`. Se resuelve en el cliente LSP escaneando la línea de la
+declaración por el primer identificador igual al nombre (que el `let`/`fn` precede). Es heurística,
+pero la gramática de raylang es lo bastante simple para que sea fiable —y, fiel al diseño del LSP,
+**no toca el núcleo**: todo vive en `src/lsp.rs`—.
+
 ## Alcance
 
-Hover y definición sobre **identificadores** (variables, parámetros, funciones). Quedan fuera —por
-ahora— los **métodos** y los **nombres de tipo** (que no llegan como `Ident` sino en posición de
-tipo), y features mayores como *completion*, *find-references*, *rename* y *signature help*.
+Hover y definición sobre **identificadores** (variables, parámetros, funciones); **find-references**
+y **rename** sobre los mismos. Quedan fuera los **métodos** y **nombres de tipo** (que no llegan como
+`Ident` sino en posición de tipo), y *completion* y *signature help*.
 
 La lección de M10.2b es la contracara de la del REPL. Allí *evitamos* exponer los tipos del
 checker porque no hacía falta; aquí, cuando sí hizo falta, abrirlo costó poco: un flag, un índice

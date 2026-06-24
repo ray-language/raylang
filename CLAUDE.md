@@ -282,6 +282,15 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   `hoverProvider`/`definitionProvider`, y `hover_at`/`definition_at` consultan el índice. Sin
   spans: el rango es `[col, col+largo_nombre)`; la def de un `let` apunta al `let` (degradación
   honesta). Introspección pura: runtime y semántica intactos.
+- **M10.2d-LSP COMPLETO** (326 tests lib + 7 en `tests/lsp_cli.rs`): **find-references + rename** en
+  el LSP (cluster 4 de la limpieza de diferidos). Reusa el índice `defs`: una declaración se
+  identifica por su **clave** `(def_line, def_col)`; todos los usos con esa clave son el mismo símbolo
+  (ámbitos ya resueltos). `symbol_occurrences` (en `src/lsp.rs`) halla la clave (uso bajo el cursor, o
+  nombre de la declaración) y reúne declaración + usos; `references_result` → lista de `Location`
+  (honra `includeDeclaration`), `rename_result` → `WorkspaceEdit`. Para el **nombre** de la
+  declaración (sin spans, la def apunta al `let`/`fn`) se escanea la línea por el primer identificador
+  igual al nombre — heurística en el **cliente LSP, cero cambios en el núcleo**. Anuncia
+  `referencesProvider`/`renameProvider`. Diferido: completion, signature help, métodos/tipos.
 - **M11.1 COMPLETO** (293 tests + integración CLI verdes): **stdlib de string** (DESIGN §20.1).
   Los strings dejan de ser opacos. **Primer cambio de runtime desde M6.3** → oráculo
   VM↔intérprete (incl. estrés del GC para `split`). Operaciones como **builtins** (estilo

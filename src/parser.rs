@@ -538,8 +538,15 @@ impl Parser {
         // Nombre de struct/enum, con argumentos de tipo opcionales: `Caja<int>`.
         // (Un identificador suelto es `Struct(name, [])`; el checker lo reclasifica.)
         if let TokenKind::Ident(name) = self.peek_kind() {
-            let name = name.clone();
+            let mut name = name.clone();
             self.advance();
+            // Tipo calificado por módulo: `M.Tipo` (M11.3c-3). El `.` se guarda **en el nombre**;
+            // el loader lo resuelve a `M::Tipo` (validando `import M;` + `pub`). Sin loader (REPL,
+            // un solo archivo) un `M.Tipo` no resuelve y el checker lo rechaza.
+            if self.eat(&TokenKind::Dot) {
+                let (ty, _, _) = self.expect_ident("el nombre del tipo tras 'M.'")?;
+                name = format!("{}.{}", name, ty);
+            }
             let args = self.type_args()?;
             return Ok(Type::Struct(name, args));
         }
@@ -828,6 +835,15 @@ impl Parser {
             } else if self.check(&TokenKind::Dot) {
                 self.advance(); // '.'
                 let (name, _, _) = self.expect_ident("el nombre del campo tras '.'")?;
+                // `M.Tipo { ... }`: literal de struct calificado por módulo (M11.3c-3). Solo si el
+                // receptor del `.` es un `Ident` (el módulo); el nombre calificado guarda el `.`,
+                // que el loader resuelve a `M::Tipo`. (Mismo compromiso struct-literal-vs-bloque
+                // que `Tipo { ... }`: las condiciones de if/while/match van entre paréntesis.)
+                if let (true, ExprKind::Ident(m)) = (self.check(&TokenKind::LBrace), &expr.kind) {
+                    let qualified = format!("{}.{}", m, name);
+                    expr = self.struct_literal(qualified, line, col)?;
+                    continue;
+                }
                 expr = Expr {
                     kind: ExprKind::Field { object: Box::new(expr), name },
                     line,
@@ -1041,7 +1057,15 @@ impl Parser {
         }
         // Variante cualificada: `Enum.Variante[(sub-bindings)]`.
         if self.eat(&TokenKind::Dot) {
-            let (variant, _, _) = self.expect_ident("el nombre de la variante")?;
+            let (mut variant, _, _) = self.expect_ident("el nombre de la variante")?;
+            // Variante calificada por módulo: `M.Enum.Variante` (M11.3c-3). El `enum_name` guarda
+            // el `M.Enum` (con `.`), que el loader resuelve a `M::Enum`.
+            let mut enum_name = name;
+            if self.eat(&TokenKind::Dot) {
+                let (real, _, _) = self.expect_ident("el nombre de la variante tras 'M.Enum.'")?;
+                enum_name = format!("{}.{}", enum_name, variant);
+                variant = real;
+            }
             let mut bindings = Vec::new();
             if self.eat(&TokenKind::LParen) {
                 loop {
@@ -1054,7 +1078,7 @@ impl Parser {
                 self.expect(&TokenKind::RParen, "')' para cerrar el patrón de variante")?;
             }
             return Ok(Pattern {
-                kind: PatternKind::Variant { enum_name: name, variant, bindings },
+                kind: PatternKind::Variant { enum_name, variant, bindings },
                 line,
                 col,
             });
@@ -1255,6 +1279,42 @@ mod tests {
         assert_eq!(fi.names[1].name, "triple");
         assert_eq!(fi.names[1].alias.as_deref(), Some("tri"));
         assert_eq!(fi.names[1].local(), "tri");
+    }
+
+    #[test]
+    fn tipo_calificado_por_modulo_guarda_el_punto() {
+        // M11.3c-3: `M.Tipo` en posición de tipo → `Struct("M.Tipo")` (el loader resuelve el `.`).
+        let prog = parse_prog("fn f(p: geo.Punto) -> mods.Color { p }\nfn main() -> int { 0 }\n");
+        assert_eq!(prog.functions[0].params[0].ty, Type::Struct("geo.Punto".into(), vec![]));
+        assert_eq!(prog.functions[0].return_type, Type::Struct("mods.Color".into(), vec![]));
+    }
+
+    #[test]
+    fn literal_de_struct_calificado_guarda_el_punto() {
+        // `M.Tipo { ... }` → `StructLit { name: "M.Tipo", ... }`.
+        let e = parse_expr("geo.Punto { x: 1, y: 2 }");
+        match &e.kind {
+            ExprKind::StructLit { name, fields } => {
+                assert_eq!(name, "geo.Punto");
+                assert_eq!(fields.len(), 2);
+            }
+            other => panic!("se esperaba un literal de struct calificado, fue {:?}", other),
+        }
+    }
+
+    #[test]
+    fn patron_de_variante_calificado_guarda_el_punto() {
+        // `M.Enum.Variante` en un patrón → `enum_name: "M.Enum"`, `variant: "Variante"`.
+        let e = parse_expr("match (c) { geo.Color.Verde(n) => n, _ => 0, }");
+        let ExprKind::Match { arms, .. } = &e.kind else { panic!("se esperaba match") };
+        match &arms[0].pattern.kind {
+            PatternKind::Variant { enum_name, variant, bindings } => {
+                assert_eq!(enum_name, "geo.Color");
+                assert_eq!(variant, "Verde");
+                assert_eq!(bindings, &vec![Some("n".to_string())]);
+            }
+            other => panic!("se esperaba un patrón de variante calificado, fue {:?}", other),
+        }
     }
 
     /// Renderiza una expresión como S-expression para asertar su forma de forma

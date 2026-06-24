@@ -142,8 +142,9 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         let (from_values, from_types) =
             clasificar_from_imports(&m, &pub_fns, &pub_types, &tipos)?;
 
-        // 3. Resolución de **valores** (funciones propias, `from`-imports de función, `M.f`).
-        let mut resolver = Resolver::new(&m, &pub_fns, &from_values);
+        // 3. Resolución de **valores** (funciones propias, `from`-imports de función, `M.f`,
+        //    construcción de enum calificada `M.Color.Rojo`).
+        let mut resolver = Resolver::new(&m, &pub_fns, &pub_types, &from_values);
         resolver.resolve_module(&mut m)?;
 
         // 4. Namespacing de **tipos** (M11.3c): renombrar las definiciones de este módulo a su
@@ -155,7 +156,8 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         rename_type_defs(&mut m.program, &own_types);
         let mut type_refs = own_types;
         type_refs.extend(from_types);
-        TypeRewriter::new(&type_refs).rewrite_program(&mut m.program);
+        let imports: HashSet<String> = m.program.imports.iter().map(|i| i.module.clone()).collect();
+        TypeRewriter::new(&type_refs, &imports, &pub_types).rewrite_program(&mut m.program);
 
         // 5. Banda de este módulo: empieza en `next_start`; sus posiciones se desplazan por `delta`.
         let start = next_start;
@@ -538,6 +540,8 @@ struct Resolver<'a> {
     imports: HashSet<String>,
     /// Funciones `pub` por módulo (de todo el programa), para verificar `M.f` y los from-imports.
     pub_fns: &'a HashMap<String, HashSet<String>>,
+    /// Tipos `pub` por módulo, para la construcción de enum calificada `M.Color.Rojo` (M11.3c-3).
+    pub_types: &'a HashMap<String, HashSet<String>>,
     /// Pila de ámbitos locales: nombres que tapan a las funciones de nivel superior.
     scopes: Vec<HashSet<String>>,
 }
@@ -548,6 +552,7 @@ impl<'a> Resolver<'a> {
     fn new(
         m: &Module,
         pub_fns: &'a HashMap<String, HashSet<String>>,
+        pub_types: &'a HashMap<String, HashSet<String>>,
         from_values: &NameMap,
     ) -> Self {
         let prefix = if m.is_entry { None } else { Some(m.name.clone()) };
@@ -560,7 +565,7 @@ impl<'a> Resolver<'a> {
             own.insert(local.clone(), global.clone());
         }
         let imports = m.program.imports.iter().map(|i| i.module.clone()).collect();
-        Resolver { own, imports, pub_fns, scopes: Vec::new() }
+        Resolver { own, imports, pub_fns, pub_types, scopes: Vec::new() }
     }
 
     fn resolve_module(&mut self, m: &mut Module) -> Result<(), LoadError> {
@@ -727,16 +732,19 @@ impl<'a> Resolver<'a> {
     }
 
     /// `object.name` donde `object` es `Ident(M)`, `M` importado y no local → `Some("M::name")`
-    /// si `name` es una función `pub` de `M`; error si no lo es; `None` si no es acceso a módulo.
+    /// si `name` es una función **o tipo** `pub` de `M`; error si no lo es; `None` si no es acceso a
+    /// módulo. El caso de tipo cubre la construcción de enum calificada `M.Color.Rojo` (M11.3c-3):
+    /// la cabeza `M.Color` colapsa a `Ident("M::Color")` y el checker la trata como enum normal.
     fn qualified_field(&self, object: &Expr, name: &str, src: &str, module: &str) -> Result<Option<String>, LoadError> {
         let ExprKind::Ident(m) = &object.kind else { return Ok(None) };
         if self.declarado_local(m) || !self.imports.contains(m) {
             return Ok(None); // una local tapa al módulo, o no es un módulo importado
         }
-        let exporta = self.pub_fns.get(m).is_some_and(|s| s.contains(name));
+        let exporta = self.pub_fns.get(m).is_some_and(|s| s.contains(name))
+            || self.pub_types.get(m).is_some_and(|s| s.contains(name));
         if !exporta {
             return Err(render(src, object.line, object.col, module, &format!(
-                "el módulo '{}' no exporta una función '{}' (¿falta 'pub', o es un tipo?)", m, name
+                "el módulo '{}' no exporta '{}' (¿falta 'pub'?)", m, name
             )));
         }
         Ok(Some(format!("{}::{}", m, name)))
@@ -751,21 +759,39 @@ impl<'a> Resolver<'a> {
 struct TypeRewriter<'a> {
     /// Nombre local de tipo → nombre global (propios del módulo; en -2, también importados).
     types: &'a NameMap,
+    /// Módulos importados con `import M;` en este módulo (para resolver `M.Tipo`, M11.3c-3).
+    imports: &'a HashSet<String>,
+    /// Tipos `pub` por módulo (de todo el programa), para validar `M.Tipo` calificado.
+    pub_types: &'a HashMap<String, HashSet<String>>,
     /// Pila de conjuntos de parámetros de tipo en ámbito (los `<…>` de fn/impl/struct/enum).
     tparams: Vec<HashSet<String>>,
 }
 
 impl<'a> TypeRewriter<'a> {
-    fn new(types: &'a NameMap) -> Self {
-        TypeRewriter { types, tparams: Vec::new() }
+    fn new(
+        types: &'a NameMap,
+        imports: &'a HashSet<String>,
+        pub_types: &'a HashMap<String, HashSet<String>>,
+    ) -> Self {
+        TypeRewriter { types, imports, pub_types, tparams: Vec::new() }
     }
 
     fn en_ambito(&self, name: &str) -> bool {
         self.tparams.iter().any(|s| s.contains(name))
     }
 
-    /// Reescribe un nombre de tipo/trait si es propio del módulo y **no** es un parámetro de tipo.
+    /// Reescribe un nombre de tipo/trait a su nombre global. Tres casos:
+    /// - **Calificado** `M.Tipo` (lleva un `.`, M11.3c-3): si `M` está importado y `Tipo` es `pub`,
+    ///   → `M::Tipo`; si no resuelve, se deja con el `.` (el checker lo rechaza → encapsulación).
+    /// - **Parámetro de tipo** (`T`): se deja intacto.
+    /// - **Tipo propio o importado** del módulo: → su nombre global (mapa `types`).
     fn rewrite_name(&self, name: &mut String) {
+        if let Some((m, ty)) = name.split_once('.') {
+            if self.imports.contains(m) && self.pub_types.get(m).is_some_and(|s| s.contains(ty)) {
+                *name = format!("{}::{}", m, ty);
+            }
+            return; // calificado: resuelto o dejado para que el checker lo rechace
+        }
         if self.en_ambito(name) {
             return; // es un parámetro de tipo (`T`), no un tipo nominal
         }

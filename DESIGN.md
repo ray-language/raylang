@@ -1856,8 +1856,23 @@ encapsulación: una referencia *bare* a un tipo de otro módulo no resuelve (hay
 - ✅ -b: `from M import a [as b]{, …}` (funciones `pub` al ámbito, con alias).
 - ✅ L3: desambiguación de posiciones entre módulos (sin colisiones) + errores atribuidos al módulo.
 - ✅ -c: tipos por módulo (`pub` en tipos, namespacing + reescritor) + `from M import Tipo [as T]`.
-- ⏳ **Tipo calificado en posición de tipo** (`M.Punto` como anotación) y **construcción calificada**
-  (`M.Color.Rojo`) → diferido: piden gramática de tipo/constructor calificado. Se usa `from M import`.
+- ✅ -c-3: **referencias calificadas por módulo** — `M.Punto` en **posición de tipo** (anotación,
+  campo, payload, `dyn M.T`, bounds), `M.Punto { … }` (**literal de struct** calificado),
+  `M.Color.Rojo[(…)]` (**construcción de enum** calificada) y `M.Color.Rojo` en **patrones**.
+- ⏳ Submódulos / directorios, `pub` granular (campos), re-exports → futuro.
+
+**Referencias calificadas (M11.3c-3).** Cierra el cruce de tipos por la vía calificada (la otra es
+`from M import`). El **parser** produce nombres con un `.` interno: `Type::Struct("M.Punto")` (posición
+de tipo), `enum_name = "M.Color"` (patrón), nombre `"M.Punto"` del literal de struct; la construcción
+de enum `M.Color.Rojo` llega como `Field`/`Call` anidados naturales. El **loader** resuelve `M.X →
+M::X` validando que `M` esté **importado** (`import M;`) y `X` sea **`pub`**. Reparto: las posiciones
+de **valor** (`M.Color.Rojo`) las colapsa el `Resolver` (consciente de ámbitos: una local `M` tapa al
+módulo), extendiendo `qualified_field` para resolver también tipos `pub`; las posiciones de **tipo**
+(anotaciones, nombre del literal, `enum_name` del patrón) las resuelve el `TypeRewriter` (un nombre
+con `.` → `rewrite_name` lo parte y valida). Una referencia que no resuelve **se deja con el `.`**:
+ningún tipo/enum definido lleva `.`, así que el checker la rechaza → **encapsulación** (un tipo
+privado o un módulo no importado no se alcanza). Gramática: el literal `M.Tipo { … }` se ancla a que
+el receptor del `.` sea un `Ident` (mismo compromiso struct-literal-vs-bloque que `Tipo { … }`).
 - ⏳ Submódulos / jerarquía de directorios, `pub` granular (campos), re-exports → futuro.
 
 **Runtime: sin cambios.** Los módulos se borran en el front-end; el programa fusionado es uno solo

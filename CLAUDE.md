@@ -300,8 +300,20 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   propio** —cero código nuevo de reescritura—. `recolectar_pub_tipos` (análogo a `recolectar_pub_fns`);
   importar un tipo **privado** → error claro (`recolectar_tipos` distingue privado de inexistente).
   `Resolver::new` ya no clasifica (recibe el mapa de valores ya hecho → deja de devolver `Result`).
-  **M11.3c COMPLETO.** Diferido: `M.Punto` (tipo calificado) y `M.Color.Rojo` (construcción calificada)
-  → piden gramática. Runtime intacto (oráculo VM↔intérprete sin tocar).
+- **M11.3c-3 COMPLETO** (308 tests + 17 en `tests/modules_cli.rs`): **referencias calificadas por
+  módulo** — `M.Punto` en posición de tipo (anotación, campo, payload, `dyn`, bounds), `M.Punto { … }`
+  (literal de struct calificado), `M.Color.Rojo[(…)]` (construcción de enum calificada) y `M.Color.Rojo`
+  en patrones. Idea (front-end puro): el **parser** guarda el `.` *dentro del nombre* —`Type::Struct(
+  "M.Punto")`, `enum_name = "M.Color"`, nombre `"M.Punto"` del literal; la construcción de enum llega
+  como `Field`/`Call` anidados— y el **loader** resuelve `M.X → M::X` validando `import M;` + `pub`.
+  Reparto valores-vs-tipos: las posiciones de **valor** (`M.Color.Rojo`) las colapsa el `Resolver`
+  (consciente de ámbitos; `qualified_field` ahora resuelve también tipos `pub`); las de **tipo**
+  (anotación, nombre del literal, `enum_name` del patrón) el `TypeRewriter` (`rewrite_name` parte un
+  nombre con `.` y valida con `imports`+`pub_types`). Una referencia que **no resuelve se deja con el
+  `.`** → el checker la rechaza (ningún tipo definido lleva `.`) → **encapsulación**. Gotcha de
+  gramática: `M.Tipo { … }` se ancla a que el receptor del `.` sea un `Ident` (mismo compromiso
+  struct-literal-vs-bloque que `Tipo { … }`). **M11.3c COMPLETO.** Diferido: submódulos/directorios,
+  `pub` granular por campo, re-exports. Runtime intacto (oráculo VM↔intérprete sin tocar).
 - **M11.2 COMPLETO** (297 tests lib + `tests/io_cli.rs`): **I/O y API de runtime** (DESIGN §20.2).
   `main` sigue sin parámetros (§0); el exterior se toca por **builtins**. **La I/O falible devuelve
   `Option`** (norte "errores como valores"). **Patrón** (como M7.3): primitivos builtin que devuelven

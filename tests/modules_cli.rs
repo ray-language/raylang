@@ -119,6 +119,43 @@ fn from_import_tipo_privado_es_error() {
 }
 
 #[test]
+fn referencia_calificada_M_tipo_en_ambos_motores() {
+    // M11.3c-3: `M.Tipo` calificado en las cuatro posiciones — anotación, literal de struct,
+    // construcción de enum y patrón de match.
+    let files = &[
+        ("geo", "pub struct Punto { x: int, y: int }\npub enum Color { Rojo, Verde(int) }\n"),
+        ("app", "import geo;\nfn dist(p: geo.Punto) -> int { p.x + p.y }\nfn valor(c: geo.Color) -> int {\n  match (c) { geo.Color.Rojo => 1, geo.Color.Verde(n) => n, }\n}\nfn main() -> int {\n  let p: geo.Punto = geo.Punto { x: 10, y: 5 };\n  print(valor(geo.Color.Rojo));\n  dist(p) + valor(geo.Color.Verde(27))\n}\n"),
+    ];
+    for vm in [false, true] {
+        let (out, code) = run_modules("ray_calif_tipo", "app", files, vm);
+        assert!(out.contains("1"), "geo.Color.Rojo => 1 (vm={vm})\n{out}");
+        assert_eq!(code, 42, "dist(15) + Verde(27) = 42 (vm={vm})");
+    }
+}
+
+#[test]
+fn referencia_calificada_a_tipo_privado_es_error() {
+    // `M.Tipo` con un tipo NO `pub` no resuelve: el checker lo rechaza (encapsulamiento).
+    let files = &[
+        ("geo", "pub struct Punto { x: int, y: int }\nstruct Secreto { z: int }\n"),
+        ("app", "import geo;\nfn main() -> int { let s: geo.Secreto = geo.Secreto { z: 1 }; s.z }\n"),
+    ];
+    let (_, code) = run_modules("ray_calif_priv", "app", files, false);
+    assert_ne!(code, 0, "un tipo privado calificado debe fallar");
+}
+
+#[test]
+fn referencia_calificada_a_enum_privado_es_error() {
+    // Construcción de enum calificada `M.Color.Rojo` con un enum NO `pub` → error de carga.
+    let files = &[
+        ("geo", "enum Color { Rojo, Verde }\npub fn f() -> int { 0 }\n"),
+        ("app", "import geo;\nfn main() -> int { match (geo.Color.Rojo) { geo.Color.Rojo => 1, geo.Color.Verde => 2, } }\n"),
+    ];
+    let (_, code) = run_modules("ray_calif_enum_priv", "app", files, false);
+    assert_ne!(code, 0, "un enum privado calificado debe fallar");
+}
+
+#[test]
 fn from_import_nombre_inexistente_es_error() {
     let files = &[
         ("lib", "pub fn f() -> int { 1 }\n"),

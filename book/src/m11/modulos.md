@@ -121,11 +121,44 @@ con alias para esquivar colisiones. La plomería es la de -b, pero el nombre loc
 mapa del **reescritor de tipos** (no en el de valores): una referencia a `Tipo`/`T` se reescribe a
 `M::Tipo` igual que un tipo propio. Importar un tipo **privado** es un error de carga (pide `pub`).
 
+## Referencias calificadas: `M.Tipo` y `M.Color.Rojo` (M11.3c-3)
+
+La otra forma de cruzar un tipo es **calificarlo**, como ya se hacía con las funciones (`M.f(...)`).
+Funciona en las cuatro posiciones donde aparece un tipo:
+
+```rust
+import geo;
+fn dist(p: geo.Punto) -> int { p.x + p.y }      // anotación
+fn valor(c: geo.Color) -> int {
+  match (c) {                                     // patrón
+    geo.Color.Rojo => 1,
+    geo.Color.Verde(n) => n,
+  }
+}
+fn main() -> int {
+  let p: geo.Punto = geo.Punto { x: 10, y: 5 };  // literal de struct calificado
+  valor(geo.Color.Verde(27)) + dist(p)           // construcción de enum calificada
+}
+```
+
+El truco vuelve a ser **borrar en el front-end**. El parser guarda el `.` *dentro del nombre*:
+`geo.Punto` llega como `Type::Struct("geo.Punto")`, el patrón como `enum_name: "geo.Color"`, el
+literal como `StructLit { name: "geo.Punto" }`; la construcción `geo.Color.Rojo` llega como los
+`Field`/`Call` anidados de siempre. El loader resuelve `M.X → M::X` **validando** que `M` esté
+importado (`import M;`) y que `X` sea `pub`. El reparto sigue la línea valores-vs-tipos:
+
+- Las posiciones de **valor** (`geo.Color.Rojo`) las colapsa el *resolutor* —es **consciente de los
+  ámbitos**: una variable local llamada `geo` taparía al módulo—, extendiendo el acceso calificado
+  para que resuelva también tipos `pub`.
+- Las posiciones de **tipo** (anotación, nombre del literal, `enum_name` del patrón) las resuelve el
+  *reescritor de tipos*: un nombre con `.` se parte y valida.
+
+Si una referencia calificada **no resuelve** (módulo no importado, o tipo no `pub`), se **deja con el
+`.`**: ningún tipo definido lleva un `.` en su nombre, así que el checker la rechaza como "tipo
+desconocido". Eso *es* la encapsulación —un tipo privado de otro módulo no se alcanza ni calificándolo—.
+
 ## Lo que queda fuera (a propósito)
 
-- **Tipo calificado en posición de tipo** (`M.Punto` como anotación) y **construcción calificada**
-  (`M.Color.Rojo`) siguen **diferidos**: piden gramática de tipo/constructor calificado. Mientras
-  tanto, `from M import Punto` cubre el cruce de tipos sin calificar.
 - **Submódulos / jerarquía de directorios**, `pub` granular (por campo), *re-exports* → futuro.
 
 > La lección de M11.3 es que una *feature* que parece muy de "sistema" —cargar archivos, espacios

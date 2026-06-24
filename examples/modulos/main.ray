@@ -24,6 +24,11 @@ fn main() -> int {
   print(area(r, Orientacion.Horizontal));   // 30
   print(area(r, Orientacion.Vertical));     // 30
 
+  // M11.3c-3: también se pueden CALIFICAR sin importarlos con `from` (basta `import figuras;`):
+  //   tipo en anotación, literal de struct, y construcción de enum, todo con `figuras.`.
+  let q: figuras.Rect = figuras.Rect { ancho: 2, alto: 9 };
+  print(figuras.area(q, figuras.Orientacion.Horizontal));   // 18
+
   // Código de salida = área del cuadrado de lado 7 = 49.
   cuad(7)
 }

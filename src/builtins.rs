@@ -174,11 +174,19 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::String { return Err((Some(1), format!("split espera un string como separador, no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
-    // contains(s, sub) -> bool (M11.4a): ¿s contiene la subcadena sub?
+    // contains(x, y) -> bool: ad-hoc polimórfico. String: ¿s contiene la subcadena sub? (M11.4a).
+    // Arreglo: ¿el arreglo contiene el elemento x (por igualdad estructural)? (M11.7b).
     Builtin { name: "contains", opcode: OpCode::Contains, check: |a| {
-        arity(a, 2, "contains", " (string, subcadena)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("contains espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("contains espera un string como subcadena, no {}", a[1]))); }
+        arity(a, 2, "contains", " (string/arreglo, valor)")?;
+        match &a[0] {
+            Type::String => {
+                if a[1] != Type::String { return Err((Some(1), format!("contains espera un string como subcadena, no {}", a[1]))); }
+            }
+            Type::Array(elem) => {
+                if a[1] != **elem { return Err((Some(1), format!("contains: el arreglo es de {} pero se busca {}", elem, a[1]))); }
+            }
+            _ => return Err((Some(0), format!("contains espera un string o un arreglo, no {}", a[0]))),
+        }
         Ok(Type::Bool)
     } },
     // replace(s, de, a) -> string (M11.4a): reemplaza todas las ocurrencias de `de` por `a`.
@@ -251,6 +259,33 @@ static BUILTINS: &[Builtin] = &[
         }
         if a[1] != Type::String { return Err((Some(1), format!("join espera un string como separador, no {}", a[1]))); }
         Ok(Type::String)
+    } },
+    // reverse(a) -> [T] (M11.7b): arreglo nuevo con los elementos en orden inverso.
+    Builtin { name: "reverse", opcode: OpCode::Reverse, check: |a| {
+        arity(a, 1, "reverse", "")?;
+        match &a[0] {
+            Type::Array(_) => Ok(a[0].clone()),
+            other => Err((Some(0), format!("reverse espera un arreglo, no {}", other))),
+        }
+    } },
+    // __pop(a) -> [T] (M11.7b): muta `a` quitando el último; [] si vacío, [x] si no. Prelude → Option<T>.
+    Builtin { name: "__pop", opcode: OpCode::ArrayPop, check: |a| {
+        arity(a, 1, "__pop", "")?;
+        match &a[0] {
+            Type::Array(elem) => Ok(Type::Array(elem.clone())),
+            other => Err((Some(0), format!("__pop espera un arreglo, no {}", other))),
+        }
+    } },
+    // __position(a, x) -> [int] (M11.7b): [] o [i] (índice de la 1ª ocurrencia). Prelude → Option<int>.
+    Builtin { name: "__position", opcode: OpCode::Position, check: |a| {
+        arity(a, 2, "__position", " (arreglo, valor)")?;
+        match &a[0] {
+            Type::Array(elem) => {
+                if a[1] != **elem { return Err((Some(1), format!("__position: el arreglo es de {} pero se busca {}", elem, a[1]))); }
+            }
+            other => return Err((Some(0), format!("__position espera un arreglo, no {}", other))),
+        }
+        Ok(Type::Array(Box::new(Type::Int)))
     } },
     // eprint(x) -> unit (M11.2a): como print, pero a stderr.
     Builtin { name: "eprint", opcode: OpCode::EPrint, check: |a| {

@@ -1798,6 +1798,8 @@ impl Checker {
                 (Type::Int, Type::Int) => Ok(Type::Int),
                 (Type::Float, Type::Float) => Ok(Type::Float),
                 (Type::String, Type::String) if op == Add => Ok(Type::String),
+                // M11.7b: `+` concatena dos arreglos del mismo tipo de elemento → arreglo.
+                (Type::Array(a), Type::Array(b)) if op == Add && a == b => Ok(Type::Array(a.clone())),
                 _ => Err(self.err(line, col, format!(
                     "el operador '{}' requiere ambos operandos int o ambos float, no {} y {}",
                     bin_op_str(op), lt, rt

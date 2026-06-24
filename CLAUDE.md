@@ -408,6 +408,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `index_of(s,sub) -> Option<int>` (primitivo `__index_of`/`IndexOf` + envoltorio en el prelude) y
     `join(arr,sep)` (`Join`). Helpers puros compartidos en `builtins.rs` (`char_index_of`,
     `substring_chars`, `repeat_str`). Todo por carácter (consistente con `len`/`chars`/`s[i]`).
+  - **M11.7b COMPLETO** (333 tests lib): **más arreglos** — concatenación `a + b` (se extiende la
+    regla de `Add` en el checker + la ejecución en ambos motores; dos `Obj` con `Add` son arreglos,
+    los strings son inline), `reverse` (`Reverse`, heap), `__pop`/`ArrayPop` (muta + `[T]` → `Option`
+    en el prelude; ojo: el opcode de pila ya se llamaba `Pop`), `contains` **extendido** a arreglos
+    (ad-hoc: string-subcadena o arreglo-pertenencia por `values_equal`), y `__position`/`Position`
+    (`[int]` → `Option<int>`). Naming sin sobrecarga: `index_of` (string) vs `position` (arreglos).
 - **M11.4 — cierre de diferidos aditivos de la stdlib** (DESIGN §20.4). Tocan runtime → oráculo
   (con estrés del GC para los que asignan heap). Tras L1, cada builtin = fila en `BUILTINS` + opcode
   + impl por motor; checker/compilador sin cambios.

@@ -103,6 +103,18 @@ fn index_of(s: string, sub: string) -> Option<int> {
     if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
+// M11.7b: quita y devuelve el último elemento del arreglo (lo muta); None si está vacío.
+fn pop<T>(a: [T]) -> Option<T> {
+    let r = __pop(a);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+// M11.7b: índice de la primera ocurrencia de `x` en el arreglo; None si no aparece.
+fn position<T>(a: [T], x: T) -> Option<int> {
+    let r = __position(a, x);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
 // --- Archivos (M11.2c): el primitivo devuelve un arreglo ETIQUETADO (primer elemento "ok"/"err");
 // aquí se traduce a Result. Así el runtime tampoco sabe de Result (como con Option). ---
 

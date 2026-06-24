@@ -154,8 +154,18 @@ impl<'a> Vm<'a> {
                 | OpCode::GreaterEqual) => {
                     let right = self.pop();
                     let left = self.pop();
-                    let result = self.apply_binary(bin, left, right, line, col)?;
-                    self.push(result);
+                    // M11.7b: `+` sobre dos arreglos (objetos del heap) los concatena en uno nuevo.
+                    // El checker garantiza que dos `Obj` con `Add` son arreglos (strings son inline).
+                    if let (OpCode::Add, HeapValue::Obj(l), HeapValue::Obj(r)) = (bin, &left, &right) {
+                        let (l, r) = (*l, *r);
+                        let mut elems = self.as_array(l).clone();
+                        elems.extend(self.as_array(r).iter().cloned());
+                        let h = self.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
+                    } else {
+                        let result = self.apply_binary(bin, left, right, line, col)?;
+                        self.push(result);
+                    }
                 }
 
                 OpCode::Jump(target) => {
@@ -292,13 +302,18 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::Contains => {
-                    // La subcadena está encima del string (orden de los argumentos).
-                    let sub = self.pop();
-                    let s = self.pop();
-                    let (HeapValue::Str(s), HeapValue::Str(sub)) = (s, sub) else {
-                        unreachable!("el checker garantiza dos strings");
+                    // El valor buscado está encima del contenedor (orden de los argumentos).
+                    let x = self.pop();
+                    let cont = self.pop();
+                    let res = match (&cont, &x) {
+                        (HeapValue::Str(s), HeapValue::Str(sub)) => s.contains(sub.as_str()),
+                        // M11.7b: arreglo → pertenencia por igualdad estructural.
+                        (HeapValue::Obj(h), _) => {
+                            self.as_array(*h).iter().any(|e| values_equal(&self.heap, e, &x))
+                        }
+                        _ => unreachable!("el checker garantiza string+string o arreglo+elemento"),
                     };
-                    self.push(HeapValue::Bool(s.contains(sub.as_str())));
+                    self.push(HeapValue::Bool(res));
                 }
                 OpCode::Replace => {
                     // Orden de los argumentos en la pila: s, de, a → se sacan en orden inverso.
@@ -380,6 +395,31 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("el checker garantiza [string]"),
                     }).collect();
                     self.push(HeapValue::Str(parts.join(sep.as_str())));
+                }
+
+                // --- Más arreglos (M11.7b) ---
+                OpCode::Reverse => {
+                    let h = self.pop_obj();
+                    let mut elems = self.as_array(h).clone();
+                    elems.reverse();
+                    let nh = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(nh));
+                }
+                OpCode::ArrayPop => {
+                    // Muta el arreglo quitando el último; devuelve [] o [x]. Prelude → Option<T>.
+                    let h = self.pop_obj();
+                    let popped = self.as_array_mut(h).pop();
+                    let elems = popped.map(|v| vec![v]).unwrap_or_default();
+                    let nh = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(nh));
+                }
+                OpCode::Position => {
+                    let x = self.pop();
+                    let h = self.pop_obj();
+                    let idx = self.as_array(h).iter().position(|e| values_equal(&self.heap, e, &x));
+                    let elems = idx.map(|i| vec![HeapValue::Int(i as i64)]).unwrap_or_default();
+                    let nh = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(nh));
                 }
 
                 // --- I/O y API de runtime (M11.2) ---
@@ -2116,6 +2156,36 @@ mod tests {
                 print(pos(index_of(s, "Mundo"), 0 - 1));   // 6
                 print(pos(index_of(s, "zzz"), 0 - 1));      // -1
                 len(s.substring(6, 11)) + pos(index_of(s, "Mundo"), 0)  // 5 + 6 = 11
+            }
+        "#);
+    }
+
+    #[test]
+    fn array_stdlib_m117b_oraculo() {
+        // M11.7b: concat (a+b), reverse, pop (muta + Option), contains, position. reverse/pop/concat
+        // asignan en el heap → estrés del GC; pop construye Option en el prelude.
+        oracle_stress(r#"
+            fn idx(o: Option<int>, def: int) -> int {
+                match (o) { Option.Some(i) => i, Option.None => def, }
+            }
+            fn ult(o: Option<int>, def: int) -> int {
+                match (o) { Option.Some(x) => x, Option.None => def, }
+            }
+            fn main() -> int {
+                let a = [1, 2, 3];
+                let b = [4, 5];
+                let c = a + b;                      // [1,2,3,4,5]
+                print(len(c));                      // 5
+                let r = reverse(c);                 // [5,4,3,2,1]
+                print(r[0]);                        // 5
+                print(c.contains(4));               // true
+                print(c.contains(99));              // false
+                print(idx(position(c, 3), 0 - 1));  // 2
+                print(idx(position(c, 99), 0 - 1)); // -1
+                let v = [10, 20, 30];
+                let x = ult(pop(v), 0);             // 30, y v queda [10,20]
+                print(len(v));                      // 2
+                x + len(c) + r[1]                   // 30 + 5 + 4 = 39
             }
         "#);
     }

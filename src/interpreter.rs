@@ -660,10 +660,11 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza un string"),
             },
-            // M11.4a: ¿el string contiene la subcadena?
+            // M11.4a/M11.7b: ¿el string contiene la subcadena? / ¿el arreglo contiene el elemento?
             "contains" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sub)) => Value::Bool(s.contains(sub.as_str())),
-                _ => unreachable!("el checker garantiza dos strings"),
+                (Value::Array(rc), x) => Value::Bool(rc.borrow().iter().any(|e| e == x)),
+                _ => unreachable!("el checker garantiza string+string o arreglo+elemento"),
             },
             // M11.4a: reemplaza todas las ocurrencias de `de` por `a`.
             "replace" => match (&values[0], &values[1], &values[2]) {
@@ -722,6 +723,33 @@ impl<'a> Interpreter<'a> {
                     Value::Str(parts.join(sep.as_str()))
                 }
                 _ => unreachable!("el checker garantiza [string], string"),
+            },
+            // M11.7b: arreglo nuevo en orden inverso.
+            "reverse" => match &values[0] {
+                Value::Array(rc) => {
+                    let mut v = rc.borrow().clone();
+                    v.reverse();
+                    Value::Array(Rc::new(RefCell::new(v)))
+                }
+                _ => unreachable!("el checker garantiza un arreglo"),
+            },
+            // M11.7b: primitivo que muta el arreglo quitando el último → [] o [x]. Prelude → Option<T>.
+            "__pop" => match &values[0] {
+                Value::Array(rc) => {
+                    let popped = rc.borrow_mut().pop();
+                    let elems = popped.map(|v| vec![v]).unwrap_or_default();
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("el checker garantiza un arreglo"),
+            },
+            // M11.7b: primitivo de búsqueda en arreglo → [] o [i]. Prelude → Option<int>.
+            "__position" => match (&values[0], &values[1]) {
+                (Value::Array(rc), x) => {
+                    let idx = rc.borrow().iter().position(|e| e == x);
+                    let elems = idx.map(|i| vec![Value::Int(i as i64)]).unwrap_or_default();
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("el checker garantiza arreglo+elemento"),
             },
             // M11.2a: como print, pero a stderr.
             "eprint" => {
@@ -837,6 +865,12 @@ impl<'a> Interpreter<'a> {
         Ok(match (op, l, r) {
             // Concatenación de strings (M11.1a): `+` sobre dos strings.
             (Add, Str(a), Str(b)) => Str(a + &b),
+            // Concatenación de arreglos (M11.7b): `+` sobre dos arreglos → arreglo nuevo.
+            (Add, Array(a), Array(b)) => {
+                let mut v = a.borrow().clone();
+                v.extend(b.borrow().iter().cloned());
+                Array(Rc::new(RefCell::new(v)))
+            }
             // Aritmética entera.
             (Add, Int(a), Int(b)) => Int(a + b),
             (Sub, Int(a), Int(b)) => Int(a - b),

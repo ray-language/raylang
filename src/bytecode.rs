@@ -140,6 +140,17 @@ pub enum OpCode {
     /// separador. Builtin `join`. (String nuevo en el heap.)
     Join,
 
+    // --- Más arreglos (M11.7b) ---
+    /// Saca un arreglo; **lo muta** quitando el último elemento y empuja un `[T]` con **0 o 1**
+    /// elementos (el quitado). Primitivo `__pop`; el prelude → `Option<T>`.
+    ArrayPop,
+    /// Saca un arreglo; empuja uno nuevo con los elementos en orden inverso. Builtin `reverse`.
+    /// (El arreglo es un objeto del heap → lo traza el GC.)
+    Reverse,
+    /// Saca `x` y un arreglo; empuja un `[int]` con **0 o 1** elementos: el índice de la primera
+    /// ocurrencia de `x` (por igualdad estructural), o vacío. Primitivo `__position`; prelude → `Option`.
+    Position,
+
     // --- I/O y API de runtime (M11.2) ---
     /// Saca un valor primitivo; lo escribe a **stderr** y empuja unit. Builtin `eprint`.
     EPrint,

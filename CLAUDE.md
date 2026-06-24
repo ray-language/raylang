@@ -856,6 +856,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     (solo nombres de variantes; el intérprete no consulta tipos). Oráculo: closures/errores/opcional +
     snippets (estado por celda independiente, `?` encadenado) = mismo stdout+exit que Rust. Diferido: d
     (UFCS/métodos/dyn/@derive + map/filter/fold del prelude).
+  - **M14.4d-1 COMPLETO** (347 lib + 16 en `tests/selfhost_interpreter.rs`): **intérprete auto-alojado —
+    despacho dinámico**. Aquí la **resolución en runtime** luce al máximo. `Interp` gana `methods:
+    Map<string, Method>` (`Tipo#metodo`), poblado por `register_methods` desde los `impl` + métodos por
+    DEFECTO del trait. `dispatch_method(recv, fname, args)` resuelve: (a) campo-función del struct →
+    (b) método (clave `type_key_of_value(recv)#fname`) → (c) `@derive` (igual ≡ values_equal, mostrar ≡
+    value_str; el checker garantiza Eq/Show → solo queda el caso derivado, sin leer la anotación) →
+    (d) UFCS a función libre `fname(recv,args)` → (e) builtin como método (`xs.len()`). **Elegante**:
+    **bounds/genéricos = no-ops** (despacha por el tipo concreto, sin diccionarios) y **`dyn` trivial**
+    (el "objeto" ES el valor concreto, sin vtable; `[dyn T]` = arreglo de concretos). Impls genéricos
+    por **constructor** (`Caja<T>`→"Caja"); anidamiento por despacho recursivo. Oráculo: ufcs/traits/
+    bounds/metodos_por_defecto/impls_genericos/trait_objects/anotaciones + snippets = mismo stdout+exit
+    que Rust. Diferido: d-2 (map/filter/fold del prelude → stdlib.ray, cierra el self-hosting).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

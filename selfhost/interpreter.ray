@@ -25,7 +25,16 @@
 // declaración, acceso/asignación de campo, aliasing), enums (`VEnum`: construcción `Enum.Variante(args)`
 // RECONOCIDA EN RUNTIME mirando las tablas del programa, `match` con patrones comodín/binding/variante).
 //
-// M14.4c (esta versión): PRIMERA CLASE. Funciones como valor (`VFunc`), funciones anónimas + closures
+// M14.4d-1 (esta versión): DESPACHO DINÁMICO. Aquí la decisión "RESOLUCIÓN EN RUNTIME" (DESIGN §23.5)
+// alcanza su máxima expresión. `recv.f(args)` se resuelve en eval mirando la ETIQUETA del valor: campo-
+// función del struct → método (tabla `Tipo#metodo` desde los `impl`, con métodos por defecto del trait)
+// → `@derive` (igual ≡ values_equal, mostrar ≡ value_str) → UFCS a función libre `f(recv, args)` →
+// builtin como método (`xs.len()`). Consecuencias ELEGANTES: **bounds y genéricos son no-ops** (el
+// despacho mira el tipo concreto en runtime, sin pasar diccionarios) y **`dyn` es trivial** (un valor
+// "objeto" ES el valor concreto, sin vtable; `obj.m()` despacha por su etiqueta). Diferido a M14.4d-2:
+// map/filter/fold del prelude (stdlib.ray).
+//
+// M14.4c: PRIMERA CLASE. Funciones como valor (`VFunc`), funciones anónimas + closures
 // (`VClosure`: captura por REFERENCIA vía CELDAS compartidas —un `struct Cell { v }` del host, que por
 // su semántica de referencia es la celda mutable que comparten varias closures, como el `Rc<RefCell>`
 // de Rust—), llamada indirecta, operador `?` (`ETry`) y los enums del prelude `Option`/`Result`
@@ -34,7 +43,7 @@
 // despacho dinámico (M14.4d: UFCS/métodos/dyn/@derive + map/filter/fold del prelude). TCO/MAX_CALL_DEPTH
 // también (el host ya da TCO + pila grande).
 
-from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind, FnExpr;
+from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind, FnExpr, MethodSig;
 
 // =====================================================================
 // Valores en tiempo de ejecución y señales de flujo
@@ -72,6 +81,10 @@ struct Cell { v: Value }
 // Una variable capturada por una closure: su nombre y la celda compartida con su origen.
 struct Capture { name: string, cell: Cell }
 
+// Un método invocable (de un `impl` o un cuerpo por defecto del trait): params (con `self` primero) +
+// cuerpo. Unifica ambos orígenes para `call_method`.
+struct Method { params: [Param], body: Block }
+
 // Error en tiempo de ejecución con ubicación (espejo de `RuntimeError` en Rust).
 pub struct RuntimeError { msg: string, line: int, col: int }
 
@@ -89,6 +102,7 @@ struct Interp {
     funcs: Map<string, Func>,
     structs: Map<string, [FieldDef]>,
     enums: Map<string, [VariantDef]>,
+    methods: Map<string, Method>,   // `Tipo#metodo` → método (de impls + defectos del trait)
     scopes: [Map<string, Cell>],
 }
 
@@ -530,10 +544,15 @@ fn eval_args(c: Interp, args: [Expr]) -> Result<[Value], Flow> {
     Result.Ok(vals)
 }
 
-// Ejecuta un builtin con sus argumentos. `panic` se intercepta aquí (necesita la posición de la llamada
-// y debe producir un FError, no un Value), igual que en el intérprete de Rust.
+// Ejecuta un builtin: evalúa sus argumentos y despacha sobre los valores.
 fn call_builtin(c: Interp, name: string, args: [Expr], line: int, col: int) -> Result<Value, Flow> {
     let vals = eval_args(c, args)?;
+    dispatch_builtin(c, name, vals, line, col)
+}
+
+// Despacha un builtin con sus argumentos ya evaluados (lo reusa el builtin-como-método, p. ej. `xs.len()`).
+// `panic` se intercepta aquí (necesita la posición de la llamada y produce un FError, no un Value).
+fn dispatch_builtin(c: Interp, name: string, vals: [Value], line: int, col: int) -> Result<Value, Flow> {
     if (name == "panic") {
         return Result.Err(Flow.FError(rt_error(line, col, as_str(vals[0]))));
     }
@@ -562,9 +581,165 @@ fn call_builtin(c: Interp, name: string, args: [Expr], line: int, col: int) -> R
     }
 }
 
-// Una llamada. Camino directo por nombre (builtin o función global). Construcción de enum con payload
-// `Enum.Variante(args)` reconocida en runtime (callee `EField` sobre un nombre de enum). El camino
-// indirecto (valor-función/closures) y el despacho dinámico (UFCS/métodos) llegan en M14.4c/d.
+// La clave de tipo de un VALOR en runtime (para el despacho de métodos): el nombre del tipo nominal o
+// del primitivo. Es lo que el despacho dinámico usa en vez de los tipos (que ya se borraron).
+fn type_key_of_value(v: Value) -> string {
+    match (v) {
+        Value.VInt(_) => "int",
+        Value.VFloat(_) => "float",
+        Value.VBool(_) => "bool",
+        Value.VStr(_) => "string",
+        Value.VChar(_) => "char",
+        Value.VUnit => "unit",
+        Value.VStruct(name, _) => name,
+        Value.VEnum(name, _, _) => name,
+        Value.VArray(_) => "[]",
+        Value.VFunc(_) => "fn",
+        Value.VClosure(_, _) => "fn",
+    }
+}
+
+// La clave de tipo del OBJETIVO de un `impl` (para poblar la tabla). `Caja<T>` → "Caja" (por constructor,
+// así un impl genérico cubre toda la familia).
+fn type_key_of_type(t: Type) -> string {
+    match (t) {
+        Type.TInt => "int",
+        Type.TFloat => "float",
+        Type.TBool => "bool",
+        Type.TString => "string",
+        Type.TChar => "char",
+        Type.TUnit => "unit",
+        Type.TNamed(name, _) => name,
+        Type.TArray(_) => "[]",
+        Type.TFn(_, _) => "fn",
+        Type.TDyn(_) => "dyn",
+    }
+}
+
+fn contains_str(xs: [string], s: string) -> bool {
+    var i = 0;
+    while (i < len(xs)) {
+        if (xs[i] == s) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn struct_has_field(fields: [SField], fname: string) -> bool {
+    var i = 0;
+    while (i < len(fields)) {
+        if (fields[i].name == fname) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Antepone `recv` (el `self`/receptor) a la lista de argumentos (para métodos y UFCS).
+fn prepend(recv: Value, args: [Value]) -> [Value] {
+    var all: [Value] = [recv];
+    var i = 0;
+    while (i < len(args)) { push(all, args[i]); i = i + 1; }
+    all
+}
+
+// Puebla la tabla de métodos (`Tipo#metodo`) desde los `impl` del programa, más los métodos por DEFECTO
+// del trait no redefinidos por el impl. El despacho mira esta tabla con la clave de tipo del receptor.
+fn register_methods(c: Interp, prog: Program) {
+    let traitmap: Map<string, [MethodSig]> = map_new();
+    var ti = 0;
+    while (ti < len(prog.traits)) {
+        insert(traitmap, prog.traits[ti].name, prog.traits[ti].methods);
+        ti = ti + 1;
+    }
+    var ii = 0;
+    while (ii < len(prog.impls)) {
+        let imp = prog.impls[ii];
+        let key = type_key_of_type(imp.target);
+        var defined: [string] = [];
+        var mi = 0;
+        while (mi < len(imp.methods)) {
+            let m = imp.methods[mi];
+            insert(c.methods, key + "#" + m.name, Method { params: m.params, body: m.body });
+            push(defined, m.name);
+            mi = mi + 1;
+        }
+        // métodos por defecto del trait no redefinidos por este impl
+        match (get(traitmap, imp.trait_name)) {
+            Option.Some(sigs) => {
+                var si = 0;
+                while (si < len(sigs)) {
+                    let sig = sigs[si];
+                    if (!contains_str(defined, sig.name)) {
+                        match (sig.default_body) {
+                            Option.Some(body) => { insert(c.methods, key + "#" + sig.name, Method { params: sig.params, body: body }); },
+                            Option.None => {},
+                        }
+                    }
+                    si = si + 1;
+                }
+            },
+            Option.None => {},
+        }
+        ii = ii + 1;
+    }
+}
+
+// Llama a un método con el receptor como `self` (primer parámetro) seguido de los argumentos.
+fn call_method(c: Interp, method: Method, recv: Value, args: [Value]) -> Result<Value, Flow> {
+    call_body(c, method.params, method.body, prepend(recv, args), no_captures())
+}
+
+// Despacho de `recv.fname(args)`: campo-función → método (tabla `Tipo#metodo`) → `@derive` (igual/mostrar)
+// → UFCS a función libre `fname(recv, args)` → builtin como método. Es el corazón de la resolución en
+// runtime: `dyn`/bounds/genéricos no necesitan nada especial (se mira la etiqueta del valor concreto).
+fn dispatch_method(c: Interp, recv: Value, fname: string, args: [Expr], line: int, col: int) -> Result<Value, Flow> {
+    // (a) ¿campo del struct que contiene una función? (gana sobre UFCS/método)
+    match (recv) {
+        Value.VStruct(_, fields) => {
+            if (struct_has_field(fields, fname)) {
+                let vals = eval_args(c, args)?;
+                return call_value(c, struct_get(fields, fname), vals);
+            }
+        },
+        _ => {},
+    }
+    // (b) método del tipo (impl o defecto)
+    match (get(c.methods, type_key_of_value(recv) + "#" + fname)) {
+        Option.Some(method) => {
+            let vals = eval_args(c, args)?;
+            return call_method(c, method, recv, vals);
+        },
+        Option.None => {},
+    }
+    // (c) @derive: igual ≡ igualdad estructural, mostrar ≡ representación (= value_str). El checker
+    // garantiza que solo se llaman sobre tipos con Eq/Show, así que el tipo deriva (o tiene impl, ya
+    // resuelto en (b)) → aquí solo queda el caso derivado.
+    if (fname == "igual") {
+        let vals = eval_args(c, args)?;
+        return Result.Ok(Value.VBool(values_equal(recv, vals[0])));
+    }
+    if (fname == "mostrar") {
+        return Result.Ok(Value.VStr(value_str(recv)));
+    }
+    // (d) UFCS a función libre: fname(recv, args)
+    match (get(c.funcs, fname)) {
+        Option.Some(f) => {
+            let vals = eval_args(c, args)?;
+            return call_named(c, f, prepend(recv, vals));
+        },
+        Option.None => {},
+    }
+    // (e) builtin como método: recv como primer argumento (p. ej. `xs.len()`)
+    if (is_builtin(fname)) {
+        let vals = eval_args(c, args)?;
+        return dispatch_builtin(c, fname, prepend(recv, vals), line, col);
+    }
+    panic("no se pudo resolver '" + fname + "' sobre el receptor")
+}
+
+// Una llamada. Camino directo por nombre (builtin o función global), construcción de enum
+// `Enum.Variante(args)` (reconocida en runtime), llamada indirecta (valor-función/closure) y despacho de
+// método/UFCS `recv.f(args)`.
 fn eval_call(c: Interp, callee: Expr, args: [Expr]) -> Result<Value, Flow> {
     match (callee.kind) {
         EKind.EIdent(name) => {
@@ -590,22 +765,27 @@ fn eval_call(c: Interp, callee: Expr, args: [Expr]) -> Result<Value, Flow> {
             }
         },
         EKind.EField(obj, fname) => {
-            // ¿Construcción de variante con payload, `Enum.Variante(args)`?
+            // ¿Construcción de variante con payload, `Enum.Variante(args)`? (receptor = nombre de enum
+            // que no es una variable local). Si no, es despacho de método/UFCS sobre el receptor.
             match (obj.kind) {
                 EKind.EIdent(maybe_enum) => {
                     match (lookup_opt(c, maybe_enum)) {
-                        Option.Some(_) => panic("M14.4d: método / UFCS"),
+                        Option.Some(recv) => dispatch_method(c, recv, fname, args, callee.line, callee.col),
                         Option.None => {
                             if (enum_has_variant(c, maybe_enum, fname)) {
                                 let vals = eval_args(c, args)?;
                                 Result.Ok(Value.VEnum(maybe_enum, fname, vals))
                             } else {
-                                panic("M14.4d: método / UFCS")
+                                let recv = eval_expr(c, obj)?;
+                                dispatch_method(c, recv, fname, args, callee.line, callee.col)
                             }
                         },
                     }
                 },
-                _ => panic("M14.4d: método / UFCS"),
+                _ => {
+                    let recv = eval_expr(c, obj)?;
+                    dispatch_method(c, recv, fname, args, callee.line, callee.col)
+                },
             }
         },
         _ => {
@@ -980,7 +1160,7 @@ fn inject_prelude_enums(c: Interp) {
 // Ejecuta el programa llamando a `main` y devuelve su valor (o un error de ejecución). El checker ya
 // garantizó que `main` existe.
 pub fn run(prog: Program) -> Result<Value, RuntimeError> {
-    let c = Interp { funcs: map_new(), structs: map_new(), enums: map_new(), scopes: empty_scopes() };
+    let c = Interp { funcs: map_new(), structs: map_new(), enums: map_new(), methods: map_new(), scopes: empty_scopes() };
     inject_prelude_enums(c); // Option/Result (los del programa, abajo, sobrescriben si el usuario redefine)
     var i = 0;
     while (i < len(prog.funcs)) {
@@ -997,6 +1177,7 @@ pub fn run(prog: Program) -> Result<Value, RuntimeError> {
         insert(c.enums, prog.enums[ei].name, prog.enums[ei].variants);
         ei = ei + 1;
     }
+    register_methods(c, prog);
     match (get(c.funcs, "main")) {
         Option.Some(m) => {
             match (call_named(c, m, no_vals())) {

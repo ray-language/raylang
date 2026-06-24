@@ -232,6 +232,68 @@ fn option_result_y_try() {
 }
 
 #[test]
+fn corpus_despacho_dinamico() {
+    // M14.4d-1: UFCS, métodos de trait, bounds (no-op), impls genéricos, dyn, @derive.
+    for rel in [
+        "examples/ufcs.ray",
+        "examples/traits.ray",
+        "examples/bounds.ray",
+        "examples/metodos_por_defecto.ray",
+        "examples/impls_genericos.ray",
+        "examples/trait_objects.ray",
+        "examples/anotaciones.ray",
+    ] {
+        comparar_archivo(rel);
+    }
+}
+
+#[test]
+fn ufcs_snippets() {
+    // UFCS a builtin (len), a función libre, y a genérica; campo-función gana sobre función libre.
+    comparar_fuente(
+        "fn doble(x: int) -> int { x * 2 } fn cabeza<T>(xs: [T]) -> T { xs[0] } fn main() -> int { let xs = [10, 20, 30]; print(xs.len()); print(xs.cabeza()); print((5).doble().doble()); 0 }",
+        "in_ufcs.ray",
+    );
+    comparar_fuente(
+        "fn op(a: int, b: int) -> int { a - b } struct M { op: fn(int) -> int } fn main() -> int { let m = M { op: fn(x: int) -> int { x + 1 } }; print(m.op(41)); 0 }",
+        "in_field_fn.ray",
+    );
+}
+
+#[test]
+fn traits_y_bounds_snippets() {
+    // Despacho de método sobre struct/enum/primitivo.
+    comparar_fuente(
+        "trait V { fn v(self) -> int; } struct P { x: int } impl V for P { fn v(self) -> int { self.x } } impl V for int { fn v(self) -> int { self } } fn main() -> int { print(P { x: 7 }.v()); print((42).v()); 0 }",
+        "in_trait.ray",
+    );
+    // Bound como no-op: despacho por tipo concreto en runtime.
+    comparar_fuente(
+        "trait V { fn v(self) -> int; } struct P { x: int } impl V for P { fn v(self) -> int { self.x } } impl V for int { fn v(self) -> int { self } } fn dv<T: V>(x: T) -> int { x.v() + x.v() } fn main() -> int { print(dv(P { x: 5 })); print(dv(10)); 0 }",
+        "in_bound.ray",
+    );
+    // Método por defecto que llama a otro método del trait.
+    comparar_fuente(
+        "trait S { fn nombre(self) -> string; fn saludar(self) -> string { self.nombre() } } struct A { } impl S for A { fn nombre(self) -> string { \"a\" } } struct B { } impl S for B { fn nombre(self) -> string { \"b\" } fn saludar(self) -> string { \"hola\" } } fn main() -> int { print(A { }.saludar()); print(B { }.saludar()); 0 }",
+        "in_default.ray",
+    );
+}
+
+#[test]
+fn dyn_y_derive_snippets() {
+    // dyn: valor concreto + despacho por etiqueta + método por defecto sobre el objeto.
+    comparar_fuente(
+        "trait An { fn voz(self) -> string; fn di(self) -> int { print(self.voz()); 1 } } struct Pe { } impl An for Pe { fn voz(self) -> string { \"guau\" } } struct Ga { } impl An for Ga { fn voz(self) -> string { \"miau\" } } fn coro(xs: [dyn An]) -> int { var n = 0; var i = 0; while (i < len(xs)) { n = n + xs[i].di(); i = i + 1; } n } fn main() -> int { let xs: [dyn An] = [Pe { }, Ga { }]; coro(xs) }",
+        "in_dyn.ray",
+    );
+    // @derive(Eq, Show) anidado: igual recursivo, mostrar recursivo.
+    comparar_fuente(
+        "@derive(Eq, Show) struct P { x: int, y: int } @derive(Eq, Show) enum F { C(int), B(P) } fn main() -> int { let a = F.B(P { x: 1, y: 2 }); let b = F.B(P { x: 1, y: 2 }); print(a.mostrar()); print(a.igual(b)); print(a.igual(F.C(5))); 0 }",
+        "in_derive.ray",
+    );
+}
+
+#[test]
 fn codigo_de_salida() {
     // El código de salida del runner es el int que devuelve main (0 si es unit).
     comparar_fuente("fn main() -> int { 42 }", "in_exit42.ray");

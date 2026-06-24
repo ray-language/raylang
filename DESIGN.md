@@ -2778,3 +2778,21 @@ Tras el intérprete, el self-hosting está **cerrado** (raylang lexea/parsea/che
   `let`, **estado por celda** con instancias independientes, `?` encadenado con Result y con Option+None)
   → mismo stdout + exit que Rust. Diferido: M14.4d (UFCS/métodos/`dyn`/`@derive` + map/filter/fold del
   prelude).
+- **M14.4d-1 COMPLETO** — despacho dinámico. Aquí la decisión **resolución en runtime** (Decisión 2)
+  alcanza su máxima expresión. `Interp` gana `methods: Map<string, Method>` (`Tipo#metodo` → método,
+  `struct Method { params, body }`), poblado por `register_methods` desde los `impl` del programa más los
+  **métodos por defecto** del trait no redefinidos. `dispatch_method(recv, fname, args)` resuelve por
+  orden: (a) **campo-función** del struct (gana sobre UFCS), (b) **método** (clave
+  `type_key_of_value(recv) + "#" + fname`), (c) **`@derive`** (`igual` ≡ `values_equal`, `mostrar` ≡
+  `value_str` —el checker garantiza Eq/Show, así que (b) cubre los impls explícitos y aquí solo queda el
+  caso derivado, sin leer la anotación—), (d) **UFCS** a función libre `fname(recv, args)`, (e) **builtin
+  como método** (`xs.len()`). **Consecuencias elegantes**: **bounds y genéricos son no-ops** (`x.m()`
+  con `x: T: Trait` despacha por el tipo concreto de `x` en runtime, sin diccionarios) y **`dyn` es
+  trivial** (un valor "objeto" ES el valor concreto, sin vtable; `obj.m()` despacha por su etiqueta, y un
+  `[dyn Trait]` es un arreglo de valores concretos). Los **impls genéricos** (`impl<T> .. for Caja<T>`)
+  se clavan por **constructor** (`type_key_of_type(Caja<T>) = "Caja"`); el anidamiento (`Caja<Caja<int>>`)
+  se resuelve solo por despacho recursivo. Oráculo (16 tests): `ufcs`/`traits`/`bounds`/
+  `metodos_por_defecto`/`impls_genericos`/`trait_objects`/`anotaciones` + snippets (UFCS a builtin/libre/
+  genérica, campo-función, despacho sobre primitivo, bound no-op, defecto, `dyn` heterogéneo con defecto,
+  `@derive` anidado) → mismo stdout + exit que Rust. Diferido: M14.4d-2 (map/filter/fold del prelude →
+  `stdlib.ray`, cierra el self-hosting).

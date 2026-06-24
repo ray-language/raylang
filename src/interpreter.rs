@@ -672,6 +672,57 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza tres strings"),
             },
+            // M11.7a: ¿empieza/termina con la subcadena?
+            "starts_with" => match (&values[0], &values[1]) {
+                (Value::Str(s), Value::Str(p)) => Value::Bool(s.starts_with(p.as_str())),
+                _ => unreachable!("el checker garantiza dos strings"),
+            },
+            "ends_with" => match (&values[0], &values[1]) {
+                (Value::Str(s), Value::Str(p)) => Value::Bool(s.ends_with(p.as_str())),
+                _ => unreachable!("el checker garantiza dos strings"),
+            },
+            // M11.7a: mayúsculas/minúsculas.
+            "to_upper" => match &values[0] {
+                Value::Str(s) => Value::Str(s.to_uppercase()),
+                _ => unreachable!("el checker garantiza un string"),
+            },
+            "to_lower" => match &values[0] {
+                Value::Str(s) => Value::Str(s.to_lowercase()),
+                _ => unreachable!("el checker garantiza un string"),
+            },
+            // M11.7a: subcadena por índice de carácter (con clamp); repetir.
+            "substring" => match (&values[0], &values[1], &values[2]) {
+                (Value::Str(s), Value::Int(i), Value::Int(j)) => {
+                    Value::Str(crate::builtins::substring_chars(s, *i, *j))
+                }
+                _ => unreachable!("el checker garantiza string, int, int"),
+            },
+            "repeat" => match (&values[0], &values[1]) {
+                (Value::Str(s), Value::Int(n)) => Value::Str(crate::builtins::repeat_str(s, *n)),
+                _ => unreachable!("el checker garantiza string, int"),
+            },
+            // M11.7a: primitivo de búsqueda → [] o [i] (índice de carácter). El prelude → Option<int>.
+            "__index_of" => match (&values[0], &values[1]) {
+                (Value::Str(s), Value::Str(sub)) => {
+                    let elems = match crate::builtins::char_index_of(s, sub) {
+                        Some(i) => vec![Value::Int(i as i64)],
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("el checker garantiza dos strings"),
+            },
+            // M11.7a: une un [string] con el separador.
+            "join" => match (&values[0], &values[1]) {
+                (Value::Array(rc), Value::Str(sep)) => {
+                    let parts: Vec<String> = rc.borrow().iter().map(|v| match v {
+                        Value::Str(s) => s.clone(),
+                        _ => unreachable!("el checker garantiza [string]"),
+                    }).collect();
+                    Value::Str(parts.join(sep.as_str()))
+                }
+                _ => unreachable!("el checker garantiza [string], string"),
+            },
             // M11.2a: como print, pero a stderr.
             "eprint" => {
                 eprintln!("{}", values[0]);

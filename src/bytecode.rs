@@ -119,6 +119,27 @@ pub enum OpCode {
     /// (El arreglo es un objeto del heap → lo traza el GC.)
     Chars,
 
+    // --- Más string (M11.7a) ---
+    /// Saca el prefijo y el string; empuja un `bool`: ¿empieza con él? Builtin `starts_with`.
+    StartsWith,
+    /// Saca el sufijo y el string; empuja un `bool`: ¿termina con él? Builtin `ends_with`.
+    EndsWith,
+    /// Saca un string; empuja el mismo en MAYÚSCULAS. Builtin `to_upper`. (String nuevo en el heap.)
+    ToUpper,
+    /// Saca un string; empuja el mismo en minúsculas. Builtin `to_lower`. (String nuevo en el heap.)
+    ToLower,
+    /// Saca `j`, `i` y el string; empuja la subcadena `[i, j)` por índice de **carácter** (con
+    /// *clamp* al rango válido). Builtin `substring`. (String nuevo en el heap.)
+    Substring,
+    /// Saca `n` y el string; empuja el string repetido `n` veces (`n<=0` → `""`). Builtin `repeat`.
+    Repeat,
+    /// Saca la subcadena y el string; empuja un `[int]` con **0 o 1** elementos: el índice de
+    /// **carácter** de la primera ocurrencia, o vacío. Primitivo `__index_of`; el prelude → `Option`.
+    IndexOf,
+    /// Saca el separador y un arreglo `[string]`; empuja un string con los trozos unidos por el
+    /// separador. Builtin `join`. (String nuevo en el heap.)
+    Join,
+
     // --- I/O y API de runtime (M11.2) ---
     /// Saca un valor primitivo; lo escribe a **stderr** y empuja unit. Builtin `eprint`.
     EPrint,

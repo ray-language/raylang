@@ -2064,3 +2064,41 @@ tocan runtime, **vuelven al oráculo** (VM↔intérprete, con estrés del GC par
 
 **Lo que sigue fuera:** `to_upper`/`to_lower`/`starts_with`/`find`, listar directorios, *buffering* —
 aditivos ulteriores cuando hagan falta. M11.4 cubre lo que pidieron los diferidos nombrados.
+
+### 20.5 M11.7 — Cierre de la stdlib aditiva (string, arreglos, I/O, sort)
+
+Cierra los diferidos aditivos restantes de la stdlib, elegidos con el usuario. Misma disciplina que
+M11.4: **tras L1, cada builtin de runtime = una fila en `BUILTINS` + un opcode + su impl por motor**,
+con **oráculo** VM↔intérprete (estrés del GC para los que asignan heap). Las funciones que devuelven
+`Option`/`Result` reusan el patrón del **arreglo etiquetado/`[T]` + envoltorio en el prelude** (el
+runtime no sabe de `Option`). Los helpers *puros* compartidos por ambos motores viven en `builtins.rs`
+(como `append_to_file`), para no duplicar lógica.
+
+**Nota de naming (sin sobrecarga).** raylang no tiene overloading, así que dos funciones no pueden
+compartir nombre. Por eso la búsqueda de posición es **`index_of`** para string y **`position`** para
+arreglos (idiomático, estilo Rust `Iterator::position`).
+
+- **M11.7a — string**: `starts_with`/`ends_with` (`-> bool`), `to_upper`/`to_lower` (heap),
+  `substring(s,i,j)` (índices de **carácter**, *clamp* a rango válido → sin error de runtime),
+  `repeat(s,n)` (`n<0` → `""`), `index_of(s,sub) -> Option<int>` (primitivo `__index_of -> [int]` +
+  envoltorio) y `join(arr,sep) -> string` (une un `[string]`). Todo por **carácter** (consistente con
+  `len`/`chars`/`s[i]`).
+- **M11.7b — arreglos**: `pop(a) -> Option<T>` (muta; `__pop`-style), `reverse(a) -> [T]` (heap),
+  `contains(a,x) -> bool` e `position(a,x) -> Option<int>` (igualdad de elementos, ad-hoc), y
+  concatenación `a + b` de arreglos (se extiende la regla de `+`/`Add`, como `string+string`).
+- **M11.7c — I/O**: `remove_file(ruta) -> Result<int,string>` y `list_dir(ruta) ->
+  Result<[string],string>` (arreglo etiquetado + envoltorio; no deterministas → integración por
+  subproceso, no oráculo).
+- **M11.7d — sort**: trait **`Ord`** en el prelude (`fn menor(self, otro: Self) -> bool`), impl para
+  `int`/`float`/`string`/`char`, y `sort<T: Ord>(a: [T]) -> [T]` **escrito en raylang** (reusa bounds/
+  diccionarios de M9.2 + `len`/`push`/índice): **front-end puro, cero opcodes nuevos**.
+
+### 20.6 M11.8 — I/O con buffering (handles de archivo)
+
+El último diferido grande de I/O: lectura/escritura **con estado** (abrir una vez, leer/escribir por
+partes, cerrar). Introduce un **handle de archivo**, pero **sin un nuevo tipo de valor ni tocar el
+GC**: el handle es un `int` y los archivos abiertos viven en un **almacén de proceso** del host (un
+`Mutex<HashMap<i64, File>>` en `interpreter.rs`, como el almacén de `args`), compartido por ambos
+motores. Builtins: `open(ruta, modo) -> Result<int,string>`, `read_line_handle(h) ->
+Option<string>`, `write_handle(h, s) -> Result<int,string>`, `close(h) -> int`. No determinista →
+integración por subproceso.

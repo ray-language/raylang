@@ -400,6 +400,14 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   impórtalo con 'import `C`;'"). Se llama en cada arista del BFS de `load` (imports + from-imports),
   **aunque `T` ya esté visitado** (cada sitio cuenta). Las cápsulas anidadas componen (basta la más
   cercana). Coste cero sin `mod.ray`. **M11.6 COMPLETO.** Runtime intacto.
+- **M11.7 — cierre de la stdlib aditiva** (DESIGN §20.5). Tocan runtime → oráculo (estrés del GC para
+  los que asignan heap). Naming: sin sobrecarga, `index_of` (string) vs `position` (arreglos).
+  - **M11.7a COMPLETO** (332 tests lib): **más string** — `starts_with`/`ends_with` (`StartsWith`/
+    `EndsWith`), `to_upper`/`to_lower` (`ToUpper`/`ToLower`, heap), `substring(s,i,j)` (`Substring`,
+    por carácter con *clamp* → sin error de runtime), `repeat(s,n)` (`Repeat`, `n<=0`→""),
+    `index_of(s,sub) -> Option<int>` (primitivo `__index_of`/`IndexOf` + envoltorio en el prelude) y
+    `join(arr,sep)` (`Join`). Helpers puros compartidos en `builtins.rs` (`char_index_of`,
+    `substring_chars`, `repeat_str`). Todo por carácter (consistente con `len`/`chars`/`s[i]`).
 - **M11.4 — cierre de diferidos aditivos de la stdlib** (DESIGN §20.4). Tocan runtime → oráculo
   (con estrés del GC para los que asignan heap). Tras L1, cada builtin = fila en `BUILTINS` + opcode
   + impl por motor; checker/compilador sin cambios.

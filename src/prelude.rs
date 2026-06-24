@@ -97,6 +97,12 @@ fn env(nombre: string) -> Option<string> {
     if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
+// M11.7a: índice (de carácter) de la primera ocurrencia de `sub` en `s`; None si no aparece.
+fn index_of(s: string, sub: string) -> Option<int> {
+    let r = __index_of(s, sub);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
 // --- Archivos (M11.2c): el primitivo devuelve un arreglo ETIQUETADO (primer elemento "ok"/"err");
 // aquí se traduce a Result. Así el runtime tampoco sabe de Result (como con Option). ---
 

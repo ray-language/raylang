@@ -63,6 +63,40 @@ pub fn append_to_file(path: &str, contents: &str) -> std::io::Result<()> {
     f.write_all(contents.as_bytes())
 }
 
+/// Índice de **carácter** de la primera ocurrencia de `sub` en `s` (M11.7a). Por carácter (no por
+/// byte), consistente con `len`/`chars`/`s[i]`. `sub` vacío → `Some(0)`. Helper compartido por ambos
+/// motores (`__index_of`).
+pub fn char_index_of(s: &str, sub: &str) -> Option<usize> {
+    let chars: Vec<char> = s.chars().collect();
+    let sub: Vec<char> = sub.chars().collect();
+    if sub.is_empty() {
+        return Some(0);
+    }
+    if sub.len() > chars.len() {
+        return None;
+    }
+    (0..=chars.len() - sub.len()).find(|&i| chars[i..i + sub.len()] == sub[..])
+}
+
+/// Subcadena `[i, j)` por índice de **carácter**, con *clamp* al rango válido (M11.7a): así nunca
+/// falla en runtime (un `i`/`j` fuera de rango se recorta; `i > j` → `""`). Helper compartido.
+pub fn substring_chars(s: &str, i: i64, j: i64) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let n = chars.len() as i64;
+    let lo = i.clamp(0, n);
+    let hi = j.clamp(lo, n); // hi >= lo → rango vacío si i > j
+    chars[lo as usize..hi as usize].iter().collect()
+}
+
+/// Repite `s` `n` veces (`n <= 0` → `""`) (M11.7a). Helper compartido.
+pub fn repeat_str(s: &str, n: i64) -> String {
+    if n <= 0 {
+        String::new()
+    } else {
+        s.repeat(n as usize)
+    }
+}
+
 // --- Helpers de las reglas ---
 
 /// Error de aridad "espera N argumento(s), se le pasaron M".
@@ -160,6 +194,63 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "chars", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("chars espera un string, no {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Char)))
+    } },
+    // starts_with(s, pre) -> bool (M11.7a): ¿`s` empieza con `pre`?
+    Builtin { name: "starts_with", opcode: OpCode::StartsWith, check: |a| {
+        arity(a, 2, "starts_with", " (string, prefijo)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("starts_with espera un string como primer argumento, no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("starts_with espera un string como prefijo, no {}", a[1]))); }
+        Ok(Type::Bool)
+    } },
+    // ends_with(s, suf) -> bool (M11.7a): ¿`s` termina con `suf`?
+    Builtin { name: "ends_with", opcode: OpCode::EndsWith, check: |a| {
+        arity(a, 2, "ends_with", " (string, sufijo)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("ends_with espera un string como primer argumento, no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("ends_with espera un string como sufijo, no {}", a[1]))); }
+        Ok(Type::Bool)
+    } },
+    // to_upper(s) -> string (M11.7a): en MAYÚSCULAS.
+    Builtin { name: "to_upper", opcode: OpCode::ToUpper, check: |a| {
+        arity(a, 1, "to_upper", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("to_upper espera un string, no {}", a[0]))); }
+        Ok(Type::String)
+    } },
+    // to_lower(s) -> string (M11.7a): en minúsculas.
+    Builtin { name: "to_lower", opcode: OpCode::ToLower, check: |a| {
+        arity(a, 1, "to_lower", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("to_lower espera un string, no {}", a[0]))); }
+        Ok(Type::String)
+    } },
+    // substring(s, i, j) -> string (M11.7a): subcadena [i, j) por índice de carácter (con clamp).
+    Builtin { name: "substring", opcode: OpCode::Substring, check: |a| {
+        arity(a, 3, "substring", " (string, inicio, fin)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("substring espera un string como primer argumento, no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("substring espera un int como inicio, no {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("substring espera un int como fin, no {}", a[2]))); }
+        Ok(Type::String)
+    } },
+    // repeat(s, n) -> string (M11.7a): `s` repetido `n` veces (`n<=0` → "").
+    Builtin { name: "repeat", opcode: OpCode::Repeat, check: |a| {
+        arity(a, 2, "repeat", " (string, veces)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("repeat espera un string como primer argumento, no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("repeat espera un int como nº de veces, no {}", a[1]))); }
+        Ok(Type::String)
+    } },
+    // __index_of(s, sub) -> [int] (M11.7a): [] o [i] (índice de carácter). El prelude → Option<int>.
+    Builtin { name: "__index_of", opcode: OpCode::IndexOf, check: |a| {
+        arity(a, 2, "__index_of", " (string, subcadena)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__index_of espera un string como primer argumento, no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__index_of espera un string como subcadena, no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::Int)))
+    } },
+    // join(arr, sep) -> string (M11.7a): une un [string] con el separador `sep`.
+    Builtin { name: "join", opcode: OpCode::Join, check: |a| {
+        arity(a, 2, "join", " (arreglo de string, separador)")?;
+        if a[0] != Type::Array(Box::new(Type::String)) {
+            return Err((Some(0), format!("join espera un [string] como primer argumento, no {}", a[0])));
+        }
+        if a[1] != Type::String { return Err((Some(1), format!("join espera un string como separador, no {}", a[1]))); }
+        Ok(Type::String)
     } },
     // eprint(x) -> unit (M11.2a): como print, pero a stderr.
     Builtin { name: "eprint", opcode: OpCode::EPrint, check: |a| {

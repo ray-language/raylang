@@ -101,11 +101,28 @@ Detalles de diseño:
   intérprete, así que `'a' == 'a'` daba `false` solo en un motor —exactamente lo que el oráculo
   existe para atrapar—.
 
-## Lo que falta (a propósito)
+## El resto de la stdlib de string (M11.7a)
 
-Quedan fuera, por aditivos, `to_upper`/`to_lower`/`starts_with`/`find`: llegarán cuando se necesiten.
-El núcleo de M11.1 fue deliberadamente el mínimo —**concatenar, medir, convertir, recortar,
-partir**—; M11.4 le sumó **buscar y reemplazar** y el **tipo `char` con indexado**.
+M11.7a cierra los aditivos que faltaban, todos por **carácter** (consistentes con `len`/`chars`/
+`s[i]`) y siguiendo el patrón de L1 (fila en `BUILTINS` + opcode + impl por motor):
+
+| Builtin | Tipo | Notas |
+|---|---|---|
+| `starts_with(s, pre)` / `ends_with(s, suf)` | `-> bool` | — |
+| `to_upper(s)` / `to_lower(s)` | `-> string` | asignan string nuevo (heap → estrés del GC) |
+| `substring(s, i, j)` | `-> string` | `[i, j)` por índice de carácter, con *clamp* (nunca falla) |
+| `repeat(s, n)` | `-> string` | `n <= 0` → `""` |
+| `index_of(s, sub)` | `-> Option<int>` | primitivo `__index_of -> [int]` + envoltorio en el prelude |
+| `join(arr, sep)` | `-> string` | une un `[string]` |
+
+`index_of` reusa el truco de M11.2: el runtime devuelve un `[int]` de 0 o 1 elementos y el prelude
+(raylang) lo traduce a `Option<int>` —el runtime sigue sin saber de `Option`—. `substring` **clampa**
+los índices al rango válido en vez de fallar, así el oráculo es trivialmente determinista. Los helpers
+puros (`char_index_of`, `substring_chars`, `repeat_str`) viven en `builtins.rs`, compartidos por los
+dos motores.
+
+> Nota de naming: como raylang **no tiene sobrecarga**, la búsqueda de posición se llama `index_of`
+> para string y `position` para arreglos (M11.7b).
 
 > La lección de M11.1 es un cambio de aire. Tras una larga racha de features *front-end* que
 > presumían de "runtime intacto", esta nos recuerda por qué esa racha era valiosa: en cuanto algo

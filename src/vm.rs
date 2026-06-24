@@ -311,6 +311,77 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Str(s.replace(de.as_str(), a.as_str())));
                 }
 
+                // --- Más string (M11.7a) ---
+                OpCode::StartsWith => {
+                    let p = self.pop();
+                    let s = self.pop();
+                    let (HeapValue::Str(s), HeapValue::Str(p)) = (s, p) else {
+                        unreachable!("el checker garantiza dos strings");
+                    };
+                    self.push(HeapValue::Bool(s.starts_with(p.as_str())));
+                }
+                OpCode::EndsWith => {
+                    let p = self.pop();
+                    let s = self.pop();
+                    let (HeapValue::Str(s), HeapValue::Str(p)) = (s, p) else {
+                        unreachable!("el checker garantiza dos strings");
+                    };
+                    self.push(HeapValue::Bool(s.ends_with(p.as_str())));
+                }
+                OpCode::ToUpper => match self.pop() {
+                    HeapValue::Str(s) => self.push(HeapValue::Str(s.to_uppercase())),
+                    _ => unreachable!("el checker garantiza un string"),
+                },
+                OpCode::ToLower => match self.pop() {
+                    HeapValue::Str(s) => self.push(HeapValue::Str(s.to_lowercase())),
+                    _ => unreachable!("el checker garantiza un string"),
+                },
+                OpCode::Substring => {
+                    // Orden en la pila: s, i, j → se sacan en inverso.
+                    let j = self.pop();
+                    let i = self.pop();
+                    let s = self.pop();
+                    let (HeapValue::Str(s), HeapValue::Int(i), HeapValue::Int(j)) = (s, i, j) else {
+                        unreachable!("el checker garantiza string, int, int");
+                    };
+                    self.push(HeapValue::Str(crate::builtins::substring_chars(&s, i, j)));
+                }
+                OpCode::Repeat => {
+                    let n = self.pop();
+                    let s = self.pop();
+                    let (HeapValue::Str(s), HeapValue::Int(n)) = (s, n) else {
+                        unreachable!("el checker garantiza string, int");
+                    };
+                    self.push(HeapValue::Str(crate::builtins::repeat_str(&s, n)));
+                }
+                OpCode::IndexOf => {
+                    // Primitivo: [] o [i] (índice de carácter). El prelude → Option<int>.
+                    let sub = self.pop();
+                    let s = self.pop();
+                    let (HeapValue::Str(s), HeapValue::Str(sub)) = (s, sub) else {
+                        unreachable!("el checker garantiza dos strings");
+                    };
+                    let elems = match crate::builtins::char_index_of(&s, &sub) {
+                        Some(i) => vec![HeapValue::Int(i as i64)],
+                        None => vec![],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::Join => {
+                    // Orden en la pila: arr, sep → se saca sep primero.
+                    let sep = self.pop();
+                    let arr = self.pop();
+                    let (HeapValue::Obj(h), HeapValue::Str(sep)) = (arr, sep) else {
+                        unreachable!("el checker garantiza [string], string");
+                    };
+                    let parts: Vec<String> = self.as_array(h).iter().map(|v| match v {
+                        HeapValue::Str(s) => s.clone(),
+                        _ => unreachable!("el checker garantiza [string]"),
+                    }).collect();
+                    self.push(HeapValue::Str(parts.join(sep.as_str())));
+                }
+
                 // --- I/O y API de runtime (M11.2) ---
                 OpCode::EPrint => {
                     let v = self.pop();
@@ -2018,6 +2089,33 @@ mod tests {
                 print(r);                              // HOLA mundo, HOLA raylang
                 print("a.b.c".replace(".", "/"));      // a/b/c
                 if (s.contains("raylang")) { len(r) } else { 0 }  // 24
+            }
+        "#);
+    }
+
+    #[test]
+    fn string_stdlib_m117_oraculo() {
+        // M11.7a: starts_with/ends_with (bool); to_upper/to_lower/substring/repeat/join asignan
+        // string nuevo (heap en la VM); index_of construye Option en el prelude. Oráculo + estrés GC.
+        oracle_stress(r#"
+            fn pos(o: Option<int>, def: int) -> int {
+                match (o) { Option.Some(i) => i, Option.None => def, }
+            }
+            fn main() -> int {
+                let s = "Hola, Mundo";
+                print(s.starts_with("Hola"));      // true
+                print(s.ends_with("xyz"));         // false
+                print(s.to_upper());               // HOLA, MUNDO
+                print(s.to_lower());               // hola, mundo
+                print(s.substring(0, 4));          // Hola
+                print(s.substring(6, 100));        // Mundo (clamp)
+                print("ab".repeat(3));             // ababab
+                print("".repeat(5));               // (vacío)
+                let partes = ["a", "b", "c"];
+                print(join(partes, "-"));          // a-b-c
+                print(pos(index_of(s, "Mundo"), 0 - 1));   // 6
+                print(pos(index_of(s, "zzz"), 0 - 1));      // -1
+                len(s.substring(6, 11)) + pos(index_of(s, "Mundo"), 0)  // 5 + 6 = 11
             }
         "#);
     }

@@ -429,6 +429,15 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     el prelude ahora inyecta **impls** (nueva `prelude::impls()` + paso 0b4 idempotente en `check`);
     (3) `ensure_impl_target` admite `Type::Char` (faltaba). Un tipo de usuario que implemente `Ord` es
     ordenable por `sort` (probado en el oráculo). **M11.7 COMPLETO.**
+- **M11.8 COMPLETO** (334 tests lib + 10 en `tests/io_cli.rs`): **I/O con buffering — handles de
+  archivo** (DESIGN §20.6). `open(ruta, modo) -> Result<int,string>` (modos `"r"`/`"w"`/`"a"`),
+  `read_line(h) -> Option<string>` (bufferizada), `write(h, s) -> Result<int,string>`, `close(h) ->
+  int`. **Sin nuevo tipo de valor ni tocar el GC**: el handle es un `int` y los archivos abiertos
+  viven en un **almacén de proceso** del host (`Mutex<HashMap<i64, OpenHandle>>` + helpers en
+  `builtins.rs`, como el de `args`); `OpenHandle = Reader(BufReader) | Writer(File)`. Opcodes `Open`/
+  `ReadLineHandle`/`WriteHandle`/`Close` + primitivos `__open`/`__read_line_handle`/`__write_handle`
+  (arreglo etiquetado/`[T]` + envoltorio en el prelude; `open` decodifica el handle con `parse_int`).
+  I/O real no determinista → integración por subproceso (no oráculo).
 - **M11.4 — cierre de diferidos aditivos de la stdlib** (DESIGN §20.4). Tocan runtime → oráculo
   (con estrés del GC para los que asignan heap). Tras L1, cada builtin = fila en `BUILTINS` + opcode
   + impl por motor; checker/compilador sin cambios.

@@ -136,12 +136,49 @@ entorno, de los argumentos, del disco). Por eso se prueba en dos capas:
 - lo **interactivo/real** (stdin, stderr, argv, entorno, ida y vuelta de archivos) con **tests de
   integración por subproceso**, que alimentan stdin, capturan stderr y usan archivos temporales.
 
+## Más I/O de archivos (M11.7c)
+
+`remove_file(ruta) -> Result<int,string>` borra; `list_dir(ruta) -> Result<[string],string>` lista
+los nombres de un directorio (**ordenados**, para que el resultado sea determinista). Mismo patrón de
+arreglo etiquetado + envoltorio en el prelude; `list_dir` reconstruye el `[string]` con un `while`+
+`push` (raylang aún no tiene slice de arreglos).
+
+## Streaming: handles de archivo (M11.8)
+
+Hasta aquí la I/O de archivos era *de una vez* (leer/escribir el archivo entero). M11.8 añade
+**streaming**: abrir una vez y leer/escribir por partes.
+
+```rust
+match (open("salida.txt", "w")) {       // "r" lectura, "w" escritura, "a" añade
+  Result.Ok(h) => {
+    write(h, "una línea\n");            // se escribe sin recargar nada
+    write(h, "otra\n");
+    close(h);
+  },
+  Result.Err(e) => print("no se pudo abrir: " + e),
+}
+
+match (open("salida.txt", "r")) {
+  Result.Ok(h) => {
+    match (read_line(h)) {              // lee la siguiente línea; None en EOF
+      Option.Some(l) => print(l),
+      Option.None => print("vacío"),
+    }
+    close(h);
+  },
+  Result.Err(e) => print(e),
+}
+```
+
+La pieza interesante es **cómo se representa el handle sin tocar el GC ni inventar un tipo de valor**:
+el handle es un **`int`**, y los archivos abiertos viven en un **almacén de proceso** del host (un
+`Mutex<HashMap<i64, …>>` en `builtins.rs`, igual que el almacén de `args`). La lectura es
+**bufferizada** (`BufReader`). El runtime de raylang no sabe de archivos: solo pasa enteros.
+
 ## Lo que queda fuera
 
-De archivos: borrado, listar directorios y *streaming* (es lectura/escritura del archivo
-**completo**). Son aditivos; llegarán cuando hagan falta. (`append` y `exists`, que estaban en esta
-lista, se saldaron en M11.4b.) Lo que hay es lo justo para apps de CLI y para leer/escribir fuentes
-`.ray`.
+Lo más estructural: *buffering* de escritura configurable, lectura binaria (no por líneas), y un slice
+de arreglos. Aditivos; llegarán cuando hagan falta.
 
 > M11.2 cierra un círculo abierto en M6.3: los tipos `Option`/`Result` existían desde entonces, pero
 > hasta ahora casi todo el que los producía era el propio usuario. La I/O es su hábitat natural —el

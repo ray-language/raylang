@@ -184,6 +184,19 @@ pub enum OpCode {
     /// directorio, o `["err", msg]`. Primitivo `__list_dir` (M11.7c); el prelude → `Result<[string],…>`.
     ListDir,
 
+    // --- I/O con buffering: handles de archivo (M11.8) ---
+    /// Saca el modo y la ruta; abre el archivo y empuja un `[string]` etiquetado `["ok", handle]`
+    /// (handle como decimal) o `["err", msg]`. Primitivo `__open`; el prelude → `Result<int,string>`.
+    Open,
+    /// Saca un handle (int); lee la siguiente línea (sin `\n`) y empuja un `[string]` con **0 o 1**
+    /// elementos (vacío en EOF/handle inválido). Primitivo `__read_line_handle`; prelude → `Option`.
+    ReadLineHandle,
+    /// Saca el contenido y un handle (int); escribe y empuja un `[string]` etiquetado
+    /// `["ok"]`/`["err", msg]`. Primitivo `__write_handle`; el prelude → `Result<int,string>`.
+    WriteHandle,
+    /// Saca un handle (int); cierra el archivo (lo quita del registro) y empuja `0`. Builtin `close`.
+    Close,
+
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como
     /// campos tenga (estaban en orden de declaración) y empuja el struct.

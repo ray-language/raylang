@@ -853,6 +853,44 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M11.8: abre un archivo → ["ok", handle] o ["err", msg].
+            "__open" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(path), Value::Str(mode)) => match crate::builtins::open_file(path, mode) {
+                        Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza dos strings"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M11.8: lee una línea del handle → [] (EOF) o [linea].
+            "__read_line_handle" => match &values[0] {
+                Value::Int(h) => {
+                    let elems = crate::builtins::read_line_handle(*h).map(|l| vec![Value::Str(l)]).unwrap_or_default();
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("el checker garantiza un int"),
+            },
+            // M11.8: escribe en el handle → ["ok"] o ["err", msg].
+            "__write_handle" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Int(h), Value::Str(s)) => match crate::builtins::write_handle(*h, s) {
+                        Ok(_) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza int, string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M11.8: cierra el handle (total).
+            "close" => match &values[0] {
+                Value::Int(h) => {
+                    crate::builtins::close_handle(*h);
+                    Value::Int(0)
+                }
+                _ => unreachable!("el checker garantiza un int"),
+            },
             _ => unreachable!("builtin desconocido"),
         }
     }

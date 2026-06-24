@@ -184,6 +184,33 @@ fn list_dir(ruta: string) -> Result<[string], string> {
         Result.Err(r[1])
     }
 }
+
+// --- I/O con buffering: handles de archivo (M11.8). open/read_line/write/close. ---
+
+// Abre un archivo (modo "r"/"w"/"a") y devuelve un handle (int); Err(mensaje) si falla.
+fn open(ruta: string, modo: string) -> Result<int, string> {
+    let r = __open(ruta, modo);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+// Lee la siguiente línea del handle (sin el salto); None en EOF (o handle no-lector).
+fn read_line(h: int) -> Option<string> {
+    let r = __read_line_handle(h);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+// Escribe en el handle; Ok(nº de caracteres) u Err(mensaje).
+fn write(h: int, s: string) -> Result<int, string> {
+    let r = __write_handle(h, s);
+    if (r[0] == "ok") { Result.Ok(len(s)) } else { Result.Err(r[1]) }
+}
 "#;
 
 /// Parsea el prelude una vez. El `expect` no puede fallar: el fuente es una constante

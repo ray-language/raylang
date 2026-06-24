@@ -88,6 +88,79 @@ pub fn substring_chars(s: &str, i: i64, j: i64) -> String {
     chars[lo as usize..hi as usize].iter().collect()
 }
 
+// --- I/O con buffering: registro de archivos abiertos (M11.8) ---
+//
+// Un handle de archivo es un `int`: NO hay un nuevo tipo de valor ni se toca el GC. Los archivos
+// abiertos viven en un almacén de **proceso** del host (como el de `args`), compartido por ambos
+// motores. La lectura es **bufferizada** (`BufReader`), que es el grano fino del *streaming*: abrir
+// una vez y leer/escribir por partes sin recargar todo el archivo.
+
+/// Un archivo abierto: lectura bufferizada o escritura.
+enum OpenHandle {
+    Reader(std::io::BufReader<std::fs::File>),
+    Writer(std::fs::File),
+}
+
+/// El registro de archivos abiertos: un contador para los handles y el mapa handle → archivo.
+struct FileRegistry {
+    next: i64,
+    open: std::collections::HashMap<i64, OpenHandle>,
+}
+
+fn registry() -> &'static std::sync::Mutex<FileRegistry> {
+    static R: std::sync::OnceLock<std::sync::Mutex<FileRegistry>> = std::sync::OnceLock::new();
+    R.get_or_init(|| std::sync::Mutex::new(FileRegistry { next: 1, open: std::collections::HashMap::new() }))
+}
+
+/// Abre `path` en el modo dado (`"r"` lectura, `"w"` escritura/trunca, `"a"` añade) y devuelve un
+/// handle (M11.8). Compartido por ambos motores (`__open`).
+pub fn open_file(path: &str, mode: &str) -> Result<i64, String> {
+    let handle = match mode {
+        "r" => std::fs::File::open(path).map(|f| OpenHandle::Reader(std::io::BufReader::new(f))),
+        "w" => std::fs::File::create(path).map(OpenHandle::Writer),
+        "a" => std::fs::OpenOptions::new().create(true).append(true).open(path).map(OpenHandle::Writer),
+        _ => return Err(format!("modo de apertura inválido: '{}' (usa \"r\", \"w\" o \"a\")", mode)),
+    }
+    .map_err(|e| e.to_string())?;
+    let mut reg = registry().lock().unwrap();
+    let id = reg.next;
+    reg.next += 1;
+    reg.open.insert(id, handle);
+    Ok(id)
+}
+
+/// Lee la siguiente línea (sin el `\n`) del handle; `None` en EOF, error o handle no-lector (M11.8).
+pub fn read_line_handle(h: i64) -> Option<String> {
+    use std::io::BufRead;
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Reader(r)) => {
+            let mut line = String::new();
+            match r.read_line(&mut line) {
+                Ok(0) | Err(_) => None,
+                Ok(_) => Some(line.trim_end_matches(['\n', '\r']).to_string()),
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Escribe `s` en el handle; `Ok(nº de caracteres)` o `Err(mensaje)` (M11.8).
+pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
+    use std::io::Write;
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Writer(f)) => f.write_all(s.as_bytes()).map(|_| s.chars().count()).map_err(|e| e.to_string()),
+        Some(OpenHandle::Reader(_)) => Err("el handle está abierto para lectura, no escritura".to_string()),
+        None => Err(format!("handle de archivo inválido: {}", h)),
+    }
+}
+
+/// Cierra el handle (lo quita del registro; el `Drop` del archivo vuelca lo pendiente) (M11.8).
+pub fn close_handle(h: i64) {
+    registry().lock().unwrap().open.remove(&h);
+}
+
 /// Lista los nombres de las entradas de un directorio (M11.7c). Helper compartido por ambos motores
 /// (`__list_dir`). Ordenados para que el resultado sea **determinista** (el sistema no garantiza orden).
 pub fn list_dir(path: &str) -> std::io::Result<Vec<String>> {
@@ -350,6 +423,32 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "__list_dir", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("__list_dir espera un string (la ruta), no {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __open(ruta, modo) -> [string] (M11.8): ["ok", handle] o ["err", msg]. Prelude → Result<int,…>.
+    Builtin { name: "__open", opcode: OpCode::Open, check: |a| {
+        arity(a, 2, "__open", " (ruta, modo)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__open espera un string (la ruta), no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__open espera un string (el modo), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __read_line_handle(h) -> [string] (M11.8): [] (EOF) o [linea]. Prelude → Option<string>.
+    Builtin { name: "__read_line_handle", opcode: OpCode::ReadLineHandle, check: |a| {
+        arity(a, 1, "__read_line_handle", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__read_line_handle espera un int (el handle), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __write_handle(h, s) -> [string] (M11.8): ["ok"] o ["err", msg]. Prelude → Result<int,string>.
+    Builtin { name: "__write_handle", opcode: OpCode::WriteHandle, check: |a| {
+        arity(a, 2, "__write_handle", " (handle, contenido)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__write_handle espera un int (el handle), no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__write_handle espera un string (el contenido), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // close(h) -> int (M11.8): cierra el handle; devuelve 0 (total).
+    Builtin { name: "close", opcode: OpCode::Close, check: |a| {
+        arity(a, 1, "close", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("close espera un int (el handle), no {}", a[0]))); }
+        Ok(Type::Int)
     } },
     // exists(ruta) -> bool (M11.4b): ¿existe la ruta? Total (no falla).
     Builtin { name: "exists", opcode: OpCode::Exists, check: |a| {

@@ -544,6 +544,50 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
 
+                // --- I/O con buffering: handles de archivo (M11.8) ---
+                OpCode::Open => {
+                    let mode = self.pop();
+                    let path = self.pop();
+                    let (HeapValue::Str(path), HeapValue::Str(mode)) = (path, mode) else {
+                        unreachable!("el checker garantiza dos strings");
+                    };
+                    let elems = match crate::builtins::open_file(&path, &mode) {
+                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::ReadLineHandle => {
+                    let handle = match self.pop() {
+                        HeapValue::Int(h) => h,
+                        _ => unreachable!("el checker garantiza un int"),
+                    };
+                    let elems = crate::builtins::read_line_handle(handle).map(|l| vec![HeapValue::Str(l)]).unwrap_or_default();
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::WriteHandle => {
+                    let s = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Str(s)) = (handle, s) else {
+                        unreachable!("el checker garantiza int, string");
+                    };
+                    let elems = match crate::builtins::write_handle(handle, &s) {
+                        Ok(_) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::Close => {
+                    match self.pop() {
+                        HeapValue::Int(h) => crate::builtins::close_handle(h),
+                        _ => unreachable!("el checker garantiza un int"),
+                    }
+                    self.push(HeapValue::Int(0));
+                }
+
                 // --- Structs (M3.2) ---
                 OpCode::MakeStruct(idx) => {
                     let sname = self.program.structs[*idx].name.clone();

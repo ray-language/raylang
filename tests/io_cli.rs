@@ -259,3 +259,70 @@ fn main() -> int {{
         assert_eq!(out.status.code(), Some(1), "tras borrar queda 1 entrada (vm={vm})");
     }
 }
+
+#[test]
+fn handles_de_archivo_open_write_read_close() {
+    // M11.8: abrir, escribir por partes, cerrar, reabrir y leer línea a línea. I/O real → subproceso.
+    for vm in [false, true] {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("ray_handles_{}", if vm { "vm" } else { "tw" }));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("out.txt").to_string_lossy().replace('\\', "/");
+
+        let src = format!(r#"
+fn main() -> int {{
+  match (open("{f}", "w")) {{
+    Result.Ok(h) => {{
+      write(h, "uno\n");
+      write(h, "dos\n");
+      close(h);
+    }},
+    Result.Err(e) => print("err: " + e),
+  }}
+  var total: int = 0;
+  match (open("{f}", "r")) {{
+    Result.Ok(h) => {{
+      match (read_line(h)) {{ Option.Some(l) => print("L1=" + l), Option.None => print("vacio"), }}
+      match (read_line(h)) {{ Option.Some(l) => print("L2=" + l), Option.None => print("vacio"), }}
+      match (read_line(h)) {{ Option.Some(l) => print("hay mas"), Option.None => print("EOF"), }}
+      close(h);
+      total = 2;
+    }},
+    Result.Err(e) => print("err: " + e),
+  }}
+  total
+}}
+"#);
+        let mut path = std::env::temp_dir();
+        path.push(format!("ray_handles_prog_{}.ray", if vm { "vm" } else { "tw" }));
+        std::fs::File::create(&path).unwrap().write_all(src.as_bytes()).unwrap();
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
+        if vm { cmd.arg("--vm"); }
+        let out = cmd.arg(&path).output().expect("ejecuta raylang");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("L1=uno"), "lee la 1ª línea (vm={vm})\n{stdout}");
+        assert!(stdout.contains("L2=dos"), "lee la 2ª línea (vm={vm})\n{stdout}");
+        assert!(stdout.contains("EOF"), "EOF tras la última (vm={vm})\n{stdout}");
+        assert_eq!(out.status.code(), Some(2), "leídas 2 líneas (vm={vm})");
+        // El archivo en disco tiene exactamente lo escrito por partes.
+        assert_eq!(std::fs::read_to_string(dir.join("out.txt")).unwrap(), "uno\ndos\n");
+    }
+}
+
+#[test]
+fn open_de_archivo_inexistente_da_err() {
+    let mut path = std::env::temp_dir();
+    path.push("ray_open_err.ray");
+    let src = r#"
+fn main() -> int {
+  match (open("/no/existe/para/nada.txt", "r")) {
+    Result.Ok(h) => 0,
+    Result.Err(e) => 1,
+  }
+}
+"#;
+    std::fs::File::create(&path).unwrap().write_all(src.as_bytes()).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang")).arg(&path).output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "open de un archivo inexistente en modo r → Err");
+}

@@ -1573,6 +1573,13 @@ impl Checker {
                     }
                     Some(else_e) => {
                         let else_ty = self.check_expr_expected(else_e, expected)?;
+                        // M13.2a: una rama divergente (p.ej. `panic`) cede el tipo a la otra.
+                        if block_diverges(then_branch) {
+                            return Ok(else_ty);
+                        }
+                        if expr_diverges(else_e) {
+                            return Ok(then_ty);
+                        }
                         if then_ty != else_ty {
                             return Err(self.err(expr.line, expr.col, format!(
                                 "las ramas del if tienen tipos distintos: {} y {}", then_ty, else_ty
@@ -1777,6 +1784,14 @@ impl Checker {
                     }
                     Some(else_e) => {
                         let else_ty = self.check_expr(else_e)?;
+                        // M13.2a: si una rama diverge (p.ej. termina en `panic`), el if toma el
+                        // tipo de la otra; solo la rama que sí produce valor manda.
+                        if block_diverges(then_branch) {
+                            return Ok(else_ty);
+                        }
+                        if expr_diverges(else_e) {
+                            return Ok(then_ty);
+                        }
                         if then_ty != else_ty {
                             return Err(self.err(expr.line, expr.col, format!(
                                 "las ramas del if tienen tipos distintos: {} y {}",
@@ -2532,6 +2547,11 @@ fn expr_diverges(expr: &Expr) -> bool {
         // Un match diverge si TODOS sus brazos divergen (el checker garantiza que es
         // exhaustivo, así que siempre se toma alguno).
         ExprKind::Match { arms, .. } => !arms.is_empty() && arms.iter().all(|a| expr_diverges(&a.body)),
+        // `panic(...)` (M13.2a) nunca retorna: una rama que termina en panic diverge, así que
+        // `match (x) { Some(v) => v, None => panic("imposible") }` cuadra de tipo. `panic` gana
+        // siempre sobre cualquier homónimo (un builtin no se tapa), así que el chequeo por nombre
+        // es seguro.
+        ExprKind::Call { callee, .. } => matches!(&callee.kind, ExprKind::Ident(n) if n == "panic"),
         _ => false,
     }
 }

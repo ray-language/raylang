@@ -371,6 +371,14 @@ static BUILTINS: &[Builtin] = &[
         }
         Ok(Type::Array(Box::new(Type::Int)))
     } },
+    // panic(msg) -> unit (M13.2a): aborta la ejecución con `msg`. Lo usan `assert`/`assert_eq` del
+    // prelude; es el único primitivo de runtime de M13.2 (el resto vive en raylang). Diverge (nunca
+    // retorna), lo que aprovecha el análisis de divergencia del checker.
+    Builtin { name: "panic", opcode: OpCode::Panic, check: |a| {
+        arity(a, 1, "panic", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("panic espera un string, no {}", a[0]))); }
+        Ok(Type::Unit)
+    } },
     // eprint(x) -> unit (M11.2a): como print, pero a stderr.
     Builtin { name: "eprint", opcode: OpCode::EPrint, check: |a| {
         arity(a, 1, "eprint", "")?;

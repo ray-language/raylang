@@ -535,6 +535,15 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     límite; M13.3a añade el del intérprete (que antes desbordaba la pila de Rust) y la pila grande.
     Oráculo `overflow_recursion_oraculo`. Diferido: **M13.3b** TCO en la VM (reusar marco en posición
     de cola).
+  - **M13.2a COMPLETO** (338 tests lib): **`panic` + `assert` + `assert_eq`**. Único toque de runtime:
+    builtin **`panic(msg)`** (opcode `Panic`) que aborta con `msg` en la posición de la llamada — el
+    intérprete lo intercepta en `eval_call` (devuelve `Flow::Error`), la VM lo baja al opcode `Panic`;
+    ambos motores dan el mismo mensaje (oráculo `panic_y_assert_falla_oraculo`). Sobre él, en el
+    **prelude (raylang)**: `assert(cond)` y `assert_eq<T: Eq + Show>(a, b)` (vía `.igual()`+`.mostrar()`,
+    bounds→dicts M9.2). Sin sobrecarga → no hay `assert(cond, msg)`; para mensaje a medida, `panic("…")`.
+    Habilitadores: `impl Eq`/`impl Show` para **primitivos** en el prelude (los pedía `assert_eq`) y
+    **`panic` diverge** (`expr_diverges` lo reconoce → una rama que termina en panic cede el tipo a la
+    otra). Falta **M13.2b**: runner mejorado (`@test` unit, aislamiento por test, reporte, filtro).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

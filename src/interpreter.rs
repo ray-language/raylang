@@ -613,6 +613,16 @@ impl<'a> Interpreter<'a> {
                     for arg in args {
                         values.push(self.eval_expr(arg)?);
                     }
+                    // `panic` (M13.2a) aborta con el mensaje en la posición de la llamada. Se
+                    // intercepta aquí —no en `eval_builtin`— porque debe producir un `Flow::Error`
+                    // (un valor de error, no un `Value`), y aquí tenemos la posición del callee.
+                    if name == "panic" {
+                        let msg = match &values[0] {
+                            Value::Str(s) => s.clone(),
+                            _ => unreachable!("el checker garantiza un string"),
+                        };
+                        return Err(runtime_error(callee.line, callee.col, &msg));
+                    }
                     return Ok(self.eval_builtin(name, values));
                 }
                 // Función de nivel superior: llamada directa.

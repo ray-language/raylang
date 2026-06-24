@@ -45,6 +45,20 @@ impl Ord for float { fn menor(self, otro: float) -> bool { self < otro } }
 impl Ord for string { fn menor(self, otro: string) -> bool { self < otro } }
 impl Ord for char { fn menor(self, otro: char) -> bool { self < otro } }
 
+// Eq/Show para los primitivos (M13.2a): los habilita `assert_eq` (que pide `T: Eq + Show`) y, en
+// general, cualquier genérico acotado por Eq/Show sobre un primitivo. Vía `==` y `to_string`, que
+// ya operan sobre int/float/bool/string/char. (Un tipo del usuario los obtiene con `@derive`.)
+impl Eq for int { fn igual(self, otro: int) -> bool { self == otro } }
+impl Eq for float { fn igual(self, otro: float) -> bool { self == otro } }
+impl Eq for string { fn igual(self, otro: string) -> bool { self == otro } }
+impl Eq for bool { fn igual(self, otro: bool) -> bool { self == otro } }
+impl Eq for char { fn igual(self, otro: char) -> bool { self == otro } }
+impl Show for int { fn mostrar(self) -> string { to_string(self) } }
+impl Show for float { fn mostrar(self) -> string { to_string(self) } }
+impl Show for string { fn mostrar(self) -> string { to_string(self) } }
+impl Show for bool { fn mostrar(self) -> string { to_string(self) } }
+impl Show for char { fn mostrar(self) -> string { to_string(self) } }
+
 // Ordena ascendente, devolviendo un arreglo NUEVO (insertion sort). `T` debe implementar `Ord`;
 // el bound se baja a paso de diccionarios (M9.2), así que `sort` es front-end puro (cero opcodes).
 fn sort<T: Ord>(a: [T]) -> [T] {
@@ -62,6 +76,24 @@ fn sort<T: Ord>(a: [T]) -> [T] {
         i = i + 1;
     }
     out
+}
+
+// --- Aserciones (M13.2a) ---
+// Sobre el primitivo `panic` (el único toque de runtime). No hay sobrecarga, así que en vez de
+// `assert(cond)` y `assert(cond, msg)` se ofrece `assert(cond)` (mensaje genérico), `assert_eq`
+// (mensaje detallado con los valores) y, para un mensaje a medida, `panic("...")` directo.
+
+// Falla con un mensaje genérico si la condición no se cumple.
+fn assert(cond: bool) {
+    if (!cond) { panic("aserción falló"); }
+}
+
+// Falla mostrando ambos valores si no son iguales. `T` debe ser Eq (comparar) y Show (mostrar);
+// los bounds se bajan a diccionarios (M9.2), así que esto es front-end puro sobre `panic`.
+fn assert_eq<T: Eq + Show>(a: T, b: T) {
+    if (!a.igual(b)) {
+        panic("assert_eq falló: " + a.mostrar() + " != " + b.mostrar());
+    }
 }
 
 // Aplica `f` a cada elemento, devolviendo un arreglo nuevo con los resultados.

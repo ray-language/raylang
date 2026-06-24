@@ -151,6 +151,11 @@ pub enum OpCode {
     /// ocurrencia de `x` (por igualdad estructural), o vacío. Primitivo `__position`; prelude → `Option`.
     Position,
 
+    // --- Aserciones (M13.2a) ---
+    /// Saca un string (el mensaje) y **aborta** la ejecución con un error de runtime que lo lleva,
+    /// en la posición de la llamada. Builtin `panic`; el prelude lo usa para `assert`/`assert_eq`.
+    Panic,
+
     // --- I/O y API de runtime (M11.2) ---
     /// Saca un valor primitivo; lo escribe a **stderr** y empuja unit. Builtin `eprint`.
     EPrint,

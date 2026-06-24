@@ -426,6 +426,15 @@ impl<'a> Vm<'a> {
                 }
 
                 // --- I/O y API de runtime (M11.2) ---
+                // M13.2a: aborta con el mensaje en la posición de la llamada (igual que el
+                // intérprete, que lo intercepta en `eval_call`). El mensaje es el string en la cima.
+                OpCode::Panic => {
+                    let msg = match self.pop() {
+                        HeapValue::Str(s) => s,
+                        _ => unreachable!("el checker garantiza un string"),
+                    };
+                    return Err(runtime_error(line, col, &msg));
+                }
                 OpCode::EPrint => {
                     let v = self.pop();
                     eprintln!("{}", format_value(&self.heap, &self.program.enums, &v));
@@ -1239,6 +1248,38 @@ mod tests {
         assert!(vm_msg.contains("desbordamiento de pila"), "vm: {vm_msg}");
         // Ambos motores reportan exactamente el mismo mensaje.
         assert_eq!(interp_msg, vm_msg, "los dos motores difieren en el mensaje");
+    }
+
+    /// M13.2a: aserciones que pasan no alteran el resultado (oráculo normal).
+    #[test]
+    fn assert_pasa_oraculo() {
+        oracle_program(
+            "fn main() -> int {
+                assert(1 + 1 == 2);
+                assert_eq(2 * 3, 6);
+                assert_eq(\"ab\", \"a\" + \"b\");
+                42
+             }",
+        );
+    }
+
+    /// M13.2a: `panic` / `assert_eq` que falla → ambos motores cortan con el MISMO mensaje.
+    #[test]
+    fn panic_y_assert_falla_oraculo() {
+        for (src, esperado) in [
+            ("fn main() -> int { panic(\"boom\"); 0 }", "boom"),
+            ("fn main() -> int { assert_eq(2 + 2, 5); 0 }", "assert_eq falló: 4 != 5"),
+            ("fn main() -> int { assert(false); 0 }", "aserción falló"),
+        ] {
+            let tokens = crate::lexer::lex(src).expect("lex ok");
+            let mut prog = crate::parser::parse(tokens).expect("parse ok");
+            crate::checker::check(&mut prog).expect("check ok");
+            let interp = crate::interpreter::run(&prog).expect_err("el intérprete debe errar");
+            let compiled = compile_program(&prog).expect("compila");
+            let vm = run_program(&compiled).expect_err("la VM debe errar");
+            assert_eq!(interp.msg, esperado, "intérprete: {}", src);
+            assert_eq!(vm.msg, esperado, "vm: {}", src);
+        }
     }
 
     #[test]

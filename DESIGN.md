@@ -2214,11 +2214,20 @@ expuesto al usuario.
 
 ### 22.2 M13.2 — `assert` + tooling de test
 
-- **M13.2a — `assert`**: builtin `assert(cond)` y `assert(cond, msg)` que **aborta con mensaje +
-  ubicación** si la condición es falsa (reusa la maquinaria de error de runtime; señal de flujo en
-  el intérprete, opcode/trampa en la VM). En ambos motores ⇒ oráculo. `assert_eq<T: Show>(a, b)`
-  en el **prelude** (raylang puro): usa `==` y compone el mensaje con `mostrar`/`to_string` ⇒
-  front-end puro, cero opcodes.
+- **M13.2a — `panic` + `assert` + `assert_eq`** ✅ **COMPLETO** (338 tests lib): el **único** toque
+  de runtime es el builtin **`panic(msg)`** (opcode `Panic`), que aborta con `msg` en la posición de
+  la llamada — en el intérprete se intercepta en `eval_call` (devuelve `Flow::Error`); en la VM es el
+  opcode `Panic` (saca el string, retorna `Err`). Ambos motores dan el **mismo mensaje** ⇒ oráculo
+  (`panic_y_assert_falla_oraculo`). Sobre él, en el **prelude (raylang puro)**: `assert(cond)`
+  (mensaje genérico) y `assert_eq<T: Eq + Show>(a, b)` (mensaje con ambos valores, vía `.igual()` +
+  `.mostrar()`; los bounds se bajan a diccionarios M9.2). **Sin sobrecarga** en raylang, así que en
+  vez de `assert(cond)` + `assert(cond, msg)` se ofrece `assert` + `assert_eq` + `panic("…")` directo
+  para el mensaje a medida. Habilitadores: (1) `impl Eq`/`impl Show` para los **primitivos** en el
+  prelude (faltaban; los pide `assert_eq`); (2) **`panic` diverge** (`expr_diverges` reconoce la
+  llamada a `panic`) ⇒ una rama que termina en `panic` cede el tipo a la otra
+  (`match (x) { Some(v) => v, None => panic("…") }` cuadra). *Limitación honesta*: el error de un
+  `assert` apunta a la línea del prelude donde está el `panic` (no al sitio de la aserción; raylang
+  no tiene backtraces); el mensaje sí es descriptivo.
 - **M13.2b — runner mejorado** (cliente externo `test_runner.rs`, **no toca el core**):
   - `@test` admite también `() -> unit`: **pasa si no dispara ningún `assert`** (modelo más natural
     que devolver `bool`).

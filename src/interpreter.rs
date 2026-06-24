@@ -638,6 +638,18 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza dos strings"),
             },
+            // M11.4a: ¿el string contiene la subcadena?
+            "contains" => match (&values[0], &values[1]) {
+                (Value::Str(s), Value::Str(sub)) => Value::Bool(s.contains(sub.as_str())),
+                _ => unreachable!("el checker garantiza dos strings"),
+            },
+            // M11.4a: reemplaza todas las ocurrencias de `de` por `a`.
+            "replace" => match (&values[0], &values[1], &values[2]) {
+                (Value::Str(s), Value::Str(de), Value::Str(a)) => {
+                    Value::Str(s.replace(de.as_str(), a.as_str()))
+                }
+                _ => unreachable!("el checker garantiza tres strings"),
+            },
             // M11.2a: como print, pero a stderr.
             "eprint" => {
                 eprintln!("{}", values[0]);

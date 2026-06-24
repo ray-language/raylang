@@ -314,6 +314,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   gramática: `M.Tipo { … }` se ancla a que el receptor del `.` sea un `Ident` (mismo compromiso
   struct-literal-vs-bloque que `Tipo { … }`). **M11.3c COMPLETO.** Diferido: submódulos/directorios,
   `pub` granular por campo, re-exports. Runtime intacto (oráculo VM↔intérprete sin tocar).
+- **M11.4 — cierre de diferidos aditivos de la stdlib** (DESIGN §20.4). Tocan runtime → oráculo
+  (con estrés del GC para los que asignan heap). Tras L1, cada builtin = fila en `BUILTINS` + opcode
+  + impl por motor; checker/compilador sin cambios.
+  - **M11.4a COMPLETO** (309 tests lib): **más string** — `contains(s, sub) -> bool` (opcode
+    `Contains`) y `replace(s, de, a) -> string` (opcode `Replace`, asigna heap). UFCS gratis
+    (`s.contains(...)`, `s.replace(...)`). Oráculo `string_contains_replace_oraculo` (estrés GC).
 - **M11.2 COMPLETO** (297 tests lib + `tests/io_cli.rs`): **I/O y API de runtime** (DESIGN §20.2).
   `main` sigue sin parámetros (§0); el exterior se toca por **builtins**. **La I/O falible devuelve
   `Option`** (norte "errores como valores"). **Patrón** (como M7.3): primitivos builtin que devuelven

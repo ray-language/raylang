@@ -110,6 +110,11 @@ pub enum OpCode {
     /// Saca el separador y el string; empuja un arreglo de strings con los trozos. Builtin
     /// `split`. (El arreglo es un objeto del heap → lo traza el GC.)
     Split,
+    /// Saca la subcadena y el string; empuja un `bool`: ¿el string la contiene? Builtin `contains`.
+    Contains,
+    /// Saca `a`, `de` y el string; empuja el string con **todas** las ocurrencias de `de`
+    /// reemplazadas por `a`. Builtin `replace`. (El string nuevo es un objeto del heap en la VM.)
+    Replace,
 
     // --- I/O y API de runtime (M11.2) ---
     /// Saca un valor primitivo; lo escribe a **stderr** y empuja unit. Builtin `eprint`.

@@ -57,13 +57,30 @@ let campos = "rojo, verde, azul".split(",");   // ["rojo", " verde", " azul"]
 print(campos[1].trim());                        // verde
 ```
 
+**Buscar y reemplazar** (M11.4a, aditivo):
+
+- **`contains(s, sub) -> bool`** — ¿`s` contiene la subcadena? Opcode `Contains`.
+- **`replace(s, de, a) -> string`** — reemplaza **todas** las ocurrencias de `de` por `a`. Opcode
+  `Replace`; asigna un string nuevo (de nuevo, oráculo + estrés del GC).
+
+```rust
+let s = "hola mundo, hola raylang";
+print(s.contains("mundo"));            // true
+print(s.replace("hola", "HOLA"));      // HOLA mundo, HOLA raylang
+print("a.b.c".replace(".", "/"));      // a/b/c
+```
+
+Estas dos nacieron como *diferidos aditivos* de M11.1 y se saldaron en M11.4. La gracia: tras el
+**registro único de builtins**, cada una fue **una fila en la tabla + un opcode + su impl por
+motor** —ni el checker ni el compilador cambiaron—.
+
 ## Lo que falta (a propósito)
 
-raylang **no tiene un tipo `char`**, así que no se indexa un string ni se itera carácter a
-carácter; se compone con `+` y se descompone con `split`. Tampoco hay `parse_int`/`int_of_string`
-todavía —van con la **I/O** de M11.2, donde de verdad hacen falta para leer entrada— ni
-`replace`/`contains`/`to_upper`, que son puramente aditivos y llegarán cuando se necesiten. El
-conjunto de M11.1 es deliberadamente el mínimo: **concatenar, medir, convertir, recortar, partir**.
+raylang **no tiene un tipo `char`** todavía (llega en M11.4c, con indexado `s[i]` e iteración).
+Hasta entonces el string se compone con `+` y se descompone con `split`. Quedan fuera, por aditivos,
+`to_upper`/`to_lower`/`starts_with`/`find`: llegarán cuando se necesiten. El núcleo de M11.1 fue
+deliberadamente el mínimo —**concatenar, medir, convertir, recortar, partir**—; M11.4a le sumó
+**buscar y reemplazar**.
 
 > La lección de M11.1 es un cambio de aire. Tras una larga racha de features *front-end* que
 > presumían de "runtime intacto", esta nos recuerda por qué esa racha era valiosa: en cuanto algo

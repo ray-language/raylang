@@ -271,6 +271,25 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Array(parts));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::Contains => {
+                    // La subcadena está encima del string (orden de los argumentos).
+                    let sub = self.pop();
+                    let s = self.pop();
+                    let (HeapValue::Str(s), HeapValue::Str(sub)) = (s, sub) else {
+                        unreachable!("el checker garantiza dos strings");
+                    };
+                    self.push(HeapValue::Bool(s.contains(sub.as_str())));
+                }
+                OpCode::Replace => {
+                    // Orden de los argumentos en la pila: s, de, a → se sacan en orden inverso.
+                    let a = self.pop();
+                    let de = self.pop();
+                    let s = self.pop();
+                    let (HeapValue::Str(s), HeapValue::Str(de), HeapValue::Str(a)) = (s, de, a) else {
+                        unreachable!("el checker garantiza tres strings");
+                    };
+                    self.push(HeapValue::Str(s.replace(de.as_str(), a.as_str())));
+                }
 
                 // --- I/O y API de runtime (M11.2) ---
                 OpCode::EPrint => {
@@ -1894,6 +1913,22 @@ mod tests {
                 let campos = split("a,bb,ccc", ",");
                 print(campos[1]);                  // bb
                 len(campos) + len(limpio)          // 3 + 4 = 7
+            }
+        "#);
+    }
+
+    #[test]
+    fn string_contains_replace_oraculo() {
+        // contains -> bool; replace asigna un string nuevo (heap en la VM). Oráculo + estrés del GC.
+        oracle_stress(r#"
+            fn main() -> int {
+                let s = "hola mundo, hola raylang";
+                print(s.contains("mundo"));            // true
+                print(s.contains("python"));           // false
+                let r = s.replace("hola", "HOLA");
+                print(r);                              // HOLA mundo, HOLA raylang
+                print("a.b.c".replace(".", "/"));      // a/b/c
+                if (s.contains("raylang")) { len(r) } else { 0 }  // 24
             }
         "#);
     }

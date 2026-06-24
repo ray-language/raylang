@@ -1877,3 +1877,29 @@ el receptor del `.` sea un `Ident` (mismo compromiso struct-literal-vs-bloque qu
 
 **Runtime: sin cambios.** Los módulos se borran en el front-end; el programa fusionado es uno solo
 con nombres únicos. Oráculo VM↔intérprete intacto.
+
+### 20.4 M11.4 — Cierre de diferidos aditivos de la stdlib
+
+M11.1/M11.2 dejaron explícitamente fuera un puñado de operaciones **aditivas** (no foundational,
+"cuando hagan falta"): más string, más I/O de archivos, y el tipo `char` con indexado. M11.4 las
+salda. Todas siguen la disciplina ya establecida: **tras el registro único de builtins (L1), añadir
+un builtin de runtime es una fila en la tabla `BUILTINS` + un opcode + su impl por motor**, y como
+tocan runtime, **vuelven al oráculo** (VM↔intérprete, con estrés del GC para las que asignan heap).
+
+- **M11.4a — más string** (puros, sin I/O):
+  - **`contains(s, sub) -> bool`**: ¿`s` contiene la subcadena `sub`? Opcode `Contains`.
+  - **`replace(s, de, a) -> string`**: reemplaza **todas** las ocurrencias de `de` por `a`. Opcode
+    `Replace`. Asigna un string nuevo (heap en la VM → estrés del GC). Con `de` vacío se respeta la
+    semántica de `str::replace` de Rust (oráculo idéntico por construcción).
+- **M11.4b — I/O de archivos aditiva** (devuelven `Result`/`bool`, norte "errores como valores"):
+  - **`exists(ruta) -> bool`**: ¿existe la ruta? Builtin primitivo (opcode `Exists`), total (no falla).
+  - **`append_file(ruta, cont) -> Result<int,string>`**: añade al final (crea si no existe). Reusa el
+    **arreglo etiquetado** de M11.2c (`["ok"]`/`["err", msg]`) + envoltorio en el prelude; opcode
+    `AppendFile`.
+- **M11.4c — tipo `char` + indexado** (el más profundo: un **tipo nuevo**, no solo builtins):
+  - `Type::Char`, literal `'a'` (lexer/parser), runtime (`Value::Char`/`HeapValue::Char`), `print`/
+    `to_string`/`==`. Indexar `s[i] -> char` y `chars(s) -> [char]`. Es el único sub-paso que añade un
+    **tipo** al lenguaje; se especifica en detalle al abordarlo.
+
+**Lo que sigue fuera:** `to_upper`/`to_lower`/`starts_with`/`find`, listar directorios, *buffering* —
+aditivos ulteriores cuando hagan falta. M11.4 cubre lo que pidieron los diferidos nombrados.

@@ -125,6 +125,21 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::String { return Err((Some(1), format!("split espera un string como separador, no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // contains(s, sub) -> bool (M11.4a): ¿s contiene la subcadena sub?
+    Builtin { name: "contains", opcode: OpCode::Contains, check: |a| {
+        arity(a, 2, "contains", " (string, subcadena)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("contains espera un string como primer argumento, no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("contains espera un string como subcadena, no {}", a[1]))); }
+        Ok(Type::Bool)
+    } },
+    // replace(s, de, a) -> string (M11.4a): reemplaza todas las ocurrencias de `de` por `a`.
+    Builtin { name: "replace", opcode: OpCode::Replace, check: |a| {
+        arity(a, 3, "replace", " (string, de, a)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("replace espera un string como primer argumento, no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("replace espera un string en 'de', no {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("replace espera un string en 'a', no {}", a[2]))); }
+        Ok(Type::String)
+    } },
     // eprint(x) -> unit (M11.2a): como print, pero a stderr.
     Builtin { name: "eprint", opcode: OpCode::EPrint, check: |a| {
         arity(a, 1, "eprint", "")?;

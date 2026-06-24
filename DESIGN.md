@@ -2424,7 +2424,18 @@ canónica del token: `"("`, `"->"`, `"let"`; nombre simbólico para los que carg
   `annotations`+`is_pub` en fn/struct/enum (+ `is_pub` en trait), y `Program` lleva
   `imports`+`from_imports`. **Hito de fidelidad**: el test fuerte parsea los **35 ejemplos** y los **4
   fuentes del self-hosting** (`lexer.ray`/`lex_dump.ray`/`parser.ray`/`parse_dump.ray`) → **el parser
-  se parsea a sí mismo** idéntico al de Rust, nodo a nodo con posiciones. **M14.2 COMPLETO** (parser).
+  se parsea a sí mismo** idéntico al de Rust, nodo a nodo con posiciones.
+- **M14.2d COMPLETO** — errores del parser como valores: `parse` pasa de camino feliz (`panic`) a
+  **`Result<Program, ParseError>`** + `struct ParseError { msg, line, col }`; cada función de parseo
+  propaga con **`?`** (igual que el lexer en M14.1b). `expect`/`expect_ident` devuelven `Result`;
+  `perr_here(p, msg)` fija la posición en el token actual (como `error_here` de Rust), `perr_at(l,c,
+  msg)` en una explícita. Los mensajes son **idénticos** a los de Rust, incluido el caso peliagudo
+  "se esperaba una expresión, se encontró `<Debug>`": se reproduce la **repr Debug** de `TokenKind`
+  con `tok_debug(k)` (los nombres de variante: `Semicolon`, `LParen`…). Se añade también el
+  *enforcement* de `parse_program` (anotaciones/`pub` mal colocados sobre trait/impl). El oráculo
+  compara también **entradas inválidas** (`error de sintaxis en L:C: msg`): 11 casos. **M14.2 COMPLETO**
+  (parser: lexer→parser auto-alojados, ambos con errores como valores, validados sobre todo el corpus
+  + auto-aplicación).
 
-**Próximas fases:** errores del parser como valores (cierre, como M14.1b para el lexer) y luego el
-**checker**, y finalmente ejecutar. Cada una, su oráculo.
+**Próximas fases:** el **checker** (la fase grande que queda: tipos, inferencia, resolución), y
+finalmente ejecutar. Cada una, su oráculo.

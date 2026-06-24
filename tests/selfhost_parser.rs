@@ -397,11 +397,15 @@ fn dump_program(prog: &Program) -> String {
     out.join("\n")
 }
 
-/// La salida canónica del parser de Rust (el oráculo) para una fuente.
+/// La salida canónica del parser de Rust (el oráculo) para una fuente. En el caso feliz, el volcado
+/// del AST; ante un error de sintaxis, el `Display` de `ParseError` (`error de sintaxis en L:C: msg`)
+/// — exactamente lo que imprime `parse_dump.ray`.
 fn canonical(src: &str) -> String {
     let tokens = raylang::lexer::lex(src).expect("el oráculo lexea sin error");
-    let prog = raylang::parser::parse(tokens).expect("el oráculo parsea sin error");
-    dump_program(&prog)
+    match raylang::parser::parse(tokens) {
+        Ok(prog) => dump_program(&prog),
+        Err(e) => format!("{e}"),
+    }
 }
 
 fn repo_path(rel: &str) -> PathBuf {
@@ -600,6 +604,23 @@ fn referencias_calificadas_por_modulo() {
     comparar("fn f(p: M.Punto) -> M.Color { p }", "sp_qual_type.ray");
     comparar("fn f() -> M.Punto { M.Punto { x: 1 } }", "sp_qual_lit.ray");
     comparar("fn f(c: M.Color) -> int { match (c) { M.Color.Rojo => 0, _ => 1 } }", "sp_qual_pat.ray");
+}
+
+/// M14.2d: errores como valores. Ante una entrada inválida, el parser auto-alojado debe producir el
+/// MISMO mensaje y ubicación que el de Rust (no abortar con `panic`).
+#[test]
+fn errores_de_sintaxis_igual_que_el_oraculo() {
+    comparar("fn f() -> int { let x = ; }", "spe_expr.ray"); // se esperaba una expresión, … Semicolon
+    comparar("1 + 2", "spe_toplevel.ray"); // se esperaba 'fn'
+    comparar("fn f( {", "spe_param.ray"); // se esperaba el nombre de un parámetro
+    comparar("fn f()", "spe_body.ray"); // se esperaba '{'
+    comparar("struct S { x }", "spe_field.ray"); // se esperaba ':' tras el nombre del campo
+    comparar("fn f() -> { 0 }", "spe_type.ray"); // se esperaba un tipo (...)
+    comparar("fn f() { 1 ", "spe_unclosed.ray"); // se esperaba '}' para cerrar el bloque
+    comparar("impl Foo bar Tipo { }", "spe_for.ray"); // se esperaba 'for', no 'bar'
+    comparar("@derive(Eq)\ntrait T { }", "spe_ann_trait.ray"); // no se permiten anotaciones sobre un trait
+    comparar("pub impl T for X { }", "spe_pub_impl.ray"); // 'pub' no se admite en un impl …
+    comparar("fn f() -> int { a b }", "spe_semi.ray"); // se esperaba ';' después de la expresión
 }
 
 /// El test fuerte de fidelidad: parsear TODOS los ejemplos reales y los PROPIOS fuentes del

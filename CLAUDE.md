@@ -655,8 +655,17 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     AST: `Annotation`/`ImportDecl`/`ImportName`/`FromImport`, `annotations`+`is_pub` en fn/struct/enum
     (+`is_pub` en trait), `Program` con `imports`+`from_imports`. **Hito de fidelidad**: el test fuerte
     parsea los **35 ejemplos** + los **4 fuentes del self-hosting** → **el parser se parsea a sí mismo**
-    idéntico al de Rust, nodo a nodo con posiciones. **M14.2 COMPLETO** (parser). Próximo: errores del
-    parser como valores (cierre, como M14.1b) y luego el **checker**. DESIGN §23.3.
+    idéntico al de Rust, nodo a nodo con posiciones. DESIGN §23.3.
+  - **M14.2d COMPLETO** (347 lib + 21 en `tests/selfhost_parser.rs`): **errores del parser como
+    valores**, **cierra el parser**. `parse` pasa de camino feliz (`panic`) a **`Result<Program,
+    ParseError>`** + `struct ParseError { msg, line, col }`; cada función de parseo propaga con `?`
+    (como el lexer en M14.1b). `expect`/`expect_ident` → `Result`; `perr_here` fija la posición en el
+    token actual (como `error_here` de Rust), `perr_at` en una explícita. Mensajes **idénticos** a
+    Rust, incluido "se esperaba una expresión, se encontró `<Debug>`": se reproduce la repr **Debug**
+    de `TokenKind` con `tok_debug(k)` (nombres de variante: `Semicolon`, `LParen`…). Se añade el
+    enforcement de `parse_program` (anotaciones/`pub` sobre trait/impl). Oráculo cubre **entradas
+    inválidas** (11 casos). **M14.2 COMPLETO** (parser auto-alojado, con errores como valores).
+    Próximo gran hito: el **checker**. DESIGN §23.3.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

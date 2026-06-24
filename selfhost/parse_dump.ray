@@ -15,7 +15,7 @@ from lexer import lex, Token, LexError;
 from parser import parse, Program, Func, Param, Type, Expr, EKind, Stmt, SKind, Block, BinOp, UnOp;
 from parser import StructDef, FieldDef, EnumDef, VariantDef, FieldInit, FnExpr, MatchArm, Pattern, PKind;
 from parser import Bound, TraitDef, MethodSig, ImplBlock;
-from parser import Annotation, ImportDecl, ImportName, FromImport;
+from parser import Annotation, ImportDecl, ImportName, FromImport, ParseError;
 
 // Re-escapa una cadena para una sola línea, idéntico al oráculo (y al lexer-dump).
 fn escape(s: string) -> string {
@@ -360,6 +360,25 @@ fn lex_or_die(src: string) -> [Token] {
     }
 }
 
+// Vuelca un Program en el orden fijo (el oráculo usa el mismo): imports, from-imports, funciones,
+// structs, enums, traits, impls.
+fn dump_program(prog: Program) {
+    var im = 0;
+    while (im < len(prog.imports)) { print(dump_import(prog.imports[im])); im = im + 1; }
+    var fr = 0;
+    while (fr < len(prog.from_imports)) { print(dump_from_import(prog.from_imports[fr])); fr = fr + 1; }
+    var i = 0;
+    while (i < len(prog.funcs)) { print(dump_func(prog.funcs[i])); i = i + 1; }
+    var s = 0;
+    while (s < len(prog.structs)) { print(dump_struct(prog.structs[s])); s = s + 1; }
+    var e = 0;
+    while (e < len(prog.enums)) { print(dump_enum(prog.enums[e])); e = e + 1; }
+    var t = 0;
+    while (t < len(prog.traits)) { print(dump_trait(prog.traits[t])); t = t + 1; }
+    var m = 0;
+    while (m < len(prog.impls)) { print(dump_impl(prog.impls[m])); m = m + 1; }
+}
+
 fn main() -> int {
     let argv = args();
     if (len(argv) == 0) {
@@ -368,23 +387,14 @@ fn main() -> int {
     }
     match (read_file(argv[0])) {
         Result.Ok(src) => {
-            let prog = parse(lex_or_die(src));
-            // Orden de volcado fijo (el oráculo usa el mismo): imports, from-imports, funciones,
-            // structs, enums, traits, impls.
-            var im = 0;
-            while (im < len(prog.imports)) { print(dump_import(prog.imports[im])); im = im + 1; }
-            var fr = 0;
-            while (fr < len(prog.from_imports)) { print(dump_from_import(prog.from_imports[fr])); fr = fr + 1; }
-            var i = 0;
-            while (i < len(prog.funcs)) { print(dump_func(prog.funcs[i])); i = i + 1; }
-            var s = 0;
-            while (s < len(prog.structs)) { print(dump_struct(prog.structs[s])); s = s + 1; }
-            var e = 0;
-            while (e < len(prog.enums)) { print(dump_enum(prog.enums[e])); e = e + 1; }
-            var t = 0;
-            while (t < len(prog.traits)) { print(dump_trait(prog.traits[t])); t = t + 1; }
-            var m = 0;
-            while (m < len(prog.impls)) { print(dump_impl(prog.impls[m])); m = m + 1; }
+            // Volcado canónico: en caso feliz el AST; ante un error de sintaxis, una línea con el
+            // mismo formato que el `Display` de `ParseError` en Rust (el oráculo compara también esto).
+            match (parse(lex_or_die(src))) {
+                Result.Ok(prog) => { dump_program(prog); },
+                Result.Err(pe) => {
+                    print("error de sintaxis en " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
+                },
+            }
             0
         },
         Result.Err(msg) => {

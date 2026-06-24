@@ -2631,3 +2631,97 @@ Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el
   `Map` en el checker, satisfacción de bounds anidada profunda, posición de cuerpos de defecto inválidos,
   prelude más allá de map/filter/fold (sort/assert/get/parse_int). **Siguiente: el back-end (ejecución/
   lowering) para cerrar el self-hosting.**
+
+### 23.5 M14.4 — El back-end (intérprete auto-alojado, diseño)
+
+La fase que **cierra el self-hosting**: ejecutar el AST validado. Tras lexer→parser→checker (todos en
+raylang), el back-end es lo único que falta para que raylang procese raylang **de punta a punta**.
+
+**Decisión 1 — el motor: el intérprete tree-walking, no la VM.** Rust tiene dos motores; portamos el
+**intérprete** (`src/interpreter.rs`, ~1657 líneas: el oráculo, el motor simple) y dejamos la VM
+(compilador + pila + GC, ~3960 líneas) como hito **posterior y opcional** (M14.5). Es el mismo orden
+pedagógico del proyecto original (M1 intérprete → M2 VM): el intérprete es la referencia; la VM se
+valida contra él. Para cerrar el self-hosting basta un motor.
+
+**Decisión 2 — resolución en runtime (despacho dinámico), NO lowering.** Aquí el back-end auto-alojado
+**diverge a propósito** de la arquitectura de Rust. El checker de Rust hace dos trabajos (validar +
+*bajar*: UFCS→llamada, métodos→funciones mangladas, bounds→diccionarios, `dyn`→struct-vtable,
+construcción de enum→`EnumLit`); su intérprete recibe un AST **ya bajado** y es *tonto* sobre
+traits/genéricos (erasure por lowering). Nuestro **checker auto-alojado es solo un validador** —omitió
+todo ese lowering (§23.4)—, así que el AST que llega al back-end **no está bajado**. En vez de
+reproducir M9 (la parte más intrincada: diccionarios, síntesis de `dyn`, renumerado de fn-exprs), el
+intérprete auto-alojado **resuelve el despacho en tiempo de evaluación**, mirando la **etiqueta del
+valor** en runtime:
+
+- **Construcción de enum** `Enum.Variante(args)` (llega como `Field`/`Call`): si el nombre es un enum
+  conocido con esa variante → construye `VEnum`. Sin tipos: solo consulta las tablas del programa.
+- **UFCS / métodos** `recv.f(args)`: evalúa `recv`; si es un struct y `f` es un **campo** que contiene
+  una función → la llama; si `f` es una **función libre** → `f(recv, args)`; si hay un **método**
+  `Tipo#f` para el tipo *en runtime* de `recv` → lo llama (tabla de métodos `(clave_tipo, método) →
+  función`, poblada desde los `impl`).
+- **`dyn`, bounds, genéricos → no-ops.** Como el despacho mira la etiqueta del valor concreto, un valor
+  "coercionado" a `dyn Trait` es **el propio valor concreto** (sin vtable), y `obj.m()` despacha por su
+  tipo en runtime. Igual los bounds (`x.m()` con `x: T: Trait` despacha por el tipo concreto de `x`, sin
+  pasar diccionarios) y los genéricos (el intérprete **nunca consulta tipos**). **El borrado (erasure)
+  ocurre solo**, sin una pasada de lowering — es la consecuencia elegante de la decisión.
+
+El precio es la divergencia con el intérprete de Rust (que es *tonto* porque el lowering ya pasó; el
+nuestro es *dinámico*). Pero el **oráculo es conductual** (ver Decisión 3), no estructural: comparamos
+comportamiento, no el AST ni la arquitectura interna → la divergencia es invisible al oráculo.
+
+**Por qué es factible — el back-end cabalga sobre el runtime del host.** Self-hostear un intérprete
+suena circular (¿un intérprete necesita su propio GC, su propia gestión de memoria?). No: el `Value`
+del intérprete auto-alojado es un **enum de raylang**, que vive en el heap de la **VM anfitriona** y lo
+recolecta **su** GC. Y la semántica de referencia + mutación que en Rust pide `Rc<RefCell<…>>` la dan
+**gratis** los tipos de raylang (M3): un arreglo/struct de raylang YA es un objeto del heap compartido
+por referencia. En concreto, el `Cell` compartido que Rust usa para que una closure capture una variable
+**por referencia** (M4.2) se modela con un **arreglo de longitud 1** (o un struct de un campo): varias
+closures que comparten esa celda comparten el mismo arreglo → mutar `cell[0]` lo ven todas. **No
+reimplementamos ni GC ni celdas**: ese fue justo el habilitador que faltaba, y por eso el back-end es la
+última pieza y no una imposible.
+
+**Decisión 3 — oráculo conductual (stdout + código de salida).** Las fases previas comparaban **texto
+canónico** de su salida (tokens, dump del AST, veredicto). El back-end compara lo que ya **observa el
+usuario final**: la **salida estándar** del programa (vía `print`) y su **código de salida** (el `int`
+que devuelve `main`). Para cada `.ray` del corpus se ejecuta por los dos pipelines —Rust (`cargo run --
+prog.ray`) y raylang (`raylang selfhost/run.ray prog.ray`, el driver `selfhost/run.ray` que
+lex→parse→check→**ejecuta**)— y se comparan stdout+exit. Corpus = los **ejemplos deterministas** (la
+mayoría de los 35). Los builtins de **I/O no determinista** (`input`/`args`/`read_file`/reloj…) se
+excluyen del oráculo automático (como ya se hace en `tests/io_cli.rs`); el resto del runtime sí.
+
+**Representación del `Value`** (espejo del de Rust, como enum de raylang):
+```
+enum Value { VInt(int), VFloat(float), VBool(bool), VStr(string), VChar(char), VUnit,
+             VArray([Value]),              // semántica de referencia: el [Value] del host
+             VStruct(string, Map<string,Value>),  // nombre + campos mutables
+             VEnum(string, string, [Value]),      // enum, variante, payload
+             VFunc(int),                   // función nombrada/anónima por índice (tabla de funciones)
+             VClosure(int, [Captura]),     // índice + entorno capturado (celdas compartidas)
+             VMap(Map<MapKey,Value>) }
+```
+Las **celdas** del ámbito (`struct Cell { v: Value }` o `[Value]` de longitud 1) hacen compartible cada
+variable; el ámbito es `Map<string, Cell>` y la pila de ámbitos un `[Map<string,Cell>]`, igual que Rust.
+
+**Flujo y control.** El intérprete de Rust señaliza con `enum Flow { Return, Error, TailCall }` propagado
+como `Result<Value, Flow>`. En raylang se modela igual (un enum `Flow` + `?`/`match` para propagarlo).
+**Recursión profunda y TCO**: el host ya da **TCO** (M13.3b) y una **pila grande** (M13.3a), así que el
+intérprete auto-alojado hereda robustez; para casar la frontera de `MAX_CALL_DEPTH` se replica el conteo
+de profundidad (o se acepta como diferido, fuera del corpus). El **trampolín de cola** se porta si hace
+falta para que recursiones de cola profundas no desborden el intérprete *anfitrión*.
+
+**Sub-fases** (varios commits cada una, como el checker):
+- **M14.4a — núcleo**: `Value` (primitivos + unit), aritmética/comparación/lógica, variables (celdas,
+  ámbitos, mutación), `if`/`while`/`block`/`return`, llamadas a funciones nombradas, recursión, builtin
+  `print`. El armazón (tabla de funciones, `call_body`, `eval_expr`/`eval_stmt`, `Flow`). Cubre
+  fib/fizzbuzz/gcd/primes. La más grande.
+- **M14.4b — datos**: arreglos (`[T]`, índice, `len`/`push`), structs (literal, acceso/asignación de
+  campo, semántica de referencia), enums (**construcción reconocida en runtime**, `match` + patrones,
+  payload). Builtins de string/arreglo/Map del runtime.
+- **M14.4c — funciones de primera clase**: funciones anónimas, **closures** (captura por celda
+  compartida), funciones como valor, orden superior (`map`/`filter`/`fold` ejecutándose de verdad).
+- **M14.4d — despacho dinámico**: tabla de métodos desde los `impl`, **UFCS/métodos** en runtime,
+  métodos por defecto, `dyn` (despacho por tipo concreto, sin vtable), `@derive` (igual/mostrar), bounds
+  (no-op). Aquí "vive" la Decisión 2. La más sutil.
+
+Tras el intérprete, el self-hosting está **cerrado** (raylang lexea/parsea/chequea/ejecuta raylang). La
+**VM auto-alojada** (M14.5) quedaría como capstone-del-capstone opcional.

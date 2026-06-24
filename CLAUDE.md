@@ -801,6 +801,24 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     ejemplos reales + ~80 casos. Diferidos (fuera del corpus): `Map` en el checker, bounds anidados
     profundos, posición de cuerpos de defecto inválidos, prelude más allá de map/filter/fold. **Siguiente
     gran hito: el back-end (ejecución/lowering) para cerrar el self-hosting.** DESIGN §23.4.
+  - **M14.4 — el back-end (intérprete auto-alojado), DISEÑO fijado** (DESIGN §23.5). Cierra el
+    self-hosting: ejecutar el AST validado. **Decisiones** (con el usuario): (1) **motor = intérprete
+    tree-walking** (port de `src/interpreter.rs`, el oráculo simple); la VM (compilador+pila+GC) queda
+    como M14.5 opcional —mismo orden M1→M2—. (2) **Resolución en runtime, NO lowering**: como el
+    checker auto-alojado es solo validador (omitió el lowering de M9), el intérprete resuelve
+    construcción de enum / UFCS / métodos / `dyn` **en tiempo de evaluación** mirando la **etiqueta del
+    valor**; consecuencia elegante: **`dyn`/bounds/genéricos son no-ops** (el intérprete nunca consulta
+    tipos → el **borrado ocurre solo**, sin pasada de lowering). Diverge a propósito del intérprete de
+    Rust (que es tonto porque el lowering ya pasó), pero el oráculo es **conductual** → invisible. (3)
+    **Oráculo conductual = stdout + código de salida** (no texto canónico): la misma `.ray` por ambos
+    pipelines (Rust `cargo run` vs `raylang selfhost/run.ray`), comparar comportamiento; corpus = los
+    ejemplos deterministas (I/O no determinista excluida, como `tests/io_cli.rs`). **Factible porque
+    cabalga sobre el host**: el `Value` es un enum de raylang en el heap de la VM anfitriona (su GC lo
+    recolecta) y la semántica de referencia + las **celdas** de closure (M4.2) las da gratis un
+    arreglo/struct de raylang (un `[Value]` de longitud 1 = celda mutable compartida) → **ni GC ni celdas
+    propias**. Sub-fases: **a** núcleo (primitivos, control, llamadas, recursión) → **b** datos
+    (arreglos/structs/enums/match) → **c** primera clase (closures, orden superior) → **d** despacho
+    dinámico (tabla de métodos, UFCS/métodos/`dyn`/`@derive`/bounds). Driver `selfhost/run.ray`.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

@@ -833,6 +833,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     fizzbuzz/gcd/primes + snippets. Corpus solo usa lo que aceptan **ambos** checkers (print/eprint;
     `to_string` lo rechaza el checker auto-alojado de M14.3 → fuera del corpus). Diferido: b (datos), c
     (primera clase), d (despacho dinámico); TCO/`MAX_CALL_DEPTH` (el host ya da TCO + pila grande).
+  - **M14.4b COMPLETO** (347 lib + 9 en `tests/selfhost_interpreter.rs`): **intérprete auto-alojado —
+    datos**. `Value` gana `VArray`/`VStruct(string,[SField])`/`VEnum(string,string,[Value])`; `Interp`
+    gana tablas `structs`/`enums`. Aquí luce **cabalgar sobre el host**: la semántica de **referencia**
+    de arreglos/structs del invitado es la del `[Value]`/`[SField]` del host (alias comparten el objeto;
+    `push`/`a[i]=v`/`obj.f=v` mutan en el sitio → `r.origen.x=99 ⇒ p.x=99`). Y la **resolución en
+    runtime**: la construcción de enum (`Enum.Variante[(args)]`), que el checker-validador no reescribió,
+    se reconoce en eval mirando `c.enums` (`enum_has_variant`); el resto de `obj.f` es campo o método
+    (M14.4d). Cubre arreglos (literal/índice/`len`/`push`/asignación/anidados; string[i]→char), structs
+    (literal en orden de declaración, acceso/asignación de campo, aliasing), enums (construcción, `match`
+    con patrones `_`/binding/variante+payload, recursivos). `value_str`/`values_equal` structural recursivo.
+    Oráculo: 5 ejemplos de datos + snippets, mismo stdout+exit que Rust. Diferido: c (closures/orden
+    superior/Option/Result/`?`), d (UFCS/métodos/dyn/@derive).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

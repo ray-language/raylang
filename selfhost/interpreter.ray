@@ -16,21 +16,27 @@
 // ORÁCULO CONDUCTUAL (no texto canónico): la misma `.ray` por ambos pipelines (Rust `cargo run` vs
 // `raylang selfhost/run.ray`), comparar stdout + código de salida. Ver `tests/selfhost_interpreter.rs`.
 //
-// M14.4a (esta versión): NÚCLEO. Primitivos (int/float/bool/string/char/unit), aritmética/comparación/
-// lógica (con cortocircuito), variables (let/var, mutabilidad por ámbito), if/while/block/return,
-// llamadas a funciones nombradas + recursión, builtins print/eprint/to_string/panic. Cubre fib/
-// fizzbuzz/gcd/primes. Diferido: datos (M14.4b: arreglos/structs/enums/match), primera clase (M14.4c:
-// closures/orden superior), despacho dinámico (M14.4d: UFCS/métodos/dyn/@derive). El trampolín de cola
-// (TCO) y el límite MAX_CALL_DEPTH también se difieren (el host ya da TCO + pila grande).
+// M14.4a: NÚCLEO. Primitivos (int/float/bool/string/char/unit), aritmética/comparación/lógica (con
+// cortocircuito), variables (let/var, mutabilidad por ámbito), if/while/block/return, llamadas a
+// funciones nombradas + recursión, builtins print/eprint/to_string/panic. Cubre fib/fizzbuzz/gcd/primes.
+//
+// M14.4b (esta versión): DATOS. Arreglos (`VArray`: literal, índice, `len`/`push`, asignación `a[i]=v`,
+// anidados; semántica de REFERENCIA gratis del `[Value]` del host), structs (`VStruct`: literal en orden
+// de declaración, acceso/asignación de campo, aliasing), enums (`VEnum`: construcción `Enum.Variante(args)`
+// RECONOCIDA EN RUNTIME mirando las tablas del programa —el checker-validador no la reescribió—, `match`
+// con patrones comodín/binding/variante). Diferido: primera clase (M14.4c: closures/orden superior/
+// Option/Result/`?`), despacho dinámico (M14.4d: UFCS/métodos/dyn/@derive). TCO/MAX_CALL_DEPTH también
+// (el host ya da TCO + pila grande).
 
-from parser import Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp;
+from parser import Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind;
 
 // =====================================================================
 // Valores en tiempo de ejecución y señales de flujo
 // =====================================================================
 
-// Un valor del intérprete (espejo del `Value` de Rust). En M14.4a solo los primitivos; los compuestos
-// (arreglo/struct/enum/función/closure/map) llegan en sub-fases posteriores.
+// Un valor del intérprete (espejo del `Value` de Rust). M14.4b añade los compuestos; función/closure/map
+// llegan en M14.4c/d. Los compuestos heredan la semántica de REFERENCIA del host: un `[Value]`/`[SField]`
+// de raylang ya es un objeto del heap compartido por alias (lo que en Rust pide `Rc<RefCell<…>>`).
 pub enum Value {
     VInt(int),
     VFloat(float),
@@ -38,7 +44,17 @@ pub enum Value {
     VStr(string),
     VChar(char),
     VUnit,
+    VArray([Value]),               // arreglo (M3): el [Value] del host da referencia + mutación
+    VStruct(string, [SField]),     // struct: nombre + campos en orden de declaración (mutables)
+    VEnum(string, string, [Value]), // enum: nombre, variante, payload (inmutable)
 }
+
+// Un campo de un struct en runtime: nombre + valor (mutable). Lista ordenada (como el `Vec<(String,
+// Value)>` de Rust) → el orden de declaración para Display/igualdad.
+struct SField { name: string, value: Value }
+
+// Una variable ligada por un patrón de `match`: su nombre y el valor que recibe.
+struct Binding { name: string, value: Value }
 
 // Error en tiempo de ejecución con ubicación (espejo de `RuntimeError` en Rust).
 pub struct RuntimeError { msg: string, line: int, col: int }
@@ -50,9 +66,15 @@ pub struct RuntimeError { msg: string, line: int, col: int }
 // distingue (un `return` produce el valor; un error se reporta).
 enum Flow { FReturn(Value), FError(RuntimeError) }
 
-// El estado del intérprete: la tabla de funciones por nombre y la pila de ámbitos (la del último es la
-// más interna). Es un struct mutado por referencia (como el `Checker`/`Parser`/`Lexer` auto-alojados).
-struct Interp { funcs: Map<string, Func>, scopes: [Map<string, Value>] }
+// El estado del intérprete: tabla de funciones por nombre, definiciones de structs (campos en orden) y
+// enums (variantes) —para construir literales y RECONOCER la construcción de enum en runtime—, y la pila
+// de ámbitos (la del último es la más interna). Struct mutado por referencia (como Checker/Parser/Lexer).
+struct Interp {
+    funcs: Map<string, Func>,
+    structs: Map<string, [FieldDef]>,
+    enums: Map<string, [VariantDef]>,
+    scopes: [Map<string, Value>],
+}
 
 fn rt_error(line: int, col: int, msg: string) -> RuntimeError {
     RuntimeError { msg: msg, line: line, col: col }
@@ -78,11 +100,42 @@ fn value_str(v: Value) -> string {
         Value.VStr(s) => s,
         Value.VChar(ch) => to_string(ch),
         Value.VUnit => "()",
+        Value.VArray(elems) => "[" + join_vals(elems) + "]",
+        Value.VStruct(name, fields) => name + " { " + join_fields(fields) + " }",
+        Value.VEnum(en, vr, payload) => {
+            if (len(payload) == 0) { en + "." + vr }
+            else { en + "." + vr + "(" + join_vals(payload) + ")" }
+        },
     }
 }
 
-// Igualdad estructural de valores (para `==`/`!=`). En M14.4a solo primitivos; el checker garantiza que
-// ambos lados son del mismo tipo, así que las ramas cruzadas no se ejercitan en programas válidos.
+// Une los `value_str` de una lista con ", " (para arreglos y payload de enum).
+fn join_vals(vals: [Value]) -> string {
+    var s = "";
+    var i = 0;
+    while (i < len(vals)) {
+        if (i > 0) { s = s + ", "; }
+        s = s + value_str(vals[i]);
+        i = i + 1;
+    }
+    s
+}
+
+// Une los campos `nombre: valor` de un struct con ", " (en orden de declaración).
+fn join_fields(fields: [SField]) -> string {
+    var s = "";
+    var i = 0;
+    while (i < len(fields)) {
+        if (i > 0) { s = s + ", "; }
+        s = s + fields[i].name + ": " + value_str(fields[i].value);
+        i = i + 1;
+    }
+    s
+}
+
+// Igualdad estructural de valores (para `==`/`!=`). El checker garantiza que ambos lados son del mismo
+// tipo, así que las ramas cruzadas no se ejercitan en programas válidos. Los compuestos comparan recursivo
+// (el checker solo lo permite sobre tipos con `==`, p. ej. derivados).
 fn values_equal(a: Value, b: Value) -> bool {
     match (a) {
         Value.VInt(x) => match (b) { Value.VInt(y) => x == y, _ => false },
@@ -91,12 +144,104 @@ fn values_equal(a: Value, b: Value) -> bool {
         Value.VStr(x) => match (b) { Value.VStr(y) => x == y, _ => false },
         Value.VChar(x) => match (b) { Value.VChar(y) => x == y, _ => false },
         Value.VUnit => match (b) { Value.VUnit => true, _ => false },
+        Value.VArray(x) => match (b) { Value.VArray(y) => vals_equal_list(x, y), _ => false },
+        Value.VStruct(nx, fx) => match (b) {
+            Value.VStruct(ny, fy) => nx == ny && fields_equal(fx, fy),
+            _ => false,
+        },
+        Value.VEnum(ex, vx, px) => match (b) {
+            Value.VEnum(ey, vy, py) => ex == ey && vx == vy && vals_equal_list(px, py),
+            _ => false,
+        },
     }
+}
+
+fn vals_equal_list(a: [Value], b: [Value]) -> bool {
+    if (len(a) != len(b)) { return false; }
+    var i = 0;
+    while (i < len(a)) {
+        if (!values_equal(a[i], b[i])) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn fields_equal(a: [SField], b: [SField]) -> bool {
+    if (len(a) != len(b)) { return false; }
+    var i = 0;
+    while (i < len(a)) {
+        if (a[i].name != b[i].name) { return false; }
+        if (!values_equal(a[i].value, b[i].value)) { return false; }
+        i = i + 1;
+    }
+    true
 }
 
 // Desempaqueta un valor que el checker garantizó string (para `panic`).
 fn as_str(v: Value) -> string {
     match (v) { Value.VStr(s) => s, _ => panic("se esperaba un string") }
+}
+
+// Desempaqueta un valor que el checker garantizó int (para los índices).
+fn as_int(v: Value) -> int {
+    match (v) { Value.VInt(n) => n, _ => panic("se esperaba un int") }
+}
+
+// Una lista de bindings vacía, ya tipada (para los patrones sin variables).
+fn no_bindings() -> [Binding] { [] }
+
+// Los campos declarados de un struct (en orden), de la tabla del programa.
+fn struct_fields(c: Interp, name: string) -> [FieldDef] {
+    match (get(c.structs, name)) {
+        Option.Some(fs) => fs,
+        Option.None => panic("struct no registrado: " + name),
+    }
+}
+
+// ¿`name` es un enum (del programa) con una variante llamada `variant`? Así se RECONOCE la construcción
+// de enum en runtime (`Enum.Variante`), que el checker-validador no reescribió a un nodo dedicado.
+fn enum_has_variant(c: Interp, name: string, variant: string) -> bool {
+    match (get(c.enums, name)) {
+        Option.Some(variants) => {
+            var i = 0;
+            while (i < len(variants)) {
+                if (variants[i].name == variant) { return true; }
+                i = i + 1;
+            }
+            false
+        },
+        Option.None => false,
+    }
+}
+
+// La expresión del campo `fname` en un literal de struct (el checker garantiza que está presente).
+fn find_field_init(inits: [FieldInit], fname: string) -> Expr {
+    var i = 0;
+    while (i < len(inits)) {
+        if (inits[i].name == fname) { return inits[i].value; }
+        i = i + 1;
+    }
+    panic("campo ausente en el literal: " + fname)
+}
+
+// Lee el valor del campo `fname` de un struct en runtime (el checker garantiza el campo).
+fn struct_get(fields: [SField], fname: string) -> Value {
+    var i = 0;
+    while (i < len(fields)) {
+        if (fields[i].name == fname) { return fields[i].value; }
+        i = i + 1;
+    }
+    panic("campo no encontrado: " + fname)
+}
+
+// Asigna al campo `fname` de un struct en runtime, mutando la celda compartida (aliasing).
+fn struct_set(fields: [SField], fname: string, v: Value) {
+    var i = 0;
+    while (i < len(fields)) {
+        if (fields[i].name == fname) { fields[i].value = v; return; }
+        i = i + 1;
+    }
+    panic("campo no encontrado: " + fname)
 }
 
 // =====================================================================
@@ -294,6 +439,16 @@ fn eval_bool(c: Interp, e: Expr) -> Result<bool, Flow> {
 
 fn is_builtin(name: string) -> bool {
     name == "print" || name == "eprint" || name == "to_string" || name == "panic"
+        || name == "len" || name == "push"
+}
+
+// `len` de un arreglo o un string (nº de caracteres). Map → M14.4c/d.
+fn builtin_len(v: Value) -> int {
+    match (v) {
+        Value.VArray(elems) => len(elems),
+        Value.VStr(s) => len(s),
+        _ => panic("len: se esperaba un arreglo o string"),
+    }
 }
 
 // Evalúa la lista de argumentos en orden (cortocircuitando ante un `return`/error).
@@ -326,12 +481,23 @@ fn call_builtin(c: Interp, name: string, args: [Expr], line: int, col: int) -> R
     if (name == "to_string") {
         return Result.Ok(Value.VStr(value_str(vals[0])));
     }
-    panic("builtin no implementado en M14.4a: " + name)
+    if (name == "len") {
+        return Result.Ok(Value.VInt(builtin_len(vals[0])));
+    }
+    if (name == "push") {
+        // push(arr, x): muta el arreglo compartido (semántica de referencia del host).
+        match (vals[0]) {
+            Value.VArray(elems) => { push(elems, vals[1]); Result.Ok(Value.VUnit) },
+            _ => panic("push: se esperaba un arreglo"),
+        }
+    } else {
+        panic("builtin no implementado en M14.4b: " + name)
+    }
 }
 
-// Una llamada. M14.4a: camino directo (nombre que no tapa una variable local → builtin o función
-// global). El camino indirecto (valor-función, closures) y la resolución dinámica (UFCS/métodos) llegan
-// en M14.4c/d.
+// Una llamada. Camino directo por nombre (builtin o función global). Construcción de enum con payload
+// `Enum.Variante(args)` reconocida en runtime (callee `EField` sobre un nombre de enum). El camino
+// indirecto (valor-función/closures) y el despacho dinámico (UFCS/métodos) llegan en M14.4c/d.
 fn eval_call(c: Interp, callee: Expr, args: [Expr]) -> Result<Value, Flow> {
     match (callee.kind) {
         EKind.EIdent(name) => {
@@ -352,7 +518,26 @@ fn eval_call(c: Interp, callee: Expr, args: [Expr]) -> Result<Value, Flow> {
                 },
             }
         },
-        _ => panic("M14.4c: llamada indirecta / UFCS / método"),
+        EKind.EField(obj, fname) => {
+            // ¿Construcción de variante con payload, `Enum.Variante(args)`?
+            match (obj.kind) {
+                EKind.EIdent(maybe_enum) => {
+                    match (lookup_opt(c, maybe_enum)) {
+                        Option.Some(_) => panic("M14.4d: método / UFCS"),
+                        Option.None => {
+                            if (enum_has_variant(c, maybe_enum, fname)) {
+                                let vals = eval_args(c, args)?;
+                                Result.Ok(Value.VEnum(maybe_enum, fname, vals))
+                            } else {
+                                panic("M14.4d: método / UFCS")
+                            }
+                        },
+                    }
+                },
+                _ => panic("M14.4d: método / UFCS"),
+            }
+        },
+        _ => panic("M14.4c: llamada indirecta"),
     }
 }
 
@@ -394,7 +579,9 @@ fn exec_stmt(c: Interp, s: Stmt) -> Result<Value, Flow> {
             let v = eval_expr(c, value)?;
             match (target.kind) {
                 EKind.EIdent(name) => { assign(c, name, v); Result.Ok(Value.VUnit) },
-                _ => panic("M14.4b: asignación a índice/campo"),
+                EKind.EIndex(arr_e, idx_e) => assign_index(c, arr_e, idx_e, v),
+                EKind.EField(obj_e, fname) => assign_field(c, obj_e, fname, v),
+                _ => panic("lvalue inválido (el checker debió rechazarlo)"),
             }
         },
         SKind.SReturn(opt) => {
@@ -484,14 +671,173 @@ fn eval_expr(c: Interp, expr: Expr) -> Result<Value, Flow> {
         },
         EKind.EWhile(cond, body) => eval_while(c, cond, body),
         EKind.EBlock(b) => exec_block(c, b),
-        EKind.EIndex(_, _) => panic("M14.4b: indexar"),
-        EKind.EField(_, _) => panic("M14.4b: acceso a campo"),
-        EKind.EArray(_) => panic("M14.4b: literal de arreglo"),
-        EKind.EStructLit(_, _) => panic("M14.4b: literal de struct"),
+        EKind.EIndex(arr_e, idx_e) => eval_index(c, arr_e, idx_e),
+        EKind.EField(obj, fname) => eval_field_or_enum(c, obj, fname),
+        EKind.EArray(elems) => eval_array(c, elems),
+        EKind.EStructLit(name, inits) => eval_struct_lit(c, name, inits),
         EKind.EFunc(_) => panic("M14.4c: función anónima"),
-        EKind.EMatch(_, _) => panic("M14.4b: match"),
+        EKind.EMatch(scr, arms) => eval_match(c, scr, arms),
         EKind.ETry(_) => panic("M14.4c: operador ?"),
     }
+}
+
+// =====================================================================
+// Datos: arreglos, structs, enums, match
+// =====================================================================
+
+// Error de índice fuera de rango (mensaje idéntico al de Rust).
+fn oob(idx_e: Expr, i: int, n: int) -> RuntimeError {
+    rt_error(idx_e.line, idx_e.col, "índice " + to_string(i) + " fuera de rango (longitud " + to_string(n) + ")")
+}
+
+fn eval_array(c: Interp, elems: [Expr]) -> Result<Value, Flow> {
+    var vals: [Value] = [];
+    var i = 0;
+    while (i < len(elems)) {
+        let v = eval_expr(c, elems[i])?;
+        push(vals, v);
+        i = i + 1;
+    }
+    Result.Ok(Value.VArray(vals))
+}
+
+// Indexar un arreglo (→ elemento) o un string (→ char, M11.4c-2). Fuera de rango = error de ejecución.
+fn eval_index(c: Interp, arr_e: Expr, idx_e: Expr) -> Result<Value, Flow> {
+    let target = eval_expr(c, arr_e)?;
+    let i = as_int(eval_expr(c, idx_e)?);
+    match (target) {
+        Value.VArray(elems) => {
+            if (i < 0 || i >= len(elems)) { return Result.Err(Flow.FError(oob(idx_e, i, len(elems)))); }
+            Result.Ok(elems[i])
+        },
+        Value.VStr(s) => {
+            let cs = chars(s);
+            if (i < 0 || i >= len(cs)) { return Result.Err(Flow.FError(oob(idx_e, i, len(cs)))); }
+            Result.Ok(Value.VChar(cs[i]))
+        },
+        _ => panic("indexar sobre un no-arreglo/string"),
+    }
+}
+
+// `obj.fname`: construcción de variante unit `Enum.Variante` (reconocida en runtime) o acceso a campo.
+fn eval_field_or_enum(c: Interp, obj: Expr, fname: string) -> Result<Value, Flow> {
+    match (obj.kind) {
+        EKind.EIdent(maybe_enum) => {
+            match (lookup_opt(c, maybe_enum)) {
+                Option.Some(_) => eval_field(c, obj, fname),
+                Option.None => {
+                    if (enum_has_variant(c, maybe_enum, fname)) {
+                        Result.Ok(Value.VEnum(maybe_enum, fname, no_vals()))
+                    } else {
+                        eval_field(c, obj, fname)
+                    }
+                },
+            }
+        },
+        _ => eval_field(c, obj, fname),
+    }
+}
+
+fn eval_field(c: Interp, obj: Expr, fname: string) -> Result<Value, Flow> {
+    let v = eval_expr(c, obj)?;
+    match (v) {
+        Value.VStruct(_, fields) => Result.Ok(struct_get(fields, fname)),
+        _ => panic("acceso a campo sobre un no-struct"),
+    }
+}
+
+// Construye un struct evaluando los campos en ORDEN DE DECLARACIÓN (como Rust → Display/igualdad casan).
+fn eval_struct_lit(c: Interp, name: string, inits: [FieldInit]) -> Result<Value, Flow> {
+    let defs = struct_fields(c, name);
+    var built: [SField] = [];
+    var i = 0;
+    while (i < len(defs)) {
+        let fname = defs[i].name;
+        let v = eval_expr(c, find_field_init(inits, fname))?;
+        push(built, SField { name: fname, value: v });
+        i = i + 1;
+    }
+    Result.Ok(Value.VStruct(name, built))
+}
+
+fn assign_index(c: Interp, arr_e: Expr, idx_e: Expr, v: Value) -> Result<Value, Flow> {
+    let target = eval_expr(c, arr_e)?;
+    let i = as_int(eval_expr(c, idx_e)?);
+    match (target) {
+        Value.VArray(elems) => {
+            if (i < 0 || i >= len(elems)) { return Result.Err(Flow.FError(oob(idx_e, i, len(elems)))); }
+            elems[i] = v; // muta el arreglo compartido
+            Result.Ok(Value.VUnit)
+        },
+        _ => panic("asignar índice sobre un no-arreglo"),
+    }
+}
+
+fn assign_field(c: Interp, obj_e: Expr, fname: string, v: Value) -> Result<Value, Flow> {
+    let target = eval_expr(c, obj_e)?;
+    match (target) {
+        Value.VStruct(_, fields) => { struct_set(fields, fname, v); Result.Ok(Value.VUnit) },
+        _ => panic("asignar campo sobre un no-struct"),
+    }
+}
+
+// Intenta casar un patrón contra un valor; si casa, devuelve los bindings (`None` si no). El checker
+// garantiza la consistencia variante/aridad, así que solo se compara la etiqueta y se reparte el payload.
+fn try_match(pat: Pattern, v: Value) -> Option<[Binding]> {
+    match (pat.kind) {
+        PKind.PWild => Option.Some(no_bindings()),
+        PKind.PBind(name) => Option.Some([Binding { name: name, value: v }]),
+        PKind.PVariant(_, variant, subs) => {
+            match (v) {
+                Value.VEnum(_, var2, payload) => {
+                    if (variant == var2) {
+                        var binds: [Binding] = [];
+                        var i = 0;
+                        while (i < len(subs)) {
+                            match (subs[i]) {
+                                Option.Some(nm) => { push(binds, Binding { name: nm, value: payload[i] }); },
+                                Option.None => {},
+                            }
+                            i = i + 1;
+                        }
+                        Option.Some(binds)
+                    } else {
+                        Option.None
+                    }
+                },
+                _ => Option.None,
+            }
+        },
+    }
+}
+
+fn bind_all(c: Interp, binds: [Binding]) {
+    var i = 0;
+    while (i < len(binds)) {
+        define(c, binds[i].name, binds[i].value);
+        i = i + 1;
+    }
+}
+
+// `match (scr) { patrón => cuerpo, ... }`: prueba los brazos en orden; el primero que casa liga sus
+// variables en un ámbito nuevo y evalúa su cuerpo. El checker garantiza exhaustividad.
+fn eval_match(c: Interp, scr: Expr, arms: [MatchArm]) -> Result<Value, Flow> {
+    let v = eval_expr(c, scr)?;
+    var i = 0;
+    while (i < len(arms)) {
+        match (try_match(arms[i].pat, v)) {
+            Option.Some(binds) => {
+                push_scope(c);
+                bind_all(c, binds);
+                let r = eval_expr(c, arms[i].body);
+                pop_scope(c);
+                return r;
+            },
+            Option.None => {},
+        }
+        i = i + 1;
+    }
+    Result.Err(Flow.FError(rt_error(scr.line, scr.col, "ningún brazo del match casó (no debería ocurrir)")))
 }
 
 // =====================================================================
@@ -501,11 +847,21 @@ fn eval_expr(c: Interp, expr: Expr) -> Result<Value, Flow> {
 // Ejecuta el programa llamando a `main` y devuelve su valor (o un error de ejecución). El checker ya
 // garantizó que `main` existe.
 pub fn run(prog: Program) -> Result<Value, RuntimeError> {
-    let c = Interp { funcs: map_new(), scopes: empty_scopes() };
+    let c = Interp { funcs: map_new(), structs: map_new(), enums: map_new(), scopes: empty_scopes() };
     var i = 0;
     while (i < len(prog.funcs)) {
         insert(c.funcs, prog.funcs[i].name, prog.funcs[i]);
         i = i + 1;
+    }
+    var si = 0;
+    while (si < len(prog.structs)) {
+        insert(c.structs, prog.structs[si].name, prog.structs[si].fields);
+        si = si + 1;
+    }
+    var ei = 0;
+    while (ei < len(prog.enums)) {
+        insert(c.enums, prog.enums[ei].name, prog.enums[ei].variants);
+        ei = ei + 1;
     }
     match (get(c.funcs, "main")) {
         Option.Some(m) => {

@@ -2745,3 +2745,19 @@ Tras el intérprete, el self-hosting está **cerrado** (raylang lexea/parsea/che
   Rust. El corpus usa solo lo que aceptan **ambos** checkers (print/eprint; `to_string` lo rechaza el
   checker auto-alojado de M14.3 → fuera del corpus). Diferido: M14.4b (datos), c (primera clase), d
   (despacho dinámico); TCO/trampolín y `MAX_CALL_DEPTH` (el host ya da TCO + pila grande).
+- **M14.4b COMPLETO** — datos. `Value` gana `VArray([Value])`, `VStruct(string, [SField])` y
+  `VEnum(string, string, [Value])`; `Interp` gana las tablas `structs`/`enums` del programa. Aquí luce
+  el **cabalgar sobre el host**: la **semántica de referencia** de arreglos/structs del invitado es la
+  del `[Value]`/`[SField]` de raylang (un alias comparte el mismo objeto del heap; `push`/`a[i]=v`/
+  `obj.f=v` mutan en el sitio y se ven por todos los alias —probado con `r.origen.x=99 ⇒ p.x=99` y arreglo
+  de structs—). Y luce la **resolución en runtime**: la construcción de enum (`Enum.Variante` y
+  `Enum.Variante(args)`), que el checker-validador NO reescribió, se **reconoce en eval** mirando
+  `c.enums` (`enum_has_variant`); el resto de `obj.f`/`f.m(args)` es acceso a campo o método (M14.4d).
+  Cubre: arreglos (literal/índice/`len`/`push`/asignación/anidados; índice de string → char), structs
+  (literal en **orden de declaración** → Display/igualdad casan, acceso/asignación de campo), enums
+  (construcción, `match` con patrones `_`/binding/variante + payload, tipos recursivos). `value_str`/
+  `values_equal` extendidos (structural recursivo). Oráculo (`tests/selfhost_interpreter.rs`, 9 tests):
+  los 5 ejemplos de datos (structs/enums/match_figuras/arrays/matriz) + snippets (aliasing, arreglo de
+  structs, payload+binding+comodín, lista enlazada recursiva, indexación encadenada) → mismo stdout +
+  exit que Rust. Builtins del corpus: `len`/`push` (los que conoce el checker auto-alojado). Diferido:
+  M14.4c (closures/orden superior/Option/Result/`?`), d (UFCS/métodos/dyn/@derive).

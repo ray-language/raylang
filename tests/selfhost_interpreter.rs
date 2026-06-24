@@ -119,6 +119,74 @@ fn llamadas_y_recursion() {
 }
 
 #[test]
+fn corpus_datos() {
+    // M14.4b: structs, enums, match, arreglos (incl. anidados).
+    for rel in [
+        "examples/structs.ray",
+        "examples/enums.ray",
+        "examples/match_figuras.ray",
+        "examples/arrays.ray",
+        "examples/matriz.ray",
+    ] {
+        comparar_archivo(rel);
+    }
+}
+
+#[test]
+fn structs_snippets() {
+    comparar_fuente(
+        "struct P { x: int, y: int } fn main() -> int { let p = P { x: 3, y: 4 }; print(p); print(p.x + p.y); 0 }",
+        "in_struct.ray",
+    );
+    // Mutación de campo + aliasing por semántica de referencia.
+    comparar_fuente(
+        "struct P { x: int, y: int } fn main() -> int { var p = P { x: 1, y: 2 }; let q = p; p.x = 9; print(q.x); 0 }",
+        "in_alias.ray",
+    );
+    // Arreglo de structs + mutación por índice.
+    comparar_fuente(
+        "struct P { x: int, y: int } fn main() -> int { var ps: [P] = []; push(ps, P { x: 1, y: 2 }); ps[0].x = 99; print(ps[0]); print(len(ps)); 0 }",
+        "in_arrstruct.ray",
+    );
+}
+
+#[test]
+fn enums_y_match_snippets() {
+    comparar_fuente(
+        "enum Dir { N, S, E, O } fn dx(d: Dir) -> int { match (d) { Dir.E => 1, Dir.O => 0 - 1, _ => 0 } } fn main() -> int { print(dx(Dir.E) + dx(Dir.O)); print(dx(Dir.N)); 0 }",
+        "in_match.ray",
+    );
+    // Variantes con payload + binding + comodín de payload.
+    comparar_fuente(
+        "enum E { A(int, int), B(string), C } fn f(e: E) -> int { match (e) { E.A(x, y) => x + y, E.B(_) => 0, E.C => 0 - 1 } } fn main() -> int { print(f(E.A(3, 4))); print(f(E.B(\"z\"))); print(f(E.C)); 0 }",
+        "in_payload.ray",
+    );
+    // Enum recursivo (lista enlazada) + Display anidado.
+    comparar_fuente(
+        "enum L { Nil, Cons(int, L) } fn suma(l: L) -> int { match (l) { L.Nil => 0, L.Cons(h, t) => h + suma(t) } } fn main() -> int { let l = L.Cons(1, L.Cons(2, L.Nil)); print(suma(l)); print(l); 0 }",
+        "in_list.ray",
+    );
+}
+
+#[test]
+fn arreglos_snippets() {
+    comparar_fuente(
+        "fn main() -> int { let a = [3, 1, 4, 1, 5]; print(a); print(a[2]); print(len(a)); 0 }",
+        "in_array.ray",
+    );
+    // Construcción dinámica + asignación por índice.
+    comparar_fuente(
+        "fn main() -> int { var a: [int] = []; var i = 0; while (i < 4) { push(a, i * i); i = i + 1; } a[0] = 100; print(a); 0 }",
+        "in_arrpush.ray",
+    );
+    // Arreglos anidados con indexación encadenada.
+    comparar_fuente(
+        "fn main() -> int { let m = [[1, 2], [3, 4]]; print(m[1][0]); print(m); 0 }",
+        "in_nested.ray",
+    );
+}
+
+#[test]
 fn codigo_de_salida() {
     // El código de salida del runner es el int que devuelve main (0 si es unit).
     comparar_fuente("fn main() -> int { 42 }", "in_exit42.ray");

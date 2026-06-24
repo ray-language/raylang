@@ -2561,3 +2561,16 @@ Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el
   envolventes; `current_return` se guarda/restaura), devuelve `fn(params) -> R`. Oráculo: 6 válidos +
   3 errores + `ufcs.ray`/`closures.ray`. Diferido a d-2: traits/impls (despacho estático, `Self`,
   métodos por defecto).
+- **M14.3d-2 COMPLETO** — traits + impls (despacho estático, `Self`, métodos por defecto). `Checker`
+  gana `traits` (nombre → firmas) y `methods` (`Tipo#metodo` → FnSig). `register_traits_impls` (tras
+  registrar firmas, antes de los cuerpos): valida traits (nombres únicos, métodos únicos), y cada impl
+  CONCRETO (cobertura sin faltantes salvo defectos, sin métodos extra/repetidos, firmas que casan vía
+  `check_method_sig` con `Self`→target). La **tabla de métodos** se puebla con la FnSig de cada método
+  (params con `Self`→target, self incluido) — `method_fnsig`; los **defectos** no redefinidos también
+  (su FnSig sale de la firma del trait). `check_impl_bodies` (tras los cuerpos de función) verifica cada
+  cuerpo de método como una función con `self` del tipo concreto (los defectos heredados se chequean por
+  impl). **Resolución** en `check_call_field`: campo → **método de trait** (`type_key_of(recv)`,
+  `mangle`) → UFCS; un método aparece en los errores con su nombre manglado (`'Tipo#m'`), como en Rust.
+  `ensure_impl_target` valida objetivos concretos (struct/enum no genérico, primitivo); genéricos/bounds
+  → d-3. Helpers `subst_self`/`type_key_of`/`mangle`/`has_default`. Oráculo: 6 válidos + 7 errores +
+  `traits.ray`. Diferido a d-3: bounds + impls genéricos.

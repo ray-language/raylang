@@ -735,6 +735,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     (`check_func_expr`, nodo `EFunc`): cierre con captura (cuerpo ve ámbitos envolventes; `current_return`
     guardado/restaurado) → `fn(params) -> R`. Oráculo: 6 válidos + 3 errores + `ufcs.ray`/`closures.ray`.
     Diferido a d-2 (traits/impls), d-3 (bounds), d-4 (dyn/@derive/resto prelude). DESIGN §23.4.
+  - **M14.3d-2 COMPLETO** (347 lib + 15 en `tests/selfhost_checker.rs`): **checker auto-alojado — traits
+    + impls** (despacho estático, `Self`, métodos por defecto). `Checker` gana `traits` (nombre→firmas) y
+    `methods` (`Tipo#metodo`→FnSig). `register_traits_impls` valida traits + cada impl CONCRETO (cobertura,
+    sin extras/repetidos, firmas que casan con `check_method_sig` Self→target) y puebla la tabla de métodos
+    (`method_fnsig`: params con Self→target, self incluido; los defectos no redefinidos también).
+    `check_impl_bodies` verifica cada cuerpo de método como función con `self` concreto (defectos por
+    impl). **Resolución** en `check_call_field`: campo → método de trait (`type_key_of`/`mangle`) → UFCS;
+    un método aparece en errores con su nombre manglado (`'Tipo#m'`), como Rust. `ensure_impl_target`
+    (concreto: struct/enum no genérico o primitivo; genéricos/bounds → d-3). Helpers `subst_self`/
+    `type_key_of`/`mangle`/`has_default`. Gotcha: `Option.None => []` en match necesita anotar el `let`.
+    Oráculo: 6 válidos + 7 errores + `traits.ray`. Diferido a d-3 (bounds + impls genéricos), d-4
+    (dyn/@derive/resto prelude). DESIGN §23.4.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

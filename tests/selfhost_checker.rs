@@ -246,13 +246,36 @@ fn errores_ufcs_y_closures() {
     comparar("fn main() -> int { let f = fn(x: int) -> int { true }; 0 }", "scue_anonret.ray");
 }
 
+#[test]
+fn traits_validos() {
+    // Despacho estático sobre struct, enum y primitivo; Self en el retorno.
+    comparar("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> int { self.x } } fn main() -> int { let p = P { x: 7 }; p.valor() }", "sctr_struct.ray");
+    comparar("trait V { fn valor(self) -> int; } enum M { Cara, Cruz } impl V for M { fn valor(self) -> int { match (self) { M.Cara => 1, M.Cruz => 0 } } } fn main() -> int { M.Cara.valor() }", "sctr_enum.ray");
+    comparar("trait V { fn valor(self) -> int; } impl V for int { fn valor(self) -> int { self } } fn main() -> int { 42.valor() }", "sctr_prim.ray");
+    comparar("struct P { x: int } trait Pt { fn doble(self) -> Self; } impl Pt for P { fn doble(self) -> Self { P { x: self.x + self.x } } } fn main() -> int { let p = P { x: 3 }; p.doble().x }", "sctr_self.ray");
+    // Método por defecto (heredado y redefinido).
+    comparar("trait S { fn nombre(self) -> string; fn saludar(self) -> string { self.nombre() } } struct P { n: string } impl S for P { fn nombre(self) -> string { self.n } } fn main() -> int { let p = P { n: \"a\" }; print(p.saludar()); 0 }", "sctr_default.ray");
+    comparar("trait S { fn nombre(self) -> string; fn saludar(self) -> string { self.nombre() } } struct R { id: int } impl S for R { fn nombre(self) -> string { \"robot\" } fn saludar(self) -> string { \"beep\" } } fn main() -> int { let r = R { id: 1 }; print(r.saludar()); 0 }", "sctr_overr.ray");
+}
+
+#[test]
+fn errores_traits() {
+    comparar("impl Foo for int { fn f(self) -> int { self } } fn main() -> int { 0 }", "sctre_notrait.ray");
+    comparar("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { } fn main() -> int { 0 }", "sctre_missing.ray");
+    comparar("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> int { self.x } fn otro(self) -> int { 0 } } fn main() -> int { 0 }", "sctre_extra.ray");
+    comparar("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> bool { true } } fn main() -> int { 0 }", "sctre_sigret.ray");
+    comparar("trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> int { self.x } } fn main() -> int { let p = P { x: 1 }; p.inexistente() }", "sctre_nomethod.ray");
+    comparar("struct T { x: int } trait T { fn f(self) -> int; } fn main() -> int { 0 }", "sctre_duptype.ray");
+    comparar("trait V { fn valor(self) -> int; } struct C<T> { v: T } impl V for C { fn valor(self) -> int { 0 } } fn main() -> int { 0 }", "sctre_genimpl.ray");
+}
+
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
 fn ejemplos_reales_validos() {
     let archivos = ["examples/fib.ray", "examples/fizzbuzz.ray", "examples/gcd.ray", "examples/primes.ray",
         "examples/structs.ray", "examples/match_figuras.ray", "examples/enums.ray", "examples/arrays.ray",
         "examples/matriz.ray", "examples/genericos.ray", "examples/tipos_genericos.ray", "examples/opcional.ray",
-        "examples/errores.ray", "examples/ufcs.ray", "examples/closures.ray"];
+        "examples/errores.ray", "examples/ufcs.ray", "examples/closures.ray", "examples/traits.ray"];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);

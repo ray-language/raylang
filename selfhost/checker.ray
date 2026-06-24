@@ -20,7 +20,7 @@
 // `TNamed(nombre, args)`; se distinguen por en qué tabla —`structs`/`enums`— está el nombre). Los
 // ámbitos y las tablas de tipos usan `Map<K,V>`.
 
-from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind, FnExpr;
+from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind, FnExpr, TraitDef, MethodSig, ImplBlock;
 
 // Error de tipos con ubicación (espejo de `TypeError` en Rust).
 pub struct TypeError { msg: string, line: int, col: int }
@@ -49,6 +49,8 @@ struct Checker {
     enums: Map<string, [VariantDef]>,
     struct_tparams: Map<string, [string]>,
     enum_tparams: Map<string, [string]>,
+    traits: Map<string, [MethodSig]>,
+    methods: Map<string, FnSig>,
     scopes: [Map<string, VarInfo>],
     current_return: Type,
     tparams: [string],
@@ -619,7 +621,8 @@ fn struct_fields(c: Checker, name: string) -> [FieldDef] {
     match (get(c.structs, name)) { Option.Some(f) => f, Option.None => [] }
 }
 
-// program = registrar tipos → registrar firmas → exigir main → verificar cada cuerpo.
+// program = registrar tipos → registrar firmas → registrar traits/impls → exigir main → verificar
+// cada cuerpo (funciones y métodos de impl).
 fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
     register_types(c, prog)?;
     var fi = 0;
@@ -635,6 +638,7 @@ fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
         insert(c.funcs, f.name, FnSig { params: ps, ret: resolve_type(f.ret), type_params: f.type_params });
         fi = fi + 1;
     }
+    register_traits_impls(c, prog)?;
     // 'main' es obligatoria: sin parámetros, retorno int o unit.
     match (get(c.funcs, "main")) {
         Option.None => { return Result.Err(terr(1, 1, "falta la función de entrada 'main'")); },
@@ -652,6 +656,7 @@ fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
         check_function(c, prog.funcs[ci])?;
         ci = ci + 1;
     }
+    check_impl_bodies(c, prog)?;
     Result.Ok(0)
 }
 
@@ -1027,7 +1032,7 @@ fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], expected
         _ => {},
     }
     let recv_ty = check_expr(c, obj)?;
-    // (2) ¿un campo del struct receptor con ese nombre (de tipo función)? Gana sobre la función libre.
+    // (2) ¿un campo del struct receptor con ese nombre (de tipo función)? Gana sobre el método/UFCS.
     match (recv_ty) {
         Type.TNamed(sname, targs) => {
             match (struct_field_type(c, sname, targs, name)) {
@@ -1037,8 +1042,28 @@ fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], expected
         },
         _ => {},
     }
-    // (3) UFCS: `name(recv, args)`.
+    // (3) ¿un método de trait del tipo concreto del receptor? Gana sobre la función libre (UFCS).
+    match (type_key_of(recv_ty)) {
+        Option.Some(key) => {
+            match (get(c.methods, mangle(key, name))) {
+                Option.Some(sig) => { return call_method(c, sig, mangle(key, name), obj, cargs, line, col); },
+                Option.None => {},
+            }
+        },
+        Option.None => {},
+    }
+    // (4) UFCS: `name(recv, args)`.
     check_ufcs(c, name, recv_ty, obj, cargs, line, col)
+}
+
+// Verifica una llamada a método `recv.m(args)` contra su firma (con `self` como primer argumento). El
+// `label` manglado (`Tipo#m`) aparece en un posible error de aridad/tipo de argumento (como en Rust).
+fn call_method(c: Checker, sig: FnSig, label: string, obj: Expr, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    var all: [Expr] = [];
+    push(all, obj);
+    var i = 0;
+    while (i < len(cargs)) { push(all, cargs[i]); i = i + 1; }
+    check_args(c, sig.params, sig.ret, all, "'" + label + "'", line, col)
 }
 
 // El tipo del campo `fname` de un struct `sname` con args de tipo `targs`, ya sustituido (`None` si
@@ -1706,11 +1731,297 @@ fn check_pattern(c: Checker, pat: Pattern, scrut_ty: Type, enum_name: string, va
     }
 }
 
+// =====================================================================
+// Traits e impls (M14.3d-2: despacho estático, Self, métodos por defecto)
+// =====================================================================
+
+// Nombre manglado de un método: `Tipo#metodo` (`#` ilegal en identificadores → no choca con nombres
+// del usuario). Es la clave de la tabla de métodos y el nombre que aparece en los errores de llamada.
+fn mangle(type_key: string, method: string) -> string { type_key + "#" + method }
+
+// Clave de tipo para la tabla de métodos: el nombre del struct/enum o el primitivo. `None` para los
+// tipos que no pueden recibir un impl (arreglos, funciones, unit, Self).
+fn type_key_of(t: Type) -> Option<string> {
+    match (t) {
+        Type.TInt => Option.Some("int"),
+        Type.TFloat => Option.Some("float"),
+        Type.TBool => Option.Some("bool"),
+        Type.TString => Option.Some("string"),
+        Type.TChar => Option.Some("char"),
+        Type.TNamed(n, _) => Option.Some(n),
+        _ => Option.None,
+    }
+}
+
+// Sustituye `Self` (`TNamed("Self", [])`) por el tipo implementador, recursivamente.
+fn subst_self(ty: Type, target: Type) -> Type {
+    match (ty) {
+        Type.TNamed(n, args) => {
+            if (n == "Self" && len(args) == 0) { target }
+            else {
+                var ra: [Type] = [];
+                var i = 0;
+                while (i < len(args)) { push(ra, subst_self(args[i], target)); i = i + 1; }
+                Type.TNamed(n, ra)
+            }
+        },
+        Type.TArray(e) => Type.TArray(subst_self(e, target)),
+        Type.TFn(ps, r) => {
+            var rps: [Type] = [];
+            var i = 0;
+            while (i < len(ps)) { push(rps, subst_self(ps[i], target)); i = i + 1; }
+            Type.TFn(rps, subst_self(r, target))
+        },
+        _ => ty,
+    }
+}
+
+fn is_primitive(t: Type) -> bool {
+    match (t) {
+        Type.TInt => true, Type.TFloat => true, Type.TBool => true, Type.TString => true, Type.TChar => true,
+        _ => false,
+    }
+}
+
+// ¿La firma de trait `tm` trae cuerpo por defecto?
+fn has_default(tm: MethodSig) -> bool {
+    match (tm.default_body) { Option.Some(_) => true, Option.None => false }
+}
+
+// La firma de trait con nombre `name` (o `None`).
+fn find_method_sig(methods: [MethodSig], name: string) -> Option<MethodSig> {
+    var i = 0;
+    while (i < len(methods)) {
+        if (methods[i].name == name) { return Option.Some(methods[i]); }
+        i = i + 1;
+    }
+    Option.None
+}
+
+// ¿El impl redefine el método `name`?
+fn impl_overrides(imp: ImplBlock, name: string) -> bool {
+    var i = 0;
+    while (i < len(imp.methods)) {
+        if (imp.methods[i].name == name) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// La FnSig de un método (params con Self→target, self incluido; ret con Self→target). El método de
+// un impl concreto es monomórfico (type_params vacío). Reusada por el método del impl y por el defecto.
+fn method_fnsig(params: [Param], ret: Type, target: Type) -> FnSig {
+    var ps: [Type] = [];
+    var i = 0;
+    while (i < len(params)) { push(ps, resolve_type(subst_self(params[i].ty, target))); i = i + 1; }
+    FnSig { params: ps, ret: resolve_type(subst_self(ret, target)), type_params: no_tparams() }
+}
+
+// Registra los traits (firmas) y valida + tabula los impls. M14.3d-2: solo impls CONCRETOS (genéricos
+// y bounds → d-3). Mismo orden/mensajes que Rust.
+fn register_traits_impls(c: Checker, prog: Program) -> Result<int, TypeError> {
+    // 1) Traits: nombres únicos (no chocan con tipos), métodos únicos.
+    var ti = 0;
+    while (ti < len(prog.traits)) {
+        let t = prog.traits[ti];
+        if (contains_key(c.structs, t.name) || contains_key(c.enums, t.name)) {
+            return Result.Err(terr(t.line, t.col, "'" + t.name + "' ya es un tipo; no puede ser también un trait"));
+        }
+        if (contains_key(c.traits, t.name)) {
+            return Result.Err(terr(t.line, t.col, "trait '" + t.name + "' declarado dos veces"));
+        }
+        var seen: [string] = [];
+        var mi = 0;
+        while (mi < len(t.methods)) {
+            let m = t.methods[mi];
+            if (contains_str(seen, m.name)) {
+                return Result.Err(terr(m.line, m.col, "método '" + m.name + "' repetido en el trait '" + t.name + "'"));
+            }
+            push(seen, m.name);
+            mi = mi + 1;
+        }
+        insert(c.traits, t.name, t.methods);
+        ti = ti + 1;
+    }
+    // 2) Impls: validar contra su trait y poblar la tabla de métodos.
+    var ii = 0;
+    while (ii < len(prog.impls)) {
+        register_impl(c, prog.impls[ii])?;
+        ii = ii + 1;
+    }
+    Result.Ok(0)
+}
+
+fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
+    let trait_methods = match (get(c.traits, imp.trait_name)) {
+        Option.Some(ms) => ms,
+        Option.None => { return Result.Err(terr(imp.line, imp.col, "trait '" + imp.trait_name + "' no declarado")); },
+    };
+    let target = resolve_type(imp.target);
+    ensure_impl_target(c, target, imp.type_params, imp.line, imp.col)?;
+    let key = type_key_str(target);
+    // Nombres del impl sin repetir.
+    var impl_names: [string] = [];
+    var mi = 0;
+    while (mi < len(imp.methods)) {
+        let m = imp.methods[mi];
+        if (contains_str(impl_names, m.name)) {
+            return Result.Err(terr(m.line, m.col, "método '" + m.name + "' implementado dos veces"));
+        }
+        push(impl_names, m.name);
+        mi = mi + 1;
+    }
+    // Cobertura: no faltan métodos del trait (salvo los que tienen defecto).
+    var tj = 0;
+    while (tj < len(trait_methods)) {
+        let tm = trait_methods[tj];
+        if (!contains_str(impl_names, tm.name) && !has_default(tm)) {
+            return Result.Err(terr(imp.line, imp.col, "el impl de '" + imp.trait_name + "' para "
+                + type_str(target) + " no implementa el método '" + tm.name + "'"));
+        }
+        tj = tj + 1;
+    }
+    // Métodos del impl: pertenecen al trait, firmas casan, registrar.
+    mi = 0;
+    while (mi < len(imp.methods)) {
+        let m = imp.methods[mi];
+        match (find_method_sig(trait_methods, m.name)) {
+            Option.None => { return Result.Err(terr(m.line, m.col, "el trait '" + imp.trait_name + "' no declara un método '" + m.name + "'")); },
+            Option.Some(tm) => {
+                check_method_sig(tm, m, target)?;
+                let mangled = mangle(key, m.name);
+                if (contains_key(c.methods, mangled)) {
+                    return Result.Err(terr(m.line, m.col, "método '" + m.name + "' ambiguo para " + type_str(target) + ": ya hay un impl que lo provee"));
+                }
+                insert(c.methods, mangled, method_fnsig(m.params, m.ret, target));
+            },
+        }
+        mi = mi + 1;
+    }
+    // Defectos no redefinidos: también van a la tabla de resolución.
+    tj = 0;
+    while (tj < len(trait_methods)) {
+        let tm = trait_methods[tj];
+        if (has_default(tm) && !contains_str(impl_names, tm.name)) {
+            let mangled = mangle(key, tm.name);
+            if (contains_key(c.methods, mangled)) {
+                return Result.Err(terr(imp.line, imp.col, "método '" + tm.name + "' ambiguo para " + type_str(target) + ": ya hay un impl que lo provee"));
+            }
+            insert(c.methods, mangled, method_fnsig(tm.params, tm.ret, target));
+        }
+        tj = tj + 1;
+    }
+    Result.Ok(0)
+}
+
+// La clave de tipo de un objetivo de impl ya validado (siempre existe).
+fn type_key_str(t: Type) -> string {
+    match (type_key_of(t)) { Option.Some(k) => k, Option.None => "" }
+}
+
+// Valida el objetivo de un `impl`. M14.3d-2: solo objetivos CONCRETOS (struct/enum no genérico, o
+// primitivo). Los impls genéricos (`impl<T> ... for Caja<T>`) y bounds → d-3.
+fn ensure_impl_target(c: Checker, target: Type, type_params: [string], line: int, col: int) -> Result<int, TypeError> {
+    if (is_primitive(target)) {
+        if (len(type_params) == 0) { return Result.Ok(0); }
+        return Result.Err(terr(line, col, "un tipo primitivo no es genérico: no admite parámetros de tipo en el impl"));
+    }
+    match (target) {
+        Type.TNamed(n, _) => {
+            if (!contains_key(c.structs, n) && !contains_key(c.enums, n)) {
+                return Result.Err(terr(line, col, "no se puede implementar para un tipo desconocido: '" + n + "'"));
+            }
+            let arity = type_arity(c, n);
+            if (len(type_params) == 0) {
+                if (arity != 0) {
+                    return Result.Err(terr(line, col, "'" + n + "' es genérico: declara sus parámetros en el impl, p. ej. 'impl<T> ... for " + n + "<T>' (M9.2b)"));
+                }
+                Result.Ok(0)
+            } else {
+                Result.Err(terr(line, col, "impls genéricos aún no soportados por el checker auto-alojado (M14.3d-3)"))
+            }
+        },
+        _ => Result.Err(terr(line, col, "solo se puede implementar un trait para un struct, enum o primitivo")),
+    }
+}
+
+// Comprueba que la firma de un método de impl coincide con la del trait, tras sustituir `Self` por el
+// tipo implementador en ambas.
+fn check_method_sig(tm: MethodSig, m: Func, target: Type) -> Result<int, TypeError> {
+    if (len(tm.params) != len(m.params)) {
+        return Result.Err(terr(m.line, m.col, "el método '" + m.name + "' toma " + to_string(len(m.params))
+            + " parámetro(s) (incluido self), pero el trait pide " + to_string(len(tm.params))));
+    }
+    var i = 0;
+    while (i < len(tm.params)) {
+        let want = resolve_type(subst_self(tm.params[i].ty, target));
+        let got = resolve_type(subst_self(m.params[i].ty, target));
+        if (!type_eq(want, got)) {
+            return Result.Err(terr(m.params[i].line, m.params[i].col, "el parámetro " + to_string(i + 1)
+                + " del método '" + m.name + "' es " + type_str(got) + ", pero el trait pide " + type_str(want)));
+        }
+        i = i + 1;
+    }
+    let want_ret = resolve_type(subst_self(tm.ret, target));
+    let got_ret = resolve_type(subst_self(m.ret, target));
+    if (!type_eq(want_ret, got_ret)) {
+        return Result.Err(terr(m.line, m.col, "el método '" + m.name + "' devuelve " + type_str(got_ret) + ", pero el trait pide " + type_str(want_ret)));
+    }
+    Result.Ok(0)
+}
+
+// Verifica los cuerpos de los métodos de cada impl (los provistos + los defectos heredados), cada uno
+// como una función con `self` de tipo concreto. Va tras verificar las funciones (la tabla de métodos
+// ya está completa: un método puede llamar a otro).
+fn check_impl_bodies(c: Checker, prog: Program) -> Result<int, TypeError> {
+    var ii = 0;
+    while (ii < len(prog.impls)) {
+        let imp = prog.impls[ii];
+        let target = resolve_type(imp.target);
+        let key = type_key_str(target);
+        var mi = 0;
+        while (mi < len(imp.methods)) {
+            let m = imp.methods[mi];
+            check_method_body(c, m.params, m.ret, m.body, m.line, m.col, mangle(key, m.name), target)?;
+            mi = mi + 1;
+        }
+        // Defectos heredados: se verifican con `self` del tipo concreto.
+        let trait_methods: [MethodSig] = match (get(c.traits, imp.trait_name)) { Option.Some(ms) => ms, Option.None => [] };
+        var tj = 0;
+        while (tj < len(trait_methods)) {
+            let tm = trait_methods[tj];
+            if (has_default(tm) && !impl_overrides(imp, tm.name)) {
+                match (tm.default_body) {
+                    Option.Some(body) => { check_method_body(c, tm.params, tm.ret, body, tm.line, tm.col, mangle(key, tm.name), target)?; },
+                    Option.None => {},
+                }
+            }
+            tj = tj + 1;
+        }
+        ii = ii + 1;
+    }
+    Result.Ok(0)
+}
+
+// Verifica el cuerpo de un método: sus parámetros (self incluido) con Self→target, y el bloque contra
+// el retorno (Self→target). `label` es el nombre manglado (aparece en un posible error de retorno).
+fn check_method_body(c: Checker, params: [Param], ret: Type, body: Block, line: int, col: int, label: string, target: Type) -> Result<int, TypeError> {
+    var sp: [Param] = [];
+    var i = 0;
+    while (i < len(params)) {
+        let p = params[i];
+        push(sp, Param { name: p.name, ty: subst_self(p.ty, target), line: p.line, col: p.col });
+        i = i + 1;
+    }
+    check_fn_body(c, sp, subst_self(ret, target), body, line, col, "'" + label + "'")
+}
+
 // Punto de entrada: valida un programa (o devuelve el primer TypeError).
 pub fn check(prog: Program) -> Result<int, TypeError> {
     let c = Checker {
         funcs: map_new(), structs: map_new(), enums: map_new(),
         struct_tparams: map_new(), enum_tparams: map_new(),
+        traits: map_new(), methods: map_new(),
         scopes: [], current_return: Type.TUnit, tparams: [],
     };
     check_program(c, prog)

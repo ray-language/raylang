@@ -334,6 +334,21 @@ fn errores_dyn() {
     comparar("trait A { fn a(self) -> int; } trait B { fn b(self) -> int; } struct S {} impl A for S { fn a(self) -> int { 1 } } impl B for S { fn b(self) -> int { 2 } } fn f(x: dyn A + B) -> int { x.a() } fn main() -> int { let x: dyn A = S {}; f(x) }", "scde_baddown.ray");
 }
 
+#[test]
+fn prelude_map_filter_fold() {
+    let d = "fn doble(x: int) -> int { x * 2 } fn par(x: int) -> bool { x % 2 == 0 } fn suma(a: int, b: int) -> int { a + b } ";
+    // map/filter/fold del prelude, vía UFCS encadenado.
+    comparar(&format!("{d}fn main() -> int {{ let xs: [int] = [1, 2, 3]; xs.map(doble).filter(par).fold(0, suma) }}"), "scpre_chain.ray");
+    // Vía pipelines.
+    comparar(&format!("{d}fn main() -> int {{ let xs: [int] = [1, 2, 3, 4]; xs |> filter(par) |> map(doble) |> fold(0, suma) }}"), "scpre_pipe.ray");
+    // Con closures inline.
+    comparar(&format!("{d}fn main() -> int {{ let xs: [int] = [1, 2, 3]; xs |> map(fn(x: int) -> int {{ x * x }}) |> fold(0, suma) }}"), "scpre_clos.ray");
+    // El usuario puede redefinir 'map' (override del prelude).
+    comparar("fn map(x: int) -> int { x + 1 } fn main() -> int { map(5) }", "scpre_override.ray");
+    // Error: el predicado/función no casa con el elemento.
+    comparar("fn negar(b: bool) -> bool { !b } fn main() -> int { let xs: [int] = [1, 2]; let ys = xs.map(negar); 0 }", "scpre_mapty.ray");
+}
+
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
 fn ejemplos_reales_validos() {
@@ -342,7 +357,7 @@ fn ejemplos_reales_validos() {
         "examples/matriz.ray", "examples/genericos.ray", "examples/tipos_genericos.ray", "examples/opcional.ray",
         "examples/errores.ray", "examples/ufcs.ray", "examples/closures.ray", "examples/traits.ray",
         "examples/bounds.ray", "examples/metodos_por_defecto.ray", "examples/impls_genericos.ray",
-        "examples/trait_objects.ray"];
+        "examples/trait_objects.ray", "examples/stdlib.ray"];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);

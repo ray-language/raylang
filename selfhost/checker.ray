@@ -543,6 +543,43 @@ fn inject_prelude(c: Checker, prog: Program) {
         insert(c.enums, "Result", rv);
         insert(c.enum_tparams, "Result", ["T", "E"]);
     }
+    inject_prelude_fns(c, prog);
+}
+
+// Inyecta las funciones genéricas de orden superior del prelude (M7.3): map/filter/fold. En Rust
+// están escritas en raylang y se parsean; aquí (validador) se registran sus FIRMAS (lo que basta para
+// resolver llamadas). Solo si el usuario no las redefine.
+fn inject_prelude_fns(c: Checker, prog: Program) {
+    let t = Type.TNamed("T", []);
+    let u = Type.TNamed("U", []);
+    let a = Type.TNamed("A", []);
+    // map<T, U>(xs: [T], f: fn(T) -> U) -> [U]
+    inject_fn(c, prog, "map", FnSig {
+        params: [Type.TArray(t), Type.TFn([t], u)], ret: Type.TArray(u), type_params: ["T", "U"], bounds: no_bounds(),
+    });
+    // filter<T>(xs: [T], pred: fn(T) -> bool) -> [T]
+    inject_fn(c, prog, "filter", FnSig {
+        params: [Type.TArray(t), Type.TFn([t], Type.TBool)], ret: Type.TArray(t), type_params: ["T"], bounds: no_bounds(),
+    });
+    // fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A
+    inject_fn(c, prog, "fold", FnSig {
+        params: [Type.TArray(t), a, Type.TFn([a, t], a)], ret: a, type_params: ["T", "A"], bounds: no_bounds(),
+    });
+}
+
+// Registra una función del prelude (su firma) si el usuario no la define con ese nombre.
+fn inject_fn(c: Checker, prog: Program, name: string, sig: FnSig) {
+    if (!user_declares_fn(prog, name)) { insert(c.funcs, name, sig); }
+}
+
+// ¿El usuario declara una función con ese nombre?
+fn user_declares_fn(prog: Program, name: string) -> bool {
+    var i = 0;
+    while (i < len(prog.funcs)) {
+        if (prog.funcs[i].name == name) { return true; }
+        i = i + 1;
+    }
+    false
 }
 
 // ¿El usuario declara un struct/enum con ese nombre? (Para no pisar su definición con la del prelude.)

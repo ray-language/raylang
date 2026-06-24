@@ -781,6 +781,13 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     devuelve el retorno. Helpers `propaga_esperado`/`subset_strs`/`find_dyn_method`. La síntesis del struct
     vtable (lowering) se OMITE. Oráculo: 4 válidos + 5 errores + `trait_objects.ray`. Diferido a d-4b:
     `@derive` + resto del prelude (Eq/Show/Ord, map/filter/fold). DESIGN §23.4.
+  - **M14.3d-4b COMPLETO** (347 lib + 22 en `tests/selfhost_checker.rs`): **checker auto-alojado — prelude
+    de orden superior** (map/filter/fold). `inject_prelude_fns` registra las FIRMAS de `map<T,U>`/
+    `filter<T>`/`fold<T,A>` en `c.funcs` (en Rust se parsean del prelude; el validador solo necesita la
+    firma). `inject_fn`/`user_declares_fn` saltan las que el usuario redefina (override). Compone con UFCS
+    (`xs.map(f)`), pipelines (`xs |> map(f)`; el receptor cuenta para la inferencia) y closures inline.
+    Oráculo: 4 válidos + 1 error + `stdlib.ray`. Diferido a d-4c: Eq/Show/Ord + impls de primitivos +
+    `@derive` + anotaciones (cierra M14.3). DESIGN §23.4.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

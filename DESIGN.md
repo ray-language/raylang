@@ -2611,3 +2611,9 @@ Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el
   `subset_strs`/`find_dyn_method`. Mensajes byte-idénticos. La síntesis del struct vtable (lowering) se
   OMITE. Oráculo: 4 válidos + 5 errores + `trait_objects.ray`. Diferido a d-4b: `@derive` + resto del
   prelude (Eq/Show/Ord, map/filter/fold).
+- **M14.3d-4b COMPLETO** — prelude de orden superior (map/filter/fold). `inject_prelude_fns` registra
+  las FIRMAS de `map<T,U>`/`filter<T>`/`fold<T,A>` en `c.funcs` (en Rust se parsean del prelude; el
+  validador solo necesita la firma para resolver llamadas). `inject_fn` salta las que el usuario
+  redefina (override). Compone con UFCS (`xs.map(f)`) y pipelines (`xs |> map(f)`) — el receptor cuenta
+  para la inferencia genérica — y con closures inline. Oráculo: 4 válidos + 1 error + `stdlib.ray`.
+  Diferido a d-4c: Eq/Show/Ord + impls de primitivos + `@derive` + anotaciones.

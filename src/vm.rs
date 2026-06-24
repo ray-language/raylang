@@ -306,6 +306,46 @@ impl<'a> Vm<'a> {
                     let arr = self.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(arr));
                 }
+                OpCode::MapRemove => {
+                    // M13.1b: quita la clave; [] o [v]. El prelude → Option<V>.
+                    let k = heap_to_key(&self.pop());
+                    let h = self.pop_obj();
+                    let elems = match self.heap.get_mut(h) {
+                        Obj::Map(m) => match m.remove(&k) {
+                            Some(v) => vec![v],
+                            None => vec![],
+                        },
+                        _ => unreachable!("el checker garantiza un Map"),
+                    };
+                    let arr = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(arr));
+                }
+                OpCode::MapKeys => {
+                    // M13.1b: claves ordenadas (determinista).
+                    let h = self.pop_obj();
+                    let mut ks: Vec<MapKey> = match self.heap.get(h) {
+                        Obj::Map(m) => m.keys().cloned().collect(),
+                        _ => unreachable!("el checker garantiza un Map"),
+                    };
+                    ks.sort();
+                    let elems: Vec<HeapValue> = ks.iter().map(key_to_heap).collect();
+                    let arr = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(arr));
+                }
+                OpCode::MapValues => {
+                    // M13.1b: valores en orden de clave ordenada (casa con keys).
+                    let h = self.pop_obj();
+                    let elems: Vec<HeapValue> = match self.heap.get(h) {
+                        Obj::Map(m) => {
+                            let mut pares: Vec<(&MapKey, &HeapValue)> = m.iter().collect();
+                            pares.sort_by(|a, b| a.0.cmp(b.0));
+                            pares.iter().map(|(_, v)| (*v).clone()).collect()
+                        }
+                        _ => unreachable!("el checker garantiza un Map"),
+                    };
+                    let arr = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(arr));
+                }
                 OpCode::Push => {
                     let v = self.pop();
                     let h = self.pop_obj();
@@ -1130,6 +1170,16 @@ fn heap_to_key(v: &HeapValue) -> MapKey {
     }
 }
 
+/// Reconstruye el valor de la VM a partir de una clave de Map (para `keys`, M13.1b).
+fn key_to_heap(k: &MapKey) -> HeapValue {
+    match k {
+        MapKey::Int(n) => HeapValue::Int(*n),
+        MapKey::Str(s) => HeapValue::Str(s.clone()),
+        MapKey::Char(c) => HeapValue::Char(*c),
+        MapKey::Bool(b) => HeapValue::Bool(*b),
+    }
+}
+
 /// Comprueba que `i` es un índice válido en `0..len`; si no, error de ejecución.
 fn bounds_check(i: i64, len: usize, line: usize, col: usize) -> Result<usize, RuntimeError> {
     if i < 0 || (i as usize) >= len {
@@ -1408,6 +1458,48 @@ mod tests {
                 let b = match (porChar.get('z')) { Option.Some(v) => v, Option.None => 0 };
                 let c = match (porBool.get(true)) { Option.Some(v) => v, Option.None => 0 };
                 a + b + c + len(porBool)
+             }",
+        );
+    }
+
+    /// M13.1b: keys (ordenadas) + values (en orden de clave) + remove, en el oráculo.
+    #[test]
+    fn map_keys_values_remove_oraculo() {
+        oracle_program(
+            "fn suma(a: [int]) -> int { var s = 0; var i = 0; while (i < len(a)) { s = s + a[i]; i = i + 1; } s }
+             fn main() -> int {
+                let m: Map<int, int> = map_new();
+                insert(m, 3, 30);
+                insert(m, 1, 10);
+                insert(m, 2, 20);
+                let ks = keys(m);              // [1, 2, 3]
+                let vs = values(m);            // [10, 20, 30]
+                let quitado = match (remove(m, 2)) { Option.Some(v) => v, Option.None => 0 };
+                ks[0] * 100 + ks[2] + suma(vs) + quitado + len(m)
+             }",
+        );
+    }
+
+    /// M13.1b: keys/values asignan arreglos en el heap → estrés del GC.
+    #[test]
+    fn map_keys_values_estres_gc_oraculo() {
+        oracle_stress(
+            "fn suma(a: [int]) -> int { var s = 0; var i = 0; while (i < len(a)) { s = s + a[i]; i = i + 1; } s }
+             fn main() -> int {
+                let m: Map<int, int> = map_new();
+                var i = 0;
+                while (i < 25) { insert(m, i, i * i); i = i + 1; }
+                let total = suma(values(m)) + suma(keys(m));
+                var quitados = 0;
+                var j = 0;
+                while (j < 25) {
+                    match (remove(m, j)) {
+                        Option.Some(v) => { quitados = quitados + 1; },
+                        Option.None => {},
+                    }
+                    j = j + 2;
+                }
+                total + quitados + len(m)
              }",
         );
     }

@@ -80,7 +80,10 @@ pub enum Value {
 /// La **clave** de un `Map` en runtime (M13.1): un primitivo hashable. No incluye `float`
 /// (no implementa `Hash`/`Eq` de forma fiable) ni tipos compuestos. El checker garantiza
 /// que solo lleguen estos tipos como clave.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// `Ord` (M13.1b) ordena las claves para que `keys`/`values` sean **deterministas** pese al
+/// `HashMap` (clave del oráculo). En un mapa dado todas las claves son del mismo tipo (el checker
+/// fija un único `K`), así que el orden entre variantes nunca se observa.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MapKey {
     Int(i64),
     Str(String),
@@ -741,6 +744,38 @@ impl<'a> Interpreter<'a> {
                         Some(v) => vec![v.clone()],
                         None => vec![],
                     };
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("el checker garantiza un Map"),
+            },
+            // M13.1b: quita y devuelve [] o [v]; el prelude → Option<V>.
+            "__map_remove" => match &values[0] {
+                Value::Map(rc) => {
+                    let elems = match rc.borrow_mut().remove(&MapKey::from_value(&values[1])) {
+                        Some(v) => vec![v],
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("el checker garantiza un Map"),
+            },
+            // M13.1b: claves ordenadas (determinista).
+            "keys" => match &values[0] {
+                Value::Map(rc) => {
+                    let mut ks: Vec<MapKey> = rc.borrow().keys().cloned().collect();
+                    ks.sort();
+                    let elems: Vec<Value> = ks.iter().map(|k| k.to_value()).collect();
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("el checker garantiza un Map"),
+            },
+            // M13.1b: valores en orden de clave ordenada (casa posición a posición con keys).
+            "values" => match &values[0] {
+                Value::Map(rc) => {
+                    let m = rc.borrow();
+                    let mut pares: Vec<(&MapKey, &Value)> = m.iter().collect();
+                    pares.sort_by(|a, b| a.0.cmp(b.0));
+                    let elems: Vec<Value> = pares.iter().map(|(_, v)| (*v).clone()).collect();
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
                 _ => unreachable!("el checker garantiza un Map"),

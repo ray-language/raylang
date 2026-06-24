@@ -89,6 +89,12 @@ fn get<K, V>(m: Map<K, V>, k: K) -> Option<V> {
     if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
+// M13.1b: quita la clave `k` del mapa y devuelve su valor (None si no estaba).
+fn remove<K, V>(m: Map<K, V>, k: K) -> Option<V> {
+    let r = __map_remove(m, k);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
 // --- Aserciones (M13.2a) ---
 // Sobre el primitivo `panic` (el único toque de runtime). No hay sobrecarga, así que en vez de
 // `assert(cond)` y `assert(cond, msg)` se ofrece `assert(cond)` (mensaje genérico), `assert_eq`

@@ -410,6 +410,32 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != kt { return Err((Some(1), format!("__map_get: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
         Ok(Type::Array(Box::new(vt)))
     } },
+    // __map_remove(m, k) -> [V] (M13.1b): quita k del mapa; [] si no estaba, [v] si sí. Prelude → Option.
+    Builtin { name: "__map_remove", opcode: OpCode::MapRemove, check: |a| {
+        arity(a, 2, "__map_remove", " (mapa, clave)")?;
+        let (kt, vt) = match &a[0] {
+            Type::Map(k, v) => ((**k).clone(), (**v).clone()),
+            other => return Err((Some(0), format!("__map_remove espera un Map como primer argumento, no {}", other))),
+        };
+        if a[1] != kt { return Err((Some(1), format!("__map_remove: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
+        Ok(Type::Array(Box::new(vt)))
+    } },
+    // keys(m) -> [K] (M13.1b): las claves del mapa, ordenadas (determinista).
+    Builtin { name: "keys", opcode: OpCode::MapKeys, check: |a| {
+        arity(a, 1, "keys", " (mapa)")?;
+        match &a[0] {
+            Type::Map(k, _) => Ok(Type::Array(k.clone())),
+            other => Err((Some(0), format!("keys espera un Map, no {}", other))),
+        }
+    } },
+    // values(m) -> [V] (M13.1b): los valores, en orden de clave ordenada (casa con keys).
+    Builtin { name: "values", opcode: OpCode::MapValues, check: |a| {
+        arity(a, 1, "values", " (mapa)")?;
+        match &a[0] {
+            Type::Map(_, v) => Ok(Type::Array(v.clone())),
+            other => Err((Some(0), format!("values espera un Map, no {}", other))),
+        }
+    } },
 
     // panic(msg) -> unit (M13.2a): aborta la ejecución con `msg`. Lo usan `assert`/`assert_eq` del
     // prelude; es el único primitivo de runtime de M13.2 (el resto vive en raylang). Diverge (nunca

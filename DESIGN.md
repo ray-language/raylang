@@ -2214,9 +2214,13 @@ usuario (vía trait `Hash` + dicts, como M9.2) → **diferido**.
   anotación → error claro. **Clave hashable** validada en `ensure_type` (`Map<float,_>` se rechaza).
   Oráculo `map_basico/claves_variadas` + `map_estres_gc` (estrés del GC). `print` de un Map
   **diferido** (no es *printable*; Display ordena por clave → determinista). Ejemplo `examples/mapa.ray`.
-- **M13.1b — recorrido**: `remove(m,k) -> Option<V>`, `keys(m) -> [K]`, `values(m) -> [V]` (ambos
-  asignan heap). Para el oráculo, `keys`/`values` se devuelven **ordenadas** (como `list_dir` en
-  M11.7c) → determinista pese a que el `HashMap` interno no lo sea.
+- **M13.1b — recorrido** ✅ **COMPLETO** (343 tests lib): `__map_remove(m,k) -> [V]` (+ envoltorio
+  `remove(m,k) -> Option<V>` en el prelude), `keys(m) -> [K]`, `values(m) -> [V]` (opcodes
+  `MapRemove`/`MapKeys`/`MapValues`; los tres asignan heap → estrés del GC). `MapKey` gana
+  `PartialOrd, Ord`: `keys` se devuelve **ordenada** y `values` en **ese mismo orden de clave**
+  (casan posición a posición) → determinista pese al `HashMap` (clave del oráculo). En un mapa
+  concreto todas las claves son del mismo tipo, así que el orden entre variantes nunca se observa.
+  Capítulo del libro `m13/mapas.md`. **M13.1 COMPLETO.**
 
 **Diferido:** clave genérica (`Hash`), `@derive(Eq/Show)` sobre `Map`, orden de iteración estable
 expuesto al usuario.

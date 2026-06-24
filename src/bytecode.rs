@@ -162,6 +162,15 @@ pub enum OpCode {
     MapGet,
     /// Saca clave y mapa; empuja un `bool`: si la clave está presente. Builtin `contains_key`.
     MapContainsKey,
+    /// Saca clave y mapa; **quita** la clave (mutando el mapa) y empuja un arreglo `[V]` con **0 o
+    /// 1** elementos (el valor que había, o vacío). Primitivo `__map_remove`; el prelude → `Option`.
+    MapRemove,
+    /// Saca un mapa; empuja un arreglo `[K]` con sus **claves**, **ordenadas** (determinista).
+    /// Builtin `keys`.
+    MapKeys,
+    /// Saca un mapa; empuja un arreglo `[V]` con sus **valores**, en orden de **clave ordenada**
+    /// (para que case posición a posición con `keys` y sea determinista). Builtin `values`.
+    MapValues,
 
     // --- Aserciones (M13.2a) ---
     /// Saca un string (el mensaje) y **aborta** la ejecución con un error de runtime que lo lleva,

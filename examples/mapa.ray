@@ -36,7 +36,19 @@ fn main() -> int {
     print("palabras distintas:");
     print(len(cuenta));   // 5: el, perro, y, gato, pez
 
-    // El código de salida es el total de palabras distintas.
+    // keys() devuelve las claves ORDENADAS; values() los valores en ese mismo orden.
+    let palabras = keys(cuenta);     // ["el", "gato", "perro", "pez", "y"]
+    print("primera (alfabética):");
+    print(palabras[0]);              // "el"
+
+    // remove() quita y devuelve el valor (Option).
+    match (remove(cuenta, "el")) {
+        Option.Some(n) => assert_eq(n, 3),
+        Option.None => panic("'el' estaba"),
+    }
+    assert_eq(len(cuenta), 4);
+
+    // El código de salida es el total de palabras distintas restantes.
     len(cuenta)
 }
 

@@ -84,3 +84,7 @@
 - [La stdlib de string](m11/strings.md)
 - [I/O y la API de runtime](m11/io.md)
 - [Módulos y `pub`](m11/modulos.md)
+
+# M13 — Habilitadores de self-hosting
+
+- [Map&lt;K, V&gt;: diccionarios](m13/mapas.md)

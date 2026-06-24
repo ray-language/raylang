@@ -564,7 +564,13 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `get -> Option<V>` en el prelude); `len` extendido. UFCS gratis. `map_new()` es **indeterminado**
     (como `[]`/`None`): su tipo lo fija el esperado (`check_expr_expected`); clave hashable validada en
     `ensure_type` (`Map<float,_>` se rechaza). Oráculo + estrés de GC. `print` de Map **diferido** (no
-    printable). Ejemplo `examples/mapa.ray`. Falta **M13.1b**: `remove`/`keys`/`values`.
+    printable). Ejemplo `examples/mapa.ray`.
+  - **M13.1b COMPLETO** (343 tests lib): **recorrido de Map** — `__map_remove -> [V]` (+ `remove ->
+    Option<V>` en el prelude), `keys -> [K]`, `values -> [V]` (opcodes `MapRemove`/`MapKeys`/
+    `MapValues`; asignan heap → estrés de GC). `MapKey` gana `Ord`: `keys` ordenada y `values` en ese
+    mismo orden de clave (casan posición a posición) → **determinista** pese al `HashMap` (oráculo).
+    Libro `m13/mapas.md`. **M13.1 COMPLETO. M13 COMPLETO** (13.1 + 13.2 + 13.3a; diferido 13.3b TCO).
+    Habilitadores de self-hosting listos; siguiente gran hito: **self-hosting** (capstone) o **M12**.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

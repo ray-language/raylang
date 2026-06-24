@@ -819,6 +819,20 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     propias**. Sub-fases: **a** núcleo (primitivos, control, llamadas, recursión) → **b** datos
     (arreglos/structs/enums/match) → **c** primera clase (closures, orden superior) → **d** despacho
     dinámico (tabla de métodos, UFCS/métodos/`dyn`/`@derive`/bounds). Driver `selfhost/run.ray`.
+  - **M14.4a COMPLETO** (347 lib + 5 en `tests/selfhost_interpreter.rs`): **intérprete auto-alojado —
+    núcleo**. `selfhost/interpreter.ray` ejecuta el AST validado → `Result<Value, RuntimeError>`. `Value`
+    = enum de raylang (primitivos `VInt`/`VFloat`/`VBool`/`VStr`/`VChar`/`VUnit`); flujo `enum Flow {
+    FReturn, FError }` propagado por `?` (como el `Flow` de Rust, sin `TailCall`). `struct Interp { funcs:
+    Map<string,Func>, scopes: [Map<string,Value>] }` mutado por referencia. Cubre literales, aritmética/
+    comparación/lógica (cortocircuito de `&&`/`||`, div/módulo por cero → error de ejecución), variables
+    (`define`/`lookup_opt`/`assign`; mutación; shadowing), if/while/block/return, llamadas nombradas +
+    recursión (`call_named` guarda/restaura `scopes` → scoping léxico; desenvuelve `FReturn`), builtins
+    print/eprint/to_string/panic. Las formas no-núcleo terminan en `panic` con su sub-fase. Driver
+    `selfhost/run.ray` (lex→parse→check→ejecuta; exit = `int` de `main`). **Oráculo CONDUCTUAL**
+    (`tests/selfhost_interpreter.rs`): mismo stdout + código de salida que el runner de Rust sobre fib/
+    fizzbuzz/gcd/primes + snippets. Corpus solo usa lo que aceptan **ambos** checkers (print/eprint;
+    `to_string` lo rechaza el checker auto-alojado de M14.3 → fuera del corpus). Diferido: b (datos), c
+    (primera clase), d (despacho dinámico); TCO/`MAX_CALL_DEPTH` (el host ya da TCO + pila grande).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

@@ -2725,3 +2725,23 @@ falta para que recursiones de cola profundas no desborden el intérprete *anfitr
 
 Tras el intérprete, el self-hosting está **cerrado** (raylang lexea/parsea/chequea/ejecuta raylang). La
 **VM auto-alojada** (M14.5) quedaría como capstone-del-capstone opcional.
+
+- **M14.4a COMPLETO** — núcleo. `selfhost/interpreter.ray` ejecuta el AST validado y devuelve
+  `Result<Value, RuntimeError>`. `Value` es un enum de raylang (M14.4a: primitivos `VInt`/`VFloat`/
+  `VBool`/`VStr`/`VChar`/`VUnit`); el flujo se modela con `enum Flow { FReturn, FError }` propagado por
+  el canal de error de `Result` (`?`), como el `Flow` de Rust (sin `TailCall`: TCO diferido). El estado
+  es un `struct Interp { funcs: Map<string,Func>, scopes: [Map<string,Value>] }` mutado por referencia
+  (como `Checker`/`Parser`/`Lexer`). Cubre: literales, aritmética/comparación/lógica (con **cortocircuito**
+  de `&&`/`||`, división/módulo por cero como error de ejecución), variables (`define`/`lookup_opt`/
+  `assign` sobre la pila de ámbitos; `var`/mutación; shadowing por celda nueva al declarar), `if`/`while`/
+  `block`/`return`, llamadas a funciones nombradas + recursión (`call_named`: guarda/restaura `scopes` →
+  scoping léxico; desenvuelve `FReturn` en el valor de la función), builtins `print`/`eprint`/`to_string`/
+  `panic` (`panic` interceptado en la llamada, con su posición). Las formas no-núcleo (`EIndex`/`EField`/
+  `EArray`/`EStructLit`/`EFunc`/`EMatch`/`ETry`, UFCS/llamada indirecta) terminan en `panic` con su
+  sub-fase destino. Driver `selfhost/run.ray` (lex→parse→check→**ejecuta**; código de salida = el `int`
+  de `main`). **Oráculo conductual** (`tests/selfhost_interpreter.rs`, 5 tests): los 4 ejemplos del
+  núcleo (fib/fizzbuzz/gcd/primes) + snippets (aritmética/floats/lógica/comparación/concat, mutación/
+  shadowing, llamadas/recursión/recursión-mutua, código de salida) → mismo stdout + exit que el runner de
+  Rust. El corpus usa solo lo que aceptan **ambos** checkers (print/eprint; `to_string` lo rechaza el
+  checker auto-alojado de M14.3 → fuera del corpus). Diferido: M14.4b (datos), c (primera clase), d
+  (despacho dinámico); TCO/trampolín y `MAX_CALL_DEPTH` (el host ya da TCO + pila grande).

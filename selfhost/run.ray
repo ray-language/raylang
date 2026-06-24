@@ -1,0 +1,69 @@
+// Driver del back-end auto-alojado (M14.4): lee un archivo (su ruta es el primer argumento), lo
+// lexea + parsea + chequea + EJECUTA con el compilador EN raylang de punta a punta.
+//
+// El código de salida es el `int` que devuelve el `main` del programa (0 si es unit) — igual que el
+// runner de Rust (`raylang prog.ray`). Las salidas de `print` van a stdout; los errores (léxico/
+// sintáctico/tipos/ejecución) a stderr.
+//
+// El test `tests/selfhost_interpreter.rs` compara, para cada `.ray`, el stdout + el código de salida de
+// este driver contra los del runner de Rust (el ORÁCULO conductual; ver DESIGN §23.5).
+
+from lexer import lex, LexError;
+from parser import parse, Program, ParseError;
+from checker import check, TypeError;
+from interpreter import run, Value, RuntimeError;
+
+// El código de salida a partir del valor de `main`: el entero si es int, 0 en otro caso (como Rust).
+fn exit_code(v: Value) -> int {
+    match (v) {
+        Value.VInt(n) => n,
+        _ => 0,
+    }
+}
+
+fn main() -> int {
+    let argv = args();
+    if (len(argv) == 0) {
+        eprint("uso: raylang selfhost/run.ray <archivo>");
+        return 1;
+    }
+    match (read_file(argv[0])) {
+        Result.Ok(src) => {
+            match (lex(src)) {
+                Result.Ok(toks) => {
+                    match (parse(toks)) {
+                        Result.Ok(prog) => {
+                            match (check(prog)) {
+                                Result.Ok(_) => {
+                                    match (run(prog)) {
+                                        Result.Ok(v) => exit_code(v),
+                                        Result.Err(re) => {
+                                            eprint("error en ejecución en " + to_string(re.line) + ":" + to_string(re.col) + ": " + re.msg);
+                                            70
+                                        },
+                                    }
+                                },
+                                Result.Err(te) => {
+                                    eprint("error de tipos en " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
+                                    65
+                                },
+                            }
+                        },
+                        Result.Err(pe) => {
+                            eprint("error de sintaxis en " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
+                            65
+                        },
+                    }
+                },
+                Result.Err(le) => {
+                    eprint("error léxico en " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg);
+                    65
+                },
+            }
+        },
+        Result.Err(msg) => {
+            eprint(msg);
+            66
+        },
+    }
+}

@@ -1,0 +1,522 @@
+// El intérprete (back-end de ejecución) de raylang, escrito EN raylang (self-hosting, M14.4).
+//
+// Cuarta y última fase del bootstrap: AST validado (del parser/checker auto-alojados) → EJECUCIÓN.
+// Port del intérprete tree-walking de Rust (`src/interpreter.rs`, el motor simple/oráculo). Cierra el
+// self-hosting: raylang lexea/parsea/chequea/ejecuta raylang de punta a punta.
+//
+// DECISIÓN CLAVE (DESIGN §23.5): RESOLUCIÓN EN RUNTIME, no lowering. El checker auto-alojado es solo un
+// validador (omitió el lowering de M9). En vez de reproducir M9, este intérprete resuelve construcción
+// de enum / UFCS / métodos / `dyn` en tiempo de evaluación mirando la ETIQUETA del valor → `dyn`/bounds/
+// genéricos quedan como no-ops (el intérprete nunca consulta tipos; el borrado ocurre solo).
+//
+// FACTIBLE porque CABALGA SOBRE EL HOST: el `Value` es un enum de raylang en el heap de la VM
+// anfitriona (su GC lo recolecta) y la semántica de referencia (M3) da gratis lo que en Rust pide
+// `Rc<RefCell<…>>`. No reimplementamos GC ni celdas.
+//
+// ORÁCULO CONDUCTUAL (no texto canónico): la misma `.ray` por ambos pipelines (Rust `cargo run` vs
+// `raylang selfhost/run.ray`), comparar stdout + código de salida. Ver `tests/selfhost_interpreter.rs`.
+//
+// M14.4a (esta versión): NÚCLEO. Primitivos (int/float/bool/string/char/unit), aritmética/comparación/
+// lógica (con cortocircuito), variables (let/var, mutabilidad por ámbito), if/while/block/return,
+// llamadas a funciones nombradas + recursión, builtins print/eprint/to_string/panic. Cubre fib/
+// fizzbuzz/gcd/primes. Diferido: datos (M14.4b: arreglos/structs/enums/match), primera clase (M14.4c:
+// closures/orden superior), despacho dinámico (M14.4d: UFCS/métodos/dyn/@derive). El trampolín de cola
+// (TCO) y el límite MAX_CALL_DEPTH también se difieren (el host ya da TCO + pila grande).
+
+from parser import Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp;
+
+// =====================================================================
+// Valores en tiempo de ejecución y señales de flujo
+// =====================================================================
+
+// Un valor del intérprete (espejo del `Value` de Rust). En M14.4a solo los primitivos; los compuestos
+// (arreglo/struct/enum/función/closure/map) llegan en sub-fases posteriores.
+pub enum Value {
+    VInt(int),
+    VFloat(float),
+    VBool(bool),
+    VStr(string),
+    VChar(char),
+    VUnit,
+}
+
+// Error en tiempo de ejecución con ubicación (espejo de `RuntimeError` en Rust).
+pub struct RuntimeError { msg: string, line: int, col: int }
+
+// Lo que interrumpe la evaluación normal (espejo de `Flow` en Rust, sin `TailCall`: TCO diferido):
+//   - FReturn(v): un `return` propagándose hacia el borde de la función.
+//   - FError(e):  un error de ejecución real, hasta el tope.
+// Ambos viajan por el canal de error de `Result` (`?` los desenrolla); el borde de la función los
+// distingue (un `return` produce el valor; un error se reporta).
+enum Flow { FReturn(Value), FError(RuntimeError) }
+
+// El estado del intérprete: la tabla de funciones por nombre y la pila de ámbitos (la del último es la
+// más interna). Es un struct mutado por referencia (como el `Checker`/`Parser`/`Lexer` auto-alojados).
+struct Interp { funcs: Map<string, Func>, scopes: [Map<string, Value>] }
+
+fn rt_error(line: int, col: int, msg: string) -> RuntimeError {
+    RuntimeError { msg: msg, line: line, col: col }
+}
+
+// Una pila de ámbitos vacía, ya tipada (para reiniciar `c.scopes`; el `[]` en asignación no infiere).
+fn empty_scopes() -> [Map<string, Value>] { [] }
+
+// Una lista de valores vacía, ya tipada (para los argumentos de `main`).
+fn no_vals() -> [Value] { [] }
+
+// =====================================================================
+// Presentación e igualdad de valores
+// =====================================================================
+
+// Representación textual de un valor, idéntica al `Display` de `Value` en Rust (la usa `print`/
+// `to_string`). Los flotantes usan el `to_string` del host = el `Display` de f64 de Rust → coincide.
+fn value_str(v: Value) -> string {
+    match (v) {
+        Value.VInt(n) => to_string(n),
+        Value.VFloat(x) => to_string(x),
+        Value.VBool(b) => to_string(b),
+        Value.VStr(s) => s,
+        Value.VChar(ch) => to_string(ch),
+        Value.VUnit => "()",
+    }
+}
+
+// Igualdad estructural de valores (para `==`/`!=`). En M14.4a solo primitivos; el checker garantiza que
+// ambos lados son del mismo tipo, así que las ramas cruzadas no se ejercitan en programas válidos.
+fn values_equal(a: Value, b: Value) -> bool {
+    match (a) {
+        Value.VInt(x) => match (b) { Value.VInt(y) => x == y, _ => false },
+        Value.VFloat(x) => match (b) { Value.VFloat(y) => x == y, _ => false },
+        Value.VBool(x) => match (b) { Value.VBool(y) => x == y, _ => false },
+        Value.VStr(x) => match (b) { Value.VStr(y) => x == y, _ => false },
+        Value.VChar(x) => match (b) { Value.VChar(y) => x == y, _ => false },
+        Value.VUnit => match (b) { Value.VUnit => true, _ => false },
+    }
+}
+
+// Desempaqueta un valor que el checker garantizó string (para `panic`).
+fn as_str(v: Value) -> string {
+    match (v) { Value.VStr(s) => s, _ => panic("se esperaba un string") }
+}
+
+// =====================================================================
+// Ámbitos: declarar, buscar, asignar
+// =====================================================================
+
+fn new_scope() -> Map<string, Value> { map_new() }
+
+fn push_scope(c: Interp) { push(c.scopes, new_scope()); }
+
+fn pop_scope(c: Interp) {
+    let removed = pop(c.scopes);
+}
+
+// Declara una variable en el ámbito más interno. En M14.4a las celdas son el propio valor (sin
+// compartición); la captura por referencia de closures (celdas compartidas) llega en M14.4c.
+fn define(c: Interp, name: string, v: Value) {
+    let top = c.scopes[len(c.scopes) - 1];
+    insert(top, name, v);
+}
+
+// Busca una variable de adentro hacia afuera; `None` si no es una variable (en ese caso el nombre es
+// una función usada como valor, diferido a M14.4c).
+fn lookup_opt(c: Interp, name: string) -> Option<Value> {
+    var i = len(c.scopes) - 1;
+    while (i >= 0) {
+        match (get(c.scopes[i], name)) {
+            Option.Some(v) => { return Option.Some(v); },
+            Option.None => {},
+        }
+        i = i - 1;
+    }
+    Option.None
+}
+
+// Asigna a una variable ya declarada, reemplazando su valor en el ámbito que la contiene.
+fn assign(c: Interp, name: string, v: Value) {
+    var i = len(c.scopes) - 1;
+    while (i >= 0) {
+        match (get(c.scopes[i], name)) {
+            Option.Some(_) => { insert(c.scopes[i], name, v); return; },
+            Option.None => {},
+        }
+        i = i - 1;
+    }
+}
+
+// =====================================================================
+// Operadores
+// =====================================================================
+
+fn cmp_int(op: BinOp, a: int, b: int) -> bool {
+    match (op) {
+        BinOp.Lt => a < b, BinOp.Le => a <= b, BinOp.Gt => a > b, BinOp.Ge => a >= b,
+        _ => panic("cmp_int: operador inesperado"),
+    }
+}
+
+fn cmp_float(op: BinOp, a: float, b: float) -> bool {
+    match (op) {
+        BinOp.Lt => a < b, BinOp.Le => a <= b, BinOp.Gt => a > b, BinOp.Ge => a >= b,
+        _ => panic("cmp_float: operador inesperado"),
+    }
+}
+
+fn cmp_str(op: BinOp, a: string, b: string) -> bool {
+    match (op) {
+        BinOp.Lt => a < b, BinOp.Le => a <= b, BinOp.Gt => a > b, BinOp.Ge => a >= b,
+        _ => panic("cmp_str: operador inesperado"),
+    }
+}
+
+fn cmp_char(op: BinOp, a: char, b: char) -> bool {
+    match (op) {
+        BinOp.Lt => a < b, BinOp.Le => a <= b, BinOp.Gt => a > b, BinOp.Ge => a >= b,
+        _ => panic("cmp_char: operador inesperado"),
+    }
+}
+
+// `+`: aritmética entera/flotante o concatenación de strings (M11.1a). Arreglos → M14.4b.
+fn eval_add(l: Value, r: Value) -> Result<Value, Flow> {
+    match (l) {
+        Value.VInt(a) => match (r) { Value.VInt(b) => Result.Ok(Value.VInt(a + b)), _ => panic("+ inválido") },
+        Value.VFloat(a) => match (r) { Value.VFloat(b) => Result.Ok(Value.VFloat(a + b)), _ => panic("+ inválido") },
+        Value.VStr(a) => match (r) { Value.VStr(b) => Result.Ok(Value.VStr(a + b)), _ => panic("+ inválido") },
+        _ => panic("+ inválido"),
+    }
+}
+
+fn arith_int(op: BinOp, a: int, b: int, line: int, col: int) -> Result<Value, Flow> {
+    match (op) {
+        BinOp.Sub => Result.Ok(Value.VInt(a - b)),
+        BinOp.Mul => Result.Ok(Value.VInt(a * b)),
+        BinOp.Div => {
+            if (b == 0) { return Result.Err(Flow.FError(rt_error(line, col, "división entera por cero"))); }
+            Result.Ok(Value.VInt(a / b))
+        },
+        BinOp.Rem => {
+            if (b == 0) { return Result.Err(Flow.FError(rt_error(line, col, "módulo por cero"))); }
+            Result.Ok(Value.VInt(a % b))
+        },
+        _ => panic("arith_int: operador inesperado"),
+    }
+}
+
+fn arith_float(op: BinOp, a: float, b: float) -> Result<Value, Flow> {
+    match (op) {
+        BinOp.Sub => Result.Ok(Value.VFloat(a - b)),
+        BinOp.Mul => Result.Ok(Value.VFloat(a * b)),
+        BinOp.Div => Result.Ok(Value.VFloat(a / b)),
+        BinOp.Rem => Result.Ok(Value.VFloat(a % b)),
+        _ => panic("arith_float: operador inesperado"),
+    }
+}
+
+// Sub/Mul/Div/Rem sobre dos enteros o dos flotantes.
+fn eval_arith(op: BinOp, l: Value, r: Value, line: int, col: int) -> Result<Value, Flow> {
+    match (l) {
+        Value.VInt(a) => match (r) { Value.VInt(b) => arith_int(op, a, b, line, col), _ => panic("aritmética inválida") },
+        Value.VFloat(a) => match (r) { Value.VFloat(b) => arith_float(op, a, b), _ => panic("aritmética inválida") },
+        _ => panic("aritmética inválida"),
+    }
+}
+
+// Lt/Le/Gt/Ge sobre números, strings (lexicográfico) o char (code point) (M11.7d).
+fn eval_cmp(op: BinOp, l: Value, r: Value) -> Result<Value, Flow> {
+    match (l) {
+        Value.VInt(a) => match (r) { Value.VInt(b) => Result.Ok(Value.VBool(cmp_int(op, a, b))), _ => panic("comparación inválida") },
+        Value.VFloat(a) => match (r) { Value.VFloat(b) => Result.Ok(Value.VBool(cmp_float(op, a, b))), _ => panic("comparación inválida") },
+        Value.VStr(a) => match (r) { Value.VStr(b) => Result.Ok(Value.VBool(cmp_str(op, a, b))), _ => panic("comparación inválida") },
+        Value.VChar(a) => match (r) { Value.VChar(b) => Result.Ok(Value.VBool(cmp_char(op, a, b))), _ => panic("comparación inválida") },
+        _ => panic("comparación inválida"),
+    }
+}
+
+// Un operador binario. Los lógicos (`&&`/`||`) hacen CORTOCIRCUITO → se tratan antes de evaluar ambos.
+fn eval_binary(c: Interp, op: BinOp, left: Expr, right: Expr, line: int, col: int) -> Result<Value, Flow> {
+    match (op) {
+        BinOp.And => {
+            if (!eval_bool(c, left)?) { return Result.Ok(Value.VBool(false)); }
+            return Result.Ok(Value.VBool(eval_bool(c, right)?));
+        },
+        BinOp.Or => {
+            if (eval_bool(c, left)?) { return Result.Ok(Value.VBool(true)); }
+            return Result.Ok(Value.VBool(eval_bool(c, right)?));
+        },
+        _ => {},
+    }
+    let l = eval_expr(c, left)?;
+    let r = eval_expr(c, right)?;
+    match (op) {
+        BinOp.Add => eval_add(l, r),
+        BinOp.Sub => eval_arith(op, l, r, line, col),
+        BinOp.Mul => eval_arith(op, l, r, line, col),
+        BinOp.Div => eval_arith(op, l, r, line, col),
+        BinOp.Rem => eval_arith(op, l, r, line, col),
+        BinOp.Eq => Result.Ok(Value.VBool(values_equal(l, r))),
+        BinOp.Ne => Result.Ok(Value.VBool(!values_equal(l, r))),
+        BinOp.Lt => eval_cmp(op, l, r),
+        BinOp.Le => eval_cmp(op, l, r),
+        BinOp.Gt => eval_cmp(op, l, r),
+        BinOp.Ge => eval_cmp(op, l, r),
+        BinOp.And => panic("inalcanzable: && ya tratado"),
+        BinOp.Or => panic("inalcanzable: || ya tratado"),
+    }
+}
+
+fn eval_unary(c: Interp, op: UnOp, inner: Expr) -> Result<Value, Flow> {
+    let v = eval_expr(c, inner)?;
+    match (op) {
+        UnOp.Neg => match (v) {
+            Value.VInt(n) => Result.Ok(Value.VInt(-n)),
+            Value.VFloat(x) => Result.Ok(Value.VFloat(-x)),
+            _ => panic("negación inválida"),
+        },
+        UnOp.Not => match (v) {
+            Value.VBool(b) => Result.Ok(Value.VBool(!b)),
+            _ => panic("negación lógica inválida"),
+        },
+    }
+}
+
+// =====================================================================
+// Auxiliares de evaluación tipada
+// =====================================================================
+
+fn eval_bool(c: Interp, e: Expr) -> Result<bool, Flow> {
+    let v = eval_expr(c, e)?;
+    match (v) { Value.VBool(b) => Result.Ok(b), _ => panic("se esperaba una condición booleana") }
+}
+
+// =====================================================================
+// Llamadas y builtins
+// =====================================================================
+
+fn is_builtin(name: string) -> bool {
+    name == "print" || name == "eprint" || name == "to_string" || name == "panic"
+}
+
+// Evalúa la lista de argumentos en orden (cortocircuitando ante un `return`/error).
+fn eval_args(c: Interp, args: [Expr]) -> Result<[Value], Flow> {
+    var vals: [Value] = [];
+    var i = 0;
+    while (i < len(args)) {
+        let v = eval_expr(c, args[i])?;
+        push(vals, v);
+        i = i + 1;
+    }
+    Result.Ok(vals)
+}
+
+// Ejecuta un builtin con sus argumentos. `panic` se intercepta aquí (necesita la posición de la llamada
+// y debe producir un FError, no un Value), igual que en el intérprete de Rust.
+fn call_builtin(c: Interp, name: string, args: [Expr], line: int, col: int) -> Result<Value, Flow> {
+    let vals = eval_args(c, args)?;
+    if (name == "panic") {
+        return Result.Err(Flow.FError(rt_error(line, col, as_str(vals[0]))));
+    }
+    if (name == "print") {
+        print(value_str(vals[0]));
+        return Result.Ok(Value.VUnit);
+    }
+    if (name == "eprint") {
+        eprint(value_str(vals[0]));
+        return Result.Ok(Value.VUnit);
+    }
+    if (name == "to_string") {
+        return Result.Ok(Value.VStr(value_str(vals[0])));
+    }
+    panic("builtin no implementado en M14.4a: " + name)
+}
+
+// Una llamada. M14.4a: camino directo (nombre que no tapa una variable local → builtin o función
+// global). El camino indirecto (valor-función, closures) y la resolución dinámica (UFCS/métodos) llegan
+// en M14.4c/d.
+fn eval_call(c: Interp, callee: Expr, args: [Expr]) -> Result<Value, Flow> {
+    match (callee.kind) {
+        EKind.EIdent(name) => {
+            match (lookup_opt(c, name)) {
+                Option.Some(_) => panic("M14.4c: función como valor / closure"),
+                Option.None => {
+                    if (is_builtin(name)) {
+                        call_builtin(c, name, args, callee.line, callee.col)
+                    } else {
+                        match (get(c.funcs, name)) {
+                            Option.Some(f) => {
+                                let vals = eval_args(c, args)?;
+                                call_named(c, f, vals)
+                            },
+                            Option.None => panic("M14.4c: función como valor / closure"),
+                        }
+                    }
+                },
+            }
+        },
+        _ => panic("M14.4c: llamada indirecta / UFCS / método"),
+    }
+}
+
+// Ejecuta una función nombrada con sus argumentos ya evaluados. Scoping léxico: arranca con una pila de
+// ámbitos NUEVA (no la de quien llama); se guarda la actual y se restaura al volver. Un `return` interno
+// (FReturn) se desenvuelve aquí en el valor de la función.
+fn call_named(c: Interp, f: Func, args: [Value]) -> Result<Value, Flow> {
+    let saved = c.scopes;
+    c.scopes = empty_scopes();
+    push_scope(c); // ámbito de los parámetros
+    var i = 0;
+    while (i < len(f.params)) {
+        define(c, f.params[i].name, args[i]);
+        i = i + 1;
+    }
+    let result = exec_block(c, f.body); // empuja, encima, el ámbito del cuerpo
+    c.scopes = saved; // restaurar el entorno de quien llama
+    match (result) {
+        Result.Ok(v) => Result.Ok(v),
+        Result.Err(flow) => match (flow) {
+            Flow.FReturn(v) => Result.Ok(v),
+            Flow.FError(e) => Result.Err(Flow.FError(e)),
+        },
+    }
+}
+
+// =====================================================================
+// Sentencias y bloques
+// =====================================================================
+
+fn exec_stmt(c: Interp, s: Stmt) -> Result<Value, Flow> {
+    match (s.kind) {
+        SKind.SLet(name, _, value, _) => {
+            let v = eval_expr(c, value)?;
+            define(c, name, v);
+            Result.Ok(Value.VUnit)
+        },
+        SKind.SAssign(target, value) => {
+            let v = eval_expr(c, value)?;
+            match (target.kind) {
+                EKind.EIdent(name) => { assign(c, name, v); Result.Ok(Value.VUnit) },
+                _ => panic("M14.4b: asignación a índice/campo"),
+            }
+        },
+        SKind.SReturn(opt) => {
+            match (opt) {
+                Option.Some(e) => {
+                    let v = eval_expr(c, e)?;
+                    Result.Err(Flow.FReturn(v))
+                },
+                Option.None => Result.Err(Flow.FReturn(Value.VUnit)),
+            }
+        },
+        SKind.SExpr(e) => {
+            eval_expr(c, e)?;
+            Result.Ok(Value.VUnit)
+        },
+    }
+}
+
+// Ejecuta las sentencias de un bloque en orden; el primer `return`/error corta y se propaga (vía `?`).
+fn run_stmts(c: Interp, b: Block) -> Result<Value, Flow> {
+    var i = 0;
+    while (i < len(b.stmts)) {
+        exec_stmt(c, b.stmts[i])?;
+        i = i + 1;
+    }
+    Result.Ok(Value.VUnit)
+}
+
+// El cuerpo de un bloque en su propio ámbito: corre las sentencias y luego la expresión final (`tail`),
+// o `Unit` si no la hay.
+fn exec_block_inner(c: Interp, b: Block) -> Result<Value, Flow> {
+    run_stmts(c, b)?;
+    match (b.tail) {
+        Option.Some(e) => eval_expr(c, e),
+        Option.None => Result.Ok(Value.VUnit),
+    }
+}
+
+// Ejecuta un bloque empujando/quitando su ámbito (en todos los caminos, también al propagar un error).
+fn exec_block(c: Interp, b: Block) -> Result<Value, Flow> {
+    push_scope(c);
+    let r = exec_block_inner(c, b);
+    pop_scope(c);
+    r
+}
+
+// Un bucle `while`: re-evalúa la condición; el valor del cuerpo se descarta, pero un `return`/error
+// dentro se propaga.
+fn eval_while(c: Interp, cond: Expr, body: Block) -> Result<Value, Flow> {
+    var go = eval_bool(c, cond)?;
+    while (go) {
+        exec_block(c, body)?;
+        go = eval_bool(c, cond)?;
+    }
+    Result.Ok(Value.VUnit)
+}
+
+// =====================================================================
+// Expresiones
+// =====================================================================
+
+fn eval_expr(c: Interp, expr: Expr) -> Result<Value, Flow> {
+    match (expr.kind) {
+        EKind.EInt(n) => Result.Ok(Value.VInt(n)),
+        EKind.EFloat(x) => Result.Ok(Value.VFloat(x)),
+        EKind.EBool(b) => Result.Ok(Value.VBool(b)),
+        EKind.EStr(s) => Result.Ok(Value.VStr(s)),
+        EKind.EChar(ch) => Result.Ok(Value.VChar(ch)),
+        EKind.EIdent(name) => {
+            match (lookup_opt(c, name)) {
+                Option.Some(v) => Result.Ok(v),
+                Option.None => panic("M14.4c: función como valor '" + name + "'"),
+            }
+        },
+        EKind.EUnary(op, inner) => eval_unary(c, op, inner),
+        EKind.EBinary(op, l, r) => eval_binary(c, op, l, r, expr.line, expr.col),
+        EKind.ECall(callee, cargs) => eval_call(c, callee, cargs),
+        EKind.EIf(cond, then_b, else_o) => {
+            if (eval_bool(c, cond)?) {
+                exec_block(c, then_b)
+            } else {
+                match (else_o) {
+                    Option.Some(e) => eval_expr(c, e),
+                    Option.None => Result.Ok(Value.VUnit),
+                }
+            }
+        },
+        EKind.EWhile(cond, body) => eval_while(c, cond, body),
+        EKind.EBlock(b) => exec_block(c, b),
+        EKind.EIndex(_, _) => panic("M14.4b: indexar"),
+        EKind.EField(_, _) => panic("M14.4b: acceso a campo"),
+        EKind.EArray(_) => panic("M14.4b: literal de arreglo"),
+        EKind.EStructLit(_, _) => panic("M14.4b: literal de struct"),
+        EKind.EFunc(_) => panic("M14.4c: función anónima"),
+        EKind.EMatch(_, _) => panic("M14.4b: match"),
+        EKind.ETry(_) => panic("M14.4c: operador ?"),
+    }
+}
+
+// =====================================================================
+// Punto de entrada
+// =====================================================================
+
+// Ejecuta el programa llamando a `main` y devuelve su valor (o un error de ejecución). El checker ya
+// garantizó que `main` existe.
+pub fn run(prog: Program) -> Result<Value, RuntimeError> {
+    let c = Interp { funcs: map_new(), scopes: empty_scopes() };
+    var i = 0;
+    while (i < len(prog.funcs)) {
+        insert(c.funcs, prog.funcs[i].name, prog.funcs[i]);
+        i = i + 1;
+    }
+    match (get(c.funcs, "main")) {
+        Option.Some(m) => {
+            match (call_named(c, m, no_vals())) {
+                Result.Ok(v) => Result.Ok(v),
+                Result.Err(flow) => match (flow) {
+                    Flow.FReturn(v) => Result.Ok(v),
+                    Flow.FError(e) => Result.Err(e),
+                },
+            }
+        },
+        Option.None => Result.Err(rt_error(0, 0, "no hay función 'main'")),
+    }
+}

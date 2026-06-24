@@ -2305,3 +2305,48 @@ cubre la recursión de cola, que es el caso que importa; solo valdría la pena e
 | M13.3 recursión | Sí (hilo + límites) | Sí (mismo error) | Pequeño-medio |
 
 El self-hosting (capstone, §7 de IDEAS) queda **después de M13** y sigue siendo ortogonal a M12.
+
+## 23. M14 — Self-hosting (bootstrap)
+
+El capstone (IDEAS §7): reescribir el compilador de raylang **en raylang**. Vive en la rama
+`feature/self-hosting` y en el directorio `selfhost/`. Se ataca **fase a fase** (lexer → parser →
+checker → …), cada una validada contra su equivalente en Rust como **oráculo**: para la misma
+entrada, las dos implementaciones deben producir la misma salida. Es el mismo principio del oráculo
+VM↔intérprete, ahora aplicado raylang↔Rust.
+
+**Estrategia del oráculo (texto canónico).** No se exponen los tipos internos de Rust a raylang.
+En su lugar, cada fase define un **formato de texto canónico** de su salida, implementado *idéntico*
+en los dos lados; el test compara los textos. Para el lexer: un token por línea, `<KIND>@<línea>:
+<col>` (`Let@1:1`, `Int(42)@2:3`, `Str("a\nb")@..`); las cadenas/caracteres se re-escapan igual en
+ambos lados. Los flotantes se formatean con el `Display` de `f64` de Rust en los dos motores → caza
+exacta (de ahí que `parse_float` fuera prerrequisito).
+
+### 23.1 M14.1 — El lexer (`selfhost/lexer.ray`)
+
+Port casi 1:1 de `src/lexer.rs`. **Viabilidad clave** (lo que el lenguaje ya daba): structs con
+**mutación de campos por referencia** (sin `var`) para el estado del cursor; `chars`/indexar string/
+`len` (M11.4c) para recorrer; comparación de `char` (M11.7d) para clasificar; `parse_int`/
+`parse_float` para los literales. **Diferencias de port** (anotadas en el archivo): no hay `match`
+sobre literales de carácter → cadenas `if/else`; el fin de entrada se maneja con guardas
+`at_end(lx)` + indexación directa (raylang no acepta `'\0'` como literal centinela).
+
+- **Driver** `selfhost/lex_dump.ray`: importa el lexer, lee un archivo (`args()[0]` + `read_file`),
+  imprime los tokens en el formato canónico. Es el cliente que el test ejecuta por subproceso.
+- **Oráculo** `tests/selfhost_lexer.rs`: para cada fuente (snippets + **archivos reales**: ejemplos
+  y el *propio* `lexer.ray`/`lex_dump.ray`) compara el stdout del lexer-en-raylang con `canonical()`
+  (el lexer de Rust formateado igual). Que el lexer en raylang **se lexee a sí mismo** igual que el
+  de Rust es la señal de fidelidad.
+
+**Dos prerrequisitos de lenguaje** que el bootstrap destapó (ambos aditivos, mejoras legítimas):
+1. **`parse_float`** (builtin, ya descrito) — el lexer necesita parsear flotantes.
+2. **Escape `\r`** en cadenas y literales de carácter (lexer de Rust + el auto-alojado) — estándar y
+   necesario para que el propio código del lexer (que lo usa) lexee.
+
+**Dos huecos de divergencia cerrados** (extienden M13.2a, que solo cubría ramas de `if`): un brazo de
+`match` que termina en `panic`/`return` ahora **cede el tipo** a los demás (igual que una rama de
+`if`). Sin esto, `match (o) { Some(v) => v, None => panic("…") }` no tipaba —y el lexer lo usa por
+todas partes—.
+
+**Próximas fases:** errores del lexer como valores (`Result` + oráculo sobre entradas inválidas),
+luego el **parser** (AST en raylang, oráculo sobre un volcado canónico del AST), el **checker**, y
+finalmente ejecutar. Cada una, su oráculo.

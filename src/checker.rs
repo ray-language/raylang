@@ -1400,7 +1400,13 @@ impl Checker {
             };
             self.pop_scope();
             let body_ty = body_ty?;
-            // Todos los brazos convergen a un mismo tipo (el tipo del match).
+            // M13.2b/M14: un brazo que diverge (termina en `panic`/`return`) no fija el tipo del
+            // match; lo ceden los demás (igual que una rama de `if`). Así
+            // `match (o) { Some(v) => v, None => panic("…") }` cuadra.
+            if expr_diverges(&arm.body) {
+                continue;
+            }
+            // Todos los brazos (no divergentes) convergen a un mismo tipo (el tipo del match).
             match &result_ty {
                 None => result_ty = Some(body_ty),
                 Some(prev) if *prev != body_ty => {

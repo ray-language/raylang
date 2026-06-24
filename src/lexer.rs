@@ -240,6 +240,7 @@ impl Lexer {
                     match self.peek() {
                         Some('n') => value.push('\n'),
                         Some('t') => value.push('\t'),
+                        Some('r') => value.push('\r'), // M14: retorno de carro
                         Some('\\') => value.push('\\'),
                         Some('"') => value.push('"'),
                         Some(other) => {
@@ -270,6 +271,7 @@ impl Lexer {
                 let escaped = match self.peek() {
                     Some('n') => '\n',
                     Some('t') => '\t',
+                    Some('r') => '\r', // M14: retorno de carro
                     Some('\\') => '\\',
                     Some('\'') => '\'',
                     Some(other) => return Err(self.error(format!("secuencia de escape inválida '\\{}'", other))),

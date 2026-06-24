@@ -590,6 +590,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `__parse_float -> [float]` opcode `ParseFloat` + envoltorio en el prelude). Prerrequisito del
     lexer (raylang tenía `parse_int` pero no flotantes). Ambos motores usan el `f64` de Rust → el
     oráculo casa. Oráculo `parse_float_oraculo`.
+  - **M14.1 — el lexer auto-alojado** (347 lib + 8 en `tests/selfhost_lexer.rs`): `selfhost/lexer.ray`
+    (port casi 1:1 de `src/lexer.rs`: `TokKind`/`Token` + `lex(src) -> [Token]`) + driver
+    `selfhost/lex_dump.ray` (imprime tokens en formato canónico `<KIND>@<l>:<c>`). **Oráculo** Rust↔
+    raylang en `tests/selfhost_lexer.rs`: compara el formato canónico de ambos lexers sobre snippets
+    y **archivos reales** (ejemplos + el propio `lexer.ray`/`lex_dump.ray` → el lexer se lexea a sí
+    mismo igual que el de Rust). Viabilidad: structs con mutación de campos por referencia (estado del
+    cursor), `chars`/`s[i]`/comparación de char, `parse_int`/`parse_float`. Port: sin `match` sobre
+    literales de char → `if/else`; EOF con guardas `at_end`+indexación (no centinela `'\0'`). Camino
+    feliz (errores → `panic`; `Result` en M14.1b). **Prerrequisitos aditivos destapados**: `parse_float`
+    y **escape `\r`** (lexer de Rust + auto-alojado). **Huecos de divergencia cerrados**: un brazo de
+    `match` que termina en `panic`/`return` cede el tipo a los demás (extiende M13.2a, que solo cubría
+    `if`) — el lexer lo usa por doquier. DESIGN §23.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

@@ -160,8 +160,33 @@ fn dump_expr(e: &Expr) -> String {
                 .collect();
             format!("(match {}{}){}", dump_expr(scrutinee), body, pp)
         }
-        other => panic!("M14.2b no cubre la expresión {:?}", other),
+        ExprKind::Try(inner) => format!("(try {}){}", dump_expr(inner), pp),
+        // EnumLit lo genera el checker, no el parser; no debería aparecer.
+        other => panic!("el parser no debería producir la expresión {:?}", other),
     }
+}
+
+/// Marca ` pub` si el ítem es público, o "".
+fn dump_pub(is_pub: bool) -> &'static str {
+    if is_pub {
+        " pub"
+    } else {
+        ""
+    }
+}
+
+/// Segmento de anotaciones ` (anns (ann derive Eq Show) ...)`, o "" si no hay.
+fn dump_anns(anns: &[Annotation]) -> String {
+    if anns.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from(" (anns");
+    for a in anns {
+        let args: String = a.args.iter().map(|x| format!(" {}", x)).collect();
+        s.push_str(&format!(" (ann {}{})", a.name, args));
+    }
+    s.push(')');
+    s
 }
 
 fn dump_fnexpr(fe: &FnExpr) -> String {
@@ -200,7 +225,9 @@ fn dump_struct(s: &StructDef) -> String {
         .map(|(n, t)| format!(" (field {} {})", n, dump_type(t)))
         .collect();
     format!(
-        "(struct {}{} (fields{})){}",
+        "(struct{}{} {}{} (fields{})){}",
+        dump_pub(s.is_pub),
+        dump_anns(&s.annotations),
         s.name,
         dump_generics(&s.type_params, &s.bounds),
         inner,
@@ -218,7 +245,9 @@ fn dump_enum(e: &EnumDef) -> String {
         })
         .collect();
     format!(
-        "(enum {}{}{}){}",
+        "(enum{}{} {}{}{}){}",
+        dump_pub(e.is_pub),
+        dump_anns(&e.annotations),
         e.name,
         dump_generics(&e.type_params, &e.bounds),
         inner,
@@ -286,7 +315,9 @@ fn dump_params(ps: &[Param]) -> String {
 
 fn dump_func(f: &Function) -> String {
     format!(
-        "(fn {}{} (params{}) {} {}){}",
+        "(fn{}{} {}{} (params{}) {} {}){}",
+        dump_pub(f.is_pub),
+        dump_anns(&f.annotations),
         f.name,
         dump_generics(&f.type_params, &f.bounds),
         dump_params(&f.params),
@@ -313,7 +344,30 @@ fn dump_methodsig(m: &MethodSig) -> String {
 
 fn dump_trait(t: &TraitDef) -> String {
     let inner: String = t.methods.iter().map(|m| format!(" {}", dump_methodsig(m))).collect();
-    format!("(trait {}{}){}", t.name, inner, pos(t.line, t.col))
+    format!("(trait{} {}{}){}", dump_pub(t.is_pub), t.name, inner, pos(t.line, t.col))
+}
+
+fn dump_import(d: &ImportDecl) -> String {
+    let mut s = format!("(import {}", d.module);
+    if let Some(a) = &d.alias {
+        s.push_str(&format!(" as {}", a));
+    }
+    s.push(')');
+    s.push_str(&pos(d.line, d.col));
+    s
+}
+
+fn dump_from_import(fi: &FromImport) -> String {
+    let mut names = String::new();
+    for n in &fi.names {
+        let mut one = format!("(name {}", n.name);
+        if let Some(a) = &n.alias {
+            one.push_str(&format!(" as {}", a));
+        }
+        one.push(')');
+        names.push_str(&format!(" {}{}", one, pos(n.line, n.col)));
+    }
+    format!("(from{} {}{}){}", dump_pub(fi.is_pub), fi.module, names, pos(fi.line, fi.col))
 }
 
 fn dump_impl(b: &ImplBlock) -> String {
@@ -328,25 +382,13 @@ fn dump_impl(b: &ImplBlock) -> String {
     )
 }
 
-/// El volcado canónico de un Program (el oráculo). Orden fijo: funciones, structs, enums, traits,
-/// impls (el driver raylang usa el mismo). M14.2c-1 cubre genéricos/traits/impls; anotaciones/`pub`/
-/// imports → M14.2c-2, así que el corpus no debe traerlos (red de seguridad).
+/// El volcado canónico de un Program (el oráculo). Orden fijo (el driver raylang usa el mismo):
+/// imports, from-imports, funciones, structs, enums, traits, impls. M14.2c-2 cierra el parser:
+/// ya cubre todo el lenguaje, así que no hay red de seguridad de asserts.
 fn dump_program(prog: &Program) -> String {
-    assert!(prog.imports.is_empty(), "M14.2c-1: el corpus no debe tener imports");
-    assert!(prog.from_imports.is_empty(), "M14.2c-1: el corpus no debe tener from-imports");
-    for f in &prog.functions {
-        assert!(f.annotations.is_empty() && !f.is_pub, "M14.2c-1: función sin anotaciones/pub");
-    }
-    for s in &prog.structs {
-        assert!(s.annotations.is_empty() && !s.is_pub, "M14.2c-1: struct sin anotaciones/pub");
-    }
-    for e in &prog.enums {
-        assert!(e.annotations.is_empty() && !e.is_pub, "M14.2c-1: enum sin anotaciones/pub");
-    }
-    for t in &prog.traits {
-        assert!(!t.is_pub, "M14.2c-1: trait sin pub");
-    }
     let mut out: Vec<String> = Vec::new();
+    out.extend(prog.imports.iter().map(dump_import));
+    out.extend(prog.from_imports.iter().map(dump_from_import));
     out.extend(prog.functions.iter().map(dump_func));
     out.extend(prog.structs.iter().map(dump_struct));
     out.extend(prog.enums.iter().map(dump_enum));
@@ -526,27 +568,65 @@ fn traits_e_impls() {
     );
 }
 
-/// El test fuerte: parsear archivos REALES (los ejemplos que solo usan features de M14.2a/b/c-1) y
-/// exigir que el parser en raylang coincida con el de Rust nodo a nodo (posiciones incluidas).
+#[test]
+fn imports_y_modulos() {
+    comparar("import geo;\nfn main() -> int { 0 }", "sp_import.ray");
+    comparar("import geo/formas/circulo as c;\nfn main() -> int { 0 }", "sp_import_path.ray");
+    comparar("from mates import doble, triple as tri;\nfn main() -> int { 0 }", "sp_from.ray");
+    comparar("pub from util import area, Punto;\nfn main() -> int { 0 }", "sp_pubfrom.ray");
+}
+
+#[test]
+fn anotaciones_y_pub() {
+    comparar("@test\nfn prueba() -> bool { true }", "sp_ann.ray");
+    comparar("@derive(Eq, Show)\nstruct Punto { x: int, y: int }", "sp_derive.ray");
+    comparar("pub fn expuesta() -> int { 0 }", "sp_pub_fn.ray");
+    comparar("pub struct S { x: int }", "sp_pub_struct.ray");
+    comparar("pub enum E { A, B }", "sp_pub_enum.ray");
+    comparar("pub trait T { fn m(self) -> int; }", "sp_pub_trait.ray");
+}
+
+#[test]
+fn azucar_try_y_pipeline() {
+    comparar("fn f() -> int { g()? }", "sp_try.ray");
+    comparar("fn f() -> int { a()?.b()? }", "sp_try_chain.ray");
+    // pipeline desazucara: `x |> g() |> h(1)` ≡ `h(g(x), 1)`.
+    comparar("fn f() -> int { x |> g() |> h(1) }", "sp_pipe.ray");
+    comparar("fn f() -> int { x |> g }", "sp_pipe_noargs.ray");
+}
+
+#[test]
+fn referencias_calificadas_por_modulo() {
+    comparar("fn f(p: M.Punto) -> M.Color { p }", "sp_qual_type.ray");
+    comparar("fn f() -> M.Punto { M.Punto { x: 1 } }", "sp_qual_lit.ray");
+    comparar("fn f(c: M.Color) -> int { match (c) { M.Color.Rojo => 0, _ => 1 } }", "sp_qual_pat.ray");
+}
+
+/// El test fuerte de fidelidad: parsear TODOS los ejemplos reales y los PROPIOS fuentes del
+/// self-hosting (el parser se parsea a sí mismo, como el lexer se lexea a sí mismo), exigiendo que
+/// el parser en raylang coincida con el de Rust nodo a nodo (posiciones incluidas).
 #[test]
 fn parsea_archivos_reales_igual_que_el_oraculo() {
-    let archivos = [
-        "examples/fib.ray",
-        "examples/fizzbuzz.ray",
-        "examples/enums.ray",
-        "examples/match_figuras.ray",
-        "examples/genericos.ray",
-        "examples/bounds.ray",
-        "examples/traits.ray",
-        "examples/tipos_genericos.ray",
-        "examples/impls_genericos.ray",
-        "examples/trait_objects.ray",
-        "examples/metodos_por_defecto.ray",
-        "examples/ufcs.ray",
-        "examples/inferencia.ray",
-        "examples/funciones.ray",
-    ];
-    for rel in archivos {
+    let mut archivos: Vec<String> = Vec::new();
+    // Todos los ejemplos.
+    let dir = repo_path("examples");
+    let mut entradas: Vec<_> = std::fs::read_dir(&dir)
+        .expect("lee examples/")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|x| x == "ray").unwrap_or(false))
+        .collect();
+    entradas.sort();
+    for p in entradas {
+        archivos.push(format!("examples/{}", p.file_name().unwrap().to_string_lossy()));
+    }
+    // Los propios fuentes del self-hosting: el parser se parsea a sí mismo.
+    archivos.push("selfhost/lexer.ray".into());
+    archivos.push("selfhost/lex_dump.ray".into());
+    archivos.push("selfhost/parser.ray".into());
+    archivos.push("selfhost/parse_dump.ray".into());
+
+    for rel in &archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);
         let nombre_tmp = format!("sp_real_{}.ray", rel.replace('/', "_"));

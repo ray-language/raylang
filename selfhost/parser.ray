@@ -59,6 +59,7 @@ pub enum EKind {
     EStructLit(string, [FieldInit]),  // Nombre { campo: valor, ... }  (M14.2b)
     EFunc(FnExpr),                    // función anónima fn(...) { ... }  (M14.2b)
     EMatch(Expr, [MatchArm]),         // match (e) { patrón => cuerpo, ... }  (M14.2b)
+    ETry(Expr),                       // expr?  (propagación de errores, M14.2c-2)
 }
 
 // Inicialización de un campo en un literal de struct: `campo: valor`.
@@ -101,8 +102,12 @@ pub struct Bound { param: string, trait_name: string }
 // El resultado de parsear `<T: A, U: B>`: los nombres y los bounds (raylang no tiene tuplas).
 struct Generics { params: [string], bounds: [Bound] }
 
-// Una función de nivel superior. `type_params`/`bounds` para genéricos (M14.2c-1; vacíos si no).
+// Una anotación `@nombre[(args)]` adherida a una declaración (M14.2c-2).
+pub struct Annotation { name: string, args: [string], line: int, col: int }
+
+// Una función de nivel superior. `type_params`/`bounds` para genéricos; `annotations`/`is_pub` (c-2).
 pub struct Func {
+    annotations: [Annotation], is_pub: bool,
     name: string, type_params: [string], bounds: [Bound],
     params: [Param], ret: Type, body: Block, line: int, col: int,
 }
@@ -110,8 +115,9 @@ pub struct Func {
 // Un campo de un struct: `nombre: tipo`.
 pub struct FieldDef { name: string, ty: Type }
 
-// Definición de struct: `struct Nombre<T: B> { campo: Tipo, ... }`.
+// Definición de struct: `[anns] [pub] struct Nombre<T: B> { campo: Tipo, ... }`.
 pub struct StructDef {
+    annotations: [Annotation], is_pub: bool,
     name: string, type_params: [string], bounds: [Bound],
     fields: [FieldDef], line: int, col: int,
 }
@@ -119,8 +125,9 @@ pub struct StructDef {
 // Una variante de enum: su nombre y su payload posicional (vacío = variante unit).
 pub struct VariantDef { name: string, payload: [Type], line: int, col: int }
 
-// Definición de enum: `enum Nombre<T: B> { Variante(tipos...), ... }`.
+// Definición de enum: `[anns] [pub] enum Nombre<T: B> { Variante(tipos...), ... }`.
 pub struct EnumDef {
+    annotations: [Annotation], is_pub: bool,
     name: string, type_params: [string], bounds: [Bound],
     variants: [VariantDef], line: int, col: int,
 }
@@ -131,8 +138,17 @@ pub struct MethodSig {
     name: string, params: [Param], ret: Type, default_body: Option<Block>, line: int, col: int,
 }
 
-// Declaración de trait: contrato de comportamiento (M14.2c-1). Lista firmas de métodos.
-pub struct TraitDef { name: string, methods: [MethodSig], line: int, col: int }
+// Declaración de trait: contrato de comportamiento (M14.2c-1). Lista firmas de métodos. `is_pub` (c-2).
+pub struct TraitDef { is_pub: bool, name: string, methods: [MethodSig], line: int, col: int }
+
+// `import M [as x];` / `import a/b/c [as x];` (M14.2c-2): importa un módulo por su ruta.
+pub struct ImportDecl { module: string, alias: Option<string>, line: int, col: int }
+
+// Un nombre traído por un `from`-import: el original y, opcionalmente, su alias local.
+pub struct ImportName { name: string, alias: Option<string>, line: int, col: int }
+
+// `[pub] from M import a [as b]{, …};` (M14.2c-2). `is_pub` marca reexport.
+pub struct FromImport { module: string, names: [ImportName], is_pub: bool, line: int, col: int }
 
 // Un bloque `impl [<T: B>] Trait for Tipo { ... }` (M14.2c-1). `target` es el tipo implementador;
 // cada método es una función ordinaria con `self` de primer parámetro.
@@ -141,10 +157,11 @@ pub struct ImplBlock {
     target: Type, methods: [Func], line: int, col: int,
 }
 
-// Un programa: funciones + tipos + traits + impls (M14.2c-1).
+// Un programa: funciones + tipos + traits + impls + imports (M14.2c-2).
 pub struct Program {
     funcs: [Func], structs: [StructDef], enums: [EnumDef],
     traits: [TraitDef], impls: [ImplBlock],
+    imports: [ImportDecl], from_imports: [FromImport],
 }
 
 // El estado del parser: la cinta de tokens, el cursor y el contador de funciones anónimas.
@@ -231,6 +248,11 @@ fn at_end(p: Parser) -> bool { tok_name(cur_kind(p)) == "eof" }
 // El token actual es exactamente `name` (su grafía canónica).
 fn check(p: Parser, name: string) -> bool { tok_name(cur_kind(p)) == name }
 
+// El token SIGUIENTE (uno por delante) es `name`. Para el lookahead de `pub from …`.
+fn check_next(p: Parser, name: string) -> bool {
+    if (p.pos + 1 < len(p.toks)) { tok_name(p.toks[p.pos + 1].kind) == name } else { false }
+}
+
 // Consume y devuelve el token actual (no avanza más allá de Eof).
 fn advance(p: Parser) -> Token {
     let t = p.toks[p.pos];
@@ -260,28 +282,115 @@ fn expect_ident(p: Parser, what: string) -> string {
 // Reglas de la gramática
 // =====================================================================
 
-// program = { struct_def | enum_def | trait_def | impl_block | function }
-// (M14.2c-1; pub/anotaciones/imports → M14.2c-2)
+// program = { import | [anns] [pub] (struct_def | enum_def | trait_def | impl_block | function) }
 fn parse_program(p: Parser) -> Program {
     var funcs: [Func] = [];
     var structs: [StructDef] = [];
     var enums: [EnumDef] = [];
     var traits: [TraitDef] = [];
     var impls: [ImplBlock] = [];
+    var imports: [ImportDecl] = [];
+    var from_imports: [FromImport] = [];
     while (!at_end(p)) {
-        if (check(p, "struct")) {
-            push(structs, struct_def(p));
-        } else if (check(p, "enum")) {
-            push(enums, enum_def(p));
-        } else if (check(p, "trait")) {
-            push(traits, trait_def(p));
-        } else if (check(p, "impl")) {
-            push(impls, impl_block(p));
+        if (check(p, "import")) {
+            push(imports, import_decl(p));
+        } else if (check(p, "from")) {
+            push(from_imports, import_from_decl(p, false));
+        } else if (check(p, "pub") && check_next(p, "from")) {
+            advance(p); // 'pub'
+            push(from_imports, import_from_decl(p, true)); // reexport
         } else {
-            push(funcs, function(p));
+            // Anotaciones (@nombre[(args)]) y luego `pub`, antes de la declaración.
+            let anns = annotations(p);
+            var is_pub = false;
+            if (check(p, "pub")) { advance(p); is_pub = true; }
+            if (check(p, "struct")) {
+                var s = struct_def(p);
+                s.annotations = anns; s.is_pub = is_pub;
+                push(structs, s);
+            } else if (check(p, "enum")) {
+                var e = enum_def(p);
+                e.annotations = anns; e.is_pub = is_pub;
+                push(enums, e);
+            } else if (check(p, "trait")) {
+                var t = trait_def(p);
+                t.is_pub = is_pub;
+                push(traits, t);
+            } else if (check(p, "impl")) {
+                push(impls, impl_block(p));
+            } else {
+                var f = function(p);
+                f.annotations = anns; f.is_pub = is_pub;
+                push(funcs, f);
+            }
         }
     }
-    Program { funcs: funcs, structs: structs, enums: enums, traits: traits, impls: impls }
+    Program {
+        funcs: funcs, structs: structs, enums: enums, traits: traits, impls: impls,
+        imports: imports, from_imports: from_imports,
+    }
+}
+
+// Recoge las anotaciones que preceden a una declaración: { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] }.
+fn annotations(p: Parser) -> [Annotation] {
+    var anns: [Annotation] = [];
+    while (check(p, "@")) {
+        let at = advance(p);
+        let name = expect_ident(p, "el nombre de la anotación tras '@'");
+        var args: [string] = [];
+        if (eat(p, "(")) {
+            if (!check(p, ")")) {
+                var seguir = true;
+                while (seguir) {
+                    push(args, expect_ident(p, "un argumento de la anotación"));
+                    if (!eat(p, ",")) { seguir = false; }
+                }
+            }
+            expect(p, ")", "')' para cerrar los argumentos de la anotación");
+        }
+        push(anns, Annotation { name: name, args: args, line: at.line, col: at.col });
+    }
+    anns
+}
+
+// module_path = IDENT { '/' IDENT }   (ruta de directorios; M11.5). Devuelve la ruta unida con '/'.
+fn module_path(p: Parser) -> string {
+    var path = expect_ident(p, "el nombre del módulo a importar");
+    while (eat(p, "/")) {
+        let seg = expect_ident(p, "un segmento de la ruta tras '/'");
+        path = path + "/" + seg;
+    }
+    path
+}
+
+// import_decl = 'import' module_path [ 'as' IDENT ] ';'
+fn import_decl(p: Parser) -> ImportDecl {
+    let kw = expect(p, "import", "'import'");
+    let modpath = module_path(p);
+    var alias: Option<string> = Option.None;
+    if (eat(p, "as")) { alias = Option.Some(expect_ident(p, "el alias tras 'as'")); }
+    expect(p, ";", "';' tras 'import …'");
+    ImportDecl { module: modpath, alias: alias, line: kw.line, col: kw.col }
+}
+
+// from_import_decl = 'from' module_path 'import' name { ',' name } ';'   ;  name = IDENT [ 'as' IDENT ]
+// `is_pub`: el 'pub' ya lo consumió parse_program (reexport).
+fn import_from_decl(p: Parser, is_pub: bool) -> FromImport {
+    let kw = expect(p, "from", "'from'");
+    let modpath = module_path(p);
+    expect(p, "import", "'import' tras 'from M'");
+    var names: [ImportName] = [];
+    var seguir = true;
+    while (seguir) {
+        let t = cur_tok(p);
+        let nm = expect_ident(p, "un nombre a importar");
+        var alias: Option<string> = Option.None;
+        if (eat(p, "as")) { alias = Option.Some(expect_ident(p, "el alias tras 'as'")); }
+        push(names, ImportName { name: nm, alias: alias, line: t.line, col: t.col });
+        if (!eat(p, ",")) { seguir = false; }
+    }
+    expect(p, ";", "';' para cerrar el 'from M import …'");
+    FromImport { module: modpath, names: names, is_pub: is_pub, line: kw.line, col: kw.col }
 }
 
 // struct_def = 'struct' IDENT '{' [ field { ',' field } [ ',' ] ] '}'   ;  field = IDENT ':' type
@@ -300,7 +409,10 @@ fn struct_def(p: Parser) -> StructDef {
         if (!eat(p, ",")) { done = true; }
     }
     expect(p, "}", "'}' para cerrar el struct");
-    StructDef { name: name, type_params: g.params, bounds: g.bounds, fields: fields, line: kw.line, col: kw.col }
+    StructDef {
+        annotations: [], is_pub: false,
+        name: name, type_params: g.params, bounds: g.bounds, fields: fields, line: kw.line, col: kw.col,
+    }
 }
 
 // enum_def = 'enum' IDENT '{' [ variant { ',' variant } [ ',' ] ] '}'
@@ -328,7 +440,10 @@ fn enum_def(p: Parser) -> EnumDef {
         if (!eat(p, ",")) { done = true; }
     }
     expect(p, "}", "'}' para cerrar el enum");
-    EnumDef { name: name, type_params: g.params, bounds: g.bounds, variants: variants, line: kw.line, col: kw.col }
+    EnumDef {
+        annotations: [], is_pub: false,
+        name: name, type_params: g.params, bounds: g.bounds, variants: variants, line: kw.line, col: kw.col,
+    }
 }
 
 // trait_def = 'trait' IDENT '{' { method_sig } '}'   (M14.2c-1)
@@ -341,7 +456,7 @@ fn trait_def(p: Parser) -> TraitDef {
         push(methods, method_sig(p));
     }
     expect(p, "}", "'}' para cerrar el trait");
-    TraitDef { name: name, methods: methods, line: kw.line, col: kw.col }
+    TraitDef { is_pub: false, name: name, methods: methods, line: kw.line, col: kw.col }
 }
 
 // method_sig = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] ( ';' | block )   (M14.2c-1)
@@ -398,6 +513,7 @@ fn impl_method(p: Parser) -> Func {
     var tp: [string] = [];
     var bd: [Bound] = [];
     Func {
+        annotations: [], is_pub: false,
         name: name, type_params: tp, bounds: bd,
         params: params, ret: ret, body: body, line: kw.line, col: kw.col,
     }
@@ -445,6 +561,7 @@ fn function(p: Parser) -> Func {
     if (eat(p, "->")) { ret = parse_type(p); }
     let body = block(p);
     Func {
+        annotations: [], is_pub: false,
         name: name, type_params: g.params, bounds: g.bounds,
         params: params, ret: ret, body: body, line: kw.line, col: kw.col,
     }
@@ -506,8 +623,12 @@ fn parse_type(p: Parser) -> Type {
     match (cur_kind(p)) {
         TokKind.Ident(name) => {
             advance(p);
+            // Tipo calificado por módulo `M.Tipo` (M14.2c-2): el `.` se guarda en el nombre; el
+            // loader lo resuelve a `M::Tipo`. Sin loader (un solo archivo) el checker lo rechaza.
+            var full = name;
+            if (eat(p, ".")) { full = full + "." + expect_ident(p, "el nombre del tipo tras 'M.'"); }
             let targs = type_args(p);
-            return Type.TNamed(name, targs);
+            return Type.TNamed(full, targs);
         },
         _ => {},
     }
@@ -633,9 +754,22 @@ fn return_stmt(p: Parser) -> Stmt {
 }
 
 // ----- Expresiones, por precedencia (de menor a mayor) -----
-// (pipeline `|>` se difiere a M14.2c; expression arranca en logic_or.)
 
-fn expression(p: Parser) -> Expr { logic_or(p) }
+fn expression(p: Parser) -> Expr { pipeline(p) }
+
+// pipeline = logic_or { '|>' call }   (M14.2c-2)
+//
+// Azúcar: `x |> f(a)` ≡ `f(x, a)` (receptor como PRIMER argumento). Precedencia más baja, asociativo
+// a la izquierda; el operando derecho se parsea a nivel de `call`. Se desazucara aquí a un `Call`.
+fn pipeline(p: Parser) -> Expr {
+    var left = logic_or(p);
+    while (check(p, "|>")) {
+        advance(p);
+        let rhs = call(p);
+        left = make_pipeline(left, rhs);
+    }
+    left
+}
 
 // logic_or = logic_and { '||' logic_and }
 fn logic_or(p: Parser) -> Expr {
@@ -747,7 +881,23 @@ fn call(p: Parser) -> Expr {
         } else if (check(p, ".")) {
             advance(p);
             let nm = expect_ident(p, "el nombre del campo tras '.'");
-            expr = Expr { kind: EKind.EField(expr, nm), line: line, col: col };
+            // `M.Tipo { ... }`: literal de struct calificado (solo si el receptor del `.` es un Ident).
+            var handled = false;
+            if (check(p, "{")) {
+                match (expr.kind) {
+                    EKind.EIdent(m) => {
+                        expr = struct_literal(p, m + "." + nm, line, col);
+                        handled = true;
+                    },
+                    _ => {},
+                }
+            }
+            if (!handled) {
+                expr = Expr { kind: EKind.EField(expr, nm), line: line, col: col };
+            }
+        } else if (check(p, "?")) {
+            advance(p); // '?' postfijo (propagación de errores, M14.2c-2)
+            expr = Expr { kind: EKind.ETry(expr), line: line, col: col };
         } else {
             seguir = false;
         }
@@ -907,7 +1057,14 @@ fn pattern(p: Parser) -> Pattern {
         return Pattern { kind: PKind.PWild, line: t.line, col: t.col };
     }
     if (eat(p, ".")) {
-        let variant = expect_ident(p, "el nombre de la variante");
+        var variant = expect_ident(p, "el nombre de la variante");
+        // Variante calificada por módulo `M.Enum.Variante` (M14.2c-2): el `enum_name` guarda `M.Enum`.
+        var enum_name = name;
+        if (eat(p, ".")) {
+            let real = expect_ident(p, "el nombre de la variante tras 'M.Enum.'");
+            enum_name = enum_name + "." + variant;
+            variant = real;
+        }
         var bindings: [Option<string>] = [];
         if (eat(p, "(")) {
             var seguir = true;
@@ -921,7 +1078,7 @@ fn pattern(p: Parser) -> Pattern {
             }
             expect(p, ")", "')' para cerrar el patrón de variante");
         }
-        return Pattern { kind: PKind.PVariant(name, variant, bindings), line: t.line, col: t.col };
+        return Pattern { kind: PKind.PVariant(enum_name, variant, bindings), line: t.line, col: t.col };
     }
     Pattern { kind: PKind.PBind(name), line: t.line, col: t.col }
 }
@@ -948,6 +1105,23 @@ fn struct_literal(p: Parser, name: string, line: int, col: int) -> Expr {
 // Crea un nodo binario heredando la posición del operando izquierdo.
 fn make_binary(op: BinOp, left: Expr, right: Expr) -> Expr {
     Expr { kind: EKind.EBinary(op, left, right), line: left.line, col: left.col }
+}
+
+// Desazucara `recv |> rhs`: inserta `recv` como PRIMER argumento de la llamada `rhs`. Si `rhs` ya es
+// `f(args)` → `f(recv, args)`; si es cualquier otra expresión `f` → `f(recv)`. Posición = la de `rhs`.
+fn make_pipeline(recv: Expr, rhs: Expr) -> Expr {
+    let line = rhs.line;
+    let col = rhs.col;
+    match (rhs.kind) {
+        EKind.ECall(callee, args) => {
+            var new_args: [Expr] = [];
+            push(new_args, recv);
+            var i = 0;
+            while (i < len(args)) { push(new_args, args[i]); i = i + 1; }
+            Expr { kind: EKind.ECall(callee, new_args), line: line, col: col }
+        },
+        _ => Expr { kind: EKind.ECall(rhs, [recv]), line: line, col: col },
+    }
 }
 
 // ¿Expresión "con bloque" (if/while/{})? Puede usarse como sentencia sin `;`.

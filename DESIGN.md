@@ -2415,6 +2415,16 @@ canónica del token: `"("`, `"->"`, `"let"`; nombre simbólico para los que carg
   reales (genericos, bounds, traits, tipos_genericos, impls_genericos, trait_objects,
   metodos_por_defecto, ufcs, inferencia, funciones…). Diferido a M14.2c-2: `?`, `|>`, anotaciones,
   `pub`, imports, tipos calificados `M.Tipo`/`M.Enum.V`.
+- **M14.2c-2 COMPLETO** — azúcar y módulos, **cierra el parser**: operador `?` (`ETry`), pipelines
+  `|>` (desugar puro a `Call` con el receptor como primer argumento, `make_pipeline`), anotaciones
+  `@nombre[(args)]`, `pub`, `import M [as x]` / `import a/b/c` (vía `module_path`), `[pub] from M
+  import a [as b]{, …}`, y referencias calificadas por módulo en posición de tipo (`M.Tipo`, con el `.`
+  guardado en el nombre), literal de struct (`M.Tipo { … }`, en `call()` si el receptor del `.` es un
+  Ident) y patrón (`M.Enum.Variante`). El AST gana `Annotation`/`ImportDecl`/`ImportName`/`FromImport`,
+  `annotations`+`is_pub` en fn/struct/enum (+ `is_pub` en trait), y `Program` lleva
+  `imports`+`from_imports`. **Hito de fidelidad**: el test fuerte parsea los **35 ejemplos** y los **4
+  fuentes del self-hosting** (`lexer.ray`/`lex_dump.ray`/`parser.ray`/`parse_dump.ray`) → **el parser
+  se parsea a sí mismo** idéntico al de Rust, nodo a nodo con posiciones. **M14.2 COMPLETO** (parser).
 
-**Próximas fases:** cerrar el parser (M14.2c-2: azúcar y módulos), el **checker**, y finalmente
-ejecutar. Cada una, su oráculo.
+**Próximas fases:** errores del parser como valores (cierre, como M14.1b para el lexer) y luego el
+**checker**, y finalmente ejecutar. Cada una, su oráculo.

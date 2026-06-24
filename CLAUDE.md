@@ -647,6 +647,16 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     snippets + 14 ejemplos reales (genericos/bounds/traits/tipos_genericos/impls_genericos/
     trait_objects/metodos_por_defecto/ufcs/inferencia/funciones). Diferido a c-2: `?`, `|>`,
     anotaciones, `pub`, imports, tipos calificados `M.Tipo`/`M.Enum.V`. DESIGN §23.3.
+  - **M14.2c-2 COMPLETO** (347 lib + 20 en `tests/selfhost_parser.rs`): **parser auto-alojado — azúcar
+    y módulos, CIERRA el parser**. Añade: `?` (`ETry`), pipelines `|>` (desugar puro a `Call`, receptor
+    como primer arg, `make_pipeline`), anotaciones `@nombre[(args)]`, `pub`, `import M [as x]`/`import
+    a/b/c` (`module_path`), `[pub] from M import a [as b]{,…}`, y refs calificadas `M.Tipo` (tipo),
+    `M.Tipo { … }` (literal, en `call()` si el receptor del `.` es Ident) y `M.Enum.Variante` (patrón).
+    AST: `Annotation`/`ImportDecl`/`ImportName`/`FromImport`, `annotations`+`is_pub` en fn/struct/enum
+    (+`is_pub` en trait), `Program` con `imports`+`from_imports`. **Hito de fidelidad**: el test fuerte
+    parsea los **35 ejemplos** + los **4 fuentes del self-hosting** → **el parser se parsea a sí mismo**
+    idéntico al de Rust, nodo a nodo con posiciones. **M14.2 COMPLETO** (parser). Próximo: errores del
+    parser como valores (cierre, como M14.1b) y luego el **checker**. DESIGN §23.3.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

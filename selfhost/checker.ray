@@ -20,7 +20,7 @@
 // `TNamed(nombre, args)`; se distinguen por en qué tabla —`structs`/`enums`— está el nombre). Los
 // ámbitos y las tablas de tipos usan `Map<K,V>`.
 
-from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind, FnExpr, TraitDef, MethodSig, ImplBlock;
+from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind, FnExpr, TraitDef, MethodSig, ImplBlock, Bound;
 
 // Error de tipos con ubicación (espejo de `TypeError` en Rust).
 pub struct TypeError { msg: string, line: int, col: int }
@@ -28,9 +28,9 @@ pub struct TypeError { msg: string, line: int, col: int }
 // Información de una variable en un ámbito.
 struct VarInfo { ty: Type, mutable: bool, dline: int, dcol: int }
 
-// Firma de una función. `type_params` son sus parámetros de tipo (M14.3c); `bounds` queda guardado
-// pero su validación (diccionarios) es de M14.3d.
-struct FnSig { params: [Type], ret: Type, type_params: [string] }
+// Firma de una función. `type_params` son sus parámetros de tipo (M14.3c); `bounds` los acota (M14.3d:
+// `T: Trait`), comprobados en cada sitio de llamada (satisfacción del bound).
+struct FnSig { params: [Type], ret: Type, type_params: [string], bounds: [Bound] }
 
 // Una variable ligada por un patrón de `match`: su nombre y el tipo que recibe.
 struct Bind { name: string, ty: Type }
@@ -51,9 +51,11 @@ struct Checker {
     enum_tparams: Map<string, [string]>,
     traits: Map<string, [MethodSig]>,
     methods: Map<string, FnSig>,
+    impl_traits: Map<string, bool>,
     scopes: [Map<string, VarInfo>],
     current_return: Type,
     tparams: [string],
+    bounds: [Bound],
 }
 
 fn terr(line: int, col: int, msg: string) -> TypeError {
@@ -635,7 +637,7 @@ fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
         var ps: [Type] = [];
         var pi = 0;
         while (pi < len(f.params)) { push(ps, resolve_type(f.params[pi].ty)); pi = pi + 1; }
-        insert(c.funcs, f.name, FnSig { params: ps, ret: resolve_type(f.ret), type_params: f.type_params });
+        insert(c.funcs, f.name, FnSig { params: ps, ret: resolve_type(f.ret), type_params: f.type_params, bounds: f.bounds });
         fi = fi + 1;
     }
     register_traits_impls(c, prog)?;
@@ -661,8 +663,11 @@ fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
 }
 
 fn check_function(c: Checker, f: Func) -> Result<int, TypeError> {
-    // Los parámetros de tipo de ESTA función están en ámbito (rígidos): `x: T` es válido.
+    // Los parámetros de tipo y bounds de ESTA función entran en ámbito (rígidos): `x: T` es válido y
+    // `x.metodo()` se resuelve contra el trait acotado.
     c.tparams = f.type_params;
+    c.bounds = f.bounds;
+    check_bounds(c, f)?;
     var pi = 0;
     while (pi < len(f.params)) {
         let p = f.params[pi];
@@ -672,7 +677,25 @@ fn check_function(c: Checker, f: Func) -> Result<int, TypeError> {
     ensure_type(c, f.ret, f.line, f.col)?;
     let r = check_fn_body(c, f.params, f.ret, f.body, f.line, f.col, "'" + f.name + "'");
     c.tparams = no_tparams();
+    c.bounds = no_bounds();
     r
+}
+
+// Valida los bounds de una función: cada bound acota un parámetro de tipo que la función declara, con
+// un trait existente.
+fn check_bounds(c: Checker, f: Func) -> Result<int, TypeError> {
+    var i = 0;
+    while (i < len(f.bounds)) {
+        let b = f.bounds[i];
+        if (!contains_str(f.type_params, b.param)) {
+            return Result.Err(terr(f.line, f.col, "el bound '" + b.param + ": " + b.trait_name + "' no acota a ningún parámetro de tipo de '" + f.name + "'"));
+        }
+        if (!contains_key(c.traits, b.trait_name)) {
+            return Result.Err(terr(f.line, f.col, "trait '" + b.trait_name + "' no declarado (en el bound de '" + f.name + "')"));
+        }
+        i = i + 1;
+    }
+    Result.Ok(0)
 }
 
 // Comprueba que una lista de parámetros de tipo no tenga repetidos.
@@ -1052,8 +1075,81 @@ fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], expected
         },
         Option.None => {},
     }
+    // (3b) ¿un método de un trait que ACOTA al tipo del receptor? (`x.m()` con `x: T`, `T: Trait`).
+    match (recv_ty) {
+        Type.TNamed(tp, targs) => {
+            if (len(targs) == 0 && contains_str(c.tparams, tp)) {
+                match (resolve_bound_method(c, tp, name, cargs, line, col)?) {
+                    Option.Some(ret) => { return Result.Ok(ret); },
+                    Option.None => {},
+                }
+            }
+        },
+        _ => {},
+    }
     // (4) UFCS: `name(recv, args)`.
     check_ufcs(c, name, recv_ty, obj, cargs, line, col)
+}
+
+// Resuelve `x.metodo(args)` con `x: T` y `T` acotado por un trait que declara `metodo` (M14.3d-3). El
+// receptor ya casó con `self` (es `T`); valida los argumentos restantes y devuelve el retorno (con
+// `Self`→T). `None` si ningún bound de `T` declara el método (→ se intenta UFCS).
+fn resolve_bound_method(c: Checker, tp: string, method: string, cargs: [Expr], line: int, col: int) -> Result<Option<Type>, TypeError> {
+    var hits: [string] = [];
+    var i = 0;
+    while (i < len(c.bounds)) {
+        let b = c.bounds[i];
+        if (b.param == tp) {
+            match (get(c.traits, b.trait_name)) {
+                Option.Some(ms) => { if (trait_has_method(ms, method)) { push(hits, b.trait_name); } },
+                Option.None => {},
+            }
+        }
+        i = i + 1;
+    }
+    if (len(hits) == 0) { return Result.Ok(Option.None); }
+    if (len(hits) > 1) {
+        return Result.Err(terr(line, col, "método '" + method + "' ambiguo para '" + tp + "': lo declaran varios traits acotados (" + join_comma(hits) + ")"));
+    }
+    let trait_name = hits[0];
+    let self_ty = Type.TNamed(tp, []);
+    let sig = match (find_method_sig(trait_methods_of(c, trait_name), method)) {
+        Option.Some(m) => m,
+        Option.None => { return Result.Err(terr(line, col, "método '" + method + "' no encontrado")); },
+    };
+    // Argumentos esperados: los del método sin el receptor (self), con Self→T.
+    var expected: [Type] = [];
+    var j = 1;
+    while (j < len(sig.params)) { push(expected, resolve_type(subst_self(sig.params[j].ty, self_ty))); j = j + 1; }
+    if (len(cargs) != len(expected)) {
+        return Result.Err(terr(line, col, "el método '" + method + "' espera " + to_string(len(expected))
+            + " argumento(s) (sin contar el receptor), se le pasaron " + to_string(len(cargs))));
+    }
+    var k = 0;
+    while (k < len(cargs)) {
+        let at = check_expr_expected(c, cargs[k], expected[k])?;
+        if (!type_eq(at, expected[k])) {
+            return Result.Err(terr(cargs[k].line, cargs[k].col,
+                "argumento " + to_string(k + 1) + " del método '" + method + "': se esperaba " + type_str(expected[k]) + ", se pasó " + type_str(at)));
+        }
+        k = k + 1;
+    }
+    Result.Ok(Option.Some(resolve_type(subst_self(sig.ret, self_ty))))
+}
+
+// Las firmas de un trait registrado (vacío si no está).
+fn trait_methods_of(c: Checker, name: string) -> [MethodSig] {
+    match (get(c.traits, name)) { Option.Some(ms) => ms, Option.None => [] }
+}
+
+// ¿La lista de firmas declara un método con ese nombre?
+fn trait_has_method(ms: [MethodSig], method: string) -> bool {
+    var i = 0;
+    while (i < len(ms)) {
+        if (ms[i].name == method) { return true; }
+        i = i + 1;
+    }
+    false
 }
 
 // Verifica una llamada a método `recv.m(args)` contra su firma (con `self` como primer argumento). El
@@ -1137,7 +1233,7 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
             if (len(sig.type_params) == 0) {
                 check_args(c, sig.params, sig.ret, cargs, "'" + name + "'", line, col)
             } else {
-                check_generic_call(c, sig.type_params, sig.params, sig.ret, cargs, "'" + name + "'", line, col)
+                check_generic_call(c, sig.type_params, sig.params, sig.ret, sig.bounds, cargs, "'" + name + "'", line, col)
             }
         },
         Option.None => Result.Err(terr(line, col, "función '" + name + "' no declarada")),
@@ -1147,7 +1243,7 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
 // Una llamada a una función GENÉRICA (M14.3c). Infiere los parámetros de tipo unificando los tipos
 // de los parámetros con los de los argumentos, y devuelve el retorno ya sustituido. Si algún
 // parámetro de tipo no queda determinado por los argumentos, es error (M6.1 no usa el tipo esperado).
-fn check_generic_call(c: Checker, type_params: [string], params: [Type], ret: Type, cargs: [Expr], label: string, line: int, col: int) -> Result<Type, TypeError> {
+fn check_generic_call(c: Checker, type_params: [string], params: [Type], ret: Type, bounds: [Bound], cargs: [Expr], label: string, line: int, col: int) -> Result<Type, TypeError> {
     if (len(cargs) != len(params)) {
         return Result.Err(terr(line, col,
             label + " espera " + to_string(len(params)) + " argumento(s), se le pasaron " + to_string(len(cargs))));
@@ -1174,7 +1270,56 @@ fn check_generic_call(c: Checker, type_params: [string], params: [Type], ret: Ty
         }
         ti = ti + 1;
     }
+    // M14.3d-3: cada parámetro acotado debe resolver a un tipo que satisfaga su bound.
+    check_call_bounds(c, bounds, sigma, line, col)?;
     Result.Ok(subst(ret, sigma))
+}
+
+// Comprueba que, en un sitio de llamada, el tipo inferido de cada parámetro acotado satisface su
+// bound. (El paso de diccionarios —lowering— se omite en el validador; aquí va solo la satisfacción.)
+fn check_call_bounds(c: Checker, bounds: [Bound], sigma: Map<string, Type>, line: int, col: int) -> Result<int, TypeError> {
+    var i = 0;
+    while (i < len(bounds)) {
+        let b = bounds[i];
+        let concrete = match (get(sigma, b.param)) { Option.Some(t) => t, Option.None => Type.TNamed(b.param, []) };
+        check_bound_satisfied(c, concrete, b.trait_name, line, col)?;
+        i = i + 1;
+    }
+    Result.Ok(0)
+}
+
+// ¿`concrete` satisface el bound `trait_name`? Dos vías: un parámetro de tipo rígido del llamador que
+// declara el mismo bound (reenvío del diccionario), o un tipo concreto con impl del trait.
+fn check_bound_satisfied(c: Checker, concrete: Type, trait_name: string, line: int, col: int) -> Result<int, TypeError> {
+    match (concrete) {
+        Type.TNamed(u, args) => {
+            if (len(args) == 0 && contains_str(c.tparams, u)) {
+                if (bounds_has(c.bounds, u, trait_name)) { return Result.Ok(0); }
+                return Result.Err(terr(line, col, "el parámetro de tipo '" + u + "' no está acotado por '" + trait_name + "' (requerido por la llamada)"));
+            }
+            if (contains_key(c.impl_traits, mangle(u, trait_name))) { Result.Ok(0) }
+            else { Result.Err(terr(line, col, type_str(concrete) + " no implementa '" + trait_name + "' (requerido por la llamada)")) }
+        },
+        _ => {
+            match (type_key_of(concrete)) {
+                Option.Some(key) => {
+                    if (contains_key(c.impl_traits, mangle(key, trait_name))) { Result.Ok(0) }
+                    else { Result.Err(terr(line, col, type_str(concrete) + " no implementa '" + trait_name + "' (requerido por la llamada)")) }
+                },
+                Option.None => Result.Err(terr(line, col, type_str(concrete) + " no puede implementar el trait '" + trait_name + "'")),
+            }
+        },
+    }
+}
+
+// ¿La lista de bounds incluye `param: trait_name`?
+fn bounds_has(bounds: [Bound], param: string, trait_name: string) -> bool {
+    var i = 0;
+    while (i < len(bounds)) {
+        if (bounds[i].param == param && bounds[i].trait_name == trait_name) { return true; }
+        i = i + 1;
+    }
+    false
 }
 
 // El builtin print/eprint: 1 argumento imprimible → unit.
@@ -1814,7 +1959,7 @@ fn method_fnsig(params: [Param], ret: Type, target: Type) -> FnSig {
     var ps: [Type] = [];
     var i = 0;
     while (i < len(params)) { push(ps, resolve_type(subst_self(params[i].ty, target))); i = i + 1; }
-    FnSig { params: ps, ret: resolve_type(subst_self(ret, target)), type_params: no_tparams() }
+    FnSig { params: ps, ret: resolve_type(subst_self(ret, target)), type_params: no_tparams(), bounds: no_bounds() }
 }
 
 // Registra los traits (firmas) y valida + tabula los impls. M14.3d-2: solo impls CONCRETOS (genéricos
@@ -1911,6 +2056,8 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
         }
         tj = tj + 1;
     }
+    // Registrar que este tipo implementa este trait (M14.3d-3: satisfacción de bounds).
+    insert(c.impl_traits, mangle(key, imp.trait_name), true);
     Result.Ok(0)
 }
 
@@ -2021,8 +2168,11 @@ pub fn check(prog: Program) -> Result<int, TypeError> {
     let c = Checker {
         funcs: map_new(), structs: map_new(), enums: map_new(),
         struct_tparams: map_new(), enum_tparams: map_new(),
-        traits: map_new(), methods: map_new(),
-        scopes: [], current_return: Type.TUnit, tparams: [],
+        traits: map_new(), methods: map_new(), impl_traits: map_new(),
+        scopes: [], current_return: Type.TUnit, tparams: [], bounds: [],
     };
     check_program(c, prog)
 }
+
+// Una lista de bounds vacía, ya tipada (para reiniciar `c.bounds`; como `no_tparams`).
+fn no_bounds() -> [Bound] { [] }

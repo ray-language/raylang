@@ -747,6 +747,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `type_key_of`/`mangle`/`has_default`. Gotcha: `Option.None => []` en match necesita anotar el `let`.
     Oráculo: 6 válidos + 7 errores + `traits.ray`. Diferido a d-3 (bounds + impls genéricos), d-4
     (dyn/@derive/resto prelude). DESIGN §23.4.
+  - **M14.3d-3a COMPLETO** (347 lib + 17 en `tests/selfhost_checker.rs`): **checker auto-alojado — bounds
+    en funciones**. `FnSig.bounds`, `Checker.bounds` (bounds en ámbito) y `Checker.impl_traits`
+    (`Tipo#Trait`→sí, lo puebla `register_impl`). `check_bounds` valida los bounds de una función.
+    **Resolución por bound** (`resolve_bound_method`, paso 3b de `check_call_field`): `x.m()` con `x: T`,
+    `T: Trait` → busca el trait acotado con el método (ambigüedad=error), valida args contra la firma
+    (Self→T), devuelve el retorno. **Satisfacción en el sitio** (`check_call_bounds`/
+    `check_bound_satisfied`, tras inferir σ): el tipo de cada param acotado debe tener impl del trait
+    (`impl_traits`) o ser un param rígido del llamador con el mismo bound (reenvío del diccionario); si no
+    → `{T} no implementa '{Trait}' (requerido por la llamada)`. El paso de diccionarios (lowering) se
+    OMITE; solo la satisfacción (veredicto). Oráculo: 4 válidos + 4 errores + `bounds.ray`/
+    `metodos_por_defecto.ray`. Limitación: un cuerpo de defecto INVÁLIDO reporta su posición original
+    (Rust renumera el clon; solo errores contrived). Diferido a d-3b (impls genéricos), d-4. DESIGN §23.4.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

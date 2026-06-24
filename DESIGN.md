@@ -2574,3 +2574,16 @@ Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el
   `ensure_impl_target` valida objetivos concretos (struct/enum no genérico, primitivo); genéricos/bounds
   → d-3. Helpers `subst_self`/`type_key_of`/`mangle`/`has_default`. Oráculo: 6 válidos + 7 errores +
   `traits.ray`. Diferido a d-3: bounds + impls genéricos.
+- **M14.3d-3a COMPLETO** — bounds en funciones. `FnSig.bounds`, `Checker.bounds` (bounds en ámbito) y
+  `Checker.impl_traits` (`Tipo#Trait`→sí, qué tipos implementan qué traits; lo puebla `register_impl`).
+  `check_bounds` valida los bounds de una función (param real + trait existente). **Resolución de método
+  por bound** (`resolve_bound_method`, paso 3b de `check_call_field`): `x.metodo()` con `x: T` y `T:
+  Trait` → busca el trait acotado que declara el método (ambigüedad = error), valida los argumentos
+  (sin el receptor) contra la firma con `Self`→T y devuelve el retorno. **Satisfacción en el sitio de
+  llamada** (`check_call_bounds`/`check_bound_satisfied`, tras inferir σ en `check_generic_call`): cada
+  parámetro acotado debe resolver a un tipo concreto con impl del trait (`impl_traits`) o a un parámetro
+  rígido del llamador con el mismo bound (**reenvío del diccionario**); si no → `{T} no implementa
+  '{Trait}' (requerido por la llamada)`. El paso de diccionarios (lowering) se OMITE; solo va la
+  satisfacción (el veredicto). Oráculo: 4 válidos + 4 errores + `bounds.ray`/`metodos_por_defecto.ray`.
+  Limitación: un cuerpo de método por defecto INVÁLIDO reporta su posición original (Rust renumera el
+  clon) — solo afecta a errores contrived (colisión campo/método). Diferido a d-3b: impls genéricos.

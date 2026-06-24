@@ -269,13 +269,36 @@ fn errores_traits() {
     comparar("trait V { fn valor(self) -> int; } struct C<T> { v: T } impl V for C { fn valor(self) -> int { 0 } } fn main() -> int { 0 }", "sctre_genimpl.ray");
 }
 
+#[test]
+fn bounds_validos() {
+    let t = "trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> int { self.x } } impl V for int { fn valor(self) -> int { self } } ";
+    // Genérico acotado: x.valor() legal porque T: V; sirve para Punto y para int.
+    comparar(&format!("{t}fn dv<T: V>(x: T) -> int {{ x.valor() + x.valor() }} fn main() -> int {{ let p = P {{ x: 3 }}; dv(p) + dv(10) }}"), "scb_bound.ray");
+    // Reenvío de diccionario: un genérico acotado llama a otro con su propio T.
+    comparar(&format!("{t}fn dv<T: V>(x: T) -> int {{ x.valor() }} fn res<T: V>(a: T, b: T) -> int {{ dv(a) + b.valor() }} fn main() -> int {{ let p = P {{ x: 3 }}; res(p, p) }}"), "scb_forward.ray");
+    // Varios bounds a la vez (T: A + B).
+    comparar(&format!("{t}trait E {{ fn eti(self) -> string; }} impl E for P {{ fn eti(self) -> string {{ \"p\" }} }} fn des<T: V + E>(x: T) -> int {{ print(x.eti()); x.valor() }} fn main() -> int {{ des(P {{ x: 3 }}) }}"), "scb_multi.ray");
+    // Método por defecto a través de un bound.
+    comparar("trait S { fn nombre(self) -> string; fn s(self) -> string { self.nombre() } } struct P { nom: string } impl S for P { fn nombre(self) -> string { self.nom } } fn an<T: S>(x: T) -> int { print(x.s()); 0 } fn main() -> int { an(P { nom: \"a\" }) }", "scb_default.ray");
+}
+
+#[test]
+fn errores_bounds() {
+    let t = "trait V { fn valor(self) -> int; } struct P { x: int } impl V for P { fn valor(self) -> int { self.x } } impl V for int { fn valor(self) -> int { self } } ";
+    comparar(&format!("{t}fn dv<T: V>(x: T) -> int {{ x.valor() }} fn main() -> int {{ dv(true) }}"), "scbe_unsat.ray");
+    comparar("fn f<T: NoExiste>(x: T) -> int { 0 } fn main() -> int { 0 }", "scbe_badbound.ray");
+    comparar("trait V { fn valor(self) -> int; } fn f<T: V>(x: int) -> int { 0 } fn g<U: V>(y: U) -> int { f(y) } fn main() -> int { 0 }", "scbe_boundtp.ray");
+    comparar(&format!("{t}fn dv<T: V>(x: T) -> int {{ x.otro() }} fn main() -> int {{ 0 }}"), "scbe_nomethod.ray");
+}
+
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
 fn ejemplos_reales_validos() {
     let archivos = ["examples/fib.ray", "examples/fizzbuzz.ray", "examples/gcd.ray", "examples/primes.ray",
         "examples/structs.ray", "examples/match_figuras.ray", "examples/enums.ray", "examples/arrays.ray",
         "examples/matriz.ray", "examples/genericos.ray", "examples/tipos_genericos.ray", "examples/opcional.ray",
-        "examples/errores.ray", "examples/ufcs.ray", "examples/closures.ray", "examples/traits.ray"];
+        "examples/errores.ray", "examples/ufcs.ray", "examples/closures.ray", "examples/traits.ray",
+        "examples/bounds.ray", "examples/metodos_por_defecto.ray"];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);

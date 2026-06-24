@@ -26,6 +26,7 @@ pub enum Type {
     Float,
     Bool,
     String,
+    Char, // M11.4c
     Unit,
     /// Arreglo dinámico de un tipo de elemento: `[T]`. Tipado estructural (M3).
     Array(Box<Type>),
@@ -67,6 +68,7 @@ impl std::fmt::Display for Type {
             Type::Float => f.write_str("float"),
             Type::Bool => f.write_str("bool"),
             Type::String => f.write_str("string"),
+            Type::Char => f.write_str("char"),
             Type::Unit => f.write_str("unit"),
             Type::Array(elem) => write!(f, "[{}]", elem),
             Type::Struct(name, args) | Type::Enum(name, args) => {
@@ -350,6 +352,7 @@ pub enum ExprKind {
     Float(f64),
     Bool(bool),
     Str(String),
+    Char(char), // M11.4c
 
     /// Referencia a una variable o función por nombre.
     Ident(String),
@@ -493,7 +496,7 @@ fn walk_block<'a>(block: &'a Block, acc: &mut Vec<&'a FnExpr>) {
 
 fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
     match &expr.kind {
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Ident(_) => {}
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Char(_) | ExprKind::Ident(_) => {}
         ExprKind::Unary { expr, .. } => walk_expr(expr, acc),
         ExprKind::Binary { left, right, .. } => {
             walk_expr(left, acc);

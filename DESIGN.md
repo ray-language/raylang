@@ -1896,10 +1896,15 @@ tocan runtime, **vuelven al oráculo** (VM↔intérprete, con estrés del GC par
   - **`append_file(ruta, cont) -> Result<int,string>`**: añade al final (crea si no existe). Reusa el
     **arreglo etiquetado** de M11.2c (`["ok"]`/`["err", msg]`) + envoltorio en el prelude; opcode
     `AppendFile`.
-- **M11.4c — tipo `char` + indexado** (el más profundo: un **tipo nuevo**, no solo builtins):
-  - `Type::Char`, literal `'a'` (lexer/parser), runtime (`Value::Char`/`HeapValue::Char`), `print`/
-    `to_string`/`==`. Indexar `s[i] -> char` y `chars(s) -> [char]`. Es el único sub-paso que añade un
-    **tipo** al lenguaje; se especifica en detalle al abordarlo.
+- **M11.4c — tipo `char` + indexado** (el más profundo: un **tipo nuevo**, no solo builtins). Dos
+  sub-pasos:
+  - **4c-1 — el tipo `char`**: `Type::Char` + keyword `char`; literal `'a'` con escapes (`\n \t \\ \'`)
+    en el lexer (`TokenKind::Char`) y parser (`ExprKind::Char`); runtime `Value::Char`/`HeapValue::Char`
+    en ambos motores; `print`/`to_string`/`==` (Display = el carácter, sin comillas, como el string).
+    Se compone con `@derive(Eq/Show)` (campos `char`) gratis (Eq por `==`, Show por `to_string`).
+  - **4c-2 — indexar e iterar**: `s[i] -> char` (extiende `Index` para strings; out-of-bounds = error
+    de runtime como en arreglos) y `chars(s) -> [char]` (builtin `Chars`, asigna heap → estrés del GC).
+    Cierra el círculo: con `char` + indexado, un string se recorre carácter a carácter.
 
 **Lo que sigue fuera:** `to_upper`/`to_lower`/`starts_with`/`find`, listar directorios, *buffering* —
 aditivos ulteriores cuando hagan falta. M11.4 cubre lo que pidieron los diferidos nombrados.

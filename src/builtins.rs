@@ -80,7 +80,7 @@ fn nullary(a: &[Type], nombre: &str) -> Result<(), BuiltinError> {
 fn printable(t: &Type) -> bool {
     matches!(
         t,
-        Type::Int | Type::Float | Type::Bool | Type::String | Type::Array(_)
+        Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Array(_)
             | Type::Struct(_, _) | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_)
     )
 }
@@ -116,8 +116,8 @@ static BUILTINS: &[Builtin] = &[
     // to_string(x) -> string (M11.1a): representación textual de un primitivo imprimible.
     Builtin { name: "to_string", opcode: OpCode::ToString, check: |a| {
         arity(a, 1, "to_string", "")?;
-        if !matches!(a[0], Type::Int | Type::Float | Type::Bool | Type::String) {
-            return Err((Some(0), format!("to_string solo convierte int/float/bool/string, no {}", a[0])));
+        if !matches!(a[0], Type::Int | Type::Float | Type::Bool | Type::String | Type::Char) {
+            return Err((Some(0), format!("to_string solo convierte int/float/bool/string/char, no {}", a[0])));
         }
         Ok(Type::String)
     } },

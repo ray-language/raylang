@@ -51,6 +51,7 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     Str(String),
+    Char(char), // M11.4c
     Unit,
     /// Arreglo (M3). `Rc` da la **semántica de referencia** (clonar el `Value`
     /// comparte el mismo arreglo); `RefCell` permite mutarlo. La GC de M4
@@ -88,6 +89,7 @@ impl PartialEq for Value {
             (Float(a), Float(b)) => a == b,
             (Bool(a), Bool(b)) => a == b,
             (Str(a), Str(b)) => a == b,
+            (Char(a), Char(b)) => a == b,
             (Unit, Unit) => true,
             (Array(a), Array(b)) => *a.borrow() == *b.borrow(),
             (Struct(a), Struct(b)) => *a.borrow() == *b.borrow(),
@@ -128,6 +130,7 @@ impl std::fmt::Display for Value {
             Value::Float(v) => write!(f, "{}", v),
             Value::Bool(v) => write!(f, "{}", v),
             Value::Str(v) => write!(f, "{}", v),
+            Value::Char(v) => write!(f, "{}", v),
             Value::Unit => write!(f, "()"),
             Value::Array(rc) => {
                 let elems = rc.borrow();
@@ -383,6 +386,7 @@ impl<'a> Interpreter<'a> {
             ExprKind::Float(v) => Ok(Value::Float(*v)),
             ExprKind::Bool(v) => Ok(Value::Bool(*v)),
             ExprKind::Str(v) => Ok(Value::Str(v.clone())),
+            ExprKind::Char(v) => Ok(Value::Char(*v)),
 
             ExprKind::Ident(name) => match self.lookup_opt(name) {
                 Some(v) => Ok(v),

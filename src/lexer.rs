@@ -166,6 +166,7 @@ impl Lexer {
             }
 
             '"' => self.string()?,
+            '\'' => self.char_literal()?,
             c if c.is_ascii_digit() => self.number()?,
             c if is_ident_start(c) => self.identifier(),
 
@@ -253,6 +254,41 @@ impl Lexer {
                     self.advance();
                 }
             }
+        }
+    }
+
+    /// Lee un literal de carácter `'a'` (M11.4c), tras consumir la comilla de apertura. Acepta los
+    /// mismos escapes que el string (`\n \t \\`) más `\'`. Exactamente un carácter entre comillas:
+    /// `''` (vacío) o varios caracteres son error.
+    fn char_literal(&mut self) -> Result<TokenKind, LexError> {
+        let c = match self.peek() {
+            None => return Err(self.error("carácter sin cerrar".into())),
+            Some('\'') => return Err(self.error("un literal de carácter no puede estar vacío ('')".into())),
+            Some('\n') => return Err(self.error("salto de línea dentro de un literal de carácter".into())),
+            Some('\\') => {
+                self.advance(); // la barra invertida
+                let escaped = match self.peek() {
+                    Some('n') => '\n',
+                    Some('t') => '\t',
+                    Some('\\') => '\\',
+                    Some('\'') => '\'',
+                    Some(other) => return Err(self.error(format!("secuencia de escape inválida '\\{}'", other))),
+                    None => return Err(self.error("carácter sin cerrar tras '\\'".into())),
+                };
+                self.advance(); // el carácter escapado
+                escaped
+            }
+            Some(c) => {
+                self.advance();
+                c
+            }
+        };
+        match self.peek() {
+            Some('\'') => {
+                self.advance(); // comilla de cierre
+                Ok(TokenKind::Char(c))
+            }
+            _ => Err(self.error("se esperaba ''' para cerrar el literal de carácter (¿más de un carácter?)".into())),
         }
     }
 
@@ -357,6 +393,7 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "float" => TokenKind::FloatType,
         "bool" => TokenKind::BoolType,
         "string" => TokenKind::StringType,
+        "char" => TokenKind::CharType,
         _ => return None,
     })
 }
@@ -407,6 +444,31 @@ mod tests {
             kinds(r#""a\nb\t\\\"""#),
             vec![TokenKind::Str("a\nb\t\\\"".into()), TokenKind::Eof]
         );
+    }
+
+    #[test]
+    fn literal_de_caracter_con_escapes() {
+        // M11.4c: 'a', escapes, y la keyword de tipo `char`.
+        assert_eq!(kinds("'a'"), vec![TokenKind::Char('a'), TokenKind::Eof]);
+        assert_eq!(
+            kinds(r"'\n' '\t' '\\' '\''"),
+            vec![
+                TokenKind::Char('\n'),
+                TokenKind::Char('\t'),
+                TokenKind::Char('\\'),
+                TokenKind::Char('\''),
+                TokenKind::Eof,
+            ]
+        );
+        assert_eq!(kinds("char"), vec![TokenKind::CharType, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn literal_de_caracter_invalido_es_error() {
+        // Vacío, multi-carácter y sin cerrar son errores de lexado.
+        assert!(crate::lexer::lex("''").is_err(), "'' vacío");
+        assert!(crate::lexer::lex("'ab'").is_err(), "más de un carácter");
+        assert!(crate::lexer::lex("'a").is_err(), "sin cerrar");
     }
 
     #[test]

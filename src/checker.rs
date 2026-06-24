@@ -1501,6 +1501,7 @@ impl Checker {
             ExprKind::Float(_) => Ok(Type::Float),
             ExprKind::Bool(_) => Ok(Type::Bool),
             ExprKind::Str(_) => Ok(Type::String),
+            ExprKind::Char(_) => Ok(Type::Char),
 
             ExprKind::Ident(name) => {
                 // Una variable tapa a una función con el mismo nombre.
@@ -2213,7 +2214,7 @@ impl Checker {
 /// arreglo lo es solo si su elemento lo es.
 fn is_comparable(t: &Type) -> bool {
     match t {
-        Type::Int | Type::Float | Type::Bool | Type::String | Type::Struct(_, _) => true,
+        Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Struct(_, _) => true,
         Type::Array(elem) => is_comparable(elem),
         // Los enums (M5) no se comparan con ==: pueden ser recursivos y portar
         // funciones; se consumen por `match`. (Un `@derive(Eq)` futuro lo abriría.)
@@ -2502,6 +2503,7 @@ fn type_key_of(ty: &Type) -> Option<String> {
         Type::Float => "float".into(),
         Type::Bool => "bool".into(),
         Type::String => "string".into(),
+        Type::Char => "char".into(),
         Type::Struct(n, _) | Type::Enum(n, _) => n.clone(),
         _ => return None,
     })
@@ -2599,7 +2601,7 @@ fn validate_derive(a: &Annotation, name: &str, type_params: &[String]) -> Result
 /// `a` aporta la posición del `@derive` para ubicar el error.
 fn render_to_string(a: &Annotation, expr: &str, ty: &Type) -> Result<String, TypeError> {
     match ty {
-        Type::Int | Type::Float | Type::Bool | Type::String => Ok(format!("to_string({expr})")),
+        Type::Int | Type::Float | Type::Bool | Type::String | Type::Char => Ok(format!("to_string({expr})")),
         // En esta fase un tipo de usuario llega como `Struct` (el checker aún no lo resolvió a
         // `Enum`); ambos se imprimen con su propio `mostrar` (deben implementar Show).
         Type::Struct(_, _) | Type::Enum(_, _) => Ok(format!("{expr}.mostrar()")),

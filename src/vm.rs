@@ -717,6 +717,7 @@ fn const_to_heap(v: &Value) -> HeapValue {
         Value::Float(x) => HeapValue::Float(*x),
         Value::Bool(b) => HeapValue::Bool(*b),
         Value::Str(s) => HeapValue::Str(s.clone()),
+        Value::Char(c) => HeapValue::Char(*c),
         Value::Unit => HeapValue::Unit,
         _ => unreachable!("las constantes del chunk son primitivas"),
     }
@@ -731,6 +732,7 @@ fn values_equal(heap: &Heap, a: &HeapValue, b: &HeapValue) -> bool {
         (H::Float(x), H::Float(y)) => x == y,
         (H::Bool(x), H::Bool(y)) => x == y,
         (H::Str(x), H::Str(y)) => x == y,
+        (H::Char(x), H::Char(y)) => x == y,
         (H::Unit, H::Unit) => true,
         (H::Function(x), H::Function(y)) => x == y,
         (H::Obj(x), H::Obj(y)) => match (heap.get(*x), heap.get(*y)) {
@@ -765,6 +767,7 @@ fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> String {
         HeapValue::Float(x) => x.to_string(),
         HeapValue::Bool(b) => b.to_string(),
         HeapValue::Str(s) => s.clone(),
+        HeapValue::Char(c) => c.to_string(),
         HeapValue::Unit => "()".to_string(),
         HeapValue::Function(_) => "<fn>".to_string(),
         HeapValue::Obj(h) => match heap.get(*h) {
@@ -799,6 +802,7 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
         HeapValue::Float(x) => Value::Float(*x),
         HeapValue::Bool(b) => Value::Bool(*b),
         HeapValue::Str(s) => Value::Str(s.clone()),
+        HeapValue::Char(c) => Value::Char(*c),
         HeapValue::Unit => Value::Unit,
         HeapValue::Function(i) => Value::Function(*i),
         HeapValue::Obj(h) => match heap.get(*h) {
@@ -1931,6 +1935,28 @@ mod tests {
                 let campos = split("a,bb,ccc", ",");
                 print(campos[1]);                  // bb
                 len(campos) + len(limpio)          // 3 + 4 = 7
+            }
+        "#);
+    }
+
+    #[test]
+    fn char_tipo_oraculo() {
+        // M11.4c-1: literal de char, anotación, ==, to_string, y @derive(Eq, Show) con campo char.
+        oracle_program(r#"
+            @derive(Eq, Show)
+            struct Tecla { c: char, repetida: bool }
+            fn clase(c: char) -> int {
+                if (c == 'a') { 1 } else { if (c == '\n') { 2 } else { 0 } }
+            }
+            fn main() -> int {
+                let c: char = 'z';
+                print(c);                              // z
+                print(to_string('x') + "!");           // x!
+                print('a' == 'a');                     // true
+                let t = Tecla { c: 'q', repetida: false };
+                print(t.mostrar());                    // Tecla { c: q, repetida: false }
+                print(t.igual(Tecla { c: 'q', repetida: false }));  // true
+                clase('a') + clase('\n') + clase('z')  // 1 + 2 + 0 = 3
             }
         "#);
     }

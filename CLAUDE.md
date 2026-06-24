@@ -325,6 +325,14 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     (primitivo `__append_file` opcode `AppendFile` + arreglo etiquetado `["ok"]`/`["err",msg]` +
     envoltorio en el prelude, como M11.2c). Helper `builtins::append_to_file` compartido por ambos
     motores (`OpenOptions::append`). I/O no determinista → integración por subproceso, no oráculo.
+  - **M11.4c-1 COMPLETO** (312 tests lib): **tipo `char`** — primer tipo nuevo desde M5. `Type::Char`
+    + keyword `char`; literal `'a'` con escapes (`\n \t \\ \'`) en lexer (`TokenKind::Char`) y parser
+    (`ExprKind::Char`); runtime `Value::Char`/`HeapValue::Char` en ambos motores (constante del chunk,
+    como Int/Str); `print`/`to_string`/`==` (Display = el carácter, sin comillas). Compone con
+    `@derive(Eq, Show)` (campo `char`) gratis. **El oráculo cazó un bug real**: el `PartialEq` manual
+    de `Value` (interpreter) no tenía la rama `Char` → `'a' == 'a'` daba `false` solo en el intérprete.
+    Toca ~10 archivos pero todo mecánico (literal + tipo + valor por motor). Falta 4c-2 (indexar
+    `s[i] -> char` + `chars(s) -> [char]`).
 - **M11.2 COMPLETO** (297 tests lib + `tests/io_cli.rs`): **I/O y API de runtime** (DESIGN §20.2).
   `main` sigue sin parámetros (§0); el exterior se toca por **builtins**. **La I/O falible devuelve
   `Option`** (norte "errores como valores"). **Patrón** (como M7.3): primitivos builtin que devuelven

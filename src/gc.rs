@@ -37,6 +37,7 @@ pub enum HeapValue {
     Float(f64),
     Bool(bool),
     Str(String),
+    Char(char), // M11.4c
     Unit,
     /// Una función **sin** captura: un índice en la tabla de funciones (no es un
     /// objeto del heap, no se recolecta).

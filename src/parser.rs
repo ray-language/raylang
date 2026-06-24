@@ -555,7 +555,8 @@ impl Parser {
             TokenKind::FloatType => Type::Float,
             TokenKind::BoolType => Type::Bool,
             TokenKind::StringType => Type::String,
-            _ => return Err(self.error_here("se esperaba un tipo (int, float, bool, string, [T] o un struct)".into())),
+            TokenKind::CharType => Type::Char,
+            _ => return Err(self.error_here("se esperaba un tipo (int, float, bool, string, char, [T] o un struct)".into())),
         };
         self.advance();
         Ok(ty)
@@ -900,6 +901,7 @@ impl Parser {
             TokenKind::Int(v) => ExprKind::Int(v),
             TokenKind::Float(v) => ExprKind::Float(v),
             TokenKind::Str(s) => ExprKind::Str(s),
+            TokenKind::Char(c) => ExprKind::Char(c),
             TokenKind::True => ExprKind::Bool(true),
             TokenKind::False => ExprKind::Bool(false),
             TokenKind::Ident(name) => {
@@ -1325,6 +1327,7 @@ mod tests {
             ExprKind::Float(v) => v.to_string(),
             ExprKind::Bool(b) => b.to_string(),
             ExprKind::Str(s) => format!("{:?}", s),
+            ExprKind::Char(c) => format!("{:?}", c),
             ExprKind::Ident(n) => n.clone(),
             ExprKind::Unary { op, expr } => format!("({} {})", uop(*op), sx(expr)),
             ExprKind::Binary { op, left, right } => {

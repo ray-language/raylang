@@ -14,6 +14,7 @@
 from lexer import lex, Token, LexError;
 from parser import parse, Program, Func, Param, Type, Expr, EKind, Stmt, SKind, Block, BinOp, UnOp;
 from parser import StructDef, FieldDef, EnumDef, VariantDef, FieldInit, FnExpr, MatchArm, Pattern, PKind;
+from parser import Bound, TraitDef, MethodSig, ImplBlock;
 
 // Re-escapa una cadena para una sola línea, idéntico al oráculo (y al lexer-dump).
 fn escape(s: string) -> string {
@@ -45,8 +46,23 @@ fn dump_type(t: Type) -> string {
         Type.TUnit => "unit",
         Type.TArray(e) => "[" + dump_type(e) + "]",
         Type.TFn(ps, r) => "fn(" + join_types(ps) + ") -> " + dump_type(r),
-        Type.TNamed(n) => n,
+        Type.TNamed(n, args) => {
+            if (len(args) == 0) { n } else { n + "<" + join_types(args) + ">" }
+        },
+        Type.TDyn(traits) => "dyn " + join_strings(traits, " + "),
     }
+}
+
+// Strings unidos por un separador.
+fn join_strings(xs: [string], sep: string) -> string {
+    var s = "";
+    var i = 0;
+    while (i < len(xs)) {
+        if (i > 0) { s = s + sep; }
+        s = s + xs[i];
+        i = i + 1;
+    }
+    s
 }
 
 // Tipos separados por ", " (igual que el Display de Type en Rust).
@@ -216,8 +232,23 @@ fn dump_params(ps: [Param]) -> string {
     s
 }
 
+// Segmento de genéricos ` (generics T U (bound T A) (bound U B))`, o "" si no hay ninguno.
+fn dump_generics(tparams: [string], bounds: [Bound]) -> string {
+    if (len(tparams) == 0 && len(bounds) == 0) { return ""; }
+    var s = " (generics";
+    var i = 0;
+    while (i < len(tparams)) { s = s + " " + tparams[i]; i = i + 1; }
+    var j = 0;
+    while (j < len(bounds)) {
+        let b = bounds[j];
+        s = s + " (bound " + b.param + " " + b.trait_name + ")";
+        j = j + 1;
+    }
+    s + ")"
+}
+
 fn dump_func(f: Func) -> string {
-    "(fn " + f.name + " (params" + dump_params(f.params) + ") "
+    "(fn " + f.name + dump_generics(f.type_params, f.bounds) + " (params" + dump_params(f.params) + ") "
         + dump_type(f.ret) + " " + dump_block(f.body) + ")" + pos(f.line, f.col)
 }
 
@@ -229,7 +260,7 @@ fn dump_struct(s: StructDef) -> string {
         inner = inner + " (field " + fd.name + " " + dump_type(fd.ty) + ")";
         i = i + 1;
     }
-    "(struct " + s.name + " (fields" + inner + "))" + pos(s.line, s.col)
+    "(struct " + s.name + dump_generics(s.type_params, s.bounds) + " (fields" + inner + "))" + pos(s.line, s.col)
 }
 
 fn dump_enum(e: EnumDef) -> string {
@@ -243,7 +274,31 @@ fn dump_enum(e: EnumDef) -> string {
         inner = inner + " (variant " + v.name + payload + ")" + pos(v.line, v.col);
         i = i + 1;
     }
-    "(enum " + e.name + inner + ")" + pos(e.line, e.col)
+    "(enum " + e.name + dump_generics(e.type_params, e.bounds) + inner + ")" + pos(e.line, e.col)
+}
+
+fn dump_methodsig(m: MethodSig) -> string {
+    var s = "(method " + m.name + " (params" + dump_params(m.params) + ") " + dump_type(m.ret);
+    match (m.default_body) {
+        Option.Some(b) => { s = s + " " + dump_block(b); },
+        Option.None => {},
+    }
+    s + ")" + pos(m.line, m.col)
+}
+
+fn dump_trait(t: TraitDef) -> string {
+    var inner = "";
+    var i = 0;
+    while (i < len(t.methods)) { inner = inner + " " + dump_methodsig(t.methods[i]); i = i + 1; }
+    "(trait " + t.name + inner + ")" + pos(t.line, t.col)
+}
+
+fn dump_impl(b: ImplBlock) -> string {
+    var inner = "";
+    var i = 0;
+    while (i < len(b.methods)) { inner = inner + " " + dump_func(b.methods[i]); i = i + 1; }
+    "(impl " + b.trait_name + dump_generics(b.type_params, b.bounds) + " " + dump_type(b.target)
+        + inner + ")" + pos(b.line, b.col)
 }
 
 // Desenvuelve el lexer (M14.2a parsea entradas válidas; un error léxico aquí es excepcional).
@@ -263,13 +318,17 @@ fn main() -> int {
     match (read_file(argv[0])) {
         Result.Ok(src) => {
             let prog = parse(lex_or_die(src));
-            // Orden de volcado: funciones, structs, enums (fijo; el oráculo usa el mismo).
+            // Orden de volcado fijo (el oráculo usa el mismo): funciones, structs, enums, traits, impls.
             var i = 0;
             while (i < len(prog.funcs)) { print(dump_func(prog.funcs[i])); i = i + 1; }
             var s = 0;
             while (s < len(prog.structs)) { print(dump_struct(prog.structs[s])); s = s + 1; }
             var e = 0;
             while (e < len(prog.enums)) { print(dump_enum(prog.enums[e])); e = e + 1; }
+            var t = 0;
+            while (t < len(prog.traits)) { print(dump_trait(prog.traits[t])); t = t + 1; }
+            var m = 0;
+            while (m < len(prog.impls)) { print(dump_impl(prog.impls[m])); m = m + 1; }
             0
         },
         Result.Err(msg) => {

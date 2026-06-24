@@ -20,12 +20,13 @@ from lexer import Token, TokKind;
 // El AST (espejo del subconjunto de `src/ast.rs` que cubre M14.2a)
 // =====================================================================
 
-// Tipos que el programador escribe. Subconjunto de M14.2a: sin genéricos `<...>`, `dyn` ni `Map`.
+// Tipos que el programador escribe.
 pub enum Type {
     TInt, TFloat, TBool, TString, TChar, TUnit,
-    TArray(Type),        // [T]
-    TFn([Type], Type),   // fn(args) -> ret
-    TNamed(string),      // un nombre en posición de tipo (struct/enum/param); el checker lo resuelve
+    TArray(Type),         // [T]
+    TFn([Type], Type),    // fn(args) -> ret
+    TNamed(string, [Type]), // un nombre con args de tipo: Punto / Caja<int> / Map<K,V> (M14.2c-1)
+    TDyn([string]),       // trait object dyn A + B (conjunto canónico: ordenado, sin duplicados)
 }
 
 pub enum UnOp { Neg, Not }
@@ -94,23 +95,57 @@ pub enum SKind {
     SExpr(Expr),
 }
 
-// Una función de nivel superior.
-pub struct Func { name: string, params: [Param], ret: Type, body: Block, line: int, col: int }
+// Un bound de un parámetro de tipo: `T: Trait` (M14.2c-1). raylang no tiene tuplas → un struct.
+pub struct Bound { param: string, trait_name: string }
+
+// El resultado de parsear `<T: A, U: B>`: los nombres y los bounds (raylang no tiene tuplas).
+struct Generics { params: [string], bounds: [Bound] }
+
+// Una función de nivel superior. `type_params`/`bounds` para genéricos (M14.2c-1; vacíos si no).
+pub struct Func {
+    name: string, type_params: [string], bounds: [Bound],
+    params: [Param], ret: Type, body: Block, line: int, col: int,
+}
 
 // Un campo de un struct: `nombre: tipo`.
 pub struct FieldDef { name: string, ty: Type }
 
-// Definición de struct: `struct Nombre { campo: Tipo, ... }` (M14.2b; sin genéricos aún).
-pub struct StructDef { name: string, fields: [FieldDef], line: int, col: int }
+// Definición de struct: `struct Nombre<T: B> { campo: Tipo, ... }`.
+pub struct StructDef {
+    name: string, type_params: [string], bounds: [Bound],
+    fields: [FieldDef], line: int, col: int,
+}
 
 // Una variante de enum: su nombre y su payload posicional (vacío = variante unit).
 pub struct VariantDef { name: string, payload: [Type], line: int, col: int }
 
-// Definición de enum: `enum Nombre { Variante(tipos...), ... }` (M14.2b; sin genéricos aún).
-pub struct EnumDef { name: string, variants: [VariantDef], line: int, col: int }
+// Definición de enum: `enum Nombre<T: B> { Variante(tipos...), ... }`.
+pub struct EnumDef {
+    name: string, type_params: [string], bounds: [Bound],
+    variants: [VariantDef], line: int, col: int,
+}
 
-// Un programa: funciones + definiciones de tipos (M14.2b).
-pub struct Program { funcs: [Func], structs: [StructDef], enums: [EnumDef] }
+// La firma de un método de trait (M14.2c-1): `fn nombre(self, p: T) -> R` con `;` o un cuerpo por
+// defecto. `params` incluye `self` como primer parámetro (tipo `Self`).
+pub struct MethodSig {
+    name: string, params: [Param], ret: Type, default_body: Option<Block>, line: int, col: int,
+}
+
+// Declaración de trait: contrato de comportamiento (M14.2c-1). Lista firmas de métodos.
+pub struct TraitDef { name: string, methods: [MethodSig], line: int, col: int }
+
+// Un bloque `impl [<T: B>] Trait for Tipo { ... }` (M14.2c-1). `target` es el tipo implementador;
+// cada método es una función ordinaria con `self` de primer parámetro.
+pub struct ImplBlock {
+    trait_name: string, type_params: [string], bounds: [Bound],
+    target: Type, methods: [Func], line: int, col: int,
+}
+
+// Un programa: funciones + tipos + traits + impls (M14.2c-1).
+pub struct Program {
+    funcs: [Func], structs: [StructDef], enums: [EnumDef],
+    traits: [TraitDef], impls: [ImplBlock],
+}
 
 // El estado del parser: la cinta de tokens, el cursor y el contador de funciones anónimas.
 struct Parser { toks: [Token], pos: int, next_fn_id: int }
@@ -225,27 +260,35 @@ fn expect_ident(p: Parser, what: string) -> string {
 // Reglas de la gramática
 // =====================================================================
 
-// program = { struct_def | enum_def | function }   (M14.2b; pub/anotaciones/imports → M14.2c)
+// program = { struct_def | enum_def | trait_def | impl_block | function }
+// (M14.2c-1; pub/anotaciones/imports → M14.2c-2)
 fn parse_program(p: Parser) -> Program {
     var funcs: [Func] = [];
     var structs: [StructDef] = [];
     var enums: [EnumDef] = [];
+    var traits: [TraitDef] = [];
+    var impls: [ImplBlock] = [];
     while (!at_end(p)) {
         if (check(p, "struct")) {
             push(structs, struct_def(p));
         } else if (check(p, "enum")) {
             push(enums, enum_def(p));
+        } else if (check(p, "trait")) {
+            push(traits, trait_def(p));
+        } else if (check(p, "impl")) {
+            push(impls, impl_block(p));
         } else {
             push(funcs, function(p));
         }
     }
-    Program { funcs: funcs, structs: structs, enums: enums }
+    Program { funcs: funcs, structs: structs, enums: enums, traits: traits, impls: impls }
 }
 
 // struct_def = 'struct' IDENT '{' [ field { ',' field } [ ',' ] ] '}'   ;  field = IDENT ':' type
 fn struct_def(p: Parser) -> StructDef {
     let kw = expect(p, "struct", "'struct'");
     let name = expect_ident(p, "el nombre del struct");
+    let g = type_params_with_bounds(p); // M14.2c-1: <T: Trait>
     expect(p, "{", "'{' tras el nombre del struct");
     var fields: [FieldDef] = [];
     var done = false;
@@ -257,7 +300,7 @@ fn struct_def(p: Parser) -> StructDef {
         if (!eat(p, ",")) { done = true; }
     }
     expect(p, "}", "'}' para cerrar el struct");
-    StructDef { name: name, fields: fields, line: kw.line, col: kw.col }
+    StructDef { name: name, type_params: g.params, bounds: g.bounds, fields: fields, line: kw.line, col: kw.col }
 }
 
 // enum_def = 'enum' IDENT '{' [ variant { ',' variant } [ ',' ] ] '}'
@@ -265,6 +308,7 @@ fn struct_def(p: Parser) -> StructDef {
 fn enum_def(p: Parser) -> EnumDef {
     let kw = expect(p, "enum", "'enum'");
     let name = expect_ident(p, "el nombre del enum");
+    let g = type_params_with_bounds(p); // M14.2c-1: <T: Trait>
     expect(p, "{", "'{' tras el nombre del enum");
     var variants: [VariantDef] = [];
     var done = false;
@@ -284,13 +328,115 @@ fn enum_def(p: Parser) -> EnumDef {
         if (!eat(p, ",")) { done = true; }
     }
     expect(p, "}", "'}' para cerrar el enum");
-    EnumDef { name: name, variants: variants, line: kw.line, col: kw.col }
+    EnumDef { name: name, type_params: g.params, bounds: g.bounds, variants: variants, line: kw.line, col: kw.col }
 }
 
-// function = 'fn' IDENT '(' [ params ] ')' [ '->' type ] block
+// trait_def = 'trait' IDENT '{' { method_sig } '}'   (M14.2c-1)
+fn trait_def(p: Parser) -> TraitDef {
+    let kw = expect(p, "trait", "'trait'");
+    let name = expect_ident(p, "el nombre del trait");
+    expect(p, "{", "'{' tras el nombre del trait");
+    var methods: [MethodSig] = [];
+    while (!check(p, "}") && !at_end(p)) {
+        push(methods, method_sig(p));
+    }
+    expect(p, "}", "'}' para cerrar el trait");
+    TraitDef { name: name, methods: methods, line: kw.line, col: kw.col }
+}
+
+// method_sig = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] ( ';' | block )   (M14.2c-1)
+// Termina en ';' (método requerido) o en un bloque (cuerpo por defecto, M9.3a).
+fn method_sig(p: Parser) -> MethodSig {
+    let kw = expect(p, "fn", "'fn' en una firma de método");
+    let name = expect_ident(p, "el nombre del método");
+    expect(p, "(", "'(' tras el nombre del método");
+    let params = method_params(p);
+    expect(p, ")", "')'");
+    var ret = Type.TUnit;
+    if (eat(p, "->")) { ret = parse_type(p); }
+    var default_body: Option<Block> = Option.None;
+    if (check(p, "{")) {
+        default_body = Option.Some(block(p));
+    } else {
+        expect(p, ";", "';' o un cuerpo '{ ... }' para el método");
+    }
+    MethodSig { name: name, params: params, ret: ret, default_body: default_body, line: kw.line, col: kw.col }
+}
+
+// impl_block = 'impl' [ '<' tparams '>' ] IDENT 'for' type '{' { impl_method } '}'   (M14.2c-1)
+// 'for' no es palabra clave: se reconoce contextualmente (un identificador con ese nombre).
+fn impl_block(p: Parser) -> ImplBlock {
+    let kw = expect(p, "impl", "'impl'");
+    let g = type_params_with_bounds(p); // impl<T: A + B> ...
+    let trait_name = expect_ident(p, "el nombre del trait");
+    let kw_for = expect_ident(p, "'for' tras el nombre del trait");
+    if (kw_for != "for") { panic("se esperaba 'for', no '" + kw_for + "'"); }
+    let target = parse_type(p);
+    expect(p, "{", "'{' para abrir el cuerpo del impl");
+    var methods: [Func] = [];
+    while (!check(p, "}") && !at_end(p)) {
+        push(methods, impl_method(p));
+    }
+    expect(p, "}", "'}' para cerrar el impl");
+    ImplBlock {
+        trait_name: trait_name, type_params: g.params, bounds: g.bounds,
+        target: target, methods: methods, line: kw.line, col: kw.col,
+    }
+}
+
+// impl_method = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] block   (como function pero con
+// method_params —admite self— y sin parámetros de tipo propios).
+fn impl_method(p: Parser) -> Func {
+    let kw = expect(p, "fn", "'fn' en un método de impl");
+    let name = expect_ident(p, "el nombre del método");
+    expect(p, "(", "'(' tras el nombre del método");
+    let params = method_params(p);
+    expect(p, ")", "')'");
+    var ret = Type.TUnit;
+    if (eat(p, "->")) { ret = parse_type(p); }
+    let body = block(p);
+    var tp: [string] = [];
+    var bd: [Bound] = [];
+    Func {
+        name: name, type_params: tp, bounds: bd,
+        params: params, ret: ret, body: body, line: kw.line, col: kw.col,
+    }
+}
+
+// method_params = [ 'self' [ ',' param { ',' param } ] ] | [ params ]
+// Como params(), pero admite un primer parámetro `self` sin anotación (tipo `Self`).
+fn method_params(p: Parser) -> [Param] {
+    var params: [Param] = [];
+    if (check(p, ")")) { return params; }
+    // ¿El primer parámetro es 'self'? (un IDENT con ese nombre, sin anotación).
+    var es_self = false;
+    match (cur_kind(p)) {
+        TokKind.Ident(n) => { if (n == "self") { es_self = true; } },
+        _ => {},
+    }
+    if (es_self) {
+        let t = cur_tok(p);
+        advance(p);
+        push(params, Param { name: "self", ty: Type.TNamed("Self", []), line: t.line, col: t.col });
+        if (!eat(p, ",")) { return params; }
+    }
+    var seguir = true;
+    while (seguir) {
+        let t = cur_tok(p);
+        let name = expect_ident(p, "el nombre de un parámetro");
+        expect(p, ":", "':' tras el nombre del parámetro");
+        let ty = parse_type(p);
+        push(params, Param { name: name, ty: ty, line: t.line, col: t.col });
+        if (!eat(p, ",")) { seguir = false; }
+    }
+    params
+}
+
+// function = 'fn' IDENT [ '<' tparam { ',' tparam } '>' ] '(' [ params ] ')' [ '->' type ] block
 fn function(p: Parser) -> Func {
     let kw = expect(p, "fn", "'fn'");
     let name = expect_ident(p, "el nombre de la función");
+    let g = type_params_with_bounds(p); // M14.2c-1: <T: A + B>
     expect(p, "(", "'(' tras el nombre de la función");
     var params: [Param] = [];
     if (!check(p, ")")) { params = parse_params(p); }
@@ -298,7 +444,10 @@ fn function(p: Parser) -> Func {
     var ret = Type.TUnit;
     if (eat(p, "->")) { ret = parse_type(p); }
     let body = block(p);
-    Func { name: name, params: params, ret: ret, body: body, line: kw.line, col: kw.col }
+    Func {
+        name: name, type_params: g.params, bounds: g.bounds,
+        params: params, ret: ret, body: body, line: kw.line, col: kw.col,
+    }
 }
 
 // params = param { ',' param } ;  param = IDENT ':' type
@@ -316,10 +465,21 @@ fn parse_params(p: Parser) -> [Param] {
     params
 }
 
-// type = 'int' | 'float' | 'bool' | 'string' | 'char' | '[' type ']'
-//      | 'fn' '(' [ type { ',' type } ] ')' [ '->' type ]
-//      | IDENT   (struct/enum/param; sin args de tipo en M14.2a)
+// type = 'dyn' IDENT { '+' IDENT } | '[' type ']' | 'fn' '(' [ types ] ')' [ '->' type ]
+//      | IDENT [ '<' type { ',' type } '>' ]   (struct/enum/param/Map; el checker lo resuelve)
+//      | 'int' | 'float' | 'bool' | 'string' | 'char'
 fn parse_type(p: Parser) -> Type {
+    // Trait object: dyn A [+ B ...]. El conjunto se guarda canónico (ordenado, sin duplicados) para
+    // que `dyn A + B` == `dyn B + A` (igual que el parser de Rust).
+    if (eat(p, "dyn")) {
+        var traits: [string] = [];
+        var seguir = true;
+        while (seguir) {
+            push(traits, expect_ident(p, "el nombre del trait tras 'dyn'"));
+            if (!eat(p, "+")) { seguir = false; }
+        }
+        return Type.TDyn(sort_dedup(traits));
+    }
     if (check(p, "[")) {
         advance(p);
         let elem = parse_type(p);
@@ -342,9 +502,13 @@ fn parse_type(p: Parser) -> Type {
         if (eat(p, "->")) { r = parse_type(p); }
         return Type.TFn(ps, r);
     }
-    // Nombre de struct/enum/parámetro de tipo.
+    // Nombre de struct/enum/parámetro/Map, con argumentos de tipo opcionales: `Caja<int>`.
     match (cur_kind(p)) {
-        TokKind.Ident(name) => { advance(p); return Type.TNamed(name); },
+        TokKind.Ident(name) => {
+            advance(p);
+            let targs = type_args(p);
+            return Type.TNamed(name, targs);
+        },
         _ => {},
     }
     // Tipos primitivos.
@@ -354,6 +518,57 @@ fn parse_type(p: Parser) -> Type {
     else if (eat(p, "string")) { Type.TString }
     else if (eat(p, "char")) { Type.TChar }
     else { panic("se esperaba un tipo (int, float, bool, string, char, [T] o un struct)") }
+}
+
+// Lista opcional de argumentos de tipo: `< type { ',' type } >` (genéricos). Vacío si no hay `<`.
+fn type_args(p: Parser) -> [Type] {
+    var args: [Type] = [];
+    if (eat(p, "<")) {
+        var seguir = true;
+        while (seguir) {
+            push(args, parse_type(p));
+            if (!eat(p, ",")) { seguir = false; }
+        }
+        expect(p, ">", "'>' para cerrar los argumentos de tipo");
+    }
+    args
+}
+
+// Parámetros de tipo y sus bounds: `< T [: A + B] { , U ... } >` (M14.2c-1). Vacío si no hay `<`.
+fn type_params_with_bounds(p: Parser) -> Generics {
+    var params: [string] = [];
+    var bounds: [Bound] = [];
+    if (eat(p, "<")) {
+        var seguir = true;
+        while (seguir) {
+            let name = expect_ident(p, "el nombre de un parámetro de tipo");
+            if (eat(p, ":")) {
+                var more = true;
+                while (more) {
+                    let tr = expect_ident(p, "el nombre de un trait en el bound");
+                    push(bounds, Bound { param: name, trait_name: tr });
+                    if (!eat(p, "+")) { more = false; }
+                }
+            }
+            push(params, name);
+            if (!eat(p, ",")) { seguir = false; }
+        }
+        expect(p, ">", "'>' para cerrar los parámetros de tipo");
+    }
+    Generics { params: params, bounds: bounds }
+}
+
+// Ordena un arreglo de strings y elimina duplicados adyacentes (para el conjunto canónico de `dyn`).
+// Reusa el `sort` del prelude (string es Ord); el dedup es una pasada lineal sobre lo ya ordenado.
+fn sort_dedup(xs: [string]) -> [string] {
+    let ordenado = sort(xs);
+    var out: [string] = [];
+    var i = 0;
+    while (i < len(ordenado)) {
+        if (i == 0 || ordenado[i] != ordenado[i - 1]) { push(out, ordenado[i]); }
+        i = i + 1;
+    }
+    out
 }
 
 // block = '{' { statement } [ expression ] '}'

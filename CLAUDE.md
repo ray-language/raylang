@@ -636,6 +636,17 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `match_figuras.ray` reales. **Gotcha**: `push(binds, Option.None)` no infiere `T` → se materializa
     en `var bv: Option<string> = Option.None;` (el tipo declarado fija el `None`). Diferido: M14.2c
     (traits/impls/genéricos/dyn/Map/`?`/pipelines/anotaciones/imports/`pub`). DESIGN §23.3.
+  - **M14.2c-1 COMPLETO** (347 lib + 16 en `tests/selfhost_parser.rs`): **parser auto-alojado — sistema
+    de tipos**. Añade: genéricos `<T: A + B>` en fn/struct/enum/impl, args de tipo (`Caja<int>`; `Map<K,
+    V>` es genérico ordinario —sin nodo especial, el checker reclasifica, como en Rust—), `dyn A + B`
+    (conjunto canónico vía `sort` del prelude + dedup lineal), `trait` (firmas + cuerpos por defecto),
+    `impl [<…>] Trait for Tipo`, receptor `self`. AST: `Bound`/`TraitDef`/`MethodSig`/`ImplBlock`,
+    genéricos en declaraciones, `TNamed(string, [Type])` (antes sin args) + `TDyn([string])`; `Program`
+    gana `traits`+`impls`. **Fidelidad**: el `self` se representa `TNamed("Self",[])` y se vuelca
+    `"Self"` (igual que el `SelfType` de Rust) → el dump cuadra sin nodo `Self` propio. Oráculo:
+    snippets + 14 ejemplos reales (genericos/bounds/traits/tipos_genericos/impls_genericos/
+    trait_objects/metodos_por_defecto/ufcs/inferencia/funciones). Diferido a c-2: `?`, `|>`,
+    anotaciones, `pub`, imports, tipos calificados `M.Tipo`/`M.Enum.V`. DESIGN §23.3.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

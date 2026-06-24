@@ -49,11 +49,36 @@ fn dump_type(t: &Type) -> String {
             let joined = ps.iter().map(dump_type).collect::<Vec<_>>().join(", ");
             format!("fn({}) -> {}", joined, dump_type(r))
         }
-        // El parser (sin checker) produce `Struct(name, args)` para todo identificador en posición
-        // de tipo. En M14.2a no hay argumentos de tipo (genéricos → M14.2c).
-        Type::Struct(name, args) if args.is_empty() => name.clone(),
-        other => panic!("M14.2a no cubre el tipo {:?}", other),
+        // El parser (sin checker) produce `Struct(name, args)` para todo identificador en posición de
+        // tipo (incl. `Map<K,V>`, sin reclasificar). El receptor `self` de un método sí llega como
+        // `SelfType`; tanto él como un `Self` escrito (que es `Struct("Self",[])`) se vuelcan "Self".
+        Type::Struct(name, args) => {
+            if args.is_empty() {
+                name.clone()
+            } else {
+                format!("{}<{}>", name, args.iter().map(dump_type).collect::<Vec<_>>().join(", "))
+            }
+        }
+        Type::SelfType => "Self".into(),
+        Type::Dyn(traits) => format!("dyn {}", traits.join(" + ")),
+        other => panic!("el parser no debería producir el tipo {:?}", other),
     }
+}
+
+/// Segmento de genéricos ` (generics T U (bound T A) (bound U B))`, o "" si no hay ninguno.
+fn dump_generics(tp: &[String], bounds: &[(String, String)]) -> String {
+    if tp.is_empty() && bounds.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from(" (generics");
+    for t in tp {
+        s.push_str(&format!(" {}", t));
+    }
+    for (p, tr) in bounds {
+        s.push_str(&format!(" (bound {} {})", p, tr));
+    }
+    s.push(')');
+    s
 }
 
 fn dump_binop(op: &BinaryOp) -> &'static str {
@@ -174,7 +199,13 @@ fn dump_struct(s: &StructDef) -> String {
         .iter()
         .map(|(n, t)| format!(" (field {} {})", n, dump_type(t)))
         .collect();
-    format!("(struct {} (fields{})){}", s.name, inner, pos(s.line, s.col))
+    format!(
+        "(struct {}{} (fields{})){}",
+        s.name,
+        dump_generics(&s.type_params, &s.bounds),
+        inner,
+        pos(s.line, s.col)
+    )
 }
 
 fn dump_enum(e: &EnumDef) -> String {
@@ -186,7 +217,13 @@ fn dump_enum(e: &EnumDef) -> String {
             format!(" (variant {}{}){}", v.name, payload, pos(v.line, v.col))
         })
         .collect();
-    format!("(enum {}{}){}", e.name, inner, pos(e.line, e.col))
+    format!(
+        "(enum {}{}{}){}",
+        e.name,
+        dump_generics(&e.type_params, &e.bounds),
+        inner,
+        pos(e.line, e.col)
+    )
 }
 
 /// Cada expresión precedida de un espacio (listas: args, elementos de arreglo).
@@ -249,8 +286,9 @@ fn dump_params(ps: &[Param]) -> String {
 
 fn dump_func(f: &Function) -> String {
     format!(
-        "(fn {} (params{}) {} {}){}",
+        "(fn {}{} (params{}) {} {}){}",
         f.name,
+        dump_generics(&f.type_params, &f.bounds),
         dump_params(&f.params),
         dump_type(&f.return_type),
         dump_block(&f.body),
@@ -258,25 +296,62 @@ fn dump_func(f: &Function) -> String {
     )
 }
 
-/// El volcado canónico de un Program (el oráculo). Orden fijo: funciones, structs, enums (el driver
-/// raylang usa el mismo). M14.2b cubre esos tres; traits/impls/genéricos/imports → M14.2c, así que el
-/// corpus no debe traerlos (red de seguridad).
+fn dump_methodsig(m: &MethodSig) -> String {
+    let mut s = format!(
+        "(method {} (params{}) {}",
+        m.name,
+        dump_params(&m.params),
+        dump_type(&m.return_type)
+    );
+    if let Some(b) = &m.default_body {
+        s.push_str(&format!(" {}", dump_block(b)));
+    }
+    s.push(')');
+    s.push_str(&pos(m.line, m.col));
+    s
+}
+
+fn dump_trait(t: &TraitDef) -> String {
+    let inner: String = t.methods.iter().map(|m| format!(" {}", dump_methodsig(m))).collect();
+    format!("(trait {}{}){}", t.name, inner, pos(t.line, t.col))
+}
+
+fn dump_impl(b: &ImplBlock) -> String {
+    let inner: String = b.methods.iter().map(|m| format!(" {}", dump_func(m))).collect();
+    format!(
+        "(impl {}{} {}{}){}",
+        b.trait_name,
+        dump_generics(&b.type_params, &b.bounds),
+        dump_type(&b.target),
+        inner,
+        pos(b.line, b.col)
+    )
+}
+
+/// El volcado canónico de un Program (el oráculo). Orden fijo: funciones, structs, enums, traits,
+/// impls (el driver raylang usa el mismo). M14.2c-1 cubre genéricos/traits/impls; anotaciones/`pub`/
+/// imports → M14.2c-2, así que el corpus no debe traerlos (red de seguridad).
 fn dump_program(prog: &Program) -> String {
-    assert!(prog.traits.is_empty(), "M14.2b: el corpus no debe tener traits");
-    assert!(prog.impls.is_empty(), "M14.2b: el corpus no debe tener impls");
-    assert!(prog.imports.is_empty(), "M14.2b: el corpus no debe tener imports");
-    assert!(prog.from_imports.is_empty(), "M14.2b: el corpus no debe tener from-imports");
-    // Las definiciones de tipo de M14.2b no llevan genéricos/anotaciones/pub (→ M14.2c).
+    assert!(prog.imports.is_empty(), "M14.2c-1: el corpus no debe tener imports");
+    assert!(prog.from_imports.is_empty(), "M14.2c-1: el corpus no debe tener from-imports");
+    for f in &prog.functions {
+        assert!(f.annotations.is_empty() && !f.is_pub, "M14.2c-1: función sin anotaciones/pub");
+    }
     for s in &prog.structs {
-        assert!(s.type_params.is_empty() && s.annotations.is_empty() && !s.is_pub, "M14.2b: struct simple");
+        assert!(s.annotations.is_empty() && !s.is_pub, "M14.2c-1: struct sin anotaciones/pub");
     }
     for e in &prog.enums {
-        assert!(e.type_params.is_empty() && e.annotations.is_empty() && !e.is_pub, "M14.2b: enum simple");
+        assert!(e.annotations.is_empty() && !e.is_pub, "M14.2c-1: enum sin anotaciones/pub");
+    }
+    for t in &prog.traits {
+        assert!(!t.is_pub, "M14.2c-1: trait sin pub");
     }
     let mut out: Vec<String> = Vec::new();
     out.extend(prog.functions.iter().map(dump_func));
     out.extend(prog.structs.iter().map(dump_struct));
     out.extend(prog.enums.iter().map(dump_enum));
+    out.extend(prog.traits.iter().map(dump_trait));
+    out.extend(prog.impls.iter().map(dump_impl));
     out.join("\n")
 }
 
@@ -420,8 +495,39 @@ fn match_y_patrones() {
     );
 }
 
-/// El test fuerte: parsear archivos REALES (los ejemplos que solo usan features de M14.2a/b) y exigir
-/// que el parser en raylang coincida con el de Rust nodo a nodo (posiciones incluidas).
+#[test]
+fn genericos_en_declaraciones() {
+    comparar("fn id<T>(x: T) -> T { x }", "sp_gen_fn.ray");
+    comparar("fn dos<A, B>(a: A, b: B) -> A { a }", "sp_gen_fn2.ray");
+    comparar("fn f<T: Show + Eq>(x: T) -> T { x }", "sp_gen_bounds.ray");
+    comparar("struct Caja<T: Show> { v: T }", "sp_gen_struct.ray");
+    comparar("enum Lista<T> { Vacia, Cons(T, Lista<T>) }", "sp_gen_enum.ray");
+}
+
+#[test]
+fn tipos_genericos_dyn_y_map() {
+    comparar("fn f(c: Caja<int>, p: Par<A, [bool]>) -> Map<string, int> { m }", "sp_targs.ray");
+    // dyn: el conjunto es canónico (ordenado, sin duplicados): `dyn Show + Eq` → `dyn Eq + Show`.
+    comparar("fn f(x: dyn Show + Eq) -> int { 0 }", "sp_dyn.ray");
+    comparar("fn f(x: dyn Show) -> int { 0 }", "sp_dyn1.ray");
+}
+
+#[test]
+fn traits_e_impls() {
+    comparar("trait Show { fn mostrar(self) -> string; }", "sp_trait.ray");
+    comparar(
+        "trait Saludo { fn hola(self) -> string { \"hola\" } fn chau(self) -> string; }",
+        "sp_trait_default.ray",
+    );
+    comparar("impl Show for int { fn mostrar(self) -> string { \"i\" } }", "sp_impl.ray");
+    comparar(
+        "impl<T: Show> Show for Caja<T> { fn mostrar(self) -> string { self.v.mostrar() } }",
+        "sp_impl_gen.ray",
+    );
+}
+
+/// El test fuerte: parsear archivos REALES (los ejemplos que solo usan features de M14.2a/b/c-1) y
+/// exigir que el parser en raylang coincida con el de Rust nodo a nodo (posiciones incluidas).
 #[test]
 fn parsea_archivos_reales_igual_que_el_oraculo() {
     let archivos = [
@@ -429,6 +535,16 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "examples/fizzbuzz.ray",
         "examples/enums.ray",
         "examples/match_figuras.ray",
+        "examples/genericos.ray",
+        "examples/bounds.ray",
+        "examples/traits.ray",
+        "examples/tipos_genericos.ray",
+        "examples/impls_genericos.ray",
+        "examples/trait_objects.ray",
+        "examples/metodos_por_defecto.ray",
+        "examples/ufcs.ray",
+        "examples/inferencia.ray",
+        "examples/funciones.ray",
     ];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));

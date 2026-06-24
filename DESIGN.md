@@ -2403,6 +2403,18 @@ canónica del token: `"("`, `"->"`, `"let"`; nombre simbólico para los que carg
   `Option.None` suelto en argumento de builtin (`push(binds, Option.None)`) no infiere su `T`; se
   materializa en una `var` tipada (`var bv: Option<string> = Option.None;`) cuyo tipo declarado fija el
   `None`. Diferido: M14.2c (traits/impls/genéricos/dyn/Map/`?`/pipelines/anotaciones/imports/`pub`).
+- **M14.2c-1 COMPLETO** — sistema de tipos: genéricos (`<T: A + B>`) en fn/struct/enum/impl, argumentos
+  de tipo (`Caja<int>`; `Map<K,V>` es un genérico ordinario a nivel de parser —no hay nodo especial,
+  como en Rust, donde el checker reclasifica `Struct("Map",…)`—), trait objects `dyn A + B` (conjunto
+  **canónico**: el parser ordena+dedup con `sort` del prelude + pasada lineal), `trait` (firmas +
+  cuerpos por defecto), `impl [<…>] Trait for Tipo`, y el receptor `self` (tipo `Self`). El AST gana
+  `Bound`/`TraitDef`/`MethodSig`/`ImplBlock`, genéricos en las declaraciones, `Type::TNamed(string,
+  [Type])` (antes sin args) y `TDyn([string])`; `Program` lleva ahora `traits`+`impls`. **Decisión de
+  fidelidad**: el `self` receptor se representa como `TNamed("Self",[])` y se vuelca `"Self"` —igual que
+  el `SelfType` de Rust—, así el dump cuadra sin un nodo `Self` propio. Oráculo: snippets + 14 ejemplos
+  reales (genericos, bounds, traits, tipos_genericos, impls_genericos, trait_objects,
+  metodos_por_defecto, ufcs, inferencia, funciones…). Diferido a M14.2c-2: `?`, `|>`, anotaciones,
+  `pub`, imports, tipos calificados `M.Tipo`/`M.Enum.V`.
 
-**Próximas fases:** completar el parser (M14.2c), el **checker**, y finalmente ejecutar. Cada una,
-su oráculo.
+**Próximas fases:** cerrar el parser (M14.2c-2: azúcar y módulos), el **checker**, y finalmente
+ejecutar. Cada una, su oráculo.

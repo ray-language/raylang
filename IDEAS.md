@@ -21,6 +21,7 @@
 | Structs vs interfaces/**traits** | Sistema de tipos / polimorfismo | **M9** | 📌 recomendación fijada (traits estilo Rust) |
 | Hot code reloading | Indirección de llamadas en la VM | tardío | 💤 acomodable |
 | Visibilidad (`pub` vs mayúscula) | Sistema de módulos | **M11** | 📌 recomendación fijada (`pub` explícito) |
+| **Módulos por directorios** (`import geo/formas/circulo;`) | Loader + parser de `import` | **M11.5** | ✅ separador `/` fijado; **solo leaf-binding** + `as`; prohibido el acceso por ruta en expresiones (ambiguo con `/` y mala práctica); rutas absolutas desde la raíz. Diferido: imports relativos, `mod.ray`, re-exports |
 | **Self-hosting** (raylang en raylang) | Capstone: requiere módulos + I/O | transversal (post-M11) | 🎯 meta-objetivo, ya habilitado por el lenguaje |
 | **Tooling de editor** (coloreado / LSP) | Front-end (reutiliza el checker) | coloreado ✅ / **LSP M10** | 🔧 parcial (LSP pendiente) |
 | **Anotaciones** (`@test`, `@derive`, …) | Parser + fase que las consume | **M10** | 📌 dirección fijada; `@` ✅ reservado en el lexer (`TokenKind::At`); falta el parser |

@@ -14,6 +14,10 @@ fn run_modules(dir: &str, entry: &str, files: &[(&str, &str)], vm: bool) -> (Str
     for (name, src) in files {
         let mut path = base.clone();
         path.push(format!("{name}.ray"));
+        // El nombre puede ser una ruta con `/` (módulos por directorios, M11.5): crea los padres.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("crea el subdirectorio del módulo");
+        }
         let mut f = std::fs::File::create(&path).expect("crea el módulo");
         f.write_all(src.as_bytes()).expect("escribe el módulo");
     }
@@ -249,4 +253,68 @@ fn llamar_funcion_privada_es_error() {
     let (out, code) = run_modules("ray_mod_priv", "app", files, false);
     assert_ne!(code, 0, "una llamada a función privada debe fallar");
     let _ = out;
+}
+
+// --- M11.5: módulos por directorios (import a/b/c) -------------------------------------------
+
+#[test]
+fn import_por_directorio_funcion_y_tipo() {
+    // `import geo/formas/circulo;` resuelve <raíz>/geo/formas/circulo.ray; el leaf es `circulo`,
+    // y se accede calificado tanto a una función `pub` como a un tipo `pub`.
+    let files = &[
+        ("geo/formas/circulo",
+         "pub struct Punto { x: int, y: int }\npub fn area(r: int) -> int { 3 * r * r }\n"),
+        ("app",
+         "import geo/formas/circulo;\nfn main() -> int {\n  let p = circulo.Punto { x: 2, y: 5 };\n  print(p.x);\n  circulo.area(4)\n}\n"),
+    ];
+    for vm in [false, true] {
+        let (out, code) = run_modules("ray_dir_basico", "app", files, vm);
+        assert!(out.contains("2"), "campo del tipo importado por ruta (vm={vm})\n{out}");
+        assert_eq!(code, 48, "exit = circulo.area(4) = 3*16 = 48 (vm={vm})");
+    }
+}
+
+#[test]
+fn import_por_directorio_con_alias() {
+    let files = &[
+        ("geo/formas/circulo", "pub fn area(r: int) -> int { 3 * r * r }\n"),
+        ("app", "import geo/formas/circulo as c;\nfn main() -> int { c.area(4) }\n"),
+    ];
+    let (_, code) = run_modules("ray_dir_alias", "app", files, false);
+    assert_eq!(code, 48, "el alias `c` accede al módulo por ruta");
+}
+
+#[test]
+fn import_por_directorio_transitivo_desde_la_raiz() {
+    // Un submódulo importa a otro **por su ruta absoluta desde la raíz** (no relativa).
+    let files = &[
+        ("geo/util", "pub fn cuadrado(n: int) -> int { n * n }\n"),
+        ("geo/formas/circulo",
+         "import geo/util;\npub fn area(r: int) -> int { 3 * util.cuadrado(r) }\n"),
+        ("app", "import geo/formas/circulo;\nfn main() -> int { circulo.area(4) }\n"),
+    ];
+    let (_, code) = run_modules("ray_dir_trans", "app", files, false);
+    assert_eq!(code, 48, "circulo (en geo/formas) usa geo/util por ruta absoluta");
+}
+
+#[test]
+fn colision_de_leaf_pide_alias() {
+    // Dos rutas con el mismo último segmento (`circulo`) colisionan: el segundo necesita `as`.
+    let files = &[
+        ("a/circulo", "pub fn area(r: int) -> int { r }\n"),
+        ("b/circulo", "pub fn area(r: int) -> int { r + r }\n"),
+        ("app", "import a/circulo;\nimport b/circulo;\nfn main() -> int { circulo.area(1) }\n"),
+    ];
+    let (out, code) = run_modules("ray_dir_colision", "app", files, false);
+    assert_ne!(code, 0, "la colisión de leaf debe fallar\n{out}");
+}
+
+#[test]
+fn from_import_por_directorio() {
+    let files = &[
+        ("geo/formas/circulo", "pub fn area(r: int) -> int { 3 * r * r }\n"),
+        ("app", "from geo/formas/circulo import area;\nfn main() -> int { area(4) }\n"),
+    ];
+    let (_, code) = run_modules("ray_dir_from", "app", files, false);
+    assert_eq!(code, 48, "from a/b/c import trae la función sin calificar");
 }

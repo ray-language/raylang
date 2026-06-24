@@ -157,9 +157,46 @@ Si una referencia calificada **no resuelve** (módulo no importado, o tipo no `p
 `.`**: ningún tipo definido lleva un `.` en su nombre, así que el checker la rechaza como "tipo
 desconocido". Eso *es* la encapsulación —un tipo privado de otro módulo no se alcanza ni calificándolo—.
 
+## Módulos por directorios (M11.5)
+
+Hasta aquí todos los módulos viven en **una sola carpeta** (el loader resuelve `import M;` contra
+`<dir-de-entrada>/M.ray`). Para organizar un proyecto de verdad hace falta una **jerarquía de
+directorios**, con la sintaxis tradicional estilo Unix:
+
+```rust
+import geo/formas/circulo;          // resuelve  <raíz>/geo/formas/circulo.ray
+import geo/formas/circulo as c;     // ... con un nombre local distinto
+
+fn main() -> int {
+  let p = circulo.Punto { x: 2, y: 5 };   // se accede por el LEAF: 'circulo'
+  circulo.area(4)
+}
+```
+
+Tres decisiones fijan la forma:
+
+- **Separador `/`.** En la línea de `import` no hay ninguna división, así que el parser reinterpreta
+  `/` como separador de directorios sin ambigüedad con el operador. La ruta es **absoluta desde la
+  raíz** del proyecto (el directorio del archivo de entrada): un submódulo que use a un vecino
+  escribe la ruta completa (`import geo/util;`), no una relativa.
+- **Solo *leaf-binding*.** `import geo/formas/circulo;` liga **el último segmento** (`circulo`) como
+  nombre local. El acceso reusa el `.` de siempre (`circulo.area`, `circulo.Punto`). Dos rutas con el
+  mismo último segmento colisionan → se pide `as` (igual que los `from`-imports).
+- **Prohibido el acceso por ruta en expresiones.** Escribir `geo/formas/circulo.area(x)` sería
+  ambiguo con la división —y además es mala práctica—. La ruta vive **solo** en la declaración
+  `import`; toda referencia posterior usa el leaf. Así nunca aparece un `/` fuera de un `import`.
+
+Lo bonito: el núcleo **no cambia nada**. La identidad de un módulo deja de ser su *stem* y pasa a ser
+su **ruta** (`geo/formas/circulo`), pero el loader la namespaca con el mismo `::` de antes traduciendo
+los `/` (`geo::formas::circulo::area`). Los mapas de acceso calificado pasan de un *conjunto* de
+nombres a un **mapa leaf → ruta**. Un solo archivo, o una carpeta plana, quedan **idénticos** (sin
+`/`, la traducción es la identidad y el leaf es el propio nombre). El intérprete y la VM siguen sin
+enterarse: ven nombres planos con `::`.
+
 ## Lo que queda fuera (a propósito)
 
-- **Submódulos / jerarquía de directorios**, `pub` granular (por campo), *re-exports* → futuro.
+- **Imports relativos** (`import ./util;`), **`mod.ray`** (directorio-como-módulo), `pub` granular
+  (por campo), *re-exports* → futuro.
 
 > La lección de M11.3 es que una *feature* que parece muy de "sistema" —cargar archivos, espacios
 > de nombres, visibilidad— cabe entera en el front-end si ya tienes la disciplina del **erasure**.

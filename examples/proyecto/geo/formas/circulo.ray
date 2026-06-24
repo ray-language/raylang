@@ -1,0 +1,12 @@
+// Submódulo en un subdirectorio: examples/proyecto/geo/formas/circulo.ray
+// Su ruta de módulo es "geo/formas/circulo" (M11.5).
+//
+// Importa a un vecino por su RUTA ABSOLUTA desde la raíz del proyecto (no relativa):
+//   import geo/util;   ->  se accede por su leaf, "util".
+
+import geo/util;
+
+pub struct Circulo { radio: int }
+
+// Usa el submódulo importado por ruta: util.cuadrado(...).
+pub fn area(c: Circulo) -> int { 3 * util.cuadrado(c.radio) }

@@ -1,0 +1,24 @@
+// Ejecuta con:  cargo run --quiet -- examples/proyecto/main.ray
+//
+// Módulos por DIRECTORIOS (M11.5). El proyecto se organiza en carpetas:
+//
+//   examples/proyecto/
+//     ├── main.ray                  (entrada; este archivo)
+//     ├── geo/util.ray              -> módulo "geo/util"
+//     └── geo/formas/circulo.ray    -> módulo "geo/formas/circulo"
+//
+// Reglas:
+//   - El separador de ruta es '/', estilo Unix. La ruta es absoluta desde la RAÍZ del
+//     proyecto (el directorio de este archivo de entrada).
+//   - Se importa con la ruta completa, pero se ACCEDE por el "leaf" (último segmento):
+//     `import geo/formas/circulo;`  ->  `circulo.area(...)`.
+//   - Para evitar colisiones de leaf, se usa `as`.
+
+import geo/formas/circulo;     // leaf: "circulo"
+import geo/util as u;          // leaf renombrado a "u"
+
+fn main() -> int {
+  let c = circulo.Circulo { radio: 4 };   // tipo `pub` del submódulo, calificado por el leaf
+  print(u.cuadrado(4));                    // 16  (otro submódulo, leaf renombrado)
+  circulo.area(c)                          // 3 * 16 = 48  -> código de salida
+}

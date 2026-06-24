@@ -121,13 +121,25 @@ pub struct Program {
     pub from_imports: Vec<FromImport>,
 }
 
-/// Una declaración `import M;` (M11.3): importa el módulo `M` (archivo `M.ray`) como espacio
-/// de nombres; sus ítems `pub` se acceden calificados (`M.f(...)`).
+/// Una declaración `import M;` / `import a/b/c [as x];` (M11.3 / M11.5): importa el módulo dado por
+/// su **ruta** (`module`, con `/` como separador de directorios, archivo `a/b/c.ray`) como espacio
+/// de nombres. El nombre local es el **leaf** (último segmento) o el `alias`; sus ítems `pub` se
+/// acceden calificados (`c.f(...)`). La ruta solo aparece aquí; las referencias usan el leaf.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportDecl {
     pub module: String,
+    pub alias: Option<String>,
     pub line: usize,
     pub col: usize,
+}
+
+impl ImportDecl {
+    /// El nombre local con el que el módulo queda en ámbito: el alias si lo hay, si no el último
+    /// segmento de la ruta (`import geo/formas/circulo;` → `circulo`).
+    pub fn leaf(&self) -> &str {
+        self.alias.as_deref()
+            .unwrap_or_else(|| self.module.rsplit('/').next().unwrap_or(&self.module))
+    }
 }
 
 /// Una declaración `from M import a [as b]{, c [as d]};` (M11.3b): trae nombres `pub` del módulo

@@ -361,6 +361,21 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   gramática: `M.Tipo { … }` se ancla a que el receptor del `.` sea un `Ident` (mismo compromiso
   struct-literal-vs-bloque que `Tipo { … }`). **M11.3c COMPLETO.** Diferido: submódulos/directorios,
   `pub` granular por campo, re-exports. Runtime intacto (oráculo VM↔intérprete sin tocar).
+- **M11.5 COMPLETO** (330 tests lib + 22 en `tests/modules_cli.rs`): **módulos por directorios**
+  (`import geo/formas/circulo;`, DESIGN §20.3). La identidad de un módulo deja de ser su *stem* y pasa
+  a ser su **ruta**, desacoplando los cinco roles que el stem cumplía: ruta de archivo, prefijo de
+  namespacing, clave de `pub` y nombre local. **Decisiones** (fijadas con el usuario): separador
+  **`/`** (en la línea de `import` no hay división → sin ambigüedad; el `parser` lee `IDENT ('/'
+  IDENT)*` en `module_path`), **solo leaf-binding** (`import a/b/c;` liga el último segmento `c`; `as`
+  para colisiones; `ImportDecl` gana `alias` + `leaf()`), rutas **absolutas desde la raíz**, y
+  **prohibido el acceso por ruta en expresiones** (ambiguo con `/` + mala práctica → el `/` solo vive
+  en el `import`). **Front-end puro**: el loader namespaca con el mismo `::` traduciendo `/`
+  (`ns_prefix`: `geo/formas/circulo` → `geo::formas::circulo::area`); los mapas de acceso calificado
+  (`Resolver.imports`, `TypeRewriter.imports`) pasan de `HashSet<módulo>` a **`ImportMap` = leaf →
+  ruta** (`build_import_map`, detecta colisión de leaf); `qualified_field`/`rewrite_name` buscan por
+  leaf, validan `pub` contra la ruta y bajan a `ns_prefix(ruta)::nombre`. Compatible hacia atrás: sin
+  `/`, `ns_prefix` es la identidad y el leaf es el propio nombre. Runtime intacto. Diferido: imports
+  relativos, `mod.ray`/directorio-como-módulo, `pub` granular por campo, re-exports.
 - **M11.4 — cierre de diferidos aditivos de la stdlib** (DESIGN §20.4). Tocan runtime → oráculo
   (con estrés del GC para los que asignan heap). Tras L1, cada builtin = fila en `BUILTINS` + opcode
   + impl por motor; checker/compilador sin cambios.

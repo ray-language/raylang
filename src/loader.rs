@@ -129,7 +129,7 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
     let mut loaded_modules: Vec<LoadedModule> = Vec::new();
     let mut next_start = 1usize; // primera línea libre del espacio global
     for mut m in modules {
-        let prefix = if m.is_entry { None } else { Some(m.name.clone()) };
+        let prefix = module_prefix(&m);
 
         // 1. `@derive` (M11.3c): se expande **aquí**, con los nombres **locales** (re-lexables),
         //    antes de namespacar; los `impl` generados se namespacan luego como los demás. El
@@ -142,9 +142,11 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         let (from_values, from_types) =
             clasificar_from_imports(&m, &pub_fns, &pub_types, &tipos)?;
 
-        // 3. Resolución de **valores** (funciones propias, `from`-imports de función, `M.f`,
-        //    construcción de enum calificada `M.Color.Rojo`).
-        let mut resolver = Resolver::new(&m, &pub_fns, &pub_types, &from_values);
+        // 3. Resolución de **valores** (funciones propias, `from`-imports de función, `c.f`,
+        //    construcción de enum calificada `c.Color.Rojo`). El `import_map` (leaf → ruta, M11.5)
+        //    lo comparten el Resolver y el TypeRewriter.
+        let import_map = build_import_map(&m)?;
+        let mut resolver = Resolver::new(&m, &pub_fns, &pub_types, &from_values, &import_map);
         resolver.resolve_module(&mut m)?;
 
         // 4. Namespacing de **tipos** (M11.3c): renombrar las definiciones de este módulo a su
@@ -156,8 +158,7 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         rename_type_defs(&mut m.program, &own_types);
         let mut type_refs = own_types;
         type_refs.extend(from_types);
-        let imports: HashSet<String> = m.program.imports.iter().map(|i| i.module.clone()).collect();
-        TypeRewriter::new(&type_refs, &imports, &pub_types).rewrite_program(&mut m.program);
+        TypeRewriter::new(&type_refs, &import_map, &pub_types).rewrite_program(&mut m.program);
 
         // 5. Banda de este módulo: empieza en `next_start`; sus posiciones se desplazan por `delta`.
         let start = next_start;
@@ -338,13 +339,27 @@ fn module_name(path: &Path) -> String {
     path.file_stem().and_then(|s| s.to_str()).unwrap_or("main").to_string()
 }
 
-/// Nombre global de una función **o tipo**: `modulo::nombre` para un módulo importado; el propio
+/// Prefijo de namespacing de una **ruta** de módulo (M11.5): los separadores de directorio `/` se
+/// traducen al separador interno `::` (`geo/formas/circulo` → `geo::formas::circulo`). Para una ruta
+/// de un solo segmento (carpeta plana, M11.3) es la identidad. El `::` es ilegal en identificadores
+/// del usuario, así que los nombres globales nunca colisionan con los suyos.
+fn ns_prefix(path: &str) -> String {
+    path.replace('/', "::")
+}
+
+/// Nombre global de una función **o tipo**: `prefijo::nombre` para un módulo importado; el propio
 /// nombre para el de entrada (sus nombres ya son globales; `main` debe seguir siendo `main`).
 fn global_fn(prefix: &Option<String>, name: &str) -> String {
     match prefix {
         Some(m) => format!("{}::{}", m, name),
         None => name.to_string(),
     }
+}
+
+/// El prefijo de namespacing de un módulo: `None` para el de entrada (sin namespacing), o
+/// `Some(ns_prefix(ruta))` para uno importado (M11.5: traduce `/`→`::`).
+fn module_prefix(m: &Module) -> Option<String> {
+    if m.is_entry { None } else { Some(ns_prefix(&m.name)) }
 }
 
 /// Mapa `nombre local → nombre global` de los **tipos** (struct/enum/trait) de un módulo (M11.3c).
@@ -457,6 +472,31 @@ fn recolectar_tipos(modules: &[Module]) -> HashMap<String, HashSet<String>> {
 /// Resolver como el mapa de tipos del TypeRewriter.
 type NameMap = HashMap<String, String>;
 
+/// Mapa `leaf → ruta` de los `import a/b/c [as x];` de un módulo (M11.5): el nombre local con el que
+/// se accede (el último segmento, o el alias) → la ruta completa del módulo (`geo/formas/circulo`),
+/// que es su identidad (clave de `pub_fns`/`pub_types`). Lo consultan `Resolver` y `TypeRewriter`
+/// para resolver el acceso calificado (`circulo.f`, `circulo.Tipo`). En M11.3 (carpeta plana) leaf y
+/// ruta coinciden, así que es compatible hacia atrás.
+type ImportMap = HashMap<String, String>;
+
+/// Construye el `ImportMap` de un módulo a partir de sus `import` (M11.5). Detecta colisiones de
+/// **leaf** (dos rutas con el mismo último segmento sin `as`) y pide renombrar con `as`.
+fn build_import_map(m: &Module) -> Result<ImportMap, LoadError> {
+    let mut map = ImportMap::new();
+    for i in &m.program.imports {
+        let leaf = i.leaf().to_string();
+        if let Some(otra) = map.insert(leaf.clone(), i.module.clone())
+            && otra != i.module
+        {
+            return Err(render(&m.source, i.line, i.col, &m.name, &format!(
+                "el nombre de módulo '{}' ya nombra a '{}'; usa 'as' para renombrar esta importación",
+                leaf, otra
+            )));
+        }
+    }
+    Ok(map)
+}
+
 /// El destino global de un nombre `from`-importado: una **función** (va al `own` del Resolver) o un
 /// **tipo** (va al mapa del TypeRewriter). Ambos guardan el nombre global `M::nombre`.
 enum FromTarget {
@@ -513,10 +553,10 @@ fn clasificar_from_name(
     tipos: &HashMap<String, HashSet<String>>,
 ) -> Result<FromTarget, LoadError> {
     if pub_fns.get(from).is_some_and(|s| s.contains(&name.name)) {
-        return Ok(FromTarget::Funcion(format!("{}::{}", from, name.name)));
+        return Ok(FromTarget::Funcion(format!("{}::{}", ns_prefix(from), name.name)));
     }
     if pub_types.get(from).is_some_and(|s| s.contains(&name.name)) {
-        return Ok(FromTarget::Tipo(format!("{}::{}", from, name.name)));
+        return Ok(FromTarget::Tipo(format!("{}::{}", ns_prefix(from), name.name)));
     }
     // No exporta el nombre: ¿existe como tipo privado? (mensaje más preciso que "no existe").
     if tipos.get(from).is_some_and(|s| s.contains(&name.name)) {
@@ -535,9 +575,10 @@ struct Resolver<'a> {
     /// Nombres de nivel superior visibles **sin calificar** en este módulo: las funciones propias
     /// y las traídas por `from M import …` (con su alias). Mapea nombre local → nombre global.
     own: NameMap,
-    /// Módulos importados con `import M;` (para el acceso calificado `M.item`). Los módulos que
-    /// solo aparecen en `from M import …` **no** entran aquí (estilo Python: no traen `M`).
-    imports: HashSet<String>,
+    /// Módulos importados con `import a/b/c [as x];`: mapa **leaf → ruta** (M11.5), para el acceso
+    /// calificado `circulo.item`. Los módulos que solo aparecen en `from M import …` **no** entran
+    /// aquí (estilo Python: no traen el leaf).
+    imports: ImportMap,
     /// Funciones `pub` por módulo (de todo el programa), para verificar `M.f` y los from-imports.
     pub_fns: &'a HashMap<String, HashSet<String>>,
     /// Tipos `pub` por módulo, para la construcción de enum calificada `M.Color.Rojo` (M11.3c-3).
@@ -554,8 +595,9 @@ impl<'a> Resolver<'a> {
         pub_fns: &'a HashMap<String, HashSet<String>>,
         pub_types: &'a HashMap<String, HashSet<String>>,
         from_values: &NameMap,
+        import_map: &ImportMap,
     ) -> Self {
-        let prefix = if m.is_entry { None } else { Some(m.name.clone()) };
+        let prefix = module_prefix(m);
         let mut own = HashMap::new();
         for f in &m.program.functions {
             own.insert(f.name.clone(), global_fn(&prefix, &f.name));
@@ -564,8 +606,7 @@ impl<'a> Resolver<'a> {
         for (local, global) in from_values {
             own.insert(local.clone(), global.clone());
         }
-        let imports = m.program.imports.iter().map(|i| i.module.clone()).collect();
-        Resolver { own, imports, pub_fns, pub_types, scopes: Vec::new() }
+        Resolver { own, imports: import_map.clone(), pub_fns, pub_types, scopes: Vec::new() }
     }
 
     fn resolve_module(&mut self, m: &mut Module) -> Result<(), LoadError> {
@@ -736,18 +777,21 @@ impl<'a> Resolver<'a> {
     /// módulo. El caso de tipo cubre la construcción de enum calificada `M.Color.Rojo` (M11.3c-3):
     /// la cabeza `M.Color` colapsa a `Ident("M::Color")` y el checker la trata como enum normal.
     fn qualified_field(&self, object: &Expr, name: &str, src: &str, module: &str) -> Result<Option<String>, LoadError> {
-        let ExprKind::Ident(m) = &object.kind else { return Ok(None) };
-        if self.declarado_local(m) || !self.imports.contains(m) {
-            return Ok(None); // una local tapa al módulo, o no es un módulo importado
+        let ExprKind::Ident(leaf) = &object.kind else { return Ok(None) };
+        if self.declarado_local(leaf) {
+            return Ok(None); // una local tapa al módulo
         }
-        let exporta = self.pub_fns.get(m).is_some_and(|s| s.contains(name))
-            || self.pub_types.get(m).is_some_and(|s| s.contains(name));
+        let Some(ruta) = self.imports.get(leaf) else {
+            return Ok(None); // no es un módulo importado (su leaf)
+        };
+        let exporta = self.pub_fns.get(ruta).is_some_and(|s| s.contains(name))
+            || self.pub_types.get(ruta).is_some_and(|s| s.contains(name));
         if !exporta {
             return Err(render(src, object.line, object.col, module, &format!(
-                "el módulo '{}' no exporta '{}' (¿falta 'pub'?)", m, name
+                "el módulo '{}' no exporta '{}' (¿falta 'pub'?)", ruta, name
             )));
         }
-        Ok(Some(format!("{}::{}", m, name)))
+        Ok(Some(format!("{}::{}", ns_prefix(ruta), name)))
     }
 }
 
@@ -759,8 +803,8 @@ impl<'a> Resolver<'a> {
 struct TypeRewriter<'a> {
     /// Nombre local de tipo → nombre global (propios del módulo; en -2, también importados).
     types: &'a NameMap,
-    /// Módulos importados con `import M;` en este módulo (para resolver `M.Tipo`, M11.3c-3).
-    imports: &'a HashSet<String>,
+    /// Módulos importados (leaf → ruta, M11.5) en este módulo, para resolver `c.Tipo` calificado.
+    imports: &'a ImportMap,
     /// Tipos `pub` por módulo (de todo el programa), para validar `M.Tipo` calificado.
     pub_types: &'a HashMap<String, HashSet<String>>,
     /// Pila de conjuntos de parámetros de tipo en ámbito (los `<…>` de fn/impl/struct/enum).
@@ -770,7 +814,7 @@ struct TypeRewriter<'a> {
 impl<'a> TypeRewriter<'a> {
     fn new(
         types: &'a NameMap,
-        imports: &'a HashSet<String>,
+        imports: &'a ImportMap,
         pub_types: &'a HashMap<String, HashSet<String>>,
     ) -> Self {
         TypeRewriter { types, imports, pub_types, tparams: Vec::new() }
@@ -781,14 +825,17 @@ impl<'a> TypeRewriter<'a> {
     }
 
     /// Reescribe un nombre de tipo/trait a su nombre global. Tres casos:
-    /// - **Calificado** `M.Tipo` (lleva un `.`, M11.3c-3): si `M` está importado y `Tipo` es `pub`,
-    ///   → `M::Tipo`; si no resuelve, se deja con el `.` (el checker lo rechaza → encapsulación).
+    /// - **Calificado** `c.Tipo` (lleva un `.`, M11.3c-3): si `c` es el leaf de un módulo importado
+    ///   (M11.5) y `Tipo` es `pub`, → `ruta::Tipo`; si no resuelve, se deja con el `.` (el checker lo
+    ///   rechaza → encapsulación).
     /// - **Parámetro de tipo** (`T`): se deja intacto.
     /// - **Tipo propio o importado** del módulo: → su nombre global (mapa `types`).
     fn rewrite_name(&self, name: &mut String) {
-        if let Some((m, ty)) = name.split_once('.') {
-            if self.imports.contains(m) && self.pub_types.get(m).is_some_and(|s| s.contains(ty)) {
-                *name = format!("{}::{}", m, ty);
+        if let Some((leaf, ty)) = name.split_once('.') {
+            if let Some(ruta) = self.imports.get(leaf)
+                && self.pub_types.get(ruta).is_some_and(|s| s.contains(ty))
+            {
+                *name = format!("{}::{}", ns_prefix(ruta), ty);
             }
             return; // calificado: resuelto o dejado para que el checker lo rechace
         }

@@ -115,19 +115,39 @@ impl Parser {
         Ok(Program { functions, structs, enums, traits, impls, imports, from_imports })
     }
 
-    /// import_decl = 'import' IDENT ';'  (M11.3)
+    /// import_decl  = 'import' module_path [ 'as' IDENT ] ';'   (M11.3 / M11.5)
+    /// module_path  = IDENT { '/' IDENT }                        (ruta de directorios; M11.5)
     fn import_decl(&mut self) -> Result<ImportDecl, ParseError> {
         let kw = self.expect(&TokenKind::Import, "'import'")?;
-        let (module, _, _) = self.expect_ident("el nombre del módulo a importar")?;
-        self.expect(&TokenKind::Semicolon, "';' tras 'import M'")?;
-        Ok(ImportDecl { module, line: kw.line, col: kw.col })
+        let (module, _, _) = self.module_path()?;
+        let alias = if self.eat(&TokenKind::As) {
+            Some(self.expect_ident("el alias tras 'as'")?.0)
+        } else {
+            None
+        };
+        self.expect(&TokenKind::Semicolon, "';' tras 'import …'")?;
+        Ok(ImportDecl { module, alias, line: kw.line, col: kw.col })
     }
 
-    /// from_import_decl = 'from' IDENT 'import' name { ',' name } ';'   (M11.3b)
+    /// Lee una **ruta de módulo** `a/b/c` (M11.5): uno o más identificadores separados por `/`.
+    /// Dentro de un `import`/`from` no hay división, así que `/` se reinterpreta sin ambigüedad como
+    /// separador de directorios. Devuelve la ruta unida con `/` y la posición del primer segmento.
+    fn module_path(&mut self) -> Result<(String, usize, usize), ParseError> {
+        let (first, line, col) = self.expect_ident("el nombre del módulo a importar")?;
+        let mut path = first;
+        while self.eat(&TokenKind::Slash) {
+            let (seg, _, _) = self.expect_ident("un segmento de la ruta tras '/'")?;
+            path.push('/');
+            path.push_str(&seg);
+        }
+        Ok((path, line, col))
+    }
+
+    /// from_import_decl = 'from' module_path 'import' name { ',' name } ';'   (M11.3b / M11.5)
     /// name            = IDENT [ 'as' IDENT ]
     fn import_from_decl(&mut self) -> Result<FromImport, ParseError> {
         let kw = self.expect(&TokenKind::From, "'from'")?;
-        let (module, _, _) = self.expect_ident("el nombre del módulo en 'from M import …'")?;
+        let (module, _, _) = self.module_path()?;
         self.expect(&TokenKind::Import, "'import' tras 'from M'")?;
         let mut names = Vec::new();
         loop {
@@ -1258,6 +1278,32 @@ mod tests {
     fn parse_prog(src: &str) -> Program {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         parse(tokens).expect("parse ok")
+    }
+
+    #[test]
+    fn import_con_ruta_de_directorios_y_leaf() {
+        // M11.5: una ruta `a/b/c` se parsea como un solo módulo; el leaf es el último segmento.
+        let prog = parse_prog("import geo/formas/circulo;\nfn main() -> int { 0 }\n");
+        assert_eq!(prog.imports.len(), 1);
+        let i = &prog.imports[0];
+        assert_eq!(i.module, "geo/formas/circulo");
+        assert_eq!(i.alias, None);
+        assert_eq!(i.leaf(), "circulo");
+    }
+
+    #[test]
+    fn import_con_ruta_y_alias() {
+        let prog = parse_prog("import geo/formas/circulo as c;\nfn main() -> int { 0 }\n");
+        let i = &prog.imports[0];
+        assert_eq!(i.module, "geo/formas/circulo");
+        assert_eq!(i.alias.as_deref(), Some("c"));
+        assert_eq!(i.leaf(), "c");
+    }
+
+    #[test]
+    fn from_import_admite_ruta_de_directorios() {
+        let prog = parse_prog("from geo/formas import area;\nfn main() -> int { 0 }\n");
+        assert_eq!(prog.from_imports[0].module, "geo/formas");
     }
 
     #[test]

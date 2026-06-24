@@ -1916,7 +1916,8 @@ encapsulación: una referencia *bare* a un tipo de otro módulo no resuelve (hay
 - ✅ -c-3: **referencias calificadas por módulo** — `M.Punto` en **posición de tipo** (anotación,
   campo, payload, `dyn M.T`, bounds), `M.Punto { … }` (**literal de struct** calificado),
   `M.Color.Rojo[(…)]` (**construcción de enum** calificada) y `M.Color.Rojo` en **patrones**.
-- ⏳ Submódulos / directorios, `pub` granular (campos), re-exports → futuro.
+- ✅ M11.5: **módulos por directorios** (`import geo/formas/circulo;`, leaf-binding, `as`).
+- ⏳ Imports relativos, `mod.ray`/directorio-como-módulo, `pub` granular (campos), re-exports → futuro.
 
 **Referencias calificadas (M11.3c-3).** Cierra el cruce de tipos por la vía calificada (la otra es
 `from M import`). El **parser** produce nombres con un `.` interno: `Type::Struct("M.Punto")` (posición
@@ -1930,7 +1931,40 @@ con `.` → `rewrite_name` lo parte y valida). Una referencia que no resuelve **
 ningún tipo/enum definido lleva `.`, así que el checker la rechaza → **encapsulación** (un tipo
 privado o un módulo no importado no se alcanza). Gramática: el literal `M.Tipo { … }` se ancla a que
 el receptor del `.` sea un `Ident` (mismo compromiso struct-literal-vs-bloque que `Tipo { … }`).
-- ⏳ Submódulos / jerarquía de directorios, `pub` granular (campos), re-exports → futuro.
+
+**Módulos por directorios (M11.5).** Hasta -c todos los módulos viven en una **carpeta plana** (el
+loader resuelve `import M;` contra `<dir-de-entrada>/M.ray`). M11.5 los organiza en **jerarquía de
+directorios**, con la sintaxis tradicional estilo Unix: `import geo/formas/circulo;` resuelve
+`<raíz>/geo/formas/circulo.ray`. La **raíz** del proyecto es el directorio del archivo de entrada;
+**todas las rutas son absolutas desde la raíz** (un módulo que importa a un vecino escribe la ruta
+completa `import geo/formas/util;`, no `import util;`; los imports **relativos** quedan diferidos).
+
+Decisiones de diseño (cerradas con el usuario):
+- **Separador `/`** (no `::` ni `.`). En la **línea de `import` no hay ambigüedad**: ahí no aparece
+  ninguna división, así que el parser lee una ruta `IDENT ('/' IDENT)*` sin choque con el operador.
+- **Solo leaf-binding**: `import geo/formas/circulo;` liga **el último segmento** (`circulo`) como
+  nombre local; el acceso es `circulo.area(...)`, `circulo.Punto` (reusa el `.` de M11.3c tal cual).
+  Con `as`: `import geo/formas/circulo as c;`. Una colisión de leaves (dos rutas con el mismo último
+  segmento) **pide `as`**, como los `from`-imports.
+- **Prohibido el acceso por ruta completa en expresiones** (`geo/formas/circulo.area(x)`): sería
+  ambiguo con la división **y** es mala práctica. La ruta vive **solo** en la declaración `import`;
+  toda referencia posterior usa el leaf (o su alias). Así nunca hay un `/` fuera de un `import`.
+
+La identidad de un módulo deja de ser su *stem* y pasa a ser su **ruta** (`geo/formas/circulo`). Eso
+desacopla los cinco roles que el *stem* cumplía a la vez: **ruta de archivo** (resolución), **prefijo
+de namespacing**, **clave de `pub`** y **nombre local**. Implementación (front-end puro, **runtime
+intacto**):
+- El **parser** lee la ruta y la guarda en `ImportDecl.module` con sus `/` (`"geo/formas/circulo"`);
+  añade `alias: Option<String>` (el `as`). El `from M import …` admite la misma ruta en `M`.
+- El **loader** namespaca con `::` igual que antes, pero el prefijo es la ruta con los `/` traducidos
+  a `::` (`ns_prefix("geo/formas/circulo") = "geo::formas::circulo"`) → nombres globales
+  `geo::formas::circulo::area`. El **leaf** (último segmento, o el alias) es el nombre local. Los
+  mapas de acceso calificado (`Resolver.imports`, `TypeRewriter.imports`) pasan de un *conjunto* de
+  nombres a un **mapa leaf → ruta**: `circulo.area`/`circulo.Tipo` busca el leaf, valida `pub` contra
+  la ruta y baja a `geo::formas::circulo::…`. Un solo archivo o una carpeta plana quedan **idénticos**
+  (sin `/`, `ns_prefix` es la identidad y el leaf es el propio nombre).
+- ⏳ Diferido aún: **imports relativos** (`import ./util;`), `mod.ray`/directorio-como-módulo,
+  `pub` granular (campos), re-exports.
 
 **Runtime: sin cambios.** Los módulos se borran en el front-end; el programa fusionado es uno solo
 con nombres únicos. Oráculo VM↔intérprete intacto.

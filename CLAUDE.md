@@ -414,6 +414,13 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     en el prelude; ojo: el opcode de pila ya se llamaba `Pop`), `contains` **extendido** a arreglos
     (ad-hoc: string-subcadena o arreglo-pertenencia por `values_equal`), y `__position`/`Position`
     (`[int]` → `Option<int>`). Naming sin sobrecarga: `index_of` (string) vs `position` (arreglos).
+  - **M11.7c COMPLETO** (333 tests lib + 8 en `tests/io_cli.rs`): **I/O de archivos** —
+    `remove_file(ruta) -> Result<int,string>` (`RemoveFile`) y `list_dir(ruta) ->
+    Result<[string],string>` (`ListDir`; nombres **ordenados** → determinista; helper `list_dir` en
+    `builtins.rs`). Patrón de arreglo etiquetado: `__remove_file -> ["ok"]/["err",msg]`,
+    `__list_dir -> ["ok", n0, …]/["err",msg]`; los envoltorios del prelude lo traducen a `Result`
+    (list_dir reconstruye el `[string]` con un `while`+`push`, no hay slice de arreglos). I/O real
+    no determinista → integración por subproceso (no oráculo).
 - **M11.4 — cierre de diferidos aditivos de la stdlib** (DESIGN §20.4). Tocan runtime → oráculo
   (con estrés del GC para los que asignan heap). Tras L1, cada builtin = fila en `BUILTINS` + opcode
   + impl por motor; checker/compilador sin cambios.

@@ -135,6 +135,26 @@ fn append_file(ruta: string, contenido: string) -> Result<int, string> {
     let r = __append_file(ruta, contenido);
     if (r[0] == "ok") { Result.Ok(len(contenido)) } else { Result.Err(r[1]) }
 }
+
+// M11.7c: borra un archivo; Ok(0) u Err(mensaje del sistema).
+fn remove_file(ruta: string) -> Result<int, string> {
+    let r = __remove_file(ruta);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+// M11.7c: nombres de las entradas de un directorio (ordenados); Ok([nombres]) u Err(mensaje).
+// El primitivo devuelve ["ok", n0, n1, …] o ["err", msg]; aquí se reconstruye el [string].
+fn list_dir(ruta: string) -> Result<[string], string> {
+    let r = __list_dir(ruta);
+    if (r[0] == "ok") {
+        var nombres: [string] = [];
+        var i = 1;
+        while (i < len(r)) { push(nombres, r[i]); i = i + 1; }
+        Result.Ok(nombres)
+    } else {
+        Result.Err(r[1])
+    }
+}
 "#;
 
 /// Parsea el prelude una vez. El `expect` no puede fallar: el fuente es una constante

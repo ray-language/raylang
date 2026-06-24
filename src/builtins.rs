@@ -88,6 +88,17 @@ pub fn substring_chars(s: &str, i: i64, j: i64) -> String {
     chars[lo as usize..hi as usize].iter().collect()
 }
 
+/// Lista los nombres de las entradas de un directorio (M11.7c). Helper compartido por ambos motores
+/// (`__list_dir`). Ordenados para que el resultado sea **determinista** (el sistema no garantiza orden).
+pub fn list_dir(path: &str) -> std::io::Result<Vec<String>> {
+    let mut nombres: Vec<String> = std::fs::read_dir(path)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    nombres.sort();
+    Ok(nombres)
+}
+
 /// Repite `s` `n` veces (`n <= 0` → `""`) (M11.7a). Helper compartido.
 pub fn repeat_str(s: &str, n: i64) -> String {
     if n <= 0 {
@@ -326,6 +337,18 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__write_file", " (ruta, contenido)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__write_file espera un string (la ruta), no {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__write_file espera un string (el contenido), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __remove_file(ruta) -> [string] (M11.7c): ["ok"] o ["err", msg]. Prelude → Result<int,string>.
+    Builtin { name: "__remove_file", opcode: OpCode::RemoveFile, check: |a| {
+        arity(a, 1, "__remove_file", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__remove_file espera un string (la ruta), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __list_dir(ruta) -> [string] (M11.7c): ["ok", n0, …] o ["err", msg]. Prelude → Result<[string],…>.
+    Builtin { name: "__list_dir", opcode: OpCode::ListDir, check: |a| {
+        arity(a, 1, "__list_dir", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__list_dir espera un string (la ruta), no {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // exists(ruta) -> bool (M11.4b): ¿existe la ruta? Total (no falla).

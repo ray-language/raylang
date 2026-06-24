@@ -177,6 +177,12 @@ pub enum OpCode {
     /// Saca el contenido y la ruta; **añade** al final del archivo (lo crea si no existe) y empuja un
     /// `[string]` etiquetado `["ok"]`/`["err", mensaje]`. Primitivo `__append_file`; el prelude → `Result`.
     AppendFile,
+    /// Saca una ruta; **borra** el archivo y empuja un `[string]` etiquetado `["ok"]`/`["err", msg]`.
+    /// Primitivo `__remove_file` (M11.7c); el prelude → `Result<int,string>`.
+    RemoveFile,
+    /// Saca una ruta; empuja un `[string]` etiquetado: `["ok", n0, n1, …]` con los nombres del
+    /// directorio, o `["err", msg]`. Primitivo `__list_dir` (M11.7c); el prelude → `Result<[string],…>`.
+    ListDir,
 
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como

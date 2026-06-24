@@ -218,3 +218,44 @@ fn env_no_definida_da_none() {
     assert!(stdout.contains("env=?"), "env() de una variable ausente es None\n{stdout}");
     assert_eq!(out.status.code(), Some(0), "len(args) = 0 sin argumentos");
 }
+
+#[test]
+fn list_dir_y_remove_file_en_ambos_motores() {
+    // M11.7c: list_dir lista (ordenado) y remove_file borra. I/O real → subproceso, no oráculo.
+    for vm in [false, true] {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("ray_listdir_{}", if vm { "vm" } else { "tw" }));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        std::fs::write(dir.join("b.txt"), "y").unwrap();
+        let d = dir.to_string_lossy().replace('\\', "/");
+
+        let src = format!(r#"
+fn main() -> int {{
+  match (list_dir("{d}")) {{
+    Result.Ok(ns) => print(join(ns, ",")),
+    Result.Err(e) => print("err: " + e),
+  }}
+  match (remove_file("{d}/a.txt")) {{
+    Result.Ok(_) => print("borrado"),
+    Result.Err(e) => print("err: " + e),
+  }}
+  match (list_dir("{d}")) {{
+    Result.Ok(ns) => len(ns),
+    Result.Err(_) => 0 - 1,
+  }}
+}}
+"#);
+        let mut path = std::env::temp_dir();
+        path.push(format!("ray_listdir_prog_{}.ray", if vm { "vm" } else { "tw" }));
+        std::fs::File::create(&path).unwrap().write_all(src.as_bytes()).unwrap();
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
+        if vm { cmd.arg("--vm"); }
+        let out = cmd.arg(&path).output().expect("ejecuta raylang");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("a.txt,b.txt"), "list_dir ordenado (vm={vm})\n{stdout}");
+        assert!(stdout.contains("borrado"), "remove_file ok (vm={vm})\n{stdout}");
+        assert_eq!(out.status.code(), Some(1), "tras borrar queda 1 entrada (vm={vm})");
+    }
+}

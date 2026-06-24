@@ -827,6 +827,32 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M11.7c: borra un archivo → ["ok"] o ["err", msg].
+            "__remove_file" => {
+                let arr = match &values[0] {
+                    Value::Str(path) => match std::fs::remove_file(path) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
+                    },
+                    _ => unreachable!("el checker garantiza un string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M11.7c: lista un directorio → ["ok", n0, …] o ["err", msg].
+            "__list_dir" => {
+                let arr = match &values[0] {
+                    Value::Str(path) => match crate::builtins::list_dir(path) {
+                        Ok(nombres) => {
+                            let mut v = vec![Value::Str("ok".to_string())];
+                            v.extend(nombres.into_iter().map(Value::Str));
+                            v
+                        }
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
+                    },
+                    _ => unreachable!("el checker garantiza un string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             _ => unreachable!("builtin desconocido"),
         }
     }

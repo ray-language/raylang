@@ -515,6 +515,34 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::RemoveFile => {
+                    let path = match self.pop() {
+                        HeapValue::Str(p) => p,
+                        _ => unreachable!("el checker garantiza un string"),
+                    };
+                    let elems = match std::fs::remove_file(&path) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::ListDir => {
+                    let path = match self.pop() {
+                        HeapValue::Str(p) => p,
+                        _ => unreachable!("el checker garantiza un string"),
+                    };
+                    let elems = match crate::builtins::list_dir(&path) {
+                        Ok(nombres) => {
+                            let mut v = vec![HeapValue::Str("ok".to_string())];
+                            v.extend(nombres.into_iter().map(HeapValue::Str));
+                            v
+                        }
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
 
                 // --- Structs (M3.2) ---
                 OpCode::MakeStruct(idx) => {

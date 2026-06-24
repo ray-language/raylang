@@ -1,0 +1,197 @@
+// Driver del parser auto-alojado (M14.2): lee un archivo (su ruta es el primer argumento), lo lexea
+// con el lexer EN raylang y lo parsea con el parser EN raylang, e imprime el AST en un formato
+// canónico (una función por línea). El test `tests/selfhost_parser.rs` compara este stdout con el
+// mismo formato producido por el parser de Rust (el ORÁCULO).
+//
+// Formato canónico (S-expression, con posición `@línea:col` en cada nodo de Expr/Stmt):
+//   func   :  (fn NOMBRE (params (param N TIPO)@l:c ...) TIPO_RET BLOQUE)@l:c
+//   bloque :  (block STMT... TAIL?)@l:c
+//   stmt   :  (let N TIPO|_ E)@l:c | (var ...) | (assign DEST E)@l:c | (return E?)@l:c | (expr E)@l:c
+//   expr   :  (int N)@l:c | (ident N)@l:c | (binary OP E E)@l:c | (call E E...)@l:c | (if C BLK E?)@l:c | ...
+//   tipo   :  int | float | bool | string | char | unit | [T] | fn(T, ...) -> R | NOMBRE
+// Las cadenas/caracteres se re-escapan igual que en el lexer-dump → coinciden con el oráculo.
+
+from lexer import lex, Token, LexError;
+from parser import parse, Program, Func, Param, Type, Expr, EKind, Stmt, SKind, Block, BinOp, UnOp;
+
+// Re-escapa una cadena para una sola línea, idéntico al oráculo (y al lexer-dump).
+fn escape(s: string) -> string {
+    var out = "";
+    let cs = chars(s);
+    var i = 0;
+    while (i < len(cs)) {
+        let c = cs[i];
+        if (c == '\\') { out = out + "\\\\"; }
+        else if (c == '\n') { out = out + "\\n"; }
+        else if (c == '\t') { out = out + "\\t"; }
+        else if (c == '\r') { out = out + "\\r"; }
+        else if (c == '"') { out = out + "\\\""; }
+        else { out = out + to_string(c); }
+        i = i + 1;
+    }
+    out
+}
+
+fn pos(line: int, col: int) -> string { "@" + to_string(line) + ":" + to_string(col) }
+
+fn dump_type(t: Type) -> string {
+    match (t) {
+        Type.TInt => "int",
+        Type.TFloat => "float",
+        Type.TBool => "bool",
+        Type.TString => "string",
+        Type.TChar => "char",
+        Type.TUnit => "unit",
+        Type.TArray(e) => "[" + dump_type(e) + "]",
+        Type.TFn(ps, r) => "fn(" + join_types(ps) + ") -> " + dump_type(r),
+        Type.TNamed(n) => n,
+    }
+}
+
+// Tipos separados por ", " (igual que el Display de Type en Rust).
+fn join_types(ps: [Type]) -> string {
+    var s = "";
+    var i = 0;
+    while (i < len(ps)) {
+        if (i > 0) { s = s + ", "; }
+        s = s + dump_type(ps[i]);
+        i = i + 1;
+    }
+    s
+}
+
+fn dump_binop(op: BinOp) -> string {
+    match (op) {
+        BinOp.Add => "add",
+        BinOp.Sub => "sub",
+        BinOp.Mul => "mul",
+        BinOp.Div => "div",
+        BinOp.Rem => "rem",
+        BinOp.Eq => "eq",
+        BinOp.Ne => "ne",
+        BinOp.Lt => "lt",
+        BinOp.Le => "le",
+        BinOp.Gt => "gt",
+        BinOp.Ge => "ge",
+        BinOp.And => "and",
+        BinOp.Or => "or",
+    }
+}
+
+fn dump_unop(op: UnOp) -> string {
+    match (op) {
+        UnOp.Neg => "neg",
+        UnOp.Not => "not",
+    }
+}
+
+fn dump_expr(e: Expr) -> string {
+    let pp = pos(e.line, e.col);
+    match (e.kind) {
+        EKind.EInt(n) => "(int " + to_string(n) + ")" + pp,
+        EKind.EFloat(f) => "(float " + to_string(f) + ")" + pp,
+        EKind.EBool(b) => "(bool " + to_string(b) + ")" + pp,
+        EKind.EStr(s) => "(str \"" + escape(s) + "\")" + pp,
+        EKind.EChar(c) => "(char '" + escape(to_string(c)) + "')" + pp,
+        EKind.EIdent(n) => "(ident " + n + ")" + pp,
+        EKind.EUnary(op, inner) => "(unary " + dump_unop(op) + " " + dump_expr(inner) + ")" + pp,
+        EKind.EBinary(op, l, r) => "(binary " + dump_binop(op) + " " + dump_expr(l) + " " + dump_expr(r) + ")" + pp,
+        EKind.ECall(callee, cargs) => "(call " + dump_expr(callee) + dump_exprs(cargs) + ")" + pp,
+        EKind.EIndex(a, i) => "(index " + dump_expr(a) + " " + dump_expr(i) + ")" + pp,
+        EKind.EField(o, nm) => "(field " + dump_expr(o) + " " + nm + ")" + pp,
+        EKind.EArray(elems) => "(array" + dump_exprs(elems) + ")" + pp,
+        EKind.EIf(c, then_b, alt) => "(if " + dump_expr(c) + " " + dump_block(then_b) + dump_opt_expr(alt) + ")" + pp,
+        EKind.EWhile(c, body) => "(while " + dump_expr(c) + " " + dump_block(body) + ")" + pp,
+        EKind.EBlock(b) => dump_block(b),
+    }
+}
+
+// Cada expresión precedida de un espacio (para listas: args, elementos de arreglo).
+fn dump_exprs(es: [Expr]) -> string {
+    var s = "";
+    var i = 0;
+    while (i < len(es)) { s = s + " " + dump_expr(es[i]); i = i + 1; }
+    s
+}
+
+fn dump_opt_expr(o: Option<Expr>) -> string {
+    match (o) {
+        Option.Some(e) => " " + dump_expr(e),
+        Option.None => "",
+    }
+}
+
+fn dump_opt_type(o: Option<Type>) -> string {
+    match (o) {
+        Option.Some(t) => dump_type(t),
+        Option.None => "_",
+    }
+}
+
+fn dump_stmt(st: Stmt) -> string {
+    let pp = pos(st.line, st.col);
+    match (st.kind) {
+        SKind.SLet(name, ty, value, mutable) => {
+            let kw = if (mutable) { "var" } else { "let" };
+            "(" + kw + " " + name + " " + dump_opt_type(ty) + " " + dump_expr(value) + ")" + pp
+        },
+        SKind.SAssign(target, value) => "(assign " + dump_expr(target) + " " + dump_expr(value) + ")" + pp,
+        SKind.SReturn(value) => "(return" + dump_opt_expr(value) + ")" + pp,
+        SKind.SExpr(e) => "(expr " + dump_expr(e) + ")" + pp,
+    }
+}
+
+fn dump_block(b: Block) -> string {
+    var s = "(block";
+    var i = 0;
+    while (i < len(b.stmts)) { s = s + " " + dump_stmt(b.stmts[i]); i = i + 1; }
+    s = s + dump_opt_expr(b.tail);
+    s + ")" + pos(b.line, b.col)
+}
+
+fn dump_params(ps: [Param]) -> string {
+    var s = "";
+    var i = 0;
+    while (i < len(ps)) {
+        let pm = ps[i];
+        s = s + " (param " + pm.name + " " + dump_type(pm.ty) + ")" + pos(pm.line, pm.col);
+        i = i + 1;
+    }
+    s
+}
+
+fn dump_func(f: Func) -> string {
+    "(fn " + f.name + " (params" + dump_params(f.params) + ") "
+        + dump_type(f.ret) + " " + dump_block(f.body) + ")" + pos(f.line, f.col)
+}
+
+// Desenvuelve el lexer (M14.2a parsea entradas válidas; un error léxico aquí es excepcional).
+fn lex_or_die(src: string) -> [Token] {
+    match (lex(src)) {
+        Result.Ok(toks) => toks,
+        Result.Err(e) => panic("error léxico: " + e.msg),
+    }
+}
+
+fn main() -> int {
+    let argv = args();
+    if (len(argv) == 0) {
+        eprint("uso: raylang selfhost/parse_dump.ray <archivo>");
+        return 1;
+    }
+    match (read_file(argv[0])) {
+        Result.Ok(src) => {
+            let prog = parse(lex_or_die(src));
+            var i = 0;
+            while (i < len(prog.funcs)) {
+                print(dump_func(prog.funcs[i]));
+                i = i + 1;
+            }
+            0
+        },
+        Result.Err(msg) => {
+            eprint(msg);
+            1
+        },
+    }
+}

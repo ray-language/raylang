@@ -612,6 +612,20 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     oráculo (`canonical`) hace `format!("{e}")` al fallar → cubre **también entradas inválidas**.
     Gotcha: `parse_int`/`parse_float` devuelven `Option` → `?` no cruza Option→Result; se desenvuelven
     con `match`. El único `panic` que queda marca código inalcanzable. **M14.1 COMPLETO.** DESIGN §23.2.
+  - **M14.2a COMPLETO** (347 lib + 9 en `tests/selfhost_parser.rs`): **el parser auto-alojado (núcleo)**.
+    `selfhost/parser.ray` (tokens → AST) se alimenta del lexer auto-alojado (`from lexer import Token,
+    TokKind;`). Cubre expresiones (toda la precedencia `logic_or`→…→`primary`), sentencias (let/var/
+    assign/return/expr), tipos básicos (primitivos, `[T]`, `fn(..)->R`, nombre), bloques y funciones de
+    nivel superior → fib/fizzbuzz. **Oráculo = volcado canónico del AST** (S-expression con `@línea:col`
+    en cada nodo de Expr/Stmt; decisión: posiciones SÍ, máximo rigor): driver `selfhost/parse_dump.ray`
+    lo imprime, `tests/selfhost_parser.rs` lo reconstruye desde el AST de Rust con `dump_program`. El
+    dump se hace sobre el **AST crudo** (sin checker) → nombres de tipo son `Struct(n,[])` (no Enum/Var),
+    sin `EnumLit`; el parser raylang produce `TNamed` y cuadra. **Viabilidad** (spikes): AST mutuamente
+    recursivo (`struct Expr`↔`enum EKind`), `[Expr]` y `Option<Expr>` (heap → sin tamaño infinito); el
+    `struct Parser` se muta por referencia (como el `Lexer`); `tok_name(k)->string` da la grafía canónica
+    del token para `check`/`eat`/`expect` (sin números mágicos). Camino feliz con `panic`. Diferido:
+    M14.2b (structs/enums/match/fn-anónimas), M14.2c (traits/impls/genéricos/dyn/Map/`?`/pipelines/
+    anotaciones/imports). DESIGN §23.3.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

@@ -2365,5 +2365,36 @@ carácter sin cerrar, salto de línea en cadena, escape inválido, `&`/`|` suelt
 **Nota de tipos:** `parse_int`/`parse_float` devuelven `Option`, así que `?` no cruza Option→Result; se
 desenvuelven con `match` y se reempaquetan como `Result.Err(lex_error(...))`. **M14.1 COMPLETO.**
 
-**Próximas fases:** el **parser** (AST en raylang, oráculo sobre un volcado canónico del AST), el
-**checker**, y finalmente ejecutar. Cada una, su oráculo.
+### 23.3 M14.2 — El parser (`selfhost/parser.ray`)
+
+Tercera fase del bootstrap: tokens (del lexer auto-alojado) → **AST**. Es ~4× el lexer → se ataca en
+sub-fases. El parser auto-alojado **se alimenta del lexer auto-alojado** (`from lexer import Token,
+TokKind;`), así que la cadena de bootstrap crece. Camino feliz con `panic` (errores como valores al
+cerrar el parser, como en el lexer).
+
+**Oráculo (volcado canónico del AST).** Misma estrategia que el lexer, ahora sobre un árbol: un
+formato **S-expression** con la **posición `@línea:col` en cada nodo** de Expr/Stmt (decisión
+tomada: máximo rigor, caza bugs de propagación de posición —binario hereda del izquierdo, paréntesis
+conserva el `(`, call/index/field heredan del receptor—). El driver `selfhost/parse_dump.ray` lo
+imprime (una función por línea); el oráculo `tests/selfhost_parser.rs` lo reconstruye desde el AST
+del parser de Rust con `dump_program`. Importante: el dump se hace **sobre el AST crudo del parser**
+(sin checker), así que los nombres en posición de tipo son `Struct(n, [])` (no `Enum`/`Var`) y no hay
+`EnumLit` —el parser auto-alojado produce su equivalente `TNamed`, y la comparación cuadra—.
+
+**Viabilidad clave (lo nuevo que el bootstrap del parser exige):** el AST es **mutuamente
+recursivo** (`struct Expr` lleva un `EKind`, que contiene `Expr`/`Block`); funciona porque
+structs/enums viven en el heap (semántica de referencia → recursión sin tamaño infinito). Validado
+con spikes: tipos mutuamente recursivos, **arreglos** del tipo recursivo (`[Expr]`) y **`Option`** del
+tipo recursivo (`Option<Expr>` para `tail`/`else`). El estado del parser es un `struct Parser` mutado
+por referencia (como el `Lexer`). Para los checks de token se usa `tok_name(k) -> string` (la grafía
+canónica del token: `"("`, `"->"`, `"let"`; nombre simbólico para los que cargan valor: `"ident"`,
+`"int-lit"`) → `check`/`eat`/`expect` comparan strings legibles, sin números mágicos.
+
+- **M14.2a COMPLETO** — núcleo: expresiones (toda la cadena de precedencia: `logic_or`→…→`primary`),
+  sentencias (let/var, asignación, return, expr), tipos básicos (primitivos, `[T]`, `fn(..)->R`,
+  nombre), bloques y funciones de nivel superior. Cubre fib/fizzbuzz. Oráculo: snippets + los archivos
+  reales que solo usan estas features. Diferido: M14.2b (structs/enums/match/fn-anónimas), M14.2c
+  (traits/impls/genéricos/dyn/Map/`?`/pipelines/anotaciones/imports).
+
+**Próximas fases:** completar el parser (M14.2b/c), el **checker**, y finalmente ejecutar. Cada una,
+su oráculo.

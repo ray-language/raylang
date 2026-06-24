@@ -95,6 +95,11 @@ fn serve<R: BufRead, W: Write>(reader: &mut R, out: &mut W) {
                 let id = msg.get("id").cloned().unwrap_or(Json::Null);
                 send(out, &resultado(id, rename_result(&msg, &docs)));
             }
+            // Cluster 4: completion — símbolos del documento + builtins + palabras clave.
+            "textDocument/completion" => {
+                let id = msg.get("id").cloned().unwrap_or(Json::Null);
+                send(out, &resultado(id, completion_result(&msg, &docs)));
+            }
             // Petición desconocida (lleva `id`) → error JSON-RPC. Notificación → se ignora.
             _ => {
                 if let Some(id) = msg.get("id") {
@@ -350,6 +355,51 @@ fn rename_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     obj(vec![("changes", changes)])
 }
 
+/// El `result` de `textDocument/completion`: los símbolos ofrecibles en el documento (funciones y
+/// tipos definidos —incluido el prelude—, builtins y palabras clave). No filtra por ámbito ni por
+/// prefijo (el cliente filtra por lo ya escrito); es una completion "de archivo", el primer escalón.
+fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+    let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
+    let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
+    let Ok(tokens) = lexer::lex(src) else { return Json::Arr(vec![]) };
+    let Ok(mut program) = parser::parse(tokens) else { return Json::Arr(vec![]) };
+    // Corre el front-end (inyecta el prelude y los métodos manglados) para ofrecer también sus
+    // funciones; tolera errores (info parcial). Se filtran los nombres sintéticos (`#`, `::`, `__`).
+    let _ = checker::semantic_index(&mut program);
+
+    // Kinds de LSP CompletionItemKind: 3=Function, 22=Struct, 13=Enum, 8=Interface, 14=Keyword.
+    let visible = |n: &str| !n.contains('#') && !n.contains("::") && !n.starts_with("__");
+    let mut items: Vec<(String, i64)> = Vec::new();
+    for f in &program.functions {
+        if visible(&f.name) { items.push((f.name.clone(), 3)); }
+    }
+    for s in &program.structs {
+        if visible(&s.name) { items.push((s.name.clone(), 22)); }
+    }
+    for e in &program.enums {
+        if visible(&e.name) { items.push((e.name.clone(), 13)); }
+    }
+    for t in &program.traits {
+        if visible(&t.name) { items.push((t.name.clone(), 8)); }
+    }
+    for b in crate::builtins::names().filter(|n| visible(n)) {
+        items.push((b.to_string(), 3));
+    }
+    for kw in [
+        "let", "var", "fn", "if", "else", "while", "match", "struct", "enum", "trait", "impl",
+        "return", "true", "false", "dyn", "pub", "import", "from", "as",
+        "int", "float", "bool", "string", "char",
+    ] {
+        items.push((kw.to_string(), 14));
+    }
+    items.sort();
+    items.dedup();
+    let lista: Vec<Json> = items.into_iter()
+        .map(|(label, kind)| obj(vec![("label", Json::Str(label)), ("kind", num(kind))]))
+        .collect();
+    Json::Arr(lista)
+}
+
 /// Lee un `Json::Num` como `usize` (las posiciones LSP son enteros).
 fn as_usize(j: &Json) -> Option<usize> {
     match j {
@@ -401,6 +451,8 @@ fn respuesta_initialize(id: Json) -> Json {
         // Cluster 4: find-references y rename (sobre el índice semántico + la fuente).
         ("referencesProvider", Json::Bool(true)),
         ("renameProvider", Json::Bool(true)),
+        // Cluster 4: completion (objeto vacío = sin resolveProvider ni triggerCharacters).
+        ("completionProvider", obj(vec![])),
     ]);
     let result = obj(vec![
         ("capabilities", capabilities),
@@ -890,6 +942,26 @@ mod tests {
     }
 
     #[test]
+    fn completion_ofrece_simbolos_builtins_y_keywords() {
+        let src = "struct Punto { x: int }\nfn doble(n: int) -> int { n + n }\nfn main() -> int { 0 }\n";
+        let msg = json::parse(
+            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":0}}}"#
+        ).unwrap();
+        let mut docs = HashMap::new();
+        docs.insert("file:///t.ray".to_string(), src.to_string());
+        let res = completion_result(&msg, &docs);
+        let items = res.as_array().unwrap();
+        let labels: Vec<&str> = items.iter().filter_map(|i| i.get("label").and_then(|l| l.as_str())).collect();
+        assert!(labels.contains(&"doble"), "función propia\n{labels:?}");
+        assert!(labels.contains(&"Punto"), "tipo propio");
+        assert!(labels.contains(&"print"), "builtin");
+        assert!(labels.contains(&"map"), "función del prelude");
+        assert!(labels.contains(&"while"), "palabra clave");
+        // No expone nombres sintéticos (manglados, internos).
+        assert!(!labels.iter().any(|l| l.contains('#') || l.starts_with("__")), "sin nombres sintéticos");
+    }
+
+    #[test]
     fn analiza_error_de_tipos() {
         let d = analizar("fn main() -> int { 1 + true }").expect("debería haber error");
         assert_eq!(d.line, 1);
@@ -950,7 +1022,7 @@ mod tests {
 
     #[test]
     fn serve_metodo_desconocido_con_id_da_error() {
-        let body = r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/completion","params":{}}"#;
+        let body = r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/formatting","params":{}}"#;
         let mut entrada = frame(body);
         entrada.push_str(&frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
 

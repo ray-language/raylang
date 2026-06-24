@@ -96,11 +96,21 @@ declaración por el primer identificador igual al nombre (que el `let`/`fn` prec
 pero la gramática de raylang es lo bastante simple para que sea fiable —y, fiel al diseño del LSP,
 **no toca el núcleo**: todo vive en `src/lsp.rs`—.
 
+## Completion (cluster 4)
+
+Una completion "de archivo", el primer escalón: al pedir sugerencias, el servidor corre el front-end
+(que inyecta el prelude) y ofrece **las funciones y tipos definidos** (incluidos los del prelude),
+**los builtins** y **las palabras clave**. No filtra por ámbito ni por prefijo —el editor filtra por
+lo ya escrito—; los nombres sintéticos (manglados con `#`, namespacados con `::`, primitivos `__*`) se
+ocultan. Es deliberadamente simple: una completion consciente del ámbito exigiría rastrear los
+ámbitos por posición, que se deja para más adelante.
+
 ## Alcance
 
 Hover y definición sobre **identificadores** (variables, parámetros, funciones); **find-references**
-y **rename** sobre los mismos. Quedan fuera los **métodos** y **nombres de tipo** (que no llegan como
-`Ident` sino en posición de tipo), y *completion* y *signature help*.
+y **rename** sobre los mismos; **completion** de símbolos del archivo + builtins + palabras clave.
+Quedan fuera los **métodos** y **nombres de tipo** en hover/def (que no llegan como `Ident`), la
+completion **por ámbito** y el *signature help*.
 
 La lección de M10.2b es la contracara de la del REPL. Allí *evitamos* exponer los tipos del
 checker porque no hacía falta; aquí, cuando sí hizo falta, abrirlo costó poco: un flag, un índice

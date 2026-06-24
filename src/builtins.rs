@@ -48,6 +48,12 @@ pub fn is_builtin(name: &str) -> bool {
     lookup(name).is_some()
 }
 
+/// Los nombres de todos los builtins (incluidos los internos `__*`). Lo usa el LSP para autocompletar
+/// (filtrando los `__*`, que son primitivos no destinados al usuario).
+pub fn names() -> impl Iterator<Item = &'static str> {
+    BUILTINS.iter().map(|b| b.name)
+}
+
 /// Añade `contents` al final del archivo `path` (lo crea si no existe). Helper compartido por ambos
 /// motores para el primitivo `__append_file` (M11.4b); la *impl* de ejecución no es metadato, pero
 /// es idéntica en los dos motores, así que vive aquí para no duplicarse.

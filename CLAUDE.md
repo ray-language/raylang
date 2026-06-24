@@ -290,7 +290,14 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   (honra `includeDeclaration`), `rename_result` → `WorkspaceEdit`. Para el **nombre** de la
   declaración (sin spans, la def apunta al `let`/`fn`) se escanea la línea por el primer identificador
   igual al nombre — heurística en el **cliente LSP, cero cambios en el núcleo**. Anuncia
-  `referencesProvider`/`renameProvider`. Diferido: completion, signature help, métodos/tipos.
+  `referencesProvider`/`renameProvider`.
+- **M10.2e-LSP COMPLETO** (327 tests lib + 8 en `tests/lsp_cli.rs`): **completion** (cluster 4). Al
+  pedir sugerencias, `completion_result` corre el front-end (inyecta prelude + métodos manglados) y
+  ofrece funciones y tipos definidos (incl. prelude), **builtins** (`builtins::names()`, nuevo) y
+  **palabras clave**; oculta nombres sintéticos (`#`, `::`, `__`). Completion "de archivo" (no por
+  ámbito ni prefijo; el editor filtra). `completionProvider` (objeto vacío). Diferido: completion por
+  ámbito, signature help, hover/def de métodos/tipos. **Cluster 4 (LSP avanzado): references + rename
+  + completion COMPLETO.**
 - **M11.1 COMPLETO** (293 tests + integración CLI verdes): **stdlib de string** (DESIGN §20.1).
   Los strings dejan de ser opacos. **Primer cambio de runtime desde M6.3** → oráculo
   VM↔intérprete (incl. estrés del GC para `split`). Operaciones como **builtins** (estilo

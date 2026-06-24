@@ -90,6 +90,17 @@ fn rename_devuelve_un_workspace_edit() {
 }
 
 #[test]
+fn completion_ofrece_simbolos() {
+    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn doble(n: int) -> int { n + n }\nfn main() -> int { 0 }"}}}"#;
+    let comp = r#"{"jsonrpc":"2.0","id":6,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":1,"character":19}}}"#;
+    let entrada = frame(open) + &frame(comp) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("\"id\":6"), "responde a la petición de completion\n{out}");
+    assert!(out.contains("\"label\":\"doble\""), "ofrece la función propia\n{out}");
+    assert!(out.contains("\"label\":\"print\""), "ofrece builtins\n{out}");
+}
+
+#[test]
 fn publica_diagnostico_ante_un_error() {
     let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int { 1 + true }"}}}"#;
     let entrada = frame(open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);

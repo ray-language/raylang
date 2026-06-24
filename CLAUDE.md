@@ -671,7 +671,17 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     lowering de M9, que queda para el back-end). Oráculo de **veredicto** (misma fuente por ambos
     pipelines; corpus válido + inválido). Reusa el AST del parser; `Map` para ámbitos; prelude diferido.
     Sub-fases: a (núcleo monomórfico) → b (datos: arrays/structs/enums/match) → c (genéricos) → d
-    (traits/impls/dyn). Errores como valores inherentes. Pendiente de implementar.
+    (traits/impls/dyn). Errores como valores inherentes.
+  - **M14.3a COMPLETO** (347 lib + 3 en `tests/selfhost_checker.rs`): **checker auto-alojado — núcleo
+    monomórfico**. `selfhost/checker.ray` valida el AST del parser auto-alojado → `Result<int,
+    TypeError>` (`ok` / `error de tipos en L:C: msg`, byte-idéntico a Rust). Dos pasadas (firmas en
+    `Map<string,FnSig>` → exigir `main` → cuerpos); pila de ámbitos `[Map<string,VarInfo>]`. Cubre
+    literales, operadores (mismas reglas/mensajes: `bin_op_str`/`is_comparable`/`order_ok`), variables
+    (let/var/mutabilidad/ámbito), llamadas (aridad+tipos, builtin `print`), if/while/block/return,
+    anotaciones (`ensure_type`/`resolve_type` monomórficos), divergencia. El `Type` del parser dobla
+    como tipo inferido; `type_eq`/`type_str`(=Display) propios. Driver `selfhost/check_dump.ray`.
+    Oráculo: 8 válidos + 20 errores + 4 ejemplos reales (fib/fizzbuzz/gcd/primes). Diferido: M14.3b
+    (datos), c (genéricos), d (traits). DESIGN §23.4.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

@@ -2489,3 +2489,15 @@ checker devuelve `Result<_, TypeError>` desde el inicio; no hay sub-fase `d` apa
 
 Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el checker queda el
 **back-end** (ejecución / lowering) para cerrar el self-hosting.
+
+- **M14.3a COMPLETO** — núcleo monomórfico. `selfhost/checker.ray` valida el AST del parser
+  auto-alojado y devuelve `Result<int, TypeError>` (`ok` o `error de tipos en L:C: msg`). Dos pasadas:
+  registrar firmas (`Map<string, FnSig>`) → exigir `main` → verificar cuerpos. Pila de ámbitos
+  (`[Map<string, VarInfo>]`, `push`/`pop`/`get`/`insert` del stdlib). Cubre literales, operadores
+  (mismas reglas/mensajes que Rust: aritmética/orden/igualdad/lógica, con `bin_op_str`/`is_comparable`/
+  `order_ok`), variables (let/var, mutabilidad, ámbito), llamadas (aridad + tipos, con el builtin
+  `print`), `if`/`while`/`block`/`return`, anotaciones (`ensure_type`/`resolve_type` monomórficos),
+  divergencia (`block/stmt/expr_diverges`, incl. `panic`). El `Type` del parser **dobla** como tipo
+  inferido; `type_eq`/`type_str` (= `Display`) propios. Driver `selfhost/check_dump.ray`. Oráculo
+  (`tests/selfhost_checker.rs`): 8 válidos + 20 errores de tipo + 4 ejemplos reales (fib/fizzbuzz/gcd/
+  primes), veredicto byte-idéntico a Rust. Diferido: M14.3b (datos), c (genéricos), d (traits).

@@ -1,0 +1,48 @@
+// Driver del checker auto-alojado (M14.3): lee un archivo (su ruta es el primer argumento), lo
+// lexea + parsea + chequea con el front-end EN raylang, e imprime el VEREDICTO en una línea:
+//   - éxito:          ok
+//   - error de tipos: error de tipos en <l>:<c>: <msg>   (formato del Display de TypeError en Rust)
+// (también imprime el error léxico/sintáctico si la fuente no llega siquiera al checker).
+// El test `tests/selfhost_checker.rs` compara este stdout con el veredicto del checker de Rust (el
+// ORÁCULO): misma fuente por ambos pipelines, mismo veredicto.
+
+from lexer import lex, LexError;
+from parser import parse, Program, ParseError;
+from checker import check, TypeError;
+
+fn main() -> int {
+    let argv = args();
+    if (len(argv) == 0) {
+        eprint("uso: raylang selfhost/check_dump.ray <archivo>");
+        return 1;
+    }
+    match (read_file(argv[0])) {
+        Result.Ok(src) => {
+            match (lex(src)) {
+                Result.Ok(toks) => {
+                    match (parse(toks)) {
+                        Result.Ok(prog) => {
+                            match (check(prog)) {
+                                Result.Ok(_) => { print("ok"); },
+                                Result.Err(te) => {
+                                    print("error de tipos en " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
+                                },
+                            }
+                        },
+                        Result.Err(pe) => {
+                            print("error de sintaxis en " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
+                        },
+                    }
+                },
+                Result.Err(le) => {
+                    print("error léxico en " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg);
+                },
+            }
+            0
+        },
+        Result.Err(msg) => {
+            eprint(msg);
+            1
+        },
+    }
+}

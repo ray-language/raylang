@@ -1,0 +1,650 @@
+// El checker (validador de tipos) de raylang, escrito EN raylang (self-hosting, M14.3).
+//
+// Tercera fase del bootstrap: AST (del parser auto-alojado) → veredicto. Es un VALIDADOR: produce
+// `ok` o un `TypeError` (mensaje + posición) byte-idéntico al checker de Rust (`src/checker.rs`). NO
+// reproduce el lowering de M9 (UFCS/diccionarios/dyn/mangling), que queda para el back-end. Se valida
+// contra el checker de Rust como ORÁCULO (ver `tests/selfhost_checker.rs`): misma fuente por ambos
+// pipelines, mismo veredicto.
+//
+// M14.3a (esta versión): NÚCLEO MONOMÓRFICO. Dos pasadas (firmas → cuerpos), pila de ámbitos,
+// literales, operadores, variables (let/var, mutabilidad, ámbito), llamadas (aridad + tipos),
+// if/while/block/return, anotaciones de tipo, divergencia, builtin print. Cubre fib/fizzbuzz.
+// Diferido: datos (arrays/structs/enums/match, M14.3b), genéricos (M14.3c), traits (M14.3d).
+//
+// El `Type` del parser DOBLA como representación del tipo inferido. Los ámbitos usan `Map<K,V>`.
+
+from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp;
+
+// Error de tipos con ubicación (espejo de `TypeError` en Rust).
+pub struct TypeError { msg: string, line: int, col: int }
+
+// Información de una variable en un ámbito.
+struct VarInfo { ty: Type, mutable: bool, dline: int, dcol: int }
+
+// Firma de una función (M14.3a: sin genéricos/bounds, que llegan en M14.3c/d).
+struct FnSig { params: [Type], ret: Type }
+
+// El estado del checker: firmas de funciones, pila de ámbitos y el retorno de la función en curso.
+struct Checker {
+    funcs: Map<string, FnSig>,
+    scopes: [Map<string, VarInfo>],
+    current_return: Type,
+}
+
+fn terr(line: int, col: int, msg: string) -> TypeError {
+    TypeError { msg: msg, line: line, col: col }
+}
+
+// =====================================================================
+// Tipos: igualdad, presentación (Display), predicados
+// =====================================================================
+
+// Igualdad estructural de tipos (raylang no deriva == sobre enums recursivos).
+fn type_eq(a: Type, b: Type) -> bool {
+    match (a) {
+        Type.TInt => match (b) { Type.TInt => true, _ => false },
+        Type.TFloat => match (b) { Type.TFloat => true, _ => false },
+        Type.TBool => match (b) { Type.TBool => true, _ => false },
+        Type.TString => match (b) { Type.TString => true, _ => false },
+        Type.TChar => match (b) { Type.TChar => true, _ => false },
+        Type.TUnit => match (b) { Type.TUnit => true, _ => false },
+        Type.TArray(ea) => match (b) { Type.TArray(eb) => type_eq(ea, eb), _ => false },
+        Type.TFn(pa, ra) => match (b) {
+            Type.TFn(pb, rb) => types_eq(pa, pb) && type_eq(ra, rb),
+            _ => false,
+        },
+        Type.TNamed(na, aa) => match (b) {
+            Type.TNamed(nb, ab) => na == nb && types_eq(aa, ab),
+            _ => false,
+        },
+        Type.TDyn(ta) => match (b) {
+            Type.TDyn(tb) => strs_eq(ta, tb),
+            _ => false,
+        },
+    }
+}
+
+fn types_eq(a: [Type], b: [Type]) -> bool {
+    if (len(a) != len(b)) { return false; }
+    var i = 0;
+    while (i < len(a)) {
+        if (!type_eq(a[i], b[i])) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn strs_eq(a: [string], b: [string]) -> bool {
+    if (len(a) != len(b)) { return false; }
+    var i = 0;
+    while (i < len(a)) {
+        if (a[i] != b[i]) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// Presentación de un tipo, idéntica al `Display` de `Type` en Rust (para los mensajes de error).
+fn type_str(t: Type) -> string {
+    match (t) {
+        Type.TInt => "int",
+        Type.TFloat => "float",
+        Type.TBool => "bool",
+        Type.TString => "string",
+        Type.TChar => "char",
+        Type.TUnit => "unit",
+        Type.TArray(e) => "[" + type_str(e) + "]",
+        Type.TFn(ps, r) => "fn(" + join_types(ps) + ") -> " + type_str(r),
+        Type.TNamed(n, args) => { if (len(args) == 0) { n } else { n + "<" + join_types(args) + ">" } },
+        Type.TDyn(ts) => "dyn " + join_strs(ts),
+    }
+}
+
+fn join_types(ps: [Type]) -> string {
+    var s = "";
+    var i = 0;
+    while (i < len(ps)) {
+        if (i > 0) { s = s + ", "; }
+        s = s + type_str(ps[i]);
+        i = i + 1;
+    }
+    s
+}
+
+fn join_strs(xs: [string]) -> string {
+    var s = "";
+    var i = 0;
+    while (i < len(xs)) {
+        if (i > 0) { s = s + " + "; }
+        s = s + xs[i];
+        i = i + 1;
+    }
+    s
+}
+
+// ¿`print`/`eprint` saben imprimir este tipo? (M14.3a: primitivos + arreglo + función.)
+fn is_printable(t: Type) -> bool {
+    match (t) {
+        Type.TInt => true,
+        Type.TFloat => true,
+        Type.TBool => true,
+        Type.TString => true,
+        Type.TChar => true,
+        Type.TArray(_) => true,
+        Type.TFn(_, _) => true,
+        _ => false,
+    }
+}
+
+// ¿Es comparable con ==/!=? (int/float/bool/string/char, o arreglo de comparables.)
+fn is_comparable(t: Type) -> bool {
+    match (t) {
+        Type.TInt => true,
+        Type.TFloat => true,
+        Type.TBool => true,
+        Type.TString => true,
+        Type.TChar => true,
+        Type.TArray(e) => is_comparable(e),
+        _ => false,
+    }
+}
+
+fn is_array(t: Type) -> bool {
+    match (t) { Type.TArray(_) => true, _ => false }
+}
+
+// ¿Operandos válidos para los comparadores de orden (< <= > >=)? Mismo tipo, y de int/float/string/char.
+fn order_ok(lt: Type, rt: Type) -> bool {
+    type_eq(lt, rt) && (type_eq(lt, Type.TInt) || type_eq(lt, Type.TFloat)
+        || type_eq(lt, Type.TString) || type_eq(lt, Type.TChar))
+}
+
+// Clase de un operador binario: 0=aritmético, 1=orden, 2=igualdad, 3=lógico.
+fn op_kind(op: BinOp) -> int {
+    match (op) {
+        BinOp.Add => 0, BinOp.Sub => 0, BinOp.Mul => 0, BinOp.Div => 0, BinOp.Rem => 0,
+        BinOp.Lt => 1, BinOp.Le => 1, BinOp.Gt => 1, BinOp.Ge => 1,
+        BinOp.Eq => 2, BinOp.Ne => 2,
+        BinOp.And => 3, BinOp.Or => 3,
+    }
+}
+
+fn is_add(op: BinOp) -> bool {
+    match (op) { BinOp.Add => true, _ => false }
+}
+
+fn bin_op_str(op: BinOp) -> string {
+    match (op) {
+        BinOp.Add => "+", BinOp.Sub => "-", BinOp.Mul => "*", BinOp.Div => "/", BinOp.Rem => "%",
+        BinOp.Eq => "==", BinOp.Ne => "!=", BinOp.Lt => "<", BinOp.Le => "<=", BinOp.Gt => ">", BinOp.Ge => ">=",
+        BinOp.And => "&&", BinOp.Or => "||",
+    }
+}
+
+// =====================================================================
+// Resolución y validación de tipos (M14.3a: monomórfico)
+// =====================================================================
+
+// Normaliza un tipo de anotación. En M14.3a solo recorre arreglos/funciones (no hay enums/genéricos
+// que reclasificar); un `TNamed` se deja tal cual y `ensure_type` lo rechaza si no es válido.
+fn resolve_type(t: Type) -> Type {
+    match (t) {
+        Type.TArray(e) => Type.TArray(resolve_type(e)),
+        Type.TFn(ps, r) => {
+            var rps: [Type] = [];
+            var i = 0;
+            while (i < len(ps)) { push(rps, resolve_type(ps[i])); i = i + 1; }
+            Type.TFn(rps, resolve_type(r))
+        },
+        _ => t,
+    }
+}
+
+// Verifica que un tipo es válido. En M14.3a no hay tipos nominales declarables → un `TNamed` es
+// siempre un tipo desconocido (mismo mensaje que Rust ante un nombre no declarado).
+fn ensure_type(t: Type, line: int, col: int) -> Result<int, TypeError> {
+    match (t) {
+        Type.TArray(e) => ensure_type(e, line, col),
+        Type.TFn(ps, r) => {
+            var i = 0;
+            while (i < len(ps)) { ensure_type(ps[i], line, col)?; i = i + 1; }
+            ensure_type(r, line, col)
+        },
+        Type.TNamed(name, _) => Result.Err(terr(line, col, "tipo desconocido: '" + name + "' no declarado")),
+        Type.TDyn(_) => Result.Err(terr(line, col, "'dyn' aún no soportado por el checker auto-alojado")),
+        _ => Result.Ok(0),
+    }
+}
+
+// =====================================================================
+// Pila de ámbitos
+// =====================================================================
+
+fn new_scope() -> Map<string, VarInfo> { map_new() }
+
+fn push_scope(c: Checker) { push(c.scopes, new_scope()); }
+
+fn pop_scope(c: Checker) {
+    let removed = pop(c.scopes);
+}
+
+fn declare(c: Checker, name: string, ty: Type, mutable: bool, line: int, col: int) {
+    let top = c.scopes[len(c.scopes) - 1];
+    insert(top, name, VarInfo { ty: ty, mutable: mutable, dline: line, dcol: col });
+}
+
+// Busca una variable de adentro hacia afuera. `None` si no está en ningún ámbito.
+fn lookup(c: Checker, name: string) -> Option<VarInfo> {
+    var i = len(c.scopes) - 1;
+    while (i >= 0) {
+        match (get(c.scopes[i], name)) {
+            Option.Some(v) => { return Option.Some(v); },
+            Option.None => {},
+        }
+        i = i - 1;
+    }
+    Option.None
+}
+
+// =====================================================================
+// Análisis de divergencia (¿todos los caminos retornan/abortan?)
+// =====================================================================
+
+fn block_diverges(b: Block) -> bool {
+    var i = 0;
+    while (i < len(b.stmts)) {
+        if (stmt_diverges(b.stmts[i])) { return true; }
+        i = i + 1;
+    }
+    match (b.tail) {
+        Option.Some(t) => expr_diverges(t),
+        Option.None => false,
+    }
+}
+
+fn stmt_diverges(s: Stmt) -> bool {
+    match (s.kind) {
+        SKind.SReturn(_) => true,
+        SKind.SExpr(e) => expr_diverges(e),
+        _ => false,
+    }
+}
+
+fn expr_diverges(e: Expr) -> bool {
+    match (e.kind) {
+        EKind.EIf(_, then_b, elseopt) => {
+            match (elseopt) {
+                Option.Some(els) => block_diverges(then_b) && expr_diverges(els),
+                Option.None => false,
+            }
+        },
+        EKind.EBlock(b) => block_diverges(b),
+        EKind.EMatch(_, arms) => {
+            if (len(arms) == 0) { return false; }
+            var i = 0;
+            while (i < len(arms)) {
+                if (!expr_diverges(arms[i].body)) { return false; }
+                i = i + 1;
+            }
+            true
+        },
+        // panic(...) nunca retorna.
+        EKind.ECall(callee, _) => {
+            match (callee.kind) {
+                EKind.EIdent(n) => n == "panic",
+                _ => false,
+            }
+        },
+        _ => false,
+    }
+}
+
+// =====================================================================
+// Las dos pasadas
+// =====================================================================
+
+// program = registrar firmas → exigir main → verificar cada cuerpo.
+fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
+    var fi = 0;
+    while (fi < len(prog.funcs)) {
+        let f = prog.funcs[fi];
+        if (contains_key(c.funcs, f.name)) {
+            return Result.Err(terr(f.line, f.col, "función '" + f.name + "' declarada dos veces"));
+        }
+        var ps: [Type] = [];
+        var pi = 0;
+        while (pi < len(f.params)) { push(ps, resolve_type(f.params[pi].ty)); pi = pi + 1; }
+        insert(c.funcs, f.name, FnSig { params: ps, ret: resolve_type(f.ret) });
+        fi = fi + 1;
+    }
+    // 'main' es obligatoria: sin parámetros, retorno int o unit.
+    match (get(c.funcs, "main")) {
+        Option.None => { return Result.Err(terr(1, 1, "falta la función de entrada 'main'")); },
+        Option.Some(sig) => {
+            if (len(sig.params) != 0) {
+                return Result.Err(terr(1, 1, "'main' no debe recibir parámetros"));
+            }
+            if (!type_eq(sig.ret, Type.TInt) && !type_eq(sig.ret, Type.TUnit)) {
+                return Result.Err(terr(1, 1, "'main' debe devolver int o unit, no " + type_str(sig.ret)));
+            }
+        },
+    }
+    var ci = 0;
+    while (ci < len(prog.funcs)) {
+        check_function(c, prog.funcs[ci])?;
+        ci = ci + 1;
+    }
+    Result.Ok(0)
+}
+
+fn check_function(c: Checker, f: Func) -> Result<int, TypeError> {
+    var pi = 0;
+    while (pi < len(f.params)) {
+        let p = f.params[pi];
+        ensure_type(p.ty, p.line, p.col)?;
+        pi = pi + 1;
+    }
+    ensure_type(f.ret, f.line, f.col)?;
+    check_fn_body(c, f.params, f.ret, f.body, f.line, f.col, "'" + f.name + "'")
+}
+
+// Verifica el cuerpo: declara los parámetros, comprueba el bloque y exige que su tipo-valor coincida
+// con el retorno declarado, salvo que el cuerpo diverja.
+fn check_fn_body(c: Checker, params: [Param], ret_ann: Type, body: Block, line: int, col: int, label: string) -> Result<int, TypeError> {
+    let ret = resolve_type(ret_ann);
+    c.current_return = ret;
+    push_scope(c);
+    var pi = 0;
+    while (pi < len(params)) {
+        let p = params[pi];
+        declare(c, p.name, resolve_type(p.ty), false, p.line, p.col);
+        pi = pi + 1;
+    }
+    let body_ty = check_block(c, body)?;
+    let diverges = block_diverges(body);
+    var eline = line;
+    var ecol = col;
+    match (body.tail) {
+        Option.Some(t) => { eline = t.line; ecol = t.col; },
+        Option.None => {},
+    }
+    pop_scope(c);
+    if (type_eq(ret, Type.TUnit)) {
+        if (!type_eq(body_ty, Type.TUnit) && !diverges) {
+            return Result.Err(terr(eline, ecol, label + " no declara retorno (unit), pero su cuerpo produce " + type_str(body_ty)));
+        }
+        Result.Ok(0)
+    } else if (type_eq(body_ty, ret) || diverges) {
+        Result.Ok(0)
+    } else {
+        Result.Err(terr(eline, ecol, label + " declara devolver " + type_str(ret) + ", pero su cuerpo produce " + type_str(body_ty)))
+    }
+}
+
+// =====================================================================
+// Sentencias
+// =====================================================================
+
+fn check_stmt(c: Checker, stmt: Stmt) -> Result<int, TypeError> {
+    match (stmt.kind) {
+        SKind.SLet(name, tyopt, value, mutable) => {
+            match (tyopt) {
+                Option.Some(annot) => {
+                    ensure_type(annot, stmt.line, stmt.col)?;
+                    let ty = resolve_type(annot);
+                    let vt = check_expr(c, value)?;
+                    if (!type_eq(vt, ty)) {
+                        return Result.Err(terr(value.line, value.col,
+                            "'" + name + "' se declara como " + type_str(ty) + " pero se inicializa con " + type_str(vt)));
+                    }
+                    declare(c, name, ty, mutable, stmt.line, stmt.col);
+                },
+                Option.None => {
+                    let vt = check_expr(c, value)?;
+                    declare(c, name, vt, mutable, stmt.line, stmt.col);
+                },
+            }
+            Result.Ok(0)
+        },
+        SKind.SAssign(target, value) => check_assign(c, target, value, stmt.line, stmt.col),
+        SKind.SReturn(valopt) => {
+            var vt = Type.TUnit;
+            match (valopt) {
+                Option.Some(e) => { vt = check_expr(c, e)?; },
+                Option.None => {},
+            }
+            if (!type_eq(vt, c.current_return)) {
+                return Result.Err(terr(stmt.line, stmt.col,
+                    "se devuelve " + type_str(vt) + " pero la función declara retorno " + type_str(c.current_return)));
+            }
+            Result.Ok(0)
+        },
+        SKind.SExpr(e) => { check_expr(c, e)?; Result.Ok(0) },
+    }
+}
+
+// Asignación (M14.3a: solo a una variable; índice/campo llegan en M14.3b).
+fn check_assign(c: Checker, target: Expr, value: Expr, line: int, col: int) -> Result<int, TypeError> {
+    match (target.kind) {
+        EKind.EIdent(name) => {
+            match (lookup(c, name)) {
+                Option.None => Result.Err(terr(target.line, target.col, "variable '" + name + "' no declarada")),
+                Option.Some(v) => {
+                    if (!v.mutable) {
+                        return Result.Err(terr(line, col,
+                            "no se puede asignar a '" + name + "': es inmutable (declarada con 'let'; usa 'var')"));
+                    }
+                    let vt = check_expr(c, value)?;
+                    if (!type_eq(vt, v.ty)) {
+                        return Result.Err(terr(value.line, value.col,
+                            "'" + name + "' es " + type_str(v.ty) + " pero se le asigna " + type_str(vt)));
+                    }
+                    Result.Ok(0)
+                },
+            }
+        },
+        _ => Result.Err(terr(target.line, target.col, "el lado izquierdo no es asignable")),
+    }
+}
+
+// =====================================================================
+// Expresiones
+// =====================================================================
+
+fn check_expr(c: Checker, e: Expr) -> Result<Type, TypeError> {
+    match (e.kind) {
+        EKind.EInt(_) => Result.Ok(Type.TInt),
+        EKind.EFloat(_) => Result.Ok(Type.TFloat),
+        EKind.EBool(_) => Result.Ok(Type.TBool),
+        EKind.EStr(_) => Result.Ok(Type.TString),
+        EKind.EChar(_) => Result.Ok(Type.TChar),
+        EKind.EIdent(name) => check_ident(c, name, e.line, e.col),
+        EKind.EUnary(op, inner) => check_unary(c, op, inner, e.line, e.col),
+        EKind.EBinary(op, l, r) => check_binary(c, op, l, r, e.line, e.col),
+        EKind.ECall(callee, cargs) => check_call(c, callee, cargs, e.line, e.col),
+        EKind.EIf(cond, then_b, elseopt) => check_if(c, cond, then_b, elseopt, e.line, e.col),
+        EKind.EWhile(cond, body) => check_while(c, cond, body, e.line, e.col),
+        EKind.EBlock(b) => check_block(c, b),
+        _ => Result.Err(terr(e.line, e.col, "expresión aún no soportada por el checker auto-alojado (M14.3a)")),
+    }
+}
+
+fn check_ident(c: Checker, name: string, line: int, col: int) -> Result<Type, TypeError> {
+    match (lookup(c, name)) {
+        Option.Some(v) => Result.Ok(v.ty),
+        Option.None => {
+            match (get(c.funcs, name)) {
+                Option.Some(sig) => Result.Ok(Type.TFn(sig.params, sig.ret)),
+                Option.None => Result.Err(terr(line, col, "nombre '" + name + "' no declarado")),
+            }
+        },
+    }
+}
+
+fn check_unary(c: Checker, op: UnOp, inner: Expr, line: int, col: int) -> Result<Type, TypeError> {
+    let t = check_expr(c, inner)?;
+    match (op) {
+        UnOp.Neg => {
+            if (type_eq(t, Type.TInt) || type_eq(t, Type.TFloat)) { Result.Ok(t) }
+            else { Result.Err(terr(line, col, "no se puede negar (-) un " + type_str(t))) }
+        },
+        UnOp.Not => {
+            if (type_eq(t, Type.TBool)) { Result.Ok(Type.TBool) }
+            else { Result.Err(terr(line, col, "el '!' requiere bool, no " + type_str(t))) }
+        },
+    }
+}
+
+fn check_binary(c: Checker, op: BinOp, l: Expr, r: Expr, line: int, col: int) -> Result<Type, TypeError> {
+    let lt = check_expr(c, l)?;
+    let rt = check_expr(c, r)?;
+    let kind = op_kind(op);
+    if (kind == 0) {
+        if (type_eq(lt, Type.TInt) && type_eq(rt, Type.TInt)) { Result.Ok(Type.TInt) }
+        else if (type_eq(lt, Type.TFloat) && type_eq(rt, Type.TFloat)) { Result.Ok(Type.TFloat) }
+        else if (is_add(op) && type_eq(lt, Type.TString) && type_eq(rt, Type.TString)) { Result.Ok(Type.TString) }
+        else if (is_add(op) && is_array(lt) && type_eq(lt, rt)) { Result.Ok(lt) }
+        else {
+            Result.Err(terr(line, col, "el operador '" + bin_op_str(op)
+                + "' requiere ambos operandos int o ambos float, no " + type_str(lt) + " y " + type_str(rt)))
+        }
+    } else if (kind == 1) {
+        if (order_ok(lt, rt)) { Result.Ok(Type.TBool) }
+        else {
+            Result.Err(terr(line, col, "el operador '" + bin_op_str(op)
+                + "' compara int/float/string/char del mismo tipo, no " + type_str(lt) + " y " + type_str(rt)))
+        }
+    } else if (kind == 2) {
+        if (type_eq(lt, rt) && is_comparable(lt)) { Result.Ok(Type.TBool) }
+        else {
+            Result.Err(terr(line, col, "el operador '" + bin_op_str(op)
+                + "' requiere ambos operandos del mismo tipo comparable, no " + type_str(lt) + " y " + type_str(rt)))
+        }
+    } else {
+        if (type_eq(lt, Type.TBool) && type_eq(rt, Type.TBool)) { Result.Ok(Type.TBool) }
+        else {
+            Result.Err(terr(line, col, "el operador '" + bin_op_str(op)
+                + "' requiere operandos bool, no " + type_str(lt) + " y " + type_str(rt)))
+        }
+    }
+}
+
+fn check_call(c: Checker, callee: Expr, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    match (callee.kind) {
+        EKind.EIdent(n) => check_named_call(c, n, cargs, line, col),
+        _ => {
+            let ty = check_expr(c, callee)?;
+            call_type(c, ty, cargs, line, col)
+        },
+    }
+}
+
+// Llamada por nombre: builtin (print/eprint), variable-función local, o función de nivel superior.
+fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    if (name == "print" || name == "eprint") {
+        return check_print(c, name, cargs, line, col);
+    }
+    match (lookup(c, name)) {
+        Option.Some(v) => { return call_type(c, v.ty, cargs, line, col); },
+        Option.None => {},
+    }
+    match (get(c.funcs, name)) {
+        Option.Some(sig) => check_args(c, sig.params, sig.ret, cargs, "'" + name + "'", line, col),
+        Option.None => Result.Err(terr(line, col, "función '" + name + "' no declarada")),
+    }
+}
+
+// El builtin print/eprint: 1 argumento imprimible → unit.
+fn check_print(c: Checker, name: string, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    if (len(cargs) != 1) {
+        return Result.Err(terr(line, col, name + " espera 1 argumento, se le pasaron " + to_string(len(cargs))));
+    }
+    let at = check_expr(c, cargs[0])?;
+    if (!is_printable(at)) {
+        return Result.Err(terr(cargs[0].line, cargs[0].col, name + " no puede imprimir un " + type_str(at)));
+    }
+    Result.Ok(Type.TUnit)
+}
+
+fn call_type(c: Checker, ty: Type, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    match (ty) {
+        Type.TFn(params, ret) => check_args(c, params, ret, cargs, "la función", line, col),
+        _ => Result.Err(terr(line, col, "no se puede llamar un valor de tipo " + type_str(ty) + " (no es una función)")),
+    }
+}
+
+fn check_args(c: Checker, params: [Type], ret: Type, cargs: [Expr], label: string, line: int, col: int) -> Result<Type, TypeError> {
+    if (len(cargs) != len(params)) {
+        return Result.Err(terr(line, col,
+            label + " espera " + to_string(len(params)) + " argumento(s), se le pasaron " + to_string(len(cargs))));
+    }
+    var i = 0;
+    while (i < len(cargs)) {
+        let at = check_expr(c, cargs[i])?;
+        if (!type_eq(at, params[i])) {
+            return Result.Err(terr(cargs[i].line, cargs[i].col,
+                "argumento " + to_string(i + 1) + " de " + label + ": se esperaba " + type_str(params[i]) + ", se pasó " + type_str(at)));
+        }
+        i = i + 1;
+    }
+    Result.Ok(ret)
+}
+
+fn check_if(c: Checker, cond: Expr, then_b: Block, elseopt: Option<Expr>, line: int, col: int) -> Result<Type, TypeError> {
+    let ct = check_expr(c, cond)?;
+    if (!type_eq(ct, Type.TBool)) {
+        return Result.Err(terr(cond.line, cond.col, "la condición del if debe ser bool, no " + type_str(ct)));
+    }
+    let then_ty = check_block(c, then_b)?;
+    match (elseopt) {
+        Option.None => {
+            if (!type_eq(then_ty, Type.TUnit)) {
+                return Result.Err(terr(line, col,
+                    "un if sin else tiene tipo unit, pero su rama produce " + type_str(then_ty) + " (añade un else)"));
+            }
+            Result.Ok(Type.TUnit)
+        },
+        Option.Some(else_e) => {
+            let else_ty = check_expr(c, else_e)?;
+            if (block_diverges(then_b)) { return Result.Ok(else_ty); }
+            if (expr_diverges(else_e)) { return Result.Ok(then_ty); }
+            if (!type_eq(then_ty, else_ty)) {
+                return Result.Err(terr(line, col,
+                    "las ramas del if tienen tipos distintos: " + type_str(then_ty) + " y " + type_str(else_ty)));
+            }
+            Result.Ok(then_ty)
+        },
+    }
+}
+
+fn check_while(c: Checker, cond: Expr, body: Block, line: int, col: int) -> Result<Type, TypeError> {
+    let ct = check_expr(c, cond)?;
+    if (!type_eq(ct, Type.TBool)) {
+        return Result.Err(terr(cond.line, cond.col, "la condición del while debe ser bool, no " + type_str(ct)));
+    }
+    check_block(c, body)?;
+    Result.Ok(Type.TUnit)
+}
+
+// Verifica un bloque en su propio ámbito y devuelve su tipo-valor (la expresión final, o unit).
+fn check_block(c: Checker, block: Block) -> Result<Type, TypeError> {
+    push_scope(c);
+    var i = 0;
+    while (i < len(block.stmts)) {
+        check_stmt(c, block.stmts[i])?;
+        i = i + 1;
+    }
+    var ty = Type.TUnit;
+    match (block.tail) {
+        Option.Some(e) => { ty = check_expr(c, e)?; },
+        Option.None => {},
+    }
+    pop_scope(c);
+    Result.Ok(ty)
+}
+
+// Punto de entrada: valida un programa (o devuelve el primer TypeError).
+pub fn check(prog: Program) -> Result<int, TypeError> {
+    let c = Checker { funcs: map_new(), scopes: [], current_return: Type.TUnit };
+    check_program(c, prog)
+}

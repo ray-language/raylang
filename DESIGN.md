@@ -2151,3 +2151,107 @@ pedagógico y perseguir producción: un único motor (la VM, jubilando el orácu
 o aislamiento por actores para data-race freedom, **GC concurrente** + runtime **M:N paralelo**,
 **algebraic effects** sobre una VM de pila explícita, gestor de paquetes y FFI. Es un cambio de
 *norte* (no una fase más), por eso vive en una rama aparte y no en la hoja de ruta principal.
+
+## 22. M13 — Habilitadores de self-hosting
+
+> **Orden de ejecución: M13 va ANTES que M12.** El capstone del proyecto es el self-hosting (§7
+> de IDEAS, "raylang en raylang"), y **la concurrencia (M12) no es un prerrequisito** para
+> compilar. M13 cierra los tres huecos prácticos que separan "self-hosting es expresable" de
+> "self-hosting no es penoso". El número de sección (§22 > §21) refleja el orden cronológico de
+> *anotación*, no el de *implementación*.
+
+Tras M11, el lenguaje **ya es suficientemente expresivo** para escribir un lexer + parser +
+checker + intérprete de raylang en raylang: `read_file`/`write_file` (M11.2c), `char`/`s[i]`/
+`chars` (M11.4c), clasificación de `char` por comparación de code point (M11.7d), `enum` recursivo
+con semántica de referencia para el AST (M5), `Result`/`Option`/`?` (M6.3), módulos por
+directorios y cápsulas (M11.3–M11.6). Lo que **falta** no son features del lenguaje sino tres
+asperezas que harían el bootstrap doloroso:
+
+1. **No hay tipo mapa.** Un compilador vive de tablas de símbolos (`nombre → tipo`, ámbitos,
+   `(tipo,método) → manglado`). Sin un `Map`, se haría con listas de asociación `O(n)`: correcto,
+   pero lento y verboso.
+2. **El tooling de test es mínimo.** `@test` (`() -> bool`) + `--test` (exit code = nº de fallos)
+   no basta para validar un compilador contra sí mismo: falta `assert` y un reporte usable.
+3. **La recursión profunda puede romper.** El **intérprete** recurre sobre la pila de Rust
+   (`eval_expr`/`eval_stmt`) y el **parser de Rust** es descenso recursivo; un parser de descenso
+   recursivo *escrito en raylang* y corrido en el intérprete es justo el caso peligroso. (La **VM
+   ya es robusta**: marcos explícitos en el heap, bucle de bytecode — no usa la pila de Rust por
+   llamada raylang.)
+
+Tres hilos independientes (separables, pero recomendado el orden 13.3 → 13.2 → 13.1: primero que
+no se caiga, luego poder testear, luego la pieza grande).
+
+### 22.1 M13.1 — `Map<K,V>`
+
+**Decisión central: un `Map` es un objeto del heap en ambos motores**, como los arreglos (M3) y los
+structs, **no** un almacén del host. Razón: claves y valores son `Value`, y cada motor representa
+los valores distinto (`Rc` en el intérprete, handles GC en la VM); un almacén del host no podría
+guardarlos de forma compartida. Sigue el molde de los arreglos: nuevo `Obj::Map` / `HeapValue::Map`
+**trazado por el GC**. **Toca el runtime y el GC** ⇒ oráculo VM↔intérprete con estrés de GC.
+
+**Claves limitadas a primitivos hashables** (`string`, `int`, `char`, `bool`) en la primera
+versión. Cubre el 99% de un compilador (claves string/int) y **evita** la maquinaria de un trait
+`Hash` con paso de diccionarios. `Key` = enum interno de primitivos hashables. Clave genérica de
+usuario (vía trait `Hash` + dicts, como M9.2) → **diferido**.
+
+- `Type::Map(Box<Type>, Box<Type>)` — el `Type` es extensible (CLAUDE.md), encaja sin tratarlo como
+  enum cerrado.
+- `map_new() -> Map<K,V>` es **indeterminado** como `[]`/`None` ⇒ reusa el chequeo bidireccional
+  (`check_expr_expected`, M6.2): `let m: Map<string,int> = map_new();`.
+- Como cada builtin tras L1 es una fila en `BUILTINS` + opcode + impl por motor, el coste marginal
+  por operación es bajo; lo caro es el primer `Obj::Map` (tipo + heap obj + tracing).
+
+**Sub-fases:**
+- **M13.1a — núcleo**: `map_new`, `insert(m,k,v)`, `get(m,k) -> Option<V>` (primitivo que devuelve
+  `[V]` + envoltorio en el prelude, patrón M11.2), `contains_key(m,k) -> bool`, `len` **extendido**
+  a mapas (ya cubre arreglos+strings). UFCS gratis: `m.insert(k,v)`, `m.get(k)`.
+- **M13.1b — recorrido**: `remove(m,k) -> Option<V>`, `keys(m) -> [K]`, `values(m) -> [V]` (ambos
+  asignan heap). Para el oráculo, `keys`/`values` se devuelven **ordenadas** (como `list_dir` en
+  M11.7c) → determinista pese a que el `HashMap` interno no lo sea.
+
+**Diferido:** clave genérica (`Hash`), `@derive(Eq/Show)` sobre `Map`, orden de iteración estable
+expuesto al usuario.
+
+### 22.2 M13.2 — `assert` + tooling de test
+
+- **M13.2a — `assert`**: builtin `assert(cond)` y `assert(cond, msg)` que **aborta con mensaje +
+  ubicación** si la condición es falsa (reusa la maquinaria de error de runtime; señal de flujo en
+  el intérprete, opcode/trampa en la VM). En ambos motores ⇒ oráculo. `assert_eq<T: Show>(a, b)`
+  en el **prelude** (raylang puro): usa `==` y compone el mensaje con `mostrar`/`to_string` ⇒
+  front-end puro, cero opcodes.
+- **M13.2b — runner mejorado** (cliente externo `test_runner.rs`, **no toca el core**):
+  - `@test` admite también `() -> unit`: **pasa si no dispara ningún `assert`** (modelo más natural
+    que devolver `bool`).
+  - Reporte por test: nombre + ✓/✗ + el mensaje del `assert` que falló; resumen final
+    (`N passed, M failed`).
+  - Filtrado por nombre (`raylang --test archivo.ray patron`).
+
+**Diferido:** setup/teardown, *property testing*, timing por test.
+
+### 22.3 M13.3 — Robustez de recursión profunda
+
+Diagnóstico: frágiles son **(a) el intérprete** (recursión en la pila de Rust) y **(b) el parser de
+Rust**; la **VM ya es robusta** (marcos en el heap).
+
+- **M13.3a — sin segfaults, techo alto**:
+  1. Correr intérprete/parser en un **hilo worker con pila grande** (`std::thread::Builder::
+     stack_size`, configurable). Es lo que hace rustc; barato y cubre (a) y (b) a la vez.
+  2. En la **VM**, un **límite de profundidad de marcos configurable** que produce un **error de
+     runtime limpio** ("límite de recursión excedido" + ubicación) en vez de crecer sin tope.
+     Oráculo: el intérprete reporta el mismo error al alcanzar su techo.
+- **M13.3b — TCO en la VM** (*opcional, candidato a diferir*): detectar llamada en posición de cola
+  y **reutilizar el marco** ⇒ recursión de cola en O(1) marcos. Pedagógicamente jugoso pero más
+  invasivo; se decide tras 13.3a.
+
+**Diferido:** reescribir el intérprete a pila explícita/trampolín (gran obra; choca con "intérprete
+simple = oráculo"; solo valdría la pena en la rama de producción de §21.1).
+
+### 22.4 Resumen de impacto
+
+| Hilo | Toca runtime | Oráculo | Tamaño |
+|------|--------------|---------|--------|
+| M13.1 `Map<K,V>` | **Sí** (nuevo heap obj + GC) | Sí, con estrés GC | Grande |
+| M13.2 `assert`/test | `assert` sí; runner no | `assert` sí | Medio |
+| M13.3 recursión | Sí (hilo + límites) | Sí (mismo error) | Pequeño-medio |
+
+El self-hosting (capstone, §7 de IDEAS) queda **después de M13** y sigue siendo ortogonal a M12.

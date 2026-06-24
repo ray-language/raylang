@@ -25,7 +25,8 @@
 | **Módulos por directorios** (`import geo/formas/circulo;`) | Loader + parser de `import` | **M11.5** | ✅ separador `/` fijado; **solo leaf-binding** + `as`; prohibido el acceso por ruta en expresiones (ambiguo con `/` y mala práctica); rutas absolutas desde la raíz. Diferido: imports relativos, `pub` granular |
 | **Aislamiento de módulos** (`mod.ray` = cápsula) | Loader (resolución + aristas) | **M11.6** | ✅ estrategia "cápsula": `mod.ray` vuelve un directorio direccionable (`import geo;`) y **encapsula** su subárbol; reexport `pub from … import …` (-a) + enforcement del borde (-b); descartados `internal/`-Go y `mod x;`/`pub(crate)`-Rust |
 | **Redes** (sockets / DNS / HTTP) | Builtins (transporte) + librería raylang (protocolos) | **post-M12** | 📌 dirección fijada: **transporte = builtins** (sockets TCP/UDP + DNS sobre `std::net`, cero deps de Cargo, reusa el molde de handles de M11.8); **protocolos (HTTP/URL) = librería en raylang** traída con `import` (no en el prelude). Async espera al scheduler de **M12** (sockets bloqueantes antes). Sin gestor de paquetes (las "libs externas" son archivos/cápsulas del proyecto) |
-| **Self-hosting** (raylang en raylang) | Capstone: requiere módulos + I/O | transversal (post-M11) | 🎯 meta-objetivo, ya habilitado por el lenguaje |
+| **Habilitadores de self-hosting** (`Map<K,V>`, `assert`/test, recursión profunda) | Runtime + GC (Map) · runner (test) · hilo/límites (recursión) | **M13 (antes que M12)** | 📌 sub-plan fijado (DESIGN §22): **M13.1** `Map<K,V>` como heap obj en ambos motores (claves primitivas hashables; genérica vía `Hash` diferida) · **M13.2** `assert`/`assert_eq` + runner con reporte y `@test` unit · **M13.3** pila grande en hilo worker + límite de marcos con error limpio (TCO diferido). Ortogonal a M12 |
+| **Self-hosting** (raylang en raylang) | Capstone: requiere módulos + I/O | transversal (post-**M13**) | 🎯 meta-objetivo, ya expresable; M13 lo vuelve práctico (mapas, test, recursión) |
 | **Tooling de editor** (coloreado / LSP) | Front-end (reutiliza el checker) | coloreado ✅ / **LSP M10** | 🔧 parcial (LSP pendiente) |
 | **Anotaciones** (`@test`, `@derive`, …) | Parser + fase que las consume | **M10** | 📌 dirección fijada; `@` ✅ reservado en el lexer (`TokenKind::At`); falta el parser |
 | **API de runtime / I/O** (`args`, `input`, `env`) | Builtins / stdlib | **M11** | 📌 dirección fijada |
@@ -156,6 +157,13 @@ El examen definitivo: que el compilador/intérprete de raylang esté escrito en
   sobre la VM (que podría seguir en Rust o reescribirse también).
 - **Cuándo**: hito natural **después de M7**. Es la señal de que raylang dejó de
   ser un juguete.
+- **Habilitadores prácticos (M13, DESIGN §22)**: el lenguaje ya es *expresable* para
+  un compilador tras M11, pero tres asperezas lo harían penoso y se cierran en M13
+  **antes de M12**: (1) un tipo **`Map<K,V>`** para las tablas de símbolos (hoy serían
+  listas de asociación `O(n)`), (2) **`assert` + tooling de test** para validar el
+  compilador contra sí mismo, (3) **robustez de recursión profunda** (pila grande en un
+  hilo worker + límite de marcos con error limpio) para que un parser de descenso
+  recursivo escrito en raylang no desborde la pila de Rust del intérprete.
 
 ## 8. Tooling de editor (coloreado y validación)
 

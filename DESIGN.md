@@ -2761,3 +2761,20 @@ Tras el intérprete, el self-hosting está **cerrado** (raylang lexea/parsea/che
   structs, payload+binding+comodín, lista enlazada recursiva, indexación encadenada) → mismo stdout +
   exit que Rust. Builtins del corpus: `len`/`push` (los que conoce el checker auto-alojado). Diferido:
   M14.4c (closures/orden superior/Option/Result/`?`), d (UFCS/métodos/dyn/@derive).
+- **M14.4c COMPLETO** — primera clase. `Value` gana `VFunc(Func)` (función nombrada como valor) y
+  `VClosure(FnExpr, [Capture])` (anónima + entorno). **Ventaja del host**: en vez del esquema de índices
+  de Rust (`Value::Function(idx)` + tabla de anónimas), el valor guarda el `Func`/`FnExpr` **directamente**
+  (referencia + GC del host) → cero tabla de colección. **Las CELDAS**, ahora sí: los ámbitos pasan de
+  `Map<string,Value>` a `Map<string,Cell>` (`struct Cell { v }`); `define` crea una celda **nueva**
+  (shadowing seguro), `assign` **muta** la celda (no la reemplaza → las closures ven el cambio), `lookup`
+  lee `cell.v`. Una `Cell` del host, por su semántica de referencia, ES la celda mutable compartida que en
+  Rust pide `Rc<RefCell<Value>>` —sin reimplementar nada—. `capture_env` toma snapshot de las celdas
+  visibles (fuera→dentro, interior tapa) y `call_body` liga las capturadas en el ámbito base (compartidas)
+  + los params encima. Llamada **indirecta** (`call_value`: VFunc/VClosure → `call_body`). Operador **`?`**
+  (`eval_try`: `Ok/Some` desempaqueta, `Err/None` → `FReturn`). Los enums del prelude `Option`/`Result` se
+  **inyectan** en `c.enums` (`inject_prelude_enums`: el intérprete solo necesita reconocer las variantes
+  para construcción/`match`; el usuario los puede sobrescribir). Oráculo (12 tests): `closures.ray`/
+  `errores.ray`/`opcional.ray` + snippets (orden superior con función nombrada, closure que captura un
+  `let`, **estado por celda** con instancias independientes, `?` encadenado con Result y con Option+None)
+  → mismo stdout + exit que Rust. Diferido: M14.4d (UFCS/métodos/`dyn`/`@derive` + map/filter/fold del
+  prelude).

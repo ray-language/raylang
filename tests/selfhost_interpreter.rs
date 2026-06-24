@@ -187,6 +187,51 @@ fn arreglos_snippets() {
 }
 
 #[test]
+fn corpus_primera_clase() {
+    // M14.4c: closures (captura por celda), funciones como valor, ?, Option/Result.
+    for rel in [
+        "examples/closures.ray",
+        "examples/errores.ray",
+        "examples/opcional.ray",
+    ] {
+        comparar_archivo(rel);
+    }
+}
+
+#[test]
+fn closures_snippets() {
+    // Funciones como valor pasadas a orden superior definido por el usuario.
+    comparar_fuente(
+        "fn doble(x: int) -> int { x * 2 } fn aplica(f: fn(int) -> int, x: int) -> int { f(x) } fn main() -> int { print(aplica(doble, 21)); 0 }",
+        "in_hof.ray",
+    );
+    // Closure que captura un `let` de main.
+    comparar_fuente(
+        "fn main() -> int { let base = 1000; let f = fn(d: int) -> int { base + d }; print(f(7)); 0 }",
+        "in_capture.ray",
+    );
+    // Estado por celda compartida: instancias independientes, mutación persistente.
+    comparar_fuente(
+        "fn acc(start: int) -> fn(int) -> int { var s = start; fn(d: int) -> int { s = s + d; s } } fn main() -> int { let a = acc(0); let b = acc(100); print(a(1)); print(a(2)); print(b(10)); print(a(3)); 0 }",
+        "in_state.ray",
+    );
+}
+
+#[test]
+fn option_result_y_try() {
+    // ? que desempaqueta y propaga, con Result.
+    comparar_fuente(
+        "fn div(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } } fn ev(a: int, b: int, c: int) -> Result<int, string> { let p = div(a, b)?; let q = div(p, c)?; Result.Ok(q) } fn show(r: Result<int, string>) -> int { match (r) { Result.Ok(v) => v, Result.Err(_) => 0 - 1 } } fn main() -> int { print(show(ev(100, 5, 2))); print(show(ev(100, 0, 2))); 0 }",
+        "in_result.ray",
+    );
+    // ? con Option encadenado y None.
+    comparar_fuente(
+        "fn mitad(n: int) -> Option<int> { if (n % 2 == 0) { Option.Some(n / 2) } else { Option.None } } fn dv(n: int) -> Option<int> { let a = mitad(n)?; let b = mitad(a)?; Option.Some(b) } fn show(o: Option<int>) -> int { match (o) { Option.Some(v) => v, Option.None => 0 - 1 } } fn main() -> int { print(show(dv(20))); print(show(dv(6))); 0 }",
+        "in_option.ray",
+    );
+}
+
+#[test]
 fn codigo_de_salida() {
     // El código de salida del runner es el int que devuelve main (0 si es unit).
     comparar_fuente("fn main() -> int { 42 }", "in_exit42.ray");

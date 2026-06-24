@@ -20,15 +20,21 @@
 // cortocircuito), variables (let/var, mutabilidad por ámbito), if/while/block/return, llamadas a
 // funciones nombradas + recursión, builtins print/eprint/to_string/panic. Cubre fib/fizzbuzz/gcd/primes.
 //
-// M14.4b (esta versión): DATOS. Arreglos (`VArray`: literal, índice, `len`/`push`, asignación `a[i]=v`,
-// anidados; semántica de REFERENCIA gratis del `[Value]` del host), structs (`VStruct`: literal en orden
-// de declaración, acceso/asignación de campo, aliasing), enums (`VEnum`: construcción `Enum.Variante(args)`
-// RECONOCIDA EN RUNTIME mirando las tablas del programa —el checker-validador no la reescribió—, `match`
-// con patrones comodín/binding/variante). Diferido: primera clase (M14.4c: closures/orden superior/
-// Option/Result/`?`), despacho dinámico (M14.4d: UFCS/métodos/dyn/@derive). TCO/MAX_CALL_DEPTH también
-// (el host ya da TCO + pila grande).
+// M14.4b: DATOS. Arreglos (`VArray`: literal, índice, `len`/`push`, asignación `a[i]=v`, anidados;
+// semántica de REFERENCIA gratis del `[Value]` del host), structs (`VStruct`: literal en orden de
+// declaración, acceso/asignación de campo, aliasing), enums (`VEnum`: construcción `Enum.Variante(args)`
+// RECONOCIDA EN RUNTIME mirando las tablas del programa, `match` con patrones comodín/binding/variante).
+//
+// M14.4c (esta versión): PRIMERA CLASE. Funciones como valor (`VFunc`), funciones anónimas + closures
+// (`VClosure`: captura por REFERENCIA vía CELDAS compartidas —un `struct Cell { v }` del host, que por
+// su semántica de referencia es la celda mutable que comparten varias closures, como el `Rc<RefCell>`
+// de Rust—), llamada indirecta, operador `?` (`ETry`) y los enums del prelude `Option`/`Result`
+// (inyectados en `c.enums`: el intérprete solo necesita reconocer sus variantes). En vez del esquema de
+// índices de Rust, el valor guarda el `Func`/`FnExpr` DIRECTAMENTE (referencia + GC del host). Diferido:
+// despacho dinámico (M14.4d: UFCS/métodos/dyn/@derive + map/filter/fold del prelude). TCO/MAX_CALL_DEPTH
+// también (el host ya da TCO + pila grande).
 
-from parser import Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind;
+from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind, FnExpr;
 
 // =====================================================================
 // Valores en tiempo de ejecución y señales de flujo
@@ -47,6 +53,8 @@ pub enum Value {
     VArray([Value]),               // arreglo (M3): el [Value] del host da referencia + mutación
     VStruct(string, [SField]),     // struct: nombre + campos en orden de declaración (mutables)
     VEnum(string, string, [Value]), // enum: nombre, variante, payload (inmutable)
+    VFunc(Func),                   // una función nombrada usada como valor (sin captura)
+    VClosure(FnExpr, [Capture]),   // una función anónima + su entorno capturado (celdas compartidas)
 }
 
 // Un campo de un struct en runtime: nombre + valor (mutable). Lista ordenada (como el `Vec<(String,
@@ -55,6 +63,14 @@ struct SField { name: string, value: Value }
 
 // Una variable ligada por un patrón de `match`: su nombre y el valor que recibe.
 struct Binding { name: string, value: Value }
+
+// Una CELDA: el contenedor mutable de una variable. Por la semántica de referencia del host, copiar la
+// celda comparte el mismo objeto del heap → varias closures que la capturen ven la misma variable y sus
+// mutaciones (es el análogo del `Rc<RefCell<Value>>` de Rust, sin reimplementar nada).
+struct Cell { v: Value }
+
+// Una variable capturada por una closure: su nombre y la celda compartida con su origen.
+struct Capture { name: string, cell: Cell }
 
 // Error en tiempo de ejecución con ubicación (espejo de `RuntimeError` en Rust).
 pub struct RuntimeError { msg: string, line: int, col: int }
@@ -73,7 +89,7 @@ struct Interp {
     funcs: Map<string, Func>,
     structs: Map<string, [FieldDef]>,
     enums: Map<string, [VariantDef]>,
-    scopes: [Map<string, Value>],
+    scopes: [Map<string, Cell>],
 }
 
 fn rt_error(line: int, col: int, msg: string) -> RuntimeError {
@@ -81,10 +97,16 @@ fn rt_error(line: int, col: int, msg: string) -> RuntimeError {
 }
 
 // Una pila de ámbitos vacía, ya tipada (para reiniciar `c.scopes`; el `[]` en asignación no infiere).
-fn empty_scopes() -> [Map<string, Value>] { [] }
+fn empty_scopes() -> [Map<string, Cell>] { [] }
 
 // Una lista de valores vacía, ya tipada (para los argumentos de `main`).
 fn no_vals() -> [Value] { [] }
+
+// Una lista de capturas vacía, ya tipada (para las funciones nombradas, sin entorno).
+fn no_captures() -> [Capture] { [] }
+
+// Una lista de tipos vacía, ya tipada (para el payload de las variantes del prelude inyectadas).
+fn no_types() -> [Type] { [] }
 
 // =====================================================================
 // Presentación e igualdad de valores
@@ -106,6 +128,8 @@ fn value_str(v: Value) -> string {
             if (len(payload) == 0) { en + "." + vr }
             else { en + "." + vr + "(" + join_vals(payload) + ")" }
         },
+        Value.VFunc(_) => "<fn>",
+        Value.VClosure(_, _) => "<fn>",
     }
 }
 
@@ -153,6 +177,9 @@ fn values_equal(a: Value, b: Value) -> bool {
             Value.VEnum(ey, vy, py) => ex == ey && vx == vy && vals_equal_list(px, py),
             _ => false,
         },
+        // Las funciones no tienen igualdad estructural (el checker prohíbe `==` sobre ellas).
+        Value.VFunc(_) => false,
+        Value.VClosure(_, _) => false,
     }
 }
 
@@ -248,7 +275,7 @@ fn struct_set(fields: [SField], fname: string, v: Value) {
 // Ámbitos: declarar, buscar, asignar
 // =====================================================================
 
-fn new_scope() -> Map<string, Value> { map_new() }
+fn new_scope() -> Map<string, Cell> { map_new() }
 
 fn push_scope(c: Interp) { push(c.scopes, new_scope()); }
 
@@ -256,20 +283,27 @@ fn pop_scope(c: Interp) {
     let removed = pop(c.scopes);
 }
 
-// Declara una variable en el ámbito más interno. En M14.4a las celdas son el propio valor (sin
-// compartición); la captura por referencia de closures (celdas compartidas) llega en M14.4c.
+// Declara una variable: una CELDA NUEVA en el ámbito más interno. Como cada declaración crea su propia
+// celda, el shadowing es seguro aunque una closure haya capturado la celda anterior (se queda con la vieja).
 fn define(c: Interp, name: string, v: Value) {
     let top = c.scopes[len(c.scopes) - 1];
-    insert(top, name, v);
+    insert(top, name, Cell { v: v });
 }
 
-// Busca una variable de adentro hacia afuera; `None` si no es una variable (en ese caso el nombre es
-// una función usada como valor, diferido a M14.4c).
+// Inserta una celda YA EXISTENTE (compartida) en el ámbito más interno. Lo usa `call_body` para ligar las
+// celdas capturadas por una closure: comparten el mismo objeto con su origen.
+fn insert_cell(c: Interp, name: string, cell: Cell) {
+    let top = c.scopes[len(c.scopes) - 1];
+    insert(top, name, cell);
+}
+
+// Busca una variable de adentro hacia afuera y devuelve su valor; `None` si no es una variable (en ese
+// caso el nombre es una función usada como valor).
 fn lookup_opt(c: Interp, name: string) -> Option<Value> {
     var i = len(c.scopes) - 1;
     while (i >= 0) {
         match (get(c.scopes[i], name)) {
-            Option.Some(v) => { return Option.Some(v); },
+            Option.Some(cell) => { return Option.Some(cell.v); },
             Option.None => {},
         }
         i = i - 1;
@@ -277,16 +311,49 @@ fn lookup_opt(c: Interp, name: string) -> Option<Value> {
     Option.None
 }
 
-// Asigna a una variable ya declarada, reemplazando su valor en el ámbito que la contiene.
+// Asigna a una variable ya declarada MUTANDO su celda (no reemplazándola): así el cambio se ve a través
+// de cualquier closure que la haya capturado.
 fn assign(c: Interp, name: string, v: Value) {
     var i = len(c.scopes) - 1;
     while (i >= 0) {
         match (get(c.scopes[i], name)) {
-            Option.Some(_) => { insert(c.scopes[i], name, v); return; },
+            Option.Some(cell) => { cell.v = v; return; },
             Option.None => {},
         }
         i = i - 1;
     }
+}
+
+// Captura por REFERENCIA todas las celdas visibles en este punto (snapshot de todos los ámbitos, de fuera
+// hacia dentro, para que una variable interior tape a una exterior del mismo nombre). Comparte las celdas
+// (no las copia) → mutar la variable después se ve en la closure.
+fn capture_env(c: Interp) -> [Capture] {
+    let m: Map<string, Cell> = map_new();
+    var i = 0;
+    while (i < len(c.scopes)) {
+        let scope = c.scopes[i];
+        let ks = keys(scope);
+        var j = 0;
+        while (j < len(ks)) {
+            match (get(scope, ks[j])) {
+                Option.Some(cell) => { insert(m, ks[j], cell); },
+                Option.None => {},
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    var caps: [Capture] = [];
+    let mk = keys(m);
+    var t = 0;
+    while (t < len(mk)) {
+        match (get(m, mk[t])) {
+            Option.Some(cell) => { push(caps, Capture { name: mk[t], cell: cell }); },
+            Option.None => {},
+        }
+        t = t + 1;
+    }
+    caps
 }
 
 // =====================================================================
@@ -502,7 +569,11 @@ fn eval_call(c: Interp, callee: Expr, args: [Expr]) -> Result<Value, Flow> {
     match (callee.kind) {
         EKind.EIdent(name) => {
             match (lookup_opt(c, name)) {
-                Option.Some(_) => panic("M14.4c: función como valor / closure"),
+                // Variable local que contiene una función → llamada indirecta.
+                Option.Some(fv) => {
+                    let vals = eval_args(c, args)?;
+                    call_value(c, fv, vals)
+                },
                 Option.None => {
                     if (is_builtin(name)) {
                         call_builtin(c, name, args, callee.line, callee.col)
@@ -512,7 +583,7 @@ fn eval_call(c: Interp, callee: Expr, args: [Expr]) -> Result<Value, Flow> {
                                 let vals = eval_args(c, args)?;
                                 call_named(c, f, vals)
                             },
-                            Option.None => panic("M14.4c: función como valor / closure"),
+                            Option.None => panic("función no resuelta: " + name),
                         }
                     }
                 },
@@ -537,23 +608,35 @@ fn eval_call(c: Interp, callee: Expr, args: [Expr]) -> Result<Value, Flow> {
                 _ => panic("M14.4d: método / UFCS"),
             }
         },
-        _ => panic("M14.4c: llamada indirecta"),
+        _ => {
+            // El callee es una expresión que produce un valor-función (otra llamada, un campo-función…).
+            let fv = eval_expr(c, callee)?;
+            let vals = eval_args(c, args)?;
+            call_value(c, fv, vals)
+        },
     }
 }
 
-// Ejecuta una función nombrada con sus argumentos ya evaluados. Scoping léxico: arranca con una pila de
-// ámbitos NUEVA (no la de quien llama); se guarda la actual y se restaura al volver. Un `return` interno
-// (FReturn) se desenvuelve aquí en el valor de la función.
-fn call_named(c: Interp, f: Func, args: [Value]) -> Result<Value, Flow> {
+// Ejecuta el cuerpo de una función (nombrada o anónima) con sus argumentos ya evaluados y su entorno
+// capturado. Scoping léxico: arranca con una pila de ámbitos NUEVA (no la de quien llama); se guarda la
+// actual y se restaura al volver. Un `return` interno (FReturn) se desenvuelve aquí en el valor de la
+// función. El ámbito base son las celdas capturadas (compartidas); encima va el de los parámetros.
+fn call_body(c: Interp, params: [Param], body: Block, args: [Value], captured: [Capture]) -> Result<Value, Flow> {
     let saved = c.scopes;
     c.scopes = empty_scopes();
-    push_scope(c); // ámbito de los parámetros
+    push_scope(c); // ámbito base: las capturas
+    var k = 0;
+    while (k < len(captured)) {
+        insert_cell(c, captured[k].name, captured[k].cell);
+        k = k + 1;
+    }
+    push_scope(c); // ámbito de los parámetros (tapan capturas con el mismo nombre)
     var i = 0;
-    while (i < len(f.params)) {
-        define(c, f.params[i].name, args[i]);
+    while (i < len(params)) {
+        define(c, params[i].name, args[i]);
         i = i + 1;
     }
-    let result = exec_block(c, f.body); // empuja, encima, el ámbito del cuerpo
+    let result = exec_block(c, body); // empuja, encima, el ámbito del cuerpo
     c.scopes = saved; // restaurar el entorno de quien llama
     match (result) {
         Result.Ok(v) => Result.Ok(v),
@@ -561,6 +644,20 @@ fn call_named(c: Interp, f: Func, args: [Value]) -> Result<Value, Flow> {
             Flow.FReturn(v) => Result.Ok(v),
             Flow.FError(e) => Result.Err(Flow.FError(e)),
         },
+    }
+}
+
+// Llama a una función NOMBRADA (sin entorno capturado).
+fn call_named(c: Interp, f: Func, args: [Value]) -> Result<Value, Flow> {
+    call_body(c, f.params, f.body, args, no_captures())
+}
+
+// Llama a un VALOR-función (camino indirecto): una función nombrada usada como valor o una closure.
+fn call_value(c: Interp, fv: Value, args: [Value]) -> Result<Value, Flow> {
+    match (fv) {
+        Value.VFunc(f) => call_body(c, f.params, f.body, args, no_captures()),
+        Value.VClosure(fe, caps) => call_body(c, fe.params, fe.body, args, caps),
+        _ => panic("se intentó llamar a un valor que no es función"),
     }
 }
 
@@ -653,7 +750,13 @@ fn eval_expr(c: Interp, expr: Expr) -> Result<Value, Flow> {
         EKind.EIdent(name) => {
             match (lookup_opt(c, name)) {
                 Option.Some(v) => Result.Ok(v),
-                Option.None => panic("M14.4c: función como valor '" + name + "'"),
+                // No es una variable: es un nombre de función usado como VALOR.
+                Option.None => {
+                    match (get(c.funcs, name)) {
+                        Option.Some(f) => Result.Ok(Value.VFunc(f)),
+                        Option.None => panic("identificador no resuelto: " + name),
+                    }
+                },
             }
         },
         EKind.EUnary(op, inner) => eval_unary(c, op, inner),
@@ -675,9 +778,9 @@ fn eval_expr(c: Interp, expr: Expr) -> Result<Value, Flow> {
         EKind.EField(obj, fname) => eval_field_or_enum(c, obj, fname),
         EKind.EArray(elems) => eval_array(c, elems),
         EKind.EStructLit(name, inits) => eval_struct_lit(c, name, inits),
-        EKind.EFunc(_) => panic("M14.4c: función anónima"),
+        EKind.EFunc(fe) => Result.Ok(Value.VClosure(fe, capture_env(c))),
         EKind.EMatch(scr, arms) => eval_match(c, scr, arms),
-        EKind.ETry(_) => panic("M14.4c: operador ?"),
+        EKind.ETry(inner) => eval_try(c, inner),
     }
 }
 
@@ -840,6 +943,36 @@ fn eval_match(c: Interp, scr: Expr, arms: [MatchArm]) -> Result<Value, Flow> {
     Result.Err(Flow.FError(rt_error(scr.line, scr.col, "ningún brazo del match casó (no debería ocurrir)")))
 }
 
+// `?`: desempaqueta `Ok(v)`/`Some(v)` a `v`, o propaga `Err(e)`/`None` como un `return` de la función
+// actual (el checker garantiza que el operando es un Result/Option y el retorno es compatible).
+fn eval_try(c: Interp, inner: Expr) -> Result<Value, Flow> {
+    let v = eval_expr(c, inner)?;
+    match (v) {
+        Value.VEnum(_, variant, payload) => {
+            if (variant == "Ok" || variant == "Some") {
+                Result.Ok(payload[0])
+            } else {
+                Result.Err(Flow.FReturn(v))
+            }
+        },
+        _ => panic("? sobre un valor que no es Result/Option"),
+    }
+}
+
+// Registra los enums del prelude (Option/Result) en la tabla, para RECONOCER su construcción
+// (`Option.Some`/`Result.Ok`/…) en runtime. El intérprete solo necesita los nombres de las variantes
+// (no los tipos del payload). Si el usuario redefine uno, sus definiciones lo sobrescriben luego.
+fn inject_prelude_enums(c: Interp) {
+    insert(c.enums, "Option", [
+        VariantDef { name: "Some", payload: no_types(), line: 0, col: 0 },
+        VariantDef { name: "None", payload: no_types(), line: 0, col: 0 },
+    ]);
+    insert(c.enums, "Result", [
+        VariantDef { name: "Ok", payload: no_types(), line: 0, col: 0 },
+        VariantDef { name: "Err", payload: no_types(), line: 0, col: 0 },
+    ]);
+}
+
 // =====================================================================
 // Punto de entrada
 // =====================================================================
@@ -848,6 +981,7 @@ fn eval_match(c: Interp, scr: Expr, arms: [MatchArm]) -> Result<Value, Flow> {
 // garantizó que `main` existe.
 pub fn run(prog: Program) -> Result<Value, RuntimeError> {
     let c = Interp { funcs: map_new(), structs: map_new(), enums: map_new(), scopes: empty_scopes() };
+    inject_prelude_enums(c); // Option/Result (los del programa, abajo, sobrescriben si el usuario redefine)
     var i = 0;
     while (i < len(prog.funcs)) {
         insert(c.funcs, prog.funcs[i].name, prog.funcs[i]);

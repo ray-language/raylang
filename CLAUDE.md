@@ -845,6 +845,17 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     con patrones `_`/binding/variante+payload, recursivos). `value_str`/`values_equal` structural recursivo.
     Oráculo: 5 ejemplos de datos + snippets, mismo stdout+exit que Rust. Diferido: c (closures/orden
     superior/Option/Result/`?`), d (UFCS/métodos/dyn/@derive).
+  - **M14.4c COMPLETO** (347 lib + 12 en `tests/selfhost_interpreter.rs`): **intérprete auto-alojado —
+    primera clase**. `Value` gana `VFunc(Func)`/`VClosure(FnExpr,[Capture])`. **Ventaja del host**: el
+    valor guarda el `Func`/`FnExpr` directamente (referencia + GC) → sin el esquema de índices+tabla de
+    anónimas de Rust. **Las CELDAS**: ámbitos `Map<string,Cell>` (`struct Cell { v }`); `define` crea
+    celda nueva (shadowing), `assign` MUTA la celda (closures ven el cambio), `lookup` lee `cell.v`. Una
+    `Cell` del host = el `Rc<RefCell<Value>>` de Rust gratis (semántica de referencia). `capture_env`
+    snapshotea las celdas visibles; `call_body` liga capturadas (base) + params (encima). Llamada
+    indirecta (`call_value`), `?` (`eval_try`), enums del prelude Option/Result inyectados en `c.enums`
+    (solo nombres de variantes; el intérprete no consulta tipos). Oráculo: closures/errores/opcional +
+    snippets (estado por celda independiente, `?` encadenado) = mismo stdout+exit que Rust. Diferido: d
+    (UFCS/métodos/dyn/@derive + map/filter/fold del prelude).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

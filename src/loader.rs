@@ -14,8 +14,12 @@
 //!
 //! M11.3b añade `from M import a [as b];`: trae **funciones `pub`** de `M` al ámbito del módulo
 //! (sin calificar), con renombrado opcional. Es la misma resolución de -a: el nombre local (el
-//! alias, o el original) se inyecta en el mapa `own` apuntando al nombre global `M::a`. Importar
-//! *tipos* sigue diferido (no se namespacan); el loader lo reporta con claridad.
+//! alias, o el original) se inyecta en el mapa `own` apuntando al nombre global `M::a`.
+//!
+//! M11.3c-2 extiende `from M import …` a **tipos `pub`** (`from M import Punto [as P]`): el nombre
+//! local se inyecta, no en el `own` de valores, sino en el mapa del `TypeRewriter`, apuntando al
+//! global `M::Punto`. Así una referencia de tipo a `Punto`/`P` (anotación, literal, patrón…) se
+//! reescribe igual que un tipo propio. La clasificación valor-vs-tipo es por `pub_fns`/`pub_types`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -108,7 +112,8 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
 
     // --- Fase 3: namespacing + resolución + desambiguación de posiciones (L3) ---
     let pub_fns = recolectar_pub_fns(&modules);
-    let tipos = recolectar_tipos(&modules); // para diagnosticar `from M import <Tipo>` (diferido)
+    let pub_types = recolectar_pub_tipos(&modules); // tipos exportables (M11.3c-2)
+    let tipos = recolectar_tipos(&modules); // todos los tipos: para distinguir "privado" de "no existe"
     let mut fusionado = Program {
         functions: Vec::new(), structs: Vec::new(), enums: Vec::new(),
         traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
@@ -132,24 +137,32 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         crate::checker::generate_derives(&mut m.program)
             .map_err(|e| render(&m.source, e.line, e.col, &m.name, &e.to_string()))?;
 
-        // 2. Resolución de **valores** (funciones propias, `from`-imports, acceso calificado `M.f`).
-        let mut resolver = Resolver::new(&m, &pub_fns, &tipos)?;
+        // 2. Clasificar los `from M import …` (M11.3b/-2): funciones `pub` → mapa de **valores**
+        //    (al `own` del Resolver); tipos `pub` → mapa de **tipos** (al TypeRewriter).
+        let (from_values, from_types) =
+            clasificar_from_imports(&m, &pub_fns, &pub_types, &tipos)?;
+
+        // 3. Resolución de **valores** (funciones propias, `from`-imports de función, `M.f`).
+        let mut resolver = Resolver::new(&m, &pub_fns, &from_values);
         resolver.resolve_module(&mut m)?;
 
-        // 3. Namespacing de **tipos** (M11.3c): renombrar las definiciones de este módulo a su
+        // 4. Namespacing de **tipos** (M11.3c): renombrar las definiciones de este módulo a su
         //    nombre global (`modulo::Tipo`) y **reescribir** todas las referencias de tipo —en
         //    posiciones de tipo y en expresiones que nombran tipos (struct lit, `Color.Rojo`,
-        //    patrones)—, sin tocar los parámetros de tipo en ámbito.
+        //    patrones)—, sin tocar los parámetros de tipo en ámbito. El mapa de reescritura suma
+        //    los tipos propios y los `from`-importados (-2).
         let own_types = build_own_types(&m.program, &prefix);
         rename_type_defs(&mut m.program, &own_types);
-        TypeRewriter::new(&own_types).rewrite_program(&mut m.program);
+        let mut type_refs = own_types;
+        type_refs.extend(from_types);
+        TypeRewriter::new(&type_refs).rewrite_program(&mut m.program);
 
-        // 4. Banda de este módulo: empieza en `next_start`; sus posiciones se desplazan por `delta`.
+        // 5. Banda de este módulo: empieza en `next_start`; sus posiciones se desplazan por `delta`.
         let start = next_start;
         shift_program(&mut m.program, start - 1);
         next_start = start + m.source.lines().count().max(1) + 1; // +1 de holgura entre bandas
 
-        // 5. Renombrar las definiciones de función a su nombre global y fusionar.
+        // 6. Renombrar las definiciones de función a su nombre global y fusionar.
         for mut f in std::mem::take(&mut m.program.functions) {
             f.name = global_fn(&prefix, &f.name);
             fusionado.functions.push(f);
@@ -333,7 +346,7 @@ fn global_fn(prefix: &Option<String>, name: &str) -> String {
 }
 
 /// Mapa `nombre local → nombre global` de los **tipos** (struct/enum/trait) de un módulo (M11.3c).
-fn build_own_types(program: &Program, prefix: &Option<String>) -> HashMap<String, String> {
+fn build_own_types(program: &Program, prefix: &Option<String>) -> NameMap {
     let mut map = HashMap::new();
     for s in &program.structs {
         map.insert(s.name.clone(), global_fn(prefix, &s.name));
@@ -349,7 +362,7 @@ fn build_own_types(program: &Program, prefix: &Option<String>) -> HashMap<String
 
 /// Renombra las **definiciones** de tipo de un módulo a su nombre global (M11.3c). Las
 /// *referencias* las reescribe `TypeRewriter`.
-fn rename_type_defs(program: &mut Program, own_types: &HashMap<String, String>) {
+fn rename_type_defs(program: &mut Program, own_types: &NameMap) {
     for s in &mut program.structs {
         if let Some(g) = own_types.get(&s.name) {
             s.name = g.clone();
@@ -411,8 +424,22 @@ fn recolectar_pub_fns(modules: &[Module]) -> HashMap<String, HashSet<String>> {
     map
 }
 
-/// Por módulo, el conjunto de nombres de tipos (struct/enum/trait). Solo se usa para dar un
-/// mensaje claro cuando un `from M import X` apunta a un tipo (importar tipos está diferido).
+/// Por módulo, el conjunto de nombres de tipos **`pub`** (struct/enum/trait): los exportables vía
+/// `from M import Tipo` (M11.3c-2). Análogo a `recolectar_pub_fns`.
+fn recolectar_pub_tipos(modules: &[Module]) -> HashMap<String, HashSet<String>> {
+    let mut map: HashMap<String, HashSet<String>> = HashMap::new();
+    for m in modules {
+        let set = map.entry(m.name.clone()).or_default();
+        set.extend(m.program.structs.iter().filter(|s| s.is_pub).map(|s| s.name.clone()));
+        set.extend(m.program.enums.iter().filter(|e| e.is_pub).map(|e| e.name.clone()));
+        set.extend(m.program.traits.iter().filter(|t| t.is_pub).map(|t| t.name.clone()));
+    }
+    map
+}
+
+/// Por módulo, el conjunto de **todos** los nombres de tipos (struct/enum/trait, `pub` o no). Sirve
+/// para distinguir, en un `from M import X` que no resuelve, un tipo **privado** (falta `pub`) de un
+/// nombre **inexistente**.
 fn recolectar_tipos(modules: &[Module]) -> HashMap<String, HashSet<String>> {
     let mut map: HashMap<String, HashSet<String>> = HashMap::new();
     for m in modules {
@@ -424,30 +451,79 @@ fn recolectar_tipos(modules: &[Module]) -> HashMap<String, HashSet<String>> {
     map
 }
 
-/// Resuelve un nombre de un `from M import a [as b]` al nombre global `M::a`, verificando que `a`
-/// sea una **función `pub`** de `M`. Si `a` es un **tipo** de `M`, da un error de "diferido"; si no
-/// existe como función pública, un error de no-exporta.
-fn resolver_from_import(
+/// Mapa `nombre local → nombre global` (`M::nombre`). Lo usan tanto el `own` de valores del
+/// Resolver como el mapa de tipos del TypeRewriter.
+type NameMap = HashMap<String, String>;
+
+/// El destino global de un nombre `from`-importado: una **función** (va al `own` del Resolver) o un
+/// **tipo** (va al mapa del TypeRewriter). Ambos guardan el nombre global `M::nombre`.
+enum FromTarget {
+    Funcion(String),
+    Tipo(String),
+}
+
+/// Clasifica **todos** los `from M import a [as b]{, …}` de un módulo en dos mapas `local → global`:
+/// uno de **valores** (funciones `pub`) y otro de **tipos** (tipos `pub`, M11.3c-2). Valida la
+/// exportación (`pub`) y la unicidad del nombre local (contra las definiciones propias del módulo y
+/// entre los propios imports): una colisión pide renombrar con `as`.
+fn clasificar_from_imports(
+    m: &Module,
+    pub_fns: &HashMap<String, HashSet<String>>,
+    pub_types: &HashMap<String, HashSet<String>>,
+    tipos: &HashMap<String, HashSet<String>>,
+) -> Result<(NameMap, NameMap), LoadError> {
+    // Nombres ya ocupados en el módulo: funciones y tipos propios (para detectar colisiones).
+    let mut locales: HashSet<String> = m.program.functions.iter().map(|f| f.name.clone()).collect();
+    locales.extend(m.program.structs.iter().map(|s| s.name.clone()));
+    locales.extend(m.program.enums.iter().map(|e| e.name.clone()));
+    locales.extend(m.program.traits.iter().map(|t| t.name.clone()));
+
+    let (mut values, mut types) = (HashMap::new(), HashMap::new());
+    for fi in &m.program.from_imports {
+        let from = &fi.module;
+        for n in &fi.names {
+            let target = clasificar_from_name(&m.source, &m.name, from, n, pub_fns, pub_types, tipos)?;
+            let local = n.local().to_string();
+            if !locales.insert(local.clone()) {
+                return Err(render(&m.source, n.line, n.col, &m.name, &format!(
+                    "el nombre '{}' ya está definido o importado en este módulo; usa 'as' para renombrarlo",
+                    local
+                )));
+            }
+            match target {
+                FromTarget::Funcion(g) => { values.insert(local, g); }
+                FromTarget::Tipo(g) => { types.insert(local, g); }
+            }
+        }
+    }
+    Ok((values, types))
+}
+
+/// Clasifica un único nombre `from`-importado: función `pub`, tipo `pub`, o error (tipo privado /
+/// inexistente). El orden prioriza funciones; un módulo no debería tener función y tipo homónimos.
+fn clasificar_from_name(
     src: &str,
     module: &str,
-    fi: &crate::ast::FromImport,
+    from: &str,
     name: &crate::ast::ImportName,
     pub_fns: &HashMap<String, HashSet<String>>,
+    pub_types: &HashMap<String, HashSet<String>>,
     tipos: &HashMap<String, HashSet<String>>,
-) -> Result<String, LoadError> {
-    let from = &fi.module;
+) -> Result<FromTarget, LoadError> {
     if pub_fns.get(from).is_some_and(|s| s.contains(&name.name)) {
-        return Ok(format!("{}::{}", from, name.name));
+        return Ok(FromTarget::Funcion(format!("{}::{}", from, name.name)));
     }
-    // No es una función pública: ¿es un tipo? (importar tipos está diferido).
+    if pub_types.get(from).is_some_and(|s| s.contains(&name.name)) {
+        return Ok(FromTarget::Tipo(format!("{}::{}", from, name.name)));
+    }
+    // No exporta el nombre: ¿existe como tipo privado? (mensaje más preciso que "no existe").
     if tipos.get(from).is_some_and(|s| s.contains(&name.name)) {
         return Err(render(src, name.line, name.col, module, &format!(
-            "'{}' es un tipo del módulo '{}'; importar tipos entre módulos está diferido — los tipos son globales, referéncialo por su nombre",
-            name.name, from
+            "'{}' es un tipo privado del módulo '{}' (¿falta 'pub'?)", name.name, from
         )));
     }
     Err(render(src, name.line, name.col, module, &format!(
-        "el módulo '{}' no exporta una función '{}' (¿falta 'pub'?)", from, name.name
+        "el módulo '{}' no exporta '{}' (¿falta 'pub'?)", from, name.name
     )))
 }
 
@@ -456,7 +532,7 @@ fn resolver_from_import(
 struct Resolver<'a> {
     /// Nombres de nivel superior visibles **sin calificar** en este módulo: las funciones propias
     /// y las traídas por `from M import …` (con su alias). Mapea nombre local → nombre global.
-    own: HashMap<String, String>,
+    own: NameMap,
     /// Módulos importados con `import M;` (para el acceso calificado `M.item`). Los módulos que
     /// solo aparecen en `from M import …` **no** entran aquí (estilo Python: no traen `M`).
     imports: HashSet<String>,
@@ -467,31 +543,24 @@ struct Resolver<'a> {
 }
 
 impl<'a> Resolver<'a> {
+    /// `from_values` son los `from M import <fn>` ya clasificados (local → `M::fn`); las colisiones
+    /// y la validación `pub` las hizo `clasificar_from_imports`, así que aquí solo se vuelcan.
     fn new(
         m: &Module,
         pub_fns: &'a HashMap<String, HashSet<String>>,
-        tipos: &HashMap<String, HashSet<String>>,
-    ) -> Result<Self, LoadError> {
+        from_values: &NameMap,
+    ) -> Self {
         let prefix = if m.is_entry { None } else { Some(m.name.clone()) };
         let mut own = HashMap::new();
         for f in &m.program.functions {
             own.insert(f.name.clone(), global_fn(&prefix, &f.name));
         }
-        // M11.3b: inyectar los `from M import a [as b]` como nombres locales → `M::a`.
-        for fi in &m.program.from_imports {
-            for n in &fi.names {
-                let target = resolver_from_import(&m.source, &m.name, fi, n, pub_fns, tipos)?;
-                let local = n.local().to_string();
-                if own.insert(local.clone(), target).is_some() {
-                    return Err(render(&m.source, n.line, n.col, &m.name, &format!(
-                        "el nombre '{}' ya está definido o importado en este módulo; usa 'as' para renombrarlo",
-                        local
-                    )));
-                }
-            }
+        // M11.3b: los `from M import a [as b]` de función entran como nombres locales → `M::a`.
+        for (local, global) in from_values {
+            own.insert(local.clone(), global.clone());
         }
         let imports = m.program.imports.iter().map(|i| i.module.clone()).collect();
-        Ok(Resolver { own, imports, pub_fns, scopes: Vec::new() })
+        Resolver { own, imports, pub_fns, scopes: Vec::new() }
     }
 
     fn resolve_module(&mut self, m: &mut Module) -> Result<(), LoadError> {
@@ -681,13 +750,13 @@ impl<'a> Resolver<'a> {
 /// `Tipo.Variante`, patrones de `match`). Un `Ident` *bare* en posición de valor lo deja `Resolver`.
 struct TypeRewriter<'a> {
     /// Nombre local de tipo → nombre global (propios del módulo; en -2, también importados).
-    types: &'a HashMap<String, String>,
+    types: &'a NameMap,
     /// Pila de conjuntos de parámetros de tipo en ámbito (los `<…>` de fn/impl/struct/enum).
     tparams: Vec<HashSet<String>>,
 }
 
 impl<'a> TypeRewriter<'a> {
-    fn new(types: &'a HashMap<String, String>) -> Self {
+    fn new(types: &'a NameMap) -> Self {
         TypeRewriter { types, tparams: Vec::new() }
     }
 

@@ -83,14 +83,49 @@ propia (o con otro import) **sin `as`**, es error: el `as` es precisamente la sa
 Nota estilo Python: `from M import x` **no** trae `M` al ámbito —solo `x`—. Para usar `M.otra`
 hace falta además `import M;`.
 
+## Tipos por módulo (M11.3c)
+
+Hasta -b los **tipos** (`struct`/`enum`/`trait`) seguían siendo globales-únicos: dos módulos no
+podían reusar un nombre, y un tipo no tenía encapsulamiento. M11.3c los pone **por módulo**, igual
+que las funciones: un tipo de un módulo no-entrada se namespaca a `modulo::Tipo`, y `pub` controla
+su exportación. Dos módulos ya pueden definir cada uno su `struct Node`; un tipo es **privado** a su
+módulo salvo que sea `pub` **y** se importe.
+
+```rust
+// geo.ray
+pub struct Punto { x: int, y: int }
+pub enum Eje { X, Y }
+
+// app.ray
+from geo import Punto, Eje;        // -2: 'from' también trae tipos pub
+fn coord(p: Punto, e: Eje) -> int {
+  match (e) { Eje.X => p.x, Eje.Y => p.y, }
+}
+fn main() -> int {
+  let p: Punto = Punto { x: 11, y: 31 };
+  coord(p, Eje.X) + coord(p, Eje.Y)   // 42
+}
+```
+
+El reto frente a las funciones: un nombre de tipo aparece en **muchas posiciones** —anotaciones
+(params, retorno, `let`), campos de struct, payloads de variante, objetivo/trait de un `impl`,
+bounds, `dyn Trait`— **y** en expresiones que lo nombran: literal de struct (`Punto { … }`),
+construcción de enum (`Eje.X`, que llega como `Field`) y patrones de `match`. El loader las reescribe
+todas con un **reescritor de tipos** aparte del de valores. La sutileza: el parser emite
+`Type::Struct(name)` para **cualquier** identificador en posición de tipo —incluidos los
+**parámetros de tipo** `T`—, así que el reescritor es *consciente de los `<…>`* en ámbito: un `T`
+ligado se deja intacto; un tipo propio del módulo → `modulo::Tipo`; uno `from`-importado → su global.
+
+`from M import Tipo [as T]` (M11.3c-2) cierra el cruce: trae un tipo `pub` al ámbito sin calificar,
+con alias para esquivar colisiones. La plomería es la de -b, pero el nombre local se inyecta en el
+mapa del **reescritor de tipos** (no en el de valores): una referencia a `Tipo`/`T` se reescribe a
+`M::Tipo` igual que un tipo propio. Importar un tipo **privado** es un error de carga (pide `pub`).
+
 ## Lo que queda fuera (a propósito)
 
-- **Cruzar tipos entre módulos** (`from M import Punto`, `M.Punto` en una anotación, o construir
-  `M.Color.Rojo`) está **diferido**. Hoy los tipos **no se namespacan**: son globales-únicos (un
-  choque de nombres de tipo entre módulos es error), así que un tipo de otro módulo se referencia
-  por su nombre tal cual —sin encapsulamiento de tipos—. Hacerlo bien exige namespacar tipos y
-  reescribir todas las posiciones de tipo y de patrón; queda para más adelante. El loader, eso sí,
-  da un error **claro** si intentas `from M import <Tipo>`.
+- **Tipo calificado en posición de tipo** (`M.Punto` como anotación) y **construcción calificada**
+  (`M.Color.Rojo`) siguen **diferidos**: piden gramática de tipo/constructor calificado. Mientras
+  tanto, `from M import Punto` cubre el cruce de tipos sin calificar.
 - **Submódulos / jerarquía de directorios**, `pub` granular (por campo), *re-exports* → futuro.
 
 > La lección de M11.3 es que una *feature* que parece muy de "sistema" —cargar archivos, espacios

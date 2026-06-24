@@ -81,14 +81,51 @@ fn from_import_colision_sin_alias_es_error() {
 }
 
 #[test]
-fn from_import_de_tipo_es_error_diferido() {
-    // Importar un tipo con `from` está diferido (los tipos son globales); error claro.
+fn from_import_tipo_pub_en_ambos_motores() {
+    // M11.3c-2: `from M import Tipo` trae un tipo `pub` al ámbito (sin calificar). Aquí un struct y
+    // un enum; se usan en anotación, literal, construcción de variante y `match`.
+    let files = &[
+        ("geo", "pub struct Punto { x: int, y: int }\npub enum Eje { X, Y }\n"),
+        ("app", "from geo import Punto, Eje;\nfn coord(p: Punto, e: Eje) -> int {\n  match (e) { Eje.X => p.x, Eje.Y => p.y, }\n}\nfn main() -> int {\n  let p: Punto = Punto { x: 11, y: 31 };\n  coord(p, Eje.X) + coord(p, Eje.Y)\n}\n"),
+    ];
+    for vm in [false, true] {
+        let (_, code) = run_modules("ray_from_tipo_pub", "app", files, vm);
+        assert_eq!(code, 42, "11 + 31 = 42 con tipos importados (vm={vm})");
+    }
+}
+
+#[test]
+fn from_import_tipo_con_alias() {
+    // `from M import Tipo as T` evita la colisión con un tipo propio homónimo.
+    let files = &[
+        ("geo", "pub struct Punto { x: int, y: int }\n"),
+        ("app", "from geo import Punto as P;\nstruct Punto { otro: int }\nfn main() -> int {\n  let a: P = P { x: 40, y: 2 };\n  let b: Punto = Punto { otro: 0 };\n  a.x + a.y + b.otro\n}\n"),
+    ];
+    for vm in [false, true] {
+        let (_, code) = run_modules("ray_from_tipo_alias", "app", files, vm);
+        assert_eq!(code, 42, "P (geo.Punto) y Punto (propio) coexisten (vm={vm})");
+    }
+}
+
+#[test]
+fn from_import_tipo_privado_es_error() {
+    // Importar un tipo NO `pub` con `from` falla: pide `pub` (encapsulamiento).
     let files = &[
         ("lib", "pub fn f() -> int { 1 }\nstruct Punto { x: int, y: int }\n"),
         ("app", "from lib import Punto;\nfn main() -> int { 0 }\n"),
     ];
-    let (_, code) = run_modules("ray_from_tipo", "app", files, false);
-    assert_ne!(code, 0, "importar un tipo con 'from' debe fallar (diferido)");
+    let (_, code) = run_modules("ray_from_tipo_priv", "app", files, false);
+    assert_ne!(code, 0, "importar un tipo privado con 'from' debe fallar");
+}
+
+#[test]
+fn from_import_nombre_inexistente_es_error() {
+    let files = &[
+        ("lib", "pub fn f() -> int { 1 }\n"),
+        ("app", "from lib import NoExiste;\nfn main() -> int { 0 }\n"),
+    ];
+    let (_, code) = run_modules("ray_from_inexistente", "app", files, false);
+    assert_ne!(code, 0, "importar un nombre inexistente debe fallar");
 }
 
 #[test]

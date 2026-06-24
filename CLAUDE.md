@@ -292,6 +292,16 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   idempotente** (salta `(trait,tipo)` ya implementados) para que el checker la reejecute sin duplicar
   ni intentar lexar `::`. Bonus: el `mostrar` de Show muestra el nombre **local** (el `::` no entra en
   los string literals). Runtime intacto.
+- **M11.3c-2 COMPLETO** (305 tests + 14 en `tests/modules_cli.rs`): **`from M import Tipo [as T]`** —
+  cruzar **tipos `pub`** entre módulos. Cierra M11.3c. Idea: el `from`-import deja de ser solo de
+  funciones; cada nombre se **clasifica** (`clasificar_from_imports`) en **valor** (función `pub` → al
+  `own` del `Resolver`) o **tipo** (tipo `pub` → al mapa del `TypeRewriter`, junto a los tipos propios).
+  Así una referencia al tipo importado (`Punto`/alias `P`) se reescribe a `M::Tipo` **igual que un tipo
+  propio** —cero código nuevo de reescritura—. `recolectar_pub_tipos` (análogo a `recolectar_pub_fns`);
+  importar un tipo **privado** → error claro (`recolectar_tipos` distingue privado de inexistente).
+  `Resolver::new` ya no clasifica (recibe el mapa de valores ya hecho → deja de devolver `Result`).
+  **M11.3c COMPLETO.** Diferido: `M.Punto` (tipo calificado) y `M.Color.Rojo` (construcción calificada)
+  → piden gramática. Runtime intacto (oráculo VM↔intérprete sin tocar).
 - **M11.2 COMPLETO** (297 tests lib + `tests/io_cli.rs`): **I/O y API de runtime** (DESIGN §20.2).
   `main` sigue sin parámetros (§0); el exterior se toca por **builtins**. **La I/O falible devuelve
   `Option`** (norte "errores como valores"). **Patrón** (como M7.3): primitivos builtin que devuelven

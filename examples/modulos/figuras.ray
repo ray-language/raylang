@@ -12,3 +12,15 @@ pub fn perimetro_rect(ancho: int, alto: int) -> int { doble(ancho) + doble(alto)
 
 // Privada: no se puede llamar desde fuera con `figuras.doble(...)`.
 fn doble(n: int) -> int { n + n }
+
+// M11.3c: los TIPOS también se exportan con `pub` y se namespacan por módulo.
+pub struct Rect { ancho: int, alto: int }
+pub enum Orientacion { Horizontal, Vertical }
+
+// Calcula el área de un Rect según su orientación dominante (demo de uso de tipos propios).
+pub fn area(r: Rect, o: Orientacion) -> int {
+  match (o) {
+    Orientacion.Horizontal => area_rect(r.ancho, r.alto),
+    Orientacion.Vertical => area_rect(r.alto, r.ancho),
+  }
+}

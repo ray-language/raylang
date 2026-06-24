@@ -1847,14 +1847,15 @@ encapsulación: una referencia *bare* a un tipo de otro módulo no resuelve (hay
   el **reescritor de referencias de tipo** completo (posiciones de tipo + expresiones que nombran
   tipos), *scope-aware* sobre params de tipo; `comprobar_tipos_unicos` deja de exigir unicidad global
   (cada módulo usa sus propios tipos; dos módulos pueden reusar un nombre).
-- **M11.3c-2** — **`from M import Tipo [as T]`**: trae un **tipo `pub`** de otro módulo al ámbito
-  (reusa el mapa del reescritor de -1 + la plomería de `from` de -b). Cierra el cruce de tipos.
+- **M11.3c-2** — **`from M import Tipo [as T]`** ✅: trae un **tipo `pub`** de otro módulo al ámbito
+  (reusa el reescritor de -1 + la plomería de `from` de -b: el nombre local se inyecta en el mapa de
+  **tipos** del reescritor, no en el de valores). Cierra el cruce de tipos.
 
 **Alcance y diferido:**
 - ✅ -a: `import M;` + `M.f(...)` (funciones `pub`), visibilidad, multi-archivo, ciclos seguros.
 - ✅ -b: `from M import a [as b]{, …}` (funciones `pub` al ámbito, con alias).
 - ✅ L3: desambiguación de posiciones entre módulos (sin colisiones) + errores atribuidos al módulo.
-- 🚧 -c: tipos por módulo (`pub` en tipos, namespacing + reescritor) + `from M import Tipo [as T]`.
+- ✅ -c: tipos por módulo (`pub` en tipos, namespacing + reescritor) + `from M import Tipo [as T]`.
 - ⏳ **Tipo calificado en posición de tipo** (`M.Punto` como anotación) y **construcción calificada**
   (`M.Color.Rojo`) → diferido: piden gramática de tipo/constructor calificado. Se usa `from M import`.
 - ⏳ Submódulos / jerarquía de directorios, `pub` granular (campos), re-exports → futuro.

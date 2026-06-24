@@ -215,13 +215,23 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::Index => {
                     let i = self.pop_int();
-                    let h = self.pop_obj();
-                    let idx = {
-                        let arr = self.as_array(h);
-                        bounds_check(i, arr.len(), line, col)?
-                    };
-                    let v = self.as_array(h)[idx].clone();
-                    self.push(v);
+                    match self.pop() {
+                        HeapValue::Obj(h) => {
+                            let idx = {
+                                let arr = self.as_array(h);
+                                bounds_check(i, arr.len(), line, col)?
+                            };
+                            let v = self.as_array(h)[idx].clone();
+                            self.push(v);
+                        }
+                        // M11.4c-2: indexar un string → el carácter en esa posición.
+                        HeapValue::Str(s) => {
+                            let chars: Vec<char> = s.chars().collect();
+                            let idx = bounds_check(i, chars.len(), line, col)?;
+                            self.push(HeapValue::Char(chars[idx]));
+                        }
+                        _ => unreachable!("el checker garantiza un arreglo o string"),
+                    }
                 }
                 OpCode::SetIndex => {
                     let v = self.pop();
@@ -269,6 +279,16 @@ impl<'a> Vm<'a> {
                         s.split(sep.as_str()).map(|p| HeapValue::Str(p.to_string())).collect();
                     // El arreglo es un objeto del heap; los Str son inline, sin handles que rootear.
                     let h = self.heap.allocate(Obj::Array(parts));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::Chars => {
+                    let s = match self.pop() {
+                        HeapValue::Str(s) => s,
+                        _ => unreachable!("el checker garantiza un string"),
+                    };
+                    let cs: Vec<HeapValue> = s.chars().map(HeapValue::Char).collect();
+                    // El arreglo es un objeto del heap; los Char son inline, sin handles que rootear.
+                    let h = self.heap.allocate(Obj::Array(cs));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::Contains => {
@@ -1957,6 +1977,31 @@ mod tests {
                 print(t.mostrar());                    // Tecla { c: q, repetida: false }
                 print(t.igual(Tecla { c: 'q', repetida: false }));  // true
                 clase('a') + clase('\n') + clase('z')  // 1 + 2 + 0 = 3
+            }
+        "#);
+    }
+
+    #[test]
+    fn char_indexar_y_chars_oraculo() {
+        // M11.4c-2: s[i] -> char, chars(s) -> [char] (asigna heap → estrés del GC).
+        oracle_stress(r#"
+            fn cuenta(s: string, c: char) -> int {
+                var n = 0;
+                var i = 0;
+                while (i < len(s)) {
+                    if (s[i] == c) { n = n + 1; }
+                    i = i + 1;
+                }
+                n
+            }
+            fn main() -> int {
+                let s = "racecar";
+                print(s[0]);                       // r
+                print(s[3]);                       // e
+                let cs = chars(s);
+                print(cs[1]);                      // a
+                print(len(cs));                    // 7
+                cuenta(s, 'r') + cuenta(s, 'c') + len(chars("hola"))  // 2 + 2 + 4 = 8
             }
         "#);
     }

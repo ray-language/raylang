@@ -422,12 +422,22 @@ impl<'a> Interpreter<'a> {
             }
 
             ExprKind::Index { array, index } => {
-                let rc = self.eval_array(array)?;
+                let target = self.eval_expr(array)?;
                 let i = self.eval_int(index)?;
-                let len = rc.borrow().len();
-                let idx = check_bounds(i, len, index.line, index.col)?;
-                let v = rc.borrow()[idx].clone();
-                Ok(v)
+                match target {
+                    Value::Array(rc) => {
+                        let len = rc.borrow().len();
+                        let idx = check_bounds(i, len, index.line, index.col)?;
+                        Ok(rc.borrow()[idx].clone())
+                    }
+                    // M11.4c-2: indexar un string → el carácter en esa posición.
+                    Value::Str(s) => {
+                        let chars: Vec<char> = s.chars().collect();
+                        let idx = check_bounds(i, chars.len(), index.line, index.col)?;
+                        Ok(Value::Char(chars[idx]))
+                    }
+                    _ => unreachable!("el checker garantiza un arreglo o un string"),
+                }
             }
 
             ExprKind::StructLit { name, fields } => {
@@ -641,6 +651,14 @@ impl<'a> Interpreter<'a> {
                     Value::Array(Rc::new(RefCell::new(parts)))
                 }
                 _ => unreachable!("el checker garantiza dos strings"),
+            },
+            // M11.4c-2: los caracteres del string → arreglo de char.
+            "chars" => match &values[0] {
+                Value::Str(s) => {
+                    let cs: Vec<Value> = s.chars().map(Value::Char).collect();
+                    Value::Array(Rc::new(RefCell::new(cs)))
+                }
+                _ => unreachable!("el checker garantiza un string"),
             },
             // M11.4a: ¿el string contiene la subcadena?
             "contains" => match (&values[0], &values[1]) {

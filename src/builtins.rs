@@ -149,6 +149,12 @@ static BUILTINS: &[Builtin] = &[
         if a[2] != Type::String { return Err((Some(2), format!("replace espera un string en 'a', no {}", a[2]))); }
         Ok(Type::String)
     } },
+    // chars(s) -> [char] (M11.4c-2): los caracteres del string, en orden.
+    Builtin { name: "chars", opcode: OpCode::Chars, check: |a| {
+        arity(a, 1, "chars", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("chars espera un string, no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Char)))
+    } },
     // eprint(x) -> unit (M11.2a): como print, pero a stderr.
     Builtin { name: "eprint", opcode: OpCode::EPrint, check: |a| {
         arity(a, 1, "eprint", "")?;

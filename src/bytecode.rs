@@ -115,6 +115,9 @@ pub enum OpCode {
     /// Saca `a`, `de` y el string; empuja el string con **todas** las ocurrencias de `de`
     /// reemplazadas por `a`. Builtin `replace`. (El string nuevo es un objeto del heap en la VM.)
     Replace,
+    /// Saca un string; empuja un arreglo `[char]` con sus caracteres. Builtin `chars` (M11.4c-2).
+    /// (El arreglo es un objeto del heap → lo traza el GC.)
+    Chars,
 
     // --- I/O y API de runtime (M11.2) ---
     /// Saca un valor primitivo; lo escribe a **stderr** y empuja unit. Builtin `eprint`.

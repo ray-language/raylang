@@ -331,8 +331,11 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     como Int/Str); `print`/`to_string`/`==` (Display = el carácter, sin comillas). Compone con
     `@derive(Eq, Show)` (campo `char`) gratis. **El oráculo cazó un bug real**: el `PartialEq` manual
     de `Value` (interpreter) no tenía la rama `Char` → `'a' == 'a'` daba `false` solo en el intérprete.
-    Toca ~10 archivos pero todo mecánico (literal + tipo + valor por motor). Falta 4c-2 (indexar
-    `s[i] -> char` + `chars(s) -> [char]`).
+    Toca ~10 archivos pero todo mecánico (literal + tipo + valor por motor).
+  - **M11.4c-2 COMPLETO** (313 tests lib): **indexar `s[i] -> char`** (extiende `Index`/opcode `Index`
+    para strings; out-of-bounds = error de runtime como en arreglos; `s[i] = c` **prohibido** en el
+    checker, strings inmutables) y **`chars(s) -> [char]`** (builtin, opcode `Chars`, asigna heap →
+    estrés del GC). Oráculo `char_indexar_y_chars_oraculo`. **M11.4c COMPLETO.** **M11.4 COMPLETO.**
 - **M11.2 COMPLETO** (297 tests lib + `tests/io_cli.rs`): **I/O y API de runtime** (DESIGN §20.2).
   `main` sigue sin parámetros (§0); el exterior se toca por **builtins**. **La I/O falible devuelve
   `Option`** (norte "errores como valores"). **Patrón** (como M7.3): primitivos builtin que devuelven

@@ -74,13 +74,38 @@ Estas dos nacieron como *diferidos aditivos* de M11.1 y se saldaron en M11.4. La
 **registro único de builtins**, cada una fue **una fila en la tabla + un opcode + su impl por
 motor** —ni el checker ni el compilador cambiaron—.
 
+## El tipo `char` e indexado (M11.4c)
+
+Hasta aquí el string era **opaco por dentro**: se medía y se partía, pero no se podía mirar carácter
+a carácter. M11.4c añade el tipo **`char`** —el **primer tipo nuevo del lenguaje desde los enums de
+M5**— y con él el indexado.
+
+```rust
+let c: char = 'a';            // literal con comillas simples; escapes \n \t \\ \'
+print('a' == 'a');            // true (char es comparable con ==)
+print(to_string('x') + "!");  // x!
+
+let s = "hola";
+print(s[0]);                  // h   — indexar un string da un char
+let cs = chars(s);            // [char]  — sus caracteres
+print(len(cs));               // 4
+```
+
+Detalles de diseño:
+
+- `s[i]` reusa el operador de **indexado** de arreglos; out-of-bounds es un error de runtime, igual
+  que en un arreglo. Los strings son **inmutables**: `s[i] = c` es un error de tipos (sí se lee).
+- `chars(s) -> [char]` es un builtin (opcode `Chars`) que **asigna en el heap** → estrés del GC.
+- Por ser un tipo, `char` tocó más sitios que un builtin (lexer, parser, checker, los dos motores),
+  pero todo mecánico. **El oráculo cazó un bug de verdad**: faltaba la rama `char` en la igualdad del
+  intérprete, así que `'a' == 'a'` daba `false` solo en un motor —exactamente lo que el oráculo
+  existe para atrapar—.
+
 ## Lo que falta (a propósito)
 
-raylang **no tiene un tipo `char`** todavía (llega en M11.4c, con indexado `s[i]` e iteración).
-Hasta entonces el string se compone con `+` y se descompone con `split`. Quedan fuera, por aditivos,
-`to_upper`/`to_lower`/`starts_with`/`find`: llegarán cuando se necesiten. El núcleo de M11.1 fue
-deliberadamente el mínimo —**concatenar, medir, convertir, recortar, partir**—; M11.4a le sumó
-**buscar y reemplazar**.
+Quedan fuera, por aditivos, `to_upper`/`to_lower`/`starts_with`/`find`: llegarán cuando se necesiten.
+El núcleo de M11.1 fue deliberadamente el mínimo —**concatenar, medir, convertir, recortar,
+partir**—; M11.4 le sumó **buscar y reemplazar** y el **tipo `char` con indexado**.
 
 > La lección de M11.1 es un cambio de aire. Tras una larga racha de features *front-end* que
 > presumían de "runtime intacto", esta nos recuerda por qué esa racha era valiosa: en cuanto algo

@@ -1,0 +1,50 @@
+// Comprueba si una palabra es un palíndromo, recorriéndola carácter a carácter.
+// Muestra el tipo `char` (M11.4c): literal 'x', indexado s[i], comparación ==.
+//
+// Ejecuta con:  cargo run --quiet -- examples/palindromo.ray
+//          o:   cargo run --quiet -- --vm examples/palindromo.ray
+// El código de salida es el nº de palíndromos encontrados.
+
+fn es_palindromo(s: string) -> bool {
+  let n = len(s);
+  var i = 0;
+  var ok = true;
+  // Compara el carácter i con su simétrico desde el final.
+  while (i < n / 2) {
+    if (s[i] == s[n - 1 - i]) {
+      i = i + 1;
+    } else {
+      ok = false;
+      i = n; // corta el bucle
+    }
+  }
+  ok
+}
+
+// Cuenta cuántas vocales tiene una palabra (otro recorrido con char y chars()).
+fn vocales(s: string) -> int {
+  var n = 0;
+  let cs = chars(s);
+  var i = 0;
+  while (i < len(cs)) {
+    let c = cs[i];
+    if (c == 'a') { n = n + 1; }
+    if (c == 'e') { n = n + 1; }
+    if (c == 'i') { n = n + 1; }
+    if (c == 'o') { n = n + 1; }
+    if (c == 'u') { n = n + 1; }
+    i = i + 1;
+  }
+  n
+}
+
+fn revisar(palabra: string) -> int {
+  let pal = es_palindromo(palabra);
+  print(palabra + ": palíndromo=" + to_string(pal) + ", vocales=" + to_string(vocales(palabra)));
+  if (pal) { 1 } else { 0 }
+}
+
+fn main() -> int {
+  // reconocer y oso son palíndromos; raylang no.
+  revisar("reconocer") + revisar("oso") + revisar("raylang")
+}

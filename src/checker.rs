@@ -939,6 +939,11 @@ impl Checker {
             // a[i] = e  — mutar el contenido NO requiere 'var' (DESIGN §12.3): la
             // inmutabilidad de `let` ata la variable, no congela el objeto.
             ExprKind::Index { array, index } => {
+                // M11.4c-2: los strings son inmutables; `s[i] = c` no se permite (sí se lee `s[i]`).
+                if self.check_expr(array)? == Type::String {
+                    return Err(self.err(target.line, target.col,
+                        "no se puede asignar a un carácter de un string (los strings son inmutables)".into()));
+                }
                 let elem = self.check_index(array, index)?;
                 let vt = self.check_expr(value)?;
                 if vt != elem {
@@ -969,7 +974,9 @@ impl Checker {
         }
         match at {
             Type::Array(elem) => Ok(*elem),
-            other => Err(self.err(array.line, array.col, format!("no se puede indexar un {} (no es un arreglo)", other))),
+            // M11.4c-2: indexar un string da el carácter en esa posición.
+            Type::String => Ok(Type::Char),
+            other => Err(self.err(array.line, array.col, format!("no se puede indexar un {} (no es un arreglo ni un string)", other))),
         }
     }
 

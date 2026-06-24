@@ -495,11 +495,44 @@ fn expr_diverges(e: Expr) -> bool {
 // Las dos pasadas
 // =====================================================================
 
+// Inyecta el prelude que necesita M14.3c-3: `Option<T>` y `Result<T, E>` como enums genéricos. En
+// Rust el prelude se parsea de un fuente raylang compartido; aquí el checker es un VALIDADOR que solo
+// recibe el AST, así que se registran sus definiciones directamente (mismo efecto para el veredicto).
+// Si el usuario declara un tipo con ese nombre, su definición gana (no se inyecta) — como el override
+// del prelude en Rust. (Eq/Show/Ord y map/filter/fold → M14.3d / fase posterior.)
+fn inject_prelude(c: Checker, prog: Program) {
+    if (!user_declares_type(prog, "Option")) {
+        var ov: [VariantDef] = [];
+        push(ov, VariantDef { name: "Some", payload: [Type.TNamed("T", [])], line: 0, col: 0 });
+        push(ov, VariantDef { name: "None", payload: [], line: 0, col: 0 });
+        insert(c.enums, "Option", ov);
+        insert(c.enum_tparams, "Option", ["T"]);
+    }
+    if (!user_declares_type(prog, "Result")) {
+        var rv: [VariantDef] = [];
+        push(rv, VariantDef { name: "Ok", payload: [Type.TNamed("T", [])], line: 0, col: 0 });
+        push(rv, VariantDef { name: "Err", payload: [Type.TNamed("E", [])], line: 0, col: 0 });
+        insert(c.enums, "Result", rv);
+        insert(c.enum_tparams, "Result", ["T", "E"]);
+    }
+}
+
+// ¿El usuario declara un struct/enum con ese nombre? (Para no pisar su definición con la del prelude.)
+fn user_declares_type(prog: Program, name: string) -> bool {
+    var i = 0;
+    while (i < len(prog.enums)) { if (prog.enums[i].name == name) { return true; } i = i + 1; }
+    var j = 0;
+    while (j < len(prog.structs)) { if (prog.structs[j].name == name) { return true; } j = j + 1; }
+    false
+}
+
 // Registra los tipos nominales (structs/enums) con sus campos/variantes resueltos, y valida que los
 // tipos referenciados existan. Va ANTES de las firmas/cuerpos (que pueden nombrar estos tipos). Mismo
 // orden y mensajes que `check_program` en Rust: nombres de enum (duplicados) → structs (no pueden
 // reusar un nombre de enum, ni repetirse) → validar los tipos referenciados (todos ya registrados).
 fn register_types(c: Checker, prog: Program) -> Result<int, TypeError> {
+    // --- Prelude: Option/Result son enums genéricos conocidos (M14.3c-3) ---
+    inject_prelude(c, prog);
     // --- Registrar enums (variantes resueltas; duplicados de enum y de variante) ---
     var ei = 0;
     while (ei < len(prog.enums)) {
@@ -802,7 +835,52 @@ fn check_expr(c: Checker, e: Expr) -> Result<Type, TypeError> {
         EKind.EField(obj, name) => check_field_or_enum(c, obj, name, Option.None, e.line, e.col),
         EKind.EStructLit(name, fields) => check_struct_lit(c, name, fields, Option.None, e.line, e.col),
         EKind.EMatch(scrut, arms) => check_match(c, scrut, arms, Option.None, e.line, e.col),
-        _ => Result.Err(terr(e.line, e.col, "expresión aún no soportada por el checker auto-alojado (traits/? → M14.3c-3/d)")),
+        EKind.ETry(inner) => check_try(c, inner, e.line, e.col),
+        _ => Result.Err(terr(e.line, e.col, "expresión aún no soportada por el checker auto-alojado (funciones anónimas → fase posterior)")),
+    }
+}
+
+// El operador de propagación `expr?` (M6.3). El operando debe ser un `Result<T, E>` o un `Option<T>`;
+// el resultado es el valor desempaquetado `T`. La función envolvente debe declarar un retorno
+// compatible: `Result<_, E>` con la misma `E`, o `Option<_>`.
+fn check_try(c: Checker, inner: Expr, line: int, col: int) -> Result<Type, TypeError> {
+    let it = check_expr(c, inner)?;
+    match (it) {
+        Type.TNamed(n, args) => {
+            if (n == "Result" && len(args) == 2) {
+                let ok_ty = args[0];
+                let err_ty = args[1];
+                match (c.current_return) {
+                    Type.TNamed(rn, rargs) => {
+                        if (rn == "Result" && len(rargs) == 2 && type_eq(rargs[1], err_ty)) {
+                            Result.Ok(ok_ty)
+                        } else {
+                            Result.Err(terr(line, col, "'?' sobre " + type_str(it) + " requiere que la función devuelva Result<_, "
+                                + type_str(err_ty) + ">, pero devuelve " + type_str(c.current_return)))
+                        }
+                    },
+                    _ => Result.Err(terr(line, col, "'?' sobre " + type_str(it) + " requiere que la función devuelva Result<_, "
+                        + type_str(err_ty) + ">, pero devuelve " + type_str(c.current_return))),
+                }
+            } else if (n == "Option" && len(args) == 1) {
+                let some_ty = args[0];
+                match (c.current_return) {
+                    Type.TNamed(rn, rargs) => {
+                        if (rn == "Option" && len(rargs) == 1) {
+                            Result.Ok(some_ty)
+                        } else {
+                            Result.Err(terr(line, col, "'?' sobre " + type_str(it)
+                                + " requiere que la función devuelva Option<_>, pero devuelve " + type_str(c.current_return)))
+                        }
+                    },
+                    _ => Result.Err(terr(line, col, "'?' sobre " + type_str(it)
+                        + " requiere que la función devuelva Option<_>, pero devuelve " + type_str(c.current_return))),
+                }
+            } else {
+                Result.Err(terr(inner.line, inner.col, "'?' requiere un Result o un Option, no " + type_str(it)))
+            }
+        },
+        _ => Result.Err(terr(inner.line, inner.col, "'?' requiere un Result o un Option, no " + type_str(it))),
     }
 }
 

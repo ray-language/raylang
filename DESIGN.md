@@ -2540,3 +2540,14 @@ Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el
   `ensure_type` valida la aridad de args de tipo (`type_arity`). El monomórfico (M14.3b) es el caso
   σ-vacía → mensajes idénticos. Oráculo: 4 válidos + 5 errores + `tipos_genericos.ray`/`opcional.ray`.
   Diferido a c-3: prelude Option/Result + `?`.
+- **M14.3c-3 COMPLETO — M14.3c COMPLETO** — prelude (Option/Result) + `?`. `inject_prelude` registra
+  `Option<T>` y `Result<T, E>` como enums genéricos conocidos: en Rust el prelude se PARSEA de un
+  fuente raylang compartido, pero el checker auto-alojado es un VALIDADOR que solo recibe el AST, así
+  que se registran sus definiciones **directamente** (mismo efecto para el veredicto); si el usuario
+  declara un tipo con ese nombre, su definición gana (override del prelude). Reusa toda la maquinaria
+  genérica de c-2: `Result.Ok(x)` infiere/siembra T,E del tipo esperado, `match` sustituye el payload.
+  El operador `?` (`check_try`, nodo `ETry`): el operando debe ser `Result<T,E>`/`Option<T>` y la
+  función envolvente declarar un retorno compatible (`Result<_,E>` con la misma E, o `Option<_>`);
+  devuelve el valor desempaquetado (mensajes byte-idénticos). Oráculo: 4 válidos + 5 errores +
+  `errores.ray`. Diferido a M14.3d: traits/impls/bounds/`@derive`/`dyn`/UFCS-métodos y el resto del
+  prelude (Eq/Show/Ord, map/filter/fold).

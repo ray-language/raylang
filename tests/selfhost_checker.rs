@@ -204,12 +204,33 @@ fn errores_tipos_genericos() {
     comparar("struct Caja<T> { v: T } fn f(c: Caja) -> int { 0 } fn main() -> int { 0 }", "scte_noargs.ray");
 }
 
+#[test]
+fn prelude_y_try_validos() {
+    // Result del prelude: construcción + match (con el tipo esperado fijando T y E).
+    comparar("fn div(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } } fn main() -> int { match (div(6, 2)) { Result.Ok(v) => v, Result.Err(_) => -1 } }", "scp_result.ray");
+    // El operador `?` sobre Result.
+    comparar("fn div(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } } fn ev(a: int, b: int) -> Result<int, string> { let p: int = div(a, b)?; Result.Ok(p + 1) } fn main() -> int { match (ev(6, 2)) { Result.Ok(v) => v, Result.Err(_) => -1 } }", "scp_try.ray");
+    // Option del prelude + `?` sobre Option.
+    comparar("fn primero(xs: [int]) -> Option<int> { if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) } } fn main() -> int { match (primero([7])) { Option.Some(v) => v, Option.None => -1 } }", "scp_option.ray");
+    comparar("fn g(xs: [int]) -> Option<int> { if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) } } fn f(xs: [int]) -> Option<int> { let x: int = g(xs)?; Option.Some(x + 1) } fn main() -> int { match (f([3])) { Option.Some(v) => v, Option.None => -1 } }", "scp_tryopt.ray");
+}
+
+#[test]
+fn errores_prelude_y_try() {
+    comparar("fn f() -> Result<int, string> { let x: int = 5?; Result.Ok(x) } fn main() -> int { 0 }", "scpe_nores.ray");
+    comparar("fn div() -> Result<int, string> { Result.Ok(1) } fn f() -> int { let x: int = div()?; x } fn main() -> int { 0 }", "scpe_badret.ray");
+    comparar("fn div() -> Result<int, string> { Result.Ok(1) } fn f() -> Result<int, bool> { let x: int = div()?; Result.Ok(x) } fn main() -> int { 0 }", "scpe_errmis.ray");
+    comparar("fn primero(xs: [int]) -> Option<int> { Option.Algun(xs[0]) } fn main() -> int { 0 }", "scpe_optvar.ray");
+    comparar("fn f() -> int { let r = Result.Ok(5); 0 } fn main() -> int { 0 }", "scpe_uninf.ray");
+}
+
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
 fn ejemplos_reales_validos() {
     let archivos = ["examples/fib.ray", "examples/fizzbuzz.ray", "examples/gcd.ray", "examples/primes.ray",
         "examples/structs.ray", "examples/match_figuras.ray", "examples/enums.ray", "examples/arrays.ray",
-        "examples/matriz.ray", "examples/genericos.ray", "examples/tipos_genericos.ray", "examples/opcional.ray"];
+        "examples/matriz.ray", "examples/genericos.ray", "examples/tipos_genericos.ray", "examples/opcional.ray",
+        "examples/errores.ray"];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);

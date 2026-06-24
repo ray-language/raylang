@@ -717,6 +717,15 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     el esperado es concreto. El monomórfico (M14.3b) es el caso σ-vacía → mensajes idénticos. Oráculo:
     4 válidos + 5 errores + `tipos_genericos.ray`/`opcional.ray`. Diferido a c-3 (Option/Result + `?`),
     d (traits/dyn/UFCS). DESIGN §23.4.
+  - **M14.3c-3 COMPLETO → M14.3c COMPLETO** (347 lib + 11 en `tests/selfhost_checker.rs`): **checker
+    auto-alojado — prelude (Option/Result) + `?`**. `inject_prelude` registra `Option<T>`/`Result<T,E>`
+    como enums genéricos conocidos: en Rust el prelude se PARSEA de un fuente raylang, pero el checker
+    auto-alojado es un VALIDADOR que solo recibe el AST → registra sus defs **directamente** (mismo
+    veredicto); el usuario puede override declarando ese nombre. Reusa la maquinaria de c-2 (`Result.Ok(x)`
+    siembra T,E del esperado; `match` sustituye el payload). `?` (`check_try`, nodo `ETry`): el operando
+    debe ser `Result<T,E>`/`Option<T>` y la función envolvente declarar retorno compatible (mensajes
+    byte-idénticos). Oráculo: 4 válidos + 5 errores + `errores.ray`. **Queda M14.3d**: traits/impls/bounds/
+    `@derive`/`dyn`/UFCS-métodos + resto del prelude (Eq/Show/Ord, map/filter/fold). DESIGN §23.4.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

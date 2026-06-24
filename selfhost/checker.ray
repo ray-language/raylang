@@ -268,7 +268,31 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
                 Result.Err(terr(line, col, "tipo desconocido: '" + name + "' no declarado"))
             }
         },
-        Type.TDyn(_) => Result.Err(terr(line, col, "'dyn' aún no soportado por el checker auto-alojado")),
+        Type.TDyn(traits) => {
+            // Cada trait del conjunto debe existir, y ningún método puede repetirse entre ellos (no
+            // se sabría a cuál despachar). Los traits deben estar registrados (M14.3d-4: `ensure_type`
+            // de un `dyn` se llama al verificar cuerpos, cuando `c.traits` ya está poblado).
+            var seen: [string] = [];
+            var i = 0;
+            while (i < len(traits)) {
+                let tr = traits[i];
+                match (get(c.traits, tr)) {
+                    Option.None => { return Result.Err(terr(line, col, "trait '" + tr + "' no declarado (en 'dyn " + join_strs(traits) + "')")); },
+                    Option.Some(ms) => {
+                        var mi = 0;
+                        while (mi < len(ms)) {
+                            if (contains_str(seen, ms[mi].name)) {
+                                return Result.Err(terr(line, col, "el método '" + ms[mi].name + "' aparece en más de un trait de 'dyn " + join_strs(traits) + "': es ambiguo"));
+                            }
+                            push(seen, ms[mi].name);
+                            mi = mi + 1;
+                        }
+                    },
+                }
+                i = i + 1;
+            }
+            Result.Ok(0)
+        },
         _ => Result.Ok(0),
     }
 }
@@ -939,6 +963,15 @@ fn check_try(c: Checker, inner: Expr, line: int, col: int) -> Result<Type, TypeE
 // formas que producen valor (bloque, if, match, literal de struct, construcción de enum). Lo demás se
 // chequea normal.
 fn check_expr_expected(c: Checker, e: Expr, expected: Type) -> Result<Type, TypeError> {
+    // M14.3d-4: si se espera `dyn Trait`, un valor concreto que lo implemente se coerciona. Las
+    // formas que propagan el esperado (if/match/bloque) NO se interceptan: la coerción ocurre en sus
+    // hojas (cada rama), igual que el resto del chequeo bidireccional.
+    match (expected) {
+        Type.TDyn(traits) => {
+            if (!propaga_esperado(e)) { return coerce_to_dyn(c, e, traits, e.line, e.col); }
+        },
+        _ => {},
+    }
     match (e.kind) {
         EKind.EArray(elems) => {
             match (expected) {
@@ -1055,6 +1088,11 @@ fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], expected
         _ => {},
     }
     let recv_ty = check_expr(c, obj)?;
+    // (1.5) receptor `dyn Trait` → despacho dinámico por la vtable del objeto.
+    match (recv_ty) {
+        Type.TDyn(traits) => { return dispatch_dyn_method(c, traits, name, cargs, line, col); },
+        _ => {},
+    }
     // (2) ¿un campo del struct receptor con ese nombre (de tipo función)? Gana sobre el método/UFCS.
     match (recv_ty) {
         Type.TNamed(sname, targs) => {
@@ -1166,6 +1204,134 @@ fn call_method(c: Checker, sig: FnSig, label: string, obj: Expr, cargs: [Expr], 
     } else {
         check_generic_call(c, sig.type_params, sig.params, sig.ret, sig.bounds, all, "'" + label + "'", line, col)
     }
+}
+
+// =====================================================================
+// Trait objects (M14.3d-4a: dyn — despacho dinámico)
+// =====================================================================
+
+// ¿`e` propaga el tipo esperado a sus hojas? (if/match/bloque: la coerción a dyn ocurre en cada rama.)
+fn propaga_esperado(e: Expr) -> bool {
+    match (e.kind) {
+        EKind.EIf(_, _, _) => true,
+        EKind.EMatch(_, _) => true,
+        EKind.EBlock(_) => true,
+        _ => false,
+    }
+}
+
+// ¿`ts` (subconjunto) está contenido en `whole`?
+fn subset_strs(ts: [string], whole: [string]) -> bool {
+    var i = 0;
+    while (i < len(ts)) {
+        if (!contains_str(whole, ts[i])) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// Coerciona una expresión a `dyn Trait`: un valor concreto que implemente todos los traits del
+// conjunto, o un `dyn` del mismo conjunto (no-op) o un superconjunto (upcasting: olvidar traits).
+fn coerce_to_dyn(c: Checker, e: Expr, traits: [string], line: int, col: int) -> Result<Type, TypeError> {
+    let actual = check_expr(c, e)?;
+    match (actual) {
+        Type.TDyn(source) => {
+            if (strs_eq(source, traits)) { return Result.Ok(actual); }
+            if (subset_strs(traits, source)) { return Result.Ok(Type.TDyn(traits)); }
+            return Result.Err(terr(line, col, "no se puede convertir 'dyn " + join_strs(source) + "' en 'dyn "
+                + join_strs(traits) + "': solo se puede upcastear a un subconjunto de traits"));
+        },
+        _ => {},
+    }
+    match (type_key_of(actual)) {
+        Option.None => Result.Err(terr(line, col, "no se puede convertir " + type_str(actual) + " en 'dyn " + join_strs(traits) + "'")),
+        Option.Some(key) => {
+            var i = 0;
+            while (i < len(traits)) {
+                if (!contains_key(c.impl_traits, mangle(key, traits[i]))) {
+                    return Result.Err(terr(line, col, type_str(actual) + " no implementa '" + traits[i] + "': no puede usarse como 'dyn " + join_strs(traits) + "'"));
+                }
+                i = i + 1;
+            }
+            Result.Ok(Type.TDyn(traits))
+        },
+    }
+}
+
+// Despacha `obj.metodo(args)` con `obj: dyn Trait`: el método se resuelve por la vtable en runtime.
+// Verifica que algún trait del conjunto declara el método, que es *object-safe* (no usa `Self` fuera
+// del receptor) y que los argumentos casan. Devuelve el retorno del método.
+fn dispatch_dyn_method(c: Checker, traits: [string], method: string, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    let sig = match (find_dyn_method(c, traits, method)) {
+        Option.Some(m) => m,
+        Option.None => { return Result.Err(terr(line, col, "'dyn " + join_strs(traits) + "' no declara un método '" + method + "'")); },
+    };
+    // Object safety: si `Self` aparece fuera del receptor (en un param o el retorno), no es invocable.
+    if (method_uses_self(sig)) {
+        return Result.Err(terr(line, col, "el método '" + method + "' usa 'Self': no es invocable sobre 'dyn " + join_strs(traits) + "'"));
+    }
+    // Argumentos (sin el receptor, que es el propio objeto).
+    var expected: [Type] = [];
+    var j = 1;
+    while (j < len(sig.params)) { push(expected, resolve_type(sig.params[j].ty)); j = j + 1; }
+    if (len(cargs) != len(expected)) {
+        return Result.Err(terr(line, col, "el método '" + method + "' espera " + to_string(len(expected))
+            + " argumento(s) (sin contar el receptor), se le pasaron " + to_string(len(cargs))));
+    }
+    var k = 0;
+    while (k < len(cargs)) {
+        let at = check_expr_expected(c, cargs[k], expected[k])?;
+        if (!type_eq(at, expected[k])) {
+            return Result.Err(terr(cargs[k].line, cargs[k].col,
+                "argumento " + to_string(k + 1) + " del método '" + method + "': se esperaba " + type_str(expected[k]) + ", se pasó " + type_str(at)));
+        }
+        k = k + 1;
+    }
+    Result.Ok(resolve_type(sig.ret))
+}
+
+// La firma del método `method` en alguno de los traits del conjunto (`None` si ninguno lo declara).
+fn find_dyn_method(c: Checker, traits: [string], method: string) -> Option<MethodSig> {
+    var i = 0;
+    while (i < len(traits)) {
+        match (find_method_sig(trait_methods_of(c, traits[i]), method)) {
+            Option.Some(m) => { return Option.Some(m); },
+            Option.None => {},
+        }
+        i = i + 1;
+    }
+    Option.None
+}
+
+// ¿Un método usa `Self` fuera del receptor (en un parámetro distinto del primero o en el retorno)?
+fn method_uses_self(sig: MethodSig) -> bool {
+    var i = 1;
+    while (i < len(sig.params)) {
+        if (type_uses_self(sig.params[i].ty)) { return true; }
+        i = i + 1;
+    }
+    type_uses_self(sig.ret)
+}
+
+// ¿El tipo menciona `Self` en cualquier posición?
+fn type_uses_self(t: Type) -> bool {
+    match (t) {
+        Type.TNamed(n, args) => {
+            if (n == "Self") { true } else { types_use_self(args) }
+        },
+        Type.TArray(e) => type_uses_self(e),
+        Type.TFn(ps, r) => types_use_self(ps) || type_uses_self(r),
+        Type.TDyn(_) => false,
+        _ => false,
+    }
+}
+fn types_use_self(ts: [Type]) -> bool {
+    var i = 0;
+    while (i < len(ts)) {
+        if (type_uses_self(ts[i])) { return true; }
+        i = i + 1;
+    }
+    false
 }
 
 // El tipo del campo `fname` de un struct `sname` con args de tipo `targs`, ya sustituido (`None` si

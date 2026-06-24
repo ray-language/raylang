@@ -311,6 +311,29 @@ fn errores_impls_genericos() {
     comparar("struct C<T> { v: T } trait V { fn f(self) -> int; } impl<T: NoExiste> V for C<T> { fn f(self) -> int { 0 } } fn main() -> int { 0 }", "scgie_implbnd.ray");
 }
 
+#[test]
+fn dyn_validos() {
+    let f = "trait F { fn area(self) -> int; } struct C { l: int } impl F for C { fn area(self) -> int { self.l * self.l } } ";
+    // Coerción concreto→dyn en un arreglo + despacho dinámico.
+    comparar(&format!("{f}fn total(fs: [dyn F]) -> int {{ var s = 0; var i = 0; while (i < len(fs)) {{ s = s + fs[i].area(); i = i + 1; }} s }} fn main() -> int {{ let fs: [dyn F] = [C {{ l: 3 }}, C {{ l: 2 }}]; total(fs) }}"), "scd_coerce.ray");
+    // Método por defecto despachado sobre el objeto.
+    comparar("trait F { fn area(self) -> int; fn d(self) -> int { self.area() } } struct C { l: int } impl F for C { fn area(self) -> int { self.l } } fn main() -> int { let x: dyn F = C { l: 5 }; x.d() }", "scd_default.ray");
+    // dyn multi-trait (dyn A + B).
+    comparar("trait A { fn a(self) -> int; } trait B { fn b(self) -> int; } struct S {} impl A for S { fn a(self) -> int { 1 } } impl B for S { fn b(self) -> int { 2 } } fn main() -> int { let x: dyn A + B = S {}; x.a() + x.b() }", "scd_multi.ray");
+    // Upcasting dyn A + B → dyn A.
+    comparar("trait A { fn a(self) -> int; } trait B { fn b(self) -> int; } struct S {} impl A for S { fn a(self) -> int { 1 } } impl B for S { fn b(self) -> int { 2 } } fn f(x: dyn A) -> int { x.a() } fn main() -> int { let x: dyn A + B = S {}; f(x) }", "scd_upcast.ray");
+}
+
+#[test]
+fn errores_dyn() {
+    let f = "trait F { fn area(self) -> int; } struct C { l: int } impl F for C { fn area(self) -> int { self.l * self.l } } ";
+    comparar(&format!("{f}struct D {{}} fn main() -> int {{ let x: dyn F = D {{}}; 0 }}"), "scde_noimpl.ray");
+    comparar(&format!("{f}fn main() -> int {{ let x: dyn F = C {{ l: 1 }}; x.nope() }}"), "scde_nomethod.ray");
+    comparar("struct S {} fn main() -> int { let x: dyn NoExiste = S {}; 0 }", "scde_notrait.ray");
+    comparar("trait F { fn dup(self) -> Self; } struct C {} impl F for C { fn dup(self) -> Self { C {} } } fn main() -> int { let x: dyn F = C {}; x.dup(); 0 }", "scde_objsafe.ray");
+    comparar("trait A { fn a(self) -> int; } trait B { fn b(self) -> int; } struct S {} impl A for S { fn a(self) -> int { 1 } } impl B for S { fn b(self) -> int { 2 } } fn f(x: dyn A + B) -> int { x.a() } fn main() -> int { let x: dyn A = S {}; f(x) }", "scde_baddown.ray");
+}
+
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
 fn ejemplos_reales_validos() {
@@ -318,7 +341,8 @@ fn ejemplos_reales_validos() {
         "examples/structs.ray", "examples/match_figuras.ray", "examples/enums.ray", "examples/arrays.ray",
         "examples/matriz.ray", "examples/genericos.ray", "examples/tipos_genericos.ray", "examples/opcional.ray",
         "examples/errores.ray", "examples/ufcs.ray", "examples/closures.ray", "examples/traits.ray",
-        "examples/bounds.ray", "examples/metodos_por_defecto.ray", "examples/impls_genericos.ray"];
+        "examples/bounds.ray", "examples/metodos_por_defecto.ray", "examples/impls_genericos.ray",
+        "examples/trait_objects.ray"];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);

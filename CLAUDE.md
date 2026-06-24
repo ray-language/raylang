@@ -771,6 +771,16 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     diccionario anidado es lowering, omitido; el corpus válido no da falsos positivos). Oráculo: 4 válidos
     + 3 errores + `impls_genericos.ray`. Diferido a d-4: dyn + @derive + resto del prelude (Eq/Show/Ord,
     map/filter/fold). DESIGN §23.4.
+  - **M14.3d-4a COMPLETO** (347 lib + 21 en `tests/selfhost_checker.rs`): **checker auto-alojado — trait
+    objects** (`dyn Trait`). `ensure_type(TDyn)` valida el conjunto (cada trait existe, ningún método
+    repetido). **Coerción** concreto→objeto (`coerce_to_dyn`, en `check_expr_expected` si se espera `dyn`
+    y la expr no propaga): el concreto implementa **todos** los traits; `dyn`→`dyn` idéntico o subconjunto
+    (**upcasting**); si no es subconjunto, error. **Despacho** `obj.m(args)` con `obj: dyn`
+    (`dispatch_dyn_method`, paso 1.5 de `check_call_field`): busca el método entre los traits, exige
+    *object-safety* (`Self` solo en el receptor; `method_uses_self`/`type_uses_self`), valida args y
+    devuelve el retorno. Helpers `propaga_esperado`/`subset_strs`/`find_dyn_method`. La síntesis del struct
+    vtable (lowering) se OMITE. Oráculo: 4 válidos + 5 errores + `trait_objects.ray`. Diferido a d-4b:
+    `@derive` + resto del prelude (Eq/Show/Ord, map/filter/fold). DESIGN §23.4.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

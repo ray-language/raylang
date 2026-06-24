@@ -2600,3 +2600,14 @@ Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el
   (shallow) — el diccionario anidado (closure) es lowering, omitido; el corpus válido no genera falsos
   positivos. **M14.3d-3 COMPLETO.** Oráculo: 4 válidos + 3 errores + `impls_genericos.ray`. Diferido a
   d-4: dyn + @derive + resto del prelude (Eq/Show/Ord, map/filter/fold).
+- **M14.3d-4a COMPLETO** — trait objects (`dyn Trait`, despacho dinámico). `ensure_type(TDyn)` valida
+  el conjunto (cada trait existe, ningún método repetido entre ellos). **Coerción** concreto→objeto
+  (`coerce_to_dyn`, en `check_expr_expected` cuando se espera `dyn` y la expr no propaga): el concreto
+  implementa **todos** los traits (`impl_traits`); `dyn`→`dyn` idéntico (no-op) o a un subconjunto
+  (**upcasting**, olvidar traits) — si no es subconjunto, error. **Despacho** `obj.m(args)` con
+  `obj: dyn` (`dispatch_dyn_method`, paso 1.5 de `check_call_field`): busca el método entre los traits
+  del conjunto, exige *object-safety* (`Self` solo en el receptor; `method_uses_self`/`type_uses_self`),
+  valida los argumentos (sin el receptor) y devuelve el retorno. Helpers `propaga_esperado`/
+  `subset_strs`/`find_dyn_method`. Mensajes byte-idénticos. La síntesis del struct vtable (lowering) se
+  OMITE. Oráculo: 4 válidos + 5 errores + `trait_objects.ray`. Diferido a d-4b: `@derive` + resto del
+  prelude (Eq/Show/Ord, map/filter/fold).

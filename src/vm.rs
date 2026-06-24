@@ -536,6 +536,18 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::ParseFloat => {
+                    // M14: [] o [f]; el prelude lo envuelve en Option<float>.
+                    let elems = match self.pop() {
+                        HeapValue::Str(s) => match s.trim().parse::<f64>() {
+                            Ok(f) => vec![HeapValue::Float(f)],
+                            Err(_) => vec![],
+                        },
+                        _ => unreachable!("el checker garantiza un string"),
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::ReadLine => {
                     // Primitivo: [] en EOF, [linea] si no (sin el '\n'). El prelude → Option<string>.
                     let mut line = String::new();
@@ -2689,6 +2701,23 @@ mod tests {
                 let b = valor(parse_int("  -7 "), 0);     // -7 (trim)
                 let c = valor(parse_int("xyz"), 100);     // 100 (None)
                 a + b + c                                 // 135
+            }
+        "#);
+    }
+
+    #[test]
+    fn parse_float_oraculo() {
+        // M14: parse_float, como parse_int, es determinista → oráculo. El formateo de float es
+        // el mismo f64 de Rust en ambos motores, así que los valores coinciden.
+        oracle_program(r#"
+            fn main() -> int {
+                let ok = match (parse_float("3.14")) { Option.Some(f) => f, Option.None => 0.0 };
+                let no = match (parse_float("hola")) { Option.Some(_) => 1, Option.None => 0 };
+                let ent = match (parse_float("42")) { Option.Some(f) => f, Option.None => 0.0 };
+                // 3.14*100 = 314, 42.0 → 42; no=0. Resultado 314 + 42 + 0 = 356.
+                let a: int = if (ok * 100.0 == 314.0) { 314 } else { -1 };
+                let b: int = if (ent == 42.0) { 42 } else { -1 };
+                a + b + no
             }
         "#);
     }

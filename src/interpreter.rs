@@ -1051,6 +1051,14 @@ impl<'a> Interpreter<'a> {
                 },
                 _ => unreachable!("el checker garantiza un string"),
             },
+            // M14: parseo de flotante (lo pide el lexer auto-alojado). [] o [f].
+            "__parse_float" => match &values[0] {
+                Value::Str(s) => match s.trim().parse::<f64>() {
+                    Ok(f) => Value::Array(Rc::new(RefCell::new(vec![Value::Float(f)]))),
+                    Err(_) => Value::Array(Rc::new(RefCell::new(vec![]))),
+                },
+                _ => unreachable!("el checker garantiza un string"),
+            },
             // M11.2a: primitivo de lectura de línea → [] en EOF, [linea] si no (sin el '\n').
             "__read_line" => {
                 let mut line = String::new();

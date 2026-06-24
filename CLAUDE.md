@@ -584,6 +584,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     no-cola (`1 + bucle(...)`). Verificado: 1M llamadas en cola + mutua profunda corren en O(1) y
     coinciden. **M13 COMPLETO** (13.1 + 13.2 + 13.3a + 13.3b). Habilitadores de self-hosting listos;
     siguiente gran hito: **self-hosting** (capstone) o **M12**.
+- **Self-hosting (branch `feature/self-hosting`)** — capstone: escribir el compilador de raylang en
+  raylang, empezando por el **lexer**, con el lexer de Rust como **oráculo** (DESIGN §23).
+  - **`parse_float(s) -> Option<float>`** (347 tests lib): builtin aditivo (patrón M11.4: primitivo
+    `__parse_float -> [float]` opcode `ParseFloat` + envoltorio en el prelude). Prerrequisito del
+    lexer (raylang tenía `parse_int` pero no flotantes). Ambos motores usan el `f64` de Rust → el
+    oráculo casa. Oráculo `parse_float_oraculo`.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

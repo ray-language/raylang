@@ -189,6 +189,10 @@ pub enum OpCode {
     /// Saca un string; empuja un arreglo `[int]` con **0 o 1** elementos: el entero parseado,
     /// o vacío si no parsea. Primitivo `__parse_int`; el prelude lo envuelve en `Option<int>`.
     ParseInt,
+    /// Saca un string; empuja un arreglo `[float]` con **0 o 1** elementos: el flotante parseado,
+    /// o vacío si no parsea. Primitivo `__parse_float`; el prelude → `Option<float>` (M14, lo pide
+    /// el lexer auto-alojado).
+    ParseFloat,
     /// No saca nada; lee una línea de **stdin** (sin el `\n`) y empuja un `[string]` con **0 o
     /// 1** elementos: vacío en EOF. Primitivo `__read_line`; el prelude lo envuelve en `Option`.
     ReadLine,

@@ -457,6 +457,12 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::String { return Err((Some(0), format!("__parse_int espera un string, no {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Int)))
     } },
+    // __parse_float(s) -> [float] (M14): [] si no parsea, [f] si sí. El prelude → Option<float>.
+    Builtin { name: "__parse_float", opcode: OpCode::ParseFloat, check: |a| {
+        arity(a, 1, "__parse_float", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__parse_float espera un string, no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Float)))
+    } },
     // __read_line() -> [string] (M11.2a): [] en EOF, [linea] si no. El prelude → Option<string>.
     Builtin { name: "__read_line", opcode: OpCode::ReadLine, check: |a| {
         nullary(a, "__read_line")?;

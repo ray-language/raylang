@@ -157,6 +157,12 @@ fn parse_int(s: string) -> Option<int> {
     if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
+// Parsea un flotante; None si el texto no es un flotante válido (M14).
+fn parse_float(s: string) -> Option<float> {
+    let r = __parse_float(s);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
 // Lee una línea de stdin (sin el salto de línea); None en fin de entrada (EOF).
 fn input() -> Option<string> {
     let r = __read_line();

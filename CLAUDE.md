@@ -523,6 +523,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   (`from M import Punto`, `M.Punto`, `M.Color.Rojo` — namespacar tipos); más string/archivos
   aditivos (`replace`/`contains`, `append`/`exists`…); **M12 concurrencia**; optimización de la VM.
   Capstone: **self-hosting** (ya habilitado: módulos + I/O de archivos). Ver DESIGN §2/§20 / IDEAS.md.
+- **M13 — habilitadores de self-hosting** (DESIGN §22; va **antes que M12**). Tres hilos: `Map<K,V>`,
+  `assert`/tooling de test, robustez de recursión profunda.
+  - **M13.3a COMPLETO** (336 tests lib): **recursión profunda sin segfaults**. (1) `lib::with_big_stack`
+    corre todo el trabajo del binario en un **hilo con pila de 256 MiB** (vs ~8 MiB del principal) →
+    el parser de descenso recursivo (Rust) y el intérprete tree-walking (recurre sobre la pila de Rust)
+    alcanzan profundidades altas sin reventar. (2) **Límite compartido** `interpreter::MAX_CALL_DEPTH =
+    1024`, que la VM reusa como `MAX_FRAMES`: el intérprete cuenta llamadas a `call_body` (campo `depth`,
+    chequeado **antes** de incrementar, como la VM con `frames.len()` antes de empujar) → **ambos motores
+    coinciden en la frontera** y dan el mismo error ("desbordamiento de pila …"). La VM ya tenía el
+    límite; M13.3a añade el del intérprete (que antes desbordaba la pila de Rust) y la pila grande.
+    Oráculo `overflow_recursion_oraculo`. Diferido: **M13.3b** TCO en la VM (reusar marco en posición
+    de cola).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

@@ -17,6 +17,14 @@ use raylang::interpreter::Value;
 use raylang::{checker, compiler, diagnostic, interpreter, loader, lsp, repl, test_runner, vm};
 
 fn main() {
+    // M13.3a: todo el trabajo corre en un hilo con pila grande, para que la recursión
+    // profunda (parser de descenso recursivo, intérprete tree-walking) dé un error
+    // limpio (al tope de `MAX_CALL_DEPTH`) en vez de desbordar la pila y morir con
+    // SIGSEGV. `run` siempre acaba en `process::exit`, así que el `join` no retorna.
+    raylang::with_big_stack(run);
+}
+
+fn run() {
     let args: Vec<String> = env::args().collect();
     let rest = &args[1..]; // sin el nombre del binario
 

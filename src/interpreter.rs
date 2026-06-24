@@ -206,6 +206,15 @@ pub fn program_args() -> &'static [String] {
     PROGRAM_ARGS.get().map(Vec::as_slice).unwrap_or(&[])
 }
 
+/// Profundidad máxima de llamadas anidadas antes de cortar con un error limpio
+/// (M13.3a). La **comparten ambos motores** —el intérprete cuenta llamadas a
+/// `call_body`; la VM cuenta marcos (`CallFrame`)— para que coincidan en la
+/// frontera: un programa que recurre justo a este límite o lo pasa da el mismo
+/// veredicto en los dos. Sin esto, el intérprete desbordaría la pila de Rust
+/// (segfault) en vez de errar; con la pila grande del hilo worker (`lib::with_big_stack`)
+/// este límite se alcanza holgadamente sin reventar.
+pub const MAX_CALL_DEPTH: usize = 1024;
+
 struct Interpreter<'a> {
     /// Todas las funciones del programa, por nombre (las referencias viven mientras
     /// viva el `program`, de ahí el lifetime `'a`).
@@ -223,6 +232,10 @@ struct Interpreter<'a> {
     /// Cada variable es una **celda** compartible (M4.2): así una closure puede
     /// capturarla por referencia.
     scopes: Vec<HashMap<String, Cell>>,
+    /// Profundidad de llamadas anidadas actualmente activas (M13.3a). Se incrementa
+    /// al entrar en `call_body` y se decrementa al salir; al alcanzar `MAX_CALL_DEPTH`
+    /// se corta con un error en vez de desbordar la pila de Rust.
+    depth: usize,
 }
 
 impl<'a> Interpreter<'a> {
@@ -244,6 +257,7 @@ impl<'a> Interpreter<'a> {
             anon: collect_fn_exprs(program),
             structs,
             scopes: Vec::new(),
+            depth: 0,
         }
     }
 
@@ -281,6 +295,20 @@ impl<'a> Interpreter<'a> {
     /// Ejecuta el cuerpo de una función (nombrada o anónima) con sus argumentos y su
     /// entorno capturado.
     fn call_body(&mut self, params: &'a [Param], body: &'a Block, args: Vec<Value>, captured: &[(String, Cell)]) -> EvalResult {
+        // Guardia de recursión (M13.3a): si ya hay `MAX_CALL_DEPTH` llamadas activas,
+        // cortamos con un error limpio en vez de seguir recurriendo sobre la pila de
+        // Rust (que acabaría en segfault). La comprobación es ANTES de incrementar,
+        // igual que la VM mira `frames.len()` antes de empujar el marco → ambos motores
+        // coinciden en la frontera. La posición es la del cuerpo de la función.
+        if self.depth >= MAX_CALL_DEPTH {
+            return Err(runtime_error(
+                body.line,
+                body.col,
+                "desbordamiento de pila (recursión demasiado profunda)",
+            ));
+        }
+        self.depth += 1;
+
         // Scoping léxico: la función arranca con una pila de ámbitos NUEVA, no la de
         // quien llama. Guardamos la actual y la restauramos al volver.
         let saved = mem::take(&mut self.scopes);
@@ -301,6 +329,7 @@ impl<'a> Interpreter<'a> {
 
         let result = self.exec_block(body);
         self.scopes = saved; // restaurar el entorno de quien llama
+        self.depth -= 1; // salimos de esta llamada
 
         match result {
             Ok(v) => Ok(v),                         // el cuerpo cayó hasta su valor final

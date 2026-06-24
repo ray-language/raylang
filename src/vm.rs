@@ -24,8 +24,11 @@ use crate::bytecode::{Chunk, CompiledEnum, CompiledFn, CompiledProgram, OpCode, 
 use crate::gc::{Handle, Heap, HeapValue, Obj, VmClosure, VmEnum, VmStruct};
 use crate::interpreter::{EnumInstance, RuntimeError, StructInstance, Value};
 
-/// Límite de marcos para detectar recursión infinita en vez de colgarse.
-const MAX_FRAMES: usize = 1024;
+/// Límite de marcos para detectar recursión infinita en vez de colgarse. Es el
+/// **mismo** que el del intérprete (`interpreter::MAX_CALL_DEPTH`, M13.3a) para que
+/// ambos motores coincidan en la frontera: un programa que recurre justo al límite
+/// da el mismo veredicto en los dos.
+const MAX_FRAMES: usize = crate::interpreter::MAX_CALL_DEPTH;
 
 /// Ejecuta un programa compilado (empezando por `main`) y devuelve su resultado.
 pub fn run_program(program: &CompiledProgram) -> Result<Value, RuntimeError> {
@@ -1212,6 +1215,30 @@ mod tests {
             "fn gcd(a: int, b: int) -> int { if (b == 0) { a } else { gcd(b, a % b) } }
              fn main() -> int { gcd(1071, 462) }",
         );
+    }
+
+    /// M13.3a: recursión infinita → ambos motores cortan con el MISMO error de
+    /// desbordamiento, en vez de colgarse o reventar la pila. Es el oráculo del
+    /// límite compartido (`MAX_CALL_DEPTH` == `MAX_FRAMES`). Corre dentro del hilo de
+    /// pila grande para que el intérprete alcance el tope sin desbordar la pila del
+    /// hilo de test (que es pequeña por defecto).
+    #[test]
+    fn overflow_recursion_oraculo() {
+        let (interp_msg, vm_msg) = crate::with_big_stack(|| {
+            let src = "fn bucle(n: int) -> int { bucle(n + 1) }
+                       fn main() -> int { bucle(0) }";
+            let tokens = crate::lexer::lex(src).expect("lex ok");
+            let mut prog = crate::parser::parse(tokens).expect("parse ok");
+            crate::checker::check(&mut prog).expect("check ok");
+            let interp = crate::interpreter::run(&prog).expect_err("el intérprete debe errar");
+            let compiled = compile_program(&prog).expect("compila");
+            let vm = run_program(&compiled).expect_err("la VM debe errar");
+            (interp.msg, vm.msg)
+        });
+        assert!(interp_msg.contains("desbordamiento de pila"), "intérprete: {interp_msg}");
+        assert!(vm_msg.contains("desbordamiento de pila"), "vm: {vm_msg}");
+        // Ambos motores reportan exactamente el mismo mensaje.
+        assert_eq!(interp_msg, vm_msg, "los dos motores difieren en el mensaje");
     }
 
     #[test]

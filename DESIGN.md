@@ -2233,12 +2233,18 @@ expuesto al usuario.
 Diagnóstico: frágiles son **(a) el intérprete** (recursión en la pila de Rust) y **(b) el parser de
 Rust**; la **VM ya es robusta** (marcos en el heap).
 
-- **M13.3a — sin segfaults, techo alto**:
-  1. Correr intérprete/parser en un **hilo worker con pila grande** (`std::thread::Builder::
-     stack_size`, configurable). Es lo que hace rustc; barato y cubre (a) y (b) a la vez.
-  2. En la **VM**, un **límite de profundidad de marcos configurable** que produce un **error de
-     runtime limpio** ("límite de recursión excedido" + ubicación) en vez de crecer sin tope.
-     Oráculo: el intérprete reporta el mismo error al alcanzar su techo.
+- **M13.3a — sin segfaults, techo alto** ✅ **COMPLETO** (336 tests lib):
+  1. **Hilo worker con pila grande**: `lib::with_big_stack` corre todo el trabajo del binario en
+     un hilo con pila de **256 MiB** (`std::thread::Builder::stack_size`), muy por encima de los
+     ~8 MiB del hilo principal. Cubre (a) el intérprete y (b) el parser de Rust a la vez. Es lo
+     que hace rustc.
+  2. **Límite compartido**: `interpreter::MAX_CALL_DEPTH = 1024`, que la VM reusa como su
+     `MAX_FRAMES`. El intérprete cuenta llamadas a `call_body` (campo `depth`, comprobado **antes**
+     de incrementar, igual que la VM mira `frames.len()` antes de empujar) → **ambos motores
+     coinciden en la frontera**: `cuenta(1000)` corre en los dos, `cuenta(1100)` da el **mismo
+     error** ("desbordamiento de pila (recursión demasiado profunda)") en los dos. El intérprete
+     reporta en la posición del cuerpo de la función; la VM, en el sitio de llamada (el mensaje es
+     idéntico, que es lo que el oráculo compara). Test `overflow_recursion_oraculo`.
 - **M13.3b — TCO en la VM** (*opcional, candidato a diferir*): detectar llamada en posición de cola
   y **reutilizar el marco** ⇒ recursión de cola en O(1) marcos. Pedagógicamente jugoso pero más
   invasivo; se decide tras 13.3a.

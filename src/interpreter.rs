@@ -928,6 +928,15 @@ impl<'a> Interpreter<'a> {
             (Le, Float(a), Float(b)) => Bool(a <= b),
             (Gt, Float(a), Float(b)) => Bool(a > b),
             (Ge, Float(a), Float(b)) => Bool(a >= b),
+            // M11.7d: orden de strings (lexicográfico) y char (por code point).
+            (Lt, Str(a), Str(b)) => Bool(a < b),
+            (Le, Str(a), Str(b)) => Bool(a <= b),
+            (Gt, Str(a), Str(b)) => Bool(a > b),
+            (Ge, Str(a), Str(b)) => Bool(a >= b),
+            (Lt, Char(a), Char(b)) => Bool(a < b),
+            (Le, Char(a), Char(b)) => Bool(a <= b),
+            (Gt, Char(a), Char(b)) => Bool(a > b),
+            (Ge, Char(a), Char(b)) => Bool(a >= b),
             // Igualdad (mismo tipo, garantizado por el checker).
             (Eq, a, b) => Bool(a == b),
             (Ne, a, b) => Bool(a != b),

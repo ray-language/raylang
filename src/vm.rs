@@ -863,6 +863,15 @@ impl<'a> Vm<'a> {
             (LessEqual, Float(a), Float(b)) => Bool(a <= b),
             (Greater, Float(a), Float(b)) => Bool(a > b),
             (GreaterEqual, Float(a), Float(b)) => Bool(a >= b),
+            // M11.7d: orden de strings (lexicográfico) y char (por code point).
+            (Less, Str(a), Str(b)) => Bool(a < b),
+            (LessEqual, Str(a), Str(b)) => Bool(a <= b),
+            (Greater, Str(a), Str(b)) => Bool(a > b),
+            (GreaterEqual, Str(a), Str(b)) => Bool(a >= b),
+            (Less, Char(a), Char(b)) => Bool(a < b),
+            (LessEqual, Char(a), Char(b)) => Bool(a <= b),
+            (Greater, Char(a), Char(b)) => Bool(a > b),
+            (GreaterEqual, Char(a), Char(b)) => Bool(a >= b),
             _ => unreachable!("combinación operador/operandos que el checker debió rechazar"),
         })
     }
@@ -2214,6 +2223,28 @@ mod tests {
                 let x = ult(pop(v), 0);             // 30, y v queda [10,20]
                 print(len(v));                      // 2
                 x + len(c) + r[1]                   // 30 + 5 + 4 = 39
+            }
+        "#);
+    }
+
+    #[test]
+    fn sort_ord_oraculo() {
+        // M11.7d: sort<T: Ord> (bound → diccionarios M9.2) sobre primitivos y un tipo de usuario
+        // que implementa Ord. Asigna arreglos en el heap → estrés del GC.
+        oracle_stress(r#"
+            struct Caja { peso: int }
+            impl Ord for Caja {
+                fn menor(self, otro: Caja) -> bool { self.peso < otro.peso }
+            }
+            fn main() -> int {
+                let xs = sort([3, 1, 4, 1, 5, 9, 2, 6]);
+                print(xs[0]); print(xs[7]);             // 1 ... 9
+                let cs = sort(['c', 'a', 'b']);
+                print(cs[0]);                            // a
+                let cajas = sort([Caja { peso: 30 }, Caja { peso: 10 }, Caja { peso: 20 }]);
+                print(cajas[0].peso);                    // 10
+                print(cajas[2].peso);                    // 30
+                xs[0] + xs[7] + cajas[0].peso            // 1 + 9 + 10 = 20
             }
         "#);
     }

@@ -421,6 +421,14 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `__list_dir -> ["ok", n0, …]/["err",msg]`; los envoltorios del prelude lo traducen a `Result`
     (list_dir reconstruye el `[string]` con un `while`+`push`, no hay slice de arreglos). I/O real
     no determinista → integración por subproceso (no oráculo).
+  - **M11.7d COMPLETO** (334 tests lib): **sort + trait `Ord`**. Trait `Ord { fn menor(self, otro:
+    Self) -> bool }` en el prelude, con `impl Ord for int/float/string/char` (vía `<`) y
+    `sort<T: Ord>(a: [T]) -> [T]` (insertion sort) **escrito en raylang** → reusa bounds/diccionarios
+    de M9.2: **front-end puro, cero opcodes**. Habilitadores: (1) se **extienden** los comparadores
+    `< <= > >=` a **string** (lexicográfico) y **char** (code point) en checker + ambos motores; (2)
+    el prelude ahora inyecta **impls** (nueva `prelude::impls()` + paso 0b4 idempotente en `check`);
+    (3) `ensure_impl_target` admite `Type::Char` (faltaba). Un tipo de usuario que implemente `Ord` es
+    ordenable por `sort` (probado en el oráculo). **M11.7 COMPLETO.**
 - **M11.4 — cierre de diferidos aditivos de la stdlib** (DESIGN §20.4). Tocan runtime → oráculo
   (con estrés del GC para los que asignan heap). Tras L1, cada builtin = fila en `BUILTINS` + opcode
   + impl por motor; checker/compilador sin cambios.

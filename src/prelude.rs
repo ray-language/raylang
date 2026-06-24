@@ -35,6 +35,35 @@ trait Show {
     fn mostrar(self) -> string;
 }
 
+// Orden total (M11.7d): `self < otro`. Lo usa `sort`. Los primitivos lo implementan vía el
+// operador `<` (extendido a string/char en M11.7d); un tipo del usuario lo implementa a mano.
+trait Ord {
+    fn menor(self, otro: Self) -> bool;
+}
+impl Ord for int { fn menor(self, otro: int) -> bool { self < otro } }
+impl Ord for float { fn menor(self, otro: float) -> bool { self < otro } }
+impl Ord for string { fn menor(self, otro: string) -> bool { self < otro } }
+impl Ord for char { fn menor(self, otro: char) -> bool { self < otro } }
+
+// Ordena ascendente, devolviendo un arreglo NUEVO (insertion sort). `T` debe implementar `Ord`;
+// el bound se baja a paso de diccionarios (M9.2), así que `sort` es front-end puro (cero opcodes).
+fn sort<T: Ord>(a: [T]) -> [T] {
+    var out: [T] = [];
+    var i: int = 0;
+    while (i < len(a)) {
+        let x: T = a[i];
+        push(out, x);
+        var j: int = len(out) - 1;
+        while (j > 0 && x.menor(out[j - 1])) {
+            out[j] = out[j - 1];
+            j = j - 1;
+        }
+        out[j] = x;
+        i = i + 1;
+    }
+    out
+}
+
 // Aplica `f` a cada elemento, devolviendo un arreglo nuevo con los resultados.
 fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
     var out: [U] = [];
@@ -174,7 +203,12 @@ pub fn functions() -> Vec<Function> {
     parse().functions
 }
 
-/// Los traits del prelude (`Eq`), ya parseados (M10.1).
+/// Los traits del prelude (`Eq`/`Show`/`Ord`), ya parseados (M10.1).
 pub fn traits() -> Vec<TraitDef> {
     parse().traits
+}
+
+/// Los `impl` del prelude (M11.7d: `Ord` para int/float/string/char), ya parseados.
+pub fn impls() -> Vec<crate::ast::ImplBlock> {
+    parse().impls
 }

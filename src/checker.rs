@@ -164,6 +164,17 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
         prelude_traits.append(&mut program.traits);
         program.traits = prelude_traits;
     }
+    // Paso 0b4 (M11.7d): inyectar los `impl` del prelude (`Ord` para int/float/string/char).
+    // Idempotente: se salta cualquier `(trait, tipo objetivo)` que ya exista (sea del usuario o de
+    // una verificación previa). De ahí los procesa el paso 0c como cualquier impl.
+    let impls_existentes: HashSet<(String, Option<String>)> = program.impls.iter()
+        .map(|i| (i.trait_name.clone(), type_key_of(&i.target)))
+        .collect();
+    let prelude_impls: Vec<crate::ast::ImplBlock> = crate::prelude::impls()
+        .into_iter()
+        .filter(|i| !impls_existentes.contains(&(i.trait_name.clone(), type_key_of(&i.target))))
+        .collect();
+    program.impls.extend(prelude_impls);
     // Paso 0b3 (M10.1, L2): generar los `impl` de `@derive(Eq)` / `@derive(Show)` sobre
     // struct/enum. Genera el AST de un `impl Trait for T { ... }` y lo añade a `program.impls`;
     // de ahí en adelante lo procesa M9 (la bajada de impls del paso 0c). Antes del paso 0c.
@@ -782,7 +793,7 @@ impl Checker {
     ///   de tipo del impl (cada uno un `Var` distinto), y cuya aridad casa con la del tipo.
     fn ensure_impl_target(&self, target: &Type, type_params: &[String], line: usize, col: usize) -> Result<(), TypeError> {
         // Primitivos: solo como objetivo concreto.
-        if matches!(target, Type::Int | Type::Float | Type::Bool | Type::String) {
+        if matches!(target, Type::Int | Type::Float | Type::Bool | Type::String | Type::Char) {
             if type_params.is_empty() {
                 return Ok(());
             }
@@ -1805,11 +1816,13 @@ impl Checker {
                     bin_op_str(op), lt, rt
                 ))),
             },
-            // Orden: solo números, del mismo tipo → bool.
+            // Orden: números, string o char, del mismo tipo → bool. M11.7d: string (lexicográfico)
+            // y char (por code point) se ordenan, lo que habilita `sort` / el trait `Ord`.
             Lt | Le | Gt | Ge => match (&lt, &rt) {
-                (Type::Int, Type::Int) | (Type::Float, Type::Float) => Ok(Type::Bool),
+                (Type::Int, Type::Int) | (Type::Float, Type::Float)
+                | (Type::String, Type::String) | (Type::Char, Type::Char) => Ok(Type::Bool),
                 _ => Err(self.err(line, col, format!(
-                    "el operador '{}' compara números del mismo tipo, no {} y {}",
+                    "el operador '{}' compara int/float/string/char del mismo tipo, no {} y {}",
                     bin_op_str(op), lt, rt
                 ))),
             },

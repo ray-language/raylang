@@ -39,6 +39,7 @@ fn responde_initialize_con_capacidades() {
     assert!(out.contains("\"hoverProvider\":true"), "anuncia hover (M10.2b)\n{out}");
     assert!(out.contains("\"referencesProvider\":true"), "anuncia find-references\n{out}");
     assert!(out.contains("\"renameProvider\":true"), "anuncia rename\n{out}");
+    assert!(out.contains("\"signatureHelpProvider\""), "anuncia signature help (M10.2f)\n{out}");
 }
 
 #[test]
@@ -119,4 +120,41 @@ fn programa_valido_publica_lista_vacia() {
     let entrada = frame(open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
     let out = lsp(&entrada);
     assert!(out.contains("\"diagnostics\":[]"), "sin errores, lista vacía\n{out}");
+}
+
+#[test]
+fn signature_help_muestra_la_firma() {
+    // M10.2f: al escribir los argumentos de `suma(`, signatureHelp da su firma y el param activo.
+    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn suma(a: int, b: int) -> int { a + b }\nfn main() -> int { suma(1, ) }"}}}"#;
+    // Cursor tras la coma (línea 1, carácter 26, 0-basado): segundo argumento.
+    let sh = r#"{"jsonrpc":"2.0","id":7,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":1,"character":26}}}"#;
+    let entrada = frame(open) + &frame(sh) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("\"id\":7"), "responde a signatureHelp\n{out}");
+    assert!(out.contains("fn suma(a: int, b: int) -> int"), "muestra la firma\n{out}");
+    assert!(out.contains("\"activeParameter\":1"), "param activo = 1 (segundo)\n{out}");
+}
+
+#[test]
+fn completion_incluye_locales_por_ambito() {
+    // M10.2f: la completion incluye los params y locales de la función bajo el cursor.
+    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn calc(factor: int) -> int {\n  let total = factor + 1;\n  \n}"}}}"#;
+    let comp = r#"{"jsonrpc":"2.0","id":8,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":2}}}"#;
+    let entrada = frame(open) + &frame(comp) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("\"id\":8"), "responde a completion\n{out}");
+    assert!(out.contains("\"label\":\"factor\""), "ofrece el parámetro factor\n{out}");
+    assert!(out.contains("\"label\":\"total\""), "ofrece la local total\n{out}");
+}
+
+#[test]
+fn hover_de_tipo_en_literal_de_struct() {
+    // M10.2f: hover sobre el nombre de tipo en un literal de struct.
+    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"struct Punto { x: int }\nfn main() -> int {\n  let p = Punto { x: 1 };\n  p.x\n}"}}}"#;
+    // `Punto` en la línea 2 (0-basado), carácter 10.
+    let hov = r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":2,"character":10}}}"#;
+    let entrada = frame(open) + &frame(hov) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("\"id\":9"), "responde a hover\n{out}");
+    assert!(out.contains("struct Punto"), "muestra el tipo del struct\n{out}");
 }

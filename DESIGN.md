@@ -1682,8 +1682,10 @@ funciones, tipos); métodos/UFCS quedan limitados. *Completion*, *find-reference
 programas son válidos ni qué significan.
 
 ### 19.3 Deferido (más allá de M10.1)
-- **LSP**: diagnósticos (M10.2 §19.2) + hover/definición (M10.2b §19.2b). *Completion*,
-  *find-references*, *rename*, *signature help* → futuro.
+- **LSP**: diagnósticos (M10.2 §19.2) + hover/definición (M10.2b §19.2b) + *find-references*/*rename*/
+  *completion* (cluster 4) + **M10.2f**: hover/def de **tipos**, **signature help** y **completion por
+  ámbito** (firma textual robusta ante el doc a medio escribir; alcance = función, sin spans). Quedan:
+  hover/def del **nombre de método** (sin posición propia) y completion por **bloque** anidado.
 - `@builtin`/`@extern` (limpiar el *special-casing* de `print`/`len`/`push`), `@deprecated`,
   `@inline`, `@delegate` → anotaciones futuras.
 - **Derivación recursiva** (`Eq` de enums con payload-enum) y **derive genérico** → futuro.

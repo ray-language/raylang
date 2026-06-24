@@ -376,6 +376,8 @@ struct Checker {
     index: SemanticIndex,
     /// Posición de declaración de cada función de nivel superior (M10.2b: ir-a-definición).
     fn_defs: HashMap<String, (usize, usize)>,
+    /// Posición de declaración de cada tipo (struct/enum/trait) — hover/def de tipos (M10.2f).
+    type_defs: HashMap<String, (usize, usize)>,
 }
 
 impl Checker {
@@ -404,6 +406,7 @@ impl Checker {
             dyn_coercions: HashMap::new(),
             dyn_dispatch: HashSet::new(),
             dyn_upcasts: HashMap::new(),
+            type_defs: HashMap::new(),
             gather: false,
             index: SemanticIndex::default(),
             fn_defs: HashMap::new(),
@@ -411,6 +414,19 @@ impl Checker {
     }
 
     fn check_program(&mut self, program: &Program) -> Result<(), TypeError> {
+        // M10.2f: posición de declaración de cada tipo (struct/enum/trait), para hover/ir-a-definición
+        // de nombres de tipo. Barato; solo se consulta si `gather`.
+        if self.gather {
+            for s in &program.structs {
+                self.type_defs.entry(s.name.clone()).or_insert((s.line, s.col));
+            }
+            for e in &program.enums {
+                self.type_defs.entry(e.name.clone()).or_insert((e.line, e.col));
+            }
+            for t in &program.traits {
+                self.type_defs.entry(t.name.clone()).or_insert((t.line, t.col));
+            }
+        }
         // --- Pre-pasada: nombres de los tipos nominales (enum y struct) ---
         // Los nombres de enum se necesitan antes de normalizar cualquier tipo, para
         // reclasificar `Struct(nombre)`→`Enum(nombre)` (`resolve_type`).
@@ -1187,6 +1203,11 @@ impl Checker {
             Some(d) => d.clone(), // clonamos para soltar el préstamo de self
             None => return Err(self.err(line, col, format!("struct '{}' no declarado", name))),
         };
+        // M10.2f: hover/def del nombre de tipo en el literal `Nombre { … }`.
+        if self.gather {
+            let def = self.type_defs.get(name).copied();
+            self.record_named(line, col, name.chars().count(), format!("struct {}", name), def);
+        }
         let tparams = self.struct_tparams.get(name).cloned().unwrap_or_default();
         // No debe haber campos desconocidos.
         for (fname, fexpr) in fields {
@@ -1247,6 +1268,11 @@ impl Checker {
             },
             None => return Err(self.err(line, col, format!("enum '{}' no declarado", enum_name))),
         };
+        // M10.2f: hover/def del nombre de enum en `Enum.Variante(...)`.
+        if self.gather {
+            let def = self.type_defs.get(enum_name).copied();
+            self.record_named(line, col, enum_name.chars().count(), format!("enum {}", enum_name), def);
+        }
         let tparams = self.enum_tparams.get(enum_name).cloned().unwrap_or_default();
         if args.len() != payload.len() {
             return Err(self.err(line, col, format!(
@@ -2334,6 +2360,19 @@ impl Checker {
         }
         let len = name.chars().count();
         self.index.hovers.push(HoverEntry { line, col, len, text: format!("{}: {}", name, ty) });
+        if let Some((def_line, def_col)) = def {
+            self.index.defs.push(DefEntry { line, col, len, def_line, def_col });
+        }
+    }
+
+    /// Registra el índice semántico del uso de un **nombre de tipo o método** (M10.2f): el texto a
+    /// mostrar en hover y, si se conoce, la posición de su declaración (ir-a-definición). Como
+    /// `record_ident`, no hace nada salvo en modo `gather`.
+    fn record_named(&mut self, line: usize, col: usize, len: usize, text: String, def: Option<(usize, usize)>) {
+        if !self.gather {
+            return;
+        }
+        self.index.hovers.push(HoverEntry { line, col, len, text });
         if let Some((def_line, def_col)) = def {
             self.index.defs.push(DefEntry { line, col, len, def_line, def_col });
         }
@@ -4592,6 +4631,25 @@ fn main() -> int {
         // Y registra su definición (el `let` de la línea 2).
         let d = idx.defs.iter().find(|d| d.line == 3 && d.col == 3).expect("def de x");
         assert_eq!((d.def_line, d.def_col), (2, 3));
+    }
+
+    #[test]
+    fn indice_semantico_hover_de_tipo() {
+        // M10.2f: el índice registra el uso de un nombre de tipo en un literal de struct y la
+        // construcción de un enum, con su posición de declaración (ir-a-definición).
+        let src = "struct Punto { x: int }\nenum Color { Rojo }\nfn main() -> int {\n  let p = Punto { x: 1 };\n  let c = Color.Rojo;\n  p.x\n}";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        let idx = semantic_index(&mut prog);
+        // Hover del nombre `Punto` en el literal (línea 4, col 11).
+        let h = idx.hovers.iter().find(|h| h.line == 4 && h.col == 11).expect("hover de Punto");
+        assert_eq!(h.text, "struct Punto");
+        // Def → la declaración del struct (línea 1).
+        let d = idx.defs.iter().find(|d| d.line == 4 && d.col == 11).expect("def de Punto");
+        assert_eq!(d.def_line, 1);
+        // Hover del enum `Color` en la construcción (línea 5).
+        let he = idx.hovers.iter().find(|h| h.line == 5 && h.text == "enum Color").expect("hover de Color");
+        assert_eq!(he.line, 5);
     }
 
     #[test]

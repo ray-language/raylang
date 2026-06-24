@@ -105,12 +105,32 @@ lo ya escrito—; los nombres sintéticos (manglados con `#`, namespacados con `
 ocultan. Es deliberadamente simple: una completion consciente del ámbito exigiría rastrear los
 ámbitos por posición, que se deja para más adelante.
 
+## Tipos, signature help y completion por ámbito (M10.2f)
+
+El último escalón del LSP cierra tres piezas que estaban diferidas:
+
+- **Hover/def de nombres de tipo.** El índice gana `type_defs` (la posición de cada `struct`/`enum`/
+  `trait`) y registra hover+def donde un tipo se **nombra en una expresión**: el literal de struct
+  (`Punto { … }`) y la construcción de enum (`Color.Rojo`). Esas posiciones *son* el nombre del tipo.
+  El **nombre de método** (`x.metodo()`) sigue fuera: comparte `(línea, col)` con su receptor (por el
+  *lowering* de UFCS) y, sin *spans*, no tenemos su posición propia —misma degradación honesta que el
+  `let`—.
+- **Signature help.** Al escribir los argumentos de una llamada, el servidor muestra la firma de la
+  función y resalta el parámetro activo. La pieza astuta: la firma se extrae **textualmente** de la
+  fuente (`find_fn_signature`), no del AST. ¿Por qué? Porque mientras tecleas `suma(1, )` el archivo
+  **no parsea** —es el estado normal de una llamada a medio escribir—; un escaneo de texto solo
+  necesita que la *declaración* `fn suma(...) -> ...` esté bien formada. El parámetro activo se cuenta
+  escaneando los paréntesis hacia atrás desde el cursor.
+- **Completion por ámbito.** Además de los símbolos del archivo, ahora se ofrecen los **parámetros y
+  locales** (`let`/`var`) de la función que contiene el cursor. Sin *spans*, el alcance es la
+  **función** entera, no el bloque exacto (otra degradación honesta).
+
 ## Alcance
 
-Hover y definición sobre **identificadores** (variables, parámetros, funciones); **find-references**
-y **rename** sobre los mismos; **completion** de símbolos del archivo + builtins + palabras clave.
-Quedan fuera los **métodos** y **nombres de tipo** en hover/def (que no llegan como `Ident`), la
-completion **por ámbito** y el *signature help*.
+Hover y definición sobre **identificadores** y **nombres de tipo**; **find-references** y **rename**
+sobre identificadores; **completion** de símbolos del archivo + builtins + palabras clave + **locales
+por ámbito**; **signature help** de funciones. Quedan fuera el hover/def del **nombre de método**
+(sin posición propia) y la completion consciente de **bloques** anidados.
 
 La lección de M10.2b es la contracara de la del REPL. Allí *evitamos* exponer los tipos del
 checker porque no hacía falta; aquí, cuando sí hizo falta, abrirlo costó poco: un flag, un índice

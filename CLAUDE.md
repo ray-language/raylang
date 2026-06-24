@@ -460,6 +460,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     para strings; out-of-bounds = error de runtime como en arreglos; `s[i] = c` **prohibido** en el
     checker, strings inmutables) y **`chars(s) -> [char]`** (builtin, opcode `Chars`, asigna heap →
     estrés del GC). Oráculo `char_indexar_y_chars_oraculo`. **M11.4c COMPLETO.** **M11.4 COMPLETO.**
+- **M10.2f COMPLETO** (335 tests lib + 11 en `tests/lsp_cli.rs`): **LSP avanzado** — hover/def de
+  **tipos**, **signature help** y **completion por ámbito**. (a) *Tipos*: el índice semántico
+  (`semantic_index`/`checker.rs`) gana `type_defs` (posición de cada struct/enum/trait) y registra
+  hover+def en los literales de struct (`Nombre { … }`) y la construcción de enum (`Color.Rojo`) vía
+  `record_named` —esas posiciones SÍ son el nombre del tipo, a diferencia del nombre de método, que
+  comparte `(línea,col)` con el receptor (sin spans) y queda **diferido**—. (b) *Signature help*
+  (`lsp.rs`): `signatureHelpProvider` (trigger `(`/`,`); `enclosing_call` halla la función en curso y
+  el param activo escaneando paréntesis hacia atrás; la firma se extrae **textualmente** de la fuente
+  (`find_fn_signature`/`split_top_commas`) → robusto con el documento a medio escribir (el parse del
+  archivo falla mientras tecleas args). (c) *Completion por ámbito*: `scope_locals` añade params y
+  `let`/`var` de la función envolvente (kind Variable); sin spans, el alcance es la función, no el
+  bloque (degradación honesta). **Cliente LSP, cero cambios de runtime/semántica.**
 - **M11.2 COMPLETO** (297 tests lib + `tests/io_cli.rs`): **I/O y API de runtime** (DESIGN §20.2).
   `main` sigue sin parámetros (§0); el exterior se toca por **builtins**. **La I/O falible devuelve
   `Option`** (norte "errores como valores"). **Patrón** (como M7.3): primitivos builtin que devuelven

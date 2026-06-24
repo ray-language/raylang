@@ -100,6 +100,11 @@ fn serve<R: BufRead, W: Write>(reader: &mut R, out: &mut W) {
                 let id = msg.get("id").cloned().unwrap_or(Json::Null);
                 send(out, &resultado(id, completion_result(&msg, &docs)));
             }
+            // M10.2f: signature help — la firma de la función cuya llamada se está escribiendo.
+            "textDocument/signatureHelp" => {
+                let id = msg.get("id").cloned().unwrap_or(Json::Null);
+                send(out, &resultado(id, signature_help_result(&msg, &docs)));
+            }
             // Petición desconocida (lleva `id`) → error JSON-RPC. Notificación → se ignora.
             _ => {
                 if let Some(id) = msg.get("id") {
@@ -392,12 +397,223 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     ] {
         items.push((kw.to_string(), 14));
     }
+    // M10.2f: completion **por ámbito** — los parámetros y locales (let/var) de la función que
+    // contiene el cursor, declarados en o antes de su línea. Kind 6 = Variable. Sin spans no se
+    // distinguen bloques anidados; basta el alcance de la función (degradación honesta).
+    if let Some((_, line0, _)) = pos_params(msg) {
+        for local in scope_locals(&program, line0 + 1) {
+            if visible(&local) { items.push((local, 6)); }
+        }
+    }
     items.sort();
     items.dedup();
     let lista: Vec<Json> = items.into_iter()
         .map(|(label, kind)| obj(vec![("label", Json::Str(label)), ("kind", num(kind))]))
         .collect();
     Json::Arr(lista)
+}
+
+/// Los nombres en ámbito local (params + `let`/`var`) de la función que contiene `cursor_line`
+/// (1-basado), declarados en o antes de esa línea (M10.2f). Sin spans, el alcance es la **función**
+/// envolvente (la de mayor línea de inicio que no la supera), no el bloque exacto: degradación honesta.
+fn scope_locals(program: &crate::ast::Program, cursor_line: usize) -> Vec<String> {
+    let Some(f) = program.functions.iter()
+        .filter(|f| f.line <= cursor_line && !f.name.contains('#') && !f.name.contains("::"))
+        .max_by_key(|f| f.line)
+    else {
+        return vec![];
+    };
+    let mut out: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
+    collect_lets(&f.body, cursor_line, &mut out);
+    out
+}
+
+/// Recolecta los nombres de `let`/`var` de un bloque (recursivo en bloques anidados) cuya línea no
+/// supere `cursor_line`.
+fn collect_lets(block: &crate::ast::Block, cursor_line: usize, out: &mut Vec<String>) {
+    use crate::ast::{ExprKind, StmtKind};
+    fn visit_expr(e: &crate::ast::Expr, cursor_line: usize, out: &mut Vec<String>) {
+        match &e.kind {
+            ExprKind::If { then_branch, else_branch, .. } => {
+                collect_lets(then_branch, cursor_line, out);
+                if let Some(eb) = else_branch { visit_expr(eb, cursor_line, out); }
+            }
+            ExprKind::While { body, .. } => collect_lets(body, cursor_line, out),
+            ExprKind::Block(b) => collect_lets(b, cursor_line, out),
+            ExprKind::Match { arms, .. } => {
+                for arm in arms { visit_expr(&arm.body, cursor_line, out); }
+            }
+            _ => {}
+        }
+    }
+    for stmt in &block.statements {
+        if let StmtKind::Let { name, value, .. } = &stmt.kind {
+            if stmt.line <= cursor_line { out.push(name.clone()); }
+            visit_expr(value, cursor_line, out);
+        } else if let StmtKind::Expr(e) = &stmt.kind {
+            visit_expr(e, cursor_line, out);
+        }
+    }
+    if let Some(t) = &block.tail {
+        visit_expr(t, cursor_line, out);
+    }
+}
+
+/// El `result` de `textDocument/signatureHelp` (M10.2f): la firma de la función cuya llamada se está
+/// escribiendo bajo el cursor, con el parámetro activo resaltado. `null` si no hay una llamada en
+/// curso o la función no se conoce.
+fn signature_help_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+    let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
+    let Some(src) = docs.get(&uri) else { return Json::Null };
+    // 1. Hallar la llamada en curso: el nombre de función y cuántas comas la preceden (param activo).
+    let Some((name, activo)) = enclosing_call(src, line0, char0) else { return Json::Null };
+    // 2. Extraer la firma **textualmente** de la fuente. Es robusto ante el documento a medio
+    //    escribir (mientras tecleas los argumentos, el parse del archivo falla); solo necesita que
+    //    la *declaración* `fn nombre(...) -> ...` esté bien formada.
+    let Some((params, ret)) = find_fn_signature(src, &name) else { return Json::Null };
+    // 3. Construir el label `fn nombre(p: T, …) -> R` y la lista de parámetros (para resaltar).
+    let label = format!("fn {}({}) -> {}", name, params.join(", "), ret);
+    let parametros: Vec<Json> = params.iter().map(|p| obj(vec![("label", Json::Str(p.clone()))])).collect();
+    let activo = activo.min(params.len().saturating_sub(1));
+    let firma = obj(vec![
+        ("label", Json::Str(label)),
+        ("parameters", Json::Arr(parametros)),
+    ]);
+    obj(vec![
+        ("signatures", Json::Arr(vec![firma])),
+        ("activeSignature", num(0)),
+        ("activeParameter", num(activo as i64)),
+    ])
+}
+
+/// Extrae la firma de `fn <name>` de la fuente, textualmente (M10.2f): devuelve `(params, retorno)`
+/// donde `params` son las cadenas `nombre: Tipo` y `retorno` el tipo de retorno (`unit` si no hay
+/// `->`). Textual a propósito: funciona aunque el resto del archivo no parsee (el caso normal al
+/// escribir argumentos). Solo exige que la **declaración** esté bien formada.
+fn find_fn_signature(src: &str, name: &str) -> Option<(Vec<String>, String)> {
+    let cs: Vec<char> = src.chars().collect();
+    let needle: Vec<char> = format!("fn {}", name).chars().collect();
+    let mut i = 0;
+    while i + needle.len() <= cs.len() {
+        if cs[i..i + needle.len()] != needle[..] {
+            i += 1;
+            continue;
+        }
+        let mut j = i + needle.len();
+        // Frontera de palabra: el char tras el nombre no debe ser de identificador (evita `sumar`).
+        if cs.get(j).is_some_and(|c| is_ident_char(*c)) {
+            i += 1;
+            continue;
+        }
+        // Saltar genéricos `<…>` y espacios hasta el `(` de los parámetros.
+        while j < cs.len() && cs[j] != '(' && cs[j] != '{' {
+            j += 1;
+        }
+        if cs.get(j) != Some(&'(') {
+            i += 1;
+            continue;
+        }
+        // Leer los parámetros entre paréntesis equilibrados.
+        let pstart = j;
+        let mut depth = 0;
+        while j < cs.len() {
+            match cs[j] {
+                '(' => depth += 1,
+                ')' => { depth -= 1; if depth == 0 { break; } }
+                _ => {}
+            }
+            j += 1;
+        }
+        if cs.get(j) != Some(&')') {
+            return None;
+        }
+        let params_text: String = cs[pstart + 1..j].iter().collect();
+        // Retorno: desde tras `)` hasta `{` (o fin de línea).
+        let mut k = j + 1;
+        let rstart = k;
+        while k < cs.len() && cs[k] != '{' && cs[k] != '\n' {
+            k += 1;
+        }
+        let ret_text: String = cs[rstart..k].iter().collect();
+        let ret = ret_text.trim().trim_start_matches("->").trim().to_string();
+        let params = split_top_commas(&params_text);
+        return Some((params, if ret.is_empty() { "unit".to_string() } else { ret }));
+    }
+    None
+}
+
+/// Parte una lista de parámetros por comas de **nivel superior** (ignora las anidadas en `<…>` o
+/// `(…)`, p. ej. `f: fn(int) -> int`). Recorta los espacios; descarta los vacíos.
+fn split_top_commas(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0i32, 0usize);
+    let cs: Vec<char> = s.chars().collect();
+    for (i, c) in cs.iter().enumerate() {
+        match c {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                let p: String = cs[start..i].iter().collect();
+                if !p.trim().is_empty() { out.push(p.trim().to_string()); }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let p: String = cs[start..].iter().collect();
+    if !p.trim().is_empty() { out.push(p.trim().to_string()); }
+    out
+}
+
+/// Halla la llamada que se está escribiendo en `(line0, char0)` (0-basado): el nombre de la función
+/// y el nº de comas de nivel superior antes del cursor (el índice del parámetro activo). Escanea el
+/// texto hasta el cursor hacia atrás contando paréntesis: el primer `(` sin cerrar abre la llamada
+/// actual, y el identificador inmediatamente anterior es su nombre.
+fn enclosing_call(src: &str, line0: usize, char0: usize) -> Option<(String, usize)> {
+    // Prefijo: todo el texto desde el inicio hasta el cursor.
+    let mut prefijo = String::new();
+    for (i, linea) in src.lines().enumerate() {
+        use std::cmp::Ordering::*;
+        match i.cmp(&line0) {
+            Less => { prefijo.push_str(linea); prefijo.push('\n'); }
+            Equal => { prefijo.extend(linea.chars().take(char0)); break; }
+            Greater => break,
+        }
+    }
+    let cs: Vec<char> = prefijo.chars().collect();
+    let (mut depth, mut comas, mut i) = (0i32, 0usize, cs.len());
+    while i > 0 {
+        i -= 1;
+        match cs[i] {
+            ')' => depth += 1,
+            '(' if depth == 0 => return ident_before(&cs, i).map(|n| (n, comas)),
+            '(' => depth -= 1,
+            ',' if depth == 0 => comas += 1,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// El identificador que termina justo antes del índice `i` (saltando espacios). `None` si no lo hay.
+fn ident_before(cs: &[char], i: usize) -> Option<String> {
+    let mut j = i;
+    while j > 0 && cs[j - 1].is_whitespace() {
+        j -= 1;
+    }
+    let fin = j;
+    while j > 0 && is_ident_char(cs[j - 1]) {
+        j -= 1;
+    }
+    if j == fin {
+        return None;
+    }
+    let nombre: String = cs[j..fin].iter().collect();
+    // Un identificador no empieza por dígito (descarta restos como `42`).
+    if nombre.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(nombre)
 }
 
 /// Lee un `Json::Num` como `usize` (las posiciones LSP son enteros).
@@ -453,6 +669,10 @@ fn respuesta_initialize(id: Json) -> Json {
         ("renameProvider", Json::Bool(true)),
         // Cluster 4: completion (objeto vacío = sin resolveProvider ni triggerCharacters).
         ("completionProvider", obj(vec![])),
+        // M10.2f: signature help — la firma de la función mientras se escriben los argumentos.
+        ("signatureHelpProvider", obj(vec![
+            ("triggerCharacters", Json::Arr(vec![text("("), text(",")])),
+        ])),
     ]);
     let result = obj(vec![
         ("capabilities", capabilities),

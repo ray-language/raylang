@@ -2501,3 +2501,17 @@ Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el
   inferido; `type_eq`/`type_str` (= `Display`) propios. Driver `selfhost/check_dump.ray`. Oráculo
   (`tests/selfhost_checker.rs`): 8 válidos + 20 errores de tipo + 4 ejemplos reales (fib/fizzbuzz/gcd/
   primes), veredicto byte-idéntico a Rust. Diferido: M14.3b (datos), c (genéricos), d (traits).
+- **M14.3b COMPLETO** — datos (monomórficos). `selfhost/checker.ray` gana arreglos (literal `[T]`,
+  índice `a[i]` con string→char, `len`/`push`), structs (definición + tablas `structs`/`enums` con
+  campos/variantes ya resueltos en `register_types`, literal `Nombre { c: v }`, acceso a campo,
+  asignación a campo/índice sin exigir `var`) y enums (construcción `Enum.Variante(args)` —reconocida
+  **en el sitio** comprobando si el nombre es un enum, sin reescribir el AST a `EnumLit` como hace
+  Rust—, `match` con patrones `_`/binding/variante, **exhaustividad**, brazos convergentes, tipos
+  recursivos). El `Type` del parser **dobla** para struct y enum (`TNamed`); se distinguen por en qué
+  tabla está el nombre. Chequeo bidireccional **mínimo** (`check_expr_expected`): el tipo esperado fija
+  el `[]` vacío (`let xs: [int] = []`) y se propaga al cuerpo de función (`check_block_expected`) — el
+  bidireccional completo (`None`, construcciones indeterminadas) llega en M14.3c. `ensure_type` ahora
+  recibe `c` (un `TNamed` debe ser un struct/enum registrado). Oráculo: 8 programas de datos válidos +
+  31 errores (struct/arreglo/enum/match, incl. tipos duplicados que el checker detecta directamente) +
+  9 ejemplos reales (añade structs/match_figuras/enums/arrays/matriz). UFCS/métodos, `Map` en el
+  checker, genéricos y `dyn` siguen diferidos a M14.3c/d.

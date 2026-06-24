@@ -682,6 +682,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     como tipo inferido; `type_eq`/`type_str`(=Display) propios. Driver `selfhost/check_dump.ray`.
     Oráculo: 8 válidos + 20 errores + 4 ejemplos reales (fib/fizzbuzz/gcd/primes). Diferido: M14.3b
     (datos), c (genéricos), d (traits). DESIGN §23.4.
+  - **M14.3b COMPLETO** (347 lib + 5 en `tests/selfhost_checker.rs`): **checker auto-alojado — datos**
+    (monomórficos). Arreglos (literal `[T]`, índice `a[i]` con string→char, `len`/`push`), structs
+    (definición + tablas `structs`/`enums` con campos/variantes resueltos en `register_types`, literal
+    `Nombre { c: v }`, acceso a campo, asignación a campo/índice sin exigir `var`) y enums (construcción
+    `Enum.Variante(args)` reconocida **en el sitio** —sin reescribir el AST a `EnumLit` como Rust—,
+    `match` con patrones `_`/binding/variante, **exhaustividad**, brazos convergentes, tipos recursivos).
+    El `Type` del parser **dobla** para struct y enum (`TNamed`); se distinguen por la tabla. Chequeo
+    bidireccional **mínimo** (`check_expr_expected`): el esperado fija el `[]` vacío y se propaga al
+    cuerpo de función (`check_block_expected`); el bidireccional completo (`None`) → M14.3c. `ensure_type`
+    pasa a recibir `c`. Oráculo: 8 datos válidos + 31 errores + 9 ejemplos reales (añade structs/
+    match_figuras/enums/arrays/matriz). Diferido: UFCS/métodos, `Map`, genéricos (M14.3c), traits/dyn
+    (M14.3d). DESIGN §23.4.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

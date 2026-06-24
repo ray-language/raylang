@@ -10,7 +10,8 @@
 //! `canonical`.
 //!
 //! Cobertura M14.3a: núcleo monomórfico (operadores, variables, llamadas, if/while/return, builtin
-//! print). El corpus evita estructuras/enums/genéricos/traits (→ M14.3b–d).
+//! print). M14.3b: datos (arreglos `[T]`/índice/`len`/`push`, structs def/literal/campo/asignación,
+//! enums construcción/`match`/exhaustividad/patrones). El corpus evita genéricos/traits (→ M14.3c–d).
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -108,10 +109,66 @@ fn errores_de_tipo() {
     comparar("fn main() -> Foo { 0 }", "sce_unknown_type.ray");
 }
 
+#[test]
+fn datos_validos() {
+    // Structs: definición, literal, acceso a campo, asignación a campo (incl. anidada).
+    comparar("struct P { x: int, y: int } fn area(p: P) -> int { p.x + p.y } fn main() -> int { let p = P { x: 1, y: 2 }; area(p) }", "scd_struct.ray");
+    comparar("struct P { x: int } fn main() -> int { var p = P { x: 1 }; p.x = 9; p.x }", "scd_fassign.ray");
+    comparar("struct Q { p: int } struct R { q: Q } fn main() -> int { var r = R { q: Q { p: 1 } }; r.q.p = 5; r.q.p }", "scd_nested.ray");
+    // Arreglos: literal anotado vacío, push, len, índice y asignación por índice.
+    comparar("fn main() -> int { var xs: [int] = []; push(xs, 3); xs[0] = 4; len(xs) }", "scd_arr.ray");
+    comparar("fn main() -> int { let m: [[int]] = [[1, 2], [3, 4]]; m[1][0] }", "scd_matriz.ray");
+    // Enums: construcción con/sin payload, match con bindings, comodín, catch-all.
+    comparar("enum E { A, B(int) } fn f(e: E) -> int { match (e) { E.A => 0, E.B(n) => n } } fn main() -> int { f(E.B(7)) }", "scd_match.ray");
+    comparar("enum E { A, B, C } fn f(e: E) -> int { match (e) { E.A => 1, _ => 0 } } fn main() -> int { f(E.C) }", "scd_catchall.ray");
+    comparar("enum F { C(float), R(float, float) } fn area(f: F) -> float { match (f) { F.C(r) => r * r, F.R(w, h) => w * h } } fn main() { print(area(F.C(2.0))); }", "scd_payload.ray");
+}
+
+#[test]
+fn errores_de_datos() {
+    // Structs.
+    comparar("fn main() -> int { let p = Q { x: 1 }; 0 }", "scde_unk_struct.ray");
+    comparar("struct P { x: int, y: int } fn main() -> int { let p = P { x: 1 }; 0 }", "scde_missing.ray");
+    comparar("struct P { x: int, y: int } fn main() -> int { let p = P { x: 1, z: 2, y: 3 }; 0 }", "scde_unkfield.ray");
+    comparar("struct P { x: int, y: int } fn main() -> int { let p = P { x: 1, x: 2, y: 3 }; 0 }", "scde_repfield.ray");
+    comparar("struct P { x: int, y: int } fn main() -> int { let p = P { x: true, y: 2 }; 0 }", "scde_fieldty.ray");
+    comparar("fn main() -> int { let n = 3; n.x }", "scde_field_nonst.ray");
+    comparar("struct P { x: int } fn main() -> int { let p = P { x: 1 }; p.z }", "scde_field_unk.ray");
+    comparar("struct P { x: int } fn main() -> int { var p = P { x: 1 }; p.x = true; 0 }", "scde_fassign_ty.ray");
+    // Arreglos.
+    comparar("fn main() -> int { let xs = []; 0 }", "scde_empty.ray");
+    comparar("fn main() -> int { let xs = [1, true]; 0 }", "scde_arrty.ray");
+    comparar("fn main() -> int { let xs: [int] = [1]; xs[true] }", "scde_idxty.ray");
+    comparar("fn main() -> int { let n = 3; n[0] }", "scde_idx_nonarr.ray");
+    comparar("fn main() -> int { var xs: [int] = [1]; xs[0] = true; 0 }", "scde_iassign_ty.ray");
+    comparar("fn main() -> int { var xs: [int] = []; push(xs, true); 0 }", "scde_push_ty.ray");
+    comparar("fn main() -> int { push(3, 1); 0 }", "scde_push_nonarr.ray");
+    comparar("fn main() -> int { len(3) }", "scde_len_nonarr.ray");
+    // Enums.
+    comparar("enum E { A } fn main() -> int { let x = E.C; 0 }", "scde_unkvariant.ray");
+    comparar("enum F { C(float) } fn main() -> int { let x = F.C(); 0 }", "scde_enum_arity.ray");
+    comparar("enum F { C(float) } fn main() -> int { let x = F.C(true); 0 }", "scde_payty.ray");
+    // match.
+    comparar("fn main() -> int { match (3) { _ => 0 } }", "scde_match_nonen.ray");
+    comparar("enum E { A, B } fn main() -> int { match (E.A) { E.A => 1 } }", "scde_nonexh.ray");
+    comparar("enum E { A, B } fn main() -> int { match (E.A) { _ => 1, E.A => 2 } }", "scde_unreach.ray");
+    comparar("enum E { A, B } fn main() -> int { match (E.A) { E.A => 1, E.A => 2, E.B => 3 } }", "scde_covered.ray");
+    comparar("enum F { C(float) } fn main() -> int { match (F.C(1.0)) { F.C(a, b) => 0 } }", "scde_pat_arity.ray");
+    comparar("enum E { A, B } fn main() -> int { match (E.A) { E.A => 1, E.B => true } }", "scde_arm_ty.ray");
+    comparar("enum E { A } enum G { Z } fn main() -> int { match (E.A) { G.Z => 0 } }", "scde_pat_enum.ray");
+    // Definiciones de tipos (el checker las detecta directamente; en el pipeline completo lo haría el loader).
+    comparar("enum E { A } enum E { B } fn main() -> int { 0 }", "scde_dup_enum.ray");
+    comparar("struct P { x: int } struct P { y: int } fn main() -> int { 0 }", "scde_dup_struct.ray");
+    comparar("enum E { A } struct E { x: int } fn main() -> int { 0 }", "scde_struct_enum.ray");
+    comparar("enum E { A, A } fn main() -> int { 0 }", "scde_repvariant.ray");
+}
+
 /// El test fuerte: los ejemplos reales monomórficos deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
 fn ejemplos_reales_validos() {
-    let archivos = ["examples/fib.ray", "examples/fizzbuzz.ray", "examples/gcd.ray", "examples/primes.ray"];
+    let archivos = ["examples/fib.ray", "examples/fizzbuzz.ray", "examples/gcd.ray", "examples/primes.ray",
+        "examples/structs.ray", "examples/match_figuras.ray", "examples/enums.ray", "examples/arrays.ray",
+        "examples/matriz.ray"];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);

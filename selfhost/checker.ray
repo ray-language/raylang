@@ -6,14 +6,21 @@
 // contra el checker de Rust como ORÁCULO (ver `tests/selfhost_checker.rs`): misma fuente por ambos
 // pipelines, mismo veredicto.
 //
-// M14.3a (esta versión): NÚCLEO MONOMÓRFICO. Dos pasadas (firmas → cuerpos), pila de ámbitos,
-// literales, operadores, variables (let/var, mutabilidad, ámbito), llamadas (aridad + tipos),
-// if/while/block/return, anotaciones de tipo, divergencia, builtin print. Cubre fib/fizzbuzz.
-// Diferido: datos (arrays/structs/enums/match, M14.3b), genéricos (M14.3c), traits (M14.3d).
+// M14.3a: NÚCLEO MONOMÓRFICO. Dos pasadas (firmas → cuerpos), pila de ámbitos, literales,
+// operadores, variables (let/var, mutabilidad, ámbito), llamadas (aridad + tipos), if/while/block/
+// return, anotaciones de tipo, divergencia, builtin print. Cubre fib/fizzbuzz.
 //
-// El `Type` del parser DOBLA como representación del tipo inferido. Los ámbitos usan `Map<K,V>`.
+// M14.3b (esta versión): DATOS (monomórficos). Arreglos (`[T]`, literal, índice, `len`/`push`),
+// structs (definición, literal `Nombre { c: v }`, acceso a campo, asignación a campo/índice), enums
+// (construcción `Enum.Variante(args)` —reconocida en el sitio, sin reescribir el AST—, `match` con
+// patrones + exhaustividad, tipos recursivos). Chequeo bidireccional MÍNIMO: el tipo esperado fija el
+// `[]` vacío (`let xs: [int] = []`). Diferido: genéricos (M14.3c), traits/dyn (M14.3d).
+//
+// El `Type` del parser DOBLA como representación del tipo inferido (un struct y un enum son ambos
+// `TNamed(nombre, args)`; se distinguen por en qué tabla —`structs`/`enums`— está el nombre). Los
+// ámbitos y las tablas de tipos usan `Map<K,V>`.
 
-from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp;
+from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind;
 
 // Error de tipos con ubicación (espejo de `TypeError` en Rust).
 pub struct TypeError { msg: string, line: int, col: int }
@@ -24,9 +31,18 @@ struct VarInfo { ty: Type, mutable: bool, dline: int, dcol: int }
 // Firma de una función (M14.3a: sin genéricos/bounds, que llegan en M14.3c/d).
 struct FnSig { params: [Type], ret: Type }
 
-// El estado del checker: firmas de funciones, pila de ámbitos y el retorno de la función en curso.
+// Una variable ligada por un patrón de `match`: su nombre y el tipo que recibe.
+struct Bind { name: string, ty: Type }
+
+// Estado mutable de la comprobación de un `match`: variantes ya cubiertas y si hay catch-all.
+struct MatchState { covered: [string], catchall: bool }
+
+// El estado del checker: firmas de funciones, tablas de tipos nominales (structs/enums, con los
+// campos/variantes ya resueltos), pila de ámbitos y el retorno de la función en curso.
 struct Checker {
     funcs: Map<string, FnSig>,
+    structs: Map<string, [FieldDef]>,
+    enums: Map<string, [VariantDef]>,
     scopes: [Map<string, VarInfo>],
     current_return: Type,
 }
@@ -122,7 +138,7 @@ fn join_strs(xs: [string]) -> string {
     s
 }
 
-// ¿`print`/`eprint` saben imprimir este tipo? (M14.3a: primitivos + arreglo + función.)
+// ¿`print`/`eprint` saben imprimir este tipo? (primitivos + arreglo + función + struct/enum.)
 fn is_printable(t: Type) -> bool {
     match (t) {
         Type.TInt => true,
@@ -132,6 +148,7 @@ fn is_printable(t: Type) -> bool {
         Type.TChar => true,
         Type.TArray(_) => true,
         Type.TFn(_, _) => true,
+        Type.TNamed(_, _) => true,
         _ => false,
     }
 }
@@ -185,8 +202,9 @@ fn bin_op_str(op: BinOp) -> string {
 // Resolución y validación de tipos (M14.3a: monomórfico)
 // =====================================================================
 
-// Normaliza un tipo de anotación. En M14.3a solo recorre arreglos/funciones (no hay enums/genéricos
-// que reclasificar); un `TNamed` se deja tal cual y `ensure_type` lo rechaza si no es válido.
+// Normaliza un tipo de anotación. Monomórfico: no reclasifica nombres (struct y enum comparten
+// `TNamed`); solo recorre arreglos/funciones/args para resolver recursivamente. (En Rust aquí se
+// reclasifica `Struct`→`Enum`/`Var`; aquí ese trabajo no existe porque el `Type` es unificado.)
 fn resolve_type(t: Type) -> Type {
     match (t) {
         Type.TArray(e) => Type.TArray(resolve_type(e)),
@@ -196,24 +214,64 @@ fn resolve_type(t: Type) -> Type {
             while (i < len(ps)) { push(rps, resolve_type(ps[i])); i = i + 1; }
             Type.TFn(rps, resolve_type(r))
         },
+        Type.TNamed(n, args) => {
+            var ra: [Type] = [];
+            var i = 0;
+            while (i < len(args)) { push(ra, resolve_type(args[i])); i = i + 1; }
+            Type.TNamed(n, ra)
+        },
         _ => t,
     }
 }
 
-// Verifica que un tipo es válido. En M14.3a no hay tipos nominales declarables → un `TNamed` es
-// siempre un tipo desconocido (mismo mensaje que Rust ante un nombre no declarado).
-fn ensure_type(t: Type, line: int, col: int) -> Result<int, TypeError> {
+// Verifica que un tipo es válido. Un `TNamed` debe nombrar un struct o un enum registrado (M14.3b);
+// si no, es un tipo desconocido (mismo mensaje que Rust). Genéricos (aridad de args, params de tipo)
+// y `dyn` quedan diferidos a M14.3c/d.
+fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeError> {
     match (t) {
-        Type.TArray(e) => ensure_type(e, line, col),
+        Type.TArray(e) => ensure_type(c, e, line, col),
         Type.TFn(ps, r) => {
             var i = 0;
-            while (i < len(ps)) { ensure_type(ps[i], line, col)?; i = i + 1; }
-            ensure_type(r, line, col)
+            while (i < len(ps)) { ensure_type(c, ps[i], line, col)?; i = i + 1; }
+            ensure_type(c, r, line, col)
         },
-        Type.TNamed(name, _) => Result.Err(terr(line, col, "tipo desconocido: '" + name + "' no declarado")),
+        Type.TNamed(name, args) => {
+            if (contains_key(c.structs, name) || contains_key(c.enums, name)) {
+                var i = 0;
+                while (i < len(args)) { ensure_type(c, args[i], line, col)?; i = i + 1; }
+                Result.Ok(0)
+            } else {
+                Result.Err(terr(line, col, "tipo desconocido: '" + name + "' no declarado"))
+            }
+        },
         Type.TDyn(_) => Result.Err(terr(line, col, "'dyn' aún no soportado por el checker auto-alojado")),
         _ => Result.Ok(0),
     }
+}
+
+// ¿`name` nombra un enum registrado? (Distingue construcción de enum de acceso a campo.)
+fn is_enum(c: Checker, name: string) -> bool { contains_key(c.enums, name) }
+
+// ¿`xs` contiene la cadena `s`?
+fn contains_str(xs: [string], s: string) -> bool {
+    var i = 0;
+    while (i < len(xs)) {
+        if (xs[i] == s) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Une cadenas con ", " (para la lista de variantes faltantes de un match no exhaustivo).
+fn join_comma(xs: [string]) -> string {
+    var s = "";
+    var i = 0;
+    while (i < len(xs)) {
+        if (i > 0) { s = s + ", "; }
+        s = s + xs[i];
+        i = i + 1;
+    }
+    s
 }
 
 // =====================================================================
@@ -303,8 +361,94 @@ fn expr_diverges(e: Expr) -> bool {
 // Las dos pasadas
 // =====================================================================
 
-// program = registrar firmas → exigir main → verificar cada cuerpo.
+// Registra los tipos nominales (structs/enums) con sus campos/variantes resueltos, y valida que los
+// tipos referenciados existan. Va ANTES de las firmas/cuerpos (que pueden nombrar estos tipos). Mismo
+// orden y mensajes que `check_program` en Rust: nombres de enum (duplicados) → structs (no pueden
+// reusar un nombre de enum, ni repetirse) → validar los tipos referenciados (todos ya registrados).
+fn register_types(c: Checker, prog: Program) -> Result<int, TypeError> {
+    // --- Registrar enums (variantes resueltas; duplicados de enum y de variante) ---
+    var ei = 0;
+    while (ei < len(prog.enums)) {
+        let e = prog.enums[ei];
+        if (contains_key(c.enums, e.name)) {
+            return Result.Err(terr(e.line, e.col, "enum '" + e.name + "' declarado dos veces"));
+        }
+        var seen: [string] = [];
+        var variants: [VariantDef] = [];
+        var vi = 0;
+        while (vi < len(e.variants)) {
+            let v = e.variants[vi];
+            if (contains_str(seen, v.name)) {
+                return Result.Err(terr(v.line, v.col, "variante '" + v.name + "' repetida en el enum '" + e.name + "'"));
+            }
+            push(seen, v.name);
+            var rp: [Type] = [];
+            var pi = 0;
+            while (pi < len(v.payload)) { push(rp, resolve_type(v.payload[pi])); pi = pi + 1; }
+            push(variants, VariantDef { name: v.name, payload: rp, line: v.line, col: v.col });
+            vi = vi + 1;
+        }
+        insert(c.enums, e.name, variants);
+        ei = ei + 1;
+    }
+    // --- Registrar structs (campos resueltos; no reusar nombre de enum, ni repetirse) ---
+    var si = 0;
+    while (si < len(prog.structs)) {
+        let s = prog.structs[si];
+        if (contains_key(c.enums, s.name)) {
+            return Result.Err(terr(s.line, s.col, "'" + s.name + "' ya es un enum; no puede ser también un struct"));
+        }
+        if (contains_key(c.structs, s.name)) {
+            return Result.Err(terr(s.line, s.col, "struct '" + s.name + "' declarado dos veces"));
+        }
+        var rf: [FieldDef] = [];
+        var fj = 0;
+        while (fj < len(s.fields)) {
+            let fd = s.fields[fj];
+            push(rf, FieldDef { name: fd.name, ty: resolve_type(fd.ty) });
+            fj = fj + 1;
+        }
+        insert(c.structs, s.name, rf);
+        si = si + 1;
+    }
+    // --- Validar los tipos referenciados (ya están todos registrados) ---
+    var ev = 0;
+    while (ev < len(prog.enums)) {
+        let e = prog.enums[ev];
+        let variants = enum_variants(c, e.name);
+        var vi = 0;
+        while (vi < len(variants)) {
+            let payload = variants[vi].payload;
+            var pi = 0;
+            while (pi < len(payload)) { ensure_type(c, payload[pi], e.line, e.col)?; pi = pi + 1; }
+            vi = vi + 1;
+        }
+        ev = ev + 1;
+    }
+    var sv = 0;
+    while (sv < len(prog.structs)) {
+        let s = prog.structs[sv];
+        let fields = struct_fields(c, s.name);
+        var fi = 0;
+        while (fi < len(fields)) { ensure_type(c, fields[fi].ty, s.line, s.col)?; fi = fi + 1; }
+        sv = sv + 1;
+    }
+    Result.Ok(0)
+}
+
+// Las variantes (resueltas) de un enum registrado (lista vacía si no está, no ocurre tras registrar).
+fn enum_variants(c: Checker, name: string) -> [VariantDef] {
+    match (get(c.enums, name)) { Option.Some(v) => v, Option.None => [] }
+}
+
+// Los campos (resueltos) de un struct registrado.
+fn struct_fields(c: Checker, name: string) -> [FieldDef] {
+    match (get(c.structs, name)) { Option.Some(f) => f, Option.None => [] }
+}
+
+// program = registrar tipos → registrar firmas → exigir main → verificar cada cuerpo.
 fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
+    register_types(c, prog)?;
     var fi = 0;
     while (fi < len(prog.funcs)) {
         let f = prog.funcs[fi];
@@ -341,10 +485,10 @@ fn check_function(c: Checker, f: Func) -> Result<int, TypeError> {
     var pi = 0;
     while (pi < len(f.params)) {
         let p = f.params[pi];
-        ensure_type(p.ty, p.line, p.col)?;
+        ensure_type(c, p.ty, p.line, p.col)?;
         pi = pi + 1;
     }
-    ensure_type(f.ret, f.line, f.col)?;
+    ensure_type(c, f.ret, f.line, f.col)?;
     check_fn_body(c, f.params, f.ret, f.body, f.line, f.col, "'" + f.name + "'")
 }
 
@@ -360,7 +504,8 @@ fn check_fn_body(c: Checker, params: [Param], ret_ann: Type, body: Block, line: 
         declare(c, p.name, resolve_type(p.ty), false, p.line, p.col);
         pi = pi + 1;
     }
-    let body_ty = check_block(c, body)?;
+    // El retorno declarado es el tipo esperado del valor del cuerpo (propaga a la expr final).
+    let body_ty = check_block_expected(c, body, ret)?;
     let diverges = block_diverges(body);
     var eline = line;
     var ecol = col;
@@ -390,9 +535,10 @@ fn check_stmt(c: Checker, stmt: Stmt) -> Result<int, TypeError> {
         SKind.SLet(name, tyopt, value, mutable) => {
             match (tyopt) {
                 Option.Some(annot) => {
-                    ensure_type(annot, stmt.line, stmt.col)?;
+                    ensure_type(c, annot, stmt.line, stmt.col)?;
                     let ty = resolve_type(annot);
-                    let vt = check_expr(c, value)?;
+                    // El tipo declarado es el esperado del valor (chequeo bidireccional: fija el `[]`).
+                    let vt = check_expr_expected(c, value, ty)?;
                     if (!type_eq(vt, ty)) {
                         return Result.Err(terr(value.line, value.col,
                             "'" + name + "' se declara como " + type_str(ty) + " pero se inicializa con " + type_str(vt)));
@@ -410,7 +556,7 @@ fn check_stmt(c: Checker, stmt: Stmt) -> Result<int, TypeError> {
         SKind.SReturn(valopt) => {
             var vt = Type.TUnit;
             match (valopt) {
-                Option.Some(e) => { vt = check_expr(c, e)?; },
+                Option.Some(e) => { vt = check_expr_expected(c, e, c.current_return)?; },
                 Option.None => {},
             }
             if (!type_eq(vt, c.current_return)) {
@@ -423,7 +569,8 @@ fn check_stmt(c: Checker, stmt: Stmt) -> Result<int, TypeError> {
     }
 }
 
-// Asignación (M14.3a: solo a una variable; índice/campo llegan en M14.3b).
+// Asignación. A una variable exige 'var'; mutar el contenido de un arreglo (`a[i] = e`) o un campo
+// (`p.x = e`) NO requiere 'var' (DESIGN §12.3: `let` ata la variable, no congela el objeto).
 fn check_assign(c: Checker, target: Expr, value: Expr, line: int, col: int) -> Result<int, TypeError> {
     match (target.kind) {
         EKind.EIdent(name) => {
@@ -442,6 +589,30 @@ fn check_assign(c: Checker, target: Expr, value: Expr, line: int, col: int) -> R
                     Result.Ok(0)
                 },
             }
+        },
+        EKind.EIndex(array, index) => {
+            // Los strings son inmutables: `s[i] = c` no se permite (sí se lee `s[i]`).
+            let at = check_expr(c, array)?;
+            if (type_eq(at, Type.TString)) {
+                return Result.Err(terr(target.line, target.col,
+                    "no se puede asignar a un carácter de un string (los strings son inmutables)"));
+            }
+            let elem = check_index(c, array, index)?;
+            let vt = check_expr(c, value)?;
+            if (!type_eq(vt, elem)) {
+                return Result.Err(terr(value.line, value.col,
+                    "el elemento es " + type_str(elem) + " pero se le asigna " + type_str(vt)));
+            }
+            Result.Ok(0)
+        },
+        EKind.EField(object, name) => {
+            let fty = check_field(c, object, name)?;
+            let vt = check_expr(c, value)?;
+            if (!type_eq(vt, fty)) {
+                return Result.Err(terr(value.line, value.col,
+                    "el campo '" + name + "' es " + type_str(fty) + " pero se le asigna " + type_str(vt)));
+            }
+            Result.Ok(0)
         },
         _ => Result.Err(terr(target.line, target.col, "el lado izquierdo no es asignable")),
     }
@@ -465,7 +636,40 @@ fn check_expr(c: Checker, e: Expr) -> Result<Type, TypeError> {
         EKind.EIf(cond, then_b, elseopt) => check_if(c, cond, then_b, elseopt, e.line, e.col),
         EKind.EWhile(cond, body) => check_while(c, cond, body, e.line, e.col),
         EKind.EBlock(b) => check_block(c, b),
-        _ => Result.Err(terr(e.line, e.col, "expresión aún no soportada por el checker auto-alojado (M14.3a)")),
+        EKind.EArray(elems) => check_array(c, elems, e.line, e.col),
+        EKind.EIndex(arr, idx) => check_index(c, arr, idx),
+        EKind.EField(obj, name) => check_field_or_enum(c, obj, name, e.line, e.col),
+        EKind.EStructLit(name, fields) => check_struct_lit(c, name, fields, e.line, e.col),
+        EKind.EMatch(scrut, arms) => check_match(c, scrut, arms, e.line, e.col),
+        _ => Result.Err(terr(e.line, e.col, "expresión aún no soportada por el checker auto-alojado (genéricos/traits → M14.3c/d)")),
+    }
+}
+
+// Una expresión con un tipo ESPERADO (chequeo bidireccional). M14.3b solo lo aprovecha para que el
+// `[]` vacío (y los elementos de un literal de arreglo) adopten el tipo esperado `[T]`; el bloque
+// propaga el esperado a su expresión final. Lo demás se chequea normal. (Genéricos —`None`,
+// construcciones indeterminadas— en M14.3c.)
+fn check_expr_expected(c: Checker, e: Expr, expected: Type) -> Result<Type, TypeError> {
+    match (e.kind) {
+        EKind.EArray(elems) => {
+            match (expected) {
+                Type.TArray(elem_exp) => {
+                    var i = 0;
+                    while (i < len(elems)) {
+                        let t = check_expr_expected(c, elems[i], elem_exp)?;
+                        if (!type_eq(t, elem_exp)) {
+                            return Result.Err(terr(elems[i].line, elems[i].col,
+                                "los elementos del arreglo deben ser " + type_str(elem_exp) + ", no " + type_str(t)));
+                        }
+                        i = i + 1;
+                    }
+                    Result.Ok(Type.TArray(elem_exp))
+                },
+                _ => check_expr(c, e),
+            }
+        },
+        EKind.EBlock(b) => check_block_expected(c, b, expected),
+        _ => check_expr(c, e),
     }
 }
 
@@ -532,10 +736,43 @@ fn check_binary(c: Checker, op: BinOp, l: Expr, r: Expr, line: int, col: int) ->
 fn check_call(c: Checker, callee: Expr, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     match (callee.kind) {
         EKind.EIdent(n) => check_named_call(c, n, cargs, line, col),
+        // `recv.f(args)`: construcción de enum `Enum.Variante(args)`, o llamada al valor de un campo.
+        // (UFCS / métodos de trait quedan diferidos a M14.3d.)
+        EKind.EField(obj, name) => check_call_field(c, obj, name, cargs, line, col),
         _ => {
             let ty = check_expr(c, callee)?;
             call_type(c, ty, cargs, line, col)
         },
+    }
+}
+
+// `obj.name(args)`. Si `obj` nombra un enum → construcción de variante con payload. Si no, es una
+// llamada al campo `name` del struct `obj` (que debe ser de tipo función).
+fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    match (obj.kind) {
+        EKind.EIdent(en) => {
+            if (is_enum(c, en)) {
+                return check_enum_lit(c, en, name, cargs, line, col);
+            }
+        },
+        _ => {},
+    }
+    let ty = check_field(c, obj, name)?;
+    call_type(c, ty, cargs, line, col)
+}
+
+// `obj.name` como expresión: construcción de variante de enum sin payload (`Enum.Variante`), o
+// acceso a campo de struct.
+fn check_field_or_enum(c: Checker, obj: Expr, name: string, line: int, col: int) -> Result<Type, TypeError> {
+    match (obj.kind) {
+        EKind.EIdent(en) => {
+            if (is_enum(c, en)) {
+                check_enum_lit(c, en, name, [], line, col)
+            } else {
+                check_field(c, obj, name)
+            }
+        },
+        _ => check_field(c, obj, name),
     }
 }
 
@@ -544,6 +781,8 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
     if (name == "print" || name == "eprint") {
         return check_print(c, name, cargs, line, col);
     }
+    if (name == "len") { return check_len(c, cargs, line, col); }
+    if (name == "push") { return check_push(c, cargs, line, col); }
     match (lookup(c, name)) {
         Option.Some(v) => { return call_type(c, v.ty, cargs, line, col); },
         Option.None => {},
@@ -566,6 +805,38 @@ fn check_print(c: Checker, name: string, cargs: [Expr], line: int, col: int) -> 
     Result.Ok(Type.TUnit)
 }
 
+// El builtin len(a) -> int: longitud de un arreglo o un string (los Map llegan en M14.3c).
+fn check_len(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    if (len(cargs) != 1) {
+        return Result.Err(terr(line, col, "len espera 1 argumento, se le pasaron " + to_string(len(cargs))));
+    }
+    let at = check_expr(c, cargs[0])?;
+    if (!(is_array(at) || type_eq(at, Type.TString))) {
+        return Result.Err(terr(cargs[0].line, cargs[0].col, "len espera un arreglo, un string o un Map, no " + type_str(at)));
+    }
+    Result.Ok(Type.TInt)
+}
+
+// El builtin push(a, x) -> unit: agrega x al final del arreglo a (lo muta). x debe ser del tipo de
+// los elementos. Tipa ambos argumentos antes de aplicar la regla (como el registro de builtins).
+fn check_push(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    if (len(cargs) != 2) {
+        return Result.Err(terr(line, col, "push espera 2 argumentos (arreglo, valor), se le pasaron " + to_string(len(cargs))));
+    }
+    let a0 = check_expr(c, cargs[0])?;
+    let a1 = check_expr(c, cargs[1])?;
+    match (a0) {
+        Type.TArray(elem) => {
+            if (!type_eq(a1, elem)) {
+                return Result.Err(terr(cargs[1].line, cargs[1].col,
+                    "push: el arreglo es de " + type_str(elem) + " pero se empuja " + type_str(a1)));
+            }
+            Result.Ok(Type.TUnit)
+        },
+        _ => Result.Err(terr(cargs[0].line, cargs[0].col, "push espera un arreglo como primer argumento, no " + type_str(a0))),
+    }
+}
+
 fn call_type(c: Checker, ty: Type, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     match (ty) {
         Type.TFn(params, ret) => check_args(c, params, ret, cargs, "la función", line, col),
@@ -580,7 +851,8 @@ fn check_args(c: Checker, params: [Type], ret: Type, cargs: [Expr], label: strin
     }
     var i = 0;
     while (i < len(cargs)) {
-        let at = check_expr(c, cargs[i])?;
+        // El tipo del parámetro es el esperado del argumento (propaga a `[]`, etc.).
+        let at = check_expr_expected(c, cargs[i], params[i])?;
         if (!type_eq(at, params[i])) {
             return Result.Err(terr(cargs[i].line, cargs[i].col,
                 "argumento " + to_string(i + 1) + " de " + label + ": se esperaba " + type_str(params[i]) + ", se pasó " + type_str(at)));
@@ -643,8 +915,311 @@ fn check_block(c: Checker, block: Block) -> Result<Type, TypeError> {
     Result.Ok(ty)
 }
 
+// Como `check_block`, pero el valor final (la *tail*) se verifica con un tipo esperado.
+fn check_block_expected(c: Checker, block: Block, expected: Type) -> Result<Type, TypeError> {
+    push_scope(c);
+    var i = 0;
+    while (i < len(block.stmts)) {
+        check_stmt(c, block.stmts[i])?;
+        i = i + 1;
+    }
+    var ty = Type.TUnit;
+    match (block.tail) {
+        Option.Some(e) => { ty = check_expr_expected(c, e, expected)?; },
+        Option.None => {},
+    }
+    pop_scope(c);
+    Result.Ok(ty)
+}
+
+// =====================================================================
+// Datos: arreglos, structs, enums, match (M14.3b)
+// =====================================================================
+
+// Un literal de arreglo `[e0, e1, ...]`. Todos los elementos deben ser del mismo tipo. El vacío `[]`
+// es indeterminado aquí (necesita un tipo esperado, vía `check_expr_expected`).
+fn check_array(c: Checker, elems: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    if (len(elems) == 0) {
+        return Result.Err(terr(line, col, "no se puede inferir el tipo de [] aquí; anótalo (p. ej. let xs: [int] = [];)"));
+    }
+    let first = check_expr(c, elems[0])?;
+    var i = 1;
+    while (i < len(elems)) {
+        let t = check_expr(c, elems[i])?;
+        if (!type_eq(t, first)) {
+            return Result.Err(terr(elems[i].line, elems[i].col,
+                "los elementos del arreglo deben ser del mismo tipo: " + type_str(first) + " y " + type_str(t)));
+        }
+        i = i + 1;
+    }
+    Result.Ok(Type.TArray(first))
+}
+
+// Indexar `a[i]`: el índice debe ser int; el receptor un arreglo (da el elemento) o un string (da
+// char). Reusado por la indexación como expresión y como destino de asignación.
+fn check_index(c: Checker, array: Expr, index: Expr) -> Result<Type, TypeError> {
+    let at = check_expr(c, array)?;
+    let it = check_expr(c, index)?;
+    if (!type_eq(it, Type.TInt)) {
+        return Result.Err(terr(index.line, index.col, "el índice debe ser int, no " + type_str(it)));
+    }
+    match (at) {
+        Type.TArray(elem) => Result.Ok(elem),
+        Type.TString => Result.Ok(Type.TChar),
+        _ => Result.Err(terr(array.line, array.col, "no se puede indexar un " + type_str(at) + " (no es un arreglo ni un string)")),
+    }
+}
+
+// `obj.name`: el objeto debe ser un struct y `name` uno de sus campos.
+fn check_field(c: Checker, object: Expr, name: string) -> Result<Type, TypeError> {
+    let ot = check_expr(c, object)?;
+    match (ot) {
+        Type.TNamed(sname, _) => {
+            match (get(c.structs, sname)) {
+                Option.Some(fields) => {
+                    match (find_field(fields, name)) {
+                        Option.Some(fty) => Result.Ok(fty),
+                        Option.None => Result.Err(terr(object.line, object.col, "el struct '" + sname + "' no tiene un campo '" + name + "'")),
+                    }
+                },
+                Option.None => Result.Err(terr(object.line, object.col, "no se puede acceder a '." + name + "' en un " + type_str(ot) + " (no es un struct)")),
+            }
+        },
+        _ => Result.Err(terr(object.line, object.col, "no se puede acceder a '." + name + "' en un " + type_str(ot) + " (no es un struct)")),
+    }
+}
+
+// El tipo del campo `name` en una lista de campos (`None` si no existe).
+fn find_field(fields: [FieldDef], name: string) -> Option<Type> {
+    var i = 0;
+    while (i < len(fields)) {
+        if (fields[i].name == name) { return Option.Some(fields[i].ty); }
+        i = i + 1;
+    }
+    Option.None
+}
+
+// Un literal de struct `Nombre { campo: valor, ... }`. Cada campo declarado debe estar exactamente
+// una vez; no debe haber campos desconocidos; cada valor debe ser del tipo del campo.
+fn check_struct_lit(c: Checker, name: string, fields: [FieldInit], line: int, col: int) -> Result<Type, TypeError> {
+    match (get(c.structs, name)) {
+        Option.None => Result.Err(terr(line, col, "struct '" + name + "' no declarado")),
+        Option.Some(declared) => {
+            // No debe haber campos desconocidos.
+            var i = 0;
+            while (i < len(fields)) {
+                let fi = fields[i];
+                if (!field_declared(declared, fi.name)) {
+                    return Result.Err(terr(fi.value.line, fi.value.col, "'" + name + "' no tiene un campo '" + fi.name + "'"));
+                }
+                i = i + 1;
+            }
+            // Cada campo declarado: presente exactamente una vez; su valor del tipo declarado.
+            var di = 0;
+            while (di < len(declared)) {
+                let df = declared[di];
+                let cnt = count_field(fields, df.name);
+                if (cnt == 0) {
+                    return Result.Err(terr(line, col, "falta el campo '" + df.name + "' en el literal de '" + name + "'"));
+                }
+                if (cnt > 1) {
+                    return Result.Err(terr(line, col, "campo '" + df.name + "' de '" + name + "' repetido"));
+                }
+                let value = field_value(fields, df.name);
+                let vt = check_expr_expected(c, value, df.ty)?;
+                if (!type_eq(vt, df.ty)) {
+                    return Result.Err(terr(value.line, value.col,
+                        "campo '" + df.name + "' de '" + name + "': se esperaba " + type_str(df.ty) + ", se pasó " + type_str(vt)));
+                }
+                di = di + 1;
+            }
+            Result.Ok(Type.TNamed(name, []))
+        },
+    }
+}
+
+// ¿Está `name` entre los campos declarados?
+fn field_declared(declared: [FieldDef], name: string) -> bool {
+    var i = 0;
+    while (i < len(declared)) {
+        if (declared[i].name == name) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Cuántas veces aparece el campo `name` en el literal (para detectar faltantes/repetidos).
+fn count_field(fields: [FieldInit], name: string) -> int {
+    var n = 0;
+    var i = 0;
+    while (i < len(fields)) {
+        if (fields[i].name == name) { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+// El valor (la primera aparición) del campo `name` en el literal (existe: se llamó con cnt == 1).
+fn field_value(fields: [FieldInit], name: string) -> Expr {
+    var i = 0;
+    while (i < len(fields)) {
+        if (fields[i].name == name) { return fields[i].value; }
+        i = i + 1;
+    }
+    fields[0].value
+}
+
+// Construcción de una variante de enum `Enum.Variante(args)`. La variante debe existir y el payload
+// (aridad + tipos) debe encajar. Devuelve `TNamed(enum_name, [])` (monomórfico).
+fn check_enum_lit(c: Checker, enum_name: string, variant: string, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    match (get(c.enums, enum_name)) {
+        Option.None => Result.Err(terr(line, col, "enum '" + enum_name + "' no declarado")),
+        Option.Some(variants) => {
+            match (find_variant(variants, variant)) {
+                Option.None => Result.Err(terr(line, col, "el enum '" + enum_name + "' no tiene la variante '" + variant + "'")),
+                Option.Some(payload) => {
+                    if (len(cargs) != len(payload)) {
+                        return Result.Err(terr(line, col, "la variante '" + enum_name + "." + variant
+                            + "' espera " + to_string(len(payload)) + " argumento(s), se dieron " + to_string(len(cargs))));
+                    }
+                    var i = 0;
+                    while (i < len(cargs)) {
+                        let pty = payload[i];
+                        let at = check_expr_expected(c, cargs[i], pty)?;
+                        if (!type_eq(at, pty)) {
+                            return Result.Err(terr(cargs[i].line, cargs[i].col,
+                                "'" + enum_name + "." + variant + "': se esperaba " + type_str(pty) + ", se pasó " + type_str(at)));
+                        }
+                        i = i + 1;
+                    }
+                    Result.Ok(Type.TNamed(enum_name, []))
+                },
+            }
+        },
+    }
+}
+
+// El payload de la variante `name` en una lista de variantes (`None` si no existe).
+fn find_variant(variants: [VariantDef], name: string) -> Option<[Type]> {
+    var i = 0;
+    while (i < len(variants)) {
+        if (variants[i].name == name) { return Option.Some(variants[i].payload); }
+        i = i + 1;
+    }
+    Option.None
+}
+
+// `match (escrutinio) { patrón => cuerpo, ... }`. El escrutinio debe ser un enum; cada patrón debe
+// pertenecer a ese enum (aridad correcta); los brazos convergen a un tipo común; debe ser exhaustivo.
+fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], line: int, col: int) -> Result<Type, TypeError> {
+    let scrut_ty = check_expr(c, scrut)?;
+    var enum_name = "";
+    match (scrut_ty) {
+        Type.TNamed(n, _) => {
+            if (is_enum(c, n)) { enum_name = n; }
+            else { return Result.Err(terr(scrut.line, scrut.col, "match requiere un enum, pero el escrutinio es " + type_str(scrut_ty))); }
+        },
+        _ => { return Result.Err(terr(scrut.line, scrut.col, "match requiere un enum, pero el escrutinio es " + type_str(scrut_ty))); },
+    }
+    if (len(arms) == 0) {
+        return Result.Err(terr(line, col, "un match no puede estar vacío"));
+    }
+    let variants = enum_variants(c, enum_name);
+    let st = MatchState { covered: [], catchall: false };
+    var result_ty: Option<Type> = Option.None;
+    var ai = 0;
+    while (ai < len(arms)) {
+        let arm = arms[ai];
+        if (st.catchall) {
+            return Result.Err(terr(arm.line, arm.col, "brazo inalcanzable: un brazo anterior ya cubre todos los casos"));
+        }
+        let binds = check_pattern(c, arm.pat, scrut_ty, enum_name, variants, st)?;
+        push_scope(c);
+        var bi = 0;
+        while (bi < len(binds)) {
+            declare(c, binds[bi].name, binds[bi].ty, false, arm.line, arm.col);
+            bi = bi + 1;
+        }
+        let body_ty = check_expr(c, arm.body)?;
+        pop_scope(c);
+        // Un brazo que diverge (panic/return) no fija el tipo del match; lo ceden los demás.
+        if (!expr_diverges(arm.body)) {
+            match (result_ty) {
+                Option.None => { result_ty = Option.Some(body_ty); },
+                Option.Some(prev) => {
+                    if (!type_eq(prev, body_ty)) {
+                        return Result.Err(terr(arm.body.line, arm.body.col,
+                            "los brazos del match producen tipos distintos: " + type_str(prev) + " y " + type_str(body_ty)));
+                    }
+                },
+            }
+        }
+        ai = ai + 1;
+    }
+    // Exhaustividad: sin catch-all, deben estar TODAS las variantes.
+    if (!st.catchall) {
+        var missing: [string] = [];
+        var vi = 0;
+        while (vi < len(variants)) {
+            let vname = variants[vi].name;
+            if (!contains_str(st.covered, vname)) { push(missing, vname); }
+            vi = vi + 1;
+        }
+        if (len(missing) > 0) {
+            return Result.Err(terr(line, col, "match no exhaustivo en '" + enum_name + "': faltan las variantes: " + join_comma(missing)));
+        }
+    }
+    match (result_ty) {
+        Option.Some(t) => Result.Ok(t),
+        Option.None => Result.Ok(Type.TUnit),
+    }
+}
+
+// Comprueba un patrón contra el enum del escrutinio. Devuelve las variables que liga (para el cuerpo
+// del brazo). Actualiza el estado (variantes cubiertas, catch-all) por referencia.
+fn check_pattern(c: Checker, pat: Pattern, scrut_ty: Type, enum_name: string, variants: [VariantDef], st: MatchState) -> Result<[Bind], TypeError> {
+    match (pat.kind) {
+        PKind.PWild => { st.catchall = true; Result.Ok([]) },
+        PKind.PBind(name) => {
+            // Liga el escrutinio completo; cubre todo lo restante.
+            st.catchall = true;
+            var binds: [Bind] = [];
+            push(binds, Bind { name: name, ty: scrut_ty });
+            Result.Ok(binds)
+        },
+        PKind.PVariant(pat_enum, variant, bindings) => {
+            if (pat_enum != enum_name) {
+                return Result.Err(terr(pat.line, pat.col, "el patrón es del enum '" + pat_enum + "', pero el escrutinio es '" + enum_name + "'"));
+            }
+            match (find_variant(variants, variant)) {
+                Option.None => Result.Err(terr(pat.line, pat.col, "el enum '" + enum_name + "' no tiene la variante '" + variant + "'")),
+                Option.Some(payload) => {
+                    if (len(bindings) != len(payload)) {
+                        return Result.Err(terr(pat.line, pat.col, "el patrón '" + enum_name + "." + variant
+                            + "' liga " + to_string(len(bindings)) + " valor(es), pero la variante tiene " + to_string(len(payload))));
+                    }
+                    if (contains_str(st.covered, variant)) {
+                        return Result.Err(terr(pat.line, pat.col, "la variante '" + variant + "' ya está cubierta por un brazo anterior"));
+                    }
+                    push(st.covered, variant);
+                    var binds: [Bind] = [];
+                    var i = 0;
+                    while (i < len(bindings)) {
+                        match (bindings[i]) {
+                            Option.Some(bn) => { push(binds, Bind { name: bn, ty: payload[i] }); },
+                            Option.None => {},
+                        }
+                        i = i + 1;
+                    }
+                    Result.Ok(binds)
+                },
+            }
+        },
+    }
+}
+
 // Punto de entrada: valida un programa (o devuelve el primer TypeError).
 pub fn check(prog: Program) -> Result<int, TypeError> {
-    let c = Checker { funcs: map_new(), scopes: [], current_return: Type.TUnit };
+    let c = Checker { funcs: map_new(), structs: map_new(), enums: map_new(), scopes: [], current_return: Type.TUnit };
     check_program(c, prog)
 }

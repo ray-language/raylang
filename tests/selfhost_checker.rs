@@ -183,12 +183,33 @@ fn errores_genericos() {
     comparar("fn ap<T, U>(f: fn(T) -> U, x: T) -> U { f(x) } fn negar(b: bool) -> bool { !b } fn main() -> int { ap(negar, 3) }", "scge_fnarg.ray");
 }
 
-/// El test fuerte: los ejemplos reales monomórficos deben dar el mismo veredicto (`ok`) que Rust.
+#[test]
+fn tipos_genericos_validos() {
+    // Struct genérico: infiere A, B de los valores; acceso a campo sustituye el tipo.
+    comparar("struct Par<A, B> { primero: A, segundo: B } fn main() -> int { let p: Par<int, bool> = Par { primero: 7, segundo: true }; if (p.segundo) { p.primero } else { 0 } }", "sct_par.ray");
+    // Enum genérico: T del payload y T del tipo esperado (Vacia); match sustituye el payload.
+    comparar("enum Caja<T> { Llena(T), Vacia } fn val(c: Caja<int>, d: int) -> int { match (c) { Caja.Llena(v) => v, Caja.Vacia => d } } fn main() -> int { let a: Caja<int> = Caja.Llena(35); let b: Caja<int> = Caja.Vacia; val(a, 0) + val(b, 9) }", "sct_caja.ray");
+    // Enum genérico recursivo + función genérica que lo recorre.
+    comparar("enum Lista<T> { Cons(T, Lista<T>), Nil } fn longitud<T>(xs: Lista<T>) -> int { match (xs) { Lista.Cons(_, r) => 1 + longitud(r), Lista.Nil => 0 } } fn main() -> int { let ns: Lista<string> = Lista.Cons(\"a\", Lista.Cons(\"b\", Lista.Nil)); longitud(ns) }", "sct_lista.ray");
+    // Inferencia local de un enum genérico (sin anotación) + match.
+    comparar("enum Caja<T> { Llena(T), Vacia } fn main() -> int { let c = Caja.Llena(5); match (c) { Caja.Llena(v) => v, Caja.Vacia => 0 } }", "sct_infer.ray");
+}
+
+#[test]
+fn errores_tipos_genericos() {
+    comparar("struct Par<A, B> { primero: A, segundo: B } fn main() -> int { let p: Par<int, bool> = Par { primero: true, segundo: true }; 0 }", "scte_fieldty.ray");
+    comparar("enum Caja<T> { Llena(T), Vacia } fn main() -> int { let c = Caja.Vacia; 0 }", "scte_vacia.ray");
+    comparar("enum Caja<T> { Llena(T), Vacia } fn f(c: Caja<int, bool>) -> int { 0 } fn main() -> int { 0 }", "scte_arity.ray");
+    comparar("enum Par2<T> { P(T, T) } fn main() -> int { let x = Par2.P(1, true); 0 }", "scte_payincon.ray");
+    comparar("struct Caja<T> { v: T } fn f(c: Caja) -> int { 0 } fn main() -> int { 0 }", "scte_noargs.ray");
+}
+
+/// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
 fn ejemplos_reales_validos() {
     let archivos = ["examples/fib.ray", "examples/fizzbuzz.ray", "examples/gcd.ray", "examples/primes.ray",
         "examples/structs.ray", "examples/match_figuras.ray", "examples/enums.ray", "examples/arrays.ray",
-        "examples/matriz.ray", "examples/genericos.ray"];
+        "examples/matriz.ray", "examples/genericos.ray", "examples/tipos_genericos.ray", "examples/opcional.ray"];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);

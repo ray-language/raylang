@@ -705,6 +705,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `let m = map_new()` son indeterminados → helper `no_tparams()` y anotación. Oráculo: 4 válidos +
     5 errores + `genericos.ray`. Diferido a c-2 (tipos genéricos + bidireccional), c-3 (Option/Result +
     `?`). DESIGN §23.4.
+  - **M14.3c-2 COMPLETO** (347 lib + 9 en `tests/selfhost_checker.rs`): **checker auto-alojado — tipos
+    genéricos + bidireccional completo**. `check_struct_lit`/`check_enum_lit` infieren args de tipo
+    (`seed_sigma_from_expected` siembra σ del esperado, `unify` con campo/payload, `finalize_type_args`
+    exige cada parámetro determinado; mensajes idénticos: `'A' no puede ser X y Y a la vez`, `no se pudo
+    inferir el parámetro de tipo 'T' … anota el tipo`). `check_field` **sustituye** el tipo del campo con
+    los args del objeto; `check_match` arma `enum_sigma` y `check_pattern` sustituye el payload de los
+    bindings. **Bidireccional completo**: `check_expr_expected` propaga a struct lit, construcción de enum
+    (`Caja.Vacia`), `if`, `match` (`check_expr_opt`/`check_block_opt`); `check_call`/`check_call_field`/
+    `check_field_or_enum` llevan `expected: Option<Type>`; `type_has_var`/`check_value_against` deciden si
+    el esperado es concreto. El monomórfico (M14.3b) es el caso σ-vacía → mensajes idénticos. Oráculo:
+    4 válidos + 5 errores + `tipos_genericos.ray`/`opcional.ray`. Diferido a c-3 (Option/Result + `?`),
+    d (traits/dyn/UFCS). DESIGN §23.4.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

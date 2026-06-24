@@ -2527,3 +2527,16 @@ Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el
   cuerpos genéricos (`[a, b]`, `f(x)`, `xs[i]`) cuadran sin código nuevo. Oráculo: 4 válidos + 5 errores
   + `genericos.ray`. Diferido a c-2: tipos genéricos (structs/enums) + bidireccional completo; a c-3:
   prelude Option/Result + `?`.
+- **M14.3c-2 COMPLETO** — genéricos: tipos (structs/enums) + bidireccional completo. `check_struct_lit`/
+  `check_enum_lit` ganan inferencia de args de tipo (`seed_sigma_from_expected` siembra σ del esperado,
+  `unify` con el payload/campo, `finalize_type_args` exige que cada parámetro quede determinado; mismos
+  mensajes: `'A' no puede ser X y Y a la vez`, `no se pudo inferir el parámetro de tipo 'T' … anota el
+  tipo`). `check_field` SUSTITUYE el tipo del campo con los args del objeto (`Par<int,bool>.primero` es
+  int); `check_match` arma el `enum_sigma` (params del enum ↔ args del escrutinio) y `check_pattern`
+  sustituye el payload de los bindings. **Bidireccional completo**: `check_expr_expected` propaga el
+  esperado a literal de struct, construcción de enum (`Caja.Vacia`), `if` y `match` (helpers
+  `check_expr_opt`/`check_block_opt`); `check_call`/`check_call_field`/`check_field_or_enum` llevan
+  `expected: Option<Type>`. `type_has_var`/`check_value_against` deciden si el esperado es concreto.
+  `ensure_type` valida la aridad de args de tipo (`type_arity`). El monomórfico (M14.3b) es el caso
+  σ-vacía → mensajes idénticos. Oráculo: 4 válidos + 5 errores + `tipos_genericos.ray`/`opcional.ray`.
+  Diferido a c-3: prelude Option/Result + `?`.

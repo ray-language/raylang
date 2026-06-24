@@ -793,23 +793,23 @@ fn check_expr(c: Checker, e: Expr) -> Result<Type, TypeError> {
         EKind.EIdent(name) => check_ident(c, name, e.line, e.col),
         EKind.EUnary(op, inner) => check_unary(c, op, inner, e.line, e.col),
         EKind.EBinary(op, l, r) => check_binary(c, op, l, r, e.line, e.col),
-        EKind.ECall(callee, cargs) => check_call(c, callee, cargs, e.line, e.col),
-        EKind.EIf(cond, then_b, elseopt) => check_if(c, cond, then_b, elseopt, e.line, e.col),
+        EKind.ECall(callee, cargs) => check_call(c, callee, cargs, Option.None, e.line, e.col),
+        EKind.EIf(cond, then_b, elseopt) => check_if(c, cond, then_b, elseopt, Option.None, e.line, e.col),
         EKind.EWhile(cond, body) => check_while(c, cond, body, e.line, e.col),
         EKind.EBlock(b) => check_block(c, b),
         EKind.EArray(elems) => check_array(c, elems, e.line, e.col),
         EKind.EIndex(arr, idx) => check_index(c, arr, idx),
-        EKind.EField(obj, name) => check_field_or_enum(c, obj, name, e.line, e.col),
-        EKind.EStructLit(name, fields) => check_struct_lit(c, name, fields, e.line, e.col),
-        EKind.EMatch(scrut, arms) => check_match(c, scrut, arms, e.line, e.col),
-        _ => Result.Err(terr(e.line, e.col, "expresión aún no soportada por el checker auto-alojado (genéricos/traits → M14.3c/d)")),
+        EKind.EField(obj, name) => check_field_or_enum(c, obj, name, Option.None, e.line, e.col),
+        EKind.EStructLit(name, fields) => check_struct_lit(c, name, fields, Option.None, e.line, e.col),
+        EKind.EMatch(scrut, arms) => check_match(c, scrut, arms, Option.None, e.line, e.col),
+        _ => Result.Err(terr(e.line, e.col, "expresión aún no soportada por el checker auto-alojado (traits/? → M14.3c-3/d)")),
     }
 }
 
-// Una expresión con un tipo ESPERADO (chequeo bidireccional). M14.3b solo lo aprovecha para que el
-// `[]` vacío (y los elementos de un literal de arreglo) adopten el tipo esperado `[T]`; el bloque
-// propaga el esperado a su expresión final. Lo demás se chequea normal. (Genéricos —`None`,
-// construcciones indeterminadas— en M14.3c.)
+// Una expresión con un tipo ESPERADO (chequeo bidireccional, M14.3b/c). El esperado fija el `[]` vacío
+// y los argumentos de tipo indeterminados (`Caja.Vacia` con esperado `Caja<int>`), y se propaga a las
+// formas que producen valor (bloque, if, match, literal de struct, construcción de enum). Lo demás se
+// chequea normal.
 fn check_expr_expected(c: Checker, e: Expr, expected: Type) -> Result<Type, TypeError> {
     match (e.kind) {
         EKind.EArray(elems) => {
@@ -830,6 +830,11 @@ fn check_expr_expected(c: Checker, e: Expr, expected: Type) -> Result<Type, Type
             }
         },
         EKind.EBlock(b) => check_block_expected(c, b, expected),
+        EKind.EStructLit(name, fields) => check_struct_lit(c, name, fields, Option.Some(expected), e.line, e.col),
+        EKind.EIf(cond, then_b, elseopt) => check_if(c, cond, then_b, elseopt, Option.Some(expected), e.line, e.col),
+        EKind.EMatch(scrut, arms) => check_match(c, scrut, arms, Option.Some(expected), e.line, e.col),
+        EKind.EField(obj, name) => check_field_or_enum(c, obj, name, Option.Some(expected), e.line, e.col),
+        EKind.ECall(callee, cargs) => check_call(c, callee, cargs, Option.Some(expected), e.line, e.col),
         _ => check_expr(c, e),
     }
 }
@@ -894,12 +899,13 @@ fn check_binary(c: Checker, op: BinOp, l: Expr, r: Expr, line: int, col: int) ->
     }
 }
 
-fn check_call(c: Checker, callee: Expr, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+fn check_call(c: Checker, callee: Expr, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     match (callee.kind) {
+        // Llamada directa por nombre (el esperado no aporta: la inferencia genérica usa los args).
         EKind.EIdent(n) => check_named_call(c, n, cargs, line, col),
         // `recv.f(args)`: construcción de enum `Enum.Variante(args)`, o llamada al valor de un campo.
         // (UFCS / métodos de trait quedan diferidos a M14.3d.)
-        EKind.EField(obj, name) => check_call_field(c, obj, name, cargs, line, col),
+        EKind.EField(obj, name) => check_call_field(c, obj, name, cargs, expected, line, col),
         _ => {
             let ty = check_expr(c, callee)?;
             call_type(c, ty, cargs, line, col)
@@ -907,13 +913,13 @@ fn check_call(c: Checker, callee: Expr, cargs: [Expr], line: int, col: int) -> R
     }
 }
 
-// `obj.name(args)`. Si `obj` nombra un enum → construcción de variante con payload. Si no, es una
-// llamada al campo `name` del struct `obj` (que debe ser de tipo función).
-fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+// `obj.name(args)`. Si `obj` nombra un enum → construcción de variante con payload (el esperado fija
+// sus args de tipo). Si no, es una llamada al campo `name` del struct `obj` (que debe ser función).
+fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     match (obj.kind) {
         EKind.EIdent(en) => {
             if (is_enum(c, en)) {
-                return check_enum_lit(c, en, name, cargs, line, col);
+                return check_enum_lit(c, en, name, cargs, expected, line, col);
             }
         },
         _ => {},
@@ -922,13 +928,13 @@ fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], line: in
     call_type(c, ty, cargs, line, col)
 }
 
-// `obj.name` como expresión: construcción de variante de enum sin payload (`Enum.Variante`), o
-// acceso a campo de struct.
-fn check_field_or_enum(c: Checker, obj: Expr, name: string, line: int, col: int) -> Result<Type, TypeError> {
+// `obj.name` como expresión: construcción de variante de enum sin payload (`Enum.Variante`; el
+// esperado fija sus args de tipo, p. ej. `Caja.Vacia`), o acceso a campo de struct.
+fn check_field_or_enum(c: Checker, obj: Expr, name: string, expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     match (obj.kind) {
         EKind.EIdent(en) => {
             if (is_enum(c, en)) {
-                check_enum_lit(c, en, name, [], line, col)
+                check_enum_lit(c, en, name, [], expected, line, col)
             } else {
                 check_field(c, obj, name)
             }
@@ -1062,12 +1068,13 @@ fn check_args(c: Checker, params: [Type], ret: Type, cargs: [Expr], label: strin
     Result.Ok(ret)
 }
 
-fn check_if(c: Checker, cond: Expr, then_b: Block, elseopt: Option<Expr>, line: int, col: int) -> Result<Type, TypeError> {
+// `if`. Con un tipo esperado, se propaga a ambas ramas (para construcciones indeterminadas dentro).
+fn check_if(c: Checker, cond: Expr, then_b: Block, elseopt: Option<Expr>, expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     let ct = check_expr(c, cond)?;
     if (!type_eq(ct, Type.TBool)) {
         return Result.Err(terr(cond.line, cond.col, "la condición del if debe ser bool, no " + type_str(ct)));
     }
-    let then_ty = check_block(c, then_b)?;
+    let then_ty = check_block_opt(c, then_b, expected)?;
     match (elseopt) {
         Option.None => {
             if (!type_eq(then_ty, Type.TUnit)) {
@@ -1077,7 +1084,7 @@ fn check_if(c: Checker, cond: Expr, then_b: Block, elseopt: Option<Expr>, line: 
             Result.Ok(Type.TUnit)
         },
         Option.Some(else_e) => {
-            let else_ty = check_expr(c, else_e)?;
+            let else_ty = check_expr_opt(c, else_e, expected)?;
             if (block_diverges(then_b)) { return Result.Ok(else_ty); }
             if (expr_diverges(else_e)) { return Result.Ok(then_ty); }
             if (!type_eq(then_ty, else_ty)) {
@@ -1086,6 +1093,23 @@ fn check_if(c: Checker, cond: Expr, then_b: Block, elseopt: Option<Expr>, line: 
             }
             Result.Ok(then_ty)
         },
+    }
+}
+
+// Chequea una expresión con un tipo esperado opcional: con `Some` propaga (bidireccional), con `None`
+// es el chequeo normal. (Evita duplicar cada función en variante con/sin esperado.)
+fn check_expr_opt(c: Checker, e: Expr, expected: Option<Type>) -> Result<Type, TypeError> {
+    match (expected) {
+        Option.Some(exp) => check_expr_expected(c, e, exp),
+        Option.None => check_expr(c, e),
+    }
+}
+
+// Como `check_expr_opt`, pero para un bloque.
+fn check_block_opt(c: Checker, b: Block, expected: Option<Type>) -> Result<Type, TypeError> {
+    match (expected) {
+        Option.Some(exp) => check_block_expected(c, b, exp),
+        Option.None => check_block(c, b),
     }
 }
 
@@ -1170,15 +1194,20 @@ fn check_index(c: Checker, array: Expr, index: Expr) -> Result<Type, TypeError> 
     }
 }
 
-// `obj.name`: el objeto debe ser un struct y `name` uno de sus campos.
+// `obj.name`: el objeto debe ser un struct y `name` uno de sus campos. Para un struct genérico, el
+// tipo del campo se SUSTITUYE con los args de tipo del objeto (el campo `primero: A` de
+// `Par<int, bool>` es int).
 fn check_field(c: Checker, object: Expr, name: string) -> Result<Type, TypeError> {
     let ot = check_expr(c, object)?;
     match (ot) {
-        Type.TNamed(sname, _) => {
+        Type.TNamed(sname, targs) => {
             match (get(c.structs, sname)) {
                 Option.Some(fields) => {
                     match (find_field(fields, name)) {
-                        Option.Some(fty) => Result.Ok(fty),
+                        Option.Some(fty) => {
+                            let sigma = build_sigma(struct_tparams(c, sname), targs);
+                            Result.Ok(subst(fty, sigma))
+                        },
                         Option.None => Result.Err(terr(object.line, object.col, "el struct '" + sname + "' no tiene un campo '" + name + "'")),
                     }
                 },
@@ -1187,6 +1216,93 @@ fn check_field(c: Checker, object: Expr, name: string) -> Result<Type, TypeError
         },
         _ => Result.Err(terr(object.line, object.col, "no se puede acceder a '." + name + "' en un " + type_str(ot) + " (no es un struct)")),
     }
+}
+
+// Los parámetros de tipo de un struct/enum registrado (lista vacía si monomórfico o desconocido).
+fn struct_tparams(c: Checker, name: string) -> [string] {
+    match (get(c.struct_tparams, name)) { Option.Some(tp) => tp, Option.None => no_tparams() }
+}
+fn enum_tparams(c: Checker, name: string) -> [string] {
+    match (get(c.enum_tparams, name)) { Option.Some(tp) => tp, Option.None => no_tparams() }
+}
+
+// σ que liga cada parámetro de tipo con su argumento (zip), para sustituir campos/payloads.
+fn build_sigma(tparams: [string], targs: [Type]) -> Map<string, Type> {
+    let sigma: Map<string, Type> = map_new();
+    var i = 0;
+    while (i < len(tparams) && i < len(targs)) {
+        insert(sigma, tparams[i], targs[i]);
+        i = i + 1;
+    }
+    sigma
+}
+
+// Siembra σ desde el tipo esperado: si se espera `Nombre<a, b>` (misma aridad), liga cada parámetro
+// con su argumento esperado. Así `Caja.Vacia` con esperado `Caja<int>` fija `T = int`.
+fn seed_sigma_from_expected(expected: Option<Type>, name: string, tparams: [string]) -> Map<string, Type> {
+    let sigma: Map<string, Type> = map_new();
+    match (expected) {
+        Option.Some(t) => {
+            match (t) {
+                Type.TNamed(en, eargs) => {
+                    if (en == name && len(eargs) == len(tparams)) {
+                        var i = 0;
+                        while (i < len(tparams)) { insert(sigma, tparams[i], eargs[i]); i = i + 1; }
+                    }
+                },
+                _ => {},
+            }
+        },
+        Option.None => {},
+    }
+    sigma
+}
+
+// ¿Contiene `t` alguna variable de tipo sin resolver (un `TNamed(n, [])` con `n` en `holes`)?
+fn type_has_var(t: Type, holes: [string]) -> bool {
+    match (t) {
+        Type.TNamed(n, args) => {
+            if (len(args) == 0 && contains_str(holes, n)) { true }
+            else { types_have_var(args, holes) }
+        },
+        Type.TArray(e) => type_has_var(e, holes),
+        Type.TFn(ps, r) => types_have_var(ps, holes) || type_has_var(r, holes),
+        _ => false,
+    }
+}
+fn types_have_var(ts: [Type], holes: [string]) -> bool {
+    var i = 0;
+    while (i < len(ts)) {
+        if (type_has_var(ts[i], holes)) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Verifica el valor de un campo/payload propagándole como esperado el tipo declarado ya sustituido
+// con lo inferido (σ), pero solo si ese tipo es concreto (sin incógnitas); si aún tiene variables,
+// no aporta y se chequea normal.
+fn check_value_against(c: Checker, value: Expr, declared: Type, sigma: Map<string, Type>, holes: [string]) -> Result<Type, TypeError> {
+    let exp = subst(declared, sigma);
+    if (type_has_var(exp, holes)) { check_expr(c, value) }
+    else { check_expr_expected(c, value, exp) }
+}
+
+// Para cada parámetro de tipo, recupera lo inferido en σ (en orden), o error si quedó indeterminado.
+fn finalize_type_args(tparams: [string], sigma: Map<string, Type>, label: string, line: int, col: int) -> Result<[Type], TypeError> {
+    var targs: [Type] = [];
+    var i = 0;
+    while (i < len(tparams)) {
+        match (get(sigma, tparams[i])) {
+            Option.Some(t) => { push(targs, t); },
+            Option.None => {
+                return Result.Err(terr(line, col,
+                    "no se pudo inferir el parámetro de tipo '" + tparams[i] + "' de " + label + "; anota el tipo"));
+            },
+        }
+        i = i + 1;
+    }
+    Result.Ok(targs)
 }
 
 // El tipo del campo `name` en una lista de campos (`None` si no existe).
@@ -1200,11 +1316,13 @@ fn find_field(fields: [FieldDef], name: string) -> Option<Type> {
 }
 
 // Un literal de struct `Nombre { campo: valor, ... }`. Cada campo declarado debe estar exactamente
-// una vez; no debe haber campos desconocidos; cada valor debe ser del tipo del campo.
-fn check_struct_lit(c: Checker, name: string, fields: [FieldInit], line: int, col: int) -> Result<Type, TypeError> {
+// una vez; no debe haber campos desconocidos. Para un struct genérico, infiere los args de tipo de
+// los valores (y del tipo esperado). Devuelve `TNamed(name, targs)`.
+fn check_struct_lit(c: Checker, name: string, fields: [FieldInit], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     match (get(c.structs, name)) {
         Option.None => Result.Err(terr(line, col, "struct '" + name + "' no declarado")),
         Option.Some(declared) => {
+            let tparams = struct_tparams(c, name);
             // No debe haber campos desconocidos.
             var i = 0;
             while (i < len(fields)) {
@@ -1214,7 +1332,8 @@ fn check_struct_lit(c: Checker, name: string, fields: [FieldInit], line: int, co
                 }
                 i = i + 1;
             }
-            // Cada campo declarado: presente exactamente una vez; su valor del tipo declarado.
+            // σ se siembra del tipo esperado; cada valor unifica los parámetros de tipo del struct.
+            let sigma = seed_sigma_from_expected(expected, name, tparams);
             var di = 0;
             while (di < len(declared)) {
                 let df = declared[di];
@@ -1226,14 +1345,17 @@ fn check_struct_lit(c: Checker, name: string, fields: [FieldInit], line: int, co
                     return Result.Err(terr(line, col, "campo '" + df.name + "' de '" + name + "' repetido"));
                 }
                 let value = field_value(fields, df.name);
-                let vt = check_expr_expected(c, value, df.ty)?;
-                if (!type_eq(vt, df.ty)) {
-                    return Result.Err(terr(value.line, value.col,
-                        "campo '" + df.name + "' de '" + name + "': se esperaba " + type_str(df.ty) + ", se pasó " + type_str(vt)));
+                let vt = check_value_against(c, value, df.ty, sigma, tparams)?;
+                match (unify(df.ty, vt, sigma, tparams)) {
+                    Result.Ok(_) => {},
+                    Result.Err(reason) => {
+                        return Result.Err(terr(value.line, value.col, "campo '" + df.name + "' de '" + name + "': " + reason));
+                    },
                 }
                 di = di + 1;
             }
-            Result.Ok(Type.TNamed(name, []))
+            let targs = finalize_type_args(tparams, sigma, "el struct '" + name + "'", line, col)?;
+            Result.Ok(Type.TNamed(name, targs))
         },
     }
 }
@@ -1270,8 +1392,9 @@ fn field_value(fields: [FieldInit], name: string) -> Expr {
 }
 
 // Construcción de una variante de enum `Enum.Variante(args)`. La variante debe existir y el payload
-// (aridad + tipos) debe encajar. Devuelve `TNamed(enum_name, [])` (monomórfico).
-fn check_enum_lit(c: Checker, enum_name: string, variant: string, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+// (aridad + tipos) debe encajar. Para un enum genérico infiere los args de tipo del payload (y del
+// tipo esperado, p. ej. `Caja.Vacia`). Devuelve `TNamed(enum_name, targs)`.
+fn check_enum_lit(c: Checker, enum_name: string, variant: string, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     match (get(c.enums, enum_name)) {
         Option.None => Result.Err(terr(line, col, "enum '" + enum_name + "' no declarado")),
         Option.Some(variants) => {
@@ -1282,17 +1405,23 @@ fn check_enum_lit(c: Checker, enum_name: string, variant: string, cargs: [Expr],
                         return Result.Err(terr(line, col, "la variante '" + enum_name + "." + variant
                             + "' espera " + to_string(len(payload)) + " argumento(s), se dieron " + to_string(len(cargs))));
                     }
+                    let tparams = enum_tparams(c, enum_name);
+                    let sigma = seed_sigma_from_expected(expected, enum_name, tparams);
                     var i = 0;
                     while (i < len(cargs)) {
                         let pty = payload[i];
-                        let at = check_expr_expected(c, cargs[i], pty)?;
-                        if (!type_eq(at, pty)) {
-                            return Result.Err(terr(cargs[i].line, cargs[i].col,
-                                "'" + enum_name + "." + variant + "': se esperaba " + type_str(pty) + ", se pasó " + type_str(at)));
+                        let at = check_value_against(c, cargs[i], pty, sigma, tparams)?;
+                        match (unify(pty, at, sigma, tparams)) {
+                            Result.Ok(_) => {},
+                            Result.Err(reason) => {
+                                return Result.Err(terr(cargs[i].line, cargs[i].col,
+                                    "'" + enum_name + "." + variant + "': " + reason));
+                            },
                         }
                         i = i + 1;
                     }
-                    Result.Ok(Type.TNamed(enum_name, []))
+                    let targs = finalize_type_args(tparams, sigma, "la variante '" + enum_name + "." + variant + "'", line, col)?;
+                    Result.Ok(Type.TNamed(enum_name, targs))
                 },
             }
         },
@@ -1311,12 +1440,13 @@ fn find_variant(variants: [VariantDef], name: string) -> Option<[Type]> {
 
 // `match (escrutinio) { patrón => cuerpo, ... }`. El escrutinio debe ser un enum; cada patrón debe
 // pertenecer a ese enum (aridad correcta); los brazos convergen a un tipo común; debe ser exhaustivo.
-fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], line: int, col: int) -> Result<Type, TypeError> {
+fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     let scrut_ty = check_expr(c, scrut)?;
     var enum_name = "";
+    var enum_targs: [Type] = [];
     match (scrut_ty) {
-        Type.TNamed(n, _) => {
-            if (is_enum(c, n)) { enum_name = n; }
+        Type.TNamed(n, targs) => {
+            if (is_enum(c, n)) { enum_name = n; enum_targs = targs; }
             else { return Result.Err(terr(scrut.line, scrut.col, "match requiere un enum, pero el escrutinio es " + type_str(scrut_ty))); }
         },
         _ => { return Result.Err(terr(scrut.line, scrut.col, "match requiere un enum, pero el escrutinio es " + type_str(scrut_ty))); },
@@ -1325,6 +1455,9 @@ fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], line: int, col: int) -
         return Result.Err(terr(line, col, "un match no puede estar vacío"));
     }
     let variants = enum_variants(c, enum_name);
+    // σ del enum: liga sus parámetros de tipo con los args del escrutinio, para sustituir los payloads
+    // (`Some(T)` sobre `Option<int>` liga `T = int`).
+    let enum_sigma = build_sigma(enum_tparams(c, enum_name), enum_targs);
     let st = MatchState { covered: [], catchall: false };
     var result_ty: Option<Type> = Option.None;
     var ai = 0;
@@ -1333,14 +1466,14 @@ fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], line: int, col: int) -
         if (st.catchall) {
             return Result.Err(terr(arm.line, arm.col, "brazo inalcanzable: un brazo anterior ya cubre todos los casos"));
         }
-        let binds = check_pattern(c, arm.pat, scrut_ty, enum_name, variants, st)?;
+        let binds = check_pattern(c, arm.pat, scrut_ty, enum_name, variants, enum_sigma, st)?;
         push_scope(c);
         var bi = 0;
         while (bi < len(binds)) {
             declare(c, binds[bi].name, binds[bi].ty, false, arm.line, arm.col);
             bi = bi + 1;
         }
-        let body_ty = check_expr(c, arm.body)?;
+        let body_ty = check_expr_opt(c, arm.body, expected)?;
         pop_scope(c);
         // Un brazo que diverge (panic/return) no fija el tipo del match; lo ceden los demás.
         if (!expr_diverges(arm.body)) {
@@ -1377,7 +1510,7 @@ fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], line: int, col: int) -
 
 // Comprueba un patrón contra el enum del escrutinio. Devuelve las variables que liga (para el cuerpo
 // del brazo). Actualiza el estado (variantes cubiertas, catch-all) por referencia.
-fn check_pattern(c: Checker, pat: Pattern, scrut_ty: Type, enum_name: string, variants: [VariantDef], st: MatchState) -> Result<[Bind], TypeError> {
+fn check_pattern(c: Checker, pat: Pattern, scrut_ty: Type, enum_name: string, variants: [VariantDef], enum_sigma: Map<string, Type>, st: MatchState) -> Result<[Bind], TypeError> {
     match (pat.kind) {
         PKind.PWild => { st.catchall = true; Result.Ok([]) },
         PKind.PBind(name) => {
@@ -1402,11 +1535,13 @@ fn check_pattern(c: Checker, pat: Pattern, scrut_ty: Type, enum_name: string, va
                         return Result.Err(terr(pat.line, pat.col, "la variante '" + variant + "' ya está cubierta por un brazo anterior"));
                     }
                     push(st.covered, variant);
+                    // Cada sub-binding liga el payload ya SUSTITUIDO con los args de tipo del
+                    // escrutinio (`x` en `Some(x)` sobre `Option<int>` es int).
                     var binds: [Bind] = [];
                     var i = 0;
                     while (i < len(bindings)) {
                         match (bindings[i]) {
-                            Option.Some(bn) => { push(binds, Bind { name: bn, ty: payload[i] }); },
+                            Option.Some(bn) => { push(binds, Bind { name: bn, ty: subst(payload[i], enum_sigma) }); },
                             Option.None => {},
                         }
                         i = i + 1;

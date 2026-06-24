@@ -2796,3 +2796,19 @@ Tras el intérprete, el self-hosting está **cerrado** (raylang lexea/parsea/che
   genérica, campo-función, despacho sobre primitivo, bound no-op, defecto, `dyn` heterogéneo con defecto,
   `@derive` anidado) → mismo stdout + exit que Rust. Diferido: M14.4d-2 (map/filter/fold del prelude →
   `stdlib.ray`, cierra el self-hosting).
+- **M14.4d-2 COMPLETO → M14.4d COMPLETO → M14.4 COMPLETO → SELF-HOSTING CERRADO**. map/filter/fold del
+  prelude. Como el checker auto-alojado es un validador (no inyecta el prelude en el programa) y el
+  intérprete necesita los **cuerpos**, se replica lo que hace el `check()` de Rust: un archivo
+  `selfhost/prelude.ray` (map/filter/fold escritos **en raylang** —genéricos + closures + `len`/`push`—)
+  que el driver `selfhost/run.ray` **parsea y FUSIONA** en el programa del usuario (`add_prelude`: añade
+  solo las que el usuario no redefina → override; la fusión no necesita desplazar posiciones porque el
+  validador no baja por posición y el intérprete despacha por etiqueta de valor). Tras la fusión,
+  map/filter/fold son funciones ordinarias: el despacho por UFCS (`xs.map(f)`) cae en la rama UFCS de
+  `dispatch_method`, y los pipelines (`xs |> f`) ya los desazucara el parser a llamadas. Oráculo (18
+  tests): `stdlib.ray` (UFCS encadenado + pipelines + closures inline) + `genericos.ray`/
+  `tipos_genericos.ray` (genéricos = no-op en runtime) + snippets (UFCS/pipeline/override) → mismo stdout
+  + exit que Rust. **Verificado: los 22 ejemplos del corpus corren idénticos por ambos pipelines** (Rust
+  `cargo run` vs `raylang selfhost/run.ray`). **raylang lexea/parsea/chequea/EJECUTA raylang de punta a
+  punta — el self-hosting está cerrado.** Diferido (fuera del corpus, como en el checker): builtins de
+  string/IO/Map en el intérprete auto-alojado, TCO/`MAX_CALL_DEPTH`, `assert`/`sort`/resto del prelude.
+  Siguiente hito posible: **M14.5** (la VM auto-alojada, capstone-del-capstone opcional).

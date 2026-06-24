@@ -868,6 +868,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     por **constructor** (`Caja<T>`→"Caja"); anidamiento por despacho recursivo. Oráculo: ufcs/traits/
     bounds/metodos_por_defecto/impls_genericos/trait_objects/anotaciones + snippets = mismo stdout+exit
     que Rust. Diferido: d-2 (map/filter/fold del prelude → stdlib.ray, cierra el self-hosting).
+  - **M14.4d-2 COMPLETO → M14.4d → M14.4 → SELF-HOSTING CERRADO** (347 lib + 18 en
+    `tests/selfhost_interpreter.rs`): **map/filter/fold del prelude**. El checker auto-alojado es
+    validador (no inyecta el prelude en el programa) y el intérprete necesita los CUERPOS → se replica el
+    `check()` de Rust: `selfhost/prelude.ray` (map/filter/fold escritos EN raylang) que `selfhost/run.ray`
+    parsea y **fusiona** en el programa del usuario (`add_prelude`: solo las que no redefina → override;
+    sin desplazar posiciones —el validador no baja por posición, el intérprete despacha por etiqueta).
+    Fusionadas, map/filter/fold son funciones ordinarias: UFCS cae en la rama UFCS de `dispatch_method`,
+    pipelines los desazucara el parser. **Verificado: los 22 ejemplos corren idénticos por ambos
+    pipelines** (Rust `cargo run` vs `raylang selfhost/run.ray`). **raylang lexea/parsea/chequea/EJECUTA
+    raylang de punta a punta — self-hosting CERRADO.** Diferido (fuera del corpus): builtins string/IO/Map
+    en el intérprete, TCO/`MAX_CALL_DEPTH`, resto del prelude (assert/sort). Siguiente posible: **M14.5**
+    (VM auto-alojada, opcional).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

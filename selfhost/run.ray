@@ -9,7 +9,7 @@
 // este driver contra los del runner de Rust (el ORÁCULO conductual; ver DESIGN §23.5).
 
 from lexer import lex, LexError;
-from parser import parse, Program, ParseError;
+from parser import parse, Func, Program, ParseError;
 from checker import check, TypeError;
 from interpreter import run, Value, RuntimeError;
 
@@ -18,6 +18,48 @@ fn exit_code(v: Value) -> int {
     match (v) {
         Value.VInt(n) => n,
         _ => 0,
+    }
+}
+
+// ¿El programa del usuario ya define una función con ese nombre? (para no pisar un override del prelude).
+fn user_has_func(user: Program, name: string) -> bool {
+    var i = 0;
+    while (i < len(user.funcs)) {
+        if (user.funcs[i].name == name) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Fusiona las funciones del prelude (map/filter/fold) en el programa del usuario —las que no redefina—,
+// igual que el `check()` de Rust inyecta el prelude parseado. No hay colisión de posiciones que importe:
+// el validador no baja por posición y el intérprete despacha por etiqueta de valor, no por `(línea,col)`.
+fn add_prelude(prelude: Program, user: Program) {
+    var extra: [Func] = [];
+    var i = 0;
+    while (i < len(prelude.funcs)) {
+        if (!user_has_func(user, prelude.funcs[i].name)) { push(extra, prelude.funcs[i]); }
+        i = i + 1;
+    }
+    user.funcs = extra + user.funcs;
+}
+
+// Carga y parsea `selfhost/prelude.ray` (relativo a la raíz del repo). Es un archivo NUESTRO; si falla
+// al leer/lexear/parsear es un bug, así que aborta con `panic`.
+fn load_prelude() -> Program {
+    match (read_file("selfhost/prelude.ray")) {
+        Result.Ok(src) => {
+            match (lex(src)) {
+                Result.Ok(toks) => {
+                    match (parse(toks)) {
+                        Result.Ok(p) => p,
+                        Result.Err(e) => panic("prelude: error de sintaxis: " + e.msg),
+                    }
+                },
+                Result.Err(e) => panic("prelude: error léxico: " + e.msg),
+            }
+        },
+        Result.Err(_) => panic("no se pudo leer selfhost/prelude.ray (ejecuta desde la raíz del repo)"),
     }
 }
 
@@ -33,6 +75,7 @@ fn main() -> int {
                 Result.Ok(toks) => {
                     match (parse(toks)) {
                         Result.Ok(prog) => {
+                            add_prelude(load_prelude(), prog); // fusiona map/filter/fold del prelude
                             match (check(prog)) {
                                 Result.Ok(_) => {
                                     match (run(prog)) {

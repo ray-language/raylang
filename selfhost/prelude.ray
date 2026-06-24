@@ -1,0 +1,42 @@
+// El prelude de orden superior de raylang, escrito EN raylang (self-hosting, M14.4d-2).
+//
+// Port de la parte de `src/prelude.rs` que define `map`/`filter`/`fold`: la stdlib de orden superior
+// NO está incrustada en el compilador, vive aquí escrita en el propio raylang (con genéricos M6,
+// closures M4 y los builtins `len`/`push`). El driver `selfhost/run.ray` parsea este archivo y FUSIONA
+// sus funciones en el programa del usuario antes de chequear/ejecutar — igual que el `check()` de Rust
+// inyecta el prelude parseado en el `Program`. Así, también en el mundo auto-alojado, map/filter/fold
+// son raylang, no magia del intérprete.
+//
+// (Option/Result, Eq/Show/Ord y los impls de primitivos los conoce el checker auto-alojado por inyección
+// directa, y el intérprete reconoce Option/Result + deriva igual/mostrar; por eso no van aquí.)
+
+fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
+    var out: [U] = [];
+    var i: int = 0;
+    while (i < len(xs)) {
+        push(out, f(xs[i]));
+        i = i + 1;
+    }
+    out
+}
+
+fn filter<T>(xs: [T], pred: fn(T) -> bool) -> [T] {
+    var out: [T] = [];
+    var i: int = 0;
+    while (i < len(xs)) {
+        let x: T = xs[i];
+        if (pred(x)) { push(out, x); }
+        i = i + 1;
+    }
+    out
+}
+
+fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A {
+    var acc: A = init;
+    var i: int = 0;
+    while (i < len(xs)) {
+        acc = f(acc, xs[i]);
+        i = i + 1;
+    }
+    acc
+}

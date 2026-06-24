@@ -294,6 +294,37 @@ fn dyn_y_derive_snippets() {
 }
 
 #[test]
+fn corpus_prelude_y_genericos() {
+    // M14.4d-2: map/filter/fold del prelude (UFCS + pipelines + closures) y genéricos (no-op en runtime).
+    for rel in [
+        "examples/stdlib.ray",
+        "examples/genericos.ray",
+        "examples/tipos_genericos.ray",
+    ] {
+        comparar_archivo(rel);
+    }
+}
+
+#[test]
+fn map_filter_fold_snippets() {
+    // map/filter/fold por UFCS encadenado.
+    comparar_fuente(
+        "fn doble(x: int) -> int { x * 2 } fn par(x: int) -> bool { x % 2 == 0 } fn suma(a: int, b: int) -> int { a + b } fn main() -> int { let xs = [1, 2, 3, 4]; print(xs.map(doble).filter(par).fold(0, suma)); 0 }",
+        "in_mff_ufcs.ray",
+    );
+    // Pipeline + closures anónimos en línea.
+    comparar_fuente(
+        "fn suma(a: int, b: int) -> int { a + b } fn main() -> int { let xs = [1, 2, 3, 4, 5]; print(xs |> map(fn(x: int) -> int { x * x }) |> filter(fn(x: int) -> bool { x > 5 }) |> fold(0, suma)); 0 }",
+        "in_mff_pipe.ray",
+    );
+    // El usuario redefine map → su versión gana (override del prelude).
+    comparar_fuente(
+        "fn map(x: int) -> int { x + 1 } fn main() -> int { print(map(41)); 0 }",
+        "in_override.ray",
+    );
+}
+
+#[test]
 fn codigo_de_salida() {
     // El código de salida del runner es el int que devuelve main (0 si es unit).
     comparar_fuente("fn main() -> int { 42 }", "in_exit42.ray");

@@ -1,0 +1,26 @@
+// M15.4b — demo del cliente HTTP, componiendo DOS librerías de raylang: http + json.
+//
+// Hace un GET y, si la respuesta es JSON, la parsea y re-serializa de forma canónica. Necesita red
+// al ejecutarlo (no determinista → no entra al oráculo ni a los tests automáticos).
+//
+// Prueba: cargo run -- --vm examples/http_demo.ray
+
+from http import fetch, header, Response;
+from json import parse, stringify;
+
+fn main() -> int {
+    match (fetch("http://example.com/")) {
+        Result.Ok(resp) => {
+            print("status: " + to_string(resp.status));
+            match (header(resp, "Content-Type")) {
+                Option.Some(ct) => print("content-type: " + ct),
+                Option.None => print("(sin content-type)"),
+            };
+            // Si el cuerpo fuese JSON, lo normalizaríamos; example.com devuelve HTML, así que
+            // mostramos solo su tamaño.
+            print("cuerpo: " + to_string(len(resp.body)) + " bytes");
+            0
+        },
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}

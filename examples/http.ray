@@ -1,0 +1,151 @@
+// M15.4b — un cliente HTTP/1.1 escrito EN raylang, sobre los builtins TCP de M15.2.
+//
+// Igual que la librería JSON: cero runtime, cero builtins; puro raylang + stdlib, importable. Solo
+// http:// (TLS pediría criptografía). Usa "Connection: close" y lee hasta EOF para delimitar el
+// cuerpo (lo más simple y correcto). Errores como valores (Result).
+
+pub struct Response {
+    status: int,
+    headers: Map<string, string>,
+    body: string,
+}
+
+struct Url { host: string, port: int, path: string }
+
+// Parsea "http://host[:port]/path" (puerto 80 por defecto).
+fn parse_url(url: string) -> Result<Url, string> {
+    let prefijo: string = "http://";
+    if (!starts_with(url, prefijo)) {
+        return Result.Err("solo se soporta http:// (sin TLS)");
+    }
+    let resto: string = substring(url, len(prefijo), len(url));
+
+    // Separar host[:port] de /path.
+    var hostport: string = resto;
+    var path: string = "/";
+    match (index_of(resto, "/")) {
+        Option.Some(idx) => {
+            hostport = substring(resto, 0, idx);
+            path = substring(resto, idx, len(resto));
+        },
+        Option.None => {},
+    }
+
+    // Separar host de puerto.
+    var host: string = hostport;
+    var port: int = 80;
+    match (index_of(hostport, ":")) {
+        Option.Some(idx) => {
+            host = substring(hostport, 0, idx);
+            let ps: string = substring(hostport, idx + 1, len(hostport));
+            match (parse_int(ps)) {
+                Option.Some(n) => { port = n; },
+                Option.None => { return Result.Err("puerto inválido: " + ps); },
+            }
+        },
+        Option.None => {},
+    }
+    Result.Ok(Url { host: host, port: port, path: path })
+}
+
+fn build_request(method: string, u: Url, body: string) -> string {
+    var req: string = method + " " + u.path + " HTTP/1.1\r\n";
+    req = req + "Host: " + u.host + "\r\n";
+    req = req + "Connection: close\r\n";
+    if (len(body) > 0) {
+        req = req + "Content-Length: " + to_string(len(body)) + "\r\n";
+    }
+    req = req + "\r\n";
+    req + body
+}
+
+// Lee del socket hasta que el servidor cierra, acumulando los trozos.
+fn leer_todo(h: int) -> Result<string, string> {
+    var acc: string = "";
+    var seguir: bool = true;
+    var err: string = "";
+    while (seguir) {
+        match (socket_read(h)) {
+            Result.Ok(trozo) => {
+                if (len(trozo) == 0) { seguir = false; } else { acc = acc + trozo; }
+            },
+            Result.Err(e) => { err = e; seguir = false; },
+        }
+    }
+    if (err == "") { Result.Ok(acc) } else { Result.Err(err) }
+}
+
+fn parse_response(raw: string) -> Result<Response, string> {
+    match (index_of(raw, "\r\n\r\n")) {
+        Option.None => Result.Err("respuesta HTTP malformada (sin separador de cabeceras)"),
+        Option.Some(idx) => {
+            let cabeceras_raw: string = substring(raw, 0, idx);
+            let cuerpo: string = substring(raw, idx + 4, len(raw));
+            let lineas: [string] = split(cabeceras_raw, "\r\n");
+
+            // Línea de estado: "HTTP/1.1 200 OK".
+            let partes: [string] = split(lineas[0], " ");
+            if (len(partes) < 2) {
+                return Result.Err("línea de estado malformada: " + lineas[0]);
+            }
+            var status: int = 0;
+            match (parse_int(partes[1])) {
+                Option.Some(n) => { status = n; },
+                Option.None => { return Result.Err("código de estado inválido: " + partes[1]); },
+            }
+
+            // Cabeceras: "Nombre: Valor" (nombre en minúsculas para lookup case-insensitive).
+            var headers: Map<string, string> = map_new();
+            var i: int = 1;
+            while (i < len(lineas)) {
+                let linea: string = lineas[i];
+                match (index_of(linea, ":")) {
+                    Option.Some(c) => {
+                        let nombre: string = to_lower(trim(substring(linea, 0, c)));
+                        let valor: string = trim(substring(linea, c + 1, len(linea)));
+                        insert(headers, nombre, valor);
+                    },
+                    Option.None => {},
+                }
+                i = i + 1;
+            }
+            Result.Ok(Response { status: status, headers: headers, body: cuerpo })
+        },
+    }
+}
+
+// Devuelve el valor de una cabecera por nombre (case-insensitive), o None.
+pub fn header(r: Response, name: string) -> Option<string> {
+    get(r.headers, to_lower(name))
+}
+
+pub fn request(method: string, url: string, body: string) -> Result<Response, string> {
+    match (parse_url(url)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(u) => {
+            match (tcp_connect(u.host, u.port)) {
+                Result.Err(e) => Result.Err("no se pudo conectar: " + e),
+                Result.Ok(h) => {
+                    match (socket_write(h, build_request(method, u, body))) {
+                        Result.Err(e) => { close(h); Result.Err("error al enviar: " + e) },
+                        Result.Ok(_) => {
+                            let r = leer_todo(h);
+                            close(h);
+                            match (r) {
+                                Result.Err(e) => Result.Err("error al leer: " + e),
+                                Result.Ok(raw) => parse_response(raw),
+                            }
+                        },
+                    }
+                },
+            }
+        },
+    }
+}
+
+// Atajo para una petición GET. Se llama `fetch` (no `get`) a propósito: `get` ya es el accesor de
+// Map en el prelude y raylang no tiene sobrecarga, así que un `fn get` lo taparía dentro de este
+// módulo —y `header` necesita el `get` de Map—.
+pub fn fetch(url: string) -> Result<Response, string> {
+    request("GET", url, "")
+}

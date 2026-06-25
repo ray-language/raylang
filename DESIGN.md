@@ -66,7 +66,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
 | **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.6: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure · ✅ **M12.3** structured concurrency · ✅ **M12.4** `select` · ✅ **M12.5** cancelación de hermanas. **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>`, select de send) |
-| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete) · ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port`; `OpenHandle::Listener`; servidor secuencial bloqueante; subproceso con el `.ray` de servidor) · ✅ **M15.4a** JSON (librería `examples/json.ray` en raylang: `parse`/`stringify`, objetos `Map<string,Json>`, salida canónica; cero runtime; subproceso golden). Pendiente: M15.4b HTTP en raylang · (capstone) M15.5 sockets no bloqueantes en el scheduler |
+| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete) · ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port`; `OpenHandle::Listener`; servidor secuencial bloqueante; subproceso con el `.ray` de servidor) · ✅ **M15.4a** JSON (librería `examples/json.ray` en raylang: `parse`/`stringify`, objetos `Map<string,Json>`, salida canónica; cero runtime; subproceso golden) · ✅ **M15.4b** HTTP (librería `examples/http.ray` en raylang sobre TCP: `fetch`/`request`/`header`, parseo de URL/respuesta; compone con `json`; subproceso vs. servidor de juguete). Pendiente: (capstone) M15.5 sockets no bloqueantes en el scheduler |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) ⏳ | rendimiento, bootstrapping | 🚧 |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -3532,3 +3532,29 @@ usa `s[i]`/`chars`/comparación de `char`/`substring`/`parse_float` de la stdlib
 **valores** (`Result`), nunca `panic`. Limitación documentada: los escapes `\uXXXX` no se soportan
 (convertir un *code point* a `char` necesitaría un builtin nuevo; fuera de la filosofía "solo
 librería"). Como toda librería de raylang, **el runtime no cambia**.
+
+**M15.4b — HTTP (especificación).** Un cliente HTTP/1.1 en `examples/http.ray`, **en raylang** sobre
+los builtins TCP de M15.2 (`tcp_connect`/`socket_write`/`socket_read`/`close`). API:
+
+```raylang
+pub struct Response { status: int, headers: Map<string, string>, body: string }
+pub fn fetch(url: string) -> Result<Response, string>        // atajo GET (no `get`: choca con el de Map)
+pub fn request(method: string, url: string, body: string) -> Result<Response, string>
+pub fn header(r: Response, name: string) -> Option<string>   // búsqueda case-insensitive
+```
+
+El atajo se llama `fetch` y no `get` porque `get` ya es el accesor de `Map` en el prelude y raylang
+**no tiene sobrecarga**: un `fn get` taparía al de `Map` dentro de `http.ray`, donde `header` lo
+necesita (lección clavada por la propia implementación).
+
+Decisiones: solo **`http://`** (TLS pediría criptografía, fuera de alcance); se parsea la URL
+(`host[:port]/path`, puerto 80 por defecto) con `starts_with`/`index_of`/`substring`. La petición usa
+**`Connection: close`** → el servidor cierra al terminar y el cliente **lee hasta EOF** (acumula
+`socket_read` hasta `""`), que es la forma más simple y correcta de delimitar el cuerpo (sin necesidad
+de `Content-Length`/*chunked*). La respuesta se parte en cabeceras/cuerpo por el **primer**
+`\r\n\r\n` (con `index_of`, no `split`, que partiría también dentro del cuerpo); las cabeceras se
+guardan en un `Map` con **nombre en minúsculas** (`to_lower`) para el lookup case-insensitive. Errores
+como `Result`. **Cero runtime.** Se prueba contra un **servidor HTTP de juguete en Rust** (un hilo que
+responde con cabeceras + cuerpo JSON y cierra); el driver combina `http` + `json` (hace `get` y parsea
+el cuerpo con la librería JSON) → *showcase* de dos librerías de raylang componiéndose, en ambos
+motores.

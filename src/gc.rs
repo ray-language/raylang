@@ -82,11 +82,16 @@ pub struct VmEnum {
 }
 
 /// Un canal `Channel<T>` (M12.1): una cola FIFO de valores en tránsito + si está cerrado. Los receptores
-/// bloqueados NO viven aquí, sino en el scheduler de la VM (`parked`), para no acoplar el GC a las fibras.
-/// No acotado en M12.1 (la cola crece sin límite); el acotado/backpressure llega en M12.2.
+/// y emisores bloqueados NO viven aquí, sino en el scheduler de la VM (`parked`), para no acoplar el GC a
+/// las fibras.
+///
+/// `cap` (M12.2) fija la capacidad: `None` = **no acotado** (la cola crece sin límite, `send` nunca
+/// bloquea); `Some(n)` = **acotado** a `n` (`send` bloquea cuando `queue.len() == n` → backpressure), con
+/// `n = 0` un canal **rendezvous** (síncrono: `send` y `recv` se encuentran, la cola siempre está vacía).
 pub struct VmChannel {
     pub queue: VecDeque<HeapValue>,
     pub closed: bool,
+    pub cap: Option<usize>,
 }
 
 /// Un objeto del heap. Las formas compuestas que el GC gestiona.

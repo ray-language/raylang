@@ -182,14 +182,20 @@ pub enum OpCode {
     /// Saca un **valor-función** (`fn() -> T`); crea una **fibra** (green thread) nueva que lo ejecuta y
     /// la encola en el scheduler, y empuja unit. Builtin `spawn`. Solo la VM.
     Spawn,
-    /// No saca nada; asigna un **canal vacío** en el heap y empuja su handle. Builtin `channel`. Solo VM.
+    /// No saca nada; asigna un **canal no acotado** en el heap y empuja su handle. Builtin `channel()`
+    /// sin argumentos (la cola crece sin límite). Solo VM.
     ChannelNew,
-    /// Saca valor y canal; **envía** el valor (lo entrega a un receptor bloqueado o lo encola) y empuja
-    /// unit. No acotado → nunca bloquea (M12.1). Error si el canal está cerrado. Builtin `send`. Solo VM.
+    /// Saca un `int` (la capacidad ≥ 0); asigna un **canal acotado** a esa capacidad y empuja su handle.
+    /// Builtin `channel(n)` (M12.2; `n = 0` rendezvous). El compilador elige entre este y `ChannelNew`
+    /// según haya argumento. Solo VM.
+    ChannelNewBounded,
+    /// Saca valor y canal; **envía** el valor (lo entrega a un receptor bloqueado, lo encola si hay hueco,
+    /// o **bloquea** al emisor si la cola está llena → backpressure, M12.2) y empuja unit. Error si el
+    /// canal está cerrado. Builtin `send`. Solo VM.
     ChanSend,
     /// Saca un canal; empuja un arreglo `[T]` con **0 o 1** elementos (el valor recibido, o vacío si el
-    /// canal está cerrado y vacío). Si está vacío y abierto, **bloquea** la fibra. Primitivo `__recv`;
-    /// el prelude lo envuelve en `Option<T>`. Solo VM.
+    /// canal está cerrado y vacío). Si está vacío y abierto, **bloquea** la fibra; al recibir despierta a
+    /// un emisor bloqueado (M12.2). Primitivo `__recv`; el prelude lo envuelve en `Option<T>`. Solo VM.
     ChanRecv,
     // (cerrar un canal reusa el opcode `Close` de M11.8, ad-hoc polimórfico: handle de archivo o canal.)
 

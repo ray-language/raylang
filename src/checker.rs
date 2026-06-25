@@ -1599,11 +1599,20 @@ impl Checker {
                 }
             }
             // M12.1: `channel()` es indeterminado (como `map_new()`); su tipo lo fija el esperado.
+            // M12.2: `channel(n)` admite una capacidad `int` (el tipo de elemento sigue indeterminado).
             ExprKind::Call { callee, args }
                 if matches!(&callee.kind, ExprKind::Ident(n) if n == "channel") =>
             {
-                if !args.is_empty() {
-                    return Err(self.err(expr.line, expr.col, "channel no recibe argumentos".into()));
+                if args.len() > 1 {
+                    return Err(self.err(expr.line, expr.col,
+                        "channel recibe a lo sumo un argumento (la capacidad)".into()));
+                }
+                if let Some(cap) = args.first() {
+                    let ct = self.check_expr(cap)?;
+                    if !matches!(ct, Type::Int) {
+                        return Err(self.err(cap.line, cap.col,
+                            format!("la capacidad de channel debe ser int, no {}", ct)));
+                    }
                 }
                 match expected {
                     Type::Channel(_) => Ok(expected.clone()),

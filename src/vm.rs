@@ -82,10 +82,20 @@ struct Fiber {
     is_main: bool,
 }
 
-/// Una fibra **bloqueada** en un `recv` sobre un canal vacío, esperando a que alguien envíe o lo cierre.
+/// Qué espera una fibra **bloqueada** sobre un canal (M12.2):
+/// - `Recv`: bloqueada en `recv` (canal vacío y abierto) → despierta cuando alguien envía o lo cierra.
+/// - `Send(v)`: bloqueada en `send` (canal acotado y lleno) → despierta cuando un `recv` libera un hueco;
+///   sostiene el valor `v` que aún no ha podido entregar (es una raíz del GC).
+enum Waiting {
+    Recv,
+    Send(HeapValue),
+}
+
+/// Una fibra **bloqueada** sobre un canal, esperando enviar o recibir.
 struct Parked {
     chan: Handle,
     fiber: Fiber,
+    waiting: Waiting,
 }
 
 struct Vm<'a> {
@@ -402,67 +412,111 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Unit);
                 }
                 OpCode::ChannelNew => {
-                    let h = self.heap.allocate(Obj::Channel(VmChannel { queue: VecDeque::new(), closed: false }));
+                    // channel() sin argumentos → canal NO acotado (cap = None).
+                    let h = self.heap.allocate(Obj::Channel(VmChannel {
+                        queue: VecDeque::new(), closed: false, cap: None,
+                    }));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::ChannelNewBounded => {
+                    // channel(n) → canal acotado a la capacidad n ≥ 0 (n = 0 rendezvous), M12.2.
+                    let n = match self.pop() {
+                        HeapValue::Int(n) => n,
+                        _ => unreachable!("el checker garantiza un int"),
+                    };
+                    if n < 0 {
+                        return Err(runtime_error(line, col, "la capacidad de un canal no puede ser negativa"));
+                    }
+                    let h = self.heap.allocate(Obj::Channel(VmChannel {
+                        queue: VecDeque::new(), closed: false, cap: Some(n as usize),
+                    }));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::ChanSend => {
                     let v = self.pop();
                     let h = self.pop_obj();
-                    let closed = match self.heap.get(h) {
-                        Obj::Channel(c) => c.closed,
+                    let (closed, len, cap) = match self.heap.get(h) {
+                        Obj::Channel(c) => (c.closed, c.queue.len(), c.cap),
                         _ => unreachable!("el checker garantiza un Channel"),
                     };
                     if closed {
                         return Err(runtime_error(line, col, "send sobre un canal cerrado"));
                     }
-                    // ¿Hay un receptor bloqueado en este canal? Entrégaselo directo (rendezvous) y despiértalo
-                    // (el primero, FIFO → determinista). Si no, encola el valor (canal no acotado, M12.1).
-                    if let Some(pos) = self.parked.iter().position(|p| p.chan == h) {
+                    // (1) ¿Hay un receptor bloqueado en este canal? Entrégaselo directo (rendezvous) y
+                    // despiértalo (el primero, FIFO → determinista).
+                    if let Some(pos) = self.parked.iter().position(
+                        |p| p.chan == h && matches!(p.waiting, Waiting::Recv))
+                    {
                         let parked = self.parked.remove(pos);
-                        self.wake_with(parked.fiber, vec![v]);
-                    } else {
+                        self.wake_recv(parked.fiber, vec![v]);
+                        self.push(HeapValue::Unit);
+                    } else if cap.is_none() || len < cap.unwrap() {
+                        // (2) Hay hueco (no acotado, o len < cap) → encola y sigue.
                         match self.heap.get_mut(h) {
                             Obj::Channel(c) => c.queue.push_back(v),
                             _ => unreachable!("el checker garantiza un Channel"),
                         }
+                        self.push(HeapValue::Unit);
+                    } else {
+                        // (3) Cola llena (acotado) → BLOQUEAR al emisor (backpressure, M12.2). Guarda la
+                        // fibra con el valor pendiente; al despertarla, `wake_sender` le deja unit (el
+                        // resultado de `send`) en la pila y continúa tras el ChanSend.
+                        let fiber = Fiber {
+                            frames: std::mem::take(&mut self.frames),
+                            stack: std::mem::take(&mut self.stack),
+                            is_main: self.current_is_main,
+                        };
+                        self.parked.push(Parked { chan: h, fiber, waiting: Waiting::Send(v) });
+                        self.schedule_next(line, col)?;
                     }
-                    self.push(HeapValue::Unit);
                 }
                 OpCode::ChanRecv => {
                     let h = self.pop_obj();
-                    // Some(Some(v)) = hay valor; Some(None) = cerrado y vacío ([]); None = vacío y abierto → bloquear.
-                    let outcome: Option<Option<HeapValue>> = match self.heap.get_mut(h) {
-                        Obj::Channel(c) => {
-                            if let Some(v) = c.queue.pop_front() {
-                                Some(Some(v))
-                            } else if c.closed {
-                                Some(None)
-                            } else {
-                                None
-                            }
-                        }
+                    // (1) ¿Valor en la cola? Sácalo; al liberar un hueco, si hay un emisor bloqueado en este
+                    // canal, su valor entra a la cola (ya hay sitio) y se le despierta.
+                    let from_queue = match self.heap.get_mut(h) {
+                        Obj::Channel(c) => c.queue.pop_front(),
                         _ => unreachable!("el checker garantiza un Channel"),
                     };
-                    match outcome {
-                        Some(Some(v)) => {
-                            let arr = self.heap.allocate(Obj::Array(vec![v]));
-                            self.push(HeapValue::Obj(arr));
-                        }
-                        Some(None) => {
-                            let arr = self.heap.allocate(Obj::Array(Vec::new()));
-                            self.push(HeapValue::Obj(arr));
-                        }
-                        None => {
-                            // Bloquear: guardar la fibra actual (ip ya apunta tras el ChanRecv → al
-                            // despertarla, el `wake_with` le deja el `[T]` en la pila y continúa) y conmutar.
-                            let fiber = Fiber {
-                                frames: std::mem::take(&mut self.frames),
-                                stack: std::mem::take(&mut self.stack),
-                                is_main: self.current_is_main,
-                            };
-                            self.parked.push(Parked { chan: h, fiber });
-                            self.schedule_next(line, col)?;
-                        }
+                    if let Some(v) = from_queue {
+                        self.wake_blocked_sender(h);
+                        let arr = self.heap.allocate(Obj::Array(vec![v]));
+                        self.push(HeapValue::Obj(arr));
+                        continue;
+                    }
+                    // (2) Cola vacía: ¿hay un emisor bloqueado? (canal lleno con cap > 0, o rendezvous
+                    // cap = 0). Toma su valor directo y despiértalo.
+                    if let Some(pos) = self.parked.iter().position(
+                        |p| p.chan == h && matches!(p.waiting, Waiting::Send(_)))
+                    {
+                        let parked = self.parked.remove(pos);
+                        let sv = match parked.waiting {
+                            Waiting::Send(sv) => sv,
+                            _ => unreachable!(),
+                        };
+                        self.wake_sender(parked.fiber);
+                        let arr = self.heap.allocate(Obj::Array(vec![sv]));
+                        self.push(HeapValue::Obj(arr));
+                        continue;
+                    }
+                    // (3) Cola vacía y sin emisores: cerrado → None ([]); abierto → bloquear (Recv).
+                    let closed = match self.heap.get(h) {
+                        Obj::Channel(c) => c.closed,
+                        _ => unreachable!("el checker garantiza un Channel"),
+                    };
+                    if closed {
+                        let arr = self.heap.allocate(Obj::Array(Vec::new()));
+                        self.push(HeapValue::Obj(arr));
+                    } else {
+                        // Bloquear: guardar la fibra actual (ip ya apunta tras el ChanRecv → al
+                        // despertarla, el `wake_recv` le deja el `[T]` en la pila y continúa) y conmutar.
+                        let fiber = Fiber {
+                            frames: std::mem::take(&mut self.frames),
+                            stack: std::mem::take(&mut self.stack),
+                            is_main: self.current_is_main,
+                        };
+                        self.parked.push(Parked { chan: h, fiber, waiting: Waiting::Recv });
+                        self.schedule_next(line, col)?;
                     }
                 }
 
@@ -809,8 +863,17 @@ impl<'a> Vm<'a> {
                             self.push(HeapValue::Int(0));
                         }
                         // Cerrar un canal: marcarlo cerrado y despertar a TODOS sus receptores bloqueados
-                        // (recibirán [] → None). Devuelve unit.
+                        // (recibirán [] → None). Devuelve unit. M12.2: cerrar un canal con un EMISOR
+                        // bloqueado es un error de programa (alguien todavía esperaba enviar) → error de
+                        // ejecución en el sitio del `close` (determinista, a diferencia de "panic en otra
+                        // fibra").
                         HeapValue::Obj(ch) => {
+                            if self.parked.iter().any(
+                                |p| p.chan == ch && matches!(p.waiting, Waiting::Send(_)))
+                            {
+                                return Err(runtime_error(line, col,
+                                    "close sobre un canal con un emisor bloqueado"));
+                            }
                             match self.heap.get_mut(ch) {
                                 Obj::Channel(c) => c.closed = true,
                                 _ => unreachable!("el checker garantiza un handle o un Channel"),
@@ -819,7 +882,7 @@ impl<'a> Vm<'a> {
                             while i < self.parked.len() {
                                 if self.parked[i].chan == ch {
                                     let parked = self.parked.remove(i);
-                                    self.wake_with(parked.fiber, Vec::new());
+                                    self.wake_recv(parked.fiber, Vec::new());
                                 } else {
                                     i += 1;
                                 }
@@ -1024,10 +1087,37 @@ impl<'a> Vm<'a> {
     /// Despierta una fibra bloqueada en `recv`: le deja `values` (envuelto en el `[T]` que devuelve el
     /// primitivo `__recv`) en su pila de operandos y la encola como lista. `[v]` la entrega un `send`; `[]`
     /// (vacío → `None`) la entrega un `close`.
-    fn wake_with(&mut self, mut fiber: Fiber, values: Vec<HeapValue>) {
+    fn wake_recv(&mut self, mut fiber: Fiber, values: Vec<HeapValue>) {
         let arr = self.heap.allocate(Obj::Array(values));
         fiber.stack.push(HeapValue::Obj(arr));
         self.ready.push_back(fiber);
+    }
+
+    /// Despierta una fibra bloqueada en `send` (M12.2): su `send` ya quedó atrás (el `ip` apunta tras el
+    /// ChanSend), así que solo le deja **unit** (el resultado de `send`) en la pila y la encola.
+    fn wake_sender(&mut self, mut fiber: Fiber) {
+        fiber.stack.push(HeapValue::Unit);
+        self.ready.push_back(fiber);
+    }
+
+    /// Tras un `recv` que liberó un hueco: si hay un **emisor bloqueado** en `chan` (cola llena, M12.2),
+    /// mete su valor pendiente en la cola (ahora hay sitio) y lo despierta. FIFO → el primero que se
+    /// bloqueó despierta antes.
+    fn wake_blocked_sender(&mut self, chan: Handle) {
+        if let Some(pos) = self.parked.iter().position(
+            |p| p.chan == chan && matches!(p.waiting, Waiting::Send(_)))
+        {
+            let parked = self.parked.remove(pos);
+            let sv = match parked.waiting {
+                Waiting::Send(sv) => sv,
+                _ => unreachable!(),
+            };
+            match self.heap.get_mut(chan) {
+                Obj::Channel(c) => c.queue.push_back(sv),
+                _ => unreachable!("el checker garantiza un Channel"),
+            }
+            self.wake_sender(parked.fiber);
+        }
     }
 
     // ----- Recolección de basura (mark-and-sweep) -----
@@ -1045,6 +1135,10 @@ impl<'a> Vm<'a> {
         }
         for p in &self.parked {
             roots.push(p.chan); // el canal que espera la fibra debe sobrevivir aunque solo lo referencie ella
+            // M12.2: un emisor bloqueado sostiene un valor pendiente que aún no entró al canal → es raíz.
+            if let Waiting::Send(v) = &p.waiting {
+                roots.extend(v.handle()); // `Option<Handle>` es iterable: añade el handle si lo hay
+            }
             gather_roots(&p.fiber.frames, &p.fiber.stack, &mut roots);
         }
 

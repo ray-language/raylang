@@ -695,6 +695,18 @@ impl<'a> Compiler<'a> {
         if let ExprKind::Ident(name) = &callee.kind {
             // Solo es directo si el nombre NO es una variable (local o upvalue).
             if !self.name_is_variable(name) {
+                // M12.2: `channel()` vs `channel(n)` → dos opcodes (no acotado / acotado). Se trata aparte
+                // porque la capacidad cambia el opcode (el resto de builtins tiene un opcode fijo en la
+                // tabla). Mismo special-case que ya tiene `channel` en el checker por ser indeterminado.
+                if name == "channel" {
+                    if let Some(cap) = args.first() {
+                        self.emit_expr(cap)?;
+                        self.emit(OpCode::ChannelNewBounded, line, col);
+                    } else {
+                        self.emit(OpCode::ChannelNew, line, col);
+                    }
+                    return Ok(());
+                }
                 // Builtin: el opcode lo da el registro único (`src/builtins.rs`).
                 if let Some(b) = crate::builtins::lookup(name) {
                     for arg in args {

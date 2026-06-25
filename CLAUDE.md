@@ -1085,6 +1085,19 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `--vm` y, por el scheduler determinista, se testean contra **salida esperada exacta** (no hay oráculo
     cruzado). Ejemplo `examples/concurrencia.ray` (pipeline de fibras). Diferido: M12.2 canales acotados
     (backpressure), M12.3 structured concurrency (scope+join), M12.4 `select`.
+  - **M12.2 COMPLETO** (347 lib + 12 en `tests/concurrency_cli.rs`): **canales acotados / backpressure**
+    (DESIGN §21.3). `channel(n)` crea un canal acotado a la capacidad `n` (`int` ≥ 0; `n=0` = **rendezvous**
+    síncrono); `channel()` sigue no acotado. El tipo de elemento sigue **indeterminado** (la capacidad es un
+    valor de runtime, no entra en `Channel<T>`); el checker acepta 0/1 args (la capacidad ha de ser `int`).
+    **`send` se vuelve el segundo punto de yield**: (1) si hay receptor bloqueado → entrega directa; (2) si
+    hay hueco (no acotado o `len<cap`) → encola; (3) cola llena → **bloquea al emisor** (`Waiting::Send(v)`,
+    aparcado con su valor pendiente → backpressure). `recv`, al liberar un hueco, **despierta a un emisor
+    bloqueado** (su valor entra a la cola); con `cap=0` toma su valor directo. `Parked` pasa a llevar
+    `Waiting::Recv`/`Send(v)`; el valor de un emisor aparcado es **raíz del GC** nueva. Dos opcodes
+    (`ChannelNew` no acotado / `ChannelNewBounded` saca la capacidad); el compilador elige por aridad
+    (special-case de `channel`, como en el checker). **`close` con un emisor bloqueado = error de ejecución**
+    en el sitio del `close` (determinista, a diferencia de panic-en-otra-fibra). Determinismo FIFO intacto;
+    deadlock cubre también emisores bloqueados. Diferido: M12.3 structured concurrency, M12.4 `select`.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

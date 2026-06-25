@@ -29,7 +29,9 @@ fn cuadrar(entrada: Channel<int>, salida: Channel<int>) {
 }
 
 fn main() -> int {
-    let nums: Channel<int> = channel();
+    // `nums` es acotado a 2 (M12.2): si el generador corre más rápido que el cuadrador, su `send` se
+    // bloquea al llenarse la cola (backpressure) en vez de acumular sin límite. `cuad` es no acotado.
+    let nums: Channel<int> = channel(2);
     let cuad: Channel<int> = channel();
 
     // Pipeline de fibras: generar -> cuadrar -> main. Cada flecha es un canal.

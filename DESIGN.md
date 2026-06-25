@@ -65,7 +65,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ✅ M11.1 stdlib de string (`+`/`len`/`to_string`/`trim`/`split`) · M11.2 I/O (`eprint`/`input`/`parse_int`/`read_int`/`env`/`args`/`read_file`/`write_file`) · M11.3 módulos (`import M;`+`M.f`, `from M import a as b`, `pub`) |
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
-| **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | 🚧 §21.1/§21.2: ✅ **M12.1** slice CSP (spawn + canales no acotados + scheduler determinista) · ⏳ M12.2 acotados/backpressure · M12.3 structured concurrency · M12.4 `select` |
+| **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | 🚧 §21.2/§21.3: ✅ **M12.1** slice CSP (spawn + canales no acotados + scheduler determinista) · ✅ **M12.2** acotados/backpressure (`channel(n)`; `send` punto de yield) · ⏳ M12.3 structured concurrency · M12.4 `select` |
 | **Transversal** | optimización de la VM (incremental, midiendo) · **VM auto-alojada** (M14.5, opcional) | rendimiento, bootstrapping | ⏳ |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -2217,6 +2217,46 @@ el canal que cada *parked* espera. `recv` bloqueante guarda la fibra (su `ip` ya
 `wake_with` le deja el `[T]` en la pila al despertarla. Tests: `tests/concurrency_cli.rs` (productor/
 consumidor, orden determinista con 2 productores, pipeline de fibras, closure capturada, `close`→`None`,
 deadlock, `send` a canal cerrado, error limpio del intérprete). Ejemplo: `examples/concurrencia.ray`.
+
+### 21.3 M12.2 — canales acotados / backpressure (especificación)
+
+M12.1 dejó los canales **no acotados**: `send` nunca bloquea (la cola crece sin límite). M12.2 añade
+**capacidad** y, con ella, **backpressure**: un emisor que escribe más rápido de lo que el consumidor lee
+acaba **bloqueándose** hasta que haya sitio. Es el segundo y último punto de yield del modelo (el primero,
+`recv`, ya estaba) y completa la simetría productor↔consumidor de CSP.
+
+**Surface (mínima, sin gramática nueva):**
+- `channel() -> Channel<T>` — **no acotado** (como en M12.1; la cola crece sin límite, `send` nunca
+  bloquea). Sin cambios.
+- `channel(n) -> Channel<T>` — **acotado** con capacidad `n` (un `int` ≥ 0). `channel(0)` es un canal
+  **síncrono / rendezvous**: `send` se completa solo cuando hay un `recv` esperando (cola de tamaño 0).
+  El tipo de elemento sigue **indeterminado** (lo fija el esperado, como `channel()`); la capacidad es un
+  valor de runtime, no parte del tipo (`Channel<T>` no lleva la capacidad).
+- `send`/`recv`/`close` sin cambios de firma.
+
+**Semántica del scheduler (extiende M12.1):**
+- **`send` pasa a ser punto de yield.** Al enviar: (1) si hay un **receptor bloqueado** en el canal,
+  entrega directo y lo despierta (rendezvous; ya en M12.1); si no, (2) si la cola **tiene hueco** (no
+  acotado, o `len < cap`), encola y sigue; si no, (3) la cola está **llena** → el emisor se **bloquea**
+  (se aparca con su valor) y se conmuta de fibra. Backpressure.
+- **`recv` despierta a un emisor bloqueado.** Al recibir, tras liberar un hueco: si hay un **emisor
+  bloqueado** en ese canal, su valor entra a la cola (ya hay sitio) y se le despierta. Con `cap = 0`
+  (cola siempre vacía) el `recv` toma el valor **directo** del emisor aparcado y lo despierta.
+- **Determinismo:** las fibras aparcadas se sirven **FIFO** (la que se bloqueó antes despierta antes);
+  un emisor despertado vuelve **al final** de `ready` (igual que un receptor en M12.1).
+- **`close` con emisores bloqueados = error de ejecución** en el sitio del `close` ("close sobre un canal
+  con un emisor bloqueado"): cerrar un canal del que alguien todavía espera enviar es un error de
+  programa, y a diferencia de "panic en otra fibra" sí es detectable y determinista en el `close`. Cerrar
+  despierta a los **receptores** con `None` (como en M12.1).
+- **Deadlock:** sin cambios — si la fibra en curso bloquea, `ready` está vacía y aún hay fibras aparcadas
+  (receptores **o** emisores) → deadlock.
+
+**Runtime / GC:** `VmChannel` gana `cap: Option<usize>` (`None` = no acotado; `Some(n)` = capacidad `n`,
+con `n = 0` rendezvous). Una fibra aparcada distingue **receptor** de **emisor** (`Waiting::Recv` /
+`Waiting::Send(valor)`); el `valor` que sostiene un emisor bloqueado es una **raíz del GC** nueva (en
+M12.1 las aparcadas no sostenían ningún valor). Dos opcodes para crear: `ChannelNew` (no acotado, 0 args)
+y `ChannelNewBounded` (saca la capacidad de la pila); el compilador elige según haya argumento (es el
+mismo *special-case* que ya tiene `channel` en el checker por ser indeterminado).
 
 ## 22. M13 — Habilitadores de self-hosting
 

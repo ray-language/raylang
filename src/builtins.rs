@@ -390,9 +390,16 @@ static BUILTINS: &[Builtin] = &[
             other => Err((Some(0), format!("spawn espera una función, no {}", other))),
         }
     } },
-    // channel() -> Channel<T>: crea un canal. Indeterminado (como map_new): el camino normal lo intercepta.
+    // channel() / channel(n) -> Channel<T>: crea un canal (no acotado, o acotado a la capacidad n: int ≥ 0,
+    // M12.2). Indeterminado en el tipo de elemento (como map_new): el camino con tipo esperado lo
+    // intercepta; aquí solo validamos la aridad/capacidad y damos el error de inferencia.
     Builtin { name: "channel", opcode: OpCode::ChannelNew, check: |a| {
-        arity(a, 0, "channel", "")?;
+        if a.len() > 1 {
+            return Err((Some(1), "channel recibe a lo sumo un argumento (la capacidad)".into()));
+        }
+        if matches!(a.first(), Some(t) if !matches!(t, Type::Int)) {
+            return Err((Some(0), format!("la capacidad de channel debe ser int, no {}", a[0])));
+        }
         Err((None, "no se puede inferir el tipo de channel; anótalo, p. ej. 'let c: Channel<int> = channel()'".into()))
     } },
     // send(ch, v) -> unit: envía v por el canal ch.

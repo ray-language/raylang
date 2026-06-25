@@ -39,6 +39,10 @@ pub enum Type {
     /// Semántica de referencia (objeto del heap). El parser lo produce como `Struct("Channel", [T])`;
     /// el checker lo reclasifica aquí (igual que `Map`). La concurrencia vive solo en la VM.
     Channel(Box<Type>),
+    /// Una tarea `Task<T>` (M12.3, structured concurrency): el handle al resultado futuro de un `spawn`.
+    /// Semántica de referencia (objeto del heap). El parser la produce como `Struct("Task", [T])`; el
+    /// checker la reclasifica aquí (igual que `Channel`/`Map`). Solo la VM.
+    Task(Box<Type>),
     /// Un struct nominal, con sus **argumentos de tipo**: `Punto` es
     /// `Struct("Punto", [])`; `Par<int, bool>` es `Struct("Par", [Int, Bool])` (M6).
     /// Tipado **nominal** (M3.2): la igualdad compara nombre y argumentos.
@@ -83,6 +87,7 @@ impl std::fmt::Display for Type {
             Type::Array(elem) => write!(f, "[{}]", elem),
             Type::Map(k, v) => write!(f, "Map<{}, {}>", k, v),
             Type::Channel(t) => write!(f, "Channel<{}>", t),
+            Type::Task(t) => write!(f, "Task<{}>", t),
             Type::Struct(name, args) | Type::Enum(name, args) => {
                 f.write_str(name)?;
                 if !args.is_empty() {

@@ -336,10 +336,20 @@ static BUILTINS: &[Builtin] = &[
         Ok(Type::Array(Box::new(Type::Int)))
     } },
     // join(arr, sep) -> string (M11.7a): une un [string] con el separador `sep`.
+    // join **ad-hoc polimórfico** (como `close`): `join(arr: [string], sep) -> string` (M11.7a) o
+    // `join(t: Task<T>) -> T` (M12.3, une una tarea). raylang no tiene sobrecarga, así que un único
+    // builtin que ramifica por el tipo del primer argumento; el compilador elige el opcode por la aridad.
     Builtin { name: "join", opcode: OpCode::Join, check: |a| {
+        if matches!(a.first(), Some(Type::Task(_))) {
+            arity(a, 1, "join", " (una Task)")?;
+            match &a[0] {
+                Type::Task(t) => return Ok((**t).clone()),
+                _ => unreachable!(),
+            }
+        }
         arity(a, 2, "join", " (arreglo de string, separador)")?;
         if a[0] != Type::Array(Box::new(Type::String)) {
-            return Err((Some(0), format!("join espera un [string] como primer argumento, no {}", a[0])));
+            return Err((Some(0), format!("join espera un [string] o una Task como primer argumento, no {}", a[0])));
         }
         if a[1] != Type::String { return Err((Some(1), format!("join espera un string como separador, no {}", a[1]))); }
         Ok(Type::String)
@@ -381,13 +391,24 @@ static BUILTINS: &[Builtin] = &[
     } },
 
     // --- Concurrencia: CSP sobre la VM (M12.1). Solo la VM las ejecuta; el intérprete da error limpio. ---
-    // spawn(f) -> unit: lanza la función f (sin parámetros) como green thread.
+    // spawn(f: fn() -> T) -> Task<T>: lanza f (sin parámetros) como green thread y devuelve su handle
+    // (M12.3; en M12.1/M12.2 devolvía unit y el handle no existía).
     Builtin { name: "spawn", opcode: OpCode::Spawn, check: |a| {
         arity(a, 1, "spawn", " (una función sin parámetros)")?;
         match &a[0] {
-            Type::Fn(params, _) if params.is_empty() => Ok(Type::Unit),
+            Type::Fn(params, ret) if params.is_empty() => Ok(Type::Task(ret.clone())),
             Type::Fn(_, _) => Err((Some(0), "spawn requiere una función SIN parámetros (fn() -> T)".into())),
             other => Err((Some(0), format!("spawn espera una función, no {}", other))),
+        }
+    } },
+    // scope(body: fn() -> R) -> R: corre body; al volver, une todas las tareas lanzadas dentro y propaga
+    // un fallo si lo hubo (M12.3 structured concurrency). El compilador lo baja con ScopeBegin/ScopeEnd.
+    Builtin { name: "scope", opcode: OpCode::ScopeBegin, check: |a| {
+        arity(a, 1, "scope", " (una función sin parámetros)")?;
+        match &a[0] {
+            Type::Fn(params, ret) if params.is_empty() => Ok((**ret).clone()),
+            Type::Fn(_, _) => Err((Some(0), "scope requiere una función SIN parámetros (fn() -> R)".into())),
+            other => Err((Some(0), format!("scope espera una función, no {}", other))),
         }
     } },
     // channel() / channel(n) -> Channel<T>: crea un canal (no acotado, o acotado a la capacidad n: int ≥ 0,

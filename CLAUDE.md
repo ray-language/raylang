@@ -1098,6 +1098,28 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     (special-case de `channel`, como en el checker). **`close` con un emisor bloqueado = error de ejecución**
     en el sitio del `close` (determinista, a diferencia de panic-en-otra-fibra). Determinismo FIFO intacto;
     deadlock cubre también emisores bloqueados. Diferido: M12.3 structured concurrency, M12.4 `select`.
+  - **M12.3 COMPLETO** (347 lib + 17 en `tests/concurrency_cli.rs`): **structured concurrency** (DESIGN
+    §21.4). El modelo estructurado (Trio/Kotlin) sobre el slice CSP: tareas con **valor de retorno**, un
+    `scope` que **posee** las que se lanzan dentro y **las une** al salir, y **propagación** del fallo de
+    una hija. **Surface** (builtins + closures, cero gramática): `Task<T>` (tipo nuevo, como `Channel<T>`);
+    `spawn(f: fn()->T)` **cambia su firma** → devuelve `Task<T>` (retrocompat: como sentencia se descarta);
+    `join(t: Task<T>) -> T` bloquea hasta que la tarea termina (re-lanza si falló); `scope(body: fn()->R)
+    -> R` corre el cuerpo y al volver une todas sus tareas y propaga el primer fallo. **`join` ad-hoc
+    polimórfico** (como `close`): colisionaba con el `join(arr,sep)` de strings (M11.7a) y raylang no tiene
+    sobrecarga → un builtin que ramifica por tipo + el compilador elige el opcode por **aridad** (1=`TaskJoin`,
+    2=`Join` string). **Runtime (solo VM)**: `Obj::Task(VmTask{state: Pending|Done(v)|Failed(msg)})`; cada
+    `Fiber` gana `task`/`scopes` (la VM espeja `current_task`/`scopes`, salva/restaura al conmutar); opcodes
+    `Spawn` (crea Task + adscribe al scope), `TaskJoin`, `ScopeBegin`/`ScopeEnd` (el compilador baja
+    `scope(body)` a `ScopeBegin; body(); ScopeEnd`, special-case como `channel`; la llamada al cuerpo NO es
+    cola → el TCO no la toca). `join`/`ScopeEnd` que bloquean **rebobinan el ip** y re-ejecutan al despertar
+    (TaskJoin re-empuja el handle que sacó). **Propagación**: el bucle de la VM corre cada instrucción en un
+    **cierre** y **captura** el error de una fibra hija (frames activos, no `main`) en su `Task` como
+    `Failed`, planificando la siguiente en vez de abortar; los de `main` y del scheduler (frames vacíos =
+    deadlock) abortan; un `Failed` se re-lanza en el `join`/`ScopeEnd` que lo observe → encadena hacia
+    arriba. **GC multi-raíz**: `Done(v)`, el handle de tarea de cada joiner aparcado, y los hijos de cada
+    `ScopeFrame` (en curso/listas/aparcadas). Ejemplo `examples/structured.ray`. Diferido: **cancelación**
+    de hermanas cuando una falla (sin primitivo de cancelación; el cuerpo del scope que hace panic deja
+    huérfanas), M12.4 `select`.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

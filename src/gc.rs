@@ -94,6 +94,22 @@ pub struct VmChannel {
     pub cap: Option<usize>,
 }
 
+/// El estado de una `Task<T>` (M12.3, structured concurrency):
+/// - `Pending`: la fibra todavía corre (los que la unan se bloquean).
+/// - `Done(valor)`: terminó normal; `join` devuelve `valor`.
+/// - `Failed(mensaje)`: terminó con un panic; `join`/`scope` re-lanzan ese mensaje (propagación).
+pub enum TaskState {
+    Pending,
+    Done(HeapValue),
+    Failed(String),
+}
+
+/// Una tarea `Task<T>` (M12.3): el handle a una fibra `spawn`eada, con su estado de terminación. El GC
+/// traza el valor de `Done` (las fibras que esperan a la tarea viven en el scheduler de la VM).
+pub struct VmTask {
+    pub state: TaskState,
+}
+
 /// Un objeto del heap. Las formas compuestas que el GC gestiona.
 pub enum Obj {
     Array(Vec<HeapValue>),
@@ -109,6 +125,8 @@ pub enum Obj {
     Map(HashMap<MapKey, HeapValue>),
     /// Un canal `Channel<T>` (M12.1): el GC traza los valores **en tránsito** (la cola).
     Channel(VmChannel),
+    /// Una tarea `Task<T>` (M12.3): el GC traza el valor de `Done`.
+    Task(VmTask),
 }
 
 /// Una ranura del heap: un objeto y su bit de marca.
@@ -218,6 +236,11 @@ impl Heap {
             Obj::Map(m) => m.values().filter_map(HeapValue::handle).collect(),
             // M12.1: los valores en tránsito en el canal son raíces mientras estén en la cola.
             Obj::Channel(c) => c.queue.iter().filter_map(HeapValue::handle).collect(),
+            // M12.3: el valor de una tarea terminada con éxito es raíz hasta que alguien la una.
+            Obj::Task(t) => match &t.state {
+                TaskState::Done(v) => v.handle().into_iter().collect(),
+                _ => Vec::new(),
+            },
         }
     }
 

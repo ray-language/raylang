@@ -1,4 +1,5 @@
-//! Pruebas de **concurrencia** (M12.1 slice CSP + M12.2 canales acotados/backpressure) sobre el binario.
+//! Pruebas de **concurrencia** (M12.1 slice CSP + M12.2 acotados/backpressure + M12.3 structured
+//! concurrency) sobre el binario.
 //!
 //! La concurrencia vive SOLO en la VM (el intérprete da un error limpio). El scheduler es **cooperativo
 //! M:1 y determinista** (cola FIFO, puntos de yield = `recv` bloqueante y, desde M12.2, `send` sobre un
@@ -297,4 +298,112 @@ fn main() -> int {
     let (_out, err, code) = run("conc_deadlock_emisor", src, true);
     assert!(err.contains("deadlock"), "stderr no menciona deadlock: {err}");
     assert_eq!(code, 70);
+}
+
+// --- M12.3: structured concurrency (Task<T> + join + scope) ---
+
+#[test]
+fn scope_join_valor_de_retorno() {
+    // spawn devuelve Task<int>; join bloquea y da su valor; el scope devuelve el valor del cuerpo.
+    let src = r#"
+fn cuadrado(n: int) -> int { n * n }
+fn main() -> int {
+    let total = scope(fn() -> int {
+        let a: Task<int> = spawn(fn() -> int { cuadrado(3) });
+        let b: Task<int> = spawn(fn() -> int { cuadrado(4) });
+        join(a) + join(b)
+    });
+    print(total);
+    total
+}
+"#;
+    let (out, _err, code) = run("conc_scope_join", src, true);
+    assert_eq!(out, "25\n");
+    assert_eq!(code, 25);
+}
+
+#[test]
+fn scope_une_tareas_no_unidas() {
+    // El scope espera a una tarea aunque no se la una explícitamente: al salir, ya terminó.
+    let src = r#"
+fn main() -> int {
+    let ch: Channel<int> = channel();
+    scope(fn() {
+        spawn(fn() { send(ch, 42); });
+    });
+    match (recv(ch)) {
+        Option.Some(v) => print(v),
+        Option.None => print(0 - 1),
+    }
+    0
+}
+"#;
+    let (out, _err, code) = run("conc_scope_autojoin", src, true);
+    assert_eq!(out, "42\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn join_propaga_el_panic_de_la_tarea() {
+    // Una tarea que hace panic: join re-lanza ese fallo en el sitio del join (propagación).
+    let src = r#"
+fn main() -> int {
+    let t: Task<int> = spawn(fn() -> int { panic("boom") });
+    let v = join(t);
+    print(v);
+    0
+}
+"#;
+    let (_out, err, code) = run("conc_join_panic", src, true);
+    assert!(err.contains("boom"), "stderr no propaga el panic: {err}");
+    assert_eq!(code, 70);
+}
+
+#[test]
+fn scope_propaga_el_panic_de_una_hija() {
+    // Una tarea lanzada dentro del scope hace panic: el scope lo propaga al unir al salir.
+    let src = r#"
+fn main() -> int {
+    scope(fn() -> int {
+        spawn(fn() -> int { panic("la hija fallo") });
+        0
+    });
+    print(999);
+    0
+}
+"#;
+    let (out, err, code) = run("conc_scope_panic", src, true);
+    assert_eq!(out, "");
+    assert!(err.contains("la hija fallo"), "stderr no propaga el panic de la hija: {err}");
+    assert_eq!(code, 70);
+}
+
+#[test]
+fn scope_de_varias_tareas() {
+    // Varias tareas en un scope, unidas en orden: ejercita el scheduler y el GC multi-raíz.
+    let src = r#"
+fn main() -> int {
+    let suma = scope(fn() -> int {
+        var tareas: [Task<int>] = [];
+        var i = 1;
+        while (i <= 5) {
+            let n = i;
+            push(tareas, spawn(fn() -> int { n * n }));
+            i = i + 1;
+        }
+        var total = 0;
+        var j = 0;
+        while (j < len(tareas)) {
+            total = total + join(tareas[j]);
+            j = j + 1;
+        }
+        total
+    });
+    print(suma);
+    suma
+}
+"#;
+    let (out, _err, code) = run("conc_scope_varias", src, true);
+    assert_eq!(out, "55\n"); // 1+4+9+16+25
+    assert_eq!(code, 55);
 }

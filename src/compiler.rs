@@ -707,6 +707,25 @@ impl<'a> Compiler<'a> {
                     }
                     return Ok(());
                 }
+                // M12.3: `scope(body)` se baja a ScopeBegin; body(); ScopeEnd. Se trata aparte porque el
+                // cuerpo se llama ENTRE los dos opcodes de scope (para poseer las tareas que lance) — no es
+                // un builtin ordinario que reciba sus args en la pila. La llamada al cuerpo NO está en
+                // posición de cola (la sigue ScopeEnd), así que el peephole de TCO no la toca.
+                if name == "scope" {
+                    self.emit(OpCode::ScopeBegin, line, col);
+                    self.emit_expr(&args[0])?;        // el cuerpo: un valor-función fn() -> R
+                    self.emit(OpCode::CallValue(0), line, col);
+                    self.emit(OpCode::ScopeEnd, line, col);
+                    return Ok(());
+                }
+                // M12.3: `join` es ad-hoc polimórfico (string vs Task). El opcode lo decide la ARIDAD:
+                // 1 argumento → unir una Task (TaskJoin); 2 → unir un [string] (Join). El checker ya validó
+                // los tipos; aquí basta la forma.
+                if name == "join" && args.len() == 1 {
+                    self.emit_expr(&args[0])?;
+                    self.emit(OpCode::TaskJoin, line, col);
+                    return Ok(());
+                }
                 // Builtin: el opcode lo da el registro único (`src/builtins.rs`).
                 if let Some(b) = crate::builtins::lookup(name) {
                     for arg in args {

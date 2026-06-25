@@ -23,7 +23,7 @@ use std::rc::Rc;
 use crate::bytecode::{Chunk, CompiledEnum, CompiledFn, CompiledProgram, OpCode, UpvalueSource};
 use std::collections::{HashMap, VecDeque};
 
-use crate::gc::{Handle, Heap, HeapValue, Obj, VmChannel, VmClosure, VmEnum, VmStruct};
+use crate::gc::{Handle, Heap, HeapValue, Obj, TaskState, VmChannel, VmClosure, VmEnum, VmStruct, VmTask};
 use crate::interpreter::{EnumInstance, MapKey, RuntimeError, StructInstance, Value};
 
 /// Límite de marcos para detectar recursión infinita en vez de colgarse. Es el
@@ -80,20 +80,35 @@ struct Fiber {
     frames: Vec<CallFrame>,
     stack: Vec<HeapValue>,
     is_main: bool,
+    /// M12.3: la `Task` que esta fibra debe rellenar al terminar (`None` para `main`).
+    task: Option<Handle>,
+    /// M12.3: pila de scopes activos en esta fibra (structured concurrency); las tareas que lance
+    /// mientras un scope esté activo quedan adscritas al más interno.
+    scopes: Vec<ScopeFrame>,
 }
 
-/// Qué espera una fibra **bloqueada** sobre un canal (M12.2):
+/// Un scope activo (M12.3): la lista de tareas lanzadas mientras estuvo en la cima de la pila de la
+/// fibra. Al cerrarse (`ScopeEnd`), el scope une a todas (las espera) y propaga el primer fallo.
+struct ScopeFrame {
+    children: Vec<Handle>,
+}
+
+/// Qué espera una fibra **bloqueada** (el handle por el que espera va en `Parked.on`):
 /// - `Recv`: bloqueada en `recv` (canal vacío y abierto) → despierta cuando alguien envía o lo cierra.
 /// - `Send(v)`: bloqueada en `send` (canal acotado y lleno) → despierta cuando un `recv` libera un hueco;
 ///   sostiene el valor `v` que aún no ha podido entregar (es una raíz del GC).
+/// - `Join`: bloqueada en `join`/`ScopeEnd` esperando a una **tarea** (M12.3); al completarse la tarea se
+///   la despierta y re-ejecuta el opcode (que rebobinó su `ip`).
 enum Waiting {
     Recv,
     Send(HeapValue),
+    Join,
 }
 
-/// Una fibra **bloqueada** sobre un canal, esperando enviar o recibir.
+/// Una fibra **bloqueada**, con el handle por el que espera (`on`: un canal para Recv/Send, una tarea para
+/// Join) y qué espera.
 struct Parked {
-    chan: Handle,
+    on: Handle,
     fiber: Fiber,
     waiting: Waiting,
 }
@@ -106,10 +121,14 @@ struct Vm<'a> {
     // --- Scheduler cooperativo M:1 (M12.1) ---
     /// Fibras listas para ejecutar, en orden FIFO (scheduler determinista).
     ready: VecDeque<Fiber>,
-    /// Fibras bloqueadas en `recv`, con el canal que esperan.
+    /// Fibras bloqueadas en `recv`/`send`/`join`, con el handle (canal o tarea) que esperan.
     parked: Vec<Parked>,
     /// ¿La fibra en ejecución es la principal (`main`)? Su retorno termina el programa (semántica Go).
     current_is_main: bool,
+    /// M12.3: la `Task` que la fibra en ejecución debe rellenar al terminar (`None` para `main`).
+    current_task: Option<Handle>,
+    /// M12.3: pila de scopes activos de la fibra en ejecución (espejo del `Fiber.scopes`).
+    scopes: Vec<ScopeFrame>,
 }
 
 impl<'a> Vm<'a> {
@@ -122,6 +141,8 @@ impl<'a> Vm<'a> {
             ready: VecDeque::new(),
             parked: Vec::new(),
             current_is_main: true,
+            current_task: None,
+            scopes: Vec::new(),
         }
     }
 
@@ -160,6 +181,10 @@ impl<'a> Vm<'a> {
             let (line, col) = self.program.functions[func].chunk.lines[ip];
             self.frames[fi].ip = ip + 1; // avance por defecto; los saltos lo cambian
 
+            // M12.3: ejecutamos la instrucción dentro de un cierre que devuelve `Ok(Some(v))` (fin del
+            // programa), `Ok(None)` (seguir) o `Err` (fallo). Así el bucle puede CAPTURAR el error de una
+            // fibra hija (propagación structured concurrency) en vez de abortar siempre.
+            let outcome: Result<Option<HeapValue>, RuntimeError> = (|| {
             match &op {
                 OpCode::Constant(idx) => {
                     let v = const_to_heap(&self.program.functions[func].chunk.constants[*idx]);
@@ -397,7 +422,8 @@ impl<'a> Vm<'a> {
 
                 // --- Concurrencia: CSP sobre la VM (M12.1) ---
                 OpCode::Spawn => {
-                    // Saca el valor-función; crea una fibra nueva que lo ejecuta (0 args) y la encola.
+                    // Saca el valor-función; crea una fibra nueva que lo ejecuta (0 args), le asigna una
+                    // Task<T> (M12.3) y la encola. Si hay un scope activo, adscribe la tarea a él.
                     let (fn_idx, upvalues) = match self.pop() {
                         HeapValue::Function(i) => (i, Vec::new()),
                         HeapValue::Obj(h) => match self.heap.get(h) {
@@ -406,10 +432,17 @@ impl<'a> Vm<'a> {
                         },
                         _ => unreachable!("el checker garantiza una función"),
                     };
+                    let task = self.heap.allocate(Obj::Task(VmTask { state: TaskState::Pending }));
+                    if let Some(scope) = self.scopes.last_mut() {
+                        scope.children.push(task);
+                    }
                     let locals = self.new_locals(fn_idx);
                     let frame = CallFrame { function: fn_idx, ip: 0, locals, upvalues };
-                    self.ready.push_back(Fiber { frames: vec![frame], stack: Vec::new(), is_main: false });
-                    self.push(HeapValue::Unit);
+                    self.ready.push_back(Fiber {
+                        frames: vec![frame], stack: Vec::new(), is_main: false,
+                        task: Some(task), scopes: Vec::new(),
+                    });
+                    self.push(HeapValue::Obj(task)); // el Task<T> es el resultado de spawn
                 }
                 OpCode::ChannelNew => {
                     // channel() sin argumentos → canal NO acotado (cap = None).
@@ -445,7 +478,7 @@ impl<'a> Vm<'a> {
                     // (1) ¿Hay un receptor bloqueado en este canal? Entrégaselo directo (rendezvous) y
                     // despiértalo (el primero, FIFO → determinista).
                     if let Some(pos) = self.parked.iter().position(
-                        |p| p.chan == h && matches!(p.waiting, Waiting::Recv))
+                        |p| p.on == h && matches!(p.waiting, Waiting::Recv))
                     {
                         let parked = self.parked.remove(pos);
                         self.wake_recv(parked.fiber, vec![v]);
@@ -461,12 +494,8 @@ impl<'a> Vm<'a> {
                         // (3) Cola llena (acotado) → BLOQUEAR al emisor (backpressure, M12.2). Guarda la
                         // fibra con el valor pendiente; al despertarla, `wake_sender` le deja unit (el
                         // resultado de `send`) en la pila y continúa tras el ChanSend.
-                        let fiber = Fiber {
-                            frames: std::mem::take(&mut self.frames),
-                            stack: std::mem::take(&mut self.stack),
-                            is_main: self.current_is_main,
-                        };
-                        self.parked.push(Parked { chan: h, fiber, waiting: Waiting::Send(v) });
+                        let fiber = self.take_current_fiber();
+                        self.parked.push(Parked { on: h, fiber, waiting: Waiting::Send(v) });
                         self.schedule_next(line, col)?;
                     }
                 }
@@ -482,12 +511,12 @@ impl<'a> Vm<'a> {
                         self.wake_blocked_sender(h);
                         let arr = self.heap.allocate(Obj::Array(vec![v]));
                         self.push(HeapValue::Obj(arr));
-                        continue;
+                        return Ok(None);
                     }
                     // (2) Cola vacía: ¿hay un emisor bloqueado? (canal lleno con cap > 0, o rendezvous
                     // cap = 0). Toma su valor directo y despiértalo.
                     if let Some(pos) = self.parked.iter().position(
-                        |p| p.chan == h && matches!(p.waiting, Waiting::Send(_)))
+                        |p| p.on == h && matches!(p.waiting, Waiting::Send(_)))
                     {
                         let parked = self.parked.remove(pos);
                         let sv = match parked.waiting {
@@ -497,7 +526,7 @@ impl<'a> Vm<'a> {
                         self.wake_sender(parked.fiber);
                         let arr = self.heap.allocate(Obj::Array(vec![sv]));
                         self.push(HeapValue::Obj(arr));
-                        continue;
+                        return Ok(None);
                     }
                     // (3) Cola vacía y sin emisores: cerrado → None ([]); abierto → bloquear (Recv).
                     let closed = match self.heap.get(h) {
@@ -510,13 +539,62 @@ impl<'a> Vm<'a> {
                     } else {
                         // Bloquear: guardar la fibra actual (ip ya apunta tras el ChanRecv → al
                         // despertarla, el `wake_recv` le deja el `[T]` en la pila y continúa) y conmutar.
-                        let fiber = Fiber {
-                            frames: std::mem::take(&mut self.frames),
-                            stack: std::mem::take(&mut self.stack),
-                            is_main: self.current_is_main,
-                        };
-                        self.parked.push(Parked { chan: h, fiber, waiting: Waiting::Recv });
+                        let fiber = self.take_current_fiber();
+                        self.parked.push(Parked { on: h, fiber, waiting: Waiting::Recv });
                         self.schedule_next(line, col)?;
+                    }
+                }
+                OpCode::TaskJoin => {
+                    // Une una tarea (M12.3): si terminó, su valor; si falló, re-lanza; si pendiente, bloquea.
+                    let t = self.pop_obj();
+                    let outcome = match self.heap.get(t) {
+                        Obj::Task(task) => match &task.state {
+                            TaskState::Done(v) => Some(Ok(v.clone())),
+                            TaskState::Failed(msg) => Some(Err(msg.clone())),
+                            TaskState::Pending => None,
+                        },
+                        _ => unreachable!("el checker garantiza una Task"),
+                    };
+                    match outcome {
+                        Some(Ok(v)) => self.push(v),
+                        Some(Err(msg)) => return Err(runtime_error(line, col, &msg)),
+                        None => {
+                            // Bloquear: re-empuja el handle (lo sacamos arriba) y rebobina el ip al
+                            // TaskJoin, para que al despertar (con la tarea ya Done/Failed) lo re-ejecute.
+                            self.push(HeapValue::Obj(t));
+                            self.frames.last_mut().unwrap().ip -= 1;
+                            let fiber = self.take_current_fiber();
+                            self.parked.push(Parked { on: t, fiber, waiting: Waiting::Join });
+                            self.schedule_next(line, col)?;
+                        }
+                    }
+                }
+                OpCode::ScopeBegin => {
+                    // Abre un scope (M12.3): las tareas spawneadas mientras esté activo se le adscriben.
+                    self.scopes.push(ScopeFrame { children: Vec::new() });
+                }
+                OpCode::ScopeEnd => {
+                    // Cierra el scope: espera a sus tareas (una a una, bloqueando) y al estar todas propaga
+                    // el primer fallo; el valor del cuerpo (R) ya está en la pila.
+                    let children: Vec<Handle> =
+                        self.scopes.last().expect("ScopeEnd sin ScopeBegin").children.clone();
+                    let pending = children.iter().copied().find(|&c| matches!(
+                        self.heap.get(c), Obj::Task(t) if matches!(t.state, TaskState::Pending)));
+                    if let Some(c) = pending {
+                        // Una hija sigue corriendo: rebobina a ScopeEnd y bloquéate esperándola.
+                        self.frames.last_mut().unwrap().ip -= 1;
+                        let fiber = self.take_current_fiber();
+                        self.parked.push(Parked { on: c, fiber, waiting: Waiting::Join });
+                        self.schedule_next(line, col)?;
+                    } else {
+                        // Todas terminadas: desapila el scope y propaga el primer fallo (si lo hubo).
+                        self.scopes.pop();
+                        for c in children {
+                            if let Obj::Task(VmTask { state: TaskState::Failed(msg) }) = self.heap.get(c) {
+                                let msg = msg.clone();
+                                return Err(runtime_error(line, col, &msg));
+                            }
+                        }
                     }
                 }
 
@@ -869,7 +947,7 @@ impl<'a> Vm<'a> {
                         // fibra").
                         HeapValue::Obj(ch) => {
                             if self.parked.iter().any(
-                                |p| p.chan == ch && matches!(p.waiting, Waiting::Send(_)))
+                                |p| p.on == ch && matches!(p.waiting, Waiting::Send(_)))
                             {
                                 return Err(runtime_error(line, col,
                                     "close sobre un canal con un emisor bloqueado"));
@@ -880,7 +958,7 @@ impl<'a> Vm<'a> {
                             }
                             let mut i = 0;
                             while i < self.parked.len() {
-                                if self.parked[i].chan == ch {
+                                if self.parked[i].on == ch && matches!(self.parked[i].waiting, Waiting::Recv) {
                                     let parked = self.parked.remove(i);
                                     self.wake_recv(parked.fiber, Vec::new());
                                 } else {
@@ -1046,27 +1124,80 @@ impl<'a> Vm<'a> {
                     if self.frames.is_empty() {
                         // La fibra terminó: si es main → fin del programa; si es spawn → siguiente fibra.
                         match self.on_fiber_done(result)? {
-                            Some(v) => return Ok(v),
-                            None => continue,
+                            Some(v) => return Ok(Some(v)),
+                            None => return Ok(None),
                         }
                     }
                     self.push(result); // entregamos el valor al llamador
                 }
             }
+            Ok(None)
+            })();
+
+            match outcome {
+                Ok(Some(v)) => return Ok(v),
+                Ok(None) => {}
+                Err(e) => {
+                    // Propagación de fallos (M12.3): el error de la fibra HIJA en curso no aborta el
+                    // programa; se captura en su `Task` (`Failed`) y se planifica la siguiente. Abortan los
+                    // de `main` y los del scheduler (frames vacíos = la fibra ya se aparcó/terminó → el
+                    // error es un deadlock, no un fallo de la fibra actual).
+                    if self.frames.is_empty() || self.current_is_main {
+                        return Err(e);
+                    }
+                    self.fail_current_fiber(e)?;
+                }
+            }
         }
     }
 
-    // ----- Scheduler de fibras (M12.1) -----
+    // ----- Scheduler de fibras (M12.1 / M12.3) -----
 
-    /// Una fibra terminó. Si es la principal (`main`) → fin del programa (su valor; semántica Go). Si es
-    /// una fibra `spawn` → su resultado se descarta y se planifica la siguiente. Devuelve `Some(v)` si el
-    /// programa termina, `None` si ya cargó otra fibra (el bucle debe `continue`).
+    /// Empaqueta la fibra en ejecución (vaciando los campos de la VM) para aparcarla o descartarla. M12.3:
+    /// además de `frames`/`stack`/`is_main`, lleva su `Task` y su pila de scopes.
+    fn take_current_fiber(&mut self) -> Fiber {
+        Fiber {
+            frames: std::mem::take(&mut self.frames),
+            stack: std::mem::take(&mut self.stack),
+            is_main: self.current_is_main,
+            task: self.current_task.take(),
+            scopes: std::mem::take(&mut self.scopes),
+        }
+    }
+
+    /// Una fibra terminó **con éxito**. Si es `main` → fin del programa (su valor; semántica Go). Si es una
+    /// fibra `spawn` → escribe el resultado en su `Task` (M12.3), despierta a los que la unen y planifica la
+    /// siguiente. Devuelve `Some(v)` si el programa termina, `None` si ya cargó otra fibra.
     fn on_fiber_done(&mut self, result: HeapValue) -> Result<Option<HeapValue>, RuntimeError> {
         if self.current_is_main {
             return Ok(Some(result));
         }
+        if let Some(task) = self.current_task.take() {
+            if let Obj::Task(t) = self.heap.get_mut(task) {
+                t.state = TaskState::Done(result);
+            }
+            self.wake_task_waiters(task);
+        }
+        self.scopes.clear();
         self.schedule_next(0, 0)?;
         Ok(None)
+    }
+
+    /// Una fibra hija **falló** (M12.3): guarda el fallo en su `Task` como `Failed`, despierta a los que la
+    /// unen (que lo re-lanzarán) y planifica la siguiente. El error solo se pierde si la tarea no la une
+    /// nadie ni la posee un `scope`.
+    fn fail_current_fiber(&mut self, e: RuntimeError) -> Result<(), RuntimeError> {
+        if let Some(task) = self.current_task.take() {
+            let msg = e.msg.clone(); // solo el mensaje; el join que lo observe le pone su propia posición
+            if let Obj::Task(t) = self.heap.get_mut(task) {
+                t.state = TaskState::Failed(msg);
+            }
+            self.wake_task_waiters(task);
+        }
+        self.frames.clear();
+        self.stack.clear();
+        self.scopes.clear();
+        self.schedule_next(e.line, e.col)
     }
 
     /// Carga la siguiente fibra lista en los campos de ejecución de la VM. Si no hay ninguna lista pero sí
@@ -1076,11 +1207,27 @@ impl<'a> Vm<'a> {
             self.frames = next.frames;
             self.stack = next.stack;
             self.current_is_main = next.is_main;
+            self.current_task = next.task;
+            self.scopes = next.scopes;
             Ok(())
         } else if !self.parked.is_empty() {
-            Err(runtime_error(line, col, "deadlock: todas las fibras están bloqueadas esperando un canal"))
+            Err(runtime_error(line, col, "deadlock: todas las fibras están bloqueadas esperando un canal o una tarea"))
         } else {
             Err(runtime_error(line, col, "no hay fibras ejecutables"))
+        }
+    }
+
+    /// Despierta a todas las fibras aparcadas en `join` sobre `task` (M12.3): al re-ejecutar su `Join`/
+    /// `ScopeEnd` verán la tarea ya terminada (Done/Failed). No empuja nada (el opcode rebobinó su `ip`).
+    fn wake_task_waiters(&mut self, task: Handle) {
+        let mut i = 0;
+        while i < self.parked.len() {
+            if self.parked[i].on == task && matches!(self.parked[i].waiting, Waiting::Join) {
+                let parked = self.parked.remove(i);
+                self.ready.push_back(parked.fiber);
+            } else {
+                i += 1;
+            }
         }
     }
 
@@ -1105,7 +1252,7 @@ impl<'a> Vm<'a> {
     /// bloqueó despierta antes.
     fn wake_blocked_sender(&mut self, chan: Handle) {
         if let Some(pos) = self.parked.iter().position(
-            |p| p.chan == chan && matches!(p.waiting, Waiting::Send(_)))
+            |p| p.on == chan && matches!(p.waiting, Waiting::Send(_)))
         {
             let parked = self.parked.remove(pos);
             let sv = match parked.waiting {
@@ -1130,16 +1277,21 @@ impl<'a> Vm<'a> {
         // (listas y bloqueadas) y los canales que esperan.
         let mut roots: Vec<Handle> = Vec::new();
         gather_roots(&self.frames, &self.stack, &mut roots);
+        // M12.3: la Task y los scopes de la fibra en curso.
+        roots.extend(self.current_task);
+        for s in &self.scopes {
+            roots.extend(s.children.iter().copied());
+        }
         for f in &self.ready {
-            gather_roots(&f.frames, &f.stack, &mut roots);
+            gather_fiber_roots(f, &mut roots);
         }
         for p in &self.parked {
-            roots.push(p.chan); // el canal que espera la fibra debe sobrevivir aunque solo lo referencie ella
+            roots.push(p.on); // el canal/tarea que espera la fibra debe sobrevivir aunque solo lo referencie ella
             // M12.2: un emisor bloqueado sostiene un valor pendiente que aún no entró al canal → es raíz.
             if let Waiting::Send(v) = &p.waiting {
                 roots.extend(v.handle()); // `Option<Handle>` es iterable: añade el handle si lo hay
             }
-            gather_roots(&p.fiber.frames, &p.fiber.stack, &mut roots);
+            gather_fiber_roots(&p.fiber, &mut roots);
         }
 
         for h in roots {
@@ -1418,6 +1570,8 @@ fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> String {
             }
             // M12.1: un canal no tiene representación textual significativa (no se inspecciona).
             Obj::Channel(_) => "<channel>".to_string(),
+            // M12.3: una tarea tampoco (se une con `join`, no se imprime).
+            Obj::Task(_) => "<task>".to_string(),
         },
     }
 }
@@ -1466,6 +1620,8 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
             // M12.1: un canal vive solo en la VM y nunca es el resultado del programa (main devuelve
             // int/unit) ni cruza al intérprete (no hay oráculo concurrente) → no necesita representación.
             Obj::Channel(_) => unreachable!("un canal nunca es el resultado del programa"),
+            // M12.3: una tarea tampoco es el resultado del programa.
+            Obj::Task(_) => unreachable!("una tarea nunca es el resultado del programa"),
         },
     }
 }
@@ -1495,6 +1651,16 @@ fn gather_roots(frames: &[CallFrame], stack: &[HeapValue], roots: &mut Vec<Handl
             }
         }
         roots.extend(frame.upvalues.iter().copied());
+    }
+}
+
+/// Reúne las raíces de una fibra suspendida o lista (M12.3): su pila/marcos, su `Task` y los hijos de sus
+/// scopes activos (las tareas que aún no ha unido).
+fn gather_fiber_roots(f: &Fiber, roots: &mut Vec<Handle>) {
+    gather_roots(&f.frames, &f.stack, roots);
+    roots.extend(f.task);
+    for s in &f.scopes {
+        roots.extend(s.children.iter().copied());
     }
 }
 

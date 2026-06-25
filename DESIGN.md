@@ -65,7 +65,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ✅ M11.1 stdlib de string (`+`/`len`/`to_string`/`trim`/`split`) · M11.2 I/O (`eprint`/`input`/`parse_int`/`read_int`/`env`/`args`/`read_file`/`write_file`) · M11.3 módulos (`import M;`+`M.f`, `from M import a as b`, `pub`) |
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
-| **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | 🚧 §21.2/§21.3: ✅ **M12.1** slice CSP (spawn + canales no acotados + scheduler determinista) · ✅ **M12.2** acotados/backpressure (`channel(n)`; `send` punto de yield) · ⏳ M12.3 structured concurrency · M12.4 `select` |
+| **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | 🚧 §21.2/§21.3/§21.4: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure (`channel(n)`) · ✅ **M12.3** structured concurrency (`Task<T>`+`join`+`scope`, propagación) · ⏳ M12.4 `select` |
 | **Transversal** | optimización de la VM (incremental, midiendo) · **VM auto-alojada** (M14.5, opcional) | rendimiento, bootstrapping | ⏳ |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -2257,6 +2257,71 @@ con `n = 0` rendezvous). Una fibra aparcada distingue **receptor** de **emisor**
 M12.1 las aparcadas no sostenían ningún valor). Dos opcodes para crear: `ChannelNew` (no acotado, 0 args)
 y `ChannelNewBounded` (saca la capacidad de la pila); el compilador elige según haya argumento (es el
 mismo *special-case* que ya tiene `channel` en el checker por ser indeterminado).
+
+### 21.4 M12.3 — structured concurrency (especificación)
+
+M12.1/M12.2 dieron `spawn` "dispara y olvida" (estilo Go): la fibra corre suelta y su resultado se
+descarta; si una fibra falla, hoy aborta todo. M12.3 trae el modelo **estructurado** (Trio/Kotlin): las
+tareas tienen **valor de retorno**, un ámbito **posee** las que se lanzan dentro y **las une** al salir
+(ninguna se fuga), y el **fallo de una hija se propaga** al punto de unión en vez de perderse o tumbar el
+proceso. Cierra el "qué pasa con el resultado/el error de una fibra".
+
+**Surface (builtins + closures; cero gramática nueva, en el espíritu del proyecto):**
+- `Task<T>` — **tipo nuevo** (`Type::Task(Box<Type>)`), como `Channel<T>`: el parser lo trae como
+  `Struct("Task",[T])` y el checker lo reclasifica en `resolve_type`.
+- `spawn(f: fn() -> T) -> Task<T>` — **cambia su firma**: ya no devuelve unit, sino un **handle tipado**
+  a la tarea. Retrocompatible: `spawn(fn() { … });` como sentencia descarta el `Task` (M12.1/M12.2 siguen
+  compilando). Si hay un `scope` activo en la fibra que llama, la tarea queda **adscrita** a él.
+- `join(t: Task<T>) -> T` — **bloquea** hasta que la tarea termina y devuelve su valor (punto de yield).
+  Si la tarea **falló** (panic), `join` **re-lanza** ese fallo (propagación).
+- `scope(body: fn() -> R) -> R` — corre `body` en la fibra actual; toda tarea lanzada **mientras el scope
+  está activo** (adscripción **dinámica** a la fibra, no léxica) queda poseída por él. Al **retornar
+  `body`**, el scope **une a todas** sus tareas (espera a que terminen) y, si alguna falló, **propaga** ese
+  fallo; si no, devuelve `R`. Garantiza que **ninguna tarea sobrevive al scope**.
+- UFCS gratis: `t.join()`.
+
+**Tipado:** son builtins con regla de tipado en el registro único (`src/builtins.rs`): `spawn` toma
+`fn() -> T` y da `Task<T>`; `join` toma `Task<T>` y da `T`; `scope` toma `fn() -> R` y da `R` (el tipo del
+scope = el del cuerpo). `Task<T>` se integra como `Channel<T>` en `subst`/`unify`/`ensure_type`/etc.
+
+**Runtime (solo VM):**
+- `Task<T>` = objeto del heap `Obj::Task(VmTask { state })` con `state ∈ {Pending, Done(valor),
+  Failed(msg)}`. La fibra de una tarea guarda **su** handle (`Fiber.task`); al terminar **normal** escribe
+  `Done(resultado)`, al **fallar** escribe `Failed(mensaje)`; en ambos casos despierta a los que esperan.
+- **Bloqueo en `join`/scope:** una fibra que espera una tarea pendiente se aparca (`Waiting::Join`); al
+  completarse la tarea se la despierta y **re-ejecuta** el opcode (el `ip` se rebobina al `Join`/`ScopeEnd`,
+  como el re-intento de `recv`). El **scope** se realiza con dos opcodes que el compilador intercala
+  alrededor de la llamada al cuerpo —`ScopeBegin` (apila un marco de scope en la fibra) · `<cuerpo>()` ·
+  `ScopeEnd` (espera a los hijos pendientes uno a uno; al estar todos, propaga el primer `Failed` o deja
+  `R`)— igual que el *special-case* de `channel` (no usa el opcode de la tabla).
+- **Propagación de fallos:** el bucle de la VM captura el error de una fibra **hija** (no `main`, con
+  frames activos) en su `Task` como `Failed` y planifica la siguiente, en vez de abortar; los errores de
+  `main` y los del scheduler (deadlock) siguen abortando. Un `Failed` se re-lanza en el `join`/`ScopeEnd`
+  que lo observe → la propagación encadena hacia arriba (si llega a `main`, aborta). Un panic en una tarea
+  **ni unida ni dentro de un scope** se pierde (la disciplina estructurada es usar `scope`/`join`).
+- **Estado por fibra:** cada `Fiber` guarda `task: Option<Handle>` y `scopes: Vec<ScopeFrame>` además de
+  `frames`/`stack`/`is_main`; la VM espeja `current_task`/`scopes` y los salva/restaura al conmutar.
+- **GC multi-raíz:** se añaden a las raíces el `Done(v)` de cada `Task`, el handle de tarea que espera un
+  joiner aparcado, y los hijos de cada `ScopeFrame` (en la fibra en curso, las listas y las aparcadas).
+
+**Determinismo / deadlock:** FIFO intacto; el deadlock cubre ahora también a los joiners (si todas las
+fibras quedan bloqueadas esperando canal **o tarea**). Tests por **salida esperada exacta** (solo VM; el
+intérprete da error limpio en `spawn`/`join`/`scope`).
+
+**Diferido:** **cancelación** de hermanas cuando una falla (Trio cancela el resto; raylang no tiene
+primitivo de cancelación → si el **cuerpo** del scope hace panic, las tareas en curso quedan huérfanas en
+vez de cancelarse) → puerta abierta. `select` → M12.4.
+
+**M12.3 — estado: COMPLETO.** Implementado según la spec. Notas: `join` resultó **ad-hoc polimórfico**
+(colisión con el `join(arr,sep)` de strings de M11.7a; raylang no tiene sobrecarga) → un builtin que
+ramifica por tipo + el compilador elige el opcode por **aridad** (1 = `TaskJoin`, 2 = `Join` de string).
+`scope(body)` se baja a `ScopeBegin; body(); ScopeEnd` (special-case del compilador como `channel`; la
+llamada al cuerpo no está en cola → el TCO no la toca). `join`/`ScopeEnd` que bloquean **rebobinan el ip**
+y re-ejecutan al despertar (TaskJoin re-empuja el handle). La **captura** del fallo de una hija se hace
+corriendo cada instrucción en un **cierre** dentro del bucle de la VM (el error de una fibra hija con
+frames activos → su `Task`; los de `main`/scheduler con frames vacíos → abortan). Tests:
+`tests/concurrency_cli.rs` (scope+join con valor, auto-join, propagación por join y por scope, scope de
+varias tareas). Ejemplo: `examples/structured.ray`.
 
 ## 22. M13 — Habilitadores de self-hosting
 

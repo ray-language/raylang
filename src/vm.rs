@@ -1072,6 +1072,22 @@ impl<'a> Vm<'a> {
                 OpCode::Pi => self.push(HeapValue::Float(std::f64::consts::PI)),
                 OpCode::E => self.push(HeapValue::Float(std::f64::consts::E)),
 
+                // --- Reloj y aleatoriedad (M15.1b): delegan en los helpers compartidos. ---
+                OpCode::Now => self.push(HeapValue::Int(crate::builtins::now_millis())),
+                OpCode::Monotonic => self.push(HeapValue::Int(crate::builtins::monotonic_millis())),
+                OpCode::Sleep => match self.pop() {
+                    HeapValue::Int(ms) => {
+                        crate::builtins::sleep_millis(ms);
+                        self.push(HeapValue::Unit);
+                    }
+                    _ => unreachable!("el checker garantiza un int"),
+                },
+                OpCode::Random => self.push(HeapValue::Float(crate::builtins::random_f64())),
+                OpCode::RandomInt => match self.pop() {
+                    HeapValue::Int(n) => self.push(HeapValue::Int(crate::builtins::random_int(n))),
+                    _ => unreachable!("el checker garantiza un int"),
+                },
+
                 // --- Structs (M3.2) ---
                 OpCode::MakeStruct(idx) => {
                     let sname = self.program.structs[*idx].name.clone();

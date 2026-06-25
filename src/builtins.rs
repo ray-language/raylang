@@ -42,6 +42,70 @@ pub fn apply_mathf(f: MathFn, x: f64) -> f64 {
     }
 }
 
+// --- Reloj y aleatoriedad (M15.1b) ---
+//
+// Estos builtins NO son deterministas → no entran al oráculo; se prueban por subproceso. Viven aquí
+// (helpers compartidos) para que el intérprete y la VM usen el MISMO reloj y el MISMO flujo de RNG.
+
+/// Milisegundos desde la época Unix (reloj de pared). Builtin `now`.
+pub fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Milisegundos de un reloj **monótono**: ancla un `Instant` de referencia en la primera llamada y
+/// devuelve el tiempo transcurrido desde él. Sirve para medir intervalos. Builtin `monotonic`.
+pub fn monotonic_millis() -> i64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as i64
+}
+
+/// Duerme el hilo `ms` milisegundos (`ms<=0` → no duerme). Builtin `sleep`.
+pub fn sleep_millis(ms: i64) {
+    if ms > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+    }
+}
+
+/// El estado del PRNG del proceso. `std` no trae generador de aleatorios y la invariante es **cero
+/// dependencias de Cargo**, así que llevamos uno propio: **SplitMix64**, sembrado del reloj la
+/// primera vez. No es criptográfico (es para simulación/jitter/ids, no para secretos).
+fn rng() -> &'static std::sync::Mutex<u64> {
+    static R: std::sync::OnceLock<std::sync::Mutex<u64>> = std::sync::OnceLock::new();
+    R.get_or_init(|| {
+        let semilla = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x9E37_79B9_7F4A_7C15);
+        std::sync::Mutex::new(semilla ^ 0x9E37_79B9_7F4A_7C15)
+    })
+}
+
+/// Avanza el generador y devuelve los siguientes 64 bits (SplitMix64).
+fn next_u64() -> u64 {
+    let mut estado = rng().lock().expect("RNG no envenenado");
+    *estado = estado.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *estado;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Un `float` aleatorio en `[0, 1)` (53 bits de mantisa). Builtin `random`.
+pub fn random_f64() -> f64 {
+    (next_u64() >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// Un entero aleatorio en `[0, n)`; `n<=0` → `0` (total, sin error de runtime). Builtin `random_int`.
+pub fn random_int(n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    (next_u64() % (n as u64)) as i64
+}
+
 /// Error de tipado de un builtin: `(índice_del_arg, mensaje)`. El índice `None` señala un error
 /// general de la llamada (p. ej. aridad); `Some(i)` el argumento culpable (para ubicar el cursor).
 pub type BuiltinError = (Option<usize>, String);
@@ -592,6 +656,21 @@ static BUILTINS: &[Builtin] = &[
     // Constantes π y e (Euler).
     Builtin { name: "pi", opcode: OpCode::Pi, check: |a| { nullary(a, "pi")?; Ok(Type::Float) } },
     Builtin { name: "e",  opcode: OpCode::E,  check: |a| { nullary(a, "e")?; Ok(Type::Float) } },
+
+    // --- Reloj y aleatoriedad (M15.1b) ---
+    Builtin { name: "now",       opcode: OpCode::Now,       check: |a| { nullary(a, "now")?; Ok(Type::Int) } },
+    Builtin { name: "monotonic", opcode: OpCode::Monotonic, check: |a| { nullary(a, "monotonic")?; Ok(Type::Int) } },
+    Builtin { name: "random",    opcode: OpCode::Random,    check: |a| { nullary(a, "random")?; Ok(Type::Float) } },
+    Builtin { name: "sleep", opcode: OpCode::Sleep, check: |a| {
+        arity(a, 1, "sleep", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("sleep espera un int (ms), no {}", a[0]))); }
+        Ok(Type::Unit)
+    } },
+    Builtin { name: "random_int", opcode: OpCode::RandomInt, check: |a| {
+        arity(a, 1, "random_int", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("random_int espera un int, no {}", a[0]))); }
+        Ok(Type::Int)
+    } },
 
     // panic(msg) -> unit (M13.2a): aborta la ejecución con `msg`. Lo usan `assert`/`assert_eq` del
     // prelude; es el único primitivo de runtime de M13.2 (el resto vive en raylang). Diverge (nunca

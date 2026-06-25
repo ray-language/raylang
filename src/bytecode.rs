@@ -306,6 +306,18 @@ pub enum OpCode {
     /// No saca nada; empuja la constante e (Euler) como `float`. Builtin `e`.
     E,
 
+    // --- Reloj y aleatoriedad (M15.1b) ---
+    /// No saca nada; empuja los milisegundos desde la época Unix (`int`). Builtin `now`.
+    Now,
+    /// No saca nada; empuja los milisegundos de un reloj monótono (`int`). Builtin `monotonic`.
+    Monotonic,
+    /// Saca `ms` (int); duerme el hilo ese tiempo y empuja unit. Builtin `sleep`.
+    Sleep,
+    /// No saca nada; empuja un `float` en `[0, 1)`. Builtin `random`.
+    Random,
+    /// Saca `n` (int); empuja un entero en `[0, n)` (`n<=0` → `0`). Builtin `random_int`.
+    RandomInt,
+
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como
     /// campos tenga (estaban en orden de declaración) y empuja el struct.

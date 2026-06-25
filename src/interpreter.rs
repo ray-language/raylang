@@ -1242,6 +1242,21 @@ impl<'a> Interpreter<'a> {
             },
             "pi" => Value::Float(std::f64::consts::PI),
             "e" => Value::Float(std::f64::consts::E),
+            // --- Reloj y aleatoriedad (M15.1b): no deterministas, delegan en los helpers compartidos. ---
+            "now" => Value::Int(crate::builtins::now_millis()),
+            "monotonic" => Value::Int(crate::builtins::monotonic_millis()),
+            "sleep" => match &values[0] {
+                Value::Int(ms) => {
+                    crate::builtins::sleep_millis(*ms);
+                    Value::Unit
+                }
+                _ => unreachable!("el checker garantiza un int"),
+            },
+            "random" => Value::Float(crate::builtins::random_f64()),
+            "random_int" => match &values[0] {
+                Value::Int(n) => Value::Int(crate::builtins::random_int(*n)),
+                _ => unreachable!("el checker garantiza un int"),
+            },
             _ => unreachable!("builtin desconocido"),
         }
     }

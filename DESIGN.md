@@ -66,7 +66,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
 | **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.6: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure · ✅ **M12.3** structured concurrency · ✅ **M12.4** `select` · ✅ **M12.5** cancelación de hermanas. **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>`, select de send) |
-| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo). Pendiente: M15.1b reloj/RNG · M15.2 cliente TCP · M15.3 servidor TCP · M15.4 HTTP/JSON en raylang · (capstone) M15.5 sockets no bloqueantes en el scheduler |
+| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso). Pendiente: M15.2 cliente TCP · M15.3 servidor TCP · M15.4 HTTP/JSON en raylang · (capstone) M15.5 sockets no bloqueantes en el scheduler |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) ⏳ | rendimiento, bootstrapping | 🚧 |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -3415,3 +3415,29 @@ Como todo builtin tras la limpieza L1: una fila en la tabla `BUILTINS` (nombre +
 tipado) + el opcode + su rama en cada motor. Cero cambios en parser/compilador (las llamadas a
 builtin se resuelven por nombre) y **runtime determinista** → oráculo VM↔intérprete (incluyendo un
 caso con `NaN`/infinito para fijar la semántica de borde de `f64`).
+
+### 24.4 M15.1b — reloj y aleatoriedad (especificación)
+
+A diferencia de las matemáticas, estos builtins son **no deterministas** (su resultado depende del
+reloj o del RNG): no entran al oráculo VM↔intérprete; se prueban por **integración** (subproceso),
+comprobando **propiedades** (rangos, monotonía) en vez de valores exactos, como el I/O de M11.2.
+
+| Builtin | Firma | Semántica |
+|---------|-------|-----------|
+| `now` | `() -> int` | milisegundos desde la época Unix (reloj de pared). Opcode `Now`. |
+| `monotonic` | `() -> int` | milisegundos de un reloj **monótono** (origen arbitrario; sirve para medir intervalos, no inmune a ajustes de hora). Opcode `Monotonic`. |
+| `sleep` | `(int) -> unit` | duerme el hilo `ms` milisegundos (`ms<=0` → no duerme). Opcode `Sleep`. |
+| `random` | `() -> float` | un `float` en `[0, 1)`. Opcode `Random`. |
+| `random_int` | `(int) -> int` | un entero en `[0, n)` (`n<=0` → `0`, total, sin error de runtime). Opcode `RandomInt`. |
+
+**El RNG sin dependencias.** `std` no trae generador de aleatorios y la invariante es **cero deps de
+Cargo**, así que raylang lleva un PRNG propio: **SplitMix64**, sembrado del reloj la primera vez, en
+un almacén de proceso del host (`OnceLock<Mutex<…>>`, como el registro de archivos de M11.8). No es
+criptográfico —es para simulación/jitter/ids, no para secretos—. El generador vive en `builtins.rs`
+(helpers compartidos `random_f64`/`random_int`/`now_millis`/`monotonic_millis`/`sleep_millis`), así
+ambos motores usan el **mismo** flujo. `monotonic` ancla un `Instant` de referencia en su primera
+llamada. Diferido: `seed_random(n)` (reproducibilidad), reloj de alta resolución (ns).
+
+**Nota sobre concurrencia (M12).** En el modelo M:1, `sleep` **bloquea el hilo del SO** → bloquea
+*todas* las fibras (no es un yield al scheduler). Es coherente con la decisión "bloqueante primero"
+de §24.1; un `sleep` que ceda la fibra llegaría con el capstone M15.5.

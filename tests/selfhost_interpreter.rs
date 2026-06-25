@@ -419,6 +419,37 @@ fn parse_y_panic() {
 }
 
 #[test]
+fn assert_y_sort() {
+    // M14.6c-2: sort<T: Ord> sobre int/string/float (bounds→.menor(); el intérprete resuelve `menor`
+    // sobre primitivos por fallback, como igual/mostrar) + assert/assert_eq (sobre panic + Eq/Show).
+    comparar_fuente(
+        "fn main() -> int { \
+            print(sort([3, 1, 2, 5, 4])); \
+            print(sort([\"pera\", \"uva\", \"kiwi\"])); \
+            print(sort([3.5, 1.0, 2.2])); \
+            assert(1 + 1 == 2); assert_eq(2 + 2, 4); assert_eq(\"a\", \"a\"); \
+            print(42); 0 \
+        }",
+        "in_sort.ray",
+    );
+    // assert_eq que FALLA: aborta vía panic (exit 70 en ambos; stdout previo intacto).
+    comparar_fuente(
+        "fn main() -> int { print(1); assert_eq(2, 3); print(2); 0 }",
+        "in_assert_fail.ray",
+    );
+    // sort sobre un tipo de USUARIO que implementa Ord (del prelude): se resuelve por la tabla de
+    // métodos (`P#menor`), no por el fallback de primitivos.
+    comparar_fuente(
+        "struct P { v: int } \
+         impl Ord for P { fn menor(self, otro: P) -> bool { self.v < otro.v } } \
+         fn main() -> int { let ps = sort([P { v: 3 }, P { v: 1 }, P { v: 2 }]); print(ps[0].v); print(ps[2].v); 0 }",
+        "in_sort_user.ray",
+    );
+    // El ejemplo real, antes diferido por assert_eq/assert (M14.6b).
+    comparar_archivo("examples/mapa.ray");
+}
+
+#[test]
 fn codigo_de_salida() {
     // El código de salida del runner es el int que devuelve main (0 si es unit).
     comparar_fuente("fn main() -> int { 42 }", "in_exit42.ray");

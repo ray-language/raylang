@@ -52,3 +52,33 @@ fn parse_float(s: string) -> Option<float> {
     let r = __parse_float(s);
     if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
 }
+
+// M14.6c-2: aserciones y orden. Construidas sobre `panic` + los traits Eq/Show/Ord (que el checker
+// conoce por inyección y el intérprete resuelve por etiqueta de valor). Port de `src/prelude.rs`.
+fn assert(cond: bool) {
+    if (!cond) { panic("aserción falló"); }
+}
+
+fn assert_eq<T: Eq + Show>(a: T, b: T) {
+    if (!a.igual(b)) {
+        panic("assert_eq falló: " + a.mostrar() + " != " + b.mostrar());
+    }
+}
+
+// Ordena ascendente devolviendo un arreglo NUEVO (insertion sort). `T: Ord` → `.menor()`.
+fn sort<T: Ord>(a: [T]) -> [T] {
+    var out: [T] = [];
+    var i: int = 0;
+    while (i < len(a)) {
+        let x: T = a[i];
+        push(out, x);
+        var j: int = len(out) - 1;
+        while (j > 0 && x.menor(out[j - 1])) {
+            out[j] = out[j - 1];
+            j = j - 1;
+        }
+        out[j] = x;
+        i = i + 1;
+    }
+    out
+}

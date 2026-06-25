@@ -389,6 +389,13 @@ fn panic_y_parse() {
     comparar("fn main() -> int { panic(5); 0 }", "scpp_pantype.ray");
     comparar("fn main() -> int { panic(); 0 }", "scpp_panarity.ray");
     comparar("fn main() -> int { match (parse_int(42)) { Option.Some(n) => n, Option.None => 0 } }", "scpp_pitype.ray");
+    // M14.6c-2: assert/assert_eq/sort (sobre los traits del prelude Eq/Show/Ord).
+    comparar("fn main() -> int { assert(true); 0 }", "scpp_assert.ray");
+    comparar("fn main() -> int { assert_eq(1, 1); 0 }", "scpp_asserteq.ray");
+    comparar("fn main() -> int { let xs = sort([3, 1, 2]); xs[0] }", "scpp_sort.ray");
+    comparar("fn main() -> int { let xs = sort([\"b\", \"a\"]); 0 }", "scpp_sortstr.ray");
+    // sort sobre un tipo sin Ord → error de bound (mensaje byte-idéntico a Rust).
+    comparar("struct P { v: int } fn main() -> int { let xs = sort([P { v: 1 }]); 0 }", "scpp_sortnoord.ray");
 }
 
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.

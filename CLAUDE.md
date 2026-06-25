@@ -914,6 +914,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       lo bloquea la stdlib**, sino dos diferidos mayores: **carga de módulos** (el pipeline auto-alojado
       procesa un solo archivo) y los **builtins de I/O** (`args`/`read_file`) de `lex_dump.ray`. Pendiente
       de M14.6c: `assert`/`assert_eq`/`sort`.
+    - **M14.6c-2 COMPLETO → M14.6c COMPLETO** (347 lib + 22 en `tests/selfhost_interpreter.rs` + 25 en
+      `tests/selfhost_checker.rs`): **`assert`/`assert_eq`/`sort`** (prelude de aserciones + orden, sobre
+      `panic` + Eq/Show/Ord). **Checker**: firmas en `inject_prelude_fns` (`assert(bool)`, `assert_eq<T:
+      Eq+Show>(T,T)`, `sort<T: Ord>([T])->[T]`; los bounds resuelven contra los traits+impls de primitivos
+      de M14.3d-4c). **Cuerpos** en `selfhost/prelude.ray` (fusionados por el driver). **Intérprete**: `sort`
+      usa `.menor()` (Ord) pero el validador omitió el lowering de diccionarios → se resuelve **`.menor()`
+      sobre primitivos por fallback** en `dispatch_method` (junto a `igual`/`mostrar`; helper `value_lt` para
+      int/float/string/char); un tipo de usuario con `impl Ord` se resuelve antes por la tabla `Tipo#menor`,
+      así que el fallback solo ve los 4 primitivos (lo que garantiza `T: Ord`). Oráculo: intérprete (sort
+      int/string/float, tipo de usuario con `impl Ord`, assert/assert_eq ok y assert_eq que falla → exit 70,
+      + **`examples/mapa.ray`** antes diferido); checker (válidos + error de bound `sort` sin Ord). El
+      compilador entero sobre el intérprete sigue bloqueado por **carga de módulos** + **builtins de I/O**.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

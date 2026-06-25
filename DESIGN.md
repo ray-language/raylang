@@ -2864,3 +2864,19 @@ diferido aditivo (fila en el checker + impl en el intérprete, como M11.4).
   el lexer entero sobre el intérprete auto-alojado NO es la stdlib**, sino dos diferidos mayores: **carga
   de módulos** (el pipeline auto-alojado procesa un solo archivo, no resuelve `import`) y los **builtins
   de I/O** (`args`/`read_file`) que usa `lex_dump.ray`. Pendiente de M14.6c: `assert`/`assert_eq`/`sort`.
+- **M14.6c-2 COMPLETO → M14.6c COMPLETO** — **`assert`/`assert_eq`/`sort`** (el prelude de aserciones y
+  orden, sobre `panic` + los traits Eq/Show/Ord). El **checker auto-alojado** inyecta sus **firmas** en
+  `inject_prelude_fns`: `assert(bool)`, `assert_eq<T: Eq + Show>(T, T)`, `sort<T: Ord>([T]) -> [T]` (los
+  bounds resuelven contra los traits + impls de primitivos ya registrados en M14.3d-4c). Sus **cuerpos**
+  (port de `src/prelude.rs`) van a `selfhost/prelude.ray` (fusionados por el driver, chequeados por ambos
+  pipelines). El punto delicado: `sort` usa `x.menor(out[j-1])` (Ord) y el intérprete-validador omitió el
+  lowering de diccionarios → el intérprete resuelve **`.menor()` sobre primitivos por fallback** en
+  `dispatch_method` (junto a `igual`/`mostrar`; helper `value_lt` para int/float/string/char). Un tipo de
+  usuario con `impl Ord` se resuelve antes, por la tabla de métodos (`Tipo#menor`), así que el fallback
+  solo ve los cuatro primitivos —exactamente lo que el checker garantiza vía `T: Ord`—. `assert_eq` reusa
+  el fallback de `igual`/`mostrar`. Oráculo: intérprete (22 tests: `sort` de int/string/float, tipo de
+  usuario con `impl Ord`, `assert`/`assert_eq` ok y `assert_eq` que falla → exit 70, + **`examples/mapa.ray`**
+  que estaba diferido por `assert_eq`/`assert` en M14.6b); checker (25 tests: válidos + error de bound
+  `sort` sin Ord, byte-idéntico). **M14.6c COMPLETO** (`panic` + `parse_int`/`parse_float` + `assert`/
+  `assert_eq`/`sort`). El compilador auto-alojado entero sobre el intérprete sigue bloqueado por la **carga
+  de módulos** + los **builtins de I/O** (diferidos mayores, no la stdlib).

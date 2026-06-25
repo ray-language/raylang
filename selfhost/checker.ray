@@ -663,6 +663,18 @@ fn inject_prelude_fns(c: Checker, prog: Program) {
     inject_fn(c, prog, "parse_float", FnSig {
         params: [Type.TString], ret: Type.TNamed("Option", [Type.TFloat]), type_params: no_tparams(), bounds: no_bounds(),
     });
+    // assert(cond: bool) (M14.6c-2). assert_eq<T: Eq + Show>(a: T, b: T). sort<T: Ord>(a: [T]) -> [T].
+    inject_fn(c, prog, "assert", FnSig {
+        params: [Type.TBool], ret: Type.TUnit, type_params: no_tparams(), bounds: no_bounds(),
+    });
+    inject_fn(c, prog, "assert_eq", FnSig {
+        params: [t, t], ret: Type.TUnit, type_params: ["T"],
+        bounds: [Bound { param: "T", trait_name: "Eq" }, Bound { param: "T", trait_name: "Show" }],
+    });
+    inject_fn(c, prog, "sort", FnSig {
+        params: [Type.TArray(t)], ret: Type.TArray(t), type_params: ["T"],
+        bounds: [Bound { param: "T", trait_name: "Ord" }],
+    });
 }
 
 // Registra una función del prelude (su firma) si el usuario no la define con ese nombre.

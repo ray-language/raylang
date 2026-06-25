@@ -602,6 +602,18 @@ fn key_lt(a: Value, b: Value) -> bool {
     }
 }
 
+// Orden `<` de Ord sobre los primitivos comparables (int/float/string/char). Lo usa el fallback de
+// `.menor()` en el despacho (M14.6c-2); a diferencia de `key_lt` (claves de Map) cubre también float.
+fn value_lt(a: Value, b: Value) -> bool {
+    match (a) {
+        Value.VInt(x) => match (b) { Value.VInt(y) => x < y, _ => panic("menor: tipos incompatibles") },
+        Value.VFloat(x) => match (b) { Value.VFloat(y) => x < y, _ => panic("menor: tipos incompatibles") },
+        Value.VStr(x) => match (b) { Value.VStr(y) => x < y, _ => panic("menor: tipos incompatibles") },
+        Value.VChar(x) => match (b) { Value.VChar(y) => x < y, _ => panic("menor: tipos incompatibles") },
+        _ => panic("menor: tipo no ordenable"),
+    }
+}
+
 // Los índices 0..n ordenados por clave (insertion sort) → keys()/values() deterministas (como Rust).
 fn map_sorted_order(ks: [Value]) -> [int] {
     var order: [int] = [];
@@ -934,6 +946,13 @@ fn dispatch_method(c: Interp, recv: Value, fname: string, args: [Expr], line: in
     }
     if (fname == "mostrar") {
         return Result.Ok(Value.VStr(value_str(recv)));
+    }
+    // `menor` de Ord sobre PRIMITIVOS (impl del prelude `impl Ord for int/float/string/char`, vía `<`).
+    // Un tipo de usuario con `impl Ord` ya se resolvió en (b); el checker exige `T: Ord`, así que aquí
+    // solo llegan esos cuatro primitivos. (M14.6c-2: lo que `sort` necesita.)
+    if (fname == "menor") {
+        let vals = eval_args(c, args)?;
+        return Result.Ok(Value.VBool(value_lt(recv, vals[0])));
     }
     // (d) UFCS a función libre: fname(recv, args)
     match (get(c.funcs, fname)) {

@@ -1190,6 +1190,39 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M15.2: conecta por TCP → ["ok", handle] o ["err", msg].
+            "__tcp_connect" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(host), Value::Int(port)) => match crate::builtins::tcp_connect(host, *port) {
+                        Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza string, int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M15.2: lee del socket → ["ok", datos] o ["err", msg].
+            "__socket_read" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::socket_read(*h) {
+                        Ok(s) => vec![Value::Str("ok".to_string()), Value::Str(s)],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza un int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M15.2: escribe en el socket → ["ok", ""] o ["err", msg].
+            "__socket_write" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Int(h), Value::Str(s)) => match crate::builtins::socket_write(*h, s) {
+                        Ok(_) => vec![Value::Str("ok".to_string()), Value::Str(String::new())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza int, string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M11.8: cierra el handle (total).
             "close" => match &values[0] {
                 Value::Int(h) => {

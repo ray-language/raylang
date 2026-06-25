@@ -273,6 +273,33 @@ fn write(h: int, s: string) -> Result<int, string> {
     let r = __write_handle(h, s);
     if (r[0] == "ok") { Result.Ok(len(s)) } else { Result.Err(r[1]) }
 }
+
+// --- Cliente TCP (M15.2). Sobre los primitivos __tcp_connect/__socket_read/__socket_write. ---
+
+// Conecta a host:port (resuelve el nombre); Ok(handle) u Err(mensaje).
+fn tcp_connect(host: string, port: int) -> Result<int, string> {
+    let r = __tcp_connect(host, port);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+// Hace una lectura del socket; Ok(datos) ("" = EOF) u Err(mensaje).
+fn socket_read(h: int) -> Result<string, string> {
+    let r = __socket_read(h);
+    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+}
+
+// Escribe en el socket; Ok(nº de bytes) u Err(mensaje).
+fn socket_write(h: int, s: string) -> Result<int, string> {
+    let r = __socket_write(h, s);
+    if (r[0] == "ok") { Result.Ok(len(s)) } else { Result.Err(r[1]) }
+}
 "#;
 
 /// Parsea el prelude una vez. El `expect` no puede fallar: el fuente es una constante

@@ -66,7 +66,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
 | **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.6: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure · ✅ **M12.3** structured concurrency · ✅ **M12.4** `select` · ✅ **M12.5** cancelación de hermanas. **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>`, select de send) |
-| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso). Pendiente: M15.2 cliente TCP · M15.3 servidor TCP · M15.4 HTTP/JSON en raylang · (capstone) M15.5 sockets no bloqueantes en el scheduler |
+| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete). Pendiente: M15.3 servidor TCP · M15.4 HTTP/JSON en raylang · (capstone) M15.5 sockets no bloqueantes en el scheduler |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) ⏳ | rendimiento, bootstrapping | 🚧 |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -3441,3 +3441,34 @@ llamada. Diferido: `seed_random(n)` (reproducibilidad), reloj de alta resolució
 **Nota sobre concurrencia (M12).** En el modelo M:1, `sleep` **bloquea el hilo del SO** → bloquea
 *todas* las fibras (no es un yield al scheduler). Es coherente con la decisión "bloqueante primero"
 de §24.1; un `sleep` que ceda la fibra llegaría con el capstone M15.5.
+
+### 24.5 M15.2 — cliente TCP (especificación)
+
+El primer trozo de **redes de verdad**: conectarse a un servidor TCP, escribirle y leerle. Sobre
+`std::net::TcpStream`, **cero deps**, reusando el **molde de handles** de M11.8.
+
+| Builtin | Firma | Semántica |
+|---------|-------|-----------|
+| `tcp_connect` | `(host: string, port: int) -> Result<int, string>` | resuelve `host` (DNS vía `std::net`), abre la conexión, devuelve un **handle** (int). `Err(msg)` si falla. |
+| `socket_read` | `(h: int) -> Result<string, string>` | **una** lectura del socket (hasta 64 KiB); devuelve lo leído como `string` (UTF-8 *lossy*). `""` = EOF (el otro extremo cerró). Bloquea hasta que haya datos. |
+| `socket_write` | `(h: int, s: string) -> Result<int, string>` | escribe `s` completo; `Ok(nº de bytes)`. |
+| `close` | `(h: int) -> int` | **ya existe** (M11.8); se extiende al handle de socket (cierra la conexión). Ad-hoc polimórfico (archivo / canal / socket). |
+
+**El handle de socket reusa el registro de archivos.** `OpenHandle` gana una variante `Tcp(TcpStream)`
+y los sockets viven en el **mismo** `FileRegistry` que los archivos (contador `next` compartido →
+handles globalmente únicos). Así `close(h)` (que solo quita del mapa) cierra archivos *y* sockets sin
+saber de cuál se trata, y el `Drop` de `TcpStream` cierra el descriptor. **El patrón de builtin:**
+primitivos con **arreglo etiquetado** (`__tcp_connect`/`__socket_read`/`__socket_write -> [string]`,
+`["ok", payload]`/`["err", msg]`) + envoltorios en el prelude que arman el `Result` (igual que
+`open`/`read_file`; el handle se decodifica con `parse_int`, como `open`). El runtime no sabe de
+`Result`.
+
+**Lectura por trozos (chunked), no hasta EOF.** `socket_read` hace **una** llamada `read()` y devuelve
+lo que venga: deja al código raylang **iterar** (acumular hasta `""` o hasta tener el cuerpo
+esperado), que es justo lo que necesita el cliente HTTP de M15.4. Para no retener el `Mutex` del
+registro durante una lectura/escritura **bloqueante**, los helpers **clonan** el `TcpStream`
+(`try_clone`, un `dup` del descriptor) y sueltan el lock antes del I/O.
+
+**Pruebas por subproceso (no oráculo).** Red no determinista: un test levanta un **servidor TCP de
+juguete en el propio Rust** (un hilo que acepta una conexión, eco/respuesta fija), y el `.ray` se
+conecta por el puerto efímero asignado; se comprueba el intercambio en ambos motores.

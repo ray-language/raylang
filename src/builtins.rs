@@ -178,10 +178,13 @@ pub fn substring_chars(s: &str, i: i64, j: i64) -> String {
 // motores. La lectura es **bufferizada** (`BufReader`), que es el grano fino del *streaming*: abrir
 // una vez y leer/escribir por partes sin recargar todo el archivo.
 
-/// Un archivo abierto: lectura bufferizada o escritura.
+/// Un recurso abierto: un archivo (lectura bufferizada o escritura) o un socket TCP (M15.2). Los
+/// sockets reusan **el mismo registro** que los archivos para que `close(h)` (que solo quita del
+/// mapa) cierre cualquiera de los dos sin saber de cuál se trata.
 enum OpenHandle {
     Reader(std::io::BufReader<std::fs::File>),
     Writer(std::fs::File),
+    Tcp(std::net::TcpStream),
 }
 
 /// El registro de archivos abiertos: un contador para los handles y el mapa handle → archivo.
@@ -235,13 +238,58 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
     match reg.open.get_mut(&h) {
         Some(OpenHandle::Writer(f)) => f.write_all(s.as_bytes()).map(|_| s.chars().count()).map_err(|e| e.to_string()),
         Some(OpenHandle::Reader(_)) => Err("el handle está abierto para lectura, no escritura".to_string()),
+        Some(OpenHandle::Tcp(_)) => Err("el handle es un socket; usa socket_write".to_string()),
         None => Err(format!("handle de archivo inválido: {}", h)),
     }
 }
 
-/// Cierra el handle (lo quita del registro; el `Drop` del archivo vuelca lo pendiente) (M11.8).
+/// Cierra el handle (lo quita del registro; el `Drop` del archivo/socket libera el recurso) (M11.8).
 pub fn close_handle(h: i64) {
     registry().lock().unwrap().open.remove(&h);
+}
+
+// --- Cliente TCP (M15.2) ---
+//
+// Sobre `std::net::TcpStream`, cero deps. El handle es un `int` y vive en el MISMO registro que los
+// archivos. Para no retener el `Mutex` del registro durante un I/O **bloqueante**, los helpers de
+// lectura/escritura **clonan** el stream (`try_clone` = `dup` del descriptor) y sueltan el lock antes.
+
+/// Conecta a `host:port` (resuelve el nombre vía `std::net`) y devuelve un handle (M15.2).
+pub fn tcp_connect(host: &str, port: i64) -> Result<i64, String> {
+    let stream = std::net::TcpStream::connect((host, port as u16)).map_err(|e| e.to_string())?;
+    let mut reg = registry().lock().unwrap();
+    let id = reg.next;
+    reg.next += 1;
+    reg.open.insert(id, OpenHandle::Tcp(stream));
+    Ok(id)
+}
+
+/// Saca un clon del stream del handle `h` (suelta el lock antes del I/O bloqueante), o un error si
+/// el handle no es un socket.
+fn socket_clone(h: i64) -> Result<std::net::TcpStream, String> {
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Tcp(s)) => s.try_clone().map_err(|e| e.to_string()),
+        Some(_) => Err(format!("el handle {} no es un socket", h)),
+        None => Err(format!("handle inválido: {}", h)),
+    }
+}
+
+/// Hace **una** lectura del socket (hasta 64 KiB) y devuelve lo leído como `string` (UTF-8 *lossy*);
+/// `""` indica EOF (el otro extremo cerró). Bloquea hasta que haya datos (M15.2).
+pub fn socket_read(h: i64) -> Result<String, String> {
+    use std::io::Read;
+    let mut stream = socket_clone(h)?;
+    let mut buf = [0u8; 65536];
+    let n = stream.read(&mut buf).map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&buf[..n]).into_owned())
+}
+
+/// Escribe `s` completo en el socket; `Ok(nº de bytes)` o `Err(mensaje)` (M15.2).
+pub fn socket_write(h: i64, s: &str) -> Result<usize, String> {
+    use std::io::Write;
+    let mut stream = socket_clone(h)?;
+    stream.write_all(s.as_bytes()).map(|_| s.len()).map_err(|e| e.to_string())
 }
 
 /// Lista los nombres de las entradas de un directorio (M11.7c). Helper compartido por ambos motores
@@ -759,7 +807,28 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::String { return Err((Some(1), format!("__write_handle espera un string (el contenido), no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
-    // close: ad-hoc polimórfico. close(h: int) -> int (M11.8, cierra un handle de archivo, devuelve 0) o
+    // --- Cliente TCP (M15.2): primitivos con arreglo etiquetado; el prelude → Result. ---
+    // __tcp_connect(host, port) -> [string]: ["ok", handle] o ["err", msg]. Prelude → Result<int,string>.
+    Builtin { name: "__tcp_connect", opcode: OpCode::TcpConnect, check: |a| {
+        arity(a, 2, "__tcp_connect", " (host, puerto)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__tcp_connect espera un string (el host), no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__tcp_connect espera un int (el puerto), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __socket_read(h) -> [string]: ["ok", datos] o ["err", msg]. Prelude → Result<string,string>.
+    Builtin { name: "__socket_read", opcode: OpCode::SocketRead, check: |a| {
+        arity(a, 1, "__socket_read", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_read espera un int (el handle), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __socket_write(h, s) -> [string]: ["ok", ""] o ["err", msg]. Prelude → Result<int,string>.
+    Builtin { name: "__socket_write", opcode: OpCode::SocketWrite, check: |a| {
+        arity(a, 2, "__socket_write", " (handle, contenido)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_write espera un int (el handle), no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__socket_write espera un string (el contenido), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // close: ad-hoc polimórfico. close(h: int) -> int (M11.8 archivo / M15.2 socket, devuelve 0) o
     // close(ch: Channel<T>) -> unit (M12.1, cierra un canal). El opcode Close ramifica en runtime.
     Builtin { name: "close", opcode: OpCode::Close, check: |a| {
         arity(a, 1, "close", "")?;

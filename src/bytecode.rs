@@ -318,6 +318,17 @@ pub enum OpCode {
     /// Saca `n` (int); empuja un entero en `[0, n)` (`n<=0` → `0`). Builtin `random_int`.
     RandomInt,
 
+    // --- Cliente TCP (M15.2) ---
+    /// Saca `port` (int) y `host` (string); conecta y empuja un `[string]` etiquetado
+    /// (`["ok", handle]`/`["err", msg]`). Primitivo `__tcp_connect`; el prelude → `Result<int,string>`.
+    TcpConnect,
+    /// Saca un handle (int); hace una lectura del socket y empuja un `[string]` etiquetado
+    /// (`["ok", datos]`/`["err", msg]`). Primitivo `__socket_read`; el prelude → `Result<string,string>`.
+    SocketRead,
+    /// Saca `s` (string) y el handle (int); escribe y empuja un `[string]` etiquetado
+    /// (`["ok", ""]`/`["err", msg]`). Primitivo `__socket_write`; el prelude → `Result<int,string>`.
+    SocketWrite,
+
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como
     /// campos tenga (estaban en orden de declaración) y empuja el struct.

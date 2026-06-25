@@ -90,3 +90,13 @@
 - [Map&lt;K, V&gt;: diccionarios](m13/mapas.md)
 - [panic, assert y el runner de pruebas](m13/aserciones.md)
 - [Recursión profunda y llamadas en cola](m13/recursion.md)
+
+# M14 — Self-hosting: raylang en raylang
+
+- [El plan y el oráculo](m14/intro.md)
+- [El lexer auto-alojado](m14/lexer.md)
+- [El parser auto-alojado](m14/parser.md)
+- [El checker auto-alojado](m14/checker.md)
+- [El intérprete auto-alojado](m14/interprete.md)
+- [El loader: juntar módulos](m14/loader.md)
+- [Meta-circularidad](m14/meta-circularidad.md)

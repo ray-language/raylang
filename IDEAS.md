@@ -313,8 +313,19 @@ bloquea nada y se hace de forma incremental, midiendo con `benchmarks/`.
   (Return, fin de chunk, llamada en cola): `new_locals` saca del pool y reconstruye; `recycle_locals`
   devuelve (acotado a 256). **No es raíz del GC** (contenido basura entre reciclar y reusar; se `clear()`+
   reconstruye, nunca se lee lo viejo → seguro). → **552 ms** (~19%; **3.22×**, 25% acumulado vs baseline).
-- Siguiente: **Opt.3** `Rc<str>` (clon barato de strings), **Opt.4** deduplicar constantes, **Opt.5**
-  peephole/plegado.
+- **Opt.3 — `Rc<str>` para strings** ❌ **evaluado y DESCARTADO** (medido): se cambió `HeapValue::Str`
+  de `String` a `Rc<str>` para abaratar el clon (bump de contador). Resultado en `benchmarks/strings.ray`
+  (string-heavy): **79 → 77 ms** (~2.6%, dentro del ruido) — porque los builtins que producen strings
+  (`to_upper`/`split`/…) devuelven `String` y el `.into()` a `Rc<str>` **copia** los bytes, anulando el
+  clon más barato. Peor aún: en `fib` (que NO toca strings) **552 → 609 ms (−10%)**: cambiar el layout de
+  `HeapValue` desplazó el codegen de LLVM del gigantesco `run()` y empeoró el bucle aritmético. Net
+  negativo → **revertido**. Lección: `Rc<str>` solo gana en código *clone-heavy* (leer el mismo string
+  muchas veces sin construir, p. ej. `self.src` del lexer auto-alojado); no compensa el coste de
+  construcción ni el riesgo de codegen. Reconsiderar solo con un perfil que muestre el clon de strings
+  dominando (string interning sería una alternativa con menos churn de construcción).
+- Siguiente (no aplicados): **Opt.4** deduplicar constantes (menor), **Opt.5** peephole/plegado (menor);
+  el gran salto restante sería **locales en la pila de operandos** (estilo clox: quita la indirección del
+  `Vec` por marco, pero Opt.2 ya capturó la asignación) — refactor grande, ROI decreciente.
 
 ## 12. Asperezas de M3
 

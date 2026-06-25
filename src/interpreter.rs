@@ -28,6 +28,7 @@ use std::mem;
 use std::rc::Rc;
 
 use crate::ast::*;
+use crate::bytecode::MathFn;
 
 /// Una **celda**: una variable en el heap, compartible. Es lo que hace posible la
 /// captura por referencia (M4.2): una closure que captura una variable comparte su
@@ -1197,6 +1198,50 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza un int"),
             },
+            // --- Matemáticas (M15.1a) ---
+            // Funciones unarias float -> float: el nombre fija qué MathFn aplicar; el cálculo lo hace
+            // `builtins::apply_mathf` (compartido con la VM → el oráculo cuadra, incl. NaN/inf).
+            "sqrt" | "sin" | "cos" | "tan" | "ln" | "log10" | "exp" | "floor" | "ceil" | "round" => {
+                let f = match name {
+                    "sqrt" => MathFn::Sqrt,
+                    "sin" => MathFn::Sin,
+                    "cos" => MathFn::Cos,
+                    "tan" => MathFn::Tan,
+                    "ln" => MathFn::Ln,
+                    "log10" => MathFn::Log10,
+                    "exp" => MathFn::Exp,
+                    "floor" => MathFn::Floor,
+                    "ceil" => MathFn::Ceil,
+                    "round" => MathFn::Round,
+                    _ => unreachable!(),
+                };
+                match &values[0] {
+                    Value::Float(x) => Value::Float(crate::builtins::apply_mathf(f, *x)),
+                    _ => unreachable!("el checker garantiza un float"),
+                }
+            }
+            "pow" => match (&values[0], &values[1]) {
+                (Value::Float(b), Value::Float(e)) => Value::Float(b.powf(*e)),
+                _ => unreachable!("el checker garantiza dos floats"),
+            },
+            // abs/min/max son ad-hoc polimórficos: conservan el tipo numérico (int o float).
+            "abs" => match &values[0] {
+                Value::Int(x) => Value::Int(x.abs()),
+                Value::Float(x) => Value::Float(x.abs()),
+                _ => unreachable!("el checker garantiza int o float"),
+            },
+            "min" => match (&values[0], &values[1]) {
+                (Value::Int(a), Value::Int(b)) => Value::Int(*a.min(b)),
+                (Value::Float(a), Value::Float(b)) => Value::Float(a.min(*b)),
+                _ => unreachable!("el checker garantiza dos números del mismo tipo"),
+            },
+            "max" => match (&values[0], &values[1]) {
+                (Value::Int(a), Value::Int(b)) => Value::Int(*a.max(b)),
+                (Value::Float(a), Value::Float(b)) => Value::Float(a.max(*b)),
+                _ => unreachable!("el checker garantiza dos números del mismo tipo"),
+            },
+            "pi" => Value::Float(std::f64::consts::PI),
+            "e" => Value::Float(std::f64::consts::E),
             _ => unreachable!("builtin desconocido"),
         }
     }

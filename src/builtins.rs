@@ -21,7 +21,26 @@
 //! propio criterio. Es la razón por la que se eligió esta tabla en Rust frente a un `@builtin fn`.
 
 use crate::ast::Type;
-use crate::bytecode::OpCode;
+use crate::bytecode::{MathFn, OpCode};
+
+/// Aplica una función matemática unaria `float -> float` (M15.1a). Helper compartido por ambos
+/// motores: el resultado es determinista e idéntico en intérprete y VM, así que vive aquí (como
+/// `append_to_file`) en vez de duplicarse. El dominio inválido (`sqrt(-1)`, `ln(0)`…) sigue la
+/// semántica de `f64` (`NaN`/`-inf`), sin error de runtime.
+pub fn apply_mathf(f: MathFn, x: f64) -> f64 {
+    match f {
+        MathFn::Sqrt => x.sqrt(),
+        MathFn::Sin => x.sin(),
+        MathFn::Cos => x.cos(),
+        MathFn::Tan => x.tan(),
+        MathFn::Ln => x.ln(),
+        MathFn::Log10 => x.log10(),
+        MathFn::Exp => x.exp(),
+        MathFn::Floor => x.floor(),
+        MathFn::Ceil => x.ceil(),
+        MathFn::Round => x.round(),
+    }
+}
 
 /// Error de tipado de un builtin: `(índice_del_arg, mensaje)`. El índice `None` señala un error
 /// general de la llamada (p. ej. aridad); `Some(i)` el argumento culpable (para ubicar el cursor).
@@ -207,6 +226,39 @@ fn printable(t: &Type) -> bool {
         Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Array(_)
             | Type::Struct(_, _) | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_)
     )
+}
+
+/// Regla de tipado de una función matemática unaria `float -> float` (M15.1a).
+fn mathf_check(a: &[Type], nombre: &str) -> Result<Type, BuiltinError> {
+    arity(a, 1, nombre, "")?;
+    if a[0] != Type::Float {
+        return Err((Some(0), format!("{} espera un float, no {}", nombre, a[0])));
+    }
+    Ok(Type::Float)
+}
+
+/// Regla de tipado de un builtin numérico **ad-hoc polimórfico** unario (`abs`): `int -> int` o
+/// `float -> float`. Conserva el tipo numérico del argumento.
+fn numeric_unary_check(a: &[Type], nombre: &str) -> Result<Type, BuiltinError> {
+    arity(a, 1, nombre, "")?;
+    match a[0] {
+        Type::Int => Ok(Type::Int),
+        Type::Float => Ok(Type::Float),
+        _ => Err((Some(0), format!("{} espera un int o un float, no {}", nombre, a[0]))),
+    }
+}
+
+/// Regla de tipado de un builtin numérico ad-hoc polimórfico binario (`min`/`max`): ambos
+/// argumentos del mismo tipo numérico (`int` o `float`); devuelve ese tipo.
+fn numeric_binary_check(a: &[Type], nombre: &str) -> Result<Type, BuiltinError> {
+    arity(a, 2, nombre, "")?;
+    if !matches!(a[0], Type::Int | Type::Float) {
+        return Err((Some(0), format!("{} espera un int o un float, no {}", nombre, a[0])));
+    }
+    if a[1] != a[0] {
+        return Err((Some(1), format!("{}: ambos argumentos deben ser del mismo tipo ({} vs {})", nombre, a[0], a[1])));
+    }
+    Ok(a[0].clone())
 }
 
 /// La tabla. El orden no importa (la búsqueda es por nombre).
@@ -512,6 +564,34 @@ static BUILTINS: &[Builtin] = &[
             other => Err((Some(0), format!("values espera un Map, no {}", other))),
         }
     } },
+
+    // --- Matemáticas (M15.1a) ---
+    // Funciones unarias float -> float, todas bajo el opcode parametrizado MathF(MathFn).
+    Builtin { name: "sqrt",  opcode: OpCode::MathF(MathFn::Sqrt),  check: |a| mathf_check(a, "sqrt") },
+    Builtin { name: "sin",   opcode: OpCode::MathF(MathFn::Sin),   check: |a| mathf_check(a, "sin") },
+    Builtin { name: "cos",   opcode: OpCode::MathF(MathFn::Cos),   check: |a| mathf_check(a, "cos") },
+    Builtin { name: "tan",   opcode: OpCode::MathF(MathFn::Tan),   check: |a| mathf_check(a, "tan") },
+    Builtin { name: "ln",    opcode: OpCode::MathF(MathFn::Ln),    check: |a| mathf_check(a, "ln") },
+    Builtin { name: "log10", opcode: OpCode::MathF(MathFn::Log10), check: |a| mathf_check(a, "log10") },
+    Builtin { name: "exp",   opcode: OpCode::MathF(MathFn::Exp),   check: |a| mathf_check(a, "exp") },
+    Builtin { name: "floor", opcode: OpCode::MathF(MathFn::Floor), check: |a| mathf_check(a, "floor") },
+    Builtin { name: "ceil",  opcode: OpCode::MathF(MathFn::Ceil),  check: |a| mathf_check(a, "ceil") },
+    Builtin { name: "round", opcode: OpCode::MathF(MathFn::Round), check: |a| mathf_check(a, "round") },
+    // pow(base, exp) -> float.
+    Builtin { name: "pow", opcode: OpCode::Pow, check: |a| {
+        arity(a, 2, "pow", " (base, exponente)")?;
+        if a[0] != Type::Float { return Err((Some(0), format!("pow espera un float, no {}", a[0]))); }
+        if a[1] != Type::Float { return Err((Some(1), format!("pow espera un float, no {}", a[1]))); }
+        Ok(Type::Float)
+    } },
+    // abs(x): int -> int / float -> float (ad-hoc polimórfico).
+    Builtin { name: "abs", opcode: OpCode::Abs, check: |a| numeric_unary_check(a, "abs") },
+    // min/max(a, b): mismo tipo numérico (ad-hoc polimórfico).
+    Builtin { name: "min", opcode: OpCode::Min, check: |a| numeric_binary_check(a, "min") },
+    Builtin { name: "max", opcode: OpCode::Max, check: |a| numeric_binary_check(a, "max") },
+    // Constantes π y e (Euler).
+    Builtin { name: "pi", opcode: OpCode::Pi, check: |a| { nullary(a, "pi")?; Ok(Type::Float) } },
+    Builtin { name: "e",  opcode: OpCode::E,  check: |a| { nullary(a, "e")?; Ok(Type::Float) } },
 
     // panic(msg) -> unit (M13.2a): aborta la ejecución con `msg`. Lo usan `assert`/`assert_eq` del
     // prelude; es el único primitivo de runtime de M13.2 (el resto vive en raylang). Diverge (nunca

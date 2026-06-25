@@ -14,6 +14,22 @@
 
 use crate::interpreter::Value;
 
+/// Las funciones matemáticas unarias `float -> float` (M15.1a). Van todas bajo el mismo opcode
+/// `OpCode::MathF(MathFn)`: el opcode dice "aplica una función matemática" y este enum **cuál**.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MathFn {
+    Sqrt,
+    Sin,
+    Cos,
+    Tan,
+    Ln,
+    Log10,
+    Exp,
+    Floor,
+    Ceil,
+    Round,
+}
+
 /// Una instrucción de la VM. Las que llevan operando (como `Constant`) lo guardan
 /// inline.
 #[derive(Debug, Clone, PartialEq)]
@@ -270,6 +286,25 @@ pub enum OpCode {
     WriteHandle,
     /// Saca un handle (int); cierra el archivo (lo quita del registro) y empuja `0`. Builtin `close`.
     Close,
+
+    // --- Matemáticas (M15.1a) ---
+    /// Saca un `float`; empuja `f(x)` donde `f` es la función `MathFn`. Builtins `sqrt`/`sin`/`cos`/
+    /// `tan`/`ln`/`log10`/`exp`/`floor`/`ceil`/`round`. **Un solo opcode parametrizado** (en vez de
+    /// uno por función) para no inflar el `match` de la VM; delega en `builtins::apply_mathf`.
+    MathF(MathFn),
+    /// Saca el exponente y la base (`float`, `float`); empuja `base.powf(exp)`. Builtin `pow`.
+    Pow,
+    /// Saca un número; empuja su valor absoluto. **Ad-hoc polimórfico**: `int -> int` / `float ->
+    /// float`. Builtin `abs`.
+    Abs,
+    /// Saca dos números del mismo tipo numérico; empuja el menor. Builtin `min` (poli. int/float).
+    Min,
+    /// Saca dos números del mismo tipo numérico; empuja el mayor. Builtin `max` (poli. int/float).
+    Max,
+    /// No saca nada; empuja la constante π como `float`. Builtin `pi`.
+    Pi,
+    /// No saca nada; empuja la constante e (Euler) como `float`. Builtin `e`.
+    E,
 
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como

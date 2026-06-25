@@ -66,10 +66,12 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
 | **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.6: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure · ✅ **M12.3** structured concurrency · ✅ **M12.4** `select` · ✅ **M12.5** cancelación de hermanas. **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>`, select de send) |
+| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo). Pendiente: M15.1b reloj/RNG · M15.2 cliente TCP · M15.3 servidor TCP · M15.4 HTTP/JSON en raylang · (capstone) M15.5 sockets no bloqueantes en el scheduler |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) ⏳ | rendimiento, bootstrapping | 🚧 |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
-> que cada uno se especifica en su propia sección al arrancarlo (M12 → §21, M13 → §22, M14 → §23).
+> que cada uno se especifica en su propia sección al arrancarlo (M12 → §21, M13 → §22, M14 → §23,
+> M15 → §24).
 > Dependencias clave: `@derive`/`@delegate` (M10) necesitan **traits** (M9); el self-hosting
 > (M14) necesitó **módulos + I/O de archivos** (M11) y los habilitadores de **M13**.
 
@@ -3343,3 +3345,73 @@ cortocircuito, locales, if/while, llamadas nombradas, recursión, builtins escal
   igual que `run.ray` (M14.7c). **Self-hosting CERRADO por AMBOS back-ends**: el intérprete (M14.4 + M14.7) y la
   VM (M14.5), como Rust tiene M1 (intérprete) y M2 (VM). raylang compila, type-checkea Y ejecuta —por
   tree-walking Y por bytecode— raylang, con raylang corriendo sobre raylang.
+
+## 24. M15 — Redes y la base moderna
+
+Con el lenguaje completo y auto-alojado, M15 mira hacia **afuera**: lo que un lenguaje moderno
+necesita para tocar el mundo —reloj, aleatoriedad, matemáticas y, sobre todo, **redes**— sin
+abandonar las dos invariantes del proyecto: **cero dependencias de Cargo** (todo sobre `std`) y el
+**oráculo** (intérprete ↔ VM) donde el comportamiento sea determinista.
+
+### 24.1 Dirección (fijada con el usuario)
+
+- **Transporte = builtins.** Los sockets (TCP/UDP) y la resolución de nombres van como builtins sobre
+  `std::net`, reusando el **molde de handles** de M11.8 (un handle es un `int`; los objetos abiertos
+  viven en un almacén de proceso del host, `OnceLock<Mutex<…>>`).
+- **Protocolos = librería en raylang.** HTTP/URL (y JSON) se escriben **en raylang** y se traen con
+  `import` (no en el prelude). Demuestran el sistema de módulos y la filosofía "lo que se puede
+  escribir en el lenguaje, se escribe en el lenguaje".
+- **Carga útil = `string` por ahora.** `socket_read`/`socket_write` usan `string`, igual que el I/O de
+  archivos (M11.2c): cómodo para texto, *lossy* para binario puro. Un tipo `bytes`/buffer (binario
+  correcto) queda como milestone futuro bien acotado.
+- **Bloqueante primero.** Los sockets de M15 **bloquean el hilo del SO** (y por tanto, en M:1,
+  *todas* las fibras). Es la base honesta y simple. La integración con el **scheduler de M12**
+  (sockets no bloqueantes que **ceden** la fibra → el "servidor async real") es el **capstone** de
+  M15, una sub-fase posterior.
+- **No determinismo → pruebas por subproceso.** Reloj, RNG y redes no son deterministas: no entran al
+  oráculo VM↔intérprete; se prueban por **integración** (subproceso), como el I/O de M11.2/M11.7c.
+  Las **matemáticas** sí son deterministas → **oráculo**.
+
+### 24.2 Sub-fases
+
+- **M15.1 — habilitadores (la base moderna).** Builtins pequeños, prerequisitos de cualquier
+  programa de red realista y huecos por derecho propio:
+  - **M15.1a — matemáticas** (determinista, oráculo): `sqrt`, `pow`, `floor`, `ceil`, `round`, `abs`,
+    `min`, `max`, `sin`, `cos`, `tan`, `ln`, `log10`, `exp`, y las constantes `pi()`/`e()`.
+  - **M15.1b — reloj y aleatoriedad** (no determinista, subproceso): `now()` (epoch en ms),
+    `monotonic()` (reloj monótono en ms, para medir intervalos), `sleep(ms)`, `random()` (float en
+    `[0,1)`) y `random_int(n)` (entero en `[0,n)`).
+- **M15.2 — cliente TCP** (bloqueante): `tcp_connect(host, port) -> Result<int,string>` (resuelve el
+  nombre vía `std::net`), `socket_read(h) -> Result<string,string>`, `socket_write(h, s) ->
+  Result<int,string>`, y `close` extendido al handle de socket (ad-hoc polimórfico, como con canales).
+- **M15.3 — servidor TCP** (bloqueante): `tcp_listen(host, port) -> Result<int,string>`,
+  `tcp_accept(listener) -> Result<int,string>` (bloquea hasta una conexión). Ejemplo: servidor echo.
+- **M15.4 — protocolos en raylang**: una librería `net/http.ray` (cliente HTTP/1.1) + parseo de URL,
+  y una librería de **JSON** (parse/serialize) escritas en raylang e importadas. Showcase del sistema
+  de módulos (cápsulas de M11.6).
+- **(capstone) M15.5 — sockets no bloqueantes integrados con el scheduler de M12**: un `accept`/`read`
+  que en vez de bloquear el hilo **aparca la fibra** y deja correr al scheduler, despertándola cuando
+  el socket está listo (estilo *readiness*/poll). El "servidor concurrente real". Diferido.
+
+### 24.3 M15.1a — matemáticas (especificación)
+
+Las funciones trascendentes (`sqrt`, `sin`, …) necesitan los intrínsecos de `f64`: van como builtins,
+no en raylang. Como son **uniformes** (casi todas `float -> float`), en vez de un opcode por función
+—que inflaría el `match` gigante de la VM (cuyo *layout* afecta al *codegen*, lección de la fase de
+optimización)— se usa **un opcode parametrizado**: `OpCode::MathF(MathFn)` lleva un enum `MathFn` que
+dice cuál aplicar. La VM y el intérprete tienen **una sola** rama que delega en un helper compartido
+(`builtins::apply_mathf`, determinista e idéntico en ambos motores → cuadra el oráculo).
+
+| Builtin | Firma | Notas |
+|---------|-------|-------|
+| `sqrt`/`sin`/`cos`/`tan`/`ln`/`log10`/`exp` | `(float) -> float` | `MathF(MathFn)`; dominio inválido (p.ej. `sqrt(-1)`) → `NaN` (la semántica de `f64`, sin error de runtime) |
+| `floor`/`ceil`/`round` | `(float) -> float` | `MathF(MathFn)` |
+| `pow` | `(float, float) -> float` | opcode `Pow` |
+| `abs` | `int -> int` / `float -> float` | **ad-hoc polimórfico**; opcode `Abs` (ramifica por tipo) |
+| `min`/`max` | `(int,int) -> int` / `(float,float) -> float` | ad-hoc poli.; opcodes `Min`/`Max` (ambos argumentos del mismo tipo numérico) |
+| `pi`/`e` | `() -> float` | constantes; opcodes `Pi`/`E` |
+
+Como todo builtin tras la limpieza L1: una fila en la tabla `BUILTINS` (nombre + opcode + regla de
+tipado) + el opcode + su rama en cada motor. Cero cambios en parser/compilador (las llamadas a
+builtin se resuelven por nombre) y **runtime determinista** → oráculo VM↔intérprete (incluyendo un
+caso con `NaN`/infinito para fijar la semántica de borde de `f64`).

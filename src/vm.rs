@@ -1031,6 +1031,47 @@ impl<'a> Vm<'a> {
                     }
                 }
 
+                // --- Matemáticas (M15.1a) ---
+                // Una sola rama para las 10 funciones float -> float; delega en el helper compartido
+                // con el intérprete (mismo cálculo → oráculo cuadra, incl. NaN/inf).
+                OpCode::MathF(f) => match self.pop() {
+                    HeapValue::Float(x) => self.push(HeapValue::Float(crate::builtins::apply_mathf(*f, x))),
+                    _ => unreachable!("el checker garantiza un float"),
+                },
+                OpCode::Pow => {
+                    let exp = self.pop();
+                    let base = self.pop();
+                    let (HeapValue::Float(base), HeapValue::Float(exp)) = (base, exp) else {
+                        unreachable!("el checker garantiza dos floats");
+                    };
+                    self.push(HeapValue::Float(base.powf(exp)));
+                }
+                OpCode::Abs => match self.pop() {
+                    HeapValue::Int(x) => self.push(HeapValue::Int(x.abs())),
+                    HeapValue::Float(x) => self.push(HeapValue::Float(x.abs())),
+                    _ => unreachable!("el checker garantiza int o float"),
+                },
+                OpCode::Min => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    match (a, b) {
+                        (HeapValue::Int(a), HeapValue::Int(b)) => self.push(HeapValue::Int(a.min(b))),
+                        (HeapValue::Float(a), HeapValue::Float(b)) => self.push(HeapValue::Float(a.min(b))),
+                        _ => unreachable!("el checker garantiza dos números del mismo tipo"),
+                    }
+                }
+                OpCode::Max => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    match (a, b) {
+                        (HeapValue::Int(a), HeapValue::Int(b)) => self.push(HeapValue::Int(a.max(b))),
+                        (HeapValue::Float(a), HeapValue::Float(b)) => self.push(HeapValue::Float(a.max(b))),
+                        _ => unreachable!("el checker garantiza dos números del mismo tipo"),
+                    }
+                }
+                OpCode::Pi => self.push(HeapValue::Float(std::f64::consts::PI)),
+                OpCode::E => self.push(HeapValue::Float(std::f64::consts::E)),
+
                 // --- Structs (M3.2) ---
                 OpCode::MakeStruct(idx) => {
                     let sname = self.program.structs[*idx].name.clone();
@@ -2041,6 +2082,36 @@ mod tests {
             assert_eq!(interp.msg, esperado, "intérprete: {}", src);
             assert_eq!(vm.msg, esperado, "vm: {}", src);
         }
+    }
+
+    /// M15.1a: la stdlib de matemáticas en el oráculo. Las funciones float se enrutan a `int` por la
+    /// comparación de floats del propio lenguaje (NaN != NaN impediría comparar `Value::Float`
+    /// directamente); abs/min/max sobre `int` devuelven `int`. El último caso fija la semántica de
+    /// **borde** de `f64`: `sqrt(-1.0)` da `NaN` en ambos motores → `NaN == NaN` es `false` → `0`.
+    #[test]
+    fn matematicas_oraculo() {
+        // Polimórficas sobre int → resultado int directo.
+        oracle_int("abs(-7)");
+        oracle_int("abs(7)");
+        oracle_int("min(3, 8)");
+        oracle_int("max(3, 8)");
+        // Funciones float, verificadas por igualdad (ambos motores calculan idéntico).
+        oracle_int("if (sqrt(16.0) == 4.0) { 1 } else { 0 }");
+        oracle_int("if (pow(2.0, 10.0) == 1024.0) { 1 } else { 0 }");
+        oracle_int("if (floor(3.7) == 3.0) { 1 } else { 0 }");
+        oracle_int("if (ceil(3.2) == 4.0) { 1 } else { 0 }");
+        oracle_int("if (round(2.5) == 3.0) { 1 } else { 0 }");
+        oracle_int("if (abs(-2.5) == 2.5) { 1 } else { 0 }");
+        oracle_int("if (min(1.5, 9.0) == 1.5) { 1 } else { 0 }");
+        oracle_int("if (max(1.5, 9.0) == 9.0) { 1 } else { 0 }");
+        oracle_int("if (sin(0.0) == 0.0) { 1 } else { 0 }");
+        oracle_int("if (cos(0.0) == 1.0) { 1 } else { 0 }");
+        oracle_int("if (ln(e()) == 1.0) { 1 } else { 0 }");
+        oracle_int("if (log10(1000.0) == 3.0) { 1 } else { 0 }");
+        oracle_int("if (exp(0.0) == 1.0) { 1 } else { 0 }");
+        oracle_int("if (pi() > 3.14) { 1 } else { 0 }");
+        // Borde: NaN se comporta igual en ambos motores (NaN != NaN → la rama else).
+        oracle_int("if (sqrt(0.0 - 1.0) == sqrt(0.0 - 1.0)) { 1 } else { 0 }");
     }
 
     /// M13.1: Map en el oráculo. Las operaciones básicas dan el mismo resultado en ambos motores.

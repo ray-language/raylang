@@ -11,6 +11,7 @@
 
 from compiler import Op, CProgram, CompiledFn, Chunk;
 from interpreter import Value, Flow, RuntimeError, value_str, values_equal, eval_add, eval_arith, eval_cmp, dispatch_builtin, rt_error, no_vals;
+from interpreter import SField, struct_get, struct_set, as_int;
 from parser import BinOp;
 
 // Un marco de llamada: la función en ejecución (índice), el puntero de instrucción, los slots locales y
@@ -108,9 +109,89 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                 if (len(frames) == 0) { result = rv; running = false; }
                 else { push(frames[len(frames) - 1].stack, rv); }
             },
+            // --- M14.5b: datos (mismo Value que el intérprete; semántica de referencia del host) ---
+            Op.OMakeArray(n) => { let elems = pop_n(fr.stack, n); push(fr.stack, Value.VArray(elems)); },
+            Op.OIndex => {
+                let i = as_int(pop_val(fr.stack));
+                let target = pop_val(fr.stack);
+                push(fr.stack, vm_index(target, i)?);
+            },
+            Op.OSetIndex => {
+                let v = pop_val(fr.stack);
+                let i = as_int(pop_val(fr.stack));
+                let target = pop_val(fr.stack);
+                match (target) {
+                    Value.VArray(elems) => {
+                        if (i < 0 || i >= len(elems)) { return Result.Err(Flow.FError(vm_oob(i, len(elems)))); }
+                        elems[i] = v; // muta el arreglo compartido (referencia del host)
+                    },
+                    _ => panic("VM: asignar índice sobre un no-arreglo"),
+                }
+            },
+            Op.OMakeStruct(name, fnames) => {
+                let vals = pop_n(fr.stack, len(fnames));
+                var fields: [SField] = [];
+                var k = 0;
+                while (k < len(fnames)) { push(fields, SField { name: fnames[k], value: vals[k] }); k = k + 1; }
+                push(fr.stack, Value.VStruct(name, fields));
+            },
+            Op.OGetField(name) => {
+                match (pop_val(fr.stack)) {
+                    Value.VStruct(_, fields) => push(fr.stack, struct_get(fields, name)),
+                    _ => panic("VM: acceso a campo sobre un no-struct"),
+                };
+            },
+            Op.OSetField(name) => {
+                let v = pop_val(fr.stack);
+                match (pop_val(fr.stack)) {
+                    Value.VStruct(_, fields) => struct_set(fields, name, v),
+                    _ => panic("VM: asignar campo sobre un no-struct"),
+                };
+            },
+            Op.OMakeEnum(en, variant, arity) => {
+                let payload = pop_n(fr.stack, arity);
+                push(fr.stack, Value.VEnum(en, variant, payload));
+            },
+            Op.OEnumTagEq(variant) => {
+                match (pop_val(fr.stack)) {
+                    Value.VEnum(_, v2, _) => push(fr.stack, Value.VBool(v2 == variant)),
+                    _ => panic("VM: EnumTagEq sobre un no-enum"),
+                };
+            },
+            Op.OGetEnumField(i) => {
+                match (pop_val(fr.stack)) {
+                    Value.VEnum(_, _, payload) => push(fr.stack, payload[i]),
+                    _ => panic("VM: GetEnumField sobre un no-enum"),
+                };
+            },
+            Op.OMatchFail => {
+                return Result.Err(Flow.FError(rt_error(0, 0, "ningún brazo del match casó (no debería ocurrir)")));
+            },
         }
     }
     Result.Ok(result)
+}
+
+// Índice fuera de rango (mismo mensaje que el intérprete/Rust; la posición no entra en el oráculo
+// conductual → 0,0). La VM no porta los `(línea, col)` de los nodos al bytecode.
+fn vm_oob(i: int, n: int) -> RuntimeError {
+    rt_error(0, 0, "índice " + to_string(i) + " fuera de rango (longitud " + to_string(n) + ")")
+}
+
+// Indexar un arreglo (→ elemento) o un string (→ char). Fuera de rango = error de ejecución.
+fn vm_index(target: Value, i: int) -> Result<Value, Flow> {
+    match (target) {
+        Value.VArray(elems) => {
+            if (i < 0 || i >= len(elems)) { return Result.Err(Flow.FError(vm_oob(i, len(elems)))); }
+            Result.Ok(elems[i])
+        },
+        Value.VStr(s) => {
+            let cs = chars(s);
+            if (i < 0 || i >= len(cs)) { return Result.Err(Flow.FError(vm_oob(i, len(cs)))); }
+            Result.Ok(Value.VChar(cs[i]))
+        },
+        _ => panic("VM: indexar sobre un no-arreglo/string"),
+    }
 }
 
 fn negate(v: Value) -> Value {

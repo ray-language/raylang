@@ -992,6 +992,21 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       fib/fizzbuzz/gcd/primes + snippets. El **prelude NO se fusiona aún** (map/filter/fold/sort usan
       llamadas indirectas/métodos → M14.5c). Pendiente: M14.5b (datos), M14.5c (closures/primera clase +
       prelude), M14.5d (despacho dinámico), TCO.
+    - **M14.5b COMPLETO** (347 lib + 9 en `tests/selfhost_vm.rs`): **datos** — arreglos (literal/índice/
+      asignación), structs (literal/campo/asignación de campo) y enums (construcción `Enum.Variante[(args)]`
+      + `match`). Filosofía clave (como el intérprete auto-alojado, M14.4b, y a diferencia de la VM de Rust
+      que usa *tags*/*ids* en tablas): **resolución por NOMBRE en runtime** — los opcodes llevan los nombres
+      (`OMakeStruct(nombre, campos)`, `OMakeEnum(enum, variante, aridad)`, `OEnumTagEq(variante)`,
+      `OGetEnumField(i)`, `OIndex`/`OSetIndex`/`OGetField`/`OSetField`/`OMakeArray`/`OMatchFail`) y la VM
+      construye/compara los `Value` por nombre. El compilador gana tablas `structs`/`enums` (de `prog` +
+      Option/Result del prelude, vía `inject_prelude_enums`) para reconocer la construcción de enum en
+      compilación (lo que el intérprete decide en runtime); `emit_match` es port de Rust pero comparando la
+      variante por nombre (sin tags); el escrutinio va a un local temporal `$match`. La VM **reusa el
+      runtime del intérprete** otra vez (`as_int`/`struct_get`/`struct_set`/`SField`, ahora `pub`): la
+      **semántica de referencia** de arreglos/structs es la del `[Value]`/`[SField]` del host (mutación
+      compartida gratis). Oráculo conductual = mismo corpus de datos del intérprete (structs/enums/
+      match_figuras/arrays/matriz + snippets de aliasing/payload/recursivos/OOB) → stdout+exit idénticos.
+      Pendiente: M14.5c (closures/primera clase/`?` + fusión del prelude), M14.5d (despacho dinámico), TCO.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

@@ -3008,3 +3008,20 @@ cortocircuito, locales, if/while, llamadas nombradas, recursión, builtins escal
   primes + snippets de aritmética/control/recursión/locales/builtins → stdout+exit idénticos. El **prelude
   no se fusiona aún** (map/filter/fold/sort → llamadas indirectas/métodos, M14.5c). Pendiente: b (datos),
   c (closures + prelude), d (despacho dinámico).
+- **M14.5b COMPLETO** — **datos** (arreglos/structs/enums/`match`). Filosofía: **resolución por NOMBRE en
+  runtime**, como el intérprete auto-alojado (M14.4b) y a diferencia de la VM de Rust, que numera variantes
+  con *tags* y structs con *ids* en tablas (`MakeEnum(enum_id, tag)`, `MakeStruct(idx)`, `EnumTagEq(tag)`).
+  Aquí los opcodes llevan los nombres: `OMakeArray(n)`, `OIndex`/`OSetIndex`, `OMakeStruct(nombre, [campos])`,
+  `OGetField(s)`/`OSetField(s)`, `OMakeEnum(enum, variante, aridad)`, `OEnumTagEq(variante)`,
+  `OGetEnumField(i)`, `OMatchFail`. El compilador gana tablas `structs` (nombre → campos en orden de
+  declaración, para emitir el literal ordenado) y `enums` (nombre → variantes; incluye Option/Result vía
+  `inject_prelude_enums`) para **reconocer la construcción de enum en compilación** (`Enum.Variante` con/sin
+  payload, espejando `eval_field_or_enum`/el path de llamada del intérprete). `emit_match` es port de
+  `emit_match` de Rust pero comparando la variante **por nombre** (`OEnumTagEq`), con el escrutinio en un
+  local temporal `$match`; `?` (`ETry`) se difiere a M14.5c (va con Option/Result/primera clase). La VM
+  **reusa el runtime del intérprete**: `OMakeStruct` construye `SField` (ahora `pub`), `OGetField`/`OSetField`
+  delegan en `struct_get`/`struct_set`, `OIndex`/`OSetIndex` en `as_int` + bounds-check con el mismo mensaje;
+  la **semántica de referencia** de arreglos/structs es la del `[Value]`/`[SField]` del host (mutación
+  compartida y aliasing gratis). Oráculo conductual = corpus de datos del intérprete (`examples/structs`/
+  `enums`/`match_figuras`/`arrays`/`matriz` + snippets de aliasing/payload/lista recursiva/OOB) → stdout+exit
+  idénticos. Pendiente: c (closures/primera clase/`?` + fusión del prelude), d (despacho dinámico), TCO.

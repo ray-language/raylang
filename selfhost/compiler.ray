@@ -3,18 +3,26 @@
 // recortado de `src/compiler.rs`.
 //
 // M14.5a — el NÚCLEO: literales, variables locales, aritmética/comparación/lógica (con cortocircuito),
-// if/while/bloques, llamadas a funciones nombradas + builtins escalares, recursión. Datos (arreglos/
-// structs/enums/match) → M14.5b; primera clase (closures) → M14.5c; despacho dinámico → M14.5d.
+// if/while/bloques, llamadas a funciones nombradas + builtins escalares, recursión.
+// M14.5b — DATOS: arreglos (literal/índice/asignación), structs (literal/campo/asignación de campo) y
+// enums (construcción `Enum.Variante[(args)]` + `match`). Primera clase (closures) → M14.5c; despacho
+// dinámico → M14.5d.
 //
 // Decisión de diseño (la elegancia del self-hosting): el bytecode reusa el `Value` del intérprete y, en
 // la VM, su runtime —no hay un segundo tipo de valor ni GC propio (cabalga sobre el host)—. Y es
 // COMPACTO: un opcode genérico `OBuiltin(nombre, argc)` delega en `dispatch_builtin`, en vez de un
 // opcode por builtin como en Rust.
+//
+// Para datos seguimos la filosofía de RESOLUCIÓN POR NOMBRE EN RUNTIME del intérprete auto-alojado (M14.4b):
+// a diferencia de la VM de Rust —que numera variantes con *tags* y structs con *ids* en tablas—, aquí los
+// opcodes llevan los NOMBRES (`OMakeStruct(nombre, campos)`, `OMakeEnum(enum, variante, aridad)`,
+// `OEnumTagEq(variante)`) y la VM construye/compara los `Value` por nombre, igual que el intérprete.
 
 from parser import Program, Func, Param, Block, Stmt, SKind, Expr, EKind, BinOp, UnOp;
+from parser import FieldInit, FieldDef, MatchArm, Pattern, PKind, VariantDef;
 from interpreter import Value, is_builtin;
 
-// El conjunto de opcodes del núcleo. Las constantes (`OConst`) indexan la tabla `consts` del chunk.
+// El conjunto de opcodes. Las constantes (`OConst`) indexan la tabla `consts` del chunk.
 pub enum Op {
     OConst(int), OTrue, OFalse, OUnit,
     OAdd, OSub, OMul, ODiv, ORem, ONeg, ONot,
@@ -23,6 +31,15 @@ pub enum Op {
     OGetLocal(int), OSetLocal(int), OInitLocal(int),
     OCall(int, int), OReturn,    // OCall(fnIndex, argc)
     OBuiltin(string, int),       // OBuiltin(nombre, argc) → dispatch_builtin en la VM
+    // --- M14.5b: datos (resolución por nombre en runtime) ---
+    OMakeArray(int),             // saca n valores → VArray
+    OIndex, OSetIndex,           // a[i] (lee) / a[i] = v
+    OMakeStruct(string, [string]), // nombre + campos en orden de declaración → VStruct
+    OGetField(string), OSetField(string), // obj.campo (lee) / obj.campo = v
+    OMakeEnum(string, string, int), // enum, variante, aridad → VEnum
+    OEnumTagEq(string),          // ¿la cima es esta variante? (saca el enum, empuja bool)
+    OGetEnumField(int),          // payload[i] del enum de la cima
+    OMatchFail,                  // ningún brazo casó (no debería ocurrir)
 }
 
 // El bytecode de una función: las instrucciones + su tabla de constantes.
@@ -38,11 +55,14 @@ pub struct CProgram { fns: [CompiledFn] }
 struct Local { name: string, slot: int, depth: int }
 
 // El estado del compilador para UNA función: el chunk en construcción + la resolución de slots/ámbitos.
-// `indices` (nombre de función → índice) se comparte entre funciones (para resolver `OCall`).
+// `indices` (nombre de función → índice), `structs` (nombre → campos) y `enums` (nombre → variantes) son
+// tablas del PROGRAMA, compartidas entre funciones (resolución de `OCall`, orden de campos, construcción).
 struct Cc {
     code: [Op], consts: [Value],
     locals: [Local], next_slot: int, max_slots: int, depth: int,
     indices: Map<string, int>,
+    structs: Map<string, [FieldDef]>,
+    enums: Map<string, [VariantDef]>,
 }
 
 // =====================================================================
@@ -109,6 +129,40 @@ fn binop_to_op(op: BinOp) -> Op {
     }
 }
 
+// Los campos declarados de un struct, en orden (de la tabla del programa).
+fn struct_field_defs(cc: Cc, name: string) -> [FieldDef] {
+    match (get(cc.structs, name)) {
+        Option.Some(fs) => fs,
+        Option.None => panic("compilador: struct no registrado: " + name),
+    }
+}
+
+// La expresión del campo `fname` en un literal de struct (el checker garantiza que está presente).
+fn find_init(inits: [FieldInit], fname: string) -> Expr {
+    var i = 0;
+    while (i < len(inits)) {
+        if (inits[i].name == fname) { return inits[i].value; }
+        i = i + 1;
+    }
+    panic("compilador: campo ausente en el literal: " + fname)
+}
+
+// ¿`name` es un enum (del programa o del prelude) con una variante `variant`? Reconoce la construcción
+// `Enum.Variante` en tiempo de compilación (lo que el intérprete decide en runtime).
+fn enum_has_variant_c(cc: Cc, name: string, variant: string) -> bool {
+    match (get(cc.enums, name)) {
+        Option.Some(variants) => {
+            var i = 0;
+            while (i < len(variants)) {
+                if (variants[i].name == variant) { return true; }
+                i = i + 1;
+            }
+            false
+        },
+        Option.None => false,
+    }
+}
+
 // =====================================================================
 // Emisión de expresiones y sentencias
 // =====================================================================
@@ -155,8 +209,107 @@ fn emit_expr(cc: Cc, e: Expr) {
             emit(cc, Op.OUnit);
         },
         EKind.EBlock(b) => emit_block(cc, b),
-        _ => panic("compilador: forma de expresión no soportada en M14.5a"),
+        // --- M14.5b: datos ---
+        EKind.EArray(elems) => { emit_args(cc, elems); emit(cc, Op.OMakeArray(len(elems))); },
+        EKind.EIndex(arr, idx) => { emit_expr(cc, arr); emit_expr(cc, idx); emit(cc, Op.OIndex); },
+        EKind.EStructLit(name, inits) => emit_struct_lit(cc, name, inits),
+        EKind.EField(obj, fname) => emit_field(cc, obj, fname),
+        EKind.EMatch(scr, arms) => emit_match(cc, scr, arms),
+        _ => panic("compilador: forma de expresión no soportada en M14.5b"),
     }
+}
+
+// Un literal de struct `Nombre { c: v, ... }`: emite los valores en ORDEN DE DECLARACIÓN (como Rust →
+// Display/igualdad casan), luego `OMakeStruct` con los nombres de campo.
+fn emit_struct_lit(cc: Cc, name: string, inits: [FieldInit]) {
+    let defs = struct_field_defs(cc, name);
+    var fnames: [string] = [];
+    var i = 0;
+    while (i < len(defs)) {
+        emit_expr(cc, find_init(inits, defs[i].name));
+        push(fnames, defs[i].name);
+        i = i + 1;
+    }
+    emit(cc, Op.OMakeStruct(name, fnames));
+}
+
+// `obj.fname`: construcción de variante unit `Enum.Variante` (si `obj` nombra un enum y no un local) o
+// acceso a campo. Espeja `eval_field_or_enum` del intérprete, resuelto en compilación.
+fn emit_field(cc: Cc, obj: Expr, fname: string) {
+    match (obj.kind) {
+        EKind.EIdent(name) => {
+            if (resolve_local(cc, name) < 0 && enum_has_variant_c(cc, name, fname)) {
+                emit(cc, Op.OMakeEnum(name, fname, 0));
+                return;
+            }
+        },
+        _ => {},
+    }
+    emit_expr(cc, obj);
+    emit(cc, Op.OGetField(fname));
+}
+
+// `match (scr) { patrón => cuerpo, ... }`. El escrutinio se guarda en un local temporal `$match`
+// (nombre no escribible → sin choque) para leer su variante/payload sin reevaluarlo. Port de
+// `emit_match` de Rust, pero comparando la variante por NOMBRE (`OEnumTagEq`), sin tags.
+fn emit_match(cc: Cc, scr: Expr, arms: [MatchArm]) {
+    emit_expr(cc, scr);
+    let saved = begin_scope(cc);
+    let scrut = declare_local(cc, "$match");
+    emit(cc, Op.OInitLocal(scrut));
+
+    var to_end: [int] = [];
+    var has_catchall = false;
+    var i = 0;
+    while (i < len(arms)) {
+        match (arms[i].pat.kind) {
+            PKind.PVariant(_, variant, bindings) => {
+                emit(cc, Op.OGetLocal(scrut));
+                emit(cc, Op.OEnumTagEq(variant));
+                let to_next = emit(cc, Op.OJumpIfFalse(0));
+                emit(cc, Op.OPop);                // casó → descartar el bool true
+                let arm_saved = begin_scope(cc);
+                var b = 0;
+                while (b < len(bindings)) {
+                    match (bindings[b]) {
+                        Option.Some(nm) => {
+                            emit(cc, Op.OGetLocal(scrut));
+                            emit(cc, Op.OGetEnumField(b));
+                            let slot = declare_local(cc, nm);
+                            emit(cc, Op.OInitLocal(slot));
+                        },
+                        Option.None => {},
+                    }
+                    b = b + 1;
+                }
+                emit_expr(cc, arms[i].body);
+                end_scope(cc, arm_saved);
+                push(to_end, emit(cc, Op.OJump(0)));
+                patch_jump(cc, to_next);
+                emit(cc, Op.OPop);                // no casó → descartar el bool false
+            },
+            PKind.PWild => {
+                has_catchall = true;
+                emit_expr(cc, arms[i].body);
+                push(to_end, emit(cc, Op.OJump(0)));
+            },
+            PKind.PBind(name) => {
+                has_catchall = true;
+                let arm_saved = begin_scope(cc);
+                emit(cc, Op.OGetLocal(scrut));
+                let slot = declare_local(cc, name);
+                emit(cc, Op.OInitLocal(slot));
+                emit_expr(cc, arms[i].body);
+                end_scope(cc, arm_saved);
+                push(to_end, emit(cc, Op.OJump(0)));
+            },
+        }
+        i = i + 1;
+    }
+    if (!has_catchall) { emit(cc, Op.OMatchFail); }
+    var j = 0;
+    while (j < len(to_end)) { patch_jump(cc, to_end[j]); j = j + 1; }
+    end_scope(cc, saved);
 }
 
 // `&&`/`||` con cortocircuito (`OJumpIfFalse` ojea la condición, no la saca); el resto, operandos + opcode.
@@ -186,7 +339,8 @@ fn emit_binary(cc: Cc, op: BinOp, l: Expr, r: Expr) {
     }
 }
 
-// Una llamada `f(args)`: builtin (→ `OBuiltin`) o función nombrada (→ `OCall`). Indirecta → M14.5c.
+// Una llamada `f(args)`: construcción de enum `Enum.Variante(args)` (→ `OMakeEnum`), builtin
+// (→ `OBuiltin`) o función nombrada (→ `OCall`). Indirecta/método → M14.5c/d.
 fn emit_call(cc: Cc, callee: Expr, cargs: [Expr]) {
     match (callee.kind) {
         EKind.EIdent(name) => {
@@ -202,9 +356,22 @@ fn emit_call(cc: Cc, callee: Expr, cargs: [Expr]) {
                 }
             }
         },
+        // `Enum.Variante(args)`: el callee es un acceso a campo sobre un nombre de enum (no un local).
+        EKind.EField(recv, variant) => {
+            match (recv.kind) {
+                EKind.EIdent(en) => {
+                    if (resolve_local(cc, en) < 0 && enum_has_variant_c(cc, en, variant)) {
+                        emit_args(cc, cargs);
+                        emit(cc, Op.OMakeEnum(en, variant, len(cargs)));
+                        return;
+                    }
+                },
+                _ => {},
+            }
+        },
         _ => {},
     }
-    panic("compilador: llamada indirecta/método no soportada en M14.5a");
+    panic("compilador: llamada indirecta/método no soportada en M14.5b");
 }
 
 fn emit_args(cc: Cc, cargs: [Expr]) {
@@ -234,7 +401,20 @@ fn emit_stmt(cc: Cc, s: Stmt) {
                     let slot = resolve_local(cc, name);
                     emit(cc, Op.OSetLocal(slot));
                 },
-                _ => panic("compilador: asignación a índice/campo no soportada en M14.5a"),
+                // a[i] = v  → arreglo, índice, valor, `OSetIndex` (consume los tres).
+                EKind.EIndex(arr, idx) => {
+                    emit_expr(cc, arr);
+                    emit_expr(cc, idx);
+                    emit_expr(cc, value);
+                    emit(cc, Op.OSetIndex);
+                },
+                // obj.campo = v  → objeto, valor, `OSetField`.
+                EKind.EField(obj, fname) => {
+                    emit_expr(cc, obj);
+                    emit_expr(cc, value);
+                    emit(cc, Op.OSetField(fname));
+                },
+                _ => panic("compilador: destino de asignación no soportado"),
             }
         },
         SKind.SReturn(opt) => {
@@ -249,8 +429,9 @@ fn emit_stmt(cc: Cc, s: Stmt) {
 // Punto de entrada
 // =====================================================================
 
-fn compile_fn(f: Func, indices: Map<string, int>) -> CompiledFn {
-    let cc = Cc { code: [], consts: [], locals: [], next_slot: 0, max_slots: 0, depth: 0, indices: indices };
+fn compile_fn(f: Func, indices: Map<string, int>, structs: Map<string, [FieldDef]>, enums: Map<string, [VariantDef]>) -> CompiledFn {
+    let cc = Cc { code: [], consts: [], locals: [], next_slot: 0, max_slots: 0, depth: 0,
+                  indices: indices, structs: structs, enums: enums };
     var i = 0;
     while (i < len(f.params)) { declare_local(cc, f.params[i].name); i = i + 1; }
     emit_block(cc, f.body);     // deja el valor del cuerpo en la pila
@@ -258,12 +439,36 @@ fn compile_fn(f: Func, indices: Map<string, int>) -> CompiledFn {
     CompiledFn { name: f.name, arity: len(f.params), nslots: cc.max_slots, chunk: Chunk { code: cc.code, consts: cc.consts } }
 }
 
+// Registra los enums del prelude (Option/Result) para RECONOCER su construcción `Option.Some`/`Result.Ok`
+// en compilación, como el intérprete los inyecta en runtime (`inject_prelude_enums`). Solo importan los
+// nombres de las variantes (la aridad la da el sitio de llamada).
+fn inject_prelude_enums(enums: Map<string, [VariantDef]>) {
+    insert(enums, "Option", [
+        VariantDef { name: "Some", payload: [], line: 0, col: 0 },
+        VariantDef { name: "None", payload: [], line: 0, col: 0 },
+    ]);
+    insert(enums, "Result", [
+        VariantDef { name: "Ok", payload: [], line: 0, col: 0 },
+        VariantDef { name: "Err", payload: [], line: 0, col: 0 },
+    ]);
+}
+
 pub fn compile(prog: Program) -> CProgram {
     var indices: Map<string, int> = map_new();
     var i = 0;
     while (i < len(prog.funcs)) { insert(indices, prog.funcs[i].name, i); i = i + 1; }
+
+    var structs: Map<string, [FieldDef]> = map_new();
+    var s = 0;
+    while (s < len(prog.structs)) { insert(structs, prog.structs[s].name, prog.structs[s].fields); s = s + 1; }
+
+    var enums: Map<string, [VariantDef]> = map_new();
+    inject_prelude_enums(enums);
+    var e = 0;
+    while (e < len(prog.enums)) { insert(enums, prog.enums[e].name, prog.enums[e].variants); e = e + 1; }
+
     var fns: [CompiledFn] = [];
     var j = 0;
-    while (j < len(prog.funcs)) { push(fns, compile_fn(prog.funcs[j], indices)); j = j + 1; }
+    while (j < len(prog.funcs)) { push(fns, compile_fn(prog.funcs[j], indices, structs, enums)); j = j + 1; }
     CProgram { fns: fns }
 }

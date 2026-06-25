@@ -65,7 +65,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ✅ M11.1 stdlib de string (`+`/`len`/`to_string`/`trim`/`split`) · M11.2 I/O (`eprint`/`input`/`parse_int`/`read_int`/`env`/`args`/`read_file`/`write_file`) · M11.3 módulos (`import M;`+`M.f`, `from M import a as b`, `pub`) |
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
-| **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.5: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure (`channel(n)`) · ✅ **M12.3** structured concurrency (`Task<T>`+`join`+`scope`, propagación) · ✅ **M12.4** `select` sobre varios canales. **M12 COMPLETO** (diferido: cancelación de hermanas, `Selected<T>`, select de send) |
+| **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.6: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure · ✅ **M12.3** structured concurrency · ✅ **M12.4** `select` · ✅ **M12.5** cancelación de hermanas. **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>`, select de send) |
 | **Transversal** | optimización de la VM (incremental, midiendo) · **VM auto-alojada** (M14.5, opcional) | rendimiento, bootstrapping | ⏳ |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -2353,9 +2353,43 @@ despiertan en orden FIFO. **Prioridad:** un `send` entrega antes a un `recv` pla
 selector es el **handle del arreglo** de canales → el GC lo rootea (y con él, transitivamente, los canales).
 Solo la VM; el intérprete da error limpio en `select`. Tests por **salida esperada exacta**.
 
-**M12.4 — estado: COMPLETO.** Implementado según la spec. Con M12.4, **M12 (concurrencia) queda COMPLETO**
-en su alcance pedagógico. Diferido (puertas abiertas): `Selected<T>` (índice+valor en un paso, azúcar del
-prelude), `select` de operaciones de **send**, y la **cancelación** de hermanas en un `scope` (§21.4).
+**M12.4 — estado: COMPLETO.** Implementado según la spec. Diferido (puertas abiertas): `Selected<T>`
+(índice+valor en un paso, azúcar del prelude) y `select` de operaciones de **send**.
+
+### 21.6 M12.5 — cancelación de hermanas (especificación)
+
+M12.3 dejó el `scope` con una semántica de fallo **incompleta**: al unir, esperaba a TODAS las tareas y
+solo después propagaba el fallo de una; y si el **cuerpo** del scope fallaba, las tareas en vuelo quedaban
+**huérfanas**. La concurrencia estructurada de verdad (Trio/Kotlin) **cancela a las hermanas** en cuanto una
+falla: no tiene sentido seguir trabajando si el resultado ya se va a descartar. M12.5 lo añade.
+
+**Sin superficie nueva** — es un cambio de **semántica** (automático, como Trio): el usuario no escribe
+nada nuevo; el `scope` simplemente cancela mejor. Solo toca el runtime de la VM.
+
+**Cancelar, en un scheduler cooperativo M:1, es trivial:** una fibra solo corre en los puntos de yield, así
+que "cancelarla" es **quitarla** de `ready`/`parked` y no reanudarla nunca (sus marcos/locales los reclama
+el GC; raylang no tiene finalizadores). `cancel_task(t)` marca la `Task` como `Failed("tarea cancelada …")`,
+saca su fibra de `ready`/`parked` y **cancela recursivamente** los hijos de los scopes de esa fibra (una
+hermana cancelada que a su vez era dueña de un scope no deja **nietos** huérfanos → cancelación transitiva).
+
+**Dónde se dispara:**
+- En `ScopeEnd`: antes de bloquearse esperando a una hija pendiente, **escanea** los hijos. Si alguno
+  **falló**, captura ese fallo (el original), **cancela** a las hermanas que sigan pendientes y propaga el
+  fallo original de inmediato — en vez de esperar a que terminen (M12.3). Es el cambio central.
+- En `fail_current_fiber`: cuando una fibra **hija** falla teniendo scopes activos (su cuerpo hizo panic con
+  tareas en vuelo), cancela los hijos de esos scopes antes de descartarla (cierra el "cuerpo falla →
+  huérfanas" para fibras no-main; en `main` el programa aborta y el punto es discutible).
+
+**Determinismo:** se propaga el **primer** fallo en orden de declaración de los hijos. **Limitaciones
+(documentadas):** la cancelación es **cooperativa** —no interrumpe el *cuerpo* del scope a mitad de
+ejecución, ni a una hermana que esté corriendo CPU sin ceder—; solo retira a las que están en `ready` o
+aparcadas. El caso patológico "el `ScopeEnd` espera a una hija que se bloquea para siempre mientras otra
+falla" degrada a **deadlock** (termina con error, no cuelga), no a propagación del fallo.
+
+**M12.5 — estado: COMPLETO.** Runtime intacto salvo la VM (cero opcodes nuevos; reusa `TaskState::Failed`).
+Tests en `tests/concurrency_cli.rs`. Con M12.5, **M12 (concurrencia) queda COMPLETO**. Diferido:
+cancelación **preemptiva** (interrumpir el cuerpo / una hermana en CPU), `Selected<T>`, `select` de send,
+y un primitivo de cancelación **explícito** (`cancel(t)`).
 
 ## 22. M13 — Habilitadores de self-hosting
 

@@ -82,10 +82,25 @@ tareas como una excepción recorre la pila de llamadas. El GC, claro, gana más 
 valor de cada `Done`, el handle de tarea de cada fibra que espera un `join`, y los hijos
 de cada `scope` activo.
 
-## Lo que queda abierto: cancelación
+## Cancelación de hermanas (M12.5)
 
-Hay un límite honesto. La concurrencia estructurada "de verdad" (Trio) **cancela a las
-hermanas** cuando una tarea falla: si `a` revienta, `b` se aborta en vez de seguir
-corriendo en vano. raylang no tiene aún un primitivo de **cancelación**, así que si el
-*cuerpo* de un `scope` hace panic, las tareas en curso quedan **huérfanas** en vez de
-cancelarse. Es la siguiente puerta a abrir, y la abordamos justo después de cerrar M12.
+La concurrencia estructurada "de verdad" (Trio) **cancela a las hermanas** cuando una
+tarea falla: si `a` revienta, `b` se aborta en vez de seguir corriendo en vano. M12.5 lo
+añade, y resulta **sorprendentemente fácil** gracias al modelo M:1. Como una fibra solo
+corre en los puntos de yield, **cancelarla es quitarla** de las colas (`ready`/`parked`)
+y no reanudarla nunca: sus marcos y locales los reclama el GC; no hay finalizadores que
+ejecutar. `cancel_task(t)` hace justo eso, y **recursivamente** con los hijos de los
+scopes de la fibra cancelada (una hermana cancelada que era dueña de su propio scope no
+deja **nietos** huérfanos).
+
+¿Cuándo se dispara? En dos sitios. En `ScopeEnd`: antes de esperar a una hija pendiente,
+escanea; si alguna **falló**, cancela a las hermanas que sigan pendientes y propaga el
+fallo original *de inmediato*, sin esperar al resto. Y en el manejo de fallos: cuando una
+fibra hija hace panic teniendo tareas en vuelo (el "cuerpo del scope falla"), cancela sus
+hijos antes de descartarla. No hay superficie nueva: el `scope` simplemente cancela mejor.
+
+El límite que queda es la cancelación **preemptiva**: no se interrumpe código que esté
+corriendo CPU sin ceder, ni el *cuerpo* del scope a mitad de una operación; solo se retira
+a las fibras que están dormidas o en cola. Para un scheduler cooperativo es justo lo que
+se puede hacer sin un mecanismo de interrupción, y cierra el grueso del problema: ninguna
+tarea sigue trabajando en vano tras un fallo de su hermana.

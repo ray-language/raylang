@@ -1,5 +1,5 @@
 //! Pruebas de **concurrencia** (M12.1 slice CSP + M12.2 acotados/backpressure + M12.3 structured
-//! concurrency + M12.4 `select`) sobre el binario.
+//! concurrency + M12.4 `select` + M12.5 cancelación de hermanas) sobre el binario.
 //!
 //! La concurrencia vive SOLO en la VM (el intérprete da un error limpio). El scheduler es **cooperativo
 //! M:1 y determinista** (cola FIFO, puntos de yield = `recv` bloqueante y, desde M12.2, `send` sobre un
@@ -499,5 +499,62 @@ fn main() -> int {
 "#;
     let (_out, err, code) = run("conc_select_deadlock", src, true);
     assert!(err.contains("deadlock"), "stderr no menciona deadlock: {err}");
+    assert_eq!(code, 70);
+}
+
+// --- M12.5: cancelación de hermanas ---
+
+#[test]
+fn scope_cancela_a_las_hermanas_cuando_una_falla() {
+    // La hija 0 hace panic; la hija 1 se bloquearía para siempre e imprimiría al final. El scope cancela a
+    // la hija 1 (no llega a imprimir) y propaga el panic ORIGINAL (no un deadlock por esperarla).
+    let src = r#"
+fn main() -> int {
+    scope(fn() -> int {
+        spawn(fn() -> int { panic("boom") });
+        spawn(fn() -> int {
+            let ch: Channel<int> = channel();
+            recv(ch);
+            print(777);
+            0
+        });
+        0
+    });
+    print(999);
+    0
+}
+"#;
+    let (out, err, code) = run("conc_cancel_hermana", src, true);
+    assert_eq!(out, ""); // ni 777 (cancelada) ni 999 (el scope propagó)
+    assert!(err.contains("boom"), "stderr no propaga el fallo original: {err}");
+    assert!(!err.contains("deadlock"), "no debería haber deadlock: {err}");
+    assert_eq!(code, 70);
+}
+
+#[test]
+fn fibra_que_falla_cancela_sus_propias_tareas() {
+    // Una tarea externa abre su scope; su cuerpo hace panic con una sub-tarea en vuelo. Al fallar, esa
+    // fibra cancela sus hijos (la sub-tarea no llega a imprimir), y join re-lanza el panic.
+    let src = r#"
+fn main() -> int {
+    let t: Task<int> = spawn(fn() -> int {
+        scope(fn() -> int {
+            spawn(fn() -> int {
+                let ch: Channel<int> = channel();
+                recv(ch);
+                print(555);
+                0
+            });
+            panic("externa falla")
+        })
+    });
+    let v = join(t);
+    print(v);
+    0
+}
+"#;
+    let (out, err, code) = run("conc_cancel_subtareas", src, true);
+    assert_eq!(out, ""); // ni 555 (sub-tarea cancelada) ni v
+    assert!(err.contains("externa falla"), "stderr no propaga el fallo: {err}");
     assert_eq!(code, 70);
 }

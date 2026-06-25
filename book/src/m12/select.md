@@ -66,7 +66,8 @@ runtime: es la consecuencia natural de que "cerrado" cuente como "listo" (lo cue
 propósito, para que puedas *detectar* el cierre). Mientras tus canales no se cierren a mitad
 —o los podes de la lista cuando lo hagan— `select` se comporta como esperas.
 
-Con `select`, **M12 queda completo**: fibras, canales con backpressure, concurrencia
-estructurada y multiplexación. Todo sobre un scheduler de un solo hilo, determinista, sin
-una sola carrera de datos posible. Lo único que queda en el tintero es la **cancelación**
-de tareas hermanas, el siguiente paso.
+Con `select` —y la **cancelación de hermanas** (M12.5) que cierra el `scope`— **M12 queda
+completo**: fibras, canales con backpressure, concurrencia estructurada con cancelación, y
+multiplexación. Todo sobre un scheduler de un solo hilo, determinista, sin una sola carrera
+de datos posible. Lo que queda en el tintero son extensiones (cancelación *preemptiva*, un
+`select` de envíos, un primitivo de cancelación explícito), no agujeros del modelo.

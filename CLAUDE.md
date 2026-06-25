@@ -1134,8 +1134,22 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     re-ejecuta y se re-bloquea. **Prioridad**: un `send` entrega antes a un `recv` plano que a un `select`
     (que solo ve el valor vía la cola). Gotcha (documentado): un canal **cerrado** queda listo para siempre
     → si haces `select` sobre una lista que lo incluye, lo elegiría siempre; hay que quitarlo de la lista (el
-    "poner a nil" de Go). Ejemplo `examples/select.ray`. **M12 COMPLETO** (12.1–12.4). Diferido: cancelación
-    de hermanas en `scope`, `Selected<T>` (índice+valor), `select` de operaciones de send.
+    "poner a nil" de Go). Ejemplo `examples/select.ray`. Diferido: `Selected<T>` (índice+valor), `select`
+    de operaciones de send.
+  - **M12.5 COMPLETO** (347 lib + 23 en `tests/concurrency_cli.rs`): **cancelación de hermanas** (DESIGN
+    §21.6). Cierra el diferido de M12.3: cuando una tarea de un `scope` falla, se **cancelan** las hermanas
+    pendientes y se propaga el fallo **original**, en vez de esperarlas (o dejarlas huérfanas). **Sin
+    superficie nueva** (semántica automática, como Trio); solo runtime de la VM. Cancelar en M:1 es trivial:
+    una fibra solo corre en los yields → `cancel_task(t)` la marca `Failed`, la **saca** de `ready`/`parked`
+    (el GC reclama sus marcos) y cancela **recursivamente** los hijos de sus scopes (transitiva: sin nietos
+    huérfanos). Se dispara en (1) `ScopeEnd`: escanea los hijos **antes** de bloquearse; si alguno falló,
+    cancela las hermanas pendientes y propaga el fallo original de inmediato (antes esperaba a todas); (2)
+    `fail_current_fiber`: una fibra hija que hace panic con tareas en vuelo cancela los hijos de sus scopes
+    (cierra "cuerpo del scope falla → huérfanas" para fibras no-main). Reusa `TaskState::Failed` (cero
+    opcodes/tipos nuevos). Cooperativa, **no preemptiva** (no interrumpe código que corre sin ceder ni el
+    cuerpo a mitad). Tests: cancelación de hermana bloqueada + cuerpo de fibra hija que cancela sus
+    subtareas. **M12 COMPLETO** (12.1–12.5). Diferido: cancelación preemptiva, `Selected<T>`, select de send,
+    `cancel(t)` explícito.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

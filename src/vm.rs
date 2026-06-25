@@ -581,27 +581,33 @@ impl<'a> Vm<'a> {
                     self.scopes.push(ScopeFrame { children: Vec::new() });
                 }
                 OpCode::ScopeEnd => {
-                    // Cierra el scope: espera a sus tareas (una a una, bloqueando) y al estar todas propaga
-                    // el primer fallo; el valor del cuerpo (R) ya está en la pila.
+                    // Cierra el scope: el valor del cuerpo (R) ya está en la pila.
                     let children: Vec<Handle> =
                         self.scopes.last().expect("ScopeEnd sin ScopeBegin").children.clone();
+                    // (1) ¿Alguna hija FALLÓ? Cancela a las hermanas que sigan pendientes y propaga el fallo
+                    // ORIGINAL de inmediato, sin esperar a las demás (M12.5: cancelación de hermanas).
+                    let failure = children.iter().find_map(|&c| match self.heap.get(c) {
+                        Obj::Task(VmTask { state: TaskState::Failed(msg) }) => Some(msg.clone()),
+                        _ => None,
+                    });
+                    if let Some(msg) = failure {
+                        for &c in &children {
+                            self.cancel_task(c); // ignora las no-pendientes (la que falló, las Done)
+                        }
+                        self.scopes.pop();
+                        return Err(runtime_error(line, col, &msg));
+                    }
+                    // (2) ¿Alguna pendiente? Rebobina a ScopeEnd y bloquéate (al despertar re-escanea).
                     let pending = children.iter().copied().find(|&c| matches!(
                         self.heap.get(c), Obj::Task(t) if matches!(t.state, TaskState::Pending)));
                     if let Some(c) = pending {
-                        // Una hija sigue corriendo: rebobina a ScopeEnd y bloquéate esperándola.
                         self.frames.last_mut().unwrap().ip -= 1;
                         let fiber = self.take_current_fiber();
                         self.parked.push(Parked { on: c, fiber, waiting: Waiting::Join });
                         self.schedule_next(line, col)?;
                     } else {
-                        // Todas terminadas: desapila el scope y propaga el primer fallo (si lo hubo).
+                        // (3) Todas terminaron con éxito: desapila el scope.
                         self.scopes.pop();
-                        for c in children {
-                            if let Obj::Task(VmTask { state: TaskState::Failed(msg) }) = self.heap.get(c) {
-                                let msg = msg.clone();
-                                return Err(runtime_error(line, col, &msg));
-                            }
-                        }
                     }
                 }
                 OpCode::Select => {
@@ -1236,6 +1242,12 @@ impl<'a> Vm<'a> {
             }
             self.wake_task_waiters(task);
         }
+        // M12.5: si esta fibra poseía tareas (scopes activos cuyo cuerpo hizo panic), cancélalas en vez de
+        // dejarlas huérfanas. (En `main` el programa aborta, así que esto importa para fibras hijas.)
+        let orphans: Vec<Handle> = self.scopes.iter().flat_map(|s| s.children.iter().copied()).collect();
+        for c in orphans {
+            self.cancel_task(c);
+        }
         self.frames.clear();
         self.stack.clear();
         self.scopes.clear();
@@ -1291,6 +1303,36 @@ impl<'a> Vm<'a> {
             } else {
                 i += 1;
             }
+        }
+    }
+
+    /// Cancela una tarea **pendiente** (M12.5, structured concurrency): la marca `Failed`, **saca** su fibra
+    /// de `ready`/`parked` (no se reanudará nunca; sus marcos/locales los reclama el GC) y cancela
+    /// **recursivamente** los hijos de los scopes de esa fibra (cancelación transitiva: una hermana
+    /// cancelada que era dueña de un scope no deja nietos huérfanos). Si la tarea ya terminó, no hace nada.
+    /// Es trivial porque el scheduler es cooperativo M:1: una fibra solo corre en los puntos de yield, así
+    /// que "cancelar" = "retirar de las colas". No es preemptiva: no interrumpe código que corra sin ceder.
+    fn cancel_task(&mut self, task: Handle) {
+        match self.heap.get_mut(task) {
+            Obj::Task(t) if matches!(t.state, TaskState::Pending) => {
+                t.state = TaskState::Failed("tarea cancelada (una hermana falló)".to_string());
+            }
+            _ => return, // no es una tarea, o ya terminó (Done/Failed) → nada que cancelar
+        }
+        let mut grandchildren: Vec<Handle> = Vec::new();
+        if let Some(pos) = self.ready.iter().position(|f| f.task == Some(task)) {
+            let f = self.ready.remove(pos).unwrap();
+            for s in &f.scopes {
+                grandchildren.extend(s.children.iter().copied());
+            }
+        } else if let Some(pos) = self.parked.iter().position(|p| p.fiber.task == Some(task)) {
+            let p = self.parked.remove(pos);
+            for s in &p.fiber.scopes {
+                grandchildren.extend(s.children.iter().copied());
+            }
+        }
+        for g in grandchildren {
+            self.cancel_task(g);
         }
     }
 

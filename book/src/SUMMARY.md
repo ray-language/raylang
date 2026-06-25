@@ -86,6 +86,13 @@
 - [I/O y la API de runtime](m11/io.md)
 - [Módulos y `pub`](m11/modulos.md)
 
+# M12 — Concurrencia
+
+- [Concurrencia: CSP sobre la VM](m12/intro.md)
+- [Fibras y canales](m12/canales.md)
+- [Structured concurrency](m12/structured.md)
+- [select: multiplexar canales](m12/select.md)
+
 # M13 — Habilitadores de self-hosting
 
 - [Map&lt;K, V&gt;: diccionarios](m13/mapas.md)

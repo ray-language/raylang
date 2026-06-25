@@ -675,6 +675,14 @@ fn inject_prelude_fns(c: Checker, prog: Program) {
         params: [Type.TArray(t)], ret: Type.TArray(t), type_params: ["T"],
         bounds: [Bound { param: "T", trait_name: "Ord" }],
     });
+    // I/O de archivos (M14.6d): read_file(ruta) -> Result<string,string>,
+    // write_file(ruta, contenido) -> Result<int,string>. (exists es builtin directo -> bool.)
+    inject_fn(c, prog, "read_file", FnSig {
+        params: [Type.TString], ret: Type.TNamed("Result", [Type.TString, Type.TString]), type_params: no_tparams(), bounds: no_bounds(),
+    });
+    inject_fn(c, prog, "write_file", FnSig {
+        params: [Type.TString, Type.TString], ret: Type.TNamed("Result", [Type.TInt, Type.TString]), type_params: no_tparams(), bounds: no_bounds(),
+    });
 }
 
 // Registra una función del prelude (su firma) si el usuario no la define con ese nombre.
@@ -1524,6 +1532,7 @@ fn is_known_builtin(name: string) -> bool {
         || name == "map_new" || name == "insert" || name == "get" || name == "contains_key"
         || name == "keys" || name == "values" || name == "remove"
         || name == "panic" || name == "__parse_int" || name == "__parse_float"
+        || name == "__read_file" || name == "__write_file" || name == "exists"
 }
 
 // ¿`name` nombra algo llamable? (builtin, variable local de función, o función de nivel superior.)
@@ -1578,6 +1587,9 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
     if (name == "panic") { return check_panic(c, cargs, line, col); }
     if (name == "__parse_int") { return check_parse_prim(c, "__parse_int", Type.TInt, cargs, line, col); }
     if (name == "__parse_float") { return check_parse_prim(c, "__parse_float", Type.TFloat, cargs, line, col); }
+    if (name == "__read_file") { return check_read_file(c, cargs, line, col); }
+    if (name == "__write_file") { return check_write_file(c, cargs, line, col); }
+    if (name == "exists") { return check_exists(c, cargs, line, col); }
     match (lookup(c, name)) {
         Option.Some(v) => { return call_type(c, v.ty, cargs, line, col); },
         Option.None => {},
@@ -1786,6 +1798,31 @@ fn check_parse_prim(c: Checker, name: string, elem: Type, cargs: [Expr], line: i
     let a = check_args_types(c, cargs)?;
     want_string(a, cargs, 0, name + " espera un string, no ")?;
     Result.Ok(Type.TArray(elem))
+}
+
+// __read_file(ruta: string) -> [string] (M14.6d): ["ok", contenido] / ["err", msg]. read_file → Result.
+fn check_read_file(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("__read_file", 1, "", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "__read_file espera un string (la ruta), no ")?;
+    Result.Ok(Type.TArray(Type.TString))
+}
+
+// __write_file(ruta: string, contenido: string) -> [string] (M14.6d): ["ok"] / ["err", msg].
+fn check_write_file(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("__write_file", 2, " (ruta, contenido)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "__write_file espera un string (la ruta), no ")?;
+    want_string(a, cargs, 1, "__write_file espera un string (el contenido), no ")?;
+    Result.Ok(Type.TArray(Type.TString))
+}
+
+// exists(ruta: string) -> bool (M14.6d): total, no falla.
+fn check_exists(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("exists", 1, "", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "exists espera un string (la ruta), no ")?;
+    Result.Ok(Type.TBool)
 }
 
 fn check_trim(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {

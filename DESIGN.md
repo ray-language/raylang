@@ -2880,3 +2880,19 @@ diferido aditivo (fila en el checker + impl en el intérprete, como M11.4).
   `sort` sin Ord, byte-idéntico). **M14.6c COMPLETO** (`panic` + `parse_int`/`parse_float` + `assert`/
   `assert_eq`/`sort`). El compilador auto-alojado entero sobre el intérprete sigue bloqueado por la **carga
   de módulos** + los **builtins de I/O** (diferidos mayores, no la stdlib).
+- **M14.6d COMPLETO** — **I/O de archivos** (`read_file`/`write_file`/`exists`). El **checker auto-alojado**
+  gana los primitivos `__read_file`/`__write_file` (arreglo etiquetado `[string]`) y el builtin `exists ->
+  bool` (`check_read_file`/`check_write_file`/`check_exists`; mensajes byte-idénticos a `src/builtins.rs`)
+  en `is_known_builtin`/`check_named_call`, más las **firmas** de los envoltorios `read_file ->
+  Result<string,string>` / `write_file -> Result<int,string>` en `inject_prelude_fns`. El **intérprete**
+  delega `__read_file`/`__write_file`/`exists` directo en los primitivos del host (que ya devuelven el
+  arreglo etiquetado / bool); los **cuerpos** `read_file`/`write_file` (port de `src/prelude.rs`, traducen
+  el arreglo a `Result`) van a `selfhost/prelude.ray`. **Oráculo conductual posible porque es determinista**:
+  ambos pipelines escriben el MISMO contenido a un temporal y lo releen → mismo stdout (1 test intérprete;
+  4 checker: read/write/exists válidos + error de tipo en `exists`). **Diferidos a propósito** (no encajan
+  en el oráculo conductual): **`args()`** —diverge entre pipelines: el self-hosted ve el path que `run.ray`
+  consumió como `argv[0]`; necesita que el driver enhebre los args al intérprete—, y **stdin/env**
+  (`input`/`read_line`/`env`) por no deterministas. Los handles de archivo (`open`/`close`/…) y
+  `remove_file`/`list_dir`/`append_file` quedan fuera del alcance (no los usa el compilador). Con esto la
+  stdlib de archivos que el compilador necesita (`read_file`) está cubierta; el bloqueo restante para la
+  meta-circularidad es **solo la carga de módulos**.

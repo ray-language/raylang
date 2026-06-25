@@ -544,6 +544,7 @@ fn is_builtin(name: string) -> bool {
         || name == "map_new" || name == "insert" || name == "get" || name == "contains_key"
         || name == "keys" || name == "values" || name == "remove"
         || name == "__parse_int" || name == "__parse_float"
+        || name == "__read_file" || name == "__write_file" || name == "exists"
 }
 
 // `len` de un arreglo, un string (nº de caracteres) o un Map (nº de entradas).
@@ -753,6 +754,12 @@ fn dispatch_builtin(c: Interp, name: string, vals: [Value], line: int, col: int)
             Option.None => Result.Ok(Value.VArray(no_vals())),
         };
     }
+    // --- I/O de archivos (M14.6d): delegan en los primitivos del host, que ya devuelven el arreglo
+    // etiquetado (["ok",…]/["err",msg]); los envoltorios `read_file`/`write_file` del prelude lo
+    // traducen a Result. `exists` es total (devuelve bool). ---
+    if (name == "__read_file") { return Result.Ok(strs_to_value(__read_file(as_str(vals[0])))); }
+    if (name == "__write_file") { return Result.Ok(strs_to_value(__write_file(as_str(vals[0]), as_str(vals[1])))); }
+    if (name == "exists") { return Result.Ok(Value.VBool(exists(as_str(vals[0])))); }
     // --- Builtins de Map (M14.6b) ---
     if (name == "map_new") { return Result.Ok(Value.VMap(MapData { keys: no_vals(), vals: no_vals() })); }
     if (name == "insert") {

@@ -926,6 +926,17 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       int/string/float, tipo de usuario con `impl Ord`, assert/assert_eq ok y assert_eq que falla → exit 70,
       + **`examples/mapa.ray`** antes diferido); checker (válidos + error de bound `sort` sin Ord). El
       compilador entero sobre el intérprete sigue bloqueado por **carga de módulos** + **builtins de I/O**.
+    - **M14.6d COMPLETO** (347 lib + 23 en `tests/selfhost_interpreter.rs` + 25 en `tests/selfhost_checker.rs`):
+      **I/O de archivos** (`read_file`/`write_file`/`exists`). **Checker**: primitivos `__read_file`/
+      `__write_file` (`-> [string]` etiquetado) + builtin `exists -> bool` en `is_known_builtin`/
+      `check_named_call` (mensajes byte-idénticos); firmas de los envoltorios `read_file -> Result<string,
+      string>` / `write_file -> Result<int,string>` en `inject_prelude_fns`. **Intérprete**: `__read_file`/
+      `__write_file`/`exists` delegan directo en los primitivos del host; **cuerpos** `read_file`/`write_file`
+      (traducen el arreglo etiquetado a Result) en `selfhost/prelude.ray`. **Oráculo determinista**: ambos
+      pipelines escriben el MISMO contenido a un temporal y lo releen → mismo stdout. **Diferidos a
+      propósito**: `args()` (diverge: el self-hosted ve el path de `run.ray` como `argv[0]`), stdin/env (no
+      deterministas), handles/remove_file/list_dir (no los usa el compilador). Bloqueo restante para la
+      meta-circularidad: **solo carga de módulos**.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

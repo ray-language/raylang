@@ -450,6 +450,24 @@ fn assert_y_sort() {
 }
 
 #[test]
+fn io_de_archivos() {
+    // M14.6d: write_file/read_file (Result, vía __write_file/__read_file etiquetados) + exists (bool).
+    // Determinista para el oráculo conductual: ambos pipelines escriben el MISMO contenido a un
+    // temporal y lo releen → mismo stdout. (args/input/env quedan diferidos: no deterministas o
+    // divergentes entre los dos pipelines.)
+    comparar_fuente(
+        "fn main() -> int { \
+            match (write_file(\"/tmp/raylang_d_oraculo.txt\", \"abc\\ndef\")) { Result.Ok(n) => print(n), Result.Err(e) => print(e) } \
+            match (read_file(\"/tmp/raylang_d_oraculo.txt\")) { Result.Ok(s) => print(s), Result.Err(e) => print(e) } \
+            match (read_file(\"/tmp/raylang_d_no_existe_zzz.txt\")) { Result.Ok(s) => print(s), Result.Err(_) => print(\"ERR\") } \
+            print(exists(\"/tmp/raylang_d_oraculo.txt\")); print(exists(\"/tmp/raylang_d_no_existe_zzz.txt\")); \
+            0 \
+        }",
+        "in_io.ray",
+    );
+}
+
+#[test]
 fn codigo_de_salida() {
     // El código de salida del runner es el int que devuelve main (0 si es unit).
     comparar_fuente("fn main() -> int { 42 }", "in_exit42.ray");

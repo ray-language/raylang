@@ -88,3 +88,5 @@
 # M13 — Habilitadores de self-hosting
 
 - [Map&lt;K, V&gt;: diccionarios](m13/mapas.md)
+- [panic, assert y el runner de pruebas](m13/aserciones.md)
+- [Recursión profunda y llamadas en cola](m13/recursion.md)

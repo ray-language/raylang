@@ -3025,3 +3025,26 @@ cortocircuito, locales, if/while, llamadas nombradas, recursión, builtins escal
   compartida y aliasing gratis). Oráculo conductual = corpus de datos del intérprete (`examples/structs`/
   `enums`/`match_figuras`/`arrays`/`matriz` + snippets de aliasing/payload/lista recursiva/OOB) → stdout+exit
   idénticos. Pendiente: c (closures/primera clase/`?` + fusión del prelude), d (despacho dinámico), TCO.
+- **M14.5c COMPLETO** — **primera clase**: funciones como valor, funciones anónimas + closures (captura por
+  upvalues), llamada indirecta y `?`. Esquema de upvalues **estilo clox** (resolución transitiva en el
+  compilador: `resolve_upvalue` busca el nombre como local de la envolvente o, recursivo, como upvalue suyo;
+  `add_upvalue` deduplica; `UpSrc.ULocal(slot)`/`UpSrc.UUp(idx)`), PERO **sin el análisis de boxing de Rust**
+  (`captured_slots`/`mark_captured`): en la VM **toda local es una `Cell`** (como el intérprete auto-alojado,
+  donde cada variable es una celda), así la celda siempre existe y el upvalue solo la referencia → el
+  compilador no decide qué boxear. El compilador pasó de `Cc` (estado de UNA función) a `Comp` con una **pila
+  de `Fscope`** (las funciones envolventes quedan debajo para que `resolve_upvalue` las consulte por índice de
+  profundidad); las funciones anónimas se compilan **en línea** (empujan su `Fscope`, emiten, lo desapilan) y
+  se **anexan** a `comp.out`, con las nombradas en índices reservados `0..n` (placeholders) para que las
+  anónimas no los pisen. **Única extensión del `Value` compartido**: `VVmClosure(int, [Cell])` (índice de la
+  fn compilada + celdas capturadas en orden de upvalue) — la representación de un cierre difiere genuinamente
+  entre AST (intérprete: `FnExpr` + capturas por nombre) y bytecode (VM: índice + celdas); en Rust también
+  difieren intérprete y VM. La VM: `OGetLocal`/`OSetLocal` leen/mutan `Cell.v` (la mutación la ven las
+  closures que comparten la celda), `OInitLocal` estrena una celda fresca (shadowing/iteraciones de bucle),
+  `OFunc(idx)` empuja `VVmClosure(idx, [])` (nombrada-como-valor o anónima sin captura), `OClosure(idx, srcs)`
+  captura las celdas **por referencia** leyendo `srcs` del marco actual, `OCallValue(argc)` desempaqueta el
+  `VVmClosure` y apila un marco con sus celdas como upvalues, `OTry` desempaqueta `Ok`/`Some` o retorna el
+  valor entero (como `OReturn`). El **prelude no se fusiona aún** (map/filter/fold no usan métodos, pero
+  `sort`/`assert_eq` sí → el prelude completo compila en M14.5d). Oráculo conductual = corpus de primera clase
+  del intérprete (`closures`/`errores`/`opcional` + snippets de HOF/captura/estado-mutable/transitiva/`?` con
+  Result y Option) → stdout+exit idénticos. Pendiente: d (despacho dinámico: métodos/UFCS/`dyn`/`@derive` +
+  fusión del prelude), TCO.

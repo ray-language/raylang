@@ -5,8 +5,9 @@
 // M14.5a — el NÚCLEO: literales, variables locales, aritmética/comparación/lógica (con cortocircuito),
 // if/while/bloques, llamadas a funciones nombradas + builtins escalares, recursión.
 // M14.5b — DATOS: arreglos (literal/índice/asignación), structs (literal/campo/asignación de campo) y
-// enums (construcción `Enum.Variante[(args)]` + `match`). Primera clase (closures) → M14.5c; despacho
-// dinámico → M14.5d.
+// enums (construcción `Enum.Variante[(args)]` + `match`).
+// M14.5c — PRIMERA CLASE: funciones como valor, funciones anónimas + closures (captura por upvalues),
+// llamada indirecta y el operador `?`. Despacho dinámico (métodos/UFCS/dyn) → M14.5d.
 //
 // Decisión de diseño (la elegancia del self-hosting): el bytecode reusa el `Value` del intérprete y, en
 // la VM, su runtime —no hay un segundo tipo de valor ni GC propio (cabalga sobre el host)—. Y es
@@ -17,8 +18,13 @@
 // a diferencia de la VM de Rust —que numera variantes con *tags* y structs con *ids* en tablas—, aquí los
 // opcodes llevan los NOMBRES (`OMakeStruct(nombre, campos)`, `OMakeEnum(enum, variante, aridad)`,
 // `OEnumTagEq(variante)`) y la VM construye/compara los `Value` por nombre, igual que el intérprete.
+//
+// Closures (M14.5c): esquema de upvalues estilo clox (resolución transitiva en el compilador). PERO, a
+// diferencia de Rust —que solo *boxea* en celdas los slots capturados (análisis `captured_slots`)—, aquí
+// TODA local es una celda en la VM (como el intérprete: cada variable es una `Cell`), así que el
+// compilador NO necesita el análisis de boxing: la celda siempre existe y el upvalue solo la referencia.
 
-from parser import Program, Func, Param, Block, Stmt, SKind, Expr, EKind, BinOp, UnOp;
+from parser import Program, Func, Param, Block, Stmt, SKind, Expr, EKind, BinOp, UnOp, FnExpr;
 from parser import FieldInit, FieldDef, MatchArm, Pattern, PKind, VariantDef;
 from interpreter import Value, is_builtin;
 
@@ -40,7 +46,16 @@ pub enum Op {
     OEnumTagEq(string),          // ¿la cima es esta variante? (saca el enum, empuja bool)
     OGetEnumField(int),          // payload[i] del enum de la cima
     OMatchFail,                  // ningún brazo casó (no debería ocurrir)
+    // --- M14.5c: primera clase ---
+    OGetUpvalue(int), OSetUpvalue(int), // lee/escribe la celda capturada i
+    OFunc(int),                  // valor-función sin captura (nombrada-como-valor o anónima sin upvalues)
+    OClosure(int, [UpSrc]),      // cierre: índice de la fn compilada + fuentes de captura
+    OCallValue(int),             // llamada indirecta (el valor-función ya está en la pila) + argc
+    OTry,                        // operador `?`: desempaqueta Ok/Some, o retorna Err/None de la función
 }
+
+// La fuente de un upvalue: una local de la función envolvente (por slot) o un upvalue suyo (transitivo).
+pub enum UpSrc { ULocal(int), UUp(int) }
 
 // El bytecode de una función: las instrucciones + su tabla de constantes.
 pub struct Chunk { code: [Op], consts: [Value] }
@@ -48,70 +63,130 @@ pub struct Chunk { code: [Op], consts: [Value] }
 // Una función compilada: nombre, aridad, nº de slots locales (para dimensionar el marco) y su chunk.
 pub struct CompiledFn { name: string, arity: int, nslots: int, chunk: Chunk }
 
-// El programa compilado: la lista de funciones (el índice es su identidad para `OCall`).
+// El programa compilado: la lista de funciones (el índice es su identidad para `OCall`/`OFunc`/`OClosure`).
 pub struct CProgram { fns: [CompiledFn] }
 
 // Una variable local en tiempo de compilación: nombre, slot (índice en el marco) y profundidad de bloque.
 struct Local { name: string, slot: int, depth: int }
 
-// El estado del compilador para UNA función: el chunk en construcción + la resolución de slots/ámbitos.
-// `indices` (nombre de función → índice), `structs` (nombre → campos) y `enums` (nombre → variantes) son
-// tablas del PROGRAMA, compartidas entre funciones (resolución de `OCall`, orden de campos, construcción).
-struct Cc {
+// El estado de compilación de UNA función: su chunk en construcción, la resolución de slots/ámbitos y los
+// upvalues descubiertos (en orden). Las funciones anidadas lo apilan/desapilan en `Comp.scopes`.
+struct Fscope {
     code: [Op], consts: [Value],
     locals: [Local], next_slot: int, max_slots: int, depth: int,
+    upvalues: [UpSrc],
+}
+
+fn new_fscope() -> Fscope {
+    Fscope { code: [], consts: [], locals: [], next_slot: 0, max_slots: 0, depth: 0, upvalues: [] }
+}
+
+// El compilador: una PILA de ámbitos de función (el último es el que se compila ahora; las envolventes
+// quedan debajo para resolver upvalues) + las tablas del programa + la lista de funciones que va llenando.
+struct Comp {
     indices: Map<string, int>,
     structs: Map<string, [FieldDef]>,
     enums: Map<string, [VariantDef]>,
+    scopes: [Fscope],
+    out: [CompiledFn],
 }
 
 // =====================================================================
-// Emisión y manejo de slots/ámbitos
+// Emisión y manejo de slots/ámbitos/upvalues
 // =====================================================================
 
-fn emit(cc: Cc, op: Op) -> int { push(cc.code, op); len(cc.code) - 1 }
+// El ámbito de función actual (la cima de la pila) y su profundidad-índice.
+fn top(comp: Comp) -> Fscope { comp.scopes[len(comp.scopes) - 1] }
+fn cur_depth(comp: Comp) -> int { len(comp.scopes) - 1 }
 
-fn add_const(cc: Cc, v: Value) -> int { push(cc.consts, v); len(cc.consts) - 1 }
+fn emit(comp: Comp, op: Op) -> int { let s = top(comp); push(s.code, op); len(s.code) - 1 }
 
-// Declara un local: le asigna el siguiente slot (monotónico; los slots no se reusan → `max_slots`
-// dimensiona el marco) y lo registra en la profundidad de bloque actual.
-fn declare_local(cc: Cc, name: string) -> int {
-    let slot = cc.next_slot;
-    cc.next_slot = cc.next_slot + 1;
-    if (cc.next_slot > cc.max_slots) { cc.max_slots = cc.next_slot; }
-    push(cc.locals, Local { name: name, slot: slot, depth: cc.depth });
+fn add_const(comp: Comp, v: Value) -> int { let s = top(comp); push(s.consts, v); len(s.consts) - 1 }
+
+// Declara un local en el ámbito actual: le asigna el siguiente slot (monotónico; los slots no se reusan →
+// `max_slots` dimensiona el marco) y lo registra en la profundidad de bloque actual.
+fn declare_local(comp: Comp, name: string) -> int {
+    let s = top(comp);
+    let slot = s.next_slot;
+    s.next_slot = s.next_slot + 1;
+    if (s.next_slot > s.max_slots) { s.max_slots = s.next_slot; }
+    push(s.locals, Local { name: name, slot: slot, depth: s.depth });
     slot
 }
 
-// Resuelve un nombre a su slot local (el más interno gana), o -1 si no es un local.
-fn resolve_local(cc: Cc, name: string) -> int {
-    var i = len(cc.locals) - 1;
+fn resolve_local(comp: Comp, name: string) -> int { resolve_local_at(comp, cur_depth(comp), name) }
+
+// Resuelve un nombre como local de la función en `d` (el más interno gana), o -1.
+fn resolve_local_at(comp: Comp, d: int, name: string) -> int {
+    let s = comp.scopes[d];
+    var i = len(s.locals) - 1;
     while (i >= 0) {
-        if (cc.locals[i].name == name) { return cc.locals[i].slot; }
+        if (s.locals[i].name == name) { return s.locals[i].slot; }
         i = i - 1;
     }
     0 - 1
 }
 
-fn begin_scope(cc: Cc) -> int { cc.depth = cc.depth + 1; cc.next_slot }
+// Resuelve un nombre como UPVALUE de la función en `d` (estilo clox): lo busca como local de la envolvente
+// (upvalue *local*) o, recursivamente, entre los upvalues de la envolvente (upvalue *de upvalue*). Devuelve
+// el índice del upvalue en `d`, o -1. (Sin marca de boxing: toda local ya es una celda en la VM.)
+fn resolve_upvalue(comp: Comp, d: int, name: string) -> int {
+    if (d == 0) { return 0 - 1; }   // la función más externa no tiene envolvente
+    let enclosing = d - 1;
+    let slot = resolve_local_at(comp, enclosing, name);
+    if (slot >= 0) { return add_upvalue(comp, d, UpSrc.ULocal(slot)); }
+    let up = resolve_upvalue(comp, enclosing, name);
+    if (up >= 0) { return add_upvalue(comp, d, UpSrc.UUp(up)); }
+    0 - 1
+}
 
-// Cierra un ámbito: descarta los locales de esta profundidad (dejan de resolver) y recupera los slots.
-fn end_scope(cc: Cc, saved: int) {
-    cc.depth = cc.depth - 1;
-    var kept: [Local] = [];
+// Registra un upvalue en la función `d` (dedup por fuente) y devuelve su índice.
+fn add_upvalue(comp: Comp, d: int, src: UpSrc) -> int {
+    let s = comp.scopes[d];
     var i = 0;
-    while (i < len(cc.locals)) {
-        if (cc.locals[i].depth <= cc.depth) { push(kept, cc.locals[i]); }
+    while (i < len(s.upvalues)) {
+        if (upsrc_eq(s.upvalues[i], src)) { return i; }
         i = i + 1;
     }
-    cc.locals = kept;
-    cc.next_slot = saved;
+    push(s.upvalues, src);
+    len(s.upvalues) - 1
+}
+
+fn upsrc_eq(a: UpSrc, b: UpSrc) -> bool {
+    match (a) {
+        UpSrc.ULocal(x) => match (b) { UpSrc.ULocal(y) => x == y, _ => false },
+        UpSrc.UUp(x) => match (b) { UpSrc.UUp(y) => x == y, _ => false },
+    }
+}
+
+// ¿`name` resuelve a una variable (local o upvalue) en el ámbito actual? Decide directo vs indirecto en
+// una llamada. (resolve_upvalue tiene efecto: registra el upvalue; es idempotente con la emisión posterior.)
+fn is_variable(comp: Comp, name: string) -> bool {
+    if (resolve_local(comp, name) >= 0) { return true; }
+    resolve_upvalue(comp, cur_depth(comp), name) >= 0
+}
+
+fn begin_scope(comp: Comp) -> int { let s = top(comp); s.depth = s.depth + 1; s.next_slot }
+
+// Cierra un ámbito: descarta los locales de esta profundidad (dejan de resolver) y recupera los slots.
+fn end_scope(comp: Comp, saved: int) {
+    let s = top(comp);
+    s.depth = s.depth - 1;
+    var kept: [Local] = [];
+    var i = 0;
+    while (i < len(s.locals)) {
+        if (s.locals[i].depth <= s.depth) { push(kept, s.locals[i]); }
+        i = i + 1;
+    }
+    s.locals = kept;
+    s.next_slot = saved;
 }
 
 // Parchea un salto emitido con destino provisional para que apunte al final actual del código.
-fn patch_jump(cc: Cc, at: int) {
-    let target = len(cc.code);
-    cc.code[at] = match (cc.code[at]) {
+fn patch_jump(comp: Comp, at: int) {
+    let s = top(comp);
+    let target = len(s.code);
+    s.code[at] = match (s.code[at]) {
         Op.OJump(_) => Op.OJump(target),
         Op.OJumpIfFalse(_) => Op.OJumpIfFalse(target),
         _ => panic("patch_jump sobre una instrucción que no es salto"),
@@ -130,8 +205,8 @@ fn binop_to_op(op: BinOp) -> Op {
 }
 
 // Los campos declarados de un struct, en orden (de la tabla del programa).
-fn struct_field_defs(cc: Cc, name: string) -> [FieldDef] {
-    match (get(cc.structs, name)) {
+fn struct_field_defs(comp: Comp, name: string) -> [FieldDef] {
+    match (get(comp.structs, name)) {
         Option.Some(fs) => fs,
         Option.None => panic("compilador: struct no registrado: " + name),
     }
@@ -149,8 +224,8 @@ fn find_init(inits: [FieldInit], fname: string) -> Expr {
 
 // ¿`name` es un enum (del programa o del prelude) con una variante `variant`? Reconoce la construcción
 // `Enum.Variante` en tiempo de compilación (lo que el intérprete decide en runtime).
-fn enum_has_variant_c(cc: Cc, name: string, variant: string) -> bool {
-    match (get(cc.enums, name)) {
+fn enum_has_variant_c(comp: Comp, name: string, variant: string) -> bool {
+    match (get(comp.enums, name)) {
         Option.Some(variants) => {
             var i = 0;
             while (i < len(variants)) {
@@ -167,191 +242,109 @@ fn enum_has_variant_c(cc: Cc, name: string, variant: string) -> bool {
 // Emisión de expresiones y sentencias
 // =====================================================================
 
-fn emit_expr(cc: Cc, e: Expr) {
+fn emit_expr(comp: Comp, e: Expr) {
     match (e.kind) {
-        EKind.EInt(n) => { emit(cc, Op.OConst(add_const(cc, Value.VInt(n)))); },
-        EKind.EFloat(f) => { emit(cc, Op.OConst(add_const(cc, Value.VFloat(f)))); },
-        EKind.EStr(s) => { emit(cc, Op.OConst(add_const(cc, Value.VStr(s)))); },
-        EKind.EChar(c) => { emit(cc, Op.OConst(add_const(cc, Value.VChar(c)))); },
-        EKind.EBool(b) => { if (b) { emit(cc, Op.OTrue); } else { emit(cc, Op.OFalse); } },
-        EKind.EIdent(name) => {
-            let slot = resolve_local(cc, name);
-            if (slot >= 0) { emit(cc, Op.OGetLocal(slot)); }
-            else { panic("compilador: función como valor no soportada en M14.5a: " + name); }
-        },
+        EKind.EInt(n) => { emit(comp, Op.OConst(add_const(comp, Value.VInt(n)))); },
+        EKind.EFloat(f) => { emit(comp, Op.OConst(add_const(comp, Value.VFloat(f)))); },
+        EKind.EStr(s) => { emit(comp, Op.OConst(add_const(comp, Value.VStr(s)))); },
+        EKind.EChar(c) => { emit(comp, Op.OConst(add_const(comp, Value.VChar(c)))); },
+        EKind.EBool(b) => { if (b) { emit(comp, Op.OTrue); } else { emit(comp, Op.OFalse); } },
+        EKind.EIdent(name) => emit_ident(comp, name),
         EKind.EUnary(op, inner) => {
-            emit_expr(cc, inner);
-            match (op) { UnOp.Neg => emit(cc, Op.ONeg), UnOp.Not => emit(cc, Op.ONot) };
+            emit_expr(comp, inner);
+            match (op) { UnOp.Neg => emit(comp, Op.ONeg), UnOp.Not => emit(comp, Op.ONot) };
         },
-        EKind.EBinary(op, l, r) => emit_binary(cc, op, l, r),
-        EKind.ECall(callee, cargs) => emit_call(cc, callee, cargs),
+        EKind.EBinary(op, l, r) => emit_binary(comp, op, l, r),
+        EKind.ECall(callee, cargs) => emit_call(comp, callee, cargs),
         EKind.EIf(cond, then_b, elseopt) => {
-            emit_expr(cc, cond);
-            let to_else = emit(cc, Op.OJumpIfFalse(0));
-            emit(cc, Op.OPop);
-            emit_block(cc, then_b);
-            let to_end = emit(cc, Op.OJump(0));
-            patch_jump(cc, to_else);
-            emit(cc, Op.OPop);
-            match (elseopt) { Option.Some(els) => emit_expr(cc, els), Option.None => { emit(cc, Op.OUnit); } };
-            patch_jump(cc, to_end);
+            emit_expr(comp, cond);
+            let to_else = emit(comp, Op.OJumpIfFalse(0));
+            emit(comp, Op.OPop);
+            emit_block(comp, then_b);
+            let to_end = emit(comp, Op.OJump(0));
+            patch_jump(comp, to_else);
+            emit(comp, Op.OPop);
+            match (elseopt) { Option.Some(els) => emit_expr(comp, els), Option.None => { emit(comp, Op.OUnit); } };
+            patch_jump(comp, to_end);
         },
         EKind.EWhile(cond, body) => {
-            let loop_start = len(cc.code);
-            emit_expr(cc, cond);
-            let exit = emit(cc, Op.OJumpIfFalse(0));
-            emit(cc, Op.OPop);
-            emit_block(cc, body);
-            emit(cc, Op.OPop);
-            emit(cc, Op.OJump(loop_start));
-            patch_jump(cc, exit);
-            emit(cc, Op.OPop);
-            emit(cc, Op.OUnit);
+            let loop_start = len(top(comp).code);
+            emit_expr(comp, cond);
+            let exit = emit(comp, Op.OJumpIfFalse(0));
+            emit(comp, Op.OPop);
+            emit_block(comp, body);
+            emit(comp, Op.OPop);
+            emit(comp, Op.OJump(loop_start));
+            patch_jump(comp, exit);
+            emit(comp, Op.OPop);
+            emit(comp, Op.OUnit);
         },
-        EKind.EBlock(b) => emit_block(cc, b),
+        EKind.EBlock(b) => emit_block(comp, b),
         // --- M14.5b: datos ---
-        EKind.EArray(elems) => { emit_args(cc, elems); emit(cc, Op.OMakeArray(len(elems))); },
-        EKind.EIndex(arr, idx) => { emit_expr(cc, arr); emit_expr(cc, idx); emit(cc, Op.OIndex); },
-        EKind.EStructLit(name, inits) => emit_struct_lit(cc, name, inits),
-        EKind.EField(obj, fname) => emit_field(cc, obj, fname),
-        EKind.EMatch(scr, arms) => emit_match(cc, scr, arms),
-        _ => panic("compilador: forma de expresión no soportada en M14.5b"),
+        EKind.EArray(elems) => { emit_args(comp, elems); emit(comp, Op.OMakeArray(len(elems))); },
+        EKind.EIndex(arr, idx) => { emit_expr(comp, arr); emit_expr(comp, idx); emit(comp, Op.OIndex); },
+        EKind.EStructLit(name, inits) => emit_struct_lit(comp, name, inits),
+        EKind.EField(obj, fname) => emit_field(comp, obj, fname),
+        EKind.EMatch(scr, arms) => emit_match(comp, scr, arms),
+        // --- M14.5c: primera clase ---
+        EKind.EFunc(fe) => emit_func_expr(comp, fe),
+        EKind.ETry(inner) => { emit_expr(comp, inner); emit(comp, Op.OTry); },
     }
 }
 
-// Un literal de struct `Nombre { c: v, ... }`: emite los valores en ORDEN DE DECLARACIÓN (como Rust →
-// Display/igualdad casan), luego `OMakeStruct` con los nombres de campo.
-fn emit_struct_lit(cc: Cc, name: string, inits: [FieldInit]) {
-    let defs = struct_field_defs(cc, name);
-    var fnames: [string] = [];
-    var i = 0;
-    while (i < len(defs)) {
-        emit_expr(cc, find_init(inits, defs[i].name));
-        push(fnames, defs[i].name);
-        i = i + 1;
+// Un identificador: local (`OGetLocal`), upvalue (`OGetUpvalue`) o función nombrada como valor (`OFunc`).
+fn emit_ident(comp: Comp, name: string) {
+    let slot = resolve_local(comp, name);
+    if (slot >= 0) { emit(comp, Op.OGetLocal(slot)); return; }
+    let up = resolve_upvalue(comp, cur_depth(comp), name);
+    if (up >= 0) { emit(comp, Op.OGetUpvalue(up)); return; }
+    match (get(comp.indices, name)) {
+        Option.Some(idx) => { emit(comp, Op.OFunc(idx)); },
+        Option.None => panic("compilador: nombre no resuelto: " + name),
     }
-    emit(cc, Op.OMakeStruct(name, fnames));
-}
-
-// `obj.fname`: construcción de variante unit `Enum.Variante` (si `obj` nombra un enum y no un local) o
-// acceso a campo. Espeja `eval_field_or_enum` del intérprete, resuelto en compilación.
-fn emit_field(cc: Cc, obj: Expr, fname: string) {
-    match (obj.kind) {
-        EKind.EIdent(name) => {
-            if (resolve_local(cc, name) < 0 && enum_has_variant_c(cc, name, fname)) {
-                emit(cc, Op.OMakeEnum(name, fname, 0));
-                return;
-            }
-        },
-        _ => {},
-    }
-    emit_expr(cc, obj);
-    emit(cc, Op.OGetField(fname));
-}
-
-// `match (scr) { patrón => cuerpo, ... }`. El escrutinio se guarda en un local temporal `$match`
-// (nombre no escribible → sin choque) para leer su variante/payload sin reevaluarlo. Port de
-// `emit_match` de Rust, pero comparando la variante por NOMBRE (`OEnumTagEq`), sin tags.
-fn emit_match(cc: Cc, scr: Expr, arms: [MatchArm]) {
-    emit_expr(cc, scr);
-    let saved = begin_scope(cc);
-    let scrut = declare_local(cc, "$match");
-    emit(cc, Op.OInitLocal(scrut));
-
-    var to_end: [int] = [];
-    var has_catchall = false;
-    var i = 0;
-    while (i < len(arms)) {
-        match (arms[i].pat.kind) {
-            PKind.PVariant(_, variant, bindings) => {
-                emit(cc, Op.OGetLocal(scrut));
-                emit(cc, Op.OEnumTagEq(variant));
-                let to_next = emit(cc, Op.OJumpIfFalse(0));
-                emit(cc, Op.OPop);                // casó → descartar el bool true
-                let arm_saved = begin_scope(cc);
-                var b = 0;
-                while (b < len(bindings)) {
-                    match (bindings[b]) {
-                        Option.Some(nm) => {
-                            emit(cc, Op.OGetLocal(scrut));
-                            emit(cc, Op.OGetEnumField(b));
-                            let slot = declare_local(cc, nm);
-                            emit(cc, Op.OInitLocal(slot));
-                        },
-                        Option.None => {},
-                    }
-                    b = b + 1;
-                }
-                emit_expr(cc, arms[i].body);
-                end_scope(cc, arm_saved);
-                push(to_end, emit(cc, Op.OJump(0)));
-                patch_jump(cc, to_next);
-                emit(cc, Op.OPop);                // no casó → descartar el bool false
-            },
-            PKind.PWild => {
-                has_catchall = true;
-                emit_expr(cc, arms[i].body);
-                push(to_end, emit(cc, Op.OJump(0)));
-            },
-            PKind.PBind(name) => {
-                has_catchall = true;
-                let arm_saved = begin_scope(cc);
-                emit(cc, Op.OGetLocal(scrut));
-                let slot = declare_local(cc, name);
-                emit(cc, Op.OInitLocal(slot));
-                emit_expr(cc, arms[i].body);
-                end_scope(cc, arm_saved);
-                push(to_end, emit(cc, Op.OJump(0)));
-            },
-        }
-        i = i + 1;
-    }
-    if (!has_catchall) { emit(cc, Op.OMatchFail); }
-    var j = 0;
-    while (j < len(to_end)) { patch_jump(cc, to_end[j]); j = j + 1; }
-    end_scope(cc, saved);
 }
 
 // `&&`/`||` con cortocircuito (`OJumpIfFalse` ojea la condición, no la saca); el resto, operandos + opcode.
-fn emit_binary(cc: Cc, op: BinOp, l: Expr, r: Expr) {
+fn emit_binary(comp: Comp, op: BinOp, l: Expr, r: Expr) {
     match (op) {
         BinOp.And => {
-            emit_expr(cc, l);
-            let jump = emit(cc, Op.OJumpIfFalse(0));
-            emit(cc, Op.OPop);
-            emit_expr(cc, r);
-            patch_jump(cc, jump);
+            emit_expr(comp, l);
+            let jump = emit(comp, Op.OJumpIfFalse(0));
+            emit(comp, Op.OPop);
+            emit_expr(comp, r);
+            patch_jump(comp, jump);
         },
         BinOp.Or => {
-            emit_expr(cc, l);
-            let to_else = emit(cc, Op.OJumpIfFalse(0));
-            let to_end = emit(cc, Op.OJump(0));
-            patch_jump(cc, to_else);
-            emit(cc, Op.OPop);
-            emit_expr(cc, r);
-            patch_jump(cc, to_end);
+            emit_expr(comp, l);
+            let to_else = emit(comp, Op.OJumpIfFalse(0));
+            let to_end = emit(comp, Op.OJump(0));
+            patch_jump(comp, to_else);
+            emit(comp, Op.OPop);
+            emit_expr(comp, r);
+            patch_jump(comp, to_end);
         },
         _ => {
-            emit_expr(cc, l);
-            emit_expr(cc, r);
-            emit(cc, binop_to_op(op));
+            emit_expr(comp, l);
+            emit_expr(comp, r);
+            emit(comp, binop_to_op(op));
         },
     }
 }
 
-// Una llamada `f(args)`: construcción de enum `Enum.Variante(args)` (→ `OMakeEnum`), builtin
-// (→ `OBuiltin`) o función nombrada (→ `OCall`). Indirecta/método → M14.5c/d.
-fn emit_call(cc: Cc, callee: Expr, cargs: [Expr]) {
+// Una llamada: construcción de enum `Enum.Variante(args)` (→ `OMakeEnum`), builtin (→ `OBuiltin`), función
+// nombrada (→ `OCall`) o INDIRECTA (un valor-función: variable/upvalue/closure → `OCallValue`). Método/UFCS
+// (receptor `.metodo()`) → M14.5d.
+fn emit_call(comp: Comp, callee: Expr, cargs: [Expr]) {
     match (callee.kind) {
         EKind.EIdent(name) => {
-            if (resolve_local(cc, name) < 0) {
+            if (!is_variable(comp, name)) {
                 if (is_builtin(name)) {
-                    emit_args(cc, cargs);
-                    emit(cc, Op.OBuiltin(name, len(cargs)));
+                    emit_args(comp, cargs);
+                    emit(comp, Op.OBuiltin(name, len(cargs)));
                     return;
                 }
-                match (get(cc.indices, name)) {
-                    Option.Some(idx) => { emit_args(cc, cargs); emit(cc, Op.OCall(idx, len(cargs))); return; },
+                match (get(comp.indices, name)) {
+                    Option.Some(idx) => { emit_args(comp, cargs); emit(comp, Op.OCall(idx, len(cargs))); return; },
                     Option.None => {},
                 }
             }
@@ -360,9 +353,9 @@ fn emit_call(cc: Cc, callee: Expr, cargs: [Expr]) {
         EKind.EField(recv, variant) => {
             match (recv.kind) {
                 EKind.EIdent(en) => {
-                    if (resolve_local(cc, en) < 0 && enum_has_variant_c(cc, en, variant)) {
-                        emit_args(cc, cargs);
-                        emit(cc, Op.OMakeEnum(en, variant, len(cargs)));
+                    if (resolve_local(comp, en) < 0 && enum_has_variant_c(comp, en, variant)) {
+                        emit_args(comp, cargs);
+                        emit(comp, Op.OMakeEnum(en, variant, len(cargs)));
                         return;
                     }
                 },
@@ -371,72 +364,196 @@ fn emit_call(cc: Cc, callee: Expr, cargs: [Expr]) {
         },
         _ => {},
     }
-    panic("compilador: llamada indirecta/método no soportada en M14.5b");
+    // Indirecto: el valor-función, luego los argumentos, luego `OCallValue`.
+    emit_expr(comp, callee);
+    emit_args(comp, cargs);
+    emit(comp, Op.OCallValue(len(cargs)));
 }
 
-fn emit_args(cc: Cc, cargs: [Expr]) {
+fn emit_args(comp: Comp, cargs: [Expr]) {
     var i = 0;
-    while (i < len(cargs)) { emit_expr(cc, cargs[i]); i = i + 1; }
+    while (i < len(cargs)) { emit_expr(comp, cargs[i]); i = i + 1; }
 }
 
-fn emit_block(cc: Cc, b: Block) {
-    let saved = begin_scope(cc);
+fn emit_block(comp: Comp, b: Block) {
+    let saved = begin_scope(comp);
     var i = 0;
-    while (i < len(b.stmts)) { emit_stmt(cc, b.stmts[i]); i = i + 1; }
-    match (b.tail) { Option.Some(e) => emit_expr(cc, e), Option.None => { emit(cc, Op.OUnit); } };
-    end_scope(cc, saved);
+    while (i < len(b.stmts)) { emit_stmt(comp, b.stmts[i]); i = i + 1; }
+    match (b.tail) { Option.Some(e) => emit_expr(comp, e), Option.None => { emit(comp, Op.OUnit); } };
+    end_scope(comp, saved);
 }
 
-fn emit_stmt(cc: Cc, s: Stmt) {
+fn emit_stmt(comp: Comp, s: Stmt) {
     match (s.kind) {
         SKind.SLet(name, _, value, _) => {
-            emit_expr(cc, value);
-            let slot = declare_local(cc, name);
-            emit(cc, Op.OInitLocal(slot));
+            emit_expr(comp, value);
+            let slot = declare_local(comp, name);
+            emit(comp, Op.OInitLocal(slot));
         },
         SKind.SAssign(target, value) => {
             match (target.kind) {
                 EKind.EIdent(name) => {
-                    emit_expr(cc, value);
-                    let slot = resolve_local(cc, name);
-                    emit(cc, Op.OSetLocal(slot));
+                    emit_expr(comp, value);
+                    let slot = resolve_local(comp, name);
+                    if (slot >= 0) { emit(comp, Op.OSetLocal(slot)); }
+                    else {
+                        let up = resolve_upvalue(comp, cur_depth(comp), name);
+                        if (up >= 0) { emit(comp, Op.OSetUpvalue(up)); }
+                        else { panic("compilador: asignación a nombre no resuelto: " + name); }
+                    }
                 },
                 // a[i] = v  → arreglo, índice, valor, `OSetIndex` (consume los tres).
                 EKind.EIndex(arr, idx) => {
-                    emit_expr(cc, arr);
-                    emit_expr(cc, idx);
-                    emit_expr(cc, value);
-                    emit(cc, Op.OSetIndex);
+                    emit_expr(comp, arr);
+                    emit_expr(comp, idx);
+                    emit_expr(comp, value);
+                    emit(comp, Op.OSetIndex);
                 },
                 // obj.campo = v  → objeto, valor, `OSetField`.
                 EKind.EField(obj, fname) => {
-                    emit_expr(cc, obj);
-                    emit_expr(cc, value);
-                    emit(cc, Op.OSetField(fname));
+                    emit_expr(comp, obj);
+                    emit_expr(comp, value);
+                    emit(comp, Op.OSetField(fname));
                 },
                 _ => panic("compilador: destino de asignación no soportado"),
             }
         },
         SKind.SReturn(opt) => {
-            match (opt) { Option.Some(e) => emit_expr(cc, e), Option.None => { emit(cc, Op.OUnit); } };
-            emit(cc, Op.OReturn);
+            match (opt) { Option.Some(e) => emit_expr(comp, e), Option.None => { emit(comp, Op.OUnit); } };
+            emit(comp, Op.OReturn);
         },
-        SKind.SExpr(e) => { emit_expr(cc, e); emit(cc, Op.OPop); },
+        SKind.SExpr(e) => { emit_expr(comp, e); emit(comp, Op.OPop); },
     }
+}
+
+// Un literal de struct `Nombre { c: v, ... }`: emite los valores en ORDEN DE DECLARACIÓN (como Rust →
+// Display/igualdad casan), luego `OMakeStruct` con los nombres de campo.
+fn emit_struct_lit(comp: Comp, name: string, inits: [FieldInit]) {
+    let defs = struct_field_defs(comp, name);
+    var fnames: [string] = [];
+    var i = 0;
+    while (i < len(defs)) {
+        emit_expr(comp, find_init(inits, defs[i].name));
+        push(fnames, defs[i].name);
+        i = i + 1;
+    }
+    emit(comp, Op.OMakeStruct(name, fnames));
+}
+
+// `obj.fname`: construcción de variante unit `Enum.Variante` (si `obj` nombra un enum y no un local) o
+// acceso a campo. Espeja `eval_field_or_enum` del intérprete, resuelto en compilación.
+fn emit_field(comp: Comp, obj: Expr, fname: string) {
+    match (obj.kind) {
+        EKind.EIdent(name) => {
+            if (resolve_local(comp, name) < 0 && enum_has_variant_c(comp, name, fname)) {
+                emit(comp, Op.OMakeEnum(name, fname, 0));
+                return;
+            }
+        },
+        _ => {},
+    }
+    emit_expr(comp, obj);
+    emit(comp, Op.OGetField(fname));
+}
+
+// `match (scr) { patrón => cuerpo, ... }`. El escrutinio se guarda en un local temporal `$match`
+// (nombre no escribible → sin choque) para leer su variante/payload sin reevaluarlo. Port de
+// `emit_match` de Rust, pero comparando la variante por NOMBRE (`OEnumTagEq`), sin tags.
+fn emit_match(comp: Comp, scr: Expr, arms: [MatchArm]) {
+    emit_expr(comp, scr);
+    let saved = begin_scope(comp);
+    let scrut = declare_local(comp, "$match");
+    emit(comp, Op.OInitLocal(scrut));
+
+    var to_end: [int] = [];
+    var has_catchall = false;
+    var i = 0;
+    while (i < len(arms)) {
+        match (arms[i].pat.kind) {
+            PKind.PVariant(_, variant, bindings) => {
+                emit(comp, Op.OGetLocal(scrut));
+                emit(comp, Op.OEnumTagEq(variant));
+                let to_next = emit(comp, Op.OJumpIfFalse(0));
+                emit(comp, Op.OPop);                // casó → descartar el bool true
+                let arm_saved = begin_scope(comp);
+                var b = 0;
+                while (b < len(bindings)) {
+                    match (bindings[b]) {
+                        Option.Some(nm) => {
+                            emit(comp, Op.OGetLocal(scrut));
+                            emit(comp, Op.OGetEnumField(b));
+                            let slot = declare_local(comp, nm);
+                            emit(comp, Op.OInitLocal(slot));
+                        },
+                        Option.None => {},
+                    }
+                    b = b + 1;
+                }
+                emit_expr(comp, arms[i].body);
+                end_scope(comp, arm_saved);
+                push(to_end, emit(comp, Op.OJump(0)));
+                patch_jump(comp, to_next);
+                emit(comp, Op.OPop);                // no casó → descartar el bool false
+            },
+            PKind.PWild => {
+                has_catchall = true;
+                emit_expr(comp, arms[i].body);
+                push(to_end, emit(comp, Op.OJump(0)));
+            },
+            PKind.PBind(name) => {
+                has_catchall = true;
+                let arm_saved = begin_scope(comp);
+                emit(comp, Op.OGetLocal(scrut));
+                let slot = declare_local(comp, name);
+                emit(comp, Op.OInitLocal(slot));
+                emit_expr(comp, arms[i].body);
+                end_scope(comp, arm_saved);
+                push(to_end, emit(comp, Op.OJump(0)));
+            },
+        }
+        i = i + 1;
+    }
+    if (!has_catchall) { emit(comp, Op.OMatchFail); }
+    var j = 0;
+    while (j < len(to_end)) { patch_jump(comp, to_end[j]); j = j + 1; }
+    end_scope(comp, saved);
+}
+
+// Una función anónima `fn(params) { cuerpo }`: se compila EN LÍNEA en su propio ámbito (que ve a los
+// envolventes para resolver upvalues), se deposita en `comp.out` y en el ámbito envolvente se emite un
+// `OClosure` (si capturó upvalues) o un `OFunc` simple (si no).
+fn emit_func_expr(comp: Comp, fe: FnExpr) {
+    push(comp.scopes, new_fscope());
+    var i = 0;
+    while (i < len(fe.params)) { declare_local(comp, fe.params[i].name); i = i + 1; }
+    emit_block(comp, fe.body);
+    emit(comp, Op.OReturn);
+    let s = top(comp);
+    let cfn = CompiledFn { name: "<fn>", arity: len(fe.params), nslots: s.max_slots, chunk: Chunk { code: s.code, consts: s.consts } };
+    let ups = s.upvalues;
+    pop(comp.scopes);
+    push(comp.out, cfn);
+    let idx = len(comp.out) - 1;
+    if (len(ups) == 0) { emit(comp, Op.OFunc(idx)); }
+    else { emit(comp, Op.OClosure(idx, ups)); }
 }
 
 // =====================================================================
 // Punto de entrada
 // =====================================================================
 
-fn compile_fn(f: Func, indices: Map<string, int>, structs: Map<string, [FieldDef]>, enums: Map<string, [VariantDef]>) -> CompiledFn {
-    let cc = Cc { code: [], consts: [], locals: [], next_slot: 0, max_slots: 0, depth: 0,
-                  indices: indices, structs: structs, enums: enums };
+// Compila una función nombrada en su propio ámbito y devuelve su `CompiledFn`. Las fn-exprs anidadas en su
+// cuerpo se compilan en línea (recursivamente) y se ANEXAN a `comp.out`.
+fn compile_named(comp: Comp, f: Func) -> CompiledFn {
+    push(comp.scopes, new_fscope());
     var i = 0;
-    while (i < len(f.params)) { declare_local(cc, f.params[i].name); i = i + 1; }
-    emit_block(cc, f.body);     // deja el valor del cuerpo en la pila
-    emit(cc, Op.OReturn);       // ...que se retorna
-    CompiledFn { name: f.name, arity: len(f.params), nslots: cc.max_slots, chunk: Chunk { code: cc.code, consts: cc.consts } }
+    while (i < len(f.params)) { declare_local(comp, f.params[i].name); i = i + 1; }
+    emit_block(comp, f.body);     // deja el valor del cuerpo en la pila
+    emit(comp, Op.OReturn);       // ...que se retorna
+    let s = top(comp);
+    let cfn = CompiledFn { name: f.name, arity: len(f.params), nslots: s.max_slots, chunk: Chunk { code: s.code, consts: s.consts } };
+    pop(comp.scopes);
+    cfn
 }
 
 // Registra los enums del prelude (Option/Result) para RECONOCER su construcción `Option.Some`/`Result.Ok`
@@ -453,6 +570,12 @@ fn inject_prelude_enums(enums: Map<string, [VariantDef]>) {
     ]);
 }
 
+// Una `CompiledFn` de relleno para reservar los slots de las funciones nombradas (índices 0..n) antes de
+// compilarlas; así las funciones anónimas, que se ANEXAN durante la compilación, no pisan esos índices.
+fn placeholder_fn() -> CompiledFn {
+    CompiledFn { name: "", arity: 0, nslots: 0, chunk: Chunk { code: [], consts: [] } }
+}
+
 pub fn compile(prog: Program) -> CProgram {
     var indices: Map<string, int> = map_new();
     var i = 0;
@@ -467,8 +590,16 @@ pub fn compile(prog: Program) -> CProgram {
     var e = 0;
     while (e < len(prog.enums)) { insert(enums, prog.enums[e].name, prog.enums[e].variants); e = e + 1; }
 
-    var fns: [CompiledFn] = [];
+    let comp = Comp { indices: indices, structs: structs, enums: enums, scopes: [], out: [] };
+    // Reservamos un hueco por función nombrada (índices 0..n); las anónimas se anexarán después.
+    let n = len(prog.funcs);
+    var r = 0;
+    while (r < n) { push(comp.out, placeholder_fn()); r = r + 1; }
     var j = 0;
-    while (j < len(prog.funcs)) { push(fns, compile_fn(prog.funcs[j], indices, structs, enums)); j = j + 1; }
-    CProgram { fns: fns }
+    while (j < n) {
+        let cfn = compile_named(comp, prog.funcs[j]);
+        comp.out[j] = cfn;
+        j = j + 1;
+    }
+    CProgram { fns: comp.out }
 }

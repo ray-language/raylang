@@ -65,6 +65,12 @@ pub enum Value {
     VFunc(Func),                   // una función nombrada usada como valor (sin captura)
     VClosure(FnExpr, [Capture]),   // una función anónima + su entorno capturado (celdas compartidas)
     VMap(MapData),                 // un Map<K,V> (M14.6b): pares clave/valor (arrays paralelos)
+    // M14.5c: el cierre de la VM auto-alojada. A diferencia del intérprete (AST: `FnExpr`+capturas por
+    // nombre), la VM ejecuta BYTECODE → guarda el ÍNDICE de la función compilada + sus celdas capturadas
+    // en orden de upvalue. Es la única variante específica de un motor (la representación de un cierre
+    // difiere genuinamente entre AST y bytecode; en Rust también difieren intérprete y VM). El intérprete
+    // nunca la crea ni la recibe.
+    VVmClosure(int, [Cell]),       // índice en CProgram.fns + celdas capturadas (upvalues)
 }
 
 // Un Map en runtime. Arrays PARALELOS clave/valor con búsqueda lineal por igualdad estructural — no se
@@ -82,8 +88,9 @@ struct Binding { name: string, value: Value }
 
 // Una CELDA: el contenedor mutable de una variable. Por la semántica de referencia del host, copiar la
 // celda comparte el mismo objeto del heap → varias closures que la capturen ven la misma variable y sus
-// mutaciones (es el análogo del `Rc<RefCell<Value>>` de Rust, sin reimplementar nada).
-struct Cell { v: Value }
+// mutaciones (es el análogo del `Rc<RefCell<Value>>` de Rust, sin reimplementar nada). `pub`: la VM
+// (M14.5c) la reusa para sus locales y upvalues (toda local es una celda, como aquí).
+pub struct Cell { v: Value }
 
 // Una variable capturada por una closure: su nombre y la celda compartida con su origen.
 struct Capture { name: string, cell: Cell }
@@ -152,6 +159,7 @@ pub fn value_str(v: Value) -> string {
         },
         Value.VFunc(_) => "<fn>",
         Value.VClosure(_, _) => "<fn>",
+        Value.VVmClosure(_, _) => "<fn>",
         // Display de Map idéntico a Rust: `Map{k: v, ...}` con las partes ordenadas como strings. (El
         // checker prohíbe imprimir un Map, así que esto no se ejercita en programas válidos.)
         Value.VMap(d) => {
@@ -210,6 +218,7 @@ pub fn values_equal(a: Value, b: Value) -> bool {
         // Las funciones no tienen igualdad estructural (el checker prohíbe `==` sobre ellas).
         Value.VFunc(_) => false,
         Value.VClosure(_, _) => false,
+        Value.VVmClosure(_, _) => false,
         // El checker prohíbe `==` sobre Map; no se ejercita en programas válidos.
         Value.VMap(_) => false,
     }
@@ -860,6 +869,7 @@ fn type_key_of_value(v: Value) -> string {
         Value.VArray(_) => "[]",
         Value.VFunc(_) => "fn",
         Value.VClosure(_, _) => "fn",
+        Value.VVmClosure(_, _) => "fn",
         Value.VMap(_) => "Map",
     }
 }

@@ -1007,6 +1007,23 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       compartida gratis). Oráculo conductual = mismo corpus de datos del intérprete (structs/enums/
       match_figuras/arrays/matriz + snippets de aliasing/payload/recursivos/OOB) → stdout+exit idénticos.
       Pendiente: M14.5c (closures/primera clase/`?` + fusión del prelude), M14.5d (despacho dinámico), TCO.
+    - **M14.5c COMPLETO** (347 lib + 12 en `tests/selfhost_vm.rs`): **primera clase** — funciones como valor,
+      funciones anónimas + **closures** (captura por upvalues), llamada indirecta (`OCallValue`) y el operador
+      `?` (`OTry`). Esquema de upvalues **estilo clox** (resolución transitiva en el compilador:
+      `resolve_upvalue`/`add_upvalue`, `UpSrc.ULocal`/`UUp`), PERO sin el análisis de *boxing* de Rust
+      (`captured_slots`): **toda local es una `Cell`** en la VM (como el intérprete auto-alojado), así la celda
+      siempre existe y el upvalue solo la referencia. El compilador pasó de `Cc` (una función) a `Comp` con una
+      **pila de `Fscope`** (las envolventes quedan debajo para resolver upvalues); las anónimas se compilan en
+      línea y se **anexan** a `comp.out` (funciones nombradas con índices reservados 0..n; las anónimas después).
+      Única extensión del `Value` compartido: **`VVmClosure(int, [Cell])`** (índice de la fn compilada + celdas
+      capturadas) — la representación de un cierre difiere genuinamente entre AST (intérprete: `FnExpr`+capturas
+      por nombre) y bytecode (VM); en Rust también difieren los dos motores. La VM: `OGetLocal`/`OSetLocal`
+      leen/mutan `Cell.v`, `OInitLocal` estrena celda (shadowing/bucle); `OClosure` captura las celdas **por
+      referencia** (compartidas → la mutación se ve); `OTry` desempaqueta Ok/Some o retorna el valor entero como
+      `OReturn`. El **prelude no se fusiona aún** (map/filter/fold no usan métodos, pero sort/assert_eq sí → el
+      prelude completo compila en M14.5d). Oráculo = corpus de primera clase del intérprete (closures/errores/
+      opcional + snippets de HOF/captura/estado/transitiva/`?` con Result y Option) → stdout+exit idénticos.
+      Pendiente: M14.5d (despacho dinámico: métodos/UFCS/dyn/@derive + fusión del prelude), TCO.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

@@ -974,6 +974,22 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza un string"),
             },
+            // M16.1b: los octetos UTF-8 del string → bytes.
+            "to_bytes" => match &values[0] {
+                Value::Str(s) => Value::Bytes(Rc::new(s.clone().into_bytes())),
+                _ => unreachable!("el checker garantiza un string"),
+            },
+            // M16.1b: decodifica bytes como UTF-8 → ["ok", s] o ["err", msg]. El prelude → Result.
+            "__from_utf8" => {
+                let arr = match &values[0] {
+                    Value::Bytes(b) => match std::str::from_utf8(b) {
+                        Ok(s) => vec![Value::Str("ok".to_string()), Value::Str(s.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
+                    },
+                    _ => unreachable!("el checker garantiza bytes"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M11.4a/M11.7b: ¿el string contiene la subcadena? / ¿el arreglo contiene el elemento?
             "contains" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sub)) => Value::Bool(s.contains(sub.as_str())),
@@ -1370,6 +1386,12 @@ impl<'a> Interpreter<'a> {
         Ok(match (op, l, r) {
             // Concatenación de strings (M11.1a): `+` sobre dos strings.
             (Add, Str(a), Str(b)) => Str(a + &b),
+            // M16.1b: concatenación de bytes → bytes nuevo.
+            (Add, Bytes(a), Bytes(b)) => {
+                let mut v = (*a).clone();
+                v.extend_from_slice(&b);
+                Bytes(Rc::new(v))
+            }
             // Concatenación de arreglos (M11.7b): `+` sobre dos arreglos → arreglo nuevo.
             (Add, Array(a), Array(b)) => {
                 let mut v = a.borrow().clone();

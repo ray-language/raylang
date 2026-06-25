@@ -215,6 +215,12 @@ fn read_file(ruta: string) -> Result<string, string> {
     if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
 }
 
+// M16.1b: decodifica bytes como UTF-8; Ok(string) u Err(mensaje) si no es válido.
+fn from_utf8(b: bytes) -> Result<string, string> {
+    let r = __from_utf8(b);
+    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+}
+
 // Escribe el contenido en el archivo (lo crea/sobrescribe); Ok(nº de caracteres) u Err(mensaje).
 fn write_file(ruta: string, contenido: string) -> Result<int, string> {
     let r = __write_file(ruta, contenido);

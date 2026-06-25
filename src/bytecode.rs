@@ -140,6 +140,11 @@ pub enum OpCode {
     /// Saca un string; empuja un arreglo `[char]` con sus caracteres. Builtin `chars` (M11.4c-2).
     /// (El arreglo es un objeto del heap → lo traza el GC.)
     Chars,
+    /// Saca un string; empuja sus octetos UTF-8 como `bytes`. Builtin `to_bytes` (M16.1b).
+    ToBytes,
+    /// Saca `bytes`; empuja un `[string]` etiquetado (`["ok", s]`/`["err", msg]`) según decodifique
+    /// como UTF-8. Primitivo `__from_utf8`; el prelude → `Result<string, string>` (M16.1b).
+    FromUtf8,
 
     // --- Más string (M11.7a) ---
     /// Saca el prefijo y el string; empuja un `bool`: ¿empieza con él? Builtin `starts_with`.

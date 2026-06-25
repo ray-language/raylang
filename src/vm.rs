@@ -704,6 +704,24 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Array(cs));
                     self.push(HeapValue::Obj(h));
                 }
+                // M16.1b: los octetos UTF-8 del string → bytes (inline, no objeto del heap).
+                OpCode::ToBytes => match self.pop() {
+                    HeapValue::Str(s) => self.push(HeapValue::Bytes(s.into_bytes())),
+                    _ => unreachable!("el checker garantiza un string"),
+                },
+                // M16.1b: decodifica bytes como UTF-8 → arreglo etiquetado; el prelude → Result.
+                OpCode::FromUtf8 => {
+                    let b = match self.pop() {
+                        HeapValue::Bytes(b) => b,
+                        _ => unreachable!("el checker garantiza bytes"),
+                    };
+                    let elems = match String::from_utf8(b) {
+                        Ok(s) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(s)],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::Contains => {
                     // El valor buscado está encima del contenedor (orden de los argumentos).
                     let x = self.pop();
@@ -1764,6 +1782,12 @@ impl<'a> Vm<'a> {
         Ok(match (op, left, right) {
             // M11.1a: `+` concatena dos strings.
             (Add, Str(a), Str(b)) => Str(a + &b),
+            // M16.1b: `+` concatena dos bytes (inline, no son objetos del heap → van por aquí).
+            (Add, Bytes(a), Bytes(b)) => {
+                let mut v = a;
+                v.extend_from_slice(&b);
+                Bytes(v)
+            }
             (Add, Int(a), Int(b)) => Int(a + b),
             (Sub, Int(a), Int(b)) => Int(a - b),
             (Mul, Int(a), Int(b)) => Int(a * b),
@@ -2287,6 +2311,24 @@ mod tests {
         oracle_int("if (b\"AB\" == b\"ABC\") { 1 } else { 0 }");
         // Los caracteres no-ASCII se codifican como UTF-8 (á = 2 octetos).
         oracle_int("len(b\"á\")");                     // 2
+        // M16.1b: to_bytes (builtin) + concatenación (opcode Add).
+        oracle_int("len(to_bytes(\"hola, mundo\"))");                   // 11
+        oracle_int("len(to_bytes(\"á\"))");                            // 2 (UTF-8)
+        oracle_int("len(to_bytes(\"AB\") + to_bytes(\"CD\"))");        // 4
+        oracle_int("if (to_bytes(\"AB\") == b\"AB\") { 1 } else { 0 }");
+        oracle_int("if (to_bytes(\"A\") + to_bytes(\"B\") == b\"AB\") { 1 } else { 0 }");
+    }
+
+    /// M16.1b: `from_utf8` es un envoltorio del **prelude** (no un opcode), así que se prueba con el
+    /// oráculo a nivel de programa completo (que inyecta el prelude), no con expresiones sueltas.
+    #[test]
+    fn bytes_from_utf8_oraculo() {
+        // Round-trip válido: decodifica y mide la longitud del string.
+        oracle_program("fn main() -> int { match (from_utf8(b\"hola\")) { Result.Ok(s) => len(s), Result.Err(e) => -1, } }");
+        // UTF-8 inválido → Err → 0.
+        oracle_program("fn main() -> int { match (from_utf8(b\"\\xff\\xfe\")) { Result.Ok(s) => 1, Result.Err(e) => 0, } }");
+        // to_bytes ∘ from_utf8 es identidad sobre texto válido.
+        oracle_program("fn main() -> int { match (from_utf8(to_bytes(\"raylang\"))) { Result.Ok(s) => len(s), Result.Err(e) => -1, } }");
     }
 
     /// M13.1: Map en el oráculo. Las operaciones básicas dan el mismo resultado en ambos motores.

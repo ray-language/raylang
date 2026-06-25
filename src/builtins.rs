@@ -566,6 +566,18 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::String { return Err((Some(0), format!("chars espera un string, no {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Char)))
     } },
+    // to_bytes(s) -> bytes (M16.1b): los octetos UTF-8 del string.
+    Builtin { name: "to_bytes", opcode: OpCode::ToBytes, check: |a| {
+        arity(a, 1, "to_bytes", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("to_bytes espera un string, no {}", a[0]))); }
+        Ok(Type::Bytes)
+    } },
+    // __from_utf8(b) -> [string] (M16.1b): ["ok", s] o ["err", msg]. El prelude → Result<string,string>.
+    Builtin { name: "__from_utf8", opcode: OpCode::FromUtf8, check: |a| {
+        arity(a, 1, "__from_utf8", "")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("__from_utf8 espera bytes, no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
     // starts_with(s, pre) -> bool (M11.7a): ¿`s` empieza con `pre`?
     Builtin { name: "starts_with", opcode: OpCode::StartsWith, check: |a| {
         arity(a, 2, "starts_with", " (string, prefijo)")?;

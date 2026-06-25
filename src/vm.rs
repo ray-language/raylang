@@ -132,6 +132,10 @@ struct Vm<'a> {
     current_task: Option<Handle>,
     /// M12.3: pila de scopes activos de la fibra en ejecución (espejo del `Fiber.scopes`).
     scopes: Vec<ScopeFrame>,
+    /// Opt.2: pool de `Vec<Local>` reutilizables. Cada llamada necesita un arreglo de locales; en vez de
+    /// asignar/liberar uno por llamada (millones en recursión), reciclamos los de los marcos que retornan.
+    /// NO es raíz del GC (sus contenidos son basura entre reciclar y reusar; `new_locals` los reconstruye).
+    locals_pool: Vec<Vec<Local>>,
 }
 
 impl<'a> Vm<'a> {
@@ -146,6 +150,7 @@ impl<'a> Vm<'a> {
             current_is_main: true,
             current_task: None,
             scopes: Vec::new(),
+            locals_pool: Vec::new(),
         }
     }
 
@@ -172,7 +177,9 @@ impl<'a> Vm<'a> {
 
             // Robustez: si se acabó el chunk sin Return (no debería), retorna unit.
             if ip >= program.functions[func].chunk.code.len() {
-                self.frames.pop();
+                if let Some(frame) = self.frames.pop() {
+                    self.recycle_locals(frame.locals); // Opt.2
+                }
                 if self.frames.is_empty() {
                     match self.on_fiber_done(HeapValue::Unit)? {
                         Some(v) => return Ok(v),
@@ -1098,7 +1105,8 @@ impl<'a> Vm<'a> {
                     }
                     self.frames[fi].function = *idx;
                     self.frames[fi].ip = 0;
-                    self.frames[fi].locals = locals;
+                    let old = std::mem::replace(&mut self.frames[fi].locals, locals);
+                    self.recycle_locals(old); // Opt.2: la llamada en cola reemplaza las locales → recicla
                     self.frames[fi].upvalues = Vec::new();
                 }
 
@@ -1146,7 +1154,8 @@ impl<'a> Vm<'a> {
                     }
                     self.frames[fi].function = fn_idx;
                     self.frames[fi].ip = 0;
-                    self.frames[fi].locals = locals;
+                    let old = std::mem::replace(&mut self.frames[fi].locals, locals);
+                    self.recycle_locals(old); // Opt.2
                     self.frames[fi].upvalues = upvalues;
                 }
 
@@ -1173,7 +1182,9 @@ impl<'a> Vm<'a> {
 
                 OpCode::Return => {
                     let result = self.pop();
-                    self.frames.pop();
+                    if let Some(frame) = self.frames.pop() {
+                        self.recycle_locals(frame.locals); // Opt.2: el marco se descarta → recicla sus locales
+                    }
                     if self.frames.is_empty() {
                         // La fibra terminó: si es main → fin del programa; si es spawn → siguiente fibra.
                         match self.on_fiber_done(result)? {
@@ -1417,15 +1428,27 @@ impl<'a> Vm<'a> {
     /// **boxeado** (su celda en el heap), los demás como `Plain(Unit)`.
     fn new_locals(&mut self, fn_idx: usize) -> Vec<Local> {
         let n = self.program.functions[fn_idx].num_locals;
-        (0..n)
-            .map(|s| {
-                if self.program.functions[fn_idx].captured.get(s).copied().unwrap_or(false) {
-                    Local::Boxed(self.heap.allocate(Obj::Cell(HeapValue::Unit)))
-                } else {
-                    Local::Plain(HeapValue::Unit)
-                }
-            })
-            .collect()
+        // Opt.2: reusa un `Vec` del pool (conserva su capacidad) en vez de asignar uno nuevo. Lo vaciamos
+        // y lo reconstruimos entero, así no se lee ninguna basura que arrastrara del uso anterior.
+        let mut locals = self.locals_pool.pop().unwrap_or_default();
+        locals.clear();
+        for s in 0..n {
+            if self.program.functions[fn_idx].captured.get(s).copied().unwrap_or(false) {
+                let cell = self.heap.allocate(Obj::Cell(HeapValue::Unit));
+                locals.push(Local::Boxed(cell));
+            } else {
+                locals.push(Local::Plain(HeapValue::Unit));
+            }
+        }
+        locals
+    }
+
+    /// Opt.2: devuelve al pool el arreglo de locales de un marco que se descarta (Return, llamada en cola,
+    /// fin de chunk). Acotado para no crecer sin límite; el GC no lo traza (contenido basura hasta reusar).
+    fn recycle_locals(&mut self, locals: Vec<Local>) {
+        if self.locals_pool.len() < 256 {
+            self.locals_pool.push(locals);
+        }
     }
 
     /// Coloca un argumento en un slot recién creado (respeta el boxing).

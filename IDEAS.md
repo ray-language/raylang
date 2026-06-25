@@ -308,7 +308,13 @@ bloquea nada y se hace de forma incremental, midiendo con `benchmarks/`.
   local (`let program = self.program`) y toma la instrucción **prestada** (`&program…code[ip]`) en vez
   de clonarla; el préstamo es del programa (inmutable, vive como la VM), no de `self`, así que el cuerpo
   sigue pudiendo mutar `self`. → **685 ms** (~7%; 2.59×).
-- Siguiente: **Opt.2** locales por llamada (pool/free-list o estilo clox), **Opt.3** `Rc<str>`.
+- **Opt.2 — pool de locales por llamada** ✅: cada llamada necesitaba un `Vec<Local>` nuevo (millones en
+  recursión). Ahora un **pool/free-list** (`locals_pool`) recicla los `Vec` de los marcos que retornan
+  (Return, fin de chunk, llamada en cola): `new_locals` saca del pool y reconstruye; `recycle_locals`
+  devuelve (acotado a 256). **No es raíz del GC** (contenido basura entre reciclar y reusar; se `clear()`+
+  reconstruye, nunca se lee lo viejo → seguro). → **552 ms** (~19%; **3.22×**, 25% acumulado vs baseline).
+- Siguiente: **Opt.3** `Rc<str>` (clon barato de strings), **Opt.4** deduplicar constantes, **Opt.5**
+  peephole/plegado.
 
 ## 12. Asperezas de M3
 

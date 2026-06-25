@@ -66,7 +66,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
 | **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.6: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure · ✅ **M12.3** structured concurrency · ✅ **M12.4** `select` · ✅ **M12.5** cancelación de hermanas. **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>`, select de send) |
-| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete) · ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port`; `OpenHandle::Listener`; servidor secuencial bloqueante; subproceso con el `.ray` de servidor) · ✅ **M15.4a** JSON (librería `examples/json.ray` en raylang: `parse`/`stringify`, objetos `Map<string,Json>`, salida canónica; cero runtime; subproceso golden) · ✅ **M15.4b** HTTP (librería `examples/http.ray` en raylang sobre TCP: `fetch`/`request`/`header`, parseo de URL/respuesta; compone con `json`; subproceso vs. servidor de juguete). Pendiente: (capstone) M15.5 sockets no bloqueantes en el scheduler |
+| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete) · ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port`; `OpenHandle::Listener`; servidor secuencial bloqueante; subproceso con el `.ray` de servidor) · ✅ **M15.4a** JSON (librería `examples/json.ray` en raylang: `parse`/`stringify`, objetos `Map<string,Json>`, salida canónica; cero runtime; subproceso golden) · ✅ **M15.4b** HTTP (librería `examples/http.ray` en raylang sobre TCP: `fetch`/`request`/`header`, parseo de URL/respuesta; compone con `json`; subproceso vs. servidor de juguete) · ✅ **M15.5** (capstone) sockets no bloqueantes + scheduler de M12 (`tcp_accept`/`socket_read` ceden la fibra; busy-poll cooperativo, `io_parked`, cero deps; servidor concurrente con `spawn`; solo VM). **M15 COMPLETO** (diferido: cesión en `socket_write`, `epoll`, bytes/TLS) |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) ⏳ | rendimiento, bootstrapping | 🚧 |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -3558,3 +3558,54 @@ como `Result`. **Cero runtime.** Se prueba contra un **servidor HTTP de juguete 
 responde con cabeceras + cuerpo JSON y cierra); el driver combina `http` + `json` (hace `get` y parsea
 el cuerpo con la librería JSON) → *showcase* de dos librerías de raylang componiéndose, en ambos
 motores.
+
+### 24.8 M15.5 — sockets no bloqueantes + el scheduler (el servidor concurrente, capstone)
+
+El capstone de M15: que `tcp_accept`/`socket_read`, en vez de bloquear el hilo (y con él **todas** las
+fibras, §24.6), **cedan la fibra al scheduler de M12**. Así, con `spawn`, un servidor atiende **muchas
+conexiones concurrentes** sobre un único hilo:
+
+```raylang
+scope(fn() {
+    while (seguir) {
+        match (tcp_accept(srv)) {           // cede si no hay conexión pendiente
+            Result.Ok(conn) => { spawn(fn() { atender(conn) }); },   // una fibra por conexión
+            Result.Err(e) => { seguir = false; },
+        }
+    }
+})
+```
+
+mientras una fibra espera datos de su conexión (`socket_read` cede), otra avanza. **Solo en la VM**
+(la concurrencia es VM-only; el intérprete sigue con sockets **bloqueantes** y un único hilo).
+
+**Cómo: sockets no bloqueantes + busy-poll cooperativo, cero dependencias.** `std` no expone
+`epoll`/`kqueue`/`poll`, y la invariante es **cero deps de Cargo**. La solución honesta: la VM pone sus
+sockets en modo **no bloqueante** (`set_nonblocking`); cuando `accept`/`read` devuelven `WouldBlock`,
+el opcode **aparca la fibra** (rebobina el `ip` y la mete en una lista nueva `io_parked`, gemela de
+`parked` pero sin handle de GC —un socket es un `int` del registro del host, no un objeto del heap—) y
+conmuta. Cuando **no queda ninguna fibra lista** pero sí hay fibras en `io_parked`, el scheduler
+**duerme ~1 ms y las re-encola todas** para que reintenten su operación (las que sigan sin estar listas
+se vuelven a aparcar). Es un *poll loop* cooperativo: ineficiente comparado con `epoll`, pero simple,
+sin deps y didáctico. Nunca hay *deadlock* mientras haya `io_parked` (se sigue sondeando); el
+*deadlock* clásico (todas en `recv`/`join`) se conserva tal cual (solo cuando `io_parked` está vacío).
+
+**Reparto intérprete/VM.** Los *builtins* compartidos (`builtins.rs`) **crean sockets bloqueantes**
+(el intérprete los usa así, un solo hilo). La **VM** los voltea a no bloqueantes (`set_nonblocking`)
+tras crearlos y usa helpers no bloqueantes (`socket_read_nb`/`tcp_accept_nb` → `Result<Option<…>,
+String>`: `Ok(None)` = `WouldBlock`). Cero opcodes nuevos: se reusan `SocketRead`/`TcpAccept` (cambia
+solo su ejecución en la VM); el resto de fases intacto. El GC rootea las fibras de `io_parked`;
+`cancel_task` (M12.5) también las busca.
+
+**Limitación documentada.** `socket_write` no es punto de cesión: en un socket no bloqueante hace un
+bucle de escritura que **gira** (spin) si el buffer del SO está lleno. Para las cargas reales (líneas
+de eco, respuestas HTTP cortas) nunca gira; una escritura gigante a un peer que no lee sí giraría. La
+cesión en la escritura (con estado de *offset* entre cesiones) queda diferida. El *poll* de 1 ms añade
+algo de latencia frente a `epoll` — aceptable para un lenguaje de aprendizaje.
+
+**Prueba.** Un servidor de eco **concurrente** en `.ray` (escucha, `scope { loop accept → spawn
+atender }`), **solo VM**, sirviendo 2 conexiones. El test conecta dos clientes y pide el eco del
+**segundo** antes de que el primero envíe: un servidor secuencial bloqueante se quedaría atascado
+leyendo al primero y nunca respondería al segundo; que el segundo reciba su eco **prueba** la
+concurrencia (los clientes de Rust ponen *read-timeout* para fallar en vez de colgarse si se rompe).
+

@@ -1,0 +1,42 @@
+// M15.5 — servidor de eco CONCURRENTE: cada conexión en su propia fibra (`spawn`).
+//
+// La clave de M15.5: `tcp_accept` y `socket_read` CEDEN al scheduler de M12 cuando no hay nada listo
+// (sockets no bloqueantes + busy-poll cooperativo), en vez de bloquear el hilo. Así, mientras una
+// conexión espera datos, otras avanzan: muchas conexiones a la vez sobre un único hilo. Solo VM
+// (la concurrencia es VM-only).
+//
+// Prueba: cargo run -- --vm examples/servidor_concurrente.ray  (y conéctate con varios `nc`; Ctrl-C
+// para parar). Compáralo con tcp_servidor.ray (M15.3), que es secuencial y atiende de uno en uno.
+
+fn atender(conn: int) {
+    match (socket_read(conn)) {
+        Result.Ok(msg) => {
+            match (socket_write(conn, "eco: " + msg)) {
+                Result.Ok(_) => {},
+                Result.Err(e) => eprint("error al escribir: " + e),
+            }
+        },
+        Result.Err(e) => eprint("error al leer: " + e),
+    }
+    close(conn);
+}
+
+fn main() -> int {
+    match (tcp_listen("127.0.0.1", 8080)) {
+        Result.Ok(srv) => {
+            print("escuchando (concurrente) en el puerto " + to_string(local_port(srv)));
+            var seguir: bool = true;
+            while (seguir) {
+                match (tcp_accept(srv)) {
+                    // Una fibra por conexión: el bucle vuelve a `accept` de inmediato (cede mientras
+                    // no haya conexión nueva), y cada `atender` cede mientras espera datos.
+                    Result.Ok(conn) => { spawn(fn() { atender(conn) }); },
+                    Result.Err(e) => { eprint("error al aceptar: " + e); seguir = false; },
+                }
+            }
+            close(srv);
+            0
+        },
+        Result.Err(e) => { eprint("no se pudo escuchar: " + e); 1 },
+    }
+}

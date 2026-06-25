@@ -126,6 +126,10 @@ struct Vm<'a> {
     ready: VecDeque<Fiber>,
     /// Fibras bloqueadas en `recv`/`send`/`join`, con el handle (canal o tarea) que esperan.
     parked: Vec<Parked>,
+    /// M15.5: fibras aparcadas esperando **E/S de red** (`accept`/`read` que dieron `WouldBlock`). No
+    /// llevan handle de GC (un socket es un `int` del registro del host, no un objeto del heap). El
+    /// scheduler las re-encola cuando no hay nadie listo (busy-poll cooperativo).
+    io_parked: Vec<Fiber>,
     /// ¿La fibra en ejecución es la principal (`main`)? Su retorno termina el programa (semántica Go).
     current_is_main: bool,
     /// M12.3: la `Task` que la fibra en ejecución debe rellenar al terminar (`None` para `main`).
@@ -147,6 +151,7 @@ impl<'a> Vm<'a> {
             heap: Heap::new(),
             ready: VecDeque::new(),
             parked: Vec::new(),
+            io_parked: Vec::new(),
             current_is_main: true,
             current_task: None,
             scopes: Vec::new(),
@@ -1000,7 +1005,11 @@ impl<'a> Vm<'a> {
                         unreachable!("el checker garantiza string, int");
                     };
                     let elems = match crate::builtins::tcp_connect(&host, port) {
-                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
+                        Ok(h) => {
+                            // M15.5: la VM usa sockets NO bloqueantes → socket_read cede al scheduler.
+                            let _ = crate::builtins::set_nonblocking(h);
+                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())]
+                        }
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
                     let h = self.heap.allocate(Obj::Array(elems));
@@ -1011,12 +1020,27 @@ impl<'a> Vm<'a> {
                         HeapValue::Int(h) => h,
                         _ => unreachable!("el checker garantiza un int"),
                     };
-                    let elems = match crate::builtins::socket_read(handle) {
-                        Ok(s) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(s)],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
-                    };
-                    let h = self.heap.allocate(Obj::Array(elems));
-                    self.push(HeapValue::Obj(h));
+                    // M15.5: lectura no bloqueante. WouldBlock (Ok(None)) → aparcar la fibra y reintentar.
+                    match crate::builtins::socket_read_nb(handle) {
+                        Ok(Some(s)) => {
+                            let elems = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(s)];
+                            let h = self.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                        }
+                        Err(e) => {
+                            let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                            let h = self.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                        }
+                        Ok(None) => {
+                            // Re-empuja el handle y rebobina al SocketRead: al despertar lo re-ejecuta.
+                            self.push(HeapValue::Int(handle));
+                            self.frames.last_mut().unwrap().ip -= 1;
+                            let fiber = self.take_current_fiber();
+                            self.io_parked.push(fiber);
+                            self.schedule_next(line, col)?;
+                        }
+                    }
                 }
                 OpCode::SocketWrite => {
                     let s = self.pop();
@@ -1039,7 +1063,11 @@ impl<'a> Vm<'a> {
                         unreachable!("el checker garantiza string, int");
                     };
                     let elems = match crate::builtins::tcp_listen(&host, port) {
-                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
+                        Ok(h) => {
+                            // M15.5: escucha NO bloqueante → tcp_accept cede al scheduler.
+                            let _ = crate::builtins::set_nonblocking(h);
+                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())]
+                        }
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
                     let h = self.heap.allocate(Obj::Array(elems));
@@ -1050,12 +1078,26 @@ impl<'a> Vm<'a> {
                         HeapValue::Int(h) => h,
                         _ => unreachable!("el checker garantiza un int"),
                     };
-                    let elems = match crate::builtins::tcp_accept(handle) {
-                        Ok(c) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(c.to_string())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
-                    };
-                    let h = self.heap.allocate(Obj::Array(elems));
-                    self.push(HeapValue::Obj(h));
+                    // M15.5: accept no bloqueante. WouldBlock (Ok(None)) → aparcar y reintentar.
+                    match crate::builtins::tcp_accept_nb(handle) {
+                        Ok(Some(c)) => {
+                            let elems = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(c.to_string())];
+                            let h = self.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                        }
+                        Err(e) => {
+                            let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                            let h = self.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                        }
+                        Ok(None) => {
+                            self.push(HeapValue::Int(handle));
+                            self.frames.last_mut().unwrap().ip -= 1;
+                            let fiber = self.take_current_fiber();
+                            self.io_parked.push(fiber);
+                            self.schedule_next(line, col)?;
+                        }
+                    }
                 }
                 OpCode::LocalPort => match self.pop() {
                     HeapValue::Int(h) => self.push(HeapValue::Int(crate::builtins::local_port(h))),
@@ -1399,6 +1441,15 @@ impl<'a> Vm<'a> {
     /// Carga la siguiente fibra lista en los campos de ejecución de la VM. Si no hay ninguna lista pero sí
     /// fibras bloqueadas → **deadlock** (nadie puede desbloquearlas).
     fn schedule_next(&mut self, line: usize, col: usize) -> Result<(), RuntimeError> {
+        // M15.5: si no hay nadie listo pero sí fibras esperando E/S de red, hacemos una **espera de E/S**:
+        // dormimos un poco (no quemar CPU) y re-encolamos TODAS las aparcadas en E/S para que reintenten su
+        // operación (las que sigan sin estar listas se volverán a aparcar). Busy-poll cooperativo, sin deps.
+        if self.ready.is_empty() && !self.io_parked.is_empty() {
+            crate::builtins::sleep_millis(1);
+            for f in self.io_parked.drain(..) {
+                self.ready.push_back(f);
+            }
+        }
         if let Some(next) = self.ready.pop_front() {
             self.frames = next.frames;
             self.stack = next.stack;
@@ -1472,6 +1523,12 @@ impl<'a> Vm<'a> {
             for s in &p.fiber.scopes {
                 grandchildren.extend(s.children.iter().copied());
             }
+        } else if let Some(pos) = self.io_parked.iter().position(|f| f.task == Some(task)) {
+            // M15.5: la fibra cancelada podría estar esperando E/S de red.
+            let f = self.io_parked.remove(pos);
+            for s in &f.scopes {
+                grandchildren.extend(s.children.iter().copied());
+            }
         }
         for g in grandchildren {
             self.cancel_task(g);
@@ -1530,6 +1587,10 @@ impl<'a> Vm<'a> {
             roots.extend(s.children.iter().copied());
         }
         for f in &self.ready {
+            gather_fiber_roots(f, &mut roots);
+        }
+        // M15.5: las fibras aparcadas esperando E/S también deben sobrevivir al GC.
+        for f in &self.io_parked {
             gather_fiber_roots(f, &mut roots);
         }
         for p in &self.parked {

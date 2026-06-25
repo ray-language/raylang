@@ -288,10 +288,80 @@ pub fn socket_read(h: i64) -> Result<String, String> {
 }
 
 /// Escribe `s` completo en el socket; `Ok(nº de bytes)` o `Err(mensaje)` (M15.2).
+///
+/// Bucle de escritura manual (no `write_all`) para tolerar sockets **no bloqueantes** (M15.5): en un
+/// socket bloqueante `write` nunca da `WouldBlock` y esto equivale a `write_all`; en uno no bloqueante,
+/// gira (`yield_now`) hasta poder escribir. La escritura NO es punto de cesión del scheduler (cargas
+/// reales —líneas, respuestas cortas— nunca giran; una escritura gigante a un peer que no lee sí).
 pub fn socket_write(h: i64, s: &str) -> Result<usize, String> {
     use std::io::Write;
     let mut stream = socket_clone(h)?;
-    stream.write_all(s.as_bytes()).map(|_| s.len()).map_err(|e| e.to_string())
+    let bytes = s.as_bytes();
+    let mut off = 0;
+    while off < bytes.len() {
+        match stream.write(&bytes[off..]) {
+            Ok(0) => return Err("la conexión se cerró durante la escritura".to_string()),
+            Ok(n) => off += n,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::yield_now(),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(bytes.len())
+}
+
+// --- Sockets no bloqueantes para el scheduler de la VM (M15.5) ---
+//
+// El intérprete usa los sockets BLOQUEANTES de arriba (un solo hilo). La VM los voltea a NO bloqueantes
+// con `set_nonblocking` y usa estos helpers, que devuelven `Ok(None)` para señalar `WouldBlock` (la VM
+// aparca la fibra y reintenta). Así `tcp_accept`/`socket_read` ceden al scheduler en vez de bloquear.
+
+/// Pone el socket (conexión o escucha) del handle `h` en modo **no bloqueante** (M15.5). Lo llama la VM
+/// tras crear el socket; el intérprete nunca, así que sus sockets siguen bloqueantes.
+pub fn set_nonblocking(h: i64) -> Result<(), String> {
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Tcp(s)) => s.set_nonblocking(true).map_err(|e| e.to_string()),
+        Some(OpenHandle::Listener(l)) => l.set_nonblocking(true).map_err(|e| e.to_string()),
+        _ => Err(format!("el handle {} no es un socket", h)),
+    }
+}
+
+/// Lectura **no bloqueante**: `Ok(Some(datos))` (o `Some("")` en EOF), `Ok(None)` si aún no hay datos
+/// (`WouldBlock` → la VM aparca), `Err` en error real (M15.5).
+pub fn socket_read_nb(h: i64) -> Result<Option<String>, String> {
+    use std::io::Read;
+    let mut stream = socket_clone(h)?;
+    let mut buf = [0u8; 65536];
+    match stream.read(&mut buf) {
+        Ok(n) => Ok(Some(String::from_utf8_lossy(&buf[..n]).into_owned())),
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Accept **no bloqueante**: `Ok(Some(handle))` con la conexión (ya puesta en no bloqueante),
+/// `Ok(None)` si no hay ninguna pendiente (`WouldBlock`), `Err` en error real (M15.5).
+pub fn tcp_accept_nb(h: i64) -> Result<Option<i64>, String> {
+    let listener = {
+        let reg = registry().lock().unwrap();
+        match reg.open.get(&h) {
+            Some(OpenHandle::Listener(l)) => l.try_clone().map_err(|e| e.to_string())?,
+            Some(_) => return Err(format!("el handle {} no es un socket de escucha", h)),
+            None => return Err(format!("handle inválido: {}", h)),
+        }
+    };
+    match listener.accept() {
+        Ok((stream, _)) => {
+            stream.set_nonblocking(true).map_err(|e| e.to_string())?;
+            let mut reg = registry().lock().unwrap();
+            let id = reg.next;
+            reg.next += 1;
+            reg.open.insert(id, OpenHandle::Tcp(stream));
+            Ok(Some(id))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 // --- Servidor TCP (M15.3) ---

@@ -14,6 +14,7 @@
 
 from lexer import lex, LexError;
 from parser import parse, ParseError, Program, Func, Block, Stmt, SKind, Expr, EKind, Pattern, PKind, FnExpr;
+from parser import Type, StructDef, EnumDef, TraitDef, ImplBlock, MethodSig, Bound;
 
 // Error de carga: mensaje + ubicación + módulo donde ocurrió (espejo recortado del de Rust).
 pub struct LoadError { msg: string, line: int, col: int, module: string }
@@ -24,8 +25,16 @@ struct Module { name: string, is_entry: bool, prog: Program }
 // Una entrada pendiente en el BFS: el nombre del módulo, su ruta de archivo y si es el de entrada.
 struct PendingMod { name: string, path: string, is_entry: bool }
 
-// La superficie pública de un módulo (M14.7a: solo valores/funciones; los tipos llegan en M14.7b).
-struct Surface { values: Map<string, string> }
+// La superficie pública de un módulo: nombre exportado → global, separado en valores (funciones) y
+// tipos (struct/enum/trait), M14.7b.
+struct Surface { values: Map<string, string>, types: Map<string, string> }
+
+// El resultado de clasificar los `from M import …` de un módulo: nombres de valor y de tipo (local→global).
+struct FromMaps { values: Map<string, string>, types: Map<string, string> }
+
+// El reescritor de **tipos**: `types` mapea nombre local de tipo → global (`modulo::Tipo`); `tparams`
+// es la pila de parámetros de tipo en ámbito (un `T` en `<T>` NO es un tipo nominal → no se reescribe).
+struct TypeRewriter { types: Map<string, string>, tparams: [[string]] }
 
 // El resolutor de **valores**: `own` mapea nombre local → nombre global (`modulo::fn`) de las funciones
 // visibles sin calificar (propias + `from`-importadas); `scopes` es la pila de ámbitos locales (un
@@ -129,16 +138,36 @@ fn build_surfaces(modules: [Module]) -> Map<string, Surface> {
             if (f.is_pub) { insert(vals, f.name, global_of(m, f.name)); }
             fi = fi + 1;
         }
-        insert(surfaces, m.name, Surface { values: vals });
+        var tys: Map<string, string> = map_new();
+        var si = 0;
+        while (si < len(m.prog.structs)) {
+            let s = m.prog.structs[si];
+            if (s.is_pub) { insert(tys, s.name, global_of(m, s.name)); }
+            si = si + 1;
+        }
+        var ei = 0;
+        while (ei < len(m.prog.enums)) {
+            let e = m.prog.enums[ei];
+            if (e.is_pub) { insert(tys, e.name, global_of(m, e.name)); }
+            ei = ei + 1;
+        }
+        var ti = 0;
+        while (ti < len(m.prog.traits)) {
+            let t = m.prog.traits[ti];
+            if (t.is_pub) { insert(tys, t.name, global_of(m, t.name)); }
+            ti = ti + 1;
+        }
+        insert(surfaces, m.name, Surface { values: vals, types: tys });
         i = i + 1;
     }
     surfaces
 }
 
-// Clasifica los `from M import a [as b]` de un módulo en un mapa local → global de **funciones** `pub`.
-// (M14.7a: si un nombre no es una función exportada, error; el cruce de TIPOS llega en M14.7b.)
-fn clasificar_from_values(m: Module, surfaces: Map<string, Surface>) -> Result<Map<string, string>, LoadError> {
+// Clasifica los `from M import a [as b]` de un módulo en dos mapas local → global: **funciones** `pub`
+// y **tipos** `pub` (M14.7b). El orden prioriza funciones (un módulo no debería tener ambos homónimos).
+fn clasificar_from(m: Module, surfaces: Map<string, Surface>) -> Result<FromMaps, LoadError> {
     var values: Map<string, string> = map_new();
+    var types: Map<string, string> = map_new();
     var i = 0;
     while (i < len(m.prog.from_imports)) {
         let fi = m.prog.from_imports[i];
@@ -151,7 +180,12 @@ fn clasificar_from_values(m: Module, surfaces: Map<string, Surface>) -> Result<M
                     match (get(surf.values, n.name)) {
                         Option.Some(g) => { insert(values, local, g); },
                         Option.None => {
-                            return Result.Err(LoadError { msg: "el módulo '" + fi.module + "' no exporta la función '" + n.name + "' (¿falta 'pub'? los tipos llegan en M14.7b)", line: n.line, col: n.col, module: m.name });
+                            match (get(surf.types, n.name)) {
+                                Option.Some(g) => { insert(types, local, g); },
+                                Option.None => {
+                                    return Result.Err(LoadError { msg: "el módulo '" + fi.module + "' no exporta '" + n.name + "' (¿falta 'pub'?)", line: n.line, col: n.col, module: m.name });
+                                },
+                            }
                         },
                     }
                 },
@@ -163,7 +197,7 @@ fn clasificar_from_values(m: Module, surfaces: Map<string, Surface>) -> Result<M
         }
         i = i + 1;
     }
-    Result.Ok(values)
+    Result.Ok(FromMaps { values: values, types: types })
 }
 
 // =====================================================================
@@ -314,6 +348,244 @@ fn resolve_fn_expr(r: Resolver, fe: FnExpr) {
 }
 
 // =====================================================================
+// Fase 3b: el TypeRewriter — namespacing de tipos (M14.7b)
+// =====================================================================
+
+// Mapa nombre local de tipo → global, de los struct/enum/trait propios del módulo.
+fn build_own_types(m: Module) -> Map<string, string> {
+    var map: Map<string, string> = map_new();
+    var si = 0;
+    while (si < len(m.prog.structs)) { insert(map, m.prog.structs[si].name, global_of(m, m.prog.structs[si].name)); si = si + 1; }
+    var ei = 0;
+    while (ei < len(m.prog.enums)) { insert(map, m.prog.enums[ei].name, global_of(m, m.prog.enums[ei].name)); ei = ei + 1; }
+    var ti = 0;
+    while (ti < len(m.prog.traits)) { insert(map, m.prog.traits[ti].name, global_of(m, m.prog.traits[ti].name)); ti = ti + 1; }
+    map
+}
+
+// Vuelca `b` sobre `a` (las claves de `b` ganan). Para unir tipos propios + `from`-importados.
+fn merge_maps(a: Map<string, string>, b: Map<string, string>) -> Map<string, string> {
+    let ks = keys(b);
+    var i = 0;
+    while (i < len(ks)) {
+        match (get(b, ks[i])) { Option.Some(v) => { insert(a, ks[i], v); }, Option.None => {} }
+        i = i + 1;
+    }
+    a
+}
+
+// Renombra las DEFINICIONES de tipo del módulo a su global (las referencias las hace el TypeRewriter).
+fn rename_type_defs(prog: Program, own_types: Map<string, string>) {
+    var si = 0;
+    while (si < len(prog.structs)) {
+        match (get(own_types, prog.structs[si].name)) { Option.Some(g) => { prog.structs[si].name = g; }, Option.None => {} }
+        si = si + 1;
+    }
+    var ei = 0;
+    while (ei < len(prog.enums)) {
+        match (get(own_types, prog.enums[ei].name)) { Option.Some(g) => { prog.enums[ei].name = g; }, Option.None => {} }
+        ei = ei + 1;
+    }
+    var ti = 0;
+    while (ti < len(prog.traits)) {
+        match (get(own_types, prog.traits[ti].name)) { Option.Some(g) => { prog.traits[ti].name = g; }, Option.None => {} }
+        ti = ti + 1;
+    }
+}
+
+fn tw_is_tparam(tw: TypeRewriter, name: string) -> bool {
+    var i = 0;
+    while (i < len(tw.tparams)) {
+        if (contains_str(tw.tparams[i], name)) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn tw_push(tw: TypeRewriter, params: [string]) { push(tw.tparams, params); }
+fn tw_pop(tw: TypeRewriter) { pop(tw.tparams); }
+
+// Un nombre de tipo/trait → su global: un parámetro de tipo en ámbito se deja; lo demás se busca en el
+// mapa (un nombre no nominal, como "Map" o "T" libre, no está → se deja igual).
+fn tw_name(tw: TypeRewriter, name: string) -> string {
+    if (tw_is_tparam(tw, name)) { return name; }
+    match (get(tw.types, name)) { Option.Some(g) => g, Option.None => name }
+}
+
+fn tw_types(tw: TypeRewriter, ts: [Type]) -> [Type] {
+    var out: [Type] = [];
+    var i = 0;
+    while (i < len(ts)) { push(out, tw_type(tw, ts[i])); i = i + 1; }
+    out
+}
+
+fn tw_names(tw: TypeRewriter, ns: [string]) -> [string] {
+    var out: [string] = [];
+    var i = 0;
+    while (i < len(ns)) { push(out, tw_name(tw, ns[i])); i = i + 1; }
+    out
+}
+
+// Reescribe un tipo a su forma con nombres globales (devuelve uno nuevo).
+fn tw_type(tw: TypeRewriter, t: Type) -> Type {
+    match (t) {
+        Type.TArray(elem) => Type.TArray(tw_type(tw, elem)),
+        Type.TFn(params, ret) => Type.TFn(tw_types(tw, params), tw_type(tw, ret)),
+        Type.TNamed(name, args) => Type.TNamed(tw_name(tw, name), tw_types(tw, args)),
+        Type.TDyn(traits) => Type.TDyn(tw_names(tw, traits)),
+        _ => t,
+    }
+}
+
+// Reescribe los `T: Trait` de un parámetro de tipo: el trait se namespaca como cualquier tipo (M9.4).
+fn tw_bounds(tw: TypeRewriter, bounds: [Bound]) {
+    var i = 0;
+    while (i < len(bounds)) { bounds[i].trait_name = tw_name(tw, bounds[i].trait_name); i = i + 1; }
+}
+
+fn tw_program(tw: TypeRewriter, prog: Program) {
+    var si = 0;
+    while (si < len(prog.structs)) { tw_struct(tw, prog.structs[si]); si = si + 1; }
+    var ei = 0;
+    while (ei < len(prog.enums)) { tw_enum(tw, prog.enums[ei]); ei = ei + 1; }
+    var ti = 0;
+    while (ti < len(prog.traits)) { tw_trait(tw, prog.traits[ti]); ti = ti + 1; }
+    var fi = 0;
+    while (fi < len(prog.funcs)) { tw_func(tw, prog.funcs[fi]); fi = fi + 1; }
+    var ii = 0;
+    while (ii < len(prog.impls)) { tw_impl(tw, prog.impls[ii]); ii = ii + 1; }
+}
+
+fn tw_struct(tw: TypeRewriter, s: StructDef) {
+    tw_push(tw, s.type_params);
+    var i = 0;
+    while (i < len(s.fields)) { s.fields[i].ty = tw_type(tw, s.fields[i].ty); i = i + 1; }
+    tw_bounds(tw, s.bounds);
+    tw_pop(tw);
+}
+
+fn tw_enum(tw: TypeRewriter, e: EnumDef) {
+    tw_push(tw, e.type_params);
+    var i = 0;
+    while (i < len(e.variants)) { e.variants[i].payload = tw_types(tw, e.variants[i].payload); i = i + 1; }
+    tw_bounds(tw, e.bounds);
+    tw_pop(tw);
+}
+
+fn tw_trait(tw: TypeRewriter, t: TraitDef) {
+    tw_push(tw, no_strs()); // los traits no llevan parámetros de tipo
+    var i = 0;
+    while (i < len(t.methods)) { tw_method(tw, t.methods[i]); i = i + 1; }
+    tw_pop(tw);
+}
+
+fn tw_method(tw: TypeRewriter, m: MethodSig) {
+    var i = 0;
+    while (i < len(m.params)) { m.params[i].ty = tw_type(tw, m.params[i].ty); i = i + 1; }
+    m.ret = tw_type(tw, m.ret);
+    match (m.default_body) { Option.Some(b) => tw_block(tw, b), Option.None => {} }
+}
+
+fn tw_func(tw: TypeRewriter, f: Func) {
+    tw_push(tw, f.type_params);
+    var i = 0;
+    while (i < len(f.params)) { f.params[i].ty = tw_type(tw, f.params[i].ty); i = i + 1; }
+    f.ret = tw_type(tw, f.ret);
+    tw_bounds(tw, f.bounds);
+    tw_block(tw, f.body);
+    tw_pop(tw);
+}
+
+fn tw_impl(tw: TypeRewriter, imp: ImplBlock) {
+    tw_push(tw, imp.type_params);
+    imp.target = tw_type(tw, imp.target);
+    imp.trait_name = tw_name(tw, imp.trait_name);
+    tw_bounds(tw, imp.bounds);
+    var i = 0;
+    while (i < len(imp.methods)) { tw_func(tw, imp.methods[i]); i = i + 1; }
+    tw_pop(tw);
+}
+
+fn tw_block(tw: TypeRewriter, b: Block) {
+    var i = 0;
+    while (i < len(b.stmts)) { tw_stmt(tw, b.stmts[i]); i = i + 1; }
+    match (b.tail) { Option.Some(t) => tw_expr(tw, t), Option.None => {} }
+}
+
+fn tw_stmt(tw: TypeRewriter, s: Stmt) {
+    match (s.kind) {
+        SKind.SLet(name, tyopt, value, mutable) => {
+            tw_expr(tw, value);
+            match (tyopt) {
+                Option.Some(t) => { s.kind = SKind.SLet(name, Option.Some(tw_type(tw, t)), value, mutable); },
+                Option.None => {},
+            }
+        },
+        SKind.SAssign(target, value) => { tw_expr(tw, target); tw_expr(tw, value); },
+        SKind.SReturn(opt) => { match (opt) { Option.Some(v) => tw_expr(tw, v), Option.None => {} } },
+        SKind.SExpr(e) => tw_expr(tw, e),
+    }
+}
+
+// Reescribe las expresiones que NOMBRAN tipos: literal de struct (`Nombre { … }`), construcción de enum
+// (`Tipo.Variante`, que llega como `Field`/`Call`) y patrones de variante. Las demás solo se recorren.
+fn tw_expr(tw: TypeRewriter, e: Expr) {
+    match (e.kind) {
+        EKind.EStructLit(name, fields) => {
+            var i = 0;
+            while (i < len(fields)) { tw_expr(tw, fields[i].value); i = i + 1; }
+            e.kind = EKind.EStructLit(tw_name(tw, name), fields);
+        },
+        // `Tipo.Variante`: si la cabeza es un identificador-tipo, se reescribe; un valor (`p.x`) no casa
+        // con ningún tipo, así que `tw_name` lo deja igual.
+        EKind.EField(obj, fname) => {
+            match (obj.kind) {
+                EKind.EIdent(tn) => { obj.kind = EKind.EIdent(tw_name(tw, tn)); },
+                _ => tw_expr(tw, obj),
+            }
+        },
+        EKind.ECall(callee, cargs) => {
+            tw_expr(tw, callee);
+            var i = 0;
+            while (i < len(cargs)) { tw_expr(tw, cargs[i]); i = i + 1; }
+        },
+        EKind.EMatch(scrut, arms) => {
+            tw_expr(tw, scrut);
+            var i = 0;
+            while (i < len(arms)) {
+                match (arms[i].pat.kind) {
+                    PKind.PVariant(en, va, binds) => { arms[i].pat.kind = PKind.PVariant(tw_name(tw, en), va, binds); },
+                    _ => {},
+                }
+                tw_expr(tw, arms[i].body);
+                i = i + 1;
+            }
+        },
+        EKind.EUnary(_, inner) => tw_expr(tw, inner),
+        EKind.EBinary(_, l, rr) => { tw_expr(tw, l); tw_expr(tw, rr); },
+        EKind.EIndex(arr, idx) => { tw_expr(tw, arr); tw_expr(tw, idx); },
+        EKind.EArray(elems) => { var i = 0; while (i < len(elems)) { tw_expr(tw, elems[i]); i = i + 1; } },
+        EKind.EFunc(fe) => tw_fn_expr(tw, fe),
+        EKind.ETry(inner) => tw_expr(tw, inner),
+        EKind.EIf(cond, then_b, elseopt) => {
+            tw_expr(tw, cond);
+            tw_block(tw, then_b);
+            match (elseopt) { Option.Some(els) => tw_expr(tw, els), Option.None => {} }
+        },
+        EKind.EWhile(cond, body) => { tw_expr(tw, cond); tw_block(tw, body); },
+        EKind.EBlock(b) => tw_block(tw, b),
+        _ => {},
+    }
+}
+
+fn tw_fn_expr(tw: TypeRewriter, fe: FnExpr) {
+    var i = 0;
+    while (i < len(fe.params)) { fe.params[i].ty = tw_type(tw, fe.params[i].ty); i = i + 1; }
+    fe.ret = tw_type(tw, fe.ret);
+    tw_block(tw, fe.body);
+}
+
+// =====================================================================
 // Fase 4: renombrar definiciones de función a su global y fusionar
 // =====================================================================
 
@@ -377,9 +649,17 @@ pub fn load(entry_path: string) -> Result<Program, LoadError> {
     var mi = 0;
     while (mi < len(modules)) {
         let m = modules[mi];
-        let from_values = clasificar_from_values(m, surfaces)?;
-        let r = Resolver { own: build_own(m, from_values), scopes: [] };
+        let fm = clasificar_from(m, surfaces)?;
+        // Resolución de VALORES (funciones propias + from-importadas).
+        let r = Resolver { own: build_own(m, fm.values), scopes: [] };
         resolve_program(r, m.prog);
+        // Namespacing de TIPOS: renombrar las definiciones propias y reescribir todas las referencias
+        // (propias + from-importadas).
+        let own_types = build_own_types(m);
+        rename_type_defs(m.prog, own_types);
+        let tw = TypeRewriter { types: merge_maps(own_types, fm.types), tparams: [] };
+        tw_program(tw, m.prog);
+        // Renombrar definiciones de función y fusionar.
         rename_and_merge(m, fused);
         mi = mi + 1;
     }

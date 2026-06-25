@@ -522,6 +522,47 @@ fn modulos_funciones() {
 }
 
 #[test]
+fn modulos_tipos() {
+    // M14.7b: cruce de TIPOS — struct + enum (con construcción de variante y match) entre módulos.
+    comparar_modulos(
+        "rl_m7b_datos",
+        &[
+            ("geo.ray", "pub struct Punto { x: int, y: int }\n\
+                pub enum Forma { Circulo(int), Rect(int, int) }\n\
+                pub fn area(f: Forma) -> int { match (f) { Forma.Circulo(r) => 3 * r * r, Forma.Rect(a, b) => a * b } }\n\
+                pub fn dist_sq(p: Punto) -> int { p.x * p.x + p.y * p.y }\n"),
+            ("main.ray", "from geo import Punto, Forma, area, dist_sq;\n\
+                fn main() -> int { let p = Punto { x: 3, y: 4 }; print(dist_sq(p)); print(area(Forma.Circulo(2))); print(area(Forma.Rect(3, 5))); 0 }\n"),
+        ],
+        "main.ray",
+    );
+    // Cruce de trait + impl + struct genérico + dyn entre módulos.
+    comparar_modulos(
+        "rl_m7b_traits",
+        &[
+            ("shapes.ray", "pub trait Medible { fn medir(self) -> int; }\n\
+                pub struct Caja<T> { valor: T, etiqueta: int }\n\
+                pub struct Cuadrado { lado: int }\n\
+                impl Medible for Cuadrado { fn medir(self) -> int { self.lado * self.lado } }\n\
+                pub fn envolver(v: int) -> Caja<int> { Caja { valor: v, etiqueta: 0 } }\n"),
+            ("main.ray", "from shapes import Medible, Caja, Cuadrado, envolver;\n\
+                fn describir(m: dyn Medible) -> int { m.medir() }\n\
+                fn main() -> int { let c = Cuadrado { lado: 5 }; print(c.medir()); print(describir(c)); let b: Caja<int> = envolver(42); print(b.valor); 0 }\n"),
+        ],
+        "main.ray",
+    );
+    // Alias de TIPO en el from-import.
+    comparar_modulos(
+        "rl_m7b_alias",
+        &[
+            ("color.ray", "pub enum Color { Rojo, Verde, Azul }\npub fn code(c: Color) -> int { match (c) { Color.Rojo => 1, Color.Verde => 2, Color.Azul => 3 } }\n"),
+            ("main.ray", "from color import Color as C, code;\nfn main() -> int { let x: C = C.Verde; print(code(x)); 0 }\n"),
+        ],
+        "main.ray",
+    );
+}
+
+#[test]
 fn codigo_de_salida() {
     // El código de salida del runner es el int que devuelve main (0 si es unit).
     comparar_fuente("fn main() -> int { 42 }", "in_exit42.ray");

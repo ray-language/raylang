@@ -954,6 +954,17 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       alias, shadowing, cadena A→B→C, función-como-valor. Pendiente: M14.7b (tipos: TypeRewriter +
       namespacing + `from M import Tipo` → desbloquea módulos reales), M14.7c (correr el compilador +
       `args()` consistente).
+    - **M14.7b COMPLETO** (347 lib + 25 en `tests/selfhost_interpreter.rs`): cruce de **tipos** (desbloquea
+      los módulos reales, que cruzan `Type`/`Expr`/…). (1) `Surface` gana `types` (`build_surfaces` la puebla
+      con struct/enum/trait `pub`); (2) `clasificar_from` reparte cada `from M import X` en valor (función)
+      o tipo, validando `pub`; (3) el **`TypeRewriter`**: `rename_type_defs` renombra defs propias a
+      `modulo::Tipo`, y `tw_program` reescribe TODAS las referencias —posiciones de tipo (anotaciones/campos/
+      payloads/target+trait de impl/bounds/dyn/args genéricos) y expresiones que nombran tipos (struct lit,
+      construcción de enum `Tipo.Variante` como `Field`/`Call`, patrones)— consciente de los `tparams` en
+      ámbito (`T` no se reescribe). El parser emite `TNamed` para todo (incl. `Map`/`T`); `tw_name` deja los
+      no encontrados igual → cubre ambos sin caso especial. Sin `import M;` calificado → el caso `M.Tipo` no
+      hace falta. Oráculo: cruce de struct+enum (construcción+match), trait+impl+genérico+dyn, alias de tipo.
+      Pendiente: M14.7c (correr el compilador de punta a punta + `args()` consistente).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

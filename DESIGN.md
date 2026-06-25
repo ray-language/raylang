@@ -2924,3 +2924,18 @@ para programas válidos las posiciones son irrelevantes al comportamiento—.
   función-importada-como-valor (a `map`) → mismo stdout + exit que Rust. Pendiente: M14.7b (cruce de
   **tipos**: namespacing de defs + TypeRewriter + `from M import Tipo`) → desbloquea los módulos reales;
   M14.7c (correr el compilador auto-alojado + consistencia de `args()`).
+- **M14.7b COMPLETO** — el cruce de **tipos** (desbloquea los módulos reales del compilador, que se
+  importan `Type`/`Expr`/… entre sí). Tres piezas, port de Rust: (1) **superficie de tipos** —`Surface`
+  gana `types` y `build_surfaces` la puebla con los struct/enum/trait `pub`—; (2) `clasificar_from`
+  clasifica cada `from M import X` en **valor** (función → mapa del Resolver) o **tipo** (→ mapa del
+  TypeRewriter), validando `pub`; (3) el **`TypeRewriter`**: `rename_type_defs` renombra las
+  definiciones de tipo propias a `modulo::Tipo`, y `tw_program` **reescribe todas las referencias** —en
+  posiciones de tipo (anotaciones, campos, payloads, target/trait de `impl`, bounds, `dyn`, args de
+  genérico) y en expresiones que **nombran** tipos (literal de struct, construcción de enum `Tipo.Variante`
+  que llega como `Field`/`Call`, patrones `match`)— *consciente de los parámetros de tipo en ámbito* (un
+  `T` en `<T>` no se reescribe; pila `tparams`). El parser auto-alojado emite `TNamed` para todo
+  identificador-tipo (incl. `Map`/`T`); `tw_name` deja los no encontrados igual, así que cubre ambos sin
+  caso especial. Sin `import M;` calificado → el caso `M.Tipo` del Rewriter de Rust no hace falta. Oráculo
+  conductual: cruce de **struct + enum** (construcción de variante + `match`), de **trait + impl + struct
+  genérico + `dyn`**, y **alias de tipo** en el from-import → mismo stdout + exit que Rust. Pendiente:
+  M14.7c (correr el compilador auto-alojado de punta a punta + consistencia de `args()`).

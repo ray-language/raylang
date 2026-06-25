@@ -937,6 +937,23 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       propósito**: `args()` (diverge: el self-hosted ve el path de `run.ray` como `argv[0]`), stdin/env (no
       deterministas), handles/remove_file/list_dir (no los usa el compilador). Bloqueo restante para la
       meta-circularidad: **solo carga de módulos**.
+  - **M14.7 — el loader auto-alojado** (carga de módulos; último bloqueo de la meta-circularidad).
+    `selfhost/loader.ray` (cliente host-side como `run.ray`) **aplana** la entrada + sus `from`-imports
+    transitivos en un `Program` plano. Port recortado de `src/loader.rs`. **Simplificaciones**: solo `from M
+    import …` (sin `import M;` calificado/directorios/cápsulas/reexports), y **sin position-shifting** (el
+    checker auto-alojado no baja por posición, el intérprete despacha por etiqueta → posiciones irrelevantes
+    al comportamiento de programas válidos).
+    - **M14.7a COMPLETO** (347 lib + 24 en `tests/selfhost_interpreter.rs`): máquina de carga + cruce de
+      **funciones**. `load(entry) -> Result<Program, LoadError>`: **BFS** de `from`-imports (`read_file` +
+      lex + parse, ciclos seguros con `visited`; ruta = `dir(entry)/dep.ray`); por módulo: `build_surfaces`
+      (función `pub` → `modulo::fn`), `clasificar_from_values` (valida `pub`), el **`Resolver`** (reescribe
+      `EIdent` → global, consciente de ámbitos: local/param/binding tapa a la función top-level), y
+      **renombrar defs + fusionar**. `run.ray` usa `load(argv[0])` (y para el prelude); archivo único = sin
+      from-imports → loader **identidad** (cero regresión). Tipos fusionados SIN namespacar aún (→ M14.7b).
+      Mutación in-place del AST apoyada en la **semántica de referencia del host**. Oráculo: 2 archivos,
+      alias, shadowing, cadena A→B→C, función-como-valor. Pendiente: M14.7b (tipos: TypeRewriter +
+      namespacing + `from M import Tipo` → desbloquea módulos reales), M14.7c (correr el compilador +
+      `args()` consistente).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

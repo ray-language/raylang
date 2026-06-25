@@ -467,6 +467,60 @@ fn io_de_archivos() {
     );
 }
 
+/// Compara los dos pipelines sobre un programa MULTI-archivo (M14.7): escribe cada (nombre, fuente)
+/// como un archivo en un subdirectorio temporal y corre `entry` por ambos pipelines. El loader resuelve
+/// los `import`/`from` relativos al directorio del archivo de entrada.
+fn comparar_modulos(dir: &str, archivos: &[(&str, &str)], entry: &str) {
+    let mut base = std::env::temp_dir();
+    base.push(dir);
+    std::fs::create_dir_all(&base).expect("crea el directorio temporal");
+    for (nombre, src) in archivos {
+        let mut ruta = base.clone();
+        ruta.push(nombre);
+        let mut f = std::fs::File::create(&ruta).expect("crea el módulo temporal");
+        f.write_all(src.as_bytes()).expect("escribe el módulo temporal");
+    }
+    let mut ep = base.clone();
+    ep.push(entry);
+    let abs = ep.to_str().expect("ruta utf-8");
+    let (so_r, code_r) = correr_rust(abs);
+    let (so_s, code_s) = correr_selfhost(abs);
+    assert_eq!(so_s, so_r, "stdout difiere en módulos {dir}/{entry}");
+    assert_eq!(code_s, code_r, "código de salida difiere en módulos {dir}/{entry}");
+}
+
+#[test]
+fn modulos_funciones() {
+    // M14.7a: cruce de FUNCIONES entre módulos vía `from M import …` (sin tipos todavía).
+    comparar_modulos(
+        "rl_m7a_basico",
+        &[
+            ("helper.ray", "pub fn doble(x: int) -> int { x * 2 }\npub fn cuadrado(x: int) -> int { x * x }\n"),
+            ("main.ray", "from helper import doble, cuadrado;\nfn main() -> int { print(doble(21)); print(cuadrado(5)); 0 }\n"),
+        ],
+        "main.ray",
+    );
+    // Alias en el from-import + una local que TAPA a la función importada (el Resolver no la reescribe).
+    comparar_modulos(
+        "rl_m7a_alias",
+        &[
+            ("util.ray", "pub fn inc(x: int) -> int { x + 1 }\n"),
+            ("main.ray", "from util import inc as mas1;\nfn main() -> int { print(mas1(10)); let inc = 99; print(inc); 0 }\n"),
+        ],
+        "main.ray",
+    );
+    // Cadena transitiva A->B->C + uso de una función importada como VALOR (a map del prelude).
+    comparar_modulos(
+        "rl_m7a_cadena",
+        &[
+            ("c.ray", "pub fn triple(x: int) -> int { x * 3 }\n"),
+            ("b.ray", "from c import triple;\npub fn aplica(x: int) -> int { triple(x) + 1 }\n"),
+            ("main.ray", "from b import aplica;\nfn main() -> int { let xs = [1, 2, 3]; print(xs.map(aplica)); 0 }\n"),
+        ],
+        "main.ray",
+    );
+}
+
 #[test]
 fn codigo_de_salida() {
     // El código de salida del runner es el int que devuelve main (0 si es unit).

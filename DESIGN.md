@@ -2896,3 +2896,31 @@ diferido aditivo (fila en el checker + impl en el intérprete, como M11.4).
   `remove_file`/`list_dir`/`append_file` quedan fuera del alcance (no los usa el compilador). Con esto la
   stdlib de archivos que el compilador necesita (`read_file`) está cubierta; el bloqueo restante para la
   meta-circularidad es **solo la carga de módulos**.
+
+#### M14.7 — el loader auto-alojado (carga de módulos)
+
+El último bloqueo para la meta-circularidad: el pipeline auto-alojado procesaba **un solo archivo**, pero
+los drivers y módulos del compilador se reparten en varios (`from lexer import …`, `from parser import …`).
+`selfhost/loader.ray` (cliente host-side como `run.ray`) **aplana** la entrada y sus dependencias
+transitivas en un único `Program` plano, que el checker/intérprete auto-alojados ya saben procesar. Port
+recortado de `src/loader.rs`. **Dos simplificaciones frente a Rust**: (1) el self-hosting solo usa `from M
+import …` (sin `import M;`/acceso calificado, sin directorios/cápsulas/reexports), y (2) **no hace falta el
+position-shifting** —Rust desplaza cada módulo a una banda de líneas disjunta porque su checker baja por
+posición (M9), pero el checker auto-alojado es un VALIDADOR y el intérprete despacha por etiqueta de valor:
+para programas válidos las posiciones son irrelevantes al comportamiento—.
+- **M14.7a COMPLETO** — la máquina de carga + cruce de **funciones**. `load(entry) -> Result<Program,
+  LoadError>`: **BFS** sobre los `from`-imports (lee con `read_file`, lexea+parsea cada módulo una vez,
+  ciclos seguros con un mapa `visited`; ruta = `dir(entry)/dep.ray`). Luego, por módulo: **superficie
+  pública** (`build_surfaces`: función `pub` → global `modulo::fn`), clasificación de los `from M import
+  <fn>` (`clasificar_from_values` → mapa local→global, valida `pub`), el **`Resolver`** (reescribe las
+  referencias `EIdent` a su nombre global —propias e importadas—, *consciente de ámbitos*: una local/param/
+  binding de `match` tapa a una función de nivel superior; pila `scopes`), y por fin **renombrar** las
+  definiciones de función a su global y **fusionar** en el `Program` plano. `run.ray` pasa a usar
+  `load(argv[0])` (también para el prelude); un archivo único no tiene `from`-imports → el loader es
+  **identidad** (cero regresión). Los **tipos** se fusionan aún SIN namespacar (su cruce → M14.7b). La
+  mutación in-place del AST se apoya en la **semántica de referencia del host** (los nodos `Expr`/`Func`
+  son structs compartidos, como en el intérprete). Oráculo conductual: cruce de funciones entre 2 archivos,
+  **alias** en el from-import, **shadowing** local que tapa la importada, **cadena transitiva** A→B→C y
+  función-importada-como-valor (a `map`) → mismo stdout + exit que Rust. Pendiente: M14.7b (cruce de
+  **tipos**: namespacing de defs + TypeRewriter + `from M import Tipo`) → desbloquea los módulos reales;
+  M14.7c (correr el compilador auto-alojado + consistencia de `args()`).

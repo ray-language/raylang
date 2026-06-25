@@ -8,8 +8,8 @@
 // El test `tests/selfhost_interpreter.rs` compara, para cada `.ray`, el stdout + el código de salida de
 // este driver contra los del runner de Rust (el ORÁCULO conductual; ver DESIGN §23.5).
 
-from lexer import lex, LexError;
-from parser import parse, Func, Program, ParseError;
+from loader import load, LoadError;
+from parser import Func, Program;
 from checker import check, TypeError;
 from interpreter import run, Value, RuntimeError;
 
@@ -44,22 +44,12 @@ fn add_prelude(prelude: Program, user: Program) {
     user.funcs = extra + user.funcs;
 }
 
-// Carga y parsea `selfhost/prelude.ray` (relativo a la raíz del repo). Es un archivo NUESTRO; si falla
-// al leer/lexear/parsear es un bug, así que aborta con `panic`.
+// Carga el prelude (`selfhost/prelude.ray`, relativo a la raíz del repo) vía el loader. Es un archivo
+// NUESTRO sin imports → el loader lo devuelve tal cual; si falla es un bug, así que aborta con `panic`.
 fn load_prelude() -> Program {
-    match (read_file("selfhost/prelude.ray")) {
-        Result.Ok(src) => {
-            match (lex(src)) {
-                Result.Ok(toks) => {
-                    match (parse(toks)) {
-                        Result.Ok(p) => p,
-                        Result.Err(e) => panic("prelude: error de sintaxis: " + e.msg),
-                    }
-                },
-                Result.Err(e) => panic("prelude: error léxico: " + e.msg),
-            }
-        },
-        Result.Err(_) => panic("no se pudo leer selfhost/prelude.ray (ejecuta desde la raíz del repo)"),
+    match (load("selfhost/prelude.ray")) {
+        Result.Ok(p) => p,
+        Result.Err(e) => panic("no se pudo cargar selfhost/prelude.ray: " + e.msg),
     }
 }
 
@@ -69,44 +59,29 @@ fn main() -> int {
         eprint("uso: raylang selfhost/run.ray <archivo>");
         return 1;
     }
-    match (read_file(argv[0])) {
-        Result.Ok(src) => {
-            match (lex(src)) {
-                Result.Ok(toks) => {
-                    match (parse(toks)) {
-                        Result.Ok(prog) => {
-                            add_prelude(load_prelude(), prog); // fusiona map/filter/fold del prelude
-                            match (check(prog)) {
-                                Result.Ok(_) => {
-                                    match (run(prog)) {
-                                        Result.Ok(v) => exit_code(v),
-                                        Result.Err(re) => {
-                                            eprint("error en ejecución en " + to_string(re.line) + ":" + to_string(re.col) + ": " + re.msg);
-                                            70
-                                        },
-                                    }
-                                },
-                                Result.Err(te) => {
-                                    eprint("error de tipos en " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
-                                    65
-                                },
-                            }
-                        },
-                        Result.Err(pe) => {
-                            eprint("error de sintaxis en " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
-                            65
+    // M14.7: el loader aplana el programa (entrada + sus `import`/`from` transitivos) en un Program plano.
+    match (load(argv[0])) {
+        Result.Ok(prog) => {
+            add_prelude(load_prelude(), prog); // fusiona map/filter/fold/... del prelude
+            match (check(prog)) {
+                Result.Ok(_) => {
+                    match (run(prog)) {
+                        Result.Ok(v) => exit_code(v),
+                        Result.Err(re) => {
+                            eprint("error en ejecución en " + to_string(re.line) + ":" + to_string(re.col) + ": " + re.msg);
+                            70
                         },
                     }
                 },
-                Result.Err(le) => {
-                    eprint("error léxico en " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg);
+                Result.Err(te) => {
+                    eprint("error de tipos en " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
                     65
                 },
             }
         },
-        Result.Err(msg) => {
-            eprint(msg);
-            66
+        Result.Err(le) => {
+            eprint("[" + le.module + "] error de carga en " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg);
+            65
         },
     }
 }

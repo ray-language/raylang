@@ -1,0 +1,387 @@
+// El *loader* auto-alojado (M14.7): aplana un programa multi-archivo en un único `Program` plano para
+// que el checker y el intérprete auto-alojados —que procesan UN programa— vean todo junto. Cliente
+// host-side, como `run.ray`: usa `read_file` (M14.6d) + el lexer/parser auto-alojados.
+//
+// Port recortado de `src/loader.rs`. El caso del self-hosting solo usa `from M import …;` (funciones Y
+// tipos), sin `import M;`/acceso calificado, sin directorios/cápsulas, sin reexports. Y una
+// SIMPLIFICACIÓN clave frente a Rust: el checker auto-alojado es un VALIDADOR (no baja por posición) y
+// el intérprete despacha por etiqueta de valor, así que **NO hace falta el position-shifting** (bandas
+// de líneas disjuntas) que Rust necesita para el lowering de M9. Para programas válidos (lo que
+// ejecutamos) las posiciones son irrelevantes al comportamiento.
+//
+// M14.7a: la máquina de carga (BFS de dependencias) + el cruce de **funciones** (el `Resolver`:
+// namespacing `modulo::fn` + reescritura de referencias). El cruce de **tipos** (TypeRewriter) → M14.7b.
+
+from lexer import lex, LexError;
+from parser import parse, ParseError, Program, Func, Block, Stmt, SKind, Expr, EKind, Pattern, PKind, FnExpr;
+
+// Error de carga: mensaje + ubicación + módulo donde ocurrió (espejo recortado del de Rust).
+pub struct LoadError { msg: string, line: int, col: int, module: string }
+
+// Un módulo ya cargado y parseado. `is_entry` distingue el de entrada (sus nombres no se namespacan).
+struct Module { name: string, is_entry: bool, prog: Program }
+
+// Una entrada pendiente en el BFS: el nombre del módulo, su ruta de archivo y si es el de entrada.
+struct PendingMod { name: string, path: string, is_entry: bool }
+
+// La superficie pública de un módulo (M14.7a: solo valores/funciones; los tipos llegan en M14.7b).
+struct Surface { values: Map<string, string> }
+
+// El resolutor de **valores**: `own` mapea nombre local → nombre global (`modulo::fn`) de las funciones
+// visibles sin calificar (propias + `from`-importadas); `scopes` es la pila de ámbitos locales (un
+// nombre local tapa a una función de nivel superior). Reescribe las referencias `EIdent` en los cuerpos.
+struct Resolver { own: Map<string, string>, scopes: [[string]] }
+
+// =====================================================================
+// Helpers de strings (rutas) y de listas
+// =====================================================================
+
+fn no_strs() -> [string] { [] }
+
+fn contains_str(xs: [string], s: string) -> bool {
+    var i = 0;
+    while (i < len(xs)) {
+        if (xs[i] == s) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// El índice del último '/' en `s`, o -1 si no hay (para separar directorio y base de una ruta).
+fn last_slash(s: string) -> int {
+    let cs = chars(s);
+    var idx = 0 - 1;
+    var i = 0;
+    while (i < len(cs)) {
+        if (cs[i] == '/') { idx = i; }
+        i = i + 1;
+    }
+    idx
+}
+
+// El directorio de una ruta (`/tmp/a.ray` → `/tmp`); `.` si la ruta no tiene '/'.
+fn dir_of(path: string) -> string {
+    let idx = last_slash(path);
+    if (idx < 0) { "." } else { substring(path, 0, idx) }
+}
+
+// El nombre base (`/tmp/a.ray` → `a.ray`).
+fn base_of(path: string) -> string {
+    let idx = last_slash(path);
+    if (idx < 0) { path } else { substring(path, idx + 1, len(path)) }
+}
+
+// El *stem* de una ruta (`/tmp/a.ray` → `a`): la base sin la extensión `.ray`.
+fn stem_of(path: string) -> string {
+    let b = base_of(path);
+    if (ends_with(b, ".ray")) { substring(b, 0, len(b) - 4) } else { b }
+}
+
+// El prefijo de namespacing de un módulo (M11.5): `/`→`::`. Sin directorios (self-hosting) es identidad.
+fn ns_prefix(name: string) -> string { replace(name, "/", "::") }
+
+// El nombre global de una función/tipo: el propio nombre para el de entrada, `modulo::nombre` para uno
+// importado (sus nombres se namespacan; `::` es ilegal en identificadores → nunca chocan con los suyos).
+fn global_of(m: Module, name: string) -> string {
+    if (m.is_entry) { name } else { ns_prefix(m.name) + "::" + name }
+}
+
+// El nombre LOCAL con el que entra un `from`-import: el alias si lo hay, o el nombre original.
+fn local_of_alias(alias: Option<string>, name: string) -> string {
+    match (alias) { Option.Some(a) => a, Option.None => name }
+}
+
+// =====================================================================
+// Fase 1: BFS — cargar y parsear cada módulo una vez (ciclos seguros)
+// =====================================================================
+
+// Lee + lexea + parsea un módulo; traduce los errores a LoadError con el nombre del módulo.
+fn load_one(name: string, path: string) -> Result<Program, LoadError> {
+    match (read_file(path)) {
+        Result.Ok(src) => {
+            match (lex(src)) {
+                Result.Ok(toks) => {
+                    match (parse(toks)) {
+                        Result.Ok(p) => Result.Ok(p),
+                        Result.Err(pe) => Result.Err(LoadError { msg: pe.msg, line: pe.line, col: pe.col, module: name }),
+                    }
+                },
+                Result.Err(le) => Result.Err(LoadError { msg: le.msg, line: le.line, col: le.col, module: name }),
+            }
+        },
+        Result.Err(_) => Result.Err(LoadError { msg: "no se pudo leer el módulo '" + name + "' (" + path + ")", line: 0, col: 0, module: name }),
+    }
+}
+
+// =====================================================================
+// Fase 2: superficies públicas (nombre pub → global)
+// =====================================================================
+
+fn build_surfaces(modules: [Module]) -> Map<string, Surface> {
+    var surfaces: Map<string, Surface> = map_new();
+    var i = 0;
+    while (i < len(modules)) {
+        let m = modules[i];
+        var vals: Map<string, string> = map_new();
+        var fi = 0;
+        while (fi < len(m.prog.funcs)) {
+            let f = m.prog.funcs[fi];
+            if (f.is_pub) { insert(vals, f.name, global_of(m, f.name)); }
+            fi = fi + 1;
+        }
+        insert(surfaces, m.name, Surface { values: vals });
+        i = i + 1;
+    }
+    surfaces
+}
+
+// Clasifica los `from M import a [as b]` de un módulo en un mapa local → global de **funciones** `pub`.
+// (M14.7a: si un nombre no es una función exportada, error; el cruce de TIPOS llega en M14.7b.)
+fn clasificar_from_values(m: Module, surfaces: Map<string, Surface>) -> Result<Map<string, string>, LoadError> {
+    var values: Map<string, string> = map_new();
+    var i = 0;
+    while (i < len(m.prog.from_imports)) {
+        let fi = m.prog.from_imports[i];
+        var j = 0;
+        while (j < len(fi.names)) {
+            let n = fi.names[j];
+            let local = local_of_alias(n.alias, n.name);
+            match (get(surfaces, fi.module)) {
+                Option.Some(surf) => {
+                    match (get(surf.values, n.name)) {
+                        Option.Some(g) => { insert(values, local, g); },
+                        Option.None => {
+                            return Result.Err(LoadError { msg: "el módulo '" + fi.module + "' no exporta la función '" + n.name + "' (¿falta 'pub'? los tipos llegan en M14.7b)", line: n.line, col: n.col, module: m.name });
+                        },
+                    }
+                },
+                Option.None => {
+                    return Result.Err(LoadError { msg: "módulo no encontrado: '" + fi.module + "'", line: n.line, col: n.col, module: m.name });
+                },
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    Result.Ok(values)
+}
+
+// =====================================================================
+// Fase 3: el Resolver — reescribir referencias de valor a nombres globales
+// =====================================================================
+
+// El mapa `own`: funciones propias del módulo (local → global) + las `from`-importadas.
+fn build_own(m: Module, from_values: Map<string, string>) -> Map<string, string> {
+    var own: Map<string, string> = map_new();
+    var i = 0;
+    while (i < len(m.prog.funcs)) {
+        let f = m.prog.funcs[i];
+        insert(own, f.name, global_of(m, f.name));
+        i = i + 1;
+    }
+    let ks = keys(from_values);
+    var j = 0;
+    while (j < len(ks)) {
+        match (get(from_values, ks[j])) { Option.Some(g) => { insert(own, ks[j], g); }, Option.None => {} }
+        j = j + 1;
+    }
+    own
+}
+
+fn rs_is_local(r: Resolver, name: string) -> bool {
+    var i = 0;
+    while (i < len(r.scopes)) {
+        if (contains_str(r.scopes[i], name)) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn rs_declare(r: Resolver, name: string) {
+    if (len(r.scopes) > 0) { push(r.scopes[len(r.scopes) - 1], name); }
+}
+
+fn rs_push(r: Resolver) { push(r.scopes, no_strs()); }
+
+fn rs_pop(r: Resolver) { pop(r.scopes); }
+
+fn resolve_program(r: Resolver, prog: Program) {
+    var i = 0;
+    while (i < len(prog.funcs)) { resolve_fn(r, prog.funcs[i]); i = i + 1; }
+    var j = 0;
+    while (j < len(prog.impls)) {
+        let imp = prog.impls[j];
+        var k = 0;
+        while (k < len(imp.methods)) { resolve_fn(r, imp.methods[k]); k = k + 1; }
+        j = j + 1;
+    }
+}
+
+fn resolve_fn(r: Resolver, f: Func) {
+    rs_push(r);
+    var i = 0;
+    while (i < len(f.params)) { rs_declare(r, f.params[i].name); i = i + 1; }
+    resolve_block(r, f.body);
+    rs_pop(r);
+}
+
+fn resolve_block(r: Resolver, b: Block) {
+    rs_push(r);
+    var i = 0;
+    while (i < len(b.stmts)) { resolve_stmt(r, b.stmts[i]); i = i + 1; }
+    match (b.tail) { Option.Some(t) => resolve_expr(r, t), Option.None => {} }
+    rs_pop(r);
+}
+
+fn resolve_stmt(r: Resolver, s: Stmt) {
+    match (s.kind) {
+        SKind.SLet(name, _, value, _) => { resolve_expr(r, value); rs_declare(r, name); },
+        SKind.SAssign(target, value) => { resolve_expr(r, target); resolve_expr(r, value); },
+        SKind.SReturn(opt) => { match (opt) { Option.Some(v) => resolve_expr(r, v), Option.None => {} } },
+        SKind.SExpr(e) => resolve_expr(r, e),
+    }
+}
+
+fn resolve_expr(r: Resolver, e: Expr) {
+    match (e.kind) {
+        // Una referencia a una función propia/importada (no tapada por una local) se reescribe a su
+        // nombre global; lo demás (builtin/prelude/local) lo deja el checker.
+        EKind.EIdent(name) => {
+            if (!rs_is_local(r, name)) {
+                match (get(r.own, name)) {
+                    Option.Some(g) => { e.kind = EKind.EIdent(g); },
+                    Option.None => {},
+                }
+            }
+        },
+        EKind.ECall(callee, cargs) => {
+            resolve_expr(r, callee);
+            var i = 0;
+            while (i < len(cargs)) { resolve_expr(r, cargs[i]); i = i + 1; }
+        },
+        EKind.EUnary(_, inner) => resolve_expr(r, inner),
+        EKind.EBinary(_, l, rr) => { resolve_expr(r, l); resolve_expr(r, rr); },
+        EKind.EIndex(arr, idx) => { resolve_expr(r, arr); resolve_expr(r, idx); },
+        // `obj.campo`: solo se resuelve el objeto (el nombre del campo/método no es una referencia).
+        EKind.EField(obj, _) => resolve_expr(r, obj),
+        EKind.EArray(elems) => { var i = 0; while (i < len(elems)) { resolve_expr(r, elems[i]); i = i + 1; } },
+        EKind.EStructLit(_, fields) => { var i = 0; while (i < len(fields)) { resolve_expr(r, fields[i].value); i = i + 1; } },
+        EKind.EFunc(fe) => resolve_fn_expr(r, fe),
+        EKind.EMatch(scrut, arms) => {
+            resolve_expr(r, scrut);
+            var i = 0;
+            while (i < len(arms)) {
+                rs_push(r);
+                declare_pattern(r, arms[i].pat);
+                resolve_expr(r, arms[i].body);
+                rs_pop(r);
+                i = i + 1;
+            }
+        },
+        EKind.ETry(inner) => resolve_expr(r, inner),
+        EKind.EIf(cond, then_b, elseopt) => {
+            resolve_expr(r, cond);
+            resolve_block(r, then_b);
+            match (elseopt) { Option.Some(els) => resolve_expr(r, els), Option.None => {} }
+        },
+        EKind.EWhile(cond, body) => { resolve_expr(r, cond); resolve_block(r, body); },
+        EKind.EBlock(b) => resolve_block(r, b),
+        _ => {},
+    }
+}
+
+// Los nombres que liga un patrón (entran en el ámbito del cuerpo del brazo).
+fn declare_pattern(r: Resolver, p: Pattern) {
+    match (p.kind) {
+        PKind.PWild => {},
+        PKind.PBind(n) => rs_declare(r, n),
+        PKind.PVariant(_, _, binds) => {
+            var i = 0;
+            while (i < len(binds)) {
+                match (binds[i]) { Option.Some(b) => rs_declare(r, b), Option.None => {} }
+                i = i + 1;
+            }
+        },
+    }
+}
+
+fn resolve_fn_expr(r: Resolver, fe: FnExpr) {
+    rs_push(r);
+    var i = 0;
+    while (i < len(fe.params)) { rs_declare(r, fe.params[i].name); i = i + 1; }
+    resolve_block(r, fe.body);
+    rs_pop(r);
+}
+
+// =====================================================================
+// Fase 4: renombrar definiciones de función a su global y fusionar
+// =====================================================================
+
+fn rename_and_merge(m: Module, fused: Program) {
+    var i = 0;
+    while (i < len(m.prog.funcs)) {
+        let f = m.prog.funcs[i];
+        f.name = global_of(m, f.name);
+        push(fused.funcs, f);
+        i = i + 1;
+    }
+    // M14.7a: los tipos (struct/enum/trait/impl) se fusionan SIN namespacar (el cruce de tipos → M14.7b).
+    var si = 0;
+    while (si < len(m.prog.structs)) { push(fused.structs, m.prog.structs[si]); si = si + 1; }
+    var ei = 0;
+    while (ei < len(m.prog.enums)) { push(fused.enums, m.prog.enums[ei]); ei = ei + 1; }
+    var ti = 0;
+    while (ti < len(m.prog.traits)) { push(fused.traits, m.prog.traits[ti]); ti = ti + 1; }
+    var ii = 0;
+    while (ii < len(m.prog.impls)) { push(fused.impls, m.prog.impls[ii]); ii = ii + 1; }
+}
+
+// =====================================================================
+// Punto de entrada
+// =====================================================================
+
+pub fn load(entry_path: string) -> Result<Program, LoadError> {
+    let root = dir_of(entry_path);
+    let entry_name = stem_of(entry_path);
+
+    // Fase 1: BFS sobre los `from M import …` (y los `import M;`, no usados en el self-hosting).
+    var modules: [Module] = [];
+    var visited: Map<string, bool> = map_new();
+    var pending: [PendingMod] = [PendingMod { name: entry_name, path: entry_path, is_entry: true }];
+    var head = 0;
+    while (head < len(pending)) {
+        let pm = pending[head];
+        head = head + 1;
+        if (!contains_key(visited, pm.name)) {
+            insert(visited, pm.name, true);
+            let prog = load_one(pm.name, pm.path)?;
+            var di = 0;
+            while (di < len(prog.from_imports)) {
+                let dep = prog.from_imports[di].module;
+                push(pending, PendingMod { name: dep, path: root + "/" + dep + ".ray", is_entry: false });
+                di = di + 1;
+            }
+            var ii = 0;
+            while (ii < len(prog.imports)) {
+                let dep = prog.imports[ii].module;
+                push(pending, PendingMod { name: dep, path: root + "/" + dep + ".ray", is_entry: false });
+                ii = ii + 1;
+            }
+            push(modules, Module { name: pm.name, is_entry: pm.is_entry, prog: prog });
+        }
+    }
+
+    // Fases 2-4: superficies, resolución por módulo y fusión.
+    let surfaces = build_surfaces(modules);
+    var fused = Program { funcs: [], structs: [], enums: [], traits: [], impls: [], imports: [], from_imports: [] };
+    var mi = 0;
+    while (mi < len(modules)) {
+        let m = modules[mi];
+        let from_values = clasificar_from_values(m, surfaces)?;
+        let r = Resolver { own: build_own(m, from_values), scopes: [] };
+        resolve_program(r, m.prog);
+        rename_and_merge(m, fused);
+        mi = mi + 1;
+    }
+    Result.Ok(fused)
+}

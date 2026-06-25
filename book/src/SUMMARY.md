@@ -108,3 +108,7 @@
 - [El intérprete auto-alojado](m14/interprete.md)
 - [El loader: juntar módulos](m14/loader.md)
 - [Meta-circularidad](m14/meta-circularidad.md)
+
+# Optimización de la VM
+
+- [Medir, cambiar, a veces revertir](opt/intro.md)

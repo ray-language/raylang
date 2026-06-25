@@ -302,6 +302,14 @@ esperado, llevarían la VM bastante más allá. Medir cada cambio con el benchma
 **Impacto en el diseño:** ninguno en el lenguaje; es trabajo interno de la VM. No
 bloquea nada y se hace de forma incremental, midiendo con `benchmarks/`.
 
+**Progreso (medido en `fib(32)`, release, hyperfine):**
+- **Baseline**: VM 735 ms (intérprete 1.76 s; 2.40× más rápida).
+- **Opt.1 — no clonar la instrucción por iteración** ✅: el bucle copia el `&CompiledProgram` a un
+  local (`let program = self.program`) y toma la instrucción **prestada** (`&program…code[ip]`) en vez
+  de clonarla; el préstamo es del programa (inmutable, vive como la VM), no de `self`, así que el cuerpo
+  sigue pudiendo mutar `self`. → **685 ms** (~7%; 2.59×).
+- Siguiente: **Opt.2** locales por llamada (pool/free-list o estilo clox), **Opt.3** `Rc<str>`.
+
 ## 12. Asperezas de M3
 
 Dos límites pequeños del front-end que afloraron al escribir ejemplos con arreglos

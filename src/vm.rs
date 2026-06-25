@@ -155,6 +155,11 @@ impl<'a> Vm<'a> {
         let locals = self.new_locals(main);
         self.frames.push(CallFrame { function: main, ip: 0, locals, upvalues: Vec::new() });
 
+        // El programa es inmutable y vive tanto como la VM; copiamos su referencia a un local (Opt.1). Así
+        // el `match` de cada instrucción la toma **prestada** del programa (no de `self`), y el cuerpo puede
+        // mutar `self` sin que el préstamo choque — eliminando el clon de la instrucción por iteración.
+        let program = self.program;
+
         loop {
             // --- Punto seguro del GC ---
             if self.heap.should_collect() {
@@ -166,7 +171,7 @@ impl<'a> Vm<'a> {
             let ip = self.frames[fi].ip;
 
             // Robustez: si se acabó el chunk sin Return (no debería), retorna unit.
-            if ip >= self.program.functions[func].chunk.code.len() {
+            if ip >= program.functions[func].chunk.code.len() {
                 self.frames.pop();
                 if self.frames.is_empty() {
                     match self.on_fiber_done(HeapValue::Unit)? {
@@ -178,17 +183,17 @@ impl<'a> Vm<'a> {
                 continue;
             }
 
-            // Clonamos la instrucción y su posición para soltar el préstamo de
-            // `self.program` antes de mutar `self`.
-            let op = self.program.functions[func].chunk.code[ip].clone();
-            let (line, col) = self.program.functions[func].chunk.lines[ip];
+            // La instrucción y su posición se toman PRESTADAS del programa (Opt.1: sin clonar). `instr`
+            // vive lo que `program` (toda la VM), así que no estorba a las mutaciones de `self` del cuerpo.
+            let instr = &program.functions[func].chunk.code[ip];
+            let (line, col) = program.functions[func].chunk.lines[ip];
             self.frames[fi].ip = ip + 1; // avance por defecto; los saltos lo cambian
 
             // M12.3: ejecutamos la instrucción dentro de un cierre que devuelve `Ok(Some(v))` (fin del
             // programa), `Ok(None)` (seguir) o `Err` (fallo). Así el bucle puede CAPTURAR el error de una
             // fibra hija (propagación structured concurrency) en vez de abortar siempre.
             let outcome: Result<Option<HeapValue>, RuntimeError> = (|| {
-            match &op {
+            match instr {
                 OpCode::Constant(idx) => {
                     let v = const_to_heap(&self.program.functions[func].chunk.constants[*idx]);
                     self.push(v);

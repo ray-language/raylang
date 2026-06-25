@@ -16,8 +16,36 @@ fn exit_code(v: Value) -> int {
     match (v) { Value.VInt(n) => n, _ => 0 }
 }
 
-// M14.5a: el prelude (map/filter/fold/sort) usa llamadas indirectas y métodos → se compilará cuando la
-// VM tenga primera clase (M14.5c). Por ahora el corpus de la VM no lo usa, así que no se fusiona.
+// ¿El programa del usuario ya define una función con ese nombre? (para no pisar un override del prelude).
+fn user_has_func(user: Program, name: string) -> bool {
+    var i = 0;
+    while (i < len(user.funcs)) {
+        if (user.funcs[i].name == name) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Fusiona las funciones del prelude (map/filter/fold/sort/assert/...) en el programa del usuario —las que no
+// redefina—, igual que en `run.ray` (M14.4d-2). Desde M14.5d la VM compila el prelude COMPLETO: map/filter/
+// fold usan llamadas indirectas (M14.5c) y sort/assert_eq usan métodos (`.menor()`/`.igual()`/`.mostrar()`),
+// resueltos por `ODispatch`.
+fn add_prelude(prelude: Program, user: Program) {
+    var extra: [Func] = [];
+    var i = 0;
+    while (i < len(prelude.funcs)) {
+        if (!user_has_func(user, prelude.funcs[i].name)) { push(extra, prelude.funcs[i]); }
+        i = i + 1;
+    }
+    user.funcs = extra + user.funcs;
+}
+
+fn load_prelude() -> Program {
+    match (load("selfhost/prelude.ray")) {
+        Result.Ok(p) => p,
+        Result.Err(e) => panic("no se pudo cargar selfhost/prelude.ray: " + e.msg),
+    }
+}
 
 // Los argumentos del programa ejecutado: lo que sigue al path que consumió este driver (argv[1..]).
 fn rest_args(argv: [string]) -> [string] {
@@ -35,6 +63,7 @@ fn main() -> int {
     }
     match (load(argv[0])) {
         Result.Ok(prog) => {
+            add_prelude(load_prelude(), prog); // fusiona map/filter/fold/sort/... del prelude
             match (check(prog)) {
                 Result.Ok(_) => {
                     let cp = compile(prog);

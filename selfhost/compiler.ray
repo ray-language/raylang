@@ -26,7 +26,8 @@
 
 from parser import Program, Func, Param, Block, Stmt, SKind, Expr, EKind, BinOp, UnOp, FnExpr;
 from parser import FieldInit, FieldDef, MatchArm, Pattern, PKind, VariantDef;
-from interpreter import Value, is_builtin;
+from parser import Type, TraitDef, MethodSig, ImplBlock;
+from interpreter import Value, is_builtin, type_key_of_type;
 
 // El conjunto de opcodes. Las constantes (`OConst`) indexan la tabla `consts` del chunk.
 pub enum Op {
@@ -52,6 +53,8 @@ pub enum Op {
     OClosure(int, [UpSrc]),      // cierre: índice de la fn compilada + fuentes de captura
     OCallValue(int),             // llamada indirecta (el valor-función ya está en la pila) + argc
     OTry,                        // operador `?`: desempaqueta Ok/Some, o retorna Err/None de la función
+    // --- M14.5d: despacho dinámico ---
+    ODispatch(string, int),      // recv.fname(args): resuelto en runtime por la etiqueta del valor
 }
 
 // La fuente de un upvalue: una local de la función envolvente (por slot) o un upvalue suyo (transitivo).
@@ -63,8 +66,10 @@ pub struct Chunk { code: [Op], consts: [Value] }
 // Una función compilada: nombre, aridad, nº de slots locales (para dimensionar el marco) y su chunk.
 pub struct CompiledFn { name: string, arity: int, nslots: int, chunk: Chunk }
 
-// El programa compilado: la lista de funciones (el índice es su identidad para `OCall`/`OFunc`/`OClosure`).
-pub struct CProgram { fns: [CompiledFn] }
+// El programa compilado: la lista de funciones (el índice es su identidad para `OCall`/`OFunc`/`OClosure`)
+// + dos tablas para el despacho dinámico en runtime (M14.5d): `indices` (nombre de función libre → índice,
+// para UFCS) y `methods` (`Tipo#metodo` → índice, de los `impl` + defectos del trait).
+pub struct CProgram { fns: [CompiledFn], indices: Map<string, int>, methods: Map<string, int> }
 
 // Una variable local en tiempo de compilación: nombre, slot (índice en el marco) y profundidad de bloque.
 struct Local { name: string, slot: int, depth: int }
@@ -349,18 +354,24 @@ fn emit_call(comp: Comp, callee: Expr, cargs: [Expr]) {
                 }
             }
         },
-        // `Enum.Variante(args)`: el callee es un acceso a campo sobre un nombre de enum (no un local).
-        EKind.EField(recv, variant) => {
+        // `recv.f(args)`: construcción de enum `Enum.Variante(args)`, o despacho de método/UFCS (runtime).
+        EKind.EField(recv, fname) => {
             match (recv.kind) {
                 EKind.EIdent(en) => {
-                    if (resolve_local(comp, en) < 0 && enum_has_variant_c(comp, en, variant)) {
+                    if (resolve_local(comp, en) < 0 && enum_has_variant_c(comp, en, fname)) {
                         emit_args(comp, cargs);
-                        emit(comp, Op.OMakeEnum(en, variant, len(cargs)));
+                        emit(comp, Op.OMakeEnum(en, fname, len(cargs)));
                         return;
                     }
                 },
                 _ => {},
             }
+            // No es construcción de enum → método/UFCS: receptor, argumentos, `ODispatch` (resuelto por la
+            // etiqueta del valor en runtime, como el intérprete; `dyn`/bounds/genéricos son no-ops).
+            emit_expr(comp, recv);
+            emit_args(comp, cargs);
+            emit(comp, Op.ODispatch(fname, len(cargs)));
+            return;
         },
         _ => {},
     }
@@ -542,18 +553,72 @@ fn emit_func_expr(comp: Comp, fe: FnExpr) {
 // Punto de entrada
 // =====================================================================
 
-// Compila una función nombrada en su propio ámbito y devuelve su `CompiledFn`. Las fn-exprs anidadas en su
-// cuerpo se compilan en línea (recursivamente) y se ANEXAN a `comp.out`.
-fn compile_named(comp: Comp, f: Func) -> CompiledFn {
+// Compila un cuerpo (función nombrada o método de impl) en su propio ámbito y devuelve su `CompiledFn`.
+// Las fn-exprs anidadas en su cuerpo se compilan en línea (recursivamente) y se ANEXAN a `comp.out`.
+fn compile_body(comp: Comp, name: string, params: [Param], body: Block) -> CompiledFn {
     push(comp.scopes, new_fscope());
     var i = 0;
-    while (i < len(f.params)) { declare_local(comp, f.params[i].name); i = i + 1; }
-    emit_block(comp, f.body);     // deja el valor del cuerpo en la pila
+    while (i < len(params)) { declare_local(comp, params[i].name); i = i + 1; }
+    emit_block(comp, body);       // deja el valor del cuerpo en la pila
     emit(comp, Op.OReturn);       // ...que se retorna
     let s = top(comp);
-    let cfn = CompiledFn { name: f.name, arity: len(f.params), nslots: s.max_slots, chunk: Chunk { code: s.code, consts: s.consts } };
+    let cfn = CompiledFn { name: name, arity: len(params), nslots: s.max_slots, chunk: Chunk { code: s.code, consts: s.consts } };
     pop(comp.scopes);
     cfn
+}
+
+// Compila los métodos de los `impl` del programa y puebla la tabla `Tipo#metodo → índice` (incluye los
+// métodos por DEFECTO del trait no redefinidos por el impl). Espeja `register_methods` del intérprete; un
+// método es una función con `self` como primer parámetro (lo antepone el despacho). Por constructor:
+// `type_key_of_type(Caja<T>) = "Caja"` → un impl genérico cubre toda la familia (genéricos = erasure).
+fn compile_methods(comp: Comp, prog: Program, methods: Map<string, int>) {
+    let traitmap: Map<string, [MethodSig]> = map_new();
+    var ti = 0;
+    while (ti < len(prog.traits)) { insert(traitmap, prog.traits[ti].name, prog.traits[ti].methods); ti = ti + 1; }
+
+    var ii = 0;
+    while (ii < len(prog.impls)) {
+        let imp = prog.impls[ii];
+        let key = type_key_of_type(imp.target);
+        var defined: [string] = [];
+        var mi = 0;
+        while (mi < len(imp.methods)) {
+            let m = imp.methods[mi];
+            let cfn = compile_body(comp, m.name, m.params, m.body);
+            push(comp.out, cfn);
+            insert(methods, key + "#" + m.name, len(comp.out) - 1);
+            push(defined, m.name);
+            mi = mi + 1;
+        }
+        // métodos por defecto del trait no redefinidos por este impl
+        match (get(traitmap, imp.trait_name)) {
+            Option.Some(sigs) => {
+                var si = 0;
+                while (si < len(sigs)) {
+                    let sig = sigs[si];
+                    if (!contains_name(defined, sig.name)) {
+                        match (sig.default_body) {
+                            Option.Some(body) => {
+                                let cfn = compile_body(comp, sig.name, sig.params, body);
+                                push(comp.out, cfn);
+                                insert(methods, key + "#" + sig.name, len(comp.out) - 1);
+                            },
+                            Option.None => {},
+                        }
+                    }
+                    si = si + 1;
+                }
+            },
+            Option.None => {},
+        }
+        ii = ii + 1;
+    }
+}
+
+fn contains_name(xs: [string], s: string) -> bool {
+    var i = 0;
+    while (i < len(xs)) { if (xs[i] == s) { return true; } i = i + 1; }
+    false
 }
 
 // Registra los enums del prelude (Option/Result) para RECONOCER su construcción `Option.Some`/`Result.Ok`
@@ -591,15 +656,17 @@ pub fn compile(prog: Program) -> CProgram {
     while (e < len(prog.enums)) { insert(enums, prog.enums[e].name, prog.enums[e].variants); e = e + 1; }
 
     let comp = Comp { indices: indices, structs: structs, enums: enums, scopes: [], out: [] };
-    // Reservamos un hueco por función nombrada (índices 0..n); las anónimas se anexarán después.
+    // Reservamos un hueco por función nombrada (índices 0..n); las anónimas/métodos se anexarán después.
     let n = len(prog.funcs);
     var r = 0;
     while (r < n) { push(comp.out, placeholder_fn()); r = r + 1; }
     var j = 0;
     while (j < n) {
-        let cfn = compile_named(comp, prog.funcs[j]);
+        let cfn = compile_body(comp, prog.funcs[j].name, prog.funcs[j].params, prog.funcs[j].body);
         comp.out[j] = cfn;
         j = j + 1;
     }
-    CProgram { fns: comp.out }
+    var methods: Map<string, int> = map_new();
+    compile_methods(comp, prog, methods);
+    CProgram { fns: comp.out, indices: indices, methods: methods }
 }

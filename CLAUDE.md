@@ -1024,6 +1024,25 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       prelude completo compila en M14.5d). Oráculo = corpus de primera clase del intérprete (closures/errores/
       opcional + snippets de HOF/captura/estado/transitiva/`?` con Result y Option) → stdout+exit idénticos.
       Pendiente: M14.5d (despacho dinámico: métodos/UFCS/dyn/@derive + fusión del prelude), TCO.
+    - **M14.5d COMPLETO → M14.5 COMPLETO** (347 lib + 15 en `tests/selfhost_vm.rs`): **despacho dinámico**
+      (métodos de trait, UFCS, `dyn`, `@derive`, bounds) + **fusión del prelude completo**. Como el intérprete
+      auto-alojado (M14.4d): **resolución por la ETIQUETA del valor en runtime** → `dyn`/bounds/genéricos son
+      **no-ops** (se despacha por el tipo concreto, sin diccionarios ni vtable; el "objeto" ES el valor). El
+      compilador baja `recv.f(args)` (que no sea construcción de enum) a un único opcode `ODispatch(fname,
+      argc)`; `compile_methods` compila los métodos de los `impl` (+ defectos del trait) como funciones con
+      `self` y puebla `CProgram.methods` (`Tipo#metodo → índice`, por constructor: `Caja<T>`→"Caja"); `CProgram`
+      también lleva `indices` (función libre → índice, para UFCS). La VM resuelve en `resolve_dispatch` (espejo
+      de `dispatch_method`): (a) campo-función del struct → (b) método (tabla) → (c) `@derive`
+      igual/mostrar/`menor` de Ord sobre primitivos (vía `values_equal`/`value_str`/`value_lt`, reusados del
+      intérprete) → (d) UFCS a función libre → (e) builtin como método; devuelve un `Dispatch` (apilar marco o
+      empujar valor) para no usar `return` dentro del bucle. **Prelude completo fusionado** en `run_vm.ray` (como
+      `run.ray`): map/filter/fold (indirectas) + sort/assert_eq (métodos por `ODispatch`) ya compilan. Gotcha
+      (M14.6a): un `match` con TODAS las ramas divergentes no tipa → el match interno cede valor en el brazo
+      normal. Oráculo conductual = corpus de despacho del intérprete (ufcs/traits/bounds/metodos_por_defecto/
+      impls_genericos/trait_objects/anotaciones) + prelude (stdlib/mapa) + snippets (método/UFCS/@derive/sort);
+      **los 33 ejemplos deterministas corren idénticos por la VM auto-alojada y por Rust**. **La VM auto-alojada
+      ejecuta el LENGUAJE COMPLETO** (núcleo+datos+primera clase+despacho dinámico+prelude). Pendiente: TCO
+      (opcional), VM meta-circular (correr el compilador sobre la VM).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

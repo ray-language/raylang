@@ -12,6 +12,7 @@
 from compiler import Op, CProgram, CompiledFn, Chunk, UpSrc;
 from interpreter import Value, Flow, RuntimeError, value_str, values_equal, eval_add, eval_arith, eval_cmp, dispatch_builtin, rt_error, no_vals;
 from interpreter import SField, struct_get, struct_set, as_int, Cell;
+from interpreter import is_builtin, type_key_of_value, value_lt, struct_has_field, prepend;
 from parser import BinOp;
 
 // Un marco de llamada: la función en ejecución (índice), el puntero de instrucción, los slots locales,
@@ -147,6 +148,17 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                     _ => panic("VM: ? sobre un valor que no es Result/Option"),
                 };
             },
+            // --- M14.5d: despacho dinámico de `recv.fname(args)` (resolución por etiqueta en runtime) ---
+            Op.ODispatch(fname, argc) => {
+                let args = pop_n(fr.stack, argc);
+                let recv = pop_val(fr.stack);
+                match (resolve_dispatch(cp, prog_args, recv, fname, args)?) {
+                    // Marco nuevo (campo-función / método / UFCS): los args ya llevan o no el receptor.
+                    Dispatch.DFrame(idx, callargs, cells) => push(frames, new_frame(cp, idx, callargs, cells)),
+                    // Valor directo (@derive igual/mostrar, primitivo menor, builtin como método).
+                    Dispatch.DValue(v) => push(fr.stack, v),
+                };
+            },
             Op.OReturn => {
                 let rv = pop_val(fr.stack);
                 pop(frames);
@@ -248,6 +260,54 @@ fn negate(v: Value) -> Value {
 
 fn not_val(v: Value) -> Value {
     match (v) { Value.VBool(b) => Value.VBool(!b), _ => panic("VM: ! de un no-booleano") }
+}
+
+// El resultado de resolver `recv.fname(args)`: o apilar un marco (campo-función/método/UFCS), o empujar un
+// valor ya calculado (@derive, primitivo `menor`, builtin como método). Separa la RESOLUCIÓN de la acción
+// para no usar `return` dentro del bucle de la VM (raylang no tiene `break`/early-return del bucle).
+enum Dispatch {
+    DFrame(int, [Value], [Cell]),   // índice de la fn compilada, argumentos (con/sin recv), upvalues
+    DValue(Value),                  // valor directo a empujar en la pila de operandos
+}
+
+// Resuelve `recv.fname(args)` por la ETIQUETA del valor (como `dispatch_method` del intérprete, M14.4d):
+// (a) campo-función del struct → (b) método (`Tipo#metodo`) → (c) @derive igual/mostrar y primitivo menor →
+// (d) UFCS a función libre → (e) builtin como método. `dyn`/bounds/genéricos no necesitan nada especial.
+fn resolve_dispatch(cp: CProgram, prog_args: [string], recv: Value, fname: string, args: [Value]) -> Result<Dispatch, Flow> {
+    // (a) ¿campo del struct que contiene una función? (gana sobre UFCS/método; NO antepone el receptor).
+    // El match interno cede un valor en el brazo normal (no todas las ramas divergen → el checker lo acepta).
+    match (recv) {
+        Value.VStruct(_, fields) => {
+            if (struct_has_field(fields, fname)) {
+                let d = match (struct_get(fields, fname)) {
+                    Value.VVmClosure(idx, cells) => Dispatch.DFrame(idx, args, cells),
+                    _ => panic("VM: el campo '" + fname + "' no es una función"),
+                };
+                return Result.Ok(d);
+            }
+        },
+        _ => {},
+    }
+    // (b) método del tipo (impl o defecto): antepone el receptor como `self`.
+    match (get(cp.methods, type_key_of_value(recv) + "#" + fname)) {
+        Option.Some(idx) => { return Result.Ok(Dispatch.DFrame(idx, prepend(recv, args), no_cells())); },
+        Option.None => {},
+    }
+    // (c) @derive (igual ≡ igualdad estructural, mostrar ≡ value_str) y `menor` de Ord sobre primitivos.
+    if (fname == "igual") { return Result.Ok(Dispatch.DValue(Value.VBool(values_equal(recv, args[0])))); }
+    if (fname == "mostrar") { return Result.Ok(Dispatch.DValue(Value.VStr(value_str(recv)))); }
+    if (fname == "menor") { return Result.Ok(Dispatch.DValue(Value.VBool(value_lt(recv, args[0])))); }
+    // (d) UFCS a función libre: fname(recv, args).
+    match (get(cp.indices, fname)) {
+        Option.Some(idx) => { return Result.Ok(Dispatch.DFrame(idx, prepend(recv, args), no_cells())); },
+        Option.None => {},
+    }
+    // (e) builtin como método: el receptor como primer argumento (p. ej. `xs.len()`).
+    if (is_builtin(fname)) {
+        let v = dispatch_builtin(prog_args, fname, prepend(recv, args), 0, 0)?;
+        return Result.Ok(Dispatch.DValue(v));
+    }
+    panic("VM: no se pudo resolver '" + fname + "' sobre el receptor")
 }
 
 // Ejecuta el programa compilado; traduce el canal `Flow` al `RuntimeError` público (como el intérprete).

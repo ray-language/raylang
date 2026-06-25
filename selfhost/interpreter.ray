@@ -632,7 +632,8 @@ fn key_lt(a: Value, b: Value) -> bool {
 
 // Orden `<` de Ord sobre los primitivos comparables (int/float/string/char). Lo usa el fallback de
 // `.menor()` en el despacho (M14.6c-2); a diferencia de `key_lt` (claves de Map) cubre también float.
-fn value_lt(a: Value, b: Value) -> bool {
+// `pub`: la VM (M14.5d) lo reusa en su despacho dinámico.
+pub fn value_lt(a: Value, b: Value) -> bool {
     match (a) {
         Value.VInt(x) => match (b) { Value.VInt(y) => x < y, _ => panic("menor: tipos incompatibles") },
         Value.VFloat(x) => match (b) { Value.VFloat(y) => x < y, _ => panic("menor: tipos incompatibles") },
@@ -856,7 +857,7 @@ fn map_collect(src: [Value], order: [int]) -> Value {
 
 // La clave de tipo de un VALOR en runtime (para el despacho de métodos): el nombre del tipo nominal o
 // del primitivo. Es lo que el despacho dinámico usa en vez de los tipos (que ya se borraron).
-fn type_key_of_value(v: Value) -> string {
+pub fn type_key_of_value(v: Value) -> string {
     match (v) {
         Value.VInt(_) => "int",
         Value.VFloat(_) => "float",
@@ -876,7 +877,7 @@ fn type_key_of_value(v: Value) -> string {
 
 // La clave de tipo del OBJETIVO de un `impl` (para poblar la tabla). `Caja<T>` → "Caja" (por constructor,
 // así un impl genérico cubre toda la familia).
-fn type_key_of_type(t: Type) -> string {
+pub fn type_key_of_type(t: Type) -> string {
     match (t) {
         Type.TInt => "int",
         Type.TFloat => "float",
@@ -900,7 +901,7 @@ fn contains_str(xs: [string], s: string) -> bool {
     false
 }
 
-fn struct_has_field(fields: [SField], fname: string) -> bool {
+pub fn struct_has_field(fields: [SField], fname: string) -> bool {
     var i = 0;
     while (i < len(fields)) {
         if (fields[i].name == fname) { return true; }
@@ -909,8 +910,9 @@ fn struct_has_field(fields: [SField], fname: string) -> bool {
     false
 }
 
-// Antepone `recv` (el `self`/receptor) a la lista de argumentos (para métodos y UFCS).
-fn prepend(recv: Value, args: [Value]) -> [Value] {
+// Antepone `recv` (el `self`/receptor) a la lista de argumentos (para métodos y UFCS). `pub`: la VM
+// (M14.5d) lo reusa en su despacho dinámico.
+pub fn prepend(recv: Value, args: [Value]) -> [Value] {
     var all: [Value] = [recv];
     var i = 0;
     while (i < len(args)) { push(all, args[i]); i = i + 1; }

@@ -251,3 +251,61 @@ fn option_result_y_try() {
         "vm_option.ray",
     );
 }
+
+// ---------------------------------------------------------------------
+// M14.5d — despacho dinámico: métodos de trait, UFCS, dyn, @derive,
+// bounds (no-op). Mismo corpus que el oráculo del intérprete (M14.4d),
+// ahora por la VM. La resolución es por la etiqueta del valor en runtime.
+// ---------------------------------------------------------------------
+
+#[test]
+fn corpus_despacho_dinamico() {
+    for rel in [
+        "examples/ufcs.ray",
+        "examples/traits.ray",
+        "examples/bounds.ray",
+        "examples/metodos_por_defecto.ray",
+        "examples/impls_genericos.ray",
+        "examples/trait_objects.ray",
+        "examples/anotaciones.ray",
+    ] {
+        comparar_archivo(rel);
+    }
+}
+
+// El prelude COMPLETO ya compila por la VM (M14.5d): map/filter/fold (llamadas indirectas, M14.5c) +
+// sort/assert_eq (métodos `.menor()`/`.igual()`/`.mostrar()`, resueltos por ODispatch). `run_vm.ray` lo
+// fusiona como `run.ray`.
+#[test]
+fn corpus_prelude() {
+    for rel in [
+        "examples/stdlib.ray",   // map/filter/fold
+        "examples/mapa.ray",     // Map + assert_eq + sort
+    ] {
+        comparar_archivo(rel);
+    }
+}
+
+#[test]
+fn metodos_y_ufcs_snippets() {
+    // Método de trait con despacho estático (resuelto por la etiqueta del valor en runtime).
+    comparar_fuente(
+        "trait Saludo { fn hola(self) -> string } struct P { n: string } impl Saludo for P { fn hola(self) -> string { \"hola \" + self.n } } fn main() -> int { let p = P { n: \"ray\" }; print(p.hola()); 0 }",
+        "vm_metodo.ray",
+    );
+    // UFCS: una función libre llamada con sintaxis de método (el receptor es el primer argumento).
+    comparar_fuente(
+        "fn cuadrado(x: int) -> int { x * x } fn main() -> int { print(5.cuadrado()); 0 }",
+        "vm_ufcs.ray",
+    );
+    // @derive(Eq, Show): igualdad e impresión derivadas (resueltas por valor, sin tabla de métodos).
+    comparar_fuente(
+        "@derive(Eq, Show) struct Punto { x: int, y: int } fn main() -> int { let a = Punto { x: 1, y: 2 }; let b = Punto { x: 1, y: 2 }; print(a.igual(b)); print(a.mostrar()); 0 }",
+        "vm_derive.ray",
+    );
+    // sort del prelude sobre un arreglo de int (usa `.menor()` de Ord sobre primitivos).
+    comparar_fuente(
+        "fn main() -> int { let xs = sort([3, 1, 2]); print(xs); 0 }",
+        "vm_sort.ray",
+    );
+}

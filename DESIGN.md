@@ -3048,3 +3048,28 @@ cortocircuito, locales, if/while, llamadas nombradas, recursión, builtins escal
   del intérprete (`closures`/`errores`/`opcional` + snippets de HOF/captura/estado-mutable/transitiva/`?` con
   Result y Option) → stdout+exit idénticos. Pendiente: d (despacho dinámico: métodos/UFCS/`dyn`/`@derive` +
   fusión del prelude), TCO.
+- **M14.5d COMPLETO → M14.5 COMPLETO** — **despacho dinámico** (métodos de trait, UFCS, `dyn`, `@derive`,
+  bounds) + **fusión del prelude completo**. Filosofía idéntica al intérprete auto-alojado (M14.4d):
+  **resolución por la ETIQUETA del valor en runtime**, así `dyn`/bounds/genéricos son **no-ops** (se despacha
+  por el tipo concreto; sin diccionarios ni vtable, el "objeto" ES el valor concreto). El compilador baja
+  `recv.f(args)` (que no sea construcción de enum) a un solo opcode `ODispatch(fname, argc)` —no resuelve
+  campo-vs-método-vs-UFCS en compilación, lo deja al runtime—. `compile_methods` (espejo de `register_methods`
+  del intérprete) compila los métodos de cada `impl` como funciones con `self` como primer parámetro (reusa
+  `compile_body`, extraída de `compile_named`) y los métodos por DEFECTO del trait no redefinidos, y puebla
+  `CProgram.methods` (`Tipo#metodo → índice`, clave por constructor vía `type_key_of_type`: `Caja<T>`→"Caja", un
+  impl genérico cubre la familia). `CProgram` lleva además `indices` (función libre → índice) para la UFCS. La
+  VM resuelve en `resolve_dispatch` (espejo de `dispatch_method`): (a) campo-función del struct (gana, sin
+  anteponer el receptor) → (b) método de la tabla (antepone `self`) → (c) `@derive` `igual`≡`values_equal`,
+  `mostrar`≡`value_str` y `menor` de Ord sobre primitivos≡`value_lt` (todos reusados del intérprete, hechos
+  `pub`) → (d) UFCS a función libre (`indices`) → (e) builtin como método (`dispatch_builtin`). Devuelve un
+  `Dispatch` (`DFrame(idx, args, cells)` apila marco / `DValue(v)` empuja valor) para separar la resolución de
+  la acción y NO usar `return` dentro del bucle de la VM. **Prelude completo fusionado** en `run_vm.ray` (como
+  `run.ray`): map/filter/fold (indirectas, M14.5c) + sort/assert_eq (métodos `.menor()`/`.igual()`/`.mostrar()`
+  por `ODispatch`) ya compilan. Gotcha reusado (M14.6a): un `match` con todas las ramas divergentes no tipa en
+  el checker de Rust → el `match` interno del caso (a) cede un valor en el brazo normal. Oráculo conductual =
+  corpus de despacho del intérprete (`ufcs`/`traits`/`bounds`/`metodos_por_defecto`/`impls_genericos`/
+  `trait_objects`/`anotaciones`) + prelude (`stdlib`/`mapa`) + snippets (método/UFCS/`@derive`/`sort`); **los 33
+  ejemplos deterministas corren idénticos por la VM auto-alojada y por Rust**. **La VM auto-alojada ejecuta el
+  LENGUAJE COMPLETO** (núcleo + datos + primera clase + despacho dinámico + prelude); el compilador auto-alojado
+  tiene ya DOS back-ends (intérprete M14.4 + VM M14.5), como Rust (M1 + M2). Diferido: TCO en la VM
+  auto-alojada (opcional), VM meta-circular (correr el compilador auto-alojado sobre la VM auto-alojada).

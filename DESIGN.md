@@ -65,7 +65,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ✅ M11.1 stdlib de string (`+`/`len`/`to_string`/`trim`/`split`) · M11.2 I/O (`eprint`/`input`/`parse_int`/`read_int`/`env`/`args`/`read_file`/`write_file`) · M11.3 módulos (`import M;`+`M.f`, `from M import a as b`, `pub`) |
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
-| **M12** | **concurrencia** (dirección probable: goroutines + channels) | scheduler, green threads, suspensión | ⏳ (se hizo M13+M14 antes) |
+| **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | 🚧 dirección y M12.1 especificados (§21.1/§21.2): M12.1 slice CSP (spawn + canales no acotados) · M12.2 acotados/backpressure · M12.3 structured concurrency · M12.4 `select` |
 | **Transversal** | optimización de la VM (incremental, midiendo) · **VM auto-alojada** (M14.5, opcional) | rendimiento, bootstrapping | ⏳ |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -2153,6 +2153,60 @@ pedagógico y perseguir producción: un único motor (la VM, jubilando el orácu
 o aislamiento por actores para data-race freedom, **GC concurrente** + runtime **M:N paralelo**,
 **algebraic effects** sobre una VM de pila explícita, gestor de paquetes y FFI. Es un cambio de
 *norte* (no una fase más), por eso vive en una rama aparte y no en la hoja de ruta principal.
+
+### 21.2 M12.1 — el slice CSP (especificación)
+
+La primera sub-fase es un **corte vertical** del modelo: `spawn` de green threads + **canales tipados**
+(`send`/`recv`/`close`), con un **scheduler cooperativo M:1 y determinista** en la VM. Es lo mínimo que
+demuestra CSP de punta a punta (productor/consumidor comunicándose por un canal). Acotados/backpressure
+→ M12.2; structured concurrency (scope + join) → M12.3; `select` → M12.4 (o diferido).
+
+**Surface (decidida con el usuario):**
+- `spawn(f)` — builtin que lanza `f` (una función de primera clase, `fn() -> T`) como green thread. Reusa
+  las closures (cero gramática nueva, en el espíritu del proyecto). El resultado de `f` se **descarta** en
+  M12.1 (el *join* con valor llega con structured concurrency, M12.3).
+- `Channel<T>` — **tipo nuevo** (`Type::Channel(Box<Type>)`). El parser lo trae como `Struct("Channel",[T])`
+  y el checker lo **reclasifica** en `resolve_type` (como `Map`).
+- `channel() -> Channel<T>` — crea un canal. Es **indeterminado** (como `map_new()`/`[]`/`None`): su tipo
+  lo fija el esperado por chequeo bidireccional (`check_expr_expected`; anotación o contexto). `T` no tiene
+  restricción (a diferencia de la clave hashable de `Map`).
+- `send(ch: Channel<T>, v: T) -> unit` — encola `v`. En M12.1 el canal es **no acotado** → `send` **nunca
+  bloquea** (el acotado/rendezvous, donde `send` también es punto de yield, llega en M12.2).
+- `recv(ch: Channel<T>) -> Option<T>` — `Some(v)` si hay valor; si el canal está **cerrado y vacío**,
+  `None` (encaja con "ausencia como valor"). Si está **vacío y abierto**, **BLOQUEA** (punto de yield).
+- `close(ch: Channel<T>) -> unit` — marca el canal cerrado y **despierta** a los receptores bloqueados (que
+  recibirán `None`). `send` sobre un canal cerrado es error de ejecución (`panic`).
+- UFCS gratis: `ch.send(v)`, `ch.recv()`, `ch.close()`.
+
+**Scheduler (cooperativo, M:1, determinista):**
+- Una **fibra** = `Fiber { frames: Vec<CallFrame>, stack: Vec<HeapValue> }` (el par que hoy son los campos
+  de la VM). El `heap` es **compartido** entre fibras (un solo hilo → sin carreras por construcción).
+- La VM gana una **cola de listas FIFO** (`ready: VecDeque<Fiber>`) y, por canal, una lista de **receptores
+  bloqueados** (`waiters`). El programa arranca como la **fibra principal** (la de `main`).
+- **Puntos de yield**: solo `recv` que bloquea (cola vacía y canal abierto) y la **terminación** de una
+  fibra. `spawn` **no** cede (solo encola la fibra nueva); `send` **no** cede (no acotado). Determinismo: la
+  `ready` es FIFO; un `send` que despierta a un receptor lo manda **al final** de `ready`.
+- **Fin del programa**: cuando la **fibra principal** retorna (semántica Go) → el código de salida es el de
+  `main`; las fibras pendientes se abandonan. Para tests deterministas, los programas hacen *join* por
+  canales (la principal `recv` los resultados antes de terminar).
+- **Deadlock**: si la fibra en curso bloquea, `ready` está vacía y aún hay fibras bloqueadas → error de
+  ejecución ("deadlock: todas las fibras están bloqueadas").
+
+**Runtime / GC:** el canal es un objeto del heap `Obj::Channel(VmChannel { queue: VecDeque<HeapValue>,
+closed: bool, waiters })`, **trazado por el GC** (los valores en la cola son raíces). Cambio importante en
+las **raíces del GC**: ya no basta con los `frames`/`stack` actuales; el `mark` debe rootear **todas las
+fibras** (sus `frames`+`stack`) + las colas de los canales + las fibras en `ready`/`waiters`.
+
+**Solo la VM (oráculo).** La concurrencia vive en la VM; el **intérprete** da un **error limpio** si topa
+con `spawn`/`channel`/`send`/`recv`/`close` ("la concurrencia requiere la VM (`--vm`)") y sigue siendo el
+oráculo de los programas **secuenciales**. Los programas **concurrentes** se corren con `--vm` y, como el
+scheduler es **determinista**, su salida es fija → los tests comparan contra **salida esperada exacta** (no
+hay oráculo cruzado VM↔intérprete para ellos). El checker acepta los builtins de concurrencia en ambos.
+
+**Sub-fases de M12:** **M12.1** este slice (spawn + canales no acotados + scheduler determinista). **M12.2**
+canales **acotados** (`channel(n)`; `send` bloquea al llenarse → backpressure; `send` pasa a ser punto de
+yield). **M12.3** **structured concurrency** (un `scope`/`spawn` que posee y hace *join* de sus tareas, con
+valor de retorno). **M12.4** `select` sobre varios canales (o diferido).
 
 ## 22. M13 — Habilitadores de self-hosting
 

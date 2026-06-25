@@ -1,0 +1,50 @@
+// Concurrencia (M12.1): CSP sobre la VM — green threads (`spawn`) + canales tipados
+// (`channel`/`send`/`recv`/`close`). El scheduler es cooperativo M:1 y determinista
+// (un solo hilo → sin carreras por construcción; se comparte COMUNICANDO, no por
+// memoria). La concurrencia vive SOLO en la VM: ejecuta este archivo con `--vm`:
+//
+//     cargo run -- --vm examples/concurrencia.ray
+//
+// (Con el intérprete da un error claro pidiendo la VM.)
+
+// Una etapa productora: genera 1..n en el canal y lo cierra al terminar.
+fn generar(salida: Channel<int>, n: int) {
+    var i = 1;
+    while (i <= n) {
+        send(salida, i);
+        i = i + 1;
+    }
+    close(salida);  // avisa "no hay más": los recv devolverán None
+}
+
+// Una etapa intermedia: lee de `entrada`, eleva al cuadrado y escribe en `salida`.
+fn cuadrar(entrada: Channel<int>, salida: Channel<int>) {
+    var seguir = true;
+    while (seguir) {
+        match (recv(entrada)) {
+            Option.Some(v) => send(salida, v * v),
+            Option.None    => { close(salida); seguir = false; },
+        }
+    }
+}
+
+fn main() -> int {
+    let nums: Channel<int> = channel();
+    let cuad: Channel<int> = channel();
+
+    // Pipeline de fibras: generar -> cuadrar -> main. Cada flecha es un canal.
+    spawn(fn() { generar(nums, 5); });
+    spawn(fn() { cuadrar(nums, cuad); });
+
+    // El consumidor (main) suma los cuadrados que llegan, hasta que el canal se cierra.
+    var total = 0;
+    var seguir = true;
+    while (seguir) {
+        match (recv(cuad)) {
+            Option.Some(v) => { print(v); total = total + v; },   // 1, 4, 9, 16, 25
+            Option.None    => { seguir = false; },
+        }
+    }
+    print(total);   // 55
+    total           // código de salida 55
+}

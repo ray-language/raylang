@@ -27,7 +27,7 @@
 //!    que **crece** tras cada recolección (estilo clox `nextGC`).
 
 use crate::interpreter::MapKey;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 /// Un *handle*: la referencia a un objeto del heap (su índice de ranura).
 pub type Handle = usize;
@@ -81,6 +81,14 @@ pub struct VmEnum {
     pub payload: Vec<HeapValue>,
 }
 
+/// Un canal `Channel<T>` (M12.1): una cola FIFO de valores en tránsito + si está cerrado. Los receptores
+/// bloqueados NO viven aquí, sino en el scheduler de la VM (`parked`), para no acoplar el GC a las fibras.
+/// No acotado en M12.1 (la cola crece sin límite); el acotado/backpressure llega en M12.2.
+pub struct VmChannel {
+    pub queue: VecDeque<HeapValue>,
+    pub closed: bool,
+}
+
 /// Un objeto del heap. Las formas compuestas que el GC gestiona.
 pub enum Obj {
     Array(Vec<HeapValue>),
@@ -94,6 +102,8 @@ pub enum Obj {
     /// Un mapa `Map<K, V>` (M13.1): clave hashable → valor. El GC traza los **valores**
     /// (las claves son primitivos *inline*, sin handles).
     Map(HashMap<MapKey, HeapValue>),
+    /// Un canal `Channel<T>` (M12.1): el GC traza los valores **en tránsito** (la cola).
+    Channel(VmChannel),
 }
 
 /// Una ranura del heap: un objeto y su bit de marca.
@@ -201,6 +211,8 @@ impl Heap {
             Obj::Cell(v) => v.handle().into_iter().collect(),
             // M13.1: las claves son primitivos (sin handles); solo se trazan los valores.
             Obj::Map(m) => m.values().filter_map(HeapValue::handle).collect(),
+            // M12.1: los valores en tránsito en el canal son raíces mientras estén en la cola.
+            Obj::Channel(c) => c.queue.iter().filter_map(HeapValue::handle).collect(),
         }
     }
 

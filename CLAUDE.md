@@ -1066,6 +1066,25 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       selfhost_metacircular_vm -- --ignored`): **la VM auto-alojada se ejecuta a sí misma**. Cero código nuevo
       (solo el test) — la VM ya soportaba el lenguaje completo (M14.5a–e) + builtins (Map/I/O/args vía
       `dispatch_builtin`). **Self-hosting CERRADO por AMBOS back-ends** (intérprete M14.7 + VM M14.5f).
+- **M12 — concurrencia** (DESIGN §21; CSP sobre la VM, fijado con el usuario). Es la última gran
+  problemática de diseño del proyecto. Modelo: green threads cooperativos **M:1** + canales tipados,
+  data-race freedom **vía CSP** (no ownership), scheduler **determinista**, intérprete = oráculo secuencial.
+  - **M12.1 COMPLETO** (347 lib + 8 en `tests/concurrency_cli.rs`): **el slice CSP** — `spawn(closure)` +
+    canales (`channel`/`send`/`recv`/`close`) + scheduler cooperativo determinista, **solo en la VM**. Surface
+    (decidida con el usuario): `spawn(f: fn()->T)` (resultado descartado), `Channel<T>` (tipo nuevo,
+    reclasificado como `Map`; `channel()` indeterminado → lo fija el esperado), `send(ch,v)` (no acotado →
+    nunca bloquea), `recv(ch) -> Option<T>` (bloquea si vacío+abierto; `None` si cerrado+vacío; primitivo
+    `__recv -> [T]` + envoltorio en el prelude, patrón M11.2), `close(ch)` (**`close` ad-hoc polimórfico**:
+    handle de archivo→int, canal→unit, reusa `OpCode::Close`). UFCS gratis. **VM**: una **fibra** = `(frames,
+    stack)`; `ready: VecDeque<Fiber>` FIFO + `parked` (fibra+canal que espera); único punto de yield = `recv`
+    bloqueante; `spawn` solo encola; `send` entrega directo a un receptor bloqueado o encola. Fin cuando
+    **main** retorna (semántica Go); **deadlock** si todas las fibras quedan bloqueadas. **GC multi-raíz**:
+    `collect` rootea TODAS las fibras (ejecución + ready + parked) + el canal que cada parked espera; canal =
+    `Obj::Channel(VmChannel { queue, closed })` trazado por el GC. **Intérprete**: error limpio ("requiere la
+    VM") en spawn/channel/send/recv → sigue siendo oráculo secuencial; los programas concurrentes corren con
+    `--vm` y, por el scheduler determinista, se testean contra **salida esperada exacta** (no hay oráculo
+    cruzado). Ejemplo `examples/concurrencia.ray` (pipeline de fibras). Diferido: M12.2 canales acotados
+    (backpressure), M12.3 structured concurrency (scope+join), M12.4 `select`.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

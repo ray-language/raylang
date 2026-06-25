@@ -21,9 +21,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::bytecode::{Chunk, CompiledEnum, CompiledFn, CompiledProgram, OpCode, UpvalueSource};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
-use crate::gc::{Handle, Heap, HeapValue, Obj, VmClosure, VmEnum, VmStruct};
+use crate::gc::{Handle, Heap, HeapValue, Obj, VmChannel, VmClosure, VmEnum, VmStruct};
 use crate::interpreter::{EnumInstance, MapKey, RuntimeError, StructInstance, Value};
 
 /// Límite de marcos para detectar recursión infinita en vez de colgarse. Es el
@@ -74,16 +74,45 @@ struct CallFrame {
     upvalues: Vec<Handle>,
 }
 
+/// Una **fibra** (green thread, M12.1): el estado suspendido de una tarea — su pila de marcos y su pila de
+/// operandos. La fibra en ejecución vive en los campos `frames`/`stack` de la VM; las demás esperan aquí.
+struct Fiber {
+    frames: Vec<CallFrame>,
+    stack: Vec<HeapValue>,
+    is_main: bool,
+}
+
+/// Una fibra **bloqueada** en un `recv` sobre un canal vacío, esperando a que alguien envíe o lo cierre.
+struct Parked {
+    chan: Handle,
+    fiber: Fiber,
+}
+
 struct Vm<'a> {
     program: &'a CompiledProgram,
     frames: Vec<CallFrame>,
     stack: Vec<HeapValue>,
     heap: Heap,
+    // --- Scheduler cooperativo M:1 (M12.1) ---
+    /// Fibras listas para ejecutar, en orden FIFO (scheduler determinista).
+    ready: VecDeque<Fiber>,
+    /// Fibras bloqueadas en `recv`, con el canal que esperan.
+    parked: Vec<Parked>,
+    /// ¿La fibra en ejecución es la principal (`main`)? Su retorno termina el programa (semántica Go).
+    current_is_main: bool,
 }
 
 impl<'a> Vm<'a> {
     fn new(program: &'a CompiledProgram) -> Self {
-        Vm { program, frames: Vec::new(), stack: Vec::new(), heap: Heap::new() }
+        Vm {
+            program,
+            frames: Vec::new(),
+            stack: Vec::new(),
+            heap: Heap::new(),
+            ready: VecDeque::new(),
+            parked: Vec::new(),
+            current_is_main: true,
+        }
     }
 
     fn run(&mut self) -> Result<HeapValue, RuntimeError> {
@@ -106,7 +135,10 @@ impl<'a> Vm<'a> {
             if ip >= self.program.functions[func].chunk.code.len() {
                 self.frames.pop();
                 if self.frames.is_empty() {
-                    return Ok(HeapValue::Unit);
+                    match self.on_fiber_done(HeapValue::Unit)? {
+                        Some(v) => return Ok(v),
+                        None => continue, // era una fibra spawn: el scheduler ya cargó la siguiente
+                    }
                 }
                 self.stack.push(HeapValue::Unit);
                 continue;
@@ -351,6 +383,87 @@ impl<'a> Vm<'a> {
                     let h = self.pop_obj();
                     self.as_array_mut(h).push(v);
                     self.push(HeapValue::Unit);
+                }
+
+                // --- Concurrencia: CSP sobre la VM (M12.1) ---
+                OpCode::Spawn => {
+                    // Saca el valor-función; crea una fibra nueva que lo ejecuta (0 args) y la encola.
+                    let (fn_idx, upvalues) = match self.pop() {
+                        HeapValue::Function(i) => (i, Vec::new()),
+                        HeapValue::Obj(h) => match self.heap.get(h) {
+                            Obj::Closure(c) => (c.index, c.upvalues.clone()),
+                            _ => unreachable!("el checker garantiza una función"),
+                        },
+                        _ => unreachable!("el checker garantiza una función"),
+                    };
+                    let locals = self.new_locals(fn_idx);
+                    let frame = CallFrame { function: fn_idx, ip: 0, locals, upvalues };
+                    self.ready.push_back(Fiber { frames: vec![frame], stack: Vec::new(), is_main: false });
+                    self.push(HeapValue::Unit);
+                }
+                OpCode::ChannelNew => {
+                    let h = self.heap.allocate(Obj::Channel(VmChannel { queue: VecDeque::new(), closed: false }));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::ChanSend => {
+                    let v = self.pop();
+                    let h = self.pop_obj();
+                    let closed = match self.heap.get(h) {
+                        Obj::Channel(c) => c.closed,
+                        _ => unreachable!("el checker garantiza un Channel"),
+                    };
+                    if closed {
+                        return Err(runtime_error(line, col, "send sobre un canal cerrado"));
+                    }
+                    // ¿Hay un receptor bloqueado en este canal? Entrégaselo directo (rendezvous) y despiértalo
+                    // (el primero, FIFO → determinista). Si no, encola el valor (canal no acotado, M12.1).
+                    if let Some(pos) = self.parked.iter().position(|p| p.chan == h) {
+                        let parked = self.parked.remove(pos);
+                        self.wake_with(parked.fiber, vec![v]);
+                    } else {
+                        match self.heap.get_mut(h) {
+                            Obj::Channel(c) => c.queue.push_back(v),
+                            _ => unreachable!("el checker garantiza un Channel"),
+                        }
+                    }
+                    self.push(HeapValue::Unit);
+                }
+                OpCode::ChanRecv => {
+                    let h = self.pop_obj();
+                    // Some(Some(v)) = hay valor; Some(None) = cerrado y vacío ([]); None = vacío y abierto → bloquear.
+                    let outcome: Option<Option<HeapValue>> = match self.heap.get_mut(h) {
+                        Obj::Channel(c) => {
+                            if let Some(v) = c.queue.pop_front() {
+                                Some(Some(v))
+                            } else if c.closed {
+                                Some(None)
+                            } else {
+                                None
+                            }
+                        }
+                        _ => unreachable!("el checker garantiza un Channel"),
+                    };
+                    match outcome {
+                        Some(Some(v)) => {
+                            let arr = self.heap.allocate(Obj::Array(vec![v]));
+                            self.push(HeapValue::Obj(arr));
+                        }
+                        Some(None) => {
+                            let arr = self.heap.allocate(Obj::Array(Vec::new()));
+                            self.push(HeapValue::Obj(arr));
+                        }
+                        None => {
+                            // Bloquear: guardar la fibra actual (ip ya apunta tras el ChanRecv → al
+                            // despertarla, el `wake_with` le deja el `[T]` en la pila y continúa) y conmutar.
+                            let fiber = Fiber {
+                                frames: std::mem::take(&mut self.frames),
+                                stack: std::mem::take(&mut self.stack),
+                                is_main: self.current_is_main,
+                            };
+                            self.parked.push(Parked { chan: h, fiber });
+                            self.schedule_next(line, col)?;
+                        }
+                    }
                 }
 
                 // --- Stdlib de string (M11.1) ---
@@ -689,11 +802,32 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::Close => {
+                    // Ad-hoc polimórfico: un handle de archivo (int, M11.8) o un canal (M12.1).
                     match self.pop() {
-                        HeapValue::Int(h) => crate::builtins::close_handle(h),
-                        _ => unreachable!("el checker garantiza un int"),
+                        HeapValue::Int(h) => {
+                            crate::builtins::close_handle(h);
+                            self.push(HeapValue::Int(0));
+                        }
+                        // Cerrar un canal: marcarlo cerrado y despertar a TODOS sus receptores bloqueados
+                        // (recibirán [] → None). Devuelve unit.
+                        HeapValue::Obj(ch) => {
+                            match self.heap.get_mut(ch) {
+                                Obj::Channel(c) => c.closed = true,
+                                _ => unreachable!("el checker garantiza un handle o un Channel"),
+                            }
+                            let mut i = 0;
+                            while i < self.parked.len() {
+                                if self.parked[i].chan == ch {
+                                    let parked = self.parked.remove(i);
+                                    self.wake_with(parked.fiber, Vec::new());
+                                } else {
+                                    i += 1;
+                                }
+                            }
+                            self.push(HeapValue::Unit);
+                        }
+                        _ => unreachable!("el checker garantiza un handle (int) o un Channel"),
                     }
-                    self.push(HeapValue::Int(0));
                 }
 
                 // --- Structs (M3.2) ---
@@ -847,12 +981,53 @@ impl<'a> Vm<'a> {
                     let result = self.pop();
                     self.frames.pop();
                     if self.frames.is_empty() {
-                        return Ok(result); // retornó main: fin del programa
+                        // La fibra terminó: si es main → fin del programa; si es spawn → siguiente fibra.
+                        match self.on_fiber_done(result)? {
+                            Some(v) => return Ok(v),
+                            None => continue,
+                        }
                     }
                     self.push(result); // entregamos el valor al llamador
                 }
             }
         }
+    }
+
+    // ----- Scheduler de fibras (M12.1) -----
+
+    /// Una fibra terminó. Si es la principal (`main`) → fin del programa (su valor; semántica Go). Si es
+    /// una fibra `spawn` → su resultado se descarta y se planifica la siguiente. Devuelve `Some(v)` si el
+    /// programa termina, `None` si ya cargó otra fibra (el bucle debe `continue`).
+    fn on_fiber_done(&mut self, result: HeapValue) -> Result<Option<HeapValue>, RuntimeError> {
+        if self.current_is_main {
+            return Ok(Some(result));
+        }
+        self.schedule_next(0, 0)?;
+        Ok(None)
+    }
+
+    /// Carga la siguiente fibra lista en los campos de ejecución de la VM. Si no hay ninguna lista pero sí
+    /// fibras bloqueadas → **deadlock** (nadie puede desbloquearlas).
+    fn schedule_next(&mut self, line: usize, col: usize) -> Result<(), RuntimeError> {
+        if let Some(next) = self.ready.pop_front() {
+            self.frames = next.frames;
+            self.stack = next.stack;
+            self.current_is_main = next.is_main;
+            Ok(())
+        } else if !self.parked.is_empty() {
+            Err(runtime_error(line, col, "deadlock: todas las fibras están bloqueadas esperando un canal"))
+        } else {
+            Err(runtime_error(line, col, "no hay fibras ejecutables"))
+        }
+    }
+
+    /// Despierta una fibra bloqueada en `recv`: le deja `values` (envuelto en el `[T]` que devuelve el
+    /// primitivo `__recv`) en su pila de operandos y la encola como lista. `[v]` la entrega un `send`; `[]`
+    /// (vacío → `None`) la entrega un `close`.
+    fn wake_with(&mut self, mut fiber: Fiber, values: Vec<HeapValue>) {
+        let arr = self.heap.allocate(Obj::Array(values));
+        fiber.stack.push(HeapValue::Obj(arr));
+        self.ready.push_back(fiber);
     }
 
     // ----- Recolección de basura (mark-and-sweep) -----
@@ -861,25 +1036,16 @@ impl<'a> Vm<'a> {
     /// propaga y barre. Solo se llama en puntos seguros del bucle.
     fn collect(&mut self) {
         // Reunimos las raíces (handles) primero, para no tomar prestado `self.stack`
-        // y `self.heap` a la vez.
+        // y `self.heap` a la vez. M12.1: además de la fibra en ejecución, rooteamos TODAS las fibras
+        // (listas y bloqueadas) y los canales que esperan.
         let mut roots: Vec<Handle> = Vec::new();
-        for v in &self.stack {
-            if let Some(h) = v.handle() {
-                roots.push(h);
-            }
+        gather_roots(&self.frames, &self.stack, &mut roots);
+        for f in &self.ready {
+            gather_roots(&f.frames, &f.stack, &mut roots);
         }
-        for frame in &self.frames {
-            for slot in &frame.locals {
-                match slot {
-                    Local::Plain(v) => {
-                        if let Some(h) = v.handle() {
-                            roots.push(h);
-                        }
-                    }
-                    Local::Boxed(h) => roots.push(*h),
-                }
-            }
-            roots.extend(frame.upvalues.iter().copied());
+        for p in &self.parked {
+            roots.push(p.chan); // el canal que espera la fibra debe sobrevivir aunque solo lo referencie ella
+            gather_roots(&p.fiber.frames, &p.fiber.stack, &mut roots);
         }
 
         for h in roots {
@@ -1156,6 +1322,8 @@ fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> String {
                 parts.sort();
                 format!("Map{{{}}}", parts.join(", "))
             }
+            // M12.1: un canal no tiene representación textual significativa (no se inspecciona).
+            Obj::Channel(_) => "<channel>".to_string(),
         },
     }
 }
@@ -1201,12 +1369,39 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
                 }
                 Value::Map(Rc::new(RefCell::new(hm)))
             }
+            // M12.1: un canal vive solo en la VM y nunca es el resultado del programa (main devuelve
+            // int/unit) ni cruza al intérprete (no hay oráculo concurrente) → no necesita representación.
+            Obj::Channel(_) => unreachable!("un canal nunca es el resultado del programa"),
         },
     }
 }
 
 fn runtime_error(line: usize, col: usize, msg: &str) -> RuntimeError {
     RuntimeError { msg: msg.to_string(), line, col }
+}
+
+/// Reúne las raíces del GC (handles) de una fibra: los valores en su pila de operandos y, por cada marco,
+/// sus locales (los `Boxed` son celdas del heap) y sus upvalues. Compartida por la fibra en ejecución y
+/// las suspendidas (M12.1). Función libre para no tomar prestado `self` entero durante la recolección.
+fn gather_roots(frames: &[CallFrame], stack: &[HeapValue], roots: &mut Vec<Handle>) {
+    for v in stack {
+        if let Some(h) = v.handle() {
+            roots.push(h);
+        }
+    }
+    for frame in frames {
+        for slot in &frame.locals {
+            match slot {
+                Local::Plain(v) => {
+                    if let Some(h) = v.handle() {
+                        roots.push(h);
+                    }
+                }
+                Local::Boxed(h) => roots.push(*h),
+            }
+        }
+        roots.extend(frame.upvalues.iter().copied());
+    }
 }
 
 /// Convierte un valor de la VM en una clave de Map (M13.1). El checker garantiza el tipo.

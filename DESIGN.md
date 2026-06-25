@@ -65,7 +65,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ✅ M11.1 stdlib de string (`+`/`len`/`to_string`/`trim`/`split`) · M11.2 I/O (`eprint`/`input`/`parse_int`/`read_int`/`env`/`args`/`read_file`/`write_file`) · M11.3 módulos (`import M;`+`M.f`, `from M import a as b`, `pub`) |
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
-| **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | 🚧 dirección y M12.1 especificados (§21.1/§21.2): M12.1 slice CSP (spawn + canales no acotados) · M12.2 acotados/backpressure · M12.3 structured concurrency · M12.4 `select` |
+| **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | 🚧 §21.1/§21.2: ✅ **M12.1** slice CSP (spawn + canales no acotados + scheduler determinista) · ⏳ M12.2 acotados/backpressure · M12.3 structured concurrency · M12.4 `select` |
 | **Transversal** | optimización de la VM (incremental, midiendo) · **VM auto-alojada** (M14.5, opcional) | rendimiento, bootstrapping | ⏳ |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -2207,6 +2207,16 @@ hay oráculo cruzado VM↔intérprete para ellos). El checker acepta los builtin
 canales **acotados** (`channel(n)`; `send` bloquea al llenarse → backpressure; `send` pasa a ser punto de
 yield). **M12.3** **structured concurrency** (un `scope`/`spawn` que posee y hace *join* de sus tareas, con
 valor de retorno). **M12.4** `select` sobre varios canales (o diferido).
+
+**M12.1 — estado: COMPLETO.** Implementado tal cual se especificó. Notas de implementación: una fibra es
+`Fiber { frames, stack, is_main }`; la VM gana `ready: VecDeque<Fiber>` + `parked: Vec<Parked{chan, fiber}>`
++ `current_is_main`; opcodes `Spawn`/`ChannelNew`/`ChanSend`/`ChanRecv` (el cierre reusa `Close`, **ad-hoc
+polimórfico** porque ya existía `close(h)` de handles de archivo de M11.8 y raylang no tiene sobrecarga);
+canal = `Obj::Channel(VmChannel { queue, closed })` trazado por el GC; `collect` rootea TODAS las fibras +
+el canal que cada *parked* espera. `recv` bloqueante guarda la fibra (su `ip` ya apunta tras `ChanRecv`) y
+`wake_with` le deja el `[T]` en la pila al despertarla. Tests: `tests/concurrency_cli.rs` (productor/
+consumidor, orden determinista con 2 productores, pipeline de fibras, closure capturada, `close`→`None`,
+deadlock, `send` a canal cerrado, error limpio del intérprete). Ejemplo: `examples/concurrencia.ray`.
 
 ## 22. M13 — Habilitadores de self-hosting
 

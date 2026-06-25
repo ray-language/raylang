@@ -379,6 +379,45 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 0, "map_new", "")?;
         Err((None, "no se puede inferir el tipo de map_new; anótalo, p. ej. 'let m: Map<string, int> = map_new()'".into()))
     } },
+
+    // --- Concurrencia: CSP sobre la VM (M12.1). Solo la VM las ejecuta; el intérprete da error limpio. ---
+    // spawn(f) -> unit: lanza la función f (sin parámetros) como green thread.
+    Builtin { name: "spawn", opcode: OpCode::Spawn, check: |a| {
+        arity(a, 1, "spawn", " (una función sin parámetros)")?;
+        match &a[0] {
+            Type::Fn(params, _) if params.is_empty() => Ok(Type::Unit),
+            Type::Fn(_, _) => Err((Some(0), "spawn requiere una función SIN parámetros (fn() -> T)".into())),
+            other => Err((Some(0), format!("spawn espera una función, no {}", other))),
+        }
+    } },
+    // channel() -> Channel<T>: crea un canal. Indeterminado (como map_new): el camino normal lo intercepta.
+    Builtin { name: "channel", opcode: OpCode::ChannelNew, check: |a| {
+        arity(a, 0, "channel", "")?;
+        Err((None, "no se puede inferir el tipo de channel; anótalo, p. ej. 'let c: Channel<int> = channel()'".into()))
+    } },
+    // send(ch, v) -> unit: envía v por el canal ch.
+    Builtin { name: "send", opcode: OpCode::ChanSend, check: |a| {
+        arity(a, 2, "send", " (canal, valor)")?;
+        let et = match &a[0] {
+            Type::Channel(t) => (**t).clone(),
+            other => return Err((Some(0), format!("send espera un Channel como primer argumento, no {}", other))),
+        };
+        if a[1] != et { return Err((Some(1), format!("send: el canal es de {} pero se pasó {}", et, a[1]))); }
+        Ok(Type::Unit)
+    } },
+    // __recv(ch) -> [T]: recibe (primitivo). [v] si hay valor, [] si cerrado+vacío; bloquea si vacío+abierto.
+    // El prelude lo envuelve en recv(ch) -> Option<T>.
+    Builtin { name: "__recv", opcode: OpCode::ChanRecv, check: |a| {
+        arity(a, 1, "__recv", " (canal)")?;
+        match &a[0] {
+            Type::Channel(t) => Ok(Type::Array(Box::new((**t).clone()))),
+            other => Err((Some(0), format!("__recv espera un Channel, no {}", other))),
+        }
+    } },
+    // close: ad-hoc polimórfico (cerrar un recurso). Un Channel (M12.1) → unit; un handle de archivo
+    // (int, M11.8) → int. Una sola entrada `close` (más abajo) lo cubre; NO se duplica aquí (raylang no
+    // tiene sobrecarga). El canal se cierra con `close(ch)` igual que un handle con `close(h)`.
+
     // insert(m, k, v) -> unit: inserta/actualiza la clave k con el valor v en el mapa m (lo muta).
     Builtin { name: "insert", opcode: OpCode::MapInsert, check: |a| {
         arity(a, 3, "insert", " (mapa, clave, valor)")?;
@@ -524,11 +563,15 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::String { return Err((Some(1), format!("__write_handle espera un string (el contenido), no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
-    // close(h) -> int (M11.8): cierra el handle; devuelve 0 (total).
+    // close: ad-hoc polimórfico. close(h: int) -> int (M11.8, cierra un handle de archivo, devuelve 0) o
+    // close(ch: Channel<T>) -> unit (M12.1, cierra un canal). El opcode Close ramifica en runtime.
     Builtin { name: "close", opcode: OpCode::Close, check: |a| {
         arity(a, 1, "close", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("close espera un int (el handle), no {}", a[0]))); }
-        Ok(Type::Int)
+        match &a[0] {
+            Type::Int => Ok(Type::Int),
+            Type::Channel(_) => Ok(Type::Unit),
+            other => Err((Some(0), format!("close espera un handle (int) o un Channel, no {}", other))),
+        }
     } },
     // exists(ruta) -> bool (M11.4b): ¿existe la ruta? Total (no falla).
     Builtin { name: "exists", opcode: OpCode::Exists, check: |a| {

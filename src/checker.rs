@@ -1104,6 +1104,17 @@ impl Checker {
                 }
                 self.ensure_type(&Type::Map(Box::new(self.resolve_type(&args[0])), Box::new(self.resolve_type(&args[1]))), line, col)
             }
+            // `Channel<T>` (M12.1): el elemento puede ser cualquier tipo (sin restricción, a diferencia de
+            // la clave hashable de Map). Llega ya como `Type::Channel` o como `Struct("Channel", [T])`.
+            Type::Channel(t) => self.ensure_type(t, line, col),
+            Type::Struct(name, args) if name == "Channel" => {
+                if args.len() != 1 {
+                    return Err(self.err(line, col, format!(
+                        "Channel espera 1 argumento de tipo, no {}", args.len()
+                    )));
+                }
+                self.ensure_type(&Type::Channel(Box::new(self.resolve_type(&args[0]))), line, col)
+            }
             // `Self` (M9) llega como `Struct("Self")` sin resolver; fuera de un impl no
             // tiene un tipo implementador al que referirse.
             Type::Struct(name, _) if name == "Self" => {
@@ -1203,6 +1214,11 @@ impl Checker {
             Type::Map(k, v) => {
                 Type::Map(Box::new(self.resolve_type(k)), Box::new(self.resolve_type(v)))
             }
+            // `Channel<T>` (M12.1) llega como `Struct("Channel", [T])`; se reclasifica a `Type::Channel`.
+            Type::Struct(name, args) if name == "Channel" && args.len() == 1 => {
+                Type::Channel(Box::new(self.resolve_type(&args[0])))
+            }
+            Type::Channel(t) => Type::Channel(Box::new(self.resolve_type(t))),
             Type::Struct(name, args) => {
                 if self.type_params.contains(name) {
                     Type::Var(name.clone())
@@ -1579,6 +1595,20 @@ impl Checker {
                     Type::Map(_, _) => Ok(expected.clone()),
                     _ => Err(self.err(expr.line, expr.col, format!(
                         "map_new produce un Map, pero aquí se espera {}", expected
+                    ))),
+                }
+            }
+            // M12.1: `channel()` es indeterminado (como `map_new()`); su tipo lo fija el esperado.
+            ExprKind::Call { callee, args }
+                if matches!(&callee.kind, ExprKind::Ident(n) if n == "channel") =>
+            {
+                if !args.is_empty() {
+                    return Err(self.err(expr.line, expr.col, "channel no recibe argumentos".into()));
+                }
+                match expected {
+                    Type::Channel(_) => Ok(expected.clone()),
+                    _ => Err(self.err(expr.line, expr.col, format!(
+                        "channel produce un Channel, pero aquí se espera {}", expected
                     ))),
                 }
             }
@@ -2479,7 +2509,8 @@ fn is_comparable(t: &Type) -> bool {
         // que no se puede comparar dentro de código genérico.
         // `Self` (M9) no debería llegar aquí (se sustituye por el tipo concreto), pero
         // como tipo abstracto no es comparable. Un trait object (M9.3b) tampoco.
-        Type::Unit | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_) | Type::SelfType | Type::Dyn(_) => false,
+        // Un canal (M12.1) no se compara con == (se comunica, no se inspecciona).
+        Type::Unit | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_) | Type::SelfType | Type::Dyn(_) | Type::Channel(_) => false,
     }
 }
 
@@ -2490,6 +2521,7 @@ fn type_has_var(t: &Type) -> bool {
         Type::Var(_) => true,
         Type::Array(e) => type_has_var(e),
         Type::Map(k, v) => type_has_var(k) || type_has_var(v),
+        Type::Channel(t) => type_has_var(t),
         Type::Fn(ps, r) => ps.iter().any(type_has_var) || type_has_var(r),
         Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(type_has_var),
         _ => false,
@@ -2519,6 +2551,7 @@ fn subst(ty: &Type, sigma: &HashMap<String, Type>) -> Type {
         Type::Var(n) => sigma.get(n).cloned().unwrap_or_else(|| ty.clone()),
         Type::Array(e) => Type::Array(Box::new(subst(e, sigma))),
         Type::Map(k, v) => Type::Map(Box::new(subst(k, sigma)), Box::new(subst(v, sigma))),
+        Type::Channel(t) => Type::Channel(Box::new(subst(t, sigma))),
         Type::Fn(ps, r) => Type::Fn(
             ps.iter().map(|p| subst(p, sigma)).collect(),
             Box::new(subst(r, sigma)),
@@ -2553,6 +2586,7 @@ fn unify(param: &Type, arg: &Type, sigma: &mut HashMap<String, Type>) -> Result<
             unify(k1, k2, sigma)?;
             unify(v1, v2, sigma)
         }
+        (Type::Channel(a), Type::Channel(b)) => unify(a, b, sigma),
         (Type::Fn(p1, r1), Type::Fn(p2, r2)) => {
             if p1.len() != p2.len() {
                 return Err(format!("se esperaba {}, se pasó {}", param, arg));
@@ -3178,6 +3212,7 @@ fn type_uses_self(ty: &Type) -> bool {
         Type::Struct(n, _) if n == "Self" => true,
         Type::Array(e) => type_uses_self(e),
         Type::Map(k, v) => type_uses_self(k) || type_uses_self(v),
+        Type::Channel(t) => type_uses_self(t),
         Type::Fn(ps, r) => ps.iter().any(type_uses_self) || type_uses_self(r),
         Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(type_uses_self),
         _ => false,
@@ -3193,6 +3228,7 @@ fn subst_self(ty: &Type, target: &Type) -> Type {
         Type::Struct(n, args) if n == "Self" && args.is_empty() => target.clone(),
         Type::Array(e) => Type::Array(Box::new(subst_self(e, target))),
         Type::Map(k, v) => Type::Map(Box::new(subst_self(k, target)), Box::new(subst_self(v, target))),
+        Type::Channel(t) => Type::Channel(Box::new(subst_self(t, target))),
         Type::Fn(ps, r) => Type::Fn(
             ps.iter().map(|p| subst_self(p, target)).collect(),
             Box::new(subst_self(r, target)),

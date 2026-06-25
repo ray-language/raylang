@@ -175,6 +175,13 @@ fn read_int() -> Option<int> {
     parse_int(s)
 }
 
+// M12.1 (concurrencia): recibe del canal. Some(v) si llega un valor; None si el canal está cerrado y
+// vacío. Envuelve el primitivo __recv (que devuelve [T]) en un Option, como input/parse_int. Solo la VM.
+fn recv<T>(ch: Channel<T>) -> Option<T> {
+    let r = __recv(ch);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
 // Valor de una variable de entorno; None si no está definida.
 fn env(nombre: string) -> Option<string> {
     let r = __env(nombre);

@@ -811,6 +811,14 @@ impl<'a> Interpreter<'a> {
                         };
                         return Err(runtime_error(callee.line, callee.col, &msg));
                     }
+                    // M12.1: la concurrencia (CSP) vive SOLO en la VM (necesita el scheduler de fibras y
+                    // continuaciones que el intérprete tree-walking no tiene). Error limpio en vez de panic.
+                    // `close` NO va aquí: es ad-hoc polimórfico y su forma de handle de archivo (M11.8) sí
+                    // corre en el intérprete; un canal nunca llega al intérprete (channel() ya da error).
+                    if name == "spawn" || name == "channel" || name == "send" || name == "__recv" {
+                        return Err(runtime_error(callee.line, callee.col,
+                            "la concurrencia (spawn/channel/send/recv) requiere la VM; ejecuta con --vm"));
+                    }
                     return Ok(self.eval_builtin(name, values));
                 }
                 // Función de nivel superior: llamada directa.

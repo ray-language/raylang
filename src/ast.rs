@@ -35,6 +35,10 @@ pub enum Type {
     /// los arreglos). El parser lo produce como `Struct("Map", [K, V])`; el checker lo
     /// reclasifica aquí (igual que `Enum`/`Var`).
     Map(Box<Type>, Box<Type>),
+    /// Un canal tipado `Channel<T>` (M12.1): el medio de comunicación entre green threads (CSP).
+    /// Semántica de referencia (objeto del heap). El parser lo produce como `Struct("Channel", [T])`;
+    /// el checker lo reclasifica aquí (igual que `Map`). La concurrencia vive solo en la VM.
+    Channel(Box<Type>),
     /// Un struct nominal, con sus **argumentos de tipo**: `Punto` es
     /// `Struct("Punto", [])`; `Par<int, bool>` es `Struct("Par", [Int, Bool])` (M6).
     /// Tipado **nominal** (M3.2): la igualdad compara nombre y argumentos.
@@ -78,6 +82,7 @@ impl std::fmt::Display for Type {
             Type::Unit => f.write_str("unit"),
             Type::Array(elem) => write!(f, "[{}]", elem),
             Type::Map(k, v) => write!(f, "Map<{}, {}>", k, v),
+            Type::Channel(t) => write!(f, "Channel<{}>", t),
             Type::Struct(name, args) | Type::Enum(name, args) => {
                 f.write_str(name)?;
                 if !args.is_empty() {

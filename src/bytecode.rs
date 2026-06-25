@@ -178,6 +178,21 @@ pub enum OpCode {
     /// (para que case posición a posición con `keys` y sea determinista). Builtin `values`.
     MapValues,
 
+    // --- Concurrencia: CSP sobre la VM (M12.1) ---
+    /// Saca un **valor-función** (`fn() -> T`); crea una **fibra** (green thread) nueva que lo ejecuta y
+    /// la encola en el scheduler, y empuja unit. Builtin `spawn`. Solo la VM.
+    Spawn,
+    /// No saca nada; asigna un **canal vacío** en el heap y empuja su handle. Builtin `channel`. Solo VM.
+    ChannelNew,
+    /// Saca valor y canal; **envía** el valor (lo entrega a un receptor bloqueado o lo encola) y empuja
+    /// unit. No acotado → nunca bloquea (M12.1). Error si el canal está cerrado. Builtin `send`. Solo VM.
+    ChanSend,
+    /// Saca un canal; empuja un arreglo `[T]` con **0 o 1** elementos (el valor recibido, o vacío si el
+    /// canal está cerrado y vacío). Si está vacío y abierto, **bloquea** la fibra. Primitivo `__recv`;
+    /// el prelude lo envuelve en `Option<T>`. Solo VM.
+    ChanRecv,
+    // (cerrar un canal reusa el opcode `Close` de M11.8, ad-hoc polimórfico: handle de archivo o canal.)
+
     // --- Aserciones (M13.2a) ---
     /// Saca un string (el mensaje) y **aborta** la ejecución con un error de runtime que lo lleva,
     /// en la posición de la llamada. Builtin `panic`; el prelude lo usa para `assert`/`assert_eq`.

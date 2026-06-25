@@ -40,3 +40,15 @@ fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A {
     }
     acc
 }
+
+// M14.6c: envoltorios sobre los primitivos `__parse_int`/`__parse_float` (que devuelven [T] vacío/único),
+// traducidos a Option con Some/None corrientes — el runtime no sabe de Option (patrón de la stdlib).
+fn parse_int(s: string) -> Option<int> {
+    let r = __parse_int(s);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+fn parse_float(s: string) -> Option<float> {
+    let r = __parse_float(s);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}

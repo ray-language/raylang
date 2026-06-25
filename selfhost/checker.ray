@@ -656,6 +656,13 @@ fn inject_prelude_fns(c: Checker, prog: Program) {
     inject_fn(c, prog, "fold", FnSig {
         params: [Type.TArray(t), a, Type.TFn([a, t], a)], ret: a, type_params: ["T", "A"], bounds: no_bounds(),
     });
+    // parse_int(s: string) -> Option<int> / parse_float(s: string) -> Option<float> (M14.6c).
+    inject_fn(c, prog, "parse_int", FnSig {
+        params: [Type.TString], ret: Type.TNamed("Option", [Type.TInt]), type_params: no_tparams(), bounds: no_bounds(),
+    });
+    inject_fn(c, prog, "parse_float", FnSig {
+        params: [Type.TString], ret: Type.TNamed("Option", [Type.TFloat]), type_params: no_tparams(), bounds: no_bounds(),
+    });
 }
 
 // Registra una función del prelude (su firma) si el usuario no la define con ese nombre.
@@ -1504,6 +1511,7 @@ fn is_known_builtin(name: string) -> bool {
         || name == "join"
         || name == "map_new" || name == "insert" || name == "get" || name == "contains_key"
         || name == "keys" || name == "values" || name == "remove"
+        || name == "panic" || name == "__parse_int" || name == "__parse_float"
 }
 
 // ¿`name` nombra algo llamable? (builtin, variable local de función, o función de nivel superior.)
@@ -1555,6 +1563,9 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
     if (name == "keys") { return check_keys(c, cargs, line, col); }
     if (name == "values") { return check_values(c, cargs, line, col); }
     if (name == "map_new") { return check_map_new(c, cargs, Option.None, line, col); }
+    if (name == "panic") { return check_panic(c, cargs, line, col); }
+    if (name == "__parse_int") { return check_parse_prim(c, "__parse_int", Type.TInt, cargs, line, col); }
+    if (name == "__parse_float") { return check_parse_prim(c, "__parse_float", Type.TFloat, cargs, line, col); }
     match (lookup(c, name)) {
         Option.Some(v) => { return call_type(c, v.ty, cargs, line, col); },
         Option.None => {},
@@ -1745,6 +1756,24 @@ fn check_to_string(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Typ
         return Result.Err(terr(cargs[0].line, cargs[0].col, "to_string solo convierte int/float/bool/string/char, no " + type_str(a[0])));
     }
     Result.Ok(Type.TString)
+}
+
+// panic(msg: string) -> unit (M14.6c). Aborta la ejecución; el análisis de divergencia ya lo
+// reconoce por nombre (`expr_diverges`). Mensaje byte-idéntico a `src/builtins.rs`.
+fn check_panic(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("panic", 1, "", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, "panic espera un string, no ")?;
+    Result.Ok(Type.TUnit)
+}
+
+// __parse_int/__parse_float(s: string) -> [T] (M14.6c): primitivos que devuelven [] / [n]. Los
+// envoltorios `parse_int`/`parse_float` del prelude los traducen a Option. `elem` es int o float.
+fn check_parse_prim(c: Checker, name: string, elem: Type, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity(name, 1, "", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    want_string(a, cargs, 0, name + " espera un string, no ")?;
+    Result.Ok(Type.TArray(elem))
 }
 
 fn check_trim(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {

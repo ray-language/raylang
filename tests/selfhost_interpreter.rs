@@ -391,6 +391,34 @@ fn map_builtins() {
 }
 
 #[test]
+fn parse_y_panic() {
+    // M14.6c-1: parse_int/parse_float (envoltorios del prelude sobre __parse_int/__parse_float,
+    // que devuelven Option) — lo que el lexer usa al tokenizar números.
+    comparar_fuente(
+        "fn main() -> int { \
+            match (parse_int(\"42\")) { Option.Some(n) => print(n), Option.None => print(0 - 1) } \
+            match (parse_int(\"-7\")) { Option.Some(n) => print(n), Option.None => print(0 - 1) } \
+            match (parse_int(\"abc\")) { Option.Some(n) => print(n), Option.None => print(0 - 1) } \
+            match (parse_float(\"3.5\")) { Option.Some(f) => print(f), Option.None => print(0.0 - 1.0) } \
+            match (parse_float(\"x\")) { Option.Some(f) => print(f), Option.None => print(0.0 - 1.0) } \
+            0 \
+        }",
+        "in_parse.ray",
+    );
+    // panic que NO dispara (camino feliz) — el análisis de divergencia cede el tipo al otro brazo.
+    comparar_fuente(
+        "fn pos(n: int) -> int { if (n >= 0) { n } else { panic(\"negativo\") } } \
+         fn main() -> int { print(pos(5)); 0 }",
+        "in_panic_ok.ray",
+    );
+    // panic que SÍ dispara: aborta con código de salida 70 en ambos pipelines (stdout previo intacto).
+    comparar_fuente(
+        "fn main() -> int { print(1); panic(\"boom\"); 0 }",
+        "in_panic_fire.ray",
+    );
+}
+
+#[test]
 fn codigo_de_salida() {
     // El código de salida del runner es el int que devuelve main (0 si es unit).
     comparar_fuente("fn main() -> int { 42 }", "in_exit42.ray");

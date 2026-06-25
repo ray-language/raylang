@@ -2849,3 +2849,18 @@ diferido aditivo (fila en el checker + impl en el intérprete, como M11.4).
   compartida) → mismo stdout + exit que Rust. (`examples/mapa.ray` aún no: usa `assert_eq`/`assert` del
   prelude → M14.6c.) Pendiente: `panic` en el checker, `parse_int`/`parse_float`, `assert`/`sort` → luego
   ejecutar el compilador auto-alojado.
+- **M14.6c-1 COMPLETO** — **`panic` + `parse_int`/`parse_float`**. El **checker auto-alojado** gana el
+  builtin **`panic(msg: string) -> unit`** (`check_panic`; el análisis de divergencia `expr_diverges` ya
+  lo reconocía por nombre → ahora también lo TIPA) y los primitivos **`__parse_int`/`__parse_float`**
+  (`check_parse_prim`, `(string) -> [int]`/`[float]`), todos registrados en `is_known_builtin`/
+  `check_named_call`; las **firmas** de los envoltorios `parse_int`/`parse_float` (`(string) ->
+  Option<int>`/`Option<float>`) se inyectan en `inject_prelude_fns`. El **intérprete** implementa
+  `__parse_int`/`__parse_float` **delegando en los del host** (`Option` → `[T]` de 0/1 elemento) y ya
+  tenía `panic` (M14.4a). Los **cuerpos** `parse_int`/`parse_float` se añaden a `selfhost/prelude.ray`
+  (envoltorios sobre los primitivos → `Option`, como en Rust; el driver los fusiona en el programa). Es
+  exactamente lo que el lexer usa al tokenizar números y abortar. Oráculo: intérprete (21 tests:
+  parse_int/parse_float camino feliz y fallo, `panic` que no dispara —cede el tipo— y que sí dispara
+  —exit 70 en ambos—); checker (25 tests: válidos + errores byte-idénticos). **Lo que falta para correr
+  el lexer entero sobre el intérprete auto-alojado NO es la stdlib**, sino dos diferidos mayores: **carga
+  de módulos** (el pipeline auto-alojado procesa un solo archivo, no resuelve `import`) y los **builtins
+  de I/O** (`args`/`read_file`) que usa `lex_dump.ray`. Pendiente de M14.6c: `assert`/`assert_eq`/`sort`.

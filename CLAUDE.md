@@ -903,6 +903,17 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       insertion sort) → deterministas como Rust. Oráculo: claves string/int + remove. (`examples/mapa.ray`
       espera M14.6c por `assert_eq`/`assert`.) Pendiente: `panic` en el checker, `parse_int`/`parse_float`,
       `assert`/`sort` → luego correr el compilador auto-alojado.
+    - **M14.6c-1 COMPLETO** (347 lib + 21 en `tests/selfhost_interpreter.rs` + 25 en `tests/selfhost_checker.rs`):
+      **`panic` + `parse_int`/`parse_float`** (lo que el lexer usa al tokenizar números y abortar).
+      **Checker**: builtin `panic(string) -> unit` (`check_panic`; `expr_diverges` ya lo reconocía por
+      nombre, ahora también lo TIPA) + primitivos `__parse_int`/`__parse_float` (`check_parse_prim`,
+      `(string) -> [int]`/`[float]`) en `is_known_builtin`/`check_named_call`; firmas de los envoltorios
+      `parse_int`/`parse_float` (`-> Option<…>`) en `inject_prelude_fns`. **Intérprete**: `__parse_int`/
+      `__parse_float` delegan en el host (`Option`→`[T]` de 0/1); `panic` ya estaba (M14.4a). **Cuerpos**
+      `parse_int`/`parse_float` en `selfhost/prelude.ray` (fusionados por el driver). **El lexer entero NO
+      lo bloquea la stdlib**, sino dos diferidos mayores: **carga de módulos** (el pipeline auto-alojado
+      procesa un solo archivo) y los **builtins de I/O** (`args`/`read_file`) de `lex_dump.ray`. Pendiente
+      de M14.6c: `assert`/`assert_eq`/`sort`.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

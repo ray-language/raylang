@@ -377,6 +377,20 @@ fn errores_derive_y_anotaciones() {
     comparar("@derive() struct S { x: int } fn main() -> int { 0 }", "scane_derempty.ray");
 }
 
+#[test]
+fn panic_y_parse() {
+    // M14.6c-1: válidos.
+    // parse_int/parse_float (envoltorios del prelude) → Option<int>/Option<float>.
+    comparar("fn main() -> int { match (parse_int(\"5\")) { Option.Some(n) => n, Option.None => 0 } }", "scpp_pi.ray");
+    comparar("fn main() -> int { match (parse_float(\"5.0\")) { Option.Some(f) => 1, Option.None => 0 } }", "scpp_pf.ray");
+    // panic como expresión divergente: cede el tipo al otro brazo del if.
+    comparar("fn pos(n: int) -> int { if (n >= 0) { n } else { panic(\"neg\") } } fn main() -> int { pos(3) }", "scpp_pan.ray");
+    // Errores (mensajes byte-idénticos a Rust).
+    comparar("fn main() -> int { panic(5); 0 }", "scpp_pantype.ray");
+    comparar("fn main() -> int { panic(); 0 }", "scpp_panarity.ray");
+    comparar("fn main() -> int { match (parse_int(42)) { Option.Some(n) => n, Option.None => 0 } }", "scpp_pitype.ray");
+}
+
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
 fn ejemplos_reales_validos() {

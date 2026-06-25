@@ -543,6 +543,7 @@ fn is_builtin(name: string) -> bool {
         || name == "join"
         || name == "map_new" || name == "insert" || name == "get" || name == "contains_key"
         || name == "keys" || name == "values" || name == "remove"
+        || name == "__parse_int" || name == "__parse_float"
 }
 
 // `len` de un arreglo, un string (nº de caracteres) o un Map (nº de entradas).
@@ -726,6 +727,20 @@ fn dispatch_builtin(c: Interp, name: string, vals: [Value], line: int, col: int)
     if (name == "repeat") { return Result.Ok(Value.VStr(repeat(as_str(vals[0]), as_int(vals[1])))); }
     if (name == "join") { return Result.Ok(Value.VStr(builtin_join(vals[0], as_str(vals[1])))); }
     if (name == "contains") { return Result.Ok(Value.VBool(builtin_contains(vals[0], vals[1]))); }
+    // --- Primitivos de parseo (M14.6c): delegan en el host y devuelven [T] (0 o 1 elemento),
+    // que los envoltorios `parse_int`/`parse_float` del prelude traducen a Option (como en Rust). ---
+    if (name == "__parse_int") {
+        return match (parse_int(as_str(vals[0]))) {
+            Option.Some(n) => Result.Ok(Value.VArray([Value.VInt(n)])),
+            Option.None => Result.Ok(Value.VArray(no_vals())),
+        };
+    }
+    if (name == "__parse_float") {
+        return match (parse_float(as_str(vals[0]))) {
+            Option.Some(f) => Result.Ok(Value.VArray([Value.VFloat(f)])),
+            Option.None => Result.Ok(Value.VArray(no_vals())),
+        };
+    }
     // --- Builtins de Map (M14.6b) ---
     if (name == "map_new") { return Result.Ok(Value.VMap(MapData { keys: no_vals(), vals: no_vals() })); }
     if (name == "insert") {

@@ -66,7 +66,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
 | **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.6: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure · ✅ **M12.3** structured concurrency · ✅ **M12.4** `select` · ✅ **M12.5** cancelación de hermanas. **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>`, select de send) |
-| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete) · ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port`; `OpenHandle::Listener`; servidor secuencial bloqueante; subproceso con el `.ray` de servidor). Pendiente: M15.4 HTTP/JSON en raylang · (capstone) M15.5 sockets no bloqueantes en el scheduler |
+| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete) · ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port`; `OpenHandle::Listener`; servidor secuencial bloqueante; subproceso con el `.ray` de servidor) · ✅ **M15.4a** JSON (librería `examples/json.ray` en raylang: `parse`/`stringify`, objetos `Map<string,Json>`, salida canónica; cero runtime; subproceso golden). Pendiente: M15.4b HTTP en raylang · (capstone) M15.5 sockets no bloqueantes en el scheduler |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) ⏳ | rendimiento, bootstrapping | 🚧 |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -3501,3 +3501,34 @@ secuencial, que basta para un echo y para servir peticiones cortas.
 **Pruebas por subproceso.** Inverso de M15.2: el `.ray` es el **servidor** (escucha en puerto 0, lo
 imprime, acepta una conexión, hace eco) y el **cliente de juguete en Rust** se conecta y verifica el
 eco. Para descubrir el puerto efímero, el `.ray` lo imprime y el test lo lee de su stdout.
+
+### 24.7 M15.4 — protocolos como librería en raylang (JSON + HTTP)
+
+El cambio de registro de M15: hasta aquí, la base eran **builtins** (Rust). Ahora los **protocolos** se
+escriben **en el propio raylang** y se traen con `import` —**cero líneas de Rust**, cero builtins—.
+Es la materialización de la filosofía "lo que se puede escribir en el lenguaje, se escribe en el
+lenguaje" y un *showcase* del sistema de módulos (M11) sobre la stdlib (string/Map/Result). Dos
+librerías, en dos sub-fases:
+
+- **M15.4a — JSON** (`examples/json.ray`): `parse`/`stringify` de JSON, **en raylang**. Determinista
+  → se prueba por subproceso con salida exacta (golden) en ambos motores.
+- **M15.4b — HTTP** (`examples/http.ray`): un cliente HTTP/1.1 (`get`/`request`) + parseo de la
+  respuesta, **en raylang** sobre los builtins de TCP de M15.2. Se prueba contra un servidor HTTP de
+  juguete en Rust.
+
+**M15.4a — JSON (especificación).** Un valor JSON es un enum recursivo:
+
+```raylang
+pub enum Json { JNull, JBool(bool), JNum(float), JStr(string), JArray([Json]), JObject(Map<string, Json>) }
+pub fn parse(s: string) -> Result<Json, string>   // descenso recursivo sobre la cadena
+pub fn stringify(j: Json) -> string                // serialización
+```
+
+Decisiones: los **objetos** se modelan con `Map<string, Json>` (M13.1) → claves únicas y, al
+serializar, **ordenadas** (`keys` es determinista) → `stringify` canónico y *round-trip* estable.
+Los **números** son `float` (un solo caso, simple). El parser es un descenso recursivo clásico con un
+`struct P { s, i, n }` mutado por referencia (semántica de struct de M3, como el lexer auto-alojado);
+usa `s[i]`/`chars`/comparación de `char`/`substring`/`parse_float` de la stdlib. Errores como
+**valores** (`Result`), nunca `panic`. Limitación documentada: los escapes `\uXXXX` no se soportan
+(convertir un *code point* a `char` necesitaría un builtin nuevo; fuera de la filosofía "solo
+librería"). Como toda librería de raylang, **el runtime no cambia**.

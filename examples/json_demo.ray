@@ -1,0 +1,27 @@
+// M15.4a — demo de la librería JSON (importada con `from`).
+//
+// Parsea un documento, lo re-serializa de forma canónica (claves ordenadas) y comprueba que el
+// round-trip es estable (parse → stringify → parse → stringify da lo mismo).
+
+from json import Json, parse, stringify;
+
+fn main() -> int {
+    let entrada: string = "{\"nombre\": \"raylang\", \"version\": 15.0, \"activo\": true, \"tags\": [\"lang\", \"toy\"], \"meta\": null}";
+
+    match (parse(entrada)) {
+        Result.Ok(j) => {
+            let canon: string = stringify(j);
+            print(canon);
+
+            // Idempotencia: re-parsear y re-serializar debe dar exactamente lo mismo.
+            match (parse(canon)) {
+                Result.Ok(j2) => {
+                    if (stringify(j2) == canon) { print("estable") } else { print("INESTABLE") }
+                },
+                Result.Err(e) => print("re-parse error: " + e),
+            };
+            0
+        },
+        Result.Err(e) => { eprint("parse error: " + e); 1 },
+    }
+}

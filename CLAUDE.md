@@ -1043,6 +1043,19 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       **los 33 ejemplos deterministas corren idénticos por la VM auto-alojada y por Rust**. **La VM auto-alojada
       ejecuta el LENGUAJE COMPLETO** (núcleo+datos+primera clase+despacho dinámico+prelude). Pendiente: TCO
       (opcional), VM meta-circular (correr el compilador sobre la VM).
+    - **M14.5e COMPLETO** (347 lib + 15 en `tests/selfhost_vm.rs` + 1 `#[ignore]`): **TCO** (recursión de cola
+      en O(1) marcos) en la VM auto-alojada. Port de M13.3b: un **peephole** `optimize_tail_calls` (en
+      `compile_body`) reescribe toda llamada (`OCall`/`OCallValue`/`ODispatch`) cuya continuación sea un
+      `OReturn` —directo o vía saltos incondicionales (`returns_immediately`)— a su variante `OTailCall`/
+      `OTailCallValue`/`OTailDispatch`, que **reutilizan el marco** (`frames[top] = new_frame(...)`) en vez de
+      apilar uno → la recursión de cola corre en O(1) marcos. Cubre también `ODispatch` (que Rust no tiene; sus
+      métodos son `Call`): `OTailDispatch` reutiliza el marco si resuelve a una función, o empuja el valor si es
+      directo (@derive/builtin). Gotcha: `Option.None` del peephole necesitó anotar `let nuevo: Option<Op>`
+      (la inferencia no cruza al `else`). Verificado: 1M de recursión de cola directa y mutua corre por la VM
+      auto-alojada idéntico a Rust (oráculo `recursion_de_cola`, `#[ignore]` por lento ~7 min doble-interpretado:
+      `cargo test --test selfhost_vm -- --ignored`); los 33 ejemplos deterministas siguen idénticos con el
+      peephole activo. **M14.5 (la VM auto-alojada) COMPLETA con TCO.** Pendiente: VM meta-circular (verificar
+      `run_vm.ray` sobre `run_vm.ray`).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

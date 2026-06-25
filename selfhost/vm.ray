@@ -159,6 +159,29 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                     Dispatch.DValue(v) => push(fr.stack, v),
                 };
             },
+            // --- M14.5e: llamadas en cola. REUTILIZAN el marco actual (lo reemplazan) en vez de apilar →
+            // la recursión de cola corre en O(1) marcos. Al retornar, el valor va al llamador ORIGINAL.
+            Op.OTailCall(idx, argc) => {
+                let args = pop_n(fr.stack, argc);
+                frames[len(frames) - 1] = new_frame(cp, idx, args, no_cells());
+            },
+            Op.OTailCallValue(argc) => {
+                let args = pop_n(fr.stack, argc);
+                match (pop_val(fr.stack)) {
+                    Value.VVmClosure(idx, cells) => { frames[len(frames) - 1] = new_frame(cp, idx, args, cells); },
+                    _ => panic("VM: llamada a un valor que no es función"),
+                };
+            },
+            Op.OTailDispatch(fname, argc) => {
+                let args = pop_n(fr.stack, argc);
+                let recv = pop_val(fr.stack);
+                match (resolve_dispatch(cp, prog_args, recv, fname, args)?) {
+                    // En cola: reutiliza el marco. Si resuelve a un valor directo, lo empuja y el `OReturn`
+                    // que sigue lo retorna (sin optimización de cola, pero correcto).
+                    Dispatch.DFrame(idx, callargs, cells) => { frames[len(frames) - 1] = new_frame(cp, idx, callargs, cells); },
+                    Dispatch.DValue(v) => push(fr.stack, v),
+                };
+            },
             Op.OReturn => {
                 let rv = pop_val(fr.stack);
                 pop(frames);

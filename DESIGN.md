@@ -3073,3 +3073,22 @@ cortocircuito, locales, if/while, llamadas nombradas, recursión, builtins escal
   LENGUAJE COMPLETO** (núcleo + datos + primera clase + despacho dinámico + prelude); el compilador auto-alojado
   tiene ya DOS back-ends (intérprete M14.4 + VM M14.5), como Rust (M1 + M2). Diferido: TCO en la VM
   auto-alojada (opcional), VM meta-circular (correr el compilador auto-alojado sobre la VM auto-alojada).
+- **M14.5e COMPLETO → M14.5 (VM auto-alojada) COMPLETA CON TCO** — **TCO** (recursión de cola en O(1) marcos),
+  port de M13.3b. Un **peephole** `optimize_tail_calls` (corrido en `compile_body` sobre el bytecode ya
+  generado) reescribe toda llamada `OCall`/`OCallValue`/`ODispatch` cuya continuación sea un `OReturn` —directo
+  o a través de saltos incondicionales (`returns_immediately` sigue la cadena de `OJump`)— a su variante de
+  cola `OTailCall`/`OTailCallValue`/`OTailDispatch`. Las variantes de cola **reutilizan el marco actual**
+  (`frames[top] = new_frame(...)`) en lugar de apilar uno nuevo: al retornar, el valor va al llamador ORIGINAL,
+  así la recursión de cola corre en O(1) marcos. A diferencia de Rust —que solo tiene `TailCall`/
+  `TailCallValue` porque sus métodos se bajan a `Call`—, aquí también hay `OTailDispatch` (los métodos/UFCS van
+  por `ODispatch`): reutiliza el marco si el despacho resuelve a una función (campo-función/método/UFCS), o
+  empuja el valor si es directo (`@derive`/`menor` primitivo/builtin) y deja que el `OReturn` siguiente lo
+  retorne. El compilador ya emite el patrón llamada→`Return` de forma natural (rama-else cae al `Return` final,
+  un `return e` lo emite tras `e`), así que basta reconocerlo. Gotcha: el `Option.None` del peephole no infería
+  su `T` (la inferencia no cruza del `then` al `else` del `if`) → se anotó `let nuevo: Option<Op>`. Verificado:
+  1M de recursión de cola directa y mutua corre por la VM auto-alojada idéntico a Rust (oráculo
+  `recursion_de_cola`, `#[ignore]` por lento ~7 min doble-interpretado; `cargo test --test selfhost_vm --
+  --ignored`); los 33 ejemplos deterministas siguen idénticos con el peephole activo (la corrección de los
+  opcodes Tail* la cubre también el corpus por defecto: gcd/primes/sort tienen llamadas en cola). **La VM
+  auto-alojada está completa (con TCO).** Diferido: VM meta-circular (verificar `run_vm.ray` corriendo
+  `run_vm.ray`, análogo al run-on-run del intérprete de M14.7c).

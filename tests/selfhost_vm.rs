@@ -309,3 +309,31 @@ fn metodos_y_ufcs_snippets() {
         "vm_sort.ray",
     );
 }
+
+// ---------------------------------------------------------------------
+// M14.5e — TCO (recursión de cola en O(1) marcos). Una recursión de cola
+// profunda corre por la VM auto-alojada reutilizando el marco, sin
+// desbordar, igual que en Rust (que tiene TCO desde M13.3b).
+//
+// `#[ignore]`: profundidades de 200k DOBLE-interpretadas (la VM auto-alojada
+// corre sobre la VM del host) son lentas (~1 min). Es el oráculo THOROUGH —
+// la prueba real de O(1) marcos—, como el run-on-run meta-circular:
+//   cargo test --test selfhost_vm -- --ignored
+// La corrección de los opcodes Tail* también la cubre el resto del corpus
+// (gcd/primes/sort... tienen llamadas en cola), que sí corre por defecto.
+// ---------------------------------------------------------------------
+
+#[test]
+#[ignore]
+fn recursion_de_cola() {
+    // Recursión de cola DIRECTA profunda (sin TCO crecería el stack de marcos sin límite → desbordaría).
+    comparar_fuente(
+        "fn cuenta(n: int, acc: int) -> int { if (n == 0) { acc } else { cuenta(n - 1, acc + n) } } fn main() -> int { print(cuenta(1000000, 0)); 0 }",
+        "vm_tco_directa.ray",
+    );
+    // Recursión de cola MUTUA profunda.
+    comparar_fuente(
+        "fn par(n: int) -> bool { if (n == 0) { true } else { impar(n - 1) } } fn impar(n: int) -> bool { if (n == 0) { false } else { par(n - 1) } } fn main() -> int { if (par(1000000)) { print(1); } else { print(0); } 0 }",
+        "vm_tco_mutua.ray",
+    );
+}

@@ -55,6 +55,8 @@ pub enum Op {
     OTry,                        // operador `?`: desempaqueta Ok/Some, o retorna Err/None de la función
     // --- M14.5d: despacho dinámico ---
     ODispatch(string, int),      // recv.fname(args): resuelto en runtime por la etiqueta del valor
+    // --- M14.5e: llamadas en cola (TCO) — reutilizan el marco actual en vez de apilar uno nuevo ---
+    OTailCall(int, int), OTailCallValue(int), OTailDispatch(string, int),
 }
 
 // La fuente de un upvalue: una local de la función envolvente (por slot) o un upvalue suyo (transitivo).
@@ -562,9 +564,53 @@ fn compile_body(comp: Comp, name: string, params: [Param], body: Block) -> Compi
     emit_block(comp, body);       // deja el valor del cuerpo en la pila
     emit(comp, Op.OReturn);       // ...que se retorna
     let s = top(comp);
+    optimize_tail_calls(s.code);  // M14.5e: las llamadas en posición de cola → variantes TailCall
     let cfn = CompiledFn { name: name, arity: len(params), nslots: s.max_slots, chunk: Chunk { code: s.code, consts: s.consts } };
     pop(comp.scopes);
     cfn
+}
+
+// Peephole de TCO (M14.5e, port de `optimize_tail_calls` de Rust): toda llamada (`OCall`/`OCallValue`/
+// `ODispatch`) cuya continuación sea un `OReturn` —directo o a través de saltos incondicionales— se
+// convierte en su variante `OTail*`, que REUTILIZA el marco en vez de apilar uno nuevo → recursión de cola
+// en O(1) marcos. El compilador ya emite ese patrón de forma natural (rama-else cae al `Return` final, etc.),
+// así que basta reconocerlo en el bytecode ya generado.
+fn optimize_tail_calls(code: [Op]) {
+    var i = 0;
+    while (i < len(code)) {
+        let nuevo: Option<Op> = match (code[i]) {
+            Op.OCall(idx, argc) => if (returns_immediately(code, i + 1)) { Option.Some(Op.OTailCall(idx, argc)) } else { Option.None },
+            Op.OCallValue(argc) => if (returns_immediately(code, i + 1)) { Option.Some(Op.OTailCallValue(argc)) } else { Option.None },
+            Op.ODispatch(fname, argc) => if (returns_immediately(code, i + 1)) { Option.Some(Op.OTailDispatch(fname, argc)) } else { Option.None },
+            _ => Option.None,
+        };
+        match (nuevo) {
+            Option.Some(op) => { code[i] = op; },
+            Option.None => {},
+        }
+        i = i + 1;
+    }
+}
+
+// ¿La instrucción en `start` (siguiendo saltos incondicionales) es un `OReturn`? El bucle acotado a la
+// longitud del código evita ciclos infinitos ante un bytecode degenerado.
+fn returns_immediately(code: [Op], start: int) -> bool {
+    var j = start;
+    var steps = 0;
+    var result = false;
+    var done = false;
+    while (!done && steps <= len(code)) {
+        if (j < 0 || j >= len(code)) { done = true; }
+        else {
+            match (code[j]) {
+                Op.OReturn => { result = true; done = true; },
+                Op.OJump(t) => { j = t; },
+                _ => { done = true; },
+            }
+        }
+        steps = steps + 1;
+    }
+    result
 }
 
 // Compila los métodos de los `impl` del programa y puebla la tabla `Tipo#metodo → índice` (incluye los

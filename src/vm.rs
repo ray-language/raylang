@@ -116,6 +116,14 @@ struct Parked {
     waiting: Waiting,
 }
 
+/// M15.5/M17: una fibra aparcada esperando **E/S de red**, junto al descriptor (`fd`) del socket por el
+/// que espera. El `fd` permite que el scheduler lo registre en el poller del SO (`kqueue`/`epoll`, M17)
+/// y despierte **solo** las fibras de los sockets que quedaron listos, en vez de re-encolarlas todas.
+struct IoParked {
+    fd: i32,
+    fiber: Fiber,
+}
+
 struct Vm<'a> {
     program: &'a CompiledProgram,
     frames: Vec<CallFrame>,
@@ -126,10 +134,11 @@ struct Vm<'a> {
     ready: VecDeque<Fiber>,
     /// Fibras bloqueadas en `recv`/`send`/`join`, con el handle (canal o tarea) que esperan.
     parked: Vec<Parked>,
-    /// M15.5: fibras aparcadas esperando **E/S de red** (`accept`/`read` que dieron `WouldBlock`). No
-    /// llevan handle de GC (un socket es un `int` del registro del host, no un objeto del heap). El
-    /// scheduler las re-encola cuando no hay nadie listo (busy-poll cooperativo).
-    io_parked: Vec<Fiber>,
+    /// M15.5/M17: fibras aparcadas esperando **E/S de red** (`accept`/`read` que dieron `WouldBlock`),
+    /// cada una con el `fd` de su socket. No llevan handle de GC (un socket es un `int` del registro del
+    /// host, no un objeto del heap). El scheduler espera readiness real en el poller del SO (M17) y, si
+    /// no hay poller, cae al busy-poll cooperativo de M15.5.
+    io_parked: Vec<IoParked>,
     /// ¿La fibra en ejecución es la principal (`main`)? Su retorno termina el programa (semántica Go).
     current_is_main: bool,
     /// M12.3: la `Task` que la fibra en ejecución debe rellenar al terminar (`None` para `main`).
@@ -771,7 +780,9 @@ impl<'a> Vm<'a> {
                             self.push(HeapValue::Int(handle));
                             self.frames.last_mut().unwrap().ip -= 1;
                             let fiber = self.take_current_fiber();
-                            self.io_parked.push(fiber);
+                            // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
+                            let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
+                            self.io_parked.push(IoParked { fd, fiber });
                             self.schedule_next(line, col)?;
                         }
                     }
@@ -1129,7 +1140,9 @@ impl<'a> Vm<'a> {
                             self.push(HeapValue::Int(handle));
                             self.frames.last_mut().unwrap().ip -= 1;
                             let fiber = self.take_current_fiber();
-                            self.io_parked.push(fiber);
+                            // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
+                            let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
+                            self.io_parked.push(IoParked { fd, fiber });
                             self.schedule_next(line, col)?;
                         }
                     }
@@ -1186,7 +1199,9 @@ impl<'a> Vm<'a> {
                             self.push(HeapValue::Int(handle));
                             self.frames.last_mut().unwrap().ip -= 1;
                             let fiber = self.take_current_fiber();
-                            self.io_parked.push(fiber);
+                            // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
+                            let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
+                            self.io_parked.push(IoParked { fd, fiber });
                             self.schedule_next(line, col)?;
                         }
                     }
@@ -1533,26 +1548,55 @@ impl<'a> Vm<'a> {
     /// Carga la siguiente fibra lista en los campos de ejecución de la VM. Si no hay ninguna lista pero sí
     /// fibras bloqueadas → **deadlock** (nadie puede desbloquearlas).
     fn schedule_next(&mut self, line: usize, col: usize) -> Result<(), RuntimeError> {
-        // M15.5: si no hay nadie listo pero sí fibras esperando E/S de red, hacemos una **espera de E/S**:
-        // dormimos un poco (no quemar CPU) y re-encolamos TODAS las aparcadas en E/S para que reintenten su
-        // operación (las que sigan sin estar listas se volverán a aparcar). Busy-poll cooperativo, sin deps.
-        if self.ready.is_empty() && !self.io_parked.is_empty() {
-            crate::builtins::sleep_millis(1);
-            for f in self.io_parked.drain(..) {
-                self.ready.push_back(f);
+        loop {
+            if let Some(next) = self.ready.pop_front() {
+                self.frames = next.frames;
+                self.stack = next.stack;
+                self.current_is_main = next.is_main;
+                self.current_task = next.task;
+                self.scopes = next.scopes;
+                return Ok(());
             }
+            // Nadie listo. Si hay fibras esperando E/S de red, espera readiness y reintenta el `pop`.
+            if !self.io_parked.is_empty() {
+                self.io_wait();
+                continue;
+            }
+            // Ni listas ni en E/S: o hay bloqueadas en canal/tarea (deadlock) o no queda nada.
+            return if !self.parked.is_empty() {
+                Err(runtime_error(line, col, "deadlock: todas las fibras están bloqueadas esperando un canal o una tarea"))
+            } else {
+                Err(runtime_error(line, col, "no hay fibras ejecutables"))
+            };
         }
-        if let Some(next) = self.ready.pop_front() {
-            self.frames = next.frames;
-            self.stack = next.stack;
-            self.current_is_main = next.is_main;
-            self.current_task = next.task;
-            self.scopes = next.scopes;
-            Ok(())
-        } else if !self.parked.is_empty() {
-            Err(runtime_error(line, col, "deadlock: todas las fibras están bloqueadas esperando un canal o una tarea"))
-        } else {
-            Err(runtime_error(line, col, "no hay fibras ejecutables"))
+    }
+
+    /// M17: cuando nadie está listo pero hay fibras esperando E/S de red, espera **readiness real** del SO
+    /// (`kqueue`/`epoll`): se bloquea hasta que algún socket esté listo para leer y despierta **solo** las
+    /// fibras de esos descriptores. Si la plataforma no tiene poller (`Unsupported`) o la espera se
+    /// interrumpe (`Ready` vacío por EINTR), cae al **busy-poll cooperativo** de M15.5 (duerme ~1 ms y
+    /// re-encola todas) → siempre hay progreso. Garantiza dejar al menos una fibra en `ready`.
+    fn io_wait(&mut self) {
+        let fds: Vec<i32> = self.io_parked.iter().map(|p| p.fd).collect();
+        if let crate::poll::PollResult::Ready(listos) = crate::poll::wait_readable(&fds, -1)
+            && !listos.is_empty()
+        {
+            // Despierta solo las fibras cuyo socket quedó listo; las demás siguen aparcadas.
+            let mut i = 0;
+            while i < self.io_parked.len() {
+                if listos.contains(&self.io_parked[i].fd) {
+                    let p = self.io_parked.remove(i);
+                    self.ready.push_back(p.fiber);
+                } else {
+                    i += 1;
+                }
+            }
+            return;
+        }
+        // Respaldo (sin poller, o despertar vacío): busy-poll cooperativo de M15.5.
+        crate::builtins::sleep_millis(1);
+        for p in self.io_parked.drain(..) {
+            self.ready.push_back(p.fiber);
         }
     }
 
@@ -1615,10 +1659,10 @@ impl<'a> Vm<'a> {
             for s in &p.fiber.scopes {
                 grandchildren.extend(s.children.iter().copied());
             }
-        } else if let Some(pos) = self.io_parked.iter().position(|f| f.task == Some(task)) {
+        } else if let Some(pos) = self.io_parked.iter().position(|p| p.fiber.task == Some(task)) {
             // M15.5: la fibra cancelada podría estar esperando E/S de red.
-            let f = self.io_parked.remove(pos);
-            for s in &f.scopes {
+            let p = self.io_parked.remove(pos);
+            for s in &p.fiber.scopes {
                 grandchildren.extend(s.children.iter().copied());
             }
         }
@@ -1682,8 +1726,8 @@ impl<'a> Vm<'a> {
             gather_fiber_roots(f, &mut roots);
         }
         // M15.5: las fibras aparcadas esperando E/S también deben sobrevivir al GC.
-        for f in &self.io_parked {
-            gather_fiber_roots(f, &mut roots);
+        for p in &self.io_parked {
+            gather_fiber_roots(&p.fiber, &mut roots);
         }
         for p in &self.parked {
             roots.push(p.on); // el canal/tarea que espera la fibra debe sobrevivir aunque solo lo referencie ella

@@ -368,6 +368,24 @@ pub fn set_nonblocking(h: i64) -> Result<(), String> {
     }
 }
 
+/// M17: el descriptor de archivo crudo (`RawFd`, un `i32` en Unix) del socket detrás del handle, para
+/// registrarlo en el poller (`kqueue`/`epoll`). `None` si el handle no es un socket o la plataforma no
+/// es Unix (allí el scheduler cae al busy-poll de M15.5, que no necesita fds).
+#[cfg(unix)]
+pub fn raw_fd(h: i64) -> Option<i32> {
+    use std::os::unix::io::AsRawFd;
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Tcp(s)) => Some(s.as_raw_fd()),
+        Some(OpenHandle::Listener(l)) => Some(l.as_raw_fd()),
+        _ => None,
+    }
+}
+#[cfg(not(unix))]
+pub fn raw_fd(_h: i64) -> Option<i32> {
+    None
+}
+
 /// Lectura **no bloqueante**: `Ok(Some(datos))` (o `Some("")` en EOF), `Ok(None)` si aún no hay datos
 /// (`WouldBlock` → la VM aparca), `Err` en error real (M15.5).
 pub fn socket_read_nb(h: i64) -> Result<Option<String>, String> {

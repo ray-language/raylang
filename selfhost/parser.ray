@@ -729,7 +729,7 @@ fn parse_type(p: Parser) -> Result<Type, ParseError> {
     else if (eat(p, "bool")) { Result.Ok(Type.TBool) }
     else if (eat(p, "string")) { Result.Ok(Type.TString) }
     else if (eat(p, "char")) { Result.Ok(Type.TChar) }
-    else { Result.Err(perr_here(p, "se esperaba un tipo (int, float, bool, string, char, [T] o un struct)")) }
+    else { Result.Err(perr_here(p, "se esperaba un tipo (int, float, bool, string, char, bytes, [T] o un struct)")) }
 }
 
 // Lista opcional de argumentos de tipo: `< type { ',' type } >` (genéricos). Vacío si no hay `<`.

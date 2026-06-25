@@ -1714,7 +1714,7 @@ fn check_len(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, Typ
     }
     let at = check_expr(c, cargs[0])?;
     if (!(is_array(at) || type_eq(at, Type.TString) || is_map(at))) {
-        return Result.Err(terr(cargs[0].line, cargs[0].col, "len espera un arreglo, un string o un Map, no " + type_str(at)));
+        return Result.Err(terr(cargs[0].line, cargs[0].col, "len espera un arreglo, un string, un Map o bytes, no " + type_str(at)));
     }
     Result.Ok(Type.TInt)
 }
@@ -2202,7 +2202,7 @@ fn check_index(c: Checker, array: Expr, index: Expr) -> Result<Type, TypeError> 
     match (at) {
         Type.TArray(elem) => Result.Ok(elem),
         Type.TString => Result.Ok(Type.TChar),
-        _ => Result.Err(terr(array.line, array.col, "no se puede indexar un " + type_str(at) + " (no es un arreglo ni un string)")),
+        _ => Result.Err(terr(array.line, array.col, "no se puede indexar un " + type_str(at) + " (no es un arreglo, string ni bytes)")),
     }
 }
 

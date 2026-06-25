@@ -68,7 +68,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.6: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure · ✅ **M12.3** structured concurrency · ✅ **M12.4** `select` · ✅ **M12.5** cancelación de hermanas. **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>`, select de send) |
 | **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete) · ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port`; `OpenHandle::Listener`; servidor secuencial bloqueante; subproceso con el `.ray` de servidor) · ✅ **M15.4a** JSON (librería `examples/json.ray` en raylang: `parse`/`stringify`, objetos `Map<string,Json>`, salida canónica; cero runtime; subproceso golden) · ✅ **M15.4b** HTTP (librería `examples/http.ray` en raylang sobre TCP: `fetch`/`request`/`header`, parseo de URL/respuesta; compone con `json`; subproceso vs. servidor de juguete) · ✅ **M15.5** (capstone) sockets no bloqueantes + scheduler de M12 (`tcp_accept`/`socket_read` ceden la fibra; busy-poll cooperativo, `io_parked`, cero deps; servidor concurrente con `spawn`; solo VM). **M15 COMPLETO** (diferido: cesión en `socket_write`, `epoll`, bytes/TLS) |
 | **M16** | **tipo `bytes`** (datos binarios) | nuevo tipo en el pipeline, literal `b"..."`, I/O binaria | ✅ §25: ✅ **M16.1a** el tipo (literal `b"..."` con `\xNN`, `len`/index→int/`==`; oráculo) · ✅ **M16.1b** string-interop (`to_bytes`/`from_utf8` + `+`; oráculo) · ✅ **M16.1c** I/O binaria (`read_file_bytes`/`write_file_bytes`/`socket_read_bytes`/`socket_write_bytes`; lecturas → `[bytes]` etiquetado; socket cede al scheduler; subproceso). **M16 COMPLETO** (cierra la deuda binaria de M15). Diferido: `bytes` como clave de Map, mutabilidad |
-| **M17** | **`epoll`/`kqueue`** (readiness real, sustituye el busy-poll de M15.5) | E/S asíncrona del SO, ¿`unsafe` acotado? | 📋 planificado |
+| **M17** | **`epoll`/`kqueue`** (readiness real, sustituye el busy-poll de M15.5) | E/S asíncrona del SO, `unsafe` acotado, FFI cero-deps | ✅ §26: poller del SO (`kqueue` macOS/BSD, `epoll` Linux) en `src/poll.rs`; FFI propio (`extern "C"`, sin el crate `libc` → invariante cero-deps); el scheduler de la VM se **bloquea** hasta readiness real y despierta **solo** las fibras de los fds listos (`io_parked` lleva ahora el `fd`); fallback al busy-poll de M15.5 en plataformas sin poller o EINTR; comportamiento idéntico (regresión: tests de M15.5/red concurrente). **M17 COMPLETO** (diferido: cesión en `socket_write`, registro persistente del poller, `bytes`/TLS en el toolchain auto-alojado) |
 | **M18** | **backend nativo** (bootstrap sin Rust) | codegen a máquina/LLVM/C | 📋 planificado |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) ⏳ | rendimiento, bootstrapping | 🚧 |
 
@@ -3655,3 +3655,61 @@ problemáticas siguientes (TLS sobre `epoll`; el backend nativo emite bytes).
 
 Como `char`, el grueso es mecánico (literal + tipo + valor por motor) y el runtime solo crece donde es
 inevitable; el checker/compilador apenas cambian (un builtin es una fila en la tabla).
+
+
+## 26. M17 — `epoll`/`kqueue` (readiness real de E/S)
+
+M15.5 dejó la concurrencia de red funcionando con un **busy-poll cooperativo**: cuando ninguna fibra
+está lista pero hay fibras aparcadas esperando E/S (`io_parked`), el scheduler **dormía ~1 ms y las
+re-encolaba todas** para que reintentaran su operación no bloqueante. Es simple y cero-deps, pero paga
+dos costes: **latencia** fija (hasta ~1 ms aunque los datos lleguen antes) y **CPU** ociosa (despierta y
+reintenta los N sockets cada milisegundo aunque ninguno esté listo). M17 lo sustituye por **notificación
+de readiness del SO**: el scheduler se **bloquea** en el kernel hasta que algún socket esté realmente
+listo para leer y despierta **solo** las fibras de esos descriptores. **Cero cambios observables** (mismo
+output, mismo orden determinista); solo mejora latencia y CPU. Solo VM (la concurrencia es VM-only).
+
+### 26.1 Decisiones
+
+- **`kqueue` (macOS/BSD) + `epoll` (Linux), con fallback al busy-poll.** Cada SO tiene su API de
+  readiness; las dos cubren las plataformas reales del proyecto. En cualquier otra (Windows) el poller
+  reporta `Unsupported` y el scheduler **conserva el busy-poll de M15.5** → degradación honesta, nunca un
+  fallo.
+- **FFI propio, no el crate `libc`.** La invariante del proyecto es **cero dependencias de Cargo** y
+  `std` no expone `epoll`/`kqueue`/`poll`. La solución honesta: declarar nosotros los pocos `extern "C"`
+  que hacen falta (`kqueue`/`kevent`, `epoll_create1`/`epoll_ctl`/`epoll_wait`, `close`). Viven en
+  libSystem (macOS) / libc (Linux), **siempre enlazados** → no son una dependencia, solo FFI con `unsafe`
+  **acotado** (encapsulado en `src/poll.rs`). Los descriptores salen de `std` vía `AsRawFd::as_raw_fd()`.
+- **Bloqueo infinito, sin timeout.** Cuando todas las fibras están en E/S, no hay nada más que hacer →
+  esperar indefinidamente en el kernel es correcto (el programa genuinamente espera a la red) y no quema
+  CPU. El *deadlock* de canal/tarea (M12) se conserva tal cual (solo aplica cuando `io_parked` está vacío).
+- **Despertar selectivo.** `io_parked` pasa de `Vec<Fiber>` a `Vec<IoParked { fd, fiber }>`: en cada
+  sitio de parking (`SocketRead`/`SocketReadBytes`/`TcpAccept`) se guarda el `fd` del socket
+  (`builtins::raw_fd`). El scheduler registra todos los fds en el poller, espera, y re-encola **solo** las
+  fibras cuyo fd quedó listo; las demás siguen aparcadas (la ganancia real frente al busy-poll).
+
+### 26.2 Cómo
+
+`src/poll.rs` expone `wait_readable(fds, timeout_ms) -> PollResult` (`Ready(listos)` | `Unsupported`),
+con tres ramas por `cfg`: kqueue (una sola llamada a `kevent` registra el changelist y espera el
+eventlist → un syscall), epoll (`epoll_create1` + N×`epoll_ctl` + `epoll_wait`), y un fallback que
+devuelve `Unsupported`. Un poller efímero por espera (crear/registrar/esperar/cerrar): solo ocurre cuando
+**todas** las fibras están bloqueadas (ocioso), no es ruta caliente. La gestión del scheduler vive en
+`Vm::schedule_next`, reescrito como **bucle**: saca la siguiente lista; si no hay y hay `io_parked`, llama
+a `io_wait` y reintenta; si no, es deadlock o fin. `io_wait` espera readiness y despierta selectivamente;
+si el poller no está o la espera vuelve vacía (EINTR), **cae al busy-poll** (duerme 1 ms y re-encola
+todas) → **siempre hay progreso**. El GC (rootea las fibras de `io_parked`) y `cancel_task` (M12.5) se
+adaptan al nuevo struct. Cero opcodes nuevos; el resto de fases intacto.
+
+### 26.3 Prueba
+
+El comportamiento no cambia, así que la **regresión** es la garantía: los tests de M15.5 / red concurrente
+(`tests/concurrency_net_cli.rs`, el servidor de eco concurrente sobre `spawn`) siguen verdes, ahora
+ejercitando el camino `kqueue` real en macOS. Que el servidor concurrente atienda a dos clientes en
+desorden **prueba** que el readiness del SO desbloquea las fibras correctas.
+
+### 26.4 Diferido
+
+Cesión en `socket_write` (sigue girando en buffer lleno, como M15.5); un registro **persistente** del
+poller (re-registrar fds entre esperas en vez de un poller efímero — más eficiente con muchas conexiones,
+pero exige gestión de altas/bajas); `epoll`/`kqueue` con *edge-triggered*; `bytes`/TLS en el toolchain
+auto-alojado. El `unsafe` queda confinado a `src/poll.rs` (los syscalls), con su contrato documentado.

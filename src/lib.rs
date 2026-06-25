@@ -20,6 +20,7 @@ pub mod lexer;
 pub mod loader;
 pub mod lsp;
 pub mod parser;
+pub mod poll;
 pub mod prelude;
 pub mod repl;
 pub mod test_runner;

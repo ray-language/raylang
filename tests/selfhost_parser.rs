@@ -631,11 +631,19 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
     let mut archivos: Vec<String> = Vec::new();
     // Todos los ejemplos.
     let dir = repo_path("examples");
+    // El toolchain auto-alojado (lexer/parser/checker/intérprete en raylang) **no soporta `bytes`**
+    // (M16 fue solo del lado de Rust; `bytes` en self-hosting es un diferido). Los ejemplos que usan
+    // `bytes`/`b"..."` quedan fuera de este corpus, como en su día quedó `mapa.ray` hasta M14.6.
+    const DIFERIDOS_SELFHOST: &[&str] = &["binario.ray"];
     let mut entradas: Vec<_> = std::fs::read_dir(&dir)
         .expect("lee examples/")
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().map(|x| x == "ray").unwrap_or(false))
+        .filter(|p| {
+            let nombre = p.file_name().unwrap().to_string_lossy().to_string();
+            !DIFERIDOS_SELFHOST.contains(&nombre.as_str())
+        })
         .collect();
     entradas.sort();
     for p in entradas {

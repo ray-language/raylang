@@ -38,6 +38,10 @@ fn kind_str(k: &TokenKind) -> String {
         TokenKind::Float(f) => format!("Float({})", f),
         TokenKind::Str(s) => format!("Str(\"{}\")", escape(s)),
         TokenKind::Char(c) => format!("Char('{}')", escape(&c.to_string())),
+        // M16: el lexer auto-alojado no tokeniza `bytes`/`b"..."`; estos tokens no aparecen en el corpus
+        // (ningún archivo probado los usa), pero el `match` debe ser exhaustivo.
+        TokenKind::Bytes(b) => format!("Bytes({:?})", b),
+        TokenKind::BytesType => "BytesType".into(),
         TokenKind::Ident(name) => format!("Ident({})", name),
         TokenKind::Let => "Let".into(),
         TokenKind::Var => "Var".into(),

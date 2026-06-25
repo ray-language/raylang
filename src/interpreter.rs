@@ -990,6 +990,51 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M16.1c: lee un archivo como bytes → [b"ok", datos] o [b"err", msg]. Tag en bytes para
+            // que el arreglo sea homogéneo ([bytes]); el prelude → Result<bytes,string>.
+            "__read_file_bytes" => {
+                let arr = match &values[0] {
+                    Value::Str(path) => match crate::builtins::read_file_bytes(path) {
+                        Ok(data) => vec![bytes_tag("ok"), Value::Bytes(Rc::new(data))],
+                        Err(e) => vec![bytes_tag("err"), bytes_of_str(&e.to_string())],
+                    },
+                    _ => unreachable!("el checker garantiza un string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M16.1c: escribe bytes a un archivo → ["ok"] o ["err", msg].
+            "__write_file_bytes" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(path), Value::Bytes(data)) => match crate::builtins::write_file_bytes(path, data) {
+                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
+                    },
+                    _ => unreachable!("el checker garantiza string, bytes"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M16.1c: lee del socket como bytes (bloqueante en el intérprete) → [b"ok", datos]/[b"err", msg].
+            "__socket_read_bytes" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::socket_read_bytes_blocking(*h) {
+                        Ok(data) => vec![bytes_tag("ok"), Value::Bytes(Rc::new(data))],
+                        Err(e) => vec![bytes_tag("err"), bytes_of_str(&e)],
+                    },
+                    _ => unreachable!("el checker garantiza un int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M16.1c: escribe bytes en el socket → ["ok", ""] o ["err", msg].
+            "__socket_write_bytes" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Int(h), Value::Bytes(data)) => match crate::builtins::socket_write_raw(*h, data) {
+                        Ok(_) => vec![Value::Str("ok".to_string()), Value::Str(String::new())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza int, bytes"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M11.4a/M11.7b: ¿el string contiene la subcadena? / ¿el arreglo contiene el elemento?
             "contains" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sub)) => Value::Bool(s.contains(sub.as_str())),
@@ -1524,6 +1569,17 @@ fn check_bounds(i: i64, len: usize, line: usize, col: usize) -> Result<usize, Fl
         return Err(runtime_error(line, col, &format!("índice {} fuera de rango (longitud {})", i, len)));
     }
     Ok(i as usize)
+}
+
+/// M16.1c: una etiqueta (`"ok"`/`"err"`) como valor `bytes`, para los arreglos `[bytes]` homogéneos
+/// que devuelven las lecturas binarias.
+fn bytes_tag(tag: &str) -> Value {
+    Value::Bytes(Rc::new(tag.as_bytes().to_vec()))
+}
+
+/// M16.1c: un string (p. ej. un mensaje de error) como valor `bytes`.
+fn bytes_of_str(s: &str) -> Value {
+    Value::Bytes(Rc::new(s.as_bytes().to_vec()))
 }
 
 /// Intenta casar un patrón (M5.2) contra un valor. Si casa, devuelve las variables a

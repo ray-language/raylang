@@ -146,6 +146,20 @@ pub enum OpCode {
     /// como UTF-8. Primitivo `__from_utf8`; el prelude → `Result<string, string>` (M16.1b).
     FromUtf8,
 
+    // --- I/O binaria (M16.1c). Lecturas → [bytes] etiquetado; escrituras → [string]. ---
+    /// Saca la ruta (string); lee el archivo y empuja `[bytes]` (`[b"ok", datos]`/`[b"err", msg]`).
+    /// Primitivo `__read_file_bytes`; el prelude → `Result<bytes, string>`.
+    ReadFileBytes,
+    /// Saca `datos` (bytes) y la ruta (string); escribe el archivo y empuja `[string]` etiquetado.
+    /// Primitivo `__write_file_bytes`; el prelude → `Result<int, string>`.
+    WriteFileBytes,
+    /// Saca un handle (int); lee del socket (no bloqueante en la VM → cede al scheduler como
+    /// `SocketRead`) y empuja `[bytes]` etiquetado. Primitivo `__socket_read_bytes`.
+    SocketReadBytes,
+    /// Saca `datos` (bytes) y el handle (int); escribe en el socket y empuja `[string]` etiquetado.
+    /// Primitivo `__socket_write_bytes`; el prelude → `Result<int, string>`.
+    SocketWriteBytes,
+
     // --- Más string (M11.7a) ---
     /// Saca el prefijo y el string; empuja un `bool`: ¿empieza con él? Builtin `starts_with`.
     StartsWith,

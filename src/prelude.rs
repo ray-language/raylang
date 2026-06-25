@@ -221,6 +221,42 @@ fn from_utf8(b: bytes) -> Result<string, string> {
     if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
 }
 
+// M16.1c: I/O binaria. Las lecturas devuelven [bytes] etiquetado (tag en bytes para arreglo
+// homogéneo); el mensaje de error viene como bytes y se decoda con from_utf8.
+fn read_file_bytes(ruta: string) -> Result<bytes, string> {
+    let r = __read_file_bytes(ruta);
+    if (r[0] == b"ok") {
+        Result.Ok(r[1])
+    } else {
+        match (from_utf8(r[1])) {
+            Result.Ok(m) => Result.Err(m),
+            Result.Err(e) => Result.Err("error de E/S"),
+        }
+    }
+}
+
+fn write_file_bytes(ruta: string, datos: bytes) -> Result<int, string> {
+    let r = __write_file_bytes(ruta, datos);
+    if (r[0] == "ok") { Result.Ok(len(datos)) } else { Result.Err(r[1]) }
+}
+
+fn socket_read_bytes(h: int) -> Result<bytes, string> {
+    let r = __socket_read_bytes(h);
+    if (r[0] == b"ok") {
+        Result.Ok(r[1])
+    } else {
+        match (from_utf8(r[1])) {
+            Result.Ok(m) => Result.Err(m),
+            Result.Err(e) => Result.Err("error de socket"),
+        }
+    }
+}
+
+fn socket_write_bytes(h: int, datos: bytes) -> Result<int, string> {
+    let r = __socket_write_bytes(h, datos);
+    if (r[0] == "ok") { Result.Ok(len(datos)) } else { Result.Err(r[1]) }
+}
+
 // Escribe el contenido en el archivo (lo crea/sobrescribe); Ok(nº de caracteres) u Err(mensaje).
 fn write_file(ruta: string, contenido: string) -> Result<int, string> {
     let r = __write_file(ruta, contenido);

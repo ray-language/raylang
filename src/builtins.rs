@@ -294,9 +294,14 @@ pub fn socket_read(h: i64) -> Result<String, String> {
 /// gira (`yield_now`) hasta poder escribir. La escritura NO es punto de cesión del scheduler (cargas
 /// reales —líneas, respuestas cortas— nunca giran; una escritura gigante a un peer que no lee sí).
 pub fn socket_write(h: i64, s: &str) -> Result<usize, String> {
+    socket_write_raw(h, s.as_bytes())
+}
+
+/// Núcleo de la escritura: escribe `bytes` completos en el socket. Tolera sockets no bloqueantes
+/// (gira en `WouldBlock`). Lo usan `socket_write` (M15.2) y `socket_write_bytes` (M16.1c).
+pub fn socket_write_raw(h: i64, bytes: &[u8]) -> Result<usize, String> {
     use std::io::Write;
     let mut stream = socket_clone(h)?;
-    let bytes = s.as_bytes();
     let mut off = 0;
     while off < bytes.len() {
         match stream.write(&bytes[off..]) {
@@ -307,6 +312,43 @@ pub fn socket_write(h: i64, s: &str) -> Result<usize, String> {
         }
     }
     Ok(bytes.len())
+}
+
+// --- I/O binaria (M16.1c) ---
+
+/// Lee un archivo entero como octetos crudos. Builtin `read_file_bytes`.
+pub fn read_file_bytes(path: &str) -> std::io::Result<Vec<u8>> {
+    std::fs::read(path)
+}
+
+/// Escribe octetos crudos a un archivo (lo crea/sobrescribe). Builtin `write_file_bytes`.
+pub fn write_file_bytes(path: &str, data: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, data)
+}
+
+/// Lectura binaria **no bloqueante** del socket (VM, M16.1c): `Ok(Some(datos))` (o `Some(vacío)` en
+/// EOF), `Ok(None)` si aún no hay datos (`WouldBlock` → la VM aparca), `Err` en error real.
+pub fn socket_read_bytes_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
+    use std::io::Read;
+    let mut stream = socket_clone(h)?;
+    let mut buf = [0u8; 65536];
+    match stream.read(&mut buf) {
+        Ok(n) => Ok(Some(buf[..n].to_vec())),
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Lectura binaria **bloqueante** del socket (intérprete, M16.1c): una lectura; `Ok(datos)` (vacío en
+/// EOF) o `Err`.
+pub fn socket_read_bytes_blocking(h: i64) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut stream = socket_clone(h)?;
+    let mut buf = [0u8; 65536];
+    match stream.read(&mut buf) {
+        Ok(n) => Ok(buf[..n].to_vec()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 // --- Sockets no bloqueantes para el scheduler de la VM (M15.5) ---
@@ -576,6 +618,33 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__from_utf8", opcode: OpCode::FromUtf8, check: |a| {
         arity(a, 1, "__from_utf8", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("__from_utf8 espera bytes, no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // --- I/O binaria (M16.1c). Lecturas → [bytes] etiquetado; escrituras → [string]. ---
+    // __read_file_bytes(ruta) -> [bytes]: [b"ok", datos] o [b"err", msg]. El prelude → Result<bytes,string>.
+    Builtin { name: "__read_file_bytes", opcode: OpCode::ReadFileBytes, check: |a| {
+        arity(a, 1, "__read_file_bytes", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__read_file_bytes espera un string (la ruta), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // __write_file_bytes(ruta, datos) -> [string]: ["ok"] o ["err", msg]. El prelude → Result<int,string>.
+    Builtin { name: "__write_file_bytes", opcode: OpCode::WriteFileBytes, check: |a| {
+        arity(a, 2, "__write_file_bytes", " (ruta, datos)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__write_file_bytes espera un string (la ruta), no {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__write_file_bytes espera bytes (los datos), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __socket_read_bytes(h) -> [bytes]: [b"ok", datos] o [b"err", msg]. El prelude → Result<bytes,string>.
+    Builtin { name: "__socket_read_bytes", opcode: OpCode::SocketReadBytes, check: |a| {
+        arity(a, 1, "__socket_read_bytes", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_read_bytes espera un int (el handle), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // __socket_write_bytes(h, datos) -> [string]: ["ok", ""] o ["err", msg]. El prelude → Result<int,string>.
+    Builtin { name: "__socket_write_bytes", opcode: OpCode::SocketWriteBytes, check: |a| {
+        arity(a, 2, "__socket_write_bytes", " (handle, datos)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_write_bytes espera un int (el handle), no {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__socket_write_bytes espera bytes (los datos), no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // starts_with(s, pre) -> bool (M11.7a): ¿`s` empieza con `pre`?

@@ -722,6 +722,73 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+
+                // --- I/O binaria (M16.1c) ---
+                // Lecturas → [bytes] etiquetado (tag en bytes para que el arreglo sea homogéneo).
+                OpCode::ReadFileBytes => {
+                    let path = match self.pop() {
+                        HeapValue::Str(s) => s,
+                        _ => unreachable!("el checker garantiza un string"),
+                    };
+                    let elems = match crate::builtins::read_file_bytes(&path) {
+                        Ok(data) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)],
+                        Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.to_string().into_bytes())],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::WriteFileBytes => {
+                    let data = self.pop();
+                    let path = self.pop();
+                    let (HeapValue::Str(path), HeapValue::Bytes(data)) = (path, data) else {
+                        unreachable!("el checker garantiza string, bytes");
+                    };
+                    let elems = match crate::builtins::write_file_bytes(&path, &data) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M16.1c: lectura binaria del socket; cede al scheduler en WouldBlock (como SocketRead, M15.5).
+                OpCode::SocketReadBytes => {
+                    let handle = match self.pop() {
+                        HeapValue::Int(h) => h,
+                        _ => unreachable!("el checker garantiza un int"),
+                    };
+                    match crate::builtins::socket_read_bytes_nb(handle) {
+                        Ok(Some(data)) => {
+                            let elems = vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)];
+                            let h = self.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                        }
+                        Err(e) => {
+                            let elems = vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())];
+                            let h = self.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                        }
+                        Ok(None) => {
+                            self.push(HeapValue::Int(handle));
+                            self.frames.last_mut().unwrap().ip -= 1;
+                            let fiber = self.take_current_fiber();
+                            self.io_parked.push(fiber);
+                            self.schedule_next(line, col)?;
+                        }
+                    }
+                }
+                OpCode::SocketWriteBytes => {
+                    let data = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Bytes(data)) = (handle, data) else {
+                        unreachable!("el checker garantiza int, bytes");
+                    };
+                    let elems = match crate::builtins::socket_write_raw(handle, &data) {
+                        Ok(_) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::Contains => {
                     // El valor buscado está encima del contenedor (orden de los argumentos).
                     let x = self.pop();

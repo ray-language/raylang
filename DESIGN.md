@@ -67,7 +67,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
 | **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.6: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure · ✅ **M12.3** structured concurrency · ✅ **M12.4** `select` · ✅ **M12.5** cancelación de hermanas. **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>`, select de send) |
 | **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete) · ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port`; `OpenHandle::Listener`; servidor secuencial bloqueante; subproceso con el `.ray` de servidor) · ✅ **M15.4a** JSON (librería `examples/json.ray` en raylang: `parse`/`stringify`, objetos `Map<string,Json>`, salida canónica; cero runtime; subproceso golden) · ✅ **M15.4b** HTTP (librería `examples/http.ray` en raylang sobre TCP: `fetch`/`request`/`header`, parseo de URL/respuesta; compone con `json`; subproceso vs. servidor de juguete) · ✅ **M15.5** (capstone) sockets no bloqueantes + scheduler de M12 (`tcp_accept`/`socket_read` ceden la fibra; busy-poll cooperativo, `io_parked`, cero deps; servidor concurrente con `spawn`; solo VM). **M15 COMPLETO** (diferido: cesión en `socket_write`, `epoll`, bytes/TLS) |
-| **M16** | **tipo `bytes`** (datos binarios) | nuevo tipo en el pipeline, literal `b"..."`, I/O binaria | 🚧 §25: ✅ **M16.1a** el tipo (literal `b"..."` con `\xNN`, `len`/index→int/`==`; oráculo) · ✅ **M16.1b** string-interop (`to_bytes`/`from_utf8` + concatenación `+`; oráculo). Pendiente: M16.1c I/O binaria |
+| **M16** | **tipo `bytes`** (datos binarios) | nuevo tipo en el pipeline, literal `b"..."`, I/O binaria | ✅ §25: ✅ **M16.1a** el tipo (literal `b"..."` con `\xNN`, `len`/index→int/`==`; oráculo) · ✅ **M16.1b** string-interop (`to_bytes`/`from_utf8` + `+`; oráculo) · ✅ **M16.1c** I/O binaria (`read_file_bytes`/`write_file_bytes`/`socket_read_bytes`/`socket_write_bytes`; lecturas → `[bytes]` etiquetado; socket cede al scheduler; subproceso). **M16 COMPLETO** (cierra la deuda binaria de M15). Diferido: `bytes` como clave de Map, mutabilidad |
 | **M17** | **`epoll`/`kqueue`** (readiness real, sustituye el busy-poll de M15.5) | E/S asíncrona del SO, ¿`unsafe` acotado? | 📋 planificado |
 | **M18** | **backend nativo** (bootstrap sin Rust) | codegen a máquina/LLVM/C | 📋 planificado |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) ⏳ | rendimiento, bootstrapping | 🚧 |
@@ -3645,8 +3645,13 @@ problemáticas siguientes (TLS sobre `epoll`; el backend nativo emite bytes).
 - **M16.1b — interoperación con string.** `to_bytes`/`from_utf8` (builtins) + concatenación `b1 + b2`.
   Determinista → oráculo (estrés del GC para `to_bytes`, que asigna).
 - **M16.1c — I/O binaria.** `read_file_bytes`/`write_file_bytes` y `socket_read_bytes`/`socket_write_bytes`:
-  cierran la deuda de M15 (binario correcto). No determinista → subproceso. Los handles y el patrón de
-  arreglo etiquetado de M15 se reusan; la única novedad es que el payload viaja como `bytes`.
+  cierran la deuda de M15 (binario correcto). No determinista → subproceso. Los handles de M15 se reusan;
+  `socket_read_bytes` **cede al scheduler** igual que `socket_read` (M15.5, no bloqueante en la VM). El
+  arreglo etiquetado del prelude tiene un giro: como un arreglo de raylang es **homogéneo**, no puede
+  mezclar el tag `string` con un payload `bytes`. Por eso las **lecturas** (`__read_file_bytes`/
+  `__socket_read_bytes`) devuelven **`[bytes]`** con el tag *también* en bytes (`[b"ok", datos]` /
+  `[b"err", msg_utf8]`); el prelude desempaqueta con `from_utf8` el mensaje de error. Las **escrituras**
+  siguen con `[string]` (`["ok"]`/`["err", msg]`), pues su payload de éxito es solo el conteo (`len`).
 
 Como `char`, el grueso es mecánico (literal + tipo + valor por motor) y el runtime solo crece donde es
 inevitable; el checker/compilador apenas cambian (un builtin es una fila en la tabla).

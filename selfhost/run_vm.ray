@@ -1,0 +1,60 @@
+// Driver del back-end de VM auto-alojado (M14.5): lexea + parsea + chequea + COMPILA a bytecode +
+// EJECUTA en la VM (`vm.ray`), de punta a punta con el compilador en raylang. Es el gemelo de
+// `run.ray` (que usa el intérprete tree-walking), para el otro motor.
+//
+// El test `tests/selfhost_vm.rs` compara, por cada `.ray`, el stdout + el código de salida de este
+// driver contra los del runner de Rust (el ORÁCULO conductual; ver DESIGN §23.6).
+
+from loader import load, LoadError;
+from parser import Func, Program;
+from checker import check, TypeError;
+from compiler import compile, CProgram;
+from interpreter import Value, RuntimeError;
+from vm import run_vm;
+
+fn exit_code(v: Value) -> int {
+    match (v) { Value.VInt(n) => n, _ => 0 }
+}
+
+// M14.5a: el prelude (map/filter/fold/sort) usa llamadas indirectas y métodos → se compilará cuando la
+// VM tenga primera clase (M14.5c). Por ahora el corpus de la VM no lo usa, así que no se fusiona.
+
+// Los argumentos del programa ejecutado: lo que sigue al path que consumió este driver (argv[1..]).
+fn rest_args(argv: [string]) -> [string] {
+    var out: [string] = [];
+    var i = 1;
+    while (i < len(argv)) { push(out, argv[i]); i = i + 1; }
+    out
+}
+
+fn main() -> int {
+    let argv = args();
+    if (len(argv) == 0) {
+        eprint("uso: raylang selfhost/run_vm.ray <archivo> [args...]");
+        return 1;
+    }
+    match (load(argv[0])) {
+        Result.Ok(prog) => {
+            match (check(prog)) {
+                Result.Ok(_) => {
+                    let cp = compile(prog);
+                    match (run_vm(cp, rest_args(argv))) {
+                        Result.Ok(v) => exit_code(v),
+                        Result.Err(re) => {
+                            eprint("error en ejecución en " + to_string(re.line) + ":" + to_string(re.col) + ": " + re.msg);
+                            70
+                        },
+                    }
+                },
+                Result.Err(te) => {
+                    eprint("error de tipos en " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
+                    65
+                },
+            }
+        },
+        Result.Err(le) => {
+            eprint("[" + le.module + "] error de carga en " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg);
+            65
+        },
+    }
+}

@@ -2958,3 +2958,53 @@ para programas válidos las posiciones son irrelevantes al comportamiento—.
   (run-on-run es `#[ignore]`: ~1 min por la interpretación de dos niveles; ejecútalo con `--ignored`.)
   Diferidos (fuera de la meta-circularidad lograda): la VM auto-alojada (M14.5), `import M;` calificado/
   directorios/cápsulas en el loader auto-alojado, el resto de builtins de I/O (stdin/env/handles).
+
+### 23.6 M14.5 — La VM auto-alojada (diseño)
+
+El **M2 de este módulo**: un segundo back-end auto-alojado que **compila el AST a bytecode** y lo
+ejecuta en una **VM de pila**, en paralelo al intérprete tree-walking de M14.4 (mismo orden M1→M2 que
+seguimos en Rust). Opcional —la meta-circularidad ya está lograda con el intérprete—, pero cierra el
+arco "dos motores" también en el mundo auto-alojado.
+
+**Decisión central (la elegancia del self-hosting): un solo `Value`.** En Rust, el intérprete y la VM
+tienen **representaciones de valor distintas** —`Value` con `Rc` el intérprete, `gc::HeapValue` con
+handles la VM— porque la VM gestiona su propio GC. La VM auto-alojada **reusa el mismo `Value` del
+intérprete** (`selfhost/interpreter.ray`) y su runtime puro: `value_str`, `values_equal`,
+`type_key_of_value`, la aritmética (`eval_add`/`eval_arith`/`eval_cmp`) y, sobre todo,
+`dispatch_builtin`. Ambos motores **cabalgan sobre el GC del host** → **sin GC propio, sin conversión
+en el borde**. Es la simplificación que el self-hosting regala y que Rust no tiene.
+
+**Bytecode compacto.** A diferencia de la VM de Rust (un opcode por builtin: `Print`/`Len`/`Split`/…),
+la auto-alojada tiene un opcode **genérico** `OBuiltin(nombre, argc)` que saca `argc` valores y delega
+en `dispatch_builtin` (y, más adelante, `OMethod(nombre, argc)` para el despacho). Así el set de
+opcodes es el **núcleo** (constantes, aritmética, comparación, saltos, locales, `Call`/`Return`,
+`MakeArray`/`Index`/…) y los builtins reusan el trabajo del intérprete.
+
+**Arquitectura.** `selfhost/compiler.ray` (AST → `[CompiledFn]`, cada una con su `Chunk` de `[Op]` +
+`[Value]` de constantes; resolución de nombres a *slots* locales e índices de función) +
+`selfhost/vm.ray` (pila de operandos `[Value]` + pila de marcos explícita `[Frame]`, en un bucle
+iterativo — como la VM de Rust, sin usar la pila del host para los marcos del lenguaje). Driver
+`selfhost/run_vm.ray`.
+
+**Oráculo: conductual, como M14.4.** La misma `.ray` por ambos caminos —Rust directo vs la VM
+auto-alojada (`run_vm.ray`)— comparando stdout + código de salida; corpus determinista. La VM
+auto-alojada debe coincidir con Rust (y por tanto con el intérprete auto-alojado, que ya coincide).
+
+**Sub-fases** (espejo de M14.4): **a** núcleo (constantes, aritmética/comparación/lógica con
+cortocircuito, locales, if/while, llamadas nombradas, recursión, builtins escalares) → **b** datos
+(arreglos/structs/enums/`match`) → **c** primera clase (funciones-valor, closures con celdas/upvalues)
+→ **d** despacho dinámico (métodos/UFCS/`dyn`/`@derive` + prelude). TCO opcional al final.
+
+- **M14.5a COMPLETO** — el **núcleo**. `selfhost/compiler.ray`: opcodes (`enum Op`: `OConst`/aritmética/
+  comparación/`OJump`/`OJumpIfFalse`/`OGetLocal`/`OSetLocal`/`OInitLocal`/`OCall`/`OReturn`/`OBuiltin`),
+  `Chunk`/`CompiledFn`/`CProgram`, y `compile(Program) -> CProgram` con resolución de slots (monotónicos,
+  `max_slots` dimensiona el marco) y ámbitos de bloque (`begin_scope`/`end_scope`), cortocircuito de
+  `&&`/`||`, e `if`/`while` orientados a expresión (port de `src/compiler.rs`). `selfhost/vm.ray`: pila de
+  operandos + pila de marcos explícitas (cada `Frame` con su propia pila → sin *base pointer*); reusa la
+  aritmética y `dispatch_builtin` del intérprete vía `?` sobre `Flow`; `run_vm(CProgram, args) ->
+  Result<Value, RuntimeError>`. Driver `selfhost/run_vm.ray` (gemelo de `run.ray`). Habilitador: se
+  hicieron `pub` los helpers reusados del intérprete y `dispatch_builtin` pasó a tomar `prog_args` (en vez
+  de `Interp`). Oráculo conductual (`tests/selfhost_vm.rs`, VM auto-alojada vs Rust): fib/fizzbuzz/gcd/
+  primes + snippets de aritmética/control/recursión/locales/builtins → stdout+exit idénticos. El **prelude
+  no se fusiona aún** (map/filter/fold/sort → llamadas indirectas/métodos, M14.5c). Pendiente: b (datos),
+  c (closures + prelude), d (despacho dinámico).

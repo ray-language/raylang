@@ -977,6 +977,21 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       lexea/parsea/chequea/EJECUTA raylang con raylang corriendo sobre raylang. (run-on-run `#[ignore]`,
       ~1 min; `cargo test --test selfhost_metacircular -- --ignored`.) Diferidos: VM auto-alojada (M14.5),
       `import M;`/directorios/cápsulas en el loader, resto de I/O (stdin/env/handles).
+  - **M14.5 — la VM auto-alojada** (DESIGN §23.6; el M2 de este módulo, en paralelo al intérprete de
+    M14.4). **Decisión central**: la VM **reusa el `Value` y el runtime del intérprete** (`value_str`/
+    `values_equal`/`eval_add`/`eval_arith`/`eval_cmp`/`dispatch_builtin`, hechos `pub`) — UN solo tipo de
+    valor y sin GC propio (a diferencia de Rust, que tiene dos), ambos cabalgan sobre el GC del host. Y el
+    bytecode es **compacto**: opcode genérico `OBuiltin(nombre, argc)` que delega en `dispatch_builtin`
+    (refactorizado para tomar `prog_args` en vez de `Interp`), en vez de un opcode por builtin.
+    `selfhost/compiler.ray` (AST → `CProgram` de `CompiledFn`+`Chunk`; resolución de slots/ámbitos como
+    `src/compiler.rs`) + `selfhost/vm.ray` (pila de operandos + pila de marcos explícitas; cada marco con
+    su propia pila → sin *base pointer*; `Flow` como canal de error) + driver `selfhost/run_vm.ray`.
+    - **M14.5a COMPLETO** (347 lib + 5 en `tests/selfhost_vm.rs`): el **núcleo** — escalares, aritmética/
+      comparación/lógica (con cortocircuito), variables locales (slots + ámbitos), if/while, llamadas
+      nombradas + builtins escalares, recursión. Oráculo conductual (VM auto-alojada vs Rust): corpus
+      fib/fizzbuzz/gcd/primes + snippets. El **prelude NO se fusiona aún** (map/filter/fold/sort usan
+      llamadas indirectas/métodos → M14.5c). Pendiente: M14.5b (datos), M14.5c (closures/primera clase +
+      prelude), M14.5d (despacho dinámico), TCO.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

@@ -1,0 +1,269 @@
+// El compilador auto-alojado (M14.5): AST → bytecode, para la VM de pila (`vm.ray`). Es el segundo
+// back-end auto-alojado, en paralelo al intérprete de M14.4 (mismo orden M1→M2 que en Rust). Port
+// recortado de `src/compiler.rs`.
+//
+// M14.5a — el NÚCLEO: literales, variables locales, aritmética/comparación/lógica (con cortocircuito),
+// if/while/bloques, llamadas a funciones nombradas + builtins escalares, recursión. Datos (arreglos/
+// structs/enums/match) → M14.5b; primera clase (closures) → M14.5c; despacho dinámico → M14.5d.
+//
+// Decisión de diseño (la elegancia del self-hosting): el bytecode reusa el `Value` del intérprete y, en
+// la VM, su runtime —no hay un segundo tipo de valor ni GC propio (cabalga sobre el host)—. Y es
+// COMPACTO: un opcode genérico `OBuiltin(nombre, argc)` delega en `dispatch_builtin`, en vez de un
+// opcode por builtin como en Rust.
+
+from parser import Program, Func, Param, Block, Stmt, SKind, Expr, EKind, BinOp, UnOp;
+from interpreter import Value, is_builtin;
+
+// El conjunto de opcodes del núcleo. Las constantes (`OConst`) indexan la tabla `consts` del chunk.
+pub enum Op {
+    OConst(int), OTrue, OFalse, OUnit,
+    OAdd, OSub, OMul, ODiv, ORem, ONeg, ONot,
+    OEq, ONe, OLt, OLe, OGt, OGe,
+    OPop, OJump(int), OJumpIfFalse(int),
+    OGetLocal(int), OSetLocal(int), OInitLocal(int),
+    OCall(int, int), OReturn,    // OCall(fnIndex, argc)
+    OBuiltin(string, int),       // OBuiltin(nombre, argc) → dispatch_builtin en la VM
+}
+
+// El bytecode de una función: las instrucciones + su tabla de constantes.
+pub struct Chunk { code: [Op], consts: [Value] }
+
+// Una función compilada: nombre, aridad, nº de slots locales (para dimensionar el marco) y su chunk.
+pub struct CompiledFn { name: string, arity: int, nslots: int, chunk: Chunk }
+
+// El programa compilado: la lista de funciones (el índice es su identidad para `OCall`).
+pub struct CProgram { fns: [CompiledFn] }
+
+// Una variable local en tiempo de compilación: nombre, slot (índice en el marco) y profundidad de bloque.
+struct Local { name: string, slot: int, depth: int }
+
+// El estado del compilador para UNA función: el chunk en construcción + la resolución de slots/ámbitos.
+// `indices` (nombre de función → índice) se comparte entre funciones (para resolver `OCall`).
+struct Cc {
+    code: [Op], consts: [Value],
+    locals: [Local], next_slot: int, max_slots: int, depth: int,
+    indices: Map<string, int>,
+}
+
+// =====================================================================
+// Emisión y manejo de slots/ámbitos
+// =====================================================================
+
+fn emit(cc: Cc, op: Op) -> int { push(cc.code, op); len(cc.code) - 1 }
+
+fn add_const(cc: Cc, v: Value) -> int { push(cc.consts, v); len(cc.consts) - 1 }
+
+// Declara un local: le asigna el siguiente slot (monotónico; los slots no se reusan → `max_slots`
+// dimensiona el marco) y lo registra en la profundidad de bloque actual.
+fn declare_local(cc: Cc, name: string) -> int {
+    let slot = cc.next_slot;
+    cc.next_slot = cc.next_slot + 1;
+    if (cc.next_slot > cc.max_slots) { cc.max_slots = cc.next_slot; }
+    push(cc.locals, Local { name: name, slot: slot, depth: cc.depth });
+    slot
+}
+
+// Resuelve un nombre a su slot local (el más interno gana), o -1 si no es un local.
+fn resolve_local(cc: Cc, name: string) -> int {
+    var i = len(cc.locals) - 1;
+    while (i >= 0) {
+        if (cc.locals[i].name == name) { return cc.locals[i].slot; }
+        i = i - 1;
+    }
+    0 - 1
+}
+
+fn begin_scope(cc: Cc) -> int { cc.depth = cc.depth + 1; cc.next_slot }
+
+// Cierra un ámbito: descarta los locales de esta profundidad (dejan de resolver) y recupera los slots.
+fn end_scope(cc: Cc, saved: int) {
+    cc.depth = cc.depth - 1;
+    var kept: [Local] = [];
+    var i = 0;
+    while (i < len(cc.locals)) {
+        if (cc.locals[i].depth <= cc.depth) { push(kept, cc.locals[i]); }
+        i = i + 1;
+    }
+    cc.locals = kept;
+    cc.next_slot = saved;
+}
+
+// Parchea un salto emitido con destino provisional para que apunte al final actual del código.
+fn patch_jump(cc: Cc, at: int) {
+    let target = len(cc.code);
+    cc.code[at] = match (cc.code[at]) {
+        Op.OJump(_) => Op.OJump(target),
+        Op.OJumpIfFalse(_) => Op.OJumpIfFalse(target),
+        _ => panic("patch_jump sobre una instrucción que no es salto"),
+    };
+}
+
+// El opcode binario para un operador (excepto `&&`/`||`, que se bajan con cortocircuito).
+fn binop_to_op(op: BinOp) -> Op {
+    match (op) {
+        BinOp.Add => Op.OAdd, BinOp.Sub => Op.OSub, BinOp.Mul => Op.OMul,
+        BinOp.Div => Op.ODiv, BinOp.Rem => Op.ORem,
+        BinOp.Eq => Op.OEq, BinOp.Ne => Op.ONe,
+        BinOp.Lt => Op.OLt, BinOp.Le => Op.OLe, BinOp.Gt => Op.OGt, BinOp.Ge => Op.OGe,
+        _ => panic("binop_to_op: && / || se tratan aparte"),
+    }
+}
+
+// =====================================================================
+// Emisión de expresiones y sentencias
+// =====================================================================
+
+fn emit_expr(cc: Cc, e: Expr) {
+    match (e.kind) {
+        EKind.EInt(n) => { emit(cc, Op.OConst(add_const(cc, Value.VInt(n)))); },
+        EKind.EFloat(f) => { emit(cc, Op.OConst(add_const(cc, Value.VFloat(f)))); },
+        EKind.EStr(s) => { emit(cc, Op.OConst(add_const(cc, Value.VStr(s)))); },
+        EKind.EChar(c) => { emit(cc, Op.OConst(add_const(cc, Value.VChar(c)))); },
+        EKind.EBool(b) => { if (b) { emit(cc, Op.OTrue); } else { emit(cc, Op.OFalse); } },
+        EKind.EIdent(name) => {
+            let slot = resolve_local(cc, name);
+            if (slot >= 0) { emit(cc, Op.OGetLocal(slot)); }
+            else { panic("compilador: función como valor no soportada en M14.5a: " + name); }
+        },
+        EKind.EUnary(op, inner) => {
+            emit_expr(cc, inner);
+            match (op) { UnOp.Neg => emit(cc, Op.ONeg), UnOp.Not => emit(cc, Op.ONot) };
+        },
+        EKind.EBinary(op, l, r) => emit_binary(cc, op, l, r),
+        EKind.ECall(callee, cargs) => emit_call(cc, callee, cargs),
+        EKind.EIf(cond, then_b, elseopt) => {
+            emit_expr(cc, cond);
+            let to_else = emit(cc, Op.OJumpIfFalse(0));
+            emit(cc, Op.OPop);
+            emit_block(cc, then_b);
+            let to_end = emit(cc, Op.OJump(0));
+            patch_jump(cc, to_else);
+            emit(cc, Op.OPop);
+            match (elseopt) { Option.Some(els) => emit_expr(cc, els), Option.None => { emit(cc, Op.OUnit); } };
+            patch_jump(cc, to_end);
+        },
+        EKind.EWhile(cond, body) => {
+            let loop_start = len(cc.code);
+            emit_expr(cc, cond);
+            let exit = emit(cc, Op.OJumpIfFalse(0));
+            emit(cc, Op.OPop);
+            emit_block(cc, body);
+            emit(cc, Op.OPop);
+            emit(cc, Op.OJump(loop_start));
+            patch_jump(cc, exit);
+            emit(cc, Op.OPop);
+            emit(cc, Op.OUnit);
+        },
+        EKind.EBlock(b) => emit_block(cc, b),
+        _ => panic("compilador: forma de expresión no soportada en M14.5a"),
+    }
+}
+
+// `&&`/`||` con cortocircuito (`OJumpIfFalse` ojea la condición, no la saca); el resto, operandos + opcode.
+fn emit_binary(cc: Cc, op: BinOp, l: Expr, r: Expr) {
+    match (op) {
+        BinOp.And => {
+            emit_expr(cc, l);
+            let jump = emit(cc, Op.OJumpIfFalse(0));
+            emit(cc, Op.OPop);
+            emit_expr(cc, r);
+            patch_jump(cc, jump);
+        },
+        BinOp.Or => {
+            emit_expr(cc, l);
+            let to_else = emit(cc, Op.OJumpIfFalse(0));
+            let to_end = emit(cc, Op.OJump(0));
+            patch_jump(cc, to_else);
+            emit(cc, Op.OPop);
+            emit_expr(cc, r);
+            patch_jump(cc, to_end);
+        },
+        _ => {
+            emit_expr(cc, l);
+            emit_expr(cc, r);
+            emit(cc, binop_to_op(op));
+        },
+    }
+}
+
+// Una llamada `f(args)`: builtin (→ `OBuiltin`) o función nombrada (→ `OCall`). Indirecta → M14.5c.
+fn emit_call(cc: Cc, callee: Expr, cargs: [Expr]) {
+    match (callee.kind) {
+        EKind.EIdent(name) => {
+            if (resolve_local(cc, name) < 0) {
+                if (is_builtin(name)) {
+                    emit_args(cc, cargs);
+                    emit(cc, Op.OBuiltin(name, len(cargs)));
+                    return;
+                }
+                match (get(cc.indices, name)) {
+                    Option.Some(idx) => { emit_args(cc, cargs); emit(cc, Op.OCall(idx, len(cargs))); return; },
+                    Option.None => {},
+                }
+            }
+        },
+        _ => {},
+    }
+    panic("compilador: llamada indirecta/método no soportada en M14.5a");
+}
+
+fn emit_args(cc: Cc, cargs: [Expr]) {
+    var i = 0;
+    while (i < len(cargs)) { emit_expr(cc, cargs[i]); i = i + 1; }
+}
+
+fn emit_block(cc: Cc, b: Block) {
+    let saved = begin_scope(cc);
+    var i = 0;
+    while (i < len(b.stmts)) { emit_stmt(cc, b.stmts[i]); i = i + 1; }
+    match (b.tail) { Option.Some(e) => emit_expr(cc, e), Option.None => { emit(cc, Op.OUnit); } };
+    end_scope(cc, saved);
+}
+
+fn emit_stmt(cc: Cc, s: Stmt) {
+    match (s.kind) {
+        SKind.SLet(name, _, value, _) => {
+            emit_expr(cc, value);
+            let slot = declare_local(cc, name);
+            emit(cc, Op.OInitLocal(slot));
+        },
+        SKind.SAssign(target, value) => {
+            match (target.kind) {
+                EKind.EIdent(name) => {
+                    emit_expr(cc, value);
+                    let slot = resolve_local(cc, name);
+                    emit(cc, Op.OSetLocal(slot));
+                },
+                _ => panic("compilador: asignación a índice/campo no soportada en M14.5a"),
+            }
+        },
+        SKind.SReturn(opt) => {
+            match (opt) { Option.Some(e) => emit_expr(cc, e), Option.None => { emit(cc, Op.OUnit); } };
+            emit(cc, Op.OReturn);
+        },
+        SKind.SExpr(e) => { emit_expr(cc, e); emit(cc, Op.OPop); },
+    }
+}
+
+// =====================================================================
+// Punto de entrada
+// =====================================================================
+
+fn compile_fn(f: Func, indices: Map<string, int>) -> CompiledFn {
+    let cc = Cc { code: [], consts: [], locals: [], next_slot: 0, max_slots: 0, depth: 0, indices: indices };
+    var i = 0;
+    while (i < len(f.params)) { declare_local(cc, f.params[i].name); i = i + 1; }
+    emit_block(cc, f.body);     // deja el valor del cuerpo en la pila
+    emit(cc, Op.OReturn);       // ...que se retorna
+    CompiledFn { name: f.name, arity: len(f.params), nslots: cc.max_slots, chunk: Chunk { code: cc.code, consts: cc.consts } }
+}
+
+pub fn compile(prog: Program) -> CProgram {
+    var indices: Map<string, int> = map_new();
+    var i = 0;
+    while (i < len(prog.funcs)) { insert(indices, prog.funcs[i].name, i); i = i + 1; }
+    var fns: [CompiledFn] = [];
+    var j = 0;
+    while (j < len(prog.funcs)) { push(fns, compile_fn(prog.funcs[j], indices)); j = j + 1; }
+    CProgram { fns: fns }
+}

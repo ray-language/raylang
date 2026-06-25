@@ -99,7 +99,7 @@ pub struct RuntimeError { msg: string, line: int, col: int }
 //   - FError(e):  un error de ejecución real, hasta el tope.
 // Ambos viajan por el canal de error de `Result` (`?` los desenrolla); el borde de la función los
 // distingue (un `return` produce el valor; un error se reporta).
-enum Flow { FReturn(Value), FError(RuntimeError) }
+pub enum Flow { FReturn(Value), FError(RuntimeError) }
 
 // El estado del intérprete: tabla de funciones por nombre, definiciones de structs (campos en orden) y
 // enums (variantes) —para construir literales y RECONOCER la construcción de enum en runtime—, y la pila
@@ -113,7 +113,7 @@ struct Interp {
     args: [string],                 // argumentos de la línea de comandos (los enhebra `run`, M14.7c)
 }
 
-fn rt_error(line: int, col: int, msg: string) -> RuntimeError {
+pub fn rt_error(line: int, col: int, msg: string) -> RuntimeError {
     RuntimeError { msg: msg, line: line, col: col }
 }
 
@@ -121,7 +121,7 @@ fn rt_error(line: int, col: int, msg: string) -> RuntimeError {
 fn empty_scopes() -> [Map<string, Cell>] { [] }
 
 // Una lista de valores vacía, ya tipada (para los argumentos de `main`).
-fn no_vals() -> [Value] { [] }
+pub fn no_vals() -> [Value] { [] }
 
 // Una lista de capturas vacía, ya tipada (para las funciones nombradas, sin entorno).
 fn no_captures() -> [Capture] { [] }
@@ -135,7 +135,7 @@ fn no_types() -> [Type] { [] }
 
 // Representación textual de un valor, idéntica al `Display` de `Value` en Rust (la usa `print`/
 // `to_string`). Los flotantes usan el `to_string` del host = el `Display` de f64 de Rust → coincide.
-fn value_str(v: Value) -> string {
+pub fn value_str(v: Value) -> string {
     match (v) {
         Value.VInt(n) => to_string(n),
         Value.VFloat(x) => to_string(x),
@@ -189,7 +189,7 @@ fn join_fields(fields: [SField]) -> string {
 // Igualdad estructural de valores (para `==`/`!=`). El checker garantiza que ambos lados son del mismo
 // tipo, así que las ramas cruzadas no se ejercitan en programas válidos. Los compuestos comparan recursivo
 // (el checker solo lo permite sobre tipos con `==`, p. ej. derivados).
-fn values_equal(a: Value, b: Value) -> bool {
+pub fn values_equal(a: Value, b: Value) -> bool {
     match (a) {
         Value.VInt(x) => match (b) { Value.VInt(y) => x == y, _ => false },
         Value.VFloat(x) => match (b) { Value.VFloat(y) => x == y, _ => false },
@@ -421,7 +421,7 @@ fn cmp_char(op: BinOp, a: char, b: char) -> bool {
 
 // `+`: aritmética entera/flotante, concatenación de strings (M11.1a) o de arreglos (M11.7b → M14.7c:
 // devuelve un arreglo NUEVO, como Rust). El checker ya garantiza tipos compatibles.
-fn eval_add(l: Value, r: Value) -> Result<Value, Flow> {
+pub fn eval_add(l: Value, r: Value) -> Result<Value, Flow> {
     match (l) {
         Value.VInt(a) => match (r) { Value.VInt(b) => Result.Ok(Value.VInt(a + b)), _ => panic("+ inválido") },
         Value.VFloat(a) => match (r) { Value.VFloat(b) => Result.Ok(Value.VFloat(a + b)), _ => panic("+ inválido") },
@@ -468,7 +468,7 @@ fn arith_float(op: BinOp, a: float, b: float) -> Result<Value, Flow> {
 }
 
 // Sub/Mul/Div/Rem sobre dos enteros o dos flotantes.
-fn eval_arith(op: BinOp, l: Value, r: Value, line: int, col: int) -> Result<Value, Flow> {
+pub fn eval_arith(op: BinOp, l: Value, r: Value, line: int, col: int) -> Result<Value, Flow> {
     match (l) {
         Value.VInt(a) => match (r) { Value.VInt(b) => arith_int(op, a, b, line, col), _ => panic("aritmética inválida") },
         Value.VFloat(a) => match (r) { Value.VFloat(b) => arith_float(op, a, b), _ => panic("aritmética inválida") },
@@ -477,7 +477,7 @@ fn eval_arith(op: BinOp, l: Value, r: Value, line: int, col: int) -> Result<Valu
 }
 
 // Lt/Le/Gt/Ge sobre números, strings (lexicográfico) o char (code point) (M11.7d).
-fn eval_cmp(op: BinOp, l: Value, r: Value) -> Result<Value, Flow> {
+pub fn eval_cmp(op: BinOp, l: Value, r: Value) -> Result<Value, Flow> {
     match (l) {
         Value.VInt(a) => match (r) { Value.VInt(b) => Result.Ok(Value.VBool(cmp_int(op, a, b))), _ => panic("comparación inválida") },
         Value.VFloat(a) => match (r) { Value.VFloat(b) => Result.Ok(Value.VBool(cmp_float(op, a, b))), _ => panic("comparación inválida") },
@@ -547,7 +547,7 @@ fn eval_bool(c: Interp, e: Expr) -> Result<bool, Flow> {
 // Llamadas y builtins
 // =====================================================================
 
-fn is_builtin(name: string) -> bool {
+pub fn is_builtin(name: string) -> bool {
     name == "print" || name == "eprint" || name == "to_string" || name == "panic"
         || name == "len" || name == "push"
         || name == "trim" || name == "split" || name == "chars" || name == "contains"
@@ -711,12 +711,13 @@ fn eval_args(c: Interp, args: [Expr]) -> Result<[Value], Flow> {
 // Ejecuta un builtin: evalúa sus argumentos y despacha sobre los valores.
 fn call_builtin(c: Interp, name: string, args: [Expr], line: int, col: int) -> Result<Value, Flow> {
     let vals = eval_args(c, args)?;
-    dispatch_builtin(c, name, vals, line, col)
+    dispatch_builtin(c.args, name, vals, line, col)
 }
 
-// Despacha un builtin con sus argumentos ya evaluados (lo reusa el builtin-como-método, p. ej. `xs.len()`).
-// `panic` se intercepta aquí (necesita la posición de la llamada y produce un FError, no un Value).
-fn dispatch_builtin(c: Interp, name: string, vals: [Value], line: int, col: int) -> Result<Value, Flow> {
+// Despacha un builtin con sus argumentos ya evaluados (lo reusan el builtin-como-método —`xs.len()`— y
+// la VM auto-alojada de M14.5). `prog_args` son los argumentos del programa (para `args()`). `panic` se
+// intercepta aquí (necesita la posición de la llamada y produce un FError, no un Value).
+pub fn dispatch_builtin(prog_args: [string], name: string, vals: [Value], line: int, col: int) -> Result<Value, Flow> {
     if (name == "panic") {
         return Result.Err(Flow.FError(rt_error(line, col, as_str(vals[0]))));
     }
@@ -774,7 +775,7 @@ fn dispatch_builtin(c: Interp, name: string, vals: [Value], line: int, col: int)
     if (name == "__read_file") { return Result.Ok(strs_to_value(__read_file(as_str(vals[0])))); }
     if (name == "__write_file") { return Result.Ok(strs_to_value(__write_file(as_str(vals[0]), as_str(vals[1])))); }
     if (name == "exists") { return Result.Ok(Value.VBool(exists(as_str(vals[0])))); }
-    if (name == "args") { return Result.Ok(strs_to_value(c.args)); }
+    if (name == "args") { return Result.Ok(strs_to_value(prog_args)); }
     if (name == "__pop") {
         // Muta el arreglo compartido quitando el último (vía el `pop` del host); devuelve [] o [x].
         return match (vals[0]) {
@@ -999,7 +1000,7 @@ fn dispatch_method(c: Interp, recv: Value, fname: string, args: [Expr], line: in
     // (e) builtin como método: recv como primer argumento (p. ej. `xs.len()`)
     if (is_builtin(fname)) {
         let vals = eval_args(c, args)?;
-        return dispatch_builtin(c, fname, prepend(recv, vals), line, col);
+        return dispatch_builtin(c.args, fname, prepend(recv, vals), line, col);
     }
     panic("no se pudo resolver '" + fname + "' sobre el receptor")
 }

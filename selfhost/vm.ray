@@ -1,0 +1,137 @@
+// La VM auto-alojada (M14.5): ejecuta el bytecode de `compiler.ray` en una máquina de pila. Es el
+// segundo back-end auto-alojado (el M2 de este módulo), en paralelo al intérprete de M14.4.
+//
+// Decisión central: **reusa el `Value` y el runtime del intérprete** (`value_str`, `values_equal`, la
+// aritmética y `dispatch_builtin`). A diferencia de Rust —dos representaciones de valor, porque la VM
+// gestiona su GC—, aquí hay UN solo `Value` y ningún GC propio: ambos motores cabalgan sobre el GC del
+// host. La VM tiene su **pila de operandos y su pila de marcos explícitas** (arreglos/structs de
+// raylang), en un bucle iterativo, sin usar la pila del host para los marcos del lenguaje.
+//
+// M14.5a — el núcleo (escalares, control, locales, llamadas, recursión, builtins escalares).
+
+from compiler import Op, CProgram, CompiledFn, Chunk;
+from interpreter import Value, Flow, RuntimeError, value_str, values_equal, eval_add, eval_arith, eval_cmp, dispatch_builtin, rt_error, no_vals;
+from parser import BinOp;
+
+// Un marco de llamada: la función en ejecución (índice), el puntero de instrucción, los slots locales y
+// su propia pila de operandos. Darle pila propia a cada marco evita la aritmética de *base pointer*.
+struct Frame { fni: int, ip: int, locals: [Value], stack: [Value] }
+
+// Saca el valor de la cima (el compilador garantiza que hay uno).
+fn pop_val(stack: [Value]) -> Value {
+    match (pop(stack)) { Option.Some(v) => v, Option.None => panic("VM: pila de operandos vacía") }
+}
+
+// Saca `n` valores y los devuelve en ORDEN de empuje (arg0 primero), para alimentar params/builtins.
+fn pop_n(stack: [Value], n: int) -> [Value] {
+    var rev: [Value] = [];
+    var i = 0;
+    while (i < n) { push(rev, pop_val(stack)); i = i + 1; }
+    var out: [Value] = [];
+    var j = len(rev) - 1;
+    while (j >= 0) { push(out, rev[j]); j = j - 1; }
+    out
+}
+
+// Crea un marco para `cp.fns[idx]`: slots dimensionados a `nslots`, con los args en los primeros (params).
+fn new_frame(cp: CProgram, idx: int, args: [Value]) -> Frame {
+    let cf = cp.fns[idx];
+    var locals: [Value] = [];
+    var i = 0;
+    while (i < cf.nslots) { push(locals, Value.VUnit); i = i + 1; }
+    var k = 0;
+    while (k < len(args)) { locals[k] = args[k]; k = k + 1; }
+    Frame { fni: idx, ip: 0, locals: locals, stack: [] }
+}
+
+// ¿La cima de la pila es `false`? (para `OJumpIfFalse`, que OJEA sin sacar).
+fn peek_false(stack: [Value]) -> bool {
+    match (stack[len(stack) - 1]) { Value.VBool(b) => !b, _ => false }
+}
+
+// El índice de la función `main` en el programa compilado.
+fn find_main(cp: CProgram) -> int {
+    var i = 0;
+    while (i < len(cp.fns)) { if (cp.fns[i].name == "main") { return i; } i = i + 1; }
+    0 - 1
+}
+
+// El bucle de la VM. Usa `Flow` como canal de error (FError); el control de funciones lo lleva la pila
+// de marcos. Devuelve el valor que retorna `main`.
+fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
+    let main_idx = find_main(cp);
+    if (main_idx < 0) { return Result.Err(Flow.FError(rt_error(0, 0, "no hay función 'main'"))); }
+    var frames: [Frame] = [new_frame(cp, main_idx, no_vals())];
+
+    var running = true;
+    var result = Value.VUnit;
+    while (running) {
+        let fr = frames[len(frames) - 1];
+        let cf = cp.fns[fr.fni];
+        let op = cf.chunk.code[fr.ip];
+        fr.ip = fr.ip + 1;
+        match (op) {
+            Op.OConst(idx) => { push(fr.stack, cf.chunk.consts[idx]); },
+            Op.OTrue => { push(fr.stack, Value.VBool(true)); },
+            Op.OFalse => { push(fr.stack, Value.VBool(false)); },
+            Op.OUnit => { push(fr.stack, Value.VUnit); },
+            Op.OPop => { pop_val(fr.stack); },
+            Op.OAdd => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_add(a, b)?); },
+            Op.OSub => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_arith(BinOp.Sub, a, b, 0, 0)?); },
+            Op.OMul => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_arith(BinOp.Mul, a, b, 0, 0)?); },
+            Op.ODiv => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_arith(BinOp.Div, a, b, 0, 0)?); },
+            Op.ORem => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_arith(BinOp.Rem, a, b, 0, 0)?); },
+            Op.ONeg => { let a = pop_val(fr.stack); push(fr.stack, negate(a)); },
+            Op.ONot => { let a = pop_val(fr.stack); push(fr.stack, not_val(a)); },
+            Op.OEq => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, Value.VBool(values_equal(a, b))); },
+            Op.ONe => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, Value.VBool(!values_equal(a, b))); },
+            Op.OLt => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_cmp(BinOp.Lt, a, b)?); },
+            Op.OLe => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_cmp(BinOp.Le, a, b)?); },
+            Op.OGt => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_cmp(BinOp.Gt, a, b)?); },
+            Op.OGe => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_cmp(BinOp.Ge, a, b)?); },
+            Op.OJump(t) => { fr.ip = t; },
+            Op.OJumpIfFalse(t) => { if (peek_false(fr.stack)) { fr.ip = t; } },
+            Op.OGetLocal(slot) => { push(fr.stack, fr.locals[slot]); },
+            Op.OSetLocal(slot) => { fr.locals[slot] = pop_val(fr.stack); },
+            Op.OInitLocal(slot) => { fr.locals[slot] = pop_val(fr.stack); },
+            Op.OBuiltin(name, argc) => {
+                let args = pop_n(fr.stack, argc);
+                push(fr.stack, dispatch_builtin(prog_args, name, args, 0, 0)?);
+            },
+            Op.OCall(idx, argc) => {
+                let args = pop_n(fr.stack, argc);
+                push(frames, new_frame(cp, idx, args));
+            },
+            Op.OReturn => {
+                let rv = pop_val(fr.stack);
+                pop(frames);
+                if (len(frames) == 0) { result = rv; running = false; }
+                else { push(frames[len(frames) - 1].stack, rv); }
+            },
+        }
+    }
+    Result.Ok(result)
+}
+
+fn negate(v: Value) -> Value {
+    match (v) {
+        Value.VInt(n) => Value.VInt(0 - n),
+        Value.VFloat(f) => Value.VFloat(0.0 - f),
+        _ => panic("VM: negación de un no-número"),
+    }
+}
+
+fn not_val(v: Value) -> Value {
+    match (v) { Value.VBool(b) => Value.VBool(!b), _ => panic("VM: ! de un no-booleano") }
+}
+
+// Ejecuta el programa compilado; traduce el canal `Flow` al `RuntimeError` público (como el intérprete).
+pub fn run_vm(cp: CProgram, prog_args: [string]) -> Result<Value, RuntimeError> {
+    match (vm_loop(cp, prog_args)) {
+        Result.Ok(v) => Result.Ok(v),
+        Result.Err(flow) => match (flow) {
+            Flow.FError(e) => Result.Err(e),
+            Flow.FReturn(v) => Result.Ok(v),
+        },
+    }
+}

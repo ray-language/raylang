@@ -1,5 +1,5 @@
 //! Pruebas de **concurrencia** (M12.1 slice CSP + M12.2 acotados/backpressure + M12.3 structured
-//! concurrency) sobre el binario.
+//! concurrency + M12.4 `select`) sobre el binario.
 //!
 //! La concurrencia vive SOLO en la VM (el intérprete da un error limpio). El scheduler es **cooperativo
 //! M:1 y determinista** (cola FIFO, puntos de yield = `recv` bloqueante y, desde M12.2, `send` sobre un
@@ -406,4 +406,98 @@ fn main() -> int {
     let (out, _err, code) = run("conc_scope_varias", src, true);
     assert_eq!(out, "55\n"); // 1+4+9+16+25
     assert_eq!(code, 55);
+}
+
+// --- M12.4: select sobre varios canales ---
+
+#[test]
+fn select_multiplexa_dos_canales() {
+    // Dos productores en canales distintos; main multiplexa con select (devuelve el índice listo).
+    let src = r#"
+fn main() -> int {
+    let a: Channel<int> = channel();
+    let b: Channel<int> = channel();
+    spawn(fn() { send(a, 10); });
+    spawn(fn() { send(b, 20); });
+    let chs: [Channel<int>] = [a, b];
+    var total = 0;
+    var n = 0;
+    while (n < 2) {
+        let i = select(chs);
+        match (recv(chs[i])) {
+            Option.Some(v) => { print(v); total = total + v; },
+            Option.None => {},
+        }
+        n = n + 1;
+    }
+    print(total);
+    total
+}
+"#;
+    let (out, _err, code) = run("conc_select_mux", src, true);
+    assert_eq!(out, "10\n20\n30\n");
+    assert_eq!(code, 30);
+}
+
+#[test]
+fn select_detecta_canal_cerrado() {
+    // Un canal cerrado cuenta como "listo": select lo devuelve y el recv da None.
+    let src = r#"
+fn main() -> int {
+    let a: Channel<int> = channel();
+    spawn(fn() { close(a); });
+    let chs: [Channel<int>] = [a];
+    let i = select(chs);
+    match (recv(chs[i])) {
+        Option.Some(v) => print(v),
+        Option.None => print(0 - 7),
+    }
+    0
+}
+"#;
+    let (out, _err, code) = run("conc_select_cerrado", src, true);
+    assert_eq!(out, "-7\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn select_bloquea_hasta_que_un_canal_este_listo() {
+    // Un canal nunca recibe valor; select bloquea hasta que el otro lo tiene, y devuelve su índice.
+    let src = r#"
+fn productor(ch: Channel<int>) {
+    var i = 0;
+    while (i < 3) { i = i + 1; }
+    send(ch, 99);
+}
+fn main() -> int {
+    let a: Channel<int> = channel();
+    let b: Channel<int> = channel();
+    spawn(fn() { productor(b); });
+    let chs: [Channel<int>] = [a, b];
+    let i = select(chs);
+    print(i);
+    match (recv(chs[i])) { Option.Some(v) => print(v), Option.None => {} }
+    0
+}
+"#;
+    let (out, _err, code) = run("conc_select_bloquea", src, true);
+    assert_eq!(out, "1\n99\n");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn select_sin_fuente_es_deadlock() {
+    // select sobre un canal que nadie alimenta ni cierra → deadlock (error de ejecución limpio).
+    let src = r#"
+fn main() -> int {
+    let a: Channel<int> = channel();
+    let chs: [Channel<int>] = [a];
+    let i = select(chs);
+    print(i);
+    0
+}
+"#;
+    let (_out, err, code) = run("conc_select_deadlock", src, true);
+    assert!(err.contains("deadlock"), "stderr no menciona deadlock: {err}");
+    assert_eq!(code, 70);
 }

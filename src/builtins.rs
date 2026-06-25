@@ -401,6 +401,15 @@ static BUILTINS: &[Builtin] = &[
             other => Err((Some(0), format!("spawn espera una función, no {}", other))),
         }
     } },
+    // select(chs: [Channel<T>]) -> int: bloquea hasta que algún canal de la lista esté listo para recibir
+    // y devuelve el índice del primero listo (M12.4). Luego recv(chs[i]) toma el valor.
+    Builtin { name: "select", opcode: OpCode::Select, check: |a| {
+        arity(a, 1, "select", " (un arreglo de canales)")?;
+        match &a[0] {
+            Type::Array(el) if matches!(&**el, Type::Channel(_)) => Ok(Type::Int),
+            other => Err((Some(0), format!("select espera un [Channel<T>], no {}", other))),
+        }
+    } },
     // scope(body: fn() -> R) -> R: corre body; al volver, une todas las tareas lanzadas dentro y propaga
     // un fallo si lo hubo (M12.3 structured concurrency). El compilador lo baja con ScopeBegin/ScopeEnd.
     Builtin { name: "scope", opcode: OpCode::ScopeBegin, check: |a| {

@@ -99,10 +99,13 @@ struct ScopeFrame {
 ///   sostiene el valor `v` que aún no ha podido entregar (es una raíz del GC).
 /// - `Join`: bloqueada en `join`/`ScopeEnd` esperando a una **tarea** (M12.3); al completarse la tarea se
 ///   la despierta y re-ejecuta el opcode (que rebobinó su `ip`).
+/// - `Select`: bloqueada en `select` esperando a que CUALQUIERA de un conjunto de canales esté listo
+///   (M12.4); `Parked.on` es el handle del **arreglo** de canales. Al despertar re-ejecuta el `select`.
 enum Waiting {
     Recv,
     Send(HeapValue),
     Join,
+    Select,
 }
 
 /// Una fibra **bloqueada**, con el handle por el que espera (`on`: un canal para Recv/Send, una tarea para
@@ -489,6 +492,7 @@ impl<'a> Vm<'a> {
                             Obj::Channel(c) => c.queue.push_back(v),
                             _ => unreachable!("el checker garantiza un Channel"),
                         }
+                        self.wake_select_waiters(h); // M12.4: el canal ya tiene valor → listo para un select
                         self.push(HeapValue::Unit);
                     } else {
                         // (3) Cola llena (acotado) → BLOQUEAR al emisor (backpressure, M12.2). Guarda la
@@ -496,6 +500,9 @@ impl<'a> Vm<'a> {
                         // resultado de `send`) en la pila y continúa tras el ChanSend.
                         let fiber = self.take_current_fiber();
                         self.parked.push(Parked { on: h, fiber, waiting: Waiting::Send(v) });
+                        // M12.4: un emisor bloqueado vuelve al canal "listo" para un select (un recv lo
+                        // tomaría); despierta a los selectores que lo esperan.
+                        self.wake_select_waiters(h);
                         self.schedule_next(line, col)?;
                     }
                 }
@@ -594,6 +601,40 @@ impl<'a> Vm<'a> {
                                 let msg = msg.clone();
                                 return Err(runtime_error(line, col, &msg));
                             }
+                        }
+                    }
+                }
+                OpCode::Select => {
+                    // Espera a que algún canal de la lista esté listo para recibir; devuelve su índice
+                    // (el menor, determinista). Si ninguno lo está, bloquea esperando al conjunto (M12.4).
+                    let arr = self.pop_obj();
+                    let chans: Vec<Handle> = match self.heap.get(arr) {
+                        Obj::Array(elems) => elems.iter().filter_map(|v| v.handle()).collect(),
+                        _ => unreachable!("el checker garantiza un arreglo de canales"),
+                    };
+                    let mut ready_idx = None;
+                    for (i, &c) in chans.iter().enumerate() {
+                        let buffered_or_closed = match self.heap.get(c) {
+                            Obj::Channel(ch) => !ch.queue.is_empty() || ch.closed,
+                            _ => unreachable!("el checker garantiza un Channel"),
+                        };
+                        let has_sender = self.parked.iter()
+                            .any(|p| p.on == c && matches!(p.waiting, Waiting::Send(_)));
+                        if buffered_or_closed || has_sender {
+                            ready_idx = Some(i);
+                            break;
+                        }
+                    }
+                    match ready_idx {
+                        Some(i) => self.push(HeapValue::Int(i as i64)),
+                        None => {
+                            // Ninguno listo: re-empuja el arreglo (lo sacamos arriba), rebobina el ip al
+                            // Select y aparca esperando al conjunto (el handle del arreglo va en `on`).
+                            self.push(HeapValue::Obj(arr));
+                            self.frames.last_mut().unwrap().ip -= 1;
+                            let fiber = self.take_current_fiber();
+                            self.parked.push(Parked { on: arr, fiber, waiting: Waiting::Select });
+                            self.schedule_next(line, col)?;
                         }
                     }
                 }
@@ -965,6 +1006,7 @@ impl<'a> Vm<'a> {
                                     i += 1;
                                 }
                             }
+                            self.wake_select_waiters(ch); // M12.4: un canal cerrado está "listo" para un select
                             self.push(HeapValue::Unit);
                         }
                         _ => unreachable!("el checker garantiza un handle (int) o un Channel"),
@@ -1223,6 +1265,27 @@ impl<'a> Vm<'a> {
         let mut i = 0;
         while i < self.parked.len() {
             if self.parked[i].on == task && matches!(self.parked[i].waiting, Waiting::Join) {
+                let parked = self.parked.remove(i);
+                self.ready.push_back(parked.fiber);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Despierta a los `select` aparcados cuyo arreglo de canales contiene `chan`, porque acaba de pasar a
+    /// estar listo para recibir (M12.4). Re-ejecutarán el `select` y verán el canal listo (o, si otro lo
+    /// consumió antes, se volverán a bloquear). No empuja nada (el opcode rebobinó su `ip`).
+    fn wake_select_waiters(&mut self, chan: Handle) {
+        let mut i = 0;
+        while i < self.parked.len() {
+            let on = self.parked[i].on;
+            let is_select = matches!(self.parked[i].waiting, Waiting::Select);
+            let contains = is_select && match self.heap.get(on) {
+                Obj::Array(elems) => elems.iter().any(|v| v.handle() == Some(chan)),
+                _ => false,
+            };
+            if contains {
                 let parked = self.parked.remove(i);
                 self.ready.push_back(parked.fiber);
             } else {

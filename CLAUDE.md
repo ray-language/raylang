@@ -1120,6 +1120,22 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `ScopeFrame` (en curso/listas/aparcadas). Ejemplo `examples/structured.ray`. Diferido: **cancelación**
     de hermanas cuando una falla (sin primitivo de cancelación; el cuerpo del scope que hace panic deja
     huérfanas), M12.4 `select`.
+  - **M12.4 COMPLETO** (347 lib + 21 en `tests/concurrency_cli.rs`): **`select` sobre varios canales**
+    (DESIGN §21.5). **`select(chs: [Channel<T>]) -> int`** bloquea hasta que algún canal de la lista esté
+    **listo para recibir** (cola no vacía ∨ cerrado ∨ con emisor bloqueado) y devuelve el **índice** del
+    primero listo (determinista: menor índice); luego `recv(chs[i])` toma el valor (o `None` si se cerró).
+    Mínimo, sin tipos ni tuplas nuevas; seguro porque entre `select` y `recv` no hay yield (M:1). UFCS
+    gratis. **Runtime (solo VM, cero objetos nuevos)**: opcode `Select` (es un builtin ordinario, no
+    necesita special-case del compilador); `Waiting` gana `Select` (el `Parked.on` del selector es el
+    **handle del arreglo** de canales → el GC lo rootea y con él los canales). Al bloquear, rebobina el `ip`
+    y re-ejecuta al despertar (re-empuja el arreglo, como `TaskJoin`). Se le despierta cuando un canal suyo
+    pasa a estar listo: `wake_select_waiters(chan)` (recorre los `Select` cuyo arreglo contiene `chan`) se
+    llama al **encolar** (`send`), al **bloquearse un emisor** y al **cerrar**. Despertar espurio →
+    re-ejecuta y se re-bloquea. **Prioridad**: un `send` entrega antes a un `recv` plano que a un `select`
+    (que solo ve el valor vía la cola). Gotcha (documentado): un canal **cerrado** queda listo para siempre
+    → si haces `select` sobre una lista que lo incluye, lo elegiría siempre; hay que quitarlo de la lista (el
+    "poner a nil" de Go). Ejemplo `examples/select.ray`. **M12 COMPLETO** (12.1–12.4). Diferido: cancelación
+    de hermanas en `scope`, `Selected<T>` (índice+valor), `select` de operaciones de send.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

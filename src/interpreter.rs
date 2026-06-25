@@ -818,9 +818,9 @@ impl<'a> Interpreter<'a> {
                     // `join` NO va aquí: es ad-hoc polimórfico y su forma de strings (M11.7a) corre en el
                     // intérprete; la forma de Task nunca llega (spawn ya da error → no existen Tasks aquí).
                     if name == "spawn" || name == "channel" || name == "send" || name == "__recv"
-                        || name == "scope" {
+                        || name == "scope" || name == "select" {
                         return Err(runtime_error(callee.line, callee.col,
-                            "la concurrencia (spawn/channel/send/recv/join/scope) requiere la VM; ejecuta con --vm"));
+                            "la concurrencia (spawn/channel/send/recv/join/scope/select) requiere la VM; ejecuta con --vm"));
                     }
                     return Ok(self.eval_builtin(name, values));
                 }

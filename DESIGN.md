@@ -65,7 +65,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ✅ M11.1 stdlib de string (`+`/`len`/`to_string`/`trim`/`split`) · M11.2 I/O (`eprint`/`input`/`parse_int`/`read_int`/`env`/`args`/`read_file`/`write_file`) · M11.3 módulos (`import M;`+`M.f`, `from M import a as b`, `pub`) |
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
-| **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | 🚧 §21.2/§21.3/§21.4: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure (`channel(n)`) · ✅ **M12.3** structured concurrency (`Task<T>`+`join`+`scope`, propagación) · ⏳ M12.4 `select` |
+| **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.5: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure (`channel(n)`) · ✅ **M12.3** structured concurrency (`Task<T>`+`join`+`scope`, propagación) · ✅ **M12.4** `select` sobre varios canales. **M12 COMPLETO** (diferido: cancelación de hermanas, `Selected<T>`, select de send) |
 | **Transversal** | optimización de la VM (incremental, midiendo) · **VM auto-alojada** (M14.5, opcional) | rendimiento, bootstrapping | ⏳ |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -2322,6 +2322,40 @@ corriendo cada instrucción en un **cierre** dentro del bucle de la VM (el error
 frames activos → su `Task`; los de `main`/scheduler con frames vacíos → abortan). Tests:
 `tests/concurrency_cli.rs` (scope+join con valor, auto-join, propagación por join y por scope, scope de
 varias tareas). Ejemplo: `examples/structured.ray`.
+
+### 21.5 M12.4 — `select` sobre varios canales (especificación)
+
+Con `recv` esperas a UN canal; `select` espera al **primero de varios** que esté listo. Es la última pieza
+del modelo CSP (multiplexar canales: un consumidor que atiende varias fuentes, *timeouts* como un canal
+más, etc.). Cierra M12.
+
+**Surface (mínima, sin tipos ni tuplas nuevas):**
+- `select(chs: [Channel<T>]) -> int` — bloquea hasta que **algún** canal de la lista esté **listo para
+  recibir** (tiene un valor en cola, tiene un emisor bloqueado, o está cerrado) y devuelve el **índice** del
+  primero listo (determinista: el de menor índice). Luego haces `recv(chs[i])` para tomar el valor (o
+  detectar el cierre con `None`). Es seguro: entre el `select` y el `recv` **no hay punto de yield** (M:1
+  cooperativo), así que la disponibilidad se mantiene. Los canales son **homogéneos** (`Channel<T>`); la
+  variante índice+valor (`Selected<T>`) y el `select` de *send* quedan como azúcar/extensión futura.
+- UFCS gratis: `chs.select()`.
+
+**Semántica (scheduler):** `select` es un punto de yield más. Al evaluarlo: escanea la lista en orden; si
+algún canal está listo (cola no vacía ∨ cerrado ∨ con emisor bloqueado) → devuelve su índice; si ninguno →
+**bloquea** la fibra esperando al **conjunto** de canales (`Waiting::Select`, con el handle del arreglo en
+`Parked.on`), rebobina el `ip` y re-ejecuta el `select` al despertar. Se la **despierta** cuando cualquiera
+de sus canales pasa a estar listo: al **encolar** un valor (`send`), al **bloquearse un emisor** (rendezvous)
+y al **cerrar** el canal (`wake_select_waiters(chan)` recorre los `Select` aparcados cuyo arreglo contiene
+ese canal). Un despertar **espurio** (otra fibra consumió el valor antes) se reabsorbe: al re-ejecutar, el
+`select` no halla nada listo y se vuelve a bloquear. **Determinismo:** menor índice listo; los aparcados se
+despiertan en orden FIFO. **Prioridad:** un `send` entrega antes a un `recv` plano bloqueado que a un
+`select` (que solo ve el valor vía la cola) — política determinista, documentada.
+
+**Runtime / GC:** ningún objeto nuevo (reusa `Obj::Channel`). `Waiting` gana `Select`; el `Parked.on` de un
+selector es el **handle del arreglo** de canales → el GC lo rootea (y con él, transitivamente, los canales).
+Solo la VM; el intérprete da error limpio en `select`. Tests por **salida esperada exacta**.
+
+**M12.4 — estado: COMPLETO.** Implementado según la spec. Con M12.4, **M12 (concurrencia) queda COMPLETO**
+en su alcance pedagógico. Diferido (puertas abiertas): `Selected<T>` (índice+valor en un paso, azúcar del
+prelude), `select` de operaciones de **send**, y la **cancelación** de hermanas en un `scope` (§21.4).
 
 ## 22. M13 — Habilitadores de self-hosting
 

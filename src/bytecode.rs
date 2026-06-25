@@ -187,6 +187,10 @@ pub enum OpCode {
     /// fallo; si sigue pendiente, **bloquea** la fibra hasta que termine (M12.3). Builtin `join` de 1
     /// argumento (el de 2 args es el `Join` de strings); el compilador elige por aridad. Solo VM.
     TaskJoin,
+    /// Saca un **arreglo de canales** `[Channel<T>]`; espera a que **alguno** esté listo para recibir (cola
+    /// no vacía, emisor bloqueado, o cerrado) y empuja el **índice** (int) del primero listo. Si ninguno
+    /// lo está, **bloquea** la fibra hasta que alguno lo esté (M12.4). Builtin `select`. Solo VM.
+    Select,
     /// Apila un **marco de scope** (vacío) en la fibra actual: las tareas `spawn`eadas mientras esté
     /// activo quedan adscritas a él (M12.3 structured concurrency). El compilador lo intercala antes de la
     /// llamada al cuerpo de `scope`. No toca la pila de operandos. Solo VM.

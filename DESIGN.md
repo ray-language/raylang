@@ -67,6 +67,9 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
 | **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.6: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure · ✅ **M12.3** structured concurrency · ✅ **M12.4** `select` · ✅ **M12.5** cancelación de hermanas. **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>`, select de send) |
 | **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete) · ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port`; `OpenHandle::Listener`; servidor secuencial bloqueante; subproceso con el `.ray` de servidor) · ✅ **M15.4a** JSON (librería `examples/json.ray` en raylang: `parse`/`stringify`, objetos `Map<string,Json>`, salida canónica; cero runtime; subproceso golden) · ✅ **M15.4b** HTTP (librería `examples/http.ray` en raylang sobre TCP: `fetch`/`request`/`header`, parseo de URL/respuesta; compone con `json`; subproceso vs. servidor de juguete) · ✅ **M15.5** (capstone) sockets no bloqueantes + scheduler de M12 (`tcp_accept`/`socket_read` ceden la fibra; busy-poll cooperativo, `io_parked`, cero deps; servidor concurrente con `spawn`; solo VM). **M15 COMPLETO** (diferido: cesión en `socket_write`, `epoll`, bytes/TLS) |
+| **M16** | **tipo `bytes`** (datos binarios) | nuevo tipo en el pipeline, literal `b"..."`, I/O binaria | 🚧 §25: ✅ **M16.1a** el tipo (literal `b"..."` con `\xNN`, `len`/index→int/`==`; oráculo). Pendiente: M16.1b string-interop (`to_bytes`/`from_utf8`/`+`) · M16.1c I/O binaria |
+| **M17** | **`epoll`/`kqueue`** (readiness real, sustituye el busy-poll de M15.5) | E/S asíncrona del SO, ¿`unsafe` acotado? | 📋 planificado |
+| **M18** | **backend nativo** (bootstrap sin Rust) | codegen a máquina/LLVM/C | 📋 planificado |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) ⏳ | rendimiento, bootstrapping | 🚧 |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -3609,3 +3612,41 @@ atender }`), **solo VM**, sirviendo 2 conexiones. El test conecta dos clientes y
 leyendo al primero y nunca respondería al segundo; que el segundo reciba su eco **prueba** la
 concurrencia (los clientes de Rust ponen *read-timeout* para fallar en vez de colgarse si se rompe).
 
+
+## 25. M16 — El tipo `bytes` (datos binarios)
+
+M15 dejó una deuda explícita: la carga útil de sockets y archivos es `string` (UTF-8 *lossy*), que
+**corrompe datos binarios** (una imagen, un `.zip`, un protocolo binario). M16 añade el tipo **`bytes`**:
+una secuencia **inmutable** de octetos (0–255), hermano de `string` (también inmutable) pero sin la
+restricción de ser UTF-8 válido. Es el primer tipo nuevo desde `char` (M11.4c) y el cimiento de las dos
+problemáticas siguientes (TLS sobre `epoll`; el backend nativo emite bytes).
+
+### 25.1 Decisiones
+
+- **Inmutable, hermano de `string`.** Como `string`, un `bytes` no se muta in situ; se construye por
+  literal o concatenación. La representación en runtime espeja a la de `string` (en la VM, **inline**
+  en el `HeapValue` —no es objeto del heap ni lo toca el GC—; en el intérprete, `Rc<Vec<u8>>` para clon
+  barato). Coherente con que los strings sean inmutables.
+- **Literal `b"..."`.** Estilo Rust/Python. Su contenido son los **bytes UTF-8** del texto, con los
+  escapes de string (`\n \t \r \\ \"`) más **`\xNN`** (dos dígitos hex → un byte arbitrario), que es lo
+  que permite escribir binario literal: `b"\x00\xff"`.
+- **Indexar da `int`.** `b[i] -> int` es el octeto en esa posición (0–255); fuera de rango = error de
+  ejecución (como arreglos/strings). No se introduce un tipo `byte`.
+- **`len`, `==`, `+`** se extienden a `bytes` (longitud en octetos; igualdad estructural; concatenación).
+- **Interoperación con `string`** vía builtins: `to_bytes(s) -> bytes` (codifica UTF-8) y
+  `from_utf8(b) -> Result<string, string>` (decodifica; falla si no es UTF-8 válido → `Result`, patrón
+  del prelude). **`print(bytes)` se difiere** (un octeto no imprimible no tiene repr textual obvia;
+  como `Map`): se inspecciona con `len`/`b[i]`/`from_utf8`.
+
+### 25.2 Sub-fases
+
+- **M16.1a — el tipo (núcleo).** `Type::Bytes` + keyword `bytes`; literal `b"..."` (lexer/parser/AST);
+  valor en ambos motores; `len(bytes)`, indexar `b[i] -> int`, igualdad `==`. Determinista → **oráculo**.
+- **M16.1b — interoperación con string.** `to_bytes`/`from_utf8` (builtins) + concatenación `b1 + b2`.
+  Determinista → oráculo (estrés del GC para `to_bytes`, que asigna).
+- **M16.1c — I/O binaria.** `read_file_bytes`/`write_file_bytes` y `socket_read_bytes`/`socket_write_bytes`:
+  cierran la deuda de M15 (binario correcto). No determinista → subproceso. Los handles y el patrón de
+  arreglo etiquetado de M15 se reusan; la única novedad es que el payload viaja como `bytes`.
+
+Como `char`, el grueso es mecánico (literal + tipo + valor por motor) y el runtime solo crece donde es
+inevitable; el checker/compilador apenas cambian (un builtin es una fila en la tabla).

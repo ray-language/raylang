@@ -1063,7 +1063,9 @@ impl Checker {
             Type::Array(elem) => Ok(*elem),
             // M11.4c-2: indexar un string da el carácter en esa posición.
             Type::String => Ok(Type::Char),
-            other => Err(self.err(array.line, array.col, format!("no se puede indexar un {} (no es un arreglo ni un string)", other))),
+            // M16.1a: indexar bytes da el octeto (0–255) como int.
+            Type::Bytes => Ok(Type::Int),
+            other => Err(self.err(array.line, array.col, format!("no se puede indexar un {} (no es un arreglo, string ni bytes)", other))),
         }
     }
 
@@ -1775,6 +1777,7 @@ impl Checker {
             ExprKind::Bool(_) => Ok(Type::Bool),
             ExprKind::Str(_) => Ok(Type::String),
             ExprKind::Char(_) => Ok(Type::Char),
+            ExprKind::Bytes(_) => Ok(Type::Bytes),
 
             ExprKind::Ident(name) => {
                 // Una variable tapa a una función con el mismo nombre.
@@ -2523,7 +2526,8 @@ fn is_hashable_key(t: &Type) -> bool {
 
 fn is_comparable(t: &Type) -> bool {
     match t {
-        Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Struct(_, _) => true,
+        // M16.1a: `bytes` se compara con `==` (igualdad estructural de octetos).
+        Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes | Type::Struct(_, _) => true,
         Type::Array(elem) => is_comparable(elem),
         // Un Map (M13.1) no se compara con == por ahora (como los enums); se consulta.
         Type::Map(_, _) => false,

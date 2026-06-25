@@ -499,8 +499,8 @@ static BUILTINS: &[Builtin] = &[
     // len(a) -> int: longitud de un arreglo, un string (M11.1a: nº de caracteres) o un Map (M13.1).
     Builtin { name: "len", opcode: OpCode::Len, check: |a| {
         arity(a, 1, "len", "")?;
-        if !matches!(a[0], Type::Array(_) | Type::String | Type::Map(_, _)) {
-            return Err((Some(0), format!("len espera un arreglo, un string o un Map, no {}", a[0])));
+        if !matches!(a[0], Type::Array(_) | Type::String | Type::Map(_, _) | Type::Bytes) {
+            return Err((Some(0), format!("len espera un arreglo, un string, un Map o bytes, no {}", a[0])));
         }
         Ok(Type::Int)
     } },

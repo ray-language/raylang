@@ -517,6 +517,10 @@ impl<'a> Compiler<'a> {
                 let idx = self.cur().chunk.add_constant(Value::Char(*c));
                 self.emit(OpCode::Constant(idx), line, col);
             }
+            ExprKind::Bytes(b) => {
+                let idx = self.cur().chunk.add_constant(Value::Bytes(std::rc::Rc::new(b.clone())));
+                self.emit(OpCode::Constant(idx), line, col);
+            }
             ExprKind::Bool(true) => {
                 self.emit(OpCode::True, line, col);
             }

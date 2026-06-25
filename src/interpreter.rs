@@ -53,6 +53,9 @@ pub enum Value {
     Bool(bool),
     Str(String),
     Char(char), // M11.4c
+    /// Bytes (M16.1a): secuencia inmutable de octetos. `Rc` da clon barato (inmutable → sin `RefCell`,
+    /// como el `String` de `Str`). Igualdad estructural.
+    Bytes(Rc<Vec<u8>>),
     Unit,
     /// Arreglo (M3). `Rc` da la **semántica de referencia** (clonar el `Value`
     /// comparte el mismo arreglo); `RefCell` permite mutarlo. La GC de M4
@@ -131,6 +134,7 @@ impl PartialEq for Value {
             (Bool(a), Bool(b)) => a == b,
             (Str(a), Str(b)) => a == b,
             (Char(a), Char(b)) => a == b,
+            (Bytes(a), Bytes(b)) => a == b,
             (Unit, Unit) => true,
             (Array(a), Array(b)) => *a.borrow() == *b.borrow(),
             (Struct(a), Struct(b)) => *a.borrow() == *b.borrow(),
@@ -175,6 +179,9 @@ impl std::fmt::Display for Value {
             Value::Bool(v) => write!(f, "{}", v),
             Value::Str(v) => write!(f, "{}", v),
             Value::Char(v) => write!(f, "{}", v),
+            // M16.1a: print(bytes) está diferido (el checker lo rechaza); esta repr solo existe para
+            // completar el Display y se ve, p. ej., en mensajes de depuración.
+            Value::Bytes(v) => write!(f, "bytes[{}]", v.len()),
             Value::Unit => write!(f, "()"),
             Value::Array(rc) => {
                 let elems = rc.borrow();
@@ -605,6 +612,7 @@ impl<'a> Interpreter<'a> {
             ExprKind::Bool(v) => Ok(Value::Bool(*v)),
             ExprKind::Str(v) => Ok(Value::Str(v.clone())),
             ExprKind::Char(v) => Ok(Value::Char(*v)),
+            ExprKind::Bytes(v) => Ok(Value::Bytes(Rc::new(v.clone()))),
 
             ExprKind::Ident(name) => match self.lookup_opt(name) {
                 Some(v) => Ok(v),
@@ -654,7 +662,12 @@ impl<'a> Interpreter<'a> {
                         let idx = check_bounds(i, chars.len(), index.line, index.col)?;
                         Ok(Value::Char(chars[idx]))
                     }
-                    _ => unreachable!("el checker garantiza un arreglo o un string"),
+                    // M16.1a: indexar bytes → el octeto como int.
+                    Value::Bytes(b) => {
+                        let idx = check_bounds(i, b.len(), index.line, index.col)?;
+                        Ok(Value::Int(b[idx] as i64))
+                    }
+                    _ => unreachable!("el checker garantiza un arreglo, un string o bytes"),
                 }
             }
 
@@ -869,7 +882,9 @@ impl<'a> Interpreter<'a> {
                 Value::Str(s) => Value::Int(s.chars().count() as i64),
                 // M13.1: len de un Map = nº de entradas.
                 Value::Map(rc) => Value::Int(rc.borrow().len() as i64),
-                _ => unreachable!("el checker garantiza un arreglo, string o Map"),
+                // M16.1a: len de bytes = nº de octetos.
+                Value::Bytes(b) => Value::Int(b.len() as i64),
+                _ => unreachable!("el checker garantiza un arreglo, string, Map o bytes"),
             },
             // --- Mapas (M13.1) ---
             "map_new" => Value::Map(Rc::new(RefCell::new(HashMap::new()))),

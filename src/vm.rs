@@ -332,7 +332,12 @@ impl<'a> Vm<'a> {
                             let idx = bounds_check(i, chars.len(), line, col)?;
                             self.push(HeapValue::Char(chars[idx]));
                         }
-                        _ => unreachable!("el checker garantiza un arreglo o string"),
+                        // M16.1a: indexar bytes → el octeto como int.
+                        HeapValue::Bytes(b) => {
+                            let idx = bounds_check(i, b.len(), line, col)?;
+                            self.push(HeapValue::Int(b[idx] as i64));
+                        }
+                        _ => unreachable!("el checker garantiza un arreglo, string o bytes"),
                     }
                 }
                 OpCode::SetIndex => {
@@ -346,12 +351,14 @@ impl<'a> Vm<'a> {
                     // M11.1a: len de arreglo o string; M13.1: len de Map (nº de entradas).
                     let len = match self.pop() {
                         HeapValue::Str(s) => s.chars().count() as i64,
+                        // M16.1a: len de bytes = nº de octetos.
+                        HeapValue::Bytes(b) => b.len() as i64,
                         HeapValue::Obj(h) => match self.heap.get(h) {
                             Obj::Array(v) => v.len() as i64,
                             Obj::Map(m) => m.len() as i64,
                             _ => unreachable!("el checker garantiza un arreglo o Map"),
                         },
-                        _ => unreachable!("el checker garantiza un arreglo, string o Map"),
+                        _ => unreachable!("el checker garantiza un arreglo, string, Map o bytes"),
                     };
                     self.push(HeapValue::Int(len));
                 }
@@ -1808,6 +1815,7 @@ fn const_to_heap(v: &Value) -> HeapValue {
         Value::Bool(b) => HeapValue::Bool(*b),
         Value::Str(s) => HeapValue::Str(s.clone()),
         Value::Char(c) => HeapValue::Char(*c),
+        Value::Bytes(b) => HeapValue::Bytes((**b).clone()),
         Value::Unit => HeapValue::Unit,
         _ => unreachable!("las constantes del chunk son primitivas"),
     }
@@ -1823,6 +1831,7 @@ fn values_equal(heap: &Heap, a: &HeapValue, b: &HeapValue) -> bool {
         (H::Bool(x), H::Bool(y)) => x == y,
         (H::Str(x), H::Str(y)) => x == y,
         (H::Char(x), H::Char(y)) => x == y,
+        (H::Bytes(x), H::Bytes(y)) => x == y,
         (H::Unit, H::Unit) => true,
         (H::Function(x), H::Function(y)) => x == y,
         (H::Obj(x), H::Obj(y)) => match (heap.get(*x), heap.get(*y)) {
@@ -1858,6 +1867,7 @@ fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> String {
         HeapValue::Bool(b) => b.to_string(),
         HeapValue::Str(s) => s.clone(),
         HeapValue::Char(c) => c.to_string(),
+        HeapValue::Bytes(b) => format!("bytes[{}]", b.len()),
         HeapValue::Unit => "()".to_string(),
         HeapValue::Function(_) => "<fn>".to_string(),
         HeapValue::Obj(h) => match heap.get(*h) {
@@ -1905,6 +1915,7 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
         HeapValue::Bool(b) => Value::Bool(*b),
         HeapValue::Str(s) => Value::Str(s.clone()),
         HeapValue::Char(c) => Value::Char(*c),
+        HeapValue::Bytes(b) => Value::Bytes(Rc::new(b.clone())),
         HeapValue::Unit => Value::Unit,
         HeapValue::Function(i) => Value::Function(*i),
         HeapValue::Obj(h) => match heap.get(*h) {
@@ -2258,6 +2269,24 @@ mod tests {
         oracle_int("if (pi() > 3.14) { 1 } else { 0 }");
         // Borde: NaN se comporta igual en ambos motores (NaN != NaN → la rama else).
         oracle_int("if (sqrt(0.0 - 1.0) == sqrt(0.0 - 1.0)) { 1 } else { 0 }");
+    }
+
+    /// M16.1a: el tipo `bytes` en el oráculo. Literal `b"..."` (con `\xNN`), `len`, indexar (→int) e
+    /// igualdad. Se enruta a `int` (el booleano de `==` vía `if`) porque `print(bytes)` está diferido.
+    #[test]
+    fn bytes_oraculo() {
+        oracle_int("len(b\"AB\")");                    // 2
+        oracle_int("len(b\"hola\")");                  // 4
+        oracle_int("b\"\\x00\\xff\"[1]");              // 255
+        oracle_int("b\"AB\\x00\"[0]");                 // 65
+        oracle_int("b\"AB\\x00\"[2]");                 // 0
+        oracle_int("len(b\"\")");                      // 0 (vacío)
+        // Igualdad estructural (misma secuencia / distinta) → 1/0.
+        oracle_int("if (b\"AB\\xff\" == b\"AB\\xff\") { 1 } else { 0 }");
+        oracle_int("if (b\"AB\" == b\"AC\") { 1 } else { 0 }");
+        oracle_int("if (b\"AB\" == b\"ABC\") { 1 } else { 0 }");
+        // Los caracteres no-ASCII se codifican como UTF-8 (á = 2 octetos).
+        oracle_int("len(b\"á\")");                     // 2
     }
 
     /// M13.1: Map en el oráculo. Las operaciones básicas dan el mismo resultado en ambos motores.

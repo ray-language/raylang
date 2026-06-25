@@ -167,6 +167,12 @@ impl Lexer {
 
             '"' => self.string()?,
             '\'' => self.char_literal()?,
+            // M16.1a: literal de bytes `b"..."`. Se distingue de un identificador que empiece por 'b'
+            // mirando si la comilla sigue inmediatamente. Va ANTES del caso de identificador.
+            'b' if self.peek() == Some('"') => {
+                self.advance(); // consume la comilla de apertura
+                self.byte_string()?
+            }
             c if c.is_ascii_digit() => self.number()?,
             c if is_ident_start(c) => self.identifier(),
 
@@ -255,6 +261,62 @@ impl Lexer {
                     self.advance();
                 }
             }
+        }
+    }
+
+    /// Lee un literal de bytes `b"..."` (M16.1a), tras consumir la comilla de apertura. Acepta los
+    /// escapes del string (`\n \t \r \\ \"`) más **`\xNN`** (dos dígitos hex → un octeto arbitrario,
+    /// la clave para escribir binario literal). Los caracteres normales se codifican como UTF-8.
+    fn byte_string(&mut self) -> Result<TokenKind, LexError> {
+        let mut bytes: Vec<u8> = Vec::new();
+        loop {
+            match self.peek() {
+                None => return Err(self.error("cadena de bytes sin cerrar".into())),
+                Some('\n') => {
+                    return Err(self.error("salto de línea dentro de una cadena de bytes sin cerrar".into()))
+                }
+                Some('"') => {
+                    self.advance(); // comilla de cierre
+                    return Ok(TokenKind::Bytes(bytes));
+                }
+                Some('\\') => {
+                    self.advance(); // la barra invertida
+                    match self.peek() {
+                        Some('n') => { bytes.push(b'\n'); self.advance(); }
+                        Some('t') => { bytes.push(b'\t'); self.advance(); }
+                        Some('r') => { bytes.push(b'\r'); self.advance(); }
+                        Some('\\') => { bytes.push(b'\\'); self.advance(); }
+                        Some('"') => { bytes.push(b'"'); self.advance(); }
+                        Some('x') => {
+                            self.advance(); // la x
+                            let hi = self.hex_digit()?;
+                            let lo = self.hex_digit()?;
+                            bytes.push((hi << 4) | lo);
+                        }
+                        Some(other) => {
+                            return Err(self.error(format!("secuencia de escape inválida '\\{}'", other)))
+                        }
+                        None => return Err(self.error("cadena de bytes sin cerrar tras '\\'".into())),
+                    }
+                }
+                Some(c) => {
+                    let mut buf = [0u8; 4];
+                    bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                    self.advance();
+                }
+            }
+        }
+    }
+
+    /// Lee un dígito hexadecimal y devuelve su valor (0–15). Para el escape `\xNN` (M16.1a).
+    fn hex_digit(&mut self) -> Result<u8, LexError> {
+        match self.peek() {
+            Some(c) if c.is_ascii_hexdigit() => {
+                self.advance();
+                Ok(c.to_digit(16).unwrap() as u8)
+            }
+            Some(other) => Err(self.error(format!("se esperaba un dígito hexadecimal tras '\\x', no '{}'", other))),
+            None => Err(self.error("cadena de bytes sin cerrar (faltan dígitos hex tras '\\x')".into())),
         }
     }
 
@@ -396,6 +458,7 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "bool" => TokenKind::BoolType,
         "string" => TokenKind::StringType,
         "char" => TokenKind::CharType,
+        "bytes" => TokenKind::BytesType,
         _ => return None,
     })
 }

@@ -18,6 +18,7 @@ pub enum TokenKind {
     Float(f64),  // 3.14
     Str(String), // "hola\n"  (escapes ya resueltos)
     Char(char),  // 'a'  (M11.4c; escapes ya resueltos)
+    Bytes(Vec<u8>), // b"..."  (M16.1a; escapes resueltos, incl. \xNN)
 
     // --- Identificador ---
     Ident(String), // nombre de variable o función
@@ -49,6 +50,7 @@ pub enum TokenKind {
     BoolType,   // bool
     StringType, // string
     CharType,   // char (M11.4c)
+    BytesType,  // bytes (M16.1a)
 
     // --- Operadores ---
     Plus,    // +

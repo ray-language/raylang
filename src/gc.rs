@@ -41,6 +41,9 @@ pub enum HeapValue {
     Bool(bool),
     Str(String),
     Char(char), // M11.4c
+    /// Bytes (M16.1a): secuencia inmutable de octetos, **inline** en el valor (como `Str`); no es un
+    /// objeto del heap ni lo traza el GC (no contiene handles).
+    Bytes(Vec<u8>),
     Unit,
     /// Una función **sin** captura: un índice en la tabla de funciones (no es un
     /// objeto del heap, no se recolecta).

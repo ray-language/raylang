@@ -10,13 +10,14 @@
 
 ## Resumen de impacto
 
-> **Estado tras M14** (hitos M1–M11, M13 y M14 completos; **meta-circularidad lograda**).
-> La columna *Cuándo* refleja la hoja de ruta acordada (ver [DESIGN.md](DESIGN.md) §2). M12
-> (concurrencia) sigue pendiente; se decidió hacer M13 + el self-hosting antes.
+> **Estado tras M14 + M12** (hitos M1–M14 completos; **meta-circularidad lograda** y **concurrencia
+> completa**). La columna *Cuándo* refleja la hoja de ruta acordada (ver [DESIGN.md](DESIGN.md) §2). M12
+> (concurrencia, CSP sobre la VM) se hizo el último, tras M13 + el self-hosting. Lo único transversal que
+> queda abierto es la **optimización de la VM de Rust** (§11, incremental, sin aplicar).
 
 | Idea | ¿Dónde pega? | Cuándo | Estado |
 |------|--------------|--------|--------|
-| Concurrencia (goroutines / async / suspend) | **Arquitectura de la VM** | **M12** | 🚧 dirección fijada (DESIGN §21) + **M12.1 especificado** (§21.2): **CSP sobre la VM** — green threads cooperativos M:1, canales tipados, structured concurrency; data-race freedom **vía CSP** (no ownership); scheduler determinista; intérprete = oráculo secuencial. Surface: `spawn(closure)`, `channel()->Channel<T>`/`send`/`recv->Option<T>`/`close` (builtins). Sub-fases: ✅ **M12.1** slice CSP (spawn + canales no acotados + scheduler determinista; solo VM, intérprete da error limpio; `close` ad-hoc polimórfico con el de handles; GC multi-raíz) · ✅ **M12.2** acotados/backpressure (`channel(n)`, `n≥0`; `n=0` rendezvous; `send` se vuelve punto de yield al llenarse la cola; `recv` despierta al emisor bloqueado; `VmChannel.cap`; `Waiting::Recv`/`Send(v)`; el valor del emisor aparcado es raíz del GC) · ✅ **M12.3** structured concurrency (`Task<T>`+`join(t)->T`+`scope(fn()->R)->R`; `spawn` pasa a devolver `Task<T>`; el scope posee las tareas lanzadas dentro y las une al salir; propagación del fallo de una hija vía captura en la `Task` y re-lanzado en `join`/`ScopeEnd`; estado por fibra `task`/`scopes`; GC multi-raíz; diferido: cancelación de hermanas) · ✅ **M12.4** `select(chs: [Channel<T>]) -> int` (bloquea hasta que un canal esté listo para recibir; devuelve el índice del primero listo, determinista; `recv(chs[i])` toma el valor; `Waiting::Select`, `wake_select_waiters`; solo VM) · ✅ **M12.5** cancelación de hermanas (semántica, sin superficie: al fallar una tarea del `scope`, se cancelan las hermanas pendientes —`cancel_task` recursivo: las saca de ready/parked y cancela nietos— y se propaga el fallo original; `ScopeEnd` cancela en vez de esperar; `fail_current_fiber` cancela los hijos de una fibra-hija que falla; cooperativa, no preemptiva). **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>` índice+valor, select de send, `cancel(t)` explícito). Diferido: algebraic effects (intérprete a pila explícita), M:N paralelo (GC thread-safe). Descartado: ownership/regiones |
+| Concurrencia (goroutines / async / suspend) | **Arquitectura de la VM** | **M12** | ✅ **COMPLETO** (DESIGN §21): **CSP sobre la VM** — green threads cooperativos M:1, canales tipados, structured concurrency; data-race freedom **vía CSP** (no ownership); scheduler determinista; intérprete = oráculo secuencial. Surface: `spawn(closure)->Task<T>`, `channel()`/`channel(n)`/`send`/`recv->Option<T>`/`close`, `join`, `scope`, `select` (builtins). Sub-fases: ✅ **M12.1** slice CSP (spawn + canales no acotados + scheduler determinista; solo VM, intérprete da error limpio; `close` ad-hoc polimórfico con el de handles; GC multi-raíz) · ✅ **M12.2** acotados/backpressure (`channel(n)`, `n≥0`; `n=0` rendezvous; `send` se vuelve punto de yield al llenarse la cola; `recv` despierta al emisor bloqueado; `VmChannel.cap`; `Waiting::Recv`/`Send(v)`; el valor del emisor aparcado es raíz del GC) · ✅ **M12.3** structured concurrency (`Task<T>`+`join(t)->T`+`scope(fn()->R)->R`; `spawn` pasa a devolver `Task<T>`; el scope posee las tareas lanzadas dentro y las une al salir; propagación del fallo de una hija vía captura en la `Task` y re-lanzado en `join`/`ScopeEnd`; estado por fibra `task`/`scopes`; GC multi-raíz; diferido: cancelación de hermanas) · ✅ **M12.4** `select(chs: [Channel<T>]) -> int` (bloquea hasta que un canal esté listo para recibir; devuelve el índice del primero listo, determinista; `recv(chs[i])` toma el valor; `Waiting::Select`, `wake_select_waiters`; solo VM) · ✅ **M12.5** cancelación de hermanas (semántica, sin superficie: al fallar una tarea del `scope`, se cancelan las hermanas pendientes —`cancel_task` recursivo: las saca de ready/parked y cancela nietos— y se propaga el fallo original; `ScopeEnd` cancela en vez de esperar; `fail_current_fiber` cancela los hijos de una fibra-hija que falla; cooperativa, no preemptiva). **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>` índice+valor, select de send, `cancel(t)` explícito). Diferido: algebraic effects (intérprete a pila explícita), M:N paralelo (GC thread-safe). Descartado: ownership/regiones |
 | **raylang de producción** (cambio de norte) | Todo el runtime | **rama aparte** | 💭 DESIGN §21.1: dejar de ser pedagógico → un solo motor (VM), ownership/actores, GC concurrente + M:N paralelo, algebraic effects, gestor de paquetes, FFI. No es una fase; vive en otra rama |
 | Null safety | Sistema de tipos | hecho | ✅ no hay `null` (`Option<T>`, M6) |
 | Introspección / reflection | Modelo de valores de la VM | post-M11 | 💤 puerta abierta (los valores cargan tipo en runtime) |
@@ -65,13 +66,17 @@ representan filosofías que compiten:
 **Estado tras M2**: ✅ la restricción **se respetó**. La VM (`src/vm.rs`) ejecuta sobre
 un stack de operandos y una **pila de marcos explícita** (`frames: Vec<CallFrame>`,
 `stack`), en un bucle iterativo — no usa el stack de Rust para los marcos del lenguaje.
-Así que la concurrencia **no está bloqueada arquitectónicamente**; se puede abordar en
-**M12**.
+Eso es justo lo que permitió, en M12, **guardar una fibra a medias y reanudarla**.
 
-**Pendiente para M12**: elegir la *dirección*. Inclinación inicial: goroutines + channels
-(más simple de usar, sin function coloring, enseña a construir un scheduler) — o
-async/await si atrae más la máquina de estados. (Un modelo *stackful* podría querer un
-stack por goroutine; conviene revisar el bucle de la VM al diseñarlo.)
+**Estado tras M12**: ✅ **COMPLETO** (DESIGN §21). Se eligió **CSP / green threads
+cooperativos M:1** (no async/await, no function coloring) — *stackful* en la práctica: una
+fibra es el par `(frames, stack)` de la VM, que se guarda en el scheduler al ceder. Las
+cinco sub-fases (slice CSP · backpressure · structured concurrency · `select` · cancelación
+de hermanas) están en la fila de la tabla de arriba y en DESIGN §21.2–§21.6. Vive **solo en
+la VM** (el intérprete da error limpio y sigue siendo el oráculo secuencial); el scheduler
+es **determinista**, así que los programas concurrentes se prueban contra salida exacta.
+**Diferidos** (puertas abiertas, no agujeros): M:N paralelo (GC thread-safe), cancelación
+preemptiva, algebraic effects (§21.1, rama de producción).
 
 ## 2. Null safety
 

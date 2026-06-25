@@ -520,8 +520,9 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   banda y lo renderiza contra **su archivo** con la **línea local**, prefijado `[módulo]` (solo si
   hay >1 módulo; archivo único sin cambios). Runtime intacto (las posiciones se borran al ejecutar).
 - **M11 + limpieza completos.** (Lo que aquí figuraba como pendiente ya está hecho: cruzar tipos
-  entre módulos → M11.3c; string/archivos aditivos → M11.4/M11.7; **self-hosting** → M14, **logrado**.)
-  Sigue pendiente: **M12 concurrencia** y optimización de la VM. Ver DESIGN §2/§20/§23 / IDEAS.md.
+  entre módulos → M11.3c; string/archivos aditivos → M11.4/M11.7; **self-hosting** → M14, **logrado**;
+  **concurrencia** → M12, **completa**.) Único transversal abierto: **optimización de la VM de Rust**
+  (incremental, midiendo). Ver DESIGN §2/§21/§23 / IDEAS.md.
 - **M13 — habilitadores de self-hosting** (DESIGN §22; va **antes que M12**). Tres hilos: `Map<K,V>`,
   `assert`/tooling de test, robustez de recursión profunda.
   - **M13.3a COMPLETO** (336 tests lib): **recursión profunda sin segfaults**. (1) `lib::with_big_stack`
@@ -1066,9 +1067,11 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       selfhost_metacircular_vm -- --ignored`): **la VM auto-alojada se ejecuta a sí misma**. Cero código nuevo
       (solo el test) — la VM ya soportaba el lenguaje completo (M14.5a–e) + builtins (Map/I/O/args vía
       `dispatch_builtin`). **Self-hosting CERRADO por AMBOS back-ends** (intérprete M14.7 + VM M14.5f).
-- **M12 — concurrencia** (DESIGN §21; CSP sobre la VM, fijado con el usuario). Es la última gran
-  problemática de diseño del proyecto. Modelo: green threads cooperativos **M:1** + canales tipados,
-  data-race freedom **vía CSP** (no ownership), scheduler **determinista**, intérprete = oráculo secuencial.
+- **M12 — concurrencia COMPLETA** (DESIGN §21; CSP sobre la VM, fijado con el usuario). La última gran
+  problemática de diseño del proyecto, hecha al final (tras M13 + self-hosting). Modelo: green threads
+  cooperativos **M:1** + canales tipados, data-race freedom **vía CSP** (no ownership), scheduler
+  **determinista**, intérprete = oráculo secuencial. Cinco sub-fases (12.1 slice · 12.2 backpressure ·
+  12.3 structured · 12.4 select · 12.5 cancelación), todas COMPLETAS; libro en `book/src/m12/`.
   - **M12.1 COMPLETO** (347 lib + 8 en `tests/concurrency_cli.rs`): **el slice CSP** — `spawn(closure)` +
     canales (`channel`/`send`/`recv`/`close`) + scheduler cooperativo determinista, **solo en la VM**. Surface
     (decidida con el usuario): `spawn(f: fn()->T)` (resultado descartado), `Channel<T>` (tipo nuevo,

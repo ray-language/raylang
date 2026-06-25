@@ -1056,6 +1056,16 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       `cargo test --test selfhost_vm -- --ignored`); los 33 ejemplos deterministas siguen idénticos con el
       peephole activo. **M14.5 (la VM auto-alojada) COMPLETA con TCO.** Pendiente: VM meta-circular (verificar
       `run_vm.ray` sobre `run_vm.ray`).
+    - **M14.5f COMPLETO → SELF-HOSTING POR LA VM CERRADO** (3 en `tests/selfhost_metacircular_vm.rs` + 1
+      `#[ignore]`): **VM meta-circular**. Gemelo de `selfhost_metacircular.rs` (intérprete, M14.7c) para el
+      SEGUNDO back-end: los drivers del self-hosting (`lex_dump`/`parse_dump`/`check_dump`) **compilados y
+      corridos sobre la VM auto-alojada** (`raylang run_vm.ray <driver> <input>`) dan stdout+exit idénticos a
+      Rust → raylang lexea/parsea/chequea raylang con el compilador+VM de raylang corriendo sobre la VM de
+      raylang. **run-on-run de la VM** (`run_vm.ray` compilando y corriendo `run_vm.ray`, TRES niveles: Rust →
+      VM → VM → ejecuta) verificado idéntico a Rust (`#[ignore]` por lento; `cargo test --test
+      selfhost_metacircular_vm -- --ignored`): **la VM auto-alojada se ejecuta a sí misma**. Cero código nuevo
+      (solo el test) — la VM ya soportaba el lenguaje completo (M14.5a–e) + builtins (Map/I/O/args vía
+      `dispatch_builtin`). **Self-hosting CERRADO por AMBOS back-ends** (intérprete M14.7 + VM M14.5f).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

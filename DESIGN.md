@@ -3092,3 +3092,17 @@ cortocircuito, locales, if/while, llamadas nombradas, recursión, builtins escal
   opcodes Tail* la cubre también el corpus por defecto: gcd/primes/sort tienen llamadas en cola). **La VM
   auto-alojada está completa (con TCO).** Diferido: VM meta-circular (verificar `run_vm.ray` corriendo
   `run_vm.ray`, análogo al run-on-run del intérprete de M14.7c).
+- **M14.5f COMPLETO → SELF-HOSTING POR LA VM CERRADO** — **VM meta-circular**. Gemelo del oráculo
+  meta-circular del intérprete (M14.7c, `selfhost_metacircular.rs`) para el SEGUNDO back-end. Los drivers del
+  self-hosting (`lex_dump`/`parse_dump`/`check_dump`) **compilados y corridos sobre la VM auto-alojada**
+  (`raylang selfhost/run_vm.ray <driver> <input>`) producen stdout+exit idénticos a Rust ejecutándolos
+  directamente → raylang lexea/parsea/chequea raylang con el compilador (`compiler.ray`) + la VM (`vm.ray`) de
+  raylang corriendo sobre la VM del host. El caso fuerte, **run-on-run de la VM** (`run_vm.ray` compilando y
+  corriendo `run_vm.ray`, que a su vez compila y corre el programa: TRES niveles, Rust → VM auto-alojada → VM
+  auto-alojada → programa), se verifica idéntico a Rust (`#[ignore]` por lento; `cargo test --test
+  selfhost_metacircular_vm -- --ignored`): **la VM auto-alojada se ejecuta a sí misma**. No hizo falta código
+  nuevo —solo el test (`tests/selfhost_metacircular_vm.rs`)—: la VM ya soportaba el lenguaje completo (M14.5a–e)
+  + los builtins (Map/I/O/`args` vía `dispatch_builtin`) que usan los drivers, y `run_vm.ray` enhebra `args()`
+  igual que `run.ray` (M14.7c). **Self-hosting CERRADO por AMBOS back-ends**: el intérprete (M14.4 + M14.7) y la
+  VM (M14.5), como Rust tiene M1 (intérprete) y M2 (VM). raylang compila, type-checkea Y ejecuta —por
+  tree-walking Y por bytecode— raylang, con raylang corriendo sobre raylang.

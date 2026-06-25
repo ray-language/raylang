@@ -109,6 +109,13 @@
 - [El loader: juntar módulos](m14/loader.md)
 - [Meta-circularidad](m14/meta-circularidad.md)
 
+# M15 — Redes y la base moderna
+
+- [Redes y la base moderna](m15/intro.md)
+- [Sockets TCP: el transporte](m15/sockets.md)
+- [Protocolos en raylang: JSON y HTTP](m15/protocolos.md)
+- [El servidor concurrente](m15/concurrente.md)
+
 # Optimización de la VM
 
 - [Medir, cambiar, a veces revertir](opt/intro.md)

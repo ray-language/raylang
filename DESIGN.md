@@ -2939,3 +2939,20 @@ para programas válidos las posiciones son irrelevantes al comportamiento—.
   conductual: cruce de **struct + enum** (construcción de variante + `match`), de **trait + impl + struct
   genérico + `dyn`**, y **alias de tipo** en el from-import → mismo stdout + exit que Rust. Pendiente:
   M14.7c (correr el compilador auto-alojado de punta a punta + consistencia de `args()`).
+- **M14.7c COMPLETO → M14.7 COMPLETO → META-CIRCULARIDAD LOGRADA.** El compilador auto-alojado entero
+  corre **sobre el intérprete auto-alojado**. Piezas: (1) **`args()` consistente** entre los dos
+  pipelines —`run.ray` consume `argv[0]` (el path del driver) y **enhebra `argv[1..]`** al intérprete
+  (`run(prog, args)`; `Interp` gana el campo `args`; el builtin `args()` los devuelve), así un driver ve
+  sus PROPIOS args igual que bajo Rust (`raylang <prog> [args]`); un programa de un solo archivo da
+  `args() == []` en ambos—; (2) `args()` añadido al checker (nulario → `[string]`); (3) `pop` (último
+  builtin de stdlib que faltaba: el checker `checker.ray` lo usa) — primitivo `__pop` (muta + `[T]` de
+  0/1) en checker e intérprete, envoltorio `pop<T>([T]) -> Option<T>` en el prelude; (4) **concatenación
+  de arreglos** `a + b` en `eval_add` del intérprete (lo usa `run.ray` en `add_prelude`; el checker ya la
+  aceptaba). **Verificado** (oráculo conductual `tests/selfhost_metacircular.rs`, comparando el driver
+  corrido por Rust vs corrido sobre el intérprete auto-alojado): **`lex_dump`** (lexer), **`parse_dump`**
+  (parser, AST idéntico), **`check_dump`** (checker, mismo veredicto incl. errores) y **run-on-run**
+  (`run.ray` corriendo `run.ray` corriendo un programa → el back-end también) producen **stdout + exit
+  idénticos**. raylang lexea/parsea/chequea/EJECUTA raylang **con raylang corriendo sobre raylang**.
+  (run-on-run es `#[ignore]`: ~1 min por la interpretación de dos niveles; ejecútalo con `--ignored`.)
+  Diferidos (fuera de la meta-circularidad lograda): la VM auto-alojada (M14.5), `import M;` calificado/
+  directorios/cápsulas en el loader auto-alojado, el resto de builtins de I/O (stdin/env/handles).

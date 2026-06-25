@@ -110,6 +110,7 @@ struct Interp {
     enums: Map<string, [VariantDef]>,
     methods: Map<string, Method>,   // `Tipo#metodo` → método (de impls + defectos del trait)
     scopes: [Map<string, Cell>],
+    args: [string],                 // argumentos de la línea de comandos (los enhebra `run`, M14.7c)
 }
 
 fn rt_error(line: int, col: int, msg: string) -> RuntimeError {
@@ -418,14 +419,26 @@ fn cmp_char(op: BinOp, a: char, b: char) -> bool {
     }
 }
 
-// `+`: aritmética entera/flotante o concatenación de strings (M11.1a). Arreglos → M14.4b.
+// `+`: aritmética entera/flotante, concatenación de strings (M11.1a) o de arreglos (M11.7b → M14.7c:
+// devuelve un arreglo NUEVO, como Rust). El checker ya garantiza tipos compatibles.
 fn eval_add(l: Value, r: Value) -> Result<Value, Flow> {
     match (l) {
         Value.VInt(a) => match (r) { Value.VInt(b) => Result.Ok(Value.VInt(a + b)), _ => panic("+ inválido") },
         Value.VFloat(a) => match (r) { Value.VFloat(b) => Result.Ok(Value.VFloat(a + b)), _ => panic("+ inválido") },
         Value.VStr(a) => match (r) { Value.VStr(b) => Result.Ok(Value.VStr(a + b)), _ => panic("+ inválido") },
+        Value.VArray(a) => match (r) { Value.VArray(b) => Result.Ok(Value.VArray(concat_values(a, b))), _ => panic("+ inválido") },
         _ => panic("+ inválido"),
     }
+}
+
+// Concatena dos arreglos de valores en uno NUEVO (no muta los originales; semántica de `a + b`).
+fn concat_values(a: [Value], b: [Value]) -> [Value] {
+    var out: [Value] = [];
+    var i = 0;
+    while (i < len(a)) { push(out, a[i]); i = i + 1; }
+    var j = 0;
+    while (j < len(b)) { push(out, b[j]); j = j + 1; }
+    out
 }
 
 fn arith_int(op: BinOp, a: int, b: int, line: int, col: int) -> Result<Value, Flow> {
@@ -544,7 +557,8 @@ fn is_builtin(name: string) -> bool {
         || name == "map_new" || name == "insert" || name == "get" || name == "contains_key"
         || name == "keys" || name == "values" || name == "remove"
         || name == "__parse_int" || name == "__parse_float"
-        || name == "__read_file" || name == "__write_file" || name == "exists"
+        || name == "__read_file" || name == "__write_file" || name == "exists" || name == "args"
+        || name == "__pop"
 }
 
 // `len` de un arreglo, un string (nº de caracteres) o un Map (nº de entradas).
@@ -760,6 +774,19 @@ fn dispatch_builtin(c: Interp, name: string, vals: [Value], line: int, col: int)
     if (name == "__read_file") { return Result.Ok(strs_to_value(__read_file(as_str(vals[0])))); }
     if (name == "__write_file") { return Result.Ok(strs_to_value(__write_file(as_str(vals[0]), as_str(vals[1])))); }
     if (name == "exists") { return Result.Ok(Value.VBool(exists(as_str(vals[0])))); }
+    if (name == "args") { return Result.Ok(strs_to_value(c.args)); }
+    if (name == "__pop") {
+        // Muta el arreglo compartido quitando el último (vía el `pop` del host); devuelve [] o [x].
+        return match (vals[0]) {
+            Value.VArray(elems) => {
+                match (pop(elems)) {
+                    Option.Some(x) => Result.Ok(Value.VArray([x])),
+                    Option.None => Result.Ok(Value.VArray(no_vals())),
+                }
+            },
+            _ => panic("__pop: se esperaba un arreglo"),
+        };
+    }
     // --- Builtins de Map (M14.6b) ---
     if (name == "map_new") { return Result.Ok(Value.VMap(MapData { keys: no_vals(), vals: no_vals() })); }
     if (name == "insert") {
@@ -1399,8 +1426,8 @@ fn inject_prelude_enums(c: Interp) {
 
 // Ejecuta el programa llamando a `main` y devuelve su valor (o un error de ejecución). El checker ya
 // garantizó que `main` existe.
-pub fn run(prog: Program) -> Result<Value, RuntimeError> {
-    let c = Interp { funcs: map_new(), structs: map_new(), enums: map_new(), methods: map_new(), scopes: empty_scopes() };
+pub fn run(prog: Program, prog_args: [string]) -> Result<Value, RuntimeError> {
+    let c = Interp { funcs: map_new(), structs: map_new(), enums: map_new(), methods: map_new(), scopes: empty_scopes(), args: prog_args };
     inject_prelude_enums(c); // Option/Result (los del programa, abajo, sobrescriben si el usuario redefine)
     var i = 0;
     while (i < len(prog.funcs)) {

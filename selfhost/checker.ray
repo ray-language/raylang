@@ -683,6 +683,10 @@ fn inject_prelude_fns(c: Checker, prog: Program) {
     inject_fn(c, prog, "write_file", FnSig {
         params: [Type.TString, Type.TString], ret: Type.TNamed("Result", [Type.TInt, Type.TString]), type_params: no_tparams(), bounds: no_bounds(),
     });
+    // pop<T>(a: [T]) -> Option<T> (M14.7c): quita y devuelve el último (None si vacío).
+    inject_fn(c, prog, "pop", FnSig {
+        params: [Type.TArray(t)], ret: Type.TNamed("Option", [t]), type_params: ["T"], bounds: no_bounds(),
+    });
 }
 
 // Registra una función del prelude (su firma) si el usuario no la define con ese nombre.
@@ -1532,7 +1536,8 @@ fn is_known_builtin(name: string) -> bool {
         || name == "map_new" || name == "insert" || name == "get" || name == "contains_key"
         || name == "keys" || name == "values" || name == "remove"
         || name == "panic" || name == "__parse_int" || name == "__parse_float"
-        || name == "__read_file" || name == "__write_file" || name == "exists"
+        || name == "__read_file" || name == "__write_file" || name == "exists" || name == "args"
+        || name == "__pop"
 }
 
 // ¿`name` nombra algo llamable? (builtin, variable local de función, o función de nivel superior.)
@@ -1590,6 +1595,8 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
     if (name == "__read_file") { return check_read_file(c, cargs, line, col); }
     if (name == "__write_file") { return check_write_file(c, cargs, line, col); }
     if (name == "exists") { return check_exists(c, cargs, line, col); }
+    if (name == "args") { return check_args_builtin(c, cargs, line, col); }
+    if (name == "__pop") { return check_pop_prim(c, cargs, line, col); }
     match (lookup(c, name)) {
         Option.Some(v) => { return call_type(c, v.ty, cargs, line, col); },
         Option.None => {},
@@ -1814,6 +1821,24 @@ fn check_write_file(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Ty
     let a = check_args_types(c, cargs)?;
     want_string(a, cargs, 0, "__write_file espera un string (la ruta), no ")?;
     want_string(a, cargs, 1, "__write_file espera un string (el contenido), no ")?;
+    Result.Ok(Type.TArray(Type.TString))
+}
+
+// __pop(a: [T]) -> [T] (M14.7c): muta `a` quitando el último; [] vacío / [x]. pop → Option<T>.
+fn check_pop_prim(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("__pop", 1, "", len(cargs), line, col)?;
+    let a0 = check_expr(c, cargs[0])?;
+    match (a0) {
+        Type.TArray(elem) => Result.Ok(Type.TArray(elem)),
+        _ => Result.Err(terr(cargs[0].line, cargs[0].col, "__pop espera un arreglo, no " + type_str(a0))),
+    }
+}
+
+// args() -> [string] (M14.7c): los argumentos de la línea de comandos del programa. Nulario.
+fn check_args_builtin(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    if (len(cargs) != 0) {
+        return Result.Err(terr(line, col, "args no espera argumentos, se le pasaron " + to_string(len(cargs))));
+    }
     Result.Ok(Type.TArray(Type.TString))
 }
 

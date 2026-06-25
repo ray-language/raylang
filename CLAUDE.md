@@ -965,6 +965,19 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       no encontrados igual → cubre ambos sin caso especial. Sin `import M;` calificado → el caso `M.Tipo` no
       hace falta. Oráculo: cruce de struct+enum (construcción+match), trait+impl+genérico+dyn, alias de tipo.
       Pendiente: M14.7c (correr el compilador de punta a punta + `args()` consistente).
+    - **M14.7c COMPLETO → M14.7 COMPLETO → META-CIRCULARIDAD LOGRADA** (347 lib + 25 intérprete + 25 checker
+      + `tests/selfhost_metacircular.rs`). El compilador auto-alojado entero corre **sobre el intérprete
+      auto-alojado**. (1) **`args()` consistente**: `run.ray` consume `argv[0]` (el path del driver) y
+      enhebra `argv[1..]` al intérprete (`run(prog, args)`; `Interp.args`; builtin `args()`), así un driver
+      ve sus propios args como bajo Rust; archivo único → `args()==[]` en ambos. (2) `args()` en el checker
+      (nulario→`[string]`). (3) `pop` (último builtin que faltaba, lo usa `checker.ray`): primitivo `__pop`
+      en checker+intérprete + envoltorio `pop<T>` en el prelude. (4) **concatenación de arreglos** `a + b`
+      en `eval_add` (la usa `run.ray`; el checker ya la aceptaba). **Verificado** (oráculo conductual,
+      driver por Rust vs sobre el intérprete auto-alojado): `lex_dump`, `parse_dump`, `check_dump` y
+      **run-on-run** (`run.ray` corriendo `run.ray` → back-end incluido) dan stdout+exit idénticos. raylang
+      lexea/parsea/chequea/EJECUTA raylang con raylang corriendo sobre raylang. (run-on-run `#[ignore]`,
+      ~1 min; `cargo test --test selfhost_metacircular -- --ignored`.) Diferidos: VM auto-alojada (M14.5),
+      `import M;`/directorios/cápsulas en el loader, resto de I/O (stdin/env/handles).
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

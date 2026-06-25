@@ -95,3 +95,9 @@ fn write_file(ruta: string, contenido: string) -> Result<int, string> {
     let r = __write_file(ruta, contenido);
     if (r[0] == "ok") { Result.Ok(len(contenido)) } else { Result.Err(r[1]) }
 }
+
+// M14.7c: quita y devuelve el último elemento (None si vacío); muta `a`. Envoltorio sobre `__pop`.
+fn pop<T>(a: [T]) -> Option<T> {
+    let r = __pop(a);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}

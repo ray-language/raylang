@@ -1223,6 +1223,33 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M15.3: bind+listen → ["ok", handle] o ["err", msg].
+            "__tcp_listen" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(host), Value::Int(port)) => match crate::builtins::tcp_listen(host, *port) {
+                        Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza string, int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M15.3: acepta una conexión → ["ok", handle] o ["err", msg].
+            "__tcp_accept" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::tcp_accept(*h) {
+                        Ok(c) => vec![Value::Str("ok".to_string()), Value::Str(c.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza un int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M15.3: puerto local del socket (total).
+            "local_port" => match &values[0] {
+                Value::Int(h) => Value::Int(crate::builtins::local_port(*h)),
+                _ => unreachable!("el checker garantiza un int"),
+            },
             // M11.8: cierra el handle (total).
             "close" => match &values[0] {
                 Value::Int(h) => {

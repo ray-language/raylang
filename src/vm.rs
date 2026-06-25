@@ -1031,6 +1031,36 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // --- Servidor TCP (M15.3) ---
+                OpCode::TcpListen => {
+                    let port = self.pop();
+                    let host = self.pop();
+                    let (HeapValue::Str(host), HeapValue::Int(port)) = (host, port) else {
+                        unreachable!("el checker garantiza string, int");
+                    };
+                    let elems = match crate::builtins::tcp_listen(&host, port) {
+                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::TcpAccept => {
+                    let handle = match self.pop() {
+                        HeapValue::Int(h) => h,
+                        _ => unreachable!("el checker garantiza un int"),
+                    };
+                    let elems = match crate::builtins::tcp_accept(handle) {
+                        Ok(c) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(c.to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::LocalPort => match self.pop() {
+                    HeapValue::Int(h) => self.push(HeapValue::Int(crate::builtins::local_port(h))),
+                    _ => unreachable!("el checker garantiza un int"),
+                },
                 OpCode::Close => {
                     // Ad-hoc polimórfico: un handle de archivo (int, M11.8) o un canal (M12.1).
                     match self.pop() {

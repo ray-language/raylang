@@ -329,6 +329,16 @@ pub enum OpCode {
     /// (`["ok", ""]`/`["err", msg]`). Primitivo `__socket_write`; el prelude → `Result<int,string>`.
     SocketWrite,
 
+    // --- Servidor TCP (M15.3) ---
+    /// Saca `port` (int) y `host` (string); hace bind+listen y empuja un `[string]` etiquetado
+    /// (`["ok", handle]`/`["err", msg]`). Primitivo `__tcp_listen`; el prelude → `Result<int,string>`.
+    TcpListen,
+    /// Saca un handle de escucha (int); bloquea hasta una conexión y empuja un `[string]` etiquetado
+    /// (`["ok", handle]`/`["err", msg]`). Primitivo `__tcp_accept`; el prelude → `Result<int,string>`.
+    TcpAccept,
+    /// Saca un handle (int); empuja su puerto local (`int`, `0` si no es un socket). Builtin `local_port`.
+    LocalPort,
+
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como
     /// campos tenga (estaban en orden de declaración) y empuja el struct.

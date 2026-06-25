@@ -66,7 +66,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
 | **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.6: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure · ✅ **M12.3** structured concurrency · ✅ **M12.4** `select` · ✅ **M12.5** cancelación de hermanas. **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>`, select de send) |
-| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete). Pendiente: M15.3 servidor TCP · M15.4 HTTP/JSON en raylang · (capstone) M15.5 sockets no bloqueantes en el scheduler |
+| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete) · ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port`; `OpenHandle::Listener`; servidor secuencial bloqueante; subproceso con el `.ray` de servidor). Pendiente: M15.4 HTTP/JSON en raylang · (capstone) M15.5 sockets no bloqueantes en el scheduler |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) ⏳ | rendimiento, bootstrapping | 🚧 |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -3472,3 +3472,32 @@ registro durante una lectura/escritura **bloqueante**, los helpers **clonan** el
 **Pruebas por subproceso (no oráculo).** Red no determinista: un test levanta un **servidor TCP de
 juguete en el propio Rust** (un hilo que acepta una conexión, eco/respuesta fija), y el `.ray` se
 conecta por el puerto efímero asignado; se comprueba el intercambio en ambos motores.
+
+### 24.6 M15.3 — servidor TCP (especificación)
+
+El otro lado: **escuchar** y **aceptar** conexiones. Con esto raylang puede escribir un servidor (un
+echo, un HTTP mínimo). Sobre `std::net::TcpListener`.
+
+| Builtin | Firma | Semántica |
+|---------|-------|-----------|
+| `tcp_listen` | `(host: string, port: int) -> Result<int, string>` | hace *bind* + *listen* en `host:port` y devuelve un **handle de escucha** (int). `port=0` → el SO asigna un puerto efímero. |
+| `tcp_accept` | `(listener: int) -> Result<int, string>` | **bloquea** hasta una conexión entrante; devuelve un **handle de conexión** (un socket normal, usable con `socket_read`/`socket_write`/`close`). |
+| `close` | `(h: int) -> int` | cierra tanto el handle de escucha como el de conexión (ya extendido en M15.2). |
+
+**Misma cápsula de handles.** `OpenHandle` gana `Listener(TcpListener)`; escuchas y conexiones
+conviven en el registro de M11.8 (handles únicos; `close` no distingue). Como `accept()` **bloquea**,
+`tcp_accept` **clona** el `TcpListener` (`try_clone`) y suelta el lock antes de bloquear —idéntico
+patrón que `socket_read`—; la conexión aceptada se inserta como un `OpenHandle::Tcp` y se devuelve su
+handle. Patrón de builtin: primitivos `__tcp_listen`/`__tcp_accept -> [string]` etiquetados +
+envoltorios `Result` en el prelude (handle decodificado con `parse_int`, como `open`/`tcp_connect`).
+
+**Modelo de servidor (bloqueante, M:1).** El bucle natural es `loop { accept(); atender(conn) }`. En
+el modelo M:1 de M12, `accept` y `socket_read` **bloquean el hilo** → un servidor bloqueante atiende
+**una conexión a la vez** (o se lanza una fibra por conexión, pero como las fibras comparten el hilo,
+una lectura bloqueante de una congela a las demás). El servidor **concurrente real** (aceptar y
+atender en paralelo cediendo al scheduler) es el capstone M15.5. M15.3 entrega el servidor
+secuencial, que basta para un echo y para servir peticiones cortas.
+
+**Pruebas por subproceso.** Inverso de M15.2: el `.ray` es el **servidor** (escucha en puerto 0, lo
+imprime, acepta una conexión, hace eco) y el **cliente de juguete en Rust** se conecta y verifica el
+eco. Para descubrir el puerto efímero, el `.ray` lo imprime y el test lo lee de su stdout.

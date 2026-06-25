@@ -3,9 +3,9 @@
 //! hilo que acepta una conexión, lee la petición y responde). El `.ray` se conecta por el puerto
 //! efímero que el SO asignó (sustituido en el fuente). Se verifica en ambos motores.
 
-use std::io::{Read, Write};
-use std::net::TcpListener;
-use std::process::Command;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::process::{Command, Stdio};
 use std::thread;
 
 /// Escribe `src` en un `.ray` temporal, ejecuta el binario (con `--vm` opcional) y devuelve
@@ -71,6 +71,69 @@ fn cliente_tcp_intercambia_con_un_servidor() {
         let (out, code) = run("ray_tcp_ok", &src, vm);
         assert_eq!(out.trim(), "pong:ping", "intercambio TCP (vm={vm}): {out}");
         assert_eq!(code, 0, "salida 0 (vm={vm})");
+    }
+}
+
+/// El `.ray` es el SERVIDOR (M15.3): escucha en puerto 0, imprime el puerto, acepta UNA conexión,
+/// lee y responde con eco. El test lee el puerto de su stdout EN VIVO (el servidor bloquea en accept,
+/// así que no se puede usar `.output()` que espera a que termine) y se conecta como cliente.
+const SERVIDOR: &str = r#"
+fn main() -> int {
+    match (tcp_listen("127.0.0.1", 0)) {
+        Result.Ok(srv) => {
+            print(local_port(srv));            // primera línea: el puerto efímero asignado
+            match (tcp_accept(srv)) {
+                Result.Ok(conn) => {
+                    match (socket_read(conn)) {
+                        Result.Ok(msg) => {
+                            match (socket_write(conn, "echo:" + msg)) {
+                                Result.Ok(_) => 0,
+                                Result.Err(e) => { eprint("write: " + e); 1 },
+                            }
+                        },
+                        Result.Err(e) => { eprint("read: " + e); 1 },
+                    };
+                    close(conn);
+                    0
+                },
+                Result.Err(e) => { eprint("accept: " + e); 1 },
+            };
+            close(srv);
+            0
+        },
+        Result.Err(e) => { eprint("listen: " + e); 1 },
+    }
+}
+"#;
+
+#[test]
+fn servidor_tcp_acepta_y_responde() {
+    for vm in [false, true] {
+        // Escribir el servidor a un temporal y lanzarlo con stdout en pipe (lo leeremos en vivo).
+        let mut path = std::env::temp_dir();
+        path.push("ray_tcp_srv.ray");
+        std::fs::File::create(&path).expect("crea").write_all(SERVIDOR.as_bytes()).expect("escribe");
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
+        if vm {
+            cmd.arg("--vm");
+        }
+        let mut child = cmd.arg(&path).stdout(Stdio::piped()).spawn().expect("lanza servidor");
+
+        // Leer el puerto (println! es line-buffered → se vacía con el salto, aunque el proceso siga).
+        let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
+        let mut linea = String::new();
+        reader.read_line(&mut linea).expect("lee el puerto");
+        let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("puerto inválido (vm={vm}): {linea:?}"));
+
+        // Conectar como cliente, escribir, y leer hasta que el servidor cierre.
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
+        stream.write_all(b"hola").expect("escribe");
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).expect("lee respuesta");
+        assert_eq!(resp, "echo:hola", "el servidor hizo eco (vm={vm})");
+
+        let status = child.wait().expect("espera al servidor");
+        assert_eq!(status.code(), Some(0), "el servidor terminó bien (vm={vm})");
     }
 }
 

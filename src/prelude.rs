@@ -300,6 +300,34 @@ fn socket_write(h: int, s: string) -> Result<int, string> {
     let r = __socket_write(h, s);
     if (r[0] == "ok") { Result.Ok(len(s)) } else { Result.Err(r[1]) }
 }
+
+// --- Servidor TCP (M15.3). Sobre __tcp_listen/__tcp_accept. ---
+
+// Escucha en host:port (port=0 → puerto efímero); Ok(handle de escucha) u Err(mensaje).
+fn tcp_listen(host: string, port: int) -> Result<int, string> {
+    let r = __tcp_listen(host, port);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+// Bloquea hasta una conexión; Ok(handle de conexión) u Err(mensaje).
+fn tcp_accept(listener: int) -> Result<int, string> {
+    let r = __tcp_accept(listener);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
 "#;
 
 /// Parsea el prelude una vez. El `expect` no puede fallar: el fuente es una constante

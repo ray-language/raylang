@@ -185,6 +185,7 @@ enum OpenHandle {
     Reader(std::io::BufReader<std::fs::File>),
     Writer(std::fs::File),
     Tcp(std::net::TcpStream),
+    Listener(std::net::TcpListener),
 }
 
 /// El registro de archivos abiertos: un contador para los handles y el mapa handle → archivo.
@@ -239,6 +240,7 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
         Some(OpenHandle::Writer(f)) => f.write_all(s.as_bytes()).map(|_| s.chars().count()).map_err(|e| e.to_string()),
         Some(OpenHandle::Reader(_)) => Err("el handle está abierto para lectura, no escritura".to_string()),
         Some(OpenHandle::Tcp(_)) => Err("el handle es un socket; usa socket_write".to_string()),
+        Some(OpenHandle::Listener(_)) => Err("el handle es un socket de escucha, no escribible".to_string()),
         None => Err(format!("handle de archivo inválido: {}", h)),
     }
 }
@@ -290,6 +292,49 @@ pub fn socket_write(h: i64, s: &str) -> Result<usize, String> {
     use std::io::Write;
     let mut stream = socket_clone(h)?;
     stream.write_all(s.as_bytes()).map(|_| s.len()).map_err(|e| e.to_string())
+}
+
+// --- Servidor TCP (M15.3) ---
+
+/// Hace *bind* + *listen* en `host:port` (con `port=0` el SO asigna un puerto efímero) y devuelve un
+/// handle de escucha (M15.3).
+pub fn tcp_listen(host: &str, port: i64) -> Result<i64, String> {
+    let listener = std::net::TcpListener::bind((host, port as u16)).map_err(|e| e.to_string())?;
+    let mut reg = registry().lock().unwrap();
+    let id = reg.next;
+    reg.next += 1;
+    reg.open.insert(id, OpenHandle::Listener(listener));
+    Ok(id)
+}
+
+/// Bloquea hasta una conexión entrante en el handle de escucha `h` y devuelve un handle de conexión
+/// (un socket normal). Clona el listener para no retener el lock durante el `accept()` bloqueante (M15.3).
+pub fn tcp_accept(h: i64) -> Result<i64, String> {
+    let listener = {
+        let reg = registry().lock().unwrap();
+        match reg.open.get(&h) {
+            Some(OpenHandle::Listener(l)) => l.try_clone().map_err(|e| e.to_string())?,
+            Some(_) => return Err(format!("el handle {} no es un socket de escucha", h)),
+            None => return Err(format!("handle inválido: {}", h)),
+        }
+    };
+    let (stream, _addr) = listener.accept().map_err(|e| e.to_string())?;
+    let mut reg = registry().lock().unwrap();
+    let id = reg.next;
+    reg.next += 1;
+    reg.open.insert(id, OpenHandle::Tcp(stream));
+    Ok(id)
+}
+
+/// El puerto local de un socket de escucha o de conexión; `0` si el handle no es un socket o falla.
+/// Útil para descubrir el puerto efímero tras `tcp_listen(host, 0)` (M15.3). Total.
+pub fn local_port(h: i64) -> i64 {
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Listener(l)) => l.local_addr().map(|a| a.port() as i64).unwrap_or(0),
+        Some(OpenHandle::Tcp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0),
+        _ => 0,
+    }
 }
 
 /// Lista los nombres de las entradas de un directorio (M11.7c). Helper compartido por ambos motores
@@ -827,6 +872,26 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__socket_write espera un int (el handle), no {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__socket_write espera un string (el contenido), no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // --- Servidor TCP (M15.3) ---
+    // __tcp_listen(host, port) -> [string]: ["ok", handle] o ["err", msg]. Prelude → Result<int,string>.
+    Builtin { name: "__tcp_listen", opcode: OpCode::TcpListen, check: |a| {
+        arity(a, 2, "__tcp_listen", " (host, puerto)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__tcp_listen espera un string (el host), no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__tcp_listen espera un int (el puerto), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __tcp_accept(listener) -> [string]: ["ok", handle] o ["err", msg]. Prelude → Result<int,string>.
+    Builtin { name: "__tcp_accept", opcode: OpCode::TcpAccept, check: |a| {
+        arity(a, 1, "__tcp_accept", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__tcp_accept espera un int (el handle de escucha), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // local_port(h) -> int (M15.3): el puerto local del socket (0 si no aplica). Total.
+    Builtin { name: "local_port", opcode: OpCode::LocalPort, check: |a| {
+        arity(a, 1, "local_port", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("local_port espera un int (el handle), no {}", a[0]))); }
+        Ok(Type::Int)
     } },
     // close: ad-hoc polimórfico. close(h: int) -> int (M11.8 archivo / M15.2 socket, devuelve 0) o
     // close(ch: Channel<T>) -> unit (M12.1, cierra un canal). El opcode Close ramifica en runtime.

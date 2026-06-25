@@ -10,8 +10,9 @@
 
 ## Resumen de impacto
 
-> **Estado tras M8** (hitos M1–M8 completos). La columna *Cuándo* refleja la hoja de
-> ruta M9+ acordada (ver [DESIGN.md](DESIGN.md) §2).
+> **Estado tras M14** (hitos M1–M11, M13 y M14 completos; **meta-circularidad lograda**).
+> La columna *Cuándo* refleja la hoja de ruta acordada (ver [DESIGN.md](DESIGN.md) §2). M12
+> (concurrencia) sigue pendiente; se decidió hacer M13 + el self-hosting antes.
 
 | Idea | ¿Dónde pega? | Cuándo | Estado |
 |------|--------------|--------|--------|
@@ -25,12 +26,13 @@
 | **Módulos por directorios** (`import geo/formas/circulo;`) | Loader + parser de `import` | **M11.5** | ✅ separador `/` fijado; **solo leaf-binding** + `as`; prohibido el acceso por ruta en expresiones (ambiguo con `/` y mala práctica); rutas absolutas desde la raíz. Diferido: imports relativos, `pub` granular |
 | **Aislamiento de módulos** (`mod.ray` = cápsula) | Loader (resolución + aristas) | **M11.6** | ✅ estrategia "cápsula": `mod.ray` vuelve un directorio direccionable (`import geo;`) y **encapsula** su subárbol; reexport `pub from … import …` (-a) + enforcement del borde (-b); descartados `internal/`-Go y `mod x;`/`pub(crate)`-Rust |
 | **Redes** (sockets / DNS / HTTP) | Builtins (transporte) + librería raylang (protocolos) | **post-M12** | 📌 dirección fijada: **transporte = builtins** (sockets TCP/UDP + DNS sobre `std::net`, cero deps de Cargo, reusa el molde de handles de M11.8); **protocolos (HTTP/URL) = librería en raylang** traída con `import` (no en el prelude). Async espera al scheduler de **M12** (sockets bloqueantes antes). Sin gestor de paquetes (las "libs externas" son archivos/cápsulas del proyecto) |
-| **Habilitadores de self-hosting** (`Map<K,V>`, `assert`/test, recursión profunda) | Runtime + GC (Map) · runner (test) · hilo/límites (recursión) | **M13 (antes que M12)** | 📌 sub-plan fijado (DESIGN §22): **M13.1** `Map<K,V>` como heap obj en ambos motores (claves primitivas hashables; genérica vía `Hash` diferida) · **M13.2** `assert`/`assert_eq` + runner con reporte y `@test` unit · **M13.3** pila grande en hilo worker + límite de marcos con error limpio (TCO diferido). Ortogonal a M12 |
-| **Self-hosting** (raylang en raylang) | Capstone: requiere módulos + I/O | transversal (post-**M13**) | 🎯 meta-objetivo, ya expresable; M13 lo vuelve práctico (mapas, test, recursión) |
-| **Tooling de editor** (coloreado / LSP) | Front-end (reutiliza el checker) | coloreado ✅ / **LSP M10** | 🔧 parcial (LSP pendiente) |
-| **Anotaciones** (`@test`, `@derive`, …) | Parser + fase que las consume | **M10** | 📌 dirección fijada; `@` ✅ reservado en el lexer (`TokenKind::At`); falta el parser |
-| **API de runtime / I/O** (`args`, `input`, `env`) | Builtins / stdlib | **M11** | 📌 dirección fijada |
-| **stdlib** (orden superior / string / I/O) | prelude + builtins | parcial | 🟡 `map`/`filter`/`fold`+`len`/`push` ✅ (M7.3); string/I/O → M11 |
+| **Habilitadores de self-hosting** (`Map<K,V>`, `assert`/test, recursión profunda) | Runtime + GC (Map) · runner (test) · hilo/límites (recursión) | **M13** | ✅ **completo** (DESIGN §22): **M13.1** `Map<K,V>` heap obj en ambos motores · **M13.2** `panic`/`assert`/`assert_eq` + runner aislado por prueba (`@test` unit/bool, filtro) · **M13.3** pila grande (hilo worker) + límite de marcos con error limpio + **TCO en ambos motores** (no quedó diferido). Genérica vía `Hash` sigue diferida |
+| **Self-hosting** (raylang en raylang) | Capstone: lexer/parser/checker/intérprete/loader en raylang | **M14** | ✅ **LOGRADO — meta-circularidad** (DESIGN §23): el compilador entero escrito en raylang corre **sobre el intérprete auto-alojado** (lex/parse/check + run-on-run idénticos a Rust). Decisiones: intérprete (no VM), checker = validador, resolución en runtime (= *erasure* gratis). Oráculo Rust (texto canónico para front-end, conductual para back-end) |
+| **VM auto-alojada** (compilador→bytecode + VM en raylang) | Back-end alternativo en raylang | **M14.5** (opcional) | 💤 diferido: el M2 de este módulo. El intérprete auto-alojado es el oráculo, igual que en Rust M1→M2 |
+| **Tooling de editor** (coloreado / LSP) | Front-end (reutiliza el checker) | **M10** | ✅ coloreado (VSCode/Sublime) + **LSP completo**: diagnósticos, hover/def, find-references, rename, completion, signature help (M10.2b–f). Clientes VSCode/Sublime/Neovim/Helix |
+| **Anotaciones** (`@test`, `@derive`, …) | Parser + fase que las consume | **M10** | ✅ conjunto cerrado: `@test` + runner, `@derive(Eq, Show)` (genera el `impl`). `@delegate`/macros de usuario → diferidos |
+| **API de runtime / I/O** (`args`, `input`, `env`) | Builtins / stdlib | **M11** | ✅ `args`/`input`/`read_int`/`env`/`eprint` + I/O de archivos (`read_file`/`write_file`/`exists`/`append_file`/handles con buffering). `main` sin parámetros |
+| **stdlib** (orden superior / string / I/O / arreglos) | prelude + builtins | **M7/M11** | ✅ `map`/`filter`/`fold` (M7.3) + string completa (M11.1/4/7a) + arreglos (`+`/`reverse`/`pop`/`contains`/`position`, M11.7b) + `sort`+`Ord` (M11.7d). Registro único de builtins (L1) |
 | **Optimización de la VM** | `bytecode`/`compiler`/`vm` | transversal | 🚀 línea base ~3×; optimizaciones de §11 sin aplicar |
 | **Asperezas de M3** | Parser + checker | hecho | ✅ `[]` en campo de struct (M6.2) y coma final en arreglos (limpieza) resueltos |
 
@@ -133,37 +135,45 @@ Reemplazar código mientras el programa corre.
   semántica y es discutible). Pero es cuestión de gusto, a confirmar.
 - **Cuándo**: cuando introduzcamos módulos (aún no planificado). No afecta M1.
 
-## 7. Self-hosting (raylang escrito en raylang) — meta-capstone
+## 7. Self-hosting (raylang escrito en raylang) — ✅ LOGRADO (M14)
 
-El examen definitivo: que el compilador/intérprete de raylang esté escrito en
-**raylang mismo**. Es *self-hosting*; el proceso para lograrlo es *bootstrapping*.
+El examen definitivo: que el compilador de raylang esté escrito en **raylang mismo**, y
+corra sobre sí mismo (**meta-circularidad**). **Conseguido en M14** (DESIGN §23). Detalle
+completo en el libro (parte M14) y en `selfhost/`.
 
-- **Impacto en el diseño actual**: ninguno. No condiciona nada; es un objetivo que
-  se *habilita* al completar el resto, no una restricción a respetar hoy.
-- **Madurez requerida**: prácticamente todo el lenguaje. Un compilador es un
-  programa que manipula texto y árboles, así que raylang necesitaría:
-  - structs + arreglos (M3) — nodos de AST, listas de tokens,
-  - **tipos suma + pattern matching (M5)** — casi imprescindibles para un AST,
-  - genéricos (M6) — `Vec<Token>`, `Option<T>`, …,
-  - stdlib con I/O de archivos y manejo de strings (M7+).
-- **Proceso (bootstrap)**:
-  1. compilador v0 en Rust (lo que estamos haciendo);
-  2. reescribir el compilador en raylang;
-  3. compilarlo con el de Rust → ya corre solo;
-  4. que se recompile a sí mismo (si el binario es idéntico, el bootstrap es
-     estable). A partir de ahí Rust deja de ser necesario.
-- **Matiz para nuestro stack** (intérprete/VM): el self-hosting consistiría en
-  escribir *en raylang* el front-end + el compilador-a-bytecode, y ejecutarlo
-  sobre la VM (que podría seguir en Rust o reescribirse también).
-- **Cuándo**: hito natural **después de M7**. Es la señal de que raylang dejó de
-  ser un juguete.
-- **Habilitadores prácticos (M13, DESIGN §22)**: el lenguaje ya es *expresable* para
-  un compilador tras M11, pero tres asperezas lo harían penoso y se cierran en M13
-  **antes de M12**: (1) un tipo **`Map<K,V>`** para las tablas de símbolos (hoy serían
-  listas de asociación `O(n)`), (2) **`assert` + tooling de test** para validar el
-  compilador contra sí mismo, (3) **robustez de recursión profunda** (pila grande en un
-  hilo worker + límite de marcos con error limpio) para que un parser de descenso
-  recursivo escrito en raylang no desborde la pila de Rust del intérprete.
+**Qué se logró.** El pipeline entero —lexer, parser, checker, intérprete y loader— vive en
+`selfhost/*.ray`, escrito en raylang, y produce **lo mismo que la implementación de Rust**
+sobre el código real del proyecto (incluido el suyo propio). Verificado eslabón a eslabón
+con Rust como **oráculo**: el lexer se lexea a sí mismo, el parser se parsea, el checker da
+el mismo veredicto, y el intérprete ejecuta con el mismo `stdout`+exit. El cierre total es
+**run-on-run**: `run.ray` corriendo `run.ray` corriendo un programa → el back-end también.
+
+**Tres decisiones que lo hicieron viable** (no un bootstrap clásico):
+1. **Intérprete, no VM** (el back-end auto-alojado es tree-walking; mismo orden M1→M2).
+2. **El checker es un validador** (produce el veredicto, NO el lowering de M9).
+3. **Resolución en runtime**, no lowering: el intérprete despacha por la etiqueta del valor
+   → `dyn`/bounds/genéricos son **no-ops** (el *erasure* ocurre solo). El intérprete
+   "cabalga sobre el host": `Value` es un enum de raylang, las celdas de closure son un
+   struct, sin GC ni celdas propias.
+
+**Oráculo** (estrategia de todo M14): la misma entrada por ambos pipelines (Rust vs raylang),
+y se comparan — **texto canónico** (tokens, AST como S-expr, veredicto del checker) para el
+front-end, y **conductual** (stdout + código de salida) para el back-end.
+
+**Habilitadores que lo precedieron**: M13 (`Map`, `panic`/`assert`+test, recursión profunda
++ TCO) lo volvió práctico; M14.6 cerró la stdlib que el compilador usa (`Map`/string/`parse_*`/
+`assert`/`sort`/I/O/`pop`/concat de arreglos); M14.7 añadió el loader y la consistencia de
+`args()`.
+
+**Diferidos (no necesarios para la meta-circularidad lograda):**
+- **VM auto-alojada (M14.5)**: el compilador-a-bytecode + VM en raylang, con el intérprete
+  auto-alojado como oráculo. Es el M2 de este módulo; opcional.
+- **Loader auto-alojado**: `import M;` calificado, módulos por directorios y cápsulas
+  (`mod.ray`), reexports. El loader actual solo cubre `from M import …` (lo que usa el
+  compilador). No hace falta *position-shifting* (el checker no baja por posición).
+- **Resto de I/O** en el self-hosting: stdin (`input`/`read_line`), `env`, handles de
+  archivo —no los usa el compilador, y `args()`/`read_file` ya bastan—.
+- **Claves de `Map` genéricas** (vía un trait `Hash` con diccionarios): hoy solo primitivos.
 
 ## 8. Tooling de editor (coloreado y validación)
 
@@ -174,20 +184,17 @@ Soporte de los archivos `.ray` en editores. Tiene dos mitades muy distintas:
   formato (TextMate en VSCode; tree-sitter en Neovim/Zed/Helix). Es una reescritura
   en regex de las reglas léxicas de `DESIGN.md` §3, independiente del lexer en Rust.
 
-- **Validación / lint en vivo (diagnostics)** — ⏳ pendiente. Se hace con un
-  **Language Server (LSP)**. La clave estratégica: el LSP se escribe **una sola vez
-  en Rust reutilizando nuestro checker** (que ya produce errores con línea/columna),
-  y **funciona en todos los editores** (VSCode, Neovim, Emacs, Helix, Zed…). Cada
-  editor solo necesita un pequeño "pegamento" para lanzar el servidor.
-  - Implementación sugerida: crate `tower-lsp` o `lsp-server`, un binario
-    `raylang-lsp` que ante cada cambio de documento corre lexer→parser→checker y
-    devuelve los errores como `Diagnostic`.
-  - **Cuándo**: hito de tooling, **M10** (junto a las anotaciones). M8.3 ya dejó el
-    renderizador de diagnósticos (`src/diagnostic.rs`), que el LSP puede aprovechar. Es
-    la forma correcta y barata de soportar "más editores": una vez el LSP existe,
-    agregar un editor es casi gratis.
-  - Punto intermedio (si se quiere antes): un lint "casero" que al guardar corre el
-    binario `raylang` y parsea su salida `error ... en L:C: msg`.
+- **Validación / lint en vivo (diagnostics)** — ✅ **hecho** (M10.2). Un **Language
+  Server (LSP)** dentro del propio binario (`raylang --lsp`), que **reutiliza el checker**.
+  Decisión clave: **cero dependencias de Cargo** → JSON-RPC + *framing* a mano (`mod json`
+  en `src/lsp.rs`), no `tower-lsp`. Es un **cliente externo** como el REPL/runner: no toca
+  el core. Funciona en todos los editores; VSCode trae un cliente propio (`editors/vscode/`,
+  con npm del lado del editor), Sublime/Neovim/Helix lo usan declarándolo.
+  - Capacidades (M10.2b–f): diagnósticos, **hover** e **ir-a-definición** (de variables,
+    funciones y tipos), **find-references**, **rename**, **completion** (de archivo y por
+    ámbito) y **signature help**. El checker pasó de *validador* a *consultable*
+    (`semantic_index` recolecta un `SemanticIndex` antes de cualquier lowering).
+  - Diferido: hover/def de **métodos** (comparten `(línea,col)` con el receptor, sin spans).
 
 ## 9. Anotaciones (`@test`, `@derive`, …)
 
@@ -224,10 +231,10 @@ rendimiento. Candidatas:
 - **Retención en runtime + reflexión** (estilo Java `@Retention(RUNTIME)`): atada al
   ítem de introspección §3.
 
-**Impacto en el diseño actual:** casi nulo. La sintaxis `@nombre[(args)]` es
-**aditiva** (un pequeño cambio en el parser). ✅ El lexer ya **reserva `@`**
-(`TokenKind::At`, fase de limpieza post-M8); el parser todavía no lo consume, así que un
-`@` da error de sintaxis hasta M10. `@derive`/`@delegate` además dependen de **traits (M9)**.
+**Estado (M10):** ✅ hecho para el conjunto cerrado. El parser consume `@nombre[(args)]`;
+**`@test`** (con runner) y **`@derive(Eq, Show)`** (genera el `impl`, que M9 baja) están
+implementados. `@delegate`/`by` y las anotaciones de usuario que "hacen algo" (macros) siguen
+diferidos (capstone de muy largo plazo).
 
 ## 10. API de runtime / I/O (cómo raylang habla con el exterior)
 
@@ -242,13 +249,13 @@ Python (`sys.argv`) — no estilo C (`main(argc, argv)`). Razón: no especializa
 firma de `main`, y la capacidad queda disponible en *cualquier* función, no solo en
 la entrada. Encaja con cómo ya funciona `print` (un builtin).
 
-Superficie prevista (se declararían como `@builtin`, ver §9):
+**Estado (M11):** ✅ implementado como builtins (la I/O falible devuelve `Option`/`Result`;
+el runtime no sabe de ellos —los arma el prelude en raylang—). Superficie:
 
-- `args() -> [string]` — argumentos de la línea de comandos.
-- `input()` / `read_line() -> string`, `read_int() -> int` — entrada estándar.
-- `eprint(...)` — escribir a stderr (hoy `print` solo va a stdout).
-- `env(nombre) -> string` — variables de entorno.
-- I/O de archivos (leer/escribir) — más adelante.
+- `args() -> [string]` — argumentos de la línea de comandos. ✅
+- `input()`/`read_int()` (stdin), `eprint(...)` (stderr), `env(nombre)`. ✅
+- I/O de archivos: `read_file`/`write_file`/`append_file`/`exists`/`remove_file`/`list_dir`
+  + handles con buffering (`open`/`read_line`/`write`/`close`, M11.8). ✅
 
 **Matiz de orden** (dos capacidades distintas):
 

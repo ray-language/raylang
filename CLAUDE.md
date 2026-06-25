@@ -519,10 +519,9 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   modules: Vec<LoadedModule{name,source,start_line}> }`; `main.rs` localiza un error global por su
   banda y lo renderiza contra **su archivo** con la **línea local**, prefijado `[módulo]` (solo si
   hay >1 módulo; archivo único sin cambios). Runtime intacto (las posiciones se borran al ejecutar).
-- **M11 + limpieza completos.** Pendientes/diferidos: **cruzar tipos entre módulos**
-  (`from M import Punto`, `M.Punto`, `M.Color.Rojo` — namespacar tipos); más string/archivos
-  aditivos (`replace`/`contains`, `append`/`exists`…); **M12 concurrencia**; optimización de la VM.
-  Capstone: **self-hosting** (ya habilitado: módulos + I/O de archivos). Ver DESIGN §2/§20 / IDEAS.md.
+- **M11 + limpieza completos.** (Lo que aquí figuraba como pendiente ya está hecho: cruzar tipos
+  entre módulos → M11.3c; string/archivos aditivos → M11.4/M11.7; **self-hosting** → M14, **logrado**.)
+  Sigue pendiente: **M12 concurrencia** y optimización de la VM. Ver DESIGN §2/§20/§23 / IDEAS.md.
 - **M13 — habilitadores de self-hosting** (DESIGN §22; va **antes que M12**). Tres hilos: `Map<K,V>`,
   `assert`/tooling de test, robustez de recursión profunda.
   - **M13.3a COMPLETO** (336 tests lib): **recursión profunda sin segfaults**. (1) `lib::with_big_stack`

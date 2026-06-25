@@ -63,13 +63,15 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M9** | **traits / interfaces** (estilo Rust) → polimorfismo + *bounds* de genéricos | despacho estático vs. dinámico, abstracción | ✅ (M9.1 trait+impl · M9.2 bounds · M9.2b impls genéricos · M9.3 defectos + trait objects) |
 | **M10** | **tooling**: LSP (reusa el checker) + anotaciones (`@test`, `@derive`, `@builtin`) | language servers, metadatos en el AST | ✅ M10.1 (anotaciones) · M10.2 (LSP: diagnósticos, JSON-RPC a mano) · M10.2b (hover/ir-a-definición) |
 | **M11** | **módulos + `pub`** + I/O/stdlib (`args`/`input`/`env`/archivos, builtins de string) | sistema de módulos, visibilidad, API de runtime | ✅ M11.1 stdlib de string (`+`/`len`/`to_string`/`trim`/`split`) · M11.2 I/O (`eprint`/`input`/`parse_int`/`read_int`/`env`/`args`/`read_file`/`write_file`) · M11.3 módulos (`import M;`+`M.f`, `from M import a as b`, `pub`) |
-| **M12** | **concurrencia** (dirección probable: goroutines + channels) | scheduler, green threads, suspensión | ⏳ |
-| **Transversal** | optimización de la VM (incremental, midiendo) y **self-hosting** (capstone) | rendimiento, bootstrapping | ⏳ |
+| **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
+| **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
+| **M12** | **concurrencia** (dirección probable: goroutines + channels) | scheduler, green threads, suspensión | ⏳ (se hizo M13+M14 antes) |
+| **Transversal** | optimización de la VM (incremental, midiendo) · **VM auto-alojada** (M14.5, opcional) | rendimiento, bootstrapping | ⏳ |
 
-> El detalle y la clasificación de impacto de los hitos M9+ viven en
-> [IDEAS.md](IDEAS.md) hasta que cada uno se especifique en su propia sección al
-> arrancarlo. Dependencias clave: `@derive`/`@delegate` (M10) necesitan **traits** (M9);
-> el self-hosting necesita **módulos + I/O de archivos** (M11).
+> El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
+> que cada uno se especifica en su propia sección al arrancarlo (M13 → §22, M14 → §23).
+> Dependencias clave: `@derive`/`@delegate` (M10) necesitan **traits** (M9); el self-hosting
+> (M14) necesitó **módulos + I/O de archivos** (M11) y los habilitadores de **M13**.
 
 Este documento especifica **M1** en detalle y fija el norte de lo posterior.
 

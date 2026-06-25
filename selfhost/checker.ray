@@ -247,6 +247,18 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
             ensure_type(c, r, line, col)
         },
         Type.TNamed(name, args) => {
+            // `Map<K, V>` (M14.6b): la clave debe ser hashable (int/string/char/bool o un parámetro de
+            // tipo); aridad 2. No es un struct/enum registrado → se trata aparte.
+            if (name == "Map") {
+                if (len(args) != 2) {
+                    return Result.Err(terr(line, col, "Map espera 2 argumentos de tipo (clave y valor), no " + to_string(len(args))));
+                }
+                if (!is_hashable_key(c, args[0])) {
+                    return Result.Err(terr(line, col, "la clave de un Map debe ser int/string/char/bool, no " + type_str(args[0])));
+                }
+                ensure_type(c, args[0], line, col)?;
+                return ensure_type(c, args[1], line, col);
+            }
             // Un parámetro de tipo en ámbito (M14.3c) es un tipo válido; no recibe argumentos.
             if (contains_str(c.tparams, name)) {
                 if (len(args) != 0) {
@@ -310,6 +322,30 @@ fn type_arity(c: Checker, name: string) -> int {
 
 // ¿`name` nombra un enum registrado? (Distingue construcción de enum de acceso a campo.)
 fn is_enum(c: Checker, name: string) -> bool { contains_key(c.enums, name) }
+
+// ¿`t` puede ser la clave de un Map? (int/string/char/bool o un parámetro de tipo en ámbito.)
+fn is_hashable_key(c: Checker, t: Type) -> bool {
+    match (t) {
+        Type.TInt => true,
+        Type.TString => true,
+        Type.TChar => true,
+        Type.TBool => true,
+        Type.TNamed(n, args) => len(args) == 0 && contains_str(c.tparams, n),
+        _ => false,
+    }
+}
+
+// ¿`t` es un `Map<K, V>`? Devuelve `Some([K, V])` o `None`.
+fn map_kv(t: Type) -> Option<[Type]> {
+    match (t) {
+        Type.TNamed(n, margs) => { if (n == "Map" && len(margs) == 2) { Option.Some(margs) } else { Option.None } },
+        _ => Option.None,
+    }
+}
+
+fn is_map(t: Type) -> bool {
+    match (map_kv(t)) { Option.Some(_) => true, Option.None => false }
+}
 
 // Un arreglo de strings vacío, ya tipado (para reiniciar `c.tparams`: asignar `[]` directamente a un
 // campo no infiere el tipo, pero el retorno de esta función sí lo fija).
@@ -1156,8 +1192,11 @@ fn check_binary(c: Checker, op: BinOp, l: Expr, r: Expr, line: int, col: int) ->
 
 fn check_call(c: Checker, callee: Expr, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     match (callee.kind) {
-        // Llamada directa por nombre (el esperado no aporta: la inferencia genérica usa los args).
-        EKind.EIdent(n) => check_named_call(c, n, cargs, line, col),
+        // map_new() es indeterminado: necesita el tipo esperado (bidireccional) para fijar Map<K,V>.
+        EKind.EIdent(n) => {
+            if (n == "map_new") { check_map_new(c, cargs, expected, line, col) }
+            else { check_named_call(c, n, cargs, line, col) }
+        },
         // `recv.f(args)`: construcción de enum `Enum.Variante(args)`, o llamada al valor de un campo.
         // (UFCS / métodos de trait quedan diferidos a M14.3d.)
         EKind.EField(obj, name) => check_call_field(c, obj, name, cargs, expected, line, col),
@@ -1463,6 +1502,8 @@ fn is_known_builtin(name: string) -> bool {
         || name == "contains" || name == "replace" || name == "starts_with" || name == "ends_with"
         || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat"
         || name == "join"
+        || name == "map_new" || name == "insert" || name == "get" || name == "contains_key"
+        || name == "keys" || name == "values" || name == "remove"
 }
 
 // ¿`name` nombra algo llamable? (builtin, variable local de función, o función de nivel superior.)
@@ -1507,6 +1548,13 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
     if (name == "repeat") { return check_repeat(c, cargs, line, col); }
     if (name == "join") { return check_join(c, cargs, line, col); }
     if (name == "contains") { return check_contains(c, cargs, line, col); }
+    if (name == "insert") { return check_insert(c, cargs, line, col); }
+    if (name == "get") { return check_get(c, cargs, line, col); }
+    if (name == "contains_key") { return check_contains_key(c, cargs, line, col); }
+    if (name == "remove") { return check_remove(c, cargs, line, col); }
+    if (name == "keys") { return check_keys(c, cargs, line, col); }
+    if (name == "values") { return check_values(c, cargs, line, col); }
+    if (name == "map_new") { return check_map_new(c, cargs, Option.None, line, col); }
     match (lookup(c, name)) {
         Option.Some(v) => { return call_type(c, v.ty, cargs, line, col); },
         Option.None => {},
@@ -1623,7 +1671,7 @@ fn check_len(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, Typ
         return Result.Err(terr(line, col, "len espera 1 argumento, se le pasaron " + to_string(len(cargs))));
     }
     let at = check_expr(c, cargs[0])?;
-    if (!(is_array(at) || type_eq(at, Type.TString))) {
+    if (!(is_array(at) || type_eq(at, Type.TString) || is_map(at))) {
         return Result.Err(terr(cargs[0].line, cargs[0].col, "len espera un arreglo, un string o un Map, no " + type_str(at)));
     }
     Result.Ok(Type.TInt)
@@ -1801,6 +1849,107 @@ fn check_contains(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type
         _ => { return Result.Err(terr(cargs[0].line, cargs[0].col, "contains espera un string o un arreglo, no " + type_str(a[0]))); },
     }
     Result.Ok(Type.TBool)
+}
+
+// =====================================================================
+// Builtins de Map (M14.6b): map_new/insert/get/contains_key/keys/values. Reglas/mensajes idénticos a
+// `src/builtins.rs` (get refleja el envoltorio del prelude: (Map<K,V>, K) -> Option<V>).
+// =====================================================================
+
+// map_new() es INDETERMINADO (como `[]`/`None`): su tipo lo fija el esperado (bidireccional).
+fn check_map_new(c: Checker, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
+    match (expected) {
+        Option.Some(t) => {
+            if (len(cargs) != 0) {
+                return Result.Err(terr(line, col, "map_new no recibe argumentos"));
+            }
+            match (map_kv(t)) {
+                Option.Some(_) => { ensure_type(c, t, line, col)?; Result.Ok(t) },
+                Option.None => Result.Err(terr(line, col, "map_new produce un Map, pero aquí se espera " + type_str(t))),
+            }
+        },
+        Option.None => Result.Err(terr(line, col,
+            "no se puede inferir el tipo de map_new; anótalo, p. ej. 'let m: Map<string, int> = map_new()'")),
+    }
+}
+
+fn check_insert(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("insert", 3, " (mapa, clave, valor)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    match (map_kv(a[0])) {
+        Option.Some(kv) => {
+            if (!type_eq(a[1], kv[0])) {
+                return Result.Err(terr(cargs[1].line, cargs[1].col, "insert: la clave del Map es " + type_str(kv[0]) + " pero se pasó " + type_str(a[1])));
+            }
+            if (!type_eq(a[2], kv[1])) {
+                return Result.Err(terr(cargs[2].line, cargs[2].col, "insert: el valor del Map es " + type_str(kv[1]) + " pero se pasó " + type_str(a[2])));
+            }
+            Result.Ok(Type.TUnit)
+        },
+        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "insert espera un Map como primer argumento, no " + type_str(a[0]))),
+    }
+}
+
+fn check_contains_key(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("contains_key", 2, " (mapa, clave)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    match (map_kv(a[0])) {
+        Option.Some(kv) => {
+            if (!type_eq(a[1], kv[0])) {
+                return Result.Err(terr(cargs[1].line, cargs[1].col, "contains_key: la clave del Map es " + type_str(kv[0]) + " pero se pasó " + type_str(a[1])));
+            }
+            Result.Ok(Type.TBool)
+        },
+        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "contains_key espera un Map como primer argumento, no " + type_str(a[0]))),
+    }
+}
+
+// get(m, k) -> Option<V> (envoltorio del prelude en Rust; aquí builtin directo, mismo tipo).
+fn check_get(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("get", 2, " (mapa, clave)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    match (map_kv(a[0])) {
+        Option.Some(kv) => {
+            if (!type_eq(a[1], kv[0])) {
+                return Result.Err(terr(cargs[1].line, cargs[1].col, "get: la clave del Map es " + type_str(kv[0]) + " pero se pasó " + type_str(a[1])));
+            }
+            Result.Ok(Type.TNamed("Option", [kv[1]]))
+        },
+        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "get espera un Map como primer argumento, no " + type_str(a[0]))),
+    }
+}
+
+// remove(m, k) -> Option<V> (envoltorio del prelude; aquí builtin directo, mismo tipo).
+fn check_remove(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("remove", 2, " (mapa, clave)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    match (map_kv(a[0])) {
+        Option.Some(kv) => {
+            if (!type_eq(a[1], kv[0])) {
+                return Result.Err(terr(cargs[1].line, cargs[1].col, "remove: la clave del Map es " + type_str(kv[0]) + " pero se pasó " + type_str(a[1])));
+            }
+            Result.Ok(Type.TNamed("Option", [kv[1]]))
+        },
+        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "remove espera un Map como primer argumento, no " + type_str(a[0]))),
+    }
+}
+
+fn check_keys(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("keys", 1, " (mapa)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    match (map_kv(a[0])) {
+        Option.Some(kv) => Result.Ok(Type.TArray(kv[0])),
+        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "keys espera un Map, no " + type_str(a[0]))),
+    }
+}
+
+fn check_values(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+    b_arity("values", 1, " (mapa)", len(cargs), line, col)?;
+    let a = check_args_types(c, cargs)?;
+    match (map_kv(a[0])) {
+        Option.Some(kv) => Result.Ok(Type.TArray(kv[1])),
+        Option.None => Result.Err(terr(cargs[0].line, cargs[0].col, "values espera un Map, no " + type_str(a[0]))),
+    }
 }
 
 fn call_type(c: Checker, ty: Type, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {

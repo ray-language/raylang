@@ -64,7 +64,13 @@ pub enum Value {
     VEnum(string, string, [Value]), // enum: nombre, variante, payload (inmutable)
     VFunc(Func),                   // una función nombrada usada como valor (sin captura)
     VClosure(FnExpr, [Capture]),   // una función anónima + su entorno capturado (celdas compartidas)
+    VMap(MapData),                 // un Map<K,V> (M14.6b): pares clave/valor (arrays paralelos)
 }
+
+// Un Map en runtime. Arrays PARALELOS clave/valor con búsqueda lineal por igualdad estructural — no se
+// usa un `Map` del host porque sus claves serían un `Value` (enum), no hasheable por el host. `MapData`
+// es un struct (semántica de referencia) → `insert` muta y los alias lo ven (como `VArray`).
+struct MapData { keys: [Value], vals: [Value] }
 
 // Un campo de un struct en runtime: nombre + valor (mutable). Lista ordenada (como el `Vec<(String,
 // Value)>` de Rust) → el orden de declaración para Display/igualdad.
@@ -144,6 +150,14 @@ fn value_str(v: Value) -> string {
         },
         Value.VFunc(_) => "<fn>",
         Value.VClosure(_, _) => "<fn>",
+        // Display de Map idéntico a Rust: `Map{k: v, ...}` con las partes ordenadas como strings. (El
+        // checker prohíbe imprimir un Map, así que esto no se ejercita en programas válidos.)
+        Value.VMap(d) => {
+            var parts: [string] = [];
+            var i = 0;
+            while (i < len(d.keys)) { push(parts, value_str(d.keys[i]) + ": " + value_str(d.vals[i])); i = i + 1; }
+            "Map{" + join(sort(parts), ", ") + "}"
+        },
     }
 }
 
@@ -194,6 +208,8 @@ fn values_equal(a: Value, b: Value) -> bool {
         // Las funciones no tienen igualdad estructural (el checker prohíbe `==` sobre ellas).
         Value.VFunc(_) => false,
         Value.VClosure(_, _) => false,
+        // El checker prohíbe `==` sobre Map; no se ejercita en programas válidos.
+        Value.VMap(_) => false,
     }
 }
 
@@ -525,15 +541,83 @@ fn is_builtin(name: string) -> bool {
         || name == "replace" || name == "starts_with" || name == "ends_with"
         || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat"
         || name == "join"
+        || name == "map_new" || name == "insert" || name == "get" || name == "contains_key"
+        || name == "keys" || name == "values" || name == "remove"
 }
 
-// `len` de un arreglo o un string (nº de caracteres). Map → M14.4c/d.
+// `len` de un arreglo, un string (nº de caracteres) o un Map (nº de entradas).
 fn builtin_len(v: Value) -> int {
     match (v) {
         Value.VArray(elems) => len(elems),
         Value.VStr(s) => len(s),
-        _ => panic("len: se esperaba un arreglo o string"),
+        Value.VMap(d) => len(d.keys),
+        _ => panic("len: se esperaba un arreglo, string o Map"),
     }
+}
+
+// =====================================================================
+// Map (M14.6b): operaciones sobre `MapData` (arrays paralelos, búsqueda lineal por igualdad estructural)
+// =====================================================================
+
+// El índice de la clave `k` en el mapa, o -1 si no está.
+fn map_find(d: MapData, k: Value) -> int {
+    var i = 0;
+    while (i < len(d.keys)) {
+        if (values_equal(d.keys[i], k)) { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// Inserta/actualiza `k -> v` mutando el mapa compartido.
+fn map_put(d: MapData, k: Value, v: Value) {
+    let idx = map_find(d, k);
+    if (idx >= 0) { d.vals[idx] = v; }
+    else { push(d.keys, k); push(d.vals, v); }
+}
+
+// Quita `k` del mapa (swap-remove: el orden no importa, keys() reordena) y devuelve `Some(v)`/`None`.
+fn map_take(d: MapData, k: Value) -> Value {
+    let idx = map_find(d, k);
+    if (idx < 0) { return Value.VEnum("Option", "None", no_vals()); }
+    let v = d.vals[idx];
+    let last = len(d.keys) - 1;
+    d.keys[idx] = d.keys[last];
+    d.vals[idx] = d.vals[last];
+    let kr = pop(d.keys);
+    let vr = pop(d.vals);
+    Value.VEnum("Option", "Some", [v])
+}
+
+// ¿`a` < `b` para claves del MISMO tipo primitivo? (orden de `MapKey` en Rust; en un mapa todas las
+// claves son del mismo tipo, así que las ramas cruzadas no se observan).
+fn key_lt(a: Value, b: Value) -> bool {
+    match (a) {
+        Value.VInt(x) => match (b) { Value.VInt(y) => x < y, _ => false },
+        Value.VStr(x) => match (b) { Value.VStr(y) => x < y, _ => false },
+        Value.VChar(x) => match (b) { Value.VChar(y) => x < y, _ => false },
+        Value.VBool(x) => match (b) { Value.VBool(y) => (!x) && y, _ => false },
+        _ => false,
+    }
+}
+
+// Los índices 0..n ordenados por clave (insertion sort) → keys()/values() deterministas (como Rust).
+fn map_sorted_order(ks: [Value]) -> [int] {
+    var order: [int] = [];
+    var i = 0;
+    while (i < len(ks)) { push(order, i); i = i + 1; }
+    var a = 1;
+    while (a < len(order)) {
+        let cur = order[a];
+        var b = a;
+        while (b > 0 && key_lt(ks[cur], ks[order[b - 1]])) {
+            order[b] = order[b - 1];
+            b = b - 1;
+        }
+        order[b] = cur;
+        a = a + 1;
+    }
+    order
 }
 
 // Envuelve un `[char]`/`[string]` del host en un `VArray` de `VChar`/`VStr` (para chars/split).
@@ -642,7 +726,57 @@ fn dispatch_builtin(c: Interp, name: string, vals: [Value], line: int, col: int)
     if (name == "repeat") { return Result.Ok(Value.VStr(repeat(as_str(vals[0]), as_int(vals[1])))); }
     if (name == "join") { return Result.Ok(Value.VStr(builtin_join(vals[0], as_str(vals[1])))); }
     if (name == "contains") { return Result.Ok(Value.VBool(builtin_contains(vals[0], vals[1]))); }
+    // --- Builtins de Map (M14.6b) ---
+    if (name == "map_new") { return Result.Ok(Value.VMap(MapData { keys: no_vals(), vals: no_vals() })); }
+    if (name == "insert") {
+        return match (vals[0]) {
+            Value.VMap(d) => { map_put(d, vals[1], vals[2]); Result.Ok(Value.VUnit) },
+            _ => panic("insert: se esperaba un Map"),
+        };
+    }
+    if (name == "contains_key") {
+        return match (vals[0]) {
+            Value.VMap(d) => Result.Ok(Value.VBool(map_find(d, vals[1]) >= 0)),
+            _ => panic("contains_key: se esperaba un Map"),
+        };
+    }
+    if (name == "get") {
+        return match (vals[0]) {
+            Value.VMap(d) => {
+                let idx = map_find(d, vals[1]);
+                if (idx >= 0) { Result.Ok(Value.VEnum("Option", "Some", [d.vals[idx]])) }
+                else { Result.Ok(Value.VEnum("Option", "None", no_vals())) }
+            },
+            _ => panic("get: se esperaba un Map"),
+        };
+    }
+    if (name == "remove") {
+        return match (vals[0]) {
+            Value.VMap(d) => Result.Ok(map_take(d, vals[1])),
+            _ => panic("remove: se esperaba un Map"),
+        };
+    }
+    if (name == "keys") {
+        return match (vals[0]) {
+            Value.VMap(d) => Result.Ok(map_collect(d.keys, map_sorted_order(d.keys))),
+            _ => panic("keys: se esperaba un Map"),
+        };
+    }
+    if (name == "values") {
+        return match (vals[0]) {
+            Value.VMap(d) => Result.Ok(map_collect(d.vals, map_sorted_order(d.keys))),
+            _ => panic("values: se esperaba un Map"),
+        };
+    }
     panic("builtin no implementado: " + name)
+}
+
+// Reúne `src[order[i]]` en un VArray (para keys/values en orden de clave ordenada).
+fn map_collect(src: [Value], order: [int]) -> Value {
+    var out: [Value] = [];
+    var i = 0;
+    while (i < len(order)) { push(out, src[order[i]]); i = i + 1; }
+    Value.VArray(out)
 }
 
 // La clave de tipo de un VALOR en runtime (para el despacho de métodos): el nombre del tipo nominal o
@@ -660,6 +794,7 @@ fn type_key_of_value(v: Value) -> string {
         Value.VArray(_) => "[]",
         Value.VFunc(_) => "fn",
         Value.VClosure(_, _) => "fn",
+        Value.VMap(_) => "Map",
     }
 }
 

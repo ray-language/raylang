@@ -891,6 +891,18 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       al reescribir `push`) no tipa ("hay al menos un brazo") → `return match {...}` con el brazo normal
       cediendo el valor. Pendiente: `Map`, `panic` en el checker, `parse_int`/`parse_float` → luego correr
       `selfhost/lex_dump.ray` sobre el intérprete.
+    - **M14.6b COMPLETO** (347 lib + 20 en `tests/selfhost_interpreter.rs`; checker oráculo 24 intacto):
+      **`Map<K,V>`** (checker + intérprete; el diferido más invasivo). **Checker**: `Map<K,V>` llega como
+      `TNamed("Map",[K,V])` (sin variante `TMap`, se trata por nombre); `ensure_type` valida aridad 2 +
+      clave hashable (`is_hashable_key`), `len` lo acepta, builtins `map_new`/`insert`/`get`/`remove`/
+      `contains_key`/`keys`/`values` (mensajes byte-idénticos; `get`/`remove` → `Option<V>`). **`map_new()`
+      indeterminado** (como `[]`/`None`): lo fija el esperado vía bidireccional (`check_map_new(expected)`,
+      interceptado en `check_call`). **Intérprete**: `VMap(MapData{keys,vals})` —arrays PARALELOS + búsqueda
+      lineal por `values_equal`, NO un `Map` del host (claves serían `Value`/enum, no hasheable); `MapData`
+      es struct → mutación compartida como `VArray`—. `keys()`/`values()` ORDENADAS por clave (`key_lt` +
+      insertion sort) → deterministas como Rust. Oráculo: claves string/int + remove. (`examples/mapa.ray`
+      espera M14.6c por `assert_eq`/`assert`.) Pendiente: `panic` en el checker, `parse_int`/`parse_float`,
+      `assert`/`sort` → luego correr el compilador auto-alojado.
 - Dos motores que deben coincidir; los tests `oracle_*` (en `vm.rs`) lo verifican,
   incluido un modo **estrés** del GC.
 

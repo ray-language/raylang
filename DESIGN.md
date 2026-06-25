@@ -2833,3 +2833,19 @@ diferido aditivo (fila en el checker + impl en el intérprete, como M11.4).
   (19 tests): snippet con toda la familia (UFCS + directa) + `chars`/indexar-string/recorrido → mismo
   stdout + exit que Rust. Pendiente hacia meta-circularidad: `Map` (checker + intérprete), `panic` en el
   checker, `parse_int`/`parse_float`, y luego ejecutar `selfhost/lex_dump.ray` sobre el intérprete.
+- **M14.6b COMPLETO** — **`Map<K, V>`** (checker + intérprete; el diferido más invasivo). El **checker
+  auto-alojado** reconoce `Map<K, V>` (llega del parser como `TNamed("Map", [K, V])` —no hay variante
+  `TMap`, se trata por nombre—): `ensure_type` valida aridad 2 + clave hashable (`is_hashable_key`:
+  int/string/char/bool o param de tipo), `len` lo acepta, y los builtins `map_new`/`insert`/`get`/
+  `remove`/`contains_key`/`keys`/`values` (reglas/mensajes byte-idénticos a Rust; `get`/`remove` reflejan
+  el envoltorio del prelude `(Map<K,V>, K) -> Option<V>`). **`map_new()` es indeterminado** (como `[]`/
+  `None`): su tipo lo fija el esperado vía bidireccional (`check_map_new` recibe `expected`, interceptado
+  en `check_call`); sin esperado → error idéntico a Rust. El **intérprete** añade `VMap(MapData)` con
+  `struct MapData { keys: [Value], vals: [Value] }` —arrays PARALELOS con búsqueda lineal por
+  `values_equal`, no un `Map` del host (sus claves serían un `Value`/enum, no hasheable); `MapData` es un
+  struct → `insert`/`remove` mutan y los alias lo ven, como `VArray`—. `keys()`/`values()` se devuelven
+  **ordenadas por clave** (insertion sort con `key_lt`) → deterministas como Rust. Oráculo (20 tests):
+  snippets con claves string e int (insert/get/contains_key/len/keys/values/remove + mutación
+  compartida) → mismo stdout + exit que Rust. (`examples/mapa.ray` aún no: usa `assert_eq`/`assert` del
+  prelude → M14.6c.) Pendiente: `panic` en el checker, `parse_int`/`parse_float`, `assert`/`sort` → luego
+  ejecutar el compilador auto-alojado.

@@ -351,6 +351,46 @@ fn string_builtins() {
 }
 
 #[test]
+fn map_builtins() {
+    // M14.6b: Map<K,V> — map_new (indeterminado, lo fija la anotación), insert/get/contains_key/len,
+    // keys()/values() ORDENADAS (deterministas como Rust), claves string e int.
+    comparar_fuente(
+        "fn main() -> int { \
+            var m: Map<string, int> = map_new(); \
+            insert(m, \"uno\", 1); insert(m, \"dos\", 2); insert(m, \"tres\", 3); insert(m, \"dos\", 22); \
+            print(len(m)); print(contains_key(m, \"uno\")); print(contains_key(m, \"x\")); \
+            match (get(m, \"dos\")) { Option.Some(v) => print(v), Option.None => print(0 - 1) } \
+            match (get(m, \"x\")) { Option.Some(v) => print(v), Option.None => print(0 - 1) } \
+            print(m.keys()); print(m.values()); \
+            0 \
+        }",
+        "in_map.ray",
+    );
+    // Claves int → keys()/values() ordenadas numéricamente.
+    comparar_fuente(
+        "fn main() -> int { \
+            var n: Map<int, string> = map_new(); \
+            insert(n, 3, \"c\"); insert(n, 1, \"a\"); insert(n, 2, \"b\"); \
+            print(n.keys()); print(n.values()); \
+            0 \
+        }",
+        "in_map_int.ray",
+    );
+    // remove(m, k) -> Option<V> + mutación compartida.
+    comparar_fuente(
+        "fn main() -> int { \
+            var m: Map<string, int> = map_new(); \
+            insert(m, \"a\", 1); insert(m, \"b\", 2); insert(m, \"c\", 3); \
+            match (remove(m, \"b\")) { Option.Some(v) => print(v), Option.None => print(0 - 1) } \
+            match (remove(m, \"x\")) { Option.Some(v) => print(v), Option.None => print(0 - 1) } \
+            print(len(m)); print(m.keys()); print(contains_key(m, \"b\")); \
+            0 \
+        }",
+        "in_map_remove.ray",
+    );
+}
+
+#[test]
 fn codigo_de_salida() {
     // El código de salida del runner es el int que devuelve main (0 si es unit).
     comparar_fuente("fn main() -> int { 42 }", "in_exit42.ray");

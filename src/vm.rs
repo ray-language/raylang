@@ -893,6 +893,16 @@ impl<'a> Vm<'a> {
                     };
                     self.push(HeapValue::Str(crate::builtins::substring_chars(&s, i, j)));
                 }
+                // M19.2: sub-secuencia de bytes por octeto (con clamp). Orden en la pila: b, i, j.
+                OpCode::SubBytes => {
+                    let j = self.pop();
+                    let i = self.pop();
+                    let b = self.pop();
+                    let (HeapValue::Bytes(b), HeapValue::Int(i), HeapValue::Int(j)) = (b, i, j) else {
+                        unreachable!("el checker garantiza bytes, int, int");
+                    };
+                    self.push(HeapValue::Bytes(crate::builtins::sub_bytes_octets(&b, i, j)));
+                }
                 OpCode::Repeat => {
                     let n = self.pop();
                     let s = self.pop();
@@ -2473,6 +2483,23 @@ mod tests {
         oracle_program("fn main() -> int { match (from_utf8(b\"\\xff\\xfe\")) { Result.Ok(s) => 1, Result.Err(e) => 0, } }");
         // to_bytes ∘ from_utf8 es identidad sobre texto válido.
         oracle_program("fn main() -> int { match (from_utf8(to_bytes(\"raylang\"))) { Result.Ok(s) => len(s), Result.Err(e) => -1, } }");
+    }
+
+    /// M19.2: `sub_bytes` (sub-secuencia por octeto, con clamp). Enrutado a int/bool (len/index/==),
+    /// como el resto de oráculos de bytes (print de bytes diferido).
+    #[test]
+    fn sub_bytes_oraculo() {
+        oracle_int("len(sub_bytes(b\"hello\", 1, 4))");                       // 3 ("ell")
+        oracle_int("sub_bytes(b\"hello\", 1, 4)[0]");                          // 101 ('e')
+        oracle_int("if (sub_bytes(b\"ABCD\", 0, 2) == b\"AB\") { 1 } else { 0 }"); // 1
+        oracle_int("if (sub_bytes(b\"ABCD\", 2, 4) == b\"CD\") { 1 } else { 0 }"); // 1
+        // Clamp: fin fuera de rango → recorta; inicio > n → vacío; i > j → vacío.
+        oracle_int("len(sub_bytes(b\"AB\", 0, 100))");                         // 2
+        oracle_int("len(sub_bytes(b\"AB\", 5, 10))");                          // 0
+        oracle_int("len(sub_bytes(b\"AB\", 1, 0))");                           // 0
+        // Octetos crudos (incl. \x00/\xff) intactos.
+        oracle_int("sub_bytes(b\"\\x00\\xff\\x10\", 1, 2)[0]");               // 255
+        oracle_int("len(sub_bytes(b\"\\x00\\xff\\x10\", 0, 3))");             // 3
     }
 
     /// M13.1: Map en el oráculo. Las operaciones básicas dan el mismo resultado en ambos motores.

@@ -634,7 +634,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
     // El toolchain auto-alojado (lexer/parser/checker/intérprete en raylang) **no soporta `bytes`**
     // (M16 fue solo del lado de Rust; `bytes` en self-hosting es un diferido). Los ejemplos que usan
     // `bytes`/`b"..."` quedan fuera de este corpus, como en su día quedó `mapa.ray` hasta M14.6.
-    const DIFERIDOS_SELFHOST: &[&str] = &["binario.ray"];
+    const DIFERIDOS_SELFHOST: &[&str] = &["binario.ray", "http.ray", "webserver.ray"];
     let mut entradas: Vec<_> = std::fs::read_dir(&dir)
         .expect("lee examples/")
         .filter_map(|e| e.ok())

@@ -1073,6 +1073,13 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza string, int, int"),
             },
+            // M19.2: sub-secuencia de bytes por octeto (con clamp).
+            "sub_bytes" => match (&values[0], &values[1], &values[2]) {
+                (Value::Bytes(b), Value::Int(i), Value::Int(j)) => {
+                    Value::Bytes(Rc::new(crate::builtins::sub_bytes_octets(b, *i, *j)))
+                }
+                _ => unreachable!("el checker garantiza bytes, int, int"),
+            },
             "repeat" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Int(n)) => Value::Str(crate::builtins::repeat_str(s, *n)),
                 _ => unreachable!("el checker garantiza string, int"),

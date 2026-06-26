@@ -1,13 +1,17 @@
 // M15.4b — un cliente HTTP/1.1 escrito EN raylang, sobre los builtins TCP de M15.2.
 //
-// Igual que la librería JSON: cero runtime, cero builtins; puro raylang + stdlib, importable. Solo
-// http:// (TLS pediría criptografía). Usa "Connection: close" y lee hasta EOF para delimitar el
-// cuerpo (lo más simple y correcto). Errores como valores (Result).
+// Igual que la librería JSON: cero runtime; puro raylang + stdlib, importable. Solo http:// (TLS
+// pediría criptografía → M19.4). Usa "Connection: close" y lee hasta EOF para delimitar el cuerpo.
+// Errores como valores (Result).
+//
+// M19.2: el cuerpo de la respuesta es **bytes** (octetos crudos intactos → descargas binarias
+// correctas, no solo texto). Las cabeceras siguen siendo texto (ASCII): se decodifican con from_utf8
+// para parsearlas. Para leer el cuerpo como texto, usa `body_text(r)`.
 
 pub struct Response {
     status: int,
     headers: Map<string, string>,
-    body: string,
+    body: bytes,
 }
 
 struct Url { host: string, port: int, path: string }
@@ -59,13 +63,13 @@ fn build_request(method: string, u: Url, body: string) -> string {
     req + body
 }
 
-// Lee del socket hasta que el servidor cierra, acumulando los trozos.
-fn leer_todo(h: int) -> Result<string, string> {
-    var acc: string = "";
+// Lee del socket hasta que el servidor cierra, acumulando los trozos como bytes (M19.2: binario intacto).
+fn leer_todo(h: int) -> Result<bytes, string> {
+    var acc: bytes = b"";
     var seguir: bool = true;
     var err: string = "";
     while (seguir) {
-        match (socket_read(h)) {
+        match (socket_read_bytes(h)) {
             Result.Ok(trozo) => {
                 if (len(trozo) == 0) { seguir = false; } else { acc = acc + trozo; }
             },
@@ -75,12 +79,29 @@ fn leer_todo(h: int) -> Result<string, string> {
     if (err == "") { Result.Ok(acc) } else { Result.Err(err) }
 }
 
-fn parse_response(raw: string) -> Result<Response, string> {
-    match (index_of(raw, "\r\n\r\n")) {
-        Option.None => Result.Err("respuesta HTTP malformada (sin separador de cabeceras)"),
-        Option.Some(idx) => {
-            let cabeceras_raw: string = substring(raw, 0, idx);
-            let cuerpo: string = substring(raw, idx + 4, len(raw));
+// El índice del primer "\r\n\r\n" (fin de cabeceras) en bytes, o -1. Escanea por octetos (CR=13, LF=10);
+// no se puede usar index_of (es de string) porque el cuerpo binario rompería from_utf8 del buffer entero.
+fn find_fin_cabeceras(b: bytes) -> int {
+    var i: int = 0;
+    while (i + 3 < len(b)) {
+        if (b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10) {
+            return i;
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn parse_response(raw: bytes) -> Result<Response, string> {
+    let sep: int = find_fin_cabeceras(raw);
+    if (sep < 0) {
+        return Result.Err("respuesta HTTP malformada (sin separador de cabeceras)");
+    }
+    // Cabeceras = texto (ASCII): se decodifican para parsearlas. Cuerpo = bytes crudos.
+    let cuerpo: bytes = sub_bytes(raw, sep + 4, len(raw));
+    match (from_utf8(sub_bytes(raw, 0, sep))) {
+        Result.Err(e) => Result.Err("cabeceras HTTP no son UTF-8: " + e),
+        Result.Ok(cabeceras_raw) => {
             let lineas: [string] = split(cabeceras_raw, "\r\n");
 
             // Línea de estado: "HTTP/1.1 200 OK".
@@ -119,6 +140,12 @@ pub fn header(r: Response, name: string) -> Option<string> {
     get(r.headers, to_lower(name))
 }
 
+// El cuerpo de la respuesta decodificado como texto UTF-8 (para respuestas de texto/JSON). Para datos
+// binarios, usa `r.body` (bytes) directamente.
+pub fn body_text(r: Response) -> Result<string, string> {
+    from_utf8(r.body)
+}
+
 pub fn request(method: string, url: string, body: string) -> Result<Response, string> {
     match (parse_url(url)) {
         Result.Err(e) => Result.Err(e),
@@ -126,7 +153,7 @@ pub fn request(method: string, url: string, body: string) -> Result<Response, st
             match (tcp_connect(u.host, u.port)) {
                 Result.Err(e) => Result.Err("no se pudo conectar: " + e),
                 Result.Ok(h) => {
-                    match (socket_write(h, build_request(method, u, body))) {
+                    match (socket_write_bytes(h, to_bytes(build_request(method, u, body)))) {
                         Result.Err(e) => { close(h); Result.Err("error al enviar: " + e) },
                         Result.Ok(_) => {
                             let r = leer_todo(h);

@@ -70,7 +70,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M16** | **tipo `bytes`** (datos binarios) | nuevo tipo en el pipeline, literal `b"..."`, I/O binaria | ✅ §25: ✅ **M16.1a** el tipo (literal `b"..."` con `\xNN`, `len`/index→int/`==`; oráculo) · ✅ **M16.1b** string-interop (`to_bytes`/`from_utf8` + `+`; oráculo) · ✅ **M16.1c** I/O binaria (`read_file_bytes`/`write_file_bytes`/`socket_read_bytes`/`socket_write_bytes`; lecturas → `[bytes]` etiquetado; socket cede al scheduler; subproceso). **M16 COMPLETO** (cierra la deuda binaria de M15). Diferido: `bytes` como clave de Map, mutabilidad |
 | **M17** | **`epoll`/`kqueue`** (readiness real, sustituye el busy-poll de M15.5) | E/S asíncrona del SO, `unsafe` acotado, FFI cero-deps | ✅ §26: poller del SO (`kqueue` macOS/BSD, `epoll` Linux) en `src/poll.rs`; FFI propio (`extern "C"`, sin el crate `libc` → invariante cero-deps); el scheduler de la VM se **bloquea** hasta readiness real y despierta **solo** las fibras de los fds listos (`io_parked` lleva ahora el `fd`); fallback al busy-poll de M15.5 en plataformas sin poller o EINTR; comportamiento idéntico (regresión: tests de M15.5/red concurrente). **M17 COMPLETO** (diferido: cesión en `socket_write`, registro persistente del poller, `bytes`/TLS en el toolchain auto-alojado) |
 | **M18** | **backend nativo** (bootstrap sin Rust) | codegen a máquina/LLVM/C | 💤 **aparcado** (decisión del usuario): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va al transversal de optimización de la VM. Se retoma más adelante |
-| **M19** | **la capa web** (servidor HTTP async + SSE · HTTP en bytes · WebSockets `ws://` · TLS) | protocolos de alto nivel como librería raylang sobre los sockets/scheduler; criptografía vs. cero-deps | 📋 §28: **M19.1** servidor web async + SSE (librería `webserver.ray` sobre el servidor concurrente de M15.5/M17; cero runtime) · **M19.2** portar HTTP a `bytes` (coherencia binaria de M16 en el protocolo) · **M19.3** WebSockets `ws://` (handshake SHA-1+base64 en raylang + framing con `bytes`) · **M19.4** TLS/SSL (**bloqueado por la invariante cero-deps**: pediría criptografía; decisión pendiente — excepción de dependencia o *shell-out* a `openssl`). `wss`/`https` dependen de M19.4 |
+| **M19** | **la capa web** (servidor HTTP async + SSE · HTTP en bytes · WebSockets `ws://` · TLS) | protocolos de alto nivel como librería raylang sobre los sockets/scheduler; criptografía vs. cero-deps | 🚧 §28: ✅ **M19.1** servidor web async + SSE (librería `webserver.ray` sobre el servidor concurrente de M15.5/M17; cero runtime) · ✅ **M19.2** HTTP en `bytes` (builtin `sub_bytes` + cliente `http.ray` y servidor `webserver.ray` con cuerpo `bytes`; round-trip binario `\x00`/`\xff` intacto) · **M19.3** WebSockets `ws://` (handshake SHA-1+base64 en raylang + framing con `bytes`) · **M19.4** TLS/SSL (**bloqueado por la invariante cero-deps**: pediría criptografía; decisión pendiente — excepción de dependencia o *shell-out* a `openssl`). `wss`/`https` dependen de M19.4 |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) 🚧 | rendimiento, bootstrapping | 🚧 §27: banco de pruebas `bench/` (fib/bucle/arreglos + `measure.py`, mejor-de-N); regla **medir-antes-y-después, conservar solo lo que supera el ruido**. ✅ LTO/`codegen-units=1` **descartado** (no mejora, medido) · ✅ **Opt.3** fast-path entero en el lazo de ops binarias (evita el doble match + la llamada a `apply_binary`; fib(35) −5%, bucle 10M −6%; oráculo VM↔intérprete intacto, semántica idéntica) |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -3809,12 +3809,28 @@ acotado (sirve N conexiones vía `scope` y termina, imprime su puerto) que impor
 cliente de Rust hace un `GET`, comprueba estado/cabeceras/cuerpo; y un caso SSE que lee varios eventos
 `data:`. Mismo molde que `http_cli.rs` (copiar la librería + un `main.ray` driver al temporal).
 
-### 28.2 M19.2 — HTTP en `bytes`
+### 28.2 M19.2 — HTTP en `bytes`  ✅
 
-`http.ray` (cliente) y `webserver.ray` (servidor) usan hoy `socket_read`/`socket_write` **string** →
-un cuerpo binario (imagen, `.zip`) se corrompe (UTF-8 lossy). M19.2 los porta a `socket_read_bytes`/
-`socket_write_bytes` (M16.1c): cabeceras como texto (ASCII), cuerpo como `bytes`. Cierra la coherencia
-binaria de M16 en la capa de protocolo. Front-end puro (las variantes `_bytes` ya existen).
+`http.ray` (cliente) y `webserver.ray` (servidor) usaban `socket_read`/`socket_write` **string** → un
+cuerpo binario (imagen, `.zip`) se corrompía (UTF-8 lossy). M19.2 porta el cuerpo (de petición y
+respuesta) a **`bytes`**: cabeceras como texto (ASCII, vía `from_utf8` para parsear) y cuerpo como
+octetos crudos. Cierra la coherencia binaria de M16 en la capa de protocolo.
+
+**No fue front-end puro** (estimación inicial errónea): separar cabeceras de cuerpo en un buffer de
+`bytes` exige **cortar bytes**, y no existía. Se añadió un builtin: **`sub_bytes(b, i, j) -> bytes`**
+(sub-secuencia por octeto, con *clamp*; análogo binario de `substring`), siguiendo el patrón de M16/
+M11.7a (fila en la tabla + opcode `SubBytes` + impl por motor + helper `sub_bytes_octets` + oráculo).
+El separador `\r\n\r\n` se localiza con un escaneo por octetos en raylang (`b[i]` da `int`), sin builtin.
+
+**API**: `Response.body`/`Request.body` pasan a `bytes`; los atajos de texto (`ok`/`text`/`json_response`)
+aceptan `string` y codifican con `to_bytes`; `bytes_response(status, body: bytes)` para cuerpos binarios;
+`body_text(r)`/`request_text(r)` (= `from_utf8`) para leer texto. `Content-Length` ahora es octetos
+(antes nº de caracteres → ligeramente incorrecto con no-ASCII; ahora correcto). El cliente envía la
+petición con `socket_write_bytes(to_bytes(...))`. **Solo `bytes` toca runtime** (el builtin `sub_bytes`);
+el resto es la librería. `http.ray`/`webserver.ray` salen del corpus del parser auto-alojado (no soporta
+`bytes`, como `binario.ray`). **Prueba**: round-trip binario (`\x00`/`\xff`) por subproceso —el servidor
+eco-devuelve el cuerpo de un POST y el cliente verifica los octetos crudos— + la composición HTTP+JSON
+del cliente vía `body_text`.
 
 ### 28.3 M19.3 — WebSockets `ws://`
 

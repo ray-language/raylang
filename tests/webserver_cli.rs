@@ -38,12 +38,23 @@ fn lanzar_servidor(name: &str, driver: &str) -> (Child, u16) {
 
 /// Conecta, envía `req` cruda y lee toda la respuesta hasta que el servidor cierra.
 fn pedir(port: u16, req: &str) -> String {
+    String::from_utf8_lossy(&pedir_bytes(port, req.as_bytes())).into_owned()
+}
+
+/// Igual que `pedir` pero envía/recibe **octetos crudos** (para verificar cuerpos binarios).
+fn pedir_bytes(port: u16, req: &[u8]) -> Vec<u8> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-    stream.write_all(req.as_bytes()).expect("envía");
-    let mut resp = String::new();
-    stream.read_to_string(&mut resp).expect("lee respuesta");
+    stream.write_all(req).expect("envía");
+    let mut resp = Vec::new();
+    stream.read_to_end(&mut resp).expect("lee respuesta");
     resp
+}
+
+/// El cuerpo de una respuesta HTTP cruda: lo que sigue al primer "\r\n\r\n".
+fn cuerpo(resp: &[u8]) -> &[u8] {
+    let sep = b"\r\n\r\n";
+    resp.windows(4).position(|w| w == sep).map(|i| &resp[i + 4..]).unwrap_or(&[])
 }
 
 // Driver: servidor concurrente acotado a 2 conexiones (cada una en su fibra) que enruta /hola.
@@ -145,6 +156,58 @@ fn servidor_sse_emite_eventos() {
     assert!(resp.contains("data: tick 0"), "esperaba el evento 0, got: {resp}");
     assert!(resp.contains("data: tick 1"), "esperaba el evento 1, got: {resp}");
     assert!(resp.contains("data: tick 2"), "esperaba el evento 2, got: {resp}");
+
+    let _ = child.wait();
+}
+
+// Driver: servidor que eco-devuelve el cuerpo de la petición como respuesta BINARIA. Verifica que un
+// cuerpo binario (con \x00/\xff) cruza intacto read_request (por Content-Length) y send_response (M19.2).
+const SRV_ECO_BIN: &str = r#"
+import webserver;
+fn manejar(conn: int) {
+    match (webserver.read_request(conn)) {
+        Result.Ok(req) => {
+            match (webserver.send_response(conn, webserver.bytes_response(200, req.body))) {
+                Result.Ok(_) => {}, Result.Err(e) => eprint(e),
+            }
+        },
+        Result.Err(e) => eprint(e),
+    }
+    close(conn);
+}
+fn main() -> int {
+    match (tcp_listen("127.0.0.1", 0)) {
+        Result.Ok(srv) => {
+            print(local_port(srv));
+            scope(fn() {
+                match (tcp_accept(srv)) {
+                    Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
+                    Result.Err(e) => eprint(e),
+                }
+            });
+            close(srv);
+            0
+        },
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+"#;
+
+#[test]
+fn servidor_eco_cuerpo_binario_intacto() {
+    let (mut child, port) = lanzar_servidor("ecobin", SRV_ECO_BIN);
+
+    // POST con un cuerpo binario de 7 octetos, incl. 0x00 y 0xFF (que UTF-8 lossy corrompería).
+    let body: [u8; 7] = [0, 255, 1, 2, b'b', b'i', b'n'];
+    let mut req: Vec<u8> = format!(
+        "POST /eco HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    req.extend_from_slice(&body);
+
+    let resp = pedir_bytes(port, &req);
+    assert_eq!(cuerpo(&resp), &body, "el cuerpo binario debe cruzar intacto, got: {:?}", cuerpo(&resp));
 
     let _ = child.wait();
 }

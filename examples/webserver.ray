@@ -5,24 +5,32 @@
 // al scheduler → muchas conexiones a la vez en un hilo, readiness por kqueue/epoll). **Solo VM** (la
 // concurrencia es VM-only).
 //
-// Carga útil = string (M19.1). El cuerpo binario correcto (bytes) es M19.2; TLS (https) es M19.4.
+// M19.2: el cuerpo (de la petición y de la respuesta) es **bytes** → binario correcto (imágenes, etc.),
+// no solo texto. Las cabeceras siguen siendo texto (ASCII). Los atajos de respuesta de texto (ok/text/
+// json_response) aceptan string y lo codifican; bytes_response acepta bytes crudos. TLS (https) es M19.4.
 
 pub struct Request {
     method: string,
     path: string,
     headers: Map<string, string>,
-    body: string,
+    body: bytes,
 }
 
 pub struct Response {
     status: int,
     headers: Map<string, string>,
-    body: string,
+    body: bytes,
 }
 
 // --- Respuestas: atajos para los casos comunes ---
 
+// Respuesta de texto: el cuerpo se codifica a UTF-8.
 pub fn text(status: int, body: string) -> Response {
+    Response { status: status, headers: map_new(), body: to_bytes(body) }
+}
+
+// Respuesta binaria: el cuerpo va tal cual (octetos crudos).
+pub fn bytes_response(status: int, body: bytes) -> Response {
     Response { status: status, headers: map_new(), body: body }
 }
 
@@ -37,7 +45,13 @@ pub fn not_found() -> Response {
 pub fn json_response(body: string) -> Response {
     var h: Map<string, string> = map_new();
     insert(h, "Content-Type", "application/json");
-    Response { status: 200, headers: h, body: body }
+    Response { status: 200, headers: h, body: to_bytes(body) }
+}
+
+// El cuerpo de una petición decodificado como texto UTF-8 (para formularios/JSON entrantes). Para datos
+// binarios entrantes, usa `req.body` (bytes) directamente.
+pub fn request_text(req: Request) -> Result<string, string> {
+    from_utf8(req.body)
 }
 
 // La frase de estado para los códigos comunes (HTTP la exige tras el número).
@@ -53,99 +67,119 @@ fn status_text(code: int) -> string {
 
 // --- Lectura de la petición ---
 
-// Lee una petición HTTP completa de la conexión: acumula hasta el fin de cabeceras (\r\n\r\n), parsea
-// la línea de petición y las cabeceras, y —si hay Content-Length— sigue leyendo hasta completar el
-// cuerpo. (Longitud por caracteres; con cuerpos no-ASCII puede divergir → se corrige en M19.2/bytes.)
+// El índice del primer "\r\n\r\n" (fin de cabeceras) en bytes, o -1. Escanea por octetos (CR=13, LF=10):
+// no se puede usar index_of (es de string) porque el cuerpo binario rompería from_utf8 del buffer entero.
+fn find_fin_cabeceras(b: bytes) -> int {
+    var i: int = 0;
+    while (i + 3 < len(b)) {
+        if (b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10) {
+            return i;
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// Lee una petición HTTP completa de la conexión: acumula bytes hasta el fin de cabeceras (\r\n\r\n),
+// decodifica SOLO las cabeceras como texto para parsearlas, y —si hay Content-Length— sigue leyendo
+// hasta completar el cuerpo (bytes crudos, octetos). M19.2: cuerpo binario correcto.
 pub fn read_request(conn: int) -> Result<Request, string> {
-    var acc: string = "";
+    var acc: bytes = b"";
     var sep: int = 0 - 1;
     var seguir: bool = true;
     while (seguir) {
-        match (index_of(acc, "\r\n\r\n")) {
-            Option.Some(i) => { sep = i; seguir = false; },
-            Option.None => {
-                match (socket_read(conn)) {
-                    Result.Ok(trozo) => {
-                        if (len(trozo) == 0) { seguir = false; } else { acc = acc + trozo; }
-                    },
-                    Result.Err(e) => { return Result.Err("error al leer: " + e); },
-                }
-            },
+        let s: int = find_fin_cabeceras(acc);
+        if (s >= 0) {
+            sep = s;
+            seguir = false;
+        } else {
+            match (socket_read_bytes(conn)) {
+                Result.Ok(trozo) => {
+                    if (len(trozo) == 0) { seguir = false; } else { acc = acc + trozo; }
+                },
+                Result.Err(e) => { return Result.Err("error al leer: " + e); },
+            }
         }
     }
     if (sep < 0) {
         return Result.Err("petición incompleta (sin fin de cabeceras)");
     }
 
-    let cabeceras_raw: string = substring(acc, 0, sep);
-    var body: string = substring(acc, sep + 4, len(acc));
-    let lineas: [string] = split(cabeceras_raw, "\r\n");
+    var body: bytes = sub_bytes(acc, sep + 4, len(acc));
+    match (from_utf8(sub_bytes(acc, 0, sep))) {
+        Result.Err(e) => Result.Err("cabeceras de la petición no son UTF-8: " + e),
+        Result.Ok(cabeceras_raw) => {
+            let lineas: [string] = split(cabeceras_raw, "\r\n");
 
-    // Línea de petición: "GET /ruta HTTP/1.1".
-    let partes: [string] = split(lineas[0], " ");
-    if (len(partes) < 2) {
-        return Result.Err("línea de petición malformada: " + lineas[0]);
-    }
-    let method: string = partes[0];
-    let path: string = partes[1];
+            // Línea de petición: "GET /ruta HTTP/1.1".
+            let partes: [string] = split(lineas[0], " ");
+            if (len(partes) < 2) {
+                return Result.Err("línea de petición malformada: " + lineas[0]);
+            }
+            let method: string = partes[0];
+            let path: string = partes[1];
 
-    // Cabeceras (nombre en minúsculas para lookup case-insensitive).
-    var headers: Map<string, string> = map_new();
-    var i: int = 1;
-    while (i < len(lineas)) {
-        match (index_of(lineas[i], ":")) {
-            Option.Some(c) => {
-                let nombre: string = to_lower(trim(substring(lineas[i], 0, c)));
-                let valor: string = trim(substring(lineas[i], c + 1, len(lineas[i])));
-                insert(headers, nombre, valor);
-            },
-            Option.None => {},
-        }
-        i = i + 1;
-    }
+            // Cabeceras (nombre en minúsculas para lookup case-insensitive).
+            var headers: Map<string, string> = map_new();
+            var i: int = 1;
+            while (i < len(lineas)) {
+                match (index_of(lineas[i], ":")) {
+                    Option.Some(c) => {
+                        let nombre: string = to_lower(trim(substring(lineas[i], 0, c)));
+                        let valor: string = trim(substring(lineas[i], c + 1, len(lineas[i])));
+                        insert(headers, nombre, valor);
+                    },
+                    Option.None => {},
+                }
+                i = i + 1;
+            }
 
-    // Cuerpo: si hay Content-Length, completar la lectura hasta esa longitud.
-    match (get(headers, "content-length")) {
-        Option.Some(cl) => {
-            match (parse_int(cl)) {
-                Option.Some(n) => {
-                    var faltan: bool = true;
-                    while (faltan && len(body) < n) {
-                        match (socket_read(conn)) {
-                            Result.Ok(trozo) => {
-                                if (len(trozo) == 0) { faltan = false; } else { body = body + trozo; }
-                            },
-                            Result.Err(e) => { return Result.Err("error al leer el cuerpo: " + e); },
-                        }
+            // Cuerpo: si hay Content-Length (octetos), completar la lectura hasta esa longitud.
+            match (get(headers, "content-length")) {
+                Option.Some(cl) => {
+                    match (parse_int(cl)) {
+                        Option.Some(n) => {
+                            var faltan: bool = true;
+                            while (faltan && len(body) < n) {
+                                match (socket_read_bytes(conn)) {
+                                    Result.Ok(trozo) => {
+                                        if (len(trozo) == 0) { faltan = false; } else { body = body + trozo; }
+                                    },
+                                    Result.Err(e) => { return Result.Err("error al leer el cuerpo: " + e); },
+                                }
+                            }
+                        },
+                        Option.None => {},
                     }
                 },
                 Option.None => {},
             }
-        },
-        Option.None => {},
-    }
 
-    Result.Ok(Request { method: method, path: path, headers: headers, body: body })
+            Result.Ok(Request { method: method, path: path, headers: headers, body: body })
+        },
+    }
 }
 
 // --- Escritura de la respuesta ---
 
 pub fn send_response(conn: int, r: Response) -> Result<int, string> {
-    var out: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
-    out = out + "Content-Length: " + to_string(len(r.body)) + "\r\n";
-    out = out + "Connection: close\r\n";
+    // Cabecera = texto (Content-Length en octetos, ya correcto); cuerpo = bytes crudos. Se envía todo
+    // junto como bytes para no corromper un cuerpo binario.
+    var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
+    head = head + "Content-Length: " + to_string(len(r.body)) + "\r\n";
+    head = head + "Connection: close\r\n";
     // Cabeceras del usuario (keys() está ordenada → salida determinista).
     let ks: [string] = keys(r.headers);
     var i: int = 0;
     while (i < len(ks)) {
         match (get(r.headers, ks[i])) {
-            Option.Some(v) => { out = out + ks[i] + ": " + v + "\r\n"; },
+            Option.Some(v) => { head = head + ks[i] + ": " + v + "\r\n"; },
             Option.None => {},
         }
         i = i + 1;
     }
-    out = out + "\r\n" + r.body;
-    socket_write(conn, out)
+    head = head + "\r\n";
+    socket_write_bytes(conn, to_bytes(head) + r.body)
 }
 
 // --- SSE (server-sent events): HTTP que no cierra y va emitiendo eventos ---

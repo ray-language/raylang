@@ -53,7 +53,7 @@ fn run_with_libs(name: &str, driver: &str, vm: bool) -> (String, i32) {
 }
 
 const DRIVER: &str = r#"
-from http import fetch, header;
+from http import fetch, header, body_text;
 from json import parse, stringify;
 
 fn main() -> int {
@@ -64,10 +64,15 @@ fn main() -> int {
                 Option.Some(ct) => print(ct),
                 Option.None => print("(sin content-type)"),
             };
-            // Componer con la librería JSON: parsear el cuerpo y re-serializar canónico.
-            match (parse(resp.body)) {
-                Result.Ok(j) => print(stringify(j)),
-                Result.Err(e) => print("json err: " + e),
+            // M19.2: el cuerpo es bytes → decodificar a texto antes de parsearlo como JSON.
+            match (body_text(resp)) {
+                Result.Ok(texto) => {
+                    match (parse(texto)) {
+                        Result.Ok(j) => print(stringify(j)),
+                        Result.Err(e) => print("json err: " + e),
+                    }
+                },
+                Result.Err(e) => print("utf8 err: " + e),
             };
             0
         },

@@ -171,6 +171,16 @@ pub fn substring_chars(s: &str, i: i64, j: i64) -> String {
     chars[lo as usize..hi as usize].iter().collect()
 }
 
+/// Sub-secuencia `[i, j)` de `bytes` por índice de **octeto**, con *clamp* al rango válido (M19.2): el
+/// análogo de `substring_chars` para datos binarios → nunca falla en runtime. Helper compartido por
+/// ambos motores (`sub_bytes`). Es lo que permite cortar cabeceras (texto) de cuerpo (binario) en HTTP.
+pub fn sub_bytes_octets(b: &[u8], i: i64, j: i64) -> Vec<u8> {
+    let n = b.len() as i64;
+    let lo = i.clamp(0, n);
+    let hi = j.clamp(lo, n); // hi >= lo → rango vacío si i > j
+    b[lo as usize..hi as usize].to_vec()
+}
+
 // --- I/O con buffering: registro de archivos abiertos (M11.8) ---
 //
 // Un handle de archivo es un `int`: NO hay un nuevo tipo de valor ni se toca el GC. Los archivos
@@ -698,6 +708,15 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::Int { return Err((Some(1), format!("substring espera un int como inicio, no {}", a[1]))); }
         if a[2] != Type::Int { return Err((Some(2), format!("substring espera un int como fin, no {}", a[2]))); }
         Ok(Type::String)
+    } },
+    // sub_bytes(b, i, j) -> bytes (M19.2): sub-secuencia [i, j) por índice de octeto (con clamp). El
+    // análogo de substring para datos binarios; corta cabeceras/cuerpo de HTTP sobre bytes.
+    Builtin { name: "sub_bytes", opcode: OpCode::SubBytes, check: |a| {
+        arity(a, 3, "sub_bytes", " (bytes, inicio, fin)")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("sub_bytes espera bytes como primer argumento, no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("sub_bytes espera un int como inicio, no {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("sub_bytes espera un int como fin, no {}", a[2]))); }
+        Ok(Type::Bytes)
     } },
     // repeat(s, n) -> string (M11.7a): `s` repetido `n` veces (`n<=0` → "").
     Builtin { name: "repeat", opcode: OpCode::Repeat, check: |a| {

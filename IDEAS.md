@@ -37,7 +37,7 @@
 | **Anotaciones** (`@test`, `@derive`, …) | Parser + fase que las consume | **M10** | ✅ conjunto cerrado: `@test` + runner, `@derive(Eq, Show)` (genera el `impl`). `@delegate`/macros de usuario → diferidos |
 | **API de runtime / I/O** (`args`, `input`, `env`) | Builtins / stdlib | **M11** | ✅ `args`/`input`/`read_int`/`env`/`eprint` + I/O de archivos (`read_file`/`write_file`/`exists`/`append_file`/handles con buffering). `main` sin parámetros |
 | **stdlib** (orden superior / string / I/O / arreglos) | prelude + builtins | **M7/M11** | ✅ `map`/`filter`/`fold` (M7.3) + string completa (M11.1/4/7a) + arreglos (`+`/`reverse`/`pop`/`contains`/`position`, M11.7b) + `sort`+`Ord` (M11.7d). Registro único de builtins (L1) |
-| **Optimización de la VM** | `bytecode`/`compiler`/`vm` | transversal **(activo)** | 🚧 DESIGN §27. Foco actual tras **aparcar M18** (backend nativo) por decisión del usuario. Principio: **incremental y midiendo** — banco `bench/` (fib/bucle/arreglos + `measure.py` mejor-de-N) y se conserva solo lo que supera el ruido (~3–5 %), con el oráculo VM↔intérprete intacto. ✅ LTO/`codegen-units=1` **descartado** (medido, no mejora) · ✅ **Opt.3** fast-path entero en ops binarias (fib(35) −5 %, bucle 10M −6 %). Pendiente a medir: `new_locals` sin branch sin-capturas, punto seguro del GC solo en asignaciones/back-edges, evitar clon de constantes `Str`/`Bytes`, `children()` del GC sin `Vec` por objeto |
+| **Optimización de la VM** | `bytecode`/`compiler`/`vm` | transversal **(activo)** | 🚧 DESIGN §27, registro medido en §11. Foco tras **aparcar M18** (backend nativo) por decisión del usuario. Principio: **incremental y midiendo** — banco `benchmarks/` (`bench.sh`+hyperfine o `measure.py` sin deps) y se conserva solo lo que supera el ruido (~3–5 %), oráculo VM↔intérprete intacto. Opt.1/Opt.2 ✅ (pase previo); Opt.3 `Rc<str>` ❌. ✅ **Opt.4** fast-path entero en ops binarias (fib(35) −5 %, bucle 10M −6 %); Opt.5 (`new_locals`)/Opt.6 (safepoint GC)/LTO ❌ descartados. Pendiente: Opt.7 dedup constantes, Opt.8 peephole, `HeapValue` 32→16 B, `children()` del GC sin `Vec` por objeto |
 | **Backend nativo** (bootstrap sin Rust) | codegen a máquina/asm/C/Rust | **M18** | 💤 **aparcado** (decisión del usuario, 2026-06): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va a la optimización de la VM. Opciones barajadas: asm (as+ld), máquina directa, C, transpilar a Rust→rustc. Se retoma más adelante |
 | **Asperezas de M3** | Parser + checker | hecho | ✅ `[]` en campo de struct (M6.2) y coma final en arreglos (limpieza) resueltos |
 
@@ -327,7 +327,19 @@ bloquea nada y se hace de forma incremental, midiendo con `benchmarks/`.
   muchas veces sin construir, p. ej. `self.src` del lexer auto-alojado); no compensa el coste de
   construcción ni el riesgo de codegen. Reconsiderar solo con un perfil que muestre el clon de strings
   dominando (string interning sería una alternativa con menos churn de construcción).
-- Siguiente (no aplicados): **Opt.4** deduplicar constantes (menor), **Opt.5** peephole/plegado (menor);
+- **Opt.4 — fast-path entero en ops binarias** ✅ (jun 2026, `measure.py` mejor-de-5): en el brazo de
+  operaciones binarias del lazo, si ambos operandos son `Int` (caso dominante en bucles/recursión) se
+  resuelve la operación **en el sitio**, evitando el doble match (`bin @ (...)` + el rematcheo de opcode y
+  ~30 tipos dentro de `apply_binary`) y la llamada a `apply_binary`. Semántica idéntica → oráculo intacto.
+  **fib(35) −5 %, bucle 10M −6 %** (`arrays` sin cambio, no es aritmético).
+- **Opt.5 — `new_locals` sin branch para funciones sin capturas** ❌ **descartado** (medido dentro del
+  ruido): las funciones calientes (fib) tienen pocos locales, el branch estaba bien predicho.
+- **Opt.6 — safepoint del GC amortizado** ❌ **descartado**: techo ~2-3 % pero rompe el modo estrés del GC
+  (colectar en cada punto seguro caza raíces faltantes); capturarlo bien exige mover el safepoint a los
+  sitios de asignación + back-edges → riesgo sobre el test sagrado del GC, no compensa por ~2-3 %.
+- **LTO + `codegen-units=1`** ❌ **descartado** (medido: igual o peor que el perfil por defecto).
+- Siguiente (no aplicados): **Opt.7** deduplicar constantes (menor), **Opt.8** peephole/plegado (menor),
+  reducir `HeapValue` de 32→16 bytes (boxear `Str`/`Bytes`; a ese tamaño el memcpy ya es barato, dudoso);
   el gran salto restante sería **locales en la pila de operandos** (estilo clox: quita la indirección del
   `Vec` por marco, pero Opt.2 ya capturó la asignación) — refactor grande, ROI decreciente.
 

@@ -255,11 +255,12 @@ impl<'a> Vm<'a> {
                 | OpCode::GreaterEqual) => {
                     let right = self.pop();
                     let left = self.pop();
-                    // Opt.3: fast-path entero. En la inmensa mayoría de programas (bucles, recursión
+                    // Opt.4: fast-path entero. En la inmensa mayoría de programas (bucles, recursión
                     // aritmética) ambos operandos son `Int`; resolverlo aquí evita el doble match y la
                     // llamada a `apply_binary` (que rematchea opcode + ~30 combinaciones de tipos).
                     // Medido (mejor de 5, release): fib(35) -5%, bucle aritmético 10M -6%. Semántica
                     // idéntica al camino general (mismos `+`/`-`/`*`; en debug ambos hacen panic al overflow).
+                    // (Opt.1/Opt.2 ya aplicadas; Opt.3 = `Rc<str>`, evaluada y descartada → por eso esto es Opt.4.)
                     if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         let (a, b) = (*a, *b);
                         let r = match bin {

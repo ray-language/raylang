@@ -116,6 +116,19 @@
 - [Protocolos en raylang: JSON y HTTP](m15/protocolos.md)
 - [El servidor concurrente](m15/concurrente.md)
 
+# M16 — El tipo bytes
+
+- [Datos binarios: el tipo bytes](m16/bytes.md)
+
+# M17 — E/S asíncrona real
+
+- [epoll y kqueue: readiness del SO](m17/readiness.md)
+
+# M19 — La capa web
+
+- [Un servidor web concurrente y SSE](m19/servidor-web.md)
+- [HTTP en bytes](m19/http-bytes.md)
+
 # Optimización de la VM
 
 - [Medir, cambiar, a veces revertir](opt/intro.md)

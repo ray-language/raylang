@@ -71,7 +71,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M17** | **`epoll`/`kqueue`** (readiness real, sustituye el busy-poll de M15.5) | E/S asíncrona del SO, `unsafe` acotado, FFI cero-deps | ✅ §26: poller del SO (`kqueue` macOS/BSD, `epoll` Linux) en `src/poll.rs`; FFI propio (`extern "C"`, sin el crate `libc` → invariante cero-deps); el scheduler de la VM se **bloquea** hasta readiness real y despierta **solo** las fibras de los fds listos (`io_parked` lleva ahora el `fd`); fallback al busy-poll de M15.5 en plataformas sin poller o EINTR; comportamiento idéntico (regresión: tests de M15.5/red concurrente). **M17 COMPLETO** (diferido: cesión en `socket_write`, registro persistente del poller, `bytes`/TLS en el toolchain auto-alojado) |
 | **M18** | **backend nativo** (bootstrap sin Rust) | codegen a máquina/LLVM/C | 💤 **aparcado** (decisión del usuario): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va al transversal de optimización de la VM. Se retoma más adelante |
 | **M19** | **la capa web** (servidor HTTP async + SSE · HTTP en bytes · WebSockets `ws://` · TLS) | protocolos de alto nivel como librería raylang sobre los sockets/scheduler; criptografía vs. cero-deps | 🚧 §28: ✅ **M19.1** servidor web async + SSE (librería `webserver.ray` sobre el servidor concurrente de M15.5/M17; cero runtime) · ✅ **M19.2** HTTP en `bytes` (builtin `sub_bytes` + cliente `http.ray` y servidor `webserver.ray` con cuerpo `bytes`; round-trip binario `\x00`/`\xff` intacto) · **M19.3** WebSockets `ws://` (handshake SHA-1+base64 en raylang + framing con `bytes`) · **M19.4** TLS/SSL (**bloqueado por la invariante cero-deps**: pediría criptografía; decisión pendiente — excepción de dependencia o *shell-out* a `openssl`). `wss`/`https` dependen de M19.4 |
-| **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) 🚧 | rendimiento, bootstrapping | 🚧 §27: banco de pruebas `bench/` (fib/bucle/arreglos + `measure.py`, mejor-de-N); regla **medir-antes-y-después, conservar solo lo que supera el ruido**. ✅ LTO/`codegen-units=1` **descartado** (no mejora, medido) · ✅ **Opt.3** fast-path entero en el lazo de ops binarias (evita el doble match + la llamada a `apply_binary`; fib(35) −5%, bucle 10M −6%; oráculo VM↔intérprete intacto, semántica idéntica) |
+| **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) 🚧 | rendimiento, bootstrapping | 🚧 §27: banco `benchmarks/` (`bench.sh`+hyperfine, o `measure.py` sin deps; fib/bucle/arreglos, mejor-de-N); regla **medir-antes-y-después, conservar solo lo que supera el ruido**. Opt.1/Opt.2 ✅ (pase previo), Opt.3 (`Rc<str>`) ❌ descartada. ✅ **Opt.4** fast-path entero en el lazo de ops binarias (evita el doble match + la llamada a `apply_binary`; fib(35) −5%, bucle 10M −6%; oráculo VM↔intérprete intacto, semántica idéntica) · LTO/`codegen-units=1` **descartado** (no mejora, medido) |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
 > que cada uno se especifica en su propia sección al arrancarlo (M12 → §21, M13 → §22, M14 → §23,
@@ -3724,44 +3724,49 @@ midiendo**: nada de optimizar a ciegas. Cada cambio se mide antes y después, y 
 mejora supera el ruido** de medición; el oráculo VM↔intérprete debe quedar intacto en cada paso (las
 optimizaciones cambian *cómo* se ejecuta, nunca *qué* resultado se produce).
 
-### 27.1 El banco de pruebas (`bench/`)
+### 27.1 El banco de pruebas (`benchmarks/`)
 
-Tres cargas que estresan ejes distintos de la VM, más un arnés de medición:
+El banco vive en `benchmarks/`, con dos arneses y varias cargas que estresan ejes distintos de la VM:
 
-- `bench/fib.ray` / `fib35.ray` — recursión: llamadas, marcos, despacho, aritmética.
-- `bench/loop.ray` — bucle aritmético apretado: pila de operandos, saltos, aritmética entera.
-- `bench/arrays.ray` — asignación en heap + GC: construir y recorrer arreglos en bucle.
-- `bench/measure.py` — corre cada caso N veces sobre el binario de **release** y reporta el **mejor
-  tiempo** (el mejor-de-N filtra el ruido del planificador del SO mejor que la media). Compara la
-  misma carga entre builds; el arranque (parse/check/compile) es coste constante → los deltas son fieles.
+- `benchmarks/bench.sh` — compara intérprete vs. VM con **hyperfine** (`fib.ray`, `strings.ray`).
+- `benchmarks/measure.py` — alternativa **sin hyperfine** (solo python3): corre cada caso N veces sobre
+  el binario de **release** y reporta el **mejor tiempo** (mejor-de-N filtra el ruido del planificador del
+  SO mejor que la media). Compara la misma carga entre builds; el arranque (parse/check/compile) es coste
+  constante → los deltas son fieles.
+- Cargas: `fib.ray`/`fib35.ray` (recursión: llamadas, marcos, despacho), `loop.ray` (bucle aritmético
+  apretado: pila, saltos, aritmética entera), `arrays.ray` (asignación en heap + GC).
 
-No es `cargo bench` (pediría `criterion`, una dependencia → rompería la invariante cero-deps). El ruido
-típico observado es ~3–5 %; una optimización debe superarlo con holgura y de forma **consistente entre
-cargas** para considerarse real.
+No se usa `cargo bench` (pediría `criterion`, una dependencia → rompería la invariante cero-deps). El
+ruido típico observado es ~3–5 %; una optimización debe superarlo con holgura y de forma **consistente
+entre cargas** para considerarse real.
+
+(Numeración: **Opt.1** «instrucción prestada» y **Opt.2** «pool de locales» se aplicaron en un pase
+previo; **Opt.3** = `Rc<str>` se evaluó y descartó —ver `IDEAS.md` §11—. De ahí que lo de este pase
+empiece en Opt.4.)
 
 ### 27.2 Resultados
 
+- **Opt.4 — fast-path entero** (sobre Opt.1/Opt.2). En el brazo de operaciones binarias del lazo, si
+  ambos operandos son `Int` (el caso dominante en bucles y recursión aritmética) se resuelve la operación
+  **en el sitio**, evitando el doble match (el `bin @ (...)` del lazo + el rematcheo de opcode y ~30
+  combinaciones de tipos dentro de `apply_binary`) y la llamada a `apply_binary`. La semántica es
+  **idéntica** al camino general (mismos `+`/`-`/`*`/…; en debug ambos hacen panic al desbordar) → el
+  oráculo no se entera. Medido (mejor de 5, release): **fib(35) −5 %, bucle 10M −6 %**; `arrays` sin
+  cambio (no es aritmético, como se esperaba).
 - **Perfil de release (LTO + `codegen-units=1`): descartado.** La hipótesis natural (inline a través de
   módulos del lazo de despacho) **no se materializó**: medido, tanto LTO «fat» como «thin» salieron
   iguales o ligeramente peores que el perfil por defecto. El perfil se quedó por defecto. (Ejemplo
   canónico de por qué se mide antes de comprometer.)
-- **Opt.3 — fast-path entero** (sobre Opt.1 «instrucción prestada» y Opt.2 «pool de locales»). En el
-  brazo de operaciones binarias del lazo, si ambos operandos son `Int` (el caso dominante en bucles y
-  recursión aritmética) se resuelve la operación **en el sitio**, evitando el doble match (el `bin @ (...)`
-  del lazo + el rematcheo de opcode y ~30 combinaciones de tipos dentro de `apply_binary`) y la llamada a
-  `apply_binary`. La semántica es **idéntica** al camino general (mismos `+`/`-`/`*`/…; en debug ambos
-  hacen panic al desbordar) → el oráculo no se entera. Medido (mejor de 5, release): **fib(35) −5 %, bucle
-  10M −6 %**; `arrays` sin cambio (no es aritmético, como se esperaba).
 
 ### 27.3 Medidas y rechazadas (la disciplina en acción)
 
-- **Opt.4 — `new_locals` sin el branch por slot para funciones sin capturas** (flag `has_captures`
+- **Opt.5 — `new_locals` sin el branch por slot para funciones sin capturas** (flag `has_captures`
   precomputado + `resize` en vez del bucle con `captured.get(s)`): **medido dentro del ruido** → revertido.
   La causa: las funciones calientes (p. ej. `fib`) tienen pocos locales, el branch estaba bien predicho.
-- **Safepoint del GC amortizado** (chequear `should_collect()` 1 de cada N instrucciones): techo medido
-  ~2-3 % en fib/loop, pero **incorrecto** — rompe el **modo estrés** del GC (que colecta en cada punto
-  seguro para cazar raíces faltantes). Capturarlo bien exigiría mover el safepoint a solo los sitios de
-  asignación + back-edges preservando el estrés: rediseño con riesgo sobre el test sagrado del GC →
+- **Opt.6 — safepoint del GC amortizado** (chequear `should_collect()` 1 de cada N instrucciones): techo
+  medido ~2-3 % en fib/loop, pero **incorrecto** — rompe el **modo estrés** del GC (que colecta en cada
+  punto seguro para cazar raíces faltantes). Capturarlo bien exigiría mover el safepoint a solo los sitios
+  de asignación + back-edges preservando el estrés: rediseño con riesgo sobre el test sagrado del GC →
   diferido, no compensa por ~2-3 %.
 
 ### 27.4 Pendiente / ideas a medir

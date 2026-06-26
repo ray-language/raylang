@@ -69,8 +69,8 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete) · ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port`; `OpenHandle::Listener`; servidor secuencial bloqueante; subproceso con el `.ray` de servidor) · ✅ **M15.4a** JSON (librería `examples/json.ray` en raylang: `parse`/`stringify`, objetos `Map<string,Json>`, salida canónica; cero runtime; subproceso golden) · ✅ **M15.4b** HTTP (librería `examples/http.ray` en raylang sobre TCP: `fetch`/`request`/`header`, parseo de URL/respuesta; compone con `json`; subproceso vs. servidor de juguete) · ✅ **M15.5** (capstone) sockets no bloqueantes + scheduler de M12 (`tcp_accept`/`socket_read` ceden la fibra; busy-poll cooperativo, `io_parked`, cero deps; servidor concurrente con `spawn`; solo VM). **M15 COMPLETO** (diferido: cesión en `socket_write`, `epoll`, bytes/TLS) |
 | **M16** | **tipo `bytes`** (datos binarios) | nuevo tipo en el pipeline, literal `b"..."`, I/O binaria | ✅ §25: ✅ **M16.1a** el tipo (literal `b"..."` con `\xNN`, `len`/index→int/`==`; oráculo) · ✅ **M16.1b** string-interop (`to_bytes`/`from_utf8` + `+`; oráculo) · ✅ **M16.1c** I/O binaria (`read_file_bytes`/`write_file_bytes`/`socket_read_bytes`/`socket_write_bytes`; lecturas → `[bytes]` etiquetado; socket cede al scheduler; subproceso). **M16 COMPLETO** (cierra la deuda binaria de M15). Diferido: `bytes` como clave de Map, mutabilidad |
 | **M17** | **`epoll`/`kqueue`** (readiness real, sustituye el busy-poll de M15.5) | E/S asíncrona del SO, `unsafe` acotado, FFI cero-deps | ✅ §26: poller del SO (`kqueue` macOS/BSD, `epoll` Linux) en `src/poll.rs`; FFI propio (`extern "C"`, sin el crate `libc` → invariante cero-deps); el scheduler de la VM se **bloquea** hasta readiness real y despierta **solo** las fibras de los fds listos (`io_parked` lleva ahora el `fd`); fallback al busy-poll de M15.5 en plataformas sin poller o EINTR; comportamiento idéntico (regresión: tests de M15.5/red concurrente). **M17 COMPLETO** (diferido: cesión en `socket_write`, registro persistente del poller, `bytes`/TLS en el toolchain auto-alojado) |
-| **M18** | **backend nativo** (bootstrap sin Rust) | codegen a máquina/LLVM/C | 📋 planificado |
-| **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) ⏳ | rendimiento, bootstrapping | 🚧 |
+| **M18** | **backend nativo** (bootstrap sin Rust) | codegen a máquina/LLVM/C | 💤 **aparcado** (decisión del usuario): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va al transversal de optimización de la VM. Se retoma más adelante |
+| **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) 🚧 | rendimiento, bootstrapping | 🚧 §27: banco de pruebas `bench/` (fib/bucle/arreglos + `measure.py`, mejor-de-N); regla **medir-antes-y-después, conservar solo lo que supera el ruido**. ✅ LTO/`codegen-units=1` **descartado** (no mejora, medido) · ✅ **Opt.3** fast-path entero en el lazo de ops binarias (evita el doble match + la llamada a `apply_binary`; fib(35) −5%, bucle 10M −6%; oráculo VM↔intérprete intacto, semántica idéntica) |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
 > que cada uno se especifica en su propia sección al arrancarlo (M12 → §21, M13 → §22, M14 → §23,
@@ -3713,3 +3713,48 @@ Cesión en `socket_write` (sigue girando en buffer lleno, como M15.5); un regist
 poller (re-registrar fds entre esperas en vez de un poller efímero — más eficiente con muchas conexiones,
 pero exige gestión de altas/bajas); `epoll`/`kqueue` con *edge-triggered*; `bytes`/TLS en el toolchain
 auto-alojado. El `unsafe` queda confinado a `src/poll.rs` (los syscalls), con su contrato documentado.
+
+
+## 27. Optimización de la VM de Rust (transversal)
+
+Con el backend nativo (M18) **aparcado** por decisión del usuario, el hilo de rendimiento abierto es
+optimizar la VM de bytecode existente. El principio rector, fijado con el usuario, es **incremental y
+midiendo**: nada de optimizar a ciegas. Cada cambio se mide antes y después, y **solo se conserva si la
+mejora supera el ruido** de medición; el oráculo VM↔intérprete debe quedar intacto en cada paso (las
+optimizaciones cambian *cómo* se ejecuta, nunca *qué* resultado se produce).
+
+### 27.1 El banco de pruebas (`bench/`)
+
+Tres cargas que estresan ejes distintos de la VM, más un arnés de medición:
+
+- `bench/fib.ray` / `fib35.ray` — recursión: llamadas, marcos, despacho, aritmética.
+- `bench/loop.ray` — bucle aritmético apretado: pila de operandos, saltos, aritmética entera.
+- `bench/arrays.ray` — asignación en heap + GC: construir y recorrer arreglos en bucle.
+- `bench/measure.py` — corre cada caso N veces sobre el binario de **release** y reporta el **mejor
+  tiempo** (el mejor-de-N filtra el ruido del planificador del SO mejor que la media). Compara la
+  misma carga entre builds; el arranque (parse/check/compile) es coste constante → los deltas son fieles.
+
+No es `cargo bench` (pediría `criterion`, una dependencia → rompería la invariante cero-deps). El ruido
+típico observado es ~3–5 %; una optimización debe superarlo con holgura y de forma **consistente entre
+cargas** para considerarse real.
+
+### 27.2 Resultados
+
+- **Perfil de release (LTO + `codegen-units=1`): descartado.** La hipótesis natural (inline a través de
+  módulos del lazo de despacho) **no se materializó**: medido, tanto LTO «fat» como «thin» salieron
+  iguales o ligeramente peores que el perfil por defecto. El perfil se quedó por defecto. (Ejemplo
+  canónico de por qué se mide antes de comprometer.)
+- **Opt.3 — fast-path entero** (sobre Opt.1 «instrucción prestada» y Opt.2 «pool de locales»). En el
+  brazo de operaciones binarias del lazo, si ambos operandos son `Int` (el caso dominante en bucles y
+  recursión aritmética) se resuelve la operación **en el sitio**, evitando el doble match (el `bin @ (...)`
+  del lazo + el rematcheo de opcode y ~30 combinaciones de tipos dentro de `apply_binary`) y la llamada a
+  `apply_binary`. La semántica es **idéntica** al camino general (mismos `+`/`-`/`*`/…; en debug ambos
+  hacen panic al desbordar) → el oráculo no se entera. Medido (mejor de 5, release): **fib(35) −5 %, bucle
+  10M −6 %**; `arrays` sin cambio (no es aritmético, como se esperaba).
+
+### 27.3 Pendiente / ideas a medir
+
+`new_locals` sin el branch por slot para funciones sin capturas; mover el punto seguro del GC a solo los
+sitios de asignación y los saltos hacia atrás (en vez de cada instrucción); evitar el clon de constantes
+`Str`/`Bytes` en bucles (internado o `Rc`); reducir el coste del `children()` del GC (hoy asigna un `Vec`
+por objeto trazado). Cada una **se acepta solo si la medición la respalda**.

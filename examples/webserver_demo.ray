@@ -1,0 +1,42 @@
+// M19.1 — demo del servidor web concurrente (usa la librería webserver.ray).
+//
+// Ejecútalo:  cargo run -- --vm examples/webserver_demo.ray
+// y prueba:
+//   curl http://127.0.0.1:8080/          -> "¡Hola desde raylang!"
+//   curl http://127.0.0.1:8080/saluda    -> JSON
+//   curl -N http://127.0.0.1:8080/sse    -> un stream SSE (5 eventos, 1/seg)
+//
+// Cada conexión se atiende en su propia fibra (spawn): muchas a la vez sobre un hilo. **Solo VM.**
+
+import webserver;
+
+// El handler de serve_raw recibe la petición YA parseada + la conexión (para responder o hacer SSE).
+fn enrutar(req: webserver.Request, conn: int) {
+    if (req.path == "/sse") {
+        // Streaming SSE: abre el stream y emite 5 eventos espaciados en el tiempo.
+        match (webserver.sse_open(conn)) { Result.Ok(_) => {}, Result.Err(e) => eprint(e) }
+        var i: int = 0;
+        while (i < 5) {
+            match (webserver.sse_event(conn, "evento " + to_string(i))) {
+                Result.Ok(_) => {}, Result.Err(e) => { eprint(e); i = 5; },
+            }
+            sleep(1000);
+            i = i + 1;
+        }
+    } else {
+        var resp: webserver.Response = webserver.not_found();
+        if (req.path == "/") { resp = webserver.ok("¡Hola desde raylang!\n"); }
+        if (req.path == "/saluda") { resp = webserver.json_response("{\"saludo\": \"hola\"}"); }
+        match (webserver.send_response(conn, resp)) {
+            Result.Ok(_) => {}, Result.Err(e) => eprint(e),
+        }
+    }
+}
+
+fn main() -> int {
+    // serve_raw da control de la conexión (lo necesita el SSE). Bucle infinito; Ctrl-C para parar.
+    match (webserver.serve_raw("127.0.0.1", 8080, enrutar)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => { eprint("no se pudo escuchar: " + e); 1 },
+    }
+}

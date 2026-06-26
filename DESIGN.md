@@ -70,6 +70,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M16** | **tipo `bytes`** (datos binarios) | nuevo tipo en el pipeline, literal `b"..."`, I/O binaria | ✅ §25: ✅ **M16.1a** el tipo (literal `b"..."` con `\xNN`, `len`/index→int/`==`; oráculo) · ✅ **M16.1b** string-interop (`to_bytes`/`from_utf8` + `+`; oráculo) · ✅ **M16.1c** I/O binaria (`read_file_bytes`/`write_file_bytes`/`socket_read_bytes`/`socket_write_bytes`; lecturas → `[bytes]` etiquetado; socket cede al scheduler; subproceso). **M16 COMPLETO** (cierra la deuda binaria de M15). Diferido: `bytes` como clave de Map, mutabilidad |
 | **M17** | **`epoll`/`kqueue`** (readiness real, sustituye el busy-poll de M15.5) | E/S asíncrona del SO, `unsafe` acotado, FFI cero-deps | ✅ §26: poller del SO (`kqueue` macOS/BSD, `epoll` Linux) en `src/poll.rs`; FFI propio (`extern "C"`, sin el crate `libc` → invariante cero-deps); el scheduler de la VM se **bloquea** hasta readiness real y despierta **solo** las fibras de los fds listos (`io_parked` lleva ahora el `fd`); fallback al busy-poll de M15.5 en plataformas sin poller o EINTR; comportamiento idéntico (regresión: tests de M15.5/red concurrente). **M17 COMPLETO** (diferido: cesión en `socket_write`, registro persistente del poller, `bytes`/TLS en el toolchain auto-alojado) |
 | **M18** | **backend nativo** (bootstrap sin Rust) | codegen a máquina/LLVM/C | 💤 **aparcado** (decisión del usuario): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va al transversal de optimización de la VM. Se retoma más adelante |
+| **M19** | **la capa web** (servidor HTTP async + SSE · HTTP en bytes · WebSockets `ws://` · TLS) | protocolos de alto nivel como librería raylang sobre los sockets/scheduler; criptografía vs. cero-deps | 📋 §28: **M19.1** servidor web async + SSE (librería `webserver.ray` sobre el servidor concurrente de M15.5/M17; cero runtime) · **M19.2** portar HTTP a `bytes` (coherencia binaria de M16 en el protocolo) · **M19.3** WebSockets `ws://` (handshake SHA-1+base64 en raylang + framing con `bytes`) · **M19.4** TLS/SSL (**bloqueado por la invariante cero-deps**: pediría criptografía; decisión pendiente — excepción de dependencia o *shell-out* a `openssl`). `wss`/`https` dependen de M19.4 |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) 🚧 | rendimiento, bootstrapping | 🚧 §27: banco de pruebas `bench/` (fib/bucle/arreglos + `measure.py`, mejor-de-N); regla **medir-antes-y-después, conservar solo lo que supera el ruido**. ✅ LTO/`codegen-units=1` **descartado** (no mejora, medido) · ✅ **Opt.3** fast-path entero en el lazo de ops binarias (evita el doble match + la llamada a `apply_binary`; fib(35) −5%, bucle 10M −6%; oráculo VM↔intérprete intacto, semántica idéntica) |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -3752,9 +3753,84 @@ cargas** para considerarse real.
   hacen panic al desbordar) → el oráculo no se entera. Medido (mejor de 5, release): **fib(35) −5 %, bucle
   10M −6 %**; `arrays` sin cambio (no es aritmético, como se esperaba).
 
-### 27.3 Pendiente / ideas a medir
+### 27.3 Medidas y rechazadas (la disciplina en acción)
 
-`new_locals` sin el branch por slot para funciones sin capturas; mover el punto seguro del GC a solo los
-sitios de asignación y los saltos hacia atrás (en vez de cada instrucción); evitar el clon de constantes
-`Str`/`Bytes` en bucles (internado o `Rc`); reducir el coste del `children()` del GC (hoy asigna un `Vec`
-por objeto trazado). Cada una **se acepta solo si la medición la respalda**.
+- **Opt.4 — `new_locals` sin el branch por slot para funciones sin capturas** (flag `has_captures`
+  precomputado + `resize` en vez del bucle con `captured.get(s)`): **medido dentro del ruido** → revertido.
+  La causa: las funciones calientes (p. ej. `fib`) tienen pocos locales, el branch estaba bien predicho.
+- **Safepoint del GC amortizado** (chequear `should_collect()` 1 de cada N instrucciones): techo medido
+  ~2-3 % en fib/loop, pero **incorrecto** — rompe el **modo estrés** del GC (que colecta en cada punto
+  seguro para cazar raíces faltantes). Capturarlo bien exigiría mover el safepoint a solo los sitios de
+  asignación + back-edges preservando el estrés: rediseño con riesgo sobre el test sagrado del GC →
+  diferido, no compensa por ~2-3 %.
+
+### 27.4 Pendiente / ideas a medir
+
+Reducir `HeapValue` de 32→16 bytes (boxear `Str`/`Bytes`; mucho churn, a ese tamaño el memcpy ya es
+barato → probablemente no pague); evitar el clon de constantes `Str`/`Bytes` en bucles (internado o `Rc`);
+reducir el coste del `children()` del GC (hoy asigna un `Vec` por objeto trazado, solo afecta a cargas
+GC-pesadas). Cada una **se acepta solo si la medición la respalda**.
+
+
+## 28. M19 — La capa web (servidor HTTP, SSE, WebSockets, TLS)
+
+M15 dio el transporte TCP (builtins) + un cliente HTTP y JSON como **librerías en raylang**, y M15.5/M17
+el servidor **concurrente** (una fibra por conexión, `accept`/`read` ceden al scheduler, readiness por
+`kqueue`/`epoll`). M16 añadió `bytes` (octetos crudos) y lo cableó en los sockets. Sobre esa base, M19
+construye la **capa de aplicación web**, en cuatro puntos de dificultad creciente. La filosofía de M15 se
+mantiene: **transporte/cómputo = builtins; protocolos = librería en raylang** (cero runtime salvo donde
+sea inevitable). El gran condicionante es la **invariante cero-deps de Cargo**, que choca de frente con
+TLS (M19.4).
+
+### 28.1 M19.1 — servidor web async + SSE
+
+Una librería `examples/webserver.ray` (como `http.ray`/`json.ray`: importable, cero runtime) sobre el
+servidor concurrente de M15.5/M17. Da el "servidor web async" de verdad: muchas conexiones a la vez en un
+hilo. Piezas:
+
+- `Request { method, path, headers: Map<string,string>, body }` y `Response { status, headers, body }`
+  (espejo del `Response` del cliente HTTP de M15.4b).
+- `read_request(conn) -> Result<Request, string>`: acumula `socket_read` hasta `\r\n\r\n` (fin de
+  cabeceras), parsea la línea de petición + cabeceras (nombre en minúsculas para lookup); si hay
+  `Content-Length`, sigue leyendo hasta completar el cuerpo.
+- `send_response(conn, Response)`: serializa línea de estado + cabeceras (+ `Content-Length`,
+  `Connection: close`) + cuerpo y `socket_write`.
+- Atajos: `ok(body)`, `text(status, body)`, `not_found()`, `json_response(body)`.
+- `serve(host, port, handler: fn(Request) -> Response)`: `tcp_listen` + bucle `accept → spawn(atender)`,
+  concurrente (cada conexión en su fibra). `serve_raw(host, port, handler: fn(Request, int) -> unit)` da
+  control total de la conexión (lo necesita SSE); `serve` se define sobre `serve_raw`.
+- **SSE (server-sent events)**: es HTTP que no cierra. `sse_open(conn)` escribe `200` +
+  `Content-Type: text/event-stream` + `Connection: keep-alive`; `sse_event(conn, data)` escribe
+  `data: <…>\n\n`; el handler (vía `serve_raw`) hace `sse_open` y luego un bucle de `sse_event`. **Cero
+  runtime nuevo**: todo es `socket_write` de strings sobre el servidor concurrente.
+
+**Prueba** (`tests/webserver_cli.rs`, subproceso, **solo VM** —la concurrencia lo es—): un servidor `.ray`
+acotado (sirve N conexiones vía `scope` y termina, imprime su puerto) que importa `webserver.ray`; un
+cliente de Rust hace un `GET`, comprueba estado/cabeceras/cuerpo; y un caso SSE que lee varios eventos
+`data:`. Mismo molde que `http_cli.rs` (copiar la librería + un `main.ray` driver al temporal).
+
+### 28.2 M19.2 — HTTP en `bytes`
+
+`http.ray` (cliente) y `webserver.ray` (servidor) usan hoy `socket_read`/`socket_write` **string** →
+un cuerpo binario (imagen, `.zip`) se corrompe (UTF-8 lossy). M19.2 los porta a `socket_read_bytes`/
+`socket_write_bytes` (M16.1c): cabeceras como texto (ASCII), cuerpo como `bytes`. Cierra la coherencia
+binaria de M16 en la capa de protocolo. Front-end puro (las variantes `_bytes` ya existen).
+
+### 28.3 M19.3 — WebSockets `ws://`
+
+Dos partes: (1) **handshake** — el cliente manda `Upgrade: websocket` + `Sec-WebSocket-Key`; el servidor
+responde con `Sec-WebSocket-Accept = base64(SHA-1(key + GUID))`. **SHA-1 y base64 son cómputo puro →
+se escriben en raylang** (sin builtins, sin deps), operando sobre `bytes` (M16). (2) **framing** — los
+mensajes van en tramas binarias (FIN/opcode/mask/length); se leen/escriben con `bytes`. **Cero runtime
+nuevo** (SHA-1/base64 en raylang + el framing con `bytes`/sockets ya disponibles); ambicioso pero
+autocontenido. `wss://` (sobre TLS) depende de M19.4.
+
+### 28.4 M19.4 — TLS / SSL
+
+El **bloqueo duro**. `https`/`wss` exigen TLS: criptografía real (AEAD tipo AES-GCM/ChaCha20-Poly1305,
+intercambio de claves ECDHE, certificados X.509, …). Implementarla a mano con seguridad es inviable, y
+la **invariante cero-deps** prohíbe `rustls`/`native-tls`. Opciones, **a decidir con el usuario**:
+(a) **excepción explícita** a la invariante para una dependencia de TLS bien acotada (lo pragmático);
+(b) ***shell-out*** a `openssl s_client`/un proxy local (mantiene cero-deps de Cargo, pero exige el
+binario `openssl` y un proceso externo); (c) **dejarlo fuera de alcance** y documentar que raylang habla
+HTTP/WS en claro (coherente con su carácter pedagógico). Hasta resolver esto, `https`/`wss` quedan fuera.

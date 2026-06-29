@@ -817,16 +817,31 @@ impl<'a> Vm<'a> {
                         HeapValue::Int(h) => h,
                         _ => unreachable!("el checker garantiza un int"),
                     };
-                    // M19.4a: una conexión TLS se lee bloqueando (rustls es síncrono), sin pasar por el
-                    // camino no bloqueante con cesión; el resto de sockets sí ceden al scheduler.
+                    // M19.4b: una conexión TLS se lee con su bomba no bloqueante (conduce el handshake/
+                    // descifrado); si bloquearía leyendo del peer, se aparca la fibra en el fd subyacente,
+                    // igual que un socket normal. El intérprete usa el camino bloqueante (no llega aquí).
                     if crate::builtins::is_tls_handle(handle) {
-                        let elems = match crate::builtins::socket_read_bytes_blocking(handle) {
-                            Ok(data) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)],
-                            Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())],
-                        };
-                        let h = self.heap.allocate(Obj::Array(elems));
-                        self.push(HeapValue::Obj(h));
-                        return Ok(None); // el ip ya avanzó; seguir con la siguiente instrucción
+                        match crate::builtins::tls_read_nb(handle) {
+                            Ok(Some(data)) => {
+                                let elems = vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)];
+                                let h = self.heap.allocate(Obj::Array(elems));
+                                self.push(HeapValue::Obj(h));
+                            }
+                            Err(e) => {
+                                let elems = vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())];
+                                let h = self.heap.allocate(Obj::Array(elems));
+                                self.push(HeapValue::Obj(h));
+                            }
+                            Ok(None) => {
+                                self.push(HeapValue::Int(handle));
+                                self.frames.last_mut().unwrap().ip -= 1;
+                                let fiber = self.take_current_fiber();
+                                let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
+                                self.io_parked.push(IoParked { fd, fiber });
+                                self.schedule_next(line, col)?;
+                            }
+                        }
+                        return Ok(None);
                     }
                     match crate::builtins::socket_read_bytes_nb(handle) {
                         Ok(Some(data)) => {
@@ -856,7 +871,13 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Int(handle), HeapValue::Bytes(data)) = (handle, data) else {
                         unreachable!("el checker garantiza int, bytes");
                     };
-                    let elems = match crate::builtins::socket_write_raw(handle, &data) {
+                    // M19.4b: las escrituras TLS cifran por su propia bomba (el socket es no bloqueante).
+                    let escrito = if crate::builtins::is_tls_handle(handle) {
+                        crate::builtins::tls_write_nb(handle, &data)
+                    } else {
+                        crate::builtins::socket_write_raw(handle, &data)
+                    };
+                    let elems = match escrito {
                         Ok(_) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
@@ -1202,8 +1223,8 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
-                // M19.4a: conexión TLS. A diferencia de TcpConnect NO se pone en no bloqueante (rustls
-                // es bloqueante en M19.4a; SocketReadBytes lo detecta y lee bloqueando, sin ceder).
+                // M19.4b: conexión TLS de cliente. La VM pone el socket en no bloqueante para que el I/O
+                // TLS (SocketReadBytes) pueda ceder la fibra, como con un socket plano.
                 OpCode::TlsConnect => {
                     let port = self.pop();
                     let host = self.pop();
@@ -1211,6 +1232,25 @@ impl<'a> Vm<'a> {
                         unreachable!("el checker garantiza string, int");
                     };
                     let elems = match crate::builtins::tls_connect(&host, port) {
+                        Ok(h) => {
+                            let _ = crate::builtins::tls_set_nonblocking(h);
+                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())]
+                        }
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M19.4b: envuelve un socket aceptado (ya no bloqueante) en una sesión TLS de servidor.
+                // El handshake lo conduce el primer SocketReadBytes, cediendo la fibra si bloquea.
+                OpCode::TlsAccept => {
+                    let key = self.pop();
+                    let cert = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Str(cert), HeapValue::Str(key)) = (handle, cert, key) else {
+                        unreachable!("el checker garantiza int, string, string");
+                    };
+                    let elems = match crate::builtins::tls_accept(handle, &cert, &key) {
                         Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };

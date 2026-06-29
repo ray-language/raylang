@@ -1307,6 +1307,17 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M19.4b: envuelve un socket aceptado en una sesión TLS de servidor → ["ok", handle]/["err",…].
+            "__tls_accept" => {
+                let arr = match (&values[0], &values[1], &values[2]) {
+                    (Value::Int(h), Value::Str(cert), Value::Str(key)) => match crate::builtins::tls_accept(*h, cert, key) {
+                        Ok(nh) => vec![Value::Str("ok".to_string()), Value::Str(nh.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza int, string, string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M15.2: lee del socket → ["ok", datos] o ["err", msg].
             "__socket_read" => {
                 let arr = match &values[0] {

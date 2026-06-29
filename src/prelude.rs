@@ -345,6 +345,20 @@ fn tls_connect(host: string, port: int) -> Result<int, string> {
     }
 }
 
+// M19.4b: envuelve un socket TCP ya aceptado (handle de tcp_accept) en una sesión TLS de servidor con
+// el certificado y la clave en PEM; Ok(handle) u Err. Reusa el handle. Solo VM (servidor concurrente).
+fn tls_accept(handle: int, cert: string, key: string) -> Result<int, string> {
+    let r = __tls_accept(handle, cert, key);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
 // Hace una lectura del socket; Ok(datos) ("" = EOF) u Err(mensaje).
 fn socket_read(h: int) -> Result<string, string> {
     let r = __socket_read(h);

@@ -196,15 +196,16 @@ enum OpenHandle {
     Writer(std::fs::File),
     Tcp(std::net::TcpStream),
     Listener(std::net::TcpListener),
-    /// M19.4: una conexión TLS de **cliente** (rustls). Guarda la sesión + el socket juntos (la sesión
-    /// es una máquina de estados mutable que no se puede clonar, a diferencia de `Tcp`); cada lectura/
-    /// escritura monta un `rustls::Stream` transitorio sobre ambos. Bloqueante (M19.4a).
-    Tls(Box<TlsClient>),
+    /// M19.4: una conexión TLS (cliente o servidor, rustls). Guarda la sesión + el socket juntos (la
+    /// sesión es una máquina de estados mutable que no se puede clonar, a diferencia de `Tcp`). El
+    /// intérprete la usa bloqueante (`rustls::Stream`); la VM, no bloqueante con cesión (M19.4b).
+    Tls(Box<TlsConn>),
 }
 
-/// Una conexión TLS de cliente: la sesión rustls + su socket TCP subyacente.
-struct TlsClient {
-    conn: rustls::ClientConnection,
+/// Una conexión TLS: la sesión rustls (cliente **o** servidor, vía el enum unificado `Connection`) +
+/// su socket TCP subyacente.
+struct TlsConn {
+    conn: rustls::Connection,
     sock: std::net::TcpStream,
 }
 
@@ -322,9 +323,9 @@ pub fn socket_write(h: i64, s: &str) -> Result<usize, String> {
 /// (gira en `WouldBlock`). Lo usan `socket_write` (M15.2) y `socket_write_bytes` (M16.1c).
 pub fn socket_write_raw(h: i64, bytes: &[u8]) -> Result<usize, String> {
     use std::io::Write;
-    // M19.4a: un handle TLS se escribe por su camino bloqueante (rustls cifra); el resto es TCP normal.
+    // M19.4: un handle TLS se cifra por la bomba TLS (sobre socket bloqueante, no gira). TCP normal si no.
     if is_tls_handle(h) {
-        return tls_write(h, bytes);
+        return tls_write_nb(h, bytes);
     }
     let mut stream = socket_clone(h)?;
     let mut off = 0;
@@ -339,16 +340,21 @@ pub fn socket_write_raw(h: i64, bytes: &[u8]) -> Result<usize, String> {
     Ok(bytes.len())
 }
 
-// --- Cliente TLS (M19.4a) ---
+// --- TLS (M19.4) ---
 //
-// La ÚNICA parte del runtime que usa una dependencia externa (`rustls`, decisión §28.4). Una conexión
-// TLS de cliente vive en el MISMO registro de handles (`OpenHandle::Tls`), así que `close(h)` la cierra
-// igual que un socket o un archivo. Es **bloqueante**: las lecturas/escrituras sostienen el lock del
-// registro mientras rustls procesa registros (correcto en el modelo M:1 cooperativo —ninguna otra fibra
-// corre durante una llamada bloqueante—; el servidor TLS no bloqueante es M19.4b).
+// La ÚNICA parte del runtime con una dependencia externa (`rustls`, decisión §28.4). Una conexión TLS
+// (cliente o servidor) vive en el MISMO registro de handles (`OpenHandle::Tls`), así que `close(h)` la
+// cierra igual que un socket o un archivo, y `socket_read_bytes`/`socket_write_bytes` la manejan (se
+// desvían a los caminos TLS). Dos modos de I/O sobre la MISMA sesión rustls:
+//   - **Bloqueante** (intérprete, sin scheduler): `rustls::Stream` sobre el socket bloqueante.
+//   - **No bloqueante con cesión** (VM, M19.4b): se conduce la máquina de estados a mano (`read_tls`/
+//     `write_tls`/`process_new_packets`) sobre un socket no bloqueante; si haría falta LEER del peer y
+//     bloquearía, se devuelve "WouldBlock" y la VM **aparca la fibra** en el fd (como un socket normal).
+//     Las escrituras (handshake/datos) caben casi siempre en el buffer de envío del SO; en el raro
+//     `WouldBlock` de escritura se gira (`yield_now`), porque el poller de M17 solo notifica lectura.
 
-/// La configuración de cliente TLS (raíces de confianza de Mozilla vía `webpki-roots`). Se construye
-/// una vez y se comparte; verifica el certificado del servidor como un navegador.
+/// La configuración de cliente TLS (raíces de Mozilla vía `webpki-roots` + `SSL_CERT_FILE`). Verifica
+/// el certificado del servidor como un navegador. Se construye una vez y se comparte.
 fn tls_client_config() -> std::sync::Arc<rustls::ClientConfig> {
     static C: std::sync::OnceLock<std::sync::Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
     C.get_or_init(|| {
@@ -372,59 +378,134 @@ fn tls_client_config() -> std::sync::Arc<rustls::ClientConfig> {
     .clone()
 }
 
-/// Abre una conexión TLS a `host:port` (handshake incluido en la primera I/O) y devuelve un handle.
-/// El nombre `host` se usa también para validar el certificado (SNI). Builtin `__tls_connect` (M19.4a).
+/// Abre una conexión TLS de cliente a `host:port` (handshake en la primera I/O); el `host` valida el
+/// certificado (SNI). Builtin `__tls_connect` (M19.4a).
 pub fn tls_connect(host: &str, port: i64) -> Result<i64, String> {
     let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
         .map_err(|_| format!("nombre de servidor inválido para TLS: {host}"))?;
-    let conn = rustls::ClientConnection::new(tls_client_config(), server_name)
+    let client = rustls::ClientConnection::new(tls_client_config(), server_name)
         .map_err(|e| e.to_string())?;
     let sock = std::net::TcpStream::connect((host, port as u16)).map_err(|e| e.to_string())?;
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
     reg.next += 1;
-    reg.open.insert(id, OpenHandle::Tls(Box::new(TlsClient { conn, sock })));
+    reg.open.insert(id, OpenHandle::Tls(Box::new(TlsConn { conn: rustls::Connection::Client(client), sock })));
     Ok(id)
 }
 
-/// ¿El handle `h` es una conexión TLS? Lo consultan los caminos de socket para desviarse al I/O TLS
-/// bloqueante (en vez del no bloqueante con cesión de la VM, que no aplica a TLS en M19.4a).
+/// Construye una configuración de servidor TLS a partir de los PEM de la cadena de certificados y la
+/// clave privada (M19.4b). Cada servidor puede tener su propio certificado, así que NO se cachea.
+fn tls_server_config(cert_pem: &str, key_pem: &str) -> Result<std::sync::Arc<rustls::ServerConfig>, String> {
+    use rustls::pki_types::pem::PemObject;
+    let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+        rustls::pki_types::CertificateDer::pem_slice_iter(cert_pem.as_bytes())
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("certificado inválido: {e}"))?;
+    if certs.is_empty() {
+        return Err("el PEM no contiene ningún certificado".to_string());
+    }
+    let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
+        .map_err(|e| format!("clave privada inválida: {e}"))?;
+    let cfg = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| e.to_string())?;
+    Ok(std::sync::Arc::new(cfg))
+}
+
+/// Convierte una conexión TCP ya aceptada (handle `h`, `OpenHandle::Tcp`) en una conexión TLS de
+/// **servidor** con el certificado/clave dados (M19.4b). Reusa el MISMO handle (saca el socket del
+/// registro y lo reinserta envuelto). El handshake ocurre en la primera I/O. Builtin `__tls_accept`.
+pub fn tls_accept(h: i64, cert_pem: &str, key_pem: &str) -> Result<i64, String> {
+    let config = tls_server_config(cert_pem, key_pem)?;
+    let server = rustls::ServerConnection::new(config).map_err(|e| e.to_string())?;
+    let mut reg = registry().lock().unwrap();
+    let sock = match reg.open.remove(&h) {
+        Some(OpenHandle::Tcp(s)) => s,
+        Some(otro) => { reg.open.insert(h, otro); return Err(format!("el handle {h} no es un socket TCP aceptado")); }
+        None => return Err(format!("handle inválido: {h}")),
+    };
+    reg.open.insert(h, OpenHandle::Tls(Box::new(TlsConn { conn: rustls::Connection::Server(server), sock })));
+    Ok(h)
+}
+
+/// ¿El handle `h` es una conexión TLS? Lo consultan los caminos de socket para desviarse al I/O TLS.
 pub fn is_tls_handle(h: i64) -> bool {
     matches!(registry().lock().unwrap().open.get(&h), Some(OpenHandle::Tls(_)))
 }
 
-/// Una lectura TLS bloqueante: descifra y devuelve hasta 64 KiB (`Vec` vacío en fin de stream). Un
-/// cierre sin `close_notify` (frecuente en servidores HTTP/1.1) se trata como EOF limpio.
-fn tls_read_bytes(h: i64) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-    let mut reg = registry().lock().unwrap();
-    match reg.open.get_mut(&h) {
-        Some(OpenHandle::Tls(tc)) => {
-            let mut stream = rustls::Stream::new(&mut tc.conn, &mut tc.sock);
-            let mut buf = [0u8; 65536];
-            match stream.read(&mut buf) {
-                Ok(n) => Ok(buf[..n].to_vec()),
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(Vec::new()),
-                Err(e) => Err(e.to_string()),
-            }
-        }
+/// Pone el socket subyacente de una conexión TLS en modo no bloqueante (lo hace la VM tras connect/
+/// accept, para que el I/O TLS pueda ceder la fibra). M19.4b.
+pub fn tls_set_nonblocking(h: i64) -> Result<(), String> {
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Tls(tc)) => tc.sock.set_nonblocking(true).map_err(|e| e.to_string()),
         _ => Err(format!("el handle {h} no es una conexión TLS")),
     }
 }
 
-/// Escribe `bytes` completos por la conexión TLS (los cifra). `Ok(nº de bytes)` o `Err`.
-fn tls_write(h: i64, bytes: &[u8]) -> Result<usize, String> {
+/// Drena las escrituras TLS pendientes (handshake/datos) al socket no bloqueante. Gira en `WouldBlock`
+/// (el buffer de envío rara vez se llena con tramas pequeñas; el poller de M17 solo notifica lectura).
+fn tls_flush_writes(tc: &mut TlsConn) -> Result<(), String> {
+    while tc.conn.wants_write() {
+        match tc.conn.write_tls(&mut tc.sock) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::yield_now(),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(())
+}
+
+/// Lectura TLS **no bloqueante** (VM, M19.4b): conduce el handshake/transporte y devuelve datos de
+/// aplicación. `Ok(Some(data))` = datos (vacío en cierre limpio), `Ok(None)` = bloquearía leyendo del
+/// peer (la VM aparca la fibra en el fd), `Err` en fallo de protocolo.
+pub fn tls_read_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
+    use std::io::Read;
+    let mut reg = registry().lock().unwrap();
+    let tc = match reg.open.get_mut(&h) {
+        Some(OpenHandle::Tls(tc)) => tc,
+        _ => return Err(format!("el handle {h} no es una conexión TLS")),
+    };
+    loop {
+        // 1) Enviar lo pendiente (ServerHello, datos…) antes de esperar al peer; si no, deadlock.
+        tls_flush_writes(tc)?;
+        // 2) ¿Hay ya texto plano descifrado disponible?
+        let mut buf = [0u8; 65536];
+        match tc.conn.reader().read(&mut buf) {
+            Ok(0) => return Ok(Some(Vec::new())),            // close_notify → EOF limpio
+            Ok(n) => return Ok(Some(buf[..n].to_vec())),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {} // no hay texto plano todavía
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(Some(Vec::new())),
+            Err(e) => return Err(e.to_string()),
+        }
+        // 3) Necesitamos más registros del peer: leer del socket (no bloqueante).
+        match tc.conn.read_tls(&mut tc.sock) {
+            Ok(0) => return Ok(Some(Vec::new())),            // el peer cerró el TCP
+            Ok(_) => {
+                tc.conn.process_new_packets().map_err(|e| e.to_string())?;
+                // tras procesar puede haber nuevas escrituras (handshake) o texto plano → reitera.
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(None), // aparcar en el fd
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
+/// Escritura TLS **no bloqueante** (VM, M19.4b): cifra `bytes` y los drena al socket. Las escrituras
+/// rara vez bloquean (tramas pequeñas); se completan en el sitio (girando en el raro `WouldBlock`).
+pub fn tls_write_nb(h: i64, bytes: &[u8]) -> Result<usize, String> {
     use std::io::Write;
     let mut reg = registry().lock().unwrap();
-    match reg.open.get_mut(&h) {
-        Some(OpenHandle::Tls(tc)) => {
-            let mut stream = rustls::Stream::new(&mut tc.conn, &mut tc.sock);
-            stream.write_all(bytes).map_err(|e| e.to_string())?;
-            stream.flush().map_err(|e| e.to_string())?;
-            Ok(bytes.len())
-        }
-        _ => Err(format!("el handle {h} no es una conexión TLS")),
-    }
+    let tc = match reg.open.get_mut(&h) {
+        Some(OpenHandle::Tls(tc)) => tc,
+        _ => return Err(format!("el handle {h} no es una conexión TLS")),
+    };
+    // Antes de cifrar datos de aplicación, asegúrate de que el handshake terminó (drena sus registros).
+    tls_flush_writes(tc)?;
+    tc.conn.writer().write_all(bytes).map_err(|e| e.to_string())?;
+    tls_flush_writes(tc)?;
+    Ok(bytes.len())
 }
 
 // --- I/O binaria (M16.1c) ---
@@ -456,9 +537,10 @@ pub fn socket_read_bytes_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
 /// EOF) o `Err`.
 pub fn socket_read_bytes_blocking(h: i64) -> Result<Vec<u8>, String> {
     use std::io::Read;
-    // M19.4a: un handle TLS se lee por su camino bloqueante (rustls descifra).
+    // M19.4: un handle TLS se lee por la bomba TLS. Sobre el socket bloqueante del intérprete, `read_tls`
+    // bloquea (nunca da WouldBlock), así que `tls_read_nb` actúa como lectura bloqueante.
     if is_tls_handle(h) {
-        return tls_read_bytes(h);
+        return Ok(tls_read_nb(h)?.unwrap_or_default());
     }
     let mut stream = socket_clone(h)?;
     let mut buf = [0u8; 65536];
@@ -495,6 +577,8 @@ pub fn raw_fd(h: i64) -> Option<i32> {
     match reg.open.get(&h) {
         Some(OpenHandle::Tcp(s)) => Some(s.as_raw_fd()),
         Some(OpenHandle::Listener(l)) => Some(l.as_raw_fd()),
+        // M19.4b: el fd del socket subyacente de una conexión TLS, para aparcar la fibra en el poller.
+        Some(OpenHandle::Tls(tc)) => Some(tc.sock.as_raw_fd()),
         _ => None,
     }
 }
@@ -1172,6 +1256,16 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__tls_connect", " (host, puerto)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__tls_connect espera un string (el host), no {}", a[0]))); }
         if a[1] != Type::Int { return Err((Some(1), format!("__tls_connect espera un int (el puerto), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __tls_accept(handle, cert, clave) -> [string] (M19.4b): envuelve un socket TCP ya aceptado en una
+    // sesión TLS de servidor con el certificado/clave PEM dados. ["ok", handle] o ["err", msg]. Prelude
+    // → Result<int,string>. El mismo handle se lee/escribe con socket_read_bytes/socket_write_bytes.
+    Builtin { name: "__tls_accept", opcode: OpCode::TlsAccept, check: |a| {
+        arity(a, 3, "__tls_accept", " (handle, cert, clave)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__tls_accept espera un int (el handle), no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__tls_accept espera un string (el certificado PEM), no {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__tls_accept espera un string (la clave PEM), no {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __socket_read(h) -> [string]: ["ok", datos] o ["err", msg]. Prelude → Result<string,string>.

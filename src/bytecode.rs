@@ -360,6 +360,10 @@ pub enum OpCode {
     /// etiquetado. Primitivo `__tls_connect` (M19.4a); el prelude → `Result<int,string>`. El handle se
     /// lee/escribe con los mismos `socket_*` (desvían a TLS) y se cierra con `close`.
     TlsConnect,
+    /// Saca la clave, el cert (strings) y el handle (int); envuelve un socket TCP aceptado en una sesión
+    /// **TLS de servidor** y empuja un `[string]` etiquetado. Primitivo `__tls_accept` (M19.4b); prelude
+    /// → `Result<int,string>`. Habilita servir `https`/`wss`.
+    TlsAccept,
     /// Saca un handle (int); hace una lectura del socket y empuja un `[string]` etiquetado
     /// (`["ok", datos]`/`["err", msg]`). Primitivo `__socket_read`; el prelude → `Result<string,string>`.
     SocketRead,

@@ -922,6 +922,17 @@ impl<'a> Vm<'a> {
                     };
                     self.push(HeapValue::Bytes(crate::builtins::sub_bytes_octets(&b, i, j)));
                 }
+                // M19.3c: construye bytes a partir de un [int] (objeto del heap), truncando a octeto.
+                OpCode::BytesOf => {
+                    let HeapValue::Obj(h) = self.pop() else {
+                        unreachable!("el checker garantiza un arreglo");
+                    };
+                    let octets: Vec<u8> = self.as_array(h).iter().map(|v| match v {
+                        HeapValue::Int(n) => (*n & 0xff) as u8,
+                        _ => unreachable!("el checker garantiza [int]"),
+                    }).collect();
+                    self.push(HeapValue::Bytes(octets));
+                }
                 OpCode::Repeat => {
                     let n = self.pop();
                     let s = self.pop();
@@ -2539,6 +2550,20 @@ mod tests {
         // Octetos crudos (incl. \x00/\xff) intactos.
         oracle_int("sub_bytes(b\"\\x00\\xff\\x10\", 1, 2)[0]");               // 255
         oracle_int("len(sub_bytes(b\"\\x00\\xff\\x10\", 0, 3))");             // 3
+    }
+
+    #[test]
+    fn bytes_of_oraculo() {
+        // M19.3c: construir bytes desde [int]. Indexar de vuelta da el mismo octeto.
+        oracle_int("len(bytes_of([72, 105]))");                               // 2
+        oracle_int("bytes_of([72, 105, 33])[1]");                             // 105
+        // Truncado a octeto (`& 255`): 256 → 0, 511 → 255, negativos envuelven.
+        oracle_int("bytes_of([256])[0]");                                     // 0
+        oracle_int("bytes_of([511])[0]");                                     // 255
+        // Round-trip con sub_bytes / igualdad de bytes.
+        oracle_int("if (bytes_of([65, 66]) == b\"AB\") { 1 } else { 0 }");    // 1
+        // Compone con concatenación de bytes (M16.1b): cabecera + carga.
+        oracle_int("len(bytes_of([129, 5]) + b\"hello\")");                   // 7
     }
 
     /// M13.1: Map en el oráculo. Las operaciones básicas dan el mismo resultado en ambos motores.

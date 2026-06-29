@@ -718,6 +718,16 @@ static BUILTINS: &[Builtin] = &[
         if a[2] != Type::Int { return Err((Some(2), format!("sub_bytes espera un int como fin, no {}", a[2]))); }
         Ok(Type::Bytes)
     } },
+    // bytes_of(xs) -> bytes (M19.3c): construye bytes a partir de un [int] (cada elemento se trunca a
+    // octeto con `& 255`). Es el **dual del indexado** `b[i]` (que ya lee un octeto como int, M16.1a):
+    // permite *construir* datos binarios octeto a octeto (tramas de WebSocket, cabeceras).
+    Builtin { name: "bytes_of", opcode: OpCode::BytesOf, check: |a| {
+        arity(a, 1, "bytes_of", " (arreglo de int)")?;
+        match &a[0] {
+            Type::Array(el) if **el == Type::Int => Ok(Type::Bytes),
+            _ => Err((Some(0), format!("bytes_of espera un [int], no {}", a[0]))),
+        }
+    } },
     // repeat(s, n) -> string (M11.7a): `s` repetido `n` veces (`n<=0` → "").
     Builtin { name: "repeat", opcode: OpCode::Repeat, check: |a| {
         arity(a, 2, "repeat", " (string, veces)")?;

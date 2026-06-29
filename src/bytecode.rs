@@ -184,6 +184,9 @@ pub enum OpCode {
     /// Saca `j`, `i` y los `bytes`; empuja la sub-secuencia `[i, j)` por índice de **octeto** (con
     /// *clamp*). Builtin `sub_bytes` (M19.2). Análogo binario de `Substring`; lo usa el HTTP sobre bytes.
     SubBytes,
+    /// Saca un `[int]` (objeto del heap); empuja `bytes` con cada elemento truncado a octeto
+    /// (`& 255`). Builtin `bytes_of` (M19.3c); dual del indexado, para construir tramas/cabeceras.
+    BytesOf,
     /// Saca `n` y el string; empuja el string repetido `n` veces (`n<=0` → `""`). Builtin `repeat`.
     Repeat,
     /// Saca la subcadena y el string; empuja un `[int]` con **0 o 1** elementos: el índice de

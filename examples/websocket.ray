@@ -1,0 +1,140 @@
+// WebSocket (RFC 6455) sobre `ws://`, escrito EN raylang. Handshake + framing, **cero deps**: usa la
+// criptografía de M19.3b (`sha1`/`base64`) y los operadores bit a bit de M19.3a. Importable.
+//
+// Alcance pedagógico: el camino feliz de un echo server de texto. El framing asume que una trama
+// completa cabe en una sola lectura del socket (suficiente para mensajes cortos), como los servidores
+// `.ray` acotados de M19.1. Sin TLS (`wss` → M19.4), sin fragmentación ni extensiones.
+
+from sha1 import sha1;
+from base64 import base64;
+
+// --- Handshake ---
+
+// El GUID mágico del protocolo (RFC 6455 §1.3): se concatena a la clave del cliente antes del SHA-1.
+fn guid() -> string { "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" }
+
+// El valor `Sec-WebSocket-Accept` para la clave del cliente: base64(SHA-1(key + GUID)).
+pub fn accept_key(key: string) -> string {
+    base64(sha1(to_bytes(key + guid())))
+}
+
+// Extrae el valor de la cabecera `Sec-WebSocket-Key` de la petición de upgrade (o "" si no aparece).
+pub fn extract_key(request: string) -> string {
+    let lineas = split(request, "\r\n");
+    var clave = "";
+    var i = 0;
+    while (i < len(lineas)) {
+        let linea = lineas[i];
+        if (starts_with(linea, "Sec-WebSocket-Key:")) {
+            match (index_of(linea, ":")) {
+                Option.Some(idx) => { clave = trim(substring(linea, idx + 1, len(linea))); },
+                Option.None => { },
+            }
+        }
+        i = i + 1;
+    }
+    clave
+}
+
+// La respuesta HTTP 101 que completa el handshake para la clave dada.
+pub fn handshake_response(key: string) -> string {
+    "HTTP/1.1 101 Switching Protocols\r\n" +
+    "Upgrade: websocket\r\n" +
+    "Connection: Upgrade\r\n" +
+    "Sec-WebSocket-Accept: " + accept_key(key) + "\r\n\r\n"
+}
+
+// --- Framing ---
+
+// Opcodes de trama (RFC 6455 §5.2).
+pub fn op_text() -> int { 1 }
+pub fn op_binary() -> int { 2 }
+pub fn op_close() -> int { 8 }
+pub fn op_ping() -> int { 9 }
+pub fn op_pong() -> int { 10 }
+
+// Una trama decodificada: su opcode, su carga útil (ya des-enmascarada) y el bit FIN.
+pub struct Frame {
+    opcode: int,
+    payload: bytes,
+    fin: bool,
+}
+
+// Decodifica una trama del **cliente** (siempre enmascarada, RFC 6455 §5.3) contenida en `data`.
+// Devuelve la trama; sobre datos incompletos el comportamiento es indefinido (camino feliz).
+pub fn decode_frame(data: bytes) -> Frame {
+    let b0 = data[0];
+    let b1 = data[1];
+    let fin = ((b0 >> 7) & 1) == 1;
+    let opcode = b0 & 15;
+    let masked = ((b1 >> 7) & 1) == 1;
+    let len7 = b1 & 127;
+    // Longitud de la carga + desplazamiento al inicio de la clave de máscara.
+    var plen = len7;
+    var off = 2;
+    if (len7 == 126) {
+        plen = (data[2] << 8) | data[3];
+        off = 4;
+    } else {
+        if (len7 == 127) {
+            // 8 octetos big-endian (en la práctica caben en el int de 64 bits).
+            plen = 0;
+            var k = 0;
+            while (k < 8) {
+                plen = (plen << 8) | data[2 + k];
+                k = k + 1;
+            }
+            off = 10;
+        }
+    }
+    // Clave de máscara de 4 octetos (si la trama viene enmascarada, como manda el cliente).
+    var mask: [int] = [0, 0, 0, 0];
+    if (masked) {
+        mask[0] = data[off];
+        mask[1] = data[off + 1];
+        mask[2] = data[off + 2];
+        mask[3] = data[off + 3];
+        off = off + 4;
+    }
+    // Des-enmascara la carga: payload[i] = data[off+i] XOR mask[i % 4].
+    var octetos: [int] = [];
+    var i = 0;
+    while (i < plen) {
+        if (masked) {
+            push(octetos, data[off + i] ^ mask[i % 4]);
+        } else {
+            push(octetos, data[off + i]);
+        }
+        i = i + 1;
+    }
+    Frame { opcode: opcode, payload: bytes_of(octetos), fin: fin }
+}
+
+// Codifica una trama del **servidor** (sin máscara, FIN activo) con el opcode y la carga dados.
+pub fn encode_frame(opcode: int, payload: bytes) -> bytes {
+    let plen = len(payload);
+    var cabecera: [int] = [];
+    push(cabecera, 128 | opcode); // FIN=1 + opcode
+    if (plen < 126) {
+        push(cabecera, plen);
+    } else {
+        if (plen < 65536) {
+            push(cabecera, 126);
+            push(cabecera, (plen >> 8) & 255);
+            push(cabecera, plen & 255);
+        } else {
+            push(cabecera, 127);
+            var k = 7;
+            while (k >= 0) {
+                push(cabecera, (plen >> (k * 8)) & 255);
+                k = k - 1;
+            }
+        }
+    }
+    bytes_of(cabecera) + payload
+}
+
+// Atajo: una trama de texto del servidor.
+pub fn encode_text(texto: string) -> bytes {
+    encode_frame(op_text(), to_bytes(texto))
+}

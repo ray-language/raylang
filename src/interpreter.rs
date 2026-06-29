@@ -1081,6 +1081,17 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza bytes, int, int"),
             },
+            // bytes_of (M19.3c): [int] → bytes, cada elemento truncado a octeto (`& 255`).
+            "bytes_of" => match &values[0] {
+                Value::Array(xs) => {
+                    let octets: Vec<u8> = xs.borrow().iter().map(|v| match v {
+                        Value::Int(n) => (*n & 0xff) as u8,
+                        _ => unreachable!("el checker garantiza [int]"),
+                    }).collect();
+                    Value::Bytes(Rc::new(octets))
+                }
+                _ => unreachable!("el checker garantiza un arreglo"),
+            },
             "repeat" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Int(n)) => Value::Str(crate::builtins::repeat_str(s, *n)),
                 _ => unreachable!("el checker garantiza string, int"),

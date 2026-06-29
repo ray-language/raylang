@@ -647,6 +647,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
     const DIFERIDOS_SELFHOST: &[&str] = &[
         "binario.ray", "http.ray", "webserver.ray",
         "sha1.ray", "base64.ray", "crypto_demo.ray",
+        "websocket.ray", "websocket_demo.ray", "websocket_echo.ray",
     ];
     let mut entradas: Vec<_> = std::fs::read_dir(&dir)
         .expect("lee examples/")

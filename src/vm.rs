@@ -2144,7 +2144,7 @@ fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> String {
         HeapValue::Bool(b) => b.to_string(),
         HeapValue::Str(s) => s.clone(),
         HeapValue::Char(c) => c.to_string(),
-        HeapValue::Bytes(b) => format!("bytes[{}]", b.len()),
+        HeapValue::Bytes(b) => crate::builtins::bytes_to_hex(b),
         HeapValue::Unit => "()".to_string(),
         HeapValue::Function(_) => "<fn>".to_string(),
         HeapValue::Obj(h) => match heap.get(*h) {
@@ -2592,6 +2592,16 @@ mod tests {
         oracle_int("len(to_bytes(\"AB\") + to_bytes(\"CD\"))");        // 4
         oracle_int("if (to_bytes(\"AB\") == b\"AB\") { 1 } else { 0 }");
         oracle_int("if (to_bytes(\"A\") + to_bytes(\"B\") == b\"AB\") { 1 } else { 0 }");
+    }
+
+    #[test]
+    fn bytes_a_hex_oraculo() {
+        // M16 (diferido): to_string(bytes) → hex en minúscula; idéntico en ambos motores.
+        oracle_int("if (to_string(b\"Hi\\xff\") == \"4869ff\") { 1 } else { 0 }");   // H=48 i=69 ff
+        oracle_int("if (to_string(b\"\\x00\\x01\\x02\") == \"000102\") { 1 } else { 0 }");
+        oracle_int("if (to_string(b\"\") == \"\") { 1 } else { 0 }");                  // vacío
+        oracle_int("if (to_string(to_bytes(\"raylang\")) == \"7261796c616e67\") { 1 } else { 0 }");
+        oracle_int("len(to_string(b\"AB\\xff\"))");                                    // 6 (2 hex por octeto)
     }
 
     /// M16.1b: `from_utf8` es un envoltorio del **prelude** (no un opcode), así que se prueba con el

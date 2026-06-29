@@ -713,7 +713,19 @@ fn printable(t: &Type) -> bool {
         t,
         Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Array(_)
             | Type::Struct(_, _) | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_)
+            | Type::Bytes // diferido de M16: se imprime en hexadecimal (ver `bytes_to_hex`)
     )
+}
+
+/// Representación textual de `bytes`: los octetos en hexadecimal continuo en minúsculas (p. ej.
+/// `b"Hi\xff"` → `"4869ff"`). Es la forma honesta para datos binarios (no son texto) y casa con las
+/// convenciones de digests. La comparten `print`/`to_string` en ambos motores (oráculo). M16 (diferido).
+pub fn bytes_to_hex(b: &[u8]) -> String {
+    let mut s = String::with_capacity(b.len() * 2);
+    for byte in b {
+        s.push_str(&format!("{:02x}", byte));
+    }
+    s
 }
 
 /// Regla de tipado de una función matemática unaria `float -> float` (M15.1a).
@@ -780,8 +792,8 @@ static BUILTINS: &[Builtin] = &[
     // to_string(x) -> string (M11.1a): representación textual de un primitivo imprimible.
     Builtin { name: "to_string", opcode: OpCode::ToString, check: |a| {
         arity(a, 1, "to_string", "")?;
-        if !matches!(a[0], Type::Int | Type::Float | Type::Bool | Type::String | Type::Char) {
-            return Err((Some(0), format!("to_string solo convierte int/float/bool/string/char, no {}", a[0])));
+        if !matches!(a[0], Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes) {
+            return Err((Some(0), format!("to_string solo convierte int/float/bool/string/char/bytes, no {}", a[0])));
         }
         Ok(Type::String)
     } },

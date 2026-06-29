@@ -3646,8 +3646,9 @@ problemáticas siguientes (TLS sobre `epoll`; el backend nativo emite bytes).
 - **`len`, `==`, `+`** se extienden a `bytes` (longitud en octetos; igualdad estructural; concatenación).
 - **Interoperación con `string`** vía builtins: `to_bytes(s) -> bytes` (codifica UTF-8) y
   `from_utf8(b) -> Result<string, string>` (decodifica; falla si no es UTF-8 válido → `Result`, patrón
-  del prelude). **`print(bytes)` se difiere** (un octeto no imprimible no tiene repr textual obvia;
-  como `Map`): se inspecciona con `len`/`b[i]`/`from_utf8`.
+  del prelude). **`print(bytes)`/`to_string(bytes)` → hexadecimal** (post-M19, helper `bytes_to_hex`
+  compartido por ambos motores; `b"Hi\xff"` → `"4869ff"`; era diferido —"sin repr textual obvia"— y se
+  resolvió con la forma honesta para binario: los octetos en hex, que casa con los digests de M19.3b).
 
 ### 25.2 Sub-fases
 

@@ -184,7 +184,7 @@ impl std::fmt::Display for Value {
             Value::Char(v) => write!(f, "{}", v),
             // M16.1a: print(bytes) está diferido (el checker lo rechaza); esta repr solo existe para
             // completar el Display y se ve, p. ej., en mensajes de depuración.
-            Value::Bytes(v) => write!(f, "bytes[{}]", v.len()),
+            Value::Bytes(v) => write!(f, "{}", crate::builtins::bytes_to_hex(v)),
             Value::Unit => write!(f, "()"),
             Value::Array(rc) => {
                 let elems = rc.borrow();

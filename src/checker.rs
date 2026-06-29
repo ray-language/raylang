@@ -1092,7 +1092,7 @@ impl Checker {
             Type::Map(k, v) => {
                 if !is_hashable_key(k) {
                     return Err(self.err(line, col, format!(
-                        "la clave de un Map debe ser int/string/char/bool, no {}", k
+                        "la clave de un Map debe ser int/string/char/bool/bytes, no {}", k
                     )));
                 }
                 self.ensure_type(k, line, col)?;
@@ -2535,10 +2535,11 @@ impl Checker {
 /// Las funciones **no** son comparables (no tienen identidad estructural); un
 /// arreglo lo es solo si su elemento lo es.
 /// ¿Es `t` un tipo válido como **clave** de un `Map` (M13.1)? Primitivos hashables
-/// (int/string/char/bool; **no** float — no es hashable de forma fiable), o un parámetro de
+/// (int/string/char/bool/**bytes**; **no** float — no es hashable de forma fiable), o un parámetro de
 /// tipo genérico (la restricción real se comprueba al instanciarlo con un tipo concreto).
 fn is_hashable_key(t: &Type) -> bool {
-    matches!(t, Type::Int | Type::String | Type::Char | Type::Bool | Type::Var(_))
+    // `bytes` (diferido de M16): secuencia inmutable de octetos → Hash/Eq/Ord fiables, como un string.
+    matches!(t, Type::Int | Type::String | Type::Char | Type::Bool | Type::Bytes | Type::Var(_))
 }
 
 fn is_comparable(t: &Type) -> bool {

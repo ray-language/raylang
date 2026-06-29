@@ -2279,7 +2279,8 @@ fn heap_to_key(v: &HeapValue) -> MapKey {
         HeapValue::Str(s) => MapKey::Str(s.clone()),
         HeapValue::Char(c) => MapKey::Char(*c),
         HeapValue::Bool(b) => MapKey::Bool(*b),
-        _ => unreachable!("el checker garantiza una clave hashable (int/string/char/bool)"),
+        HeapValue::Bytes(b) => MapKey::Bytes(b.clone()),
+        _ => unreachable!("el checker garantiza una clave hashable (int/string/char/bool/bytes)"),
     }
 }
 
@@ -2290,6 +2291,7 @@ fn key_to_heap(k: &MapKey) -> HeapValue {
         MapKey::Str(s) => HeapValue::Str(s.clone()),
         MapKey::Char(c) => HeapValue::Char(*c),
         MapKey::Bool(b) => HeapValue::Bool(*b),
+        MapKey::Bytes(b) => HeapValue::Bytes(b.clone()),
     }
 }
 
@@ -2690,6 +2692,42 @@ mod tests {
                 let b = match (porChar.get('z')) { Option.Some(v) => v, Option.None => 0 };
                 let c = match (porBool.get(true)) { Option.Some(v) => v, Option.None => 0 };
                 a + b + c + len(porBool)
+             }",
+        );
+    }
+
+    #[test]
+    fn map_clave_bytes_oraculo() {
+        // M16 (diferido): `bytes` como clave de Map. Incluye octetos crudos (\x00/\xff).
+        oracle_program(
+            "fn main() -> int {
+                let m: Map<bytes, int> = map_new();
+                insert(m, b\"uno\", 10);
+                insert(m, b\"\\x00\\xff\", 99);
+                insert(m, b\"dos\", 20);
+                let a = match (m.get(b\"uno\")) { Option.Some(v) => v, Option.None => 0 };
+                let b = match (m.get(b\"\\x00\\xff\")) { Option.Some(v) => v, Option.None => 0 };
+                let c = if (m.contains_key(b\"dos\")) { 1 } else { 0 };
+                a + b + c + len(m)
+             }",
+        );
+    }
+
+    #[test]
+    fn map_clave_bytes_keys_oraculo() {
+        // keys/values con clave bytes: orden determinista (MapKey::Bytes es Ord lexicográfico).
+        oracle_program(
+            "fn main() -> int {
+                let m: Map<bytes, int> = map_new();
+                insert(m, b\"c\", 3);
+                insert(m, b\"a\", 1);
+                insert(m, b\"b\", 2);
+                let ks = m.keys();   // ordenadas: a, b, c
+                let vs = m.values(); // 1, 2, 3
+                var total = 0;
+                var i = 0;
+                while (i < len(vs)) { total = total + vs[i] * (i + 1); i = i + 1; }
+                total + len(ks)
              }",
         );
     }

@@ -93,6 +93,7 @@ pub enum MapKey {
     Str(String),
     Char(char),
     Bool(bool),
+    Bytes(Vec<u8>), // M16 (diferido): secuencia de octetos como clave (Hash/Eq/Ord fiables)
 }
 
 impl MapKey {
@@ -103,7 +104,8 @@ impl MapKey {
             Value::Str(s) => MapKey::Str(s.clone()),
             Value::Char(c) => MapKey::Char(*c),
             Value::Bool(b) => MapKey::Bool(*b),
-            _ => unreachable!("el checker garantiza una clave hashable (int/string/char/bool)"),
+            Value::Bytes(b) => MapKey::Bytes((**b).clone()),
+            _ => unreachable!("el checker garantiza una clave hashable (int/string/char/bool/bytes)"),
         }
     }
 
@@ -114,6 +116,7 @@ impl MapKey {
             MapKey::Str(s) => Value::Str(s.clone()),
             MapKey::Char(c) => Value::Char(*c),
             MapKey::Bool(b) => Value::Bool(*b),
+            MapKey::Bytes(b) => Value::Bytes(Rc::new(b.clone())),
         }
     }
 }

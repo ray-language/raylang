@@ -51,6 +51,15 @@ pub enum OpCode {
     /// Niega el booleano en la cima (`!b`).
     Not,
 
+    // Bit a bit (M19.3a): operandos int. Las binarias sacan 2 y empujan 1; `BitNot` saca 1.
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    /// Complemento a uno del int en la cima (`~x`).
+    BitNot,
+
     // Comparación: sacan 2, empujan un bool.
     Equal,
     NotEqual,

@@ -471,7 +471,7 @@ impl Parser {
                     break;
                 }
             }
-            self.expect(&TokenKind::Gt, "'>' para cerrar los parámetros de tipo")?;
+            self.close_type_angle("'>' para cerrar los parámetros de tipo")?;
         }
         Ok((params, bounds))
     }
@@ -488,7 +488,7 @@ impl Parser {
                     break;
                 }
             }
-            self.expect(&TokenKind::Gt, "'>' para cerrar los argumentos de tipo")?;
+            self.close_type_angle("'>' para cerrar los argumentos de tipo")?;
         }
         Ok(args)
     }
@@ -724,13 +724,49 @@ impl Parser {
         Ok(left)
     }
 
-    /// logic_and = equality { '&&' equality }
+    /// logic_and = bit_or { '&&' bit_or }
     fn logic_and(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.equality()?;
+        let mut left = self.bit_or()?;
         while self.check(&TokenKind::AmpAmp) {
             self.advance();
-            let right = self.equality()?;
+            let right = self.bit_or()?;
             left = make_binary(BinaryOp::And, left, right);
+        }
+        Ok(left)
+    }
+
+    // Operadores bit a bit (M19.3a). Precedencia estándar (estilo C), de menor a mayor:
+    // '|' (bit_or) < '^' (bit_xor) < '&' (bit_and), todos por debajo de la igualdad. Así
+    // `a & b == c` agrupa como `a & (b == c)` (compatible con C), y `flags & MASK` corriente.
+    /// bit_or = bit_xor { '|' bit_xor }
+    fn bit_or(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.bit_xor()?;
+        while self.check(&TokenKind::Pipe) {
+            self.advance();
+            let right = self.bit_xor()?;
+            left = make_binary(BinaryOp::BitOr, left, right);
+        }
+        Ok(left)
+    }
+
+    /// bit_xor = bit_and { '^' bit_and }
+    fn bit_xor(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.bit_and()?;
+        while self.check(&TokenKind::Caret) {
+            self.advance();
+            let right = self.bit_and()?;
+            left = make_binary(BinaryOp::BitXor, left, right);
+        }
+        Ok(left)
+    }
+
+    /// bit_and = equality { '&' equality }
+    fn bit_and(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.equality()?;
+        while self.check(&TokenKind::Amp) {
+            self.advance();
+            let right = self.equality()?;
+            left = make_binary(BinaryOp::BitAnd, left, right);
         }
         Ok(left)
     }
@@ -751,15 +787,36 @@ impl Parser {
         Ok(left)
     }
 
-    /// comparison = term { ('<' | '<=' | '>' | '>=') term }
+    /// comparison = shift { ('<' | '<=' | '>' | '>=') shift }
     fn comparison(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.term()?;
+        let mut left = self.shift()?;
         loop {
             let op = match self.peek_kind() {
                 TokenKind::Lt => BinaryOp::Lt,
                 TokenKind::LtEq => BinaryOp::Le,
                 TokenKind::Gt => BinaryOp::Gt,
                 TokenKind::GtEq => BinaryOp::Ge,
+                _ => break,
+            };
+            self.advance();
+            let right = self.shift()?;
+            left = make_binary(op, left, right);
+        }
+        Ok(left)
+    }
+
+    /// shift = term { ('<<' | '>>') term }  (M19.3a)
+    ///
+    /// `shift` está por debajo de `comparison` y por encima de `term` (aritmética), así que
+    /// el shift agrupa MÁS FLOJO que `+`/`-`: `a + b << c` es `(a + b) << c` y `a << 2 + 1`
+    /// es `a << (2 + 1)`. Es la precedencia de C (aditivo < shift), elegida para que el
+    /// framing de WS (`hi << 8 | lo`) lea natural junto con `|` aún más flojo.
+    fn shift(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.term()?;
+        loop {
+            let op = match self.peek_kind() {
+                TokenKind::Shl => BinaryOp::Shl,
+                TokenKind::Shr => BinaryOp::Shr,
                 _ => break,
             };
             self.advance();
@@ -807,6 +864,7 @@ impl Parser {
         let op = match self.peek_kind() {
             TokenKind::Bang => Some(UnaryOp::Not),
             TokenKind::Minus => Some(UnaryOp::Neg),
+            TokenKind::Tilde => Some(UnaryOp::BitNot), // ~ (NOT bit a bit, M19.3a)
             _ => None,
         };
         if let Some(op) = op {
@@ -1205,6 +1263,28 @@ impl Parser {
         }
     }
 
+    /// Cierra una lista de argumentos/parámetros de tipo con `>` (M19.3a).
+    ///
+    /// Problema clásico: el lexer junta `>>` en un solo token `Shr` (desplazamiento),
+    /// pero en `Caja<Caja<int>>` esos `>>` cierran DOS niveles de genéricos. Solución
+    /// (estilo Rust/Java): si al cerrar nos topamos con un `Shr`, lo **partimos** en dos
+    /// `>` — consumimos uno conceptualmente reescribiendo el token actual a `Gt` (sin
+    /// avanzar), dejando el otro `>` para que lo cierre el nivel exterior. Un `>=` o `>`
+    /// suelto se trata normal.
+    fn close_type_angle(&mut self, what: &str) -> Result<(), ParseError> {
+        if self.check(&TokenKind::Gt) {
+            self.advance();
+            Ok(())
+        } else if self.check(&TokenKind::Shr) {
+            // Parte `>>` → consume un `>`, deja el token como `Gt` para el nivel de fuera.
+            let t = &self.tokens[self.pos];
+            self.tokens[self.pos] = Token::new(TokenKind::Gt, t.line, t.col + 1);
+            Ok(())
+        } else {
+            Err(self.error_here(format!("se esperaba {}", what)))
+        }
+    }
+
     /// Consume un identificador y devuelve `(nombre, línea, columna)`.
     fn expect_ident(&mut self, what: &str) -> Result<(String, usize, usize), ParseError> {
         let tok = self.peek().clone();
@@ -1479,6 +1559,7 @@ mod tests {
         match op {
             UnaryOp::Neg => "-",
             UnaryOp::Not => "!",
+            UnaryOp::BitNot => "~",
         }
     }
 
@@ -1488,6 +1569,7 @@ mod tests {
             Add => "+", Sub => "-", Mul => "*", Div => "/", Rem => "%",
             Eq => "==", Ne => "!=", Lt => "<", Le => "<=", Gt => ">", Ge => ">=",
             And => "&&", Or => "||",
+            BitAnd => "&", BitOr => "|", BitXor => "^", Shl => "<<", Shr => ">>",
         }
     }
 

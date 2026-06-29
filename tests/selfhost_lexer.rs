@@ -82,6 +82,14 @@ fn kind_str(k: &TokenKind) -> String {
         TokenKind::PipePipe => "PipePipe".into(),
         TokenKind::Bang => "Bang".into(),
         TokenKind::Eq => "Eq".into(),
+        // M19.3a: operadores bit a bit. El lexer auto-alojado aún no los tokeniza; no aparecen
+        // en el corpus (ningún archivo probado los usa), pero el `match` debe ser exhaustivo.
+        TokenKind::Amp => "Amp".into(),
+        TokenKind::Pipe => "Pipe".into(),
+        TokenKind::Caret => "Caret".into(),
+        TokenKind::Tilde => "Tilde".into(),
+        TokenKind::Shl => "Shl".into(),
+        TokenKind::Shr => "Shr".into(),
         TokenKind::LParen => "LParen".into(),
         TokenKind::RParen => "RParen".into(),
         TokenKind::LBrace => "LBrace".into(),
@@ -203,8 +211,9 @@ fn errores_lexicos_igual_que_el_oraculo() {
     comparar("\"sin cerrar", "sh_err_str_abierta.ray"); // cadena sin cerrar
     comparar("\"rota\nlinea\"", "sh_err_str_nl.ray"); // salto de línea en cadena
     comparar("\"mal\\q\"", "sh_err_escape.ray"); // secuencia de escape inválida '\q'
-    comparar("a & b", "sh_err_amp.ray"); // '&' suelto
-    comparar("a | b", "sh_err_pipe.ray"); // '|' suelto
+    // M19.3a: '&' y '|' sueltos dejaron de ser error en el lexer de Rust (son AND/OR bit a
+    // bit). El lexer auto-alojado (`selfhost/lexer.ray`) aún NO tokeniza bitops —diferido,
+    // como `bytes`—, así que estas entradas quedan fuera del corpus del oráculo.
     comparar("''", "sh_err_char_vacio.ray"); // literal de carácter vacío
     comparar("'ab'", "sh_err_char_multi.ray"); // más de un carácter
     comparar("'a", "sh_err_char_abierto.ray"); // carácter sin cerrar

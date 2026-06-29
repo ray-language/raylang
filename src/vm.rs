@@ -241,6 +241,13 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("el checker garantiza un bool"),
                     });
                 }
+                OpCode::BitNot => {
+                    let v = self.pop();
+                    self.push(match v {
+                        HeapValue::Int(n) => HeapValue::Int(!n), // M19.3a: complemento a uno
+                        _ => unreachable!("el checker garantiza un int"),
+                    });
+                }
 
                 bin @ (OpCode::Add
                 | OpCode::Sub
@@ -252,7 +259,12 @@ impl<'a> Vm<'a> {
                 | OpCode::Less
                 | OpCode::LessEqual
                 | OpCode::Greater
-                | OpCode::GreaterEqual) => {
+                | OpCode::GreaterEqual
+                | OpCode::BitAnd
+                | OpCode::BitOr
+                | OpCode::BitXor
+                | OpCode::Shl
+                | OpCode::Shr) => {
                     let right = self.pop();
                     let left = self.pop();
                     // Opt.4: fast-path entero. En la inmensa mayoría de programas (bucles, recursión
@@ -285,6 +297,12 @@ impl<'a> Vm<'a> {
                             OpCode::GreaterEqual => HeapValue::Bool(a >= b),
                             OpCode::Equal => HeapValue::Bool(a == b),
                             OpCode::NotEqual => HeapValue::Bool(a != b),
+                            // Bit a bit (M19.3a): mismos `wrapping_*` que el intérprete.
+                            OpCode::BitAnd => HeapValue::Int(a & b),
+                            OpCode::BitOr => HeapValue::Int(a | b),
+                            OpCode::BitXor => HeapValue::Int(a ^ b),
+                            OpCode::Shl => HeapValue::Int(a.wrapping_shl(b as u32)),
+                            OpCode::Shr => HeapValue::Int(a.wrapping_shr(b as u32)),
                             _ => unreachable!("el grupo `bin` solo trae operadores binarios"),
                         };
                         self.push(r);
@@ -2448,6 +2466,26 @@ mod tests {
         oracle_int("if (pi() > 3.14) { 1 } else { 0 }");
         // Borde: NaN se comporta igual en ambos motores (NaN != NaN → la rama else).
         oracle_int("if (sqrt(0.0 - 1.0) == sqrt(0.0 - 1.0)) { 1 } else { 0 }");
+    }
+
+    #[test]
+    fn bitops_oraculo() {
+        // M19.3a: operadores bit a bit. Ambos motores comparten `wrapping_*` → idénticos.
+        oracle_int("6 & 3");   // 0b110 & 0b011 = 0b010 = 2
+        oracle_int("6 | 3");   // 0b111 = 7
+        oracle_int("6 ^ 3");   // 0b101 = 5
+        oracle_int("1 << 4");  // 16
+        oracle_int("255 >> 4");// 15
+        oracle_int("~0");      // -1 (complemento a uno)
+        oracle_int("~5");      // -6
+        // Precedencia: shift por debajo de aditivo; bit a bit por debajo de comparación.
+        oracle_int("1 + 1 << 4");           // (1+1) << 4 = 32
+        oracle_int("(0 | 1) & (2 | 1)");    // 1
+        // Patrón típico de framing: combinar dos bytes en un entero de 16 bits.
+        oracle_int("200 << 8 | 57");        // 200*256+57 = 51257
+        // Máscara y desplazamiento encadenados (estilo extracción de campos).
+        oracle_int("(51257 >> 8) & 255");   // 200
+        oracle_int("51257 & 255");          // 57
     }
 
     /// M16.1a: el tipo `bytes` en el oráculo. Literal `b"..."` (con `\xNN`), `len`, indexar (→int) e

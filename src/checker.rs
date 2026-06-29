@@ -1812,6 +1812,9 @@ impl Checker {
                     UnaryOp::Neg => Err(self.err(expr.line, expr.col, format!("no se puede negar (-) un {}", t))),
                     UnaryOp::Not if t == Type::Bool => Ok(Type::Bool),
                     UnaryOp::Not => Err(self.err(expr.line, expr.col, format!("el '!' requiere bool, no {}", t))),
+                    // M19.3a: NOT bit a bit, int → int.
+                    UnaryOp::BitNot if t == Type::Int => Ok(Type::Int),
+                    UnaryOp::BitNot => Err(self.err(expr.line, expr.col, format!("el '~' requiere int, no {}", t))),
                 }
             }
 
@@ -1996,6 +1999,18 @@ impl Checker {
                 } else {
                     Err(self.err(line, col, format!(
                         "el operador '{}' requiere operandos bool, no {} y {}",
+                        bin_op_str(op), lt, rt
+                    )))
+                }
+            }
+            // Bit a bit (M19.3a): ambos operandos int → int. Sin float (los desplazamientos
+            // y máscaras no tienen sentido sobre IEEE-754); el runtime opera sobre i64.
+            BitAnd | BitOr | BitXor | Shl | Shr => {
+                if lt == Type::Int && rt == Type::Int {
+                    Ok(Type::Int)
+                } else {
+                    Err(self.err(line, col, format!(
+                        "el operador '{}' requiere operandos int, no {} y {}",
                         bin_op_str(op), lt, rt
                     )))
                 }
@@ -2651,6 +2666,7 @@ fn bin_op_str(op: BinaryOp) -> &'static str {
         Add => "+", Sub => "-", Mul => "*", Div => "/", Rem => "%",
         Eq => "==", Ne => "!=", Lt => "<", Le => "<=", Gt => ">", Ge => ">=",
         And => "&&", Or => "||",
+        BitAnd => "&", BitOr => "|", BitXor => "^", Shl => "<<", Shr => ">>",
     }
 }
 

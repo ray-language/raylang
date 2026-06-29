@@ -629,6 +629,7 @@ impl<'a> Interpreter<'a> {
                     (UnaryOp::Neg, Value::Int(n)) => Value::Int(-n),
                     (UnaryOp::Neg, Value::Float(x)) => Value::Float(-x),
                     (UnaryOp::Not, Value::Bool(b)) => Value::Bool(!b),
+                    (UnaryOp::BitNot, Value::Int(n)) => Value::Int(!n), // M19.3a: NOT bit a bit
                     _ => unreachable!("el checker garantiza operandos válidos para el unario"),
                 })
             }
@@ -1493,6 +1494,14 @@ impl<'a> Interpreter<'a> {
             // Igualdad (mismo tipo, garantizado por el checker).
             (Eq, a, b) => Bool(a == b),
             (Ne, a, b) => Bool(a != b),
+            // Bit a bit (M19.3a): sobre i64. Los desplazamientos usan `wrapping_*` con el
+            // contador como u32 → deterministas y SIN panic (en debug, `<<` con cuenta ≥64
+            // o negativa abortaría); ambos motores comparten exactamente esta semántica.
+            (BitAnd, Int(a), Int(b)) => Int(a & b),
+            (BitOr, Int(a), Int(b)) => Int(a | b),
+            (BitXor, Int(a), Int(b)) => Int(a ^ b),
+            (Shl, Int(a), Int(b)) => Int(a.wrapping_shl(b as u32)),
+            (Shr, Int(a), Int(b)) => Int(a.wrapping_shr(b as u32)),
             _ => unreachable!("combinación de operador/operandos que el checker debió rechazar"),
         })
     }

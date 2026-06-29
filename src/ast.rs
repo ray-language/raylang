@@ -599,6 +599,7 @@ fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
 pub enum UnaryOp {
     Neg, // -
     Not, // !
+    BitNot, // ~  (NOT bit a bit, M19.3a): operando int → int.
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -616,4 +617,10 @@ pub enum BinaryOp {
     Ge,  // >=
     And, // &&
     Or,  // ||
+    // Bit a bit (M19.3a): ambos operandos int → int. Habilitan SHA-1 / base64 / framing WS.
+    BitAnd, // &
+    BitOr,  // |
+    BitXor, // ^
+    Shl,    // <<
+    Shr,    // >>
 }

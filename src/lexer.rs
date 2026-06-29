@@ -136,23 +136,30 @@ impl Lexer {
             '<' => {
                 if self.match_char('=') {
                     TokenKind::LtEq
+                } else if self.match_char('<') {
+                    TokenKind::Shl // << (desplazamiento, M19.3a)
                 } else {
                     TokenKind::Lt
                 }
             }
             '>' => {
+                // Ojo: '>>' es ambiguo con genéricos anidados (`Caja<Caja<int>>`). El lexer
+                // siempre emite `Shr`; al cerrar argumentos de tipo, el parser **parte** un
+                // `Shr` en dos `>` (igual que Rust/Java). Ver `Parser::close_type_angle`.
                 if self.match_char('=') {
                     TokenKind::GtEq
+                } else if self.match_char('>') {
+                    TokenKind::Shr // >> (desplazamiento, M19.3a)
                 } else {
                     TokenKind::Gt
                 }
             }
-            // '&' y '|' solo existen duplicados en M1 (&& y ||). Sueltos son error.
+            // '&' y '|' duplicados son lógicos (&& ||); sueltos son bit a bit (M19.3a).
             '&' => {
                 if self.match_char('&') {
                     TokenKind::AmpAmp
                 } else {
-                    return Err(self.error("se esperaba '&&' (¿olvidaste un '&'?)".into()));
+                    TokenKind::Amp // & (AND bit a bit)
                 }
             }
             '|' => {
@@ -161,9 +168,11 @@ impl Lexer {
                 } else if self.match_char('>') {
                     TokenKind::PipeArrow // |> (pipeline, M7.2)
                 } else {
-                    return Err(self.error("se esperaba '||' o '|>' (¿olvidaste un '|'?)".into()));
+                    TokenKind::Pipe // | (OR bit a bit)
                 }
             }
+            '^' => TokenKind::Caret, // ^ (XOR bit a bit, M19.3a)
+            '~' => TokenKind::Tilde, // ~ (NOT bit a bit, M19.3a)
 
             '"' => self.string()?,
             '\'' => self.char_literal()?,
@@ -579,19 +588,37 @@ mod tests {
 
     #[test]
     fn token_pipeline_y_or() {
-        // '|>' (pipeline, M7.2) y '||' (or) se distinguen; un '|' suelto es error.
+        // '|>' (pipeline, M7.2), '||' (or) y '|' (OR bit a bit, M19.3a) se distinguen.
         assert_eq!(
-            kinds("a |> b || c"),
+            kinds("a |> b || c | d"),
             vec![
                 TokenKind::Ident("a".into()),
                 TokenKind::PipeArrow,
                 TokenKind::Ident("b".into()),
                 TokenKind::PipePipe,
                 TokenKind::Ident("c".into()),
+                TokenKind::Pipe,
+                TokenKind::Ident("d".into()),
                 TokenKind::Eof,
             ]
         );
-        assert!(lex("a | b").is_err());
+    }
+
+    #[test]
+    fn operadores_bit_a_bit() {
+        // M19.3a: & | ^ ~ << >> sueltos. Ojo: '<<'/'>>' priman sobre '<'/'>'.
+        assert_eq!(
+            kinds("& | ^ ~ << >>"),
+            vec![
+                TokenKind::Amp,
+                TokenKind::Pipe,
+                TokenKind::Caret,
+                TokenKind::Tilde,
+                TokenKind::Shl,
+                TokenKind::Shr,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
@@ -656,12 +683,11 @@ mod tests {
         let e = lex("\"sin cerrar").unwrap_err();
         assert!(e.msg.contains("sin cerrar"));
 
-        // '&' suelto
-        assert!(lex("a & b").is_err());
-
         // escape inválido
         assert!(lex("\"\\q\"").is_err());
     }
+
+    // Nota (M19.3a): '&' y '|' sueltos ya NO son error (son AND/OR bit a bit).
 
     #[test]
     fn programa_fib_completo() {

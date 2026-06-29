@@ -70,7 +70,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M16** | **tipo `bytes`** (datos binarios) | nuevo tipo en el pipeline, literal `b"..."`, I/O binaria | ✅ §25: ✅ **M16.1a** el tipo (literal `b"..."` con `\xNN`, `len`/index→int/`==`; oráculo) · ✅ **M16.1b** string-interop (`to_bytes`/`from_utf8` + `+`; oráculo) · ✅ **M16.1c** I/O binaria (`read_file_bytes`/`write_file_bytes`/`socket_read_bytes`/`socket_write_bytes`; lecturas → `[bytes]` etiquetado; socket cede al scheduler; subproceso). **M16 COMPLETO** (cierra la deuda binaria de M15). Diferido: `bytes` como clave de Map, mutabilidad |
 | **M17** | **`epoll`/`kqueue`** (readiness real, sustituye el busy-poll de M15.5) | E/S asíncrona del SO, `unsafe` acotado, FFI cero-deps | ✅ §26: poller del SO (`kqueue` macOS/BSD, `epoll` Linux) en `src/poll.rs`; FFI propio (`extern "C"`, sin el crate `libc` → invariante cero-deps); el scheduler de la VM se **bloquea** hasta readiness real y despierta **solo** las fibras de los fds listos (`io_parked` lleva ahora el `fd`); fallback al busy-poll de M15.5 en plataformas sin poller o EINTR; comportamiento idéntico (regresión: tests de M15.5/red concurrente). **M17 COMPLETO** (diferido: cesión en `socket_write`, registro persistente del poller, `bytes`/TLS en el toolchain auto-alojado) |
 | **M18** | **backend nativo** (bootstrap sin Rust) | codegen a máquina/LLVM/C | 💤 **aparcado** (decisión del usuario): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va al transversal de optimización de la VM. Se retoma más adelante |
-| **M19** | **la capa web** (servidor HTTP async + SSE · HTTP en bytes · WebSockets `ws://` · TLS) | protocolos de alto nivel como librería raylang sobre los sockets/scheduler; criptografía vs. cero-deps | 🚧 §28: ✅ **M19.1** servidor web async + SSE (librería `webserver.ray` sobre el servidor concurrente de M15.5/M17; cero runtime) · ✅ **M19.2** HTTP en `bytes` (builtin `sub_bytes` + cliente `http.ray` y servidor `webserver.ray` con cuerpo `bytes`; round-trip binario `\x00`/`\xff` intacto) · **M19.3** WebSockets `ws://` (handshake SHA-1+base64 en raylang + framing con `bytes`) · **M19.4** TLS/SSL (**bloqueado por la invariante cero-deps**: pediría criptografía; decisión pendiente — excepción de dependencia o *shell-out* a `openssl`). `wss`/`https` dependen de M19.4 |
+| **M19** | **la capa web** (servidor HTTP async + SSE · HTTP en bytes · WebSockets `ws://` · TLS) | protocolos de alto nivel como librería raylang sobre los sockets/scheduler; criptografía vs. cero-deps | 🚧 §28: ✅ **M19.1** servidor web async + SSE (librería `webserver.ray` sobre el servidor concurrente de M15.5/M17; cero runtime) · ✅ **M19.2** HTTP en `bytes` (builtin `sub_bytes` + cliente `http.ray` y servidor `webserver.ray` con cuerpo `bytes`; round-trip binario `\x00`/`\xff` intacto) · 🚧 **M19.3** WebSockets `ws://` (handshake SHA-1+base64 en raylang + framing con `bytes`): ✅ **M19.3a** operadores bit a bit `& | ^ ~ << >>` (habilitador, único toque de lenguaje; oráculo) · **M19.3b** SHA-1/base64/handshake/framing (pendiente) · **M19.4** TLS/SSL (**bloqueado por la invariante cero-deps**: pediría criptografía; decisión pendiente — excepción de dependencia o *shell-out* a `openssl`). `wss`/`https` dependen de M19.4 |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) 🚧 | rendimiento, bootstrapping | 🚧 §27: banco `benchmarks/` (`bench.sh`+hyperfine, o `measure.py` sin deps; fib/bucle/arreglos, mejor-de-N); regla **medir-antes-y-después, conservar solo lo que supera el ruido**. Opt.1/Opt.2 ✅ (pase previo), Opt.3 (`Rc<str>`) ❌ descartada. ✅ **Opt.4** fast-path entero en el lazo de ops binarias (evita el doble match + la llamada a `apply_binary`; fib(35) −5%, bucle 10M −6%; oráculo VM↔intérprete intacto, semántica idéntica) · LTO/`codegen-units=1` **descartado** (no mejora, medido) |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -110,11 +110,14 @@ Activadas después: `struct` (M3), `enum` y `match` (M5).
 +  -  *  /  %          aritméticos
 ==  !=  <  <=  >  >=   comparación
 &&  ||  !              lógicos
+&  |  ^  ~  <<  >>     bit a bit (M19.3a)
 =                     asignación
 ( )  { }              agrupación / bloques
 ,  ;  :               separadores
 ->                    flecha de tipo de retorno
 ```
+Nota (M19.3a): `<<`/`>>` se lexean siempre como un token; en genéricos anidados
+(`Caja<Caja<int>>`) el parser **parte** el `>>` en dos `>` al cerrar (estilo Rust).
 Reservados para el futuro: `|>` (pipeline), `.` (UFCS), `?` (propagación),
 `@` (anotaciones, p. ej. `@test`/`@derive`), `<` `>` también delimitarán
 argumentos genéricos.
@@ -225,12 +228,16 @@ whileExpr        = 'while' '(' expression ')' block ;
 (* expresiones sin bloque, por precedencia de menor a mayor *)
 exprWithoutBlock = logicOr ;
 logicOr        = logicAnd { '||' logicAnd } ;
-logicAnd       = equality { '&&' equality } ;
+logicAnd       = bitOr { '&&' bitOr } ;
+bitOr          = bitXor { '|' bitXor } ;                       (* M19.3a *)
+bitXor         = bitAnd { '^' bitAnd } ;                       (* M19.3a *)
+bitAnd         = equality { '&' equality } ;                   (* M19.3a *)
 equality       = comparison { ( '==' | '!=' ) comparison } ;
-comparison     = term { ( '<' | '<=' | '>' | '>=' ) term } ;
+comparison     = shift { ( '<' | '<=' | '>' | '>=' ) shift } ;
+shift          = term { ( '<<' | '>>' ) term } ;              (* M19.3a *)
 term           = factor { ( '+' | '-' ) factor } ;
 factor         = unary { ( '*' | '/' | '%' ) unary } ;
-unary          = ( '!' | '-' ) unary | call ;
+unary          = ( '!' | '-' | '~' ) unary | call ;          (* '~' M19.3a *)
 call           = primary { '(' [ args ] ')' } ;
 args           = expression { ',' expression } ;
 primary        = INT | FLOAT | STRING | 'true' | 'false'
@@ -260,6 +267,9 @@ Notas:
   - aritmética: ambos `int` → `int`, ambos `float` → `float`; mezcla = error.
   - comparaciones: ambos lados del mismo tipo ordenable → `bool`.
   - `&& || !`: sobre `bool` → `bool`.
+  - bit a bit `& | ^ << >>` (binarios) y `~` (unario): ambos operandos `int` → `int`
+    (M19.3a). Sin `float`. Los desplazamientos usan `wrapping_*` sobre `i64` (cuenta
+    mod 64, sin panic) — idénticos en intérprete y VM.
   - condición de `if`/`while`: `bool`.
   - `if`/bloque como expresión: reglas de §6.
   - `return e`: tipo de `e` coincide con el retorno declarado; el valor final del
@@ -3845,6 +3855,20 @@ se escriben en raylang** (sin builtins, sin deps), operando sobre `bytes` (M16).
 mensajes van en tramas binarias (FIN/opcode/mask/length); se leen/escriben con `bytes`. **Cero runtime
 nuevo** (SHA-1/base64 en raylang + el framing con `bytes`/sockets ya disponibles); ambicioso pero
 autocontenido. `wss://` (sobre TLS) depende de M19.4.
+
+**M19.3a — operadores bit a bit** ✅ (habilitador, **único toque de lenguaje** de M19.3). SHA-1 y el
+framing necesitan `& | ^ ~ << >>` sobre `int`, que raylang no tenía. Decisión: **operadores**, no
+builtins —`(a & b) | (c << 2)` lee infinitamente mejor que `bor(band(a,b), shl(c,2))` y es lo
+pedagógicamente completo (precedencia bit a bit es un clásico)—. Tokens nuevos (`Amp`/`Pipe`/`Caret`/
+`Tilde`/`Shl`/`Shr`; `&`/`|` sueltos dejan de ser error léxico), `BinaryOp::{BitAnd,BitOr,BitXor,Shl,
+Shr}` + `UnaryOp::BitNot`, niveles de precedencia estilo C (`|` < `^` < `&` < igualdad; shift entre
+comparación y aditivo), opcodes en la VM. Semántica `wrapping_*` sobre `i64` (sin panic, cuenta mod 64),
+**idéntica en ambos motores** (oráculo `bitops_oraculo`). **Gotcha del lexer**: `>>` choca con genéricos
+anidados (`Caja<Caja<int>>`); el lexer siempre emite `Shr` y el parser lo **parte** en dos `>` al cerrar
+argumentos de tipo (`close_type_angle`, estilo Rust/Java). Diferido: bitops en el toolchain auto-alojado
+(como `bytes`; `selfhost/lexer.ray` aún no los tokeniza → fuera del corpus del oráculo de self-hosting).
+
+**M19.3b — SHA-1 + base64 + handshake + framing**: pendiente (sobre los bitops de M19.3a).
 
 ### 28.4 M19.4 — TLS / SSL
 

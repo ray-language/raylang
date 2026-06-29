@@ -96,6 +96,13 @@ fn dump_binop(op: &BinaryOp) -> &'static str {
         BinaryOp::Ge => "ge",
         BinaryOp::And => "and",
         BinaryOp::Or => "or",
+        // M19.3a: bit a bit. El parser auto-alojado aún no los reconoce; fuera del corpus,
+        // pero el `match` debe ser exhaustivo.
+        BinaryOp::BitAnd => "bitand",
+        BinaryOp::BitOr => "bitor",
+        BinaryOp::BitXor => "bitxor",
+        BinaryOp::Shl => "shl",
+        BinaryOp::Shr => "shr",
     }
 }
 
@@ -103,6 +110,7 @@ fn dump_unop(op: &UnaryOp) -> &'static str {
     match op {
         UnaryOp::Neg => "neg",
         UnaryOp::Not => "not",
+        UnaryOp::BitNot => "bitnot", // M19.3a
     }
 }
 

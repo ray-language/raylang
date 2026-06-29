@@ -68,6 +68,13 @@ pub enum TokenKind {
     PipePipe,// ||
     Bang,    // !
     Eq,      // =
+    // Operadores bit a bit (M19.3a): habilitan SHA-1 / base64 / framing de WebSocket.
+    Amp,     // &  (AND bit a bit)
+    Pipe,    // |  (OR bit a bit)
+    Caret,   // ^  (XOR bit a bit)
+    Tilde,   // ~  (NOT bit a bit, unario)
+    Shl,     // << (desplazamiento a la izquierda)
+    Shr,     // >> (desplazamiento a la derecha)
 
     // --- Puntuación / agrupación ---
     LParen,    // (

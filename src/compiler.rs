@@ -548,6 +548,7 @@ impl<'a> Compiler<'a> {
                 let opc = match op {
                     UnaryOp::Neg => OpCode::Negate,
                     UnaryOp::Not => OpCode::Not,
+                    UnaryOp::BitNot => OpCode::BitNot, // M19.3a
                 };
                 self.emit(opc, line, col);
             }
@@ -585,6 +586,12 @@ impl<'a> Compiler<'a> {
                     BinaryOp::Le => OpCode::LessEqual,
                     BinaryOp::Gt => OpCode::Greater,
                     BinaryOp::Ge => OpCode::GreaterEqual,
+                    // Bit a bit (M19.3a).
+                    BinaryOp::BitAnd => OpCode::BitAnd,
+                    BinaryOp::BitOr => OpCode::BitOr,
+                    BinaryOp::BitXor => OpCode::BitXor,
+                    BinaryOp::Shl => OpCode::Shl,
+                    BinaryOp::Shr => OpCode::Shr,
                     BinaryOp::And | BinaryOp::Or => unreachable!("cubiertos arriba"),
                 };
                 self.emit(opc, line, col);

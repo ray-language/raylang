@@ -331,6 +331,20 @@ fn tcp_connect(host: string, port: int) -> Result<int, string> {
     }
 }
 
+// M19.4a: conecta por TLS a host:port (verifica el certificado del servidor); Ok(handle) u Err. El
+// handle se lee/escribe con socket_read_bytes/socket_write_bytes (que desvían a TLS) y se cierra con close.
+fn tls_connect(host: string, port: int) -> Result<int, string> {
+    let r = __tls_connect(host, port);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
 // Hace una lectura del socket; Ok(datos) ("" = EOF) u Err(mensaje).
 fn socket_read(h: int) -> Result<string, string> {
     let r = __socket_read(h);

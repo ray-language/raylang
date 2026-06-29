@@ -196,6 +196,16 @@ enum OpenHandle {
     Writer(std::fs::File),
     Tcp(std::net::TcpStream),
     Listener(std::net::TcpListener),
+    /// M19.4: una conexión TLS de **cliente** (rustls). Guarda la sesión + el socket juntos (la sesión
+    /// es una máquina de estados mutable que no se puede clonar, a diferencia de `Tcp`); cada lectura/
+    /// escritura monta un `rustls::Stream` transitorio sobre ambos. Bloqueante (M19.4a).
+    Tls(Box<TlsClient>),
+}
+
+/// Una conexión TLS de cliente: la sesión rustls + su socket TCP subyacente.
+struct TlsClient {
+    conn: rustls::ClientConnection,
+    sock: std::net::TcpStream,
 }
 
 /// El registro de archivos abiertos: un contador para los handles y el mapa handle → archivo.
@@ -251,6 +261,7 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
         Some(OpenHandle::Reader(_)) => Err("el handle está abierto para lectura, no escritura".to_string()),
         Some(OpenHandle::Tcp(_)) => Err("el handle es un socket; usa socket_write".to_string()),
         Some(OpenHandle::Listener(_)) => Err("el handle es un socket de escucha, no escribible".to_string()),
+        Some(OpenHandle::Tls(_)) => Err("el handle es una conexión TLS; usa socket_write".to_string()),
         None => Err(format!("handle de archivo inválido: {}", h)),
     }
 }
@@ -311,6 +322,10 @@ pub fn socket_write(h: i64, s: &str) -> Result<usize, String> {
 /// (gira en `WouldBlock`). Lo usan `socket_write` (M15.2) y `socket_write_bytes` (M16.1c).
 pub fn socket_write_raw(h: i64, bytes: &[u8]) -> Result<usize, String> {
     use std::io::Write;
+    // M19.4a: un handle TLS se escribe por su camino bloqueante (rustls cifra); el resto es TCP normal.
+    if is_tls_handle(h) {
+        return tls_write(h, bytes);
+    }
     let mut stream = socket_clone(h)?;
     let mut off = 0;
     while off < bytes.len() {
@@ -322,6 +337,94 @@ pub fn socket_write_raw(h: i64, bytes: &[u8]) -> Result<usize, String> {
         }
     }
     Ok(bytes.len())
+}
+
+// --- Cliente TLS (M19.4a) ---
+//
+// La ÚNICA parte del runtime que usa una dependencia externa (`rustls`, decisión §28.4). Una conexión
+// TLS de cliente vive en el MISMO registro de handles (`OpenHandle::Tls`), así que `close(h)` la cierra
+// igual que un socket o un archivo. Es **bloqueante**: las lecturas/escrituras sostienen el lock del
+// registro mientras rustls procesa registros (correcto en el modelo M:1 cooperativo —ninguna otra fibra
+// corre durante una llamada bloqueante—; el servidor TLS no bloqueante es M19.4b).
+
+/// La configuración de cliente TLS (raíces de confianza de Mozilla vía `webpki-roots`). Se construye
+/// una vez y se comparte; verifica el certificado del servidor como un navegador.
+fn tls_client_config() -> std::sync::Arc<rustls::ClientConfig> {
+    static C: std::sync::OnceLock<std::sync::Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
+    C.get_or_init(|| {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        // Igual que curl/OpenSSL: `SSL_CERT_FILE` añade certificados de confianza extra (una CA propia,
+        // un proxy corporativo, o —en las pruebas— una CA autofirmada local). Se ignoran los inválidos.
+        if let Ok(path) = std::env::var("SSL_CERT_FILE") {
+            use rustls::pki_types::pem::PemObject;
+            if let Ok(certs) = rustls::pki_types::CertificateDer::pem_file_iter(&path) {
+                for cert in certs.flatten() {
+                    let _ = roots.add(cert);
+                }
+            }
+        }
+        let cfg = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        std::sync::Arc::new(cfg)
+    })
+    .clone()
+}
+
+/// Abre una conexión TLS a `host:port` (handshake incluido en la primera I/O) y devuelve un handle.
+/// El nombre `host` se usa también para validar el certificado (SNI). Builtin `__tls_connect` (M19.4a).
+pub fn tls_connect(host: &str, port: i64) -> Result<i64, String> {
+    let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|_| format!("nombre de servidor inválido para TLS: {host}"))?;
+    let conn = rustls::ClientConnection::new(tls_client_config(), server_name)
+        .map_err(|e| e.to_string())?;
+    let sock = std::net::TcpStream::connect((host, port as u16)).map_err(|e| e.to_string())?;
+    let mut reg = registry().lock().unwrap();
+    let id = reg.next;
+    reg.next += 1;
+    reg.open.insert(id, OpenHandle::Tls(Box::new(TlsClient { conn, sock })));
+    Ok(id)
+}
+
+/// ¿El handle `h` es una conexión TLS? Lo consultan los caminos de socket para desviarse al I/O TLS
+/// bloqueante (en vez del no bloqueante con cesión de la VM, que no aplica a TLS en M19.4a).
+pub fn is_tls_handle(h: i64) -> bool {
+    matches!(registry().lock().unwrap().open.get(&h), Some(OpenHandle::Tls(_)))
+}
+
+/// Una lectura TLS bloqueante: descifra y devuelve hasta 64 KiB (`Vec` vacío en fin de stream). Un
+/// cierre sin `close_notify` (frecuente en servidores HTTP/1.1) se trata como EOF limpio.
+fn tls_read_bytes(h: i64) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Tls(tc)) => {
+            let mut stream = rustls::Stream::new(&mut tc.conn, &mut tc.sock);
+            let mut buf = [0u8; 65536];
+            match stream.read(&mut buf) {
+                Ok(n) => Ok(buf[..n].to_vec()),
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(Vec::new()),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+        _ => Err(format!("el handle {h} no es una conexión TLS")),
+    }
+}
+
+/// Escribe `bytes` completos por la conexión TLS (los cifra). `Ok(nº de bytes)` o `Err`.
+fn tls_write(h: i64, bytes: &[u8]) -> Result<usize, String> {
+    use std::io::Write;
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Tls(tc)) => {
+            let mut stream = rustls::Stream::new(&mut tc.conn, &mut tc.sock);
+            stream.write_all(bytes).map_err(|e| e.to_string())?;
+            stream.flush().map_err(|e| e.to_string())?;
+            Ok(bytes.len())
+        }
+        _ => Err(format!("el handle {h} no es una conexión TLS")),
+    }
 }
 
 // --- I/O binaria (M16.1c) ---
@@ -353,6 +456,10 @@ pub fn socket_read_bytes_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
 /// EOF) o `Err`.
 pub fn socket_read_bytes_blocking(h: i64) -> Result<Vec<u8>, String> {
     use std::io::Read;
+    // M19.4a: un handle TLS se lee por su camino bloqueante (rustls descifra).
+    if is_tls_handle(h) {
+        return tls_read_bytes(h);
+    }
     let mut stream = socket_clone(h)?;
     let mut buf = [0u8; 65536];
     match stream.read(&mut buf) {
@@ -1056,6 +1163,15 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__tcp_connect", " (host, puerto)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__tcp_connect espera un string (el host), no {}", a[0]))); }
         if a[1] != Type::Int { return Err((Some(1), format!("__tcp_connect espera un int (el puerto), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __tls_connect(host, puerto) -> [string] (M19.4a): ["ok", handle] o ["err", msg]. Prelude →
+    // Result<int,string>. Igual que __tcp_connect pero cifra con TLS (rustls); el handle se lee/escribe
+    // con socket_read_bytes/socket_write_bytes (que desvían a TLS) y se cierra con close.
+    Builtin { name: "__tls_connect", opcode: OpCode::TlsConnect, check: |a| {
+        arity(a, 2, "__tls_connect", " (host, puerto)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__tls_connect espera un string (el host), no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__tls_connect espera un int (el puerto), no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __socket_read(h) -> [string]: ["ok", datos] o ["err", msg]. Prelude → Result<string,string>.

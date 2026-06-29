@@ -14,15 +14,24 @@ pub struct Response {
     body: bytes,
 }
 
-struct Url { host: string, port: int, path: string }
+struct Url { host: string, port: int, path: string, tls: bool }
 
-// Parsea "http://host[:port]/path" (puerto 80 por defecto).
+// Parsea "http://host[:port]/path" o "https://…" (puertos 80/443 por defecto). M19.4a: `https` usa TLS.
 fn parse_url(url: string) -> Result<Url, string> {
-    let prefijo: string = "http://";
-    if (!starts_with(url, prefijo)) {
-        return Result.Err("solo se soporta http:// (sin TLS)");
+    var resto: string = "";
+    var port: int = 80;
+    var tls: bool = false;
+    if (starts_with(url, "https://")) {
+        resto = substring(url, 8, len(url));
+        port = 443;
+        tls = true;
+    } else {
+        if (starts_with(url, "http://")) {
+            resto = substring(url, 7, len(url));
+        } else {
+            return Result.Err("solo se soporta http:// o https://");
+        }
     }
-    let resto: string = substring(url, len(prefijo), len(url));
 
     // Separar host[:port] de /path.
     var hostport: string = resto;
@@ -35,9 +44,8 @@ fn parse_url(url: string) -> Result<Url, string> {
         Option.None => {},
     }
 
-    // Separar host de puerto.
+    // Separar host de puerto (un ':' explícito gana al puerto por defecto del esquema).
     var host: string = hostport;
-    var port: int = 80;
     match (index_of(hostport, ":")) {
         Option.Some(idx) => {
             host = substring(hostport, 0, idx);
@@ -49,7 +57,7 @@ fn parse_url(url: string) -> Result<Url, string> {
         },
         Option.None => {},
     }
-    Result.Ok(Url { host: host, port: port, path: path })
+    Result.Ok(Url { host: host, port: port, path: path, tls: tls })
 }
 
 fn build_request(method: string, u: Url, body: string) -> string {
@@ -146,11 +154,20 @@ pub fn body_text(r: Response) -> Result<string, string> {
     from_utf8(r.body)
 }
 
+// Abre la conexión adecuada al esquema: TLS para https, TCP en claro para http (M19.4a).
+fn conectar(u: Url) -> Result<int, string> {
+    if (u.tls) {
+        tls_connect(u.host, u.port)
+    } else {
+        tcp_connect(u.host, u.port)
+    }
+}
+
 pub fn request(method: string, url: string, body: string) -> Result<Response, string> {
     match (parse_url(url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
-            match (tcp_connect(u.host, u.port)) {
+            match (conectar(u)) {
                 Result.Err(e) => Result.Err("no se pudo conectar: " + e),
                 Result.Ok(h) => {
                     match (socket_write_bytes(h, to_bytes(build_request(method, u, body)))) {

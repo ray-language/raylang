@@ -1,0 +1,25 @@
+// M19.4a — demo de cliente HTTPS. Hace un GET por TLS de la URL pasada como argumento e imprime el
+// estado y el cuerpo. Usa la librería `http.ray` (que ahora habla http:// y https://).
+//
+// Ejecútalo:  cargo run -- examples/https_demo.ray https://example.com/
+
+from http import fetch, Response, body_text;
+
+fn main() -> int {
+    let a = args();
+    if (len(a) < 1) {
+        eprint("uso: https_demo <url>");
+        return 1;
+    }
+    match (fetch(a[0])) {
+        Result.Err(e) => { eprint(e); 1 },
+        Result.Ok(r) => {
+            print("status=" + to_string(r.status));
+            match (body_text(r)) {
+                Result.Ok(b) => { print("body=" + b); },
+                Result.Err(e) => { eprint("cuerpo no es texto: " + e); },
+            }
+            0
+        },
+    }
+}

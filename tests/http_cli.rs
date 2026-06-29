@@ -106,7 +106,7 @@ fn main() -> int {
 "#;
     for vm in [false, true] {
         let (out, code) = run_with_libs("noproto", driver, vm);
-        assert_eq!(out.trim(), "solo se soporta http:// (sin TLS)", "rechaza no-http (vm={vm}): {out}");
+        assert_eq!(out.trim(), "solo se soporta http:// o https://", "rechaza no-http (vm={vm}): {out}");
         assert_eq!(code, 1);
     }
 }

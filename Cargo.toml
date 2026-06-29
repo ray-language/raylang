@@ -4,3 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# M19.4 — TLS. ÚNICA excepción a la invariante cero-deps (decisión §28.4): la criptografía no se
+# implementa a mano. `rustls` con el proveedor `ring` (Rust+C portable, sin cmake/OpenSSL) + las raíces
+# de confianza de Mozilla (`webpki-roots`) para verificar certificados de servidor.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"
+# Para leer certificados PEM (SSL_CERT_FILE): la feature `std` de los tipos de rustls (ya en el árbol).
+rustls-pki-types = { version = "1", features = ["std"] }

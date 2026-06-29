@@ -1296,6 +1296,17 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M19.4a: abre una conexión TLS → ["ok", handle] o ["err", msg].
+            "__tls_connect" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(host), Value::Int(port)) => match crate::builtins::tls_connect(host, *port) {
+                        Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza string, int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M15.2: lee del socket → ["ok", datos] o ["err", msg].
             "__socket_read" => {
                 let arr = match &values[0] {

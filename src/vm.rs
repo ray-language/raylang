@@ -817,6 +817,17 @@ impl<'a> Vm<'a> {
                         HeapValue::Int(h) => h,
                         _ => unreachable!("el checker garantiza un int"),
                     };
+                    // M19.4a: una conexión TLS se lee bloqueando (rustls es síncrono), sin pasar por el
+                    // camino no bloqueante con cesión; el resto de sockets sí ceden al scheduler.
+                    if crate::builtins::is_tls_handle(handle) {
+                        let elems = match crate::builtins::socket_read_bytes_blocking(handle) {
+                            Ok(data) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)],
+                            Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())],
+                        };
+                        let h = self.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
+                        return Ok(None); // el ip ya avanzó; seguir con la siguiente instrucción
+                    }
                     match crate::builtins::socket_read_bytes_nb(handle) {
                         Ok(Some(data)) => {
                             let elems = vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)];
@@ -1186,6 +1197,21 @@ impl<'a> Vm<'a> {
                             let _ = crate::builtins::set_nonblocking(h);
                             vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())]
                         }
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M19.4a: conexión TLS. A diferencia de TcpConnect NO se pone en no bloqueante (rustls
+                // es bloqueante en M19.4a; SocketReadBytes lo detecta y lee bloqueando, sin ceder).
+                OpCode::TlsConnect => {
+                    let port = self.pop();
+                    let host = self.pop();
+                    let (HeapValue::Str(host), HeapValue::Int(port)) = (host, port) else {
+                        unreachable!("el checker garantiza string, int");
+                    };
+                    let elems = match crate::builtins::tls_connect(&host, port) {
+                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
                     let h = self.heap.allocate(Obj::Array(elems));

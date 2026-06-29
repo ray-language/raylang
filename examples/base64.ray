@@ -1,0 +1,51 @@
+// base64 (RFC 4648) escrito EN raylang. Cero runtime nuevo: puro cómputo sobre los operadores
+// bit a bit (M19.3a) y la stdlib de strings. Importable: `from base64 import base64;`.
+//
+// Codifica un arreglo de octetos (`[int]`, cada elemento 0..255) en su representación base64
+// estándar (con relleno `=`). Es lo que el handshake de WebSocket necesita para el digest SHA-1.
+
+fn alphabet() -> string { "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" }
+
+// El carácter base64 del valor de 6 bits `idx` (0..63).
+fn enc_char(idx: int) -> string {
+    let a = alphabet();
+    to_string(a[idx])
+}
+
+pub fn base64(data: [int]) -> string {
+    let n = len(data);
+    var out = "";
+    // Bloques completos de 3 octetos → 4 caracteres.
+    var i = 0;
+    while (i + 3 <= n) {
+        let b0 = data[i] & 255;
+        let b1 = data[i + 1] & 255;
+        let b2 = data[i + 2] & 255;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out = out + enc_char((triple >> 18) & 63);
+        out = out + enc_char((triple >> 12) & 63);
+        out = out + enc_char((triple >> 6) & 63);
+        out = out + enc_char(triple & 63);
+        i = i + 3;
+    }
+    // Cola: 1 o 2 octetos sobrantes se rellenan con '='.
+    let rem = n - i;
+    if (rem == 1) {
+        let b0 = data[i] & 255;
+        let triple = b0 << 16;
+        out = out + enc_char((triple >> 18) & 63);
+        out = out + enc_char((triple >> 12) & 63);
+        out = out + "==";
+    } else {
+        if (rem == 2) {
+            let b0 = data[i] & 255;
+            let b1 = data[i + 1] & 255;
+            let triple = (b0 << 16) | (b1 << 8);
+            out = out + enc_char((triple >> 18) & 63);
+            out = out + enc_char((triple >> 12) & 63);
+            out = out + enc_char((triple >> 6) & 63);
+            out = out + "=";
+        }
+    }
+    out
+}

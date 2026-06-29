@@ -70,7 +70,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M16** | **tipo `bytes`** (datos binarios) | nuevo tipo en el pipeline, literal `b"..."`, I/O binaria | ✅ §25: ✅ **M16.1a** el tipo (literal `b"..."` con `\xNN`, `len`/index→int/`==`; oráculo) · ✅ **M16.1b** string-interop (`to_bytes`/`from_utf8` + `+`; oráculo) · ✅ **M16.1c** I/O binaria (`read_file_bytes`/`write_file_bytes`/`socket_read_bytes`/`socket_write_bytes`; lecturas → `[bytes]` etiquetado; socket cede al scheduler; subproceso). **M16 COMPLETO** (cierra la deuda binaria de M15). Diferido: `bytes` como clave de Map, mutabilidad |
 | **M17** | **`epoll`/`kqueue`** (readiness real, sustituye el busy-poll de M15.5) | E/S asíncrona del SO, `unsafe` acotado, FFI cero-deps | ✅ §26: poller del SO (`kqueue` macOS/BSD, `epoll` Linux) en `src/poll.rs`; FFI propio (`extern "C"`, sin el crate `libc` → invariante cero-deps); el scheduler de la VM se **bloquea** hasta readiness real y despierta **solo** las fibras de los fds listos (`io_parked` lleva ahora el `fd`); fallback al busy-poll de M15.5 en plataformas sin poller o EINTR; comportamiento idéntico (regresión: tests de M15.5/red concurrente). **M17 COMPLETO** (diferido: cesión en `socket_write`, registro persistente del poller, `bytes`/TLS en el toolchain auto-alojado) |
 | **M18** | **backend nativo** (bootstrap sin Rust) | codegen a máquina/LLVM/C | 💤 **aparcado** (decisión del usuario): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va al transversal de optimización de la VM. Se retoma más adelante |
-| **M19** | **la capa web** (servidor HTTP async + SSE · HTTP en bytes · WebSockets `ws://` · TLS) | protocolos de alto nivel como librería raylang sobre los sockets/scheduler; criptografía vs. cero-deps | 🚧 §28: ✅ **M19.1** servidor web async + SSE (librería `webserver.ray` sobre el servidor concurrente de M15.5/M17; cero runtime) · ✅ **M19.2** HTTP en `bytes` (builtin `sub_bytes` + cliente `http.ray` y servidor `webserver.ray` con cuerpo `bytes`; round-trip binario `\x00`/`\xff` intacto) · 🚧 **M19.3** WebSockets `ws://` (handshake SHA-1+base64 en raylang + framing con `bytes`): ✅ **M19.3a** operadores bit a bit `& | ^ ~ << >>` (habilitador, único toque de lenguaje; oráculo) · **M19.3b** SHA-1/base64/handshake/framing (pendiente) · **M19.4** TLS/SSL (**bloqueado por la invariante cero-deps**: pediría criptografía; decisión pendiente — excepción de dependencia o *shell-out* a `openssl`). `wss`/`https` dependen de M19.4 |
+| **M19** | **la capa web** (servidor HTTP async + SSE · HTTP en bytes · WebSockets `ws://` · TLS) | protocolos de alto nivel como librería raylang sobre los sockets/scheduler; criptografía vs. cero-deps | 🚧 §28: ✅ **M19.1** servidor web async + SSE (librería `webserver.ray` sobre el servidor concurrente de M15.5/M17; cero runtime) · ✅ **M19.2** HTTP en `bytes` (builtin `sub_bytes` + cliente `http.ray` y servidor `webserver.ray` con cuerpo `bytes`; round-trip binario `\x00`/`\xff` intacto) · 🚧 **M19.3** WebSockets `ws://` (handshake SHA-1+base64 en raylang + framing con `bytes`): ✅ **M19.3a** operadores bit a bit `& | ^ ~ << >>` (habilitador, único toque de lenguaje; oráculo) · ✅ **M19.3b** SHA-1 + base64 en raylang (`sha1.ray`/`base64.ray`, cero runtime nuevo; vectores RFC 3174/4648/6455) · **M19.3c** handshake + framing + echo server (pendiente) · **M19.4** TLS/SSL (**bloqueado por la invariante cero-deps**: pediría criptografía; decisión pendiente — excepción de dependencia o *shell-out* a `openssl`). `wss`/`https` dependen de M19.4 |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) 🚧 | rendimiento, bootstrapping | 🚧 §27: banco `benchmarks/` (`bench.sh`+hyperfine, o `measure.py` sin deps; fib/bucle/arreglos, mejor-de-N); regla **medir-antes-y-después, conservar solo lo que supera el ruido**. Opt.1/Opt.2 ✅ (pase previo), Opt.3 (`Rc<str>`) ❌ descartada. ✅ **Opt.4** fast-path entero en el lazo de ops binarias (evita el doble match + la llamada a `apply_binary`; fib(35) −5%, bucle 10M −6%; oráculo VM↔intérprete intacto, semántica idéntica) · LTO/`codegen-units=1` **descartado** (no mejora, medido) |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -3868,7 +3868,21 @@ anidados (`Caja<Caja<int>>`); el lexer siempre emite `Shr` y el parser lo **part
 argumentos de tipo (`close_type_angle`, estilo Rust/Java). Diferido: bitops en el toolchain auto-alojado
 (como `bytes`; `selfhost/lexer.ray` aún no los tokeniza → fuera del corpus del oráculo de self-hosting).
 
-**M19.3b — SHA-1 + base64 + handshake + framing**: pendiente (sobre los bitops de M19.3a).
+**M19.3b — SHA-1 + base64 (cómputo puro)** ✅. Ambos **escritos en raylang** (`examples/sha1.ray`,
+`examples/base64.ray`), **cero runtime nuevo**: sobre los bitops de M19.3a + `bytes` (M16) + la stdlib
+de strings. `sha1(msg: bytes) -> [int]` (digest de 20 octetos; `sha1_hex` para la forma hex);
+`base64(data: [int]) -> string`. Clave: no hicieron falta builtins nuevos —leer octetos es `b[i]`
+(indexado de `bytes`, M16.1a, ya da `int`) y el digest se modela como `[int]`—; SHA-1 es aritmética de
+32 bits sobre el `int` de 64 (se enmascara con `& 0xFFFFFFFF` y se rota con `rotl`). Verificado contra
+**vectores estándar** (RFC 3174 SHA-1, RFC 4648 base64) y el **accept canónico del RFC 6455**
+(`base64(SHA-1("dGhlIHNhbXBsZSBub25jZQ==" + GUID)) = s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`), idéntico en
+intérprete y VM (`tests/websocket_cli.rs`, driver `examples/crypto_demo.ray`). Diferido en el toolchain
+auto-alojado (bitops, como `bytes`).
+
+**M19.3c — handshake + framing + echo server**: pendiente. El handshake parsea `Sec-WebSocket-Key`,
+responde `Sec-WebSocket-Accept` (ya computable con M19.3b) y conmuta a tramas; el framing
+(FIN/opcode/mask/length, des-enmascarar) se lee/escribe con `bytes` — para **construir** tramas hará
+falta una primitiva `bytes_of([int]) -> bytes` (dual del indexado, único toque de runtime previsto).
 
 ### 28.4 M19.4 — TLS / SSL
 

@@ -71,7 +71,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M17** | **`epoll`/`kqueue`** (readiness real, sustituye el busy-poll de M15.5) | E/S asíncrona del SO, `unsafe` acotado, FFI cero-deps | ✅ §26: poller del SO (`kqueue` macOS/BSD, `epoll` Linux) en `src/poll.rs`; FFI propio (`extern "C"`, sin el crate `libc` → invariante cero-deps); el scheduler de la VM se **bloquea** hasta readiness real y despierta **solo** las fibras de los fds listos (`io_parked` lleva ahora el `fd`); fallback al busy-poll de M15.5 en plataformas sin poller o EINTR; comportamiento idéntico (regresión: tests de M15.5/red concurrente). **M17 COMPLETO** (diferido: cesión en `socket_write`, registro persistente del poller, `bytes`/TLS en el toolchain auto-alojado) |
 | **M18** | **backend nativo** (bootstrap sin Rust) | codegen a máquina/LLVM/C | 💤 **aparcado** (decisión del usuario): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va al transversal de optimización de la VM. Se retoma más adelante |
 | **M19** | **la capa web** (servidor HTTP async + SSE · HTTP en bytes · WebSockets `ws://` · TLS) | protocolos de alto nivel como librería raylang sobre los sockets/scheduler; criptografía vs. cero-deps | ✅ §28: ✅ **M19.1** servidor web async + SSE (librería `webserver.ray` sobre el servidor concurrente de M15.5/M17; cero runtime) · ✅ **M19.2** HTTP en `bytes` (builtin `sub_bytes` + cliente `http.ray` y servidor `webserver.ray` con cuerpo `bytes`; round-trip binario `\x00`/`\xff` intacto) · 🚧 **M19.3** WebSockets `ws://` (handshake SHA-1+base64 en raylang + framing con `bytes`): ✅ **M19.3a** operadores bit a bit `& | ^ ~ << >>` (habilitador, único toque de lenguaje; oráculo) · ✅ **M19.3b** SHA-1 + base64 en raylang (`sha1.ray`/`base64.ray`, cero runtime nuevo; vectores RFC 3174/4648/6455) · ✅ **M19.3c** handshake + framing + echo server (`websocket.ray`/`websocket_echo.ray`; builtin `bytes_of`; e2e en el test) → **M19.3 COMPLETO** · ✅ **M19.4** TLS/SSL — **decidido: excepción cero-deps con `rustls`** (§28.4; 1.ª dependencia de Cargo): ✅ **M19.4a** cliente TLS + `https://` (`tls_connect`; handle TLS en el registro de sockets → `http.ray` habla https transparente; verificación con `webpki-roots` + `SSL_CERT_FILE`; test determinista con servidor TLS local) · ✅ **M19.4b** servidor TLS + `wss://` (`tls_accept`; rustls conducido a mano sobre el enum `Connection`, **integrado con el scheduler no bloqueante** —aparca la fibra en el fd al bloquear leyendo—; misma bomba sirve a ambos motores; `wss_echo.ray`; e2e con cliente WebSocket-sobre-TLS en el test) → **M19.4 + M19 COMPLETOS** |
-| **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) 🚧 | rendimiento, bootstrapping | 🚧 §27: banco `benchmarks/` (`bench.sh`+hyperfine, o `measure.py` sin deps; fib/bucle/arreglos, mejor-de-N); regla **medir-antes-y-después, conservar solo lo que supera el ruido**. Opt.1/Opt.2 ✅ (pase previo), Opt.3 (`Rc<str>`) ❌ descartada. ✅ **Opt.4** fast-path entero en el lazo de ops binarias (evita el doble match + la llamada a `apply_binary`; fib(35) −5%, bucle 10M −6%; oráculo VM↔intérprete intacto, semántica idéntica) · LTO/`codegen-units=1` **descartado** (no mejora, medido) |
+| **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) 🚧 | rendimiento, bootstrapping | 🚧 §27: banco `benchmarks/` (`bench.sh`+hyperfine, o `measure.py` sin deps; fib/bucle/arreglos, mejor-de-N); regla **medir-antes-y-después, conservar solo lo que supera el ruido**. Opt.1/Opt.2 ✅ (pase previo), Opt.3 (`Rc<str>`) ❌ descartada. ✅ **Opt.4** fast-path entero en el lazo de ops binarias (evita el doble match + la llamada a `apply_binary`; fib(35) −5%, bucle 10M −6%) · ✅ **Opt.7** posición `(línea,col)` perezosa (`pos!()`: se quita la lectura de `lines[ip]` por instrucción del camino caliente; **−7/−9/−8 % en fib/loop/arrays**, consistente; mejor-de-15 para destapar la señal bajo el ruido) · Opt.5/Opt.6/Opt.8/LTO **descartados** (medidos dentro del ruido o incorrectos). Oráculo VM↔intérprete intacto en cada paso |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
 > que cada uno se especifica en su propia sección al arrancarlo (M12 → §21, M13 → §22, M14 → §23,
@@ -3744,7 +3744,8 @@ El banco vive en `benchmarks/`, con dos arneses y varias cargas que estresan eje
   SO mejor que la media). Compara la misma carga entre builds; el arranque (parse/check/compile) es coste
   constante → los deltas son fieles.
 - Cargas: `fib.ray`/`fib35.ray` (recursión: llamadas, marcos, despacho), `loop.ray` (bucle aritmético
-  apretado: pila, saltos, aritmética entera), `arrays.ray` (asignación en heap + GC).
+  apretado: pila, saltos, aritmética entera), `arrays.ray` (asignación en heap + GC), `gcnested.ray`
+  (arreglos de arreglos → el GC traza objetos con **hijos en el heap**, no solo primitivos).
 
 No se usa `cargo bench` (pediría `criterion`, una dependencia → rompería la invariante cero-deps). El
 ruido típico observado es ~3–5 %; una optimización debe superarlo con holgura y de forma **consistente
@@ -3767,6 +3768,16 @@ empiece en Opt.4.)
   módulos del lazo de despacho) **no se materializó**: medido, tanto LTO «fat» como «thin» salieron
   iguales o ligeramente peores que el perfil por defecto. El perfil se quedó por defecto. (Ejemplo
   canónico de por qué se mide antes de comprometer.)
+- **Opt.7 — posición `(línea, col)` perezosa.** El lazo de despacho leía `chunk.lines[ip]` (una `(usize,
+  usize)`) **por cada instrucción**, pero el camino caliente (locales, constantes, aritmética, saltos)
+  **nunca la usa** —solo los sitios de error o de cesión del scheduler—. Ahora se resuelve **bajo
+  demanda** con un macro `pos!()` (lee `lines[ip]` solo donde hace falta), quitando una lectura de
+  memoria de cada iteración del lazo. Medido (mejor de **15** —best-of-5 no resolvía la señal del ruido,
+  ver abajo): **fib(35) −7 %, bucle 10M −9 %, arrays −8 %**. **Consistente entre las tres cargas** (toda
+  instrucción pasa por el lazo) y correcto (oráculo + tests de posición de error intactos: la posición se
+  calcula igual, solo que perezosamente). **Lección de medición**: el efecto (~8 %) quedaba *enmascarado*
+  por la varianza de mejor-de-5 (la baseline saltaba ±4 % entre corridas); subir a mejor-de-15 lo destapó
+  limpio. Best-of-N con N grande filtra el ruido del planificador mejor que N pequeño.
 
 ### 27.3 Medidas y rechazadas (la disciplina en acción)
 
@@ -3778,6 +3789,12 @@ empiece en Opt.4.)
   punto seguro para cazar raíces faltantes). Capturarlo bien exigiría mover el safepoint a solo los sitios
   de asignación + back-edges preservando el estrés: rediseño con riesgo sobre el test sagrado del GC →
   diferido, no compensa por ~2-3 %.
+- **Opt.8 — `children()` del GC con buffer reusado** (un `Vec` por `trace` en vez de uno por objeto
+  trazado, vía `collect_children` que vuelca en un buffer compartido): **medido dentro del ruido**, incluso
+  con un benchmark nuevo `gcnested.ray` (arreglos de arreglos → objetos con hijos en el heap) → revertido.
+  Causa: el `trace` solo corre en una recolección (infrecuente; el umbral crece ×2 con la población viva),
+  y asignar un `Vec` pequeño no es el cuello de botella; para arreglos de `int` (la carga `arrays`) los
+  hijos son primitivos → `children` ya devolvía un `Vec` vacío (que no asigna). El benchmark se conserva.
 
 ### 27.4 Pendiente / ideas a medir
 

@@ -1,0 +1,19 @@
+// GC con hijos en el heap: arreglos de arreglos (cada interno es un objeto trazado con handles).
+fn main() -> int {
+    var total: int = 0;
+    var r: int = 0;
+    while (r < 3000) {
+        var outer: [[int]] = [];
+        var k: int = 0;
+        while (k < 50) {
+            var inner: [int] = [];
+            var i: int = 0;
+            while (i < 20) { push(inner, i); i = i + 1; }
+            push(outer, inner);
+            k = k + 1;
+        }
+        total = total + len(outer);
+        r = r + 1;
+    }
+    total % 1000
+}

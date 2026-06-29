@@ -204,10 +204,13 @@ impl<'a> Vm<'a> {
                 continue;
             }
 
-            // La instrucción y su posición se toman PRESTADAS del programa (Opt.1: sin clonar). `instr`
-            // vive lo que `program` (toda la VM), así que no estorba a las mutaciones de `self` del cuerpo.
+            // La instrucción se toma PRESTADA del programa (Opt.1: sin clonar). `instr` vive lo que
+            // `program` (toda la VM), así que no estorba a las mutaciones de `self` del cuerpo.
             let instr = &program.functions[func].chunk.code[ip];
-            let (line, col) = program.functions[func].chunk.lines[ip];
+            // Opt.7: la posición `(línea, col)` NO se lee por instrucción —el camino caliente
+            // (locales/constantes/aritmética/saltos) nunca la usa, solo los sitios de error o de cesión—.
+            // Se resuelve **bajo demanda** con `pos!()`, leyendo `lines[ip]` solo donde hace falta.
+            macro_rules! pos { () => {{ let p = program.functions[func].chunk.lines[ip]; (p.0, p.1) }} }
             self.frames[fi].ip = ip + 1; // avance por defecto; los saltos lo cambian
 
             // M12.3: ejecutamos la instrucción dentro de un cierre que devuelve `Ok(Some(v))` (fin del
@@ -281,13 +284,13 @@ impl<'a> Vm<'a> {
                             OpCode::Mul => HeapValue::Int(a * b),
                             OpCode::Div => {
                                 if b == 0 {
-                                    return Err(runtime_error(line, col, "división entera por cero"));
+                                    return Err(runtime_error(pos!().0, pos!().1, "división entera por cero"));
                                 }
                                 HeapValue::Int(a / b)
                             }
                             OpCode::Rem => {
                                 if b == 0 {
-                                    return Err(runtime_error(line, col, "módulo por cero"));
+                                    return Err(runtime_error(pos!().0, pos!().1, "módulo por cero"));
                                 }
                                 HeapValue::Int(a % b)
                             }
@@ -316,7 +319,7 @@ impl<'a> Vm<'a> {
                         let h = self.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
                     } else {
-                        let result = self.apply_binary(bin, left, right, line, col)?;
+                        let result = self.apply_binary(bin, left, right, pos!().0, pos!().1)?;
                         self.push(result);
                     }
                 }
@@ -382,7 +385,7 @@ impl<'a> Vm<'a> {
                         HeapValue::Obj(h) => {
                             let idx = {
                                 let arr = self.as_array(h);
-                                bounds_check(i, arr.len(), line, col)?
+                                bounds_check(i, arr.len(), pos!().0, pos!().1)?
                             };
                             let v = self.as_array(h)[idx].clone();
                             self.push(v);
@@ -390,12 +393,12 @@ impl<'a> Vm<'a> {
                         // M11.4c-2: indexar un string → el carácter en esa posición.
                         HeapValue::Str(s) => {
                             let chars: Vec<char> = s.chars().collect();
-                            let idx = bounds_check(i, chars.len(), line, col)?;
+                            let idx = bounds_check(i, chars.len(), pos!().0, pos!().1)?;
                             self.push(HeapValue::Char(chars[idx]));
                         }
                         // M16.1a: indexar bytes → el octeto como int.
                         HeapValue::Bytes(b) => {
-                            let idx = bounds_check(i, b.len(), line, col)?;
+                            let idx = bounds_check(i, b.len(), pos!().0, pos!().1)?;
                             self.push(HeapValue::Int(b[idx] as i64));
                         }
                         _ => unreachable!("el checker garantiza un arreglo, string o bytes"),
@@ -405,7 +408,7 @@ impl<'a> Vm<'a> {
                     let v = self.pop();
                     let i = self.pop_int();
                     let h = self.pop_obj();
-                    let idx = bounds_check(i, self.as_array(h).len(), line, col)?;
+                    let idx = bounds_check(i, self.as_array(h).len(), pos!().0, pos!().1)?;
                     self.as_array_mut(h)[idx] = v;
                 }
                 OpCode::Len => {
@@ -546,7 +549,7 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("el checker garantiza un int"),
                     };
                     if n < 0 {
-                        return Err(runtime_error(line, col, "la capacidad de un canal no puede ser negativa"));
+                        return Err(runtime_error(pos!().0, pos!().1, "la capacidad de un canal no puede ser negativa"));
                     }
                     let h = self.heap.allocate(Obj::Channel(VmChannel {
                         queue: VecDeque::new(), closed: false, cap: Some(n as usize),
@@ -561,7 +564,7 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("el checker garantiza un Channel"),
                     };
                     if closed {
-                        return Err(runtime_error(line, col, "send sobre un canal cerrado"));
+                        return Err(runtime_error(pos!().0, pos!().1, "send sobre un canal cerrado"));
                     }
                     // (1) ¿Hay un receptor bloqueado en este canal? Entrégaselo directo (rendezvous) y
                     // despiértalo (el primero, FIFO → determinista).
@@ -588,7 +591,7 @@ impl<'a> Vm<'a> {
                         // M12.4: un emisor bloqueado vuelve al canal "listo" para un select (un recv lo
                         // tomaría); despierta a los selectores que lo esperan.
                         self.wake_select_waiters(h);
-                        self.schedule_next(line, col)?;
+                        self.schedule_next(pos!().0, pos!().1)?;
                     }
                 }
                 OpCode::ChanRecv => {
@@ -633,7 +636,7 @@ impl<'a> Vm<'a> {
                         // despertarla, el `wake_recv` le deja el `[T]` en la pila y continúa) y conmutar.
                         let fiber = self.take_current_fiber();
                         self.parked.push(Parked { on: h, fiber, waiting: Waiting::Recv });
-                        self.schedule_next(line, col)?;
+                        self.schedule_next(pos!().0, pos!().1)?;
                     }
                 }
                 OpCode::TaskJoin => {
@@ -649,7 +652,7 @@ impl<'a> Vm<'a> {
                     };
                     match outcome {
                         Some(Ok(v)) => self.push(v),
-                        Some(Err(msg)) => return Err(runtime_error(line, col, &msg)),
+                        Some(Err(msg)) => return Err(runtime_error(pos!().0, pos!().1, &msg)),
                         None => {
                             // Bloquear: re-empuja el handle (lo sacamos arriba) y rebobina el ip al
                             // TaskJoin, para que al despertar (con la tarea ya Done/Failed) lo re-ejecute.
@@ -657,7 +660,7 @@ impl<'a> Vm<'a> {
                             self.frames.last_mut().unwrap().ip -= 1;
                             let fiber = self.take_current_fiber();
                             self.parked.push(Parked { on: t, fiber, waiting: Waiting::Join });
-                            self.schedule_next(line, col)?;
+                            self.schedule_next(pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -680,7 +683,7 @@ impl<'a> Vm<'a> {
                             self.cancel_task(c); // ignora las no-pendientes (la que falló, las Done)
                         }
                         self.scopes.pop();
-                        return Err(runtime_error(line, col, &msg));
+                        return Err(runtime_error(pos!().0, pos!().1, &msg));
                     }
                     // (2) ¿Alguna pendiente? Rebobina a ScopeEnd y bloquéate (al despertar re-escanea).
                     let pending = children.iter().copied().find(|&c| matches!(
@@ -689,7 +692,7 @@ impl<'a> Vm<'a> {
                         self.frames.last_mut().unwrap().ip -= 1;
                         let fiber = self.take_current_fiber();
                         self.parked.push(Parked { on: c, fiber, waiting: Waiting::Join });
-                        self.schedule_next(line, col)?;
+                        self.schedule_next(pos!().0, pos!().1)?;
                     } else {
                         // (3) Todas terminaron con éxito: desapila el scope.
                         self.scopes.pop();
@@ -725,7 +728,7 @@ impl<'a> Vm<'a> {
                             self.frames.last_mut().unwrap().ip -= 1;
                             let fiber = self.take_current_fiber();
                             self.parked.push(Parked { on: arr, fiber, waiting: Waiting::Select });
-                            self.schedule_next(line, col)?;
+                            self.schedule_next(pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -838,7 +841,7 @@ impl<'a> Vm<'a> {
                                 let fiber = self.take_current_fiber();
                                 let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                                 self.io_parked.push(IoParked { fd, fiber });
-                                self.schedule_next(line, col)?;
+                                self.schedule_next(pos!().0, pos!().1)?;
                             }
                         }
                         return Ok(None);
@@ -861,7 +864,7 @@ impl<'a> Vm<'a> {
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             self.io_parked.push(IoParked { fd, fiber });
-                            self.schedule_next(line, col)?;
+                            self.schedule_next(pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -1034,7 +1037,7 @@ impl<'a> Vm<'a> {
                         HeapValue::Str(s) => s,
                         _ => unreachable!("el checker garantiza un string"),
                     };
-                    return Err(runtime_error(line, col, &msg));
+                    return Err(runtime_error(pos!().0, pos!().1, &msg));
                 }
                 OpCode::EPrint => {
                     let v = self.pop();
@@ -1282,7 +1285,7 @@ impl<'a> Vm<'a> {
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             self.io_parked.push(IoParked { fd, fiber });
-                            self.schedule_next(line, col)?;
+                            self.schedule_next(pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -1341,7 +1344,7 @@ impl<'a> Vm<'a> {
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             self.io_parked.push(IoParked { fd, fiber });
-                            self.schedule_next(line, col)?;
+                            self.schedule_next(pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -1365,7 +1368,7 @@ impl<'a> Vm<'a> {
                             if self.parked.iter().any(
                                 |p| p.on == ch && matches!(p.waiting, Waiting::Send(_)))
                             {
-                                return Err(runtime_error(line, col,
+                                return Err(runtime_error(pos!().0, pos!().1,
                                     "close sobre un canal con un emisor bloqueado"));
                             }
                             match self.heap.get_mut(ch) {
@@ -1480,7 +1483,7 @@ impl<'a> Vm<'a> {
                     self.push(v);
                 }
                 OpCode::MatchFail => {
-                    return Err(runtime_error(line, col, "ningún brazo del match casó (no debería ocurrir)"));
+                    return Err(runtime_error(pos!().0, pos!().1, "ningún brazo del match casó (no debería ocurrir)"));
                 }
                 OpCode::GetField(name) => {
                     let h = self.pop_obj();
@@ -1498,7 +1501,7 @@ impl<'a> Vm<'a> {
 
                 OpCode::Call(idx, argc) => {
                     if self.frames.len() >= MAX_FRAMES {
-                        return Err(runtime_error(line, col, "desbordamiento de pila (recursión demasiado profunda)"));
+                        return Err(runtime_error(pos!().0, pos!().1, "desbordamiento de pila (recursión demasiado profunda)"));
                     }
                     let mut locals = self.new_locals(*idx);
                     for i in (0..*argc).rev() {
@@ -1528,7 +1531,7 @@ impl<'a> Vm<'a> {
                 OpCode::Function(idx) => self.push(HeapValue::Function(*idx)),
                 OpCode::CallValue(argc) => {
                     if self.frames.len() >= MAX_FRAMES {
-                        return Err(runtime_error(line, col, "desbordamiento de pila (recursión demasiado profunda)"));
+                        return Err(runtime_error(pos!().0, pos!().1, "desbordamiento de pila (recursión demasiado profunda)"));
                     }
                     let mut args_rev = Vec::with_capacity(*argc);
                     for _ in 0..*argc {

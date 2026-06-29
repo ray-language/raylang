@@ -3895,8 +3895,30 @@ sin fragmentación/extensiones). `wss://` (sobre TLS) sigue dependiendo de M19.4
 
 El **bloqueo duro**. `https`/`wss` exigen TLS: criptografía real (AEAD tipo AES-GCM/ChaCha20-Poly1305,
 intercambio de claves ECDHE, certificados X.509, …). Implementarla a mano con seguridad es inviable, y
-la **invariante cero-deps** prohíbe `rustls`/`native-tls`. Opciones, **a decidir con el usuario**:
-(a) **excepción explícita** a la invariante para una dependencia de TLS bien acotada (lo pragmático);
-(b) ***shell-out*** a `openssl s_client`/un proxy local (mantiene cero-deps de Cargo, pero exige el
-binario `openssl` y un proceso externo); (c) **dejarlo fuera de alcance** y documentar que raylang habla
-HTTP/WS en claro (coherente con su carácter pedagógico). Hasta resolver esto, `https`/`wss` quedan fuera.
+la **invariante cero-deps** prohíbe `rustls`/`native-tls`.
+
+**Decisión (con el usuario): opción (a) — excepción explícita a la invariante con `rustls`.** Es la
+primera dependencia de Cargo del proyecto, una **excepción consciente y acotada** (registrada en
+IDEAS.md): TLS es el único dominio donde "hazlo a mano" es irresponsable (criptografía), así que se delega
+en una librería revisada en vez de inventar. `rustls` (Rust puro, sin OpenSSL) arrastra un árbol
+transitivo (su proveedor criptográfico + `webpki`/roots), de modo que "una dependencia" es el *grafo* de
+rustls, no un único crate — el espíritu de la excepción es "una sola **decisión** de dependencia, en un
+solo dominio (TLS)". El resto del lenguaje sigue cero-deps.
+
+**Arquitectura**: igual que los sockets (M15) e I/O con handles (M11.8), una **sesión TLS vive en el
+almacén del host** (un `Mutex<HashMap<i64, TlsConn>>`), y el handle es un `int`. Builtins nuevos envuelven
+el stream; lecturas/escrituras reutilizan el patrón `Result`/arreglo etiquetado.
+
+Sub-fases:
+- **M19.4a — cliente TLS (bloqueante) + `https://`**: `tls_connect(host, port) -> Result<int,string>`
+  (handshake rustls sobre un `TcpStream` **bloqueante**) + `tls_read`/`tls_write` (o reusar la forma de
+  `socket_*`). Habilita `https` en `http.ray` (que es síncrono, "Connection: close" + leer hasta EOF →
+  bloqueante basta). Test determinista: un **servidor TLS local en el test (Rust)** con certificado
+  autofirmado; el cliente raylang conecta confiando en esa CA de prueba.
+- **M19.4b — servidor TLS + `wss://`**: `tls_accept(listener, cert, key)` envuelve una conexión aceptada.
+  Más difícil: integrar la **máquina de estados de rustls con el scheduler no bloqueante** (M15.5/M17) —
+  ceder la fibra cuando el socket subyacente bloquearía mientras rustls procesa registros— y cargar
+  cert/clave. Habilita servir `https`/`wss`. Posible diferido si la integración con kqueue/epoll se
+  complica (un primer cut bloqueante, una fibra por conexión).
+
+Hasta M19.4a, `https`/`wss` siguen fuera; con M19.4a, `https` cliente; con M19.4b, también servidor.

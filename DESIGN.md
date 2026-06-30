@@ -4167,4 +4167,24 @@ Verificado e2e contra un **servidor DNS de juguete en Rust** que responde A/AAAA
 con un puntero de compresión `0xC00C` en su exchange) por ambos motores (`tests/dns_cli.rs`), y comprobado
 a mano contra **DNS real** (8.8.8.8: A, AAAA con `::`, MX null de example.com, y sus 2 TXT reales —SPF +
 token de verificación—). ID fijo (un resolver real lo aleatoriza y reintenta). Diferido: SRV/NS/SOA/PTR,
-TCP fallback para respuestas truncadas, caché por TTL.
+TCP fallback para respuestas truncadas.
+
+**M22.1 — caché DNS por TTL** ✅ (`dns_cache.ray`). Envuelve el resolver respetando el TTL. `dns.ray`
+expone `query_full`/`parse_full` → `DnsResult { records, ttl }` (TTL mínimo de la respuesta, vía `be32`);
+`query`/`parse_records` pasan a ser envoltorios. La caché (`struct Cache` con arreglos paralelos clave→
+registros+expiración; clave = `"qtype:nombre"`) sirve de la caché si `now() < expiración`, si no consulta
+y guarda con `now() + ttl*1000`; contadores de aciertos/fallos. Verificado e2e: el servidor de juguete
+**cuenta** las consultas → 3 resoluciones de 2 claves distintas dan solo **2** consultas (la repetida se
+cachea), por ambos motores (`tests/dns_cache_cli.rs`).
+
+## §32 — M23: cliente OAuth 2.0
+
+**M23 — OAuth2** ✅ (`oauth2.ray`). Cliente OAuth 2.0 como librería raylang, apilado sobre `http.ray`
+(peticiones) + `url.ray` (form-encoding) + `json.ray` (respuesta del token). Cubre el grant
+**client_credentials** (POST `application/x-www-form-urlencoded` al token endpoint → `struct Token
+{ access_token, token_type, expires_in }`), `authorize_url` (construye la URL del flujo de código) y
+`bearer_header` (cabecera `Authorization: Bearer …` para las APIs protegidas). Extractores sobre el `Json`
+de `json.ray` (`JObject`/`JStr`/`JNum`; `expires_in` entero vía `to_string`+`parse_int` porque JSON solo
+tiene float). Maneja la respuesta de error de OAuth (`{"error": …}`) aun con HTTP no-200. Verificado e2e
+contra un **token endpoint de juguete en Rust** (valida el grant, responde el JSON del token) por ambos
+motores (`tests/oauth2_cli.rs`). Diferido: flujos authorization_code/refresh_token completos, PKCE.

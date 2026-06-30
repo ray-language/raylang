@@ -1,0 +1,124 @@
+// Cliente OAuth 2.0, escrito EN raylang. Cero runtime nuevo: se apila sobre `http.ray` (peticiones) +
+// `url.ray` (form-encoding) + `json.ray` (respuesta del token). Importable:
+//   from oauth2 import Token, client_credentials, authorize_url, bearer_header;
+//
+// Cubre el grant **client_credentials** (de servidor a servidor: POST application/x-www-form-urlencoded
+// al token endpoint → access_token), la construcción de la **URL de autorización** del flujo de código,
+// y el armado de la cabecera `Authorization: Bearer <token>` para llamar a las APIs protegidas.
+
+from http import request_with, body_text, Response;
+from json import Json, parse;
+from url import url_encode;
+
+// El token devuelto por el servidor de autorización.
+pub struct Token {
+    access_token: string,
+    token_type: string,
+    expires_in: int, // segundos hasta la expiración (0 si no se indica)
+}
+
+// --- Extractores sobre el JSON parseado ---
+fn obj_get(j: Json, key: string) -> Option<Json> {
+    match (j) {
+        Json.JObject(m) => get(m, key),
+        _ => Option.None,
+    }
+}
+fn as_str(j: Json) -> string {
+    match (j) {
+        Json.JStr(s) => s,
+        _ => "",
+    }
+}
+// JSON solo tiene números float; expires_in es entero → se convierte vía texto (whole floats → sin punto).
+fn as_int(j: Json) -> int {
+    match (j) {
+        Json.JNum(f) => match (parse_int(to_string(f))) {
+            Option.Some(n) => n,
+            Option.None => 0,
+        },
+        _ => 0,
+    }
+}
+fn str_field(j: Json, key: string) -> string {
+    match (obj_get(j, key)) {
+        Option.Some(v) => as_str(v),
+        Option.None => "",
+    }
+}
+fn int_field(j: Json, key: string) -> int {
+    match (obj_get(j, key)) {
+        Option.Some(v) => as_int(v),
+        Option.None => 0,
+    }
+}
+
+// Parsea la respuesta JSON del token endpoint a un `Token` (o un error de OAuth con su `error`).
+fn parse_token(body: string) -> Result<Token, string> {
+    match (parse(body)) {
+        Result.Err(e) => Result.Err("respuesta del token no es JSON: " + e),
+        Result.Ok(j) => {
+            let err = str_field(j, "error");
+            if (len(err) > 0) {
+                Result.Err("error OAuth: " + err)
+            } else {
+                let at = str_field(j, "access_token");
+                if (len(at) == 0) {
+                    Result.Err("la respuesta no trae access_token")
+                } else {
+                    Result.Ok(Token {
+                        access_token: at,
+                        token_type: str_field(j, "token_type"),
+                        expires_in: int_field(j, "expires_in"),
+                    })
+                }
+            }
+        },
+    }
+}
+
+// Grant client_credentials: POST al token endpoint con las credenciales y devuelve el `Token`.
+pub fn client_credentials(token_url: string, client_id: string, client_secret: string, scope: string) -> Result<Token, string> {
+    var body = "grant_type=client_credentials"
+        + "&client_id=" + url_encode(client_id)
+        + "&client_secret=" + url_encode(client_secret);
+    if (len(scope) > 0) {
+        body = body + "&scope=" + url_encode(scope);
+    }
+    var h: Map<string, string> = map_new();
+    insert(h, "Content-Type", "application/x-www-form-urlencoded");
+    insert(h, "Accept", "application/json");
+    match (request_with("POST", token_url, body, h)) {
+        Result.Err(e) => Result.Err("no se pudo contactar el token endpoint: " + e),
+        Result.Ok(resp) => {
+            match (body_text(resp)) {
+                Result.Err(e) => Result.Err("cuerpo del token no es UTF-8: " + e),
+                Result.Ok(txt) => {
+                    if (resp.status != 200) {
+                        // Aun en error, OAuth devuelve un JSON con `error`; se intenta parsear.
+                        match (parse_token(txt)) {
+                            Result.Err(e) => Result.Err("token endpoint HTTP " + to_string(resp.status) + ": " + e),
+                            Result.Ok(t) => Result.Ok(t),
+                        }
+                    } else {
+                        parse_token(txt)
+                    }
+                },
+            }
+        },
+    }
+}
+
+// Construye la URL de autorización del flujo de código (a la que se redirige al usuario).
+pub fn authorize_url(endpoint: string, client_id: string, redirect_uri: string, scope: string, state: string) -> string {
+    endpoint + "?response_type=code"
+        + "&client_id=" + url_encode(client_id)
+        + "&redirect_uri=" + url_encode(redirect_uri)
+        + "&scope=" + url_encode(scope)
+        + "&state=" + url_encode(state)
+}
+
+// La cabecera `Authorization` para llamar a una API protegida con este token.
+pub fn bearer_header(token: Token) -> string {
+    "Bearer " + token.access_token
+}

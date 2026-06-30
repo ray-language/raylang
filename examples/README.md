@@ -38,7 +38,7 @@ Cliente y servidor TCP; servidor concurrente (solo VM).
 ## `web/` — la capa web
 Librerías en raylang (importables) + sus demos. **El servidor es solo VM.**
 - **Librerías**: `http` (cliente HTTP/HTTPS), `json` (parse/stringify), `webserver` (servidor + SSE),
-  `websocket` (handshake + framing), `sha1` / `base64` (cripto del handshake).
+  `websocket` (handshake + framing), `sha1` / `sha256` / `base64` (cripto), …
 - **Demos**: `http_demo`, `json_demo`, `https_demo`, `webserver_demo`, `websocket_demo`,
   `websocket_echo` (echo `ws://`), `wss_echo` (echo `wss://`), `crypto_demo` (vectores SHA-1/base64).
 - **`framework`**: un micro-framework web tipo Express (enrutado, parámetros de ruta, middleware,

@@ -71,6 +71,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M17** | **`epoll`/`kqueue`** (readiness real, sustituye el busy-poll de M15.5) | E/S asíncrona del SO, `unsafe` acotado, FFI cero-deps | ✅ §26: poller del SO (`kqueue` macOS/BSD, `epoll` Linux) en `src/poll.rs`; FFI propio (`extern "C"`, sin el crate `libc` → invariante cero-deps); el scheduler de la VM se **bloquea** hasta readiness real y despierta **solo** las fibras de los fds listos (`io_parked` lleva ahora el `fd`); fallback al busy-poll de M15.5 en plataformas sin poller o EINTR; comportamiento idéntico (regresión: tests de M15.5/red concurrente). **M17 COMPLETO** (✅ cesión en `socket_write` post-M19: el poller gana interés de escritura `wait(read_fds, write_fds)`; diferido: registro persistente del poller, `bytes`/bitops en el toolchain auto-alojado) |
 | **M18** | **backend nativo** (bootstrap sin Rust) | codegen a máquina/LLVM/C | 💤 **aparcado** (decisión del usuario): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va al transversal de optimización de la VM. Se retoma más adelante |
 | **M19** | **la capa web** (servidor HTTP async + SSE · HTTP en bytes · WebSockets `ws://` · TLS) | protocolos de alto nivel como librería raylang sobre los sockets/scheduler; criptografía vs. cero-deps | ✅ §28: ✅ **M19.1** servidor web async + SSE (librería `webserver.ray` sobre el servidor concurrente de M15.5/M17; cero runtime) · ✅ **M19.2** HTTP en `bytes` (builtin `sub_bytes` + cliente `http.ray` y servidor `webserver.ray` con cuerpo `bytes`; round-trip binario `\x00`/`\xff` intacto) · 🚧 **M19.3** WebSockets `ws://` (handshake SHA-1+base64 en raylang + framing con `bytes`): ✅ **M19.3a** operadores bit a bit `& | ^ ~ << >>` (habilitador, único toque de lenguaje; oráculo) · ✅ **M19.3b** SHA-1 + base64 en raylang (`sha1.ray`/`base64.ray`, cero runtime nuevo; vectores RFC 3174/4648/6455) · ✅ **M19.3c** handshake + framing + echo server (`websocket.ray`/`websocket_echo.ray`; builtin `bytes_of`; e2e en el test) → **M19.3 COMPLETO** · ✅ **M19.4** TLS/SSL — **decidido: excepción cero-deps con `rustls`** (§28.4; 1.ª dependencia de Cargo): ✅ **M19.4a** cliente TLS + `https://` (`tls_connect`; handle TLS en el registro de sockets → `http.ray` habla https transparente; verificación con `webpki-roots` + `SSL_CERT_FILE`; test determinista con servidor TLS local) · ✅ **M19.4b** servidor TLS + `wss://` (`tls_accept`; rustls conducido a mano sobre el enum `Connection`, **integrado con el scheduler no bloqueante** —aparca la fibra en el fd al bloquear leyendo—; misma bomba sirve a ambos motores; `wss_echo.ray`; e2e con cliente WebSocket-sobre-TLS en el test) → **M19.4 + M19 COMPLETOS** |
+| **M20** | **cripto, identidad y clientes cloud** (SHA-256/HMAC · JWT/UUID · URL/cookies · tiempo · Redis) | la capa que un servicio cloud/distribuido necesita, como librería raylang sobre M19 | 🚧 §29: ✅ **M20.1** SHA-256 (`sha256.ray`, FIPS 180-4 en raylang puro, gemelo de `sha1.ray`; vectores NIST por ambos motores) · 🚧 M20.2 HMAC-SHA256 + base64url + hex · M20.3 JWT (HS256) + UUID v4 · M20.4 URL/query/cookies · M20.5 tiempo/fechas · M20.6 cliente Redis (RESP) · M20.7+ HTTP robusto + gzip + UDP. Filosofía M15/M19: protocolos = librería en raylang, runtime intacto salvo lo imposible (UDP, fecha UTC) |
 | **Transversal** | **VM auto-alojada** ✅ (M14.5) · optimización de la VM de Rust (incremental, midiendo) 🚧 | rendimiento, bootstrapping | 🚧 §27: banco `benchmarks/` (`bench.sh`+hyperfine, o `measure.py` sin deps; fib/bucle/arreglos, mejor-de-N); regla **medir-antes-y-después, conservar solo lo que supera el ruido**. Opt.1/Opt.2 ✅ (pase previo), Opt.3 (`Rc<str>`) ❌ descartada. ✅ **Opt.4** fast-path entero en el lazo de ops binarias (evita el doble match + la llamada a `apply_binary`; fib(35) −5%, bucle 10M −6%) · ✅ **Opt.7** posición `(línea,col)` perezosa (`pos!()`: se quita la lectura de `lines[ip]` por instrucción del camino caliente; **−7/−9/−8 % en fib/loop/arrays**, consistente; mejor-de-15 para destapar la señal bajo el ruido) · Opt.5/Opt.6/Opt.8/LTO **descartados** (medidos dentro del ruido o incorrectos). Oráculo VM↔intérprete intacto en cada paso |
 
 > El detalle y la clasificación de impacto de los hitos viven en [IDEAS.md](IDEAS.md) hasta
@@ -3994,3 +3995,30 @@ Sub-fases:
 
 **M19 COMPLETO** (servidor web + SSE · HTTP en bytes · WebSockets `ws://` · TLS cliente y servidor →
 `https`/`wss`). La invariante cero-deps se rompe **solo** en TLS (excepción consciente §28.4).
+
+## §29 — M20: la capa de cripto, identidad y clientes cloud (librerías raylang)
+
+Sobre el transporte (M15), la concurrencia (M15.5/M17), `bytes` (M16) y la web (M19), M20 construye la
+capa que un servicio **cloud/distribuido** real necesita: criptografía moderna, identidad (tokens),
+formatos de la web (URL/cookies), tiempo, y clientes de infraestructura. **Filosofía idéntica a M15/M19**:
+todo lo que pueda escribirse en raylang se escribe en raylang (cero runtime nuevo), apilándose sobre los
+operadores bit a bit (M19.3a) y `bytes` (M16). El runtime solo se toca para lo que es físicamente
+imposible en el lenguaje (UDP, componentes de fecha UTC). Plan por fases (cada una compila y conserva el
+oráculo VM↔intérprete; las librerías cripto son cómputo puro determinista → se verifican contra vectores
+estándar por ambos motores):
+
+- **M20.1 — SHA-256** ✅ (`examples/web/sha256.ray`). FIPS 180-4 en raylang puro, gemelo de `sha1.ray`:
+  aritmética de 32 bits enmascarada (`& mask32()`), `rotr` (rotación a la derecha), tabla de 64
+  constantes de ronda, planificación de mensaje de 64 palabras. Salida `[int]` de 32 octetos o hex con
+  `sha256_hex`. Verificado contra los vectores NIST (`""`, `"abc"`, mensaje multi-bloque, fox/avalancha)
+  por ambos motores (`tests/sha256_cli.rs`). Cimiento de HMAC/JWT/firma de requests.
+- **M20.2 — HMAC-SHA256 + base64url + hex genérico** (siguiente). HMAC (RFC 2104) sobre SHA-256, en
+  raylang puro; base64url (RFC 4648 §5, alfabeto URL-safe, sin relleno) para tokens; hex encode/decode.
+- **M20.3 — JWT (HS256) + UUID v4**. El *capstone* del cimiento cripto: firma/verificación de JSON Web
+  Tokens apilando SHA-256 + HMAC + base64url + la librería `json`; UUID v4 sobre `random`.
+- **M20.4 — URL/query/cookies**. Percent-encoding (encode/decode), parseo de query string, cookies.
+- **M20.5 — tiempo y fechas**. Formateo/parseo (ISO 8601, RFC 1123 para cabeceras HTTP), durations,
+  sobre el epoch que da `now`; un builtin mínimo para componentes UTC si hace falta.
+- **M20.6 — cliente Redis (RESP)**. El protocolo RESP es trivial sobre TCP → el ejemplo "cliente de
+  infra cloud" más rentable, en raylang puro.
+- **M20.7+ — HTTP cliente robusto** (chunked/redirects/headers), **gzip/deflate**, **UDP** (runtime).

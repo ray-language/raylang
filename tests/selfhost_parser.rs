@@ -651,6 +651,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "url.ray", "cookie.ray", "url_demo.ray", // M20.4: url/cookies, usa `bytes` + bitops
         "udp.ray", "udp_demo.ray", "udp_yield_demo.ray", // M20.8/M20.11: UDP, usa `bytes`
         "dns.ray", "dns_demo.ray", // M22: cliente DNS, usa `bytes` + bitops
+        "dns_cache.ray", "dns_cache_demo.ray", // M22.1: caché DNS (importa dns → bytes/bitops)
         "sigv4.ray", "sigv4_demo.ray", // M20.9: AWS SigV4, usa `bytes` + bitops (vía hmac/sha256/url)
         "inflate.ray", "inflate_demo.ray", // M20.10: INFLATE/gzip, usa `bytes` + bitops
         "deflate.ray", "deflate_demo.ray", // M20-final: encoder DEFLATE, usa `bytes` + bitops

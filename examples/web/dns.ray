@@ -14,6 +14,11 @@ fn be16(data: bytes, i: int) -> int {
     (data[i] << 8) | data[i + 1]
 }
 
+// Entero de 32 bits big-endian en la posición `i` (para el TTL).
+fn be32(data: bytes, i: int) -> int {
+    (data[i] << 24) | (data[i + 1] << 16) | (data[i + 2] << 8) | data[i + 3]
+}
+
 // --- Construcción de la consulta ---
 
 // Codifica un nombre de dominio como labels: cada parte precedida por su longitud, terminado en 0.
@@ -185,8 +190,16 @@ fn read_txt(data: bytes, rdstart: int, rdlength: int) -> string {
     s
 }
 
-// Parsea una respuesta DNS a registros tipados (A, AAAA, MX, CNAME, TXT y otros).
-pub fn parse_records(data: bytes) -> Result<[Record], string> {
+// El resultado completo de una consulta: los registros + el TTL mínimo (en segundos) de la respuesta,
+// que es lo que una caché debe respetar para no servir datos caducados.
+pub struct DnsResult {
+    records: [Record],
+    ttl: int,
+}
+
+// Parsea una respuesta DNS a registros tipados (A, AAAA, MX, CNAME, TXT y otros), devolviendo además el
+// TTL mínimo. (El TTL mínimo del conjunto es el límite seguro de caché.)
+pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
     if (len(data) < 12) {
         return Result.Err("respuesta DNS demasiado corta");
     }
@@ -207,11 +220,14 @@ pub fn parse_records(data: bytes) -> Result<[Record], string> {
     }
     // Recorre las respuestas.
     var recs: [Record] = [];
+    var min_ttl = 0 - 1; // -1 = sin respuestas todavía
     var a = 0;
     while (a < ancount) {
         let nr = read_name(data, pos);
         pos = nr.next;
         let atype = be16(data, pos);
+        let ttl = be32(data, pos + 4);
+        if (min_ttl < 0 || ttl < min_ttl) { min_ttl = ttl; }
         let rdlength = be16(data, pos + 8); // tras TYPE(2)+CLASS(2)+TTL(4)
         let rdstart = pos + 10;
         if (atype == 1 && rdlength == 4) {
@@ -235,11 +251,21 @@ pub fn parse_records(data: bytes) -> Result<[Record], string> {
         pos = rdstart + rdlength;
         a = a + 1;
     }
-    Result.Ok(recs)
+    var ttl_final = min_ttl;
+    if (ttl_final < 0) { ttl_final = 0; } // sin respuestas → TTL 0
+    Result.Ok(DnsResult { records: recs, ttl: ttl_final })
+}
+
+// Parsea solo los registros (sin TTL), envoltorio de `parse_full`.
+pub fn parse_records(data: bytes) -> Result<[Record], string> {
+    match (parse_full(data)) {
+        Result.Ok(r) => Result.Ok(r.records),
+        Result.Err(e) => Result.Err(e),
+    }
 }
 
 // Convierte registros a strings legibles: A/AAAA → la dirección; MX → "preferencia exchange".
-fn format_records(recs: [Record]) -> [string] {
+pub fn format_records(recs: [Record]) -> [string] {
     var out: [string] = [];
     var i = 0;
     while (i < len(recs)) {
@@ -265,9 +291,9 @@ fn nombre_rcode(rcode: int) -> string {
 
 // --- Resolución de alto nivel ---
 
-// Consulta el servidor DNS `server:port` por UDP para `name` y `qtype`, devolviendo los registros
-// tipados. Un resolver real aleatoriza el ID y reintenta; aquí se usa un ID fijo (una consulta/respuesta).
-pub fn query(server: string, port: int, name: string, qtype: int) -> Result<[Record], string> {
+// Consulta el servidor DNS `server:port` por UDP para `name` y `qtype`, devolviendo los registros + el
+// TTL. Un resolver real aleatoriza el ID y reintenta; aquí se usa un ID fijo (una consulta/respuesta).
+pub fn query_full(server: string, port: int, name: string, qtype: int) -> Result<DnsResult, string> {
     let consulta = build_query(4660, name, qtype); // 4660 = 0x1234
     match (bind("0.0.0.0", 0)) {
         Result.Err(e) => Result.Err("bind: " + e),
@@ -278,12 +304,20 @@ pub fn query(server: string, port: int, name: string, qtype: int) -> Result<[Rec
                     let r = recv_from(h);
                     close(h);
                     match (r) {
-                        Result.Ok(pkt) => parse_records(pkt.data),
+                        Result.Ok(pkt) => parse_full(pkt.data),
                         Result.Err(e) => Result.Err("recv: " + e),
                     }
                 },
             }
         },
+    }
+}
+
+// Como `query_full` pero devolviendo solo los registros tipados.
+pub fn query(server: string, port: int, name: string, qtype: int) -> Result<[Record], string> {
+    match (query_full(server, port, name, qtype)) {
+        Result.Ok(r) => Result.Ok(r.records),
+        Result.Err(e) => Result.Err(e),
     }
 }
 

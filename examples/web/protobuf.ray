@@ -1,0 +1,220 @@
+// Protocol Buffers (proto3) — códec del formato wire + framing de gRPC, escrito EN raylang. Cero
+// runtime nuevo. Es el corazón de la carga útil de gRPC (los mensajes van como protobuf). Importable:
+//   from protobuf import writer, write_varint, write_string, write_bytes, finish,
+//                        parse, PbField, get_int, get_string, grpc_frame, grpc_unframe;
+//
+// El formato wire es schema-LESS: cada campo es un *tag* (varint = `número<<3 | wire_type`) seguido del
+// valor. Wire types: 0 varint (LEB128: int/bool/enum), 1 fixed64 (8 octetos LE), 2 length-delimited
+// (string/bytes/submensaje: varint de longitud + octetos), 5 fixed32 (4 octetos LE). Sin schema, el
+// decodificador devuelve los campos crudos (número + valor) y el llamador los interpreta.
+//
+// Cubre proto3 con varints NO negativos (los `sint`/zigzag y los negativos de int64 quedan diferidos).
+
+// --- Codificación (constructor de mensaje) ---
+
+pub struct PbWriter {
+    out: [int],
+}
+
+pub fn writer() -> PbWriter {
+    PbWriter { out: [] }
+}
+
+// Codifica un varint (LEB128): 7 bits por octeto, bit alto = continuación. Para valores no negativos.
+fn encode_varint(out: [int], value: int) {
+    var v = value;
+    while (v >= 128) {
+        push(out, (v & 127) | 128);
+        v = v >> 7;
+    }
+    push(out, v & 127);
+}
+
+fn write_tag(out: [int], field: int, wire: int) {
+    encode_varint(out, (field << 3) | wire);
+}
+
+fn append_bytes(out: [int], b: bytes) {
+    var i = 0;
+    while (i < len(b)) {
+        push(out, b[i]);
+        i = i + 1;
+    }
+}
+
+// Campo varint (wire 0): int32/int64/uint/bool/enum.
+pub fn write_varint(w: PbWriter, field: int, value: int) {
+    write_tag(w.out, field, 0);
+    encode_varint(w.out, value);
+}
+
+// Campo length-delimited (wire 2) a partir de un string (UTF-8).
+pub fn write_string(w: PbWriter, field: int, s: string) {
+    write_tag(w.out, field, 2);
+    let b = to_bytes(s);
+    encode_varint(w.out, len(b));
+    append_bytes(w.out, b);
+}
+
+// Campo length-delimited (wire 2) a partir de bytes crudos (o un submensaje ya serializado).
+pub fn write_bytes(w: PbWriter, field: int, b: bytes) {
+    write_tag(w.out, field, 2);
+    encode_varint(w.out, len(b));
+    append_bytes(w.out, b);
+}
+
+// Campo fixed64 (wire 1): 8 octetos little-endian.
+pub fn write_fixed64(w: PbWriter, field: int, value: int) {
+    write_tag(w.out, field, 1);
+    var k = 0;
+    while (k < 8) {
+        push(w.out, (value >> (k * 8)) & 255);
+        k = k + 1;
+    }
+}
+
+// Campo fixed32 (wire 5): 4 octetos little-endian.
+pub fn write_fixed32(w: PbWriter, field: int, value: int) {
+    write_tag(w.out, field, 5);
+    var k = 0;
+    while (k < 4) {
+        push(w.out, (value >> (k * 8)) & 255);
+        k = k + 1;
+    }
+}
+
+// El mensaje serializado.
+pub fn finish(w: PbWriter) -> bytes {
+    bytes_of(w.out)
+}
+
+// --- Decodificación ---
+
+// Un campo decodificado: número, wire type, y el valor (entero para varint/fixed; bytes para len-delim).
+pub struct PbField {
+    number: int,
+    wire: int,
+    int_val: int,
+    bytes_val: bytes,
+}
+
+struct VarintResult {
+    value: int,
+    next: int,
+}
+
+// Decodifica un varint desde `pos`; devuelve el valor y la posición siguiente.
+fn decode_varint(data: bytes, pos: int) -> VarintResult {
+    var result = 0;
+    var shift = 0;
+    var p = pos;
+    var seguir = true;
+    while (seguir) {
+        let b = data[p];
+        result = result | ((b & 127) << shift);
+        p = p + 1;
+        if ((b & 128) == 0) {
+            seguir = false;
+        } else {
+            shift = shift + 7;
+        }
+    }
+    VarintResult { value: result, next: p }
+}
+
+// Lee `nbytes` octetos little-endian como entero desde `pos`.
+fn read_le(data: bytes, pos: int, nbytes: int) -> int {
+    var v = 0;
+    var k = 0;
+    while (k < nbytes) {
+        v = v | (data[pos + k] << (k * 8));
+        k = k + 1;
+    }
+    v
+}
+
+// Parsea un mensaje protobuf a una lista de campos crudos (sin schema).
+pub fn parse(data: bytes) -> Result<[PbField], string> {
+    var fields: [PbField] = [];
+    var pos = 0;
+    let n = len(data);
+    while (pos < n) {
+        let tag = decode_varint(data, pos);
+        pos = tag.next;
+        let number = tag.value >> 3;
+        let wire = tag.value & 7;
+        if (wire == 0) {
+            let v = decode_varint(data, pos);
+            pos = v.next;
+            push(fields, PbField { number: number, wire: 0, int_val: v.value, bytes_val: b"" });
+        } else { if (wire == 2) {
+            let lenv = decode_varint(data, pos);
+            pos = lenv.next;
+            let b = sub_bytes(data, pos, pos + lenv.value);
+            pos = pos + lenv.value;
+            push(fields, PbField { number: number, wire: 2, int_val: 0, bytes_val: b });
+        } else { if (wire == 1) {
+            push(fields, PbField { number: number, wire: 1, int_val: read_le(data, pos, 8), bytes_val: b"" });
+            pos = pos + 8;
+        } else { if (wire == 5) {
+            push(fields, PbField { number: number, wire: 5, int_val: read_le(data, pos, 4), bytes_val: b"" });
+            pos = pos + 4;
+        } else {
+            return Result.Err("wire type no soportado: " + to_string(wire));
+        }}}}
+    }
+    Result.Ok(fields)
+}
+
+// --- Accesores por número de campo (primer campo que coincide) ---
+pub fn get_int(fields: [PbField], number: int) -> int {
+    var i = 0;
+    while (i < len(fields)) {
+        if (fields[i].number == number) {
+            return fields[i].int_val;
+        }
+        i = i + 1;
+    }
+    0
+}
+
+pub fn get_bytes(fields: [PbField], number: int) -> bytes {
+    var i = 0;
+    while (i < len(fields)) {
+        if (fields[i].number == number) {
+            return fields[i].bytes_val;
+        }
+        i = i + 1;
+    }
+    b""
+}
+
+pub fn get_string(fields: [PbField], number: int) -> string {
+    match (from_utf8(get_bytes(fields, number))) {
+        Result.Ok(s) => s,
+        Result.Err(_) => "",
+    }
+}
+
+// --- Framing de gRPC ---
+// Un mensaje gRPC sobre HTTP/2 va con un prefijo de 5 octetos: 1 octeto de flag de compresión (0 = sin
+// comprimir) + 4 octetos big-endian con la longitud del mensaje, seguidos del protobuf.
+
+pub fn grpc_frame(message: bytes) -> bytes {
+    var out: [int] = [];
+    push(out, 0); // sin comprimir
+    let n = len(message);
+    push(out, (n >> 24) & 255);
+    push(out, (n >> 16) & 255);
+    push(out, (n >> 8) & 255);
+    push(out, n & 255);
+    bytes_of(out) + message
+}
+
+pub fn grpc_unframe(data: bytes) -> Result<bytes, string> {
+    if (len(data) < 5) {
+        return Result.Err("frame gRPC demasiado corto");
+    }
+    let n = (data[1] << 24) | (data[2] << 16) | (data[3] << 8) | data[4];
+    Result.Ok(sub_bytes(data, 5, 5 + n))
+}

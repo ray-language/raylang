@@ -4201,3 +4201,19 @@ handshake (genera una `Sec-WebSocket-Key` de 16 octetos aleatorios en base64, en
 bloqueante). Verificado e2e contra el propio `websocket_echo.ray` (servidor raylang) — **cliente raylang
 hablando con servidor raylang** — con eco de UTF-8 multibyte (`☃`) por ambos motores
 (`tests/websocket_client_cli.rs`). Diferido: `wss://` (TLS), fragmentación, ping/pong automático.
+
+## §34 — M25: protobuf + framing gRPC
+
+**M25 — protobuf (la carga útil de gRPC)** ✅ (`protobuf.ray`). HTTP/2 completo (framing binario + HPACK +
+streams + control de flujo) es un protocolo enorme; el corazón **autocontenido y verificable** de gRPC es
+el **códec del formato wire de Protocol Buffers**, que es lo que esta fase implementa. Códec proto3
+schema-less: un `PbWriter` acumula campos (`write_varint`/`write_string`/`write_bytes`/`write_fixed32`/
+`write_fixed64`) con su *tag* (varint `número<<3 | wire_type`) + valor; `finish` → `bytes`. `parse` decodifica
+a `[PbField]` (número, wire, valor entero o bytes) y `get_int`/`get_string`/`get_bytes` los leen por número.
+Varints en LEB128; length-delimited y fixed32/64 little-endian. **Framing de gRPC**: `grpc_frame`/
+`grpc_unframe` (prefijo de 5 octetos: flag de compresión + longitud big-endian + el protobuf). Verificado
+por golden (los vectores canónicos de la doc: campo 1 varint 150 → `08 96 01`, `"testing"`) + round-trip +
+**validación con un decodificador del wire format en Python sin dependencias** por ambos motores
+(`tests/protobuf_cli.rs`). Es **puro** (bytes/bitops) — fuera del oráculo de self-hosting. Diferido (grande):
+el **transporte HTTP/2** (framing + HPACK + multiplexado de streams + flow control) para un cliente gRPC
+completo; `sint`/zigzag y los negativos de int64 en el varint.

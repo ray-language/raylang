@@ -4055,4 +4055,12 @@ estándar por ambos motores):
   ambos motores (`tests/redis_cli.rs`). Gotchas de raylang: una asignación en un brazo `match` necesita
   bloque + `;`; reasignar un `Result` no propaga el tipo esperado → `read_line` usa `return` directo.
   No usa `bytes`/bitops → lo cubre además el oráculo de self-hosting.
-- **M20.7+ — HTTP cliente robusto** (chunked/redirects/headers), **gzip/deflate**, **UDP** (runtime).
+- **M20.7 — HTTP cliente robusto** ✅ (ampliación aditiva de `http.ray`). `request_with(method, url,
+  body, headers)` (cabeceras/métodos arbitrarios — Authorization, Accept, …); `fetch_follow(url, max)`
+  (sigue 301/302/303/307/308 por `Location`, absoluta o relativa, con límite anti-bucle); decodificación
+  **Transfer-Encoding: chunked** (`decode_chunked` sobre bytes, integrada en `parse_response` cuando la
+  cabecera lo indica). Sin regresión en el `http.ray` previo. Verificado e2e (cabecera eco + redirect +
+  chunked) por ambos motores (`tests/httpc_cli.rs`). Gotcha: `from` es palabra clave → un parámetro no
+  puede llamarse así.
+- **M20.8+ — pendientes** (mayores): **gzip/deflate** (Content-Encoding; DEFLATE en raylang puro, el más
+  duro), **UDP** (único hueco de runtime: builtins + opcodes + ambos motores → habilita DNS/statsd).

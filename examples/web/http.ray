@@ -61,11 +61,27 @@ fn parse_url(url: string) -> Result<Url, string> {
 }
 
 fn build_request(method: string, u: Url, body: string) -> string {
+    build_request_h(method, u, body, map_new())
+}
+
+// Como `build_request` pero con cabeceras extra (nombre→valor). Las del cliente (Host/Connection/
+// Content-Length) se ponen primero; las extra se añaden tal cual (en orden de clave, determinista).
+fn build_request_h(method: string, u: Url, body: string, extra: Map<string, string>) -> string {
     var req: string = method + " " + u.path + " HTTP/1.1\r\n";
     req = req + "Host: " + u.host + "\r\n";
     req = req + "Connection: close\r\n";
     if (len(body) > 0) {
         req = req + "Content-Length: " + to_string(len(body)) + "\r\n";
+    }
+    let nombres: [string] = keys(extra);
+    var i: int = 0;
+    while (i < len(nombres)) {
+        let nombre: string = nombres[i];
+        match (get(extra, nombre)) {
+            Option.Some(valor) => { req = req + nombre + ": " + valor + "\r\n"; },
+            Option.None => {},
+        }
+        i = i + 1;
     }
     req = req + "\r\n";
     req + body
@@ -98,6 +114,78 @@ fn find_fin_cabeceras(b: bytes) -> int {
         i = i + 1;
     }
     0 - 1
+}
+
+// El índice del primer "\r\n" en bytes desde `from`, o -1. (Para el framing de transfer-encoding chunked.)
+fn find_crlf(b: bytes, desde: int) -> int {
+    var i: int = desde;
+    while (i + 1 < len(b)) {
+        if (b[i] == 13 && b[i + 1] == 10) {
+            return i;
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// Valor (0..15) de un octeto de dígito hexadecimal, o -1 si no lo es.
+fn hex_byte_val(o: int) -> int {
+    if (o >= 48 && o <= 57) {
+        o - 48
+    } else { if (o >= 97 && o <= 102) {
+        o - 87 // 'a'..'f'
+    } else { if (o >= 65 && o <= 70) {
+        o - 55 // 'A'..'F'
+    } else {
+        0 - 1
+    }}}
+}
+
+// Tamaño (decimal) de un chunk a partir de su línea hex `[start, end)`. Se detiene en `;` (extensiones)
+// o en el primer carácter no-hexadecimal (tolerante).
+fn parse_chunk_size(b: bytes, start: int, end: int) -> int {
+    var size: int = 0;
+    var i: int = start;
+    while (i < end) {
+        let o: int = b[i];
+        if (o == 59) { // ';'
+            return size;
+        }
+        let v: int = hex_byte_val(o);
+        if (v < 0) {
+            return size;
+        }
+        size = size * 16 + v;
+        i = i + 1;
+    }
+    size
+}
+
+// Decodifica un cuerpo con Transfer-Encoding: chunked → los octetos crudos. Formato:
+// `<hex>\r\n<datos>\r\n` repetido, terminado por un chunk de tamaño 0.
+fn decode_chunked(body: bytes) -> Result<bytes, string> {
+    var out: bytes = b"";
+    var pos: int = 0;
+    let n: int = len(body);
+    var seguir: bool = true;
+    while (seguir && pos < n) {
+        let line_end: int = find_crlf(body, pos);
+        if (line_end < 0) {
+            return Result.Err("chunk sin CRLF de tamaño");
+        }
+        let size: int = parse_chunk_size(body, pos, line_end);
+        pos = line_end + 2;
+        if (size <= 0) {
+            seguir = false; // chunk final (0)
+        } else {
+            if (pos + size > n) {
+                return Result.Err("chunk truncado");
+            }
+            out = out + sub_bytes(body, pos, pos + size);
+            pos = pos + size + 2; // salta el \r\n tras los datos
+        }
+    }
+    Result.Ok(out)
 }
 
 fn parse_response(raw: bytes) -> Result<Response, string> {
@@ -138,7 +226,21 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                 }
                 i = i + 1;
             }
-            Result.Ok(Response { status: status, headers: headers, body: cuerpo })
+            // Transfer-Encoding: chunked → decodificar el cuerpo (un cliente robusto lo soporta;
+            // algunos servidores siempre chunked aunque pidamos Connection: close).
+            var cuerpo_final: bytes = cuerpo;
+            match (get(headers, "transfer-encoding")) {
+                Option.Some(te) => {
+                    if (contains(to_lower(te), "chunked")) {
+                        match (decode_chunked(cuerpo)) {
+                            Result.Ok(d) => { cuerpo_final = d; },
+                            Result.Err(e) => { return Result.Err(e); },
+                        }
+                    }
+                },
+                Option.None => {},
+            }
+            Result.Ok(Response { status: status, headers: headers, body: cuerpo_final })
         },
     }
 }
@@ -164,13 +266,19 @@ fn conectar(u: Url) -> Result<int, string> {
 }
 
 pub fn request(method: string, url: string, body: string) -> Result<Response, string> {
+    request_with(method, url, body, map_new())
+}
+
+// Como `request` pero con cabeceras extra (Authorization, Accept, Content-Type, …). Es la base de
+// un cliente robusto: método y cabeceras arbitrarios.
+pub fn request_with(method: string, url: string, body: string, headers: Map<string, string>) -> Result<Response, string> {
     match (parse_url(url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
             match (conectar(u)) {
                 Result.Err(e) => Result.Err("no se pudo conectar: " + e),
                 Result.Ok(h) => {
-                    match (socket_write_bytes(h, to_bytes(build_request(method, u, body)))) {
+                    match (socket_write_bytes(h, to_bytes(build_request_h(method, u, body, headers)))) {
                         Result.Err(e) => { close(h); Result.Err("error al enviar: " + e) },
                         Result.Ok(_) => {
                             let r = leer_todo(h);
@@ -184,6 +292,53 @@ pub fn request(method: string, url: string, body: string) -> Result<Response, st
                 },
             }
         },
+    }
+}
+
+// ¿Es `status` una redirección con cabecera Location (301/302/303/307/308)?
+fn es_redireccion(status: int) -> bool {
+    status == 301 || status == 302 || status == 303 || status == 307 || status == 308
+}
+
+// GET que sigue redirecciones (hasta `max` saltos). Devuelve la respuesta final, o un Err si se
+// supera el límite (posible bucle) o falla una petición. La nueva URL sale de la cabecera `Location`.
+pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
+    var actual: string = url;
+    var restantes: int = max;
+    while (true) {
+        match (fetch(actual)) {
+            Result.Err(e) => { return Result.Err(e); },
+            Result.Ok(resp) => {
+                if (!es_redireccion(resp.status)) {
+                    return Result.Ok(resp);
+                }
+                if (restantes <= 0) {
+                    return Result.Err("demasiadas redirecciones");
+                }
+                match (header(resp, "location")) {
+                    Option.Some(loc) => { actual = absolutizar(actual, loc); },
+                    Option.None => { return Result.Ok(resp); }, // redirección sin Location: se devuelve
+                }
+                restantes = restantes - 1;
+            },
+        }
+    }
+    Result.Err("inalcanzable")
+}
+
+// Resuelve una Location que puede ser absoluta (`http://…`) o relativa al host actual (`/otra`).
+fn absolutizar(base: string, loc: string) -> string {
+    if (starts_with(loc, "http://") || starts_with(loc, "https://")) {
+        loc
+    } else {
+        match (parse_url(base)) {
+            Result.Ok(u) => {
+                let esquema: string = if (u.tls) { "https://" } else { "http://" };
+                let puerto: string = ":" + to_string(u.port);
+                esquema + u.host + puerto + loc
+            },
+            Result.Err(_) => loc,
+        }
     }
 }
 

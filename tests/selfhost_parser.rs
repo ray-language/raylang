@@ -661,6 +661,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "metrics_server_demo.ray", // M21.3: monta metrics sobre webserver → usa `bytes`
         "oauth2.ray", "oauth2_demo.ray", // M23: cliente OAuth2 (importa http → bytes)
         "protobuf.ray", "protobuf_demo.ray", // M25: códec protobuf, usa `bytes` + bitops
+        "http2.ray", "hpack.ray", "http2_demo.ray", // M26: HTTP/2 framing + HPACK, usa `bytes` + bitops
     ];
     // Los ejemplos viven en subdirectorios por categoría (basics/, types/, web/, …) → se recorre
     // `examples/` **recursivamente**. Se saltan los directorios de ejemplos de MÓDULOS (multi-archivo,

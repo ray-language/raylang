@@ -53,6 +53,8 @@ Librerías en raylang (importables) + sus demos. **El servidor es solo VM.**
 - **`websocket_client`**: un cliente WebSocket (`ws://`) con tramas enmascaradas (`websocket_client_demo`
   habla con el servidor `websocket_echo`).
 - **`protobuf`**: el códec del formato wire de Protocol Buffers (proto3) + framing de gRPC.
+- **`http2`** / **`hpack`**: la capa de framing de HTTP/2 (RFC 7540) + la compresión de cabeceras HPACK
+  (RFC 7541, verificada contra los vectores oficiales del Apéndice C).
 - **Demos**: `http_demo`, `json_demo`, `https_demo`, `webserver_demo`, `websocket_demo`,
   `websocket_echo` (echo `ws://`), `wss_echo` (echo `wss://`), `crypto_demo` (vectores SHA-1/base64).
 - **`framework`**: un micro-framework web tipo Express (enrutado, parámetros de ruta, middleware,

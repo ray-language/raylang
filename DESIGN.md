@@ -4216,3 +4216,24 @@ por golden (los vectores canónicos de la doc: campo 1 varint 150 → `08 96 01`
 (`tests/protobuf_cli.rs`). Es **puro** (bytes/bitops) — fuera del oráculo de self-hosting. Diferido (grande):
 el **transporte HTTP/2** (framing + HPACK + multiplexado de streams + flow control) para un cliente gRPC
 completo; `sint`/zigzag y los negativos de int64 en el varint.
+
+## §35 — M26: transporte HTTP/2 (framing + HPACK)
+
+**M26 — HTTP/2** 🚧 (`http2.ray` + `hpack.ray`). HTTP/2 completo es un protocolo de envergadura propia
+(framing binario + HPACK + multiplexado de streams + control de flujo); esta fase entrega las dos piezas
+**autocontenidas y verificables contra los vectores oficiales del RFC**, que son el grueso del trabajo.
+- **Framing (`http2.ray`, RFC 7540)**: cabecera de 9 octetos (longitud 24 BE + tipo + flags + R/stream_id
+  31) + carga; `encode_frame`/`parse_frame`/`frame_size`; tipos (DATA/HEADERS/SETTINGS/WINDOW_UPDATE/PING/
+  GOAWAY/RST_STREAM) y flags; la **connection preface** del cliente; atajos `settings_empty`/`settings_ack`/
+  `headers_frame`/`data_frame`. Verificado por round-trip.
+- **HPACK (`hpack.ray`, RFC 7541)** — la parte difícil: tabla **estática** (61 entradas) + **dinámica**
+  (inserción + evicción por tamaño), enteros con prefijo de N bits (§5.1), literales de string sin Huffman
+  (§5.2), y las representaciones de campo (indexado, literal con indexado incremental, sin indexado/nunca
+  indexado, actualización de tamaño). Codificador + decodificador con tabla dinámica compartida.
+  **Verificado contra los vectores OFICIALES del RFC 7541 §C.3** (las tres peticiones, byte-idéntico,
+  incluidas las referencias `be`/`bf` a la tabla dinámica) + round-trip, por ambos motores
+  (`tests/http2_cli.rs`). El **Huffman** de strings queda diferido (el codificador emite literales crudos —
+  válidos—; el decodificador rechaza un literal Huffman con error claro). **Diferido (grande)**: HPACK-
+  Huffman (tabla de 257 códigos del Apéndice B), el **transporte vivo** (preface + SETTINGS + WINDOW_UPDATE
+  + multiplexado de streams sobre una conexión TLS con ALPN `h2`), y con ello un cliente **gRPC** completo
+  (HEADERS con `:path`=método + `content-type: application/grpc` + DATA con el protobuf de M25 enmarcado).

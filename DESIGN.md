@@ -4091,5 +4091,12 @@ estándar por ambos motores):
   `Content-Encoding: gzip` (en `parse_response`, tras el chunked). E2E: el servidor de juguete sirve un
   cuerpo gzip y el cliente lo entrega ya descomprimido (`tests/httpc_cli.rs`, ambos motores; los tests
   que copian `http.ray` ahora copian también `inflate.ray`). **M20.10 COMPLETO.**
-- **M20.11+ — pendiente**: compresión DEFLATE (encoder, mucho más código) + cesión cooperativa de UDP en
-  la VM (integración con `io_parked`).
+- **M20.11 — cesión cooperativa de UDP en la VM** ✅. Cierra el diferido de M20.8: `udp_recv_from` deja
+  de bloquear el scheduler. La VM pone el socket UDP en no bloqueante al `udp_bind` (`set_nonblocking`
+  extendido a `OpenHandle::Udp`); `udp_recv_from_nb` devuelve `Ok(None)` en `WouldBlock` y el opcode
+  `UdpRecvFrom` **aparca la fibra en el fd** (`raw_fd` extendido a UDP) y reintenta al despertar — el
+  mismo `io_parked`/poller (kqueue/epoll, M17) que TCP/TLS. El intérprete sigue bloqueante (un hilo).
+  Prueba conductual que **requiere** la cesión (dos fibras esperando datagramas a la vez → con un recv
+  bloqueante habría deadlock; el test colgaría): `tests/udp_yield_cli.rs` (solo VM). **M20.11 COMPLETO.**
+- **Pendiente de M20**: solo la **compresión** DEFLATE (encoder, mucho más código que el decoder; el
+  cliente HTTP descomprime pero no comprime al enviar) — único diferido restante de M20.

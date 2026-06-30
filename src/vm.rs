@@ -1261,7 +1261,11 @@ impl<'a> Vm<'a> {
                         unreachable!("el checker garantiza string, int");
                     };
                     let elems = match crate::builtins::udp_bind(&host, port) {
-                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
+                        Ok(h) => {
+                            // M20.11: la VM usa el socket NO bloqueante → udp_recv_from cede al scheduler.
+                            let _ = crate::builtins::set_nonblocking(h);
+                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())]
+                        }
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
                     let h = self.heap.allocate(Obj::Array(elems));
@@ -1284,22 +1288,38 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M20.11: recv UDP no bloqueante; cede la fibra al scheduler en WouldBlock (como SocketReadBytes).
                 OpCode::UdpRecvFrom => {
                     let handle = match self.pop() {
                         HeapValue::Int(h) => h,
                         _ => unreachable!("el checker garantiza un int"),
                     };
-                    let elems = match crate::builtins::udp_recv_from(handle) {
-                        Ok((host, port, data)) => vec![
-                            HeapValue::Bytes(b"ok".to_vec()),
-                            HeapValue::Bytes(host.into_bytes()),
-                            HeapValue::Bytes(port.to_string().into_bytes()),
-                            HeapValue::Bytes(data),
-                        ],
-                        Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())],
-                    };
-                    let h = self.heap.allocate(Obj::Array(elems));
-                    self.push(HeapValue::Obj(h));
+                    match crate::builtins::udp_recv_from_nb(handle) {
+                        Ok(Some((host, port, data))) => {
+                            let elems = vec![
+                                HeapValue::Bytes(b"ok".to_vec()),
+                                HeapValue::Bytes(host.into_bytes()),
+                                HeapValue::Bytes(port.to_string().into_bytes()),
+                                HeapValue::Bytes(data),
+                            ];
+                            let h = self.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                        }
+                        Err(e) => {
+                            let elems = vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())];
+                            let h = self.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                        }
+                        Ok(None) => {
+                            // No hay datagrama: re-ejecuta el opcode al despertar (re-empuja el handle).
+                            self.push(HeapValue::Int(handle));
+                            self.frames.last_mut().unwrap().ip -= 1;
+                            let fiber = self.take_current_fiber();
+                            let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
+                            self.io_parked.push(IoParked { fd, fiber, pending_write: None });
+                            self.schedule_next(pos!().0, pos!().1)?;
+                        }
+                    }
                 }
                 // M19.4b: conexión TLS de cliente. La VM pone el socket en no bloqueante para que el I/O
                 // TLS (SocketReadBytes) pueda ceder la fibra, como con un socket plano.

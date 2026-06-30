@@ -586,6 +586,7 @@ pub fn set_nonblocking(h: i64) -> Result<(), String> {
     match reg.open.get(&h) {
         Some(OpenHandle::Tcp(s)) => s.set_nonblocking(true).map_err(|e| e.to_string()),
         Some(OpenHandle::Listener(l)) => l.set_nonblocking(true).map_err(|e| e.to_string()),
+        Some(OpenHandle::Udp(s)) => s.set_nonblocking(true).map_err(|e| e.to_string()),
         _ => Err(format!("el handle {} no es un socket", h)),
     }
 }
@@ -602,6 +603,7 @@ pub fn raw_fd(h: i64) -> Option<i32> {
         Some(OpenHandle::Listener(l)) => Some(l.as_raw_fd()),
         // M19.4b: el fd del socket subyacente de una conexión TLS, para aparcar la fibra en el poller.
         Some(OpenHandle::Tls(tc)) => Some(tc.sock.as_raw_fd()),
+        Some(OpenHandle::Udp(s)) => Some(s.as_raw_fd()), // M20.11: cesión de udp_recv_from
         _ => None,
     }
 }
@@ -733,6 +735,28 @@ pub fn udp_recv_from(h: i64) -> Result<(String, i64, Vec<u8>), String> {
     let (n, addr) = sock.recv_from(&mut buf).map_err(|e| e.to_string())?;
     buf.truncate(n);
     Ok((addr.ip().to_string(), addr.port() as i64, buf))
+}
+
+/// Variante NO bloqueante de `udp_recv_from` para la VM (M20.11): `Ok(None)` si no hay datagrama listo
+/// (`WouldBlock`) → la VM aparca la fibra en el fd y reintenta, como `socket_read_bytes_nb`.
+pub fn udp_recv_from_nb(h: i64) -> Result<Option<(String, i64, Vec<u8>)>, String> {
+    let sock = {
+        let reg = registry().lock().unwrap();
+        match reg.open.get(&h) {
+            Some(OpenHandle::Udp(s)) => s.try_clone().map_err(|e| e.to_string())?,
+            Some(_) => return Err(format!("el handle {} no es un socket UDP", h)),
+            None => return Err(format!("handle inválido: {}", h)),
+        }
+    };
+    let mut buf = vec![0u8; 65536];
+    match sock.recv_from(&mut buf) {
+        Ok((n, addr)) => {
+            buf.truncate(n);
+            Ok(Some((addr.ip().to_string(), addr.port() as i64, buf)))
+        }
+        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Lista los nombres de las entradas de un directorio (M11.7c). Helper compartido por ambos motores

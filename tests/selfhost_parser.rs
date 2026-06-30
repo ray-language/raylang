@@ -649,7 +649,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops
         "jwt.ray", "jwt_demo.ray", "uuid.ray", // M20.3: JWT/UUID, usa `bytes` + bitops
         "url.ray", "cookie.ray", "url_demo.ray", // M20.4: url/cookies, usa `bytes` + bitops
-        "udp.ray", "udp_demo.ray", // M20.8: UDP, usa `bytes`
+        "udp.ray", "udp_demo.ray", "udp_yield_demo.ray", // M20.8/M20.11: UDP, usa `bytes`
         "sigv4.ray", "sigv4_demo.ray", // M20.9: AWS SigV4, usa `bytes` + bitops (vía hmac/sha256/url)
         "inflate.ray", "inflate_demo.ray", // M20.10: INFLATE/gzip, usa `bytes` + bitops
         "websocket.ray", "websocket_demo.ray", "websocket_echo.ray",

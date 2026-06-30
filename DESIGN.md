@@ -4107,3 +4107,20 @@ estándar por ambos motores):
   compatibilidad estándar** — el gzip que produce raylang lo descomprime **Python** (`gzip.decompress`),
   probando que el stream DEFLATE es válido, no solo auto-consistente. Gotcha: `while {…}` seguido de una
   línea que abre `(` se parsea como llamar al unit del while → variable temporal. **M20 COMPLETO.**
+
+## §30 — M21: observabilidad (logging estructurado + métricas Prometheus)
+
+Sobre el stack web/cloud de M20, M21 añade lo que un servicio necesita para ser **operable**: logs
+estructurados y métricas. Ambas librerías raylang puras (cero runtime), verificadas contra herramientas
+externas (Python `json`, formato de exposición de Prometheus).
+
+- **M21.1 — logging estructurado en JSON** ✅ (`log.ray`). Cada entrada es una **línea JSON** (ts, level,
+  service, msg + campos) lista para un agregador (Loki/ELK/CloudWatch). API **encadenable por UFCS
+  cross-module**: `info(lg, "login").field("user","ada").field_int("n",3).emit()`. Niveles DEBUG/INFO/
+  WARN/ERROR con filtro por `min_level`; campos tipados (`field`/`field_int`/`field_bool`, con flag
+  `quoted` para no entrecomillar números/bools); escapado JSON propio (`"`, `\`, `\n`/`\t`/`\r`). `render(e,
+  ts)` separa el formateo (determinista, testeable) de `emit` (que usa `now_utc` de `time.ray`). Verificado
+  por golden + **validación con Python `json.loads`** por ambos motores (`tests/log_cli.rs`). Puro (sin
+  `bytes`/bitops) → lo cubre además el oráculo de self-hosting.
+- **M21.2 — métricas Prometheus** (siguiente): counters/gauges/histogramas con labels, render al formato de
+  exposición de texto (`# HELP`/`# TYPE`/series).

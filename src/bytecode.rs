@@ -380,6 +380,15 @@ pub enum OpCode {
     TcpAccept,
     /// Saca un handle (int); empuja su puerto local (`int`, `0` si no es un socket). Builtin `local_port`.
     LocalPort,
+    /// Saca `port` (int) y `host` (string); enlaza un socket UDP y empuja un `[string]` etiquetado.
+    /// Primitivo `__udp_bind`; la lib udp.ray → `Result<int,string>` (M20.8).
+    UdpBind,
+    /// Saca `datos` (bytes), `port` (int), `host` (string) y el handle (int); envía un datagrama y
+    /// empuja un `[string]` etiquetado con los octetos enviados. Primitivo `__udp_send_to` (M20.8).
+    UdpSendTo,
+    /// Saca un handle (int); bloquea hasta recibir un datagrama y empuja un `[bytes]` etiquetado
+    /// (`[b"ok", host, puerto, datos]`/`[b"err", msg]`). Primitivo `__udp_recv_from` (M20.8).
+    UdpRecvFrom,
 
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como

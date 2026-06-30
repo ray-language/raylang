@@ -4062,5 +4062,15 @@ estándar por ambos motores):
   cabecera lo indica). Sin regresión en el `http.ray` previo. Verificado e2e (cabecera eco + redirect +
   chunked) por ambos motores (`tests/httpc_cli.rs`). Gotcha: `from` es palabra clave → un parámetro no
   puede llamarse así.
-- **M20.8+ — pendientes** (mayores): **gzip/deflate** (Content-Encoding; DEFLATE en raylang puro, el más
-  duro), **UDP** (único hueco de runtime: builtins + opcodes + ambos motores → habilita DNS/statsd).
+- **M20.8 — UDP** ✅ (`udp.ray` + runtime). El único hueco de runtime de M20: sockets sin conexión sobre
+  `std::net::UdpSocket` (cero deps), en el mismo registro de handles (`OpenHandle::Udp`). 3 builtins/
+  opcodes (`__udp_bind`/`__udp_send_to`/`__udp_recv_from` ↔ `UdpBind`/`UdpSendTo`/`UdpRecvFrom`), impl
+  en ambos motores. A diferencia de TCP, cada datagrama lleva su remitente → `__udp_recv_from` devuelve
+  un `[bytes]` etiquetado `[b"ok", host, puerto, datos]` y la librería `udp.ray` lo traduce a un
+  `struct Packet { host, port, data }` (el runtime no sabe de `Packet`/`Result`; patrón M11.2c, pero el
+  envoltorio vive en una **librería de usuario**, no en el prelude). I/O **bloqueante** en ambos motores
+  (la cesión cooperativa al scheduler queda diferida, como TCP antes de M15.5). No determinista (red) →
+  probado por subproceso contra un servidor UDP de eco en Rust por ambos motores (`tests/udp_cli.rs`),
+  verificando round-trip + remitente. Habilita DNS, statsd, descubrimiento, juegos.
+- **M20.9+ — pendiente**: **gzip/deflate** (Content-Encoding; DEFLATE en raylang puro, el algoritmo más
+  duro de la lista) + cesión cooperativa de UDP en la VM (integración con `io_parked`).

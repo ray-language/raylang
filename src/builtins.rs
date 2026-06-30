@@ -200,6 +200,9 @@ enum OpenHandle {
     /// sesión es una máquina de estados mutable que no se puede clonar, a diferencia de `Tcp`). El
     /// intérprete la usa bloqueante (`rustls::Stream`); la VM, no bloqueante con cesión (M19.4b).
     Tls(Box<TlsConn>),
+    /// M20.8: un socket UDP (sin conexión). Se enlaza con `udp_bind` y se usa con `udp_send_to`/
+    /// `udp_recv_from` (cada datagrama lleva su remitente). En el mismo registro de handles.
+    Udp(std::net::UdpSocket),
 }
 
 /// Una conexión TLS: la sesión rustls (cliente **o** servidor, vía el enum unificado `Connection`) +
@@ -263,6 +266,7 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
         Some(OpenHandle::Tcp(_)) => Err("el handle es un socket; usa socket_write".to_string()),
         Some(OpenHandle::Listener(_)) => Err("el handle es un socket de escucha, no escribible".to_string()),
         Some(OpenHandle::Tls(_)) => Err("el handle es una conexión TLS; usa socket_write".to_string()),
+        Some(OpenHandle::Udp(_)) => Err("el handle es un socket UDP; usa udp_send_to".to_string()),
         None => Err(format!("handle de archivo inválido: {}", h)),
     }
 }
@@ -683,8 +687,52 @@ pub fn local_port(h: i64) -> i64 {
     match reg.open.get(&h) {
         Some(OpenHandle::Listener(l)) => l.local_addr().map(|a| a.port() as i64).unwrap_or(0),
         Some(OpenHandle::Tcp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0),
+        Some(OpenHandle::Udp(s)) => s.local_addr().map(|a| a.port() as i64).unwrap_or(0),
         _ => 0,
     }
+}
+
+// --- UDP (M20.8) ---
+//
+// Sockets sin conexión sobre `std::net::UdpSocket`, cero deps. El handle vive en el mismo registro.
+// A diferencia de TCP, cada datagrama lleva su remitente → `udp_recv_from` devuelve (host, puerto,
+// datos). I/O **bloqueante** en ambos motores por ahora (la cesión cooperativa queda diferida).
+
+/// Enlaza un socket UDP a `host:port` (port=0 → efímero, consultable con `local_port`) (M20.8).
+pub fn udp_bind(host: &str, port: i64) -> Result<i64, String> {
+    let sock = std::net::UdpSocket::bind((host, port as u16)).map_err(|e| e.to_string())?;
+    let mut reg = registry().lock().unwrap();
+    let id = reg.next;
+    reg.next += 1;
+    reg.open.insert(id, OpenHandle::Udp(sock));
+    Ok(id)
+}
+
+/// Envía `data` al destino `host:port` desde el socket UDP `h`; `Ok(nº de octetos enviados)` (M20.8).
+pub fn udp_send_to(h: i64, host: &str, port: i64, data: &[u8]) -> Result<usize, String> {
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Udp(s)) => s.send_to(data, (host, port as u16)).map_err(|e| e.to_string()),
+        Some(_) => Err(format!("el handle {} no es un socket UDP", h)),
+        None => Err(format!("handle inválido: {}", h)),
+    }
+}
+
+/// Recibe un datagrama del socket UDP `h` (bloqueante); `Ok((host, puerto, datos))` del remitente
+/// (M20.8). Clona el socket para no retener el lock del registro durante la espera (como en TCP).
+pub fn udp_recv_from(h: i64) -> Result<(String, i64, Vec<u8>), String> {
+    let sock = {
+        let reg = registry().lock().unwrap();
+        match reg.open.get(&h) {
+            Some(OpenHandle::Udp(s)) => s.try_clone().map_err(|e| e.to_string())?,
+            Some(_) => return Err(format!("el handle {} no es un socket UDP", h)),
+            None => return Err(format!("handle inválido: {}", h)),
+        }
+    };
+    let mut buf = vec![0u8; 65536]; // un datagrama UDP cabe de sobra en 64 KiB
+    let (n, addr) = sock.recv_from(&mut buf).map_err(|e| e.to_string())?;
+    buf.truncate(n);
+    Ok((addr.ip().to_string(), addr.port() as i64, buf))
 }
 
 /// Lista los nombres de las entradas de un directorio (M11.7c). Helper compartido por ambos motores
@@ -1331,6 +1379,30 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "local_port", "")?;
         if a[0] != Type::Int { return Err((Some(0), format!("local_port espera un int (el handle), no {}", a[0]))); }
         Ok(Type::Int)
+    } },
+    // --- UDP (M20.8) ---
+    // __udp_bind(host, port) -> [string]: ["ok", handle] o ["err", msg]. Lib udp.ray → Result<int,string>.
+    Builtin { name: "__udp_bind", opcode: OpCode::UdpBind, check: |a| {
+        arity(a, 2, "__udp_bind", " (host, puerto)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__udp_bind espera un string (el host), no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__udp_bind espera un int (el puerto), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __udp_send_to(h, host, port, datos) -> [string]: ["ok", n] o ["err", msg]. Lib → Result<int,string>.
+    Builtin { name: "__udp_send_to", opcode: OpCode::UdpSendTo, check: |a| {
+        arity(a, 4, "__udp_send_to", " (handle, host, puerto, datos)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__udp_send_to espera un int (el handle), no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__udp_send_to espera un string (el host), no {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__udp_send_to espera un int (el puerto), no {}", a[2]))); }
+        if a[3] != Type::Bytes { return Err((Some(3), format!("__udp_send_to espera bytes (los datos), no {}", a[3]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __udp_recv_from(h) -> [bytes]: [b"ok", host, puerto, datos] o [b"err", msg] (todo en bytes, homogéneo).
+    // Lib → Result<Packet,string> con Packet{host,port,data}.
+    Builtin { name: "__udp_recv_from", opcode: OpCode::UdpRecvFrom, check: |a| {
+        arity(a, 1, "__udp_recv_from", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__udp_recv_from espera un int (el handle), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     // close: ad-hoc polimórfico. close(h: int) -> int (M11.8 archivo / M15.2 socket, devuelve 0) o
     // close(ch: Channel<T>) -> unit (M12.1, cierra un canal). El opcode Close ramifica en runtime.

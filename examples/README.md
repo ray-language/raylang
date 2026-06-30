@@ -40,7 +40,8 @@ Librerías en raylang (importables) + sus demos. **El servidor es solo VM.**
 - **Librerías**: `http` (cliente HTTP/HTTPS), `json` (parse/stringify), `webserver` (servidor + SSE),
   `websocket` (handshake + framing), `sha1` / `sha256` / `hmac` / `base64` / `hex` (cripto),
   `jwt` (JSON Web Tokens HS256), `uuid` (v4), `url` (percent-encoding + query string), `cookie`,
-  `time` (fechas/horas UTC: ISO 8601, RFC 1123, duraciones), `redis` (cliente RESP2 sobre TCP).
+  `time` (fechas/horas UTC: ISO 8601, RFC 1123, duraciones), `redis` (cliente RESP2 sobre TCP),
+  `udp` (datagramas sin conexión).
 - **Demos**: `http_demo`, `json_demo`, `https_demo`, `webserver_demo`, `websocket_demo`,
   `websocket_echo` (echo `ws://`), `wss_echo` (echo `wss://`), `crypto_demo` (vectores SHA-1/base64).
 - **`framework`**: un micro-framework web tipo Express (enrutado, parámetros de ruta, middleware,

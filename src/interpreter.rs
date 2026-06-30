@@ -1039,6 +1039,46 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M20.8: enlaza un socket UDP → ["ok", handle] o ["err", msg].
+            "__udp_bind" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(host), Value::Int(port)) => match crate::builtins::udp_bind(host, *port) {
+                        Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza string, int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M20.8: envía un datagrama → ["ok", n] o ["err", msg].
+            "__udp_send_to" => {
+                let arr = match (&values[0], &values[1], &values[2], &values[3]) {
+                    (Value::Int(h), Value::Str(host), Value::Int(port), Value::Bytes(data)) => {
+                        match crate::builtins::udp_send_to(*h, host, *port, data) {
+                            Ok(n) => vec![Value::Str("ok".to_string()), Value::Str(n.to_string())],
+                            Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                        }
+                    }
+                    _ => unreachable!("el checker garantiza int, string, int, bytes"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M20.8: recibe un datagrama (bloqueante) → [b"ok", host, puerto, datos] o [b"err", msg].
+            "__udp_recv_from" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::udp_recv_from(*h) {
+                        Ok((host, port, data)) => vec![
+                            bytes_tag("ok"),
+                            bytes_of_str(&host),
+                            bytes_of_str(&port.to_string()),
+                            Value::Bytes(Rc::new(data)),
+                        ],
+                        Err(e) => vec![bytes_tag("err"), bytes_of_str(&e)],
+                    },
+                    _ => unreachable!("el checker garantiza un int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M11.4a/M11.7b: ¿el string contiene la subcadena? / ¿el arreglo contiene el elemento?
             "contains" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sub)) => Value::Bool(s.contains(sub.as_str())),

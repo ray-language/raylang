@@ -4087,6 +4087,9 @@ estándar por ambos motores):
   de repetición 16/17/18). Envoltorios `gunzip` (RFC 1952, cabecera + tráiler, **verifica CRC-32**),
   `zlib_inflate` (RFC 1950) e `inflate_raw`. `crc32` propio (polinomio 0xEDB88320). Verificado contra
   blobs gzip de Python (los 3 tipos de bloque) + CRC-32 estándar por ambos motores (`tests/inflate_cli.rs`).
-  Falta **M20.10b**: integrarlo en `http.ray` (`Content-Encoding: gzip` automático).
+  ✅ **M20.10b**: `http.ray` importa `gunzip` y descomprime **automáticamente** las respuestas con
+  `Content-Encoding: gzip` (en `parse_response`, tras el chunked). E2E: el servidor de juguete sirve un
+  cuerpo gzip y el cliente lo entrega ya descomprimido (`tests/httpc_cli.rs`, ambos motores; los tests
+  que copian `http.ray` ahora copian también `inflate.ray`). **M20.10 COMPLETO.**
 - **M20.11+ — pendiente**: compresión DEFLATE (encoder, mucho más código) + cesión cooperativa de UDP en
   la VM (integración con `io_parked`).

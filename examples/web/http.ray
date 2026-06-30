@@ -8,6 +8,9 @@
 // correctas, no solo texto). Las cabeceras siguen siendo texto (ASCII): se decodifican con from_utf8
 // para parsearlas. Para leer el cuerpo como texto, usa `body_text(r)`.
 
+// M20.10b: descompresión transparente de `Content-Encoding: gzip` (la librería INFLATE en raylang).
+from inflate import gunzip;
+
 pub struct Response {
     status: int,
     headers: Map<string, string>,
@@ -235,6 +238,18 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                         match (decode_chunked(cuerpo)) {
                             Result.Ok(d) => { cuerpo_final = d; },
                             Result.Err(e) => { return Result.Err(e); },
+                        }
+                    }
+                },
+                Option.None => {},
+            }
+            // Content-Encoding: gzip → descomprimir el cuerpo (M20.10b, librería INFLATE).
+            match (get(headers, "content-encoding")) {
+                Option.Some(ce) => {
+                    if (contains(to_lower(ce), "gzip")) {
+                        match (gunzip(cuerpo_final)) {
+                            Result.Ok(d) => { cuerpo_final = d; },
+                            Result.Err(e) => { return Result.Err("gzip: " + e); },
                         }
                     }
                 },

@@ -4046,6 +4046,13 @@ estándar por ambos motores):
   `parse_iso8601`; `format_duration` (`1h2m3s`). Válido para fechas ≥ 1970 (epoch ≥ 0 → la división
   trunca = floor). Verificado contra `datetime` de Python por ambos motores (`tests/time_cli.rs`), incl.
   año bisiesto. **No usa `bytes`/bitops → lo cubre además el oráculo de self-hosting** (parser).
-- **M20.6 — cliente Redis (RESP)**. El protocolo RESP es trivial sobre TCP → el ejemplo "cliente de
-  infra cloud" más rentable, en raylang puro.
+- **M20.6 — cliente Redis (RESP)** ✅ (`redis.ray`). Cliente Redis (protocolo RESP2) sobre los builtins
+  TCP (M15.2), cero runtime nuevo. `encode_command([string])` (array de bulk strings); un `struct Conn`
+  (handle + buffer) con un lector con framing por encima de `socket_read` (`pull`/`read_line`/`read_n`);
+  `read_reply` parsea las 5 formas RESP (`+`/`-`/`:`/`$`/`*`, recursivo para arrays) a un `enum Reply`.
+  Funciona en **ambos motores** (intérprete con sockets bloqueantes, VM no bloqueante). Verificado e2e
+  contra un **servidor RESP de juguete en Rust** (PING/SET/GET/INCR/RPUSH/LRANGE/DEL en memoria) por
+  ambos motores (`tests/redis_cli.rs`). Gotchas de raylang: una asignación en un brazo `match` necesita
+  bloque + `;`; reasignar un `Result` no propaga el tipo esperado → `read_line` usa `return` directo.
+  No usa `bytes`/bitops → lo cubre además el oráculo de self-hosting.
 - **M20.7+ — HTTP cliente robusto** (chunked/redirects/headers), **gzip/deflate**, **UDP** (runtime).

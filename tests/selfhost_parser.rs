@@ -637,8 +637,6 @@ fn errores_de_sintaxis_igual_que_el_oraculo() {
 #[test]
 fn parsea_archivos_reales_igual_que_el_oraculo() {
     let mut archivos: Vec<String> = Vec::new();
-    // Todos los ejemplos.
-    let dir = repo_path("examples");
     // El toolchain auto-alojado (lexer/parser/checker/intérprete en raylang) **no soporta `bytes`**
     // (M16 fue solo del lado de Rust; `bytes` en self-hosting es un diferido). Los ejemplos que usan
     // `bytes`/`b"..."` quedan fuera de este corpus, como en su día quedó `mapa.ray` hasta M14.6.
@@ -650,20 +648,30 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "websocket.ray", "websocket_demo.ray", "websocket_echo.ray",
         "framework.ray", // micro-framework web: usa `bytes` (diferido en el toolchain auto-alojado)
     ];
-    let mut entradas: Vec<_> = std::fs::read_dir(&dir)
-        .expect("lee examples/")
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().map(|x| x == "ray").unwrap_or(false))
-        .filter(|p| {
-            let nombre = p.file_name().unwrap().to_string_lossy().to_string();
-            !DIFERIDOS_SELFHOST.contains(&nombre.as_str())
-        })
-        .collect();
-    entradas.sort();
-    for p in entradas {
-        archivos.push(format!("examples/{}", p.file_name().unwrap().to_string_lossy()));
+    // Los ejemplos viven en subdirectorios por categoría (basics/, types/, web/, …) → se recorre
+    // `examples/` **recursivamente**. Se saltan los directorios de ejemplos de MÓDULOS (multi-archivo,
+    // con fragmentos `mod.ray` no parseables sueltos), que prueba `modules_cli`.
+    const DIRS_EXCLUIDOS: &[&str] = &["capsula", "modulos", "proyecto"];
+    fn recolectar(dir: &std::path::Path, fuera: &[&str], difer: &[&str], out: &mut Vec<String>) {
+        let mut entradas: Vec<_> = std::fs::read_dir(dir).expect("lee dir").filter_map(|e| e.ok()).map(|e| e.path()).collect();
+        entradas.sort();
+        for p in entradas {
+            if p.is_dir() {
+                let nombre = p.file_name().unwrap().to_string_lossy().to_string();
+                if !fuera.contains(&nombre.as_str()) {
+                    recolectar(&p, fuera, difer, out);
+                }
+            } else if p.extension().map(|x| x == "ray").unwrap_or(false) {
+                let nombre = p.file_name().unwrap().to_string_lossy().to_string();
+                if !difer.contains(&nombre.as_str()) {
+                    // Ruta relativa a la raíz del repo (p. ej. "examples/basics/fib.ray").
+                    let raiz = repo_path("");
+                    out.push(p.strip_prefix(&raiz).unwrap().to_string_lossy().to_string());
+                }
+            }
+        }
     }
+    recolectar(&repo_path("examples"), DIRS_EXCLUIDOS, DIFERIDOS_SELFHOST, &mut archivos);
     // Los propios fuentes del self-hosting: el parser se parsea a sí mismo.
     archivos.push("selfhost/lexer.ray".into());
     archivos.push("selfhost/lex_dump.ray".into());

@@ -54,7 +54,7 @@ fn lanzar_servidor_tls() -> u16 {
 
 /// Corre el demo HTTPS contra `url`, confiando en la CA de prueba (`SSL_CERT_FILE`). Devuelve stdout.
 fn correr_demo(flags: &[&str], url: &str) -> String {
-    let demo = format!("{}/examples/https_demo.ray", env!("CARGO_MANIFEST_DIR"));
+    let demo = format!("{}/examples/web/https_demo.ray", env!("CARGO_MANIFEST_DIR"));
     // El cliente confía en la CA de prueba (que firmó el cert de `localhost`), no en la hoja.
     let cert = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_raylang"))
@@ -88,14 +88,14 @@ fn cliente_https_contra_servidor_local_vm() {
     assert!(out.contains("body=hola-tls"), "cuerpo incorrecto, got: {out}");
 }
 
-// --- M19.4b: servidor TLS (`wss://`) — `examples/wss_echo.ray` ---
+// --- M19.4b: servidor TLS (`wss://`) — `examples/web/wss_echo.ray` ---
 //
 // El servidor wss en raylang corre en la VM (no bloqueante: la fibra cede mientras rustls hace el
 // handshake/descifra). Lo atacamos con un cliente WebSocket-sobre-TLS escrito aquí en Rust.
 
 /// Lanza `wss_echo.ray` (con el cert/clave de prueba) y devuelve su proceso + puerto efímero.
 fn lanzar_wss_server() -> (Child, u16) {
-    let demo = format!("{}/examples/wss_echo.ray", env!("CARGO_MANIFEST_DIR"));
+    let demo = format!("{}/examples/web/wss_echo.ray", env!("CARGO_MANIFEST_DIR"));
     let cert = format!("{}/tests/fixtures/tls_cert.pem", env!("CARGO_MANIFEST_DIR"));
     let key = format!("{}/tests/fixtures/tls_key.pem", env!("CARGO_MANIFEST_DIR"));
     let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))

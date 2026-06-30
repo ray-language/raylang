@@ -3,7 +3,7 @@
 // tiene un emisor esperando) y devuelve el ÍNDICE del primero listo; luego `recv(chs[i])` toma el
 // valor. Como toda la concurrencia, vive SOLO en la VM:
 //
-//     cargo run -- --vm examples/select.ray
+//     cargo run -- --vm examples/concurrency/select.ray
 //
 // (Con el intérprete da un error claro pidiendo la VM.)
 //

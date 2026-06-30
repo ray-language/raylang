@@ -69,7 +69,7 @@ scheduler, así que usa sockets *bloqueantes* — y sobre un socket bloqueante, 
 bloquea, nunca devuelve `WouldBlock`. La bomba "no bloqueante" se comporta como bloqueante sin una línea
 de código especial. Un solo camino para los dos mundos.
 
-Con eso, `examples/wss_echo.ray` es el echo server de WebSocket del capítulo anterior con **una línea
+Con eso, `examples/web/wss_echo.ray` es el echo server de WebSocket del capítulo anterior con **una línea
 nueva**: un `tls_accept(conn, cert, clave)` tras aceptar la conexión. A partir de ahí, el handshake de
 upgrade y todas las tramas viajan cifradas, sin que el código de WebSocket se entere. El test lo verifica
 de punta a punta: un cliente WebSocket-sobre-TLS de verdad completa el handshake (con el accept canónico

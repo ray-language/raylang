@@ -2,7 +2,7 @@
 // Calcula los primeros 10 números de Fibonacci.
 //
 // Por ahora solo lo usamos para alimentar al lexer:
-//   cargo run -- examples/fib.ray
+//   cargo run -- examples/basics/fib.ray
 
 fn fib(n: int) -> int {
     if (n < 2) {

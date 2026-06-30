@@ -40,7 +40,7 @@ correcto depende del **contexto gramatical**, no solo de los caracteres.
 ## M19.3b — SHA-1 y base64, en raylang y sin tocar el runtime
 
 Con los bits en su sitio, las dos piezas criptográficas se escriben **enteras en raylang**
-(`examples/sha1.ray`, `examples/base64.ray`). Y aquí pasó algo bonito: **no hizo falta ni un builtin
+(`examples/web/sha1.ray`, `examples/web/base64.ray`). Y aquí pasó algo bonito: **no hizo falta ni un builtin
 nuevo**. Para leer el mensaje octeto a octeto bastaba con indexar `bytes` —`b[i]` ya daba un `int` desde
 M16— y el digest de 20 octetos se modela como un `[int]` corriente.
 
@@ -93,7 +93,7 @@ fn encode_text(texto: string) -> bytes {
 }
 ```
 
-El resultado es `examples/websocket_echo.ray`: escucha, completa el handshake y reenvía cada trama de
+El resultado es `examples/web/websocket_echo.ray`: escucha, completa el handshake y reenvía cada trama de
 texto hasta que el cliente cierra. La prueba de extremo a extremo levanta el servidor en la VM y lo ataca
 con un cliente WebSocket de verdad (en el test): handshake con el accept canónico, ida y vuelta de tramas
 enmascaradas, y el `close` de cortesía. Un protocolo bidireccional real, construido sobre los sockets de

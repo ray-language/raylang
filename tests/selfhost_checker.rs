@@ -407,12 +407,12 @@ fn panic_y_parse() {
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.
 #[test]
 fn ejemplos_reales_validos() {
-    let archivos = ["examples/fib.ray", "examples/fizzbuzz.ray", "examples/gcd.ray", "examples/primes.ray",
-        "examples/structs.ray", "examples/match_figuras.ray", "examples/enums.ray", "examples/arrays.ray",
-        "examples/matriz.ray", "examples/genericos.ray", "examples/tipos_genericos.ray", "examples/opcional.ray",
-        "examples/errores.ray", "examples/ufcs.ray", "examples/closures.ray", "examples/traits.ray",
-        "examples/bounds.ray", "examples/metodos_por_defecto.ray", "examples/impls_genericos.ray",
-        "examples/trait_objects.ray", "examples/stdlib.ray", "examples/anotaciones.ray"];
+    let archivos = ["examples/basics/fib.ray", "examples/basics/fizzbuzz.ray", "examples/basics/gcd.ray", "examples/basics/primes.ray",
+        "examples/data/structs.ray", "examples/data/match_figuras.ray", "examples/data/enums.ray", "examples/data/arrays.ray",
+        "examples/data/matriz.ray", "examples/types/genericos.ray", "examples/types/tipos_genericos.ray", "examples/types/opcional.ray",
+        "examples/types/errores.ray", "examples/stdlib/ufcs.ray", "examples/stdlib/closures.ray", "examples/types/traits.ray",
+        "examples/types/bounds.ray", "examples/types/metodos_por_defecto.ray", "examples/types/impls_genericos.ray",
+        "examples/types/trait_objects.ray", "examples/stdlib/stdlib.ray", "examples/types/anotaciones.ray"];
     for rel in archivos {
         let src = std::fs::read_to_string(repo_path(rel)).unwrap_or_else(|e| panic!("lee {rel}: {e}"));
         let esperado = canonical(&src);

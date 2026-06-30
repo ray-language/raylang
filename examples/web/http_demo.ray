@@ -3,7 +3,7 @@
 // Hace un GET y, si la respuesta es JSON, la parsea y re-serializa de forma canónica. Necesita red
 // al ejecutarlo (no determinista → no entra al oráculo ni a los tests automáticos).
 //
-// Prueba: cargo run -- --vm examples/http_demo.ray
+// Prueba: cargo run -- --vm examples/web/http_demo.ray
 
 from http import fetch, header, Response;
 from json import parse, stringify;

@@ -6,8 +6,8 @@
 //
 // La inferencia vive solo en el checker; el runtime no cambia (los tipos se borran).
 // Ejecuta con:
-//   cargo run --quiet -- examples/inferencia.ray
-//   cargo run --quiet -- --vm examples/inferencia.ray
+//   cargo run --quiet -- examples/basics/inferencia.ray
+//   cargo run --quiet -- --vm examples/basics/inferencia.ray
 
 struct Punto { x: int, y: int }
 enum Caja<T> { Llena(T), Vacia }

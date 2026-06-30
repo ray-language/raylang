@@ -3,7 +3,7 @@
 M15 dio el cliente HTTP; el servidor de M15.5 sabía aceptar conexiones concurrentes pero hablaba TCP
 crudo (un eco). M19 construye encima la **capa de aplicación web**, y lo hace fiel a la regla de M15:
 **el transporte son builtins; los protocolos son librerías escritas en raylang**. Así que el servidor
-web no es código de Rust: es `examples/webserver.ray`, importable, legible, modificable.
+web no es código de Rust: es `examples/web/webserver.ray`, importable, legible, modificable.
 
 ## De TCP a HTTP: parsear, enrutar, responder
 
@@ -54,7 +54,7 @@ stream SSE no bloquea a los demás: la fibra del stream cede mientras espera, la
 "servidor web async" de verdad, escrito enteramente en el lenguaje.
 
 ```rust
-// examples/webserver_demo.ray (resumen)
+// examples/web/webserver_demo.ray (resumen)
 import webserver;
 fn enrutar(req: webserver.Request, conn: int) {
     if (req.path == "/sse") {

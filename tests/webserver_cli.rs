@@ -1,4 +1,4 @@
-//! Pruebas del servidor web en raylang (M19.1, `examples/webserver.ray`): petición/respuesta HTTP y
+//! Pruebas del servidor web en raylang (M19.1, `examples/web/webserver.ray`): petición/respuesta HTTP y
 //! streaming SSE. La concurrencia (spawn/scope) es **solo VM**, y la red no es determinista para el
 //! oráculo → subproceso: un servidor `.ray` **acotado** (sirve N conexiones vía `scope` y termina,
 //! imprime su puerto) que importa la librería, y un cliente de Rust que comprueba la respuesta. Mismo
@@ -16,7 +16,7 @@ fn lanzar_servidor(name: &str, driver: &str) -> (Child, u16) {
     let mut dir = std::env::temp_dir();
     dir.push(format!("ray_web_{name}"));
     std::fs::create_dir_all(&dir).expect("crea dir");
-    let src = format!("{}/examples/webserver.ray", env!("CARGO_MANIFEST_DIR"));
+    let src = format!("{}/examples/web/webserver.ray", env!("CARGO_MANIFEST_DIR"));
     std::fs::copy(&src, dir.join("webserver.ray")).expect("copia webserver.ray");
     let driver_path = dir.join("main.ray");
     std::fs::File::create(&driver_path).expect("crea driver").write_all(driver.as_bytes()).expect("escribe");

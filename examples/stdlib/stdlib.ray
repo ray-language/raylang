@@ -12,8 +12,8 @@
 //   fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A
 //
 // Ejecuta con:
-//   cargo run --quiet -- examples/stdlib.ray
-//   cargo run --quiet -- --vm examples/stdlib.ray
+//   cargo run --quiet -- examples/stdlib/stdlib.ray
+//   cargo run --quiet -- --vm examples/stdlib/stdlib.ray
 
 fn doble(x: int) -> int { x * 2 }
 fn es_par(x: int) -> bool { x % 2 == 0 }

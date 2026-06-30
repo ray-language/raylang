@@ -2,7 +2,7 @@
 // `scope` que las POSEE y las UNE al salir (ninguna se fuga), y que PROPAGA el fallo de una hija.
 // Como toda la concurrencia, vive SOLO en la VM:
 //
-//     cargo run -- --vm examples/structured.ray
+//     cargo run -- --vm examples/concurrency/structured.ray
 //
 // (Con el intérprete da un error claro pidiendo la VM.)
 

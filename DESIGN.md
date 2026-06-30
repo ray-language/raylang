@@ -66,7 +66,7 @@ que raylang expresa) y *tooling/runtime* (lo que lo hace usable y rápido).
 | **M13** | **habilitadores de self-hosting**: `Map<K,V>`, `panic`/`assert`+test, recursión profunda + **TCO** | tablas hash, aserciones, robustez de pila, llamadas en cola | ✅ M13.1 `Map` · M13.2 `panic`/`assert`+runner · M13.3 pila grande + límite + TCO (ambos motores) |
 | **M14** | **self-hosting**: lexer/parser/checker/intérprete/loader en raylang → **meta-circularidad** | bootstrapping, oráculo (texto/conductual), *erasure* por resolución en runtime | ✅ **LOGRADO** (M14.1 lexer · M14.2 parser · M14.3 checker · M14.4 intérprete · M14.6 stdlib · M14.7 loader + meta-circularidad) |
 | **M12** | **concurrencia**: CSP sobre la VM (green threads cooperativos M:1 + canales tipados) | scheduler determinista, green threads, fibras, GC multi-raíz | ✅ §21.2–§21.6: ✅ **M12.1** slice CSP · ✅ **M12.2** acotados/backpressure · ✅ **M12.3** structured concurrency · ✅ **M12.4** `select` · ✅ **M12.5** cancelación de hermanas. **M12 COMPLETO** (diferido: cancelación preemptiva, `Selected<T>`, select de send) |
-| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete) · ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port`; `OpenHandle::Listener`; servidor secuencial bloqueante; subproceso con el `.ray` de servidor) · ✅ **M15.4a** JSON (librería `examples/json.ray` en raylang: `parse`/`stringify`, objetos `Map<string,Json>`, salida canónica; cero runtime; subproceso golden) · ✅ **M15.4b** HTTP (librería `examples/http.ray` en raylang sobre TCP: `fetch`/`request`/`header`, parseo de URL/respuesta; compone con `json`; subproceso vs. servidor de juguete) · ✅ **M15.5** (capstone) sockets no bloqueantes + scheduler de M12 (`tcp_accept`/`socket_read` ceden la fibra; busy-poll cooperativo, `io_parked`, cero deps; servidor concurrente con `spawn`; solo VM). **M15 COMPLETO** (diferidos ya resueltos: `epoll` M17, bytes M16, TLS M19.4, cesión en `socket_write` post-M19) |
+| **M15** | **redes + base moderna**: sockets (builtins/`std::net`) + HTTP/JSON (librería raylang) + reloj/RNG/matemáticas | I/O de red, handles, librerías sobre builtins, base de runtime | 🚧 §24: ✅ **M15.1a** matemáticas (oráculo) · ✅ **M15.1b** reloj/RNG (`now`/`monotonic`/`sleep`/`random`/`random_int`; PRNG SplitMix64 propio; subproceso) · ✅ **M15.2** cliente TCP (`tcp_connect`/`socket_read`/`socket_write` sobre `std::net`; handle reusa el registro de M11.8; `close` extendido; subproceso vs. servidor de juguete) · ✅ **M15.3** servidor TCP (`tcp_listen`/`tcp_accept`/`local_port`; `OpenHandle::Listener`; servidor secuencial bloqueante; subproceso con el `.ray` de servidor) · ✅ **M15.4a** JSON (librería `examples/web/json.ray` en raylang: `parse`/`stringify`, objetos `Map<string,Json>`, salida canónica; cero runtime; subproceso golden) · ✅ **M15.4b** HTTP (librería `examples/web/http.ray` en raylang sobre TCP: `fetch`/`request`/`header`, parseo de URL/respuesta; compone con `json`; subproceso vs. servidor de juguete) · ✅ **M15.5** (capstone) sockets no bloqueantes + scheduler de M12 (`tcp_accept`/`socket_read` ceden la fibra; busy-poll cooperativo, `io_parked`, cero deps; servidor concurrente con `spawn`; solo VM). **M15 COMPLETO** (diferidos ya resueltos: `epoll` M17, bytes M16, TLS M19.4, cesión en `socket_write` post-M19) |
 | **M16** | **tipo `bytes`** (datos binarios) | nuevo tipo en el pipeline, literal `b"..."`, I/O binaria | ✅ §25: ✅ **M16.1a** el tipo (literal `b"..."` con `\xNN`, `len`/index→int/`==`; oráculo) · ✅ **M16.1b** string-interop (`to_bytes`/`from_utf8` + `+`; oráculo) · ✅ **M16.1c** I/O binaria (`read_file_bytes`/`write_file_bytes`/`socket_read_bytes`/`socket_write_bytes`; lecturas → `[bytes]` etiquetado; socket cede al scheduler; subproceso). **M16 COMPLETO** (cierra la deuda binaria de M15). ✅ **`bytes` clave de Map** (post-M19; `MapKey::Bytes`). Diferido: mutabilidad |
 | **M17** | **`epoll`/`kqueue`** (readiness real, sustituye el busy-poll de M15.5) | E/S asíncrona del SO, `unsafe` acotado, FFI cero-deps | ✅ §26: poller del SO (`kqueue` macOS/BSD, `epoll` Linux) en `src/poll.rs`; FFI propio (`extern "C"`, sin el crate `libc` → invariante cero-deps); el scheduler de la VM se **bloquea** hasta readiness real y despierta **solo** las fibras de los fds listos (`io_parked` lleva ahora el `fd`); fallback al busy-poll de M15.5 en plataformas sin poller o EINTR; comportamiento idéntico (regresión: tests de M15.5/red concurrente). **M17 COMPLETO** (✅ cesión en `socket_write` post-M19: el poller gana interés de escritura `wait(read_fds, write_fds)`; diferido: registro persistente del poller, `bytes`/bitops en el toolchain auto-alojado) |
 | **M18** | **backend nativo** (bootstrap sin Rust) | codegen a máquina/LLVM/C | 💤 **aparcado** (decisión del usuario): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va al transversal de optimización de la VM. Se retoma más adelante |
@@ -2232,7 +2232,7 @@ canal = `Obj::Channel(VmChannel { queue, closed })` trazado por el GC; `collect`
 el canal que cada *parked* espera. `recv` bloqueante guarda la fibra (su `ip` ya apunta tras `ChanRecv`) y
 `wake_with` le deja el `[T]` en la pila al despertarla. Tests: `tests/concurrency_cli.rs` (productor/
 consumidor, orden determinista con 2 productores, pipeline de fibras, closure capturada, `close`→`None`,
-deadlock, `send` a canal cerrado, error limpio del intérprete). Ejemplo: `examples/concurrencia.ray`.
+deadlock, `send` a canal cerrado, error limpio del intérprete). Ejemplo: `examples/concurrency/concurrencia.ray`.
 
 ### 21.3 M12.2 — canales acotados / backpressure (especificación)
 
@@ -2337,7 +2337,7 @@ y re-ejecutan al despertar (TaskJoin re-empuja el handle). La **captura** del fa
 corriendo cada instrucción en un **cierre** dentro del bucle de la VM (el error de una fibra hija con
 frames activos → su `Task`; los de `main`/scheduler con frames vacíos → abortan). Tests:
 `tests/concurrency_cli.rs` (scope+join con valor, auto-join, propagación por join y por scope, scope de
-varias tareas). Ejemplo: `examples/structured.ray`.
+varias tareas). Ejemplo: `examples/concurrency/structured.ray`.
 
 ### 21.5 M12.4 — `select` sobre varios canales (especificación)
 
@@ -2468,7 +2468,7 @@ usuario (vía trait `Hash` + dicts, como M9.2) → **diferido**.
   es **indeterminado** (como `[]`/`None`): su tipo lo fija el esperado (`check_expr_expected`); sin
   anotación → error claro. **Clave hashable** validada en `ensure_type` (`Map<float,_>` se rechaza).
   Oráculo `map_basico/claves_variadas` + `map_estres_gc` (estrés del GC). `print` de un Map
-  **diferido** (no es *printable*; Display ordena por clave → determinista). Ejemplo `examples/mapa.ray`.
+  **diferido** (no es *printable*; Display ordena por clave → determinista). Ejemplo `examples/data/mapa.ray`.
 - **M13.1b — recorrido** ✅ **COMPLETO** (343 tests lib): `__map_remove(m,k) -> [V]` (+ envoltorio
   `remove(m,k) -> Option<V>` en el prelude), `keys(m) -> [K]`, `values(m) -> [V]` (opcodes
   `MapRemove`/`MapKeys`/`MapValues`; los tres asignan heap → estrés del GC). `MapKey` gana
@@ -2654,7 +2654,7 @@ canónica del token: `"("`, `"->"`, `"let"`; nombre simbólico para los que carg
   como el parser de Rust) y `match`/patrones (comodín, binding, `Enum.Variante(sub-bindings)`). El AST
   crece con structs/enums propios y tres variantes de `EKind` (`EStructLit`/`EFunc`/`EMatch`); el
   `Program` ahora lleva `funcs`+`structs`+`enums` (orden de volcado fijo: funciones, structs, enums).
-  Oráculo: snippets + `examples/enums.ray` y `examples/match_figuras.ray` reales. **Gotcha**: un
+  Oráculo: snippets + `examples/data/enums.ray` y `examples/data/match_figuras.ray` reales. **Gotcha**: un
   `Option.None` suelto en argumento de builtin (`push(binds, Option.None)`) no infiere su `T`; se
   materializa en una `var` tipada (`var bv: Option<string> = Option.None;`) cuyo tipo declarado fija el
   `None`. Diferido: M14.2c (traits/impls/genéricos/dyn/Map/`?`/pipelines/anotaciones/imports/`pub`).
@@ -3101,7 +3101,7 @@ diferido aditivo (fila en el checker + impl en el intérprete, como M11.4).
   struct → `insert`/`remove` mutan y los alias lo ven, como `VArray`—. `keys()`/`values()` se devuelven
   **ordenadas por clave** (insertion sort con `key_lt`) → deterministas como Rust. Oráculo (20 tests):
   snippets con claves string e int (insert/get/contains_key/len/keys/values/remove + mutación
-  compartida) → mismo stdout + exit que Rust. (`examples/mapa.ray` aún no: usa `assert_eq`/`assert` del
+  compartida) → mismo stdout + exit que Rust. (`examples/data/mapa.ray` aún no: usa `assert_eq`/`assert` del
   prelude → M14.6c.) Pendiente: `panic` en el checker, `parse_int`/`parse_float`, `assert`/`sort` → luego
   ejecutar el compilador auto-alojado.
 - **M14.6c-1 COMPLETO** — **`panic` + `parse_int`/`parse_float`**. El **checker auto-alojado** gana el
@@ -3130,7 +3130,7 @@ diferido aditivo (fila en el checker + impl en el intérprete, como M11.4).
   usuario con `impl Ord` se resuelve antes, por la tabla de métodos (`Tipo#menor`), así que el fallback
   solo ve los cuatro primitivos —exactamente lo que el checker garantiza vía `T: Ord`—. `assert_eq` reusa
   el fallback de `igual`/`mostrar`. Oráculo: intérprete (22 tests: `sort` de int/string/float, tipo de
-  usuario con `impl Ord`, `assert`/`assert_eq` ok y `assert_eq` que falla → exit 70, + **`examples/mapa.ray`**
+  usuario con `impl Ord`, `assert`/`assert_eq` ok y `assert_eq` que falla → exit 70, + **`examples/data/mapa.ray`**
   que estaba diferido por `assert_eq`/`assert` en M14.6b); checker (25 tests: válidos + error de bound
   `sort` sin Ord, byte-idéntico). **M14.6c COMPLETO** (`panic` + `parse_int`/`parse_float` + `assert`/
   `assert_eq`/`sort`). El compilador auto-alojado entero sobre el intérprete sigue bloqueado por la **carga
@@ -3524,9 +3524,9 @@ Es la materialización de la filosofía "lo que se puede escribir en el lenguaje
 lenguaje" y un *showcase* del sistema de módulos (M11) sobre la stdlib (string/Map/Result). Dos
 librerías, en dos sub-fases:
 
-- **M15.4a — JSON** (`examples/json.ray`): `parse`/`stringify` de JSON, **en raylang**. Determinista
+- **M15.4a — JSON** (`examples/web/json.ray`): `parse`/`stringify` de JSON, **en raylang**. Determinista
   → se prueba por subproceso con salida exacta (golden) en ambos motores.
-- **M15.4b — HTTP** (`examples/http.ray`): un cliente HTTP/1.1 (`get`/`request`) + parseo de la
+- **M15.4b — HTTP** (`examples/web/http.ray`): un cliente HTTP/1.1 (`get`/`request`) + parseo de la
   respuesta, **en raylang** sobre los builtins de TCP de M15.2. Se prueba contra un servidor HTTP de
   juguete en Rust.
 
@@ -3547,7 +3547,7 @@ usa `s[i]`/`chars`/comparación de `char`/`substring`/`parse_float` de la stdlib
 (convertir un *code point* a `char` necesitaría un builtin nuevo; fuera de la filosofía "solo
 librería"). Como toda librería de raylang, **el runtime no cambia**.
 
-**M15.4b — HTTP (especificación).** Un cliente HTTP/1.1 en `examples/http.ray`, **en raylang** sobre
+**M15.4b — HTTP (especificación).** Un cliente HTTP/1.1 en `examples/web/http.ray`, **en raylang** sobre
 los builtins TCP de M15.2 (`tcp_connect`/`socket_write`/`socket_read`/`close`). API:
 
 ```raylang
@@ -3843,7 +3843,7 @@ TLS (M19.4).
 
 ### 28.1 M19.1 — servidor web async + SSE
 
-Una librería `examples/webserver.ray` (como `http.ray`/`json.ray`: importable, cero runtime) sobre el
+Una librería `examples/web/webserver.ray` (como `http.ray`/`json.ray`: importable, cero runtime) sobre el
 servidor concurrente de M15.5/M17. Da el "servidor web async" de verdad: muchas conexiones a la vez en un
 hilo. Piezas:
 
@@ -3912,24 +3912,24 @@ anidados (`Caja<Caja<int>>`); el lexer siempre emite `Shr` y el parser lo **part
 argumentos de tipo (`close_type_angle`, estilo Rust/Java). Diferido: bitops en el toolchain auto-alojado
 (como `bytes`; `selfhost/lexer.ray` aún no los tokeniza → fuera del corpus del oráculo de self-hosting).
 
-**M19.3b — SHA-1 + base64 (cómputo puro)** ✅. Ambos **escritos en raylang** (`examples/sha1.ray`,
-`examples/base64.ray`), **cero runtime nuevo**: sobre los bitops de M19.3a + `bytes` (M16) + la stdlib
+**M19.3b — SHA-1 + base64 (cómputo puro)** ✅. Ambos **escritos en raylang** (`examples/web/sha1.ray`,
+`examples/web/base64.ray`), **cero runtime nuevo**: sobre los bitops de M19.3a + `bytes` (M16) + la stdlib
 de strings. `sha1(msg: bytes) -> [int]` (digest de 20 octetos; `sha1_hex` para la forma hex);
 `base64(data: [int]) -> string`. Clave: no hicieron falta builtins nuevos —leer octetos es `b[i]`
 (indexado de `bytes`, M16.1a, ya da `int`) y el digest se modela como `[int]`—; SHA-1 es aritmética de
 32 bits sobre el `int` de 64 (se enmascara con `& 0xFFFFFFFF` y se rota con `rotl`). Verificado contra
 **vectores estándar** (RFC 3174 SHA-1, RFC 4648 base64) y el **accept canónico del RFC 6455**
 (`base64(SHA-1("dGhlIHNhbXBsZSBub25jZQ==" + GUID)) = s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`), idéntico en
-intérprete y VM (`tests/websocket_cli.rs`, driver `examples/crypto_demo.ray`). Diferido en el toolchain
+intérprete y VM (`tests/websocket_cli.rs`, driver `examples/web/crypto_demo.ray`). Diferido en el toolchain
 auto-alojado (bitops, como `bytes`).
 
-**M19.3c — handshake + framing + echo server** ✅ → **M19.3 COMPLETO**. Librería `examples/websocket.ray`
+**M19.3c — handshake + framing + echo server** ✅ → **M19.3 COMPLETO**. Librería `examples/web/websocket.ray`
 (sobre `sha1`/`base64` de M19.3b): handshake (`extract_key` de la petición de upgrade →
 `handshake_response` con el `Sec-WebSocket-Accept`) + framing (`decode_frame` des-enmascara la trama
 del cliente; `encode_frame`/`encode_text` construyen la del servidor, sin máscara; FIN/opcode/longitud
 de 7/16/64 bits). **Único toque de runtime de M19.3c**: el builtin `bytes_of([int]) -> bytes` (dual del
 indexado `b[i]`, que ya leía un octeto; oráculo `bytes_of_oraculo`) para *construir* tramas octeto a
-octeto; el resto es `bytes` + `+` (concatenación) + bitops. Echo server real `examples/websocket_echo.ray`
+octeto; el resto es `bytes` + `+` (concatenación) + bitops. Echo server real `examples/web/websocket_echo.ray`
 (handshake + bucle de eco hasta `close`, secuencial, **solo VM**). Verificado de extremo a extremo con
 un cliente WebSocket en el test (`tests/websocket_cli.rs`): handshake con el accept canónico + ida y
 vuelta de tramas de texto enmascaradas + close. Alcance pedagógico (camino feliz, una trama por lectura,
@@ -3963,7 +3963,7 @@ Sub-fases:
   Verificación de certificado con las raíces de Mozilla (`webpki-roots`) + **`SSL_CERT_FILE`** para CAs
   extra (como curl). Test **determinista y sin red**: un servidor TLS local en el propio test (rustls +
   CA autofirmada de `tests/fixtures/`), el cliente raylang confía en esa CA vía `SSL_CERT_FILE`
-  (`tests/tls_cli.rs`, ambos motores); demo `examples/https_demo.ray`. Verificado también contra HTTPS
+  (`tests/tls_cli.rs`, ambos motores); demo `examples/web/https_demo.ray`. Verificado también contra HTTPS
   público real (`fetch("https://example.com/")`). **Único toque que NO es runtime puro: las deps de TLS.**
 - **M19.4b — servidor TLS + `wss://`** ✅ → **M19.4 / M19 COMPLETOS**. `tls_accept(handle, cert, key)`
   envuelve una conexión TCP ya aceptada en una sesión TLS de **servidor** (reusa el handle). Lo difícil
@@ -3977,7 +3977,7 @@ Sub-fases:
   — sobre el socket **bloqueante** del intérprete, `read_tls` simplemente bloquea (nunca da WouldBlock),
   así que el intérprete no necesita un camino aparte (se eliminó `rustls::Stream`, que además no acepta
   el enum `Connection`). `tls_server_config` carga cert/clave PEM (`with_single_cert`). El echo server
-  `examples/wss_echo.ray` = el de M19.3c + un `tls_accept` tras `tcp_accept`: todo el I/O (upgrade HTTP +
+  `examples/web/wss_echo.ray` = el de M19.3c + un `tls_accept` tras `tcp_accept`: todo el I/O (upgrade HTTP +
   tramas) viaja cifrado porque `socket_read_bytes`/`socket_write_bytes` se desvían a TLS. Verificado de
   extremo a extremo con un cliente WebSocket-sobre-TLS en el test (`tests/tls_cli.rs`): handshake con el
   accept canónico + tramas enmascaradas + close, sobre el scheduler no bloqueante. `wss://` real.

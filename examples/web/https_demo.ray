@@ -1,7 +1,7 @@
 // M19.4a — demo de cliente HTTPS. Hace un GET por TLS de la URL pasada como argumento e imprime el
 // estado y el cuerpo. Usa la librería `http.ray` (que ahora habla http:// y https://).
 //
-// Ejecútalo:  cargo run -- examples/https_demo.ray https://example.com/
+// Ejecútalo:  cargo run -- examples/web/https_demo.ray https://example.com/
 
 from http import fetch, Response, body_text;
 

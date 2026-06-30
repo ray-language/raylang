@@ -59,7 +59,7 @@ fn comparar_fuente(src: &str, nombre_tmp: &str) {
 #[test]
 fn corpus_nucleo() {
     // Los cuatro programas-objetivo del núcleo, por la VM auto-alojada.
-    for rel in ["examples/fib.ray", "examples/fizzbuzz.ray", "examples/gcd.ray", "examples/primes.ray"] {
+    for rel in ["examples/basics/fib.ray", "examples/basics/fizzbuzz.ray", "examples/basics/gcd.ray", "examples/basics/primes.ray"] {
         comparar_archivo(rel);
     }
 }
@@ -128,11 +128,11 @@ fn codigo_de_salida() {
 #[test]
 fn corpus_datos() {
     for rel in [
-        "examples/structs.ray",
-        "examples/enums.ray",
-        "examples/match_figuras.ray",
-        "examples/arrays.ray",
-        "examples/matriz.ray",
+        "examples/data/structs.ray",
+        "examples/data/enums.ray",
+        "examples/data/match_figuras.ray",
+        "examples/data/arrays.ray",
+        "examples/data/matriz.ray",
     ] {
         comparar_archivo(rel);
     }
@@ -206,9 +206,9 @@ fn arreglos_snippets() {
 #[test]
 fn corpus_primera_clase() {
     for rel in [
-        "examples/closures.ray",
-        "examples/errores.ray",
-        "examples/opcional.ray",
+        "examples/stdlib/closures.ray",
+        "examples/types/errores.ray",
+        "examples/types/opcional.ray",
     ] {
         comparar_archivo(rel);
     }
@@ -261,13 +261,13 @@ fn option_result_y_try() {
 #[test]
 fn corpus_despacho_dinamico() {
     for rel in [
-        "examples/ufcs.ray",
-        "examples/traits.ray",
-        "examples/bounds.ray",
-        "examples/metodos_por_defecto.ray",
-        "examples/impls_genericos.ray",
-        "examples/trait_objects.ray",
-        "examples/anotaciones.ray",
+        "examples/stdlib/ufcs.ray",
+        "examples/types/traits.ray",
+        "examples/types/bounds.ray",
+        "examples/types/metodos_por_defecto.ray",
+        "examples/types/impls_genericos.ray",
+        "examples/types/trait_objects.ray",
+        "examples/types/anotaciones.ray",
     ] {
         comparar_archivo(rel);
     }
@@ -279,8 +279,8 @@ fn corpus_despacho_dinamico() {
 #[test]
 fn corpus_prelude() {
     for rel in [
-        "examples/stdlib.ray",   // map/filter/fold
-        "examples/mapa.ray",     // Map + assert_eq + sort
+        "examples/stdlib/stdlib.ray",   // map/filter/fold
+        "examples/data/mapa.ray",     // Map + assert_eq + sort
     ] {
         comparar_archivo(rel);
     }

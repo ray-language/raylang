@@ -1,6 +1,6 @@
-//! Pruebas de las librerías criptográficas de M19.3b (`examples/sha1.ray`, `examples/base64.ray`),
+//! Pruebas de las librerías criptográficas de M19.3b (`examples/web/sha1.ray`, `examples/web/base64.ray`),
 //! la base del handshake de WebSocket. Son **cómputo puro determinista** → no hace falta red ni
-//! oráculo cruzado a mano: se corre el driver `examples/crypto_demo.ray` por ambos motores
+//! oráculo cruzado a mano: se corre el driver `examples/web/crypto_demo.ray` por ambos motores
 //! (intérprete y VM) y se compara su salida con los **vectores de referencia** conocidos (RFC 3174
 //! para SHA-1, RFC 4648 para base64, RFC 6455 §1.3 para el accept de WebSocket).
 
@@ -25,9 +25,9 @@ const ESPERADO: &[&str] = &[
     "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
 ];
 
-/// Corre `examples/crypto_demo.ray` con los flags dados y devuelve sus líneas de stdout.
+/// Corre `examples/web/crypto_demo.ray` con los flags dados y devuelve sus líneas de stdout.
 fn correr(flags: &[&str]) -> Vec<String> {
-    let demo = format!("{}/examples/crypto_demo.ray", env!("CARGO_MANIFEST_DIR"));
+    let demo = format!("{}/examples/web/crypto_demo.ray", env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .args(flags)
         .arg(&demo)
@@ -56,14 +56,14 @@ fn vectores_sha1_base64_handshake_vm() {
 
 // --- Echo server de WebSocket de extremo a extremo (M19.3c) ---
 //
-// `examples/websocket_echo.ray` es un servidor real (handshake + framing). La concurrencia/red son
+// `examples/web/websocket_echo.ray` es un servidor real (handshake + framing). La concurrencia/red son
 // **solo VM** y no deterministas para el oráculo → subproceso + un cliente WebSocket escrito aquí en
 // Rust que hace el handshake y un intercambio de tramas, igual que `webserver_cli.rs`.
 
 /// Lanza el echo server (`--vm`, desde `examples/` para que resuelva sus imports) y devuelve el
 /// proceso + el puerto efímero que imprime en su primera línea.
 fn lanzar_echo() -> (Child, u16) {
-    let demo = format!("{}/examples/websocket_echo.ray", env!("CARGO_MANIFEST_DIR"));
+    let demo = format!("{}/examples/web/websocket_echo.ray", env!("CARGO_MANIFEST_DIR"));
     let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
         .arg("--vm")
         .arg(&demo)

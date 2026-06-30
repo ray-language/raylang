@@ -38,7 +38,7 @@ fn run_with_libs(name: &str, driver: &str, vm: bool) -> (String, i32) {
     dir.push(format!("ray_http_{name}_{}", if vm { "vm" } else { "interp" }));
     std::fs::create_dir_all(&dir).expect("crea dir");
     for lib in ["http.ray", "json.ray"] {
-        let src = format!("{}/examples/{lib}", env!("CARGO_MANIFEST_DIR"));
+        let src = format!("{}/examples/web/{lib}", env!("CARGO_MANIFEST_DIR"));
         std::fs::copy(&src, dir.join(lib)).unwrap_or_else(|_| panic!("copia {lib}"));
     }
     let driver_path = dir.join("main.ray");

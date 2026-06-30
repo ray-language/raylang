@@ -1,6 +1,6 @@
 // M19.1 — demo del servidor web concurrente (usa la librería webserver.ray).
 //
-// Ejecútalo:  cargo run -- --vm examples/webserver_demo.ray
+// Ejecútalo:  cargo run -- --vm examples/web/webserver_demo.ray
 // y prueba:
 //   curl http://127.0.0.1:8080/          -> "¡Hola desde raylang!"
 //   curl http://127.0.0.1:8080/saluda    -> JSON

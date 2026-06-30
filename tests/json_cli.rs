@@ -1,19 +1,19 @@
 //! Pruebas de la librería JSON en raylang (M15.4a). JSON es determinista, pero la librería es
 //! multi-archivo (se importa `json.ray`), así que en vez del oráculo in-process se prueba por
-//! subproceso: se copia `examples/json.ray` a un directorio temporal junto a un driver que la
+//! subproceso: se copia `examples/web/json.ray` a un directorio temporal junto a un driver que la
 //! importa, y se ejecuta en ambos motores comprobando la salida exacta (golden).
 
 use std::io::Write;
 use std::process::Command;
 
-/// Copia `examples/json.ray` a un temporal único por `name`, escribe `driver` como `main.ray` a su
+/// Copia `examples/web/json.ray` a un temporal único por `name`, escribe `driver` como `main.ray` a su
 /// lado (para que `from json import …` resuelva), ejecuta en el motor dado y devuelve `(stdout, código)`.
 fn run_with_lib(name: &str, driver: &str, vm: bool) -> (String, i32) {
     let mut dir = std::env::temp_dir();
     dir.push(format!("ray_json_{name}_{}", if vm { "vm" } else { "interp" }));
     std::fs::create_dir_all(&dir).expect("crea dir");
 
-    let lib_src = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/json.ray");
+    let lib_src = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/web/json.ray");
     std::fs::copy(lib_src, dir.join("json.ray")).expect("copia json.ray");
 
     let driver_path = dir.join("main.ray");

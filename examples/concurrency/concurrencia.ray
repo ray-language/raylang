@@ -3,7 +3,7 @@
 // (un solo hilo → sin carreras por construcción; se comparte COMUNICANDO, no por
 // memoria). La concurrencia vive SOLO en la VM: ejecuta este archivo con `--vm`:
 //
-//     cargo run -- --vm examples/concurrencia.ray
+//     cargo run -- --vm examples/concurrency/concurrencia.ray
 //
 // (Con el intérprete da un error claro pidiendo la VM.)
 

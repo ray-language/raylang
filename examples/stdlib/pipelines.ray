@@ -9,8 +9,8 @@
 //
 // A diferencia de UFCS (que se resuelve en el checker), `|>` es puro desugaring del
 // PARSER: el AST ya lleva llamadas ordinarias. Ejecuta con:
-//   cargo run --quiet -- examples/pipelines.ray
-//   cargo run --quiet -- --vm examples/pipelines.ray
+//   cargo run --quiet -- examples/stdlib/pipelines.ray
+//   cargo run --quiet -- --vm examples/stdlib/pipelines.ray
 
 fn doble(x: int) -> int { x * 2 }
 fn inc(x: int) -> int { x + 1 }

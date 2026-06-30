@@ -226,12 +226,12 @@ fn errores_lexicos_igual_que_el_oraculo() {
 #[test]
 fn lexa_archivos_reales_igual_que_el_oraculo() {
     let archivos = [
-        "examples/fib.ray",
-        "examples/fizzbuzz.ray",
-        "examples/enums.ray",
-        "examples/genericos.ray",
-        "examples/mapa.ray",
-        "examples/match_figuras.ray",
+        "examples/basics/fib.ray",
+        "examples/basics/fizzbuzz.ray",
+        "examples/data/enums.ray",
+        "examples/types/genericos.ray",
+        "examples/data/mapa.ray",
+        "examples/data/match_figuras.ray",
         "selfhost/lexer.ray",
         "selfhost/lex_dump.ray",
     ];

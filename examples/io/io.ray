@@ -1,11 +1,11 @@
 // I/O y API de runtime (M11.2).
 //
 // Modo interactivo (lee de stdin):
-//   echo "7" | cargo run --quiet -- examples/io.ray
+//   echo "7" | cargo run --quiet -- examples/io/io.ray
 // Modo por argumentos (suma los que reciba como CLI args):
-//   cargo run --quiet -- examples/io.ray 3 4 no 10
+//   cargo run --quiet -- examples/io/io.ray 3 4 no 10
 // Variable de entorno opcional que cambia el saludo:
-//   RAY_NOMBRE=Ada cargo run --quiet -- examples/io.ray 1 2
+//   RAY_NOMBRE=Ada cargo run --quiet -- examples/io/io.ray 1 2
 
 // Suma los argumentos que sean enteros; ignora (avisando por stderr) los que no.
 fn sumar_args(xs: [string]) -> int {

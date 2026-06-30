@@ -72,10 +72,10 @@ fn comparar_fuente(src: &str, nombre_tmp: &str) {
 fn corpus_nucleo() {
     // Los cuatro programas-objetivo del núcleo: recursión, while, if/else, %, return temprano.
     for rel in [
-        "examples/fib.ray",
-        "examples/fizzbuzz.ray",
-        "examples/gcd.ray",
-        "examples/primes.ray",
+        "examples/basics/fib.ray",
+        "examples/basics/fizzbuzz.ray",
+        "examples/basics/gcd.ray",
+        "examples/basics/primes.ray",
     ] {
         comparar_archivo(rel);
     }
@@ -122,11 +122,11 @@ fn llamadas_y_recursion() {
 fn corpus_datos() {
     // M14.4b: structs, enums, match, arreglos (incl. anidados).
     for rel in [
-        "examples/structs.ray",
-        "examples/enums.ray",
-        "examples/match_figuras.ray",
-        "examples/arrays.ray",
-        "examples/matriz.ray",
+        "examples/data/structs.ray",
+        "examples/data/enums.ray",
+        "examples/data/match_figuras.ray",
+        "examples/data/arrays.ray",
+        "examples/data/matriz.ray",
     ] {
         comparar_archivo(rel);
     }
@@ -190,9 +190,9 @@ fn arreglos_snippets() {
 fn corpus_primera_clase() {
     // M14.4c: closures (captura por celda), funciones como valor, ?, Option/Result.
     for rel in [
-        "examples/closures.ray",
-        "examples/errores.ray",
-        "examples/opcional.ray",
+        "examples/stdlib/closures.ray",
+        "examples/types/errores.ray",
+        "examples/types/opcional.ray",
     ] {
         comparar_archivo(rel);
     }
@@ -235,13 +235,13 @@ fn option_result_y_try() {
 fn corpus_despacho_dinamico() {
     // M14.4d-1: UFCS, métodos de trait, bounds (no-op), impls genéricos, dyn, @derive.
     for rel in [
-        "examples/ufcs.ray",
-        "examples/traits.ray",
-        "examples/bounds.ray",
-        "examples/metodos_por_defecto.ray",
-        "examples/impls_genericos.ray",
-        "examples/trait_objects.ray",
-        "examples/anotaciones.ray",
+        "examples/stdlib/ufcs.ray",
+        "examples/types/traits.ray",
+        "examples/types/bounds.ray",
+        "examples/types/metodos_por_defecto.ray",
+        "examples/types/impls_genericos.ray",
+        "examples/types/trait_objects.ray",
+        "examples/types/anotaciones.ray",
     ] {
         comparar_archivo(rel);
     }
@@ -297,9 +297,9 @@ fn dyn_y_derive_snippets() {
 fn corpus_prelude_y_genericos() {
     // M14.4d-2: map/filter/fold del prelude (UFCS + pipelines + closures) y genéricos (no-op en runtime).
     for rel in [
-        "examples/stdlib.ray",
-        "examples/genericos.ray",
-        "examples/tipos_genericos.ray",
+        "examples/stdlib/stdlib.ray",
+        "examples/types/genericos.ray",
+        "examples/types/tipos_genericos.ray",
     ] {
         comparar_archivo(rel);
     }
@@ -446,7 +446,7 @@ fn assert_y_sort() {
         "in_sort_user.ray",
     );
     // El ejemplo real, antes diferido por assert_eq/assert (M14.6b).
-    comparar_archivo("examples/mapa.ray");
+    comparar_archivo("examples/data/mapa.ray");
 }
 
 #[test]

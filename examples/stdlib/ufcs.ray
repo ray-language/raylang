@@ -7,8 +7,8 @@
 //
 // Regla de desambiguación: si el receptor es un struct con un CAMPO con ese nombre,
 // gana el campo; si no, se busca una función libre. Ejecuta con:
-//   cargo run --quiet -- examples/ufcs.ray
-//   cargo run --quiet -- --vm examples/ufcs.ray
+//   cargo run --quiet -- examples/stdlib/ufcs.ray
+//   cargo run --quiet -- --vm examples/stdlib/ufcs.ray
 // (ambos motores devuelven el mismo código de salida)
 
 fn doble(x: int) -> int { x * 2 }

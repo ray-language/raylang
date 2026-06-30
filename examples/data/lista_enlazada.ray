@@ -5,7 +5,7 @@
 // handle + GC en la VM), no hay problema de "tamaño infinito".
 //
 // Este ejemplo se centra en CONSTRUIR e imprimir la lista. Recorrerla (longitud,
-// suma, búsqueda...) se hace con `match`: ver examples/lista_recorrido.ray.
+// suma, búsqueda...) se hace con `match`: ver examples/data/lista_recorrido.ray.
 
 // Una lista de enteros es: o bien una celda (cabeza + resto), o bien vacía.
 enum Lista {

@@ -4,7 +4,7 @@
 // HTTP de upgrade + tramas) viaja cifrado: `socket_read_bytes`/`socket_write_bytes` se desvían a TLS
 // transparentemente, y la VM cede la fibra cuando el TLS bloquearía. **Solo VM.**
 //
-// Ejecútalo:  cargo run -- --vm examples/wss_echo.ray <cert.pem> <key.pem>
+// Ejecútalo:  cargo run -- --vm examples/web/wss_echo.ray <cert.pem> <key.pem>
 // Imprime el puerto efímero en la primera línea.
 
 import websocket;

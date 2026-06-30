@@ -4,7 +4,7 @@
 // y cierra. En el modelo M:1 (bloqueante), atiende UNA conexión a la vez —accept y socket_read
 // bloquean el hilo—; el servidor concurrente real llegará con el capstone M15.5.
 //
-// Pruébalo: `cargo run -- --vm examples/tcp_servidor.ray` y, en otra terminal,
+// Pruébalo: `cargo run -- --vm examples/net/tcp_servidor.ray` y, en otra terminal,
 // `nc 127.0.0.1 <puerto>` (escribe algo y verás el eco). Necesita red → no entra al oráculo.
 
 // Atiende una conexión: lee un mensaje y responde con eco.

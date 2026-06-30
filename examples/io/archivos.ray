@@ -1,7 +1,7 @@
 // I/O de archivos (M11.2c). read_file/write_file devuelven Result<_, string>.
 //
 // Ejecuta pasando una ruta como argumento:
-//   cargo run --quiet -- examples/archivos.ray /tmp/saludo.txt
+//   cargo run --quiet -- examples/io/archivos.ray /tmp/saludo.txt
 
 // Saca el valor de un Result o, si es Err, lo informa por stderr y usa un valor por defecto.
 fn o_default(r: Result<string, string>, def: string) -> string {

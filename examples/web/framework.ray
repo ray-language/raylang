@@ -3,7 +3,7 @@
 // **middleware** y una **respuesta mutable** con atajos (`text`/`json`/`status`). Cero runtime nuevo: puro
 // raylang + stdlib + la concurrencia de M15.5/M17. **Solo VM** (el servidor cede fibras).
 //
-//   cargo run -- --vm examples/framework.ray
+//   cargo run -- --vm examples/web/framework.ray
 // y prueba:
 //   curl http://127.0.0.1:8080/
 //   curl http://127.0.0.1:8080/users/42

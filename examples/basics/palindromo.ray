@@ -1,8 +1,8 @@
 // Comprueba si una palabra es un palíndromo, recorriéndola carácter a carácter.
 // Muestra el tipo `char` (M11.4c): literal 'x', indexado s[i], comparación ==.
 //
-// Ejecuta con:  cargo run --quiet -- examples/palindromo.ray
-//          o:   cargo run --quiet -- --vm examples/palindromo.ray
+// Ejecuta con:  cargo run --quiet -- examples/basics/palindromo.ray
+//          o:   cargo run --quiet -- --vm examples/basics/palindromo.ray
 // El código de salida es el nº de palíndromos encontrados.
 
 fn es_palindromo(s: string) -> bool {

@@ -23,7 +23,7 @@ expresiones, sintaxis de llaves.
 > cualquier `cargo`, ejecuta: `source "$HOME/.cargo/env"`
 
 - Tests: `cargo test`
-- Ejecutar un programa: `cargo run --quiet -- examples/fib.ray`
+- Ejecutar un programa: `cargo run --quiet -- examples/basics/fib.ray`
 - REPL interactivo (M8.2): `cargo run --quiet` (sin archivo) o `--repl`
 - Binario release: `cargo build --release` → `./target/release/raylang prog.ray`
 - El código de salida del runner es el `int` que devuelve `main` (0 si es unit).
@@ -564,7 +564,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `get -> Option<V>` en el prelude); `len` extendido. UFCS gratis. `map_new()` es **indeterminado**
     (como `[]`/`None`): su tipo lo fija el esperado (`check_expr_expected`); clave hashable validada en
     `ensure_type` (`Map<float,_>` se rechaza). Oráculo + estrés de GC. `print` de Map **diferido** (no
-    printable). Ejemplo `examples/mapa.ray`.
+    printable). Ejemplo `examples/data/mapa.ray`.
   - **M13.1b COMPLETO** (343 tests lib): **recorrido de Map** — `__map_remove -> [V]` (+ `remove ->
     Option<V>` en el prelude), `keys -> [K]`, `values -> [V]` (opcodes `MapRemove`/`MapKeys`/
     `MapValues`; asignan heap → estrés de GC). `MapKey` gana `Ord`: `keys` ordenada y `values` en ese
@@ -632,7 +632,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     que Rust → casa en el dump) y `match`/patrones (`_`, binding, `Enum.Variante(sub-bindings)`). El AST
     crece con `StructDef`/`EnumDef`/`VariantDef`/`FnExpr`/`MatchArm`/`Pattern` y tres variantes de
     `EKind` (`EStructLit`/`EFunc`/`EMatch`); `Program` pasa a `funcs`+`structs`+`enums` (orden de volcado
-    fijo: funciones, structs, enums; el oráculo usa el mismo). Corpus: snippets + `examples/enums.ray` y
+    fijo: funciones, structs, enums; el oráculo usa el mismo). Corpus: snippets + `examples/data/enums.ray` y
     `match_figuras.ray` reales. **Gotcha**: `push(binds, Option.None)` no infiere `T` → se materializa
     en `var bv: Option<string> = Option.None;` (el tipo declarado fija el `None`). Diferido: M14.2c
     (traits/impls/genéricos/dyn/Map/`?`/pipelines/anotaciones/imports/`pub`). DESIGN §23.3.
@@ -900,7 +900,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       interceptado en `check_call`). **Intérprete**: `VMap(MapData{keys,vals})` —arrays PARALELOS + búsqueda
       lineal por `values_equal`, NO un `Map` del host (claves serían `Value`/enum, no hasheable); `MapData`
       es struct → mutación compartida como `VArray`—. `keys()`/`values()` ORDENADAS por clave (`key_lt` +
-      insertion sort) → deterministas como Rust. Oráculo: claves string/int + remove. (`examples/mapa.ray`
+      insertion sort) → deterministas como Rust. Oráculo: claves string/int + remove. (`examples/data/mapa.ray`
       espera M14.6c por `assert_eq`/`assert`.) Pendiente: `panic` en el checker, `parse_int`/`parse_float`,
       `assert`/`sort` → luego correr el compilador auto-alojado.
     - **M14.6c-1 COMPLETO** (347 lib + 21 en `tests/selfhost_interpreter.rs` + 25 en `tests/selfhost_checker.rs`):
@@ -924,7 +924,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       int/float/string/char); un tipo de usuario con `impl Ord` se resuelve antes por la tabla `Tipo#menor`,
       así que el fallback solo ve los 4 primitivos (lo que garantiza `T: Ord`). Oráculo: intérprete (sort
       int/string/float, tipo de usuario con `impl Ord`, assert/assert_eq ok y assert_eq que falla → exit 70,
-      + **`examples/mapa.ray`** antes diferido); checker (válidos + error de bound `sort` sin Ord). El
+      + **`examples/data/mapa.ray`** antes diferido); checker (válidos + error de bound `sort` sin Ord). El
       compilador entero sobre el intérprete sigue bloqueado por **carga de módulos** + **builtins de I/O**.
     - **M14.6d COMPLETO** (347 lib + 23 en `tests/selfhost_interpreter.rs` + 25 en `tests/selfhost_checker.rs`):
       **I/O de archivos** (`read_file`/`write_file`/`exists`). **Checker**: primitivos `__read_file`/
@@ -1086,7 +1086,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `Obj::Channel(VmChannel { queue, closed })` trazado por el GC. **Intérprete**: error limpio ("requiere la
     VM") en spawn/channel/send/recv → sigue siendo oráculo secuencial; los programas concurrentes corren con
     `--vm` y, por el scheduler determinista, se testean contra **salida esperada exacta** (no hay oráculo
-    cruzado). Ejemplo `examples/concurrencia.ray` (pipeline de fibras). Diferido: M12.2 canales acotados
+    cruzado). Ejemplo `examples/concurrency/concurrencia.ray` (pipeline de fibras). Diferido: M12.2 canales acotados
     (backpressure), M12.3 structured concurrency (scope+join), M12.4 `select`.
   - **M12.2 COMPLETO** (347 lib + 12 en `tests/concurrency_cli.rs`): **canales acotados / backpressure**
     (DESIGN §21.3). `channel(n)` crea un canal acotado a la capacidad `n` (`int` ≥ 0; `n=0` = **rendezvous**
@@ -1120,7 +1120,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `Failed`, planificando la siguiente en vez de abortar; los de `main` y del scheduler (frames vacíos =
     deadlock) abortan; un `Failed` se re-lanza en el `join`/`ScopeEnd` que lo observe → encadena hacia
     arriba. **GC multi-raíz**: `Done(v)`, el handle de tarea de cada joiner aparcado, y los hijos de cada
-    `ScopeFrame` (en curso/listas/aparcadas). Ejemplo `examples/structured.ray`. Diferido: **cancelación**
+    `ScopeFrame` (en curso/listas/aparcadas). Ejemplo `examples/concurrency/structured.ray`. Diferido: **cancelación**
     de hermanas cuando una falla (sin primitivo de cancelación; el cuerpo del scope que hace panic deja
     huérfanas), M12.4 `select`.
   - **M12.4 COMPLETO** (347 lib + 21 en `tests/concurrency_cli.rs`): **`select` sobre varios canales**
@@ -1137,7 +1137,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     re-ejecuta y se re-bloquea. **Prioridad**: un `send` entrega antes a un `recv` plano que a un `select`
     (que solo ve el valor vía la cola). Gotcha (documentado): un canal **cerrado** queda listo para siempre
     → si haces `select` sobre una lista que lo incluye, lo elegiría siempre; hay que quitarlo de la lista (el
-    "poner a nil" de Go). Ejemplo `examples/select.ray`. Diferido: `Selected<T>` (índice+valor), `select`
+    "poner a nil" de Go). Ejemplo `examples/concurrency/select.ray`. Diferido: `Selected<T>` (índice+valor), `select`
     de operaciones de send.
   - **M12.5 COMPLETO** (347 lib + 23 en `tests/concurrency_cli.rs`): **cancelación de hermanas** (DESIGN
     §21.6). Cierra el diferido de M12.3: cuando una tarea de un `scope` falla, se **cancelan** las hermanas

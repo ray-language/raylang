@@ -5,7 +5,7 @@
 // conexión espera datos, otras avanzan: muchas conexiones a la vez sobre un único hilo. Solo VM
 // (la concurrencia es VM-only).
 //
-// Prueba: cargo run -- --vm examples/servidor_concurrente.ray  (y conéctate con varios `nc`; Ctrl-C
+// Prueba: cargo run -- --vm examples/net/servidor_concurrente.ray  (y conéctate con varios `nc`; Ctrl-C
 // para parar). Compáralo con tcp_servidor.ray (M15.3), que es secuencial y atiende de uno en uno.
 
 fn atender(conn: int) {

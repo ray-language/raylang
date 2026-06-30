@@ -1,4 +1,4 @@
-//! Prueba del micro-framework web (`examples/framework.ray`): enrutado, parámetros de ruta, middleware
+//! Prueba del micro-framework web (`examples/web/framework.ray`): enrutado, parámetros de ruta, middleware
 //! y respuestas. El servidor es concurrente (cede fibras) → **solo VM** y no determinista para el
 //! oráculo, así que se prueba por subproceso + un cliente HTTP en Rust (como `webserver_cli`). Se copia
 //! el framework (con puerto efímero) y su dependencia `webserver.ray` a un temporal y se lanza con `--vm`.
@@ -15,8 +15,8 @@ fn lanzar() -> (Child, u16) {
     let mut dir = std::env::temp_dir();
     dir.push("ray_framework");
     std::fs::create_dir_all(&dir).expect("crea dir");
-    std::fs::copy(format!("{raiz}/examples/webserver.ray"), dir.join("webserver.ray")).expect("copia webserver");
-    let fw = std::fs::read_to_string(format!("{raiz}/examples/framework.ray")).expect("lee framework");
+    std::fs::copy(format!("{raiz}/examples/web/webserver.ray"), dir.join("webserver.ray")).expect("copia webserver");
+    let fw = std::fs::read_to_string(format!("{raiz}/examples/web/framework.ray")).expect("lee framework");
     std::fs::write(dir.join("framework.ray"), fw.replace("8080", "0")).expect("escribe framework");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))

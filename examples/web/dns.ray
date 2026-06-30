@@ -107,6 +107,8 @@ pub enum Record {
     Mx(int, string), // preferencia, exchange (tipo 15)
     Cname(string),   // nombre canónico (tipo 5)
     Txt(string),     // texto (tipo 16)
+    Ns(string),      // servidor de nombres (tipo 2)
+    Srv(int, int, int, string), // prioridad, peso, puerto, target (tipo 33)
     Other(int),      // otro tipo (número)
 }
 
@@ -245,9 +247,19 @@ pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
         } else { if (atype == 16) {
             // TXT: una o más "character-strings" (octeto de longitud + texto), concatenadas.
             push(recs, Record.Txt(read_txt(data, rdstart, rdlength)));
+        } else { if (atype == 2) {
+            // NS: un nombre de dominio (con compresión).
+            push(recs, Record.Ns(read_name(data, rdstart).name));
+        } else { if (atype == 33) {
+            // SRV: prioridad + peso + puerto (cada uno 2 octetos) + target (nombre, con compresión).
+            let prio = be16(data, rdstart);
+            let peso = be16(data, rdstart + 2);
+            let puerto = be16(data, rdstart + 4);
+            let target = read_name(data, rdstart + 6).name;
+            push(recs, Record.Srv(prio, peso, puerto, target));
         } else {
             push(recs, Record.Other(atype));
-        }}}}}
+        }}}}}}}
         pos = rdstart + rdlength;
         a = a + 1;
     }
@@ -275,6 +287,10 @@ pub fn format_records(recs: [Record]) -> [string] {
             Record.Mx(pref, ex) => { push(out, to_string(pref) + " " + ex); },
             Record.Cname(name) => { push(out, name); },
             Record.Txt(t) => { push(out, t); },
+            Record.Ns(name) => { push(out, name); },
+            Record.Srv(prio, peso, puerto, target) => {
+                push(out, to_string(prio) + " " + to_string(peso) + " " + to_string(puerto) + " " + target);
+            },
             Record.Other(_) => {},
         }
         i = i + 1;
@@ -356,6 +372,22 @@ pub fn query_cname(server: string, port: int, name: string) -> Result<[string], 
 // Resuelve registros TXT (texto arbitrario: SPF, verificación de dominio, etc.).
 pub fn query_txt(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 16)) {
+        Result.Ok(recs) => Result.Ok(format_records(recs)),
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+// Resuelve registros NS (servidores de nombres autoritativos de la zona).
+pub fn query_ns(server: string, port: int, name: string) -> Result<[string], string> {
+    match (query(server, port, name, 2)) {
+        Result.Ok(recs) => Result.Ok(format_records(recs)),
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+// Resuelve registros SRV → "prioridad peso puerto target" (descubrimiento de servicios).
+pub fn query_srv(server: string, port: int, name: string) -> Result<[string], string> {
+    match (query(server, port, name, 33)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
         Result.Err(e) => Result.Err(e),
     }

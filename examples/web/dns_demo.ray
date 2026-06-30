@@ -4,7 +4,7 @@
 //
 //   cargo run -- --vm examples/web/dns_demo.ray        # consulta 8.8.8.8 (red real)
 
-from dns import query_a, query_aaaa, query_mx, query_cname, query_txt;
+from dns import query_a, query_aaaa, query_mx, query_cname, query_txt, query_ns, query_srv;
 
 fn main() -> int {
     let a = args();
@@ -23,6 +23,8 @@ fn main() -> int {
     imprime("MX", query_mx(server, port, "example.com"));
     imprime("CNAME", query_cname(server, port, "example.com"));
     imprime("TXT", query_txt(server, port, "example.com"));
+    imprime("NS", query_ns(server, port, "example.com"));
+    imprime("SRV", query_srv(server, port, "_sip._tcp.example.com"));
     0
 }
 

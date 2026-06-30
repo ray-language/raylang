@@ -4157,7 +4157,7 @@ recogiendo las de tipo A. La pieza difícil es la **compresión de nombres**: un
 puntero `0xC0xx` a un offset anterior → `read_name` sigue los punteros pero devuelve la posición
 **siguiente** en el flujo original (no la del destino del salto), reconstruyendo el nombre con labels +
 puntos. `query(server, port, name, qtype)` enlaza un socket UDP efímero, envía la consulta y parsea la respuesta a
-**registros tipados** (`enum Record { A | Aaaa | Mx | Cname | Txt | Other }`); `query_a`/`query_aaaa`/
+**registros tipados** (`enum Record { A | Aaaa | Mx | Cname | Txt | Ns | Srv | Other }`); `query_a`/`query_aaaa`/
 `query_mx`/`query_cname`/`query_txt` son envoltorios que formatean a string. **CNAME** (tipo 5): un nombre
 de dominio (con compresión, vía `read_name`). **TXT** (tipo 16): una o más *character-strings*
 (`<longitud><octetos>`) concatenadas (`read_txt`). **AAAA** (tipo 28): los 16 octetos → IPv6 canónica con compresión `::`
@@ -4166,8 +4166,7 @@ de la racha de ceros más larga (RFC 5952, `format_ipv6`). **MX** (tipo 15): pre
 Verificado e2e contra un **servidor DNS de juguete en Rust** que responde A/AAAA/MX según el QTYPE (el MX
 con un puntero de compresión `0xC00C` en su exchange) por ambos motores (`tests/dns_cli.rs`), y comprobado
 a mano contra **DNS real** (8.8.8.8: A, AAAA con `::`, MX null de example.com, y sus 2 TXT reales —SPF +
-token de verificación—). ID fijo (un resolver real lo aleatoriza y reintenta). Diferido: SRV/NS/SOA/PTR,
-TCP fallback para respuestas truncadas.
+token de verificación—). ID fijo (un resolver real lo aleatoriza y reintenta). Diferido: SOA/PTR/CAA, TCP fallback para respuestas truncadas.
 
 **M22.1 — caché DNS por TTL** ✅ (`dns_cache.ray`). Envuelve el resolver respetando el TTL. `dns.ray`
 expone `query_full`/`parse_full` → `DnsResult { records, ttl }` (TTL mínimo de la respuesta, vía `be32`);

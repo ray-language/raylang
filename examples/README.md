@@ -47,7 +47,7 @@ Librerías en raylang (importables) + sus demos. **El servidor es solo VM.**
 - **`metrics_server_demo`**: un endpoint `/metrics` real (monta `metrics` sobre `webserver`,
   escrapeable por Prometheus).
 - **`dns`** / **`dns_cache`**: un cliente DNS (RFC 1035) sobre UDP que resuelve registros A/AAAA/MX/
-  CNAME/TXT (con compresión de nombres e IPv6 canónica) + una caché que respeta el TTL.
+  CNAME/TXT/NS/SRV (con compresión de nombres e IPv6 canónica) + una caché que respeta el TTL.
 - **`oauth2`**: un cliente OAuth 2.0 (grant client_credentials, URL de autorización, cabecera Bearer)
   sobre `http`/`json`/`url`.
 - **`websocket_client`**: un cliente WebSocket (`ws://`) con tramas enmascaradas (`websocket_client_demo`

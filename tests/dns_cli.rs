@@ -76,6 +76,29 @@ fn toy_dns_server() -> u16 {
                     resp.push(txt.len() as u8);                // longitud de la character-string
                     resp.extend_from_slice(txt);
                 }
+                2 => {
+                    // NS: "ns1" + puntero a "example.com" → "ns1.example.com".
+                    resp.extend_from_slice(&[0, 2]);           // TYPE = NS
+                    resp.extend_from_slice(&[0, 1]);           // CLASS = IN
+                    resp.extend_from_slice(&[0, 0, 1, 0x2c]);  // TTL
+                    resp.extend_from_slice(&[0, 6]);           // RDLENGTH = 4 + 2
+                    resp.extend_from_slice(&[3, b'n', b's', b'1']); // label "ns1"
+                    resp.extend_from_slice(&[0xC0, 0x0C]);     // puntero a "example.com"
+                }
+                33 => {
+                    // SRV: prio 10, peso 5, puerto 8080, target "sip" + puntero a "example.com".
+                    resp.extend_from_slice(&[0, 33]);          // TYPE = SRV
+                    resp.extend_from_slice(&[0, 1]);           // CLASS = IN
+                    resp.extend_from_slice(&[0, 0, 1, 0x2c]);  // TTL
+                    resp.extend_from_slice(&[0, 12]);          // RDLENGTH = 2+2+2 + 4 + 2
+                    resp.extend_from_slice(&[0, 10]);          // prioridad = 10
+                    resp.extend_from_slice(&[0, 5]);           // peso = 5
+                    resp.extend_from_slice(&[0x1f, 0x90]);     // puerto = 8080
+                    resp.extend_from_slice(&[3, b's', b'i', b'p']); // label "sip"
+                    // Puntero al offset 22 = "example" dentro de la pregunta "_sip._tcp.example.com"
+                    // (12=inicio QNAME; [4]_sip=5 + [4]_tcp=5 → "example" en 22) → target "sip.example.com".
+                    resp.extend_from_slice(&[0xC0, 0x16]);
+                }
                 _ => {
                     // A: 93.184.216.34
                     resp.extend_from_slice(&[0, 1]);           // TYPE = A
@@ -116,6 +139,8 @@ const ESPERADO: &[&str] = &[
     "MX 10 mail.example.com", // registro MX (preferencia + exchange con compresión de nombre)
     "CNAME cdn.example.com",  // registro CNAME (nombre con compresión)
     "TXT v=spf1 -all",        // registro TXT (character-string)
+    "NS ns1.example.com",     // registro NS (nombre con compresión)
+    "SRV 10 5 8080 sip.example.com", // registro SRV (prio peso puerto target, target comprimido)
 ];
 
 #[test]

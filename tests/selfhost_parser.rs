@@ -647,6 +647,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops
+        "jwt.ray", "jwt_demo.ray", "uuid.ray", // M20.3: JWT/UUID, usa `bytes` + bitops
         "websocket.ray", "websocket_demo.ray", "websocket_echo.ray",
         "framework.ray", // micro-framework web: usa `bytes` (diferido en el toolchain auto-alojado)
     ];

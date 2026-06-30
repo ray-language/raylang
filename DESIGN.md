@@ -4020,8 +4020,16 @@ estándar por ambos motores):
   `base64url`/`base64url_decode` (RFC 4648 §5, alfabeto URL-safe `-`/`_`, sin relleno) para JWT.
   Verificado contra RFC 4231 + `openssl` por ambos motores (`tests/hmac_cli.rs`), incl. clave > bloque
   y round-trips. Cimiento de JWT (M20.3).
-- **M20.3 — JWT (HS256) + UUID v4**. El *capstone* del cimiento cripto: firma/verificación de JSON Web
-  Tokens apilando SHA-256 + HMAC + base64url + la librería `json`; UUID v4 sobre `random`.
+- **M20.3 — JWT (HS256) + UUID v4** ✅ (`jwt.ray`, `uuid.ray`). El *capstone* del cimiento cripto:
+  `jwt_sign(secret, payload_json) -> token` y `jwt_verify(secret, token) -> Result<payload_json, msg>`
+  apilando HMAC-SHA256 + base64url + `bytes`. El payload se pasa/devuelve como **JSON crudo** (raylang
+  es tipado y las claims son heterogéneas → el JSON lo arma el usuario, opcionalmente con `json.ray`).
+  Verificación con comparación en tiempo (casi) constante (`const_eq`, no filtra por el primer byte);
+  NO comprueba `exp` (política de la app, sobre el JSON ya devuelto → M20.5). UUID v4 sobre `random_int`
+  (versión/variante fijados) + `is_uuid_v4` (validador → permite probar el aleatorio por su forma de
+  modo determinista). JWT verificado **byte a byte contra una implementación de referencia** (`hmac`+
+  `base64url` de Python) por ambos motores (`tests/jwt_cli.rs`), incl. secreto incorrecto, tamper y
+  token mal formado.
 - **M20.4 — URL/query/cookies**. Percent-encoding (encode/decode), parseo de query string, cookies.
 - **M20.5 — tiempo y fechas**. Formateo/parseo (ISO 8601, RFC 1123 para cabeceras HTTP), durations,
   sobre el epoch que da `now`; un builtin mínimo para componentes UTC si hace falta.

@@ -1,0 +1,81 @@
+// JSON Web Tokens (RFC 7519) con firma HS256, escritos EN raylang. Cero runtime nuevo: apila
+// HMAC-SHA256 (`hmac.ray`) + base64url (`base64.ray`) + `bytes`. Importable:
+//   from jwt import jwt_sign, jwt_verify;
+//
+// Un JWT es `base64url(header) . base64url(payload) . base64url(firma)`, donde la firma es
+// HMAC-SHA256(secreto, "header.payload"). El header está fijo a HS256. El payload (las *claims*)
+// se pasa y se devuelve como **string JSON** crudo: raylang es estáticamente tipado y las claims son
+// heterogéneas → dejar el JSON al usuario (que puede armarlo con la librería `json`) es lo idiomático.
+
+from hmac import hmac_sha256;
+from base64 import base64url, base64url_decode;
+
+// Octetos (`[int]`) de un string vía `to_bytes` (UTF-8) + indexado de bytes.
+fn str_octets(s: string) -> [int] {
+    let b = to_bytes(s);
+    var out: [int] = [];
+    var i = 0;
+    while (i < len(b)) {
+        push(out, b[i]);
+        i = i + 1;
+    }
+    out
+}
+
+// El header canónico de HS256, ya codificado en base64url (constante).
+fn header_b64() -> string {
+    base64url(str_octets("{\"alg\":\"HS256\",\"typ\":\"JWT\"}"))
+}
+
+// La firma base64url de un "header.payload" dado, con el secreto.
+fn sign_input(secret: bytes, signing_input: string) -> string {
+    base64url(hmac_sha256(secret, to_bytes(signing_input)))
+}
+
+// Firma las *claims* (JSON crudo) y devuelve el JWT compacto `h.p.s`.
+pub fn jwt_sign(secret: bytes, payload_json: string) -> string {
+    let h = header_b64();
+    let p = base64url(str_octets(payload_json));
+    let signing_input = h + "." + p;
+    let s = sign_input(secret, signing_input);
+    signing_input + "." + s
+}
+
+// Comparación de strings en tiempo (casi) constante: recorre SIEMPRE toda la longitud, acumulando
+// las diferencias, para no filtrar por el momento del primer byte distinto (mitiga timing attacks).
+fn const_eq(a: string, b: string) -> bool {
+    if (len(a) != len(b)) {
+        return false;
+    }
+    var diff = 0;
+    var i = 0;
+    while (i < len(a)) {
+        if (a[i] != b[i]) {
+            diff = diff + 1;
+        }
+        i = i + 1;
+    }
+    diff == 0
+}
+
+// Verifica la firma de un JWT con el secreto. `Ok(payload_json)` si es válida, `Err(motivo)` si no
+// (formato incorrecto, firma que no cuadra, o payload no-UTF-8). NO comprueba `exp`/`nbf` (eso es
+// política de la aplicación, sobre el JSON ya devuelto — necesita la librería de tiempo, M20.5).
+pub fn jwt_verify(secret: bytes, token: string) -> Result<string, string> {
+    let parts = split(token, ".");
+    if (len(parts) != 3) {
+        return Result.Err("JWT mal formado: se esperaban 3 segmentos");
+    }
+    let h = parts[0];
+    let p = parts[1];
+    let firma = parts[2];
+    let esperada = sign_input(secret, h + "." + p);
+    if (!const_eq(firma, esperada)) {
+        return Result.Err("firma inválida");
+    }
+    // Firma válida: decodifica el payload (base64url → octetos → UTF-8).
+    match (base64url_decode(p)) {
+        Result.Ok(octetos) => from_utf8(bytes_of(octetos)),
+        Result.Err(e) => Result.Err(e),
+    }
+}

@@ -648,6 +648,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "binario.ray", "http.ray", "webserver.ray",
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "websocket.ray", "websocket_demo.ray", "websocket_echo.ray",
+        "framework.ray", // micro-framework web: usa `bytes` (diferido en el toolchain auto-alojado)
     ];
     let mut entradas: Vec<_> = std::fs::read_dir(&dir)
         .expect("lee examples/")

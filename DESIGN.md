@@ -4146,3 +4146,18 @@ externas (Python `json`, formato de exposición de Prometheus).
   (`Content-Type: text/plain; version=0.0.4`) — escrapeable por un Prometheus real. E2E (solo VM): se
   genera tráfico y se escrapea `/metrics`, validando counters etiquetados + histograma (`tests/
   metrics_server_cli.rs`). **M21 COMPLETO** (observabilidad: logs + métricas + endpoint).
+
+## §31 — M22: cliente DNS sobre UDP
+
+Estrena los sockets UDP de M20 con un protocolo real. **M22 — cliente DNS** ✅ (`dns.ray`, RFC 1035).
+Resuelve nombres a IPv4 (registros A) por UDP, librería raylang pura. `build_query(id, name, qtype)`
+arma el mensaje (cabecera de 12 octetos con RD=1 + pregunta con QNAME en labels length-prefixed);
+`parse_response` lee la cabecera (valida RCODE), salta la sección de preguntas y recorre las RRs
+recogiendo las de tipo A. La pieza difícil es la **compresión de nombres**: un nombre puede acabar en un
+puntero `0xC0xx` a un offset anterior → `read_name` sigue los punteros pero devuelve la posición
+**siguiente** en el flujo original (no la del destino del salto), reconstruyendo el nombre con labels +
+puntos. `query_a(server, port, name)` enlaza un socket UDP efímero, envía la consulta y parsea la
+respuesta. Verificado e2e contra un **servidor DNS de juguete en Rust** (responde un A con un puntero de
+compresión `0xC00C` para ejercitar el parser) por ambos motores (`tests/dns_cli.rs`), y comprobado a mano
+contra **DNS real** (8.8.8.8). ID fijo (un resolver real lo aleatoriza y reintenta). Diferido: AAAA/CNAME/
+MX, TCP fallback para respuestas truncadas, caché por TTL.

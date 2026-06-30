@@ -1,0 +1,166 @@
+// Cliente DNS (RFC 1035) sobre UDP, escrito EN raylang. Cero runtime nuevo: se apoya en los sockets
+// UDP de M20 (`udp.ray`) + `bytes`. Importable: `from dns import query_a, build_query, parse_response;`.
+//
+// Resuelve nombres a direcciones IPv4 (registros A). Un mensaje DNS es: cabecera de 12 octetos
+// (ID, flags, conteos) + sección de preguntas (QNAME en labels length-prefixed + QTYPE + QCLASS) +
+// secciones de respuesta (RRs). La parte difícil es la **compresión de nombres**: un nombre puede
+// terminar en un puntero `0xC0xx` a un offset anterior del mensaje (para no repetir sufijos) → el
+// parser debe seguir los punteros pero devolver la posición SIGUIENTE en el flujo original.
+
+from udp import bind, send_to, recv_from, Packet;
+
+// Entero de 16 bits big-endian en la posición `i`.
+fn be16(data: bytes, i: int) -> int {
+    (data[i] << 8) | data[i + 1]
+}
+
+// --- Construcción de la consulta ---
+
+// Codifica un nombre de dominio como labels: cada parte precedida por su longitud, terminado en 0.
+fn encode_name(name: string) -> [int] {
+    var out: [int] = [];
+    let parts = split(name, ".");
+    var i = 0;
+    while (i < len(parts)) {
+        let b = to_bytes(parts[i]);
+        push(out, len(b));
+        var j = 0;
+        while (j < len(b)) {
+            push(out, b[j]);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    push(out, 0);
+    out
+}
+
+// Construye una consulta DNS estándar (recursión deseada) para `name` y el tipo `qtype` (1 = A).
+pub fn build_query(id: int, name: string, qtype: int) -> bytes {
+    var m: [int] = [];
+    // Cabecera (12 octetos).
+    push(m, (id >> 8) & 255); push(m, id & 255); // ID
+    push(m, 1); push(m, 0);                       // flags: RD=1 (recursión deseada)
+    push(m, 0); push(m, 1);                       // QDCOUNT = 1
+    push(m, 0); push(m, 0);                       // ANCOUNT = 0
+    push(m, 0); push(m, 0);                       // NSCOUNT = 0
+    push(m, 0); push(m, 0);                       // ARCOUNT = 0
+    // Pregunta.
+    let qn = encode_name(name);
+    var i = 0;
+    while (i < len(qn)) {
+        push(m, qn[i]);
+        i = i + 1;
+    }
+    push(m, (qtype >> 8) & 255); push(m, qtype & 255); // QTYPE
+    push(m, 0); push(m, 1);                             // QCLASS = IN
+    bytes_of(m)
+}
+
+// --- Parseo de la respuesta ---
+
+// El resultado de leer un nombre: el nombre y la posición SIGUIENTE en el flujo (tras seguir punteros).
+struct NameResult {
+    name: string,
+    next: int,
+}
+
+// Lee un nombre desde `pos`, siguiendo punteros de compresión (0xC0). `next` es la posición tras el
+// primer puntero o tras el octeto 0 final (lo que ocurra antes), NO la del destino del salto.
+fn read_name(data: bytes, pos: int) -> NameResult {
+    var labels: [string] = [];
+    var p = pos;
+    var next = 0 - 1;
+    var seguir = true;
+    while (seguir) {
+        let lenb = data[p];
+        if (lenb == 0) {
+            p = p + 1;
+            if (next < 0) { next = p; }
+            seguir = false;
+        } else { if ((lenb & 192) == 192) { // puntero 0xC0xx
+            if (next < 0) { next = p + 2; }
+            p = ((lenb & 63) << 8) | data[p + 1];
+        } else {
+            // label: `lenb` octetos a partir de p+1.
+            let etiqueta = match (from_utf8(sub_bytes(data, p + 1, p + 1 + lenb))) {
+                Result.Ok(s) => s,
+                Result.Err(_) => "?",
+            };
+            push(labels, etiqueta);
+            p = p + 1 + lenb;
+        }}
+    }
+    NameResult { name: join(labels, "."), next: next }
+}
+
+// Parsea una respuesta DNS y devuelve las direcciones IPv4 (registros A) como strings.
+pub fn parse_response(data: bytes) -> Result<[string], string> {
+    if (len(data) < 12) {
+        return Result.Err("respuesta DNS demasiado corta");
+    }
+    let flags = be16(data, 2);
+    let rcode = flags & 15;
+    if (rcode != 0) {
+        return Result.Err("DNS rcode=" + to_string(rcode) + nombre_rcode(rcode));
+    }
+    let qdcount = be16(data, 4);
+    let ancount = be16(data, 6);
+    var pos = 12;
+    // Salta la sección de preguntas (nombre + QTYPE + QCLASS por pregunta).
+    var q = 0;
+    while (q < qdcount) {
+        let nr = read_name(data, pos);
+        pos = nr.next + 4;
+        q = q + 1;
+    }
+    // Recorre las respuestas; recoge las de tipo A.
+    var ips: [string] = [];
+    var a = 0;
+    while (a < ancount) {
+        let nr = read_name(data, pos);
+        pos = nr.next;
+        let atype = be16(data, pos);
+        let rdlength = be16(data, pos + 8); // tras TYPE(2)+CLASS(2)+TTL(4)
+        let rdstart = pos + 10;
+        if (atype == 1 && rdlength == 4) {
+            let ip = to_string(data[rdstart]) + "." + to_string(data[rdstart + 1]) + "."
+                + to_string(data[rdstart + 2]) + "." + to_string(data[rdstart + 3]);
+            push(ips, ip);
+        }
+        pos = rdstart + rdlength;
+        a = a + 1;
+    }
+    Result.Ok(ips)
+}
+
+fn nombre_rcode(rcode: int) -> string {
+    if (rcode == 1) { " (error de formato)" }
+    else { if (rcode == 2) { " (fallo del servidor)" }
+    else { if (rcode == 3) { " (nombre inexistente)" }
+    else { "" }}}
+}
+
+// --- Resolución de alto nivel ---
+
+// Resuelve `name` a IPv4 (registros A) consultando el servidor DNS `server:port` por UDP. Un resolver
+// real aleatoriza el ID y reintenta; aquí se usa un ID fijo (una sola consulta/respuesta).
+pub fn query_a(server: string, port: int, name: string) -> Result<[string], string> {
+    let consulta = build_query(4660, name, 1); // 4660 = 0x1234
+    match (bind("0.0.0.0", 0)) {
+        Result.Err(e) => Result.Err("bind: " + e),
+        Result.Ok(h) => {
+            match (send_to(h, server, port, consulta)) {
+                Result.Err(e) => { close(h); Result.Err("send: " + e) },
+                Result.Ok(_) => {
+                    let r = recv_from(h);
+                    close(h);
+                    match (r) {
+                        Result.Ok(pkt) => parse_response(pkt.data),
+                        Result.Err(e) => Result.Err("recv: " + e),
+                    }
+                },
+            }
+        },
+    }
+}

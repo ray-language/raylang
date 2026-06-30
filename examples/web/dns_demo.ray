@@ -1,0 +1,32 @@
+// Demo del cliente DNS (M22). Resuelve "example.com" a IPv4 por UDP. Si se le pasa un puerto como
+// argumento, consulta a 127.0.0.1:<puerto> (el servidor DNS de juguete del test); si no, a 8.8.8.8:53
+// (DNS público real). Imprime cada IP. Lo lanza `tests/dns_cli.rs` por ambos motores.
+//
+//   cargo run -- --vm examples/web/dns_demo.ray        # consulta 8.8.8.8 (red real)
+
+from dns import query_a;
+
+fn main() -> int {
+    let a = args();
+    var server = "8.8.8.8";
+    var port = 53;
+    if (len(a) > 0) {
+        server = "127.0.0.1";
+        match (parse_int(a[0])) {
+            Option.Some(p) => { port = p; },
+            Option.None => {},
+        }
+    }
+
+    match (query_a(server, port, "example.com")) {
+        Result.Ok(ips) => {
+            var i = 0;
+            while (i < len(ips)) {
+                print(ips[i]);
+                i = i + 1;
+            }
+            0
+        },
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}

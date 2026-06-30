@@ -1,0 +1,41 @@
+// Demo del cliente WebSocket (M24). Se conecta a un echo server ws:// (el puerto llega como argumento),
+// hace el handshake, envía tres mensajes (incluido uno con caracteres no ASCII) y muestra cada eco.
+// Lo lanza `tests/websocket_client_cli.rs` contra `websocket_echo.ray` (servidor raylang) por ambos
+// motores → cliente raylang hablando con servidor raylang.
+
+from websocket_client import connect, send_text, recv_text, close_ws;
+
+fn main() -> int {
+    let a = args();
+    var port = 8080;
+    if (len(a) > 0) {
+        match (parse_int(a[0])) {
+            Option.Some(p) => { port = p; },
+            Option.None => {},
+        }
+    }
+
+    match (connect("127.0.0.1", port, "/")) {
+        Result.Err(e) => { eprint(e); 1 },
+        Result.Ok(h) => {
+            eco(h, "hola");
+            eco(h, "mundo");
+            eco(h, "raylang ☃ unicode");
+            close_ws(h);
+            0
+        },
+    }
+}
+
+// Envía un mensaje y muestra el eco recibido.
+fn eco(h: int, msg: string) {
+    match (send_text(h, msg)) {
+        Result.Err(e) => print("ERR send: " + e),
+        Result.Ok(_) => {
+            match (recv_text(h)) {
+                Result.Ok(eco) => print(eco),
+                Result.Err(e) => print("ERR recv: " + e),
+            }
+        },
+    }
+}

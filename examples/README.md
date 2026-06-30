@@ -50,6 +50,8 @@ Librerías en raylang (importables) + sus demos. **El servidor es solo VM.**
   CNAME/TXT (con compresión de nombres e IPv6 canónica) + una caché que respeta el TTL.
 - **`oauth2`**: un cliente OAuth 2.0 (grant client_credentials, URL de autorización, cabecera Bearer)
   sobre `http`/`json`/`url`.
+- **`websocket_client`**: un cliente WebSocket (`ws://`) con tramas enmascaradas (`websocket_client_demo`
+  habla con el servidor `websocket_echo`).
 - **Demos**: `http_demo`, `json_demo`, `https_demo`, `webserver_demo`, `websocket_demo`,
   `websocket_echo` (echo `ws://`), `wss_echo` (echo `wss://`), `crypto_demo` (vectores SHA-1/base64).
 - **`framework`**: un micro-framework web tipo Express (enrutado, parámetros de ruta, middleware,

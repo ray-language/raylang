@@ -4188,3 +4188,16 @@ de `json.ray` (`JObject`/`JStr`/`JNum`; `expires_in` entero vía `to_string`+`pa
 tiene float). Maneja la respuesta de error de OAuth (`{"error": …}`) aun con HTTP no-200. Verificado e2e
 contra un **token endpoint de juguete en Rust** (valida el grant, responde el JSON del token) por ambos
 motores (`tests/oauth2_cli.rs`). Diferido: flujos authorization_code/refresh_token completos, PKCE.
+
+## §33 — M24: cliente WebSocket (`ws://`)
+
+**M24 — cliente WebSocket** ✅ (`websocket_client.ray`). El espejo del servidor de M19.3c: el cliente debe
+**enmascarar** las tramas que envía (RFC 6455 §5.3) y lee tramas del servidor sin enmascarar (que
+`websocket.decode_frame` ya maneja — comprueba el bit MASK). Reusa la cripto del handshake (`accept_key`
+con SHA-1/base64) y el framing de lectura de `websocket.ray`. `connect(host, port, path)` hace el
+handshake (genera una `Sec-WebSocket-Key` de 16 octetos aleatorios en base64, envía el upgrade, **verifica
+`Sec-WebSocket-Accept`** = base64(SHA-1(key+GUID))); `send_text` (trama enmascarada con clave de máscara de
+4 octetos aleatorios), `recv_text` (decodifica), `close_ws`. Funciona en **ambos motores** (cliente
+bloqueante). Verificado e2e contra el propio `websocket_echo.ray` (servidor raylang) — **cliente raylang
+hablando con servidor raylang** — con eco de UTF-8 multibyte (`☃`) por ambos motores
+(`tests/websocket_client_cli.rs`). Diferido: `wss://` (TLS), fragmentación, ping/pong automático.

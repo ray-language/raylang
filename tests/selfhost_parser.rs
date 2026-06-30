@@ -656,6 +656,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "inflate.ray", "inflate_demo.ray", // M20.10: INFLATE/gzip, usa `bytes` + bitops
         "deflate.ray", "deflate_demo.ray", // M20-final: encoder DEFLATE, usa `bytes` + bitops
         "websocket.ray", "websocket_demo.ray", "websocket_echo.ray",
+        "websocket_client.ray", "websocket_client_demo.ray", // M24: cliente WS, usa `bytes` + bitops
         "framework.ray", // micro-framework web: usa `bytes` (diferido en el toolchain auto-alojado)
         "metrics_server_demo.ray", // M21.3: monta metrics sobre webserver → usa `bytes`
         "oauth2.ray", "oauth2_demo.ray", // M23: cliente OAuth2 (importa http → bytes)

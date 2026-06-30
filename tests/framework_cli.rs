@@ -15,12 +15,15 @@ fn lanzar() -> (Child, u16) {
     let mut dir = std::env::temp_dir();
     dir.push("ray_framework");
     std::fs::create_dir_all(&dir).expect("crea dir");
+    // El framework es una librería (sin `main`): se prueba a través de su demo, que lo IMPORTA. Se
+    // copian los tres archivos (webserver ← framework ← framework_demo) al temporal.
     std::fs::copy(format!("{raiz}/examples/web/webserver.ray"), dir.join("webserver.ray")).expect("copia webserver");
-    let fw = std::fs::read_to_string(format!("{raiz}/examples/web/framework.ray")).expect("lee framework");
-    std::fs::write(dir.join("framework.ray"), fw.replace("8080", "0")).expect("escribe framework");
+    std::fs::copy(format!("{raiz}/examples/web/framework.ray"), dir.join("framework.ray")).expect("copia framework");
+    let demo = std::fs::read_to_string(format!("{raiz}/examples/web/framework_demo.ray")).expect("lee demo");
+    std::fs::write(dir.join("framework_demo.ray"), demo.replace("8080", "0")).expect("escribe demo");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
-        .arg("--vm").arg(dir.join("framework.ray"))
+        .arg("--vm").arg(dir.join("framework_demo.ray"))
         .stdout(Stdio::piped()).stderr(Stdio::null())
         .spawn().expect("lanza framework");
 

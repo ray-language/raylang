@@ -3,19 +3,10 @@
 // **middleware** y una **respuesta mutable** con atajos (`text`/`json`/`status`). Cero runtime nuevo: puro
 // raylang + stdlib + la concurrencia de M15.5/M17. **Solo VM** (el servidor cede fibras).
 //
-//   cargo run -- --vm examples/web/framework.ray
-// y prueba:
-//   curl http://127.0.0.1:8080/
-//   curl http://127.0.0.1:8080/users/42
-//   curl -X POST -d 'eco esto' http://127.0.0.1:8080/echo
-//   curl -i http://127.0.0.1:8080/teapot      (responde 418)
-//   curl -i http://127.0.0.1:8080/nope        (responde 404)
-//
-// Nota de diseño: el framework Y el demo (`main`) viven en el MISMO archivo a propósito. Los atajos
-// estilo Express (`app.get(...)`, `r.text(...)`, `c.param(...)`) usan **UFCS**, que resuelve la función
-// libre por el nombre del receptor — y eso solo funciona dentro del mismo módulo (el azúcar `recv.f(x)`
-// no se reescribe a través de `import`). Mantener todo junto da la ergonomía completa; las secciones de
-// abajo están claramente separadas para copiar el framework a tu propio archivo.
+// Es una **librería reutilizable**: impórtala con `from framework import …` y usa la API estilo Express
+// con UFCS (`app.GET("/", h)`, `r.text(...)`, `c.param("id")`). Ver el demo en `framework_demo.ray`.
+// (UFCS ahora resuelve funciones importadas a través de `import`, así que el framework y su uso pueden
+// vivir en módulos distintos.)
 
 import webserver;
 
@@ -188,44 +179,4 @@ pub fn listen(app: App, host: string, port: int) -> Result<int, string> {
             Result.Err(e) => { eprint("respuesta: " + e); },
         }
     })
-}
-
-// ─────────────────────────────────────────────────────────────────────────────────────────────────
-//  Demo: una pequeña API usando el framework de arriba (estilo Express, todo con UFCS).
-// ─────────────────────────────────────────────────────────────────────────────────────────────────
-
-// Middleware: registra cada petición (método + ruta) y deja seguir la cadena.
-fn logger(c: Ctx, r: Res) -> bool {
-    print(c.method + " " + c.path);
-    true
-}
-
-fn main() -> int {
-    var app = new_app();
-    app.use_mw(logger);
-
-    app.GET("/", fn(c: Ctx, r: Res) {
-        r.text("¡Hola desde el micro-framework de raylang!");
-    });
-
-    // Parámetro de ruta: /users/:id → c.param("id").
-    app.GET("/users/:id", fn(c: Ctx, r: Res) {
-        let id: string = c.param("id");
-        r.json("{\"id\": \"" + id + "\", \"nombre\": \"usuario-" + id + "\"}");
-    });
-
-    // Eco del cuerpo de la petición.
-    app.POST("/echo", fn(c: Ctx, r: Res) {
-        r.text(c.body());
-    });
-
-    // Estado a medida, encadenado: r.status(418).text(...).
-    app.GET("/teapot", fn(c: Ctx, r: Res) {
-        r.status(418).text("Soy una tetera");
-    });
-
-    match (app.listen("127.0.0.1", 8080)) {
-        Result.Ok(_) => 0,
-        Result.Err(e) => { eprint(e); 1 },
-    }
 }

@@ -1,0 +1,50 @@
+// Demo del micro-framework web (`framework.ray`), estilo Express. **El framework se importa** como una
+// librería, y aun así los atajos `app.GET(...)`, `r.text(...)`, `c.param(...)` funcionan con UFCS — eso
+// requiere que UFCS resuelva funciones IMPORTADAS, no solo las del módulo de entrada (justo lo que
+// `Program.ufcs_aliases` habilita). **Solo VM** (servidor concurrente).
+//
+//   cargo run -- --vm examples/web/framework_demo.ray
+// y prueba:
+//   curl http://127.0.0.1:8080/
+//   curl http://127.0.0.1:8080/users/42
+//   curl -X POST -d 'eco esto' http://127.0.0.1:8080/echo
+//   curl -i http://127.0.0.1:8080/teapot      (responde 418)
+//   curl -i http://127.0.0.1:8080/nope        (responde 404)
+
+from framework import new_app, use_mw, GET, POST, listen, param, body, text, json, status, Ctx, Res;
+
+// Middleware: registra cada petición (método + ruta) y deja seguir la cadena.
+fn logger(c: Ctx, r: Res) -> bool {
+    print(c.method + " " + c.path);
+    true
+}
+
+fn main() -> int {
+    var app = new_app();
+    app.use_mw(logger);
+
+    app.GET("/", fn(c: Ctx, r: Res) {
+        r.text("¡Hola desde el micro-framework de raylang!");
+    });
+
+    // Parámetro de ruta: /users/:id → c.param("id").
+    app.GET("/users/:id", fn(c: Ctx, r: Res) {
+        let id: string = c.param("id");
+        r.json("{\"id\": \"" + id + "\", \"nombre\": \"usuario-" + id + "\"}");
+    });
+
+    // Eco del cuerpo de la petición.
+    app.POST("/echo", fn(c: Ctx, r: Res) {
+        r.text(c.body());
+    });
+
+    // Estado a medida, encadenado: r.status(418).text(...).
+    app.GET("/teapot", fn(c: Ctx, r: Res) {
+        r.status(418).text("Soy una tetera");
+    });
+
+    match (app.listen("127.0.0.1", 8080)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}

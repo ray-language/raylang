@@ -829,6 +829,16 @@ Forzado por las decisiones (no abierto):
   regla total y evita el currying implícito.
 - **Orden de resolución de `X.nombre(args)`** en el checker: (1) construcción de enum
   (`Color.Rojo`, ya en M5); (2) campo de struct; (3) UFCS a función libre; (4) error.
+- **UFCS resuelve también funciones `from`-importadas** (post-M19). El azúcar `recv.f(...)`
+  llega como `Call(Field(recv, f))`; el loader **no** reescribe el nombre del método `f`
+  (no tiene tipos para decidir campo-vs-función), así que una `f` traída por `from M import f`
+  quedaba sin resolver (era `M::f` en la tabla, no `f`). Arreglo: el loader deja en
+  `Program.ufcs_aliases` el mapa **nombre local → global** de las funciones from-importadas;
+  el checker lo usa como **fallback** en el paso (3) —después de campo y método, así que la
+  prioridad se conserva—. Un mismo alias que mapee a globales distintos en módulos distintos
+  es ambiguo sin contexto → se **excluye** (degradación segura). Habilita librerías con API por
+  punto (p. ej. el micro-framework `examples/web/framework.ray`, importado por su demo). Los
+  imports **calificados** (`import M; M.f(...)`) no añaden alias UFCS (se usan como `M.f`).
 
 ### 16.1 Sintaxis nueva
 

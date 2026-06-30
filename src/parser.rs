@@ -118,7 +118,7 @@ impl Parser {
                 functions.push(f);
             }
         }
-        Ok(Program { functions, structs, enums, traits, impls, imports, from_imports })
+        Ok(Program { functions, structs, enums, traits, impls, imports, from_imports, ufcs_aliases: std::collections::HashMap::new() })
     }
 
     /// import_decl  = 'import' module_path [ 'as' IDENT ] ';'   (M11.3 / M11.5)

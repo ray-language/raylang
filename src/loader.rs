@@ -129,7 +129,13 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
     let mut fusionado = Program {
         functions: Vec::new(), structs: Vec::new(), enums: Vec::new(),
         traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
+        ufcs_aliases: HashMap::new(),
     };
+    // Alias UFCS: nombre local de función `from`-importada → global, agregado de todos los módulos.
+    // Un nombre que mapee a DOS globales distintos en módulos distintos es ambiguo sin contexto de
+    // módulo → se **excluye** (degradación segura: ese nombre cae al comportamiento previo).
+    let mut ufcs_aliases: HashMap<String, String> = HashMap::new();
+    let mut ufcs_ambiguos: HashSet<String> = HashSet::new();
 
     // El módulo de **entrada** se fusiona primero, en `delta` 0 (sus líneas coinciden con su
     // archivo): un programa de un solo archivo queda **idéntico** a antes. Cada módulo siguiente
@@ -153,6 +159,15 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         //    (al `own` del Resolver); tipos `pub` → mapa de **tipos** (al TypeRewriter).
         let (from_values, from_types) =
             clasificar_from_imports(&m, &surfaces, &tipos)?;
+
+        // Acumular los alias UFCS de este módulo (función from-importada: local → global). Un alias
+        // que ya existía con OTRO global es ambiguo entre módulos → se marca para excluir.
+        for (local, global) in &from_values {
+            match ufcs_aliases.get(local) {
+                Some(g) if g != global => { ufcs_ambiguos.insert(local.clone()); }
+                _ => { ufcs_aliases.insert(local.clone(), global.clone()); }
+            }
+        }
 
         // 3. Resolución de **valores** (funciones propias, `from`-imports de función, `c.f`,
         //    construcción de enum calificada `c.Color.Rojo`). El `import_map` (leaf → ruta, M11.5)
@@ -190,6 +205,10 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         loaded_modules.push(LoadedModule { name: m.name, source: m.source, start_line: start });
     }
     loaded_modules.sort_by_key(|m| m.start_line);
+    for amb in &ufcs_ambiguos {
+        ufcs_aliases.remove(amb);
+    }
+    fusionado.ufcs_aliases = ufcs_aliases;
     Ok(Loaded { program: fusionado, modules: loaded_modules })
 }
 

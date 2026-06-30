@@ -42,7 +42,8 @@ Librerías en raylang (importables) + sus demos. **El servidor es solo VM.**
 - **Demos**: `http_demo`, `json_demo`, `https_demo`, `webserver_demo`, `websocket_demo`,
   `websocket_echo` (echo `ws://`), `wss_echo` (echo `wss://`), `crypto_demo` (vectores SHA-1/base64).
 - **`framework`**: un micro-framework web tipo Express (enrutado, parámetros de ruta, middleware,
-  respuestas) sobre `webserver`. Framework + demo en un solo archivo (la ergonomía UFCS no cruza módulos).
+  respuestas) sobre `webserver`, como **librería reutilizable**. `framework_demo` lo importa y usa la
+  API por punto (`app.GET(...)`, `r.text(...)`) — UFCS resuelve las funciones importadas.
 
 ## Módulos (multi-archivo)
 Ejemplos del sistema de módulos, con su propia estructura de directorios:

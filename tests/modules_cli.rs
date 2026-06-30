@@ -434,3 +434,48 @@ fn capsulas_anidadas_respetan_el_borde_mas_cercano() {
     let (out, code) = run_modules("ray_cap_anidada", "app", files, false);
     assert_ne!(code, 0, "a/otro no puede entrar al interior de la cápsula a/b\n{out}");
 }
+
+#[test]
+fn ufcs_resuelve_funcion_importada() {
+    // UFCS (`recv.f(...)`) debe resolver una función traída por `from M import f` —no solo las del
+    // módulo de entrada—. El loader deja el alias local→global (`Program.ufcs_aliases`) y el checker
+    // lo usa como *fallback* tras campo/método. Encadenado: `"x".saluda().grita()`.
+    let files = &[
+        ("texto", "pub fn saluda(n: string) -> string { \"hola \" + n }\npub fn grita(s: string) -> string { to_upper(s) }\n"),
+        ("main", "from texto import saluda, grita;\nfn main() -> int { print(\"mundo\".saluda().grita()); 0 }\n"),
+    ];
+    for vm in [false, true] {
+        let (out, code) = run_modules("ray_ufcs_import", "main", files, vm);
+        assert_eq!(out.trim(), "HOLA MUNDO", "UFCS cross-module (vm={vm}): {out}");
+        assert_eq!(code, 0);
+    }
+}
+
+#[test]
+fn ufcs_importado_con_alias() {
+    // El alias de `from M import f as g` también vale para UFCS: `x.g(...)` → `M::f(x, ...)`.
+    let files = &[
+        ("lib", "pub fn doble(n: int) -> int { n * 2 }\n"),
+        ("main", "from lib import doble as twice;\nfn main() -> int { print(21.twice()); 0 }\n"),
+    ];
+    for vm in [false, true] {
+        let (out, code) = run_modules("ray_ufcs_alias", "main", files, vm);
+        assert_eq!(out.trim(), "42", "UFCS con alias (vm={vm}): {out}");
+        assert_eq!(code, 0);
+    }
+}
+
+#[test]
+fn ufcs_importado_no_rompe_acceso_a_campo() {
+    // Seguridad: que exista una función importada homónima a un campo NO rompe el acceso al campo
+    // (la resolución prueba campo antes que el alias importado).
+    let files = &[
+        ("lib", "pub fn name(c: int) -> string { \"FN\" }\n"),
+        ("main", "from lib import name;\nstruct Caja { name: string }\nfn main() -> int { let c = Caja { name: \"CAMPO\" }; print(c.name); 0 }\n"),
+    ];
+    for vm in [false, true] {
+        let (out, code) = run_modules("ray_ufcs_campo", "main", files, vm);
+        assert_eq!(out.trim(), "CAMPO", "campo gana sobre función importada (vm={vm}): {out}");
+        assert_eq!(code, 0);
+    }
+}

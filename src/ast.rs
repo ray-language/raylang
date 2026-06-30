@@ -137,6 +137,11 @@ pub struct Program {
     /// Declaraciones `from M import a [as b];` del archivo (M11.3b). También las consume el
     /// loader: traen funciones `pub` de `M` al ámbito del módulo (sin calificar), con alias.
     pub from_imports: Vec<FromImport>,
+    /// Metadata que deja el **loader** para el checker: nombre local de una función `from`-importada
+    /// → su nombre global (`modulo::f`). Permite que **UFCS** (`recv.f(...)`) resuelva funciones
+    /// importadas, no solo las del módulo de entrada (el azúcar `recv.f` no lo reescribe el loader,
+    /// que no tiene tipos; el checker lo usa como *fallback* tras campo/método). Vacío sin imports.
+    pub ufcs_aliases: std::collections::HashMap<String, String>,
 }
 
 /// Una declaración `import M;` / `import a/b/c [as x];` (M11.3 / M11.5): importa el módulo dado por

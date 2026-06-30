@@ -378,6 +378,10 @@ struct Checker {
     fn_defs: HashMap<String, (usize, usize)>,
     /// Posición de declaración de cada tipo (struct/enum/trait) — hover/def de tipos (M10.2f).
     type_defs: HashMap<String, (usize, usize)>,
+    /// Alias UFCS de funciones `from`-importadas (nombre local → global), que deja el loader. Permiten
+    /// que `recv.f(...)` resuelva una función importada como *fallback* (tras campo/método). Vacío sin
+    /// imports.
+    ufcs_aliases: HashMap<String, String>,
 }
 
 impl Checker {
@@ -410,10 +414,16 @@ impl Checker {
             gather: false,
             index: SemanticIndex::default(),
             fn_defs: HashMap::new(),
+            ufcs_aliases: HashMap::new(),
         }
     }
 
     fn check_program(&mut self, program: &Program) -> Result<(), TypeError> {
+        // El loader deja los alias UFCS de funciones importadas (M11.3b + UFCS cross-module). Se copian
+        // aquí, una vez, para usarlos como fallback al resolver `recv.f(...)`.
+        if self.ufcs_aliases.is_empty() && !program.ufcs_aliases.is_empty() {
+            self.ufcs_aliases = program.ufcs_aliases.clone();
+        }
         // M10.2f: posición de declaración de cada tipo (struct/enum/trait), para hover/ir-a-definición
         // de nombres de tipo. Barato; solo se consulta si `gather`.
         if self.gather {
@@ -2111,19 +2121,24 @@ impl Checker {
     /// genéricos) y registra el sitio `(línea, columna, nombre)` para que `lower_ufcs`
     /// baje el nodo a una llamada ordinaria tras la verificación.
     fn check_ufcs(&mut self, name: &str, recv_ty: &Type, object: &Expr, args: &[Expr], line: usize, col: usize) -> Result<Type, TypeError> {
-        // Si el nombre no resuelve a nada llamable, el error debe hablar de UFCS (no es
-        // ni campo del receptor ni función libre), mencionando el tipo del receptor.
-        if !self.name_is_callable(name) {
+        // El destino de la función libre: el propio nombre si es llamable directamente, o —fallback—
+        // el global de una función `from`-importada (UFCS cross-module, M11.3b). Si no resuelve a nada,
+        // el error habla de UFCS (no es ni campo del receptor ni función), mencionando el tipo.
+        let target = if self.name_is_callable(name) {
+            name.to_string()
+        } else if let Some(global) = self.ufcs_aliases.get(name).cloned() {
+            global
+        } else {
             return Err(self.err(line, col, format!(
                 "no existe campo ni función '{}' aplicable a {}", name, recv_ty
             )));
-        }
+        };
         let mut all_args = Vec::with_capacity(args.len() + 1);
         all_args.push(object.clone());
         all_args.extend_from_slice(args);
-        let ty = self.check_named_call(name, &all_args, line, col)?;
-        // UFCS de función libre: el destino es el mismo nombre.
-        self.ufcs_sites.insert((line, col, name.to_string()), name.to_string());
+        let ty = self.check_named_call(&target, &all_args, line, col)?;
+        // El sitio se baja a `target(recv, args)`; para una función importada, `target` es el global.
+        self.ufcs_sites.insert((line, col, name.to_string()), target);
         Ok(ty)
     }
 

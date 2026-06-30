@@ -1,0 +1,20 @@
+// Demo/verificación de histogramas CON labels (M21.4). Cada conjunto de labels tiene su propia familia
+// de series (buckets + +Inf + _sum + _count), con `le` fusionado en el conjunto. Determinista → lo
+// ejecuta `tests/metrics_labels_cli.rs`, que además valida la cumulatividad por serie con Python.
+
+from metrics import registry, register_histogram, observe_l, render, labels1;
+
+fn main() {
+    let reg = registry();
+    register_histogram(reg, "rpc_duracion_segundos", "Duracion de RPC por metodo", [0.1, 0.5, 1.0]);
+
+    // method=get: tres observaciones que caen en distintos buckets.
+    observe_l(reg, "rpc_duracion_segundos", labels1("method", "get"), 0.05);
+    observe_l(reg, "rpc_duracion_segundos", labels1("method", "get"), 0.2);
+    observe_l(reg, "rpc_duracion_segundos", labels1("method", "get"), 0.8);
+
+    // method=set: una observación lenta (solo cae en +Inf).
+    observe_l(reg, "rpc_duracion_segundos", labels1("method", "set"), 1.5);
+
+    print(render(reg));
+}

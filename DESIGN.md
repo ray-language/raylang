@@ -4129,7 +4129,15 @@ externas (Python `json`, formato de exposición de Prometheus).
   para histogramas (buckets cumulativos pre-creados en orden canónico + `_sum`/`_count` + `+Inf`). Salida
   determinista verificada por golden + **validación estructural con Python** (formato de las series +
   cumulatividad de los buckets, `+Inf == _count`) por ambos motores (`tests/metrics_cli.rs`). Puro → lo
-  cubre además el oráculo de self-hosting. Diferido: histogramas con labels.
+  cubre además el oráculo de self-hosting.
+- **M21.4 — histogramas con labels** ✅ (cierra el diferido de M21.2). Cada conjunto de labels tiene su
+  **propia familia de series** (buckets + `+Inf` + `_sum` + `_count`), creada en orden canónico la primera
+  vez que se observa ese conjunto (`ensure_hist_series`, idempotente vía `find_series` del `_count`) — ya
+  no se pre-crea al registrar (el conjunto de labels no se conoce entonces). `observe_l(reg, name, labels,
+  v)` (y `observe` = azúcar con el conjunto vacío → el caso M21.2 es idéntico, regresión verde). El `le` se
+  **fusiona** en el conjunto de labels de cada `_bucket` (`with_le`, render ordenado); `_sum`/`_count`
+  llevan solo los labels del usuario. Verificado por golden + validación Python de **cumulatividad por
+  conjunto de labels** (`+Inf == _count` por grupo) en ambos motores (`tests/metrics_labels_cli.rs`).
 - **M21.3 — endpoint `/metrics` real** ✅ (`metrics_server_demo.ray`). Monta `metrics.ray` sobre
   `webserver.ray`: un `Registry` **compartido se captura en el handler** (closure por upvalue → la
   semántica de referencia del struct lo hace estado mutable común a todas las fibras; las ops `inc`/

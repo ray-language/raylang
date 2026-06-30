@@ -12,23 +12,25 @@
 //! `unsafe` acotado. Los descriptores (`RawFd`, un `i32` en Unix) salen de `std` vía
 //! `AsRawFd::as_raw_fd()` (ver `builtins::raw_fd`).
 //!
-//! **API**: `wait_readable(fds, timeout_ms)` bloquea hasta que al menos uno de `fds` esté listo para
-//! leer (o venza el timeout; `timeout_ms < 0` = infinito) y devuelve `Ready(listos)` con los fds
-//! listos. En una plataforma sin poller (p. ej. Windows) devuelve `Unsupported` y el scheduler cae al
-//! busy-poll de M15.5. Un error transitorio (EINTR) se mapea a `Ready(vacío)`, que el scheduler
-//! también resuelve cayendo al busy-poll → **siempre hay progreso**.
+//! **API**: `wait(read_fds, write_fds, timeout_ms)` bloquea hasta que al menos uno de `read_fds` esté
+//! listo para **leer** o uno de `write_fds` para **escribir** (o venza el timeout; `timeout_ms < 0` =
+//! infinito) y devuelve `Ready(listos)` con los fds que quedaron listos. La cesión en `socket_write`
+//! (post-M19.4) usa el interés de escritura: una fibra que llena el buffer de envío se aparca hasta que
+//! el socket vuelva a ser escribible. En una plataforma sin poller (p. ej. Windows) devuelve
+//! `Unsupported` y el scheduler cae al busy-poll de M15.5. Un error transitorio (EINTR) se mapea a
+//! `Ready(vacío)`, que el scheduler también resuelve cayendo al busy-poll → **siempre hay progreso**.
 
-/// Resultado de esperar readiness. `Ready` con la lista (posiblemente vacía) de fds listos para leer;
-/// `Unsupported` si esta plataforma no tiene poller (el llamador debe hacer busy-poll).
+/// Resultado de esperar readiness. `Ready` con la lista (posiblemente vacía) de fds listos (de lectura
+/// o de escritura); `Unsupported` si esta plataforma no tiene poller (el llamador debe hacer busy-poll).
 pub enum PollResult {
     Ready(Vec<i32>),
     Unsupported,
 }
 
-/// Bloquea hasta que algún descriptor de `fds` esté listo para **leer** (o venza `timeout_ms`;
-/// negativo = infinito). Despacha a la implementación de la plataforma.
-pub fn wait_readable(fds: &[i32], timeout_ms: i32) -> PollResult {
-    sys::wait_readable(fds, timeout_ms)
+/// Bloquea hasta que algún `read_fds` esté listo para **leer** o algún `write_fds` para **escribir** (o
+/// venza `timeout_ms`; negativo = infinito). Despacha a la implementación de la plataforma.
+pub fn wait(read_fds: &[i32], write_fds: &[i32], timeout_ms: i32) -> PollResult {
+    sys::wait(read_fds, write_fds, timeout_ms)
 }
 
 // ─── macOS / BSD: kqueue ────────────────────────────────────────────────────────────────────────
@@ -44,6 +46,7 @@ mod sys {
     use super::PollResult;
 
     const EVFILT_READ: i16 = -1;
+    const EVFILT_WRITE: i16 = -2;
     const EV_ADD: u16 = 0x0001;
 
     /// `struct kevent` de Darwin/BSD (64-bit): 32 bytes, alineación 8. El kernel lee/escribe todos los
@@ -79,8 +82,8 @@ mod sys {
         fn close(fd: i32) -> i32;
     }
 
-    pub fn wait_readable(fds: &[i32], timeout_ms: i32) -> PollResult {
-        if fds.is_empty() {
+    pub fn wait(read_fds: &[i32], write_fds: &[i32], timeout_ms: i32) -> PollResult {
+        if read_fds.is_empty() && write_fds.is_empty() {
             return PollResult::Ready(Vec::new());
         }
         // SAFETY: `kqueue`/`kevent` son syscalls de libSystem. Los fds vienen de sockets vivos del
@@ -93,18 +96,15 @@ mod sys {
                 return PollResult::Unsupported;
             }
             // Una sola llamada a kevent registra (changelist) y espera (eventlist) → un solo syscall.
-            let changes: Vec<Kevent> = fds
-                .iter()
-                .map(|&fd| Kevent {
-                    ident: fd as usize,
-                    filter: EVFILT_READ,
-                    flags: EV_ADD,
-                    fflags: 0,
-                    data: 0,
-                    udata: core::ptr::null_mut(),
-                })
-                .collect();
-            let mut events: Vec<Kevent> = (0..fds.len())
+            // Un fd puede pedir lectura (EVFILT_READ) y/o escritura (EVFILT_WRITE) con eventos separados.
+            let mut changes: Vec<Kevent> = Vec::with_capacity(read_fds.len() + write_fds.len());
+            for &fd in read_fds {
+                changes.push(Kevent { ident: fd as usize, filter: EVFILT_READ, flags: EV_ADD, fflags: 0, data: 0, udata: core::ptr::null_mut() });
+            }
+            for &fd in write_fds {
+                changes.push(Kevent { ident: fd as usize, filter: EVFILT_WRITE, flags: EV_ADD, fflags: 0, data: 0, udata: core::ptr::null_mut() });
+            }
+            let mut events: Vec<Kevent> = (0..changes.len())
                 .map(|_| Kevent {
                     ident: 0,
                     filter: 0,
@@ -149,6 +149,7 @@ mod sys {
 
     const EPOLL_CTL_ADD: i32 = 1;
     const EPOLLIN: u32 = 0x001;
+    const EPOLLOUT: u32 = 0x004;
 
     // En glibc, `struct epoll_event` está **empaquetada** solo en x86_64 (12 bytes); en otras arqui-
     // tecturas lleva la alineación natural del `u64` (16 bytes). Reproducimos ambos casos.
@@ -174,8 +175,8 @@ mod sys {
         fn close(fd: i32) -> i32;
     }
 
-    pub fn wait_readable(fds: &[i32], timeout_ms: i32) -> PollResult {
-        if fds.is_empty() {
+    pub fn wait(read_fds: &[i32], write_fds: &[i32], timeout_ms: i32) -> PollResult {
+        if read_fds.is_empty() && write_fds.is_empty() {
             return PollResult::Ready(Vec::new());
         }
         // SAFETY: `epoll_*` son syscalls de libc. Igual que en kqueue: fds vivos, buffers locales del
@@ -185,14 +186,19 @@ mod sys {
             if ep < 0 {
                 return PollResult::Unsupported;
             }
-            for &fd in fds {
+            // Interés por fd: lectura (EPOLLIN), escritura (EPOLLOUT) o ambos. Se combinan en un solo
+            // `EPOLL_CTL_ADD` por fd (añadir el mismo fd dos veces daría EEXIST).
+            let mut interes: std::collections::HashMap<i32, u32> = std::collections::HashMap::new();
+            for &fd in read_fds { *interes.entry(fd).or_insert(0) |= EPOLLIN; }
+            for &fd in write_fds { *interes.entry(fd).or_insert(0) |= EPOLLOUT; }
+            for (&fd, &evs) in &interes {
                 let mut ev = EpollEvent {
-                    events: EPOLLIN,
+                    events: evs,
                     data: fd as u64, // guardamos el fd para recuperarlo del evento listo
                 };
                 epoll_ctl(ep, EPOLL_CTL_ADD, fd, &mut ev as *mut EpollEvent);
             }
-            let mut events: Vec<EpollEvent> = (0..fds.len())
+            let mut events: Vec<EpollEvent> = (0..interes.len())
                 .map(|_| EpollEvent { events: 0, data: 0 })
                 .collect();
             let n = epoll_wait(ep, events.as_mut_ptr(), events.len() as i32, timeout_ms);
@@ -225,7 +231,7 @@ mod sys {
 )))]
 mod sys {
     use super::PollResult;
-    pub fn wait_readable(_fds: &[i32], _timeout_ms: i32) -> PollResult {
+    pub fn wait(_read_fds: &[i32], _write_fds: &[i32], _timeout_ms: i32) -> PollResult {
         PollResult::Unsupported
     }
 }

@@ -340,6 +340,25 @@ pub fn socket_write_raw(h: i64, bytes: &[u8]) -> Result<usize, String> {
     Ok(bytes.len())
 }
 
+/// Escritura **parcial no bloqueante** (VM): escribe lo que quepa en el buffer de envío del socket y
+/// devuelve cuántos octetos entraron (`Ok(n)`). `n == bytes.len()` → completa; `n < len` → el buffer se
+/// llenó (`WouldBlock`) y el resto (`bytes[n..]`) hay que reintentarlo cuando el socket sea **escribible**
+/// (el scheduler aparca la fibra con interés de escritura, M19.4b post — cesión en `socket_write`).
+pub fn socket_write_nb(h: i64, bytes: &[u8]) -> Result<usize, String> {
+    use std::io::Write;
+    let mut stream = socket_clone(h)?;
+    let mut off = 0;
+    while off < bytes.len() {
+        match stream.write(&bytes[off..]) {
+            Ok(0) => return Err("la conexión se cerró durante la escritura".to_string()),
+            Ok(n) => off += n,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(off)
+}
+
 // --- TLS (M19.4) ---
 //
 // La ÚNICA parte del runtime con una dependencia externa (`rustls`, decisión §28.4). Una conexión TLS

@@ -122,6 +122,16 @@ struct Parked {
 struct IoParked {
     fd: i32,
     fiber: Fiber,
+    /// `None` = aparcada esperando **lectura** (el caso de M15.5/M17). `Some` = esperando que el socket
+    /// sea **escribible** para terminar una escritura parcial (cesión en `socket_write`, post-M19.4): el
+    /// poller registra `fd` con interés de escritura y, al despertar, el scheduler drena lo que falta.
+    pending_write: Option<PendingWrite>,
+}
+
+/// Una escritura que bloqueó a medias: el handle del socket y los octetos que aún faltan por enviar.
+struct PendingWrite {
+    handle: i64,
+    remaining: Vec<u8>,
 }
 
 struct Vm<'a> {
@@ -840,7 +850,7 @@ impl<'a> Vm<'a> {
                                 self.frames.last_mut().unwrap().ip -= 1;
                                 let fiber = self.take_current_fiber();
                                 let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
-                                self.io_parked.push(IoParked { fd, fiber });
+                                self.io_parked.push(IoParked { fd, fiber, pending_write: None });
                                 self.schedule_next(pos!().0, pos!().1)?;
                             }
                         }
@@ -863,7 +873,7 @@ impl<'a> Vm<'a> {
                             let fiber = self.take_current_fiber();
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
-                            self.io_parked.push(IoParked { fd, fiber });
+                            self.io_parked.push(IoParked { fd, fiber, pending_write: None });
                             self.schedule_next(pos!().0, pos!().1)?;
                         }
                     }
@@ -874,18 +884,35 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Int(handle), HeapValue::Bytes(data)) = (handle, data) else {
                         unreachable!("el checker garantiza int, bytes");
                     };
-                    // M19.4b: las escrituras TLS cifran por su propia bomba (el socket es no bloqueante).
-                    let escrito = if crate::builtins::is_tls_handle(handle) {
-                        crate::builtins::tls_write_nb(handle, &data)
+                    if crate::builtins::is_tls_handle(handle) {
+                        // M19.4b: las escrituras TLS cifran por su propia bomba (busy-spin en el raro bloqueo).
+                        let elems = match crate::builtins::tls_write_nb(handle, &data) {
+                            Ok(_) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
+                            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        };
+                        let h = self.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
                     } else {
-                        crate::builtins::socket_write_raw(handle, &data)
-                    };
-                    let elems = match escrito {
-                        Ok(_) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
-                    };
-                    let h = self.heap.allocate(Obj::Array(elems));
-                    self.push(HeapValue::Obj(h));
+                        // TCP plano: escritura parcial; si el buffer se llena, CEDE la fibra hasta que el
+                        // socket sea escribible (en vez de girar) → no acapara el hilo del scheduler.
+                        match crate::builtins::socket_write_nb(handle, &data) {
+                            Ok(n) if n == data.len() => {
+                                let elems = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())];
+                                let h = self.heap.allocate(Obj::Array(elems));
+                                self.push(HeapValue::Obj(h));
+                            }
+                            Ok(n) => {
+                                let (line, col) = pos!();
+                                self.park_write(handle, data[n..].to_vec(), line, col)?;
+                                return Ok(None);
+                            }
+                            Err(e) => {
+                                let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                                let h = self.heap.allocate(Obj::Array(elems));
+                                self.push(HeapValue::Obj(h));
+                            }
+                        }
+                    }
                 }
                 OpCode::Contains => {
                     // El valor buscado está encima del contenedor (orden de los argumentos).
@@ -1284,7 +1311,7 @@ impl<'a> Vm<'a> {
                             let fiber = self.take_current_fiber();
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
-                            self.io_parked.push(IoParked { fd, fiber });
+                            self.io_parked.push(IoParked { fd, fiber, pending_write: None });
                             self.schedule_next(pos!().0, pos!().1)?;
                         }
                     }
@@ -1295,12 +1322,27 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Int(handle), HeapValue::Str(s)) = (handle, s) else {
                         unreachable!("el checker garantiza int, string");
                     };
-                    let elems = match crate::builtins::socket_write(handle, &s) {
-                        Ok(_) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
-                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
-                    };
-                    let h = self.heap.allocate(Obj::Array(elems));
-                    self.push(HeapValue::Obj(h));
+                    // Cesión en `socket_write` (como SocketWriteBytes): escritura parcial de los octetos
+                    // UTF-8; si el buffer se llena, cede la fibra (el resto pendiente vive en bytes, lo que
+                    // evita reconstruir un string roto a mitad de carácter multibyte).
+                    let bytes = s.into_bytes();
+                    match crate::builtins::socket_write_nb(handle, &bytes) {
+                        Ok(n) if n == bytes.len() => {
+                            let elems = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())];
+                            let h = self.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                        }
+                        Ok(n) => {
+                            let (line, col) = pos!();
+                            self.park_write(handle, bytes[n..].to_vec(), line, col)?;
+                            return Ok(None);
+                        }
+                        Err(e) => {
+                            let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
+                            let h = self.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                        }
+                    }
                 }
                 // --- Servidor TCP (M15.3) ---
                 OpCode::TcpListen => {
@@ -1343,7 +1385,7 @@ impl<'a> Vm<'a> {
                             let fiber = self.take_current_fiber();
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
-                            self.io_parked.push(IoParked { fd, fiber });
+                            self.io_parked.push(IoParked { fd, fiber, pending_write: None });
                             self.schedule_next(pos!().0, pos!().1)?;
                         }
                     }
@@ -1646,6 +1688,38 @@ impl<'a> Vm<'a> {
         }
     }
 
+    /// Cesión en `socket_write` (post-M19.4): la escritura llenó el buffer de envío y `remaining` no
+    /// cupo. Aparca la fibra actual esperando que `handle` sea **escribible** (el `ip` ya apunta tras el
+    /// opcode de escritura; el resultado se empuja al terminar, en `finish_parked_write`).
+    fn park_write(&mut self, handle: i64, remaining: Vec<u8>, line: usize, col: usize) -> Result<(), RuntimeError> {
+        let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
+        let fiber = self.take_current_fiber();
+        self.io_parked.push(IoParked { fd, fiber, pending_write: Some(PendingWrite { handle, remaining }) });
+        self.schedule_next(line, col)
+    }
+
+    /// Una fibra aparcada por escritura despertó (su socket es escribible): drena lo que falta. Si lo
+    /// completa (o falla), empuja el resultado etiquetado (`["ok",""]`/`["err",msg]`) en su pila y la pone
+    /// lista; si aún bloquea, la re-aparca con el resto. (`allocate` no colecta aquí → sin riesgo de GC.)
+    fn finish_parked_write(&mut self, fd: i32, mut fiber: Fiber, mut pw: PendingWrite) {
+        let resultado = match crate::builtins::socket_write_nb(pw.handle, &pw.remaining) {
+            Ok(n) if n == pw.remaining.len() => Ok(()),
+            Ok(n) => {
+                pw.remaining.drain(..n); // descarta lo ya enviado y re-aparca el resto
+                self.io_parked.push(IoParked { fd, fiber, pending_write: Some(pw) });
+                return;
+            }
+            Err(e) => Err(e),
+        };
+        let elems = match resultado {
+            Ok(()) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
+            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+        };
+        let h = self.heap.allocate(Obj::Array(elems));
+        fiber.stack.push(HeapValue::Obj(h));
+        self.ready.push_back(fiber);
+    }
+
     /// Una fibra terminó **con éxito**. Si es `main` → fin del programa (su valor; semántica Go). Si es una
     /// fibra `spawn` → escribe el resultado en su `Task` (M12.3), despierta a los que la unen y planifica la
     /// siguiente. Devuelve `Some(v)` si el programa termina, `None` si ya cargó otra fibra.
@@ -1719,26 +1793,39 @@ impl<'a> Vm<'a> {
     /// interrumpe (`Ready` vacío por EINTR), cae al **busy-poll cooperativo** de M15.5 (duerme ~1 ms y
     /// re-encola todas) → siempre hay progreso. Garantiza dejar al menos una fibra en `ready`.
     fn io_wait(&mut self) {
-        let fds: Vec<i32> = self.io_parked.iter().map(|p| p.fd).collect();
-        if let crate::poll::PollResult::Ready(listos) = crate::poll::wait_readable(&fds, -1)
+        // Cada fibra espera **lectura** (pending_write None) o **escritura** (Some) de su socket.
+        let read_fds: Vec<i32> = self.io_parked.iter().filter(|p| p.pending_write.is_none()).map(|p| p.fd).collect();
+        let write_fds: Vec<i32> = self.io_parked.iter().filter(|p| p.pending_write.is_some()).map(|p| p.fd).collect();
+        if let crate::poll::PollResult::Ready(listos) = crate::poll::wait(&read_fds, &write_fds, -1)
             && !listos.is_empty()
         {
-            // Despierta solo las fibras cuyo socket quedó listo; las demás siguen aparcadas.
+            // Saca las fibras cuyo socket quedó listo; las demás siguen aparcadas.
+            let mut woken: Vec<IoParked> = Vec::new();
             let mut i = 0;
             while i < self.io_parked.len() {
                 if listos.contains(&self.io_parked[i].fd) {
-                    let p = self.io_parked.remove(i);
-                    self.ready.push_back(p.fiber);
+                    woken.push(self.io_parked.remove(i));
                 } else {
                     i += 1;
                 }
             }
+            self.wake_parked(woken);
             return;
         }
         // Respaldo (sin poller, o despertar vacío): busy-poll cooperativo de M15.5.
         crate::builtins::sleep_millis(1);
-        for p in self.io_parked.drain(..) {
-            self.ready.push_back(p.fiber);
+        let woken: Vec<IoParked> = self.io_parked.drain(..).collect();
+        self.wake_parked(woken);
+    }
+
+    /// Pone listas las fibras despertadas: las de lectura re-ejecutan su opcode (re-pushearon su handle);
+    /// las de escritura terminan lo que faltaba (`finish_parked_write`).
+    fn wake_parked(&mut self, woken: Vec<IoParked>) {
+        for p in woken {
+            match p.pending_write {
+                None => self.ready.push_back(p.fiber),
+                Some(pw) => self.finish_parked_write(p.fd, p.fiber, pw),
+            }
         }
     }
 

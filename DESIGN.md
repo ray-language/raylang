@@ -4012,8 +4012,14 @@ estándar por ambos motores):
   constantes de ronda, planificación de mensaje de 64 palabras. Salida `[int]` de 32 octetos o hex con
   `sha256_hex`. Verificado contra los vectores NIST (`""`, `"abc"`, mensaje multi-bloque, fox/avalancha)
   por ambos motores (`tests/sha256_cli.rs`). Cimiento de HMAC/JWT/firma de requests.
-- **M20.2 — HMAC-SHA256 + base64url + hex genérico** (siguiente). HMAC (RFC 2104) sobre SHA-256, en
-  raylang puro; base64url (RFC 4648 §5, alfabeto URL-safe, sin relleno) para tokens; hex encode/decode.
+- **M20.2 — HMAC-SHA256 + base64url + hex genérico** ✅ (`hmac.ray`, `hex.ray`, `base64.ray` ampliado).
+  HMAC (RFC 2104) sobre SHA-256 en raylang puro: `SHA256((K'^opad) || SHA256((K'^ipad) || m))`, con la
+  clave ajustada al bloque de 64 octetos. Habilitador: `sha256.ray` expone `sha256_octets([int])`
+  (entrada por octetos) para encadenar hashes sin pasar por `bytes`. `hex_encode`/`hex_decode` (con
+  `Result`; sin aritmética de `char` —no soportada— vía `index_of` en la tabla de dígitos).
+  `base64url`/`base64url_decode` (RFC 4648 §5, alfabeto URL-safe `-`/`_`, sin relleno) para JWT.
+  Verificado contra RFC 4231 + `openssl` por ambos motores (`tests/hmac_cli.rs`), incl. clave > bloque
+  y round-trips. Cimiento de JWT (M20.3).
 - **M20.3 — JWT (HS256) + UUID v4**. El *capstone* del cimiento cripto: firma/verificación de JSON Web
   Tokens apilando SHA-256 + HMAC + base64url + la librería `json`; UUID v4 sobre `random`.
 - **M20.4 — URL/query/cookies**. Percent-encoding (encode/decode), parseo de query string, cookies.

@@ -1,0 +1,64 @@
+// HMAC-SHA256 (RFC 2104) escrito EN raylang. Cero runtime nuevo: se apila sobre `sha256.ray`.
+// Importable: `from hmac import hmac_sha256, hmac_sha256_hex;`.
+//
+// HMAC(K, m) = SHA256( (K' ^ opad) || SHA256( (K' ^ ipad) || m ) ), donde K' es la clave ajustada
+// al tamaño de bloque (64 octetos en SHA-256): si es más larga se hashea, y se rellena con ceros.
+// Es la base de la firma simétrica: JWT (HS256), cookies firmadas, webhooks, firma de requests.
+
+from sha256 import sha256_octets;
+from hex import hex_encode;
+
+// Tamaño de bloque de SHA-256, en octetos.
+fn block_size() -> int { 64 }
+
+// `bytes` → octetos `[int]` (cada uno 0..255).
+fn to_octets(b: bytes) -> [int] {
+    var o: [int] = [];
+    var i = 0;
+    while (i < len(b)) {
+        push(o, b[i]);
+        i = i + 1;
+    }
+    o
+}
+
+// Concatena `b` al final de `a` (muta `a`, semántica de referencia).
+fn append_all(a: [int], b: [int]) {
+    var i = 0;
+    while (i < len(b)) {
+        push(a, b[i]);
+        i = i + 1;
+    }
+}
+
+pub fn hmac_sha256(key: bytes, msg: bytes) -> [int] {
+    // Clave ajustada al tamaño de bloque: se hashea si es más larga, luego se rellena con ceros.
+    var k = to_octets(key);
+    if (len(k) > block_size()) {
+        k = sha256_octets(k);
+    }
+    while (len(k) < block_size()) {
+        push(k, 0);
+    }
+    // Pads: K' XOR 0x36 (ipad) y K' XOR 0x5c (opad).
+    var ipad: [int] = [];
+    var opad: [int] = [];
+    var i = 0;
+    while (i < block_size()) {
+        push(ipad, k[i] ^ 54); // 0x36
+        push(opad, k[i] ^ 92); // 0x5c
+        i = i + 1;
+    }
+    // inner = SHA256(ipad || msg)
+    let m = to_octets(msg);
+    append_all(ipad, m);
+    let inner = sha256_octets(ipad);
+    // HMAC = SHA256(opad || inner)
+    append_all(opad, inner);
+    sha256_octets(opad)
+}
+
+// El HMAC-SHA256 en hexadecimal (64 caracteres), la forma habitual de mostrarlo.
+pub fn hmac_sha256_hex(key: bytes, msg: bytes) -> string {
+    hex_encode(hmac_sha256(key, msg))
+}

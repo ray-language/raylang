@@ -29,9 +29,9 @@ fn k_table() -> [int] {
     ]
 }
 
-// Rellena el mensaje según SHA-256 y lo devuelve como `[int]` de octetos: el mensaje, un `0x80`, ceros
-// hasta que la longitud ≡ 56 (mod 64), y 8 octetos big-endian con la longitud en bits. (Idéntico a SHA-1.)
-fn pad(msg: bytes) -> [int] {
+// Rellena el mensaje (octetos `[int]`) según SHA-256: el mensaje, un `0x80`, ceros hasta que la
+// longitud ≡ 56 (mod 64), y 8 octetos big-endian con la longitud en bits. (Idéntico a SHA-1.)
+fn pad(msg: [int]) -> [int] {
     let n = len(msg);
     var m: [int] = [];
     var i = 0;
@@ -60,7 +60,9 @@ fn append_word(out: [int], w: int) {
     push(out, w & 255);
 }
 
-pub fn sha256(msg: bytes) -> [int] {
+// SHA-256 sobre octetos (`[int]`, cada uno 0..255). Entrada interna que permite encadenar hashes
+// sin pasar por `bytes` (lo usa HMAC: `sha256(opad || sha256(ipad || msg))`).
+pub fn sha256_octets(msg: [int]) -> [int] {
     let m = pad(msg);
     let kk = k_table();
     // Valores hash iniciales (parte fraccionaria de la raíz cuadrada de los primeros 8 primos).
@@ -128,6 +130,17 @@ pub fn sha256(msg: bytes) -> [int] {
     append_word(out, h6);
     append_word(out, h7);
     out
+}
+
+// SHA-256 de un mensaje `bytes` (la interfaz pública habitual). Convierte a octetos y delega.
+pub fn sha256(msg: bytes) -> [int] {
+    var oct: [int] = [];
+    var i = 0;
+    while (i < len(msg)) {
+        push(oct, msg[i]);
+        i = i + 1;
+    }
+    sha256_octets(oct)
 }
 
 // El dígito hexadecimal (minúscula) del valor `d` (0..15).

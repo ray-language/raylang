@@ -49,3 +49,76 @@ pub fn base64(data: [int]) -> string {
     }
     out
 }
+
+// --- base64url (RFC 4648 §5): alfabeto URL-safe (`-`/`_` en vez de `+`/`/`) y SIN relleno `=`. ---
+// Es la codificación que usan los JSON Web Tokens (cada segmento es base64url sin padding).
+
+// Reemplaza los caracteres no-URL-safe y quita el relleno de una cadena base64 estándar.
+fn to_url(s: string) -> string {
+    var out = "";
+    var i = 0;
+    while (i < len(s)) {
+        let c = s[i];
+        if (c == '+') {
+            out = out + "-";
+        } else {
+            if (c == '/') {
+                out = out + "_";
+            } else {
+                if (c == '=') {
+                    out = out + "";
+                } else {
+                    out = out + to_string(c);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Octetos → base64url (sin relleno). Se reusa `base64` y se transforma el alfabeto.
+pub fn base64url(data: [int]) -> string {
+    to_url(base64(data))
+}
+
+// El valor de 6 bits (0..63) de un carácter base64url, o -1 si no pertenece al alfabeto.
+fn dec_char(c: char) -> int {
+    if (c == '-') {
+        62
+    } else {
+        if (c == '_') {
+            63
+        } else {
+            // El alfabeto estándar comparte A-Z/a-z/0-9 con base64url.
+            match (index_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", to_string(c))) {
+                Option.Some(i) => i,
+                Option.None => 0 - 1,
+            }
+        }
+    }
+}
+
+// base64url (sin relleno) → octetos. `Err` si hay un carácter fuera del alfabeto. Decodifica grupos
+// de 4 caracteres (24 bits → 3 octetos); una cola de 2 caracteres da 1 octeto y de 3 da 2 octetos.
+pub fn base64url_decode(s: string) -> Result<[int], string> {
+    let n = len(s);
+    var out: [int] = [];
+    var acc = 0;  // acumulador de bits
+    var nbits = 0; // bits válidos en el acumulador
+    var i = 0;
+    while (i < n) {
+        let v = dec_char(s[i]);
+        if (v < 0) {
+            return Result.Err("carácter base64url inválido");
+        }
+        acc = (acc << 6) | v;
+        nbits = nbits + 6;
+        if (nbits >= 8) {
+            nbits = nbits - 8;
+            push(out, (acc >> nbits) & 255);
+        }
+        i = i + 1;
+    }
+    Result.Ok(out)
+}

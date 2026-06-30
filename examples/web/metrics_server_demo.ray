@@ -1,0 +1,43 @@
+// Servidor con un endpoint `/metrics` real (M21.3): monta `metrics.ray` sobre `webserver.ray`. Un
+// `Registry` compartido se captura en el handler (closure); cada petición incrementa un counter por
+// (método, ruta) y observa una duración en un histograma, y `GET /metrics` devuelve el registro en el
+// formato de exposición de Prometheus (text/plain) → escrapeable por un Prometheus real. **Solo VM**
+// (servidor concurrente). Lo prueba `tests/metrics_server_cli.rs`.
+//
+//   cargo run -- --vm examples/web/metrics_server_demo.ray
+//   curl 127.0.0.1:8080/ ; curl 127.0.0.1:8080/metrics
+
+from webserver import serve, Request, Response, text, not_found;
+from metrics import registry, register_counter, register_histogram, inc, observe, render, labels2, Registry;
+
+// Respuesta /metrics con el Content-Type que espera Prometheus.
+fn metrics_response(cuerpo: string) -> Response {
+    var h: Map<string, string> = map_new();
+    insert(h, "Content-Type", "text/plain; version=0.0.4");
+    Response { status: 200, headers: h, body: to_bytes(cuerpo) }
+}
+
+fn main() -> int {
+    let reg = registry();
+    register_counter(reg, "http_requests_total", "Total de peticiones HTTP por metodo y ruta");
+    register_histogram(reg, "http_request_duracion_segundos", "Duracion de la peticion (simulada)", [0.005, 0.01, 0.05]);
+
+    let r = serve("127.0.0.1", 8080, fn(req: Request) -> Response {
+        if (req.path == "/metrics") {
+            // El propio /metrics no se contabiliza (convención: el scrape no infla las métricas).
+            metrics_response(render(reg))
+        } else {
+            inc(reg, "http_requests_total", labels2("method", req.method, "path", req.path));
+            observe(reg, "http_request_duracion_segundos", 0.008); // duración simulada (cae en le≥0.01)
+            if (req.path == "/") {
+                text(200, "hola desde raylang")
+            } else {
+                not_found()
+            }
+        }
+    });
+    match (r) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}

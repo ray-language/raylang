@@ -655,6 +655,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "deflate.ray", "deflate_demo.ray", // M20-final: encoder DEFLATE, usa `bytes` + bitops
         "websocket.ray", "websocket_demo.ray", "websocket_echo.ray",
         "framework.ray", // micro-framework web: usa `bytes` (diferido en el toolchain auto-alojado)
+        "metrics_server_demo.ray", // M21.3: monta metrics sobre webserver → usa `bytes`
     ];
     // Los ejemplos viven en subdirectorios por categoría (basics/, types/, web/, …) → se recorre
     // `examples/` **recursivamente**. Se saltan los directorios de ejemplos de MÓDULOS (multi-archivo,

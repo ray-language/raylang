@@ -4129,5 +4129,12 @@ externas (Python `json`, formato de exposición de Prometheus).
   para histogramas (buckets cumulativos pre-creados en orden canónico + `_sum`/`_count` + `+Inf`). Salida
   determinista verificada por golden + **validación estructural con Python** (formato de las series +
   cumulatividad de los buckets, `+Inf == _count`) por ambos motores (`tests/metrics_cli.rs`). Puro → lo
-  cubre además el oráculo de self-hosting. **M21 COMPLETO** (observabilidad: logs + métricas). Diferido:
-  histogramas con labels.
+  cubre además el oráculo de self-hosting. Diferido: histogramas con labels.
+- **M21.3 — endpoint `/metrics` real** ✅ (`metrics_server_demo.ray`). Monta `metrics.ray` sobre
+  `webserver.ray`: un `Registry` **compartido se captura en el handler** (closure por upvalue → la
+  semántica de referencia del struct lo hace estado mutable común a todas las fibras; las ops `inc`/
+  `observe`/`render` no ceden → atómicas en el scheduler M:1). Cada petición incrementa un counter por
+  `(método, ruta)` y observa una duración; `GET /metrics` devuelve el registro en formato de exposición
+  (`Content-Type: text/plain; version=0.0.4`) — escrapeable por un Prometheus real. E2E (solo VM): se
+  genera tráfico y se escrapea `/metrics`, validando counters etiquetados + histograma (`tests/
+  metrics_server_cli.rs`). **M21 COMPLETO** (observabilidad: logs + métricas + endpoint).

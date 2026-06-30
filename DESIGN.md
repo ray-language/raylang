@@ -4079,5 +4079,14 @@ estándar por ambos motores):
   cadena de HMAC → signature). Cabeceras canónicas vía `keys` (ordenadas), query canónica con `url_encode`
   + `sort`. Verificado contra el vector oficial **get-vanilla** de la suite de AWS + un caso con query
   desordenada y cuerpo (referencia Python) por ambos motores (`tests/sigv4_cli.rs`).
-- **M20.10+ — pendiente**: **gzip/deflate** (Content-Encoding; DEFLATE en raylang puro, el algoritmo más
-  duro de la lista) + cesión cooperativa de UDP en la VM (integración con `io_parked`).
+- **M20.10 — gzip/deflate (INFLATE)** 🚧 (`inflate.ray`). El algoritmo más complejo de la stdlib: el
+  **descompresor DEFLATE** (RFC 1951) en raylang puro, port del `puff.c` de zlib. ✅ **M20.10a**: bit-stream
+  sobre `bytes` (LSB-first), decodificación Huffman **canónica** (`build_huff`/`decode` al estilo puff:
+  `counts[]` por longitud + `symbols[]` ordenados), referencias LZ77 hacia atrás (con copia solapada =
+  run-length), y los **tres tipos de bloque** (almacenado, Huffman fijo, Huffman dinámico con los códigos
+  de repetición 16/17/18). Envoltorios `gunzip` (RFC 1952, cabecera + tráiler, **verifica CRC-32**),
+  `zlib_inflate` (RFC 1950) e `inflate_raw`. `crc32` propio (polinomio 0xEDB88320). Verificado contra
+  blobs gzip de Python (los 3 tipos de bloque) + CRC-32 estándar por ambos motores (`tests/inflate_cli.rs`).
+  Falta **M20.10b**: integrarlo en `http.ray` (`Content-Encoding: gzip` automático).
+- **M20.11+ — pendiente**: compresión DEFLATE (encoder, mucho más código) + cesión cooperativa de UDP en
+  la VM (integración con `io_parked`).

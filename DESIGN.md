@@ -4199,7 +4199,7 @@ handshake (genera una `Sec-WebSocket-Key` de 16 octetos aleatorios en base64, en
 4 octetos aleatorios), `recv_text` (decodifica), `close_ws`. Funciona en **ambos motores** (cliente
 bloqueante). Verificado e2e contra el propio `websocket_echo.ray` (servidor raylang) — **cliente raylang
 hablando con servidor raylang** — con eco de UTF-8 multibyte (`☃`) por ambos motores
-(`tests/websocket_client_cli.rs`). Diferido: `wss://` (TLS), fragmentación, ping/pong automático.
+(`tests/websocket_client_cli.rs`). Diferido: fragmentación, ping/pong automático. (`wss://` ✅ vía `connect_tls`.)
 
 ## §34 — M25: protobuf + framing gRPC
 

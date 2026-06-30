@@ -1,0 +1,216 @@
+// Métricas estilo Prometheus, escritas EN raylang. Cero runtime nuevo. Un registro de counters, gauges
+// e histogramas que se renderiza al **formato de exposición de texto** de Prometheus (`# HELP`/`# TYPE`
+// + series), listo para servir en `/metrics` (con `webserver.ray`). Importable:
+//   from metrics import registry, register_counter, register_gauge, register_histogram,
+//                       inc, add, set, observe, render, no_labels, labels1, labels2;
+//
+// Modelo simple con arreglos paralelos + búsqueda lineal (suficiente para unos pocos cientos de series).
+// Counters/gauges admiten labels; los histogramas (por simplicidad) son sin labels. El orden de salida
+// es determinista (métricas en orden de registro; series en orden de creación; labels ordenados).
+
+pub struct Registry {
+    names: [string],    // métricas registradas, en orden
+    helps: [string],
+    kinds: [int],       // 0=counter, 1=gauge, 2=histogram
+    bucketses: [[float]], // límites de bucket (solo histogramas; [] para los demás)
+    s_metric: [int],    // serie → índice de su métrica
+    s_text: [string],   // prefijo de la línea: "nombre{labels}" / "nombre_bucket{le=...}" / "_sum" / "_count"
+    s_val: [float],     // valor de la serie
+}
+
+pub fn registry() -> Registry {
+    Registry { names: [], helps: [], kinds: [], bucketses: [], s_metric: [], s_text: [], s_val: [] }
+}
+
+fn no_buckets() -> [float] {
+    var e: [float] = [];
+    e
+}
+
+// --- Helpers de labels ---
+pub fn no_labels() -> Map<string, string> {
+    map_new()
+}
+pub fn labels1(k: string, v: string) -> Map<string, string> {
+    var m: Map<string, string> = map_new();
+    insert(m, k, v);
+    m
+}
+pub fn labels2(k1: string, v1: string, k2: string, v2: string) -> Map<string, string> {
+    var m: Map<string, string> = map_new();
+    insert(m, k1, v1);
+    insert(m, k2, v2);
+    m
+}
+
+// Escapa un valor de label (Prometheus: barra, comilla, salto de línea).
+fn label_escape(s: string) -> string {
+    var out = "";
+    var i = 0;
+    while (i < len(s)) {
+        let c = s[i];
+        if (c == '\\') { out = out + "\\\\"; }
+        else { if (c == '"') { out = out + "\\\""; }
+        else { if (c == '\n') { out = out + "\\n"; }
+        else { out = out + to_string(c); }}}
+        i = i + 1;
+    }
+    out
+}
+
+// Renderiza un conjunto de labels como `{k="v",...}` (claves ordenadas) o "" si está vacío.
+fn render_labels(labels: Map<string, string>) -> string {
+    let ks = keys(labels);
+    if (len(ks) == 0) {
+        return "";
+    }
+    var out = "{";
+    var i = 0;
+    while (i < len(ks)) {
+        if (i > 0) { out = out + ","; }
+        let k = ks[i];
+        let v = match (get(labels, k)) {
+            Option.Some(x) => x,
+            Option.None => "",
+        };
+        out = out + k + "=\"" + label_escape(v) + "\"";
+        i = i + 1;
+    }
+    out + "}"
+}
+
+// --- Registro de métricas ---
+fn add_metric(reg: Registry, name: string, help: string, kind: int, buckets: [float]) -> int {
+    push(reg.names, name);
+    push(reg.helps, help);
+    push(reg.kinds, kind);
+    push(reg.bucketses, buckets);
+    len(reg.names) - 1
+}
+
+pub fn register_counter(reg: Registry, name: string, help: string) {
+    add_metric(reg, name, help, 0, no_buckets());
+}
+pub fn register_gauge(reg: Registry, name: string, help: string) {
+    add_metric(reg, name, help, 1, no_buckets());
+}
+
+fn fmt_float(v: float) -> string {
+    to_string(v)
+}
+
+// Crea una serie (valor 0) y devuelve su índice.
+fn create_series(reg: Registry, mi: int, text: string) -> int {
+    push(reg.s_metric, mi);
+    push(reg.s_text, text);
+    push(reg.s_val, 0.0);
+    len(reg.s_metric) - 1
+}
+
+pub fn register_histogram(reg: Registry, name: string, help: string, buckets: [float]) {
+    let mi = add_metric(reg, name, help, 2, buckets);
+    // Pre-crea las series en orden canónico: buckets ascendentes, +Inf, _sum, _count.
+    var i = 0;
+    while (i < len(buckets)) {
+        create_series(reg, mi, name + "_bucket{le=\"" + fmt_float(buckets[i]) + "\"}");
+        i = i + 1;
+    }
+    create_series(reg, mi, name + "_bucket{le=\"+Inf\"}");
+    create_series(reg, mi, name + "_sum");
+    create_series(reg, mi, name + "_count");
+}
+
+// --- Búsqueda ---
+fn find_metric(reg: Registry, name: string) -> int {
+    var i = 0;
+    while (i < len(reg.names)) {
+        if (reg.names[i] == name) {
+            return i;
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// Índice de la serie con ese texto dentro de la métrica `mi`, creándola si no existe.
+fn touch_series(reg: Registry, mi: int, text: string) -> int {
+    var i = 0;
+    while (i < len(reg.s_text)) {
+        if (reg.s_metric[i] == mi && reg.s_text[i] == text) {
+            return i;
+        }
+        i = i + 1;
+    }
+    create_series(reg, mi, text)
+}
+
+// --- Operaciones ---
+pub fn add(reg: Registry, name: string, labels: Map<string, string>, v: float) {
+    let mi = find_metric(reg, name);
+    if (mi < 0) {
+        panic("métrica no registrada: " + name);
+    }
+    let si = touch_series(reg, mi, name + render_labels(labels));
+    reg.s_val[si] = reg.s_val[si] + v;
+}
+
+pub fn inc(reg: Registry, name: string, labels: Map<string, string>) {
+    add(reg, name, labels, 1.0);
+}
+
+pub fn set(reg: Registry, name: string, labels: Map<string, string>, v: float) {
+    let mi = find_metric(reg, name);
+    if (mi < 0) {
+        panic("métrica no registrada: " + name);
+    }
+    let si = touch_series(reg, mi, name + render_labels(labels));
+    reg.s_val[si] = v;
+}
+
+// Observa un valor en un histograma (sin labels): incrementa los buckets ≥ v, +Inf, _count, y suma a _sum.
+pub fn observe(reg: Registry, name: string, v: float) {
+    let mi = find_metric(reg, name);
+    if (mi < 0) {
+        panic("histograma no registrado: " + name);
+    }
+    let bks = reg.bucketses[mi];
+    var i = 0;
+    while (i < len(bks)) {
+        if (v <= bks[i]) {
+            let si = touch_series(reg, mi, name + "_bucket{le=\"" + fmt_float(bks[i]) + "\"}");
+            reg.s_val[si] = reg.s_val[si] + 1.0;
+        }
+        i = i + 1;
+    }
+    let inf = touch_series(reg, mi, name + "_bucket{le=\"+Inf\"}");
+    reg.s_val[inf] = reg.s_val[inf] + 1.0;
+    let ss = touch_series(reg, mi, name + "_sum");
+    reg.s_val[ss] = reg.s_val[ss] + v;
+    let sc = touch_series(reg, mi, name + "_count");
+    reg.s_val[sc] = reg.s_val[sc] + 1.0;
+}
+
+fn kind_name(k: int) -> string {
+    if (k == 0) { "counter" }
+    else { if (k == 1) { "gauge" }
+    else { "histogram" }}
+}
+
+// Renderiza todo el registro al formato de exposición de Prometheus.
+pub fn render(reg: Registry) -> string {
+    var out = "";
+    var mi = 0;
+    while (mi < len(reg.names)) {
+        out = out + "# HELP " + reg.names[mi] + " " + reg.helps[mi] + "\n";
+        out = out + "# TYPE " + reg.names[mi] + " " + kind_name(reg.kinds[mi]) + "\n";
+        var si = 0;
+        while (si < len(reg.s_metric)) {
+            if (reg.s_metric[si] == mi) {
+                out = out + reg.s_text[si] + " " + fmt_float(reg.s_val[si]) + "\n";
+            }
+            si = si + 1;
+        }
+        mi = mi + 1;
+    }
+    out
+}

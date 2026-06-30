@@ -4122,5 +4122,12 @@ externas (Python `json`, formato de exposición de Prometheus).
   ts)` separa el formateo (determinista, testeable) de `emit` (que usa `now_utc` de `time.ray`). Verificado
   por golden + **validación con Python `json.loads`** por ambos motores (`tests/log_cli.rs`). Puro (sin
   `bytes`/bitops) → lo cubre además el oráculo de self-hosting.
-- **M21.2 — métricas Prometheus** (siguiente): counters/gauges/histogramas con labels, render al formato de
-  exposición de texto (`# HELP`/`# TYPE`/series).
+- **M21.2 — métricas Prometheus** ✅ (`metrics.ray`). Un registro de **counters/gauges/histogramas** que se
+  renderiza al **formato de exposición de texto** de Prometheus (`# HELP`/`# TYPE` + series), listo para
+  servir en `/metrics`. Modelo de arreglos paralelos + búsqueda lineal; `inc`/`add`/`set` con **labels**
+  (`labels1`/`labels2`/`no_labels`, claves ordenadas → determinista, con escapado de valores); `observe`
+  para histogramas (buckets cumulativos pre-creados en orden canónico + `_sum`/`_count` + `+Inf`). Salida
+  determinista verificada por golden + **validación estructural con Python** (formato de las series +
+  cumulatividad de los buckets, `+Inf == _count`) por ambos motores (`tests/metrics_cli.rs`). Puro → lo
+  cubre además el oráculo de self-hosting. **M21 COMPLETO** (observabilidad: logs + métricas). Diferido:
+  histogramas con labels.

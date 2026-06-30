@@ -43,7 +43,7 @@ Librerías en raylang (importables) + sus demos. **El servidor es solo VM.**
   `time` (fechas/horas UTC: ISO 8601, RFC 1123, duraciones), `redis` (cliente RESP2 sobre TCP),
   `udp` (datagramas sin conexión), `sigv4` (firma de requests AWS Signature V4),
   `inflate` (descompresión DEFLATE/gzip/zlib + CRC-32), `deflate` (compresión DEFLATE/gzip/zlib, LZ77 + Huffman fijo),
-  `log` (logging estructurado en JSON).
+  `log` (logging estructurado en JSON), `metrics` (métricas Prometheus: counters/gauges/histogramas).
 - **Demos**: `http_demo`, `json_demo`, `https_demo`, `webserver_demo`, `websocket_demo`,
   `websocket_echo` (echo `ws://`), `wss_echo` (echo `wss://`), `crypto_demo` (vectores SHA-1/base64).
 - **`framework`**: un micro-framework web tipo Express (enrutado, parámetros de ruta, middleware,

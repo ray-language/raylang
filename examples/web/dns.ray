@@ -100,6 +100,8 @@ pub enum Record {
     A(string),       // IPv4 (tipo 1)
     Aaaa(string),    // IPv6 (tipo 28)
     Mx(int, string), // preferencia, exchange (tipo 15)
+    Cname(string),   // nombre canónico (tipo 5)
+    Txt(string),     // texto (tipo 16)
     Other(int),      // otro tipo (número)
 }
 
@@ -165,7 +167,25 @@ fn format_ipv6(data: bytes, start: int) -> string {
     out
 }
 
-// Parsea una respuesta DNS a registros tipados (A, AAAA, MX y otros).
+// Lee el RDATA de un TXT: una o más "character-strings" (octeto de longitud + ese nº de octetos),
+// dentro de `rdlength` octetos desde `rdstart`, concatenadas en un solo string.
+fn read_txt(data: bytes, rdstart: int, rdlength: int) -> string {
+    var s = "";
+    var p = rdstart;
+    let fin = rdstart + rdlength;
+    while (p < fin) {
+        let slen = data[p];
+        p = p + 1;
+        s = s + match (from_utf8(sub_bytes(data, p, p + slen))) {
+            Result.Ok(t) => t,
+            Result.Err(_) => "?",
+        };
+        p = p + slen;
+    }
+    s
+}
+
+// Parsea una respuesta DNS a registros tipados (A, AAAA, MX, CNAME, TXT y otros).
 pub fn parse_records(data: bytes) -> Result<[Record], string> {
     if (len(data) < 12) {
         return Result.Err("respuesta DNS demasiado corta");
@@ -203,9 +223,15 @@ pub fn parse_records(data: bytes) -> Result<[Record], string> {
             let pref = be16(data, rdstart);
             let ex = read_name(data, rdstart + 2);
             push(recs, Record.Mx(pref, ex.name));
+        } else { if (atype == 5) {
+            // CNAME: un solo nombre de dominio (puede llevar compresión).
+            push(recs, Record.Cname(read_name(data, rdstart).name));
+        } else { if (atype == 16) {
+            // TXT: una o más "character-strings" (octeto de longitud + texto), concatenadas.
+            push(recs, Record.Txt(read_txt(data, rdstart, rdlength)));
         } else {
             push(recs, Record.Other(atype));
-        }}}
+        }}}}}
         pos = rdstart + rdlength;
         a = a + 1;
     }
@@ -221,6 +247,8 @@ fn format_records(recs: [Record]) -> [string] {
             Record.A(ip) => { push(out, ip); },
             Record.Aaaa(ip) => { push(out, ip); },
             Record.Mx(pref, ex) => { push(out, to_string(pref) + " " + ex); },
+            Record.Cname(name) => { push(out, name); },
+            Record.Txt(t) => { push(out, t); },
             Record.Other(_) => {},
         }
         i = i + 1;
@@ -278,6 +306,22 @@ pub fn query_aaaa(server: string, port: int, name: string) -> Result<[string], s
 // Resuelve registros MX → "preferencia exchange" (menor preferencia = mayor prioridad).
 pub fn query_mx(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 15)) {
+        Result.Ok(recs) => Result.Ok(format_records(recs)),
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+// Resuelve registros CNAME (nombre canónico al que apunta un alias).
+pub fn query_cname(server: string, port: int, name: string) -> Result<[string], string> {
+    match (query(server, port, name, 5)) {
+        Result.Ok(recs) => Result.Ok(format_records(recs)),
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+// Resuelve registros TXT (texto arbitrario: SPF, verificación de dominio, etc.).
+pub fn query_txt(server: string, port: int, name: string) -> Result<[string], string> {
+    match (query(server, port, name, 16)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
         Result.Err(e) => Result.Err(e),
     }

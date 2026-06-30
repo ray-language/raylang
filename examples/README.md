@@ -46,8 +46,8 @@ Librerías en raylang (importables) + sus demos. **El servidor es solo VM.**
   `log` (logging estructurado en JSON), `metrics` (métricas Prometheus: counters/gauges/histogramas).
 - **`metrics_server_demo`**: un endpoint `/metrics` real (monta `metrics` sobre `webserver`,
   escrapeable por Prometheus).
-- **`dns`**: un cliente DNS (RFC 1035) sobre UDP que resuelve registros A/AAAA/MX (con compresión de
-  nombres e IPv6 canónica).
+- **`dns`**: un cliente DNS (RFC 1035) sobre UDP que resuelve registros A/AAAA/MX/CNAME/TXT (con
+  compresión de nombres e IPv6 canónica).
 - **Demos**: `http_demo`, `json_demo`, `https_demo`, `webserver_demo`, `websocket_demo`,
   `websocket_echo` (echo `ws://`), `wss_echo` (echo `wss://`), `crypto_demo` (vectores SHA-1/base64).
 - **`framework`**: un micro-framework web tipo Express (enrutado, parámetros de ruta, middleware,

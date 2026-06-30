@@ -57,6 +57,25 @@ fn toy_dns_server() -> u16 {
                     resp.extend_from_slice(&[4, b'm', b'a', b'i', b'l']); // label "mail"
                     resp.extend_from_slice(&[0xC0, 0x0C]);     // puntero a "example.com"
                 }
+                5 => {
+                    // CNAME: "cdn" + puntero a "example.com" → "cdn.example.com".
+                    resp.extend_from_slice(&[0, 5]);           // TYPE = CNAME
+                    resp.extend_from_slice(&[0, 1]);           // CLASS = IN
+                    resp.extend_from_slice(&[0, 0, 1, 0x2c]);  // TTL
+                    resp.extend_from_slice(&[0, 6]);           // RDLENGTH = 4 + 2
+                    resp.extend_from_slice(&[3, b'c', b'd', b'n']); // label "cdn"
+                    resp.extend_from_slice(&[0xC0, 0x0C]);     // puntero a "example.com"
+                }
+                16 => {
+                    // TXT: una character-string "v=spf1 -all".
+                    let txt = b"v=spf1 -all";
+                    resp.extend_from_slice(&[0, 16]);          // TYPE = TXT
+                    resp.extend_from_slice(&[0, 1]);           // CLASS = IN
+                    resp.extend_from_slice(&[0, 0, 1, 0x2c]);  // TTL
+                    resp.extend_from_slice(&[0, (txt.len() as u8) + 1]); // RDLENGTH = 1 + len
+                    resp.push(txt.len() as u8);                // longitud de la character-string
+                    resp.extend_from_slice(txt);
+                }
                 _ => {
                     // A: 93.184.216.34
                     resp.extend_from_slice(&[0, 1]);           // TYPE = A
@@ -92,19 +111,21 @@ fn correr(flags: &[&str], port: u16) -> Vec<String> {
 }
 
 const ESPERADO: &[&str] = &[
-    "A 93.184.216.34",       // registro A (IPv4)
-    "AAAA 2001:db8::1",      // registro AAAA (IPv6, con compresión ::)
+    "A 93.184.216.34",        // registro A (IPv4)
+    "AAAA 2001:db8::1",       // registro AAAA (IPv6, con compresión ::)
     "MX 10 mail.example.com", // registro MX (preferencia + exchange con compresión de nombre)
+    "CNAME cdn.example.com",  // registro CNAME (nombre con compresión)
+    "TXT v=spf1 -all",        // registro TXT (character-string)
 ];
 
 #[test]
-fn dns_resuelve_a_aaaa_mx_interprete() {
+fn dns_resuelve_todos_los_tipos_interprete() {
     let port = toy_dns_server();
     assert_eq!(correr(&[], port), ESPERADO);
 }
 
 #[test]
-fn dns_resuelve_a_aaaa_mx_vm() {
+fn dns_resuelve_todos_los_tipos_vm() {
     let port = toy_dns_server();
     assert_eq!(correr(&["--vm"], port), ESPERADO);
 }

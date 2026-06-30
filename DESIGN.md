@@ -4072,5 +4072,12 @@ estándar por ambos motores):
   (la cesión cooperativa al scheduler queda diferida, como TCP antes de M15.5). No determinista (red) →
   probado por subproceso contra un servidor UDP de eco en Rust por ambos motores (`tests/udp_cli.rs`),
   verificando round-trip + remitente. Habilita DNS, statsd, descubrimiento, juegos.
-- **M20.9+ — pendiente**: **gzip/deflate** (Content-Encoding; DEFLATE en raylang puro, el algoritmo más
+- **M20.9 — AWS Signature V4** ✅ (`sigv4.ray`). El *capstone* del stack de M20: apila HMAC-SHA256 +
+  SHA-256 hex + URL encoding + fecha (formato básico `to_iso8601_basic`/`date_stamp` añadidos a
+  `time.ray`). `authorization_header(cred, method, path, query, headers, payload, amz_date)` produce la
+  cabecera `Authorization` en los 4 pasos de AWS (canonical request → string to sign → signing key por
+  cadena de HMAC → signature). Cabeceras canónicas vía `keys` (ordenadas), query canónica con `url_encode`
+  + `sort`. Verificado contra el vector oficial **get-vanilla** de la suite de AWS + un caso con query
+  desordenada y cuerpo (referencia Python) por ambos motores (`tests/sigv4_cli.rs`).
+- **M20.10+ — pendiente**: **gzip/deflate** (Content-Encoding; DEFLATE en raylang puro, el algoritmo más
   duro de la lista) + cesión cooperativa de UDP en la VM (integración con `io_parked`).

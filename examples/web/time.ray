@@ -95,6 +95,17 @@ pub fn to_iso8601(dt: DateTime) -> string {
         + "T" + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + "Z"
 }
 
+// Formato ISO 8601 "básico" (sin separadores): `YYYYMMDDTHHMMSSZ`. Es el `X-Amz-Date` de AWS SigV4.
+pub fn to_iso8601_basic(dt: DateTime) -> string {
+    pad(dt.year, 4) + pad(dt.month, 2) + pad(dt.day, 2)
+        + "T" + pad(dt.hour, 2) + pad(dt.minute, 2) + pad(dt.second, 2) + "Z"
+}
+
+// Solo la fecha, sin separadores: `YYYYMMDD` (el "datestamp" del *credential scope* de AWS SigV4).
+pub fn date_stamp(dt: DateTime) -> string {
+    pad(dt.year, 4) + pad(dt.month, 2) + pad(dt.day, 2)
+}
+
 fn weekday_name(w: int) -> string {
     let nombres = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     nombres[w]

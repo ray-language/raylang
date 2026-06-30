@@ -650,6 +650,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "jwt.ray", "jwt_demo.ray", "uuid.ray", // M20.3: JWT/UUID, usa `bytes` + bitops
         "url.ray", "cookie.ray", "url_demo.ray", // M20.4: url/cookies, usa `bytes` + bitops
         "udp.ray", "udp_demo.ray", // M20.8: UDP, usa `bytes`
+        "sigv4.ray", "sigv4_demo.ray", // M20.9: AWS SigV4, usa `bytes` + bitops (vía hmac/sha256/url)
         "websocket.ray", "websocket_demo.ray", "websocket_echo.ray",
         "framework.ray", // micro-framework web: usa `bytes` (diferido en el toolchain auto-alojado)
     ];

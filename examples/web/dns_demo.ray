@@ -1,10 +1,10 @@
-// Demo del cliente DNS (M22). Resuelve "example.com" a IPv4 por UDP. Si se le pasa un puerto como
-// argumento, consulta a 127.0.0.1:<puerto> (el servidor DNS de juguete del test); si no, a 8.8.8.8:53
-// (DNS público real). Imprime cada IP. Lo lanza `tests/dns_cli.rs` por ambos motores.
+// Demo del cliente DNS (M22). Resuelve "example.com" en A (IPv4), AAAA (IPv6) y MX (correo) por UDP.
+// Si se le pasa un puerto como argumento, consulta a 127.0.0.1:<puerto> (el servidor DNS de juguete
+// del test); si no, a 8.8.8.8:53 (DNS público real). Lo lanza `tests/dns_cli.rs` por ambos motores.
 //
 //   cargo run -- --vm examples/web/dns_demo.ray        # consulta 8.8.8.8 (red real)
 
-from dns import query_a;
+from dns import query_a, query_aaaa, query_mx;
 
 fn main() -> int {
     let a = args();
@@ -18,15 +18,22 @@ fn main() -> int {
         }
     }
 
-    match (query_a(server, port, "example.com")) {
-        Result.Ok(ips) => {
+    imprime("A", query_a(server, port, "example.com"));
+    imprime("AAAA", query_aaaa(server, port, "example.com"));
+    imprime("MX", query_mx(server, port, "example.com"));
+    0
+}
+
+// Imprime cada valor prefijado por el tipo de registro (o el error).
+fn imprime(tipo: string, r: Result<[string], string>) {
+    match (r) {
+        Result.Ok(vals) => {
             var i = 0;
-            while (i < len(ips)) {
-                print(ips[i]);
+            while (i < len(vals)) {
+                print(tipo + " " + vals[i]);
                 i = i + 1;
             }
-            0
         },
-        Result.Err(e) => { eprint(e); 1 },
+        Result.Err(e) => print(tipo + " ERR " + e),
     }
 }

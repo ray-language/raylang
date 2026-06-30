@@ -8,8 +8,9 @@ use std::net::UdpSocket;
 use std::process::Command;
 use std::thread;
 
-/// Servidor DNS de juguete: recibe una consulta, eco de la pregunta + una respuesta A = 93.184.216.34,
-/// con el nombre de la respuesta como puntero a la pregunta (offset 12). Devuelve el puerto.
+/// Servidor DNS de juguete: responde según el QTYPE (A/AAAA/MX), con el nombre de la respuesta como
+/// puntero a la pregunta (offset 12). El MX usa además un puntero de compresión en su exchange
+/// ("mail" + puntero a "example.com"). Devuelve el puerto.
 fn toy_dns_server() -> u16 {
     let sock = UdpSocket::bind("127.0.0.1:0").expect("bind dns");
     let port = sock.local_addr().expect("addr").port();
@@ -21,6 +22,8 @@ fn toy_dns_server() -> u16 {
                 Err(_) => return,
             };
             let consulta = &buf[..n];
+            // QTYPE = los 2 octetos antes del QCLASS final (pregunta = QNAME + QTYPE(2) + QCLASS(2)).
+            let qtype = ((consulta[n - 4] as u16) << 8) | consulta[n - 3] as u16;
             // La pregunta va de offset 12 al final (un solo QNAME + QTYPE + QCLASS).
             let pregunta = &consulta[12..n];
 
@@ -31,13 +34,38 @@ fn toy_dns_server() -> u16 {
             resp.extend_from_slice(&[0, 1]);         // ANCOUNT = 1
             resp.extend_from_slice(&[0, 0, 0, 0]);   // NSCOUNT, ARCOUNT
             resp.extend_from_slice(pregunta);        // eco de la pregunta
-            // Respuesta (RR A):
-            resp.extend_from_slice(&[0xC0, 0x0C]);   // NAME = puntero al offset 12 (la pregunta)
-            resp.extend_from_slice(&[0, 1]);         // TYPE = A
-            resp.extend_from_slice(&[0, 1]);         // CLASS = IN
-            resp.extend_from_slice(&[0, 0, 1, 0x2c]); // TTL = 300
-            resp.extend_from_slice(&[0, 4]);         // RDLENGTH = 4
-            resp.extend_from_slice(&[93, 184, 216, 34]); // RDATA = 93.184.216.34
+            // NAME de la respuesta = puntero al offset 12 (la pregunta), común a todos los tipos.
+            resp.extend_from_slice(&[0xC0, 0x0C]);
+            match qtype {
+                28 => {
+                    // AAAA: 2001:db8::1
+                    resp.extend_from_slice(&[0, 28]);          // TYPE = AAAA
+                    resp.extend_from_slice(&[0, 1]);           // CLASS = IN
+                    resp.extend_from_slice(&[0, 0, 1, 0x2c]);  // TTL
+                    resp.extend_from_slice(&[0, 16]);          // RDLENGTH = 16
+                    resp.extend_from_slice(&[
+                        0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01,
+                    ]);
+                }
+                15 => {
+                    // MX: preferencia 10, exchange "mail" + puntero a "example.com" (offset 12).
+                    resp.extend_from_slice(&[0, 15]);          // TYPE = MX
+                    resp.extend_from_slice(&[0, 1]);           // CLASS = IN
+                    resp.extend_from_slice(&[0, 0, 1, 0x2c]);  // TTL
+                    resp.extend_from_slice(&[0, 9]);           // RDLENGTH = 2 + 5 + 2
+                    resp.extend_from_slice(&[0, 10]);          // preferencia = 10
+                    resp.extend_from_slice(&[4, b'm', b'a', b'i', b'l']); // label "mail"
+                    resp.extend_from_slice(&[0xC0, 0x0C]);     // puntero a "example.com"
+                }
+                _ => {
+                    // A: 93.184.216.34
+                    resp.extend_from_slice(&[0, 1]);           // TYPE = A
+                    resp.extend_from_slice(&[0, 1]);           // CLASS = IN
+                    resp.extend_from_slice(&[0, 0, 1, 0x2c]);  // TTL
+                    resp.extend_from_slice(&[0, 4]);           // RDLENGTH = 4
+                    resp.extend_from_slice(&[93, 184, 216, 34]);
+                }
+            }
             let _ = sock.send_to(&resp, origen);
         }
     });
@@ -63,14 +91,20 @@ fn correr(flags: &[&str], port: u16) -> Vec<String> {
         .collect()
 }
 
+const ESPERADO: &[&str] = &[
+    "A 93.184.216.34",       // registro A (IPv4)
+    "AAAA 2001:db8::1",      // registro AAAA (IPv6, con compresión ::)
+    "MX 10 mail.example.com", // registro MX (preferencia + exchange con compresión de nombre)
+];
+
 #[test]
-fn dns_resuelve_a_interprete() {
+fn dns_resuelve_a_aaaa_mx_interprete() {
     let port = toy_dns_server();
-    assert_eq!(correr(&[], port), vec!["93.184.216.34".to_string()]);
+    assert_eq!(correr(&[], port), ESPERADO);
 }
 
 #[test]
-fn dns_resuelve_a_vm() {
+fn dns_resuelve_a_aaaa_mx_vm() {
     let port = toy_dns_server();
-    assert_eq!(correr(&["--vm"], port), vec!["93.184.216.34".to_string()]);
+    assert_eq!(correr(&["--vm"], port), ESPERADO);
 }

@@ -4098,5 +4098,12 @@ estándar por ambos motores):
   mismo `io_parked`/poller (kqueue/epoll, M17) que TCP/TLS. El intérprete sigue bloqueante (un hilo).
   Prueba conductual que **requiere** la cesión (dos fibras esperando datagramas a la vez → con un recv
   bloqueante habría deadlock; el test colgaría): `tests/udp_yield_cli.rs` (solo VM). **M20.11 COMPLETO.**
-- **Pendiente de M20**: solo la **compresión** DEFLATE (encoder, mucho más código que el decoder; el
-  cliente HTTP descomprime pero no comprime al enviar) — único diferido restante de M20.
+- **M20.12 — compresión DEFLATE (encoder)** ✅ (`deflate.ray`). Cierra M20: la pareja de `inflate.ray`.
+  Huffman **fijo** (BTYPE=01, evita construir/transmitir árboles) + matching **LZ77** con cadenas de
+  hash al estilo zlib (`head[hash3]`/`prev[pos]`, ventana 32 KiB, `max_chain` 256) → comprime de verdad.
+  Escritor de bits dual (LSB-first para los extra, MSB-first para los códigos Huffman). `deflate_raw`,
+  `gzip_compress` (cabecera + CRC-32 + ISIZE) y `zlib_compress` (cabecera + Adler-32). **Doble
+  verificación** (`tests/deflate_cli.rs`): round-trip interno con `inflate.ray` (ambos motores) **y
+  compatibilidad estándar** — el gzip que produce raylang lo descomprime **Python** (`gzip.decompress`),
+  probando que el stream DEFLATE es válido, no solo auto-consistente. Gotcha: `while {…}` seguido de una
+  línea que abre `(` se parsea como llamar al unit del while → variable temporal. **M20 COMPLETO.**

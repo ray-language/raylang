@@ -652,6 +652,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "udp.ray", "udp_demo.ray", "udp_yield_demo.ray", // M20.8/M20.11: UDP, usa `bytes`
         "sigv4.ray", "sigv4_demo.ray", // M20.9: AWS SigV4, usa `bytes` + bitops (vía hmac/sha256/url)
         "inflate.ray", "inflate_demo.ray", // M20.10: INFLATE/gzip, usa `bytes` + bitops
+        "deflate.ray", "deflate_demo.ray", // M20-final: encoder DEFLATE, usa `bytes` + bitops
         "websocket.ray", "websocket_demo.ray", "websocket_echo.ray",
         "framework.ray", // micro-framework web: usa `bytes` (diferido en el toolchain auto-alojado)
     ];

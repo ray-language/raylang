@@ -4038,8 +4038,14 @@ estándar por ambos motores):
   **por UFCS cross-module** (`cookie("sid","abc").with_path("/").with_http_only()` — showcase del fix
   de M19) y `set_cookie` que serializa a `Set-Cookie`. Verificado contra `urllib.parse.quote` por
   ambos motores (`tests/url_cli.rs`).
-- **M20.5 — tiempo y fechas**. Formateo/parseo (ISO 8601, RFC 1123 para cabeceras HTTP), durations,
-  sobre el epoch que da `now`; un builtin mínimo para componentes UTC si hace falta.
+- **M20.5 — tiempo y fechas** ✅ (`time.ray`). **Cero runtime nuevo**: `now()` ya da los milisegundos
+  UTC desde el epoch, y convertir eso en (año, mes, día, hora, …) es aritmética pura (el algoritmo
+  "civil from days" de Howard Hinnant y su inverso) → **solo UTC** (sin base de zonas horarias, que es
+  lo que piden las cabeceras HTTP, los logs y `exp` de JWT). `struct DateTime`; `from_epoch_millis`/
+  `now_utc`/`to_epoch_millis` (inverso); `to_iso8601` (RFC 3339), `to_rfc1123` (cabecera `Date:` HTTP),
+  `parse_iso8601`; `format_duration` (`1h2m3s`). Válido para fechas ≥ 1970 (epoch ≥ 0 → la división
+  trunca = floor). Verificado contra `datetime` de Python por ambos motores (`tests/time_cli.rs`), incl.
+  año bisiesto. **No usa `bytes`/bitops → lo cubre además el oráculo de self-hosting** (parser).
 - **M20.6 — cliente Redis (RESP)**. El protocolo RESP es trivial sobre TCP → el ejemplo "cliente de
   infra cloud" más rentable, en raylang puro.
 - **M20.7+ — HTTP cliente robusto** (chunked/redirects/headers), **gzip/deflate**, **UDP** (runtime).

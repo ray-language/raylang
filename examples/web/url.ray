@@ -1,0 +1,145 @@
+// Codificación de URL (percent-encoding, RFC 3986) y query strings, escritas EN raylang. Cero runtime
+// nuevo. Importable: `from url import url_encode, url_decode, parse_query, build_query;`.
+//
+// `url_encode` deja pasar los caracteres "unreserved" (A-Z a-z 0-9 - _ . ~) y codifica el resto como
+// `%XX` (hex en mayúscula de cada octeto UTF-8). `url_decode` revierte `%XX` y, siguiendo
+// application/x-www-form-urlencoded, decodifica `+` como espacio (lo habitual al leer query/body).
+
+// Dígito hexadecimal en MAYÚSCULA (convención de las URLs) del valor `d` (0..15).
+fn hex_up(d: int) -> string {
+    let digits = "0123456789ABCDEF";
+    to_string(digits[d])
+}
+
+// Los dos dígitos hex (mayúscula) de un octeto.
+fn hex2(o: int) -> string {
+    hex_up((o >> 4) & 15) + hex_up(o & 15)
+}
+
+// Valor (0..15) de un dígito hexadecimal, o -1 si no lo es (acepta mayúscula y minúscula).
+fn hex_val(c: char) -> int {
+    match (index_of("0123456789abcdef", to_lower(to_string(c)))) {
+        Option.Some(i) => i,
+        Option.None => 0 - 1,
+    }
+}
+
+// ¿Es `c` un carácter "unreserved" (no necesita escaparse)?
+fn is_unreserved(c: char) -> bool {
+    match (index_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~", to_string(c))) {
+        Option.Some(_) => true,
+        Option.None => false,
+    }
+}
+
+pub fn url_encode(s: string) -> string {
+    var out = "";
+    var i = 0;
+    while (i < len(s)) {
+        let c = s[i];
+        if (is_unreserved(c)) {
+            out = out + to_string(c);
+        } else {
+            // Cada carácter no-unreserved se codifica por sus octetos UTF-8 (1+ octetos).
+            let b = to_bytes(to_string(c));
+            var j = 0;
+            while (j < len(b)) {
+                out = out + "%" + hex2(b[j]);
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+pub fn url_decode(s: string) -> Result<string, string> {
+    var oct: [int] = [];
+    let n = len(s);
+    var i = 0;
+    while (i < n) {
+        let c = s[i];
+        if (c == '%') {
+            if (i + 2 >= n) {
+                return Result.Err("escape % incompleto");
+            }
+            let hi = hex_val(s[i + 1]);
+            let lo = hex_val(s[i + 2]);
+            if (hi < 0 || lo < 0) {
+                return Result.Err("escape % inválido");
+            }
+            push(oct, (hi << 4) | lo);
+            i = i + 3;
+        } else {
+            if (c == '+') {
+                push(oct, 32); // espacio (form-urlencoded)
+                i = i + 1;
+            } else {
+                let b = to_bytes(to_string(c));
+                var j = 0;
+                while (j < len(b)) {
+                    push(oct, b[j]);
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
+        }
+    }
+    from_utf8(bytes_of(oct))
+}
+
+// `url_decode` tolerante: si la entrada está mal formada, devuelve el texto crudo (no rompe el parseo).
+fn url_decode_or(s: string) -> string {
+    match (url_decode(s)) {
+        Result.Ok(v) => v,
+        Result.Err(_) => s,
+    }
+}
+
+// Parsea una query string (`a=1&b=hola%20mundo`) en un `Map<string,string>` (la última clave gana).
+// Cada clave/valor se url-decodifica. Una clave sin `=` queda con valor "".
+pub fn parse_query(qs: string) -> Map<string, string> {
+    var m: Map<string, string> = map_new();
+    if (len(qs) == 0) {
+        return m;
+    }
+    let pairs = split(qs, "&");
+    var i = 0;
+    while (i < len(pairs)) {
+        let p = pairs[i];
+        if (len(p) > 0) {
+            // Se parte por el PRIMER `=` (el valor puede contener más).
+            match (index_of(p, "=")) {
+                Option.Some(eq) => {
+                    let k = url_decode_or(substring(p, 0, eq));
+                    let v = url_decode_or(substring(p, eq + 1, len(p)));
+                    insert(m, k, v);
+                },
+                Option.None => { insert(m, url_decode_or(p), ""); },
+            }
+        }
+        i = i + 1;
+    }
+    m
+}
+
+// Construye una query string a partir de un `Map<string,string>`. Las claves salen ORDENADAS
+// (`keys` es determinista) → salida reproducible. Clave y valor se url-codifican.
+pub fn build_query(m: Map<string, string>) -> string {
+    let ks = keys(m);
+    var out = "";
+    var i = 0;
+    while (i < len(ks)) {
+        if (i > 0) {
+            out = out + "&";
+        }
+        let k = ks[i];
+        let v = match (get(m, k)) {
+            Option.Some(x) => x,
+            Option.None => "",
+        };
+        out = out + url_encode(k) + "=" + url_encode(v);
+        i = i + 1;
+    }
+    out
+}

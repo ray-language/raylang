@@ -4030,7 +4030,14 @@ estándar por ambos motores):
   modo determinista). JWT verificado **byte a byte contra una implementación de referencia** (`hmac`+
   `base64url` de Python) por ambos motores (`tests/jwt_cli.rs`), incl. secreto incorrecto, tamper y
   token mal formado.
-- **M20.4 — URL/query/cookies**. Percent-encoding (encode/decode), parseo de query string, cookies.
+- **M20.4 — URL/query/cookies** ✅ (`url.ray`, `cookie.ray`). Percent-encoding (RFC 3986):
+  `url_encode` (deja pasar unreserved, escapa el resto por octeto UTF-8 en `%XX` mayúscula) /
+  `url_decode` (revierte `%XX` y `+`→espacio, form-urlencoded). `parse_query`→`Map` (parte por el
+  PRIMER `=`, url-decodifica) / `build_query` (claves ordenadas → reproducible). Cookies:
+  `parse_cookies` (cabecera `Cookie:`→`Map`) + un `struct Cookie` con setters `with_*` encadenables
+  **por UFCS cross-module** (`cookie("sid","abc").with_path("/").with_http_only()` — showcase del fix
+  de M19) y `set_cookie` que serializa a `Set-Cookie`. Verificado contra `urllib.parse.quote` por
+  ambos motores (`tests/url_cli.rs`).
 - **M20.5 — tiempo y fechas**. Formateo/parseo (ISO 8601, RFC 1123 para cabeceras HTTP), durations,
   sobre el epoch que da `now`; un builtin mínimo para componentes UTC si hace falta.
 - **M20.6 — cliente Redis (RESP)**. El protocolo RESP es trivial sobre TCP → el ejemplo "cliente de

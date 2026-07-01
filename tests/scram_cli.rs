@@ -22,8 +22,9 @@ fn correr(flags: &[&str]) -> (Vec<String>, bool) {
     (lineas, out.status.success())
 }
 
-/// El intérprete es lento con PBKDF2 (4096 iteraciones de HMAC-SHA256, ~8 s); va `#[ignore]`. La VM
-/// (más rápida) queda en la suite por defecto y ambos motores producen salida idéntica.
+/// Ambos van `#[ignore]`: este test valida SCRAM contra el vector del RFC 7677 con i=4096 (PBKDF2 lento,
+/// ~8–26 s por motor). La cobertura del CÓDIGO SCRAM en la suite por defecto la da `postgres_cli.rs`
+/// (e2e a i=64, rápido); la validación contra el RFC se corre a demanda con `-- --ignored`.
 #[test]
 #[ignore]
 fn scram_interprete() {
@@ -33,6 +34,7 @@ fn scram_interprete() {
 }
 
 #[test]
+#[ignore]
 fn scram_vm() {
     let (lineas, ok) = correr(&["--vm"]);
     assert!(ok, "scram_demo falló en la VM");

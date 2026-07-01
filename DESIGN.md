@@ -4531,8 +4531,19 @@ Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.
     `scram_final(sc, password, server_first)` calcula ClientProof (ClientKey ⊕ HMAC(StoredKey, AuthMessage))
     y devuelve el client-final; `scram_verify(sc, server_final)` comprueba la ServerSignature. Verificado
     contra el ejemplo COMPLETO del RFC 7677 §3 (client-final byte-idéntico + firma del servidor verificada),
-    ambos motores (`tests/scram_cli.rs`; interp `#[ignore]` por PBKDF2 lento, VM en la suite). Falta el
-    protocolo wire de PostgreSQL (startup/query/rows) → M32.1b.
+    ambos motores (`tests/scram_cli.rs`; `#[ignore]`: PBKDF2 a i=4096 es lento, se corre a demanda —la
+    cobertura del código SCRAM en la suite la da el e2e de postgres a i=64). Falta el protocolo wire → M32.1b.
+  - **M32.1b COMPLETO → M32.1 COMPLETO** — **cliente PostgreSQL** (`examples/web/postgres.ray`, protocolo
+    wire v3). `pg_query(host, port, user, db, password, nonce, sql) -> Result<[string], string>`: abre TCP,
+    envía el **StartupMessage** (sin octeto de tipo), conduce la máquina de mensajes `[tipo][longitud][carga]`
+    —Authentication ('R': SASL/SASLContinue/SASLFinal/Ok, cableando `scram.ray`), ReadyForQuery ('Z': manda
+    la Query), RowDescription/DataRow ('T'/'D': parsea las columnas), ErrorResponse ('E')— hasta la segunda
+    ReadyForQuery. **Autenticación SCRAM-SHA-256 completa** con verificación de la firma del servidor. Test
+    `tests/postgres_cli.rs`: un **servidor PostgreSQL de juguete escrito a mano** (solo std, TCP plano) que
+    reproduce el intercambio SASL con valores **precomputados** (nonce/salt fijos, i=64 → sin cripto en Rust)
+    y responde una fila; el cliente raylang autentica, verifica la firma del servidor y devuelve la fila
+    ("hola-postgres"), ambos motores. **M32.1 COMPLETO**: cliente PostgreSQL real con SCRAM-SHA-256, todo
+    librería raylang. Reusa toda la pila cripto (PBKDF2/HMAC/SHA-256/base64).
 - **M32.2 Formatos de config**: TOML (y/o YAML/CSV) como librería raylang.
 - **M32.3 Plantillas HTML** — un motor de plantillas simple (interpolación + bucles) sobre M27.
 

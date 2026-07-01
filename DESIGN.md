@@ -4561,6 +4561,18 @@ Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.
     Diferido: tablas en línea `{…}`, arreglos de tablas `[[…]]`, fechas, strings multilínea/literales.
     **M32.2 COMPLETO** (CSV + TOML como librerías raylang puras).
 - **M32.3 Plantillas HTML** — un motor de plantillas simple (interpolación + bucles) sobre M27.
+  - **COMPLETO → M32 COMPLETO → PLAN §36 COMPLETO** — **motor de plantillas HTML** (`examples/stdlib/
+    template.ray`, estilo Jinja/Django). Tokenizador → parser de árbol (`enum Node`) → render. Sintaxis:
+    interpolación `{{ var }}` con **autoescape HTML** (`< > & " '` → entidades), cruda `{{& var }}`,
+    condicional `{% if cond %}…{% else %}…{% endif %}` y bucle `{% for x in lista %}…{% endfor %}`. Contexto
+    con valores tipados (`enum TVal { VStr, VInt, VBool, VList }`) y bindings; el `for` **shadowa** la
+    variable del bucle (prepend al contexto). API `render_template(tpl, ctx) -> Result<string, string>` +
+    constructores `ctx_str`/`ctx_int`/`ctx_bool`/`ctx_list`/`val_*`. Demo + `tests/template_cli.rs`
+    (autoescape, if/else, for sobre lista heterogénea, raw; ambos motores); raylang puro → **pasa el parser
+    auto-alojado**. Diferido: filtros (`{{ x|upper }}`), `elif`, herencia de plantillas, expresiones en las
+    condiciones (hoy la condición es una variable, por truthiness). **M32 COMPLETO** (PostgreSQL + CSV/TOML +
+    plantillas HTML). **El plan post-M26 (DESIGN §36: M27 ergonomía · M28 ergonomía II · M29 tooling · M30
+    cripto avanzada · M31 gRPC · M32 clientes/formatos) está COMPLETO.**
 
 ### Diferidos / research (fuera del plan por ahora)
 - **Gestor de paquetes** (las "libs" siguen siendo archivos/cápsulas del proyecto).

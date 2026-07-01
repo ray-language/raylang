@@ -4494,6 +4494,17 @@ Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.
     VM lo pone no bloqueante tras el handshake para el framing con cesión de fibras. Test `h2_alpn_cli.rs`
     (servidor rustls de juguete que ofrece/no ofrece `h2`; ambos motores). Falta la máquina de estados
     HTTP/2 viva (preface + SETTINGS + streams) → M31.2b.
+  - **M31.2b COMPLETO → M31.2 COMPLETO** — **cliente HTTP/2 vivo** (`examples/web/http2_client.ray`):
+    `http2_get(host, port, path) -> Result<Http2Response, string>` hace un GET completo cableando las
+    primitivas de M26 (`http2.ray` framing + `hpack.ray` encode/decode) sobre el socket TLS con ALPN `h2`:
+    envía la connection preface + SETTINGS del cliente + HEADERS (petición HPACK-comprimida, END_STREAM), y
+    en un bucle acumula bytes, extrae frames completos (`frame_size`/`parse_frame`), responde el SETTINGS del
+    servidor con ACK, decodifica el HEADERS de respuesta (`:status`) y concatena los DATA, hasta END_STREAM
+    en el stream 1. Test `tests/http2_live_cli.rs`: un **servidor h2 de juguete escrito a mano** (solo std +
+    rustls, sin traer h2/hyper → fiel al cero-deps) que responde `:status:200` (índice 0x88) + un DATA; el
+    cliente raylang obtiene status 200 y el cuerpo, ambos motores. **Bug de checker cazado y arreglado**: un
+    `match` con TODOS los brazos divergentes (`return`) hacía `panic` el checker ("hay al menos un brazo");
+    ahora type-checkea (el match diverge → unit). Falta integrar HPACK+Huffman e ir a gRPC → M31.3.
 - **M31.3 Cliente gRPC e2e** — HEADERS (`:path`=método, `content-type: application/grpc`) + DATA con el
   protobuf de M25 enmarcado (`grpc_frame`); leer HEADERS+DATA+trailers. Verificable contra un servidor
   gRPC real o un mock.

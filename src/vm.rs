@@ -2887,6 +2887,13 @@ mod tests {
         oracle_program("fn leer() -> Result<int, string> { Result.Ok(5) } fn proc() -> Result<int, string> { let x = leer()?; Result.Ok(x * 2) } fn main() -> int { match (proc()) { Result.Ok(v) => v, Result.Err(e) => 0 } }");
     }
 
+    /// Un `match` con TODOS los brazos divergentes (`return`) type-checkea (antes hacía panic el checker,
+    /// "hay al menos un brazo"): el match diverge y vale unit; la función retorna por los `return`.
+    #[test]
+    fn match_todos_divergentes_oraculo() {
+        oracle_program("fn f(o: Option<int>) -> int { match (o) { Option.Some(n) => { return n; }, Option.None => { return 0; } } } fn main() -> int { f(Option.Some(5)) + f(Option.None) }"); // 5
+    }
+
     /// M28.1: sobrecarga de operadores vía traits (`Add`/`Sub`/`Mul`/`Div`/`Neg`). `a op b` sobre
     /// un tipo de usuario baja a `a.metodo(b)` (función manglada de M9) → ambos motores coinciden.
     #[test]

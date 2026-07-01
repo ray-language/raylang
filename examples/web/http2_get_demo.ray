@@ -1,0 +1,24 @@
+// Demo del cliente HTTP/2 vivo (M31.2b): recibe host y puerto por argumentos, hace un GET a "/" sobre
+// HTTP/2 (TLS + ALPN h2) e imprime el código de estado y el cuerpo de la respuesta.
+
+from http2_client import http2_get, Http2Response;
+
+fn main() {
+    let a = args();
+    let host = a[0];
+    match (parse_int(a[1])) {
+        Option.Some(port) => {
+            match (http2_get(host, port, "/")) {
+                Result.Ok(resp) => {
+                    print("status: " + to_string(resp.status));
+                    match (from_utf8(resp.body)) {
+                        Result.Ok(s) => print("body: " + s),
+                        Result.Err(e) => print("body: <no utf8>"),
+                    }
+                },
+                Result.Err(e) => print("error: " + e),
+            }
+        },
+        Option.None => print("puerto inválido"),
+    }
+}

@@ -1,0 +1,105 @@
+// Cliente HTTP/2 vivo (RFC 7540) escrito EN raylang. Cablea el framing (`http2.ray`) + HPACK
+// (`hpack.ray`) sobre una conexión TLS con ALPN `h2` (M31.2a). Hace un GET completo: connection
+// preface + intercambio de SETTINGS + HEADERS (petición) + lectura de la respuesta (HEADERS + DATA),
+// hasta END_STREAM. Importable: `from http2_client import http2_get, Http2Response;`.
+//
+// Es el transporte que necesita un cliente gRPC (M31.3): gRPC = HTTP/2 + framing de mensajes en DATA.
+
+from http2 import preface, settings_empty, settings_ack, headers_frame, parse_frame, frame_size,
+     ft_settings, ft_headers, ft_data, ft_goaway, fl_ack, fl_end_stream, Http2Frame;
+from hpack import new_hpack, encode, decode, header, HEntry;
+
+// La respuesta: el código de estado (`:status`) y el cuerpo (concatenación de los frames DATA).
+pub struct Http2Response { status: int, body: bytes }
+
+// Busca el pseudo-header `:status` en una lista de cabeceras decodificadas.
+fn extract_status(hs: [HEntry]) -> int {
+    var st = 0;
+    var i = 0;
+    while (i < len(hs)) {
+        if (hs[i].name == ":status") {
+            match (parse_int(hs[i].value)) {
+                Option.Some(n) => { st = n; },
+                Option.None => { st = 0; },
+            }
+        }
+        i = i + 1;
+    }
+    st
+}
+
+// Hace un GET sobre HTTP/2 a `host:port` con la ruta dada (por TLS, ALPN `h2`).
+pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response, string> {
+    let h = match (tls_connect_h2(host, port)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => { return Result.Err(e); },
+    };
+
+    // Petición: preface + SETTINGS del cliente + HEADERS (stream 1, END_STREAM porque el GET no lleva
+    // cuerpo). Las pseudo-cabeceras van en orden: :method, :path, :scheme, :authority.
+    let enc = new_hpack();
+    let reqhdrs = [
+        header(":method", "GET"),
+        header(":path", path),
+        header(":scheme", "https"),
+        header(":authority", host),
+    ];
+    let block = encode(enc, reqhdrs);
+    let salida = preface() + settings_empty() + headers_frame(1, block, true);
+    match (socket_write_bytes(h, salida)) {
+        Result.Ok(n) => { },
+        Result.Err(e) => { close(h); return Result.Err(e); },
+    }
+
+    // Respuesta: acumula bytes, extrae frames completos y procesa hasta END_STREAM en el stream 1.
+    let dec = new_hpack();
+    var buf = b"";
+    var status = 0;
+    var body = b"";
+    var done = false;
+    while (!done) {
+        match (socket_read_bytes(h)) {
+            Result.Ok(chunk) => {
+                if (len(chunk) == 0) {
+                    done = true;            // el peer cerró
+                }
+                buf = buf + chunk;
+            },
+            Result.Err(e) => { close(h); return Result.Err(e); },
+        }
+        while (frame_size(buf) > 0 && len(buf) >= frame_size(buf)) {
+            let fsz = frame_size(buf);
+            let fbytes = sub_bytes(buf, 0, fsz);
+            buf = sub_bytes(buf, fsz, len(buf));
+            match (parse_frame(fbytes)) {
+                Result.Ok(fr) => {
+                    if (fr.ftype == ft_settings()) {
+                        if ((fr.flags & fl_ack()) == 0) {
+                            // SETTINGS del servidor → responder ACK.
+                            match (socket_write_bytes(h, settings_ack())) {
+                                Result.Ok(x) => { },
+                                Result.Err(e) => { close(h); return Result.Err(e); },
+                            }
+                        }
+                    } else if (fr.ftype == ft_headers()) {
+                        match (decode(dec, fr.payload)) {
+                            Result.Ok(hs) => { status = extract_status(hs); },
+                            Result.Err(e) => { close(h); return Result.Err("HPACK: " + e); },
+                        }
+                    } else if (fr.ftype == ft_data()) {
+                        body = body + fr.payload;
+                    } else if (fr.ftype == ft_goaway()) {
+                        close(h);
+                        return Result.Err("el servidor envió GOAWAY");
+                    }
+                    if (fr.stream_id == 1 && (fr.flags & fl_end_stream()) != 0) {
+                        done = true;
+                    }
+                },
+                Result.Err(e) => { close(h); return Result.Err(e); },
+            }
+        }
+    }
+    close(h);
+    Result.Ok(Http2Response { status: status, body: body })
+}

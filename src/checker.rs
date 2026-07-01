@@ -1669,7 +1669,10 @@ impl Checker {
             }
         }
 
-        Ok(result_ty.expect("hay al menos un brazo"))
+        // Si NINGÚN brazo produjo valor (todos divergen: `return`/`panic`), el `match` diverge; le damos
+        // tipo unit (antes esto hacía `panic` en el checker sobre código válido — p. ej. un `match` cuyos
+        // dos brazos hacen `return`). Como statement es correcto; su valor no se alcanza nunca.
+        Ok(result_ty.unwrap_or(Type::Unit))
     }
 
     /// Verifica el operador de propagación `expr?` (M6.3). El operando debe ser un

@@ -4388,6 +4388,18 @@ Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
     COMPLETO** como librería raylang pura, cero runtime.
 - **M29.2 Formateador** (`rayfmt`, estilo `gofmt`) — cliente externo que reusa el parser (como el LSP/
   runner). Pretty-printer canónico del AST → idempotente, sin configuración.
+  - **COMPLETO** (`src/fmt.rs`, `raylang --fmt <archivo>`). **Cliente externo**: `format_source` corre
+    lexer+parser y hace *pretty-print* del AST; no toca el núcleo. Cubre TODO el AST: imports/from-imports,
+    const, struct/enum (con `@derive`/`pub`/genéricos/bounds), trait (firmas + cuerpos por defecto), impl
+    (con `trait_args` de M28.2), funciones, todas las sentencias y expresiones. **Impresión con precedencia**
+    (`bin_prec`/`expr_prec` espejo de la jerarquía del parser) → paréntesis mínimos. Indentación de 4
+    espacios; ítems de nivel superior en el **orden del archivo** (se ordenan por `line`, ya que el AST los
+    bucketiza por categoría); formas con bloque (`if`/`while`/`match`) indentadas por `fmt_value`. Al trabajar
+    sobre el AST, **normaliza**: descarta comentarios (el lexer no los guarda) y desazucara lo que el parser
+    (interpolación `f"…"` → `+ to_string`, pipelines `|>` → llamadas) — el resultado siempre es válido e
+    **idempotente**. `tests/fmt_cli.rs`: idempotencia (`fmt(fmt(x))==fmt(x)`) sobre 14 ejemplos + **preserva
+    el comportamiento** (original y formateado dan la misma salida+exit en ambos motores). Diferido:
+    preservar comentarios (exigiría que el lexer los adjunte al AST), reflow de líneas largas.
 - **M29.3 Optimización de la VM** — retomar el transversal (DESIGN §27): dedup de constantes, peephole/
   plegado, `HeapValue` 32→16 B. Cobra relevancia por el coste de SHA-256/DEFLATE/HPACK. Método incremental,
   midiendo (banco `benchmarks/`), conservar solo lo que supera el ruido.

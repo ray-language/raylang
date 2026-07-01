@@ -39,6 +39,28 @@ fn run() {
         return;
     }
 
+    // Formateador (M29.2): `raylang --fmt <archivo>` imprime la versión canónica por stdout.
+    if rest.len() == 2 && rest[0] == "--fmt" {
+        let path = &rest[1];
+        let src = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("no se pudo leer '{}': {}", path, e);
+                process::exit(66);
+            }
+        };
+        match raylang::fmt::format_source(&src) {
+            Ok(out) => {
+                print!("{}", out);
+                return;
+            }
+            Err(e) => {
+                eprintln!("error de formato: {}", e);
+                process::exit(65);
+            }
+        }
+    }
+
     // Forma general: raylang [--vm | --test] <archivo.ray> [args del programa...].
     // Una flag opcional al principio, luego la ruta; todo lo que siga son los argumentos del
     // programa (M11.2b), accesibles desde raylang con el builtin `args()`.

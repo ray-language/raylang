@@ -53,6 +53,9 @@ pub struct Parser {
     /// Si está activo, un `Nombre { … }` NO se parsea como literal de struct (M27.2): en la cabecera de
     /// un `for` (sin paréntesis) el `{` abre el cuerpo del bucle, no un struct. Igual que Rust.
     no_struct_lit: bool,
+    /// Spans de expresiones (M33a-2): inicio → fin (exclusivo) del último token consumido,
+    /// registrados en `expression()` con política max-end. Al terminar pasan al `Program`.
+    expr_spans: std::collections::HashMap<(usize, usize), (usize, usize)>,
 }
 
 /// Parámetros de tipo y sus bounds (M9.2): `(nombres, pares (parámetro, trait))`.
@@ -60,7 +63,7 @@ type TypeParamsAndBounds = (Vec<String>, Vec<(String, String)>);
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false }
+        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new() }
     }
 
     // =================================================================
@@ -136,7 +139,7 @@ impl Parser {
                 functions.push(f);
             }
         }
-        Ok(Program { functions, structs, enums, consts, traits, impls, imports, from_imports, ufcs_aliases: std::collections::HashMap::new() })
+        Ok(Program { functions, structs, enums, consts, traits, impls, imports, from_imports, ufcs_aliases: std::collections::HashMap::new(), expr_spans: std::mem::take(&mut self.expr_spans) })
     }
 
     /// import_decl  = 'import' module_path [ 'as' IDENT ] ';'   (M11.3 / M11.5)
@@ -854,8 +857,25 @@ impl Parser {
     // ----- Expresiones (por precedencia, de menor a mayor) -----
 
     /// expression = pipeline  (las expresiones-con-bloque se reconocen en `primary`)
+    ///
+    /// M33a-2: aquí —la puerta por la que pasa toda expresión de usuario— se registra su
+    /// **span**: inicio `(line, col)` del nodo → fin (exclusivo) del último token consumido.
+    /// Política *max-end*: si dos expresiones comparten inicio (un binario hereda la posición
+    /// de su operando izquierdo), queda la más ancha. El checker lo consulta en `err()`.
     fn expression(&mut self) -> Result<Expr, ParseError> {
-        self.pipeline()
+        let e = self.pipeline()?;
+        let end = self.prev_end();
+        self.expr_spans
+            .entry((e.line, e.col))
+            .and_modify(|old| { if end > *old { *old = end; } })
+            .or_insert(end);
+        Ok(e)
+    }
+
+    /// El fin (exclusivo) del último token consumido: `(línea, col + len)`.
+    fn prev_end(&self) -> (usize, usize) {
+        let t = &self.tokens[self.pos.saturating_sub(1)];
+        (t.line, t.col + t.len)
     }
 
     /// pipeline = logic_or { '|>' call }

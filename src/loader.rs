@@ -129,7 +129,7 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
     let mut fusionado = Program {
         functions: Vec::new(), structs: Vec::new(), enums: Vec::new(), consts: Vec::new(),
         traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
-        ufcs_aliases: HashMap::new(),
+        ufcs_aliases: HashMap::new(), expr_spans: HashMap::new(),
     };
     // Alias UFCS: nombre local de función `from`-importada → global, agregado de todos los módulos.
     // Un nombre que mapee a DOS globales distintos en módulos distintos es ambiguo sin contexto de
@@ -202,6 +202,7 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         fusionado.consts.append(&mut m.program.consts); // M27.5
         fusionado.traits.append(&mut m.program.traits);
         fusionado.impls.append(&mut m.program.impls);
+        fusionado.expr_spans.extend(std::mem::take(&mut m.program.expr_spans));
 
         loaded_modules.push(LoadedModule { name: m.name, source: m.source, start_line: start });
     }
@@ -222,6 +223,11 @@ fn shift_program(program: &mut Program, delta: usize) {
     if delta == 0 {
         return;
     }
+    // M33a-2: los spans de expresiones viajan con su módulo (claves y valores).
+    program.expr_spans = std::mem::take(&mut program.expr_spans)
+        .into_iter()
+        .map(|((l, c), (el, ec))| ((l + delta, c), (el + delta, ec)))
+        .collect();
     for f in &mut program.functions {
         shift_function(f, delta);
     }

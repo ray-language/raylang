@@ -732,7 +732,7 @@ fn diagnostico_json(src: &str, d: &Diag) -> Json {
         .map(|l| l.chars().count())
         .unwrap_or(start_char + 1);
     let end_char = if d.len > 1 {
-        (start_char + d.len).min(line_len.max(start_char + 1))
+        start_char.saturating_add(d.len).min(line_len.max(start_char + 1))
     } else if start_char < line_len {
         line_len
     } else {

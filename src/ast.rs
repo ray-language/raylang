@@ -159,6 +159,13 @@ pub struct Program {
     /// importadas, no solo las del módulo de entrada (el azúcar `recv.f` no lo reescribe el loader,
     /// que no tiene tipos; el checker lo usa como *fallback* tras campo/método). Vacío sin imports.
     pub ufcs_aliases: std::collections::HashMap<String, String>,
+    /// Spans de expresiones (M33a-2): inicio `(línea, col)` de una expresión → su **fin**
+    /// `(línea_fin, col_fin)` (exclusivo), registrado por el parser en `expression()` con
+    /// política *max-end* (si dos expresiones comparten inicio, queda la más ancha). Lo
+    /// consulta el `err()` del checker para subrayar la expresión completa; una posición
+    /// ausente (expresiones sintetizadas por el lowering, prelude) degrada a extensión 1.
+    /// El loader lo desplaza y fusiona con las bandas de líneas de cada módulo (L3).
+    pub expr_spans: std::collections::HashMap<(usize, usize), (usize, usize)>,
 }
 
 /// Una declaración `import M;` / `import a/b/c [as x];` (M11.3 / M11.5): importa el módulo dado por

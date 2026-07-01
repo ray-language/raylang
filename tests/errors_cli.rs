@@ -43,3 +43,12 @@ fn error_de_sintaxis_subraya_el_token_completo() {
     assert!(err.contains("|             ^^^^"), "subraya los 4 chars de 'enum'\n{err}");
     assert!(!err.contains("^^^^^"), "y no más de 4\n{err}");
 }
+
+#[test]
+fn error_de_tipos_subraya_la_expresion_completa() {
+    // M33a-2: el checker subraya la expresión entera, no solo su inicio.
+    let err = run_file_stderr("fn main() -> int {\n    let x = 1 + true;\n    x\n}\n", "ray_err_span_expr.ray");
+    assert!(err.contains("error de tipos en 2:13"), "cabecera\n{err}");
+    assert!(err.contains("|             ^^^^^^^^"), "subraya '1 + true' (8 chars)\n{err}");
+    assert!(!err.contains("^^^^^^^^^"), "y no más de 8\n{err}");
+}

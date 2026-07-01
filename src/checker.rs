@@ -334,6 +334,9 @@ struct Checker {
     /// Se verifican en la construcción del valor (no hay runtime).
     struct_bounds: HashMap<String, Vec<(String, String)>>,
     enum_bounds: HashMap<String, Vec<(String, String)>>,
+    /// Spans de expresiones del parser (M33a-2): inicio → fin. Los consulta `err()` para
+    /// subrayar la expresión completa; una posición ausente degrada a extensión 1.
+    expr_spans: HashMap<(usize, usize), (usize, usize)>,
     /// Pila de ámbitos de variables. El último es el más interno.
     scopes: Vec<HashMap<String, VarInfo>>,
     /// Tipo de retorno de la función que estamos verificando ahora mismo, para
@@ -442,6 +445,7 @@ impl Checker {
             struct_bounds: HashMap::new(),
             enum_bounds: HashMap::new(),
             scopes: Vec::new(),
+            expr_spans: HashMap::new(),
             current_return: Type::Unit,
             type_params: HashSet::new(),
             ufcs_sites: HashMap::new(),
@@ -474,6 +478,13 @@ impl Checker {
         // aquí, una vez, para usarlos como fallback al resolver `recv.f(...)`.
         if self.ufcs_aliases.is_empty() && !program.ufcs_aliases.is_empty() {
             self.ufcs_aliases = program.ufcs_aliases.clone();
+        }
+        // M33a-2: los spans de expresiones que dejó el parser, para que `err()` subraye la
+        // expresión completa. (Las posiciones del prelude inyectado no están —se parsea
+        // aparte— y degradan a extensión 1; un choque hipotético con ellas solo afectaría
+        // al ancho del subrayado, nunca al veredicto.)
+        if self.expr_spans.is_empty() && !program.expr_spans.is_empty() {
+            self.expr_spans = program.expr_spans.clone();
         }
         // M27.5: registrar y validar las constantes de nivel superior. El valor debe ser un literal (o
         // un literal negado) del tipo declarado. Un duplicado o un valor no-literal es error.
@@ -2898,8 +2909,17 @@ impl Checker {
         self.scopes.iter().rev().find_map(|scope| scope.get(name))
     }
 
+    /// Construye un `TypeError`. La extensión (M33a-2) sale de la tabla de spans del
+    /// parser: hit en la misma línea → la expresión completa; hit multilínea → el
+    /// sentinela `usize::MAX` ("hasta el fin de línea"; los renderizadores acotan);
+    /// miss (expresión sintetizada por el lowering, prelude) → 1.
     fn err(&self, line: usize, col: usize, msg: String) -> TypeError {
-        TypeError { msg, line, col, len: 1 }
+        let len = match self.expr_spans.get(&(line, col)) {
+            Some(&(el, ec)) if el == line && ec > col => ec - col,
+            Some(_) => usize::MAX, // expresión multilínea
+            None => 1,
+        };
+        TypeError { msg, line, col, len }
     }
 }
 
@@ -4636,6 +4656,18 @@ mod tests {
             e.msg,
             needle
         );
+    }
+
+    #[test]
+    fn el_error_de_tipos_subraya_la_expresion_completa() {
+        // M33a-2: la extensión del error sale de la tabla de spans del parser.
+        let e = check_src("fn main() -> int { let x = 1 + true; x }").unwrap_err();
+        assert!(e.msg.contains("requiere ambos operandos"), "{}", e.msg);
+        assert_eq!(e.len, "1 + true".chars().count(), "subraya la expresión entera");
+        // Un argumento de tipo equivocado subraya el argumento (pasa por expression()).
+        let e = check_src("fn f(a: int) -> int { a }\nfn main() -> int { f(\"dos\") }").unwrap_err();
+        assert!(e.msg.contains("se esperaba int"), "{}", e.msg);
+        assert_eq!(e.len, "\"dos\"".chars().count());
     }
 
     // M9.4: bounds en parámetros de tipo de struct/enum (verificados en la construcción).

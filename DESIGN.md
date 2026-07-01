@@ -4634,7 +4634,31 @@ los errores léxicos y sintácticos subrayan el lexema completo (`^^^^`).
   incluye longitudes; el espejo de `len` en `selfhost/lexer.ray` queda **diferido** hasta que algo
   lo necesite.
 
-### 38.2 M33a-2 — spans en los nodos del AST (diferido a su corte)
+### 38.2 M33a-2 — spans de expresiones: el checker subraya la expresión completa
 
-Los nodos de `Expr`/`Stmt` ganan posición de **fin** (el parser la toma del último token
-consumido) y el checker subraya la expresión completa. Se especificará en su corte.
+Con a-1, un error de tipos seguía marcando un punto (`len = 1`). El objetivo de a-2 es que
+`1 + true` se subraye **entero**. La pregunta de diseño era dónde vive el fin de una expresión.
+
+**Decisión: tabla lateral, no campos en el AST.** `Program.expr_spans: HashMap<(línea, col),
+(línea_fin, col_fin)>`, poblada por el parser. Se descartó añadir `end_line`/`end_col` a `Expr`
+porque el AST se construye en **cientos** de sitios (el parser, pero también todas las síntesis
+del lowering de M9/M10 —dyn structs, closures-diccionario, derives— donde un "fin" no significa
+nada); la tabla es el patrón de la casa (posición→dato, como `ufcs_sites`/`dyn_coercions`) y se
+apoya en la misma infraestructura que ya garantiza **posiciones globalmente únicas** entre
+módulos (bandas de líneas disjuntas, L3).
+
+- **El parser registra en un solo punto**: `expression()`, la puerta por la que pasa toda
+  expresión de usuario (sentencia-expresión, argumentos, índices, inicializadores, paréntesis,
+  escrutinios). Clave = `(line, col)` del `Expr` devuelto; valor = el **fin del último token
+  consumido** (`prev_end`). Política **max-end**: si dos expresiones comparten inicio (un nodo
+  binario hereda la posición de su operando izquierdo), gana la más ancha — un error sobre `a`
+  en `a + b` subraya `a + b` completo (degradación aceptable, y a menudo lo deseable).
+- **El loader** desplaza la tabla con su módulo (claves y valores, el mismo delta de
+  `shift_program`) y las fusiona (sin choques: bandas disjuntas).
+- **El checker** guarda la tabla y `err()` la consulta: hit en la misma línea → `len = fin −
+  col`; hit multi-línea → `len = usize::MAX` (el sentinela "hasta el fin de línea": ambos
+  renderizadores acotan); **miss** (expresión sintética del lowering, clones renumerados,
+  prelude) → `1`, el comportamiento de a-1. Degradación honesta y sin pánicos posibles.
+- **LSP**: la suma `col + len` pasa a saturante (el sentinela no desborda) y, con `len > 1`
+  real, el subrayado del editor pasa a la expresión exacta.
+- Los `Display` siguen sin cambiar → oráculos self-hosted intactos.

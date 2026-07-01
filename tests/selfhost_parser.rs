@@ -671,6 +671,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "operadores.ray", // M28.1: sobrecarga de operadores (el toolchain auto-alojado aún no la soporta)
         "conversion_error.ray", // M28.2: `?` con From<S> / traits con params de tipo (idem)
         "enteros.ray", // M28.3: enteros con tamaño u8/u32/u64 + `for` (idem)
+        "regex.ray", // M29.1c: el motor de regex usa tuplas `Option<(int,int)>` (M27.1, idem)
         "regex_demo.ray", // M29.1: demo del motor de regex; usa interpolación f"..." (idem)
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops

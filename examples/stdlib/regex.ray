@@ -450,3 +450,104 @@ pub fn search(pattern: string, text: string) -> bool {
     }
     false
 }
+
+// ---------------------------------------------------------------------------
+// M29.1c — localización: find / find_all / replace_all.
+// ---------------------------------------------------------------------------
+
+// Corre el autómata ANCLADO en la posición `s` y devuelve el índice final del match **más largo**
+// que empieza en `s` (leftmost-longest), o -1 si no hay ninguno. `txt` son los caracteres del texto.
+fn match_at(prog: Prog, txt: [char], s: int, n: int) -> int {
+    var clist: [int] = [];
+    let seen = new_bools(len(prog.insts));
+    add_thread(prog, clist, seen, 0, s, n);
+    var best = 0 - 1;
+    if (has_match(prog, clist)) {
+        best = s;                                       // match de ancho cero en `s`
+    }
+    var i = s;
+    while (i < n) {
+        clist = step(prog, clist, txt[i], i + 1, n, false); // anclado: sin sembrar
+        i = i + 1;
+        if (has_match(prog, clist)) {
+            best = i;
+        }
+        if (len(clist) == 0) {
+            return best;                                // sin hilos vivos: no puede extenderse más
+        }
+    }
+    best
+}
+
+// La primera coincidencia (leftmost): `Some((inicio, fin))` con índices por carácter, o `None`.
+pub fn find(pattern: string, text: string) -> Option<(int, int)> {
+    let prog = compile_pattern(pattern);
+    let txt = chars(text);
+    let n = len(txt);
+    var s = 0;
+    while (s <= n) {
+        let e = match_at(prog, txt, s, n);
+        if (e >= 0) {
+            return Option.Some((s, e));
+        }
+        s = s + 1;
+    }
+    Option.None
+}
+
+// El substring de la primera coincidencia, o `None`.
+pub fn find_str(pattern: string, text: string) -> Option<string> {
+    match (find(pattern, text)) {
+        Option.Some(par) => Option.Some(substring(text, par.0, par.1)),
+        Option.None => Option.None,
+    }
+}
+
+// Todas las coincidencias NO solapadas, de izquierda a derecha, como substrings.
+pub fn find_all(pattern: string, text: string) -> [string] {
+    let prog = compile_pattern(pattern);
+    let txt = chars(text);
+    let n = len(txt);
+    var out: [string] = [];
+    var s = 0;
+    while (s <= n) {
+        let e = match_at(prog, txt, s, n);
+        if (e >= 0) {
+            push(out, substring(text, s, e));
+            if (e > s) {
+                s = e;                                  // continúa tras la coincidencia (no solapada)
+            } else {
+                s = s + 1;                              // coincidencia de ancho cero: avanza uno
+            }
+        } else {
+            s = s + 1;
+        }
+    }
+    out
+}
+
+// Reemplaza cada coincidencia NO solapada por `repl` y devuelve el texto resultante.
+pub fn replace_all(pattern: string, text: string, repl: string) -> string {
+    let prog = compile_pattern(pattern);
+    let txt = chars(text);
+    let n = len(txt);
+    var out = "";
+    var s = 0;
+    while (s <= n) {
+        let e = match_at(prog, txt, s, n);
+        if (e >= 0 && e > s) {
+            out = out + repl;
+            s = e;
+        } else {
+            // sin coincidencia (o de ancho cero): copia el carácter actual y avanza.
+            if (e >= 0) {
+                out = out + repl;                       // coincidencia vacía: inserta el reemplazo
+            }
+            if (s < n) {
+                out = out + substring(text, s, s + 1);
+            }
+            s = s + 1;
+        }
+    }
+    out
+}

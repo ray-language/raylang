@@ -53,6 +53,14 @@ const ESPERADO: &[&str] = &[
     "search/^\\d+$/ ~ \"123a5\" = no",
     "full  /\\w+@\\w+\\.\\w+/ ~ \"ana@rayala.org\" = si",
     "full  /\\w+@\\w+\\.\\w+/ ~ \"ana.rayala.org\" = no",
+    "find  /\\d+/ ~ \"abc123def\" = \"123\"",
+    "find  /\\d+/ ~ \"sin numeros\" = <none>",
+    "find  /a+/ ~ \"xaaay\" = \"aaa\"",
+    "all   /\\d+/ ~ \"a12b345c6\" = [12,345,6]",
+    "all   /[a-z]+/ ~ \"Hola Mundo 42\" = [ola,undo]",
+    "repl  /\\d+/ \"quedan 3 de 10\" -> \"quedan N de N\"",
+    "repl  /\\s+/ \"hola   mundo  ya\" -> \"hola_mundo_ya\"",
+    "repl  /a/ \"banana\" -> \"b-n-n-\"",
 ];
 
 fn correr(flags: &[&str]) -> (Vec<String>, bool) {

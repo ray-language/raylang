@@ -4379,6 +4379,13 @@ Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
     (opcodes AssertStart/AssertEnd; `add_thread` recibe la posición y sigue la aserción solo si `pos==0` /
     `pos==n`). Casos nuevos en el demo (clases, `\d+`, correo de juguete, `^\d+$`); `regex.ray` sigue
     parseándose idéntico bajo el toolchain auto-alojado. `find`/captura/`replace` → M29.1c.
+  - **M29.1c COMPLETO → M29.1 COMPLETO**: localización. `match_at` corre el autómata **anclado** en cada
+    posición y da el match **más largo** (leftmost-longest). API: `find -> Option<(int,int)>` (índices de la
+    1.ª coincidencia; usa tuplas M27.1), `find_str -> Option<string>`, `find_all -> [string]` (no solapadas),
+    `replace_all -> string`. Demo con `\d+`/`[a-z]+`/`\s+`; ambos motores coinciden. Al usar tuplas,
+    `regex.ray` se excluye del corpus del parser auto-alojado. Diferido: grupos de captura (necesitan una Pike
+    VM con listas de posiciones), cuantificadores `{n,m}`, no-greedy `*?`, backreferences. **M29.1 (regex)
+    COMPLETO** como librería raylang pura, cero runtime.
 - **M29.2 Formateador** (`rayfmt`, estilo `gofmt`) — cliente externo que reusa el parser (como el LSP/
   runner). Pretty-printer canónico del AST → idempotente, sin configuración.
 - **M29.3 Optimización de la VM** — retomar el transversal (DESIGN §27): dedup de constantes, peephole/

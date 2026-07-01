@@ -3,7 +3,7 @@
 // Usa `full_match` (anclado a todo el texto) y `search` (algún substring). Imprime, para cada caso,
 // el patrón, el texto y el veredicto. El test compara la salida y exige que ambos motores coincidan.
 
-from regex import full_match, search;
+from regex import full_match, search, find_str, find_all, replace_all;
 
 fn si(b: bool) -> string {
     if (b) { "si" } else { "no" }
@@ -15,6 +15,28 @@ fn caso_full(pat: string, txt: string) {
 
 fn caso_search(pat: string, txt: string) {
     print(f"search/{pat}/ ~ \"{txt}\" = {si(search(pat, txt))}");
+}
+
+fn caso_find(pat: string, txt: string) {
+    match (find_str(pat, txt)) {
+        Option.Some(m) => print(f"find  /{pat}/ ~ \"{txt}\" = \"{m}\""),
+        Option.None => print(f"find  /{pat}/ ~ \"{txt}\" = <none>"),
+    }
+}
+
+fn caso_findall(pat: string, txt: string) {
+    let ms = find_all(pat, txt);
+    var s = "";
+    var primero = true;
+    for m in ms {
+        if (primero) { primero = false; } else { s = s + ","; }
+        s = s + m;
+    }
+    print(f"all   /{pat}/ ~ \"{txt}\" = [{s}]");
+}
+
+fn caso_replace(pat: string, txt: string, rep: string) {
+    print(f"repl  /{pat}/ \"{txt}\" -> \"{replace_all(pat, txt, rep)}\"");
 }
 
 fn main() {
@@ -86,4 +108,14 @@ fn main() {
     // Un correo de juguete.
     caso_full("\\w+@\\w+\\.\\w+", "ana@rayala.org"); // si
     caso_full("\\w+@\\w+\\.\\w+", "ana.rayala.org"); // no
+
+    // M29.1c — localización.
+    caso_find("\\d+", "abc123def");         // "123"
+    caso_find("\\d+", "sin numeros");       // <none>
+    caso_find("a+", "xaaay");               // "aaa" (leftmost-longest)
+    caso_findall("\\d+", "a12b345c6");      // [12,345,6]
+    caso_findall("[a-z]+", "Hola Mundo 42");// [ola,undo]
+    caso_replace("\\d+", "quedan 3 de 10", "N");        // "quedan N de N"
+    caso_replace("\\s+", "hola   mundo  ya", "_");      // "hola_mundo_ya"
+    caso_replace("a", "banana", "-");                    // "b-n-n-"
 }

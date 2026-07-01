@@ -626,11 +626,13 @@ fn as_usize(j: &Json) -> Option<usize> {
 
 // ── Análisis: el puente con el compilador ────────────────────────────────────────────
 
-/// Un diagnóstico del front-end: posición **1-basada** (como reportan las fases) y el
-/// mensaje, que es el `Display` del error (la misma cabecera que muestra el terminal).
+/// Un diagnóstico del front-end: posición **1-basada** (como reportan las fases), la
+/// extensión del error en caracteres (M33a; `1` si la fase no la conoce) y el mensaje,
+/// que es el `Display` del error (la misma cabecera que muestra el terminal).
 pub struct Diag {
     pub line: usize,
     pub col: usize,
+    pub len: usize,
     pub message: String,
 }
 
@@ -642,14 +644,14 @@ pub struct Diag {
 pub fn analizar(src: &str) -> Option<Diag> {
     let tokens = match lexer::lex(src) {
         Ok(t) => t,
-        Err(e) => return Some(Diag { line: e.line, col: e.col, message: e.to_string() }),
+        Err(e) => return Some(Diag { line: e.line, col: e.col, len: e.len, message: e.to_string() }),
     };
     let mut program = match parser::parse(tokens) {
         Ok(p) => p,
-        Err(e) => return Some(Diag { line: e.line, col: e.col, message: e.to_string() }),
+        Err(e) => return Some(Diag { line: e.line, col: e.col, len: e.len, message: e.to_string() }),
     };
     if let Err(e) = checker::check(&mut program) {
-        return Some(Diag { line: e.line, col: e.col, message: e.to_string() });
+        return Some(Diag { line: e.line, col: e.col, len: e.len, message: e.to_string() });
     }
     None
 }
@@ -719,15 +721,23 @@ fn diagnostico_json(src: &str, d: &Diag) -> Json {
     // 1-basado (nuestras fases) → 0-basado (LSP).
     let line0 = d.line.saturating_sub(1);
     let start_char = d.col.saturating_sub(1);
-    // Subrayamos desde la columna del error hasta el final de la línea (subrayado visible).
-    // El `character` de LSP cuenta unidades UTF-16; para código ASCII coincide con el número
-    // de caracteres, que es con lo que medimos la línea.
+    // Con extensión conocida (M33a: lexer/parser reportan el token ofensor) subrayamos el
+    // lexema exacto; con `len == 1` (el checker, hasta M33a-2) conservamos el subrayado
+    // hasta el final de la línea (más visible que un solo carácter). El `character` de LSP
+    // cuenta unidades UTF-16; para código ASCII coincide con el número de caracteres, que
+    // es con lo que medimos la línea.
     let line_len = src
         .lines()
         .nth(line0)
         .map(|l| l.chars().count())
         .unwrap_or(start_char + 1);
-    let end_char = if start_char < line_len { line_len } else { start_char + 1 };
+    let end_char = if d.len > 1 {
+        (start_char + d.len).min(line_len.max(start_char + 1))
+    } else if start_char < line_len {
+        line_len
+    } else {
+        start_char + 1
+    };
     let pos = |ch: usize| obj(vec![("line", num(line0 as i64)), ("character", num(ch as i64))]);
     obj(vec![
         ("range", obj(vec![("start", pos(start_char)), ("end", pos(end_char))])),

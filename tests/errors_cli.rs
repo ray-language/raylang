@@ -33,3 +33,13 @@ fn error_de_ejecucion_muestra_contexto() {
     assert!(err.contains("3 |     10 / d"), "{err}");
     assert!(err.contains("^"), "{err}");
 }
+
+#[test]
+fn error_de_sintaxis_subraya_el_token_completo() {
+    // M33a: el token ofensor se subraya entero (^^^^), no solo su primer carácter.
+    let err = run_file_stderr("fn main() -> int {\n    let x = enum;\n    x\n}\n", "ray_err_span.ray");
+    assert!(err.contains("error de sintaxis en 2:13"), "cabecera con ubicación\n{err}");
+    assert!(err.contains("2 |     let x = enum;"), "muestra la línea de fuente\n{err}");
+    assert!(err.contains("|             ^^^^"), "subraya los 4 chars de 'enum'\n{err}");
+    assert!(!err.contains("^^^^^"), "y no más de 4\n{err}");
+}

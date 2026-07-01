@@ -4602,3 +4602,39 @@ producción, y (II) el plan **M33–M43** en cuatro arcos:
 A precede a todo; B y C pueden ir en paralelo tras A; D cierra. Los principios del proyecto (una
 fase a la vez, medir antes de conservar, oráculo en desarrollo, cero deps salvo excepción
 consciente) siguen vigentes. Lo sacrificado está declarado al final de PRODUCCION.md.
+
+## 38. M33 — Compilador sin pánicos y diagnósticos de producción
+
+Primera fase del arco A (PRODUCCION.md). Sub-fases: **a)** spans, **b)** ICE→diagnóstico,
+**c)** multi-error con recuperación, **d)** fuzzing. La (a) se parte en dos cortes verticales:
+
+### 38.1 M33a-1 — spans en tokens + subrayado de rango
+
+Hoy todo diagnóstico apunta a **un punto** `(línea, col)` y el renderizador (M8.3) dibuja un solo
+`^`. El primer corte da al compilador la noción de **extensión**: cada token sabe cuánto mide, y
+los errores léxicos y sintácticos subrayan el lexema completo (`^^^^`).
+
+- **`Token.len`** — longitud del lexema en **caracteres**. Es exacta y barata por dos invariantes
+  que ya teníamos: la emisión de tokens está **centralizada** (un solo `push` en `tokenize`, que
+  conoce `start_col` y la posición del cursor al terminar) y **ningún token cruza líneas** (el
+  lexer rechaza el salto de línea dentro de una cadena desde M1). `len = col − start_col` (≥1;
+  `Eof` mide 1). El único `Token::new` fuera del lexer (el split de `>>` para genéricos anidados,
+  M19.3a) sintetiza un `Gt` de `len` 1.
+- **`LexError.len` / `ParseError.len` / `TypeError.len`** — la extensión del error. El lexer la
+  toma del helper `error()` (lo consumido del token en curso → "cadena sin cerrar" subraya desde la
+  comilla); el parser, del **token ofensor** (`se esperaba X, se encontró <tok>` subraya `<tok>`
+  entero); el checker pone `1` por ahora (los spans de **expresiones** exigen extensión en los
+  nodos del AST → **M33a-2**). Los `Display` no cambian (la extensión no va en la cabecera) → los
+  mensajes byte-idénticos de los oráculos self-hosted quedan intactos.
+- **`diagnostic::render(src, line, col, len, headline)`** — dibuja `^` repetido `len` veces,
+  **acotado** al final de la línea de fuente (una extensión corrupta nunca desborda el render).
+- **LSP**: `Diag` gana `len`; el rango publicado pasa de 1 carácter al **token completo** (el
+  subrayado del editor cubre el lexema). Para errores del checker sigue siendo 1 (→ a-2).
+- **Self-hosting intacto**: el formato canónico del oráculo (`<KIND>@<l>:<c>`, dumps del AST) no
+  incluye longitudes; el espejo de `len` en `selfhost/lexer.ray` queda **diferido** hasta que algo
+  lo necesite.
+
+### 38.2 M33a-2 — spans en los nodos del AST (diferido a su corte)
+
+Los nodos de `Expr`/`Stmt` ganan posición de **fin** (el parser la toma del último token
+consumido) y el checker subraya la expresión completa. Se especificará en su corte.

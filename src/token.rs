@@ -114,19 +114,24 @@ pub enum InterpPart {
     Expr(String),
 }
 
-/// Un token concreto en el texto: su clase y dónde empieza.
+/// Un token concreto en el texto: su clase, dónde empieza y cuánto mide.
 ///
 /// `line` y `col` son 1-basados (la primera posición es 1:1), que es lo que un
-/// humano espera ver en un mensaje de error.
+/// humano espera ver en un mensaje de error. `len` (M33a) es la longitud del
+/// lexema en **caracteres**: junto con `col` forma el *span* del token
+/// (`[col, col+len)`), que los diagnósticos subrayan completo. Es exacta porque
+/// ningún token de raylang cruza líneas (el lexer rechaza el salto de línea
+/// dentro de una cadena).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     pub line: usize,
     pub col: usize,
+    pub len: usize,
 }
 
 impl Token {
-    pub fn new(kind: TokenKind, line: usize, col: usize) -> Self {
-        Token { kind, line, col }
+    pub fn new(kind: TokenKind, line: usize, col: usize, len: usize) -> Self {
+        Token { kind, line, col, len }
     }
 }

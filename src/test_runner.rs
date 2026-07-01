@@ -33,14 +33,14 @@ pub fn run(src: &str, filtro: Option<&str>) -> i32 {
     let tokens = match lexer::lex(src) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("{}", diagnostic::render(src, e.line, e.col, &e.to_string()));
+            eprintln!("{}", diagnostic::render(src, e.line, e.col, e.len, &e.to_string()));
             return 65;
         }
     };
     let pristine = match parser::parse(tokens) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("{}", diagnostic::render(src, e.line, e.col, &e.to_string()));
+            eprintln!("{}", diagnostic::render(src, e.line, e.col, e.len, &e.to_string()));
             return 65;
         }
     };
@@ -75,7 +75,7 @@ pub fn run(src: &str, filtro: Option<&str>) -> i32 {
         let nombres: Vec<&str> = tests.iter().map(|(n, _)| n.as_str()).collect();
         let mut prog = swap_main(pristine.clone(), &synth_main_all(&nombres));
         if let Err(e) = checker::check(&mut prog) {
-            eprintln!("{}", diagnostic::render(src, e.line, e.col, &e.to_string()));
+            eprintln!("{}", diagnostic::render(src, e.line, e.col, e.len, &e.to_string()));
             return 65;
         }
     }

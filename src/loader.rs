@@ -98,16 +98,16 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
             // M11.6b: la arista de import debe respetar el borde de cápsula (aunque `dep` ya
             // esté visitado: cada sitio que importa un submódulo interno desde fuera es ilegal).
             if let Some(c) = capsula_violada(&root, &name, dep) {
-                return Err(render(&source, line, col, &name, &format!(
+                return Err(render(&source, line, col, 1, &name, &format!(
                     "el módulo '{}' es interno a la cápsula '{}'; impórtalo con 'import {};'",
                     dep, c, c
                 )));
             }
             if !visitados.contains(dep) {
                 match resolve_module_path(&root, dep) {
-                    Err(msg) => return Err(render(&source, line, col, &name, &msg)),
+                    Err(msg) => return Err(render(&source, line, col, 1, &name, &msg)),
                     Ok(Some(mp)) => pendientes.push((dep.clone(), mp, false)),
-                    Ok(None) => return Err(render(&source, line, col, &name, &format!(
+                    Ok(None) => return Err(render(&source, line, col, 1, &name, &format!(
                         "no se encuentra el módulo '{}' (se esperaba {}/{}.ray o {}/{}/mod.ray)",
                         dep, root.display(), dep, root.display(), dep
                     ))),
@@ -153,7 +153,7 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         //    antes de namespacar; los `impl` generados se namespacan luego como los demás. El
         //    checker la reejecuta sobre el programa fusionado, pero es idempotente y los salta.
         crate::checker::generate_derives(&mut m.program)
-            .map_err(|e| render(&m.source, e.line, e.col, &m.name, &e.to_string()))?;
+            .map_err(|e| render(&m.source, e.line, e.col, e.len, &m.name, &e.to_string()))?;
 
         // 2. Clasificar los `from M import …` (M11.3b/-2): funciones `pub` → mapa de **valores**
         //    (al `own` del Resolver); tipos `pub` → mapa de **tipos** (al TypeRewriter).
@@ -480,14 +480,14 @@ fn rename_type_defs(program: &mut Program, own_types: &NameMap) {
 }
 
 fn parse_source(name: &str, source: &str) -> Result<Program, LoadError> {
-    let tokens = crate::lexer::lex(source).map_err(|e| render(source, e.line, e.col, name, &e.to_string()))?;
-    crate::parser::parse(tokens).map_err(|e| render(source, e.line, e.col, name, &e.to_string()))
+    let tokens = crate::lexer::lex(source).map_err(|e| render(source, e.line, e.col, e.len, name, &e.to_string()))?;
+    crate::parser::parse(tokens).map_err(|e| render(source, e.line, e.col, e.len, name, &e.to_string()))
 }
 
 /// Construye un `LoadError` renderizado: antepone `[módulo]` y dibuja el contexto de fuente.
-fn render(source: &str, line: usize, col: usize, module: &str, msg: &str) -> LoadError {
+fn render(source: &str, line: usize, col: usize, len: usize, module: &str, msg: &str) -> LoadError {
     let headline = format!("[{}] {}", module, msg);
-    LoadError { message: diagnostic::render(source, line, col, &headline) }
+    LoadError { message: diagnostic::render(source, line, col, len, &headline) }
 }
 
 /// Los tipos (struct/enum/trait) se namespacan por módulo (M11.3c), así que dos **módulos** pueden
@@ -500,7 +500,7 @@ fn comprobar_tipos_unicos(modules: &[Module]) -> Result<(), LoadError> {
             .chain(m.program.traits.iter().map(|t| (t.name.clone(), t.line, t.col)));
         for (name, line, col) in nombres {
             if !visto.insert(name.clone()) {
-                return Err(render(&m.source, line, col, &m.name, &format!(
+                return Err(render(&m.source, line, col, 1, &m.name, &format!(
                     "el tipo '{}' ya está definido en este módulo", name
                 )));
             }
@@ -627,7 +627,7 @@ fn build_import_map(m: &Module) -> Result<ImportMap, LoadError> {
         if let Some(otra) = map.insert(leaf.clone(), i.module.clone())
             && otra != i.module
         {
-            return Err(render(&m.source, i.line, i.col, &m.name, &format!(
+            return Err(render(&m.source, i.line, i.col, 1, &m.name, &format!(
                 "el nombre de módulo '{}' ya nombra a '{}'; usa 'as' para renombrar esta importación",
                 leaf, otra
             )));
@@ -665,7 +665,7 @@ fn clasificar_from_imports(
             let target = clasificar_from_name(&m.source, &m.name, from, n, surfaces, tipos)?;
             let local = n.local().to_string();
             if !locales.insert(local.clone()) {
-                return Err(render(&m.source, n.line, n.col, &m.name, &format!(
+                return Err(render(&m.source, n.line, n.col, 1, &m.name, &format!(
                     "el nombre '{}' ya está definido o importado en este módulo; usa 'as' para renombrarlo",
                     local
                 )));
@@ -697,11 +697,11 @@ fn clasificar_from_name(
     }
     // No exporta el nombre: ¿existe como tipo privado? (mensaje más preciso que "no existe").
     if tipos.get(from).is_some_and(|s| s.contains(&name.name)) {
-        return Err(render(src, name.line, name.col, module, &format!(
+        return Err(render(src, name.line, name.col, 1, module, &format!(
             "'{}' es un tipo privado del módulo '{}' (¿falta 'pub'?)", name.name, from
         )));
     }
-    Err(render(src, name.line, name.col, module, &format!(
+    Err(render(src, name.line, name.col, 1, module, &format!(
         "el módulo '{}' no exporta '{}' (¿falta 'pub'?)", from, name.name
     )))
 }
@@ -949,7 +949,7 @@ impl<'a> Resolver<'a> {
         let global = surf.and_then(|s| s.values.get(name).or_else(|| s.types.get(name)));
         match global {
             Some(g) => Ok(Some(g.clone())),
-            None => Err(render(src, object.line, object.col, module, &format!(
+            None => Err(render(src, object.line, object.col, 1, module, &format!(
                 "el módulo '{}' no exporta '{}' (¿falta 'pub'?)", ruta, name
             ))),
         }

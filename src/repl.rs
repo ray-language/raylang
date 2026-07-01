@@ -210,9 +210,9 @@ impl Session {
         // Errores renderizados con su contexto de fuente (M8.3), contra la fuente
         // sintetizada `src`: el `^` apunta al token ofensor (que contiene el código del
         // usuario). El número de línea es el de la fuente sintetizada.
-        let tokens = lexer::lex(src).map_err(|e| diagnostic::render(src, e.line, e.col, &e.to_string()))?;
-        let mut prog = parser::parse(tokens).map_err(|e| diagnostic::render(src, e.line, e.col, &e.to_string()))?;
-        checker::check(&mut prog).map_err(|e| diagnostic::render(src, e.line, e.col, &e.to_string()))?;
+        let tokens = lexer::lex(src).map_err(|e| diagnostic::render(src, e.line, e.col, e.len, &e.to_string()))?;
+        let mut prog = parser::parse(tokens).map_err(|e| diagnostic::render(src, e.line, e.col, e.len, &e.to_string()))?;
+        checker::check(&mut prog).map_err(|e| diagnostic::render(src, e.line, e.col, e.len, &e.to_string()))?;
         Ok(prog)
     }
 
@@ -260,7 +260,7 @@ impl Session {
 fn run_prog(prog: &Program, src: &str) -> Result<(), String> {
     interpreter::run(prog)
         .map(|_| ())
-        .map_err(|e| diagnostic::render(src, e.line, e.col, &e.to_string()))
+        .map_err(|e| diagnostic::render(src, e.line, e.col, 1, &e.to_string()))
 }
 
 fn wrap(line: &str) -> String {

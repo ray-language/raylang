@@ -21,12 +21,15 @@
 use crate::ast::*;
 use crate::token::{InterpPart, Token, TokenKind};
 
-/// Error sintáctico con ubicación.
+/// Error sintáctico con ubicación. `len` (M33a) es la extensión en caracteres del
+/// token ofensor — el renderizador de diagnósticos subraya el lexema completo. No
+/// entra en el `Display` (la cabecera no cambia).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
     pub msg: String,
     pub line: usize,
     pub col: usize,
+    pub len: usize,
 }
 
 impl std::fmt::Display for ParseError {
@@ -197,6 +200,7 @@ impl Parser {
                 msg: format!("'pub' no se admite en {} (exporta el trait/tipo, no el impl)", donde),
                 line: t.line,
                 col: t.col,
+                len: t.len,
             }),
         }
     }
@@ -234,6 +238,7 @@ impl Parser {
                 msg: format!("no se permiten anotaciones sobre {}", donde),
                 line: a.line,
                 col: a.col,
+                len: 1, // la anotación no guarda su extensión; el '@' basta
             }),
         }
     }
@@ -390,12 +395,12 @@ impl Parser {
             self.advance();
         } else {
             let tok = self.peek();
-            let (fline, fcol) = (tok.line, tok.col);
+            let (fline, fcol, flen) = (tok.line, tok.col, tok.len);
             let found = match &tok.kind {
                 TokenKind::Ident(n) => n.clone(),
                 other => format!("{:?}", other),
             };
-            return Err(ParseError { msg: format!("se esperaba 'for', no '{}'", found), line: fline, col: fcol });
+            return Err(ParseError { msg: format!("se esperaba 'for', no '{}'", found), line: fline, col: fcol, len: flen });
         }
         let target = self.parse_type()?;
         self.expect(&TokenKind::LBrace, "'{' para abrir el cuerpo del impl")?;
@@ -756,12 +761,12 @@ impl Parser {
                 InterpPart::Lit(s) => Expr { kind: ExprKind::Str(s), line, col },
                 InterpPart::Expr(src) => {
                     let toks = crate::lexer::lex(&src)
-                        .map_err(|e| ParseError { msg: format!("en la interpolación: {}", e.msg), line, col })?;
+                        .map_err(|e| ParseError { msg: format!("en la interpolación: {}", e.msg), line, col, len: 1 })?;
                     let mut sub = Parser::new(toks);
                     let e = sub.expression()
-                        .map_err(|e| ParseError { msg: format!("en la interpolación: {}", e.msg), line, col })?;
+                        .map_err(|e| ParseError { msg: format!("en la interpolación: {}", e.msg), line, col, len: 1 })?;
                     if !sub.is_at_end() {
-                        return Err(ParseError { msg: "la interpolación debe ser una sola expresión".into(), line, col });
+                        return Err(ParseError { msg: "la interpolación debe ser una sola expresión".into(), line, col, len: 1 });
                     }
                     // to_string(e) — convierte primitivos/string a texto para concatenar.
                     let callee = Expr { kind: ExprKind::Ident("to_string".into()), line, col };
@@ -1204,6 +1209,7 @@ impl Parser {
                     msg: format!("se esperaba una expresión, se encontró {:?}", other),
                     line: tok.line,
                     col: tok.col,
+                    len: tok.len,
                 })
             }
         };
@@ -1478,7 +1484,7 @@ impl Parser {
         } else if self.check(&TokenKind::Shr) {
             // Parte `>>` → consume un `>`, deja el token como `Gt` para el nivel de fuera.
             let t = &self.tokens[self.pos];
-            self.tokens[self.pos] = Token::new(TokenKind::Gt, t.line, t.col + 1);
+            self.tokens[self.pos] = Token::new(TokenKind::Gt, t.line, t.col + 1, 1);
             Ok(())
         } else {
             Err(self.error_here(format!("se esperaba {}", what)))
@@ -1496,10 +1502,10 @@ impl Parser {
         }
     }
 
-    /// Construye un error apuntando al token actual.
+    /// Construye un error apuntando al token actual, subrayándolo entero (M33a).
     fn error_here(&self, msg: String) -> ParseError {
         let t = self.peek();
-        ParseError { msg, line: t.line, col: t.col }
+        ParseError { msg, line: t.line, col: t.col, len: t.len }
     }
 }
 
@@ -1573,6 +1579,19 @@ mod tests {
     fn parse_prog(src: &str) -> Program {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         parse(tokens).expect("parse ok")
+    }
+
+    #[test]
+    fn el_error_sintactico_subraya_el_token_ofensor() {
+        // M33a: el error lleva la extensión del token que lo provocó.
+        let tokens = crate::lexer::lex("fn main() -> int { let x = enum; x }").expect("lex ok");
+        let e = parse(tokens).unwrap_err();
+        assert!(e.msg.contains("se esperaba una expresión"), "{}", e.msg);
+        assert_eq!(e.len, 4, "'enum' mide 4 caracteres");
+        // Un identificador ofensor mide su nombre entero.
+        let tokens = crate::lexer::lex("fn main() -> int { 1 nombrelargo }").expect("lex ok");
+        let e = parse(tokens).unwrap_err();
+        assert_eq!(e.len, "nombrelargo".chars().count());
     }
 
     #[test]

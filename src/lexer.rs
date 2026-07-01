@@ -14,11 +14,17 @@ use crate::token::{InterpPart, Token, TokenKind};
 
 /// Error léxico con ubicación. Se produce ante un carácter inesperado, una cadena
 /// sin cerrar, un escape inválido o un número mal formado.
+///
+/// `len` (M33a) es la extensión del error en caracteres: lo consumido del token en
+/// curso cuando se detectó (una "cadena sin cerrar" subraya desde la comilla). No
+/// entra en el `Display` (la cabecera no cambia); la usa el renderizador de
+/// diagnósticos para dibujar el rango.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LexError {
     pub msg: String,
     pub line: usize,
     pub col: usize,
+    pub len: usize,
 }
 
 impl std::fmt::Display for LexError {
@@ -74,12 +80,15 @@ impl Lexer {
 
             match self.peek() {
                 None => {
-                    tokens.push(Token::new(TokenKind::Eof, self.start_line, self.start_col));
+                    tokens.push(Token::new(TokenKind::Eof, self.start_line, self.start_col, 1));
                     return Ok(tokens);
                 }
                 Some(_) => {
                     let kind = self.next_token()?;
-                    tokens.push(Token::new(kind, self.start_line, self.start_col));
+                    // La longitud del lexema (M33a): la emisión está centralizada y ningún
+                    // token cruza líneas, así que basta restar columnas al terminar.
+                    let len = (self.col - self.start_col).max(1);
+                    tokens.push(Token::new(kind, self.start_line, self.start_col, len));
                 }
             }
         }
@@ -520,12 +529,17 @@ impl Lexer {
         }
     }
 
-    /// Construye un `LexError` apuntando al inicio del token actual.
+    /// Construye un `LexError` apuntando al inicio del token actual. La extensión
+    /// (M33a) es lo consumido del token hasta detectar el error — solo si el error
+    /// cae en la misma línea donde empezó el token (siempre, salvo la cadena rota
+    /// por un salto de línea, que subraya solo lo recorrido en su línea).
     fn error(&self, msg: String) -> LexError {
+        let len = if self.line == self.start_line { (self.col - self.start_col).max(1) } else { 1 };
         LexError {
             msg,
             line: self.start_line,
             col: self.start_col,
+            len,
         }
     }
 }
@@ -589,6 +603,34 @@ mod tests {
     /// Tokeniza y devuelve solo las clases (sin posiciones), terminadas en Eof.
     fn kinds(src: &str) -> Vec<TokenKind> {
         lex(src).expect("debería tokenizar sin error").into_iter().map(|t| t.kind).collect()
+    }
+
+    #[test]
+    fn los_tokens_llevan_su_longitud() {
+        // M33a: cada token mide su lexema en caracteres (col..col+len es el span).
+        let toks = lex("let foo = 12345 + \"ab\\n\";").expect("tokeniza");
+        let lens: Vec<(TokenKind, usize)> =
+            toks.into_iter().map(|t| (t.kind, t.len)).collect();
+        assert_eq!(lens[0], (TokenKind::Let, 3));
+        assert_eq!(lens[1], (TokenKind::Ident("foo".into()), 3));
+        assert_eq!(lens[2], (TokenKind::Eq, 1));
+        assert_eq!(lens[3], (TokenKind::Int(12345), 5));
+        assert_eq!(lens[4], (TokenKind::Plus, 1));
+        // El string mide su forma ESCRITA (comillas y escapes incluidos): "ab\n" son 6 chars.
+        assert_eq!(lens[5], (TokenKind::Str("ab\n".into()), 6));
+        assert_eq!(lens[6], (TokenKind::Semicolon, 1));
+        assert_eq!(lens[7], (TokenKind::Eof, 1));
+    }
+
+    #[test]
+    fn el_error_lexico_lleva_su_extension() {
+        // M33a: "cadena sin cerrar" subraya desde la comilla hasta donde se rompió.
+        let e = lex("let s = \"hola").unwrap_err();
+        assert_eq!((e.line, e.col), (1, 9));
+        assert_eq!(e.len, 5, "desde la comilla hasta el final: \"hola son 5 chars");
+        // Un carácter inesperado mide 1.
+        let e = lex("let # = 1").unwrap_err();
+        assert_eq!(e.len, 1);
     }
 
     #[test]

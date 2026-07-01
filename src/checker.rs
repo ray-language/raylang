@@ -31,12 +31,16 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
 
-/// Error de tipos con ubicación.
+/// Error de tipos con ubicación. `len` (M33a) es la extensión del error en
+/// caracteres; por ahora siempre `1` (subrayar la **expresión** completa exige
+/// que los nodos del AST lleven posición de fin → M33a-2). No entra en el
+/// `Display`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeError {
     pub msg: String,
     pub line: usize,
     pub col: usize,
+    pub len: usize,
 }
 
 impl std::fmt::Display for TypeError {
@@ -2895,7 +2899,7 @@ impl Checker {
     }
 
     fn err(&self, line: usize, col: usize, msg: String) -> TypeError {
-        TypeError { msg, line, col }
+        TypeError { msg, line, col, len: 1 }
     }
 }
 
@@ -3368,15 +3372,15 @@ fn impl_target_name(t: &Type) -> Option<&str> {
 /// y el tipo no genérico (M9.1 no admite impls genéricos).
 fn validate_derive(a: &Annotation, name: &str, type_params: &[String]) -> Result<(), TypeError> {
     if a.args.is_empty() {
-        return Err(TypeError { msg: "'@derive' requiere al menos un trait (p. ej. @derive(Eq))".into(), line: a.line, col: a.col });
+        return Err(TypeError { msg: "'@derive' requiere al menos un trait (p. ej. @derive(Eq))".into(), line: a.line, col: a.col, len: 1 });
     }
     for arg in &a.args {
         if arg != "Eq" && arg != "Show" {
-            return Err(TypeError { msg: format!("no se sabe derivar '{}' (por ahora Eq y Show)", arg), line: a.line, col: a.col });
+            return Err(TypeError { msg: format!("no se sabe derivar '{}' (por ahora Eq y Show)", arg), line: a.line, col: a.col, len: 1 });
         }
     }
     if !type_params.is_empty() {
-        return Err(TypeError { msg: format!("no se puede derivar para el tipo genérico '{}'", name), line: a.line, col: a.col });
+        return Err(TypeError { msg: format!("no se puede derivar para el tipo genérico '{}'", name), line: a.line, col: a.col, len: 1 });
     }
     Ok(())
 }
@@ -3394,6 +3398,7 @@ fn render_to_string(a: &Annotation, expr: &str, ty: &Type) -> Result<String, Typ
             msg: format!("no se puede derivar Show para un campo de tipo {} (por ahora primitivos, struct y enum)", otro),
             line: a.line,
             col: a.col,
+            len: 1,
         }),
     }
 }

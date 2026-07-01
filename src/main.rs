@@ -125,7 +125,7 @@ fn run() {
         let (source, name, local) = locate(e.line);
         e.line = local; // que el `Display` del error muestre la línea local, no la global
         let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
-        eprintln!("{}", diagnostic::render(&source, local, e.col, &head));
+        eprintln!("{}", diagnostic::render(&source, local, e.col, e.len, &head));
         process::exit(65);
     }
 
@@ -137,7 +137,7 @@ fn run() {
                 let (source, name, local) = locate(e.line);
                 e.line = local;
                 let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
-                eprintln!("{}", diagnostic::render(&source, local, e.col, &head));
+                eprintln!("{}", diagnostic::render(&source, local, e.col, 1, &head));
                 process::exit(65);
             }
         }
@@ -152,7 +152,7 @@ fn run() {
             let (source, name, local) = locate(e.line);
             e.line = local;
             let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
-            eprintln!("{}", diagnostic::render(&source, local, e.col, &head));
+            eprintln!("{}", diagnostic::render(&source, local, e.col, 1, &head));
             process::exit(70); // EX_SOFTWARE
         }
     }

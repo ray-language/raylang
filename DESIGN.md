@@ -4237,3 +4237,89 @@ completo; `sint`/zigzag y los negativos de int64 en el varint.
   Huffman (tabla de 257 códigos del Apéndice B), el **transporte vivo** (preface + SETTINGS + WINDOW_UPDATE
   + multiplexado de streams sobre una conexión TLS con ALPN `h2`), y con ello un cliente **gRPC** completo
   (HEADERS con `:path`=método + `content-type: application/grpc` + DATA con el protobuf de M25 enmarcado).
+
+## §36 — Plan post-M26: ergonomía del lenguaje, tooling y librerías
+
+Tras el gran arco de **librerías aplicadas** (M15–M26: red, cloud, cripto, compresión, observabilidad),
+el proyecto llega a un punto de inflexión. Escribir toda esa capa destapó, una y otra vez, los mismos
+huecos **ergonómicos del lenguaje** (bucles por índice, formato por concatenación, structs para retorno
+múltiple…). El plan vuelve primero al **lenguaje** —lo más *en tema* para un proyecto que trata de
+construir un lenguaje, y lo que mejora **retroactivamente** todo el código— y luego encara tooling y las
+librerías de mayor valor.
+
+**Principio de orden**: (1) ergonomía del lenguaje primero (cada feature toca todas las fases lexer→
+parser→checker→ambos motores→self-hosting: el objetivo pedagógico), ordenada por *fundamento × impacto ×
+dependencias*; (2) tooling que multiplica la productividad; (3) librerías por valor. Cada fase mantiene el
+oráculo VM↔intérprete y el corpus de self-hosting; método incremental, un commit por paso.
+
+### M27 — Ergonomía del lenguaje I (iteración y forma)
+Lo que más limpia el código existente y futuro. Toca lexer/parser/checker/ambos motores.
+- **M27.1 Tuplas / retorno múltiple** (`(a, b)`). Foundational: elimina los `struct XResult` inventados por
+  todo el código (`NameResult`, `VarintResult`, `IntResult`…) y habilita la iteración `(clave, valor)` de
+  `Map`. Nuevo `Type::Tuple`, patrones de tupla en `match`/`let`. Erasure en runtime (como structs).
+- **M27.2 `for` / iteradores** (el mayor golpe ergonómico). `for x in arr { … }`, `for (i, x) in …`. Un
+  **protocolo `Iterator`** (trait con `next() -> Option<T>`) sobre el que `for` desazucara; impls para
+  arreglos, rangos (`0..n`), `Map` (→ tuplas de M27.1), string (→ `char`). Desugar de front-end (cero
+  opcodes) que reusa closures/traits.
+- **M27.3 Interpolación de strings** (`"x = {x}, y = {f(z)}"`). El segundo mayor golpe: sustituye las
+  cadenas de `+ to_string(...)`. Puro lexer/parser: se desazucara a concatenación con `to_string` de cada
+  expresión interpolada. Escape `{{`/`}}`.
+- **M27.4 Casts numéricos** (`x as int` / `y as float`). Cierra el papercut de OAuth2 (`parse_int(to_string
+  (f))`). Reusa la keyword `as` (hoy solo alias de import) en posición de expresión; opcode de conversión
+  (o builtin) en ambos motores.
+- **M27.5 `const` de nivel superior**. Sustituye el patrón `fn guid() -> string { "…" }`. Constantes
+  evaluadas en compilación (literales), en ámbito global. Toca parser/checker; runtime las inlinea.
+
+### M28 — Ergonomía del lenguaje II (abstracción)
+Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
+- **M28.1 Sobrecarga de operadores** vía traits (`Add`/`Sub`/`Mul`/`Div`/`Neg`, `PartialEq`/`Ord`…). Hoy
+  `+`/`==`/`<` están *special-cased*; se generalizan a métodos de trait para que un tipo de usuario los
+  defina. Bonus: puede **unificar** `@derive(Eq)` (que pasa a derivar `PartialEq`).
+- **M28.2 `?` con conversión de error** (traits `From`/`Into`). Hoy `?` no convierte el tipo de error; con
+  `From<E1> for E2` el `?` convierte automáticamente → librerías con un enum de error propio en vez de
+  arrastrar `string`.
+- **M28.3 Enteros con tamaño / unsigned** (`u8`/`u32`/`i32`/`u64`…). El más invasivo (toca todo el modelo
+  numérico). Elimina el enmascarado a mano (`& 0xFFFFFFFF`) omnipresente en SHA-256/DEFLATE/HPACK/protobuf.
+  Decisión de diseño pendiente: conjunto de tipos, reglas de conversión, `wrapping`/overflow. Puede quedar
+  **acotado** (solo `u8`/`u32`/`u64` sin promoción implícita) para no volverse research-grade.
+
+### M29 — Tooling
+- **M29.1 Regex** — la ausencia más llamativa de la stdlib. Motor propio (Thompson NFA / backtracking
+  acotado); puede ser **librería en raylang** (una vez M27 facilita el parseo) o builtin-asistido. Alcance
+  inicial: literales, clases, `*`/`+`/`?`/`|`, grupos, anclas.
+- **M29.2 Formateador** (`rayfmt`, estilo `gofmt`) — cliente externo que reusa el parser (como el LSP/
+  runner). Pretty-printer canónico del AST → idempotente, sin configuración.
+- **M29.3 Optimización de la VM** — retomar el transversal (DESIGN §27): dedup de constantes, peephole/
+  plegado, `HeapValue` 32→16 B. Cobra relevancia por el coste de SHA-256/DEFLATE/HPACK. Método incremental,
+  midiendo (banco `benchmarks/`), conservar solo lo que supera el ruido.
+
+### M30 — Cripto avanzada (cifrado y firmas)
+Cierra el dominio cripto: hoy hay *hashing*/HMAC pero **no cifrado ni firma asimétrica**.
+- **M30.1 Cripto simétrica**: **ChaCha20-Poly1305** (AEAD moderno, aritmética de 32 bits → encaja en
+  raylang) y/o **AES-GCM**. Verificable contra los vectores del RFC 8439.
+- **M30.2 Cripto asimétrica**: **Ed25519** (firmas sobre curva de Edwards; aritmética de campo grande →
+  ejercita `u64`/bignum). Verificable contra los vectores del RFC 8032.
+- **M30.3 JWT RS256/ES256**: sobre M30.2, extiende `jwt.ray` más allá de HS256 (firma asimétrica de tokens).
+
+### M31 — Cerrar gRPC (transporte HTTP/2 vivo)
+Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.
+- **M31.1 HPACK-Huffman** — la tabla de 257 códigos del RFC 7541 Apéndice B (decodificación canónica, como
+  `inflate`); verificable contra los vectores C.4/C.6. Cierra HPACK.
+- **M31.2 Transporte HTTP/2 vivo** — la connection preface + intercambio de SETTINGS + WINDOW_UPDATE +
+  multiplexado de streams, todo sobre TLS con **ALPN `h2`** (requiere exponer ALPN en `tls_connect`).
+- **M31.3 Cliente gRPC e2e** — HEADERS (`:path`=método, `content-type: application/grpc`) + DATA con el
+  protobuf de M25 enmarcado (`grpc_frame`); leer HEADERS+DATA+trailers. Verificable contra un servidor
+  gRPC real o un mock.
+
+### M32 — Clientes y formatos
+- **M32.1 Cliente PostgreSQL** (protocolo wire) — el siguiente gran ejemplo "cliente cloud" en raylang
+  puro, al estilo del de Redis pero con autenticación (SCRAM-SHA-256, que reusa M20) y mensajes tipados.
+- **M32.2 Formatos de config**: TOML (y/o YAML/CSV) como librería raylang.
+- **M32.3 Plantillas HTML** — un motor de plantillas simple (interpolación + bucles) sobre M27.
+
+### Diferidos / research (fuera del plan por ahora)
+- **Gestor de paquetes** (las "libs" siguen siendo archivos/cápsulas del proyecto).
+- **Debugger** (breakpoints/step; el LSP ya da diagnósticos/hover/rename).
+- **FFI** (contradice la invariante cero-deps; solo si se abre esa puerta conscientemente, como TLS).
+- **Reflection / serialización derivada** (`@derive(Json)`) — necesita introspección de runtime.
+- **JIT / backend nativo** (M18, aparcado).

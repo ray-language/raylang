@@ -10,10 +10,14 @@
 
 ## Resumen de impacto
 
-> **Estado tras M14 + M12** (hitos M1–M14 completos; **meta-circularidad lograda** y **concurrencia
-> completa**). La columna *Cuándo* refleja la hoja de ruta acordada (ver [DESIGN.md](DESIGN.md) §2). M12
-> (concurrencia, CSP sobre la VM) se hizo el último, tras M13 + el self-hosting. Lo único transversal que
-> queda abierto es la **optimización de la VM de Rust** (§11, incremental, sin aplicar).
+> **Estado tras M26** (núcleo M1–M14 completo con **meta-circularidad** y **concurrencia CSP**; luego el
+> gran arco de **librerías aplicadas** M15–M26: red/cloud/cripto/compresión/observabilidad —DNS(7 tipos+
+> caché)/HTTP(S)/WebSocket(ws+wss)/TLS/Redis/UDP/OAuth2/protobuf/HTTP2-framing+HPACK, más logging+métricas—,
+> todo como librería en el propio lenguaje). La columna *Cuándo* refleja la hoja de ruta (ver
+> [DESIGN.md](DESIGN.md) §2 y el **plan post-M26 en §36**). **Siguiente arco (M27–M32)**: volver a la
+> **ergonomía del lenguaje** (tuplas, `for`/iteradores, interpolación… lo que destaparon las librerías) →
+> **tooling** (regex, formateador, optimización VM) → **más librerías** (cripto avanzada, cerrar gRPC,
+> PostgreSQL). Detalle y orden razonado en §36.
 
 | Idea | ¿Dónde pega? | Cuándo | Estado |
 |------|--------------|--------|--------|
@@ -43,6 +47,12 @@
 | **Optimización de la VM** | `bytecode`/`compiler`/`vm` | transversal **(activo)** | 🚧 DESIGN §27, registro medido en §11. Foco tras **aparcar M18** (backend nativo) por decisión del usuario. Principio: **incremental y midiendo** — banco `benchmarks/` (`bench.sh`+hyperfine o `measure.py` sin deps) y se conserva solo lo que supera el ruido (~3–5 %), oráculo VM↔intérprete intacto. Opt.1/Opt.2 ✅ (pase previo); Opt.3 `Rc<str>` ❌. ✅ **Opt.4** fast-path entero en ops binarias (fib −5 %, bucle −6 %); ✅ **Opt.7** posición `(línea,col)` perezosa con `pos!()` (quita la lectura de `lines[ip]` por instrucción del camino caliente → **fib −7 %, loop −9 %, arrays −8 %**, consistente; señal destapada con mejor-de-15); Opt.5 (`new_locals`)/Opt.6 (safepoint GC)/Opt.8 (`children()` con buffer reusado, dentro del ruido incluso con `gcnested.ray`)/LTO ❌ descartados. Pendiente: dedup constantes, peephole/plegado, `HeapValue` 32→16 B |
 | **Backend nativo** (bootstrap sin Rust) | codegen a máquina/asm/C/Rust | **M18** | 💤 **aparcado** (decisión del usuario, 2026-06): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va a la optimización de la VM. Opciones barajadas: asm (as+ld), máquina directa, C, transpilar a Rust→rustc. Se retoma más adelante |
 | **Asperezas de M3** | Parser + checker | hecho | ✅ `[]` en campo de struct (M6.2) y coma final en arreglos (limpieza) resueltos |
+| **Ergonomía del lenguaje I** (tuplas · `for`/iteradores · interpolación · casts · `const`) | Lexer + parser + checker + ambos motores + self-hosting | **M27** | 🚧 DESIGN §36. La deuda ergonómica que destaparon las librerías M15–M26. **M27.1** tuplas/retorno múltiple (`Type::Tuple`, patrones; erasure) → mata los `struct XResult`; **M27.2** `for`/iteradores (protocolo `Iterator` como trait + desugar; arreglos/rangos/`Map`→tuplas/string; front-end puro) = el mayor golpe; **M27.3** interpolación `"…{expr}…"` (desugar a `+ to_string`, puro léxico); **M27.4** casts `x as int`/`as float` (reusa `as`); **M27.5** `const` de nivel superior |
+| **Ergonomía del lenguaje II** (operadores · `?`+From/Into · enteros con tamaño) | Sistema de tipos / traits + modelo numérico | **M28** | 🚧 DESIGN §36. **M28.1** sobrecarga de operadores vía traits (`Add`/`Ord`/`PartialEq`…; hoy *special-cased*; puede unificar `@derive(Eq)`); **M28.2** `?` con conversión de error (`From`/`Into` → enums de error propios en vez de `string`); **M28.3** enteros con tamaño/unsigned (`u8`/`u32`/`u64`; el más invasivo; mata el `& 0xFFFFFFFF` de la cripto; puede quedar acotado sin promoción implícita) |
+| **Tooling** (regex · formateador · optimización VM) | Motor propio / cliente externo (reusa parser) / VM | **M29** | 🚧 DESIGN §36. **M29.1** regex (ausencia más llamativa de la stdlib; motor Thompson NFA, librería raylang o builtin-asistido); **M29.2** formateador `rayfmt` (pretty-printer canónico del AST, idempotente, sin config); **M29.3** retomar optimización VM (§27: dedup constantes, peephole, `HeapValue` 32→16 B) |
+| **Cripto avanzada** (cifrado + firma asimétrica) | Librería raylang (cómputo) | **M30** | 🚧 DESIGN §36. Hoy hay hashing/HMAC pero **no cifrado**. **M30.1** simétrica ChaCha20-Poly1305/AES-GCM (vectores RFC 8439); **M30.2** asimétrica Ed25519 (RFC 8032; ejercita bignum/`u64`); **M30.3** JWT RS256/ES256 sobre lo anterior |
+| **Cerrar gRPC** (transporte HTTP/2 vivo) | Librería raylang sobre TLS+ALPN | **M31** | 🚧 DESIGN §36. Los diferidos grandes de M26. **M31.1** HPACK-Huffman (tabla 257 del RFC 7541 Ap. B; vectores C.4/C.6); **M31.2** transporte vivo (preface + SETTINGS + streams sobre TLS con ALPN `h2` — requiere exponer ALPN en `tls_connect`); **M31.3** cliente gRPC e2e |
+| **Clientes y formatos** (PostgreSQL · TOML/CSV · plantillas) | Librería raylang | **M32** | 🚧 DESIGN §36. **M32.1** cliente PostgreSQL (protocolo wire + SCRAM-SHA-256, reusa M20); **M32.2** TOML/YAML/CSV; **M32.3** motor de plantillas HTML sobre M27 |
 
 ---
 

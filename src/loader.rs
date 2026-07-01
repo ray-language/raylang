@@ -308,7 +308,7 @@ fn shift_stmt(s: &mut Stmt, delta: usize) {
 fn shift_expr(e: &mut Expr, delta: usize) {
     e.line += delta;
     match &mut e.kind {
-        ExprKind::Unary { expr, .. } => shift_expr(expr, delta),
+        ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } => shift_expr(expr, delta),
         ExprKind::Binary { left, right, .. } => {
             shift_expr(left, delta);
             shift_expr(right, delta);
@@ -860,7 +860,7 @@ impl<'a> Resolver<'a> {
                     self.resolve_expr(object, src, module)?;
                 }
             }
-            ExprKind::Unary { expr: inner, .. } => self.resolve_expr(inner, src, module)?,
+            ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => self.resolve_expr(inner, src, module)?,
             ExprKind::Binary { left, right, .. } => {
                 self.resolve_expr(left, src, module)?;
                 self.resolve_expr(right, src, module)?;
@@ -1191,7 +1191,7 @@ impl<'a> TypeRewriter<'a> {
                     self.rewrite_expr(&mut arm.body);
                 }
             }
-            ExprKind::Unary { expr: inner, .. } => self.rewrite_expr(inner),
+            ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => self.rewrite_expr(inner),
             ExprKind::Binary { left, right, .. } => {
                 self.rewrite_expr(left);
                 self.rewrite_expr(right);

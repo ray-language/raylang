@@ -1941,6 +1941,24 @@ impl Checker {
 
             ExprKind::Index { array, index } => self.check_index(array, index),
 
+            ExprKind::Cast { expr: inner, ty } => {
+                // M27.4: conversión numérica. Permitidas: int↔float, char↔int (e identidad).
+                let from = self.check_expr(inner)?;
+                self.ensure_type(ty, expr.line, expr.col)?;
+                let to = self.resolve_type(ty);
+                let ok = matches!(
+                    (&from, &to),
+                    (Type::Int, Type::Float) | (Type::Float, Type::Int)
+                        | (Type::Char, Type::Int) | (Type::Int, Type::Char)
+                        | (Type::Int, Type::Int) | (Type::Float, Type::Float) | (Type::Char, Type::Char)
+                );
+                if !ok {
+                    return Err(self.err(expr.line, expr.col, format!(
+                        "no se puede convertir {} a {} con 'as' (solo int↔float y char↔int)", from, to)));
+                }
+                Ok(to)
+            }
+
             ExprKind::StructLit { name, fields } => self.check_struct_lit(name, fields, None, expr.line, expr.col),
 
             ExprKind::Field { object, name } => self.check_field(object, name),
@@ -2885,7 +2903,7 @@ fn resolve_expr(expr: &mut Expr, enums: &HashSet<String>) {
 
     // Caso general: recorrer los sub-nodos.
     match &mut expr.kind {
-        ExprKind::Unary { expr: inner, .. } => resolve_expr(inner, enums),
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => resolve_expr(inner, enums),
         ExprKind::Binary { left, right, .. } => {
             resolve_expr(left, enums);
             resolve_expr(right, enums);
@@ -3224,7 +3242,7 @@ fn freshen_expr(expr: &mut Expr, next: &mut usize) {
     expr.line = 1_000_000 + *next;
     expr.col = 1;
     match &mut expr.kind {
-        ExprKind::Unary { expr: inner, .. } => freshen_expr(inner, next),
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => freshen_expr(inner, next),
         ExprKind::Binary { left, right, .. } => {
             freshen_expr(left, next);
             freshen_expr(right, next);
@@ -3322,7 +3340,7 @@ fn renumber_block(block: &mut Block, next: &mut usize) {
 
 fn renumber_expr(expr: &mut Expr, next: &mut usize) {
     match &mut expr.kind {
-        ExprKind::Unary { expr: inner, .. } => renumber_expr(inner, next),
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => renumber_expr(inner, next),
         ExprKind::Binary { left, right, .. } => {
             renumber_expr(left, next);
             renumber_expr(right, next);
@@ -3510,7 +3528,7 @@ fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
 
     // Recorrer los sub-nodos (incluye los argumentos ya reescritos).
     match &mut expr.kind {
-        ExprKind::Unary { expr: inner, .. } => lower_ufcs_expr(inner, sites),
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => lower_ufcs_expr(inner, sites),
         ExprKind::Binary { left, right, .. } => {
             lower_ufcs_expr(left, sites);
             lower_ufcs_expr(right, sites);
@@ -3649,7 +3667,7 @@ fn lower_dict_calls_block(block: &mut Block, sites: &DictSites) {
 fn lower_dict_calls_expr(expr: &mut Expr, sites: &DictSites) {
     // Recorrer primero los hijos (el receptor y los argumentos pueden ser otras llamadas).
     match &mut expr.kind {
-        ExprKind::Unary { expr: inner, .. } => lower_dict_calls_expr(inner, sites),
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => lower_dict_calls_expr(inner, sites),
         ExprKind::Binary { left, right, .. } => {
             lower_dict_calls_expr(left, sites);
             lower_dict_calls_expr(right, sites);
@@ -3825,7 +3843,7 @@ fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
     // Recorrer los sub-nodos primero (post-orden): así los despachos/coerciones anidados
     // (en el receptor y los argumentos) ya están bajados cuando reescribimos este nodo.
     match &mut expr.kind {
-        ExprKind::Unary { expr: inner, .. } => lower_dyn_expr(inner, coercions, dispatch, upcasts, tm, counter),
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => lower_dyn_expr(inner, coercions, dispatch, upcasts, tm, counter),
         ExprKind::Binary { left, right, .. } => {
             lower_dyn_expr(left, coercions, dispatch, upcasts, tm, counter);
             lower_dyn_expr(right, coercions, dispatch, upcasts, tm, counter);

@@ -985,7 +985,7 @@ impl Parser {
 
     /// factor = unary { ('*' | '/' | '%') unary }
     fn factor(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.unary()?;
+        let mut left = self.cast()?;
         loop {
             let op = match self.peek_kind() {
                 TokenKind::Star => BinaryOp::Mul,
@@ -994,10 +994,22 @@ impl Parser {
                 _ => break,
             };
             self.advance();
-            let right = self.unary()?;
+            let right = self.cast()?;
             left = make_binary(op, left, right);
         }
         Ok(left)
+    }
+
+    /// cast = unary { 'as' type }   — conversión numérica (M27.4). Liga más fuerte que los binarios,
+    /// más débil que los unarios (como Rust): `-x as float` = `(-x) as float`.
+    fn cast(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.unary()?;
+        while self.check(&TokenKind::As) {
+            let tok = self.advance();
+            let ty = self.parse_type()?;
+            expr = Expr { kind: ExprKind::Cast { expr: Box::new(expr), ty }, line: tok.line, col: tok.col };
+        }
+        Ok(expr)
     }
 
     /// unary = ('!' | '-') unary | call
@@ -1659,6 +1671,7 @@ mod tests {
                 format!("({})", e.join(", "))
             }
             ExprKind::Index { array, index } => format!("(index {} {})", sx(array), sx(index)),
+            ExprKind::Cast { expr, ty } => format!("(as {} {})", sx(expr), ty),
             ExprKind::StructLit { name, fields } => {
                 let fs: Vec<String> = fields.iter().map(|(n, e)| format!("{}: {}", n, sx(e))).collect();
                 format!("{} {{{}}}", name, fs.join(", "))

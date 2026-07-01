@@ -259,6 +259,26 @@ pub fn run(program: &Program) -> Result<Value, RuntimeError> {
     Interpreter::new(program).run_main()
 }
 
+/// M27.4: convierte `v` al tipo `ty` (`as`). El checker garantiza una combinación válida; solo el
+/// `int as char` con un code point inválido puede fallar en runtime.
+fn cast_value(v: Value, ty: &Type, line: usize, col: usize) -> Result<Value, Flow> {
+    match (&v, ty) {
+        (Value::Int(n), Type::Float) => Ok(Value::Float(*n as f64)),
+        (Value::Float(f), Type::Int) => Ok(Value::Int(*f as i64)), // trunca hacia cero
+        (Value::Char(c), Type::Int) => Ok(Value::Int(*c as i64)),  // code point
+        (Value::Int(n), Type::Char) => match u32::try_from(*n).ok().and_then(char::from_u32) {
+            Some(c) => Ok(Value::Char(c)),
+            None => Err(Flow::Error(RuntimeError {
+                msg: format!("{} no es un carácter Unicode válido para 'as char'", n),
+                line,
+                col,
+            })),
+        },
+        // Identidad (int as int, etc.): sin cambio.
+        _ => Ok(v),
+    }
+}
+
 /// Almacén de proceso para los **argumentos del programa** (M11.2b). El runner (`main.rs`) los
 /// fija antes de ejecutar; el builtin `args()` los lee en ambos motores. Los clientes que no los
 /// fijan (REPL, runner de `@test`, tests) ven `[]`. Es estado de proceso, como `std::env::args`.
@@ -732,6 +752,12 @@ impl<'a> Interpreter<'a> {
                     vec.push(self.eval_expr(e)?);
                 }
                 Ok(Value::Array(Rc::new(RefCell::new(vec))))
+            }
+
+            // M27.4: conversión numérica `as`. El checker garantiza una combinación válida.
+            ExprKind::Cast { expr: inner, ty } => {
+                let v = self.eval_expr(inner)?;
+                Ok(cast_value(v, ty, inner.line, inner.col)?)
             }
 
             ExprKind::Index { array, index } => {

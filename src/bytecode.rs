@@ -32,6 +32,14 @@ pub enum MathFn {
 
 /// Una instrucción de la VM. Las que llevan operando (como `Constant`) lo guardan
 /// inline.
+/// El tipo destino de un `as` (M27.4). El opcode `Cast` convierte según el valor en runtime.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CastTarget {
+    Int,
+    Float,
+    Char,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpCode {
     /// Empuja `constants[idx]` a la pila.
@@ -130,6 +138,9 @@ pub enum OpCode {
     /// Saca un arreglo **o string**; empuja su longitud (int). Builtin `len`. (M11.1a: string
     /// → nº de caracteres.)
     Len,
+    /// M27.4: conversión numérica `as`. Saca un valor y empuja su conversión al tipo destino (según el
+    /// tipo del valor en runtime: int↔float, char↔int).
+    Cast(CastTarget),
     /// Saca valor y arreglo; agrega el valor al final; empuja unit. Builtin `push`.
     Push,
 

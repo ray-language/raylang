@@ -4282,9 +4282,14 @@ Lo que más limpia el código existente y futuro. Toca lexer/parser/checker/ambo
   tipo con `to_string` (primitivos/string); para structs, interpolar un campo o `.mostrar()`. Ambos motores
   lo ven como concatenación (cero cambios de runtime). Verificado en el oráculo (`interpolacion_oraculo`,
   incl. que `"..."` NO interpola) + ejemplo `basics/interpolacion.ray`. Excluido del oráculo de self-hosting.
-- **M27.4 Casts numéricos** (`x as int` / `y as float`). Cierra el papercut de OAuth2 (`parse_int(to_string
-  (f))`). Reusa la keyword `as` (hoy solo alias de import) en posición de expresión; opcode de conversión
-  (o builtin) en ambos motores.
+- **M27.4 Casts numéricos** ✅ (`x as int` / `y as float` / `c as int` / `n as char`). Cierra el papercut de
+  OAuth2 (`parse_int(to_string(f))`). Reusa la keyword `as` (antes solo alias de import) en posición de
+  expresión: nivel de precedencia `cast` entre `unary` y la multiplicación (como Rust). `ExprKind::Cast`;
+  el checker valida las combinaciones (int↔float, char↔int, e identidad) y devuelve el destino. **Cambia la
+  representación en runtime** (no es erasure): opcode `Cast(CastTarget)` que despacha por el valor +
+  destino (int→float, float→int truncando hacia cero, char→int code point, int→char con error si el code
+  point es inválido). Verificado en el oráculo (`cast_oraculo`) + ejemplo `basics/casts.ray` (cifrado
+  César combinando casts + `for` + interpolación). Excluido del oráculo de self-hosting.
 - **M27.5 `const` de nivel superior**. Sustituye el patrón `fn guid() -> string { "…" }`. Constantes
   evaluadas en compilación (literales), en ámbito global. Toca parser/checker; runtime las inlinea.
 

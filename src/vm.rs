@@ -20,7 +20,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::bytecode::{Chunk, CompiledEnum, CompiledFn, CompiledProgram, OpCode, UpvalueSource};
+use crate::bytecode::{CastTarget, Chunk, CompiledEnum, CompiledFn, CompiledProgram, OpCode, UpvalueSource};
 use std::collections::{HashMap, VecDeque};
 
 use crate::gc::{Handle, Heap, HeapValue, Obj, TaskState, VmChannel, VmClosure, VmEnum, VmStruct, VmTask};
@@ -435,6 +435,26 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("el checker garantiza un arreglo, string, Map o bytes"),
                     };
                     self.push(HeapValue::Int(len));
+                }
+                // M27.4: conversión numérica `as` (según el valor en runtime + destino).
+                OpCode::Cast(target) => {
+                    let v = self.pop();
+                    let out = match (&v, target) {
+                        (HeapValue::Int(n), CastTarget::Float) => HeapValue::Float(*n as f64),
+                        (HeapValue::Float(f), CastTarget::Int) => HeapValue::Int(*f as i64),
+                        (HeapValue::Char(c), CastTarget::Int) => HeapValue::Int(*c as i64),
+                        (HeapValue::Int(n), CastTarget::Char) => {
+                            match u32::try_from(*n).ok().and_then(char::from_u32) {
+                                Some(c) => HeapValue::Char(c),
+                                None => {
+                                    return Err(runtime_error(pos!().0, pos!().1,
+                                        &format!("{} no es un carácter Unicode válido para 'as char'", n)));
+                                }
+                            }
+                        }
+                        _ => v, // identidad
+                    };
+                    self.push(out);
                 }
                 // --- Mapas Map<K,V> (M13.1) ---
                 OpCode::MapNew => {
@@ -2720,6 +2740,17 @@ mod tests {
     }
 
     /// M27.2: bucle `for` — rango, arreglo, string, Map `(k, v)`, `_`. Ambos motores coinciden.
+    /// M27.4: casts `as` — int↔float, char↔int. Cambian la representación → ambos motores coinciden.
+    #[test]
+    fn cast_oraculo() {
+        oracle_int("(3.99 as int) + (2.1 as int)");        // 3 + 2 = 5
+        oracle_int("('A' as int) + ('a' as int)");         // 65 + 97 = 162
+        oracle_int("if ((7 as float) == 7.0) { 1 } else { 0 }"); // 1
+        oracle_int("if ((66 as char) == 'B') { 1 } else { 0 }"); // 1
+        oracle_int("(0.0 - 4.7) as int");                  // -4 (trunca hacia cero)
+        oracle_program("fn main() -> int { let s = 10; let n = 4; let avg = (s as float) / (n as float); avg as int }"); // 2
+    }
+
     /// M27.3: interpolación de strings. Desazucara a `+ to_string(...)` → ambos motores coinciden.
     /// Se enruta a `int` comparando la longitud del resultado (print está diferido en `oracle_int`).
     #[test]

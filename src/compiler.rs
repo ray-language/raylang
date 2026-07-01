@@ -28,7 +28,7 @@ use std::collections::HashMap;
 
 use crate::ast::*;
 use crate::bytecode::{
-    Chunk, CompiledEnum, CompiledFn, CompiledProgram, CompiledStruct, CompiledVariant, OpCode,
+    CastTarget, Chunk, CompiledEnum, CompiledFn, CompiledProgram, CompiledStruct, CompiledVariant, OpCode,
     UpvalueRef, UpvalueSource,
 };
 use crate::interpreter::Value;
@@ -786,6 +786,17 @@ impl<'a> Compiler<'a> {
                     self.emit_expr(e)?;
                 }
                 self.emit(OpCode::MakeArray(elems.len()), line, col);
+            }
+
+            // M27.4: conversión numérica `as`. El destino ya lo normalizó el checker (int/float/char).
+            ExprKind::Cast { expr: inner, ty } => {
+                self.emit_expr(inner)?;
+                let target = match ty {
+                    Type::Float => CastTarget::Float,
+                    Type::Char => CastTarget::Char,
+                    _ => CastTarget::Int, // Type::Int (el checker solo permite int/float/char)
+                };
+                self.emit(OpCode::Cast(target), line, col);
             }
 
             ExprKind::Index { array, index } => {

@@ -134,6 +134,7 @@ fn dump_expr(e: &Expr) -> String {
         ExprKind::Index { array, index } => {
             format!("(index {} {}){}", dump_expr(array), dump_expr(index), pp)
         }
+        ExprKind::Cast { expr, ty } => format!("(as {} {}){}", dump_expr(expr), dump_type(ty), pp),
         ExprKind::Field { object, name } => format!("(field {} {}){}", dump_expr(object), name, pp),
         ExprKind::ArrayLit(elems) => format!("(array{}){}", dump_exprs(elems), pp),
         ExprKind::TupleLit(elems) => format!("(tuple{}){}", dump_exprs(elems), pp),
@@ -665,6 +666,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "tuplas.ray", // M27.1: tuplas (el toolchain auto-alojado aún no las soporta)
         "for_bucles.ray", // M27.2: bucle `for` (el toolchain auto-alojado aún no lo soporta)
         "interpolacion.ray", // M27.3: interpolación de strings (idem)
+        "casts.ray", // M27.4: casts `as` (idem; usa `for`/interpolación también)
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops

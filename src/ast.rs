@@ -469,6 +469,11 @@ pub enum ExprKind {
     /// Indexación: `a[i]`. (M3)
     Index { array: Box<Expr>, index: Box<Expr> },
 
+    /// Conversión numérica `expr as T` (M27.4): int↔float, char↔int. Cambia la representación en runtime
+    /// (a diferencia de las tuplas/genéricos que son erasure) → cada motor la ejecuta según el tipo del
+    /// valor y el destino.
+    Cast { expr: Box<Expr>, ty: Type },
+
     /// Literal de struct: `Punto { x: 1, y: 2 }`. (M3.2)
     StructLit { name: String, fields: Vec<(String, Expr)> },
 
@@ -623,6 +628,7 @@ fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
             }
         }
         ExprKind::Field { object, .. } => walk_expr(object, acc),
+        ExprKind::Cast { expr, .. } => walk_expr(expr, acc),
         ExprKind::EnumLit { args, .. } => {
             for a in args {
                 walk_expr(a, acc);

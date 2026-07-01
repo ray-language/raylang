@@ -4575,8 +4575,30 @@ Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.
     cripto avanzada · M31 gRPC · M32 clientes/formatos) está COMPLETO.**
 
 ### Diferidos / research (fuera del plan por ahora)
-- **Gestor de paquetes** (las "libs" siguen siendo archivos/cápsulas del proyecto).
+- **Gestor de paquetes** (las "libs" siguen siendo archivos/cápsulas del proyecto). → plan de producción (§37, M39).
 - **Debugger** (breakpoints/step; el LSP ya da diagnósticos/hover/rename).
-- **FFI** (contradice la invariante cero-deps; solo si se abre esa puerta conscientemente, como TLS).
+- **FFI** (contradice la invariante cero-deps; solo si se abre esa puerta conscientemente, como TLS). → §37 (M41).
 - **Reflection / serialización derivada** (`@derive(Json)`) — necesita introspección de runtime.
-- **JIT / backend nativo** (M18, aparcado).
+- **JIT / backend nativo** (M18, aparcado; el transpile-a-Rust queda como investigación post-1.0, §37).
+
+## 37. El plan de producción (rama `feature/improvements`)
+
+El cambio de norte anotado en §21.1 tiene ahora **documento-contrato propio**:
+**[PRODUCCION.md](PRODUCCION.md)**. Contiene (I) el análisis a fondo del lenguaje post-§36 contra
+los cinco ejes —moderno, flexible, ligero, seguro, elegante— con las **siete brechas** hacia
+producción, y (II) el plan **M33–M43** en cuatro arcos:
+
+- **A — Estabilidad** (M33 spans + compilador sin ICEs + multi-error + fuzzing · M34 SPEC normativa
+  + semver + congelación de API · M35 un solo motor de producto — la VM; el intérprete queda como
+  oráculo de desarrollo).
+- **B — Rendimiento y paralelismo** (M36 optimización profunda de la VM · M37 GC de pausas acotadas
+  · M38 **M:N con aislamiento por actores**: heap por fibra + transferencia de propiedad en `send`).
+- **C — Ecosistema** (M39 CLI unificado `ray` + gestor de paquetes con `ray.toml`/lockfile · M40
+  stdlib 1.0 en `std/` + protocolo `Iterator` + `Hash` + patrones anidados/guardas/`if let` +
+  `raydoc` · M41 FFI con ABI C).
+- **D — Endurecimiento y lanzamiento** (M42 política de overflow + cripto nativa vía ring + límites
+  de recursos + fuzzing continuo · M43 distribución: binarios, playground WASM, marketplace → 1.0).
+
+A precede a todo; B y C pueden ir en paralelo tras A; D cierra. Los principios del proyecto (una
+fase a la vez, medir antes de conservar, oráculo en desarrollo, cero deps salvo excepción
+consciente) siguen vigentes. Lo sacrificado está declarado al final de PRODUCCION.md.

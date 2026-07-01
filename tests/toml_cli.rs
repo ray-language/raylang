@@ -1,0 +1,40 @@
+//! Prueba del parser TOML (`examples/stdlib/toml.ray`, M32.2b — subconjunto). El demo parsea un
+//! documento con comentarios, tablas y valores string/int/float/bool/array, y muestra cada valor por su
+//! ruta con puntos. El test exige la salida esperada y que ambos motores coincidan.
+
+use std::process::Command;
+
+const ESPERADO: &[&str] = &[
+    "title = \"raylang\"",
+    "server.host = \"localhost\"",
+    "server.port = 8080",
+    "server.debug = true",
+    "server.ratio = 1.5",
+    "server.tags = [\"a\", \"b\", \"c\"]",
+    "server.ports = [80, 443, 8080]",
+];
+
+fn correr(flags: &[&str]) -> (Vec<String>, bool) {
+    let demo = format!("{}/examples/stdlib/toml_demo.ray", env!("CARGO_MANIFEST_DIR"));
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(flags)
+        .arg(&demo)
+        .output()
+        .expect("ejecuta toml_demo.ray");
+    let lineas = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
+    (lineas, out.status.success())
+}
+
+#[test]
+fn toml_interprete() {
+    let (lineas, ok) = correr(&[]);
+    assert!(ok, "toml_demo falló en el intérprete");
+    assert_eq!(lineas, ESPERADO);
+}
+
+#[test]
+fn toml_vm() {
+    let (lineas, ok) = correr(&["--vm"]);
+    assert!(ok, "toml_demo falló en la VM");
+    assert_eq!(lineas, ESPERADO);
+}

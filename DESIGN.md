@@ -4551,6 +4551,15 @@ Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.
     `write_csv(rows) -> string` (entrecomilla y escapa donde hace falta). Puro cómputo, cero runtime. Demo +
     `tests/csv_cli.rs` (parseo de campos entrecomillados + round-trip, ambos motores). Al ser raylang puro
     (sin bitops), **pasa el oráculo del parser auto-alojado**. TOML → M32.2b.
+  - **M32.2b COMPLETO → M32.2 COMPLETO** — **TOML** (subconjunto, `examples/stdlib/toml.ray`). Parser de
+    cursor sobre los caracteres: `parse_toml(src) -> Result<[TomlEntry], string>` donde `TomlEntry{key,
+    value}` con la clave como ruta con puntos (`server.port`) y `enum TomlValue { TStr, TInt, TFloat, TBool,
+    TArray([TomlValue]) }` (recursivo). Soporta comentarios `#`, tablas `[a.b]`, claves desnudas, strings
+    `"..."` con escapes, enteros/flotantes/booleanos, y arreglos `[…]` (posiblemente multilínea). Helpers
+    `toml_get(entries, key) -> Option<TomlValue>` y `toml_show`. Demo + `tests/toml_cli.rs` (comentarios,
+    tablas, todos los tipos, arrays; ambos motores); raylang puro → **pasa el parser auto-alojado**.
+    Diferido: tablas en línea `{…}`, arreglos de tablas `[[…]]`, fechas, strings multilínea/literales.
+    **M32.2 COMPLETO** (CSV + TOML como librerías raylang puras).
 - **M32.3 Plantillas HTML** — un motor de plantillas simple (interpolación + bucles) sobre M27.
 
 ### Diferidos / research (fuera del plan por ahora)

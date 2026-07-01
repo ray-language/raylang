@@ -1,0 +1,27 @@
+// Demo de TOML: parsea un documento con comentarios, tablas, y valores string/int/float/bool/array,
+// y muestra cada valor por su ruta con puntos.
+
+from toml import parse_toml, toml_get, toml_show, TomlValue, TomlEntry;
+
+fn show_key(entries: [TomlEntry], key: string) {
+    match (toml_get(entries, key)) {
+        Option.Some(v) => print(key + " = " + toml_show(v)),
+        Option.None => print(key + " = <none>"),
+    }
+}
+
+fn main() {
+    let doc = "# configuración de ejemplo\ntitle = \"raylang\"\n\n[server]\nhost = \"localhost\"  # el host\nport = 8080\ndebug = true\nratio = 1.5\ntags = [\"a\", \"b\", \"c\"]\nports = [80, 443, 8080]\n";
+    match (parse_toml(doc)) {
+        Result.Ok(entries) => {
+            show_key(entries, "title");
+            show_key(entries, "server.host");
+            show_key(entries, "server.port");
+            show_key(entries, "server.debug");
+            show_key(entries, "server.ratio");
+            show_key(entries, "server.tags");
+            show_key(entries, "server.ports");
+        },
+        Result.Err(e) => print("err: " + e),
+    }
+}

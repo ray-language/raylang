@@ -4545,6 +4545,12 @@ Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.
     ("hola-postgres"), ambos motores. **M32.1 COMPLETO**: cliente PostgreSQL real con SCRAM-SHA-256, todo
     librería raylang. Reusa toda la pila cripto (PBKDF2/HMAC/SHA-256/base64).
 - **M32.2 Formatos de config**: TOML (y/o YAML/CSV) como librería raylang.
+  - **M32.2a COMPLETO** — **CSV** (RFC 4180, `examples/stdlib/csv.ray`). `parse_csv(src) ->
+    Result<[[string]], string>` (filas de campos como strings — heterogéneo → todo string, idiomático en un
+    lenguaje tipado) con campos entrecomillados (coma/salto/comilla internos, `""` escapado), LF o CRLF; y
+    `write_csv(rows) -> string` (entrecomilla y escapa donde hace falta). Puro cómputo, cero runtime. Demo +
+    `tests/csv_cli.rs` (parseo de campos entrecomillados + round-trip, ambos motores). Al ser raylang puro
+    (sin bitops), **pasa el oráculo del parser auto-alojado**. TOML → M32.2b.
 - **M32.3 Plantillas HTML** — un motor de plantillas simple (interpolación + bucles) sobre M27.
 
 ### Diferidos / research (fuera del plan por ahora)

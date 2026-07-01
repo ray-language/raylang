@@ -1,0 +1,46 @@
+// Demo de CSV: parsea un documento con campos entrecomillados (coma interna, comillas escapadas),
+// imprime las filas (campos unidos por '|'), y comprueba el round-trip (write_csv → parse_csv).
+
+from csv import parse_csv, write_csv;
+
+fn fila_str(f: [string]) -> string {
+    var s = "";
+    var c = 0;
+    while (c < len(f)) {
+        if (c > 0) { s = s + "|"; }
+        s = s + f[c];
+        c = c + 1;
+    }
+    s
+}
+
+fn iguales(a: [[string]], b: [[string]]) -> bool {
+    if (len(a) != len(b)) { return false; }
+    var i = 0;
+    while (i < len(a)) {
+        if (fila_str(a[i]) != fila_str(b[i])) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn main() {
+    let doc = "name,age,city\n\"Doe, John\",42,\"New \"\"York\"\"\"\nAda,36,London\n";
+    match (parse_csv(doc)) {
+        Result.Ok(rows) => {
+            var r = 0;
+            while (r < len(rows)) {
+                print(fila_str(rows[r]));
+                r = r + 1;
+            }
+            // Round-trip: serializar y re-parsear debe dar las mismas filas.
+            match (parse_csv(write_csv(rows))) {
+                Result.Ok(rows2) => {
+                    if (iguales(rows, rows2)) { print("roundtrip ok"); } else { print("roundtrip FALLO"); }
+                },
+                Result.Err(e) => print("re-parse err: " + e),
+            }
+        },
+        Result.Err(e) => print("err: " + e),
+    }
+}

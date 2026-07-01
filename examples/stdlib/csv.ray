@@ -1,0 +1,121 @@
+// CSV (RFC 4180) escrito EN raylang. Parser y writer de valores separados por comas, con soporte de
+// campos entrecomillados (comas, comillas y saltos de línea dentro del campo). Puro cómputo, cero
+// runtime. Importable: `from csv import parse_csv, write_csv;`.
+//
+// El parseo devuelve `[[string]]` (filas de campos como strings): raylang es estáticamente tipado y las
+// columnas son heterogéneas, así que dejar todo como string (y que el usuario convierta) es lo idiomático.
+
+// Parsea un documento CSV a filas de campos. Los campos entrecomillados (`"..."`) admiten comas, saltos
+// de línea y comillas escapadas como `""`. Acepta finales de línea LF o CRLF.
+pub fn parse_csv(src: string) -> Result<[[string]], string> {
+    let cs = chars(src);
+    let n = len(cs);
+    var rows: [[string]] = [];
+    var row: [string] = [];
+    var field = "";
+    var vivo = false;                 // ¿hay una fila/campo en curso? (para flushear el final sin `\n`)
+    var i = 0;
+    while (i < n) {
+        let c = cs[i];
+        if (c == '"') {
+            vivo = true;
+            i = i + 1;
+            var cerrado = false;
+            while (!cerrado && i < n) {
+                let d = cs[i];
+                if (d == '"') {
+                    if (i + 1 < n && cs[i + 1] == '"') {
+                        field = field + "\"";       // comilla escapada
+                        i = i + 2;
+                    } else {
+                        cerrado = true;
+                        i = i + 1;
+                    }
+                } else {
+                    field = field + to_string(d);
+                    i = i + 1;
+                }
+            }
+            if (!cerrado) {
+                return Result.Err("comilla sin cerrar en el CSV");
+            }
+        } else if (c == ',') {
+            push(row, field);
+            field = "";
+            vivo = true;
+            i = i + 1;
+        } else if (c == '\n') {
+            push(row, field);
+            push(rows, row);
+            row = [];
+            field = "";
+            vivo = false;
+            i = i + 1;
+        } else if (c == '\r') {
+            i = i + 1;                 // se ignora (parte de CRLF)
+        } else {
+            field = field + to_string(c);
+            vivo = true;
+            i = i + 1;
+        }
+    }
+    // Flushea la última fila si el documento no terminó en salto de línea.
+    if (vivo || len(field) > 0 || len(row) > 0) {
+        push(row, field);
+        push(rows, row);
+    }
+    Result.Ok(rows)
+}
+
+// ¿Necesita `s` entrecomillado al escribir? (contiene coma, comilla, CR o LF).
+fn necesita_comillas(s: string) -> bool {
+    var q = false;
+    var i = 0;
+    while (i < len(s)) {
+        let c = s[i];
+        if (c == ',' || c == '"' || c == '\n' || c == '\r') {
+            q = true;
+        }
+        i = i + 1;
+    }
+    q
+}
+
+// Escribe un campo, entrecomillándolo y escapando las comillas si hace falta.
+fn write_field(s: string) -> string {
+    if (!necesita_comillas(s)) {
+        return s;
+    }
+    var out = "\"";
+    var i = 0;
+    while (i < len(s)) {
+        let c = s[i];
+        if (c == '"') {
+            out = out + "\"\"";
+        } else {
+            out = out + to_string(c);
+        }
+        i = i + 1;
+    }
+    out + "\""
+}
+
+// Serializa filas de campos a un documento CSV (líneas separadas por `\n`).
+pub fn write_csv(rows: [[string]]) -> string {
+    var out = "";
+    var r = 0;
+    while (r < len(rows)) {
+        let fila = rows[r];
+        var c = 0;
+        while (c < len(fila)) {
+            if (c > 0) {
+                out = out + ",";
+            }
+            out = out + write_field(fila[c]);
+            c = c + 1;
+        }
+        out = out + "\n";
+        r = r + 1;
+    }
+    out
+}

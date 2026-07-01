@@ -1009,6 +1009,53 @@ impl Checker {
                     ))),
                 }
             }
+            StmtKind::For { pat, iter, body } => {
+                // M27.2: determina el/los tipo(s) de la(s) variable(s) según el iterable, los liga en un
+                // ámbito nuevo y verifica el cuerpo.
+                let bindings: Vec<(String, Type)> = match iter {
+                    ForIter::Range { start, end } => {
+                        let st = self.check_expr(start)?;
+                        let et = self.check_expr(end)?;
+                        if st != Type::Int || et != Type::Int {
+                            return Err(self.err(stmt.line, stmt.col, format!(
+                                "el rango de un for debe ser int..int, no {}..{}", st, et)));
+                        }
+                        match pat {
+                            ForPat::Single(n) => vec![(n.clone(), Type::Int)],
+                            ForPat::Tuple(_) => return Err(self.err(stmt.line, stmt.col,
+                                "un rango liga una sola variable (no una tupla)".into())),
+                        }
+                    }
+                    ForIter::In(e) => {
+                        let it = self.check_expr(e)?;
+                        match (&it, pat) {
+                            (Type::Array(elem), ForPat::Single(n)) => vec![(n.clone(), (**elem).clone())],
+                            (Type::String, ForPat::Single(n)) => vec![(n.clone(), Type::Char)],
+                            (Type::Map(k, v), ForPat::Tuple(names)) => {
+                                if names.len() != 2 {
+                                    return Err(self.err(stmt.line, stmt.col,
+                                        "iterar un Map liga exactamente dos variables (clave, valor)".into()));
+                                }
+                                let mut b = Vec::new();
+                                if let Some(kn) = &names[0] { b.push((kn.clone(), (**k).clone())); }
+                                if let Some(vn) = &names[1] { b.push((vn.clone(), (**v).clone())); }
+                                b
+                            }
+                            (Type::Map(_, _), ForPat::Single(_)) => return Err(self.err(stmt.line, stmt.col,
+                                "iterar un Map requiere una tupla `(clave, valor)`".into())),
+                            (other, _) => return Err(self.err(stmt.line, stmt.col, format!(
+                                "no se puede iterar sobre {} (se esperaba un arreglo, string o Map)", other))),
+                        }
+                    }
+                };
+                self.push_scope();
+                for (n, t) in bindings {
+                    self.declare(&n, t, false, (stmt.line, stmt.col));
+                }
+                self.check_block(body)?;
+                self.pop_scope();
+                Ok(())
+            }
             StmtKind::Assign { target, value } => self.check_assign(target, value, stmt.line, stmt.col),
             StmtKind::Return { value } => {
                 let vt = match value {
@@ -2780,6 +2827,13 @@ fn resolve_block(block: &mut Block, enums: &HashSet<String>) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
             StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => resolve_expr(value, enums),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { resolve_expr(start, enums); resolve_expr(end, enums); }
+                    ForIter::In(e) => resolve_expr(e, enums),
+                }
+                resolve_block(body, enums);
+            }
             StmtKind::Assign { target, value } => {
                 resolve_expr(target, enums);
                 resolve_expr(value, enums);
@@ -3137,6 +3191,13 @@ fn freshen_block(block: &mut Block, next: &mut usize) {
         stmt.col = 1;
         match &mut stmt.kind {
             StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => freshen_expr(value, next),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { freshen_expr(start, next); freshen_expr(end, next); }
+                    ForIter::In(e) => freshen_expr(e, next),
+                }
+                freshen_block(body, next);
+            }
             StmtKind::Assign { target, value } => {
                 freshen_expr(target, next);
                 freshen_expr(value, next);
@@ -3234,6 +3295,13 @@ fn renumber_block(block: &mut Block, next: &mut usize) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
             StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => renumber_expr(value, next),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { renumber_expr(start, next); renumber_expr(end, next); }
+                    ForIter::In(e) => renumber_expr(e, next),
+                }
+                renumber_block(body, next);
+            }
             StmtKind::Assign { target, value } => {
                 renumber_expr(target, next);
                 renumber_expr(value, next);
@@ -3382,6 +3450,13 @@ fn lower_ufcs_block(block: &mut Block, sites: &SiteMap) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
             StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_ufcs_expr(value, sites),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { lower_ufcs_expr(start, sites); lower_ufcs_expr(end, sites); }
+                    ForIter::In(e) => lower_ufcs_expr(e, sites),
+                }
+                lower_ufcs_block(body, sites);
+            }
             StmtKind::Assign { target, value } => {
                 lower_ufcs_expr(target, sites);
                 lower_ufcs_expr(value, sites);
@@ -3546,6 +3621,13 @@ fn lower_dict_calls_block(block: &mut Block, sites: &DictSites) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
             StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_dict_calls_expr(value, sites),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { lower_dict_calls_expr(start, sites); lower_dict_calls_expr(end, sites); }
+                    ForIter::In(e) => lower_dict_calls_expr(e, sites),
+                }
+                lower_dict_calls_block(body, sites);
+            }
             StmtKind::Assign { target, value } => {
                 lower_dict_calls_expr(target, sites);
                 lower_dict_calls_expr(value, sites);
@@ -3714,6 +3796,13 @@ fn lower_dyn_block(block: &mut Block, coercions: &CoercionMap, dispatch: &Dispat
     for stmt in &mut block.statements {
         match &mut stmt.kind {
             StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_dyn_expr(value, coercions, dispatch, upcasts, tm, counter),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { lower_dyn_expr(start, coercions, dispatch, upcasts, tm, counter); lower_dyn_expr(end, coercions, dispatch, upcasts, tm, counter); }
+                    ForIter::In(e) => lower_dyn_expr(e, coercions, dispatch, upcasts, tm, counter),
+                }
+                lower_dyn_block(body, coercions, dispatch, upcasts, tm, counter);
+            }
             StmtKind::Assign { target, value } => {
                 lower_dyn_expr(target, coercions, dispatch, upcasts, tm, counter);
                 lower_dyn_expr(value, coercions, dispatch, upcasts, tm, counter);

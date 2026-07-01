@@ -2719,6 +2719,20 @@ mod tests {
         oracle_program("fn main() -> int { let t = ((1, 2), 3); let inner = t.0; inner.1 + t.1 }"); // 2 + 3 = 5
     }
 
+    /// M27.2: bucle `for` — rango, arreglo, string, Map `(k, v)`, `_`. Ambos motores coinciden.
+    #[test]
+    fn for_oraculo() {
+        oracle_program("fn main() -> int { var s = 0; for i in 0..5 { s = s + i; } s }"); // 10
+        oracle_program("fn main() -> int { var t = 0; for x in [10, 20, 30] { t = t + x; } t }"); // 60
+        oracle_program("fn main() -> int { var n = 0; for c in \"hola\" { n = n + 1; } n }"); // 4
+        oracle_program("fn main() -> int { var m: Map<string, int> = map_new(); insert(m, \"a\", 1); insert(m, \"b\", 5); var s = 0; for (k, v) in m { s = s + v; } s }"); // 6
+        oracle_program("fn main() -> int { var m: Map<int, int> = map_new(); insert(m, 1, 10); insert(m, 2, 20); var c = 0; for (k, _) in m { c = c + k; } c }"); // 3
+        // for anidado.
+        oracle_program("fn main() -> int { var s = 0; for i in 0..3 { for j in 0..3 { s = s + 1; } } s }"); // 9
+        // `for` sobre un valor con return dentro (propaga).
+        oracle_program("fn buscar(xs: [int], t: int) -> int { for x in xs { if (x == t) { return 1; } } 0 } fn main() -> int { buscar([3, 7, 9], 7) }"); // 1
+    }
+
     #[test]
     fn bitops_oraculo() {
         // M19.3a: operadores bit a bit. Ambos motores comparten `wrapping_*` → idénticos.

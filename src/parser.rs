@@ -47,6 +47,9 @@ pub struct Parser {
     pos: usize,
     /// Contador para asignar un id único a cada función anónima (M4.1).
     next_fn_id: usize,
+    /// Si está activo, un `Nombre { … }` NO se parsea como literal de struct (M27.2): en la cabecera de
+    /// un `for` (sin paréntesis) el `{` abre el cuerpo del bucle, no un struct. Igual que Rust.
+    no_struct_lit: bool,
 }
 
 /// Parámetros de tipo y sus bounds (M9.2): `(nombres, pares (parámetro, trait))`.
@@ -54,7 +57,7 @@ type TypeParamsAndBounds = (Vec<String>, Vec<(String, String)>);
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, next_fn_id: 0 }
+        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false }
     }
 
     // =================================================================
@@ -365,13 +368,18 @@ impl Parser {
         // ambos quedan vacíos (impl concreto de M9.1).
         let (type_params, bounds) = self.type_params_with_bounds()?;
         let (trait_name, _, _) = self.expect_ident("el nombre del trait")?;
-        let (kw_for, fline, fcol) = self.expect_ident("'for' tras el nombre del trait")?;
-        if kw_for != "for" {
-            return Err(ParseError {
-                msg: format!("se esperaba 'for', no '{}'", kw_for),
-                line: fline,
-                col: fcol,
-            });
+        // `for` es palabra clave desde M27.2 (antes era un identificador aquí). Se conserva el mensaje de
+        // error original para que el oráculo del parser auto-alojado (que aún trata `for` como ident) cuadre.
+        if self.check(&TokenKind::For) {
+            self.advance();
+        } else {
+            let tok = self.peek();
+            let (fline, fcol) = (tok.line, tok.col);
+            let found = match &tok.kind {
+                TokenKind::Ident(n) => n.clone(),
+                other => format!("{:?}", other),
+            };
+            return Err(ParseError { msg: format!("se esperaba 'for', no '{}'", found), line: fline, col: fcol });
         }
         let target = self.parse_type()?;
         self.expect(&TokenKind::LBrace, "'{' para abrir el cuerpo del impl")?;
@@ -623,6 +631,10 @@ impl Parser {
                 statements.push(self.return_stmt()?);
                 continue;
             }
+            if self.check(&TokenKind::For) {
+                statements.push(self.for_stmt()?);
+                continue;
+            }
             // Parseamos una expresión. Puede ser el lado izquierdo de una
             // asignación, una sentencia-de-expresión, o el valor final del bloque.
             let expr = self.expression()?;
@@ -710,6 +722,56 @@ impl Parser {
         self.expect(&TokenKind::Semicolon, "';' al final de la declaración")?;
         Ok(Stmt {
             kind: StmtKind::Let { name, ty, value, mutable },
+            line: kw.line,
+            col: kw.col,
+        })
+    }
+
+    /// Parsea una expresión con el literal de struct desactivado (para la cabecera del `for`, M27.2).
+    fn expr_no_struct(&mut self) -> Result<Expr, ParseError> {
+        let saved = self.no_struct_lit;
+        self.no_struct_lit = true;
+        let r = self.expression();
+        self.no_struct_lit = saved;
+        r
+    }
+
+    /// forStmt = 'for' ( IDENT | '(' names ')' ) 'in' ( expr '..' expr | expr ) block   (M27.2)
+    fn for_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let kw = self.advance(); // 'for'
+        // Patrón: un nombre, o una tupla `(k, v)` para iterar un Map.
+        let pat = if self.check(&TokenKind::LParen) {
+            self.advance();
+            let mut names = Vec::new();
+            loop {
+                let (n, _, _) = self.expect_ident("un nombre en el patrón del for")?;
+                names.push(if n == "_" { None } else { Some(n) });
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+                if self.check(&TokenKind::RParen) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::RParen, "')' para cerrar el patrón del for")?;
+            ForPat::Tuple(names)
+        } else {
+            let (n, _, _) = self.expect_ident("el nombre de la variable del for")?;
+            ForPat::Single(n)
+        };
+        self.expect(&TokenKind::In, "'in' en el for")?;
+        // El iterable. La condición del bloque va sin paréntesis (como if/while), así que el literal de
+        // struct está prohibido aquí (mismo compromiso): se usa `no_struct` en la expresión.
+        let start = self.expr_no_struct()?;
+        let iter = if self.eat(&TokenKind::DotDot) {
+            let end = self.expr_no_struct()?;
+            ForIter::Range { start, end }
+        } else {
+            ForIter::In(start)
+        };
+        let body = self.block()?;
+        Ok(Stmt {
+            kind: StmtKind::For { pat, iter, body },
             line: kw.line,
             col: kw.col,
         })
@@ -973,7 +1035,7 @@ impl Parser {
                 // receptor del `.` es un `Ident` (el módulo); el nombre calificado guarda el `.`,
                 // que el loader resuelve a `M::Tipo`. (Mismo compromiso struct-literal-vs-bloque
                 // que `Tipo { ... }`: las condiciones de if/while/match van entre paréntesis.)
-                if let (true, ExprKind::Ident(m)) = (self.check(&TokenKind::LBrace), &expr.kind) {
+                if let (true, false, ExprKind::Ident(m)) = (self.check(&TokenKind::LBrace), self.no_struct_lit, &expr.kind) {
                     let qualified = format!("{}.{}", m, name);
                     expr = self.struct_literal(qualified, line, col)?;
                     continue;
@@ -1041,8 +1103,8 @@ impl Parser {
             TokenKind::Ident(name) => {
                 // `Nombre { ... }` es un literal de struct. (Las condiciones de
                 // if/while van entre paréntesis, así que no hay ambigüedad con los
-                // bloques.)
-                if self.check(&TokenKind::LBrace) {
+                // bloques.) En la cabecera de un `for` el flag lo desactiva (M27.2).
+                if self.check(&TokenKind::LBrace) && !self.no_struct_lit {
                     return self.struct_literal(name, tok.line, tok.col);
                 }
                 ExprKind::Ident(name)
@@ -1625,6 +1687,17 @@ mod tests {
                 let kw = if *mutable { "var" } else { "let" };
                 let ns: Vec<String> = names.iter().map(|n| n.clone().unwrap_or_else(|| "_".to_string())).collect();
                 format!("{} ({}) = {}", kw, ns.join(", "), sx(value))
+            }
+            StmtKind::For { pat, iter, .. } => {
+                let p = match pat {
+                    ForPat::Single(n) => n.clone(),
+                    ForPat::Tuple(ns) => format!("({})", ns.iter().map(|n| n.clone().unwrap_or_else(|| "_".to_string())).collect::<Vec<_>>().join(", ")),
+                };
+                let it = match iter {
+                    ForIter::Range { start, end } => format!("{}..{}", sx(start), sx(end)),
+                    ForIter::In(e) => sx(e),
+                };
+                format!("for {} in {}", p, it)
             }
             StmtKind::Assign { target, value } => format!("{} = {}", sx(target), sx(value)),
             StmtKind::Return { value } => match value {

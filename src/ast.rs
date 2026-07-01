@@ -390,6 +390,15 @@ pub enum StmtKind {
         value: Expr,
         mutable: bool,
     },
+    /// Bucle `for` (M27.2): `for x in iterable { … }`. El iterable puede ser un **rango** `a..b`
+    /// (`ForIter::Range`), o una colección (`ForIter::In`): arreglo (`x` = elemento), string (`x` =
+    /// `char`), o `Map` (el patrón debe ser una tupla `(k, v)`). Azúcar de front-end sobre `while`;
+    /// cada motor lo ejecuta directamente (bind de la(s) variable(s) por iteración).
+    For {
+        pat: ForPat,
+        iter: ForIter,
+        body: Block,
+    },
     /// Asignación a un *lvalue*: `x = e;`, `a[i] = e;`, `p.x = e;` (M3.2).
     /// `target` es una expresión asignable (`Ident`, `Index`, o `Field`).
     Assign { target: Expr, value: Expr },
@@ -398,6 +407,20 @@ pub enum StmtKind {
     /// Una expresión usada como sentencia: su valor se descarta. P. ej.
     /// `print(x);` o `if (c) { ... }`.
     Expr(Expr),
+}
+
+/// El patrón de variable de un `for` (M27.2): un solo nombre, o una tupla `(k, v)` (para iterar `Map`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForPat {
+    Single(String),
+    Tuple(Vec<Option<String>>),
+}
+
+/// El iterable de un `for` (M27.2): un rango `a..b` o una colección.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForIter {
+    Range { start: Expr, end: Expr },
+    In(Expr),
 }
 
 /// Una expresión: produce un valor.
@@ -547,6 +570,13 @@ fn walk_block<'a>(block: &'a Block, acc: &mut Vec<&'a FnExpr>) {
         match &s.kind {
             StmtKind::Let { value, .. } => walk_expr(value, acc),
             StmtKind::LetTuple { value, .. } => walk_expr(value, acc),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { walk_expr(start, acc); walk_expr(end, acc); }
+                    ForIter::In(e) => walk_expr(e, acc),
+                }
+                walk_block(body, acc);
+            }
             StmtKind::Assign { target, value } => {
                 walk_expr(target, acc);
                 walk_expr(value, acc);

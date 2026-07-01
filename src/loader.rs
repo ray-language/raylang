@@ -24,7 +24,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::ast::{Block, Expr, ExprKind, FnExpr, Function, MethodSig, PatternKind, Program, Stmt, StmtKind, Type};
+use crate::ast::{Block, Expr, ExprKind, FnExpr, ForIter, ForPat, Function, MethodSig, PatternKind, Program, Stmt, StmtKind, Type};
 use crate::diagnostic;
 
 /// Un error de carga, ya **renderizado** con su contexto de fuente (la línea + `^`), listo
@@ -285,6 +285,13 @@ fn shift_stmt(s: &mut Stmt, delta: usize) {
     match &mut s.kind {
         StmtKind::Let { value, .. } => shift_expr(value, delta),
         StmtKind::LetTuple { value, .. } => shift_expr(value, delta),
+        StmtKind::For { iter, body, .. } => {
+            match iter {
+                ForIter::Range { start, end } => { shift_expr(start, delta); shift_expr(end, delta); }
+                ForIter::In(e) => shift_expr(e, delta),
+            }
+            shift_block(body, delta);
+        }
         StmtKind::Assign { target, value } => {
             shift_expr(target, delta);
             shift_expr(value, delta);
@@ -788,6 +795,26 @@ impl<'a> Resolver<'a> {
                     self.declarar(n);
                 }
             }
+            StmtKind::For { pat, iter, body } => {
+                match iter {
+                    ForIter::Range { start, end } => {
+                        self.resolve_expr(start, src, module)?;
+                        self.resolve_expr(end, src, module)?;
+                    }
+                    ForIter::In(e) => self.resolve_expr(e, src, module)?,
+                }
+                self.scopes.push(std::collections::HashSet::new()); // ámbito de la(s) variable(s) del for
+                match pat {
+                    ForPat::Single(n) => self.declarar(n),
+                    ForPat::Tuple(names) => {
+                        for n in names.iter().flatten() {
+                            self.declarar(n);
+                        }
+                    }
+                }
+                self.resolve_block(body, src, module)?;
+                self.scopes.pop();
+            }
             StmtKind::Assign { target, value } => {
                 self.resolve_expr(target, src, module)?;
                 self.resolve_expr(value, src, module)?;
@@ -1102,6 +1129,13 @@ impl<'a> TypeRewriter<'a> {
             }
             StmtKind::LetTuple { value, .. } => {
                 self.rewrite_expr(value);
+            }
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { self.rewrite_expr(start); self.rewrite_expr(end); }
+                    ForIter::In(e) => self.rewrite_expr(e),
+                }
+                self.rewrite_block(body);
             }
             StmtKind::Assign { target, value } => {
                 self.rewrite_expr(target);

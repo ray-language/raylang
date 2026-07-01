@@ -4262,10 +4262,17 @@ Lo que más limpia el código existente y futuro. Toca lexer/parser/checker/ambo
   **Gotchas** (documentados): el acceso encadenado `t.0.1` choca con el float `0.1` en el lexer → binding
   intermedio; una tupla `(…)` justo tras un `while {}` se parsea como llamada → `return`/`;`. El toolchain
   auto-alojado aún no soporta tuplas (excluido del oráculo de self-hosting).
-- **M27.2 `for` / iteradores** (el mayor golpe ergonómico). `for x in arr { … }`, `for (i, x) in …`. Un
-  **protocolo `Iterator`** (trait con `next() -> Option<T>`) sobre el que `for` desazucara; impls para
-  arreglos, rangos (`0..n`), `Map` (→ tuplas de M27.1), string (→ `char`). Desugar de front-end (cero
-  opcodes) que reusa closures/traits.
+- **M27.2 `for` / iteradores** ✅ (el mayor golpe ergonómico). `for x in arr`, `for i in a..b` (rango),
+  `for c in "…"` (chars), `for (k, v) in map` (¡tuplas de M27.1!, `_` descarta). Tokens `for`/`in`/`..`
+  (`DotDot`); `StmtKind::For { pat, iter, body }` (`ForPat` single/tuple, `ForIter` Range/In). El checker
+  valida el iterable (arreglo→elemento, string→char, `Map`→tupla `(k,v)`) y liga la(s) variable(s) en un
+  ámbito nuevo. **Ambos motores lo ejecutan directamente** (sin protocolo `Iterator` genérico —diferido—):
+  el intérprete itera y el compilador baja a un bucle contado con locales `$…` (arreglo/string por
+  `Index`/`Len`; `Map` por `MapKeys`/`MapValues` **ordenados** → determinista, casa con la VM). Gotcha:
+  `for` obligó a que `for` sea keyword → el `impl X for Y` pasó de `expect_ident` a consumir el token; y
+  en la cabecera del `for` (sin paréntesis) se desactiva el literal de struct (flag `no_struct_lit`, como
+  Rust). Verificado en el oráculo (`for_oraculo`, incl. anidados/`return`/Map) + ejemplo
+  `basics/for_bucles.ray`. Excluido del oráculo de self-hosting (el toolchain aún no lo soporta).
 - **M27.3 Interpolación de strings** (`"x = {x}, y = {f(z)}"`). El segundo mayor golpe: sustituye las
   cadenas de `+ to_string(...)`. Puro lexer/parser: se desazucara a concatenación con `to_string` de cada
   expresión interpolada. Escape `{{`/`}}`.

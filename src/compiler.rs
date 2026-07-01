@@ -296,6 +296,129 @@ impl<'a> Compiler<'a> {
         s.next_slot
     }
 
+    /// Emite un entero constante (para índices/incrementos del `for`).
+    fn emit_int(&mut self, n: i64, line: usize, col: usize) {
+        let c = self.cur().chunk.add_constant(Value::Int(n));
+        self.emit(OpCode::Constant(c), line, col);
+    }
+
+    /// Compila el cuerpo de un `for` (M27.2). El escrutinio ya está en un ámbito (`begin_scope`). Casos:
+    /// rango `a..b`, y `in` sobre arreglo/string (por índice) o `Map` (por keys/values ordenados).
+    fn emit_for(&mut self, pat: &ForPat, iter: &ForIter, body: &Block, line: usize, col: usize) -> Result<(), CompileError> {
+        // Emite: idx (en `idx_slot`) recorre 0..len; cada iteración liga la(s) variable(s) y ejecuta el
+        // cuerpo. `bind` genera el código que, dado `idx` en la pila NO, liga la(s) variable(s).
+        match iter {
+            ForIter::Range { start, end } => {
+                let name = match pat { ForPat::Single(n) => n.clone(), _ => unreachable!("checker: un nombre") };
+                self.emit_expr(start)?;
+                let i_slot = self.declare_local(&name);
+                self.emit(OpCode::InitLocal(i_slot), line, col);
+                self.emit_expr(end)?;
+                let end_slot = self.declare_local("$end");
+                self.emit(OpCode::InitLocal(end_slot), line, col);
+                let loop_start = self.cur().chunk.code.len();
+                self.emit(OpCode::GetLocal(i_slot), line, col);
+                self.emit(OpCode::GetLocal(end_slot), line, col);
+                self.emit(OpCode::Less, line, col);
+                let exit = self.emit(OpCode::JumpIfFalse(0), line, col);
+                self.emit(OpCode::Pop, line, col);
+                self.emit_block(body)?;
+                self.emit(OpCode::Pop, line, col);
+                // i = i + 1
+                self.emit(OpCode::GetLocal(i_slot), line, col);
+                self.emit_int(1, line, col);
+                self.emit(OpCode::Add, line, col);
+                self.emit(OpCode::SetLocal(i_slot), line, col);
+                self.emit(OpCode::Jump(loop_start), line, col);
+                self.patch_jump(exit);
+                self.emit(OpCode::Pop, line, col);
+            }
+            ForIter::In(e) => {
+                // El valor a iterar. Para arreglo/string se recorre por índice; para Map, keys+values.
+                self.emit_expr(e)?;
+                let is_map = matches!(pat, ForPat::Tuple(_));
+                if is_map {
+                    // La pila tiene el Map. Duplica-vía-local: guarda el Map y saca keys/values.
+                    let map_slot = self.declare_local("$map");
+                    self.emit(OpCode::InitLocal(map_slot), line, col);
+                    self.emit(OpCode::GetLocal(map_slot), line, col);
+                    self.emit(OpCode::MapKeys, line, col);
+                    let keys_slot = self.declare_local("$keys");
+                    self.emit(OpCode::InitLocal(keys_slot), line, col);
+                    self.emit(OpCode::GetLocal(map_slot), line, col);
+                    self.emit(OpCode::MapValues, line, col);
+                    let vals_slot = self.declare_local("$vals");
+                    self.emit(OpCode::InitLocal(vals_slot), line, col);
+                    let names = match pat { ForPat::Tuple(ns) => ns.clone(), _ => unreachable!() };
+                    let k_slot = names[0].as_ref().map(|n| self.declare_local(n));
+                    let v_slot = names[1].as_ref().map(|n| self.declare_local(n));
+                    self.emit_counted_loop(keys_slot, body, line, col, &mut |c, idx| {
+                        if let Some(ks) = k_slot {
+                            c.emit(OpCode::GetLocal(keys_slot), line, col);
+                            c.emit(OpCode::GetLocal(idx), line, col);
+                            c.emit(OpCode::Index, line, col);
+                            c.emit(OpCode::InitLocal(ks), line, col);
+                        }
+                        if let Some(vs) = v_slot {
+                            c.emit(OpCode::GetLocal(vals_slot), line, col);
+                            c.emit(OpCode::GetLocal(idx), line, col);
+                            c.emit(OpCode::Index, line, col);
+                            c.emit(OpCode::InitLocal(vs), line, col);
+                        }
+                    })?;
+                } else {
+                    let name = match pat { ForPat::Single(n) => n.clone(), _ => unreachable!("checker: un nombre") };
+                    let arr_slot = self.declare_local("$arr");
+                    self.emit(OpCode::InitLocal(arr_slot), line, col);
+                    let x_slot = self.declare_local(&name);
+                    self.emit_counted_loop(arr_slot, body, line, col, &mut |c, idx| {
+                        c.emit(OpCode::GetLocal(arr_slot), line, col);
+                        c.emit(OpCode::GetLocal(idx), line, col);
+                        c.emit(OpCode::Index, line, col);
+                        c.emit(OpCode::InitLocal(x_slot), line, col);
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Emite un bucle `idx: 0..len(arr_slot)` que, en cada iteración, ejecuta `bind` (que liga la(s)
+    /// variable(s)), el cuerpo, e incrementa `idx`. Compartido por los casos arreglo/string y Map.
+    fn emit_counted_loop(
+        &mut self,
+        arr_slot: usize,
+        body: &Block,
+        line: usize,
+        col: usize,
+        bind: &mut dyn FnMut(&mut Self, usize),
+    ) -> Result<(), CompileError> {
+        self.emit_int(0, line, col);
+        let idx_slot = self.declare_local("$idx");
+        self.emit(OpCode::InitLocal(idx_slot), line, col);
+        self.emit(OpCode::GetLocal(arr_slot), line, col);
+        self.emit(OpCode::Len, line, col);
+        let len_slot = self.declare_local("$len");
+        self.emit(OpCode::InitLocal(len_slot), line, col);
+        let loop_start = self.cur().chunk.code.len();
+        self.emit(OpCode::GetLocal(idx_slot), line, col);
+        self.emit(OpCode::GetLocal(len_slot), line, col);
+        self.emit(OpCode::Less, line, col);
+        let exit = self.emit(OpCode::JumpIfFalse(0), line, col);
+        self.emit(OpCode::Pop, line, col);
+        bind(self, idx_slot); // liga la(s) variable(s) de la iteración
+        self.emit_block(body)?;
+        self.emit(OpCode::Pop, line, col);
+        self.emit(OpCode::GetLocal(idx_slot), line, col);
+        self.emit_int(1, line, col);
+        self.emit(OpCode::Add, line, col);
+        self.emit(OpCode::SetLocal(idx_slot), line, col);
+        self.emit(OpCode::Jump(loop_start), line, col);
+        self.patch_jump(exit);
+        self.emit(OpCode::Pop, line, col);
+        Ok(())
+    }
+
     fn end_scope(&mut self, saved_slot: usize) {
         let s = self.cur();
         s.scope_depth -= 1;
@@ -470,6 +593,12 @@ impl<'a> Compiler<'a> {
                         self.emit(OpCode::InitLocal(slot), line, col);
                     }
                 }
+            }
+            // M27.2: bucle `for`. Se compila a un bucle contado con locales temporales (`$…`, no chocan).
+            StmtKind::For { pat, iter, body } => {
+                let saved = self.begin_scope();
+                self.emit_for(pat, iter, body, line, col)?;
+                self.end_scope(saved);
             }
             StmtKind::Assign { target, value } => match &target.kind {
                 // x = e  → a un local, a un upvalue, según resuelva el nombre.

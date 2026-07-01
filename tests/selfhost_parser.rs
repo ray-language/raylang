@@ -296,6 +296,17 @@ fn dump_stmt(st: &Stmt) -> String {
             let ns: String = names.iter().map(|n| format!(" {}", n.clone().unwrap_or_else(|| "_".to_string()))).collect();
             format!("({} (tuple{}) {}){}", kw, ns, dump_expr(value), pp)
         }
+        StmtKind::For { pat, iter, body } => {
+            let p = match pat {
+                raylang::ast::ForPat::Single(n) => n.clone(),
+                raylang::ast::ForPat::Tuple(ns) => format!("(tuple{})", ns.iter().map(|n| format!(" {}", n.clone().unwrap_or_else(|| "_".to_string()))).collect::<String>()),
+            };
+            let it = match iter {
+                raylang::ast::ForIter::Range { start, end } => format!("(range {} {})", dump_expr(start), dump_expr(end)),
+                raylang::ast::ForIter::In(e) => dump_expr(e),
+            };
+            format!("(for {} {} {}){}", p, it, dump_block(body), pp)
+        }
         StmtKind::Assign { target, value } => {
             format!("(assign {} {}){}", dump_expr(target), dump_expr(value), pp)
         }
@@ -652,6 +663,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
     const DIFERIDOS_SELFHOST: &[&str] = &[
         "binario.ray", "http.ray", "webserver.ray",
         "tuplas.ray", // M27.1: tuplas (el toolchain auto-alojado aún no las soporta)
+        "for_bucles.ray", // M27.2: bucle `for` (el toolchain auto-alojado aún no lo soporta)
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops

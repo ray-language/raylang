@@ -238,6 +238,8 @@ impl Session {
                     name: names.iter().flatten().next().cloned().unwrap_or_else(|| "_".to_string()),
                     src: ensure_semi(line),
                 }),
+                // M27.2: un `for` es una sentencia con efectos; se conserva sin mostrar valor.
+                StmtKind::For { .. } => Ok(Entry::Assign { show: None, src: ensure_semi(line) }),
                 StmtKind::Assign { target, .. } => {
                     let show = match &target.kind {
                         ExprKind::Ident(n) => Some(n.clone()),

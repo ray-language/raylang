@@ -112,7 +112,15 @@ impl Lexer {
             ',' => TokenKind::Comma,
             ';' => TokenKind::Semicolon,
             ':' => TokenKind::Colon,
-            '.' => TokenKind::Dot,
+            '.' => {
+                // `..` es el operador de rango (M27.2); `.` solo es acceso a campo.
+                if self.peek() == Some('.') {
+                    self.advance();
+                    TokenKind::DotDot
+                } else {
+                    TokenKind::Dot
+                }
+            }
             '?' => TokenKind::Question,
             '@' => TokenKind::At, // reservado para anotaciones (M10); el parser aún no lo usa
 
@@ -450,6 +458,8 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "if" => TokenKind::If,
         "else" => TokenKind::Else,
         "while" => TokenKind::While,
+        "for" => TokenKind::For,
+        "in" => TokenKind::In,
         "true" => TokenKind::True,
         "false" => TokenKind::False,
         "struct" => TokenKind::Struct,

@@ -31,6 +31,8 @@ pub enum TokenKind {
     If,
     Else,
     While,
+    For, // M27.2
+    In,  // M27.2
     True,
     False,
     Struct,
@@ -87,6 +89,7 @@ pub enum TokenKind {
     Semicolon, // ;
     Colon,     // :
     Dot,       // .
+    DotDot,    // ..  (rango, M27.2)
     Arrow,     // ->
     FatArrow,  // =>  (brazos de match, M5)
     Question,  // ?   (propagación de errores, M6)

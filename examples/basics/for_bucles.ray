@@ -1,0 +1,43 @@
+// El bucle `for` (M27.2): itera rangos, arreglos, strings y Maps sin manejar índices a mano.
+// Azúcar de front-end sobre `while`; cada motor lo ejecuta directamente.
+
+fn main() {
+    // Rango `a..b` (sin incluir b).
+    var suma = 0;
+    for i in 0..10 {
+        suma = suma + i;
+    }
+    print("suma 0..10 = " + to_string(suma)); // 45
+
+    // Sobre un arreglo: la variable liga cada elemento.
+    let notas = [7, 9, 6, 10, 8];
+    var total = 0;
+    for n in notas {
+        total = total + n;
+    }
+    print("media = " + to_string(total / len(notas))); // 8
+
+    // Sobre un string: la variable es un `char`.
+    var vocales = 0;
+    for c in "murcielago" {
+        if (c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u') {
+            vocales = vocales + 1;
+        }
+    }
+    print("vocales = " + to_string(vocales)); // 5
+
+    // Sobre un Map: el patrón es una tupla `(clave, valor)`. Las claves salen ORDENADAS (determinista).
+    var inventario: Map<string, int> = map_new();
+    insert(inventario, "manzanas", 12);
+    insert(inventario, "peras", 7);
+    insert(inventario, "kiwis", 20);
+    for (fruta, cantidad) in inventario {
+        print("  " + fruta + ": " + to_string(cantidad));
+    }
+
+    // Rango descendente no existe directamente; se recorre y se resta.
+    print("cuenta atrás:");
+    for i in 0..5 {
+        print("  " + to_string(4 - i)); // 4, 3, 2, 1, 0
+    }
+}

@@ -581,6 +581,73 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(())
             }
+            // M27.2: bucle `for`. Cada iteración liga la(s) variable(s) en un ámbito fresco y ejecuta el
+            // cuerpo (su valor se descarta; un return/error se propaga).
+            StmtKind::For { pat, iter, body } => {
+                match iter {
+                    ForIter::Range { start, end } => {
+                        let s = self.eval_int(start)?;
+                        let e = self.eval_int(end)?;
+                        let name = match pat { ForPat::Single(n) => n, _ => unreachable!("checker: un nombre") };
+                        let mut i = s;
+                        while i < e {
+                            self.scopes.push(HashMap::new());
+                            self.define(name, Value::Int(i));
+                            let r = self.exec_block(body);
+                            self.scopes.pop();
+                            r?;
+                            i += 1;
+                        }
+                    }
+                    ForIter::In(e) => {
+                        let v = self.eval_expr(e)?;
+                        match v {
+                            Value::Array(rc) => {
+                                let name = match pat { ForPat::Single(n) => n, _ => unreachable!("checker: un nombre") };
+                                let len = rc.borrow().len();
+                                for idx in 0..len {
+                                    let item = rc.borrow()[idx].clone();
+                                    self.scopes.push(HashMap::new());
+                                    self.define(name, item);
+                                    let r = self.exec_block(body);
+                                    self.scopes.pop();
+                                    r?;
+                                }
+                            }
+                            Value::Str(s) => {
+                                let name = match pat { ForPat::Single(n) => n, _ => unreachable!("checker: un nombre") };
+                                for c in s.chars() {
+                                    self.scopes.push(HashMap::new());
+                                    self.define(name, Value::Char(c));
+                                    let r = self.exec_block(body);
+                                    self.scopes.pop();
+                                    r?;
+                                }
+                            }
+                            Value::Map(rc) => {
+                                let (kn, vn) = match pat {
+                                    ForPat::Tuple(names) => (names[0].clone(), names[1].clone()),
+                                    _ => unreachable!("checker: una tupla (k, v)"),
+                                };
+                                // Clave ordenada (determinista, como el builtin `keys`) → casa con la VM.
+                                let mut ks: Vec<MapKey> = rc.borrow().keys().cloned().collect();
+                                ks.sort();
+                                for k in ks {
+                                    let val = rc.borrow().get(&k).cloned().expect("clave presente");
+                                    self.scopes.push(HashMap::new());
+                                    if let Some(n) = &kn { self.define(n, k.to_value()); }
+                                    if let Some(n) = &vn { self.define(n, val); }
+                                    let r = self.exec_block(body);
+                                    self.scopes.pop();
+                                    r?;
+                                }
+                            }
+                            _ => unreachable!("el checker garantiza arreglo/string/Map"),
+                        }
+                    }
+                }
+                Ok(())
+            }
             StmtKind::Assign { target, value } => {
                 let v = self.eval_expr(value)?;
                 match &target.kind {

@@ -636,11 +636,29 @@ pub struct Diag {
     pub message: String,
 }
 
+/// Corre el front-end **sin ejecutar** y devuelve TODOS los errores (M33c, hasta el tope
+/// de cada fase): un error léxico corta (sin tokens no hay nada que recuperar); los de
+/// sintaxis se acumulan con recuperación (`parse_all`); solo si el parse quedó limpio se
+/// pasa al checker (`check_all`) — los errores de tipos sobre un AST parcial serían
+/// cascada basura. Es lo que publica `publishDiagnostics`.
+pub fn analizar_todos(src: &str) -> Vec<Diag> {
+    let diag = |line: usize, col: usize, len: usize, message: String| Diag { line, col, len, message };
+    let tokens = match lexer::lex(src) {
+        Ok(t) => t,
+        Err(e) => return vec![diag(e.line, e.col, e.len, e.to_string())],
+    };
+    let (mut program, perrs) = parser::parse_all(tokens);
+    if !perrs.is_empty() {
+        return perrs.into_iter().map(|e| diag(e.line, e.col, e.len, e.to_string())).collect();
+    }
+    checker::check_all(&mut program)
+        .into_iter()
+        .map(|e| diag(e.line, e.col, e.len, e.to_string()))
+        .collect()
+}
+
 /// Corre el front-end (lexer → parser → checker) **sin ejecutar** y devuelve el primer
 /// error, si lo hay. Es todo el acoplamiento con el compilador: la API pública, nada más.
-///
-/// Nuestro compilador es *fail-fast* (devuelve el primer error), así que se publica **un**
-/// diagnóstico por documento; reportar *todos* exigiría recolección de errores por fase.
 pub fn analizar(src: &str) -> Option<Diag> {
     let tokens = match lexer::lex(src) {
         Ok(t) => t,
@@ -699,10 +717,8 @@ fn error_metodo(id: Json, method: &str) -> Json {
 
 /// Analiza la fuente y construye la notificación `publishDiagnostics` para ese documento.
 fn diagnosticos(uri: &str, src: &str) -> Json {
-    let diags = match analizar(src) {
-        Some(d) => vec![diagnostico_json(src, &d)],
-        None => vec![], // sin errores: una lista vacía borra los diagnósticos previos
-    };
+    // M33c: todos los errores del documento (una lista vacía borra los previos).
+    let diags = analizar_todos(src).iter().map(|d| diagnostico_json(src, d)).collect();
     publish(uri, diags)
 }
 
@@ -1116,6 +1132,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn analizar_todos_publica_varios_errores() {
+        // M33c: dos errores de tipos → dos diagnósticos.
+        let ds = analizar_todos("fn f() -> int { 1 + true }\nfn g() -> int { \"x\" * 2 }\nfn main() -> int { 0 }");
+        assert_eq!(ds.len(), 2, "{:?}", ds.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!((ds[0].line, ds[1].line), (1, 2));
+        // Dos errores de sintaxis → dos diagnósticos (recuperación del parser)…
+        let ds = analizar_todos("fn f() -> int { let = 1; 0 }\nfn g() -> int { 2 + }\nfn main() -> int { 0 }");
+        assert!(ds.len() >= 2, "{:?}", ds.iter().map(|d| &d.message).collect::<Vec<_>>());
+        // …pero un parse sucio NO llega al checker (sería cascada sobre un AST parcial).
+        assert!(ds.iter().all(|d| d.message.contains("sintaxis")), "{:?}",
+            ds.iter().map(|d| &d.message).collect::<Vec<_>>());
+        // Sin errores → lista vacía (borra los diagnósticos previos del editor).
+        assert!(analizar_todos("fn main() -> int { 0 }").is_empty());
+    }
+
+        #[test]
     fn analiza_programa_valido_sin_errores() {
         assert!(analizar("fn main() -> int { 1 + 2 }").is_none());
     }

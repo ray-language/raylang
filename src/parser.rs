@@ -45,6 +45,18 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
     Parser::new(tokens).parse_program()
 }
 
+/// Variante acumuladora (M33c): parsea recuperándose de los errores — ante uno, lo guarda,
+/// **resincroniza** al próximo ítem top-level (`sync_item`) y sigue. Devuelve el programa
+/// **parcial** (los ítems que sí parsearon) y todos los errores (hasta `MAX_ERRORES`). El
+/// primer error es **idéntico** al de `parse` (mismo recorrido hasta ahí). Es la variante
+/// de *diagnóstico* (LSP/CLI); el camino de ejecución sigue usando `parse` (fail-fast).
+pub fn parse_all(tokens: Vec<Token>) -> (Program, Vec<ParseError>) {
+    Parser::new(tokens).parse_program_all()
+}
+
+/// Tope de errores acumulados (M33c): la cascada tras una recuperación imperfecta no inunda.
+const MAX_ERRORES: usize = 20;
+
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
@@ -82,74 +94,130 @@ impl Parser {
 
     /// program = { import | [anns] [pub] (struct_def | enum_def | trait_def | impl_block | function) }
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
-        let mut functions = Vec::new();
-        let mut structs = Vec::new();
-        let mut enums = Vec::new();
-        let mut traits = Vec::new();
-        let mut impls = Vec::new();
-        let mut imports = Vec::new();
-        let mut from_imports = Vec::new();
-        let mut consts = Vec::new();
+        let mut acc = Program::default();
         while !self.is_at_end() {
-            // M11.3: `import M;` precede a todo (sin anotaciones ni `pub`).
-            if self.check(&TokenKind::Import) {
-                imports.push(self.import_decl()?);
-                continue;
-            }
-            // M11.3b: `from M import a [as b]{, …};` trae nombres al ámbito.
-            if self.check(&TokenKind::From) {
-                from_imports.push(self.import_from_decl(false)?);
-                continue;
-            }
-            // M11.6a: `pub from M import …;` reexporta (construye la cara pública de un `mod.ray`).
-            if self.check(&TokenKind::Pub) && self.check_next(&TokenKind::From) {
-                self.advance(); // 'pub'
-                from_imports.push(self.import_from_decl(true)?);
-                continue;
-            }
-            // M10.1: las anotaciones (`@nombre[(args)]`) preceden a la declaración.
-            let anns = self.annotations()?;
-            // M11.3: `pub` exporta el ítem. En M11.3a solo se admite ante una función
-            // (tipos/enums/traits son globales por ahora).
-            let pub_tok = if self.check(&TokenKind::Pub) { Some(self.advance()) } else { None };
-            if self.check(&TokenKind::Const) {
-                // M27.5: `const NAME: T = <literal>;`.
-                self.no_annotations(&anns, "una constante")?;
-                let kw = self.advance();
-                let (name, _, _) = self.expect_ident("el nombre de la constante")?;
-                self.expect(&TokenKind::Colon, "':' tras el nombre de la constante")?;
-                let ty = self.parse_type()?;
-                self.expect(&TokenKind::Eq, "'=' en la constante")?;
-                let value = self.expression()?;
-                self.expect(&TokenKind::Semicolon, "';' al final de la constante")?;
-                consts.push(ConstDef { name, ty, value, is_pub: pub_tok.is_some(), line: kw.line, col: kw.col });
-            } else if self.check(&TokenKind::Struct) {
-                let mut s = self.struct_def()?;
-                s.annotations = anns;
-                s.is_pub = pub_tok.is_some();
-                structs.push(s);
-            } else if self.check(&TokenKind::Enum) {
-                let mut e = self.enum_def()?;
-                e.annotations = anns;
-                e.is_pub = pub_tok.is_some();
-                enums.push(e);
-            } else if self.check(&TokenKind::Trait) {
-                self.no_annotations(&anns, "un trait")?;
-                let mut t = self.trait_def()?;
-                t.is_pub = pub_tok.is_some();
-                traits.push(t);
-            } else if self.check(&TokenKind::Impl) {
-                self.no_pub(&pub_tok, "un impl")?;
-                self.no_annotations(&anns, "un impl")?;
-                impls.push(self.impl_block()?);
-            } else {
-                let mut f = self.function()?;
-                f.annotations = anns;
-                f.is_pub = pub_tok.is_some();
-                functions.push(f);
+            self.parse_item(&mut acc)?;
+        }
+        acc.expr_spans = std::mem::take(&mut self.expr_spans);
+        Ok(acc)
+    }
+
+    /// La variante acumuladora de `parse_program` (M33c): un error se guarda y se
+    /// **resincroniza** al próximo ítem; el programa devuelto es parcial.
+    pub fn parse_program_all(&mut self) -> (Program, Vec<ParseError>) {
+        let mut acc = Program::default();
+        let mut errores = Vec::new();
+        while !self.is_at_end() {
+            let antes = self.pos;
+            if let Err(e) = self.parse_item(&mut acc) {
+                errores.push(e);
+                if errores.len() >= MAX_ERRORES {
+                    break;
+                }
+                if self.pos == antes {
+                    self.advance(); // progreso garantizado: nunca reintentar el mismo token
+                }
+                self.sync_item();
             }
         }
-        Ok(Program { functions, structs, enums, consts, traits, impls, imports, from_imports, ufcs_aliases: std::collections::HashMap::new(), expr_spans: std::mem::take(&mut self.expr_spans) })
+        acc.expr_spans = std::mem::take(&mut self.expr_spans);
+        (acc, errores)
+    }
+
+    /// Resincronización (M33c): avanza hasta el próximo arranque plausible de ítem
+    /// top-level. El contador de llaves **relativo** exige ≤ 0: un error dentro de un
+    /// cuerpo salta el cuerpo entero antes de anclar (un `fn` anónimo en medio de un
+    /// cuerpo roto aún puede anclar de más — heurística honesta, acotada por el tope).
+    fn sync_item(&mut self) {
+        let mut depth: i64 = 0;
+        while !self.is_at_end() {
+            match &self.peek().kind {
+                TokenKind::LBrace => depth += 1,
+                TokenKind::RBrace => depth -= 1,
+                k if depth <= 0
+                    && matches!(
+                        k,
+                        TokenKind::Fn
+                            | TokenKind::Struct
+                            | TokenKind::Enum
+                            | TokenKind::Trait
+                            | TokenKind::Impl
+                            | TokenKind::Pub
+                            | TokenKind::Import
+                            | TokenKind::From
+                            | TokenKind::Const
+                            | TokenKind::At
+                    ) =>
+                {
+                    return;
+                }
+                _ => {}
+            }
+            self.advance();
+        }
+    }
+
+    /// Parsea UN ítem de nivel superior y lo agrega al programa. Extraído del bucle de
+    /// `parse_program` (M33c) para que el fail-fast y el acumulador compartan el código.
+    fn parse_item(&mut self, acc: &mut Program) -> Result<(), ParseError> {
+        // M11.3: `import M;` precede a todo (sin anotaciones ni `pub`).
+        if self.check(&TokenKind::Import) {
+            acc.imports.push(self.import_decl()?);
+            return Ok(());
+        }
+        // M11.3b: `from M import a [as b]{, …};` trae nombres al ámbito.
+        if self.check(&TokenKind::From) {
+            acc.from_imports.push(self.import_from_decl(false)?);
+            return Ok(());
+        }
+        // M11.6a: `pub from M import …;` reexporta (construye la cara pública de un `mod.ray`).
+        if self.check(&TokenKind::Pub) && self.check_next(&TokenKind::From) {
+            self.advance(); // 'pub'
+            acc.from_imports.push(self.import_from_decl(true)?);
+            return Ok(());
+        }
+        // M10.1: las anotaciones (`@nombre[(args)]`) preceden a la declaración.
+        let anns = self.annotations()?;
+        // M11.3: `pub` exporta el ítem. En M11.3a solo se admite ante una función
+        // (tipos/enums/traits son globales por ahora).
+        let pub_tok = if self.check(&TokenKind::Pub) { Some(self.advance()) } else { None };
+        if self.check(&TokenKind::Const) {
+            // M27.5: `const NAME: T = <literal>;`.
+            self.no_annotations(&anns, "una constante")?;
+            let kw = self.advance();
+            let (name, _, _) = self.expect_ident("el nombre de la constante")?;
+            self.expect(&TokenKind::Colon, "':' tras el nombre de la constante")?;
+            let ty = self.parse_type()?;
+            self.expect(&TokenKind::Eq, "'=' en la constante")?;
+            let value = self.expression()?;
+            self.expect(&TokenKind::Semicolon, "';' al final de la constante")?;
+            acc.consts.push(ConstDef { name, ty, value, is_pub: pub_tok.is_some(), line: kw.line, col: kw.col });
+        } else if self.check(&TokenKind::Struct) {
+            let mut s = self.struct_def()?;
+            s.annotations = anns;
+            s.is_pub = pub_tok.is_some();
+            acc.structs.push(s);
+        } else if self.check(&TokenKind::Enum) {
+            let mut e = self.enum_def()?;
+            e.annotations = anns;
+            e.is_pub = pub_tok.is_some();
+            acc.enums.push(e);
+        } else if self.check(&TokenKind::Trait) {
+            self.no_annotations(&anns, "un trait")?;
+            let mut t = self.trait_def()?;
+            t.is_pub = pub_tok.is_some();
+            acc.traits.push(t);
+        } else if self.check(&TokenKind::Impl) {
+            self.no_pub(&pub_tok, "un impl")?;
+            self.no_annotations(&anns, "un impl")?;
+            acc.impls.push(self.impl_block()?);
+        } else {
+            let mut f = self.function()?;
+            f.annotations = anns;
+            f.is_pub = pub_tok.is_some();
+            acc.functions.push(f);
+        }
+        Ok(())
     }
 
     /// import_decl  = 'import' module_path [ 'as' IDENT ] ';'   (M11.3 / M11.5)
@@ -1640,6 +1708,30 @@ mod tests {
     }
 
     #[test]
+    fn parse_all_se_recupera_y_acumula() {
+        // M33c: dos ítems rotos → dos errores; los ítems sanos entre medias sobreviven.
+        let src = "fn f() -> int { let = 1; 0 }\nfn buena() -> int { 42 }\nstruct P { x int }\nfn main() -> int { buena() }";
+        let toks = crate::lexer::lex(src).expect("lex ok");
+        let (prog, errs) = parse_all(toks.clone());
+        assert_eq!(errs.len(), 2, "{errs:?}");
+        // El primer error es byte-idéntico al de la variante fail-fast (oráculos).
+        let solo = parse(toks).unwrap_err();
+        assert_eq!(errs[0], solo);
+        // El programa parcial conserva los ítems que sí parsearon.
+        let nombres: Vec<&str> = prog.functions.iter().map(|f| f.name.as_str()).collect();
+        assert!(nombres.contains(&"buena") && nombres.contains(&"main"), "{nombres:?}");
+    }
+
+    #[test]
+    fn parse_all_acota_la_cascada() {
+        // Un fuente patológico no produce errores sin fin: el tope corta.
+        let src = "fn ( fn ( fn ( fn ( fn ( fn (".repeat(20);
+        let toks = crate::lexer::lex(&src).expect("lex ok");
+        let (_, errs) = parse_all(toks);
+        assert!(!errs.is_empty() && errs.len() <= 20, "{}", errs.len());
+    }
+
+        #[test]
     fn el_anidamiento_hostil_se_corta_con_error() {
         // M33d: sin límite, 100k niveles desbordan la pila y ABORTAN el proceso.
         // Con pila grande para que el guard (y no la pila del hilo de test) sea el límite.

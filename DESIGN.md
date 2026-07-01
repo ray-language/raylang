@@ -4739,3 +4739,42 @@ no lo replica (el corpus del oráculo no anida así) — anotado como diferido.
 (200 KB, el archivo patológico es una sola línea). `diagnostic::render` gana una **ventana**:
 una línea de más de 160 caracteres se recorta alrededor de la columna del error con `…` en los
 bordes (el cursor sigue alineado). Pulido de presentación puro.
+
+### 38.5 M33c — multi-error con recuperación
+
+Hoy el pipeline es *fail-fast*: el primer error termina la pasada, y el LSP publica **un**
+diagnóstico por documento. Producción quiere ver **todos** (hasta un tope) los errores de una
+tacada. La restricción que gobierna el diseño: **el primer error debe seguir siendo
+byte-idéntico** — los oráculos self-hosted (M14) comparan contra él, y el camino de ejecución
+no cambia.
+
+**Decisión: variantes acumuladoras, firmas intactas.** `parse`/`check` conservan firma y
+comportamiento (fail-fast; es lo que ejecuta, y lo que el self-hosting espeja). Se añaden:
+
+- **`parser::parse_all(tokens) -> (Program, Vec<ParseError>)`** — el cuerpo del bucle de ítems
+  se extrae a `parse_item`; la variante acumuladora, ante un error, lo guarda y **resincroniza**
+  (`sync_item`): avanza (garantizando progreso) hasta el próximo arranque de ítem top-level
+  (`fn`/`struct`/`enum`/`trait`/`impl`/`pub`/`import`/`from`/`const`/`@`) con el **contador de
+  llaves relativo ≤ 0** — así un error dentro de un cuerpo salta el cuerpo entero. El `Program`
+  devuelto es **parcial** (los ítems que sí parsearon). Heurística honesta: un `fn` anónimo en
+  medio de un cuerpo roto puede anclar de más (cascada acotada por el tope); los compiladores
+  reales conviven con lo mismo.
+- **`checker::check_all(&mut Program) -> Vec<TypeError>`** — granularidad **por función**: las
+  pasadas tempranas (tipos, firmas, anotaciones) siguen fail-fast (sus tablas a medias
+  envenenarían todo lo demás); el bucle de **cuerpos** acumula (flag `acumular`), truncando
+  `scopes` tras un cuerpo fallido para no contaminar al siguiente (`check_function` ya restaura
+  el resto de su estado incluso en error). Los métodos de impl ya viven en `program.functions`
+  (paso 0c) → cubiertos gratis. **Sin lowering**: la variante es de diagnóstico; si hay errores
+  no se ejecuta nada.
+- **Tope `MAX_ERRORES = 20`** en ambos (la cascada tras una recuperación imperfecta no inunda).
+- **LSP**: `analizar_todos` (lex → un error · parse → los de `parse_all` · si parse limpio →
+  `check_all`) y `publishDiagnostics` publica la lista completa. No se mezclan fases: los
+  errores del checker sobre un AST parcial serían cascada basura.
+- **CLI**: si `check` falla, `main` re-corre `check_all` sobre una copia previa del programa y
+  renderiza **todos** (cada uno localizado contra su módulo, L3). Los errores de parse en CLI
+  siguen fail-fast (el loader corta por módulo); el multi-error de parse luce en el LSP, que es
+  por-documento.
+- **REPL**: sigue fail-fast a propósito — una entrada de REPL es una línea; el multi-error no
+  aporta y la entrada errónea se descarta entera igualmente (M8.2).
+- **El fuzzer (38.4) apunta a la variante nueva**: `analizar_todos` ejercita la recuperación
+  (`sync_item`) y el `check_all` sobre programas parciales — la superficie que estrena esta fase.

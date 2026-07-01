@@ -121,13 +121,21 @@ fn run() {
 
     // El checker resuelve la construcción de enums sobre el AST (lo muta), así que
     // el intérprete y la VM reciben un programa ya resuelto.
-    if let Err(mut e) = checker::check(&mut program) {
-        let (source, name, local) = locate(e.line);
-        e.line = local; // que el `Display` del error muestre la línea local, no la global
-        let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
-        eprintln!("{}", diagnostic::render(&source, local, e.col, e.len, &head));
+    // M33c: si la verificación falla, se re-corre la variante acumuladora sobre una copia
+    // previa del programa y se muestran TODOS los errores (cada uno localizado contra su
+    // módulo, L3), no solo el primero. El camino feliz sigue costando un solo `check`.
+    let backup = program.clone();
+    if checker::check(&mut program).is_err() {
+        let mut copia = backup;
+        for mut e in checker::check_all(&mut copia) {
+            let (source, name, local) = locate(e.line);
+            e.line = local; // que el `Display` del error muestre la línea local, no la global
+            let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
+            eprintln!("{}", diagnostic::render(&source, local, e.col, e.len, &head));
+        }
         process::exit(65);
     }
+    drop(backup);
 
     // Backend: intérprete (M1) o VM (M2).
     let result = if use_vm {

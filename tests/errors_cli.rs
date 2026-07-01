@@ -52,3 +52,15 @@ fn error_de_tipos_subraya_la_expresion_completa() {
     assert!(err.contains("|             ^^^^^^^^"), "subraya '1 + true' (8 chars)\n{err}");
     assert!(!err.contains("^^^^^^^^^"), "y no más de 8\n{err}");
 }
+
+#[test]
+fn el_cli_muestra_todos_los_errores_de_tipos() {
+    // M33c: dos cuerpos con error → los dos diagnósticos renderizados, exit 65.
+    let err = run_file_stderr(
+        "fn f() -> int { 1 + true }\nfn g() -> int { \"x\" * 2 }\nfn main() -> int { f() + g() }\n",
+        "ray_err_multi.ray",
+    );
+    assert!(err.contains("error de tipos en 1:17"), "primer error\n{err}");
+    assert!(err.contains("error de tipos en 2:17"), "segundo error\n{err}");
+    assert!(err.contains("int y bool") && err.contains("string y int"), "{err}");
+}

@@ -6,10 +6,12 @@
 //! propios, en vez de `cargo-fuzz` (nightly + libFuzzer; el coverage-guided queda
 //! diferido). El corpus semilla son los `.ray` reales del repo (`examples/` + `selfhost/`).
 //!
-//! Objetivo: `lsp::analizar` (corre el front-end SIN ejecutar — fuzzeamos el compilador,
-//! no el programa del usuario) y `fmt::format_source`. Cada caso corre en un hilo con
-//! pila grande; un `join` con `Err` = pánico = hallazgo: la entrada se guarda en
-//! `target/fuzz/` y el test falla con la ruta y la semilla (reproducible).
+//! Objetivo: `lsp::analizar_todos` (corre el front-end SIN ejecutar — fuzzeamos el
+//! compilador, no el programa del usuario; la variante multi-error ejercita además la
+//! recuperación del parser y el `check_all` sobre programas parciales, M33c) y
+//! `fmt::format_source`. Cada caso corre en un hilo con pila grande; un `join` con
+//! `Err` = pánico = hallazgo: la entrada se guarda en `target/fuzz/` y el test falla
+//! con la ruta y la semilla (reproducible).
 //!
 //! Dos marchas: el *smoke* determinista corre en la suite (semilla fija, casos acotados);
 //! la campaña larga es `#[ignore]` y se gradúa con `RAYLANG_FUZZ_ITERS`:
@@ -143,7 +145,9 @@ fn correr(caso: &[u8]) -> Option<String> {
     let h = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(move || {
-            let _ = raylang::lsp::analizar(&src2); // lex → parse → check, sin ejecutar
+            // M33c: la variante multi-error ejercita también la RECUPERACIÓN del parser
+            // (sync_item) y el check_all sobre programas parciales — superficie nueva.
+            let _ = raylang::lsp::analizar_todos(&src2); // lex → parse_all → check_all
             let _ = raylang::fmt::format_source(&src2); // rayfmt: lex → parse → pretty-print
         })
         .expect("hilo del caso");

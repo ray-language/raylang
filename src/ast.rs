@@ -136,7 +136,7 @@ pub struct Annotation {
 
 /// Un programa completo: definiciones de tipos (struct/enum) y funciones de nivel
 /// superior.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Program {
     pub functions: Vec<Function>,
     pub structs: Vec<StructDef>,

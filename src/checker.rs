@@ -92,6 +92,25 @@ struct VarInfo {
 /// enum (`Enum.Variante(args)`) en nodos `EnumLit` explícitos (M5). Esa resolución
 /// es parte del front-end compartido: el intérprete y la VM reciben el AST ya
 /// resuelto, sin duplicar la regla.
+/// Tope de errores acumulados por `check_all` (M33c).
+const MAX_ERRORES: usize = 20;
+
+/// Variante acumuladora de `check` (M33c): devuelve TODOS los errores de tipos (hasta
+/// `MAX_ERRORES`), con granularidad por función — las pasadas tempranas siguen fail-fast.
+/// **Solo diagnóstico** (LSP/CLI): omite el lowering, porque con errores no se ejecuta
+/// nada. El primer error es idéntico al de `check` (mismo recorrido hasta ahí).
+pub fn check_all(program: &mut Program) -> Vec<TypeError> {
+    if let Err(e) = prepare_program(program) {
+        return vec![e];
+    }
+    let mut checker = Checker::new();
+    checker.acumular = true;
+    match checker.check_program(program) {
+        Err(e) => vec![e], // pasada temprana (fail-fast): un solo error
+        Ok(()) => checker.errores,
+    }
+}
+
 pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // Pasos 0–1: inyectar el prelude, generar derivaciones, bajar los métodos de impl y
     // resolver la construcción de enums (compartido con `semantic_index`).
@@ -337,6 +356,12 @@ struct Checker {
     /// Spans de expresiones del parser (M33a-2): inicio → fin. Los consulta `err()` para
     /// subrayar la expresión completa; una posición ausente degrada a extensión 1.
     expr_spans: HashMap<(usize, usize), (usize, usize)>,
+    /// Modo acumulador (M33c, `check_all`): el bucle de cuerpos guarda los errores en
+    /// `errores` y sigue con la siguiente función, en vez de cortar en el primero. Las
+    /// pasadas tempranas (tipos/firmas) siguen fail-fast: sus tablas a medias
+    /// envenenarían todo lo demás. Apagado (fail-fast) en `check`, el camino de ejecución.
+    acumular: bool,
+    errores: Vec<TypeError>,
     /// Pila de ámbitos de variables. El último es el más interno.
     scopes: Vec<HashMap<String, VarInfo>>,
     /// Tipo de retorno de la función que estamos verificando ahora mismo, para
@@ -446,6 +471,8 @@ impl Checker {
             enum_bounds: HashMap::new(),
             scopes: Vec::new(),
             expr_spans: HashMap::new(),
+            acumular: false,
+            errores: Vec::new(),
             current_return: Type::Unit,
             type_params: HashSet::new(),
             ufcs_sites: HashMap::new(),
@@ -649,7 +676,20 @@ impl Checker {
 
         // --- Verificación de cada función ---
         for f in &program.functions {
-            self.check_function(f)?;
+            let profundidad = self.scopes.len();
+            if let Err(e) = self.check_function(f) {
+                if !self.acumular {
+                    return Err(e);
+                }
+                // M33c: un cuerpo fallido no contamina al siguiente — `check_function` ya
+                // restaura type_params/current_self/bounds incluso en error; los ámbitos
+                // que el cuerpo dejó a medias se truncan aquí.
+                self.scopes.truncate(profundidad);
+                self.errores.push(e);
+                if self.errores.len() >= MAX_ERRORES {
+                    break;
+                }
+            }
         }
         Ok(())
     }
@@ -4666,6 +4706,40 @@ mod tests {
     }
 
     #[test]
+    fn check_all_acumula_por_funcion() {
+        // M33c: un error por cuerpo, todos reportados; el primero idéntico al fail-fast.
+        let src = "fn f() -> int { 1 + true }\nfn g() -> int { \"x\" * 2 }\nfn main() -> int { f() + g() }";
+        let toks = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(toks).expect("parse ok");
+        let mut prog2 = prog.clone();
+        let errs = check_all(&mut prog2);
+        assert_eq!(errs.len(), 2, "{errs:?}");
+        assert!(errs[0].msg.contains("int y bool"), "{}", errs[0].msg);
+        assert!(errs[1].msg.contains("string y int"), "{}", errs[1].msg);
+        let solo = check(&mut prog).unwrap_err();
+        assert_eq!(errs[0], solo, "el primer error debe ser byte-idéntico (oráculos)");
+    }
+
+    #[test]
+    fn check_all_con_pasada_temprana_rota_da_un_error() {
+        // Un error de la pre-pasada (función duplicada) es fail-fast → exactamente uno,
+        // aunque haya además errores de cuerpo más abajo.
+        let src = "fn f() -> int { 0 }\nfn f() -> int { 1 }\nfn g() -> int { 1 + true }\nfn main() -> int { 0 }";
+        let toks = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(toks).expect("parse ok");
+        let errs = check_all(&mut prog);
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(errs[0].msg.contains("declarada dos veces"), "{}", errs[0].msg);
+        // Y un tipo desconocido en una FIRMA se valida en la fase de cuerpos → acumula
+        // junto a los demás (mejor: más errores de una tacada).
+        let src = "fn f(a: NoExiste) -> int { 0 }\nfn g() -> int { 1 + true }\nfn main() -> int { 0 }";
+        let toks = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(toks).expect("parse ok");
+        let errs = check_all(&mut prog);
+        assert_eq!(errs.len(), 2, "{errs:?}");
+    }
+
+        #[test]
     fn el_error_de_tipos_subraya_la_expresion_completa() {
         // M33a-2: la extensión del error sale de la tabla de spans del parser.
         let e = check_src("fn main() -> int { let x = 1 + true; x }").unwrap_err();

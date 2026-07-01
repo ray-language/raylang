@@ -131,6 +131,34 @@
 - [WebSockets](m19/websockets.md)
 - [TLS — https y wss](m19/tls.md)
 
+# M20–M26 — La pila de red y protocolos
+
+- [La pila de red y protocolos](m20/pila-de-red.md)
+
+# M27 — Ergonomía del lenguaje I
+
+- [Tuplas, for, interpolación y casts](m27/ergonomia.md)
+
+# M28 — Ergonomía del lenguaje II
+
+- [Operadores, From y enteros con tamaño](m28/ergonomia.md)
+
+# M29 — Tooling: regex y formateador
+
+- [Regex, rayfmt y optimización](m29/tooling.md)
+
+# M30 — Criptografía avanzada
+
+- [Cifrado autenticado y firmas](m30/cripto-avanzada.md)
+
+# M31 — Cerrar gRPC
+
+- [HPACK-Huffman, HTTP/2 vivo y gRPC](m31/cerrar-grpc.md)
+
+# M32 — Clientes y formatos
+
+- [PostgreSQL, CSV/TOML y plantillas](m32/clientes-formatos.md)
+
 # Optimización de la VM
 
 - [Medir, cambiar, a veces revertir](opt/intro.md)

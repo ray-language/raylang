@@ -4305,6 +4305,16 @@ Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
 - **M28.1 Sobrecarga de operadores** vía traits (`Add`/`Sub`/`Mul`/`Div`/`Neg`, `PartialEq`/`Ord`…). Hoy
   `+`/`==`/`<` están *special-cased*; se generalizan a métodos de trait para que un tipo de usuario los
   defina. Bonus: puede **unificar** `@derive(Eq)` (que pasa a derivar `PartialEq`).
+  - **COMPLETO** (aritméticos + `-` unario): traits `Add`/`Sub`/`Mul`/`Div`/`Neg` en el prelude. **Front-end
+    puro / erasure** (reusa el patrón de bajada por posición de UFCS): en `check_binary`, cuando el camino
+    built-in falla y ambos operandos son el **mismo tipo de usuario** que implementa el trait del operador
+    (`impl_traits`), se registra el sitio `(línea, col, "Add"/…)` → método manglado (`Vec2#add`) y el retorno
+    es `Self`; `-x` análogo con `Neg`. Una pasada `lower_operators` (antes de `lower_ufcs`) reescribe el
+    `Binary`/`Unary` a una llamada ordinaria `Vec2#add(a, b)` a la función que M9 ya inyectó → **runtime
+    intacto** (cero opcodes, oráculo VM↔intérprete verde). La clave lleva el **nombre del trait** porque
+    operadores encadenados (`a + b + c`) comparten `(línea, col)` en el AST (mismo operador → mismo método).
+    Comparación (`==`/`<`) e impls genéricos de operador quedan **diferidos** (los aritméticos concretos son
+    el caso útil; los primitivos siguen por el camino built-in). Ejemplo `examples/types/operadores.ray`.
 - **M28.2 `?` con conversión de error** (traits `From`/`Into`). Hoy `?` no convierte el tipo de error; con
   `From<E1> for E2` el `?` convierte automáticamente → librerías con un enum de error propio en vez de
   arrastrar `string`.

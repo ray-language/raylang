@@ -2778,6 +2778,24 @@ mod tests {
         oracle_program("fn main() -> int { let n = 42; if (f\"n={n}\" == \"n=42\") { 1 } else { 0 } }");
     }
 
+    /// M28.1: sobrecarga de operadores vía traits (`Add`/`Sub`/`Mul`/`Div`/`Neg`). `a op b` sobre
+    /// un tipo de usuario baja a `a.metodo(b)` (función manglada de M9) → ambos motores coinciden.
+    #[test]
+    fn operadores_oraculo() {
+        let vec2 = "struct Vec2 { x: int, y: int } \
+            impl Add for Vec2 { fn add(self, o: Vec2) -> Vec2 { Vec2 { x: self.x + o.x, y: self.y + o.y } } } \
+            impl Sub for Vec2 { fn sub(self, o: Vec2) -> Vec2 { Vec2 { x: self.x - o.x, y: self.y - o.y } } } \
+            impl Neg for Vec2 { fn neg(self) -> Vec2 { Vec2 { x: 0 - self.x, y: 0 - self.y } } } ";
+        // Suma de vectores: (1,2) + (3,4) = (4,6) → 4+6 = 10.
+        oracle_program(&format!("{vec2} fn main() -> int {{ let a = Vec2 {{ x: 1, y: 2 }}; let b = Vec2 {{ x: 3, y: 4 }}; let c = a + b; c.x + c.y }}"));
+        // Resta y negación encadenadas: -((5,5) - (1,2)) = -(4,3) = (-4,-3) → -7.
+        oracle_program(&format!("{vec2} fn main() -> int {{ let a = Vec2 {{ x: 5, y: 5 }}; let b = Vec2 {{ x: 1, y: 2 }}; let c = -(a - b); c.x + c.y }}"));
+        // Suma triple encadenada (mismo operador, posición compartida en el AST): (1,0)+(1,0)+(1,0).
+        oracle_program(&format!("{vec2} fn main() -> int {{ let u = Vec2 {{ x: 1, y: 0 }}; let s = u + u + u; s.x }}"));
+        // Los operadores built-in sobre int/float siguen intactos (no se enrutan a traits).
+        oracle_int("2 * 3 + 4");
+    }
+
     #[test]
     fn for_oraculo() {
         oracle_program("fn main() -> int { var s = 0; for i in 0..5 { s = s + i; } s }"); // 10

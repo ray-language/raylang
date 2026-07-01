@@ -98,6 +98,10 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // Paso 4 (M7.1 + M9): bajar las llamadas por punto (`recv.f(args)`) a llamadas
     // ordinarias (`f(recv, args)`); incluye UFCS, métodos de trait (M9.1) y métodos sobre
     // un tipo acotado, que bajan a una llamada al parámetro-diccionario (M9.2).
+    // Paso 3.5 (M28.1): bajar la sobrecarga de operadores — `a op b` (con un tipo de usuario que
+    // implementa el trait del operador) a `a.metodo(b)`, y `-x` a `x.neg()`. Se hace antes que el
+    // resto de bajadas: el resultado es una llamada ordinaria a la función manglada del método.
+    lower_operators(program, &checker.op_sites);
     lower_ufcs(program, &checker.ufcs_sites);
     // Paso 5 (M9.2): añadir los parámetros-diccionario a las funciones con bounds y los
     // argumentos correspondientes en cada sitio de llamada. Diccionarios = valores función;
@@ -328,6 +332,9 @@ struct Checker {
     /// (`Tipo#metodo`). Tras verificar, `lower_ufcs` reescribe `recv.f(args)` a
     /// `destino(recv, args)`, de modo que el intérprete y la VM solo ven llamadas.
     ufcs_sites: HashMap<(usize, usize, String), String>,
+    /// M28.1: sitios de sobrecarga de operadores. Clave `(línea, col, "Add"/"Sub"/…)` → función manglada
+    /// del método del operador (`Vec2#add`). El lowering reescribe el `Binary`/`Unary` a una llamada.
+    op_sites: HashMap<(usize, usize, String), String>,
     /// Traits declarados (M9): nombre → firmas de sus métodos (con `self`/`Self` aún sin
     /// sustituir). Llenado en la pre-pasada, antes de validar los impls.
     traits: HashMap<String, Vec<MethodSig>>,
@@ -402,6 +409,7 @@ impl Checker {
             current_return: Type::Unit,
             type_params: HashSet::new(),
             ufcs_sites: HashMap::new(),
+            op_sites: HashMap::new(),
             traits: HashMap::new(),
             methods: HashMap::new(),
             impl_fn_self: HashMap::new(),
@@ -1925,7 +1933,15 @@ impl Checker {
                 let t = self.check_expr(inner)?;
                 match op {
                     UnaryOp::Neg if t == Type::Int || t == Type::Float => Ok(t),
-                    UnaryOp::Neg => Err(self.err(expr.line, expr.col, format!("no se puede negar (-) un {}", t))),
+                    // M28.1: sobrecarga de `-` unario vía el trait `Neg`. Si el tipo lo implementa,
+                    // `-x` baja a `x.neg()`.
+                    UnaryOp::Neg => match type_key_of(&t) {
+                        Some(key) if self.impl_traits.contains(&(key.clone(), "Neg".to_string())) => {
+                            self.op_sites.insert((expr.line, expr.col, "Neg".to_string()), mangle(&key, "neg"));
+                            Ok(t)
+                        }
+                        _ => Err(self.err(expr.line, expr.col, format!("no se puede negar (-) un {}", t))),
+                    },
                     UnaryOp::Not if t == Type::Bool => Ok(Type::Bool),
                     UnaryOp::Not => Err(self.err(expr.line, expr.col, format!("el '!' requiere bool, no {}", t))),
                     // M19.3a: NOT bit a bit, int → int.
@@ -2109,10 +2125,15 @@ impl Checker {
                 (Type::Bytes, Type::Bytes) if op == Add => Ok(Type::Bytes),
                 // M11.7b: `+` concatena dos arreglos del mismo tipo de elemento → arreglo.
                 (Type::Array(a), Type::Array(b)) if op == Add && a == b => Ok(Type::Array(a.clone())),
-                _ => Err(self.err(line, col, format!(
-                    "el operador '{}' requiere ambos operandos int o ambos float, no {} y {}",
-                    bin_op_str(op), lt, rt
-                ))),
+                // M28.1: sobrecarga de operadores. Si ambos operandos son el mismo tipo de usuario
+                // que implementa el trait del operador (`Add`/`Sub`/…), `a op b` baja a `a.metodo(b)`.
+                _ => match self.try_operator_overload(op, &lt, &rt, line, col) {
+                    Some(res) => res,
+                    None => Err(self.err(line, col, format!(
+                        "el operador '{}' requiere ambos operandos int o ambos float, no {} y {}",
+                        bin_op_str(op), lt, rt
+                    ))),
+                },
             },
             // Orden: números, string o char, del mismo tipo → bool. M11.7d: string (lexicográfico)
             // y char (por code point) se ordenan, lo que habilita `sort` / el trait `Ord`.
@@ -2159,6 +2180,34 @@ impl Checker {
                 }
             }
         }
+    }
+
+    /// M28.1: intenta resolver `a op b` como una sobrecarga de operador. Devuelve `Some(...)` si
+    /// ambos operandos son el mismo tipo de usuario que implementa el trait del operador
+    /// (`Add`/`Sub`/`Mul`/`Div`), registrando el sitio para bajar `a op b` a `a.metodo(b)`; `None`
+    /// si el operador no es sobrecargable o el tipo no lo implementa (→ error built-in).
+    fn try_operator_overload(
+        &mut self,
+        op: BinaryOp,
+        lt: &Type,
+        rt: &Type,
+        line: usize,
+        col: usize,
+    ) -> Option<Result<Type, TypeError>> {
+        // El operador ha de tener un trait asociado y ambos operandos el mismo tipo.
+        let (trait_name, method) = op_trait_method(op)?;
+        if lt != rt {
+            return None;
+        }
+        let key = type_key_of(lt)?;
+        // Solo tipos de usuario (struct/enum); los primitivos ya los cubre el camino built-in.
+        if !self.impl_traits.contains(&(key.clone(), trait_name.to_string())) {
+            return None;
+        }
+        // El método está garantizado por la validación del impl; registra el sitio y el retorno = Self.
+        let mangled = mangle(&key, method);
+        self.op_sites.insert((line, col, trait_name.to_string()), mangled);
+        Some(Ok(lt.clone()))
     }
 
     fn check_call(
@@ -3015,6 +3064,18 @@ fn mangle(type_key: &str, method: &str) -> String {
     format!("{}#{}", type_key, method)
 }
 
+/// M28.1: mapa operador binario → (trait, método) para la sobrecarga. `None` si el operador
+/// no es sobrecargable (`%`, comparación, lógicos, bit a bit).
+fn op_trait_method(op: BinaryOp) -> Option<(&'static str, &'static str)> {
+    match op {
+        BinaryOp::Add => Some(("Add", "add")),
+        BinaryOp::Sub => Some(("Sub", "sub")),
+        BinaryOp::Mul => Some(("Mul", "mul")),
+        BinaryOp::Div => Some(("Div", "div")),
+        _ => None,
+    }
+}
+
 /// Clave de tipo para la tabla de métodos: el nombre del struct/enum o el primitivo.
 /// `None` para los tipos que no pueden recibir un impl en M9.1 (arreglos, funciones,
 /// unit, parámetros de tipo, `Self`).
@@ -3617,6 +3678,138 @@ fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
         }
         ExprKind::Block(b) => lower_ufcs_block(b, sites),
         // Literales, Ident: nada que recorrer.
+        _ => {}
+    }
+}
+
+// =====================================================================
+// Bajada de sobrecarga de operadores (M28.1)
+// =====================================================================
+//
+// `a op b` (con un tipo de usuario que implementa el trait del operador) y `-x` se
+// registraron en `op_sites` con clave `(línea, col, "Add"/"Sub"/…/"Neg")` → función
+// manglada del método (`Vec2#add`). Aquí se reescriben esos `Binary`/`Unary` a una
+// llamada ordinaria `metodo(a, b)` / `metodo(x)`, que el intérprete y la VM ya saben
+// ejecutar (el método es una función libre inyectada por M9). Corre **antes** de
+// `lower_ufcs`, así el resultado —un `Call(Ident)`— no necesita más bajadas.
+
+fn lower_operators(program: &mut Program, sites: &SiteMap) {
+    if sites.is_empty() {
+        return;
+    }
+    for f in &mut program.functions {
+        lower_operators_block(&mut f.body, sites);
+    }
+}
+
+fn lower_operators_block(block: &mut Block, sites: &SiteMap) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_operators_expr(value, sites),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { lower_operators_expr(start, sites); lower_operators_expr(end, sites); }
+                    ForIter::In(e) => lower_operators_expr(e, sites),
+                }
+                lower_operators_block(body, sites);
+            }
+            StmtKind::Assign { target, value } => {
+                lower_operators_expr(target, sites);
+                lower_operators_expr(value, sites);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    lower_operators_expr(v, sites);
+                }
+            }
+            StmtKind::Expr(e) => lower_operators_expr(e, sites),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        lower_operators_expr(t, sites);
+    }
+}
+
+fn lower_operators_expr(expr: &mut Expr, sites: &SiteMap) {
+    // ¿Este `Binary`/`Unary` es un sitio registrado? La clave lleva el nombre del trait del
+    // operador porque un mismo `(línea, col)` puede corresponder a operadores encadenados
+    // (`a + b + c`); un mismo operador en la misma posición baja al mismo método. Reescribir
+    // ANTES de recorrer los hijos, para que la recursión baje también los operandos.
+    let target = match &expr.kind {
+        ExprKind::Binary { op, .. } => op_trait_method(*op)
+            .and_then(|(tr, _)| sites.get(&(expr.line, expr.col, tr.to_string())).cloned()),
+        ExprKind::Unary { op: UnaryOp::Neg, .. } => {
+            sites.get(&(expr.line, expr.col, "Neg".to_string())).cloned()
+        }
+        _ => None,
+    };
+    if let Some(target) = target {
+        let (l, c) = (expr.line, expr.col);
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+        let args = match taken {
+            ExprKind::Binary { left, right, .. } => vec![*left, *right],
+            ExprKind::Unary { expr: inner, .. } => vec![*inner],
+            _ => unreachable!("el guard de sitio garantiza Binary o Unary Neg"),
+        };
+        expr.kind = ExprKind::Call {
+            callee: Box::new(Expr { kind: ExprKind::Ident(target), line: l, col: c }),
+            args,
+        };
+    }
+
+    // Recorrer los sub-nodos (incluye los operandos ya reescritos).
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => lower_operators_expr(inner, sites),
+        ExprKind::Binary { left, right, .. } => {
+            lower_operators_expr(left, sites);
+            lower_operators_expr(right, sites);
+        }
+        ExprKind::Call { callee, args } => {
+            lower_operators_expr(callee, sites);
+            for a in args {
+                lower_operators_expr(a, sites);
+            }
+        }
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
+            for e in elems {
+                lower_operators_expr(e, sites);
+            }
+        }
+        ExprKind::Index { array, index } => {
+            lower_operators_expr(array, sites);
+            lower_operators_expr(index, sites);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                lower_operators_expr(e, sites);
+            }
+        }
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                lower_operators_expr(a, sites);
+            }
+        }
+        ExprKind::Field { object, .. } => lower_operators_expr(object, sites),
+        ExprKind::Func(fe) => lower_operators_block(&mut fe.body, sites),
+        ExprKind::Match { scrutinee, arms } => {
+            lower_operators_expr(scrutinee, sites);
+            for arm in arms {
+                lower_operators_expr(&mut arm.body, sites);
+            }
+        }
+        ExprKind::Try(inner) => lower_operators_expr(inner, sites),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            lower_operators_expr(cond, sites);
+            lower_operators_block(then_branch, sites);
+            if let Some(e) = else_branch {
+                lower_operators_expr(e, sites);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            lower_operators_expr(cond, sites);
+            lower_operators_block(body, sites);
+        }
+        ExprKind::Block(b) => lower_operators_block(b, sites),
         _ => {}
     }
 }

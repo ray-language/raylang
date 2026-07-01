@@ -45,6 +45,14 @@ impl Ord for float { fn menor(self, otro: float) -> bool { self < otro } }
 impl Ord for string { fn menor(self, otro: string) -> bool { self < otro } }
 impl Ord for char { fn menor(self, otro: char) -> bool { self < otro } }
 
+// Traits de sobrecarga de operadores (M28.1): un tipo que implemente estos traits puede usar los
+// operadores aritméticos. El checker baja `a + b` (con `a`/`b` de un tipo de usuario) a `a.add(b)`.
+trait Add { fn add(self, otro: Self) -> Self; }
+trait Sub { fn sub(self, otro: Self) -> Self; }
+trait Mul { fn mul(self, otro: Self) -> Self; }
+trait Div { fn div(self, otro: Self) -> Self; }
+trait Neg { fn neg(self) -> Self; }
+
 // Eq/Show para los primitivos (M13.2a): los habilita `assert_eq` (que pide `T: Eq + Show`) y, en
 // general, cualquier genérico acotado por Eq/Show sobre un primitivo. Vía `==` y `to_string`, que
 // ya operan sobre int/float/bool/string/char. (Un tipo del usuario los obtiene con `@derive`.)

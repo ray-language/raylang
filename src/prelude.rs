@@ -359,6 +359,19 @@ fn tls_connect(host: string, port: int) -> Result<int, string> {
     }
 }
 
+// M31.2a: conexión TLS con ALPN 'h2' (HTTP/2); error si el servidor no lo negocia.
+fn tls_connect_h2(host: string, port: int) -> Result<int, string> {
+    let r = __tls_connect_h2(host, port);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
 // M19.4b: envuelve un socket TCP ya aceptado (handle de tcp_accept) en una sesión TLS de servidor con
 // el certificado y la clave en PEM; Ok(handle) u Err. Reusa el handle. Solo VM (servidor concurrente).
 fn tls_accept(handle: int, cert: string, key: string) -> Result<int, string> {

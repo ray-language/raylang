@@ -4486,6 +4486,14 @@ Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.
     legible por máquina + validación Kraft/prefijo/vector es lo fiable.
 - **M31.2 Transporte HTTP/2 vivo** — la connection preface + intercambio de SETTINGS + WINDOW_UPDATE +
   multiplexado de streams, todo sobre TLS con **ALPN `h2`** (requiere exponer ALPN en `tls_connect`).
+  - **M31.2a COMPLETO** — **ALPN `h2` en el runtime TLS**. Builtin `__tls_connect_h2` (opcode
+    `TlsConnectH2`) + envoltorio `tls_connect_h2(host, port) -> Result<int,string>` en el prelude: conecta,
+    configura `alpn_protocols=[b"h2"]` en un `ClientConfig` propio (la config cacheada no lleva ALPN),
+    **completa el handshake bloqueante** (para poder consultar el ALPN negociado) y **exige** que el
+    servidor negocie `h2` (si no, error). Reusa el registro de handles + rutas de I/O de `tls_connect`; la
+    VM lo pone no bloqueante tras el handshake para el framing con cesión de fibras. Test `h2_alpn_cli.rs`
+    (servidor rustls de juguete que ofrece/no ofrece `h2`; ambos motores). Falta la máquina de estados
+    HTTP/2 viva (preface + SETTINGS + streams) → M31.2b.
 - **M31.3 Cliente gRPC e2e** — HEADERS (`:path`=método, `content-type: application/grpc`) + DATA con el
   protobuf de M25 enmarcado (`grpc_frame`); leer HEADERS+DATA+trailers. Verificable contra un servidor
   gRPC real o un mock.

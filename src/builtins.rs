@@ -416,6 +416,46 @@ pub fn tls_connect(host: &str, port: i64) -> Result<i64, String> {
     Ok(id)
 }
 
+/// M31.2a: conexión TLS de cliente ofreciendo **ALPN `h2`** (HTTP/2). Conecta, **completa el handshake**
+/// (bloqueante) y exige que el servidor negocie `h2`; si no, error. Devuelve el handle (reusa el mismo
+/// registro/rutas de I/O que `tls_connect`). Builtin `__tls_connect_h2`.
+pub fn tls_connect_h2(host: &str, port: i64) -> Result<i64, String> {
+    // Config propia (la cacheada no lleva ALPN); reusa el mismo almacén de raíces + SSL_CERT_FILE.
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    if let Ok(path) = std::env::var("SSL_CERT_FILE") {
+        use rustls::pki_types::pem::PemObject;
+        if let Ok(certs) = rustls::pki_types::CertificateDer::pem_file_iter(&path) {
+            for cert in certs.flatten() {
+                let _ = roots.add(cert);
+            }
+        }
+    }
+    let mut cfg = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    cfg.alpn_protocols = vec![b"h2".to_vec()];
+
+    let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|_| format!("nombre de servidor inválido para TLS: {host}"))?;
+    let mut client = rustls::ClientConnection::new(std::sync::Arc::new(cfg), server_name)
+        .map_err(|e| e.to_string())?;
+    let mut sock = std::net::TcpStream::connect((host, port as u16)).map_err(|e| e.to_string())?;
+    // Handshake bloqueante hasta terminar (para poder consultar el ALPN negociado).
+    while client.is_handshaking() {
+        client.complete_io(&mut sock).map_err(|e| e.to_string())?;
+    }
+    match client.alpn_protocol() {
+        Some(p) if p == b"h2" => {}
+        _ => return Err("el servidor no negoció HTTP/2 (ALPN 'h2')".to_string()),
+    }
+    let mut reg = registry().lock().unwrap();
+    let id = reg.next;
+    reg.next += 1;
+    reg.open.insert(id, OpenHandle::Tls(Box::new(TlsConn { conn: rustls::Connection::Client(client), sock })));
+    Ok(id)
+}
+
 /// Construye una configuración de servidor TLS a partir de los PEM de la cadena de certificados y la
 /// clave privada (M19.4b). Cada servidor puede tener su propio certificado, así que NO se cachea.
 fn tls_server_config(cert_pem: &str, key_pem: &str) -> Result<std::sync::Arc<rustls::ServerConfig>, String> {
@@ -1359,6 +1399,14 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__tls_connect", " (host, puerto)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__tls_connect espera un string (el host), no {}", a[0]))); }
         if a[1] != Type::Int { return Err((Some(1), format!("__tls_connect espera un int (el puerto), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __tls_connect_h2(host, puerto) -> [string] (M31.2a): como __tls_connect pero ofreciendo ALPN 'h2';
+    // exige que el servidor negocie HTTP/2. ["ok", handle] o ["err", msg]. Prelude → Result<int,string>.
+    Builtin { name: "__tls_connect_h2", opcode: OpCode::TlsConnectH2, check: |a| {
+        arity(a, 2, "__tls_connect_h2", " (host, puerto)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__tls_connect_h2 espera un string (el host), no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__tls_connect_h2 espera un int (el puerto), no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __tls_accept(handle, cert, clave) -> [string] (M19.4b): envuelve un socket TCP ya aceptado en una

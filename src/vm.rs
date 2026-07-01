@@ -1367,6 +1367,24 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M31.2a: conexión TLS con ALPN h2 (el handshake ya se completó de forma bloqueante en el
+                // builtin; tras él se pone no bloqueante para el framing con cesión de fibras).
+                OpCode::TlsConnectH2 => {
+                    let port = self.pop();
+                    let host = self.pop();
+                    let (HeapValue::Str(host), HeapValue::Int(port)) = (host, port) else {
+                        unreachable!("el checker garantiza string, int");
+                    };
+                    let elems = match crate::builtins::tls_connect_h2(&host, port) {
+                        Ok(h) => {
+                            let _ = crate::builtins::tls_set_nonblocking(h);
+                            vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())]
+                        }
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // M19.4b: envuelve un socket aceptado (ya no bloqueante) en una sesión TLS de servidor.
                 // El handshake lo conduce el primer SocketReadBytes, cediendo la fibra si bloquea.
                 OpCode::TlsAccept => {

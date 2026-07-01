@@ -1521,6 +1521,17 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M31.2a: conexión TLS con ALPN h2 → ["ok", handle]/["err", msg].
+            "__tls_connect_h2" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(host), Value::Int(port)) => match crate::builtins::tls_connect_h2(host, *port) {
+                        Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza string, int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M19.4b: envuelve un socket aceptado en una sesión TLS de servidor → ["ok", handle]/["err",…].
             "__tls_accept" => {
                 let arr = match (&values[0], &values[1], &values[2]) {

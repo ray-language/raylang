@@ -4348,6 +4348,17 @@ Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
     comparten la máscara → **oráculo** `uint_oraculo` verde; ejemplo `examples/types/enteros.ray` (FNV-1a
     en u32 sin enmascarar a mano). `Map<u8,_>` sigue rechazado (uint no es clave hashable, diferido).
     Los literales aún necesitan `as` (`5 as u8`); la coerción de literal polimórfico → **M28.3b**.
+  - **M28.3b COMPLETO** (ergonomía: literal polimórfico). Un literal entero adopta el ancho uint del
+    **contexto** sin `as`: tipo esperado (`let x: u8 = 5`, arg `f(42)`, elemento `[u8] = [1,2,3]`) u
+    **operando** de un operador (`x + 100` con `x: u8` cede `100` a u8; `200 + 100` con esperado u8
+    propaga a ambos literales, recursivo en aritmética/bitops). NO es promoción: solo cede el LITERAL
+    (un `x: int` no se promociona). Fuera de rango → error (`el literal 300 no cabe en u8`). Front-end
+    puro: `check_expr_expected`/`coerce_uint_binop` registran el sitio (`uint_literal_sites`) y
+    `lower_uint_literals` envuelve el literal en un `Cast` al ancho (`5 as u8`) → reusa el `as` de
+    M28.3a, runtime intacto. Oráculo `uint_literal_oraculo`; ejemplo actualizado a la sintaxis limpia.
+    **M28.3 COMPLETO** (u8/u32/u64 con wrapping, casts, literal polimórfico). **M28 COMPLETO**
+    (sobrecarga de operadores + `?`/From + enteros con tamaño). Diferido: comparación/impls genéricos
+    de operador, `Into`/From entre módulos, `Map<u8,_>`, más anchos/con signo, literales hex.
 
 ### M29 — Tooling
 - **M29.1 Regex** — la ausencia más llamativa de la stdlib. Motor propio (Thompson NFA / backtracking

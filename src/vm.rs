@@ -2837,6 +2837,19 @@ mod tests {
         oracle_program("fn dobla(x: u32) -> u32 { x + x } fn main() -> int { dobla(10 as u32) as int }"); // 20
     }
 
+    /// M28.3b: coerción de literal entero polimórfico — un literal adopta el ancho uint del contexto
+    /// (tipo esperado u operando). Baja a un `as` → ambos motores coinciden.
+    #[test]
+    fn uint_literal_oraculo() {
+        oracle_program("fn main() -> int { let x: u8 = 5; x as int }");            // 5
+        oracle_program("fn main() -> int { let x: u8 = 200; let y: u8 = x + 100; y as int }"); // 44
+        oracle_program("fn main() -> int { let z: u8 = 200 + 100; z as int }");    // 44 (ambos literales)
+        oracle_program("fn main() -> int { let b: u32 = 4000000000; b as int }");  // 4000000000
+        oracle_program("fn main() -> int { let a: [u8] = [1, 2, 3]; a[2] as int }"); // 3
+        oracle_program("fn f(x: u8) -> u8 { x } fn main() -> int { f(42) as int }"); // 42 (arg literal)
+        oracle_program("fn main() -> int { let m: u32 = (1 << 8) + 1; m as int }"); // 257 (bitop literales)
+    }
+
     /// M28.2: `?` con conversión de error vía `From<S>`. `expr?` (con `impl From<E1> for E2`) baja a
     /// un `match` que convierte en la rama de error → runtime intacto, ambos motores coinciden.
     #[test]

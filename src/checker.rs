@@ -98,6 +98,9 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // Paso 4 (M7.1 + M9): bajar las llamadas por punto (`recv.f(args)`) a llamadas
     // ordinarias (`f(recv, args)`); incluye UFCS, métodos de trait (M9.1) y métodos sobre
     // un tipo acotado, que bajan a una llamada al parámetro-diccionario (M9.2).
+    // Paso 3.3 (M28.3b): envolver en un `as u{w}` los literales enteros que el contexto coercionó a
+    // un entero sin signo (`let x: u8 = 5`). Antes que el resto: el resultado es un `Cast` corriente.
+    lower_uint_literals(program, &checker.uint_literal_sites);
     // Paso 3.4 (M28.2): bajar los `?` que convierten el error — `expr?` (con `impl From<E1> for E2`)
     // a un `match` que aplica la conversión en la rama de error. Front-end puro: el `?` sin conversión
     // sigue siendo nativo; solo los sitios registrados se reescriben. Antes que el resto de bajadas,
@@ -363,6 +366,10 @@ struct Checker {
     /// M28.2: sitios de `?` que requieren conversión de error. `(línea, col)` → función manglada
     /// de `From`. `lower_try_conversions` reescribe ese `Try` a un `match` que convierte.
     try_conversions: HashMap<(usize, usize), String>,
+    /// M28.3b: literales enteros que se coercionan a un entero sin signo por el contexto (tipo
+    /// esperado, u operando de un operador). `(línea, col)` → ancho. `lower_uint_literals` envuelve
+    /// ese literal en un `Cast` al `u8`/`u32`/`u64` correspondiente (el runtime produce el UInt).
+    uint_literal_sites: HashMap<(usize, usize), u8>,
     /// Tabla de resolución de métodos de trait (M9): `(clave_de_tipo, método)` → nombre
     /// manglado de la función que lo implementa. La clave de tipo es el nombre del
     /// struct/enum o el primitivo (ver `type_key`). Un mismo `(tipo, método)` solo puede
@@ -438,6 +445,7 @@ impl Checker {
             trait_tparams: HashMap::new(),
             from_impls: HashMap::new(),
             try_conversions: HashMap::new(),
+            uint_literal_sites: HashMap::new(),
             traits: HashMap::new(),
             methods: HashMap::new(),
             impl_fn_self: HashMap::new(),
@@ -1820,6 +1828,24 @@ impl Checker {
                 return self.coerce_to_dyn(expr, &traits.clone(), expr.line, expr.col);
             }
         }
+        // M28.3b: un literal entero adopta el ancho sin signo esperado (`let x: u8 = 5`).
+        if let Type::UInt(w) = expected {
+            if let Some(t) = self.coerce_uint_literal(expr, *w)? {
+                return Ok(t);
+            }
+            // Un binario aritmético/bit a bit (mismo tipo que sus operandos) propaga el ancho a
+            // ambos lados: `let z: u8 = 200 + 100` coerciona los dos literales. Solo si ambos
+            // acaban siendo el uint esperado; si no, se cae al chequeo normal (que da el error).
+            if let ExprKind::Binary { op, left, right } = &expr.kind {
+                if is_width_preserving(*op) {
+                    let lt = self.check_expr_expected(left, expected)?;
+                    let rt = self.check_expr_expected(right, expected)?;
+                    if lt == *expected && rt == *expected {
+                        return Ok(expected.clone());
+                    }
+                }
+            }
+        }
         match &expr.kind {
             // M13.1: `map_new()` es indeterminado (como `[]`/`None`); su tipo lo fija el esperado.
             ExprKind::Call { callee, args }
@@ -2220,6 +2246,9 @@ impl Checker {
     ) -> Result<Type, TypeError> {
         let lt = self.check_expr(left)?;
         let rt = self.check_expr(right)?;
+        // M28.3b: si un operando es uint y el otro un literal entero, el literal adopta el ancho
+        // (`x + 100` con `x: u8` trata `100` como u8). No es promoción: solo cede el LITERAL.
+        let (lt, rt) = self.coerce_uint_binop(left, right, lt, rt)?;
         use BinaryOp::*;
         match op {
             // Aritméticos: ambos int → int, ambos float → float. Sin mezclas.
@@ -2319,6 +2348,34 @@ impl Checker {
         let mangled = mangle(&key, method);
         self.op_sites.insert((line, col, trait_name.to_string()), mangled);
         Some(Ok(lt.clone()))
+    }
+
+    /// M28.3b: si `expr` es un literal entero que cabe en `u{w}`, lo registra para coercionarlo a
+    /// ese ancho (en el lowering se envuelve en un `as u{w}`) y devuelve `Some(UInt(w))`. Si no es
+    /// un literal, `None` (sin coerción). Si es un literal fuera de rango, error.
+    fn coerce_uint_literal(&mut self, expr: &Expr, w: u8) -> Result<Option<Type>, TypeError> {
+        if let ExprKind::Int(n) = &expr.kind {
+            if !uint_literal_fits(*n, w) {
+                return Err(self.err(expr.line, expr.col, format!(
+                    "el literal {} no cabe en u{}", n, w)));
+            }
+            self.uint_literal_sites.insert((expr.line, expr.col), w);
+            return Ok(Some(Type::UInt(w)));
+        }
+        Ok(None)
+    }
+
+    /// M28.3b: coerción de un literal entero en un operador binario donde el otro operando es uint.
+    /// Devuelve los tipos (posiblemente) ajustados. No hay promoción de valores no-literales.
+    fn coerce_uint_binop(&mut self, left: &Expr, right: &Expr, lt: Type, rt: Type) -> Result<(Type, Type), TypeError> {
+        if let (Type::UInt(w), Type::Int) = (&lt, &rt) {
+            let w = *w;
+            if let Some(t) = self.coerce_uint_literal(right, w)? { return Ok((lt, t)); }
+        } else if let (Type::Int, Type::UInt(w)) = (&lt, &rt) {
+            let w = *w;
+            if let Some(t) = self.coerce_uint_literal(left, w)? { return Ok((t, rt)); }
+        }
+        Ok((lt, rt))
     }
 
     fn check_call(
@@ -3190,6 +3247,21 @@ fn is_typed_trait_impl(imp: &ImplBlock) -> bool {
     !imp.trait_args.is_empty()
 }
 
+/// M28.3b: ¿el operador binario produce un valor del mismo tipo que sus operandos? (Aritméticos y
+/// bit a bit sí; comparación/lógicos no.) Decide si propagar el ancho uint esperado a los operandos.
+fn is_width_preserving(op: BinaryOp) -> bool {
+    use BinaryOp::*;
+    matches!(op, Add | Sub | Mul | Div | Rem | BitAnd | BitOr | BitXor | Shl | Shr)
+}
+
+/// M28.3b: ¿cabe el literal entero `n` (siempre ≥ 0 aquí; los negativos son `-` unario) en un
+/// entero sin signo de `w` bits? Para u64, cualquier i64 no negativo cabe (i64::MAX < u64::MAX).
+fn uint_literal_fits(n: i64, w: u8) -> bool {
+    if n < 0 { return false; }
+    if w >= 64 { return true; }
+    (n as u64) <= crate::interpreter::uint_mask(w)
+}
+
 /// M28.1: mapa operador binario → (trait, método) para la sobrecarga. `None` si el operador
 /// no es sobrecargable (`%`, comparación, lógicos, bit a bit).
 fn op_trait_method(op: BinaryOp) -> Option<(&'static str, &'static str)> {
@@ -3804,6 +3876,89 @@ fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
         }
         ExprKind::Block(b) => lower_ufcs_block(b, sites),
         // Literales, Ident: nada que recorrer.
+        _ => {}
+    }
+}
+
+// =====================================================================
+// Bajada de literales enteros coercionados a uint (M28.3b)
+// =====================================================================
+//
+// Un literal entero en posición uint (`let x: u8 = 5`, `x + 100` con `x: u8`) se registró en
+// `uint_literal_sites`. Aquí se envuelve en un `Cast` al ancho (`5 as u8`), de modo que el
+// runtime —que borra los tipos— produzca el `UInt` correcto. Reusa el `as` de M27.4/M28.3a.
+
+type UIntLitMap = HashMap<(usize, usize), u8>;
+
+fn lower_uint_literals(program: &mut Program, sites: &UIntLitMap) {
+    if sites.is_empty() {
+        return;
+    }
+    for f in &mut program.functions {
+        lower_uintlit_block(&mut f.body, sites);
+    }
+}
+
+fn lower_uintlit_block(block: &mut Block, sites: &UIntLitMap) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_uintlit_expr(value, sites),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { lower_uintlit_expr(start, sites); lower_uintlit_expr(end, sites); }
+                    ForIter::In(e) => lower_uintlit_expr(e, sites),
+                }
+                lower_uintlit_block(body, sites);
+            }
+            StmtKind::Assign { target, value } => { lower_uintlit_expr(target, sites); lower_uintlit_expr(value, sites); }
+            StmtKind::Return { value } => { if let Some(v) = value { lower_uintlit_expr(v, sites); } }
+            StmtKind::Expr(e) => lower_uintlit_expr(e, sites),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        lower_uintlit_expr(t, sites);
+    }
+}
+
+fn lower_uintlit_expr(expr: &mut Expr, sites: &UIntLitMap) {
+    // ¿Es un literal entero registrado? Envolverlo en `Cast` al ancho. (No tiene hijos que recorrer.)
+    if let ExprKind::Int(_) = &expr.kind {
+        if let Some(&w) = sites.get(&(expr.line, expr.col)) {
+            let (l, c) = (expr.line, expr.col);
+            let inner = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+            expr.kind = ExprKind::Cast {
+                expr: Box::new(Expr { kind: inner, line: l, col: c }),
+                ty: Type::UInt(w),
+            };
+            return;
+        }
+    }
+    // Recorrer los sub-nodos.
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => lower_uintlit_expr(inner, sites),
+        ExprKind::Binary { left, right, .. } => { lower_uintlit_expr(left, sites); lower_uintlit_expr(right, sites); }
+        ExprKind::Call { callee, args } => {
+            lower_uintlit_expr(callee, sites);
+            for a in args { lower_uintlit_expr(a, sites); }
+        }
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { lower_uintlit_expr(e, sites); } }
+        ExprKind::Index { array, index } => { lower_uintlit_expr(array, sites); lower_uintlit_expr(index, sites); }
+        ExprKind::StructLit { fields, .. } => { for (_, e) in fields { lower_uintlit_expr(e, sites); } }
+        ExprKind::EnumLit { args, .. } => { for a in args { lower_uintlit_expr(a, sites); } }
+        ExprKind::Field { object, .. } => lower_uintlit_expr(object, sites),
+        ExprKind::Func(fe) => lower_uintlit_block(&mut fe.body, sites),
+        ExprKind::Match { scrutinee, arms } => {
+            lower_uintlit_expr(scrutinee, sites);
+            for arm in arms { lower_uintlit_expr(&mut arm.body, sites); }
+        }
+        ExprKind::Try(inner) => lower_uintlit_expr(inner, sites),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            lower_uintlit_expr(cond, sites);
+            lower_uintlit_block(then_branch, sites);
+            if let Some(e) = else_branch { lower_uintlit_expr(e, sites); }
+        }
+        ExprKind::While { cond, body } => { lower_uintlit_expr(cond, sites); lower_uintlit_block(body, sites); }
+        ExprKind::Block(b) => lower_uintlit_block(b, sites),
         _ => {}
     }
 }

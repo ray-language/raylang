@@ -38,6 +38,7 @@ pub enum CastTarget {
     Int,
     Float,
     Char,
+    UInt(u8), // M28.3: u8/u32/u64 (el u8 es el ancho en bits)
 }
 
 #[derive(Debug, Clone, PartialEq)]

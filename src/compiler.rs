@@ -807,7 +807,8 @@ impl<'a> Compiler<'a> {
                 let target = match ty {
                     Type::Float => CastTarget::Float,
                     Type::Char => CastTarget::Char,
-                    _ => CastTarget::Int, // Type::Int (el checker solo permite int/float/char)
+                    Type::UInt(w) => CastTarget::UInt(*w), // M28.3
+                    _ => CastTarget::Int, // Type::Int (el checker solo permite int/float/char/uint)
                 };
                 self.emit(OpCode::Cast(target), line, col);
             }

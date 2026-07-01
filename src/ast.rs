@@ -28,6 +28,10 @@ pub enum Type {
     String,
     Char, // M11.4c
     Bytes, // M16.1a: secuencia inmutable de octetos (datos binarios)
+    /// Entero **sin signo con tamaño** (M28.3): `u8`/`u32`/`u64`. El `u8` interno es el ancho en
+    /// bits (8/32/64). Aritmética con **wrapping** dentro del ancho; conversión solo con `as`
+    /// (sin promoción implícita). `int` sigue siendo el i64 por defecto.
+    UInt(u8),
     Unit,
     /// Arreglo dinámico de un tipo de elemento: `[T]`. Tipado estructural (M3).
     Array(Box<Type>),
@@ -90,6 +94,7 @@ impl std::fmt::Display for Type {
             Type::String => f.write_str("string"),
             Type::Char => f.write_str("char"),
             Type::Bytes => f.write_str("bytes"),
+            Type::UInt(w) => write!(f, "u{}", w),
             Type::Unit => f.write_str("unit"),
             Type::Array(elem) => write!(f, "[{}]", elem),
             Type::Tuple(ts) => {

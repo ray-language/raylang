@@ -1,0 +1,39 @@
+// M28.3 — enteros sin signo con tamaño: u8 / u32 / u64.
+//
+// `int` sigue siendo el i64 con signo por defecto. Los tipos `u8`/`u32`/`u64` dan aritmética
+// **con wrapping** dentro de su ancho (sin panic al desbordar) y bitops sin signo — justo lo que
+// la criptografía y el hashing necesitan, eliminando el enmascarado a mano (`& 0xFF`, `& 0xFFFFFFFF`).
+//
+// No hay promoción implícita: mezclar anchos (o u8 con int) es error; se convierte con `as`.
+
+// FNV-1a de 32 bits: el ejemplo canónico de aritmética u32 con wrapping. Sin u32 habría que
+// enmascarar cada paso con `& 0xFFFFFFFF`; aquí el wrapping es automático.
+fn fnv1a(datos: [u8]) -> u32 {
+    var h = 2166136261 as u32;          // offset basis
+    let primo = 16777619 as u32;        // FNV prime
+    for b in datos {
+        h = (h ^ (b as u32)) * primo;   // XOR + multiplicación, ambos envuelven a 32 bits
+    }
+    h
+}
+
+fn main() {
+    // El wrapping de u8: 200 + 100 = 300 → 44 (mod 256), sin error de overflow.
+    let a = 200 as u8;
+    let b = 100 as u8;
+    print("u8 wrap: " + to_string((a + b) as int));   // 44
+
+    // ~ y máscara implícita del ancho.
+    print("~0u8 = " + to_string((~(0 as u8)) as int)); // 255
+
+    // FNV-1a sobre unos octetos.
+    var datos: [u8] = [];
+    datos.push(104 as u8);   // 'h'
+    datos.push(105 as u8);   // 'i'
+    let hash = fnv1a(datos);
+    print("fnv1a(\"hi\") = " + to_string(hash as int));
+
+    // u64: aritmética de 64 bits sin signo.
+    let grande = (1000000 as u64) * (1000000 as u64);  // 10^12
+    print("u64: " + to_string(grande as int));
+}

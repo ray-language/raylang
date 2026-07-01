@@ -53,6 +53,10 @@ pub enum Value {
     Bool(bool),
     Str(String),
     Char(char), // M11.4c
+    /// Entero sin signo con tamaño (M28.3): `u8`/`u32`/`u64`. El valor va enmascarado a su ancho
+    /// (`(val, ancho_en_bits)`). La aritmética envuelve dentro del ancho; el tipo estático distingue
+    /// los anchos (el runtime lleva el ancho para poder envolver bien).
+    UInt(u64, u8),
     /// Bytes (M16.1a): secuencia inmutable de octetos. `Rc` da clon barato (inmutable → sin `RefCell`,
     /// como el `String` de `Str`). Igualdad estructural.
     Bytes(Rc<Vec<u8>>),
@@ -137,6 +141,7 @@ impl PartialEq for Value {
             (Bool(a), Bool(b)) => a == b,
             (Str(a), Str(b)) => a == b,
             (Char(a), Char(b)) => a == b,
+            (UInt(a, _), UInt(b, _)) => a == b, // M28.3 (mismo ancho garantizado por el checker)
             (Bytes(a), Bytes(b)) => a == b,
             (Unit, Unit) => true,
             (Array(a), Array(b)) => *a.borrow() == *b.borrow(),
@@ -182,6 +187,7 @@ impl std::fmt::Display for Value {
             Value::Bool(v) => write!(f, "{}", v),
             Value::Str(v) => write!(f, "{}", v),
             Value::Char(v) => write!(f, "{}", v),
+            Value::UInt(v, _) => write!(f, "{}", v),
             // M16.1a: print(bytes) está diferido (el checker lo rechaza); esta repr solo existe para
             // completar el Display y se ve, p. ej., en mensajes de depuración.
             Value::Bytes(v) => write!(f, "{}", crate::builtins::bytes_to_hex(v)),
@@ -278,6 +284,16 @@ pub fn eval_const_literal(e: &Expr) -> Value {
     }
 }
 
+/// M28.3: máscara de bits de un entero sin signo de `width` bits (`0xFF` para u8, etc.).
+pub fn uint_mask(width: u8) -> u64 {
+    if width >= 64 { u64::MAX } else { (1u64 << width) - 1 }
+}
+
+/// M28.3: construye un `UInt` enmascarando el valor a su ancho (aplica el wrapping).
+pub fn make_uint(val: u64, width: u8) -> Value {
+    Value::UInt(val & uint_mask(width), width)
+}
+
 /// M27.4: convierte `v` al tipo `ty` (`as`). El checker garantiza una combinación válida; solo el
 /// `int as char` con un code point inválido puede fallar en runtime.
 fn cast_value(v: Value, ty: &Type, line: usize, col: usize) -> Result<Value, Flow> {
@@ -293,6 +309,13 @@ fn cast_value(v: Value, ty: &Type, line: usize, col: usize) -> Result<Value, Flo
                 col,
             })),
         },
+        // M28.3: conversiones de/hacia enteros sin signo con tamaño. Enmascaran al ancho destino.
+        (Value::Int(n), Type::UInt(w)) => Ok(make_uint(*n as u64, *w)),
+        (Value::UInt(n, _), Type::Int) => Ok(Value::Int(*n as i64)),
+        (Value::UInt(n, _), Type::UInt(w)) => Ok(make_uint(*n, *w)),
+        (Value::UInt(n, _), Type::Float) => Ok(Value::Float(*n as f64)),
+        (Value::Float(f), Type::UInt(w)) => Ok(make_uint(*f as i64 as u64, *w)),
+        (Value::Char(c), Type::UInt(w)) => Ok(make_uint(*c as u64, *w)),
         // Identidad (int as int, etc.): sin cambio.
         _ => Ok(v),
     }
@@ -765,6 +788,7 @@ impl<'a> Interpreter<'a> {
                     (UnaryOp::Neg, Value::Float(x)) => Value::Float(-x),
                     (UnaryOp::Not, Value::Bool(b)) => Value::Bool(!b),
                     (UnaryOp::BitNot, Value::Int(n)) => Value::Int(!n), // M19.3a: NOT bit a bit
+                    (UnaryOp::BitNot, Value::UInt(n, w)) => make_uint(!n, w), // M28.3: NOT sobre uint (enmascarado)
                     _ => unreachable!("el checker garantiza operandos válidos para el unario"),
                 })
             }
@@ -1725,6 +1749,29 @@ impl<'a> Interpreter<'a> {
             (BitXor, Int(a), Int(b)) => Int(a ^ b),
             (Shl, Int(a), Int(b)) => Int(a.wrapping_shl(b as u32)),
             (Shr, Int(a), Int(b)) => Int(a.wrapping_shr(b as u32)),
+            // M28.3: enteros sin signo con tamaño. Ambos operandos comparten ancho (garantía del
+            // checker); la aritmética envuelve dentro del ancho (`make_uint` enmascara). División y
+            // módulo sin signo; desplazamientos lógicos.
+            (Add, UInt(a, w), UInt(b, _)) => make_uint(a.wrapping_add(b), w),
+            (Sub, UInt(a, w), UInt(b, _)) => make_uint(a.wrapping_sub(b), w),
+            (Mul, UInt(a, w), UInt(b, _)) => make_uint(a.wrapping_mul(b), w),
+            (Div, UInt(a, w), UInt(b, _)) => {
+                if b == 0 { return Err(runtime_error(line, col, "división entera por cero")); }
+                make_uint(a / b, w)
+            }
+            (Rem, UInt(a, w), UInt(b, _)) => {
+                if b == 0 { return Err(runtime_error(line, col, "módulo por cero")); }
+                make_uint(a % b, w)
+            }
+            (Lt, UInt(a, _), UInt(b, _)) => Bool(a < b),
+            (Le, UInt(a, _), UInt(b, _)) => Bool(a <= b),
+            (Gt, UInt(a, _), UInt(b, _)) => Bool(a > b),
+            (Ge, UInt(a, _), UInt(b, _)) => Bool(a >= b),
+            (BitAnd, UInt(a, w), UInt(b, _)) => make_uint(a & b, w),
+            (BitOr, UInt(a, w), UInt(b, _)) => make_uint(a | b, w),
+            (BitXor, UInt(a, w), UInt(b, _)) => make_uint(a ^ b, w),
+            (Shl, UInt(a, w), UInt(b, _)) => make_uint(a.wrapping_shl(b as u32), w),
+            (Shr, UInt(a, w), UInt(b, _)) => make_uint(a.wrapping_shr(b as u32), w),
             _ => unreachable!("combinación de operador/operandos que el checker debió rechazar"),
         })
     }

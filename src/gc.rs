@@ -41,6 +41,9 @@ pub enum HeapValue {
     Bool(bool),
     Str(String),
     Char(char), // M11.4c
+    /// Entero sin signo con tamaño (M28.3): `(valor_enmascarado, ancho_en_bits)`. Escalar inline
+    /// como `Int`/`Char`; no es objeto del heap ni lo traza el GC.
+    UInt(u64, u8),
     /// Bytes (M16.1a): secuencia inmutable de octetos, **inline** en el valor (como `Str`); no es un
     /// objeto del heap ni lo traza el GC (no contiene handles).
     Bytes(Vec<u8>),

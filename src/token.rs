@@ -57,6 +57,7 @@ pub enum TokenKind {
     StringType, // string
     CharType,   // char (M11.4c)
     BytesType,  // bytes (M16.1a)
+    UIntType(u8), // u8/u32/u64 (M28.3); el u8 es el ancho en bits
 
     // --- Operadores ---
     Plus,    // +

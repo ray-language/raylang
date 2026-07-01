@@ -670,6 +670,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "constantes.ray", // M27.5: const de nivel superior (idem)
         "operadores.ray", // M28.1: sobrecarga de operadores (el toolchain auto-alojado aún no la soporta)
         "conversion_error.ray", // M28.2: `?` con From<S> / traits con params de tipo (idem)
+        "enteros.ray", // M28.3: enteros con tamaño u8/u32/u64 + `for` (idem)
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops

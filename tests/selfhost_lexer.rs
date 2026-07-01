@@ -44,6 +44,9 @@ fn kind_str(k: &TokenKind) -> String {
         // (ningún archivo probado los usa), pero el `match` debe ser exhaustivo.
         TokenKind::Bytes(b) => format!("Bytes({:?})", b),
         TokenKind::BytesType => "BytesType".into(),
+        // M28.3: u8/u32/u64. El lexer auto-alojado aún no los tokeniza; no aparecen en el corpus,
+        // pero el `match` debe ser exhaustivo.
+        TokenKind::UIntType(w) => format!("UIntType({})", w),
         TokenKind::Ident(name) => format!("Ident({})", name),
         TokenKind::Let => "Let".into(),
         TokenKind::Var => "Var".into(),

@@ -4337,6 +4337,17 @@ Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
   numérico). Elimina el enmascarado a mano (`& 0xFFFFFFFF`) omnipresente en SHA-256/DEFLATE/HPACK/protobuf.
   Decisión de diseño pendiente: conjunto de tipos, reglas de conversión, `wrapping`/overflow. Puede quedar
   **acotado** (solo `u8`/`u32`/`u64` sin promoción implícita) para no volverse research-grade.
+  - **Decisiones fijadas con el usuario**: conjunto **acotado `u8`/`u32`/`u64`** (`int` sigue siendo i64);
+    aritmética con **wrapping** dentro del ancho; conversión **solo con `as`** (sin promoción implícita).
+  - **M28.3a COMPLETO** (núcleo, casts explícitos): `Type::UInt(ancho)` (keywords `u8`/`u32`/`u64`;
+    `TokenKind::UIntType(w)`). Runtime: `Value::UInt(u64, u8)` / `HeapValue::UInt(u64, u8)` (escalar inline
+    como `Char`, sin GC; lleva el ancho para poder envolver). Helpers `uint_mask`/`make_uint`/`uint_heap`
+    enmascaran al ancho (aplican el wrapping). Aritmética `+ - * / %`, bitops `& | ^ << >> ~` y comparación
+    **sin signo** exigen **mismo ancho** en ambos operandos (el checker; sin mezclas). `as` convierte
+    int↔uint, uint↔uint (cualquier ancho), float↔uint, char→uint (`CastTarget::UInt`). Ambos motores
+    comparten la máscara → **oráculo** `uint_oraculo` verde; ejemplo `examples/types/enteros.ray` (FNV-1a
+    en u32 sin enmascarar a mano). `Map<u8,_>` sigue rechazado (uint no es clave hashable, diferido).
+    Los literales aún necesitan `as` (`5 as u8`); la coerción de literal polimórfico → **M28.3b**.
 
 ### M29 — Tooling
 - **M29.1 Regex** — la ausencia más llamativa de la stdlib. Motor propio (Thompson NFA / backtracking

@@ -2044,8 +2044,9 @@ impl Checker {
                     },
                     UnaryOp::Not if t == Type::Bool => Ok(Type::Bool),
                     UnaryOp::Not => Err(self.err(expr.line, expr.col, format!("el '!' requiere bool, no {}", t))),
-                    // M19.3a: NOT bit a bit, int → int.
+                    // M19.3a: NOT bit a bit, int → int. M28.3: también sobre uint (mismo ancho).
                     UnaryOp::BitNot if t == Type::Int => Ok(Type::Int),
+                    UnaryOp::BitNot if matches!(t, Type::UInt(_)) => Ok(t),
                     UnaryOp::BitNot => Err(self.err(expr.line, expr.col, format!("el '~' requiere int, no {}", t))),
                 }
             }
@@ -2084,6 +2085,7 @@ impl Checker {
 
             ExprKind::Cast { expr: inner, ty } => {
                 // M27.4: conversión numérica. Permitidas: int↔float, char↔int (e identidad).
+                // M28.3: int↔uint, uint↔uint (cualquier ancho), float↔uint, char→uint.
                 let from = self.check_expr(inner)?;
                 self.ensure_type(ty, expr.line, expr.col)?;
                 let to = self.resolve_type(ty);
@@ -2092,10 +2094,15 @@ impl Checker {
                     (Type::Int, Type::Float) | (Type::Float, Type::Int)
                         | (Type::Char, Type::Int) | (Type::Int, Type::Char)
                         | (Type::Int, Type::Int) | (Type::Float, Type::Float) | (Type::Char, Type::Char)
+                ) || matches!(
+                    (&from, &to),
+                    (Type::Int, Type::UInt(_)) | (Type::UInt(_), Type::Int)
+                        | (Type::UInt(_), Type::UInt(_)) | (Type::UInt(_), Type::Float)
+                        | (Type::Float, Type::UInt(_)) | (Type::Char, Type::UInt(_))
                 );
                 if !ok {
                     return Err(self.err(expr.line, expr.col, format!(
-                        "no se puede convertir {} a {} con 'as' (solo int↔float y char↔int)", from, to)));
+                        "no se puede convertir {} a {} con 'as' (solo int↔float, char↔int y de/hacia u8/u32/u64)", from, to)));
                 }
                 Ok(to)
             }
@@ -2225,6 +2232,9 @@ impl Checker {
                 (Type::Bytes, Type::Bytes) if op == Add => Ok(Type::Bytes),
                 // M11.7b: `+` concatena dos arreglos del mismo tipo de elemento → arreglo.
                 (Type::Array(a), Type::Array(b)) if op == Add && a == b => Ok(Type::Array(a.clone())),
+                // M28.3: enteros sin signo con tamaño — ambos del MISMO ancho → ese ancho (wrapping
+                // en runtime). Sin promoción implícita: mezclar u8+u32 o u8+int es error (usa `as`).
+                (Type::UInt(a), Type::UInt(b)) if a == b => Ok(Type::UInt(*a)),
                 // M28.1: sobrecarga de operadores. Si ambos operandos son el mismo tipo de usuario
                 // que implementa el trait del operador (`Add`/`Sub`/…), `a op b` baja a `a.metodo(b)`.
                 _ => match self.try_operator_overload(op, &lt, &rt, line, col) {
@@ -2240,6 +2250,8 @@ impl Checker {
             Lt | Le | Gt | Ge => match (&lt, &rt) {
                 (Type::Int, Type::Int) | (Type::Float, Type::Float)
                 | (Type::String, Type::String) | (Type::Char, Type::Char) => Ok(Type::Bool),
+                // M28.3: enteros sin signo del mismo ancho se ordenan (comparación sin signo).
+                (Type::UInt(a), Type::UInt(b)) if a == b => Ok(Type::Bool),
                 _ => Err(self.err(line, col, format!(
                     "el operador '{}' compara int/float/string/char del mismo tipo, no {} y {}",
                     bin_op_str(op), lt, rt
@@ -2269,16 +2281,15 @@ impl Checker {
             }
             // Bit a bit (M19.3a): ambos operandos int → int. Sin float (los desplazamientos
             // y máscaras no tienen sentido sobre IEEE-754); el runtime opera sobre i64.
-            BitAnd | BitOr | BitXor | Shl | Shr => {
-                if lt == Type::Int && rt == Type::Int {
-                    Ok(Type::Int)
-                } else {
-                    Err(self.err(line, col, format!(
-                        "el operador '{}' requiere operandos int, no {} y {}",
-                        bin_op_str(op), lt, rt
-                    )))
-                }
-            }
+            BitAnd | BitOr | BitXor | Shl | Shr => match (&lt, &rt) {
+                (Type::Int, Type::Int) => Ok(Type::Int),
+                // M28.3: bit a bit sobre enteros sin signo del mismo ancho → ese ancho.
+                (Type::UInt(a), Type::UInt(b)) if a == b => Ok(Type::UInt(*a)),
+                _ => Err(self.err(line, col, format!(
+                    "el operador '{}' requiere operandos int, no {} y {}",
+                    bin_op_str(op), lt, rt
+                ))),
+            },
         }
     }
 
@@ -2854,7 +2865,8 @@ fn is_const_literal(e: &Expr) -> bool {
 fn is_comparable(t: &Type) -> bool {
     match t {
         // M16.1a: `bytes` se compara con `==` (igualdad estructural de octetos).
-        Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes | Type::Struct(_, _) => true,
+        // M28.3: los enteros sin signo con tamaño se comparan con `==`.
+        Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes | Type::UInt(_) | Type::Struct(_, _) => true,
         Type::Array(elem) => is_comparable(elem),
         // M27.1: una tupla es comparable con == si todos sus elementos lo son (igualdad posición a posición).
         Type::Tuple(ts) => ts.iter().all(is_comparable),

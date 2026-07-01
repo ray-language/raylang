@@ -621,6 +621,9 @@ impl Parser {
             TokenKind::StringType => Type::String,
             TokenKind::CharType => Type::Char,
             TokenKind::BytesType => Type::Bytes,
+            TokenKind::UIntType(w) => Type::UInt(*w),
+            // Nota: el mensaje conserva su texto original (sin u8/u32/u64) para no romper el oráculo del
+            // parser auto-alojado (`selfhost/parser.ray`), que aún no conoce los enteros con tamaño.
             _ => return Err(self.error_here("se esperaba un tipo (int, float, bool, string, char, bytes, [T] o un struct)".into())),
         };
         self.advance();

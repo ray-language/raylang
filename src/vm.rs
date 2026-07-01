@@ -258,6 +258,7 @@ impl<'a> Vm<'a> {
                     let v = self.pop();
                     self.push(match v {
                         HeapValue::Int(n) => HeapValue::Int(!n), // M19.3a: complemento a uno
+                        HeapValue::UInt(n, w) => uint_heap(!n, w), // M28.3: NOT sobre uint (enmascarado)
                         _ => unreachable!("el checker garantiza un int"),
                     });
                 }
@@ -452,6 +453,13 @@ impl<'a> Vm<'a> {
                                 }
                             }
                         }
+                        // M28.3: conversiones de/hacia enteros sin signo con tamaño (enmascaran al ancho).
+                        (HeapValue::Int(n), CastTarget::UInt(w)) => uint_heap(*n as u64, *w),
+                        (HeapValue::UInt(n, _), CastTarget::Int) => HeapValue::Int(*n as i64),
+                        (HeapValue::UInt(n, _), CastTarget::UInt(w)) => uint_heap(*n, *w),
+                        (HeapValue::UInt(n, _), CastTarget::Float) => HeapValue::Float(*n as f64),
+                        (HeapValue::Float(f), CastTarget::UInt(w)) => uint_heap(*f as i64 as u64, *w),
+                        (HeapValue::Char(c), CastTarget::UInt(w)) => uint_heap(*c as u64, *w),
                         _ => v, // identidad
                     };
                     self.push(out);
@@ -2253,9 +2261,37 @@ impl<'a> Vm<'a> {
             (LessEqual, Char(a), Char(b)) => Bool(a <= b),
             (Greater, Char(a), Char(b)) => Bool(a > b),
             (GreaterEqual, Char(a), Char(b)) => Bool(a >= b),
+            // M28.3: enteros sin signo con tamaño. Mismo ancho garantizado por el checker; wrapping
+            // dentro del ancho (`crate::interpreter::uint_mask`), idéntico al intérprete.
+            (Add, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_add(b), w),
+            (Sub, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_sub(b), w),
+            (Mul, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_mul(b), w),
+            (Div, UInt(a, w), UInt(b, _)) => {
+                if b == 0 { return Err(runtime_error(line, col, "división entera por cero")); }
+                uint_heap(a / b, w)
+            }
+            (Rem, UInt(a, w), UInt(b, _)) => {
+                if b == 0 { return Err(runtime_error(line, col, "módulo por cero")); }
+                uint_heap(a % b, w)
+            }
+            (Less, UInt(a, _), UInt(b, _)) => Bool(a < b),
+            (LessEqual, UInt(a, _), UInt(b, _)) => Bool(a <= b),
+            (Greater, UInt(a, _), UInt(b, _)) => Bool(a > b),
+            (GreaterEqual, UInt(a, _), UInt(b, _)) => Bool(a >= b),
+            (BitAnd, UInt(a, w), UInt(b, _)) => uint_heap(a & b, w),
+            (BitOr, UInt(a, w), UInt(b, _)) => uint_heap(a | b, w),
+            (BitXor, UInt(a, w), UInt(b, _)) => uint_heap(a ^ b, w),
+            (Shl, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_shl(b as u32), w),
+            (Shr, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_shr(b as u32), w),
             _ => unreachable!("combinación operador/operandos que el checker debió rechazar"),
         })
     }
+}
+
+/// M28.3: construye un `HeapValue::UInt` enmascarando al ancho (aplica el wrapping), como
+/// `make_uint` del intérprete.
+fn uint_heap(val: u64, width: u8) -> HeapValue {
+    HeapValue::UInt(val & crate::interpreter::uint_mask(width), width)
 }
 
 /// Convierte una constante del chunk (un `Value` del intérprete, siempre primitivo)
@@ -2267,6 +2303,7 @@ fn const_to_heap(v: &Value) -> HeapValue {
         Value::Bool(b) => HeapValue::Bool(*b),
         Value::Str(s) => HeapValue::Str(s.clone()),
         Value::Char(c) => HeapValue::Char(*c),
+        Value::UInt(n, w) => HeapValue::UInt(*n, *w), // M28.3
         Value::Bytes(b) => HeapValue::Bytes((**b).clone()),
         Value::Unit => HeapValue::Unit,
         _ => unreachable!("las constantes del chunk son primitivas"),
@@ -2283,6 +2320,7 @@ fn values_equal(heap: &Heap, a: &HeapValue, b: &HeapValue) -> bool {
         (H::Bool(x), H::Bool(y)) => x == y,
         (H::Str(x), H::Str(y)) => x == y,
         (H::Char(x), H::Char(y)) => x == y,
+        (H::UInt(x, _), H::UInt(y, _)) => x == y, // M28.3 (mismo ancho garantizado por el checker)
         (H::Bytes(x), H::Bytes(y)) => x == y,
         (H::Unit, H::Unit) => true,
         (H::Function(x), H::Function(y)) => x == y,
@@ -2319,6 +2357,7 @@ fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> String {
         HeapValue::Bool(b) => b.to_string(),
         HeapValue::Str(s) => s.clone(),
         HeapValue::Char(c) => c.to_string(),
+        HeapValue::UInt(n, _) => n.to_string(),
         HeapValue::Bytes(b) => crate::builtins::bytes_to_hex(b),
         HeapValue::Unit => "()".to_string(),
         HeapValue::Function(_) => "<fn>".to_string(),
@@ -2367,6 +2406,7 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
         HeapValue::Bool(b) => Value::Bool(*b),
         HeapValue::Str(s) => Value::Str(s.clone()),
         HeapValue::Char(c) => Value::Char(*c),
+        HeapValue::UInt(n, w) => Value::UInt(*n, *w),
         HeapValue::Bytes(b) => Value::Bytes(Rc::new(b.clone())),
         HeapValue::Unit => Value::Unit,
         HeapValue::Function(i) => Value::Function(*i),
@@ -2776,6 +2816,25 @@ mod tests {
         oracle_int("len(\"{n}\")");                        // 3 (literal "{n}")
         // Interpolación con una variable local.
         oracle_program("fn main() -> int { let n = 42; if (f\"n={n}\" == \"n=42\") { 1 } else { 0 } }");
+    }
+
+    /// M28.3: enteros sin signo con tamaño (u8/u32/u64). Aritmética con wrapping dentro del ancho,
+    /// bitops, comparación sin signo, conversión con `as`. Ambos motores comparten la máscara → iguales.
+    #[test]
+    fn uint_oraculo() {
+        oracle_int("((200 as u8) + (100 as u8)) as int");   // 300 mod 256 = 44
+        oracle_int("(511 as u8) as int");                    // 255 (enmascarado)
+        oracle_int("((4294967295 as u32) + (1 as u32)) as int"); // wrap a 0
+        oracle_int("((1 as u32) << (8 as u32)) as int");     // 256
+        oracle_int("(~(0 as u8)) as int");                   // 255
+        oracle_int("((250 as u8) - (5 as u8)) as int");      // 245
+        oracle_int("((0 as u8) - (1 as u8)) as int");        // wrap a 255
+        oracle_int("if ((255 as u8) > (1 as u8)) { 1 } else { 0 }"); // 1 (sin signo)
+        oracle_int("(((240 as u8) & (15 as u8)) | (1 as u8)) as int"); // (0) | 1 = 1
+        oracle_int("(((1000000 as u64) * (1000000 as u64))) as int"); // 10^12 (cabe en u64, no en u32)
+        // Round-trip de anchos.
+        oracle_int("(((300 as u8) as u32) as int)");         // 300&0xFF=44
+        oracle_program("fn dobla(x: u32) -> u32 { x + x } fn main() -> int { dobla(10 as u32) as int }"); // 20
     }
 
     /// M28.2: `?` con conversión de error vía `From<S>`. `expr?` (con `impl From<E1> for E2`) baja a

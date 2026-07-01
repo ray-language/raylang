@@ -4508,6 +4508,18 @@ Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.
 - **M31.3 Cliente gRPC e2e** — HEADERS (`:path`=método, `content-type: application/grpc`) + DATA con el
   protobuf de M25 enmarcado (`grpc_frame`); leer HEADERS+DATA+trailers. Verificable contra un servidor
   gRPC real o un mock.
+  - **COMPLETO → M31 COMPLETO** — **cliente gRPC unario** (`examples/web/grpc_client.ray`). `grpc_call(host,
+    port, path, mensaje) -> Result<GrpcResponse{message, grpc_status}, string>` apila TODO lo construido:
+    TLS+ALPN `h2` (M31.2a), framing HTTP/2 + HPACK (M26), y protobuf + `grpc_frame` (M25). Envía HEADERS
+    (`POST /paquete.Servicio/Metodo`, `content-type: application/grpc`, `te: trailers`) **sin** END_STREAM
+    + DATA (`grpc_frame(mensaje)`, END_STREAM); lee la respuesta: HEADERS (`:status`), DATA (mensaje
+    gRPC-framed) y el HEADERS de **trailers** con `grpc-status`, hasta END_STREAM; desenmarca con
+    `grpc_unframe`. Test `tests/grpc_cli.rs`: un **servidor gRPC de juguete escrito a mano** (solo std +
+    rustls, sin traer h2/hyper/tonic → cero-deps) que responde `:status:200` + un mensaje protobuf
+    gRPC-framed + trailer `grpc-status: 0`; el cliente raylang obtiene `grpc-status 0` y parsea el string de
+    la respuesta ("hola, raylang"), ambos motores. **M31 (cerrar gRPC) COMPLETO**: HPACK-Huffman + transporte
+    HTTP/2 vivo (ALPN) + cliente gRPC e2e — raylang tiene un cliente gRPC real, todo como librería raylang
+    salvo el runtime de TLS/ALPN.
 
 ### M32 — Clientes y formatos
 - **M32.1 Cliente PostgreSQL** (protocolo wire) — el siguiente gran ejemplo "cliente cloud" en raylang

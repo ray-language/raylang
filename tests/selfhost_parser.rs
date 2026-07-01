@@ -690,6 +690,8 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "http2_client.ray", // M31.2b: cliente HTTP/2, importa http2/hpack (bytes/bitops, idem)
         "http2_get_demo.ray", // M31.2b: demo importa http2_client (idem)
         "h2_alpn_demo.ray", // M31.2a: usa args()/tls_connect_h2 (fuera del subset auto-alojado)
+        "grpc_client.ray", // M31.3: cliente gRPC, importa http2/hpack/protobuf (bytes/bitops, idem)
+        "grpc_call_demo.ray", // M31.3: demo importa grpc_client (idem)
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops

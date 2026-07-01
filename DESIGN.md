@@ -4430,6 +4430,14 @@ Cierra el dominio cripto: hoy hay *hashing*/HMAC pero **no cifrado ni firma asim
     vector RFC 8439 §2.5.2, ambos motores (`tests/poly1305_cli.rs`). **Habilitador de lenguaje**: la coerción
     de literal uint de M28.3b se extendió a la **asignación** (`x = 200` con `x: u8`; var/campo/elemento) vía
     `check_expr_expected` en `check_assign` (oráculo). AEAD ChaCha20-Poly1305 (seal/open) → M30.1c.
+  - **M30.1c COMPLETO → M30.1 COMPLETO** — **AEAD ChaCha20-Poly1305** (`examples/web/chacha20poly1305.ray`):
+    cifrado autenticado (RFC 8439 §2.8). Combina ChaCha20 (contador 1 para el criptograma) + Poly1305 (clave
+    de una sola vez = bloque ChaCha20 con contador 0). El tag cubre `AAD ‖ pad ‖ cripto ‖ pad ‖ len(AAD) ‖
+    len(cripto)`. `aead_seal -> Sealed{ciphertext, tag}`, `aead_open -> Option<[int]>` (verifica el tag en
+    tiempo constante y descifra, o `None` si fue manipulado). Verificado byte a byte contra el vector RFC
+    8439 §2.8.2 (criptograma + tag) + round-trip + rechazo de tamper, ambos motores (`tests/chacha20poly1305_cli.rs`).
+    **Toda la aritmética en `u32`/`u64` de M28.3, sin enmascarado a mano.** AES-GCM se deja fuera (ChaCha20-
+    Poly1305 es el AEAD moderno preferido; AES-GCM exigiría S-boxes + GHASH sobre GF(2^128), diferido).
 - **M30.2 Cripto asimétrica**: **Ed25519** (firmas sobre curva de Edwards; aritmética de campo grande →
   ejercita `u64`/bignum). Verificable contra los vectores del RFC 8032.
 - **M30.3 JWT RS256/ES256**: sobre M30.2, extiende `jwt.ray` más allá de HS256 (firma asimétrica de tokens).

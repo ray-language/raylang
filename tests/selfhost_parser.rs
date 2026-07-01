@@ -677,6 +677,8 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "chacha20_demo.ray", // M30.1a: demo usa `for`/u32 (idem)
         "poly1305.ray", // M30.1b: Poly1305 usa enteros con tamaño u64 (M28.3, idem)
         "poly1305_demo.ray", // M30.1b: demo usa `for`/u64 (idem)
+        "chacha20poly1305.ray", // M30.1c: AEAD (importa chacha20/poly1305 → u32/u64, idem)
+        "chacha20poly1305_demo.ray", // M30.1c: demo usa `for`/u32 (idem)
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops

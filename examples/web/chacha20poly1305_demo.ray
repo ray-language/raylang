@@ -1,0 +1,61 @@
+// Demo del AEAD ChaCha20-Poly1305 (RFC 8439 §2.8.2): sella el texto de ejemplo con la clave/nonce/AAD
+// del estándar y verifica que criptograma y tag coinciden byte a byte con el vector oficial. Luego
+// abre (round-trip) y comprueba que manipular un octeto hace que la apertura falle.
+
+from chacha20poly1305 import aead_seal, aead_open, Sealed;
+from hex import hex_encode;
+
+fn str_bytes(s: string) -> [int] {
+    var b: [int] = [];
+    for c in s {
+        push(b, c as int);
+    }
+    b
+}
+
+fn main() {
+    // Clave: octetos 0x80..0x9f.
+    var key: [int] = [];
+    var i = 128;
+    while (i < 160) {
+        push(key, i);
+        i = i + 1;
+    }
+    // Nonce (12 octetos): 07 00 00 00 ‖ 40 41 42 43 44 45 46 47.
+    let nonce: [int] = [7, 0, 0, 0, 64, 65, 66, 67, 68, 69, 70, 71];
+    // AAD: 50 51 52 53 c0 c1 c2 c3 c4 c5 c6 c7.
+    let aad: [int] = [80, 81, 82, 83, 192, 193, 194, 195, 196, 197, 198, 199];
+
+    let pt = str_bytes("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.");
+
+    let sellado = aead_seal(key, nonce, aad, pt);
+    print(hex_encode(sellado.ciphertext));
+    print(hex_encode(sellado.tag));
+
+    // Abrir el sellado auténtico: recupera el texto.
+    match (aead_open(key, nonce, aad, sellado.ciphertext, sellado.tag)) {
+        Option.Some(claro) => {
+            var ok = len(claro) == len(pt);
+            var j = 0;
+            while (j < len(pt)) {
+                if (claro[j] != pt[j]) { ok = false; }
+                j = j + 1;
+            }
+            if (ok) { print("open ok"); } else { print("open MISMATCH"); }
+        },
+        Option.None => print("open FALLO"),
+    }
+
+    // Manipular un octeto del criptograma debe hacer que la apertura RECHACE.
+    var ct2: [int] = [];
+    var k = 0;
+    while (k < len(sellado.ciphertext)) {
+        push(ct2, sellado.ciphertext[k]);
+        k = k + 1;
+    }
+    ct2[0] = ct2[0] ^ 1; // voltea un bit
+    match (aead_open(key, nonce, aad, ct2, sellado.tag)) {
+        Option.Some(x) => print("tamper NO detectado"),
+        Option.None => print("tamper rechazado"),
+    }
+}

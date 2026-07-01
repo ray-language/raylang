@@ -1,0 +1,91 @@
+// ChaCha20-Poly1305 AEAD (RFC 8439 §2.8) — cifrado autenticado con datos asociados. Combina el
+// cifrador de flujo ChaCha20 (confidencialidad) con el MAC Poly1305 (integridad + autenticidad).
+//
+// Construcción: la clave de Poly1305 es el primer bloque de ChaCha20 con contador 0; el criptograma
+// usa contador 1 en adelante; el tag cubre `AAD ‖ pad ‖ criptograma ‖ pad ‖ len(AAD) ‖ len(cripto)`.
+// Importable: `from chacha20poly1305 import aead_seal, aead_open, Sealed;`.
+
+from chacha20 import chacha20_block, chacha20_encrypt;
+from poly1305 import poly1305_mac;
+
+// El resultado de sellar: el criptograma y su tag de 16 octetos.
+pub struct Sealed { ciphertext: [int], tag: [int] }
+
+// La clave de Poly1305 de una sola vez: los primeros 32 octetos de ChaCha20 con contador 0.
+fn poly_key_gen(key: [int], nonce: [int]) -> [int] {
+    let blk = chacha20_block(key, 0 as u32, nonce);
+    var k: [int] = [];
+    var i = 0;
+    while (i < 32) {
+        push(k, blk[i]);
+        i = i + 1;
+    }
+    k
+}
+
+// Añade `n` como longitud de 8 octetos little-endian.
+fn push_len_le(m: [int], n: int) {
+    var k = 0;
+    while (k < 8) {
+        push(m, (n >> (k * 8)) & 255);
+        k = k + 1;
+    }
+}
+
+// El mensaje que autentica Poly1305: AAD (con relleno a múltiplo de 16), criptograma (idem), y las
+// dos longitudes en 8 octetos LE.
+fn mac_data(aad: [int], ct: [int]) -> [int] {
+    var m: [int] = [];
+    var i = 0;
+    while (i < len(aad)) {
+        push(m, aad[i]);
+        i = i + 1;
+    }
+    while (len(m) % 16 != 0) {
+        push(m, 0);
+    }
+    i = 0;
+    while (i < len(ct)) {
+        push(m, ct[i]);
+        i = i + 1;
+    }
+    while (len(m) % 16 != 0) {
+        push(m, 0);
+    }
+    push_len_le(m, len(aad));
+    push_len_le(m, len(ct));
+    m
+}
+
+// Sella `plaintext`: devuelve el criptograma + el tag de autenticación.
+pub fn aead_seal(key: [int], nonce: [int], aad: [int], plaintext: [int]) -> Sealed {
+    let ct = chacha20_encrypt(key, 1 as u32, nonce, plaintext);
+    let pk = poly_key_gen(key, nonce);
+    let tag = poly1305_mac(pk, mac_data(aad, ct));
+    Sealed { ciphertext: ct, tag: tag }
+}
+
+// Comparación de tags en tiempo constante (no revela dónde difieren).
+fn ct_eq(a: [int], b: [int]) -> bool {
+    if (len(a) != len(b)) {
+        return false;
+    }
+    var diff = 0;
+    var i = 0;
+    while (i < len(a)) {
+        diff = diff | (a[i] ^ b[i]);
+        i = i + 1;
+    }
+    diff == 0
+}
+
+// Abre (verifica + descifra): recomputa el tag y, si coincide con el recibido, devuelve el texto
+// plano; si no, `None` (el mensaje fue manipulado o la clave/nonce no corresponden).
+pub fn aead_open(key: [int], nonce: [int], aad: [int], ct: [int], tag: [int]) -> Option<[int]> {
+    let pk = poly_key_gen(key, nonce);
+    let esperado = poly1305_mac(pk, mac_data(aad, ct));
+    if (ct_eq(esperado, tag)) {
+        return Option.Some(chacha20_encrypt(key, 1 as u32, nonce, ct)); // XOR de nuevo = descifrar
+    }
+    Option.None
+}

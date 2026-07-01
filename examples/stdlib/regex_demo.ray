@@ -56,4 +56,34 @@ fn main() {
     caso_search("xyz", "abcde");    // no
     caso_search("a+", "bbbaaa");    // si
     caso_search("", "abc");         // si (patrón vacío: casa en todas partes)
+
+    // M29.1b — clases de caracteres.
+    caso_full("[abc]+", "cabba");       // si
+    caso_full("[abc]+", "cabxa");       // no
+    caso_full("[a-z]+", "hola");        // si
+    caso_full("[a-z]+", "Hola");        // no
+    caso_full("[^0-9]+", "abc");        // si
+    caso_full("[^0-9]+", "ab3");        // no
+    caso_full("[A-Za-z0-9_]+", "var_9");// si
+
+    // Escapes de clase: \d \w \s (y negados).
+    caso_full("\\d+", "2024");          // si
+    caso_full("\\d+", "20a4");          // no
+    caso_full("\\w+", "hola_99");       // si
+    caso_full("a\\sb", "a b");          // si
+    caso_full("a\\sb", "a_b");          // no
+    caso_full("\\D+", "abc");           // si
+    caso_full("[\\d.]+", "3.14");       // si (dígitos y punto dentro de la clase)
+
+    // Anclas ^ y $.
+    caso_search("^abc", "abcdef");      // si (empieza por abc)
+    caso_search("^abc", "xabcdef");     // no (no empieza por abc)
+    caso_search("def$", "abcdef");      // si (termina en def)
+    caso_search("def$", "abcdefg");     // no
+    caso_search("^\\d+$", "12345");     // si (todo dígitos, anclado)
+    caso_search("^\\d+$", "123a5");     // no
+
+    // Un correo de juguete.
+    caso_full("\\w+@\\w+\\.\\w+", "ana@rayala.org"); // si
+    caso_full("\\w+@\\w+\\.\\w+", "ana.rayala.org"); // no
 }

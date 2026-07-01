@@ -4373,6 +4373,12 @@ Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
     un hilo en pc 0 en cada posición). Demo `regex_demo.ray` + `tests/regex_cli.rs` (batería de casos, ambos
     motores coinciden). `regex.ray` **pasa el oráculo del parser auto-alojado** (se parsea idéntico). Clases
     `[...]`, escapes `\d`/`\w`/`\s` y anclas `^`/`$` → M29.1b; `find`/captura/`replace` → M29.1c.
+  - **M29.1b COMPLETO**: clases de caracteres `[abc]`/`[a-z]`/`[^...]` (rangos + negación; `struct Class`/
+    `Range`, tabla `Prog.classes` indexada por el opcode Class), escapes predefinidos `\d`/`\w`/`\s` y sus
+    negados `\D`/`\W`/`\S` (átomos y dentro de `[...]`), y anclas `^`/`$` como **aserciones de ancho cero**
+    (opcodes AssertStart/AssertEnd; `add_thread` recibe la posición y sigue la aserción solo si `pos==0` /
+    `pos==n`). Casos nuevos en el demo (clases, `\d+`, correo de juguete, `^\d+$`); `regex.ray` sigue
+    parseándose idéntico bajo el toolchain auto-alojado. `find`/captura/`replace` → M29.1c.
 - **M29.2 Formateador** (`rayfmt`, estilo `gofmt`) — cliente externo que reusa el parser (como el LSP/
   runner). Pretty-printer canónico del AST → idempotente, sin configuración.
 - **M29.3 Optimización de la VM** — retomar el transversal (DESIGN §27): dedup de constantes, peephole/

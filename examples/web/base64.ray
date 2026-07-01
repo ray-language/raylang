@@ -99,6 +99,51 @@ fn dec_char(c: char) -> int {
     }
 }
 
+// El valor de 6 bits de un carácter base64 ESTÁNDAR (`+`/`/`), o -1 si no pertenece.
+fn dec_char_std(c: char) -> int {
+    if (c == '+') {
+        62
+    } else {
+        if (c == '/') {
+            63
+        } else {
+            match (index_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", to_string(c))) {
+                Option.Some(i) => i,
+                Option.None => 0 - 1,
+            }
+        }
+    }
+}
+
+// base64 estándar (con relleno `=`) → octetos. `Err` si hay un carácter fuera del alfabeto. El relleno
+// `=` marca el fin de los datos. Lo usa SCRAM/PostgreSQL (M32.1) para el salt y la firma del servidor.
+pub fn base64_decode(s: string) -> Result<[int], string> {
+    let n = len(s);
+    var out: [int] = [];
+    var acc = 0;
+    var nbits = 0;
+    var i = 0;
+    while (i < n) {
+        let c = s[i];
+        if (c == '=') {
+            i = n;                       // relleno: fin de los datos
+        } else {
+            let v = dec_char_std(c);
+            if (v < 0) {
+                return Result.Err("carácter base64 inválido");
+            }
+            acc = (acc << 6) | v;
+            nbits = nbits + 6;
+            if (nbits >= 8) {
+                nbits = nbits - 8;
+                push(out, (acc >> nbits) & 255);
+            }
+            i = i + 1;
+        }
+    }
+    Result.Ok(out)
+}
+
 // base64url (sin relleno) → octetos. `Err` si hay un carácter fuera del alfabeto. Decodifica grupos
 // de 4 caracteres (24 bits → 3 octetos); una cola de 2 caracteres da 1 octeto y de 3 da 2 octetos.
 pub fn base64url_decode(s: string) -> Result<[int], string> {

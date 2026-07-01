@@ -4524,6 +4524,15 @@ Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.
 ### M32 — Clientes y formatos
 - **M32.1 Cliente PostgreSQL** (protocolo wire) — el siguiente gran ejemplo "cliente cloud" en raylang
   puro, al estilo del de Redis pero con autenticación (SCRAM-SHA-256, que reusa M20) y mensajes tipados.
+  - **M32.1a COMPLETO** — **SCRAM-SHA-256** (`examples/web/scram.ray`, RFC 5802/7677), el mecanismo de
+    autenticación de PostgreSQL. Showcase de la pila cripto: **PBKDF2-HMAC-SHA256** (implementado, dkLen=32,
+    un bloque: `result = U1 ⊕ … ⊕ Uc`) + HMAC-SHA256 (M20.2) + SHA-256 (M20.1) + base64 (se añadió
+    `base64_decode` estándar a `base64.ray`). Cliente: `scram_first(user, nonce)` → client-first;
+    `scram_final(sc, password, server_first)` calcula ClientProof (ClientKey ⊕ HMAC(StoredKey, AuthMessage))
+    y devuelve el client-final; `scram_verify(sc, server_final)` comprueba la ServerSignature. Verificado
+    contra el ejemplo COMPLETO del RFC 7677 §3 (client-final byte-idéntico + firma del servidor verificada),
+    ambos motores (`tests/scram_cli.rs`; interp `#[ignore]` por PBKDF2 lento, VM en la suite). Falta el
+    protocolo wire de PostgreSQL (startup/query/rows) → M32.1b.
 - **M32.2 Formatos de config**: TOML (y/o YAML/CSV) como librería raylang.
 - **M32.3 Plantillas HTML** — un motor de plantillas simple (interpolación + bucles) sobre M27.
 

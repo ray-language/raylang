@@ -2848,6 +2848,9 @@ mod tests {
         oracle_program("fn main() -> int { let a: [u8] = [1, 2, 3]; a[2] as int }"); // 3
         oracle_program("fn f(x: u8) -> u8 { x } fn main() -> int { f(42) as int }"); // 42 (arg literal)
         oracle_program("fn main() -> int { let m: u32 = (1 << 8) + 1; m as int }"); // 257 (bitop literales)
+        // M28.3b: la asignación coerciona el literal al ancho del destino (var, campo, elemento).
+        oracle_program("fn main() -> int { var x: u8 = 0; x = 200; x as int }");    // 200
+        oracle_program("fn main() -> int { var a: [u32] = [0]; a[0] = 7; a[0] as int }"); // 7
     }
 
     /// M28.2: `?` con conversión de error vía `From<S>`. `expr?` (con `impl From<E1> for E2`) baja a

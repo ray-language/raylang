@@ -1218,7 +1218,9 @@ impl Checker {
                         name
                     )));
                 }
-                let vt = self.check_expr(value)?;
+                // M28.3b: con tipo esperado, un literal entero adopta el ancho uint (`x = 5` con x: u8),
+                // igual que en un `let`; para el resto, `check_expr_expected` cae al chequeo normal.
+                let vt = self.check_expr_expected(value, &var_ty)?;
                 if vt != var_ty {
                     return Err(self.err(value.line, value.col, format!("'{}' es {} pero se le asigna {}", name, var_ty, vt)));
                 }
@@ -1233,7 +1235,7 @@ impl Checker {
                         "no se puede asignar a un carácter de un string (los strings son inmutables)".into()));
                 }
                 let elem = self.check_index(array, index)?;
-                let vt = self.check_expr(value)?;
+                let vt = self.check_expr_expected(value, &elem)?;
                 if vt != elem {
                     return Err(self.err(value.line, value.col, format!("el elemento es {} pero se le asigna {}", elem, vt)));
                 }
@@ -1242,7 +1244,7 @@ impl Checker {
             // p.x = e  — mutar un campo (no requiere 'var', como el índice).
             ExprKind::Field { object, name } => {
                 let fty = self.check_field(object, name)?;
-                let vt = self.check_expr(value)?;
+                let vt = self.check_expr_expected(value, &fty)?;
                 if vt != fty {
                     return Err(self.err(value.line, value.col, format!("el campo '{}' es {} pero se le asigna {}", name, fty, vt)));
                 }

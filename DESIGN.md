@@ -4418,6 +4418,18 @@ Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
 Cierra el dominio cripto: hoy hay *hashing*/HMAC pero **no cifrado ni firma asimétrica**.
 - **M30.1 Cripto simétrica**: **ChaCha20-Poly1305** (AEAD moderno, aritmética de 32 bits → encaja en
   raylang) y/o **AES-GCM**. Verificable contra los vectores del RFC 8439.
+  - **M30.1a COMPLETO** — **ChaCha20** (`examples/web/chacha20.ray`): 20 rondas de suma/XOR/rotación sobre
+    palabras de 32 bits. **Showcase de M28.3**: aritmética `u32` pura, SIN el `& 0xFFFFFFFF` que plaga a
+    `sha256.ray` — el código es idéntico al pseudocódigo del RFC. `rotl32`/`quarter_round`/`chacha20_block`/
+    `chacha20_encrypt`. Verificado byte a byte contra el vector RFC 8439 §2.4.2 + round-trip, ambos motores
+    (`tests/chacha20_cli.rs`).
+  - **M30.1b COMPLETO** — **Poly1305** (`examples/web/poly1305.ray`): MAC de una sola vez, aritmética modular
+    de 130 bits (mod 2^130−5). Port de poly1305-donna (32-bit): acumulador y `r` en **5 limbs de 26 bits**,
+    productos en **`u64`** (52..55 bits) → otro showcase de M28.3 (antes exigiría emular 64 bits a mano).
+    Selección final en tiempo constante con la máscara `(g4 >> 63) - 1`. Verificado byte a byte contra el
+    vector RFC 8439 §2.5.2, ambos motores (`tests/poly1305_cli.rs`). **Habilitador de lenguaje**: la coerción
+    de literal uint de M28.3b se extendió a la **asignación** (`x = 200` con `x: u8`; var/campo/elemento) vía
+    `check_expr_expected` en `check_assign` (oráculo). AEAD ChaCha20-Poly1305 (seal/open) → M30.1c.
 - **M30.2 Cripto asimétrica**: **Ed25519** (firmas sobre curva de Edwards; aritmética de campo grande →
   ejercita `u64`/bignum). Verificable contra los vectores del RFC 8032.
 - **M30.3 JWT RS256/ES256**: sobre M30.2, extiende `jwt.ray` más allá de HS256 (firma asimétrica de tokens).

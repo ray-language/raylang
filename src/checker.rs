@@ -291,6 +291,8 @@ pub struct DefEntry {
 struct Checker {
     /// Firmas de todas las funciones (llenada en la pre-pasada).
     functions: HashMap<String, FnSig>,
+    /// Constantes de nivel superior (M27.5): nombre → tipo. Resueltas como `Ident` globales.
+    consts: HashMap<String, Type>,
     /// Definiciones de struct: nombre → campos (en orden). Pre-pasada.
     structs: HashMap<String, Vec<(String, Type)>>,
     /// Definiciones de enum: nombre → variantes (nombre, payload), en orden.
@@ -388,6 +390,7 @@ impl Checker {
     fn new() -> Self {
         Checker {
             functions: HashMap::new(),
+            consts: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
             enum_names: HashSet::new(),
@@ -423,6 +426,24 @@ impl Checker {
         // aquí, una vez, para usarlos como fallback al resolver `recv.f(...)`.
         if self.ufcs_aliases.is_empty() && !program.ufcs_aliases.is_empty() {
             self.ufcs_aliases = program.ufcs_aliases.clone();
+        }
+        // M27.5: registrar y validar las constantes de nivel superior. El valor debe ser un literal (o
+        // un literal negado) del tipo declarado. Un duplicado o un valor no-literal es error.
+        for c in &program.consts {
+            self.ensure_type(&c.ty, c.line, c.col)?;
+            let declared = self.resolve_type(&c.ty);
+            if !is_const_literal(&c.value) {
+                return Err(self.err(c.value.line, c.value.col,
+                    format!("el valor de la constante '{}' debe ser un literal", c.name)));
+            }
+            let vt = self.check_expr(&c.value)?;
+            if vt != declared {
+                return Err(self.err(c.value.line, c.value.col, format!(
+                    "la constante '{}' se declara como {} pero su valor es {}", c.name, declared, vt)));
+            }
+            if self.consts.insert(c.name.clone(), declared).is_some() {
+                return Err(self.err(c.line, c.col, format!("constante '{}' declarada dos veces", c.name)));
+            }
         }
         // M10.2f: posición de declaración de cada tipo (struct/enum/trait), para hover/ir-a-definición
         // de nombres de tipo. Barato; solo se consulta si `gather`.
@@ -1882,6 +1903,10 @@ impl Checker {
                 // clase: su tipo es el tipo función correspondiente (M4.1). Una
                 // función **genérica** no puede tomarse como valor (su tipo no es un
                 // `fn(...)` concreto): hay que llamarla directamente (M6.1).
+                // M27.5: una constante de nivel superior (global) resuelve a su tipo.
+                if let Some(ty) = self.consts.get(name) {
+                    return Ok(ty.clone());
+                }
                 if let Some(sig) = self.functions.get(name) {
                     if !sig.type_params.is_empty() {
                         return Err(self.err(expr.line, expr.col, format!(
@@ -2663,6 +2688,18 @@ impl Checker {
 fn is_hashable_key(t: &Type) -> bool {
     // `bytes` (diferido de M16): secuencia inmutable de octetos → Hash/Eq/Ord fiables, como un string.
     matches!(t, Type::Int | Type::String | Type::Char | Type::Bool | Type::Bytes | Type::Var(_))
+}
+
+/// ¿Es `e` un valor válido para una constante (M27.5)? Un literal, o un literal numérico negado (`-5`).
+fn is_const_literal(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
+        | ExprKind::Char(_) | ExprKind::Bytes(_) => true,
+        ExprKind::Unary { op: UnaryOp::Neg, expr } => {
+            matches!(expr.kind, ExprKind::Int(_) | ExprKind::Float(_))
+        }
+        _ => false,
+    }
 }
 
 fn is_comparable(t: &Type) -> bool {

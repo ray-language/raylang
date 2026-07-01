@@ -127,7 +127,7 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
     let surfaces = build_surfaces(&modules);
     let tipos = recolectar_tipos(&modules); // todos los tipos: para distinguir "privado" de "no existe"
     let mut fusionado = Program {
-        functions: Vec::new(), structs: Vec::new(), enums: Vec::new(),
+        functions: Vec::new(), structs: Vec::new(), enums: Vec::new(), consts: Vec::new(),
         traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
         ufcs_aliases: HashMap::new(),
     };
@@ -199,6 +199,7 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         }
         fusionado.structs.append(&mut m.program.structs);
         fusionado.enums.append(&mut m.program.enums);
+        fusionado.consts.append(&mut m.program.consts); // M27.5
         fusionado.traits.append(&mut m.program.traits);
         fusionado.impls.append(&mut m.program.impls);
 
@@ -223,6 +224,10 @@ fn shift_program(program: &mut Program, delta: usize) {
     }
     for f in &mut program.functions {
         shift_function(f, delta);
+    }
+    for c in &mut program.consts {
+        c.line += delta;
+        shift_expr(&mut c.value, delta);
     }
     for s in &mut program.structs {
         s.line += delta;

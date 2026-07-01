@@ -95,6 +95,12 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
     let n_named = program.functions.len();
     let total = n_named + collect_fn_exprs(program).len();
 
+    // M27.5: valores de las constantes de nivel superior (evaluados de sus literales).
+    let mut consts = HashMap::new();
+    for cst in &program.consts {
+        consts.insert(cst.name.clone(), crate::interpreter::eval_const_literal(&cst.value));
+    }
+
     let mut c = Compiler {
         indices: &indices,
         structs: &struct_defs,
@@ -102,6 +108,7 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
         n_named,
         functions: (0..total).map(|_| None).collect(),
         scopes: Vec::new(),
+        consts,
     };
     for (i, f) in program.functions.iter().enumerate() {
         c.compile_function(i, &f.params, &f.body, f.line, f.col, f.name.clone())?;
@@ -117,7 +124,7 @@ pub fn compile_expr(expr: &Expr) -> Result<Chunk, CompileError> {
     let indices = HashMap::new();
     let structs = HashMap::new();
     let enums = HashMap::new();
-    let mut c = Compiler { indices: &indices, structs: &structs, enums: &enums, n_named: 0, functions: Vec::new(), scopes: Vec::new() };
+    let mut c = Compiler { indices: &indices, structs: &structs, enums: &enums, n_named: 0, functions: Vec::new(), scopes: Vec::new(), consts: HashMap::new() };
     c.scopes.push(FnScope::new());
     c.emit_expr(expr)?;
     c.emit(OpCode::Return, expr.line, expr.col);
@@ -171,6 +178,8 @@ struct Compiler<'a> {
     n_named: usize,
     functions: Vec<Option<CompiledFn>>,
     scopes: Vec<FnScope>,
+    /// Constantes de nivel superior (M27.5): nombre → su valor. Una referencia se compila a `Constant`.
+    consts: HashMap<String, Value>,
 }
 
 impl<'a> Compiler<'a> {
@@ -681,8 +690,12 @@ impl<'a> Compiler<'a> {
                     let depth = self.scopes.len() - 1;
                     if let Some(up) = self.resolve_upvalue(depth, name) {
                         self.emit(OpCode::GetUpvalue(up), line, col);
+                    } else if let Some(v) = self.consts.get(name).cloned() {
+                        // M27.5: una constante de nivel superior → su valor como Constant.
+                        let cidx = self.cur().chunk.add_constant(v);
+                        self.emit(OpCode::Constant(cidx), line, col);
                     } else {
-                        // No es variable ni upvalue: un nombre de función como valor.
+                        // No es variable ni upvalue ni constante: un nombre de función como valor.
                         let idx = *self.indices.get(name).expect("el checker garantiza el nombre");
                         self.emit(OpCode::Function(idx), line, col);
                     }

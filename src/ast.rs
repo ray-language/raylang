@@ -136,6 +136,9 @@ pub struct Program {
     pub functions: Vec<Function>,
     pub structs: Vec<StructDef>,
     pub enums: Vec<EnumDef>,
+    /// Constantes de nivel superior (M27.5): `const NAME: T = <literal>;`. Su valor es un literal
+    /// (compile-time); los motores resuelven una referencia `NAME` contra esta tabla.
+    pub consts: Vec<ConstDef>,
     /// Declaraciones de trait: contratos de comportamiento (M9). Solo firmas.
     pub traits: Vec<TraitDef>,
     /// Bloques `impl Trait for Tipo` que implementan un trait para un tipo (M9).
@@ -202,6 +205,17 @@ impl ImportName {
     pub fn local(&self) -> &str {
         self.alias.as_deref().unwrap_or(&self.name)
     }
+}
+
+/// Una constante de nivel superior (M27.5): `const NAME: T = value;`. `value` es un literal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstDef {
+    pub name: String,
+    pub ty: Type,
+    pub value: Expr,
+    pub is_pub: bool,
+    pub line: usize,
+    pub col: usize,
 }
 
 /// Definición de un struct: `struct Nombre { campo: Tipo, ... }` (M3.2). Los campos

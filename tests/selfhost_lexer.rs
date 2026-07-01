@@ -55,6 +55,7 @@ fn kind_str(k: &TokenKind) -> String {
         TokenKind::For => "For".into(),
         TokenKind::In => "In".into(),
         TokenKind::DotDot => "DotDot".into(),
+        TokenKind::Const => "Const".into(),
         TokenKind::True => "True".into(),
         TokenKind::False => "False".into(),
         TokenKind::Struct => "Struct".into(),

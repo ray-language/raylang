@@ -39,6 +39,7 @@ pub enum TokenKind {
     True,
     False,
     Struct,
+    Const, // M27.5
     Enum,  // M5
     Match, // M5
     Trait, // M9

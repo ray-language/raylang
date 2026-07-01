@@ -4290,8 +4290,15 @@ Lo que más limpia el código existente y futuro. Toca lexer/parser/checker/ambo
   destino (int→float, float→int truncando hacia cero, char→int code point, int→char con error si el code
   point es inválido). Verificado en el oráculo (`cast_oraculo`) + ejemplo `basics/casts.ray` (cifrado
   César combinando casts + `for` + interpolación). Excluido del oráculo de self-hosting.
-- **M27.5 `const` de nivel superior**. Sustituye el patrón `fn guid() -> string { "…" }`. Constantes
-  evaluadas en compilación (literales), en ámbito global. Toca parser/checker; runtime las inlinea.
+- **M27.5 `const` de nivel superior** ✅ (`const NAME: T = <literal>;`). Sustituye el patrón `fn guid() ->
+  string { "…" }`. Keyword `const`; `ConstDef` en `Program.consts`. El valor debe ser un **literal** (o un
+  literal numérico negado; computados → diferido). El checker registra `nombre → tipo`, valida el literal
+  contra `T`, y resuelve una referencia `Ident(NAME)` global contra la tabla. **Sin reescritura global**:
+  cada motor lleva su tabla de valores (`eval_const_literal`, compartido) y resuelve el `Ident` — el
+  intérprete devuelve el valor, el compilador emite `Constant`. El loader fusiona los consts de todos los
+  módulos (con shift de posiciones). Verificado en el oráculo (`const_oraculo`) + ejemplo
+  `basics/constantes.ray`. Excluido del oráculo de self-hosting. **M27 (ergonomía I) COMPLETO** (tuplas,
+  `for`/iteradores, interpolación `f"…"`, casts `as`, `const`).
 
 ### M28 — Ergonomía del lenguaje II (abstracción)
 Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).

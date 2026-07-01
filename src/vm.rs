@@ -2740,6 +2740,17 @@ mod tests {
     }
 
     /// M27.2: bucle `for` — rango, arreglo, string, Map `(k, v)`, `_`. Ambos motores coinciden.
+    /// M27.5: constantes de nivel superior. Resueltas como `Ident` globales → ambos motores coinciden.
+    #[test]
+    fn const_oraculo() {
+        oracle_program("const MAX: int = 100; fn main() -> int { MAX - 42 }"); // 58
+        oracle_program("const A: int = 7; const B: int = 3; fn main() -> int { A * B }"); // 21
+        oracle_program("const NEG: int = -5; fn main() -> int { NEG + 10 }"); // 5
+        oracle_program("const PI: float = 3.0; fn f(r: float) -> float { PI * r } fn main() -> int { f(4.0) as int }"); // 12
+        oracle_program("const ON: bool = true; fn main() -> int { if (ON) { 1 } else { 0 } }"); // 1
+        oracle_int("if (\"x\" == \"x\") { 1 } else { 0 }"); // control
+    }
+
     /// M27.4: casts `as` — int↔float, char↔int. Cambian la representación → ambos motores coinciden.
     #[test]
     fn cast_oraculo() {

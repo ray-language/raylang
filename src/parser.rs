@@ -73,6 +73,7 @@ impl Parser {
         let mut impls = Vec::new();
         let mut imports = Vec::new();
         let mut from_imports = Vec::new();
+        let mut consts = Vec::new();
         while !self.is_at_end() {
             // M11.3: `import M;` precede a todo (sin anotaciones ni `pub`).
             if self.check(&TokenKind::Import) {
@@ -95,7 +96,18 @@ impl Parser {
             // M11.3: `pub` exporta el ítem. En M11.3a solo se admite ante una función
             // (tipos/enums/traits son globales por ahora).
             let pub_tok = if self.check(&TokenKind::Pub) { Some(self.advance()) } else { None };
-            if self.check(&TokenKind::Struct) {
+            if self.check(&TokenKind::Const) {
+                // M27.5: `const NAME: T = <literal>;`.
+                self.no_annotations(&anns, "una constante")?;
+                let kw = self.advance();
+                let (name, _, _) = self.expect_ident("el nombre de la constante")?;
+                self.expect(&TokenKind::Colon, "':' tras el nombre de la constante")?;
+                let ty = self.parse_type()?;
+                self.expect(&TokenKind::Eq, "'=' en la constante")?;
+                let value = self.expression()?;
+                self.expect(&TokenKind::Semicolon, "';' al final de la constante")?;
+                consts.push(ConstDef { name, ty, value, is_pub: pub_tok.is_some(), line: kw.line, col: kw.col });
+            } else if self.check(&TokenKind::Struct) {
                 let mut s = self.struct_def()?;
                 s.annotations = anns;
                 s.is_pub = pub_tok.is_some();
@@ -121,7 +133,7 @@ impl Parser {
                 functions.push(f);
             }
         }
-        Ok(Program { functions, structs, enums, traits, impls, imports, from_imports, ufcs_aliases: std::collections::HashMap::new() })
+        Ok(Program { functions, structs, enums, consts, traits, impls, imports, from_imports, ufcs_aliases: std::collections::HashMap::new() })
     }
 
     /// import_decl  = 'import' module_path [ 'as' IDENT ] ';'   (M11.3 / M11.5)

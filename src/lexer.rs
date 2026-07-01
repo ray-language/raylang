@@ -556,6 +556,7 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "true" => TokenKind::True,
         "false" => TokenKind::False,
         "struct" => TokenKind::Struct,
+        "const" => TokenKind::Const,
         "enum" => TokenKind::Enum,
         "match" => TokenKind::Match,
         "trait" => TokenKind::Trait,

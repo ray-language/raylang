@@ -259,6 +259,25 @@ pub fn run(program: &Program) -> Result<Value, RuntimeError> {
     Interpreter::new(program).run_main()
 }
 
+/// M27.5: evalúa el valor literal de una constante (el checker garantiza que es un literal). Compartido
+/// con el compilador (las constantes del chunk son `Value` del intérprete, convertidas en el borde de la VM).
+pub fn eval_const_literal(e: &Expr) -> Value {
+    match &e.kind {
+        ExprKind::Int(n) => Value::Int(*n),
+        ExprKind::Float(f) => Value::Float(*f),
+        ExprKind::Bool(b) => Value::Bool(*b),
+        ExprKind::Str(s) => Value::Str(s.clone()),
+        ExprKind::Char(c) => Value::Char(*c),
+        ExprKind::Bytes(b) => Value::Bytes(Rc::new(b.clone())),
+        ExprKind::Unary { op: UnaryOp::Neg, expr } => match &expr.kind {
+            ExprKind::Int(n) => Value::Int(-n),
+            ExprKind::Float(f) => Value::Float(-f),
+            _ => unreachable!("el checker garantiza un literal numérico negado"),
+        },
+        _ => unreachable!("el checker garantiza un literal"),
+    }
+}
+
 /// M27.4: convierte `v` al tipo `ty` (`as`). El checker garantiza una combinación válida; solo el
 /// `int as char` con un code point inválido puede fallar en runtime.
 fn cast_value(v: Value, ty: &Type, line: usize, col: usize) -> Result<Value, Flow> {
@@ -316,6 +335,8 @@ struct Interpreter<'a> {
     anon: Vec<&'a FnExpr>,
     /// Definiciones de struct, por nombre (para construir literales en orden).
     structs: HashMap<String, &'a StructDef>,
+    /// Constantes de nivel superior (M27.5): nombre → su valor (ya evaluado del literal).
+    consts: HashMap<String, Value>,
     /// Pila de ámbitos de la función en ejecución. El último es el más interno.
     /// Cada variable es una **celda** compartible (M4.2): así una closure puede
     /// capturarla por referencia.
@@ -338,12 +359,17 @@ impl<'a> Interpreter<'a> {
         for s in &program.structs {
             structs.insert(s.name.clone(), s);
         }
+        let mut consts = HashMap::new();
+        for c in &program.consts {
+            consts.insert(c.name.clone(), eval_const_literal(&c.value));
+        }
         Interpreter {
             functions,
             named: &program.functions,
             named_index,
             anon: collect_fn_exprs(program),
             structs,
+            consts,
             scopes: Vec::new(),
             depth: 0,
         }
@@ -721,8 +747,12 @@ impl<'a> Interpreter<'a> {
 
             ExprKind::Ident(name) => match self.lookup_opt(name) {
                 Some(v) => Ok(v),
-                // No es una variable: es un nombre de función usado como valor.
                 None => {
+                    // M27.5: una constante de nivel superior.
+                    if let Some(v) = self.consts.get(name) {
+                        return Ok(v.clone());
+                    }
+                    // No es una variable ni constante: un nombre de función usado como valor.
                     let idx = *self.named_index.get(name).expect("el checker garantiza el nombre");
                     Ok(Value::Function(idx))
                 }

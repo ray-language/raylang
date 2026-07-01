@@ -4440,6 +4440,22 @@ Cierra el dominio cripto: hoy hay *hashing*/HMAC pero **no cifrado ni firma asim
     Poly1305 es el AEAD moderno preferido; AES-GCM exigiría S-boxes + GHASH sobre GF(2^128), diferido).
 - **M30.2 Cripto asimétrica**: **Ed25519** (firmas sobre curva de Edwards; aritmética de campo grande →
   ejercita `u64`/bignum). Verificable contra los vectores del RFC 8032.
+  - **M30.2a COMPLETO** — **SHA-512** (`examples/web/sha512.ray`), prerrequisito. Aritmética de 64 bits:
+    showcase de `u64` (como SHA-256 pero sin `& mask`). Constantes de 64 bits (> i64::MAX) compuestas con
+    `w64(hi, lo)`. Vectores "abc"/vacío/"quick brown fox" (FIPS 180-4/NIST, vs Python).
+  - **M30.2b/c/d COMPLETO → M30.2 COMPLETO** — **Ed25519** (`examples/web/ed25519.ray`), **port de
+    TweetNaCl** (dominio público, la referencia más compacta y auditada). La parte más matemática del
+    proyecto: (b) aritmética de campo mod 2^255−19 en **16 limbs de 16 bits** en `[int]` (i64 con signo; los
+    productos de la multiplicación escolar y los pliegues `2^256≡38` caben de sobra en i64 → no hace falta
+    u128), con carries por desplazamiento **aritmético** de i64 (`car25519`); (c) ley de grupo de Edwards en
+    coordenadas extendidas (`point_add`/`scalarmult`/`scalarbase`), empaquetado/desempaquetado de puntos con
+    raíz cuadrada (`pow2523`); (d) firma/verificación con reducción de escalares mod L (`mod_l`) y SHA-512.
+    API `ed25519_public_key`/`ed25519_sign`/`ed25519_verify`. **Verificado byte a byte contra la
+    implementación de referencia canónica del RFC 8032** (apéndice) para 3 semillas del §7.1: clave pública
+    + firma idénticas, verificación acepta la firma válida y rechaza la manipulada, ambos motores
+    (`tests/ed25519_cli.rs`). (Gotcha de depuración: un vector "esperado" mal transcrito hizo pensar en un
+    bug; tres implementaciones independientes —raylang, una referencia propia y el apéndice del RFC—
+    coincidieron, confirmando que raylang era correcto.) Sobre esto, M30.3 (JWT EdDSA/Ed25519).
 - **M30.3 JWT RS256/ES256**: sobre M30.2, extiende `jwt.ray` más allá de HS256 (firma asimétrica de tokens).
 
 ### M31 — Cerrar gRPC (transporte HTTP/2 vivo)

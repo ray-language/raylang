@@ -1,0 +1,449 @@
+// Ed25519 (RFC 8032) escrito EN raylang — firma digital sobre la curva de Edwards edwards25519.
+// **Port de TweetNaCl** (D. J. Bernstein et al., dominio público): la implementación de referencia más
+// compacta y auditada. La parte más matemática del proyecto: aritmética de campo mod 2^255−19, la ley
+// de grupo de Edwards en coordenadas extendidas, y reducción de escalares mod L (el orden del grupo).
+//
+// Un elemento de campo `gf` son 16 limbs de 16 bits en un `[int]` (i64, con signo: las restas producen
+// negativos y el desplazamiento aritmético de i64 los propaga). Un punto son 4 `gf` (X, Y, Z, T).
+// Usa SHA-512 (`sha512.ray`). Importable: `from ed25519 import ed25519_public_key, ed25519_sign, ed25519_verify;`.
+
+from sha512 import sha512_octets;
+
+// -------------------- utilidades de gf y bytes --------------------
+
+fn gf16() -> [int] { [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }
+
+fn gcopy(r: [int], a: [int]) {
+    var i = 0;
+    while (i < 16) { r[i] = a[i]; i = i + 1; }
+}
+
+fn newpoint() -> [[int]] { [gf16(), gf16(), gf16(), gf16()] }
+
+// Constantes de la curva (limbs de 16 bits, de TweetNaCl).
+fn con_D() -> [int] { [30883, 4953, 19914, 30187, 55467, 16705, 2637, 112, 59544, 30585, 16505, 36039, 65139, 11119, 27886, 20995] }
+fn con_D2() -> [int] { [61785, 9906, 39828, 60374, 45398, 33411, 5274, 224, 53552, 61171, 33010, 6542, 64743, 22239, 55772, 9222] }
+fn con_X() -> [int] { [54554, 36645, 11616, 51542, 42930, 38181, 51040, 26924, 56412, 64982, 57905, 49316, 21502, 52590, 14035, 8553] }
+fn con_Y() -> [int] { [26200, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214] }
+fn con_I() -> [int] { [41136, 18958, 6951, 50414, 58488, 44335, 6150, 12099, 55207, 15867, 153, 11085, 57099, 20417, 9344, 11139] }
+fn con_L() -> [int] { [237, 211, 245, 92, 26, 99, 18, 88, 214, 156, 247, 162, 222, 249, 222, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16] }
+
+// -------------------- aritmética de campo (mod 2^255−19) --------------------
+
+fn car25519(o: [int]) {
+    var i = 0;
+    while (i < 16) {
+        let c = o[i] >> 16;              // desplazamiento aritmético (i64) → acarreo con signo
+        if (i < 15) {
+            o[i + 1] = o[i + 1] + c;
+        } else {
+            o[0] = o[0] + 38 * c;        // 2^256 ≡ 38 (mod p)
+        }
+        o[i] = o[i] - (c << 16);
+        i = i + 1;
+    }
+}
+
+fn fadd(o: [int], a: [int], b: [int]) {
+    var i = 0;
+    while (i < 16) { o[i] = a[i] + b[i]; i = i + 1; }
+}
+
+fn fsub(o: [int], a: [int], b: [int]) {
+    var i = 0;
+    while (i < 16) { o[i] = a[i] - b[i]; i = i + 1; }
+}
+
+fn fmul(o: [int], a: [int], b: [int]) {
+    var t: [int] = [];
+    var i = 0;
+    while (i < 31) { push(t, 0); i = i + 1; }
+    i = 0;
+    while (i < 16) {
+        var j = 0;
+        while (j < 16) {
+            t[i + j] = t[i + j] + a[i] * b[j];
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 15) {
+        t[i] = t[i] + 38 * t[i + 16];    // pliega el exceso (2^256 ≡ 38)
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 16) { o[i] = t[i]; i = i + 1; }
+    car25519(o);
+    car25519(o);
+}
+
+fn fsqr(o: [int], a: [int]) { fmul(o, a, a); }
+
+// Inverso multiplicativo: a^(p−2) por cadena de cuadrados (2^255−21).
+fn finv(o: [int], a: [int]) {
+    let c = gf16();
+    gcopy(c, a);
+    var i = 253;
+    while (i >= 0) {
+        fsqr(c, c);
+        if (i != 2 && i != 4) { fmul(c, c, a); }
+        i = i - 1;
+    }
+    gcopy(o, c);
+}
+
+// a^((p−5)/8), para la raíz cuadrada al decodificar puntos.
+fn pow2523(o: [int], a: [int]) {
+    let c = gf16();
+    gcopy(c, a);
+    var i = 250;
+    while (i >= 0) {
+        fsqr(c, c);
+        if (i != 1) { fmul(c, c, a); }
+        i = i - 1;
+    }
+    gcopy(o, c);
+}
+
+// Intercambio condicional de p y q (en tiempo constante) si b == 1.
+fn sel25519(p: [int], q: [int], b: int) {
+    let c = ~(b - 1);
+    var i = 0;
+    while (i < 16) {
+        let t = c & (p[i] ^ q[i]);
+        p[i] = p[i] ^ t;
+        q[i] = q[i] ^ t;
+        i = i + 1;
+    }
+}
+
+// Serializa un gf a 32 octetos (reducido completamente mod p).
+fn pack25519(o: [int], n: [int]) {
+    let t = gf16();
+    gcopy(t, n);
+    car25519(t); car25519(t); car25519(t);
+    var j = 0;
+    while (j < 2) {
+        let m = gf16();
+        m[0] = t[0] - 65517;             // 0xffed
+        var i = 1;
+        while (i < 15) {
+            m[i] = t[i] - 65535 - ((m[i - 1] >> 16) & 1);
+            m[i - 1] = m[i - 1] & 65535;
+            i = i + 1;
+        }
+        m[15] = t[15] - 32767 - ((m[14] >> 16) & 1);
+        let b = (m[15] >> 16) & 1;
+        m[14] = m[14] & 65535;
+        sel25519(t, m, 1 - b);
+        j = j + 1;
+    }
+    var i = 0;
+    while (i < 16) {
+        o[2 * i] = t[i] & 255;
+        o[2 * i + 1] = (t[i] >> 8) & 255;
+        i = i + 1;
+    }
+}
+
+// Decodifica 32 octetos a un gf.
+fn unpack25519(o: [int], n: [int]) {
+    var i = 0;
+    while (i < 16) {
+        o[i] = n[2 * i] + (n[2 * i + 1] << 8);
+        i = i + 1;
+    }
+    o[15] = o[15] & 32767;
+}
+
+// ¿Difieren a y b tras empaquetarlos? (0 = iguales.)
+fn neq25519(a: [int], b: [int]) -> bool {
+    let pa: [int] = []; let pb: [int] = [];
+    var i = 0;
+    while (i < 32) { push(pa, 0); push(pb, 0); i = i + 1; }
+    pack25519(pa, a);
+    pack25519(pb, b);
+    var diff = 0;
+    i = 0;
+    while (i < 32) { diff = diff | (pa[i] ^ pb[i]); i = i + 1; }
+    diff != 0
+}
+
+// El bit de paridad (LSB del empaquetado).
+fn par25519(a: [int]) -> int {
+    let d: [int] = [];
+    var i = 0;
+    while (i < 32) { push(d, 0); i = i + 1; }
+    pack25519(d, a);
+    d[0] & 1
+}
+
+// -------------------- ley de grupo de Edwards --------------------
+
+// Suma de puntos en coordenadas extendidas: p = p + q.
+fn point_add(p: [[int]], q: [[int]]) {
+    let a = gf16(); let b = gf16(); let c = gf16(); let d = gf16();
+    let t = gf16(); let e = gf16(); let f = gf16(); let g = gf16(); let h = gf16();
+    fsub(a, p[1], p[0]);
+    fsub(t, q[1], q[0]);
+    fmul(a, a, t);
+    fadd(b, p[0], p[1]);
+    fadd(t, q[0], q[1]);
+    fmul(b, b, t);
+    fmul(c, p[3], q[3]);
+    fmul(c, c, con_D2());
+    fmul(d, p[2], q[2]);
+    fadd(d, d, d);
+    fsub(e, b, a);
+    fsub(f, d, c);
+    fadd(g, d, c);
+    fadd(h, b, a);
+    fmul(p[0], e, f);
+    fmul(p[1], h, g);
+    fmul(p[2], g, f);
+    fmul(p[3], e, h);
+}
+
+fn cswap(p: [[int]], q: [[int]], b: int) {
+    var i = 0;
+    while (i < 4) {
+        sel25519(p[i], q[i], b);
+        i = i + 1;
+    }
+}
+
+// p = s · q, con s un escalar de 32 octetos (little-endian).
+fn scalarmult(p: [[int]], q: [[int]], s: [int]) {
+    gcopy(p[0], gf16());
+    let uno = gf16(); uno[0] = 1;
+    gcopy(p[1], uno);
+    gcopy(p[2], uno);
+    gcopy(p[3], gf16());
+    var i = 255;
+    while (i >= 0) {
+        let b = (s[i / 8] >> (i & 7)) & 1;
+        cswap(p, q, b);
+        point_add(q, p);
+        point_add(p, p);
+        cswap(p, q, b);
+        i = i - 1;
+    }
+}
+
+// p = s · B (el punto base).
+fn scalarbase(p: [[int]], s: [int]) {
+    let q = newpoint();
+    gcopy(q[0], con_X());
+    gcopy(q[1], con_Y());
+    let uno = gf16(); uno[0] = 1;
+    gcopy(q[2], uno);
+    fmul(q[3], con_X(), con_Y());
+    scalarmult(p, q, s);
+}
+
+// Empaqueta un punto a 32 octetos (con el bit de signo de x en el bit alto).
+fn point_pack(r: [int], p: [[int]]) {
+    let tx = gf16(); let ty = gf16(); let zi = gf16();
+    finv(zi, p[2]);
+    fmul(tx, p[0], zi);
+    fmul(ty, p[1], zi);
+    pack25519(r, ty);
+    r[31] = r[31] ^ (par25519(tx) << 7);
+}
+
+// Decodifica el punto NEGADO desde 32 octetos (lo que pide la verificación). Devuelve false si el
+// punto no está en la curva.
+fn unpackneg(r: [[int]], pk: [int]) -> bool {
+    let t = gf16(); let chk = gf16(); let num = gf16(); let den = gf16();
+    let den2 = gf16(); let den4 = gf16(); let den6 = gf16();
+    let uno = gf16(); uno[0] = 1;
+    gcopy(r[2], uno);
+    unpack25519(r[1], pk);
+    fsqr(num, r[1]);
+    fmul(den, num, con_D());
+    fsub(num, num, r[2]);
+    fadd(den, r[2], den);
+    fsqr(den2, den);
+    fsqr(den4, den2);
+    fmul(den6, den4, den2);
+    fmul(t, den6, num);
+    fmul(t, t, den);
+    pow2523(t, t);
+    fmul(t, t, num);
+    fmul(t, t, den);
+    fmul(t, t, den);
+    fmul(r[0], t, den);
+    fsqr(chk, r[0]);
+    fmul(chk, chk, den);
+    if (neq25519(chk, num)) { fmul(r[0], r[0], con_I()); }
+    fsqr(chk, r[0]);
+    fmul(chk, chk, den);
+    if (neq25519(chk, num)) { return false; }
+    if (par25519(r[0]) == (pk[31] >> 7)) { fsub(r[0], gf16(), r[0]); }
+    fmul(r[3], r[0], r[1]);
+    true
+}
+
+// -------------------- escalares mod L --------------------
+
+// Reduce el número de 64 octetos `x` (i64 por posición) mod L → 32 octetos.
+fn mod_l(x: [int]) -> [int] {
+    let el = con_L();
+    var i = 63;
+    while (i >= 32) {
+        var carry = 0;
+        var j = i - 32;
+        while (j < i - 12) {
+            x[j] = x[j] + carry - 16 * x[i] * el[j - (i - 32)];
+            carry = (x[j] + 128) >> 8;
+            x[j] = x[j] - (carry << 8);
+            j = j + 1;
+        }
+        x[j] = x[j] + carry;
+        x[i] = 0;
+        i = i - 1;
+    }
+    var carry = 0;
+    var j = 0;
+    while (j < 32) {
+        x[j] = x[j] + carry - ((x[31] >> 4) * el[j]);
+        carry = x[j] >> 8;
+        x[j] = x[j] & 255;
+        j = j + 1;
+    }
+    j = 0;
+    while (j < 32) { x[j] = x[j] - carry * el[j]; j = j + 1; }
+    let r: [int] = [];
+    i = 0;
+    while (i < 32) { push(r, 0); i = i + 1; }
+    i = 0;
+    while (i < 32) {
+        x[i + 1] = x[i + 1] + (x[i] >> 8);
+        r[i] = x[i] & 255;
+        i = i + 1;
+    }
+    r
+}
+
+// Reduce un buffer de 64 octetos (bytes) mod L → escalar de 32 octetos.
+fn sc_reduce(h: [int]) -> [int] {
+    var x: [int] = [];
+    var i = 0;
+    while (i < 64) { push(x, h[i]); i = i + 1; }
+    mod_l(x)
+}
+
+// -------------------- API pública --------------------
+
+// Extrae `[start, start+n)` de un arreglo.
+fn slice(a: [int], start: int, n: int) -> [int] {
+    var out: [int] = [];
+    var i = 0;
+    while (i < n) { push(out, a[start + i]); i = i + 1; }
+    out
+}
+
+// El escalar secreto clampeado (primera mitad del hash del seed).
+fn clamp_scalar(seed: [int]) -> [int] {
+    let d = sha512_octets(seed);
+    d[0] = d[0] & 248;
+    d[31] = d[31] & 127;
+    d[31] = d[31] | 64;
+    d
+}
+
+// La clave pública (32 octetos) derivada del seed (32 octetos).
+pub fn ed25519_public_key(seed: [int]) -> [int] {
+    let d = clamp_scalar(seed);
+    let p = newpoint();
+    scalarbase(p, slice(d, 0, 32));
+    let pk: [int] = [];
+    var i = 0;
+    while (i < 32) { push(pk, 0); i = i + 1; }
+    point_pack(pk, p);
+    pk
+}
+
+// Firma `msg` (64 octetos: R ‖ S) con el seed y su clave pública.
+pub fn ed25519_sign(seed: [int], pubkey: [int], msg: [int]) -> [int] {
+    let d = clamp_scalar(seed);
+
+    // r = SHA512(prefix ‖ msg), reducido; R = r·B.
+    var pref: [int] = [];
+    var i = 32;
+    while (i < 64) { push(pref, d[i]); i = i + 1; }
+    i = 0;
+    while (i < len(msg)) { push(pref, msg[i]); i = i + 1; }
+    let r = sc_reduce(sha512_octets(pref));
+
+    let p = newpoint();
+    scalarbase(p, r);
+    let sig: [int] = [];
+    i = 0;
+    while (i < 64) { push(sig, 0); i = i + 1; }
+    point_pack(sig, p);   // sig[0..32] = R
+
+    // k = SHA512(R ‖ A ‖ msg), reducido.
+    var km: [int] = [];
+    i = 0;
+    while (i < 32) { push(km, sig[i]); i = i + 1; }
+    i = 0;
+    while (i < 32) { push(km, pubkey[i]); i = i + 1; }
+    i = 0;
+    while (i < len(msg)) { push(km, msg[i]); i = i + 1; }
+    let k = sc_reduce(sha512_octets(km));
+
+    // S = (r + k·d) mod L.
+    var x: [int] = [];
+    i = 0;
+    while (i < 64) { push(x, 0); i = i + 1; }
+    i = 0;
+    while (i < 32) { x[i] = r[i]; i = i + 1; }
+    i = 0;
+    while (i < 32) {
+        var j = 0;
+        while (j < 32) {
+            x[i + j] = x[i + j] + k[i] * d[j];
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    let s = mod_l(x);
+    i = 0;
+    while (i < 32) { sig[32 + i] = s[i]; i = i + 1; }
+    sig
+}
+
+// Verifica que `sig` (64 octetos) firma `msg` bajo `pubkey`.
+pub fn ed25519_verify(pubkey: [int], msg: [int], sig: [int]) -> bool {
+    let q = newpoint();
+    if (!unpackneg(q, pubkey)) {
+        return false;
+    }
+    // k = SHA512(R ‖ A ‖ msg), reducido.
+    var km: [int] = [];
+    var i = 0;
+    while (i < 32) { push(km, sig[i]); i = i + 1; }
+    i = 0;
+    while (i < 32) { push(km, pubkey[i]); i = i + 1; }
+    i = 0;
+    while (i < len(msg)) { push(km, msg[i]); i = i + 1; }
+    let k = sc_reduce(sha512_octets(km));
+
+    let p = newpoint();
+    scalarmult(p, q, k);        // p = k·(−A)
+    let q2 = newpoint();
+    scalarbase(q2, slice(sig, 32, 32)); // q2 = S·B
+    point_add(p, q2);           // p = S·B − k·A
+    let t: [int] = [];
+    i = 0;
+    while (i < 32) { push(t, 0); i = i + 1; }
+    point_pack(t, p);
+
+    // Debe coincidir con R = sig[0..32].
+    var diff = 0;
+    i = 0;
+    while (i < 32) { diff = diff | (t[i] ^ sig[i]); i = i + 1; }
+    diff == 0
+}

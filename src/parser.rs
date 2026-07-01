@@ -56,14 +56,24 @@ pub struct Parser {
     /// Spans de expresiones (M33a-2): inicio → fin (exclusivo) del último token consumido,
     /// registrados en `expression()` con política max-end. Al terminar pasan al `Program`.
     expr_spans: std::collections::HashMap<(usize, usize), (usize, usize)>,
+    /// Profundidad de recursión actual (M33d): la incrementan los tres puntos recursivos
+    /// (`expression`/`parse_type`/`block`); al pasar `MAX_PARSE_DEPTH` se corta con un
+    /// `ParseError` — sin esto, un `((((…` hostil desborda la pila y ABORTA el proceso
+    /// (un stack overflow ni siquiera es capturable como ICE).
+    depth: usize,
 }
+
+/// Límite de anidamiento del parser (M33d), espejo del `MAX_CALL_DEPTH` del runtime
+/// (M13.3a): ~2.6 KB de pila por nivel → 1000 niveles caben holgados incluso en un hilo
+/// estándar de 8 MB. Ningún programa legítimo anida 1000 niveles.
+const MAX_PARSE_DEPTH: usize = 1000;
 
 /// Parámetros de tipo y sus bounds (M9.2): `(nombres, pares (parámetro, trait))`.
 type TypeParamsAndBounds = (Vec<String>, Vec<(String, String)>);
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new() }
+        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new(), depth: 0 }
     }
 
     // =================================================================
@@ -543,6 +553,13 @@ impl Parser {
     /// type = 'int' | 'bool' | 'float' | 'string' | '[' type ']'
     ///      | 'fn' '(' [ type { ',' type } ] ')' [ '->' type ]
     fn parse_type(&mut self) -> Result<Type, ParseError> {
+        self.enter()?;
+        let t = self.parse_type_inner();
+        self.depth -= 1;
+        t
+    }
+
+    fn parse_type_inner(&mut self) -> Result<Type, ParseError> {
         // Trait object: dyn A [+ B + ...] (M9.3b / M9.5). El conjunto se guarda canónico
         // (ordenado y sin duplicados) para que `dyn A + B` y `dyn B + A` sean el mismo tipo.
         if self.eat(&TokenKind::Dyn) {
@@ -644,6 +661,13 @@ impl Parser {
     /// expresión final **sin** `;` es el valor del bloque (`tail`); lo demás son
     /// sentencias.
     fn block(&mut self) -> Result<Block, ParseError> {
+        self.enter()?;
+        let b = self.block_inner();
+        self.depth -= 1;
+        b
+    }
+
+    fn block_inner(&mut self) -> Result<Block, ParseError> {
         let open = self.expect(&TokenKind::LBrace, "'{'")?;
         let mut statements = Vec::new();
         let mut tail: Option<Box<Expr>> = None;
@@ -863,13 +887,27 @@ impl Parser {
     /// Política *max-end*: si dos expresiones comparten inicio (un binario hereda la posición
     /// de su operando izquierdo), queda la más ancha. El checker lo consulta en `err()`.
     fn expression(&mut self) -> Result<Expr, ParseError> {
+        self.enter()?;
         let e = self.pipeline()?;
+        self.depth -= 1;
         let end = self.prev_end();
         self.expr_spans
             .entry((e.line, e.col))
             .and_modify(|old| { if end > *old { *old = end; } })
             .or_insert(end);
         Ok(e)
+    }
+
+    /// Entra un nivel de recursión (M33d); corta con error si se pasa del límite. En un
+    /// `Err` propagado no se decrementa: el parser es fail-fast y el parseo termina ahí.
+    fn enter(&mut self) -> Result<(), ParseError> {
+        self.depth += 1;
+        if self.depth > MAX_PARSE_DEPTH {
+            return Err(self.error_here(format!(
+                "anidamiento demasiado profundo (límite: {MAX_PARSE_DEPTH} niveles)"
+            )));
+        }
+        Ok(())
     }
 
     /// El fin (exclusivo) del último token consumido: `(línea, col + len)`.
@@ -1602,6 +1640,23 @@ mod tests {
     }
 
     #[test]
+    fn el_anidamiento_hostil_se_corta_con_error() {
+        // M33d: sin límite, 100k niveles desbordan la pila y ABORTAN el proceso.
+        // Con pila grande para que el guard (y no la pila del hilo de test) sea el límite.
+        crate::with_big_stack(|| {
+            for (abre, cierra) in [("(", ")"), ("[", "]"), ("{ ", " }")] {
+                let n = 2000;
+                let src = format!("fn main() -> int {{ {}1{} }}", abre.repeat(n), cierra.repeat(n));
+                let e = parse(crate::lexer::lex(&src).expect("lex ok")).unwrap_err();
+                assert!(e.msg.contains("anidamiento demasiado profundo"), "{abre}: {}", e.msg);
+            }
+            // Y el anidamiento razonable sigue pasando.
+            let src = format!("fn main() -> int {{ {}1{} }}", "(".repeat(500), ")".repeat(500));
+            parse(crate::lexer::lex(&src).expect("lex ok")).expect("500 niveles pasan");
+        });
+    }
+
+        #[test]
     fn el_error_sintactico_subraya_el_token_ofensor() {
         // M33a: el error lleva la extensión del token que lo provocó.
         let tokens = crate::lexer::lex("fn main() -> int { let x = enum; x }").expect("lex ok");

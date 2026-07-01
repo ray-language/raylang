@@ -4701,3 +4701,41 @@ guard garantiza…").
 su auditoría va con el arco del motor único (M35/M36); la red central de `with_big_stack` ya
 los convierte en un ICE presentable mientras tanto. La validación de verdad de esta fase llega
 con el fuzzing (M33d).
+
+### 38.4 M33d — fuzzing del front-end
+
+La validación de M33a/b: bombardear lex→parse→check con entradas corruptas y comprobar que
+**ninguna** tumba el proceso (todo acaba en diagnóstico o, si hay bug, en un ICE presentable).
+
+**Decisión: arnés propio de mutación, cero dependencias.** Se consideró `cargo-fuzz`
+(libFuzzer, coverage-guided) y se descartó por ahora: exige nightly + una dependencia, y el
+grueso del valor —mutar un corpus real y detectar pánicos— lo da un arnés de ~150 líneas con el
+PRNG propio (SplitMix64, M15.1b). El fuzzing coverage-guided queda **diferido** (anotado en
+IDEAS) para cuando el arnés simple deje de encontrar cosas.
+
+- **Corpus semilla**: los `.ray` reales del repo (`examples/` + `selfhost/`, ~164 archivos).
+- **Mutaciones** (por caso, 1–4 aplicadas): flip de byte, truncar, borrar/duplicar un span,
+  insertar basura ASCII/UTF-8, **amplificar** un carácter (la que encuentra los anidamientos), y
+  empalmar dos archivos del corpus.
+- **Objetivo**: `lsp::analizar` (lex→parse→check **sin ejecutar** — fuzzeamos el front-end, no
+  el programa del usuario) + `fmt::format_source`. Cada caso corre en un **hilo con pila
+  grande**; un `join` con `Err` = pánico = hallazgo (se guarda la entrada y falla el test con la
+  ruta). Un stack overflow no es capturable (aborta el proceso) — visible igualmente.
+- **Dos marchas**: un *smoke* **determinista** en la suite (semilla fija, casos acotados,
+  segundos) que impide regresiones; y la **campaña** `#[ignore]` (iteraciones por
+  `RAYLANG_FUZZ_ITERS`) para búsquedas largas.
+
+**El primer hallazgo llegó antes que el fuzzer** (hipótesis dirigida): el parser de descenso
+recursivo no tenía **límite de profundidad** — `((((…` / `[[[[…` / `{{{{…` de 100k niveles
+desbordaban incluso los 256 MiB del worker y **abortaban** el proceso (SIGABRT; ni la red de
+ICEs puede cazar un stack overflow). Fix: **`MAX_PARSE_DEPTH = 1000`** (espejo del
+`MAX_CALL_DEPTH` del runtime, M13.3a), un contador en los tres puntos de recursión del parser
+(`expression`, `parse_type`, `block`) que corta con un `ParseError` posicionado ("anidamiento
+demasiado profundo"). 1000 niveles × ~2.6 KB/nivel ≈ 2.6 MB: seguro incluso en un hilo estándar
+de 8 MB (LSP embebido, tests). Nadie anida 1000 niveles legítimamente. El parser auto-alojado
+no lo replica (el corpus del oráculo no anida así) — anotado como diferido.
+
+**Hallazgo colateral**: el diagnóstico de ese mismo caso imprimía la **línea de fuente entera**
+(200 KB, el archivo patológico es una sola línea). `diagnostic::render` gana una **ventana**:
+una línea de más de 160 caracteres se recorta alrededor de la columna del error con `…` en los
+bordes (el cursor sigue alineado). Pulido de presentación puro.

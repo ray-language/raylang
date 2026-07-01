@@ -56,13 +56,29 @@ pub fn render(source: &str, line: usize, col: usize, len: usize, headline: &str)
     };
     let num = line.to_string();
     let gutter = " ".repeat(num.len());
+    // Una línea patológicamente larga (p. ej. un archivo de una sola línea generado) se
+    // recorta a una VENTANA alrededor de la columna del error, con `…` en los bordes
+    // (M33d: sin esto, el diagnóstico de un `((((…` de 200 KB imprimía la línea entera).
+    const VENTANA: usize = 160;
+    let chars: Vec<char> = src_line.chars().collect();
+    let (visible, col_vis) = if chars.len() <= VENTANA {
+        (src_line.to_string(), col)
+    } else {
+        let ini = col.saturating_sub(1).saturating_sub(VENTANA / 2).min(chars.len());
+        let fin = (ini + VENTANA).min(chars.len());
+        let pre = if ini > 0 { "…" } else { "" };
+        let post = if fin < chars.len() { "…" } else { "" };
+        let trozo: String = chars[ini..fin].iter().collect();
+        // La columna del cursor, relativa a la ventana (el `…` de prefijo ocupa 1).
+        (format!("{pre}{trozo}{post}"), col - ini + if ini > 0 { 1 } else { 0 })
+    };
     // La línea de fuente, con un canalón "  N | ".
     out.push('\n');
-    out.push_str(&format!("  {} | {}", num, src_line));
+    out.push_str(&format!("  {} | {}", num, visible));
     // La línea del subrayado, alineada bajo la columna del error. La extensión se
-    // acota a lo que queda de línea (y como mínimo un `^`, aunque apunte al final).
-    let caret_pad = " ".repeat(col.saturating_sub(1));
-    let resto = src_line.chars().count().saturating_sub(col.saturating_sub(1));
+    // acota a lo que queda de ventana (y como mínimo un `^`, aunque apunte al final).
+    let caret_pad = " ".repeat(col_vis.saturating_sub(1));
+    let resto = visible.chars().count().saturating_sub(col_vis.saturating_sub(1));
     let width = len.max(1).min(resto.max(1));
     out.push('\n');
     out.push_str(&format!("  {} | {}{}", gutter, caret_pad, "^".repeat(width)));
@@ -112,6 +128,23 @@ error de sintaxis en 1:13: se esperaba una expresión, se encontró While
         let src = "let x = 5\n";
         let out = render(src, 1, 1, 1, "err");
         assert_eq!(out, "err\n  1 | let x = 5\n    | ^");
+    }
+
+    #[test]
+    fn una_linea_larguisima_se_recorta_a_una_ventana() {
+        // M33d: la línea se acota alrededor de la columna del error, con `…` en los bordes.
+        let linea = format!("{}AQUI{}", "x".repeat(500), "y".repeat(500));
+        let out = render(&linea, 1, 501, 4, "err");
+        let lineas: Vec<&str> = out.lines().collect();
+        assert!(lineas[1].starts_with("  1 | …"), "{out}");
+        assert!(lineas[1].ends_with("…"), "{out}");
+        assert!(lineas[1].contains("AQUI"), "{out}");
+        assert!(lineas[1].chars().count() < 200, "acotada: {}", lineas[1].chars().count());
+        // El cursor sigue alineado bajo la A de AQUI.
+        let col_a = lineas[1].chars().position(|c| c == 'A').unwrap();
+        let col_caret = lineas[2].chars().position(|c| c == '^').unwrap();
+        assert_eq!(col_a, col_caret, "{out}");
+        assert!(lineas[2].contains("^^^^"), "{out}");
     }
 
     #[test]

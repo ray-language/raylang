@@ -2705,6 +2705,20 @@ mod tests {
         oracle_int("if (sqrt(0.0 - 1.0) == sqrt(0.0 - 1.0)) { 1 } else { 0 }");
     }
 
+    /// M27.1: tuplas — retorno múltiple, acceso `.N`, desestructuración (`_`), heterogéneas. Erasure a
+    /// arreglos → ambos motores coinciden.
+    #[test]
+    fn tuplas_oraculo() {
+        oracle_program("fn dm(a: int, b: int) -> (int, int) { (a / b, a % b) } fn main() -> int { let t = dm(17, 5); t.0 + t.1 * 10 }"); // 3 + 20 = 23
+        oracle_program("fn main() -> int { let (q, r) = (7, 3); q * r }"); // 21
+        oracle_program("fn main() -> int { let (_, b, _) = (1, 42, 9); b }"); // 42 (descarta con _)
+        oracle_program("fn main() -> int { let t = (\"x\", 5, true); if (t.2) { t.1 } else { 0 } }"); // 5 (heterogénea)
+        oracle_program("fn swap(a: int, b: int) -> (int, int) { (b, a) } fn main() -> int { let (x, y) = swap(1, 2); x * 10 + y }"); // 21
+        // Tupla anidada (el acceso encadenado `t.0.1` choca con el float `0.1` en el lexer → binding
+        // intermedio; limitación documentada de M27.1).
+        oracle_program("fn main() -> int { let t = ((1, 2), 3); let inner = t.0; inner.1 + t.1 }"); // 2 + 3 = 5
+    }
+
     #[test]
     fn bitops_oraculo() {
         // M19.3a: operadores bit a bit. Ambos motores comparten `wrapping_*` → idénticos.

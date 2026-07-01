@@ -566,6 +566,21 @@ impl<'a> Interpreter<'a> {
                 self.define(name, v);
                 Ok(())
             }
+            // M27.1: desestructuración de tupla. La tupla es un arreglo en runtime → se liga por índice.
+            StmtKind::LetTuple { names, value, .. } => {
+                let v = self.eval_expr(value)?;
+                let rc = match v {
+                    Value::Array(rc) => rc,
+                    _ => unreachable!("el checker garantiza una tupla (arreglo)"),
+                };
+                let elems = rc.borrow();
+                for (i, n) in names.iter().enumerate() {
+                    if let Some(name) = n {
+                        self.define(name, elems[i].clone());
+                    }
+                }
+                Ok(())
+            }
             StmtKind::Assign { target, value } => {
                 let v = self.eval_expr(value)?;
                 match &target.kind {
@@ -643,7 +658,8 @@ impl<'a> Interpreter<'a> {
 
             ExprKind::Call { callee, args } => self.eval_call(callee, args),
 
-            ExprKind::ArrayLit(elems) => {
+            // M27.1: una tupla `(a, b, …)` se construye como un arreglo (erasure).
+            ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
                 let mut vec = Vec::with_capacity(elems.len());
                 for e in elems {
                     vec.push(self.eval_expr(e)?);
@@ -715,6 +731,14 @@ impl<'a> Interpreter<'a> {
             }
 
             ExprKind::Field { object, name } => {
+                // M27.1: un nombre de campo numérico es un acceso a tupla `t.0` (la tupla es un arreglo).
+                if let Ok(idx) = name.parse::<usize>() {
+                    let v = self.eval_expr(object)?;
+                    if let Value::Array(rc) = v {
+                        return Ok(rc.borrow()[idx].clone());
+                    }
+                    unreachable!("el checker garantiza una tupla para el acceso .N");
+                }
                 let rc = self.eval_struct(object)?;
                 let v = rc
                     .borrow()

@@ -31,6 +31,11 @@ pub enum Type {
     Unit,
     /// Arreglo dinámico de un tipo de elemento: `[T]`. Tipado estructural (M3).
     Array(Box<Type>),
+    /// Una **tupla** `(T1, T2, …)` de 2+ elementos (M27.1): tipos heterogéneos, aridad fija. Tipado
+    /// estructural (dos tuplas son iguales si coinciden aridad y tipos posición a posición). En runtime
+    /// se **borra a un arreglo** (los arreglos del runtime son heterogéneos): `TupleLit`→`ArrayLit`,
+    /// acceso `t.0`→`Index`. Habilita el retorno múltiple y la iteración `(clave, valor)` de `Map`.
+    Tuple(Vec<Type>),
     /// Un mapa/diccionario `Map<K, V>` (M13.1): claves `K` (primitivo hashable:
     /// int/string/char/bool) → valores `V`. Semántica de referencia (objeto del heap, como
     /// los arreglos). El parser lo produce como `Struct("Map", [K, V])`; el checker lo
@@ -87,6 +92,10 @@ impl std::fmt::Display for Type {
             Type::Bytes => f.write_str("bytes"),
             Type::Unit => f.write_str("unit"),
             Type::Array(elem) => write!(f, "[{}]", elem),
+            Type::Tuple(ts) => {
+                let inner: Vec<String> = ts.iter().map(|t| t.to_string()).collect();
+                write!(f, "({})", inner.join(", "))
+            }
             Type::Map(k, v) => write!(f, "Map<{}, {}>", k, v),
             Type::Channel(t) => write!(f, "Channel<{}>", t),
             Type::Task(t) => write!(f, "Task<{}>", t),
@@ -372,6 +381,15 @@ pub enum StmtKind {
         value: Expr,
         mutable: bool,
     },
+    /// Desestructuración de **tupla** en un `let`/`var` (M27.1): `let (a, b) = e;`. Cada nombre liga una
+    /// posición de la tupla (`_` = descartar, `None`). El checker exige que `value` sea una tupla de la
+    /// misma aridad y liga cada nombre con el tipo de su posición; en runtime se evalúa `value` a un
+    /// arreglo y se liga por índice.
+    LetTuple {
+        names: Vec<Option<String>>,
+        value: Expr,
+        mutable: bool,
+    },
     /// Asignación a un *lvalue*: `x = e;`, `a[i] = e;`, `p.x = e;` (M3.2).
     /// `target` es una expresión asignable (`Ident`, `Index`, o `Field`).
     Assign { target: Expr, value: Expr },
@@ -419,6 +437,11 @@ pub enum ExprKind {
 
     /// Literal de arreglo: `[1, 2, 3]` (o `[]` vacío). (M3)
     ArrayLit(Vec<Expr>),
+
+    /// Literal de **tupla**: `(a, b, …)` de 2+ elementos (M27.1). El checker le da un `Type::Tuple` y lo
+    /// **baja a `ArrayLit`** para el runtime (erasure). Un `(e)` de un solo elemento es un paréntesis, no
+    /// una tupla.
+    TupleLit(Vec<Expr>),
 
     /// Indexación: `a[i]`. (M3)
     Index { array: Box<Expr>, index: Box<Expr> },
@@ -523,6 +546,7 @@ fn walk_block<'a>(block: &'a Block, acc: &mut Vec<&'a FnExpr>) {
     for s in &block.statements {
         match &s.kind {
             StmtKind::Let { value, .. } => walk_expr(value, acc),
+            StmtKind::LetTuple { value, .. } => walk_expr(value, acc),
             StmtKind::Assign { target, value } => {
                 walk_expr(target, acc);
                 walk_expr(value, acc);
@@ -554,7 +578,7 @@ fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
                 walk_expr(a, acc);
             }
         }
-        ExprKind::ArrayLit(elems) => {
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
                 walk_expr(e, acc);
             }

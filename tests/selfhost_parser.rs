@@ -45,6 +45,7 @@ fn dump_type(t: &Type) -> String {
         Type::Char => "char".into(),
         Type::Unit => "unit".into(),
         Type::Array(e) => format!("[{}]", dump_type(e)),
+        Type::Tuple(ts) => format!("(tuple{})", ts.iter().map(|t| format!(" {}", dump_type(t))).collect::<String>()),
         Type::Fn(ps, r) => {
             let joined = ps.iter().map(dump_type).collect::<Vec<_>>().join(", ");
             format!("fn({}) -> {}", joined, dump_type(r))
@@ -135,6 +136,7 @@ fn dump_expr(e: &Expr) -> String {
         }
         ExprKind::Field { object, name } => format!("(field {} {}){}", dump_expr(object), name, pp),
         ExprKind::ArrayLit(elems) => format!("(array{}){}", dump_exprs(elems), pp),
+        ExprKind::TupleLit(elems) => format!("(tuple{}){}", dump_exprs(elems), pp),
         ExprKind::If { cond, then_branch, else_branch } => {
             format!(
                 "(if {} {}{}){}",
@@ -288,6 +290,11 @@ fn dump_stmt(st: &Stmt) -> String {
         StmtKind::Let { name, ty, value, mutable } => {
             let kw = if *mutable { "var" } else { "let" };
             format!("({} {} {} {}){}", kw, name, dump_opt_type(ty), dump_expr(value), pp)
+        }
+        StmtKind::LetTuple { names, value, mutable } => {
+            let kw = if *mutable { "var" } else { "let" };
+            let ns: String = names.iter().map(|n| format!(" {}", n.clone().unwrap_or_else(|| "_".to_string()))).collect();
+            format!("({} (tuple{}) {}){}", kw, ns, dump_expr(value), pp)
         }
         StmtKind::Assign { target, value } => {
             format!("(assign {} {}){}", dump_expr(target), dump_expr(value), pp)
@@ -644,6 +651,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
     // se excluyen las librerías cripto de M19.3b (`sha1.ray`/`base64.ray`/`crypto_demo.ray`).
     const DIFERIDOS_SELFHOST: &[&str] = &[
         "binario.ray", "http.ray", "webserver.ray",
+        "tuplas.ray", // M27.1: tuplas (el toolchain auto-alojado aún no las soporta)
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops

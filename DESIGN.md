@@ -4254,9 +4254,14 @@ oráculo VM↔intérprete y el corpus de self-hosting; método incremental, un c
 
 ### M27 — Ergonomía del lenguaje I (iteración y forma)
 Lo que más limpia el código existente y futuro. Toca lexer/parser/checker/ambos motores.
-- **M27.1 Tuplas / retorno múltiple** (`(a, b)`). Foundational: elimina los `struct XResult` inventados por
-  todo el código (`NameResult`, `VarintResult`, `IntResult`…) y habilita la iteración `(clave, valor)` de
-  `Map`. Nuevo `Type::Tuple`, patrones de tupla en `match`/`let`. Erasure en runtime (como structs).
+- **M27.1 Tuplas / retorno múltiple** ✅ (`(a, b)`). `Type::Tuple(Vec<Type>)` (2+ elementos, tipado
+  estructural), literal `(a, b, …)` (`ExprKind::TupleLit`), acceso por índice `t.0` (`Field` con nombre
+  numérico), y **desestructuración** `let (a, b) = e;` (`StmtKind::LetTuple`, `_` descarta). **Erasure a
+  arreglos**: la tupla ES un arreglo en runtime (heterogéneo), `t.N`→índice; cero valor nuevo, ambos motores
+  reusan `MakeArray`/`Index`. Verificado en el oráculo (`tuplas_oraculo`) + ejemplo `basics/tuplas.ray`.
+  **Gotchas** (documentados): el acceso encadenado `t.0.1` choca con el float `0.1` en el lexer → binding
+  intermedio; una tupla `(…)` justo tras un `while {}` se parsea como llamada → `return`/`;`. El toolchain
+  auto-alojado aún no soporta tuplas (excluido del oráculo de self-hosting).
 - **M27.2 `for` / iteradores** (el mayor golpe ergonómico). `for x in arr { … }`, `for (i, x) in …`. Un
   **protocolo `Iterator`** (trait con `next() -> Option<T>`) sobre el que `for` desazucara; impls para
   arreglos, rangos (`0..n`), `Map` (→ tuplas de M27.1), string (→ `char`). Desugar de front-end (cero

@@ -233,6 +233,11 @@ impl Session {
         if let Some(stmt) = body.statements.first() {
             match &stmt.kind {
                 StmtKind::Let { name, .. } => Ok(Entry::Bind { name: name.clone(), src: ensure_semi(line) }),
+                // M27.1: desestructuración de tupla — se muestra el valor del primer nombre ligado.
+                StmtKind::LetTuple { names, .. } => Ok(Entry::Bind {
+                    name: names.iter().flatten().next().cloned().unwrap_or_else(|| "_".to_string()),
+                    src: ensure_semi(line),
+                }),
                 StmtKind::Assign { target, .. } => {
                     let show = match &target.kind {
                         ExprKind::Ident(n) => Some(n.clone()),

@@ -985,6 +985,30 @@ impl Checker {
                 self.declare(name, var_ty, *mutable, (stmt.line, stmt.col));
                 Ok(())
             }
+            StmtKind::LetTuple { names, value, mutable } => {
+                // Desestructuración `let (a, b) = e;` (M27.1): el valor debe ser una tupla de la misma
+                // aridad; cada nombre se liga con el tipo de su posición (`_` no liga nada).
+                let vt = self.check_expr(value)?;
+                match vt {
+                    Type::Tuple(elems) => {
+                        if elems.len() != names.len() {
+                            return Err(self.err(value.line, value.col, format!(
+                                "la desestructuración tiene {} nombres pero la tupla tiene {} elementos",
+                                names.len(), elems.len()
+                            )));
+                        }
+                        for (n, t) in names.iter().zip(elems) {
+                            if let Some(name) = n {
+                                self.declare(name, t, *mutable, (stmt.line, stmt.col));
+                            }
+                        }
+                        Ok(())
+                    }
+                    other => Err(self.err(value.line, value.col, format!(
+                        "no se puede desestructurar un {} (se esperaba una tupla)", other
+                    ))),
+                }
+            }
             StmtKind::Assign { target, value } => self.check_assign(target, value, stmt.line, stmt.col),
             StmtKind::Return { value } => {
                 let vt = match value {
@@ -1577,6 +1601,16 @@ impl Checker {
     /// `primero: A` de `Par<int, bool>` es un `int`.
     fn check_field(&mut self, object: &Expr, name: &str) -> Result<Type, TypeError> {
         let ot = self.check_expr(object)?;
+        // Acceso a **tupla** `t.0` (M27.1): un nombre de campo numérico solo es válido sobre una tupla.
+        if let Type::Tuple(elems) = &ot {
+            let idx: usize = name.parse().map_err(|_| self.err(object.line, object.col,
+                format!("no se puede acceder a '.{}' en una tupla (usa un índice como .0)", name)))?;
+            if idx >= elems.len() {
+                return Err(self.err(object.line, object.col, format!(
+                    "la tupla tiene {} elementos; el índice .{} está fuera de rango", elems.len(), idx)));
+            }
+            return Ok(elems[idx].clone());
+        }
         match ot {
             Type::Struct(sname, targs) => {
                 let fields = self.structs.get(&sname).expect("el checker registró el struct");
@@ -1847,6 +1881,15 @@ impl Checker {
                     }
                 }
                 Ok(Type::Array(Box::new(first)))
+            }
+
+            ExprKind::TupleLit(elems) => {
+                // Una tupla `(a, b, …)` (M27.1): tipos heterogéneos, aridad ≥ 2. En runtime es un arreglo.
+                let mut tys = Vec::with_capacity(elems.len());
+                for e in elems {
+                    tys.push(self.check_expr(e)?);
+                }
+                Ok(Type::Tuple(tys))
             }
 
             ExprKind::Index { array, index } => self.check_index(array, index),
@@ -2562,6 +2605,8 @@ fn is_comparable(t: &Type) -> bool {
         // M16.1a: `bytes` se compara con `==` (igualdad estructural de octetos).
         Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes | Type::Struct(_, _) => true,
         Type::Array(elem) => is_comparable(elem),
+        // M27.1: una tupla es comparable con == si todos sus elementos lo son (igualdad posición a posición).
+        Type::Tuple(ts) => ts.iter().all(is_comparable),
         // Un Map (M13.1) no se compara con == por ahora (como los enums); se consulta.
         Type::Map(_, _) => false,
         // Los enums (M5) no se comparan con ==: pueden ser recursivos y portar
@@ -2734,7 +2779,7 @@ fn expr_diverges(expr: &Expr) -> bool {
 fn resolve_block(block: &mut Block, enums: &HashSet<String>) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
-            StmtKind::Let { value, .. } => resolve_expr(value, enums),
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => resolve_expr(value, enums),
             StmtKind::Assign { target, value } => {
                 resolve_expr(target, enums);
                 resolve_expr(value, enums);
@@ -2797,7 +2842,7 @@ fn resolve_expr(expr: &mut Expr, enums: &HashSet<String>) {
                 resolve_expr(a, enums);
             }
         }
-        ExprKind::ArrayLit(elems) => {
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
                 resolve_expr(e, enums);
             }
@@ -3091,7 +3136,7 @@ fn freshen_block(block: &mut Block, next: &mut usize) {
         stmt.line = 1_000_000 + *next;
         stmt.col = 1;
         match &mut stmt.kind {
-            StmtKind::Let { value, .. } => freshen_expr(value, next),
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => freshen_expr(value, next),
             StmtKind::Assign { target, value } => {
                 freshen_expr(target, next);
                 freshen_expr(value, next);
@@ -3128,7 +3173,7 @@ fn freshen_expr(expr: &mut Expr, next: &mut usize) {
                 freshen_expr(a, next);
             }
         }
-        ExprKind::ArrayLit(elems) => {
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
                 freshen_expr(e, next);
             }
@@ -3188,7 +3233,7 @@ fn renumber_fn_exprs(program: &mut Program) {
 fn renumber_block(block: &mut Block, next: &mut usize) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
-            StmtKind::Let { value, .. } => renumber_expr(value, next),
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => renumber_expr(value, next),
             StmtKind::Assign { target, value } => {
                 renumber_expr(target, next);
                 renumber_expr(value, next);
@@ -3219,7 +3264,7 @@ fn renumber_expr(expr: &mut Expr, next: &mut usize) {
                 renumber_expr(a, next);
             }
         }
-        ExprKind::ArrayLit(elems) => {
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
                 renumber_expr(e, next);
             }
@@ -3336,7 +3381,7 @@ fn lower_ufcs(program: &mut Program, sites: &SiteMap) {
 fn lower_ufcs_block(block: &mut Block, sites: &SiteMap) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
-            StmtKind::Let { value, .. } => lower_ufcs_expr(value, sites),
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_ufcs_expr(value, sites),
             StmtKind::Assign { target, value } => {
                 lower_ufcs_expr(target, sites);
                 lower_ufcs_expr(value, sites);
@@ -3400,7 +3445,7 @@ fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
                 lower_ufcs_expr(a, sites);
             }
         }
-        ExprKind::ArrayLit(elems) => {
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
                 lower_ufcs_expr(e, sites);
             }
@@ -3500,7 +3545,7 @@ fn lower_dict_calls(program: &mut Program, sites: &DictSites) {
 fn lower_dict_calls_block(block: &mut Block, sites: &DictSites) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
-            StmtKind::Let { value, .. } => lower_dict_calls_expr(value, sites),
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_dict_calls_expr(value, sites),
             StmtKind::Assign { target, value } => {
                 lower_dict_calls_expr(target, sites);
                 lower_dict_calls_expr(value, sites);
@@ -3532,7 +3577,7 @@ fn lower_dict_calls_expr(expr: &mut Expr, sites: &DictSites) {
                 lower_dict_calls_expr(a, sites);
             }
         }
-        ExprKind::ArrayLit(elems) => {
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
                 lower_dict_calls_expr(e, sites);
             }
@@ -3668,7 +3713,7 @@ fn lower_dyn(program: &mut Program, coercions: &CoercionMap, dispatch: &Dispatch
 fn lower_dyn_block(block: &mut Block, coercions: &CoercionMap, dispatch: &DispatchSet, upcasts: &UpcastMap, tm: &HashMap<String, Vec<String>>, counter: &mut usize) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
-            StmtKind::Let { value, .. } => lower_dyn_expr(value, coercions, dispatch, upcasts, tm, counter),
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_dyn_expr(value, coercions, dispatch, upcasts, tm, counter),
             StmtKind::Assign { target, value } => {
                 lower_dyn_expr(target, coercions, dispatch, upcasts, tm, counter);
                 lower_dyn_expr(value, coercions, dispatch, upcasts, tm, counter);
@@ -3701,7 +3746,7 @@ fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
                 lower_dyn_expr(a, coercions, dispatch, upcasts, tm, counter);
             }
         }
-        ExprKind::ArrayLit(elems) => {
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
                 lower_dyn_expr(e, coercions, dispatch, upcasts, tm, counter);
             }

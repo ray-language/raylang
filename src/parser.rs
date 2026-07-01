@@ -533,6 +533,27 @@ impl Parser {
             self.expect(&TokenKind::RBracket, "']' para cerrar el tipo de arreglo")?;
             return Ok(Type::Array(Box::new(elem)));
         }
+        // Tupla: (T1, T2, …). Un `(T)` de un solo elemento es solo un paréntesis → el tipo interior.
+        if self.check(&TokenKind::LParen) {
+            self.advance();
+            let mut elems = Vec::new();
+            if !self.check(&TokenKind::RParen) {
+                loop {
+                    elems.push(self.parse_type()?);
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
+                    }
+                    if self.check(&TokenKind::RParen) {
+                        break; // coma final permitida
+                    }
+                }
+            }
+            self.expect(&TokenKind::RParen, "')' para cerrar el tipo tupla")?;
+            if elems.len() == 1 {
+                return Ok(elems.into_iter().next().unwrap());
+            }
+            return Ok(Type::Tuple(elems));
+        }
         // Tipo función: fn(T1, T2) -> R  (el '-> R' es opcional; ausente = unit).
         if self.check(&TokenKind::Fn) {
             self.advance();
@@ -654,6 +675,30 @@ impl Parser {
     fn let_stmt(&mut self) -> Result<Stmt, ParseError> {
         let kw = self.advance(); // 'let' o 'var'
         let mutable = kw.kind == TokenKind::Var;
+        // Desestructuración de tupla: `let (a, b) = e;` (M27.1). `_` descarta una posición.
+        if self.check(&TokenKind::LParen) {
+            self.advance();
+            let mut names = Vec::new();
+            loop {
+                let (n, _, _) = self.expect_ident("un nombre en la desestructuración")?;
+                names.push(if n == "_" { None } else { Some(n) }); // `_` descarta esa posición
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+                if self.check(&TokenKind::RParen) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::RParen, "')' para cerrar la desestructuración")?;
+            self.expect(&TokenKind::Eq, "'=' en la desestructuración")?;
+            let value = self.expression()?;
+            self.expect(&TokenKind::Semicolon, "';' al final de la declaración")?;
+            return Ok(Stmt {
+                kind: StmtKind::LetTuple { names, value, mutable },
+                line: kw.line,
+                col: kw.col,
+            });
+        }
         let (name, _, _) = self.expect_ident("el nombre de la variable")?;
         let ty = if self.eat(&TokenKind::Colon) {
             Some(self.parse_type()?)
@@ -913,6 +958,16 @@ impl Parser {
                 };
             } else if self.check(&TokenKind::Dot) {
                 self.advance(); // '.'
+                // Acceso a tupla `t.0`: tras el '.' viene un número, no un identificador (M27.1).
+                if let TokenKind::Int(n) = self.peek().kind {
+                    self.advance();
+                    expr = Expr {
+                        kind: ExprKind::Field { object: Box::new(expr), name: n.to_string() },
+                        line,
+                        col,
+                    };
+                    continue;
+                }
                 let (name, _, _) = self.expect_ident("el nombre del campo tras '.'")?;
                 // `M.Tipo { ... }`: literal de struct calificado por módulo (M11.3c-3). Solo si el
                 // receptor del `.` es un `Ident` (el módulo); el nombre calificado guarda el `.`,
@@ -993,11 +1048,27 @@ impl Parser {
                 ExprKind::Ident(name)
             }
             TokenKind::LParen => {
-                // Agrupación: el paréntesis no deja rastro en el AST, solo afecta
-                // el orden de parseo. Conservamos la posición del '('.
-                let inner = self.expression()?;
+                // Agrupación `(e)` o literal de **tupla** `(e1, e2, …)` (M27.1). Un solo elemento sin coma
+                // es agrupación (no deja rastro en el AST); con 2+ es una tupla.
+                let first = self.expression()?;
+                if self.eat(&TokenKind::Comma) {
+                    let mut elems = vec![first];
+                    if !self.check(&TokenKind::RParen) {
+                        loop {
+                            elems.push(self.expression()?);
+                            if !self.eat(&TokenKind::Comma) {
+                                break;
+                            }
+                            if self.check(&TokenKind::RParen) {
+                                break; // coma final permitida
+                            }
+                        }
+                    }
+                    self.expect(&TokenKind::RParen, "')' para cerrar la tupla")?;
+                    return Ok(Expr { kind: ExprKind::TupleLit(elems), line: tok.line, col: tok.col });
+                }
                 self.expect(&TokenKind::RParen, "')' para cerrar el paréntesis")?;
-                return Ok(Expr { kind: inner.kind, line: tok.line, col: tok.col });
+                return Ok(Expr { kind: first.kind, line: tok.line, col: tok.col });
             }
             other => {
                 return Err(ParseError {
@@ -1485,6 +1556,10 @@ mod tests {
                 let e: Vec<String> = elems.iter().map(sx).collect();
                 format!("[{}]", e.join(", "))
             }
+            ExprKind::TupleLit(elems) => {
+                let e: Vec<String> = elems.iter().map(sx).collect();
+                format!("({})", e.join(", "))
+            }
             ExprKind::Index { array, index } => format!("(index {} {})", sx(array), sx(index)),
             ExprKind::StructLit { name, fields } => {
                 let fs: Vec<String> = fields.iter().map(|(n, e)| format!("{}: {}", n, sx(e))).collect();
@@ -1545,6 +1620,11 @@ mod tests {
             StmtKind::Let { name, value, mutable, .. } => {
                 let kw = if *mutable { "var" } else { "let" };
                 format!("{} {} = {}", kw, name, sx(value))
+            }
+            StmtKind::LetTuple { names, value, mutable } => {
+                let kw = if *mutable { "var" } else { "let" };
+                let ns: Vec<String> = names.iter().map(|n| n.clone().unwrap_or_else(|| "_".to_string())).collect();
+                format!("{} ({}) = {}", kw, ns.join(", "), sx(value))
             }
             StmtKind::Assign { target, value } => format!("{} = {}", sx(target), sx(value)),
             StmtKind::Return { value } => match value {

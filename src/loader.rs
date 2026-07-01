@@ -284,6 +284,7 @@ fn shift_stmt(s: &mut Stmt, delta: usize) {
     s.line += delta;
     match &mut s.kind {
         StmtKind::Let { value, .. } => shift_expr(value, delta),
+        StmtKind::LetTuple { value, .. } => shift_expr(value, delta),
         StmtKind::Assign { target, value } => {
             shift_expr(target, delta);
             shift_expr(value, delta);
@@ -311,7 +312,7 @@ fn shift_expr(e: &mut Expr, delta: usize) {
                 shift_expr(a, delta);
             }
         }
-        ExprKind::ArrayLit(elems) => {
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for x in elems {
                 shift_expr(x, delta);
             }
@@ -781,6 +782,12 @@ impl<'a> Resolver<'a> {
                 self.resolve_expr(value, src, module)?;
                 self.declarar(name); // el binding entra en ámbito tras su inicializador
             }
+            StmtKind::LetTuple { names, value, .. } => {
+                self.resolve_expr(value, src, module)?;
+                for n in names.iter().flatten() {
+                    self.declarar(n);
+                }
+            }
             StmtKind::Assign { target, value } => {
                 self.resolve_expr(target, src, module)?;
                 self.resolve_expr(value, src, module)?;
@@ -831,7 +838,7 @@ impl<'a> Resolver<'a> {
                 self.resolve_expr(left, src, module)?;
                 self.resolve_expr(right, src, module)?;
             }
-            ExprKind::ArrayLit(elems) => {
+            ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
                 for e in elems {
                     self.resolve_expr(e, src, module)?;
                 }
@@ -980,6 +987,11 @@ impl<'a> TypeRewriter<'a> {
                 }
             }
             Type::Array(elem) => self.rewrite_type(elem),
+            Type::Tuple(ts) => {
+                for t in ts {
+                    self.rewrite_type(t);
+                }
+            }
             Type::Map(k, v) => {
                 self.rewrite_type(k);
                 self.rewrite_type(v);
@@ -1088,6 +1100,9 @@ impl<'a> TypeRewriter<'a> {
                 }
                 self.rewrite_expr(value);
             }
+            StmtKind::LetTuple { value, .. } => {
+                self.rewrite_expr(value);
+            }
             StmtKind::Assign { target, value } => {
                 self.rewrite_expr(target);
                 self.rewrite_expr(value);
@@ -1147,7 +1162,7 @@ impl<'a> TypeRewriter<'a> {
                 self.rewrite_expr(left);
                 self.rewrite_expr(right);
             }
-            ExprKind::ArrayLit(elems) => {
+            ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
                 for e in elems {
                     self.rewrite_expr(e);
                 }

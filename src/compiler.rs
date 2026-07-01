@@ -454,6 +454,23 @@ impl<'a> Compiler<'a> {
                 let slot = self.declare_local(name);
                 self.emit(OpCode::InitLocal(slot), line, col);
             }
+            // M27.1: desestructuración de tupla. La tupla es un arreglo → se guarda en un temp y se
+            // liga cada nombre por índice (`$tuple` no es un identificador válido, no choca).
+            StmtKind::LetTuple { names, value, .. } => {
+                self.emit_expr(value)?;
+                let tup_slot = self.declare_local("$tuple");
+                self.emit(OpCode::InitLocal(tup_slot), line, col);
+                for (i, n) in names.iter().enumerate() {
+                    if let Some(name) = n {
+                        self.emit(OpCode::GetLocal(tup_slot), line, col);
+                        let cidx = self.cur().chunk.add_constant(Value::Int(i as i64));
+                        self.emit(OpCode::Constant(cidx), line, col);
+                        self.emit(OpCode::Index, line, col);
+                        let slot = self.declare_local(name);
+                        self.emit(OpCode::InitLocal(slot), line, col);
+                    }
+                }
+            }
             StmtKind::Assign { target, value } => match &target.kind {
                 // x = e  → a un local, a un upvalue, según resuelva el nombre.
                 ExprKind::Ident(name) => {
@@ -634,7 +651,8 @@ impl<'a> Compiler<'a> {
 
             ExprKind::Try(inner) => self.emit_try(inner, line, col)?,
 
-            ExprKind::ArrayLit(elems) => {
+            // M27.1: una tupla `(a, b, …)` se compila como un arreglo (erasure).
+            ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
                 for e in elems {
                     self.emit_expr(e)?;
                 }
@@ -676,8 +694,16 @@ impl<'a> Compiler<'a> {
             }
 
             ExprKind::Field { object, name } => {
-                self.emit_expr(object)?;
-                self.emit(OpCode::GetField(name.clone()), line, col);
+                // M27.1: un nombre de campo numérico es un acceso a tupla `t.0` → índice del arreglo.
+                if let Ok(idx) = name.parse::<i64>() {
+                    self.emit_expr(object)?;
+                    let cidx = self.cur().chunk.add_constant(Value::Int(idx));
+                    self.emit(OpCode::Constant(cidx), line, col);
+                    self.emit(OpCode::Index, line, col);
+                } else {
+                    self.emit_expr(object)?;
+                    self.emit(OpCode::GetField(name.clone()), line, col);
+                }
             }
 
             ExprKind::Func(fe) => {

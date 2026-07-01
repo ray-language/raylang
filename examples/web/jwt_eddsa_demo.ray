@@ -1,0 +1,40 @@
+// Demo de JWT EdDSA (RFC 8037): firma unas claims con un seed Ed25519, imprime el token compacto, y
+// comprueba que (1) la clave pública correcta lo verifica y devuelve las claims, (2) una clave pública
+// distinta lo rechaza (propiedad asimétrica), (3) un payload manipulado (con firma de otro mensaje) se
+// rechaza.
+
+from jwt_eddsa import jwt_eddsa_sign, jwt_eddsa_verify;
+from ed25519 import ed25519_public_key;
+
+fn main() {
+    // Seed del firmante (semilla 2 del RFC 8032 §7.1).
+    let seed: [int] = [76, 205, 8, 155, 40, 255, 150, 218, 157, 182, 195, 70, 236, 17, 78, 15, 91, 138, 49, 159, 53, 171, 166, 36, 218, 140, 246, 237, 79, 184, 166, 251];
+    let payload = "{\"sub\":\"ada\",\"admin\":true}";
+
+    let token = jwt_eddsa_sign(seed, payload);
+    print(token);
+
+    let pk = ed25519_public_key(seed);
+    match (jwt_eddsa_verify(pk, token)) {
+        Result.Ok(claims) => print("ok: " + claims),
+        Result.Err(e) => print("err: " + e),
+    }
+
+    // Clave pública equivocada (la de la semilla 1) → rechazo.
+    let otro_seed: [int] = [157, 97, 177, 157, 239, 254, 188, 63, 40, 81, 62, 119, 227, 211, 101, 61, 149, 167, 92, 62, 92, 114, 224, 125, 15, 101, 179, 200, 91, 214, 204, 152];
+    let otra_pk = ed25519_public_key(otro_seed);
+    match (jwt_eddsa_verify(otra_pk, token)) {
+        Result.Ok(c) => print("clave equivocada ACEPTADA"),
+        Result.Err(e) => print("clave equivocada rechazada"),
+    }
+
+    // Payload manipulado: header.payload originales pero con la firma de OTRO mensaje.
+    let token2 = jwt_eddsa_sign(seed, "{\"sub\":\"eve\",\"admin\":true}");
+    let a = split(token, ".");
+    let b = split(token2, ".");
+    let forjado = a[0] + "." + a[1] + "." + b[2];
+    match (jwt_eddsa_verify(pk, forjado)) {
+        Result.Ok(c) => print("manipulado ACEPTADO"),
+        Result.Err(e) => print("manipulado rechazado"),
+    }
+}

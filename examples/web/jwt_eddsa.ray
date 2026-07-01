@@ -1,0 +1,60 @@
+// JWT con firma EdDSA/Ed25519 (RFC 8037 + RFC 7519), escrito EN raylang. Cierra M30: extiende los JWT
+// más allá del HMAC simétrico (HS256 de `jwt.ray`) con **firma asimétrica** — el que firma tiene el
+// seed privado, cualquiera verifica con la clave pública. Apila Ed25519 (`ed25519.ray`) + base64url.
+//
+// Un JWT es `base64url(header) . base64url(payload) . base64url(firma)`, con la firma =
+// Ed25519(seed, "header.payload"). El header está fijo a `{"alg":"EdDSA","typ":"JWT"}`. El payload
+// (las *claims*) se pasa y se devuelve como string JSON crudo (como en HS256). Importable:
+//   from jwt_eddsa import jwt_eddsa_sign, jwt_eddsa_verify;
+
+from ed25519 import ed25519_public_key, ed25519_sign, ed25519_verify;
+from base64 import base64url, base64url_decode;
+
+// Octetos (`[int]`) de un string (UTF-8).
+fn str_octets(s: string) -> [int] {
+    let b = to_bytes(s);
+    var out: [int] = [];
+    var i = 0;
+    while (i < len(b)) {
+        push(out, b[i]);
+        i = i + 1;
+    }
+    out
+}
+
+// El header canónico de EdDSA, ya codificado en base64url.
+fn header_b64() -> string {
+    base64url(str_octets("{\"alg\":\"EdDSA\",\"typ\":\"JWT\"}"))
+}
+
+// Firma las *claims* (JSON crudo) con el `seed` privado (32 octetos) y devuelve el JWT compacto `h.p.s`.
+pub fn jwt_eddsa_sign(seed: [int], payload_json: string) -> string {
+    let pk = ed25519_public_key(seed);
+    let h = header_b64();
+    let p = base64url(str_octets(payload_json));
+    let signing_input = h + "." + p;
+    let sig = ed25519_sign(seed, pk, str_octets(signing_input));
+    signing_input + "." + base64url(sig)
+}
+
+// Verifica un JWT EdDSA con la clave pública (32 octetos). `Ok(payload_json)` si la firma es válida,
+// `Err(motivo)` si no. NO comprueba `exp`/`nbf` (política de la aplicación sobre el JSON devuelto).
+pub fn jwt_eddsa_verify(pubkey: [int], token: string) -> Result<string, string> {
+    let parts = split(token, ".");
+    if (len(parts) != 3) {
+        return Result.Err("JWT mal formado: se esperaban 3 segmentos");
+    }
+    let signing_input = parts[0] + "." + parts[1];
+    let sig = match (base64url_decode(parts[2])) {
+        Result.Ok(s) => s,
+        Result.Err(e) => { return Result.Err(e); },
+    };
+    if (!ed25519_verify(pubkey, str_octets(signing_input), sig)) {
+        return Result.Err("firma inválida");
+    }
+    // Firma válida: decodifica el payload (base64url → octetos → UTF-8).
+    match (base64url_decode(parts[1])) {
+        Result.Ok(octetos) => from_utf8(bytes_of(octetos)),
+        Result.Err(e) => Result.Err(e),
+    }
+}

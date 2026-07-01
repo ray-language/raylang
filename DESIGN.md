@@ -4457,6 +4457,18 @@ Cierra el dominio cripto: hoy hay *hashing*/HMAC pero **no cifrado ni firma asim
     bug; tres implementaciones independientes —raylang, una referencia propia y el apéndice del RFC—
     coincidieron, confirmando que raylang era correcto.) Sobre esto, M30.3 (JWT EdDSA/Ed25519).
 - **M30.3 JWT RS256/ES256**: sobre M30.2, extiende `jwt.ray` más allá de HS256 (firma asimétrica de tokens).
+  - **COMPLETO → M30 COMPLETO** — **JWT EdDSA/Ed25519** (`examples/web/jwt_eddsa.ray`, RFC 8037 alg
+    `"EdDSA"`). Elegido EdDSA (sobre RS256/ES256) porque reusa Ed25519 (M30.2) directamente: RS256 exige RSA
+    (exponenciación modular gigante) y ES256 la curva P-256 (ECDSA) — ambos serían otro M30.2 entero. El JWT
+    es `base64url(header).base64url(payload).base64url(firma)` con firma = Ed25519(seed, "header.payload") y
+    header fijo `{"alg":"EdDSA","typ":"JWT"}`. `jwt_eddsa_sign(seed, claims_json)` / `jwt_eddsa_verify(pubkey,
+    token) -> Result<claims, motivo>` (el firmante tiene el seed privado; cualquiera verifica con la clave
+    pública — firma **asimétrica**, a diferencia del HMAC simétrico de HS256). Verificado: el token es
+    **byte-idéntico a una computación independiente en Python** (Ed25519 canónico + base64url) →
+    interoperable; verificación acepta la firma válida, rechaza clave equivocada y payload manipulado, ambos
+    motores (`tests/jwt_eddsa_cli.rs`; interp `#[ignore]` por lento, VM en la suite). **M30 (cripto avanzada)
+    COMPLETO**: cifrado autenticado (ChaCha20-Poly1305) + firma (Ed25519) + JWT asimétrico (EdDSA). RS256/
+    ES256 y AES-GCM quedan diferidos (RSA/P-256/GHASH son cada uno un módulo propio).
 
 ### M31 — Cerrar gRPC (transporte HTTP/2 vivo)
 Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.

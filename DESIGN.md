@@ -4364,6 +4364,15 @@ Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
 - **M29.1 Regex** — la ausencia más llamativa de la stdlib. Motor propio (Thompson NFA / backtracking
   acotado); puede ser **librería en raylang** (una vez M27 facilita el parseo) o builtin-asistido. Alcance
   inicial: literales, clases, `*`/`+`/`?`/`|`, grupos, anclas.
+  - **Enfoque elegido**: **librería raylang pura** (`examples/stdlib/regex.ray`) con la "VM de regex" de
+    Russ Cox (**Thompson NFA**, tiempo lineal, sin blowup del backtracking) — cero cambios de runtime. El
+    patrón se compila a bytecode (Char/Any/Match/Jmp/Split) y se simula manteniendo el conjunto de hilos
+    activos. Reusa enums recursivos + structs mutables + recursión.
+  - **M29.1a COMPLETO**: núcleo — literales, `.`, `*`/`+`/`?`, alternancia `|`, grupos `( )`, concatenación,
+    escapes de literal (`\.`). API `full_match` (anclado a todo el texto) y `search` (algún substring; siembra
+    un hilo en pc 0 en cada posición). Demo `regex_demo.ray` + `tests/regex_cli.rs` (batería de casos, ambos
+    motores coinciden). `regex.ray` **pasa el oráculo del parser auto-alojado** (se parsea idéntico). Clases
+    `[...]`, escapes `\d`/`\w`/`\s` y anclas `^`/`$` → M29.1b; `find`/captura/`replace` → M29.1c.
 - **M29.2 Formateador** (`rayfmt`, estilo `gofmt`) — cliente externo que reusa el parser (como el LSP/
   runner). Pretty-printer canónico del AST → idempotente, sin configuración.
 - **M29.3 Optimización de la VM** — retomar el transversal (DESIGN §27): dedup de constantes, peephole/

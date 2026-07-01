@@ -1,0 +1,284 @@
+// M29.1 — motor de expresiones regulares en raylang puro.
+//
+// Enfoque: la "máquina virtual de regex" de Russ Cox (Thompson NFA). El patrón se compila a un
+// pequeño programa de bytecode (Char/Any/Match/Jmp/Split) y se simula manteniendo el CONJUNTO de
+// hilos activos a la vez → tiempo lineal, sin el blowup exponencial del backtracking. Cero cambios
+// de runtime: solo enums, structs, arreglos y recursión.
+//
+// M29.1a (núcleo): literales, `.`, `*` `+` `?`, alternancia `|`, grupos `( )`, concatenación.
+// Clases `[...]`, escapes `\d`/`\w`/`\s` y anclas `^`/`$` llegan en M29.1b.
+
+// Una instrucción de la máquina. op: 0=Char, 1=Any, 2=Match, 3=Jmp, 4=Split.
+//   Char(c):    si el carácter de entrada es `c`, el hilo avanza a pc+1; si no, muere.
+//   Any:        casa con cualquier carácter; el hilo avanza a pc+1.
+//   Match:      estado de aceptación.
+//   Jmp(x):     salto incondicional (epsilon) a `x`.
+//   Split(x,y): bifurca en dos hilos (epsilon), a `x` y a `y`.
+struct Inst { op: int, x: int, y: int, c: char }
+
+// El AST del patrón. Recursivo: en raylang los enums son objetos del heap (semántica de
+// referencia), así que un payload puede volver a ser un `Re` sin tamaño infinito.
+enum Re {
+    Empty,
+    Lit(char),
+    Any,
+    Concat(Re, Re),
+    Alt(Re, Re),
+    Star(Re),
+    Plus(Re),
+    Opt(Re),
+}
+
+// ---------------------------------------------------------------------------
+// Parser del patrón (descenso recursivo sobre los caracteres del patrón).
+//   alt    := concat ('|' concat)*
+//   concat := repeat*
+//   repeat := atom ('*' | '+' | '?')*
+//   atom   := '(' alt ')' | '.' | '\' char | char
+// ---------------------------------------------------------------------------
+
+struct PS { pat: [char], pos: int }
+
+fn ps_at_end(p: PS) -> bool { p.pos >= len(p.pat) }
+fn ps_peek(p: PS) -> char { p.pat[p.pos] }              // el llamador comprueba at_end antes
+fn ps_advance(p: PS) -> char { let c = p.pat[p.pos]; p.pos = p.pos + 1; c }
+
+fn parse_alt(p: PS) -> Re {
+    var node = parse_concat(p);
+    while (!ps_at_end(p) && ps_peek(p) == '|') {
+        ps_advance(p);                                  // consume '|'
+        let rhs = parse_concat(p);
+        node = Re.Alt(node, rhs);
+    }
+    node
+}
+
+fn parse_concat(p: PS) -> Re {
+    var node = Re.Empty;
+    var primero = true;
+    while (!ps_at_end(p) && ps_peek(p) != '|' && ps_peek(p) != ')') {
+        let r = parse_repeat(p);
+        if (primero) {
+            node = r;
+            primero = false;
+        } else {
+            node = Re.Concat(node, r);
+        }
+    }
+    node
+}
+
+fn parse_repeat(p: PS) -> Re {
+    var node = parse_atom(p);
+    while (!ps_at_end(p) && (ps_peek(p) == '*' || ps_peek(p) == '+' || ps_peek(p) == '?')) {
+        let op = ps_advance(p);
+        if (op == '*') {
+            node = Re.Star(node);
+        } else if (op == '+') {
+            node = Re.Plus(node);
+        } else {
+            node = Re.Opt(node);
+        }
+    }
+    node
+}
+
+fn parse_atom(p: PS) -> Re {
+    let c = ps_peek(p);
+    if (c == '(') {
+        ps_advance(p);
+        let inner = parse_alt(p);
+        if (!ps_at_end(p) && ps_peek(p) == ')') {
+            ps_advance(p);
+        } else {
+            panic("regex: falta ')'");
+        }
+        return inner;
+    }
+    if (c == '.') {
+        ps_advance(p);
+        return Re.Any;
+    }
+    if (c == '\\') {
+        ps_advance(p);                                  // consume la barra
+        if (ps_at_end(p)) {
+            panic("regex: '\\' al final del patrón");
+        }
+        let e = ps_advance(p);
+        return Re.Lit(e);                               // literal escapado (\. \* \( …)
+    }
+    ps_advance(p);
+    Re.Lit(c)
+}
+
+// ---------------------------------------------------------------------------
+// Compilación Re → programa de instrucciones (con parcheo de saltos hacia delante).
+// ---------------------------------------------------------------------------
+
+fn emit(prog: [Inst], op: int, x: int, y: int, c: char) -> int {
+    let pos = len(prog);
+    push(prog, Inst { op: op, x: x, y: y, c: c });
+    pos
+}
+
+fn compile_re(re: Re, prog: [Inst]) {
+    match (re) {
+        Re.Empty => { },
+        Re.Lit(c) => { emit(prog, 0, 0, 0, c); },
+        Re.Any => { emit(prog, 1, 0, 0, ' '); },
+        Re.Concat(a, b) => {
+            compile_re(a, prog);
+            compile_re(b, prog);
+        },
+        Re.Alt(a, b) => {
+            // Split L1, L2 ; L1: <a> ; Jmp L3 ; L2: <b> ; L3:
+            let sp = emit(prog, 4, 0, 0, ' ');
+            let si = prog[sp];
+            si.x = len(prog);
+            compile_re(a, prog);
+            let jp = emit(prog, 3, 0, 0, ' ');
+            si.y = len(prog);
+            compile_re(b, prog);
+            let ji = prog[jp];
+            ji.x = len(prog);
+        },
+        Re.Star(a) => {
+            // L1: Split L2, L3 ; L2: <a> ; Jmp L1 ; L3:
+            let sp = emit(prog, 4, 0, 0, ' ');
+            let si = prog[sp];
+            si.x = len(prog);
+            compile_re(a, prog);
+            emit(prog, 3, sp, 0, ' ');                  // Jmp de vuelta al Split
+            si.y = len(prog);
+        },
+        Re.Plus(a) => {
+            // L1: <a> ; Split L1, L3 ; L3:
+            let l1 = len(prog);
+            compile_re(a, prog);
+            let sp = emit(prog, 4, l1, 0, ' ');
+            let si = prog[sp];
+            si.y = len(prog);
+        },
+        Re.Opt(a) => {
+            // Split L1, L2 ; L1: <a> ; L2:
+            let sp = emit(prog, 4, 0, 0, ' ');
+            let si = prog[sp];
+            si.x = len(prog);
+            compile_re(a, prog);
+            si.y = len(prog);
+        },
+    }
+}
+
+fn compile_pattern(pattern: string) -> [Inst] {
+    let p = PS { pat: chars(pattern), pos: 0 };
+    let re = parse_alt(p);
+    if (!ps_at_end(p)) {
+        panic("regex: carácter inesperado en el patrón (¿')'  de más?)");
+    }
+    var prog: [Inst] = [];
+    compile_re(re, prog);
+    emit(prog, 2, 0, 0, ' ');                           // Match final
+    prog
+}
+
+// ---------------------------------------------------------------------------
+// Simulación (Thompson): se mantiene el conjunto de hilos activos.
+// ---------------------------------------------------------------------------
+
+fn new_bools(n: int) -> [bool] {
+    var b: [bool] = [];
+    var i = 0;
+    while (i < n) {
+        push(b, false);
+        i = i + 1;
+    }
+    b
+}
+
+// Sigue los epsilon (Jmp/Split) desde `pc` y añade los pc "consumidores" (Char/Any/Match) a `list`.
+// `seen` evita ciclos de epsilon (p. ej. `(a*)*`).
+fn add_thread(prog: [Inst], list: [int], seen: [bool], pc: int) {
+    if (seen[pc]) {
+        return;
+    }
+    seen[pc] = true;
+    let ins = prog[pc];
+    if (ins.op == 3) {                                  // Jmp
+        add_thread(prog, list, seen, ins.x);
+    } else if (ins.op == 4) {                           // Split
+        add_thread(prog, list, seen, ins.x);
+        add_thread(prog, list, seen, ins.y);
+    } else {                                            // Char / Any / Match
+        push(list, pc);
+    }
+}
+
+fn has_match(prog: [Inst], list: [int]) -> bool {
+    var i = 0;
+    while (i < len(list)) {
+        if (prog[list[i]].op == 2) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// Avanza el conjunto de hilos `clist` consumiendo el carácter `ch`; devuelve el conjunto siguiente.
+// Si `seed` es cierto, también arranca un hilo nuevo en pc 0 (búsqueda: el match puede empezar aquí).
+fn step(prog: [Inst], clist: [int], ch: char, seed: bool) -> [int] {
+    var nlist: [int] = [];
+    let nseen = new_bools(len(prog));
+    var k = 0;
+    while (k < len(clist)) {
+        let pc = clist[k];
+        let ins = prog[pc];
+        if (ins.op == 0 && ins.c == ch) {               // Char que casa
+            add_thread(prog, nlist, nseen, pc + 1);
+        } else if (ins.op == 1) {                       // Any
+            add_thread(prog, nlist, nseen, pc + 1);
+        }
+        k = k + 1;
+    }
+    if (seed) {
+        add_thread(prog, nlist, nseen, 0);
+    }
+    nlist
+}
+
+// ¿Casa el patrón con TODO el texto (anclado a ambos extremos)?
+pub fn full_match(pattern: string, text: string) -> bool {
+    let prog = compile_pattern(pattern);
+    let txt = chars(text);
+    var clist: [int] = [];
+    let seen = new_bools(len(prog));
+    add_thread(prog, clist, seen, 0);
+    var i = 0;
+    while (i < len(txt)) {
+        clist = step(prog, clist, txt[i], false);       // sin sembrar: anclado al inicio
+        i = i + 1;
+    }
+    has_match(prog, clist)                              // aceptación tras consumir todo
+}
+
+// ¿Casa el patrón con ALGÚN substring del texto (búsqueda no anclada)?
+pub fn search(pattern: string, text: string) -> bool {
+    let prog = compile_pattern(pattern);
+    let txt = chars(text);
+    var clist: [int] = [];
+    let seen = new_bools(len(prog));
+    add_thread(prog, clist, seen, 0);
+    if (has_match(prog, clist)) {                        // match vacío en la posición 0
+        return true;
+    }
+    var i = 0;
+    while (i < len(txt)) {
+        clist = step(prog, clist, txt[i], true);        // siembra: el match puede empezar en cualquier posición
+        if (has_match(prog, clist)) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}

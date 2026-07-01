@@ -1,0 +1,59 @@
+// M29.1 — demo del motor de regex (`regex.ray`).
+//
+// Usa `full_match` (anclado a todo el texto) y `search` (algún substring). Imprime, para cada caso,
+// el patrón, el texto y el veredicto. El test compara la salida y exige que ambos motores coincidan.
+
+from regex import full_match, search;
+
+fn si(b: bool) -> string {
+    if (b) { "si" } else { "no" }
+}
+
+fn caso_full(pat: string, txt: string) {
+    print(f"full  /{pat}/ ~ \"{txt}\" = {si(full_match(pat, txt))}");
+}
+
+fn caso_search(pat: string, txt: string) {
+    print(f"search/{pat}/ ~ \"{txt}\" = {si(search(pat, txt))}");
+}
+
+fn main() {
+    // Literales y concatenación.
+    caso_full("abc", "abc");        // si
+    caso_full("abc", "abd");        // no
+    caso_full("abc", "ab");         // no
+
+    // '.' comodín.
+    caso_full("a.c", "axc");        // si
+    caso_full("a.c", "ac");         // no
+
+    // '*' '+' '?'.
+    caso_full("ab*c", "ac");        // si
+    caso_full("ab*c", "abbbc");     // si
+    caso_full("ab+c", "ac");        // no
+    caso_full("ab+c", "abc");       // si
+    caso_full("colou?r", "color");  // si
+    caso_full("colou?r", "colour"); // si
+
+    // Alternancia y grupos.
+    caso_full("gr(a|e)y", "gray");  // si
+    caso_full("gr(a|e)y", "grey");  // si
+    caso_full("gr(a|e)y", "groy");  // no
+    caso_full("(ab)+", "ababab");   // si
+    caso_full("(ab)+", "aba");      // no
+
+    // Anidamiento y estrella de grupo.
+    caso_full("a(b|c)*d", "ad");        // si
+    caso_full("a(b|c)*d", "abccbd");    // si
+    caso_full("a(b|c)*d", "abxd");      // no
+
+    // Escapes: un metacarácter literal.
+    caso_full("a\\.b", "a.b");      // si
+    caso_full("a\\.b", "axb");      // no
+
+    // Búsqueda no anclada.
+    caso_search("cd", "abcde");     // si
+    caso_search("xyz", "abcde");    // no
+    caso_search("a+", "bbbaaa");    // si
+    caso_search("", "abc");         // si (patrón vacío: casa en todas partes)
+}

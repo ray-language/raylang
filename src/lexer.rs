@@ -432,7 +432,7 @@ impl Lexer {
         match self.peek() {
             Some(c) if c.is_ascii_hexdigit() => {
                 self.advance();
-                Ok(c.to_digit(16).unwrap() as u8)
+                Ok(c.to_digit(16).unwrap_or_else(|| crate::ice!("'{c}' pasó el guard de hexdigit")) as u8)
             }
             Some(other) => Err(self.error(format!("se esperaba un dígito hexadecimal tras '\\x', no '{}'", other))),
             None => Err(self.error("cadena de bytes sin cerrar (faltan dígitos hex tras '\\x')".into())),

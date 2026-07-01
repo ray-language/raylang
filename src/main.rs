@@ -21,7 +21,7 @@ fn main() {
     // profunda (parser de descenso recursivo, intérprete tree-walking) dé un error
     // limpio (al tope de `MAX_CALL_DEPTH`) en vez de desbordar la pila y morir con
     // SIGSEGV. `run` siempre acaba en `process::exit`, así que el `join` no retorna.
-    raylang::with_big_stack(run);
+    raylang::with_big_stack_or_ice(run);
 }
 
 fn run() {

@@ -574,7 +574,7 @@ impl Checker {
         // su aridad), con los parámetros de cada definición en ámbito ---
         for e in &program.enums {
             self.type_params = e.type_params.iter().cloned().collect();
-            let variants = self.enums.get(&e.name).expect("recién registrado").clone();
+            let variants = self.enums.get(&e.name).unwrap_or_else(|| crate::ice!("enum '{}' recién registrado no está en la tabla", e.name)).clone();
             for (_, payload) in &variants {
                 for t in payload {
                     self.ensure_type(t, e.line, e.col)?;
@@ -583,7 +583,7 @@ impl Checker {
         }
         for s in &program.structs {
             self.type_params = s.type_params.iter().cloned().collect();
-            let fields = self.structs.get(&s.name).expect("recién registrado").clone();
+            let fields = self.structs.get(&s.name).unwrap_or_else(|| crate::ice!("struct '{}' recién registrado no está en la tabla", s.name)).clone();
             for (_, ty) in &fields {
                 self.ensure_type(ty, s.line, s.col)?;
             }
@@ -813,7 +813,7 @@ impl Checker {
             self.check_impl_bounds(imp)?;
             let target = self.resolve_type(&imp.target);
             self.ensure_impl_target(&target, &imp.type_params, imp.line, imp.col)?;
-            let key = type_key_of(&target).expect("objetivo validado tiene clave");
+            let key = type_key_of(&target).unwrap_or_else(|| crate::ice!("el objetivo de impl validado no tiene clave de tipo"));
 
             // M28.2: impl de un trait con parámetros de tipo (`impl From<S> for E`). Se registra
             // como una **conversión** —no en la tabla de despacho por punto (el método `from` no
@@ -1621,7 +1621,7 @@ impl Checker {
             return Err(self.err(line, col, "un match no puede estar vacío".into()));
         }
         // Variantes del enum (clonadas para soltar el préstamo de self).
-        let variants = self.enums.get(&enum_name).expect("el checker registró el enum").clone();
+        let variants = self.enums.get(&enum_name).unwrap_or_else(|| crate::ice!("el enum '{}' no está en la tabla del checker", enum_name)).clone();
         // σ del enum: liga sus parámetros de tipo con los argumentos del escrutinio,
         // para sustituir los payloads (`Some(T)` sobre `Option<int>` liga `T = int`).
         let enum_tparams = self.enum_tparams.get(&enum_name).cloned().unwrap_or_default();
@@ -1817,7 +1817,7 @@ impl Checker {
         }
         match ot {
             Type::Struct(sname, targs) => {
-                let fields = self.structs.get(&sname).expect("el checker registró el struct");
+                let fields = self.structs.get(&sname).unwrap_or_else(|| crate::ice!("el struct '{}' no está en la tabla del checker", sname));
                 let fty = match fields.iter().find(|(fname, _)| fname == name) {
                     Some((_, fty)) => fty.clone(),
                     None => return Err(self.err(object.line, object.col, format!("el struct '{}' no tiene un campo '{}'", sname, name))),
@@ -2670,7 +2670,14 @@ impl Checker {
             )));
         }
         let trait_name = &hits[0];
-        let sig = self.traits.get(trait_name).unwrap().iter().find(|m| m.name == method).unwrap().clone();
+        let sig = self
+            .traits
+            .get(trait_name)
+            .unwrap_or_else(|| crate::ice!("el trait '{}' del bound no está registrado", trait_name))
+            .iter()
+            .find(|m| m.name == method)
+            .unwrap_or_else(|| crate::ice!("el método '{}' no está en el trait '{}'", method, trait_name))
+            .clone();
         let self_ty = Type::Var(tp.to_string());
         // El receptor ya casó con `self` (es `T`); comprobar los argumentos restantes.
         let expected: Vec<Type> = sig.params.iter().skip(1)
@@ -2798,7 +2805,7 @@ impl Checker {
             let sig = self.traits.get(trait_name)
                 .and_then(|ms| ms.iter().find(|m| m.name == method))
                 .cloned()
-                .expect("el método pertenece al trait (impl validado)");
+                .unwrap_or_else(|| crate::ice!("el método no pertenece al trait (el impl se validó)"));
             return self.synth_dict_closure(&gi, &key, &sig, concrete, line, col);
         }
         // Impl no genérico, o genérico **sin** bounds: la función manglada tiene la aridad
@@ -2873,7 +2880,7 @@ impl Checker {
     fn declare(&mut self, name: &str, ty: Type, mutable: bool, def: (usize, usize)) {
         self.scopes
             .last_mut()
-            .expect("siempre hay un ámbito activo al declarar")
+            .unwrap_or_else(|| crate::ice!("no hay ámbito activo al declarar una variable"))
             .insert(name.to_string(), VarInfo { ty, mutable, def });
     }
 
@@ -3247,7 +3254,7 @@ fn is_enum_head(expr: &Expr, enums: &HashSet<String>) -> bool {
 fn ident_name(expr: &Expr) -> String {
     match &expr.kind {
         ExprKind::Ident(n) => n.clone(),
-        _ => unreachable!("ident_name exige un Ident"),
+        _ => crate::ice!("ident_name exige un Ident"),
     }
 }
 
@@ -3353,7 +3360,7 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                 match trait_arg.as_str() {
                     "Eq" => nuevos.push(parse_derived_impl("Eq", &s.name, "fn igual(self, otro: Self) -> bool", &struct_eq_body(&s.fields))),
                     "Show" => nuevos.push(parse_derived_impl("Show", &s.name, "fn mostrar(self) -> string", &struct_show_body(a, &s.name, &s.fields)?)),
-                    _ => unreachable!("validate_derive garantiza un trait conocido"),
+                    _ => crate::ice!("validate_derive garantiza un trait conocido"),
                 }
             }
         }
@@ -3371,7 +3378,7 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                 match trait_arg.as_str() {
                     "Eq" => nuevos.push(parse_derived_impl("Eq", &e.name, "fn igual(self, otro: Self) -> bool", &enum_eq_body(&e.name, &e.variants))),
                     "Show" => nuevos.push(parse_derived_impl("Show", &e.name, "fn mostrar(self) -> string", &enum_show_body(a, &e.name, &e.variants)?)),
-                    _ => unreachable!("validate_derive garantiza un trait conocido"),
+                    _ => crate::ice!("validate_derive garantiza un trait conocido"),
                 }
             }
         }
@@ -3464,8 +3471,8 @@ fn parse_derived_impl(trait_name: &str, name: &str, firma: &str, body: &str) -> 
     let src = format!(
         "impl {trait_name} for {name} {{\n    {firma} {{\n{body}\n    }}\n}}"
     );
-    let toks = crate::lexer::lex(&src).expect("el impl derivado lexea");
-    let mut prog = crate::parser::parse(toks).expect("el impl derivado parsea");
+    let toks = crate::lexer::lex(&src).unwrap_or_else(|e| crate::ice!("el impl derivado no lexea: {e}"));
+    let mut prog = crate::parser::parse(toks).unwrap_or_else(|e| crate::ice!("el impl derivado no parsea: {e}"));
     prog.impls.remove(0)
 }
 
@@ -3845,10 +3852,10 @@ fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
                     args: new_args,
                 };
             } else {
-                unreachable!("el guard de sitio garantiza Call con callee Field");
+                crate::ice!("el guard de sitio garantiza Call con callee Field");
             }
         } else {
-            unreachable!("el guard de sitio garantiza un Call");
+            crate::ice!("el guard de sitio garantiza un Call");
         }
     }
 
@@ -4053,7 +4060,7 @@ fn lower_try_expr(expr: &mut Expr, sites: &TryConvMap) {
         let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
         let inner = match taken {
             ExprKind::Try(inner) => *inner,
-            _ => unreachable!("el guard garantiza un Try"),
+            _ => crate::ice!("el guard garantiza un Try"),
         };
         let mk = |kind| Expr { kind, line: l, col: c };
         // Rama Ok: `Result.Ok($to) => $to`.
@@ -4180,7 +4187,7 @@ fn lower_operators_expr(expr: &mut Expr, sites: &SiteMap) {
         let args = match taken {
             ExprKind::Binary { left, right, .. } => vec![*left, *right],
             ExprKind::Unary { expr: inner, .. } => vec![*inner],
-            _ => unreachable!("el guard de sitio garantiza Binary o Unary Neg"),
+            _ => crate::ice!("el guard de sitio garantiza Binary o Unary Neg"),
         };
         expr.kind = ExprKind::Call {
             callee: Box::new(Expr { kind: ExprKind::Ident(target), line: l, col: c }),
@@ -4570,8 +4577,8 @@ fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
     };
     if dispatch_method.is_some() {
         let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
-        let ExprKind::Call { callee, mut args } = taken else { unreachable!("sitio de despacho es un Call") };
-        let ExprKind::Field { object, name } = callee.kind else { unreachable!("el callee de un despacho es un Field") };
+        let ExprKind::Call { callee, mut args } = taken else { crate::ice!("sitio de despacho es un Call") };
+        let ExprKind::Field { object, name } = callee.kind else { crate::ice!("el callee de un despacho es un Field") };
         let tmp = format!("__dynrecv#{}", *counter);
         *counter += 1;
         let let_stmt = Stmt {

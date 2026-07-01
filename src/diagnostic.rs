@@ -16,6 +16,29 @@
 //! La columna es 1-basada y se asume que la sangría es con espacios (un tab desalinearía
 //! el subrayado).
 
+/// El único pánico permitido en el front-end (M33b): una **invariante interna rota** (un
+/// ICE, *internal compiler error*). Panica con el prefijo `ICE:` — el hook estándar de Rust
+/// añade archivo:línea del sitio, útil para el reporte — y la red central de
+/// `with_big_stack` lo convierte en el banner de [`ice_banner`] + salida con código 101.
+/// Un error del usuario NUNCA pasa por aquí: eso es un `LexError`/`ParseError`/`TypeError`.
+#[macro_export]
+macro_rules! ice {
+    ($($arg:tt)*) => {
+        panic!("ICE: {}", format_args!($($arg)*)) // ice-ok: la única definición permitida
+    };
+}
+
+/// El banner que ve el usuario cuando el compilador panica (M33b): distingue el ICE de un
+/// error de su programa y pide el reporte. `detalle` es el payload del pánico (el mensaje de
+/// `ice!` o el de un pánico no auditado, p. ej. un índice fuera de rango).
+pub fn ice_banner(detalle: &str) -> String {
+    format!(
+        "error interno del compilador (ICE): {detalle}\n\
+         Esto es un bug de raylang, no de tu programa. Por favor repórtalo\n\
+         junto con el fuente que lo causó."
+    )
+}
+
 /// Renderiza un diagnóstico: la cabecera del error (su `Display`, que ya incluye la
 /// ubicación y el mensaje) seguida de la línea de fuente y `^` repetido `len` veces
 /// bajo la columna (M33a). El subrayado se **acota** al final de la línea: una
@@ -89,6 +112,27 @@ error de sintaxis en 1:13: se esperaba una expresión, se encontró While
         let src = "let x = 5\n";
         let out = render(src, 1, 1, 1, "err");
         assert_eq!(out, "err\n  1 | let x = 5\n    | ^");
+    }
+
+    #[test]
+    fn ice_panica_con_el_prefijo() {
+        // M33b: el payload de `ice!` lleva el prefijo distinguible.
+        let r = std::panic::catch_unwind(|| crate::ice!("mapa sin la clave '{}'", "x"));
+        let payload = r.unwrap_err();
+        let msg = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert_eq!(msg, "ICE: mapa sin la clave 'x'");
+    }
+
+    #[test]
+    fn el_banner_pide_reporte() {
+        let b = ice_banner("ICE: algo se rompió");
+        assert!(b.starts_with("error interno del compilador (ICE): ICE: algo se rompió"));
+        assert!(b.contains("bug de raylang"), "{b}");
+        assert!(b.contains("repórtalo"), "{b}");
     }
 
     #[test]

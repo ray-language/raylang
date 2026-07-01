@@ -430,8 +430,8 @@ fn tcp_accept(listener: int) -> Result<int, string> {
 /// Parsea el prelude una vez. El `expect` no puede fallar: el fuente es una constante
 /// conocida y válida.
 fn parse() -> crate::ast::Program {
-    let tokens = crate::lexer::lex(SOURCE).expect("el prelude lexea");
-    crate::parser::parse(tokens).expect("el prelude parsea")
+    let tokens = crate::lexer::lex(SOURCE).unwrap_or_else(|e| crate::ice!("el prelude no lexea: {e}"));
+    crate::parser::parse(tokens).unwrap_or_else(|e| crate::ice!("el prelude no parsea: {e}"))
 }
 
 /// Los enums del prelude (`Option`/`Result`), ya parseados.

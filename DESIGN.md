@@ -4662,3 +4662,42 @@ módulos (bandas de líneas disjuntas, L3).
 - **LSP**: la suma `col + len` pasa a saturante (el sentinela no desborda) y, con `len > 1`
   real, el subrayado del editor pasa a la expresión exacta.
 - Los `Display` siguen sin cambiar → oráculos self-hosted intactos.
+
+### 38.3 M33b — ICE → diagnóstico
+
+Un compilador de producción **no hace panic con ninguna entrada**: o acepta el programa o da un
+diagnóstico. Un pánico interno (ICE, *internal compiler error*) puede seguir existiendo —las
+invariantes internas se rompen cuando hay un bug— pero debe (a) distinguirse de un error del
+usuario, (b) pedir un reporte, y (c) no depender de que cada sitio lo formatee bien.
+
+**La auditoría, primero.** El análisis de PRODUCCION.md estimó ~200 `panic!`/`unwrap` en el
+front-end; la auditoría real (excluyendo tests y el falso positivo del **método `expect` del
+propio parser**, que devuelve `Result` y es el camino bueno) encontró **26 sitios** en el
+front-end y sus clientes de compilación. Los tres sospechosos de ser alcanzables por entrada
+del usuario (`f""`, `f"{}"`, `b"\xZZ"`) resultaron estar **guardados** (errores limpios); no se
+encontró ningún ICE alcanzable conocido. El resto son invariantes ("recién registrado", "el
+guard garantiza…").
+
+**Las tres piezas:**
+1. **`ice!(…)`** (macro en `diagnostic.rs`): el único panic permitido en el front-end. Panica
+   con el prefijo `ICE:` (el hook estándar añade archivo:línea — útil para el reporte). Los 26
+   sitios se convierten: `unwrap`/`expect` → `unwrap_or_else(|| ice!(…))`, `unreachable!` →
+   `ice!` (mensajes preservados).
+2. **La red central** `with_big_stack_or_ice` (`lib.rs`): todo el binario corre en el hilo
+   worker; si el worker panica, el `join` ya no re-panica (doble traza fea) sino que imprime el
+   **banner de ICE** (`diagnostic::ice_banner`: qué pasó + "esto es un bug de raylang, no de tu
+   programa; repórtalo con el fuente que lo causó") y sale con **código 101** (convención Rust).
+   La red caza también los pánicos **no auditados** (un índice fuera de rango futuro): es la
+   garantía de UX, no la macro. `with_big_stack` (la variante que re-lanza) queda para los
+   tests, donde un assert fallido dentro del closure debe tumbar SU test, no el proceso.
+3. **El test de política** (`tests/ice_policy.rs`): lee los fuentes del front-end y sus clientes
+   de compilación (token/lexer/parser/ast/checker/loader/prelude/diagnostic/fmt/lsp/repl/
+   test_runner/main) y **falla si reaparece** un `panic!`/`unwrap()`/`expect("…")`/`unreachable!`
+   fuera de tests (marcador `// ice-ok` para las excepciones deliberadas, hoy solo la definición
+   de la macro). La política se **auto-defiende**.
+
+**Alcance**: el runtime (`vm`/`interpreter`/`compiler`/`bytecode`/`gc`/`builtins`) queda
+**fuera** — sus pánicos son del dominio de ejecución (el registro de handles, locks del host) y
+su auditoría va con el arco del motor único (M35/M36); la red central de `with_big_stack` ya
+los convierte en un ICE presentable mientras tanto. La validación de verdad de esta fase llega
+con el fuzzing (M33d).

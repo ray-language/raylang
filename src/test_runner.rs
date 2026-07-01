@@ -131,8 +131,8 @@ fn ejecutar_una(pristine: &crate::ast::Program, name: &str, kind: &Kind) -> Resu
 /// vivan en el otro programa.
 fn swap_main(mut program: crate::ast::Program, main_src: &str) -> crate::ast::Program {
     let main_fn = {
-        let toks = lexer::lex(main_src).expect("el main sintetizado lexea");
-        let mut prog = parser::parse(toks).expect("el main sintetizado parsea");
+        let toks = lexer::lex(main_src).unwrap_or_else(|e| crate::ice!("el main sintetizado no lexea: {e}"));
+        let mut prog = parser::parse(toks).unwrap_or_else(|e| crate::ice!("el main sintetizado no parsea: {e}"));
         prog.functions.remove(0)
     };
     program.functions.retain(|f| f.name != "main");

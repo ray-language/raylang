@@ -582,7 +582,7 @@ impl Parser {
             }
             self.expect(&TokenKind::RParen, "')' para cerrar el tipo tupla")?;
             if elems.len() == 1 {
-                return Ok(elems.into_iter().next().unwrap());
+                return Ok(elems.into_iter().next().unwrap_or_else(|| crate::ice!("tupla de 1 elemento sin elemento")));
             }
             return Ok(Type::Tuple(elems));
         }
@@ -785,7 +785,7 @@ impl Parser {
                 },
             });
         }
-        Ok(acc.expect("una cadena interpolada tiene al menos una parte"))
+        Ok(acc.unwrap_or_else(|| crate::ice!("una cadena interpolada llegó sin partes del lexer")))
     }
 
     /// Parsea una expresión con el literal de struct desactivado (para la cabecera del `for`, M27.2).

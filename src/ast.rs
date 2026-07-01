@@ -600,7 +600,7 @@ pub fn collect_fn_exprs(program: &Program) -> Vec<&FnExpr> {
     for fe in acc {
         by_id[fe.id] = Some(fe);
     }
-    by_id.into_iter().map(|o| o.expect("ids de fn-expr densos")).collect()
+    by_id.into_iter().map(|o| o.unwrap_or_else(|| crate::ice!("hueco en los ids densos de fn-expr"))).collect()
 }
 
 fn walk_block<'a>(block: &'a Block, acc: &mut Vec<&'a FnExpr>) {

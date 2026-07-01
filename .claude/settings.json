@@ -7,10 +7,16 @@
       "Edit",
       "Write",
       "Glob",
-      "Grep"
+      "Grep",
+      "Bash(cargo *)",
+      "Bash(source \"$HOME/.cargo/env\" && cargo *)",
+      "Bash(source \"$HOME/.cargo/env\" && ./target/*)",
+      "Bash(./target/*)",
+      "Bash(mdbook *)",
+      "Bash(git commit *)",
+      "Bash(git commit:*)"
     ],
     "ask": [
-      "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(git reset:*)",
       "Bash(git rebase:*)",

@@ -336,13 +336,15 @@ impl Parser {
     fn trait_def(&mut self) -> Result<TraitDef, ParseError> {
         let kw = self.expect(&TokenKind::Trait, "'trait'")?;
         let (name, _, _) = self.expect_ident("el nombre del trait")?;
+        // M28.2: parámetros de tipo del trait, `trait From<S>`. Sin `<`, vacío (trait de M9).
+        let (type_params, _) = self.type_params_with_bounds()?;
         self.expect(&TokenKind::LBrace, "'{' tras el nombre del trait")?;
         let mut methods = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
             methods.push(self.method_sig()?);
         }
         self.expect(&TokenKind::RBrace, "'}' para cerrar el trait")?;
-        Ok(TraitDef { is_pub: false, name, methods, line: kw.line, col: kw.col })
+        Ok(TraitDef { is_pub: false, name, type_params, methods, line: kw.line, col: kw.col })
     }
 
     /// method_sig = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] ( ';' | block )  (M9)
@@ -380,6 +382,8 @@ impl Parser {
         // ambos quedan vacíos (impl concreto de M9.1).
         let (type_params, bounds) = self.type_params_with_bounds()?;
         let (trait_name, _, _) = self.expect_ident("el nombre del trait")?;
+        // M28.2: argumentos de tipo del trait, `impl From<string> for E`. Sin `<`, vacío.
+        let trait_args = self.type_args()?;
         // `for` es palabra clave desde M27.2 (antes era un identificador aquí). Se conserva el mensaje de
         // error original para que el oráculo del parser auto-alojado (que aún trata `for` como ident) cuadre.
         if self.check(&TokenKind::For) {
@@ -400,7 +404,7 @@ impl Parser {
             methods.push(self.impl_method()?);
         }
         self.expect(&TokenKind::RBrace, "'}' para cerrar el impl")?;
-        Ok(ImplBlock { trait_name, type_params, bounds, target, methods, line: kw.line, col: kw.col })
+        Ok(ImplBlock { trait_name, trait_args, type_params, bounds, target, methods, line: kw.line, col: kw.col })
     }
 
     /// impl_method = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] block  (M9)

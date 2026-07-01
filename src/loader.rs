@@ -1082,6 +1082,11 @@ impl<'a> TypeRewriter<'a> {
             self.tparams.push(imp.type_params.iter().cloned().collect());
             self.rewrite_type(&mut imp.target);
             self.rewrite_name(&mut imp.trait_name);
+            // M28.2: los argumentos de tipo del trait (`impl From<Otro> for E`) son posiciones de
+            // tipo → namespaciarlos como cualquier otra referencia de tipo.
+            for arg in &mut imp.trait_args {
+                self.rewrite_type(arg);
+            }
             for (_, tr) in &mut imp.bounds {
                 self.rewrite_name(tr);
             }

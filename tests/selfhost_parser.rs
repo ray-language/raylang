@@ -668,6 +668,8 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "interpolacion.ray", // M27.3: interpolación de strings (idem)
         "casts.ray", // M27.4: casts `as` (idem; usa `for`/interpolación también)
         "constantes.ray", // M27.5: const de nivel superior (idem)
+        "operadores.ray", // M28.1: sobrecarga de operadores (el toolchain auto-alojado aún no la soporta)
+        "conversion_error.ray", // M28.2: `?` con From<S> / traits con params de tipo (idem)
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops

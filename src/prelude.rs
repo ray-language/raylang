@@ -45,6 +45,12 @@ impl Ord for float { fn menor(self, otro: float) -> bool { self < otro } }
 impl Ord for string { fn menor(self, otro: string) -> bool { self < otro } }
 impl Ord for char { fn menor(self, otro: char) -> bool { self < otro } }
 
+// Conversión de tipos (M28.2): `From<S>` construye un valor a partir de uno de tipo `S`. Su método
+// `desde` NO tiene `self` (es asociado; el nombre es `desde` porque `from` es palabra clave del
+// import). Lo consume el operador `?`: sobre un `Result<_, E1>` dentro de una función que devuelve
+// `Result<_, E2>`, si hay `impl From<E1> for E2` el error se convierte automáticamente.
+trait From<S> { fn desde(origen: S) -> Self; }
+
 // Traits de sobrecarga de operadores (M28.1): un tipo que implemente estos traits puede usar los
 // operadores aritméticos. El checker baja `a + b` (con `a`/`b` de un tipo de usuario) a `a.add(b)`.
 trait Add { fn add(self, otro: Self) -> Self; }

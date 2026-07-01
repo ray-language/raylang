@@ -2778,6 +2778,22 @@ mod tests {
         oracle_program("fn main() -> int { let n = 42; if (f\"n={n}\" == \"n=42\") { 1 } else { 0 } }");
     }
 
+    /// M28.2: `?` con conversión de error vía `From<S>`. `expr?` (con `impl From<E1> for E2`) baja a
+    /// un `match` que convierte en la rama de error → runtime intacto, ambos motores coinciden.
+    #[test]
+    fn conversion_error_oraculo() {
+        let base = "enum MiErr { Io(string) } \
+            impl From<string> for MiErr { fn desde(o: string) -> MiErr { MiErr.Io(o) } } \
+            fn leer(f: bool) -> Result<int, string> { if (f) { Result.Err(\"x\") } else { Result.Ok(7) } } \
+            fn proc(f: bool) -> Result<int, MiErr> { let x = leer(f)?; Result.Ok(x + 1) } ";
+        // Camino Ok: proc(false) = Ok(8); code = 8.
+        oracle_program(&format!("{base} fn main() -> int {{ match (proc(false)) {{ Result.Ok(v) => v, Result.Err(e) => 0 - 1 }} }}"));
+        // Camino Err convertido: proc(true) = Err(MiErr.Io(\"x\")); se detecta la conversión → 99.
+        oracle_program(&format!("{base} fn main() -> int {{ match (proc(true)) {{ Result.Ok(v) => v, Result.Err(e) => match (e) {{ MiErr.Io(s) => 99 }} }} }}"));
+        // El `?` SIN conversión (mismo tipo de error) sigue intacto.
+        oracle_program("fn leer() -> Result<int, string> { Result.Ok(5) } fn proc() -> Result<int, string> { let x = leer()?; Result.Ok(x * 2) } fn main() -> int { match (proc()) { Result.Ok(v) => v, Result.Err(e) => 0 } }");
+    }
+
     /// M28.1: sobrecarga de operadores vía traits (`Add`/`Sub`/`Mul`/`Div`/`Neg`). `a op b` sobre
     /// un tipo de usuario baja a `a.metodo(b)` (función manglada de M9) → ambos motores coinciden.
     #[test]

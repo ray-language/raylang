@@ -98,6 +98,11 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // Paso 4 (M7.1 + M9): bajar las llamadas por punto (`recv.f(args)`) a llamadas
     // ordinarias (`f(recv, args)`); incluye UFCS, métodos de trait (M9.1) y métodos sobre
     // un tipo acotado, que bajan a una llamada al parámetro-diccionario (M9.2).
+    // Paso 3.4 (M28.2): bajar los `?` que convierten el error — `expr?` (con `impl From<E1> for E2`)
+    // a un `match` que aplica la conversión en la rama de error. Front-end puro: el `?` sin conversión
+    // sigue siendo nativo; solo los sitios registrados se reescriben. Antes que el resto de bajadas,
+    // para que estas recorran el operando (ahora escrutinio del match) y la llamada de conversión.
+    lower_try_conversions(program, &checker.try_conversions);
     // Paso 3.5 (M28.1): bajar la sobrecarga de operadores — `a op b` (con un tipo de usuario que
     // implementa el trait del operador) a `a.metodo(b)`, y `-x` a `x.neg()`. Se hace antes que el
     // resto de bajadas: el resultado es una llamada ordinaria a la función manglada del método.
@@ -211,10 +216,19 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
             let params = m.params.iter()
                 .map(|p| Param { ty: subst_self(&p.ty, &imp.target), ..p.clone() })
                 .collect();
+            // M28.2: un método de un impl `From<S>` se inyecta con nombre manglado **por origen**
+            // (`E#from#string`) para no colisionar con otros `impl From<...> for E`. El resto
+            // (impls de M9) usa el manglado ordinario `Tipo#metodo`.
+            let name = if is_typed_trait_impl(imp) && m.name == "desde" {
+                let src_key = imp.trait_args.first().and_then(type_key_of).unwrap_or_default();
+                mangle_from(&key, &src_key)
+            } else {
+                mangle(&key, &m.name)
+            };
             program.functions.push(Function {
                 annotations: Vec::new(),
                 is_pub: false,
-                name: mangle(&key, &m.name),
+                name,
                 type_params: imp.type_params.clone(),
                 bounds: imp.bounds.clone(),
                 params,
@@ -338,6 +352,17 @@ struct Checker {
     /// Traits declarados (M9): nombre → firmas de sus métodos (con `self`/`Self` aún sin
     /// sustituir). Llenado en la pre-pasada, antes de validar los impls.
     traits: HashMap<String, Vec<MethodSig>>,
+    /// M28.2: parámetros de tipo de cada trait (`trait From<S>` → `["S"]`). Da la aridad para
+    /// validar los argumentos de tipo de un `impl From<string> for E`.
+    trait_tparams: HashMap<String, Vec<String>>,
+    /// M28.2: conversiones `From`. `(clave_origen, clave_destino)` → función manglada que
+    /// convierte (`MiError#from#string`). La consulta `check_try` para el operador `?`: sobre
+    /// `Result<_, E1>` en una función que devuelve `Result<_, E2>`, si hay `impl From<E1> for E2`
+    /// el `?` convierte el error automáticamente.
+    from_impls: HashMap<(String, String), String>,
+    /// M28.2: sitios de `?` que requieren conversión de error. `(línea, col)` → función manglada
+    /// de `From`. `lower_try_conversions` reescribe ese `Try` a un `match` que convierte.
+    try_conversions: HashMap<(usize, usize), String>,
     /// Tabla de resolución de métodos de trait (M9): `(clave_de_tipo, método)` → nombre
     /// manglado de la función que lo implementa. La clave de tipo es el nombre del
     /// struct/enum o el primitivo (ver `type_key`). Un mismo `(tipo, método)` solo puede
@@ -410,6 +435,9 @@ impl Checker {
             type_params: HashSet::new(),
             ufcs_sites: HashMap::new(),
             op_sites: HashMap::new(),
+            trait_tparams: HashMap::new(),
+            from_impls: HashMap::new(),
+            try_conversions: HashMap::new(),
             traits: HashMap::new(),
             methods: HashMap::new(),
             impl_fn_self: HashMap::new(),
@@ -746,6 +774,7 @@ impl Checker {
                 }
             }
             self.traits.insert(t.name.clone(), t.methods.clone());
+            self.trait_tparams.insert(t.name.clone(), t.type_params.clone());
         }
 
         // 2) Impls: validar contra su trait y poblar las tablas de resolución.
@@ -762,6 +791,15 @@ impl Checker {
             let target = self.resolve_type(&imp.target);
             self.ensure_impl_target(&target, &imp.type_params, imp.line, imp.col)?;
             let key = type_key_of(&target).expect("objetivo validado tiene clave");
+
+            // M28.2: impl de un trait con parámetros de tipo (`impl From<S> for E`). Se registra
+            // como una **conversión** —no en la tabla de despacho por punto (el método `from` no
+            // tiene `self`)—. La consume el operador `?` (`check_try`).
+            if is_typed_trait_impl(imp) {
+                self.register_typed_trait_impl(imp, &target, &key)?;
+                continue;
+            }
+
             // Registrar el impl genérico (para `dict_for`: diccionarios anidados).
             if !imp.type_params.is_empty() {
                 self.generic_impls.insert(
@@ -822,6 +860,51 @@ impl Checker {
             self.impl_traits.insert((key, imp.trait_name.clone()));
         }
         self.type_params.clear();
+        Ok(())
+    }
+
+    /// M28.2: registra un `impl` de un trait con parámetros de tipo. Hoy solo `From<S>` tiene
+    /// semántica (la consume el operador `?`): valida la firma `fn from(origen: S) -> Self` y
+    /// guarda la conversión `(origen, destino) → función manglada`. Otros traits con parámetros
+    /// de tipo se aceptan sintácticamente pero aún no hacen nada (diferido).
+    fn register_typed_trait_impl(&mut self, imp: &ImplBlock, target: &Type, key: &str) -> Result<(), TypeError> {
+        let tparams = self.trait_tparams.get(&imp.trait_name).cloned().unwrap_or_default();
+        if imp.trait_args.len() != tparams.len() {
+            return Err(self.err(imp.line, imp.col, format!(
+                "el trait '{}' toma {} parámetro(s) de tipo, pero el impl pasa {}",
+                imp.trait_name, tparams.len(), imp.trait_args.len()
+            )));
+        }
+        if imp.trait_name != "From" {
+            return Ok(()); // otros traits con parámetros de tipo: sin semántica todavía
+        }
+        // `From<S> for E` exige `fn from(origen: S) -> E` (sin `self`).
+        let src = self.resolve_type(&imp.trait_args[0]);
+        let src_key = match type_key_of(&src) {
+            Some(k) => k,
+            None => return Err(self.err(imp.line, imp.col,
+                "el tipo de origen de 'From' no admite conversión".into())),
+        };
+        let m = match imp.methods.iter().find(|m| m.name == "desde") {
+            Some(m) => m,
+            None => return Err(self.err(imp.line, imp.col, format!(
+                "el impl de 'From' para {} no implementa el método 'desde'", target))),
+        };
+        if m.params.len() != 1 {
+            return Err(self.err(m.line, m.col,
+                "'desde' toma exactamente un parámetro (el valor de origen), sin 'self'".into()));
+        }
+        let got_param = self.resolve_type(&m.params[0].ty);
+        if got_param != src {
+            return Err(self.err(m.params[0].line, m.params[0].col, format!(
+                "el parámetro de 'desde' es {}, pero 'From<{}>' pide {}", got_param, src, src)));
+        }
+        let got_ret = self.resolve_type(&subst_self(&m.return_type, target));
+        if &got_ret != target {
+            return Err(self.err(m.line, m.col, format!(
+                "'desde' debe devolver {} (el tipo destino), no {}", target, got_ret)));
+        }
+        self.from_impls.insert((src_key.clone(), key.to_string()), mangle_from(key, &src_key));
         Ok(())
     }
 
@@ -1589,7 +1672,24 @@ impl Checker {
             Type::Enum(name, args) if name == "Result" && args.len() == 2 => {
                 let (ok_ty, err_ty) = (args[0].clone(), args[1].clone());
                 match &self.current_return {
+                    // Mismo tipo de error → `?` propaga tal cual (M6.3).
                     Type::Enum(rn, rargs) if rn == "Result" && rargs.len() == 2 && rargs[1] == err_ty => Ok(ok_ty),
+                    // M28.2: distinto tipo de error, pero hay `impl From<E1> for E2` → `?` convierte.
+                    // (Solo el camino de ÉXITO diverge de M6.3; el error conserva el mismo texto para no
+                    //  romper el oráculo del checker auto-alojado, que no conoce `From`.)
+                    Type::Enum(rn, rargs) if rn == "Result" && rargs.len() == 2 => {
+                        match (type_key_of(&err_ty), type_key_of(&rargs[1])) {
+                            (Some(k1), Some(k2)) if self.from_impls.contains_key(&(k1.clone(), k2.clone())) => {
+                                let mangled = self.from_impls[&(k1, k2)].clone();
+                                self.try_conversions.insert((line, col), mangled);
+                                Ok(ok_ty)
+                            }
+                            _ => Err(self.err(line, col, format!(
+                                "'?' sobre {} requiere que la función devuelva Result<_, {}>, pero devuelve {}",
+                                it, err_ty, self.current_return
+                            ))),
+                        }
+                    }
                     other => Err(self.err(line, col, format!(
                         "'?' sobre {} requiere que la función devuelva Result<_, {}>, pero devuelve {}",
                         it, err_ty, other
@@ -3064,6 +3164,20 @@ fn mangle(type_key: &str, method: &str) -> String {
     format!("{}#{}", type_key, method)
 }
 
+/// M28.2: nombre manglado de un método de conversión `From`. Incluye la **clave del origen**
+/// para que `impl From<string> for E` e `impl From<int> for E` no colisionen (mismo destino
+/// `E` y método `from`, distinta conversión). Nunca es invocable por el usuario (`#`).
+fn mangle_from(target_key: &str, source_key: &str) -> String {
+    format!("{}#from#{}", target_key, source_key)
+}
+
+/// M28.2: ¿es `imp` un impl de un trait con parámetros de tipo (estilo `From<S>`)? Estos se
+/// tratan aparte: su método de conversión se inyecta con un nombre manglado por origen y no
+/// entra en la tabla de despacho por punto (no tiene `self`).
+fn is_typed_trait_impl(imp: &ImplBlock) -> bool {
+    !imp.trait_args.is_empty()
+}
+
 /// M28.1: mapa operador binario → (trait, método) para la sobrecarga. `None` si el operador
 /// no es sobrecargable (`%`, comparación, lógicos, bit a bit).
 fn op_trait_method(op: BinaryOp) -> Option<(&'static str, &'static str)> {
@@ -3678,6 +3792,126 @@ fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
         }
         ExprKind::Block(b) => lower_ufcs_block(b, sites),
         // Literales, Ident: nada que recorrer.
+        _ => {}
+    }
+}
+
+// =====================================================================
+// Bajada de `?` con conversión de error (M28.2)
+// =====================================================================
+//
+// `expr?` sobre `Result<T, E1>` en una función que devuelve `Result<_, E2>` (con
+// `impl From<E1> for E2`) se registró en `try_conversions` con la función manglada de
+// conversión. Aquí ese `Try` se reescribe a:
+//
+//     match (expr) {
+//         Result.Ok($to)  => $to,
+//         Result.Err($te) => { return Result.Err(<from>($te)); },
+//     }
+//
+// Puro front-end (reusa `match`, construcción de enum y `return`): el runtime no cambia.
+// El `?` que NO convierte sigue siendo el nodo nativo `Try` (M6.3).
+
+type TryConvMap = HashMap<(usize, usize), String>;
+
+fn lower_try_conversions(program: &mut Program, sites: &TryConvMap) {
+    if sites.is_empty() {
+        return;
+    }
+    for f in &mut program.functions {
+        lower_try_block(&mut f.body, sites);
+    }
+}
+
+fn lower_try_block(block: &mut Block, sites: &TryConvMap) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_try_expr(value, sites),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { lower_try_expr(start, sites); lower_try_expr(end, sites); }
+                    ForIter::In(e) => lower_try_expr(e, sites),
+                }
+                lower_try_block(body, sites);
+            }
+            StmtKind::Assign { target, value } => { lower_try_expr(target, sites); lower_try_expr(value, sites); }
+            StmtKind::Return { value } => { if let Some(v) = value { lower_try_expr(v, sites); } }
+            StmtKind::Expr(e) => lower_try_expr(e, sites),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        lower_try_expr(t, sites);
+    }
+}
+
+fn lower_try_expr(expr: &mut Expr, sites: &TryConvMap) {
+    // ¿Este `Try` es un sitio de conversión registrado? Reescribir ANTES de recorrer los hijos,
+    // para que la recursión baje el operando (ahora escrutinio del match).
+    let conv = match &expr.kind {
+        ExprKind::Try(_) => sites.get(&(expr.line, expr.col)).cloned(),
+        _ => None,
+    };
+    if let Some(mangled) = conv {
+        let (l, c) = (expr.line, expr.col);
+        let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0));
+        let inner = match taken {
+            ExprKind::Try(inner) => *inner,
+            _ => unreachable!("el guard garantiza un Try"),
+        };
+        let mk = |kind| Expr { kind, line: l, col: c };
+        // Rama Ok: `Result.Ok($to) => $to`.
+        let arm_ok = MatchArm {
+            pattern: Pattern {
+                kind: PatternKind::Variant { enum_name: "Result".into(), variant: "Ok".into(), bindings: vec![Some("$to".into())] },
+                line: l, col: c,
+            },
+            body: mk(ExprKind::Ident("$to".into())),
+            line: l, col: c,
+        };
+        // Rama Err: `Result.Err($te) => { return Result.Err(<from>($te)); }`.
+        let convertido = mk(ExprKind::Call {
+            callee: Box::new(mk(ExprKind::Ident(mangled))),
+            args: vec![mk(ExprKind::Ident("$te".into()))],
+        });
+        let err_val = mk(ExprKind::EnumLit { enum_name: "Result".into(), variant: "Err".into(), args: vec![convertido] });
+        let ret_stmt = Stmt { kind: StmtKind::Return { value: Some(err_val) }, line: l, col: c };
+        let arm_err = MatchArm {
+            pattern: Pattern {
+                kind: PatternKind::Variant { enum_name: "Result".into(), variant: "Err".into(), bindings: vec![Some("$te".into())] },
+                line: l, col: c,
+            },
+            body: mk(ExprKind::Block(Block { statements: vec![ret_stmt], tail: None, line: l, col: c })),
+            line: l, col: c,
+        };
+        expr.kind = ExprKind::Match { scrutinee: Box::new(inner), arms: vec![arm_ok, arm_err] };
+    }
+
+    // Recorrer los sub-nodos.
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => lower_try_expr(inner, sites),
+        ExprKind::Binary { left, right, .. } => { lower_try_expr(left, sites); lower_try_expr(right, sites); }
+        ExprKind::Call { callee, args } => {
+            lower_try_expr(callee, sites);
+            for a in args { lower_try_expr(a, sites); }
+        }
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { lower_try_expr(e, sites); } }
+        ExprKind::Index { array, index } => { lower_try_expr(array, sites); lower_try_expr(index, sites); }
+        ExprKind::StructLit { fields, .. } => { for (_, e) in fields { lower_try_expr(e, sites); } }
+        ExprKind::EnumLit { args, .. } => { for a in args { lower_try_expr(a, sites); } }
+        ExprKind::Field { object, .. } => lower_try_expr(object, sites),
+        ExprKind::Func(fe) => lower_try_block(&mut fe.body, sites),
+        ExprKind::Match { scrutinee, arms } => {
+            lower_try_expr(scrutinee, sites);
+            for arm in arms { lower_try_expr(&mut arm.body, sites); }
+        }
+        ExprKind::Try(inner) => lower_try_expr(inner, sites),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            lower_try_expr(cond, sites);
+            lower_try_block(then_branch, sites);
+            if let Some(e) = else_branch { lower_try_expr(e, sites); }
+        }
+        ExprKind::While { cond, body } => { lower_try_expr(cond, sites); lower_try_block(body, sites); }
+        ExprKind::Block(b) => lower_try_block(b, sites),
         _ => {}
     }
 }

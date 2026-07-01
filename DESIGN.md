@@ -4318,6 +4318,21 @@ Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
 - **M28.2 `?` con conversión de error** (traits `From`/`Into`). Hoy `?` no convierte el tipo de error; con
   `From<E1> for E2` el `?` convierte automáticamente → librerías con un enum de error propio en vez de
   arrastrar `string`.
+  - **COMPLETO**. Habilitador: **parámetros de tipo en traits** (`trait From<S>`, primer trait con
+    `<...>`; `TraitDef.type_params`, `ImplBlock.trait_args`). El trait `From<S> { fn desde(origen: S) ->
+    Self; }` vive en el prelude; su método `desde` **no tiene `self`** (asociado; `from` es palabra clave
+    del import). El usuario escribe `impl From<string> for MiError { fn desde(o: string) -> MiError {…} }`.
+    **Front-end puro / erasure**: en el paso 0c el método se inyecta como función libre con nombre manglado
+    **por origen** (`MiError#desde#string`, para que varios `impl From<…> for MiError` no colisionen);
+    `register_typed_trait_impl` valida la firma y puebla `from_impls: (origen, destino) → manglado`.
+    `check_try`, si el error del `Result` (E1) difiere del retorno (E2) pero hay `impl From<E1> for E2`,
+    registra el sitio; `lower_try_conversions` reescribe ese `expr?` a un `match (expr) { Result.Ok($to)
+    => $to, Result.Err($te) => { return Result.Err(MiError#desde#string($te)); } }` → **runtime intacto**
+    (reusa `match`+`return`+construcción de enum; el `?` sin conversión sigue siendo el nodo `Try` nativo
+    de M6.3). Oráculo `conversion_error_oraculo` + ejemplo `examples/types/conversion_error.ray`. Los
+    parámetros de tipo en traits solo tienen semántica para `From`/`?` (otros usos —bounds, `dyn`,
+    despacho `.metodo()`— se aceptan sintácticamente pero se **difieren**); `Into`, cadenas de conversión
+    y `From` entre módulos también diferidos.
 - **M28.3 Enteros con tamaño / unsigned** (`u8`/`u32`/`i32`/`u64`…). El más invasivo (toca todo el modelo
   numérico). Elimina el enmascarado a mano (`& 0xFFFFFFFF`) omnipresente en SHA-256/DEFLATE/HPACK/protobuf.
   Decisión de diseño pendiente: conjunto de tipos, reglas de conversión, `wrapping`/overflow. Puede quedar

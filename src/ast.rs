@@ -276,6 +276,9 @@ pub struct TraitDef {
     /// `pub` (M11.3c): el trait se exporta de su módulo. Sin `pub`, privado al módulo.
     pub is_pub: bool,
     pub name: String,
+    /// Parámetros de tipo del trait (M28.2): los `S` de `trait From<S>`. Vacío = trait
+    /// ordinario (M9). Habilitan el patrón de conversión de `From<S>` que consume `?`.
+    pub type_params: Vec<String>,
     pub methods: Vec<MethodSig>,
     pub line: usize,
     pub col: usize,
@@ -306,6 +309,10 @@ pub struct MethodSig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplBlock {
     pub trait_name: String,
+    /// Argumentos de tipo del trait (M28.2): los `string` de `impl From<string> for MiError`.
+    /// Vacío para un trait sin parámetros de tipo (M9). Distinguen `impl From<string> for E` de
+    /// `impl From<IoError> for E` (mismo target y trait, distinta conversión).
+    pub trait_args: Vec<Type>,
     /// Parámetros de tipo del impl (M9.2b): los `T` de `impl<T> Trait for Caja<T>`.
     pub type_params: Vec<String>,
     /// Bounds de esos parámetros (M9.2b): `impl<T: A + B> ...`. Pares `(parámetro, trait)`.

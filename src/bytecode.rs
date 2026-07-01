@@ -459,8 +459,14 @@ impl Chunk {
         self.code.len() - 1
     }
 
-    /// Registra una constante y devuelve su índice.
+    /// Registra una constante y devuelve su índice. M29.3: **dedup** — si ya hay una constante
+    /// idéntica en el pool, reutiliza su índice en vez de añadir un duplicado. Los literales se
+    /// repiten muchísimo (los enteros pequeños `0`/`1`/`2`, strings, nombres de campo), así que el
+    /// pool encoge notablemente. La búsqueda es lineal, pero solo ocurre en **compilación** (una vez).
     pub fn add_constant(&mut self, value: Value) -> usize {
+        if let Some(i) = self.constants.iter().position(|c| c == &value) {
+            return i;
+        }
         self.constants.push(value);
         self.constants.len() - 1
     }
@@ -546,4 +552,25 @@ pub struct CompiledProgram {
     pub structs: Vec<CompiledStruct>,
     pub enums: Vec<CompiledEnum>,
     pub main: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::interpreter::Value;
+
+    /// M29.3: `add_constant` deduplica — una constante idéntica reutiliza su índice.
+    #[test]
+    fn add_constant_deduplica() {
+        let mut c = Chunk::new();
+        let i0 = c.add_constant(Value::Int(7));
+        let i1 = c.add_constant(Value::Int(7)); // duplicado → mismo índice
+        let i2 = c.add_constant(Value::Int(9)); // distinto → índice nuevo
+        let i3 = c.add_constant(Value::Str("a".into()));
+        let i4 = c.add_constant(Value::Str("a".into())); // duplicado
+        assert_eq!(i0, i1);
+        assert_ne!(i0, i2);
+        assert_eq!(i3, i4);
+        assert_eq!(c.constants.len(), 3); // 7, 9, "a" — sin duplicados
+    }
 }

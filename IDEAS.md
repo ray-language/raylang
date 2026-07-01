@@ -360,10 +360,24 @@ bloquea nada y se hace de forma incremental, midiendo con `benchmarks/`.
   benchmark nuevo `gcnested.ray`): el `trace` corre infrecuente (umbral ×2) y un `Vec` pequeño no es el
   cuello; para arreglos de `int` los hijos son primitivos → ya devolvía un `Vec` vacío (que no asigna).
 - **LTO + `codegen-units=1`** ❌ **descartado** (medido: igual o peor que el perfil por defecto).
-- Siguiente (no aplicados): deduplicar constantes (menor), peephole/plegado (menor), reducir `HeapValue`
-  de 32→16 bytes (boxear `Str`/`Bytes`; a ese tamaño el memcpy ya es barato, dudoso); el gran salto
-  restante sería **locales en la pila de operandos** (estilo clox; Opt.2 ya capturó la asignación) —
-  refactor grande, ROI decreciente.
+- **M29.3 (jul 2026, `measure.py` mejor-de-15).** Se retomó el transversal con la baseline fib(35) 2.18 s /
+  loop 1.04 s / arrays 0.196 s / gcnested 0.312 s.
+  - **Opt.9 — dedup de constantes** ✅ **conservado por MEMORIA, no velocidad**: `add_constant` reutiliza el
+    índice de una constante idéntica ya presente (búsqueda lineal, solo en compilación). Los literales se
+    repiten muchísimo (`0`/`1`/`2`, nombres de campo, strings) → el pool encoge. **Velocidad neutra** (dentro
+    del ruido: es una lectura por índice en runtime, da igual cuántas constantes haya), pero es la optimización
+    estándar de todo VM de bytecode y **no tiene contrapartida** (solo elimina duplicados) → se mantiene como
+    mejora de calidad/memoria. Test `add_constant_deduplica`.
+  - **Opt.10 — `OpCode` 32→24 B (boxear `GetField`/`SetField`)** ❌ **medido y DESCARTADO**: eran las únicas
+    variantes con `String` inline; boxearlas a `Box<str>` baja `OpCode` a 24 B (tope `(usize,usize)`=16 B) →
+    stream de código 25 % más denso. **Sin efecto** (fib incluso +2 %, resto plano): estos benchmarks NO están
+    limitados por el *fetch*/caché (los chunks caben de sobra en L1), sino por el trabajo real (llamadas,
+    aritmética, GC). Confirma que reducir `HeapValue` 32→16 (boxear `Str`/`Bytes`, alta cirugía ~119 sitios)
+    tampoco pagaría en estos casos → **no se intentó**. Revertido.
+  - Conclusión: **los levers de tamaño (OpCode/HeapValue) no mueven estos benchmarks**; las ganancias fáciles
+    (Opt.1/2/4/7) ya están exprimidas. El salto restante sería algorítmico (locales en la pila estilo clox,
+    reducir el coste de llamada/GC), refactor grande de ROI decreciente. **M29.3 cerrado** con el dedup + este
+    registro. La VM sigue a ~3.2× del intérprete.
 
 ## 12. Asperezas de M3
 

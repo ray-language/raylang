@@ -4403,6 +4403,16 @@ Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
 - **M29.3 Optimización de la VM** — retomar el transversal (DESIGN §27): dedup de constantes, peephole/
   plegado, `HeapValue` 32→16 B. Cobra relevancia por el coste de SHA-256/DEFLATE/HPACK. Método incremental,
   midiendo (banco `benchmarks/`), conservar solo lo que supera el ruido.
+  - **COMPLETO** (cierra M29). Método: `measure.py` mejor-de-15 sobre release; baseline fib(35) 2.18 s /
+    loop 1.04 s / arrays 0.196 s / gcnested 0.312 s. **Opt.9 dedup de constantes** ✅ (`add_constant`
+    reutiliza el índice de una constante idéntica) — **conservado por memoria** (el pool encoge; los literales
+    se repiten muchísimo), **velocidad neutra** pero sin contrapartida (es la optimización estándar de todo VM
+    de bytecode). **Opt.10 `OpCode` 32→24 B** (boxear `GetField`/`SetField` a `Box<str>`) ❌ **medido y
+    descartado**: sin efecto → estos benchmarks no están limitados por *fetch*/caché sino por el trabajo real
+    (llamadas/aritmética/GC); por lo mismo, reducir `HeapValue` 32→16 (alta cirugía) no pagaría → no se
+    intentó. Registro completo en IDEAS §11. Las ganancias fáciles ya estaban exprimidas (Opt.1/2/4/7); el
+    salto restante es algorítmico (locales en la pila estilo clox), refactor grande de ROI decreciente. **M29
+    (tooling) COMPLETO** (regex + rayfmt + optimización VM).
 
 ### M30 — Cripto avanzada (cifrado y firmas)
 Cierra el dominio cripto: hoy hay *hashing*/HMAC pero **no cifrado ni firma asimétrica**.

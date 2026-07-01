@@ -685,6 +685,8 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "ed25519_demo.ray", // M30.2: demo usa `for`/importa ed25519 (idem)
         "jwt_eddsa.ray", // M30.3: JWT EdDSA, importa ed25519 (bitops/u64, idem)
         "jwt_eddsa_demo.ray", // M30.3: demo importa ed25519 (idem)
+        "huffman.ray", // M31.1: HPACK-Huffman, usa bitops (& | << >>, idem)
+        "huffman_demo.ray", // M31.1: demo usa `for`/importa huffman (idem)
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops

@@ -4474,6 +4474,16 @@ Cierra el dominio cripto: hoy hay *hashing*/HMAC pero **no cifrado ni firma asim
 Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.
 - **M31.1 HPACK-Huffman** — la tabla de 257 códigos del RFC 7541 Apéndice B (decodificación canónica, como
   `inflate`); verificable contra los vectores C.4/C.6. Cierra HPACK.
+  - **COMPLETO** (`examples/web/huffman.ray`). La tabla estática de 257 símbolos (código + nº de bits) del
+    RFC 7541 Apéndice B, **obtenida de una fuente de producción** (x/net/http2 de Go, vía WebFetch) y
+    **validada**: es un código prefijo completo (Kraft = 2^30, sin colisiones) y reproduce el vector oficial
+    C.4.1. `huffman_encode` concatena los códigos MSB-first y rellena el último octeto con 1s (prefijo de
+    EOS); `huffman_decode` recorre un **trie binario** (construido de la tabla en arreglos paralelos) bit a
+    bit, rechazando el relleno inválido y el símbolo EOS (RFC §5.2). Verificado byte a byte contra C.4.1/
+    C.4.2/C.4.3 y C.6.1 + round-trip, ambos motores (`tests/huffman_cli.rs`). Excluido del corpus del parser
+    auto-alojado (bitops). Falta integrarlo en `hpack.ray` (que hoy emite literales crudos) → parte de M31.3.
+    Lección: WebFetch de una tabla numérica summarizada dio errores (255≡EOS, Kraft roto); una fuente
+    legible por máquina + validación Kraft/prefijo/vector es lo fiable.
 - **M31.2 Transporte HTTP/2 vivo** — la connection preface + intercambio de SETTINGS + WINDOW_UPDATE +
   multiplexado de streams, todo sobre TLS con **ALPN `h2`** (requiere exponer ALPN en `tls_connect`).
 - **M31.3 Cliente gRPC e2e** — HEADERS (`:path`=método, `content-type: application/grpc`) + DATA con el

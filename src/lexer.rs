@@ -10,7 +10,7 @@
 //! correspondan. Para operadores de dos caracteres (`==`, `->`, …) usamos un
 //! lookahead de un carácter.
 
-use crate::token::{Token, TokenKind};
+use crate::token::{InterpPart, Token, TokenKind};
 
 /// Error léxico con ubicación. Se produce ante un carácter inesperado, una cadena
 /// sin cerrar, un escape inválido o un número mal formado.
@@ -190,6 +190,11 @@ impl Lexer {
                 self.advance(); // consume la comilla de apertura
                 self.byte_string()?
             }
+            // M27.3: cadena interpolada `f"...{expr}..."`. Como `b"..."`, el prefijo va pegado a la comilla.
+            'f' if self.peek() == Some('"') => {
+                self.advance(); // consume la comilla de apertura
+                self.interp_string()?
+            }
             c if c.is_ascii_digit() => self.number()?,
             c if is_ident_start(c) => self.identifier(),
 
@@ -246,8 +251,44 @@ impl Lexer {
 
     /// Lee una cadena `"..."` (ya consumida la comilla de apertura), resolviendo
     /// los escapes `\n \t \\ \"`.
+    /// Cadena normal `"..."`: sin interpolación (las llaves `{` `}` son literales). Compat total.
     fn string(&mut self) -> Result<TokenKind, LexError> {
         let mut value = String::new();
+        loop {
+            match self.peek() {
+                None => return Err(self.error("cadena sin cerrar".into())),
+                Some('\n') => return Err(self.error("salto de línea dentro de una cadena sin cerrar".into())),
+                Some('"') => {
+                    self.advance();
+                    return Ok(TokenKind::Str(value));
+                }
+                Some('\\') => {
+                    self.advance();
+                    match self.peek() {
+                        Some('n') => value.push('\n'),
+                        Some('t') => value.push('\t'),
+                        Some('r') => value.push('\r'),
+                        Some('\\') => value.push('\\'),
+                        Some('"') => value.push('"'),
+                        Some(other) => return Err(self.error(format!("secuencia de escape inválida '\\{}'", other))),
+                        None => return Err(self.error("cadena sin cerrar tras '\\'".into())),
+                    }
+                    self.advance();
+                }
+                Some(c) => {
+                    value.push(c);
+                    self.advance();
+                }
+            }
+        }
+    }
+
+    /// Cadena interpolada `f"...{expr}..."` (M27.3), tras consumir la comilla. Se acumula el literal en
+    /// `cur` y, al encontrar `{expr}`, se cierra el literal y se guarda el código crudo de la expresión
+    /// (balanceando llaves anidadas). `{{`/`}}` escapan una llave literal. Sin `{`, un `Str` normal.
+    fn interp_string(&mut self) -> Result<TokenKind, LexError> {
+        let mut parts: Vec<InterpPart> = Vec::new();
+        let mut cur = String::new();
         loop {
             match self.peek() {
                 None => return Err(self.error("cadena sin cerrar".into())),
@@ -256,16 +297,16 @@ impl Lexer {
                 }
                 Some('"') => {
                     self.advance(); // comilla de cierre
-                    return Ok(TokenKind::Str(value));
+                    break;
                 }
                 Some('\\') => {
                     self.advance(); // la barra invertida
                     match self.peek() {
-                        Some('n') => value.push('\n'),
-                        Some('t') => value.push('\t'),
-                        Some('r') => value.push('\r'), // M14: retorno de carro
-                        Some('\\') => value.push('\\'),
-                        Some('"') => value.push('"'),
+                        Some('n') => cur.push('\n'),
+                        Some('t') => cur.push('\t'),
+                        Some('r') => cur.push('\r'), // M14: retorno de carro
+                        Some('\\') => cur.push('\\'),
+                        Some('"') => cur.push('"'),
                         Some(other) => {
                             return Err(self.error(format!("secuencia de escape inválida '\\{}'", other)))
                         }
@@ -273,12 +314,64 @@ impl Lexer {
                     }
                     self.advance(); // el carácter escapado
                 }
+                Some('{') => {
+                    self.advance();
+                    if self.peek() == Some('{') {
+                        self.advance();
+                        cur.push('{'); // `{{` → llave literal
+                    } else {
+                        // Inicio de una interpolación: se cierra el literal pendiente y se lee la expresión.
+                        if !cur.is_empty() {
+                            parts.push(InterpPart::Lit(std::mem::take(&mut cur)));
+                        }
+                        let mut expr_src = String::new();
+                        let mut depth = 1;
+                        loop {
+                            match self.peek() {
+                                None => return Err(self.error("interpolación '{' sin cerrar en la cadena".into())),
+                                Some('\n') => return Err(self.error("salto de línea dentro de una interpolación".into())),
+                                Some('{') => { depth += 1; expr_src.push('{'); self.advance(); }
+                                Some('}') => {
+                                    depth -= 1;
+                                    self.advance();
+                                    if depth == 0 { break; }
+                                    expr_src.push('}');
+                                }
+                                Some(c) => { expr_src.push(c); self.advance(); }
+                            }
+                        }
+                        if expr_src.trim().is_empty() {
+                            return Err(self.error("interpolación vacía '{}' en la cadena".into()));
+                        }
+                        parts.push(InterpPart::Expr(expr_src));
+                    }
+                }
+                Some('}') => {
+                    self.advance();
+                    if self.peek() == Some('}') {
+                        self.advance();
+                        cur.push('}'); // `}}` → llave literal
+                    } else {
+                        return Err(self.error("'}' suelto en la cadena; usa '}}' para un literal".into()));
+                    }
+                }
                 Some(c) => {
-                    value.push(c);
+                    cur.push(c);
                     self.advance();
                 }
             }
         }
+        // Cierra el literal final (o el string vacío si no hubo partes).
+        if !cur.is_empty() || parts.is_empty() {
+            parts.push(InterpPart::Lit(cur));
+        }
+        // Sin interpolaciones → un `Str` normal (compat hacia atrás).
+        if parts.len() == 1 {
+            if let InterpPart::Lit(s) = &parts[0] {
+                return Ok(TokenKind::Str(s.clone()));
+            }
+        }
+        Ok(TokenKind::InterpStr(parts))
     }
 
     /// Lee un literal de bytes `b"..."` (M16.1a), tras consumir la comilla de apertura. Acepta los

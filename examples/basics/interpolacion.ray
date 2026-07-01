@@ -1,0 +1,31 @@
+// Interpolación de strings (M27.3): una cadena con prefijo `f"…{expr}…"` incrusta el valor de una
+// expresión, convertida con `to_string`. Sustituye las largas cadenas de `+ to_string(...)`. El prefijo
+// `f` (como `b"..."` de bytes) la distingue de una cadena normal `"..."`, donde `{` es literal (compat).
+
+fn area(base: int, altura: int) -> int { base * altura / 2 }
+
+fn main() {
+    let nombre = "Ada";
+    let anio = 1815;
+
+    // Variables y texto.
+    print(f"{nombre} nació en {anio}.");                 // Ada nació en 1815.
+
+    // Expresiones arbitrarias dentro de `{}`.
+    print(f"Un triángulo 6x4 tiene área {area(6, 4)}."); // ... área 12.
+
+    let x = 7;
+    print(f"{x} al cuadrado es {x * x}, y su mitad {x / 2}."); // 7 ... 49 ... 3.
+
+    // Cualquier tipo imprimible: int, float, bool, char, string.
+    print(f"bool={true}, float={2.5}, char={'!'}");      // bool=true, float=2.5, char=!
+
+    // Llaves literales: se escriben dobladas.
+    print(f"un objeto JSON: {{ \"clave\": {x} }}");       // un objeto JSON: { "clave": 7 }
+
+    // Se combina con `for` (M27.2) y tuplas (M27.1).
+    for i in 1..4 {
+        let par = (i, i * i);
+        print(f"  {par.0}² = {par.1}");                   // 1²=1, 2²=4, 3²=9
+    }
+}

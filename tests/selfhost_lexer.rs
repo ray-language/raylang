@@ -37,6 +37,8 @@ fn kind_str(k: &TokenKind) -> String {
         TokenKind::Int(n) => format!("Int({})", n),
         TokenKind::Float(f) => format!("Float({})", f),
         TokenKind::Str(s) => format!("Str(\"{}\")", escape(s)),
+        // M27.3: cadena interpolada (el lexer auto-alojado aún no la produce; no aparece en el corpus).
+        TokenKind::InterpStr(_) => "InterpStr".into(),
         TokenKind::Char(c) => format!("Char('{}')", escape(&c.to_string())),
         // M16: el lexer auto-alojado no tokeniza `bytes`/`b"..."`; estos tokens no aparecen en el corpus
         // (ningún archivo probado los usa), pero el `match` debe ser exhaustivo.

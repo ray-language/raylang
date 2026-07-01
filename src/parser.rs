@@ -19,7 +19,7 @@
 //! hacia la izquierda: `1 - 2 - 3` → `(1 - 2) - 3` (asociativo a la izquierda).
 
 use crate::ast::*;
-use crate::token::{Token, TokenKind};
+use crate::token::{InterpPart, Token, TokenKind};
 
 /// Error sintáctico con ubicación.
 #[derive(Debug, Clone, PartialEq)]
@@ -727,6 +727,40 @@ impl Parser {
         })
     }
 
+    /// Baja una cadena interpolada (M27.3) a la concatenación `"lit" + to_string(expr) + …`. Cada
+    /// fragmento de expresión se re-lexea y re-parsea como una expresión completa. Las posiciones usan
+    /// las de la cadena (los errores del fragmento traen el detalle en el mensaje).
+    fn build_interp(&mut self, parts: Vec<InterpPart>, line: usize, col: usize) -> Result<Expr, ParseError> {
+        let mut acc: Option<Expr> = None;
+        for part in parts {
+            let piece = match part {
+                InterpPart::Lit(s) => Expr { kind: ExprKind::Str(s), line, col },
+                InterpPart::Expr(src) => {
+                    let toks = crate::lexer::lex(&src)
+                        .map_err(|e| ParseError { msg: format!("en la interpolación: {}", e.msg), line, col })?;
+                    let mut sub = Parser::new(toks);
+                    let e = sub.expression()
+                        .map_err(|e| ParseError { msg: format!("en la interpolación: {}", e.msg), line, col })?;
+                    if !sub.is_at_end() {
+                        return Err(ParseError { msg: "la interpolación debe ser una sola expresión".into(), line, col });
+                    }
+                    // to_string(e) — convierte primitivos/string a texto para concatenar.
+                    let callee = Expr { kind: ExprKind::Ident("to_string".into()), line, col };
+                    Expr { kind: ExprKind::Call { callee: Box::new(callee), args: vec![e] }, line, col }
+                }
+            };
+            acc = Some(match acc {
+                None => piece,
+                Some(prev) => Expr {
+                    kind: ExprKind::Binary { op: BinaryOp::Add, left: Box::new(prev), right: Box::new(piece) },
+                    line,
+                    col,
+                },
+            });
+        }
+        Ok(acc.expect("una cadena interpolada tiene al menos una parte"))
+    }
+
     /// Parsea una expresión con el literal de struct desactivado (para la cabecera del `for`, M27.2).
     fn expr_no_struct(&mut self) -> Result<Expr, ParseError> {
         let saved = self.no_struct_lit;
@@ -1096,6 +1130,8 @@ impl Parser {
             TokenKind::Int(v) => ExprKind::Int(v),
             TokenKind::Float(v) => ExprKind::Float(v),
             TokenKind::Str(s) => ExprKind::Str(s),
+            // M27.3: cadena interpolada → concatenación con `to_string` de cada expresión.
+            TokenKind::InterpStr(parts) => return self.build_interp(parts, tok.line, tok.col),
             TokenKind::Char(c) => ExprKind::Char(c),
             TokenKind::Bytes(b) => ExprKind::Bytes(b),
             TokenKind::True => ExprKind::Bool(true),

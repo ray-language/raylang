@@ -4273,9 +4273,15 @@ Lo que más limpia el código existente y futuro. Toca lexer/parser/checker/ambo
   en la cabecera del `for` (sin paréntesis) se desactiva el literal de struct (flag `no_struct_lit`, como
   Rust). Verificado en el oráculo (`for_oraculo`, incl. anidados/`return`/Map) + ejemplo
   `basics/for_bucles.ray`. Excluido del oráculo de self-hosting (el toolchain aún no lo soporta).
-- **M27.3 Interpolación de strings** (`"x = {x}, y = {f(z)}"`). El segundo mayor golpe: sustituye las
-  cadenas de `+ to_string(...)`. Puro lexer/parser: se desazucara a concatenación con `to_string` de cada
-  expresión interpolada. Escape `{{`/`}}`.
+- **M27.3 Interpolación de strings** ✅ (**prefijo `f"…{expr}…"`**, como `b"..."` de bytes). El segundo
+  mayor golpe. **Puro léxico/sintaxis**: el lexer parte la f-string en partes (`InterpPart::Lit`/`Expr`,
+  token `InterpStr`; balancea llaves anidadas; `{{`/`}}` escapan), y el parser **re-lexea+re-parsea** cada
+  fragmento como expresión y baja todo a `"lit" + to_string(expr) + …`. **Decisión clave**: el prefijo `f`
+  (en vez de que todo `"..."` interpole) preserva la **compat total** — una cadena normal `"…{…}…"` deja
+  las llaves literales (imprescindible: el código existente genera JSON/HPACK con `{` a mansalva). Cualquier
+  tipo con `to_string` (primitivos/string); para structs, interpolar un campo o `.mostrar()`. Ambos motores
+  lo ven como concatenación (cero cambios de runtime). Verificado en el oráculo (`interpolacion_oraculo`,
+  incl. que `"..."` NO interpola) + ejemplo `basics/interpolacion.ray`. Excluido del oráculo de self-hosting.
 - **M27.4 Casts numéricos** (`x as int` / `y as float`). Cierra el papercut de OAuth2 (`parse_int(to_string
   (f))`). Reusa la keyword `as` (hoy solo alias de import) en posición de expresión; opcode de conversión
   (o builtin) en ambos motores.

@@ -3088,6 +3088,7 @@ fn struct_show_body(a: &Annotation, name: &str, fields: &[(String, Type)]) -> Re
     for (n, ty) in fields {
         partes.push(format!("\"{n}: \" + {}", render_to_string(a, &format!("self.{n}"), ty)?));
     }
+    // El string generado usa una cadena normal `"..."` (no `f"..."`), donde `{` es literal (M27.3).
     Ok(format!("        \"{name} {{ \" + {} + \" }}\"", partes.join(" + \", \" + ")))
 }
 

@@ -664,6 +664,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "binario.ray", "http.ray", "webserver.ray",
         "tuplas.ray", // M27.1: tuplas (el toolchain auto-alojado aún no las soporta)
         "for_bucles.ray", // M27.2: bucle `for` (el toolchain auto-alojado aún no lo soporta)
+        "interpolacion.ray", // M27.3: interpolación de strings (idem)
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops

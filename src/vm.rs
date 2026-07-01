@@ -2720,6 +2720,22 @@ mod tests {
     }
 
     /// M27.2: bucle `for` — rango, arreglo, string, Map `(k, v)`, `_`. Ambos motores coinciden.
+    /// M27.3: interpolación de strings. Desazucara a `+ to_string(...)` → ambos motores coinciden.
+    /// Se enruta a `int` comparando la longitud del resultado (print está diferido en `oracle_int`).
+    #[test]
+    fn interpolacion_oraculo() {
+        oracle_int("len(f\"x={1}\")");                     // "x=1" → 3
+        oracle_int("len(f\"{1}+{2}={3}\")");               // "1+2=3" → 5
+        oracle_int("if (f\"a{1}b\" == \"a1b\") { 1 } else { 0 }");   // 1
+        oracle_int("if (f\"{2 + 3}\" == \"5\") { 1 } else { 0 }");   // 1
+        oracle_int("if (f\"{true}/{'z'}\" == \"true/z\") { 1 } else { 0 }"); // 1
+        oracle_int("len(f\"llave {{lit}}\")"); // {{ }} literales → "llave {lit}" = 11
+        // Una cadena normal NO interpola: `{n}` es literal.
+        oracle_int("len(\"{n}\")");                        // 3 (literal "{n}")
+        // Interpolación con una variable local.
+        oracle_program("fn main() -> int { let n = 42; if (f\"n={n}\" == \"n=42\") { 1 } else { 0 } }");
+    }
+
     #[test]
     fn for_oraculo() {
         oracle_program("fn main() -> int { var s = 0; for i in 0..5 { s = s + i; } s }"); // 10

@@ -673,6 +673,8 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "enteros.ray", // M28.3: enteros con tamaño u8/u32/u64 + `for` (idem)
         "regex.ray", // M29.1c: el motor de regex usa tuplas `Option<(int,int)>` (M27.1, idem)
         "regex_demo.ray", // M29.1: demo del motor de regex; usa interpolación f"..." (idem)
+        "chacha20.ray", // M30.1a: ChaCha20 usa enteros con tamaño u32 (M28.3, idem)
+        "chacha20_demo.ray", // M30.1a: demo usa `for`/u32 (idem)
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops

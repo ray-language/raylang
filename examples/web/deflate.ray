@@ -14,7 +14,7 @@
 // Empaquetado de bits: DEFLATE pone los bits LSB-first en cada octeto, pero los códigos Huffman se
 // escriben MSB-first → `write_bits` (LSB, para los bits extra) y `write_huff` (MSB, para los códigos).
 
-from inflate import crc32;
+from std/inflate import crc32;
 
 // --- Escritor de bits ---
 struct BitWriter {

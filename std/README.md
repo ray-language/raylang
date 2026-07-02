@@ -57,4 +57,10 @@ Operan sobre `bytes` (convierte un `string` con el builtin `to_bytes`).
 - **`std/sha1`** — `sha1`/`sha1_hex`.
 - **`std/hmac`** — `hmac_sha256`/`hmac_sha256_hex` (sobre `std/sha256` + `std/hex`).
 
+### Compresión (M40.7c)
+
+- **`std/inflate`** — `inflate_raw`/`zlib_inflate`/`gunzip` (DEFLATE/zlib/gzip), `crc32`.
+- **`std/deflate`** — `deflate_raw`/`zlib_compress`/`gzip_compress` (sobre `std/inflate` para el CRC).
+- **`std/huffman`** — `huffman_encode`/`huffman_decode`.
+
 (Más módulos por venir; ver DESIGN §42.9.)

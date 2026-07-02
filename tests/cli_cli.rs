@@ -400,3 +400,33 @@ fn stdlib_hashing_vectores_conocidos() {
     assert!(out.contains("b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad"), "hmac_sha256(\"\",\"\")\n{out}");
     assert!(out.contains("a9993e364706816aba3e25717850c26c9cd0d89d"), "sha1(abc)\n{out}");
 }
+
+#[test]
+fn stdlib_compresion_roundtrip() {
+    // M40.7c: compresión promovida a std/. deflate → std/inflate (namespacado en el ejemplo).
+    let base = tmp("std_comp");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "import std/inflate;\n\
+         import std/deflate;\n\
+         import std/huffman;\n\
+         fn main() -> int {\n\
+             let comp = deflate.deflate_raw(to_bytes(\"raylang raylang raylang comprime\"));\n\
+             match (inflate.inflate_raw(comp)) {\n\
+                 Result.Ok(back) => { match (from_utf8(back)) {\n\
+                     Result.Ok(s) => { print(s); }, Result.Err(e) => { print(e); },\n\
+                 } }, Result.Err(e) => { print(e); },\n\
+             }\n\
+             match (huffman.huffman_decode(huffman.huffman_encode([65, 65, 66, 67]))) {\n\
+                 Result.Ok(d) => { print(d); }, Result.Err(e) => { print(e); },\n\
+             }\n\
+             0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con imports de std compresión debe salir 0\n{err}");
+    assert!(out.contains("raylang raylang raylang comprime"), "deflate→inflate roundtrip\n{out}");
+    assert!(out.contains("[65, 65, 66, 67]"), "huffman roundtrip\n{out}");
+}

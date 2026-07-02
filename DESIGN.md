@@ -5461,3 +5461,8 @@ corran (un temporal de test sin `hex.ray`/`sha256.ray` al lado resuelve igual �
 `hmac_cli`/`sha512_cli`/`sigv4_cli`, que copian estas libs a un dir temporal). API sobre `bytes` (`string`
 → `bytes` con el builtin `to_bytes`). Vectores conocidos en `stdlib_hashing_vectores_conocidos` (cli_cli):
 sha256("abc"), sha512(""), hmac_sha256("",""), sha1("abc").
+
+**M40.7c — compresión**: `std/inflate` (`inflate_raw`/`zlib_inflate`/`gunzip` + `crc32`; hoja), `std/huffman`
+(`huffman_encode`/`huffman_decode`; hoja) y `std/deflate` (`deflate_raw`/`zlib_compress`/`gzip_compress`;
+→`std/inflate` para el CRC). Test de roundtrip `stdlib_compresion_roundtrip` (cli_cli): deflate→inflate
+recupera el texto, huffman ida y vuelta. `deflate_cli`/`inflate_cli`/`http_cli` intactos.

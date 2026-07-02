@@ -36,6 +36,10 @@ const MODULOS: &[(&str, &str)] = &[
     ("std/sha256", include_str!("../examples/web/sha256.ray")),
     ("std/sha512", include_str!("../examples/web/sha512.ray")),
     ("std/hmac", include_str!("../examples/web/hmac.ray")),
+    // Compresión (M40.7c). `deflate` → `std/inflate` (namespacado en el ejemplo).
+    ("std/inflate", include_str!("../examples/web/inflate.ray")),
+    ("std/deflate", include_str!("../examples/web/deflate.ray")),
+    ("std/huffman", include_str!("../examples/web/huffman.ray")),
 ];
 
 /// La fuente embebida del módulo `nombre` (`"std/math"`), o `None` si no es un módulo de la stdlib.

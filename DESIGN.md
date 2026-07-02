@@ -1710,11 +1710,31 @@ funciones, tipos); métodos/UFCS quedan limitados. *Completion*, *find-reference
 *signature help* → futuro. **Runtime y semántica intactos**: M10.2b es introspección; no cambia qué
 programas son válidos ni qué significan.
 
+#### 19.2g LSP con soporte de módulos (diagnósticos multi-archivo)
+
+Hasta aquí el LSP analizaba **un archivo aislado** (lex→parser→checker sobre el buffer). En un
+proyecto multi-archivo (M11.3) eso marcaba **errores espurios**: un `from geo import duplicar;`
+daba "función 'duplicar' no declarada" porque nunca se corría el loader. Se arregla en los
+**diagnósticos**:
+
+- El loader gana `load_fuente(entry, fuente, dep_roots)`: como `load_con_deps` pero usa el **buffer
+  en memoria** para el archivo de entrada (cambios sin guardar) y lee los imports **de disco**.
+- `analizar_modular(uri, src)` corre el loader sobre el buffer, chequea el **programa fusionado** con
+  `check_all` (multi-error) y publica solo los errores que caen en **este** archivo (banda de la
+  entrada, `delta 0` → la línea global es la local; los de otros módulos pertenecen a sus URIs). Si
+  el buffer no es un `file:` o no parsea, cae al análisis de un solo archivo (errores de sintaxis
+  precisos). Si el loader falla con la entrada válida (import ausente, cápsula), un diagnóstico al
+  inicio. `.ray-deps/` (M39c) se resuelve como en `ray run`, así que las dependencias también cuentan.
+
+Hover/definición/references/rename/completion **siguen siendo de un solo archivo** (no cruzan
+módulos aún): el índice semántico se construye sobre el buffer, sin loader. Diferido.
+
 ### 19.3 Deferido (más allá de M10.1)
-- **LSP**: diagnósticos (M10.2 §19.2) + hover/definición (M10.2b §19.2b) + *find-references*/*rename*/
-  *completion* (cluster 4) + **M10.2f**: hover/def de **tipos**, **signature help** y **completion por
-  ámbito** (firma textual robusta ante el doc a medio escribir; alcance = función, sin spans). Quedan:
-  hover/def del **nombre de método** (sin posición propia) y completion por **bloque** anidado.
+- **LSP**: diagnósticos (M10.2 §19.2, **multi-archivo** §19.2g) + hover/definición (M10.2b §19.2b) +
+  *find-references*/*rename*/*completion* (cluster 4) + **M10.2f**: hover/def de **tipos**, **signature
+  help** y **completion por ámbito** (firma textual robusta ante el doc a medio escribir; alcance =
+  función, sin spans). Quedan: hover/def del **nombre de método** (sin posición propia), completion por
+  **bloque** anidado, y **hover/def/completion cruzando módulos** (hoy solo diagnósticos usan el loader).
 - `@builtin`/`@extern` (limpiar el *special-casing* de `print`/`len`/`push`), `@deprecated`,
   `@inline`, `@delegate` → anotaciones futuras.
 - **Derivación recursiva** (`Eq` de enums con payload-enum) y **derive genérico** → futuro.

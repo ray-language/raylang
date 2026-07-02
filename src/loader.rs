@@ -86,6 +86,19 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
 /// protegidos por el enforcement de cápsula (M11.6b) sin código nuevo. Con `dep_roots` vacío el
 /// comportamiento es idéntico a antes (un solo `root`).
 pub fn load_con_deps(entry: &Path, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
+    load_impl(entry, dep_roots, None)
+}
+
+/// Como [`load_con_deps`], pero usa `fuente` como contenido del **archivo de entrada** en vez de
+/// leerlo del disco (los imports sí se leen de disco). Es lo que necesita el **LSP**: analizar el
+/// buffer en memoria (con cambios sin guardar) mientras resuelve sus imports desde los archivos.
+pub fn load_fuente(entry: &Path, fuente: &str, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
+    load_impl(entry, dep_roots, Some(fuente))
+}
+
+/// Núcleo de la carga. `entry_source`, si está, es el contenido del archivo de entrada (buffer en
+/// memoria); si es `None`, la entrada se lee del disco como los demás módulos.
+fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>) -> Result<Loaded, LoadError> {
     let project_root = entry.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
     // Raíces de búsqueda de módulos: el proyecto primero, luego la caché de dependencias.
     let mut roots = vec![project_root];
@@ -100,9 +113,13 @@ pub fn load_con_deps(entry: &Path, dep_roots: &[PathBuf]) -> Result<Loaded, Load
         if !visitados.insert(name.clone()) {
             continue; // ya cargado (los ciclos se cierran aquí)
         }
-        let source = std::fs::read_to_string(&path).map_err(|e| LoadError {
-            message: format!("no se pudo leer el módulo '{}' ({}): {}", name, path.display(), e),
-        })?;
+        // El archivo de entrada puede venir de un buffer en memoria (LSP); el resto, del disco.
+        let source = match entry_source {
+            Some(s) if is_entry => s.to_string(),
+            _ => std::fs::read_to_string(&path).map_err(|e| LoadError {
+                message: format!("no se pudo leer el módulo '{}' ({}): {}", name, path.display(), e),
+            })?,
+        };
         let program = parse_source(&name, &source)?;
         // Dependencias del módulo: tanto `import M;` como `from M import …;` cargan `M`.
         let deps = program.imports.iter().map(|i| (&i.module, i.line, i.col))

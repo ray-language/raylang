@@ -17,8 +17,9 @@
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
+use std::path::{Path, PathBuf};
 
-use crate::{checker, lexer, parser};
+use crate::{checker, lexer, loader, parser};
 use json::Json;
 
 /// Arranca el servidor: lee mensajes de stdin y escribe respuestas a stdout hasta `exit`.
@@ -391,9 +392,10 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
         items.push((b.to_string(), 3));
     }
     for kw in [
-        "let", "var", "fn", "if", "else", "while", "match", "struct", "enum", "trait", "impl",
-        "return", "true", "false", "dyn", "pub", "import", "from", "as",
-        "int", "float", "bool", "string", "char",
+        "let", "var", "const", "fn", "if", "else", "while", "for", "in", "match",
+        "struct", "enum", "trait", "impl", "return", "true", "false", "dyn", "pub",
+        "import", "from", "as",
+        "int", "float", "bool", "string", "char", "bytes", "u8", "u32", "u64",
     ] {
         items.push((kw.to_string(), 14));
     }
@@ -717,9 +719,91 @@ fn error_metodo(id: Json, method: &str) -> Json {
 
 /// Analiza la fuente y construye la notificación `publishDiagnostics` para ese documento.
 fn diagnosticos(uri: &str, src: &str) -> Json {
-    // M33c: todos los errores del documento (una lista vacía borra los previos).
-    let diags = analizar_todos(src).iter().map(|d| diagnostico_json(src, d)).collect();
-    publish(uri, diags)
+    // Soporte de módulos: si el documento es un archivo, se analiza **con el loader** (resolviendo
+    // sus imports desde disco) para no marcar errores espurios en proyectos multi-archivo. Si no es
+    // un archivo o el buffer ni siquiera parsea, se cae al análisis de un solo archivo (multi-error).
+    let diags = analizar_modular(uri, src).unwrap_or_else(|| analizar_todos(src));
+    let json = diags.iter().map(|d| diagnostico_json(src, d)).collect();
+    publish(uri, json)
+}
+
+/// Diagnósticos **con módulos**: corre el loader sobre el buffer de entrada (imports leídos de
+/// disco) y devuelve los errores que caen en ESTE archivo, con su línea local. Devuelve `None`
+/// cuando conviene caer al análisis de un solo archivo: si el URI no es un `file:` (buffer sin
+/// guardar) o si el buffer de entrada ni siquiera parsea (así el fallback da errores de sintaxis
+/// precisos y multi-error sobre la entrada, en vez de un único error del loader).
+fn analizar_modular(uri: &str, src: &str) -> Option<Vec<Diag>> {
+    let path = uri_to_path(uri)?;
+    let deps = dep_roots_for(&path);
+    match loader::load_fuente(&path, src, &deps) {
+        Ok(loaded) => {
+            // El módulo de entrada es la banda que empieza más arriba (delta 0 → línea local =
+            // global). Solo publicamos SUS errores: los de otros módulos pertenecen a sus URIs.
+            let entry_start = loaded.modules.iter().map(|m| m.start_line).min().unwrap_or(1);
+            let mut program = loaded.program;
+            let diags = checker::check_all(&mut program)
+                .into_iter()
+                .filter_map(|e| {
+                    let m = loaded.modules.iter().rev().find(|m| m.start_line <= e.line)?;
+                    (m.start_line == entry_start).then(|| Diag {
+                        line: e.line - m.start_line + 1,
+                        col: e.col,
+                        len: e.len,
+                        message: e.to_string(),
+                    })
+                })
+                .collect();
+            Some(diags)
+        }
+        Err(e) => {
+            // El loader no pudo cargar. Si el buffer de entrada parsea, el fallo es de un import
+            // (módulo ausente, cápsula violada, dependencia que no parsea) → un diagnóstico al
+            // inicio. Si no parsea, `None` para que el fallback dé los errores de sintaxis precisos.
+            let entrada_parsea = lexer::lex(src).ok().and_then(|t| parser::parse(t).ok()).is_some();
+            entrada_parsea.then(|| vec![Diag { line: 1, col: 1, len: 1, message: e.message }])
+        }
+    }
+}
+
+/// Convierte un URI `file://…` a una ruta del sistema (decodificando `%XX`). `None` si no es un
+/// `file:` (p. ej. un buffer `untitled:` sin archivo → se analiza en modo de un solo archivo).
+fn uri_to_path(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    // `file:///Users/…` → host vacío; la ruta arranca en el tercer '/'. Un raro `localhost` se ignora.
+    let ruta = rest.strip_prefix("localhost").unwrap_or(rest);
+    Some(PathBuf::from(percent_decode(ruta)))
+}
+
+/// Decodifica los `%XX` de un URI (p. ej. `%20` → espacio). Sin dependencias.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    let hex = |c: u8| (c as char).to_digit(16);
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2]))
+        {
+            out.push((h * 16 + l) as u8);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Raíces de dependencias para el loader (M39c): la caché `.ray-deps/` del proyecto que contiene
+/// `entry` (subiendo hasta el `ray.toml`), si existe. Alinea el LSP con `ray run`.
+fn dep_roots_for(entry: &Path) -> Vec<PathBuf> {
+    let dir = entry.parent().unwrap_or(Path::new("."));
+    let raiz = crate::manifest::Manifest::find(dir)
+        .and_then(|toml| toml.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| dir.to_path_buf());
+    let cache = raiz.join(".ray-deps");
+    if cache.is_dir() { vec![cache] } else { Vec::new() }
 }
 
 /// Envuelve una lista de diagnósticos en la notificación `textDocument/publishDiagnostics`.
@@ -1150,6 +1234,44 @@ mod tests {
         #[test]
     fn analiza_programa_valido_sin_errores() {
         assert!(analizar("fn main() -> int { 1 + 2 }").is_none());
+    }
+
+    #[test]
+    fn diagnosticos_con_modulos() {
+        // Un proyecto de dos archivos: `geo.ray` (en disco) y la entrada `main.ray` (en el buffer).
+        let dir = std::env::temp_dir().join("ray_lsp_mod");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("geo.ray"), "pub fn duplicar(x: int) -> int { x * 2 }\n").unwrap();
+        let entry = dir.join("main.ray");
+        let uri = format!("file://{}", entry.display());
+
+        // (a) Un import válido NO produce diagnósticos (antes: "función 'duplicar' no declarada").
+        let src = "from geo import duplicar;\nfn main() -> int { duplicar(21) }\n";
+        let ds = analizar_modular(&uri, src).expect("modo modular (es un archivo)");
+        assert!(ds.is_empty(), "un import válido no debe dar errores: {:?}",
+            ds.iter().map(|d| &d.message).collect::<Vec<_>>());
+
+        // (b) Un error de tipos EN LA ENTRADA sí se reporta, con la línea local.
+        let src = "from geo import duplicar;\nfn main() -> int { duplicar(true) }\n";
+        let ds = analizar_modular(&uri, src).expect("modular");
+        assert_eq!(ds.len(), 1, "{:?}", ds.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(ds[0].line, 2, "línea local de la entrada, no la global del programa fusionado");
+
+        // (c) Un import a un módulo inexistente se reporta (la entrada parsea → error del loader).
+        let src = "from noexiste import cosa;\nfn main() -> int { 0 }\n";
+        let ds = analizar_modular(&uri, src).expect("modular");
+        assert_eq!(ds.len(), 1);
+        assert!(ds[0].message.contains("noexiste"), "{}", ds[0].message);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn uri_a_ruta_decodifica() {
+        assert_eq!(uri_to_path("file:///a/b/c.ray"), Some(PathBuf::from("/a/b/c.ray")));
+        assert_eq!(uri_to_path("file:///a/mi%20carpeta/x.ray"), Some(PathBuf::from("/a/mi carpeta/x.ray")));
+        assert_eq!(uri_to_path("untitled:Untitled-1"), None); // buffer sin archivo → single-file
     }
 
     #[test]

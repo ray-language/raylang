@@ -66,5 +66,14 @@ fn main() -> int {
   + `std/url`.
 - **`net/webserver`** — servidor HTTP async + SSE (sobre el scheduler de fibras). Hoja.
 
-(Más módulos —observabilidad `time`/`log`/`metrics`, el micro-framework web `framework`— se irán añadiendo.
-Los que dependen de sockets vivos se prueban con servidores de juguete, no en el oráculo.)
+### Observabilidad
+
+- **`net/time`** — fecha/hora: `now_utc`, `from_epoch_millis`, `to_iso8601`, `date_stamp`. (`now_utc` no
+  es determinista; el formateo sí.)
+- **`net/log`** — logging estructurado (niveles, campos, JSON). Sobre `net/time`.
+- **`net/metrics`** — métricas estilo Prometheus (counter/gauge/histogram + labels), `render` en formato
+  de exposición. Hoja.
+
+Los que dependen de **sockets vivos** (http/http2/websocket/dns/udp/redis/postgres/oauth2) se prueban con
+servidores de juguete, no en el oráculo. Pendiente: `framework` (micro-framework web) — una interacción
+de UFCS con imports calificados por resolver.

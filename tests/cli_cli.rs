@@ -783,3 +783,35 @@ fn paquete_net_websocket_accept_key() {
     assert_eq!(code, 0, "run con net/websocket debe salir 0\n{err}");
     assert!(out.contains("s3pPLMBiTxaQ9kYGzzhZRbK+xOo="), "handshake WebSocket RFC 6455\n{out}");
 }
+
+#[test]
+fn paquete_net_observabilidad() {
+    // M40.8e: time (formateo determinista) + metrics (Prometheus). log → net/time (dep interna).
+    let repo = env!("CARGO_MANIFEST_DIR");
+    let base = tmp("net_obs");
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(
+        base.join("ray.toml"),
+        format!("[package]\nname = \"obs\"\nversion = \"0.1.0\"\n\n[dependencies]\nnet = \"path:{repo}/packages/net\"\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("src/main.ray"),
+        "import net/time;\n\
+         import net/metrics;\n\
+         fn main() -> int {\n\
+         \x20 print(time.to_iso8601(time.from_epoch_millis(1609459200000)));\n\
+         \x20 let reg = metrics.registry();\n\
+         \x20 metrics.register_counter(reg, \"hits\", \"total\");\n\
+         \x20 metrics.inc(reg, \"hits\", metrics.no_labels());\n\
+         \x20 metrics.inc(reg, \"hits\", metrics.no_labels());\n\
+         \x20 print(metrics.render(reg));\n\
+         \x20 0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run"]);
+    assert_eq!(code, 0, "run con net/time+metrics debe salir 0\n{err}");
+    assert!(out.contains("2021-01-01T00:00:00Z"), "time formatea el epoch\n{out}");
+    assert!(out.contains("hits 2"), "metrics cuenta y renderiza Prometheus\n{out}");
+}

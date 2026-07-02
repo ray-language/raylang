@@ -1,0 +1,112 @@
+// Logging estructurado en JSON, escrito EN raylang. Cero runtime nuevo. Cada entrada es una línea JSON
+// con marca de tiempo, nivel, servicio, mensaje y campos estructurados → lista para que la recoja un
+// agregador (Loki, ELK, CloudWatch…). Importable:
+//   from log import logger, debug, info, warn, error, field, field_int, field_bool, emit, render;
+//
+// API encadenable por UFCS (cross-module): `info(lg, "login").field("user", "ada").field_int("n", 3).emit();`
+// Niveles: DEBUG=0, INFO=1, WARN=2, ERROR=3. El logger filtra por debajo de su `min_level`.
+
+from net/time import now_utc, to_iso8601;
+
+pub struct Logger {
+    service: string,
+    min_level: int,
+}
+
+// Un campo estructurado: clave, valor ya formateado, y si va entre comillas (string) o crudo (número/bool).
+struct Field {
+    key: string,
+    value: string,
+    quoted: bool,
+}
+
+// Una entrada en construcción: el logger, el nivel, el mensaje y los campos acumulados.
+pub struct LogEntry {
+    lg: Logger,
+    level: int,
+    msg: string,
+    fields: [Field],
+}
+
+pub fn logger(service: string) -> Logger {
+    Logger { service: service, min_level: 0 }
+}
+
+// Logger con un nivel mínimo (descarta por debajo).
+pub fn with_level(lg: Logger, min_level: int) -> Logger {
+    Logger { service: lg.service, min_level: min_level }
+}
+
+fn at(lg: Logger, level: int, msg: string) -> LogEntry {
+    LogEntry { lg: lg, level: level, msg: msg, fields: [] }
+}
+
+pub fn debug(lg: Logger, msg: string) -> LogEntry { at(lg, 0, msg) }
+pub fn info(lg: Logger, msg: string) -> LogEntry { at(lg, 1, msg) }
+pub fn warn(lg: Logger, msg: string) -> LogEntry { at(lg, 2, msg) }
+pub fn error(lg: Logger, msg: string) -> LogEntry { at(lg, 3, msg) }
+
+// Añade un campo string (encadenable). Muta la entrada por referencia y la devuelve.
+pub fn field(e: LogEntry, key: string, value: string) -> LogEntry {
+    push(e.fields, Field { key: key, value: value, quoted: true });
+    e
+}
+pub fn field_int(e: LogEntry, key: string, value: int) -> LogEntry {
+    push(e.fields, Field { key: key, value: to_string(value), quoted: false });
+    e
+}
+pub fn field_bool(e: LogEntry, key: string, value: bool) -> LogEntry {
+    push(e.fields, Field { key: key, value: to_string(value), quoted: false });
+    e
+}
+
+fn level_name(level: int) -> string {
+    if (level <= 0) { "DEBUG" }
+    else { if (level == 1) { "INFO" }
+    else { if (level == 2) { "WARN" }
+    else { "ERROR" }}}
+}
+
+// Escapa una cadena para incrustarla en JSON (comillas, barra, y los controles comunes).
+fn json_escape(s: string) -> string {
+    var out = "";
+    var i = 0;
+    while (i < len(s)) {
+        let c = s[i];
+        if (c == '"') { out = out + "\\\""; }
+        else { if (c == '\\') { out = out + "\\\\"; }
+        else { if (c == '\n') { out = out + "\\n"; }
+        else { if (c == '\t') { out = out + "\\t"; }
+        else { if (c == '\r') { out = out + "\\r"; }
+        else { out = out + to_string(c); }}}}}
+        i = i + 1;
+    }
+    out
+}
+
+// Renderiza la entrada como una línea JSON con la marca de tiempo `ts` dada (determinista → testeable).
+// El orden de claves es fijo: ts, level, service, msg, y luego los campos en orden de adición.
+pub fn render(e: LogEntry, ts: string) -> string {
+    var out = "{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(e.level) + "\",\"service\":\""
+        + json_escape(e.lg.service) + "\",\"msg\":\"" + json_escape(e.msg) + "\"";
+    var i = 0;
+    while (i < len(e.fields)) {
+        let f = e.fields[i];
+        out = out + ",\"" + json_escape(f.key) + "\":";
+        if (f.quoted) {
+            out = out + "\"" + json_escape(f.value) + "\"";
+        } else {
+            out = out + f.value;
+        }
+        i = i + 1;
+    }
+    out + "}"
+}
+
+// Emite la entrada (a stdout) si su nivel alcanza el mínimo del logger. La marca de tiempo es la actual
+// en UTC (ISO 8601). Para una salida determinista (tests), usa `render(e, ts)` con un `ts` fijo.
+pub fn emit(e: LogEntry) {
+    if (e.level >= e.lg.min_level) {
+        print(render(e, to_iso8601(now_utc())));
+    }
+}

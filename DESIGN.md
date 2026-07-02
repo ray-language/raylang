@@ -5118,3 +5118,28 @@ expresión `if` en el brazo `_`. El patrón usa la **misma gramática que el mat
 calificadas: `if let Option.Some(v) = o`). Checker, motores y fmt lo ven como un `match` corriente
 (fmt lo reimprime como match, lossy como el resto del azúcar). Oráculo `if_let_oraculo`. Cero cambios
 fuera del parser. Siguiente: **M40.1c** (patrones anidados).
+
+### 42.3 M40.1c — patrones de variante anidados
+
+Un sub-patrón de variante deja de ser un binding plano y pasa a ser un **patrón completo, recursivo**:
+`match (r) { Result.Ok(Option.Some(v)) => v, Result.Ok(_) => …, Result.Err(e) => … }`.
+
+- **AST**: `PatternKind::Variant.bindings: Vec<Option<String>>` → `subpatterns: Vec<Pattern>` (recursivo).
+  El viejo `None` es un `Wildcard`; el viejo `Some(n)` un `Binding(n)`.
+- **Parser**: cada posición se parsea con `pattern()` (recursivo).
+- **Checker**: `check_pattern` se parte en `check_subpattern` (recursivo: resuelve el enum del **tipo**
+  de cada sub-valor —el payload sustituido—, no de un parámetro externo; recurre sobre los sub-patrones)
+  + `registrar_cobertura` (exhaustividad **conservadora**: una variante cuenta como cubierta solo si
+  TODOS sus sub-patrones son catch-all; un sub-patrón anidado no la marca → hace falta un fallback).
+- **Intérprete**: `match_pattern` recursivo (un sub-patrón que no casa hace fallar el brazo entero).
+- **VM**: `emit_pattern_test` recursivo — cada `EnumTagEq` (a cualquier profundidad) que puede fallar
+  añade su salto a `to_next`; el sub-valor se extrae a un local temporal (`$sub`) y se recurre. En
+  runtime el primer fallo salta dejando UN bool → un solo `Pop` los limpia (invariante ya de las guardas).
+- **loader**: `shift_pattern` (posiciones) y `rewrite_pattern` (namespacing del `enum_name`) recursivos;
+  `recolectar_bindings` recursivo. **Bug latente de M40.1a corregido**: los 9 pases de lowering/
+  renumerado (`resolve`/`freshen`/`renumber`/`lower_*`) recorrían `arm.body` pero NO la **guarda** —una
+  guarda con UFCS/método/`?`/operador no se bajaba—; ahora también la recorren.
+- **fmt**: renderiza los sub-patrones recursivamente.
+
+Oráculo `patrones_anidados_oraculo` (`Result<Option<int>>` + `Option<Option<int>>`) + guarda con UFCS.
+SPEC §5. Runtime: cero opcodes nuevos. Siguiente: **M40.1d** (patrón de struct `Punto { x, y }`).

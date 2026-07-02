@@ -24,7 +24,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::ast::{Block, Expr, ExprKind, FnExpr, ForIter, ForPat, Function, MethodSig, PatternKind, Program, Stmt, StmtKind, Type};
+use crate::ast::{Block, Expr, ExprKind, FnExpr, ForIter, ForPat, Function, MethodSig, Pattern, PatternKind, Program, Stmt, StmtKind, Type};
 use crate::diagnostic;
 
 /// Un error de carga, ya **renderizado** con su contexto de fuente (la línea + `^`), listo
@@ -378,6 +378,16 @@ fn shift_stmt(s: &mut Stmt, delta: usize) {
     }
 }
 
+/// Desplaza (línea) un patrón y sus sub-patrones (M40.1c, recursivo). La columna se conserva.
+fn shift_pattern(p: &mut Pattern, delta: usize) {
+    p.line += delta;
+    if let PatternKind::Variant { subpatterns, .. } = &mut p.kind {
+        for sub in subpatterns {
+            shift_pattern(sub, delta);
+        }
+    }
+}
+
 fn shift_expr(e: &mut Expr, delta: usize) {
     e.line += delta;
     match &mut e.kind {
@@ -417,7 +427,10 @@ fn shift_expr(e: &mut Expr, delta: usize) {
             shift_expr(scrutinee, delta);
             for arm in arms {
                 arm.line += delta;
-                arm.pattern.line += delta;
+                shift_pattern(&mut arm.pattern, delta); // M40.1c: recursivo (sub-patrones)
+                if let Some(g) = &mut arm.guard {
+                    shift_expr(g, delta); // M40.1a: la guarda también viaja con su módulo
+                }
                 shift_expr(&mut arm.body, delta);
             }
         }
@@ -1250,6 +1263,17 @@ impl<'a> TypeRewriter<'a> {
         }
     }
 
+    /// Namespaca el `enum_name` de un patrón de variante y, recursivamente, el de sus sub-patrones
+    /// (M40.1c). Un `_`/binding no nombra tipos.
+    fn rewrite_pattern(&self, p: &mut Pattern) {
+        if let PatternKind::Variant { enum_name, subpatterns, .. } = &mut p.kind {
+            self.rewrite_name(enum_name);
+            for sub in subpatterns {
+                self.rewrite_pattern(sub);
+            }
+        }
+    }
+
     fn rewrite_expr(&self, expr: &mut Expr) {
         match &mut expr.kind {
             // Literal de struct: el nombre es un tipo.
@@ -1285,8 +1309,9 @@ impl<'a> TypeRewriter<'a> {
             ExprKind::Match { scrutinee, arms } => {
                 self.rewrite_expr(scrutinee);
                 for arm in arms {
-                    if let PatternKind::Variant { enum_name, .. } = &mut arm.pattern.kind {
-                        self.rewrite_name(enum_name);
+                    self.rewrite_pattern(&mut arm.pattern); // M40.1c: recursivo (sub-patrones)
+                    if let Some(g) = &mut arm.guard {
+                        self.rewrite_expr(g); // M40.1a: la guarda puede nombrar tipos
                     }
                     self.rewrite_expr(&mut arm.body);
                 }
@@ -1332,20 +1357,25 @@ impl<'a> TypeRewriter<'a> {
     }
 }
 
-/// Los nombres que liga un brazo de `match` (para meterlos en el ámbito del cuerpo).
+/// Los nombres que liga un brazo de `match` (para meterlos en el ámbito del cuerpo). Recorre los
+/// sub-patrones anidados (M40.1c).
 fn arm_bindings(arm: &crate::ast::MatchArm) -> HashSet<String> {
-    use crate::ast::PatternKind::*;
     let mut set = HashSet::new();
-    match &arm.pattern.kind {
-        Wildcard => {}
-        Binding(n) => {
+    recolectar_bindings(&arm.pattern, &mut set);
+    set
+}
+
+/// Añade a `set` los nombres que liga un patrón (recursivo, M40.1c).
+fn recolectar_bindings(p: &Pattern, set: &mut HashSet<String>) {
+    match &p.kind {
+        PatternKind::Wildcard => {}
+        PatternKind::Binding(n) => {
             set.insert(n.clone());
         }
-        Variant { bindings, .. } => {
-            for b in bindings.iter().flatten() {
-                set.insert(b.clone());
+        PatternKind::Variant { subpatterns, .. } => {
+            for sub in subpatterns {
+                recolectar_bindings(sub, set);
             }
         }
     }
-    set
 }

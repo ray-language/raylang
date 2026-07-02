@@ -522,11 +522,11 @@ fn fmt_pattern(p: &Pattern) -> String {
     match &p.kind {
         PatternKind::Wildcard => "_".to_string(),
         PatternKind::Binding(n) => n.clone(),
-        PatternKind::Variant { enum_name, variant, bindings } => {
-            if bindings.is_empty() {
+        PatternKind::Variant { enum_name, variant, subpatterns } => {
+            if subpatterns.is_empty() {
                 format!("{}.{}", enum_name, variant)
             } else {
-                let bs: Vec<String> = bindings.iter().map(|b| b.clone().unwrap_or_else(|| "_".to_string())).collect();
+                let bs: Vec<String> = subpatterns.iter().map(fmt_pattern).collect(); // recursivo (M40.1c)
                 format!("{}.{}({})", enum_name, variant, bs.join(", "))
             }
         }

@@ -585,12 +585,13 @@ pub enum PatternKind {
     /// Un identificador suelto: liga el escrutinio completo a ese nombre. También
     /// catch-all (cubre todo lo restante).
     Binding(String),
-    /// `Enum.Variante(sub-bindings)`: casa con esa variante. Cada sub-binding liga
-    /// una posición del payload a un nombre, o lo descarta si es `None` (`_`).
+    /// `Enum.Variante(sub-patrones)`: casa con esa variante y aplica un **sub-patrón** a cada
+    /// posición del payload (M40.1c: recursivo). Un sub-patrón puede ser `_` (descarta), un binding
+    /// (liga), u **otra variante anidada** (`Result.Ok(Option.Some(v))`). Sin `(…)`, sin payload.
     Variant {
         enum_name: String,
         variant: String,
-        bindings: Vec<Option<String>>,
+        subpatterns: Vec<Pattern>,
     },
 }
 

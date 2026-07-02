@@ -202,11 +202,13 @@ Literales (§1), identificadores, `(expr)` (agrupación), tuplas `(a, b, …)`, 
   gramática que el match (variantes calificadas). El escrutinio va sin paréntesis, hasta el `{`.
 - **`match (expr) { patrón [if guarda] => (expr | bloque), … }`** es expresión; brazos convergentes
   (misma regla de divergencia; todos divergentes → unit). **Exhaustivo** sobre enums. Patrones
-  (planos): `Enum.Variante(bindings…)` (también `M.Enum.Variante`), binding suelto, `_`. **Guardas**
-  (M40.1a): `patrón if <cond>` casa solo si el patrón liga Y la `cond` (`bool`, con los bindings del
-  patrón en ámbito) es `true`; si no, se sigue al siguiente brazo. Un brazo con guarda **no** cuenta
-  para la exhaustividad (puede no casar) → hace falta un fallback. No hay patrones anidados ni
-  literales (diferido).
+  `Enum.Variante(sub-patrón…)` (también `M.Enum.Variante`), binding suelto, `_`. **Patrones anidados**
+  (M40.1c): cada posición del payload es un sub-patrón completo, recursivo (`Result.Ok(Option.Some(v))`).
+  **Guardas** (M40.1a): `patrón if <cond>` casa solo si el patrón liga Y la `cond` (`bool`, con los
+  bindings del patrón en ámbito) es `true`; si no, se sigue al siguiente brazo. **Exhaustividad
+  conservadora**: una variante cuenta como cubierta solo si sus sub-patrones son catch-all (`_`/binding)
+  y sin guarda; un sub-patrón anidado no la marca → hace falta un fallback (`Ok(_)`). No hay patrones de
+  literal ni de struct (M40.1d, diferido).
 - **Ambigüedad struct-literal/bloque**: `Nombre { … }` se reconoce como literal solo si el
   receptor es un identificador (o `M.Nombre`) en posición de expresión; en la cabecera de un
   `for`/`if`/`while` sin paréntesis el `{` abre el cuerpo. El escrutinio de `match` y las

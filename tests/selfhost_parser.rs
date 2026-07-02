@@ -216,12 +216,15 @@ fn dump_pattern(pat: &Pattern) -> String {
     match &pat.kind {
         PatternKind::Wildcard => format!("(wild){}", pp),
         PatternKind::Binding(n) => format!("(bind {}){}", n, pp),
-        PatternKind::Variant { enum_name, variant, bindings } => {
-            let binds: String = bindings
+        PatternKind::Variant { enum_name, variant, subpatterns } => {
+            // Los sub-patrones planos (binding/`_`) se vuelcan como ` nombre`/` _`, igual que el
+            // parser auto-alojado (que no tiene patrones anidados; el corpus no los usa, M40.1c).
+            let binds: String = subpatterns
                 .iter()
-                .map(|o| match o {
-                    Some(n) => format!(" {}", n),
-                    None => " _".into(),
+                .map(|sp| match &sp.kind {
+                    PatternKind::Binding(n) => format!(" {}", n),
+                    PatternKind::Wildcard => " _".into(),
+                    _ => format!(" {}", dump_pattern(sp)),
                 })
                 .collect();
             format!("(variant {} {}{}){}", enum_name, variant, binds, pp)

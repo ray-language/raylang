@@ -1549,11 +1549,11 @@ impl Parser {
                 enum_name = format!("{}.{}", enum_name, variant);
                 variant = real;
             }
-            let mut bindings = Vec::new();
+            let mut subpatterns = Vec::new();
             if self.eat(&TokenKind::LParen) {
                 loop {
-                    let (b, _, _) = self.expect_ident("un sub-patrón (nombre o '_')")?;
-                    bindings.push(if b == "_" { None } else { Some(b) });
+                    // M40.1c: cada posición es un sub-patrón completo (recursivo), no solo un nombre.
+                    subpatterns.push(self.pattern()?);
                     if !self.eat(&TokenKind::Comma) {
                         break;
                     }
@@ -1561,7 +1561,7 @@ impl Parser {
                 self.expect(&TokenKind::RParen, "')' para cerrar el patrón de variante")?;
             }
             return Ok(Pattern {
-                kind: PatternKind::Variant { enum_name, variant, bindings },
+                kind: PatternKind::Variant { enum_name, variant, subpatterns },
                 line,
                 col,
             });
@@ -1909,10 +1909,10 @@ mod tests {
         let e = parse_expr("match (c) { geo.Color.Verde(n) => n, _ => 0, }");
         let ExprKind::Match { arms, .. } = &e.kind else { panic!("se esperaba match") };
         match &arms[0].pattern.kind {
-            PatternKind::Variant { enum_name, variant, bindings } => {
+            PatternKind::Variant { enum_name, variant, subpatterns } => {
                 assert_eq!(enum_name, "geo.Color");
                 assert_eq!(variant, "Verde");
-                assert_eq!(bindings, &vec![Some("n".to_string())]);
+                assert_eq!(spat(&subpatterns[0]), "n"); // el sub-patrón es un binding `n`
             }
             other => panic!("se esperaba un patrón de variante calificado, fue {:?}", other),
         }
@@ -1982,11 +1982,11 @@ mod tests {
         match &p.kind {
             PatternKind::Wildcard => "_".to_string(),
             PatternKind::Binding(n) => n.clone(),
-            PatternKind::Variant { enum_name, variant, bindings } => {
-                let bs: Vec<String> = bindings.iter().map(|b| b.clone().unwrap_or_else(|| "_".to_string())).collect();
-                if bs.is_empty() {
+            PatternKind::Variant { enum_name, variant, subpatterns } => {
+                if subpatterns.is_empty() {
                     format!("{}.{}", enum_name, variant)
                 } else {
+                    let bs: Vec<String> = subpatterns.iter().map(spat).collect();
                     format!("{}.{}({})", enum_name, variant, bs.join(", "))
                 }
             }

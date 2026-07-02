@@ -1668,8 +1668,8 @@ impl Checker {
     ///   - debe ser **exhaustivo**: cubrir todas las variantes o tener un catch-all.
     fn check_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], expected: Option<&Type>, line: usize, col: usize) -> Result<Type, TypeError> {
         let scrut_ty = self.check_expr(scrutinee)?;
-        let (enum_name, targs) = match &scrut_ty {
-            Type::Enum(n, args) => (n.clone(), args.clone()),
+        let enum_name = match &scrut_ty {
+            Type::Enum(n, _) => n.clone(),
             other => return Err(self.err(scrutinee.line, scrutinee.col, format!(
                 "match requiere un enum, pero el escrutinio es {}", other
             ))),
@@ -1677,12 +1677,9 @@ impl Checker {
         if arms.is_empty() {
             return Err(self.err(line, col, "un match no puede estar vacío".into()));
         }
-        // Variantes del enum (clonadas para soltar el préstamo de self).
+        // Variantes del enum (para la exhaustividad). La σ de tipos ya no hace falta aquí:
+        // `check_subpattern` la resuelve del tipo de cada sub-valor (M40.1c).
         let variants = self.enums.get(&enum_name).unwrap_or_else(|| crate::ice!("el enum '{}' no está en la tabla del checker", enum_name)).clone();
-        // σ del enum: liga sus parámetros de tipo con los argumentos del escrutinio,
-        // para sustituir los payloads (`Some(T)` sobre `Option<int>` liga `T = int`).
-        let enum_tparams = self.enum_tparams.get(&enum_name).cloned().unwrap_or_default();
-        let enum_sigma: HashMap<String, Type> = enum_tparams.into_iter().zip(targs).collect();
 
         let mut covered: HashSet<String> = HashSet::new();
         let mut catchall = false;
@@ -1694,15 +1691,13 @@ impl Checker {
                 return Err(self.err(arm.line, arm.col,
                     "brazo inalcanzable: un brazo anterior ya cubre todos los casos".into()));
             }
-            // Comprueba el patrón y obtiene las variables a ligar (payload sustituido). Un brazo con
-            // **guarda** (M40.1a) puede no casar aunque el patrón ligue, así que NO cuenta para la
-            // exhaustividad ni la alcanzabilidad: se le pasan `covered`/`catchall` temporales.
-            let binds = if arm.guard.is_some() {
-                let (mut cov, mut cat) = (HashSet::new(), false);
-                self.check_pattern(&arm.pattern, &scrut_ty, &enum_name, &variants, &enum_sigma, &mut cov, &mut cat)?
-            } else {
-                self.check_pattern(&arm.pattern, &scrut_ty, &enum_name, &variants, &enum_sigma, &mut covered, &mut catchall)?
-            };
+            // Comprueba el patrón (recursivo, M40.1c) y obtiene las variables a ligar. La cobertura
+            // (exhaustividad) se registra aparte y SOLO para brazos sin guarda: un brazo con **guarda**
+            // (M40.1a) puede no casar aunque el patrón ligue → no cuenta para exhaustividad/alcance.
+            let binds = self.check_subpattern(&arm.pattern, &scrut_ty)?;
+            if arm.guard.is_none() {
+                self.registrar_cobertura(&arm.pattern, &mut covered, &mut catchall)?;
+            }
             // Verifica la guarda (bool) y el cuerpo con esas variables en un ámbito propio,
             // propagando el tipo esperado del match a cada brazo (para construcciones como `None`).
             self.push_scope();
@@ -1814,61 +1809,79 @@ impl Checker {
     /// Comprueba un patrón contra el enum del escrutinio. Devuelve las variables que
     /// liga (nombre, tipo) para declararlas en el cuerpo del brazo. Actualiza el
     /// conjunto de variantes cubiertas y marca si el patrón es catch-all.
-    fn check_pattern(
-        &self,
-        pat: &Pattern,
-        scrut_ty: &Type,
-        enum_name: &str,
-        variants: &[(String, Vec<Type>)],
-        enum_sigma: &HashMap<String, Type>,
-        covered: &mut HashSet<String>,
-        catchall: &mut bool,
-    ) -> Result<Vec<(String, Type)>, TypeError> {
+    /// Verifica que `pat` casa con un valor de tipo `ty` y recolecta sus bindings (nombre → tipo).
+    /// Recursivo (M40.1c): un sub-patrón de variante puede ser otra variante anidada; su enum se
+    /// resuelve del **tipo** del sub-valor (el payload sustituido), no de un parámetro externo.
+    fn check_subpattern(&self, pat: &Pattern, ty: &Type) -> Result<Vec<(String, Type)>, TypeError> {
         match &pat.kind {
-            PatternKind::Wildcard => {
-                *catchall = true;
-                Ok(Vec::new())
-            }
-            PatternKind::Binding(name) => {
-                // Liga el escrutinio completo; cubre todo lo restante.
-                *catchall = true;
-                Ok(vec![(name.clone(), scrut_ty.clone())])
-            }
-            PatternKind::Variant { enum_name: pat_enum, variant, bindings } => {
-                if pat_enum != enum_name {
-                    return Err(self.err(pat.line, pat.col, format!(
-                        "el patrón es del enum '{}', pero el escrutinio es '{}'", pat_enum, enum_name
-                    )));
-                }
-                let payload = match variants.iter().find(|(v, _)| v == variant) {
-                    Some((_, p)) => p,
-                    None => return Err(self.err(pat.line, pat.col, format!(
-                        "el enum '{}' no tiene la variante '{}'", enum_name, variant
+            PatternKind::Wildcard => Ok(Vec::new()),
+            PatternKind::Binding(name) => Ok(vec![(name.clone(), ty.clone())]),
+            PatternKind::Variant { enum_name: pat_enum, variant, subpatterns } => {
+                let (ty_enum, targs) = match ty {
+                    Type::Enum(n, args) => (n.clone(), args.clone()),
+                    other => return Err(self.err(pat.line, pat.col, format!(
+                        "el patrón es del enum '{}', pero aquí el valor es {}", pat_enum, other
                     ))),
                 };
-                if bindings.len() != payload.len() {
+                if *pat_enum != ty_enum {
+                    // Redacción idéntica a la original (el checker auto-alojado la espeja byte a byte).
+                    return Err(self.err(pat.line, pat.col, format!(
+                        "el patrón es del enum '{}', pero el escrutinio es '{}'", pat_enum, ty_enum
+                    )));
+                }
+                let variants = self.enums.get(&ty_enum)
+                    .unwrap_or_else(|| crate::ice!("el enum '{}' no está en la tabla del checker", ty_enum)).clone();
+                let payload = match variants.iter().find(|(v, _)| v == variant) {
+                    Some((_, p)) => p.clone(),
+                    None => return Err(self.err(pat.line, pat.col, format!(
+                        "el enum '{}' no tiene la variante '{}'", ty_enum, variant
+                    ))),
+                };
+                if subpatterns.len() != payload.len() {
                     return Err(self.err(pat.line, pat.col, format!(
                         "el patrón '{}.{}' liga {} valor(es), pero la variante tiene {}",
-                        enum_name, variant, bindings.len(), payload.len()
+                        ty_enum, variant, subpatterns.len(), payload.len()
                     )));
                 }
-                if !covered.insert(variant.clone()) {
-                    return Err(self.err(pat.line, pat.col, format!(
-                        "la variante '{}' ya está cubierta por un brazo anterior", variant
-                    )));
-                }
-                // Cada sub-binding nombrado liga el payload, ya sustituido con los
-                // argumentos de tipo del escrutinio (`x` en `Some(x)` sobre
-                // `Option<int>` es un `int`).
+                // σ del enum del sub-valor: liga sus parámetros de tipo con los argumentos del tipo.
+                let tparams = self.enum_tparams.get(&ty_enum).cloned().unwrap_or_default();
+                let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs).collect();
                 let mut binds = Vec::new();
-                for (b, ty) in bindings.iter().zip(payload) {
-                    if let Some(name) = b {
-                        binds.push((name.clone(), subst(ty, enum_sigma)));
-                    }
+                for (sub, pty) in subpatterns.iter().zip(&payload) {
+                    binds.extend(self.check_subpattern(sub, &subst(pty, &sigma))?); // recursivo
                 }
                 Ok(binds)
             }
         }
+    }
+
+    /// Registra la cobertura del patrón de **primer nivel** para la exhaustividad (conservadora,
+    /// M40.1c): una variante cuenta como cubierta solo si TODOS sus sub-patrones son catch-all
+    /// (`_`/binding); si alguno es una variante anidada, NO se marca (hace falta un fallback). Un
+    /// `_`/binding de primer nivel es catch-all total. Repetir una variante ya cubierta = inalcanzable.
+    fn registrar_cobertura(
+        &self,
+        pat: &Pattern,
+        covered: &mut HashSet<String>,
+        catchall: &mut bool,
+    ) -> Result<(), TypeError> {
+        match &pat.kind {
+            PatternKind::Wildcard | PatternKind::Binding(_) => *catchall = true,
+            PatternKind::Variant { variant, subpatterns, .. } => {
+                let cubre_todo = subpatterns
+                    .iter()
+                    .all(|p| matches!(p.kind, PatternKind::Wildcard | PatternKind::Binding(_)));
+                if cubre_todo {
+                    if !covered.insert(variant.clone()) {
+                        return Err(self.err(pat.line, pat.col, format!(
+                            "la variante '{}' ya está cubierta por un brazo anterior", variant
+                        )));
+                    }
+                }
+                // Si no cubre todo (un sub-patrón anidado), no se marca: sigue haciendo falta un fallback.
+            }
+        }
+        Ok(())
     }
 
     /// Verifica `obj.name` y devuelve el tipo del campo. Para un struct genérico, el
@@ -3331,7 +3344,7 @@ fn resolve_expr(expr: &mut Expr, enums: &HashSet<String>) {
         ExprKind::Match { scrutinee, arms } => {
             resolve_expr(scrutinee, enums);
             for arm in arms {
-                resolve_expr(&mut arm.body, enums);
+                resolve_expr(&mut arm.body, enums); if let Some(g) = &mut arm.guard { resolve_expr(g, enums); }
             }
         }
         ExprKind::Try(inner) => resolve_expr(inner, enums),
@@ -3717,7 +3730,7 @@ fn freshen_expr(expr: &mut Expr, next: &mut usize) {
         ExprKind::Match { scrutinee, arms } => {
             freshen_expr(scrutinee, next);
             for arm in arms {
-                freshen_expr(&mut arm.body, next);
+                freshen_expr(&mut arm.body, next); if let Some(g) = &mut arm.guard { freshen_expr(g, next); }
             }
         }
         ExprKind::Try(inner) => freshen_expr(inner, next),
@@ -3820,7 +3833,7 @@ fn renumber_expr(expr: &mut Expr, next: &mut usize) {
         ExprKind::Match { scrutinee, arms } => {
             renumber_expr(scrutinee, next);
             for arm in arms {
-                renumber_expr(&mut arm.body, next);
+                renumber_expr(&mut arm.body, next); if let Some(g) = &mut arm.guard { renumber_expr(g, next); }
             }
         }
         ExprKind::Try(inner) => renumber_expr(inner, next),
@@ -4003,7 +4016,7 @@ fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
         ExprKind::Match { scrutinee, arms } => {
             lower_ufcs_expr(scrutinee, sites);
             for arm in arms {
-                lower_ufcs_expr(&mut arm.body, sites);
+                lower_ufcs_expr(&mut arm.body, sites); if let Some(g) = &mut arm.guard { lower_ufcs_expr(g, sites); }
             }
         }
         ExprKind::Try(inner) => lower_ufcs_expr(inner, sites),
@@ -4093,7 +4106,7 @@ fn lower_uintlit_expr(expr: &mut Expr, sites: &UIntLitMap) {
         ExprKind::Func(fe) => lower_uintlit_block(&mut fe.body, sites),
         ExprKind::Match { scrutinee, arms } => {
             lower_uintlit_expr(scrutinee, sites);
-            for arm in arms { lower_uintlit_expr(&mut arm.body, sites); }
+            for arm in arms { lower_uintlit_expr(&mut arm.body, sites); if let Some(g) = &mut arm.guard { lower_uintlit_expr(g, sites); } }
         }
         ExprKind::Try(inner) => lower_uintlit_expr(inner, sites),
         ExprKind::If { cond, then_branch, else_branch } => {
@@ -4173,7 +4186,7 @@ fn lower_try_expr(expr: &mut Expr, sites: &TryConvMap) {
         // Rama Ok: `Result.Ok($to) => $to`.
         let arm_ok = MatchArm {
             pattern: Pattern {
-                kind: PatternKind::Variant { enum_name: "Result".into(), variant: "Ok".into(), bindings: vec![Some("$to".into())] },
+                kind: PatternKind::Variant { enum_name: "Result".into(), variant: "Ok".into(), subpatterns: vec![Pattern { kind: PatternKind::Binding("$to".into()), line: l, col: c }] },
                 line: l, col: c,
             },
             guard: None,
@@ -4189,7 +4202,7 @@ fn lower_try_expr(expr: &mut Expr, sites: &TryConvMap) {
         let ret_stmt = Stmt { kind: StmtKind::Return { value: Some(err_val) }, line: l, col: c };
         let arm_err = MatchArm {
             pattern: Pattern {
-                kind: PatternKind::Variant { enum_name: "Result".into(), variant: "Err".into(), bindings: vec![Some("$te".into())] },
+                kind: PatternKind::Variant { enum_name: "Result".into(), variant: "Err".into(), subpatterns: vec![Pattern { kind: PatternKind::Binding("$te".into()), line: l, col: c }] },
                 line: l, col: c,
             },
             guard: None,
@@ -4215,7 +4228,7 @@ fn lower_try_expr(expr: &mut Expr, sites: &TryConvMap) {
         ExprKind::Func(fe) => lower_try_block(&mut fe.body, sites),
         ExprKind::Match { scrutinee, arms } => {
             lower_try_expr(scrutinee, sites);
-            for arm in arms { lower_try_expr(&mut arm.body, sites); }
+            for arm in arms { lower_try_expr(&mut arm.body, sites); if let Some(g) = &mut arm.guard { lower_try_expr(g, sites); } }
         }
         ExprKind::Try(inner) => lower_try_expr(inner, sites),
         ExprKind::If { cond, then_branch, else_branch } => {
@@ -4341,7 +4354,7 @@ fn lower_operators_expr(expr: &mut Expr, sites: &SiteMap) {
         ExprKind::Match { scrutinee, arms } => {
             lower_operators_expr(scrutinee, sites);
             for arm in arms {
-                lower_operators_expr(&mut arm.body, sites);
+                lower_operators_expr(&mut arm.body, sites); if let Some(g) = &mut arm.guard { lower_operators_expr(g, sites); }
             }
         }
         ExprKind::Try(inner) => lower_operators_expr(inner, sites),
@@ -4479,7 +4492,7 @@ fn lower_dict_calls_expr(expr: &mut Expr, sites: &DictSites) {
         ExprKind::Match { scrutinee, arms } => {
             lower_dict_calls_expr(scrutinee, sites);
             for arm in arms {
-                lower_dict_calls_expr(&mut arm.body, sites);
+                lower_dict_calls_expr(&mut arm.body, sites); if let Some(g) = &mut arm.guard { lower_dict_calls_expr(g, sites); }
             }
         }
         ExprKind::Try(inner) => lower_dict_calls_expr(inner, sites),
@@ -4655,7 +4668,7 @@ fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
         ExprKind::Match { scrutinee, arms } => {
             lower_dyn_expr(scrutinee, coercions, dispatch, upcasts, tm, counter);
             for arm in arms {
-                lower_dyn_expr(&mut arm.body, coercions, dispatch, upcasts, tm, counter);
+                lower_dyn_expr(&mut arm.body, coercions, dispatch, upcasts, tm, counter); if let Some(g) = &mut arm.guard { lower_dyn_expr(g, coercions, dispatch, upcasts, tm, counter); }
             }
         }
         ExprKind::Try(inner) => lower_dyn_expr(inner, coercions, dispatch, upcasts, tm, counter),

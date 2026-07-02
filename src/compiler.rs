@@ -471,6 +471,43 @@ impl<'a> Compiler<'a> {
     /// emite una **cadena de decisión** —probar el tag de cada variante, ligar su
     /// payload, ejecutar el cuerpo y saltar al final—. El valor del brazo que casa
     /// queda en la pila (el `match` es una expresión).
+    /// Emite el test + los bindings de un patrón (M40.1c, recursivo) contra el valor guardado en el
+    /// local `val_slot`. Cada `EnumTagEq` que puede fallar añade su salto a `to_next` (dejando UN
+    /// bool); en runtime el primer fallo salta y deja exactamente un bool → el llamador lo limpia con
+    /// un solo `Pop`. Un `Wildcard` no emite nada (siempre casa); un `Binding` liga sin test. Un
+    /// sub-patrón anidado se extrae a un local temporal (`$sub`) y se recurre.
+    fn emit_pattern_test(&mut self, pat: &Pattern, val_slot: usize, to_next: &mut Vec<usize>, line: usize, col: usize) -> Result<(), CompileError> {
+        match &pat.kind {
+            PatternKind::Wildcard => {}
+            PatternKind::Binding(name) => {
+                self.emit(OpCode::GetLocal(val_slot), line, col);
+                let slot = self.declare_local(name);
+                self.emit(OpCode::InitLocal(slot), line, col);
+            }
+            PatternKind::Variant { enum_name, variant, subpatterns } => {
+                let (_, vmap) = self.enums.get(enum_name).expect("el checker registró el enum");
+                let (tag, _arity) = *vmap.get(variant).expect("el checker validó la variante");
+                // ¿Es esta la variante? Si no, al siguiente brazo (dejando el bool).
+                self.emit(OpCode::GetLocal(val_slot), line, col);
+                self.emit(OpCode::EnumTagEq(tag), line, col);
+                to_next.push(self.emit(OpCode::JumpIfFalse(0), line, col));
+                self.emit(OpCode::Pop, line, col); // casó → descartar el bool true
+                // Cada posición del payload: se extrae a un temporal y se casa recursivamente.
+                for (i, sub) in subpatterns.iter().enumerate() {
+                    if matches!(sub.kind, PatternKind::Wildcard) {
+                        continue; // `_` no liga ni testea → no hace falta extraerlo
+                    }
+                    self.emit(OpCode::GetLocal(val_slot), line, col);
+                    self.emit(OpCode::GetEnumField(i), line, col);
+                    let sub_slot = self.declare_local("$sub");
+                    self.emit(OpCode::InitLocal(sub_slot), line, col);
+                    self.emit_pattern_test(sub, sub_slot, to_next, line, col)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn emit_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], line: usize, col: usize) -> Result<(), CompileError> {
         // El escrutinio se evalúa UNA vez y se guarda en un local temporal: así se lee
         // su tag y su payload sin reevaluarlo, y queda rooteado para el GC mientras
@@ -491,33 +528,8 @@ impl<'a> Compiler<'a> {
             // Ámbito del brazo (bindings + guarda + cuerpo). `InitLocal` boxea el slot si una closure
             // del cuerpo lo captura. `end_scope` es solo compile-time → saltar por encima es seguro.
             let arm_saved = self.begin_scope();
-            match &arm.pattern.kind {
-                PatternKind::Variant { enum_name, variant, bindings } => {
-                    let (_, vmap) = self.enums.get(enum_name).expect("el checker registró el enum");
-                    let (tag, _arity) = *vmap.get(variant).expect("el checker validó la variante");
-                    // ¿Es esta la variante? Si no, al siguiente brazo (dejando el bool).
-                    self.emit(OpCode::GetLocal(scrut_slot), aline, acol);
-                    self.emit(OpCode::EnumTagEq(tag), aline, acol);
-                    to_next.push(self.emit(OpCode::JumpIfFalse(0), aline, acol));
-                    self.emit(OpCode::Pop, aline, acol); // casó → descartar el bool true
-                    // Ligar el payload.
-                    for (i, b) in bindings.iter().enumerate() {
-                        if let Some(name) = b {
-                            self.emit(OpCode::GetLocal(scrut_slot), aline, acol);
-                            self.emit(OpCode::GetEnumField(i), aline, acol);
-                            let slot = self.declare_local(name);
-                            self.emit(OpCode::InitLocal(slot), aline, acol);
-                        }
-                    }
-                }
-                PatternKind::Wildcard => {} // sin test ni binding
-                PatternKind::Binding(name) => {
-                    // Liga el escrutinio completo.
-                    self.emit(OpCode::GetLocal(scrut_slot), aline, acol);
-                    let slot = self.declare_local(name);
-                    self.emit(OpCode::InitLocal(slot), aline, acol);
-                }
-            }
+            // Emite los tests + bindings del patrón (recursivo, M40.1c) contra el valor del escrutinio.
+            self.emit_pattern_test(&arm.pattern, scrut_slot, &mut to_next, aline, acol)?;
             // Guarda (M40.1a): si es falsa, al siguiente brazo (dejando su bool). Con los bindings del
             // patrón ya en ámbito. Un brazo con guarda NO es catch-all (puede no casar).
             if let Some(g) = &arm.guard {

@@ -1655,7 +1655,7 @@ fn match_pattern(pat: &Pattern, value: &Value) -> Option<Vec<(String, Value)>> {
     match &pat.kind {
         PatternKind::Wildcard => Some(Vec::new()),
         PatternKind::Binding(name) => Some(vec![(name.clone(), value.clone())]),
-        PatternKind::Variant { variant, bindings, .. } => {
+        PatternKind::Variant { variant, subpatterns, .. } => {
             let e = match value {
                 Value::Enum(e) => e,
                 _ => return None, // el checker lo impide; por robustez
@@ -1663,11 +1663,11 @@ fn match_pattern(pat: &Pattern, value: &Value) -> Option<Vec<(String, Value)>> {
             if e.variant != *variant {
                 return None;
             }
+            // M40.1c: cada sub-patrón se casa recursivamente contra su posición del payload; si
+            // alguno no casa (una variante anidada que no coincide), el brazo entero falla.
             let mut binds = Vec::new();
-            for (b, v) in bindings.iter().zip(&e.payload) {
-                if let Some(name) = b {
-                    binds.push((name.clone(), v.clone()));
-                }
+            for (sub, v) in subpatterns.iter().zip(&e.payload) {
+                binds.extend(match_pattern(sub, v)?);
             }
             Some(binds)
         }

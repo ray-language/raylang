@@ -2611,6 +2611,11 @@ mod tests {
         oracle_program("\
             fn f(o: Option<int>) -> int { match (o) { x if false => 9, _ => 1 } }\n\
             fn main() -> int { f(Option.Some(5)) + f(Option.None) }"); // 2
+        // Guarda que usa **UFCS** (`xs.len()`): debe pasar por el lowering (M40.1a: los pases bajan
+        // también la guarda, no solo el cuerpo).
+        oracle_program("\
+            fn g(o: Option<[int]>) -> int { match (o) { Option.Some(xs) if xs.len() > 2 => 1, Option.Some(xs) => 0, Option.None => 0 - 1 } }\n\
+            fn main() -> int { g(Option.Some([1, 2, 3])) * 100 + (g(Option.Some([9])) + 5) * 10 }"); // 150
     }
 
     /// M40.1b: `if let <patrón> = <expr> { … } else { … }` — azúcar del parser a un match de dos
@@ -2630,6 +2635,37 @@ mod tests {
             \x20 if let Option.Some(n) = nada { s = s + 1000; }\n\
             \x20 s\n\
             }"); // 10
+    }
+
+    /// M40.1c: **patrones de variante anidados** (`Result.Ok(Option.Some(v))`). Exhaustividad
+    /// conservadora → hace falta un fallback (`Ok(_)`). Oráculo VM↔intérprete (test + codegen).
+    #[test]
+    fn patrones_anidados_oraculo() {
+        // Result<Option<int>, string>: cada caso a un dígito.
+        oracle_program("\
+            fn d(r: Result<Option<int>, string>) -> int {\n\
+            \x20 match (r) {\n\
+            \x20   Result.Ok(Option.Some(v)) => v,\n\
+            \x20   Result.Ok(_) => 100,\n\
+            \x20   Result.Err(e) => 200,\n\
+            \x20 }\n\
+            }\n\
+            fn main() -> int {\n\
+            \x20 let a: Result<Option<int>, string> = Result.Ok(Option.Some(42));\n\
+            \x20 let b: Result<Option<int>, string> = Result.Ok(Option.None);\n\
+            \x20 let c: Result<Option<int>, string> = Result.Err(\"x\");\n\
+            \x20 d(a) + d(b) + d(c)\n\
+            }"); // 42 + 100 + 200 = 342
+        // Option<Option<int>> con un segundo nivel de anidamiento.
+        oracle_program("\
+            fn f(o: Option<Option<int>>) -> int {\n\
+            \x20 match (o) { Option.Some(Option.Some(n)) => n, Option.Some(_) => 100, Option.None => 200 }\n\
+            }\n\
+            fn main() -> int {\n\
+            \x20 let x: Option<Option<int>> = Option.Some(Option.Some(7));\n\
+            \x20 let z: Option<Option<int>> = Option.None;\n\
+            \x20 f(x) + f(z)\n\
+            }"); // 7 + 200 = 207
     }
 
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada

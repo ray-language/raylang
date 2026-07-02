@@ -2689,6 +2689,32 @@ mod tests {
             }"); // 7*1000 + (-9+100)*10 + (-1+10) = 7000 + 910 + 9 = 7919
     }
 
+    /// M40.2: `for x in it` sobre un tipo que implementa `Iterator<T>`. El `for` llama a `next`
+    /// hasta `None`, ligando el elemento. Oráculo VM↔intérprete (el estado del iterador muta por
+    /// referencia entre iteraciones).
+    #[test]
+    fn iterator_for_oraculo() {
+        oracle_program("\
+            struct Rango { actual: int, fin: int }\n\
+            impl Iterator<int> for Rango {\n\
+            \x20 fn next(self) -> Option<int> {\n\
+            \x20   if (self.actual < self.fin) {\n\
+            \x20     let v = self.actual;\n\
+            \x20     self.actual = self.actual + 1;\n\
+            \x20     Option.Some(v)\n\
+            \x20   } else { Option.None }\n\
+            \x20 }\n\
+            }\n\
+            fn main() -> int {\n\
+            \x20 let r = Rango { actual: 1, fin: 6 };\n\
+            \x20 var suma = 0;\n\
+            \x20 for n in r {\n\
+            \x20   suma = suma + n * n;\n\
+            \x20 }\n\
+            \x20 suma\n\
+            }"); // 1+4+9+16+25 = 55
+    }
+
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
     /// punto seguro) y exige que el resultado coincida con el intérprete. Es la
     /// prueba clave del GC: si una raíz faltara, un valor vivo se liberaría y el

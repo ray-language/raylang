@@ -5169,3 +5169,35 @@ maquinaria recursiva de M40.1c.
 Oráculo `patrones_struct_oraculo`. SPEC §5. Runtime: cero opcodes nuevos. **M40.1 (ergonomía de
 match: guardas + `if let` + patrones anidados + struct) COMPLETO.** Diferido: patrones de literal,
 patrón de struct de primer nivel (`let Punto { x, y } = p`), `M.Struct { … }` calificado.
+
+### 42.5 M40.2 — el trait `Iterator` (`for x in it`)
+
+`for x in it` deja de ser solo para arreglos/strings/Map: un tipo que implemente el trait del prelude
+`Iterator<T> { fn next(self) -> Option<T>; }` es iterable. El bucle llama a `next` hasta `None`,
+ligando cada elemento. **Caso aditivo** (elige el enfoque incremental; no re-funda map/filter/fold aún).
+
+- **Prelude**: `trait Iterator<T> { fn next(self) -> Option<T>; }`. Como los structs son valores de
+  referencia con campos mutables, `next(self)` avanza el estado del propio iterador entre iteraciones
+  (no hace falta `&mut` — la semántica de referencia lo da gratis).
+- **Traits genéricos con parámetro**: `Iterator<T>` es el segundo trait con args (tras `From<S>` de
+  M28.2). Habilitó dos arreglos en el despacho: (1) `is_typed_trait_impl` se restringe a `From` (los
+  demás traits parametrizados usan despacho por punto ordinario, no el mecanismo de conversión); (2)
+  `check_method_sig` recibe un `trait_sigma` (los params del trait, p. ej. `T`→`int` en
+  `impl Iterator<int>`) y sustituye la firma **tras** `resolve_type` (orden clave: primero `Struct("T")`
+  → `Var("T")`, luego σ lo fija) → el `next` del impl valida contra `-> Option<int>`.
+- **Detección + lowering en el checker**: en el caso `for` (rama `In`, receptor único), si el iterable
+  no es arreglo/string/Map se prueba `iterator_de(ty)`: busca `(type_key, "Iterator")` en `impl_traits`,
+  saca el `next` manglado de `methods` y extrae el elemento del `Option<T>` de su retorno. Se registra
+  en `for_iter_sites` (posición del `for` → nombre manglado de `next`) y un pase **`lower_for_iters`**
+  (espejo de `lower_ufcs`) reescribe `ForIter::In(e)` → `ForIter::Iter { expr, next_fn }`.
+- **AST**: `ForIter` gana la variante `Iter { expr, next_fn }`. La produce solo el lowering; el parser
+  emite siempre `In` (la sintaxis `for x in it` ya existía). Todos los walkers (renumber/freshen/
+  resolve/lower_*/loader/fmt) tratan `Iter.expr` como `In`.
+- **Motores**: intérprete — evalúa el iterable una vez y llama a `call_function(next, [it])` en bucle,
+  desempaquetando el `Option` hasta `None`. VM (`emit_for`) — guarda el iterable en un local, y en cada
+  vuelta `Call(next, 1)` → `EnumTagEq(0)` (¿`Some`?) → si no, sale; si sí, `GetEnumField(0)` liga el
+  elemento y ejecuta el cuerpo. **Cero opcodes nuevos** (reusa los de enum + `Call`).
+
+Oráculo `iterator_for_oraculo` (el estado del iterador muta por referencia entre iteraciones). Ejemplo
+`examples/stdlib/iterador.ray`. SPEC §7. Siguiente en M40: `.iter()` sobre arreglos/rangos + re-fundar
+map/filter/fold sobre `Iterator`; luego `Hash` derivable + Set/deque/string-builder; `std/` + raydoc.

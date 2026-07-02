@@ -51,6 +51,12 @@ impl Ord for char { fn menor(self, otro: char) -> bool { self < otro } }
 // `Result<_, E2>`, si hay `impl From<E1> for E2` el error se convierte automáticamente.
 trait From<S> { fn desde(origen: S) -> Self; }
 
+// Iteración (M40.2): un tipo que implemente `Iterator<T>` produce una secuencia de `T` — `next`
+// devuelve `Some(elemento)` y avanza el cursor, o `None` cuando se agota. Habilita `for x in it`
+// sobre iteradores de usuario (además de arreglos/strings/Map). Como los structs son valores de
+// referencia con campos mutables, `next(self)` avanza el estado del propio iterador.
+trait Iterator<T> { fn next(self) -> Option<T>; }
+
 // Traits de sobrecarga de operadores (M28.1): un tipo que implemente estos traits puede usar los
 // operadores aritméticos. El checker baja `a + b` (con `a`/`b` de un tipo de usuario) a `a.add(b)`.
 trait Add { fn add(self, otro: Self) -> Self; }

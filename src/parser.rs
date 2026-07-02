@@ -2045,6 +2045,7 @@ mod tests {
                 let it = match iter {
                     ForIter::Range { start, end } => format!("{}..{}", sx(start), sx(end)),
                     ForIter::In(e) => sx(e),
+                    ForIter::Iter { expr, .. } => sx(expr),
                 };
                 format!("for {} in {}", p, it)
             }

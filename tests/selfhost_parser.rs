@@ -313,6 +313,8 @@ fn dump_stmt(st: &Stmt) -> String {
             let it = match iter {
                 raylang::ast::ForIter::Range { start, end } => format!("(range {} {})", dump_expr(start), dump_expr(end)),
                 raylang::ast::ForIter::In(e) => dump_expr(e),
+                // M40.2: `Iter` lo produce el lowering del checker; el parser (crudo) nunca lo emite.
+                raylang::ast::ForIter::Iter { expr, .. } => dump_expr(expr),
             };
             format!("(for {} {} {}){}", p, it, dump_block(body), pp)
         }
@@ -722,6 +724,8 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "oauth2.ray", "oauth2_demo.ray", // M23: cliente OAuth2 (importa http → bytes)
         "protobuf.ray", "protobuf_demo.ray", // M25: códec protobuf, usa `bytes` + bitops
         "http2.ray", "hpack.ray", "http2_demo.ray", // M26: HTTP/2 framing + HPACK, usa `bytes` + bitops
+        "iterador.ray", // M40.2: `impl Iterator<int> for …` — args de tipo en el trait de un impl,
+                        // aún no soportados por el parser auto-alojado (M14.2c).
     ];
     // Los ejemplos viven en subdirectorios por categoría (basics/, types/, web/, …) → se recorre
     // `examples/` **recursivamente**. Se saltan los directorios de ejemplos de MÓDULOS (multi-archivo,

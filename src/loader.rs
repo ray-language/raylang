@@ -362,6 +362,7 @@ fn shift_stmt(s: &mut Stmt, delta: usize) {
             match iter {
                 ForIter::Range { start, end } => { shift_expr(start, delta); shift_expr(end, delta); }
                 ForIter::In(e) => shift_expr(e, delta),
+                ForIter::Iter { expr, .. } => shift_expr(expr, delta),
             }
             shift_block(body, delta);
         }
@@ -918,6 +919,7 @@ impl<'a> Resolver<'a> {
                         self.resolve_expr(end, src, module)?;
                     }
                     ForIter::In(e) => self.resolve_expr(e, src, module)?,
+                    ForIter::Iter { expr, .. } => self.resolve_expr(expr, src, module)?,
                 }
                 self.scopes.push(std::collections::HashSet::new()); // ámbito de la(s) variable(s) del for
                 match pat {
@@ -1255,6 +1257,7 @@ impl<'a> TypeRewriter<'a> {
                 match iter {
                     ForIter::Range { start, end } => { self.rewrite_expr(start); self.rewrite_expr(end); }
                     ForIter::In(e) => self.rewrite_expr(e),
+                    ForIter::Iter { expr, .. } => self.rewrite_expr(expr),
                 }
                 self.rewrite_block(body);
             }

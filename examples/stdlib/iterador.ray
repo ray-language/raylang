@@ -1,0 +1,65 @@
+// Iteradores de usuario (M40.2): un tipo que implementa `Iterator<T>` es iterable con `for x in it`.
+// El bucle llama a `next(self) -> Option<T>` hasta `None`, ligando cada elemento. Como los structs
+// son valores de referencia con campos mutables, `next` avanza el estado del propio iterador.
+
+// Un contador de `desde` (inclusivo) a `hasta` (exclusivo) que produce enteros.
+struct Rango {
+    actual: int,
+    hasta: int,
+}
+
+impl Iterator<int> for Rango {
+    fn next(self) -> Option<int> {
+        if (self.actual < self.hasta) {
+            let v = self.actual;
+            self.actual = self.actual + 1;
+            Option.Some(v)
+        } else {
+            Option.None
+        }
+    }
+}
+
+fn rango(desde: int, hasta: int) -> Rango {
+    Rango { actual: desde, hasta: hasta }
+}
+
+// Un iterador de Fibonacci acotado: produce los primeros `n` términos.
+struct Fibs {
+    a: int,
+    b: int,
+    quedan: int,
+}
+
+impl Iterator<int> for Fibs {
+    fn next(self) -> Option<int> {
+        if (self.quedan <= 0) {
+            Option.None
+        } else {
+            let actual = self.a;
+            self.a = self.b;
+            self.b = actual + self.b;
+            self.quedan = self.quedan - 1;
+            Option.Some(actual)
+        }
+    }
+}
+
+fn main() -> int {
+    // Suma de los cuadrados de 1..6 = 1 + 4 + 9 + 16 + 25 = 55.
+    var suma = 0;
+    for n in rango(1, 6) {
+        suma = suma + n * n;
+    }
+    print(suma);
+
+    // Primeros 10 términos de Fibonacci.
+    var texto = "fib:";
+    let fibs = Fibs { a: 0, b: 1, quedan: 10 };
+    for f in fibs {
+        texto = texto + " " + to_string(f);
+    }
+    print(texto);
+
+    suma
+}

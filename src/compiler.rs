@@ -388,6 +388,36 @@ impl<'a> Compiler<'a> {
                     })?;
                 }
             }
+            // M40.2: iterador de usuario. Evaluamos el iterable una vez (semántica de referencia →
+            // `next` muta su estado) y llamamos a `next` hasta que devuelva `None` (tag 1 de Option).
+            ForIter::Iter { expr, next_fn } => {
+                let name = match pat { ForPat::Single(n) => n.clone(), _ => unreachable!("checker: un nombre") };
+                let &idx = self.indices.get(next_fn).expect("el checker garantiza next");
+                self.emit_expr(expr)?;
+                let it_slot = self.declare_local("$it");
+                self.emit(OpCode::InitLocal(it_slot), line, col);
+                let opt_slot = self.declare_local("$opt");
+                let x_slot = self.declare_local(&name);
+                let loop_start = self.cur().chunk.code.len();
+                // opt = next(it)
+                self.emit(OpCode::GetLocal(it_slot), line, col);
+                self.emit(OpCode::Call(idx, 1), line, col);
+                self.emit(OpCode::InitLocal(opt_slot), line, col);
+                // ¿es Some (tag 0)? Si no (None), salimos.
+                self.emit(OpCode::GetLocal(opt_slot), line, col);
+                self.emit(OpCode::EnumTagEq(0), line, col);
+                let exit = self.emit(OpCode::JumpIfFalse(0), line, col);
+                self.emit(OpCode::Pop, line, col); // descartar el bool true
+                // x = payload[0]
+                self.emit(OpCode::GetLocal(opt_slot), line, col);
+                self.emit(OpCode::GetEnumField(0), line, col);
+                self.emit(OpCode::InitLocal(x_slot), line, col);
+                self.emit_block(body)?;
+                self.emit(OpCode::Pop, line, col); // descartar el valor del cuerpo
+                self.emit(OpCode::Jump(loop_start), line, col);
+                self.patch_jump(exit);
+                self.emit(OpCode::Pop, line, col); // descartar el bool false
+            }
         }
         Ok(())
     }

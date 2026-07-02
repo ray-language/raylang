@@ -134,6 +134,8 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // resto de bajadas: el resultado es una llamada ordinaria a la función manglada del método.
     lower_operators(program, &checker.op_sites);
     lower_ufcs(program, &checker.ufcs_sites);
+    // M40.2: reescribir `for x in it` (sobre un iterador) a `ForIter::Iter`, con el `next` manglado.
+    lower_for_iters(program, &checker.for_iter_sites);
     // Paso 5 (M9.2): añadir los parámetros-diccionario a las funciones con bounds y los
     // argumentos correspondientes en cada sitio de llamada. Diccionarios = valores función;
     // el runtime no cambia.
@@ -382,6 +384,9 @@ struct Checker {
     /// (`Tipo#metodo`). Tras verificar, `lower_ufcs` reescribe `recv.f(args)` a
     /// `destino(recv, args)`, de modo que el intérprete y la VM solo ven llamadas.
     ufcs_sites: HashMap<(usize, usize, String), String>,
+    /// M40.2: `for x in it` sobre un iterador → posición del `for` (línea, col) → nombre manglado de
+    /// su método `next`. Un pase lo baja reescribiendo `ForIter::In` a `ForIter::Iter`.
+    for_iter_sites: HashMap<(usize, usize), String>,
     /// M28.1: sitios de sobrecarga de operadores. Clave `(línea, col, "Add"/"Sub"/…)` → función manglada
     /// del método del operador (`Vec2#add`). El lowering reescribe el `Binary`/`Unary` a una llamada.
     op_sites: HashMap<(usize, usize, String), String>,
@@ -481,6 +486,7 @@ impl Checker {
             current_return: Type::Unit,
             type_params: HashSet::new(),
             ufcs_sites: HashMap::new(),
+            for_iter_sites: HashMap::new(),
             op_sites: HashMap::new(),
             trait_tparams: HashMap::new(),
             from_impls: HashMap::new(),
@@ -856,6 +862,11 @@ impl Checker {
             // objetivo y se comparan las firmas, para que `Caja<T>` y un parámetro `x: T`
             // normalicen `T` a `Var` (en vez de `Struct("T")`). Se limpia al terminar el bucle.
             self.type_params = imp.type_params.iter().cloned().collect();
+            // M40.2: los parámetros de tipo del TRAIT también entran en ámbito, para que
+            // `resolve_type` normalice `T` (en `Option<T>` del método del trait) a `Var` y la σ del
+            // trait (`T`→`int`) lo sustituya al comparar las firmas de un `impl Iterator<int>`.
+            let ttp = self.trait_tparams.get(&imp.trait_name).cloned().unwrap_or_default();
+            self.type_params.extend(ttp);
             self.check_impl_bounds(imp)?;
             let target = self.resolve_type(&imp.target);
             self.ensure_impl_target(&target, &imp.type_params, imp.line, imp.col)?;
@@ -893,6 +904,13 @@ impl Checker {
                     )));
                 }
             }
+            // σ del trait (M40.2): sus parámetros de tipo → los argumentos del impl (`T`→`int` para
+            // `impl Iterator<int>`). Vacío para un trait ordinario (M9) → sin efecto.
+            let trait_tp = self.trait_tparams.get(&imp.trait_name).cloned().unwrap_or_default();
+            let trait_sigma: HashMap<String, Type> = trait_tp
+                .into_iter()
+                .zip(imp.trait_args.iter().map(|t| self.resolve_type(t)))
+                .collect();
             // ...ni sobran (cada método del impl pertenece al trait), y las firmas casan.
             for m in &imp.methods {
                 let tm = match trait_methods.iter().find(|tm| tm.name == m.name) {
@@ -901,7 +919,7 @@ impl Checker {
                         "el trait '{}' no declara un método '{}'", imp.trait_name, m.name
                     ))),
                 };
-                self.check_method_sig(tm, m, &target)?;
+                self.check_method_sig(tm, m, &target, &trait_sigma)?;
                 let mangled = mangle(&key, &m.name);
                 if self.methods.contains_key(&(key.clone(), m.name.clone())) {
                     return Err(self.err(m.line, m.col, format!(
@@ -1048,15 +1066,19 @@ impl Checker {
 
     /// Comprueba que la firma de un método de impl coincide con la del trait, tras
     /// sustituir `Self` por el tipo implementador en ambas (M9.1).
-    fn check_method_sig(&self, tm: &MethodSig, m: &Function, target: &Type) -> Result<(), TypeError> {
+    fn check_method_sig(&self, tm: &MethodSig, m: &Function, target: &Type, trait_sigma: &HashMap<String, Type>) -> Result<(), TypeError> {
         if tm.params.len() != m.params.len() {
             return Err(self.err(m.line, m.col, format!(
                 "el método '{}' toma {} parámetro(s) (incluido self), pero el trait pide {}",
                 m.name, m.params.len(), tm.params.len()
             )));
         }
+        // Los tipos del trait se sustituyen: `Self`→target y los parámetros de tipo del trait por los
+        // argumentos del impl (`T`→`int` para `impl Iterator<int>`, M40.2). Se resuelve ANTES de la σ
+        // del trait: `resolve_type` normaliza `T` (`Struct`) a `Var`, que es lo que `subst` sustituye.
+        let esperado = |ty: &Type| subst(&self.resolve_type(&subst_self(ty, target)), trait_sigma);
         for (i, (tp, ip)) in tm.params.iter().zip(&m.params).enumerate() {
-            let want = self.resolve_type(&subst_self(&tp.ty, target));
+            let want = esperado(&tp.ty);
             let got = self.resolve_type(&subst_self(&ip.ty, target));
             if want != got {
                 return Err(self.err(ip.line, ip.col, format!(
@@ -1065,7 +1087,7 @@ impl Checker {
                 )));
             }
         }
-        let want_ret = self.resolve_type(&subst_self(&tm.return_type, target));
+        let want_ret = esperado(&tm.return_type);
         let got_ret = self.resolve_type(&subst_self(&m.return_type, target));
         if want_ret != got_ret {
             return Err(self.err(m.line, m.col, format!(
@@ -1224,10 +1246,21 @@ impl Checker {
                             }
                             (Type::Map(_, _), ForPat::Single(_)) => return Err(self.err(stmt.line, stmt.col,
                                 "iterar un Map requiere una tupla `(clave, valor)`".into())),
+                            // M40.2: un tipo que implementa `Iterator<T>` → se itera llamando a `next`.
+                            (other, ForPat::Single(n)) => match self.iterator_de(other) {
+                                Some((elem, next_fn)) => {
+                                    self.for_iter_sites.insert((stmt.line, stmt.col), next_fn);
+                                    vec![(n.clone(), elem)]
+                                }
+                                None => return Err(self.err(stmt.line, stmt.col, format!(
+                                    "no se puede iterar sobre {} (se esperaba un arreglo, string, Map o un Iterator)", other))),
+                            },
                             (other, _) => return Err(self.err(stmt.line, stmt.col, format!(
                                 "no se puede iterar sobre {} (se esperaba un arreglo, string o Map)", other))),
                         }
                     }
+                    // M40.2: `Iter` lo produce el lowering DESPUÉS del chequeo; aquí nunca aparece.
+                    ForIter::Iter { .. } => unreachable!("ForIter::Iter no existe durante el chequeo"),
                 };
                 self.push_scope();
                 for (n, t) in bindings {
@@ -1809,6 +1842,22 @@ impl Checker {
     /// Comprueba un patrón contra el enum del escrutinio. Devuelve las variables que
     /// liga (nombre, tipo) para declararlas en el cuerpo del brazo. Actualiza el
     /// conjunto de variantes cubiertas y marca si el patrón es catch-all.
+    /// Si `ty` implementa `Iterator<T>` (M40.2), devuelve `(T, next_manglado)`: el tipo de elemento
+    /// (el argumento de `Option` en el retorno de `next`) y el nombre manglado de su método `next`,
+    /// para que `for x in it` lo consuma. `None` si el tipo no es un iterador.
+    fn iterator_de(&self, ty: &Type) -> Option<(Type, String)> {
+        let key = type_key_of(ty)?;
+        if !self.impl_traits.contains(&(key.clone(), "Iterator".to_string())) {
+            return None;
+        }
+        let next_fn = self.methods.get(&(key, "next".to_string()))?.clone();
+        // El elemento es el argumento de `Option` en el retorno de `next` (`Option<T>` → `T`).
+        match &self.functions.get(&next_fn)?.ret {
+            Type::Enum(n, args) if n == "Option" && args.len() == 1 => Some((args[0].clone(), next_fn)),
+            _ => None,
+        }
+    }
+
     /// Verifica que `pat` casa con un valor de tipo `ty` y recolecta sus bindings (nombre → tipo).
     /// Recursivo (M40.1c): un sub-patrón de variante puede ser otra variante anidada; su enum se
     /// resuelve del **tipo** del sub-valor (el payload sustituido), no de un parámetro externo.
@@ -3306,6 +3355,7 @@ fn resolve_block(block: &mut Block, enums: &HashSet<String>) {
                 match iter {
                     ForIter::Range { start, end } => { resolve_expr(start, enums); resolve_expr(end, enums); }
                     ForIter::In(e) => resolve_expr(e, enums),
+                    ForIter::Iter { expr, .. } => resolve_expr(expr, enums),
                 }
                 resolve_block(body, enums);
             }
@@ -3446,7 +3496,10 @@ fn mangle_from(target_key: &str, source_key: &str) -> String {
 /// tratan aparte: su método de conversión se inyecta con un nombre manglado por origen y no
 /// entra en la tabla de despacho por punto (no tiene `self`).
 fn is_typed_trait_impl(imp: &ImplBlock) -> bool {
-    !imp.trait_args.is_empty()
+    // Solo `From<S>` usa el mecanismo de **conversión** (su método `desde` es asociado —sin `self`—,
+    // consumido por `?`). Otros traits parametrizados (p. ej. `Iterator<T>`, M40.2) van por el
+    // despacho normal por punto: sus métodos con `self` se registran en la tabla de métodos.
+    !imp.trait_args.is_empty() && imp.trait_name == "From"
 }
 
 /// M28.3b: ¿el operador binario produce un valor del mismo tipo que sus operandos? (Aritméticos y
@@ -3713,6 +3766,7 @@ fn freshen_block(block: &mut Block, next: &mut usize) {
                 match iter {
                     ForIter::Range { start, end } => { freshen_expr(start, next); freshen_expr(end, next); }
                     ForIter::In(e) => freshen_expr(e, next),
+                    ForIter::Iter { expr, .. } => freshen_expr(expr, next),
                 }
                 freshen_block(body, next);
             }
@@ -3817,6 +3871,7 @@ fn renumber_block(block: &mut Block, next: &mut usize) {
                 match iter {
                     ForIter::Range { start, end } => { renumber_expr(start, next); renumber_expr(end, next); }
                     ForIter::In(e) => renumber_expr(e, next),
+                    ForIter::Iter { expr, .. } => renumber_expr(expr, next),
                 }
                 renumber_block(body, next);
             }
@@ -3899,6 +3954,76 @@ fn renumber_expr(expr: &mut Expr, next: &mut usize) {
     }
 }
 
+/// M40.2: baja `for x in it` (sobre un iterador) reescribiendo `ForIter::In` a `ForIter::Iter` con
+/// el nombre manglado de `next`, en cada `for` cuya `(línea, col)` esté en `sites`. Recorre todo el
+/// AST (bloques anidados en if/while/match/fn) para alcanzar cualquier `for`.
+fn lower_for_iters(program: &mut Program, sites: &HashMap<(usize, usize), String>) {
+    if sites.is_empty() {
+        return;
+    }
+    for f in &mut program.functions {
+        lower_for_iters_block(&mut f.body, sites);
+    }
+}
+
+fn lower_for_iters_block(block: &mut Block, sites: &HashMap<(usize, usize), String>) {
+    for stmt in &mut block.statements {
+        let pos = (stmt.line, stmt.col);
+        match &mut stmt.kind {
+            StmtKind::For { iter, body, .. } => {
+                if let (Some(next_fn), ForIter::In(_)) = (sites.get(&pos), &*iter) {
+                    let viejo = std::mem::replace(iter, ForIter::In(Expr { kind: ExprKind::Int(0), line: 0, col: 0 }));
+                    if let ForIter::In(e) = viejo {
+                        *iter = ForIter::Iter { expr: e, next_fn: next_fn.clone() };
+                    }
+                }
+                match iter {
+                    ForIter::Range { start, end } => { lower_for_iters_expr(start, sites); lower_for_iters_expr(end, sites); }
+                    ForIter::In(e) => lower_for_iters_expr(e, sites),
+                    ForIter::Iter { expr, .. } => lower_for_iters_expr(expr, sites),
+                }
+                lower_for_iters_block(body, sites);
+            }
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_for_iters_expr(value, sites),
+            StmtKind::Assign { target, value } => { lower_for_iters_expr(target, sites); lower_for_iters_expr(value, sites); }
+            StmtKind::Return { value } => { if let Some(v) = value { lower_for_iters_expr(v, sites); } }
+            StmtKind::Expr(e) => lower_for_iters_expr(e, sites),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        lower_for_iters_expr(t, sites);
+    }
+}
+
+fn lower_for_iters_expr(expr: &mut Expr, sites: &HashMap<(usize, usize), String>) {
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } | ExprKind::Try(inner) => lower_for_iters_expr(inner, sites),
+        ExprKind::Binary { left, right, .. } => { lower_for_iters_expr(left, sites); lower_for_iters_expr(right, sites); }
+        ExprKind::Call { callee, args } => { lower_for_iters_expr(callee, sites); for a in args { lower_for_iters_expr(a, sites); } }
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { lower_for_iters_expr(e, sites); } }
+        ExprKind::Index { array, index } => { lower_for_iters_expr(array, sites); lower_for_iters_expr(index, sites); }
+        ExprKind::StructLit { fields, .. } => { for (_, e) in fields { lower_for_iters_expr(e, sites); } }
+        ExprKind::EnumLit { args, .. } => { for a in args { lower_for_iters_expr(a, sites); } }
+        ExprKind::Field { object, .. } => lower_for_iters_expr(object, sites),
+        ExprKind::Func(fe) => lower_for_iters_block(&mut fe.body, sites),
+        ExprKind::Match { scrutinee, arms } => {
+            lower_for_iters_expr(scrutinee, sites);
+            for arm in arms {
+                lower_for_iters_expr(&mut arm.body, sites);
+                if let Some(g) = &mut arm.guard { lower_for_iters_expr(g, sites); }
+            }
+        }
+        ExprKind::If { cond, then_branch, else_branch } => {
+            lower_for_iters_expr(cond, sites);
+            lower_for_iters_block(then_branch, sites);
+            if let Some(e) = else_branch { lower_for_iters_expr(e, sites); }
+        }
+        ExprKind::While { cond, body } => { lower_for_iters_expr(cond, sites); lower_for_iters_block(body, sites); }
+        ExprKind::Block(b) => lower_for_iters_block(b, sites),
+        _ => {}
+    }
+}
+
 /// ¿El tipo menciona `Self` (M9.3b)? Cubre `SelfType` y `Struct("Self")`, recursivamente.
 /// Lo usa la *object safety*: un método cuya firma (fuera del receptor) usa `Self` no es
 /// invocable sobre un trait object.
@@ -3972,6 +4097,7 @@ fn lower_ufcs_block(block: &mut Block, sites: &SiteMap) {
                 match iter {
                     ForIter::Range { start, end } => { lower_ufcs_expr(start, sites); lower_ufcs_expr(end, sites); }
                     ForIter::In(e) => lower_ufcs_expr(e, sites),
+                    ForIter::Iter { expr, .. } => lower_ufcs_expr(expr, sites),
                 }
                 lower_ufcs_block(body, sites);
             }
@@ -4110,6 +4236,7 @@ fn lower_uintlit_block(block: &mut Block, sites: &UIntLitMap) {
                 match iter {
                     ForIter::Range { start, end } => { lower_uintlit_expr(start, sites); lower_uintlit_expr(end, sites); }
                     ForIter::In(e) => lower_uintlit_expr(e, sites),
+                    ForIter::Iter { expr, .. } => lower_uintlit_expr(expr, sites),
                 }
                 lower_uintlit_block(body, sites);
             }
@@ -4201,6 +4328,7 @@ fn lower_try_block(block: &mut Block, sites: &TryConvMap) {
                 match iter {
                     ForIter::Range { start, end } => { lower_try_expr(start, sites); lower_try_expr(end, sites); }
                     ForIter::In(e) => lower_try_expr(e, sites),
+                    ForIter::Iter { expr, .. } => lower_try_expr(expr, sites),
                 }
                 lower_try_block(body, sites);
             }
@@ -4316,6 +4444,7 @@ fn lower_operators_block(block: &mut Block, sites: &SiteMap) {
                 match iter {
                     ForIter::Range { start, end } => { lower_operators_expr(start, sites); lower_operators_expr(end, sites); }
                     ForIter::In(e) => lower_operators_expr(e, sites),
+                    ForIter::Iter { expr, .. } => lower_operators_expr(expr, sites),
                 }
                 lower_operators_block(body, sites);
             }
@@ -4480,6 +4609,7 @@ fn lower_dict_calls_block(block: &mut Block, sites: &DictSites) {
                 match iter {
                     ForIter::Range { start, end } => { lower_dict_calls_expr(start, sites); lower_dict_calls_expr(end, sites); }
                     ForIter::In(e) => lower_dict_calls_expr(e, sites),
+                    ForIter::Iter { expr, .. } => lower_dict_calls_expr(expr, sites),
                 }
                 lower_dict_calls_block(body, sites);
             }
@@ -4655,6 +4785,7 @@ fn lower_dyn_block(block: &mut Block, coercions: &CoercionMap, dispatch: &Dispat
                 match iter {
                     ForIter::Range { start, end } => { lower_dyn_expr(start, coercions, dispatch, upcasts, tm, counter); lower_dyn_expr(end, coercions, dispatch, upcasts, tm, counter); }
                     ForIter::In(e) => lower_dyn_expr(e, coercions, dispatch, upcasts, tm, counter),
+                    ForIter::Iter { expr, .. } => lower_dyn_expr(expr, coercions, dispatch, upcasts, tm, counter),
                 }
                 lower_dyn_block(body, coercions, dispatch, upcasts, tm, counter);
             }

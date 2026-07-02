@@ -129,9 +129,10 @@ const    = 'const' IDENT ':' tipo '=' literal ';' ;
   cobertura del impl debe ser exacta (ni métodos de más ni de menos, firmas idénticas con
   `Self` sustituido). Un impl puede ser **genérico** (`impl<T: B> Trait for Caja<T>`), aplicado
   exactamente a los parámetros propios; a lo sumo un impl por `(constructor, trait)`.
-- Los **traits con parámetros de tipo** (`trait From<S>`) existen con semántica limitada: hoy
-  solo `From<S> { fn desde(origen: S) -> Self; }` alimenta la conversión de `?` (§6.7); usarlos
-  en bounds o `dyn` es error.
+- Los **traits con parámetros de tipo** (`trait From<S>`, `trait Iterator<T>`) existen con
+  semántica limitada: `From<S> { fn desde(origen: S) -> Self; }` alimenta la conversión de `?`
+  (§6.7), e `Iterator<T> { fn next(self) -> Option<T>; }` habilita `for x in it` (§5) por despacho
+  por punto ordinario. Usar un trait parametrizado del usuario en bounds o `dyn` es error.
 - `const` de nivel superior: el valor es un **literal** (o literal negado).
 
 ## 5. Sentencias
@@ -159,8 +160,9 @@ iterable  = expresion [ '..' expresion ] ;
   referenciado (§8); `var` gobierna la *ligadura*, no el objeto. `s[i] = c` sobre string es
   error (inmutable).
 - **`for`** itera: arreglo (elemento), rango `a..b` (enteros, `a` inclusivo, `b` exclusivo; el
-  rango solo existe en la cabecera del `for`), string (`char`) y `Map` (tupla `(clave, valor)`
-  en orden de clave — determinista). No hay protocolo de iteración de usuario (diferido).
+  rango solo existe en la cabecera del `for`), string (`char`), `Map` (tupla `(clave, valor)`
+  en orden de clave — determinista) y cualquier tipo que implemente **`Iterator<T>`** (§7): el
+  bucle llama a `next(self) -> Option<T>` hasta `None`, ligando cada elemento.
 - **`return`** sale de la función envolvente; `return;` devuelve unit. El valor de una función
   también puede *caer* del bloque (retorno implícito: la expresión final sin `;`).
 
@@ -338,7 +340,7 @@ prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el 
 - **Red**: `tcp_connect tcp_listen tcp_accept local_port socket_read socket_write
   socket_read_bytes socket_write_bytes udp_* tls_connect tls_accept tls_connect_h2`.
 - **Concurrencia**: §9. — **Traits del prelude**: `Eq(igual) Show(mostrar) Ord(menor)
-  Add/Sub/Mul/Div/Neg From<S>(desde)` y `Option<T>`/`Result<T,E>`.
+  Add/Sub/Mul/Div/Neg From<S>(desde) Iterator<T>(next)` y `Option<T>`/`Result<T,E>`.
 
 **Decisiones de nombres, congeladas** (raylang **no tiene sobrecarga**; cada firma un nombre):
 `index_of` (string) vs `position` (arreglos); `fetch` (HTTP de la stdlib) porque `get` es de

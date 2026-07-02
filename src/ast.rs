@@ -460,6 +460,10 @@ pub enum ForPat {
 pub enum ForIter {
     Range { start: Expr, end: Expr },
     In(Expr),
+    /// `for x in it` sobre un tipo que implementa `Iterator<T>` (M40.2). El parser produce `In`; el
+    /// checker lo reescribe a esto cuando el iterable es un iterador, guardando el nombre manglado de
+    /// su método `next` (`Contador#next`). Los motores iteran llamando a `next` hasta `None`.
+    Iter { expr: Expr, next_fn: String },
 }
 
 /// Una expresión: produce un valor.
@@ -630,6 +634,7 @@ fn walk_block<'a>(block: &'a Block, acc: &mut Vec<&'a FnExpr>) {
                 match iter {
                     ForIter::Range { start, end } => { walk_expr(start, acc); walk_expr(end, acc); }
                     ForIter::In(e) => walk_expr(e, acc),
+                    ForIter::Iter { expr, .. } => walk_expr(expr, acc),
                 }
                 walk_block(body, acc);
             }

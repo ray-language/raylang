@@ -467,6 +467,29 @@ impl<'a> Interpreter<'a> {
                             _ => unreachable!("el checker garantiza arreglo/string/Map"),
                         }
                     }
+                    // M40.2: iterador de usuario. Evaluamos el iterable una vez (semántica de referencia
+                    // → `next` muta su estado interno) y llamamos a `next` hasta `None`.
+                    ForIter::Iter { expr, next_fn } => {
+                        let it = self.eval_expr(expr)?;
+                        let name = match pat { ForPat::Single(n) => n, _ => unreachable!("checker: un nombre") };
+                        let func = *self.functions.get(next_fn.as_str()).expect("el checker garantiza next");
+                        loop {
+                            let r = self.call_function(func, vec![it.clone()])?;
+                            let inst = match r {
+                                Value::Enum(rc) => rc,
+                                _ => unreachable!("next devuelve Option"),
+                            };
+                            if inst.variant == "None" {
+                                break;
+                            }
+                            let item = inst.payload[0].clone();
+                            self.scopes.push(HashMap::new());
+                            self.define(name, item);
+                            let r = self.exec_block(body);
+                            self.scopes.pop();
+                            r?;
+                        }
+                    }
                 }
                 Ok(())
             }

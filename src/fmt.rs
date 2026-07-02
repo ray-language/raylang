@@ -303,6 +303,7 @@ fn fmt_stmt(st: &Stmt, indent: usize) -> String {
             let it = match iter {
                 ForIter::Range { start, end } => format!("{}..{}", fmt_expr(start, 0), fmt_expr(end, 0)),
                 ForIter::In(e) => fmt_expr(e, 0),
+                ForIter::Iter { expr, .. } => fmt_expr(expr, 0),
             };
             format!("for {} in {} {}", p, it, fmt_block(body, indent))
         }

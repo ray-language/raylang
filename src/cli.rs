@@ -168,9 +168,10 @@ fn cmd_fetch(_args: &[String]) {
         println!("'{}' no declara dependencias", m.name);
         return;
     }
+    // `asegurar` resuelve el grafo COMPLETO (directas + transitivas) y devuelve cuántas descargó.
     match crate::deps::asegurar(&m) {
-        Ok(0) => println!("dependencias al día ({} en total)", m.dependencies.len()),
-        Ok(n) => println!("{n} dependencia(s) descargada(s); {} en total", m.dependencies.len()),
+        Ok(0) => println!("dependencias al día"),
+        Ok(n) => println!("{n} dependencia(s) descargada(s) (incluidas transitivas)"),
         Err(e) => {
             eprintln!("error descargando dependencias: {e}");
             process::exit(65);

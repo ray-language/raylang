@@ -82,35 +82,65 @@ fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     }
 }
 
-/// Asegura que todas las dependencias del manifiesto estén en la caché `.ray-deps/` y **verifica su
-/// integridad** contra el lockfile `ray.lock` (M39c-2b): descarga las que falten, y para cada una
-/// **recomputa su hash de contenido** y lo compara con el bloqueado — un desajuste (una dependencia
-/// cacheada modificada) es error de *supply-chain*. Actualiza `ray.lock`. Devuelve cuántas se
-/// descargaron en esta llamada (0 si estaban todas y verifican).
+/// Asegura que **todo el grafo** de dependencias (directas y **transitivas**, M39c-3) esté en la
+/// caché `.ray-deps/` y **verifica su integridad** contra `ray.lock` (M39c-2b). Es un BFS sobre el
+/// grafo: por cada paquete descargado se lee su propio `ray.toml` y se encolan SUS dependencias.
+/// Ciclos seguros (mapa de elegidos). Conflictos (mismo nombre, distinto spec): **MVS ligero** —el
+/// mayor tag semver de la misma URL, o error si no son comparables (caché plana: un slot por nombre)—.
+/// Para cada paquete recomputa el hash y lo compara con el bloqueado; un desajuste = *supply-chain*.
 pub fn asegurar(manifest: &Manifest) -> Result<usize, String> {
     let cache = manifest.root.join(".ray-deps");
-    let bloqueadas = leer_lock(&manifest.root)?; // nombre → entrada bloqueada
-    let mut nuevo_lock: Vec<LockEntry> = Vec::new();
-    let mut nuevas = 0;
+    let bloqueadas = leer_lock(&manifest.root)?;
 
-    for (nombre, spec_raw) in &manifest.dependencies {
-        let spec = parse_spec(spec_raw)?;
-        let dest = cache.join(nombre);
+    // BFS del grafo. `elegido` = spec resuelto por nombre (tras MVS); `cacheado` = spec que esta
+    // ejecución dejó en la caché (para re-descargar si un conflicto lo actualiza).
+    let mut elegido: std::collections::HashMap<String, GitSpec> = std::collections::HashMap::new();
+    let mut cacheado: std::collections::HashMap<String, GitSpec> = std::collections::HashMap::new();
+    let mut cola: std::collections::VecDeque<(String, GitSpec)> = std::collections::VecDeque::new();
+    let mut nuevas = 0usize;
+    for (n, s) in &manifest.dependencies {
+        cola.push_back((n.clone(), parse_spec(s)?));
+    }
 
-        // Descargar si falta. Para una dependencia ya cacheada, se lee su commit (si es un repo
-        // git; una colocada a mano —M39c-1— no lo es → commit vacío, el hash igual la verifica).
-        let commit = if dest.exists() {
-            rev_parse(&dest).unwrap_or_default()
-        } else {
-            eprintln!("  descargando {nombre} ({}@{})", spec.url, spec.git_ref);
-            nuevas += 1;
-            fetch(nombre, &spec, &dest)?
+    while let Some((nombre, spec)) = cola.pop_front() {
+        // Elegir el spec: nuevo, o MVS con el ya elegido si difieren (conflicto).
+        let elegido_spec = match elegido.get(&nombre) {
+            None => spec,
+            Some(prev) if *prev == spec => prev.clone(),
+            Some(prev) => mvs(&nombre, prev, &spec)?,
         };
+        let sin_cambio = elegido.get(&nombre) == Some(&elegido_spec);
+        elegido.insert(nombre.clone(), elegido_spec.clone());
+        if sin_cambio && cacheado.get(&nombre) == Some(&elegido_spec) {
+            continue; // ya procesado con este spec (dedup / ciclo)
+        }
 
-        // Hash de contenido de lo que hay ahora en la caché.
+        // Descargar (o re-descargar si esta ejecución tenía otra versión por un conflicto).
+        let dest = cache.join(&nombre);
+        if cacheado.get(&nombre) != Some(&elegido_spec) {
+            if cacheado.contains_key(&nombre) && dest.exists() {
+                let _ = std::fs::remove_dir_all(&dest); // upgrade dentro de esta resolución
+            }
+            if !dest.exists() {
+                eprintln!("  descargando {nombre} ({}@{})", elegido_spec.url, elegido_spec.git_ref);
+                fetch(&nombre, &elegido_spec, &dest)?;
+                nuevas += 1;
+            }
+            cacheado.insert(nombre.clone(), elegido_spec.clone());
+        }
+
+        // Dependencias transitivas: leer el `ray.toml` del paquete y encolarlas.
+        for (dn, ds) in deps_del_paquete(&dest)? {
+            cola.push_back((dn, parse_spec(&ds)?));
+        }
+    }
+
+    // Verificar el hash de cada paquete elegido contra el lock y reescribir `ray.lock`.
+    let mut nuevo_lock: Vec<LockEntry> = Vec::new();
+    for (nombre, spec) in &elegido {
+        let dest = cache.join(nombre);
+        let commit = rev_parse(&dest).unwrap_or_default();
         let hash = hash_package(&dest)?;
-
-        // Verificación: si estaba bloqueada con el MISMO spec, el hash debe coincidir.
         if let Some(b) = bloqueadas.get(nombre)
             && b.url == spec.url
             && b.git_ref == spec.git_ref
@@ -123,18 +153,73 @@ pub fn asegurar(manifest: &Manifest) -> Result<usize, String> {
                 b.hash, hash
             ));
         }
-
         nuevo_lock.push(LockEntry {
             name: nombre.clone(),
-            url: spec.url,
-            git_ref: spec.git_ref,
+            url: spec.url.clone(),
+            git_ref: spec.git_ref.clone(),
             commit,
             hash,
         });
     }
-
     escribir_lock(&manifest.root, &mut nuevo_lock)?;
     Ok(nuevas)
+}
+
+/// Selección de versión ante un conflicto (mismo nombre, distinto spec): con la **misma URL** y
+/// refs **semver** (`vX.Y.Z`/`X.Y.Z`), gana el mayor (la mínima versión que satisface a ambos, estilo
+/// Go-MVS reinterpretando `@vX` como "al menos vX"). Si las URLs difieren o los refs no son semver
+/// comparables, es error: la caché es plana (un solo slot por nombre) y no se puede reconciliar.
+fn mvs(nombre: &str, a: &GitSpec, b: &GitSpec) -> Result<GitSpec, String> {
+    if a.url == b.url
+        && let (Some(va), Some(vb)) = (semver(&a.git_ref), semver(&b.git_ref))
+    {
+        return Ok(if vb > va { b.clone() } else { a.clone() });
+    }
+    Err(format!(
+        "conflicto de versiones para la dependencia '{nombre}': se pide '{}@{}' y '{}@{}', \
+         irreconciliables (URLs distintas o refs no semver). Fija una sola versión.",
+        a.url, a.git_ref, b.url, b.git_ref
+    ))
+}
+
+/// Parsea un ref semver `vX.Y.Z` / `X.Y.Z` (ignora un sufijo de pre-release tras `-`) a `(mayor,
+/// menor, parche)`. `None` si no es semver (un commit, una rama…). Para ordenar en `mvs`.
+fn semver(git_ref: &str) -> Option<(u64, u64, u64)> {
+    let nucleo = git_ref.strip_prefix('v').unwrap_or(git_ref);
+    let nucleo = nucleo.split('-').next().unwrap_or(nucleo); // corta pre-release
+    let mut it = nucleo.split('.');
+    let mayor = it.next()?.parse().ok()?;
+    let menor = it.next()?.parse().ok()?;
+    let parche = it.next().unwrap_or("0").parse().ok()?;
+    Some((mayor, menor, parche))
+}
+
+/// Las dependencias declaradas en el `ray.toml` de un paquete descargado (su `[dependencies]`), para
+/// la resolución transitiva. Vacío si el paquete no tiene `ray.toml` (paquete hoja). Lenient: no
+/// exige `name`/`version` (a un paquete-dependencia solo le miramos sus dependencias).
+fn deps_del_paquete(pkg_dir: &Path) -> Result<Vec<(String, String)>, String> {
+    let Ok(fuente) = std::fs::read_to_string(pkg_dir.join("ray.toml")) else {
+        return Ok(Vec::new());
+    };
+    let mut deps = Vec::new();
+    let mut en_deps = false;
+    for linea in fuente.lines() {
+        let linea = linea.split_once('#').map_or(linea, |(a, _)| a).trim();
+        if linea.is_empty() {
+            continue;
+        }
+        if let Some(sec) = linea.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            en_deps = sec.trim() == "dependencies";
+            continue;
+        }
+        if en_deps
+            && let Some((clave, valor)) = linea.split_once('=')
+            && let Some(val) = valor.trim().strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+        {
+            deps.push((clave.trim().to_string(), val.to_string()));
+        }
+    }
+    Ok(deps)
 }
 
 // ── Hash de contenido de un paquete ──────────────────────────────────────────────────
@@ -283,5 +368,29 @@ mod tests {
         assert!(parse_spec("https://x/geo@v1").unwrap_err().contains("git+"));
         assert!(parse_spec("git+https://x/geo").unwrap_err().contains("no fija una versión"));
         assert!(parse_spec("git+@v1").unwrap_err().contains("mal formada"));
+    }
+
+    #[test]
+    fn parsea_semver() {
+        assert_eq!(semver("v1.2.3"), Some((1, 2, 3)));
+        assert_eq!(semver("1.2"), Some((1, 2, 0)));
+        assert_eq!(semver("v2.0.0-rc1"), Some((2, 0, 0))); // corta el pre-release
+        assert_eq!(semver("main"), None);
+        assert_eq!(semver("abc123def"), None); // un commit no es semver
+    }
+
+    #[test]
+    fn mvs_elige_o_falla() {
+        let a = GitSpec { url: "u".into(), git_ref: "v1.0.0".into() };
+        let b = GitSpec { url: "u".into(), git_ref: "v2.1.0".into() };
+        // Misma URL, semver → gana el mayor.
+        assert_eq!(mvs("x", &a, &b).unwrap(), b);
+        assert_eq!(mvs("x", &b, &a).unwrap(), b);
+        // URLs distintas → error (caché plana, un slot por nombre).
+        let c = GitSpec { url: "otra".into(), git_ref: "v3.0.0".into() };
+        assert!(mvs("x", &a, &c).unwrap_err().contains("conflicto"));
+        // Ref no semver → error.
+        let d = GitSpec { url: "u".into(), git_ref: "main".into() };
+        assert!(mvs("x", &a, &d).unwrap_err().contains("conflicto"));
     }
 }

@@ -168,3 +168,57 @@ fn la_verificacion_detecta_manipulacion() {
     assert_eq!(code, 65, "una dependencia manipulada aborta\n{err}");
     assert!(err.contains("ray.lock") && err.contains("contenido cambió"), "{err}");
 }
+
+// ── M39c-3: dependencias transitivas ──────────────────────────────────────────────────
+
+/// Publica un paquete con su propio `ray.toml` que declara dependencias (para las transitivas).
+/// `deps` son pares `(nombre, spec)`.
+fn publicar_con_deps(base: &Path, nombre: &str, mod_ray: &str, deps: &[(&str, &Path)]) -> std::path::PathBuf {
+    let repo = base.join(format!("{nombre}-repo"));
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join("mod.ray"), mod_ray).unwrap();
+    let mut toml = format!("[package]\nname = \"{nombre}\"\nversion = \"1.0.0\"\n\n[dependencies]\n");
+    for (dn, drepo) in deps {
+        toml.push_str(&format!("{dn} = \"git+file://{}@v1.0\"\n", drepo.display()));
+    }
+    std::fs::write(repo.join("ray.toml"), toml).unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "v1"]);
+    git(&repo, &["tag", "v1.0"]);
+    repo
+}
+
+#[test]
+fn resuelve_dependencias_transitivas() {
+    let base = tmp("transitivas");
+    // mathx (hoja) ← geo (depende de mathx) ← app.
+    let mathx = publicar(&base, "mathx", "pub fn add10(x: int) -> int { x + 10 }\n");
+    let geo = publicar_con_deps(
+        &base,
+        "geo",
+        "from mathx import add10;\npub fn calc(x: int) -> int { add10(x) * 2 }\n",
+        &[("mathx", &mathx)],
+    );
+    let app = app_con_dep(
+        &base,
+        "geo",
+        &geo,
+        "from geo import calc;\nfn main() -> int { print(calc(5)); 0 }\n",
+    );
+
+    // fetch trae geo Y su transitiva mathx.
+    let (out, err, code) = ray(&app, &["fetch"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("descargada"), "{out}");
+    assert!(app.join(".ray-deps/geo/mod.ray").is_file(), "geo en la caché");
+    assert!(app.join(".ray-deps/mathx/mod.ray").is_file(), "la transitiva mathx también");
+
+    // run: geo usa mathx → calc(5) = (5+10)*2 = 30.
+    let (out, err, _code) = ray(&app, &["run"]);
+    assert!(out.contains("30"), "usa la cadena app→geo→mathx\n{out}\n{err}");
+
+    // El lock incluye AMBOS paquetes.
+    let lock = std::fs::read_to_string(app.join("ray.lock")).unwrap();
+    assert!(lock.contains("[geo]") && lock.contains("[mathx]"), "{lock}");
+}

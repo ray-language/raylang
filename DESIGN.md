@@ -5069,5 +5069,20 @@ descargó y que **no se manipuló** después. Es lo que da el lockfile.
 Tests (`deps_cli.rs`): `fetch` genera el lock con hash/commit; `run` re-verifica sin error; manipular
 un archivo cacheado → aborta (65) con el mensaje de supply-chain. Vectores NIST en `sha256.rs`.
 
-**Cierra el grueso de M39c.** Pendiente (M39c-3, opcional): dependencias **transitivas** (un paquete
-con sus propias deps) + resolución semver de versión-mínima estilo Go (hoy solo deps directas fijadas).
+### 41.6 M39c-3 — dependencias transitivas + resolución de conflictos
+
+Un paquete puede tener **sus propias dependencias** (su `ray.toml` con `[dependencies]`). `asegurar`
+pasa de iterar las deps directas a un **BFS sobre el grafo**: por cada paquete descargado lee su
+`ray.toml` (lenient, `deps_del_paquete`) y encola SUS dependencias, hasta agotar el grafo. Todo va a
+la **caché plana** `.ray-deps/<nombre>/` (un slot por nombre) — el loader ya las encuentra a todas.
+
+- **Ciclos y dedup**: un mapa `elegido` (nombre → spec resuelto) cierra los ciclos y evita re-procesar.
+- **Conflictos** (el mismo nombre pedido con specs distintos): como la caché es plana, hay que elegir
+  UNA versión. **MVS ligero** (`mvs`): con la misma URL y refs **semver** (`vX.Y.Z`), gana el mayor
+  (reinterpretando `@vX` como "al menos vX", estilo Go-MVS); si un conflicto sube la versión ya
+  cacheada, se re-descarga. URLs distintas o refs no-semver (rama/commit) → **error** (irreconciliables).
+- El lock (M39c-2b) registra **todo el grafo** (directas + transitivas), cada uno con su hash.
+
+Tests: `resolve_dependencias_transitivas` (cadena app→geo→mathx, offline; el lock incluye ambos) +
+unitarios de `semver`/`mvs`. **M39c COMPLETO** (gestor de paquetes: cápsula → git → lock → transitivas).
+Diferido: versión-mínima con RANGOS de verdad (nuestras specs son refs exactas), `ray update`, re-exports.

@@ -32,13 +32,17 @@ baja a un bucle contado con locales sintéticas (`$idx`, `$len`, `$arr`…).
 contextual. Se resolvió consumiendo el nuevo token pero **conservando el mensaje de error antiguo**, para
 que el oráculo del parser auto-alojado (que todavía trata `for` como identificador) siguiera cuadrando.
 
-## Interpolación: `f"n = {expr}"`
+## Interpolación: `"n = ${expr}"`
 
-El prefijo `f"…"` (como `b"…"` de bytes) marca una cadena interpolable; `"…"` normal **no** interpola.
-Esta decisión no es cosmética: mucho código —JSON a mano, HPACK— usa `{` como carácter literal, y hacer
-que todo `"…"` interpolara los habría roto (lo destapó el micro-framework web). El lexer parte la cadena
-en fragmentos (`InterpPart`), el parser re-lexea y re-parsea cada `{expr}` y lo desazucara a
-`+ to_string(expr)`; `{{`/`}}` escapan las llaves.
+Cualquier cadena interpola: `${expr}` incrusta el valor de una expresión, sin prefijo. El lexer parte la
+cadena en fragmentos (`InterpPart`), el parser re-lexea y re-parsea cada `${expr}` y lo desazucara a
+`+ to_string(expr)`.
+
+**La clave está en el marcador `$`** (rediseñado después de M39c; antes era el prefijo `f"…{x}…"` estilo
+Python). El `$` solo es especial **seguido de `{`**: `"$5"`, `"$PATH"` y —lo importante— `"{ … }"` (JSON a
+mano, HPACK, que usan `{` como carácter literal a mansalva) siguen siendo literales **sin escape**. Solo un
+`${` literal necesita escaparse, con `\$`. Así se gana la ergonomía de "interpolar sin recordar prefijo" sin
+la fragilidad del `{` siempre-especial de Python, que obligaba a doblar `{{`/`}}` en todo ese código.
 
 ## Casts: `x as int`
 

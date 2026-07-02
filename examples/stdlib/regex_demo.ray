@@ -10,17 +10,17 @@ fn si(b: bool) -> string {
 }
 
 fn caso_full(pat: string, txt: string) {
-    print(f"full  /{pat}/ ~ \"{txt}\" = {si(full_match(pat, txt))}");
+    print("full  /${pat}/ ~ \"${txt}\" = ${si(full_match(pat, txt))}");
 }
 
 fn caso_search(pat: string, txt: string) {
-    print(f"search/{pat}/ ~ \"{txt}\" = {si(search(pat, txt))}");
+    print("search/${pat}/ ~ \"${txt}\" = ${si(search(pat, txt))}");
 }
 
 fn caso_find(pat: string, txt: string) {
     match (find_str(pat, txt)) {
-        Option.Some(m) => print(f"find  /{pat}/ ~ \"{txt}\" = \"{m}\""),
-        Option.None => print(f"find  /{pat}/ ~ \"{txt}\" = <none>"),
+        Option.Some(m) => print("find  /${pat}/ ~ \"${txt}\" = \"${m}\""),
+        Option.None => print("find  /${pat}/ ~ \"${txt}\" = <none>"),
     }
 }
 
@@ -32,11 +32,11 @@ fn caso_findall(pat: string, txt: string) {
         if (primero) { primero = false; } else { s = s + ","; }
         s = s + m;
     }
-    print(f"all   /{pat}/ ~ \"{txt}\" = [{s}]");
+    print("all   /${pat}/ ~ \"${txt}\" = [${s}]");
 }
 
 fn caso_replace(pat: string, txt: string, rep: string) {
-    print(f"repl  /{pat}/ \"{txt}\" -> \"{replace_all(pat, txt, rep)}\"");
+    print("repl  /${pat}/ \"${txt}\" -> \"${replace_all(pat, txt, rep)}\"");
 }
 
 fn main() {

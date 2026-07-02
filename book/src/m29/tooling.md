@@ -80,7 +80,7 @@ construcción: los paréntesis se emiten según la precedencia real (`bin_prec`/
 la jerarquía del parser), así que `a + b * c` pierde los paréntesis sobrantes y `(a + b) * c` los conserva
 — exactamente los mínimos. La que hay que aceptar es que el AST **normaliza**: el lexer no guarda los
 comentarios, así que el formateador los **descarta** (el diferido honesto de esta versión), y desazucara lo
-que el parser desazucaraba de todos modos — la interpolación `f"n = {x}"` reaparece como `+ to_string(x)`,
+que el parser desazucaraba de todos modos — la interpolación `"n = ${x}"` reaparece como `+ to_string(x)`,
 los pipelines `|>` como llamadas ordinarias.
 
 La propiedad que convierte esto en una herramienta de verdad y no en un juguete es la **idempotencia**:

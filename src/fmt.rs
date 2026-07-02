@@ -3,7 +3,7 @@
 //! del AST; no toca el núcleo (checker/motores). `raylang --fmt <archivo>` imprime la versión formateada.
 //!
 //! Como trabaja sobre el **AST**, el formateador **normaliza**: descarta comentarios (el lexer no los
-//! guarda) y desazucara lo que el parser desazucara (interpolación `f"…"` → `+ to_string(...)`,
+//! guarda) y desazucara lo que el parser desazucara (interpolación `"…${x}…"` → `+ to_string(...)`,
 //! pipelines `|>` → llamadas). El resultado siempre es válido y `fmt(fmt(x)) == fmt(x)`.
 
 use crate::ast::*;

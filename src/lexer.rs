@@ -199,11 +199,6 @@ impl Lexer {
                 self.advance(); // consume la comilla de apertura
                 self.byte_string()?
             }
-            // M27.3: cadena interpolada `f"...{expr}..."`. Como `b"..."`, el prefijo va pegado a la comilla.
-            'f' if self.peek() == Some('"') => {
-                self.advance(); // consume la comilla de apertura
-                self.interp_string()?
-            }
             c if c.is_ascii_digit() => self.number()?,
             c if is_ident_start(c) => self.identifier(),
 
@@ -258,44 +253,13 @@ impl Lexer {
         keyword(&text).unwrap_or(TokenKind::Ident(text))
     }
 
-    /// Lee una cadena `"..."` (ya consumida la comilla de apertura), resolviendo
-    /// los escapes `\n \t \\ \"`.
-    /// Cadena normal `"..."`: sin interpolación (las llaves `{` `}` son literales). Compat total.
+    /// Lee una cadena `"..."` (ya consumida la comilla de apertura). Toda cadena puede **interpolar**
+    /// (M27.3, rediseñado): `${expr}` inserta el valor de `expr` (balanceando llaves anidadas). El `$`
+    /// solo es especial seguido de `{`; en cualquier otro sitio es literal (`"$5"`, `"$PATH"` no
+    /// necesitan escape). Las llaves `{` `}` son **siempre literales**. Escapes: `\n \t \r \\ \"` y
+    /// **`\$`** (para un `${` literal, p. ej. al generar shell/plantillas). Sin ningún `${…}`, la
+    /// cadena degrada a un `Str` normal → toda cadena preexistente sin `${` lexea byte-idéntico.
     fn string(&mut self) -> Result<TokenKind, LexError> {
-        let mut value = String::new();
-        loop {
-            match self.peek() {
-                None => return Err(self.error("cadena sin cerrar".into())),
-                Some('\n') => return Err(self.error("salto de línea dentro de una cadena sin cerrar".into())),
-                Some('"') => {
-                    self.advance();
-                    return Ok(TokenKind::Str(value));
-                }
-                Some('\\') => {
-                    self.advance();
-                    match self.peek() {
-                        Some('n') => value.push('\n'),
-                        Some('t') => value.push('\t'),
-                        Some('r') => value.push('\r'),
-                        Some('\\') => value.push('\\'),
-                        Some('"') => value.push('"'),
-                        Some(other) => return Err(self.error(format!("secuencia de escape inválida '\\{}'", other))),
-                        None => return Err(self.error("cadena sin cerrar tras '\\'".into())),
-                    }
-                    self.advance();
-                }
-                Some(c) => {
-                    value.push(c);
-                    self.advance();
-                }
-            }
-        }
-    }
-
-    /// Cadena interpolada `f"...{expr}..."` (M27.3), tras consumir la comilla. Se acumula el literal en
-    /// `cur` y, al encontrar `{expr}`, se cierra el literal y se guarda el código crudo de la expresión
-    /// (balanceando llaves anidadas). `{{`/`}}` escapan una llave literal. Sin `{`, un `Str` normal.
-    fn interp_string(&mut self) -> Result<TokenKind, LexError> {
         let mut parts: Vec<InterpPart> = Vec::new();
         let mut cur = String::new();
         loop {
@@ -313,9 +277,10 @@ impl Lexer {
                     match self.peek() {
                         Some('n') => cur.push('\n'),
                         Some('t') => cur.push('\t'),
-                        Some('r') => cur.push('\r'), // M14: retorno de carro
+                        Some('r') => cur.push('\r'),
                         Some('\\') => cur.push('\\'),
                         Some('"') => cur.push('"'),
+                        Some('$') => cur.push('$'), // `\$` → un `$` literal (para un `${` sin interpolar)
                         Some(other) => {
                             return Err(self.error(format!("secuencia de escape inválida '\\{}'", other)))
                         }
@@ -323,46 +288,33 @@ impl Lexer {
                     }
                     self.advance(); // el carácter escapado
                 }
-                Some('{') => {
-                    self.advance();
-                    if self.peek() == Some('{') {
-                        self.advance();
-                        cur.push('{'); // `{{` → llave literal
-                    } else {
-                        // Inicio de una interpolación: se cierra el literal pendiente y se lee la expresión.
-                        if !cur.is_empty() {
-                            parts.push(InterpPart::Lit(std::mem::take(&mut cur)));
-                        }
-                        let mut expr_src = String::new();
-                        let mut depth = 1;
-                        loop {
-                            match self.peek() {
-                                None => return Err(self.error("interpolación '{' sin cerrar en la cadena".into())),
-                                Some('\n') => return Err(self.error("salto de línea dentro de una interpolación".into())),
-                                Some('{') => { depth += 1; expr_src.push('{'); self.advance(); }
-                                Some('}') => {
-                                    depth -= 1;
-                                    self.advance();
-                                    if depth == 0 { break; }
-                                    expr_src.push('}');
-                                }
-                                Some(c) => { expr_src.push(c); self.advance(); }
+                // `${expr}`: inicio de una interpolación. Un `$` sin `{` detrás es un carácter normal.
+                Some('$') if self.peek_next() == Some('{') => {
+                    self.advance(); // el `$`
+                    self.advance(); // el `{`
+                    if !cur.is_empty() {
+                        parts.push(InterpPart::Lit(std::mem::take(&mut cur)));
+                    }
+                    let mut expr_src = String::new();
+                    let mut depth = 1;
+                    loop {
+                        match self.peek() {
+                            None => return Err(self.error("interpolación '${' sin cerrar en la cadena".into())),
+                            Some('\n') => return Err(self.error("salto de línea dentro de una interpolación".into())),
+                            Some('{') => { depth += 1; expr_src.push('{'); self.advance(); }
+                            Some('}') => {
+                                depth -= 1;
+                                self.advance();
+                                if depth == 0 { break; }
+                                expr_src.push('}');
                             }
+                            Some(c) => { expr_src.push(c); self.advance(); }
                         }
-                        if expr_src.trim().is_empty() {
-                            return Err(self.error("interpolación vacía '{}' en la cadena".into()));
-                        }
-                        parts.push(InterpPart::Expr(expr_src));
                     }
-                }
-                Some('}') => {
-                    self.advance();
-                    if self.peek() == Some('}') {
-                        self.advance();
-                        cur.push('}'); // `}}` → llave literal
-                    } else {
-                        return Err(self.error("'}' suelto en la cadena; usa '}}' para un literal".into()));
+                    if expr_src.trim().is_empty() {
+                        return Err(self.error("interpolación vacía '${}' en la cadena".into()));
                     }
+                    parts.push(InterpPart::Expr(expr_src));
                 }
                 Some(c) => {
                     cur.push(c);
@@ -603,6 +555,31 @@ mod tests {
     /// Tokeniza y devuelve solo las clases (sin posiciones), terminadas en Eof.
     fn kinds(src: &str) -> Vec<TokenKind> {
         lex(src).expect("debería tokenizar sin error").into_iter().map(|t| t.kind).collect()
+    }
+
+    #[test]
+    fn interpolacion_de_cadenas() {
+        use crate::token::InterpPart::{Expr, Lit};
+        // `${expr}` en cualquier cadena → InterpStr con partes literales y de expresión (código crudo).
+        assert_eq!(
+            kinds("\"a${x + 1}b\""),
+            vec![
+                TokenKind::InterpStr(vec![Lit("a".into()), Expr("x + 1".into()), Lit("b".into())]),
+                TokenKind::Eof
+            ]
+        );
+        // Sin `${`, degrada a un `Str` normal: las llaves son literales y `$` suelto también.
+        assert_eq!(kinds("\"{n} cuesta $5\""), vec![TokenKind::Str("{n} cuesta $5".into()), TokenKind::Eof]);
+        // `\$` escapa un `${` literal (no interpola).
+        assert_eq!(kinds("\"\\${x}\""), vec![TokenKind::Str("${x}".into()), TokenKind::Eof]);
+        // Interpolación al inicio y llaves anidadas dentro de la expresión.
+        assert_eq!(
+            kinds("\"${ f({a}) }\""),
+            vec![TokenKind::InterpStr(vec![Expr(" f({a}) ".into())]), TokenKind::Eof]
+        );
+        // Errores: interpolación vacía y sin cerrar.
+        assert!(lex("\"${}\"").is_err());
+        assert!(lex("\"${x\"").is_err());
     }
 
     #[test]

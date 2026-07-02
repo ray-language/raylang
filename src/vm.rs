@@ -2861,20 +2861,23 @@ mod tests {
         oracle_program("fn main() -> int { let s = 10; let n = 4; let avg = (s as float) / (n as float); avg as int }"); // 2
     }
 
-    /// M27.3: interpolación de strings. Desazucara a `+ to_string(...)` → ambos motores coinciden.
-    /// Se enruta a `int` comparando la longitud del resultado (print está diferido en `oracle_int`).
+    /// M27.3: interpolación de strings `"...${expr}..."`. Desazucara a `+ to_string(...)` → ambos
+    /// motores coinciden. Se enruta a `int` comparando la longitud (print diferido en `oracle_int`).
     #[test]
     fn interpolacion_oraculo() {
-        oracle_int("len(f\"x={1}\")");                     // "x=1" → 3
-        oracle_int("len(f\"{1}+{2}={3}\")");               // "1+2=3" → 5
-        oracle_int("if (f\"a{1}b\" == \"a1b\") { 1 } else { 0 }");   // 1
-        oracle_int("if (f\"{2 + 3}\" == \"5\") { 1 } else { 0 }");   // 1
-        oracle_int("if (f\"{true}/{'z'}\" == \"true/z\") { 1 } else { 0 }"); // 1
-        oracle_int("len(f\"llave {{lit}}\")"); // {{ }} literales → "llave {lit}" = 11
-        // Una cadena normal NO interpola: `{n}` es literal.
-        oracle_int("len(\"{n}\")");                        // 3 (literal "{n}")
+        oracle_int("len(\"x=${1}\")");                     // "x=1" → 3
+        oracle_int("len(\"${1}+${2}=${3}\")");             // "1+2=3" → 5
+        oracle_int("if (\"a${1}b\" == \"a1b\") { 1 } else { 0 }");   // 1
+        oracle_int("if (\"${2 + 3}\" == \"5\") { 1 } else { 0 }");   // 1
+        oracle_int("if (\"${true}/${'z'}\" == \"true/z\") { 1 } else { 0 }"); // 1
+        // Las llaves son SIEMPRE literales (sin `{{`/`}}`); solo `${` es especial.
+        oracle_int("len(\"llave {lit}\")"); // "llave {lit}" = 11
+        // Un `$` que no precede a `{` es literal (sin escape): "$5" → 2 caracteres.
+        oracle_int("len(\"$5\")");                         // 2
+        // `\$` escapa un `${` literal: "\${x}" → "${x}" = 4 caracteres, sin interpolar.
+        oracle_int("len(\"\\${x}\")");                     // 4 (literal "${x}")
         // Interpolación con una variable local.
-        oracle_program("fn main() -> int { let n = 42; if (f\"n={n}\" == \"n=42\") { 1 } else { 0 } }");
+        oracle_program("fn main() -> int { let n = 42; if (\"n=${n}\" == \"n=42\") { 1 } else { 0 } }");
     }
 
     /// M28.3: enteros sin signo con tamaño (u8/u32/u64). Aritmética con wrapping dentro del ancho,

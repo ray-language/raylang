@@ -6,16 +6,16 @@ fn main() {
     let aciertos = 17;
     let total = 20;
     let ratio = (aciertos as float) / (total as float);
-    print(f"ratio = {ratio}");             // ratio = 0.85
+    print("ratio = ${ratio}");             // ratio = 0.85
 
     // float → int: trunca hacia cero.
-    print(f"trunc(3.99) = {3.99 as int}");  // 3
-    print(f"trunc(-2.7) = {(0.0 - 2.7) as int}"); // -2
+    print("trunc(3.99) = ${3.99 as int}");  // 3
+    print("trunc(-2.7) = ${(0.0 - 2.7) as int}"); // -2
 
     // char → int (code point) e int → char.
     let letra = 'M';
-    print(f"'M' es el code point {letra as int}"); // 77
-    print(f"el code point 90 es {90 as char}");     // Z
+    print("'M' es el code point ${letra as int}"); // 77
+    print("el code point 90 es ${90 as char}");     // Z
 
     // Cifrado César simple (desplaza 3 posiciones en A–Z) combinando casts + for.
     var cifrado = "";
@@ -23,5 +23,5 @@ fn main() {
         let desplazado = ((c as int) - ('A' as int) + 3) % 26 + ('A' as int);
         cifrado = cifrado + to_string(desplazado as char);
     }
-    print(f"HOLA cifrado (César +3) = {cifrado}"); // KROD
+    print("HOLA cifrado (César +3) = ${cifrado}"); // KROD
 }

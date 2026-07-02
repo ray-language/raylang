@@ -1292,7 +1292,7 @@ impl Parser {
             TokenKind::Int(v) => ExprKind::Int(v),
             TokenKind::Float(v) => ExprKind::Float(v),
             TokenKind::Str(s) => ExprKind::Str(s),
-            // M27.3: cadena interpolada → concatenación con `to_string` de cada expresión.
+            // M27.3: cadena interpolada `"...${expr}..."` → concatenación con `to_string` de cada expresión.
             TokenKind::InterpStr(parts) => return self.build_interp(parts, tok.line, tok.col),
             TokenKind::Char(c) => ExprKind::Char(c),
             TokenKind::Bytes(b) => ExprKind::Bytes(b),

@@ -36,9 +36,10 @@ caracteres. **Ningún token cruza líneas.**
   - *Entero*: dígitos decimales (`42`). Debe caber en `int` (i64); si no, error léxico. No hay
     literales hex/octales/binarios ni separador `_` (diferido).
   - *Flotante*: `dígitos '.' dígitos` (`3.14`). Un `.` sin dígito decimal no es flotante.
-  - *Cadena*: `"…"` con escapes `\n \t \r \\ \"`. No admite saltos de línea literales.
-  - *Cadena interpolada*: `f"…{expr}…"`. Cada `{expr}` contiene **una** expresión; `{{` y `}}`
-    escapan las llaves. Azúcar: se desazucara a concatenación con `to_string(expr)` (§6.6).
+  - *Cadena*: `"…"` con escapes `\n \t \r \\ \" \$`. No admite saltos de línea literales.
+  - *Cadena interpolada*: cualquier cadena `"…${expr}…"`. `${expr}` contiene **una** expresión; el
+    `$` solo es especial seguido de `{` (`"$5"`, `"{n}"` son literales; `\${` es un `${` literal).
+    Azúcar: se desazucara a concatenación con `to_string(expr)` (§6.6).
   - *Carácter*: `'a'` con escapes `\n \t \r \\ \'`. Un code point Unicode.
   - *Bytes*: `b"…"` con los escapes de cadena más `\xNN` (octeto arbitrario, dos dígitos hex).
   - *Booleano*: `true` / `false`.
@@ -227,7 +228,8 @@ si no lo es); `int`↔`u*` y `u*`↔`u*` truncan al ancho destino (bits bajos).
 
 ### 6.6 Interpolación
 
-`f"a{x}b"` ≡ `"a" + to_string(x) + "b"`. Cada `{expr}` debe ser de tipo imprimible (§10).
+`"a${x}b"` ≡ `"a" + to_string(x) + "b"`. Cada `${expr}` debe ser de tipo imprimible (§10). El `$`
+solo interpola seguido de `{`; en cualquier otra posición es un carácter literal.
 
 ### 6.7 El operador `?`
 

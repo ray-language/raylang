@@ -24,7 +24,7 @@ impl Neg for Vec2 {
 }
 
 impl Show for Vec2 {
-    fn mostrar(self) -> string { f"({self.x}, {self.y})" }
+    fn mostrar(self) -> string { "(${self.x}, ${self.y})" }
 }
 
 fn main() {

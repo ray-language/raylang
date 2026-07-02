@@ -17,7 +17,7 @@ pub enum TokenKind {
     Int(i64),    // 42
     Float(f64),  // 3.14
     Str(String), // "hola\n"  (escapes ya resueltos)
-    /// Cadena con **interpolación** `"a{x}b"` (M27.3): partes literales y expresiones (código crudo).
+    /// Cadena con **interpolación** `"a${x}b"` (M27.3): partes literales y expresiones (código crudo).
     /// El parser la baja a concatenación con `to_string` de cada expresión.
     InterpStr(Vec<InterpPart>),
     Char(char),  // 'a'  (M11.4c; escapes ya resueltos)
@@ -107,7 +107,7 @@ pub enum TokenKind {
     Eof,
 }
 
-/// Una parte de una cadena interpolada (M27.3): texto literal, o el código crudo de una expresión `{…}`.
+/// Una parte de una cadena interpolada (M27.3): texto literal, o el código crudo de una expresión `${…}`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InterpPart {
     Lit(String),

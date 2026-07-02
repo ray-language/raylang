@@ -5489,5 +5489,10 @@ uuid) está en `std/`: **24 módulos** (3 nativos math/text/sort + 21 promovidos
 `http`/`http2`/`http2_client`, `websocket`/`websocket_client`, `grpc_client`, `postgres`/`redis`, `oauth2`/
 `scram`/`sigv4`/`jwt`/`cookie`, `framework`/`webserver`. Dependen de sockets/TLS y no son deterministas →
 son un *framework de aplicación*, no una biblioteca estándar; esperan a un paquete `net`/aplicación propio.
-También quedan como diferido menor `uuid` (→`std/hex`, pero valor de identidad), `time`/`log`/`metrics`
-(reloj no determinista) y `base64`-dependientes de auth.
+También quedan como diferido menor `time`/`log`/`metrics` (reloj no determinista) y el `hpack` (detalle del
+stack HTTP/2, va con el tier de red).
+
+**M40 COMPLETO.** Ergonomía de match (guardas/`if let`/patrones anidados+struct) + Iterator (perezoso,
+re-fundado bajo `map`/`filter`/`fold`) + colecciones (`@derive(Hash)`, `Set`/`Deque`/`StringBuilder`) +
+raydoc + `std/` embebida y auto-contenida (24 módulos). La stdlib 1.0 del arco C está cerrada; el único
+diferido grande es el tier de red como paquete propio. Siguiente: **M41 — FFI**.

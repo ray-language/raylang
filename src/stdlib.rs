@@ -21,6 +21,7 @@
 const MODULOS: &[(&str, &str)] = &[
     ("std/math", include_str!("../std/math.ray")),
     ("std/text", include_str!("../std/text.ray")),
+    ("std/sort", include_str!("../std/sort.ray")),
 ];
 
 /// La fuente embebida del módulo `nombre` (`"std/math"`), o `None` si no es un módulo de la stdlib.
@@ -36,6 +37,7 @@ mod tests {
     fn modulos_conocidos_resuelven() {
         assert!(embedded("std/math").is_some());
         assert!(embedded("std/text").is_some());
+        assert!(embedded("std/sort").is_some());
     }
 
     #[test]

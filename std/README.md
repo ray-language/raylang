@@ -34,5 +34,7 @@ con `ray doc std/math.ray` (que lee el archivo directamente).
   `clamp`, `gcd`, `lcm`, `ipow`, `factorial`, `is_prime`.
 - **`std/text`** — utilidades de string más allá de los builtins: `is_empty`, `pad_left`, `pad_right`,
   `capitalize`, `reverse`, `count`, `words`.
+- **`std/sort`** — orden y búsqueda sobre arreglos genéricos (`T: Ord`), alrededor del `sort` del prelude:
+  `is_sorted`, `sort_desc`, `min`, `max`, `binary_search`, `dedup`, `merge`.
 
-(Más módulos por venir; ver DESIGN §42.7.)
+(Más módulos por venir; ver DESIGN §42.8.)

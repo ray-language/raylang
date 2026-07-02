@@ -5403,4 +5403,12 @@ auto-contenido (`ray run` desde cualquier directorio, con `RAYLANG_STD` roto, re
 `std/` queda **reservado** (gana a un archivo local homónimo). Se **elimina** el descubrimiento por
 filesystem (`raiz_std`/`RAYLANG_STD` en `cli.rs`), ahora código muerto. `ray doc std/math.ray` sigue leyendo
 el archivo directamente (por eso los `.ray` permanecen en el repo). Front-end puro, runtime intacto.
-Diferido: más módulos (`std/sort`, …), promover librerías de `examples/` a `std/`.
+Diferido: más módulos, promover librerías de `examples/` a `std/`.
+
+**M40.5b — `std/sort`**: tercer módulo de la stdlib (primero embebido de nacimiento). Orden y búsqueda
+sobre arreglos **genéricos** (`T: Ord`, el trait del prelude), alrededor del `sort` genérico que ya vive
+en el prelude: `is_sorted`, `sort_desc` (`reverse(sort(a))`), `min`/`max`, `binary_search` (O(log n) sobre
+un arreglo ordenado; la igualdad se deriva de `Ord`: `x==y` ⟺ ni `x<y` ni `y<x`), `dedup` (ordena y quita
+repetidos) y `merge` (fusiona dos ordenados). Demuestra que un módulo `std/` puede ser **genérico con
+bounds** (el diccionario de `Ord` se reenvía a través de la frontera de módulo, M9.2) y componer con el
+prelude (`sort`/`reverse`). Test en `cli_cli.rs` (`stdlib_sort_busca_y_deduplica`).

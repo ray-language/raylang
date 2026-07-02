@@ -288,8 +288,8 @@ fn doc_genera_markdown_de_la_superficie_publica() {
 
 #[test]
 fn importa_la_stdlib_del_sistema() {
-    // Un programa fuera del repo (dir temporal) puede `import std/math;` — la stdlib se descubre
-    // relativa al ejecutable (target/debug/…/ray → raíz del repo con std/).
+    // Un programa fuera del repo (dir temporal) puede `import std/math;` — la stdlib va EMBEBIDA en el
+    // binario (M40.5), así que resuelve sin que `std/` exista en disco junto al programa.
     let base = tmp("std_import");
     let archivo = base.join("main.ray");
     std::fs::write(
@@ -317,4 +317,26 @@ fn stdlib_text_capitaliza_e_invierte() {
     assert!(out.contains("Hola"), "capitalize\n{out}");
     assert!(out.contains("cba"), "reverse\n{out}");
     assert!(out.contains("2"), "count no solapado\n{out}");
+}
+
+#[test]
+fn stdlib_sort_busca_y_deduplica() {
+    let base = tmp("std_sort");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "import std/sort;\n\
+         fn main() -> int {\n\
+             print(sort.dedup([5, 2, 8, 2, 1, 8]));\n\
+             print(sort.binary_search([1, 3, 5, 7, 9], 7));\n\
+             print(sort.merge([1, 4], [2, 3, 5]));\n\
+             0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con import std/sort debe salir 0\n{err}");
+    assert!(out.contains("[1, 2, 5, 8]"), "dedup ordena y quita repetidos\n{out}");
+    assert!(out.contains("Option.Some(3)"), "binary_search halla el índice\n{out}");
+    assert!(out.contains("[1, 2, 3, 4, 5]"), "merge fusiona ordenado\n{out}");
 }

@@ -1,0 +1,106 @@
+// std/sort (M40.5b) — orden y búsqueda sobre arreglos, genéricos sobre `T: Ord` (el trait del prelude
+// con `menor`; hay impl para int/float/string/char y para tipos de usuario que lo implementen). El
+// `sort` genérico ya vive en el prelude; aquí van las utilidades que lo rodean. `import std/sort;` →
+// `sort.binary_search(xs, 7)`.
+
+/// ¿Está `a` ordenado de forma **no decreciente**? (`[]` y `[x]` → `true`).
+pub fn is_sorted<T: Ord>(a: [T]) -> bool {
+    var i = 1;
+    var ok = true;
+    while (i < len(a) && ok) {
+        if (a[i].menor(a[i - 1])) { ok = false; }
+        i = i + 1;
+    }
+    ok
+}
+
+/// Ordena `a` de forma **descendente** (mayor a menor). Es `sort` del prelude, invertido.
+pub fn sort_desc<T: Ord>(a: [T]) -> [T] {
+    reverse(sort(a))
+}
+
+/// El **mínimo** de `a`, o `None` si está vacío.
+pub fn min<T: Ord>(a: [T]) -> Option<T> {
+    if (len(a) == 0) {
+        Option.None
+    } else {
+        var m: T = a[0];
+        var i = 1;
+        while (i < len(a)) {
+            if (a[i].menor(m)) { m = a[i]; }
+            i = i + 1;
+        }
+        Option.Some(m)
+    }
+}
+
+/// El **máximo** de `a`, o `None` si está vacío.
+pub fn max<T: Ord>(a: [T]) -> Option<T> {
+    if (len(a) == 0) {
+        Option.None
+    } else {
+        var m: T = a[0];
+        var i = 1;
+        while (i < len(a)) {
+            if (m.menor(a[i])) { m = a[i]; }
+            i = i + 1;
+        }
+        Option.Some(m)
+    }
+}
+
+/// **Búsqueda binaria** de `x` en un arreglo `a` que se asume **ordenado** (no decreciente): devuelve
+/// `Some(i)` con `a[i] == x` (algún índice si hay repetidos), o `None` si no está. O(log n). La igualdad
+/// se deriva de `Ord`: `x == y` ⟺ ni `x < y` ni `y < x`.
+pub fn binary_search<T: Ord>(a: [T], x: T) -> Option<int> {
+    var lo = 0;
+    var hi = len(a);
+    while (lo < hi) {
+        let mid = lo + (hi - lo) / 2;
+        let m: T = a[mid];
+        if (m.menor(x)) {
+            lo = mid + 1;
+        } else {
+            if (x.menor(m)) {
+                hi = mid;
+            } else {
+                return Option.Some(mid);
+            }
+        }
+    }
+    Option.None
+}
+
+/// Ordena `a` y **elimina los duplicados** (los iguales quedan una sola vez). El resultado está ordenado.
+pub fn dedup<T: Ord>(a: [T]) -> [T] {
+    let s = sort(a);
+    var out: [T] = [];
+    var i = 0;
+    while (i < len(s)) {
+        // Como `s` está ordenado, los iguales son adyacentes: se añade si el último es estrictamente menor.
+        if (len(out) == 0 || out[len(out) - 1].menor(s[i])) {
+            push(out, s[i]);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// **Fusiona** dos arreglos **ya ordenados** `a` y `b` en uno solo ordenado (estable: ante empate, gana `a`).
+pub fn merge<T: Ord>(a: [T], b: [T]) -> [T] {
+    var out: [T] = [];
+    var i = 0;
+    var j = 0;
+    while (i < len(a) && j < len(b)) {
+        if (b[j].menor(a[i])) {
+            push(out, b[j]);
+            j = j + 1;
+        } else {
+            push(out, a[i]);
+            i = i + 1;
+        }
+    }
+    while (i < len(a)) { push(out, a[i]); i = i + 1; }
+    while (j < len(b)) { push(out, b[j]); j = j + 1; }
+    out
+}

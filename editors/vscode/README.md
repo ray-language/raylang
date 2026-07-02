@@ -13,17 +13,20 @@ extensión se conecta como cliente (ver "Diagnósticos en vivo" al final).
 
 | Categoría | Ejemplos | Scope TextMate |
 |-----------|----------|----------------|
-| Palabras clave de control | `if else while return match` | `keyword.control` |
-| Declaración / storage | `let var fn struct enum trait impl dyn` | `storage.type` |
+| Palabras clave de control | `if else while for in return match import from as` | `keyword.control` |
+| Declaración / storage | `let var const fn struct enum trait impl dyn pub` | `storage.type` |
 | Receptor / tipo propio | `self`, `Self` | `variable.language.self` |
 | Anotaciones | `@test`, `@derive(Eq)` | `storage.modifier.annotation` |
-| Tipos primitivos | `int float bool string` | `support.type.primitive` |
+| Tipos primitivos | `int float bool string char bytes u8 u32 u64` | `support.type.primitive` |
 | Tipos de usuario | `Punto` (struct), `Figura` (enum) | `entity.name.type` |
 | Booleanos | `true false` | `constant.language.boolean` |
 | Números | `42`, `3.14` | `constant.numeric` |
-| Cadenas y escapes | `"hola\n"` | `string.quoted.double` |
+| Cadenas y escapes | `"hola\n"`, `"pi = ${x}"` | `string.quoted.double` + `meta.interpolation` |
+| Interpolación | `${expr}` dentro de cualquier cadena | `meta.interpolation` + `punctuation.section.interpolation` |
+| Literal de bytes | `b"\x00\xff"` | `string.quoted.double.byte` |
+| Carácter | `'a'`, `'\n'` | `constant.character` |
 | Comentarios | `// ...` | `comment.line` |
-| Builtins y stdlib | `print len push map filter fold` | `support.function.builtin` |
+| Builtins y stdlib | `print len push map filter fold sort assert spawn send` | `support.function.builtin` |
 | Definición de struct | `struct Punto` | `entity.name.type` |
 | Definición de enum | `enum Figura` | `entity.name.type` |
 | Definición de trait | `trait Mostrable` | `entity.name.type` |
@@ -167,7 +170,7 @@ capítulo "El LSP" del libro).
 3. **Enlaza e instala** la extensión (igual que para el coloreado):
 
    ```sh
-   ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.10.0
+   ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.11.0
    # recarga VSCode: Cmd/Ctrl+Shift+P → "Developer: Reload Window"
    ```
 

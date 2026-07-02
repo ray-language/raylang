@@ -4,7 +4,9 @@
   "scopeName": "source.raylang",
   "patterns": [
     { "include": "#comments" },
+    { "include": "#byte-strings" },
     { "include": "#strings" },
+    { "include": "#characters" },
     { "include": "#annotation" },
     { "include": "#struct-definition" },
     { "include": "#enum-definition" },
@@ -34,10 +36,50 @@
       "end": "\"",
       "patterns": [
         {
+          "comment": "Escapes: \\n \\t \\r \\\\ \\\" y \\$ (un '$' literal, para un '${' sin interpolar).",
           "name": "constant.character.escape.raylang",
           "match": "\\\\."
+        },
+        { "include": "#interpolation" }
+      ]
+    },
+    "interpolation": {
+      "comment": "Interpolación `${expr}` (M27.3): toda cadena interpola; el '$' solo es especial seguido de '{'. El interior se resalta como código (recursivo); las llaves anidadas se balancean.",
+      "name": "meta.interpolation.raylang",
+      "begin": "\\$\\{",
+      "end": "\\}",
+      "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.raylang" } },
+      "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.raylang" } },
+      "patterns": [
+        {
+          "comment": "Llaves anidadas dentro de la expresión (p. ej. `${f({a: 1})}`).",
+          "begin": "\\{",
+          "end": "\\}",
+          "patterns": [{ "include": "$self" }]
+        },
+        { "include": "$self" }
+      ]
+    },
+    "byte-strings": {
+      "comment": "Literal de bytes `b\"...\"` (M16.1): escapes de string más `\\xNN`. No interpola.",
+      "name": "string.quoted.double.byte.raylang",
+      "begin": "b\"",
+      "end": "\"",
+      "beginCaptures": { "0": { "name": "storage.type.string.byte.raylang" } },
+      "patterns": [
+        {
+          "name": "constant.character.escape.raylang",
+          "match": "\\\\(x[0-9A-Fa-f]{2}|.)"
         }
       ]
+    },
+    "characters": {
+      "comment": "Literal de carácter `'a'` (M11.4c): un code point, con escapes `\\n \\t \\r \\\\ \\'`.",
+      "name": "string.quoted.single.raylang",
+      "match": "'(\\\\.|[^'\\\\])'",
+      "captures": {
+        "0": { "name": "constant.character.raylang" }
+      }
     },
     "annotation": {
       "comment": "Anotación @nombre (M10.1): @test, @derive, ... Los argumentos (p. ej. @derive(Eq)) caen en sus propias reglas (tipos de usuario).",
@@ -84,7 +126,7 @@
     },
     "keywords-control": {
       "name": "keyword.control.raylang",
-      "match": "\\b(if|else|while|return|match|import|from|as)\\b"
+      "match": "\\b(if|else|while|for|in|return|match|import|from|as)\\b"
     },
     "self": {
       "comment": "El receptor 'self' y el tipo 'Self' dentro de un trait/impl (M9).",
@@ -93,15 +135,16 @@
     },
     "storage": {
       "name": "storage.type.raylang",
-      "match": "\\b(let|var|fn|struct|enum|trait|impl|dyn|pub)\\b"
+      "match": "\\b(let|var|const|fn|struct|enum|trait|impl|dyn|pub)\\b"
     },
     "builtins": {
+      "comment": "Builtins + funciones del prelude de uso común (M11–M13). No es exhaustivo; el resto se colorea por la regla de llamada. Solo con '(' detrás para no chocar con variables.",
       "name": "support.function.builtin.raylang",
-      "match": "\\b(print|len|push|map|filter|fold|to_string|trim|split|eprint|input|read_int|parse_int|args|env|read_file|write_file)\\b(?=\\s*\\()"
+      "match": "\\b(print|eprint|len|push|pop|to_string|to_bytes|bytes_of|trim|split|contains|replace|chars|starts_with|ends_with|to_upper|to_lower|substring|sub_bytes|repeat|join|reverse|index_of|position|sort|map|filter|fold|map_new|insert|get|remove|contains_key|keys|values|spawn|channel|send|recv|select|scope|panic|assert|assert_eq|input|read_int|parse_int|parse_float|args|env|read_file|write_file|append_file|remove_file|list_dir|exists|open|read_line|write|close|sqrt|sin|cos|tan|ln|exp|floor|ceil|round|pow|abs|min|max|pi|now|monotonic|sleep|random|random_int)\\b(?=\\s*\\()"
     },
     "types": {
       "name": "support.type.primitive.raylang",
-      "match": "\\b(int|float|bool|string)\\b"
+      "match": "\\b(int|float|bool|string|char|bytes|u8|u32|u64)\\b"
     },
     "user-types": {
       "name": "entity.name.type.raylang",
@@ -138,8 +181,9 @@
       }
     },
     "operators": {
+      "comment": "Incluye el rango `..` (bucles for, M27.2) y los bit a bit `& | ^ ~ << >>` (M19.3a).",
       "name": "keyword.operator.raylang",
-      "match": "=>|->|\\|>|==|!=|<=|>=|&&|\\|\\||[-+*/%<>!=:?]"
+      "match": "=>|->|\\|>|\\.\\.|<<|>>|==|!=|<=|>=|&&|\\|\\||[-+*/%<>!=:?&|^~]"
     }
   }
 }

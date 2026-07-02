@@ -19,12 +19,16 @@ scope: source.raylang
 variables:
   ident: '[A-Za-z_][A-Za-z0-9_]*'
   user_type: '[A-Z][A-Za-z0-9_]*'
-  builtins: 'print|len|push|map|filter|fold|to_string|trim|split|eprint|input|read_int|parse_int|args|env|read_file|write_file'
+  # Builtins + funciones del prelude de uso común (M11–M13). No exhaustivo; el resto lo colorea
+  # la regla de llamada. Mismo conjunto que la gramática de VSCode.
+  builtins: 'print|eprint|len|push|pop|to_string|to_bytes|bytes_of|trim|split|contains|replace|chars|starts_with|ends_with|to_upper|to_lower|substring|sub_bytes|repeat|join|reverse|index_of|position|sort|map|filter|fold|map_new|insert|get|remove|contains_key|keys|values|spawn|channel|send|recv|select|scope|panic|assert|assert_eq|input|read_int|parse_int|parse_float|args|env|read_file|write_file|append_file|remove_file|list_dir|exists|open|read_line|write|close|sqrt|sin|cos|tan|ln|exp|floor|ceil|round|pow|abs|min|max|pi|now|monotonic|sleep|random|random_int'
 
 contexts:
   main:
     - include: comments
+    - include: byte_strings
     - include: strings
+    - include: characters
     - include: annotations
     - include: definitions
     - include: keywords
@@ -38,16 +42,50 @@ contexts:
       scope: comment.line.double-slash.raylang
 
   strings:
-    # Una cadena con escapes; se entra a un contexto propio hasta la comilla de cierre.
+    # Una cadena con escapes e interpolación `${expr}` (M27.3); contexto propio hasta la comilla.
     - match: '"'
       scope: punctuation.definition.string.begin.raylang
       push:
         - meta_scope: string.quoted.double.raylang
+        # Escapes: \n \t \r \\ \" y \$ (un '$' literal, para un '${' sin interpolar). Va primero:
+        # así '\${' se toma como '$' escapado + '{' literal, sin abrir interpolación.
         - match: '\\.'
+          scope: constant.character.escape.raylang
+        # Interpolación: el '$' solo es especial seguido de '{'. El interior se resalta como código.
+        - match: '\$\{'
+          scope: punctuation.section.interpolation.begin.raylang
+          push:
+            - meta_scope: meta.interpolation.raylang
+            - match: '\}'
+              scope: punctuation.section.interpolation.end.raylang
+              pop: true
+            # Llaves anidadas en la expresión (p. ej. `${f({a: 1})}`) para no cerrar de más.
+            - match: '\{'
+              push:
+                - match: '\}'
+                  pop: true
+                - include: main
+            - include: main
+        - match: '"'
+          scope: punctuation.definition.string.end.raylang
+          pop: true
+
+  byte_strings:
+    # Literal de bytes `b"..."` (M16.1): escapes de string más `\xNN`. No interpola.
+    - match: 'b"'
+      scope: punctuation.definition.string.begin.raylang storage.type.string.byte.raylang
+      push:
+        - meta_scope: string.quoted.double.byte.raylang
+        - match: '\\(x[0-9A-Fa-f]{2}|.)'
           scope: constant.character.escape.raylang
         - match: '"'
           scope: punctuation.definition.string.end.raylang
           pop: true
+
+  characters:
+    # Literal de carácter `'a'` (M11.4c): un code point, con escapes `\n \t \r \\ \'`.
+    - match: "'(\\\\.|[^'\\\\])'"
+      scope: constant.character.raylang
 
   annotations:
     # @nombre (M10.1): @test, @derive, ... El argumento (@derive(Eq)) cae luego en 'types'.
@@ -74,19 +112,19 @@ contexts:
         2: entity.name.function.raylang
 
   keywords:
-    - match: '\b(if|else|while|return|match|import|from|as)\b'
+    - match: '\b(if|else|while|for|in|return|match|import|from|as)\b'
       scope: keyword.control.raylang
     # El receptor 'self' y el tipo 'Self' (M9). Antes de 'types' porque Self es mayúscula.
     - match: '\b(self|Self)\b'
       scope: variable.language.self.raylang
-    - match: '\b(let|var|fn|struct|enum|trait|impl|dyn|pub)\b'
+    - match: '\b(let|var|const|fn|struct|enum|trait|impl|dyn|pub)\b'
       scope: storage.type.raylang
     # Builtins/stdlib seguidos de '(' : antes de la regla de llamadas para conservar su color.
     - match: '\b({{builtins}})\b(?=\s*\()'
       scope: support.function.builtin.raylang
 
   types:
-    - match: '\b(int|float|bool|string)\b'
+    - match: '\b(int|float|bool|string|char|bytes|u8|u32|u64)\b'
       scope: support.type.primitive.raylang
     # Nombre de tipo de usuario por convención (empieza en mayúscula): struct/enum/variante/etc.
     - match: '\b{{user_type}}\b'
@@ -113,5 +151,6 @@ contexts:
         2: entity.name.function.raylang
 
   operators:
-    - match: '=>|->|\|>|==|!=|<=|>=|&&|\|\||[-+*/%<>!=:?]'
+    # Incluye el rango `..` (bucles for, M27.2) y los bit a bit `& | ^ ~ << >>` (M19.3a).
+    - match: '=>|->|\|>|\.\.|<<|>>|==|!=|<=|>=|&&|\|\||[-+*/%<>!=:?&|^~]'
       scope: keyword.operator.raylang

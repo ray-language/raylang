@@ -2,7 +2,7 @@
   "name": "raylang",
   "displayName": "raylang",
   "description": "Soporte para el lenguaje raylang (.ray): resaltado de sintaxis + cliente del Language Server (diagnósticos en vivo).",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "publisher": "rayala",
   "engines": {
     "vscode": "^1.75.0"

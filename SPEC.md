@@ -329,8 +329,11 @@ prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el 
   float bool string char bytes u*` y (vía `mostrar`) tipos con `Show`.
 - **String**: `trim split chars contains replace starts_with ends_with to_upper to_lower
   substring repeat index_of join to_bytes parse_int parse_float` · **Arreglos**: `push pop
-  reverse contains position sort map filter fold` (+ `a + b` concatena) · **Bytes**:
+  reverse contains position sort map filter fold iter` (+ `a + b` concatena) · **Bytes**:
   `bytes_of sub_bytes from_utf8` (+ `b1 + b2`, `to_string` → hex).
+- **Iteradores** (M40.2b): `xs.iter()` (cursor `ArrayIter<T>` sobre un arreglo) y `range(a, b)`
+  (cursor `RangeIter` sobre `a..b`, semi-abierto) son iteradores de primera clase (`Iterator<T>`)
+  recorribles con `for x in …`.
 - **Map**: `map_new insert get remove contains_key keys values len` (recorridos en orden de
   clave).
 - **Matemáticas**: `sqrt pow floor ceil round abs min max sin cos tan ln log10 exp pi e` ·

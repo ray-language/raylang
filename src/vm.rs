@@ -2715,6 +2715,25 @@ mod tests {
             }"); // 1+4+9+16+25 = 55
     }
 
+    /// M40.2b: `.iter()` sobre arreglos (iterador genérico `ArrayIter<T>` del prelude) y `range`
+    /// (iterador `RangeIter`), como iteradores de primera clase. Oráculo VM↔intérprete: el impl
+    /// genérico de `Iterator` y la sustitución del elemento (`[int].iter()` liga `int`, no `T`).
+    #[test]
+    fn iter_range_oraculo() {
+        oracle_program("\
+            fn main() -> int {\n\
+            \x20 let xs = [10, 20, 30, 40];\n\
+            \x20 var s = 0;\n\
+            \x20 for x in xs.iter() { s = s + x; }\n\
+            \x20 var p = 1;\n\
+            \x20 for i in range(1, 6) { p = p * i; }\n\
+            \x20 let it = range(0, 4);\n\
+            \x20 var q = 0;\n\
+            \x20 for n in it { q = q + n; }\n\
+            \x20 s * 10000 + p * 10 + q\n\
+            }"); // 100*10000 + 120*10 + 6 = 1001206
+    }
+
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
     /// punto seguro) y exige que el resultado coincida con el intérprete. Es la
     /// prueba clave del GC: si una raíz faltara, un valor vivo se liberaría y el

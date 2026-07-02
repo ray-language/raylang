@@ -178,6 +178,18 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
         all.append(&mut program.enums);
         program.enums = all;
     }
+    // Paso 0a (M40.2b): inyectar los structs del prelude (`ArrayIter`/`RangeIter` para `.iter()`/
+    // `range`) que el usuario no haya redefinido. Como los enums, quedan en el AST que también ven
+    // el intérprete y la VM. Idempotente (si se re-verifica, no duplica).
+    let structs_usuario: HashSet<String> = program.structs.iter().map(|s| s.name.clone()).collect();
+    let mut prelude_structs: Vec<StructDef> = crate::prelude::structs()
+        .into_iter()
+        .filter(|s| !structs_usuario.contains(&s.name))
+        .collect();
+    if !prelude_structs.is_empty() {
+        prelude_structs.append(&mut program.structs);
+        program.structs = prelude_structs;
+    }
     // Paso 0b (M7.3): inyectar las funciones del prelude (map/filter/fold). Se saltan
     // las que el usuario ya definió con ese nombre —permite override y hace la inyección
     // idempotente si se vuelve a verificar—. Como los enums, quedan en el AST que
@@ -1851,9 +1863,19 @@ impl Checker {
             return None;
         }
         let next_fn = self.methods.get(&(key, "next".to_string()))?.clone();
+        let sig = self.functions.get(&next_fn)?;
+        // Impl genérico (`impl<T> Iterator<T> for ArrayIter<T>`): el `next` manglado es una función
+        // genérica; su retorno es `Option<T>` con `T` sin fijar. Unificamos el tipo del receptor
+        // (`self`, params[0]) con el tipo REAL del iterable para obtener σ y sustituir el retorno →
+        // el elemento sale concreto (`int` para `[int].iter()`). Para un impl concreto (Contador),
+        // σ queda vacío y `Option<int>` pasa tal cual.
+        let mut sigma = HashMap::new();
+        if let Some(self_ty) = sig.params.first() {
+            let _ = unify(self_ty, ty, &mut sigma);
+        }
         // El elemento es el argumento de `Option` en el retorno de `next` (`Option<T>` → `T`).
-        match &self.functions.get(&next_fn)?.ret {
-            Type::Enum(n, args) if n == "Option" && args.len() == 1 => Some((args[0].clone(), next_fn)),
+        match subst(&sig.ret, &sigma) {
+            Type::Enum(n, args) if n == "Option" && args.len() == 1 => Some((args.into_iter().next().unwrap(), next_fn)),
             _ => None,
         }
     }

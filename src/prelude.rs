@@ -14,7 +14,7 @@
 //!   puede escribir librería útil **dentro del lenguaje**, sin tocar el runtime. Lucen
 //!   con UFCS (`xs.map(f)`) y pipelines (`xs |> map(f)`).
 
-use crate::ast::{EnumDef, Function, TraitDef};
+use crate::ast::{EnumDef, Function, StructDef, TraitDef};
 
 /// El código fuente del prelude. Se parsea una vez; sus enums y funciones se anteponen
 /// a los del programa del usuario.
@@ -56,6 +56,46 @@ trait From<S> { fn desde(origen: S) -> Self; }
 // sobre iteradores de usuario (además de arreglos/strings/Map). Como los structs son valores de
 // referencia con campos mutables, `next(self)` avanza el estado del propio iterador.
 trait Iterator<T> { fn next(self) -> Option<T>; }
+
+// `.iter()` sobre arreglos y `range` (M40.2b): iteradores de PRIMERA CLASE, escritos en raylang
+// sobre `Iterator<T>`. `arr.iter()` (UFCS de `iter`) da un cursor sobre el arreglo; `range(a, b)`
+// uno sobre los enteros `a..b` (semi-abierto). Front-end puro: reusan la maquinaria de M40.2 (el
+// `for` llama a `next`), sin tocar el runtime. El estado del cursor vive en los campos del struct
+// (mutados por referencia en `next`, como cualquier iterador de usuario).
+struct ArrayIter<T> { datos: [T], pos: int }
+impl<T> Iterator<T> for ArrayIter<T> {
+    fn next(self) -> Option<T> {
+        if (self.pos < len(self.datos)) {
+            let v = self.datos[self.pos];
+            self.pos = self.pos + 1;
+            Option.Some(v)
+        } else {
+            Option.None
+        }
+    }
+}
+// Iterador sobre los elementos del arreglo, en orden. `xs.iter()` == `iter(xs)` (UFCS).
+fn iter<T>(xs: [T]) -> ArrayIter<T> {
+    ArrayIter { datos: xs, pos: 0 }
+}
+
+struct RangeIter { actual: int, fin: int }
+impl Iterator<int> for RangeIter {
+    fn next(self) -> Option<int> {
+        if (self.actual < self.fin) {
+            let v = self.actual;
+            self.actual = self.actual + 1;
+            Option.Some(v)
+        } else {
+            Option.None
+        }
+    }
+}
+// Iterador sobre los enteros de `desde` (inclusivo) a `hasta` (exclusivo) — el `a..b` del `for`,
+// pero como valor de primera clase que se puede pasar, guardar y recorrer con `for x in range(a, b)`.
+fn range(desde: int, hasta: int) -> RangeIter {
+    RangeIter { actual: desde, fin: hasta }
+}
 
 // Traits de sobrecarga de operadores (M28.1): un tipo que implemente estos traits puede usar los
 // operadores aritméticos. El checker baja `a + b` (con `a`/`b` de un tipo de usuario) a `a.add(b)`.
@@ -443,6 +483,11 @@ fn parse() -> crate::ast::Program {
 /// Los enums del prelude (`Option`/`Result`), ya parseados.
 pub fn enums() -> Vec<EnumDef> {
     parse().enums
+}
+
+/// Los structs del prelude (`ArrayIter`/`RangeIter` para `.iter()`/`range`, M40.2b), ya parseados.
+pub fn structs() -> Vec<StructDef> {
+    parse().structs
 }
 
 /// Las funciones del prelude (`map`/`filter`/`fold`), ya parseadas.

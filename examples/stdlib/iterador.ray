@@ -61,5 +61,21 @@ fn main() -> int {
     }
     print(texto);
 
+    // El prelude trae dos iteradores de primera clase listos para usar:
+    //   `xs.iter()` recorre un arreglo, `range(a, b)` los enteros `a..b` (semi-abierto).
+    let xs = [3, 1, 4, 1, 5, 9];
+    var total = 0;
+    for x in xs.iter() {
+        total = total + x;
+    }
+    print(total); // 23
+
+    // `range` como valor: se puede guardar y recorrer igual que cualquier iterador.
+    var fact = 1;
+    for i in range(1, 6) {
+        fact = fact * i;
+    }
+    print(fact); // 120
+
     suma
 }

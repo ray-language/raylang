@@ -5199,5 +5199,29 @@ ligando cada elemento. **Caso aditivo** (elige el enfoque incremental; no re-fun
   elemento y ejecuta el cuerpo. **Cero opcodes nuevos** (reusa los de enum + `Call`).
 
 Oráculo `iterator_for_oraculo` (el estado del iterador muta por referencia entre iteraciones). Ejemplo
-`examples/stdlib/iterador.ray`. SPEC §7. Siguiente en M40: `.iter()` sobre arreglos/rangos + re-fundar
-map/filter/fold sobre `Iterator`; luego `Hash` derivable + Set/deque/string-builder; `std/` + raydoc.
+`examples/stdlib/iterador.ray`. SPEC §7.
+
+#### M40.2b — `.iter()` sobre arreglos y `range`
+
+Iteradores de **primera clase** para arreglos y rangos, **escritos en el prelude en raylang** sobre
+`Iterator<T>` — front-end puro, cero runtime, reusan la maquinaria de M40.2a. `xs.iter()` (UFCS de la
+función `iter`) da un `ArrayIter<T>` que recorre el arreglo; `range(a, b)` un `RangeIter` sobre los
+enteros `a..b` (semi-abierto) — el `a..b` del `for`, pero como **valor** que se puede pasar, guardar y
+recorrer. El estado del cursor vive en los campos del struct (mutados por referencia en `next`).
+
+- **Prelude**: `struct ArrayIter<T> { datos, pos }` + `impl<T> Iterator<T> for ArrayIter<T>`, y
+  `struct RangeIter { actual, fin }` + `impl Iterator<int> for RangeIter`, con `fn iter<T>(xs: [T]) ->
+  ArrayIter<T>` y `fn range(desde, hasta) -> RangeIter`. **Primeros structs del prelude**: se añade
+  `prelude::structs()` y un paso `0a` en `prepare_program` que los inyecta (idempotente, saltando los
+  que el usuario redefina), como los enums Option/Result.
+- **Impl genérico de un trait parametrizado**: `impl<T> Iterator<T> for ArrayIter<T>` es el primero que
+  combina genéricos del impl con args del trait. Obligó a robustecer `iterator_de`: el `next` manglado
+  es una función **genérica** (`-> Option<T>` con `T` sin fijar), así que se **unifica** el tipo del
+  receptor (`self`, `params[0]`) con el tipo real del iterable para obtener σ y sustituir el retorno →
+  el elemento sale concreto (`int` para `[int].iter()`), no la variable `T`. Un impl concreto (Contador)
+  da σ vacío → `Option<int>` pasa tal cual (compatibilidad exacta con M40.2a).
+
+Oráculo `iter_range_oraculo` (impl genérico + sustitución del elemento, int y string). Diferido:
+adaptadores de iterador perezosos (`.map()`/`.filter()` sobre `Iterator`) y re-fundar map/filter/fold
+sobre `Iterator` — el siguiente escalón de M40; luego `Hash` derivable + Set/deque/string-builder;
+`std/` + raydoc.

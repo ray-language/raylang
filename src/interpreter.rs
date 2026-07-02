@@ -1704,6 +1704,7 @@ fn value_to_ffi(v: &Value) -> crate::ffi::FfiVal<'_> {
         Value::Bool(b) => crate::ffi::FfiVal::Int(*b as i64),
         Value::Str(s) => crate::ffi::FfiVal::Str(s.as_str()),      // M41.2: → char* (NUL-terminado en ffi::call)
         Value::Bytes(b) => crate::ffi::FfiVal::Bytes(b.as_slice()), // M41.2: → puntero al buffer crudo
+        Value::Ptr(p) => crate::ffi::FfiVal::Int(*p),              // M41.4b: la dirección opaca por registro
         _ => unreachable!("el checker garantiza un tipo marshalable en la frontera FFI"),
     }
 }
@@ -1743,6 +1744,9 @@ fn ffi_to_value(r: crate::ffi::FfiRet, ret: crate::ffi::CKind, line: usize, col:
             };
             opt_value("Some", vec![inner])
         }
+        FfiRet::Ptr(p) => Value::Ptr(p),                                  // M41.4b
+        FfiRet::OptPtr(None) => opt_value("None", vec![]),
+        FfiRet::OptPtr(Some(p)) => opt_value("Some", vec![Value::Ptr(p)]),
     })
 }
 

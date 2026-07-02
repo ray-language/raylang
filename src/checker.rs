@@ -3311,6 +3311,8 @@ fn is_comparable(t: &Type) -> bool {
         // M16.1a: `bytes` se compara con `==` (igualdad estructural de octetos).
         // M28.3: los enteros sin signo con tamaño se comparan con `==`.
         Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes | Type::UInt(_) | Type::Struct(_, _) => true,
+        // M41.4b: un `ptr` se compara con == por identidad (misma dirección foránea).
+        Type::Ptr => true,
         Type::Array(elem) => is_comparable(elem),
         // M27.1: una tupla es comparable con == si todos sus elementos lo son (igualdad posición a posición).
         Type::Tuple(ts) => ts.iter().all(is_comparable),

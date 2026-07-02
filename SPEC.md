@@ -31,7 +31,7 @@ caracteres. **Ningún token cruza líneas.**
   `#` o `::` no son escribibles por el usuario (los usan las bajadas internas y los módulos).
 - **Palabras clave** (reservadas):
   `let var fn return if else while for in true false struct const enum match trait impl dyn
-  pub import from extern as` y las de tipo `int float bool string char bytes u8 u32 u64`.
+  pub import from extern as` y las de tipo `int float bool string char bytes ptr u8 u32 u64`.
 - **Literales**:
   - *Entero*: dígitos decimales (`42`). Debe caber en `int` (i64); si no, error léxico. No hay
     literales hex/octales/binarios ni separador `_` (diferido).
@@ -80,7 +80,7 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
 ## 3. Tipos
 
 ```ebnf
-tipo = 'int' | 'float' | 'bool' | 'string' | 'char' | 'bytes'
+tipo = 'int' | 'float' | 'bool' | 'string' | 'char' | 'bytes' | 'ptr'
      | 'u8' | 'u32' | 'u64'
      | '[' tipo ']'
      | '(' tipo ',' tipo { ',' tipo } ')'
@@ -146,10 +146,11 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   resuelve al archivo de plataforma o al proceso). Los tipos deben ser **marshalables**: los primitivos
   `int`↔C `int` (32 bits, con signo), `u64`↔C `long`/`size_t` (64 bits), `float`↔double, `bool`↔int
   (aridad 0..=3), y como **argumento** `string`↔`char*` (NUL-terminado) y `bytes`↔puntero al buffer
-  (M41.2). Un puntero opaco (`FILE*`, handle) se pasa como `u64` (M41.4). El **retorno** admite
-  `int`/`u64`/`float`/`bool`/`unit`
-  y, para un `char*`, **`Option<bytes>`** (`NULL → None`; la frontera copia los bytes hasta el NUL y no
-  libera el puntero) o **`Option<string>`** (azúcar que valida UTF-8; bytes inválidos → error de
+  (M41.2). Un puntero opaco (`FILE*`, handle) se pasa como `u64` o, con seguridad de tipos, como **`ptr`**
+  (M41.4b: un puntero **opaco** — se recibe/pasa/compara por identidad, pero no se desreferencia ni opera).
+  El **retorno** admite `int`/`u64`/`float`/`bool`/`unit`, `ptr`/`Option<ptr>` (`NULL → None`, p. ej.
+  `fopen`), y para un `char*`, **`Option<bytes>`** (`NULL → None`; la frontera copia los bytes hasta el NUL
+  y no libera el puntero) o **`Option<string>`** (azúcar que valida UTF-8; bytes inválidos → error de
   ejecución) (M41.3). Un `string`/`bytes` **pelado** de retorno es error (un `char*` puede ser NULL y no
   hay `null`). Una firma fuera del catálogo, o un tipo no marshalable, es error.
   Llamar a una `extern fn` se ve como cualquier llamada. **Declarar una `extern fn` es la única

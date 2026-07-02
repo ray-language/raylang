@@ -621,3 +621,43 @@ fn ffi_anchura_int_y_puntero_opaco_como_u64() {
     assert!(out.contains("10"), "strlen size_t (u64)\n{out}");
     assert!(out.contains("3"), "fgetc leyó 3 bytes y EOF (-1) cortó el bucle\n{out}");
 }
+
+#[test]
+fn ffi_ptr_opaco_y_option_ptr() {
+    // M41.4b: tipo `ptr` opaco + Option<ptr> fallible. fopen(existe)→Some, fopen(no existe)→None.
+    let base = tmp("ffi_ptr");
+    std::fs::write(base.join("data.txt"), "Hi!").unwrap();
+    let datos = base.join("data.txt");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        format!(
+            "extern \"c\" {{\n\
+             \x20 fn fopen(path: string, mode: string) -> Option<ptr>;\n\
+             \x20 fn fgetc(stream: ptr) -> int;\n\
+             \x20 fn fclose(stream: ptr) -> int;\n\
+             }}\n\
+             fn leer(h: ptr) -> int {{\n\
+             \x20 var n = 0; var c = fgetc(h);\n\
+             \x20 while (c >= 0) {{ n = n + 1; c = fgetc(h); }}\n\
+             \x20 fclose(h); n\n\
+             }}\n\
+             fn main() -> int {{\n\
+             \x20 match (fopen(\"{}\", \"r\")) {{\n\
+             \x20   Option.Some(h) => {{ print(leer(h)); }}, Option.None => {{ print(\"no\"); }},\n\
+             \x20 }}\n\
+             \x20 match (fopen(\"{}/no_existe\", \"r\")) {{\n\
+             \x20   Option.Some(h) => {{ fclose(h); print(\"abrió?!\"); }}, Option.None => {{ print(\"None ok\"); }},\n\
+             \x20 }}\n\
+             \x20 0\n\
+             }}\n",
+            datos.to_str().unwrap(),
+            base.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con ptr/Option<ptr> debe salir 0\n{err}");
+    assert!(out.contains("3"), "leyó 3 bytes por el handle ptr\n{out}");
+    assert!(out.contains("None ok"), "fopen de archivo inexistente → None\n{out}");
+}

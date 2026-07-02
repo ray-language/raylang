@@ -408,6 +408,7 @@ impl<'a> Vm<'a> {
                             HeapValue::Bool(b) => crate::ffi::FfiVal::Int(*b as i64),
                             HeapValue::Str(s) => crate::ffi::FfiVal::Str(s.as_str()),
                             HeapValue::Bytes(b) => crate::ffi::FfiVal::Bytes(b.as_slice()),
+                            HeapValue::Ptr(p) => crate::ffi::FfiVal::Int(*p), // M41.4b
                             _ => return Err(runtime_error(pos!().0, pos!().1,
                                 "argumento no marshalable en la frontera FFI")),
                         });
@@ -436,6 +437,18 @@ impl<'a> Vm<'a> {
                                     };
                                     ("Some", vec![inner])
                                 }
+                            };
+                            let (eid, tag) = option_variant(&program.enums, variant).ok_or_else(||
+                                runtime_error(pos!().0, pos!().1, "el enum Option del prelude no está disponible para el retorno FFI"))?;
+                            let h = self.heap.allocate(Obj::Enum(VmEnum { enum_id: eid, tag, payload }));
+                            HeapValue::Obj(h)
+                        }
+                        // M41.4b: puntero opaco.
+                        crate::ffi::FfiRet::Ptr(p) => HeapValue::Ptr(p),
+                        crate::ffi::FfiRet::OptPtr(opt) => {
+                            let (variant, payload): (&str, Vec<HeapValue>) = match opt {
+                                None => ("None", vec![]),
+                                Some(p) => ("Some", vec![HeapValue::Ptr(p)]),
                             };
                             let (eid, tag) = option_variant(&program.enums, variant).ok_or_else(||
                                 runtime_error(pos!().0, pos!().1, "el enum Option del prelude no está disponible para el retorno FFI"))?;
@@ -2415,6 +2428,7 @@ fn values_equal(heap: &Heap, a: &HeapValue, b: &HeapValue) -> bool {
         (H::Char(x), H::Char(y)) => x == y,
         (H::UInt(x, _), H::UInt(y, _)) => x == y, // M28.3 (mismo ancho garantizado por el checker)
         (H::Bytes(x), H::Bytes(y)) => x == y,
+        (H::Ptr(x), H::Ptr(y)) => x == y, // M41.4b: identidad de puntero
         (H::Unit, H::Unit) => true,
         (H::Function(x), H::Function(y)) => x == y,
         (H::Obj(x), H::Obj(y)) => match (heap.get(*x), heap.get(*y)) {
@@ -2452,6 +2466,7 @@ fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> String {
         HeapValue::Char(c) => c.to_string(),
         HeapValue::UInt(n, _) => n.to_string(),
         HeapValue::Bytes(b) => crate::builtins::bytes_to_hex(b),
+        HeapValue::Ptr(_) => "<ptr>".to_string(), // M41.4b: dirección no determinista → repr opaca
         HeapValue::Unit => "()".to_string(),
         HeapValue::Function(_) => "<fn>".to_string(),
         HeapValue::Obj(h) => match heap.get(*h) {
@@ -2501,6 +2516,7 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
         HeapValue::Char(c) => Value::Char(*c),
         HeapValue::UInt(n, w) => Value::UInt(*n, *w),
         HeapValue::Bytes(b) => Value::Bytes(Rc::new(b.clone())),
+        HeapValue::Ptr(p) => Value::Ptr(*p), // M41.4b
         HeapValue::Unit => Value::Unit,
         HeapValue::Function(i) => Value::Function(*i),
         HeapValue::Obj(h) => match heap.get(*h) {

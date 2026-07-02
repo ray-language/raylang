@@ -726,6 +726,8 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "http2.ray", "hpack.ray", "http2_demo.ray", // M26: HTTP/2 framing + HPACK, usa `bytes` + bitops
         "iterador.ray", // M40.2: `impl Iterator<int> for …` — args de tipo en el trait de un impl,
                         // aún no soportados por el parser auto-alojado (M14.2c).
+        "libm.ray",     // M41: bloques `extern "lib" { … }` (FFI), aún no en el parser auto-alojado.
+        "cstrings.ray", // M41: idem.
     ];
     // Los ejemplos viven en subdirectorios por categoría (basics/, types/, web/, …) → se recorre
     // `examples/` **recursivamente**. Se saltan los directorios de ejemplos de MÓDULOS (multi-archivo,

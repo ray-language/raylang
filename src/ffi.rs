@@ -54,6 +54,11 @@ pub enum CKind {
     /// **Retorno** `char*` → `Option<string>` (M41.3): azúcar sobre `OptBytes` que **valida UTF-8**
     /// (bytes inválidos → error de ejecución; para no asumir codificación, usa `Option<bytes>`).
     OptStr,
+    /// `ptr` → puntero opaco foráneo (M41.4b), 64 bits. Como argumento (su dirección) o retorno (`void*`
+    /// no-NULL).
+    Ptr,
+    /// **Retorno** `ptr` fallible → `Option<ptr>` (M41.4b): `NULL → None` (p. ej. `fopen`).
+    OptPtr,
 }
 
 /// Descriptor de una función externa listo para llamar: qué librería, qué símbolo, y las clases de
@@ -80,6 +85,7 @@ pub fn ckind(ty: &crate::ast::Type) -> Option<CKind> {
         Type::Unit => Some(CKind::Unit),
         Type::String => Some(CKind::Str),
         Type::Bytes => Some(CKind::Bytes),
+        Type::Ptr => Some(CKind::Ptr),
         _ => None,
     }
 }
@@ -97,10 +103,12 @@ pub fn ret_ckind(ty: &crate::ast::Type) -> Option<CKind> {
         Type::Float => Some(CKind::Float),
         Type::Bool => Some(CKind::Bool),
         Type::Unit => Some(CKind::Unit),
+        Type::Ptr => Some(CKind::Ptr),
         Type::Struct(n, args) | Type::Enum(n, args) if n == "Option" && args.len() == 1 => {
             match &args[0] {
                 Type::Bytes => Some(CKind::OptBytes),
                 Type::String => Some(CKind::OptStr),
+                Type::Ptr => Some(CKind::OptPtr),
                 _ => None,
             }
         }
@@ -141,6 +149,10 @@ pub enum FfiRet {
     /// Retorno `char*` (M41.3): los bytes copiados hasta el NUL, o `None` si el puntero era NULL. El
     /// motor lo envuelve en `Option<bytes>` o (validando UTF-8) `Option<string>`.
     OptBytes(Option<Vec<u8>>),
+    /// Retorno `ptr` (M41.4b): la dirección opaca (no-NULL, por contrato).
+    Ptr(i64),
+    /// Retorno `Option<ptr>` (M41.4b): la dirección, o `None` si era NULL.
+    OptPtr(Option<i64>),
 }
 
 // El molde de un **argumento** a efectos de la ABI: banco de registros enteros (`I`) o de flotantes
@@ -175,8 +187,8 @@ fn ret_mold(k: CKind) -> RetMold {
         CKind::Float => RetMold::F,
         // C `int` (32 bits): Bool también (un `bool` de C es int-sized).
         CKind::Int | CKind::Bool => RetMold::I32,
-        // 64 bits: `u64`/`long`/`size_t` y los punteros de retorno (`char*` → OptBytes/OptStr).
-        CKind::U64 | CKind::OptBytes | CKind::OptStr => RetMold::I64,
+        // 64 bits: `u64`/`long`/`size_t`, los punteros de retorno (`char*`, `ptr`, y sus `Option`).
+        CKind::U64 | CKind::OptBytes | CKind::OptStr | CKind::Ptr | CKind::OptPtr => RetMold::I64,
         // `void`: el valor no se lee; la anchura da igual.
         CKind::Unit | CKind::Str | CKind::Bytes => RetMold::I64,
     }
@@ -198,6 +210,9 @@ fn int_return(desc: &ExternDesc, raw: i64) -> FfiRet {
                 FfiRet::OptBytes(Some(bytes))
             }
         }
+        // Puntero opaco: NO se desreferencia; solo se transporta la dirección (M41.4b).
+        CKind::Ptr => FfiRet::Ptr(raw),
+        CKind::OptPtr => FfiRet::OptPtr(if raw == 0 { None } else { Some(raw) }),
         _ => FfiRet::Int(raw),
     }
 }
@@ -388,6 +403,20 @@ mod tests {
         // No encontrado → NULL → None.
         match call(&d, &[FfiVal::Str("abc"), FfiVal::Str("z")]).unwrap() {
             FfiRet::OptBytes(None) => {}
+            other => panic!("se esperaba None, {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strstr_devuelve_option_ptr() {
+        // M41.4b: el mismo char* como puntero OPACO. No se desreferencia: solo Some(dirección≠0)/None.
+        let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptPtr };
+        match call(&d, &[FfiVal::Str("hello"), FfiVal::Str("ll")]).unwrap() {
+            FfiRet::OptPtr(Some(p)) => assert_ne!(p, 0),
+            other => panic!("se esperaba Some, {other:?}"),
+        }
+        match call(&d, &[FfiVal::Str("hello"), FfiVal::Str("z")]).unwrap() {
+            FfiRet::OptPtr(None) => {}
             other => panic!("se esperaba None, {other:?}"),
         }
     }

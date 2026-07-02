@@ -47,6 +47,9 @@ pub enum HeapValue {
     /// Bytes (M16.1a): secuencia inmutable de octetos, **inline** en el valor (como `Str`); no es un
     /// objeto del heap ni lo traza el GC (no contiene handles).
     Bytes(Vec<u8>),
+    /// Un **puntero opaco** foráneo (`ptr`, M41.4b): la dirección de un objeto de C, escalar inline. No
+    /// es objeto del heap ni lo traza el GC (no contiene handles). Se compara por identidad.
+    Ptr(i64),
     Unit,
     /// Una función **sin** captura: un índice en la tabla de funciones (no es un
     /// objeto del heap, no se recolecta).

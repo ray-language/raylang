@@ -759,6 +759,7 @@ impl Parser {
             TokenKind::StringType => Type::String,
             TokenKind::CharType => Type::Char,
             TokenKind::BytesType => Type::Bytes,
+            TokenKind::PtrType => Type::Ptr,
             TokenKind::UIntType(w) => Type::UInt(*w),
             // Nota: el mensaje conserva su texto original (sin u8/u32/u64) para no romper el oráculo del
             // parser auto-alojado (`selfhost/parser.ray`), que aún no conoce los enteros con tamaño.

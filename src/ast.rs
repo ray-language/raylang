@@ -83,6 +83,10 @@ pub enum Type {
     /// de traits, **canónico** (ordenado y sin duplicados); `dyn A` es `Dyn(["A"])`. En runtime
     /// se realiza como un struct sintetizado `__dyn_A+B { data, métodos de la unión... }`.
     Dyn(Vec<String>),
+    /// Un **puntero opaco** foráneo (`ptr`, M41.4b): la dirección de un objeto de C (un `FILE*`, un
+    /// handle de sqlite, …). Es un escalar **opaco**: se puede recibir de C, pasar a C, guardar y
+    /// comparar por identidad, pero NO desreferenciar ni operar aritméticamente. El GC no lo traza.
+    Ptr,
 }
 
 impl std::fmt::Display for Type {
@@ -95,6 +99,7 @@ impl std::fmt::Display for Type {
             Type::Char => f.write_str("char"),
             Type::Bytes => f.write_str("bytes"),
             Type::UInt(w) => write!(f, "u{}", w),
+            Type::Ptr => f.write_str("ptr"),
             Type::Unit => f.write_str("unit"),
             Type::Array(elem) => write!(f, "[{}]", elem),
             Type::Tuple(ts) => {

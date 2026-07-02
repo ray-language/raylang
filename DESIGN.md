@@ -5631,3 +5631,30 @@ correcto y con estado: `fopen -> u64`, `fgetc(s: u64) -> int`, `fclose(s: u64)`.
 `ffi_anchura_int_y_puntero_opaco_como_u64` (lee un archivo con `fopen`/`fgetc` hasta EOF → 3 bytes).
 Los 3 oráculos previos siguen verdes (abs/atoi/strlen dan lo mismo con la anchura correcta). Diferido a
 **M41.4b**: un tipo `ptr` opaco (alias con seguridad de tipos sobre el `u64` crudo) + `Option<ptr>`.
+
+### 43.4b M41.4b — el tipo `ptr` (puntero opaco con seguridad de tipos)
+
+Sobre los handles-como-`u64` de M41.4a, un tipo **`ptr`** dedicado: un puntero foráneo **opaco**. Ventajas
+sobre el `u64` crudo: (1) **seguridad de tipos** —el checker rechaza aritmética (`ptr + 1`) e indexado
+(`p[0]`) por las reglas de tipo normales (un `ptr` no es int/float ni indexable), así que no puedes
+fabricar/corromper un handle por accidente—; (2) **firmas autodocumentadas** (`fopen -> Option<ptr>`);
+(3) **`Option<ptr>`** para los fallibles (`fopen` devuelve NULL → `None`) — el `match` idiomático en vez
+de `if h == 0`.
+
+**Escalar nuevo, como `char` (M11.4c).** Keyword `ptr` → `Type::Ptr`; `Value::Ptr(i64)`/`HeapValue::Ptr
+(i64)` (inline, **no trazado por el GC** — no apunta al heap de raylang); igualdad por **identidad** (misma
+dirección); `print` → `<ptr>` (la dirección real es no determinista por ASLR → repr opaca y estable). En
+la frontera: arg → su dirección por registro entero; retorno `ptr` → `Value::Ptr`; `Option<ptr>` → `None`
+si NULL, `Some(Ptr)` si no (reusa el armado de `Option` de M41.3). `CKind` gana `Ptr`/`OptPtr`; `FfiRet`
+gana `Ptr(i64)`/`OptPtr(Option<i64>)`.
+
+**Inseguridad inherente (documentada).** Un `ptr` a memoria liberada es un use-after-free (raylang no
+puede saberlo); es responsabilidad del usuario mantenerlo válido —parte de la frontera insegura—. Por eso
+el oráculo NO puede probar `ptr` en proceso de forma determinista (un `ptr` a un `CString` temporal muere
+tras la llamada); lo real es I/O con estado. Test por subproceso `ffi_ptr_opaco_y_option_ptr`
+(fopen/fgetc/fclose vía `Option<ptr>`: abre y cuenta bytes, o `None` si el archivo no existe) + unit
+`strstr_devuelve_option_ptr` (sin desreferenciar) + ejemplo `examples/ffi/cstrings.ray`. **M41.4 COMPLETO.**
+
+**Diferido**: `free` allocator-aware para retornos con propiedad (vía anotación); callbacks (fn raylang →
+C), structs por valor, variádicas, buffer+longitud como par de args; más combinaciones de molde según haga
+falta.

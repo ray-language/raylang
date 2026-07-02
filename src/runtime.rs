@@ -47,6 +47,10 @@ pub enum Value {
     /// Bytes (M16.1a): secuencia inmutable de octetos. `Rc` da clon barato (inmutable → sin `RefCell`,
     /// como el `String` de `Str`). Igualdad estructural.
     Bytes(Rc<Vec<u8>>),
+    /// Un **puntero opaco** foráneo (`ptr`, M41.4b): la dirección de un objeto de C, como escalar
+    /// inline. Opaco: se compara por identidad (misma dirección) y se imprime `<ptr>` (la dirección
+    /// real es no determinista → no se muestra). El GC no lo traza (no apunta al heap de raylang).
+    Ptr(i64),
     Unit,
     /// Arreglo (M3). `Rc` da la **semántica de referencia** (clonar el `Value`
     /// comparte el mismo arreglo); `RefCell` permite mutarlo. La GC de M4
@@ -130,6 +134,7 @@ impl PartialEq for Value {
             (Char(a), Char(b)) => a == b,
             (UInt(a, _), UInt(b, _)) => a == b, // M28.3 (mismo ancho garantizado por el checker)
             (Bytes(a), Bytes(b)) => a == b,
+            (Ptr(a), Ptr(b)) => a == b, // M41.4b: identidad de puntero (misma dirección)
             (Unit, Unit) => true,
             (Array(a), Array(b)) => *a.borrow() == *b.borrow(),
             (Struct(a), Struct(b)) => *a.borrow() == *b.borrow(),
@@ -178,6 +183,8 @@ impl std::fmt::Display for Value {
             // M16.1a: print(bytes) está diferido (el checker lo rechaza); esta repr solo existe para
             // completar el Display y se ve, p. ej., en mensajes de depuración.
             Value::Bytes(v) => write!(f, "{}", crate::builtins::bytes_to_hex(v)),
+            // M41.4b: la dirección real es no determinista (ASLR) → repr opaca y estable.
+            Value::Ptr(_) => write!(f, "<ptr>"),
             Value::Unit => write!(f, "()"),
             Value::Array(rc) => {
                 let elems = rc.borrow();

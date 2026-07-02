@@ -553,6 +553,7 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "string" => TokenKind::StringType,
         "char" => TokenKind::CharType,
         "bytes" => TokenKind::BytesType,
+        "ptr" => TokenKind::PtrType, // M41.4b: puntero opaco foráneo (FFI)
         "u8" => TokenKind::UIntType(8),   // M28.3: enteros sin signo con tamaño
         "u32" => TokenKind::UIntType(32),
         "u64" => TokenKind::UIntType(64),

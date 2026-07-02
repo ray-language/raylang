@@ -31,6 +31,7 @@ pub mod prelude;
 pub mod repl;
 pub mod runtime;
 pub mod sha256;
+pub mod stdlib;
 pub mod test_runner;
 pub mod token;
 pub mod vm;

@@ -15,15 +15,18 @@ A diferencia del **prelude** (que se inyecta automáticamente en cada programa: 
 `map`/`filter`/`fold`, `Set`/`Deque`/`StringBuilder`, `Iterator`, …), la `std/` es **opcional**: solo
 se carga lo que se importa.
 
-## Descubrimiento
+## Empaquetado en el binario
 
-El binario localiza `std/` en tiempo de ejecución:
+Desde M40.5 la `std/` va **embebida en el ejecutable** (`include_str!`, como el prelude): estos `.ray`
+del repo se compilan dentro del binario, así `ray run prog.ray` con `import std/math;` funciona **sin que
+`std/` exista en disco** — el binario es auto-contenido. El loader resuelve `std/…` contra la fuente
+embebida (`src/stdlib.rs`) antes de tocar el filesystem, de modo que el prefijo `std/` queda **reservado**.
 
-1. La variable de entorno `RAYLANG_STD` (apuntando al directorio que contiene `std/`, o a `std/`).
-2. Si no, subiendo desde el ejecutable (en el repo: `target/…/ray` → la raíz del proyecto con `std/`).
-
+Estos archivos siguen siendo la **única fuente de verdad**: se editan aquí y `include_str!` los recompila.
 Los módulos son **públicos** (`pub`) y están documentados con comentarios `///`; genera su documentación
-con `ray doc std/math.ray`.
+con `ray doc std/math.ray` (que lee el archivo directamente).
+
+**Añadir un módulo**: crea `std/<nombre>.ray` y añade su fila a `MODULOS` en `src/stdlib.rs`.
 
 ## Módulos
 

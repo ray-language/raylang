@@ -137,12 +137,16 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>) ->
         if !visitados.insert(name.clone()) {
             continue; // ya cargado (los ciclos se cierran aquí)
         }
-        // El archivo de entrada puede venir de un buffer en memoria (LSP); el resto, del disco.
+        // El archivo de entrada puede venir de un buffer en memoria (LSP); un módulo de la stdlib,
+        // de la fuente **embebida** en el binario (M40.5, auto-contención); el resto, del disco.
         let source = match entry_source {
             Some(s) if is_entry => s.to_string(),
-            _ => std::fs::read_to_string(&path).map_err(|e| LoadError {
-                message: format!("no se pudo leer el módulo '{}' ({}): {}", name, path.display(), e),
-            })?,
+            _ => match crate::stdlib::embedded(&name) {
+                Some(s) => s.to_string(),
+                None => std::fs::read_to_string(&path).map_err(|e| LoadError {
+                    message: format!("no se pudo leer el módulo '{}' ({}): {}", name, path.display(), e),
+                })?,
+            },
         };
         let program = parse_source(&name, &source)?;
         // Dependencias del módulo: tanto `import M;` como `from M import …;` cargan `M`.
@@ -158,6 +162,12 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>) ->
                 )));
             }
             if !visitados.contains(dep) {
+                // M40.5: un módulo de la stdlib se resuelve a su fuente embebida (sin disco). La ruta
+                // es una sentinela solo para mensajes; la lectura la intercepta `stdlib::embedded`.
+                if crate::stdlib::embedded(dep).is_some() {
+                    pendientes.push((dep.clone(), PathBuf::from(format!("<std>/{dep}.ray")), false));
+                    continue;
+                }
                 match resolve_module_path(&roots, dep) {
                     Err(msg) => return Err(render(&source, line, col, 1, &name, &msg)),
                     Ok(Some(mp)) => pendientes.push((dep.clone(), mp, false)),

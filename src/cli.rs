@@ -311,36 +311,9 @@ fn raices_de_dependencias() -> Vec<PathBuf> {
     if cache.is_dir() {
         roots.push(cache);
     }
-    // M40.4b: la biblioteca estándar importable con `import std/…`. Se añade como una raíz de módulos
-    // más (el directorio que CONTIENE `std/`), así `import std/math;` resuelve `std/math.ray`.
-    if let Some(std) = raiz_std() {
-        roots.push(std);
-    }
+    // La biblioteca estándar (`import std/…`) ya no es una raíz de disco: desde M40.5 va **embebida**
+    // en el binario (`crate::stdlib`, auto-contención), y el loader la resuelve antes que el filesystem.
     roots
-}
-
-/// Localiza el directorio que **contiene** `std/` (la stdlib importable). Se busca por el env
-/// `RAYLANG_STD` (apuntando a ese directorio o directamente a `std/`), y si no, subiendo desde el
-/// ejecutable (en el repo: `target/debug/ray` → la raíz con `std/`). `None` si no se encuentra.
-fn raiz_std() -> Option<PathBuf> {
-    if let Ok(p) = env::var("RAYLANG_STD") {
-        let pb = PathBuf::from(&p);
-        if pb.join("std").is_dir() {
-            return Some(pb);
-        }
-        if pb.file_name().map(|n| n == "std").unwrap_or(false) {
-            return pb.parent().map(Path::to_path_buf);
-        }
-    }
-    let exe = env::current_exe().ok()?;
-    let mut d = exe.parent();
-    while let Some(dir) = d {
-        if dir.join("std").is_dir() {
-            return Some(dir.to_path_buf());
-        }
-        d = dir.parent();
-    }
-    None
 }
 
 /// Carga el manifiesto del proyecto que contiene el directorio actual. `None` si no hay

@@ -5388,6 +5388,19 @@ std/math;` resuelve `std/math.ray`. **Descubrimiento** (`raiz_std` en `cli.rs`):
 o subiendo desde el ejecutable (en el repo, `target/…/ray` → la raíz con `std/`). Primer módulo:
 **`std/math`** (utilidades enteras que complementan los builtins: `iabs`/`sign`/`clamp`/`gcd`/`lcm`/
 `ipow`/`factorial`/`is_prime`), todo `pub` y documentado con `///` (→ `ray doc std/math.ray`). Integración
-en `cli_cli.rs`. Diferido: **bundlear `std/` en el binario** (auto-contención total, como el prelude;
-hoy la stdlib vive en disco relativa al binario), más módulos (`std/text`, `std/sort`, …), promover las
-librerías de `examples/` a `std/`. **M40.4 (std/ + raydoc) en marcha.**
+en `cli_cli.rs`. Primer módulo: **`std/math`**; **`std/text`** (M40.4c) le siguió. **M40.4 (std/ +
+raydoc) COMPLETO.**
+
+### 42.8 M40.5 — `std/` embebida en el binario (auto-contención)
+
+Cierra el diferido de §42.7: la `std/` deja de vivir en disco relativa al ejecutable y se **empaqueta en
+el binario**, igual que el prelude. Los `std/*.ray` del repo se compilan dentro con `include_str!` (módulo
+nuevo `src/stdlib.rs`: tabla `MODULOS = [(nombre, fuente)]` + `embedded(nombre) -> Option<&'static str>`);
+siguen siendo la **única fuente de verdad** (un módulo = un `.ray` + una fila). El **loader** consulta
+`stdlib::embedded` **antes del filesystem**, tanto al resolver el nombre de módulo (ruta sentinela `<std>/…`)
+como al leer la fuente → un `import std/math;` funciona **sin `std/` en disco**: el ejecutable es
+auto-contenido (`ray run` desde cualquier directorio, con `RAYLANG_STD` roto, resuelve igual). El prefijo
+`std/` queda **reservado** (gana a un archivo local homónimo). Se **elimina** el descubrimiento por
+filesystem (`raiz_std`/`RAYLANG_STD` en `cli.rs`), ahora código muerto. `ray doc std/math.ray` sigue leyendo
+el archivo directamente (por eso los `.ray` permanecen en el repo). Front-end puro, runtime intacto.
+Diferido: más módulos (`std/sort`, …), promover librerías de `examples/` a `std/`.

@@ -397,12 +397,16 @@ impl<'a> Vm<'a> {
                         fargs.push(self.pop());
                     }
                     fargs.reverse(); // se sacaron en orden inverso
+                    // Los `HeapValue` retenidos en `fargs` viven durante la llamada; los `FfiVal` de
+                    // string/bytes toman prestado su buffer inline (M41.2).
                     let mut cargs = Vec::with_capacity(*argc);
                     for v in &fargs {
                         cargs.push(match v {
                             HeapValue::Int(n) => crate::ffi::FfiVal::Int(*n),
                             HeapValue::Float(f) => crate::ffi::FfiVal::Float(*f),
                             HeapValue::Bool(b) => crate::ffi::FfiVal::Int(*b as i64),
+                            HeapValue::Str(s) => crate::ffi::FfiVal::Str(s.as_str()),
+                            HeapValue::Bytes(b) => crate::ffi::FfiVal::Bytes(b.as_slice()),
                             _ => return Err(runtime_error(pos!().0, pos!().1,
                                 "argumento no marshalable en la frontera FFI")),
                         });
@@ -2641,6 +2645,32 @@ mod tests {
              }\n\
              fn main() -> int {\n\
              \x20 if (sqrt(16.0) == 4.0 && pow(2.0, 10.0) == 1024.0 && abs(0 - 5) == 5) { 42 } else { 0 }\n\
+             }",
+        );
+    }
+
+    /// M41.2: **FFI con string/bytes** → `char*`. Un `string` se marshala a una `CString`
+    /// NUL-terminada; un `bytes` se pasa por el puntero de su buffer. Determinista (strlen/atoi) →
+    /// oráculo. Programas separados porque el nombre extern ES el símbolo (un `strlen` por programa).
+    #[test]
+    fn ffi_strings_oraculo() {
+        // string → char*: strlen y atoi.
+        oracle_program(
+            "extern \"c\" {\n\
+             \x20 fn strlen(s: string) -> int;\n\
+             \x20 fn atoi(s: string) -> int;\n\
+             }\n\
+             fn main() -> int {\n\
+             \x20 if (strlen(\"hola mundo\") == 10 && atoi(\"42\") == 42 && atoi(\"  -7x\") == 0 - 7) { 1 } else { 0 }\n\
+             }",
+        );
+        // bytes → puntero al buffer (NUL-terminado a mano con un literal de bytes).
+        oracle_program(
+            "extern \"c\" {\n\
+             \x20 fn strlen(s: bytes) -> int;\n\
+             }\n\
+             fn main() -> int {\n\
+             \x20 if (strlen(b\"abcde\\x00\") == 5) { 1 } else { 0 }\n\
              }",
         );
     }

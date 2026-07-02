@@ -826,10 +826,13 @@ impl<'a> Interpreter<'a> {
                 // insegura: un fallo de carga/símbolo o firma no soportada es un error de ejecución en
                 // la posición de la llamada.
                 if let Some(desc) = self.externs.get(name.as_str()).cloned() {
-                    let mut fargs = Vec::with_capacity(args.len());
+                    // Los `Value` se evalúan y **retienen** en `vals`: los `FfiVal` de string/bytes los
+                    // toman prestados y deben vivir durante la llamada C.
+                    let mut vals = Vec::with_capacity(args.len());
                     for arg in args {
-                        fargs.push(value_to_ffi(&self.eval_expr(arg)?));
+                        vals.push(self.eval_expr(arg)?);
                     }
+                    let fargs: Vec<_> = vals.iter().map(value_to_ffi).collect();
                     return match crate::ffi::call(&desc, &fargs) {
                         Ok(r) => Ok(ffi_to_value(r, desc.ret_kind)),
                         Err(msg) => Err(runtime_error(callee.line, callee.col, &msg)),
@@ -1693,12 +1696,14 @@ fn runtime_error(line: usize, col: usize, msg: &str) -> Flow {
 
 /// Convierte un `Value` de raylang a un valor de la frontera FFI (M41). El checker ya garantizó que
 /// el argumento es un primitivo marshalable; `bool` va como entero (0/1).
-fn value_to_ffi(v: &Value) -> crate::ffi::FfiVal {
+fn value_to_ffi(v: &Value) -> crate::ffi::FfiVal<'_> {
     match v {
         Value::Int(n) => crate::ffi::FfiVal::Int(*n),
         Value::Float(f) => crate::ffi::FfiVal::Float(*f),
         Value::Bool(b) => crate::ffi::FfiVal::Int(*b as i64),
-        _ => unreachable!("el checker garantiza un primitivo marshalable en la frontera FFI"),
+        Value::Str(s) => crate::ffi::FfiVal::Str(s.as_str()),      // M41.2: → char* (NUL-terminado en ffi::call)
+        Value::Bytes(b) => crate::ffi::FfiVal::Bytes(b.as_slice()), // M41.2: → puntero al buffer crudo
+        _ => unreachable!("el checker garantiza un tipo marshalable en la frontera FFI"),
     }
 }
 

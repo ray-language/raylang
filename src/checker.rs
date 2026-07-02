@@ -724,15 +724,18 @@ impl Checker {
                 let pt = self.resolve_type(&p.ty);
                 if crate::ffi::ckind(&pt).is_none() || matches!(pt, Type::Unit) {
                     return Err(self.err(p.line, p.col, format!(
-                        "el tipo {} del parámetro '{}' de la 'extern fn {}' no es marshalable por FFI (M41.1: int, float, bool)",
+                        "el tipo {} del parámetro '{}' de la 'extern fn {}' no es marshalable por FFI (int, float, bool, string, bytes)",
                         pt, p.name, e.name)));
                 }
             }
             let ret = self.resolve_type(&e.return_type);
-            if crate::ffi::ckind(&ret).is_none() {
-                return Err(self.err(e.line, e.col, format!(
-                    "el tipo de retorno {} de la 'extern fn {}' no es marshalable por FFI (M41.1: int, float, bool, unit)",
-                    ret, e.name)));
+            match crate::ffi::ckind(&ret) {
+                Some(k) if crate::ffi::ckind_valido_como_retorno(k) => {}
+                _ => {
+                    return Err(self.err(e.line, e.col, format!(
+                        "el tipo de retorno {} de la 'extern fn {}' no es marshalable por FFI (retorno: int, float, bool, unit; string/bytes de retorno → diferido)",
+                        ret, e.name)));
+                }
             }
             let sig = FnSig {
                 type_params: Vec::new(),

@@ -537,3 +537,24 @@ fn ffi_llama_a_libm() {
     assert_eq!(code, 0, "run con extern debe salir 0\n{err}");
     assert!(out.contains("ffi ok"), "sqrt/pow de libm por FFI\n{out}");
 }
+
+#[test]
+fn ffi_marshala_strings_a_char_ptr() {
+    // M41.2: un `string` de raylang se pasa como `char*` (NUL-terminado) a una función C.
+    let base = tmp("ffi_str");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "extern \"c\" { fn strlen(s: string) -> int; fn atoi(s: string) -> int; }\n\
+         fn main() -> int {\n\
+         \x20 print(strlen(\"hola mundo\"));\n\
+         \x20 print(atoi(\"42\"));\n\
+         \x20 0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con string FFI debe salir 0\n{err}");
+    assert!(out.contains("10"), "strlen(\"hola mundo\")\n{out}");
+    assert!(out.contains("42"), "atoi(\"42\")\n{out}");
+}

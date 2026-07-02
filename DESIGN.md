@@ -5540,3 +5540,30 @@ oráculo + integración por subproceso (`ffi_llama_a_libm`, cli_cli). Ejemplo `e
 **Diferido**: M41.2 `bytes`/`string` (marshalling a puntero+longitud, `char*`); M41.3 punteros opacos /
 handles (APIs con estado como sqlite); callbacks (fn raylang → C), structs por valor, variádicas; más
 aridad/combinaciones de molde según haga falta; namespacing de externs entre módulos.
+
+### 43.2 M41.2 — string/bytes como argumento (`char*`)
+
+Cierra media parte del diferido de M41.1: pasar un `string` o `bytes` de raylang a una función C que
+espera un puntero. Habilita las APIs C de cadenas (`strlen`, `atoi`, `puts`, …) y de buffers.
+
+**Marshalling.** Un argumento `string` → `char*`: `ffi::call` crea una **`CString`** (NUL-terminada) y
+pasa su puntero; la `CString` se **retiene viva** (`keep`) hasta el final de la llamada. Un `bytes` →
+puntero al buffer crudo (sin NUL; el usuario lo termina si hace falta, p. ej. con un literal `b"…\x00"`).
+La clave de la ABI: en 64 bits un **puntero es del tamaño de un `i64` y comparte convención de llamada**
+(banco de registros enteros), así que un argumento puntero se pasa por los **mismos moldes `i64`** de
+M41.1 —su dirección— sin ampliar el catálogo. `CKind` gana `Str`/`Bytes` (ambos → mold entero); `FfiVal`
+gana `Str(&str)`/`Bytes(&[u8])`, **prestados** del `Value`/`HeapValue` (los strings/bytes son inline en
+ambos motores → cero copia salvo la `CString`). Los motores retienen los valores evaluados mientras dura
+la llamada (los `FfiVal` los toman prestados).
+
+**Alcance.** Solo **argumento**. El **retorno** `char*` queda diferido por su problema de NULL (raylang
+no tiene `null`; `getenv`/`strstr` devuelven NULL) y de propiedad (¿quién libera?). El checker distingue:
+un `string`/`bytes` en un parámetro es válido; en el retorno, error claro ("string/bytes de retorno →
+diferido"). Un `string` con un NUL interior → error de ejecución (`CString::new` falla).
+
+**Verificación.** Determinista (strlen/atoi) → oráculo `ffi_strings_oraculo` (string vía strlen/atoi;
+bytes vía `strlen(b"…\x00")`, programas separados porque el nombre extern ES el símbolo). 2 unit más en
+`ffi.rs` + integración `ffi_marshala_strings_a_char_ptr` (cli_cli). Ejemplo ampliado `examples/ffi/libm.ray`.
+
+**Diferido**: M41.3 retorno `char*` (con una convención honesta para NULL/propiedad), punteros opacos /
+handles, callbacks, structs por valor, variádicas, buffer+longitud como par.

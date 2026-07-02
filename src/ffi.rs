@@ -37,6 +37,11 @@ pub enum CKind {
     Float,
     Bool,
     Unit,
+    /// `string` → `char*` (NUL-terminado). Solo como **argumento** en M41.2 (el retorno `char*` con su
+    /// problema de NULL/propiedad queda diferido). A efectos de ABI es un puntero (banco de enteros).
+    Str,
+    /// `bytes` → puntero al buffer crudo (`void*`/`char*` sin NUL). Solo como argumento (M41.2).
+    Bytes,
 }
 
 /// Descriptor de una función externa listo para llamar: qué librería, qué símbolo, y las clases de
@@ -60,8 +65,16 @@ pub fn ckind(ty: &crate::ast::Type) -> Option<CKind> {
         Type::Float => Some(CKind::Float),
         Type::Bool => Some(CKind::Bool),
         Type::Unit => Some(CKind::Unit),
+        Type::String => Some(CKind::Str),
+        Type::Bytes => Some(CKind::Bytes),
         _ => None,
     }
+}
+
+/// ¿Puede este `CKind` ser el **retorno** de una extern fn en M41.2? Los punteros (`Str`/`Bytes`) solo
+/// se admiten como argumento por ahora; el retorno `char*` (NULL/propiedad) se difiere.
+pub fn ckind_valido_como_retorno(k: CKind) -> bool {
+    matches!(k, CKind::Int | CKind::Float | CKind::Bool | CKind::Unit)
 }
 
 /// Construye el descriptor de llamada de una función externa desde su AST. `None` si algún tipo no es
@@ -76,12 +89,15 @@ pub fn desc_of(ext: &crate::ast::ExternFn) -> Option<ExternDesc> {
     })
 }
 
-/// Un valor en la frontera, ya colapsado a las dos clases que van en registro: entero (i64, cubre
-/// int y bool) o doble (f64). Cada motor convierte su propio `Value`/`HeapValue` a esto y de vuelta.
+/// Un argumento en la frontera FFI. Los primitivos van por valor; `Str`/`Bytes` se toman **prestados**
+/// del `Value`/`HeapValue` del motor (viven durante la llamada) y `ffi::call` los materializa a un
+/// puntero C (una `CString` NUL-terminada para `Str`; el buffer crudo para `Bytes`).
 #[derive(Debug, Clone, Copy)]
-pub enum FfiVal {
+pub enum FfiVal<'a> {
     Int(i64),
     Float(f64),
+    Str(&'a str),
+    Bytes(&'a [u8]),
 }
 
 /// El resultado de una llamada FFI: un `FfiVal`, o `Unit` (void). El motor lo convierte al `Value`
@@ -104,7 +120,10 @@ enum Mold {
 fn mold_of(k: CKind) -> Mold {
     match k {
         CKind::Float => Mold::F,
-        _ => Mold::I, // Int y Bool van como entero
+        // Int, Bool y los punteros (Str/Bytes) van por el banco de registros enteros. En 64 bits un
+        // puntero es del tamaño de un i64 y comparte convención de llamada, así que un argumento puntero
+        // se pasa por los mismos moldes `i64` (su dirección).
+        _ => Mold::I,
     }
 }
 
@@ -173,9 +192,33 @@ pub fn call(desc: &ExternDesc, args: &[FfiVal]) -> Result<FfiRet, String> {
     let sym = resolve_symbol(&desc.lib, &desc.name)?;
     let molds: Vec<Mold> = desc.arg_kinds.iter().map(|&k| mold_of(k)).collect();
     let ret = mold_of(desc.ret_kind);
+
+    // Materializar cada argumento a su valor de registro (i64 para int/bool/puntero, f64 para float).
+    // Las `CString` de los argumentos `string` se **retienen vivas** en `keep` hasta el final de la
+    // llamada (la función C recibe su puntero). Los `bytes` se pasan por el puntero del slice prestado.
+    enum Reg {
+        I(i64),
+        F(f64),
+    }
+    let mut keep: Vec<std::ffi::CString> = Vec::new();
+    let mut regs: Vec<Reg> = Vec::with_capacity(args.len());
+    for a in args {
+        regs.push(match a {
+            FfiVal::Int(v) => Reg::I(*v),
+            FfiVal::Float(v) => Reg::F(*v),
+            FfiVal::Str(s) => {
+                let cs = std::ffi::CString::new(*s)
+                    .map_err(|_| format!("el argumento string de '{}' contiene un NUL interior", desc.name))?;
+                let ptr = cs.as_ptr() as i64;
+                keep.push(cs);
+                Reg::I(ptr)
+            }
+            FfiVal::Bytes(b) => Reg::I(b.as_ptr() as i64),
+        });
+    }
     // Los enteros/flotantes de cada argumento, ya listos para pasar por registro.
-    let i = |n: usize| match args[n] { FfiVal::Int(v) => v, FfiVal::Float(v) => v as i64 };
-    let f = |n: usize| match args[n] { FfiVal::Float(v) => v, FfiVal::Int(v) => v as f64 };
+    let i = |n: usize| match &regs[n] { Reg::I(v) => *v, Reg::F(v) => *v as i64 };
+    let f = |n: usize| match &regs[n] { Reg::F(v) => *v, Reg::I(v) => *v as f64 };
 
     // El catálogo acotado de firmas. Cada brazo transmuta el puntero al tipo `extern "C" fn(...)`
     // concreto y llama. `unsafe`: confiamos en que la firma declarada casa con la función real.
@@ -242,5 +285,23 @@ mod tests {
     fn simbolo_inexistente_es_error() {
         let d = desc("no_existe_este_simbolo_xyz", vec![], CKind::Int);
         assert!(call(&d, &[]).is_err());
+    }
+
+    #[test]
+    fn strlen_marshala_string_a_char_ptr() {
+        let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Str], ret_kind: CKind::Int };
+        match call(&d, &[FfiVal::Str("hola mundo")]).unwrap() {
+            FfiRet::Int(n) => assert_eq!(n, 10),
+            other => panic!("se esperaba int, {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strlen_marshala_bytes_nul_terminados() {
+        let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Bytes], ret_kind: CKind::Int };
+        match call(&d, &[FfiVal::Bytes(b"abcde\x00")]).unwrap() {
+            FfiRet::Int(n) => assert_eq!(n, 5),
+            other => panic!("se esperaba int, {other:?}"),
+        }
     }
 }

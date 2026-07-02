@@ -143,11 +143,13 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
 - **FFI** (`extern "lib" { … }`, M41): declara funciones de una librería C. Cada firma va **sin
   cuerpo**; su nombre es a la vez el identificador en raylang y el símbolo a resolver. La librería se
   carga con `dlopen` y los símbolos con `dlsym` en tiempo de ejecución (el nombre corto `"m"` se
-  resuelve al archivo de plataforma o al proceso). Los tipos deben ser **marshalables**: en M41.1, los
-  primitivos `int`↔long, `float`↔double, `bool`↔int (retorno además puede ser `unit`↔void), con aridad
-  0..=3. Una firma fuera del catálogo, o un tipo no marshalable, es error. Llamar a una `extern fn` se
-  ve como cualquier llamada. **Declarar una `extern fn` es la única operación insegura del lenguaje**:
-  cruzar a C anula las garantías (memoria, firmas); todo lo demás es seguro por construcción.
+  resuelve al archivo de plataforma o al proceso). Los tipos deben ser **marshalables**: los primitivos
+  `int`↔long, `float`↔double, `bool`↔int (aridad 0..=3), y como **argumento** `string`↔`char*`
+  (NUL-terminado) y `bytes`↔puntero al buffer (M41.2). El **retorno** admite `int`/`float`/`bool`/`unit`
+  (`char*` de retorno → diferido). Una firma fuera del catálogo, o un tipo no marshalable, es error.
+  Llamar a una `extern fn` se ve como cualquier llamada. **Declarar una `extern fn` es la única
+  operación insegura del lenguaje**: cruzar a C anula las garantías (memoria, firmas); todo lo demás es
+  seguro por construcción.
 
 ## 5. Sentencias
 

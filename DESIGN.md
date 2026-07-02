@@ -1748,9 +1748,12 @@ Diferido: navegación cross-archivo (def/references que salten a otro módulo) y
 ### 19.3 Deferido (más allá de M10.1)
 - **LSP**: diagnósticos (M10.2 §19.2, **multi-archivo** §19.2g) + hover/definición (M10.2b §19.2b) +
   *find-references*/*rename*/*completion* (cluster 4) + **M10.2f**: hover/def de **tipos**, **signature
-  help** y **completion por ámbito** (firma textual robusta ante el doc a medio escribir; alcance =
-  función, sin spans). Quedan: hover/def del **nombre de método** (sin posición propia), completion por
-  **bloque** anidado, y **hover/def/completion cruzando módulos** (hoy solo diagnósticos usan el loader).
+  help** y **completion por ámbito** + **M10.2g**: **hover de campos y métodos** (`p.x`, `xs.map()`,
+  `n.metodo()`) — el AST `Field` no lleva la posición del nombre tras el `.`, así que el parser la registra
+  en una side-table `field_name_pos` (clave `(línea,col,nombre)`, como `ufcs_sites`; el loader la desplaza)
+  y el checker registra el hover del campo/método en `check_field`/`check_call` con su tipo/firma. Quedan:
+  **def** del nombre de método (solo hover), completion por **bloque** anidado, y **navegación cruzando
+  módulos** (def/references que salten a otro archivo; hoy los diagnósticos y el hover ya resuelven imports).
 - `@builtin`/`@extern` (limpiar el *special-casing* de `print`/`len`/`push`), `@deprecated`,
   `@inline`, `@delegate` → anotaciones futuras.
 - **Derivación recursiva** (`Eq` de enums con payload-enum) y **derive genérico** → futuro.

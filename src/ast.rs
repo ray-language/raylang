@@ -166,6 +166,12 @@ pub struct Program {
     /// ausente (expresiones sintetizadas por el lowering, prelude) degrada a extensión 1.
     /// El loader lo desplaza y fusiona con las bandas de líneas de cada módulo (L3).
     pub expr_spans: std::collections::HashMap<(usize, usize), (usize, usize)>,
+    /// Posición del **nombre del campo/método** en un acceso `recv.name` (M10.2g): la clave es la
+    /// posición del acceso `(línea, col)` —que es la del receptor— más el nombre, y el valor es la
+    /// `(línea, col)` del propio `name` tras el `.`. El AST `Field` no la guarda (comparte posición
+    /// con el receptor); esta tabla la registra el parser para que el LSP dé **hover del campo/
+    /// método** en su posición. Mismo esquema de clave que `ufcs_sites`. El loader la desplaza.
+    pub field_name_pos: std::collections::HashMap<(usize, usize, String), (usize, usize)>,
 }
 
 /// Una declaración `import M;` / `import a/b/c [as x];` (M11.3 / M11.5): importa el módulo dado por

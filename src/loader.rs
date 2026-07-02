@@ -160,7 +160,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>) ->
     let mut fusionado = Program {
         functions: Vec::new(), structs: Vec::new(), enums: Vec::new(), consts: Vec::new(),
         traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
-        ufcs_aliases: HashMap::new(), expr_spans: HashMap::new(),
+        ufcs_aliases: HashMap::new(), expr_spans: HashMap::new(), field_name_pos: HashMap::new(),
     };
     // Alias UFCS: nombre local de función `from`-importada → global, agregado de todos los módulos.
     // Un nombre que mapee a DOS globales distintos en módulos distintos es ambiguo sin contexto de
@@ -234,6 +234,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>) ->
         fusionado.traits.append(&mut m.program.traits);
         fusionado.impls.append(&mut m.program.impls);
         fusionado.expr_spans.extend(std::mem::take(&mut m.program.expr_spans));
+        fusionado.field_name_pos.extend(std::mem::take(&mut m.program.field_name_pos));
 
         loaded_modules.push(LoadedModule { name: m.name, source: m.source, start_line: start });
     }
@@ -258,6 +259,11 @@ fn shift_program(program: &mut Program, delta: usize) {
     program.expr_spans = std::mem::take(&mut program.expr_spans)
         .into_iter()
         .map(|((l, c), (el, ec))| ((l + delta, c), (el + delta, ec)))
+        .collect();
+    // M10.2g: la posición del nombre de campo/método también (clave y valor llevan línea).
+    program.field_name_pos = std::mem::take(&mut program.field_name_pos)
+        .into_iter()
+        .map(|((l, c, n), (nl, nc))| ((l + delta, c, n), (nl + delta, nc)))
         .collect();
     for f in &mut program.functions {
         shift_function(f, delta);

@@ -160,6 +160,7 @@ pub fn semantic_index(program: &mut Program) -> SemanticIndex {
     }
     let mut checker = Checker::new();
     checker.gather = true;
+    checker.field_name_pos = program.field_name_pos.clone(); // posiciones de nombres de campo/método
     let _ = checker.check_program(program); // best-effort: el índice parcial igual sirve
     checker.index
 }
@@ -445,6 +446,10 @@ struct Checker {
     /// de declaración por identificador) en `index`. Solo lo enciende `semantic_index`; en una
     /// verificación normal queda en `false` (coste cero).
     gather: bool,
+    /// Posición del nombre de campo/método en `recv.name` (M10.2g), copiada del `Program` en modo
+    /// `gather`: `(línea, col, nombre)` del acceso → `(línea, col)` del `name`. Para registrar el
+    /// hover del campo/método en su posición (el AST `Field` no la lleva). Vacío sin `gather`.
+    field_name_pos: std::collections::HashMap<(usize, usize, String), (usize, usize)>,
     /// El índice semántico recolectado (M10.2b). Vacío si `gather` es `false`.
     index: SemanticIndex,
     /// Posición de declaración de cada función de nivel superior (M10.2b: ir-a-definición).
@@ -494,6 +499,7 @@ impl Checker {
             dyn_upcasts: HashMap::new(),
             type_defs: HashMap::new(),
             gather: false,
+            field_name_pos: std::collections::HashMap::new(),
             index: SemanticIndex::default(),
             fn_defs: HashMap::new(),
             ufcs_aliases: HashMap::new(),
@@ -1875,7 +1881,10 @@ impl Checker {
                 };
                 let tparams = self.struct_tparams.get(&sname).cloned().unwrap_or_default();
                 let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs).collect();
-                Ok(subst(&fty, &sigma))
+                let resultado = subst(&fty, &sigma);
+                // M10.2g: hover del **campo** en su posición (nombre tras el `.`).
+                self.record_field_hover(object.line, object.col, name, &resultado);
+                Ok(resultado)
             }
             other => Err(self.err(object.line, object.col, format!("no se puede acceder a '.{}' en un {} (no es un struct)", name, other))),
         }
@@ -2487,6 +2496,8 @@ impl Checker {
                 }
                 if let Type::Struct(sname, targs) = &recv_ty {
                     if let Some(fty) = self.struct_field_type(sname, targs, name) {
+                        // M10.2g: hover del campo-función invocado.
+                        self.record_field_hover(object.line, object.col, name, &fty);
                         return self.call_type(fty, args, line, col);
                     }
                 }
@@ -2500,6 +2511,12 @@ impl Checker {
                     all.push((**object).clone());
                     all.extend_from_slice(args);
                     let ty = self.check_named_call(&mangled, &all, line, col)?;
+                    // M10.2g: hover del **método de trait** en su nombre (su firma incluye el receptor).
+                    let mty = self.functions.get(&mangled)
+                        .map(|s| Type::Fn(s.params.clone(), Box::new(s.ret.clone())));
+                    if let Some(mty) = mty {
+                        self.record_field_hover(object.line, object.col, name, &mty);
+                    }
                     self.ufcs_sites.insert((line, col, name.clone()), mangled);
                     return Ok(ty);
                 }
@@ -2558,6 +2575,13 @@ impl Checker {
         all_args.push(object.clone());
         all_args.extend_from_slice(args);
         let ty = self.check_named_call(&target, &all_args, line, col)?;
+        // M10.2g: hover del **método UFCS** en su nombre — la firma de la función libre resuelta
+        // (map/filter/fold, funciones propias). Los builtins (len/trim/…) no tienen FnSig → se omiten.
+        let mty = self.functions.get(&target)
+            .map(|s| Type::Fn(s.params.clone(), Box::new(s.ret.clone())));
+        if let Some(mty) = mty {
+            self.record_field_hover(object.line, object.col, name, &mty);
+        }
         // El sitio se baja a `target(recv, args)`; para una función importada, `target` es el global.
         self.ufcs_sites.insert((line, col, name.to_string()), target);
         Ok(ty)
@@ -2959,6 +2983,24 @@ impl Checker {
         self.index.hovers.push(HoverEntry { line, col, len, text });
         if let Some((def_line, def_col)) = def {
             self.index.defs.push(DefEntry { line, col, len, def_line, def_col });
+        }
+    }
+
+    /// Registra el hover de un **campo o método** `name` accedido en `recv.name` (M10.2g). La
+    /// posición del acceso es la del receptor `(recv_line, recv_col)`; el hover se coloca en la
+    /// posición real del `name` tras el `.` (de `field_name_pos`, poblada por el parser). No hace
+    /// nada sin `gather` ni si no se conoce la posición del nombre.
+    fn record_field_hover(&mut self, recv_line: usize, recv_col: usize, name: &str, ty: &Type) {
+        if !self.gather {
+            return;
+        }
+        if let Some(&(nl, nc)) = self.field_name_pos.get(&(recv_line, recv_col, name.to_string())) {
+            self.index.hovers.push(HoverEntry {
+                line: nl,
+                col: nc,
+                len: name.chars().count(),
+                text: format!("{}: {}", name, ty),
+            });
         }
     }
 

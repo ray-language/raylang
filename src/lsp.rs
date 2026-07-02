@@ -1387,6 +1387,24 @@ mod tests {
     }
 
     #[test]
+    fn hover_de_campos_y_metodos() {
+        // Campo de struct: `p.x` → el tipo del campo, en la posición del nombre tras el `.`.
+        let src = "struct Punto { x: int, y: int }\nfn main() -> int {\n  let p = Punto { x: 3, y: 4 };\n  p.x + p.y\n}\n";
+        let (t, _, _) = hover_at(None, src, 3, 4).expect("hover del campo x");
+        assert_eq!(t, "x: int");
+
+        // Método de trait: `n.doblar()` → la firma del método (incluye el receptor).
+        let src = "trait D { fn doblar(self) -> int; }\nstruct N { v: int }\nimpl D for N { fn doblar(self) -> int { self.v * 2 } }\nfn main() -> int {\n  let n = N { v: 21 };\n  n.doblar()\n}\n";
+        let (t, _, _) = hover_at(None, src, 5, 4).expect("hover del método doblar");
+        assert_eq!(t, "doblar: fn(N) -> int");
+
+        // Método por UFCS a una función del prelude: `xs.map(f)`.
+        let src = "fn main() -> int {\n  let xs = [1, 2, 3];\n  xs.map(fn(a: int) -> int { a + 1 });\n  0\n}\n";
+        let (t, _, _) = hover_at(None, src, 2, 5).expect("hover del método map");
+        assert!(t.starts_with("map: fn("), "{t}");
+    }
+
+    #[test]
     fn nombre_fachada_colapsa_namespaces() {
         // Ruta interna → fachada `primer.último` (respeta la cápsula, sin `::`).
         assert_eq!(nombre_fachada("geo::formas::circulo::Circulo"), "geo.Circulo");

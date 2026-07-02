@@ -68,6 +68,9 @@ pub struct Parser {
     /// Spans de expresiones (M33a-2): inicio → fin (exclusivo) del último token consumido,
     /// registrados en `expression()` con política max-end. Al terminar pasan al `Program`.
     expr_spans: std::collections::HashMap<(usize, usize), (usize, usize)>,
+    /// Posición del nombre en un acceso `recv.name` (M10.2g): `(línea, col, nombre)` del acceso →
+    /// `(línea, col)` del `name` tras el `.`. Al terminar pasa al `Program` (para el hover del LSP).
+    field_name_pos: std::collections::HashMap<(usize, usize, String), (usize, usize)>,
     /// Profundidad de recursión actual (M33d): la incrementan los tres puntos recursivos
     /// (`expression`/`parse_type`/`block`); al pasar `MAX_PARSE_DEPTH` se corta con un
     /// `ParseError` — sin esto, un `((((…` hostil desborda la pila y ABORTA el proceso
@@ -85,7 +88,7 @@ type TypeParamsAndBounds = (Vec<String>, Vec<(String, String)>);
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new(), depth: 0 }
+        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new(), field_name_pos: std::collections::HashMap::new(), depth: 0 }
     }
 
     // =================================================================
@@ -99,6 +102,7 @@ impl Parser {
             self.parse_item(&mut acc)?;
         }
         acc.expr_spans = std::mem::take(&mut self.expr_spans);
+        acc.field_name_pos = std::mem::take(&mut self.field_name_pos);
         Ok(acc)
     }
 
@@ -121,6 +125,7 @@ impl Parser {
             }
         }
         acc.expr_spans = std::mem::take(&mut self.expr_spans);
+        acc.field_name_pos = std::mem::take(&mut self.field_name_pos);
         (acc, errores)
     }
 
@@ -1218,7 +1223,9 @@ impl Parser {
                 self.advance(); // '.'
                 // Acceso a tupla `t.0`: tras el '.' viene un número, no un identificador (M27.1).
                 if let TokenKind::Int(n) = self.peek().kind {
+                    let (nl, nc) = (self.peek().line, self.peek().col);
                     self.advance();
+                    self.field_name_pos.insert((line, col, n.to_string()), (nl, nc));
                     expr = Expr {
                         kind: ExprKind::Field { object: Box::new(expr), name: n.to_string() },
                         line,
@@ -1226,7 +1233,9 @@ impl Parser {
                     };
                     continue;
                 }
-                let (name, _, _) = self.expect_ident("el nombre del campo tras '.'")?;
+                let (name, nl, nc) = self.expect_ident("el nombre del campo tras '.'")?;
+                // Posición del nombre del campo/método, para el hover del LSP (M10.2g).
+                self.field_name_pos.insert((line, col, name.clone()), (nl, nc));
                 // `M.Tipo { ... }`: literal de struct calificado por módulo (M11.3c-3). Solo si el
                 // receptor del `.` es un `Ident` (el módulo); el nombre calificado guarda el `.`,
                 // que el loader resuelve a `M::Tipo`. (Mismo compromiso struct-literal-vs-bloque

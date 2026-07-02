@@ -40,6 +40,18 @@ pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
     Lexer::new(src).tokenize()
 }
 
+/// Como [`lex`], pero arranca el cursor en `(line, col)` en vez de `(1, 1)`: los tokens (y sus
+/// posiciones) salen como si el fragmento viviera ahí. Lo usa el parser para re-lexar el cuerpo de
+/// una interpolación `${…}` con posiciones reales (M27.3 + hover del LSP).
+pub fn lex_at(src: &str, line: usize, col: usize) -> Result<Vec<Token>, LexError> {
+    let mut lx = Lexer::new(src);
+    lx.line = line;
+    lx.col = col;
+    lx.start_line = line;
+    lx.start_col = col;
+    lx.tokenize()
+}
+
 pub struct Lexer {
     /// El fuente como vector de caracteres Unicode. Trabajar con `char` (y no con
     /// bytes) evita partir un carácter multibyte por la mitad.
@@ -295,6 +307,8 @@ impl Lexer {
                     if !cur.is_empty() {
                         parts.push(InterpPart::Lit(std::mem::take(&mut cur)));
                     }
+                    // Posición del primer carácter de la expresión (para re-lexarla con posiciones reales).
+                    let (el, ec) = (self.line, self.col);
                     let mut expr_src = String::new();
                     let mut depth = 1;
                     loop {
@@ -314,7 +328,7 @@ impl Lexer {
                     if expr_src.trim().is_empty() {
                         return Err(self.error("interpolación vacía '${}' en la cadena".into()));
                     }
-                    parts.push(InterpPart::Expr(expr_src));
+                    parts.push(InterpPart::Expr(expr_src, el, ec));
                 }
                 Some(c) => {
                     cur.push(c);
@@ -564,7 +578,8 @@ mod tests {
         assert_eq!(
             kinds("\"a${x + 1}b\""),
             vec![
-                TokenKind::InterpStr(vec![Lit("a".into()), Expr("x + 1".into()), Lit("b".into())]),
+                // `"a${x + 1}b"`: la expresión `x + 1` empieza en la columna 5 (tras `"a${`).
+                TokenKind::InterpStr(vec![Lit("a".into()), Expr("x + 1".into(), 1, 5), Lit("b".into())]),
                 TokenKind::Eof
             ]
         );
@@ -575,7 +590,7 @@ mod tests {
         // Interpolación al inicio y llaves anidadas dentro de la expresión.
         assert_eq!(
             kinds("\"${ f({a}) }\""),
-            vec![TokenKind::InterpStr(vec![Expr(" f({a}) ".into())]), TokenKind::Eof]
+            vec![TokenKind::InterpStr(vec![Expr(" f({a}) ".into(), 1, 4)]), TokenKind::Eof]
         );
         // Errores: interpolación vacía y sin cerrar.
         assert!(lex("\"${}\"").is_err());

@@ -1405,6 +1405,18 @@ mod tests {
     }
 
     #[test]
+    fn hover_dentro_de_interpolacion() {
+        // Las expresiones de `${…}` se re-lexan con posiciones reales → hover funciona dentro.
+        let src = "fn main() -> int {\n  let x = 7;\n  print(\"n=${x} y ${x + 1}\");\n  0\n}\n";
+        // línea 3 (0-based 2): `  print("n=${x} y ${x + 1}");`
+        //   `x` de `${x}` en col 13; `x` de `${x + 1}` en col 20.
+        let (t, _, _) = hover_at(None, src, 2, 13).expect("hover 'x' en ${x}");
+        assert_eq!(t, "x: int");
+        let (t, _, _) = hover_at(None, src, 2, 20).expect("hover 'x' en ${x + 1}");
+        assert_eq!(t, "x: int");
+    }
+
+    #[test]
     fn nombre_fachada_colapsa_namespaces() {
         // Ruta interna → fachada `primer.último` (respeta la cápsula, sin `::`).
         assert_eq!(nombre_fachada("geo::formas::circulo::Circulo"), "geo.Circulo");

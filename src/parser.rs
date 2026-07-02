@@ -852,25 +852,29 @@ impl Parser {
     }
 
     /// Baja una cadena interpolada (M27.3) a la concatenación `"lit" + to_string(expr) + …`. Cada
-    /// fragmento de expresión se re-lexea y re-parsea como una expresión completa. Las posiciones usan
-    /// las de la cadena (los errores del fragmento traen el detalle en el mensaje).
+    /// fragmento de expresión se re-lexea (**en su posición real**, con `lex_at`) y re-parsea como una
+    /// expresión completa, así el sub-AST lleva posiciones de la fuente → el LSP da hover dentro de
+    /// `${…}`. Las partes literales usan la posición de la cadena.
     fn build_interp(&mut self, parts: Vec<InterpPart>, line: usize, col: usize) -> Result<Expr, ParseError> {
         let mut acc: Option<Expr> = None;
         for part in parts {
             let piece = match part {
                 InterpPart::Lit(s) => Expr { kind: ExprKind::Str(s), line, col },
-                InterpPart::Expr(src) => {
-                    let toks = crate::lexer::lex(&src)
-                        .map_err(|e| ParseError { msg: format!("en la interpolación: {}", e.msg), line, col, len: 1 })?;
+                InterpPart::Expr(src, el, ec) => {
+                    // Se re-lexa el fragmento ARRANCANDO en su posición real `(el, ec)`, así el
+                    // sub-AST nace con posiciones de la fuente (no las de la cadena) → el LSP da
+                    // hover sobre los identificadores dentro de `${…}`.
+                    let toks = crate::lexer::lex_at(&src, el, ec)
+                        .map_err(|e| ParseError { msg: format!("en la interpolación: {}", e.msg), line: el, col: ec, len: 1 })?;
                     let mut sub = Parser::new(toks);
                     let e = sub.expression()
-                        .map_err(|e| ParseError { msg: format!("en la interpolación: {}", e.msg), line, col, len: 1 })?;
+                        .map_err(|e| ParseError { msg: format!("en la interpolación: {}", e.msg), line: el, col: ec, len: 1 })?;
                     if !sub.is_at_end() {
-                        return Err(ParseError { msg: "la interpolación debe ser una sola expresión".into(), line, col, len: 1 });
+                        return Err(ParseError { msg: "la interpolación debe ser una sola expresión".into(), line: el, col: ec, len: 1 });
                     }
                     // to_string(e) — convierte primitivos/string a texto para concatenar.
-                    let callee = Expr { kind: ExprKind::Ident("to_string".into()), line, col };
-                    Expr { kind: ExprKind::Call { callee: Box::new(callee), args: vec![e] }, line, col }
+                    let callee = Expr { kind: ExprKind::Ident("to_string".into()), line: el, col: ec };
+                    Expr { kind: ExprKind::Call { callee: Box::new(callee), args: vec![e] }, line: el, col: ec }
                 }
             };
             acc = Some(match acc {

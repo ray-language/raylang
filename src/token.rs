@@ -111,7 +111,9 @@ pub enum TokenKind {
 #[derive(Debug, Clone, PartialEq)]
 pub enum InterpPart {
     Lit(String),
-    Expr(String),
+    /// El código crudo de una expresión `${…}` más la `(línea, col)` donde empieza en la fuente
+    /// (tras `${`), para que el parser la re-lexe con posiciones reales (hover del LSP en `${x}`).
+    Expr(String, usize, usize),
 }
 
 /// Un token concreto en el texto: su clase, dónde empieza y cuánto mide.

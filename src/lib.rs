@@ -14,6 +14,7 @@ pub mod bytecode;
 pub mod checker;
 pub mod cli;
 pub mod compiler;
+pub mod deps;
 pub mod diagnostic;
 pub mod fmt;
 pub mod gc;

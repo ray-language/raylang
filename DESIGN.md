@@ -4968,5 +4968,30 @@ Tests (`cli_cli.rs`): `from geo import` desde la caché, acceso calificado `geo.
 usando su propio interno, el *enforcement* que impide a la app alcanzar `geo/interno`, y el shadowing
 local-sobre-dependencia.
 
-Pendiente de M39: **M39c-2** (descarga git-first —clonar `git+URL@tag`— + lockfile `ray.lock` con
-hashes de contenido para *supply-chain* + verificación en cada build).
+### 41.4 M39c-2a — descarga git-first
+
+Segundo paso: **descargar** de verdad las dependencias declaradas. Una dependencia es
+`nombre = "git+<URL>@<ref>"` en `[dependencies]`; se clona el repositorio en `.ray-deps/<nombre>/`
+(donde M39c-1 la encuentra como cápsula). Un paquete publicable tiene su `mod.ray` en la **raíz**
+del repo (su cara pública).
+
+**Decisión: se delega en el binario `git` del sistema** (`std::process::Command`, `src/deps.rs`).
+Hablar el protocolo git a mano (packfiles, smart-HTTP, resolución de refs) sería enorme y ajeno a
+lo pedagógico del proyecto; *shelling out* a `git` es la vía honesta y **no rompe la invariante
+cero-dependencias de Cargo** — `git` es una dependencia del *entorno*, no un crate enlazado.
+
+- `parse_spec("git+<URL>@<ref>")`: el `git+` marca el esquema; el `@<ref>` es **obligatorio** (fijar
+  la versión → build reproducible); se parte por el **último** `@` (no rompe `usuario@host`).
+- `fetch`: `git clone --quiet <URL> <dest>` + `git checkout --quiet <ref>` (sirve tag/rama/SHA) +
+  `git rev-parse HEAD` (el commit resuelto, para el lockfile de 2b). Si el checkout falla (ref
+  inexistente) se **limpia** el clon a medias.
+- `asegurar(manifest)`: descarga las que **falten** (las presentes se saltan → sin red ni `git` si
+  ya están cacheadas). La usan el subcomando **`ray fetch`** (explícito) y la **auto-descarga** en
+  `run`/`build`/`test` (`resolver_entrada`, estilo cargo): un fallo de descarga aborta con 65.
+
+Tests **offline y deterministas** (`deps_cli.rs`): la dependencia es un repo git local (`git init` +
+tag) servido por `file://` — `ray fetch` la clona, `ray run` la auto-descarga y usa, una ref
+inexistente falla dejando la caché limpia. Unitarios de `parse_spec` en `deps.rs`.
+
+Pendiente de M39: **M39c-2b** (lockfile `ray.lock` con hashes de contenido SHA-256 para
+*supply-chain* + verificación en cada build; el `rev-parse` ya da el commit a fijar).

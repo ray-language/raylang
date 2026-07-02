@@ -48,6 +48,7 @@ fn run() {
         Some("run") => cmd_run(&rest[1..]),
         Some("build") => cmd_build(&rest[1..]),
         Some("test") => cmd_test_sub(&rest[1..]),
+        Some("fetch") => cmd_fetch(&rest[1..]),
         Some("fmt") => cmd_fmt(&rest[1..]),
         Some("lsp") => lsp::run(),
         Some("repl") | None => repl::run(),
@@ -71,6 +72,7 @@ Uso: ray <subcomando> [opciones]
   run [archivo]     ejecuta (por defecto src/main.ray) [--interp] [args...]
   build [archivo]   chequea y compila sin ejecutar (0 ok / 65 error)
   test [archivo]    corre las funciones @test [filtro]
+  fetch             descarga las dependencias de ray.toml a .ray-deps/
   fmt <archivo>     imprime la versión canónica por stdout
   lsp               arranca el Language Server
   repl              REPL interactivo
@@ -155,6 +157,27 @@ fn cmd_test_sub(args: &[String]) {
     ejecutar_tests(&path, filtro);
 }
 
+/// `ray fetch`: descarga a `.ray-deps/` las dependencias declaradas en `ray.toml` que aún no
+/// estén presentes (M39c-2a). Requiere estar en un proyecto (con manifiesto).
+fn cmd_fetch(_args: &[String]) {
+    let Some(m) = cargar_manifiesto() else {
+        eprintln!("no hay proyecto: falta 'ray.toml' con las dependencias a descargar");
+        process::exit(64);
+    };
+    if m.dependencies.is_empty() {
+        println!("'{}' no declara dependencias", m.name);
+        return;
+    }
+    match crate::deps::asegurar(&m) {
+        Ok(0) => println!("dependencias al día ({} en total)", m.dependencies.len()),
+        Ok(n) => println!("{n} dependencia(s) descargada(s); {} en total", m.dependencies.len()),
+        Err(e) => {
+            eprintln!("error descargando dependencias: {e}");
+            process::exit(65);
+        }
+    }
+}
+
 /// `ray fmt <archivo>`: imprime la versión canónica por stdout.
 fn cmd_fmt(args: &[String]) {
     let Some(path) = args.first() else {
@@ -222,22 +245,14 @@ fn resolver_entrada(explicito: Option<&str>, banner: bool) -> String {
         if banner {
             eprintln!("compilando {} v{}", m.name, m.version);
         }
-        // Una dependencia se resuelve si ya está en la caché `.ray-deps/` (colocada a mano por
-        // ahora; su descarga automática desde git llega en M39c-2). Solo avisamos de las que
-        // faltan: si están todas, el loader ya las encuentra.
-        let cache = m.root.join(".ray-deps");
-        let faltan: Vec<&str> = m
-            .dependencies
-            .iter()
-            .map(|(nombre, _)| nombre.as_str())
-            .filter(|n| !cache.join(n).is_dir() && !cache.join(format!("{n}.ray")).is_file())
-            .collect();
-        if !faltan.is_empty() {
-            eprintln!(
-                "aviso: dependencia(s) sin descargar: {} (su descarga automática llega en M39c-2; \
-                 por ahora colócalas en '.ray-deps/<nombre>/mod.ray')",
-                faltan.join(", ")
-            );
+        // Auto-descarga (M39c-2a, estilo cargo): asegura que las dependencias declaradas estén en
+        // `.ray-deps/` antes de cargar el programa. Las presentes se saltan (sin red); si falta
+        // alguna se clona de git. Un fallo de descarga aborta con 65 (no se puede compilar sin ella).
+        if !m.dependencies.is_empty()
+            && let Err(e) = crate::deps::asegurar(m)
+        {
+            eprintln!("error resolviendo dependencias: {e}");
+            process::exit(65);
         }
     }
     if let Some(p) = explicito {

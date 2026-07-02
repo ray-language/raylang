@@ -165,16 +165,18 @@ fn run_sube_a_la_raiz_desde_un_subdirectorio() {
 }
 
 #[test]
-fn avisa_de_dependencias_no_resueltas() {
+fn dependencia_inalcanzable_falla_al_descargar() {
+    // M39c-2a: una dependencia declarada se descarga en `run`/`build`; si no se puede clonar
+    // (aquí, una ruta local inexistente → fallo rápido y offline), es error de compilación.
     let raiz = proyecto(
         "manifest_deps",
-        "[package]\nname = \"condeps\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"git+https://x/geo@v1\"\n",
+        "[package]\nname = \"condeps\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"git+file:///no/existe/geo@v1\"\n",
         "src/main.ray",
         "fn main() -> int { 0 }\n",
     );
     let (_out, err, code) = ray(&raiz, &["run"]);
-    assert_eq!(code, 0);
-    assert!(err.contains("dependencia") && err.contains("M39c"), "avisa de deps sin resolver\n{err}");
+    assert_eq!(code, 65, "una dependencia inalcanzable aborta\n{err}");
+    assert!(err.contains("geo") && err.contains("clonar"), "error claro de descarga\n{err}");
 }
 
 #[test]

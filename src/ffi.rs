@@ -33,7 +33,12 @@ const RTLD_NOW: c_int = 2; // resolución inmediata (igual en Linux y macOS)
 /// conserva aparte para reconstruir un `bool` de raylang al volver. `Unit` solo como retorno (void).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CKind {
+    /// `int` → C **`int`** (32 bits, con signo). El caso más común en C (fgetc/abs/atoi/…). Al volver se
+    /// **extiende el signo** de 32 a 64 bits (M41.4).
     Int,
+    /// `u64` → C **`long`/`size_t`** (64 bits). Para valores anchos: `strlen`, `off_t`, o un puntero
+    /// tratado como entero (M41.4).
+    U64,
     Float,
     Bool,
     Unit,
@@ -69,6 +74,7 @@ pub fn ckind(ty: &crate::ast::Type) -> Option<CKind> {
     use crate::ast::Type;
     match ty {
         Type::Int => Some(CKind::Int),
+        Type::UInt(64) => Some(CKind::U64),
         Type::Float => Some(CKind::Float),
         Type::Bool => Some(CKind::Bool),
         Type::Unit => Some(CKind::Unit),
@@ -87,6 +93,7 @@ pub fn ret_ckind(ty: &crate::ast::Type) -> Option<CKind> {
     use crate::ast::Type;
     match ty {
         Type::Int => Some(CKind::Int),
+        Type::UInt(64) => Some(CKind::U64),
         Type::Float => Some(CKind::Float),
         Type::Bool => Some(CKind::Bool),
         Type::Unit => Some(CKind::Unit),
@@ -136,28 +143,49 @@ pub enum FfiRet {
     OptBytes(Option<Vec<u8>>),
 }
 
-// El molde de una clase de argumento a efectos de la ABI: solo importa si va por el banco de
-// registros enteros (I) o el de flotantes (F) —bool va como entero—.
+// El molde de un **argumento** a efectos de la ABI: banco de registros enteros (`I`) o de flotantes
+// (`F`). Aquí NO importa la anchura: la ABI pasa cada argumento entero por un registro y el callee lee
+// los bits que necesite de los bajos, así que un `int` (32), un `u64`/puntero (64) y un `bool` van todos
+// por el mismo molde `i64`. Por eso el catálogo de firmas no explota con la anchura (solo el retorno la
+// distingue).
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Mold {
+enum ArgMold {
     I,
     F,
 }
 
-fn mold_of(k: CKind) -> Mold {
+// El molde del **retorno**: aquí SÍ importa la anchura, porque leemos el registro de retorno con un
+// tipo concreto. `I32` (C `int`, se extiende el signo a 64), `I64` (C `long`/`size_t`/puntero), `F`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RetMold {
+    I32,
+    I64,
+    F,
+}
+
+fn arg_mold(k: CKind) -> ArgMold {
     match k {
-        CKind::Float => Mold::F,
-        // Int, Bool y todos los punteros (Str/Bytes de argumento, OptBytes/OptStr de retorno) van por el
-        // banco de registros enteros. En 64 bits un puntero es del tamaño de un i64 y comparte convención
-        // de llamada, así que se pasan/devuelven por los mismos moldes `i64` (su dirección).
-        _ => Mold::I,
+        CKind::Float => ArgMold::F,
+        _ => ArgMold::I,
     }
 }
 
-/// Interpreta el valor de retorno de un molde `-> i64` según el `ret_kind` declarado: para `Unit` es
-/// `void`; para `OptBytes`/`OptStr` el `i64` es un `char*` (0 = NULL → `None`; si no, se **copian** los
-/// bytes hasta el NUL — sin liberar el puntero); para el resto es un entero. La conversión final a
-/// `bytes`/`string` (y la validación UTF-8 de `OptStr`) la hace el motor.
+fn ret_mold(k: CKind) -> RetMold {
+    match k {
+        CKind::Float => RetMold::F,
+        // C `int` (32 bits): Bool también (un `bool` de C es int-sized).
+        CKind::Int | CKind::Bool => RetMold::I32,
+        // 64 bits: `u64`/`long`/`size_t` y los punteros de retorno (`char*` → OptBytes/OptStr).
+        CKind::U64 | CKind::OptBytes | CKind::OptStr => RetMold::I64,
+        // `void`: el valor no se lee; la anchura da igual.
+        CKind::Unit | CKind::Str | CKind::Bytes => RetMold::I64,
+    }
+}
+
+/// Interpreta el valor de retorno (ya un `i64`: extendido de 32 bits si el molde era `I32`, o directo si
+/// `I64`) según el `ret_kind`: `Unit` es `void`; `OptBytes`/`OptStr` tratan el `i64` como `char*` (0 =
+/// NULL → `None`; si no, **copian** los bytes hasta el NUL, sin liberar); el resto es un entero (el motor
+/// decide `int` vs `u64`). La validación UTF-8 de `OptStr` la hace el motor.
 fn int_return(desc: &ExternDesc, raw: i64) -> FfiRet {
     match desc.ret_kind {
         CKind::Unit => FfiRet::Unit,
@@ -237,8 +265,7 @@ fn resolve_symbol(lib: &str, symbol: &str) -> Result<*mut c_void, String> {
 /// símbolo no resuelve o la firma no está en el catálogo soportado.
 pub fn call(desc: &ExternDesc, args: &[FfiVal]) -> Result<FfiRet, String> {
     let sym = resolve_symbol(&desc.lib, &desc.name)?;
-    let molds: Vec<Mold> = desc.arg_kinds.iter().map(|&k| mold_of(k)).collect();
-    let ret = mold_of(desc.ret_kind);
+    let molds: Vec<ArgMold> = desc.arg_kinds.iter().map(|&k| arg_mold(k)).collect();
 
     // Materializar cada argumento a su valor de registro (i64 para int/bool/puntero, f64 para float).
     // Las `CString` de los argumentos `string` se **retienen vivas** en `keep` hasta el final de la
@@ -269,34 +296,35 @@ pub fn call(desc: &ExternDesc, args: &[FfiVal]) -> Result<FfiRet, String> {
 
     // El catálogo acotado de firmas. Cada brazo transmuta el puntero al tipo `extern "C" fn(...)`
     // concreto y llama. `unsafe`: confiamos en que la firma declarada casa con la función real.
-    // Un molde `-> i64` devuelve un `raw` que `int_return` interpreta según `ret_kind` (entero, unit, o
-    // `char*` → Option). Un molde `-> f64` es siempre un float.
-    unsafe {
-        Ok(match (molds.as_slice(), ret) {
-            // --- aridad 0 ---
-            ([], Mold::I) => { let g: extern "C" fn() -> i64 = std::mem::transmute(sym); int_return(desc, g()) }
-            ([], Mold::F) => { let g: extern "C" fn() -> f64 = std::mem::transmute(sym); FfiRet::Float(g()) }
-            // --- aridad 1 ---
-            ([Mold::I], Mold::I) => { let g: extern "C" fn(i64) -> i64 = std::mem::transmute(sym); int_return(desc, g(i(0))) }
-            ([Mold::I], Mold::F) => { let g: extern "C" fn(i64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(i(0))) }
-            ([Mold::F], Mold::I) => { let g: extern "C" fn(f64) -> i64 = std::mem::transmute(sym); int_return(desc, g(f(0))) }
-            ([Mold::F], Mold::F) => { let g: extern "C" fn(f64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(f(0))) }
-            // --- aridad 2 ---
-            ([Mold::I, Mold::I], Mold::I) => { let g: extern "C" fn(i64, i64) -> i64 = std::mem::transmute(sym); int_return(desc, g(i(0), i(1))) }
-            ([Mold::I, Mold::I], Mold::F) => { let g: extern "C" fn(i64, i64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(i(0), i(1))) }
-            ([Mold::F, Mold::F], Mold::I) => { let g: extern "C" fn(f64, f64) -> i64 = std::mem::transmute(sym); int_return(desc, g(f(0), f(1))) }
-            ([Mold::F, Mold::F], Mold::F) => { let g: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(f(0), f(1))) }
-            ([Mold::I, Mold::F], Mold::F) => { let g: extern "C" fn(i64, f64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(i(0), f(1))) }
-            ([Mold::F, Mold::I], Mold::F) => { let g: extern "C" fn(f64, i64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(f(0), i(1))) }
-            // --- aridad 3 ---
-            ([Mold::I, Mold::I, Mold::I], Mold::I) => { let g: extern "C" fn(i64, i64, i64) -> i64 = std::mem::transmute(sym); int_return(desc, g(i(0), i(1), i(2))) }
-            ([Mold::F, Mold::F, Mold::F], Mold::F) => { let g: extern "C" fn(f64, f64, f64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(f(0), f(1), f(2))) }
-            _ => return Err(format!(
-                "la firma de '{}' no está en el catálogo FFI soportado (primitivos int/float/bool + char*, aridad 0..=3)",
-                desc.name
-            )),
-        })
+    // Despacho: la firma de **argumentos** (molde `I`/`F` por posición) elige el tipo `extern "C"`; la
+    // macro transmuta y llama con la anchura de **retorno** correcta (i32→signo-extendido, i64, o f64).
+    // `int_return` interpreta el i64 resultante según `ret_kind`. `unsafe`: confiamos en la firma declarada.
+    macro_rules! dispatch {
+        ( ($($aty:ty),*), ($($aval:expr),*) ) => {{
+            match ret_mold(desc.ret_kind) {
+                RetMold::I32 => { let g: extern "C" fn($($aty),*) -> i32 = unsafe { std::mem::transmute(sym) }; int_return(desc, g($($aval),*) as i64) }
+                RetMold::I64 => { let g: extern "C" fn($($aty),*) -> i64 = unsafe { std::mem::transmute(sym) }; int_return(desc, g($($aval),*)) }
+                RetMold::F   => { let g: extern "C" fn($($aty),*) -> f64 = unsafe { std::mem::transmute(sym) }; FfiRet::Float(g($($aval),*)) }
+            }
+        }};
     }
+    use ArgMold::{F, I};
+    Ok(match molds.as_slice() {
+        [] => dispatch!((), ()),
+        [I] => dispatch!((i64), (i(0))),
+        [F] => dispatch!((f64), (f(0))),
+        [I, I] => dispatch!((i64, i64), (i(0), i(1))),
+        [I, F] => dispatch!((i64, f64), (i(0), f(1))),
+        [F, I] => dispatch!((f64, i64), (f(0), i(1))),
+        [F, F] => dispatch!((f64, f64), (f(0), f(1))),
+        [I, I, I] => dispatch!((i64, i64, i64), (i(0), i(1), i(2))),
+        [I, I, F] => dispatch!((i64, i64, f64), (i(0), i(1), f(2))),
+        [F, F, F] => dispatch!((f64, f64, f64), (f(0), f(1), f(2))),
+        _ => return Err(format!(
+            "la firma de '{}' no está en el catálogo FFI soportado (int/u64/float/bool/puntero, aridad 0..=3)",
+            desc.name
+        )),
+    })
 }
 
 #[cfg(test)]

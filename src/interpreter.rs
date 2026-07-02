@@ -1699,6 +1699,7 @@ fn runtime_error(line: usize, col: usize, msg: &str) -> Flow {
 fn value_to_ffi(v: &Value) -> crate::ffi::FfiVal<'_> {
     match v {
         Value::Int(n) => crate::ffi::FfiVal::Int(*n),
+        Value::UInt(v, _) => crate::ffi::FfiVal::Int(*v as i64), // M41.4: u64 → 64 bits por registro entero
         Value::Float(f) => crate::ffi::FfiVal::Float(*f),
         Value::Bool(b) => crate::ffi::FfiVal::Int(*b as i64),
         Value::Str(s) => crate::ffi::FfiVal::Str(s.as_str()),      // M41.2: → char* (NUL-terminado en ffi::call)
@@ -1725,6 +1726,7 @@ fn ffi_to_value(r: crate::ffi::FfiRet, ret: crate::ffi::CKind, line: usize, col:
     use crate::ffi::{CKind, FfiRet};
     Ok(match r {
         FfiRet::Int(n) if ret == CKind::Bool => Value::Bool(n != 0),
+        FfiRet::Int(n) if ret == CKind::U64 => Value::UInt(n as u64, 64), // M41.4: C long/size_t → u64
         FfiRet::Int(n) => Value::Int(n),
         FfiRet::Float(f) => Value::Float(f),
         FfiRet::Unit => Value::Unit,

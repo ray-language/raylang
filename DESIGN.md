@@ -5602,3 +5602,32 @@ integración `ffi_retorno_char_ptr_como_option` (cli_cli) + ejemplo `examples/ff
 
 **Diferido**: `free` allocator-aware (retornos con propiedad, vía anotación); punteros opacos / handles
 (APIs con estado como sqlite); callbacks (fn raylang → C), structs por valor, variádicas, buffer+longitud.
+
+### 43.4 M41.4a — anchura correcta de enteros (`int` 32 / `u64` 64) + handles opacos
+
+**Un bug de corrección destapado por los handles.** Un `FILE*` de `fopen` se pasa bien a `fgetc`/`fclose`
+(el puntero de 64 bits round-trips), pero `fgetc` entraba en **bucle infinito**: devuelve un C `int` de
+**32 bits** (EOF = `-1` = `0xFFFFFFFF`), y el molde lo leía como `i64` de 64 bits → los 32 bits altos, que
+la ABI deja **indefinidos** para un retorno `int`, salían en cero → `-1` se leía como `4294967295` y el
+bucle `while (c >= 0)` no terminaba. `abs`/`atoi` "funcionaban" en M41.1–3 **por suerte** (el callee
+extendía el signo); era UB.
+
+**El fondo** (decidido con el usuario): en C, `int` = 32 bits pero `long`/`size_t`/puntero = 64 (LP64). Se
+mezclaban en el molde `i64`. Ahora: **`int` → C `int` (32 bits, con extensión de signo al volver)** —el
+caso más común (fgetc/abs/atoi)—, **`u64` → C `long`/`size_t` (64 bits)** —valores anchos y punteros
+opacos tratados como entero—.
+
+**Refactor de moldes (clave para no explotar el catálogo).** En la ABI, **los argumentos** enteros van
+todos por registro entero y el callee lee la anchura que quiera de los bits bajos → un `int`(32), un
+`u64`/puntero(64) y un `bool` comparten el molde de argumento `i64`. **Solo el retorno** distingue anchura
+(se lee el registro con un tipo concreto). Así el `match` de `call` se parte en dos: un `match` sobre la
+firma de **argumentos** (molde `I`/`F` por posición) × una **macro `dispatch!`** que transmuta con la
+anchura de **retorno** correcta (`i32` signo-extendido / `i64` / `f64`). Un solo sitio por firma de args
+da las tres anchuras de retorno gratis. `CKind` gana `U64`; los motores marshalan `Value::UInt(_,64)` ↔
+FfiVal y devuelven `Value::UInt` para `ret_kind == U64`.
+
+**Handles opacos, ya.** Con esto un puntero opaco (`FILE*`, `sqlite3*`) se pasa como **`u64`** de 64 bits,
+correcto y con estado: `fopen -> u64`, `fgetc(s: u64) -> int`, `fclose(s: u64)`. Test por subproceso
+`ffi_anchura_int_y_puntero_opaco_como_u64` (lee un archivo con `fopen`/`fgetc` hasta EOF → 3 bytes).
+Los 3 oráculos previos siguen verdes (abs/atoi/strlen dan lo mismo con la anchura correcta). Diferido a
+**M41.4b**: un tipo `ptr` opaco (alias con seguridad de tipos sobre el `u64` crudo) + `Option<ptr>`.

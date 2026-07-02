@@ -144,8 +144,10 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   cuerpo**; su nombre es a la vez el identificador en raylang y el símbolo a resolver. La librería se
   carga con `dlopen` y los símbolos con `dlsym` en tiempo de ejecución (el nombre corto `"m"` se
   resuelve al archivo de plataforma o al proceso). Los tipos deben ser **marshalables**: los primitivos
-  `int`↔long, `float`↔double, `bool`↔int (aridad 0..=3), y como **argumento** `string`↔`char*`
-  (NUL-terminado) y `bytes`↔puntero al buffer (M41.2). El **retorno** admite `int`/`float`/`bool`/`unit`
+  `int`↔C `int` (32 bits, con signo), `u64`↔C `long`/`size_t` (64 bits), `float`↔double, `bool`↔int
+  (aridad 0..=3), y como **argumento** `string`↔`char*` (NUL-terminado) y `bytes`↔puntero al buffer
+  (M41.2). Un puntero opaco (`FILE*`, handle) se pasa como `u64` (M41.4). El **retorno** admite
+  `int`/`u64`/`float`/`bool`/`unit`
   y, para un `char*`, **`Option<bytes>`** (`NULL → None`; la frontera copia los bytes hasta el NUL y no
   libera el puntero) o **`Option<string>`** (azúcar que valida UTF-8; bytes inválidos → error de
   ejecución) (M41.3). Un `string`/`bytes` **pelado** de retorno es error (un `char*` puede ser NULL y no

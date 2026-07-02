@@ -403,6 +403,7 @@ impl<'a> Vm<'a> {
                     for v in &fargs {
                         cargs.push(match v {
                             HeapValue::Int(n) => crate::ffi::FfiVal::Int(*n),
+                            HeapValue::UInt(v, _) => crate::ffi::FfiVal::Int(*v as i64), // M41.4: u64 → 64 bits
                             HeapValue::Float(f) => crate::ffi::FfiVal::Float(*f),
                             HeapValue::Bool(b) => crate::ffi::FfiVal::Int(*b as i64),
                             HeapValue::Str(s) => crate::ffi::FfiVal::Str(s.as_str()),
@@ -415,6 +416,7 @@ impl<'a> Vm<'a> {
                         .map_err(|m| runtime_error(pos!().0, pos!().1, &m))?;
                     let val = match r {
                         crate::ffi::FfiRet::Int(n) if desc.ret_kind == crate::ffi::CKind::Bool => HeapValue::Bool(n != 0),
+                        crate::ffi::FfiRet::Int(n) if desc.ret_kind == crate::ffi::CKind::U64 => HeapValue::UInt(n as u64, 64),
                         crate::ffi::FfiRet::Int(n) => HeapValue::Int(n),
                         crate::ffi::FfiRet::Float(f) => HeapValue::Float(f),
                         crate::ffi::FfiRet::Unit => HeapValue::Unit,

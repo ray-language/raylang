@@ -583,3 +583,41 @@ fn ffi_retorno_char_ptr_como_option() {
     assert!(out.contains("mundo"), "strstr encontró 'mundo'\n{out}");
     assert!(out.contains("none"), "strstr no encontrado → None\n{out}");
 }
+
+#[test]
+fn ffi_anchura_int_y_puntero_opaco_como_u64() {
+    // M41.4a: int → C int (32-bit, EOF=-1 corta el bucle); u64 → C long/size_t (64-bit); un FILE*
+    // (puntero) se pasa como u64 (opaco). fopen/fgetc/fclose sobre un archivo con contenido conocido.
+    let base = tmp("ffi_width");
+    std::fs::write(base.join("data.txt"), "Hi!").unwrap();
+    let datos = base.join("data.txt");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        format!(
+            "extern \"c\" {{\n\
+             \x20 fn fopen(path: string, mode: string) -> u64;\n\
+             \x20 fn fgetc(stream: u64) -> int;\n\
+             \x20 fn fclose(stream: u64) -> int;\n\
+             \x20 fn strlen(s: string) -> u64;\n\
+             }}\n\
+             fn main() -> int {{\n\
+             \x20 print(strlen(\"hola mundo\") as int);\n\
+             \x20 let h = fopen(\"{}\", \"r\");\n\
+             \x20 if (h == 0) {{ print(\"no abrió\"); return 1; }}\n\
+             \x20 var n = 0;\n\
+             \x20 var c = fgetc(h);\n\
+             \x20 while (c >= 0) {{ n = n + 1; c = fgetc(h); }}\n\
+             \x20 fclose(h);\n\
+             \x20 print(n);\n\
+             \x20 0\n\
+             }}\n",
+            datos.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con u64/int FFI debe salir 0\n{err}");
+    assert!(out.contains("10"), "strlen size_t (u64)\n{out}");
+    assert!(out.contains("3"), "fgetc leyó 3 bytes y EOF (-1) cortó el bucle\n{out}");
+}

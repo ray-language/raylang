@@ -1,0 +1,47 @@
+# `net` — el paquete de red de raylang (adicional, **no** embebido)
+
+A diferencia de la biblioteca estándar (`std/`, embebida en el binario base), el tier de **red y
+protocolos** vive aquí, en un **paquete adicional**: son librerías que dependen de sockets/TLS o que solo
+interesan a quien construye servicios, y serían peso muerto en el binario de todo el mundo. Se apoyan en
+las `std/` embebidas para lo fundacional (`from std/hmac import …`).
+
+## Cómo usarlo
+
+Declara el paquete en tu `ray.toml` como una **dependencia por ruta** (M40.8a) — o, cuando se publique,
+como una dependencia git:
+
+```toml
+[dependencies]
+net = "path:../ruta/a/packages/net"
+```
+
+y luego importa el módulo que necesites (como con `std/`):
+
+```raylang
+import net/jwt;
+
+fn main() -> int {
+    let tok = jwt.jwt_sign(to_bytes("secreto"), "{\"sub\":\"ada\"}");
+    print(tok);
+    match (jwt.jwt_verify(to_bytes("secreto"), tok)) {
+        Result.Ok(payload) => { print(payload); },
+        Result.Err(e) => { print("firma inválida: " + e); },
+    }
+    0
+}
+```
+
+## Módulos
+
+### Autenticación y firma (deterministas)
+
+- **`net/jwt`** — JSON Web Tokens HS256: `jwt_sign(secret: bytes, payload_json) -> string`,
+  `jwt_verify(secret: bytes, token) -> Result<string, string>`. Sobre `std/hmac` + `std/base64`.
+- **`net/jwt_eddsa`** — JWT firmados con Ed25519 (EdDSA). Sobre `std/ed25519` + `std/base64`.
+- **`net/sigv4`** — firma AWS Signature V4 para peticiones. Sobre `std/hmac` + `std/sha256` + `std/url`.
+- **`net/scram`** — el handshake SCRAM-SHA-256 (autenticación de PostgreSQL). Sobre `std/hmac` +
+  `std/sha256` + `std/base64`.
+- **`net/cookie`** — parseo y serialización de cookies HTTP. Sobre `std/url`.
+
+(Más módulos —HTTP, HTTP/2, WebSocket, DNS, UDP, Redis, Postgres, gRPC, OAuth2…— se irán añadiendo; los
+que dependen de sockets vivos se prueban con servidores de juguete, no en el oráculo.)

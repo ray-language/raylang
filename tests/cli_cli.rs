@@ -692,3 +692,36 @@ fn dependencia_por_ruta_local() {
     // La path-dep NO se descarga: no debe crear `.ray-deps`.
     assert!(!base.join("app/.ray-deps").exists(), "una path-dep no se clona");
 }
+
+#[test]
+fn paquete_net_jwt_via_path_dep() {
+    // M40.8b: el paquete `net` (adicional, no embebido) consumido por path-dep. jwt es determinista
+    // (firma+verifica) y se apoya en std/hmac + std/base64 embebidas.
+    let repo = env!("CARGO_MANIFEST_DIR");
+    let base = tmp("net_jwt");
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(
+        base.join("ray.toml"),
+        format!("[package]\nname = \"netapp\"\nversion = \"0.1.0\"\n\n[dependencies]\nnet = \"path:{repo}/packages/net\"\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("src/main.ray"),
+        "import net/jwt;\n\
+         fn main() -> int {\n\
+         \x20 let tok = jwt.jwt_sign(to_bytes(\"secreto\"), \"{\\\"sub\\\":\\\"ada\\\"}\");\n\
+         \x20 match (jwt.jwt_verify(to_bytes(\"secreto\"), tok)) {\n\
+         \x20   Result.Ok(p) => { print(p); }, Result.Err(e) => { print(\"err\"); },\n\
+         \x20 }\n\
+         \x20 match (jwt.jwt_verify(to_bytes(\"mala\"), tok)) {\n\
+         \x20   Result.Ok(p) => { print(\"¿?\"); }, Result.Err(e) => { print(\"rechazado\"); },\n\
+         \x20 }\n\
+         \x20 0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run"]);
+    assert_eq!(code, 0, "run con el paquete net debe salir 0\n{err}");
+    assert!(out.contains("{\"sub\":\"ada\"}"), "jwt_verify con la clave correcta → Ok(payload)\n{out}");
+    assert!(out.contains("rechazado"), "jwt_verify con clave mala → Err\n{out}");
+}

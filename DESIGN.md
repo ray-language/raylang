@@ -5098,6 +5098,19 @@ peso muerto para quien no las use), sino en un paquete que se trae por `path:`/g
 `std/` embebidas para lo fundacional (`from std/hmac import`, …). Tests: `distingue_path_dep_de_git`
 (deps.rs) + `dependencia_por_ruta_local` (cli_cli, paquete-cápsula externo, sin `.ray-deps`).
 
+### 41.8 M40.8b — el paquete `net` (adicional, no embebido)
+
+Sobre las path-deps, el **tier de red** se materializa como un paquete: `packages/net/` — un directorio de
+módulos (importados `net/jwt`, `net/http`, … como `std/math`; sin cápsula/`mod.ray`, todos públicos). **No
+va en el binario base** (peso muerto para quien no lo use); se consume por `net = "path:…/packages/net"` (o
+git al publicarse) y se apoya en las `std/` embebidas para lo fundacional (los `from hmac import` de los
+ejemplos se reescriben a `from std/hmac import`). Primer grupo, **autenticación y firma** (deterministas →
+testeables): `net/jwt` (HS256, sobre std/hmac+std/base64), `net/jwt_eddsa` (EdDSA, std/ed25519), `net/sigv4`
+(AWS SigV4, std/hmac+sha256+url), `net/scram` (SCRAM-SHA-256, std/hmac+sha256+base64), `net/cookie` (std/url).
+Los `examples/web/*.ray` siguen como material pedagógico + sus tests; el paquete es la versión distribuible
+(imports a `std/`). Test `paquete_net_jwt_via_path_dep` (cli_cli, firma+verifica un JWT). Diferido: HTTP/
+HTTP2/WebSocket/DNS/UDP/Redis/Postgres/gRPC/OAuth2 (los de sockets vivos, con servidor de juguete).
+
 Tests: `resolve_dependencias_transitivas` (cadena app→geo→mathx, offline; el lock incluye ambos) +
 unitarios de `semver`/`mvs`. **M39c COMPLETO** (gestor de paquetes: cápsula → git → lock → transitivas).
 Diferido: versión-mínima con RANGOS de verdad (nuestras specs son refs exactas), `ray update`, re-exports.

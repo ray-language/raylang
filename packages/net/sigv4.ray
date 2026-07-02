@@ -1,0 +1,104 @@
+// AWS Signature Version 4 — firma de requests, escrita EN raylang. Cero runtime nuevo: es el capstone
+// del stack de M20, apilando HMAC-SHA256 (`hmac.ray`) + SHA-256 hex (`sha256.ray`) + URL encoding
+// (`url.ray`) + fechas (`time.ray`). Importable:
+//   from sigv4 import credentials, authorization_header;
+//
+// SigV4 firma una petición HTTP en cuatro pasos (docs de AWS):
+//   1. *canonical request*: método, URI, query canónica, cabeceras canónicas, signed-headers, hash del cuerpo.
+//   2. *string to sign*: algoritmo, fecha, *credential scope*, hash de la canonical request.
+//   3. *signing key*: una cadena de HMAC sobre (AWS4+secreto) → fecha → región → servicio → "aws4_request".
+//   4. *signature* = HMAC(signing_key, string_to_sign), y la cabecera `Authorization`.
+//
+// El nombre de cabecera en el `Map` debe ir ya en MINÚSCULA (la forma canónica de AWS); `keys` los
+// entrega ordenados → cabeceras canónicas y signed-headers deterministas.
+
+from std/hmac import hmac_sha256, hmac_sha256_hex;
+from std/sha256 import sha256_hex;
+from std/url import url_encode;
+
+// Las credenciales + el destino (región/servicio) de la firma.
+pub struct Credentials {
+    access_key: string,
+    secret_key: string,
+    region: string,
+    service: string,
+}
+
+pub fn credentials(access_key: string, secret_key: string, region: string, service: string) -> Credentials {
+    Credentials { access_key: access_key, secret_key: secret_key, region: region, service: service }
+}
+
+// Query string canónica: cada `k=v` con clave y valor url-codificados (RFC 3986) y los pares ORDENADOS.
+fn canonical_query(raw: string) -> string {
+    if (len(raw) == 0) {
+        return "";
+    }
+    let pares: [string] = split(raw, "&");
+    var codificados: [string] = [];
+    var i: int = 0;
+    while (i < len(pares)) {
+        let p: string = pares[i];
+        match (index_of(p, "=")) {
+            Option.Some(eq) => {
+                let k: string = url_encode(substring(p, 0, eq));
+                let v: string = url_encode(substring(p, eq + 1, len(p)));
+                push(codificados, k + "=" + v);
+            },
+            Option.None => { push(codificados, url_encode(p) + "="); },
+        }
+        i = i + 1;
+    }
+    join(sort(codificados), "&")
+}
+
+// Un HMAC-SHA256 cuyo resultado se reusa como clave del siguiente (la derivación de la *signing key*).
+fn hmac_bytes(key: bytes, msg: string) -> bytes {
+    bytes_of(hmac_sha256(key, to_bytes(msg)))
+}
+
+// Devuelve el valor de la cabecera `Authorization` para la petición dada. `amz_date` en formato básico
+// `YYYYMMDDTHHMMSSZ` (usa `time::to_iso8601_basic`); el "datestamp" se extrae de sus 8 primeros dígitos.
+pub fn authorization_header(cred: Credentials, method: string, path: string, query: string,
+                            headers: Map<string, string>, payload: bytes, amz_date: string) -> string {
+    // --- Cabeceras canónicas + signed-headers (claves ya en minúscula; `keys` las da ordenadas). ---
+    let nombres: [string] = keys(headers);
+    var canonical_headers: string = "";
+    var signed_headers: string = "";
+    var i: int = 0;
+    while (i < len(nombres)) {
+        let n: string = nombres[i];
+        let v: string = match (get(headers, n)) {
+            Option.Some(x) => trim(x),
+            Option.None => "",
+        };
+        canonical_headers = canonical_headers + n + ":" + v + "\n";
+        if (i > 0) {
+            signed_headers = signed_headers + ";";
+        }
+        signed_headers = signed_headers + n;
+        i = i + 1;
+    }
+
+    // --- 1. Canonical request. ---
+    let cpath: string = if (len(path) == 0) { "/" } else { path };
+    let payload_hash: string = sha256_hex(payload);
+    let canonical_request: string = method + "\n" + cpath + "\n" + canonical_query(query) + "\n"
+        + canonical_headers + "\n" + signed_headers + "\n" + payload_hash;
+
+    // --- 2. String to sign. ---
+    let datestamp: string = substring(amz_date, 0, 8);
+    let scope: string = datestamp + "/" + cred.region + "/" + cred.service + "/aws4_request";
+    let string_to_sign: string = "AWS4-HMAC-SHA256\n" + amz_date + "\n" + scope + "\n"
+        + sha256_hex(to_bytes(canonical_request));
+
+    // --- 3. Signing key (cadena de HMAC). ---
+    let k_date: bytes = hmac_bytes(to_bytes("AWS4" + cred.secret_key), datestamp);
+    let k_region: bytes = hmac_bytes(k_date, cred.region);
+    let k_service: bytes = hmac_bytes(k_region, cred.service);
+    let k_signing: bytes = hmac_bytes(k_service, "aws4_request");
+
+    // --- 4. Signature + cabecera Authorization. ---
+    let signature: string = hmac_sha256_hex(k_signing, to_bytes(string_to_sign));
+    "AWS4-HMAC-SHA256 Credential=" + cred.access_key + "/" + scope
+        + ", SignedHeaders=" + signed_headers + ", Signature=" + signature
+}

@@ -5686,3 +5686,9 @@ tras la llamada); lo real es I/O con estado. Test por subproceso `ffi_ptr_opaco_
 **Diferido**: `free` allocator-aware para retornos con propiedad (vía anotación); callbacks (fn raylang →
 C), structs por valor, variádicas, buffer+longitud como par de args; más combinaciones de molde según haga
 falta.
+
+**M41 COMPLETO** (FFI usable de verdad): llamar a C con primitivos (41.1), pasar `string`/`bytes` como
+`char*` (41.2), recibir `char*` de vuelta con una convención honesta para NULL/encoding/propiedad (41.3),
+y APIs con estado vía handles opacos —anchura de enteros correcta (`int` 32 / `u64` 64) + el tipo `ptr`—
+(41.4). Lo diferido (callbacks, structs por valor, variádicas) son piezas especializadas, no imprescindibles
+para la 1.0. Siguiente: **M42 — endurecimiento de seguridad**.

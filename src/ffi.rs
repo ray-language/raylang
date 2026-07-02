@@ -23,6 +23,9 @@ use std::os::raw::{c_char, c_int};
 use std::sync::Mutex;
 
 // --- Declaraciones C crudas (como poll.rs; cero deps de Cargo) ---
+// SAFETY: las firmas coinciden con las de `<dlfcn.h>` (`void *dlopen(const char*, int)`,
+// `void *dlsym(void*, const char*)`), presentes en libc en Linux/macOS. No las llamamos con datos
+// inválidos (los punteros vienen de `CString`s vivas; ver `open_lib`/`resolve_symbol`).
 unsafe extern "C" {
     fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
@@ -220,6 +223,10 @@ fn int_return(desc: &ExternDesc, raw: i64) -> FfiRet {
 // Caché de handles de librería abiertos (por nombre corto). El puntero es opaco y válido durante toda
 // la vida del proceso; se comparte entre hilos tras el Mutex (nunca se cierra: las libs viven siempre).
 struct Handle(*mut c_void);
+// SAFETY: un handle de `dlopen` es un recurso GLOBAL del proceso; `dlsym` sobre él es thread-safe y
+// nosotros NUNCA desreferenciamos el puntero (solo lo pasamos de vuelta a `dlsym`). Compartirlo entre
+// hilos (tras el `Mutex` de `handles()`) es por tanto seguro, aunque `*mut c_void` no sea `Send` por
+// defecto. No se hace `dlclose` (fuga deliberada: las librerías viven toda la ejecución).
 unsafe impl Send for Handle {}
 
 fn handles() -> &'static Mutex<HashMap<String, Handle>> {

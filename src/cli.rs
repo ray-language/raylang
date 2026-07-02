@@ -222,11 +222,21 @@ fn resolver_entrada(explicito: Option<&str>, banner: bool) -> String {
         if banner {
             eprintln!("compilando {} v{}", m.name, m.version);
         }
-        if !m.dependencies.is_empty() {
+        // Una dependencia se resuelve si ya está en la caché `.ray-deps/` (colocada a mano por
+        // ahora; su descarga automática desde git llega en M39c-2). Solo avisamos de las que
+        // faltan: si están todas, el loader ya las encuentra.
+        let cache = m.root.join(".ray-deps");
+        let faltan: Vec<&str> = m
+            .dependencies
+            .iter()
+            .map(|(nombre, _)| nombre.as_str())
+            .filter(|n| !cache.join(n).is_dir() && !cache.join(format!("{n}.ray")).is_file())
+            .collect();
+        if !faltan.is_empty() {
             eprintln!(
-                "aviso: '{}' declara {} dependencia(s), pero su resolución llega en M39c; se ignoran.",
-                m.name,
-                m.dependencies.len()
+                "aviso: dependencia(s) sin descargar: {} (su descarga automática llega en M39c-2; \
+                 por ahora colócalas en '.ray-deps/<nombre>/mod.ray')",
+                faltan.join(", ")
             );
         }
     }
@@ -248,6 +258,19 @@ fn resolver_entrada(explicito: Option<&str>, banner: bool) -> String {
         eprintln!("no se indicó archivo y no hay proyecto (falta 'ray.toml' o 'src/main.ray')");
         process::exit(64);
     }
+}
+
+/// Las raíces de dependencias para el loader (M39c): la caché `.ray-deps/` en la raíz del
+/// proyecto (junto al `ray.toml`), si existe. Un paquete descargado vive en `.ray-deps/<dep>/`
+/// como cápsula; el loader busca ahí tras la raíz del proyecto. Sin proyecto ni caché, `[]`
+/// (comportamiento idéntico a antes: el loader resuelve solo contra la raíz del archivo).
+fn raices_de_dependencias() -> Vec<PathBuf> {
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let raiz = Manifest::find(&cwd)
+        .and_then(|toml| toml.parent().map(Path::to_path_buf))
+        .unwrap_or(cwd);
+    let cache = raiz.join(".ray-deps");
+    if cache.is_dir() { vec![cache] } else { Vec::new() }
 }
 
 /// Carga el manifiesto del proyecto que contiene el directorio actual. `None` si no hay
@@ -305,7 +328,7 @@ type Locate = Box<dyn Fn(usize) -> (String, String, usize)>;
 /// Carga el archivo de entrada y sus imports (loader, M11.3), devolviendo el programa
 /// fusionado, un localizador de líneas y si hay más de un módulo.
 fn cargar_y_localizar(path: &str) -> (crate::ast::Program, Locate, bool) {
-    let loaded = match loader::load(Path::new(path)) {
+    let loaded = match loader::load_con_deps(Path::new(path), &raices_de_dependencias()) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("{}", e.message);

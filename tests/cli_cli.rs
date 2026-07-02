@@ -187,3 +187,82 @@ fn manifiesto_mal_formado_falla_claro() {
     assert_eq!(code, 65, "un ray.toml mal formado es error de compilación\n{err}");
     assert!(err.contains("ray.toml:2"), "el error trae la línea\n{err}");
 }
+
+// ── M39c-1: la caché `.ray-deps/` es raíz de módulos (un paquete = una cápsula) ──────
+
+/// Escribe un paquete `nombre` en la caché `.ray-deps/` del proyecto `raiz`, con su `mod.ray`.
+fn dep(raiz: &std::path::Path, nombre: &str, mod_ray: &str) {
+    let d = raiz.join(".ray-deps").join(nombre);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("mod.ray"), mod_ray).unwrap();
+}
+
+#[test]
+fn dependencia_de_ray_deps_es_importable() {
+    let raiz = proyecto(
+        "dep_import",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"git+https://x/geo@v1\"\n",
+        "src/main.ray",
+        "from geo import duplicar;\nfn main() -> int { print(duplicar(21)); 0 }\n",
+    );
+    dep(&raiz, "geo", "pub fn duplicar(x: int) -> int { x * 2 }\n");
+    // La dependencia está en la caché → el loader la encuentra y `from geo import` funciona.
+    let (out, err, code) = ray(&raiz, &["run"]);
+    assert!(out.contains("42"), "usa la función de la dependencia\n{out}\n{err}");
+    assert_eq!(code, 0);
+    // Y como está presente, NO se avisa de dependencia sin descargar.
+    assert!(!err.contains("sin descargar"), "no debe avisar de una dep presente\n{err}");
+}
+
+#[test]
+fn dependencia_calificada_y_capsula_protege_internos() {
+    let raiz = proyecto(
+        "dep_capsula",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+        "src/main.ray",
+        "import geo;\nfn main() -> int { print(geo.triplicar(10)); 0 }\n",
+    );
+    // El paquete geo es una cápsula que usa su propio submódulo interno.
+    dep(
+        &raiz,
+        "geo",
+        "from geo/interno import triple;\npub fn triplicar(x: int) -> int { triple(x) }\n",
+    );
+    std::fs::write(
+        raiz.join(".ray-deps/geo/interno.ray"),
+        "pub fn triple(x: int) -> int { x * 3 }\n",
+    )
+    .unwrap();
+    // Acceso calificado a la cara pública del paquete.
+    let (out, err, code) = ray(&raiz, &["run"]);
+    assert!(out.contains("30"), "geo.triplicar via su interno\n{out}\n{err}");
+    assert_eq!(code, 0);
+
+    // La app NO puede alcanzar el submódulo interno del paquete (enforcement de cápsula, M11.6b).
+    std::fs::write(
+        raiz.join("src/main.ray"),
+        "import geo/interno;\nfn main() -> int { print(geo.interno.triple(5)); 0 }\n",
+    )
+    .unwrap();
+    let (_o, err, code) = ray(&raiz, &["run"]);
+    assert_eq!(code, 65, "alcanzar el interno de una dependencia es error\n{err}");
+    assert!(err.contains("interno a la cápsula 'geo'"), "{err}");
+}
+
+#[test]
+fn lo_local_tapa_a_la_dependencia_del_mismo_nombre() {
+    let raiz = proyecto(
+        "dep_shadow",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+        "src/main.ray",
+        "from util import saludo;\nfn main() -> int { print(saludo()); 0 }\n",
+    );
+    // Módulo local `util` en el proyecto...
+    std::fs::write(raiz.join("src/util.ray"), "pub fn saludo() -> int { 1 }\n").unwrap();
+    // ...y una dependencia `util` homónima en la caché.
+    dep(&raiz, "util", "pub fn saludo() -> int { 999 }\n");
+    // El proyecto se busca antes que la caché: gana el módulo local.
+    let (out, err, code) = ray(&raiz, &["run"]);
+    assert!(out.contains("1") && !out.contains("999"), "lo local tapa a la dependencia\n{out}\n{err}");
+    assert_eq!(code, 0);
+}

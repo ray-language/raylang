@@ -76,7 +76,20 @@ struct Module {
 
 /// Carga el archivo de entrada y sus imports (transitivos), y devuelve el programa fusionado.
 pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
-    let root = entry.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    load_con_deps(entry, &[])
+}
+
+/// Como [`load`], pero además busca los módulos en las **raíces de dependencias** `dep_roots`
+/// (la caché `.ray-deps/`, M39c): tras la raíz del proyecto, cada raíz extra se prueba en orden
+/// (lo local tapa a una dependencia con el mismo nombre). Una dependencia descargada es una
+/// **cápsula** (`<dep>/mod.ray`): `import geo;` la trae y sus submódulos internos quedan
+/// protegidos por el enforcement de cápsula (M11.6b) sin código nuevo. Con `dep_roots` vacío el
+/// comportamiento es idéntico a antes (un solo `root`).
+pub fn load_con_deps(entry: &Path, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
+    let project_root = entry.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    // Raíces de búsqueda de módulos: el proyecto primero, luego la caché de dependencias.
+    let mut roots = vec![project_root];
+    roots.extend(dep_roots.iter().cloned());
     let entry_name = module_name(entry);
 
     // --- Fase 1: cargar y parsear cada módulo una vez (BFS sobre los imports) ---
@@ -97,19 +110,20 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
         for (dep, line, col) in deps {
             // M11.6b: la arista de import debe respetar el borde de cápsula (aunque `dep` ya
             // esté visitado: cada sitio que importa un submódulo interno desde fuera es ilegal).
-            if let Some(c) = capsula_violada(&root, &name, dep) {
+            if let Some(c) = capsula_violada(&roots, &name, dep) {
                 return Err(render(&source, line, col, 1, &name, &format!(
                     "el módulo '{}' es interno a la cápsula '{}'; impórtalo con 'import {};'",
                     dep, c, c
                 )));
             }
             if !visitados.contains(dep) {
-                match resolve_module_path(&root, dep) {
+                match resolve_module_path(&roots, dep) {
                     Err(msg) => return Err(render(&source, line, col, 1, &name, &msg)),
                     Ok(Some(mp)) => pendientes.push((dep.clone(), mp, false)),
                     Ok(None) => return Err(render(&source, line, col, 1, &name, &format!(
-                        "no se encuentra el módulo '{}' (se esperaba {}/{}.ray o {}/{}/mod.ray)",
-                        dep, root.display(), dep, root.display(), dep
+                        "no se encuentra el módulo '{}' (se esperaba '{}.ray' o '{}/mod.ray' en: {})",
+                        dep, dep, dep,
+                        roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")
                     ))),
                 }
             }
@@ -396,11 +410,14 @@ fn module_name(path: &Path) -> String {
 /// propia cápsula (`importer == C`, su `mod.ray`) o vive bajo `C/`. Devuelve `Some(C)` si la viola.
 /// Las cápsulas anidadas componen: estar dentro de la interior implica estar dentro de la exterior,
 /// así que basta comprobar la más cercana.
-fn capsula_violada(root: &Path, importer: &str, target: &str) -> Option<String> {
+fn capsula_violada(roots: &[PathBuf], importer: &str, target: &str) -> Option<String> {
     let segs: Vec<&str> = target.split('/').collect();
     for k in (1..segs.len()).rev() {
         let c = segs[..k].join("/");
-        if root.join(&c).join("mod.ray").exists() {
+        // Una cápsula `C` existe si CUALQUIER raíz tiene `<raíz>/C/mod.ray` (una dependencia
+        // descargada es una cápsula en la caché; sus internos quedan protegidos igual que los del
+        // proyecto). La más profunda gana (cápsulas anidadas componen).
+        if roots.iter().any(|r| r.join(&c).join("mod.ray").exists()) {
             let dentro = importer == c || importer.starts_with(&format!("{}/", c));
             return if dentro { None } else { Some(c) };
         }
@@ -413,18 +430,23 @@ fn capsula_violada(root: &Path, importer: &str, target: &str) -> Option<String> 
 /// directorio: el `mod.ray` *es* el módulo de identidad `dep`). Una sola forma canónica: si **ambos**
 /// existen, es ambiguo (error) —evita el lío histórico de `foo.rs`-vs-`foo/mod.rs`—. `None` si no
 /// existe ninguno.
-fn resolve_module_path(root: &Path, dep: &str) -> Result<Option<PathBuf>, String> {
-    let as_file = root.join(format!("{}.ray", dep));
-    let as_dir = root.join(dep).join("mod.ray");
-    match (as_file.exists(), as_dir.exists()) {
-        (true, true) => Err(format!(
-            "el módulo '{}' es ambiguo: existen '{}' y '{}'; deja solo uno",
-            dep, as_file.display(), as_dir.display()
-        )),
-        (true, false) => Ok(Some(as_file)),
-        (false, true) => Ok(Some(as_dir)),
-        (false, false) => Ok(None),
+fn resolve_module_path(roots: &[PathBuf], dep: &str) -> Result<Option<PathBuf>, String> {
+    // Se prueban las raíces en orden (proyecto → caché de dependencias); la primera que resuelva
+    // gana. La ambigüedad archivo-vs-directorio se comprueba **dentro** de cada raíz.
+    for root in roots {
+        let as_file = root.join(format!("{}.ray", dep));
+        let as_dir = root.join(dep).join("mod.ray");
+        match (as_file.exists(), as_dir.exists()) {
+            (true, true) => return Err(format!(
+                "el módulo '{}' es ambiguo: existen '{}' y '{}'; deja solo uno",
+                dep, as_file.display(), as_dir.display()
+            )),
+            (true, false) => return Ok(Some(as_file)),
+            (false, true) => return Ok(Some(as_dir)),
+            (false, false) => {} // no está en esta raíz; probar la siguiente
+        }
     }
+    Ok(None)
 }
 
 /// Prefijo de namespacing de una **ruta** de módulo (M11.5): los separadores de directorio `/` se

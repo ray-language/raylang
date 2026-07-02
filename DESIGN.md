@@ -4944,5 +4944,29 @@ Un proyecto raylang es un directorio con `ray.toml` en su raíz. M39b lo **lee**
 Tests: unitarios del parser (`manifest.rs`) + integración (`cli_cli.rs`: entry del manifiesto,
 subida desde subdirectorio, aviso de deps, error del manifiesto).
 
-Pendiente de M39: **M39c** (resolución de dependencias git-first + lockfile con hashes + caché
-descargada `.ray-deps/`, importable por el loader — cruza el sistema de módulos M11.3–M11.6).
+### 41.3 M39c-1 — la caché `.ray-deps/` es raíz de módulos (un paquete = una cápsula)
+
+Primer paso del gestor de paquetes: hacer que las dependencias ya descargadas sean **importables**.
+La pieza clave es una decisión de diseño que reutiliza todo el sistema de módulos existente:
+
+> **Una dependencia descargada es una cápsula.** Un paquete `geo` vive en `.ray-deps/geo/` con su
+> `mod.ray`; por M11.6 eso es una cápsula direccionable. `import geo;` la trae; sus submódulos
+> internos (`geo/interno`) quedan protegidos por el *enforcement* de cápsula (M11.6b) **gratis** —
+> la frontera de encapsulación de un paquete es la misma que la de una cápsula del proyecto.
+
+Implementación (front-end puro; runtime intacto):
+
+- El **loader** pasa de una sola raíz a una **lista de raíces de búsqueda**: `load_con_deps(entry,
+  dep_roots)` construye `[raíz_del_proyecto, ...dep_roots]`. `resolve_module_path` y
+  `capsula_violada` iteran las raíces; la primera que resuelve gana → **lo local tapa** a una
+  dependencia homónima. Con `dep_roots` vacío el comportamiento es idéntico (`load` delega con `&[]`).
+- El **CLI** añade `.ray-deps/` (junto al `ray.toml`) como raíz si existe (`raices_de_dependencias`).
+  El aviso de M39b se afina: solo avisa de las dependencias que **faltan** en la caché (las presentes
+  ya se resuelven); su **descarga automática** desde git llega en M39c-2 (por ahora se colocan a mano).
+
+Tests (`cli_cli.rs`): `from geo import` desde la caché, acceso calificado `geo.f()` con la cápsula
+usando su propio interno, el *enforcement* que impide a la app alcanzar `geo/interno`, y el shadowing
+local-sobre-dependencia.
+
+Pendiente de M39: **M39c-2** (descarga git-first —clonar `git+URL@tag`— + lockfile `ray.lock` con
+hashes de contenido para *supply-chain* + verificación en cada build).

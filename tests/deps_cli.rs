@@ -122,3 +122,49 @@ fn ref_inexistente_falla_y_deja_la_cache_limpia() {
     // El clon a medio hacer no se queda en la caché.
     assert!(!app.join(".ray-deps/geo").exists(), "la caché queda limpia tras el fallo");
 }
+
+// ── M39c-2b: lockfile `ray.lock` con hashes + verificación de integridad ──────────────
+
+#[test]
+fn fetch_genera_y_verifica_el_lockfile() {
+    let base = tmp("lockfile");
+    let repo = publicar(&base, "geo", "pub fn duplicar(x: int) -> int { x * 2 }\n");
+    let app = app_con_dep(
+        &base,
+        "geo",
+        &repo,
+        "from geo import duplicar;\nfn main() -> int { duplicar(21) }\n",
+    );
+    // fetch genera ray.lock con la url/ref/commit y el hash de contenido.
+    let (_o, err, code) = ray(&app, &["fetch"]);
+    assert_eq!(code, 0, "{err}");
+    let lock = std::fs::read_to_string(app.join("ray.lock")).expect("ray.lock existe");
+    assert!(lock.contains("[geo]"), "{lock}");
+    assert!(lock.contains("hash = \"sha256:"), "el lock trae el hash de contenido\n{lock}");
+    assert!(lock.contains("commit = \""), "el lock trae el commit resuelto\n{lock}");
+    // run vuelve a verificar contra el lock, sin error (exit = 42, el valor de `main`, no el 65
+    // del error de supply-chain).
+    assert_eq!(ray(&app, &["run"]).2, 42, "la verificación pasa sobre la caché intacta");
+}
+
+#[test]
+fn la_verificacion_detecta_manipulacion() {
+    let base = tmp("tamper");
+    let repo = publicar(&base, "geo", "pub fn duplicar(x: int) -> int { x * 2 }\n");
+    let app = app_con_dep(
+        &base,
+        "geo",
+        &repo,
+        "from geo import duplicar;\nfn main() -> int { duplicar(21) }\n",
+    );
+    assert_eq!(ray(&app, &["fetch"]).2, 0);
+    // Manipular un archivo de la dependencia cacheada.
+    let modray = app.join(".ray-deps/geo/mod.ray");
+    let mut contenido = std::fs::read_to_string(&modray).unwrap();
+    contenido.push_str("\n// inyectado\n");
+    std::fs::write(&modray, contenido).unwrap();
+    // La próxima resolución detecta que el hash no coincide con el lock → aborta (supply-chain).
+    let (_o, err, code) = ray(&app, &["run"]);
+    assert_eq!(code, 65, "una dependencia manipulada aborta\n{err}");
+    assert!(err.contains("ray.lock") && err.contains("contenido cambió"), "{err}");
+}

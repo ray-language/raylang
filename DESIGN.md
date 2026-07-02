@@ -5048,5 +5048,26 @@ Tests **offline y deterministas** (`deps_cli.rs`): la dependencia es un repo git
 tag) servido por `file://` — `ray fetch` la clona, `ray run` la auto-descarga y usa, una ref
 inexistente falla dejando la caché limpia. Unitarios de `parse_spec` en `deps.rs`.
 
-Pendiente de M39: **M39c-2b** (lockfile `ray.lock` con hashes de contenido SHA-256 para
-*supply-chain* + verificación en cada build; el `rev-parse` ya da el commit a fijar).
+### 41.5 M39c-2b — lockfile `ray.lock` con hashes (supply-chain)
+
+La descarga (2a) fija la versión; falta garantizar que lo que se **ejecuta** es lo que se
+descargó y que **no se manipuló** después. Es lo que da el lockfile.
+
+- **SHA-256 en Rust puro** (`src/sha256.rs`): implementado a mano —no vía `ring`— para respetar la
+  invariante cero-deps de Cargo (la única excepción es TLS). Verificado contra los vectores del NIST.
+- **Hash de contenido de un paquete** (`deps::hash_package`): un SHA-256 sobre el resumen
+  `ruta:sha256(contenido)` de cada archivo (ordenados; ignora `.git`) — un árbol de hashes tipo
+  Merkle, memoria acotada. Detecta cualquier cambio de contenido o de rutas.
+- **`ray.lock`**: por dependencia, `url` + `ref` + `commit` resuelto + `hash` de contenido. Formato
+  = el mismo subconjunto de TOML que `ray.toml`; entradas **ordenadas por nombre** (diffs limpios);
+  **se commitea** (fija las versiones para el equipo). `.ray-deps/` sí se ignora, `ray.lock` no.
+- **Verificación en cada resolución** (`asegurar`): para cada dependencia cacheada se **recomputa** el
+  hash y se compara con el bloqueado (si el spec `url@ref` coincide); un desajuste = **error de
+  *supply-chain*** ("su contenido cambió desde que se bloqueó"), con el hash esperado vs actual. Las
+  que faltan se descargan y se registran; el lock se reescribe con el estado actual.
+
+Tests (`deps_cli.rs`): `fetch` genera el lock con hash/commit; `run` re-verifica sin error; manipular
+un archivo cacheado → aborta (65) con el mensaje de supply-chain. Vectores NIST en `sha256.rs`.
+
+**Cierra el grueso de M39c.** Pendiente (M39c-3, opcional): dependencias **transitivas** (un paquete
+con sus propias deps) + resolución semver de versión-mínima estilo Go (hoy solo deps directas fijadas).

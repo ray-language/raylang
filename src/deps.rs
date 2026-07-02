@@ -82,24 +82,181 @@ fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     }
 }
 
-/// Asegura que todas las dependencias del manifiesto estén en la caché `.ray-deps/`: descarga las
-/// que **falten** (las presentes se dejan tal cual; su verificación por hash llega en M39c-2b).
-/// Devuelve cuántas se descargaron en esta llamada (0 si estaban todas). Solo mira el disco → sin
-/// red ni `git` cuando ya están cacheadas.
+/// Asegura que todas las dependencias del manifiesto estén en la caché `.ray-deps/` y **verifica su
+/// integridad** contra el lockfile `ray.lock` (M39c-2b): descarga las que falten, y para cada una
+/// **recomputa su hash de contenido** y lo compara con el bloqueado — un desajuste (una dependencia
+/// cacheada modificada) es error de *supply-chain*. Actualiza `ray.lock`. Devuelve cuántas se
+/// descargaron en esta llamada (0 si estaban todas y verifican).
 pub fn asegurar(manifest: &Manifest) -> Result<usize, String> {
     let cache = manifest.root.join(".ray-deps");
+    let bloqueadas = leer_lock(&manifest.root)?; // nombre → entrada bloqueada
+    let mut nuevo_lock: Vec<LockEntry> = Vec::new();
     let mut nuevas = 0;
+
     for (nombre, spec_raw) in &manifest.dependencies {
-        let dest = cache.join(nombre);
-        if dest.exists() {
-            continue; // ya descargada
-        }
         let spec = parse_spec(spec_raw)?;
-        eprintln!("  descargando {nombre} ({}@{})", spec.url, spec.git_ref);
-        fetch(nombre, &spec, &dest)?;
-        nuevas += 1;
+        let dest = cache.join(nombre);
+
+        // Descargar si falta. Para una dependencia ya cacheada, se lee su commit (si es un repo
+        // git; una colocada a mano —M39c-1— no lo es → commit vacío, el hash igual la verifica).
+        let commit = if dest.exists() {
+            rev_parse(&dest).unwrap_or_default()
+        } else {
+            eprintln!("  descargando {nombre} ({}@{})", spec.url, spec.git_ref);
+            nuevas += 1;
+            fetch(nombre, &spec, &dest)?
+        };
+
+        // Hash de contenido de lo que hay ahora en la caché.
+        let hash = hash_package(&dest)?;
+
+        // Verificación: si estaba bloqueada con el MISMO spec, el hash debe coincidir.
+        if let Some(b) = bloqueadas.get(nombre)
+            && b.url == spec.url
+            && b.git_ref == spec.git_ref
+            && b.hash != hash
+        {
+            return Err(format!(
+                "la dependencia '{nombre}' no coincide con 'ray.lock': su contenido cambió desde que \
+                 se bloqueó (posible manipulación).\n  esperado: {}\n  actual:   {}\n  Si el cambio es \
+                 legítimo, borra '.ray-deps/{nombre}' y 'ray.lock' y vuelve a resolver.",
+                b.hash, hash
+            ));
+        }
+
+        nuevo_lock.push(LockEntry {
+            name: nombre.clone(),
+            url: spec.url,
+            git_ref: spec.git_ref,
+            commit,
+            hash,
+        });
     }
+
+    escribir_lock(&manifest.root, &mut nuevo_lock)?;
     Ok(nuevas)
+}
+
+// ── Hash de contenido de un paquete ──────────────────────────────────────────────────
+
+/// El **hash de contenido** de un paquete descargado en `dir`: un SHA-256 sobre el resumen de
+/// `ruta_relativa:sha256(contenido)` de cada archivo (ordenados por ruta) — un árbol de hashes tipo
+/// Merkle. Detecta cualquier cambio de contenido o de rutas; ignora `.git` (el historial no es parte
+/// del paquete). Devuelve `sha256:<hex>`. Memoria acotada (no concatena los contenidos).
+pub fn hash_package(dir: &Path) -> Result<String, String> {
+    let mut archivos: Vec<(String, std::path::PathBuf)> = Vec::new();
+    recolectar_archivos(dir, dir, &mut archivos)?;
+    archivos.sort();
+    let mut resumen = String::new();
+    for (rel, abs) in &archivos {
+        let contenido = std::fs::read(abs)
+            .map_err(|e| format!("no se pudo leer '{}': {e}", abs.display()))?;
+        resumen.push_str(rel);
+        resumen.push(':');
+        resumen.push_str(&crate::sha256::sha256_hex(&contenido));
+        resumen.push('\n');
+    }
+    Ok(format!("sha256:{}", crate::sha256::sha256_hex(resumen.as_bytes())))
+}
+
+/// Recolecta recursivamente los archivos bajo `dir` como `(ruta_relativa_a_base, ruta_absoluta)`,
+/// saltando `.git`. Las rutas usan `/` (portable y determinista entre plataformas).
+fn recolectar_archivos(base: &Path, dir: &Path, out: &mut Vec<(String, std::path::PathBuf)>) -> Result<(), String> {
+    let entradas = std::fs::read_dir(dir)
+        .map_err(|e| format!("no se pudo listar '{}': {e}", dir.display()))?;
+    for entrada in entradas {
+        let entrada = entrada.map_err(|e| format!("error listando '{}': {e}", dir.display()))?;
+        if entrada.file_name() == *".git" {
+            continue; // el historial de git no es parte del contenido del paquete
+        }
+        let path = entrada.path();
+        if path.is_dir() {
+            recolectar_archivos(base, &path, out)?;
+        } else {
+            let rel = path.strip_prefix(base).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+            out.push((rel, path));
+        }
+    }
+    Ok(())
+}
+
+// ── Lockfile `ray.lock` ───────────────────────────────────────────────────────────────
+
+/// Una entrada de `ray.lock`: qué se descargó (url + ref), a qué commit resolvió, y el hash de su
+/// contenido (para verificar la integridad en cada build, M39c-2b).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LockEntry {
+    pub name: String,
+    pub url: String,
+    pub git_ref: String,
+    pub commit: String,
+    pub hash: String,
+}
+
+/// Lee `ray.lock` de `root` a un mapa `nombre → entrada`. Vacío si no existe. Formato: secciones
+/// `[nombre]` con `clave = "valor"` (el mismo subconjunto de TOML que `ray.toml`).
+fn leer_lock(root: &Path) -> Result<std::collections::HashMap<String, LockEntry>, String> {
+    let ruta = root.join("ray.lock");
+    let Ok(fuente) = std::fs::read_to_string(&ruta) else {
+        return Ok(std::collections::HashMap::new()); // sin lock aún → mapa vacío
+    };
+    let mut mapa = std::collections::HashMap::new();
+    let mut actual: Option<LockEntry> = None;
+    let cerrar = |actual: &mut Option<LockEntry>, mapa: &mut std::collections::HashMap<String, LockEntry>| {
+        if let Some(e) = actual.take() {
+            mapa.insert(e.name.clone(), e);
+        }
+    };
+    for (i, linea) in fuente.lines().enumerate() {
+        let linea = linea.split_once('#').map_or(linea, |(a, _)| a).trim();
+        if linea.is_empty() {
+            continue;
+        }
+        if let Some(resto) = linea.strip_prefix('[') {
+            cerrar(&mut actual, &mut mapa);
+            let nombre = resto.strip_suffix(']')
+                .ok_or_else(|| format!("ray.lock:{}: cabecera sin ']'", i + 1))?;
+            actual = Some(LockEntry {
+                name: nombre.trim().to_string(),
+                url: String::new(), git_ref: String::new(), commit: String::new(), hash: String::new(),
+            });
+            continue;
+        }
+        let (clave, valor) = linea.split_once('=')
+            .ok_or_else(|| format!("ray.lock:{}: se esperaba 'clave = valor'", i + 1))?;
+        let valor = valor.trim().strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+            .ok_or_else(|| format!("ray.lock:{}: el valor debe ir entre comillas", i + 1))?;
+        let Some(e) = actual.as_mut() else {
+            return Err(format!("ray.lock:{}: clave fuera de una sección [nombre]", i + 1));
+        };
+        match clave.trim() {
+            "url" => e.url = valor.to_string(),
+            "ref" => e.git_ref = valor.to_string(),
+            "commit" => e.commit = valor.to_string(),
+            "hash" => e.hash = valor.to_string(),
+            _ => {} // claves desconocidas se ignoran (extensibilidad)
+        }
+    }
+    cerrar(&mut actual, &mut mapa);
+    Ok(mapa)
+}
+
+/// Escribe `ray.lock` en `root` con las entradas **ordenadas por nombre** (determinista → diffs
+/// limpios en control de versiones). El lockfile SÍ se commitea (fija las versiones para el equipo).
+fn escribir_lock(root: &Path, entradas: &mut [LockEntry]) -> Result<(), String> {
+    entradas.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut s = String::from(
+        "# ray.lock — versiones y hashes bloqueados de las dependencias (generado por 'ray').\n\
+         # Se commitea al repositorio. No editar a mano.\n",
+    );
+    for e in entradas.iter() {
+        s.push_str(&format!(
+            "\n[{}]\nurl = \"{}\"\nref = \"{}\"\ncommit = \"{}\"\nhash = \"{}\"\n",
+            e.name, e.url, e.git_ref, e.commit, e.hash
+        ));
+    }
+    std::fs::write(root.join("ray.lock"), s)
+        .map_err(|e| format!("no se pudo escribir 'ray.lock': {e}"))
 }
 
 #[cfg(test)]

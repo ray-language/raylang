@@ -40,6 +40,11 @@ const MODULOS: &[(&str, &str)] = &[
     ("std/inflate", include_str!("../examples/web/inflate.ray")),
     ("std/deflate", include_str!("../examples/web/deflate.ray")),
     ("std/huffman", include_str!("../examples/web/huffman.ray")),
+    // Procesamiento de texto/datos (M40.7d): librerías puras de `examples/stdlib/` (todas hojas).
+    ("std/regex", include_str!("../examples/stdlib/regex.ray")),
+    ("std/csv", include_str!("../examples/stdlib/csv.ray")),
+    ("std/toml", include_str!("../examples/stdlib/toml.ray")),
+    ("std/template", include_str!("../examples/stdlib/template.ray")),
 ];
 
 /// La fuente embebida del módulo `nombre` (`"std/math"`), o `None` si no es un módulo de la stdlib.

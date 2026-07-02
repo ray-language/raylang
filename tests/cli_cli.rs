@@ -430,3 +430,34 @@ fn stdlib_compresion_roundtrip() {
     assert!(out.contains("raylang raylang raylang comprime"), "deflate→inflate roundtrip\n{out}");
     assert!(out.contains("[65, 65, 66, 67]"), "huffman roundtrip\n{out}");
 }
+
+#[test]
+fn stdlib_texto_regex_csv_toml() {
+    // M40.7d: procesamiento de texto/datos (librerías puras de examples/stdlib/, hojas).
+    let base = tmp("std_txt");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "import std/regex;\n\
+         import std/csv;\n\
+         import std/toml;\n\
+         fn main() -> int {\n\
+             print(regex.find_all(\"[0-9]+\", \"a12b345c\"));\n\
+             match (csv.parse_csv(\"a,b\\n1,2\")) {\n\
+                 Result.Ok(rows) => { print(rows); }, Result.Err(e) => { print(e); },\n\
+             }\n\
+             match (toml.parse_toml(\"port = 8080\")) {\n\
+                 Result.Ok(es) => { match (toml.toml_get(es, \"port\")) {\n\
+                     Option.Some(v) => { print(toml.toml_show(v)); }, Option.None => { print(\"?\"); },\n\
+                 } }, Result.Err(e) => { print(e); },\n\
+             }\n\
+             0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con imports de std texto debe salir 0\n{err}");
+    assert!(out.contains("[12, 345]"), "regex find_all\n{out}");
+    assert!(out.contains("[[a, b], [1, 2]]"), "csv parse\n{out}");
+    assert!(out.contains("8080"), "toml get\n{out}");
+}

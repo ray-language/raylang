@@ -63,4 +63,12 @@ Operan sobre `bytes` (convierte un `string` con el builtin `to_bytes`).
 - **`std/deflate`** — `deflate_raw`/`zlib_compress`/`gzip_compress` (sobre `std/inflate` para el CRC).
 - **`std/huffman`** — `huffman_encode`/`huffman_decode`.
 
+### Procesamiento de texto y datos (M40.7d)
+
+- **`std/regex`** — motor NFA lineal (Thompson): `full_match`, `search`, `find`, `find_str`, `find_all`,
+  `replace_all`.
+- **`std/csv`** — `parse_csv(src) -> Result<[[string]], string>`, `write_csv(rows) -> string`.
+- **`std/toml`** — `enum TomlValue`, `parse_toml`, `toml_get`, `toml_show` (subconjunto de TOML).
+- **`std/template`** — motor de plantillas HTML con autoescape: `enum TVal`, `ctx_*`, `render`.
+
 (Más módulos por venir; ver DESIGN §42.9.)

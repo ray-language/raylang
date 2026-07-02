@@ -5466,3 +5466,9 @@ sha256("abc"), sha512(""), hmac_sha256("",""), sha1("abc").
 (`huffman_encode`/`huffman_decode`; hoja) y `std/deflate` (`deflate_raw`/`zlib_compress`/`gzip_compress`;
 →`std/inflate` para el CRC). Test de roundtrip `stdlib_compresion_roundtrip` (cli_cli): deflate→inflate
 recupera el texto, huffman ida y vuelta. `deflate_cli`/`inflate_cli`/`http_cli` intactos.
+
+**M40.7d — texto/datos**: librerías puras de `examples/stdlib/` (todas hojas, verbatim): `std/regex` (motor
+NFA lineal de Thompson: `full_match`/`search`/`find`/`find_all`/`replace_all`), `std/csv` (`parse_csv`/
+`write_csv`), `std/toml` (`enum TomlValue`, `parse_toml`/`toml_get`/`toml_show`; subconjunto), `std/template`
+(plantillas HTML con autoescape). Test `stdlib_texto_regex_csv_toml` (cli_cli). Cero cambios en los ejemplos
+→ sus tests intactos.

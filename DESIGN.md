@@ -5083,6 +5083,21 @@ la **caché plana** `.ray-deps/<nombre>/` (un slot por nombre) — el loader ya 
   cacheada, se re-descarga. URLs distintas o refs no-semver (rama/commit) → **error** (irreconciliables).
 - El lock (M39c-2b) registra **todo el grafo** (directas + transitivas), cada uno con su hash.
 
+### 41.7 M40.8a — dependencias por ruta local (`path:<dir>`)
+
+Habilita **paquetes adicionales no embebidos**: una librería que vive en el mismo repo (o en una carpeta
+local) y se consume sin publicarla en git. `ray.toml`: `nombre = "path:<dir>"`. A diferencia de una git,
+una path-dep **no se descarga ni se bloquea/hashea** (es local y mutable, para desarrollo o un paquete
+del propio proyecto): `deps::ruta_de_path_dep` la reconoce por el prefijo `path:`, `asegurar` la **salta**
+(directas y transitivas), y el CLI (`raices_de_dependencias`) **registra su carpeta como raíz de
+módulos** —añade el *padre* de `<dir>`, así `import <nombre>;` resuelve `<dir>/mod.ray` (cápsula) con la
+misma maquinaria de M39c-1 (cápsula + enforcement M11.6b)—. El paquete puede vivir **fuera** del proyecto
+que lo importa. Reusa todo el loader; cero cambios de runtime. Es la base para el paquete de **red**
+(§tier de red de M40.7): las librerías que dependen de sockets/TLS **no** van en el binario base (serían
+peso muerto para quien no las use), sino en un paquete que se trae por `path:`/git y se apoya en las
+`std/` embebidas para lo fundacional (`from std/hmac import`, …). Tests: `distingue_path_dep_de_git`
+(deps.rs) + `dependencia_por_ruta_local` (cli_cli, paquete-cápsula externo, sin `.ray-deps`).
+
 Tests: `resolve_dependencias_transitivas` (cadena app→geo→mathx, offline; el lock incluye ambos) +
 unitarios de `semver`/`mvs`. **M39c COMPLETO** (gestor de paquetes: cápsula → git → lock → transitivas).
 Diferido: versión-mínima con RANGOS de verdad (nuestras specs son refs exactas), `ray update`, re-exports.

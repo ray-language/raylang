@@ -305,11 +305,27 @@ fn raices_de_dependencias() -> Vec<PathBuf> {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let raiz = Manifest::find(&cwd)
         .and_then(|toml| toml.parent().map(Path::to_path_buf))
-        .unwrap_or(cwd);
+        .unwrap_or_else(|| cwd.clone());
     let cache = raiz.join(".ray-deps");
     let mut roots = Vec::new();
     if cache.is_dir() {
         roots.push(cache);
+    }
+    // M40.8a: dependencias por **ruta local** (`nombre = "path:<dir>"`). No se descargan; la carpeta del
+    // paquete se registra como raíz de módulos, así `import <nombre>;` resuelve `<dir>/mod.ray` (cápsula)
+    // como cualquier dependencia. Se añade el **padre** de `<dir>` (el loader busca `<raíz>/<nombre>/…`).
+    if let Ok(Some(m)) = Manifest::load(&cwd) {
+        for (_name, spec) in &m.dependencies {
+            if let Some(p) = crate::deps::ruta_de_path_dep(spec) {
+                let dir = m.root.join(p);
+                if let Some(parent) = dir.parent().map(Path::to_path_buf)
+                    && dir.exists()
+                    && !roots.contains(&parent)
+                {
+                    roots.push(parent);
+                }
+            }
+        }
     }
     // La biblioteca estándar (`import std/…`) ya no es una raíz de disco: desde M40.5 va **embebida**
     // en el binario (`crate::stdlib`, auto-contención), y el loader la resuelve antes que el filesystem.

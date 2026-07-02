@@ -661,3 +661,34 @@ fn ffi_ptr_opaco_y_option_ptr() {
     assert!(out.contains("3"), "leyó 3 bytes por el handle ptr\n{out}");
     assert!(out.contains("None ok"), "fopen de archivo inexistente → None\n{out}");
 }
+
+#[test]
+fn dependencia_por_ruta_local() {
+    // M40.8a: `nombre = "path:<dir>"` consume un paquete-cápsula LOCAL sin git ni descarga (un paquete
+    // adicional que no va en el binario). El paquete vive fuera del proyecto que lo importa.
+    let base = tmp("pathdep");
+    // El paquete-cápsula `saludo` (con mod.ray).
+    std::fs::create_dir_all(base.join("pkgs/saludo")).unwrap();
+    std::fs::write(
+        base.join("pkgs/saludo/mod.ray"),
+        "pub fn hola(n: string) -> string { \"hola, \" + n + \"!\" }\n",
+    )
+    .unwrap();
+    // El proyecto que lo consume por ruta.
+    std::fs::create_dir_all(base.join("app/src")).unwrap();
+    std::fs::write(
+        base.join("app/ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nsaludo = \"path:../pkgs/saludo\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("app/src/main.ray"),
+        "import saludo;\nfn main() -> int { print(saludo.hola(\"mundo\")); 0 }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base.join("app"), &["run"]);
+    assert_eq!(code, 0, "run con path-dep debe salir 0\n{err}");
+    assert!(out.contains("hola, mundo!"), "usó la función del paquete local\n{out}");
+    // La path-dep NO se descarga: no debe crear `.ray-deps`.
+    assert!(!base.join("app/.ray-deps").exists(), "una path-dep no se clona");
+}

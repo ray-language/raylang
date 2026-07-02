@@ -25,6 +25,14 @@ pub struct GitSpec {
     pub git_ref: String,
 }
 
+/// Si el spec es una **dependencia por ruta local** (`path:<dir>`), devuelve el `<dir>` (relativo a la
+/// raíz del proyecto, o absoluto). A diferencia de las git, no se descargan ni se bloquean/hashean (son
+/// locales y mutables, pensadas para desarrollo o un paquete que vive en el mismo repo): el CLI registra
+/// su carpeta como raíz de módulos. `None` si no es una path-dep. (M40.8a)
+pub fn ruta_de_path_dep(spec: &str) -> Option<&str> {
+    spec.strip_prefix("path:").map(str::trim)
+}
+
 /// Parsea `git+<URL>@<ref>`. El prefijo `git+` marca el esquema (por ahora el único), y el
 /// `@<ref>` es **obligatorio**: fijar una versión concreta (un tag o commit) es lo que hace el
 /// build reproducible. Se parte por el **último** `@` para no romper URLs con `usuario@host`.
@@ -99,6 +107,9 @@ pub fn asegurar(manifest: &Manifest) -> Result<usize, String> {
     let mut cola: std::collections::VecDeque<(String, GitSpec)> = std::collections::VecDeque::new();
     let mut nuevas = 0usize;
     for (n, s) in &manifest.dependencies {
+        if ruta_de_path_dep(s).is_some() {
+            continue; // M40.8a: las path-deps son locales; no se descargan (las registra el CLI)
+        }
         cola.push_back((n.clone(), parse_spec(s)?));
     }
 
@@ -129,8 +140,11 @@ pub fn asegurar(manifest: &Manifest) -> Result<usize, String> {
             cacheado.insert(nombre.clone(), elegido_spec.clone());
         }
 
-        // Dependencias transitivas: leer el `ray.toml` del paquete y encolarlas.
+        // Dependencias transitivas: leer el `ray.toml` del paquete y encolarlas (saltando path-deps).
         for (dn, ds) in deps_del_paquete(&dest)? {
+            if ruta_de_path_dep(&ds).is_some() {
+                continue;
+            }
             cola.push_back((dn, parse_spec(&ds)?));
         }
     }
@@ -353,6 +367,15 @@ mod tests {
         let s = parse_spec("git+https://ejemplo/geo@v1.0").unwrap();
         assert_eq!(s.url, "https://ejemplo/geo");
         assert_eq!(s.git_ref, "v1.0");
+    }
+
+    #[test]
+    fn distingue_path_dep_de_git() {
+        // M40.8a: una path-dep se reconoce por el prefijo `path:` y NO es una git spec.
+        assert_eq!(ruta_de_path_dep("path:../pkgs/net"), Some("../pkgs/net"));
+        assert_eq!(ruta_de_path_dep("path:  packages/web  "), Some("packages/web"));
+        assert_eq!(ruta_de_path_dep("git+https://x/geo@v1"), None);
+        assert!(parse_spec("path:../pkgs/net").is_err()); // no es git → parse_spec la rechaza
     }
 
     #[test]

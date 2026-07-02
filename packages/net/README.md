@@ -53,5 +53,18 @@ fn main() -> int {
 - **`net/http2_client`** — cliente HTTP/2 sobre `net/http2` + `net/hpack`.
 - **`net/grpc_client`** — cliente gRPC sobre `net/http2` + `net/hpack` + `std/protobuf`.
 
-(Más módulos —WebSocket, DNS, UDP, Redis, Postgres, OAuth2, observabilidad…— se irán añadiendo; los que
-dependen de sockets vivos se prueban con servidores de juguete, no en el oráculo.)
+### Transporte y servicios (dependen de sockets)
+
+- **`net/udp`** — sockets UDP: `bind`/`send_to`/`recv_from`. Hoja.
+- **`net/dns`** — resolución DNS (7 tipos de registro). Sobre `net/udp`.
+- **`net/dns_cache`** — caché DNS con TTL. Sobre `net/dns`.
+- **`net/websocket`** — handshake + framing WebSocket (`ws://`/`wss://`). Sobre `std/sha1` + `std/base64`.
+- **`net/websocket_client`** — cliente WebSocket. Sobre `net/websocket` + `std/sha1` + `std/base64`.
+- **`net/redis`** — cliente Redis (protocolo RESP). Hoja.
+- **`net/postgres`** — cliente PostgreSQL (protocolo de frontend/backend). Sobre `net/scram`.
+- **`net/oauth2`** — flujo OAuth2 (client credentials, authorization code). Sobre `net/http` + `std/json`
+  + `std/url`.
+- **`net/webserver`** — servidor HTTP async + SSE (sobre el scheduler de fibras). Hoja.
+
+(Más módulos —observabilidad `time`/`log`/`metrics`, el micro-framework web `framework`— se irán añadiendo.
+Los que dependen de sockets vivos se prueban con servidores de juguete, no en el oráculo.)

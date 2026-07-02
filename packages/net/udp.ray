@@ -1,0 +1,66 @@
+// UDP (datagramas sin conexión) como librería en raylang, sobre los builtins de runtime de M20.8
+// (`__udp_bind`/`__udp_send_to`/`__udp_recv_from`). Importable:
+//   from udp import bind, send_to, recv_from, Packet;
+//
+// A diferencia de TCP, no hay conexión: cada datagrama lleva su remitente, así que `recv_from`
+// devuelve un `Packet { host, port, data }` (con quién y qué). Habilita DNS, statsd, descubrimiento,
+// juegos, etc. I/O **bloqueante** en ambos motores por ahora (la cesión cooperativa queda diferida).
+//
+// Patrón de los primitivos (como M11.2c): el builtin devuelve un arreglo etiquetado y este envoltorio
+// lo traduce a `Result`/`Packet` → el runtime no sabe de `Result` ni de `Packet`.
+
+// Un datagrama recibido: su remitente (host, puerto) y el contenido (bytes crudos).
+pub struct Packet {
+    host: string,
+    port: int,
+    data: bytes,
+}
+
+// Enlaza un socket UDP a `host:port` (port=0 → efímero; el puerto real se consulta con `local_port`).
+pub fn bind(host: string, port: int) -> Result<int, string> {
+    let r = __udp_bind(host, port); // ["ok", handle] o ["err", msg]
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle UDP inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+// Envía `data` al destino `host:port`; `Ok(nº de octetos enviados)`.
+pub fn send_to(h: int, host: string, port: int, data: bytes) -> Result<int, string> {
+    let r = __udp_send_to(h, host, port, data); // ["ok", n] o ["err", msg]
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(n) => Result.Ok(n),
+            Option.None => Result.Ok(0),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+// Texto de un campo `bytes` del primitivo, o "" si no es UTF-8 válido.
+fn texto(b: bytes) -> string {
+    match (from_utf8(b)) {
+        Result.Ok(s) => s,
+        Result.Err(_) => "",
+    }
+}
+
+// Recibe un datagrama (bloquea hasta que llega uno); `Ok(Packet)` con remitente + contenido.
+pub fn recv_from(h: int) -> Result<Packet, string> {
+    let r = __udp_recv_from(h); // [b"ok", host, puerto, datos] o [b"err", msg], todo en bytes
+    if (texto(r[0]) == "ok") {
+        let host = texto(r[1]);
+        let port = match (parse_int(texto(r[2]))) {
+            Option.Some(n) => n,
+            Option.None => 0,
+        };
+        Result.Ok(Packet { host: host, port: port, data: r[3] })
+    } else {
+        Result.Err(texto(r[1]))
+    }
+}

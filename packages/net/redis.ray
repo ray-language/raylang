@@ -1,0 +1,202 @@
+// Cliente Redis (protocolo RESP2) escrito EN raylang, sobre los builtins TCP (M15.2). Cero runtime
+// nuevo. Importable: `from redis import connect, command, close_conn, Reply, reply_str;`.
+//
+// RESP es deliberadamente simple: una petición es un *array de bulk strings*
+//   *<n>\r\n $<len>\r\n <arg>\r\n ...
+// y una respuesta empieza por un byte de tipo: `+` simple string, `-` error, `:` entero,
+// `$` bulk string (`$-1` = nil), `*` array. Es el mejor ejemplo de "cliente de infra cloud" en
+// raylang puro: request/response con framing sobre un socket. (Valores tratados como `string` →
+// texto; un cliente binario-seguro usaría `bytes`.)
+//
+// Como los sockets ceden la fibra, el camino concurrente es **solo VM**; en el intérprete corren
+// bloqueantes (un hilo), así que el cliente funciona en ambos motores contra un servidor real.
+
+// Una respuesta de Redis (RESP2).
+pub enum Reply {
+    Str(string), // simple string (+) o bulk string ($)
+    Int(int),    // entero (:)
+    Nil,         // bulk/array nulo ($-1 / *-1)
+    Arr([Reply]), // array (*)
+    Err(string), // error del servidor (-)
+}
+
+// Conexión: el handle del socket + un buffer de lectura no consumido (framing por encima de los
+// trozos que entrega `socket_read`).
+pub struct Conn {
+    h: int,
+    buf: string,
+}
+
+pub fn connect(host: string, port: int) -> Result<Conn, string> {
+    match (tcp_connect(host, port)) {
+        Result.Ok(h) => Result.Ok(Conn { h: h, buf: "" }),
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+pub fn close_conn(c: Conn) {
+    close(c.h);
+}
+
+// Codifica un comando (lista de argumentos) como un array RESP de bulk strings.
+pub fn encode_command(args: [string]) -> string {
+    var s = "*" + to_string(len(args)) + "\r\n";
+    var i = 0;
+    while (i < len(args)) {
+        let a = args[i];
+        s = s + "$" + to_string(len(a)) + "\r\n" + a + "\r\n";
+        i = i + 1;
+    }
+    s
+}
+
+// Lee un trozo más del socket al buffer; false si la conexión se cerró (EOF) o falló.
+fn pull(c: Conn) -> bool {
+    match (socket_read(c.h)) {
+        Result.Ok(chunk) => {
+            if (len(chunk) == 0) {
+                false
+            } else {
+                c.buf = c.buf + chunk;
+                true
+            }
+        },
+        Result.Err(_) => false,
+    }
+}
+
+// Lee una línea terminada en \r\n (sin el CRLF), rellenando desde el socket si hace falta.
+fn read_line(c: Conn) -> Result<string, string> {
+    while (true) {
+        match (index_of(c.buf, "\r\n")) {
+            Option.Some(pos) => {
+                let line = substring(c.buf, 0, pos);
+                c.buf = substring(c.buf, pos + 2, len(c.buf));
+                return Result.Ok(line);
+            },
+            Option.None => {
+                if (!pull(c)) {
+                    return Result.Err("conexión cerrada al leer una línea");
+                }
+            },
+        }
+    }
+    Result.Err("inalcanzable")
+}
+
+// Lee exactamente `n` caracteres, rellenando desde el socket si hace falta.
+fn read_n(c: Conn, n: int) -> Result<string, string> {
+    while (len(c.buf) < n) {
+        if (!pull(c)) {
+            return Result.Err("conexión cerrada al leer el cuerpo");
+        }
+    }
+    let s = substring(c.buf, 0, n);
+    c.buf = substring(c.buf, n, len(c.buf));
+    Result.Ok(s)
+}
+
+// parse_int tolerante (0 si falla).
+fn int_or(s: string) -> int {
+    match (parse_int(s)) {
+        Option.Some(n) => n,
+        Option.None => 0,
+    }
+}
+
+// Lee y parsea UNA respuesta RESP (recursiva para los arrays).
+fn read_reply(c: Conn) -> Result<Reply, string> {
+    match (read_line(c)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(line) => {
+            if (len(line) == 0) {
+                return Result.Err("respuesta RESP vacía");
+            }
+            let t = line[0];
+            let rest = substring(line, 1, len(line));
+            if (t == '+') {
+                Result.Ok(Reply.Str(rest))
+            } else { if (t == '-') {
+                Result.Ok(Reply.Err(rest))
+            } else { if (t == ':') {
+                Result.Ok(Reply.Int(int_or(rest)))
+            } else { if (t == '$') {
+                let n = int_or(rest);
+                if (n < 0) {
+                    Result.Ok(Reply.Nil)
+                } else {
+                    match (read_n(c, n)) {
+                        Result.Err(e) => Result.Err(e),
+                        Result.Ok(data) => {
+                            // Consume el \r\n que cierra el bulk string.
+                            match (read_line(c)) {
+                                Result.Ok(_) => Result.Ok(Reply.Str(data)),
+                                Result.Err(e) => Result.Err(e),
+                            }
+                        },
+                    }
+                }
+            } else { if (t == '*') {
+                let n = int_or(rest);
+                if (n < 0) {
+                    Result.Ok(Reply.Nil)
+                } else {
+                    read_array(c, n)
+                }
+            } else {
+                Result.Err("tipo RESP desconocido: " + to_string(t))
+            }}}}}
+        },
+    }
+}
+
+// Lee `n` respuestas seguidas como un array.
+fn read_array(c: Conn, n: int) -> Result<Reply, string> {
+    var items: [Reply] = [];
+    var i = 0;
+    var err = "";
+    while (i < n && err == "") {
+        match (read_reply(c)) {
+            Result.Ok(it) => push(items, it),
+            Result.Err(e) => { err = e; },
+        }
+        i = i + 1;
+    }
+    if (err != "") {
+        Result.Err(err)
+    } else {
+        Result.Ok(Reply.Arr(items))
+    }
+}
+
+// Envía un comando y lee su respuesta.
+pub fn command(c: Conn, args: [string]) -> Result<Reply, string> {
+    match (socket_write(c.h, encode_command(args))) {
+        Result.Err(e) => Result.Err("error al enviar: " + e),
+        Result.Ok(_) => read_reply(c),
+    }
+}
+
+// Representación legible de una respuesta (para depurar/mostrar).
+pub fn reply_str(r: Reply) -> string {
+    match (r) {
+        Reply.Str(s) => s,
+        Reply.Int(n) => to_string(n),
+        Reply.Nil => "(nil)",
+        Reply.Err(e) => "(error) " + e,
+        Reply.Arr(items) => "[" + join_replies(items) + "]",
+    }
+}
+
+fn join_replies(items: [Reply]) -> string {
+    var s = "";
+    var i = 0;
+    while (i < len(items)) {
+        if (i > 0) {
+            s = s + ", ";
+        }
+        s = s + reply_str(items[i]);
+        i = i + 1;
+    }
+    s
+}

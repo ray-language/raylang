@@ -757,3 +757,29 @@ fn paquete_net_hpack_roundtrip() {
     assert_eq!(code, 0, "run con net/hpack debe salir 0\n{err}");
     assert!(out.contains("2"), "hpack encode+decode roundtrip de 2 cabeceras\n{out}");
 }
+
+#[test]
+fn paquete_net_websocket_accept_key() {
+    // M40.8d: transporte/servicios. websocket.accept_key es determinista (RFC 6455) y se apoya en
+    // std/sha1 + std/base64 embebidas. Deps internas del paquete (dns → net/udp, etc.) ya validadas.
+    let repo = env!("CARGO_MANIFEST_DIR");
+    let base = tmp("net_ws");
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(
+        base.join("ray.toml"),
+        format!("[package]\nname = \"ws\"\nversion = \"0.1.0\"\n\n[dependencies]\nnet = \"path:{repo}/packages/net\"\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("src/main.ray"),
+        "import net/websocket;\n\
+         fn main() -> int {\n\
+         \x20 print(websocket.accept_key(\"dGhlIHNhbXBsZSBub25jZQ==\"));\n\
+         \x20 0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run"]);
+    assert_eq!(code, 0, "run con net/websocket debe salir 0\n{err}");
+    assert!(out.contains("s3pPLMBiTxaQ9kYGzzhZRbK+xOo="), "handshake WebSocket RFC 6455\n{out}");
+}

@@ -1,0 +1,242 @@
+// M19.1 — un servidor web HTTP/1.1 CONCURRENTE escrito EN raylang, con soporte de SSE.
+//
+// Como http.ray/json.ray: cero runtime, cero builtins nuevos; puro raylang + stdlib, importable. Se
+// apoya en el servidor concurrente de M15.5/M17 (tcp_listen/tcp_accept/socket_read/socket_write ceden
+// al scheduler → muchas conexiones a la vez en un hilo, readiness por kqueue/epoll). **Solo VM** (la
+// concurrencia es VM-only).
+//
+// M19.2: el cuerpo (de la petición y de la respuesta) es **bytes** → binario correcto (imágenes, etc.),
+// no solo texto. Las cabeceras siguen siendo texto (ASCII). Los atajos de respuesta de texto (ok/text/
+// json_response) aceptan string y lo codifican; bytes_response acepta bytes crudos. TLS (https) es M19.4.
+
+pub struct Request {
+    method: string,
+    path: string,
+    headers: Map<string, string>,
+    body: bytes,
+}
+
+pub struct Response {
+    status: int,
+    headers: Map<string, string>,
+    body: bytes,
+}
+
+// --- Respuestas: atajos para los casos comunes ---
+
+// Respuesta de texto: el cuerpo se codifica a UTF-8.
+pub fn text(status: int, body: string) -> Response {
+    Response { status: status, headers: map_new(), body: to_bytes(body) }
+}
+
+// Respuesta binaria: el cuerpo va tal cual (octetos crudos).
+pub fn bytes_response(status: int, body: bytes) -> Response {
+    Response { status: status, headers: map_new(), body: body }
+}
+
+pub fn ok(body: string) -> Response {
+    text(200, body)
+}
+
+pub fn not_found() -> Response {
+    text(404, "Not Found")
+}
+
+pub fn json_response(body: string) -> Response {
+    var h: Map<string, string> = map_new();
+    insert(h, "Content-Type", "application/json");
+    Response { status: 200, headers: h, body: to_bytes(body) }
+}
+
+// El cuerpo de una petición decodificado como texto UTF-8 (para formularios/JSON entrantes). Para datos
+// binarios entrantes, usa `req.body` (bytes) directamente.
+pub fn request_text(req: Request) -> Result<string, string> {
+    from_utf8(req.body)
+}
+
+// La frase de estado para los códigos comunes (HTTP la exige tras el número).
+fn status_text(code: int) -> string {
+    if (code == 200) { "OK" }
+    else if (code == 201) { "Created" }
+    else if (code == 204) { "No Content" }
+    else if (code == 400) { "Bad Request" }
+    else if (code == 404) { "Not Found" }
+    else if (code == 500) { "Internal Server Error" }
+    else { "Status" }
+}
+
+// --- Lectura de la petición ---
+
+// El índice del primer "\r\n\r\n" (fin de cabeceras) en bytes, o -1. Escanea por octetos (CR=13, LF=10):
+// no se puede usar index_of (es de string) porque el cuerpo binario rompería from_utf8 del buffer entero.
+fn find_fin_cabeceras(b: bytes) -> int {
+    var i: int = 0;
+    while (i + 3 < len(b)) {
+        if (b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10) {
+            return i;
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// Lee una petición HTTP completa de la conexión: acumula bytes hasta el fin de cabeceras (\r\n\r\n),
+// decodifica SOLO las cabeceras como texto para parsearlas, y —si hay Content-Length— sigue leyendo
+// hasta completar el cuerpo (bytes crudos, octetos). M19.2: cuerpo binario correcto.
+pub fn read_request(conn: int) -> Result<Request, string> {
+    var acc: bytes = b"";
+    var sep: int = 0 - 1;
+    var seguir: bool = true;
+    while (seguir) {
+        let s: int = find_fin_cabeceras(acc);
+        if (s >= 0) {
+            sep = s;
+            seguir = false;
+        } else {
+            match (socket_read_bytes(conn)) {
+                Result.Ok(trozo) => {
+                    if (len(trozo) == 0) { seguir = false; } else { acc = acc + trozo; }
+                },
+                Result.Err(e) => { return Result.Err("error al leer: " + e); },
+            }
+        }
+    }
+    if (sep < 0) {
+        return Result.Err("petición incompleta (sin fin de cabeceras)");
+    }
+
+    var body: bytes = sub_bytes(acc, sep + 4, len(acc));
+    match (from_utf8(sub_bytes(acc, 0, sep))) {
+        Result.Err(e) => Result.Err("cabeceras de la petición no son UTF-8: " + e),
+        Result.Ok(cabeceras_raw) => {
+            let lineas: [string] = split(cabeceras_raw, "\r\n");
+
+            // Línea de petición: "GET /ruta HTTP/1.1".
+            let partes: [string] = split(lineas[0], " ");
+            if (len(partes) < 2) {
+                return Result.Err("línea de petición malformada: " + lineas[0]);
+            }
+            let method: string = partes[0];
+            let path: string = partes[1];
+
+            // Cabeceras (nombre en minúsculas para lookup case-insensitive).
+            var headers: Map<string, string> = map_new();
+            var i: int = 1;
+            while (i < len(lineas)) {
+                match (index_of(lineas[i], ":")) {
+                    Option.Some(c) => {
+                        let nombre: string = to_lower(trim(substring(lineas[i], 0, c)));
+                        let valor: string = trim(substring(lineas[i], c + 1, len(lineas[i])));
+                        insert(headers, nombre, valor);
+                    },
+                    Option.None => {},
+                }
+                i = i + 1;
+            }
+
+            // Cuerpo: si hay Content-Length (octetos), completar la lectura hasta esa longitud.
+            match (get(headers, "content-length")) {
+                Option.Some(cl) => {
+                    match (parse_int(cl)) {
+                        Option.Some(n) => {
+                            var faltan: bool = true;
+                            while (faltan && len(body) < n) {
+                                match (socket_read_bytes(conn)) {
+                                    Result.Ok(trozo) => {
+                                        if (len(trozo) == 0) { faltan = false; } else { body = body + trozo; }
+                                    },
+                                    Result.Err(e) => { return Result.Err("error al leer el cuerpo: " + e); },
+                                }
+                            }
+                        },
+                        Option.None => {},
+                    }
+                },
+                Option.None => {},
+            }
+
+            Result.Ok(Request { method: method, path: path, headers: headers, body: body })
+        },
+    }
+}
+
+// --- Escritura de la respuesta ---
+
+pub fn send_response(conn: int, r: Response) -> Result<int, string> {
+    // Cabecera = texto (Content-Length en octetos, ya correcto); cuerpo = bytes crudos. Se envía todo
+    // junto como bytes para no corromper un cuerpo binario.
+    var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
+    head = head + "Content-Length: " + to_string(len(r.body)) + "\r\n";
+    head = head + "Connection: close\r\n";
+    // Cabeceras del usuario (keys() está ordenada → salida determinista).
+    let ks: [string] = keys(r.headers);
+    var i: int = 0;
+    while (i < len(ks)) {
+        match (get(r.headers, ks[i])) {
+            Option.Some(v) => { head = head + ks[i] + ": " + v + "\r\n"; },
+            Option.None => {},
+        }
+        i = i + 1;
+    }
+    head = head + "\r\n";
+    socket_write_bytes(conn, to_bytes(head) + r.body)
+}
+
+// --- SSE (server-sent events): HTTP que no cierra y va emitiendo eventos ---
+
+// Abre un stream SSE: 200 + Content-Type: text/event-stream (mantiene la conexión viva).
+pub fn sse_open(conn: int) -> Result<int, string> {
+    var out: string = "HTTP/1.1 200 OK\r\n";
+    out = out + "Content-Type: text/event-stream\r\n";
+    out = out + "Cache-Control: no-cache\r\n";
+    out = out + "Connection: keep-alive\r\n\r\n";
+    socket_write(conn, out)
+}
+
+// Emite un evento SSE: "data: <texto>\n\n".
+pub fn sse_event(conn: int, data: string) -> Result<int, string> {
+    socket_write(conn, "data: " + data + "\n\n")
+}
+
+// --- El bucle del servidor (concurrente: una fibra por conexión) ---
+
+// Atiende UNA conexión: lee la petición y se la pasa al handler (que controla la conexión). Cierra al
+// terminar. Lo usa serve_raw; cada conexión corre en su propia fibra.
+fn atender(conn: int, handler: fn(Request, int)) {
+    match (read_request(conn)) {
+        Result.Ok(req) => { handler(req, conn); },
+        Result.Err(e) => { eprint("petición: " + e); },
+    }
+    close(conn);
+}
+
+// Servidor de bajo nivel: el handler recibe la petición Y la conexión (para responder o hacer streaming
+// SSE). Bucle infinito; cada conexión en su fibra. **Solo VM.**
+pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<int, string> {
+    match (tcp_listen(host, port)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(srv) => {
+            print("escuchando en el puerto " + to_string(local_port(srv)));
+            var seguir: bool = true;
+            while (seguir) {
+                match (tcp_accept(srv)) {
+                    Result.Ok(conn) => { spawn(fn() { atender(conn, handler) }); },
+                    Result.Err(e) => { eprint("aceptar: " + e); seguir = false; },
+                }
+            }
+            close(srv);
+            Result.Ok(0)
+        },
+    }
+}
+
+// Servidor ergonómico: el handler es petición → respuesta; serve envía la respuesta y cierra. Se define
+// sobre serve_raw. **Solo VM.**
+pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Result<int, string> {
+    serve_raw(host, port, fn(req: Request, conn: int) {
+        match (send_response(conn, handler(req))) {
+            Result.Ok(_) => {},
+            Result.Err(e) => { eprint("respuesta: " + e); },
+        }
+    })
+}

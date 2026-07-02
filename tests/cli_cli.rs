@@ -725,3 +725,35 @@ fn paquete_net_jwt_via_path_dep() {
     assert!(out.contains("{\"sub\":\"ada\"}"), "jwt_verify con la clave correcta → Ok(payload)\n{out}");
     assert!(out.contains("rechazado"), "jwt_verify con clave mala → Err\n{out}");
 }
+
+#[test]
+fn paquete_net_hpack_roundtrip() {
+    // M40.8c: el grupo HTTP del paquete net. hpack (HPACK) es determinista: codifica cabeceras y las
+    // decodifica de vuelta. Con deps INTERNAS del paquete (http2_client → net/http2 + net/hpack).
+    let repo = env!("CARGO_MANIFEST_DIR");
+    let base = tmp("net_hpack");
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(
+        base.join("ray.toml"),
+        format!("[package]\nname = \"h2\"\nversion = \"0.1.0\"\n\n[dependencies]\nnet = \"path:{repo}/packages/net\"\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("src/main.ray"),
+        "import net/hpack;\n\
+         fn main() -> int {\n\
+         \x20 let enc = hpack.new_hpack();\n\
+         \x20 let hs = [hpack.header(\":method\", \"GET\"), hpack.header(\":path\", \"/\")];\n\
+         \x20 let blob = hpack.encode(enc, hs);\n\
+         \x20 let dec = hpack.new_hpack();\n\
+         \x20 match (hpack.decode(dec, blob)) {\n\
+         \x20   Result.Ok(out) => { print(len(out)); }, Result.Err(e) => { print(\"err\"); },\n\
+         \x20 }\n\
+         \x20 0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run"]);
+    assert_eq!(code, 0, "run con net/hpack debe salir 0\n{err}");
+    assert!(out.contains("2"), "hpack encode+decode roundtrip de 2 cabeceras\n{out}");
+}

@@ -43,5 +43,15 @@ fn main() -> int {
   `std/sha256` + `std/base64`.
 - **`net/cookie`** — parseo y serialización de cookies HTTP. Sobre `std/url`.
 
-(Más módulos —HTTP, HTTP/2, WebSocket, DNS, UDP, Redis, Postgres, gRPC, OAuth2…— se irán añadiendo; los
-que dependen de sockets vivos se prueban con servidores de juguete, no en el oráculo.)
+### HTTP y HTTP/2
+
+- **`net/http`** — cliente/servidor HTTP/1.1 en `bytes` (habla `https://` vía el TLS del runtime). Sobre
+  `std/inflate` (gunzip).
+- **`net/http2`** — framing HTTP/2 (preface, SETTINGS, frames). Hoja.
+- **`net/hpack`** — compresión de cabeceras HPACK (RFC 7541): `header`, `encode`, `decode` + tabla
+  dinámica. Determinista. Hoja.
+- **`net/http2_client`** — cliente HTTP/2 sobre `net/http2` + `net/hpack`.
+- **`net/grpc_client`** — cliente gRPC sobre `net/http2` + `net/hpack` + `std/protobuf`.
+
+(Más módulos —WebSocket, DNS, UDP, Redis, Postgres, OAuth2, observabilidad…— se irán añadiendo; los que
+dependen de sockets vivos se prueban con servidores de juguete, no en el oráculo.)

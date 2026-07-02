@@ -1,0 +1,133 @@
+// Cliente gRPC unario escrito EN raylang (cierra M31 / el diferido de M26+M25). gRPC = HTTP/2 +
+// mensajes protobuf gRPC-framed en los frames DATA. Apila TODO lo construido: TLS+ALPN h2 (M31.2a),
+// framing HTTP/2 (`http2.ray`) + HPACK (`hpack.ray`, M26), y protobuf + grpc_frame (`protobuf.ray`, M25).
+//
+// Una llamada unaria: HEADERS (POST /paquete.Servicio/Metodo, content-type application/grpc, te
+// trailers) + DATA (grpc_frame(mensaje)) con END_STREAM; la respuesta trae HEADERS (:status) + DATA
+// (mensaje gRPC-framed) + un HEADERS de **trailers** con `grpc-status`. Importable:
+//   from grpc_client import grpc_call, GrpcResponse;
+
+from net/http2 import preface, settings_empty, settings_ack, encode_frame, parse_frame, frame_size,
+     ft_settings, ft_headers, ft_data, ft_goaway, fl_ack, fl_end_stream, fl_end_headers, Http2Frame;
+from net/hpack import new_hpack, encode, decode, header, HEntry;
+from std/protobuf import grpc_frame, grpc_unframe;
+
+// La respuesta de una llamada gRPC: el mensaje (bytes protobuf) y el `grpc-status` (0 = OK).
+pub struct GrpcResponse { message: bytes, grpc_status: int }
+
+// Extrae un header (por nombre) de una lista decodificada; "" si no está.
+fn find_header(hs: [HEntry], name: string) -> string {
+    var v = "";
+    var i = 0;
+    while (i < len(hs)) {
+        if (hs[i].name == name) {
+            v = hs[i].value;
+        }
+        i = i + 1;
+    }
+    v
+}
+
+// Hace una llamada gRPC unaria a `host:port` con la ruta `/paquete.Servicio/Metodo` y el `mensaje`
+// protobuf ya serializado. Devuelve el mensaje de respuesta + el grpc-status.
+pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Result<GrpcResponse, string> {
+    let h = match (tls_connect_h2(host, port)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => { return Result.Err(e); },
+    };
+
+    // HEADERS de la petición (sin END_STREAM: sigue un DATA con el mensaje).
+    let enc = new_hpack();
+    let reqhdrs = [
+        header(":method", "POST"),
+        header(":path", path),
+        header(":scheme", "https"),
+        header(":authority", host),
+        header("te", "trailers"),
+        header("content-type", "application/grpc"),
+        header("user-agent", "grpc-raylang/1"),
+    ];
+    let block = encode(enc, reqhdrs);
+    let hframe = encode_frame(ft_headers(), fl_end_headers(), 1, block);
+    let dframe = encode_frame(ft_data(), fl_end_stream(), 1, grpc_frame(mensaje));
+    match (socket_write_bytes(h, preface() + settings_empty() + hframe + dframe)) {
+        Result.Ok(n) => { },
+        Result.Err(e) => { close(h); return Result.Err(e); },
+    }
+
+    // Respuesta.
+    let dec = new_hpack();
+    var buf = b"";
+    var body = b"";        // acumulado de los DATA (mensaje gRPC-framed)
+    var status = 0;
+    var grpc_status = 0;
+    var tuvo_grpc_status = false;
+    var done = false;
+    while (!done) {
+        match (socket_read_bytes(h)) {
+            Result.Ok(chunk) => {
+                if (len(chunk) == 0) { done = true; }
+                buf = buf + chunk;
+            },
+            Result.Err(e) => { close(h); return Result.Err(e); },
+        }
+        while (frame_size(buf) > 0 && len(buf) >= frame_size(buf)) {
+            let fsz = frame_size(buf);
+            let fbytes = sub_bytes(buf, 0, fsz);
+            buf = sub_bytes(buf, fsz, len(buf));
+            match (parse_frame(fbytes)) {
+                Result.Ok(fr) => {
+                    if (fr.ftype == ft_settings()) {
+                        if ((fr.flags & fl_ack()) == 0) {
+                            match (socket_write_bytes(h, settings_ack())) {
+                                Result.Ok(x) => { },
+                                Result.Err(e) => { close(h); return Result.Err(e); },
+                            }
+                        }
+                    } else if (fr.ftype == ft_headers()) {
+                        // Puede ser el HEADERS inicial (:status) o el de trailers (grpc-status).
+                        match (decode(dec, fr.payload)) {
+                            Result.Ok(hs) => {
+                                let st = find_header(hs, ":status");
+                                if (st != "") {
+                                    match (parse_int(st)) {
+                                        Option.Some(n) => { status = n; },
+                                        Option.None => { status = 0; },
+                                    }
+                                }
+                                let gs = find_header(hs, "grpc-status");
+                                if (gs != "") {
+                                    tuvo_grpc_status = true;
+                                    match (parse_int(gs)) {
+                                        Option.Some(n) => { grpc_status = n; },
+                                        Option.None => { grpc_status = 0; },
+                                    }
+                                }
+                            },
+                            Result.Err(e) => { close(h); return Result.Err("HPACK: " + e); },
+                        }
+                    } else if (fr.ftype == ft_data()) {
+                        body = body + fr.payload;
+                    } else if (fr.ftype == ft_goaway()) {
+                        close(h);
+                        return Result.Err("el servidor envió GOAWAY");
+                    }
+                    if (fr.stream_id == 1 && (fr.flags & fl_end_stream()) != 0) {
+                        done = true;
+                    }
+                },
+                Result.Err(e) => { close(h); return Result.Err(e); },
+            }
+        }
+    }
+    close(h);
+
+    if (status != 200) {
+        return Result.Err("HTTP/2 status " + to_string(status));
+    }
+    // Desenmarca el mensaje gRPC de la respuesta.
+    match (grpc_unframe(body)) {
+        Result.Ok(msg) => Result.Ok(GrpcResponse { message: msg, grpc_status: grpc_status }),
+        Result.Err(e) => Result.Err("grpc: " + e),
+    }
+}

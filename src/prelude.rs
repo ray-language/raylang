@@ -102,6 +102,32 @@ trait Iterator<T> {
             }
         } }
     }
+    // Perezoso: descarta los primeros `n` elementos y entrega el resto. El descarte ocurre en la
+    // primera llamada a `next` (el contador capturado se agota una vez).
+    fn skip(self, n: int) -> Iter<T> {
+        var saltar = n;
+        Iter { paso: fn() -> Option<T> {
+            while (saltar > 0) {
+                saltar = saltar - 1;
+                self.next();
+            }
+            self.next()
+        } }
+    }
+    // Perezoso: empareja este iterador con `otra` posición a posición en tuplas `(T, U)`; se agota
+    // cuando cualquiera de los dos lo hace. `otra` ha de ser un `Iter<U>` (los adaptadores devuelven
+    // `Iter`; un iterador de usuario se convierte con `.map(...)` o similar). Método genérico sobre `U`.
+    fn zip<U>(self, otra: Iter<U>) -> Iter<(T, U)> {
+        Iter { paso: fn() -> Option<(T, U)> {
+            match (self.next()) {
+                Option.Some(a) => match (otra.next()) {
+                    Option.Some(b) => Option.Some((a, b)),
+                    Option.None => Option.None,
+                },
+                Option.None => Option.None,
+            }
+        } }
+    }
     // Perezoso: empareja cada elemento con su índice (0, 1, 2, …) en una tupla `(int, T)`. Consúmelo
     // destructurando: `for par in it.enumerate() { let (i, x) = par; … }`.
     fn enumerate(self) -> Iter<(int, T)> {
@@ -183,6 +209,13 @@ fn range(desde: int, hasta: int) -> Iter<int> {
             Option.None
         }
     } }
+}
+
+// TERMINAL: suma los elementos de un iterador de enteros (`it.sum()` vía UFCS). Es función libre —no
+// método del trait— porque un `sum` genérico necesitaría un cero y un `+` del tipo del elemento, que
+// raylang no expresa aún; se especializa a `Iter<int>` (lo más común).
+fn sum(it: Iter<int>) -> int {
+    it.fold(0, fn(a: int, x: int) -> int { a + x })
 }
 
 // Traits de sobrecarga de operadores (M28.1): un tipo que implemente estos traits puede usar los

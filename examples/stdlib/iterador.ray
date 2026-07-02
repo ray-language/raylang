@@ -117,5 +117,16 @@ fn main() -> int {
     }
     print(etiquetas); // "0a 1b 2c "
 
+    // `.skip(n)` descarta los primeros `n`; `.zip(otra)` empareja dos iteradores (se agota con el más
+    // corto); `.sum()` (función libre sobre Iter<int>, vía UFCS) suma un iterador de enteros.
+    print(sum(range(1, 101)));               // 5050
+    print(range(0, 100).skip(97).sum());     // 97+98+99 = 294
+
+    var acopladas = "";
+    for (n, nombre) in range(1, 100).zip(["uno", "dos", "tres"].iter()) {
+        acopladas = acopladas + to_string(n) + ":" + nombre + " ";
+    }
+    print(acopladas); // "1:uno 2:dos 3:tres "
+
     suma
 }

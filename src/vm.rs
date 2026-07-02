@@ -2795,6 +2795,21 @@ mod tests {
             }"); // a=1+4+9+16=30, b=0*10+1*20+2*30=80, c=(0*100+5)+(1*100+6)+(2*100+7)=5+106+207=318
     }
 
+    /// M40.2f: `.skip(n)` (descarta los primeros n), `.zip(otra)` (pares `(T, U)`, se agota con el
+    /// más corto; método genérico) y `.sum()` (terminal, función libre sobre `Iter<int>` vía UFCS).
+    /// Oráculo VM↔intérprete: zip con tipos distintos + patrón de tupla, y sum encadenado.
+    #[test]
+    fn skip_zip_sum_oraculo() {
+        oracle_program("\
+            fn main() -> int {\n\
+            \x20 let a = sum(range(0, 100).skip(5).take(3));\n\
+            \x20 var b = 0;\n\
+            \x20 for (n, c) in range(1, 50).zip([\"a\", \"bb\", \"ccc\"].iter()) { b = b + n * len(c); }\n\
+            \x20 let d = range(1, 6).map(fn(n: int) -> int { n * n }).sum();\n\
+            \x20 a * 100000 + b * 100 + d\n\
+            }"); // a=5+6+7=18, b=1*1+2*2+3*3=14, d=55 → 18*100000+14*100+55
+    }
+
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
     /// punto seguro) y exige que el resultado coincida con el intérprete. Es la
     /// prueba clave del GC: si una raíz faltara, un valor vivo se liberaría y el

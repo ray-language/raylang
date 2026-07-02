@@ -5286,6 +5286,18 @@ varios huecos **preexistentes** en el manejo de `Type::Tuple`:
   cada nombre a su componente (como el caso `Map`), y ambos motores destructuran el elemento-tupla por
   posición en la bajada de `ForIter::Iter`.
 
-Oráculo `take_enumerate_oraculo`. Diferido: `.skip()`/`.zip()`/`.sum()`; re-fundar el `map`/`filter`/
-`fold` eager sobre `Iterator`; bounds en métodos genéricos cruzando módulos. Luego `Hash` derivable +
-Set/deque/string-builder; `std/` + raydoc.
+Oráculo `take_enumerate_oraculo`.
+
+#### M40.2f — `.skip()`/`.zip()`/`.sum()`
+
+Completan el juego de adaptadores. **Puro prelude** (reusan la maquinaria de M40.2c–e). `.skip(n)`
+(perezoso, descarta los primeros `n` en la primera llamada a `next`) y `.zip(otra: Iter<U>)` (método
+genérico, empareja posición a posición en `(T, U)`, se agota con el más corto — reusa la inferencia
+sobre tuplas y el patrón-de-tupla-en-`for` de M40.2e) son métodos del trait. **`sum`** va como
+**función libre** `sum(it: Iter<int>) -> int` (UFCS `it.sum()`), NO método del trait: un `sum` genérico
+necesitaría un cero y un `+` del tipo del elemento (un trait `Zero`/`Sum`), que raylang no expresa aún
+→ se especializa a `Iter<int>` (lo más común). `zip` exige que `otra` sea un `Iter<U>` (los adaptadores
+lo devuelven; un iterador de usuario se convierte con `.map(...)`). Oráculo `skip_zip_sum_oraculo`.
+Diferido: `sum` genérico (requiere `Zero`/`Sum`); re-fundar el `map`/`filter`/`fold` eager sobre
+`Iterator`; bounds en métodos genéricos cruzando módulos. Luego `Hash` derivable + Set/deque/
+string-builder; `std/` + raydoc.

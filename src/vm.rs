@@ -39,6 +39,19 @@ pub fn run_program(program: &CompiledProgram) -> Result<Value, RuntimeError> {
     Ok(to_value(&vm.heap, &program.enums, &result))
 }
 
+/// Como [`run_program`], pero con un **límite de instrucciones** (fuel, M42.1): si la ejecución supera
+/// `fuel` instrucciones, aborta con un error en vez de correr sin fin. Para embeber raylang como
+/// lenguaje de scripts confinado (un bucle infinito o una entrada maliciosa no cuelgan al anfitrión).
+/// `None` = sin límite (idéntico a `run_program`).
+pub fn run_program_con_limite(program: &CompiledProgram, fuel: Option<u64>) -> Result<Value, RuntimeError> {
+    let mut vm = Vm::new(program);
+    if let Some(f) = fuel {
+        vm.fuel = f;
+    }
+    let result = vm.run()?;
+    Ok(to_value(&vm.heap, &program.enums, &result))
+}
+
 /// Ejecuta un `Chunk` suelto (una expresión compilada). Lo envuelve como una
 /// función sin parámetros ni locales. Se usa en los tests de expresiones.
 pub fn run(chunk: &Chunk) -> Result<Value, RuntimeError> {
@@ -160,6 +173,11 @@ struct Vm<'a> {
     /// asignar/liberar uno por llamada (millones en recursión), reciclamos los de los marcos que retornan.
     /// NO es raíz del GC (sus contenidos son basura entre reciclar y reusar; `new_locals` los reconstruye).
     locals_pool: Vec<Vec<Local>>,
+    /// M42.1: **fuel** — presupuesto de instrucciones restante (límite de recursos para embeber raylang
+    /// como lenguaje de scripts confinado). Decrece una por instrucción; al llegar a 0 se aborta con un
+    /// error limpio. `u64::MAX` = **sin límite** (el default): nunca se agota en la práctica, así que el
+    /// coste es un decremento + comparación por instrucción, sin ramas.
+    fuel: u64,
 }
 
 impl<'a> Vm<'a> {
@@ -176,6 +194,7 @@ impl<'a> Vm<'a> {
             current_task: None,
             scopes: Vec::new(),
             locals_pool: Vec::new(),
+            fuel: u64::MAX, // sin límite por defecto
         }
     }
 
@@ -199,6 +218,14 @@ impl<'a> Vm<'a> {
             let fi = self.frames.len() - 1;
             let func = self.frames[fi].function;
             let ip = self.frames[fi].ip;
+
+            // M42.1: fuel. Sin límite (`u64::MAX`) nunca dispara; con límite, aborta al agotarse. La
+            // posición es la de la instrucción en curso (para el diagnóstico).
+            if self.fuel == 0 {
+                let (l, c) = program.functions[func].chunk.lines.get(ip).copied().unwrap_or((0, 0));
+                return Err(runtime_error(l, c, "límite de instrucciones agotado (fuel)"));
+            }
+            self.fuel -= 1;
 
             // Robustez: si se acabó el chunk sin Return (no debería), retorna unit.
             if ip >= program.functions[func].chunk.code.len() {
@@ -3189,6 +3216,26 @@ mod tests {
         crate::interpreter::run(&prog).expect("interp ok");
         let compiled = compile_program(&prog).expect("compila");
         run_program(&compiled).expect("vm ok");
+    }
+
+    /// M42.1: **fuel** — límite de instrucciones de la VM. Un bucle infinito aborta con fuel finito
+    /// (no cuelga); un programa que termina dentro del presupuesto da su resultado normal.
+    #[test]
+    fn fuel_limita_la_ejecucion() {
+        fn compilar(src: &str) -> CompiledProgram {
+            let tokens = crate::lexer::lex(src).expect("lex ok");
+            let mut prog = crate::parser::parse(tokens).expect("parse ok");
+            crate::checker::check(&mut prog).expect("check ok");
+            compile_program(&prog).expect("compila")
+        }
+        // Bucle infinito: con fuel finito, aborta (sin fuel colgaría, así que no se prueba sin límite).
+        let inf = compilar("fn main() -> int { var i = 0; while (true) { i = i + 1; } 0 }");
+        let err = run_program_con_limite(&inf, Some(50_000)).expect_err("debe agotar el fuel");
+        assert!(err.msg.contains("fuel"), "mensaje de fuel: {}", err.msg);
+        // Un programa que termina dentro del presupuesto da el mismo resultado que sin límite.
+        let ok = compilar("fn main() -> int { var s = 0; var i = 0; while (i < 100) { s = s + i; i = i + 1; } s }");
+        assert_eq!(run_program_con_limite(&ok, Some(1_000_000)).unwrap(), Value::Int(4950));
+        assert_eq!(run_program_con_limite(&ok, None).unwrap(), Value::Int(4950)); // None = sin límite
     }
 
     #[test]

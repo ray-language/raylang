@@ -5692,3 +5692,32 @@ falta.
 y APIs con estado vía handles opacos —anchura de enteros correcta (`int` 32 / `u64` 64) + el tipo `ptr`—
 (41.4). Lo diferido (callbacks, structs por valor, variádicas) son piezas especializadas, no imprescindibles
 para la 1.0. Siguiente: **M42 — endurecimiento de seguridad**.
+
+## 44. M42 — endurecimiento de seguridad (arco D)
+
+El último arco antes de la 1.0. Cuatro frentes: política de overflow, cripto de producción, límites de
+recursos y auditoría/fuzzing.
+
+**Overflow de `int` (ya resuelto).** El primer ítem del plan ya estaba hecho: el desbordamiento de `int`
+es **error de ejecución** (`checked_*` en ambos motores y ambos modos —debug y release—, no UB), documentado
+en SPEC §8 y con el oráculo `overflow_aritmetico_oraculo`. Los `u8/u32/u64` envuelven por diseño.
+
+**Auditoría de los `unsafe`** (arranque de M42). 12 bloques: 8 en `src/ffi.rs` (FFI) + 4 en `src/poll.rs`
+(epoll/kqueue). Todos **sound**: los de FFI por el contrato de la frontera (el `transmute` confía en la
+firma declarada —responsabilidad del usuario, la única zona insegura del lenguaje—; `CStr::from_ptr` solo
+sobre punteros no-NULL con la `CString` origen viva; `dlopen`/`dlsym` con punteros de `CString`s vivas).
+Se documentan las invariantes SAFETY del bloque `extern "C"` y del `impl Send for Handle`.
+
+### 44.1 M42.1 — fuel (límite de instrucciones de la VM)
+
+Para embeber raylang como **lenguaje de scripts confinado** (un nicho natural para un runtime ligero): un
+bucle infinito o una entrada maliciosa **no deben colgar al anfitrión**. La VM gana un contador `fuel`
+(u64) que decrece una unidad por instrucción; al llegar a 0 aborta con "límite de instrucciones agotado
+(fuel)". **Coste casi nulo cuando está desactivado**: el default es `u64::MAX` (sin límite), que nunca se
+agota en la práctica → un decremento + comparación por instrucción, sin ramas de "¿activado?". Es
+**solo de la VM** (el motor de producto), como la concurrencia: el intérprete es el oráculo de desarrollo,
+no un sandbox. API `vm::run_program_con_limite(prog, Option<u64>)`; CLI `ray run --fuel N archivo.ray`
+(`--fuel` con `--interp` es error: es un límite de la VM). Tests: `fuel_limita_la_ejecucion` (unit: un
+bucle infinito aborta, un programa que termina da su resultado) + `fuel_aborta_un_bucle_infinito`
+(integración: exit 70). Diferido: **tope de heap** (límite de memoria, el otro recurso), cripto de
+producción vía `ring`, fuzzing continuo en CI + `cargo audit`.

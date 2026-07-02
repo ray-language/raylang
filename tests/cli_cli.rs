@@ -815,3 +815,19 @@ fn paquete_net_observabilidad() {
     assert!(out.contains("2021-01-01T00:00:00Z"), "time formatea el epoch\n{out}");
     assert!(out.contains("hits 2"), "metrics cuenta y renderiza Prometheus\n{out}");
 }
+
+#[test]
+fn fuel_aborta_un_bucle_infinito() {
+    // M42.1: `ray run --fuel N` limita las instrucciones de la VM (para embeber raylang confinado).
+    // Un bucle infinito aborta en vez de colgar; el error lo dice y el código de salida es 70.
+    let base = tmp("fuel");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "fn main() -> int { var i = 0; while (true) { i = i + 1; } 0 }\n",
+    )
+    .unwrap();
+    let (_out, err, code) = ray(&base, &["run", "--fuel", "200000", archivo.to_str().unwrap()]);
+    assert_eq!(code, 70, "un bucle infinito con fuel finito aborta (EX_SOFTWARE)\n{err}");
+    assert!(err.contains("fuel"), "el error menciona el límite de instrucciones\n{err}");
+}

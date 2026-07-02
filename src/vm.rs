@@ -2613,6 +2613,25 @@ mod tests {
             fn main() -> int { f(Option.Some(5)) + f(Option.None) }"); // 2
     }
 
+    /// M40.1b: `if let <patrón> = <expr> { … } else { … }` — azúcar del parser a un match de dos
+    /// brazos. Oráculo VM↔intérprete: expresión (con else) y statement (sin else).
+    #[test]
+    fn if_let_oraculo() {
+        // Expresión: `if let Some(v) = o { v } else { def }`.
+        oracle_program("\
+            fn vo(o: Option<int>, def: int) -> int { if let Option.Some(v) = o { v } else { def } }\n\
+            fn main() -> int { vo(Option.Some(42), 0) * 100 + vo(Option.None, 7) }"); // 4207
+        // Statement (sin else): solo actúa si el patrón casa.
+        oracle_program("\
+            fn main() -> int {\n\
+            \x20 var s = 0;\n\
+            \x20 if let Option.Some(n) = Option.Some(10) { s = s + n; }\n\
+            \x20 let nada: Option<int> = Option.None;\n\
+            \x20 if let Option.Some(n) = nada { s = s + 1000; }\n\
+            \x20 s\n\
+            }"); // 10
+    }
+
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
     /// punto seguro) y exige que el resultado coincida con el intérprete. Es la
     /// prueba clave del GC: si una raíz faltara, un valor vivo se liberaría y el

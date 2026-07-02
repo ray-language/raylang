@@ -5107,4 +5107,14 @@ patrón en ámbito) evalúa a `true`; si no, se sigue al siguiente brazo.
 - **fmt**: renderiza `patrón if <cond> => …` (antes lo habría descartado — bug lossy corregido).
 
 Oráculo VM↔intérprete (`guardas_oraculo`). SPEC §5 actualizado. Runtime: cero opcodes nuevos.
-Siguiente: **M40.1b** (`if let`), **M40.1c** (patrones anidados).
+
+### 42.2 M40.1b — `if let`
+
+`if let patrón = expr { then } [else …]`. **Azúcar puro del parser** (como pipelines/interpolación):
+se desazucara a `match (expr) { patrón => { then }, _ => else }` (sin `else`, el brazo `_` es un bloque
+vacío → unit). El parser detecta `if` seguido de `let` (`if_let_expr`); el escrutinio va sin paréntesis
+hasta el `{` (con `no_struct_lit`, como la cabecera de un `for`); `else if` encadena poniendo la
+expresión `if` en el brazo `_`. El patrón usa la **misma gramática que el match** (variantes
+calificadas: `if let Option.Some(v) = o`). Checker, motores y fmt lo ven como un `match` corriente
+(fmt lo reimprime como match, lossy como el resto del azúcar). Oráculo `if_let_oraculo`. Cero cambios
+fuera del parser. Siguiente: **M40.1c** (patrones anidados).

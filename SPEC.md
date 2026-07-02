@@ -197,6 +197,9 @@ Literales (§1), identificadores, `(expr)` (agrupación), tuplas `(a, b, …)`, 
 - **`if (cond) bloque [else (bloque | if …)]`** es **expresión**: con `else`, ambas ramas deben
   converger en tipo (una rama que **diverge** —`return`, `panic`— cede el tipo a la otra); sin
   `else`, unit.
+- **`if let patrón = expr bloque [else (bloque | if …)]`** (M40.1b) es azúcar de **`match (expr) {
+  patrón => bloque, _ => else }`** (sin `else`, el brazo `_` es unit). El patrón usa la misma
+  gramática que el match (variantes calificadas). El escrutinio va sin paréntesis, hasta el `{`.
 - **`match (expr) { patrón [if guarda] => (expr | bloque), … }`** es expresión; brazos convergentes
   (misma regla de divergencia; todos divergentes → unit). **Exhaustivo** sobre enums. Patrones
   (planos): `Enum.Variante(bindings…)` (también `M.Enum.Variante`), binding suelto, `_`. **Guardas**

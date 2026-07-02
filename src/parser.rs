@@ -1358,6 +1358,11 @@ impl Parser {
     /// ifExpr = 'if' '(' expression ')' block [ 'else' ( block | ifExpr ) ]
     fn if_expr(&mut self) -> Result<Expr, ParseError> {
         let kw = self.expect(&TokenKind::If, "'if'")?;
+        // M40.1b: `if let <patrón> = <expr> { … } [else …]`. Azúcar puro → un `match` de dos brazos
+        // (`patrón => {then}`, `_ => {else}`); el checker/los motores/fmt lo tratan como match.
+        if self.eat(&TokenKind::Let) {
+            return self.if_let_expr(kw.line, kw.col);
+        }
         self.expect(&TokenKind::LParen, "'(' tras 'if'")?;
         let cond = self.expression()?;
         self.expect(&TokenKind::RParen, "')' tras la condición")?;
@@ -1380,6 +1385,52 @@ impl Parser {
             kind: ExprKind::If { cond: Box::new(cond), then_branch, else_branch },
             line: kw.line,
             col: kw.col,
+        })
+    }
+
+    /// `if let <patrón> = <expr> <bloque> [else (<bloque> | if…)]` (M40.1b), tras consumir `if let`.
+    /// Se desazucara a `match (<expr>) { <patrón> => <bloque>, _ => <else | {}> }`. El patrón usa la
+    /// misma gramática que el match (variantes **calificadas**: `if let Option.Some(v) = o { … }`).
+    fn if_let_expr(&mut self, line: usize, col: usize) -> Result<Expr, ParseError> {
+        let pattern = self.pattern()?;
+        self.expect(&TokenKind::Eq, "'=' en 'if let <patrón> = <expr>'")?;
+        // El escrutinio va sin paréntesis hasta el `{`; `no_struct_lit` evita tomar `Nombre {` como
+        // literal de struct (el `{` abre el bloque del `then`), igual que en la cabecera de un `for`.
+        let saved = self.no_struct_lit;
+        self.no_struct_lit = true;
+        let scrut = self.expression();
+        self.no_struct_lit = saved;
+        let scrut = scrut?;
+        let then_block = self.block()?;
+        // El cuerpo del brazo `_`: el `else` (bloque o `else if` encadenado), o unit (bloque vacío).
+        let else_body = if self.eat(&TokenKind::Else) {
+            if self.check(&TokenKind::If) {
+                self.if_expr()? // `else if …` es una expresión `if`/`if let`; va tal cual al brazo `_`.
+            } else {
+                let b = self.block()?;
+                Expr { line: b.line, col: b.col, kind: ExprKind::Block(b) }
+            }
+        } else {
+            Expr { line, col, kind: ExprKind::Block(Block { statements: Vec::new(), tail: None, line, col }) }
+        };
+        let arm_then = MatchArm {
+            pattern,
+            guard: None,
+            body: Expr { line: then_block.line, col: then_block.col, kind: ExprKind::Block(then_block) },
+            line,
+            col,
+        };
+        let arm_else = MatchArm {
+            pattern: Pattern { kind: PatternKind::Wildcard, line, col },
+            guard: None,
+            body: else_body,
+            line,
+            col,
+        };
+        Ok(Expr {
+            kind: ExprKind::Match { scrutinee: Box::new(scrut), arms: vec![arm_then, arm_else] },
+            line,
+            col,
         })
     }
 

@@ -268,3 +268,20 @@ fn lo_local_tapa_a_la_dependencia_del_mismo_nombre() {
     assert!(out.contains("1") && !out.contains("999"), "lo local tapa a la dependencia\n{out}\n{err}");
     assert_eq!(code, 0);
 }
+
+#[test]
+fn doc_genera_markdown_de_la_superficie_publica() {
+    let base = tmp("doc");
+    let archivo = base.join("lib.ray");
+    std::fs::write(
+        &archivo,
+        "/// Suma dos enteros.\npub fn suma(a: int, b: int) -> int { a + b }\n\nfn interna() -> int { 0 }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["doc", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "doc debe salir 0\n{err}");
+    assert!(out.contains("# lib.ray"), "encabezado con el nombre\n{out}");
+    assert!(out.contains("### `fn suma(a: int, b: int) -> int`"), "firma\n{out}");
+    assert!(out.contains("Suma dos enteros."), "el comentario /// se documenta\n{out}");
+    assert!(!out.contains("interna"), "los ítems privados no se documentan\n{out}");
+}

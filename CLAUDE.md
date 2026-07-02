@@ -28,7 +28,7 @@ expresiones, sintaxis de llaves.
   se acepta por compatibilidad (ya es el default).
 - **CLI de subcomandos (M39a)**: el binario de producto es **`ray`** (`raylang` es un alias del
   mismo binario; la lógica vive en `src/cli.rs`, dos envoltorios finos `src/main.rs`+`src/bin/ray.rs`).
-  Subcomandos: `ray new/run/build/test/fmt/lsp/repl/version/help`. La interfaz legada por flags
+  Subcomandos: `ray new/run/build/test/fmt/doc/lsp/repl/version/help` (`doc` = raydoc, M40.4). La interfaz legada por flags
   (`--vm`/`--interp`/`--test`/`--fmt`/`--lsp`/`--repl`/`<archivo>`) se conserva (los tests la usan).
 - REPL interactivo (M8.2): `cargo run --quiet` (sin archivo) o `--repl` (sobre la VM).
 - Binario release: `cargo build --release` → `./target/release/raylang prog.ray`

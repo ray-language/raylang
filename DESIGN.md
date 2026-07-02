@@ -5362,4 +5362,17 @@ vacíos genéricos (`deque_new`) reusan la inferencia bidireccional de M40.3b + 
 
 Oráculo `sb_deque_oraculo`. Ejemplo `examples/stdlib/builder_deque.ray`. **M40.3 (colecciones: Hash +
 Set + StringBuilder + Deque) COMPLETO.** Diferido: HashMap de usuario, resize del Set, `[]` inline en
-campo genérico. Siguiente sub-área de M40: `std/` (promover `examples/` a árbol versionado) + raydoc.
+campo genérico.
+
+### 42.7 M40.4 — `std/` + raydoc
+
+#### M40.4a — raydoc (`ray doc`)
+
+Generador de **documentación Markdown** a partir de fuente raylang. **Cliente del front-end** (como
+`fmt`/`lsp`, `src/raydoc.rs`): lexer+parser para la lista de ítems y sus **firmas**, y un escaneo del
+fuente para los **comentarios de documentación** `///` que preceden a cada ítem (contiguos, unidos en un
+párrafo). No toca el núcleo. Documenta la **superficie pública** (ítems `pub`) si la hay; si no (un
+programa suelto), todos. Agrupa por Traits/Structs/Enums/Funciones, con la firma reconstruida del AST
+(genéricos + bounds; el receptor `self` sin tipo). Nuevo subcomando `ray doc <archivo>` (`src/cli.rs`),
+en paralelo a `ray fmt`. Tests unitarios (`raydoc.rs`) + integración (`cli_cli.rs`). Diferido: doc de
+proyecto multi-archivo, salida HTML, enlaces cruzados. Siguiente: **M40.4b** — el árbol `std/`.

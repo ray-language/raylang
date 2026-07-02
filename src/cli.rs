@@ -50,6 +50,7 @@ fn run() {
         Some("test") => cmd_test_sub(&rest[1..]),
         Some("fetch") => cmd_fetch(&rest[1..]),
         Some("fmt") => cmd_fmt(&rest[1..]),
+        Some("doc") => cmd_doc(&rest[1..]),
         Some("lsp") => lsp::run(),
         Some("repl") | None => repl::run(),
         Some("version") | Some("--version") | Some("-V") => {
@@ -74,6 +75,7 @@ Uso: ray <subcomando> [opciones]
   test [archivo]    corre las funciones @test [filtro]
   fetch             descarga las dependencias de ray.toml a .ray-deps/
   fmt <archivo>     imprime la versión canónica por stdout
+  doc <archivo>     genera la documentación Markdown de su superficie pública
   lsp               arranca el Language Server
   repl              REPL interactivo
   version           versión del lenguaje
@@ -186,6 +188,25 @@ fn cmd_fmt(args: &[String]) {
         process::exit(64);
     };
     formatear(path);
+}
+
+// M40.4: `ray doc <archivo>` imprime la documentación Markdown de la superficie pública del archivo.
+fn cmd_doc(args: &[String]) {
+    let Some(path) = args.first() else {
+        eprintln!("uso: ray doc <archivo>");
+        process::exit(64);
+    };
+    let titulo = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path);
+    match crate::raydoc::generate(&leer_fuente(path), titulo) {
+        Ok(md) => print!("{md}"),
+        Err(e) => {
+            eprintln!("error de documentación: {e}");
+            process::exit(65);
+        }
+    }
 }
 
 // ── Modo legado (compatibilidad con la interfaz por flags) ───────────────────────────

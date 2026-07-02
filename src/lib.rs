@@ -23,6 +23,7 @@ pub mod interpreter;
 pub mod lexer;
 pub mod loader;
 pub mod lsp;
+pub mod raydoc;
 pub mod manifest;
 pub mod parser;
 pub mod poll;

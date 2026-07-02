@@ -1,0 +1,87 @@
+// std/math (M40.4b) — utilidades enteras que complementan los builtins matemáticos (sqrt/pow/abs/
+// min/max/…). Todo `pub`: se importa con `import std/math;` y se usa calificado (`math.gcd(12, 18)`).
+
+/// Valor absoluto de `x`.
+pub fn iabs(x: int) -> int {
+    if (x < 0) { 0 - x } else { x }
+}
+
+/// Signo de `x`: -1 si es negativo, 0 si es cero, 1 si es positivo.
+pub fn sign(x: int) -> int {
+    if (x < 0) { 0 - 1 } else { if (x > 0) { 1 } else { 0 } }
+}
+
+/// Restringe `x` al rango cerrado `[lo, hi]` (se asume `lo <= hi`).
+pub fn clamp(x: int, lo: int, hi: int) -> int {
+    if (x < lo) { lo } else { if (x > hi) { hi } else { x } }
+}
+
+/// Máximo común divisor de `a` y `b` por el algoritmo de Euclides. Siempre no-negativo;
+/// `gcd(0, 0) == 0`.
+pub fn gcd(a: int, b: int) -> int {
+    var x = iabs(a);
+    var y = iabs(b);
+    while (y != 0) {
+        let t = y;
+        y = x % y;
+        x = t;
+    }
+    x
+}
+
+/// Mínimo común múltiplo de `a` y `b`. `lcm(_, 0) == 0`.
+pub fn lcm(a: int, b: int) -> int {
+    if (a == 0 || b == 0) {
+        0
+    } else {
+        let g = gcd(a, b);
+        iabs(a / g * b)
+    }
+}
+
+/// `base` elevado a `exp` (con `exp >= 0`) por exponenciación rápida (binaria). `exp < 0` → 0.
+pub fn ipow(base: int, exp: int) -> int {
+    if (exp < 0) {
+        0
+    } else {
+        var resultado = 1;
+        var b = base;
+        var e = exp;
+        while (e > 0) {
+            if (e % 2 == 1) { resultado = resultado * b; }
+            b = b * b;
+            e = e / 2;
+        }
+        resultado
+    }
+}
+
+/// Factorial de `n` (con `n >= 0`). `n < 0` → 0.
+pub fn factorial(n: int) -> int {
+    if (n < 0) {
+        0
+    } else {
+        var r = 1;
+        var i = 2;
+        while (i <= n) {
+            r = r * i;
+            i = i + 1;
+        }
+        r
+    }
+}
+
+/// ¿Es `n` un número primo? (`n < 2` → false). Prueba por divisores hasta la raíz.
+pub fn is_prime(n: int) -> bool {
+    if (n < 2) {
+        false
+    } else {
+        var i = 2;
+        var primo = true;
+        while (i * i <= n && primo) {
+            if (n % i == 0) { primo = false; }
+            i = i + 1;
+        }
+        primo
+    }
+}

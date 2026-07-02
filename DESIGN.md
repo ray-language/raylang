@@ -5375,4 +5375,19 @@ párrafo). No toca el núcleo. Documenta la **superficie pública** (ítems `pub
 programa suelto), todos. Agrupa por Traits/Structs/Enums/Funciones, con la firma reconstruida del AST
 (genéricos + bounds; el receptor `self` sin tipo). Nuevo subcomando `ray doc <archivo>` (`src/cli.rs`),
 en paralelo a `ray fmt`. Tests unitarios (`raydoc.rs`) + integración (`cli_cli.rs`). Diferido: doc de
-proyecto multi-archivo, salida HTML, enlaces cruzados. Siguiente: **M40.4b** — el árbol `std/`.
+proyecto multi-archivo, salida HTML, enlaces cruzados.
+
+#### M40.4b — la biblioteca estándar `std/`
+
+Módulos de biblioteca **escritos en raylang**, importables con la sintaxis de módulos por ruta
+(`import std/math;`, M11.5) y usados calificados (`math.gcd(...)`). A diferencia del **prelude**
+(inyectado siempre: Option/Result, map/filter/fold, Set/Deque/StringBuilder, Iterator), la `std/` es
+**opcional** (solo se carga lo importado). **Reusa el mecanismo de raíces de módulos** de M39c: el CLI
+añade el directorio que **contiene** `std/` como una raíz más (junto a `.ray-deps/`), así `import
+std/math;` resuelve `std/math.ray`. **Descubrimiento** (`raiz_std` en `cli.rs`): la env `RAYLANG_STD`,
+o subiendo desde el ejecutable (en el repo, `target/…/ray` → la raíz con `std/`). Primer módulo:
+**`std/math`** (utilidades enteras que complementan los builtins: `iabs`/`sign`/`clamp`/`gcd`/`lcm`/
+`ipow`/`factorial`/`is_prime`), todo `pub` y documentado con `///` (→ `ray doc std/math.ray`). Integración
+en `cli_cli.rs`. Diferido: **bundlear `std/` en el binario** (auto-contención total, como el prelude;
+hoy la stdlib vive en disco relativa al binario), más módulos (`std/text`, `std/sort`, …), promover las
+librerías de `examples/` a `std/`. **M40.4 (std/ + raydoc) en marcha.**

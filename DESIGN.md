@@ -4839,8 +4839,30 @@ que corrían sin flag (I/O, formatos, cripto…) ahora usan la VM y **pasan igua
 tocar un test —el que verificaba el error de concurrencia del intérprete corriendo *sin* flag—
 para que pida `--interp` explícitamente (ya no es el default). 688 tests verdes.
 
-**Alcance de M35 restante**: la VM ya es el motor de producto, pero el intérprete sigue **en el
-binario** (es el oráculo, y comparte el modelo de valores `Value`/`MapKey`/`RuntimeError`).
-Sacarlo de la *release* detrás de una feature de Cargo (`oracle`), extrayendo el modelo de
-valores a un módulo compartido, es **M35b**; la suite de regresión de rendimiento en CI (los
-benchmarks fallan si degradan >5 %) es **M35c**. Ambas quedan pendientes.
+**Alcance de M35 restante tras M35a**: la VM ya es el motor de producto, pero el intérprete
+seguía **en el binario**. Sacarlo (M35b) y la regresión de rendimiento en CI (M35c) quedaban
+pendientes.
+
+### 40.1 M35b — el intérprete tras una feature; el modelo de valores compartido
+
+El intérprete y la VM compartían el **modelo de valores** (`Value`, `MapKey`, `EnumInstance`,
+`StructInstance`, `RuntimeError`, `Cell`, `Closure`) más helpers (`MAX_CALL_DEPTH`, el almacén
+de args de proceso, `uint_mask`/`make_uint`/`eval_const_literal`), todo dentro de
+`interpreter.rs`. Eso impedía compilar la VM sin el tree-walker. M35b los separa:
+
+- **Nuevo módulo `src/runtime.rs`** (se compila **siempre**): el modelo de valores + los
+  helpers compartidos. Es el `Value` que ambos motores producen en la frontera (el intérprete
+  nativamente; la VM al convertir su `HeapValue` al salir). Extracción **pura** (relocalización,
+  sin cambio de comportamiento); el checker/compilador/VM/binario pasan a importar de `runtime::`.
+- **`interpreter.rs`** queda solo con el tree-walker (`Interpreter`, `run`, `eval_*`, `Flow`,
+  `cast_value`…) y se **gatea con la feature `interp`** (activa por defecto: `cargo build`/`cargo
+  test` lo incluyen; el oráculo VM↔intérprete sigue corriendo).
+- **`cargo build --no-default-features`** produce un binario **solo-VM** (~126 KB menos): corre
+  normal y `--interp` avisa con claridad ("esta build no incluye el intérprete… ejecuta en la
+  VM"). La *release* de producto puede excluir el oráculo; el desarrollo lo conserva.
+- Los tests unitarios del oráculo (en `vm.rs`, `#[cfg(test)]`) referencian `crate::interpreter`
+  y **solo compilan bajo `cargo test`** (feature `interp` on por defecto) — un `cargo build`
+  no toca el código de test, así que no necesitan gate propio.
+
+Verificado: 688 tests verdes con la feature; ambas builds (con y sin) compilan limpias; el
+binario solo-VM ejecuta y rechaza `--interp`. Queda **M35c** (regresión de rendimiento en CI).

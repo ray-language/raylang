@@ -3,6 +3,14 @@ name = "raylang"
 version = "1.0.0-beta.1"
 edition = "2024"
 
+[features]
+# M35b: el **intérprete de árbol** vive tras esta feature (activa por defecto). El motor de
+# producto es la VM (M35a); el intérprete existe como **oráculo de desarrollo** (validación
+# cruzada) y como `--interp`. Una *release* mínima puede excluirlo con `--no-default-features`,
+# quedándose solo con la VM. El modelo de valores (`runtime`) se compila siempre.
+default = ["interp"]
+interp = []
+
 [dependencies]
 # M19.4 — TLS. ÚNICA excepción a la invariante cero-deps (decisión §28.4): la criptografía no se
 # implementa a mano. `rustls` con el proveedor `ring` (Rust+C portable, sin cmake/OpenSSL) + las raíces

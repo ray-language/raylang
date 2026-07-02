@@ -3346,7 +3346,7 @@ fn is_width_preserving(op: BinaryOp) -> bool {
 fn uint_literal_fits(n: i64, w: u8) -> bool {
     if n < 0 { return false; }
     if w >= 64 { return true; }
-    (n as u64) <= crate::interpreter::uint_mask(w)
+    (n as u64) <= crate::runtime::uint_mask(w)
 }
 
 /// M28.1: mapa operador binario → (trait, método) para la sobrecarga. `None` si el operador

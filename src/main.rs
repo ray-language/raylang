@@ -17,8 +17,8 @@ use std::env;
 use std::fs;
 use std::process;
 
-use raylang::interpreter::Value;
-use raylang::{checker, compiler, diagnostic, interpreter, loader, lsp, repl, test_runner, vm};
+use raylang::runtime::Value;
+use raylang::{checker, compiler, diagnostic, loader, lsp, repl, runtime, test_runner, vm};
 
 fn main() {
     // M13.3a: todo el trabajo corre en un hilo con pila grande, para que la recursión
@@ -100,7 +100,7 @@ fn run() {
     }
     let path = rest[idx].clone();
     // Los argumentos del programa son lo que sigue a la ruta; se dejan en el almacén de proceso.
-    interpreter::set_program_args(rest[idx + 1..].to_vec());
+    runtime::set_program_args(rest[idx + 1..].to_vec());
 
     // Modo prueba (M10.1): corre las funciones `@test` vía un cliente externo (single-file).
     // M13.2b: un argumento tras la ruta filtra las pruebas por nombre (subcadena).
@@ -155,8 +155,19 @@ fn run() {
     drop(backup);
 
     // Backend: VM por defecto (M35, el motor de producto), intérprete con `--interp`.
+    // M35b: el intérprete solo está en la build si la feature `interp` está activa; una
+    // *release* mínima (`--no-default-features`) no lo trae y `--interp` avisa con claridad.
     let result = if use_interp {
-        interpreter::run(&program)
+        #[cfg(feature = "interp")]
+        {
+            raylang::interpreter::run(&program)
+        }
+        #[cfg(not(feature = "interp"))]
+        {
+            let _ = &program;
+            eprintln!("esta build no incluye el intérprete (compilada con --no-default-features); ejecuta en la VM, sin --interp");
+            process::exit(64);
+        }
     } else {
         match compiler::compile_program(&program) {
             Ok(compiled) => vm::run_program(&compiled),

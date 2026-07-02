@@ -43,7 +43,8 @@ fuente → [lexer] → tokens → [parser] → AST → [checker] → [interprete
 | `src/token.rs`, `src/lexer.rs` | léxico | texto → tokens; cada token con (línea, col) |
 | `src/ast.rs`, `src/parser.rs` | sintaxis | descenso recursivo; precedencia por jerarquía de reglas |
 | `src/checker.rs` | semántica | tipos; dos pasadas (firmas + cuerpos), pila de ámbitos, análisis de divergencia |
-| `src/interpreter.rs` | ejecución | tree-walking; valores en runtime; `return` como señal de flujo |
+| `src/runtime.rs` | modelo de valores | M35b: `Value`/`MapKey`/`RuntimeError`/`Closure`/helpers, **compartido** por ambos motores; se compila siempre |
+| `src/interpreter.rs` | ejecución | tree-walking; `return` como señal de flujo. **Oráculo de desarrollo** tras la feature `interp` (default); el motor de producto es la VM (M35) |
 | `src/diagnostic.rs` | presentación | M8.3: `render` añade la línea de fuente y un `^` bajo la posición. Solo presentación; no toca las fases |
 | `src/repl.rs` | cliente externo | REPL (M8.2): acumula y re-ejecuta `fn main` vía la API pública; muestra el valor con `print`. No toca el core |
 | `src/test_runner.rs` | cliente externo | runner `@test` (M10.1): sintetiza un `main` que corre las pruebas; código de salida = nº de fallos. No toca el core |

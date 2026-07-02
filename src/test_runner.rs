@@ -15,7 +15,7 @@
 //! El código de salida es el **número de fallos** (0 = todas pasaron).
 
 use crate::ast::Type;
-use crate::interpreter::Value;
+use crate::runtime::Value;
 use crate::{checker, diagnostic, lexer, parser};
 
 /// Cómo se decide si una prueba pasa, según su tipo de retorno.

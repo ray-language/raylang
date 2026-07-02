@@ -24,13 +24,13 @@ use crate::bytecode::{CastTarget, Chunk, CompiledEnum, CompiledFn, CompiledProgr
 use std::collections::{HashMap, VecDeque};
 
 use crate::gc::{Handle, Heap, HeapValue, Obj, TaskState, VmChannel, VmClosure, VmEnum, VmStruct, VmTask};
-use crate::interpreter::{EnumInstance, MapKey, RuntimeError, StructInstance, Value};
+use crate::runtime::{EnumInstance, MapKey, RuntimeError, StructInstance, Value};
 
 /// Límite de marcos para detectar recursión infinita en vez de colgarse. Es el
-/// **mismo** que el del intérprete (`interpreter::MAX_CALL_DEPTH`, M13.3a) para que
+/// **mismo** que el del intérprete (`runtime::MAX_CALL_DEPTH`, M13.3a) para que
 /// ambos motores coincidan en la frontera: un programa que recurre justo al límite
 /// da el mismo veredicto en los dos.
-const MAX_FRAMES: usize = crate::interpreter::MAX_CALL_DEPTH;
+const MAX_FRAMES: usize = crate::runtime::MAX_CALL_DEPTH;
 
 /// Ejecuta un programa compilado (empezando por `main`) y devuelve su resultado.
 pub fn run_program(program: &CompiledProgram) -> Result<Value, RuntimeError> {
@@ -1155,7 +1155,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::Args => {
                     // Argumentos del programa (del almacén de proceso); arreglo de strings.
-                    let items: Vec<HeapValue> = crate::interpreter::program_args()
+                    let items: Vec<HeapValue> = crate::runtime::program_args()
                         .iter()
                         .map(|a| HeapValue::Str(a.clone()))
                         .collect();
@@ -2289,7 +2289,7 @@ impl<'a> Vm<'a> {
             (Greater, Char(a), Char(b)) => Bool(a > b),
             (GreaterEqual, Char(a), Char(b)) => Bool(a >= b),
             // M28.3: enteros sin signo con tamaño. Mismo ancho garantizado por el checker; wrapping
-            // dentro del ancho (`crate::interpreter::uint_mask`), idéntico al intérprete.
+            // dentro del ancho (`crate::runtime::uint_mask`), idéntico al intérprete.
             (Add, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_add(b), w),
             (Sub, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_sub(b), w),
             (Mul, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_mul(b), w),
@@ -2318,7 +2318,7 @@ impl<'a> Vm<'a> {
 /// M28.3: construye un `HeapValue::UInt` enmascarando al ancho (aplica el wrapping), como
 /// `make_uint` del intérprete.
 fn uint_heap(val: u64, width: u8) -> HeapValue {
-    HeapValue::UInt(val & crate::interpreter::uint_mask(width), width)
+    HeapValue::UInt(val & crate::runtime::uint_mask(width), width)
 }
 
 /// Convierte una constante del chunk (un `Value` del intérprete, siempre primitivo)

@@ -16,6 +16,7 @@ pub mod compiler;
 pub mod diagnostic;
 pub mod fmt;
 pub mod gc;
+#[cfg(feature = "interp")]
 pub mod interpreter;
 pub mod lexer;
 pub mod loader;
@@ -24,6 +25,7 @@ pub mod parser;
 pub mod poll;
 pub mod prelude;
 pub mod repl;
+pub mod runtime;
 pub mod test_runner;
 pub mod token;
 pub mod vm;
@@ -33,7 +35,7 @@ pub mod vm;
 /// intérprete (`eval_*` recurre sobre la pila de Rust) recurren con la profundidad
 /// del programa; sin esto, una entrada muy anidada o una recursión profunda
 /// desbordarían la pila y el proceso moriría con SIGSEGV en vez de dar un error.
-/// Con esta pila, el techo efectivo lo pone `interpreter::MAX_CALL_DEPTH` (error
+/// Con esta pila, el techo efectivo lo pone `runtime::MAX_CALL_DEPTH` (error
 /// limpio), que se alcanza holgadamente dentro de 256 MiB. La **VM no lo necesita**
 /// (sus marcos viven en el heap), pero correrla también aquí no cuesta nada.
 const STACK_SIZE: usize = 256 * 1024 * 1024;
@@ -43,9 +45,9 @@ const STACK_SIZE: usize = 256 * 1024 * 1024;
 /// intérprete (la VM convierte en la frontera), así que los clientes (REPL, runner de
 /// `@test`, binario) son idénticos con uno u otro motor. Un error de **compilación** (raro
 /// tras un check exitoso: es la bajada a bytecode) se presenta como error de ejecución.
-pub fn run_on_vm(program: &ast::Program) -> Result<interpreter::Value, interpreter::RuntimeError> {
+pub fn run_on_vm(program: &ast::Program) -> Result<runtime::Value, runtime::RuntimeError> {
     let compiled = compiler::compile_program(program)
-        .map_err(|e| interpreter::RuntimeError { msg: e.msg, line: e.line, col: e.col })?;
+        .map_err(|e| runtime::RuntimeError { msg: e.msg, line: e.line, col: e.col })?;
     vm::run_program(&compiled)
 }
 

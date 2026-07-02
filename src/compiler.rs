@@ -31,7 +31,7 @@ use crate::bytecode::{
     CastTarget, Chunk, CompiledEnum, CompiledFn, CompiledProgram, CompiledStruct, CompiledVariant, OpCode,
     UpvalueRef, UpvalueSource,
 };
-use crate::interpreter::Value;
+use crate::runtime::Value;
 
 /// Mapa de structs para el compilador: nombre → (índice en la tabla, nombres de
 /// campo en orden de declaración).
@@ -98,7 +98,7 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
     // M27.5: valores de las constantes de nivel superior (evaluados de sus literales).
     let mut consts = HashMap::new();
     for cst in &program.consts {
-        consts.insert(cst.name.clone(), crate::interpreter::eval_const_literal(&cst.value));
+        consts.insert(cst.name.clone(), crate::runtime::eval_const_literal(&cst.value));
     }
 
     let mut c = Compiler {

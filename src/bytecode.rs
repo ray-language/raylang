@@ -12,7 +12,7 @@
 //! (`Vec<OpCode>`): es lo idiomático en Rust y muchísimo más claro para aprender,
 //! a costa de algo de densidad. Empaquetar a bytes sería una optimización posterior.
 
-use crate::interpreter::Value;
+use crate::runtime::Value;
 
 /// Las funciones matemáticas unarias `float -> float` (M15.1a). Van todas bajo el mismo opcode
 /// `OpCode::MathF(MathFn)`: el opcode dice "aplica una función matemática" y este enum **cuál**.
@@ -560,7 +560,7 @@ pub struct CompiledProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interpreter::Value;
+    use crate::runtime::Value;
 
     /// M29.3: `add_constant` deduplica — una constante idéntica reutiliza su índice.
     #[test]

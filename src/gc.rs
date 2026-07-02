@@ -26,7 +26,7 @@
 //! 3. **Disparo**: se recolecta cuando el número de objetos vivos cruza un umbral
 //!    que **crece** tras cada recolección (estilo clox `nextGC`).
 
-use crate::interpreter::MapKey;
+use crate::runtime::MapKey;
 use std::collections::{HashMap, VecDeque};
 
 /// Un *handle*: la referencia a un objeto del heap (su índice de ranura).

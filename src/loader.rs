@@ -48,6 +48,9 @@ pub struct LoadedModule {
     pub name: String,
     pub source: String,
     pub start_line: usize,
+    /// Ruta del archivo del módulo (M10.2h): permite al LSP devolver la `Location` en el archivo
+    /// correcto al navegar cruzando módulos (ir-a-definición / references).
+    pub path: PathBuf,
 }
 
 impl Loaded {
@@ -72,6 +75,8 @@ struct Module {
     is_entry: bool,
     program: Program,
     source: String,
+    /// Ruta del archivo del módulo (para que el LSP navegue cruzando archivos, M10.2h).
+    path: PathBuf,
 }
 
 /// Carga el archivo de entrada y sus imports (transitivos), y devuelve el programa fusionado.
@@ -145,7 +150,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>) ->
                 }
             }
         }
-        modules.push(Module { name, is_entry, program, source });
+        modules.push(Module { name, is_entry, program, source, path });
     }
 
     // --- Fase 2: tipos únicos **dentro de cada módulo** (M11.3c: ya no globales) ---
@@ -236,7 +241,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>) ->
         fusionado.expr_spans.extend(std::mem::take(&mut m.program.expr_spans));
         fusionado.field_name_pos.extend(std::mem::take(&mut m.program.field_name_pos));
 
-        loaded_modules.push(LoadedModule { name: m.name, source: m.source, start_line: start });
+        loaded_modules.push(LoadedModule { name: m.name, source: m.source, start_line: start, path: m.path });
     }
     loaded_modules.sort_by_key(|m| m.start_line);
     for amb in &ufcs_ambiguos {

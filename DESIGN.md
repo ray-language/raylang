@@ -1751,9 +1751,12 @@ Diferido: navegación cross-archivo (def/references que salten a otro módulo) y
   help** y **completion por ámbito** + **M10.2g**: **hover de campos y métodos** (`p.x`, `xs.map()`,
   `n.metodo()`) — el AST `Field` no lleva la posición del nombre tras el `.`, así que el parser la registra
   en una side-table `field_name_pos` (clave `(línea,col,nombre)`, como `ufcs_sites`; el loader la desplaza)
-  y el checker registra el hover del campo/método en `check_field`/`check_call` con su tipo/firma. Quedan:
-  **def** del nombre de método (solo hover), completion por **bloque** anidado, y **navegación cruzando
-  módulos** (def/references que salten a otro archivo; hoy los diagnósticos y el hover ya resuelven imports).
+  y el checker registra el hover del campo/método en `check_field`/`check_call` con su tipo/firma +
+  **M10.2h**: **ir-a-definición cruzando archivos** — `LoadedModule` gana su `path`, y `definition_at`
+  mapea la declaración (posición global del programa fusionado) a su **módulo** (archivo + línea local),
+  devolviendo la `Location` en el archivo correcto (saltar a `geo.ray` desde `import geo;`). Quedan:
+  **def** del nombre de método (solo hover), completion por **bloque** anidado, y **references/rename
+  cruzando módulos** (hoy references es entry-only y rename se niega si el símbolo cruza módulos).
 - `@builtin`/`@extern` (limpiar el *special-casing* de `print`/`len`/`push`), `@deprecated`,
   `@inline`, `@delegate` → anotaciones futuras.
 - **Derivación recursiva** (`Eq` de enums con payload-enum) y **derive genérico** → futuro.

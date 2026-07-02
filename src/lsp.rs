@@ -296,30 +296,55 @@ fn rango(line0: usize, start: usize, end: usize) -> Json {
 
 // ── Ir-a-definición (M10.2b) ─────────────────────────────────────────────────────────
 
-/// El `result` de un `textDocument/definition`: una `Location` (uri + rango de la
-/// declaración) en el mismo documento, o `null` si el identificador no tiene una declaración
-/// conocida (p. ej. un método, un builtin o un tipo).
+/// El `result` de un `textDocument/definition`: una `Location` (uri + rango de la declaración), o
+/// `null` si el identificador no tiene declaración conocida (método, builtin, tipo). La declaración
+/// puede estar en **otro archivo** (M10.2h): se resuelve el import y se devuelve el URI del módulo
+/// donde vive, con su línea local.
 fn definition_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     let Some(src) = docs.get(&uri) else { return Json::Null };
-    let Some((def_line0, def_col0, len)) = definition_at(Some(&uri), src, line0, char0) else { return Json::Null };
+    let Some((target_uri, def_line0, def_col0, len)) = definition_at(&uri, src, line0, char0) else {
+        return Json::Null;
+    };
     obj(vec![
-        ("uri", Json::Str(uri)),
+        ("uri", Json::Str(target_uri)),
         ("range", rango(def_line0, def_col0, def_col0 + len)),
     ])
 }
 
-/// Busca el identificador en `(line0, char0)` (0-basado) y devuelve la posición de su declaración
-/// `(def_line0, def_col0, largo)` (0-basadas). Índice módulo-aware. Si la declaración vive en OTRO
-/// módulo (fuera del buffer de la entrada), aún no se navega cross-archivo → sin resultado.
-fn definition_at(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<(usize, usize, usize)> {
-    let idx = indice_para(uri, src)?;
-    let entry_lines = src.lines().count();
+/// Busca el identificador en `(line0, char0)` (0-basado) y devuelve `(uri_destino, línea0, col0,
+/// largo)` de su declaración. Módulo-aware: si el documento es un archivo, se carga con el loader y
+/// la declaración se mapea a su **módulo** (archivo + línea local) —así se navega cruzando archivos—;
+/// si no, se resuelve solo dentro del buffer.
+fn definition_at(uri: &str, src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize, usize)> {
     let (qline, qcol) = (line0 + 1, char0 + 1);
+    // Camino módulo-aware: el loader da el programa fusionado + las bandas de cada módulo (con su
+    // ruta). La declaración se localiza por su banda → archivo y línea local correctos.
+    if let Some(path) = uri_to_path(uri)
+        && let Ok(loaded) = loader::load_fuente(&path, src, &dep_roots_for(&path))
+    {
+        let mut program = loaded.program;
+        let idx = checker::semantic_index(&mut program);
+        let d = idx.defs.iter()
+            .filter(|d| d.line == qline && qcol >= d.col && qcol < d.col + d.len)
+            .min_by_key(|d| d.len)?;
+        // ¿En qué módulo (banda) cae la declaración? El de mayor `start_line` que no la supere.
+        let m = loaded.modules.iter().rev().find(|m| m.start_line <= d.def_line)?;
+        let local = d.def_line - m.start_line; // 0-basada
+        let col0 = d.def_col - 1;
+        // Recorta el largo al token real del ARCHIVO DESTINO (el `len` puede venir namespacado).
+        let len = d.len.min(token_len(&m.source, local, col0)).max(1);
+        let target_uri = format!("file://{}", m.path.display());
+        return Some((target_uri, local, col0, len));
+    }
+    // Fallback un solo archivo (buffer sin guardar): la declaración vive en el propio documento.
+    let idx = indice_para(Some(uri), src)?;
     let d = idx.defs.iter()
         .filter(|d| d.line == qline && qcol >= d.col && qcol < d.col + d.len)
         .min_by_key(|d| d.len)?;
-    (d.def_line <= entry_lines).then(|| (d.def_line - 1, d.def_col - 1, d.len))
+    let (dl0, dc0) = (d.def_line - 1, d.def_col - 1);
+    let len = d.len.min(token_len(src, dl0, dc0)).max(1);
+    Some((uri.to_string(), dl0, dc0, len))
 }
 
 // ── Find-references y rename (cluster 4) ─────────────────────────────────────────────
@@ -1426,6 +1451,27 @@ mod tests {
         assert_eq!(nombre_fachada("c: Punto"), "c: Punto");
         assert_eq!(nombre_fachada("n: int"), "n: int");
         assert_eq!(nombre_fachada("f: fn(int, bool) -> string"), "f: fn(int, bool) -> string");
+    }
+
+    #[test]
+    fn definicion_cruza_modulos() {
+        let dir = std::env::temp_dir().join("ray_lsp_def_mod");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("geo.ray"), "pub fn duplicar(x: int) -> int { x * 2 }\n").unwrap();
+        let uri = format!("file://{}", dir.join("main.ray").display());
+        let src = "from geo import duplicar;\nfn main() -> int {\n  let r = duplicar(21);\n  r\n}\n";
+
+        // Ir-a-definición de la función IMPORTADA → salta al otro archivo (geo.ray, línea 0).
+        let (turi, line, _, _) = definition_at(&uri, src, 2, 10).expect("def de duplicar");
+        assert!(turi.ends_with("geo.ray"), "el destino es el archivo del módulo: {turi}");
+        assert_eq!(line, 0);
+
+        // Ir-a-definición de una variable LOCAL → se queda en este archivo.
+        let (turi, line, _, _) = definition_at(&uri, src, 3, 2).expect("def de r");
+        assert!(turi.ends_with("main.ray"), "{turi}");
+        assert_eq!(line, 2, "la declaración de 'r' está en la línea 3 (0-based 2)");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

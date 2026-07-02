@@ -28,6 +28,12 @@ fn run() {
     let args: Vec<String> = env::args().collect();
     let rest = &args[1..]; // sin el nombre del binario
 
+    // M34: la versión del lenguaje (semver; la SPEC la fija). `-V` como cortesía.
+    if rest.len() == 1 && (rest[0] == "--version" || rest[0] == "-V") {
+        println!("raylang {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     // Modos sin archivo: REPL interactivo (M8.2) y LSP (M10.2).
     if rest.is_empty() || (rest.len() == 1 && rest[0] == "--repl") {
         repl::run();

@@ -4778,3 +4778,39 @@ comportamiento (fail-fast; es lo que ejecuta, y lo que el self-hosting espeja). 
   aporta y la entrada errónea se descarta entera igualmente (M8.2).
 - **El fuzzer (38.4) apunta a la variante nueva**: `analizar_todos` ejercita la recuperación
   (`sync_item`) y el `check_all` sobre programas parciales — la superficie que estrena esta fase.
+
+## 39. M34 — Especificación y versionado (arco A)
+
+La segunda fase del arco A entrega el documento que faltaba para que raylang sea *definible*
+sin leer 25k líneas de Rust: **[SPEC.md](SPEC.md)**, normativo (DESIGN queda como crónica; el
+libro como pedagogía; ante conflicto manda la SPEC). Cubre léxico, módulos/cápsulas, tipos,
+gramática EBNF de declaraciones/sentencias/expresiones (tabla de precedencia de 15 niveles),
+reglas del sistema de tipos, semántica de evaluación (referencia vs valor, TCO, límites),
+concurrencia CSP, la superficie estable de builtins/prelude, diagnósticos/códigos de salida, y
+la política de versionado. El parser auto-alojado (M14) queda como validador cruzado de la
+gramática.
+
+**Versionado (SemVer)**: el lenguaje pasa a **1.0.0-beta.1** (Cargo.toml; `raylang --version`).
+Estable = §§1–11 de la SPEC salvo lo marcado interno (primitivos `__`, bytecode, detalles de
+GC/scheduler, el render de errores más allá de la cabecera). Deprecación: anuncio en la SPEC ≥
+una MENOR antes de retirar en la siguiente MAYOR.
+
+**Congelación de API**: los nombres se congelan con su **porqué** documentado (SPEC §10):
+`index_of`/`position`, `fetch`, `bytes_of`/`to_bytes` están justificados por la ausencia de
+sobrecarga y la colisión UFCS con `Map.get`; no se renombró nada.
+
+**Escribir la SPEC destapó dos bugs** (el patrón de M33d otra vez — especificar es verificar):
+1. **El overflow de `int` dependía del build del compilador** (panic en debug presentado como
+   ICE, wrap silencioso en release). La política de M42 se adelantó: **desbordamiento = error
+   de ejecución** ("desbordamiento aritmético en int"), coherente con división por cero;
+   Add/Sub/Mul/Div(MIN/-1)/Rem/Neg en ambos motores + el fast-path Opt.4; oráculo
+   `overflow_aritmetico_oraculo`. `u8/u32/u64` y los bit a bit siguen wrapping por diseño.
+2. **Asignar a una posición de tupla era un ICE** (`t.0 = 9` pasaba el checker sin bajarse y
+   reventaba ambos motores; el fuzzer no lo vio — el corpus apenas usa tuplas). Decisión de
+   lenguaje (SPEC §3/§5): las posiciones de tupla son de **solo lectura** — la tupla es un
+   agregado inmutable y se comporta como *valor* (para mutar: desestructurar o arreglo). El
+   checker lo rechaza con error claro.
+
+También se verificó empíricamente lo afirmado: el contador de shift se enmascara (semántica
+Rust), `float as int` satura en los extremos, y la ventana/subrayado de M33 sobre los nuevos
+errores.

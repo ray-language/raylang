@@ -1298,6 +1298,17 @@ impl Checker {
             }
             // p.x = e  — mutar un campo (no requiere 'var', como el índice).
             ExprKind::Field { object, name } => {
+                // M34 (SPEC §5): una posición de tupla NO es asignable — la tupla es un
+                // agregado inmutable (para mutar, desestructura o usa un arreglo). Sin
+                // esto, `t.0 = v` pasaba el checker sin bajarse y reventaba los motores.
+                if name.chars().all(|c| c.is_ascii_digit()) {
+                    let ot = self.check_expr(object)?;
+                    if matches!(ot, Type::Tuple(_)) {
+                        return Err(self.err(line, col, format!(
+                            "una posición de tupla no es asignable ('.{name}'); desestructura la tupla o usa un arreglo"
+                        )));
+                    }
+                }
                 let fty = self.check_field(object, name)?;
                 let vt = self.check_expr_expected(value, &fty)?;
                 if vt != fty {
@@ -4706,6 +4717,19 @@ mod tests {
     }
 
     #[test]
+    fn asignar_a_posicion_de_tupla_es_error() {
+        // M34 (SPEC §5): las posiciones de tupla son de solo lectura. Antes esto era
+        // un ICE (pasaba el checker sin bajarse y reventaba ambos motores).
+        err_contains(
+            "fn main() -> int { var t = (1, 2); t.0 = 9; t.0 }",
+            "una posición de tupla no es asignable",
+        );
+        // La lectura y la desestructuración siguen funcionando.
+        check_src("fn main() -> int { let t = (1, 2); let (a, b) = t; a + b + t.0 }")
+            .expect("leer y desestructurar es válido");
+    }
+
+        #[test]
     fn check_all_acumula_por_funcion() {
         // M33c: un error por cuerpo, todos reportados; el primero idéntico al fail-fast.
         let src = "fn f() -> int { 1 + true }\nfn g() -> int { \"x\" * 2 }\nfn main() -> int { f() + g() }";

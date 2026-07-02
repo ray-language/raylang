@@ -461,3 +461,33 @@ fn stdlib_texto_regex_csv_toml() {
     assert!(out.contains("[[a, b], [1, 2]]"), "csv parse\n{out}");
     assert!(out.contains("8080"), "toml get\n{out}");
 }
+
+#[test]
+fn stdlib_cripto_aead_y_protobuf() {
+    // M40.7e: primitivas cripto + protobuf. AEAD (chacha20-poly1305) seal→open y protobuf varint.
+    // aead depende de std/chacha20 + std/poly1305; se namespacaron en el ejemplo (resuelven embebidas).
+    let base = tmp("std_crypto");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "import std/chacha20poly1305;\n\
+         import std/protobuf;\n\
+         fn main() -> int {\n\
+             let key: [int] = []; var i = 0; while (i < 32) { push(key, i); i = i + 1; }\n\
+             let nonce: [int] = []; var j = 0; while (j < 12) { push(nonce, 0); j = j + 1; }\n\
+             let s = chacha20poly1305.aead_seal(key, nonce, [], [72, 105]);\n\
+             match (chacha20poly1305.aead_open(key, nonce, [], s.ciphertext, s.tag)) {\n\
+                 Option.Some(pt) => { print(pt); }, Option.None => { print(\"auth\"); },\n\
+             }\n\
+             let w = protobuf.writer();\n\
+             protobuf.write_varint(w, 1, 150);\n\
+             print(to_string(protobuf.finish(w)));\n\
+             0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con imports de std cripto debe salir 0\n{err}");
+    assert!(out.contains("[72, 105]"), "aead seal→open roundtrip\n{out}");
+    assert!(out.contains("089601"), "protobuf varint field1=150\n{out}");
+}

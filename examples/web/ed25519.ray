@@ -7,7 +7,7 @@
 // negativos y el desplazamiento aritmético de i64 los propaga). Un punto son 4 `gf` (X, Y, Z, T).
 // Usa SHA-512 (`sha512.ray`). Importable: `from ed25519 import ed25519_public_key, ed25519_sign, ed25519_verify;`.
 
-from sha512 import sha512_octets;
+from std/sha512 import sha512_octets;
 
 // -------------------- utilidades de gf y bytes --------------------
 

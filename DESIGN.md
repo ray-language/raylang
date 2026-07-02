@@ -5472,3 +5472,17 @@ NFA lineal de Thompson: `full_match`/`search`/`find`/`find_all`/`replace_all`), 
 `write_csv`), `std/toml` (`enum TomlValue`, `parse_toml`/`toml_get`/`toml_show`; subconjunto), `std/template`
 (plantillas HTML con autoescape). Test `stdlib_texto_regex_csv_toml` (cli_cli). Cero cambios en los ejemplos
 → sus tests intactos.
+
+**M40.7e — cripto + protobuf**: `std/chacha20`/`std/poly1305`/`std/protobuf` (hojas), `std/chacha20poly1305`
+(AEAD `aead_seal`/`aead_open`; →`std/chacha20`+`std/poly1305`) y `std/ed25519` (firmas EdDSA;
+→`std/sha512`). Test `stdlib_cripto_aead_y_protobuf` (cli_cli): AEAD seal→open roundtrip + protobuf varint.
+Verificado que `chacha20poly1305_cli`/`ed25519_cli`/`jwt_eddsa_cli`/`protobuf_cli` siguen verdes (copian estas
+libs a temporales; los imports namespacados resuelven embebidos). **Con esto, el subconjunto fundacional
+determinista (encoding + hashing + compresión + cripto + protobuf + texto/datos) está en `std/`.**
+
+**Diferido (tier de red / aplicación, sigue en `examples/`).** No se promueve: `udp`/`dns`/`dns_cache`,
+`http`/`http2`/`http2_client`, `websocket`/`websocket_client`, `grpc_client`, `postgres`/`redis`, `oauth2`/
+`scram`/`sigv4`/`jwt`/`cookie`, `framework`/`webserver`. Dependen de sockets/TLS y no son deterministas →
+son un *framework de aplicación*, no una biblioteca estándar; esperan a un paquete `net`/aplicación propio.
+También quedan como diferido menor `uuid` (→`std/hex`, pero valor de identidad), `time`/`log`/`metrics`
+(reloj no determinista) y `base64`-dependientes de auth.

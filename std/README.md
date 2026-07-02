@@ -71,4 +71,13 @@ Operan sobre `bytes` (convierte un `string` con el builtin `to_bytes`).
 - **`std/toml`** — `enum TomlValue`, `parse_toml`, `toml_get`, `toml_show` (subconjunto de TOML).
 - **`std/template`** — motor de plantillas HTML con autoescape: `enum TVal`, `ctx_*`, `render`.
 
+### Criptografía y serialización (M40.7e)
+
+- **`std/chacha20`** — `chacha20_block`, `chacha20_encrypt` (cifrado de flujo RFC 8439).
+- **`std/poly1305`** — `poly1305_mac` (MAC).
+- **`std/chacha20poly1305`** — AEAD `aead_seal`/`aead_open` (`struct Sealed`; sobre chacha20 + poly1305).
+- **`std/ed25519`** — `ed25519_public_key`/`ed25519_sign`/`ed25519_verify` (firmas EdDSA; sobre `std/sha512`).
+- **`std/protobuf`** — writer/reader de Protocol Buffers: `writer`/`write_varint`/`write_string`/`finish`/
+  `parse`/`get_int`/`get_string` + enmarcado gRPC.
+
 (Más módulos por venir; ver DESIGN §42.9.)

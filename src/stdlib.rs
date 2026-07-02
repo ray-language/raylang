@@ -45,6 +45,13 @@ const MODULOS: &[(&str, &str)] = &[
     ("std/csv", include_str!("../examples/stdlib/csv.ray")),
     ("std/toml", include_str!("../examples/stdlib/toml.ray")),
     ("std/template", include_str!("../examples/stdlib/template.ray")),
+    // Primitivas criptográficas + protobuf (M40.7e). `chacha20poly1305` → `std/chacha20`+`std/poly1305`;
+    // `ed25519` → `std/sha512` (namespacados en los ejemplos).
+    ("std/chacha20", include_str!("../examples/web/chacha20.ray")),
+    ("std/poly1305", include_str!("../examples/web/poly1305.ray")),
+    ("std/chacha20poly1305", include_str!("../examples/web/chacha20poly1305.ray")),
+    ("std/ed25519", include_str!("../examples/web/ed25519.ray")),
+    ("std/protobuf", include_str!("../examples/web/protobuf.ray")),
 ];
 
 /// La fuente embebida del módulo `nombre` (`"std/math"`), o `None` si no es un módulo de la stdlib.

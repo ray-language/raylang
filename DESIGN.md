@@ -1759,9 +1759,14 @@ Diferido: navegación cross-archivo (def/references que salten a otro módulo) y
   bandas del programa fusionado y mapea cada una a su módulo (archivo + línea local, largo recortado al
   token real con `token_len`); la declaración apunta al **nombre** (escaneando la fuente del módulo
   destino). Gotcha: `use_name` lee el identificador de la fuente (no `d.len`, que en un uso namespacado
-  `geo::f` excede el token escrito). Quedan: **def** del nombre de método (solo hover), completion por
-  **bloque** anidado, y **rename cruzando módulos** (hoy rename se niega si el símbolo cruza módulos, para
-  no editarlo a medias — necesitaría un `WorkspaceEdit` multi-archivo).
+  `geo::f` excede el token escrito) — y **rename cruzando módulos**: `WorkspaceEdit` multi-archivo con
+  declaración + usos (todos los módulos) + los **especificadores de `from`-import** que traen el símbolo
+  (el loader los expone en `Loaded.from_import_sites`, casados por el global de la decl vía
+  `def_global_name`). **Gate de seguridad**: se exige que TODA posición contenga exactamente el nombre; un
+  uso por **alias** (`as x`) o una referencia **calificada** tiene otro texto → el rename se **rechaza**
+  (null) en vez de dejar el código a medias. Quedan: **def** del nombre de método (solo hover) y completion
+  por **bloque** anidado / de símbolos `pub` de otros módulos. **Navegación cross-archivo (def/references/
+  rename) COMPLETA.**
 - `@builtin`/`@extern` (limpiar el *special-casing* de `print`/`len`/`push`), `@deprecated`,
   `@inline`, `@delegate` → anotaciones futuras.
 - **Derivación recursiva** (`Eq` de enums con payload-enum) y **derive genérico** → futuro.

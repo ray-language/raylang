@@ -41,6 +41,25 @@ pub struct Loaded {
     /// Ordenados por `start_line` ascendente. La banda del módulo `i` es `[start_line_i, …)` hasta
     /// el `start_line` del siguiente.
     pub modules: Vec<LoadedModule>,
+    /// Sitios de `from M import nombre` (M10.2h): el especificador de import y el global al que
+    /// resuelve. Los usa el **rename** del LSP para tocar también la línea del import (que no es un
+    /// "uso" del índice) al renombrar un símbolo importado. Posiciones **locales** del archivo importador.
+    pub from_import_sites: Vec<FromImportSite>,
+}
+
+/// Un especificador de `from M import nombre [as alias]` (M10.2h): dónde está escrito el `nombre` y
+/// a qué global resuelve, para que el rename lo actualice.
+pub struct FromImportSite {
+    /// El global al que resuelve el nombre importado (`geo::duplicar`).
+    pub global: String,
+    /// Archivo que contiene el `from`-import.
+    pub path: PathBuf,
+    /// Posición **local** (1-basada) del `nombre` en la línea del import, y su longitud.
+    pub line: usize,
+    pub col: usize,
+    pub len: usize,
+    /// ¿Lleva `as alias`? (Entonces los usos van por el alias; el rename cross-módulo se abstiene.)
+    pub aliased: bool,
 }
 
 /// Un módulo cargado, con su fuente y la línea global donde empieza su banda (L3).
@@ -181,6 +200,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>) ->
     modules.sort_by_key(|m| !m.is_entry);
 
     let mut loaded_modules: Vec<LoadedModule> = Vec::new();
+    let mut from_import_sites: Vec<FromImportSite> = Vec::new();
     let mut next_start = 1usize; // primera línea libre del espacio global
     for mut m in modules {
         let prefix = module_prefix(&m);
@@ -194,7 +214,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>) ->
         // 2. Clasificar los `from M import …` (M11.3b/-2): funciones `pub` → mapa de **valores**
         //    (al `own` del Resolver); tipos `pub` → mapa de **tipos** (al TypeRewriter).
         let (from_values, from_types) =
-            clasificar_from_imports(&m, &surfaces, &tipos)?;
+            clasificar_from_imports(&m, &surfaces, &tipos, &mut from_import_sites)?;
 
         // Acumular los alias UFCS de este módulo (función from-importada: local → global). Un alias
         // que ya existía con OTRO global es ambiguo entre módulos → se marca para excluir.
@@ -248,7 +268,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>) ->
         ufcs_aliases.remove(amb);
     }
     fusionado.ufcs_aliases = ufcs_aliases;
-    Ok(Loaded { program: fusionado, modules: loaded_modules })
+    Ok(Loaded { program: fusionado, modules: loaded_modules, from_import_sites })
 }
 
 /// Desplaza **todas** las posiciones (línea) de un módulo por `delta` (L3). La columna se conserva.
@@ -707,6 +727,7 @@ fn clasificar_from_imports(
     m: &Module,
     surfaces: &Surfaces,
     tipos: &HashMap<String, HashSet<String>>,
+    sites: &mut Vec<FromImportSite>,
 ) -> Result<(NameMap, NameMap), LoadError> {
     // Nombres ya ocupados en el módulo: funciones y tipos propios (para detectar colisiones).
     let mut locales: HashSet<String> = m.program.functions.iter().map(|f| f.name.clone()).collect();
@@ -726,6 +747,19 @@ fn clasificar_from_imports(
                     local
                 )));
             }
+            // M10.2h: registra el sitio del especificador para el rename del LSP (posición local
+            // del `nombre`, el global al que resuelve, si lleva `as alias`).
+            let global = match &target {
+                FromTarget::Funcion(g) | FromTarget::Tipo(g) => g.clone(),
+            };
+            sites.push(FromImportSite {
+                global,
+                path: m.path.clone(),
+                line: n.line,
+                col: n.col,
+                len: n.name.chars().count(),
+                aliased: n.alias.is_some(),
+            });
             match target {
                 FromTarget::Funcion(g) => { values.insert(local, g); }
                 FromTarget::Tipo(g) => { types.insert(local, g); }

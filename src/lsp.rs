@@ -363,17 +363,21 @@ fn is_ident_char(c: char) -> bool {
 /// Un rango en una línea: `(line0, col0, len)`, todo 0-basado.
 type Span = (usize, usize, usize);
 
+/// El identificador escrito en `(line0, col0)` (0-basados) de `lines`, o `None` si ahí no empieza uno.
+fn token_at(lines: &[&str], line0: usize, col0: usize) -> Option<String> {
+    let chars: Vec<char> = lines.get(line0)?.chars().collect();
+    if col0 >= chars.len() {
+        return None;
+    }
+    let end = col0 + chars[col0..].iter().take_while(|&&c| is_ident_char(c)).count();
+    (end > col0).then(|| chars[col0..end].iter().collect())
+}
+
 /// El texto (nombre) de un uso `d`, leído de `lines` en la posición de `d` (1-basado en `d.line`).
 /// Se lee el **identificador** que empieza ahí (no `d.len`, que en un uso namespacado —`geo::f`—
 /// excede el token escrito en la fuente).
 fn use_name(lines: &[&str], d: &checker::DefEntry) -> Option<String> {
-    let chars: Vec<char> = lines.get(d.line - 1)?.chars().collect();
-    let start = d.col - 1;
-    if start >= chars.len() {
-        return None;
-    }
-    let end = start + chars[start..].iter().take_while(|&&c| is_ident_char(c)).count();
-    (end > start).then(|| chars[start..end].iter().collect())
+    token_at(lines, d.line - 1, d.col - 1)
 }
 
 /// Rango del **nombre** `name` como palabra entera desde `(def_line, def_col)` (1-basados) en
@@ -542,21 +546,142 @@ fn rename_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some(new_name) = msg.get("params").and_then(|p| p.get("newName")).and_then(|n| n.as_str()) else {
         return Json::Null;
     };
-    let Some((_, decl, usos, es_local)) = symbol_occurrences(Some(&uri), src, line0, char0) else { return Json::Null };
-    // Rename solo de símbolos que viven enteros en este archivo: renombrar uno que cruza módulos
-    // desde aquí lo dejaría a medias (los usos en otros archivos no se tocarían) → se rechaza.
-    if !es_local {
+    // Camino cross-archivo (si es un archivo). Agrupa las ediciones por URI. Un rename que no puede
+    // hacerse de forma **completa y segura** (alias, refs calificadas, símbolo no resoluble)
+    // devuelve `None` → aquí `null` (el editor avisa de que no se puede renombrar).
+    let posiciones = if uri_to_path(&uri).is_some() {
+        match rename_cross(&uri, src, line0, char0) {
+            Some(p) => p,
+            None => return Json::Null,
+        }
+    } else {
+        // Buffer sin guardar: solo dentro de este archivo (con el gate `es_local`).
+        let Some((_, decl, usos, es_local)) = symbol_occurrences(Some(&uri), src, line0, char0) else {
+            return Json::Null;
+        };
+        if !es_local {
+            return Json::Null;
+        }
+        decl.into_iter().chain(usos).map(|s| (uri.clone(), s)).collect()
+    };
+    if posiciones.is_empty() {
         return Json::Null;
     }
-    let mut rangos: Vec<(usize, usize, usize)> = decl.into_iter().chain(usos).collect();
-    rangos.sort();
-    rangos.dedup();
-    let edits: Vec<Json> = rangos.into_iter().map(|(l, c, len)| obj(vec![
-        ("range", rango(l, c, c + len)),
-        ("newText", Json::Str(new_name.to_string())),
-    ])).collect();
-    let changes = obj(vec![(uri.as_str(), Json::Arr(edits))]);
+    // Agrupar las ediciones por archivo (`WorkspaceEdit.changes`).
+    let mut por_uri: HashMap<String, Vec<Json>> = HashMap::new();
+    for (u, (l, c, len)) in posiciones {
+        por_uri.entry(u).or_default().push(obj(vec![
+            ("range", rango(l, c, c + len)),
+            ("newText", Json::Str(new_name.to_string())),
+        ]));
+    }
+    let changes = obj(por_uri.into_iter().map(|(u, edits)| (u, Json::Arr(edits))).collect::<Vec<_>>()
+        .iter().map(|(u, e)| (u.as_str(), e.clone())).collect());
     obj(vec![("changes", changes)])
+}
+
+/// Todas las posiciones a sustituir para renombrar el símbolo bajo el cursor, **cruzando archivos**
+/// (M10.2h): declaración + usos (de todos los módulos) + los especificadores de `from`-import que lo
+/// traen. Devuelve `None` (→ rename rechazado) si no hay símbolo o si el rename no sería **completo
+/// y seguro**: se exige que TODA posición contenga exactamente el nombre (un uso por **alias** o una
+/// referencia **calificada** tienen otro texto → se rechaza, para no corromper el código).
+fn rename_cross(uri: &str, src: &str, line0: usize, char0: usize) -> Option<Vec<(String, Span)>> {
+    let path = uri_to_path(uri)?;
+    let loaded = loader::load_fuente(&path, src, &dep_roots_for(&path)).ok()?;
+    let mut program = loaded.program.clone();
+    let idx = checker::semantic_index(&mut program);
+    let entry_lines: Vec<&str> = src.lines().collect();
+    let (qline, qcol) = (line0 + 1, char0 + 1);
+
+    // Objetivo: (tdl, tdc, nombre) — cursor sobre un uso o sobre el nombre de una decl de la entrada.
+    let mut target: Option<(usize, usize, String)> = idx.defs.iter()
+        .filter(|d| d.line == qline && qcol >= d.col && qcol < d.col + d.len)
+        .min_by_key(|d| d.len)
+        .and_then(|d| use_name(&entry_lines, d).map(|n| (d.def_line, d.def_col, n)));
+    if target.is_none() {
+        for d in &idx.defs {
+            if d.def_line > entry_lines.len() {
+                continue;
+            }
+            let Some(name) = use_name(&entry_lines, d) else { continue };
+            let sobre = decl_name_range(&entry_lines, d.def_line, d.def_col, &name)
+                .is_some_and(|(dl, dc, len)| dl + 1 == qline && qcol > dc && qcol - 1 < dc + len);
+            if sobre {
+                target = Some((d.def_line, d.def_col, name));
+                break;
+            }
+        }
+    }
+    let (tdl, tdc, name) = target?;
+
+    // El global al que apunta la declaración (para casar los `from`-import): el nombre del ítem cuya
+    // definición está en (tdl, tdc). Si no es un ítem top-level (variable local), el propio nombre.
+    let global = def_global_name(&loaded.program, tdl, tdc).unwrap_or_else(|| name.clone());
+
+    let modulo_de = |gl: usize| loaded.modules.iter().rev().find(|m| m.start_line <= gl);
+    let uri_de = |m: &loader::LoadedModule| format!("file://{}", m.path.display());
+
+    // Recoge las posiciones (uri, span), verificando que el TEXTO de cada una sea exactamente
+    // `name`; si alguna no lo es (alias, ref calificada), `seguro` pasa a false y el rename se rechaza.
+    let mut posiciones: Vec<(String, Span)> = Vec::new();
+    let mut seguro = true;
+
+    // (1) La declaración (su nombre, en el archivo donde vive).
+    if let Some(m) = modulo_de(tdl) {
+        let m_lines: Vec<&str> = m.source.lines().collect();
+        let local = tdl - m.start_line + 1;
+        if let Some((dl0, dc0, _)) = decl_name_range(&m_lines, local, tdc, &name) {
+            empujar_rename(&mut posiciones, &mut seguro, &name, uri_de(m), dl0, dc0, &m_lines);
+        }
+    }
+    // (2) Los usos (de todos los módulos).
+    for d in idx.defs.iter().filter(|d| d.def_line == tdl && d.def_col == tdc) {
+        if let Some(m) = modulo_de(d.line) {
+            let m_lines: Vec<&str> = m.source.lines().collect();
+            empujar_rename(&mut posiciones, &mut seguro, &name, uri_de(m), d.line - m.start_line, d.col - 1, &m_lines);
+        }
+    }
+    // (3) Los especificadores de `from M import name` que traen este global. Un import con `as` va
+    // por alias (los usos son el alias, ya rechazados) → inseguro. Se lee de la fuente del módulo ya
+    // cargado (el archivo de entrada usa el buffer, no el disco).
+    for s in loaded.from_import_sites.iter().filter(|s| s.global == global) {
+        if s.aliased {
+            seguro = false;
+            continue;
+        }
+        let Some(m) = loaded.modules.iter().find(|m| m.path == s.path) else {
+            seguro = false;
+            continue;
+        };
+        let m_lines: Vec<&str> = m.source.lines().collect();
+        empujar_rename(&mut posiciones, &mut seguro, &name, uri_de(m), s.line - 1, s.col - 1, &m_lines);
+    }
+
+    if !seguro {
+        return None; // rename incompleto/ambiguo → mejor no tocar nada
+    }
+    posiciones.sort();
+    posiciones.dedup();
+    Some(posiciones)
+}
+
+/// Añade una posición a renombrar si el texto en `(dl0, dc0)` de `lines` es exactamente `name`;
+/// si no (alias, ref calificada, posición inesperada), marca el rename como **inseguro**.
+fn empujar_rename(pos: &mut Vec<(String, Span)>, seguro: &mut bool, name: &str, u: String, dl0: usize, dc0: usize, lines: &[&str]) {
+    match token_at(lines, dl0, dc0) {
+        Some(t) if t == name => pos.push((u, (dl0, dc0, name.chars().count()))),
+        _ => *seguro = false,
+    }
+}
+
+/// El nombre global del ítem top-level (función/struct/enum/trait) cuya declaración está en
+/// `(line, col)`, o `None` si ahí no hay uno (p. ej. es una variable local).
+fn def_global_name(program: &crate::ast::Program, line: usize, col: usize) -> Option<String> {
+    let en = |l: usize, c: usize| l == line && c == col;
+    program.functions.iter().find(|f| en(f.line, f.col)).map(|f| f.name.clone())
+        .or_else(|| program.structs.iter().find(|s| en(s.line, s.col)).map(|s| s.name.clone()))
+        .or_else(|| program.enums.iter().find(|e| en(e.line, e.col)).map(|e| e.name.clone()))
+        .or_else(|| program.traits.iter().find(|t| en(t.line, t.col)).map(|t| t.name.clone()))
 }
 
 /// El `result` de `textDocument/completion`: los símbolos ofrecibles en el documento (funciones y
@@ -1572,6 +1697,32 @@ mod tests {
         assert!(archivos.contains("main.ray"), "incluye el uso del archivo abierto: {locs:?}");
         // 3 apariciones: declaración + uso interno en geo.ray, uso en main.ray.
         assert_eq!(locs.len(), 3, "{locs:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_cruza_modulos() {
+        let dir = std::env::temp_dir().join("ray_lsp_ren_mod");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("geo.ray"),
+            "pub fn duplicar(x: int) -> int { x * 2 }\npub fn cuad(x: int) -> int { duplicar(x) }\n").unwrap();
+        let uri = format!("file://{}", dir.join("main.ray").display());
+
+        // Rename de una función importada → toca AMBOS archivos, INCLUIDA la línea del import.
+        let src = "from geo import duplicar;\nfn main() -> int {\n  duplicar(21)\n}\n";
+        let pos = rename_cross(&uri, src, 2, 2).expect("rename cross-módulo");
+        let archivos: std::collections::HashSet<&str> =
+            pos.iter().map(|(u, _)| u.rsplit('/').next().unwrap()).collect();
+        assert!(archivos.contains("geo.ray") && archivos.contains("main.ray"), "{pos:?}");
+        // 4 posiciones: decl + uso interno (geo.ray), especificador de import + uso (main.ray).
+        assert_eq!(pos.len(), 4, "{pos:?}");
+        // El especificador del import (main.ray línea 0) está entre las posiciones.
+        assert!(pos.iter().any(|(u, (l, _, _))| u.ends_with("main.ray") && *l == 0), "falta el import: {pos:?}");
+
+        // Con `as alias`, el rename se NIEGA (los usos van por el alias → incompleto e inseguro).
+        let src = "from geo import duplicar as d;\nfn main() -> int { d(21) }\n";
+        assert!(rename_cross(&uri, src, 1, 19).is_none(), "rename con alias debe rechazarse");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

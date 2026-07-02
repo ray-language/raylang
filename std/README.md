@@ -29,5 +29,7 @@ con `ray doc std/math.ray`.
 
 - **`std/math`** — utilidades enteras que complementan los builtins matemáticos: `iabs`, `sign`,
   `clamp`, `gcd`, `lcm`, `ipow`, `factorial`, `is_prime`.
+- **`std/text`** — utilidades de string más allá de los builtins: `is_empty`, `pad_left`, `pad_right`,
+  `capitalize`, `reverse`, `count`, `words`.
 
 (Más módulos por venir; ver DESIGN §42.7.)

@@ -1,0 +1,74 @@
+// std/text (M40.4c) — utilidades de string que complementan los builtins (trim/split/chars/replace/
+// to_upper/substring/repeat/index_of/join/…). Todo `pub`: `import std/text;` → `text.capitalize(s)`.
+
+/// ¿Está el string vacío?
+pub fn is_empty(s: string) -> bool {
+    len(s) == 0
+}
+
+/// Rellena `s` por la IZQUIERDA con el string `relleno` hasta alcanzar `ancho` caracteres (si ya lo
+/// alcanza, se devuelve tal cual). `relleno` se repite entero (usa un solo carácter para un ancho exacto).
+pub fn pad_left(s: string, ancho: int, relleno: string) -> string {
+    let faltan = ancho - len(s);
+    if (faltan <= 0) { s } else { repeat(relleno, faltan) + s }
+}
+
+/// Como `pad_left`, pero rellenando por la DERECHA.
+pub fn pad_right(s: string, ancho: int, relleno: string) -> string {
+    let faltan = ancho - len(s);
+    if (faltan <= 0) { s } else { s + repeat(relleno, faltan) }
+}
+
+/// Pone en mayúscula el primer carácter y deja el resto igual. String vacío → vacío.
+pub fn capitalize(s: string) -> string {
+    if (len(s) == 0) {
+        s
+    } else {
+        to_upper(substring(s, 0, 1)) + substring(s, 1, len(s))
+    }
+}
+
+/// Invierte el string carácter a carácter.
+pub fn reverse(s: string) -> string {
+    let cs = chars(s);
+    var out = "";
+    var i = len(cs) - 1;
+    while (i >= 0) {
+        out = out + to_string(cs[i]);
+        i = i - 1;
+    }
+    out
+}
+
+/// Número de ocurrencias **no solapadas** de `sub` en `s` (`sub` vacío → 0).
+pub fn count(s: string, sub: string) -> int {
+    if (len(sub) == 0) {
+        0
+    } else {
+        var n = 0;
+        var resto = s;
+        var seguir = true;
+        while (seguir) {
+            match (index_of(resto, sub)) {
+                Option.Some(i) => {
+                    n = n + 1;
+                    resto = substring(resto, i + len(sub), len(resto));
+                },
+                Option.None => { seguir = false; },
+            }
+        }
+        n
+    }
+}
+
+/// Parte `s` en palabras separadas por espacios, descartando las vacías (espacios repetidos).
+pub fn words(s: string) -> [string] {
+    let partes = split(s, " ");
+    var out: [string] = [];
+    var i = 0;
+    while (i < len(partes)) {
+        if (len(partes[i]) > 0) { push(out, partes[i]); }
+        i = i + 1;
+    }
+    out
+}

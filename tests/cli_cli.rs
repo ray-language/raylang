@@ -302,3 +302,19 @@ fn importa_la_stdlib_del_sistema() {
     assert!(out.contains("12"), "gcd(48,36)=12\n{out}");
     assert!(out.contains("true"), "is_prime(13)\n{out}");
 }
+
+#[test]
+fn stdlib_text_capitaliza_e_invierte() {
+    let base = tmp("std_text");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "import std/text;\nfn main() -> int { print(text.capitalize(\"hola\")); print(text.reverse(\"abc\")); print(text.count(\"aaaa\", \"aa\")); 0 }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con import std/text debe salir 0\n{err}");
+    assert!(out.contains("Hola"), "capitalize\n{out}");
+    assert!(out.contains("cba"), "reverse\n{out}");
+    assert!(out.contains("2"), "count no solapado\n{out}");
+}

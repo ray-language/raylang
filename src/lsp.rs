@@ -234,7 +234,50 @@ fn hover_at(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<
     let start = e.col - 1;
     // Recorta el fin al identificador real de la fuente (el `len` namespacado puede excederlo).
     let end = start + e.len.min(token_len(src, line0, start));
-    Some((e.text.clone(), start, end))
+    Some((nombre_fachada(&e.text), start, end))
+}
+
+/// Presenta los nombres globales para el usuario: convierte cada ruta namespacada del loader
+/// (`geo::formas::circulo::Circulo`) a su **forma de fachada** `primer.último` (`geo.Circulo`).
+/// Respeta la cápsula (no expone la estructura interna `formas/circulo`) y usa el separador `.`
+/// del lenguaje en vez del interno `::` —que el usuario nunca escribe—. Un nombre sin `::` (tipo
+/// local, primitivo) se deja igual.
+fn nombre_fachada(texto: &str) -> String {
+    let chars: Vec<char> = texto.chars().collect();
+    let seg = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if !seg(chars[i]) {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        // Lee una ruta `seg (:: seg)*`, quedándonos con el primer y el último segmento.
+        let inicio = i;
+        while i < chars.len() && seg(chars[i]) {
+            i += 1;
+        }
+        let primero: String = chars[inicio..i].iter().collect();
+        let mut ultimo: Option<String> = None;
+        while i + 1 < chars.len() && chars[i] == ':' && chars[i + 1] == ':' {
+            i += 2;
+            let s = i;
+            while i < chars.len() && seg(chars[i]) {
+                i += 1;
+            }
+            ultimo = Some(chars[s..i].iter().collect());
+        }
+        match ultimo {
+            Some(u) => {
+                out.push_str(&primero);
+                out.push('.');
+                out.push_str(&u);
+            }
+            None => out.push_str(&primero),
+        }
+    }
+    out
 }
 
 /// Longitud del identificador que empieza en `(line0, col0)` (0-basados) en la fuente: cuántos
@@ -1332,14 +1375,27 @@ mod tests {
         // Variable LOCAL: hover funciona pese al import (índice sobre el programa fusionado).
         let (t, _, _) = hover_at(Some(&uri), src, 3, 11).expect("hover sobre 'y'");
         assert_eq!(t, "y: int");
-        // Función IMPORTADA de otro módulo: muestra su tipo (nombre namespacado).
+        // Función IMPORTADA de otro módulo: muestra su tipo en forma de fachada (`geo.duplicar`,
+        // no el `geo::duplicar` interno).
         let (t, _, _) = hover_at(Some(&uri), src, 3, 2).expect("hover sobre 'duplicar'");
-        assert!(t.starts_with("geo::duplicar: fn(int) -> int"), "{t}");
+        assert_eq!(t, "geo.duplicar: fn(int) -> int", "forma de fachada, sin '::'");
 
         // Rename de una variable local en un archivo multi-módulo: seguro (vive entera aquí).
         let (_, _, _, es_local) = symbol_occurrences(Some(&uri), src, 3, 11).expect("símbolo");
         assert!(es_local, "'y' es local → renombrable");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nombre_fachada_colapsa_namespaces() {
+        // Ruta interna → fachada `primer.último` (respeta la cápsula, sin `::`).
+        assert_eq!(nombre_fachada("geo::formas::circulo::Circulo"), "geo.Circulo");
+        assert_eq!(nombre_fachada("geo::area: fn(geo::formas::circulo::Circulo) -> int"),
+            "geo.area: fn(geo.Circulo) -> int");
+        // Nombres sin namespacing (locales, primitivos) intactos.
+        assert_eq!(nombre_fachada("c: Punto"), "c: Punto");
+        assert_eq!(nombre_fachada("n: int"), "n: int");
+        assert_eq!(nombre_fachada("f: fn(int, bool) -> string"), "f: fn(int, bool) -> string");
     }
 
     #[test]

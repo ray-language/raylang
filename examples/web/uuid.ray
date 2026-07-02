@@ -4,7 +4,7 @@
 // 16 octetos aleatorios con dos campos fijos: los 4 bits altos del octeto 6 = 0100 (versión 4) y los
 // 2 bits altos del octeto 8 = 10 (variante RFC 4122). Formato canónico 8-4-4-4-12 en hex minúscula.
 
-from hex import hex_encode;
+from std/hex import hex_encode;
 
 pub fn uuid_v4() -> string {
     var b: [int] = [];

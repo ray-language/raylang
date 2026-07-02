@@ -79,5 +79,11 @@ Operan sobre `bytes` (convierte un `string` con el builtin `to_bytes`).
 - **`std/ed25519`** — `ed25519_public_key`/`ed25519_sign`/`ed25519_verify` (firmas EdDSA; sobre `std/sha512`).
 - **`std/protobuf`** — writer/reader de Protocol Buffers: `writer`/`write_varint`/`write_string`/`finish`/
   `parse`/`get_int`/`get_string` + enmarcado gRPC.
+- **`std/uuid`** — `uuid_v4()` (RFC 4122 v4, sobre el PRNG del runtime) y `is_uuid_v4(s)` (validación).
 
-(Más módulos por venir; ver DESIGN §42.9.)
+## Lo que NO está en `std/` (tier de red)
+
+Las librerías que dependen de sockets/TLS y no son deterministas —`udp`, `dns`, `http`, `http2`,
+`websocket`, `grpc`, `postgres`, `redis`, `oauth2`, `jwt`, `scram`, `sigv4`, `framework`, `webserver`…—
+**siguen en `examples/`**: son un *framework de aplicación*, no una biblioteca estándar. Se importan
+directamente desde ahí, o esperan a un paquete `net`/aplicación propio (ver DESIGN §42.9).

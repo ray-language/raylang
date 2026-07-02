@@ -5477,8 +5477,13 @@ NFA lineal de Thompson: `full_match`/`search`/`find`/`find_all`/`replace_all`), 
 (AEAD `aead_seal`/`aead_open`; →`std/chacha20`+`std/poly1305`) y `std/ed25519` (firmas EdDSA;
 →`std/sha512`). Test `stdlib_cripto_aead_y_protobuf` (cli_cli): AEAD seal→open roundtrip + protobuf varint.
 Verificado que `chacha20poly1305_cli`/`ed25519_cli`/`jwt_eddsa_cli`/`protobuf_cli` siguen verdes (copian estas
-libs a temporales; los imports namespacados resuelven embebidos). **Con esto, el subconjunto fundacional
-determinista (encoding + hashing + compresión + cripto + protobuf + texto/datos) está en `std/`.**
+libs a temporales; los imports namespacados resuelven embebidos).
+
+**M40.7f — uuid**: `std/uuid` (`uuid_v4()` sobre `random_int` del runtime, `is_uuid_v4(s)` validación;
+→`std/hex`). `uuid_v4` no es determinista → el test valida el **roundtrip** (`is_uuid_v4(uuid_v4())` es
+determinista) + rechazo de basura + longitud 36 (`stdlib_uuid_genera_y_valida`, cli_cli). **Con esto, el
+subconjunto fundacional determinista (encoding + hashing + compresión + cripto + protobuf + texto/datos +
+uuid) está en `std/`: **24 módulos** (3 nativos math/text/sort + 21 promovidos).**
 
 **Diferido (tier de red / aplicación, sigue en `examples/`).** No se promueve: `udp`/`dns`/`dns_cache`,
 `http`/`http2`/`http2_client`, `websocket`/`websocket_client`, `grpc_client`, `postgres`/`redis`, `oauth2`/

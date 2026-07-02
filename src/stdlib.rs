@@ -52,6 +52,8 @@ const MODULOS: &[(&str, &str)] = &[
     ("std/chacha20poly1305", include_str!("../examples/web/chacha20poly1305.ray")),
     ("std/ed25519", include_str!("../examples/web/ed25519.ray")),
     ("std/protobuf", include_str!("../examples/web/protobuf.ray")),
+    // UUID (M40.7f): `uuid_v4` usa `random_int` (no determinista), `is_uuid_v4` valida. → `std/hex`.
+    ("std/uuid", include_str!("../examples/web/uuid.ray")),
 ];
 
 /// La fuente embebida del módulo `nombre` (`"std/math"`), o `None` si no es un módulo de la stdlib.

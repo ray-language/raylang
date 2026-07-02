@@ -491,3 +491,26 @@ fn stdlib_cripto_aead_y_protobuf() {
     assert!(out.contains("[72, 105]"), "aead seal→open roundtrip\n{out}");
     assert!(out.contains("089601"), "protobuf varint field1=150\n{out}");
 }
+
+#[test]
+fn stdlib_uuid_genera_y_valida() {
+    // M40.7f: uuid_v4 usa random_int (no determinista); se valida el ROUNDTRIP (is_uuid_v4 es determinista).
+    let base = tmp("std_uuid");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "import std/uuid;\n\
+         fn main() -> int {\n\
+             print(uuid.is_uuid_v4(uuid.uuid_v4()));\n\
+             print(uuid.is_uuid_v4(\"not-a-uuid\"));\n\
+             print(len(uuid.uuid_v4()));\n\
+             0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con import std/uuid debe salir 0\n{err}");
+    assert!(out.contains("true"), "is_uuid_v4(uuid_v4()) roundtrip\n{out}");
+    assert!(out.contains("false"), "is_uuid_v4 rechaza basura\n{out}");
+    assert!(out.contains("36"), "un uuid mide 36 chars\n{out}");
+}

@@ -371,3 +371,32 @@ fn stdlib_encoding_hex_base64_url_json() {
     assert!(out.contains("a%20b%26c"), "url_encode\n{out}");
     assert!(out.contains("{\"n\":42}"), "json parse+stringify\n{out}");
 }
+
+#[test]
+fn stdlib_hashing_vectores_conocidos() {
+    // M40.7b: hashing promovido a std/. sha512/hmac no son hojas → sus imports se namespacaron a std/,
+    // que la resolución embebida satisface (el temporal no tiene hex.ray/sha256.ray al lado).
+    let base = tmp("std_hash");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "import std/sha256;\n\
+         import std/sha512;\n\
+         import std/hmac;\n\
+         import std/sha1;\n\
+         fn main() -> int {\n\
+             print(sha256.sha256_hex(to_bytes(\"abc\")));\n\
+             print(sha512.sha512_hex([]));\n\
+             print(hmac.hmac_sha256_hex(to_bytes(\"\"), to_bytes(\"\")));\n\
+             print(sha1.sha1_hex(to_bytes(\"abc\")));\n\
+             0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con imports de std hashing debe salir 0\n{err}");
+    assert!(out.contains("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), "sha256(abc)\n{out}");
+    assert!(out.starts_with("ba7816bf") || out.contains("cf83e1357eefb8bd"), "sha512(\"\")\n{out}");
+    assert!(out.contains("b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad"), "hmac_sha256(\"\",\"\")\n{out}");
+    assert!(out.contains("a9993e364706816aba3e25717850c26c9cd0d89d"), "sha1(abc)\n{out}");
+}

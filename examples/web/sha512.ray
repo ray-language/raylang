@@ -6,7 +6,7 @@
 // Las constantes de 64 bits superan i64::MAX, así que se componen de dos mitades de 32 bits con `w64`.
 // Importable: `from sha512 import sha512, sha512_hex, sha512_octets;`.
 
-from hex import hex_encode;
+from std/hex import hex_encode;
 
 // Compone una palabra de 64 bits a partir de sus mitades alta y baja de 32 bits.
 fn w64(hi: int, lo: int) -> u64 {

@@ -5453,3 +5453,11 @@ al **`examples/…/X.ray` original** — la fuente es única, el ejemplo sigue s
 filas en `MODULOS`. Test `stdlib_encoding_hex_base64_url_json` (cli_cli). Las librerías con dependencias
 (`from X import`) se namespacan a `std/X` en M40.7b+ (reescribir su import a `from std/…`, verificado contra
 la resolución embebida). Diferido: hashing, compresión, cripto, protobuf; el *tier* de red.
+
+**M40.7b — hashing**: `std/sha1`, `std/sha256` (hojas, verbatim), `std/sha512` (→`std/hex`), `std/hmac`
+(→`std/sha256` + `std/hex`). Las dos con deps **dejan de ser hojas**: se reescribe su `from hex import` →
+`from std/hex import` (etc.) **en el propio ejemplo**, y la resolución embebida lo satisface corran donde
+corran (un temporal de test sin `hex.ray`/`sha256.ray` al lado resuelve igual — verificado con
+`hmac_cli`/`sha512_cli`/`sigv4_cli`, que copian estas libs a un dir temporal). API sobre `bytes` (`string`
+→ `bytes` con el builtin `to_bytes`). Vectores conocidos en `stdlib_hashing_vectores_conocidos` (cli_cli):
+sha256("abc"), sha512(""), hmac_sha256("",""), sha1("abc").

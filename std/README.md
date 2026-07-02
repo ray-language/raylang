@@ -48,4 +48,13 @@ la fuente del módulo `std/`.
 - **`std/url`** — `url_encode`/`url_decode`, `parse_query`/`build_query` (sobre `Map<string, string>`).
 - **`std/json`** — `enum Json`, `parse(s) -> Result<Json, string>`, `stringify(j) -> string`.
 
-(Más módulos por venir; ver DESIGN §42.8.)
+### Hashing (M40.7b)
+
+Operan sobre `bytes` (convierte un `string` con el builtin `to_bytes`).
+
+- **`std/sha256`** — `sha256_octets`/`sha256`/`sha256_hex`.
+- **`std/sha512`** — `sha512_octets`/`sha512`/`sha512_hex`.
+- **`std/sha1`** — `sha1`/`sha1_hex`.
+- **`std/hmac`** — `hmac_sha256`/`hmac_sha256_hex` (sobre `std/sha256` + `std/hex`).
+
+(Más módulos por venir; ver DESIGN §42.9.)

@@ -30,6 +30,12 @@ const MODULOS: &[(&str, &str)] = &[
     ("std/base64", include_str!("../examples/web/base64.ray")),
     ("std/url", include_str!("../examples/web/url.ray")),
     ("std/json", include_str!("../examples/web/json.ray")),
+    // Hashing (M40.7b). `sha512`/`hmac` no son hojas: sus `from … import` se namespacaron a `std/…` (en el
+    // propio ejemplo), que la resolución embebida satisface corran donde corran.
+    ("std/sha1", include_str!("../examples/web/sha1.ray")),
+    ("std/sha256", include_str!("../examples/web/sha256.ray")),
+    ("std/sha512", include_str!("../examples/web/sha512.ray")),
+    ("std/hmac", include_str!("../examples/web/hmac.ray")),
 ];
 
 /// La fuente embebida del módulo `nombre` (`"std/math"`), o `None` si no es un módulo de la stdlib.

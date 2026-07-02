@@ -334,12 +334,14 @@ prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el 
   substring repeat index_of join to_bytes parse_int parse_float` · **Arreglos**: `push pop
   reverse contains position sort map filter fold iter` (+ `a + b` concatena) · **Bytes**:
   `bytes_of sub_bytes from_utf8` (+ `b1 + b2`, `to_string` → hex).
-- **Iteradores** (M40.2b/c/d): `xs.iter()` y `range(a, b)` (semi-abierto) son iteradores de primera
+- **Iteradores** (M40.2b–e): `xs.iter()` y `range(a, b)` (semi-abierto) son iteradores de primera
   clase (`Iter<T>`, respaldados por un closure) recorribles con `for x in …`. **Adaptadores
-  perezosos** (métodos de `Iterator`): `.map(f)` y `.filter(pred)` devuelven otro iterador que solo
-  calcula al recorrerse, encadenables (`range(0,n).map(f).filter(p)`). **Terminales**: `.fold(init, f)`
-  reduce a un valor y `.collect()` materializa a `[T]` (cierra la cadena). No colisionan con el
-  `map`/`filter`/`fold` **eager** de arreglos (`xs.map(f) -> [U]`): se desambigua por el tipo del receptor.
+  perezosos** (métodos de `Iterator`): `.map(f)`, `.filter(pred)`, `.take(n)` (corta a los primeros `n`)
+  y `.enumerate()` (pares `(int, T)` con el índice) devuelven otro iterador que solo calcula al
+  recorrerse, encadenables (`range(0,n).map(f).filter(p).take(k)`). **Terminales**: `.fold(init, f)`
+  reduce a un valor y `.collect()` materializa a `[T]`. `enumerate` se consume con **patrón de tupla**
+  en el `for`: `for (i, x) in it.enumerate() { … }`. No colisionan con el `map`/`filter`/`fold`
+  **eager** de arreglos (`xs.map(f) -> [U]`): se desambigua por el tipo del receptor.
 - **Map**: `map_new insert get remove contains_key keys values len` (recorridos en orden de
   clave).
 - **Matemáticas**: `sqrt pow floor ceil round abs min max sin cos tan ln log10 exp pi e` ·

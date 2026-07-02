@@ -1296,8 +1296,24 @@ impl Checker {
                                 None => return Err(self.err(stmt.line, stmt.col, format!(
                                     "no se puede iterar sobre {} (se esperaba un arreglo, string, Map o un Iterator)", other))),
                             },
-                            (other, _) => return Err(self.err(stmt.line, stmt.col, format!(
-                                "no se puede iterar sobre {} (se esperaba un arreglo, string o Map)", other))),
+                            // M40.2e: `for (a, b) in it` sobre un iterador cuyo elemento es una tupla
+                            // (p. ej. `enumerate()` → `(int, T)`). Cada nombre liga una posición.
+                            (other, ForPat::Tuple(names)) => match self.iterator_de(other) {
+                                Some((elem, next_fn)) => {
+                                    let comps = match &elem {
+                                        Type::Tuple(ts) if ts.len() == names.len() => ts.clone(),
+                                        _ => return Err(self.err(stmt.line, stmt.col, format!(
+                                            "el patrón de {} variables no casa con el elemento {} del iterador",
+                                            names.len(), elem))),
+                                    };
+                                    self.for_iter_sites.insert((stmt.line, stmt.col), next_fn);
+                                    names.iter().zip(comps)
+                                        .filter_map(|(name, ty)| name.as_ref().map(|n| (n.clone(), ty)))
+                                        .collect()
+                                }
+                                None => return Err(self.err(stmt.line, stmt.col, format!(
+                                    "no se puede iterar sobre {} (se esperaba un arreglo, string, Map o un Iterator)", other))),
+                            },
                         }
                     }
                     // M40.2: `Iter` lo produce el lowering DESPUÉS del chequeo; aquí nunca aparece.
@@ -1601,6 +1617,9 @@ impl Checker {
                 Type::Enum(name.clone(), args.iter().map(|a| self.resolve_type(a)).collect())
             }
             Type::Array(elem) => Type::Array(Box::new(self.resolve_type(elem))),
+            // Tuplas (M27.1): resolver cada componente (antes se dejaban sin resolver → un `Struct("T")`
+            // dentro de una tupla no se reclasificaba a `Var`/`Enum`, rompiendo la inferencia genérica).
+            Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| self.resolve_type(t)).collect()),
             Type::Fn(params, ret) => Type::Fn(
                 params.iter().map(|p| self.resolve_type(p)).collect(),
                 Box::new(self.resolve_type(ret)),
@@ -1622,15 +1641,21 @@ impl Checker {
             let def = self.type_defs.get(name).copied();
             self.record_named(line, col, name.chars().count(), format!("struct {}", name), def);
         }
-        let tparams = self.struct_tparams.get(name).cloned().unwrap_or_default();
+        let orig_tparams = self.struct_tparams.get(name).cloned().unwrap_or_default();
         // No debe haber campos desconocidos.
         for (fname, fexpr) in fields {
             if !declared.iter().any(|(dname, _)| dname == fname) {
                 return Err(self.err(fexpr.line, fexpr.col, format!("'{}' no tiene un campo '{}'", name, fname)));
             }
         }
-        // σ: parámetro de tipo → tipo inferido. Se siembra del tipo esperado.
-        let mut sigma = seed_sigma_from_expected(expected, name, &tparams);
+        // M40.2e: renombrar los params del struct a nombres frescos para la inferencia (higiene: que un
+        // `T` del struct no colisione con un `T` del ámbito). Los bounds usan los nombres originales.
+        let field_types: Vec<Type> = declared.iter().map(|(_, t)| t.clone()).collect();
+        let (tparams, fresh_types) = freshen_ctor_params(&orig_tparams, &field_types, &self.type_params);
+        let declared: Vec<(String, Type)> = declared.iter().map(|(n, _)| n.clone()).zip(fresh_types).collect();
+        // σ: parámetro de tipo → tipo inferido. Se siembra del tipo esperado (resuelto, ver check_enum_lit).
+        let expected_owned = expected.map(|e| self.resolve_type(e));
+        let mut sigma = seed_sigma_from_expected(expected_owned.as_ref(), name, &tparams);
         // Cada campo declarado debe estar presente exactamente una vez; su valor
         // determina (unifica) los parámetros de tipo del struct.
         for (dname, dty) in &declared {
@@ -1649,7 +1674,7 @@ impl Checker {
         let targs = self.finalize_type_args(&tparams, &sigma, &format!("el struct '{}'", name), line, col)?;
         // M9.4: cada parámetro acotado debe resolver a un tipo que satisfaga su bound.
         let bounds = self.struct_bounds.get(name).cloned().unwrap_or_default();
-        self.check_construction_bounds(name, &tparams, &targs, &bounds, line, col)?;
+        self.check_construction_bounds(name, &orig_tparams, &targs, &bounds, line, col)?;
         Ok(Type::Struct(name.to_string(), targs))
     }
 
@@ -1687,14 +1712,21 @@ impl Checker {
             let def = self.type_defs.get(enum_name).copied();
             self.record_named(line, col, enum_name.chars().count(), format!("enum {}", enum_name), def);
         }
-        let tparams = self.enum_tparams.get(enum_name).cloned().unwrap_or_default();
+        let orig_tparams = self.enum_tparams.get(enum_name).cloned().unwrap_or_default();
         if args.len() != payload.len() {
             return Err(self.err(line, col, format!(
                 "la variante '{}.{}' espera {} argumento(s), se dieron {}",
                 enum_name, variant, payload.len(), args.len()
             )));
         }
-        let mut sigma = seed_sigma_from_expected(expected, enum_name, &tparams);
+        // M40.2e: renombrar los params del enum a nombres frescos para la inferencia (higiene: que el
+        // `T` de Option no colisione con un `T` del ámbito). Los bounds usan los nombres originales.
+        let (tparams, payload) = freshen_ctor_params(&orig_tparams, &payload, &self.type_params);
+        // El esperado se **resuelve** (Struct("T")→Var("T") según el ámbito) para que sus parámetros de
+        // tipo casen con los del cuerpo (que ya vienen resueltos); si no, `T` de una anotación y `T`
+        // inferido diferirían como Struct vs Var.
+        let expected_owned = expected.map(|e| self.resolve_type(e));
+        let mut sigma = seed_sigma_from_expected(expected_owned.as_ref(), enum_name, &tparams);
         for (arg, pty) in args.iter().zip(&payload) {
             let at = self.check_value_against(arg, pty, &sigma)?;
             unify(pty, &at, &mut sigma).map_err(|reason| self.err(arg.line, arg.col, format!(
@@ -1704,7 +1736,7 @@ impl Checker {
         let targs = self.finalize_type_args(&tparams, &sigma, &format!("la variante '{}.{}'", enum_name, variant), line, col)?;
         // M9.4: cada parámetro acotado debe resolver a un tipo que satisfaga su bound.
         let bounds = self.enum_bounds.get(enum_name).cloned().unwrap_or_default();
-        self.check_construction_bounds(enum_name, &tparams, &targs, &bounds, line, col)?;
+        self.check_construction_bounds(enum_name, &orig_tparams, &targs, &bounds, line, col)?;
         Ok(Type::Enum(enum_name.to_string(), targs))
     }
 
@@ -3248,6 +3280,32 @@ fn type_has_var(t: &Type) -> bool {
 /// Siembra `σ` a partir del tipo esperado (M6.2): si se espera `Nombre<a, b, ...>` con
 /// la aridad correcta, liga cada parámetro de tipo con su argumento esperado. Así
 /// `Caja.Vacia` con tipo esperado `Caja<int>` fija `T = int`.
+/// Higiene de la inferencia de construcción (M40.2e): renombra los parámetros de tipo del tipo
+/// construido a nombres frescos (`$ctor$i`, ilegales para el usuario) para que **no colisionen con
+/// parámetros de tipo rígidos del ámbito**. Sin esto, `fn f<T>() -> Option<(int, T)> { Option.Some(
+/// (0, x)) }` confunde el `T` de `Option` con el `T` de `f` y liga `T := (int, T)` (occurs-check
+/// falso). Devuelve `(tparams frescos, tipos con los params renombrados)` en el mismo orden (los
+/// argumentos de tipo resultantes siguen la posición, así que los bounds usan los nombres originales).
+fn freshen_ctor_params(tparams: &[String], types: &[Type], in_scope: &HashSet<String>) -> (Vec<String>, Vec<Type>) {
+    // Solo se renombran los parámetros que **colisionan** con un parámetro de tipo del ámbito; sin
+    // colisión no se toca nada, así los mensajes de error conservan los nombres originales (`'A'`).
+    if !tparams.iter().any(|t| in_scope.contains(t)) {
+        return (tparams.to_vec(), types.to_vec());
+    }
+    let mut ren: HashMap<String, Type> = HashMap::new();
+    let fresh: Vec<String> = tparams.iter().enumerate().map(|(i, t)| {
+        if in_scope.contains(t) {
+            let f = format!("$ctor${}", i);
+            ren.insert(t.clone(), Type::Var(f.clone()));
+            f
+        } else {
+            t.clone()
+        }
+    }).collect();
+    let types = types.iter().map(|t| subst(t, &ren)).collect();
+    (fresh, types)
+}
+
 fn seed_sigma_from_expected(expected: Option<&Type>, name: &str, tparams: &[String]) -> HashMap<String, Type> {
     let mut sigma = HashMap::new();
     if let Some(Type::Struct(en, eargs) | Type::Enum(en, eargs)) = expected {
@@ -3274,6 +3332,7 @@ fn subst(ty: &Type, sigma: &HashMap<String, Type>) -> Type {
             ps.iter().map(|p| subst(p, sigma)).collect(),
             Box::new(subst(r, sigma)),
         ),
+        Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| subst(t, sigma)).collect()),
         // Tipos nominales: sustituir sus argumentos de tipo (M6.2).
         Type::Struct(n, args) => Type::Struct(n.clone(), args.iter().map(|a| subst(a, sigma)).collect()),
         Type::Enum(n, args) => Type::Enum(n.clone(), args.iter().map(|a| subst(a, sigma)).collect()),
@@ -3314,6 +3373,14 @@ fn unify(param: &Type, arg: &Type, sigma: &mut HashMap<String, Type>) -> Result<
                 unify(a, b, sigma)?;
             }
             unify(r1, r2, sigma)
+        }
+        // Tuplas (M27.1): misma aridad y unificar posición a posición (habilita genéricos sobre
+        // tuplas, p. ej. `Iter<(int, T)>` de `enumerate`).
+        (Type::Tuple(t1), Type::Tuple(t2)) if t1.len() == t2.len() => {
+            for (a, b) in t1.iter().zip(t2) {
+                unify(a, b, sigma)?;
+            }
+            Ok(())
         }
         // Tipos nominales: mismo nombre y unificar sus argumentos de tipo (M6.2), p.
         // ej. `Caja<T>` contra `Caja<int>` liga `T = int`.
@@ -4111,6 +4178,7 @@ fn subst_named(ty: &Type, sigma: &HashMap<String, Type>) -> Type {
             ps.iter().map(|p| subst_named(p, sigma)).collect(),
             Box::new(subst_named(r, sigma)),
         ),
+        Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| subst_named(t, sigma)).collect()),
         Type::Struct(n, args) => Type::Struct(n.clone(), args.iter().map(|a| subst_named(a, sigma)).collect()),
         Type::Enum(n, args) => Type::Enum(n.clone(), args.iter().map(|a| subst_named(a, sigma)).collect()),
         other => other.clone(),
@@ -4191,6 +4259,7 @@ fn subst_self(ty: &Type, target: &Type) -> Type {
             ps.iter().map(|p| subst_self(p, target)).collect(),
             Box::new(subst_self(r, target)),
         ),
+        Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| subst_self(t, target)).collect()),
         Type::Struct(n, args) => {
             Type::Struct(n.clone(), args.iter().map(|a| subst_self(a, target)).collect())
         }

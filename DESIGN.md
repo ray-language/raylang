@@ -5267,6 +5267,25 @@ M40.2c). `.fold(init, f)` reduce de izquierda a derecha (método genérico sobre
 -> [T]`, sin params de tipo propios — usa `T` del trait, sustituido en el cuerpo por `subst_named_block`
 para impls concretos). Coexisten con el `fold` **eager** de arreglos por el mismo despacho según receptor
 (`[T].fold` → función libre; `Iter<T>.fold` → método del trait). Oráculo `fold_collect_oraculo`.
-Diferido: `.take()`/`.skip()`/`.zip()`/`.enumerate()`/`.sum()`; re-fundar el `map`/`filter`/`fold` eager
-sobre `Iterator`; bounds en métodos genéricos cruzando módulos. Luego `Hash` derivable + Set/deque/
-string-builder; `std/` + raydoc.
+
+#### M40.2e — `.take()`/`.enumerate()` + tuplas en la inferencia genérica
+
+`.take(n)` (perezoso, corta a los primeros `n`) y `.enumerate()` (empareja cada elemento con su índice
+en `(int, T)`), métodos del prelude. `enumerate` **produce tuplas**, lo que destapó y obligó a cerrar
+varios huecos **preexistentes** en el manejo de `Type::Tuple`:
+
+- Las tuplas no participaban en la **inferencia genérica**: `subst`/`unify`/`resolve_type`/`subst_self`/
+  `subst_named` no recorrían `Type::Tuple` (caían en el caso por defecto) → `Iter<(int, T)>` no
+  sustituía ni unificaba su `T`. Se añadió el caso `Tuple` a los cinco. Bug latente comprobado:
+  `fn f<T>(x: T) -> Option<(int, T)> { Option.Some((0, x)) }` fallaba en `main`.
+- **Higiene de la construcción**: la inferencia de `Option.Some`/struct-lit keyea σ por nombre de
+  parámetro; el `T` de `Option` colisionaba con un `T` rígido del ámbito → `T := (int, T)` (occurs-check
+  falso). `freshen_ctor_params` renombra a `$ctor$i` **solo los params que colisionan** (sin colisión,
+  intacto → mensajes de error idénticos). El tipo esperado se **resuelve** antes de sembrar σ.
+- **Patrón de tupla en el `for` sobre iteradores**: `for (i, x) in it.enumerate()` — el checker liga
+  cada nombre a su componente (como el caso `Map`), y ambos motores destructuran el elemento-tupla por
+  posición en la bajada de `ForIter::Iter`.
+
+Oráculo `take_enumerate_oraculo`. Diferido: `.skip()`/`.zip()`/`.sum()`; re-fundar el `map`/`filter`/
+`fold` eager sobre `Iterator`; bounds en métodos genéricos cruzando módulos. Luego `Hash` derivable +
+Set/deque/string-builder; `std/` + raydoc.

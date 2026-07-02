@@ -89,6 +89,34 @@ trait Iterator<T> {
             res
         } }
     }
+    // Perezoso: entrega a lo sumo los primeros `n` elementos, luego se agota. Corta la cadena sin
+    // consumir el resto del origen (útil sobre iteradores infinitos/largos).
+    fn take(self, n: int) -> Iter<T> {
+        var restantes = n;
+        Iter { paso: fn() -> Option<T> {
+            if (restantes <= 0) {
+                Option.None
+            } else {
+                restantes = restantes - 1;
+                self.next()
+            }
+        } }
+    }
+    // Perezoso: empareja cada elemento con su índice (0, 1, 2, …) en una tupla `(int, T)`. Consúmelo
+    // destructurando: `for par in it.enumerate() { let (i, x) = par; … }`.
+    fn enumerate(self) -> Iter<(int, T)> {
+        var i = 0;
+        Iter { paso: fn() -> Option<(int, T)> {
+            match (self.next()) {
+                Option.Some(x) => {
+                    let par = (i, x);
+                    i = i + 1;
+                    Option.Some(par)
+                },
+                Option.None => Option.None,
+            }
+        } }
+    }
     // TERMINAL: reduce el iterador a un único valor, acumulando de izquierda a derecha desde `init`.
     // A diferencia de map/filter, consume el iterador aquí mismo (no es perezoso). Método genérico
     // sobre el tipo del acumulador `A`.

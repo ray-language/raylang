@@ -391,13 +391,21 @@ impl<'a> Compiler<'a> {
             // M40.2: iterador de usuario. Evaluamos el iterable una vez (semántica de referencia →
             // `next` muta su estado) y llamamos a `next` hasta que devuelva `None` (tag 1 de Option).
             ForIter::Iter { expr, next_fn } => {
-                let name = match pat { ForPat::Single(n) => n.clone(), _ => unreachable!("checker: un nombre") };
                 let &idx = self.indices.get(next_fn).expect("el checker garantiza next");
                 self.emit_expr(expr)?;
                 let it_slot = self.declare_local("$it");
                 self.emit(OpCode::InitLocal(it_slot), line, col);
                 let opt_slot = self.declare_local("$opt");
-                let x_slot = self.declare_local(&name);
+                // Slots de binding según el patrón: un solo nombre, o (M40.2e) una tupla
+                // (`enumerate`) que se destructura por posición desde el elemento.
+                let (x_slot, tuple_slots): (usize, Vec<Option<usize>>) = match pat {
+                    ForPat::Single(n) => (self.declare_local(n), Vec::new()),
+                    ForPat::Tuple(names) => {
+                        let elem = self.declare_local("$elem");
+                        let slots = names.iter().map(|n| n.as_ref().map(|nm| self.declare_local(nm))).collect();
+                        (elem, slots)
+                    }
+                };
                 let loop_start = self.cur().chunk.code.len();
                 // opt = next(it)
                 self.emit(OpCode::GetLocal(it_slot), line, col);
@@ -408,10 +416,19 @@ impl<'a> Compiler<'a> {
                 self.emit(OpCode::EnumTagEq(0), line, col);
                 let exit = self.emit(OpCode::JumpIfFalse(0), line, col);
                 self.emit(OpCode::Pop, line, col); // descartar el bool true
-                // x = payload[0]
+                // x = payload[0] (o la tupla, que luego se destructura)
                 self.emit(OpCode::GetLocal(opt_slot), line, col);
                 self.emit(OpCode::GetEnumField(0), line, col);
                 self.emit(OpCode::InitLocal(x_slot), line, col);
+                // M40.2e: destructurar la tupla en sus posiciones (`$elem[i]` → cada nombre).
+                for (i, slot) in tuple_slots.iter().enumerate() {
+                    if let Some(s) = slot {
+                        self.emit(OpCode::GetLocal(x_slot), line, col);
+                        self.emit_int(i as i64, line, col);
+                        self.emit(OpCode::Index, line, col);
+                        self.emit(OpCode::InitLocal(*s), line, col);
+                    }
+                }
                 self.emit_block(body)?;
                 self.emit(OpCode::Pop, line, col); // descartar el valor del cuerpo
                 self.emit(OpCode::Jump(loop_start), line, col);

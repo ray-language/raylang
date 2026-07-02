@@ -106,5 +106,16 @@ fn main() -> int {
     print(len(cuadrados)); // 5
     print(cuadrados[4]);   // 25
 
+    // `.take(n)` corta la cadena a los primeros `n` (perezoso: no toca el resto del origen).
+    let tres = range(1, 1000000).map(fn(n: int) -> int { n * n }).take(3).collect();
+    print(tres[2]); // 9
+
+    // `.enumerate()` empareja cada elemento con su índice; se consume con patrón de tupla en el `for`.
+    var etiquetas = "";
+    for (i, letra) in ["a", "b", "c"].iter().enumerate() {
+        etiquetas = etiquetas + to_string(i) + letra + " ";
+    }
+    print(etiquetas); // "0a 1b 2c "
+
     suma
 }

@@ -471,7 +471,6 @@ impl<'a> Interpreter<'a> {
                     // → `next` muta su estado interno) y llamamos a `next` hasta `None`.
                     ForIter::Iter { expr, next_fn } => {
                         let it = self.eval_expr(expr)?;
-                        let name = match pat { ForPat::Single(n) => n, _ => unreachable!("checker: un nombre") };
                         let func = *self.functions.get(next_fn.as_str()).expect("el checker garantiza next");
                         loop {
                             let r = self.call_function(func, vec![it.clone()])?;
@@ -484,7 +483,20 @@ impl<'a> Interpreter<'a> {
                             }
                             let item = inst.payload[0].clone();
                             self.scopes.push(HashMap::new());
-                            self.define(name, item);
+                            match pat {
+                                ForPat::Single(n) => self.define(n, item),
+                                // M40.2e: patrón de tupla (p. ej. `enumerate`) — el elemento es una tupla
+                                // (arreglo en runtime); se liga por posición.
+                                ForPat::Tuple(names) => {
+                                    let comps = match &item {
+                                        Value::Array(rc) => rc.borrow().clone(),
+                                        _ => unreachable!("el checker garantiza un elemento tupla"),
+                                    };
+                                    for (name, v) in names.iter().zip(comps) {
+                                        if let Some(n) = name { self.define(n, v); }
+                                    }
+                                }
+                            }
                             let r = self.exec_block(body);
                             self.scopes.pop();
                             r?;

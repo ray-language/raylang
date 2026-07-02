@@ -2777,6 +2777,24 @@ mod tests {
             }"); // a=15, b=165 (1+9+25+49+81), len=5, zs[0]=13
     }
 
+    /// M40.2e: adaptadores `.take(n)` (perezoso, corta) y `.enumerate()` (pares `(int, T)`), este
+    /// último consumido con **patrón de tupla en el `for`** (`for (i, x) in it.enumerate()`). Oráculo
+    /// VM↔intérprete. Ejercita también la inferencia genérica sobre tuplas (`Iter<(int, T)>`).
+    #[test]
+    fn take_enumerate_oraculo() {
+        oracle_program("\
+            fn main() -> int {\n\
+            \x20 let ys = range(1, 1000).map(fn(n: int) -> int { n * n }).take(4).collect();\n\
+            \x20 var a = 0;\n\
+            \x20 for x in ys.iter() { a = a + x; }\n\
+            \x20 var b = 0;\n\
+            \x20 for par in [10, 20, 30].iter().enumerate() { let (i, v) = par; b = b + i * v; }\n\
+            \x20 var c = 0;\n\
+            \x20 for (i, v) in range(5, 100).enumerate().take(3) { c = c + i * 100 + v; }\n\
+            \x20 a * 10000 + b * 100 + c\n\
+            }"); // a=1+4+9+16=30, b=0*10+1*20+2*30=80, c=(0*100+5)+(1*100+6)+(2*100+7)=5+106+207=318
+    }
+
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
     /// punto seguro) y exige que el resultado coincida con el intérprete. Es la
     /// prueba clave del GC: si una raíz faltara, un valor vivo se liberaría y el

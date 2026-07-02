@@ -814,6 +814,14 @@ impl<'a> Vm<'a> {
                     let h = self.heap.allocate(Obj::Array(cs));
                     self.push(HeapValue::Obj(h));
                 }
+                // M40.3a: el code point Unicode de un char → int.
+                OpCode::CharCode => {
+                    let c = match self.pop() {
+                        HeapValue::Char(c) => c,
+                        _ => unreachable!("el checker garantiza un char"),
+                    };
+                    self.push(HeapValue::Int(c as i64));
+                }
                 // M16.1b: los octetos UTF-8 del string → bytes (inline, no objeto del heap).
                 OpCode::ToBytes => match self.pop() {
                     HeapValue::Str(s) => self.push(HeapValue::Bytes(s.into_bytes())),
@@ -2808,6 +2816,28 @@ mod tests {
             \x20 let d = range(1, 6).map(fn(n: int) -> int { n * n }).sum();\n\
             \x20 a * 100000 + b * 100 + d\n\
             }"); // a=5+6+7=18, b=1*1+2*2+3*3=14, d=55 → 18*100000+14*100+55
+    }
+
+    /// M40.3a: `@derive(Hash)` sobre struct y enum, más `char_code` y las impls de Hash de
+    /// primitivos (int/bool/char/string) del prelude. El hash se calcula EN raylang (recursión por
+    /// `.hash()` de campos), así que el oráculo VM↔intérprete verifica que ambos motores producen el
+    /// MISMO entero. Cubre el fix de colisión de posiciones (dos derivados con campos de tipos
+    /// distintos que van a `int#hash` vs `string#hash`).
+    #[test]
+    fn hash_derive_oraculo() {
+        oracle_program("\
+            @derive(Hash, Eq)\n\
+            struct Punto { x: int, y: int }\n\
+            @derive(Hash)\n\
+            struct Persona { nombre: string, edad: int }\n\
+            @derive(Hash)\n\
+            enum Color { Rojo, Verde, RGB(int, int, int) }\n\
+            fn main() -> int {\n\
+            \x20 let p = Punto { x: 3, y: 4 };\n\
+            \x20 let a = Persona { nombre: \"Ada\", edad: 36 };\n\
+            \x20 let mismo = if (p.hash() == (Punto { x: 3, y: 4 }).hash()) { 1 } else { 0 };\n\
+            \x20 p.hash() + a.hash() * 7 + Color.RGB(1, 2, 3).hash() * 13 + char_code('Z') + mismo * 100000\n\
+            }");
     }
 
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada

@@ -45,6 +45,27 @@ impl Ord for float { fn menor(self, otro: float) -> bool { self < otro } }
 impl Ord for string { fn menor(self, otro: string) -> bool { self < otro } }
 impl Ord for char { fn menor(self, otro: char) -> bool { self < otro } }
 
+// Hash (M40.3a): un valor hashable produce un `int`. `@derive(Hash)` lo genera para un struct/enum
+// (combinando `.hash()` de sus campos); los primitivos lo implementan aquí, en raylang (el string
+// itera sus caracteres con `char_code`). Lo consumen las tablas hash del prelude (Set, M40.3b).
+// `float` NO es hashable (como en `Map`): un struct con campo float no puede derivar Hash.
+trait Hash { fn hash(self) -> int; }
+impl Hash for int { fn hash(self) -> int { self } }
+impl Hash for bool { fn hash(self) -> int { if (self) { 1 } else { 0 } } }
+impl Hash for char { fn hash(self) -> int { char_code(self) } }
+impl Hash for string {
+    fn hash(self) -> int {
+        var h = 17;
+        let cs = chars(self);
+        var i = 0;
+        while (i < len(cs)) {
+            h = h * 31 + char_code(cs[i]);
+            i = i + 1;
+        }
+        h
+    }
+}
+
 // Conversión de tipos (M28.2): `From<S>` construye un valor a partir de uno de tipo `S`. Su método
 // `desde` NO tiene `self` (es asociado; el nombre es `desde` porque `from` es palabra clave del
 // import). Lo consume el operador `?`: sobre un `Result<_, E1>` dentro de una función que devuelve

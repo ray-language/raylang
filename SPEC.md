@@ -72,7 +72,8 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
 - Los **tipos** se namespacan por módulo (dos módulos pueden definir `Node`); las funciones
   también. `main` vive en el módulo de entrada.
 - **Anotaciones** (conjunto cerrado): `@test` sobre funciones `() -> bool` o `() -> unit`;
-  `@derive(Eq, Show)` sobre structs/enums **no genéricos**. Cualquier otra es error.
+  `@derive(Eq, Show, Hash)` sobre structs/enums **no genéricos** (Hash → `hash(self) -> int`,
+  combinando el `.hash()` de los campos; un campo `float`/array no es hashable). Cualquier otra es error.
 - **`main`** es obligatoria en el programa de entrada: sin parámetros, retorno `int` o `unit`.
   El código de salida del proceso es ese `int` (`& 0xFF`) o `0`.
 
@@ -330,7 +331,7 @@ prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el 
 
 - **Núcleo**: `print eprint to_string len panic assert assert_eq` · tipos imprimibles: `int
   float bool string char bytes u*` y (vía `mostrar`) tipos con `Show`.
-- **String**: `trim split chars contains replace starts_with ends_with to_upper to_lower
+- **Caracteres**: `char_code(c) -> int` (code point Unicode). — **String**: `trim split chars contains replace starts_with ends_with to_upper to_lower
   substring repeat index_of join to_bytes parse_int parse_float` · **Arreglos**: `push pop
   reverse contains position sort map filter fold iter` (+ `a + b` concatena) · **Bytes**:
   `bytes_of sub_bytes from_utf8` (+ `b1 + b2`, `to_string` → hex).
@@ -352,7 +353,7 @@ prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el 
   remove_file list_dir open read_line write close read_file_bytes write_file_bytes`.
 - **Red**: `tcp_connect tcp_listen tcp_accept local_port socket_read socket_write
   socket_read_bytes socket_write_bytes udp_* tls_connect tls_accept tls_connect_h2`.
-- **Concurrencia**: §9. — **Traits del prelude**: `Eq(igual) Show(mostrar) Ord(menor)
+- **Concurrencia**: §9. — **Traits del prelude**: `Eq(igual) Show(mostrar) Ord(menor) Hash(hash)
   Add/Sub/Mul/Div/Neg From<S>(desde) Iterator<T>(next)` y `Option<T>`/`Result<T,E>`.
 
 **Decisiones de nombres, congeladas** (raylang **no tiene sobrecarga**; cada firma un nombre):

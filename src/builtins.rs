@@ -970,6 +970,13 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::String { return Err((Some(0), format!("chars espera un string, no {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Char)))
     } },
+    // char_code(c) -> int (M40.3a): el code point Unicode del carácter. Habilita hashear strings/chars
+    // en raylang (para `Hash`) y ordenar por code point.
+    Builtin { name: "char_code", opcode: OpCode::CharCode, check: |a| {
+        arity(a, 1, "char_code", "")?;
+        if a[0] != Type::Char { return Err((Some(0), format!("char_code espera un char, no {}", a[0]))); }
+        Ok(Type::Int)
+    } },
     // to_bytes(s) -> bytes (M16.1b): los octetos UTF-8 del string.
     Builtin { name: "to_bytes", opcode: OpCode::ToBytes, check: |a| {
         arity(a, 1, "to_bytes", "")?;

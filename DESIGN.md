@@ -5299,5 +5299,29 @@ necesitaría un cero y un `+` del tipo del elemento (un trait `Zero`/`Sum`), que
 → se especializa a `Iter<int>` (lo más común). `zip` exige que `otra` sea un `Iter<U>` (los adaptadores
 lo devuelven; un iterador de usuario se convierte con `.map(...)`). Oráculo `skip_zip_sum_oraculo`.
 Diferido: `sum` genérico (requiere `Zero`/`Sum`); re-fundar el `map`/`filter`/`fold` eager sobre
-`Iterator`; bounds en métodos genéricos cruzando módulos. Luego `Hash` derivable + Set/deque/
-string-builder; `std/` + raydoc.
+`Iterator`; bounds en métodos genéricos cruzando módulos.
+
+### 42.6 M40.3 — colecciones (Hash + Set/deque/string-builder)
+
+#### M40.3a — `Hash` derivable
+
+`@derive(Hash)` (3er trait derivable, tras Eq/Show) genera `impl Hash for T { fn hash(self) -> int }`.
+El trait `Hash { fn hash(self) -> int; }` vive en el prelude con impls de primitivos **en raylang**:
+`int` → sí mismo, `bool` → 0/1, `char` → `char_code(self)`, `string` → polinomio sobre sus caracteres
+(`h = h*31 + char_code(c)`). `float` NO es hashable (como en `Map`). El cuerpo derivado combina el
+`.hash()` de cada campo (struct) o del payload por variante + su índice (enum) — recursivo, en raylang.
+Habilita usar tipos de usuario como claves de tablas hash (Set/HashMap, M40.3b+).
+
+- **Único toque de runtime**: builtin `char_code(c: char) -> int` (opcode `CharCode`; el code point).
+  Todo lo demás es front-end (trait + impls + derive, como Eq/Show).
+- **Bug de colisión de posiciones (corregido, era latente)**: cada impl derivado se parsea desde la
+  línea 1, así que dos derivados comparten `(línea, col)`. El lowering por posición (UFCS/despacho)
+  colapsaba `self.x.hash()` (int) y `self.n.hash()` (string) de impls distintos al MISMO destino →
+  despacho equivocado (`chars` sobre un int → ICE). Antes solo funcionaba por suerte cuando los campos
+  colisionantes iban al mismo destino (`@derive(Show)` con campos del mismo tipo). Fix: `generate_derives`
+  asigna a cada cuerpo derivado **posiciones sintéticas únicas y globales** (contador atómico, banda 50M
+  disjunta de la 1M de los métodos por defecto), vía `freshen_positions`. Arregla Eq/Show/Hash a la vez.
+
+Oráculo `hash_derive_oraculo` (el hash se calcula en raylang → ambos motores dan el mismo entero).
+Diferido: `Hash` cruzando módulos con colisión de posiciones (raro; el fix no sobrevive al shift del
+loader para módulos no-entrada). Siguiente: Set/deque/string-builder (M40.3b+); luego `std/` + raydoc.

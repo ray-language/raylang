@@ -3697,6 +3697,7 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                 match trait_arg.as_str() {
                     "Eq" => nuevos.push(parse_derived_impl("Eq", &s.name, "fn igual(self, otro: Self) -> bool", &struct_eq_body(&s.fields))),
                     "Show" => nuevos.push(parse_derived_impl("Show", &s.name, "fn mostrar(self) -> string", &struct_show_body(a, &s.name, &s.fields)?)),
+                    "Hash" => nuevos.push(parse_derived_impl("Hash", &s.name, "fn hash(self) -> int", &struct_hash_body(&s.fields))),
                     _ => crate::ice!("validate_derive garantiza un trait conocido"),
                 }
             }
@@ -3715,9 +3716,26 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                 match trait_arg.as_str() {
                     "Eq" => nuevos.push(parse_derived_impl("Eq", &e.name, "fn igual(self, otro: Self) -> bool", &enum_eq_body(&e.name, &e.variants))),
                     "Show" => nuevos.push(parse_derived_impl("Show", &e.name, "fn mostrar(self) -> string", &enum_show_body(a, &e.name, &e.variants)?)),
+                    "Hash" => nuevos.push(parse_derived_impl("Hash", &e.name, "fn hash(self) -> int", &enum_hash_body(&e.name, &e.variants))),
                     _ => crate::ice!("validate_derive garantiza un trait conocido"),
                 }
             }
+        }
+    }
+    // M40.3a: dar a cada cuerpo derivado posiciones **sintéticas únicas y globales**. Cada impl se
+    // parsea desde la línea 1, así que dos derivados (o el mismo re-generado por módulo) colisionarían
+    // en las bajadas por posición (UFCS/despacho): p. ej. `self.x.hash()` (int) y `self.n.hash()`
+    // (string) en la misma `(línea, col)` se bajarían al MISMO destino → despacho equivocado. Un
+    // contador atómico global reserva una banda de 1M por método (base 50M, disjunta de la 1M de los
+    // métodos por defecto y muy por encima de cualquier fuente real). Antes solo funcionaba por suerte
+    // cuando los campos colisionantes iban al mismo destino (p. ej. `@derive(Show)` con campos del
+    // mismo tipo). Ver `freshen_positions`.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static DERIVE_FRESH: AtomicUsize = AtomicUsize::new(49_000_000);
+    for imp in &mut nuevos {
+        for m in &mut imp.methods {
+            let mut next = DERIVE_FRESH.fetch_add(1_000_000, Ordering::Relaxed);
+            freshen_positions(&mut m.body, &mut next);
         }
     }
     program.impls.extend(nuevos);
@@ -3739,8 +3757,8 @@ fn validate_derive(a: &Annotation, name: &str, type_params: &[String]) -> Result
         return Err(TypeError { msg: "'@derive' requiere al menos un trait (p. ej. @derive(Eq))".into(), line: a.line, col: a.col, len: 1 });
     }
     for arg in &a.args {
-        if arg != "Eq" && arg != "Show" {
-            return Err(TypeError { msg: format!("no se sabe derivar '{}' (por ahora Eq y Show)", arg), line: a.line, col: a.col, len: 1 });
+        if arg != "Eq" && arg != "Show" && arg != "Hash" {
+            return Err(TypeError { msg: format!("no se sabe derivar '{}' (por ahora Eq, Show y Hash)", arg), line: a.line, col: a.col, len: 1 });
         }
     }
     if !type_params.is_empty() {
@@ -3815,6 +3833,40 @@ fn parse_derived_impl(trait_name: &str, name: &str, firma: &str, body: &str) -> 
 
 /// Cuerpo de `igual` para un struct: conjunción de la igualdad de cada campo (sin campos →
 /// `true`).
+/// Cuerpo de `hash` para un struct (M40.3a): combina el `.hash()` de cada campo con un polinomio
+/// `h = h*31 + campo.hash()` (arranca en 17). Sin campos → `17`. Cada campo debe implementar `Hash`
+/// (el checker lo exige al verificar el cuerpo generado); un campo no hashable (float/array) → error.
+fn struct_hash_body(fields: &[(String, Type)]) -> String {
+    let mut acc = "17".to_string();
+    for (n, _) in fields {
+        acc = format!("({acc} * 31 + self.{n}.hash())");
+    }
+    format!("        {acc}")
+}
+
+/// Cuerpo de `hash` para un enum (M40.3a): `match` sobre `self`; el hash arranca en el índice de la
+/// variante y combina el `.hash()` de cada elemento del payload (variante unit → su índice).
+fn enum_hash_body(name: &str, variants: &[VariantDef]) -> String {
+    let mut arms = String::new();
+    for (idx, v) in variants.iter().enumerate() {
+        let k = v.payload.len();
+        if k == 0 {
+            arms.push_str(&format!("            {name}.{v} => {idx},\n", v = v.name));
+        } else {
+            let binds: Vec<String> = (0..k).map(|i| format!("a{i}")).collect();
+            let mut acc = format!("{idx}");
+            for i in 0..k {
+                acc = format!("({acc} * 31 + a{i}.hash())");
+            }
+            arms.push_str(&format!(
+                "            {name}.{v}({b}) => {acc},\n",
+                v = v.name, b = binds.join(", ")
+            ));
+        }
+    }
+    format!("        match (self) {{\n{arms}        }}")
+}
+
 fn struct_eq_body(fields: &[(String, Type)]) -> String {
     if fields.is_empty() {
         return "        true".into();

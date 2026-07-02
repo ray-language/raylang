@@ -948,6 +948,11 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza un string"),
             },
+            // M40.3a: el code point Unicode de un char → int.
+            "char_code" => match &values[0] {
+                Value::Char(c) => Value::Int(*c as i64),
+                _ => unreachable!("el checker garantiza un char"),
+            },
             // M16.1b: los octetos UTF-8 del string → bytes.
             "to_bytes" => match &values[0] {
                 Value::Str(s) => Value::Bytes(Rc::new(s.clone().into_bytes())),

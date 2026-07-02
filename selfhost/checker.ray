@@ -2824,8 +2824,8 @@ fn validate_derive(a: Annotation, name: string, type_params: [string]) -> Result
     }
     var i = 0;
     while (i < len(a.args)) {
-        if (a.args[i] != "Eq" && a.args[i] != "Show") {
-            return Result.Err(terr(a.line, a.col, "no se sabe derivar '" + a.args[i] + "' (por ahora Eq y Show)"));
+        if (a.args[i] != "Eq" && a.args[i] != "Show" && a.args[i] != "Hash") {
+            return Result.Err(terr(a.line, a.col, "no se sabe derivar '" + a.args[i] + "' (por ahora Eq, Show y Hash)"));
         }
         i = i + 1;
     }

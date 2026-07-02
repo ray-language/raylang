@@ -1726,8 +1726,24 @@ daba "función 'duplicar' no declarada" porque nunca se corría el loader. Se ar
   precisos). Si el loader falla con la entrada válida (import ausente, cápsula), un diagnóstico al
   inicio. `.ray-deps/` (M39c) se resuelve como en `ray run`, así que las dependencias también cuentan.
 
-Hover/definición/references/rename/completion **siguen siendo de un solo archivo** (no cruzan
-módulos aún): el índice semántico se construye sobre el buffer, sin loader. Diferido.
+**Consultas (hover/def/references/rename) módulo-aware.** El mismo problema mataba TODO el hover de
+un archivo con imports: el índice semántico (`semantic_index`) se construía sobre el buffer aislado,
+el checker fallaba por el `import` y no recogía nada —ni siquiera los símbolos locales—. Se arregla
+con `indice_para(uri, src)`: construye el índice sobre el **programa fusionado** del loader (delta 0
+para la entrada → posiciones locales), con *fallback* al buffer aislado. Detalles:
+
+- **hover** funciona en archivos multi-módulo: variables/params/funciones locales y también el tipo
+  de un símbolo **importado** de otro módulo (muestra el nombre namespacado, `geo::area: fn(...)`).
+- **Solapamiento por nombres namespacados**: un `geo::duplicar` registra un `len` mayor que el token
+  `duplicar` de la fuente y solapaba al token siguiente. Se resuelve eligiendo el hover **más
+  específico** (menor `len`) entre los que solapan la posición, y recortando el rango al identificador
+  real de la fuente (`token_len`).
+- **def/references/rename** filtran a la **banda de la entrada** (este archivo): una declaración en
+  otro módulo aún no navega cross-archivo (def → sin resultado), y `rename` se **niega** en símbolos
+  que cruzan módulos (los renombraría a medias) — solo renombra los que viven enteros en el archivo.
+
+Diferido: navegación cross-archivo (def/references que salten a otro módulo) y completion de símbolos
+`pub` de otros módulos (hoy completion es del buffer + prelude + builtins).
 
 ### 19.3 Deferido (más allá de M10.1)
 - **LSP**: diagnósticos (M10.2 §19.2, **multi-archivo** §19.2g) + hover/definición (M10.2b §19.2b) +

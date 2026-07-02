@@ -194,23 +194,55 @@ fn pos_params(msg: &Json) -> Option<(String, usize, usize)> {
 fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     let Some(src) = docs.get(&uri) else { return Json::Null };
-    let Some((info, start, end)) = hover_at(src, line0, char0) else { return Json::Null };
+    let Some((info, start, end)) = hover_at(Some(&uri), src, line0, char0) else { return Json::Null };
     obj(vec![
         ("contents", obj(vec![("kind", text("plaintext")), ("value", Json::Str(info))])),
         ("range", rango(line0, start, end)),
     ])
 }
 
-/// Busca el identificador en `(line0, char0)` (0-basado) y devuelve `(texto, col_ini, col_fin)`
-/// (columnas 0-basadas en esa línea). Corre el front-end recolectando el índice semántico.
-fn hover_at(src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
+/// El índice semántico para las consultas (hover/def/refs/rename). Si el documento es un archivo,
+/// se construye sobre el **programa fusionado** del loader (imports resueltos desde disco): así en
+/// un proyecto multi-archivo los símbolos —locales y de otros módulos— se resuelven, en vez de que
+/// el checker falle por el `import` y no se recoja nada. El archivo de entrada queda en delta 0, así
+/// que sus posiciones coinciden con las del buffer. Si no es un archivo o el loader falla, se
+/// construye sobre el buffer aislado (comportamiento previo). Es la misma idea que en los diagnósticos.
+fn indice_para(uri: Option<&str>, src: &str) -> Option<checker::SemanticIndex> {
+    if let Some(path) = uri.and_then(uri_to_path)
+        && let Ok(loaded) = loader::load_fuente(&path, src, &dep_roots_for(&path))
+    {
+        let mut program = loaded.program;
+        return Some(checker::semantic_index(&mut program));
+    }
     let tokens = lexer::lex(src).ok()?;
     let mut program = parser::parse(tokens).ok()?;
-    let idx = checker::semantic_index(&mut program);
-    // El índice usa posiciones 1-basadas (como las fases); el cursor llega 0-basado.
+    Some(checker::semantic_index(&mut program))
+}
+
+/// Busca el identificador en `(line0, char0)` (0-basado) y devuelve `(texto, col_ini, col_fin)`
+/// (columnas 0-basadas en esa línea). El índice es módulo-aware (ver `indice_para`).
+fn hover_at(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
+    let idx = indice_para(uri, src)?;
+    // El índice usa posiciones 1-basadas (como las fases); el cursor llega 0-basado. La consulta
+    // cae siempre en la banda de la entrada (delta 0), así que coincide con las posiciones locales.
     let (qline, qcol) = (line0 + 1, char0 + 1);
-    let e = idx.hovers.iter().find(|h| h.line == qline && qcol >= h.col && qcol < h.col + h.len)?;
-    Some((e.text.clone(), e.col - 1, e.col - 1 + e.len))
+    // Entre los que solapan la posición, el **más específico** (menor rango): un nombre namespacado
+    // (`geo::duplicar`) registra un `len` mayor que el token de la fuente y solaparía el siguiente.
+    let e = idx.hovers.iter()
+        .filter(|h| h.line == qline && qcol >= h.col && qcol < h.col + h.len)
+        .min_by_key(|h| h.len)?;
+    let start = e.col - 1;
+    // Recorta el fin al identificador real de la fuente (el `len` namespacado puede excederlo).
+    let end = start + e.len.min(token_len(src, line0, start));
+    Some((e.text.clone(), start, end))
+}
+
+/// Longitud del identificador que empieza en `(line0, col0)` (0-basados) en la fuente: cuántos
+/// caracteres de identificador consecutivos hay. Sirve para no subrayar de más cuando el índice
+/// trae un nombre namespacado más largo que el token escrito.
+fn token_len(src: &str, line0: usize, col0: usize) -> usize {
+    let Some(linea) = src.lines().nth(line0) else { return 0 };
+    linea.chars().skip(col0).take_while(|&c| is_ident_char(c)).count()
 }
 
 /// Un `range` LSP en una sola línea (0-basada), de la columna `start` a `end` (0-basadas).
@@ -227,22 +259,24 @@ fn rango(line0: usize, start: usize, end: usize) -> Json {
 fn definition_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     let Some(src) = docs.get(&uri) else { return Json::Null };
-    let Some((def_line0, def_col0, len)) = definition_at(src, line0, char0) else { return Json::Null };
+    let Some((def_line0, def_col0, len)) = definition_at(Some(&uri), src, line0, char0) else { return Json::Null };
     obj(vec![
         ("uri", Json::Str(uri)),
         ("range", rango(def_line0, def_col0, def_col0 + len)),
     ])
 }
 
-/// Busca el identificador en `(line0, char0)` (0-basado) y devuelve la posición de su
-/// declaración `(def_line0, def_col0, largo)` (0-basadas). Como hover, corre el front-end.
-fn definition_at(src: &str, line0: usize, char0: usize) -> Option<(usize, usize, usize)> {
-    let tokens = lexer::lex(src).ok()?;
-    let mut program = parser::parse(tokens).ok()?;
-    let idx = checker::semantic_index(&mut program);
+/// Busca el identificador en `(line0, char0)` (0-basado) y devuelve la posición de su declaración
+/// `(def_line0, def_col0, largo)` (0-basadas). Índice módulo-aware. Si la declaración vive en OTRO
+/// módulo (fuera del buffer de la entrada), aún no se navega cross-archivo → sin resultado.
+fn definition_at(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<(usize, usize, usize)> {
+    let idx = indice_para(uri, src)?;
+    let entry_lines = src.lines().count();
     let (qline, qcol) = (line0 + 1, char0 + 1);
-    let d = idx.defs.iter().find(|d| d.line == qline && qcol >= d.col && qcol < d.col + d.len)?;
-    Some((d.def_line - 1, d.def_col - 1, d.len))
+    let d = idx.defs.iter()
+        .filter(|d| d.line == qline && qcol >= d.col && qcol < d.col + d.len)
+        .min_by_key(|d| d.len)?;
+    (d.def_line <= entry_lines).then(|| (d.def_line - 1, d.def_col - 1, d.len))
 }
 
 // ── Find-references y rename (cluster 4) ─────────────────────────────────────────────
@@ -263,10 +297,14 @@ type Span = (usize, usize, usize);
 
 /// El símbolo bajo el cursor: su nombre, el rango de su **declaración** (si se localiza) y los
 /// rangos de todos sus **usos**. `None` si no hay símbolo.
-fn symbol_occurrences(src: &str, line0: usize, char0: usize) -> Option<(String, Option<Span>, Vec<Span>)> {
-    let tokens = lexer::lex(src).ok()?;
-    let mut program = parser::parse(tokens).ok()?;
-    let idx = checker::semantic_index(&mut program);
+fn symbol_occurrences(
+    uri: Option<&str>,
+    src: &str,
+    line0: usize,
+    char0: usize,
+) -> Option<(String, Option<Span>, Vec<Span>, bool)> {
+    let idx = indice_para(uri, src)?;
+    let entry_lines = src.lines().count();
     let lines: Vec<&str> = src.lines().collect();
     let (qline, qcol) = (line0 + 1, char0 + 1);
 
@@ -296,7 +334,8 @@ fn symbol_occurrences(src: &str, line0: usize, char0: usize) -> Option<(String, 
     // Clave de la declaración objetivo: (a) el cursor está sobre un uso, o (b) sobre el nombre de
     // una declaración (que tenga al menos un uso, del que se toma el nombre).
     let mut target: Option<(usize, usize, String)> = idx.defs.iter()
-        .find(|d| d.line == qline && qcol >= d.col && qcol < d.col + d.len)
+        .filter(|d| d.line == qline && qcol >= d.col && qcol < d.col + d.len)
+        .min_by_key(|d| d.len)
         .and_then(|d| use_name(d).map(|n| (d.def_line, d.def_col, n)));
     if target.is_none() {
         for d in &idx.defs {
@@ -312,13 +351,21 @@ fn symbol_occurrences(src: &str, line0: usize, char0: usize) -> Option<(String, 
     let (tdl, tdc, name) = target?;
 
     let decl = decl_range(tdl, tdc, &name);
-    let mut usos: Vec<(usize, usize, usize)> = idx.defs.iter()
-        .filter(|d| d.def_line == tdl && d.def_col == tdc)
+    // Todos los usos con la clave de esta declaración. Se filtran a la **banda de la entrada** (este
+    // archivo): los usos en otros módulos tienen líneas fuera del buffer y no deben devolverse aquí.
+    let todos: Vec<&checker::DefEntry> =
+        idx.defs.iter().filter(|d| d.def_line == tdl && d.def_col == tdc).collect();
+    let mut usos: Vec<Span> = todos
+        .iter()
+        .filter(|d| d.line <= entry_lines)
         .map(|d| (d.line - 1, d.col - 1, d.len))
         .collect();
     usos.sort();
     usos.dedup();
-    Some((name, decl, usos))
+    // ¿El símbolo vive ENTERO en este archivo? (declaración local + ningún uso en otro módulo). Solo
+    // entonces es seguro renombrarlo desde aquí; si cruza módulos, un rename local lo dejaría a medias.
+    let es_local = tdl <= entry_lines && todos.iter().all(|d| d.line <= entry_lines);
+    Some((name, decl, usos, es_local))
 }
 
 /// El `result` de `textDocument/references`: una lista de `Location` (uso, y la declaración si el
@@ -330,7 +377,7 @@ fn references_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
         .and_then(|c| c.get("includeDeclaration"))
         .map(|b| matches!(b, Json::Bool(true)))
         .unwrap_or(true);
-    let Some((_, decl, usos)) = symbol_occurrences(src, line0, char0) else { return Json::Arr(vec![]) };
+    let Some((_, decl, usos, _)) = symbol_occurrences(Some(&uri), src, line0, char0) else { return Json::Arr(vec![]) };
     let mut locs: Vec<Json> = Vec::new();
     if let Some((l, c, len)) = decl.filter(|_| incluir_decl) {
         locs.push(obj(vec![("uri", Json::Str(uri.clone())), ("range", rango(l, c, c + len))]));
@@ -349,7 +396,12 @@ fn rename_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some(new_name) = msg.get("params").and_then(|p| p.get("newName")).and_then(|n| n.as_str()) else {
         return Json::Null;
     };
-    let Some((_, decl, usos)) = symbol_occurrences(src, line0, char0) else { return Json::Null };
+    let Some((_, decl, usos, es_local)) = symbol_occurrences(Some(&uri), src, line0, char0) else { return Json::Null };
+    // Rename solo de símbolos que viven enteros en este archivo: renombrar uno que cruza módulos
+    // desde aquí lo dejaría a medias (los usos en otros archivos no se tocarían) → se rechaza.
+    if !es_local {
+        return Json::Null;
+    }
     let mut rangos: Vec<(usize, usize, usize)> = decl.into_iter().chain(usos).collect();
     rangos.sort();
     rangos.dedup();
@@ -1268,6 +1320,29 @@ mod tests {
     }
 
     #[test]
+    fn hover_con_modulos() {
+        // Antes: un archivo con `import` no daba NINGÚN hover (el checker fallaba por el import).
+        let dir = std::env::temp_dir().join("ray_lsp_hover_mod");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("geo.ray"), "pub fn duplicar(x: int) -> int { x * 2 }\n").unwrap();
+        let uri = format!("file://{}", dir.join("main.ray").display());
+        let src = "from geo import duplicar;\nfn main() -> int {\n  let y = 5;\n  duplicar(y)\n}\n";
+
+        // Variable LOCAL: hover funciona pese al import (índice sobre el programa fusionado).
+        let (t, _, _) = hover_at(Some(&uri), src, 3, 11).expect("hover sobre 'y'");
+        assert_eq!(t, "y: int");
+        // Función IMPORTADA de otro módulo: muestra su tipo (nombre namespacado).
+        let (t, _, _) = hover_at(Some(&uri), src, 3, 2).expect("hover sobre 'duplicar'");
+        assert!(t.starts_with("geo::duplicar: fn(int) -> int"), "{t}");
+
+        // Rename de una variable local en un archivo multi-módulo: seguro (vive entera aquí).
+        let (_, _, _, es_local) = symbol_occurrences(Some(&uri), src, 3, 11).expect("símbolo");
+        assert!(es_local, "'y' es local → renombrable");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn uri_a_ruta_decodifica() {
         assert_eq!(uri_to_path("file:///a/b/c.ray"), Some(PathBuf::from("/a/b/c.ray")));
         assert_eq!(uri_to_path("file:///a/mi%20carpeta/x.ray"), Some(PathBuf::from("/a/mi carpeta/x.ray")));
@@ -1279,12 +1354,13 @@ mod tests {
         // `let x = 1; x + x` → declaración + 2 usos.
         let src = "fn main() -> int {\n  let x = 1;\n  x + x\n}\n";
         // Cursor sobre el primer uso de `x` (línea 3 → 0-based 2, col 2).
-        let (name, decl, usos) = symbol_occurrences(src, 2, 2).expect("hay símbolo");
+        let (name, decl, usos, es_local) = symbol_occurrences(None, src, 2, 2).expect("hay símbolo");
         assert_eq!(name, "x");
         assert_eq!(decl, Some((1, 6, 1)), "la declaración apunta al NOMBRE x, no al 'let'");
         assert_eq!(usos.len(), 2, "x + x son dos usos");
+        assert!(es_local, "una variable local vive entera en este archivo");
         // Y desde el nombre de la declaración (línea 2 → 0-based 1, col 6) da lo mismo.
-        let (n2, d2, u2) = symbol_occurrences(src, 1, 6).expect("símbolo desde la declaración");
+        let (n2, d2, u2, _) = symbol_occurrences(None, src, 1, 6).expect("símbolo desde la declaración");
         assert_eq!((n2, d2, u2.len()), ("x".to_string(), Some((1, 6, 1)), 2));
     }
 
@@ -1293,10 +1369,10 @@ mod tests {
         // Dos `x` en funciones distintas no se mezclan (claves de declaración distintas).
         let src = "fn f(a: int) -> int {\n  let x = a;\n  x + x\n}\nfn main() -> int {\n  let x = 9;\n  x\n}\n";
         // El `x` de `f` (línea 3 → 0-based 2): 2 usos.
-        let (_, _, uf) = symbol_occurrences(src, 2, 2).unwrap();
+        let (_, _, uf, _) = symbol_occurrences(None, src, 2, 2).unwrap();
         assert_eq!(uf.len(), 2);
         // El `x` de `main` (línea 7 → 0-based 6): 1 uso.
-        let (_, _, um) = symbol_occurrences(src, 6, 2).unwrap();
+        let (_, _, um, _) = symbol_occurrences(None, src, 6, 2).unwrap();
         assert_eq!(um.len(), 1);
     }
 
@@ -1305,7 +1381,7 @@ mod tests {
         // Una función llamada dos veces: declaración + 2 usos.
         let src = "fn doble(n: int) -> int { n + n }\nfn main() -> int {\n  doble(1) + doble(2)\n}\n";
         // Cursor sobre la primera llamada `doble` (línea 3 → 0-based 2, col 2).
-        let (name, decl, usos) = symbol_occurrences(src, 2, 2).expect("hay símbolo");
+        let (name, decl, usos, _) = symbol_occurrences(None, src, 2, 2).expect("hay símbolo");
         assert_eq!(name, "doble");
         assert_eq!(decl, Some((0, 3, 5)), "la declaración apunta al nombre 'doble' tras 'fn '");
         assert_eq!(usos.len(), 2);

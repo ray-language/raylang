@@ -2840,6 +2840,30 @@ mod tests {
             }");
     }
 
+    /// M40.3b: `Set<T>` (tabla hash bucketed del prelude, sobre Hash + Eq). Cubre `set_new()` (con
+    /// inferencia bidireccional del tipo elemento), add/has/remove/size con primitivos Y un tipo de
+    /// usuario (`@derive(Hash, Eq)`), incl. deduplicación. Oráculo VM↔intérprete (tamaño/pertenencia
+    /// son deterministas; el orden de `set_items` no).
+    #[test]
+    fn set_oraculo() {
+        oracle_program("\
+            @derive(Hash, Eq)\n\
+            struct P { x: int, y: int }\n\
+            fn main() -> int {\n\
+            \x20 let s: Set<int> = set_new();\n\
+            \x20 set_add(s, 3); set_add(s, 7); set_add(s, 3); set_add(s, 100);\n\
+            \x20 set_remove(s, 7);\n\
+            \x20 let ps: Set<P> = set_new();\n\
+            \x20 set_add(ps, P { x: 1, y: 2 });\n\
+            \x20 set_add(ps, P { x: 1, y: 2 });\n\
+            \x20 set_add(ps, P { x: 5, y: 6 });\n\
+            \x20 let a = if (set_has(s, 3)) { 1 } else { 0 };\n\
+            \x20 let b = if (set_has(s, 7)) { 1 } else { 0 };\n\
+            \x20 let c = if (ps.set_has(P { x: 1, y: 2 })) { 1 } else { 0 };\n\
+            \x20 set_size(s) * 1000 + set_size(ps) * 100 + a * 10 + b + c\n\
+            }"); // size(s)=2, size(ps)=2, a=1, b=0, c=1 → 2000+200+10+0+1 = 2211
+    }
+
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
     /// punto seguro) y exige que el resultado coincida con el intérprete. Es la
     /// prueba clave del GC: si una raíz faltara, un valor vivo se liberaría y el

@@ -5324,4 +5324,24 @@ Habilita usar tipos de usuario como claves de tablas hash (Set/HashMap, M40.3b+)
 
 Oráculo `hash_derive_oraculo` (el hash se calcula en raylang → ambos motores dan el mismo entero).
 Diferido: `Hash` cruzando módulos con colisión de posiciones (raro; el fix no sobrevive al shift del
-loader para módulos no-entrada). Siguiente: Set/deque/string-builder (M40.3b+); luego `std/` + raydoc.
+loader para módulos no-entrada).
+
+#### M40.3b — `Set<T>` + inferencia bidireccional en llamadas
+
+`Set<T>` (`struct Set<T> { buckets: [[T]], tam }`) es una **tabla hash bucketed escrita en el prelude**
+sobre `@derive(Hash)` + `Eq` (`T` implementa ambos; los bounds se bajan a diccionarios, M9.2). API con
+prefijo `set_` (para no chocar con builtins ya tomados: `contains`/`insert`/`remove`): `set_new`,
+`set_add`, `set_has`, `set_remove`, `set_size`, `set_items`. `s.set_add(x)` por UFCS. Nº de buckets fijo
+(sin resize aún). Deduplica por `.igual()`; el índice de bucket es `x.hash()` normalizado.
+
+Habilitador: **inferencia bidireccional en llamadas genéricas** (M40.3b). `set_new() -> Set<T>` es un
+constructor **vacío**: `T` no aparece en los argumentos, así que antes no se podía inferir (`let s:
+Set<int> = set_new()` fallaba). Ahora, en `check_expr_expected`, una llamada a una función genérica de
+usuario recibe el tipo **esperado**; `check_generic_call` rellena los parámetros de tipo que los
+argumentos NO determinan unificando el retorno con el esperado (best-effort en un σ aparte → **los
+argumentos siguen mandando**, cero cambio para el código existente). Generaliza el truco de `map_new`/
+`channel` (que eran special-cases por nombre) a cualquier función genérica.
+
+Oráculo `set_oraculo` (add/has/remove/size con primitivos y un tipo de usuario, dedup). Ejemplo
+`examples/stdlib/conjunto.ray`. Diferido: resize/rehash, `HashMap<K,V>` de usuario, operaciones de
+conjunto (unión/intersección). Siguiente: deque + string-builder; luego `std/` + raydoc.

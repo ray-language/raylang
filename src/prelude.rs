@@ -239,6 +239,89 @@ fn sum(it: Iter<int>) -> int {
     it.fold(0, fn(a: int, x: int) -> int { a + x })
 }
 
+// --- Conjuntos: Set<T> (M40.3b) ---
+// Tabla hash **bucketed** escrita EN raylang sobre `@derive(Hash)` + `Eq`: `T` debe implementar ambos
+// (los bounds se bajan a diccionarios, M9.2). Las operaciones llevan prefijo `set_` para no chocar con
+// builtins ya tomados (`contains`/`insert`/`remove`). `set_new()` es un constructor vacío: su `T` lo fija
+// el tipo esperado (inferencia bidireccional en la llamada, M40.3b). Nº de buckets fijo (sin resize aún).
+struct Set<T> { buckets: [[T]], tam: int }
+
+fn set_new<T>() -> Set<T> {
+    var bs: [[T]] = [];
+    var i = 0;
+    while (i < 16) {
+        var e: [T] = [];
+        push(bs, e);
+        i = i + 1;
+    }
+    Set { buckets: bs, tam: 0 }
+}
+
+// Índice de bucket de `x` (hash módulo nº de buckets, normalizado a 0..n aunque el hash sea negativo).
+fn set_bucket<T: Hash>(x: T, n: int) -> int {
+    let h = x.hash();
+    ((h % n) + n) % n
+}
+
+// ¿Está `x` en el bucket `b`? Búsqueda lineal por igualdad (`Eq`).
+fn set_en_bucket<T: Eq>(b: [T], x: T) -> bool {
+    var i = 0;
+    while (i < len(b)) {
+        if (b[i].igual(x)) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Añade `x` al conjunto (si no estaba ya). Muta `s`.
+fn set_add<T: Hash + Eq>(s: Set<T>, x: T) {
+    let idx = set_bucket(x, len(s.buckets));
+    let b = s.buckets[idx];
+    if (!set_en_bucket(b, x)) {
+        push(b, x);
+        s.tam = s.tam + 1;
+    }
+}
+
+// ¿Pertenece `x` al conjunto?
+fn set_has<T: Hash + Eq>(s: Set<T>, x: T) -> bool {
+    let idx = set_bucket(x, len(s.buckets));
+    set_en_bucket(s.buckets[idx], x)
+}
+
+// Quita `x` del conjunto (si estaba). Muta `s` reconstruyendo el bucket sin `x`.
+fn set_remove<T: Hash + Eq>(s: Set<T>, x: T) {
+    let idx = set_bucket(x, len(s.buckets));
+    let b = s.buckets[idx];
+    var nuevo: [T] = [];
+    var i = 0;
+    var quitado = false;
+    while (i < len(b)) {
+        if (b[i].igual(x)) { quitado = true; } else { push(nuevo, b[i]); }
+        i = i + 1;
+    }
+    if (quitado) {
+        s.buckets[idx] = nuevo;
+        s.tam = s.tam - 1;
+    }
+}
+
+// Número de elementos del conjunto.
+fn set_size<T>(s: Set<T>) -> int { s.tam }
+
+// Los elementos del conjunto en un arreglo (orden no especificado — por bucket).
+fn set_items<T>(s: Set<T>) -> [T] {
+    var out: [T] = [];
+    var i = 0;
+    while (i < len(s.buckets)) {
+        let b = s.buckets[i];
+        var j = 0;
+        while (j < len(b)) { push(out, b[j]); j = j + 1; }
+        i = i + 1;
+    }
+    out
+}
+
 // Traits de sobrecarga de operadores (M28.1): un tipo que implemente estos traits puede usar los
 // operadores aritméticos. El checker baja `a + b` (con `a`/`b` de un tipo de usuario) a `a.add(b)`.
 trait Add { fn add(self, otro: Self) -> Self; }

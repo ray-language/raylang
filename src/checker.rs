@@ -2157,6 +2157,24 @@ impl Checker {
                     ))),
                 }
             }
+            // M40.3b: llamada a una función **genérica** de usuario en contexto tipado. Se pasa el
+            // esperado para rellenar los parámetros de tipo que los argumentos no determinen (p. ej.
+            // un constructor vacío `set_new() -> Set<T>`). No afecta a builtins/variables-función ni a
+            // funciones no genéricas (caen al chequeo normal).
+            ExprKind::Call { callee, args }
+                if matches!(&callee.kind, ExprKind::Ident(n)
+                    if crate::builtins::lookup(n).is_none()
+                       && self.lookup(n).is_none()
+                       && self.functions.get(n).is_some_and(|s| !s.type_params.is_empty())) =>
+            {
+                let name = match &callee.kind { ExprKind::Ident(n) => n.clone(), _ => unreachable!() };
+                if let Some(sig) = self.functions.get(&name).filter(|_| self.gather) {
+                    let ty = Type::Fn(sig.params.clone(), Box::new(sig.ret.clone()));
+                    let def = self.fn_defs.get(&name).copied();
+                    self.record_ident(callee.line, callee.col, &name, &ty, def);
+                }
+                self.check_named_call(&name, args, expr.line, expr.col, Some(expected))
+            }
             ExprKind::StructLit { name, fields } => {
                 self.check_struct_lit(name, fields, Some(expected), expr.line, expr.col)
             }
@@ -2672,7 +2690,7 @@ impl Checker {
                     let def = self.fn_defs.get(&n).copied();
                     self.record_ident(callee.line, callee.col, &n, &ty, def);
                 }
-                self.check_named_call(&n, args, line, col)
+                self.check_named_call(&n, args, line, col, None)
             }
 
             // UFCS (M7.1): `recv.f(args)`. Si `f` es un **campo** del struct receptor,
@@ -2703,7 +2721,7 @@ impl Checker {
                     let mut all = Vec::with_capacity(args.len() + 1);
                     all.push((**object).clone());
                     all.extend_from_slice(args);
-                    let ty = self.check_named_call(&mangled, &all, line, col)?;
+                    let ty = self.check_named_call(&mangled, &all, line, col, None)?;
                     // M10.2g: hover del **método de trait** en su nombre (su firma incluye el receptor).
                     let mty = self.functions.get(&mangled)
                         .map(|s| Type::Fn(s.params.clone(), Box::new(s.ret.clone())));
@@ -2767,7 +2785,7 @@ impl Checker {
         let mut all_args = Vec::with_capacity(args.len() + 1);
         all_args.push(object.clone());
         all_args.extend_from_slice(args);
-        let ty = self.check_named_call(&target, &all_args, line, col)?;
+        let ty = self.check_named_call(&target, &all_args, line, col, None)?;
         // M10.2g: hover del **método UFCS** en su nombre — la firma de la función libre resuelta
         // (map/filter/fold, funciones propias). Los builtins (len/trim/…) no tienen FnSig → se omiten.
         let mty = self.functions.get(&target)
@@ -2792,7 +2810,7 @@ impl Checker {
     /// Resolución de una llamada por **nombre** (`name(args)`): builtins conocidos,
     /// variable local que tape una función global, función de nivel superior (directa o
     /// genérica). Compartida por la llamada directa y por UFCS.
-    fn check_named_call(&mut self, name: &str, args: &[Expr], line: usize, col: usize) -> Result<Type, TypeError> {
+    fn check_named_call(&mut self, name: &str, args: &[Expr], line: usize, col: usize, expected: Option<&Type>) -> Result<Type, TypeError> {
         // Builtins (DESIGN.md §7): su firma vive en el **registro único** (`src/builtins.rs`), no
         // dispersa aquí. Se comprueban antes que una local/función homónima (un builtin no se tapa).
         // Se tipan los argumentos por el camino normal y la regla del builtin valida y da el tipo.
@@ -2827,7 +2845,7 @@ impl Checker {
             }
             // Genérica: inferir los argumentos de tipo unificando con los argumentos.
             let (ret_ty, sigma) =
-                self.check_generic_call(&type_params, &params, &ret, args, &label, line, col)?;
+                self.check_generic_call(&type_params, &params, &ret, args, &label, line, col, expected)?;
             // M9.2: si la función tiene bounds, registrar los diccionarios a pasar en este
             // sitio (verificando que cada tipo inferido cumple su bound).
             if !bounds.is_empty() {
@@ -2878,6 +2896,7 @@ impl Checker {
     /// de tipo unificando los tipos de los parámetros con los de los argumentos, y
     /// devuelve el tipo de retorno ya sustituido. Si algún parámetro de tipo no queda
     /// determinado por los argumentos, es error (M6.1 no usa el tipo esperado).
+    #[allow(clippy::too_many_arguments)]
     fn check_generic_call(
         &mut self,
         type_params: &[String],
@@ -2887,6 +2906,7 @@ impl Checker {
         label: &str,
         line: usize,
         col: usize,
+        expected: Option<&Type>,
     ) -> Result<(Type, HashMap<String, Type>), TypeError> {
         if args.len() != params.len() {
             return Err(self.err(line, col, format!(
@@ -2901,6 +2921,19 @@ impl Checker {
             unify(param, &at, &mut sigma).map_err(|reason| self.err(arg.line, arg.col, format!(
                 "argumento {} de {}: {}", i + 1, label, reason
             )))?;
+        }
+        // M40.3b: los argumentos mandan; si algún parámetro de tipo NO aparece en ellos (p. ej. un
+        // constructor vacío `set_new() -> Set<T>`), se rellena desde el tipo ESPERADO unificando el
+        // retorno con él. Best-effort en un σ aparte para no alterar lo ya inferido de los argumentos.
+        if let Some(exp) = expected.filter(|_| type_params.iter().any(|tp| !sigma.contains_key(tp))) {
+            let mut seed = HashMap::new();
+            if unify(ret, exp, &mut seed).is_ok() {
+                for tp in type_params {
+                    if !sigma.contains_key(tp) {
+                        if let Some(t) = seed.get(tp) { sigma.insert(tp.clone(), t.clone()); }
+                    }
+                }
+            }
         }
         // Todos los parámetros de tipo deben haber quedado determinados.
         for tp in type_params {

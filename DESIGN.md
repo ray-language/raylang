@@ -4920,6 +4920,29 @@ subcomando conocido cae al **modo legado** (`legacy`), que reconoce `--vm`/`--in
 `--fmt`/`--lsp`/`--repl` y el `<archivo>` directo. Los 688 tests (todos con flags o ruta
 directa) pasan sin cambios; los subcomandos nuevos se prueban en `tests/cli_cli.rs`.
 
-Pendiente de M39: **M39b** (parsear `ray.toml` + `build`/`run` dirigidos por el manifiesto) y
-**M39c** (resolución de dependencias git-first + lockfile con hashes + caché descargada,
-importable por el loader).
+### 41.2 M39b — el manifiesto `ray.toml` dirige el build
+
+Un proyecto raylang es un directorio con `ray.toml` en su raíz. M39b lo **lee** y hace que
+`run`/`build`/`test` se dirijan por él.
+
+- **`src/manifest.rs`**: un `Manifest { name, version, entry, dependencies, root }` + un
+  **lector TOML mínimo en Rust** (secciones `[tabla]`, `clave = "cadena"`, comentarios `#`;
+  errores con nº de línea). **Decisión**: no se reusa el `toml.ray` de M32.2 — el CLI necesita
+  leer la config *antes* de ejecutar nada, así que arrancar el intérprete solo para parsear el
+  manifiesto sería circular. El subconjunto soportado es todo lo que `ray.toml` usa.
+- **Descubrimiento del proyecto** (estilo `cargo`/`git`): `Manifest::find` sube por los
+  ancestros del directorio actual hasta hallar un `ray.toml`. Así `ray run` funciona desde
+  cualquier subdirectorio del proyecto.
+- **`resolver_entrada`** (en `cli.rs`) unifica la resolución del archivo a procesar: (1) el
+  archivo explícito de la línea de comandos; (2) la `entry` del manifiesto (por defecto
+  `src/main.ray`); (3) `src/main.ray` en el cwd; si nada, error de uso. `ray build` imprime un
+  banner `compilando <nombre> v<versión>`.
+- **Dependencias**: se parsean pero **aún no se resuelven** (M39c); un manifiesto con
+  dependencias avisa con claridad ("su resolución llega en M39c; se ignoran"). Un `ray.toml`
+  mal formado es error de compilación (65) con la línea.
+
+Tests: unitarios del parser (`manifest.rs`) + integración (`cli_cli.rs`: entry del manifiesto,
+subida desde subdirectorio, aviso de deps, error del manifiesto).
+
+Pendiente de M39: **M39c** (resolución de dependencias git-first + lockfile con hashes + caché
+descargada `.ray-deps/`, importable por el loader — cruza el sistema de módulos M11.3–M11.6).

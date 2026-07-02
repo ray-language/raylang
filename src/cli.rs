@@ -22,9 +22,10 @@
 
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 
+use crate::manifest::Manifest;
 use crate::runtime::Value;
 use crate::{checker, compiler, diagnostic, loader, lsp, repl, runtime, test_runner, vm};
 
@@ -121,17 +122,18 @@ fn cmd_new(args: &[String]) {
 /// `src/main.ray` (convención de proyecto). Los args tras el archivo van a `args()`.
 fn cmd_run(args: &[String]) {
     let (use_interp, resto) = tomar_interp(args);
-    let (path, prog_args) = match resto.split_first() {
-        Some((p, rest)) => (p.clone(), rest.to_vec()),
-        None => (entrada_por_defecto(), Vec::new()),
+    let (explicito, prog_args) = match resto.split_first() {
+        Some((p, rest)) => (Some(p.as_str()), rest.to_vec()),
+        None => (None, Vec::new()),
     };
+    let path = resolver_entrada(explicito, false);
     ejecutar(&path, prog_args, use_interp);
 }
 
 /// `ray build [archivo]`: chequea y **compila** el programa sin ejecutarlo (útil para CI y
 /// para validar antes de publicar). Sale 0 si compila, 65 si hay errores de compilación.
 fn cmd_build(args: &[String]) {
-    let path = args.first().cloned().unwrap_or_else(entrada_por_defecto);
+    let path = resolver_entrada(args.first().map(String::as_str), true);
     let (mut program, locate, multi) = cargar_y_localizar(&path);
     verificar_o_salir(&mut program, &locate, multi);
     match compiler::compile_program(&program) {
@@ -148,7 +150,7 @@ fn cmd_build(args: &[String]) {
 
 /// `ray test [archivo] [filtro]`: corre las funciones `@test`.
 fn cmd_test_sub(args: &[String]) {
-    let path = args.first().cloned().unwrap_or_else(entrada_por_defecto);
+    let path = resolver_entrada(args.first().map(String::as_str), false);
     let filtro = args.get(1).map(String::as_str);
     ejecutar_tests(&path, filtro);
 }
@@ -208,14 +210,56 @@ fn legacy(rest: &[String]) {
 
 // ── Piezas compartidas ───────────────────────────────────────────────────────────────
 
-/// La entrada por defecto de un proyecto: `src/main.ray` si existe. Si no, error de uso.
-fn entrada_por_defecto() -> String {
+/// Resuelve el archivo a procesar (run/build/test) y el contexto de proyecto (M39b).
+/// `explicito`: el archivo dado en la línea de comandos, si lo hay. `banner`: imprime
+/// "compilando <nombre> v<versión>" (para `build`). Prioridad: (1) el archivo explícito;
+/// (2) la entrada del manifiesto (`ray.toml` subiendo desde el cwd); (3) `src/main.ray` en
+/// el cwd; si nada, error de uso. Avisa —una vez— si el manifiesto declara dependencias
+/// (aún no se resuelven, M39c).
+fn resolver_entrada(explicito: Option<&str>, banner: bool) -> String {
+    let manifiesto = cargar_manifiesto();
+    if let Some(m) = &manifiesto {
+        if banner {
+            eprintln!("compilando {} v{}", m.name, m.version);
+        }
+        if !m.dependencies.is_empty() {
+            eprintln!(
+                "aviso: '{}' declara {} dependencia(s), pero su resolución llega en M39c; se ignoran.",
+                m.name,
+                m.dependencies.len()
+            );
+        }
+    }
+    if let Some(p) = explicito {
+        return p.to_string();
+    }
+    if let Some(m) = &manifiesto {
+        let entry = m.entry_path();
+        if !entry.is_file() {
+            eprintln!("el manifiesto '{}' apunta a una entrada inexistente: '{}'", m.name, entry.display());
+            process::exit(66);
+        }
+        return entry.to_string_lossy().into_owned();
+    }
     let def = "src/main.ray";
     if Path::new(def).exists() {
         def.to_string()
     } else {
-        eprintln!("no se indicó archivo y no existe '{def}' (¿estás en la raíz del proyecto?)");
+        eprintln!("no se indicó archivo y no hay proyecto (falta 'ray.toml' o 'src/main.ray')");
         process::exit(64);
+    }
+}
+
+/// Carga el manifiesto del proyecto que contiene el directorio actual. `None` si no hay
+/// proyecto; un `ray.toml` mal formado aborta con 65 (error de compilación de la config).
+fn cargar_manifiesto() -> Option<Manifest> {
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match Manifest::load(&cwd) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("{e}");
+            process::exit(65);
+        }
     }
 }
 

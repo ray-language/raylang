@@ -118,3 +118,72 @@ fn compat_flags_legadas() {
     assert_eq!(ray(&base, &["p.ray"]).2, 7, "raylang <archivo> directo");
     assert_eq!(ray(&base, &["--vm", "p.ray"]).2, 7, "raylang --vm <archivo>");
 }
+
+// ── M39b: el manifiesto ray.toml dirige build/run/test ───────────────────────────────
+
+/// Crea un proyecto con un `ray.toml` a medida y un archivo de entrada.
+fn proyecto(nombre: &str, manifiesto: &str, entry_rel: &str, entry_src: &str) -> std::path::PathBuf {
+    let raiz = tmp(nombre);
+    std::fs::write(raiz.join("ray.toml"), manifiesto).unwrap();
+    let entry = raiz.join(entry_rel);
+    std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+    std::fs::write(entry, entry_src).unwrap();
+    raiz
+}
+
+#[test]
+fn build_y_run_usan_la_entry_del_manifiesto() {
+    let raiz = proyecto(
+        "manifest_entry",
+        "[package]\nname = \"miapp\"\nversion = \"2.0.0\"\nentry = \"src/arranque.ray\"\n",
+        "src/arranque.ray",
+        "fn main() -> int { print(\"arranque\"); 5 }\n",
+    );
+    // build: banner con nombre+versión (a stderr) y compila la entry del manifiesto.
+    let (out, err, code) = ray(&raiz, &["build"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("compilando miapp v2.0.0"), "banner del proyecto\n{err}");
+    assert!(out.contains("arranque.ray") && out.contains("compila"), "{out}");
+    // run: ejecuta la entry del manifiesto (sin pasar archivo).
+    let (out, _err, code) = ray(&raiz, &["run"]);
+    assert!(out.contains("arranque"), "{out}");
+    assert_eq!(code, 5, "el exit es el int de main");
+}
+
+#[test]
+fn run_sube_a_la_raiz_desde_un_subdirectorio() {
+    let raiz = proyecto(
+        "manifest_subdir",
+        "[package]\nname = \"p\"\nversion = \"0.1.0\"\n",
+        "src/main.ray",
+        "fn main() -> int { print(\"raiz\"); 0 }\n",
+    );
+    // Ejecutar desde src/: el CLI sube buscando ray.toml (como cargo/git).
+    let (out, _err, code) = ray(&raiz.join("src"), &["run"]);
+    assert!(out.contains("raiz"), "encuentra el proyecto subiendo\n{out}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn avisa_de_dependencias_no_resueltas() {
+    let raiz = proyecto(
+        "manifest_deps",
+        "[package]\nname = \"condeps\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"git+https://x/geo@v1\"\n",
+        "src/main.ray",
+        "fn main() -> int { 0 }\n",
+    );
+    let (_out, err, code) = ray(&raiz, &["run"]);
+    assert_eq!(code, 0);
+    assert!(err.contains("dependencia") && err.contains("M39c"), "avisa de deps sin resolver\n{err}");
+}
+
+#[test]
+fn manifiesto_mal_formado_falla_claro() {
+    let raiz = tmp("manifest_bad");
+    std::fs::write(raiz.join("ray.toml"), "[package]\nname = sinComillas\n").unwrap();
+    std::fs::create_dir_all(raiz.join("src")).unwrap();
+    std::fs::write(raiz.join("src/main.ray"), "fn main() -> int { 0 }\n").unwrap();
+    let (_out, err, code) = ray(&raiz, &["build"]);
+    assert_eq!(code, 65, "un ray.toml mal formado es error de compilación\n{err}");
+    assert!(err.contains("ray.toml:2"), "el error trae la línea\n{err}");
+}

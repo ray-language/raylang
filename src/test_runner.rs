@@ -16,7 +16,7 @@
 
 use crate::ast::Type;
 use crate::interpreter::Value;
-use crate::{checker, diagnostic, interpreter, lexer, parser};
+use crate::{checker, diagnostic, lexer, parser};
 
 /// Cómo se decide si una prueba pasa, según su tipo de retorno.
 enum Kind {
@@ -118,7 +118,9 @@ fn ejecutar_una(pristine: &crate::ast::Program, name: &str, kind: &Kind) -> Resu
     if let Err(e) = checker::check(&mut prog) {
         return Err(format!("error de compilación: {}", e));
     }
-    match interpreter::run(&prog) {
+    // M35: las pruebas corren sobre la VM (el motor de producto) — mismo veredicto que el
+    // intérprete, y ahora una prueba puede usar concurrencia (spawn/canales).
+    match crate::run_on_vm(&prog) {
         Ok(Value::Int(0)) => Ok(()),
         Ok(Value::Int(_)) => Err("la prueba devolvió false".into()),
         Ok(_) => Ok(()),

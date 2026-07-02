@@ -1012,7 +1012,7 @@ impl<'a> Interpreter<'a> {
                     if name == "spawn" || name == "channel" || name == "send" || name == "__recv"
                         || name == "scope" || name == "select" {
                         return Err(runtime_error(callee.line, callee.col,
-                            "la concurrencia (spawn/channel/send/recv/join/scope/select) requiere la VM; ejecuta con --vm"));
+                            "la concurrencia (spawn/channel/send/recv/join/scope/select) requiere la VM; el intérprete es solo el oráculo secuencial (no uses --interp)"));
                     }
                     return Ok(self.eval_builtin(name, values));
                 }

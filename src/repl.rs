@@ -29,7 +29,7 @@
 use std::io::{self, BufRead, Write};
 
 use crate::ast::{ExprKind, Program, StmtKind};
-use crate::{checker, diagnostic, interpreter, lexer, parser};
+use crate::{checker, diagnostic, lexer, parser};
 
 /// Arranca el bucle interactivo leyendo de la entrada estándar.
 pub fn run() {
@@ -256,9 +256,11 @@ impl Session {
     }
 }
 
-/// Ejecuta el programa y renderiza un posible error de ejecución con su contexto.
+/// Ejecuta el programa sobre la **VM** (M35: el motor de producto) y renderiza un posible
+/// error de ejecución con su contexto. Devuelve el mismo `Value`/`RuntimeError` que el
+/// intérprete, así que el REPL no nota el cambio de motor (pero gana la concurrencia).
 fn run_prog(prog: &Program, src: &str) -> Result<(), String> {
-    interpreter::run(prog)
+    crate::run_on_vm(prog)
         .map(|_| ())
         .map_err(|e| diagnostic::render(src, e.line, e.col, 1, &e.to_string()))
 }

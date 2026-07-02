@@ -4814,3 +4814,33 @@ sobrecarga y la colisión UFCS con `Map.get`; no se renombró nada.
 También se verificó empíricamente lo afirmado: el contador de shift se enmascara (semántica
 Rust), `float as int` satura en los extremos, y la ventana/subrayado de M33 sobre los nuevos
 errores.
+
+## 40. M35a — La VM es el motor de producto (arco A)
+
+Tercera fase del arco A (PRODUCCION.md). Hasta aquí el binario ejecutaba con el **intérprete**
+por defecto y `--vm` era opt-in — al revés de lo que quiere producción: el usuario que corre
+`raylang prog.ray` recibía el tree-walker lento. M35a lo invierte.
+
+**Decisión: la VM por defecto, el intérprete como oráculo de desarrollo.**
+- `raylang <archivo>` corre en la **VM**. `--interp` selecciona el intérprete (rol nuevo: el
+  oráculo secuencial, que da error limpio ante la concurrencia). `--vm` se mantiene **aceptado**
+  (redundante) por compatibilidad con los scripts y los ~decenas de tests que lo pasan.
+- El **REPL** y el **runner de `@test`** pasan también a la VM. Ganan la concurrencia gratis (una
+  `@test` puede usar `spawn`/canales); el veredicto es idéntico porque la VM devuelve el mismo
+  `Value`/`RuntimeError` que el intérprete en la frontera.
+- Pieza compartida: `lib::run_on_vm(program)` compila (bajada a bytecode) el programa ya
+  chequeado y lo corre en la VM, devolviendo `Result<Value, RuntimeError>` (un error de
+  compilación —raro tras un check exitoso— se presenta como error de ejecución). Lo usan los tres
+  clientes (binario, REPL, runner).
+
+**Por qué es seguro invertir el default**: el oráculo VM↔intérprete garantiza comportamiento
+observable idéntico para todo programa determinista (SPEC §Conformidad). Los tests de integración
+que corrían sin flag (I/O, formatos, cripto…) ahora usan la VM y **pasan igual**; solo hubo que
+tocar un test —el que verificaba el error de concurrencia del intérprete corriendo *sin* flag—
+para que pida `--interp` explícitamente (ya no es el default). 688 tests verdes.
+
+**Alcance de M35 restante**: la VM ya es el motor de producto, pero el intérprete sigue **en el
+binario** (es el oráculo, y comparte el modelo de valores `Value`/`MapKey`/`RuntimeError`).
+Sacarlo de la *release* detrás de una feature de Cargo (`oracle`), extrayendo el modelo de
+valores a un módulo compartido, es **M35b**; la suite de regresión de rendimiento en CI (los
+benchmarks fallan si degradan >5 %) es **M35c**. Ambas quedan pendientes.

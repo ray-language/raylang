@@ -1,13 +1,17 @@
 //! CLI de raylang.
 //!
-//! Uso: `raylang [--vm] <archivo.ray>`  — ejecuta un archivo.
+//! Uso: `raylang <archivo.ray>`         — ejecuta un archivo (en la VM, M35).
+//!      `raylang --interp <archivo>`    — fuerza el intérprete (oráculo de desarrollo).
 //!      `raylang --test <archivo.ray>`  — corre las funciones `@test` (M10.1).
 //!      `raylang --lsp`                  — arranca el Language Server (M10.2).
+//!      `raylang --version`             — imprime la versión del lenguaje (M34).
 //!      `raylang`  (o `raylang --repl`)  — arranca el REPL interactivo (M8.2).
 //!
-//! Corre el pipeline: lexer → parser → checker, y luego ejecuta el programa con el
-//! **intérprete** (por defecto) o con la **máquina virtual** (`--vm`). El código de
-//! salida del proceso es el entero que devuelve `main` (0 si es unit).
+//! Corre el pipeline: lexer → parser → checker, y luego ejecuta el programa en la
+//! **máquina virtual** (el motor de producto, M35). `--interp` selecciona el
+//! **intérprete** de árbol, que queda como oráculo de desarrollo (secuencial; da un
+//! error limpio ante la concurrencia). `--vm` se acepta por compatibilidad (redundante).
+//! El código de salida del proceso es el entero que devuelve `main` (0 si es unit).
 
 use std::env;
 use std::fs;
@@ -67,15 +71,22 @@ fn run() {
         }
     }
 
-    // Forma general: raylang [--vm | --test] <archivo.ray> [args del programa...].
+    // Forma general: raylang [--interp | --test] <archivo.ray> [args del programa...].
     // Una flag opcional al principio, luego la ruta; todo lo que siga son los argumentos del
     // programa (M11.2b), accesibles desde raylang con el builtin `args()`.
+    //
+    // M35: la **VM** es el motor de producto (por defecto). El **intérprete** queda como
+    // oráculo de desarrollo, seleccionable con `--interp`. `--vm` se mantiene aceptado
+    // (redundante) por compatibilidad con scripts y tests que lo pasan explícitamente.
     let mut idx = 0;
-    let (mut use_vm, mut test_mode) = (false, false);
+    let (mut use_interp, mut test_mode) = (false, false);
     match rest[0].as_str() {
-        "--vm" => {
-            use_vm = true;
+        "--interp" => {
+            use_interp = true;
             idx = 1;
+        }
+        "--vm" => {
+            idx = 1; // ya es el default; se acepta por compatibilidad
         }
         "--test" => {
             test_mode = true;
@@ -84,7 +95,7 @@ fn run() {
         _ => {}
     }
     if idx >= rest.len() {
-        eprintln!("uso: raylang [--vm | --test] <archivo.ray> [args...]   |   raylang [--repl | --lsp]");
+        eprintln!("uso: raylang [--interp | --test] <archivo.ray> [args...]   |   raylang [--repl | --lsp]");
         process::exit(64); // EX_USAGE
     }
     let path = rest[idx].clone();
@@ -143,8 +154,10 @@ fn run() {
     }
     drop(backup);
 
-    // Backend: intérprete (M1) o VM (M2).
-    let result = if use_vm {
+    // Backend: VM por defecto (M35, el motor de producto), intérprete con `--interp`.
+    let result = if use_interp {
+        interpreter::run(&program)
+    } else {
         match compiler::compile_program(&program) {
             Ok(compiled) => vm::run_program(&compiled),
             Err(mut e) => {
@@ -155,8 +168,6 @@ fn run() {
                 process::exit(65);
             }
         }
-    } else {
-        interpreter::run(&program)
     };
 
     match result {

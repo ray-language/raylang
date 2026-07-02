@@ -38,6 +38,17 @@ pub mod vm;
 /// (sus marcos viven en el heap), pero correrla también aquí no cuesta nada.
 const STACK_SIZE: usize = 256 * 1024 * 1024;
 
+/// Compila un programa **ya chequeado** (bajado por el checker) y lo ejecuta sobre la
+/// **VM** — el motor de producto (M35). Devuelve el mismo `Value`/`RuntimeError` que el
+/// intérprete (la VM convierte en la frontera), así que los clientes (REPL, runner de
+/// `@test`, binario) son idénticos con uno u otro motor. Un error de **compilación** (raro
+/// tras un check exitoso: es la bajada a bytecode) se presenta como error de ejecución.
+pub fn run_on_vm(program: &ast::Program) -> Result<interpreter::Value, interpreter::RuntimeError> {
+    let compiled = compiler::compile_program(program)
+        .map_err(|e| interpreter::RuntimeError { msg: e.msg, line: e.line, col: e.col })?;
+    vm::run_program(&compiled)
+}
+
 /// Lanza `f` en el hilo worker de pila grande y devuelve el resultado del `join`
 /// (el pánico del worker, si lo hubo, viaja como `Err(payload)`).
 fn spawn_big_stack<F, T>(f: F) -> std::thread::Result<T>

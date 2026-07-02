@@ -10,16 +10,17 @@
 use std::io::Write;
 use std::process::Command;
 
-/// Escribe `src` en un `.ray` temporal, ejecuta `raylang [--vm] <archivo>` y devuelve (stdout, stderr, código).
+/// Escribe `src` en un `.ray` temporal, ejecuta raylang y devuelve (stdout, stderr, código).
+/// `vm = true` corre en la VM (el default de M35; se pasa `--vm`, redundante pero explícito);
+/// `vm = false` fuerza el **intérprete** (`--interp`) para verificar su error limpio ante la
+/// concurrencia — que ya no es el default, así que hay que pedirlo.
 fn run(name: &str, src: &str, vm: bool) -> (String, String, i32) {
     let mut path = std::env::temp_dir();
     path.push(format!("{name}.ray"));
     std::fs::File::create(&path).expect("crea").write_all(src.as_bytes()).expect("escribe");
 
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
-    if vm {
-        cmd.arg("--vm");
-    }
+    cmd.arg(if vm { "--vm" } else { "--interp" });
     let out = cmd.arg(&path).output().expect("lanza raylang");
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),

@@ -23,8 +23,10 @@ expresiones, sintaxis de llaves.
 > cualquier `cargo`, ejecuta: `source "$HOME/.cargo/env"`
 
 - Tests: `cargo test`
-- Ejecutar un programa: `cargo run --quiet -- examples/basics/fib.ray`
-- REPL interactivo (M8.2): `cargo run --quiet` (sin archivo) o `--repl`
+- Ejecutar un programa: `cargo run --quiet -- examples/basics/fib.ray` (corre en la **VM**, el
+  motor de producto desde M35). `--interp` fuerza el intérprete (oráculo de desarrollo); `--vm`
+  se acepta por compatibilidad (ya es el default).
+- REPL interactivo (M8.2): `cargo run --quiet` (sin archivo) o `--repl` (sobre la VM).
 - Binario release: `cargo build --release` → `./target/release/raylang prog.ray`
 - El código de salida del runner es el `int` que devuelve `main` (0 si es unit).
 

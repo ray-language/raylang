@@ -44,8 +44,9 @@
       ]
     },
     "interpolation": {
-      "comment": "Interpolación `${expr}` (M27.3): toda cadena interpola; el '$' solo es especial seguido de '{'. El interior se resalta como código (recursivo); las llaves anidadas se balancean.",
+      "comment": "Interpolación `${expr}` (M27.3): toda cadena interpola; el '$' solo es especial seguido de '{'. `contentName: meta.embedded` hace que VSCode pinte el interior como CÓDIGO (resetea el color de string heredado), no como texto de cadena; así los identificadores planos, literales y operadores dentro de `${…}` se ven como código. El interior se resalta recursivamente; las llaves anidadas se balancean.",
       "name": "meta.interpolation.raylang",
+      "contentName": "meta.embedded.line.raylang",
       "begin": "\\$\\{",
       "end": "\\}",
       "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.raylang" } },

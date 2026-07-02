@@ -37,3 +37,28 @@ entero en el lazo de ops binarias: fib(35) −5 %, bucle 10M −6 %); el punto d
 ~2.4×. Entre medias, **Opt.3** (`Rc<str>`) se evaluó y **descartó** (medido, sin mejora), y
 LTO/`codegen-units=1` también. El registro **medido** completo está en `IDEAS.md` §11; la
 narrativa, en el libro (capítulo de optimización de la VM).
+
+## Gate de regresión (M35c)
+
+`regress.py` convierte el banco en un **gate**: mide la VM de release (mejor-de-15) y la
+compara contra un baseline commiteado (`baseline.json`), **fallando (exit 1) si algún caso es
+>5 % más lento**. Solo python3.
+
+```sh
+python3 benchmarks/regress.py --record          # graba el baseline en ESTA máquina
+python3 benchmarks/regress.py                   # comprueba (el gate)
+python3 benchmarks/regress.py --threshold 0.10  # umbral a medida
+cargo test --release --test perf_regression -- --ignored --nocapture   # el mismo gate vía cargo
+```
+
+**La huella de máquina.** Los tiempos absolutos dependen del hardware, así que el baseline
+guarda una huella (plataforma + CPUs + modelo). Si la de ahora **no casa**, el gate degrada a
+**informativo** (avisa y sale 0) — así es seguro en cualquier máquina. El baseline commiteado se
+grabó en un Apple M3 Pro; en **otra máquina o en CI, graba el tuyo** una vez (`--record`,
+cacheado) y a partir de ahí el gate es estricto en ese runner (lo que M35c pide). `--strict`
+fuerza el gate ignorando la huella.
+
+**Por qué mejor-de-15 y 5 %.** A mejor-de-7 este banco tiene ~5 % de varianza entre corridas en
+un portátil (el gate false-positivea); a **mejor-de-15** baja a ~1-1.5 %, dejando ~3.5 % de
+holgura bajo el umbral del 5 %. Es la misma N que `measure.py` necesitó para destapar señales
+pequeñas. En un runner de CI dedicado (más silencioso) el 5 % es holgado.

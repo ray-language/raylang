@@ -4865,4 +4865,27 @@ de args de proceso, `uint_mask`/`make_uint`/`eval_const_literal`), todo dentro d
   no toca el código de test, así que no necesitan gate propio.
 
 Verificado: 688 tests verdes con la feature; ambas builds (con y sin) compilan limpias; el
-binario solo-VM ejecuta y rechaza `--interp`. Queda **M35c** (regresión de rendimiento en CI).
+binario solo-VM ejecuta y rechaza `--interp`.
+
+### 40.2 M35c — gate de regresión de rendimiento; CIERRA M35 y el arco A
+
+El banco `benchmarks/` medía pero no **fallaba**. M35c le pone un gate: `regress.py`
+(python3, cero deps) mide la VM de release (mejor-de-15) y la compara contra un baseline
+commiteado (`baseline.json`), saliendo con **código 1 si algún caso es >5 % más lento**. Un
+envoltorio `#[ignore]` (`tests/perf_regression.rs`) lo hace descubrible desde `cargo test`.
+
+Dos decisiones que la medición real forzó:
+- **La huella de máquina.** Los tiempos absolutos dependen del hardware → el baseline guarda
+  una huella (plataforma + CPUs + modelo); si no casa, el gate degrada a **informativo** (sale
+  0). En CI —mismo runner— casa y es estricto, que es lo que pide M35c; en otra máquina se
+  graba el baseline propio (`--record`). Así el gate es seguro en cualquier sitio y protege de
+  verdad donde se grabó.
+- **Mejor-de-15, umbral 5 %.** A mejor-de-7 el banco tiene ~5 % de varianza en un portátil (el
+  gate false-positivea, cazado en pruebas); a mejor-de-15 baja a ~1-1.5 % → ~3.5 % de holgura
+  bajo el 5 %. Es la N que `measure.py` ya necesitaba. Verificado: tres corridas seguidas dan
+  +1.5 %/+0.8 % (pasa), y forzar el umbral a 1 % hace fallar el gate (prueba de que muerde).
+
+**M35 COMPLETO** (a: VM de producto · b: intérprete tras la feature · c: gate de regresión).
+**Arco A (estabilidad) COMPLETO**: M33 diagnósticos de producción · M34 SPEC + versionado ·
+M35 un solo motor. Siguen, en paralelo, el arco **B** (rendimiento: M36 VM, M37 GC, M38 M:N
+por actores) y el arco **C** (ecosistema: M39 `ray`+paquetes, M40 stdlib 1.0, M41 FFI).

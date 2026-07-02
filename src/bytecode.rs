@@ -105,6 +105,10 @@ pub enum OpCode {
     /// apilar uno nuevo (recursión de cola en O(1) marcos). Lo emite un *peephole* del compilador
     /// cuando una llamada va seguida —directa o vía saltos— de un `Return`.
     TailCall(usize, usize),
+    /// **Llamada a función externa** (M41, FFI): `CallExtern(extern_idx, argc)`. Saca `argc`
+    /// argumentos de la pila, los marshala, llama a la función C descrita por `externs[extern_idx]`
+    /// (`dlopen`/`dlsym` + transmutación de firma) y empuja el resultado. La frontera insegura.
+    CallExtern(usize, usize),
     /// Builtin `print`: saca un valor, lo imprime, y empuja unit.
     Print,
 
@@ -557,6 +561,8 @@ pub struct CompiledProgram {
     pub structs: Vec<CompiledStruct>,
     pub enums: Vec<CompiledEnum>,
     pub main: usize,
+    /// Descriptores de las funciones externas (M41, FFI), indexados por el `CallExtern(idx, _)`.
+    pub externs: Vec<crate::ffi::ExternDesc>,
 }
 
 #[cfg(test)]

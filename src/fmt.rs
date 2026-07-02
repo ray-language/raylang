@@ -50,6 +50,11 @@ fn format_program(p: &Program) -> String {
     for it in &p.functions {
         items.push(TopItem { line: it.line, text: fmt_function(it) });
     }
+    // M41: bloques `extern "lib" { … }`. El AST aplana las firmas (cada una con su `lib`); aquí se
+    // reagrupan por librería (en orden de primera aparición) → un bloque por lib, canónico.
+    for (lib, line) in extern_libs_en_orden(&p.externs) {
+        items.push(TopItem { line, text: fmt_extern_block(&lib, &p.externs) });
+    }
 
     // Orden del archivo: por la línea de origen (los ítems están bucketizados por categoría en el AST).
     items.sort_by_key(|it| it.line);
@@ -88,6 +93,31 @@ fn fmt_from_import(it: &FromImport) -> String {
 fn fmt_const(it: &ConstDef) -> String {
     let pref = if it.is_pub { "pub " } else { "" };
     format!("{}const {}: {} = {};", pref, it.name, fmt_type(&it.ty), fmt_expr(&it.value, 0))
+}
+
+/// Las librerías de los bloques `extern` en orden de primera aparición, con la línea de esa primera
+/// firma (para ordenar el bloque entre los ítems de nivel superior). (M41)
+fn extern_libs_en_orden(externs: &[ExternFn]) -> Vec<(String, usize)> {
+    let mut vistos: Vec<(String, usize)> = Vec::new();
+    for e in externs {
+        if !vistos.iter().any(|(l, _)| *l == e.lib) {
+            vistos.push((e.lib.clone(), e.line));
+        }
+    }
+    vistos
+}
+
+/// Formatea un bloque `extern "lib" { fn …; … }` con todas las firmas de esa librería. (M41)
+fn fmt_extern_block(lib: &str, externs: &[ExternFn]) -> String {
+    let mut s = format!("extern {:?} {{\n", lib);
+    for e in externs.iter().filter(|e| e.lib == lib) {
+        s.push_str(&format!(
+            "{}fn {}({}){};\n",
+            INDENT, e.name, fmt_params(&e.params), fmt_return(&e.return_type)
+        ));
+    }
+    s.push('}');
+    s
 }
 
 // ---------------------------------------------------------------------------

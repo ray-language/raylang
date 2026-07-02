@@ -5496,3 +5496,47 @@ stack HTTP/2, va con el tier de red).
 re-fundado bajo `map`/`filter`/`fold`) + colecciones (`@derive(Hash)`, `Set`/`Deque`/`StringBuilder`) +
 raydoc + `std/` embebida y auto-contenida (24 módulos). La stdlib 1.0 del arco C está cerrada; el único
 diferido grande es el tier de red como paquete propio. Siguiente: **M41 — FFI**.
+
+## 43. M41 — FFI (llamar a C)
+
+Hasta aquí la única vía de escape de raylang era **escribir un builtin en Rust y recompilar el
+compilador**. M41 abre la frontera: declarar una función C, cargarla en runtime y llamarla como una
+función normal. Es lo que permite que el ecosistema crezca **sin tocar el compilador**.
+
+### 43.1 M41.1 — el slice de primitivos
+
+**Superficie** (decidida con el usuario): bloque **`extern "lib" { fn nombre(params) -> ret; … }`**
+(estilo Rust, agrupa símbolos por librería). El nombre de cada firma es a la vez el identificador
+raylang y el símbolo `dlsym`. **Sin ceremonia por llamada**: declarar la `extern fn` ES el acto
+inseguro (documentado); llamarla se ve como cualquier función (no se introdujo `unsafe {}` — superficie
+que no rinde en un lenguaje pedagógico). **Solo primitivos** en M41.1: `int`↔long, `float`↔double,
+`bool`↔int (retorno además `unit`↔void), aridad 0..=3.
+
+**La restricción dura: cero deps de Cargo → sin libffi.** Llamar a una función C arbitraria en runtime
+pide normalmente libffi (arma el marco según la ABI para cualquier firma), que sería una dependencia de
+Cargo. Sin ella, raylang soporta un **catálogo acotado de firmas**: `dlsym` da el puntero del símbolo,
+y se **transmuta** a un tipo `extern "C" fn(...)` **concreto** —uno por combinación de aridad y clases
+de argumento— y se llama. La clase de cada argumento debe preservarse (la ABI SysV pasa enteros y
+flotantes por bancos de registros distintos), así que el molde es la tupla exacta `(clases_arg, clase_ret)`.
+Es una limitación honesta y documentada; la mayoría de APIs C caen en unas pocas formas.
+
+**Implementación.** Módulo nuevo `src/ffi.rs` (compartido por ambos motores): `dlopen`/`dlsym`
+declarados a mano como `unsafe extern "C"` (patrón de `poll.rs`, cero deps), caché de handles, y `call`
+con el `match` de moldes. Un nombre de librería `"m"` se resuelve al archivo de plataforma
+(`libm.dylib`/`libm.so`) o, si falla, al **handle global del proceso** (`dlopen(NULL)`), donde ya viven
+libc/libm enlazadas por el binario → `extern "m" { fn sqrt… }` funciona en macOS y Linux. Pipeline:
+lexer (keyword `extern`), parser (`extern_block` → `Program.externs: Vec<ExternFn>`), checker (registra
+cada extern en la tabla de firmas para que la llamada typee, y **valida marshalabilidad**), y los
+motores despachan: el intérprete tiene una tabla `externs` y llama a `ffi::call`; la VM baja a un opcode
+nuevo `CallExtern(idx, argc)` con la tabla `CompiledProgram.externs`. `fmt` reagrupa las firmas por
+librería (sin pérdidas, idempotente). Cero opcodes de aritmética/GC nuevos: una extern fn es como un
+builtin cuya impl vive tras `dlsym`.
+
+**El oráculo prueba FFI.** `sqrt`/`pow`/`abs` de libm/libc son **deterministas**, así que ambos motores
+llaman a la misma función C y coinciden → `ffi_libm_oraculo` (vm.rs) verifica FFI con el mismo rigor que
+el resto del lenguaje (a diferencia de la I/O de red, no determinista). Tests: 3 unit (`ffi.rs`) + el
+oráculo + integración por subproceso (`ffi_llama_a_libm`, cli_cli). Ejemplo `examples/ffi/libm.ray`.
+
+**Diferido**: M41.2 `bytes`/`string` (marshalling a puntero+longitud, `char*`); M41.3 punteros opacos /
+handles (APIs con estado como sqlite); callbacks (fn raylang → C), structs por valor, variádicas; más
+aridad/combinaciones de molde según haga falta; namespacing de externs entre módulos.

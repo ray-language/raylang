@@ -112,6 +112,9 @@ struct Interpreter<'a> {
     /// al entrar en `call_body` y se decrementa al salir; al alcanzar `MAX_CALL_DEPTH`
     /// se corta con un error en vez de desbordar la pila de Rust.
     depth: usize,
+    /// Funciones externas (M41, FFI): nombre → descriptor de llamada. Una llamada a uno de estos
+    /// nombres se despacha a `ffi::call` (a la librería C) en vez de ejecutar un cuerpo raylang.
+    externs: HashMap<String, crate::ffi::ExternDesc>,
 }
 
 impl<'a> Interpreter<'a> {
@@ -130,6 +133,12 @@ impl<'a> Interpreter<'a> {
         for c in &program.consts {
             consts.insert(c.name.clone(), eval_const_literal(&c.value));
         }
+        let mut externs = HashMap::new();
+        for e in &program.externs {
+            if let Some(d) = crate::ffi::desc_of(e) {
+                externs.insert(e.name.clone(), d);
+            }
+        }
         Interpreter {
             functions,
             named: &program.functions,
@@ -139,6 +148,7 @@ impl<'a> Interpreter<'a> {
             consts,
             scopes: Vec::new(),
             depth: 0,
+            externs,
         }
     }
 
@@ -811,6 +821,19 @@ impl<'a> Interpreter<'a> {
                             "la concurrencia (spawn/channel/send/recv/join/scope/select) requiere la VM; el intérprete es solo el oráculo secuencial (no uses --interp)"));
                     }
                     return Ok(self.eval_builtin(name, values));
+                }
+                // M41: función externa (FFI). Se despacha a la librería C vía `ffi::call`. La frontera
+                // insegura: un fallo de carga/símbolo o firma no soportada es un error de ejecución en
+                // la posición de la llamada.
+                if let Some(desc) = self.externs.get(name.as_str()).cloned() {
+                    let mut fargs = Vec::with_capacity(args.len());
+                    for arg in args {
+                        fargs.push(value_to_ffi(&self.eval_expr(arg)?));
+                    }
+                    return match crate::ffi::call(&desc, &fargs) {
+                        Ok(r) => Ok(ffi_to_value(r, desc.ret_kind)),
+                        Err(msg) => Err(runtime_error(callee.line, callee.col, &msg)),
+                    };
                 }
                 // Función de nivel superior: llamada directa.
                 if let Some(&idx) = self.named_index.get(name.as_str()) {
@@ -1666,6 +1689,29 @@ impl<'a> Interpreter<'a> {
 
 fn runtime_error(line: usize, col: usize, msg: &str) -> Flow {
     Flow::Error(RuntimeError { msg: msg.to_string(), line, col })
+}
+
+/// Convierte un `Value` de raylang a un valor de la frontera FFI (M41). El checker ya garantizó que
+/// el argumento es un primitivo marshalable; `bool` va como entero (0/1).
+fn value_to_ffi(v: &Value) -> crate::ffi::FfiVal {
+    match v {
+        Value::Int(n) => crate::ffi::FfiVal::Int(*n),
+        Value::Float(f) => crate::ffi::FfiVal::Float(*f),
+        Value::Bool(b) => crate::ffi::FfiVal::Int(*b as i64),
+        _ => unreachable!("el checker garantiza un primitivo marshalable en la frontera FFI"),
+    }
+}
+
+/// Convierte el resultado de una llamada FFI al `Value` que corresponda según el tipo de retorno
+/// declarado (`ret_kind`): un entero C se vuelve `bool` si el retorno era `bool`, y `unit` es `Unit`.
+fn ffi_to_value(r: crate::ffi::FfiRet, ret: crate::ffi::CKind) -> Value {
+    use crate::ffi::{CKind, FfiRet};
+    match r {
+        FfiRet::Int(n) if ret == CKind::Bool => Value::Bool(n != 0),
+        FfiRet::Int(n) => Value::Int(n),
+        FfiRet::Float(f) => Value::Float(f),
+        FfiRet::Unit => Value::Unit,
+    }
 }
 
 /// Comprueba que `i` es un índice válido en `0..len`; si no, error de ejecución.

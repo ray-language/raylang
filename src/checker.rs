@@ -711,6 +711,38 @@ impl Checker {
         }
         self.type_params.clear();
 
+        // M41: registrar las funciones externas (FFI) como llamables. Cada una es una firma sin cuerpo;
+        // se valida que sus tipos sean marshalables (primitivos en M41.1) y se registra en la tabla de
+        // firmas para que `nombre(args)` typee como una llamada ordinaria. Los motores despachan a `ffi`.
+        for e in &program.externs {
+            if self.functions.contains_key(&e.name) {
+                return Err(self.err(e.line, e.col, format!(
+                    "'{}' ya está declarada (colisión entre una función y una 'extern fn')", e.name)));
+            }
+            for p in &e.params {
+                self.ensure_type(&p.ty, p.line, p.col)?;
+                let pt = self.resolve_type(&p.ty);
+                if crate::ffi::ckind(&pt).is_none() || matches!(pt, Type::Unit) {
+                    return Err(self.err(p.line, p.col, format!(
+                        "el tipo {} del parámetro '{}' de la 'extern fn {}' no es marshalable por FFI (M41.1: int, float, bool)",
+                        pt, p.name, e.name)));
+                }
+            }
+            let ret = self.resolve_type(&e.return_type);
+            if crate::ffi::ckind(&ret).is_none() {
+                return Err(self.err(e.line, e.col, format!(
+                    "el tipo de retorno {} de la 'extern fn {}' no es marshalable por FFI (M41.1: int, float, bool, unit)",
+                    ret, e.name)));
+            }
+            let sig = FnSig {
+                type_params: Vec::new(),
+                params: e.params.iter().map(|p| self.resolve_type(&p.ty)).collect(),
+                ret,
+                bounds: Vec::new(),
+            };
+            self.functions.insert(e.name.clone(), sig);
+        }
+
         // 'main' es obligatoria (DESIGN.md §11): sin parámetros y con retorno int o unit.
         match self.functions.get("main") {
             None => return Err(self.err(1, 1, "falta la función de entrada 'main'".into())),

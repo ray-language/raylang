@@ -151,6 +151,7 @@ impl Parser {
                             | TokenKind::Import
                             | TokenKind::From
                             | TokenKind::Const
+                            | TokenKind::Extern
                             | TokenKind::At
                     ) =>
                 {
@@ -179,6 +180,11 @@ impl Parser {
         if self.check(&TokenKind::Pub) && self.check_next(&TokenKind::From) {
             self.advance(); // 'pub'
             acc.from_imports.push(self.import_from_decl(true)?);
+            return Ok(());
+        }
+        // M41: `extern "lib" { fn … }` declara funciones C (FFI). Sin anotaciones ni `pub`.
+        if self.check(&TokenKind::Extern) {
+            self.extern_block(acc)?;
             return Ok(());
         }
         // M10.1: las anotaciones (`@nombre[(args)]`) preceden a la declaración.
@@ -418,6 +424,37 @@ impl Parser {
             line: kw.line,
             col: kw.col,
         })
+    }
+
+    /// extern_block = 'extern' STRING '{' { extern_sig } '}'   (M41, FFI)
+    /// extern_sig   = 'fn' IDENT '(' [ params ] ')' [ '->' type ] ';'
+    ///
+    /// Declara funciones C de una librería. Cada firma va sin cuerpo (termina en `;`); su nombre es a
+    /// la vez el identificador en raylang y el símbolo a resolver con `dlsym`. El nombre de la librería
+    /// es el string literal tras `extern` (`extern "m"` → `libm`).
+    fn extern_block(&mut self, acc: &mut Program) -> Result<(), ParseError> {
+        self.expect(&TokenKind::Extern, "'extern'")?;
+        let lib_tok = self.advance();
+        let lib = match &lib_tok.kind {
+            TokenKind::Str(s) => s.clone(),
+            _ => return Err(ParseError {
+                msg: "se esperaba el nombre de la librería como string tras 'extern' (p. ej. extern \"m\")".into(),
+                line: lib_tok.line, col: lib_tok.col, len: 1,
+            }),
+        };
+        self.expect(&TokenKind::LBrace, "'{' tras extern \"lib\"")?;
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            let kw = self.expect(&TokenKind::Fn, "'fn' en el bloque extern")?;
+            let (name, _, _) = self.expect_ident("el nombre de la función externa")?;
+            self.expect(&TokenKind::LParen, "'(' tras el nombre de la función externa")?;
+            let params = if self.check(&TokenKind::RParen) { Vec::new() } else { self.params()? };
+            self.expect(&TokenKind::RParen, "')'")?;
+            let return_type = if self.eat(&TokenKind::Arrow) { self.parse_type()? } else { Type::Unit };
+            self.expect(&TokenKind::Semicolon, "';' al final de la firma externa (no lleva cuerpo)")?;
+            acc.externs.push(ExternFn { name, lib: lib.clone(), params, return_type, line: kw.line, col: kw.col });
+        }
+        self.expect(&TokenKind::RBrace, "'}' para cerrar el bloque extern")?;
+        Ok(())
     }
 
     /// trait_def = 'trait' IDENT '{' { method_sig } '}'  (M9)

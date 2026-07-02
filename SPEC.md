@@ -31,7 +31,7 @@ caracteres. **Ningún token cruza líneas.**
   `#` o `::` no son escribibles por el usuario (los usan las bajadas internas y los módulos).
 - **Palabras clave** (reservadas):
   `let var fn return if else while for in true false struct const enum match trait impl dyn
-  pub import from as` y las de tipo `int float bool string char bytes u8 u32 u64`.
+  pub import from extern as` y las de tipo `int float bool string char bytes u8 u32 u64`.
 - **Literales**:
   - *Entero*: dígitos decimales (`42`). Debe caber en `int` (i64); si no, error léxico. No hay
     literales hex/octales/binarios ni separador `_` (diferido).
@@ -123,6 +123,8 @@ trait    = 'trait' IDENT [ '<' IDENT { ',' IDENT } '>' ] '{' { firma_metodo } '}
 firma_metodo = 'fn' IDENT '(' 'self' { ',' param } ')' [ '->' tipo ] ( ';' | bloque ) ;
 impl     = 'impl' [ genericos ] IDENT [ '<' tipo … '>' ] 'for' tipo '{' { metodo } '}' ;
 const    = 'const' IDENT ':' tipo '=' literal ';' ;
+extern   = 'extern' STRING '{' { firma_extern } '}' ;
+firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
 ```
 
 - Las **firmas son explícitas** (parámetros y retorno); la inferencia es solo local (§5).
@@ -138,6 +140,14 @@ const    = 'const' IDENT ':' tipo '=' literal ';' ;
   (§6.7), e `Iterator<T> { fn next(self) -> Option<T>; }` habilita `for x in it` (§5) por despacho
   por punto ordinario. Usar un trait parametrizado del usuario en bounds o `dyn` es error.
 - `const` de nivel superior: el valor es un **literal** (o literal negado).
+- **FFI** (`extern "lib" { … }`, M41): declara funciones de una librería C. Cada firma va **sin
+  cuerpo**; su nombre es a la vez el identificador en raylang y el símbolo a resolver. La librería se
+  carga con `dlopen` y los símbolos con `dlsym` en tiempo de ejecución (el nombre corto `"m"` se
+  resuelve al archivo de plataforma o al proceso). Los tipos deben ser **marshalables**: en M41.1, los
+  primitivos `int`↔long, `float`↔double, `bool`↔int (retorno además puede ser `unit`↔void), con aridad
+  0..=3. Una firma fuera del catálogo, o un tipo no marshalable, es error. Llamar a una `extern fn` se
+  ve como cualquier llamada. **Declarar una `extern fn` es la única operación insegura del lenguaje**:
+  cruzar a C anula las garantías (memoria, firmas); todo lo demás es seguro por construcción.
 
 ## 5. Sentencias
 

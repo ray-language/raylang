@@ -1,0 +1,32 @@
+// FFI (M41.1) — llamar a funciones C nativas desde raylang.
+//
+// Un bloque `extern "lib" { … }` declara funciones de una librería C. El nombre de cada firma es a la
+// vez el identificador en raylang y el símbolo que se resuelve con `dlsym`. Se cargan por `dlopen` en
+// tiempo de ejecución y se llaman como cualquier otra función. En M41.1 los tipos marshalables son los
+// primitivos: `int` (↔ long), `float` (↔ double) y `bool` (↔ int), con aridad 0..=3.
+//
+// Declarar una `extern fn` es EL acto inseguro del lenguaje: al cruzar a C, raylang ya no puede
+// garantizar nada (la función puede mentir sobre su firma o corromper memoria). Todo lo demás sigue
+// siendo seguro por construcción.
+//
+//   cargo run --quiet -- examples/ffi/libm.ray
+
+extern "m" {
+    fn sqrt(x: float) -> float;
+    fn pow(base: float, exp: float) -> float;
+    fn cbrt(x: float) -> float;
+    fn hypot(x: float, y: float) -> float;
+}
+
+extern "c" {
+    fn abs(n: int) -> int;
+}
+
+fn main() -> int {
+    print(sqrt(2.0));        // 1.4142135623730951
+    print(pow(2.0, 10.0));   // 1024
+    print(cbrt(27.0));       // 3
+    print(hypot(3.0, 4.0));  // 5 (la hipotenusa del 3-4-5)
+    print(abs(0 - 42));      // 42 (libc, int -> int)
+    0
+}

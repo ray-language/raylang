@@ -514,3 +514,26 @@ fn stdlib_uuid_genera_y_valida() {
     assert!(out.contains("false"), "is_uuid_v4 rechaza basura\n{out}");
     assert!(out.contains("36"), "un uuid mide 36 chars\n{out}");
 }
+
+#[test]
+fn ffi_llama_a_libm() {
+    // M41.1: FFI. Un `extern "m" { … }` declara funciones de libm y se llaman como cualquier función.
+    // Determinista (libm) → end-to-end por subproceso, motor de producto (VM).
+    let base = tmp("ffi_libm");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "extern \"m\" {\n\
+         \x20 fn sqrt(x: float) -> float;\n\
+         \x20 fn pow(base: float, exp: float) -> float;\n\
+         }\n\
+         fn main() -> int {\n\
+         \x20 if (sqrt(16.0) == 4.0 && pow(2.0, 10.0) == 1024.0) { print(\"ffi ok\"); } else { print(\"ffi mal\"); }\n\
+         \x20 0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con extern debe salir 0\n{err}");
+    assert!(out.contains("ffi ok"), "sqrt/pow de libm por FFI\n{out}");
+}

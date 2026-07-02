@@ -172,6 +172,28 @@ pub struct Program {
     /// con el receptor); esta tabla la registra el parser para que el LSP dé **hover del campo/
     /// método** en su posición. Mismo esquema de clave que `ufcs_sites`. El loader la desplaza.
     pub field_name_pos: std::collections::HashMap<(usize, usize, String), (usize, usize)>,
+    /// Funciones externas (M41, FFI): `extern "lib" { fn nombre(params) -> ret; … }`. Cada una es
+    /// una firma **sin cuerpo** cuya implementación vive en una librería C nativa, cargada por
+    /// `dlopen`/`dlsym` en tiempo de ejecución (`src/ffi.rs`). El checker valida que los tipos sean
+    /// marshalables (primitivos en M41.1) y las registra como llamables; los motores despachan la
+    /// llamada a `ffi::call` en vez de ejecutar un cuerpo. Es **la** frontera insegura del lenguaje.
+    pub externs: Vec<ExternFn>,
+}
+
+/// Una función externa (M41, FFI): una firma sin cuerpo asociada a una librería C (`lib`). El nombre
+/// es a la vez el identificador en raylang y el símbolo a resolver con `dlsym`. Sin genéricos ni
+/// `pub`/anotaciones en M41.1. Declarar una `extern fn` es el acto consciente de abrir la frontera
+/// insegura; llamarla luego se ve como cualquier función.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternFn {
+    pub name: String,
+    /// Nombre corto de la librería (`"m"` → `libm`); lo resuelve `ffi` al archivo de plataforma o al
+    /// handle global del proceso (donde viven libc/libm ya enlazadas).
+    pub lib: String,
+    pub params: Vec<Param>,
+    pub return_type: Type,
+    pub line: usize,
+    pub col: usize,
 }
 
 /// Una declaración `import M;` / `import a/b/c [as x];` (M11.3 / M11.5): importa el módulo dado por

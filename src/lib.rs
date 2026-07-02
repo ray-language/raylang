@@ -16,6 +16,7 @@ pub mod cli;
 pub mod compiler;
 pub mod deps;
 pub mod diagnostic;
+pub mod ffi;
 pub mod fmt;
 pub mod gc;
 #[cfg(feature = "interp")]

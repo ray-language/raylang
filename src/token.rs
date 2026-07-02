@@ -48,6 +48,7 @@ pub enum TokenKind {
     Pub,    // M11.3 (visibilidad: exporta un ítem del módulo)
     Import, // M11.3 (import M; — importa un módulo como espacio de nombres)
     From,   // M11.3b (from M import a [as b]; — trae nombres al ámbito)
+    Extern, // M41 (extern "lib" { fn … } — declara funciones C para FFI)
     As,     // M11.3b (renombrado en un from-import)
 
     // --- Palabras clave de tipo ---

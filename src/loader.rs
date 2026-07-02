@@ -195,6 +195,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>) ->
         functions: Vec::new(), structs: Vec::new(), enums: Vec::new(), consts: Vec::new(),
         traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
         ufcs_aliases: HashMap::new(), expr_spans: HashMap::new(), field_name_pos: HashMap::new(),
+        externs: Vec::new(),
     };
     // Alias UFCS: nombre local de función `from`-importada → global, agregado de todos los módulos.
     // Un nombre que mapee a DOS globales distintos en módulos distintos es ambiguo sin contexto de
@@ -268,6 +269,10 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>) ->
         fusionado.consts.append(&mut m.program.consts); // M27.5
         fusionado.traits.append(&mut m.program.traits);
         fusionado.impls.append(&mut m.program.impls);
+        // M41: las funciones externas (FFI) NO se namespacan: su `name` es a la vez el identificador
+        // raylang y el símbolo C a resolver con dlsym. Se fusionan tal cual (efectivamente globales por
+        // su símbolo). Colisiones de símbolo entre módulos → diferido.
+        fusionado.externs.append(&mut m.program.externs);
         fusionado.expr_spans.extend(std::mem::take(&mut m.program.expr_spans));
         fusionado.field_name_pos.extend(std::mem::take(&mut m.program.field_name_pos));
 

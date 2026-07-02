@@ -545,6 +545,7 @@ fn keyword(s: &str) -> Option<TokenKind> {
         "pub" => TokenKind::Pub,
         "import" => TokenKind::Import,
         "from" => TokenKind::From,
+        "extern" => TokenKind::Extern,
         "as" => TokenKind::As,
         "int" => TokenKind::IntType,
         "float" => TokenKind::FloatType,

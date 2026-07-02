@@ -101,6 +101,16 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
         consts.insert(cst.name.clone(), crate::runtime::eval_const_literal(&cst.value));
     }
 
+    // M41: tabla de funciones externas (FFI) + mapa nombre → índice (para bajar `CallExtern`).
+    let mut externs = Vec::new();
+    let mut extern_indices = HashMap::new();
+    for e in &program.externs {
+        if let Some(d) = crate::ffi::desc_of(e) {
+            extern_indices.insert(e.name.clone(), externs.len());
+            externs.push(d);
+        }
+    }
+
     let mut c = Compiler {
         indices: &indices,
         structs: &struct_defs,
@@ -109,13 +119,14 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
         functions: (0..total).map(|_| None).collect(),
         scopes: Vec::new(),
         consts,
+        extern_indices: &extern_indices,
     };
     for (i, f) in program.functions.iter().enumerate() {
         c.compile_function(i, &f.params, &f.body, f.line, f.col, f.name.clone())?;
     }
 
     let functions = c.functions.into_iter().map(|o| o.expect("toda función quedó compilada")).collect();
-    Ok(CompiledProgram { functions, structs: struct_table, enums: enum_table, main })
+    Ok(CompiledProgram { functions, structs: struct_table, enums: enum_table, main, externs })
 }
 
 /// Compila una expresión suelta a un `Chunk` (sin variables ni llamadas). Se usa
@@ -124,7 +135,8 @@ pub fn compile_expr(expr: &Expr) -> Result<Chunk, CompileError> {
     let indices = HashMap::new();
     let structs = HashMap::new();
     let enums = HashMap::new();
-    let mut c = Compiler { indices: &indices, structs: &structs, enums: &enums, n_named: 0, functions: Vec::new(), scopes: Vec::new(), consts: HashMap::new() };
+    let extern_indices = HashMap::new();
+    let mut c = Compiler { indices: &indices, structs: &structs, enums: &enums, n_named: 0, functions: Vec::new(), scopes: Vec::new(), consts: HashMap::new(), extern_indices: &extern_indices };
     c.scopes.push(FnScope::new());
     c.emit_expr(expr)?;
     c.emit(OpCode::Return, expr.line, expr.col);
@@ -180,6 +192,9 @@ struct Compiler<'a> {
     scopes: Vec<FnScope>,
     /// Constantes de nivel superior (M27.5): nombre → su valor. Una referencia se compila a `Constant`.
     consts: HashMap<String, Value>,
+    /// Funciones externas (M41, FFI): nombre → índice en la tabla `externs` del `CompiledProgram`.
+    /// Una llamada a uno de estos nombres se baja a `CallExtern(idx, argc)`.
+    extern_indices: &'a HashMap<String, usize>,
 }
 
 impl<'a> Compiler<'a> {
@@ -1002,6 +1017,15 @@ impl<'a> Compiler<'a> {
                         self.emit_expr(arg)?;
                     }
                     self.emit(b.opcode.clone(), line, col);
+                    return Ok(());
+                }
+                // M41: función externa (FFI) → CallExtern. Sus argumentos van a la pila como en una
+                // llamada ordinaria; la VM los marshala y llama a la librería C.
+                if let Some(&idx) = self.extern_indices.get(name) {
+                    for arg in args {
+                        self.emit_expr(arg)?;
+                    }
+                    self.emit(OpCode::CallExtern(idx, args.len()), line, col);
                     return Ok(());
                 }
                 if let Some(&idx) = self.indices.get(name) {

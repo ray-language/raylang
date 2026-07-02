@@ -54,6 +54,7 @@ pub fn run(chunk: &Chunk) -> Result<Value, RuntimeError> {
         structs: Vec::new(),
         enums: Vec::new(),
         main: 0,
+        externs: Vec::new(),
     };
     run_program(&program)
 }
@@ -386,6 +387,34 @@ impl<'a> Vm<'a> {
                     let v = self.pop();
                     println!("{}", format_value(&self.heap, &self.program.enums, &v));
                     self.push(HeapValue::Unit);
+                }
+
+                // --- FFI (M41): llamada a una función C ---
+                OpCode::CallExtern(idx, argc) => {
+                    let desc = &program.externs[*idx];
+                    let mut fargs = Vec::with_capacity(*argc);
+                    for _ in 0..*argc {
+                        fargs.push(self.pop());
+                    }
+                    fargs.reverse(); // se sacaron en orden inverso
+                    let mut cargs = Vec::with_capacity(*argc);
+                    for v in &fargs {
+                        cargs.push(match v {
+                            HeapValue::Int(n) => crate::ffi::FfiVal::Int(*n),
+                            HeapValue::Float(f) => crate::ffi::FfiVal::Float(*f),
+                            HeapValue::Bool(b) => crate::ffi::FfiVal::Int(*b as i64),
+                            _ => return Err(runtime_error(pos!().0, pos!().1,
+                                "argumento no marshalable en la frontera FFI")),
+                        });
+                    }
+                    let r = crate::ffi::call(desc, &cargs)
+                        .map_err(|m| runtime_error(pos!().0, pos!().1, &m))?;
+                    self.push(match r {
+                        crate::ffi::FfiRet::Int(n) if desc.ret_kind == crate::ffi::CKind::Bool => HeapValue::Bool(n != 0),
+                        crate::ffi::FfiRet::Int(n) => HeapValue::Int(n),
+                        crate::ffi::FfiRet::Float(f) => HeapValue::Float(f),
+                        crate::ffi::FfiRet::Unit => HeapValue::Unit,
+                    });
                 }
 
                 // --- Arreglos (M3) ---
@@ -2595,6 +2624,25 @@ mod tests {
         let compiled = compile_program(&prog).expect("compila");
         let vm = run_program(&compiled).expect("vm ok");
         assert_eq!(interp, vm, "VM y intérprete difieren");
+    }
+
+    /// M41: **FFI**. Llamar a funciones C nativas (libm/libc) por `dlopen`/`dlsym`. Determinista
+    /// (sqrt/pow/abs dan lo mismo siempre) → el oráculo VM↔intérprete vale: ambos motores llaman a la
+    /// MISMA función C y deben coincidir. Cubre float→float, aridad 2, e int→int (libc `abs`).
+    #[test]
+    fn ffi_libm_oraculo() {
+        oracle_program(
+            "extern \"m\" {\n\
+             \x20 fn sqrt(x: float) -> float;\n\
+             \x20 fn pow(base: float, exp: float) -> float;\n\
+             }\n\
+             extern \"c\" {\n\
+             \x20 fn abs(n: int) -> int;\n\
+             }\n\
+             fn main() -> int {\n\
+             \x20 if (sqrt(16.0) == 4.0 && pow(2.0, 10.0) == 1024.0 && abs(0 - 5) == 5) { 42 } else { 0 }\n\
+             }",
+        );
     }
 
     /// M40.1a: **guardas** en los brazos del match (`patrón if <cond> => …`). El brazo casa solo si

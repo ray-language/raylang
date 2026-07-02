@@ -2758,6 +2758,25 @@ mod tests {
             }"); // a=55, b=20, c=120, d=17 → 55*1000000 + 20*10000 + 120*100 + 17 = 55200012017... comprobado por el oráculo
     }
 
+    /// M40.2d: operaciones TERMINALES `.fold()` (reduce a un valor, método genérico sobre el
+    /// acumulador) y `.collect()` (materializa a `[T]`, puente de vuelta desde la cadena perezosa).
+    /// Oráculo VM↔intérprete: fold cambia de tipo, collect tras map/filter, y coexistencia con el
+    /// `fold` EAGER de arreglos (el `[T].fold` cae en la función libre).
+    #[test]
+    fn fold_collect_oraculo() {
+        oracle_program("\
+            fn main() -> int {\n\
+            \x20 let a = range(1, 6).fold(0, fn(ac: int, x: int) -> int { ac + x });\n\
+            \x20 let ys = range(1, 11)\n\
+            \x20   .map(fn(n: int) -> int { n * n })\n\
+            \x20   .filter(fn(n: int) -> bool { n % 2 == 1 })\n\
+            \x20   .collect();\n\
+            \x20 let b = ys.fold(0, fn(ac: int, x: int) -> int { ac + x });\n\
+            \x20 let zs = [3, 1, 2].iter().map(fn(n: int) -> int { n + 10 }).collect();\n\
+            \x20 a * 100000 + b * 100 + len(ys) * 10 + zs[0]\n\
+            }"); // a=15, b=165 (1+9+25+49+81), len=5, zs[0]=13
+    }
+
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
     /// punto seguro) y exige que el resultado coincida con el intérprete. Es la
     /// prueba clave del GC: si una raíz faltara, un valor vivo se liberaría y el

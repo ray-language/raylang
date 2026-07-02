@@ -96,5 +96,15 @@ fn main() -> int {
     }
     print(linea); // "10 20 30 "
 
+    // Operaciones TERMINALES: `.fold()` reduce a un valor, `.collect()` materializa a un arreglo.
+    // `fold` puede cambiar de tipo (aquí int -> string), acumulando de izquierda a derecha.
+    let concat = range(1, 5).fold("", fn(a: string, x: int) -> string { a + to_string(x) });
+    print(concat); // "1234"
+
+    // `.collect()` cierra la cadena perezosa devolviendo un `[int]` de verdad.
+    let cuadrados = range(1, 6).map(fn(n: int) -> int { n * n }).collect();
+    print(len(cuadrados)); // 5
+    print(cuadrados[4]);   // 25
+
     suma
 }

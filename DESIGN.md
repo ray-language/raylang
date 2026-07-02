@@ -5256,7 +5256,17 @@ f: fn(T) -> U) -> Iter<U>`) — un método con parámetros de tipo PROPIOS, dist
   cero). El loader pone en ámbito los `type_params` del trait y del método al reescribir tipos.
 
 Oráculo `adaptadores_perezosos_oraculo` (map cambia de tipo, filter avanza el origen, encadenamiento).
-Ejemplo `examples/stdlib/iterador.ray`. SPEC §7/§10. Diferido: `.fold()`/`.collect()`/`.take()`/`.zip()`
-y demás adaptadores; re-fundar el `map`/`filter`/`fold` eager sobre `Iterator`; bounds en métodos
-genéricos cruzando módulos (namespacing). Luego `Hash` derivable + Set/deque/string-builder; `std/` +
-raydoc.
+Ejemplo `examples/stdlib/iterador.ray`. SPEC §7/§10.
+
+#### M40.2d — operaciones terminales `.fold()`/`.collect()`
+
+Cierran la cadena de iterador: consumen el iterador (perezoso) y producen un valor concreto. Métodos
+por defecto de `Iterator`, **puro prelude** (sin tocar el núcleo; reusan los métodos genéricos de
+M40.2c). `.fold(init, f)` reduce de izquierda a derecha (método genérico sobre el acumulador `A`:
+`fn fold<A>(self, init: A, f: fn(A, T) -> A) -> A`); `.collect()` acumula en un `[T]` (`fn collect(self)
+-> [T]`, sin params de tipo propios — usa `T` del trait, sustituido en el cuerpo por `subst_named_block`
+para impls concretos). Coexisten con el `fold` **eager** de arreglos por el mismo despacho según receptor
+(`[T].fold` → función libre; `Iter<T>.fold` → método del trait). Oráculo `fold_collect_oraculo`.
+Diferido: `.take()`/`.skip()`/`.zip()`/`.enumerate()`/`.sum()`; re-fundar el `map`/`filter`/`fold` eager
+sobre `Iterator`; bounds en métodos genéricos cruzando módulos. Luego `Hash` derivable + Set/deque/
+string-builder; `std/` + raydoc.

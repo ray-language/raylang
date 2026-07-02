@@ -89,6 +89,33 @@ trait Iterator<T> {
             res
         } }
     }
+    // TERMINAL: reduce el iterador a un único valor, acumulando de izquierda a derecha desde `init`.
+    // A diferencia de map/filter, consume el iterador aquí mismo (no es perezoso). Método genérico
+    // sobre el tipo del acumulador `A`.
+    fn fold<A>(self, init: A, f: fn(A, T) -> A) -> A {
+        var acc: A = init;
+        var seguir = true;
+        while (seguir) {
+            match (self.next()) {
+                Option.Some(x) => { acc = f(acc, x); },
+                Option.None => { seguir = false; },
+            }
+        }
+        acc
+    }
+    // TERMINAL: materializa el iterador (perezoso) en un arreglo `[T]`. El puente de vuelta desde la
+    // cadena `iter().map().filter()` a un arreglo concreto.
+    fn collect(self) -> [T] {
+        var out: [T] = [];
+        var seguir = true;
+        while (seguir) {
+            match (self.next()) {
+                Option.Some(x) => { push(out, x); },
+                Option.None => { seguir = false; },
+            }
+        }
+        out
+    }
 }
 
 // `.iter()` sobre arreglos y `range` (M40.2b/c): iteradores de PRIMERA CLASE. La representación es

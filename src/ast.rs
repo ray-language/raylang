@@ -560,6 +560,10 @@ pub enum ExprKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    /// Guarda opcional (M40.1a): `patrón if <cond> => …`. El brazo solo casa si el patrón liga Y la
+    /// guarda (una expresión `bool`, con los bindings del patrón en ámbito) evalúa a `true`; si no,
+    /// se sigue al brazo siguiente. Un brazo con guarda **no** cuenta para la exhaustividad.
+    pub guard: Option<Expr>,
     pub body: Expr,
     pub line: usize,
     pub col: usize,

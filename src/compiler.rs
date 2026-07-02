@@ -485,19 +485,22 @@ impl<'a> Compiler<'a> {
 
         for arm in arms {
             let (aline, acol) = (arm.line, arm.col);
+            // Saltos que van al SIGUIENTE brazo (test de variante fallido, o guarda falsa). Cada uno
+            // deja UN bool en la pila; en runtime se toma como mucho uno → un solo `Pop` los limpia.
+            let mut to_next: Vec<usize> = Vec::new();
+            // Ámbito del brazo (bindings + guarda + cuerpo). `InitLocal` boxea el slot si una closure
+            // del cuerpo lo captura. `end_scope` es solo compile-time → saltar por encima es seguro.
+            let arm_saved = self.begin_scope();
             match &arm.pattern.kind {
                 PatternKind::Variant { enum_name, variant, bindings } => {
-                    // Tag de esta variante (de la tabla de enums del compilador).
                     let (_, vmap) = self.enums.get(enum_name).expect("el checker registró el enum");
                     let (tag, _arity) = *vmap.get(variant).expect("el checker validó la variante");
-                    // ¿Es esta la variante? Si no, al siguiente brazo.
+                    // ¿Es esta la variante? Si no, al siguiente brazo (dejando el bool).
                     self.emit(OpCode::GetLocal(scrut_slot), aline, acol);
                     self.emit(OpCode::EnumTagEq(tag), aline, acol);
-                    let to_next = self.emit(OpCode::JumpIfFalse(0), aline, acol);
+                    to_next.push(self.emit(OpCode::JumpIfFalse(0), aline, acol));
                     self.emit(OpCode::Pop, aline, acol); // casó → descartar el bool true
-                    // Ligar el payload en un ámbito propio del brazo (InitLocal boxea
-                    // el slot si una closure del cuerpo lo captura).
-                    let arm_saved = self.begin_scope();
+                    // Ligar el payload.
                     for (i, b) in bindings.iter().enumerate() {
                         if let Some(name) = b {
                             self.emit(OpCode::GetLocal(scrut_slot), aline, acol);
@@ -506,30 +509,33 @@ impl<'a> Compiler<'a> {
                             self.emit(OpCode::InitLocal(slot), aline, acol);
                         }
                     }
-                    self.emit_expr(&arm.body)?;
-                    self.end_scope(arm_saved);
-                    to_end.push(self.emit(OpCode::Jump(0), aline, acol));
-                    // Etiqueta del siguiente brazo: descartar el bool false.
-                    self.patch_jump(to_next);
-                    self.emit(OpCode::Pop, aline, acol);
                 }
-                PatternKind::Wildcard => {
-                    // Catch-all sin ligar: sin test, siempre se ejecuta.
-                    has_catchall = true;
-                    self.emit_expr(&arm.body)?;
-                    to_end.push(self.emit(OpCode::Jump(0), aline, acol));
-                }
+                PatternKind::Wildcard => {} // sin test ni binding
                 PatternKind::Binding(name) => {
-                    // Catch-all que liga el escrutinio completo.
-                    has_catchall = true;
-                    let arm_saved = self.begin_scope();
+                    // Liga el escrutinio completo.
                     self.emit(OpCode::GetLocal(scrut_slot), aline, acol);
                     let slot = self.declare_local(name);
                     self.emit(OpCode::InitLocal(slot), aline, acol);
-                    self.emit_expr(&arm.body)?;
-                    self.end_scope(arm_saved);
-                    to_end.push(self.emit(OpCode::Jump(0), aline, acol));
                 }
+            }
+            // Guarda (M40.1a): si es falsa, al siguiente brazo (dejando su bool). Con los bindings del
+            // patrón ya en ámbito. Un brazo con guarda NO es catch-all (puede no casar).
+            if let Some(g) = &arm.guard {
+                self.emit_expr(g)?;
+                to_next.push(self.emit(OpCode::JumpIfFalse(0), aline, acol));
+                self.emit(OpCode::Pop, aline, acol); // guarda true
+            } else if matches!(arm.pattern.kind, PatternKind::Wildcard | PatternKind::Binding(_)) {
+                has_catchall = true;
+            }
+            self.emit_expr(&arm.body)?;
+            self.end_scope(arm_saved);
+            to_end.push(self.emit(OpCode::Jump(0), aline, acol));
+            // Etiqueta del siguiente brazo: cada salto de `to_next` cae aquí dejando un bool → 1 Pop.
+            for j in &to_next {
+                self.patch_jump(*j);
+            }
+            if !to_next.is_empty() {
+                self.emit(OpCode::Pop, aline, acol);
             }
         }
 

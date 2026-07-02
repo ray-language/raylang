@@ -330,6 +330,15 @@ impl<'a> Interpreter<'a> {
                         for (name, v) in binds {
                             self.define(&name, v);
                         }
+                        // Guarda (M40.1a): si no evalúa a `true`, el brazo no casa → siguiente
+                        // (soltando su ámbito). Un error de la guarda se propaga tras soltarlo.
+                        if let Some(g) = &arm.guard {
+                            match self.eval_expr(g) {
+                                Ok(Value::Bool(true)) => {}
+                                Ok(_) => { self.scopes.pop(); continue; }
+                                Err(e) => { self.scopes.pop(); return Err(e); }
+                            }
+                        }
                         let result = self.eval_tail(&arm.body);
                         self.scopes.pop();
                         return result;
@@ -692,6 +701,14 @@ impl<'a> Interpreter<'a> {
                         self.scopes.push(HashMap::new());
                         for (name, v) in binds {
                             self.define(&name, v);
+                        }
+                        // Guarda (M40.1a): si no da `true`, el brazo no casa → siguiente.
+                        if let Some(g) = &arm.guard {
+                            match self.eval_expr(g) {
+                                Ok(Value::Bool(true)) => {}
+                                Ok(_) => { self.scopes.pop(); continue; }
+                                Err(e) => { self.scopes.pop(); return Err(e); }
+                            }
                         }
                         let result = self.eval_expr(&arm.body);
                         self.scopes.pop();

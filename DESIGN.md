@@ -5086,3 +5086,25 @@ la **caché plana** `.ray-deps/<nombre>/` (un slot por nombre) — el loader ya 
 Tests: `resolve_dependencias_transitivas` (cadena app→geo→mathx, offline; el lock incluye ambos) +
 unitarios de `semver`/`mvs`. **M39c COMPLETO** (gestor de paquetes: cápsula → git → lock → transitivas).
 Diferido: versión-mínima con RANGOS de verdad (nuestras specs son refs exactas), `ray update`, re-exports.
+
+## 42. M40 — stdlib 1.0 (arco C)
+
+### 42.1 M40.1a — guardas en los brazos del `match`
+
+Primera pieza de la **ergonomía de match** (deuda de M5.2). Un brazo puede llevar una **guarda**:
+`patrón if <cond> => cuerpo`. Casa solo si el patrón liga Y la `cond` (`bool`, con los bindings del
+patrón en ámbito) evalúa a `true`; si no, se sigue al siguiente brazo.
+
+- **AST**: `MatchArm` gana `guard: Option<Expr>`. Parser: `if <expr>` entre el patrón y el `=>`.
+- **Checker**: la guarda se chequea como `bool` en el ámbito de los bindings del patrón. **Clave para
+  la exhaustividad**: un brazo con guarda **no** cuenta como cubierto (puede no casar) → se le pasan
+  `covered`/`catchall` temporales, así `match (o) { Some(n) if n>0 => …, None => … }` es **no
+  exhaustivo** (falta `Some` sin guarda) y tampoco vuelve inalcanzables los brazos siguientes.
+- **Intérprete**: tras ligar el patrón, evalúa la guarda; si no es `true`, suelta el ámbito y sigue.
+- **VM**: `emit_match` reescrito y unificado — los saltos "al siguiente brazo" (test de variante
+  fallido, guarda falsa) se acumulan en `to_next`; cada uno deja UN bool y en runtime se toma como
+  mucho uno, así un solo `Pop` los limpia. `end_scope` es compile-time → saltar por encima es seguro.
+- **fmt**: renderiza `patrón if <cond> => …` (antes lo habría descartado — bug lossy corregido).
+
+Oráculo VM↔intérprete (`guardas_oraculo`). SPEC §5 actualizado. Runtime: cero opcodes nuevos.
+Siguiente: **M40.1b** (`if let`), **M40.1c** (patrones anidados).

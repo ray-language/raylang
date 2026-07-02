@@ -197,10 +197,13 @@ Literales (§1), identificadores, `(expr)` (agrupación), tuplas `(a, b, …)`, 
 - **`if (cond) bloque [else (bloque | if …)]`** es **expresión**: con `else`, ambas ramas deben
   converger en tipo (una rama que **diverge** —`return`, `panic`— cede el tipo a la otra); sin
   `else`, unit.
-- **`match (expr) { patrón => (expr | bloque), … }`** es expresión; brazos convergentes (misma
-  regla de divergencia; todos divergentes → unit). **Exhaustivo** sobre enums. Patrones
-  (planos): `Enum.Variante(bindings…)` (también `M.Enum.Variante`), binding suelto, `_`. No hay
-  patrones anidados, literales ni guards (diferido).
+- **`match (expr) { patrón [if guarda] => (expr | bloque), … }`** es expresión; brazos convergentes
+  (misma regla de divergencia; todos divergentes → unit). **Exhaustivo** sobre enums. Patrones
+  (planos): `Enum.Variante(bindings…)` (también `M.Enum.Variante`), binding suelto, `_`. **Guardas**
+  (M40.1a): `patrón if <cond>` casa solo si el patrón liga Y la `cond` (`bool`, con los bindings del
+  patrón en ámbito) es `true`; si no, se sigue al siguiente brazo. Un brazo con guarda **no** cuenta
+  para la exhaustividad (puede no casar) → hace falta un fallback. No hay patrones anidados ni
+  literales (diferido).
 - **Ambigüedad struct-literal/bloque**: `Nombre { … }` se reconoce como literal solo si el
   receptor es un identificador (o `M.Nombre`) en posición de expresión; en la cabecera de un
   `for`/`if`/`while` sin paréntesis el `{` abre el cuerpo. El escrutinio de `match` y las

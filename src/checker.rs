@@ -1694,19 +1694,33 @@ impl Checker {
                 return Err(self.err(arm.line, arm.col,
                     "brazo inalcanzable: un brazo anterior ya cubre todos los casos".into()));
             }
-            // Comprueba el patrón y obtiene las variables a ligar (payload sustituido).
-            let binds = self.check_pattern(&arm.pattern, &scrut_ty, &enum_name, &variants, &enum_sigma, &mut covered, &mut catchall)?;
-            // Verifica el cuerpo con esas variables en un ámbito propio, propagando el
-            // tipo esperado del match a cada brazo (para construcciones como `None`).
+            // Comprueba el patrón y obtiene las variables a ligar (payload sustituido). Un brazo con
+            // **guarda** (M40.1a) puede no casar aunque el patrón ligue, así que NO cuenta para la
+            // exhaustividad ni la alcanzabilidad: se le pasan `covered`/`catchall` temporales.
+            let binds = if arm.guard.is_some() {
+                let (mut cov, mut cat) = (HashSet::new(), false);
+                self.check_pattern(&arm.pattern, &scrut_ty, &enum_name, &variants, &enum_sigma, &mut cov, &mut cat)?
+            } else {
+                self.check_pattern(&arm.pattern, &scrut_ty, &enum_name, &variants, &enum_sigma, &mut covered, &mut catchall)?
+            };
+            // Verifica la guarda (bool) y el cuerpo con esas variables en un ámbito propio,
+            // propagando el tipo esperado del match a cada brazo (para construcciones como `None`).
             self.push_scope();
             for (name, ty) in binds {
                 self.declare(&name, ty, false, (arm.line, arm.col));
             }
+            let guard_ty = arm.guard.as_ref().map(|g| self.check_expr(g));
             let body_ty = match expected {
                 Some(exp) => self.check_expr_expected(&arm.body, exp),
                 None => self.check_expr(&arm.body),
             };
             self.pop_scope();
+            if let (Some(g), Some(gt)) = (arm.guard.as_ref(), guard_ty)
+                && gt? != Type::Bool
+            {
+                return Err(self.err(g.line, g.col,
+                    "la guarda de un brazo del match debe ser de tipo bool".into()));
+            }
             let body_ty = body_ty?;
             // M13.2b/M14: un brazo que diverge (termina en `panic`/`return`) no fija el tipo del
             // match; lo ceden los demás (igual que una rama de `if`). Así
@@ -4162,6 +4176,7 @@ fn lower_try_expr(expr: &mut Expr, sites: &TryConvMap) {
                 kind: PatternKind::Variant { enum_name: "Result".into(), variant: "Ok".into(), bindings: vec![Some("$to".into())] },
                 line: l, col: c,
             },
+            guard: None,
             body: mk(ExprKind::Ident("$to".into())),
             line: l, col: c,
         };
@@ -4177,6 +4192,7 @@ fn lower_try_expr(expr: &mut Expr, sites: &TryConvMap) {
                 kind: PatternKind::Variant { enum_name: "Result".into(), variant: "Err".into(), bindings: vec![Some("$te".into())] },
                 line: l, col: c,
             },
+            guard: None,
             body: mk(ExprKind::Block(Block { statements: vec![ret_stmt], tail: None, line: l, col: c })),
             line: l, col: c,
         };

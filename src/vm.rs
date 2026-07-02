@@ -2589,6 +2589,30 @@ mod tests {
         assert_eq!(interp, vm, "VM y intérprete difieren");
     }
 
+    /// M40.1a: **guardas** en los brazos del match (`patrón if <cond> => …`). El brazo casa solo si
+    /// el patrón liga Y la guarda es true; si no, se sigue al siguiente. Oráculo VM↔intérprete.
+    #[test]
+    fn guardas_oraculo() {
+        // clasificar por rango: 3=grande, 2=positivo, 1=neg/cero, 0=nada. Un dígito por caso.
+        let prog = "\
+            fn c(o: Option<int>) -> int {\n\
+            \x20 match (o) {\n\
+            \x20   Option.Some(n) if n > 100 => 3,\n\
+            \x20   Option.Some(n) if n > 0 => 2,\n\
+            \x20   Option.Some(n) => 1,\n\
+            \x20   Option.None => 0,\n\
+            \x20 }\n\
+            }\n\
+            fn main() -> int {\n\
+            \x20 c(Option.Some(500)) * 1000 + c(Option.Some(7)) * 100 + c(Option.Some(0 - 5)) * 10 + c(Option.None)\n\
+            }";
+        oracle_program(prog); // ambos motores → 3210
+        // Guarda sobre un binding catch-all (no sobre una variante), y fallback tras ella.
+        oracle_program("\
+            fn f(o: Option<int>) -> int { match (o) { x if false => 9, _ => 1 } }\n\
+            fn main() -> int { f(Option.Some(5)) + f(Option.None) }"); // 2
+    }
+
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
     /// punto seguro) y exige que el resultado coincida con el intérprete. Es la
     /// prueba clave del GC: si una raíz faltara, un valor vivo se liberaría y el

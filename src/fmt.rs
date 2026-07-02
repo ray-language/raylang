@@ -503,7 +503,12 @@ fn fmt_expr_indented(e: &Expr, base: usize) -> String {
                 } else {
                     fmt_expr(&arm.body, 0)
                 };
-                s.push_str(&format!("{}{} => {},\n", inner, fmt_pattern(&arm.pattern), body));
+                // Guarda opcional (M40.1a): `patrón if <cond> => …`.
+                let guarda = match &arm.guard {
+                    Some(g) => format!(" if {}", fmt_expr(g, 0)),
+                    None => String::new(),
+                };
+                s.push_str(&format!("{}{}{} => {},\n", inner, fmt_pattern(&arm.pattern), guarda, body));
             }
             s.push_str(&INDENT.repeat(base));
             s.push('}');

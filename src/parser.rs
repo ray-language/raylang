@@ -1460,13 +1460,19 @@ impl Parser {
         })
     }
 
-    /// Un brazo: `patrón => expresión`.
+    /// Un brazo: `patrón [if guarda] => expresión` (M40.1a).
     fn match_arm(&mut self) -> Result<MatchArm, ParseError> {
         let pattern = self.pattern()?;
         let (line, col) = (pattern.line, pattern.col);
+        // Guarda opcional: `if <cond>` entre el patrón y el `=>`.
+        let guard = if self.eat(&TokenKind::If) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
         self.expect(&TokenKind::FatArrow, "'=>' tras el patrón")?;
         let body = self.expression()?;
-        Ok(MatchArm { pattern, body, line, col })
+        Ok(MatchArm { pattern, guard, body, line, col })
     }
 
     /// pattern = '_' | IDENT | IDENT '.' IDENT [ '(' subpat { ',' subpat } ')' ]

@@ -5429,3 +5429,27 @@ un arreglo ordenado; la igualdad se deriva de `Ord`: `x==y` ⟺ ni `x<y` ni `y<x
 repetidos) y `merge` (fusiona dos ordenados). Demuestra que un módulo `std/` puede ser **genérico con
 bounds** (el diccionario de `Ord` se reenvía a través de la frontera de módulo, M9.2) y componer con el
 prelude (`sort`/`reverse`). Test en `cli_cli.rs` (`stdlib_sort_busca_y_deduplica`).
+
+### 42.9 M40.7 — promover librerías de `examples/` a `std/`
+
+Cierra el diferido de §42.8: las librerías que hasta ahora solo vivían como **ejemplos** (`examples/web/`,
+`examples/stdlib/`) se promueven a `std/` para que sean importables (`import std/json;`) y auto-contenidas.
+
+**Naturaleza dual del catálogo.** Las librerías de `examples/` se parten en dos:
+- **Fundacionales, puras y deterministas** — encoding (hex/base64/url/json), hashing (sha1/256/512, hmac),
+  compresión (inflate/deflate/huffman), primitivas cripto (chacha20/poly1305/ed25519), protobuf. **Son el
+  corazón de una stdlib**: se promueven.
+- **Red viva / protocolos** (udp/dns/http/http2/websocket/grpc/postgres/redis/oauth2/…) — dependen de
+  sockets/TLS, no deterministas; **son un *framework de aplicación*, no una biblioteca estándar**. Se dejan
+  como *tier* aparte (siguen en `examples/`), a la espera de un `net`/paquete propio. Diferido.
+
+**Cero duplicación.** Como `std/` se embebe con `include_str!` (M40.5), un módulo `std/X` promovido apunta
+al **`examples/…/X.ray` original** — la fuente es única, el ejemplo sigue siendo el artefacto pedagógico
+(referenciado por el libro y los tests) y a la vez la fuente del módulo `std/`. No se copia código.
+
+**M40.7a — encoding** (hojas puras, sin `import` → se embeben verbatim): `std/hex` (`hex_encode`/
+`hex_decode`), `std/base64` (`base64`/`base64url` + `*_decode` → `Result`), `std/url` (`url_encode`/
+`url_decode`, `parse_query`/`build_query` sobre `Map`), `std/json` (`enum Json`, `parse`/`stringify`). Cuatro
+filas en `MODULOS`. Test `stdlib_encoding_hex_base64_url_json` (cli_cli). Las librerías con dependencias
+(`from X import`) se namespacan a `std/X` en M40.7b+ (reescribir su import a `from std/…`, verificado contra
+la resolución embebida). Diferido: hashing, compresión, cripto, protobuf; el *tier* de red.

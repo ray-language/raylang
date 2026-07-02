@@ -340,3 +340,34 @@ fn stdlib_sort_busca_y_deduplica() {
     assert!(out.contains("Option.Some(3)"), "binary_search halla el índice\n{out}");
     assert!(out.contains("[1, 2, 3, 4, 5]"), "merge fusiona ordenado\n{out}");
 }
+
+#[test]
+fn stdlib_encoding_hex_base64_url_json() {
+    // M40.7a: librerías de encoding promovidas de examples/web/ a std/ (embebidas, fuente única).
+    let base = tmp("std_enc");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "import std/hex;\n\
+         import std/base64;\n\
+         import std/url;\n\
+         import std/json;\n\
+         fn main() -> int {\n\
+             print(hex.hex_encode([255, 0, 171]));\n\
+             print(base64.base64([104, 105]));\n\
+             print(url.url_encode(\"a b&c\"));\n\
+             match (json.parse(\"{\\\"n\\\": 42}\")) {\n\
+                 Result.Ok(j) => { print(json.stringify(j)); },\n\
+                 Result.Err(e) => { print(e); },\n\
+             }\n\
+             0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con imports de std encoding debe salir 0\n{err}");
+    assert!(out.contains("ff00ab"), "hex_encode\n{out}");
+    assert!(out.contains("aGk="), "base64 de \"hi\"\n{out}");
+    assert!(out.contains("a%20b%26c"), "url_encode\n{out}");
+    assert!(out.contains("{\"n\":42}"), "json parse+stringify\n{out}");
+}

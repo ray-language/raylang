@@ -19,9 +19,17 @@
 /// (`import std/math;` → `"std/math"`). Las rutas de `include_str!` son relativas a este archivo
 /// (`src/stdlib.rs` → `../std/…`).
 const MODULOS: &[(&str, &str)] = &[
+    // Utilidades escritas para la stdlib (viven en `std/`).
     ("std/math", include_str!("../std/math.ray")),
     ("std/text", include_str!("../std/text.ray")),
     ("std/sort", include_str!("../std/sort.ray")),
+    // Librerías **promovidas** desde `examples/` (M40.7): se embeben apuntando al archivo original —fuente
+    // ÚNICA, sin duplicar—; el ejemplo sigue siendo el artefacto pedagógico y a la vez la fuente de `std/`.
+    // Solo se promueven así las **hojas** (sin `import`); las que tienen dependencias se namespacan (M40.7b+).
+    ("std/hex", include_str!("../examples/web/hex.ray")),
+    ("std/base64", include_str!("../examples/web/base64.ray")),
+    ("std/url", include_str!("../examples/web/url.ray")),
+    ("std/json", include_str!("../examples/web/json.ray")),
 ];
 
 /// La fuente embebida del módulo `nombre` (`"std/math"`), o `None` si no es un módulo de la stdlib.
@@ -38,6 +46,8 @@ mod tests {
         assert!(embedded("std/math").is_some());
         assert!(embedded("std/text").is_some());
         assert!(embedded("std/sort").is_some());
+        assert!(embedded("std/hex").is_some());
+        assert!(embedded("std/json").is_some());
     }
 
     #[test]

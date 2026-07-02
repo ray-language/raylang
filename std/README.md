@@ -37,4 +37,15 @@ con `ray doc std/math.ray` (que lee el archivo directamente).
 - **`std/sort`** — orden y búsqueda sobre arreglos genéricos (`T: Ord`), alrededor del `sort` del prelude:
   `is_sorted`, `sort_desc`, `min`, `max`, `binary_search`, `dedup`, `merge`.
 
+### Encoding (promovidas de `examples/`, M40.7a)
+
+Estas librerías **ya existían** como ejemplos y se promueven a `std/` embebiéndolas: la fuente es el
+`examples/web/*.ray` original (no se duplica), el ejemplo sigue siendo el artefacto pedagógico y a la vez
+la fuente del módulo `std/`.
+
+- **`std/hex`** — `hex_encode(data: [int]) -> string`, `hex_decode(s) -> Result<[int], string>`.
+- **`std/base64`** — `base64`/`base64url` (encode) y `base64_decode`/`base64url_decode` (`Result`).
+- **`std/url`** — `url_encode`/`url_decode`, `parse_query`/`build_query` (sobre `Map<string, string>`).
+- **`std/json`** — `enum Json`, `parse(s) -> Result<Json, string>`, `stringify(j) -> string`.
+
 (Más módulos por venir; ver DESIGN §42.8.)

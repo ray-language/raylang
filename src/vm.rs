@@ -2864,6 +2864,28 @@ mod tests {
             }"); // size(s)=2, size(ps)=2, a=1, b=0, c=1 → 2000+200+10+0+1 = 2211
     }
 
+    /// M40.3c: `StringBuilder` (acumula trozos, une una vez con `join`) y `Deque<T>` (cola doble
+    /// sobre arreglo + índice head). Oráculo VM↔interp: sb_build determinista; deque con push/pop por
+    /// ambos extremos, incl. el vaciado (None) y la reconstrucción de push_front.
+    #[test]
+    fn sb_deque_oraculo() {
+        oracle_program("\
+            fn dv(o: Option<int>) -> int { match (o) { Option.Some(v) => v, Option.None => 0 - 1, } }\n\
+            fn main() -> int {\n\
+            \x20 let sb = sb_new();\n\
+            \x20 var i = 1;\n\
+            \x20 while (i <= 4) { sb.sb_push(to_string(i)); sb.sb_push(\",\"); i = i + 1; }\n\
+            \x20 let texto = sb.sb_build();\n\
+            \x20 let d: Deque<int> = deque_new();\n\
+            \x20 deque_push_back(d, 1); deque_push_back(d, 2); deque_push_front(d, 0);\n\
+            \x20 let a = dv(deque_pop_front(d));\n\
+            \x20 let b = dv(deque_pop_back(d));\n\
+            \x20 deque_push_front(d, 9);\n\
+            \x20 let c = dv(deque_pop_front(d));\n\
+            \x20 len(texto) * 1000 + a * 100 + b * 10 + c\n\
+            }"); // texto=\"1,2,3,4,\" (len 8), a=0, b=2, c=9 → 8000+0+20+9 = 8029
+    }
+
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
     /// punto seguro) y exige que el resultado coincida con el intérprete. Es la
     /// prueba clave del GC: si una raíz faltara, un valor vivo se liberaría y el

@@ -350,6 +350,10 @@ prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el 
 - **Set** (`Set<T>`, M40.3b; `T` debe derivar/implementar `Hash` + `Eq`): `set_new` (constructor
   vacío, el tipo lo fija el contexto), `set_add set_has set_remove set_size set_items`. Tabla hash
   escrita en el prelude; el prefijo `set_` evita chocar con builtins (`s.set_add(x)` por UFCS).
+- **StringBuilder** (M40.3c): `sb_new sb_push sb_build sb_count` — acumula trozos y los une una vez
+  (evita el O(n²) de `+` en bucle). **Deque** (`Deque<T>`, M40.3d): `deque_new deque_push_back
+  deque_push_front deque_pop_front deque_pop_back deque_peek_front deque_len deque_is_empty` (pop/peek
+  → `Option<T>`); cola/pila/doble-extremo sobre arreglo + índice `head`.
 - **Matemáticas**: `sqrt pow floor ceil round abs min max sin cos tan ln log10 exp pi e` ·
   **Reloj/azar**: `now monotonic sleep random random_int`.
 - **Proceso/E-S**: `args env input read_int read_file write_file append_file exists

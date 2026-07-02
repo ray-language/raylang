@@ -306,6 +306,77 @@ fn set_remove<T: Hash + Eq>(s: Set<T>, x: T) {
     }
 }
 
+// --- Constructor de strings: StringBuilder (M40.3c) ---
+// Acumula trozos y los une UNA vez al final (`join`), evitando el O(n²) de concatenar con `+` en un
+// bucle (cada `+` copia todo lo acumulado). Prefijo `sb_` (para no chocar con `push`). UFCS: `sb.sb_push(s)`.
+struct StringBuilder { partes: [string] }
+
+fn sb_new() -> StringBuilder { StringBuilder { partes: [] } }
+
+// Añade un trozo al final (O(1) amortizado; no copia lo ya acumulado).
+fn sb_push(sb: StringBuilder, s: string) { push(sb.partes, s); }
+
+// Une todo lo acumulado en un solo string (O(total), una vez).
+fn sb_build(sb: StringBuilder) -> string { join(sb.partes, "") }
+
+// Número de trozos acumulados (no de caracteres).
+fn sb_count(sb: StringBuilder) -> int { len(sb.partes) }
+
+// --- Cola doble: Deque<T> (M40.3d) ---
+// Respaldada por un arreglo + un índice `head` (los elementos vivos son `datos[head..]`). Así
+// `push_back`/`pop_front` (uso de cola) son O(1); `pop_back` también; `push_front` es O(1) si hay
+// hueco al frente (head>0), O(n) si toca reconstruir. `pop_*`/`peek_*` devuelven `Option<T>` (None si
+// vacía). `deque_new()` es un constructor vacío (T lo fija el contexto, M40.3b). Prefijo `deque_`.
+struct Deque<T> { datos: [T], head: int }
+
+fn deque_new<T>() -> Deque<T> {
+    var d: [T] = [];
+    Deque { datos: d, head: 0 }
+}
+
+// Número de elementos vivos.
+fn deque_len<T>(d: Deque<T>) -> int { len(d.datos) - d.head }
+fn deque_is_empty<T>(d: Deque<T>) -> bool { deque_len(d) == 0 }
+
+// Encola por detrás (O(1) amortizado).
+fn deque_push_back<T>(d: Deque<T>, x: T) { push(d.datos, x); }
+
+// Desencola por delante; None si vacía (O(1): solo avanza `head`).
+fn deque_pop_front<T>(d: Deque<T>) -> Option<T> {
+    if (d.head < len(d.datos)) {
+        let v = d.datos[d.head];
+        d.head = d.head + 1;
+        Option.Some(v)
+    } else {
+        Option.None
+    }
+}
+
+// Desencola por detrás; None si vacía.
+fn deque_pop_back<T>(d: Deque<T>) -> Option<T> {
+    if (len(d.datos) > d.head) { pop(d.datos) } else { Option.None }
+}
+
+// Encola por delante (O(1) si hay hueco; si no, reconstruye O(n)).
+fn deque_push_front<T>(d: Deque<T>, x: T) {
+    if (d.head > 0) {
+        d.head = d.head - 1;
+        d.datos[d.head] = x;
+    } else {
+        var nuevo: [T] = [];
+        push(nuevo, x);
+        var i = d.head;
+        while (i < len(d.datos)) { push(nuevo, d.datos[i]); i = i + 1; }
+        d.datos = nuevo;
+        d.head = 0;
+    }
+}
+
+// Mira el frente sin desencolar; None si vacía.
+fn deque_peek_front<T>(d: Deque<T>) -> Option<T> {
+    if (d.head < len(d.datos)) { Option.Some(d.datos[d.head]) } else { Option.None }
+}
+
 // Número de elementos del conjunto.
 fn set_size<T>(s: Set<T>) -> int { s.tam }
 

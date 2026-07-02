@@ -5344,4 +5344,22 @@ argumentos siguen mandando**, cero cambio para el código existente). Generaliza
 
 Oráculo `set_oraculo` (add/has/remove/size con primitivos y un tipo de usuario, dedup). Ejemplo
 `examples/stdlib/conjunto.ray`. Diferido: resize/rehash, `HashMap<K,V>` de usuario, operaciones de
-conjunto (unión/intersección). Siguiente: deque + string-builder; luego `std/` + raydoc.
+conjunto (unión/intersección).
+
+#### M40.3c/d — StringBuilder + Deque
+
+Dos colecciones lineales, **puro prelude** (structs + funciones, cero runtime). **StringBuilder**
+(`struct StringBuilder { partes: [string] }`): `sb_new`/`sb_push`/`sb_build`/`sb_count`. Acumula trozos
+y los une **una vez** con `join` al final (`sb_build`) → O(total) en vez del O(n²) de concatenar con `+`
+en un bucle (cada `+` copia todo lo acumulado). **Deque** (`struct Deque<T> { datos: [T], head }`):
+`deque_new`/`push_back`/`push_front`/`pop_front`/`pop_back`/`peek_front`/`len`/`is_empty` (los `pop`/
+`peek` → `Option<T>`). Respaldada por un arreglo + índice `head` (los vivos son `datos[head..]`):
+`push_back`/`pop_front`/`pop_back` O(1), `push_front` O(1) con hueco o O(n) reconstruyendo. Sirve de
+cola (FIFO: push_back+pop_front), pila (LIFO: push_back+pop_back) o doble-extremo. Prefijos `sb_`/
+`deque_` (evitan chocar con builtins; UFCS: `sb.sb_push(s)`, `d.deque_push_back(x)`). Los constructores
+vacíos genéricos (`deque_new`) reusan la inferencia bidireccional de M40.3b + el patrón `var d: [T] = []`
+(el `[]` inline en un campo de tipo genérico aún no se infiere — limitación menor).
+
+Oráculo `sb_deque_oraculo`. Ejemplo `examples/stdlib/builder_deque.ray`. **M40.3 (colecciones: Hash +
+Set + StringBuilder + Deque) COMPLETO.** Diferido: HashMap de usuario, resize del Set, `[]` inline en
+campo genérico. Siguiente sub-área de M40: `std/` (promover `examples/` a árbol versionado) + raydoc.

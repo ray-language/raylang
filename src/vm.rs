@@ -2668,6 +2668,27 @@ mod tests {
             }"); // 7 + 200 = 207
     }
 
+    /// M40.1d: **patrón de struct** (`Some(Punto { x, y })`). El struct irrefutable cubre la variante
+    /// sin fallback. Oráculo VM↔intérprete (destructuración + campo con sub-patrón/`_`).
+    #[test]
+    fn patrones_struct_oraculo() {
+        oracle_program("\
+            struct Punto { x: int, y: int }\n\
+            fn f(o: Option<Punto>) -> int {\n\
+            \x20 match (o) {\n\
+            \x20   Option.Some(Punto { x, y }) if x > 0 => x + y,\n\
+            \x20   Option.Some(Punto { x: n, y: _ }) => n,\n\
+            \x20   Option.None => 0 - 1,\n\
+            \x20 }\n\
+            }\n\
+            fn main() -> int {\n\
+            \x20 let a = Option.Some(Punto { x: 3, y: 4 });\n\
+            \x20 let b = Option.Some(Punto { x: 0 - 9, y: 0 });\n\
+            \x20 let c: Option<Punto> = Option.None;\n\
+            \x20 f(a) * 1000 + (f(b) + 100) * 10 + (f(c) + 10)\n\
+            }"); // 7*1000 + (-9+100)*10 + (-1+10) = 7000 + 910 + 9 = 7919
+    }
+
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
     /// punto seguro) y exige que el resultado coincida con el intérprete. Es la
     /// prueba clave del GC: si una raíz faltara, un valor vivo se liberaría y el

@@ -381,10 +381,18 @@ fn shift_stmt(s: &mut Stmt, delta: usize) {
 /// Desplaza (línea) un patrón y sus sub-patrones (M40.1c, recursivo). La columna se conserva.
 fn shift_pattern(p: &mut Pattern, delta: usize) {
     p.line += delta;
-    if let PatternKind::Variant { subpatterns, .. } = &mut p.kind {
-        for sub in subpatterns {
-            shift_pattern(sub, delta);
+    match &mut p.kind {
+        PatternKind::Variant { subpatterns, .. } => {
+            for sub in subpatterns {
+                shift_pattern(sub, delta);
+            }
         }
+        PatternKind::Struct { fields, .. } => {
+            for (_, sub) in fields {
+                shift_pattern(sub, delta);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1266,11 +1274,20 @@ impl<'a> TypeRewriter<'a> {
     /// Namespaca el `enum_name` de un patrón de variante y, recursivamente, el de sus sub-patrones
     /// (M40.1c). Un `_`/binding no nombra tipos.
     fn rewrite_pattern(&self, p: &mut Pattern) {
-        if let PatternKind::Variant { enum_name, subpatterns, .. } = &mut p.kind {
-            self.rewrite_name(enum_name);
-            for sub in subpatterns {
-                self.rewrite_pattern(sub);
+        match &mut p.kind {
+            PatternKind::Variant { enum_name, subpatterns, .. } => {
+                self.rewrite_name(enum_name);
+                for sub in subpatterns {
+                    self.rewrite_pattern(sub);
+                }
             }
+            PatternKind::Struct { name, fields } => {
+                self.rewrite_name(name); // M40.1d: namespacar el nombre del struct
+                for (_, sub) in fields {
+                    self.rewrite_pattern(sub);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1374,6 +1391,11 @@ fn recolectar_bindings(p: &Pattern, set: &mut HashSet<String>) {
         }
         PatternKind::Variant { subpatterns, .. } => {
             for sub in subpatterns {
+                recolectar_bindings(sub, set);
+            }
+        }
+        PatternKind::Struct { fields, .. } => {
+            for (_, sub) in fields {
                 recolectar_bindings(sub, set);
             }
         }

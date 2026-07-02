@@ -1671,6 +1671,23 @@ fn match_pattern(pat: &Pattern, value: &Value) -> Option<Vec<(String, Value)>> {
             }
             Some(binds)
         }
+        PatternKind::Struct { fields, .. } => {
+            // M40.1d: destructura un struct. El checker garantiza el tipo; se casan los campos
+            // listados (recursivo). Un campo cuyo sub-patrón no case hace fallar el brazo.
+            let s = match value {
+                Value::Struct(s) => s,
+                _ => return None, // el checker lo impide; por robustez
+            };
+            let mut binds = Vec::new();
+            for (fname, fpat) in fields {
+                let fv = s.borrow().fields.iter().find(|(f, _)| f == fname).map(|(_, v)| v.clone());
+                match fv {
+                    Some(v) => binds.extend(match_pattern(fpat, &v)?),
+                    None => return None, // el checker garantiza el campo; por robustez
+                }
+            }
+            Some(binds)
+        }
     }
 }
 

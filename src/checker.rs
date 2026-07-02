@@ -1852,6 +1852,36 @@ impl Checker {
                 }
                 Ok(binds)
             }
+            PatternKind::Struct { name, fields } => {
+                // El valor debe ser un struct con este nombre (M40.1d).
+                let (sname, targs) = match ty {
+                    Type::Struct(n, args) => (n.clone(), args.clone()),
+                    other => return Err(self.err(pat.line, pat.col, format!(
+                        "el patrón de struct '{}' no casa: aquí el valor es {}", name, other
+                    ))),
+                };
+                if *name != sname {
+                    return Err(self.err(pat.line, pat.col, format!(
+                        "el patrón es del struct '{}', pero aquí el valor es del struct '{}'", name, sname
+                    )));
+                }
+                let campos = self.structs.get(&sname)
+                    .unwrap_or_else(|| crate::ice!("el struct '{}' no está en la tabla del checker", sname)).clone();
+                // σ del struct: liga sus parámetros de tipo con los argumentos (`Par<int,bool>`).
+                let tparams = self.struct_tparams.get(&sname).cloned().unwrap_or_default();
+                let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs).collect();
+                let mut binds = Vec::new();
+                for (fname, fpat) in fields {
+                    let fty = match campos.iter().find(|(f, _)| f == fname) {
+                        Some((_, t)) => subst(t, &sigma),
+                        None => return Err(self.err(fpat.line, fpat.col, format!(
+                            "el struct '{}' no tiene un campo '{}'", sname, fname
+                        ))),
+                    };
+                    binds.extend(self.check_subpattern(fpat, &fty)?); // recursivo
+                }
+                Ok(binds)
+            }
         }
     }
 
@@ -1868,9 +1898,10 @@ impl Checker {
         match &pat.kind {
             PatternKind::Wildcard | PatternKind::Binding(_) => *catchall = true,
             PatternKind::Variant { variant, subpatterns, .. } => {
-                let cubre_todo = subpatterns
-                    .iter()
-                    .all(|p| matches!(p.kind, PatternKind::Wildcard | PatternKind::Binding(_)));
+                // Cubre la variante si todos sus sub-patrones son **irrefutables** (siempre casan):
+                // `_`/binding o un struct de campos irrefutables (`Punto { x, y }`). Una variante
+                // anidada es refutable → no cubre (conservador; hace falta un fallback).
+                let cubre_todo = subpatterns.iter().all(es_irrefutable);
                 if cubre_todo {
                     if !covered.insert(variant.clone()) {
                         return Err(self.err(pat.line, pat.col, format!(
@@ -1880,6 +1911,9 @@ impl Checker {
                 }
                 // Si no cubre todo (un sub-patrón anidado), no se marca: sigue haciendo falta un fallback.
             }
+            // Un patrón de struct nunca es de primer nivel (el escrutinio de un match es un enum); no
+            // marca cobertura. Este brazo existe solo para la exhaustividad del `match` de Rust.
+            PatternKind::Struct { .. } => {}
         }
         Ok(())
     }
@@ -3221,6 +3255,18 @@ fn stmt_diverges(stmt: &Stmt) -> bool {
         StmtKind::Return { .. } => true,
         StmtKind::Expr(e) => expr_diverges(e),
         _ => false,
+    }
+}
+
+/// ¿El patrón es **irrefutable** (casa siempre, sin importar el valor)? Un `_`/binding, o un patrón
+/// de struct cuyos campos son todos irrefutables (`Punto { x, y }`). Una variante es **refutable**
+/// (solo casa una de las variantes). Se usa para la exhaustividad conservadora (M40.1c/1d): una
+/// variante de primer nivel cubre solo si sus sub-patrones son irrefutables.
+fn es_irrefutable(p: &Pattern) -> bool {
+    match &p.kind {
+        PatternKind::Wildcard | PatternKind::Binding(_) => true,
+        PatternKind::Struct { fields, .. } => fields.iter().all(|(_, f)| es_irrefutable(f)),
+        PatternKind::Variant { .. } => false,
     }
 }
 

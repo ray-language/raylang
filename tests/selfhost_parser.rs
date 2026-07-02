@@ -229,6 +229,11 @@ fn dump_pattern(pat: &Pattern) -> String {
                 .collect();
             format!("(variant {} {}{}){}", enum_name, variant, binds, pp)
         }
+        // M40.1d: patrón de struct (el toolchain auto-alojado no lo soporta; fuera del corpus).
+        PatternKind::Struct { name, fields } => {
+            let fs: String = fields.iter().map(|(f, p)| format!(" ({} {})", f, dump_pattern(p))).collect();
+            format!("(struct-pat {}{}){}", name, fs, pp)
+        }
     }
 }
 

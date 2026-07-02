@@ -5143,3 +5143,29 @@ Un sub-patrón de variante deja de ser un binding plano y pasa a ser un **patró
 
 Oráculo `patrones_anidados_oraculo` (`Result<Option<int>>` + `Option<Option<int>>`) + guarda con UFCS.
 SPEC §5. Runtime: cero opcodes nuevos. Siguiente: **M40.1d** (patrón de struct `Punto { x, y }`).
+
+### 42.4 M40.1d — patrón de struct
+
+`Nombre { campo [: sub-patrón], … }` destructura un struct dentro de un match. Cierra el ejemplo
+`match (o) { Option.Some(Punto { x, y }) => x + y, Option.None => 0 }`. **Caso aditivo** sobre la
+maquinaria recursiva de M40.1c.
+
+- **AST**: nueva `PatternKind::Struct { name, fields: Vec<(String, Pattern)> }`. Forma corta
+  `{ x, y }` = `{ x: x, y: y }` (el parser la expande a bindings). Solo aparece **anidado** (el
+  escrutinio de un match es un enum).
+- **Parser**: `pattern()` detecta `Ident {` (inequívoco en posición de patrón; no hay ambigüedad con
+  un bloque, a diferencia de las expresiones → sin `no_struct_lit`).
+- **Checker**: caso `Struct` en `check_subpattern` (el valor debe ser ese struct; se resuelven los
+  tipos de campo con σ del struct genérico; recurre por cada campo listado —parcial permitido—).
+- **Motores**: intérprete recursivo (extrae el campo del `StructInstance`); VM `emit_pattern_test`
+  sin tag (el struct siempre casa por tipo), extrae cada campo con `GetField` a un temporal y recurre.
+- **loader**/**fmt**: recorren/renderizan los campos recursivamente; `rewrite_pattern` namespaca el
+  nombre del struct.
+- **Exhaustividad afinada**: se introduce `es_irrefutable(patrón)` (`_`/binding, o struct de campos
+  irrefutables). Una variante de primer nivel cubre si sus sub-patrones son irrefutables → así
+  `Option.Some(Punto { x, y })` + `Option.None` es **exhaustivo sin fallback** (antes lo pedía). Una
+  variante anidada sigue siendo refutable (conservador).
+
+Oráculo `patrones_struct_oraculo`. SPEC §5. Runtime: cero opcodes nuevos. **M40.1 (ergonomía de
+match: guardas + `if let` + patrones anidados + struct) COMPLETO.** Diferido: patrones de literal,
+patrón de struct de primer nivel (`let Punto { x, y } = p`), `M.Struct { … }` calificado.

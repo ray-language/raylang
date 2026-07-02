@@ -530,6 +530,14 @@ fn fmt_pattern(p: &Pattern) -> String {
                 format!("{}.{}({})", enum_name, variant, bs.join(", "))
             }
         }
+        PatternKind::Struct { name, fields } => {
+            // M40.1d: `Nombre { campo: sub, … }` (la forma corta `campo` = `campo: campo` se reimprime
+            // larga, sin ambigüedad).
+            let fs: Vec<String> = fields.iter()
+                .map(|(f, p)| format!("{}: {}", f, fmt_pattern(p)))
+                .collect();
+            format!("{} {{ {} }}", name, fs.join(", "))
+        }
     }
 }
 

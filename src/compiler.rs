@@ -504,6 +504,20 @@ impl<'a> Compiler<'a> {
                     self.emit_pattern_test(sub, sub_slot, to_next, line, col)?;
                 }
             }
+            PatternKind::Struct { fields, .. } => {
+                // M40.1d: sin tag (un struct siempre casa por tipo, garantizado por el checker); se
+                // extrae cada campo listado con `GetField` a un temporal y se casa recursivamente.
+                for (fname, fpat) in fields {
+                    if matches!(fpat.kind, PatternKind::Wildcard) {
+                        continue;
+                    }
+                    self.emit(OpCode::GetLocal(val_slot), line, col);
+                    self.emit(OpCode::GetField(fname.clone()), line, col);
+                    let sub_slot = self.declare_local("$sub");
+                    self.emit(OpCode::InitLocal(sub_slot), line, col);
+                    self.emit_pattern_test(fpat, sub_slot, to_next, line, col)?;
+                }
+            }
         }
         Ok(())
     }

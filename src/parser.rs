@@ -1566,6 +1566,27 @@ impl Parser {
                 col,
             });
         }
+        // Patrón de struct: `Nombre { campo [: sub-patrón], … }` (M40.1d). En posición de patrón el
+        // `{` es inequívocamente una destructuración (no hay ambigüedad con un bloque, a diferencia
+        // de las expresiones); no hace falta `no_struct_lit`.
+        if self.eat(&TokenKind::LBrace) {
+            let mut fields = Vec::new();
+            while !self.check(&TokenKind::RBrace) {
+                let (campo, fl, fc) = self.expect_ident("el nombre de un campo")?;
+                // Forma larga `campo: <patrón>` o corta `campo` (≡ `campo: campo`, un binding).
+                let sub = if self.eat(&TokenKind::Colon) {
+                    self.pattern()?
+                } else {
+                    Pattern { kind: PatternKind::Binding(campo.clone()), line: fl, col: fc }
+                };
+                fields.push((campo, sub));
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::RBrace, "'}' para cerrar el patrón de struct")?;
+            return Ok(Pattern { kind: PatternKind::Struct { name, fields }, line, col });
+        }
         // Identificador suelto: binding catch-all.
         Ok(Pattern { kind: PatternKind::Binding(name), line, col })
     }
@@ -1989,6 +2010,10 @@ mod tests {
                     let bs: Vec<String> = subpatterns.iter().map(spat).collect();
                     format!("{}.{}({})", enum_name, variant, bs.join(", "))
                 }
+            }
+            PatternKind::Struct { name, fields } => {
+                let fs: Vec<String> = fields.iter().map(|(f, p)| format!("{}: {}", f, spat(p))).collect();
+                format!("{} {{ {} }}", name, fs.join(", "))
             }
         }
     }

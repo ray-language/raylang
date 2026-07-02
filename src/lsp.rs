@@ -363,6 +363,36 @@ fn is_ident_char(c: char) -> bool {
 /// Un rango en una línea: `(line0, col0, len)`, todo 0-basado.
 type Span = (usize, usize, usize);
 
+/// El texto (nombre) de un uso `d`, leído de `lines` en la posición de `d` (1-basado en `d.line`).
+/// Se lee el **identificador** que empieza ahí (no `d.len`, que en un uso namespacado —`geo::f`—
+/// excede el token escrito en la fuente).
+fn use_name(lines: &[&str], d: &checker::DefEntry) -> Option<String> {
+    let chars: Vec<char> = lines.get(d.line - 1)?.chars().collect();
+    let start = d.col - 1;
+    if start >= chars.len() {
+        return None;
+    }
+    let end = start + chars[start..].iter().take_while(|&&c| is_ident_char(c)).count();
+    (end > start).then(|| chars[start..end].iter().collect())
+}
+
+/// Rango del **nombre** `name` como palabra entera desde `(def_line, def_col)` (1-basados) en
+/// `lines`: un `let`/`fn` apunta al keyword → escanea hasta el nombre; un parámetro ya está en él.
+fn decl_name_range(lines: &[&str], def_line: usize, def_col: usize, name: &str) -> Option<Span> {
+    let chars: Vec<char> = lines.get(def_line - 1)?.chars().collect();
+    let nm: Vec<char> = name.chars().collect();
+    let mut i = def_col.saturating_sub(1);
+    while i + nm.len() <= chars.len() {
+        let antes = i == 0 || !is_ident_char(chars[i - 1]);
+        let despues = i + nm.len() == chars.len() || !is_ident_char(chars[i + nm.len()]);
+        if antes && despues && chars[i..i + nm.len()] == nm[..] {
+            return Some((def_line - 1, i, nm.len()));
+        }
+        i += 1;
+    }
+    None
+}
+
 /// El símbolo bajo el cursor: su nombre, el rango de su **declaración** (si se localiza) y los
 /// rangos de todos sus **usos**. `None` si no hay símbolo.
 fn symbol_occurrences(
@@ -376,39 +406,16 @@ fn symbol_occurrences(
     let lines: Vec<&str> = src.lines().collect();
     let (qline, qcol) = (line0 + 1, char0 + 1);
 
-    // El texto (nombre) de un uso, leído de la fuente en su rango.
-    let use_name = |d: &checker::DefEntry| -> Option<String> {
-        let chars: Vec<char> = lines.get(d.line - 1)?.chars().collect();
-        let start = d.col - 1;
-        (start + d.len <= chars.len()).then(|| chars[start..start + d.len].iter().collect())
-    };
-    // Rango del nombre de una declaración: el primer `name` como palabra entera desde su posición
-    // (un `let`/`fn` apunta al keyword → escanea hasta el nombre; un parámetro ya está en el nombre).
-    let decl_range = |def_line: usize, def_col: usize, name: &str| -> Option<Span> {
-        let chars: Vec<char> = lines.get(def_line - 1)?.chars().collect();
-        let nm: Vec<char> = name.chars().collect();
-        let mut i = def_col.saturating_sub(1);
-        while i + nm.len() <= chars.len() {
-            let antes = i == 0 || !is_ident_char(chars[i - 1]);
-            let despues = i + nm.len() == chars.len() || !is_ident_char(chars[i + nm.len()]);
-            if antes && despues && chars[i..i + nm.len()] == nm[..] {
-                return Some((def_line - 1, i, nm.len()));
-            }
-            i += 1;
-        }
-        None
-    };
-
     // Clave de la declaración objetivo: (a) el cursor está sobre un uso, o (b) sobre el nombre de
     // una declaración (que tenga al menos un uso, del que se toma el nombre).
     let mut target: Option<(usize, usize, String)> = idx.defs.iter()
         .filter(|d| d.line == qline && qcol >= d.col && qcol < d.col + d.len)
         .min_by_key(|d| d.len)
-        .and_then(|d| use_name(d).map(|n| (d.def_line, d.def_col, n)));
+        .and_then(|d| use_name(&lines, d).map(|n| (d.def_line, d.def_col, n)));
     if target.is_none() {
         for d in &idx.defs {
-            let Some(name) = use_name(d) else { continue };
-            let sobre_decl = decl_range(d.def_line, d.def_col, &name)
+            let Some(name) = use_name(&lines, d) else { continue };
+            let sobre_decl = decl_name_range(&lines, d.def_line, d.def_col, &name)
                 .is_some_and(|(dl, dc, len)| dl + 1 == qline && qcol > dc && qcol - 1 < dc + len);
             if sobre_decl {
                 target = Some((d.def_line, d.def_col, name));
@@ -418,7 +425,7 @@ fn symbol_occurrences(
     }
     let (tdl, tdc, name) = target?;
 
-    let decl = decl_range(tdl, tdc, &name);
+    let decl = decl_name_range(&lines, tdl, tdc, &name);
     // Todos los usos con la clave de esta declaración. Se filtran a la **banda de la entrada** (este
     // archivo): los usos en otros módulos tienen líneas fuera del buffer y no deben devolverse aquí.
     let todos: Vec<&checker::DefEntry> =
@@ -437,7 +444,8 @@ fn symbol_occurrences(
 }
 
 /// El `result` de `textDocument/references`: una lista de `Location` (uso, y la declaración si el
-/// cliente pide `includeDeclaration`). Lista vacía si no hay símbolo.
+/// cliente pide `includeDeclaration`). **Cruza archivos** (M10.2h): un símbolo usado en varios
+/// módulos devuelve sus usos en cada archivo. Lista vacía si no hay símbolo.
 fn references_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Arr(vec![]) };
     let Some(src) = docs.get(&uri) else { return Json::Arr(vec![]) };
@@ -445,15 +453,85 @@ fn references_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
         .and_then(|c| c.get("includeDeclaration"))
         .map(|b| matches!(b, Json::Bool(true)))
         .unwrap_or(true);
-    let Some((_, decl, usos, _)) = symbol_occurrences(Some(&uri), src, line0, char0) else { return Json::Arr(vec![]) };
-    let mut locs: Vec<Json> = Vec::new();
-    if let Some((l, c, len)) = decl.filter(|_| incluir_decl) {
-        locs.push(obj(vec![("uri", Json::Str(uri.clone())), ("range", rango(l, c, c + len))]));
+    // Camino cross-archivo (si es un archivo); si no (buffer sin guardar), un solo archivo.
+    let locs: Vec<(String, Span)> = references_cross(&uri, src, line0, char0, incluir_decl)
+        .unwrap_or_else(|| {
+            let mut v = Vec::new();
+            if let Some((_, decl, usos, _)) = symbol_occurrences(Some(&uri), src, line0, char0) {
+                if let Some(s) = decl.filter(|_| incluir_decl) {
+                    v.push((uri.clone(), s));
+                }
+                v.extend(usos.into_iter().map(|s| (uri.clone(), s)));
+            }
+            v
+        });
+    let json = locs.into_iter()
+        .map(|(u, (l, c, len))| obj(vec![("uri", Json::Str(u)), ("range", rango(l, c, c + len))]))
+        .collect();
+    Json::Arr(json)
+}
+
+/// Todas las apariciones de un símbolo (declaración + usos) **cruzando módulos** (M10.2h): corre el
+/// loader, halla la clave de la declaración objetivo (cursor sobre un uso, o sobre el nombre de una
+/// declaración de este archivo) y mapea cada aparición a su módulo → `(uri, rango 0-basado)`. El
+/// largo se recorta al token real del archivo destino (los usos namespacados registran más). `None`
+/// si el uri no es un archivo o el loader falla (→ el llamador cae a un solo archivo).
+fn references_cross(uri: &str, src: &str, line0: usize, char0: usize, incluir_decl: bool) -> Option<Vec<(String, Span)>> {
+    let path = uri_to_path(uri)?;
+    let loaded = loader::load_fuente(&path, src, &dep_roots_for(&path)).ok()?;
+    let mut program = loaded.program;
+    let idx = checker::semantic_index(&mut program);
+    let entry_lines: Vec<&str> = src.lines().collect();
+    let (qline, qcol) = (line0 + 1, char0 + 1);
+
+    // Objetivo: clave `(tdl, tdc)` + nombre. Cursor sobre un uso, o sobre el nombre de una
+    // declaración de la ENTRADA (el cursor siempre está en el archivo abierto).
+    let mut target: Option<(usize, usize, String)> = idx.defs.iter()
+        .filter(|d| d.line == qline && qcol >= d.col && qcol < d.col + d.len)
+        .min_by_key(|d| d.len)
+        .and_then(|d| use_name(&entry_lines, d).map(|n| (d.def_line, d.def_col, n)));
+    if target.is_none() {
+        for d in &idx.defs {
+            if d.def_line > entry_lines.len() {
+                continue; // la declaración no está en este archivo → el cursor no puede estar en ella
+            }
+            let Some(name) = use_name(&entry_lines, d) else { continue };
+            let sobre = decl_name_range(&entry_lines, d.def_line, d.def_col, &name)
+                .is_some_and(|(dl, dc, len)| dl + 1 == qline && qcol > dc && qcol - 1 < dc + len);
+            if sobre {
+                target = Some((d.def_line, d.def_col, name));
+                break;
+            }
+        }
     }
-    for (l, c, len) in usos {
-        locs.push(obj(vec![("uri", Json::Str(uri.clone())), ("range", rango(l, c, c + len))]));
+    let (tdl, tdc, name) = target?;
+
+    // Localiza el módulo (banda) de una línea global y devuelve su URI + línea local.
+    let modulo_de = |gl: usize| loaded.modules.iter().rev().find(|m| m.start_line <= gl);
+
+    let mut locs: Vec<(String, Span)> = Vec::new();
+    // La declaración: apunta al **nombre** en su archivo (escanea la fuente del módulo destino).
+    if incluir_decl
+        && let Some(m) = modulo_de(tdl)
+    {
+        let m_lines: Vec<&str> = m.source.lines().collect();
+        let local_decl = tdl - m.start_line + 1; // 1-basada en el módulo
+        if let Some(span) = decl_name_range(&m_lines, local_decl, tdc, &name) {
+            locs.push((format!("file://{}", m.path.display()), span));
+        }
     }
-    Json::Arr(locs)
+    // Los usos: cada uno mapeado a su módulo, con el largo recortado al token real.
+    for d in idx.defs.iter().filter(|d| d.def_line == tdl && d.def_col == tdc) {
+        if let Some(m) = modulo_de(d.line) {
+            let local0 = d.line - m.start_line;
+            let col0 = d.col - 1;
+            let len = d.len.min(token_len(&m.source, local0, col0)).max(1);
+            locs.push((format!("file://{}", m.path.display()), (local0, col0, len)));
+        }
+    }
+    locs.sort();
+    locs.dedup();
+    Some(locs)
 }
 
 /// El `result` de `textDocument/rename`: un `WorkspaceEdit` que sustituye el símbolo (declaración
@@ -1471,6 +1549,29 @@ mod tests {
         let (turi, line, _, _) = definition_at(&uri, src, 3, 2).expect("def de r");
         assert!(turi.ends_with("main.ray"), "{turi}");
         assert_eq!(line, 2, "la declaración de 'r' está en la línea 3 (0-based 2)");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn references_cruzan_modulos() {
+        let dir = std::env::temp_dir().join("ray_lsp_refs_mod");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // geo.ray: define `duplicar` y lo usa una vez internamente.
+        std::fs::write(dir.join("geo.ray"),
+            "pub fn duplicar(x: int) -> int { x * 2 }\npub fn cuad(x: int) -> int { duplicar(x) }\n").unwrap();
+        let uri = format!("file://{}", dir.join("main.ray").display());
+        let src = "from geo import duplicar;\nfn main() -> int {\n  duplicar(21)\n}\n";
+
+        // Find-references desde el uso en main.ray → apariciones en AMBOS archivos.
+        let locs = references_cross(&uri, src, 2, 2, true).expect("references");
+        let archivos: std::collections::HashSet<&str> = locs.iter()
+            .map(|(u, _)| u.rsplit('/').next().unwrap())
+            .collect();
+        assert!(archivos.contains("geo.ray"), "incluye la declaración y el uso interno: {locs:?}");
+        assert!(archivos.contains("main.ray"), "incluye el uso del archivo abierto: {locs:?}");
+        // 3 apariciones: declaración + uso interno en geo.ray, uso en main.ray.
+        assert_eq!(locs.len(), 3, "{locs:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

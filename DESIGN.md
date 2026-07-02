@@ -1754,9 +1754,14 @@ Diferido: navegación cross-archivo (def/references que salten a otro módulo) y
   y el checker registra el hover del campo/método en `check_field`/`check_call` con su tipo/firma +
   **M10.2h**: **ir-a-definición cruzando archivos** — `LoadedModule` gana su `path`, y `definition_at`
   mapea la declaración (posición global del programa fusionado) a su **módulo** (archivo + línea local),
-  devolviendo la `Location` en el archivo correcto (saltar a `geo.ray` desde `import geo;`). Quedan:
-  **def** del nombre de método (solo hover), completion por **bloque** anidado, y **references/rename
-  cruzando módulos** (hoy references es entry-only y rename se niega si el símbolo cruza módulos).
+  devolviendo la `Location` en el archivo correcto (saltar a `geo.ray` desde `import geo;`) — y
+  **find-references cruzando archivos**: `references_cross` recolecta las apariciones de todas las
+  bandas del programa fusionado y mapea cada una a su módulo (archivo + línea local, largo recortado al
+  token real con `token_len`); la declaración apunta al **nombre** (escaneando la fuente del módulo
+  destino). Gotcha: `use_name` lee el identificador de la fuente (no `d.len`, que en un uso namespacado
+  `geo::f` excede el token escrito). Quedan: **def** del nombre de método (solo hover), completion por
+  **bloque** anidado, y **rename cruzando módulos** (hoy rename se niega si el símbolo cruza módulos, para
+  no editarlo a medias — necesitaría un `WorkspaceEdit` multi-archivo).
 - `@builtin`/`@extern` (limpiar el *special-casing* de `print`/`len`/`push`), `@deprecated`,
   `@inline`, `@delegate` → anotaciones futuras.
 - **Derivación recursiva** (`Eq` de enums con payload-enum) y **derive genérico** → futuro.

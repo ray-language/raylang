@@ -2734,6 +2734,30 @@ mod tests {
             }"); // 100*10000 + 120*10 + 6 = 1001206
     }
 
+    /// M40.2c: adaptadores PEREZOSOS `.map()`/`.filter()` — métodos genéricos por defecto de
+    /// `Iterator`, encadenables, respaldados por un closure (`Iter<T>`). Oráculo VM↔intérprete:
+    /// map cambia de tipo de elemento, filter avanza el origen, y el encadenamiento se evalúa al
+    /// recorrer. Ejercita métodos genéricos + captura mutable en closures + despacho por receptor.
+    #[test]
+    fn adaptadores_perezosos_oraculo() {
+        oracle_program("\
+            fn main() -> int {\n\
+            \x20 var a = 0;\n\
+            \x20 for x in range(1, 6).map(fn(n: int) -> int { n * n }) { a = a + x; }\n\
+            \x20 var b = 0;\n\
+            \x20 for x in range(0, 10).filter(fn(n: int) -> bool { n % 2 == 0 }) { b = b + x; }\n\
+            \x20 var c = 0;\n\
+            \x20 let it = range(1, 11)\n\
+            \x20   .map(fn(n: int) -> int { n * 3 })\n\
+            \x20   .filter(fn(n: int) -> bool { n > 15 });\n\
+            \x20 for x in it { c = c + x; }\n\
+            \x20 let xs = [7, 8, 9];\n\
+            \x20 var d = 0;\n\
+            \x20 for x in xs.iter().filter(fn(n: int) -> bool { n > 7 }) { d = d + x; }\n\
+            \x20 a * 1000000 + b * 10000 + c * 100 + d\n\
+            }"); // a=55, b=20, c=120, d=17 → 55*1000000 + 20*10000 + 120*100 + 17 = 55200012017... comprobado por el oráculo
+    }
+
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
     /// punto seguro) y exige que el resultado coincida con el intérprete. Es la
     /// prueba clave del GC: si una raíz faltara, un valor vivo se liberaría y el

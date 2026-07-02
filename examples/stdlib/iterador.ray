@@ -77,5 +77,24 @@ fn main() -> int {
     }
     print(fact); // 120
 
+    // Adaptadores PEREZOSOS (M40.2c): `.map()` y `.filter()` son métodos de TODO iterador y
+    // devuelven otro iterador que solo calcula al recorrerse. Se encadenan. Aquí: de 1..21, elevar
+    // al cuadrado, quedarnos con los múltiplos de 10, y sumarlos.
+    var s = 0;
+    let cadena = range(1, 21)
+        .map(fn(n: int) -> int { n * n })
+        .filter(fn(n: int) -> bool { n % 10 == 0 });
+    for x in cadena {
+        s = s + x;
+    }
+    print(s); // 100 + 400 = 500  (10² y 20²)
+
+    // `.map()` puede cambiar el tipo de elemento (int -> string). Nada se calcula hasta el `for`.
+    var linea = "";
+    for t in [1, 2, 3].iter().map(fn(n: int) -> string { to_string(n * 10) }) {
+        linea = linea + t + " ";
+    }
+    print(linea); // "10 20 30 "
+
     suma
 }

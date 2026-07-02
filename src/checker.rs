@@ -240,6 +240,11 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
     let trait_sigs: HashMap<String, Vec<MethodSig>> = program.traits.iter()
         .map(|t| (t.name.clone(), t.methods.clone()))
         .collect();
+    // M40.2c: parámetros de tipo de cada trait (`trait Iterator<T>` → ["T"]), para sustituirlos por
+    // los argumentos del impl al bajar sus métodos (un `impl Iterator<int>` fija `T = int`).
+    let trait_tparams: HashMap<String, Vec<String>> = program.traits.iter()
+        .map(|t| (t.name.clone(), t.type_params.clone()))
+        .collect();
     // Contador para renumerar las posiciones de cada cuerpo por defecto clonado (M9.3a):
     // cada clon recibe posiciones únicas para que las bajadas por posición no colisionen.
     let mut fresh_pos = 0usize;
@@ -248,6 +253,12 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
             Some(k) => k,
             None => continue, // objetivo inválido: el error se da en la validación
         };
+        // M40.2c: σ que lleva cada parámetro de tipo del trait a su argumento en este impl
+        // (`impl Iterator<int>` → {T: int}). Vacío para un trait sin parámetros (M9). Se aplica,
+        // tras `subst_self`, a los tipos de los métodos bajados (firma), así heredan `T` concreto.
+        let trait_sigma: HashMap<String, Type> = trait_tparams.get(&imp.trait_name)
+            .map(|tps| tps.iter().cloned().zip(imp.trait_args.iter().cloned()).collect())
+            .unwrap_or_default();
         // Métodos provistos por el impl. M9.2b: un impl genérico (`impl<T: B> Trait for
         // Caja<T>`) baja sus métodos a funciones **genéricas acotadas** (heredan los
         // `type_params`/`bounds` del impl); de ahí, `append_dict_params` y
@@ -255,7 +266,7 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
         // concreto (M9.1) ambos son vacíos → función ordinaria, como antes.
         for m in &imp.methods {
             let params = m.params.iter()
-                .map(|p| Param { ty: subst_self(&p.ty, &imp.target), ..p.clone() })
+                .map(|p| Param { ty: subst_named(&subst_self(&p.ty, &imp.target), &trait_sigma), ..p.clone() })
                 .collect();
             // M28.2: un método de un impl `From<S>` se inyecta con nombre manglado **por origen**
             // (`E#from#string`) para no colisionar con otros `impl From<...> for E`. El resto
@@ -266,15 +277,24 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
             } else {
                 mangle(&key, &m.name)
             };
+            // M40.2c: el manglado hereda los type_params/bounds del impl (M9.2b) MÁS los propios
+            // del método (`fn map<U>`). Así `Iter#map<T, U>` es una función genérica: la inferencia
+            // fija T por el receptor y U por el argumento `f`.
+            let mut type_params = imp.type_params.clone();
+            type_params.extend(m.type_params.iter().cloned());
+            let mut bounds = imp.bounds.clone();
+            bounds.extend(m.bounds.iter().cloned());
+            let mut body = m.body.clone();
+            if !trait_sigma.is_empty() { subst_named_block(&mut body, &trait_sigma); }
             program.functions.push(Function {
                 annotations: Vec::new(),
                 is_pub: false,
                 name,
-                type_params: imp.type_params.clone(),
-                bounds: imp.bounds.clone(),
+                type_params,
+                bounds,
                 params,
-                return_type: subst_self(&m.return_type, &imp.target),
-                body: m.body.clone(),
+                return_type: subst_named(&subst_self(&m.return_type, &imp.target), &trait_sigma),
+                body,
                 line: m.line,
                 col: m.col,
             });
@@ -288,19 +308,28 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
                 continue; // el impl lo redefine: gana el del impl
             }
             let params = tm.params.iter()
-                .map(|p| Param { ty: subst_self(&p.ty, &imp.target), ..p.clone() })
+                .map(|p| Param { ty: subst_named(&subst_self(&p.ty, &imp.target), &trait_sigma), ..p.clone() })
                 .collect();
             // Clonar el cuerpo del defecto y renumerar sus posiciones (únicas por impl).
             let mut body = body.clone();
             freshen_positions(&mut body, &mut fresh_pos);
+            // M40.2c: sustituir los parámetros del trait en el cuerpo (p. ej. `Option<T>` de `filter`
+            // → `Option<int>` para `impl Iterator<int>`), como en la firma.
+            if !trait_sigma.is_empty() { subst_named_block(&mut body, &trait_sigma); }
+            // M40.2c: un método por defecto genérico (`fn map<U>` en el trait) → el manglado hereda
+            // los type_params/bounds del impl más los del propio método.
+            let mut type_params = imp.type_params.clone();
+            type_params.extend(tm.type_params.iter().cloned());
+            let mut bounds = imp.bounds.clone();
+            bounds.extend(tm.bounds.iter().cloned());
             program.functions.push(Function {
                 annotations: Vec::new(),
                 is_pub: false,
                 name: mangle(&key, &tm.name),
-                type_params: imp.type_params.clone(),
-                bounds: imp.bounds.clone(),
+                type_params,
+                bounds,
                 params,
-                return_type: subst_self(&tm.return_type, &imp.target),
+                return_type: subst_named(&subst_self(&tm.return_type, &imp.target), &trait_sigma),
                 body,
                 line: tm.line,
                 col: tm.col,
@@ -4066,6 +4095,90 @@ fn type_uses_self(ty: &Type) -> bool {
 /// Sustituye `Self` por el tipo implementador (M9). Cubre las dos formas con que `Self`
 /// llega del parser: `Type::SelfType` (el receptor `self`) y `Struct("Self")` (en una
 /// anotación como `-> Self`).
+/// M40.2c: sustituye los parámetros de tipo de un trait por los argumentos del impl. En el AST
+/// crudo (pre-resolución) un parámetro de tipo aparece como `Struct(nombre, [])`; aquí se reemplaza
+/// por su argumento. Se usa al bajar un método de un impl de trait parametrizado
+/// (`impl Iterator<int> for RangeIter`) para que `fn map<U>(self, f: fn(T) -> U)` herede `T = int`
+/// en su firma. Como `subst_self` pero por nombre y para varios parámetros a la vez.
+fn subst_named(ty: &Type, sigma: &HashMap<String, Type>) -> Type {
+    match ty {
+        Type::Struct(n, args) if args.is_empty() && sigma.contains_key(n) => sigma[n].clone(),
+        Type::Array(e) => Type::Array(Box::new(subst_named(e, sigma))),
+        Type::Map(k, v) => Type::Map(Box::new(subst_named(k, sigma)), Box::new(subst_named(v, sigma))),
+        Type::Channel(t) => Type::Channel(Box::new(subst_named(t, sigma))),
+        Type::Task(t) => Type::Task(Box::new(subst_named(t, sigma))),
+        Type::Fn(ps, r) => Type::Fn(
+            ps.iter().map(|p| subst_named(p, sigma)).collect(),
+            Box::new(subst_named(r, sigma)),
+        ),
+        Type::Struct(n, args) => Type::Struct(n.clone(), args.iter().map(|a| subst_named(a, sigma)).collect()),
+        Type::Enum(n, args) => Type::Enum(n.clone(), args.iter().map(|a| subst_named(a, sigma)).collect()),
+        other => other.clone(),
+    }
+}
+
+/// M40.2c: aplica `subst_named` a TODAS las anotaciones de tipo del cuerpo de un método (tipos de
+/// `let`, firmas de closures, casts), recursivamente. Necesario porque el cuerpo de un método por
+/// defecto genérico puede anotar un parámetro del trait —`filter` escribe `Option<T>`—, y sobre un
+/// impl concreto (`impl Iterator<int>`) ese `T` debe volverse `int` (no queda en `type_params`).
+fn subst_named_block(block: &mut Block, sigma: &HashMap<String, Type>) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { ty, value, .. } => {
+                if let Some(t) = ty { *t = subst_named(t, sigma); }
+                subst_named_expr(value, sigma);
+            }
+            StmtKind::LetTuple { value, .. } => subst_named_expr(value, sigma),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => { subst_named_expr(start, sigma); subst_named_expr(end, sigma); }
+                    ForIter::In(e) => subst_named_expr(e, sigma),
+                    ForIter::Iter { expr, .. } => subst_named_expr(expr, sigma),
+                }
+                subst_named_block(body, sigma);
+            }
+            StmtKind::Assign { target, value } => { subst_named_expr(target, sigma); subst_named_expr(value, sigma); }
+            StmtKind::Return { value } => { if let Some(v) = value { subst_named_expr(v, sigma); } }
+            StmtKind::Expr(e) => subst_named_expr(e, sigma),
+        }
+    }
+    if let Some(t) = &mut block.tail { subst_named_expr(t, sigma); }
+}
+
+fn subst_named_expr(expr: &mut Expr, sigma: &HashMap<String, Type>) {
+    match &mut expr.kind {
+        ExprKind::Cast { expr: inner, ty } => { subst_named_expr(inner, sigma); *ty = subst_named(ty, sigma); }
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Try(inner) => subst_named_expr(inner, sigma),
+        ExprKind::Binary { left, right, .. } => { subst_named_expr(left, sigma); subst_named_expr(right, sigma); }
+        ExprKind::Call { callee, args } => { subst_named_expr(callee, sigma); for a in args { subst_named_expr(a, sigma); } }
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { subst_named_expr(e, sigma); } }
+        ExprKind::Index { array, index } => { subst_named_expr(array, sigma); subst_named_expr(index, sigma); }
+        ExprKind::StructLit { fields, .. } => { for (_, e) in fields { subst_named_expr(e, sigma); } }
+        ExprKind::EnumLit { args, .. } => { for a in args { subst_named_expr(a, sigma); } }
+        ExprKind::Field { object, .. } => subst_named_expr(object, sigma),
+        ExprKind::Func(fe) => {
+            for p in &mut fe.params { p.ty = subst_named(&p.ty, sigma); }
+            fe.return_type = subst_named(&fe.return_type, sigma);
+            subst_named_block(&mut fe.body, sigma);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            subst_named_expr(scrutinee, sigma);
+            for arm in arms {
+                subst_named_expr(&mut arm.body, sigma);
+                if let Some(g) = &mut arm.guard { subst_named_expr(g, sigma); }
+            }
+        }
+        ExprKind::If { cond, then_branch, else_branch } => {
+            subst_named_expr(cond, sigma);
+            subst_named_block(then_branch, sigma);
+            if let Some(e) = else_branch { subst_named_expr(e, sigma); }
+        }
+        ExprKind::While { cond, body } => { subst_named_expr(cond, sigma); subst_named_block(body, sigma); }
+        ExprKind::Block(b) => subst_named_block(b, sigma),
+        _ => {}
+    }
+}
+
 fn subst_self(ty: &Type, target: &Type) -> Type {
     match ty {
         Type::SelfType => target.clone(),

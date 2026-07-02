@@ -55,46 +55,79 @@ trait From<S> { fn desde(origen: S) -> Self; }
 // devuelve `Some(elemento)` y avanza el cursor, o `None` cuando se agota. Habilita `for x in it`
 // sobre iteradores de usuario (además de arreglos/strings/Map). Como los structs son valores de
 // referencia con campos mutables, `next(self)` avanza el estado del propio iterador.
-trait Iterator<T> { fn next(self) -> Option<T>; }
-
-// `.iter()` sobre arreglos y `range` (M40.2b): iteradores de PRIMERA CLASE, escritos en raylang
-// sobre `Iterator<T>`. `arr.iter()` (UFCS de `iter`) da un cursor sobre el arreglo; `range(a, b)`
-// uno sobre los enteros `a..b` (semi-abierto). Front-end puro: reusan la maquinaria de M40.2 (el
-// `for` llama a `next`), sin tocar el runtime. El estado del cursor vive en los campos del struct
-// (mutados por referencia en `next`, como cualquier iterador de usuario).
-struct ArrayIter<T> { datos: [T], pos: int }
-impl<T> Iterator<T> for ArrayIter<T> {
-    fn next(self) -> Option<T> {
-        if (self.pos < len(self.datos)) {
-            let v = self.datos[self.pos];
-            self.pos = self.pos + 1;
-            Option.Some(v)
-        } else {
-            Option.None
-        }
+//
+// M40.2c: `map`/`filter` son **adaptadores PEREZOSOS** — métodos por DEFECTO del trait, así que
+// TODO iterador los tiene, y devuelven otro iterador (`Iter<U>`/`Iter<T>`) que solo calcula al
+// recorrerse. Son **métodos genéricos** (`map<U>`): la primera feature de M40.2c. La desambiguación
+// con el `map`/`filter` EAGER de arreglos es por el tipo del receptor: un arreglo (que no implementa
+// `Iterator`) cae en la función libre; un iterador, en el método del trait.
+trait Iterator<T> {
+    fn next(self) -> Option<T>;
+    // Transforma cada elemento con `f`, perezosamente. `xs.iter().map(f)` no calcula nada hasta el
+    // `for`/`next`. Reusa el closure `paso` de `Iter`, que captura `self` (el iterador de origen,
+    // por referencia → su estado avanza) y `f`.
+    fn map<U>(self, f: fn(T) -> U) -> Iter<U> {
+        Iter { paso: fn() -> Option<U> {
+            match (self.next()) {
+                Option.Some(x) => Option.Some(f(x)),
+                Option.None => Option.None,
+            }
+        } }
+    }
+    // Conserva solo los elementos que cumplen `pred`, perezosamente. Avanza el iterador de origen
+    // hasta el próximo que pasa el filtro (o `None` si se agota).
+    fn filter(self, pred: fn(T) -> bool) -> Iter<T> {
+        Iter { paso: fn() -> Option<T> {
+            var res: Option<T> = Option.None;
+            var seguir = true;
+            while (seguir) {
+                match (self.next()) {
+                    Option.Some(x) => { if (pred(x)) { res = Option.Some(x); seguir = false; } },
+                    Option.None => { seguir = false; },
+                }
+            }
+            res
+        } }
     }
 }
+
+// `.iter()` sobre arreglos y `range` (M40.2b/c): iteradores de PRIMERA CLASE. La representación es
+// **un closure** `paso: fn() -> Option<T>` (type-erasure): un iterador ES una función con estado que
+// entrega el siguiente elemento o `None`. Así `iter`/`range`/`map`/`filter` producen todos el MISMO
+// tipo `Iter<T>` y se encadenan sin bounds sobre traits parametrizados (que raylang no permite). El
+// estado (posición, cursor) vive en variables capturadas por el closure (mutadas por referencia).
+struct Iter<T> { paso: fn() -> Option<T> }
+impl<T> Iterator<T> for Iter<T> {
+    fn next(self) -> Option<T> { (self.paso)() }
+}
+
 // Iterador sobre los elementos del arreglo, en orden. `xs.iter()` == `iter(xs)` (UFCS).
-fn iter<T>(xs: [T]) -> ArrayIter<T> {
-    ArrayIter { datos: xs, pos: 0 }
-}
-
-struct RangeIter { actual: int, fin: int }
-impl Iterator<int> for RangeIter {
-    fn next(self) -> Option<int> {
-        if (self.actual < self.fin) {
-            let v = self.actual;
-            self.actual = self.actual + 1;
+fn iter<T>(xs: [T]) -> Iter<T> {
+    var i = 0;
+    Iter { paso: fn() -> Option<T> {
+        if (i < len(xs)) {
+            let v = xs[i];
+            i = i + 1;
             Option.Some(v)
         } else {
             Option.None
         }
-    }
+    } }
 }
+
 // Iterador sobre los enteros de `desde` (inclusivo) a `hasta` (exclusivo) — el `a..b` del `for`,
-// pero como valor de primera clase que se puede pasar, guardar y recorrer con `for x in range(a, b)`.
-fn range(desde: int, hasta: int) -> RangeIter {
-    RangeIter { actual: desde, fin: hasta }
+// pero como valor de primera clase que se puede pasar, guardar, recorrer y encadenar con map/filter.
+fn range(desde: int, hasta: int) -> Iter<int> {
+    var i = desde;
+    Iter { paso: fn() -> Option<int> {
+        if (i < hasta) {
+            let v = i;
+            i = i + 1;
+            Option.Some(v)
+        } else {
+            Option.None
+        }
+    } }
 }
 
 // Traits de sobrecarga de operadores (M28.1): un tipo que implemente estos traits puede usar los

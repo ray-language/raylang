@@ -307,6 +307,11 @@ pub struct TraitDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MethodSig {
     pub name: String,
+    /// Parámetros de tipo **propios del método** (M40.2c): los `U` de `fn map<U>(self, ...)`.
+    /// Vacío = método no genérico (M9). Se suman a los del impl al bajar el método a función.
+    pub type_params: Vec<String>,
+    /// Bounds de esos parámetros de tipo (M40.2c): pares `(parámetro, trait)`. Vacío = sin bounds.
+    pub bounds: Vec<(String, String)>,
     pub params: Vec<Param>,
     pub return_type: Type, // Unit si se omitió el `-> ...`
     /// Cuerpo **por defecto** (M9.3a): `Some` si la firma trae un bloque en vez de `;`.

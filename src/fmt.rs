@@ -208,7 +208,9 @@ fn fmt_trait(it: &TraitDef) -> String {
 }
 
 fn fmt_method_sig(m: &MethodSig) -> String {
-    let head = format!("fn {}({}){}", m.name, fmt_params(&m.params), fmt_return(&m.return_type));
+    // M40.2c: métodos genéricos — renderizar los parámetros de tipo propios (`fn map<U>`).
+    let gens = fmt_generics(&m.type_params, &m.bounds);
+    let head = format!("fn {}{}({}){}", m.name, gens, fmt_params(&m.params), fmt_return(&m.return_type));
     match &m.default_body {
         Some(body) => format!("{} {}", head, fmt_block(body, 1)),
         None => format!("{};", head),

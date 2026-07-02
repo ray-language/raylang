@@ -1180,9 +1180,14 @@ impl<'a> TypeRewriter<'a> {
             self.tparams.pop();
         }
         for t in &mut program.traits {
-            self.tparams.push(HashSet::new()); // los traits no llevan parámetros de tipo
+            // M28.2: los parámetros de tipo del trait (`trait Iterator<T>`) están en ámbito en sus
+            // firmas; M40.2c: cada método puede tener los suyos (`fn map<U>`). No se reescriben como
+            // tipos de módulo.
+            self.tparams.push(t.type_params.iter().cloned().collect());
             for m in &mut t.methods {
+                self.tparams.push(m.type_params.iter().cloned().collect());
                 self.rewrite_method(m);
+                self.tparams.pop();
             }
             self.tparams.pop();
         }

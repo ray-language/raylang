@@ -5221,7 +5221,42 @@ recorrer. El estado del cursor vive en los campos del struct (mutados por refere
   el elemento sale concreto (`int` para `[int].iter()`), no la variable `T`. Un impl concreto (Contador)
   da σ vacío → `Option<int>` pasa tal cual (compatibilidad exacta con M40.2a).
 
-Oráculo `iter_range_oraculo` (impl genérico + sustitución del elemento, int y string). Diferido:
-adaptadores de iterador perezosos (`.map()`/`.filter()` sobre `Iterator`) y re-fundar map/filter/fold
-sobre `Iterator` — el siguiente escalón de M40; luego `Hash` derivable + Set/deque/string-builder;
-`std/` + raydoc.
+Oráculo `iter_range_oraculo` (impl genérico + sustitución del elemento, int y string).
+
+#### M40.2c — métodos genéricos + adaptadores perezosos `.map()`/`.filter()`
+
+Adaptadores de iterador **perezosos**: `it.map(f)` y `it.filter(pred)` devuelven otro iterador que
+solo calcula al recorrerse, encadenables (`range(0,n).map(f).filter(p)`). Dos decisiones de diseño
+que se apoyan mutuamente:
+
+- **Type-erasure con un closure**: un iterador ES, en el fondo, un `fn() -> Option<T>` con estado. La
+  representación unificada es `struct Iter<T> { paso: fn() -> Option<T> }` (con `impl<T> Iterator<T>
+  for Iter<T>`); `iter`/`range`/`map`/`filter` producen todos `Iter<T>`. Esto **esquiva el bound**
+  `I: Iterator<T>` (raylang no permite bounds sobre traits parametrizados): al ser todos el mismo tipo
+  concreto, no hace falta ser genérico sobre "cualquier iterador". El estado (posición, cursor) vive
+  en variables capturadas por el closure (mutadas por referencia — la captura mutable de M4.2).
+- **`map`/`filter` como métodos por DEFECTO de `Iterator`**: así los tiene todo iterador (incl. los de
+  usuario) y **se desambiguan del `map`/`filter` eager de arreglos por el tipo del receptor** —un
+  arreglo no implementa `Iterator` → cae en la función libre `map(xs, f) -> [U]`; un iterador → el
+  método del trait `Iterator#map`—. raylang no tiene sobrecarga, y esta es la única vía que deja
+  coexistir ambos con el mismo nombre.
+
+El habilitador de fondo es una **feature nueva del lenguaje: métodos genéricos** (`fn map<U>(self,
+f: fn(T) -> U) -> Iter<U>`) — un método con parámetros de tipo PROPIOS, distintos de los del impl:
+
+- **AST/parser**: `MethodSig` (y el ya existente `Function` de los métodos de impl) gana `type_params`/
+  `bounds`; `method_sig`/`impl_method` los parsean con `type_params_with_bounds` (como una `fn`).
+- **Checker (bajada, paso 0c)**: el método manglado hereda los `type_params`/`bounds` del impl (M9.2b)
+  **más los del propio método** → `Iter#map<T, U>` es una función genérica; la inferencia fija `T` por
+  el receptor y `U` por el argumento `f`. Además, para un impl de trait **parametrizado**
+  (`impl Iterator<int> for RangeIter`), se sustituyen los parámetros del trait por sus argumentos
+  (`T → int`) tanto en la **firma** (`subst_named`, análogo a `subst_self` pero por nombre) como en el
+  **cuerpo** del método (`subst_named_block`, recorre las anotaciones de tipo: `filter` escribe
+  `Option<T>` en su closure). Solo se activa con traits parametrizados (σ vacío para Eq/Show/… → coste
+  cero). El loader pone en ámbito los `type_params` del trait y del método al reescribir tipos.
+
+Oráculo `adaptadores_perezosos_oraculo` (map cambia de tipo, filter avanza el origen, encadenamiento).
+Ejemplo `examples/stdlib/iterador.ray`. SPEC §7/§10. Diferido: `.fold()`/`.collect()`/`.take()`/`.zip()`
+y demás adaptadores; re-fundar el `map`/`filter`/`fold` eager sobre `Iterator`; bounds en métodos
+genéricos cruzando módulos (namespacing). Luego `Hash` derivable + Set/deque/string-builder; `std/` +
+raydoc.

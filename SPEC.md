@@ -129,6 +129,9 @@ const    = 'const' IDENT ':' tipo '=' literal ';' ;
   cobertura del impl debe ser exacta (ni métodos de más ni de menos, firmas idénticas con
   `Self` sustituido). Un impl puede ser **genérico** (`impl<T: B> Trait for Caja<T>`), aplicado
   exactamente a los parámetros propios; a lo sumo un impl por `(constructor, trait)`.
+- Un método (de trait o de impl) puede tener **parámetros de tipo propios** (M40.2c):
+  `fn map<U>(self, f: fn(T) -> U) -> Iter<U>`. Se suman a los del impl al resolver la llamada;
+  la inferencia los fija por los argumentos. Habilita p. ej. los adaptadores de `Iterator` (§10).
 - Los **traits con parámetros de tipo** (`trait From<S>`, `trait Iterator<T>`) existen con
   semántica limitada: `From<S> { fn desde(origen: S) -> Self; }` alimenta la conversión de `?`
   (§6.7), e `Iterator<T> { fn next(self) -> Option<T>; }` habilita `for x in it` (§5) por despacho
@@ -331,9 +334,11 @@ prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el 
   substring repeat index_of join to_bytes parse_int parse_float` · **Arreglos**: `push pop
   reverse contains position sort map filter fold iter` (+ `a + b` concatena) · **Bytes**:
   `bytes_of sub_bytes from_utf8` (+ `b1 + b2`, `to_string` → hex).
-- **Iteradores** (M40.2b): `xs.iter()` (cursor `ArrayIter<T>` sobre un arreglo) y `range(a, b)`
-  (cursor `RangeIter` sobre `a..b`, semi-abierto) son iteradores de primera clase (`Iterator<T>`)
-  recorribles con `for x in …`.
+- **Iteradores** (M40.2b/c): `xs.iter()` y `range(a, b)` (semi-abierto) son iteradores de primera
+  clase (`Iter<T>`, respaldados por un closure) recorribles con `for x in …`. **Adaptadores
+  perezosos** (métodos de `Iterator`): `.map(f)` y `.filter(pred)` devuelven otro iterador que solo
+  calcula al recorrerse, encadenables (`range(0,n).map(f).filter(p)`). No colisionan con el
+  `map`/`filter` **eager** de arreglos (`xs.map(f) -> [U]`): se desambigua por el tipo del receptor.
 - **Map**: `map_new insert get remove contains_key keys values len` (recorridos en orden de
   clave).
 - **Matemáticas**: `sqrt pow floor ceil round abs min max sin cos tan ln log10 exp pi e` ·

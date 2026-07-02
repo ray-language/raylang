@@ -445,6 +445,8 @@ impl Parser {
     fn method_sig(&mut self) -> Result<MethodSig, ParseError> {
         let kw = self.expect(&TokenKind::Fn, "'fn' en una firma de método")?;
         let (name, _, _) = self.expect_ident("el nombre del método")?;
+        // M40.2c: parámetros de tipo propios del método, `fn map<U>(self, ...)`. Sin `<`, vacío.
+        let (type_params, bounds) = self.type_params_with_bounds()?;
         self.expect(&TokenKind::LParen, "'(' tras el nombre del método")?;
         let params = self.method_params()?;
         self.expect(&TokenKind::RParen, "')'")?;
@@ -460,7 +462,7 @@ impl Parser {
             self.expect(&TokenKind::Semicolon, "';' o un cuerpo '{ ... }' para el método")?;
             None
         };
-        Ok(MethodSig { name, params, return_type, default_body, line: kw.line, col: kw.col })
+        Ok(MethodSig { name, type_params, bounds, params, return_type, default_body, line: kw.line, col: kw.col })
     }
 
     /// impl_block = 'impl' IDENT 'for' type '{' { impl_method } '}'  (M9)
@@ -498,13 +500,14 @@ impl Parser {
         Ok(ImplBlock { trait_name, trait_args, type_params, bounds, target, methods, line: kw.line, col: kw.col })
     }
 
-    /// impl_method = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] block  (M9)
+    /// impl_method = 'fn' IDENT [ '<' type_params '>' ] '(' [ method_params ] ')' [ '->' type ] block
     ///
-    /// Como `function()` pero con `method_params` (admite `self`) y sin parámetros de
-    /// tipo propios (los métodos genéricos se difieren a M9.2).
+    /// Como `function()` pero con `method_params` (admite `self`). M40.2c: admite parámetros de
+    /// tipo propios del método (`fn map<U>(self, ...)`), para casar con la firma del trait.
     fn impl_method(&mut self) -> Result<Function, ParseError> {
         let kw = self.expect(&TokenKind::Fn, "'fn' en un método de impl")?;
         let (name, _, _) = self.expect_ident("el nombre del método")?;
+        let (type_params, bounds) = self.type_params_with_bounds()?;
         self.expect(&TokenKind::LParen, "'(' tras el nombre del método")?;
         let params = self.method_params()?;
         self.expect(&TokenKind::RParen, "')'")?;
@@ -518,8 +521,8 @@ impl Parser {
             annotations: Vec::new(),
             is_pub: false, // los métodos de impl no llevan `pub` propio
             name,
-            type_params: Vec::new(),
-            bounds: Vec::new(),
+            type_params,
+            bounds,
             params,
             return_type,
             body,

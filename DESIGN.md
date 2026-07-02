@@ -5298,8 +5298,25 @@ sobre tuplas y el patrón-de-tupla-en-`for` de M40.2e) son métodos del trait. *
 necesitaría un cero y un `+` del tipo del elemento (un trait `Zero`/`Sum`), que raylang no expresa aún
 → se especializa a `Iter<int>` (lo más común). `zip` exige que `otra` sea un `Iter<U>` (los adaptadores
 lo devuelven; un iterador de usuario se convierte con `.map(...)`). Oráculo `skip_zip_sum_oraculo`.
-Diferido: `sum` genérico (requiere `Zero`/`Sum`); re-fundar el `map`/`filter`/`fold` eager sobre
-`Iterator`; bounds en métodos genéricos cruzando módulos.
+Diferido: `sum` genérico (requiere `Zero`/`Sum`); bounds en métodos genéricos cruzando módulos.
+
+#### M40.6 — re-fundar `map`/`filter`/`fold` eager sobre `Iterator`
+
+Cierra el diferido de M40.2f. Hasta aquí coexistían **dos** implementaciones de `map`/`filter`/`fold`: las
+**funciones libres ansiosas** sobre arreglos (M7.3, un bucle que materializa `[T]` por etapa) y los
+**métodos perezosos** del trait `Iterator` (M40.2c/d, devuelven `Iter<T>` y fusionan). Duplicación de
+lógica pura. Se eligió la **opción B** (frente a A = modelo Rust, arreglos perezosos + `.collect()`
+obligatorio, rompedor; y C = documentar y dejar dos familias): **conservar las firmas ansiosas** pero
+reimplementarlas como envoltorio de una línea sobre la maquinaria perezosa —`map(xs,f) =
+iter(xs).map(f).collect()`, `filter` análogo, `fold(xs,init,f) = iter(xs).fold(init,f)`—. La lógica queda
+en **un solo sitio** (el trait); las funciones libres solo añaden el `iter()…collect()` por ergonomía (un
+`[U]` indexable sin ceremonia). **Sin recursión**: dentro del cuerpo, `iter(xs)` es un `Iter<T>`, así que
+`.map`/`.filter`/`.fold` resuelven al método del trait (campo→método→UFCS), nunca a la función libre. B
+elimina la **duplicación de código**, no la **distinción de coste**: la cara ansiosa sigue sin fusionar
+(cada función libre devuelve un `[T]` completo) — inherente a su firma, deliberado (para fusión, se entra
+por `.iter()`). Front-end puro, runtime intacto; los 424 oráculos idénticos (misma semántica exacta). La
+distinción eager-vs-lazy se documenta en el libro (`book/src/m40/iteradores.md`). Diferido (hito propio si
+se quiere): opción A (modelo Rust puro) con su migración; `sum` genérico vía `Zero`/`Sum`.
 
 ### 42.6 M40.3 — colecciones (Hash + Set/deque/string-builder)
 

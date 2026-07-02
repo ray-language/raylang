@@ -159,6 +159,10 @@
 
 - [PostgreSQL, CSV/TOML y plantillas](m32/clientes-formatos.md)
 
+# M40 — Stdlib 1.0
+
+- [Iteradores: perezosos y ansiosos](m40/iteradores.md)
+
 # Optimización de la VM
 
 - [Medir, cambiar, a veces revertir](opt/intro.md)

@@ -469,38 +469,28 @@ fn assert_eq<T: Eq + Show>(a: T, b: T) {
     }
 }
 
+// --- map/filter/fold EAGER sobre arreglos (M7.3), re-fundados sobre Iterator (M40.6) ---
+// Estas funciones libres son la cara ERGONÓMICA de la operación: `xs.map(f)` (con `xs: [T]`) devuelve
+// directamente un `[U]` indexable, sin `.iter()`/`.collect()`. Desde M40.6 NO reimplementan el bucle:
+// delegan en la maquinaria PEREZOSA del trait `Iterator` (`iter(xs).map(f).collect()`), que es la única
+// fuente de verdad de la lógica. El despacho por tipo de receptor evita recursión: dentro de estos
+// cuerpos, `iter(xs)` es un `Iter<T>`, así que `.map`/`.filter`/`.fold` resuelven al MÉTODO del trait
+// (campo→método→UFCS), nunca a estas funciones libres. Cara eager (materializa) vs. cara lazy
+// (`xs.iter().map(f).filter(g).collect()`, fusiona sin arreglos intermedios): ver el libro, m40/iteradores.
+
 // Aplica `f` a cada elemento, devolviendo un arreglo nuevo con los resultados.
 fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
-    var out: [U] = [];
-    var i: int = 0;
-    while (i < len(xs)) {
-        push(out, f(xs[i]));
-        i = i + 1;
-    }
-    out
+    iter(xs).map(f).collect()
 }
 
 // Conserva los elementos para los que `pred` es verdadero, en un arreglo nuevo.
 fn filter<T>(xs: [T], pred: fn(T) -> bool) -> [T] {
-    var out: [T] = [];
-    var i: int = 0;
-    while (i < len(xs)) {
-        let x: T = xs[i];
-        if (pred(x)) { push(out, x); }
-        i = i + 1;
-    }
-    out
+    iter(xs).filter(pred).collect()
 }
 
 // Reduce el arreglo a un único valor, acumulando de izquierda a derecha desde `init`.
 fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A {
-    var acc: A = init;
-    var i: int = 0;
-    while (i < len(xs)) {
-        acc = f(acc, xs[i]);
-        i = i + 1;
-    }
-    acc
+    iter(xs).fold(init, f)
 }
 
 // --- I/O (M11.2): envoltorios sobre primitivos builtin que devuelven [T] (vacío/único) ---

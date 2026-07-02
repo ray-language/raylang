@@ -784,7 +784,10 @@ impl<'a> Interpreter<'a> {
             ExprKind::Unary { op, expr: inner } => {
                 let v = self.eval_expr(inner)?;
                 Ok(match (op, v) {
-                    (UnaryOp::Neg, Value::Int(n)) => Value::Int(-n),
+                    // -i64::MIN desborda (M34, SPEC §8): error, como la aritmética binaria.
+                    (UnaryOp::Neg, Value::Int(n)) => Value::Int(
+                        n.checked_neg().ok_or_else(|| runtime_error(expr.line, expr.col, "desbordamiento aritmético en int"))?,
+                    ),
                     (UnaryOp::Neg, Value::Float(x)) => Value::Float(-x),
                     (UnaryOp::Not, Value::Bool(b)) => Value::Bool(!b),
                     (UnaryOp::BitNot, Value::Int(n)) => Value::Int(!n), // M19.3a: NOT bit a bit
@@ -1709,21 +1712,25 @@ impl<'a> Interpreter<'a> {
                 v.extend(b.borrow().iter().cloned());
                 Array(Rc::new(RefCell::new(v)))
             }
-            // Aritmética entera.
-            (Add, Int(a), Int(b)) => Int(a + b),
-            (Sub, Int(a), Int(b)) => Int(a - b),
-            (Mul, Int(a), Int(b)) => Int(a * b),
+            // Aritmética entera. El desbordamiento es ERROR de ejecución (M34, SPEC §8):
+            // coherente con la división por cero y con el eje "seguro" — antes el
+            // comportamiento dependía del build del compilador (panic en debug, wrap en
+            // release). Los u8/u32/u64 siguen con wrapping POR DISEÑO (M28.3).
+            (Add, Int(a), Int(b)) => Int(a.checked_add(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?),
+            (Sub, Int(a), Int(b)) => Int(a.checked_sub(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?),
+            (Mul, Int(a), Int(b)) => Int(a.checked_mul(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?),
             (Div, Int(a), Int(b)) => {
                 if b == 0 {
                     return Err(runtime_error(line, col, "división entera por cero"));
                 }
-                Int(a / b)
+                // El único desbordamiento de división: i64::MIN / -1.
+                Int(a.checked_div(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?)
             }
             (Rem, Int(a), Int(b)) => {
                 if b == 0 {
                     return Err(runtime_error(line, col, "módulo por cero"));
                 }
-                Int(a % b)
+                Int(a.checked_rem(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?)
             }
             // Aritmética flotante (división por cero da inf/NaN, como IEEE-754).
             (Add, Float(a), Float(b)) => Float(a + b),

@@ -242,7 +242,11 @@ impl<'a> Vm<'a> {
                 OpCode::Negate => {
                     let v = self.pop();
                     self.push(match v {
-                        HeapValue::Int(n) => HeapValue::Int(-n),
+                        // -i64::MIN desborda (M34, SPEC §8): error, como la aritmética binaria.
+                        HeapValue::Int(n) => HeapValue::Int(n.checked_neg().ok_or_else(|| {
+                            let (l, c) = pos!();
+                            runtime_error(l, c, "desbordamiento aritmético en int")
+                        })?),
                         HeapValue::Float(x) => HeapValue::Float(-x),
                         _ => unreachable!("el checker garantiza un número"),
                     });
@@ -285,25 +289,29 @@ impl<'a> Vm<'a> {
                     // aritmética) ambos operandos son `Int`; resolverlo aquí evita el doble match y la
                     // llamada a `apply_binary` (que rematchea opcode + ~30 combinaciones de tipos).
                     // Medido (mejor de 5, release): fib(35) -5%, bucle aritmético 10M -6%. Semántica
-                    // idéntica al camino general (mismos `+`/`-`/`*`; en debug ambos hacen panic al overflow).
+                    // idéntica al camino general — incluido el desbordamiento como error (M34, SPEC §8).
                     // (Opt.1/Opt.2 ya aplicadas; Opt.3 = `Rc<str>`, evaluada y descartada → por eso esto es Opt.4.)
                     if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         let (a, b) = (*a, *b);
+                        let ovf = || {
+                            let (l, c) = pos!();
+                            runtime_error(l, c, "desbordamiento aritmético en int")
+                        };
                         let r = match bin {
-                            OpCode::Add => HeapValue::Int(a + b),
-                            OpCode::Sub => HeapValue::Int(a - b),
-                            OpCode::Mul => HeapValue::Int(a * b),
+                            OpCode::Add => HeapValue::Int(a.checked_add(b).ok_or_else(ovf)?),
+                            OpCode::Sub => HeapValue::Int(a.checked_sub(b).ok_or_else(ovf)?),
+                            OpCode::Mul => HeapValue::Int(a.checked_mul(b).ok_or_else(ovf)?),
                             OpCode::Div => {
                                 if b == 0 {
                                     return Err(runtime_error(pos!().0, pos!().1, "división entera por cero"));
                                 }
-                                HeapValue::Int(a / b)
+                                HeapValue::Int(a.checked_div(b).ok_or_else(ovf)?)
                             }
                             OpCode::Rem => {
                                 if b == 0 {
                                     return Err(runtime_error(pos!().0, pos!().1, "módulo por cero"));
                                 }
-                                HeapValue::Int(a % b)
+                                HeapValue::Int(a.checked_rem(b).ok_or_else(ovf)?)
                             }
                             OpCode::Less => HeapValue::Bool(a < b),
                             OpCode::LessEqual => HeapValue::Bool(a <= b),
@@ -2242,20 +2250,21 @@ impl<'a> Vm<'a> {
                 v.extend_from_slice(&b);
                 Bytes(v)
             }
-            (Add, Int(a), Int(b)) => Int(a + b),
-            (Sub, Int(a), Int(b)) => Int(a - b),
-            (Mul, Int(a), Int(b)) => Int(a * b),
+            // Desbordamiento de int = error de ejecución (M34, SPEC §8), como en el intérprete.
+            (Add, Int(a), Int(b)) => Int(a.checked_add(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?),
+            (Sub, Int(a), Int(b)) => Int(a.checked_sub(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?),
+            (Mul, Int(a), Int(b)) => Int(a.checked_mul(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?),
             (Div, Int(a), Int(b)) => {
                 if b == 0 {
                     return Err(runtime_error(line, col, "división entera por cero"));
                 }
-                Int(a / b)
+                Int(a.checked_div(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?)
             }
             (Rem, Int(a), Int(b)) => {
                 if b == 0 {
                     return Err(runtime_error(line, col, "módulo por cero"));
                 }
-                Int(a % b)
+                Int(a.checked_rem(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?)
             }
             (Add, Float(a), Float(b)) => Float(a + b),
             (Sub, Float(a), Float(b)) => Float(a - b),
@@ -2703,7 +2712,39 @@ mod tests {
     /// (`1 + bucle(...)`): la de cola, con el TCO de M13.3b, sería un bucle infinito
     /// legítimo (O(1) marcos) y nunca desbordaría —ese es justo el punto del TCO—.
     #[test]
-    fn overflow_recursion_oraculo() {
+    fn overflow_aritmetico_oraculo() {
+        // M34 (SPEC §8): el desbordamiento de int es ERROR de ejecución idéntico en ambos
+        // motores (antes: panic en debug / wrap silencioso en release — dependía del build).
+        let casos = [
+            "fn main() -> int { let m = 9223372036854775807; m + 1 }",       // Add
+            "fn main() -> int { let m = -9223372036854775807 - 1; m - 1 }",  // Sub
+            "fn main() -> int { let m = 9223372036854775807; m * 2 }",       // Mul
+            "fn main() -> int { let m = -9223372036854775807 - 1; m / -1 }", // Div (MIN/-1)
+            "fn main() -> int { let m = -9223372036854775807 - 1; m % -1 }", // Rem (MIN%-1)
+            "fn main() -> int { let m = -9223372036854775807 - 1; -m }",     // Neg (-MIN)
+        ];
+        for src in casos {
+            let tokens = crate::lexer::lex(src).expect("lex ok");
+            let mut prog = crate::parser::parse(tokens).expect("parse ok");
+            crate::checker::check(&mut prog).expect("check ok");
+            let interp = crate::interpreter::run(&prog).expect_err("el intérprete debe errar");
+            let compiled = compile_program(&prog).expect("compila");
+            let vm = run_program(&compiled).expect_err("la VM debe errar");
+            assert!(interp.msg.contains("desbordamiento aritmético en int"), "interp: {} ({src})", interp.msg);
+            assert_eq!(interp.msg, vm.msg, "ambos motores idénticos ({src})");
+        }
+        // Y la aritmética al borde SIN desbordar sigue funcionando igual en ambos.
+        let src = "fn main() -> int { let m = 9223372036854775806; print(m + 1); 0 }";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
+        crate::interpreter::run(&prog).expect("interp ok");
+        let compiled = compile_program(&prog).expect("compila");
+        run_program(&compiled).expect("vm ok");
+    }
+
+    #[test]
+        fn overflow_recursion_oraculo() {
         let (interp_msg, vm_msg) = crate::with_big_stack(|| {
             let src = "fn bucle(n: int) -> int { 1 + bucle(n + 1) }
                        fn main() -> int { bucle(0) }";

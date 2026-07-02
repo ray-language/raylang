@@ -12,6 +12,7 @@ pub mod ast;
 pub mod builtins;
 pub mod bytecode;
 pub mod checker;
+pub mod cli;
 pub mod compiler;
 pub mod diagnostic;
 pub mod fmt;

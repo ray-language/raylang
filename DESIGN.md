@@ -4889,3 +4889,37 @@ Dos decisiones que la medición real forzó:
 **Arco A (estabilidad) COMPLETO**: M33 diagnósticos de producción · M34 SPEC + versionado ·
 M35 un solo motor. Siguen, en paralelo, el arco **B** (rendimiento: M36 VM, M37 GC, M38 M:N
 por actores) y el arco **C** (ecosistema: M39 `ray`+paquetes, M40 stdlib 1.0, M41 FFI).
+
+## 41. M39 — CLI unificado `ray` + gestor de paquetes (arco C)
+
+Primera fase del arco C (ecosistema, PRODUCCION.md). El análisis marcó la falta de gestor de
+paquetes como la **brecha nº1 de adopción**; M39 la ataca, empezando por el CLI que lo alojará.
+
+### 41.1 M39a — el CLI de subcomandos
+
+Hasta aquí el binario era `raylang` con **flags sueltas** (`--vm`/`--test`/`--fmt`/`--lsp`/
+`--repl`/`--version`/`--interp`). M39a lo reorganiza en un CLI de **subcomandos** estilo
+`cargo`/`go`, bajo el nombre de producto **`ray`**:
+
+- `ray new <nombre>` — esqueleto de proyecto: `ray.toml` (el manifiesto que leerá M39b) +
+  `src/main.ray` (hola-mundo) + `.gitignore`.
+- `ray run [archivo]` — ejecuta; sin archivo usa `src/main.ray` (convención de proyecto).
+  `--interp` fuerza el intérprete; los args tras el archivo van a `args()`.
+- `ray build [archivo]` — **nuevo**: chequea y compila **sin ejecutar** (para CI / validar
+  antes de publicar); sale 0 si compila, 65 si hay errores (multi-error de M33c).
+- `ray test [archivo] [filtro]` · `ray fmt <archivo>` · `ray lsp` · `ray repl` · `ray version`
+  · `ray help`.
+
+**Dos binarios, un código.** La lógica del CLI se movió a `src/cli.rs` (módulo de la lib);
+`src/main.rs` (→ `raylang`) y `src/bin/ray.rs` (→ `ray`) son envoltorios de una línea sobre
+`cli::main`. Así el nombre de producto es `ray` y `raylang` sobrevive como alias — los tests
+usan `CARGO_BIN_EXE_raylang` y no se tocan.
+
+**Compatibilidad total.** La interfaz por flags se conserva: un primer argumento que no sea un
+subcomando conocido cae al **modo legado** (`legacy`), que reconoce `--vm`/`--interp`/`--test`/
+`--fmt`/`--lsp`/`--repl` y el `<archivo>` directo. Los 688 tests (todos con flags o ruta
+directa) pasan sin cambios; los subcomandos nuevos se prueban en `tests/cli_cli.rs`.
+
+Pendiente de M39: **M39b** (parsear `ray.toml` + `build`/`run` dirigidos por el manifiesto) y
+**M39c** (resolución de dependencias git-first + lockfile con hashes + caché descargada,
+importable por el loader).

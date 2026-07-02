@@ -1,0 +1,120 @@
+//! Pruebas del CLI de subcomandos (M39a) sobre el binario: `new`, `run`, `build`, `test`,
+//! `help`, `version`, y la compatibilidad con la interfaz legada por flags.
+
+use std::process::Command;
+
+const BIN: &str = env!("CARGO_BIN_EXE_raylang");
+
+/// Ejecuta el binario con `args` y `cwd`, devuelve (stdout, stderr, código).
+fn ray(cwd: &std::path::Path, args: &[&str]) -> (String, String, i32) {
+    let out = Command::new(BIN).args(args).current_dir(cwd).output().expect("lanza el binario");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
+/// Un directorio temporal único por prueba (evita choques entre tests paralelos).
+fn tmp(nombre: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("ray_cli_{nombre}"));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).expect("crea el dir temporal");
+    d
+}
+
+#[test]
+fn new_crea_el_esqueleto_y_run_lo_ejecuta() {
+    let base = tmp("new");
+    // `ray new proj` crea ray.toml + src/main.ray + .gitignore.
+    let (out, _err, code) = ray(&base, &["new", "proj"]);
+    assert_eq!(code, 0, "new debe salir 0\n{out}");
+    let proj = base.join("proj");
+    assert!(proj.join("ray.toml").is_file(), "falta ray.toml");
+    assert!(proj.join("src/main.ray").is_file(), "falta src/main.ray");
+    assert!(proj.join(".gitignore").is_file(), "falta .gitignore");
+    let manifiesto = std::fs::read_to_string(proj.join("ray.toml")).unwrap();
+    assert!(manifiesto.contains("name = \"proj\""), "el manifiesto nombra el proyecto\n{manifiesto}");
+
+    // `ray run` sin archivo usa src/main.ray (convención de proyecto).
+    let (out, _err, code) = ray(&proj, &["run"]);
+    assert!(out.contains("hola desde proj"), "run ejecuta el hola-mundo\n{out}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn new_falla_si_el_destino_existe() {
+    let base = tmp("new_dup");
+    assert_eq!(ray(&base, &["new", "dup"]).2, 0);
+    let (_o, err, code) = ray(&base, &["new", "dup"]);
+    assert_ne!(code, 0, "no debe sobrescribir un directorio existente");
+    assert!(err.contains("ya existe"), "{err}");
+}
+
+#[test]
+fn run_pasa_los_args_del_programa() {
+    let base = tmp("run_args");
+    std::fs::write(
+        base.join("prog.ray"),
+        "fn main() -> int { print(len(args())); 0 }\n",
+    )
+    .unwrap();
+    // Los argumentos tras el archivo llegan a `args()`.
+    let (out, _err, _code) = ray(&base, &["run", "prog.ray", "uno", "dos", "tres"]);
+    assert!(out.contains("3"), "args() ve los 3 argumentos\n{out}");
+}
+
+#[test]
+fn build_compila_ok_y_reporta_errores() {
+    let base = tmp("build");
+    // Programa válido: build sale 0.
+    std::fs::write(base.join("ok.ray"), "fn main() -> int { 1 + 2 }\n").unwrap();
+    let (out, _err, code) = ray(&base, &["build", "ok.ray"]);
+    assert_eq!(code, 0, "build de un programa válido sale 0\n{out}");
+    assert!(out.contains("compila"), "{out}");
+    // build NO ejecuta: un programa que devolvería 42 igual sale 0 (solo compiló).
+    std::fs::write(base.join("cuarenta.ray"), "fn main() -> int { 42 }\n").unwrap();
+    assert_eq!(ray(&base, &["build", "cuarenta.ray"]).2, 0, "build no corre el programa");
+    // Programa con error de tipos: build sale 65 y no dice 'compila'.
+    std::fs::write(base.join("mal.ray"), "fn main() -> int { 1 + true }\n").unwrap();
+    let (_o, err, code) = ray(&base, &["build", "mal.ray"]);
+    assert_eq!(code, 65, "build de un programa con error sale 65\n{err}");
+    assert!(err.contains("error de tipos"), "{err}");
+}
+
+#[test]
+fn test_subcomando_corre_las_pruebas() {
+    let base = tmp("test");
+    std::fs::write(
+        base.join("suite.ray"),
+        "@test\nfn pasa() -> bool { true }\n@test\nfn falla() -> bool { false }\nfn main() -> int { 0 }\n",
+    )
+    .unwrap();
+    let (out, _err, code) = ray(&base, &["test", "suite.ray"]);
+    assert!(out.contains("pasa") && out.contains("falla"), "informa ambas pruebas\n{out}");
+    assert_eq!(code, 1, "el código de salida es el número de fallos (1)");
+    // Filtro por subcadena: solo la que pasa.
+    let (out, _err, code) = ray(&base, &["test", "suite.ray", "pasa"]);
+    assert!(out.contains("pasa") && !out.contains("FALLO"), "el filtro deja solo 'pasa'\n{out}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn help_y_version() {
+    let cwd = std::env::temp_dir();
+    let (out, _err, code) = ray(&cwd, &["help"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("Uso: ray") && out.contains("new") && out.contains("build"), "{out}");
+    let (out, _err, code) = ray(&cwd, &["version"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("raylang 1."), "la versión del lenguaje\n{out}");
+}
+
+#[test]
+fn compat_flags_legadas() {
+    let base = tmp("legacy");
+    std::fs::write(base.join("p.ray"), "fn main() -> int { 7 }\n").unwrap();
+    // La interfaz previa por flags sigue funcionando (un `<archivo>` directo, y --vm).
+    assert_eq!(ray(&base, &["p.ray"]).2, 7, "raylang <archivo> directo");
+    assert_eq!(ray(&base, &["--vm", "p.ray"]).2, 7, "raylang --vm <archivo>");
+}

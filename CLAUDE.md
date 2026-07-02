@@ -26,6 +26,10 @@ expresiones, sintaxis de llaves.
 - Ejecutar un programa: `cargo run --quiet -- examples/basics/fib.ray` (corre en la **VM**, el
   motor de producto desde M35). `--interp` fuerza el intérprete (oráculo de desarrollo); `--vm`
   se acepta por compatibilidad (ya es el default).
+- **CLI de subcomandos (M39a)**: el binario de producto es **`ray`** (`raylang` es un alias del
+  mismo binario; la lógica vive en `src/cli.rs`, dos envoltorios finos `src/main.rs`+`src/bin/ray.rs`).
+  Subcomandos: `ray new/run/build/test/fmt/lsp/repl/version/help`. La interfaz legada por flags
+  (`--vm`/`--interp`/`--test`/`--fmt`/`--lsp`/`--repl`/`<archivo>`) se conserva (los tests la usan).
 - REPL interactivo (M8.2): `cargo run --quiet` (sin archivo) o `--repl` (sobre la VM).
 - Binario release: `cargo build --release` → `./target/release/raylang prog.ray`
 - El código de salida del runner es el `int` que devuelve `main` (0 si es unit).

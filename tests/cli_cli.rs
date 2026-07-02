@@ -558,3 +558,28 @@ fn ffi_marshala_strings_a_char_ptr() {
     assert!(out.contains("10"), "strlen(\"hola mundo\")\n{out}");
     assert!(out.contains("42"), "atoi(\"42\")\n{out}");
 }
+
+#[test]
+fn ffi_retorno_char_ptr_como_option() {
+    // M41.3: un char* de retorno → Option<string> (None si NULL). strstr es determinista.
+    let base = tmp("ffi_ret");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "extern \"c\" { fn strstr(h: string, n: string) -> Option<string>; }\n\
+         fn main() -> int {\n\
+         \x20 match (strstr(\"hola mundo\", \"mundo\")) {\n\
+         \x20   Option.Some(s) => { print(s); }, Option.None => { print(\"none\"); },\n\
+         \x20 }\n\
+         \x20 match (strstr(\"hola\", \"zzz\")) {\n\
+         \x20   Option.Some(s) => { print(s); }, Option.None => { print(\"none\"); },\n\
+         \x20 }\n\
+         \x20 0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con retorno char* debe salir 0\n{err}");
+    assert!(out.contains("mundo"), "strstr encontró 'mundo'\n{out}");
+    assert!(out.contains("none"), "strstr no encontrado → None\n{out}");
+}

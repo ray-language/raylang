@@ -413,12 +413,35 @@ impl<'a> Vm<'a> {
                     }
                     let r = crate::ffi::call(desc, &cargs)
                         .map_err(|m| runtime_error(pos!().0, pos!().1, &m))?;
-                    self.push(match r {
+                    let val = match r {
                         crate::ffi::FfiRet::Int(n) if desc.ret_kind == crate::ffi::CKind::Bool => HeapValue::Bool(n != 0),
                         crate::ffi::FfiRet::Int(n) => HeapValue::Int(n),
                         crate::ffi::FfiRet::Float(f) => HeapValue::Float(f),
                         crate::ffi::FfiRet::Unit => HeapValue::Unit,
-                    });
+                        // M41.3: char* → Option<bytes>/Option<string> (construido como el enum del prelude).
+                        crate::ffi::FfiRet::OptBytes(opt) => {
+                            let (variant, payload): (&str, Vec<HeapValue>) = match opt {
+                                None => ("None", vec![]),
+                                Some(bytes) => {
+                                    let inner = if desc.ret_kind == crate::ffi::CKind::OptStr {
+                                        match String::from_utf8(bytes) {
+                                            Ok(s) => HeapValue::Str(s),
+                                            Err(_) => return Err(runtime_error(pos!().0, pos!().1,
+                                                "la función C devolvió bytes que no son UTF-8 válido (declara Option<bytes> para recibirlos crudos)")),
+                                        }
+                                    } else {
+                                        HeapValue::Bytes(bytes)
+                                    };
+                                    ("Some", vec![inner])
+                                }
+                            };
+                            let (eid, tag) = option_variant(&program.enums, variant).ok_or_else(||
+                                runtime_error(pos!().0, pos!().1, "el enum Option del prelude no está disponible para el retorno FFI"))?;
+                            let h = self.heap.allocate(Obj::Enum(VmEnum { enum_id: eid, tag, payload }));
+                            HeapValue::Obj(h)
+                        }
+                    };
+                    self.push(val);
                 }
 
                 // --- Arreglos (M3) ---
@@ -2521,6 +2544,14 @@ fn runtime_error(line: usize, col: usize, msg: &str) -> RuntimeError {
     RuntimeError { msg: msg.to_string(), line, col }
 }
 
+/// Localiza la variante `variant` del enum `Option` del prelude en la tabla compilada, devolviendo
+/// `(enum_id, tag)` para armar un `VmEnum`. Lo usa el retorno FFI `char*` → `Option` (M41.3).
+fn option_variant(enums: &[crate::bytecode::CompiledEnum], variant: &str) -> Option<(usize, usize)> {
+    let ei = enums.iter().position(|e| e.name == "Option")?;
+    let tag = enums[ei].variants.iter().position(|v| v.name == variant)?;
+    Some((ei, tag))
+}
+
 /// Reúne las raíces del GC (handles) de una fibra: los valores en su pila de operandos y, por cada marco,
 /// sus locales (los `Boxed` son celdas del heap) y sus upvalues. Compartida por la fibra en ejecución y
 /// las suspendidas (M12.1). Función libre para no tomar prestado `self` entero durante la recolección.
@@ -2673,6 +2704,30 @@ mod tests {
              \x20 if (strlen(b\"abcde\\x00\") == 5) { 1 } else { 0 }\n\
              }",
         );
+    }
+
+    /// M41.3: **FFI con retorno `char*`** → `Option<bytes>`/`Option<string>`. `strstr` es determinista
+    /// (devuelve un puntero DENTRO del argumento, o NULL si no encuentra) → oráculo. Some/None + el
+    /// azúcar de string, en ambos motores.
+    #[test]
+    fn ffi_char_ptr_return_oraculo() {
+        // Option<string>: encontrado → Some("world"); no encontrado → None.
+        oracle_program(
+            "extern \"c\" { fn strstr(h: string, n: string) -> Option<string>; }\n\
+             fn d(o: Option<string>) -> int {\n\
+             \x20 match (o) { Option.Some(s) => len(s), Option.None => 0 - 1 }\n\
+             }\n\
+             fn main() -> int {\n\
+             \x20 d(strstr(\"hello world\", \"world\")) * 10 + (d(strstr(\"abc\", \"z\")) + 1)\n\
+             }",
+        ); // "world"→len 5 ⇒ 50; no encontrado→-1 ⇒ +0 ⇒ 50
+        // Option<bytes>: primitiva cruda.
+        oracle_program(
+            "extern \"c\" { fn strstr(h: string, n: string) -> Option<bytes>; }\n\
+             fn main() -> int {\n\
+             \x20 match (strstr(\"raylang\", \"lang\")) { Option.Some(b) => len(b), Option.None => 0 }\n\
+             }",
+        ); // "lang" ⇒ len 4
     }
 
     /// M40.1a: **guardas** en los brazos del match (`patrón if <cond> => …`). El brazo casa solo si

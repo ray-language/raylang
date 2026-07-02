@@ -146,7 +146,10 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   resuelve al archivo de plataforma o al proceso). Los tipos deben ser **marshalables**: los primitivos
   `int`↔long, `float`↔double, `bool`↔int (aridad 0..=3), y como **argumento** `string`↔`char*`
   (NUL-terminado) y `bytes`↔puntero al buffer (M41.2). El **retorno** admite `int`/`float`/`bool`/`unit`
-  (`char*` de retorno → diferido). Una firma fuera del catálogo, o un tipo no marshalable, es error.
+  y, para un `char*`, **`Option<bytes>`** (`NULL → None`; la frontera copia los bytes hasta el NUL y no
+  libera el puntero) o **`Option<string>`** (azúcar que valida UTF-8; bytes inválidos → error de
+  ejecución) (M41.3). Un `string`/`bytes` **pelado** de retorno es error (un `char*` puede ser NULL y no
+  hay `null`). Una firma fuera del catálogo, o un tipo no marshalable, es error.
   Llamar a una `extern fn` se ve como cualquier llamada. **Declarar una `extern fn` es la única
   operación insegura del lenguaje**: cruzar a C anula las garantías (memoria, firmas); todo lo demás es
   seguro por construcción.

@@ -5567,3 +5567,38 @@ bytes vía `strlen(b"…\x00")`, programas separados porque el nombre extern ES 
 
 **Diferido**: M41.3 retorno `char*` (con una convención honesta para NULL/propiedad), punteros opacos /
 handles, callbacks, structs por valor, variádicas, buffer+longitud como par.
+
+### 43.3 M41.3 — retorno `char*` → `Option<bytes>`/`Option<string>`
+
+Recibir un `char*` de vuelta de C. Un `char*` de retorno arrastra **tres** ambigüedades que el tipo C no
+expresa, y raylang las resuelve honestamente:
+
+1. **Puede ser NULL** (`getenv`/`strstr` devuelven NULL). raylang **no tiene `null`** → se modela con
+   **`Option`**: `NULL → None`, no-NULL → `Some(...)`. Declarar el retorno como `string` pelado sería
+   deshonesto (no puede representar la ausencia) → el checker lo **rechaza**; hay que declarar `Option<…>`.
+2. **Propiedad indefinida** (¿prestado como `getenv`? ¿`malloc`ado como `strdup`?). La frontera **copia**
+   los bytes hasta el NUL y **nunca libera** el puntero: seguro para los prestados/estáticos; un retorno
+   con propiedad **fuga** (honesto — sin conocer el allocator, liberar corrompería el heap; entre fuga y
+   corrupción, la fuga). El `free` allocator-aware con anotación → futuro.
+3. **No es texto garantizado** (`char*` son bytes, no UTF-8). La **primitiva** es **`Option<bytes>`**
+   (crudo, sin asumir codificación; el usuario convierte con `from_utf8`); **`Option<string>`** es
+   **azúcar** que valida UTF-8 (bytes inválidos → error de ejecución, no corrupción silenciosa).
+
+**Implementación.** El molde de la ABI **no cambia**: un `char*` de retorno vuelve en el registro entero,
+igual que un `i64` (como M41.2 trató los punteros de entrada). Lo nuevo es la interpretación del retorno
+(`int_return` en `ffi.rs`): si `ret_kind` es `OptBytes`/`OptStr`, el `i64` es un `char*` (0 = NULL →
+`None`; si no, `CStr::from_ptr` copia los bytes → `Some`). `ffi::call` devuelve `FfiRet::OptBytes(Option<
+Vec<u8>>)` y **cada motor construye el `Option`** del prelude: el intérprete por nombre (`EnumInstance`
+`Option`/`Some`/`None`); la VM por `enum_id`+`tag` (`option_variant` los localiza en la tabla compilada)
+→ `Obj::Enum`. La validación UTF-8 de `OptStr` la hace el motor (tiene la maquinaria de error). Es el
+primer punto donde la frontera FFI **fabrica un `Option`** (excepción acotada y justificada: el retorno
+es inherentemente especial). `ret_ckind` clasifica el tipo de retorno (primitivos + `Option<bytes>`/
+`Option<string>`, en forma cruda `Struct` o resuelta `Enum`).
+
+**El oráculo lo prueba.** `strstr` es determinista (devuelve un puntero DENTRO del argumento —vivo durante
+la llamada, la `CString` está en `keep`— o NULL) → `ffi_char_ptr_return_oraculo` verifica Some/None +
+el azúcar de string en ambos motores. Unit `strstr_devuelve_char_ptr_como_optbytes` (`ffi.rs`) +
+integración `ffi_retorno_char_ptr_como_option` (cli_cli) + ejemplo `examples/ffi/cstrings.ray`.
+
+**Diferido**: `free` allocator-aware (retornos con propiedad, vía anotación); punteros opacos / handles
+(APIs con estado como sqlite); callbacks (fn raylang → C), structs por valor, variádicas, buffer+longitud.

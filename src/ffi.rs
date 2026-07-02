@@ -37,11 +37,18 @@ pub enum CKind {
     Float,
     Bool,
     Unit,
-    /// `string` → `char*` (NUL-terminado). Solo como **argumento** en M41.2 (el retorno `char*` con su
-    /// problema de NULL/propiedad queda diferido). A efectos de ABI es un puntero (banco de enteros).
+    /// `string` → `char*` (NUL-terminado). Como **argumento** (M41.2). A efectos de ABI es un puntero
+    /// (banco de registros enteros).
     Str,
-    /// `bytes` → puntero al buffer crudo (`void*`/`char*` sin NUL). Solo como argumento (M41.2).
+    /// `bytes` → puntero al buffer crudo (`void*`/`char*` sin NUL). Como argumento (M41.2).
     Bytes,
+    /// **Retorno** `char*` → `Option<bytes>` (M41.3): `NULL → None`, no-NULL → `Some(bytes hasta el NUL)`.
+    /// La frontera **copia** los bytes y **nunca libera** el puntero (seguro para prestados/estáticos como
+    /// `getenv`/`strstr`; los retornos con propiedad `malloc`ados fugan — honesto, sin corromper el heap).
+    OptBytes,
+    /// **Retorno** `char*` → `Option<string>` (M41.3): azúcar sobre `OptBytes` que **valida UTF-8**
+    /// (bytes inválidos → error de ejecución; para no asumir codificación, usa `Option<bytes>`).
+    OptStr,
 }
 
 /// Descriptor de una función externa listo para llamar: qué librería, qué símbolo, y las clases de
@@ -71,10 +78,27 @@ pub fn ckind(ty: &crate::ast::Type) -> Option<CKind> {
     }
 }
 
-/// ¿Puede este `CKind` ser el **retorno** de una extern fn en M41.2? Los punteros (`Str`/`Bytes`) solo
-/// se admiten como argumento por ahora; el retorno `char*` (NULL/propiedad) se difiere.
-pub fn ckind_valido_como_retorno(k: CKind) -> bool {
-    matches!(k, CKind::Int | CKind::Float | CKind::Bool | CKind::Unit)
+/// Clasifica el tipo de **retorno** de una extern fn. Admite los primitivos (`int/float/bool/unit`) y,
+/// para un `char*` de retorno, `Option<bytes>` (→ `OptBytes`) y `Option<string>` (→ `OptStr`, azúcar con
+/// validación UTF-8). Un `string`/`bytes` **pelado** de retorno NO se admite: un `char*` puede ser NULL y
+/// raylang no tiene `null`, así que la ausencia se modela con `Option`. Acepta el tipo tanto en forma
+/// cruda del parser (`Struct("Option", …)`) como resuelta por el checker (`Enum("Option", …)`).
+pub fn ret_ckind(ty: &crate::ast::Type) -> Option<CKind> {
+    use crate::ast::Type;
+    match ty {
+        Type::Int => Some(CKind::Int),
+        Type::Float => Some(CKind::Float),
+        Type::Bool => Some(CKind::Bool),
+        Type::Unit => Some(CKind::Unit),
+        Type::Struct(n, args) | Type::Enum(n, args) if n == "Option" && args.len() == 1 => {
+            match &args[0] {
+                Type::Bytes => Some(CKind::OptBytes),
+                Type::String => Some(CKind::OptStr),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Construye el descriptor de llamada de una función externa desde su AST. `None` si algún tipo no es
@@ -85,7 +109,7 @@ pub fn desc_of(ext: &crate::ast::ExternFn) -> Option<ExternDesc> {
         name: ext.name.clone(),
         lib: ext.lib.clone(),
         arg_kinds: arg_kinds?,
-        ret_kind: ckind(&ext.return_type)?,
+        ret_kind: ret_ckind(&ext.return_type)?,
     })
 }
 
@@ -102,11 +126,14 @@ pub enum FfiVal<'a> {
 
 /// El resultado de una llamada FFI: un `FfiVal`, o `Unit` (void). El motor lo convierte al `Value`
 /// que corresponda según `ret_kind` (un `i64` se vuelve `bool` si el retorno declarado era `bool`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum FfiRet {
     Int(i64),
     Float(f64),
     Unit,
+    /// Retorno `char*` (M41.3): los bytes copiados hasta el NUL, o `None` si el puntero era NULL. El
+    /// motor lo envuelve en `Option<bytes>` o (validando UTF-8) `Option<string>`.
+    OptBytes(Option<Vec<u8>>),
 }
 
 // El molde de una clase de argumento a efectos de la ABI: solo importa si va por el banco de
@@ -120,10 +147,30 @@ enum Mold {
 fn mold_of(k: CKind) -> Mold {
     match k {
         CKind::Float => Mold::F,
-        // Int, Bool y los punteros (Str/Bytes) van por el banco de registros enteros. En 64 bits un
-        // puntero es del tamaño de un i64 y comparte convención de llamada, así que un argumento puntero
-        // se pasa por los mismos moldes `i64` (su dirección).
+        // Int, Bool y todos los punteros (Str/Bytes de argumento, OptBytes/OptStr de retorno) van por el
+        // banco de registros enteros. En 64 bits un puntero es del tamaño de un i64 y comparte convención
+        // de llamada, así que se pasan/devuelven por los mismos moldes `i64` (su dirección).
         _ => Mold::I,
+    }
+}
+
+/// Interpreta el valor de retorno de un molde `-> i64` según el `ret_kind` declarado: para `Unit` es
+/// `void`; para `OptBytes`/`OptStr` el `i64` es un `char*` (0 = NULL → `None`; si no, se **copian** los
+/// bytes hasta el NUL — sin liberar el puntero); para el resto es un entero. La conversión final a
+/// `bytes`/`string` (y la validación UTF-8 de `OptStr`) la hace el motor.
+fn int_return(desc: &ExternDesc, raw: i64) -> FfiRet {
+    match desc.ret_kind {
+        CKind::Unit => FfiRet::Unit,
+        CKind::OptBytes | CKind::OptStr => {
+            if raw == 0 {
+                FfiRet::OptBytes(None)
+            } else {
+                // SAFETY: el contrato de la extern fn dice que devuelve un `char*` válido NUL-terminado.
+                let bytes = unsafe { std::ffi::CStr::from_ptr(raw as *const c_char) }.to_bytes().to_vec();
+                FfiRet::OptBytes(Some(bytes))
+            }
+        }
+        _ => FfiRet::Int(raw),
     }
 }
 
@@ -222,33 +269,30 @@ pub fn call(desc: &ExternDesc, args: &[FfiVal]) -> Result<FfiRet, String> {
 
     // El catálogo acotado de firmas. Cada brazo transmuta el puntero al tipo `extern "C" fn(...)`
     // concreto y llama. `unsafe`: confiamos en que la firma declarada casa con la función real.
+    // Un molde `-> i64` devuelve un `raw` que `int_return` interpreta según `ret_kind` (entero, unit, o
+    // `char*` → Option). Un molde `-> f64` es siempre un float.
     unsafe {
-        macro_rules! ret_int {
-            ($e:expr) => {
-                Ok(if desc.ret_kind == CKind::Unit { FfiRet::Unit } else { FfiRet::Int($e) })
-            };
-        }
         Ok(match (molds.as_slice(), ret) {
             // --- aridad 0 ---
-            ([], Mold::I) => { let g: extern "C" fn() -> i64 = std::mem::transmute(sym); return ret_int!(g()); }
+            ([], Mold::I) => { let g: extern "C" fn() -> i64 = std::mem::transmute(sym); int_return(desc, g()) }
             ([], Mold::F) => { let g: extern "C" fn() -> f64 = std::mem::transmute(sym); FfiRet::Float(g()) }
             // --- aridad 1 ---
-            ([Mold::I], Mold::I) => { let g: extern "C" fn(i64) -> i64 = std::mem::transmute(sym); return ret_int!(g(i(0))); }
+            ([Mold::I], Mold::I) => { let g: extern "C" fn(i64) -> i64 = std::mem::transmute(sym); int_return(desc, g(i(0))) }
             ([Mold::I], Mold::F) => { let g: extern "C" fn(i64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(i(0))) }
-            ([Mold::F], Mold::I) => { let g: extern "C" fn(f64) -> i64 = std::mem::transmute(sym); return ret_int!(g(f(0))); }
+            ([Mold::F], Mold::I) => { let g: extern "C" fn(f64) -> i64 = std::mem::transmute(sym); int_return(desc, g(f(0))) }
             ([Mold::F], Mold::F) => { let g: extern "C" fn(f64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(f(0))) }
             // --- aridad 2 ---
-            ([Mold::I, Mold::I], Mold::I) => { let g: extern "C" fn(i64, i64) -> i64 = std::mem::transmute(sym); return ret_int!(g(i(0), i(1))); }
+            ([Mold::I, Mold::I], Mold::I) => { let g: extern "C" fn(i64, i64) -> i64 = std::mem::transmute(sym); int_return(desc, g(i(0), i(1))) }
             ([Mold::I, Mold::I], Mold::F) => { let g: extern "C" fn(i64, i64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(i(0), i(1))) }
-            ([Mold::F, Mold::F], Mold::I) => { let g: extern "C" fn(f64, f64) -> i64 = std::mem::transmute(sym); return ret_int!(g(f(0), f(1))); }
+            ([Mold::F, Mold::F], Mold::I) => { let g: extern "C" fn(f64, f64) -> i64 = std::mem::transmute(sym); int_return(desc, g(f(0), f(1))) }
             ([Mold::F, Mold::F], Mold::F) => { let g: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(f(0), f(1))) }
             ([Mold::I, Mold::F], Mold::F) => { let g: extern "C" fn(i64, f64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(i(0), f(1))) }
             ([Mold::F, Mold::I], Mold::F) => { let g: extern "C" fn(f64, i64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(f(0), i(1))) }
             // --- aridad 3 ---
-            ([Mold::I, Mold::I, Mold::I], Mold::I) => { let g: extern "C" fn(i64, i64, i64) -> i64 = std::mem::transmute(sym); return ret_int!(g(i(0), i(1), i(2))); }
+            ([Mold::I, Mold::I, Mold::I], Mold::I) => { let g: extern "C" fn(i64, i64, i64) -> i64 = std::mem::transmute(sym); int_return(desc, g(i(0), i(1), i(2))) }
             ([Mold::F, Mold::F, Mold::F], Mold::F) => { let g: extern "C" fn(f64, f64, f64) -> f64 = std::mem::transmute(sym); FfiRet::Float(g(f(0), f(1), f(2))) }
             _ => return Err(format!(
-                "la firma de '{}' no está en el catálogo FFI soportado (M41.1: primitivos int/float/bool, aridad 0..=3)",
+                "la firma de '{}' no está en el catálogo FFI soportado (primitivos int/float/bool + char*, aridad 0..=3)",
                 desc.name
             )),
         })
@@ -302,6 +346,21 @@ mod tests {
         match call(&d, &[FfiVal::Bytes(b"abcde\x00")]).unwrap() {
             FfiRet::Int(n) => assert_eq!(n, 5),
             other => panic!("se esperaba int, {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strstr_devuelve_char_ptr_como_optbytes() {
+        let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptBytes };
+        // Encontrado → Some(bytes desde la coincidencia).
+        match call(&d, &[FfiVal::Str("hello world"), FfiVal::Str("world")]).unwrap() {
+            FfiRet::OptBytes(Some(b)) => assert_eq!(b, b"world"),
+            other => panic!("se esperaba Some, {other:?}"),
+        }
+        // No encontrado → NULL → None.
+        match call(&d, &[FfiVal::Str("abc"), FfiVal::Str("z")]).unwrap() {
+            FfiRet::OptBytes(None) => {}
+            other => panic!("se esperaba None, {other:?}"),
         }
     }
 }

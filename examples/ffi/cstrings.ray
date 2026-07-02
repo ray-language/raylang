@@ -1,0 +1,36 @@
+// FFI (M41.3) — recibir un `char*` de vuelta de C.
+//
+// Un `char*` de retorno arrastra tres ambigüedades que raylang resuelve honestamente:
+//   - Puede ser NULL  → se modela con `Option` (raylang no tiene `null`).
+//   - Propiedad indefinida → la frontera COPIA los bytes y NUNCA libera el puntero (seguro para los
+//     prestados como `strstr`/`getenv`; un retorno con `malloc` propio fugaría, sin corromper el heap).
+//   - No es texto garantizado → la primitiva es `Option<bytes>` (crudo); `Option<string>` es azúcar que
+//     valida UTF-8 (bytes inválidos → error de ejecución).
+//
+//   cargo run --quiet -- examples/ffi/cstrings.ray
+
+extern "c" {
+    // strstr(haystack, needle): un puntero DENTRO de haystack a la primera coincidencia, o NULL.
+    fn strstr(haystack: string, needle: string) -> Option<string>;
+    // La misma función, pero recibiendo los bytes crudos (sin asumir UTF-8).
+    fn strchr(s: string, c: int) -> Option<bytes>;
+}
+
+fn mostrar(o: Option<string>) -> string {
+    match (o) {
+        Option.Some(s) => s,
+        Option.None => "(no encontrado)",
+    }
+}
+
+fn main() -> int {
+    print(mostrar(strstr("hola mundo", "mundo")));  // mundo
+    print(mostrar(strstr("hola mundo", "xyz")));     // (no encontrado)
+
+    // strchr por el código de 'l' (108): "llo mundo" (bytes crudos).
+    match (strchr("hola mundo", 108)) {
+        Option.Some(b) => { print(len(b)); },         // 8
+        Option.None => { print("sin 'l'"); },
+    }
+    0
+}

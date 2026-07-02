@@ -834,7 +834,7 @@ impl<'a> Interpreter<'a> {
                     }
                     let fargs: Vec<_> = vals.iter().map(value_to_ffi).collect();
                     return match crate::ffi::call(&desc, &fargs) {
-                        Ok(r) => Ok(ffi_to_value(r, desc.ret_kind)),
+                        Ok(r) => ffi_to_value(r, desc.ret_kind, callee.line, callee.col),
                         Err(msg) => Err(runtime_error(callee.line, callee.col, &msg)),
                     };
                 }
@@ -1707,16 +1707,41 @@ fn value_to_ffi(v: &Value) -> crate::ffi::FfiVal<'_> {
     }
 }
 
+/// Construye un valor `Option` del prelude (`Some(v)`/`None`). El intérprete identifica los enums por
+/// nombre, así que basta con el nombre `Option` y la variante. (M41.3)
+fn opt_value(variant: &str, payload: Vec<Value>) -> Value {
+    Value::Enum(Rc::new(EnumInstance {
+        enum_name: "Option".to_string(),
+        variant: variant.to_string(),
+        payload,
+    }))
+}
+
 /// Convierte el resultado de una llamada FFI al `Value` que corresponda según el tipo de retorno
-/// declarado (`ret_kind`): un entero C se vuelve `bool` si el retorno era `bool`, y `unit` es `Unit`.
-fn ffi_to_value(r: crate::ffi::FfiRet, ret: crate::ffi::CKind) -> Value {
+/// declarado (`ret_kind`): un entero C se vuelve `bool` si el retorno era `bool`; `unit` es `Unit`; un
+/// `char*` se envuelve en `Option<bytes>` (`None` si NULL) o, para `OptStr`, en `Option<string>`
+/// validando UTF-8 (bytes inválidos → error de ejecución). (M41.3)
+fn ffi_to_value(r: crate::ffi::FfiRet, ret: crate::ffi::CKind, line: usize, col: usize) -> EvalResult {
     use crate::ffi::{CKind, FfiRet};
-    match r {
+    Ok(match r {
         FfiRet::Int(n) if ret == CKind::Bool => Value::Bool(n != 0),
         FfiRet::Int(n) => Value::Int(n),
         FfiRet::Float(f) => Value::Float(f),
         FfiRet::Unit => Value::Unit,
-    }
+        FfiRet::OptBytes(None) => opt_value("None", vec![]),
+        FfiRet::OptBytes(Some(bytes)) => {
+            let inner = if ret == CKind::OptStr {
+                match String::from_utf8(bytes) {
+                    Ok(s) => Value::Str(s),
+                    Err(_) => return Err(runtime_error(line, col,
+                        "la función C devolvió bytes que no son UTF-8 válido (declara Option<bytes> para recibirlos crudos)")),
+                }
+            } else {
+                Value::Bytes(Rc::new(bytes))
+            };
+            opt_value("Some", vec![inner])
+        }
+    })
 }
 
 /// Comprueba que `i` es un índice válido en `0..len`; si no, error de ejecución.

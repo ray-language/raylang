@@ -279,7 +279,7 @@ impl<'a> Vm<'a> {
                     self.recycle_locals(frame.locals); // Opt.2
                 }
                 if self.cur.frames.is_empty() {
-                    match self.on_fiber_done(HeapValue::Unit)? {
+                    match Self::on_fiber_done(&mut self.cur, &mut self.shared, HeapValue::Unit)? {
                         Some(v) => return Ok(v),
                         None => continue, // era una fibra spawn: el scheduler ya cargó la siguiente
                     }
@@ -780,7 +780,7 @@ impl<'a> Vm<'a> {
                         |p| p.on == h && matches!(p.waiting, Waiting::Recv))
                     {
                         let parked = self.shared.parked.remove(pos);
-                        self.wake_recv(parked.fiber, vec![v]);
+                        Self::wake_recv(&self.cur, &mut self.shared, parked.fiber, vec![v]);
                         self.push(HeapValue::Unit);
                     } else if cap.is_none() || len < cap.unwrap() {
                         // (2) Hay hueco (no acotado, o len < cap) → encola y sigue. M38.1b-2: el valor se
@@ -789,18 +789,18 @@ impl<'a> Vm<'a> {
                         let v2 = transfer_value(&self.cur.heap, &mut ch_heap, &v, &mut HashMap::new());
                         self.shared.channels[h].heap = ch_heap;
                         self.shared.channels[h].queue.push_back(v2);
-                        self.wake_select_waiters(h); // M12.4: el canal ya tiene valor → listo para un select
+                        Self::wake_select_waiters(&mut self.shared, h); // M12.4: el canal ya tiene valor → listo para un select
                         self.push(HeapValue::Unit);
                     } else {
                         // (3) Cola llena (acotado) → BLOQUEAR al emisor (backpressure, M12.2). Guarda la
                         // fibra con el valor pendiente; al despertarla, `wake_sender` le deja unit (el
                         // resultado de `send`) en la pila y continúa tras el ChanSend.
-                        let fiber = self.take_current_fiber();
+                        let fiber = Self::take_current_fiber(&mut self.cur);
                         self.shared.parked.push(Parked { on: h, fiber, waiting: Waiting::Send(v) });
                         // M12.4: un emisor bloqueado vuelve al canal "listo" para un select (un recv lo
                         // tomaría); despierta a los selectores que lo esperan.
-                        self.wake_select_waiters(h);
-                        self.schedule_next(pos!().0, pos!().1)?;
+                        Self::wake_select_waiters(&mut self.shared, h);
+                        Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
                     }
                 }
                 OpCode::ChanRecv => {
@@ -816,7 +816,7 @@ impl<'a> Vm<'a> {
                         if !self.shared.channels[h].queue.is_empty() {
                             self.shared.channels[h].heap = ch_heap; // aún hay valores en tránsito → conserva el heap
                         } // si no, `ch_heap` se descarta (limpieza)
-                        self.wake_blocked_sender(h);
+                        Self::wake_blocked_sender(&mut self.shared, h);
                         let arr = self.cur.heap.allocate(Obj::Array(vec![v2]));
                         self.push(HeapValue::Obj(arr));
                         return Ok(None);
@@ -834,7 +834,7 @@ impl<'a> Vm<'a> {
                         // M38.1b-2: el valor del emisor bloqueado vive en el heap de SU fibra (aparcada) →
                         // se transfiere al heap del receptor antes de despertar al emisor.
                         let sv2 = transfer_value(&parked.fiber.heap, &mut self.cur.heap, &sv, &mut HashMap::new());
-                        self.wake_sender(parked.fiber);
+                        Self::wake_sender(&mut self.shared, parked.fiber);
                         let arr = self.cur.heap.allocate(Obj::Array(vec![sv2]));
                         self.push(HeapValue::Obj(arr));
                         return Ok(None);
@@ -847,9 +847,9 @@ impl<'a> Vm<'a> {
                     } else {
                         // Bloquear: guardar la fibra actual (ip ya apunta tras el ChanRecv → al
                         // despertarla, el `wake_recv` le deja el `[T]` en la pila y continúa) y conmutar.
-                        let fiber = self.take_current_fiber();
+                        let fiber = Self::take_current_fiber(&mut self.cur);
                         self.shared.parked.push(Parked { on: h, fiber, waiting: Waiting::Recv });
-                        self.schedule_next(pos!().0, pos!().1)?;
+                        Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
                     }
                 }
                 OpCode::TaskJoin => {
@@ -874,9 +874,9 @@ impl<'a> Vm<'a> {
                             // TaskJoin, para que al despertar (con la tarea ya Done/Failed) lo re-ejecute.
                             self.push(HeapValue::Task(t));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = self.take_current_fiber();
+                            let fiber = Self::take_current_fiber(&mut self.cur);
                             self.shared.parked.push(Parked { on: t, fiber, waiting: Waiting::Join });
-                            self.schedule_next(pos!().0, pos!().1)?;
+                            Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -896,7 +896,7 @@ impl<'a> Vm<'a> {
                     });
                     if let Some(msg) = failure {
                         for &c in &children {
-                            self.cancel_task(c); // ignora las no-pendientes (la que falló, las Done)
+                            Self::cancel_task(&mut self.shared, c); // ignora las no-pendientes (la que falló, las Done)
                         }
                         self.cur.scopes.pop();
                         return Err(runtime_error(pos!().0, pos!().1, &msg));
@@ -906,9 +906,9 @@ impl<'a> Vm<'a> {
                         matches!(self.shared.tasks[c].state, TaskState::Pending));
                     if let Some(c) = pending {
                         self.cur.frames.last_mut().unwrap().ip -= 1;
-                        let fiber = self.take_current_fiber();
+                        let fiber = Self::take_current_fiber(&mut self.cur);
                         self.shared.parked.push(Parked { on: c, fiber, waiting: Waiting::Join });
-                        self.schedule_next(pos!().0, pos!().1)?;
+                        Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
                     } else {
                         // (3) Todas terminaron con éxito: desapila el scope.
                         self.cur.scopes.pop();
@@ -943,9 +943,9 @@ impl<'a> Vm<'a> {
                             // Select y aparca esperando al conjunto (el handle del arreglo va en `on`).
                             self.push(HeapValue::Obj(arr));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = self.take_current_fiber();
+                            let fiber = Self::take_current_fiber(&mut self.cur);
                             self.shared.parked.push(Parked { on: arr, fiber, waiting: Waiting::Select });
-                            self.schedule_next(pos!().0, pos!().1)?;
+                            Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -1142,10 +1142,10 @@ impl<'a> Vm<'a> {
                             Ok(None) => {
                                 self.push(HeapValue::Int(handle));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = self.take_current_fiber();
+                                let fiber = Self::take_current_fiber(&mut self.cur);
                                 let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                                 self.shared.io_parked.push(IoParked { fd, fiber, pending_write: None });
-                                self.schedule_next(pos!().0, pos!().1)?;
+                                Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
                             }
                         }
                         return Ok(None);
@@ -1164,11 +1164,11 @@ impl<'a> Vm<'a> {
                         Ok(None) => {
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = self.take_current_fiber();
+                            let fiber = Self::take_current_fiber(&mut self.cur);
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             self.shared.io_parked.push(IoParked { fd, fiber, pending_write: None });
-                            self.schedule_next(pos!().0, pos!().1)?;
+                            Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -1197,7 +1197,7 @@ impl<'a> Vm<'a> {
                             }
                             Ok(n) => {
                                 let (line, col) = pos!();
-                                self.park_write(handle, data[n..].to_vec(), line, col)?;
+                                Self::park_write(&mut self.cur, &mut self.shared, handle, data[n..].to_vec(), line, col)?;
                                 return Ok(None);
                             }
                             Err(e) => {
@@ -1608,10 +1608,10 @@ impl<'a> Vm<'a> {
                             // No hay datagrama: re-ejecuta el opcode al despertar (re-empuja el handle).
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = self.take_current_fiber();
+                            let fiber = Self::take_current_fiber(&mut self.cur);
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             self.shared.io_parked.push(IoParked { fd, fiber, pending_write: None });
-                            self.schedule_next(pos!().0, pos!().1)?;
+                            Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -1688,11 +1688,11 @@ impl<'a> Vm<'a> {
                             // Re-empuja el handle y rebobina al SocketRead: al despertar lo re-ejecuta.
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = self.take_current_fiber();
+                            let fiber = Self::take_current_fiber(&mut self.cur);
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             self.shared.io_parked.push(IoParked { fd, fiber, pending_write: None });
-                            self.schedule_next(pos!().0, pos!().1)?;
+                            Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -1714,7 +1714,7 @@ impl<'a> Vm<'a> {
                         }
                         Ok(n) => {
                             let (line, col) = pos!();
-                            self.park_write(handle, bytes[n..].to_vec(), line, col)?;
+                            Self::park_write(&mut self.cur, &mut self.shared, handle, bytes[n..].to_vec(), line, col)?;
                             return Ok(None);
                         }
                         Err(e) => {
@@ -1762,11 +1762,11 @@ impl<'a> Vm<'a> {
                         Ok(None) => {
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = self.take_current_fiber();
+                            let fiber = Self::take_current_fiber(&mut self.cur);
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             self.shared.io_parked.push(IoParked { fd, fiber, pending_write: None });
-                            self.schedule_next(pos!().0, pos!().1)?;
+                            Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -1798,12 +1798,12 @@ impl<'a> Vm<'a> {
                             while i < self.shared.parked.len() {
                                 if self.shared.parked[i].on == ch && matches!(self.shared.parked[i].waiting, Waiting::Recv) {
                                     let parked = self.shared.parked.remove(i);
-                                    self.wake_recv(parked.fiber, Vec::new());
+                                    Self::wake_recv(&self.cur, &mut self.shared, parked.fiber, Vec::new());
                                 } else {
                                     i += 1;
                                 }
                             }
-                            self.wake_select_waiters(ch); // M12.4: un canal cerrado está "listo" para un select
+                            Self::wake_select_waiters(&mut self.shared, ch); // M12.4: un canal cerrado está "listo" para un select
                             self.push(HeapValue::Unit);
                         }
                         _ => unreachable!("el checker garantiza un handle (int) o un Channel"),
@@ -2023,7 +2023,7 @@ impl<'a> Vm<'a> {
                     }
                     if self.cur.frames.is_empty() {
                         // La fibra terminó: si es main → fin del programa; si es spawn → siguiente fibra.
-                        match self.on_fiber_done(result)? {
+                        match Self::on_fiber_done(&mut self.cur, &mut self.shared, result)? {
                             Some(v) => return Ok(Some(v)),
                             None => return Ok(None),
                         }
@@ -2045,7 +2045,7 @@ impl<'a> Vm<'a> {
                     if self.cur.frames.is_empty() || self.cur.is_main {
                         return Err(e);
                     }
-                    self.fail_current_fiber(e)?;
+                    Self::fail_current_fiber(&mut self.cur, &mut self.shared, e)?;
                 }
             }
         }
@@ -2055,30 +2055,31 @@ impl<'a> Vm<'a> {
 
     /// Empaqueta la fibra en ejecución (vaciando los campos de la VM) para aparcarla o descartarla. M12.3:
     /// además de `frames`/`stack`/`is_main`, lleva su `Task` y su pila de scopes.
-    fn take_current_fiber(&mut self) -> Fiber {
-        // M38.3b: la fibra en curso ES `self.cur` → conmutar es un swap (deja una `Fiber` vacía en `cur`).
-        std::mem::take(&mut self.cur)
+    /// M38.3b: la fibra en curso ES `cur` → conmutar es un swap (deja una `Fiber` vacía).
+    fn take_current_fiber(cur: &mut Fiber) -> Fiber {
+        std::mem::take(cur)
     }
 
     /// Cesión en `socket_write` (post-M19.4): la escritura llenó el buffer de envío y `remaining` no
     /// cupo. Aparca la fibra actual esperando que `handle` sea **escribible** (el `ip` ya apunta tras el
     /// opcode de escritura; el resultado se empuja al terminar, en `finish_parked_write`).
-    fn park_write(&mut self, handle: i64, remaining: Vec<u8>, line: usize, col: usize) -> Result<(), RuntimeError> {
+    /// M38.3b: función asociada (recibe `cur`/`shared` explícitos, no `&mut self`).
+    fn park_write(cur: &mut Fiber, shared: &mut Shared, handle: i64, remaining: Vec<u8>, line: usize, col: usize) -> Result<(), RuntimeError> {
         let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
-        let fiber = self.take_current_fiber();
-        self.shared.io_parked.push(IoParked { fd, fiber, pending_write: Some(PendingWrite { handle, remaining }) });
-        self.schedule_next(line, col)
+        let fiber = Self::take_current_fiber(cur);
+        shared.io_parked.push(IoParked { fd, fiber, pending_write: Some(PendingWrite { handle, remaining }) });
+        Self::schedule_next(cur, shared, line, col)
     }
 
     /// Una fibra aparcada por escritura despertó (su socket es escribible): drena lo que falta. Si lo
     /// completa (o falla), empuja el resultado etiquetado (`["ok",""]`/`["err",msg]`) en su pila y la pone
     /// lista; si aún bloquea, la re-aparca con el resto. (`allocate` no colecta aquí → sin riesgo de GC.)
-    fn finish_parked_write(&mut self, fd: i32, mut fiber: Fiber, mut pw: PendingWrite) {
+    fn finish_parked_write(shared: &mut Shared, fd: i32, mut fiber: Fiber, mut pw: PendingWrite) {
         let resultado = match crate::builtins::socket_write_nb(pw.handle, &pw.remaining) {
             Ok(n) if n == pw.remaining.len() => Ok(()),
             Ok(n) => {
                 pw.remaining.drain(..n); // descarta lo ya enviado y re-aparca el resto
-                self.shared.io_parked.push(IoParked { fd, fiber, pending_write: Some(pw) });
+                shared.io_parked.push(IoParked { fd, fiber, pending_write: Some(pw) });
                 return;
             }
             Err(e) => Err(e),
@@ -2090,66 +2091,66 @@ impl<'a> Vm<'a> {
         // M38.1b-2: el resultado se aloja en el heap de la fibra que se despierta (no el de la actual).
         let h = fiber.heap.allocate(Obj::Array(elems));
         fiber.stack.push(HeapValue::Obj(h));
-        self.shared.ready.push_back(fiber);
+        shared.ready.push_back(fiber);
     }
 
     /// Una fibra terminó **con éxito**. Si es `main` → fin del programa (su valor; semántica Go). Si es una
     /// fibra `spawn` → escribe el resultado en su `Task` (M12.3), despierta a los que la unen y planifica la
     /// siguiente. Devuelve `Some(v)` si el programa termina, `None` si ya cargó otra fibra.
-    fn on_fiber_done(&mut self, result: HeapValue) -> Result<Option<HeapValue>, RuntimeError> {
-        if self.cur.is_main {
+    fn on_fiber_done(cur: &mut Fiber, shared: &mut Shared, result: HeapValue) -> Result<Option<HeapValue>, RuntimeError> {
+        if cur.is_main {
             return Ok(Some(result));
         }
-        if let Some(task) = self.cur.task.take() {
+        if let Some(task) = cur.task.take() {
             // M38.1b-2: el resultado vive en el heap de ESTA fibra (que se descarta al terminar) → se
             // transfiere al heap de la tarea, donde `join` lo recogerá.
-            let mut t_heap = std::mem::take(&mut self.shared.tasks[task].heap);
-            let r2 = transfer_value(&self.cur.heap, &mut t_heap, &result, &mut HashMap::new());
-            self.shared.tasks[task].heap = t_heap;
-            self.shared.tasks[task].state = TaskState::Done(r2);
-            self.wake_task_waiters(task);
+            let mut t_heap = std::mem::take(&mut shared.tasks[task].heap);
+            let r2 = transfer_value(&cur.heap, &mut t_heap, &result, &mut HashMap::new());
+            shared.tasks[task].heap = t_heap;
+            shared.tasks[task].state = TaskState::Done(r2);
+            Self::wake_task_waiters(shared, task);
         }
-        self.cur.scopes.clear();
-        self.schedule_next(0, 0)?;
+        cur.scopes.clear();
+        Self::schedule_next(cur, shared, 0, 0)?;
         Ok(None)
     }
 
     /// Una fibra hija **falló** (M12.3): guarda el fallo en su `Task` como `Failed`, despierta a los que la
     /// unen (que lo re-lanzarán) y planifica la siguiente. El error solo se pierde si la tarea no la une
     /// nadie ni la posee un `scope`.
-    fn fail_current_fiber(&mut self, e: RuntimeError) -> Result<(), RuntimeError> {
-        if let Some(task) = self.cur.task.take() {
+    fn fail_current_fiber(cur: &mut Fiber, shared: &mut Shared, e: RuntimeError) -> Result<(), RuntimeError> {
+        if let Some(task) = cur.task.take() {
             let msg = e.msg.clone(); // solo el mensaje; el join que lo observe le pone su propia posición
-            self.shared.tasks[task].state = TaskState::Failed(msg);
-            self.wake_task_waiters(task);
+            shared.tasks[task].state = TaskState::Failed(msg);
+            Self::wake_task_waiters(shared, task);
         }
         // M12.5: si esta fibra poseía tareas (scopes activos cuyo cuerpo hizo panic), cancélalas en vez de
         // dejarlas huérfanas. (En `main` el programa aborta, así que esto importa para fibras hijas.)
-        let orphans: Vec<usize> = self.cur.scopes.iter().flat_map(|s| s.children.iter().copied()).collect();
+        let orphans: Vec<usize> = cur.scopes.iter().flat_map(|s| s.children.iter().copied()).collect();
         for c in orphans {
-            self.cancel_task(c);
+            Self::cancel_task(shared, c);
         }
-        self.cur.frames.clear();
-        self.cur.stack.clear();
-        self.cur.scopes.clear();
-        self.schedule_next(e.line, e.col)
+        cur.frames.clear();
+        cur.stack.clear();
+        cur.scopes.clear();
+        Self::schedule_next(cur, shared, e.line, e.col)
     }
 
-    /// Carga la siguiente fibra lista en los campos de ejecución de la VM. Si no hay ninguna lista pero sí
-    /// fibras bloqueadas → **deadlock** (nadie puede desbloquearlas).
-    fn schedule_next(&mut self, line: usize, col: usize) -> Result<(), RuntimeError> {
+    /// Carga la siguiente fibra lista en `cur`. Si no hay ninguna lista pero sí fibras bloqueadas →
+    /// **deadlock** (nadie puede desbloquearlas).
+    fn schedule_next(cur: &mut Fiber, shared: &mut Shared, line: usize, col: usize) -> Result<(), RuntimeError> {
         loop {
-            if let Some(next) = self.shared.ready.pop_front() {
-                self.cur = next; // M38.3b: cargar la siguiente fibra es un move
+            if let Some(next) = shared.ready.pop_front() {
+                *cur = next; // M38.3b: cargar la siguiente fibra es un move
                 return Ok(());
             }
             // Nadie listo. Si hay fibras esperando E/S de red, espera readiness y reintenta el `pop`.
-            if !self.shared.io_parked.is_empty() {
-                self.io_wait();
+            if !shared.io_parked.is_empty() {
+                Self::io_wait(shared);
                 continue;
             }
             // Ni listas ni en E/S: o hay bloqueadas en canal/tarea (deadlock) o no queda nada.
-            return if !self.shared.parked.is_empty() {
+            return if !shared.parked.is_empty() {
                 Err(runtime_error(line, col, "deadlock: todas las fibras están bloqueadas esperando un canal o una tarea"))
             } else {
                 Err(runtime_error(line, col, "no hay fibras ejecutables"))
@@ -2162,51 +2163,51 @@ impl<'a> Vm<'a> {
     /// fibras de esos descriptores. Si la plataforma no tiene poller (`Unsupported`) o la espera se
     /// interrumpe (`Ready` vacío por EINTR), cae al **busy-poll cooperativo** de M15.5 (duerme ~1 ms y
     /// re-encola todas) → siempre hay progreso. Garantiza dejar al menos una fibra en `ready`.
-    fn io_wait(&mut self) {
+    fn io_wait(shared: &mut Shared) {
         // Cada fibra espera **lectura** (pending_write None) o **escritura** (Some) de su socket.
-        let read_fds: Vec<i32> = self.shared.io_parked.iter().filter(|p| p.pending_write.is_none()).map(|p| p.fd).collect();
-        let write_fds: Vec<i32> = self.shared.io_parked.iter().filter(|p| p.pending_write.is_some()).map(|p| p.fd).collect();
+        let read_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.pending_write.is_none()).map(|p| p.fd).collect();
+        let write_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.pending_write.is_some()).map(|p| p.fd).collect();
         if let crate::poll::PollResult::Ready(listos) = crate::poll::wait(&read_fds, &write_fds, -1)
             && !listos.is_empty()
         {
             // Saca las fibras cuyo socket quedó listo; las demás siguen aparcadas.
             let mut woken: Vec<IoParked> = Vec::new();
             let mut i = 0;
-            while i < self.shared.io_parked.len() {
-                if listos.contains(&self.shared.io_parked[i].fd) {
-                    woken.push(self.shared.io_parked.remove(i));
+            while i < shared.io_parked.len() {
+                if listos.contains(&shared.io_parked[i].fd) {
+                    woken.push(shared.io_parked.remove(i));
                 } else {
                     i += 1;
                 }
             }
-            self.wake_parked(woken);
+            Self::wake_parked(shared, woken);
             return;
         }
         // Respaldo (sin poller, o despertar vacío): busy-poll cooperativo de M15.5.
         crate::builtins::sleep_millis(1);
-        let woken: Vec<IoParked> = self.shared.io_parked.drain(..).collect();
-        self.wake_parked(woken);
+        let woken: Vec<IoParked> = shared.io_parked.drain(..).collect();
+        Self::wake_parked(shared, woken);
     }
 
     /// Pone listas las fibras despertadas: las de lectura re-ejecutan su opcode (re-pushearon su handle);
     /// las de escritura terminan lo que faltaba (`finish_parked_write`).
-    fn wake_parked(&mut self, woken: Vec<IoParked>) {
+    fn wake_parked(shared: &mut Shared, woken: Vec<IoParked>) {
         for p in woken {
             match p.pending_write {
-                None => self.shared.ready.push_back(p.fiber),
-                Some(pw) => self.finish_parked_write(p.fd, p.fiber, pw),
+                None => shared.ready.push_back(p.fiber),
+                Some(pw) => Self::finish_parked_write(shared, p.fd, p.fiber, pw),
             }
         }
     }
 
     /// Despierta a todas las fibras aparcadas en `join` sobre `task` (M12.3): al re-ejecutar su `Join`/
     /// `ScopeEnd` verán la tarea ya terminada (Done/Failed). No empuja nada (el opcode rebobinó su `ip`).
-    fn wake_task_waiters(&mut self, task: Handle) {
+    fn wake_task_waiters(shared: &mut Shared, task: Handle) {
         let mut i = 0;
-        while i < self.shared.parked.len() {
-            if self.shared.parked[i].on == task && matches!(self.shared.parked[i].waiting, Waiting::Join) {
-                let parked = self.shared.parked.remove(i);
-                self.shared.ready.push_back(parked.fiber);
+        while i < shared.parked.len() {
+            if shared.parked[i].on == task && matches!(shared.parked[i].waiting, Waiting::Join) {
+                let parked = shared.parked.remove(i);
+                shared.ready.push_back(parked.fiber);
             } else {
                 i += 1;
             }
@@ -2216,21 +2217,21 @@ impl<'a> Vm<'a> {
     /// Despierta a los `select` aparcados cuyo arreglo de canales contiene `chan`, porque acaba de pasar a
     /// estar listo para recibir (M12.4). Re-ejecutarán el `select` y verán el canal listo (o, si otro lo
     /// consumió antes, se volverán a bloquear). No empuja nada (el opcode rebobinó su `ip`).
-    fn wake_select_waiters(&mut self, chan: usize) {
+    fn wake_select_waiters(shared: &mut Shared, chan: usize) {
         let mut i = 0;
-        while i < self.shared.parked.len() {
-            let on = self.shared.parked[i].on;
-            let is_select = matches!(self.shared.parked[i].waiting, Waiting::Select);
+        while i < shared.parked.len() {
+            let on = shared.parked[i].on;
+            let is_select = matches!(shared.parked[i].waiting, Waiting::Select);
             // M38.1b-2: el `on` de un Select es el handle del arreglo de canales, que vive en el heap de LA
             // FIBRA APARCADA (no en el de la fibra actual que dispara el wake). Sus elementos son
             // `HeapValue::Channel(id)`.
-            let contains = is_select && match self.shared.parked[i].fiber.heap.get(on) {
+            let contains = is_select && match shared.parked[i].fiber.heap.get(on) {
                 Obj::Array(elems) => elems.iter().any(|v| matches!(v, HeapValue::Channel(id) if *id == chan)),
                 _ => false,
             };
             if contains {
-                let parked = self.shared.parked.remove(i);
-                self.shared.ready.push_back(parked.fiber);
+                let parked = shared.parked.remove(i);
+                shared.ready.push_back(parked.fiber);
             } else {
                 i += 1;
             }
@@ -2243,77 +2244,77 @@ impl<'a> Vm<'a> {
     /// cancelada que era dueña de un scope no deja nietos huérfanos). Si la tarea ya terminó, no hace nada.
     /// Es trivial porque el scheduler es cooperativo M:1: una fibra solo corre en los puntos de yield, así
     /// que "cancelar" = "retirar de las colas". No es preemptiva: no interrumpe código que corra sin ceder.
-    fn cancel_task(&mut self, task: usize) {
-        match &mut self.shared.tasks[task].state {
+    fn cancel_task(shared: &mut Shared, task: usize) {
+        match &mut shared.tasks[task].state {
             estado @ TaskState::Pending => {
                 *estado = TaskState::Failed("tarea cancelada (una hermana falló)".to_string());
             }
             _ => return, // ya terminó (Done/Failed) → nada que cancelar
         }
         let mut grandchildren: Vec<usize> = Vec::new();
-        if let Some(pos) = self.shared.ready.iter().position(|f| f.task == Some(task)) {
-            let f = self.shared.ready.remove(pos).unwrap();
+        if let Some(pos) = shared.ready.iter().position(|f| f.task == Some(task)) {
+            let f = shared.ready.remove(pos).unwrap();
             for s in &f.scopes {
                 grandchildren.extend(s.children.iter().copied());
             }
-        } else if let Some(pos) = self.shared.parked.iter().position(|p| p.fiber.task == Some(task)) {
-            let p = self.shared.parked.remove(pos);
+        } else if let Some(pos) = shared.parked.iter().position(|p| p.fiber.task == Some(task)) {
+            let p = shared.parked.remove(pos);
             for s in &p.fiber.scopes {
                 grandchildren.extend(s.children.iter().copied());
             }
-        } else if let Some(pos) = self.shared.io_parked.iter().position(|p| p.fiber.task == Some(task)) {
+        } else if let Some(pos) = shared.io_parked.iter().position(|p| p.fiber.task == Some(task)) {
             // M15.5: la fibra cancelada podría estar esperando E/S de red.
-            let p = self.shared.io_parked.remove(pos);
+            let p = shared.io_parked.remove(pos);
             for s in &p.fiber.scopes {
                 grandchildren.extend(s.children.iter().copied());
             }
         }
         for g in grandchildren {
-            self.cancel_task(g);
+            Self::cancel_task(shared, g);
         }
     }
 
     /// Despierta una fibra bloqueada en `recv`: le deja `values` (envuelto en el `[T]` que devuelve el
     /// primitivo `__recv`) en su pila de operandos y la encola como lista. `[v]` la entrega un `send`; `[]`
     /// (vacío → `None`) la entrega un `close`.
-    fn wake_recv(&mut self, mut fiber: Fiber, values: Vec<HeapValue>) {
+    fn wake_recv(cur: &Fiber, shared: &mut Shared, mut fiber: Fiber, values: Vec<HeapValue>) {
         // M38.1b-2: los `values` vienen del heap de la fibra ACTUAL (el emisor en un rendezvous); se
         // transfieren al heap de la fibra que se despierta (el receptor) antes de alojar el `[T]` ahí.
         let mut remap = HashMap::new();
         let mut vals2 = Vec::with_capacity(values.len());
         for v in &values {
-            vals2.push(transfer_value(&self.cur.heap, &mut fiber.heap, v, &mut remap));
+            vals2.push(transfer_value(&cur.heap, &mut fiber.heap, v, &mut remap));
         }
         let arr = fiber.heap.allocate(Obj::Array(vals2));
         fiber.stack.push(HeapValue::Obj(arr));
-        self.shared.ready.push_back(fiber);
+        shared.ready.push_back(fiber);
     }
 
     /// Despierta una fibra bloqueada en `send` (M12.2): su `send` ya quedó atrás (el `ip` apunta tras el
     /// ChanSend), así que solo le deja **unit** (el resultado de `send`) en la pila y la encola.
-    fn wake_sender(&mut self, mut fiber: Fiber) {
+    fn wake_sender(shared: &mut Shared, mut fiber: Fiber) {
         fiber.stack.push(HeapValue::Unit);
-        self.shared.ready.push_back(fiber);
+        shared.ready.push_back(fiber);
     }
 
     /// Tras un `recv` que liberó un hueco: si hay un **emisor bloqueado** en `chan` (cola llena, M12.2),
     /// mete su valor pendiente en la cola (ahora hay sitio) y lo despierta. FIFO → el primero que se
     /// bloqueó despierta antes.
-    fn wake_blocked_sender(&mut self, chan: usize) {
-        if let Some(pos) = self.shared.parked.iter().position(
+    fn wake_blocked_sender(shared: &mut Shared, chan: usize) {
+        if let Some(pos) = shared.parked.iter().position(
             |p| p.on == chan && matches!(p.waiting, Waiting::Send(_)))
         {
-            let parked = self.shared.parked.remove(pos);
+            let parked = shared.parked.remove(pos);
             let sv = match parked.waiting {
                 Waiting::Send(sv) => sv,
                 _ => unreachable!(),
             };
             // M38.1b-2: el valor del emisor (heap de su fibra) entra a la cola → al heap del canal.
-            let mut ch_heap = std::mem::take(&mut self.shared.channels[chan].heap);
+            let mut ch_heap = std::mem::take(&mut shared.channels[chan].heap);
             let sv2 = transfer_value(&parked.fiber.heap, &mut ch_heap, &sv, &mut HashMap::new());
-            self.shared.channels[chan].heap = ch_heap;
-            self.shared.channels[chan].queue.push_back(sv2);
-            self.wake_sender(parked.fiber);
+            shared.channels[chan].heap = ch_heap;
+            shared.channels[chan].queue.push_back(sv2);
+            Self::wake_sender(shared, parked.fiber);
         }
     }
 

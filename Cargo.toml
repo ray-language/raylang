@@ -19,3 +19,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 webpki-roots = "0.26"
 # Para leer certificados PEM (SSL_CERT_FILE): la feature `std` de los tipos de rustls (ya en el árbol).
 rustls-pki-types = { version = "1", features = ["std"] }
+# M43 — cripto de PRODUCCIÓN. `ring` ya está en el árbol (lo enlaza rustls); declararlo directo resuelve a
+# la MISMA copia (0.17.x) → cero crate nuevo, dentro de la excepción "TLS/ring" ya sancionada. Da las
+# primitivas de tiempo constante y auditadas (SHA/HMAC/Ed25519/AEAD) que raylang puro no puede garantizar.
+# Las implementaciones en raylang (`examples/web/*.ray`) se conservan como DEMOSTRACIÓN DEL LENGUAJE.
+ring = "0.17"

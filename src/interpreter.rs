@@ -984,6 +984,20 @@ impl<'a> Interpreter<'a> {
                 Value::Str(s) => Value::Bytes(Rc::new(s.clone().into_bytes())),
                 _ => unreachable!("el checker garantiza un string"),
             },
+            // M43: hashes de producción vía `ring`. Delegan en los helpers de `builtins` (compartidos
+            // con la VM → salida idéntica, el oráculo se mantiene).
+            "sha256" => match &values[0] {
+                Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha256(b))),
+                _ => unreachable!("el checker garantiza bytes"),
+            },
+            "sha512" => match &values[0] {
+                Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha512(b))),
+                _ => unreachable!("el checker garantiza bytes"),
+            },
+            "sha1" => match &values[0] {
+                Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha1(b))),
+                _ => unreachable!("el checker garantiza bytes"),
+            },
             // M16.1b: decodifica bytes como UTF-8 → ["ok", s] o ["err", msg]. El prelude → Result.
             "__from_utf8" => {
                 let arr = match &values[0] {

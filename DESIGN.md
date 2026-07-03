@@ -5772,3 +5772,34 @@ sin valor. Con esto se cierra el arco D (endurecimiento): overflow (resuelto), a
 tope de heap, fuzzing continuo + CI + `cargo audit`. Diferido único: **cripto de producción vía `ring`** —
 una **bifurcación de diseño** (la cripto pura en raylang es pedagógica; migrar a `ring`, ya enlazado por
 rustls, no añade deps pero cambia la naturaleza del `net`/std) que se decide con el usuario.
+
+## 45. M43 — cripto de producción (`ring`)
+
+**Decisión del usuario** (resuelta la bifurcación de §44.3): raylang evoluciona hacia **producción real**, así
+que la criptografía que usa el código de verdad (el paquete `net`: JWT, SCRAM, SigV4, WebSocket) pasa a
+apoyarse en **`ring`** —primitivas de **tiempo constante**, auditadas—. Las implementaciones en raylang puro
+(`examples/web/sha256.ray`, etc.) **se conservan como DEMOSTRACIÓN DEL LENGUAJE** (prueban que raylang es lo
+bastante expresivo para bit-twiddling serio), **no como un segundo backend**: una sola implementación de
+producción. El motivo es de seguridad, no de corrección: las versiones puras calculan el hash correcto
+(probadas contra vectores RFC), pero corriendo sobre la VM interpretada **no pueden garantizar resistencia a
+canales laterales de temporización**, requisito para tocar secretos reales.
+
+**Arquitectura**: builtins **nativos** (Rust), no módulos raylang — `ring` es Rust, así que sus primitivas
+entran en la tabla `BUILTINS` (nombre + opcode + regla de tipo) con impl en ambos motores, como
+`split`/`to_bytes`. Devuelven **`bytes`** (el tipo honesto de la salida cripto). `ring` ya está en el árbol
+(lo enlaza rustls); declararlo dependencia **directa** resuelve a la **misma copia 0.17.x** → cero crate
+nuevo, dentro de la excepción "TLS/ring" ya sancionada (§28.4). **El oráculo se mantiene**: `ring` es
+determinista para digest/HMAC/Ed25519-firma(RFC 8032)/verificación/AEAD-con-nonce-dado → ambos motores llaman
+al MISMO `ring` → salida idéntica. La generación de claves (aleatoria) queda fuera del oráculo.
+
+### 45.1 M43.1 — digests SHA (`sha256`/`sha512`/`sha1`)
+
+Los tres hashes como builtins `bytes -> bytes` (opcodes `Sha256`/`Sha512`/`Sha1`; helpers `builtins::sha256`
+/`sha512`/`sha1` compartidos por ambos motores). `sha1` se expone porque `ring` lo nombra
+`SHA1_FOR_LEGACY_USE_ONLY` y algún protocolo lo exige por diseño (el accept-key de WebSocket, RFC 6455); está
+roto para seguridad nueva. Test `sha_digests_oraculo` con **doble red**: el oráculo (interp==vm) verifica
+CONSISTENCIA, y los **vectores conocidos** (NIST/RFC: `sha256("abc")`, entrada vacía, `sha512("abc")`,
+`sha1("abc")`) verifican CORRECCIÓN —el programa devuelve 1 solo si el hex casa, así un fallo de corrección da
+0 aunque ambos motores coincidieran—. Estrés del GC encadenando hashes (cada uno asigna un `bytes` nuevo).
+Siguen: 45.2 `hmac_sha256`, 45.3 Ed25519, 45.4 ChaCha20-Poly1305 AEAD, 45.5 migrar el `net` + des-embeber la
+cripto pura de `std/`.

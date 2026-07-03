@@ -172,6 +172,10 @@ pub enum OpCode {
     /// Saca `bytes`; empuja un `[string]` etiquetado (`["ok", s]`/`["err", msg]`) según decodifique
     /// como UTF-8. Primitivo `__from_utf8`; el prelude → `Result<string, string>` (M16.1b).
     FromUtf8,
+    /// M43: hashes de PRODUCCIÓN vía `ring` (bytes -> bytes). Sacan `bytes`, empujan el digest.
+    Sha256,
+    Sha512,
+    Sha1,
 
     // --- I/O binaria (M16.1c). Lecturas → [bytes] etiquetado; escrituras → [string]. ---
     /// Saca la ruta (string); lee el archivo y empuja `[bytes]` (`[b"ok", datos]`/`[b"err", msg]`).

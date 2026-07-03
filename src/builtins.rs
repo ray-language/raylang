@@ -181,6 +181,30 @@ pub fn sub_bytes_octets(b: &[u8], i: i64, j: i64) -> Vec<u8> {
     b[lo as usize..hi as usize].to_vec()
 }
 
+// --- Cripto de PRODUCCIÓN vía `ring` (M43) ---
+//
+// Hashes de tiempo constante y auditados. A diferencia de las implementaciones en raylang puro
+// (`examples/web/sha256.ray`, etc.), que se conservan como DEMOSTRACIÓN DEL LENGUAJE, estas son las que
+// usa el código de producción (el paquete `net`): un hash sobre la VM interpretada no puede garantizar
+// resistencia a canales laterales de temporización, requisito para tocar secretos reales. Helpers
+// compartidos por ambos motores → la salida es idéntica (`ring` es determinista) y el oráculo se mantiene.
+
+/// SHA-256 (32 octetos). El caballo de batalla de HMAC/JWT/firmas.
+pub fn sha256(data: &[u8]) -> Vec<u8> {
+    ring::digest::digest(&ring::digest::SHA256, data).as_ref().to_vec()
+}
+
+/// SHA-512 (64 octetos).
+pub fn sha512(data: &[u8]) -> Vec<u8> {
+    ring::digest::digest(&ring::digest::SHA512, data).as_ref().to_vec()
+}
+
+/// SHA-1 (20 octetos). `ring` lo nombra `..._FOR_LEGACY_USE_ONLY`: roto para seguridad, se expone SOLO
+/// para protocolos que aún lo exigen por diseño (p. ej. el accept-key de WebSocket, RFC 6455).
+pub fn sha1(data: &[u8]) -> Vec<u8> {
+    ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, data).as_ref().to_vec()
+}
+
 // --- I/O con buffering: registro de archivos abiertos (M11.8) ---
 //
 // Un handle de archivo es un `int`: NO hay un nuevo tipo de valor ni se toca el GC. Los archivos
@@ -981,6 +1005,22 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "to_bytes", opcode: OpCode::ToBytes, check: |a| {
         arity(a, 1, "to_bytes", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("to_bytes espera un string, no {}", a[0]))); }
+        Ok(Type::Bytes)
+    } },
+    // M43: hashes de producción vía `ring` (bytes -> bytes). Ver el bloque de helpers arriba.
+    Builtin { name: "sha256", opcode: OpCode::Sha256, check: |a| {
+        arity(a, 1, "sha256", "")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("sha256 espera bytes, no {}", a[0]))); }
+        Ok(Type::Bytes)
+    } },
+    Builtin { name: "sha512", opcode: OpCode::Sha512, check: |a| {
+        arity(a, 1, "sha512", "")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("sha512 espera bytes, no {}", a[0]))); }
+        Ok(Type::Bytes)
+    } },
+    Builtin { name: "sha1", opcode: OpCode::Sha1, check: |a| {
+        arity(a, 1, "sha1", "")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("sha1 espera bytes, no {}", a[0]))); }
         Ok(Type::Bytes)
     } },
     // __from_utf8(b) -> [string] (M16.1b): ["ok", s] o ["err", msg]. El prelude → Result<string,string>.

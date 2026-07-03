@@ -943,6 +943,19 @@ impl<'a> Vm<'a> {
                     HeapValue::Str(s) => self.push(HeapValue::Bytes(s.into_bytes())),
                     _ => unreachable!("el checker garantiza un string"),
                 },
+                // M43: hashes de producción vía `ring` (helpers compartidos con el intérprete).
+                OpCode::Sha256 => match self.pop() {
+                    HeapValue::Bytes(b) => self.push(HeapValue::Bytes(crate::builtins::sha256(&b))),
+                    _ => unreachable!("el checker garantiza bytes"),
+                },
+                OpCode::Sha512 => match self.pop() {
+                    HeapValue::Bytes(b) => self.push(HeapValue::Bytes(crate::builtins::sha512(&b))),
+                    _ => unreachable!("el checker garantiza bytes"),
+                },
+                OpCode::Sha1 => match self.pop() {
+                    HeapValue::Bytes(b) => self.push(HeapValue::Bytes(crate::builtins::sha1(&b))),
+                    _ => unreachable!("el checker garantiza bytes"),
+                },
                 // M16.1b: decodifica bytes como UTF-8 → arreglo etiquetado; el prelude → Result.
                 OpCode::FromUtf8 => {
                     let b = match self.pop() {
@@ -4772,6 +4785,55 @@ mod tests {
                 if (s.contains("raylang")) { len(r) } else { 0 }  // 24
             }
         "#);
+    }
+
+    /// M43.1: **hashes de producción vía `ring`** (`sha256`/`sha512`/`sha1`). Doble red: el **oráculo**
+    /// (interp==vm) verifica CONSISTENCIA —ambos motores llaman al mismo `ring`—, y los **vectores conocidos**
+    /// (NIST/RFC) verifican CORRECCIÓN: el programa devuelve 1 solo si el hex calculado casa con el esperado,
+    /// así un error de corrección da 0 (que el oráculo por sí solo no detectaría si ambos motores fallaran
+    /// igual). Cubre entrada vacía y las tres funciones.
+    #[test]
+    fn sha_digests_oraculo() {
+        let casos = [
+            ("sha256", "abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            ("sha256", "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            (
+                "sha512",
+                "abc",
+                "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+            ),
+            ("sha1", "abc", "a9993e364706816aba3e25717850c26c9cd0d89d"),
+        ];
+        for (f, input, hex) in casos {
+            let src = format!(
+                "fn main() -> int {{ if (to_string({f}(to_bytes(\"{input}\"))) == \"{hex}\") {{ 1 }} else {{ 0 }} }}"
+            );
+            let tokens = crate::lexer::lex(&src).expect("lex ok");
+            let mut prog = crate::parser::parse(tokens).expect("parse ok");
+            crate::checker::check(&mut prog).expect("check ok");
+            let interp = crate::interpreter::run(&prog).expect("interp ok");
+            let compiled = compile_program(&prog).expect("compila");
+            let vm = run_program(&compiled).expect("vm ok");
+            assert_eq!(interp, vm, "VM≠intérprete en {f}(\"{input}\")");
+            assert_eq!(vm, Value::Int(1), "{f}(\"{input}\") no casó con el vector conocido");
+        }
+        // Estrés del GC: cada hash asigna un `bytes` nuevo en el heap; encadenar hashes debe sobrevivir a
+        // una recolección en cada paso seguro (destapa raíces faltantes).
+        oracle_stress(
+            r#"
+            fn main() -> int {
+                var acc = to_bytes("semilla");
+                var i = 0;
+                while (i < 50) {
+                    acc = sha256(acc);       // 32 octetos, heap nuevo cada vuelta
+                    acc = sha512(acc);       // 64 octetos
+                    acc = sha1(acc);         // 20 octetos
+                    i = i + 1;
+                }
+                len(acc)                     // 20 (último es sha1)
+            }
+        "#,
+        );
     }
 
     #[test]

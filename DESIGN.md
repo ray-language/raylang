@@ -4641,7 +4641,8 @@ Los dos diferidos grandes de M26, que juntos dan un cliente gRPC real.
 El cambio de norte anotado en §21.1 tiene ahora **documento-contrato propio**:
 **[PRODUCCION.md](PRODUCCION.md)**. Contiene (I) el análisis a fondo del lenguaje post-§36 contra
 los cinco ejes —moderno, flexible, ligero, seguro, elegante— con las **siete brechas** hacia
-producción, y (II) el plan **M33–M43** en cuatro arcos:
+producción, y (II) el plan **M33–M44** en cuatro arcos (la numeración creció al separar la cripto en su
+propio hito; ver el desglose del arco D abajo):
 
 - **A — Estabilidad** (M33 spans + compilador sin ICEs + multi-error + fuzzing · M34 SPEC normativa
   + semver + congelación de API · M35 un solo motor de producto — la VM; el intérprete queda como
@@ -4651,12 +4652,30 @@ producción, y (II) el plan **M33–M43** en cuatro arcos:
 - **C — Ecosistema** (M39 CLI unificado `ray` + gestor de paquetes con `ray.toml`/lockfile · M40
   stdlib 1.0 en `std/` + protocolo `Iterator` + `Hash` + patrones anidados/guardas/`if let` +
   `raydoc` · M41 FFI con ABI C).
-- **D — Endurecimiento y lanzamiento** (M42 política de overflow + cripto nativa vía ring + límites
-  de recursos + fuzzing continuo · M43 distribución: binarios, playground WASM, marketplace → 1.0).
+- **D — Endurecimiento y lanzamiento**. Al ejecutarlo, la **cripto de producción vía `ring` se separó en
+  su propio hito** (era demasiado sustantiva para un sub-punto de M42), corriendo la numeración:
+  - **M42 — endurecimiento** (§44): política de overflow (ya resuelta) + auditoría de los `unsafe` +
+    **fuel** (límite de instrucciones) + **tope de heap** (límite de objetos vivos) + **fuzzing continuo
+    + CI + `cargo audit`**.
+  - **M43 — cripto de producción vía `ring`** (§45): SHA/HMAC/Ed25519/AEAD como builtins de tiempo
+    constante; el paquete `net` migrado a ellos; la cripto pura queda como demostración del lenguaje.
+  - **M44 — distribución** (pendiente): binarios, playground WASM, marketplace → **1.0**.
 
 A precede a todo; B y C pueden ir en paralelo tras A; D cierra. Los principios del proyecto (una
 fase a la vez, medir antes de conservar, oráculo en desarrollo, cero deps salvo excepción
 consciente) siguen vigentes. Lo sacrificado está declarado al final de PRODUCCION.md.
+
+**Estado del plan de producción** (al cierre de M43): **arcos A, C y D-endurecimiento/cripto COMPLETOS**.
+- **A — Estabilidad**: ✅ M33 (diagnósticos sin ICEs) · M34 (SPEC + semver `1.0.0-beta.1`) · M35 (la VM es
+  el motor de producto; el intérprete es el oráculo de desarrollo).
+- **B — Rendimiento y paralelismo**: 🚧 solo el transversal de optimización de la VM (incremental, midiendo;
+  §2/§27). M36/M37/M38 (GC de pausas acotadas, M:N por actores) **no iniciados** — el modelo CSP M:1 de M12
+  cubre la concurrencia por ahora.
+- **C — Ecosistema**: ✅ M39 (CLI `ray` + gestor de paquetes con `ray.toml`/lockfile/git/path-deps) · M40
+  (stdlib `std/` embebida + `Iterator` + colecciones + `raydoc` + el paquete `net`) · M41 (FFI con ABI C,
+  sin libffi).
+- **D — Endurecimiento**: ✅ M42 (fuel + tope de heap + fuzzing/CI/`cargo audit`) · M43 (cripto de
+  producción vía `ring`). **Falta M44 (distribución) para la 1.0.**
 
 ## 38. M33 — Compilador sin pánicos y diagnósticos de producción
 

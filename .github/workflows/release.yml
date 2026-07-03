@@ -1,0 +1,81 @@
+# CI de RELEASES de raylang (M44c). Al empujar un tag `vX.Y.Z`, construye los binarios (`ray` + `raylang`)
+# para las plataformas soportadas y los sube a la GitHub Release del tag. Cada plataforma se compila de
+# forma NATIVA en su propio runner (macOS arm/intel, Linux x86_64/arm64, Windows) → `ring`/`rustls` (la
+# excepción cero-deps, con C/asm por arquitectura) compilan sin cross-compilación.
+#
+# Los assets NO llevan la versión en el nombre (`raylang-<target>.tar.gz`), así el instalador puede usar
+# `releases/latest/download/raylang-<target>.tar.gz` sin consultar la API de GitHub.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Crea (o reutiliza, si ya existe) la Release del tag, con notas autogeneradas. Un solo job para no
+  # competir entre las patas de la matriz.
+  crear-release:
+    name: crear la Release del tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Crear la Release (idempotente)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1 \
+            || gh release create "${{ github.ref_name }}" \
+                 --repo "${{ github.repository }}" \
+                 --title "raylang ${{ github.ref_name }}" \
+                 --generate-notes
+
+  # Construye y sube un asset por plataforma.
+  build:
+    name: build ${{ matrix.target }}
+    needs: crear-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,    target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-13,         target: x86_64-apple-darwin }
+          - { os: macos-14,         target: aarch64-apple-darwin }
+          - { os: windows-latest,   target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust estable + target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add ${{ matrix.target }}
+      - name: Build de release
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Empaquetar (tar.gz, unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          tar czf "raylang-${{ matrix.target }}.tar.gz" \
+            -C "target/${{ matrix.target }}/release" ray raylang
+      - name: Empaquetar (zip, windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path "target/${{ matrix.target }}/release/ray.exe", "target/${{ matrix.target }}/release/raylang.exe" `
+            -DestinationPath "raylang-${{ matrix.target }}.zip"
+      - name: Subir el asset a la Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          asset=$(ls raylang-${{ matrix.target }}.tar.gz raylang-${{ matrix.target }}.zip 2>/dev/null | head -1)
+          echo "subiendo $asset"
+          gh release upload "${{ github.ref_name }}" "$asset" \
+            --repo "${{ github.repository }}" --clobber

@@ -38,12 +38,17 @@ servicios externos (del mantenedor).
 
 - [x] **Playground web (WASM)** — ✅ M44a
       raylang en el navegador (VM en `wasm32`, cero `wasm-bindgen`). `playground/` + `playground/build.sh`.
-- [ ] **Binarios por plataforma + instalador** — ⬜
-      Releases con binarios macOS/Linux/Windows + instalador (`curl | sh` y/o `brew`). Los archivos
-      (script del instalador + workflow de release) son en-repo; ejecutarlos corre en CI.
-- [ ] **CI de releases** — ⬜
-      Hay CI de **test** (`.github/workflows/ci.yml`: clippy + test + `--no-default-features` + `cargo
-      audit` + fuzz nocturno). Falta un workflow que, en un tag, **cruce-compile y suba binarios** a Releases.
+- [ ] **Binarios por plataforma + instalador** — 🟡
+      Listos en-repo: **`install.sh`** (`curl -sSfL …/install.sh | sh`; detecta OS/arch → target, descarga
+      de la Release, instala en `~/.local/bin`) y el workflow de release (abajo) que produce los binarios.
+      Falta **ejecutarlos** (empujar un tag → publicar la primera Release) y, opcionalmente, un `brew` tap.
+      Verificado localmente: detección de target + round-trip de empaquetado (tar → extrae `ray`/`raylang`
+      → corre).
+- [ ] **CI de releases** — 🟡
+      **`.github/workflows/release.yml`** listo: en un tag `v*`, construye NATIVAMENTE por plataforma
+      (macOS arm/intel, Linux x86_64/arm64, Windows) — así `ring`/`rustls` compilan sin cross — empaqueta
+      `ray`+`raylang` y los sube a la Release con `gh` (sin acciones de terceros). Falta **dispararlo** con
+      un tag. (El CI de **test** —`ci.yml`— ya existía.)
 - [ ] **Extensión VSCode publicada** — 🌐
       La extensión existe (`editors/vscode/`, con cliente LSP); falta **publicarla** en el marketplace.
 - [ ] **Libro y sitio publicados** — 🌐

@@ -4725,8 +4725,15 @@ propio hito; ver el desglose del arco D abajo):
       **checklist viva** hacia la 1.0 (cada criterio con su estado honesto). Criterios técnicos: ✅ salvo
       SPEC (escrita, falta publicar) y benchmarks (guarda de regresión; el 3–5× aspiracional de M36 no se
       persiguió, decisión de alcance).
-    - **Pendiente de M44**: binarios por plataforma + instalador (`curl|sh`/brew), CI de releases,
-      publicación (marketplace VSCode, hosting libro/sitio/SPEC), y **declarar raylang 1.0**.
+    - **M44c — instalador + CI de releases HECHO** (en-repo): `install.sh` (`curl -sSfL …/install.sh | sh`;
+      detecta OS/arch → target, descarga de la Release, instala en `~/.local/bin`; `RAYLANG_VERSION`/`_BIN_DIR`/
+      `_REPO`/`_DRY_RUN`) y `.github/workflows/release.yml` (en un tag `v*`, build NATIVO por plataforma —
+      macOS arm/intel, Linux x86_64/arm64, Windows — empaqueta `ray`+`raylang` y sube con `gh`, sin acciones
+      de terceros; assets sin versión en el nombre → `releases/latest/download`). Verificado localmente
+      (detección de target + round-trip de empaquetado); el run real corre al empujar un tag.
+    - **Pendiente de M44**: **ejecutar** el pipeline (empujar un tag → primera Release con binarios),
+      publicación externa (marketplace VSCode, hosting libro/sitio/SPEC, brew tap), y **declarar raylang 1.0**
+      (subir versión + notas + tag).
 
 A precede a todo; B y C pueden ir en paralelo tras A; D cierra. Los principios del proyecto (una
 fase a la vez, medir antes de conservar, oráculo en desarrollo, cero deps salvo excepción

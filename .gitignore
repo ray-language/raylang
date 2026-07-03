@@ -11,6 +11,9 @@ debug/
 # Backups que genera rustfmt.
 **/*.rs.bk
 
+# M44a: el .wasm del playground es un artefacto de build (se genera con playground/build.sh).
+playground/*.wasm
+
 # Información de depuración de builds MSVC (Windows).
 *.pdb
 

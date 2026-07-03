@@ -704,7 +704,7 @@ impl<'a> Vm<'a> {
 
                 OpCode::Print => {
                     let v = self.pop();
-                    println!("{}", format_value(&self.cur.heap, &self.program.enums, &v));
+                    crate::host_print(&format_value(&self.cur.heap, &self.program.enums, &v));
                     self.push(HeapValue::Unit);
                 }
 
@@ -1661,7 +1661,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::EPrint => {
                     let v = self.pop();
-                    eprintln!("{}", format_value(&self.cur.heap, &self.program.enums, &v));
+                    crate::host_eprint(&format_value(&self.cur.heap, &self.program.enums, &v));
                     self.push(HeapValue::Unit);
                 }
                 OpCode::ParseInt => {

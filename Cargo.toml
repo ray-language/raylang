@@ -3,6 +3,12 @@ name = "raylang"
 version = "1.0.0-beta.1"
 edition = "2024"
 
+# M44a-3: `cdylib` para que el build wasm exporte `alloc`/`run`/`dealloc` (el playground web); `rlib` para
+# que los binarios (`ray`/`raylang`) y los tests sigan enlazando contra la librería. En nativo se compilan
+# ambos (el cdylib es un artefacto extra e inofensivo).
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [features]
 # M35b: el **intérprete de árbol** vive tras esta feature (activa por defecto). El motor de
 # producto es la VM (M35a); el intérprete existe como **oráculo de desarrollo** (validación

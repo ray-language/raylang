@@ -873,7 +873,7 @@ impl<'a> Interpreter<'a> {
     fn eval_builtin(&self, name: &str, values: Vec<Value>) -> Value {
         match name {
             "print" => {
-                println!("{}", values[0]);
+                crate::host_print(&values[0].to_string());
                 Value::Unit
             }
             "len" => match &values[0] {
@@ -1254,7 +1254,7 @@ impl<'a> Interpreter<'a> {
             },
             // M11.2a: como print, pero a stderr.
             "eprint" => {
-                eprintln!("{}", values[0]);
+                crate::host_eprint(&values[0].to_string());
                 Value::Unit
             }
             // M11.2a: primitivo de parseo → [] o [n]. El prelude lo envuelve en Option.

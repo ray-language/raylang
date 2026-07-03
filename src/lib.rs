@@ -36,6 +36,28 @@ pub mod stdlib;
 pub mod test_runner;
 pub mod token;
 pub mod vm;
+/// M44a-3: el punto de entrada WebAssembly del playground (solo en `wasm32`).
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+
+/// M44a-3: enrutado de la salida de `print`/`eprint` (los opcodes `Print`/`EPrint` y el builtin del
+/// intérprete pasan por aquí). En **nativo** va a stdout/stderr (idéntico al `println!`/`eprintln!` de
+/// siempre); en el **playground web** (`wasm32`, sin stdout) se acumula en un buffer que el entry point
+/// `wasm::run` devuelve. Así el mismo programa imprime en ambos entornos.
+#[inline]
+pub fn host_print(s: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    println!("{s}");
+    #[cfg(target_arch = "wasm32")]
+    wasm::push_stdout(s);
+}
+#[inline]
+pub fn host_eprint(s: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    eprintln!("{s}");
+    #[cfg(target_arch = "wasm32")]
+    wasm::push_stderr(s);
+}
 
 /// Tamaño de pila del hilo worker (M13.3a): 256 MiB, muy por encima de los ~8 MiB
 /// por defecto del hilo principal. El parser (descenso recursivo en Rust) y el

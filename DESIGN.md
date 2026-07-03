@@ -6037,6 +6037,13 @@ VM, como desde M12.)
   siempre —correcto y simple— y medir si el move por unicidad paga). El canal pasa a estructura del host.
 - **M38.3 — pool de hilos M:N**: repartir fibras sobre N hilos + work-stealing; sincronizar las colas
   (no los heaps). Aquí llega el multicore real; medir *speedup* con una carga paralela nueva en el banco.
+  - **M38.3a HECHO** (prep, single-thread aún): se agrupa el estado del scheduler que N hilos compartirían
+    —`ready`/`parked`/`io_parked`/`channels`/`tasks`, ~83 sitios de acceso— en un `struct Shared` propiedad
+    directa del `Vm` (sin lock todavía). Con los heaps aislados (M38.1), es lo ÚNICO compartido; la
+    ejecución de cada fibra (frames/stack/heap/scopes/current_task/fuel) es thread-local. Behavior-preserving
+    → `Arc<Mutex<Shared>>` queda a un wrap de distancia. **Riesgo cualitativo de M38.3b** (el pool de hilos):
+    fallos de concurrencia = heisenbugs (deadlocks/races no deterministas); exige stress testing dedicado y
+    resolver la integración del poller de M17 (`kqueue`/`epoll`, hoy single-thread) en M:N.
 - **M38.4 — `--deterministic`**: preservar el modo M:1 reproducible para tests/oráculo; toda la batería de
   concurrencia de M12 debe pasar en ese modo.
 

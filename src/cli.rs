@@ -424,7 +424,10 @@ fn cargar_y_localizar(path: &str) -> (crate::ast::Program, Locate, bool) {
     let multi = modules.len() > 1;
     let locate: Locate = Box::new(move |gline: usize| {
         let m = modules.iter().rev().find(|m| m.start_line <= gline).unwrap_or(&modules[0]);
-        (m.source.clone(), m.name.clone(), gline - m.start_line + 1)
+        // `saturating_sub`: una posición fallback `(0,0)` (p.ej. un error de runtime sin línea concreta,
+        // como el deadlock declarado por un worker ocioso en M:N, o el fallback de fuel) da `gline < start_line`
+        // → sin esto, restar underflowaría (usize). Para posiciones válidas (`gline >= start_line`) es idéntico.
+        (m.source.clone(), m.name.clone(), gline.saturating_sub(m.start_line) + 1)
     });
     (loaded.program, locate, multi)
 }

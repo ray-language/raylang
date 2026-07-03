@@ -84,7 +84,9 @@ impl Loaded {
     pub fn locate(&self, line: usize) -> (&str, &str, usize) {
         let m = self.modules.iter().rev().find(|m| m.start_line <= line)
             .unwrap_or_else(|| &self.modules[0]);
-        (&m.name, &m.source, line - m.start_line + 1)
+        // `saturating_sub`: una posición `(0,0)` (error de runtime sin línea concreta) daría `line < start_line`
+        // → sin esto underflowaría (usize). Para posiciones válidas (`line >= start_line`) es idéntico.
+        (&m.name, &m.source, line.saturating_sub(m.start_line) + 1)
     }
 }
 

@@ -37,7 +37,7 @@ pub fn run_program(program: &CompiledProgram) -> Result<Value, RuntimeError> {
     let mut vm = Vm::new(program);
     let result = vm.run()?;
     vm.print_gc_stats_if_requested(); // M37.1
-    Ok(to_value(&vm.heap, &program.enums, &result))
+    Ok(to_value(&vm.cur.heap, &program.enums, &result))
 }
 
 /// Como [`run_program`], pero con **límites de recursos** para embeber raylang confinado (un bucle
@@ -56,11 +56,11 @@ pub fn run_program_con_limite(
         vm.fuel = f;
     }
     if let Some(n) = heap_cap {
-        vm.heap.set_max_live(n);
+        vm.cur.heap.set_max_live(n);
     }
     let result = vm.run()?;
     vm.print_gc_stats_if_requested(); // M37.1
-    Ok(to_value(&vm.heap, &program.enums, &result))
+    Ok(to_value(&vm.cur.heap, &program.enums, &result))
 }
 
 /// Ejecuta un `Chunk` suelto (una expresión compilada). Lo envuelve como una
@@ -100,7 +100,8 @@ struct CallFrame {
 }
 
 /// Una **fibra** (green thread, M12.1): el estado suspendido de una tarea — su pila de marcos y su pila de
-/// operandos. La fibra en ejecución vive en los campos `frames`/`stack` de la VM; las demás esperan aquí.
+/// operandos. M38.3b: la fibra EN CURSO vive en `Vm.cur` (un `Fiber`); las demás esperan en `Shared`.
+#[derive(Default)]
 struct Fiber {
     frames: Vec<CallFrame>,
     stack: Vec<HeapValue>,
@@ -185,20 +186,16 @@ struct Shared {
 
 struct Vm<'a> {
     program: &'a CompiledProgram,
-    frames: Vec<CallFrame>,
-    stack: Vec<HeapValue>,
-    heap: Heap,
+    /// M38.3b: la **fibra en curso** (su ejecución: marcos, pila, heap, scopes, task, is_main). Es
+    /// thread-local (en M:N cada worker tiene la suya); al conmutar se salva en `Shared` y se carga la
+    /// siguiente. Antes eran campos sueltos del `Vm`; unificarlos en un `Fiber` hace la conmutación un
+    /// simple swap y prepara el split exec/shared que exige el lock de M38.3.
+    cur: Fiber,
     /// M38.3a: el **estado compartido del scheduler** (colas de fibras + almacenes de canales/tareas),
     /// agrupado para el paso a M:N (M38.3b lo envolverá en `Arc<Mutex<Shared>>` — con los heaps ya aislados
     /// en M38.1, es lo ÚNICO que N hilos compartirían; el GC no, cada heap es thread-local). Aquí sigue
     /// siendo propiedad directa del `Vm` (single-thread, sin lock) → comportamiento idéntico.
     shared: Shared,
-    /// ¿La fibra en ejecución es la principal (`main`)? Su retorno termina el programa (semántica Go).
-    current_is_main: bool,
-    /// M12.3: la `Task` que la fibra en ejecución debe rellenar al terminar (`None` para `main`).
-    current_task: Option<Handle>,
-    /// M12.3: pila de scopes activos de la fibra en ejecución (espejo del `Fiber.scopes`).
-    scopes: Vec<ScopeFrame>,
     /// Opt.2: pool de `Vec<Local>` reutilizables. Cada llamada necesita un arreglo de locales; en vez de
     /// asignar/liberar uno por llamada (millones en recursión), reciclamos los de los marcos que retornan.
     /// NO es raíz del GC (sus contenidos son basura entre reciclar y reusar; `new_locals` los reconstruye).
@@ -221,13 +218,15 @@ impl<'a> Vm<'a> {
     fn new(program: &'a CompiledProgram) -> Self {
         Vm {
             program,
-            frames: Vec::new(),
-            stack: Vec::new(),
-            heap: Heap::new(),
+            cur: Fiber {
+                frames: Vec::new(),
+                stack: Vec::new(),
+                heap: Heap::new(),
+                is_main: true,
+                task: None,
+                scopes: Vec::new(),
+            },
             shared: Shared::default(),
-            current_is_main: true,
-            current_task: None,
-            scopes: Vec::new(),
             locals_pool: Vec::new(),
             fuel: u64::MAX, // sin límite por defecto
             gc_count: 0,
@@ -240,7 +239,7 @@ impl<'a> Vm<'a> {
         // Marco inicial: main, con su arreglo de locales (sin argumentos).
         let main = self.program.main;
         let locals = self.new_locals(main);
-        self.frames.push(CallFrame { function: main, ip: 0, locals, upvalues: Vec::new() });
+        self.cur.frames.push(CallFrame { function: main, ip: 0, locals, upvalues: Vec::new() });
 
         // El programa es inmutable y vive tanto como la VM; copiamos su referencia a un local (Opt.1). Así
         // el `match` de cada instrucción la toma **prestada** del programa (no de `self`), y el cuerpo puede
@@ -249,22 +248,22 @@ impl<'a> Vm<'a> {
 
         loop {
             // --- Punto seguro del GC ---
-            if self.heap.should_collect() {
+            if self.cur.heap.should_collect() {
                 self.collect();
                 // M42.2: tope de heap. Si tras recolectar siguen vivos más objetos de los permitidos,
                 // el programa realmente necesita más memoria de la presupuestada → aborta limpio.
-                if self.heap.over_cap() {
-                    let fi = self.frames.len() - 1;
-                    let func = self.frames[fi].function;
-                    let ip = self.frames[fi].ip;
+                if self.cur.heap.over_cap() {
+                    let fi = self.cur.frames.len() - 1;
+                    let func = self.cur.frames[fi].function;
+                    let ip = self.cur.frames[fi].ip;
                     let (l, c) = program.functions[func].chunk.lines.get(ip).copied().unwrap_or((0, 0));
                     return Err(runtime_error(l, c, "límite de memoria agotado (tope de heap)"));
                 }
             }
 
-            let fi = self.frames.len() - 1;
-            let func = self.frames[fi].function;
-            let ip = self.frames[fi].ip;
+            let fi = self.cur.frames.len() - 1;
+            let func = self.cur.frames[fi].function;
+            let ip = self.cur.frames[fi].ip;
 
             // M42.1: fuel. Sin límite (`u64::MAX`) nunca dispara; con límite, aborta al agotarse. La
             // posición es la de la instrucción en curso (para el diagnóstico).
@@ -276,16 +275,16 @@ impl<'a> Vm<'a> {
 
             // Robustez: si se acabó el chunk sin Return (no debería), retorna unit.
             if ip >= program.functions[func].chunk.code.len() {
-                if let Some(frame) = self.frames.pop() {
+                if let Some(frame) = self.cur.frames.pop() {
                     self.recycle_locals(frame.locals); // Opt.2
                 }
-                if self.frames.is_empty() {
+                if self.cur.frames.is_empty() {
                     match self.on_fiber_done(HeapValue::Unit)? {
                         Some(v) => return Ok(v),
                         None => continue, // era una fibra spawn: el scheduler ya cargó la siguiente
                     }
                 }
-                self.stack.push(HeapValue::Unit);
+                self.cur.stack.push(HeapValue::Unit);
                 continue;
             }
 
@@ -296,7 +295,7 @@ impl<'a> Vm<'a> {
             // (locales/constantes/aritmética/saltos) nunca la usa, solo los sitios de error o de cesión—.
             // Se resuelve **bajo demanda** con `pos!()`, leyendo `lines[ip]` solo donde hace falta.
             macro_rules! pos { () => {{ let p = program.functions[func].chunk.lines[ip]; (p.0, p.1) }} }
-            self.frames[fi].ip = ip + 1; // avance por defecto; los saltos lo cambian
+            self.cur.frames[fi].ip = ip + 1; // avance por defecto; los saltos lo cambian
 
             // M12.3: ejecutamos la instrucción dentro de un cierre que devuelve `Ok(Some(v))` (fin del
             // programa), `Ok(None)` (seguir) o `Err` (fallo). Así el bucle puede CAPTURAR el error de una
@@ -410,7 +409,7 @@ impl<'a> Vm<'a> {
                         let (l, r) = (*l, *r);
                         let mut elems = self.as_array(l).clone();
                         elems.extend(self.as_array(r).iter().cloned());
-                        let h = self.heap.allocate(Obj::Array(elems));
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
                     } else {
                         let result = self.apply_binary(bin, left, right, pos!().0, pos!().1)?;
@@ -419,11 +418,11 @@ impl<'a> Vm<'a> {
                 }
 
                 OpCode::Jump(target) => {
-                    self.frames[fi].ip = *target;
+                    self.cur.frames[fi].ip = *target;
                 }
                 OpCode::JumpIfFalse(target) => {
                     if matches!(self.peek(), HeapValue::Bool(false)) {
-                        self.frames[fi].ip = *target;
+                        self.cur.frames[fi].ip = *target;
                     }
                 }
 
@@ -453,26 +452,26 @@ impl<'a> Vm<'a> {
                     // seguro); si no, guarda el valor directamente.
                     let v = self.pop();
                     let boxed = self.program.functions[func].captured.get(*slot).copied().unwrap_or(false);
-                    self.frames[fi].locals[*slot] = if boxed {
-                        Local::Boxed(self.heap.allocate(Obj::Cell(v)))
+                    self.cur.frames[fi].locals[*slot] = if boxed {
+                        Local::Boxed(self.cur.heap.allocate(Obj::Cell(v)))
                     } else {
                         Local::Plain(v)
                     };
                 }
                 OpCode::GetUpvalue(i) => {
-                    let h = self.frames[fi].upvalues[*i];
+                    let h = self.cur.frames[fi].upvalues[*i];
                     let v = self.cell_get(h);
                     self.push(v);
                 }
                 OpCode::SetUpvalue(i) => {
                     let v = self.pop();
-                    let h = self.frames[fi].upvalues[*i];
+                    let h = self.cur.frames[fi].upvalues[*i];
                     self.cell_set(h, v);
                 }
 
                 OpCode::Print => {
                     let v = self.pop();
-                    println!("{}", format_value(&self.heap, &self.program.enums, &v));
+                    println!("{}", format_value(&self.cur.heap, &self.program.enums, &v));
                     self.push(HeapValue::Unit);
                 }
 
@@ -527,7 +526,7 @@ impl<'a> Vm<'a> {
                             };
                             let (eid, tag) = option_variant(&program.enums, variant).ok_or_else(||
                                 runtime_error(pos!().0, pos!().1, "el enum Option del prelude no está disponible para el retorno FFI"))?;
-                            let h = self.heap.allocate(Obj::Enum(VmEnum { enum_id: eid, tag, payload }));
+                            let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: eid, tag, payload }));
                             HeapValue::Obj(h)
                         }
                         // M41.4b: puntero opaco.
@@ -539,7 +538,7 @@ impl<'a> Vm<'a> {
                             };
                             let (eid, tag) = option_variant(&program.enums, variant).ok_or_else(||
                                 runtime_error(pos!().0, pos!().1, "el enum Option del prelude no está disponible para el retorno FFI"))?;
-                            let h = self.heap.allocate(Obj::Enum(VmEnum { enum_id: eid, tag, payload }));
+                            let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: eid, tag, payload }));
                             HeapValue::Obj(h)
                         }
                     };
@@ -553,7 +552,7 @@ impl<'a> Vm<'a> {
                         elems.push(self.pop());
                     }
                     elems.reverse(); // se sacaron en orden inverso
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::Index => {
@@ -594,7 +593,7 @@ impl<'a> Vm<'a> {
                         HeapValue::Str(s) => s.chars().count() as i64,
                         // M16.1a: len de bytes = nº de octetos.
                         HeapValue::Bytes(b) => b.len() as i64,
-                        HeapValue::Obj(h) => match self.heap.get(h) {
+                        HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Array(v) => v.len() as i64,
                             Obj::Map(m) => m.len() as i64,
                             _ => unreachable!("el checker garantiza un arreglo o Map"),
@@ -632,14 +631,14 @@ impl<'a> Vm<'a> {
                 }
                 // --- Mapas Map<K,V> (M13.1) ---
                 OpCode::MapNew => {
-                    let h = self.heap.allocate(Obj::Map(HashMap::new()));
+                    let h = self.cur.heap.allocate(Obj::Map(HashMap::new()));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::MapInsert => {
                     let v = self.pop();
                     let k = heap_to_key(&self.pop());
                     let h = self.pop_obj();
-                    match self.heap.get_mut(h) {
+                    match self.cur.heap.get_mut(h) {
                         Obj::Map(m) => { m.insert(k, v); }
                         _ => unreachable!("el checker garantiza un Map"),
                     }
@@ -648,7 +647,7 @@ impl<'a> Vm<'a> {
                 OpCode::MapContainsKey => {
                     let k = heap_to_key(&self.pop());
                     let h = self.pop_obj();
-                    let presente = match self.heap.get(h) {
+                    let presente = match self.cur.heap.get(h) {
                         Obj::Map(m) => m.contains_key(&k),
                         _ => unreachable!("el checker garantiza un Map"),
                     };
@@ -658,46 +657,46 @@ impl<'a> Vm<'a> {
                     // Primitivo: [] o [v]; el prelude lo envuelve en Option<V>.
                     let k = heap_to_key(&self.pop());
                     let h = self.pop_obj();
-                    let elems = match self.heap.get(h) {
+                    let elems = match self.cur.heap.get(h) {
                         Obj::Map(m) => match m.get(&k) {
                             Some(v) => vec![v.clone()],
                             None => vec![],
                         },
                         _ => unreachable!("el checker garantiza un Map"),
                     };
-                    let arr = self.heap.allocate(Obj::Array(elems));
+                    let arr = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(arr));
                 }
                 OpCode::MapRemove => {
                     // M13.1b: quita la clave; [] o [v]. El prelude → Option<V>.
                     let k = heap_to_key(&self.pop());
                     let h = self.pop_obj();
-                    let elems = match self.heap.get_mut(h) {
+                    let elems = match self.cur.heap.get_mut(h) {
                         Obj::Map(m) => match m.remove(&k) {
                             Some(v) => vec![v],
                             None => vec![],
                         },
                         _ => unreachable!("el checker garantiza un Map"),
                     };
-                    let arr = self.heap.allocate(Obj::Array(elems));
+                    let arr = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(arr));
                 }
                 OpCode::MapKeys => {
                     // M13.1b: claves ordenadas (determinista).
                     let h = self.pop_obj();
-                    let mut ks: Vec<MapKey> = match self.heap.get(h) {
+                    let mut ks: Vec<MapKey> = match self.cur.heap.get(h) {
                         Obj::Map(m) => m.keys().cloned().collect(),
                         _ => unreachable!("el checker garantiza un Map"),
                     };
                     ks.sort();
                     let elems: Vec<HeapValue> = ks.iter().map(key_to_heap).collect();
-                    let arr = self.heap.allocate(Obj::Array(elems));
+                    let arr = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(arr));
                 }
                 OpCode::MapValues => {
                     // M13.1b: valores en orden de clave ordenada (casa con keys).
                     let h = self.pop_obj();
-                    let elems: Vec<HeapValue> = match self.heap.get(h) {
+                    let elems: Vec<HeapValue> = match self.cur.heap.get(h) {
                         Obj::Map(m) => {
                             let mut pares: Vec<(&MapKey, &HeapValue)> = m.iter().collect();
                             pares.sort_by(|a, b| a.0.cmp(b.0));
@@ -705,7 +704,7 @@ impl<'a> Vm<'a> {
                         }
                         _ => unreachable!("el checker garantiza un Map"),
                     };
-                    let arr = self.heap.allocate(Obj::Array(elems));
+                    let arr = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(arr));
                 }
                 OpCode::Push => {
@@ -721,7 +720,7 @@ impl<'a> Vm<'a> {
                     // Task<T> (M12.3) y la encola. Si hay un scope activo, adscribe la tarea a él.
                     let (fn_idx, upvalues) = match self.pop() {
                         HeapValue::Function(i) => (i, Vec::new()),
-                        HeapValue::Obj(h) => match self.heap.get(h) {
+                        HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Closure(c) => (c.index, c.upvalues.clone()),
                             _ => unreachable!("el checker garantiza una función"),
                         },
@@ -730,7 +729,7 @@ impl<'a> Vm<'a> {
                     // M38.1b: la tarea vive en el almacén del host, referenciada por id.
                     let task = self.shared.tasks.len();
                     self.shared.tasks.push(VmTask { state: TaskState::Pending, heap: Heap::new() });
-                    if let Some(scope) = self.scopes.last_mut() {
+                    if let Some(scope) = self.cur.scopes.last_mut() {
                         scope.children.push(task);
                     }
                     // M38.1b-2: la fibra hija tiene su PROPIO heap; las capturas (upvalues) del closure
@@ -738,7 +737,7 @@ impl<'a> Vm<'a> {
                     let mut new_heap = Heap::new();
                     let mut remap = HashMap::new();
                     let upvalues: Vec<Handle> = upvalues.iter()
-                        .map(|&up| transfer_obj(&self.heap, &mut new_heap, up, &mut remap))
+                        .map(|&up| transfer_obj(&self.cur.heap, &mut new_heap, up, &mut remap))
                         .collect();
                     let locals = self.new_locals(fn_idx);
                     let frame = CallFrame { function: fn_idx, ip: 0, locals, upvalues };
@@ -787,7 +786,7 @@ impl<'a> Vm<'a> {
                         // (2) Hay hueco (no acotado, o len < cap) → encola y sigue. M38.1b-2: el valor se
                         // transfiere del heap de la fibra al heap del canal (en tránsito).
                         let mut ch_heap = std::mem::take(&mut self.shared.channels[h].heap);
-                        let v2 = transfer_value(&self.heap, &mut ch_heap, &v, &mut HashMap::new());
+                        let v2 = transfer_value(&self.cur.heap, &mut ch_heap, &v, &mut HashMap::new());
                         self.shared.channels[h].heap = ch_heap;
                         self.shared.channels[h].queue.push_back(v2);
                         self.wake_select_waiters(h); // M12.4: el canal ya tiene valor → listo para un select
@@ -813,12 +812,12 @@ impl<'a> Vm<'a> {
                         // M38.1b-2: el valor viene del heap del canal → se transfiere al heap del receptor.
                         // Si la cola queda vacía, el heap del canal se limpia (nadie referencia sus objetos).
                         let ch_heap = std::mem::take(&mut self.shared.channels[h].heap);
-                        let v2 = transfer_value(&ch_heap, &mut self.heap, &v, &mut HashMap::new());
+                        let v2 = transfer_value(&ch_heap, &mut self.cur.heap, &v, &mut HashMap::new());
                         if !self.shared.channels[h].queue.is_empty() {
                             self.shared.channels[h].heap = ch_heap; // aún hay valores en tránsito → conserva el heap
                         } // si no, `ch_heap` se descarta (limpieza)
                         self.wake_blocked_sender(h);
-                        let arr = self.heap.allocate(Obj::Array(vec![v2]));
+                        let arr = self.cur.heap.allocate(Obj::Array(vec![v2]));
                         self.push(HeapValue::Obj(arr));
                         return Ok(None);
                     }
@@ -834,16 +833,16 @@ impl<'a> Vm<'a> {
                         };
                         // M38.1b-2: el valor del emisor bloqueado vive en el heap de SU fibra (aparcada) →
                         // se transfiere al heap del receptor antes de despertar al emisor.
-                        let sv2 = transfer_value(&parked.fiber.heap, &mut self.heap, &sv, &mut HashMap::new());
+                        let sv2 = transfer_value(&parked.fiber.heap, &mut self.cur.heap, &sv, &mut HashMap::new());
                         self.wake_sender(parked.fiber);
-                        let arr = self.heap.allocate(Obj::Array(vec![sv2]));
+                        let arr = self.cur.heap.allocate(Obj::Array(vec![sv2]));
                         self.push(HeapValue::Obj(arr));
                         return Ok(None);
                     }
                     // (3) Cola vacía y sin emisores: cerrado → None ([]); abierto → bloquear (Recv).
                     let closed = self.shared.channels[h].closed;
                     if closed {
-                        let arr = self.heap.allocate(Obj::Array(Vec::new()));
+                        let arr = self.cur.heap.allocate(Obj::Array(Vec::new()));
                         self.push(HeapValue::Obj(arr));
                     } else {
                         // Bloquear: guardar la fibra actual (ip ya apunta tras el ChanRecv → al
@@ -865,7 +864,7 @@ impl<'a> Vm<'a> {
                         Some(Ok(v)) => {
                             // M38.1b-2: el valor de Done vive en el heap de la tarea → al heap del que la une.
                             let t_heap = std::mem::take(&mut self.shared.tasks[t].heap);
-                            let v2 = transfer_value(&t_heap, &mut self.heap, &v, &mut HashMap::new());
+                            let v2 = transfer_value(&t_heap, &mut self.cur.heap, &v, &mut HashMap::new());
                             self.shared.tasks[t].heap = t_heap;
                             self.push(v2);
                         }
@@ -874,7 +873,7 @@ impl<'a> Vm<'a> {
                             // Bloquear: re-empuja el id (lo sacamos arriba) y rebobina el ip al
                             // TaskJoin, para que al despertar (con la tarea ya Done/Failed) lo re-ejecute.
                             self.push(HeapValue::Task(t));
-                            self.frames.last_mut().unwrap().ip -= 1;
+                            self.cur.frames.last_mut().unwrap().ip -= 1;
                             let fiber = self.take_current_fiber();
                             self.shared.parked.push(Parked { on: t, fiber, waiting: Waiting::Join });
                             self.schedule_next(pos!().0, pos!().1)?;
@@ -883,12 +882,12 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::ScopeBegin => {
                     // Abre un scope (M12.3): las tareas spawneadas mientras esté activo se le adscriben.
-                    self.scopes.push(ScopeFrame { children: Vec::new() });
+                    self.cur.scopes.push(ScopeFrame { children: Vec::new() });
                 }
                 OpCode::ScopeEnd => {
                     // Cierra el scope: el valor del cuerpo (R) ya está en la pila.
                     let children: Vec<usize> =
-                        self.scopes.last().expect("ScopeEnd sin ScopeBegin").children.clone();
+                        self.cur.scopes.last().expect("ScopeEnd sin ScopeBegin").children.clone();
                     // (1) ¿Alguna hija FALLÓ? Cancela a las hermanas que sigan pendientes y propaga el fallo
                     // ORIGINAL de inmediato, sin esperar a las demás (M12.5: cancelación de hermanas).
                     let failure = children.iter().find_map(|&c| match &self.shared.tasks[c].state {
@@ -899,27 +898,27 @@ impl<'a> Vm<'a> {
                         for &c in &children {
                             self.cancel_task(c); // ignora las no-pendientes (la que falló, las Done)
                         }
-                        self.scopes.pop();
+                        self.cur.scopes.pop();
                         return Err(runtime_error(pos!().0, pos!().1, &msg));
                     }
                     // (2) ¿Alguna pendiente? Rebobina a ScopeEnd y bloquéate (al despertar re-escanea).
                     let pending = children.iter().copied().find(|&c|
                         matches!(self.shared.tasks[c].state, TaskState::Pending));
                     if let Some(c) = pending {
-                        self.frames.last_mut().unwrap().ip -= 1;
+                        self.cur.frames.last_mut().unwrap().ip -= 1;
                         let fiber = self.take_current_fiber();
                         self.shared.parked.push(Parked { on: c, fiber, waiting: Waiting::Join });
                         self.schedule_next(pos!().0, pos!().1)?;
                     } else {
                         // (3) Todas terminaron con éxito: desapila el scope.
-                        self.scopes.pop();
+                        self.cur.scopes.pop();
                     }
                 }
                 OpCode::Select => {
                     // Espera a que algún canal de la lista esté listo para recibir; devuelve su índice
                     // (el menor, determinista). Si ninguno lo está, bloquea esperando al conjunto (M12.4).
                     let arr = self.pop_obj();
-                    let chans: Vec<usize> = match self.heap.get(arr) {
+                    let chans: Vec<usize> = match self.cur.heap.get(arr) {
                         Obj::Array(elems) => elems.iter().filter_map(|v| match v {
                             HeapValue::Channel(id) => Some(*id),
                             _ => None,
@@ -943,7 +942,7 @@ impl<'a> Vm<'a> {
                             // Ninguno listo: re-empuja el arreglo (lo sacamos arriba), rebobina el ip al
                             // Select y aparca esperando al conjunto (el handle del arreglo va en `on`).
                             self.push(HeapValue::Obj(arr));
-                            self.frames.last_mut().unwrap().ip -= 1;
+                            self.cur.frames.last_mut().unwrap().ip -= 1;
                             let fiber = self.take_current_fiber();
                             self.shared.parked.push(Parked { on: arr, fiber, waiting: Waiting::Select });
                             self.schedule_next(pos!().0, pos!().1)?;
@@ -956,7 +955,7 @@ impl<'a> Vm<'a> {
                     // Representación textual (la misma que `print`): coincide con el `Display`
                     // que usa el intérprete en `to_string`.
                     let v = self.pop();
-                    let s = format_value(&self.heap, &self.program.enums, &v);
+                    let s = format_value(&self.cur.heap, &self.program.enums, &v);
                     self.push(HeapValue::Str(s));
                 }
                 OpCode::Trim => match self.pop() {
@@ -973,7 +972,7 @@ impl<'a> Vm<'a> {
                     let parts: Vec<HeapValue> =
                         s.split(sep.as_str()).map(|p| HeapValue::Str(p.to_string())).collect();
                     // El arreglo es un objeto del heap; los Str son inline, sin handles que rootear.
-                    let h = self.heap.allocate(Obj::Array(parts));
+                    let h = self.cur.heap.allocate(Obj::Array(parts));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::Chars => {
@@ -983,7 +982,7 @@ impl<'a> Vm<'a> {
                     };
                     let cs: Vec<HeapValue> = s.chars().map(HeapValue::Char).collect();
                     // El arreglo es un objeto del heap; los Char son inline, sin handles que rootear.
-                    let h = self.heap.allocate(Obj::Array(cs));
+                    let h = self.cur.heap.allocate(Obj::Array(cs));
                     self.push(HeapValue::Obj(h));
                 }
                 // M40.3a: el code point Unicode de un char → int.
@@ -1030,7 +1029,7 @@ impl<'a> Vm<'a> {
                         Some(pk) => vec![HeapValue::Bytes(pk)],
                         None => vec![],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::Ed25519Sign => {
@@ -1043,7 +1042,7 @@ impl<'a> Vm<'a> {
                         Some(sig) => vec![HeapValue::Bytes(sig)],
                         None => vec![],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::Ed25519Verify => {
@@ -1075,7 +1074,7 @@ impl<'a> Vm<'a> {
                         Some(out) => vec![HeapValue::Bytes(out)],
                         None => vec![],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 // M16.1b: decodifica bytes como UTF-8 → arreglo etiquetado; el prelude → Result.
@@ -1088,7 +1087,7 @@ impl<'a> Vm<'a> {
                         Ok(s) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(s)],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
 
@@ -1103,7 +1102,7 @@ impl<'a> Vm<'a> {
                         Ok(data) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)],
                         Err(e) => vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.to_string().into_bytes())],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::WriteFileBytes => {
@@ -1116,7 +1115,7 @@ impl<'a> Vm<'a> {
                         Ok(()) => vec![HeapValue::Str("ok".to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 // M16.1c: lectura binaria del socket; cede al scheduler en WouldBlock (como SocketRead, M15.5).
@@ -1132,17 +1131,17 @@ impl<'a> Vm<'a> {
                         match crate::builtins::tls_read_nb(handle) {
                             Ok(Some(data)) => {
                                 let elems = vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)];
-                                let h = self.heap.allocate(Obj::Array(elems));
+                                let h = self.cur.heap.allocate(Obj::Array(elems));
                                 self.push(HeapValue::Obj(h));
                             }
                             Err(e) => {
                                 let elems = vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())];
-                                let h = self.heap.allocate(Obj::Array(elems));
+                                let h = self.cur.heap.allocate(Obj::Array(elems));
                                 self.push(HeapValue::Obj(h));
                             }
                             Ok(None) => {
                                 self.push(HeapValue::Int(handle));
-                                self.frames.last_mut().unwrap().ip -= 1;
+                                self.cur.frames.last_mut().unwrap().ip -= 1;
                                 let fiber = self.take_current_fiber();
                                 let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                                 self.shared.io_parked.push(IoParked { fd, fiber, pending_write: None });
@@ -1154,17 +1153,17 @@ impl<'a> Vm<'a> {
                     match crate::builtins::socket_read_bytes_nb(handle) {
                         Ok(Some(data)) => {
                             let elems = vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)];
-                            let h = self.heap.allocate(Obj::Array(elems));
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                         Err(e) => {
                             let elems = vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())];
-                            let h = self.heap.allocate(Obj::Array(elems));
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                         Ok(None) => {
                             self.push(HeapValue::Int(handle));
-                            self.frames.last_mut().unwrap().ip -= 1;
+                            self.cur.frames.last_mut().unwrap().ip -= 1;
                             let fiber = self.take_current_fiber();
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
@@ -1185,7 +1184,7 @@ impl<'a> Vm<'a> {
                             Ok(_) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
                             Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                         };
-                        let h = self.heap.allocate(Obj::Array(elems));
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
                     } else {
                         // TCP plano: escritura parcial; si el buffer se llena, CEDE la fibra hasta que el
@@ -1193,7 +1192,7 @@ impl<'a> Vm<'a> {
                         match crate::builtins::socket_write_nb(handle, &data) {
                             Ok(n) if n == data.len() => {
                                 let elems = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())];
-                                let h = self.heap.allocate(Obj::Array(elems));
+                                let h = self.cur.heap.allocate(Obj::Array(elems));
                                 self.push(HeapValue::Obj(h));
                             }
                             Ok(n) => {
@@ -1203,7 +1202,7 @@ impl<'a> Vm<'a> {
                             }
                             Err(e) => {
                                 let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
-                                let h = self.heap.allocate(Obj::Array(elems));
+                                let h = self.cur.heap.allocate(Obj::Array(elems));
                                 self.push(HeapValue::Obj(h));
                             }
                         }
@@ -1217,7 +1216,7 @@ impl<'a> Vm<'a> {
                         (HeapValue::Str(s), HeapValue::Str(sub)) => s.contains(sub.as_str()),
                         // M11.7b: arreglo → pertenencia por igualdad estructural.
                         (HeapValue::Obj(h), _) => {
-                            self.as_array(*h).iter().any(|e| values_equal(&self.heap, e, &x))
+                            self.as_array(*h).iter().any(|e| values_equal(&self.cur.heap, e, &x))
                         }
                         _ => unreachable!("el checker garantiza string+string o arreglo+elemento"),
                     };
@@ -1309,7 +1308,7 @@ impl<'a> Vm<'a> {
                         Some(i) => vec![HeapValue::Int(i as i64)],
                         None => vec![],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::Join => {
@@ -1331,7 +1330,7 @@ impl<'a> Vm<'a> {
                     let h = self.pop_obj();
                     let mut elems = self.as_array(h).clone();
                     elems.reverse();
-                    let nh = self.heap.allocate(Obj::Array(elems));
+                    let nh = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(nh));
                 }
                 OpCode::ArrayPop => {
@@ -1339,15 +1338,15 @@ impl<'a> Vm<'a> {
                     let h = self.pop_obj();
                     let popped = self.as_array_mut(h).pop();
                     let elems = popped.map(|v| vec![v]).unwrap_or_default();
-                    let nh = self.heap.allocate(Obj::Array(elems));
+                    let nh = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(nh));
                 }
                 OpCode::Position => {
                     let x = self.pop();
                     let h = self.pop_obj();
-                    let idx = self.as_array(h).iter().position(|e| values_equal(&self.heap, e, &x));
+                    let idx = self.as_array(h).iter().position(|e| values_equal(&self.cur.heap, e, &x));
                     let elems = idx.map(|i| vec![HeapValue::Int(i as i64)]).unwrap_or_default();
-                    let nh = self.heap.allocate(Obj::Array(elems));
+                    let nh = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(nh));
                 }
 
@@ -1363,7 +1362,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::EPrint => {
                     let v = self.pop();
-                    eprintln!("{}", format_value(&self.heap, &self.program.enums, &v));
+                    eprintln!("{}", format_value(&self.cur.heap, &self.program.enums, &v));
                     self.push(HeapValue::Unit);
                 }
                 OpCode::ParseInt => {
@@ -1375,7 +1374,7 @@ impl<'a> Vm<'a> {
                         },
                         _ => unreachable!("el checker garantiza un string"),
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::ParseFloat => {
@@ -1387,7 +1386,7 @@ impl<'a> Vm<'a> {
                         },
                         _ => unreachable!("el checker garantiza un string"),
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::ReadLine => {
@@ -1397,7 +1396,7 @@ impl<'a> Vm<'a> {
                         Ok(0) | Err(_) => vec![],
                         Ok(_) => vec![HeapValue::Str(line.trim_end_matches(['\n', '\r']).to_string())],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::Env => {
@@ -1409,7 +1408,7 @@ impl<'a> Vm<'a> {
                         },
                         _ => unreachable!("el checker garantiza un string"),
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::Args => {
@@ -1418,7 +1417,7 @@ impl<'a> Vm<'a> {
                         .iter()
                         .map(|a| HeapValue::Str(a.clone()))
                         .collect();
-                    let h = self.heap.allocate(Obj::Array(items));
+                    let h = self.cur.heap.allocate(Obj::Array(items));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::ReadFile => {
@@ -1430,7 +1429,7 @@ impl<'a> Vm<'a> {
                         },
                         _ => unreachable!("el checker garantiza un string"),
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::WriteFile => {
@@ -1444,7 +1443,7 @@ impl<'a> Vm<'a> {
                         Ok(()) => vec![HeapValue::Str("ok".to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::Exists => match self.pop() {
@@ -1462,7 +1461,7 @@ impl<'a> Vm<'a> {
                         Ok(()) => vec![HeapValue::Str("ok".to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::RemoveFile => {
@@ -1474,7 +1473,7 @@ impl<'a> Vm<'a> {
                         Ok(()) => vec![HeapValue::Str("ok".to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::ListDir => {
@@ -1490,7 +1489,7 @@ impl<'a> Vm<'a> {
                         }
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
 
@@ -1505,7 +1504,7 @@ impl<'a> Vm<'a> {
                         Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::ReadLineHandle => {
@@ -1514,7 +1513,7 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("el checker garantiza un int"),
                     };
                     let elems = crate::builtins::read_line_handle(handle).map(|l| vec![HeapValue::Str(l)]).unwrap_or_default();
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::WriteHandle => {
@@ -1527,7 +1526,7 @@ impl<'a> Vm<'a> {
                         Ok(_) => vec![HeapValue::Str("ok".to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 // --- Cliente TCP (M15.2): arreglo etiquetado en el heap; el prelude → Result. ---
@@ -1545,7 +1544,7 @@ impl<'a> Vm<'a> {
                         }
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 // M20.8: UDP. Bloqueante en ambos motores por ahora (la cesión cooperativa queda diferida).
@@ -1563,7 +1562,7 @@ impl<'a> Vm<'a> {
                         }
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::UdpSendTo => {
@@ -1580,7 +1579,7 @@ impl<'a> Vm<'a> {
                         Ok(n) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(n.to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 // M20.11: recv UDP no bloqueante; cede la fibra al scheduler en WouldBlock (como SocketReadBytes).
@@ -1597,18 +1596,18 @@ impl<'a> Vm<'a> {
                                 HeapValue::Bytes(port.to_string().into_bytes()),
                                 HeapValue::Bytes(data),
                             ];
-                            let h = self.heap.allocate(Obj::Array(elems));
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                         Err(e) => {
                             let elems = vec![HeapValue::Bytes(b"err".to_vec()), HeapValue::Bytes(e.into_bytes())];
-                            let h = self.heap.allocate(Obj::Array(elems));
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                         Ok(None) => {
                             // No hay datagrama: re-ejecuta el opcode al despertar (re-empuja el handle).
                             self.push(HeapValue::Int(handle));
-                            self.frames.last_mut().unwrap().ip -= 1;
+                            self.cur.frames.last_mut().unwrap().ip -= 1;
                             let fiber = self.take_current_fiber();
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             self.shared.io_parked.push(IoParked { fd, fiber, pending_write: None });
@@ -1631,7 +1630,7 @@ impl<'a> Vm<'a> {
                         }
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 // M31.2a: conexión TLS con ALPN h2 (el handshake ya se completó de forma bloqueante en el
@@ -1649,7 +1648,7 @@ impl<'a> Vm<'a> {
                         }
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 // M19.4b: envuelve un socket aceptado (ya no bloqueante) en una sesión TLS de servidor.
@@ -1665,7 +1664,7 @@ impl<'a> Vm<'a> {
                         Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::SocketRead => {
@@ -1677,18 +1676,18 @@ impl<'a> Vm<'a> {
                     match crate::builtins::socket_read_nb(handle) {
                         Ok(Some(s)) => {
                             let elems = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(s)];
-                            let h = self.heap.allocate(Obj::Array(elems));
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                         Err(e) => {
                             let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
-                            let h = self.heap.allocate(Obj::Array(elems));
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                         Ok(None) => {
                             // Re-empuja el handle y rebobina al SocketRead: al despertar lo re-ejecuta.
                             self.push(HeapValue::Int(handle));
-                            self.frames.last_mut().unwrap().ip -= 1;
+                            self.cur.frames.last_mut().unwrap().ip -= 1;
                             let fiber = self.take_current_fiber();
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
@@ -1710,7 +1709,7 @@ impl<'a> Vm<'a> {
                     match crate::builtins::socket_write_nb(handle, &bytes) {
                         Ok(n) if n == bytes.len() => {
                             let elems = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())];
-                            let h = self.heap.allocate(Obj::Array(elems));
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                         Ok(n) => {
@@ -1720,7 +1719,7 @@ impl<'a> Vm<'a> {
                         }
                         Err(e) => {
                             let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
-                            let h = self.heap.allocate(Obj::Array(elems));
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                     }
@@ -1740,7 +1739,7 @@ impl<'a> Vm<'a> {
                         }
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
-                    let h = self.heap.allocate(Obj::Array(elems));
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::TcpAccept => {
@@ -1752,17 +1751,17 @@ impl<'a> Vm<'a> {
                     match crate::builtins::tcp_accept_nb(handle) {
                         Ok(Some(c)) => {
                             let elems = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(c.to_string())];
-                            let h = self.heap.allocate(Obj::Array(elems));
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                         Err(e) => {
                             let elems = vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)];
-                            let h = self.heap.allocate(Obj::Array(elems));
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
                             self.push(HeapValue::Obj(h));
                         }
                         Ok(None) => {
                             self.push(HeapValue::Int(handle));
-                            self.frames.last_mut().unwrap().ip -= 1;
+                            self.cur.frames.last_mut().unwrap().ip -= 1;
                             let fiber = self.take_current_fiber();
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
@@ -1878,7 +1877,7 @@ impl<'a> Vm<'a> {
                     }
                     values.reverse(); // orden de declaración
                     let fields: Vec<(String, HeapValue)> = field_names.into_iter().zip(values).collect();
-                    let h = self.heap.allocate(Obj::Struct(VmStruct { name: sname, fields }));
+                    let h = self.cur.heap.allocate(Obj::Struct(VmStruct { name: sname, fields }));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::MakeEnum(enum_id, tag) => {
@@ -1889,7 +1888,7 @@ impl<'a> Vm<'a> {
                         payload.push(self.pop());
                     }
                     payload.reverse(); // orden de declaración
-                    let h = self.heap.allocate(Obj::Enum(VmEnum { enum_id: *enum_id, tag: *tag, payload }));
+                    let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: *enum_id, tag: *tag, payload }));
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::EnumTagEq(tag) => {
@@ -1920,7 +1919,7 @@ impl<'a> Vm<'a> {
                 }
 
                 OpCode::Call(idx, argc) => {
-                    if self.frames.len() >= MAX_FRAMES {
+                    if self.cur.frames.len() >= MAX_FRAMES {
                         return Err(runtime_error(pos!().0, pos!().1, "desbordamiento de pila (recursión demasiado profunda)"));
                     }
                     let mut locals = self.new_locals(*idx);
@@ -1928,7 +1927,7 @@ impl<'a> Vm<'a> {
                         let v = self.pop();
                         self.put_arg(&mut locals, i, v);
                     }
-                    self.frames.push(CallFrame { function: *idx, ip: 0, locals, upvalues: Vec::new() });
+                    self.cur.frames.push(CallFrame { function: *idx, ip: 0, locals, upvalues: Vec::new() });
                 }
                 // M13.3b: llamada en cola — REUTILIZA el marco actual (no crece la pila de marcos).
                 // En posición de cola, el valor de esta llamada es el de la función actual, así que
@@ -1940,17 +1939,17 @@ impl<'a> Vm<'a> {
                         let v = self.pop();
                         self.put_arg(&mut locals, i, v);
                     }
-                    self.frames[fi].function = *idx;
-                    self.frames[fi].ip = 0;
-                    let old = std::mem::replace(&mut self.frames[fi].locals, locals);
+                    self.cur.frames[fi].function = *idx;
+                    self.cur.frames[fi].ip = 0;
+                    let old = std::mem::replace(&mut self.cur.frames[fi].locals, locals);
                     self.recycle_locals(old); // Opt.2: la llamada en cola reemplaza las locales → recicla
-                    self.frames[fi].upvalues = Vec::new();
+                    self.cur.frames[fi].upvalues = Vec::new();
                 }
 
                 // --- Funciones de primera clase (M4.1) ---
                 OpCode::Function(idx) => self.push(HeapValue::Function(*idx)),
                 OpCode::CallValue(argc) => {
-                    if self.frames.len() >= MAX_FRAMES {
+                    if self.cur.frames.len() >= MAX_FRAMES {
                         return Err(runtime_error(pos!().0, pos!().1, "desbordamiento de pila (recursión demasiado profunda)"));
                     }
                     let mut args_rev = Vec::with_capacity(*argc);
@@ -1959,7 +1958,7 @@ impl<'a> Vm<'a> {
                     }
                     let (fn_idx, upvalues) = match self.pop() {
                         HeapValue::Function(i) => (i, Vec::new()),
-                        HeapValue::Obj(h) => match self.heap.get(h) {
+                        HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Closure(c) => (c.index, c.upvalues.clone()),
                             _ => unreachable!("el checker garantiza una función"),
                         },
@@ -1969,7 +1968,7 @@ impl<'a> Vm<'a> {
                     for (j, val) in args_rev.into_iter().enumerate() {
                         self.put_arg(&mut locals, *argc - 1 - j, val);
                     }
-                    self.frames.push(CallFrame { function: fn_idx, ip: 0, locals, upvalues });
+                    self.cur.frames.push(CallFrame { function: fn_idx, ip: 0, locals, upvalues });
                 }
                 // M13.3b: llamada indirecta en cola — reutiliza el marco actual.
                 OpCode::TailCallValue(argc) => {
@@ -1979,7 +1978,7 @@ impl<'a> Vm<'a> {
                     }
                     let (fn_idx, upvalues) = match self.pop() {
                         HeapValue::Function(i) => (i, Vec::new()),
-                        HeapValue::Obj(h) => match self.heap.get(h) {
+                        HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Closure(c) => (c.index, c.upvalues.clone()),
                             _ => unreachable!("el checker garantiza una función"),
                         },
@@ -1989,11 +1988,11 @@ impl<'a> Vm<'a> {
                     for (j, val) in args_rev.into_iter().enumerate() {
                         self.put_arg(&mut locals, *argc - 1 - j, val);
                     }
-                    self.frames[fi].function = fn_idx;
-                    self.frames[fi].ip = 0;
-                    let old = std::mem::replace(&mut self.frames[fi].locals, locals);
+                    self.cur.frames[fi].function = fn_idx;
+                    self.cur.frames[fi].ip = 0;
+                    let old = std::mem::replace(&mut self.cur.frames[fi].locals, locals);
                     self.recycle_locals(old); // Opt.2
-                    self.frames[fi].upvalues = upvalues;
+                    self.cur.frames[fi].upvalues = upvalues;
                 }
 
                 // --- Closures (M4.2) ---
@@ -2005,24 +2004,24 @@ impl<'a> Vm<'a> {
                     let mut upvalues = Vec::with_capacity(descs.len());
                     for d in &descs {
                         let cell = match d.source {
-                            UpvalueSource::Local(slot) => match &self.frames[fi].locals[slot] {
+                            UpvalueSource::Local(slot) => match &self.cur.frames[fi].locals[slot] {
                                 Local::Boxed(h) => *h,
                                 Local::Plain(_) => unreachable!("un local capturado debe estar boxeado"),
                             },
-                            UpvalueSource::Upvalue(u) => self.frames[fi].upvalues[u],
+                            UpvalueSource::Upvalue(u) => self.cur.frames[fi].upvalues[u],
                         };
                         upvalues.push(cell);
                     }
-                    let h = self.heap.allocate(Obj::Closure(VmClosure { index: *idx, upvalues }));
+                    let h = self.cur.heap.allocate(Obj::Closure(VmClosure { index: *idx, upvalues }));
                     self.push(HeapValue::Obj(h));
                 }
 
                 OpCode::Return => {
                     let result = self.pop();
-                    if let Some(frame) = self.frames.pop() {
+                    if let Some(frame) = self.cur.frames.pop() {
                         self.recycle_locals(frame.locals); // Opt.2: el marco se descarta → recicla sus locales
                     }
-                    if self.frames.is_empty() {
+                    if self.cur.frames.is_empty() {
                         // La fibra terminó: si es main → fin del programa; si es spawn → siguiente fibra.
                         match self.on_fiber_done(result)? {
                             Some(v) => return Ok(Some(v)),
@@ -2043,7 +2042,7 @@ impl<'a> Vm<'a> {
                     // programa; se captura en su `Task` (`Failed`) y se planifica la siguiente. Abortan los
                     // de `main` y los del scheduler (frames vacíos = la fibra ya se aparcó/terminó → el
                     // error es un deadlock, no un fallo de la fibra actual).
-                    if self.frames.is_empty() || self.current_is_main {
+                    if self.cur.frames.is_empty() || self.cur.is_main {
                         return Err(e);
                     }
                     self.fail_current_fiber(e)?;
@@ -2057,14 +2056,8 @@ impl<'a> Vm<'a> {
     /// Empaqueta la fibra en ejecución (vaciando los campos de la VM) para aparcarla o descartarla. M12.3:
     /// además de `frames`/`stack`/`is_main`, lleva su `Task` y su pila de scopes.
     fn take_current_fiber(&mut self) -> Fiber {
-        Fiber {
-            frames: std::mem::take(&mut self.frames),
-            stack: std::mem::take(&mut self.stack),
-            heap: std::mem::take(&mut self.heap), // M38.1b-2: la fibra se lleva su heap
-            is_main: self.current_is_main,
-            task: self.current_task.take(),
-            scopes: std::mem::take(&mut self.scopes),
-        }
+        // M38.3b: la fibra en curso ES `self.cur` → conmutar es un swap (deja una `Fiber` vacía en `cur`).
+        std::mem::take(&mut self.cur)
     }
 
     /// Cesión en `socket_write` (post-M19.4): la escritura llenó el buffer de envío y `remaining` no
@@ -2104,19 +2097,19 @@ impl<'a> Vm<'a> {
     /// fibra `spawn` → escribe el resultado en su `Task` (M12.3), despierta a los que la unen y planifica la
     /// siguiente. Devuelve `Some(v)` si el programa termina, `None` si ya cargó otra fibra.
     fn on_fiber_done(&mut self, result: HeapValue) -> Result<Option<HeapValue>, RuntimeError> {
-        if self.current_is_main {
+        if self.cur.is_main {
             return Ok(Some(result));
         }
-        if let Some(task) = self.current_task.take() {
+        if let Some(task) = self.cur.task.take() {
             // M38.1b-2: el resultado vive en el heap de ESTA fibra (que se descarta al terminar) → se
             // transfiere al heap de la tarea, donde `join` lo recogerá.
             let mut t_heap = std::mem::take(&mut self.shared.tasks[task].heap);
-            let r2 = transfer_value(&self.heap, &mut t_heap, &result, &mut HashMap::new());
+            let r2 = transfer_value(&self.cur.heap, &mut t_heap, &result, &mut HashMap::new());
             self.shared.tasks[task].heap = t_heap;
             self.shared.tasks[task].state = TaskState::Done(r2);
             self.wake_task_waiters(task);
         }
-        self.scopes.clear();
+        self.cur.scopes.clear();
         self.schedule_next(0, 0)?;
         Ok(None)
     }
@@ -2125,20 +2118,20 @@ impl<'a> Vm<'a> {
     /// unen (que lo re-lanzarán) y planifica la siguiente. El error solo se pierde si la tarea no la une
     /// nadie ni la posee un `scope`.
     fn fail_current_fiber(&mut self, e: RuntimeError) -> Result<(), RuntimeError> {
-        if let Some(task) = self.current_task.take() {
+        if let Some(task) = self.cur.task.take() {
             let msg = e.msg.clone(); // solo el mensaje; el join que lo observe le pone su propia posición
             self.shared.tasks[task].state = TaskState::Failed(msg);
             self.wake_task_waiters(task);
         }
         // M12.5: si esta fibra poseía tareas (scopes activos cuyo cuerpo hizo panic), cancélalas en vez de
         // dejarlas huérfanas. (En `main` el programa aborta, así que esto importa para fibras hijas.)
-        let orphans: Vec<usize> = self.scopes.iter().flat_map(|s| s.children.iter().copied()).collect();
+        let orphans: Vec<usize> = self.cur.scopes.iter().flat_map(|s| s.children.iter().copied()).collect();
         for c in orphans {
             self.cancel_task(c);
         }
-        self.frames.clear();
-        self.stack.clear();
-        self.scopes.clear();
+        self.cur.frames.clear();
+        self.cur.stack.clear();
+        self.cur.scopes.clear();
         self.schedule_next(e.line, e.col)
     }
 
@@ -2147,12 +2140,7 @@ impl<'a> Vm<'a> {
     fn schedule_next(&mut self, line: usize, col: usize) -> Result<(), RuntimeError> {
         loop {
             if let Some(next) = self.shared.ready.pop_front() {
-                self.frames = next.frames;
-                self.stack = next.stack;
-                self.heap = next.heap; // M38.1b-2: restaura el heap de la fibra que entra
-                self.current_is_main = next.is_main;
-                self.current_task = next.task;
-                self.scopes = next.scopes;
+                self.cur = next; // M38.3b: cargar la siguiente fibra es un move
                 return Ok(());
             }
             // Nadie listo. Si hay fibras esperando E/S de red, espera readiness y reintenta el `pop`.
@@ -2294,7 +2282,7 @@ impl<'a> Vm<'a> {
         let mut remap = HashMap::new();
         let mut vals2 = Vec::with_capacity(values.len());
         for v in &values {
-            vals2.push(transfer_value(&self.heap, &mut fiber.heap, v, &mut remap));
+            vals2.push(transfer_value(&self.cur.heap, &mut fiber.heap, v, &mut remap));
         }
         let arr = fiber.heap.allocate(Obj::Array(vals2));
         fiber.stack.push(HeapValue::Obj(arr));
@@ -2336,8 +2324,8 @@ impl<'a> Vm<'a> {
     fn collect(&mut self) {
         // M37.1: cronometramos la pausa stop-the-world para medir el objetivo de M37 (pausas acotadas).
         let inicio = std::time::Instant::now();
-        // Reunimos las raíces (handles) primero, para no tomar prestado `self.stack`
-        // y `self.heap` a la vez. M12.1: además de la fibra en ejecución, rooteamos TODAS las fibras
+        // Reunimos las raíces (handles) primero, para no tomar prestado `self.cur.stack`
+        // y `self.cur.heap` a la vez. M12.1: además de la fibra en ejecución, rooteamos TODAS las fibras
         // (listas y bloqueadas) y los canales que esperan.
         // M38.1b-2: **heap-por-fibra**. Este `collect` recolecta SOLO el heap de la fibra en curso, cuyas
         // únicas raíces son sus propios marcos y pila (invariante de aislamiento: ningún objeto de este
@@ -2345,13 +2333,13 @@ impl<'a> Vm<'a> {
         // fibras tienen su propio heap (se recolecta cuando cada una corre); los valores en tránsito viven
         // en el heap del canal/tarea. Así la pausa la acota el tamaño del heap de una sola fibra.
         let mut roots: Vec<Handle> = Vec::new();
-        gather_roots(&self.frames, &self.stack, &mut roots);
+        gather_roots(&self.cur.frames, &self.cur.stack, &mut roots);
 
         for h in roots {
-            self.heap.mark(h);
+            self.cur.heap.mark(h);
         }
-        self.heap.trace();
-        self.heap.sweep();
+        self.cur.heap.trace();
+        self.cur.heap.sweep();
         // M37.1: registra la pausa (una sola recolección stop-the-world).
         let dt = inicio.elapsed().as_nanos();
         self.gc_count += 1;
@@ -2389,7 +2377,7 @@ impl<'a> Vm<'a> {
         locals.clear();
         for s in 0..n {
             if self.program.functions[fn_idx].captured.get(s).copied().unwrap_or(false) {
-                let cell = self.heap.allocate(Obj::Cell(HeapValue::Unit));
+                let cell = self.cur.heap.allocate(Obj::Cell(HeapValue::Unit));
                 locals.push(Local::Boxed(cell));
             } else {
                 locals.push(Local::Plain(HeapValue::Unit));
@@ -2415,31 +2403,31 @@ impl<'a> Vm<'a> {
     }
 
     fn get_local(&self, fi: usize, slot: usize) -> HeapValue {
-        match &self.frames[fi].locals[slot] {
+        match &self.cur.frames[fi].locals[slot] {
             Local::Plain(v) => v.clone(),
             Local::Boxed(h) => self.cell_get(*h),
         }
     }
 
     fn set_local(&mut self, fi: usize, slot: usize, v: HeapValue) {
-        match &self.frames[fi].locals[slot] {
+        match &self.cur.frames[fi].locals[slot] {
             Local::Boxed(h) => {
                 let h = *h;
                 self.cell_set(h, v);
             }
-            Local::Plain(_) => self.frames[fi].locals[slot] = Local::Plain(v),
+            Local::Plain(_) => self.cur.frames[fi].locals[slot] = Local::Plain(v),
         }
     }
 
     fn cell_get(&self, h: Handle) -> HeapValue {
-        match self.heap.get(h) {
+        match self.cur.heap.get(h) {
             Obj::Cell(v) => v.clone(),
             _ => unreachable!("se esperaba una celda"),
         }
     }
 
     fn cell_set(&mut self, h: Handle, v: HeapValue) {
-        match self.heap.get_mut(h) {
+        match self.cur.heap.get_mut(h) {
             Obj::Cell(slot) => *slot = v,
             _ => unreachable!("se esperaba una celda"),
         }
@@ -2448,35 +2436,35 @@ impl<'a> Vm<'a> {
     // ----- Acceso a objetos del heap -----
 
     fn as_array(&self, h: Handle) -> &Vec<HeapValue> {
-        match self.heap.get(h) {
+        match self.cur.heap.get(h) {
             Obj::Array(v) => v,
             _ => unreachable!("el checker garantiza un arreglo"),
         }
     }
 
     fn as_array_mut(&mut self, h: Handle) -> &mut Vec<HeapValue> {
-        match self.heap.get_mut(h) {
+        match self.cur.heap.get_mut(h) {
             Obj::Array(v) => v,
             _ => unreachable!("el checker garantiza un arreglo"),
         }
     }
 
     fn as_struct(&self, h: Handle) -> &VmStruct {
-        match self.heap.get(h) {
+        match self.cur.heap.get(h) {
             Obj::Struct(s) => s,
             _ => unreachable!("el checker garantiza un struct"),
         }
     }
 
     fn as_struct_mut(&mut self, h: Handle) -> &mut VmStruct {
-        match self.heap.get_mut(h) {
+        match self.cur.heap.get_mut(h) {
             Obj::Struct(s) => s,
             _ => unreachable!("el checker garantiza un struct"),
         }
     }
 
     fn as_enum(&self, h: Handle) -> &VmEnum {
-        match self.heap.get(h) {
+        match self.cur.heap.get(h) {
             Obj::Enum(e) => e,
             _ => unreachable!("el checker garantiza un enum"),
         }
@@ -2485,15 +2473,15 @@ impl<'a> Vm<'a> {
     // ----- Pila de operandos -----
 
     fn push(&mut self, v: HeapValue) {
-        self.stack.push(v);
+        self.cur.stack.push(v);
     }
 
     fn pop(&mut self) -> HeapValue {
-        self.stack.pop().expect("pila vacía: bytecode mal formado")
+        self.cur.stack.pop().expect("pila vacía: bytecode mal formado")
     }
 
     fn peek(&self) -> &HeapValue {
-        self.stack.last().expect("pila vacía: bytecode mal formado")
+        self.cur.stack.last().expect("pila vacía: bytecode mal formado")
     }
 
     fn pop_int(&mut self) -> i64 {
@@ -2534,8 +2522,8 @@ impl<'a> Vm<'a> {
         use OpCode::*;
         // Igualdad: estructural, mirando el heap.
         match op {
-            Equal => return Ok(Bool(values_equal(&self.heap, &left, &right))),
-            NotEqual => return Ok(Bool(!values_equal(&self.heap, &left, &right))),
+            Equal => return Ok(Bool(values_equal(&self.cur.heap, &left, &right))),
+            NotEqual => return Ok(Bool(!values_equal(&self.cur.heap, &left, &right))),
             _ => {}
         }
         Ok(match (op, left, right) {
@@ -3350,9 +3338,9 @@ mod tests {
         let interp = crate::interpreter::run(&prog).expect("intérprete ok");
         let compiled = compile_program(&prog).expect("compila");
         let mut vm = Vm::new(&compiled);
-        vm.heap.stress = true;
+        vm.cur.heap.stress = true;
         let result = vm.run().expect("vm ok");
-        let vm_result = to_value(&vm.heap, &compiled.enums, &result);
+        let vm_result = to_value(&vm.cur.heap, &compiled.enums, &result);
         assert_eq!(interp, vm_result, "VM (estrés) y intérprete difieren en:\n{}", src);
     }
 
@@ -4371,7 +4359,7 @@ mod tests {
         let mut vm = Vm::new(&compiled);
         vm.run().expect("vm ok");
         // Sin GC habría ~550 objetos vivos; con barrido, muy pocos.
-        assert!(vm.heap.live() < 80, "el heap no se acotó: {} objetos vivos", vm.heap.live());
+        assert!(vm.cur.heap.live() < 80, "el heap no se acotó: {} objetos vivos", vm.cur.heap.live());
     }
 
     // ----- M5.3: match en la VM (oráculo VM<->intérprete) -----
@@ -4609,7 +4597,7 @@ mod tests {
         let mut vm = Vm::new(&compiled);
         vm.run().expect("vm ok");
         // Sin GC habría ~200 objetos vivos; con mark-and-sweep, muy pocos.
-        assert!(vm.heap.live() < 80, "el heap no se acotó: {} objetos vivos", vm.heap.live());
+        assert!(vm.cur.heap.live() < 80, "el heap no se acotó: {} objetos vivos", vm.cur.heap.live());
     }
 
     // ----- M7.1: UFCS (azúcar de front-end; ambos motores ven la llamada ya bajada) -----

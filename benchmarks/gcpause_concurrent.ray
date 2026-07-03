@@ -1,0 +1,42 @@
+// M38.1b-2 — pausas del GC con heap-POR-FIBRA. Gemelo concurrente de `gcpause.ray`: en vez de UN actor
+// con un heap grande (300k vivos → pausa ~10 ms), reparte la misma carga en 60 fibras, cada una con un
+// heap moderado (~5000 vivos). Con heap-por-fibra, cada GC recolecta el heap de UNA fibra → la pausa la
+// acota ese heap pequeño (no el total). Mide con:
+//   RAYLANG_GC_STATS=1 ./target/release/raylang --vm benchmarks/gcpause_concurrent.ray
+// Espera-se pausa_max << los ~10 ms de gcpause.ray (el objetivo <1 ms de M37, por construcción).
+fn worker() -> int {
+    // Heap moderado vivo por fibra + churn para forzar GCs sobre ese heap pequeño.
+    var vivo: [[int]] = [];
+    var i = 0;
+    while (i < 5000) {
+        var a: [int] = [];
+        push(a, i);
+        push(vivo, a);
+        i = i + 1;
+    }
+    var j = 0;
+    var s = 0;
+    while (j < 30000) {
+        var t: [int] = [];
+        push(t, j);
+        s = s + t[0];
+        j = j + 1;
+    }
+    s % 100 + len(vivo) - len(vivo)
+}
+
+fn main() -> int {
+    var tasks: [Task<int>] = [];
+    var k = 0;
+    while (k < 60) {
+        push(tasks, spawn(fn() -> int { worker() }));
+        k = k + 1;
+    }
+    var sum = 0;
+    var j = 0;
+    while (j < len(tasks)) {
+        sum = sum + join(tasks[j]);
+        j = j + 1;
+    }
+    sum % 1000
+}

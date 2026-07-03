@@ -3934,6 +3934,15 @@ pieza de más riesgo (un barrier omitido = objeto vivo recolectado = corrupción
 plena se **co-diseña con M38**; entretanto se recortan costes de la recolección stop-the-world que valen bajo
 cualquiera de los dos futuros (M37.2+).
 
+**M37 CERRADO por el heap-por-fibra de M38.1b** (§46.5). Medido (release, M3 Pro) con `gcpause.ray`
+(1 actor, heap grande) vs. `gcpause_concurrent.ray` (60 fibras, la misma carga repartida): la pausa máxima
+del GC cae de **10,5 ms** (un heap de 300k) a **0,12 ms** (cada GC recolecta el heap de una fibra pequeña),
+un **87× menos** y muy por debajo del objetivo **<1 ms** — **por construcción**, sin marcado incremental ni
+*write barrier* (la pieza de más riesgo, así evitada). Es la ruta que el plan anticipó: acotar la pausa vía
+heaps por actor en vez de un GC incremental. (Un solo actor con un heap enorme sigue teniendo una pausa
+grande —inherente—; lo que M38.1 garantiza es que **ninguna colección detiene a los demás actores** y que
+cada heap está acotado.)
+
 
 ## 28. M19 — La capa web (servidor HTTP, SSE, WebSockets, TLS)
 
@@ -6005,9 +6014,25 @@ VM, como desde M12.)
     colas y los de `Done` de las tareas. **Behavior-preserving**: heap único aún, toda la batería de
     concurrencia de M12 (23 tests) pasa idéntica. Prerrequisito para el split (un handle de canal ya no
     vive en el heap de objetos).
-  - **M38.1b-2 (pendiente)**: dividir el heap de objetos **por fibra** (mover `heap` de `Vm` a `Fiber`,
-    save/restore en la conmutación) + cablear `transfer_value` en los cruces (capturas de spawn, send→cola,
-    cola→recv). `collect` pasa a recolectar solo el heap de la fibra en curso → acota la pausa.
+  - **M38.1b-2 HECHO**: **heap de objetos por fibra**. `Fiber` gana `heap` (`Vm.heap` = el de la fibra en
+    curso; save/restore en `take_current_fiber`/`schedule_next`); cada `VmChannel`/`VmTask` gana su propio
+    heap para los valores **en tránsito**/de `Done` (que no pertenecen a ninguna fibra). `transfer_value` se
+    cablea en TODOS los cruces: capturas de `spawn` (spawner→hija), `send`→heap del canal, heap del canal→
+    `recv`, emisor bloqueado→receptor, `Done`→heap de la tarea→`join`, y `wake_recv`/`finish_parked_write`
+    (alojan en el heap de la fibra que despiertan). El heap del canal se **limpia al vaciarse la cola**.
+    **`collect` se simplifica**: recolecta SOLO el heap de la fibra en curso, cuyas únicas raíces son sus
+    marcos/pila (invariante de aislamiento) → **la pausa la acota el heap de una fibra**, no el total.
+    Gotcha resuelto: el arreglo de canales de un `select` aparcado vive en el heap de LA FIBRA APARCADA
+    (no en el de la que dispara el wake). Verificado: 442 lib (single-fiber idéntico) + 23 concurrency_cli.
+    **Consecuencia semántica (data-race freedom por construcción)**: `spawn` deep-copia las capturas → **NO
+    hay estado mutable compartido entre fibras**. El slice CSP de M12 compartía el heap (dos fibras podían
+    mutar el mismo objeto capturado); M38 lo elimina — es la garantía del modelo de actores, pero un cambio
+    de comportamiento. Lo destapó el webserver con métricas compartidas (`metrics_server_demo.ray`): su
+    `Registry` compartido entre los handlers dejó de acumular. Se **migró al patrón de actores** (un actor
+    de métricas que posee el `Registry` y recibe updates por un canal; `GET /metrics` le pide el render por
+    un canal de respuesta) → cuentas correctas por el orden FIFO. Los **canales SÍ se comparten** (su id es
+    un valor primitivo que se copia tal cual al transferir) → son el medio de comunicación entre actores.
+    **Cierra M37**: pausa máxima del GC 10,5 ms → 0,12 ms (§27.5), <1 ms por construcción.
 - **M38.2 — move/copy-on-send**: `send`/`recv` transfieren el subgrafo entre heaps (empezar con deep-copy
   siempre —correcto y simple— y medir si el move por unicidad paga). El canal pasa a estructura del host.
 - **M38.3 — pool de hilos M:N**: repartir fibras sobre N hilos + work-stealing; sincronizar las colas

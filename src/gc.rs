@@ -108,6 +108,11 @@ pub struct VmChannel {
     pub queue: VecDeque<HeapValue>,
     pub closed: bool,
     pub cap: Option<usize>,
+    /// M38.1b-2: heap propio del canal para los valores **en tránsito** (los de `queue`). Un valor no
+    /// pertenece a ninguna fibra entre `send` y `recv`; se **transfiere** al heap del canal en `send` y de
+    /// ahí al heap del receptor en `recv`. Se **limpia cuando la cola se vacía** (nadie referencia sus
+    /// objetos entonces) → acota su tamaño sin un GC propio.
+    pub heap: Heap,
 }
 
 /// El estado de una `Task<T>` (M12.3, structured concurrency):
@@ -124,6 +129,10 @@ pub enum TaskState {
 /// traza el valor de `Done` (las fibras que esperan a la tarea viven en el scheduler de la VM).
 pub struct VmTask {
     pub state: TaskState,
+    /// M38.1b-2: heap propio de la tarea para su valor de `Done` (producido por la fibra hija, cuyo heap
+    /// se descarta al terminar; se **transfiere** aquí en `on_fiber_done` y de aquí al heap del que la
+    /// une en `join`).
+    pub heap: Heap,
 }
 
 /// Un objeto del heap. Las formas compuestas que el GC gestiona.

@@ -104,6 +104,10 @@ struct CallFrame {
 struct Fiber {
     frames: Vec<CallFrame>,
     stack: Vec<HeapValue>,
+    /// M38.1b-2: el **heap propio** de la fibra (aislamiento por actores, §46.2). `Vm.heap` es el de la
+    /// fibra en curso; al conmutar se salva aquí y se restaura el de la siguiente. Un objeto de este heap
+    /// solo lo alcanzan los marcos/pila de esta fibra (invariante: sin handles cruzados entre heaps).
+    heap: Heap,
     is_main: bool,
     /// M12.3: la `Task` que esta fibra debe rellenar al terminar (`None` para `main`).
     task: Option<Handle>,
@@ -723,14 +727,21 @@ impl<'a> Vm<'a> {
                     };
                     // M38.1b: la tarea vive en el almacén del host, referenciada por id.
                     let task = self.tasks.len();
-                    self.tasks.push(VmTask { state: TaskState::Pending });
+                    self.tasks.push(VmTask { state: TaskState::Pending, heap: Heap::new() });
                     if let Some(scope) = self.scopes.last_mut() {
                         scope.children.push(task);
                     }
+                    // M38.1b-2: la fibra hija tiene su PROPIO heap; las capturas (upvalues) del closure
+                    // viven en el heap del spawner → se transfieren al heap nuevo (aislamiento por actores).
+                    let mut new_heap = Heap::new();
+                    let mut remap = HashMap::new();
+                    let upvalues: Vec<Handle> = upvalues.iter()
+                        .map(|&up| transfer_obj(&self.heap, &mut new_heap, up, &mut remap))
+                        .collect();
                     let locals = self.new_locals(fn_idx);
                     let frame = CallFrame { function: fn_idx, ip: 0, locals, upvalues };
                     self.ready.push_back(Fiber {
-                        frames: vec![frame], stack: Vec::new(), is_main: false,
+                        frames: vec![frame], stack: Vec::new(), heap: new_heap, is_main: false,
                         task: Some(task), scopes: Vec::new(),
                     });
                     self.push(HeapValue::Task(task)); // el Task<T> es el resultado de spawn
@@ -738,7 +749,7 @@ impl<'a> Vm<'a> {
                 OpCode::ChannelNew => {
                     // channel() sin argumentos → canal NO acotado (cap = None). M38.1b: en el host.
                     let id = self.channels.len();
-                    self.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: None });
+                    self.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: None, heap: Heap::new() });
                     self.push(HeapValue::Channel(id));
                 }
                 OpCode::ChannelNewBounded => {
@@ -751,7 +762,7 @@ impl<'a> Vm<'a> {
                         return Err(runtime_error(pos!().0, pos!().1, "la capacidad de un canal no puede ser negativa"));
                     }
                     let id = self.channels.len();
-                    self.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: Some(n as usize) });
+                    self.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: Some(n as usize), heap: Heap::new() });
                     self.push(HeapValue::Channel(id));
                 }
                 OpCode::ChanSend => {
@@ -771,8 +782,12 @@ impl<'a> Vm<'a> {
                         self.wake_recv(parked.fiber, vec![v]);
                         self.push(HeapValue::Unit);
                     } else if cap.is_none() || len < cap.unwrap() {
-                        // (2) Hay hueco (no acotado, o len < cap) → encola y sigue.
-                        self.channels[h].queue.push_back(v);
+                        // (2) Hay hueco (no acotado, o len < cap) → encola y sigue. M38.1b-2: el valor se
+                        // transfiere del heap de la fibra al heap del canal (en tránsito).
+                        let mut ch_heap = std::mem::take(&mut self.channels[h].heap);
+                        let v2 = transfer_value(&self.heap, &mut ch_heap, &v, &mut HashMap::new());
+                        self.channels[h].heap = ch_heap;
+                        self.channels[h].queue.push_back(v2);
                         self.wake_select_waiters(h); // M12.4: el canal ya tiene valor → listo para un select
                         self.push(HeapValue::Unit);
                     } else {
@@ -793,8 +808,15 @@ impl<'a> Vm<'a> {
                     // canal, su valor entra a la cola (ya hay sitio) y se le despierta.
                     let from_queue = self.channels[h].queue.pop_front();
                     if let Some(v) = from_queue {
+                        // M38.1b-2: el valor viene del heap del canal → se transfiere al heap del receptor.
+                        // Si la cola queda vacía, el heap del canal se limpia (nadie referencia sus objetos).
+                        let ch_heap = std::mem::take(&mut self.channels[h].heap);
+                        let v2 = transfer_value(&ch_heap, &mut self.heap, &v, &mut HashMap::new());
+                        if !self.channels[h].queue.is_empty() {
+                            self.channels[h].heap = ch_heap; // aún hay valores en tránsito → conserva el heap
+                        } // si no, `ch_heap` se descarta (limpieza)
                         self.wake_blocked_sender(h);
-                        let arr = self.heap.allocate(Obj::Array(vec![v]));
+                        let arr = self.heap.allocate(Obj::Array(vec![v2]));
                         self.push(HeapValue::Obj(arr));
                         return Ok(None);
                     }
@@ -808,8 +830,11 @@ impl<'a> Vm<'a> {
                             Waiting::Send(sv) => sv,
                             _ => unreachable!(),
                         };
+                        // M38.1b-2: el valor del emisor bloqueado vive en el heap de SU fibra (aparcada) →
+                        // se transfiere al heap del receptor antes de despertar al emisor.
+                        let sv2 = transfer_value(&parked.fiber.heap, &mut self.heap, &sv, &mut HashMap::new());
                         self.wake_sender(parked.fiber);
-                        let arr = self.heap.allocate(Obj::Array(vec![sv]));
+                        let arr = self.heap.allocate(Obj::Array(vec![sv2]));
                         self.push(HeapValue::Obj(arr));
                         return Ok(None);
                     }
@@ -835,7 +860,13 @@ impl<'a> Vm<'a> {
                         TaskState::Pending => None,
                     };
                     match outcome {
-                        Some(Ok(v)) => self.push(v),
+                        Some(Ok(v)) => {
+                            // M38.1b-2: el valor de Done vive en el heap de la tarea → al heap del que la une.
+                            let t_heap = std::mem::take(&mut self.tasks[t].heap);
+                            let v2 = transfer_value(&t_heap, &mut self.heap, &v, &mut HashMap::new());
+                            self.tasks[t].heap = t_heap;
+                            self.push(v2);
+                        }
                         Some(Err(msg)) => return Err(runtime_error(pos!().0, pos!().1, &msg)),
                         None => {
                             // Bloquear: re-empuja el id (lo sacamos arriba) y rebobina el ip al
@@ -2027,6 +2058,7 @@ impl<'a> Vm<'a> {
         Fiber {
             frames: std::mem::take(&mut self.frames),
             stack: std::mem::take(&mut self.stack),
+            heap: std::mem::take(&mut self.heap), // M38.1b-2: la fibra se lleva su heap
             is_main: self.current_is_main,
             task: self.current_task.take(),
             scopes: std::mem::take(&mut self.scopes),
@@ -2060,7 +2092,8 @@ impl<'a> Vm<'a> {
             Ok(()) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
             Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
         };
-        let h = self.heap.allocate(Obj::Array(elems));
+        // M38.1b-2: el resultado se aloja en el heap de la fibra que se despierta (no el de la actual).
+        let h = fiber.heap.allocate(Obj::Array(elems));
         fiber.stack.push(HeapValue::Obj(h));
         self.ready.push_back(fiber);
     }
@@ -2073,7 +2106,12 @@ impl<'a> Vm<'a> {
             return Ok(Some(result));
         }
         if let Some(task) = self.current_task.take() {
-            self.tasks[task].state = TaskState::Done(result);
+            // M38.1b-2: el resultado vive en el heap de ESTA fibra (que se descarta al terminar) → se
+            // transfiere al heap de la tarea, donde `join` lo recogerá.
+            let mut t_heap = std::mem::take(&mut self.tasks[task].heap);
+            let r2 = transfer_value(&self.heap, &mut t_heap, &result, &mut HashMap::new());
+            self.tasks[task].heap = t_heap;
+            self.tasks[task].state = TaskState::Done(r2);
             self.wake_task_waiters(task);
         }
         self.scopes.clear();
@@ -2109,6 +2147,7 @@ impl<'a> Vm<'a> {
             if let Some(next) = self.ready.pop_front() {
                 self.frames = next.frames;
                 self.stack = next.stack;
+                self.heap = next.heap; // M38.1b-2: restaura el heap de la fibra que entra
                 self.current_is_main = next.is_main;
                 self.current_task = next.task;
                 self.scopes = next.scopes;
@@ -2192,9 +2231,10 @@ impl<'a> Vm<'a> {
         while i < self.parked.len() {
             let on = self.parked[i].on;
             let is_select = matches!(self.parked[i].waiting, Waiting::Select);
-            // M38.1b: el `on` de un Select es el handle del arreglo (heap de objetos); sus elementos son
-            // ahora `HeapValue::Channel(id)`.
-            let contains = is_select && match self.heap.get(on) {
+            // M38.1b-2: el `on` de un Select es el handle del arreglo de canales, que vive en el heap de LA
+            // FIBRA APARCADA (no en el de la fibra actual que dispara el wake). Sus elementos son
+            // `HeapValue::Channel(id)`.
+            let contains = is_select && match self.parked[i].fiber.heap.get(on) {
                 Obj::Array(elems) => elems.iter().any(|v| matches!(v, HeapValue::Channel(id) if *id == chan)),
                 _ => false,
             };
@@ -2247,7 +2287,14 @@ impl<'a> Vm<'a> {
     /// primitivo `__recv`) en su pila de operandos y la encola como lista. `[v]` la entrega un `send`; `[]`
     /// (vacío → `None`) la entrega un `close`.
     fn wake_recv(&mut self, mut fiber: Fiber, values: Vec<HeapValue>) {
-        let arr = self.heap.allocate(Obj::Array(values));
+        // M38.1b-2: los `values` vienen del heap de la fibra ACTUAL (el emisor en un rendezvous); se
+        // transfieren al heap de la fibra que se despierta (el receptor) antes de alojar el `[T]` ahí.
+        let mut remap = HashMap::new();
+        let mut vals2 = Vec::with_capacity(values.len());
+        for v in &values {
+            vals2.push(transfer_value(&self.heap, &mut fiber.heap, v, &mut remap));
+        }
+        let arr = fiber.heap.allocate(Obj::Array(vals2));
         fiber.stack.push(HeapValue::Obj(arr));
         self.ready.push_back(fiber);
     }
@@ -2271,7 +2318,11 @@ impl<'a> Vm<'a> {
                 Waiting::Send(sv) => sv,
                 _ => unreachable!(),
             };
-            self.channels[chan].queue.push_back(sv);
+            // M38.1b-2: el valor del emisor (heap de su fibra) entra a la cola → al heap del canal.
+            let mut ch_heap = std::mem::take(&mut self.channels[chan].heap);
+            let sv2 = transfer_value(&parked.fiber.heap, &mut ch_heap, &sv, &mut HashMap::new());
+            self.channels[chan].heap = ch_heap;
+            self.channels[chan].queue.push_back(sv2);
             self.wake_sender(parked.fiber);
         }
     }
@@ -2286,41 +2337,13 @@ impl<'a> Vm<'a> {
         // Reunimos las raíces (handles) primero, para no tomar prestado `self.stack`
         // y `self.heap` a la vez. M12.1: además de la fibra en ejecución, rooteamos TODAS las fibras
         // (listas y bloqueadas) y los canales que esperan.
+        // M38.1b-2: **heap-por-fibra**. Este `collect` recolecta SOLO el heap de la fibra en curso, cuyas
+        // únicas raíces son sus propios marcos y pila (invariante de aislamiento: ningún objeto de este
+        // heap lo alcanza otra fibra ni un canal/tarea — los valores que cruzan se TRANSFIEREN). Las demás
+        // fibras tienen su propio heap (se recolecta cuando cada una corre); los valores en tránsito viven
+        // en el heap del canal/tarea. Así la pausa la acota el tamaño del heap de una sola fibra.
         let mut roots: Vec<Handle> = Vec::new();
         gather_roots(&self.frames, &self.stack, &mut roots);
-        // M38.1b: current_task y scopes.children son ids de tareas del host, no handles del heap.
-        for f in &self.ready {
-            gather_fiber_roots(f, &mut roots);
-        }
-        // M15.5: las fibras aparcadas esperando E/S también deben sobrevivir al GC.
-        for p in &self.io_parked {
-            gather_fiber_roots(&p.fiber, &mut roots);
-        }
-        for p in &self.parked {
-            // M38.1b: el `on` es un handle del heap SOLO para Select (el arreglo de canales); para
-            // Recv/Send/Join es un id de canal/tarea del host → no se rootea como handle.
-            if matches!(p.waiting, Waiting::Select) {
-                roots.push(p.on);
-            }
-            // M12.2: un emisor bloqueado sostiene un valor pendiente que aún no entró al canal → es raíz.
-            if let Waiting::Send(v) = &p.waiting {
-                roots.extend(v.handle()); // `Option<Handle>` es iterable: añade el handle si lo hay
-            }
-            gather_fiber_roots(&p.fiber, &mut roots);
-        }
-        // M38.1b: raíces de los almacenes del host — los valores EN TRÁNSITO en las colas de los canales y
-        // los valores de `Done` de las tareas viven en el heap de objetos y solo los alcanzan estos
-        // almacenes (ya no son objetos del heap trazables por el GC).
-        for ch in &self.channels {
-            for v in &ch.queue {
-                roots.extend(v.handle());
-            }
-        }
-        for t in &self.tasks {
-            if let TaskState::Done(v) = &t.state {
-                roots.extend(v.handle());
-            }
-        }
 
         for h in roots {
             self.heap.mark(h);
@@ -2878,11 +2901,8 @@ fn gather_roots(frames: &[CallFrame], stack: &[HeapValue], roots: &mut Vec<Handl
 
 /// Reúne las raíces de una fibra suspendida o lista (M12.3): su pila/marcos, su `Task` y los hijos de sus
 /// scopes activos (las tareas que aún no ha unido).
-fn gather_fiber_roots(f: &Fiber, roots: &mut Vec<Handle>) {
-    gather_roots(&f.frames, &f.stack, roots);
-    // M38.1b: `f.task` y `scopes.children` son ids de tareas del host, NO handles del heap → no se rootean
-    // aquí. Los valores de `Done` de las tareas los rootea `collect` desde `self.tasks`.
-}
+// M38.1b-2: `gather_fiber_roots` se eliminó — con heap-por-fibra, `collect` solo rootea el heap de la
+// fibra en curso (sus marcos/pila); las demás fibras recolectan su propio heap cuando corren.
 
 /// Convierte un valor de la VM en una clave de Map (M13.1). El checker garantiza el tipo.
 fn heap_to_key(v: &HeapValue) -> MapKey {

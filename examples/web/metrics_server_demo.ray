@@ -1,14 +1,41 @@
-// Servidor con un endpoint `/metrics` real (M21.3): monta `metrics.ray` sobre `webserver.ray`. Un
-// `Registry` compartido se captura en el handler (closure); cada petición incrementa un counter por
-// (método, ruta) y observa una duración en un histograma, y `GET /metrics` devuelve el registro en el
-// formato de exposición de Prometheus (text/plain) → escrapeable por un Prometheus real. **Solo VM**
-// (servidor concurrente). Lo prueba `tests/metrics_server_cli.rs`.
+// Servidor con un endpoint `/metrics` real (M21.3), en el modelo de ACTORES (M38): monta `metrics.ray`
+// sobre `webserver.ray`. Como el webserver lanza una **fibra por conexión** y M38 aísla los heaps (sin
+// estado mutable compartido entre fibras — data-race freedom por construcción), el `Registry` NO se
+// comparte: vive en un **actor de métricas** (una fibra que lo posee) y las peticiones le envían updates
+// por un **canal**. `GET /metrics` le pide el render con un canal de respuesta. **Solo VM** (concurrente).
+// Lo prueba `tests/metrics_server_cli.rs`.
 //
 //   cargo run -- --vm examples/web/metrics_server_demo.ray
 //   curl 127.0.0.1:8080/ ; curl 127.0.0.1:8080/metrics
 
 from webserver import serve, Request, Response, text, not_found;
 from metrics import registry, register_counter, register_histogram, inc, observe, render, labels2, Registry;
+
+// Los mensajes al actor de métricas. `Render` lleva un canal por el que el actor devuelve el texto
+// (enviar un canal dentro del mensaje funciona: su id es un valor primitivo, se comparte al transferir).
+enum MetricMsg {
+    Inc(string, Map<string, string>),   // nombre del counter, etiquetas
+    Observe(string, float),             // nombre del histograma, valor
+    Render(Channel<string>),            // canal de respuesta con el texto renderizado
+}
+
+// El actor: posee el `Registry` y lo muta/lee SOLO él, procesando mensajes en orden (FIFO → las cuentas
+// son deterministas: un `Render` ve todos los `Inc`/`Observe` encolados antes que él).
+fn metrics_actor(reg: Registry, ch: Channel<MetricMsg>) {
+    var running = true;
+    while (running) {
+        match (recv(ch)) {
+            Option.Some(msg) => {
+                match (msg) {
+                    MetricMsg.Inc(n, l) => inc(reg, n, l),
+                    MetricMsg.Observe(n, v) => observe(reg, n, v),
+                    MetricMsg.Render(reply) => send(reply, render(reg)),
+                }
+            },
+            Option.None => { running = false; },   // canal cerrado
+        }
+    }
+}
 
 // Respuesta /metrics con el Content-Type que espera Prometheus.
 fn metrics_response(cuerpo: string) -> Response {
@@ -22,13 +49,24 @@ fn main() -> int {
     register_counter(reg, "http_requests_total", "Total de peticiones HTTP por metodo y ruta");
     register_histogram(reg, "http_request_duracion_segundos", "Duracion de la peticion (simulada)", [0.005, 0.01, 0.05]);
 
+    // El canal del actor de métricas (su id lo capturan todos los handlers → le envían a TODOS al mismo).
+    let mch: Channel<MetricMsg> = channel();
+    spawn(fn() { metrics_actor(reg, mch); });
+
     let r = serve("127.0.0.1", 8080, fn(req: Request) -> Response {
         if (req.path == "/metrics") {
-            // El propio /metrics no se contabiliza (convención: el scrape no infla las métricas).
-            metrics_response(render(reg))
+            // Pide el render al actor por un canal de respuesta (todos los updates previos ya están
+            // encolados antes que este Render → cuentas correctas por el orden FIFO).
+            let reply: Channel<string> = channel();
+            send(mch, MetricMsg.Render(reply));
+            match (recv(reply)) {
+                Option.Some(s) => metrics_response(s),
+                Option.None => metrics_response(""),
+            }
         } else {
-            inc(reg, "http_requests_total", labels2("method", req.method, "path", req.path));
-            observe(reg, "http_request_duracion_segundos", 0.008); // duración simulada (cae en le≥0.01)
+            // El propio /metrics no se contabiliza (convención: el scrape no infla las métricas).
+            send(mch, MetricMsg.Inc("http_requests_total", labels2("method", req.method, "path", req.path)));
+            send(mch, MetricMsg.Observe("http_request_duracion_segundos", 0.008)); // duración simulada
             if (req.path == "/") {
                 text(200, "hola desde raylang")
             } else {

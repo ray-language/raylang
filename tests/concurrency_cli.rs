@@ -21,6 +21,11 @@ fn run(name: &str, src: &str, vm: bool) -> (String, String, i32) {
 
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
     cmd.arg(if vm { "--vm" } else { "--interp" });
+    // M38.4: el default de la VM es multicore (orden de fibras NO determinista); estas pruebas comparan
+    // contra salida EXACTA (orden FIFO), así que fuerzan el scheduler M:1 reproducible con `--deterministic`.
+    if vm {
+        cmd.arg("--deterministic");
+    }
     let out = cmd.arg(&path).output().expect("lanza raylang");
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),

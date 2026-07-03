@@ -70,7 +70,7 @@ raylang {v} — lenguaje de programación
 Uso: ray <subcomando> [opciones]
 
   new <nombre>      crea un proyecto nuevo (ray.toml + src/main.ray)
-  run [archivo]     ejecuta (por defecto src/main.ray) [--interp] [--fuel N] [--heap N] [args...]
+  run [archivo]     ejecuta (por defecto src/main.ray) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   build [archivo]   chequea y compila sin ejecutar (0 ok / 65 error)
   test [archivo]    corre las funciones @test [filtro]
   fetch             descarga las dependencias de ray.toml a .ray-deps/
@@ -125,7 +125,13 @@ fn cmd_new(args: &[String]) {
 /// `ray run [--interp] [archivo] [args...]`: ejecuta el programa. Sin archivo usa
 /// `src/main.ray` (convención de proyecto). Los args tras el archivo van a `args()`.
 fn cmd_run(args: &[String]) {
-    let (use_interp, resto) = tomar_interp(args);
+    // M38.4: `--deterministic` fuerza el scheduler M:1 reproducible (un hilo, orden FIFO), aunque el default
+    // sea multicore. Útil para salida reproducible; inocuo con `--interp` (ya es secuencial).
+    let (deterministic, args) = tomar_flag_bool(args, "--deterministic");
+    if deterministic {
+        crate::vm::set_deterministic(true);
+    }
+    let (use_interp, resto) = tomar_interp(&args);
     let (fuel, resto) = tomar_flag_num(&resto, "--fuel", "un número de instrucciones (p. ej. --fuel 1000000)");
     let (heap, resto) = tomar_flag_num(&resto, "--heap", "un número de objetos (p. ej. --heap 1000000)");
     let (explicito, prog_args) = match resto.split_first() {
@@ -238,6 +244,13 @@ fn cmd_doc(args: &[String]) {
 // ── Modo legado (compatibilidad con la interfaz por flags) ───────────────────────────
 
 fn legacy(rest: &[String]) {
+    // M38.4: `--deterministic` (order-independent) fuerza el scheduler M:1 reproducible. Se extrae antes de
+    // todo el parseo por-posición del modo legado.
+    let (deterministic, rest) = tomar_flag_bool(rest, "--deterministic");
+    if deterministic {
+        crate::vm::set_deterministic(true);
+    }
+    let rest = &rest[..];
     // --lsp / --repl sin archivo.
     if rest.len() == 1 && rest[0] == "--lsp" {
         lsp::run();
@@ -377,6 +390,15 @@ fn tomar_interp(args: &[String]) -> (bool, Vec<String>) {
         Some((f, rest)) if f == "--interp" => (true, rest.to_vec()),
         _ => (false, args.to_vec()),
     }
+}
+
+/// M38.4: extrae un flag booleano sin valor (p. ej. `--deterministic`) de CUALQUIER posición de la lista y
+/// devuelve `(presente, resto_sin_el_flag)`. Order-independent (a diferencia de `tomar_interp`), para que
+/// `--deterministic` pueda combinarse libremente con `--interp`/`--fuel`/el archivo.
+fn tomar_flag_bool(args: &[String], flag: &str) -> (bool, Vec<String>) {
+    let presente = args.iter().any(|a| a == flag);
+    let resto = args.iter().filter(|a| a.as_str() != flag).cloned().collect();
+    (presente, resto)
 }
 
 /// Lee el fuente de un archivo o aborta con el código de E/S adecuado.

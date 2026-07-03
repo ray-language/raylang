@@ -40,15 +40,43 @@ const MAX_FRAMES: usize = crate::runtime::MAX_CALL_DEPTH;
 /// ocioso con trabajo pendiente en otro hilo (raro en cargas bien paralelizadas). Con N=1 nunca se usa.
 const SPIN_SLEEP_US: u64 = 50;
 
-/// M38.3b paso 3: nº de hilos worker del scheduler M:N. **Default 1** (single-thread, scheduler determinista
-/// — el suite de concurrencia de M12 compara contra salida exacta y lo exige; M38.4 invertirá el default y
-/// añadirá `--deterministic`). `RAYLANG_THREADS=N` habilita el multicore real (opt-in por ahora). Se clampa
-/// a [1, 256] y `0`/basura → 1.
-fn num_workers() -> usize {
-    match std::env::var("RAYLANG_THREADS") {
-        Ok(s) => s.trim().parse::<usize>().unwrap_or(1).clamp(1, 256),
-        Err(_) => 1,
+/// M38.4: bandera global de **modo determinista** (`--deterministic`). La fija la CLI (proceso-local, como
+/// `set_program_args`) antes de ejecutar; fuerza el scheduler **M:1 reproducible** (un hilo, orden FIFO) para
+/// tests y para el oráculo, aunque el default sea multicore. `Relaxed` basta: se escribe una vez al arranque,
+/// antes de lanzar hilos worker.
+static FORCE_DETERMINISTIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// M38.4: activa/desactiva el modo determinista (`--deterministic`). La CLI la llama al parsear el flag.
+pub fn set_deterministic(v: bool) {
+    FORCE_DETERMINISTIC.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// M38.4: nº de hilos worker del scheduler M:N. **El multicore es el default** (§46.4); lo determinista es
+/// opt-in. Reglas, en orden:
+/// 1. `--deterministic` (o el default de los tests) → **1** (M:1 reproducible; el oráculo/M12 lo exige).
+/// 2. `RAYLANG_THREADS=N` explícito → **N** (override; `=1` = forzar determinista).
+/// 3. El programa **no usa `spawn`** → **1**: sólo existe la fibra `main`, el multicore no aporta nada y
+///    evitamos el coste de lanzar hilos (la inmensa mayoría de programas, incluidos todos los del oráculo).
+/// 4. Concurrente y sin override → **`available_parallelism()`** (multicore por defecto).
+///
+/// El resultado se clampa al rango 1..=256.
+fn num_workers(program: &CompiledProgram) -> usize {
+    if FORCE_DETERMINISTIC.load(std::sync::atomic::Ordering::Relaxed) {
+        return 1;
     }
+    if let Ok(s) = std::env::var("RAYLANG_THREADS") {
+        return s.trim().parse::<usize>().unwrap_or(1).clamp(1, 256);
+    }
+    if !program_uses_spawn(program) {
+        return 1;
+    }
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 256)
+}
+
+/// M38.4: ¿el programa contiene el opcode `Spawn`? Si no, sólo hay la fibra `main` → el scheduler M:N no
+/// aporta nada y `num_workers` devuelve 1 (sin lanzar hilos). Un escaneo único y barato del bytecode.
+fn program_uses_spawn(program: &CompiledProgram) -> bool {
+    program.functions.iter().any(|f| f.chunk.code.iter().any(|op| matches!(op, OpCode::Spawn)))
 }
 
 /// M38.3b paso 3: una referencia al programa compilado **compartible entre hilos worker**. `CompiledProgram`
@@ -309,7 +337,7 @@ impl<'a> Vm<'a> {
     }
 
     /// M38.3b paso 3: **orquestador** del scheduler M:N. Arma la fibra de `main`, la encola en `ready` y
-    /// lanza `num_workers()` hilos worker (o corre single-thread si es 1 → scheduler determinista, default).
+    /// lanza `num_workers(program)` hilos worker (o corre single-thread si es 1 → scheduler determinista).
     /// Cada worker ejecuta fibras de la cola compartida hasta que `main` retorna (semántica Go) o hay un
     /// error fatal; el primero en terminar fija `Shared.outcome`, que los demás ven y se detienen. El
     /// resultado del programa es ese `outcome`.
@@ -324,7 +352,7 @@ impl<'a> Vm<'a> {
         main_fiber.frames.push(CallFrame { function: main, ip: 0, locals, upvalues: Vec::new() });
         self.sched().ready.push_back(main_fiber);
 
-        let n = num_workers();
+        let n = num_workers(self.program);
         if n == 1 {
             // Single-thread determinista (default): este Vm ES el único worker. `poll_next` toma main de
             // `ready`; comportamiento idéntico a antes de M38.3b (con N=1 el `running` oscila 1↔0 y nunca se

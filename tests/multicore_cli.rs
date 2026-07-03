@@ -139,6 +139,67 @@ fn main() -> int {
 }
 
 #[test]
+fn default_es_multicore_sin_override() {
+    // M38.4: sin `RAYLANG_THREADS` ni `--deterministic`, un programa CON `spawn` corre en multicore por
+    // defecto (`available_parallelism()`). No podemos observar el paralelismo directamente, pero sí que el
+    // camino por defecto produce el resultado correcto (independiente del scheduling). Un programa SIN
+    // spawn caería a N=1 (probado indirectamente por todo el suite oráculo).
+    let src = r#"
+fn cuadrado(x: int) -> int { x * x }
+fn main() -> int {
+    let a = spawn(fn() -> int { cuadrado(6) });
+    let b = spawn(fn() -> int { cuadrado(7) });
+    print(join(a) + join(b));   // 36 + 49 = 85
+    0
+}
+"#;
+    let mut path = std::env::temp_dir();
+    path.push("mc_default.ray");
+    std::fs::File::create(&path).expect("crea").write_all(src.as_bytes()).expect("escribe");
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .env_remove("RAYLANG_THREADS") // asegura el DEFAULT (multicore para programas con spawn)
+        .arg("--vm")
+        .arg(&path)
+        .output()
+        .expect("lanza raylang");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "85\n");
+    assert_eq!(out.status.code().unwrap_or(-1), 0);
+}
+
+#[test]
+fn deterministic_reproducible() {
+    // M38.4: `--deterministic` fuerza el scheduler M:1 (orden FIFO) → salida idéntica en cada corrida, aun
+    // para un programa con varias fibras cuyo orden bajo multicore variaría.
+    let src = r#"
+fn main() -> int {
+    let ch: Channel<int> = channel();
+    spawn(fn() { var i = 0; while (i < 4) { send(ch, i); i = i + 1; } close(ch); });
+    var seguir = true;
+    while (seguir) {
+        match (recv(ch)) {
+            Option.Some(v) => print(v),
+            Option.None => { seguir = false; },
+        }
+    }
+    0
+}
+"#;
+    let mut path = std::env::temp_dir();
+    path.push("mc_det.ray");
+    std::fs::File::create(&path).expect("crea").write_all(src.as_bytes()).expect("escribe");
+    let corre = || {
+        let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+            .arg("--vm").arg("--deterministic").arg(&path)
+            .output().expect("lanza raylang");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let a = corre();
+    let b = corre();
+    assert_eq!(a, "0\n1\n2\n3\n"); // orden FIFO reproducible
+    assert_eq!(a, b);
+}
+
+#[test]
 fn deadlock_detectado_en_paralelo() {
     // Un recv sobre un canal que nadie alimenta ni cierra: con todas las fibras bloqueadas y ningún worker
     // ejecutando (running == 0), el scheduler M:N debe detectar el deadlock (no colgarse indefinidamente).

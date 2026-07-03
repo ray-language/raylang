@@ -1,7 +1,14 @@
 [package]
 name = "raylang"
-version = "1.0.0-beta.1"
+version = "1.0.0"
 edition = "2024"
+description = "raylang — un lenguaje de programación estáticamente tipado, orientado a expresiones, con genéricos, traits, concurrencia por actores y compilador auto-alojado. Escrito en Rust (VM + GC), casi cero dependencias."
+authors = ["Roberto Ayala <dev@rayala.org>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/roberto-ayala/raylang"
+readme = "README.md"
+keywords = ["language", "compiler", "vm", "interpreter", "programming-language"]
+categories = ["compilers", "development-tools"]
 
 # M44a-3: `cdylib` para que el build wasm exporte `alloc`/`run`/`dealloc` (el playground web); `rlib` para
 # que los binarios (`ray`/`raylang`) y los tests sigan enlazando contra la librería. En nativo se compilan

@@ -1,7 +1,8 @@
 # Camino a raylang 1.0
 
 Checklist viva hacia el lanzamiento de la **1.0**. Los criterios los fija PRODUCCION.md (arco D → 1.0); aquí
-se rastrea su estado honesto. Versión actual: **`1.0.0-beta.1`** (ver `SPEC.md` §12).
+se rastrea su estado honesto. Versión: **`1.0.0`** (bump hecho en `Cargo.toml`/`SPEC.md`; falta empujar el
+tag `v1.0.0` para publicar la Release).
 
 Leyenda: ✅ hecho · 🟡 hecho en el repo, falta publicar/ejecutar fuera · ⬜ pendiente · 🌐 requiere cuentas/
 servicios externos (del mantenedor).
@@ -54,8 +55,9 @@ servicios externos (del mantenedor).
 - [ ] **Libro y sitio publicados** — 🌐
       El libro (`book/`, mdBook) existe; falta hostearlo + un sitio de aterrizaje (que puede alojar el
       playground y la SPEC).
-- [ ] **Declarar `1.0.0`** — ⬜
-      Subir la versión en `Cargo.toml`/`SPEC.md`, escribir notas de la versión, crear el tag/Release.
+- [ ] **Declarar `1.0.0`** — 🟡
+      Versión subida a `1.0.0` en `Cargo.toml`/`SPEC.md`; notas en `CHANGELOG.md`; licencia MIT OR
+      Apache-2.0 (`LICENSE-MIT`/`LICENSE-APACHE`). Falta **empujar el tag `v1.0.0`** (dispara la Release).
 
 ## Notas
 

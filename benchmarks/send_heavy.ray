@@ -1,0 +1,24 @@
+// M38.2: mide el coste de la transferencia de valores por canal (deep-copy en send + recv).
+// Construye UN arreglo grande una vez y lo envía N veces → aísla la transferencia de la construcción.
+// Canal acotado (backpressure) → a lo sumo 1-2 valores en vuelo (estado estacionario).
+fn productor(ch: Channel<[int]>, a: [int], n: int) {
+    var i = 0;
+    while (i < n) { send(ch, a); i = i + 1; }
+    close(ch);
+}
+fn main() -> int {
+    var big: [int] = [];
+    var j = 0;
+    while (j < 5000) { push(big, j); j = j + 1; }   // 5000 elementos
+    let ch: Channel<[int]> = channel(1);            // acotado
+    spawn(fn() { productor(ch, big, 4000); });      // 4000 envíos → 4000 send-copies + 4000 recv-copies
+    var total = 0;
+    var seguir = true;
+    while (seguir) {
+        match (recv(ch)) {
+            Option.Some(a) => { total = total + a[0]; },
+            Option.None => { seguir = false; },
+        }
+    }
+    total
+}

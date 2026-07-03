@@ -6033,8 +6033,19 @@ VM, como desde M12.)
     un canal de respuesta) → cuentas correctas por el orden FIFO. Los **canales SÍ se comparten** (su id es
     un valor primitivo que se copia tal cual al transferir) → son el medio de comunicación entre actores.
     **Cierra M37**: pausa máxima del GC 10,5 ms → 0,12 ms (§27.5), <1 ms por construcción.
-- **M38.2 — move/copy-on-send**: `send`/`recv` transfieren el subgrafo entre heaps (empezar con deep-copy
-  siempre —correcto y simple— y medir si el move por unicidad paga). El canal pasa a estructura del host.
+- **M38.2 — move/copy-on-send DESCARTADO por medición** (el deep-copy-siempre de M38.1 se conserva). Se midió
+  (`benchmarks/send_heavy.ray` + variantes, `RAYLANG_XFER_STATS`, instrumentación temporal en `transfer_value`)
+  el coste real de la transferencia deep-copy en tres escenarios: **(a) mensajes pequeños** (int, la carga
+  típica de concurrencia): la transferencia es **~5% del tiempo y casi todo instrumentación** —un escalar no
+  tiene objeto que mover, nada que optimizar—; **(b) valores grandes frescos/únicos** (donde el move sería
+  seguro): la transferencia es **~10%**, la **construcción domina ~90%** (move no ayuda a construir); **(c)
+  valores grandes aliaseados** (donde la transferencia SÍ domina, ~89%): el move es **inseguro** (el emisor
+  aún lo referencia) → obligatorio deep-copy. Además, mover un subgrafo entre dos `Heap` separados (Vec+
+  handles) es **igual de O(tamaño)** para estructuras con handles anidados (hay que remapear); solo un
+  arreglo/string/bytes plano logra move O(1). Y la **detección de unicidad** (sin refcounts ni ownership
+  types) exige un *scan* de alcanzabilidad O(heap vivo) por `send` que **penalizaría el caso común**. Por la
+  disciplina de §27 (conservar solo lo que supera el ruido ~3-5% en cargas realistas), no paga. El canal ya
+  quedó como estructura del host en M38.1b-1. **Cierra M38.**
 - **M38.3 — pool de hilos M:N**: repartir fibras sobre N hilos + work-stealing; sincronizar las colas
   (no los heaps). Aquí llega el multicore real; medir *speedup* con una carga paralela nueva en el banco.
   - **M38.3a HECHO** (prep, single-thread aún): se agrupa el estado del scheduler que N hilos compartirían
@@ -6072,8 +6083,8 @@ VM, como desde M12.)
   (salida FIFO exacta) usa `--deterministic`; los servidores (webserver/websocket/métricas/net) corren en el
   DEFAULT multicore y pasan (salida request-response determinista). Medido: `benchmarks/parallel.ray` corre
   multicore por defecto (4,4 s) vs `--deterministic` (16,0 s, serie); un programa sin `spawn` en N=1 sin
-  overhead. **M38 COMPLETO** (M:N por actores) salvo el diferido **M38.2** (move-on-send optimizado; hoy `send`
-  siempre deep-copia el subgrafo — correcto pero no óptimo; medir si el move por unicidad paga).
+  overhead. Con M38.2 descartado por medición (ver abajo), **M38 (M:N por actores) COMPLETO** — y con él el
+  grueso del arco B (M36 opt VM + M37 pausas GC cerradas vía heap-por-fibra + M38 multicore por actores).
 
 ### 46.6 Riesgos y mitigaciones
 

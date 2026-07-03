@@ -5925,3 +5925,101 @@ hermanos en `examples/web/` (los demos `*_demo.ray` ya usaban imports locales; `
 sigue embebido). Verificado: los tests de demos (`chacha20poly1305_cli`/`ed25519_cli`/`chacha20_cli`) + la
 suite completa siguen verdes. **M43.5 y M43 COMPLETOS**: la cripto de producción (`ring`) es la que usa el
 código real; la pura es demostración del lenguaje.
+
+
+## 46. M38 — Paralelismo M:N con aislamiento por actores (arco B) — DISEÑO
+
+**Estado: diseño (aún sin implementar).** Esta sección fija la arquitectura y los riesgos ANTES de tocar
+código, por ser la fase de más riesgo técnico del plan (PRODUCCION §Arco B). La implementación va después,
+en sub-fases medidas, con la suite verde en cada paso.
+
+### 46.1 El problema y por qué M38 cierra también M37
+
+Dos brechas de producción convergen en una sola solución:
+- **Multicore**: hoy la VM corre en **un** hilo (el scheduler M:1 de M12 reparte fibras cooperativas sobre
+  un solo núcleo). En una máquina de 8/16 núcleos, 7/15 están ociosos. Es la brecha de rendimiento más
+  profunda.
+- **Pausas del GC** (M37): medido en §27.5, el GC stop-the-world da pausas de ~10 ms sobre un heap grande,
+  10× por encima del objetivo <1 ms, y §27.3 (M37.2) probó que **ningún tweak barato lo acota** — la pausa
+  la domina el recorrido O(heap).
+
+La misma decisión resuelve las dos: **un heap (y un GC) por actor**. Cada actor tiene un heap **pequeño e
+independiente**; recolectarlo es una pausa **corta por construcción** (acota M37 sin marcado incremental ni
+*write barrier* —la pieza de más riesgo—), y como los heaps son independientes, **cada actor puede correr en
+un hilo distinto** (multicore). CSP ya eligió este camino en M12; M38 lo lleva a su conclusión.
+
+### 46.2 El modelo: aislamiento por actores (heap-por-fibra + move-on-send)
+
+**Invariante central**: un objeto del heap del actor A **nunca** contiene un handle al heap del actor B. No
+hay memoria compartida mutable entre actores → **data-race freedom por construcción** (no por *ownership* en
+el sistema de tipos, como Rust; ni por un GC global concurrente). La única comunicación entre actores es el
+**canal**, y `send` **transfiere la propiedad** del valor (lo saca del heap del emisor y lo mete en el del
+receptor). Es el modelo de Erlang/Pony-lite.
+
+**Transferencia en `send`** (`v` viaja del heap del emisor al del receptor):
+- **Move** (barato) si `v` es de **propiedad única** en el emisor: nada más en el heap del emisor lo
+  alcanza. Se **re-aloja** el subgrafo de `v` (sus objetos + handles) en el heap destino y se borra del
+  origen. Coste O(tamaño de `v`), sin copia de datos primitivos.
+- **Deep-copy** (fallback) si `v` está **aliaseado** (algo más en el emisor lo referencia): copiar
+  moviéndolo rompería ese alias. Se copia profundamente el subgrafo al destino y el original se queda.
+  Coste O(tamaño de `v`), correcto siempre.
+- **Detección**: tras `send`, ¿queda `v` alcanzable desde las raíces del emisor **excluyendo** el propio
+  `v`? Es una consulta de alcanzabilidad acotada al subgrafo (o, más simple y conservador al principio:
+  **siempre deep-copy**, y optimizar a move cuando la unicidad se pueda probar barato — medir cuál paga).
+
+**El canal, ¿de quién es el heap?** Un canal lo comparten emisor y receptor → no puede vivir en el heap de
+un actor. Pasa a ser una **estructura del host compartida** (`Arc<Mutex<…>>` en Rust, fuera del GC de los
+actores), con la cola de valores **en tránsito** (que no pertenecen a ningún actor entre `send` y `recv`).
+Los valores en tránsito se **serializan** a una forma sin handles (o con handles a un mini-heap del canal) al
+entrar y se **re-alojan** en el heap del receptor al salir. Es el único punto de sincronización real.
+
+### 46.3 El scheduler M:N
+
+- **N hilos del SO** (≈ núcleos), **M fibras** repartidas. Cada hilo tiene su cola de fibras listas
+  (*run queue*) + **robo de trabajo** (*work-stealing*) cuando queda ocioso.
+- Cada fibra lleva **su heap** con ella; corre en el hilo que la tenga. El GC de una fibra solo mira **sus**
+  raíces (su pila + marcos) → sin "stop-the-world" global, sin sincronizar hilos para recolectar.
+- **Bloqueo/despertar entre hilos**: `recv`/`send`/`join`/`select` que bloquean aparcan la fibra; el poller
+  de E/S (M17, `kqueue`/`epoll`) y los canales despiertan fibras que pueden acabar en **otro** hilo →
+  hace falta sincronización en las colas (mutex/lock-free), no en los heaps.
+
+### 46.4 Determinismo como modo (`--deterministic`)
+
+El scheduler M:1 determinista de hoy (orden FIFO reproducible) es lo que hace testeable la concurrencia (los
+tests de M12 comparan contra salida exacta). Se **conserva** como **`--deterministic`**: un solo hilo,
+round-robin, orden fijo → misma salida siempre, para tests y para el oráculo. El **multicore es el default**;
+lo determinista es opt-in. (El oráculo VM↔intérprete sigue siendo secuencial: la concurrencia solo vive en la
+VM, como desde M12.)
+
+### 46.5 Sub-fases (implementación medida, tras este diseño)
+
+- **M38.1 — heap-por-fibra** (single-thread todavía): cada `Fiber` gana su propio `Heap`; el GC recolecta
+  solo el heap de la fibra en curso. Esto **ya acota las pausas** (heaps pequeños) → **cierra el objetivo de
+  M37**, medible con el benchmark de §27.5. Es el paso que desacopla el heap del scheduler; el más invasivo
+  del runtime pero sin hilos aún (riesgo acotado).
+- **M38.2 — move/copy-on-send**: `send`/`recv` transfieren el subgrafo entre heaps (empezar con deep-copy
+  siempre —correcto y simple— y medir si el move por unicidad paga). El canal pasa a estructura del host.
+- **M38.3 — pool de hilos M:N**: repartir fibras sobre N hilos + work-stealing; sincronizar las colas
+  (no los heaps). Aquí llega el multicore real; medir *speedup* con una carga paralela nueva en el banco.
+- **M38.4 — `--deterministic`**: preservar el modo M:1 reproducible para tests/oráculo; toda la batería de
+  concurrencia de M12 debe pasar en ese modo.
+
+### 46.6 Riesgos y mitigaciones
+
+- **Re-alojar subgrafos entre heaps** (el corazón de `send`) es código nuevo delicado: recorrer el grafo,
+  copiar/mover objetos, remapear handles. Mitigación: empezar por **deep-copy siempre** (un solo recorrido,
+  sin la lógica de unicidad), validado por un oráculo de igualdad estructural antes/después.
+- **La invariante "sin handles cruzados"** es la que garantiza la seguridad; un solo cruce = corrupción o
+  data race. Mitigación: un **modo de verificación** (como el estrés del GC) que, en cada `send`, comprueba
+  que el subgrafo transferido no deja ni toma handles cruzados.
+- **Sincronización del scheduler** entre hilos (colas, parking, work-stealing) es la fuente clásica de bugs
+  de concurrencia del propio runtime (no del programa raylang). Mitigación: **M38.3 va al final**; hasta
+  entonces todo es single-thread y determinista, y el modo `--deterministic` da un oráculo reproducible.
+- **Riesgo sobre un runtime impecable** (441 lib + 40 binarios verdes): cada sub-fase mantiene la suite
+  verde; M38.1 (heap-por-fibra) es puramente interno (mismos resultados, distinta gestión de memoria) → el
+  oráculo VM↔intérprete y los tests de M12 lo blindan.
+
+**Regla de oro del arco B** (§27): cada sub-fase se **mide** (pausas del GC en M38.1; *speedup* multicore en
+M38.3) y se conserva solo si los datos la respaldan. **Nota de invariante cero-deps**: el pool de hilos usa
+`std::thread` (sin `rayon`/`tokio`); la sincronización, `std::sync` (`Arc`/`Mutex`/`Condvar`) — todo de la
+librería estándar, sin dependencias de Cargo nuevas.

@@ -6044,8 +6044,29 @@ VM, como desde M12.)
     → `Arc<Mutex<Shared>>` queda a un wrap de distancia. **Riesgo cualitativo de M38.3b** (el pool de hilos):
     fallos de concurrencia = heisenbugs (deadlocks/races no deterministas); exige stress testing dedicado y
     resolver la integración del poller de M17 (`kqueue`/`epoll`, hoy single-thread) en M:N.
+  - **M38.3b HECHO** (`8492a27`+`f28e4be`+`f689a74`): el **pool de hilos M:N**, en tres pasos. **Paso 2**:
+    `Vm.shared` tras `Arc<Mutex<Shared>>` (single-thread a través del lock; un lock por handler para no
+    reentrar el Mutex —que no es reentrante—; gotcha: `select`/`close` retenían un guard y re-bloqueaban →
+    deadlock). **Paso 3a** (infra): `run()` orquesta N hilos worker (`thread::scope`, pila 256 MiB) sobre una
+    cola `ready` compartida; cada worker con su `cur`/heap thread-local (el GC no sincroniza). `ProgRef`
+    (wrapper `unsafe impl Send/Sync`) comparte el `&CompiledProgram` inmutable (constantes `Value`/`Rc` sólo
+    leídas). **No se usó Condvar sino busy-poll** (`poll_next` reemplaza a `schedule_next`): más simple y a
+    prueba de lost-wakeups; un worker ocioso espera con `SPIN_SLEEP_US` mientras `Shared.running>0` y sólo
+    declara deadlock si `running==0`. El contador `running` (workers ejecutando una fibra) es la clave del
+    deadlock M:N. Correcciones destapadas para M:N REAL: **TOCTOU** (Spawn/ChannelNew alojaban id con dos
+    locks) y **lost-wakeup** (TaskJoin/ScopeEnd/Select comprobaban estado y aparcaban en locks separados) →
+    un ÚNICO guard sostenido a través de comprobar+aparcar. **Default N=1** (determinista, idéntico a hoy;
+    el suite de M12 lo exige); `RAYLANG_THREADS=N` habilita M:N (opt-in por ahora; M38.4 invertirá el
+    default). **Paso 3b** (verificación): *speedup* medido en `benchmarks/parallel.ray` (4 tareas CPU-bound):
+    N=1 16,1 s → N=4 **4,2 s (3,84×, casi lineal)** en un M3 Pro; N=8 no mejora (sólo 4 tareas). Tests
+    `tests/multicore_cli.rs` (resultados independientes del scheduling). Bug real cazado: un worker ocioso
+    declaraba deadlock con posición `(0,0)` → el localizador de errores underflowaba (`gline - start_line`,
+    entry `start_line=1`) → `saturating_sub` (fix general de un bug latente pre-existente). Integración del
+    poller: funciona (el worker con `running==0` hace `io_wait` bajo el lock; el corpus de M12 no usa red).
 - **M38.4 — `--deterministic`**: preservar el modo M:1 reproducible para tests/oráculo; toda la batería de
-  concurrencia de M12 debe pasar en ese modo.
+  concurrencia de M12 debe pasar en ese modo. **Pendiente**: hoy el default ya ES N=1 determinista (para
+  mantener verde el suite); M38.4 invertirá el default a multicore y ofrecerá `--deterministic` (= forzar N=1)
+  como opt-in reproducible, cableado en el harness de tests. La infraestructura (N configurable) ya está.
 
 ### 46.6 Riesgos y mitigaciones
 

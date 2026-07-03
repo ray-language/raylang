@@ -70,7 +70,7 @@ raylang {v} — lenguaje de programación
 Uso: ray <subcomando> [opciones]
 
   new <nombre>      crea un proyecto nuevo (ray.toml + src/main.ray)
-  run [archivo]     ejecuta (por defecto src/main.ray) [--interp] [--fuel N] [args...]
+  run [archivo]     ejecuta (por defecto src/main.ray) [--interp] [--fuel N] [--heap N] [args...]
   build [archivo]   chequea y compila sin ejecutar (0 ok / 65 error)
   test [archivo]    corre las funciones @test [filtro]
   fetch             descarga las dependencias de ray.toml a .ray-deps/
@@ -126,30 +126,33 @@ fn cmd_new(args: &[String]) {
 /// `src/main.ray` (convención de proyecto). Los args tras el archivo van a `args()`.
 fn cmd_run(args: &[String]) {
     let (use_interp, resto) = tomar_interp(args);
-    let (fuel, resto) = tomar_fuel(&resto);
+    let (fuel, resto) = tomar_flag_num(&resto, "--fuel", "un número de instrucciones (p. ej. --fuel 1000000)");
+    let (heap, resto) = tomar_flag_num(&resto, "--heap", "un número de objetos (p. ej. --heap 1000000)");
     let (explicito, prog_args) = match resto.split_first() {
         Some((p, rest)) => (Some(p.as_str()), rest.to_vec()),
         None => (None, Vec::new()),
     };
     let path = resolver_entrada(explicito, false);
-    ejecutar(&path, prog_args, use_interp, fuel);
+    ejecutar(&path, prog_args, use_interp, fuel, heap.map(|n| n as usize));
 }
 
-/// Separa un `--fuel <N>` inicial (M42.1): el límite de instrucciones de la VM. `<N>` debe ser un entero.
-fn tomar_fuel(args: &[String]) -> (Option<u64>, Vec<String>) {
+/// Separa una opción `--flag <N>` inicial con valor entero. La usan `--fuel` (M42.1, límite de
+/// instrucciones) y `--heap` (M42.2, tope de objetos vivos), los dos recursos de la VM para embeber
+/// raylang confinado. `<N>` debe ser un entero no negativo; `descripcion` es el texto de ayuda al fallar.
+fn tomar_flag_num(args: &[String], flag: &str, descripcion: &str) -> (Option<u64>, Vec<String>) {
     if let Some((f, rest)) = args.split_first()
-        && f == "--fuel"
+        && f == flag
     {
         match rest.split_first() {
             Some((n, tail)) => match n.parse::<u64>() {
                 Ok(v) => return (Some(v), tail.to_vec()),
                 Err(_) => {
-                    eprintln!("--fuel requiere un número de instrucciones (p. ej. --fuel 1000000)");
+                    eprintln!("{flag} requiere {descripcion}");
                     process::exit(64);
                 }
             },
             None => {
-                eprintln!("--fuel requiere un número de instrucciones (p. ej. --fuel 1000000)");
+                eprintln!("{flag} requiere {descripcion}");
                 process::exit(64);
             }
         }
@@ -272,7 +275,7 @@ fn legacy(rest: &[String]) {
     if test_mode {
         ejecutar_tests(&path, rest.get(idx + 1).map(String::as_str));
     } else {
-        ejecutar(&path, rest[idx + 1..].to_vec(), use_interp, None);
+        ejecutar(&path, rest[idx + 1..].to_vec(), use_interp, None, None);
     }
 }
 
@@ -443,9 +446,9 @@ fn verificar_o_salir(program: &mut crate::ast::Program, locate: &Locate, multi: 
 }
 
 /// Carga, chequea y ejecuta un archivo (VM por defecto, `--interp` para el intérprete).
-fn ejecutar(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u64>) {
-    if fuel.is_some() && use_interp {
-        eprintln!("--fuel es un límite de la VM (motor de producto); no se aplica con --interp");
+fn ejecutar(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u64>, heap: Option<usize>) {
+    if (fuel.is_some() || heap.is_some()) && use_interp {
+        eprintln!("--fuel/--heap son límites de la VM (motor de producto); no se aplican con --interp");
         process::exit(64);
     }
     runtime::set_program_args(prog_args);
@@ -468,7 +471,7 @@ fn ejecutar(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u
         }
     } else {
         match compiler::compile_program(&program) {
-            Ok(compiled) => vm::run_program_con_limite(&compiled, fuel),
+            Ok(compiled) => vm::run_program_con_limite(&compiled, fuel, heap),
             Err(mut e) => {
                 let (source, name, local) = locate(e.line);
                 e.line = local;

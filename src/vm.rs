@@ -39,14 +39,23 @@ pub fn run_program(program: &CompiledProgram) -> Result<Value, RuntimeError> {
     Ok(to_value(&vm.heap, &program.enums, &result))
 }
 
-/// Como [`run_program`], pero con un **límite de instrucciones** (fuel, M42.1): si la ejecución supera
-/// `fuel` instrucciones, aborta con un error en vez de correr sin fin. Para embeber raylang como
-/// lenguaje de scripts confinado (un bucle infinito o una entrada maliciosa no cuelgan al anfitrión).
-/// `None` = sin límite (idéntico a `run_program`).
-pub fn run_program_con_limite(program: &CompiledProgram, fuel: Option<u64>) -> Result<Value, RuntimeError> {
+/// Como [`run_program`], pero con **límites de recursos** para embeber raylang confinado (un bucle
+/// infinito o una entrada maliciosa no cuelgan ni agotan la memoria del anfitrión):
+/// - `fuel` (M42.1): presupuesto de **instrucciones**; al superarlo, aborta en vez de correr sin fin.
+/// - `heap_cap` (M42.2): tope de **objetos vivos**; al rebasarlo (tras un GC), aborta.
+///
+/// `None` en ambos = sin límite (idéntico a `run_program`).
+pub fn run_program_con_limite(
+    program: &CompiledProgram,
+    fuel: Option<u64>,
+    heap_cap: Option<usize>,
+) -> Result<Value, RuntimeError> {
     let mut vm = Vm::new(program);
     if let Some(f) = fuel {
         vm.fuel = f;
+    }
+    if let Some(n) = heap_cap {
+        vm.heap.set_max_live(n);
     }
     let result = vm.run()?;
     Ok(to_value(&vm.heap, &program.enums, &result))
@@ -213,6 +222,15 @@ impl<'a> Vm<'a> {
             // --- Punto seguro del GC ---
             if self.heap.should_collect() {
                 self.collect();
+                // M42.2: tope de heap. Si tras recolectar siguen vivos más objetos de los permitidos,
+                // el programa realmente necesita más memoria de la presupuestada → aborta limpio.
+                if self.heap.over_cap() {
+                    let fi = self.frames.len() - 1;
+                    let func = self.frames[fi].function;
+                    let ip = self.frames[fi].ip;
+                    let (l, c) = program.functions[func].chunk.lines.get(ip).copied().unwrap_or((0, 0));
+                    return Err(runtime_error(l, c, "límite de memoria agotado (tope de heap)"));
+                }
             }
 
             let fi = self.frames.len() - 1;
@@ -3230,12 +3248,34 @@ mod tests {
         }
         // Bucle infinito: con fuel finito, aborta (sin fuel colgaría, así que no se prueba sin límite).
         let inf = compilar("fn main() -> int { var i = 0; while (true) { i = i + 1; } 0 }");
-        let err = run_program_con_limite(&inf, Some(50_000)).expect_err("debe agotar el fuel");
+        let err = run_program_con_limite(&inf, Some(50_000), None).expect_err("debe agotar el fuel");
         assert!(err.msg.contains("fuel"), "mensaje de fuel: {}", err.msg);
         // Un programa que termina dentro del presupuesto da el mismo resultado que sin límite.
         let ok = compilar("fn main() -> int { var s = 0; var i = 0; while (i < 100) { s = s + i; i = i + 1; } s }");
-        assert_eq!(run_program_con_limite(&ok, Some(1_000_000)).unwrap(), Value::Int(4950));
-        assert_eq!(run_program_con_limite(&ok, None).unwrap(), Value::Int(4950)); // None = sin límite
+        assert_eq!(run_program_con_limite(&ok, Some(1_000_000), None).unwrap(), Value::Int(4950));
+        assert_eq!(run_program_con_limite(&ok, None, None).unwrap(), Value::Int(4950)); // None = sin límite
+    }
+
+    /// M42.2: **tope de heap** — límite de objetos vivos de la VM. Un programa que retiene un montón
+    /// de objetos (aquí, un arreglo que crece sin cesar) aborta al rebasar el tope; uno frugal, no.
+    #[test]
+    fn tope_de_heap_limita_los_objetos_vivos() {
+        fn compilar(src: &str) -> CompiledProgram {
+            let tokens = crate::lexer::lex(src).expect("lex ok");
+            let mut prog = crate::parser::parse(tokens).expect("parse ok");
+            crate::checker::check(&mut prog).expect("check ok");
+            compile_program(&prog).expect("compila")
+        }
+        // Retiene objetos vivos sin parar (cada iteración empuja un arreglo nuevo a `xs`, que sigue
+        // alcanzable). Con un tope bajo, el GC no puede liberarlos → aborta.
+        let crece = compilar(
+            "fn main() -> int { var xs: [[int]] = []; var i = 0; while (i < 100000) { push(xs, [i]); i = i + 1; } 0 }",
+        );
+        let err = run_program_con_limite(&crece, None, Some(1_000)).expect_err("debe rebasar el tope");
+        assert!(err.msg.contains("tope de heap"), "mensaje de tope: {}", err.msg);
+        // Un programa frugal (no retiene) termina normal aun con tope bajo: el GC recicla la basura.
+        let frugal = compilar("fn main() -> int { var s = 0; var i = 0; while (i < 10000) { s = s + i; i = i + 1; } s }");
+        assert_eq!(run_program_con_limite(&frugal, None, Some(1_000)).unwrap(), Value::Int(49995000));
     }
 
     #[test]

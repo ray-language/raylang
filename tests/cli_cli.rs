@@ -831,3 +831,19 @@ fn fuel_aborta_un_bucle_infinito() {
     assert_eq!(code, 70, "un bucle infinito con fuel finito aborta (EX_SOFTWARE)\n{err}");
     assert!(err.contains("fuel"), "el error menciona el límite de instrucciones\n{err}");
 }
+
+#[test]
+fn tope_de_heap_aborta_un_programa_glotón() {
+    // M42.2: `ray run --heap N` limita los objetos vivos de la VM (el otro recurso, junto al fuel).
+    // Un programa que retiene objetos sin cesar aborta al rebasar el tope; el error lo dice, exit 70.
+    let base = tmp("heap");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "fn main() -> int { var xs: [[int]] = []; var i = 0; while (i < 1000000) { push(xs, [i]); i = i + 1; } 0 }\n",
+    )
+    .unwrap();
+    let (_out, err, code) = ray(&base, &["run", "--heap", "5000", archivo.to_str().unwrap()]);
+    assert_eq!(code, 70, "un programa glotón con tope de heap aborta (EX_SOFTWARE)\n{err}");
+    assert!(err.contains("tope de heap"), "el error menciona el tope de heap\n{err}");
+}

@@ -5721,3 +5721,21 @@ no un sandbox. API `vm::run_program_con_limite(prog, Option<u64>)`; CLI `ray run
 bucle infinito aborta, un programa que termina da su resultado) + `fuel_aborta_un_bucle_infinito`
 (integración: exit 70). Diferido: **tope de heap** (límite de memoria, el otro recurso), cripto de
 producción vía `ring`, fuzzing continuo en CI + `cargo audit`.
+
+### 44.2 M42.2 — tope de heap (límite de memoria de la VM)
+
+El **segundo recurso a acotar** junto al fuel: un programa que retiene objetos sin cesar no debe agotar
+la memoria del anfitrión. Se mide en **objetos vivos** (`Heap.live`, la unidad que el GC ya lleva),
+análogo a cómo el fuel cuenta instrucciones — no bytes, que exigiría dimensionar cada `Obj` (más
+invasivo y menos honesto con un heap de handles). El `Heap` gana `max_live: usize` (default `usize::MAX`
+= sin límite, coste nulo). Al acercarse al tope, `should_collect` **fuerza un GC** (además de sus
+disparos normales); si tras recolectar `live` sigue por encima (`over_cap`), la VM aborta con "límite de
+memoria agotado (tope de heap)". La secuencia forzar-GC-luego-comprobar es lo que hace el tope **honesto**:
+solo aborta si el programa realmente *necesita* más objetos vivos de los permitidos (la basura reciclable
+no cuenta). Es **solo de la VM**, como el fuel. Los dos límites se agrupan en el mismo entrypoint:
+`vm::run_program_con_limite(prog, Option<u64> fuel, Option<usize> heap_cap)`; CLI `ray run --heap N`
+(comparte el parser `tomar_flag_num` con `--fuel`; ambos con `--interp` son error). Tests:
+`tope_de_heap_limita_los_objetos_vivos` (unit: un programa que retiene arreglos aborta, uno frugal
+termina normal aun con tope bajo porque el GC recicla) + `tope_de_heap_aborta_un_programa_glotón`
+(integración: exit 70). Con fuel + tope de heap, raylang embebido está **acotado en tiempo y en memoria**.
+Diferido de M42: cripto de producción vía `ring` (bifurcación de diseño), fuzzing continuo + `cargo audit`.

@@ -157,6 +157,11 @@ pub struct Heap {
     gray: Vec<Handle>,
     live: usize,
     next_gc: usize,
+    /// M42.2: **tope de heap** — máximo de objetos vivos permitidos. Junto al fuel (cuenta de
+    /// instrucciones), es el otro recurso a acotar para embeber raylang confinado. `usize::MAX` =
+    /// **sin límite** (el default): nunca dispara, coste nulo. Al acercarse al tope se fuerza un GC
+    /// (ver `should_collect`); si tras recolectar sigue por encima, la VM aborta (`over_cap`).
+    max_live: usize,
     /// Modo de estrés: si está activo, la VM recolecta en **cada** punto seguro. Sirve
     /// para destapar raíces faltantes en los tests.
     pub stress: bool,
@@ -170,6 +175,7 @@ impl Default for Heap {
             gray: Vec::new(),
             live: 0,
             next_gc: INITIAL_GC,
+            max_live: usize::MAX,
             stress: false,
         }
     }
@@ -201,9 +207,21 @@ impl Heap {
         &mut self.slots[h].as_mut().expect("handle válido (objeto vivo)").obj
     }
 
-    /// ¿Conviene recolectar? (En modo estrés, siempre.)
+    /// ¿Conviene recolectar? (En modo estrés, siempre.) M42.2: también al alcanzar el tope de
+    /// heap, para forzar un GC antes de rebasarlo (si tras recolectar sigue por encima, `over_cap`).
     pub fn should_collect(&self) -> bool {
-        self.stress || self.live >= self.next_gc
+        self.stress || self.live >= self.next_gc || self.live >= self.max_live
+    }
+
+    /// M42.2: ¿se rebasó el tope de heap tras recolectar? La VM lo consulta después del GC: si es
+    /// cierto, el programa necesita más objetos vivos de los permitidos → aborta.
+    pub fn over_cap(&self) -> bool {
+        self.live > self.max_live
+    }
+
+    /// M42.2: fija el tope de objetos vivos (para embeber raylang confinado).
+    pub fn set_max_live(&mut self, n: usize) {
+        self.max_live = n;
     }
 
     /// Número de objetos vivos (para tests/diagnóstico).

@@ -4715,17 +4715,18 @@ A precede a todo; B y C pueden ir en paralelo tras A; D cierra. Los principios d
 fase a la vez, medir antes de conservar, oráculo en desarrollo, cero deps salvo excepción
 consciente) siguen vigentes. Lo sacrificado está declarado al final de PRODUCCION.md.
 
-**Estado del plan de producción** (al cierre de M43): **arcos A, C y D-endurecimiento/cripto COMPLETOS**.
+**Estado del plan de producción** (al cierre del arco B): **arcos A, B, C y D-endurecimiento/cripto COMPLETOS**.
 - **A — Estabilidad**: ✅ M33 (diagnósticos sin ICEs) · M34 (SPEC + semver `1.0.0-beta.1`) · M35 (la VM es
   el motor de producto; el intérprete es el oráculo de desarrollo).
-- **B — Rendimiento y paralelismo**: 🚧 solo el transversal de optimización de la VM (incremental, midiendo;
-  §2/§27). M36/M37/M38 (GC de pausas acotadas, M:N por actores) **no iniciados** — el modelo CSP M:1 de M12
-  cubre la concurrencia por ahora.
+- **B — Rendimiento y paralelismo**: ✅ M36.1 (superinstrucciones, win real medido) · M37 (pausas del GC
+  acotadas, **cerrado por el heap-por-fibra de M38.1**: 10,5 ms → 0,12 ms) · M38 (**M:N con aislamiento por
+  actores**: heap por fibra + pool de hilos multicore real, 3,84× en 4 tareas; multicore por defecto,
+  `--deterministic`/`RAYLANG_THREADS=1` fuerza el M:1 reproducible; M38.2 move-on-send descartado por medición).
 - **C — Ecosistema**: ✅ M39 (CLI `ray` + gestor de paquetes con `ray.toml`/lockfile/git/path-deps) · M40
   (stdlib `std/` embebida + `Iterator` + colecciones + `raydoc` + el paquete `net`) · M41 (FFI con ABI C,
   sin libffi).
 - **D — Endurecimiento**: ✅ M42 (fuel + tope de heap + fuzzing/CI/`cargo audit`) · M43 (cripto de
-  producción vía `ring`). **Falta M44 (distribución) para la 1.0.**
+  producción vía `ring`). **Falta M44 (distribución) para la 1.0** — el ÚNICO hito restante del plan.
 
 ## 38. M33 — Compilador sin pánicos y diagnósticos de producción
 

@@ -36,6 +36,7 @@ const MAX_FRAMES: usize = crate::runtime::MAX_CALL_DEPTH;
 pub fn run_program(program: &CompiledProgram) -> Result<Value, RuntimeError> {
     let mut vm = Vm::new(program);
     let result = vm.run()?;
+    vm.print_gc_stats_if_requested(); // M37.1
     Ok(to_value(&vm.heap, &program.enums, &result))
 }
 
@@ -58,6 +59,7 @@ pub fn run_program_con_limite(
         vm.heap.set_max_live(n);
     }
     let result = vm.run()?;
+    vm.print_gc_stats_if_requested(); // M37.1
     Ok(to_value(&vm.heap, &program.enums, &result))
 }
 
@@ -187,6 +189,13 @@ struct Vm<'a> {
     /// error limpio. `u64::MAX` = **sin límite** (el default): nunca se agota en la práctica, así que el
     /// coste es un decremento + comparación por instrucción, sin ramas.
     fuel: u64,
+    /// M37.1: **instrumentación de pausas del GC**. Cuenta de recolecciones y la pausa máxima (ns) de una
+    /// sola recolección stop-the-world. Sirve para MEDIR el objetivo de M37 (pausas acotadas, <1 ms) antes
+    /// de decidir si el barrido/marcado incremental compensan. Coste: un `Instant` por recolección (raro).
+    /// Se imprimen a stderr al terminar si `RAYLANG_GC_STATS` está en el entorno.
+    gc_count: u64,
+    gc_max_pause_ns: u128,
+    gc_total_pause_ns: u128,
 }
 
 impl<'a> Vm<'a> {
@@ -204,6 +213,9 @@ impl<'a> Vm<'a> {
             scopes: Vec::new(),
             locals_pool: Vec::new(),
             fuel: u64::MAX, // sin límite por defecto
+            gc_count: 0,
+            gc_max_pause_ns: 0,
+            gc_total_pause_ns: 0,
         }
     }
 
@@ -2279,6 +2291,8 @@ impl<'a> Vm<'a> {
     /// Recolecta: marca desde las raíces (pila + locales + upvalues de los marcos),
     /// propaga y barre. Solo se llama en puntos seguros del bucle.
     fn collect(&mut self) {
+        // M37.1: cronometramos la pausa stop-the-world para medir el objetivo de M37 (pausas acotadas).
+        let inicio = std::time::Instant::now();
         // Reunimos las raíces (handles) primero, para no tomar prestado `self.stack`
         // y `self.heap` a la vez. M12.1: además de la fibra en ejecución, rooteamos TODAS las fibras
         // (listas y bloqueadas) y los canales que esperan.
@@ -2310,6 +2324,29 @@ impl<'a> Vm<'a> {
         }
         self.heap.trace();
         self.heap.sweep();
+        // M37.1: registra la pausa (una sola recolección stop-the-world).
+        let dt = inicio.elapsed().as_nanos();
+        self.gc_count += 1;
+        self.gc_total_pause_ns += dt;
+        if dt > self.gc_max_pause_ns {
+            self.gc_max_pause_ns = dt;
+        }
+    }
+
+    /// M37.1: imprime las estadísticas de pausas del GC a stderr si `RAYLANG_GC_STATS` está en el entorno.
+    /// Instrumentación de medición (arco B / M37): cuántas recolecciones y la pausa máxima/media.
+    fn print_gc_stats_if_requested(&self) {
+        if std::env::var_os("RAYLANG_GC_STATS").is_none() {
+            return;
+        }
+        let media = if self.gc_count > 0 { self.gc_total_pause_ns / self.gc_count as u128 } else { 0 };
+        eprintln!(
+            "[gc] recolecciones={} pausa_max={:.3}ms pausa_media={:.3}ms total={:.3}ms",
+            self.gc_count,
+            self.gc_max_pause_ns as f64 / 1e6,
+            media as f64 / 1e6,
+            self.gc_total_pause_ns as f64 / 1e6,
+        );
     }
 
     // ----- Locales (con boxing) -----

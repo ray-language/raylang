@@ -3905,6 +3905,26 @@ barato → probablemente no pague); evitar el clon de constantes `Str`/`Bytes` e
 reducir el coste del `children()` del GC (hoy asigna un `Vec` por objeto trazado, solo afecta a cargas
 GC-pesadas). Cada una **se acepta solo si la medición la respalda**.
 
+### 27.5 M37.1 — instrumentación de pausas del GC (medir antes de optimizar)
+
+M37 (arco B) busca **pausas del GC acotadas** (<1 ms). Fiel a la disciplina de §27, **primero se mide**:
+- **Instrumentación**: la VM cronometra cada `collect()` (una recolección stop-the-world) con `Instant` y
+  acumula cuenta + pausa máxima/media; con `RAYLANG_GC_STATS=1` las imprime a stderr al terminar. Coste
+  nulo desactivado (un `Instant` por recolección, que es rara).
+- **Benchmark de heap grande** `benchmarks/gcpause.ray`: conserva ~300k arreglos vivos y genera basura
+  para forzar GCs sobre ese heap grande (cada uno marca todo lo vivo + barre todos los slots).
+- **Resultado (release, M3 Pro)**: 14 recolecciones, **pausa máxima 9,8 ms**, media 1,3 ms. La pausa está
+  **~10× por encima del objetivo** → el problema es real a escala y el trabajo de M37 está justificado por
+  datos. La pausa = marcar (O(vivos)) + barrer (O(slots)), ambos crecen con el heap.
+
+**Camino a <1 ms** (fijado con el dato): acotar la pausa de forma **independiente del tamaño del heap** exige
+**incrementalidad** —marcado incremental (tri-color + *write barrier*) + barrido incremental— **o** el
+**heap-por-actor de M38** (heaps pequeños e independientes → pausa corta por construcción). El plan ya avisa
+que M37 y M38 **se diseñan juntos** y que el heap-por-actor **simplifica** este GC; el *write barrier* es la
+pieza de más riesgo (un barrier omitido = objeto vivo recolectado = corrupción). Por eso la incrementalidad
+plena se **co-diseña con M38**; entretanto se recortan costes de la recolección stop-the-world que valen bajo
+cualquiera de los dos futuros (M37.2+).
+
 
 ## 28. M19 — La capa web (servidor HTTP, SSE, WebSockets, TLS)
 

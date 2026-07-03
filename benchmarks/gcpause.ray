@@ -1,0 +1,27 @@
+// M37.1 — carga de estrés de PAUSAS del GC. Construye un heap grande VIVO (un arreglo de muchos
+// arreglos que se conservan) y luego genera basura para disparar recolecciones sobre ese heap grande:
+// cada GC debe marcar todo lo vivo + barrer todos los slots → la pausa crece con el heap. Mide con
+//   RAYLANG_GC_STATS=1 ./target/release/raylang --vm benchmarks/gcpause.ray
+// (imprime a stderr recolecciones + pausa máx/media). El objetivo de M37 es pausa máx < 1 ms.
+fn main() -> int {
+    // Heap grande vivo: 300k arreglos conservados en `vivo` (~300k objetos vivos + el arreglo raíz).
+    var vivo: [[int]] = [];
+    var i = 0;
+    while (i < 300000) {
+        var a: [int] = [];
+        push(a, i);
+        push(vivo, a);
+        i = i + 1;
+    }
+    // Churn: mucha basura efímera para forzar GCs mientras el heap vivo es grande.
+    var j = 0;
+    var s = 0;
+    while (j < 300000) {
+        var tmp: [int] = [];
+        push(tmp, j);
+        s = s + tmp[0];
+        j = j + 1;
+    }
+    // Usa `vivo` al final para que no lo recolecten antes (mantiene el heap grande durante el churn).
+    s % 1000 + len(vivo) - len(vivo)
+}

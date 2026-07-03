@@ -61,20 +61,32 @@ pub fn set_deterministic(v: bool) {
 ///
 /// El resultado se clampa al rango 1..=256.
 fn num_workers(program: &CompiledProgram) -> usize {
-    if FORCE_DETERMINISTIC.load(std::sync::atomic::Ordering::Relaxed) {
-        return 1;
+    // M44a: en `wasm32` (el playground web) no hay hilos del SO → siempre 1 (nunca se invoca `thread::
+    // scope`). `available_parallelism()` ya daría `Err`→1 allí, pero lo forzamos por robustez.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = program;
+        1
     }
-    if let Ok(s) = std::env::var("RAYLANG_THREADS") {
-        return s.trim().parse::<usize>().unwrap_or(1).clamp(1, 256);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if FORCE_DETERMINISTIC.load(std::sync::atomic::Ordering::Relaxed) {
+            return 1;
+        }
+        if let Ok(s) = std::env::var("RAYLANG_THREADS") {
+            return s.trim().parse::<usize>().unwrap_or(1).clamp(1, 256);
+        }
+        if !program_uses_spawn(program) {
+            return 1;
+        }
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 256)
     }
-    if !program_uses_spawn(program) {
-        return 1;
-    }
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 256)
 }
 
 /// M38.4: ¿el programa contiene el opcode `Spawn`? Si no, sólo hay la fibra `main` → el scheduler M:N no
 /// aporta nada y `num_workers` devuelve 1 (sin lanzar hilos). Un escaneo único y barato del bytecode.
+/// M44a: solo lo usa la rama no-wasm de `num_workers` (en wasm siempre es 1).
+#[cfg(not(target_arch = "wasm32"))]
 fn program_uses_spawn(program: &CompiledProgram) -> bool {
     program.functions.iter().any(|f| f.chunk.code.iter().any(|op| matches!(op, OpCode::Spawn)))
 }

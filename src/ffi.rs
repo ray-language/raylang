@@ -17,19 +17,28 @@
 //! archivo de plataforma (`libm.dylib`/`libm.so`) y, si falla, al **handle global** del proceso
 //! (`dlopen(NULL)`), donde ya viven libc/libm enlazadas por el propio binario.
 
+// M44a: estos imports solo los usa la maquinaria `dlopen` (cfg(not wasm)); en wasm quedarían sin usar.
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::ffi::c_void;
+#[cfg(not(target_arch = "wasm32"))]
 use std::os::raw::{c_char, c_int};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
 
 // --- Declaraciones C crudas (como poll.rs; cero deps de Cargo) ---
 // SAFETY: las firmas coinciden con las de `<dlfcn.h>` (`void *dlopen(const char*, int)`,
 // `void *dlsym(void*, const char*)`), presentes en libc en Linux/macOS. No las llamamos con datos
 // inválidos (los punteros vienen de `CString`s vivas; ver `open_lib`/`resolve_symbol`).
+// M44a: `dlopen`/`dlsym` no existen en `wasm32` (no hay carga dinámica en el navegador) → el FFI entero
+// (esta declaración + `open_lib`/`resolve_symbol`/`call`) es cfg(not wasm); `call` tiene un stub de wasm.
+#[cfg(not(target_arch = "wasm32"))]
 unsafe extern "C" {
     fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
+#[cfg(not(target_arch = "wasm32"))]
 const RTLD_NOW: c_int = 2; // resolución inmediata (igual en Linux y macOS)
 
 /// La clase de un valor en la frontera FFI. `Bool` se marshala como entero C (`int`), pero se
@@ -163,6 +172,9 @@ pub enum FfiRet {
 // los bits que necesite de los bajos, así que un `int` (32), un `u64`/puntero (64) y un `bool` van todos
 // por el mismo molde `i64`. Por eso el catálogo de firmas no explota con la anchura (solo el retorno la
 // distingue).
+// M44a: los moldes de ABI y su uso viven solo en `call` (cfg(not wasm)) → gateados para no dar código
+// muerto en el build del playground.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ArgMold {
     I,
@@ -171,6 +183,7 @@ enum ArgMold {
 
 // El molde del **retorno**: aquí SÍ importa la anchura, porque leemos el registro de retorno con un
 // tipo concreto. `I32` (C `int`, se extiende el signo a 64), `I64` (C `long`/`size_t`/puntero), `F`.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RetMold {
     I32,
@@ -178,6 +191,7 @@ enum RetMold {
     F,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn arg_mold(k: CKind) -> ArgMold {
     match k {
         CKind::Float => ArgMold::F,
@@ -185,6 +199,7 @@ fn arg_mold(k: CKind) -> ArgMold {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn ret_mold(k: CKind) -> RetMold {
     match k {
         CKind::Float => RetMold::F,
@@ -201,6 +216,7 @@ fn ret_mold(k: CKind) -> RetMold {
 /// `I64`) según el `ret_kind`: `Unit` es `void`; `OptBytes`/`OptStr` tratan el `i64` como `char*` (0 =
 /// NULL → `None`; si no, **copian** los bytes hasta el NUL, sin liberar); el resto es un entero (el motor
 /// decide `int` vs `u64`). La validación UTF-8 de `OptStr` la hace el motor.
+#[cfg(not(target_arch = "wasm32"))]
 fn int_return(desc: &ExternDesc, raw: i64) -> FfiRet {
     match desc.ret_kind {
         CKind::Unit => FfiRet::Unit,
@@ -222,19 +238,23 @@ fn int_return(desc: &ExternDesc, raw: i64) -> FfiRet {
 
 // Caché de handles de librería abiertos (por nombre corto). El puntero es opaco y válido durante toda
 // la vida del proceso; se comparte entre hilos tras el Mutex (nunca se cierra: las libs viven siempre).
+#[cfg(not(target_arch = "wasm32"))]
 struct Handle(*mut c_void);
 // SAFETY: un handle de `dlopen` es un recurso GLOBAL del proceso; `dlsym` sobre él es thread-safe y
 // nosotros NUNCA desreferenciamos el puntero (solo lo pasamos de vuelta a `dlsym`). Compartirlo entre
 // hilos (tras el `Mutex` de `handles()`) es por tanto seguro, aunque `*mut c_void` no sea `Send` por
 // defecto. No se hace `dlclose` (fuga deliberada: las librerías viven toda la ejecución).
+#[cfg(not(target_arch = "wasm32"))]
 unsafe impl Send for Handle {}
 
+#[cfg(not(target_arch = "wasm32"))]
 fn handles() -> &'static Mutex<HashMap<String, Handle>> {
     static HANDLES: std::sync::OnceLock<Mutex<HashMap<String, Handle>>> = std::sync::OnceLock::new();
     HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 // Nombres de archivo candidatos para una librería corta, según la plataforma.
+#[cfg(not(target_arch = "wasm32"))]
 fn lib_filenames(short: &str) -> Vec<String> {
     if cfg!(target_os = "macos") {
         vec![format!("lib{short}.dylib"), format!("{short}.dylib"), short.to_string()]
@@ -245,6 +265,7 @@ fn lib_filenames(short: &str) -> Vec<String> {
 
 // Abre (o recupera de caché) el handle de la librería `lib`. Prueba los nombres de plataforma y, si
 // ninguno resuelve, cae al **handle global** del proceso (`dlopen(NULL)`), donde están libc/libm.
+#[cfg(not(target_arch = "wasm32"))]
 fn open_lib(lib: &str) -> Result<*mut c_void, String> {
     let mut map = handles().lock().unwrap();
     if let Some(h) = map.get(lib) {
@@ -272,6 +293,7 @@ fn open_lib(lib: &str) -> Result<*mut c_void, String> {
 }
 
 // Resuelve el puntero de un símbolo en una librería.
+#[cfg(not(target_arch = "wasm32"))]
 fn resolve_symbol(lib: &str, symbol: &str) -> Result<*mut c_void, String> {
     let handle = open_lib(lib)?;
     let c = std::ffi::CString::new(symbol).map_err(|_| format!("símbolo inválido '{symbol}'"))?;
@@ -285,6 +307,7 @@ fn resolve_symbol(lib: &str, symbol: &str) -> Result<*mut c_void, String> {
 /// Llama a la función externa descrita por `desc` con `args` (ya convertidos por el motor). Resuelve
 /// el símbolo, transmuta el puntero al molde de la firma y ejecuta la llamada C. `Err` si la librería/
 /// símbolo no resuelve o la firma no está en el catálogo soportado.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn call(desc: &ExternDesc, args: &[FfiVal]) -> Result<FfiRet, String> {
     let sym = resolve_symbol(&desc.lib, &desc.name)?;
     let molds: Vec<ArgMold> = desc.arg_kinds.iter().map(|&k| arg_mold(k)).collect();
@@ -347,6 +370,13 @@ pub fn call(desc: &ExternDesc, args: &[FfiVal]) -> Result<FfiRet, String> {
             desc.name
         )),
     })
+}
+
+/// M44a: en el playground web (wasm) no hay carga dinámica de librerías (`dlopen`) → el FFI no está
+/// disponible. Un `extern fn` chequea igual (su descriptor es puro), pero llamarlo da un error de ejecución.
+#[cfg(target_arch = "wasm32")]
+pub fn call(desc: &ExternDesc, _args: &[FfiVal]) -> Result<FfiRet, String> {
+    Err(format!("FFI no disponible en el playground web (wasm): '{}'", desc.name))
 }
 
 #[cfg(test)]

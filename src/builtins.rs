@@ -189,29 +189,46 @@ pub fn sub_bytes_octets(b: &[u8], i: i64, j: i64) -> Vec<u8> {
 // resistencia a canales laterales de temporización, requisito para tocar secretos reales. Helpers
 // compartidos por ambos motores → la salida es idéntica (`ring` es determinista) y el oráculo se mantiene.
 
+// M44a — En `wasm32` (el playground web) NO hay `ring` → la cripto no está disponible: el playground
+// embarca solo el lenguaje NÚCLEO. Cada función se cfg-parte en su versión nativa (con `ring`) y un stub
+// de wasm inofensivo (vacío/`None`/`false`); el *gating por checker* (M44a-4) hará que un programa que use
+// cripto/red dé un error de compilación claro en el playground, así que estos stubs no se alcanzan.
+
 /// SHA-256 (32 octetos). El caballo de batalla de HMAC/JWT/firmas.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn sha256(data: &[u8]) -> Vec<u8> {
     ring::digest::digest(&ring::digest::SHA256, data).as_ref().to_vec()
 }
+#[cfg(target_arch = "wasm32")]
+pub fn sha256(_data: &[u8]) -> Vec<u8> { Vec::new() }
 
 /// SHA-512 (64 octetos).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn sha512(data: &[u8]) -> Vec<u8> {
     ring::digest::digest(&ring::digest::SHA512, data).as_ref().to_vec()
 }
+#[cfg(target_arch = "wasm32")]
+pub fn sha512(_data: &[u8]) -> Vec<u8> { Vec::new() }
 
 /// SHA-1 (20 octetos). `ring` lo nombra `..._FOR_LEGACY_USE_ONLY`: roto para seguridad, se expone SOLO
 /// para protocolos que aún lo exigen por diseño (p. ej. el accept-key de WebSocket, RFC 6455).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn sha1(data: &[u8]) -> Vec<u8> {
     ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, data).as_ref().to_vec()
 }
+#[cfg(target_arch = "wasm32")]
+pub fn sha1(_data: &[u8]) -> Vec<u8> { Vec::new() }
 
 /// HMAC-SHA256 (32 octetos): MAC con clave, la base de JWT (HS256), SigV4 y muchos esquemas de auth.
 /// La verificación honesta se hace **recomputando** el MAC y comparando en tiempo constante — pero eso es
 /// responsabilidad de quien compara; aquí solo se produce la etiqueta.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
     let k = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
     ring::hmac::sign(&k, msg).as_ref().to_vec()
 }
+#[cfg(target_arch = "wasm32")]
+pub fn hmac_sha256(_key: &[u8], _msg: &[u8]) -> Vec<u8> { Vec::new() }
 
 // --- Ed25519 (firma de curva elíptica, M43.3) ---
 //
@@ -220,27 +237,36 @@ pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
 // inválido, no un ICE. `verify` es **total** (nunca falla; da `false` ante clave/firma inválidas).
 
 /// Clave pública (32 octetos) derivada de una semilla de 32 octetos. `None` si la semilla no mide 32.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn ed25519_public_key(seed: &[u8]) -> Option<Vec<u8>> {
     use ring::signature::KeyPair;
     ring::signature::Ed25519KeyPair::from_seed_unchecked(seed)
         .ok()
         .map(|kp| kp.public_key().as_ref().to_vec())
 }
+#[cfg(target_arch = "wasm32")]
+pub fn ed25519_public_key(_seed: &[u8]) -> Option<Vec<u8>> { None }
 
 /// Firma (64 octetos) de `msg` con la semilla de 32 octetos. `None` si la semilla no mide 32. Ed25519 es
 /// **determinista** (RFC 8032: el nonce se deriva por hash) → misma entrada, misma firma → el oráculo vale.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn ed25519_sign(seed: &[u8], msg: &[u8]) -> Option<Vec<u8>> {
     ring::signature::Ed25519KeyPair::from_seed_unchecked(seed)
         .ok()
         .map(|kp| kp.sign(msg).as_ref().to_vec())
 }
+#[cfg(target_arch = "wasm32")]
+pub fn ed25519_sign(_seed: &[u8], _msg: &[u8]) -> Option<Vec<u8>> { None }
 
 /// Verifica que `sig` es una firma de `msg` bajo `pubkey`. Total: `false` ante cualquier entrada inválida.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn ed25519_verify(pubkey: &[u8], msg: &[u8], sig: &[u8]) -> bool {
     ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, pubkey)
         .verify(msg, sig)
         .is_ok()
 }
+#[cfg(target_arch = "wasm32")]
+pub fn ed25519_verify(_pubkey: &[u8], _msg: &[u8], _sig: &[u8]) -> bool { false }
 
 // --- ChaCha20-Poly1305 AEAD (cifrado autenticado, M43.4) ---
 //
@@ -252,6 +278,7 @@ pub fn ed25519_verify(pubkey: &[u8], msg: &[u8], sig: &[u8]) -> bool {
 
 /// Cifra y autentica `plaintext` con `key` (32) y `nonce` (12), ligando `aad` (datos autenticados no
 /// cifrados). Devuelve `texto_cifrado || etiqueta(16)`; `None` si `key`/`nonce` no miden lo debido.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn chacha20poly1305_seal(key: &[u8], nonce: &[u8], aad: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
     let unbound = ring::aead::UnboundKey::new(&ring::aead::CHACHA20_POLY1305, key).ok()?;
     let key = ring::aead::LessSafeKey::new(unbound);
@@ -260,9 +287,12 @@ pub fn chacha20poly1305_seal(key: &[u8], nonce: &[u8], aad: &[u8], plaintext: &[
     key.seal_in_place_append_tag(nonce, ring::aead::Aad::from(aad), &mut in_out).ok()?;
     Some(in_out)
 }
+#[cfg(target_arch = "wasm32")]
+pub fn chacha20poly1305_seal(_key: &[u8], _nonce: &[u8], _aad: &[u8], _plaintext: &[u8]) -> Option<Vec<u8>> { None }
 
 /// Descifra y verifica `ciphertext_and_tag` (`texto_cifrado || etiqueta`) con `key`/`nonce`/`aad`. Devuelve
 /// el texto plano, o `None` si la autenticación falla (manipulación) o los tamaños no cuadran.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn chacha20poly1305_open(key: &[u8], nonce: &[u8], aad: &[u8], ciphertext_and_tag: &[u8]) -> Option<Vec<u8>> {
     let unbound = ring::aead::UnboundKey::new(&ring::aead::CHACHA20_POLY1305, key).ok()?;
     let key = ring::aead::LessSafeKey::new(unbound);
@@ -271,6 +301,8 @@ pub fn chacha20poly1305_open(key: &[u8], nonce: &[u8], aad: &[u8], ciphertext_an
     let plaintext = key.open_in_place(nonce, ring::aead::Aad::from(aad), &mut in_out).ok()?;
     Some(plaintext.to_vec())
 }
+#[cfg(target_arch = "wasm32")]
+pub fn chacha20poly1305_open(_key: &[u8], _nonce: &[u8], _aad: &[u8], _ciphertext_and_tag: &[u8]) -> Option<Vec<u8>> { None }
 
 // --- I/O con buffering: registro de archivos abiertos (M11.8) ---
 //
@@ -290,6 +322,8 @@ enum OpenHandle {
     /// M19.4: una conexión TLS (cliente o servidor, rustls). Guarda la sesión + el socket juntos (la
     /// sesión es una máquina de estados mutable que no se puede clonar, a diferencia de `Tcp`). El
     /// intérprete la usa bloqueante (`rustls::Stream`); la VM, no bloqueante con cesión (M19.4b).
+    /// M44a: no existe en `wasm32` (sin `rustls`) → el playground web no tiene TLS.
+    #[cfg(not(target_arch = "wasm32"))]
     Tls(Box<TlsConn>),
     /// M20.8: un socket UDP (sin conexión). Se enlaza con `udp_bind` y se usa con `udp_send_to`/
     /// `udp_recv_from` (cada datagrama lleva su remitente). En el mismo registro de handles.
@@ -297,7 +331,8 @@ enum OpenHandle {
 }
 
 /// Una conexión TLS: la sesión rustls (cliente **o** servidor, vía el enum unificado `Connection`) +
-/// su socket TCP subyacente.
+/// su socket TCP subyacente. M44a: solo en targets no-wasm (usa `rustls`).
+#[cfg(not(target_arch = "wasm32"))]
 struct TlsConn {
     conn: rustls::Connection,
     sock: std::net::TcpStream,
@@ -356,6 +391,7 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
         Some(OpenHandle::Reader(_)) => Err("el handle está abierto para lectura, no escritura".to_string()),
         Some(OpenHandle::Tcp(_)) => Err("el handle es un socket; usa socket_write".to_string()),
         Some(OpenHandle::Listener(_)) => Err("el handle es un socket de escucha, no escribible".to_string()),
+        #[cfg(not(target_arch = "wasm32"))]
         Some(OpenHandle::Tls(_)) => Err("el handle es una conexión TLS; usa socket_write".to_string()),
         Some(OpenHandle::Udp(_)) => Err("el handle es un socket UDP; usa udp_send_to".to_string()),
         None => Err(format!("handle de archivo inválido: {}", h)),
@@ -469,6 +505,7 @@ pub fn socket_write_nb(h: i64, bytes: &[u8]) -> Result<usize, String> {
 
 /// La configuración de cliente TLS (raíces de Mozilla vía `webpki-roots` + `SSL_CERT_FILE`). Verifica
 /// el certificado del servidor como un navegador. Se construye una vez y se comparte.
+#[cfg(not(target_arch = "wasm32"))]
 fn tls_client_config() -> std::sync::Arc<rustls::ClientConfig> {
     static C: std::sync::OnceLock<std::sync::Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
     C.get_or_init(|| {
@@ -494,6 +531,7 @@ fn tls_client_config() -> std::sync::Arc<rustls::ClientConfig> {
 
 /// Abre una conexión TLS de cliente a `host:port` (handshake en la primera I/O); el `host` valida el
 /// certificado (SNI). Builtin `__tls_connect` (M19.4a).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn tls_connect(host: &str, port: i64) -> Result<i64, String> {
     let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
         .map_err(|_| format!("nombre de servidor inválido para TLS: {host}"))?;
@@ -506,10 +544,13 @@ pub fn tls_connect(host: &str, port: i64) -> Result<i64, String> {
     reg.open.insert(id, OpenHandle::Tls(Box::new(TlsConn { conn: rustls::Connection::Client(client), sock })));
     Ok(id)
 }
+#[cfg(target_arch = "wasm32")]
+pub fn tls_connect(_host: &str, _port: i64) -> Result<i64, String> { Err("TLS no disponible en el playground web (wasm)".to_string()) }
 
 /// M31.2a: conexión TLS de cliente ofreciendo **ALPN `h2`** (HTTP/2). Conecta, **completa el handshake**
 /// (bloqueante) y exige que el servidor negocie `h2`; si no, error. Devuelve el handle (reusa el mismo
 /// registro/rutas de I/O que `tls_connect`). Builtin `__tls_connect_h2`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn tls_connect_h2(host: &str, port: i64) -> Result<i64, String> {
     // Config propia (la cacheada no lleva ALPN); reusa el mismo almacén de raíces + SSL_CERT_FILE.
     let mut roots = rustls::RootCertStore::empty();
@@ -546,9 +587,12 @@ pub fn tls_connect_h2(host: &str, port: i64) -> Result<i64, String> {
     reg.open.insert(id, OpenHandle::Tls(Box::new(TlsConn { conn: rustls::Connection::Client(client), sock })));
     Ok(id)
 }
+#[cfg(target_arch = "wasm32")]
+pub fn tls_connect_h2(_host: &str, _port: i64) -> Result<i64, String> { Err("TLS no disponible en el playground web (wasm)".to_string()) }
 
 /// Construye una configuración de servidor TLS a partir de los PEM de la cadena de certificados y la
 /// clave privada (M19.4b). Cada servidor puede tener su propio certificado, así que NO se cachea.
+#[cfg(not(target_arch = "wasm32"))]
 fn tls_server_config(cert_pem: &str, key_pem: &str) -> Result<std::sync::Arc<rustls::ServerConfig>, String> {
     use rustls::pki_types::pem::PemObject;
     let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
@@ -570,6 +614,7 @@ fn tls_server_config(cert_pem: &str, key_pem: &str) -> Result<std::sync::Arc<rus
 /// Convierte una conexión TCP ya aceptada (handle `h`, `OpenHandle::Tcp`) en una conexión TLS de
 /// **servidor** con el certificado/clave dados (M19.4b). Reusa el MISMO handle (saca el socket del
 /// registro y lo reinserta envuelto). El handshake ocurre en la primera I/O. Builtin `__tls_accept`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn tls_accept(h: i64, cert_pem: &str, key_pem: &str) -> Result<i64, String> {
     let config = tls_server_config(cert_pem, key_pem)?;
     let server = rustls::ServerConnection::new(config).map_err(|e| e.to_string())?;
@@ -582,14 +627,22 @@ pub fn tls_accept(h: i64, cert_pem: &str, key_pem: &str) -> Result<i64, String> 
     reg.open.insert(h, OpenHandle::Tls(Box::new(TlsConn { conn: rustls::Connection::Server(server), sock })));
     Ok(h)
 }
+#[cfg(target_arch = "wasm32")]
+pub fn tls_accept(_h: i64, _cert_pem: &str, _key_pem: &str) -> Result<i64, String> { Err("TLS no disponible en el playground web (wasm)".to_string()) }
 
 /// ¿El handle `h` es una conexión TLS? Lo consultan los caminos de socket para desviarse al I/O TLS.
+/// M44a: en wasm nunca hay handles TLS (no se pueden crear) → siempre `false`, y los caminos TLS de
+/// `socket_write_raw`/`socket_read_bytes_blocking`/la VM quedan muertos.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn is_tls_handle(h: i64) -> bool {
     matches!(registry().lock().unwrap().open.get(&h), Some(OpenHandle::Tls(_)))
 }
+#[cfg(target_arch = "wasm32")]
+pub fn is_tls_handle(_h: i64) -> bool { false }
 
 /// Pone el socket subyacente de una conexión TLS en modo no bloqueante (lo hace la VM tras connect/
 /// accept, para que el I/O TLS pueda ceder la fibra). M19.4b.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn tls_set_nonblocking(h: i64) -> Result<(), String> {
     let reg = registry().lock().unwrap();
     match reg.open.get(&h) {
@@ -597,9 +650,13 @@ pub fn tls_set_nonblocking(h: i64) -> Result<(), String> {
         _ => Err(format!("el handle {h} no es una conexión TLS")),
     }
 }
+#[cfg(target_arch = "wasm32")]
+pub fn tls_set_nonblocking(_h: i64) -> Result<(), String> { Err("TLS no disponible en el playground web (wasm)".to_string()) }
 
 /// Drena las escrituras TLS pendientes (handshake/datos) al socket no bloqueante. Gira en `WouldBlock`
 /// (el buffer de envío rara vez se llena con tramas pequeñas; el poller de M17 solo notifica lectura).
+/// M44a: solo no-wasm (toma `&mut TlsConn`, que no existe en wasm).
+#[cfg(not(target_arch = "wasm32"))]
 fn tls_flush_writes(tc: &mut TlsConn) -> Result<(), String> {
     while tc.conn.wants_write() {
         match tc.conn.write_tls(&mut tc.sock) {
@@ -614,6 +671,7 @@ fn tls_flush_writes(tc: &mut TlsConn) -> Result<(), String> {
 /// Lectura TLS **no bloqueante** (VM, M19.4b): conduce el handshake/transporte y devuelve datos de
 /// aplicación. `Ok(Some(data))` = datos (vacío en cierre limpio), `Ok(None)` = bloquearía leyendo del
 /// peer (la VM aparca la fibra en el fd), `Err` en fallo de protocolo.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn tls_read_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
     use std::io::Read;
     let mut reg = registry().lock().unwrap();
@@ -645,9 +703,12 @@ pub fn tls_read_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
         }
     }
 }
+#[cfg(target_arch = "wasm32")]
+pub fn tls_read_nb(_h: i64) -> Result<Option<Vec<u8>>, String> { Err("TLS no disponible en el playground web (wasm)".to_string()) }
 
 /// Escritura TLS **no bloqueante** (VM, M19.4b): cifra `bytes` y los drena al socket. Las escrituras
 /// rara vez bloquean (tramas pequeñas); se completan en el sitio (girando en el raro `WouldBlock`).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn tls_write_nb(h: i64, bytes: &[u8]) -> Result<usize, String> {
     use std::io::Write;
     let mut reg = registry().lock().unwrap();
@@ -661,6 +722,8 @@ pub fn tls_write_nb(h: i64, bytes: &[u8]) -> Result<usize, String> {
     tls_flush_writes(tc)?;
     Ok(bytes.len())
 }
+#[cfg(target_arch = "wasm32")]
+pub fn tls_write_nb(_h: i64, _bytes: &[u8]) -> Result<usize, String> { Err("TLS no disponible en el playground web (wasm)".to_string()) }
 
 // --- I/O binaria (M16.1c) ---
 

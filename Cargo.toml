@@ -11,7 +11,11 @@ edition = "2024"
 default = ["interp"]
 interp = []
 
-[dependencies]
+# M44a — TLS/cripto SOLO para targets NO-wasm. `ring`/`rustls` no compilan a `wasm32-unknown-unknown`
+# (asm/C específico de arquitectura), y el **playground web** (M44) embarca solo el lenguaje NÚCLEO
+# (sin red/TLS/cripto). Al declararlas como dependencias condicionadas por target, el build nativo queda
+# IDÉNTICO y el de wasm simplemente no las trae. El uso en `builtins.rs` va tras `cfg(not(wasm32))`.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # M19.4 — TLS. ÚNICA excepción a la invariante cero-deps (decisión §28.4): la criptografía no se
 # implementa a mano. `rustls` con el proveedor `ring` (Rust+C portable, sin cmake/OpenSSL) + las raíces
 # de confianza de Mozilla (`webpki-roots`) para verificar certificados de servidor.

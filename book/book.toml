@@ -8,7 +8,7 @@ src = "src"
 [output.html]
 default-theme = "rust"
 preferred-dark-theme = "navy"
-git-repository-url = "https://github.com/"
+git-repository-url = "https://github.com/roberto-ayala/raylang"
 edit-url-template = ""
 
 [output.html.fold]

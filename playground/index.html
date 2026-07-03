@@ -4,8 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>raylang · playground</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 20 200 184'%3E%3Cpath d='M100 50 C108 49 113 53 115 60 C150 66 175 84 191 116 C166 127 141 137 119 150 C111 154 105 159 100 165 C95 159 89 154 81 150 C59 137 34 127 9 116 C25 84 50 66 85 60 C87 53 92 49 100 50 Z' fill='%232B7CE0'/%3E%3Cpath d='M93 55 C90 45 88 38 87 30' stroke='%232B7CE0' stroke-width='7' stroke-linecap='round' fill='none'/%3E%3Cpath d='M107 55 C110 45 112 38 113 30' stroke='%232B7CE0' stroke-width='7' stroke-linecap='round' fill='none'/%3E%3C/svg%3E">
 <style>
-  :root { color-scheme: dark; --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3; --accent:#4ea1ff; --muted:#8b949e; }
+  /* Colores de marca raylang: azul primario #2B7CE0, navy #0B1F33, acentos. */
+  :root { color-scheme: dark; --bg:#0b1622; --panel:#0e1c2e; --border:#1e3454; --fg:#e6edf3; --accent:#2B7CE0; --muted:#8fa6c4; }
   * { box-sizing: border-box; }
   body { margin:0; font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--fg); }
   header { display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid var(--border); }
@@ -30,6 +32,11 @@
 </head>
 <body>
 <header>
+  <svg width="26" height="24" viewBox="0 20 200 184" aria-hidden="true" style="flex:none">
+    <path d="M100 50 C108 49 113 53 115 60 C150 66 175 84 191 116 C166 127 141 137 119 150 C111 154 105 159 100 165 C95 159 89 154 81 150 C59 137 34 127 9 116 C25 84 50 66 85 60 C87 53 92 49 100 50 Z" fill="#2B7CE0"/>
+    <path d="M93 55 C90 45 88 38 87 30" stroke="#2B7CE0" stroke-width="7" stroke-linecap="round" fill="none"/>
+    <path d="M107 55 C110 45 112 38 113 30" stroke="#2B7CE0" stroke-width="7" stroke-linecap="round" fill="none"/>
+  </svg>
   <h1>raylang <span class="tag">· playground</span></h1>
   <span class="ejemplos" id="ejemplos"></span>
   <span class="sp"></span>

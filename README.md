@@ -1,7 +1,9 @@
-<!-- El logo de marca irá aquí (assets/logo.svg) cuando esté extraído del PDF de identidad. -->
 <div align="center">
 
-# raylang
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/raylang-lockup-horizontal-dark.svg">
+  <img src="assets/raylang-lockup-horizontal.svg" alt="raylang" width="380">
+</picture>
 
 **Un lenguaje de programación estáticamente tipado, orientado a expresiones y auto-alojado — escrito en Rust, con casi cero dependencias.**
 
@@ -209,3 +211,11 @@ Doble licencia, a tu elección:
 - **Apache-2.0** ([`LICENSE-APACHE`](LICENSE-APACHE))
 
 `SPDX-License-Identifier: MIT OR Apache-2.0`
+
+---
+
+<div align="center">
+<img src="assets/raylang-mascot.svg" alt="la mascota de raylang: una manta raya sonriente" width="130">
+<br>
+<sub>La identidad de marca (logo, variaciones, colores) vive en <a href="assets/"><code>assets/</code></a> · <a href="assets/branding/raylang-brand.pdf">libro de marca</a>.</sub>
+</div>

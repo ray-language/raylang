@@ -2732,6 +2732,100 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
     }
 }
 
+// ===================== M38.1a — transferencia de subgrafo entre heaps =====================
+//
+// El ladrillo del aislamiento por actores (§46): copiar el subgrafo de un valor de un heap a otro,
+// remapeando los handles. Lo usará `send`/`recv`/`spawn` cuando cada fibra tenga su heap (M38.1b): un
+// valor que cruza de un actor a otro se **re-aloja** en el heap destino. Aquí se construye y prueba en
+// AISLAMIENTO (dos heaps sueltos), sin tocar el VM en marcha.
+//
+// Correcto ante **sharing y ciclos**: un `remap: old_handle → new_handle` memoiza los objetos ya
+// copiados, así (a) el sharing interno del subgrafo se preserva (un objeto alcanzado por dos caminos se
+// copia una vez) y (b) los ciclos (las closures capturan celdas → grafos cíclicos) no ciclan al copiar.
+// Para cerrar el ciclo se **reserva primero** un placeholder en el destino y se registra el mapeo ANTES
+// de copiar los hijos, de modo que una referencia de vuelta encuentre el handle nuevo.
+//
+// `Channel`/`Task` NO se transfieren: son la sincronización **compartida** entre actores (viven fuera del
+// heap de cualquier fibra; §46.2). Aquí es un caso inalcanzable (los valores que cruzan son datos).
+
+/// Transfiere `v` del heap `src` al heap `dst`, devolviendo el valor equivalente con handles del destino.
+/// Los primitivos se copian tal cual; los objetos se re-alojan (ver `transfer_obj`).
+pub fn transfer_value(
+    src: &Heap,
+    dst: &mut Heap,
+    v: &HeapValue,
+    remap: &mut HashMap<Handle, Handle>,
+) -> HeapValue {
+    match v {
+        HeapValue::Obj(h) => HeapValue::Obj(transfer_obj(src, dst, *h, remap)),
+        // Escalares inline (Int/Float/Bool/Str/Char/UInt/Bytes/Ptr/Unit/Function): copia directa.
+        otro => otro.clone(),
+    }
+}
+
+/// Re-aloja el objeto `h` de `src` en `dst`, recursivamente. Reserva un placeholder + registra el mapeo
+/// antes de copiar los hijos (para ciclos), y memoiza (para sharing).
+fn transfer_obj(src: &Heap, dst: &mut Heap, h: Handle, remap: &mut HashMap<Handle, Handle>) -> Handle {
+    if let Some(&nh) = remap.get(&h) {
+        return nh; // ya copiado (sharing o ciclo) → reusa el handle destino
+    }
+    // Reserva un placeholder y registra el mapeo ANTES de recursar (cierra los ciclos).
+    let nh = dst.allocate(Obj::Array(Vec::new()));
+    remap.insert(h, nh);
+    // Se **clona** la estructura del objeto origen para soltar el préstamo de `src` antes de transferir
+    // los hijos (que mutan `dst`). El clon copia los `HeapValue` hijos (baratos salvo Str/Bytes); sus
+    // handles se remapean al transferirlos.
+    let nuevo: Obj = match src.get(h) {
+        Obj::Array(elems) => {
+            let elems = elems.clone();
+            Obj::Array(elems.iter().map(|e| transfer_value(src, dst, e, remap)).collect())
+        }
+        Obj::Struct(s) => {
+            let name = s.name.clone();
+            let fields = s.fields.clone();
+            Obj::Struct(VmStruct {
+                name,
+                fields: fields.iter().map(|(n, e)| (n.clone(), transfer_value(src, dst, e, remap))).collect(),
+            })
+        }
+        Obj::Enum(e) => {
+            let (enum_id, tag) = (e.enum_id, e.tag);
+            let payload = e.payload.clone();
+            Obj::Enum(VmEnum {
+                enum_id,
+                tag,
+                payload: payload.iter().map(|e| transfer_value(src, dst, e, remap)).collect(),
+            })
+        }
+        Obj::Closure(c) => {
+            let index = c.index;
+            let upvalues = c.upvalues.clone(); // handles a celdas
+            Obj::Closure(VmClosure {
+                index,
+                upvalues: upvalues.iter().map(|&up| transfer_obj(src, dst, up, remap)).collect(),
+            })
+        }
+        Obj::Cell(inner) => {
+            let inner = inner.clone();
+            Obj::Cell(transfer_value(src, dst, &inner, remap))
+        }
+        Obj::Map(m) => {
+            let pares: Vec<(MapKey, HeapValue)> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let mut nm: HashMap<MapKey, HeapValue> = HashMap::with_capacity(pares.len());
+            for (k, val) in pares {
+                let nv = transfer_value(src, dst, &val, remap);
+                nm.insert(k, nv); // las claves son primitivos (sin handles)
+            }
+            Obj::Map(nm)
+        }
+        // §46.2: canales y tareas son sincronización COMPARTIDA, no se re-alojan en un heap de fibra.
+        Obj::Channel(_) => unreachable!("un canal es compartido; no se transfiere entre heaps"),
+        Obj::Task(_) => unreachable!("una tarea es compartida; no se transfiere entre heaps"),
+    };
+    *dst.get_mut(nh) = nuevo;
+    nh
+}
+
 fn runtime_error(line: usize, col: usize, msg: &str) -> RuntimeError {
     RuntimeError { msg: msg.to_string(), line, col }
 }
@@ -3383,6 +3477,56 @@ mod tests {
         let ok = compilar("fn main() -> int { var s = 0; var i = 0; while (i < 100) { s = s + i; i = i + 1; } s }");
         assert_eq!(run_program_con_limite(&ok, Some(1_000_000), None).unwrap(), Value::Int(4950));
         assert_eq!(run_program_con_limite(&ok, None, None).unwrap(), Value::Int(4950)); // None = sin límite
+    }
+
+    /// M38.1a: `transfer_value` re-aloja un subgrafo de un heap a otro con handles del destino.
+    /// Cubre lo estructural (arreglo con struct + string), el **sharing interno** (un objeto alcanzado
+    /// por dos caminos se copia UNA vez) y los **ciclos** (que un deep-copy ingenuo colgaría).
+    #[test]
+    fn transfer_value_entre_heaps() {
+        use std::collections::HashMap;
+        // (1) Estructural: [1, P{x:2}, "hi"] → estructuralmente igual, con handles del destino.
+        {
+            let mut a = Heap::new();
+            let p = a.allocate(Obj::Struct(VmStruct { name: "P".into(), fields: vec![("x".into(), HeapValue::Int(2))] }));
+            let top = a.allocate(Obj::Array(vec![HeapValue::Int(1), HeapValue::Obj(p), HeapValue::Str("hi".into())]));
+            let mut b = Heap::new();
+            let mut remap = HashMap::new();
+            let tv = transfer_value(&a, &mut b, &HeapValue::Obj(top), &mut remap);
+            assert_eq!(to_value(&b, &[], &tv), to_value(&a, &[], &HeapValue::Obj(top)), "estructuralmente iguales");
+            assert_eq!(b.live(), 2, "se copiaron 2 objetos (arreglo + struct)");
+        }
+        // (2) Sharing: [sub, sub] con el MISMO handle → tras transferir, ambos apuntan al mismo destino.
+        {
+            let mut a = Heap::new();
+            let sub = a.allocate(Obj::Array(vec![HeapValue::Int(7)]));
+            let top = a.allocate(Obj::Array(vec![HeapValue::Obj(sub), HeapValue::Obj(sub)]));
+            let mut b = Heap::new();
+            let mut remap = HashMap::new();
+            let tv = transfer_value(&a, &mut b, &HeapValue::Obj(top), &mut remap);
+            let nt = tv.handle().unwrap();
+            let (h0, h1) = match b.get(nt) {
+                Obj::Array(e) => (e[0].handle().unwrap(), e[1].handle().unwrap()),
+                _ => panic!("esperaba arreglo"),
+            };
+            assert_eq!(h0, h1, "el sharing interno se preserva (un solo objeto copiado)");
+            assert_eq!(b.live(), 2, "sharing → 2 objetos (top + sub), no 3");
+        }
+        // (3) Ciclo: arr -> cell -> arr. Debe terminar y preservar el ciclo.
+        {
+            let mut a = Heap::new();
+            let arr = a.allocate(Obj::Array(Vec::new())); // placeholder
+            let cell = a.allocate(Obj::Cell(HeapValue::Obj(arr)));
+            *a.get_mut(arr) = Obj::Array(vec![HeapValue::Obj(cell)]); // cierra el ciclo
+            let mut b = Heap::new();
+            let mut remap = HashMap::new();
+            let tv = transfer_value(&a, &mut b, &HeapValue::Obj(arr), &mut remap);
+            let narr = tv.handle().unwrap();
+            let ncell = match b.get(narr) { Obj::Array(e) => e[0].handle().unwrap(), _ => panic!() };
+            let back = match b.get(ncell) { Obj::Cell(HeapValue::Obj(h)) => *h, _ => panic!() };
+            assert_eq!(back, narr, "el ciclo se preserva (la celda apunta de vuelta al arreglo)");
+            assert_eq!(b.live(), 2, "ciclo → 2 objetos (arreglo + celda)");
+        }
     }
 
     /// M42.2: **tope de heap** — límite de objetos vivos de la VM. Un programa que retiene un montón

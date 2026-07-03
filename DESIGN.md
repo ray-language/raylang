@@ -3897,6 +3897,15 @@ empiece en Opt.4.)
   Causa: el `trace` solo corre en una recolección (infrecuente; el umbral crece ×2 con la población viva),
   y asignar un `Vec` pequeño no es el cuello de botella; para arreglos de `int` (la carga `arrays`) los
   hijos son primitivos → `children` ya devolvía un `Vec` vacío (que no asigna). El benchmark se conserva.
+- **M37.2 — `children()` con buffer reusado, re-medido a escala** (misma idea que Opt.8 pero con el
+  benchmark de heap grande de M37.1, 300k objetos vivos, midiendo la **pausa** del GC). Hipótesis: a 300k
+  objetos, las 300k asignaciones de `Vec` sí pesarían. **Medido (5 corridas cada uno)**: pausa máxima
+  mediana **8,87 ms (sin buffer) vs 8,96 ms (con buffer)**, media 1,12 vs 1,14 ms, total 15,7 vs 16,0 ms —
+  **distribuciones solapadas, dentro del ruido** (una sola corrida engañaba con 8,88 vs 9,79) → **revertido**.
+  **Dato clave para M37**: la pausa la domina el **recorrido O(heap)** (tocar 300k objetos → fallos de
+  caché), no la asignación (muchas listas de hijos son de tamaño 1 → el `Vec` es diminuto). Corolario: **no
+  hay tweak barato que baje la pausa stop-the-world de forma acotada**; el objetivo <1 ms exige la estructura
+  (marcado/barrido incremental con *write barrier*, o el heap-por-actor de M38). Confirma §27.5.
 
 ### 27.4 Pendiente / ideas a medir
 

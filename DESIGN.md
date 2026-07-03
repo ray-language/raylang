@@ -6063,10 +6063,17 @@ VM, como desde M12.)
     declaraba deadlock con posición `(0,0)` → el localizador de errores underflowaba (`gline - start_line`,
     entry `start_line=1`) → `saturating_sub` (fix general de un bug latente pre-existente). Integración del
     poller: funciona (el worker con `running==0` hace `io_wait` bajo el lock; el corpus de M12 no usa red).
-- **M38.4 — `--deterministic`**: preservar el modo M:1 reproducible para tests/oráculo; toda la batería de
-  concurrencia de M12 debe pasar en ese modo. **Pendiente**: hoy el default ya ES N=1 determinista (para
-  mantener verde el suite); M38.4 invertirá el default a multicore y ofrecerá `--deterministic` (= forzar N=1)
-  como opt-in reproducible, cableado en el harness de tests. La infraestructura (N configurable) ya está.
+- **M38.4 — `--deterministic` HECHO** (`233532f`): **invierte el default a multicore**; lo determinista es
+  opt-in. `num_workers(program)` decide en orden: (1) `--deterministic` (bandera global `AtomicBool` que fija
+  la CLI) → 1 hilo (M:1 reproducible, FIFO); (2) `RAYLANG_THREADS=N` → N; (3) el programa **no usa `spawn`**
+  → 1 (sólo hay `main`; el multicore no aporta y así el oráculo y la mayoría de programas no pagan el coste de
+  lanzar hilos — cero regresión); (4) concurrente sin override → `available_parallelism()`. La CLI acepta
+  `--deterministic` (order-independent) en `ray run` y en la interfaz legada `--vm`. Tests: `concurrency_cli`
+  (salida FIFO exacta) usa `--deterministic`; los servidores (webserver/websocket/métricas/net) corren en el
+  DEFAULT multicore y pasan (salida request-response determinista). Medido: `benchmarks/parallel.ray` corre
+  multicore por defecto (4,4 s) vs `--deterministic` (16,0 s, serie); un programa sin `spawn` en N=1 sin
+  overhead. **M38 COMPLETO** (M:N por actores) salvo el diferido **M38.2** (move-on-send optimizado; hoy `send`
+  siempre deep-copia el subgrafo — correcto pero no óptimo; medir si el move por unicidad paga).
 
 ### 46.6 Riesgos y mitigaciones
 

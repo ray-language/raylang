@@ -164,6 +164,15 @@ struct Vm<'a> {
     frames: Vec<CallFrame>,
     stack: Vec<HeapValue>,
     heap: Heap,
+    // --- M38.1b: almacenes del host de canales y tareas ---
+    /// Canales `Channel<T>` (M12.1): sincronización COMPARTIDA entre actores, fuera del GC de las fibras
+    /// (§46.2). Se referencian por id (índice) vía `HeapValue::Channel(id)`. No se reclaman durante una
+    /// ejecución (suelen ser pocos; un free-list es una optimización futura). El GC rootea los valores en
+    /// tránsito de sus colas (ver `collect`).
+    channels: Vec<VmChannel>,
+    /// Tareas `Task<T>` (M12.3): compartidas entre la fibra hija y quien la une, fuera del GC. Se
+    /// referencian por id vía `HeapValue::Task(id)`. El GC rootea el valor de `Done`.
+    tasks: Vec<VmTask>,
     // --- Scheduler cooperativo M:1 (M12.1) ---
     /// Fibras listas para ejecutar, en orden FIFO (scheduler determinista).
     ready: VecDeque<Fiber>,
@@ -205,6 +214,8 @@ impl<'a> Vm<'a> {
             frames: Vec::new(),
             stack: Vec::new(),
             heap: Heap::new(),
+            channels: Vec::new(),
+            tasks: Vec::new(),
             ready: VecDeque::new(),
             parked: Vec::new(),
             io_parked: Vec::new(),
@@ -710,7 +721,9 @@ impl<'a> Vm<'a> {
                         },
                         _ => unreachable!("el checker garantiza una función"),
                     };
-                    let task = self.heap.allocate(Obj::Task(VmTask { state: TaskState::Pending }));
+                    // M38.1b: la tarea vive en el almacén del host, referenciada por id.
+                    let task = self.tasks.len();
+                    self.tasks.push(VmTask { state: TaskState::Pending });
                     if let Some(scope) = self.scopes.last_mut() {
                         scope.children.push(task);
                     }
@@ -720,14 +733,13 @@ impl<'a> Vm<'a> {
                         frames: vec![frame], stack: Vec::new(), is_main: false,
                         task: Some(task), scopes: Vec::new(),
                     });
-                    self.push(HeapValue::Obj(task)); // el Task<T> es el resultado de spawn
+                    self.push(HeapValue::Task(task)); // el Task<T> es el resultado de spawn
                 }
                 OpCode::ChannelNew => {
-                    // channel() sin argumentos → canal NO acotado (cap = None).
-                    let h = self.heap.allocate(Obj::Channel(VmChannel {
-                        queue: VecDeque::new(), closed: false, cap: None,
-                    }));
-                    self.push(HeapValue::Obj(h));
+                    // channel() sin argumentos → canal NO acotado (cap = None). M38.1b: en el host.
+                    let id = self.channels.len();
+                    self.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: None });
+                    self.push(HeapValue::Channel(id));
                 }
                 OpCode::ChannelNewBounded => {
                     // channel(n) → canal acotado a la capacidad n ≥ 0 (n = 0 rendezvous), M12.2.
@@ -738,18 +750,15 @@ impl<'a> Vm<'a> {
                     if n < 0 {
                         return Err(runtime_error(pos!().0, pos!().1, "la capacidad de un canal no puede ser negativa"));
                     }
-                    let h = self.heap.allocate(Obj::Channel(VmChannel {
-                        queue: VecDeque::new(), closed: false, cap: Some(n as usize),
-                    }));
-                    self.push(HeapValue::Obj(h));
+                    let id = self.channels.len();
+                    self.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: Some(n as usize) });
+                    self.push(HeapValue::Channel(id));
                 }
                 OpCode::ChanSend => {
                     let v = self.pop();
-                    let h = self.pop_obj();
-                    let (closed, len, cap) = match self.heap.get(h) {
-                        Obj::Channel(c) => (c.closed, c.queue.len(), c.cap),
-                        _ => unreachable!("el checker garantiza un Channel"),
-                    };
+                    let h = self.pop_channel();
+                    let c = &self.channels[h];
+                    let (closed, len, cap) = (c.closed, c.queue.len(), c.cap);
                     if closed {
                         return Err(runtime_error(pos!().0, pos!().1, "send sobre un canal cerrado"));
                     }
@@ -763,10 +772,7 @@ impl<'a> Vm<'a> {
                         self.push(HeapValue::Unit);
                     } else if cap.is_none() || len < cap.unwrap() {
                         // (2) Hay hueco (no acotado, o len < cap) → encola y sigue.
-                        match self.heap.get_mut(h) {
-                            Obj::Channel(c) => c.queue.push_back(v),
-                            _ => unreachable!("el checker garantiza un Channel"),
-                        }
+                        self.channels[h].queue.push_back(v);
                         self.wake_select_waiters(h); // M12.4: el canal ya tiene valor → listo para un select
                         self.push(HeapValue::Unit);
                     } else {
@@ -782,13 +788,10 @@ impl<'a> Vm<'a> {
                     }
                 }
                 OpCode::ChanRecv => {
-                    let h = self.pop_obj();
+                    let h = self.pop_channel();
                     // (1) ¿Valor en la cola? Sácalo; al liberar un hueco, si hay un emisor bloqueado en este
                     // canal, su valor entra a la cola (ya hay sitio) y se le despierta.
-                    let from_queue = match self.heap.get_mut(h) {
-                        Obj::Channel(c) => c.queue.pop_front(),
-                        _ => unreachable!("el checker garantiza un Channel"),
-                    };
+                    let from_queue = self.channels[h].queue.pop_front();
                     if let Some(v) = from_queue {
                         self.wake_blocked_sender(h);
                         let arr = self.heap.allocate(Obj::Array(vec![v]));
@@ -811,10 +814,7 @@ impl<'a> Vm<'a> {
                         return Ok(None);
                     }
                     // (3) Cola vacía y sin emisores: cerrado → None ([]); abierto → bloquear (Recv).
-                    let closed = match self.heap.get(h) {
-                        Obj::Channel(c) => c.closed,
-                        _ => unreachable!("el checker garantiza un Channel"),
-                    };
+                    let closed = self.channels[h].closed;
                     if closed {
                         let arr = self.heap.allocate(Obj::Array(Vec::new()));
                         self.push(HeapValue::Obj(arr));
@@ -828,22 +828,19 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::TaskJoin => {
                     // Une una tarea (M12.3): si terminó, su valor; si falló, re-lanza; si pendiente, bloquea.
-                    let t = self.pop_obj();
-                    let outcome = match self.heap.get(t) {
-                        Obj::Task(task) => match &task.state {
-                            TaskState::Done(v) => Some(Ok(v.clone())),
-                            TaskState::Failed(msg) => Some(Err(msg.clone())),
-                            TaskState::Pending => None,
-                        },
-                        _ => unreachable!("el checker garantiza una Task"),
+                    let t = self.pop_task();
+                    let outcome = match &self.tasks[t].state {
+                        TaskState::Done(v) => Some(Ok(v.clone())),
+                        TaskState::Failed(msg) => Some(Err(msg.clone())),
+                        TaskState::Pending => None,
                     };
                     match outcome {
                         Some(Ok(v)) => self.push(v),
                         Some(Err(msg)) => return Err(runtime_error(pos!().0, pos!().1, &msg)),
                         None => {
-                            // Bloquear: re-empuja el handle (lo sacamos arriba) y rebobina el ip al
+                            // Bloquear: re-empuja el id (lo sacamos arriba) y rebobina el ip al
                             // TaskJoin, para que al despertar (con la tarea ya Done/Failed) lo re-ejecute.
-                            self.push(HeapValue::Obj(t));
+                            self.push(HeapValue::Task(t));
                             self.frames.last_mut().unwrap().ip -= 1;
                             let fiber = self.take_current_fiber();
                             self.parked.push(Parked { on: t, fiber, waiting: Waiting::Join });
@@ -857,12 +854,12 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::ScopeEnd => {
                     // Cierra el scope: el valor del cuerpo (R) ya está en la pila.
-                    let children: Vec<Handle> =
+                    let children: Vec<usize> =
                         self.scopes.last().expect("ScopeEnd sin ScopeBegin").children.clone();
                     // (1) ¿Alguna hija FALLÓ? Cancela a las hermanas que sigan pendientes y propaga el fallo
                     // ORIGINAL de inmediato, sin esperar a las demás (M12.5: cancelación de hermanas).
-                    let failure = children.iter().find_map(|&c| match self.heap.get(c) {
-                        Obj::Task(VmTask { state: TaskState::Failed(msg) }) => Some(msg.clone()),
+                    let failure = children.iter().find_map(|&c| match &self.tasks[c].state {
+                        TaskState::Failed(msg) => Some(msg.clone()),
                         _ => None,
                     });
                     if let Some(msg) = failure {
@@ -873,8 +870,8 @@ impl<'a> Vm<'a> {
                         return Err(runtime_error(pos!().0, pos!().1, &msg));
                     }
                     // (2) ¿Alguna pendiente? Rebobina a ScopeEnd y bloquéate (al despertar re-escanea).
-                    let pending = children.iter().copied().find(|&c| matches!(
-                        self.heap.get(c), Obj::Task(t) if matches!(t.state, TaskState::Pending)));
+                    let pending = children.iter().copied().find(|&c|
+                        matches!(self.tasks[c].state, TaskState::Pending));
                     if let Some(c) = pending {
                         self.frames.last_mut().unwrap().ip -= 1;
                         let fiber = self.take_current_fiber();
@@ -889,16 +886,17 @@ impl<'a> Vm<'a> {
                     // Espera a que algún canal de la lista esté listo para recibir; devuelve su índice
                     // (el menor, determinista). Si ninguno lo está, bloquea esperando al conjunto (M12.4).
                     let arr = self.pop_obj();
-                    let chans: Vec<Handle> = match self.heap.get(arr) {
-                        Obj::Array(elems) => elems.iter().filter_map(|v| v.handle()).collect(),
+                    let chans: Vec<usize> = match self.heap.get(arr) {
+                        Obj::Array(elems) => elems.iter().filter_map(|v| match v {
+                            HeapValue::Channel(id) => Some(*id),
+                            _ => None,
+                        }).collect(),
                         _ => unreachable!("el checker garantiza un arreglo de canales"),
                     };
                     let mut ready_idx = None;
                     for (i, &c) in chans.iter().enumerate() {
-                        let buffered_or_closed = match self.heap.get(c) {
-                            Obj::Channel(ch) => !ch.queue.is_empty() || ch.closed,
-                            _ => unreachable!("el checker garantiza un Channel"),
-                        };
+                        let ch = &self.channels[c];
+                        let buffered_or_closed = !ch.queue.is_empty() || ch.closed;
                         let has_sender = self.parked.iter()
                             .any(|p| p.on == c && matches!(p.waiting, Waiting::Send(_)));
                         if buffered_or_closed || has_sender {
@@ -1756,17 +1754,14 @@ impl<'a> Vm<'a> {
                         // bloqueado es un error de programa (alguien todavía esperaba enviar) → error de
                         // ejecución en el sitio del `close` (determinista, a diferencia de "panic en otra
                         // fibra").
-                        HeapValue::Obj(ch) => {
+                        HeapValue::Channel(ch) => {
                             if self.parked.iter().any(
                                 |p| p.on == ch && matches!(p.waiting, Waiting::Send(_)))
                             {
                                 return Err(runtime_error(pos!().0, pos!().1,
                                     "close sobre un canal con un emisor bloqueado"));
                             }
-                            match self.heap.get_mut(ch) {
-                                Obj::Channel(c) => c.closed = true,
-                                _ => unreachable!("el checker garantiza un handle o un Channel"),
-                            }
+                            self.channels[ch].closed = true;
                             let mut i = 0;
                             while i < self.parked.len() {
                                 if self.parked[i].on == ch && matches!(self.parked[i].waiting, Waiting::Recv) {
@@ -2078,9 +2073,7 @@ impl<'a> Vm<'a> {
             return Ok(Some(result));
         }
         if let Some(task) = self.current_task.take() {
-            if let Obj::Task(t) = self.heap.get_mut(task) {
-                t.state = TaskState::Done(result);
-            }
+            self.tasks[task].state = TaskState::Done(result);
             self.wake_task_waiters(task);
         }
         self.scopes.clear();
@@ -2094,14 +2087,12 @@ impl<'a> Vm<'a> {
     fn fail_current_fiber(&mut self, e: RuntimeError) -> Result<(), RuntimeError> {
         if let Some(task) = self.current_task.take() {
             let msg = e.msg.clone(); // solo el mensaje; el join que lo observe le pone su propia posición
-            if let Obj::Task(t) = self.heap.get_mut(task) {
-                t.state = TaskState::Failed(msg);
-            }
+            self.tasks[task].state = TaskState::Failed(msg);
             self.wake_task_waiters(task);
         }
         // M12.5: si esta fibra poseía tareas (scopes activos cuyo cuerpo hizo panic), cancélalas en vez de
         // dejarlas huérfanas. (En `main` el programa aborta, así que esto importa para fibras hijas.)
-        let orphans: Vec<Handle> = self.scopes.iter().flat_map(|s| s.children.iter().copied()).collect();
+        let orphans: Vec<usize> = self.scopes.iter().flat_map(|s| s.children.iter().copied()).collect();
         for c in orphans {
             self.cancel_task(c);
         }
@@ -2196,13 +2187,15 @@ impl<'a> Vm<'a> {
     /// Despierta a los `select` aparcados cuyo arreglo de canales contiene `chan`, porque acaba de pasar a
     /// estar listo para recibir (M12.4). Re-ejecutarán el `select` y verán el canal listo (o, si otro lo
     /// consumió antes, se volverán a bloquear). No empuja nada (el opcode rebobinó su `ip`).
-    fn wake_select_waiters(&mut self, chan: Handle) {
+    fn wake_select_waiters(&mut self, chan: usize) {
         let mut i = 0;
         while i < self.parked.len() {
             let on = self.parked[i].on;
             let is_select = matches!(self.parked[i].waiting, Waiting::Select);
+            // M38.1b: el `on` de un Select es el handle del arreglo (heap de objetos); sus elementos son
+            // ahora `HeapValue::Channel(id)`.
             let contains = is_select && match self.heap.get(on) {
-                Obj::Array(elems) => elems.iter().any(|v| v.handle() == Some(chan)),
+                Obj::Array(elems) => elems.iter().any(|v| matches!(v, HeapValue::Channel(id) if *id == chan)),
                 _ => false,
             };
             if contains {
@@ -2220,14 +2213,14 @@ impl<'a> Vm<'a> {
     /// cancelada que era dueña de un scope no deja nietos huérfanos). Si la tarea ya terminó, no hace nada.
     /// Es trivial porque el scheduler es cooperativo M:1: una fibra solo corre en los puntos de yield, así
     /// que "cancelar" = "retirar de las colas". No es preemptiva: no interrumpe código que corra sin ceder.
-    fn cancel_task(&mut self, task: Handle) {
-        match self.heap.get_mut(task) {
-            Obj::Task(t) if matches!(t.state, TaskState::Pending) => {
-                t.state = TaskState::Failed("tarea cancelada (una hermana falló)".to_string());
+    fn cancel_task(&mut self, task: usize) {
+        match &mut self.tasks[task].state {
+            estado @ TaskState::Pending => {
+                *estado = TaskState::Failed("tarea cancelada (una hermana falló)".to_string());
             }
-            _ => return, // no es una tarea, o ya terminó (Done/Failed) → nada que cancelar
+            _ => return, // ya terminó (Done/Failed) → nada que cancelar
         }
-        let mut grandchildren: Vec<Handle> = Vec::new();
+        let mut grandchildren: Vec<usize> = Vec::new();
         if let Some(pos) = self.ready.iter().position(|f| f.task == Some(task)) {
             let f = self.ready.remove(pos).unwrap();
             for s in &f.scopes {
@@ -2269,7 +2262,7 @@ impl<'a> Vm<'a> {
     /// Tras un `recv` que liberó un hueco: si hay un **emisor bloqueado** en `chan` (cola llena, M12.2),
     /// mete su valor pendiente en la cola (ahora hay sitio) y lo despierta. FIFO → el primero que se
     /// bloqueó despierta antes.
-    fn wake_blocked_sender(&mut self, chan: Handle) {
+    fn wake_blocked_sender(&mut self, chan: usize) {
         if let Some(pos) = self.parked.iter().position(
             |p| p.on == chan && matches!(p.waiting, Waiting::Send(_)))
         {
@@ -2278,10 +2271,7 @@ impl<'a> Vm<'a> {
                 Waiting::Send(sv) => sv,
                 _ => unreachable!(),
             };
-            match self.heap.get_mut(chan) {
-                Obj::Channel(c) => c.queue.push_back(sv),
-                _ => unreachable!("el checker garantiza un Channel"),
-            }
+            self.channels[chan].queue.push_back(sv);
             self.wake_sender(parked.fiber);
         }
     }
@@ -2298,11 +2288,7 @@ impl<'a> Vm<'a> {
         // (listas y bloqueadas) y los canales que esperan.
         let mut roots: Vec<Handle> = Vec::new();
         gather_roots(&self.frames, &self.stack, &mut roots);
-        // M12.3: la Task y los scopes de la fibra en curso.
-        roots.extend(self.current_task);
-        for s in &self.scopes {
-            roots.extend(s.children.iter().copied());
-        }
+        // M38.1b: current_task y scopes.children son ids de tareas del host, no handles del heap.
         for f in &self.ready {
             gather_fiber_roots(f, &mut roots);
         }
@@ -2311,12 +2297,29 @@ impl<'a> Vm<'a> {
             gather_fiber_roots(&p.fiber, &mut roots);
         }
         for p in &self.parked {
-            roots.push(p.on); // el canal/tarea que espera la fibra debe sobrevivir aunque solo lo referencie ella
+            // M38.1b: el `on` es un handle del heap SOLO para Select (el arreglo de canales); para
+            // Recv/Send/Join es un id de canal/tarea del host → no se rootea como handle.
+            if matches!(p.waiting, Waiting::Select) {
+                roots.push(p.on);
+            }
             // M12.2: un emisor bloqueado sostiene un valor pendiente que aún no entró al canal → es raíz.
             if let Waiting::Send(v) = &p.waiting {
                 roots.extend(v.handle()); // `Option<Handle>` es iterable: añade el handle si lo hay
             }
             gather_fiber_roots(&p.fiber, &mut roots);
+        }
+        // M38.1b: raíces de los almacenes del host — los valores EN TRÁNSITO en las colas de los canales y
+        // los valores de `Done` de las tareas viven en el heap de objetos y solo los alcanzan estos
+        // almacenes (ya no son objetos del heap trazables por el GC).
+        for ch in &self.channels {
+            for v in &ch.queue {
+                roots.extend(v.handle());
+            }
+        }
+        for t in &self.tasks {
+            if let TaskState::Done(v) = &t.state {
+                roots.extend(v.handle());
+            }
         }
 
         for h in roots {
@@ -2479,6 +2482,22 @@ impl<'a> Vm<'a> {
         match self.pop() {
             HeapValue::Obj(h) => h,
             _ => unreachable!("el checker garantiza un objeto"),
+        }
+    }
+
+    /// M38.1b: saca un id de canal (el checker garantiza un `Channel<T>`).
+    fn pop_channel(&mut self) -> usize {
+        match self.pop() {
+            HeapValue::Channel(id) => id,
+            _ => unreachable!("el checker garantiza un canal"),
+        }
+    }
+
+    /// M38.1b: saca un id de tarea (el checker garantiza un `Task<T>`).
+    fn pop_task(&mut self) -> usize {
+        match self.pop() {
+            HeapValue::Task(id) => id,
+            _ => unreachable!("el checker garantiza una tarea"),
         }
     }
 
@@ -2671,11 +2690,10 @@ fn format_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> String {
                 parts.sort();
                 format!("Map{{{}}}", parts.join(", "))
             }
-            // M12.1: un canal no tiene representación textual significativa (no se inspecciona).
-            Obj::Channel(_) => "<channel>".to_string(),
-            // M12.3: una tarea tampoco (se une con `join`, no se imprime).
-            Obj::Task(_) => "<task>".to_string(),
         },
+        // M38.1b: canal/tarea (host) no se inspeccionan textualmente.
+        HeapValue::Channel(_) => "<channel>".to_string(),
+        HeapValue::Task(_) => "<task>".to_string(),
     }
 }
 
@@ -2723,12 +2741,11 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
                 }
                 Value::Map(Rc::new(RefCell::new(hm)))
             }
-            // M12.1: un canal vive solo en la VM y nunca es el resultado del programa (main devuelve
-            // int/unit) ni cruza al intérprete (no hay oráculo concurrente) → no necesita representación.
-            Obj::Channel(_) => unreachable!("un canal nunca es el resultado del programa"),
-            // M12.3: una tarea tampoco es el resultado del programa.
-            Obj::Task(_) => unreachable!("una tarea nunca es el resultado del programa"),
         },
+        // M38.1b: un canal/tarea (host) nunca es el resultado del programa ni cruza al intérprete
+        // (main devuelve int/unit; no hay oráculo concurrente).
+        HeapValue::Channel(_) => unreachable!("un canal nunca es el resultado del programa"),
+        HeapValue::Task(_) => unreachable!("una tarea nunca es el resultado del programa"),
     }
 }
 
@@ -2818,9 +2835,6 @@ fn transfer_obj(src: &Heap, dst: &mut Heap, h: Handle, remap: &mut HashMap<Handl
             }
             Obj::Map(nm)
         }
-        // §46.2: canales y tareas son sincronización COMPARTIDA, no se re-alojan en un heap de fibra.
-        Obj::Channel(_) => unreachable!("un canal es compartido; no se transfiere entre heaps"),
-        Obj::Task(_) => unreachable!("una tarea es compartida; no se transfiere entre heaps"),
     };
     *dst.get_mut(nh) = nuevo;
     nh
@@ -2866,10 +2880,8 @@ fn gather_roots(frames: &[CallFrame], stack: &[HeapValue], roots: &mut Vec<Handl
 /// scopes activos (las tareas que aún no ha unido).
 fn gather_fiber_roots(f: &Fiber, roots: &mut Vec<Handle>) {
     gather_roots(&f.frames, &f.stack, roots);
-    roots.extend(f.task);
-    for s in &f.scopes {
-        roots.extend(s.children.iter().copied());
-    }
+    // M38.1b: `f.task` y `scopes.children` son ids de tareas del host, NO handles del heap → no se rootean
+    // aquí. Los valores de `Done` de las tareas los rootea `collect` desde `self.tasks`.
 }
 
 /// Convierte un valor de la VM en una clave de Map (M13.1). El checker garantiza el tipo.

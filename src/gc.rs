@@ -50,6 +50,13 @@ pub enum HeapValue {
     /// Un **puntero opaco** foráneo (`ptr`, M41.4b): la dirección de un objeto de C, escalar inline. No
     /// es objeto del heap ni lo traza el GC (no contiene handles). Se compara por identidad.
     Ptr(i64),
+    /// M38.1b: un **canal** (`Channel<T>`) por su **id** en el almacén del host de la VM (`Vm.channels`),
+    /// NO un objeto del heap. Los canales son sincronización COMPARTIDA entre actores (§46.2): viven fuera
+    /// del GC de cualquier fibra. Los valores en tránsito en su cola sí son raíces (los rootea la VM).
+    Channel(usize),
+    /// M38.1b: una **tarea** (`Task<T>`) por su **id** en el almacén del host (`Vm.tasks`), NO un objeto del
+    /// heap. Compartida entre la fibra hija y quien la une. El valor de `Done` es raíz (lo rootea la VM).
+    Task(usize),
     Unit,
     /// Una función **sin** captura: un índice en la tabla de funciones (no es un
     /// objeto del heap, no se recolecta).
@@ -132,10 +139,10 @@ pub enum Obj {
     /// Un mapa `Map<K, V>` (M13.1): clave hashable → valor. El GC traza los **valores**
     /// (las claves son primitivos *inline*, sin handles).
     Map(HashMap<MapKey, HeapValue>),
-    /// Un canal `Channel<T>` (M12.1): el GC traza los valores **en tránsito** (la cola).
-    Channel(VmChannel),
-    /// Una tarea `Task<T>` (M12.3): el GC traza el valor de `Done`.
-    Task(VmTask),
+    // M38.1b: `Channel`/`Task` YA NO son objetos del heap. Son sincronización compartida entre actores,
+    // viven en almacenes del host de la VM (`Vm.channels`/`Vm.tasks`) referenciados por
+    // `HeapValue::Channel(id)`/`Task(id)`. Sus structs (`VmChannel`/`VmTask`/`TaskState`) siguen definidos
+    // aquí (los usa la VM); el GC solo rootea los valores en tránsito / de `Done` que la VM le aporta.
 }
 
 /// Una ranura del heap: un objeto y su bit de marca.
@@ -261,13 +268,8 @@ impl Heap {
             Obj::Cell(v) => v.handle().into_iter().collect(),
             // M13.1: las claves son primitivos (sin handles); solo se trazan los valores.
             Obj::Map(m) => m.values().filter_map(HeapValue::handle).collect(),
-            // M12.1: los valores en tránsito en el canal son raíces mientras estén en la cola.
-            Obj::Channel(c) => c.queue.iter().filter_map(HeapValue::handle).collect(),
-            // M12.3: el valor de una tarea terminada con éxito es raíz hasta que alguien la una.
-            Obj::Task(t) => match &t.state {
-                TaskState::Done(v) => v.handle().into_iter().collect(),
-                _ => Vec::new(),
-            },
+            // M38.1b: Channel/Task ya no son objetos del heap (viven en el host); sus valores en
+            // tránsito / de Done los rootea la VM directamente en `collect`.
         }
     }
 

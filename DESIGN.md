@@ -5996,7 +5996,18 @@ VM, como desde M12.)
 - **M38.1 — heap-por-fibra** (single-thread todavía): cada `Fiber` gana su propio `Heap`; el GC recolecta
   solo el heap de la fibra en curso. Esto **ya acota las pausas** (heaps pequeños) → **cierra el objetivo de
   M37**, medible con el benchmark de §27.5. Es el paso que desacopla el heap del scheduler; el más invasivo
-  del runtime pero sin hilos aún (riesgo acotado).
+  del runtime pero sin hilos aún (riesgo acotado). Se implementa en incrementos:
+  - **M38.1a HECHO**: `transfer_value` (subgrafo entre heaps, cycle/sharing-safe), probada en aislamiento.
+  - **M38.1b-1 HECHO**: **canales y tareas al almacén del host** — dejan de ser `Obj::Channel`/`Obj::Task`
+    en el GC y pasan a `Vm.channels`/`Vm.tasks` (`Vec`), referenciados por `HeapValue::Channel(id)`/`Task(id)`
+    (distintos de `Obj`, para que con heaps por fibra un handle de canal no sea ambiguo de qué heap). El GC
+    ya no traza canales/tasks; en su lugar `collect` rootea directamente los valores **en tránsito** de las
+    colas y los de `Done` de las tareas. **Behavior-preserving**: heap único aún, toda la batería de
+    concurrencia de M12 (23 tests) pasa idéntica. Prerrequisito para el split (un handle de canal ya no
+    vive en el heap de objetos).
+  - **M38.1b-2 (pendiente)**: dividir el heap de objetos **por fibra** (mover `heap` de `Vm` a `Fiber`,
+    save/restore en la conmutación) + cablear `transfer_value` en los cruces (capturas de spawn, send→cola,
+    cola→recv). `collect` pasa a recolectar solo el heap de la fibra en curso → acota la pausa.
 - **M38.2 — move/copy-on-send**: `send`/`recv` transfieren el subgrafo entre heaps (empezar con deep-copy
   siempre —correcto y simple— y medir si el move por unicidad paga). El canal pasa a estructura del host.
 - **M38.3 — pool de hilos M:N**: repartir fibras sobre N hilos + work-stealing; sincronizar las colas

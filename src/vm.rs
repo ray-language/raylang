@@ -22,6 +22,7 @@ use std::rc::Rc;
 
 use crate::bytecode::{CastTarget, Chunk, CompiledEnum, CompiledFn, CompiledProgram, OpCode, UpvalueSource};
 use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::gc::{Handle, Heap, HeapValue, Obj, TaskState, VmChannel, VmClosure, VmEnum, VmStruct, VmTask};
 use crate::runtime::{EnumInstance, MapKey, RuntimeError, StructInstance, Value};
@@ -195,7 +196,11 @@ struct Vm<'a> {
     /// agrupado para el paso a M:N (M38.3b lo envolverá en `Arc<Mutex<Shared>>` — con los heaps ya aislados
     /// en M38.1, es lo ÚNICO que N hilos compartirían; el GC no, cada heap es thread-local). Aquí sigue
     /// siendo propiedad directa del `Vm` (single-thread, sin lock) → comportamiento idéntico.
-    shared: Shared,
+    /// M38.3b paso 2: el estado compartido del scheduler tras un `Mutex` (envuelto en `Arc` para que en el
+    /// paso 3 lo compartan N hilos). Aquí (single-thread) el lock nunca tiene contención. Cada operación del
+    /// scheduler bloquea UNA vez (`self.sched()`) y pasa el guard a la cadena de helpers (que ya toman
+    /// `&mut Shared`), evitando la reentrancia (el `Mutex` no es reentrante).
+    shared: Arc<Mutex<Shared>>,
     /// Opt.2: pool de `Vec<Local>` reutilizables. Cada llamada necesita un arreglo de locales; en vez de
     /// asignar/liberar uno por llamada (millones en recursión), reciclamos los de los marcos que retornan.
     /// NO es raíz del GC (sus contenidos son basura entre reciclar y reusar; `new_locals` los reconstruye).
@@ -226,13 +231,19 @@ impl<'a> Vm<'a> {
                 task: None,
                 scopes: Vec::new(),
             },
-            shared: Shared::default(),
+            shared: Arc::new(Mutex::new(Shared::default())),
             locals_pool: Vec::new(),
             fuel: u64::MAX, // sin límite por defecto
             gc_count: 0,
             gc_max_pause_ns: 0,
             gc_total_pause_ns: 0,
         }
+    }
+
+    /// M38.3b paso 2: bloquea el estado compartido del scheduler. Una operación del scheduler llama esto
+    /// UNA vez y usa el guard (`&mut *sh`) para toda su cadena de helpers → sin reentrancia ni deadlock.
+    fn sched(&self) -> MutexGuard<'_, Shared> {
+        self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado") // ice-ok: invariante
     }
 
     fn run(&mut self) -> Result<HeapValue, RuntimeError> {
@@ -279,7 +290,7 @@ impl<'a> Vm<'a> {
                     self.recycle_locals(frame.locals); // Opt.2
                 }
                 if self.cur.frames.is_empty() {
-                    match Self::on_fiber_done(&mut self.cur, &mut self.shared, HeapValue::Unit)? {
+                    match Self::on_fiber_done(&mut self.cur, &mut self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado"), HeapValue::Unit)? {
                         Some(v) => return Ok(v),
                         None => continue, // era una fibra spawn: el scheduler ya cargó la siguiente
                     }
@@ -727,8 +738,8 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("el checker garantiza una función"),
                     };
                     // M38.1b: la tarea vive en el almacén del host, referenciada por id.
-                    let task = self.shared.tasks.len();
-                    self.shared.tasks.push(VmTask { state: TaskState::Pending, heap: Heap::new() });
+                    let task = self.sched().tasks.len();
+                    self.sched().tasks.push(VmTask { state: TaskState::Pending, heap: Heap::new() });
                     if let Some(scope) = self.cur.scopes.last_mut() {
                         scope.children.push(task);
                     }
@@ -741,7 +752,7 @@ impl<'a> Vm<'a> {
                         .collect();
                     let locals = self.new_locals(fn_idx);
                     let frame = CallFrame { function: fn_idx, ip: 0, locals, upvalues };
-                    self.shared.ready.push_back(Fiber {
+                    self.sched().ready.push_back(Fiber {
                         frames: vec![frame], stack: Vec::new(), heap: new_heap, is_main: false,
                         task: Some(task), scopes: Vec::new(),
                     });
@@ -749,8 +760,8 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::ChannelNew => {
                     // channel() sin argumentos → canal NO acotado (cap = None). M38.1b: en el host.
-                    let id = self.shared.channels.len();
-                    self.shared.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: None, heap: Heap::new() });
+                    let id = self.sched().channels.len();
+                    self.sched().channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: None, heap: Heap::new() });
                     self.push(HeapValue::Channel(id));
                 }
                 OpCode::ChannelNewBounded => {
@@ -762,71 +773,79 @@ impl<'a> Vm<'a> {
                     if n < 0 {
                         return Err(runtime_error(pos!().0, pos!().1, "la capacidad de un canal no puede ser negativa"));
                     }
-                    let id = self.shared.channels.len();
-                    self.shared.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: Some(n as usize), heap: Heap::new() });
+                    let id = self.sched().channels.len();
+                    self.sched().channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: Some(n as usize), heap: Heap::new() });
                     self.push(HeapValue::Channel(id));
                 }
                 OpCode::ChanSend => {
                     let v = self.pop();
                     let h = self.pop_channel();
-                    let c = &self.shared.channels[h];
+                    // M38.3b paso 2: un ÚNICO lock por handler (lock-once). Se bloquea `self.shared`
+                    // DIRECTAMENTE (no vía `self.sched()`, que tomaría `&self` entero) para que el guard
+                    // preste solo el campo `self.shared`; así `self.cur.*` (campo disjunto) sigue accesible
+                    // bajo el guard sostenido.
+                    let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                    let c = &sh.channels[h];
                     let (closed, len, cap) = (c.closed, c.queue.len(), c.cap);
                     if closed {
                         return Err(runtime_error(pos!().0, pos!().1, "send sobre un canal cerrado"));
                     }
                     // (1) ¿Hay un receptor bloqueado en este canal? Entrégaselo directo (rendezvous) y
                     // despiértalo (el primero, FIFO → determinista).
-                    if let Some(pos) = self.shared.parked.iter().position(
+                    if let Some(pos) = sh.parked.iter().position(
                         |p| p.on == h && matches!(p.waiting, Waiting::Recv))
                     {
-                        let parked = self.shared.parked.remove(pos);
-                        Self::wake_recv(&self.cur, &mut self.shared, parked.fiber, vec![v]);
-                        self.push(HeapValue::Unit);
+                        let parked = sh.parked.remove(pos);
+                        Self::wake_recv(&self.cur, &mut sh, parked.fiber, vec![v]);
+                        self.cur.stack.push(HeapValue::Unit);
                     } else if cap.is_none() || len < cap.unwrap() {
                         // (2) Hay hueco (no acotado, o len < cap) → encola y sigue. M38.1b-2: el valor se
                         // transfiere del heap de la fibra al heap del canal (en tránsito).
-                        let mut ch_heap = std::mem::take(&mut self.shared.channels[h].heap);
+                        let mut ch_heap = std::mem::take(&mut sh.channels[h].heap);
                         let v2 = transfer_value(&self.cur.heap, &mut ch_heap, &v, &mut HashMap::new());
-                        self.shared.channels[h].heap = ch_heap;
-                        self.shared.channels[h].queue.push_back(v2);
-                        Self::wake_select_waiters(&mut self.shared, h); // M12.4: el canal ya tiene valor → listo para un select
-                        self.push(HeapValue::Unit);
+                        sh.channels[h].heap = ch_heap;
+                        sh.channels[h].queue.push_back(v2);
+                        Self::wake_select_waiters(&mut sh, h); // M12.4: el canal ya tiene valor → listo para un select
+                        self.cur.stack.push(HeapValue::Unit);
                     } else {
                         // (3) Cola llena (acotado) → BLOQUEAR al emisor (backpressure, M12.2). Guarda la
                         // fibra con el valor pendiente; al despertarla, `wake_sender` le deja unit (el
                         // resultado de `send`) en la pila y continúa tras el ChanSend.
                         let fiber = Self::take_current_fiber(&mut self.cur);
-                        self.shared.parked.push(Parked { on: h, fiber, waiting: Waiting::Send(v) });
+                        sh.parked.push(Parked { on: h, fiber, waiting: Waiting::Send(v) });
                         // M12.4: un emisor bloqueado vuelve al canal "listo" para un select (un recv lo
                         // tomaría); despierta a los selectores que lo esperan.
-                        Self::wake_select_waiters(&mut self.shared, h);
-                        Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
+                        Self::wake_select_waiters(&mut sh, h);
+                        let (l, c2) = pos!();
+                        Self::schedule_next(&mut self.cur, &mut sh, l, c2)?;
                     }
                 }
                 OpCode::ChanRecv => {
                     let h = self.pop_channel();
+                    // M38.3b paso 2: lock-once (ver ChanSend).
+                    let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
                     // (1) ¿Valor en la cola? Sácalo; al liberar un hueco, si hay un emisor bloqueado en este
                     // canal, su valor entra a la cola (ya hay sitio) y se le despierta.
-                    let from_queue = self.shared.channels[h].queue.pop_front();
+                    let from_queue = sh.channels[h].queue.pop_front();
                     if let Some(v) = from_queue {
                         // M38.1b-2: el valor viene del heap del canal → se transfiere al heap del receptor.
                         // Si la cola queda vacía, el heap del canal se limpia (nadie referencia sus objetos).
-                        let ch_heap = std::mem::take(&mut self.shared.channels[h].heap);
+                        let ch_heap = std::mem::take(&mut sh.channels[h].heap);
                         let v2 = transfer_value(&ch_heap, &mut self.cur.heap, &v, &mut HashMap::new());
-                        if !self.shared.channels[h].queue.is_empty() {
-                            self.shared.channels[h].heap = ch_heap; // aún hay valores en tránsito → conserva el heap
+                        if !sh.channels[h].queue.is_empty() {
+                            sh.channels[h].heap = ch_heap; // aún hay valores en tránsito → conserva el heap
                         } // si no, `ch_heap` se descarta (limpieza)
-                        Self::wake_blocked_sender(&mut self.shared, h);
+                        Self::wake_blocked_sender(&mut sh, h);
                         let arr = self.cur.heap.allocate(Obj::Array(vec![v2]));
-                        self.push(HeapValue::Obj(arr));
+                        self.cur.stack.push(HeapValue::Obj(arr));
                         return Ok(None);
                     }
                     // (2) Cola vacía: ¿hay un emisor bloqueado? (canal lleno con cap > 0, o rendezvous
                     // cap = 0). Toma su valor directo y despiértalo.
-                    if let Some(pos) = self.shared.parked.iter().position(
+                    if let Some(pos) = sh.parked.iter().position(
                         |p| p.on == h && matches!(p.waiting, Waiting::Send(_)))
                     {
-                        let parked = self.shared.parked.remove(pos);
+                        let parked = sh.parked.remove(pos);
                         let sv = match parked.waiting {
                             Waiting::Send(sv) => sv,
                             _ => unreachable!(),
@@ -834,28 +853,29 @@ impl<'a> Vm<'a> {
                         // M38.1b-2: el valor del emisor bloqueado vive en el heap de SU fibra (aparcada) →
                         // se transfiere al heap del receptor antes de despertar al emisor.
                         let sv2 = transfer_value(&parked.fiber.heap, &mut self.cur.heap, &sv, &mut HashMap::new());
-                        Self::wake_sender(&mut self.shared, parked.fiber);
+                        Self::wake_sender(&mut sh, parked.fiber);
                         let arr = self.cur.heap.allocate(Obj::Array(vec![sv2]));
-                        self.push(HeapValue::Obj(arr));
+                        self.cur.stack.push(HeapValue::Obj(arr));
                         return Ok(None);
                     }
                     // (3) Cola vacía y sin emisores: cerrado → None ([]); abierto → bloquear (Recv).
-                    let closed = self.shared.channels[h].closed;
+                    let closed = sh.channels[h].closed;
                     if closed {
                         let arr = self.cur.heap.allocate(Obj::Array(Vec::new()));
-                        self.push(HeapValue::Obj(arr));
+                        self.cur.stack.push(HeapValue::Obj(arr));
                     } else {
                         // Bloquear: guardar la fibra actual (ip ya apunta tras el ChanRecv → al
                         // despertarla, el `wake_recv` le deja el `[T]` en la pila y continúa) y conmutar.
                         let fiber = Self::take_current_fiber(&mut self.cur);
-                        self.shared.parked.push(Parked { on: h, fiber, waiting: Waiting::Recv });
-                        Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
+                        sh.parked.push(Parked { on: h, fiber, waiting: Waiting::Recv });
+                        let (l, c2) = pos!();
+                        Self::schedule_next(&mut self.cur, &mut sh, l, c2)?;
                     }
                 }
                 OpCode::TaskJoin => {
                     // Une una tarea (M12.3): si terminó, su valor; si falló, re-lanza; si pendiente, bloquea.
                     let t = self.pop_task();
-                    let outcome = match &self.shared.tasks[t].state {
+                    let outcome = match &self.sched().tasks[t].state {
                         TaskState::Done(v) => Some(Ok(v.clone())),
                         TaskState::Failed(msg) => Some(Err(msg.clone())),
                         TaskState::Pending => None,
@@ -863,9 +883,9 @@ impl<'a> Vm<'a> {
                     match outcome {
                         Some(Ok(v)) => {
                             // M38.1b-2: el valor de Done vive en el heap de la tarea → al heap del que la une.
-                            let t_heap = std::mem::take(&mut self.shared.tasks[t].heap);
+                            let t_heap = std::mem::take(&mut self.sched().tasks[t].heap);
                             let v2 = transfer_value(&t_heap, &mut self.cur.heap, &v, &mut HashMap::new());
-                            self.shared.tasks[t].heap = t_heap;
+                            self.sched().tasks[t].heap = t_heap;
                             self.push(v2);
                         }
                         Some(Err(msg)) => return Err(runtime_error(pos!().0, pos!().1, &msg)),
@@ -875,8 +895,8 @@ impl<'a> Vm<'a> {
                             self.push(HeapValue::Task(t));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
                             let fiber = Self::take_current_fiber(&mut self.cur);
-                            self.shared.parked.push(Parked { on: t, fiber, waiting: Waiting::Join });
-                            Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
+                            self.sched().parked.push(Parked { on: t, fiber, waiting: Waiting::Join });
+                            Self::schedule_next(&mut self.cur, &mut self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado"), pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -890,25 +910,25 @@ impl<'a> Vm<'a> {
                         self.cur.scopes.last().expect("ScopeEnd sin ScopeBegin").children.clone();
                     // (1) ¿Alguna hija FALLÓ? Cancela a las hermanas que sigan pendientes y propaga el fallo
                     // ORIGINAL de inmediato, sin esperar a las demás (M12.5: cancelación de hermanas).
-                    let failure = children.iter().find_map(|&c| match &self.shared.tasks[c].state {
+                    let failure = children.iter().find_map(|&c| match &self.sched().tasks[c].state {
                         TaskState::Failed(msg) => Some(msg.clone()),
                         _ => None,
                     });
                     if let Some(msg) = failure {
                         for &c in &children {
-                            Self::cancel_task(&mut self.shared, c); // ignora las no-pendientes (la que falló, las Done)
+                            Self::cancel_task(&mut self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado"), c); // ignora las no-pendientes (la que falló, las Done)
                         }
                         self.cur.scopes.pop();
                         return Err(runtime_error(pos!().0, pos!().1, &msg));
                     }
                     // (2) ¿Alguna pendiente? Rebobina a ScopeEnd y bloquéate (al despertar re-escanea).
                     let pending = children.iter().copied().find(|&c|
-                        matches!(self.shared.tasks[c].state, TaskState::Pending));
+                        matches!(self.sched().tasks[c].state, TaskState::Pending));
                     if let Some(c) = pending {
                         self.cur.frames.last_mut().unwrap().ip -= 1;
                         let fiber = Self::take_current_fiber(&mut self.cur);
-                        self.shared.parked.push(Parked { on: c, fiber, waiting: Waiting::Join });
-                        Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
+                        self.sched().parked.push(Parked { on: c, fiber, waiting: Waiting::Join });
+                        Self::schedule_next(&mut self.cur, &mut self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado"), pos!().0, pos!().1)?;
                     } else {
                         // (3) Todas terminaron con éxito: desapila el scope.
                         self.cur.scopes.pop();
@@ -925,17 +945,24 @@ impl<'a> Vm<'a> {
                         }).collect(),
                         _ => unreachable!("el checker garantiza un arreglo de canales"),
                     };
-                    let mut ready_idx = None;
-                    for (i, &c) in chans.iter().enumerate() {
-                        let ch = &self.shared.channels[c];
-                        let buffered_or_closed = !ch.queue.is_empty() || ch.closed;
-                        let has_sender = self.shared.parked.iter()
-                            .any(|p| p.on == c && matches!(p.waiting, Waiting::Send(_)));
-                        if buffered_or_closed || has_sender {
-                            ready_idx = Some(i);
-                            break;
+                    // M38.3b paso 2: un ÚNICO lock para el escaneo. El Mutex NO es reentrante, y la
+                    // extensión de vida del temporal mantenía vivo el guard de `channels[c]` mientras el
+                    // `has_sender` volvía a llamar `self.sched()` → doble-lock del mismo hilo = DEADLOCK.
+                    let ready_idx = {
+                        let sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                        let mut found = None;
+                        for (i, &c) in chans.iter().enumerate() {
+                            let ch = &sh.channels[c];
+                            let buffered_or_closed = !ch.queue.is_empty() || ch.closed;
+                            let has_sender = sh.parked.iter()
+                                .any(|p| p.on == c && matches!(p.waiting, Waiting::Send(_)));
+                            if buffered_or_closed || has_sender {
+                                found = Some(i);
+                                break;
+                            }
                         }
-                    }
+                        found
+                    };
                     match ready_idx {
                         Some(i) => self.push(HeapValue::Int(i as i64)),
                         None => {
@@ -944,8 +971,10 @@ impl<'a> Vm<'a> {
                             self.push(HeapValue::Obj(arr));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
                             let fiber = Self::take_current_fiber(&mut self.cur);
-                            self.shared.parked.push(Parked { on: arr, fiber, waiting: Waiting::Select });
-                            Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
+                            let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                            sh.parked.push(Parked { on: arr, fiber, waiting: Waiting::Select });
+                            let (l, c2) = pos!();
+                            Self::schedule_next(&mut self.cur, &mut sh, l, c2)?;
                         }
                     }
                 }
@@ -1144,8 +1173,8 @@ impl<'a> Vm<'a> {
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
                                 let fiber = Self::take_current_fiber(&mut self.cur);
                                 let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
-                                self.shared.io_parked.push(IoParked { fd, fiber, pending_write: None });
-                                Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
+                                self.sched().io_parked.push(IoParked { fd, fiber, pending_write: None });
+                                Self::schedule_next(&mut self.cur, &mut self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado"), pos!().0, pos!().1)?;
                             }
                         }
                         return Ok(None);
@@ -1167,8 +1196,8 @@ impl<'a> Vm<'a> {
                             let fiber = Self::take_current_fiber(&mut self.cur);
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
-                            self.shared.io_parked.push(IoParked { fd, fiber, pending_write: None });
-                            Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
+                            self.sched().io_parked.push(IoParked { fd, fiber, pending_write: None });
+                            Self::schedule_next(&mut self.cur, &mut self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado"), pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -1197,7 +1226,7 @@ impl<'a> Vm<'a> {
                             }
                             Ok(n) => {
                                 let (line, col) = pos!();
-                                Self::park_write(&mut self.cur, &mut self.shared, handle, data[n..].to_vec(), line, col)?;
+                                Self::park_write(&mut self.cur, &mut self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado"), handle, data[n..].to_vec(), line, col)?;
                                 return Ok(None);
                             }
                             Err(e) => {
@@ -1610,8 +1639,8 @@ impl<'a> Vm<'a> {
                             self.cur.frames.last_mut().unwrap().ip -= 1;
                             let fiber = Self::take_current_fiber(&mut self.cur);
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
-                            self.shared.io_parked.push(IoParked { fd, fiber, pending_write: None });
-                            Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
+                            self.sched().io_parked.push(IoParked { fd, fiber, pending_write: None });
+                            Self::schedule_next(&mut self.cur, &mut self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado"), pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -1691,8 +1720,8 @@ impl<'a> Vm<'a> {
                             let fiber = Self::take_current_fiber(&mut self.cur);
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
-                            self.shared.io_parked.push(IoParked { fd, fiber, pending_write: None });
-                            Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
+                            self.sched().io_parked.push(IoParked { fd, fiber, pending_write: None });
+                            Self::schedule_next(&mut self.cur, &mut self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado"), pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -1714,7 +1743,7 @@ impl<'a> Vm<'a> {
                         }
                         Ok(n) => {
                             let (line, col) = pos!();
-                            Self::park_write(&mut self.cur, &mut self.shared, handle, bytes[n..].to_vec(), line, col)?;
+                            Self::park_write(&mut self.cur, &mut self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado"), handle, bytes[n..].to_vec(), line, col)?;
                             return Ok(None);
                         }
                         Err(e) => {
@@ -1765,8 +1794,8 @@ impl<'a> Vm<'a> {
                             let fiber = Self::take_current_fiber(&mut self.cur);
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
-                            self.shared.io_parked.push(IoParked { fd, fiber, pending_write: None });
-                            Self::schedule_next(&mut self.cur, &mut self.shared, pos!().0, pos!().1)?;
+                            self.sched().io_parked.push(IoParked { fd, fiber, pending_write: None });
+                            Self::schedule_next(&mut self.cur, &mut self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado"), pos!().0, pos!().1)?;
                         }
                     }
                 }
@@ -1787,24 +1816,28 @@ impl<'a> Vm<'a> {
                         // ejecución en el sitio del `close` (determinista, a diferencia de "panic en otra
                         // fibra").
                         HeapValue::Channel(ch) => {
-                            if self.shared.parked.iter().any(
+                            // M38.3b paso 2: un ÚNICO lock para todo el cierre. El `if ... && matches!(...)`
+                            // hacía dos `self.sched()` en la misma condición con guards solapados → doble-lock
+                            // del Mutex no reentrante = DEADLOCK cuando el canal tenía un receptor aparcado.
+                            let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                            if sh.parked.iter().any(
                                 |p| p.on == ch && matches!(p.waiting, Waiting::Send(_)))
                             {
                                 return Err(runtime_error(pos!().0, pos!().1,
                                     "close sobre un canal con un emisor bloqueado"));
                             }
-                            self.shared.channels[ch].closed = true;
+                            sh.channels[ch].closed = true;
                             let mut i = 0;
-                            while i < self.shared.parked.len() {
-                                if self.shared.parked[i].on == ch && matches!(self.shared.parked[i].waiting, Waiting::Recv) {
-                                    let parked = self.shared.parked.remove(i);
-                                    Self::wake_recv(&self.cur, &mut self.shared, parked.fiber, Vec::new());
+                            while i < sh.parked.len() {
+                                if sh.parked[i].on == ch && matches!(sh.parked[i].waiting, Waiting::Recv) {
+                                    let parked = sh.parked.remove(i);
+                                    Self::wake_recv(&self.cur, &mut sh, parked.fiber, Vec::new());
                                 } else {
                                     i += 1;
                                 }
                             }
-                            Self::wake_select_waiters(&mut self.shared, ch); // M12.4: un canal cerrado está "listo" para un select
-                            self.push(HeapValue::Unit);
+                            Self::wake_select_waiters(&mut sh, ch); // M12.4: un canal cerrado está "listo" para un select
+                            self.cur.stack.push(HeapValue::Unit);
                         }
                         _ => unreachable!("el checker garantiza un handle (int) o un Channel"),
                     }
@@ -2023,7 +2056,7 @@ impl<'a> Vm<'a> {
                     }
                     if self.cur.frames.is_empty() {
                         // La fibra terminó: si es main → fin del programa; si es spawn → siguiente fibra.
-                        match Self::on_fiber_done(&mut self.cur, &mut self.shared, result)? {
+                        match Self::on_fiber_done(&mut self.cur, &mut self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado"), result)? {
                             Some(v) => return Ok(Some(v)),
                             None => return Ok(None),
                         }
@@ -2045,7 +2078,7 @@ impl<'a> Vm<'a> {
                     if self.cur.frames.is_empty() || self.cur.is_main {
                         return Err(e);
                     }
-                    Self::fail_current_fiber(&mut self.cur, &mut self.shared, e)?;
+                    Self::fail_current_fiber(&mut self.cur, &mut self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado"), e)?;
                 }
             }
         }

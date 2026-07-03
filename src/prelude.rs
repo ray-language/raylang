@@ -509,6 +509,19 @@ fn parse_float(s: string) -> Option<float> {
     if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
+// Ed25519 (M43.3, cripto de producción vía ring). La semilla privada es de 32 octetos; None si no lo es.
+// Clave pública (32 octetos) derivada de la semilla.
+fn ed25519_public_key(seed: bytes) -> Option<bytes> {
+    let r = __ed25519_public_key(seed);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+// Firma (64 octetos) de msg con la semilla. Determinista (RFC 8032). None si la semilla no mide 32.
+fn ed25519_sign(seed: bytes, msg: bytes) -> Option<bytes> {
+    let r = __ed25519_sign(seed, msg);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
 // Lee una línea de stdin (sin el salto de línea); None en fin de entrada (EOF).
 fn input() -> Option<string> {
     let r = __read_line();

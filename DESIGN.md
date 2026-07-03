@@ -5810,3 +5810,15 @@ cripto pura de `std/`.
 `ring::hmac`). Es la base de JWT (HS256), SigV4 y esquemas de auth. El builtin solo **produce** la etiqueta;
 la verificación honesta (recomputar y comparar en tiempo constante) es de quien compara. Test
 `hmac_sha256_oraculo`: oráculo (interp==vm) + vector RFC 4231 (Test Case 2) + estrés de GC encadenando HMAC.
+
+### 45.3 M43.3 — Ed25519 (firma de curva elíptica)
+
+`ed25519_public_key(seed) -> Option<bytes>`, `ed25519_sign(seed, msg) -> Option<bytes>`,
+`ed25519_verify(pubkey, msg, sig) -> bool`. La semilla privada es de **exactamente 32 octetos**; `ring` falla
+si no → los dos primeros son **fallibles**: primitivos `__ed25519_public_key`/`__ed25519_sign` que devuelven
+`[bytes]` etiquetado (`[]`/`[valor]`) y el prelude los envuelve en `Option<bytes>` (el patrón M11.2, "errores
+como valores" — una semilla de mal tamaño es un dato inválido, no un ICE). `verify` es **total** (nunca falla;
+`false` ante clave/firma inválida) → builtin `bool` directo. Ed25519 es **determinista** (RFC 8032: el nonce se
+deriva por hash) → misma entrada, misma firma → el oráculo vale. Test `ed25519_oraculo`: oráculo (interp==vm) +
+validación **relacional** con `ring` como impl de confianza (firma verifica, mensaje alterado no, semilla corta
+→ `None`, firmar dos veces da lo mismo) → el programa devuelve 1 solo si TODO cuadra.

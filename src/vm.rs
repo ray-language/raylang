@@ -964,6 +964,41 @@ impl<'a> Vm<'a> {
                     };
                     self.push(HeapValue::Bytes(crate::builtins::hmac_sha256(&k, &m)));
                 }
+                // M43.3: Ed25519. Los fallibles empujan `[bytes]` etiquetado; `verify` empuja un bool.
+                OpCode::Ed25519PublicKey => {
+                    let seed = match self.pop() {
+                        HeapValue::Bytes(b) => b,
+                        _ => unreachable!("el checker garantiza bytes"),
+                    };
+                    let elems = match crate::builtins::ed25519_public_key(&seed) {
+                        Some(pk) => vec![HeapValue::Bytes(pk)],
+                        None => vec![],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::Ed25519Sign => {
+                    let msg = self.pop();
+                    let seed = self.pop();
+                    let (HeapValue::Bytes(seed), HeapValue::Bytes(msg)) = (seed, msg) else {
+                        unreachable!("el checker garantiza bytes, bytes");
+                    };
+                    let elems = match crate::builtins::ed25519_sign(&seed, &msg) {
+                        Some(sig) => vec![HeapValue::Bytes(sig)],
+                        None => vec![],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::Ed25519Verify => {
+                    let sig = self.pop();
+                    let msg = self.pop();
+                    let pk = self.pop();
+                    let (HeapValue::Bytes(pk), HeapValue::Bytes(msg), HeapValue::Bytes(sig)) = (pk, msg, sig) else {
+                        unreachable!("el checker garantiza bytes, bytes, bytes");
+                    };
+                    self.push(HeapValue::Bool(crate::builtins::ed25519_verify(&pk, &msg, &sig)));
+                }
                 // M16.1b: decodifica bytes como UTF-8 → arreglo etiquetado; el prelude → Result.
                 OpCode::FromUtf8 => {
                     let b = match self.pop() {
@@ -4878,6 +4913,51 @@ mod tests {
             }
         "#,
         );
+    }
+
+    /// M43.3: **Ed25519** vía `ring` (`sign`/`verify`/`public_key`). Oráculo (interp==vm) + validación
+    /// RELACIONAL de corrección con `ring` como impl de confianza: la firma **verifica**, un mensaje
+    /// alterado **no**, la semilla corta da `None`, y firmar dos veces da lo mismo (determinismo, RFC 8032).
+    /// El programa devuelve 1 solo si TODO cuadra → un fallo de cableado da 0. La semilla son 32 octetos
+    /// ASCII (`to_bytes` de 32 chars) para no depender de literales de byte largos.
+    #[test]
+    fn ed25519_oraculo() {
+        let src = r#"
+            fn main() -> int {
+                let seed = to_bytes("0123456789abcdef0123456789abcdef");   // 32 octetos
+                let msg = to_bytes("mensaje firmado");
+                match (ed25519_public_key(seed)) {
+                    Option.Some(pk) => {
+                        match (ed25519_sign(seed, msg)) {
+                            Option.Some(sig) => {
+                                let ok = ed25519_verify(pk, msg, sig);                       // true
+                                let alterado = ed25519_verify(pk, to_bytes("mensaje alterad"), sig); // false
+                                let otra = ed25519_sign(seed, msg);                           // determinista
+                                let det = match (otra) {
+                                    Option.Some(s2) => to_string(s2) == to_string(sig),       // true
+                                    Option.None => false,
+                                };
+                                let corta = match (ed25519_public_key(to_bytes("corta"))) {   // None (no 32)
+                                    Option.Some(x) => false,
+                                    Option.None => true,
+                                };
+                                if (ok && !alterado && det && corta) { 1 } else { 0 }
+                            },
+                            Option.None => 0,
+                        }
+                    },
+                    Option.None => 0,
+                }
+            }
+        "#;
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
+        let interp = crate::interpreter::run(&prog).expect("interp ok");
+        let compiled = compile_program(&prog).expect("compila");
+        let vm = run_program(&compiled).expect("vm ok");
+        assert_eq!(interp, vm, "VM≠intérprete en ed25519");
+        assert_eq!(vm, Value::Int(1), "Ed25519: falló roundtrip/manipulación/None/determinismo");
     }
 
     #[test]

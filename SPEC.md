@@ -355,7 +355,9 @@ prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el 
   `bytes_of sub_bytes from_utf8` (+ `b1 + b2`, `to_string` → hex).
 - **Cripto de producción** (M43, respaldada por `ring`, tiempo constante): `sha256 sha512 sha1`
   (`bytes -> bytes`; `sha1` es legado, solo para protocolos que lo exigen como el accept-key de
-  WebSocket) y `hmac_sha256(clave, mensaje) -> bytes` (base de JWT/SigV4). Las implementaciones en
+  WebSocket) y `hmac_sha256(clave, mensaje) -> bytes` (base de JWT/SigV4). **Ed25519**:
+  `ed25519_public_key(seed) -> Option<bytes>` y `ed25519_sign(seed, msg) -> Option<bytes>` (`None` si la
+  semilla no mide 32 octetos), `ed25519_verify(pubkey, msg, sig) -> bool` (total). Las implementaciones en
   raylang puro de `examples/web/` son demostración del lenguaje, no producción (correctas pero no
   constant-time).
 - **Iteradores** (M40.2b–f): `xs.iter()` y `range(a, b)` (semi-abierto) son iteradores de primera

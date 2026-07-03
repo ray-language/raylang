@@ -1002,6 +1002,33 @@ impl<'a> Interpreter<'a> {
                 (Value::Bytes(k), Value::Bytes(m)) => Value::Bytes(Rc::new(crate::builtins::hmac_sha256(k, m))),
                 _ => unreachable!("el checker garantiza bytes, bytes"),
             },
+            // M43.3: Ed25519. Los fallibles devuelven `[bytes]` etiquetado (vacío/único); el prelude → Option.
+            "__ed25519_public_key" => match &values[0] {
+                Value::Bytes(seed) => {
+                    let elems = match crate::builtins::ed25519_public_key(seed) {
+                        Some(pk) => vec![Value::Bytes(Rc::new(pk))],
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("el checker garantiza bytes"),
+            },
+            "__ed25519_sign" => match (&values[0], &values[1]) {
+                (Value::Bytes(seed), Value::Bytes(msg)) => {
+                    let elems = match crate::builtins::ed25519_sign(seed, msg) {
+                        Some(sig) => vec![Value::Bytes(Rc::new(sig))],
+                        None => vec![],
+                    };
+                    Value::Array(Rc::new(RefCell::new(elems)))
+                }
+                _ => unreachable!("el checker garantiza bytes, bytes"),
+            },
+            "ed25519_verify" => match (&values[0], &values[1], &values[2]) {
+                (Value::Bytes(pk), Value::Bytes(msg), Value::Bytes(sig)) => {
+                    Value::Bool(crate::builtins::ed25519_verify(pk, msg, sig))
+                }
+                _ => unreachable!("el checker garantiza bytes, bytes, bytes"),
+            },
             // M16.1b: decodifica bytes como UTF-8 → ["ok", s] o ["err", msg]. El prelude → Result.
             "__from_utf8" => {
                 let arr = match &values[0] {

@@ -213,6 +213,35 @@ pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
     ring::hmac::sign(&k, msg).as_ref().to_vec()
 }
 
+// --- Ed25519 (firma de curva elíptica, M43.3) ---
+//
+// La semilla privada es de **exactamente 32 octetos**; `ring` falla si no. Devolvemos `Option` (→ el
+// primitivo etiqueta `[]`/`[valor]` y el prelude lo envuelve): un tamaño de semilla malo es un dato
+// inválido, no un ICE. `verify` es **total** (nunca falla; da `false` ante clave/firma inválidas).
+
+/// Clave pública (32 octetos) derivada de una semilla de 32 octetos. `None` si la semilla no mide 32.
+pub fn ed25519_public_key(seed: &[u8]) -> Option<Vec<u8>> {
+    use ring::signature::KeyPair;
+    ring::signature::Ed25519KeyPair::from_seed_unchecked(seed)
+        .ok()
+        .map(|kp| kp.public_key().as_ref().to_vec())
+}
+
+/// Firma (64 octetos) de `msg` con la semilla de 32 octetos. `None` si la semilla no mide 32. Ed25519 es
+/// **determinista** (RFC 8032: el nonce se deriva por hash) → misma entrada, misma firma → el oráculo vale.
+pub fn ed25519_sign(seed: &[u8], msg: &[u8]) -> Option<Vec<u8>> {
+    ring::signature::Ed25519KeyPair::from_seed_unchecked(seed)
+        .ok()
+        .map(|kp| kp.sign(msg).as_ref().to_vec())
+}
+
+/// Verifica que `sig` es una firma de `msg` bajo `pubkey`. Total: `false` ante cualquier entrada inválida.
+pub fn ed25519_verify(pubkey: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, pubkey)
+        .verify(msg, sig)
+        .is_ok()
+}
+
 // --- I/O con buffering: registro de archivos abiertos (M11.8) ---
 //
 // Un handle de archivo es un `int`: NO hay un nuevo tipo de valor ni se toca el GC. Los archivos
@@ -1037,6 +1066,26 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Bytes { return Err((Some(0), format!("hmac_sha256 espera bytes (clave), no {}", a[0]))); }
         if a[1] != Type::Bytes { return Err((Some(1), format!("hmac_sha256 espera bytes (mensaje), no {}", a[1]))); }
         Ok(Type::Bytes)
+    } },
+    // M43.3: Ed25519. Los fallibles (semilla de 32 octetos) son primitivos `[bytes]` etiquetados
+    // (vacío/único); el prelude los envuelve en Option<bytes>. `verify` es total → bool directo.
+    Builtin { name: "__ed25519_public_key", opcode: OpCode::Ed25519PublicKey, check: |a| {
+        arity(a, 1, "__ed25519_public_key", "")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("ed25519_public_key espera bytes (semilla), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    Builtin { name: "__ed25519_sign", opcode: OpCode::Ed25519Sign, check: |a| {
+        arity(a, 2, "__ed25519_sign", "")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("ed25519_sign espera bytes (semilla), no {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("ed25519_sign espera bytes (mensaje), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    Builtin { name: "ed25519_verify", opcode: OpCode::Ed25519Verify, check: |a| {
+        arity(a, 3, "ed25519_verify", "")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("ed25519_verify espera bytes (clave pública), no {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("ed25519_verify espera bytes (mensaje), no {}", a[1]))); }
+        if a[2] != Type::Bytes { return Err((Some(2), format!("ed25519_verify espera bytes (firma), no {}", a[2]))); }
+        Ok(Type::Bool)
     } },
     // __from_utf8(b) -> [string] (M16.1b): ["ok", s] o ["err", msg]. El prelude → Result<string,string>.
     Builtin { name: "__from_utf8", opcode: OpCode::FromUtf8, check: |a| {

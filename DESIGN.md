@@ -5739,3 +5739,36 @@ no cuenta). Es **solo de la VM**, como el fuel. Los dos límites se agrupan en e
 termina normal aun con tope bajo porque el GC recicla) + `tope_de_heap_aborta_un_programa_glotón`
 (integración: exit 70). Con fuel + tope de heap, raylang embebido está **acotado en tiempo y en memoria**.
 Diferido de M42: cripto de producción vía `ring` (bifurcación de diseño), fuzzing continuo + `cargo audit`.
+
+### 44.3 M42.3 — fuzzing continuo + CI + auditoría de dependencias
+
+**Invariante que se endurece**: entrada arbitraria → **error de usuario limpio, jamás un *panic* de Rust**.
+Un panic en el pipeline lo captura la red de ICEs (`lib::with_big_stack_or_ice`, exit 101, "reporta este
+bug"): correcto para una invariante rota, pero *input del usuario* nunca debe dispararlo. El fuzzer busca
+esos casos.
+
+**Fuzzer determinista sin dependencias** (`tests/fuzz_frontend.rs`): la restricción cero-deps de Cargo
+descarta cargo-fuzz (exige nightly + `libfuzzer-sys`/`arbitrary` + un crate aparte). En su lugar, un fuzzer
+**sembrado escrito a mano** (como el SHA-256 de M39c-2b o el JSON del LSP): PRNG **SplitMix64** propio
+(dominio público, ~6 líneas), corpus = los `.ray` reales del repo (examples/selfhost/std), seis estrategias
+de mutación (bytes al azar, flip/inserción/borrado de bytes, truncado, empalme de dos semillas), y por cada
+entrada corre `lex → parse → check → compile → VM` dentro de `catch_unwind` (con el panic hook silenciado),
+afirmando que **no panica**. La VM se acota con **fuel + tope de heap** (M42.1/42.2): un programa generado
+que resulte válido pero cicle no cuelga el proceso de test — sinergia directa con las dos fases previas. Las
+entradas se truncan (≤4 KiB) para **acotar la profundidad de anidación** y con ella la recursión del parser
+(que recurre en la pila de Rust); además corre en el hilo de pila grande (`with_big_stack`) por margen. Es
+**determinista y reproducible**: semilla base fija, cada iteración deriva la suya, y un hallazgo imprime la
+semilla + escribe la entrada culpable a un archivo (`RAYLANG_FUZZ_SEED=<n>` la re-ejecuta;
+`RAYLANG_FUZZ_ITERS=<n>` sube el presupuesto). Corre dentro de `cargo test` → **fuzzing continuo**: cada
+corrida local y de CI fuzzea (3000 iteraciones por defecto; 200 000 en el job nocturno).
+
+**CI** (`.github/workflows/ci.yml`, GitHub Actions, primer CI del proyecto): job `test` (clippy +
+`cargo test` —que incluye el fuzzer— + `cargo test --no-default-features` para la release solo-VM + build de
+release), job `audit` (`cargo audit` contra los avisos de RustSec, para vigilar la **única excepción a
+cero-deps**: rustls/ring/webpki), y job `fuzz-nocturno` programado (cron 03:17 UTC, presupuesto alto). **No
+hay paso de `cargo fmt --check`**: el código usa alineación manual de comentarios deliberada que rustfmt
+reformatearía — el estilo del proyecto no es el de rustfmt por defecto, imponerlo sería un rediseño masivo
+sin valor. Con esto se cierra el arco D (endurecimiento): overflow (resuelto), auditoría de `unsafe`, fuel,
+tope de heap, fuzzing continuo + CI + `cargo audit`. Diferido único: **cripto de producción vía `ring`** —
+una **bifurcación de diseño** (la cripto pura en raylang es pedagógica; migrar a `ring`, ya enlazado por
+rustls, no añade deps pero cambia la naturaleza del `net`/std) que se decide con el usuario.

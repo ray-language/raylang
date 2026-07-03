@@ -114,6 +114,10 @@ fn kind_str(k: &TokenKind) -> String {
         TokenKind::Question => "Question".into(),
         TokenKind::PipeArrow => "PipeArrow".into(),
         TokenKind::At => "At".into(),
+        // M41: FFI (`extern`, tipo `ptr`). El lexer auto-alojado no los tokeniza (son posteriores al
+        // self-hosting); no aparecen en el corpus, pero el `match` debe ser exhaustivo.
+        TokenKind::Extern => "Extern".into(),
+        TokenKind::PtrType => "PtrType".into(),
         TokenKind::Eof => "Eof".into(),
     }
 }

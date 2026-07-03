@@ -1349,7 +1349,7 @@ impl Checker {
                         }
                     }
                     // M40.2: `Iter` lo produce el lowering DESPUÉS del chequeo; aquí nunca aparece.
-                    ForIter::Iter { .. } => unreachable!("ForIter::Iter no existe durante el chequeo"),
+                    ForIter::Iter { .. } => crate::ice!("ForIter::Iter no existe durante el chequeo"),
                 };
                 self.push_scope();
                 for (n, t) in bindings {
@@ -1968,7 +1968,10 @@ impl Checker {
         }
         // El elemento es el argumento de `Option` en el retorno de `next` (`Option<T>` → `T`).
         match subst(&sig.ret, &sigma) {
-            Type::Enum(n, args) if n == "Option" && args.len() == 1 => Some((args.into_iter().next().unwrap(), next_fn)),
+            Type::Enum(n, args) if n == "Option" && args.len() == 1 => {
+                let elem = args.into_iter().next().unwrap_or_else(|| crate::ice!("Option con 1 arg pero sin elemento"));
+                Some((elem, next_fn))
+            }
             _ => None,
         }
     }
@@ -2199,7 +2202,7 @@ impl Checker {
                        && self.lookup(n).is_none()
                        && self.functions.get(n).is_some_and(|s| !s.type_params.is_empty())) =>
             {
-                let name = match &callee.kind { ExprKind::Ident(n) => n.clone(), _ => unreachable!() };
+                let name = match &callee.kind { ExprKind::Ident(n) => n.clone(), _ => crate::ice!("callee garantizado Ident por la guarda del match") };
                 if let Some(sig) = self.functions.get(&name).filter(|_| self.gather) {
                     let ty = Type::Fn(sig.params.clone(), Box::new(sig.ret.clone()));
                     let def = self.fn_defs.get(&name).copied();

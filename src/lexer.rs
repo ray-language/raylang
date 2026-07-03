@@ -634,6 +634,8 @@ mod tests {
     }
 
     #[test]
+    // `3.14` prueba el lexeo de floats, no es una aproximación de PI (falso positivo de `approx_constant`).
+    #[allow(clippy::approx_constant)]
     fn literales() {
         assert_eq!(kinds("42"), vec![TokenKind::Int(42), TokenKind::Eof]);
         assert_eq!(kinds("3.14"), vec![TokenKind::Float(3.14), TokenKind::Eof]);

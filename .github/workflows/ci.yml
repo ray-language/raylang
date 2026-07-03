@@ -1,0 +1,75 @@
+# CI de raylang (M42.3). Verifica cada push/PR: lints (clippy), la batería completa de tests (que incluye
+# el fuzzer determinista del front-end, `tests/fuzz_frontend.rs`), el build de release y que la release
+# mínima solo-VM (`--no-default-features`, sin intérprete) compile. Aparte, `audit` revisa las dependencias
+# (la única excepción a la invariante cero-deps: rustls/ring/webpki) contra los avisos de RustSec.
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+  schedule:
+    # Fuzzing nocturno prolongado (03:17 UTC; minuto no-redondo para no coincidir con el pico de cron).
+    - cron: "17 3 * * *"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Lints + tests + build. Es el grueso: si algo se rompe, aquí se ve. (No hay paso de `cargo fmt
+  # --check`: el código usa alineación manual de comentarios deliberada que rustfmt reformatearía; el
+  # estilo del proyecto no es el de rustfmt por defecto.)
+  test:
+    name: clippy · test · build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust estable (con clippy)
+        run: rustup toolchain install stable --profile minimal --component clippy
+      - name: Caché de cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Clippy
+        run: cargo clippy --all-targets
+      - name: Tests (incluye el fuzzer del front-end)
+        run: cargo test
+      - name: Build de release
+        run: cargo build --release
+      # La release mínima excluye el intérprete (solo-VM). No se corren tests aquí: los oráculos
+      # comparan intérprete↔VM y necesitan la feature `interp`; basta con verificar que compila.
+      - name: Build solo-VM (sin intérprete)
+        run: cargo build --release --no-default-features
+
+  # Auditoría de dependencias contra la base de avisos de seguridad de RustSec. Se aparta del job
+  # principal porque instala una herramienta y consulta una base remota (más lento, distinto fallo).
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust estable
+        run: rustup toolchain install stable --profile minimal
+      - name: Instalar cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Auditar Cargo.lock
+        run: cargo audit
+
+  # Fuzzing prolongado, programado (no en cada push): muchas más iteraciones que el `cargo test` de arriba.
+  # El fuzzer es determinista y sembrado, así que un hallazgo trae su semilla exacta para reproducir.
+  fuzz-nocturno:
+    name: fuzz nocturno (prolongado)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Rust estable
+        run: rustup toolchain install stable --profile minimal
+      - name: Fuzz del front-end (presupuesto alto)
+        env:
+          RAYLANG_FUZZ_ITERS: "200000"
+        run: cargo test --test fuzz_frontend -- --nocapture

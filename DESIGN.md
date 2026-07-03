@@ -4720,8 +4720,13 @@ propio hito; ver el desglose del arco D abajo):
       (index.html + build.sh + README). Alcance = lenguaje NÚCLEO (todo el lenguaje + prelude + stdlib
       pura; red/TLS/cripto/FFI/hilos no disponibles; un solo archivo). .wasm release 1,0M. Verificado E2E
       con Node. **Nativo intacto** en los tres pasos.
+    - **M44b — `SECURITY.md` + criterios 1.0 HECHO**: `SECURITY.md` (modelo de seguridad, alcance, proceso
+      de reporte) → el criterio "política de seguridad vigente" queda cumplido; y `RELEASE-1.0.md`, la
+      **checklist viva** hacia la 1.0 (cada criterio con su estado honesto). Criterios técnicos: ✅ salvo
+      SPEC (escrita, falta publicar) y benchmarks (guarda de regresión; el 3–5× aspiracional de M36 no se
+      persiguió, decisión de alcance).
     - **Pendiente de M44**: binarios por plataforma + instalador (`curl|sh`/brew), CI de releases,
-      publicación (marketplace VSCode, hosting libro/sitio), `SECURITY.md`, y **declarar raylang 1.0**.
+      publicación (marketplace VSCode, hosting libro/sitio/SPEC), y **declarar raylang 1.0**.
 
 A precede a todo; B y C pueden ir en paralelo tras A; D cierra. Los principios del proyecto (una
 fase a la vez, medir antes de conservar, oráculo en desarrollo, cero deps salvo excepción

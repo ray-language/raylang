@@ -5822,3 +5822,15 @@ como valores" — una semilla de mal tamaño es un dato inválido, no un ICE). `
 deriva por hash) → misma entrada, misma firma → el oráculo vale. Test `ed25519_oraculo`: oráculo (interp==vm) +
 validación **relacional** con `ring` como impl de confianza (firma verifica, mensaje alterado no, semilla corta
 → `None`, firmar dos veces da lo mismo) → el programa devuelve 1 solo si TODO cuadra.
+
+### 45.4 M43.4 — ChaCha20-Poly1305 AEAD
+
+Cifrado autenticado (usado en TLS 1.3, WireGuard, age): `chacha20poly1305_seal(key, nonce, aad, plaintext) ->
+Option<bytes>` (devuelve `texto_cifrado || etiqueta(16)`) y `chacha20poly1305_open(key, nonce, aad,
+ciphertext_and_tag) -> Option<bytes>`. Clave de 32 octetos, nonce de 12; ambas `Option` (primitivos `[bytes]`
+etiquetado + envoltorio prelude): `seal` da `None` si los tamaños no cuadran, `open` da `None` si la
+**autenticación falla** (dato manipulado) o los tamaños no cuadran. Se usa `LessSafeKey` de `ring` porque el
+nonce lo aporta quien llama (la API "segura" gestiona el nonce por secuencia; este primitivo es de más bajo
+nivel). Test `chacha20poly1305_oraculo`: oráculo (interp==vm) + relacional (seal→open recupera, alterar el aad
+→ `None`, clave corta → `None`). Con esto están **todas las primitivas cripto de producción**; queda 45.5:
+migrar el `net` a ellas + des-embeber la cripto pura de `std/`.

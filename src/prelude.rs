@@ -522,6 +522,19 @@ fn ed25519_sign(seed: bytes, msg: bytes) -> Option<bytes> {
     if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
+// ChaCha20-Poly1305 AEAD (M43.4). Clave de 32 octetos, nonce de 12. seal → texto_cifrado||etiqueta;
+// None si los tamaños no cuadran.
+fn chacha20poly1305_seal(key: bytes, nonce: bytes, aad: bytes, plaintext: bytes) -> Option<bytes> {
+    let r = __chacha20poly1305_seal(key, nonce, aad, plaintext);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+// open verifica y descifra; None si la autenticación falla (dato manipulado) o los tamaños no cuadran.
+fn chacha20poly1305_open(key: bytes, nonce: bytes, aad: bytes, ciphertext: bytes) -> Option<bytes> {
+    let r = __chacha20poly1305_open(key, nonce, aad, ciphertext);
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
 // Lee una línea de stdin (sin el salto de línea); None en fin de entrada (EOF).
 fn input() -> Option<string> {
     let r = __read_line();

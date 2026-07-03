@@ -357,9 +357,11 @@ prelude (escritas en raylang, inyectadas salvo redefinición del usuario — el 
   (`bytes -> bytes`; `sha1` es legado, solo para protocolos que lo exigen como el accept-key de
   WebSocket) y `hmac_sha256(clave, mensaje) -> bytes` (base de JWT/SigV4). **Ed25519**:
   `ed25519_public_key(seed) -> Option<bytes>` y `ed25519_sign(seed, msg) -> Option<bytes>` (`None` si la
-  semilla no mide 32 octetos), `ed25519_verify(pubkey, msg, sig) -> bool` (total). Las implementaciones en
-  raylang puro de `examples/web/` son demostración del lenguaje, no producción (correctas pero no
-  constant-time).
+  semilla no mide 32 octetos), `ed25519_verify(pubkey, msg, sig) -> bool` (total). **AEAD**:
+  `chacha20poly1305_seal(key, nonce, aad, plaintext) -> Option<bytes>` (→ `cifrado||etiqueta`) y
+  `chacha20poly1305_open(key, nonce, aad, cifrado_y_etiqueta) -> Option<bytes>` (`None` si falla la
+  autenticación o los tamaños). Las implementaciones en raylang puro de `examples/web/` son demostración del
+  lenguaje, no producción (correctas pero no constant-time).
 - **Iteradores** (M40.2b–f): `xs.iter()` y `range(a, b)` (semi-abierto) son iteradores de primera
   clase (`Iter<T>`, respaldados por un closure) recorribles con `for x in …`. **Adaptadores
   perezosos** (métodos de `Iterator`): `.map(f)`, `.filter(pred)`, `.take(n)`, `.skip(n)`,

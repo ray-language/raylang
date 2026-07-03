@@ -1029,6 +1029,24 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza bytes, bytes, bytes"),
             },
+            // M43.4: ChaCha20-Poly1305 AEAD. seal/open devuelven `[bytes]` etiquetado; el prelude → Option.
+            "__chacha20poly1305_seal" | "__chacha20poly1305_open" => {
+                match (&values[0], &values[1], &values[2], &values[3]) {
+                    (Value::Bytes(k), Value::Bytes(n), Value::Bytes(aad), Value::Bytes(data)) => {
+                        let res = if name == "__chacha20poly1305_seal" {
+                            crate::builtins::chacha20poly1305_seal(k, n, aad, data)
+                        } else {
+                            crate::builtins::chacha20poly1305_open(k, n, aad, data)
+                        };
+                        let elems = match res {
+                            Some(out) => vec![Value::Bytes(Rc::new(out))],
+                            None => vec![],
+                        };
+                        Value::Array(Rc::new(RefCell::new(elems)))
+                    }
+                    _ => unreachable!("el checker garantiza cuatro bytes"),
+                }
+            }
             // M16.1b: decodifica bytes como UTF-8 → ["ok", s] o ["err", msg]. El prelude → Result.
             "__from_utf8" => {
                 let arr = match &values[0] {

@@ -183,6 +183,10 @@ pub enum OpCode {
     Ed25519PublicKey,
     Ed25519Sign,
     Ed25519Verify,
+    /// M43.4: ChaCha20-Poly1305 AEAD. Sacan 4 `bytes` (clave, nonce, aad, dato); empujan `[bytes]`
+    /// etiquetado (el prelude → `Option<bytes>`).
+    ChaChaPolySeal,
+    ChaChaPolyOpen,
 
     // --- I/O binaria (M16.1c). Lecturas → [bytes] etiquetado; escrituras → [string]. ---
     /// Saca la ruta (string); lee el archivo y empuja `[bytes]` (`[b"ok", datos]`/`[b"err", msg]`).

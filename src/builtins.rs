@@ -242,6 +242,36 @@ pub fn ed25519_verify(pubkey: &[u8], msg: &[u8], sig: &[u8]) -> bool {
         .is_ok()
 }
 
+// --- ChaCha20-Poly1305 AEAD (cifrado autenticado, M43.4) ---
+//
+// La clave son 32 octetos y el nonce 12; `ring` falla si no. `seal` devuelve `texto_cifrado || etiqueta`
+// (la etiqueta de 16 octetos va anexada); `open` la verifica y devuelve el texto plano, o `None` si la
+// autenticación falla (dato manipulado) o los tamaños no cuadran. Ambos `Option` → primitivo `[bytes]`
+// etiquetado + envoltorio en el prelude. Usamos `LessSafeKey` porque el nonce lo aporta quien llama (la
+// API "segura" de `ring` gestiona el nonce por secuencia; aquí el primitivo es de más bajo nivel).
+
+/// Cifra y autentica `plaintext` con `key` (32) y `nonce` (12), ligando `aad` (datos autenticados no
+/// cifrados). Devuelve `texto_cifrado || etiqueta(16)`; `None` si `key`/`nonce` no miden lo debido.
+pub fn chacha20poly1305_seal(key: &[u8], nonce: &[u8], aad: &[u8], plaintext: &[u8]) -> Option<Vec<u8>> {
+    let unbound = ring::aead::UnboundKey::new(&ring::aead::CHACHA20_POLY1305, key).ok()?;
+    let key = ring::aead::LessSafeKey::new(unbound);
+    let nonce = ring::aead::Nonce::try_assume_unique_for_key(nonce).ok()?;
+    let mut in_out = plaintext.to_vec();
+    key.seal_in_place_append_tag(nonce, ring::aead::Aad::from(aad), &mut in_out).ok()?;
+    Some(in_out)
+}
+
+/// Descifra y verifica `ciphertext_and_tag` (`texto_cifrado || etiqueta`) con `key`/`nonce`/`aad`. Devuelve
+/// el texto plano, o `None` si la autenticación falla (manipulación) o los tamaños no cuadran.
+pub fn chacha20poly1305_open(key: &[u8], nonce: &[u8], aad: &[u8], ciphertext_and_tag: &[u8]) -> Option<Vec<u8>> {
+    let unbound = ring::aead::UnboundKey::new(&ring::aead::CHACHA20_POLY1305, key).ok()?;
+    let key = ring::aead::LessSafeKey::new(unbound);
+    let nonce = ring::aead::Nonce::try_assume_unique_for_key(nonce).ok()?;
+    let mut in_out = ciphertext_and_tag.to_vec();
+    let plaintext = key.open_in_place(nonce, ring::aead::Aad::from(aad), &mut in_out).ok()?;
+    Some(plaintext.to_vec())
+}
+
 // --- I/O con buffering: registro de archivos abiertos (M11.8) ---
 //
 // Un handle de archivo es un `int`: NO hay un nuevo tipo de valor ni se toca el GC. Los archivos
@@ -1086,6 +1116,22 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::Bytes { return Err((Some(1), format!("ed25519_verify espera bytes (mensaje), no {}", a[1]))); }
         if a[2] != Type::Bytes { return Err((Some(2), format!("ed25519_verify espera bytes (firma), no {}", a[2]))); }
         Ok(Type::Bool)
+    } },
+    // M43.4: ChaCha20-Poly1305 AEAD. seal/open (clave, nonce, aad, dato) -> [bytes] etiquetado; el
+    // prelude → Option<bytes> (None si tamaños malos o —en open— falla la autenticación).
+    Builtin { name: "__chacha20poly1305_seal", opcode: OpCode::ChaChaPolySeal, check: |a| {
+        arity(a, 4, "__chacha20poly1305_seal", "")?;
+        for (i, etiqueta) in ["clave", "nonce", "aad", "texto plano"].iter().enumerate() {
+            if a[i] != Type::Bytes { return Err((Some(i), format!("chacha20poly1305_seal espera bytes ({etiqueta}), no {}", a[i]))); }
+        }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    Builtin { name: "__chacha20poly1305_open", opcode: OpCode::ChaChaPolyOpen, check: |a| {
+        arity(a, 4, "__chacha20poly1305_open", "")?;
+        for (i, etiqueta) in ["clave", "nonce", "aad", "texto cifrado"].iter().enumerate() {
+            if a[i] != Type::Bytes { return Err((Some(i), format!("chacha20poly1305_open espera bytes ({etiqueta}), no {}", a[i]))); }
+        }
+        Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     // __from_utf8(b) -> [string] (M16.1b): ["ok", s] o ["err", msg]. El prelude → Result<string,string>.
     Builtin { name: "__from_utf8", opcode: OpCode::FromUtf8, check: |a| {

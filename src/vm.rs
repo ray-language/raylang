@@ -999,6 +999,29 @@ impl<'a> Vm<'a> {
                     };
                     self.push(HeapValue::Bool(crate::builtins::ed25519_verify(&pk, &msg, &sig)));
                 }
+                // M43.4: ChaCha20-Poly1305 AEAD. Pop en orden inverso (dato, aad, nonce, clave).
+                op @ (OpCode::ChaChaPolySeal | OpCode::ChaChaPolyOpen) => {
+                    let data = self.pop();
+                    let aad = self.pop();
+                    let nonce = self.pop();
+                    let key = self.pop();
+                    let (HeapValue::Bytes(key), HeapValue::Bytes(nonce), HeapValue::Bytes(aad), HeapValue::Bytes(data)) =
+                        (key, nonce, aad, data)
+                    else {
+                        unreachable!("el checker garantiza cuatro bytes");
+                    };
+                    let res = if matches!(op, OpCode::ChaChaPolySeal) {
+                        crate::builtins::chacha20poly1305_seal(&key, &nonce, &aad, &data)
+                    } else {
+                        crate::builtins::chacha20poly1305_open(&key, &nonce, &aad, &data)
+                    };
+                    let elems = match res {
+                        Some(out) => vec![HeapValue::Bytes(out)],
+                        None => vec![],
+                    };
+                    let h = self.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // M16.1b: decodifica bytes como UTF-8 → arreglo etiquetado; el prelude → Result.
                 OpCode::FromUtf8 => {
                     let b = match self.pop() {
@@ -4958,6 +4981,47 @@ mod tests {
         let vm = run_program(&compiled).expect("vm ok");
         assert_eq!(interp, vm, "VM≠intérprete en ed25519");
         assert_eq!(vm, Value::Int(1), "Ed25519: falló roundtrip/manipulación/None/determinismo");
+    }
+
+    /// M43.4: **ChaCha20-Poly1305 AEAD** vía `ring`. Oráculo (interp==vm) + validación relacional:
+    /// `seal` luego `open` recupera el texto, alterar el `aad` hace fallar la autenticación (`None`), y una
+    /// clave de mal tamaño da `None` en `seal`. Devuelve 1 solo si todo cuadra.
+    #[test]
+    fn chacha20poly1305_oraculo() {
+        let src = r#"
+            fn main() -> int {
+                let key = to_bytes("0123456789abcdef0123456789abcdef");   // 32 octetos
+                let nonce = to_bytes("nonce-de-12b");                     // 12 octetos
+                let aad = to_bytes("cabecera");
+                let pt = to_bytes("texto secreto");
+                match (chacha20poly1305_seal(key, nonce, aad, pt)) {
+                    Option.Some(ct) => {
+                        let recuperado = match (chacha20poly1305_open(key, nonce, aad, ct)) {
+                            Option.Some(p) => to_string(p) == to_string(pt),
+                            Option.None => false,
+                        };
+                        let manipulado = match (chacha20poly1305_open(key, nonce, to_bytes("otra cab"), ct)) {
+                            Option.Some(p) => false,
+                            Option.None => true,
+                        };
+                        let corta = match (chacha20poly1305_seal(to_bytes("corta"), nonce, aad, pt)) {
+                            Option.Some(x) => false,
+                            Option.None => true,
+                        };
+                        if (recuperado && manipulado && corta) { 1 } else { 0 }
+                    },
+                    Option.None => 0,
+                }
+            }
+        "#;
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
+        let interp = crate::interpreter::run(&prog).expect("interp ok");
+        let compiled = compile_program(&prog).expect("compila");
+        let vm = run_program(&compiled).expect("vm ok");
+        assert_eq!(interp, vm, "VM≠intérprete en chacha20poly1305");
+        assert_eq!(vm, Value::Int(1), "AEAD: falló roundtrip/autenticación/tamaño");
     }
 
     #[test]

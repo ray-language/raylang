@@ -373,30 +373,27 @@ fn stdlib_encoding_hex_base64_url_json() {
 }
 
 #[test]
-fn stdlib_hashing_vectores_conocidos() {
-    // M40.7b: hashing promovido a std/. sha512/hmac no son hojas → sus imports se namespacaron a std/,
-    // que la resolución embebida satisface (el temporal no tiene hex.ray/sha256.ray al lado).
-    let base = tmp("std_hash");
+fn crypto_builtins_hashing_vectores() {
+    // M43.5b: la cripto de producción (builtins vía ring) a nivel CLI. sha256/sha512/sha1/hmac_sha256
+    // (bytes -> bytes; `to_string` de un bytes da su hex). Vectores NIST/RFC. (Antes esto probaba la std
+    // cripto pura embebida, ahora des-embebida → solo ejemplos; los builtins la sustituyen.)
+    let base = tmp("crypto_hash");
     let archivo = base.join("main.ray");
     std::fs::write(
         &archivo,
-        "import std/sha256;\n\
-         import std/sha512;\n\
-         import std/hmac;\n\
-         import std/sha1;\n\
-         fn main() -> int {\n\
-             print(sha256.sha256_hex(to_bytes(\"abc\")));\n\
-             print(sha512.sha512_hex([]));\n\
-             print(hmac.hmac_sha256_hex(to_bytes(\"\"), to_bytes(\"\")));\n\
-             print(sha1.sha1_hex(to_bytes(\"abc\")));\n\
+        "fn main() -> int {\n\
+             print(to_string(sha256(to_bytes(\"abc\"))));\n\
+             print(to_string(sha512(to_bytes(\"\"))));\n\
+             print(to_string(hmac_sha256(to_bytes(\"\"), to_bytes(\"\"))));\n\
+             print(to_string(sha1(to_bytes(\"abc\"))));\n\
              0\n\
          }\n",
     )
     .unwrap();
     let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con imports de std hashing debe salir 0\n{err}");
+    assert_eq!(code, 0, "run con los builtins cripto debe salir 0\n{err}");
     assert!(out.contains("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), "sha256(abc)\n{out}");
-    assert!(out.starts_with("ba7816bf") || out.contains("cf83e1357eefb8bd"), "sha512(\"\")\n{out}");
+    assert!(out.contains("cf83e1357eefb8bd"), "sha512(\"\")\n{out}");
     assert!(out.contains("b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad"), "hmac_sha256(\"\",\"\")\n{out}");
     assert!(out.contains("a9993e364706816aba3e25717850c26c9cd0d89d"), "sha1(abc)\n{out}");
 }
@@ -464,20 +461,25 @@ fn stdlib_texto_regex_csv_toml() {
 
 #[test]
 fn stdlib_cripto_aead_y_protobuf() {
-    // M40.7e: primitivas cripto + protobuf. AEAD (chacha20-poly1305) seal→open y protobuf varint.
-    // aead depende de std/chacha20 + std/poly1305; se namespacaron en el ejemplo (resuelven embebidas).
+    // AEAD (chacha20-poly1305) de PRODUCCIÓN vía el builtin `ring` (M43.4) + protobuf (std, M40.7e).
+    // seal → ct||tag (Option<bytes>), open verifica y descifra. Antes esto usaba la std cripto pura
+    // embebida (des-embebida en M43.5b); el builtin la sustituye. Protobuf sigue siendo std embebida.
     let base = tmp("std_crypto");
     let archivo = base.join("main.ray");
     std::fs::write(
         &archivo,
-        "import std/chacha20poly1305;\n\
-         import std/protobuf;\n\
+        "import std/protobuf;\n\
          fn main() -> int {\n\
-             let key: [int] = []; var i = 0; while (i < 32) { push(key, i); i = i + 1; }\n\
-             let nonce: [int] = []; var j = 0; while (j < 12) { push(nonce, 0); j = j + 1; }\n\
-             let s = chacha20poly1305.aead_seal(key, nonce, [], [72, 105]);\n\
-             match (chacha20poly1305.aead_open(key, nonce, [], s.ciphertext, s.tag)) {\n\
-                 Option.Some(pt) => { print(pt); }, Option.None => { print(\"auth\"); },\n\
+             let key = to_bytes(\"0123456789abcdef0123456789abcdef\");\n\
+             let nonce = to_bytes(\"noncenonce12\");\n\
+             match (chacha20poly1305_seal(key, nonce, to_bytes(\"\"), to_bytes(\"Hi\"))) {\n\
+                 Option.Some(ct) => {\n\
+                     match (chacha20poly1305_open(key, nonce, to_bytes(\"\"), ct)) {\n\
+                         Option.Some(pt) => { print(to_string(pt)); },\n\
+                         Option.None => { print(\"auth\"); },\n\
+                     }\n\
+                 },\n\
+                 Option.None => { print(\"seal-none\"); },\n\
              }\n\
              let w = protobuf.writer();\n\
              protobuf.write_varint(w, 1, 150);\n\
@@ -487,8 +489,8 @@ fn stdlib_cripto_aead_y_protobuf() {
     )
     .unwrap();
     let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
-    assert_eq!(code, 0, "run con imports de std cripto debe salir 0\n{err}");
-    assert!(out.contains("[72, 105]"), "aead seal→open roundtrip\n{out}");
+    assert_eq!(code, 0, "run con el builtin AEAD + std/protobuf debe salir 0\n{err}");
+    assert!(out.contains("4869"), "aead seal→open roundtrip (hex de \"Hi\")\n{out}");
     assert!(out.contains("089601"), "protobuf varint field1=150\n{out}");
 }
 
@@ -696,7 +698,7 @@ fn dependencia_por_ruta_local() {
 #[test]
 fn paquete_net_jwt_via_path_dep() {
     // M40.8b: el paquete `net` (adicional, no embebido) consumido por path-dep. jwt es determinista
-    // (firma+verifica) y se apoya en std/hmac + std/base64 embebidas.
+    // (firma+verifica) y se apoya en net/crypto (HMAC de producción vía ring, M43.5) + std/base64.
     let repo = env!("CARGO_MANIFEST_DIR");
     let base = tmp("net_jwt");
     std::fs::create_dir_all(base.join("src")).unwrap();
@@ -761,7 +763,7 @@ fn paquete_net_hpack_roundtrip() {
 #[test]
 fn paquete_net_websocket_accept_key() {
     // M40.8d: transporte/servicios. websocket.accept_key es determinista (RFC 6455) y se apoya en
-    // std/sha1 + std/base64 embebidas. Deps internas del paquete (dns → net/udp, etc.) ya validadas.
+    // net/crypto (SHA-1 de producción vía ring, M43.5) + std/base64. Deps internas (dns → net/udp) validadas.
     let repo = env!("CARGO_MANIFEST_DIR");
     let base = tmp("net_ws");
     std::fs::create_dir_all(base.join("src")).unwrap();

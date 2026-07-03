@@ -5,8 +5,8 @@
 // usa contador 1 en adelante; el tag cubre `AAD ‖ pad ‖ criptograma ‖ pad ‖ len(AAD) ‖ len(cripto)`.
 // Importable: `from chacha20poly1305 import aead_seal, aead_open, Sealed;`.
 
-from std/chacha20 import chacha20_block, chacha20_encrypt;
-from std/poly1305 import poly1305_mac;
+from chacha20 import chacha20_block, chacha20_encrypt;
+from poly1305 import poly1305_mac;
 
 // El resultado de sellar: el criptograma y su tag de 16 octetos.
 pub struct Sealed { ciphertext: [int], tag: [int] }

@@ -30,12 +30,11 @@ const MODULOS: &[(&str, &str)] = &[
     ("std/base64", include_str!("../examples/web/base64.ray")),
     ("std/url", include_str!("../examples/web/url.ray")),
     ("std/json", include_str!("../examples/web/json.ray")),
-    // Hashing (M40.7b). `sha512`/`hmac` no son hojas: sus `from … import` se namespacaron a `std/…` (en el
-    // propio ejemplo), que la resolución embebida satisface corran donde corran.
-    ("std/sha1", include_str!("../examples/web/sha1.ray")),
-    ("std/sha256", include_str!("../examples/web/sha256.ray")),
-    ("std/sha512", include_str!("../examples/web/sha512.ray")),
-    ("std/hmac", include_str!("../examples/web/hmac.ray")),
+    // NOTA (M43.5b): la **criptografía** (sha1/sha256/sha512/hmac/chacha20/poly1305/chacha20poly1305/
+    // ed25519) YA NO se embebe. La cripto de producción son los **builtins de `ring`** (tiempo constante,
+    // auditados; M43); las implementaciones en raylang puro (`examples/web/sha256.ray`, etc.) se conservan
+    // SOLO como demostración del lenguaje (correctas, pero sobre la VM no garantizan resistencia a canales
+    // laterales). El paquete `net` las consume vía `net/crypto` (adaptadores sobre los builtins).
     // Compresión (M40.7c). `deflate` → `std/inflate` (namespacado en el ejemplo).
     ("std/inflate", include_str!("../examples/web/inflate.ray")),
     ("std/deflate", include_str!("../examples/web/deflate.ray")),
@@ -45,12 +44,7 @@ const MODULOS: &[(&str, &str)] = &[
     ("std/csv", include_str!("../examples/stdlib/csv.ray")),
     ("std/toml", include_str!("../examples/stdlib/toml.ray")),
     ("std/template", include_str!("../examples/stdlib/template.ray")),
-    // Primitivas criptográficas + protobuf (M40.7e). `chacha20poly1305` → `std/chacha20`+`std/poly1305`;
-    // `ed25519` → `std/sha512` (namespacados en los ejemplos).
-    ("std/chacha20", include_str!("../examples/web/chacha20.ray")),
-    ("std/poly1305", include_str!("../examples/web/poly1305.ray")),
-    ("std/chacha20poly1305", include_str!("../examples/web/chacha20poly1305.ray")),
-    ("std/ed25519", include_str!("../examples/web/ed25519.ray")),
+    // Protobuf (M40.7e; la cripto que lo acompañaba se des-embebió, ver la nota de arriba).
     ("std/protobuf", include_str!("../examples/web/protobuf.ray")),
     // UUID (M40.7f): `uuid_v4` usa `random_int` (no determinista), `is_uuid_v4` valida. → `std/hex`.
     ("std/uuid", include_str!("../examples/web/uuid.ray")),

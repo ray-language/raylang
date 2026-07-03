@@ -5853,5 +5853,15 @@ de los builtins para los que colisionan (`hmac_sha256_octets`, `sha1_octets`, `e
 net/crypto import` y sus sitios de llamada. Ed25519: `ed_sign` NO recibe la clave pública (a diferencia del
 pedagógico de 3 args; `ring` la deriva). **Verificado**: los 4 tests de integración del `net` pasan — jwt HS256
 firma+verifica y el accept-key de WebSocket dan sus KATs de RFC, ahora con cripto de tiempo constante.
-**M43.5b** (pendiente): des-embeber `sha*`/`hmac`/`chacha*`/`ed25519` de `src/stdlib.rs` (vuelven a ser SOLO
-ejemplos) + actualizar los tests M40.7 que probaban la std cripto embebida.
+**M43.5b — des-embeber la cripto pura de `std/`**: se quitan `sha1`/`sha256`/`sha512`/`hmac`/`chacha20`/
+`poly1305`/`chacha20poly1305`/`ed25519` de la tabla `MODULOS` de `src/stdlib.rs` → dejan de ser módulos
+`std/` importables y vuelven a ser **solo ejemplos** en `examples/web/`. Ningún otro `std/` embebido dependía
+de ellos (uuid → hex, no cripto), así que el des-embeber es local. **Ripple resuelto**: (1) los dos tests
+M40.7 que probaban la std cripto embebida (`stdlib_hashing`, la parte AEAD de `stdlib_cripto`) se **convierten
+a probar los builtins de producción** vía CLI (más valioso: chequeo a nivel CLI de la cripto real); (2) los
+ejemplos cripto se cruzaban con `from std/X` (namespacado en M40.7 para resolver contra la std embebida) → se
+**revierten a `from X` local** (sha256/sha512/chacha20/poly1305) para que corran standalone contra sus
+hermanos en `examples/web/` (los demos `*_demo.ray` ya usaban imports locales; `from std/hex` se conserva, hex
+sigue embebido). Verificado: los tests de demos (`chacha20poly1305_cli`/`ed25519_cli`/`chacha20_cli`) + la
+suite completa siguen verdes. **M43.5 y M43 COMPLETOS**: la cripto de producción (`ring`) es la que usa el
+código real; la pura es demostración del lenguaje.

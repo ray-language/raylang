@@ -3868,6 +3868,18 @@ empiece en Opt.4.)
   calcula igual, solo que perezosamente). **Lección de medición**: el efecto (~8 %) quedaba *enmascarado*
   por la varianza de mejor-de-5 (la baseline saltaba ±4 % entre corridas); subir a mejor-de-15 lo destapó
   limpio. Best-of-N con N grande filtra el ruido del planificador mejor que N pequeño.
+- **M36.1 — superinstrucciones** (arranca el arco B, §44/PRODUCCION). El coste dominante de una VM de
+  *switch* es el **despacho** (el `match` gigante + el avance del `ip`) por instrucción. `GetLocal` es el
+  opcode más frecuente y casi siempre carga un operando seguido de otro `GetLocal` o una `Constant`. Un
+  *peephole* (`fuse_superinstructions`, tras el TCO) fusiona esos pares en un opcode: `GetLocal(s);
+  GetLocal(t)` → `GetLocalLocal(s,t)` y `GetLocal(s); Constant(c)` → `GetLocalConst(s,c)`, que hacen los dos
+  empujes en **una** iteración del lazo. Fusionar acorta el código → **desplaza los índices**, así que el
+  pase **remapea los destinos de salto** (`Jump`/`JumpIfFalse`, los únicos con destino de código) vía un
+  mapa viejo→nuevo, y **no fusiona** si el segundo opcode es destino de un salto (algo aterrizaría entre
+  medias). Semántica idéntica (mismos empujes, mismos saltos) → oráculo intacto (441 tests + suite completa).
+  Medido (mejor de 15, release): **fib(35) −8 %, bucle 10M −9,5 %, arrays −11 %, gcnested −10 %** —
+  **consistente en las cuatro cargas** (toda función pasa por el fusor) y muy por encima del ruido. Es el
+  primer win estructural (vs. los micro de Opt.4/7); la baseline se actualiza a estos números.
 
 ### 27.3 Medidas y rechazadas (la disciplina en acción)
 

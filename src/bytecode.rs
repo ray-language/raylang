@@ -94,6 +94,13 @@ pub enum OpCode {
     GetLocal(usize),
     /// Saca la cima y la guarda en el slot local `slot` del marco actual.
     SetLocal(usize),
+    /// **Superinstrucción** (M36.1): empuja `local[s]` y luego `local[t]` en una sola instrucción.
+    /// Fusiona el par `GetLocal(s); GetLocal(t)` que produce el compilador para cargar los dos operandos
+    /// de un binario `a op b` → una iteración del lazo de despacho en vez de dos. Semántica idéntica.
+    GetLocalLocal(usize, usize),
+    /// **Superinstrucción** (M36.1): empuja `local[s]` y luego `constants[c]`. Fusiona `GetLocal(s);
+    /// Constant(c)` (el patrón de `x op <literal>`, `i < N`, …). Semántica idéntica.
+    GetLocalConst(usize, usize),
     /// **Declara** un slot local (M4.2): saca la cima y la guarda inicializando el
     /// slot. Distinto de `SetLocal` porque si el slot está *boxeado* (capturado por
     /// una closure), crea una **celda nueva** — cada declaración estrena celda, lo

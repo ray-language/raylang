@@ -223,6 +223,8 @@ impl<'a> Compiler<'a> {
         // (directo o a través de saltos incondicionales) se convierte en `TailCall`, que reutiliza
         // el marco en vez de apilar uno nuevo → recursión de cola en O(1) marcos.
         optimize_tail_calls(&mut self.cur().chunk);
+        // M36.1: superinstrucciones (tras el TCO → no fusiona a través de una llamada).
+        fuse_superinstructions(&mut self.cur().chunk);
 
         let mut scope = self.scopes.pop().expect("acabamos de empujar el ámbito");
         scope.captured_slots.resize(scope.max_slots, false);
@@ -1084,4 +1086,64 @@ fn returns_immediately(chunk: &Chunk, mut j: usize) -> bool {
         }
     }
     false
+}
+
+/// **Superinstrucciones** (M36.1): fusiona pares de opcodes adyacentes muy frecuentes en uno solo, para
+/// que el lazo de despacho de la VM haga **una** iteración en vez de dos. El despacho (el `match` gigante +
+/// el avance del `ip`) es un coste dominante en una VM de switch; `GetLocal` es el opcode más frecuente y
+/// casi siempre carga un operando seguido de otro `GetLocal` o una `Constant`. Fusionamos:
+/// - `GetLocal(s); GetLocal(t)` → `GetLocalLocal(s, t)` (operandos de `a op b`).
+/// - `GetLocal(s); Constant(c)` → `GetLocalConst(s, c)` (operandos de `x op <literal>`, `i < N`, …).
+///
+/// Fusionar acorta el vector de código, lo que **desplaza los índices** → hay que **remapear los destinos
+/// de salto** (`Jump`/`JumpIfFalse`, los únicos opcodes con destino de código). Un par NO se fusiona si su
+/// segundo opcode es **destino de un salto** (algo aterrizaría entre medias). Corre tras el TCO (no fusiona
+/// a través de una llamada). El resultado es equivalente: mismos empujes, mismos saltos → oráculo intacto.
+fn fuse_superinstructions(chunk: &mut Chunk) {
+    let n = chunk.code.len();
+    if n == 0 {
+        return;
+    }
+    // (1) Marca qué índices son destino de algún salto (no se puede fusionar "dentro" de ellos).
+    let mut es_destino = vec![false; n];
+    for op in &chunk.code {
+        match op {
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => es_destino[*t] = true,
+            _ => {}
+        }
+    }
+    // (2) Reconstruye el código fusionando pares elegibles; `viejo_a_nuevo[i]` = nueva posición de la
+    // instrucción que empezaba en `i`. El segundo opcode de un par fusionado nunca es destino de salto
+    // (lo garantiza `es_destino`), así que su entrada en el mapa queda sin usar.
+    let mut viejo_a_nuevo = vec![0usize; n];
+    let mut code = Vec::with_capacity(n);
+    let mut lines = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        viejo_a_nuevo[i] = code.len();
+        if i + 1 < n && !es_destino[i + 1] {
+            if let Some(fusion) = match (&chunk.code[i], &chunk.code[i + 1]) {
+                (OpCode::GetLocal(s), OpCode::GetLocal(t)) => Some(OpCode::GetLocalLocal(*s, *t)),
+                (OpCode::GetLocal(s), OpCode::Constant(c)) => Some(OpCode::GetLocalConst(*s, *c)),
+                _ => None,
+            } {
+                code.push(fusion);
+                lines.push(chunk.lines[i]); // la posición del primer opcode del par
+                i += 2;
+                continue;
+            }
+        }
+        code.push(chunk.code[i].clone());
+        lines.push(chunk.lines[i]);
+        i += 1;
+    }
+    // (3) Remapea los destinos de salto a las nuevas posiciones.
+    for op in &mut code {
+        match op {
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => *t = viejo_a_nuevo[*t],
+            _ => {}
+        }
+    }
+    chunk.code = code;
+    chunk.lines = lines;
 }

@@ -402,6 +402,19 @@ impl<'a> Vm<'a> {
                     let v = self.get_local(fi, *slot);
                     self.push(v);
                 }
+                // M36.1: superinstrucciones — dos empujes en una iteración del lazo.
+                OpCode::GetLocalLocal(s, t) => {
+                    let a = self.get_local(fi, *s);
+                    let b = self.get_local(fi, *t);
+                    self.push(a);
+                    self.push(b);
+                }
+                OpCode::GetLocalConst(s, c) => {
+                    let a = self.get_local(fi, *s);
+                    let b = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    self.push(a);
+                    self.push(b);
+                }
                 OpCode::SetLocal(slot) => {
                     let v = self.pop();
                     self.set_local(fi, *slot, v);

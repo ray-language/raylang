@@ -998,6 +998,10 @@ impl<'a> Interpreter<'a> {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha1(b))),
                 _ => unreachable!("el checker garantiza bytes"),
             },
+            "hmac_sha256" => match (&values[0], &values[1]) {
+                (Value::Bytes(k), Value::Bytes(m)) => Value::Bytes(Rc::new(crate::builtins::hmac_sha256(k, m))),
+                _ => unreachable!("el checker garantiza bytes, bytes"),
+            },
             // M16.1b: decodifica bytes como UTF-8 → ["ok", s] o ["err", msg]. El prelude → Result.
             "__from_utf8" => {
                 let arr = match &values[0] {

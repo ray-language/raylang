@@ -176,6 +176,8 @@ pub enum OpCode {
     Sha256,
     Sha512,
     Sha1,
+    /// M43.2: HMAC-SHA256. Saca `msg` y `key` (bytes); empuja la etiqueta de 32 octetos.
+    HmacSha256,
 
     // --- I/O binaria (M16.1c). Lecturas → [bytes] etiquetado; escrituras → [string]. ---
     /// Saca la ruta (string); lee el archivo y empuja `[bytes]` (`[b"ok", datos]`/`[b"err", msg]`).

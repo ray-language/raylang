@@ -205,6 +205,14 @@ pub fn sha1(data: &[u8]) -> Vec<u8> {
     ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, data).as_ref().to_vec()
 }
 
+/// HMAC-SHA256 (32 octetos): MAC con clave, la base de JWT (HS256), SigV4 y muchos esquemas de auth.
+/// La verificación honesta se hace **recomputando** el MAC y comparando en tiempo constante — pero eso es
+/// responsabilidad de quien compara; aquí solo se produce la etiqueta.
+pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
+    let k = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
+    ring::hmac::sign(&k, msg).as_ref().to_vec()
+}
+
 // --- I/O con buffering: registro de archivos abiertos (M11.8) ---
 //
 // Un handle de archivo es un `int`: NO hay un nuevo tipo de valor ni se toca el GC. Los archivos
@@ -1021,6 +1029,13 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "sha1", opcode: OpCode::Sha1, check: |a| {
         arity(a, 1, "sha1", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("sha1 espera bytes, no {}", a[0]))); }
+        Ok(Type::Bytes)
+    } },
+    // M43.2: HMAC-SHA256 (clave, mensaje) -> etiqueta de 32 octetos.
+    Builtin { name: "hmac_sha256", opcode: OpCode::HmacSha256, check: |a| {
+        arity(a, 2, "hmac_sha256", "")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("hmac_sha256 espera bytes (clave), no {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("hmac_sha256 espera bytes (mensaje), no {}", a[1]))); }
         Ok(Type::Bytes)
     } },
     // __from_utf8(b) -> [string] (M16.1b): ["ok", s] o ["err", msg]. El prelude → Result<string,string>.

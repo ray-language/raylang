@@ -5803,3 +5803,10 @@ CONSISTENCIA, y los **vectores conocidos** (NIST/RFC: `sha256("abc")`, entrada v
 0 aunque ambos motores coincidieran—. Estrés del GC encadenando hashes (cada uno asigna un `bytes` nuevo).
 Siguen: 45.2 `hmac_sha256`, 45.3 Ed25519, 45.4 ChaCha20-Poly1305 AEAD, 45.5 migrar el `net` + des-embeber la
 cripto pura de `std/`.
+
+### 45.2 M43.2 — HMAC-SHA256
+
+`hmac_sha256(key: bytes, msg: bytes) -> bytes` (opcode `HmacSha256`, helper `builtins::hmac_sha256` sobre
+`ring::hmac`). Es la base de JWT (HS256), SigV4 y esquemas de auth. El builtin solo **produce** la etiqueta;
+la verificación honesta (recomputar y comparar en tiempo constante) es de quien compara. Test
+`hmac_sha256_oraculo`: oráculo (interp==vm) + vector RFC 4231 (Test Case 2) + estrés de GC encadenando HMAC.

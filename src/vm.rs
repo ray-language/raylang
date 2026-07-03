@@ -956,6 +956,14 @@ impl<'a> Vm<'a> {
                     HeapValue::Bytes(b) => self.push(HeapValue::Bytes(crate::builtins::sha1(&b))),
                     _ => unreachable!("el checker garantiza bytes"),
                 },
+                OpCode::HmacSha256 => {
+                    let m = self.pop();
+                    let k = self.pop();
+                    let (HeapValue::Bytes(k), HeapValue::Bytes(m)) = (k, m) else {
+                        unreachable!("el checker garantiza bytes, bytes");
+                    };
+                    self.push(HeapValue::Bytes(crate::builtins::hmac_sha256(&k, &m)));
+                }
                 // M16.1b: decodifica bytes como UTF-8 → arreglo etiquetado; el prelude → Result.
                 OpCode::FromUtf8 => {
                     let b = match self.pop() {
@@ -4831,6 +4839,42 @@ mod tests {
                     i = i + 1;
                 }
                 len(acc)                     // 20 (último es sha1)
+            }
+        "#,
+        );
+    }
+
+    /// M43.2: **HMAC-SHA256** vía `ring`. Misma doble red: oráculo (interp==vm) + vector conocido
+    /// (RFC 4231, Test Case 2: clave `"Jefe"`, mensaje `"what do ya want for nothing?"`).
+    #[test]
+    fn hmac_sha256_oraculo() {
+        let src = format!(
+            "fn main() -> int {{ if (to_string(hmac_sha256(to_bytes(\"Jefe\"), to_bytes(\"{}\"))) == \"{}\") {{ 1 }} else {{ 0 }} }}",
+            "what do ya want for nothing?",
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+        let tokens = crate::lexer::lex(&src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
+        let interp = crate::interpreter::run(&prog).expect("interp ok");
+        let compiled = compile_program(&prog).expect("compila");
+        let vm = run_program(&compiled).expect("vm ok");
+        assert_eq!(interp, vm, "VM≠intérprete en hmac_sha256");
+        assert_eq!(vm, Value::Int(1), "hmac_sha256 no casó con el vector RFC 4231");
+        // Estrés de GC: HMAC en cadena (clave y mensaje del paso previo).
+        oracle_stress(
+            r#"
+            fn main() -> int {
+                var k = to_bytes("clave");
+                var m = to_bytes("mensaje");
+                var i = 0;
+                while (i < 50) {
+                    let t = hmac_sha256(k, m);
+                    k = t;
+                    m = sha256(t);
+                    i = i + 1;
+                }
+                len(k)                       // 32
             }
         "#,
         );

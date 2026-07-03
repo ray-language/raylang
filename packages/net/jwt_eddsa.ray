@@ -7,7 +7,7 @@
 // (las *claims*) se pasa y se devuelve como string JSON crudo (como en HS256). Importable:
 //   from jwt_eddsa import jwt_eddsa_sign, jwt_eddsa_verify;
 
-from std/ed25519 import ed25519_public_key, ed25519_sign, ed25519_verify;
+from net/crypto import ed_sign, ed_verify;
 from std/base64 import base64url, base64url_decode;
 
 // Octetos (`[int]`) de un string (UTF-8).
@@ -29,11 +29,12 @@ fn header_b64() -> string {
 
 // Firma las *claims* (JSON crudo) con el `seed` privado (32 octetos) y devuelve el JWT compacto `h.p.s`.
 pub fn jwt_eddsa_sign(seed: [int], payload_json: string) -> string {
-    let pk = ed25519_public_key(seed);
     let h = header_b64();
     let p = base64url(str_octets(payload_json));
     let signing_input = h + "." + p;
-    let sig = ed25519_sign(seed, pk, str_octets(signing_input));
+    // `ring` deriva la clave pública de la semilla al firmar (a diferencia del Ed25519 pedagógico de 3
+    // argumentos, que la recibía) → aquí no hace falta calcularla.
+    let sig = ed_sign(seed, str_octets(signing_input));
     signing_input + "." + base64url(sig)
 }
 
@@ -49,7 +50,7 @@ pub fn jwt_eddsa_verify(pubkey: [int], token: string) -> Result<string, string> 
         Result.Ok(s) => s,
         Result.Err(e) => { return Result.Err(e); },
     };
-    if (!ed25519_verify(pubkey, str_octets(signing_input), sig)) {
+    if (!ed_verify(pubkey, str_octets(signing_input), sig)) {
         return Result.Err("firma inválida");
     }
     // Firma válida: decodifica el payload (base64url → octetos → UTF-8).

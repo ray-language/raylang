@@ -12,8 +12,7 @@
 // El nombre de cabecera en el `Map` debe ir ya en MINÚSCULA (la forma canónica de AWS); `keys` los
 // entrega ordenados → cabeceras canónicas y signed-headers deterministas.
 
-from std/hmac import hmac_sha256, hmac_sha256_hex;
-from std/sha256 import sha256_hex;
+from net/crypto import hmac_sha256_octets, hmac_sha256_hex, sha256_hex;
 from std/url import url_encode;
 
 // Las credenciales + el destino (región/servicio) de la firma.
@@ -53,7 +52,7 @@ fn canonical_query(raw: string) -> string {
 
 // Un HMAC-SHA256 cuyo resultado se reusa como clave del siguiente (la derivación de la *signing key*).
 fn hmac_bytes(key: bytes, msg: string) -> bytes {
-    bytes_of(hmac_sha256(key, to_bytes(msg)))
+    bytes_of(hmac_sha256_octets(key, to_bytes(msg)))
 }
 
 // Devuelve el valor de la cabecera `Authorization` para la petición dada. `amz_date` en formato básico

@@ -5834,3 +5834,24 @@ nonce lo aporta quien llama (la API "segura" gestiona el nonce por secuencia; es
 nivel). Test `chacha20poly1305_oraculo`: oráculo (interp==vm) + relacional (seal→open recupera, alterar el aad
 → `None`, clave corta → `None`). Con esto están **todas las primitivas cripto de producción**; queda 45.5:
 migrar el `net` a ellas + des-embeber la cripto pura de `std/`.
+
+### 45.5 M43.5 — migrar el `net` a la cripto de producción + des-embeber la pura
+
+El paso que **cierra M43** y, a diferencia de 45.1–45.4 (aditivos), toca código existente. Se parte en dos.
+
+**Hallazgo que dirige el diseño**: los builtins **ganan** a una función de usuario del mismo nombre (una `fn
+hmac_sha256` de usuario se ignora; la llamada va al builtin). Así que un envoltorio no puede reusar el nombre
+de un builtin (quedaría muerto). Además, los consumidores del `net` son `[int]`-céntricos (`base64url([int])`,
+HMAC pura → `[int]`), mientras los builtins son `bytes`-céntricos.
+
+**M43.5a — `net/crypto` + migración de consumidores**: un módulo `packages/net/crypto.ray` (adaptadores
+finos sobre los builtins) presenta la API en `[int]`/hex que el `net` ya consumía, con **nombres distintos**
+de los builtins para los que colisionan (`hmac_sha256_octets`, `sha1_octets`, `ed_sign`/`ed_verify`/
+`ed_public_key`) y los de conveniencia que no colisionan tal cual (`sha256_octets`, `sha256_hex`,
+`hmac_sha256_hex`). Un puente `octetos(bytes) -> [int]` cruza los dos mundos. Los 6 consumidores
+(`jwt`/`scram`/`sigv4`/`jwt_eddsa`/`websocket`/`websocket_client`) cambian su `from std/… import` por `from
+net/crypto import` y sus sitios de llamada. Ed25519: `ed_sign` NO recibe la clave pública (a diferencia del
+pedagógico de 3 args; `ring` la deriva). **Verificado**: los 4 tests de integración del `net` pasan — jwt HS256
+firma+verifica y el accept-key de WebSocket dan sus KATs de RFC, ahora con cripto de tiempo constante.
+**M43.5b** (pendiente): des-embeber `sha*`/`hmac`/`chacha*`/`ed25519` de `src/stdlib.rs` (vuelven a ser SOLO
+ejemplos) + actualizar los tests M40.7 que probaban la std cripto embebida.

@@ -7,7 +7,7 @@
 // se pasa y se devuelve como **string JSON** crudo: raylang es estáticamente tipado y las claims son
 // heterogéneas → dejar el JSON al usuario (que puede armarlo con la librería `json`) es lo idiomático.
 
-from std/hmac import hmac_sha256;
+from net/crypto import hmac_sha256_octets;
 from std/base64 import base64url, base64url_decode;
 
 // Octetos (`[int]`) de un string vía `to_bytes` (UTF-8) + indexado de bytes.
@@ -29,7 +29,7 @@ fn header_b64() -> string {
 
 // La firma base64url de un "header.payload" dado, con el secreto.
 fn sign_input(secret: bytes, signing_input: string) -> string {
-    base64url(hmac_sha256(secret, to_bytes(signing_input)))
+    base64url(hmac_sha256_octets(secret, to_bytes(signing_input)))
 }
 
 // Firma las *claims* (JSON crudo) y devuelve el JWT compacto `h.p.s`.

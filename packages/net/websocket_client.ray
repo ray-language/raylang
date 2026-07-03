@@ -7,7 +7,6 @@
 // `websocket.ray`. Sobre los sockets TCP (M15): funciona en ambos motores (cliente bloqueante). Sin TLS
 // (`wss` añadiría `tls_connect`), sin fragmentación.
 
-from std/sha1 import sha1;
 from std/base64 import base64;
 from net/websocket import accept_key, decode_frame, Frame, op_text, op_close;
 

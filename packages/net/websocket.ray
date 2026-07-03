@@ -5,7 +5,7 @@
 // completa cabe en una sola lectura del socket (suficiente para mensajes cortos), como los servidores
 // `.ray` acotados de M19.1. Sin TLS (`wss` → M19.4), sin fragmentación ni extensiones.
 
-from std/sha1 import sha1;
+from net/crypto import sha1_octets;
 from std/base64 import base64;
 
 // --- Handshake ---
@@ -15,7 +15,7 @@ fn guid() -> string { "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" }
 
 // El valor `Sec-WebSocket-Accept` para la clave del cliente: base64(SHA-1(key + GUID)).
 pub fn accept_key(key: string) -> string {
-    base64(sha1(to_bytes(key + guid())))
+    base64(sha1_octets(to_bytes(key + guid())))
 }
 
 // Extrae el valor de la cabecera `Sec-WebSocket-Key` de la petición de upgrade (o "" si no aparece).

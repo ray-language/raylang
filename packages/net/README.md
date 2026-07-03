@@ -3,7 +3,13 @@
 A diferencia de la biblioteca estándar (`std/`, embebida en el binario base), el tier de **red y
 protocolos** vive aquí, en un **paquete adicional**: son librerías que dependen de sockets/TLS o que solo
 interesan a quien construye servicios, y serían peso muerto en el binario de todo el mundo. Se apoyan en
-las `std/` embebidas para lo fundacional (`from std/hmac import …`).
+las `std/` embebidas para lo fundacional (`from std/base64 import …`).
+
+**Criptografía de producción (M43)**: el módulo `net/crypto` expone SHA/HMAC/Ed25519 respaldados por
+`ring` (tiempo constante, auditado) en la forma (`[int]`/hex) que estos módulos consumen. Las
+implementaciones en raylang puro (`examples/web/sha256.ray`, etc.) se conservan como **demostración del
+lenguaje**, no como el backend de producción: correctas, pero sobre la VM interpretada no garantizan
+resistencia a canales laterales de temporización (requisito para tocar secretos reales).
 
 ## Cómo usarlo
 
@@ -36,11 +42,11 @@ fn main() -> int {
 ### Autenticación y firma (deterministas)
 
 - **`net/jwt`** — JSON Web Tokens HS256: `jwt_sign(secret: bytes, payload_json) -> string`,
-  `jwt_verify(secret: bytes, token) -> Result<string, string>`. Sobre `std/hmac` + `std/base64`.
-- **`net/jwt_eddsa`** — JWT firmados con Ed25519 (EdDSA). Sobre `std/ed25519` + `std/base64`.
-- **`net/sigv4`** — firma AWS Signature V4 para peticiones. Sobre `std/hmac` + `std/sha256` + `std/url`.
-- **`net/scram`** — el handshake SCRAM-SHA-256 (autenticación de PostgreSQL). Sobre `std/hmac` +
-  `std/sha256` + `std/base64`.
+  `jwt_verify(secret: bytes, token) -> Result<string, string>`. Sobre `net/crypto` + `std/base64`.
+- **`net/jwt_eddsa`** — JWT firmados con Ed25519 (EdDSA). Sobre `net/crypto` + `std/base64`.
+- **`net/sigv4`** — firma AWS Signature V4 para peticiones. Sobre `net/crypto` + `std/url`.
+- **`net/scram`** — el handshake SCRAM-SHA-256 (autenticación de PostgreSQL). Sobre `net/crypto` +
+  `std/base64`.
 - **`net/cookie`** — parseo y serialización de cookies HTTP. Sobre `std/url`.
 
 ### HTTP y HTTP/2
@@ -58,8 +64,8 @@ fn main() -> int {
 - **`net/udp`** — sockets UDP: `bind`/`send_to`/`recv_from`. Hoja.
 - **`net/dns`** — resolución DNS (7 tipos de registro). Sobre `net/udp`.
 - **`net/dns_cache`** — caché DNS con TTL. Sobre `net/dns`.
-- **`net/websocket`** — handshake + framing WebSocket (`ws://`/`wss://`). Sobre `std/sha1` + `std/base64`.
-- **`net/websocket_client`** — cliente WebSocket. Sobre `net/websocket` + `std/sha1` + `std/base64`.
+- **`net/websocket`** — handshake + framing WebSocket (`ws://`/`wss://`). Sobre `net/crypto` + `std/base64`.
+- **`net/websocket_client`** — cliente WebSocket. Sobre `net/websocket` + `std/base64`.
 - **`net/redis`** — cliente Redis (protocolo RESP). Hoja.
 - **`net/postgres`** — cliente PostgreSQL (protocolo de frontend/backend). Sobre `net/scram`.
 - **`net/oauth2`** — flujo OAuth2 (client credentials, authorization code). Sobre `net/http` + `std/json`

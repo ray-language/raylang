@@ -4709,7 +4709,19 @@ propio hito; ver el desglose del arco D abajo):
     + CI + `cargo audit`**.
   - **M43 — cripto de producción vía `ring`** (§45): SHA/HMAC/Ed25519/AEAD como builtins de tiempo
     constante; el paquete `net` migrado a ellos; la cripto pura queda como demostración del lenguaje.
-  - **M44 — distribución** (pendiente): binarios, playground WASM, marketplace → **1.0**.
+  - **M44 — distribución** → **1.0** (en curso):
+    - **M44a — playground WASM HECHO** (`b17b414`+`f881f3b`+`278fd1c`): raylang corre EN EL NAVEGADOR (la
+      VM compilada a `wasm32-unknown-unknown`), **sin `wasm-bindgen` ni deps nuevas** (ABI cruda a mano,
+      como `dlopen`/`poll`). Tres pasos: (1) `ring`/`rustls` → deps solo-nativo (`[target.'cfg(not(
+      target_arch="wasm32"))'.dependencies]`); su uso en `builtins.rs` (cripto SHA/HMAC/Ed25519/AEAD +
+      TLS) cfg-partido con stubs de wasm. (2) FFI (`dlopen`/`dlsym`) cfg-gateado (era el bloqueador de
+      LINK) + `num_workers`→1 en wasm (sin hilos). (3) `src/wasm.rs`: `alloc`/`run(ptr,len)->u64`/`dealloc`
+      + captura de stdout (`print`→`host_print`→buffer); `[lib] crate-type=["cdylib","rlib"]`; `playground/`
+      (index.html + build.sh + README). Alcance = lenguaje NÚCLEO (todo el lenguaje + prelude + stdlib
+      pura; red/TLS/cripto/FFI/hilos no disponibles; un solo archivo). .wasm release 1,0M. Verificado E2E
+      con Node. **Nativo intacto** en los tres pasos.
+    - **Pendiente de M44**: binarios por plataforma + instalador (`curl|sh`/brew), CI de releases,
+      publicación (marketplace VSCode, hosting libro/sitio), `SECURITY.md`, y **declarar raylang 1.0**.
 
 A precede a todo; B y C pueden ir en paralelo tras A; D cierra. Los principios del proyecto (una
 fase a la vez, medir antes de conservar, oráculo en desarrollo, cero deps salvo excepción
@@ -4726,7 +4738,9 @@ consciente) siguen vigentes. Lo sacrificado está declarado al final de PRODUCCI
   (stdlib `std/` embebida + `Iterator` + colecciones + `raydoc` + el paquete `net`) · M41 (FFI con ABI C,
   sin libffi).
 - **D — Endurecimiento**: ✅ M42 (fuel + tope de heap + fuzzing/CI/`cargo audit`) · M43 (cripto de
-  producción vía `ring`). **Falta M44 (distribución) para la 1.0** — el ÚNICO hito restante del plan.
+  producción vía `ring`). **M44 (distribución) EN CURSO** — el ÚNICO hito restante del plan: **M44a
+  (playground WASM) HECHO** (raylang en el navegador, cero wasm-bindgen); falta binarios/instalador/CI de
+  releases + publicación + `SECURITY.md` → **declarar 1.0**.
 
 ## 38. M33 — Compilador sin pánicos y diagnósticos de producción
 

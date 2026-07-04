@@ -24,10 +24,22 @@
   @media (max-width:800px){ main{ grid-template-columns:1fr; grid-template-rows:1fr 1fr; } }
   .pane { background:var(--panel); display:flex; flex-direction:column; min-width:0; min-height:0; }
   .pane .label { padding:6px 14px; color:var(--muted); font-size:12px; border-bottom:1px solid var(--border); text-transform:uppercase; letter-spacing:.04em; }
-  textarea, pre { flex:1; margin:0; border:0; padding:14px; background:transparent; color:var(--fg);
-    font:13px/1.5 "JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace; resize:none; overflow:auto; tab-size:4; white-space:pre; }
-  textarea:focus { outline:none; }
-  pre { color:#c9d1d9; }
+  /* Editor con resaltado por OVERLAY: un <textarea> transparente (edición nativa: caret, selección) encima
+     de un <pre> coloreado; se sincroniza el scroll. Ambas capas comparten métricas EXACTAS (mono → alinea). */
+  .editor { position:relative; flex:1; min-height:0; overflow:hidden; }
+  .editor > pre, .editor > textarea {
+    position:absolute; inset:0; margin:0; border:0; padding:14px;
+    font:13px/1.5 "JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+    tab-size:4; white-space:pre; overflow-wrap:normal; }
+  .editor > pre { color:#c9d1d9; background:transparent; pointer-events:none; overflow:hidden; }
+  .editor > textarea { color:transparent; background:transparent; caret-color:var(--fg);
+    resize:none; outline:none; overflow:auto; }
+  /* Salida */
+  #out { flex:1; margin:0; padding:14px; color:#c9d1d9; overflow:auto; white-space:pre-wrap;
+    font:13px/1.5 "JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace; }
+  /* Tokens (tema oscuro sobre el navy de marca). */
+  .tok-kw{color:#c9a3ff} .tok-ty{color:#5bacf7} .tok-str{color:#7ee787} .tok-num{color:#f0a868}
+  .tok-com{color:#6b7f99;font-style:italic} .tok-fn{color:#79c0ff} .tok-lit{color:#f0a868} .tok-ann{color:#e3b341}
   .ejemplos { display:flex; gap:6px; flex-wrap:wrap; }
   .ejemplos a { color:var(--accent); font-size:12px; text-decoration:none; cursor:pointer; }
   .ejemplos a:hover { text-decoration:underline; }
@@ -50,7 +62,10 @@
 <main>
   <div class="pane">
     <div class="label">fuente</div>
-    <textarea id="src" spellcheck="false"></textarea>
+    <div class="editor">
+      <pre aria-hidden="true"><code id="hl"></code></pre>
+      <textarea id="src" spellcheck="false" wrap="off" autocapitalize="off" autocorrect="off" autocomplete="off"></textarea>
+    </div>
   </div>
   <div class="pane">
     <div class="label">salida</div>
@@ -105,7 +120,47 @@ fn main() -> int {
 };
 
 const $ = (id) => document.getElementById(id);
-const srcEl = $("src"), outEl = $("out"), runEl = $("run"), statusEl = $("status");
+const srcEl = $("src"), outEl = $("out"), runEl = $("run"), statusEl = $("status"), hlEl = $("hl");
+
+// --- Resaltado de sintaxis de raylang (a mano, cero deps) ---
+// Un scanner tokeniza el fuente (robusto ante comentarios/strings) y emite <span> por token. Las
+// palabras clave y tipos primitivos son los del lexer real (src/token.rs); un identificador con mayúscula
+// inicial se trata como tipo/enum, y uno seguido de '(' como función.
+const KW  = new Set("fn let var const if else while for in match return struct enum trait impl import from as pub dyn extern spawn".split(" "));
+const TY  = new Set("int float bool string char bytes ptr unit".split(" "));
+const LIT = new Set("true false".split(" "));
+function esc(s){ return s.replace(/[&<>]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[c])); }
+function span(cls, s){ return `<span class="${cls}">${esc(s)}</span>`; }
+function highlight(code){
+  let out = "", i = 0; const n = code.length;
+  const isIdStart = c => /[A-Za-z_]/.test(c), isId = c => /[A-Za-z0-9_]/.test(c);
+  const scanStr = (j, q) => { j++; while (j < n && code[j] !== q) { if (code[j] === "\\") j++; j++; } return j + 1; };
+  while (i < n) {
+    const c = code[i];
+    if (c === "/" && code[i+1] === "/") { let j = i; while (j < n && code[j] !== "\n") j++; out += span("tok-com", code.slice(i, j)); i = j; }
+    else if (c === '"') { const j = scanStr(i, '"'); out += span("tok-str", code.slice(i, j)); i = j; }
+    else if (c === "b" && code[i+1] === '"') { const j = scanStr(i+1, '"'); out += span("tok-str", code.slice(i, j)); i = j; }
+    else if (c === "'") { const j = scanStr(i, "'"); out += span("tok-str", code.slice(i, j)); i = j; }
+    else if (c === "@") { let j = i+1; while (j < n && isId(code[j])) j++; out += span("tok-ann", code.slice(i, j)); i = j; }
+    else if (/[0-9]/.test(c)) { let j = i; while (j < n && /[0-9._eExXa-fA-F]/.test(code[j])) j++; out += span("tok-num", code.slice(i, j)); i = j; }
+    else if (isIdStart(c)) {
+      let j = i; while (j < n && isId(code[j])) j++; const w = code.slice(i, j);
+      let k = j; while (k < n && /\s/.test(code[k])) k++;
+      let cls = KW.has(w) ? "tok-kw" : TY.has(w) ? "tok-ty" : LIT.has(w) ? "tok-lit"
+              : (w === "self" || w === "Self") ? "tok-kw"
+              : /^[A-Z]/.test(w) ? "tok-ty"
+              : code[k] === "(" ? "tok-fn" : null;
+      out += cls ? span(cls, w) : esc(w); i = j;
+    }
+    else { out += esc(c); i++; }
+  }
+  return out;
+}
+function render(){
+  hlEl.innerHTML = highlight(srcEl.value);
+  hlEl.parentNode.scrollTop = srcEl.scrollTop;
+  hlEl.parentNode.scrollLeft = srcEl.scrollLeft;
+}
 
 let wasm = null;
 async function cargar() {
@@ -145,16 +200,30 @@ const ejEl = $("ejemplos");
 for (const nombre of Object.keys(EJEMPLOS)) {
   const a = document.createElement("a");
   a.textContent = nombre;
-  a.onclick = () => { srcEl.value = EJEMPLOS[nombre]; };
+  a.onclick = () => { srcEl.value = EJEMPLOS[nombre]; render(); };
   ejEl.appendChild(a);
 }
 
 runEl.onclick = ejecutar;
+// Re-resaltar al escribir; sincronizar el scroll de la capa coloreada con el textarea.
+srcEl.addEventListener("input", render);
+srcEl.addEventListener("scroll", () => { hlEl.parentNode.scrollTop = srcEl.scrollTop; hlEl.parentNode.scrollLeft = srcEl.scrollLeft; });
+// Tab inserta 4 espacios (indentación) en vez de mover el foco.
+srcEl.addEventListener("keydown", (e) => {
+  if (e.key === "Tab") {
+    e.preventDefault();
+    const s = srcEl.selectionStart, t = srcEl.selectionEnd;
+    srcEl.value = srcEl.value.slice(0, s) + "    " + srcEl.value.slice(t);
+    srcEl.selectionStart = srcEl.selectionEnd = s + 4;
+    render();
+  }
+});
 document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); ejecutar(); }
 });
 
 srcEl.value = EJEMPLOS["fib"];
+render();
 cargar();
 </script>
 </body>

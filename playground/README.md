@@ -26,6 +26,9 @@ cd playground && python3 -m http.server 8000
 El `.wasm` es un artefacto de build (no se versiona; ver `.gitignore`). Con `wasm-opt` (paquete
 `binaryen`) instalado, `build.sh` lo reduce con `-Oz`.
 
+El editor trae **resaltado de sintaxis** (escrito a mano, cero deps): un tokenizador de raylang colorea un
+`<pre>` que va detrás de un `<textarea>` transparente (técnica de *overlay* → edición nativa intacta).
+
 ## Cómo funciona (ABI)
 
 El módulo exporta tres funciones (`src/wasm.rs`):

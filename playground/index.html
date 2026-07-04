@@ -40,6 +40,7 @@
   /* Tokens (tema oscuro sobre el navy de marca). */
   .tok-kw{color:#c9a3ff} .tok-ty{color:#5bacf7} .tok-str{color:#7ee787} .tok-num{color:#f0a868}
   .tok-com{color:#6b7f99;font-style:italic} .tok-fn{color:#79c0ff} .tok-lit{color:#f0a868} .tok-ann{color:#e3b341}
+  .tok-idelim{color:#8fa6c4}  /* delimitadores ${ } de interpolación */
   .ejemplos { display:flex; gap:6px; flex-wrap:wrap; }
   .ejemplos a { color:var(--accent); font-size:12px; text-decoration:none; cursor:pointer; }
   .ejemplos a:hover { text-decoration:underline; }
@@ -107,10 +108,10 @@ fn main() -> int {
     print(area(Figura.Rect(3.0, 4.0)));
     0
 }`,
-  "traits": `trait Saludar { fn hola(self) -> string }
+  "traits": `trait Saludar { fn hola(self) -> string; }
 struct Persona { nombre: string }
 impl Saludar for Persona {
-    fn hola(self) -> string { "hola, " + self.nombre }
+    fn hola(self) -> string { "hola, \${self.nombre}!" }   // interpolación de strings
 }
 fn main() -> int {
     let p = Persona { nombre: "raylang" };
@@ -131,6 +132,28 @@ const TY  = new Set("int float bool string char bytes ptr unit".split(" "));
 const LIT = new Set("true false".split(" "));
 function esc(s){ return s.replace(/[&<>]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[c])); }
 function span(cls, s){ return `<span class="${cls}">${esc(s)}</span>`; }
+// Una cadena "..." con interpolación: las partes literales van en verde y cada ${expr} se resalta como
+// CÓDIGO embebido (recursivo, vía highlight). Los delimitadores ${ } se marcan aparte. `\` escapa (incl.
+// `\${` como un `${` literal, que así NO abre interpolación). Devuelve [html, índice tras la comilla].
+function hlString(code, i){
+  const n = code.length; let j = i + 1, out = "", lit = code[i];
+  while (j < n) {
+    const c = code[j];
+    if (c === "\\") { lit += c + (code[j+1] ?? ""); j += 2; continue; }   // escape: 2 caracteres
+    if (c === '"') { lit += c; j++; break; }                              // comilla de cierre
+    if (c === "$" && code[j+1] === "{") {
+      if (lit) { out += span("tok-str", lit); lit = ""; }
+      let d = 1, k = j + 2;                                               // balancea llaves anidadas
+      while (k < n && d > 0) { const ch = code[k]; if (ch === "{") d++; else if (ch === "}") { d--; if (d === 0) break; } k++; }
+      out += span("tok-idelim", "${") + highlight(code.slice(j + 2, k)) + (code[k] === "}" ? span("tok-idelim", "}") : "");
+      j = code[k] === "}" ? k + 1 : k;
+      continue;
+    }
+    lit += c; j++;
+  }
+  if (lit) out += span("tok-str", lit);
+  return [out, j];
+}
 function highlight(code){
   let out = "", i = 0; const n = code.length;
   const isIdStart = c => /[A-Za-z_]/.test(c), isId = c => /[A-Za-z0-9_]/.test(c);
@@ -138,7 +161,7 @@ function highlight(code){
   while (i < n) {
     const c = code[i];
     if (c === "/" && code[i+1] === "/") { let j = i; while (j < n && code[j] !== "\n") j++; out += span("tok-com", code.slice(i, j)); i = j; }
-    else if (c === '"') { const j = scanStr(i, '"'); out += span("tok-str", code.slice(i, j)); i = j; }
+    else if (c === '"') { const [h, j] = hlString(code, i); out += h; i = j; }
     else if (c === "b" && code[i+1] === '"') { const j = scanStr(i+1, '"'); out += span("tok-str", code.slice(i, j)); i = j; }
     else if (c === "'") { const j = scanStr(i, "'"); out += span("tok-str", code.slice(i, j)); i = j; }
     else if (c === "@") { let j = i+1; while (j < n && isId(code[j])) j++; out += span("tok-ann", code.slice(i, j)); i = j; }

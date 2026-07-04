@@ -837,8 +837,14 @@ fn signature_help_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((name, activo)) = enclosing_call(src, line0, char0) else { return Json::Null };
     // 2. Extraer la firma **textualmente** de la fuente. Es robusto ante el documento a medio
     //    escribir (mientras tecleas los argumentos, el parse del archivo falla); solo necesita que
-    //    la *declaración* `fn nombre(...) -> ...` esté bien formada.
-    let Some((params, ret)) = find_fn_signature(src, &name) else { return Json::Null };
+    //    la *declaración* `fn nombre(...) -> ...` esté bien formada. Si no es una función del archivo,
+    //    se prueba con la firma fija de un **builtin** (`pow`/`sqrt`/…), que no vive en la fuente.
+    let Some((params, ret)) = find_fn_signature(src, &name).or_else(|| {
+        crate::builtins::signature(&name)
+            .map(|(ps, r)| (ps.iter().map(|p| p.to_string()).collect(), r.to_string()))
+    }) else {
+        return Json::Null;
+    };
     // 3. Construir el label `fn nombre(p: T, …) -> R` y la lista de parámetros (para resaltar).
     let label = format!("fn {}({}) -> {}", name, params.join(", "), ret);
     let parametros: Vec<Json> = params.iter().map(|p| obj(vec![("label", Json::Str(p.clone()))])).collect();
@@ -1945,6 +1951,29 @@ mod tests {
         let sel = punto.get("selectionRange").unwrap().get("start").unwrap();
         assert_eq!(sel.get("line"), Some(&Json::Num(1.0)));
         assert_eq!(sel.get("character"), Some(&Json::Num(7.0)));
+    }
+
+    #[test]
+    fn hover_y_signature_de_builtins() {
+        // M10.2i: los builtins (print/pow/abs/…) no viven en la fuente; aun así el hover muestra su
+        // firma (con los tipos de la llamada) y el signature help su firma fija.
+        let src = "fn main() -> int {\n  let x = abs(-3);\n  let y = pow(2.0, 8.0);\n  print(x);\n  0\n}\n";
+        // Hover sobre `pow` (línea 3, 0-based 2) → firma con los tipos reales.
+        let col = src.lines().nth(2).unwrap().find("pow").unwrap();
+        let (t, _, _) = hover_at(None, src, 2, col).expect("hover de pow");
+        assert_eq!(t, "pow: fn(float, float) -> float");
+        // `abs(-3)` → int (ad-hoc polimórfico resuelto a int en esta llamada).
+        let cabs = src.lines().nth(1).unwrap().find("abs").unwrap();
+        let (ta, _, _) = hover_at(None, src, 1, cabs).expect("hover de abs");
+        assert_eq!(ta, "abs: fn(int) -> int");
+        // `print(x)` → unit.
+        let cp = src.lines().nth(3).unwrap().find("print").unwrap();
+        let (tp, _, _) = hover_at(None, src, 3, cp).expect("hover de print");
+        assert_eq!(tp, "print: fn(int) -> unit");
+        // Signature help de un builtin con firma fija.
+        let (ps, ret) = crate::builtins::signature("pow").expect("firma de pow");
+        assert_eq!((ps, ret), (vec!["base: float", "exp: float"], "float"));
+        assert!(crate::builtins::signature("len").is_none(), "los ad-hoc (len) no tienen firma fija");
     }
 
     #[test]

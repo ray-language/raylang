@@ -137,6 +137,29 @@ pub fn names() -> impl Iterator<Item = &'static str> {
     BUILTINS.iter().map(|b| b.name)
 }
 
+/// Firma legible de un builtin para el **signature help** del LSP: `(params, retorno)`. Cubre los
+/// builtins de cara al usuario con **firma fija**; los ad-hoc polimórficos (int|float, `min`/`max`) se
+/// muestran con un tipo representativo. `None` para los que no tienen firma fija sensata (`print`/`len`
+/// aceptan cualquier valor) y los internos `__*`. El **hover** no usa esto —se calcula dinámicamente con
+/// los tipos de cada llamada—; el signature help sí, porque se pide antes de que la llamada esté completa.
+pub fn signature(name: &str) -> Option<(Vec<&'static str>, &'static str)> {
+    Some(match name {
+        // Matemáticas de un argumento float → float.
+        "sqrt" | "sin" | "cos" | "tan" | "ln" | "log10" | "exp" | "floor" | "ceil" | "round" => {
+            (vec!["x: float"], "float")
+        }
+        "pow" => (vec!["base: float", "exp: float"], "float"),
+        "abs" => (vec!["x: float"], "float"), // ad-hoc: también int → int
+        "min" | "max" => (vec!["a: float", "b: float"], "float"), // ad-hoc: también int
+        "pi" | "e" | "random" => (vec![], "float"),
+        "now" | "monotonic" => (vec![], "int"),
+        "sleep" => (vec!["ms: int"], "unit"),
+        "random_int" => (vec!["n: int"], "int"),
+        "panic" => (vec!["msg: string"], "unit"),
+        _ => return None,
+    })
+}
+
 /// Añade `contents` al final del archivo `path` (lo crea si no existe). Helper compartido por ambos
 /// motores para el primitivo `__append_file` (M11.4b); la *impl* de ejecución no es metadato, pero
 /// es idéntica en los dos motores, así que vive aquí para no duplicarse.

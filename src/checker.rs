@@ -2753,7 +2753,9 @@ impl Checker {
                     let def = self.fn_defs.get(&n).copied();
                     self.record_ident(callee.line, callee.col, &n, &ty, def);
                 }
-                self.check_named_call(&n, args, line, col, None)
+                // `hover_directo = true`: `(line, col)` es la posición del nombre → registra el hover
+                // del builtin ahí (`print`/`pow`/`abs`… muestran su firma con los tipos de la llamada).
+                self.check_named_call_impl(&n, args, line, col, None, true)
             }
 
             // UFCS (M7.1): `recv.f(args)`. Si `f` es un **campo** del struct receptor,
@@ -2876,6 +2878,13 @@ impl Checker {
     /// variable local que tape una función global, función de nivel superior (directa o
     /// genérica). Compartida por la llamada directa y por UFCS.
     fn check_named_call(&mut self, name: &str, args: &[Expr], line: usize, col: usize, expected: Option<&Type>) -> Result<Type, TypeError> {
+        self.check_named_call_impl(name, args, line, col, expected, false)
+    }
+
+    /// Como [`check_named_call`], pero `hover_directo` indica que `(line, col)` es la posición del
+    /// **nombre** llamado (llamada directa `f(...)`), no una reescritura (UFCS/método). Solo entonces
+    /// se registra el hover del builtin ahí (M10.2i): así `print`/`pow`/`abs`… muestran su firma.
+    fn check_named_call_impl(&mut self, name: &str, args: &[Expr], line: usize, col: usize, expected: Option<&Type>, hover_directo: bool) -> Result<Type, TypeError> {
         // Builtins (DESIGN.md §7): su firma vive en el **registro único** (`src/builtins.rs`), no
         // dispersa aquí. Se comprueban antes que una local/función homónima (un builtin no se tapa).
         // Se tipan los argumentos por el camino normal y la regla del builtin valida y da el tipo.
@@ -2885,7 +2894,16 @@ impl Checker {
                 arg_types.push(self.check_expr(a)?);
             }
             return match (b.check)(&arg_types) {
-                Ok(t) => Ok(t),
+                Ok(t) => {
+                    // M10.2i: hover del builtin en su nombre — su firma con los tipos de ESTA llamada
+                    // (`pow: fn(float, float) -> float`). Solo en llamada directa (posición correcta) y
+                    // modo gather. Los builtins internos (`__…`) no se muestran (el usuario no los escribe).
+                    if hover_directo && self.gather && !name.starts_with("__") {
+                        let fn_ty = Type::Fn(arg_types.clone(), Box::new(t.clone()));
+                        self.record_ident(line, col, name, &fn_ty, None);
+                    }
+                    Ok(t)
+                }
                 // El índice señala el argumento culpable (para el cursor); `None` → el sitio de llamada.
                 Err((Some(i), msg)) => Err(self.err(args[i].line, args[i].col, msg)),
                 Err((None, msg)) => Err(self.err(line, col, msg)),

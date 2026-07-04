@@ -5,32 +5,32 @@ from ed25519 import ed25519_public_key, ed25519_sign, ed25519_verify;
 from hex import hex_encode;
 
 fn si(b: bool) -> string {
-    if (b) { "si" } else { "no" }
+  if (b) { "si" } else { "no" }
 }
 
 fn probar(seed: [int], msg: [int]) {
-    let pk = ed25519_public_key(seed);
-    print(hex_encode(pk));
-    let sig = ed25519_sign(seed, pk, msg);
-    print(hex_encode(sig));
-    print(si(ed25519_verify(pk, msg, sig)));
+  let pk = ed25519_public_key(seed);
+  print(hex_encode(pk));
+  let sig = ed25519_sign(seed, pk, msg);
+  print(hex_encode(sig));
+  print(si(ed25519_verify(pk, msg, sig)));
 
-    // Manipular la firma (voltear un bit de S) debe hacer que la verificación falle.
-    var bad: [int] = [];
-    var i = 0;
-    while (i < 64) {
-        push(bad, sig[i]);
-        i = i + 1;
-    }
-    bad[40] = bad[40] ^ 1;
-    print(si(ed25519_verify(pk, msg, bad)));
+  // Manipular la firma (voltear un bit de S) debe hacer que la verificación falle.
+  var bad: [int] = [];
+  var i = 0;
+  while (i < 64) {
+    push(bad, sig[i]);
+    i = i + 1;
+  }
+  bad[40] = bad[40] ^ 1;
+  print(si(ed25519_verify(pk, msg, bad)));
 }
 
 fn main() {
-    // Test 1: mensaje vacío.
-    probar([157, 97, 177, 157, 239, 254, 188, 63, 40, 81, 62, 119, 227, 211, 101, 61, 149, 167, 92, 62, 92, 114, 224, 125, 15, 101, 179, 200, 91, 214, 204, 152], []);
-    // Test 2: mensaje de 1 octeto.
-    probar([76, 205, 8, 155, 40, 255, 150, 218, 157, 182, 195, 70, 236, 17, 78, 15, 91, 138, 49, 159, 53, 171, 166, 36, 218, 140, 246, 237, 79, 184, 166, 251], [114]);
-    // Test 3: mensaje de 2 octetos.
-    probar([197, 170, 141, 244, 63, 159, 131, 123, 237, 183, 68, 47, 49, 220, 183, 177, 102, 211, 133, 53, 7, 111, 9, 75, 133, 206, 58, 46, 11, 68, 88, 247], [175, 130]);
+  // Test 1: mensaje vacío.
+  probar([157, 97, 177, 157, 239, 254, 188, 63, 40, 81, 62, 119, 227, 211, 101, 61, 149, 167, 92, 62, 92, 114, 224, 125, 15, 101, 179, 200, 91, 214, 204, 152], []);
+  // Test 2: mensaje de 1 octeto.
+  probar([76, 205, 8, 155, 40, 255, 150, 218, 157, 182, 195, 70, 236, 17, 78, 15, 91, 138, 49, 159, 53, 171, 166, 36, 218, 140, 246, 237, 79, 184, 166, 251], [114]);
+  // Test 3: mensaje de 2 octetos.
+  probar([197, 170, 141, 244, 63, 159, 131, 123, 237, 183, 68, 47, 49, 220, 183, 177, 102, 211, 133, 53, 7, 111, 9, 75, 133, 206, 58, 46, 11, 68, 88, 247], [175, 130]);
 }

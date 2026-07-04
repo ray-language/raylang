@@ -7,33 +7,33 @@
 // heterogéneos van en un enum y el contexto es una lista de `(nombre, valor)`.
 // Un valor de plantilla.
 pub enum TVal {
-    VStr(string),
-    VInt(int),
-    VBool(bool),
-    VList([TVal]),
+  VStr(string),
+  VInt(int),
+  VBool(bool),
+  VList([TVal]),
 }
 
 // Una asociación nombre → valor en el contexto.
 pub struct Bind {
-    name: string,
-    value: TVal,
+  name: string,
+  value: TVal,
 }
 
 // Un token del tokenizador: texto literal, interpolación (escapada / cruda), o una etiqueta `{% … %}`.
 enum Tok {
-    TText(string),
-    TVar(string),
-    TRaw(string),
-    TTag(string),
+  TText(string),
+  TVar(string),
+  TRaw(string),
+  TTag(string),
 }
 
 // Un nodo del árbol de la plantilla.
 enum Node {
-    NText(string),
-    NVar(string),
-    NRaw(string),
-    NIf(string, [Node], [Node]),
-    NFor(string, string, [Node]),
+  NText(string),
+  NVar(string),
+  NRaw(string),
+  NIf(string, [Node], [Node]),
+  NFor(string, string, [Node]),
 }
 
 // ---- Constructores del contexto (API) ----
@@ -51,294 +51,294 @@ pub fn val_int(n: int) -> TVal { TVal.VInt(n) }
 
 // ---- Tokenizador ----
 fn tokenize(tpl: string) -> Result<[Tok], string> {
-    let cs = chars(tpl);
-    let n = len(cs);
-    var toks: [Tok] = [];
-    var text = "";
-    var i = 0;
-    while (i < n) {
-        if (i + 1 < n && cs[i] == '{' && cs[i + 1] == '{') {
-            if (text != "") {
-                push(toks, Tok.TText(text));
-                text = "";
-            }
-            i = i + 2;
-            var inner = "";
-            var cerrado = false;
-            while (!cerrado && i < n) {
-                if (i + 1 < n && cs[i] == '}' && cs[i + 1] == '}') {
-                    cerrado = true;
-                    i = i + 2;
-                } else {
-                    inner = inner + to_string(cs[i]);
-                    i = i + 1;
-                }
-            }
-            if (!cerrado) {
-                return Result.Err("'{{' sin cerrar");
-            }
-            let tr = trim(inner);
-            if (len(tr) > 0 && tr[0] == '&') {
-                push(toks, Tok.TRaw(trim(substring(tr, 1, len(tr)))));
-            } else {
-                push(toks, Tok.TVar(tr));
-            }
-        } else if (i + 1 < n && cs[i] == '{' && cs[i + 1] == '%') {
-            if (text != "") {
-                push(toks, Tok.TText(text));
-                text = "";
-            }
-            i = i + 2;
-            var inner = "";
-            var cerrado = false;
-            while (!cerrado && i < n) {
-                if (i + 1 < n && cs[i] == '%' && cs[i + 1] == '}') {
-                    cerrado = true;
-                    i = i + 2;
-                } else {
-                    inner = inner + to_string(cs[i]);
-                    i = i + 1;
-                }
-            }
-            if (!cerrado) {
-                return Result.Err("'{%' sin cerrar");
-            }
-            push(toks, Tok.TTag(trim(inner)));
-        } else {
-            text = text + to_string(cs[i]);
-            i = i + 1;
-        }
-    }
-    if (text != "") {
+  let cs = chars(tpl);
+  let n = len(cs);
+  var toks: [Tok] = [];
+  var text = "";
+  var i = 0;
+  while (i < n) {
+    if (i + 1 < n && cs[i] == '{' && cs[i + 1] == '{') {
+      if (text != "") {
         push(toks, Tok.TText(text));
+        text = "";
+      }
+      i = i + 2;
+      var inner = "";
+      var cerrado = false;
+      while (!cerrado && i < n) {
+        if (i + 1 < n && cs[i] == '}' && cs[i + 1] == '}') {
+          cerrado = true;
+          i = i + 2;
+        } else {
+          inner = inner + to_string(cs[i]);
+          i = i + 1;
+        }
+      }
+      if (!cerrado) {
+        return Result.Err("'{{' sin cerrar");
+      }
+      let tr = trim(inner);
+      if (len(tr) > 0 && tr[0] == '&') {
+        push(toks, Tok.TRaw(trim(substring(tr, 1, len(tr)))));
+      } else {
+        push(toks, Tok.TVar(tr));
+      }
+    } else if (i + 1 < n && cs[i] == '{' && cs[i + 1] == '%') {
+      if (text != "") {
+        push(toks, Tok.TText(text));
+        text = "";
+      }
+      i = i + 2;
+      var inner = "";
+      var cerrado = false;
+      while (!cerrado && i < n) {
+        if (i + 1 < n && cs[i] == '%' && cs[i + 1] == '}') {
+          cerrado = true;
+          i = i + 2;
+        } else {
+          inner = inner + to_string(cs[i]);
+          i = i + 1;
+        }
+      }
+      if (!cerrado) {
+        return Result.Err("'{%' sin cerrar");
+      }
+      push(toks, Tok.TTag(trim(inner)));
+    } else {
+      text = text + to_string(cs[i]);
+      i = i + 1;
     }
-    Result.Ok(toks)
+  }
+  if (text != "") {
+    push(toks, Tok.TText(text));
+  }
+  Result.Ok(toks)
 }
 
 // ---- Parser (tokens → árbol) ----
 struct PC {
-    toks: [Tok],
-    pos: int,
+  toks: [Tok],
+  pos: int,
 }
 
 // El resultado de parsear una secuencia: los nodos + la etiqueta que la detuvo (else/endif/endfor/"").
 struct SeqResult {
-    nodes: [Node],
-    stop: string,
+  nodes: [Node],
+  stop: string,
 }
 
 fn first_word(s: string) -> string {
-    let parts = split(s, " ");
-    parts[0]
+  let parts = split(s, " ");
+  parts[0]
 }
 
 fn parse_seq(pc: PC, stops: [string]) -> Result<SeqResult, string> {
-    var nodes: [Node] = [];
-    var stop = "";
-    var done = false;
-    while (!done) {
-        if (pc.pos >= len(pc.toks)) {
+  var nodes: [Node] = [];
+  var stop = "";
+  var done = false;
+  while (!done) {
+    if (pc.pos >= len(pc.toks)) {
+      done = true;
+    } else {
+      let tok = pc.toks[pc.pos];
+      match (tok) {
+        Tok.TText(s) => {
+          push(nodes, Node.NText(s));
+          pc.pos = pc.pos + 1;
+        },
+        Tok.TVar(s) => {
+          push(nodes, Node.NVar(s));
+          pc.pos = pc.pos + 1;
+        },
+        Tok.TRaw(s) => {
+          push(nodes, Node.NRaw(s));
+          pc.pos = pc.pos + 1;
+        },
+        Tok.TTag(s) => {
+          let kw = first_word(s);
+          if (contains(stops, kw)) {
+            pc.pos = pc.pos + 1;
+            stop = kw;
             done = true;
-        } else {
-            let tok = pc.toks[pc.pos];
-            match (tok) {
-                Tok.TText(s) => {
-                    push(nodes, Node.NText(s));
-                    pc.pos = pc.pos + 1;
+          } else if (kw == "if") {
+            pc.pos = pc.pos + 1;
+            let cond = trim(substring(s, 2, len(s)));
+            let thenr = match (parse_seq(pc, ["else", "endif"])) {
+              Result.Ok(x) => x,
+              Result.Err(e) => {
+                return Result.Err(e);
+              },
+            };
+            var elsebody: [Node] = [];
+            if (thenr.stop == "else") {
+              let elser = match (parse_seq(pc, ["endif"])) {
+                Result.Ok(x) => x,
+                Result.Err(e) => {
+                  return Result.Err(e);
                 },
-                Tok.TVar(s) => {
-                    push(nodes, Node.NVar(s));
-                    pc.pos = pc.pos + 1;
-                },
-                Tok.TRaw(s) => {
-                    push(nodes, Node.NRaw(s));
-                    pc.pos = pc.pos + 1;
-                },
-                Tok.TTag(s) => {
-                    let kw = first_word(s);
-                    if (contains(stops, kw)) {
-                        pc.pos = pc.pos + 1;
-                        stop = kw;
-                        done = true;
-                    } else if (kw == "if") {
-                        pc.pos = pc.pos + 1;
-                        let cond = trim(substring(s, 2, len(s)));
-                        let thenr = match (parse_seq(pc, ["else", "endif"])) {
-                            Result.Ok(x) => x,
-                            Result.Err(e) => {
-                                return Result.Err(e);
-                            },
-                        };
-                        var elsebody: [Node] = [];
-                        if (thenr.stop == "else") {
-                            let elser = match (parse_seq(pc, ["endif"])) {
-                                Result.Ok(x) => x,
-                                Result.Err(e) => {
-                                    return Result.Err(e);
-                                },
-                            };
-                            elsebody = elser.nodes;
-                        }
-                        push(nodes, Node.NIf(cond, thenr.nodes, elsebody));
-                    } else if (kw == "for") {
-                        pc.pos = pc.pos + 1;
-                        let parts = split(s, " ");  // ["for", x, "in", lista]
-                        if (len(parts) < 4) {
-                            return Result.Err("'for' mal formado (se espera 'for x in lista')");
-                        }
-                        let bodyr = match (parse_seq(pc, ["endfor"])) {
-                            Result.Ok(x) => x,
-                            Result.Err(e) => {
-                                return Result.Err(e);
-                            },
-                        };
-                        push(nodes, Node.NFor(parts[1], parts[3], bodyr.nodes));
-                    } else {
-                        return Result.Err("etiqueta desconocida: '" + kw + "'");
-                    }
-                },
+              };
+              elsebody = elser.nodes;
             }
-        }
+            push(nodes, Node.NIf(cond, thenr.nodes, elsebody));
+          } else if (kw == "for") {
+            pc.pos = pc.pos + 1;
+            let parts = split(s, " ");  // ["for", x, "in", lista]
+            if (len(parts) < 4) {
+              return Result.Err("'for' mal formado (se espera 'for x in lista')");
+            }
+            let bodyr = match (parse_seq(pc, ["endfor"])) {
+              Result.Ok(x) => x,
+              Result.Err(e) => {
+                return Result.Err(e);
+              },
+            };
+            push(nodes, Node.NFor(parts[1], parts[3], bodyr.nodes));
+          } else {
+            return Result.Err("etiqueta desconocida: '" + kw + "'");
+          }
+        },
+      }
     }
-    Result.Ok(SeqResult { nodes: nodes, stop: stop })
+  }
+  Result.Ok(SeqResult { nodes: nodes, stop: stop })
 }
 
 // ---- Render ----
 fn escape_html(s: string) -> string {
-    var out = "";
-    var i = 0;
-    while (i < len(s)) {
-        let c = s[i];
-        if (c == '&') {
-            out = out + "&amp;";
-        } else if (c == '<') {
-            out = out + "&lt;";
-        } else if (c == '>') {
-            out = out + "&gt;";
-        } else if (c == '"') {
-            out = out + "&quot;";
-        } else if (c == '\'') {
-            out = out + "&#39;";
-        } else {
-            out = out + to_string(c);
-        }
-        i = i + 1;
+  var out = "";
+  var i = 0;
+  while (i < len(s)) {
+    let c = s[i];
+    if (c == '&') {
+      out = out + "&amp;";
+    } else if (c == '<') {
+      out = out + "&lt;";
+    } else if (c == '>') {
+      out = out + "&gt;";
+    } else if (c == '"') {
+      out = out + "&quot;";
+    } else if (c == '\'') {
+      out = out + "&#39;";
+    } else {
+      out = out + to_string(c);
     }
-    out
+    i = i + 1;
+  }
+  out
 }
 
 fn lookup(ctx: [Bind], name: string) -> Option<TVal> {
-    var i = 0;
-    while (i < len(ctx)) {
-        if (ctx[i].name == name) {
-            return Option.Some(ctx[i].value);
-        }
-        i = i + 1;
+  var i = 0;
+  while (i < len(ctx)) {
+    if (ctx[i].name == name) {
+      return Option.Some(ctx[i].value);
     }
-    Option.None
+    i = i + 1;
+  }
+  Option.None
 }
 
 fn with_binding(ctx: [Bind], name: string, v: TVal) -> [Bind] {
-    var out: [Bind] = [Bind { name: name, value: v }];
-    var i = 0;
-    while (i < len(ctx)) {
-        push(out, ctx[i]);
-        i = i + 1;
-    }
-    out
+  var out: [Bind] = [Bind { name: name, value: v }];
+  var i = 0;
+  while (i < len(ctx)) {
+    push(out, ctx[i]);
+    i = i + 1;
+  }
+  out
 }
 
 fn truthy(v: TVal) -> bool {
-    match (v) {
-        TVal.VBool(b) => b,
-        TVal.VInt(n) => n != 0,
-        TVal.VStr(s) => s != "",
-        TVal.VList(xs) => len(xs) > 0,
-    }
+  match (v) {
+    TVal.VBool(b) => b,
+    TVal.VInt(n) => n != 0,
+    TVal.VStr(s) => s != "",
+    TVal.VList(xs) => len(xs) > 0,
+  }
 }
 
 fn render_val(v: TVal) -> string {
-    match (v) {
-        TVal.VStr(s) => s,
-        TVal.VInt(n) => to_string(n),
-        TVal.VBool(b) => if (b) { "true" } else { "false" },
-        TVal.VList(xs) => {
-            var s = "";
-            var i = 0;
-            while (i < len(xs)) {
-                if (i > 0) {
-                    s = s + ", ";
-                }
-                s = s + render_val(xs[i]);
-                i = i + 1;
-            }
-            s
-        },
-    }
+  match (v) {
+    TVal.VStr(s) => s,
+    TVal.VInt(n) => to_string(n),
+    TVal.VBool(b) => if (b) { "true" } else { "false" },
+    TVal.VList(xs) => {
+      var s = "";
+      var i = 0;
+      while (i < len(xs)) {
+        if (i > 0) {
+          s = s + ", ";
+        }
+        s = s + render_val(xs[i]);
+        i = i + 1;
+      }
+      s
+    },
+  }
 }
 
 fn render_nodes(nodes: [Node], ctx: [Bind]) -> string {
-    var out = "";
-    var i = 0;
-    while (i < len(nodes)) {
-        out = out + render_node(nodes[i], ctx);
-        i = i + 1;
-    }
-    out
+  var out = "";
+  var i = 0;
+  while (i < len(nodes)) {
+    out = out + render_node(nodes[i], ctx);
+    i = i + 1;
+  }
+  out
 }
 
 fn render_node(node: Node, ctx: [Bind]) -> string {
-    match (node) {
-        Node.NText(s) => s,
-        Node.NVar(name) => match (lookup(ctx, name)) {
-            Option.Some(v) => escape_html(render_val(v)),
-            Option.None => "",
-        },
-        Node.NRaw(name) => match (lookup(ctx, name)) {
-            Option.Some(v) => render_val(v),
-            Option.None => "",
-        },
-        Node.NIf(cond, entonces, sino) => {
-            let t = match (lookup(ctx, cond)) {
-                Option.Some(v) => truthy(v),
-                Option.None => false,
-            };
-            if (t) { render_nodes(entonces, ctx) } else { render_nodes(sino, ctx) }
-        },
-        Node.NFor(vname, lname, body) => {
-            match (lookup(ctx, lname)) {
-                Option.Some(v) => match (v) {
-                    TVal.VList(xs) => {
-                        var s = "";
-                        var i = 0;
-                        while (i < len(xs)) {
-                            s = s + render_nodes(body, with_binding(ctx, vname, xs[i]));
-                            i = i + 1;
-                        }
-                        s
-                    },
-                    _ => "",
-                },
-                Option.None => "",
+  match (node) {
+    Node.NText(s) => s,
+    Node.NVar(name) => match (lookup(ctx, name)) {
+      Option.Some(v) => escape_html(render_val(v)),
+      Option.None => "",
+    },
+    Node.NRaw(name) => match (lookup(ctx, name)) {
+      Option.Some(v) => render_val(v),
+      Option.None => "",
+    },
+    Node.NIf(cond, entonces, sino) => {
+      let t = match (lookup(ctx, cond)) {
+        Option.Some(v) => truthy(v),
+        Option.None => false,
+      };
+      if (t) { render_nodes(entonces, ctx) } else { render_nodes(sino, ctx) }
+    },
+    Node.NFor(vname, lname, body) => {
+      match (lookup(ctx, lname)) {
+        Option.Some(v) => match (v) {
+          TVal.VList(xs) => {
+            var s = "";
+            var i = 0;
+            while (i < len(xs)) {
+              s = s + render_nodes(body, with_binding(ctx, vname, xs[i]));
+              i = i + 1;
             }
+            s
+          },
+          _ => "",
         },
-    }
+        Option.None => "",
+      }
+    },
+  }
 }
 
 // Renderiza `tpl` con el contexto `ctx`. Tokeniza → parsea → renderiza.
 pub fn render_template(tpl: string, ctx: [Bind]) -> Result<string, string> {
-    let toks = match (tokenize(tpl)) {
-        Result.Ok(t) => t,
-        Result.Err(e) => {
-            return Result.Err(e);
-        },
-    };
-    let pc = PC { toks: toks, pos: 0 };
-    let seq = match (parse_seq(pc, [])) {
-        Result.Ok(s) => s,
-        Result.Err(e) => {
-            return Result.Err(e);
-        },
-    };
-    Result.Ok(render_nodes(seq.nodes, ctx))
+  let toks = match (tokenize(tpl)) {
+    Result.Ok(t) => t,
+    Result.Err(e) => {
+      return Result.Err(e);
+    },
+  };
+  let pc = PC { toks: toks, pos: 0 };
+  let seq = match (parse_seq(pc, [])) {
+    Result.Ok(s) => s,
+    Result.Err(e) => {
+      return Result.Err(e);
+    },
+  };
+  Result.Ok(render_nodes(seq.nodes, ctx))
 }

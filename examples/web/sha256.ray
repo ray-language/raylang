@@ -11,156 +11,156 @@ fn mask32() -> int { 4294967295 }  // 0xFFFFFFFF
 
 // Rotación de 32 bits a la DERECHA: `x` se asume ya enmascarado a 32 bits (no negativo).
 fn rotr(x: int, n: int) -> int {
-    (x >> n | x << 32 - n) & mask32()
+  (x >> n | x << 32 - n) & mask32()
 }
 
 // Las 64 constantes de ronda (parte fraccionaria de la raíz cúbica de los primeros 64 primos).
 fn k_table() -> [int] {
-    [1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221, 3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580, 3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986, 2554220882, 2821834349, 2952996808, 3210313671, 3336571891, 3584528711, 113926993, 338241895, 666307205, 773529912, 1294757372, 1396182291, 1695183700, 1986661051, 2177026350, 2456956037, 2730485921, 2820302411, 3259730800, 3345764771, 3516065817, 3600352804, 4094571909, 275423344, 430227734, 506948616, 659060556, 883997877, 958139571, 1322822218, 1537002063, 1747873779, 1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298]
+  [1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221, 3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580, 3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986, 2554220882, 2821834349, 2952996808, 3210313671, 3336571891, 3584528711, 113926993, 338241895, 666307205, 773529912, 1294757372, 1396182291, 1695183700, 1986661051, 2177026350, 2456956037, 2730485921, 2820302411, 3259730800, 3345764771, 3516065817, 3600352804, 4094571909, 275423344, 430227734, 506948616, 659060556, 883997877, 958139571, 1322822218, 1537002063, 1747873779, 1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298]
 }
 
 // Rellena el mensaje (octetos `[int]`) según SHA-256: el mensaje, un `0x80`, ceros hasta que la
 // longitud ≡ 56 (mod 64), y 8 octetos big-endian con la longitud en bits. (Idéntico a SHA-1.)
 fn pad(msg: [int]) -> [int] {
-    let n = len(msg);
-    var m: [int] = [];
-    var i = 0;
-    while (i < n) {
-        push(m, msg[i]);
-        i = i + 1;
-    }
-    push(m, 128);  // 0x80: el bit '1' de cierre seguido de ceros
-    while (len(m) % 64 != 56) {
-        push(m, 0);
-    }
-    let bitlen = n * 8;
-    var k = 7;
-    while (k >= 0) {
-        push(m, bitlen >> k * 8 & 255);
-        k = k - 1;
-    }
-    m
+  let n = len(msg);
+  var m: [int] = [];
+  var i = 0;
+  while (i < n) {
+    push(m, msg[i]);
+    i = i + 1;
+  }
+  push(m, 128);  // 0x80: el bit '1' de cierre seguido de ceros
+  while (len(m) % 64 != 56) {
+    push(m, 0);
+  }
+  let bitlen = n * 8;
+  var k = 7;
+  while (k >= 0) {
+    push(m, bitlen >> k * 8 & 255);
+    k = k - 1;
+  }
+  m
 }
 
 // Añade los 4 octetos big-endian de la palabra de 32 bits `w` al final de `out`.
 fn append_word(out: [int], w: int) {
-    push(out, w >> 24 & 255);
-    push(out, w >> 16 & 255);
-    push(out, w >> 8 & 255);
-    push(out, w & 255);
+  push(out, w >> 24 & 255);
+  push(out, w >> 16 & 255);
+  push(out, w >> 8 & 255);
+  push(out, w & 255);
 }
 
 // SHA-256 sobre octetos (`[int]`, cada uno 0..255). Entrada interna que permite encadenar hashes
 // sin pasar por `bytes` (lo usa HMAC: `sha256(opad || sha256(ipad || msg))`).
 pub fn sha256_octets(msg: [int]) -> [int] {
-    let m = pad(msg);
-    let kk = k_table();
-    // Valores hash iniciales (parte fraccionaria de la raíz cuadrada de los primeros 8 primos).
-    var h0 = 1779033703;
-    var h1 = 3144134277;
-    var h2 = 1013904242;
-    var h3 = 2773480762;
-    var h4 = 1359893119;
-    var h5 = 2600822924;
-    var h6 = 528734635;
-    var h7 = 1541459225;
-    let total = len(m);
-    var chunk = 0;
-    while (chunk < total) {
-        // 16 palabras big-endian del bloque de 64 octetos.
-        var w: [int] = [];
-        var j = 0;
-        while (j < 16) {
-            let base = chunk + j * 4;
-            let word = m[base] << 24 | m[base + 1] << 16 | m[base + 2] << 8 | m[base + 3];
-            push(w, word & mask32());
-            j = j + 1;
-        }
-        // Extiende a 64 palabras con la planificación de mensaje.
-        var t = 16;
-        while (t < 64) {
-            let x = w[t - 15];
-            let s0 = rotr(x, 7) ^ rotr(x, 18) ^ x >> 3;
-            let y = w[t - 2];
-            let s1 = rotr(y, 17) ^ rotr(y, 19) ^ y >> 10;
-            push(w, w[t - 16] + s0 + w[t - 7] + s1 & mask32());
-            t = t + 1;
-        }
-        var a = h0;
-        var b = h1;
-        var c = h2;
-        var d = h3;
-        var e = h4;
-        var f = h5;
-        var g = h6;
-        var h = h7;
-        var idx = 0;
-        while (idx < 64) {
-            let s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
-            let ch = e & f ^ ~e & mask32() & g;
-            let temp1 = h + s1 + ch + kk[idx] + w[idx] & mask32();
-            let s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
-            let maj = a & b ^ a & c ^ b & c;
-            let temp2 = s0 + maj & mask32();
-            h = g;
-            g = f;
-            f = e;
-            e = d + temp1 & mask32();
-            d = c;
-            c = b;
-            b = a;
-            a = temp1 + temp2 & mask32();
-            idx = idx + 1;
-        }
-        h0 = h0 + a & mask32();
-        h1 = h1 + b & mask32();
-        h2 = h2 + c & mask32();
-        h3 = h3 + d & mask32();
-        h4 = h4 + e & mask32();
-        h5 = h5 + f & mask32();
-        h6 = h6 + g & mask32();
-        h7 = h7 + h & mask32();
-        chunk = chunk + 64;
+  let m = pad(msg);
+  let kk = k_table();
+  // Valores hash iniciales (parte fraccionaria de la raíz cuadrada de los primeros 8 primos).
+  var h0 = 1779033703;
+  var h1 = 3144134277;
+  var h2 = 1013904242;
+  var h3 = 2773480762;
+  var h4 = 1359893119;
+  var h5 = 2600822924;
+  var h6 = 528734635;
+  var h7 = 1541459225;
+  let total = len(m);
+  var chunk = 0;
+  while (chunk < total) {
+    // 16 palabras big-endian del bloque de 64 octetos.
+    var w: [int] = [];
+    var j = 0;
+    while (j < 16) {
+      let base = chunk + j * 4;
+      let word = m[base] << 24 | m[base + 1] << 16 | m[base + 2] << 8 | m[base + 3];
+      push(w, word & mask32());
+      j = j + 1;
     }
-    var out: [int] = [];
-    append_word(out, h0);
-    append_word(out, h1);
-    append_word(out, h2);
-    append_word(out, h3);
-    append_word(out, h4);
-    append_word(out, h5);
-    append_word(out, h6);
-    append_word(out, h7);
-    out
+    // Extiende a 64 palabras con la planificación de mensaje.
+    var t = 16;
+    while (t < 64) {
+      let x = w[t - 15];
+      let s0 = rotr(x, 7) ^ rotr(x, 18) ^ x >> 3;
+      let y = w[t - 2];
+      let s1 = rotr(y, 17) ^ rotr(y, 19) ^ y >> 10;
+      push(w, w[t - 16] + s0 + w[t - 7] + s1 & mask32());
+      t = t + 1;
+    }
+    var a = h0;
+    var b = h1;
+    var c = h2;
+    var d = h3;
+    var e = h4;
+    var f = h5;
+    var g = h6;
+    var h = h7;
+    var idx = 0;
+    while (idx < 64) {
+      let s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      let ch = e & f ^ ~e & mask32() & g;
+      let temp1 = h + s1 + ch + kk[idx] + w[idx] & mask32();
+      let s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      let maj = a & b ^ a & c ^ b & c;
+      let temp2 = s0 + maj & mask32();
+      h = g;
+      g = f;
+      f = e;
+      e = d + temp1 & mask32();
+      d = c;
+      c = b;
+      b = a;
+      a = temp1 + temp2 & mask32();
+      idx = idx + 1;
+    }
+    h0 = h0 + a & mask32();
+    h1 = h1 + b & mask32();
+    h2 = h2 + c & mask32();
+    h3 = h3 + d & mask32();
+    h4 = h4 + e & mask32();
+    h5 = h5 + f & mask32();
+    h6 = h6 + g & mask32();
+    h7 = h7 + h & mask32();
+    chunk = chunk + 64;
+  }
+  var out: [int] = [];
+  append_word(out, h0);
+  append_word(out, h1);
+  append_word(out, h2);
+  append_word(out, h3);
+  append_word(out, h4);
+  append_word(out, h5);
+  append_word(out, h6);
+  append_word(out, h7);
+  out
 }
 
 // SHA-256 de un mensaje `bytes` (la interfaz pública habitual). Convierte a octetos y delega.
 pub fn sha256(msg: bytes) -> [int] {
-    var oct: [int] = [];
-    var i = 0;
-    while (i < len(msg)) {
-        push(oct, msg[i]);
-        i = i + 1;
-    }
-    sha256_octets(oct)
+  var oct: [int] = [];
+  var i = 0;
+  while (i < len(msg)) {
+    push(oct, msg[i]);
+    i = i + 1;
+  }
+  sha256_octets(oct)
 }
 
 // El dígito hexadecimal (minúscula) del valor `d` (0..15).
 fn hex_digit(d: int) -> string {
-    let digits = "0123456789abcdef";
-    to_string(digits[d])
+  let digits = "0123456789abcdef";
+  to_string(digits[d])
 }
 
 // El digest en hexadecimal (64 caracteres), la forma habitual de mostrar un SHA-256.
 pub fn sha256_hex(msg: bytes) -> string {
-    let d = sha256(msg);
-    var s = "";
-    var i = 0;
-    while (i < len(d)) {
-        let octet = d[i];
-        s = s + hex_digit(octet >> 4 & 15);
-        s = s + hex_digit(octet & 15);
-        i = i + 1;
-    }
-    s
+  let d = sha256(msg);
+  var s = "";
+  var i = 0;
+  while (i < len(d)) {
+    let octet = d[i];
+    s = s + hex_digit(octet >> 4 & 15);
+    s = s + hex_digit(octet & 15);
+    i = i + 1;
+  }
+  s
 }

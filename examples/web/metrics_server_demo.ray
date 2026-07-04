@@ -13,75 +13,75 @@ from metrics import registry, register_counter, register_histogram, inc, observe
 // Los mensajes al actor de métricas. `Render` lleva un canal por el que el actor devuelve el texto
 // (enviar un canal dentro del mensaje funciona: su id es un valor primitivo, se comparte al transferir).
 enum MetricMsg {
-    Inc(string, Map<string, string>),  // nombre del counter, etiquetas
-    Observe(string, float),  // nombre del histograma, valor
-    Render(Channel<string>),  // canal de respuesta con el texto renderizado
+  Inc(string, Map<string, string>),  // nombre del counter, etiquetas
+  Observe(string, float),  // nombre del histograma, valor
+  Render(Channel<string>),  // canal de respuesta con el texto renderizado
 }
 
 // El actor: posee el `Registry` y lo muta/lee SOLO él, procesando mensajes en orden (FIFO → las cuentas
 // son deterministas: un `Render` ve todos los `Inc`/`Observe` encolados antes que él).
 fn metrics_actor(reg: Registry, ch: Channel<MetricMsg>) {
-    var running = true;
-    while (running) {
-        match (recv(ch)) {
-            Option.Some(msg) => {
-                match (msg) {
-                    MetricMsg.Inc(n, l) => inc(reg, n, l),
-                    MetricMsg.Observe(n, v) => observe(reg, n, v),
-                    MetricMsg.Render(reply) => send(reply, render(reg)),
-                }
-            },
-            Option.None => {
-                running = false;  // canal cerrado
-            },
+  var running = true;
+  while (running) {
+    match (recv(ch)) {
+      Option.Some(msg) => {
+        match (msg) {
+          MetricMsg.Inc(n, l) => inc(reg, n, l),
+          MetricMsg.Observe(n, v) => observe(reg, n, v),
+          MetricMsg.Render(reply) => send(reply, render(reg)),
         }
+      },
+      Option.None => {
+        running = false;  // canal cerrado
+      },
     }
+  }
 }
 
 // Respuesta /metrics con el Content-Type que espera Prometheus.
 fn metrics_response(cuerpo: string) -> Response {
-    var h: Map<string, string> = map_new();
-    insert(h, "Content-Type", "text/plain; version=0.0.4");
-    Response { status: 200, headers: h, body: to_bytes(cuerpo) }
+  var h: Map<string, string> = map_new();
+  insert(h, "Content-Type", "text/plain; version=0.0.4");
+  Response { status: 200, headers: h, body: to_bytes(cuerpo) }
 }
 
 fn main() -> int {
-    let reg = registry();
-    register_counter(reg, "http_requests_total", "Total de peticiones HTTP por metodo y ruta");
-    register_histogram(reg, "http_request_duracion_segundos", "Duracion de la peticion (simulada)", [0.005, 0.01, 0.05]);
+  let reg = registry();
+  register_counter(reg, "http_requests_total", "Total de peticiones HTTP por metodo y ruta");
+  register_histogram(reg, "http_request_duracion_segundos", "Duracion de la peticion (simulada)", [0.005, 0.01, 0.05]);
 
-    // El canal del actor de métricas (su id lo capturan todos los handlers → le envían a TODOS al mismo).
-    let mch: Channel<MetricMsg> = channel();
-    spawn(fn() {
-    metrics_actor(reg, mch);
+  // El canal del actor de métricas (su id lo capturan todos los handlers → le envían a TODOS al mismo).
+  let mch: Channel<MetricMsg> = channel();
+  spawn(fn() {
+  metrics_actor(reg, mch);
 });
 
-    let r = serve("127.0.0.1", 8080, fn(req: Request) -> Response {
-    if (req.path == "/metrics") {
-        // Pide el render al actor por un canal de respuesta (todos los updates previos ya están
-        // encolados antes que este Render → cuentas correctas por el orden FIFO).
-        let reply: Channel<string> = channel();
-        send(mch, MetricMsg.Render(reply));
-        match (recv(reply)) {
-            Option.Some(s) => metrics_response(s),
-            Option.None => metrics_response(""),
-        }
+  let r = serve("127.0.0.1", 8080, fn(req: Request) -> Response {
+  if (req.path == "/metrics") {
+    // Pide el render al actor por un canal de respuesta (todos los updates previos ya están
+    // encolados antes que este Render → cuentas correctas por el orden FIFO).
+    let reply: Channel<string> = channel();
+    send(mch, MetricMsg.Render(reply));
+    match (recv(reply)) {
+      Option.Some(s) => metrics_response(s),
+      Option.None => metrics_response(""),
+    }
+  } else {
+    // El propio /metrics no se contabiliza (convención: el scrape no infla las métricas).
+    send(mch, MetricMsg.Inc("http_requests_total", labels2("method", req.method, "path", req.path)));
+    send(mch, MetricMsg.Observe("http_request_duracion_segundos", 0.008));  // duración simulada
+    if (req.path == "/") {
+      text(200, "hola desde raylang")
     } else {
-        // El propio /metrics no se contabiliza (convención: el scrape no infla las métricas).
-        send(mch, MetricMsg.Inc("http_requests_total", labels2("method", req.method, "path", req.path)));
-        send(mch, MetricMsg.Observe("http_request_duracion_segundos", 0.008));  // duración simulada
-        if (req.path == "/") {
-            text(200, "hola desde raylang")
-        } else {
-            not_found()
-        }
+      not_found()
     }
+  }
 });
-    match (r) {
-        Result.Ok(_) => 0,
-        Result.Err(e) => {
-            eprint(e);
-            1
-        },
-    }
+  match (r) {
+    Result.Ok(_) => 0,
+    Result.Err(e) => {
+      eprint(e);
+      1
+    },
+  }
 }

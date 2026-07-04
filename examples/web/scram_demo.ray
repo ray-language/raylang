@@ -4,21 +4,21 @@
 from scram import scram_first, scram_client_first_message, scram_final, scram_verify, Scram;
 
 fn main() {
-    let sc = scram_first("user", "rOprNGfwEbeRWgbNEkqO");
-    print(scram_client_first_message(sc));
+  let sc = scram_first("user", "rOprNGfwEbeRWgbNEkqO");
+  print(scram_client_first_message(sc));
 
-    let server_first = "r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096";
-    match (scram_final(sc, "pencil", server_first)) {
-        Result.Ok(client_final) => {
-            print(client_final);
-            // La firma del servidor (server-final) del RFC 7677.
-            let server_final = "v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=";
-            if (scram_verify(sc, server_final)) {
-                print("server verificado");
-            } else {
-                print("server FALLO");
-            }
-        },
-        Result.Err(e) => print("error: " + e),
-    }
+  let server_first = "r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096";
+  match (scram_final(sc, "pencil", server_first)) {
+    Result.Ok(client_final) => {
+      print(client_final);
+      // La firma del servidor (server-final) del RFC 7677.
+      let server_final = "v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=";
+      if (scram_verify(sc, server_final)) {
+        print("server verificado");
+      } else {
+        print("server FALLO");
+      }
+    },
+    Result.Err(e) => print("error: " + e),
+  }
 }

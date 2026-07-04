@@ -6,36 +6,36 @@ from dns import Record, format_records;
 from dns_cache import Cache, new_cache, resolve;
 
 fn main() -> int {
-    let a = args();
-    var port = 53;
-    if (len(a) > 0) {
-        match (parse_int(a[0])) {
-            Option.Some(p) => {
-                port = p;
-            },
-            Option.None => { },
-        }
+  let a = args();
+  var port = 53;
+  if (len(a) > 0) {
+    match (parse_int(a[0])) {
+      Option.Some(p) => {
+        port = p;
+      },
+      Option.None => { },
     }
-    let c = new_cache("127.0.0.1", port);
+  }
+  let c = new_cache("127.0.0.1", port);
 
-    imprime(resolve(c, "example.com", 1));  // fallo → consulta 1
-    imprime(resolve(c, "example.com", 1));  // ACIERTO → sin consulta
-    imprime(resolve(c, "example.org", 1));  // fallo → consulta 2
+  imprime(resolve(c, "example.com", 1));  // fallo → consulta 1
+  imprime(resolve(c, "example.com", 1));  // ACIERTO → sin consulta
+  imprime(resolve(c, "example.org", 1));  // fallo → consulta 2
 
-    print("hits=" + to_string(c.hits) + " misses=" + to_string(c.misses));
-    0
+  print("hits=" + to_string(c.hits) + " misses=" + to_string(c.misses));
+  0
 }
 
 fn imprime(r: Result<[Record], string>) {
-    match (r) {
-        Result.Ok(recs) => {
-            let ss = format_records(recs);
-            var i = 0;
-            while (i < len(ss)) {
-                print(ss[i]);
-                i = i + 1;
-            }
-        },
-        Result.Err(e) => print("ERR " + e),
-    }
+  match (r) {
+    Result.Ok(recs) => {
+      let ss = format_records(recs);
+      var i = 0;
+      while (i < len(ss)) {
+        print(ss[i]);
+        i = i + 1;
+      }
+    },
+    Result.Err(e) => print("ERR " + e),
+  }
 }

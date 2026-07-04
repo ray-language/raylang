@@ -5,25 +5,25 @@
 // `recv.f(args)` a `f(recv, args)`, todas se pueden llamar también como métodos: `s.len()`,
 // `s.trim()`, `s.split(",")`. Es el primer cambio de runtime desde M6.3 (toca intérprete y VM).
 fn saludar(nombre: string) -> string {
-    "hola, " + nombre + "!"  // concatenación con +
+  "hola, " + nombre + "!"  // concatenación con +
 }
 
 fn main() -> int {
-    let nombre = "raylang";
-    print(saludar(nombre));  // hola, raylang!
-    print(len(nombre));  // 7  (nº de caracteres)
+  let nombre = "raylang";
+  print(saludar(nombre));  // hola, raylang!
+  print(len(nombre));  // 7  (nº de caracteres)
 
-    // to_string: convertir primitivos a texto y componer mensajes.
-    let n = 3 + 4;
-    print("n = " + to_string(n));  // n = 7
-    print(to_string(true));  // true
+  // to_string: convertir primitivos a texto y componer mensajes.
+  let n = 3 + 4;
+  print("n = " + to_string(n));  // n = 7
+  print(to_string(true));  // true
 
-    // trim + split para descomponer (split devuelve [string]).
-    let csv = "  rojo, verde , azul  ";
-    let campos = csv.trim().split(",");  // UFCS encadenado
-    print(len(campos));  // 3
-    print(trim(campos[0]));  // rojo
-    print(campos[1].trim());  // verde
+  // trim + split para descomponer (split devuelve [string]).
+  let csv = "  rojo, verde , azul  ";
+  let campos = csv.trim().split(",");  // UFCS encadenado
+  print(len(campos));  // 3
+  print(trim(campos[0]));  // rojo
+  print(campos[1].trim());  // verde
 
-    len(campos)  // código de salida: 3
+  len(campos)  // código de salida: 3
 }

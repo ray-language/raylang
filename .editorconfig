@@ -1,0 +1,9 @@
+# EditorConfig — https://editorconfig.org
+#
+# Estilo de indentación del proyecto. `ray fmt` (y el LSP, vía el editor) leen
+# `indent_style`/`indent_size` de aquí: los fuentes raylang usan 2 espacios.
+root = true
+
+[*.ray]
+indent_style = space
+indent_size = 2

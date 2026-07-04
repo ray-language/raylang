@@ -28,82 +28,82 @@ pub fn fl_ack() -> int { 1 }  // SETTINGS/PING
 
 // La "connection preface" del cliente (RFC 7540 §3.5): la cadena mágica que abre toda conexión HTTP/2.
 pub fn preface() -> bytes {
-    to_bytes("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+  to_bytes("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
 }
 
 // Un frame parseado.
 pub struct Http2Frame {
-    ftype: int,
-    flags: int,
-    stream_id: int,
-    payload: bytes,
+  ftype: int,
+  flags: int,
+  stream_id: int,
+  payload: bytes,
 }
 
 // Codifica un frame: cabecera de 9 octetos + carga útil.
 pub fn encode_frame(ftype: int, flags: int, stream_id: int, payload: bytes) -> bytes {
-    let plen = len(payload);
-    var out: [int] = [];
-    push(out, plen >> 16 & 255);  // longitud (24 bits BE)
-    push(out, plen >> 8 & 255);
-    push(out, plen & 255);
-    push(out, ftype & 255);
-    push(out, flags & 255);
-    push(out, stream_id >> 24 & 127);  // R(1)=0 + stream_id alto
-    push(out, stream_id >> 16 & 255);
-    push(out, stream_id >> 8 & 255);
-    push(out, stream_id & 255);
-    bytes_of(out) + payload
+  let plen = len(payload);
+  var out: [int] = [];
+  push(out, plen >> 16 & 255);  // longitud (24 bits BE)
+  push(out, plen >> 8 & 255);
+  push(out, plen & 255);
+  push(out, ftype & 255);
+  push(out, flags & 255);
+  push(out, stream_id >> 24 & 127);  // R(1)=0 + stream_id alto
+  push(out, stream_id >> 16 & 255);
+  push(out, stream_id >> 8 & 255);
+  push(out, stream_id & 255);
+  bytes_of(out) + payload
 }
 
 // Parsea el PRIMER frame de `data` (asume que el frame completo está presente).
 pub fn parse_frame(data: bytes) -> Result<Http2Frame, string> {
-    if (len(data) < 9) {
-        return Result.Err("frame HTTP/2 incompleto (cabecera < 9 octetos)");
-    }
-    let plen = data[0] << 16 | data[1] << 8 | data[2];
-    let ftype = data[3];
-    let flags = data[4];
-    let stream_id = (data[5] & 127) << 24 | data[6] << 16 | data[7] << 8 | data[8];
-    if (len(data) < 9 + plen) {
-        return Result.Err("frame HTTP/2 truncado (carga incompleta)");
-    }
-    Result.Ok(Http2Frame { ftype: ftype, flags: flags, stream_id: stream_id, payload: sub_bytes(data, 9, 9 + plen) })
+  if (len(data) < 9) {
+    return Result.Err("frame HTTP/2 incompleto (cabecera < 9 octetos)");
+  }
+  let plen = data[0] << 16 | data[1] << 8 | data[2];
+  let ftype = data[3];
+  let flags = data[4];
+  let stream_id = (data[5] & 127) << 24 | data[6] << 16 | data[7] << 8 | data[8];
+  if (len(data) < 9 + plen) {
+    return Result.Err("frame HTTP/2 truncado (carga incompleta)");
+  }
+  Result.Ok(Http2Frame { ftype: ftype, flags: flags, stream_id: stream_id, payload: sub_bytes(data, 9, 9 + plen) })
 }
 
 // El número de octetos que ocupa un frame en el flujo (9 + longitud de la carga), para iterar varios.
 pub fn frame_size(data: bytes) -> int {
-    if (len(data) < 9) {
-        return 0;
-    }
-    9 + (data[0] << 16 | data[1] << 8 | data[2])
+  if (len(data) < 9) {
+    return 0;
+  }
+  9 + (data[0] << 16 | data[1] << 8 | data[2])
 }
 
 // --- Atajos de construcción ---
 // Un frame SETTINGS vacío (el cliente lo envía tras la preface). Stream 0.
 pub fn settings_empty() -> bytes {
-    encode_frame(ft_settings(), 0, 0, b"")
+  encode_frame(ft_settings(), 0, 0, b"")
 }
 
 // El ACK de un SETTINGS recibido. Stream 0.
 pub fn settings_ack() -> bytes {
-    encode_frame(ft_settings(), fl_ack(), 0, b"")
+  encode_frame(ft_settings(), fl_ack(), 0, b"")
 }
 
 // Un frame HEADERS con END_HEADERS (y opcionalmente END_STREAM) en el stream dado. El bloque de
 // cabeceras ya viene comprimido con HPACK (`hpack.encode`).
 pub fn headers_frame(stream_id: int, header_block: bytes, end_stream: bool) -> bytes {
-    var flags = fl_end_headers();
-    if (end_stream) {
-        flags = flags | fl_end_stream();
-    }
-    encode_frame(ft_headers(), flags, stream_id, header_block)
+  var flags = fl_end_headers();
+  if (end_stream) {
+    flags = flags | fl_end_stream();
+  }
+  encode_frame(ft_headers(), flags, stream_id, header_block)
 }
 
 // Un frame DATA (opcionalmente END_STREAM) en el stream dado.
 pub fn data_frame(stream_id: int, payload: bytes, end_stream: bool) -> bytes {
-    var flags = 0;
-    if (end_stream) {
-        flags = fl_end_stream();
-    }
-    encode_frame(ft_data(), flags, stream_id, payload)
+  var flags = 0;
+  if (end_stream) {
+    flags = fl_end_stream();
+  }
+  encode_frame(ft_data(), flags, stream_id, payload)
 }

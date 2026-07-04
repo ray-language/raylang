@@ -3,48 +3,48 @@
 // Importable: `from hex import hex_encode, hex_decode;`. Útil para digests, claves, fingerprints.
 // El dígito hexadecimal (minúscula) del valor `d` (0..15).
 fn hex_digit(d: int) -> string {
-    let digits = "0123456789abcdef";
-    to_string(digits[d])
+  let digits = "0123456789abcdef";
+  to_string(digits[d])
 }
 
 // El valor (0..15) de un dígito hexadecimal, o -1 si el carácter no es hexadecimal. raylang no
 // permite aritmética sobre `char` → se busca el carácter (en minúscula) en la tabla de dígitos.
 fn hex_val(c: char) -> int {
-    match (index_of("0123456789abcdef", to_lower(to_string(c)))) {
-        Option.Some(i) => i,
-        Option.None => 0 - 1,
-    }
+  match (index_of("0123456789abcdef", to_lower(to_string(c)))) {
+    Option.Some(i) => i,
+    Option.None => 0 - 1,
+  }
 }
 
 // Octetos → string hexadecimal (2 dígitos por octeto, minúsculas).
 pub fn hex_encode(data: [int]) -> string {
-    var s = "";
-    var i = 0;
-    while (i < len(data)) {
-        let o = data[i];
-        s = s + hex_digit(o >> 4 & 15);
-        s = s + hex_digit(o & 15);
-        i = i + 1;
-    }
-    s
+  var s = "";
+  var i = 0;
+  while (i < len(data)) {
+    let o = data[i];
+    s = s + hex_digit(o >> 4 & 15);
+    s = s + hex_digit(o & 15);
+    i = i + 1;
+  }
+  s
 }
 
 // String hexadecimal → octetos. `Err` si la longitud es impar o hay un carácter no hexadecimal.
 pub fn hex_decode(s: string) -> Result<[int], string> {
-    let n = len(s);
-    if (n % 2 != 0) {
-        return Result.Err("longitud hexadecimal impar");
+  let n = len(s);
+  if (n % 2 != 0) {
+    return Result.Err("longitud hexadecimal impar");
+  }
+  var out: [int] = [];
+  var i = 0;
+  while (i < n) {
+    let hi = hex_val(s[i]);
+    let lo = hex_val(s[i + 1]);
+    if (hi < 0 || lo < 0) {
+      return Result.Err("carácter hexadecimal inválido");
     }
-    var out: [int] = [];
-    var i = 0;
-    while (i < n) {
-        let hi = hex_val(s[i]);
-        let lo = hex_val(s[i + 1]);
-        if (hi < 0 || lo < 0) {
-            return Result.Err("carácter hexadecimal inválido");
-        }
-        push(out, hi << 4 | lo);
-        i = i + 2;
-    }
-    Result.Ok(out)
+    push(out, hi << 4 | lo);
+    i = i + 2;
+  }
+  Result.Ok(out)
 }

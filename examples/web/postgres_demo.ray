@@ -3,27 +3,27 @@
 from postgres import pg_query;
 
 fn main() {
-    let a = args();
-    let host = a[0];
-    match (parse_int(a[1])) {
-        Option.Some(port) => {
-            match (pg_query(host, port, "raylang", "test", "secret", "clientnonce123456", "SELECT greeting")) {
-                Result.Ok(cols) => {
-                    var s = "";
-                    var primero = true;
-                    for c in cols {
-                        if (primero) {
-                            primero = false;
-                        } else {
-                            s = s + "|";
-                        }
-                        s = s + c;
-                    }
-                    print("row: " + s);
-                },
-                Result.Err(e) => print("error: " + e),
+  let a = args();
+  let host = a[0];
+  match (parse_int(a[1])) {
+    Option.Some(port) => {
+      match (pg_query(host, port, "raylang", "test", "secret", "clientnonce123456", "SELECT greeting")) {
+        Result.Ok(cols) => {
+          var s = "";
+          var primero = true;
+          for c in cols {
+            if (primero) {
+              primero = false;
+            } else {
+              s = s + "|";
             }
+            s = s + c;
+          }
+          print("row: " + s);
         },
-        Option.None => print("puerto inválido"),
-    }
+        Result.Err(e) => print("error: " + e),
+      }
+    },
+    Option.None => print("puerto inválido"),
+  }
 }

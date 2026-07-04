@@ -6,28 +6,28 @@
 from protobuf import writer, write_varint, write_string, finish, parse, get_int, get_string, grpc_frame, grpc_unframe;
 
 fn main() {
-    let w = writer();
-    write_varint(w, 1, 150);  // 08 96 01
-    write_string(w, 2, "testing");  // 12 07 74 65 73 74 69 6e 67
-    write_varint(w, 3, 300);  // 18 ac 02
-    let msg = finish(w);
-    print(to_string(msg));  // hex del mensaje
+  let w = writer();
+  write_varint(w, 1, 150);  // 08 96 01
+  write_string(w, 2, "testing");  // 12 07 74 65 73 74 69 6e 67
+  write_varint(w, 3, 300);  // 18 ac 02
+  let msg = finish(w);
+  print(to_string(msg));  // hex del mensaje
 
-    // Round-trip: decodifica y lee los campos por número.
-    match (parse(msg)) {
-        Result.Ok(fields) => {
-            print("field1=" + to_string(get_int(fields, 1)));  // 150
-            print("field2=" + get_string(fields, 2));  // testing
-            print("field3=" + to_string(get_int(fields, 3)));  // 300
-        },
-        Result.Err(e) => print("ERR parse: " + e),
-    }
+  // Round-trip: decodifica y lee los campos por número.
+  match (parse(msg)) {
+    Result.Ok(fields) => {
+      print("field1=" + to_string(get_int(fields, 1)));  // 150
+      print("field2=" + get_string(fields, 2));  // testing
+      print("field3=" + to_string(get_int(fields, 3)));  // 300
+    },
+    Result.Err(e) => print("ERR parse: " + e),
+  }
 
-    // Framing de gRPC: prefijo de 5 octetos (flag + longitud) + el protobuf.
-    let frame = grpc_frame(msg);
-    print(to_string(frame));  // hex del frame (empieza por 00 + longitud big-endian)
-    match (grpc_unframe(frame)) {
-        Result.Ok(back) => print("roundtrip=" + to_string(to_string(back) == to_string(msg))),  // true
-        Result.Err(e) => print("ERR unframe: " + e),
-    }
+  // Framing de gRPC: prefijo de 5 octetos (flag + longitud) + el protobuf.
+  let frame = grpc_frame(msg);
+  print(to_string(frame));  // hex del frame (empieza por 00 + longitud big-endian)
+  match (grpc_unframe(frame)) {
+    Result.Ok(back) => print("roundtrip=" + to_string(to_string(back) == to_string(msg))),  // true
+    Result.Err(e) => print("ERR unframe: " + e),
+  }
 }

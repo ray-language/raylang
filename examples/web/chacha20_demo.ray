@@ -6,45 +6,45 @@ from hex import hex_encode;
 
 // Convierte una cadena ASCII en octetos.
 fn str_bytes(s: string) -> [int] {
-    var b: [int] = [];
-    for c in s {
-        push(b, c as int);
-    }
-    b
+  var b: [int] = [];
+  for c in s {
+    push(b, c as int);
+  }
+  b
 }
 
 fn main() {
-    // Clave: los octetos 0..31.
-    var key: [int] = [];
-    var i = 0;
-    while (i < 32) {
-        push(key, i);
-        i = i + 1;
-    }
-    // Nonce (12 octetos): 00 00 00 00 00 00 00 4a 00 00 00 00.
-    let nonce: [int] = [0, 0, 0, 0, 0, 0, 0, 74, 0, 0, 0, 0];
-    // Contador inicial: 1.
-    let counter = 1 as u32;
+  // Clave: los octetos 0..31.
+  var key: [int] = [];
+  var i = 0;
+  while (i < 32) {
+    push(key, i);
+    i = i + 1;
+  }
+  // Nonce (12 octetos): 00 00 00 00 00 00 00 4a 00 00 00 00.
+  let nonce: [int] = [0, 0, 0, 0, 0, 0, 0, 74, 0, 0, 0, 0];
+  // Contador inicial: 1.
+  let counter = 1 as u32;
 
-    let texto = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
-    let pt = str_bytes(texto);
+  let texto = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
+  let pt = str_bytes(texto);
 
-    let ct = chacha20_encrypt(key, counter, nonce, pt);
-    print(hex_encode(ct));
+  let ct = chacha20_encrypt(key, counter, nonce, pt);
+  print(hex_encode(ct));
 
-    // Round-trip: descifrar (XOR de nuevo) recupera el texto original.
-    let back = chacha20_encrypt(key, counter, nonce, ct);
-    var igual = len(back) == len(pt);
-    var j = 0;
-    while (j < len(pt)) {
-        if (back[j] != pt[j]) {
-            igual = false;
-        }
-        j = j + 1;
+  // Round-trip: descifrar (XOR de nuevo) recupera el texto original.
+  let back = chacha20_encrypt(key, counter, nonce, ct);
+  var igual = len(back) == len(pt);
+  var j = 0;
+  while (j < len(pt)) {
+    if (back[j] != pt[j]) {
+      igual = false;
     }
-    if (igual) {
-        print("roundtrip ok");
-    } else {
-        print("roundtrip FALLO");
-    }
+    j = j + 1;
+  }
+  if (igual) {
+    print("roundtrip ok");
+  } else {
+    print("roundtrip FALLO");
+  }
 }

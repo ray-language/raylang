@@ -8,53 +8,53 @@
 // `__dyn_Figura { data, area, nombre }`: el dato + sus funciones (la vtable). Por eso el
 // runtime no cambia: reusa structs + funciones de primera clase.
 trait Figura {
-    fn area(self) -> int;
-    fn nombre(self) -> string;
-    fn describir(self) -> int {
-        // método por defecto (M9.3a) sobre el objeto
-        print(self.nombre());
-        self.area()
-    }
+  fn area(self) -> int;
+  fn nombre(self) -> string;
+  fn describir(self) -> int {
+    // método por defecto (M9.3a) sobre el objeto
+    print(self.nombre());
+    self.area()
+  }
 }
 
 struct Cuadrado {
-    lado: int,
+  lado: int,
 }
 
 impl Figura for Cuadrado {
-    fn area(self) -> int { self.lado * self.lado }
+  fn area(self) -> int { self.lado * self.lado }
 
-    fn nombre(self) -> string { "cuadrado" }
+  fn nombre(self) -> string { "cuadrado" }
 }
 
 struct Rect {
-    ancho: int,
-    alto: int,
+  ancho: int,
+  alto: int,
 }
 
 impl Figura for Rect {
-    fn area(self) -> int { self.ancho * self.alto }
+  fn area(self) -> int { self.ancho * self.alto }
 
-    fn nombre(self) -> string { "rect" }
+  fn nombre(self) -> string { "rect" }
 }
 
 // Opera sobre CUALQUIER Figura sin saber el tipo concreto: despacho dinámico por valor.
 fn area_total(figuras: [dyn Figura]) -> int {
-    var suma = 0;
-    var i = 0;
-    while (i < len(figuras)) {
-        suma = suma + figuras[i].describir();  // despacha area() y nombre() en runtime
-        i = i + 1;
-    }
-    suma
+  var suma = 0;
+  var i = 0;
+  while (i < len(figuras)) {
+    suma = suma + figuras[i].describir();  // despacha area() y nombre() en runtime
+    i = i + 1;
+  }
+  suma
 }
 
 fn main() -> int {
-    let c = Cuadrado { lado: 3 };
-    let r = Rect { ancho: 4, alto: 5 };
+  let c = Cuadrado { lado: 3 };
+  let r = Rect { ancho: 4, alto: 5 };
 
-    // Arreglo heterogéneo: cada elemento se coerce a `dyn Figura` (con su vtable).
-    let figuras: [dyn Figura] = [c, r, Cuadrado { lado: 2 }];
+  // Arreglo heterogéneo: cada elemento se coerce a `dyn Figura` (con su vtable).
+  let figuras: [dyn Figura] = [c, r, Cuadrado { lado: 2 }];
 
-    area_total(figuras)  // imprime cuadrado/rect/cuadrado; 9 + 20 + 4 = 33
+  area_total(figuras)  // imprime cuadrado/rect/cuadrado; 9 + 20 + 4 = 33
 }

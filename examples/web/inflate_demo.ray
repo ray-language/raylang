@@ -5,37 +5,37 @@
 from inflate import gunzip, inflate_raw, crc32;
 
 fn main() {
-    // --- Bloque Huffman FIJO (BTYPE=1): texto corto comprimido a nivel 9. ---
-    let g_fijo = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff+J\xac\xccI\xccKWH-V(\xcdS\xc8I\xcdK/M\xccJUHIUH,(J\xcdK\xc9\xac\x02r\xf5\x14\x8a\x10\xcaR2\xcbR\x8bJ2S\xf2\x11\xa2h\xb4\"\x00\xa8l\xc0\x03U\x00\x00\x00";
-    print(texto(g_fijo));
+  // --- Bloque Huffman FIJO (BTYPE=1): texto corto comprimido a nivel 9. ---
+  let g_fijo = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff+J\xac\xccI\xccKWH-V(\xcdS\xc8I\xcdK/M\xccJUHIUH,(J\xcdK\xc9\xac\x02r\xf5\x14\x8a\x10\xcaR2\xcbR\x8bJ2S\xf2\x11\xa2h\xb4\"\x00\xa8l\xc0\x03U\x00\x00\x00";
+  print(texto(g_fijo));
 
-    // --- Bloque ALMACENADO (BTYPE=0): el mismo texto comprimido a nivel 0. ---
-    let g_stored = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x04\xff\x01U\x00\xaa\xffraylang es un lenguaje de aprendizaje. raylang es divertido. raylang raylang raylang!\xa8l\xc0\x03U\x00\x00\x00";
-    print(texto(g_stored));
+  // --- Bloque ALMACENADO (BTYPE=0): el mismo texto comprimido a nivel 0. ---
+  let g_stored = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x04\xff\x01U\x00\xaa\xffraylang es un lenguaje de aprendizaje. raylang es divertido. raylang raylang raylang!\xa8l\xc0\x03U\x00\x00\x00";
+  print(texto(g_stored));
 
-    // --- Bloque Huffman DINÁMICO (BTYPE=2): texto largo y variado. ---
-    let g_din = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xed\x8e\xd9r\x01Q\x18\x06_\xe5KY\n\x17c\x8b\xa0*\x15\x82!\x8b\x9d$\x96\xa2\xeaw\xe6\xe0\xf0\x9b\x93\xcc\x12[yw\xf3\x12\xee\\u\xf7]\x9b\x8c\x7f\xc9\xfa\x84\x9d\xef\x08%\x99V\x1ake[>\x84\xde)\xc2R\xb2:A\x90c)f\x8d#\xb6j\xaf\x0c4\tB\xad|i\x13<-hA\x90\x0c\x97\x0ez\xa9mX\xd2s\xc8\r\xc0\xf8%\x96\xf6\x9f/\x83\x08|C\x06R\xe9L\xf61\xf7\x94/\x14\xf1Z\xa9\xd6\xccz\xe3\xed\xfd\xe3\xb3\xd9jw\xba\xbd\xfe`\xf8\xf5\xfd3\x1aO\xf0P\x0e\x85#\xf3h\"\x16\xc7\xf92\x9d=\xbf\x94\x92\x06\xcc\xfb\xebM^\xaf>\x865\x96\x04\x02\x00\x00";
-    let t = texto(g_din);
-    print(len(t));  // 516 (longitud del texto descomprimido)
-    print(substring(t, 0, 41));  // El veloz murcielago hindu comia feliz...
+  // --- Bloque Huffman DINÁMICO (BTYPE=2): texto largo y variado. ---
+  let g_din = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xed\x8e\xd9r\x01Q\x18\x06_\xe5KY\n\x17c\x8b\xa0*\x15\x82!\x8b\x9d$\x96\xa2\xeaw\xe6\xe0\xf0\x9b\x93\xcc\x12[yw\xf3\x12\xee\\u\xf7]\x9b\x8c\x7f\xc9\xfa\x84\x9d\xef\x08%\x99V\x1ake[>\x84\xde)\xc2R\xb2:A\x90c)f\x8d#\xb6j\xaf\x0c4\tB\xad|i\x13<-hA\x90\x0c\x97\x0ez\xa9mX\xd2s\xc8\r\xc0\xf8%\x96\xf6\x9f/\x83\x08|C\x06R\xe9L\xf61\xf7\x94/\x14\xf1Z\xa9\xd6\xccz\xe3\xed\xfd\xe3\xb3\xd9jw\xba\xbd\xfe`\xf8\xf5\xfd3\x1aO\xf0P\x0e\x85#\xf3h\"\x16\xc7\xf92\x9d=\xbf\x94\x92\x06\xcc\xfb\xebM^\xaf>\x865\x96\x04\x02\x00\x00";
+  let t = texto(g_din);
+  print(len(t));  // 516 (longitud del texto descomprimido)
+  print(substring(t, 0, 41));  // El veloz murcielago hindu comia feliz...
 
-    // --- CRC-32 (vector estándar: crc32("123456789") = 0xcbf43926 = 3421780262). ---
-    print(to_string(crc32(to_bytes("123456789"))));
+  // --- CRC-32 (vector estándar: crc32("123456789") = 0xcbf43926 = 3421780262). ---
+  print(to_string(crc32(to_bytes("123456789"))));
 }
 
 // gunzip + decodifica a texto; aborta con el error si algo falla (la demo asume blobs válidos).
 fn texto(g: bytes) -> string {
-    match (gunzip(g)) {
-        Result.Ok(b) => match (from_utf8(b)) {
-            Result.Ok(s) => s,
-            Result.Err(e) => {
-                panic("utf8: " + e);
-                ""
-            },
-        },
-        Result.Err(e) => {
-            panic("gunzip: " + e);
-            ""
-        },
-    }
+  match (gunzip(g)) {
+    Result.Ok(b) => match (from_utf8(b)) {
+      Result.Ok(s) => s,
+      Result.Err(e) => {
+        panic("utf8: " + e);
+        ""
+      },
+    },
+    Result.Err(e) => {
+      panic("gunzip: " + e);
+      ""
+    },
+  }
 }

@@ -3,21 +3,21 @@
 from http2_client import http2_get, Http2Response;
 
 fn main() {
-    let a = args();
-    let host = a[0];
-    match (parse_int(a[1])) {
-        Option.Some(port) => {
-            match (http2_get(host, port, "/")) {
-                Result.Ok(resp) => {
-                    print("status: " + to_string(resp.status));
-                    match (from_utf8(resp.body)) {
-                        Result.Ok(s) => print("body: " + s),
-                        Result.Err(e) => print("body: <no utf8>"),
-                    }
-                },
-                Result.Err(e) => print("error: " + e),
-            }
+  let a = args();
+  let host = a[0];
+  match (parse_int(a[1])) {
+    Option.Some(port) => {
+      match (http2_get(host, port, "/")) {
+        Result.Ok(resp) => {
+          print("status: " + to_string(resp.status));
+          match (from_utf8(resp.body)) {
+            Result.Ok(s) => print("body: " + s),
+            Result.Err(e) => print("body: <no utf8>"),
+          }
         },
-        Option.None => print("puerto inválido"),
-    }
+        Result.Err(e) => print("error: " + e),
+      }
+    },
+    Option.None => print("puerto inválido"),
+  }
 }

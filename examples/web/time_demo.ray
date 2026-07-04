@@ -3,35 +3,35 @@
 from time import from_epoch_millis, to_iso8601, to_rfc1123, to_epoch_millis, parse_iso8601, now_utc, format_duration;
 
 fn main() {
-    // --- conversión epoch → fecha civil (ISO 8601 + RFC 1123) ---
-    print(iso(0));  // 1970-01-01T00:00:00Z
-    print(rfc(0));  // Thu, 01 Jan 1970 00:00:00 GMT
-    print(iso(784111777000));  // 1994-11-06T08:49:37Z
-    print(rfc(784111777000));  // Sun, 06 Nov 1994 08:49:37 GMT
-    print(iso(1719748177000));  // 2024-06-30T11:49:37Z
-    print(rfc(1719748177000));  // Sun, 30 Jun 2024 11:49:37 GMT
-    // 2024 es bisiesto: el 1 de marzo verifica el manejo del 29 de febrero.
-    print(rfc(1709251200000));  // Fri, 01 Mar 2024 00:00:00 GMT
+  // --- conversión epoch → fecha civil (ISO 8601 + RFC 1123) ---
+  print(iso(0));  // 1970-01-01T00:00:00Z
+  print(rfc(0));  // Thu, 01 Jan 1970 00:00:00 GMT
+  print(iso(784111777000));  // 1994-11-06T08:49:37Z
+  print(rfc(784111777000));  // Sun, 06 Nov 1994 08:49:37 GMT
+  print(iso(1719748177000));  // 2024-06-30T11:49:37Z
+  print(rfc(1719748177000));  // Sun, 30 Jun 2024 11:49:37 GMT
+  // 2024 es bisiesto: el 1 de marzo verifica el manejo del 29 de febrero.
+  print(rfc(1709251200000));  // Fri, 01 Mar 2024 00:00:00 GMT
 
-    // --- round-trip: to_epoch_millis(from_epoch_millis(x)) == x (al segundo) ---
-    let x = 1719748177000;
-    print(to_epoch_millis(from_epoch_millis(x)) == x);  // true
+  // --- round-trip: to_epoch_millis(from_epoch_millis(x)) == x (al segundo) ---
+  let x = 1719748177000;
+  print(to_epoch_millis(from_epoch_millis(x)) == x);  // true
 
-    // --- parse_iso8601 → epoch ---
-    match (parse_iso8601("1994-11-06T08:49:37Z")) {
-        Result.Ok(dt) => print(to_epoch_millis(dt) == 784111777000),  // true
-        Result.Err(e) => print(e),
-    }
+  // --- parse_iso8601 → epoch ---
+  match (parse_iso8601("1994-11-06T08:49:37Z")) {
+    Result.Ok(dt) => print(to_epoch_millis(dt) == 784111777000),  // true
+    Result.Err(e) => print(e),
+  }
 
-    // --- now_utc coherente con now() (propiedad, no valor) ---
-    let ahora = now_utc();
-    let delta = now() - to_epoch_millis(ahora);
-    print(delta >= 0 && delta < 1000);  // true (la diferencia es solo el resto sub-segundo)
+  // --- now_utc coherente con now() (propiedad, no valor) ---
+  let ahora = now_utc();
+  let delta = now() - to_epoch_millis(ahora);
+  print(delta >= 0 && delta < 1000);  // true (la diferencia es solo el resto sub-segundo)
 
-    // --- duraciones ---
-    print(format_duration(3723000));  // 1h2m3s
-    print(format_duration(45000));  // 45s
-    print(format_duration(500));  // 500ms
+  // --- duraciones ---
+  print(format_duration(3723000));  // 1h2m3s
+  print(format_duration(45000));  // 45s
+  print(format_duration(500));  // 500ms
 }
 
 fn iso(ms: int) -> string { to_iso8601(from_epoch_millis(ms)) }

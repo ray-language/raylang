@@ -6,39 +6,39 @@
 from dns import query_a, query_aaaa, query_mx, query_cname, query_txt, query_ns, query_srv;
 
 fn main() -> int {
-    let a = args();
-    var server = "8.8.8.8";
-    var port = 53;
-    if (len(a) > 0) {
-        server = "127.0.0.1";
-        match (parse_int(a[0])) {
-            Option.Some(p) => {
-                port = p;
-            },
-            Option.None => { },
-        }
+  let a = args();
+  var server = "8.8.8.8";
+  var port = 53;
+  if (len(a) > 0) {
+    server = "127.0.0.1";
+    match (parse_int(a[0])) {
+      Option.Some(p) => {
+        port = p;
+      },
+      Option.None => { },
     }
+  }
 
-    imprime("A", query_a(server, port, "example.com"));
-    imprime("AAAA", query_aaaa(server, port, "example.com"));
-    imprime("MX", query_mx(server, port, "example.com"));
-    imprime("CNAME", query_cname(server, port, "example.com"));
-    imprime("TXT", query_txt(server, port, "example.com"));
-    imprime("NS", query_ns(server, port, "example.com"));
-    imprime("SRV", query_srv(server, port, "_sip._tcp.example.com"));
-    0
+  imprime("A", query_a(server, port, "example.com"));
+  imprime("AAAA", query_aaaa(server, port, "example.com"));
+  imprime("MX", query_mx(server, port, "example.com"));
+  imprime("CNAME", query_cname(server, port, "example.com"));
+  imprime("TXT", query_txt(server, port, "example.com"));
+  imprime("NS", query_ns(server, port, "example.com"));
+  imprime("SRV", query_srv(server, port, "_sip._tcp.example.com"));
+  0
 }
 
 // Imprime cada valor prefijado por el tipo de registro (o el error).
 fn imprime(tipo: string, r: Result<[string], string>) {
-    match (r) {
-        Result.Ok(vals) => {
-            var i = 0;
-            while (i < len(vals)) {
-                print(tipo + " " + vals[i]);
-                i = i + 1;
-            }
-        },
-        Result.Err(e) => print(tipo + " ERR " + e),
-    }
+  match (r) {
+    Result.Ok(vals) => {
+      var i = 0;
+      while (i < len(vals)) {
+        print(tipo + " " + vals[i]);
+        i = i + 1;
+      }
+    },
+    Result.Err(e) => print(tipo + " ERR " + e),
+  }
 }

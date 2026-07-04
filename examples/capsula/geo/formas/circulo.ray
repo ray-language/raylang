@@ -3,7 +3,7 @@
 import geo/util;
 
 pub struct Circulo {
-    radio: int,
+  radio: int,
 }
 
 pub fn area(c: Circulo) -> int { 3 * util.cuadrado(c.radio) }

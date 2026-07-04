@@ -3,127 +3,127 @@
 // son valores de referencia con campos mutables, `next` avanza el estado del propio iterador.
 // Un contador de `desde` (inclusivo) a `hasta` (exclusivo) que produce enteros.
 struct Rango {
-    actual: int,
-    hasta: int,
+  actual: int,
+  hasta: int,
 }
 
 impl Iterator<int> for Rango {
-    fn next(self) -> Option<int> {
-        if (self.actual < self.hasta) {
-            let v = self.actual;
-            self.actual = self.actual + 1;
-            Option.Some(v)
-        } else {
-            Option.None
-        }
+  fn next(self) -> Option<int> {
+    if (self.actual < self.hasta) {
+      let v = self.actual;
+      self.actual = self.actual + 1;
+      Option.Some(v)
+    } else {
+      Option.None
     }
+  }
 }
 
 fn rango(desde: int, hasta: int) -> Rango {
-    Rango { actual: desde, hasta: hasta }
+  Rango { actual: desde, hasta: hasta }
 }
 
 // Un iterador de Fibonacci acotado: produce los primeros `n` términos.
 struct Fibs {
-    a: int,
-    b: int,
-    quedan: int,
+  a: int,
+  b: int,
+  quedan: int,
 }
 
 impl Iterator<int> for Fibs {
-    fn next(self) -> Option<int> {
-        if (self.quedan <= 0) {
-            Option.None
-        } else {
-            let actual = self.a;
-            self.a = self.b;
-            self.b = actual + self.b;
-            self.quedan = self.quedan - 1;
-            Option.Some(actual)
-        }
+  fn next(self) -> Option<int> {
+    if (self.quedan <= 0) {
+      Option.None
+    } else {
+      let actual = self.a;
+      self.a = self.b;
+      self.b = actual + self.b;
+      self.quedan = self.quedan - 1;
+      Option.Some(actual)
     }
+  }
 }
 
 fn main() -> int {
-    // Suma de los cuadrados de 1..6 = 1 + 4 + 9 + 16 + 25 = 55.
-    var suma = 0;
-    for n in rango(1, 6) {
-        suma = suma + n * n;
-    }
-    print(suma);
+  // Suma de los cuadrados de 1..6 = 1 + 4 + 9 + 16 + 25 = 55.
+  var suma = 0;
+  for n in rango(1, 6) {
+    suma = suma + n * n;
+  }
+  print(suma);
 
-    // Primeros 10 términos de Fibonacci.
-    var texto = "fib:";
-    let fibs = Fibs { a: 0, b: 1, quedan: 10 };
-    for f in fibs {
-        texto = texto + " " + to_string(f);
-    }
-    print(texto);
+  // Primeros 10 términos de Fibonacci.
+  var texto = "fib:";
+  let fibs = Fibs { a: 0, b: 1, quedan: 10 };
+  for f in fibs {
+    texto = texto + " " + to_string(f);
+  }
+  print(texto);
 
-    // El prelude trae dos iteradores de primera clase listos para usar:
-    //   `xs.iter()` recorre un arreglo, `range(a, b)` los enteros `a..b` (semi-abierto).
-    let xs = [3, 1, 4, 1, 5, 9];
-    var total = 0;
-    for x in xs.iter() {
-        total = total + x;
-    }
-    print(total);  // 23
+  // El prelude trae dos iteradores de primera clase listos para usar:
+  //   `xs.iter()` recorre un arreglo, `range(a, b)` los enteros `a..b` (semi-abierto).
+  let xs = [3, 1, 4, 1, 5, 9];
+  var total = 0;
+  for x in xs.iter() {
+    total = total + x;
+  }
+  print(total);  // 23
 
-    // `range` como valor: se puede guardar y recorrer igual que cualquier iterador.
-    var fact = 1;
-    for i in range(1, 6) {
-        fact = fact * i;
-    }
-    print(fact);  // 120
+  // `range` como valor: se puede guardar y recorrer igual que cualquier iterador.
+  var fact = 1;
+  for i in range(1, 6) {
+    fact = fact * i;
+  }
+  print(fact);  // 120
 
-    // Adaptadores PEREZOSOS (M40.2c): `.map()` y `.filter()` son métodos de TODO iterador y
-    // devuelven otro iterador que solo calcula al recorrerse. Se encadenan. Aquí: de 1..21, elevar
-    // al cuadrado, quedarnos con los múltiplos de 10, y sumarlos.
-    var s = 0;
-    let cadena = range(1, 21).map(fn(n: int) -> int { n * n }).filter(fn(n: int) -> bool { n % 10 == 0 });
-    for x in cadena {
-        s = s + x;
-    }
-    print(s);  // 100 + 400 = 500  (10² y 20²)
+  // Adaptadores PEREZOSOS (M40.2c): `.map()` y `.filter()` son métodos de TODO iterador y
+  // devuelven otro iterador que solo calcula al recorrerse. Se encadenan. Aquí: de 1..21, elevar
+  // al cuadrado, quedarnos con los múltiplos de 10, y sumarlos.
+  var s = 0;
+  let cadena = range(1, 21).map(fn(n: int) -> int { n * n }).filter(fn(n: int) -> bool { n % 10 == 0 });
+  for x in cadena {
+    s = s + x;
+  }
+  print(s);  // 100 + 400 = 500  (10² y 20²)
 
-    // `.map()` puede cambiar el tipo de elemento (int -> string). Nada se calcula hasta el `for`.
-    var linea = "";
-    for t in [1, 2, 3].iter().map(fn(n: int) -> string { to_string(n * 10) }) {
-        linea = linea + t + " ";
-    }
-    print(linea);  // "10 20 30 "
+  // `.map()` puede cambiar el tipo de elemento (int -> string). Nada se calcula hasta el `for`.
+  var linea = "";
+  for t in [1, 2, 3].iter().map(fn(n: int) -> string { to_string(n * 10) }) {
+    linea = linea + t + " ";
+  }
+  print(linea);  // "10 20 30 "
 
-    // Operaciones TERMINALES: `.fold()` reduce a un valor, `.collect()` materializa a un arreglo.
-    // `fold` puede cambiar de tipo (aquí int -> string), acumulando de izquierda a derecha.
-    let concat = range(1, 5).fold("", fn(a: string, x: int) -> string { a + to_string(x) });
-    print(concat);  // "1234"
+  // Operaciones TERMINALES: `.fold()` reduce a un valor, `.collect()` materializa a un arreglo.
+  // `fold` puede cambiar de tipo (aquí int -> string), acumulando de izquierda a derecha.
+  let concat = range(1, 5).fold("", fn(a: string, x: int) -> string { a + to_string(x) });
+  print(concat);  // "1234"
 
-    // `.collect()` cierra la cadena perezosa devolviendo un `[int]` de verdad.
-    let cuadrados = range(1, 6).map(fn(n: int) -> int { n * n }).collect();
-    print(len(cuadrados));  // 5
-    print(cuadrados[4]);  // 25
+  // `.collect()` cierra la cadena perezosa devolviendo un `[int]` de verdad.
+  let cuadrados = range(1, 6).map(fn(n: int) -> int { n * n }).collect();
+  print(len(cuadrados));  // 5
+  print(cuadrados[4]);  // 25
 
-    // `.take(n)` corta la cadena a los primeros `n` (perezoso: no toca el resto del origen).
-    let tres = range(1, 1000000).map(fn(n: int) -> int { n * n }).take(3).collect();
-    print(tres[2]);  // 9
+  // `.take(n)` corta la cadena a los primeros `n` (perezoso: no toca el resto del origen).
+  let tres = range(1, 1000000).map(fn(n: int) -> int { n * n }).take(3).collect();
+  print(tres[2]);  // 9
 
-    // `.enumerate()` empareja cada elemento con su índice; se consume con patrón de tupla en el `for`.
-    var etiquetas = "";
-    for (i, letra) in ["a", "b", "c"].iter().enumerate() {
-        etiquetas = etiquetas + to_string(i) + letra + " ";
-    }
-    print(etiquetas);  // "0a 1b 2c "
+  // `.enumerate()` empareja cada elemento con su índice; se consume con patrón de tupla en el `for`.
+  var etiquetas = "";
+  for (i, letra) in ["a", "b", "c"].iter().enumerate() {
+    etiquetas = etiquetas + to_string(i) + letra + " ";
+  }
+  print(etiquetas);  // "0a 1b 2c "
 
-    // `.skip(n)` descarta los primeros `n`; `.zip(otra)` empareja dos iteradores (se agota con el más
-    // corto); `.sum()` (función libre sobre Iter<int>, vía UFCS) suma un iterador de enteros.
-    print(sum(range(1, 101)));  // 5050
-    print(range(0, 100).skip(97).sum());  // 97+98+99 = 294
+  // `.skip(n)` descarta los primeros `n`; `.zip(otra)` empareja dos iteradores (se agota con el más
+  // corto); `.sum()` (función libre sobre Iter<int>, vía UFCS) suma un iterador de enteros.
+  print(sum(range(1, 101)));  // 5050
+  print(range(0, 100).skip(97).sum());  // 97+98+99 = 294
 
-    var acopladas = "";
-    for (n, nombre) in range(1, 100).zip(["uno", "dos", "tres"].iter()) {
-        acopladas = acopladas + to_string(n) + ":" + nombre + " ";
-    }
-    print(acopladas);  // "1:uno 2:dos 3:tres "
+  var acopladas = "";
+  for (n, nombre) in range(1, 100).zip(["uno", "dos", "tres"].iter()) {
+    acopladas = acopladas + to_string(n) + ":" + nombre + " ";
+  }
+  print(acopladas);  // "1:uno 2:dos 3:tres "
 
-    suma
+  suma
 }

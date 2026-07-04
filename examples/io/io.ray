@@ -8,47 +8,47 @@
 //   RAY_NOMBRE=Ada cargo run --quiet -- examples/io/io.ray 1 2
 // Suma los argumentos que sean enteros; ignora (avisando por stderr) los que no.
 fn sumar_args(xs: [string]) -> int {
-    var total = 0;
-    var i = 0;
-    while (i < len(xs)) {
-        match (parse_int(xs[i])) {
-            Option.Some(n) => {
-                total = total + n;
-            },
-            Option.None => {
-                eprint("ignoro (no es entero): " + xs[i]);
-            },
-        }
-        i = i + 1;
+  var total = 0;
+  var i = 0;
+  while (i < len(xs)) {
+    match (parse_int(xs[i])) {
+      Option.Some(n) => {
+        total = total + n;
+      },
+      Option.None => {
+        eprint("ignoro (no es entero): " + xs[i]);
+      },
     }
-    total
+    i = i + 1;
+  }
+  total
 }
 
 fn main() -> int {
-    // Saludo personalizable por entorno.
-    let nombre = match (env("RAY_NOMBRE")) {
-        Option.Some(n) => n,
-        Option.None => "mundo",
-    };
-    print("hola, " + nombre);
+  // Saludo personalizable por entorno.
+  let nombre = match (env("RAY_NOMBRE")) {
+    Option.Some(n) => n,
+    Option.None => "mundo",
+  };
+  print("hola, " + nombre);
 
-    let xs = args();
-    if (len(xs) > 0) {
-        // Modo CLI: sumar los argumentos.
-        let total = sumar_args(xs);
-        print("suma de args = " + total.to_string());
-        total
-    } else {
-        // Modo interactivo: leer un entero de stdin.
-        match (read_int()) {
-            Option.Some(n) => {
-                print("leí " + n.to_string());
-                n
-            },
-            Option.None => {
-                print("sin entrada válida");
-                0
-            },
-        }
+  let xs = args();
+  if (len(xs) > 0) {
+    // Modo CLI: sumar los argumentos.
+    let total = sumar_args(xs);
+    print("suma de args = " + total.to_string());
+    total
+  } else {
+    // Modo interactivo: leer un entero de stdin.
+    match (read_int()) {
+      Option.Some(n) => {
+        print("leí " + n.to_string());
+        n
+      },
+      Option.None => {
+        print("sin entrada válida");
+        0
+      },
     }
+  }
 }

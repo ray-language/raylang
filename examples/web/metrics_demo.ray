@@ -4,24 +4,24 @@
 from metrics import registry, register_counter, register_gauge, register_histogram, inc, add, set, observe, render, no_labels, labels2;
 
 fn main() {
-    let reg = registry();
-    register_counter(reg, "http_requests_total", "Total de peticiones HTTP");
-    register_gauge(reg, "temperatura_celsius", "Temperatura actual");
-    register_histogram(reg, "http_duracion_segundos", "Duracion de las peticiones", [0.1, 0.5, 1.0]);
+  let reg = registry();
+  register_counter(reg, "http_requests_total", "Total de peticiones HTTP");
+  register_gauge(reg, "temperatura_celsius", "Temperatura actual");
+  register_histogram(reg, "http_duracion_segundos", "Duracion de las peticiones", [0.1, 0.5, 1.0]);
 
-    // Counter con labels (dos series distintas por el conjunto de labels).
-    inc(reg, "http_requests_total", labels2("method", "GET", "code", "200"));
-    inc(reg, "http_requests_total", labels2("method", "GET", "code", "200"));
-    inc(reg, "http_requests_total", labels2("method", "POST", "code", "500"));
+  // Counter con labels (dos series distintas por el conjunto de labels).
+  inc(reg, "http_requests_total", labels2("method", "GET", "code", "200"));
+  inc(reg, "http_requests_total", labels2("method", "GET", "code", "200"));
+  inc(reg, "http_requests_total", labels2("method", "POST", "code", "500"));
 
-    // Gauge (sin labels).
-    set(reg, "temperatura_celsius", no_labels(), 21.5);
+  // Gauge (sin labels).
+  set(reg, "temperatura_celsius", no_labels(), 21.5);
 
-    // Histograma: cuatro observaciones que caen en distintos buckets.
-    observe(reg, "http_duracion_segundos", 0.05);
-    observe(reg, "http_duracion_segundos", 0.3);
-    observe(reg, "http_duracion_segundos", 0.8);
-    observe(reg, "http_duracion_segundos", 2.0);
+  // Histograma: cuatro observaciones que caen en distintos buckets.
+  observe(reg, "http_duracion_segundos", 0.05);
+  observe(reg, "http_duracion_segundos", 0.3);
+  observe(reg, "http_duracion_segundos", 0.8);
+  observe(reg, "http_duracion_segundos", 2.0);
 
-    print(render(reg));
+  print(render(reg));
 }

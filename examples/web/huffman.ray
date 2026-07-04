@@ -10,148 +10,148 @@
 // prefijo completo (Kraft = 2^30) y reproduce el vector oficial C.4.1 ("www.example.com").
 // El código Huffman de cada símbolo 0..256 (256 = EOS), alineado a LSB.
 fn huff_codes() -> [int] {
-    [8184, 8388568, 268435426, 268435427, 268435428, 268435429, 268435430, 268435431, 268435432, 16777194, 1073741820, 268435433, 268435434, 1073741821, 268435435, 268435436, 268435437, 268435438, 268435439, 268435440, 268435441, 268435442, 1073741822, 268435443, 268435444, 268435445, 268435446, 268435447, 268435448, 268435449, 268435450, 268435451, 20, 1016, 1017, 4090, 8185, 21, 248, 2042, 1018, 1019, 249, 2043, 250, 22, 23, 24, 0, 1, 2, 25, 26, 27, 28, 29, 30, 31, 92, 251, 32764, 32, 4091, 1020, 8186, 33, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 252, 115, 253, 8187, 524272, 8188, 16380, 34, 32765, 3, 35, 4, 36, 5, 37, 38, 39, 6, 116, 117, 40, 41, 42, 7, 43, 118, 44, 8, 9, 45, 119, 120, 121, 122, 123, 32766, 2044, 16381, 8189, 268435452, 1048550, 4194258, 1048551, 1048552, 4194259, 4194260, 4194261, 8388569, 4194262, 8388570, 8388571, 8388572, 8388573, 8388574, 16777195, 8388575, 16777196, 16777197, 4194263, 8388576, 16777198, 8388577, 8388578, 8388579, 8388580, 2097116, 4194264, 8388581, 4194265, 8388582, 8388583, 16777199, 4194266, 2097117, 1048553, 4194267, 4194268, 8388584, 8388585, 2097118, 8388586, 4194269, 4194270, 16777200, 2097119, 4194271, 8388587, 8388588, 2097120, 2097121, 4194272, 2097122, 8388589, 4194273, 8388590, 8388591, 1048554, 4194274, 4194275, 4194276, 8388592, 4194277, 4194278, 8388593, 67108832, 67108833, 1048555, 524273, 4194279, 8388594, 4194280, 33554412, 67108834, 67108835, 67108836, 134217694, 134217695, 67108837, 16777201, 33554413, 524274, 2097123, 67108838, 134217696, 134217697, 67108839, 134217698, 16777202, 2097124, 2097125, 67108840, 67108841, 268435453, 134217699, 134217700, 134217701, 1048556, 16777203, 1048557, 2097126, 4194281, 2097127, 2097128, 8388595, 4194282, 4194283, 33554414, 33554415, 16777204, 16777205, 67108842, 8388596, 67108843, 134217702, 67108844, 67108845, 134217703, 134217704, 134217705, 134217706, 134217707, 268435454, 134217708, 134217709, 134217710, 134217711, 134217712, 67108846, 1073741823]
+  [8184, 8388568, 268435426, 268435427, 268435428, 268435429, 268435430, 268435431, 268435432, 16777194, 1073741820, 268435433, 268435434, 1073741821, 268435435, 268435436, 268435437, 268435438, 268435439, 268435440, 268435441, 268435442, 1073741822, 268435443, 268435444, 268435445, 268435446, 268435447, 268435448, 268435449, 268435450, 268435451, 20, 1016, 1017, 4090, 8185, 21, 248, 2042, 1018, 1019, 249, 2043, 250, 22, 23, 24, 0, 1, 2, 25, 26, 27, 28, 29, 30, 31, 92, 251, 32764, 32, 4091, 1020, 8186, 33, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 252, 115, 253, 8187, 524272, 8188, 16380, 34, 32765, 3, 35, 4, 36, 5, 37, 38, 39, 6, 116, 117, 40, 41, 42, 7, 43, 118, 44, 8, 9, 45, 119, 120, 121, 122, 123, 32766, 2044, 16381, 8189, 268435452, 1048550, 4194258, 1048551, 1048552, 4194259, 4194260, 4194261, 8388569, 4194262, 8388570, 8388571, 8388572, 8388573, 8388574, 16777195, 8388575, 16777196, 16777197, 4194263, 8388576, 16777198, 8388577, 8388578, 8388579, 8388580, 2097116, 4194264, 8388581, 4194265, 8388582, 8388583, 16777199, 4194266, 2097117, 1048553, 4194267, 4194268, 8388584, 8388585, 2097118, 8388586, 4194269, 4194270, 16777200, 2097119, 4194271, 8388587, 8388588, 2097120, 2097121, 4194272, 2097122, 8388589, 4194273, 8388590, 8388591, 1048554, 4194274, 4194275, 4194276, 8388592, 4194277, 4194278, 8388593, 67108832, 67108833, 1048555, 524273, 4194279, 8388594, 4194280, 33554412, 67108834, 67108835, 67108836, 134217694, 134217695, 67108837, 16777201, 33554413, 524274, 2097123, 67108838, 134217696, 134217697, 67108839, 134217698, 16777202, 2097124, 2097125, 67108840, 67108841, 268435453, 134217699, 134217700, 134217701, 1048556, 16777203, 1048557, 2097126, 4194281, 2097127, 2097128, 8388595, 4194282, 4194283, 33554414, 33554415, 16777204, 16777205, 67108842, 8388596, 67108843, 134217702, 67108844, 67108845, 134217703, 134217704, 134217705, 134217706, 134217707, 268435454, 134217708, 134217709, 134217710, 134217711, 134217712, 67108846, 1073741823]
 }
 
 // El nº de bits de cada símbolo 0..256.
 fn huff_lens() -> [int] {
-    [13, 23, 28, 28, 28, 28, 28, 28, 28, 24, 30, 28, 28, 30, 28, 28, 28, 28, 28, 28, 28, 28, 30, 28, 28, 28, 28, 28, 28, 28, 28, 28, 6, 10, 10, 12, 13, 6, 8, 11, 10, 10, 8, 11, 8, 6, 6, 6, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 7, 8, 15, 6, 12, 10, 13, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 8, 7, 8, 13, 19, 13, 14, 6, 15, 5, 6, 5, 6, 5, 6, 6, 6, 5, 7, 7, 6, 6, 6, 5, 6, 7, 6, 5, 5, 6, 7, 7, 7, 7, 7, 15, 11, 14, 13, 28, 20, 22, 20, 20, 22, 22, 22, 23, 22, 23, 23, 23, 23, 23, 24, 23, 24, 24, 22, 23, 24, 23, 23, 23, 23, 21, 22, 23, 22, 23, 23, 24, 22, 21, 20, 22, 22, 23, 23, 21, 23, 22, 22, 24, 21, 22, 23, 23, 21, 21, 22, 21, 23, 22, 23, 23, 20, 22, 22, 22, 23, 22, 22, 23, 26, 26, 20, 19, 22, 23, 22, 25, 26, 26, 26, 27, 27, 26, 24, 25, 19, 21, 26, 27, 27, 26, 27, 24, 21, 21, 26, 26, 28, 27, 27, 27, 20, 24, 20, 21, 22, 21, 21, 23, 22, 22, 25, 25, 24, 24, 26, 23, 26, 27, 26, 26, 27, 27, 27, 27, 27, 28, 27, 27, 27, 27, 27, 26, 30]
+  [13, 23, 28, 28, 28, 28, 28, 28, 28, 24, 30, 28, 28, 30, 28, 28, 28, 28, 28, 28, 28, 28, 30, 28, 28, 28, 28, 28, 28, 28, 28, 28, 6, 10, 10, 12, 13, 6, 8, 11, 10, 10, 8, 11, 8, 6, 6, 6, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 7, 8, 15, 6, 12, 10, 13, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 8, 7, 8, 13, 19, 13, 14, 6, 15, 5, 6, 5, 6, 5, 6, 6, 6, 5, 7, 7, 6, 6, 6, 5, 6, 7, 6, 5, 5, 6, 7, 7, 7, 7, 7, 15, 11, 14, 13, 28, 20, 22, 20, 20, 22, 22, 22, 23, 22, 23, 23, 23, 23, 23, 24, 23, 24, 24, 22, 23, 24, 23, 23, 23, 23, 21, 22, 23, 22, 23, 23, 24, 22, 21, 20, 22, 22, 23, 23, 21, 23, 22, 22, 24, 21, 22, 23, 23, 21, 21, 22, 21, 23, 22, 23, 23, 20, 22, 22, 22, 23, 22, 22, 23, 26, 26, 20, 19, 22, 23, 22, 25, 26, 26, 26, 27, 27, 26, 24, 25, 19, 21, 26, 27, 27, 26, 27, 24, 21, 21, 26, 26, 28, 27, 27, 27, 20, 24, 20, 21, 22, 21, 21, 23, 22, 22, 25, 25, 24, 24, 26, 23, 26, 27, 26, 26, 27, 27, 27, 27, 27, 28, 27, 27, 27, 27, 27, 26, 30]
 }
 
 // Codifica octetos `[int]` a su forma Huffman de HPACK.
 pub fn huffman_encode(data: [int]) -> [int] {
-    let codes = huff_codes();
-    let lens = huff_lens();
-    var out: [int] = [];
-    var acc = 0;  // acumulador de bits (los `nbits` de menor peso son los pendientes)
-    var nbits = 0;
-    var i = 0;
-    while (i < len(data)) {
-        let s = data[i];
-        acc = acc << lens[s] | codes[s];
-        nbits = nbits + lens[s];
-        while (nbits >= 8) {
-            nbits = nbits - 8;
-            push(out, acc >> nbits & 255);
-        }
-        acc = acc & (1 << nbits) - 1;  // conserva solo los bits pendientes (< 8)
-        i = i + 1;
+  let codes = huff_codes();
+  let lens = huff_lens();
+  var out: [int] = [];
+  var acc = 0;  // acumulador de bits (los `nbits` de menor peso son los pendientes)
+  var nbits = 0;
+  var i = 0;
+  while (i < len(data)) {
+    let s = data[i];
+    acc = acc << lens[s] | codes[s];
+    nbits = nbits + lens[s];
+    while (nbits >= 8) {
+      nbits = nbits - 8;
+      push(out, acc >> nbits & 255);
     }
-    if (nbits > 0) {
-        let pad = 8 - nbits;
-        acc = acc << pad | (1 << pad) - 1;  // relleno con 1s (prefijo de EOS)
-        push(out, acc & 255);
-    }
-    out
+    acc = acc & (1 << nbits) - 1;  // conserva solo los bits pendientes (< 8)
+    i = i + 1;
+  }
+  if (nbits > 0) {
+    let pad = 8 - nbits;
+    acc = acc << pad | (1 << pad) - 1;  // relleno con 1s (prefijo de EOS)
+    push(out, acc & 255);
+  }
+  out
 }
 
 // ---- Decodificación por trie ----
 // Un trie binario en arreglos paralelos: hijo por bit 0 / bit 1 (o -1) y símbolo si es hoja (o -1).
 struct Trie {
-    left: [int],
-    right: [int],
-    sym: [int],
+  left: [int],
+  right: [int],
+  sym: [int],
 }
 
 fn trie_new() -> Trie {
-    Trie { left: [0 - 1], right: [0 - 1], sym: [0 - 1] }  // nodo 0 = raíz
+  Trie { left: [0 - 1], right: [0 - 1], sym: [0 - 1] }  // nodo 0 = raíz
 }
 
 fn trie_add_node(t: Trie) -> int {
-    push(t.left, 0 - 1);
-    push(t.right, 0 - 1);
-    push(t.sym, 0 - 1);
-    len(t.left) - 1
+  push(t.left, 0 - 1);
+  push(t.right, 0 - 1);
+  push(t.sym, 0 - 1);
+  len(t.left) - 1
 }
 
 fn trie_insert(t: Trie, code: int, nbits: int, symbol: int) {
-    var node = 0;
-    var b = nbits - 1;
-    while (b >= 0) {
-        let bit = code >> b & 1;
-        if (bit == 0) {
-            if (t.left[node] < 0) {
-                t.left[node] = trie_add_node(t);
-            }
-            node = t.left[node];
-        } else {
-            if (t.right[node] < 0) {
-                t.right[node] = trie_add_node(t);
-            }
-            node = t.right[node];
-        }
-        b = b - 1;
+  var node = 0;
+  var b = nbits - 1;
+  while (b >= 0) {
+    let bit = code >> b & 1;
+    if (bit == 0) {
+      if (t.left[node] < 0) {
+        t.left[node] = trie_add_node(t);
+      }
+      node = t.left[node];
+    } else {
+      if (t.right[node] < 0) {
+        t.right[node] = trie_add_node(t);
+      }
+      node = t.right[node];
     }
-    t.sym[node] = symbol;
+    b = b - 1;
+  }
+  t.sym[node] = symbol;
 }
 
 fn build_trie() -> Trie {
-    let codes = huff_codes();
-    let lens = huff_lens();
-    let t = trie_new();
-    var s = 0;
-    while (s < 257) {
-        trie_insert(t, codes[s], lens[s], s);
-        s = s + 1;
-    }
-    t
+  let codes = huff_codes();
+  let lens = huff_lens();
+  let t = trie_new();
+  var s = 0;
+  while (s < 257) {
+    trie_insert(t, codes[s], lens[s], s);
+    s = s + 1;
+  }
+  t
 }
 
 // Decodifica una secuencia Huffman de HPACK a octetos. Rechaza el relleno inválido (que no sea el
 // prefijo de EOS de 1s) y la aparición del símbolo EOS (256), como pide el RFC.
 pub fn huffman_decode(data: [int]) -> Result<[int], string> {
-    let t = build_trie();
-    var out: [int] = [];
-    var node = 0;
-    var i = 0;
-    while (i < len(data)) {
-        let byte = data[i];
-        var b = 7;
-        while (b >= 0) {
-            let bit = byte >> b & 1;
-            if (bit == 0) {
-                node = t.left[node];
-            } else {
-                node = t.right[node];
-            }
-            if (node < 0) {
-                return Result.Err("secuencia Huffman inválida");
-            }
-            if (t.sym[node] >= 0) {
-                if (t.sym[node] == 256) {
-                    return Result.Err("EOS no permitido en el flujo");
-                }
-                push(out, t.sym[node]);
-                node = 0;  // vuelve a la raíz
-            }
-            b = b - 1;
+  let t = build_trie();
+  var out: [int] = [];
+  var node = 0;
+  var i = 0;
+  while (i < len(data)) {
+    let byte = data[i];
+    var b = 7;
+    while (b >= 0) {
+      let bit = byte >> b & 1;
+      if (bit == 0) {
+        node = t.left[node];
+      } else {
+        node = t.right[node];
+      }
+      if (node < 0) {
+        return Result.Err("secuencia Huffman inválida");
+      }
+      if (t.sym[node] >= 0) {
+        if (t.sym[node] == 256) {
+          return Result.Err("EOS no permitido en el flujo");
         }
-        i = i + 1;
+        push(out, t.sym[node]);
+        node = 0;  // vuelve a la raíz
+      }
+      b = b - 1;
     }
-    // Al final debemos estar en la raíz o en un prefijo de puros 1s (relleno de EOS) de ≤7 bits.
-    if (node != 0) {
-        if (!valid_padding(t, node)) {
-            return Result.Err("relleno Huffman inválido");
-        }
+    i = i + 1;
+  }
+  // Al final debemos estar en la raíz o en un prefijo de puros 1s (relleno de EOS) de ≤7 bits.
+  if (node != 0) {
+    if (!valid_padding(t, node)) {
+      return Result.Err("relleno Huffman inválido");
     }
-    Result.Ok(out)
+  }
+  Result.Ok(out)
 }
 
 // El relleno válido (RFC 7541 §5.2) son ≤7 bits, todos 1 (el prefijo más significativo del código de
 // EOS, que es todo unos). Es decir, el nodo final debe estar en el camino de **solo hijos-de-bit-1**
 // desde la raíz, alcanzable en ≤7 pasos.
 fn valid_padding(t: Trie, node: int) -> bool {
-    var n = 0;  // raíz
-    var steps = 0;
-    while (steps <= 7) {
-        if (n == node) {
-            return true;
-        }
-        if (t.right[n] < 0) {
-            return false;
-        }
-        n = t.right[n];
-        steps = steps + 1;
+  var n = 0;  // raíz
+  var steps = 0;
+  while (steps <= 7) {
+    if (n == node) {
+      return true;
     }
-    false
+    if (t.right[n] < 0) {
+      return false;
+    }
+    n = t.right[n];
+    steps = steps + 1;
+  }
+  false
 }

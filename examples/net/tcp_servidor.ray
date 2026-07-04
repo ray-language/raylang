@@ -8,38 +8,38 @@
 // `nc 127.0.0.1 <puerto>` (escribe algo y verás el eco). Necesita red → no entra al oráculo.
 // Atiende una conexión: lee un mensaje y responde con eco.
 fn atender(conn: int) {
-    match (socket_read(conn)) {
-        Result.Ok(msg) => {
-            match (socket_write(conn, "eco: " + msg)) {
-                Result.Ok(_) => { },
-                Result.Err(e) => eprint("error al escribir: " + e),
-            }
-        },
-        Result.Err(e) => eprint("error al leer: " + e),
-    }
-    close(conn);
+  match (socket_read(conn)) {
+    Result.Ok(msg) => {
+      match (socket_write(conn, "eco: " + msg)) {
+        Result.Ok(_) => { },
+        Result.Err(e) => eprint("error al escribir: " + e),
+      }
+    },
+    Result.Err(e) => eprint("error al leer: " + e),
+  }
+  close(conn);
 }
 
 fn main() -> int {
-    match (tcp_listen("127.0.0.1", 8080)) {
-        Result.Ok(srv) => {
-            print("escuchando en el puerto " + to_string(local_port(srv)));
-            var seguir: bool = true;
-            while (seguir) {
-                match (tcp_accept(srv)) {
-                    Result.Ok(conn) => atender(conn),
-                    Result.Err(e) => {
-                        eprint("error al aceptar: " + e);
-                        seguir = false;
-                    },
-                }
-            }
-            close(srv);
-            0
-        },
-        Result.Err(e) => {
-            eprint("no se pudo escuchar: " + e);
-            1
-        },
-    }
+  match (tcp_listen("127.0.0.1", 8080)) {
+    Result.Ok(srv) => {
+      print("escuchando en el puerto " + to_string(local_port(srv)));
+      var seguir: bool = true;
+      while (seguir) {
+        match (tcp_accept(srv)) {
+          Result.Ok(conn) => atender(conn),
+          Result.Err(e) => {
+            eprint("error al aceptar: " + e);
+            seguir = false;
+          },
+        }
+      }
+      close(srv);
+      0
+    },
+    Result.Err(e) => {
+      eprint("no se pudo escuchar: " + e);
+      1
+    },
+  }
 }

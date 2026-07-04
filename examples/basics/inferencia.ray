@@ -9,42 +9,42 @@
 //   cargo run --quiet -- examples/basics/inferencia.ray
 //   cargo run --quiet -- --vm examples/basics/inferencia.ray
 struct Punto {
-    x: int,
-    y: int,
+  x: int,
+  y: int,
 }
 
 enum Caja<T> {
-    Llena(T),
-    Vacia,
+  Llena(T),
+  Vacia,
 }
 
 fn doble(x: int) -> int { x * 2 }  // la firma SÍ se anota: §0, sin inferencia global
 
 fn main() -> int {
-    let x = 3;  // int
-    let nombre = "raylang";  // string  (no se usa; solo muestra la inferencia)
-    let activo = x > 0;  // bool
-    let xs = [10, 20, 30];  // [int]
-    let p = Punto { x: 7, y: 6 };  // Punto
-    let c = Caja.Llena(5);  // Caja<int>  (los genéricos de M6 se infieren igual)
+  let x = 3;  // int
+  let nombre = "raylang";  // string  (no se usa; solo muestra la inferencia)
+  let activo = x > 0;  // bool
+  let xs = [10, 20, 30];  // [int]
+  let p = Punto { x: 7, y: 6 };  // Punto
+  let c = Caja.Llena(5);  // Caja<int>  (los genéricos de M6 se infieren igual)
 
-    var total = 0;  // int, y mutable
-    total = total + x.doble();  // UFCS sobre una inferida -> total = 6
+  var total = 0;  // int, y mutable
+  total = total + x.doble();  // UFCS sobre una inferida -> total = 6
 
-    // se mezclan inferidas con anotadas sin fricción
-    let suma: int = xs[0] + xs[1] + xs[2];  // anotada -> 60
-    let cv = p.x + p.y;  // inferida -> 13
-    let dentro = match (c) {
-        // inferida -> 5
-        Caja.Llena(v) => v,
-        Caja.Vacia => 0,
-    };
+  // se mezclan inferidas con anotadas sin fricción
+  let suma: int = xs[0] + xs[1] + xs[2];  // anotada -> 60
+  let cv = p.x + p.y;  // inferida -> 13
+  let dentro = match (c) {
+    // inferida -> 5
+    Caja.Llena(v) => v,
+    Caja.Vacia => 0,
+  };
 
-    // lo que NO se puede inferir necesita anotación; p. ej. esto sería un error:
-    //   let vacio = [];        // error: no se puede inferir el tipo de []
-    //   let nada = Caja.Vacia; // error: anótalo (let nada: Caja<int> = Caja.Vacia;)
-    let vacio: [int] = [];  // anotada, sí
-    if (activo) { } else { }
+  // lo que NO se puede inferir necesita anotación; p. ej. esto sería un error:
+  //   let vacio = [];        // error: no se puede inferir el tipo de []
+  //   let nada = Caja.Vacia; // error: anótalo (let nada: Caja<int> = Caja.Vacia;)
+  let vacio: [int] = [];  // anotada, sí
+  if (activo) { } else { }
 
-    total + suma + cv + dentro + len(vacio)  // 6 + 60 + 13 + 5 + 0 = 84
+  total + suma + cv + dentro + len(vacio)  // 6 + 60 + 13 + 5 + 0 = 84
 }

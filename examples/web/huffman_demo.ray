@@ -4,43 +4,43 @@ from huffman import huffman_encode, huffman_decode;
 from hex import hex_encode;
 
 fn str_bytes(s: string) -> [int] {
-    var b: [int] = [];
-    for c in s {
-        push(b, c as int);
-    }
-    b
+  var b: [int] = [];
+  for c in s {
+    push(b, c as int);
+  }
+  b
 }
 
 fn probar(s: string) {
-    let enc = huffman_encode(str_bytes(s));
-    print(hex_encode(enc));
-    match (huffman_decode(enc)) {
-        Result.Ok(dec) => {
-            let orig = str_bytes(s);
-            var ok = len(dec) == len(orig);
-            var i = 0;
-            while (i < len(orig)) {
-                if (dec[i] != orig[i]) {
-                    ok = false;
-                }
-                i = i + 1;
-            }
-            if (ok) {
-                print("roundtrip ok");
-            } else {
-                print("roundtrip FALLO");
-            }
-        },
-        Result.Err(e) => print("decode err: " + e),
-    }
+  let enc = huffman_encode(str_bytes(s));
+  print(hex_encode(enc));
+  match (huffman_decode(enc)) {
+    Result.Ok(dec) => {
+      let orig = str_bytes(s);
+      var ok = len(dec) == len(orig);
+      var i = 0;
+      while (i < len(orig)) {
+        if (dec[i] != orig[i]) {
+          ok = false;
+        }
+        i = i + 1;
+      }
+      if (ok) {
+        print("roundtrip ok");
+      } else {
+        print("roundtrip FALLO");
+      }
+    },
+    Result.Err(e) => print("decode err: " + e),
+  }
 }
 
 fn main() {
-    probar("www.example.com");  // C.4.1: f1e3c2e5f23a6ba0ab90f4ff
-    probar("no-cache");  // C.4.2: a8eb10649cbf
-    probar("custom-key");  // C.4.3 (name): 25a849e95ba97d7f
-    probar("custom-value");  // C.4.3 (value): 25a849e95bb8e8b4bf
-    probar("private");  // C.6.1 (cache-control): aec3771a4b
-    probar("Mon, 21 Oct 2013 20:13:21 GMT");  // C.6.1 (date)
-    probar("https://www.example.com");  // C.6.1 (location)
+  probar("www.example.com");  // C.4.1: f1e3c2e5f23a6ba0ab90f4ff
+  probar("no-cache");  // C.4.2: a8eb10649cbf
+  probar("custom-key");  // C.4.3 (name): 25a849e95ba97d7f
+  probar("custom-value");  // C.4.3 (value): 25a849e95bb8e8b4bf
+  probar("private");  // C.6.1 (cache-control): aec3771a4b
+  probar("Mon, 21 Oct 2013 20:13:21 GMT");  // C.6.1 (date)
+  probar("https://www.example.com");  // C.6.1 (location)
 }

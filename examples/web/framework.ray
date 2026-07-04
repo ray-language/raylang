@@ -13,44 +13,44 @@ import webserver;
 // Un parámetro de ruta capturado (`:id` → ("id", "42")). Lista de asociación (pocos por ruta) en vez de
 // un Map, para no chocar con el `get` del prelude al definir el `get` de rutas en este módulo.
 struct Param {
-    name: string,
-    value: string,
+  name: string,
+  value: string,
 }
 
 // El contexto que ve un handler: la petición + los parámetros de ruta extraídos del patrón.
 pub struct Ctx {
-    method: string,
-    path: string,
-    params: [Param],
-    req: webserver.Request,
+  method: string,
+  path: string,
+  params: [Param],
+  req: webserver.Request,
 }
 
 // La respuesta que el handler construye mutando (por referencia): estado, cuerpo y tipo de contenido.
 // El campo se llama `code` (no `status`) para no chocar con la función `status` (un campo gana sobre
 // una función libre en UFCS, y `r.status(418)` llamaría al campo int).
 pub struct Res {
-    code: int,
-    body: bytes,
-    content_type: string,
+  code: int,
+  body: bytes,
+  content_type: string,
 }
 
 // Una ruta registrada: método HTTP + segmentos del patrón (un segmento ":x" captura un parámetro).
 struct Route {
-    method: string,
-    segments: [string],
-    handler: fn(Ctx, Res),
+  method: string,
+  segments: [string],
+  handler: fn(Ctx, Res),
 }
 
 // La aplicación: rutas + middlewares (corren antes del handler; devuelven false para cortar la cadena).
 pub struct App {
-    routes: [Route],
-    middlewares: [fn(Ctx, Res) -> bool],
+  routes: [Route],
+  middlewares: [fn(Ctx, Res) -> bool],
 }
 
 pub fn new_app() -> App {
-    var rs: [Route] = [];
-    var ms: [fn(Ctx, Res) -> bool] = [];
-    App { routes: rs, middlewares: ms }
+  var rs: [Route] = [];
+  var ms: [fn(Ctx, Res) -> bool] = [];
+  App { routes: rs, middlewares: ms }
 }
 
 // --- Registro de rutas (con UFCS: `app.GET("/", handler)`) ---
@@ -59,68 +59,68 @@ pub fn new_app() -> App {
 // el choque de `get` con el `get` del prelude (de Map) — definir `fn get` en el módulo de entrada
 // taparía el `get` de Map para todo el programa, rompiendo a `webserver.ray`, que lo usa.
 fn add_route(app: App, method: string, pattern: string, handler: fn(Ctx, Res)) {
-    push(app.routes, Route { method: method, segments: split_path(pattern), handler: handler });
+  push(app.routes, Route { method: method, segments: split_path(pattern), handler: handler });
 }
 
 pub fn GET(app: App, pattern: string, handler: fn(Ctx, Res)) {
-    add_route(app, "GET", pattern, handler);
+  add_route(app, "GET", pattern, handler);
 }
 
 pub fn POST(app: App, pattern: string, handler: fn(Ctx, Res)) {
-    add_route(app, "POST", pattern, handler);
+  add_route(app, "POST", pattern, handler);
 }
 
 pub fn PUT(app: App, pattern: string, handler: fn(Ctx, Res)) {
-    add_route(app, "PUT", pattern, handler);
+  add_route(app, "PUT", pattern, handler);
 }
 
 pub fn DELETE(app: App, pattern: string, handler: fn(Ctx, Res)) {
-    add_route(app, "DELETE", pattern, handler);
+  add_route(app, "DELETE", pattern, handler);
 }
 
 // Registra un middleware (corre antes del enrutado; devuelve false para detener la petición).
 pub fn use_mw(app: App, mw: fn(Ctx, Res) -> bool) {
-    push(app.middlewares, mw);
+  push(app.middlewares, mw);
 }
 
 // --- Helpers del contexto (handler) ---
 // El valor de un parámetro de ruta (`:name`), o "" si no existe.
 pub fn param(ctx: Ctx, name: string) -> string {
-    var i: int = 0;
-    while (i < len(ctx.params)) {
-        if (ctx.params[i].name == name) {
-            return ctx.params[i].value;
-        }
-        i = i + 1;
+  var i: int = 0;
+  while (i < len(ctx.params)) {
+    if (ctx.params[i].name == name) {
+      return ctx.params[i].value;
     }
-    ""
+    i = i + 1;
+  }
+  ""
 }
 
 // El cuerpo de la petición como texto (UTF-8); "" si no es texto válido.
 pub fn body(ctx: Ctx) -> string {
-    match (from_utf8(ctx.req.body)) {
-        Result.Ok(s) => s,
-        Result.Err(_) => "",
-    }
+  match (from_utf8(ctx.req.body)) {
+    Result.Ok(s) => s,
+    Result.Err(_) => "",
+  }
 }
 
 // --- Helpers de la respuesta (mutan `res`; encadenables con UFCS) ---
 // Fija el código de estado y devuelve `res` (para encadenar: `r.status(404).text("...")`).
 pub fn status(res: Res, n: int) -> Res {
-    res.code = n;
-    res
+  res.code = n;
+  res
 }
 
 // Responde texto plano.
 pub fn text(res: Res, txt: string) {
-    res.body = to_bytes(txt);
-    res.content_type = "text/plain; charset=utf-8";
+  res.body = to_bytes(txt);
+  res.content_type = "text/plain; charset=utf-8";
 }
 
 // Responde JSON (el llamador pasa el JSON ya serializado).
 pub fn json(res: Res, txt: string) {
-    res.body = to_bytes(txt);
-    res.content_type = "application/json";
+  res.body = to_bytes(txt);
+  res.content_type = "application/json";
 }
 
 // --- Enrutado ---
@@ -130,84 +130,84 @@ fn split_path(p: string) -> [string] { split(p, "/") }
 
 // ¿Casan los segmentos del patrón con los de la ruta? Si sí, devuelve los parámetros capturados.
 fn match_route(pat: [string], path: [string]) -> Option<[Param]> {
-    if (len(pat) != len(path)) {
+  if (len(pat) != len(path)) {
+    return Option.None;
+  }
+  var ps: [Param] = [];
+  var i: int = 0;
+  while (i < len(pat)) {
+    let seg: string = pat[i];
+    if (starts_with(seg, ":")) {
+      push(ps, Param { name: substring(seg, 1, len(seg)), value: path[i] });
+    } else {
+      if (seg != path[i]) {
         return Option.None;
+      }
     }
-    var ps: [Param] = [];
-    var i: int = 0;
-    while (i < len(pat)) {
-        let seg: string = pat[i];
-        if (starts_with(seg, ":")) {
-            push(ps, Param { name: substring(seg, 1, len(seg)), value: path[i] });
-        } else {
-            if (seg != path[i]) {
-                return Option.None;
-            }
-        }
-        i = i + 1;
-    }
-    Option.Some(ps)
+    i = i + 1;
+  }
+  Option.Some(ps)
 }
 
 // Construye la `webserver.Response` final a partir de la `Res` que rellenó el handler.
 fn build_response(res: Res) -> webserver.Response {
-    var h: Map<string, string> = map_new();
-    insert(h, "Content-Type", res.content_type);
-    webserver.Response { status: res.code, headers: h, body: res.body }
+  var h: Map<string, string> = map_new();
+  insert(h, "Content-Type", res.content_type);
+  webserver.Response { status: res.code, headers: h, body: res.body }
 }
 
 // Atiende una petición ya parseada: corre los middlewares, busca la ruta que casa y ejecuta su handler;
 // 404 si ninguna casa. Devuelve la respuesta a enviar.
 fn handle(app: App, req: webserver.Request) -> webserver.Response {
-    let res: Res = Res { code: 200, body: b"", content_type: "text/plain; charset=utf-8" };
-    var ctx: Ctx = Ctx { method: req.method, path: req.path, params: [], req: req };
+  let res: Res = Res { code: 200, body: b"", content_type: "text/plain; charset=utf-8" };
+  var ctx: Ctx = Ctx { method: req.method, path: req.path, params: [], req: req };
 
-    // Middlewares: si alguno devuelve false, se corta y se responde lo que haya dejado.
-    var seguir: bool = true;
-    var m: int = 0;
-    while (seguir && m < len(app.middlewares)) {
-        let mw: fn(Ctx, Res) -> bool = app.middlewares[m];
-        if (!mw(ctx, res)) {
-            seguir = false;
-        }
-        m = m + 1;
+  // Middlewares: si alguno devuelve false, se corta y se responde lo que haya dejado.
+  var seguir: bool = true;
+  var m: int = 0;
+  while (seguir && m < len(app.middlewares)) {
+    let mw: fn(Ctx, Res) -> bool = app.middlewares[m];
+    if (!mw(ctx, res)) {
+      seguir = false;
     }
-    if (!seguir) {
-        return build_response(res);
-    }
+    m = m + 1;
+  }
+  if (!seguir) {
+    return build_response(res);
+  }
 
-    // Enrutado: primera ruta cuyo método y patrón casan.
-    let path_segs: [string] = split_path(req.path);
-    var j: int = 0;
-    while (j < len(app.routes)) {
-        let rt: Route = app.routes[j];
-        if (rt.method == req.method) {
-            match (match_route(rt.segments, path_segs)) {
-                Option.Some(ps) => {
-                    ctx.params = ps;
-                    rt.handler(ctx, res);
-                    return build_response(res);
-                },
-                Option.None => { },
-            }
-        }
-        j = j + 1;
+  // Enrutado: primera ruta cuyo método y patrón casan.
+  let path_segs: [string] = split_path(req.path);
+  var j: int = 0;
+  while (j < len(app.routes)) {
+    let rt: Route = app.routes[j];
+    if (rt.method == req.method) {
+      match (match_route(rt.segments, path_segs)) {
+        Option.Some(ps) => {
+          ctx.params = ps;
+          rt.handler(ctx, res);
+          return build_response(res);
+        },
+        Option.None => { },
+      }
     }
+    j = j + 1;
+  }
 
-    // Ninguna ruta casó.
-    res.code = 404;
-    res.text("Not Found");
-    build_response(res)
+  // Ninguna ruta casó.
+  res.code = 404;
+  res.text("Not Found");
+  build_response(res)
 }
 
 // Arranca el servidor: cada conexión, en su fibra, pasa por middlewares + enrutado. **Solo VM.**
 pub fn listen(app: App, host: string, port: int) -> Result<int, string> {
-    webserver.serve_raw(host, port, fn(req: webserver.Request, conn: int) {
-    match (webserver.send_response(conn, handle(app, req))) {
-        Result.Ok(_) => { },
-        Result.Err(e) => {
-            eprint("respuesta: " + e);
-        },
-    }
+  webserver.serve_raw(host, port, fn(req: webserver.Request, conn: int) {
+  match (webserver.send_response(conn, handle(app, req))) {
+    Result.Ok(_) => { },
+    Result.Err(e) => {
+      eprint("respuesta: " + e);
+    },
+  }
 })
 }

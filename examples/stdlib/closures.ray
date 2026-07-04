@@ -3,37 +3,37 @@
 // creó, y mutarla se ve a través de la closure.
 // Contador con estado: 'n' sobrevive a 'contador' y persiste entre llamadas.
 fn contador() -> fn() -> int {
-    var n: int = 0;
-    fn() -> int {
-    n = n + 1;  // muta la variable capturada
-    n
+  var n: int = 0;
+  fn() -> int {
+  n = n + 1;  // muta la variable capturada
+  n
 }
 }
 
 // Captura transitiva: 'x' es local de 'sumador'; la closure interna lo captura.
 fn sumador(x: int) -> fn(int) -> int {
-    fn(y: int) -> int { x + y }
+  fn(y: int) -> int { x + y }
 }
 
 fn main() -> int {
-    // Cada 'contador()' crea su PROPIA celda 'n' independiente.
-    let c1: fn() -> int = contador();
-    let c2: fn() -> int = contador();
-    print(c1());  // 1
-    print(c1());  // 2
-    print(c1());  // 3
-    print(c2());  // 1  (c2 tiene su propio n)
-    print(c1());  // 4
+  // Cada 'contador()' crea su PROPIA celda 'n' independiente.
+  let c1: fn() -> int = contador();
+  let c2: fn() -> int = contador();
+  print(c1());  // 1
+  print(c1());  // 2
+  print(c1());  // 3
+  print(c2());  // 1  (c2 tiene su propio n)
+  print(c1());  // 4
 
-    // La función devuelta recuerda 'x'.
-    let add10: fn(int) -> int = sumador(10);
-    let add100: fn(int) -> int = sumador(100);
-    print(add10(5));  // 15
-    print(add100(5));  // 105
+  // La función devuelta recuerda 'x'.
+  let add10: fn(int) -> int = sumador(10);
+  let add100: fn(int) -> int = sumador(100);
+  print(add10(5));  // 15
+  print(add100(5));  // 105
 
-    // Closure capturando un 'let' del propio main.
-    let base: int = 1000;
-    let f: fn(int) -> int = fn(d: int) -> int { base + d };
-    print(f(7));  // 1007
-    0
+  // Closure capturando un 'let' del propio main.
+  let base: int = 1000;
+  let f: fn(int) -> int = fn(d: int) -> int { base + d };
+  print(f(7));  // 1007
+  0
 }

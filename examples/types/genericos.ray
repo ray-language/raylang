@@ -19,14 +19,14 @@ fn doble(n: int) -> int { n * 2 }
 fn negar(b: bool) -> bool { !b }
 
 fn main() -> int {
-    let a: int = identidad(5);  // T = int, inferido del argumento
-    let b: bool = identidad(true);  // T = bool
+  let a: int = identidad(5);  // T = int, inferido del argumento
+  let b: bool = identidad(true);  // T = bool
 
-    print(b);  // true
-    print(aplicar(negar, false));  // true  (T=bool, U=bool)
+  print(b);  // true
+  print(aplicar(negar, false));  // true  (T=bool, U=bool)
 
-    let xs: [int] = par(10, 20);  // T = int
-    print(ultimo(xs));  // 20
+  let xs: [int] = par(10, 20);  // T = int
+  print(ultimo(xs));  // 20
 
-    a + aplicar(doble, 18) + ultimo(xs)  // 5 + 36 + 20 = 61
+  a + aplicar(doble, 18) + ultimo(xs)  // 5 + 36 + 20 = 61
 }

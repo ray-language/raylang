@@ -6,52 +6,52 @@ from base64 import base64url, base64url_decode;
 from hex import hex_encode, hex_decode;
 
 fn main() {
-    // --- HMAC-SHA256 (RFC 4231 §4.3 + vectores de openssl) ---
-    print(hmac_sha256_hex(to_bytes("Jefe"), to_bytes("what do ya want for nothing?")));
-    // 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
-    print(hmac_sha256_hex(to_bytes("key"), to_bytes("The quick brown fox jumps over the lazy dog")));
-    // f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
-    // Clave más larga que el bloque (>64 octetos) → se hashea antes.
-    print(hmac_sha256_hex(to_bytes("clave-larguisima-de-mas-de-sesenta-y-cuatro-octetos-para-forzar-el-hash-previo"), to_bytes("mensaje")));
-    // 7d5c78edf5aae49e5d1bf1106e250485811585bcad0d78ebbea235d9f320a0dd
-    // --- base64url (sin relleno, alfabeto URL-safe) ---
-    print(base64url(hex_decode_ok("4d616e")));  // TWFu  ("Man")
-    print(base64url([251, 255, 191]));  // -_-_  (ejerce '-' y '_')
-    print(base64url(str_octets("{\"alg\":\"HS256\"}")));  // eyJhbGciOiJIUzI1NiJ9 (cabecera JWT)
+  // --- HMAC-SHA256 (RFC 4231 §4.3 + vectores de openssl) ---
+  print(hmac_sha256_hex(to_bytes("Jefe"), to_bytes("what do ya want for nothing?")));
+  // 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843
+  print(hmac_sha256_hex(to_bytes("key"), to_bytes("The quick brown fox jumps over the lazy dog")));
+  // f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
+  // Clave más larga que el bloque (>64 octetos) → se hashea antes.
+  print(hmac_sha256_hex(to_bytes("clave-larguisima-de-mas-de-sesenta-y-cuatro-octetos-para-forzar-el-hash-previo"), to_bytes("mensaje")));
+  // 7d5c78edf5aae49e5d1bf1106e250485811585bcad0d78ebbea235d9f320a0dd
+  // --- base64url (sin relleno, alfabeto URL-safe) ---
+  print(base64url(hex_decode_ok("4d616e")));  // TWFu  ("Man")
+  print(base64url([251, 255, 191]));  // -_-_  (ejerce '-' y '_')
+  print(base64url(str_octets("{\"alg\":\"HS256\"}")));  // eyJhbGciOiJIUzI1NiJ9 (cabecera JWT)
 
-    // --- round-trip: base64url_decode(base64url(x)) == x ---
-    let original = hmac_sha256(to_bytes("key"), to_bytes("dato"));
-    match (base64url_decode(base64url(original))) {
-        Result.Ok(vuelta) => print(hex_encode(vuelta) == hex_encode(original)),  // true
-        Result.Err(e) => print(e),
-    }
+  // --- round-trip: base64url_decode(base64url(x)) == x ---
+  let original = hmac_sha256(to_bytes("key"), to_bytes("dato"));
+  match (base64url_decode(base64url(original))) {
+    Result.Ok(vuelta) => print(hex_encode(vuelta) == hex_encode(original)),  // true
+    Result.Err(e) => print(e),
+  }
 
-    // --- hex round-trip ---
-    match (hex_decode("deadbeef")) {
-        Result.Ok(o) => print(hex_encode(o)),  // deadbeef
-        Result.Err(e) => print(e),
-    }
+  // --- hex round-trip ---
+  match (hex_decode("deadbeef")) {
+    Result.Ok(o) => print(hex_encode(o)),  // deadbeef
+    Result.Err(e) => print(e),
+  }
 }
 
 // Octetos de un string.
 fn str_octets(s: string) -> [int] {
-    let b = to_bytes(s);
-    var out: [int] = [];
-    var i = 0;
-    while (i < len(b)) {
-        push(out, b[i]);
-        i = i + 1;
-    }
-    out
+  let b = to_bytes(s);
+  var out: [int] = [];
+  var i = 0;
+  while (i < len(b)) {
+    push(out, b[i]);
+    i = i + 1;
+  }
+  out
 }
 
 // hex_decode que asume entrada válida (para la demo).
 fn hex_decode_ok(s: string) -> [int] {
-    match (hex_decode(s)) {
-        Result.Ok(o) => o,
-        Result.Err(e) => {
-            panic(e);
-            []
-        },
-    }
+  match (hex_decode(s)) {
+    Result.Ok(o) => o,
+    Result.Err(e) => {
+      panic(e);
+      []
+    },
+  }
 }

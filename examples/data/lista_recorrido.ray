@@ -1,7 +1,6 @@
 // Recorrer un enum RECURSIVO con match: el caso estrella de los tipos suma. Cada
 // función casa sobre la lista, liga (cabeza, resto) y recurre sobre el resto.
 // (M5 — corre igual con el intérprete y con la VM: `--vm`.)
-
 enum Lista {
     Cons(int, Lista),
     Nil,
@@ -10,14 +9,14 @@ enum Lista {
 fn longitud(xs: Lista) -> int {
     match (xs) {
         Lista.Cons(_, resto) => 1 + longitud(resto),
-        Lista.Nil            => 0,
+        Lista.Nil => 0,
     }
 }
 
 fn suma(xs: Lista) -> int {
     match (xs) {
         Lista.Cons(cabeza, resto) => cabeza + suma(resto),
-        Lista.Nil                 => 0,
+        Lista.Nil => 0,
     }
 }
 
@@ -25,15 +24,15 @@ fn suma(xs: Lista) -> int {
 fn contiene(xs: Lista, n: int) -> bool {
     match (xs) {
         Lista.Cons(cabeza, resto) => if (cabeza == n) { true } else { contiene(resto, n) },
-        Lista.Nil                 => false,
+        Lista.Nil => false,
     }
 }
 
 fn main() -> int {
     let xs: Lista = Lista.Cons(10, Lista.Cons(20, Lista.Cons(30, Lista.Nil)));
-    print(longitud(xs));      // 3
-    print(suma(xs));          // 60
+    print(longitud(xs));  // 3
+    print(suma(xs));  // 60
     print(contiene(xs, 20));  // true
     print(contiene(xs, 99));  // false
-    suma(xs)                  // código de salida 60
+    suma(xs)  // código de salida 60
 }

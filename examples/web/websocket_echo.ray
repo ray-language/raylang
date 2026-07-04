@@ -5,18 +5,23 @@
 // Imprime el puerto efímero en la primera línea; luego acepta conexiones y, por cada una, completa el
 // handshake y reenvía (eco) cada trama de texto hasta que el cliente cierra. Una conexión a la vez
 // (secuencial: suficiente para un demo; la versión concurrente usaría `spawn` como webserver.ray).
-
 import websocket;
 
 // Completa el handshake en `conn` (lee la petición de upgrade, responde 101). True si fue bien.
 fn handshake(conn: int) -> bool {
     match (socket_read(conn)) {
-        Result.Err(e) => { eprint(e); false },
+        Result.Err(e) => {
+            eprint(e);
+            false
+        },
         Result.Ok(req) => {
             let clave = websocket.extract_key(req);
             match (socket_write(conn, websocket.handshake_response(clave))) {
                 Result.Ok(_) => true,
-                Result.Err(e) => { eprint(e); false },
+                Result.Err(e) => {
+                    eprint(e);
+                    false
+                },
             }
         },
     }
@@ -27,27 +32,36 @@ fn eco(conn: int) {
     var seguir = true;
     while (seguir) {
         match (socket_read_bytes(conn)) {
-            Result.Err(_) => { seguir = false; },
+            Result.Err(_) => {
+                seguir = false;
+            },
             Result.Ok(datos) => {
                 if (len(datos) < 2) {
-                    seguir = false; // conexión cerrada o trama incompleta
+                    seguir = false;  // conexión cerrada o trama incompleta
                 } else {
                     let f = websocket.decode_frame(datos);
                     if (f.opcode == websocket.op_close()) {
                         // Devuelve un close de cortesía y termina esta conexión.
                         let cierre = websocket.encode_frame(websocket.op_close(), to_bytes(""));
-                        match (socket_write_bytes(conn, cierre)) { Result.Ok(_) => {}, Result.Err(_) => {}, }
+                        match (socket_write_bytes(conn, cierre)) {
+                            Result.Ok(_) => { },
+                            Result.Err(_) => { },
+                        }
                         seguir = false;
                     } else {
                         // Eco: reenvía el mismo texto en una trama de texto del servidor.
                         match (from_utf8(f.payload)) {
                             Result.Ok(txt) => {
                                 match (socket_write_bytes(conn, websocket.encode_text(txt))) {
-                                    Result.Ok(_) => {},
-                                    Result.Err(_) => { seguir = false; },
+                                    Result.Ok(_) => { },
+                                    Result.Err(_) => {
+                                        seguir = false;
+                                    },
                                 }
                             },
-                            Result.Err(_) => { seguir = false; },
+                            Result.Err(_) => {
+                                seguir = false;
+                            },
                         }
                     }
                 }
@@ -58,15 +72,23 @@ fn eco(conn: int) {
 
 fn main() -> int {
     match (tcp_listen("127.0.0.1", 0)) {
-        Result.Err(e) => { eprint("no se pudo escuchar: " + e); 1 },
+        Result.Err(e) => {
+            eprint("no se pudo escuchar: " + e);
+            1
+        },
         Result.Ok(srv) => {
-            print(to_string(local_port(srv))); // primera línea: el puerto efímero
+            print(to_string(local_port(srv)));  // primera línea: el puerto efímero
             var seguir = true;
             while (seguir) {
                 match (tcp_accept(srv)) {
-                    Result.Err(e) => { eprint(e); seguir = false; },
+                    Result.Err(e) => {
+                        eprint(e);
+                        seguir = false;
+                    },
                     Result.Ok(conn) => {
-                        if (handshake(conn)) { eco(conn); }
+                        if (handshake(conn)) {
+                            eco(conn);
+                        }
                         close(conn);
                     },
                 }

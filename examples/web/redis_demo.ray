@@ -3,23 +3,25 @@
 // contra un servidor RESP de juguete (en Rust), por ambos motores.
 //
 //   raylang --vm examples/web/redis_demo.ray 6379   # contra un Redis real en el 6379
-
 from redis import connect, command, close_conn, Conn, Reply, reply_str;
 
 fn main() -> int {
     let puerto = puerto_de_args();
     match (connect("127.0.0.1", puerto)) {
-        Result.Err(e) => { eprint("no se pudo conectar: " + e); 1 },
+        Result.Err(e) => {
+            eprint("no se pudo conectar: " + e);
+            1
+        },
         Result.Ok(c) => {
-            print(reply_str(ejec(c, ["PING"])));                          // PONG
-            print(reply_str(ejec(c, ["SET", "clave", "valor"])));         // OK
-            print(reply_str(ejec(c, ["GET", "clave"])));                  // valor
-            print(reply_str(ejec(c, ["GET", "noexiste"])));               // (nil)
-            print(reply_str(ejec(c, ["INCR", "contador"])));              // 1
-            print(reply_str(ejec(c, ["INCR", "contador"])));              // 2
-            print(reply_str(ejec(c, ["RPUSH", "lista", "a", "b", "c"]))); // 3
-            print(reply_str(ejec(c, ["LRANGE", "lista", "0", "-1"])));    // [a, b, c]
-            print(reply_str(ejec(c, ["DEL", "clave"])));                  // 1
+            print(reply_str(ejec(c, ["PING"])));  // PONG
+            print(reply_str(ejec(c, ["SET", "clave", "valor"])));  // OK
+            print(reply_str(ejec(c, ["GET", "clave"])));  // valor
+            print(reply_str(ejec(c, ["GET", "noexiste"])));  // (nil)
+            print(reply_str(ejec(c, ["INCR", "contador"])));  // 1
+            print(reply_str(ejec(c, ["INCR", "contador"])));  // 2
+            print(reply_str(ejec(c, ["RPUSH", "lista", "a", "b", "c"])));  // 3
+            print(reply_str(ejec(c, ["LRANGE", "lista", "0", "-1"])));  // [a, b, c]
+            print(reply_str(ejec(c, ["DEL", "clave"])));  // 1
             close_conn(c);
             0
         },
@@ -30,7 +32,10 @@ fn main() -> int {
 fn ejec(c: Conn, args: [string]) -> Reply {
     match (command(c, args)) {
         Result.Ok(r) => r,
-        Result.Err(e) => { panic(e); Reply.Nil },
+        Result.Err(e) => {
+            panic(e);
+            Reply.Nil
+        },
     }
 }
 

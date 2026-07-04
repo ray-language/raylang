@@ -1,6 +1,5 @@
 // Verificación determinista del framing/handshake de WebSocket (M19.3c), sin red.
 // Lo ejecuta `tests/websocket_cli.rs`; cada línea de salida se compara con su referencia.
-
 from websocket import accept_key, extract_key, handshake_response, decode_frame, encode_text, encode_frame, op_close, Frame;
 
 // Texto de una carga `bytes` (asumiendo UTF-8 válido; aborta si no).
@@ -18,7 +17,7 @@ fn hex(b: bytes) -> string {
     var i = 0;
     while (i < len(b)) {
         let o = b[i];
-        s = s + to_string(digitos[(o >> 4) & 15]);
+        s = s + to_string(digitos[o >> 4 & 15]);
         s = s + to_string(digitos[o & 15]);
         i = i + 1;
     }
@@ -28,25 +27,25 @@ fn hex(b: bytes) -> string {
 fn main() {
     // --- Handshake (ejemplo canónico del RFC 6455 §1.3) ---
     let req = "GET /chat HTTP/1.1\r\nHost: server.example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
-    print(extract_key(req));                 // dGhlIHNhbXBsZSBub25jZQ==
-    print(accept_key(extract_key(req)));     // s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+    print(extract_key(req));  // dGhlIHNhbXBsZSBub25jZQ==
+    print(accept_key(extract_key(req)));  // s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
     // La línea de estado de la respuesta de upgrade.
-    print(split(handshake_response("dGhlIHNhbXBsZSBub25jZQ=="), "\r\n")[0]); // HTTP/1.1 101 Switching Protocols
+    print(split(handshake_response("dGhlIHNhbXBsZSBub25jZQ=="), "\r\n")[0]);  // HTTP/1.1 101 Switching Protocols
 
     // --- Decodificar una trama de texto ENMASCARADA del cliente ("Hi") ---
     // b0=0x81 (FIN+texto), b1=0x82 (mask+len 2), clave 37 fa 21 3d, carga 'H'^37='7f', 'i'^fa='93'.
     let trama_cliente = bytes_of([129, 130, 55, 250, 33, 61, 127, 147]);
     let f = decode_frame(trama_cliente);
-    print(texto(f.payload));                 // Hi
-    print(to_string(f.opcode));              // 1
-    print(to_string(f.fin));                 // true
+    print(texto(f.payload));  // Hi
+    print(to_string(f.opcode));  // 1
+    print(to_string(f.fin));  // true
 
     // --- Codificar una trama de texto del servidor (sin máscara) ---
-    print(hex(encode_text("Hi")));           // 81024869  (FIN+texto, len 2, "Hi")
+    print(hex(encode_text("Hi")));  // 81024869  (FIN+texto, len 2, "Hi")
     // Carga de 126 octetos → longitud extendida de 16 bits.
-    print(hex(encode_frame(op_close(), to_bytes(""))));   // 8800  (close, sin carga)
+    print(hex(encode_frame(op_close(), to_bytes(""))));  // 8800  (close, sin carga)
 
     // Round-trip: decodificar lo que el servidor codifica (las tramas del servidor no van enmascaradas).
     let g = decode_frame(encode_text("pong!"));
-    print(texto(g.payload));                 // pong!
+    print(texto(g.payload));  // pong!
 }

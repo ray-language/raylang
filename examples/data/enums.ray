@@ -1,7 +1,6 @@
 // Tipos suma (enum): una variante de varias, cada una con su payload posicional.
 // M5.1 permite CONSTRUIR, pasar e imprimir variantes; consumirlas con `match`
 // llega en M5.2. Las variantes se nombran cualificadas: Enum.Variante.
-
 // Una figura es UNA de estas formas. El payload va entre paréntesis (posicional);
 // `Punto` no lleva datos (variante unit).
 enum Figura {
@@ -29,17 +28,13 @@ fn main() {
     let r: Figura = Figura.Rect(3.0, 4.0);
     let p: Figura = Figura.Punto;
 
-    print(c);   // Figura.Circulo(2)
-    print(r);   // Figura.Rect(3, 4)
-    print(p);   // Figura.Punto
+    print(c);  // Figura.Circulo(2)
+    print(r);  // Figura.Rect(3, 4)
+    print(p);  // Figura.Punto
 
     // Un arreglo de eventos: enums como elementos de [T].
-    let eventos: [Evento] = [
-        Evento.Click(10, 20),
-        Evento.Tecla("Enter"),
-        Evento.Cerrar
-    ];
-    print(eventos[0]);          // Evento.Click(10, 20)
-    print(reflejar(eventos[1])); // Evento.Tecla(Enter)
-    print(eventos[2]);          // Evento.Cerrar
+    let eventos: [Evento] = [Evento.Click(10, 20), Evento.Tecla("Enter"), Evento.Cerrar];
+    print(eventos[0]);  // Evento.Click(10, 20)
+    print(reflejar(eventos[1]));  // Evento.Tecla(Enter)
+    print(eventos[2]);  // Evento.Cerrar
 }

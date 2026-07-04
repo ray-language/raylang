@@ -11,7 +11,6 @@
 // sobre una lista fija que incluye canales cerrados, `select` los elegiría una y otra vez (el idiom de
 // Go es "poner ese caso a nil"; aquí: quitar el canal cerrado de la lista). Para no liar el ejemplo,
 // estas fuentes NO cierran: el consumidor lee un número conocido de valores.
-
 fn fuente(ch: Channel<int>, base: int, cuantos: int) {
     var i = 0;
     while (i < cuantos) {
@@ -23,8 +22,12 @@ fn fuente(ch: Channel<int>, base: int, cuantos: int) {
 fn main() -> int {
     let a: Channel<int> = channel();
     let b: Channel<int> = channel();
-    spawn(fn() { fuente(a, 100, 2); });   // 100, 101
-    spawn(fn() { fuente(b, 200, 2); });   // 200, 201
+    spawn(fn() {
+    fuente(a, 100, 2);  // 100, 101
+});
+    spawn(fn() {
+    fuente(b, 200, 2);  // 200, 201
+});
 
     let chs: [Channel<int>] = [a, b];
     var total = 0;
@@ -33,11 +36,14 @@ fn main() -> int {
     while (n < 4) {
         let i = select(chs);
         match (recv(chs[i])) {
-            Option.Some(v) => { print(v); total = total + v; },
-            Option.None => {},
+            Option.Some(v) => {
+                print(v);
+                total = total + v;
+            },
+            Option.None => { },
         }
         n = n + 1;
     }
-    print(total);   // 100+101+200+201 = 602
+    print(total);  // 100+101+200+201 = 602
     total
 }

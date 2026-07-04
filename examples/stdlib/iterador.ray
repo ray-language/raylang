@@ -1,7 +1,6 @@
 // Iteradores de usuario (M40.2): un tipo que implementa `Iterator<T>` es iterable con `for x in it`.
 // El bucle llama a `next(self) -> Option<T>` hasta `None`, ligando cada elemento. Como los structs
 // son valores de referencia con campos mutables, `next` avanza el estado del propio iterador.
-
 // Un contador de `desde` (inclusivo) a `hasta` (exclusivo) que produce enteros.
 struct Rango {
     actual: int,
@@ -68,65 +67,63 @@ fn main() -> int {
     for x in xs.iter() {
         total = total + x;
     }
-    print(total); // 23
+    print(total);  // 23
 
     // `range` como valor: se puede guardar y recorrer igual que cualquier iterador.
     var fact = 1;
     for i in range(1, 6) {
         fact = fact * i;
     }
-    print(fact); // 120
+    print(fact);  // 120
 
     // Adaptadores PEREZOSOS (M40.2c): `.map()` y `.filter()` son métodos de TODO iterador y
     // devuelven otro iterador que solo calcula al recorrerse. Se encadenan. Aquí: de 1..21, elevar
     // al cuadrado, quedarnos con los múltiplos de 10, y sumarlos.
     var s = 0;
-    let cadena = range(1, 21)
-        .map(fn(n: int) -> int { n * n })
-        .filter(fn(n: int) -> bool { n % 10 == 0 });
+    let cadena = range(1, 21).map(fn(n: int) -> int { n * n }).filter(fn(n: int) -> bool { n % 10 == 0 });
     for x in cadena {
         s = s + x;
     }
-    print(s); // 100 + 400 = 500  (10² y 20²)
+    print(s);  // 100 + 400 = 500  (10² y 20²)
 
     // `.map()` puede cambiar el tipo de elemento (int -> string). Nada se calcula hasta el `for`.
     var linea = "";
     for t in [1, 2, 3].iter().map(fn(n: int) -> string { to_string(n * 10) }) {
         linea = linea + t + " ";
     }
-    print(linea); // "10 20 30 "
+    print(linea);  // "10 20 30 "
 
     // Operaciones TERMINALES: `.fold()` reduce a un valor, `.collect()` materializa a un arreglo.
     // `fold` puede cambiar de tipo (aquí int -> string), acumulando de izquierda a derecha.
     let concat = range(1, 5).fold("", fn(a: string, x: int) -> string { a + to_string(x) });
-    print(concat); // "1234"
+    print(concat);  // "1234"
 
     // `.collect()` cierra la cadena perezosa devolviendo un `[int]` de verdad.
     let cuadrados = range(1, 6).map(fn(n: int) -> int { n * n }).collect();
-    print(len(cuadrados)); // 5
-    print(cuadrados[4]);   // 25
+    print(len(cuadrados));  // 5
+    print(cuadrados[4]);  // 25
 
     // `.take(n)` corta la cadena a los primeros `n` (perezoso: no toca el resto del origen).
     let tres = range(1, 1000000).map(fn(n: int) -> int { n * n }).take(3).collect();
-    print(tres[2]); // 9
+    print(tres[2]);  // 9
 
     // `.enumerate()` empareja cada elemento con su índice; se consume con patrón de tupla en el `for`.
     var etiquetas = "";
     for (i, letra) in ["a", "b", "c"].iter().enumerate() {
         etiquetas = etiquetas + to_string(i) + letra + " ";
     }
-    print(etiquetas); // "0a 1b 2c "
+    print(etiquetas);  // "0a 1b 2c "
 
     // `.skip(n)` descarta los primeros `n`; `.zip(otra)` empareja dos iteradores (se agota con el más
     // corto); `.sum()` (función libre sobre Iter<int>, vía UFCS) suma un iterador de enteros.
-    print(sum(range(1, 101)));               // 5050
-    print(range(0, 100).skip(97).sum());     // 97+98+99 = 294
+    print(sum(range(1, 101)));  // 5050
+    print(range(0, 100).skip(97).sum());  // 97+98+99 = 294
 
     var acopladas = "";
     for (n, nombre) in range(1, 100).zip(["uno", "dos", "tres"].iter()) {
         acopladas = acopladas + to_string(n) + ":" + nombre + " ";
     }
-    print(acopladas); // "1:uno 2:dos 3:tres "
+    print(acopladas);  // "1:uno 2:dos 3:tres "
 
     suma
 }

@@ -3,7 +3,6 @@
 //
 // 16 octetos aleatorios con dos campos fijos: los 4 bits altos del octeto 6 = 0100 (versión 4) y los
 // 2 bits altos del octeto 8 = 10 (variante RFC 4122). Formato canónico 8-4-4-4-12 en hex minúscula.
-
 from std/hex import hex_encode;
 
 pub fn uuid_v4() -> string {
@@ -13,11 +12,10 @@ pub fn uuid_v4() -> string {
         push(b, random_int(256));
         i = i + 1;
     }
-    b[6] = (b[6] & 15) | 64;   // versión 4: 0x40 en el nibble alto
-    b[8] = (b[8] & 63) | 128;  // variante 10xx: 0x80 en los bits altos
-    let h = hex_encode(b);     // 32 dígitos hex
-    substring(h, 0, 8) + "-" + substring(h, 8, 12) + "-" + substring(h, 12, 16) + "-"
-        + substring(h, 16, 20) + "-" + substring(h, 20, 32)
+    b[6] = b[6] & 15 | 64;  // versión 4: 0x40 en el nibble alto
+    b[8] = b[8] & 63 | 128;  // variante 10xx: 0x80 en los bits altos
+    let h = hex_encode(b);  // 32 dígitos hex
+    substring(h, 0, 8) + "-" + substring(h, 8, 12) + "-" + substring(h, 12, 16) + "-" + substring(h, 16, 20) + "-" + substring(h, 20, 32)
 }
 
 // ¿Es `c` un dígito hexadecimal en minúscula (0-9 a-f)?
@@ -37,10 +35,11 @@ pub fn is_uuid_v4(s: string) -> bool {
     if (s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-') {
         return false;
     }
-    if (s[14] != '4') { // primer dígito del 3.er grupo = versión
+    if (s[14] != '4') {
+        // primer dígito del 3.er grupo = versión
         return false;
     }
-    let v = s[19]; // primer dígito del 4.º grupo = variante (8,9,a,b)
+    let v = s[19];  // primer dígito del 4.º grupo = variante (8,9,a,b)
     if (!(v == '8' || v == '9' || v == 'a' || v == 'b')) {
         return false;
     }

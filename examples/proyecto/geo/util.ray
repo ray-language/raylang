@@ -1,4 +1,3 @@
 // Submódulo de utilidades: examples/proyecto/geo/util.ray  ->  ruta de módulo "geo/util".
 // `pub` exporta; el leaf con el que se accede es el último segmento de la ruta: "util".
-
 pub fn cuadrado(n: int) -> int { n * n }

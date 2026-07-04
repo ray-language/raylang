@@ -15,9 +15,9 @@ fn nueva() -> Pila {
 
 fn empujar(p: Pila, x: int) {
     if (p.tope < len(p.datos)) {
-        p.datos[p.tope] = x;     // reusar ranura existente
+        p.datos[p.tope] = x;  // reusar ranura existente
     } else {
-        push(p.datos, x);        // crecer el arreglo
+        push(p.datos, x);  // crecer el arreglo
     }
     p.tope = p.tope + 1;
 }
@@ -37,14 +37,14 @@ fn main() -> int {
     empujar(p, 10);
     empujar(p, 20);
     empujar(p, 30);
-    print(p.tope);       // 3
+    print(p.tope);  // 3
 
-    print(sacar(p));     // 30
-    print(sacar(p));     // 20
-    print(p.tope);       // 1
-    print(vacia(p));     // false
+    print(sacar(p));  // 30
+    print(sacar(p));  // 20
+    print(p.tope);  // 1
+    print(vacia(p));  // false
 
-    print(sacar(p));     // 10
-    print(vacia(p));     // true
+    print(sacar(p));  // 10
+    print(vacia(p));  // true
     0
 }

@@ -1,6 +1,5 @@
 // Demo de HPACK-Huffman (RFC 7541): codifica cadenas de ejemplo del estándar y verifica que el
 // resultado coincide byte a byte con los vectores oficiales, y que decodificar recupera el original.
-
 from huffman import huffman_encode, huffman_decode;
 from hex import hex_encode;
 
@@ -21,21 +20,27 @@ fn probar(s: string) {
             var ok = len(dec) == len(orig);
             var i = 0;
             while (i < len(orig)) {
-                if (dec[i] != orig[i]) { ok = false; }
+                if (dec[i] != orig[i]) {
+                    ok = false;
+                }
                 i = i + 1;
             }
-            if (ok) { print("roundtrip ok"); } else { print("roundtrip FALLO"); }
+            if (ok) {
+                print("roundtrip ok");
+            } else {
+                print("roundtrip FALLO");
+            }
         },
         Result.Err(e) => print("decode err: " + e),
     }
 }
 
 fn main() {
-    probar("www.example.com");            // C.4.1: f1e3c2e5f23a6ba0ab90f4ff
-    probar("no-cache");                   // C.4.2: a8eb10649cbf
-    probar("custom-key");                 // C.4.3 (name): 25a849e95ba97d7f
-    probar("custom-value");               // C.4.3 (value): 25a849e95bb8e8b4bf
-    probar("private");                    // C.6.1 (cache-control): aec3771a4b
-    probar("Mon, 21 Oct 2013 20:13:21 GMT"); // C.6.1 (date)
-    probar("https://www.example.com");    // C.6.1 (location)
+    probar("www.example.com");  // C.4.1: f1e3c2e5f23a6ba0ab90f4ff
+    probar("no-cache");  // C.4.2: a8eb10649cbf
+    probar("custom-key");  // C.4.3 (name): 25a849e95ba97d7f
+    probar("custom-value");  // C.4.3 (value): 25a849e95bb8e8b4bf
+    probar("private");  // C.6.1 (cache-control): aec3771a4b
+    probar("Mon, 21 Oct 2013 20:13:21 GMT");  // C.6.1 (date)
+    probar("https://www.example.com");  // C.6.1 (location)
 }

@@ -1,7 +1,9 @@
 // StringBuilder y Deque (M40.3c/d), dos colecciones lineales del prelude.
-
 fn dv(o: Option<int>) -> int {
-    match (o) { Option.Some(v) => v, Option.None => 0 - 1, }
+    match (o) {
+        Option.Some(v) => v,
+        Option.None => 0 - 1,
+    }
 }
 
 fn main() -> int {
@@ -14,7 +16,7 @@ fn main() -> int {
         sb.sb_push("\n");
         i = i + 1;
     }
-    print(sb.sb_build()); // fila1\nfila2\n…\nfila5\n
+    print(sb.sb_build());  // fila1\nfila2\n…\nfila5\n
     print(sb_count(sb));  // 15 (3 trozos × 5)
 
     // Deque: cola doble. Como COLA (FIFO): push_back + pop_front.
@@ -22,15 +24,15 @@ fn main() -> int {
     deque_push_back(cola, 10);
     deque_push_back(cola, 20);
     deque_push_back(cola, 30);
-    print(dv(deque_pop_front(cola))); // 10
-    print(dv(deque_pop_front(cola))); // 20
+    print(dv(deque_pop_front(cola)));  // 10
+    print(dv(deque_pop_front(cola)));  // 20
 
     // Como PILA (LIFO): push_back + pop_back.
     let pila: Deque<string> = deque_new();
     pila.deque_push_back("a");
     pila.deque_push_back("b");
     match (deque_pop_back(pila)) {
-        Option.Some(s) => print(s), // "b"
+        Option.Some(s) => print(s),  // "b"
         Option.None => print("vacía"),
     }
 
@@ -39,8 +41,8 @@ fn main() -> int {
     deque_push_back(d, 2);
     deque_push_front(d, 1);
     deque_push_front(d, 0);
-    print(deque_len(d));              // 3
-    print(dv(deque_peek_front(d)));   // 0
+    print(deque_len(d));  // 3
+    print(dv(deque_peek_front(d)));  // 0
 
     0
 }

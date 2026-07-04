@@ -4,20 +4,27 @@
 // Un frame HTTP/2 = cabecera de 9 octetos (longitud 24 bits BE + tipo 8 + flags 8 + R 1 + stream_id 31)
 // + carga útil. Esta capa codifica/parsea frames y la "connection preface" del cliente. La compresión de
 // cabeceras (HPACK) vive en `hpack.ray`; juntas permiten construir una petición HTTP/2 / gRPC.
-
 // Tipos de frame (RFC 7540 §6).
 pub fn ft_data() -> int { 0 }
+
 pub fn ft_headers() -> int { 1 }
+
 pub fn ft_rst_stream() -> int { 3 }
+
 pub fn ft_settings() -> int { 4 }
+
 pub fn ft_ping() -> int { 6 }
+
 pub fn ft_goaway() -> int { 7 }
+
 pub fn ft_window_update() -> int { 8 }
 
 // Flags comunes.
-pub fn fl_end_stream() -> int { 1 }   // DATA/HEADERS
+pub fn fl_end_stream() -> int { 1 }  // DATA/HEADERS
+
 pub fn fl_end_headers() -> int { 4 }  // HEADERS
-pub fn fl_ack() -> int { 1 }          // SETTINGS/PING
+
+pub fn fl_ack() -> int { 1 }  // SETTINGS/PING
 
 // La "connection preface" del cliente (RFC 7540 §3.5): la cadena mágica que abre toda conexión HTTP/2.
 pub fn preface() -> bytes {
@@ -36,14 +43,14 @@ pub struct Http2Frame {
 pub fn encode_frame(ftype: int, flags: int, stream_id: int, payload: bytes) -> bytes {
     let plen = len(payload);
     var out: [int] = [];
-    push(out, (plen >> 16) & 255); // longitud (24 bits BE)
-    push(out, (plen >> 8) & 255);
+    push(out, plen >> 16 & 255);  // longitud (24 bits BE)
+    push(out, plen >> 8 & 255);
     push(out, plen & 255);
     push(out, ftype & 255);
     push(out, flags & 255);
-    push(out, (stream_id >> 24) & 127); // R(1)=0 + stream_id alto
-    push(out, (stream_id >> 16) & 255);
-    push(out, (stream_id >> 8) & 255);
+    push(out, stream_id >> 24 & 127);  // R(1)=0 + stream_id alto
+    push(out, stream_id >> 16 & 255);
+    push(out, stream_id >> 8 & 255);
     push(out, stream_id & 255);
     bytes_of(out) + payload
 }
@@ -53,19 +60,14 @@ pub fn parse_frame(data: bytes) -> Result<Http2Frame, string> {
     if (len(data) < 9) {
         return Result.Err("frame HTTP/2 incompleto (cabecera < 9 octetos)");
     }
-    let plen = (data[0] << 16) | (data[1] << 8) | data[2];
+    let plen = data[0] << 16 | data[1] << 8 | data[2];
     let ftype = data[3];
     let flags = data[4];
-    let stream_id = ((data[5] & 127) << 24) | (data[6] << 16) | (data[7] << 8) | data[8];
+    let stream_id = (data[5] & 127) << 24 | data[6] << 16 | data[7] << 8 | data[8];
     if (len(data) < 9 + plen) {
         return Result.Err("frame HTTP/2 truncado (carga incompleta)");
     }
-    Result.Ok(Http2Frame {
-        ftype: ftype,
-        flags: flags,
-        stream_id: stream_id,
-        payload: sub_bytes(data, 9, 9 + plen),
-    })
+    Result.Ok(Http2Frame { ftype: ftype, flags: flags, stream_id: stream_id, payload: sub_bytes(data, 9, 9 + plen) })
 }
 
 // El número de octetos que ocupa un frame en el flujo (9 + longitud de la carga), para iterar varios.
@@ -73,11 +75,10 @@ pub fn frame_size(data: bytes) -> int {
     if (len(data) < 9) {
         return 0;
     }
-    9 + ((data[0] << 16) | (data[1] << 8) | data[2])
+    9 + (data[0] << 16 | data[1] << 8 | data[2])
 }
 
 // --- Atajos de construcción ---
-
 // Un frame SETTINGS vacío (el cliente lo envía tras la preface). Stream 0.
 pub fn settings_empty() -> bytes {
     encode_frame(ft_settings(), 0, 0, b"")

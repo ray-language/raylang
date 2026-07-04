@@ -7,33 +7,36 @@
 //
 // Entrada/salida de octetos como `[int]` (0..255). La clave son 32 octetos, el nonce 12. Importable:
 // `from chacha20 import chacha20_encrypt, chacha20_block;`.
-
 // Rotación de 32 bits a la IZQUIERDA (la que usa ChaCha20).
 fn rotl32(x: u32, n: u32) -> u32 {
-    (x << n) | (x >> (32 - n))
+    x << n | x >> 32 - n
 }
 
 // El "quarter round": el corazón de ChaCha20. Muta 4 palabras del estado `st` en las posiciones a,b,c,d.
 fn quarter_round(st: [u32], a: int, b: int, c: int, d: int) {
-    st[a] = st[a] + st[b];   st[d] = rotl32(st[d] ^ st[a], 16);
-    st[c] = st[c] + st[d];   st[b] = rotl32(st[b] ^ st[c], 12);
-    st[a] = st[a] + st[b];   st[d] = rotl32(st[d] ^ st[a], 8);
-    st[c] = st[c] + st[d];   st[b] = rotl32(st[b] ^ st[c], 7);
+    st[a] = st[a] + st[b];
+    st[d] = rotl32(st[d] ^ st[a], 16);
+    st[c] = st[c] + st[d];
+    st[b] = rotl32(st[b] ^ st[c], 12);
+    st[a] = st[a] + st[b];
+    st[d] = rotl32(st[d] ^ st[a], 8);
+    st[c] = st[c] + st[d];
+    st[b] = rotl32(st[b] ^ st[c], 7);
 }
 
 // Lee 4 octetos de `b` desde el índice `i` como una palabra u32 en little-endian.
 fn word_le(b: [int], i: int) -> u32 {
-    (b[i] as u32) | ((b[i + 1] as u32) << 8) | ((b[i + 2] as u32) << 16) | ((b[i + 3] as u32) << 24)
+    b[i] as u32 | b[i + 1] as u32 << 8 | b[i + 2] as u32 << 16 | b[i + 3] as u32 << 24
 }
 
 // El bloque ChaCha20: dada clave (32 octetos), contador y nonce (12 octetos), produce 64 octetos de
 // flujo de clave. El estado inicial son 16 palabras: 4 constantes + 8 de clave + contador + 3 de nonce.
 pub fn chacha20_block(key: [int], counter: u32, nonce: [int]) -> [int] {
     var st: [u32] = [];
-    push(st, 1634760805 as u32); // "expa" (0x61707865)
+    push(st, 1634760805 as u32);  // "expa" (0x61707865)
     push(st, 857760878 as u32);  // "nd 3" (0x3320646e)
-    push(st, 2036477234 as u32); // "2-by" (0x79622d32)
-    push(st, 1797285236 as u32); // "te k" (0x6b206574)
+    push(st, 2036477234 as u32);  // "2-by" (0x79622d32)
+    push(st, 1797285236 as u32);  // "te k" (0x6b206574)
     var i = 0;
     while (i < 8) {
         push(st, word_le(key, i * 4));
@@ -72,9 +75,9 @@ pub fn chacha20_block(key: [int], counter: u32, nonce: [int]) -> [int] {
     while (i < 16) {
         let w = work[i] + st[i];
         push(out, (w & 255) as int);
-        push(out, ((w >> 8) & 255) as int);
-        push(out, ((w >> 16) & 255) as int);
-        push(out, ((w >> 24) & 255) as int);
+        push(out, (w >> 8 & 255) as int);
+        push(out, (w >> 16 & 255) as int);
+        push(out, (w >> 24 & 255) as int);
         i = i + 1;
     }
     out

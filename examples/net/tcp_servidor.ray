@@ -6,13 +6,12 @@
 //
 // Pruébalo: `cargo run -- --vm examples/net/tcp_servidor.ray` y, en otra terminal,
 // `nc 127.0.0.1 <puerto>` (escribe algo y verás el eco). Necesita red → no entra al oráculo.
-
 // Atiende una conexión: lee un mensaje y responde con eco.
 fn atender(conn: int) {
     match (socket_read(conn)) {
         Result.Ok(msg) => {
             match (socket_write(conn, "eco: " + msg)) {
-                Result.Ok(_) => {},
+                Result.Ok(_) => { },
                 Result.Err(e) => eprint("error al escribir: " + e),
             }
         },
@@ -38,6 +37,9 @@ fn main() -> int {
             close(srv);
             0
         },
-        Result.Err(e) => { eprint("no se pudo escuchar: " + e); 1 },
+        Result.Err(e) => {
+            eprint("no se pudo escuchar: " + e);
+            1
+        },
     }
 }

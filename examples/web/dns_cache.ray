@@ -5,19 +5,21 @@
 // Respeta el TTL como pide el DNS: una entrada se sirve de la caché mientras `now() < expiración`; al
 // caducar (o si nunca se vio) se consulta y se reescribe. Clave de caché = "qtype:nombre". Lleva
 // contadores de aciertos/fallos (útiles para métricas o para verificar el comportamiento).
-
 from dns import Record, DnsResult, query_full;
 
 pub struct Cache {
     server: string,
     port: int,
-    keys: [string],       // "qtype:nombre"
-    records: [[Record]],  // registros cacheados por clave
-    expiry: [int],        // instante de expiración (ms epoch) por clave
+    keys: [string],
+    records: [[Record]],
+    expiry: [int],
     hits: int,
     misses: int,
 }
 
+// "qtype:nombre"
+// registros cacheados por clave
+// instante de expiración (ms epoch) por clave
 pub fn new_cache(server: string, port: int) -> Cache {
     Cache { server: server, port: port, keys: [], records: [], expiry: [], hits: 0, misses: 0 }
 }

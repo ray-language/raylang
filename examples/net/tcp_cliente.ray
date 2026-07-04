@@ -5,7 +5,6 @@
 // en una librería HTTP de raylang; aquí se ve el transporte crudo.
 //
 // Necesita red al ejecutarlo (no es determinista → no entra al oráculo ni a los tests).
-
 // Lee del socket hasta que el servidor cierra (acumulando los trozos).
 fn leer_todo(h: int) -> string {
     var acc: string = "";
@@ -14,7 +13,7 @@ fn leer_todo(h: int) -> string {
         match (socket_read(h)) {
             Result.Ok(trozo) => {
                 if (len(trozo) == 0) {
-                    seguir = false;        // EOF: el servidor cerró
+                    seguir = false;  // EOF: el servidor cerró
                 } else {
                     acc = acc + trozo;
                 }
@@ -45,6 +44,9 @@ fn main() -> int {
             close(h);
             0
         },
-        Result.Err(e) => { eprint("no se pudo conectar: " + e); 1 },
+        Result.Err(e) => {
+            eprint("no se pudo conectar: " + e);
+            1
+        },
     }
 }

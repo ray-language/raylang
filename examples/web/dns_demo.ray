@@ -3,7 +3,6 @@
 // del test); si no, a 8.8.8.8:53 (DNS público real). Lo lanza `tests/dns_cli.rs` por ambos motores.
 //
 //   cargo run -- --vm examples/web/dns_demo.ray        # consulta 8.8.8.8 (red real)
-
 from dns import query_a, query_aaaa, query_mx, query_cname, query_txt, query_ns, query_srv;
 
 fn main() -> int {
@@ -13,8 +12,10 @@ fn main() -> int {
     if (len(a) > 0) {
         server = "127.0.0.1";
         match (parse_int(a[0])) {
-            Option.Some(p) => { port = p; },
-            Option.None => {},
+            Option.Some(p) => {
+                port = p;
+            },
+            Option.None => { },
         }
     }
 

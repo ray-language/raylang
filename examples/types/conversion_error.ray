@@ -7,7 +7,6 @@
 // `From<S>` es un trait con parámetro de tipo (M28.2); su método `desde` no tiene `self` (es
 // asociado; se llama `desde` porque `from` es palabra clave del import). El usuario nunca lo
 // invoca directamente: solo el `?` lo usa al convertir.
-
 enum AppError {
     Lectura(string),
     Vacio,
@@ -26,7 +25,7 @@ fn leer_config(ok: bool) -> Result<int, string> {
 
 // Operación de alto nivel que expone AppError. El `?` convierte el error string -> AppError.
 fn cargar(ok: bool) -> Result<int, AppError> {
-    let valor = leer_config(ok)?;   // string -> AppError automático
+    let valor = leer_config(ok)?;  // string -> AppError automático
     if (valor == 0) {
         return Result.Err(AppError.Vacio);
     }
@@ -44,6 +43,6 @@ fn mostrar(r: Result<int, AppError>) {
 }
 
 fn main() {
-    mostrar(cargar(true));    // ok: 84
-    mostrar(cargar(false));   // error de lectura: no se pudo abrir config
+    mostrar(cargar(true));  // ok: 84
+    mostrar(cargar(false));  // error de lectura: no se pudo abrir config
 }

@@ -1,6 +1,5 @@
 // Demo/verificación de JWT (HS256) y UUID v4 (M20.3). Lo ejecuta `tests/jwt_cli.rs`. La salida es
 // determinista (el JWT con un secreto fijo es reproducible; el UUID se prueba por su FORMA, no su valor).
-
 from jwt import jwt_sign, jwt_verify;
 from uuid import uuid_v4, is_uuid_v4;
 
@@ -14,14 +13,14 @@ fn main() {
 
     // Verificación con el secreto correcto → Ok(payload_json).
     match (jwt_verify(secreto, token)) {
-        Result.Ok(payload) => print(payload), // == claims
+        Result.Ok(payload) => print(payload),  // == claims
         Result.Err(e) => print("ERR: " + e),
     }
 
     // Verificación con un secreto incorrecto → Err("firma inválida").
     match (jwt_verify(to_bytes("otro-secreto"), token)) {
         Result.Ok(_) => print("ERR: debería fallar"),
-        Result.Err(e) => print(e), // firma inválida
+        Result.Err(e) => print(e),  // firma inválida
     }
 
     // Token manipulado (se altera el último carácter de la firma) → Err.
@@ -40,8 +39,8 @@ fn main() {
     // UUID v4: dos generados son válidos por su forma y distintos entre sí.
     let u1 = uuid_v4();
     let u2 = uuid_v4();
-    print(is_uuid_v4(u1) && is_uuid_v4(u2)); // true
-    print(u1 != u2);                          // true (colisión astronómicamente improbable)
+    print(is_uuid_v4(u1) && is_uuid_v4(u2));  // true
+    print(u1 != u2);  // true (colisión astronómicamente improbable)
 }
 
 // Devuelve un carácter distinto al último de `token` (para invertir la firma sin adivinar hex).

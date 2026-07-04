@@ -1,7 +1,6 @@
 // Demo del cliente OAuth2 (M23). Pide un token con el grant client_credentials a un token endpoint
 // (127.0.0.1:<puerto> del test) y muestra el token + la cabecera Bearer + una URL de autorización
 // (esta última es pura, determinista). Lo lanza `tests/oauth2_cli.rs` por ambos motores.
-
 from oauth2 import Token, client_credentials, authorize_url, bearer_header;
 
 fn main() -> int {
@@ -9,19 +8,23 @@ fn main() -> int {
     var port = 8080;
     if (len(a) > 0) {
         match (parse_int(a[0])) {
-            Option.Some(p) => { port = p; },
-            Option.None => {},
+            Option.Some(p) => {
+                port = p;
+            },
+            Option.None => { },
         }
     }
     let token_url = "http://127.0.0.1:" + to_string(port) + "/token";
 
     // URL de autorización (flujo de código) — pura, no toca la red.
-    print(authorize_url("https://auth.example.com/authorize", "mi-cliente",
-                        "https://app.example.com/callback", "read write", "xyz123"));
+    print(authorize_url("https://auth.example.com/authorize", "mi-cliente", "https://app.example.com/callback", "read write", "xyz123"));
 
     // Grant client_credentials contra el token endpoint.
     match (client_credentials(token_url, "mi-cliente", "secreto", "read")) {
-        Result.Err(e) => { eprint(e); 1 },
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
         Result.Ok(t) => {
             print("access_token=" + t.access_token);
             print("token_type=" + t.token_type);

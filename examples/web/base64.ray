@@ -3,7 +3,6 @@
 //
 // Codifica un arreglo de octetos (`[int]`, cada elemento 0..255) en su representación base64
 // estándar (con relleno `=`). Es lo que el handshake de WebSocket necesita para el digest SHA-1.
-
 fn alphabet() -> string { "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" }
 
 // El carácter base64 del valor de 6 bits `idx` (0..63).
@@ -21,10 +20,10 @@ pub fn base64(data: [int]) -> string {
         let b0 = data[i] & 255;
         let b1 = data[i + 1] & 255;
         let b2 = data[i + 2] & 255;
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        out = out + enc_char((triple >> 18) & 63);
-        out = out + enc_char((triple >> 12) & 63);
-        out = out + enc_char((triple >> 6) & 63);
+        let triple = b0 << 16 | b1 << 8 | b2;
+        out = out + enc_char(triple >> 18 & 63);
+        out = out + enc_char(triple >> 12 & 63);
+        out = out + enc_char(triple >> 6 & 63);
         out = out + enc_char(triple & 63);
         i = i + 3;
     }
@@ -33,17 +32,17 @@ pub fn base64(data: [int]) -> string {
     if (rem == 1) {
         let b0 = data[i] & 255;
         let triple = b0 << 16;
-        out = out + enc_char((triple >> 18) & 63);
-        out = out + enc_char((triple >> 12) & 63);
+        out = out + enc_char(triple >> 18 & 63);
+        out = out + enc_char(triple >> 12 & 63);
         out = out + "==";
     } else {
         if (rem == 2) {
             let b0 = data[i] & 255;
             let b1 = data[i + 1] & 255;
-            let triple = (b0 << 16) | (b1 << 8);
-            out = out + enc_char((triple >> 18) & 63);
-            out = out + enc_char((triple >> 12) & 63);
-            out = out + enc_char((triple >> 6) & 63);
+            let triple = b0 << 16 | b1 << 8;
+            out = out + enc_char(triple >> 18 & 63);
+            out = out + enc_char(triple >> 12 & 63);
+            out = out + enc_char(triple >> 6 & 63);
             out = out + "=";
         }
     }
@@ -52,7 +51,6 @@ pub fn base64(data: [int]) -> string {
 
 // --- base64url (RFC 4648 §5): alfabeto URL-safe (`-`/`_` en vez de `+`/`/`) y SIN relleno `=`. ---
 // Es la codificación que usan los JSON Web Tokens (cada segmento es base64url sin padding).
-
 // Reemplaza los caracteres no-URL-safe y quita el relleno de una cadena base64 estándar.
 fn to_url(s: string) -> string {
     var out = "";
@@ -126,17 +124,17 @@ pub fn base64_decode(s: string) -> Result<[int], string> {
     while (i < n) {
         let c = s[i];
         if (c == '=') {
-            i = n;                       // relleno: fin de los datos
+            i = n;  // relleno: fin de los datos
         } else {
             let v = dec_char_std(c);
             if (v < 0) {
                 return Result.Err("carácter base64 inválido");
             }
-            acc = (acc << 6) | v;
+            acc = acc << 6 | v;
             nbits = nbits + 6;
             if (nbits >= 8) {
                 nbits = nbits - 8;
-                push(out, (acc >> nbits) & 255);
+                push(out, acc >> nbits & 255);
             }
             i = i + 1;
         }
@@ -150,18 +148,18 @@ pub fn base64url_decode(s: string) -> Result<[int], string> {
     let n = len(s);
     var out: [int] = [];
     var acc = 0;  // acumulador de bits
-    var nbits = 0; // bits válidos en el acumulador
+    var nbits = 0;  // bits válidos en el acumulador
     var i = 0;
     while (i < n) {
         let v = dec_char(s[i]);
         if (v < 0) {
             return Result.Err("carácter base64url inválido");
         }
-        acc = (acc << 6) | v;
+        acc = acc << 6 | v;
         nbits = nbits + 6;
         if (nbits >= 8) {
             nbits = nbits - 8;
-            push(out, (acc >> nbits) & 255);
+            push(out, acc >> nbits & 255);
         }
         i = i + 1;
     }

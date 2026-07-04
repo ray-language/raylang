@@ -1,27 +1,26 @@
 // Conversiones numéricas con `as` (M27.4): int↔float y char↔int. A diferencia de las tuplas o los
 // genéricos (erasure), un cast SÍ cambia la representación del valor en runtime.
-
 fn main() {
     // int → float: imprescindible para dividir sin truncar.
     let aciertos = 17;
     let total = 20;
-    let ratio = (aciertos as float) / (total as float);
-    print("ratio = ${ratio}");             // ratio = 0.85
+    let ratio = aciertos as float / total as float;
+    print("ratio = " + to_string(ratio));  // ratio = 0.85
 
     // float → int: trunca hacia cero.
-    print("trunc(3.99) = ${3.99 as int}");  // 3
-    print("trunc(-2.7) = ${(0.0 - 2.7) as int}"); // -2
+    print("trunc(3.99) = " + to_string(3.99 as int));  // 3
+    print("trunc(-2.7) = " + to_string((0.0 - 2.7) as int));  // -2
 
     // char → int (code point) e int → char.
     let letra = 'M';
-    print("'M' es el code point ${letra as int}"); // 77
-    print("el code point 90 es ${90 as char}");     // Z
+    print("'M' es el code point " + to_string(letra as int));  // 77
+    print("el code point 90 es " + to_string(90 as char));  // Z
 
     // Cifrado César simple (desplaza 3 posiciones en A–Z) combinando casts + for.
     var cifrado = "";
     for c in "HOLA" {
-        let desplazado = ((c as int) - ('A' as int) + 3) % 26 + ('A' as int);
+        let desplazado = (c as int - 'A' as int + 3) % 26 + 'A' as int;
         cifrado = cifrado + to_string(desplazado as char);
     }
-    print("HOLA cifrado (César +3) = ${cifrado}"); // KROD
+    print("HOLA cifrado (César +3) = " + to_string(cifrado));  // KROD
 }

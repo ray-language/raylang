@@ -10,12 +10,16 @@
 //   cargo run --quiet -- examples/stdlib/ufcs.ray
 //   cargo run --quiet -- --vm examples/stdlib/ufcs.ray
 // (ambos motores devuelven el mismo código de salida)
-
 fn doble(x: int) -> int { x * 2 }
+
 fn inc(x: int) -> int { x + 1 }
+
 fn suma(a: int, b: int) -> int { a + b }
 
-struct Punto { x: int, y: int }
+struct Punto {
+    x: int,
+    y: int,
+}
 
 // 'norma1' no es un campo de Punto: `p.norma1()` se resuelve como UFCS -> norma1(p).
 fn norma1(p: Punto) -> int { p.x + p.y }
@@ -25,27 +29,30 @@ fn cabeza<T>(xs: [T]) -> T { xs[0] }
 
 // La regla "campo gana sobre función libre", en acción. Hay una función libre 'op'...
 fn op(a: int, b: int) -> int { a - b }
+
 // ...y un struct con un CAMPO 'op' (de tipo función). En `m.op(x)` gana el campo.
-struct Maquina { op: fn(int) -> int }
+struct Maquina {
+    op: fn(int) -> int,
+}
 
 fn main() -> int {
     let xs: [int] = [10, 20, 30];
-    let n: int = xs.len();             // builtin como método -> len(xs) = 3
-    let primero: int = xs.cabeza();    // genérica vía UFCS -> cabeza(xs), T = int = 10
+    let n: int = xs.len();  // builtin como método -> len(xs) = 3
+    let primero: int = xs.cabeza();  // genérica vía UFCS -> cabeza(xs), T = int = 10
 
     let v: int = 5;
     let encadenado: int = v.doble().inc().doble();  // doble(inc(doble(5))) = 22
 
     let p: Punto = Punto { x: 7, y: 6 };
-    let m: int = p.norma1();           // UFCS (no es campo) -> norma1(p) = 13
-    let campo: int = p.x;              // sigue siendo acceso a campo = 7
+    let m: int = p.norma1();  // UFCS (no es campo) -> norma1(p) = 13
+    let campo: int = p.x;  // sigue siendo acceso a campo = 7
 
-    let mezcla: int = v.suma(n);       // suma(5, 3) = 8
+    let mezcla: int = v.suma(n);  // suma(5, 3) = 8
 
     // 'op' es campo del struct: gana sobre la función libre 'op'. Se llama al campo,
     // NO op(maq, 41). Sería 'maq - 41' si ganara la libre, lo cual ni siquiera tiparía.
     let maq: Maquina = Maquina { op: fn(x: int) -> int { x + 1 } };
-    let r: int = maq.op(41);           // (maq.op)(41) = 42
+    let r: int = maq.op(41);  // (maq.op)(41) = 42
 
     // 3 + 10 + 22 + 13 + 7 + 8 + 42 = 105
     n + primero + encadenado + m + campo + mezcla + r

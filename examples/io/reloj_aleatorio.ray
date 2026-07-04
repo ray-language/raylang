@@ -2,7 +2,6 @@
 //
 // now()/monotonic()/sleep() (reloj) y random()/random_int() (PRNG propio, SplitMix64).
 // Son NO deterministas (su salida cambia entre ejecuciones); por eso no entran al oráculo.
-
 fn main() -> int {
     // Medir un intervalo con el reloj monótono.
     let t0: int = monotonic();

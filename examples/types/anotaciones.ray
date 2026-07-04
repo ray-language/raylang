@@ -7,23 +7,36 @@
 //   @derive(Show)  genera el impl Show: mostrar(self) -> string (L2).
 //                  Es codegen sobre traits (M9): la anotación crea el impl, M9 lo baja.
 //   @derive(Eq, Show)  pide varios a la vez.
-
 // @derive(Eq) sobre un enum: '==' no compara enums, pero 'igual' (derivado) sí.
 @derive(Eq, Show)
-enum Color { Rojo, Verde, Azul }
+enum Color {
+    Rojo,
+    Verde,
+    Azul,
+}
 
 // @derive(Eq) sobre un struct, y sobre un enum con payload.
 @derive(Eq, Show)
-struct Punto { x: int, y: int }
+struct Punto {
+    x: int,
+    y: int,
+}
 
 @derive(Eq, Show)
-enum Forma { Circulo(int), Rect(int, int) }
+enum Forma {
+    Circulo(int),
+    Rect(int, int),
+}
 
 // Como Color/Punto/Forma implementan Eq (derivado), satisfacen un bound T: Eq.
 fn cuenta_iguales<T: Eq>(a: T, b: T, c: T) -> int {
     var n = 0;
-    if (a.igual(b)) { n = n + 1; }
-    if (a.igual(c)) { n = n + 1; }
+    if (a.igual(b)) {
+        n = n + 1;
+    }
+    if (a.igual(c)) {
+        n = n + 1;
+    }
     n
 }
 
@@ -44,8 +57,8 @@ fn forma_con_payload() -> bool { Forma.Rect(3, 4).igual(Forma.Rect(3, 4)) }
 fn main() -> int {
     let rojo = Color.Rojo;
     // @derive(Show): mostrar() da una representación textual (recursiva en campos/payload).
-    print(rojo.mostrar());                       // Color.Rojo
-    print(Punto { x: 3, y: 4 }.mostrar());       // Punto { x: 3, y: 4 }
-    print(Forma.Rect(3, 4).mostrar());           // Forma.Rect(3, 4)
-    cuenta_iguales(rojo, Color.Rojo, Color.Azul)   // a==b (1), a!=c → 1
+    print(rojo.mostrar());  // Color.Rojo
+    print(Punto { x: 3, y: 4 }.mostrar());  // Punto { x: 3, y: 4 }
+    print(Forma.Rect(3, 4).mostrar());  // Forma.Rect(3, 4)
+    cuenta_iguales(rojo, Color.Rojo, Color.Azul)  // a==b (1), a!=c → 1
 }

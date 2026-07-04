@@ -8,21 +8,28 @@
 // reusando el paso de diccionarios de M9.2. El único caso nuevo —pasar un Caja<int> a otro
 // genérico acotado— se resuelve con un "diccionario anidado": un closure que captura el
 // diccionario interno. Todo son closures (M4); el runtime no cambia.
-
-struct Caja<T> { contenido: T }
+struct Caja<T> {
+    contenido: T,
+}
 
 // 1) Impl genérico SIN bounds: el método no usa T. Vale para cualquier Caja<T>.
-trait Contar { fn contar(self) -> int; }
+trait Contar {
+    fn contar(self) -> int;
+}
+
 impl<T> Contar for Caja<T> {
     fn contar(self) -> int { 1 }
 }
 
 // 2) Impl genérico ACOTADO: Caja<T> es Medir si T lo es. El cuerpo usa T.medir().
-trait Medir { fn medir(self) -> int; }
+trait Medir {
+    fn medir(self) -> int;
+}
 
 impl Medir for int {
     fn medir(self) -> int { self }
 }
+
 impl<T: Medir> Medir for Caja<T> {
     fn medir(self) -> int { self.contenido.medir() + 1 }
 }
@@ -36,17 +43,17 @@ fn medir_dos<X: Medir>(a: X, b: X) -> int {
 fn main() -> int {
     let ci = Caja { contenido: 42 };
     let cs = Caja { contenido: "hola" };
-    print(ci.contar());          // 1   (impl sin bounds; T = int)
-    print(cs.contar());          // 1   (el mismo impl; T = string)
+    print(ci.contar());  // 1   (impl sin bounds; T = int)
+    print(cs.contar());  // 1   (el mismo impl; T = string)
 
     let c = Caja { contenido: 10 };
-    print(c.medir());            // 11  (10 + 1, vía el diccionario interno de int)
+    print(c.medir());  // 11  (10 + 1, vía el diccionario interno de int)
 
     // Caja<Caja<int>>: un diccionario anidado que contiene otro.
     let c2 = Caja { contenido: Caja { contenido: 100 } };
-    print(c2.medir());           // 102 (100 + 1 + 1)
+    print(c2.medir());  // 102 (100 + 1 + 1)
 
-    print(medir_dos(c, c));      // 22  ((10+1) * 2; el closure-diccionario se usa dos veces)
+    print(medir_dos(c, c));  // 22  ((10+1) * 2; el closure-diccionario se usa dos veces)
 
-    c2.medir() + medir_dos(c, c) // código de salida: 102 + 22 = 124
+    c2.medir() + medir_dos(c, c)  // código de salida: 102 + 22 = 124
 }

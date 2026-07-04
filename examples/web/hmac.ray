@@ -4,7 +4,6 @@
 // HMAC(K, m) = SHA256( (K' ^ opad) || SHA256( (K' ^ ipad) || m ) ), donde K' es la clave ajustada
 // al tamaño de bloque (64 octetos en SHA-256): si es más larga se hashea, y se rellena con ceros.
 // Es la base de la firma simétrica: JWT (HS256), cookies firmadas, webhooks, firma de requests.
-
 from sha256 import sha256_octets;
 from std/hex import hex_encode;
 
@@ -45,8 +44,8 @@ pub fn hmac_sha256(key: bytes, msg: bytes) -> [int] {
     var opad: [int] = [];
     var i = 0;
     while (i < block_size()) {
-        push(ipad, k[i] ^ 54); // 0x36
-        push(opad, k[i] ^ 92); // 0x5c
+        push(ipad, k[i] ^ 54);  // 0x36
+        push(opad, k[i] ^ 92);  // 0x5c
         i = i + 1;
     }
     // inner = SHA256(ipad || msg)

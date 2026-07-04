@@ -2,7 +2,6 @@
 // hace el handshake, envía tres mensajes (incluido uno con caracteres no ASCII) y muestra cada eco.
 // Lo lanza `tests/websocket_client_cli.rs` contra `websocket_echo.ray` (servidor raylang) por ambos
 // motores → cliente raylang hablando con servidor raylang.
-
 from websocket_client import connect, connect_tls, send_text, recv_text, close_ws;
 
 fn main() -> int {
@@ -10,8 +9,10 @@ fn main() -> int {
     var port = 8080;
     if (len(a) > 0) {
         match (parse_int(a[0])) {
-            Option.Some(p) => { port = p; },
-            Option.None => {},
+            Option.Some(p) => {
+                port = p;
+            },
+            Option.None => { },
         }
     }
     // El segundo argumento "wss" usa TLS (host "localhost", el CN del cert de prueba).
@@ -28,7 +29,10 @@ fn main() -> int {
         connect(host, port, "/")
     };
     match (conn) {
-        Result.Err(e) => { eprint(e); 1 },
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
         Result.Ok(h) => {
             eco(h, "hola");
             eco(h, "mundo");

@@ -5,15 +5,14 @@
 // la criptografía y el hashing necesitan, eliminando el enmascarado a mano (`& 0xFF`, `& 0xFFFFFFFF`).
 //
 // No hay promoción implícita: mezclar anchos (o u8 con int) es error; se convierte con `as`.
-
 // FNV-1a de 32 bits: el ejemplo canónico de aritmética u32 con wrapping. Sin u32 habría que
 // enmascarar cada paso con `& 0xFFFFFFFF`; aquí el wrapping es automático. Los literales adoptan
 // el ancho por el contexto (M28.3b): `h: u32 = 2166136261` sin escribir `as u32`.
 fn fnv1a(datos: [u8]) -> u32 {
-    var h: u32 = 2166136261;            // offset basis
-    let primo: u32 = 16777619;          // FNV prime
+    var h: u32 = 2166136261;  // offset basis
+    let primo: u32 = 16777619;  // FNV prime
     for b in datos {
-        h = (h ^ (b as u32)) * primo;   // XOR + multiplicación, ambos envuelven a 32 bits
+        h = (h ^ b as u32) * primo;  // XOR + multiplicación, ambos envuelven a 32 bits
     }
     h
 }
@@ -23,14 +22,14 @@ fn main() {
     // adoptan u8 por el tipo declarado (sin `as`).
     let a: u8 = 200;
     let b: u8 = 100;
-    print("u8 wrap: " + to_string((a + b) as int));   // 44
+    print("u8 wrap: " + to_string((a + b) as int));  // 44
 
     // ~ y máscara implícita del ancho.
     let cero: u8 = 0;
-    print("~0u8 = " + to_string((~cero) as int));      // 255
+    print("~0u8 = " + to_string(~cero as int));  // 255
 
     // FNV-1a sobre unos octetos.
-    var datos: [u8] = [104, 105];   // 'h', 'i' (literales coercionados a u8)
+    var datos: [u8] = [104, 105];  // 'h', 'i' (literales coercionados a u8)
     let hash = fnv1a(datos);
     print("fnv1a(\"hi\") = " + to_string(hash as int));
 

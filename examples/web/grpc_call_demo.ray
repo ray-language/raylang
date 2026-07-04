@@ -1,6 +1,5 @@
 // Demo del cliente gRPC (M31.3): construye un mensaje protobuf de petición, hace una llamada unaria
 // gRPC (HTTP/2 + protobuf) a host:port, e imprime el grpc-status y el string de la respuesta.
-
 from grpc_client import grpc_call, GrpcResponse;
 from protobuf import writer, write_string, finish, parse, get_string;
 

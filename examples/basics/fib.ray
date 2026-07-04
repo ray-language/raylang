@@ -3,7 +3,6 @@
 //
 // Por ahora solo lo usamos para alimentar al lexer:
 //   cargo run -- examples/basics/fib.ray
-
 fn fib(n: int) -> int {
     if (n < 2) {
         n

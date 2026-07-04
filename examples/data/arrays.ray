@@ -11,9 +11,9 @@ fn suma(a: [int]) -> int {
 
 fn main() -> int {
     let nums: [int] = [3, 1, 4, 1, 5, 9, 2, 6];
-    print(nums);          // imprime el arreglo
-    print(len(nums));     // 8
-    print(suma(nums));    // 31
+    print(nums);  // imprime el arreglo
+    print(len(nums));  // 8
+    print(suma(nums));  // 31
 
     // Construir un arreglo dinámicamente con push.
     var cuadrados: [int] = [];
@@ -22,6 +22,6 @@ fn main() -> int {
         push(cuadrados, i * i);
         i = i + 1;
     }
-    print(cuadrados);     // [0, 1, 4, 9, 16]
+    print(cuadrados);  // [0, 1, 4, 9, 16]
     0
 }

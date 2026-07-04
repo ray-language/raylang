@@ -1,6 +1,5 @@
 // Demo de la conexión TLS con ALPN 'h2' (M31.2a): recibe host y puerto por argumentos, intenta
 // negociar HTTP/2 y reporta el resultado. Es el enganche para el transporte HTTP/2 vivo (M31.2b).
-
 fn main() {
     let a = args();
     let host = a[0];

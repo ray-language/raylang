@@ -6,7 +6,6 @@
 // Operaciones: map_new() (necesita anotación de tipo, como `[]`), insert(m, k, v),
 // get(m, k) -> Option<V>, contains_key(m, k) -> bool, len(m). Lucen con UFCS:
 // m.insert(k, v), m.get(k), m.contains_key(k).
-
 // Cuenta cuántas veces aparece cada palabra en un texto.
 fn contar_palabras(texto: string) -> Map<string, int> {
     let cuenta: Map<string, int> = map_new();
@@ -34,12 +33,12 @@ fn main() -> int {
     assert(!cuenta.contains_key("loro"));
 
     print("palabras distintas:");
-    print(len(cuenta));   // 5: el, perro, y, gato, pez
+    print(len(cuenta));  // 5: el, perro, y, gato, pez
 
     // keys() devuelve las claves ORDENADAS; values() los valores en ese mismo orden.
-    let palabras = keys(cuenta);     // ["el", "gato", "perro", "pez", "y"]
+    let palabras = keys(cuenta);  // ["el", "gato", "perro", "pez", "y"]
     print("primera (alfabética):");
-    print(palabras[0]);              // "el"
+    print(palabras[0]);  // "el"
 
     // remove() quita y devuelve el valor (Option).
     match (remove(cuenta, "el")) {

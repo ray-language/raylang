@@ -1,7 +1,6 @@
 // Demo del AEAD ChaCha20-Poly1305 (RFC 8439 §2.8.2): sella el texto de ejemplo con la clave/nonce/AAD
 // del estándar y verifica que criptograma y tag coinciden byte a byte con el vector oficial. Luego
 // abre (round-trip) y comprueba que manipular un octeto hace que la apertura falle.
-
 from chacha20poly1305 import aead_seal, aead_open, Sealed;
 from hex import hex_encode;
 
@@ -38,10 +37,16 @@ fn main() {
             var ok = len(claro) == len(pt);
             var j = 0;
             while (j < len(pt)) {
-                if (claro[j] != pt[j]) { ok = false; }
+                if (claro[j] != pt[j]) {
+                    ok = false;
+                }
                 j = j + 1;
             }
-            if (ok) { print("open ok"); } else { print("open MISMATCH"); }
+            if (ok) {
+                print("open ok");
+            } else {
+                print("open MISMATCH");
+            }
         },
         Option.None => print("open FALLO"),
     }
@@ -53,7 +58,7 @@ fn main() {
         push(ct2, sellado.ciphertext[k]);
         k = k + 1;
     }
-    ct2[0] = ct2[0] ^ 1; // voltea un bit
+    ct2[0] = ct2[0] ^ 1;  // voltea un bit
     match (aead_open(key, nonce, aad, ct2, sellado.tag)) {
         Option.Some(x) => print("tamper NO detectado"),
         Option.None => print("tamper rechazado"),

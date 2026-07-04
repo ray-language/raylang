@@ -10,15 +10,17 @@
 // si fueran MSB-first → `read_bit` saca el bit menos significativo y `decode` los va acumulando por la
 // izquierda. La salida se acumula en `[int]` (las referencias hacia atrás copian de lo ya emitido,
 // incluso solapándose, que es la semántica run-length de LZ77) y al final se empaqueta con `bytes_of`.
-
 // El estado de la descompresión: la entrada (bytes), el cursor de bits y la salida acumulada.
 struct Inflater {
     data: bytes,
-    pos: int,    // octeto actual
-    bitpos: int, // bit dentro del octeto (0..7), LSB primero
-    out: [int],  // octetos descomprimidos
+    pos: int,
+    bitpos: int,
+    out: [int],
 }
 
+// octeto actual
+// bit dentro del octeto (0..7), LSB primero
+// octetos descomprimidos
 // Un árbol de Huffman canónico, representado al estilo puff: `counts[l]` = nº de códigos de longitud
 // `l`; `symbols` = los símbolos ordenados por (longitud, valor).
 struct Huff {
@@ -29,7 +31,7 @@ struct Huff {
 // Lee un bit (LSB-first). Asume que hay datos suficientes (un stream bien formado no se pasa).
 fn read_bit(s: Inflater) -> int {
     let byte = s.data[s.pos];
-    let bit = (byte >> s.bitpos) & 1;
+    let bit = byte >> s.bitpos & 1;
     s.bitpos = s.bitpos + 1;
     if (s.bitpos == 8) {
         s.bitpos = 0;
@@ -43,7 +45,7 @@ fn read_bits(s: Inflater, n: int) -> int {
     var v = 0;
     var i = 0;
     while (i < n) {
-        v = v | (read_bit(s) << i);
+        v = v | read_bit(s) << i;
         i = i + 1;
     }
     v
@@ -54,17 +56,23 @@ fn build_huff(lengths: [int]) -> Huff {
     let n = len(lengths);
     var counts: [int] = [];
     var i = 0;
-    while (i < 16) { push(counts, 0); i = i + 1; }
+    while (i < 16) {
+        push(counts, 0);
+        i = i + 1;
+    }
     i = 0;
     while (i < n) {
         counts[lengths[i]] = counts[lengths[i]] + 1;
         i = i + 1;
     }
-    counts[0] = 0; // longitud 0 = símbolo ausente, no cuenta
+    counts[0] = 0;  // longitud 0 = símbolo ausente, no cuenta
     // Offset (primer índice en `symbols`) de cada longitud.
     var offs: [int] = [];
     i = 0;
-    while (i < 16) { push(offs, 0); i = i + 1; }
+    while (i < 16) {
+        push(offs, 0);
+        i = i + 1;
+    }
     var l = 1;
     while (l < 15) {
         offs[l + 1] = offs[l] + counts[l];
@@ -73,7 +81,10 @@ fn build_huff(lengths: [int]) -> Huff {
     // Coloca cada símbolo (con longitud > 0) en su sitio, ordenado por (longitud, símbolo).
     var symbols: [int] = [];
     i = 0;
-    while (i < n) { push(symbols, 0); i = i + 1; }
+    while (i < n) {
+        push(symbols, 0);
+        i = i + 1;
+    }
     i = 0;
     while (i < n) {
         if (lengths[i] != 0) {
@@ -98,7 +109,7 @@ fn decode(s: Inflater, h: Huff) -> int {
             return h.symbols[index + (code - first)];
         }
         index = index + count;
-        first = (first + count) << 1;
+        first = first + count << 1;
         code = code << 1;
         l = l + 1;
     }
@@ -109,13 +120,16 @@ fn decode(s: Inflater, h: Huff) -> int {
 fn len_base() -> [int] {
     [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
 }
+
 fn len_extra() -> [int] {
     [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
 }
+
 // Tablas de distancia (códigos 0..29): base + bits extra.
 fn dist_base() -> [int] {
     [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
 }
+
 fn dist_extra() -> [int] {
     [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
 }
@@ -132,10 +146,10 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
             return Result.Err("código literal/longitud inválido");
         }
         if (sym == 256) {
-            return Result.Ok(0); // fin del bloque
+            return Result.Ok(0);  // fin del bloque
         }
         if (sym < 256) {
-            push(s.out, sym); // literal
+            push(s.out, sym);  // literal
         } else {
             let li = sym - 257;
             if (li >= 29) {
@@ -153,7 +167,7 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
             let start = len(s.out) - distance;
             var k = 0;
             while (k < length) {
-                push(s.out, s.out[start + k]); // copia (puede solaparse → run-length)
+                push(s.out, s.out[start + k]);  // copia (puede solaparse → run-length)
                 k = k + 1;
             }
         }
@@ -165,10 +179,10 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
 fn stored_block(s: Inflater) -> Result<int, string> {
     if (s.bitpos != 0) {
         s.bitpos = 0;
-        s.pos = s.pos + 1; // alinear al siguiente octeto
+        s.pos = s.pos + 1;  // alinear al siguiente octeto
     }
-    let length = s.data[s.pos] | (s.data[s.pos + 1] << 8);
-    s.pos = s.pos + 4; // salta LEN (2) + NLEN (2)
+    let length = s.data[s.pos] | s.data[s.pos + 1] << 8;
+    s.pos = s.pos + 4;  // salta LEN (2) + NLEN (2)
     var k = 0;
     while (k < length) {
         push(s.out, s.data[s.pos]);
@@ -182,16 +196,32 @@ fn stored_block(s: Inflater) -> Result<int, string> {
 fn fixed_litlen() -> Huff {
     var l: [int] = [];
     var i = 0;
-    while (i < 144) { push(l, 8); i = i + 1; }
-    while (i < 256) { push(l, 9); i = i + 1; }
-    while (i < 280) { push(l, 7); i = i + 1; }
-    while (i < 288) { push(l, 8); i = i + 1; }
+    while (i < 144) {
+        push(l, 8);
+        i = i + 1;
+    }
+    while (i < 256) {
+        push(l, 9);
+        i = i + 1;
+    }
+    while (i < 280) {
+        push(l, 7);
+        i = i + 1;
+    }
+    while (i < 288) {
+        push(l, 8);
+        i = i + 1;
+    }
     build_huff(l)
 }
+
 fn fixed_dist() -> Huff {
     var l: [int] = [];
     var i = 0;
-    while (i < 30) { push(l, 5); i = i + 1; }
+    while (i < 30) {
+        push(l, 5);
+        i = i + 1;
+    }
     build_huff(l)
 }
 
@@ -204,7 +234,10 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
     let order = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
     var cl_lengths: [int] = [];
     var i = 0;
-    while (i < 19) { push(cl_lengths, 0); i = i + 1; }
+    while (i < 19) {
+        push(cl_lengths, 0);
+        i = i + 1;
+    }
     i = 0;
     while (i < hclen) {
         cl_lengths[order[i]] = read_bits(s, 3);
@@ -220,30 +253,50 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
         }
         if (sym < 16) {
             push(all_lengths, sym);
-        } else { if (sym == 16) {
-            if (len(all_lengths) == 0) {
-                return Result.Err("repetición 16 sin longitud previa");
+        } else {
+            if (sym == 16) {
+                if (len(all_lengths) == 0) {
+                    return Result.Err("repetición 16 sin longitud previa");
+                }
+                let prev = all_lengths[len(all_lengths) - 1];
+                let rep = read_bits(s, 2) + 3;
+                var k = 0;
+                while (k < rep) {
+                    push(all_lengths, prev);
+                    k = k + 1;
+                }
+            } else {
+                if (sym == 17) {
+                    let rep = read_bits(s, 3) + 3;
+                    var k = 0;
+                    while (k < rep) {
+                        push(all_lengths, 0);
+                        k = k + 1;
+                    }
+                } else {
+                    // 18
+                    let rep = read_bits(s, 7) + 11;
+                    var k = 0;
+                    while (k < rep) {
+                        push(all_lengths, 0);
+                        k = k + 1;
+                    }
+                }
             }
-            let prev = all_lengths[len(all_lengths) - 1];
-            let rep = read_bits(s, 2) + 3;
-            var k = 0;
-            while (k < rep) { push(all_lengths, prev); k = k + 1; }
-        } else { if (sym == 17) {
-            let rep = read_bits(s, 3) + 3;
-            var k = 0;
-            while (k < rep) { push(all_lengths, 0); k = k + 1; }
-        } else { // 18
-            let rep = read_bits(s, 7) + 11;
-            var k = 0;
-            while (k < rep) { push(all_lengths, 0); k = k + 1; }
-        }}}
+        }
     }
     // Reparte en longitudes de literal/longitud y de distancia.
     var lit_lengths: [int] = [];
     var dist_lengths: [int] = [];
     i = 0;
-    while (i < hlit) { push(lit_lengths, all_lengths[i]); i = i + 1; }
-    while (i < hlit + hdist) { push(dist_lengths, all_lengths[i]); i = i + 1; }
+    while (i < hlit) {
+        push(lit_lengths, all_lengths[i]);
+        i = i + 1;
+    }
+    while (i < hlit + hdist) {
+        push(dist_lengths, all_lengths[i]);
+        i = i + 1;
+    }
     inflate_codes(s, build_huff(lit_lengths), build_huff(dist_lengths))
 }
 
@@ -256,16 +309,22 @@ fn inflate_blocks(s: Inflater) -> Result<int, string> {
         var r: Result<int, string> = Result.Ok(0);
         if (btype == 0) {
             r = stored_block(s);
-        } else { if (btype == 1) {
-            r = inflate_codes(s, fixed_litlen(), fixed_dist());
-        } else { if (btype == 2) {
-            r = dynamic_block(s);
         } else {
-            return Result.Err("tipo de bloque DEFLATE reservado (3)");
-        }}}
+            if (btype == 1) {
+                r = inflate_codes(s, fixed_litlen(), fixed_dist());
+            } else {
+                if (btype == 2) {
+                    r = dynamic_block(s);
+                } else {
+                    return Result.Err("tipo de bloque DEFLATE reservado (3)");
+                }
+            }
+        }
         match (r) {
-            Result.Err(e) => { return Result.Err(e); },
-            Result.Ok(_) => {},
+            Result.Err(e) => {
+                return Result.Err(e);
+            },
+            Result.Ok(_) => { },
         }
     }
     Result.Ok(0)
@@ -282,14 +341,14 @@ pub fn inflate_raw(data: bytes) -> Result<bytes, string> {
 
 // --- CRC-32 (RFC 1952, polinomio reflejado 0xEDB88320) para verificar gzip. ---
 pub fn crc32(data: bytes) -> int {
-    var crc = 4294967295; // 0xFFFFFFFF
+    var crc = 4294967295;  // 0xFFFFFFFF
     var i = 0;
     while (i < len(data)) {
         crc = crc ^ data[i];
         var j = 0;
         while (j < 8) {
             if ((crc & 1) != 0) {
-                crc = (crc >> 1) ^ 3988292384; // 0xEDB88320
+                crc = crc >> 1 ^ 3988292384;  // 0xEDB88320
             } else {
                 crc = crc >> 1;
             }
@@ -312,20 +371,28 @@ pub fn gunzip(data: bytes) -> Result<bytes, string> {
         return Result.Err("método de compresión gzip no soportado");
     }
     let flg = data[3];
-    var pos = 10; // cabecera fija de 10 octetos
-    if ((flg & 4) != 0) { // FEXTRA
-        let xlen = data[pos] | (data[pos + 1] << 8);
+    var pos = 10;  // cabecera fija de 10 octetos
+    if ((flg & 4) != 0) {
+        // FEXTRA
+        let xlen = data[pos] | data[pos + 1] << 8;
         pos = pos + 2 + xlen;
     }
-    if ((flg & 8) != 0) { // FNAME (terminado en NUL)
-        while (data[pos] != 0) { pos = pos + 1; }
+    if ((flg & 8) != 0) {
+        // FNAME (terminado en NUL)
+        while (data[pos] != 0) {
+            pos = pos + 1;
+        }
         pos = pos + 1;
     }
-    if ((flg & 16) != 0) { // FCOMMENT (terminado en NUL)
-        while (data[pos] != 0) { pos = pos + 1; }
+    if ((flg & 16) != 0) {
+        // FCOMMENT (terminado en NUL)
+        while (data[pos] != 0) {
+            pos = pos + 1;
+        }
         pos = pos + 1;
     }
-    if ((flg & 2) != 0) { // FHCRC
+    if ((flg & 2) != 0) {
+        // FHCRC
         pos = pos + 2;
     }
     let comprimido = sub_bytes(data, pos, len(data) - 8);
@@ -334,7 +401,7 @@ pub fn gunzip(data: bytes) -> Result<bytes, string> {
         Result.Ok(salida) => {
             // Verifica el CRC-32 del tráiler (4 octetos LSB-first antes de ISIZE).
             let n = len(data);
-            let crc_esperado = data[n - 8] | (data[n - 7] << 8) | (data[n - 6] << 16) | (data[n - 5] << 24);
+            let crc_esperado = data[n - 8] | data[n - 7] << 8 | data[n - 6] << 16 | data[n - 5] << 24;
             let crc_real = crc32(salida);
             if ((crc_real & 4294967295) != (crc_esperado & 4294967295)) {
                 Result.Err("CRC32 no coincide (gzip corrupto)")

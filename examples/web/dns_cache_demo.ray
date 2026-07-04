@@ -2,7 +2,6 @@
 // caché → no toca la red) y "example.org" A una vez (otro fallo). Imprime las IPs y los contadores de
 // aciertos/fallos. Lo lanza `tests/dns_cache_cli.rs`, que además cuenta las consultas que recibe el
 // servidor (deben ser 2, no 3). Por ambos motores.
-
 from dns import Record, format_records;
 from dns_cache import Cache, new_cache, resolve;
 
@@ -11,15 +10,17 @@ fn main() -> int {
     var port = 53;
     if (len(a) > 0) {
         match (parse_int(a[0])) {
-            Option.Some(p) => { port = p; },
-            Option.None => {},
+            Option.Some(p) => {
+                port = p;
+            },
+            Option.None => { },
         }
     }
     let c = new_cache("127.0.0.1", port);
 
-    imprime(resolve(c, "example.com", 1)); // fallo → consulta 1
-    imprime(resolve(c, "example.com", 1)); // ACIERTO → sin consulta
-    imprime(resolve(c, "example.org", 1)); // fallo → consulta 2
+    imprime(resolve(c, "example.com", 1));  // fallo → consulta 1
+    imprime(resolve(c, "example.com", 1));  // ACIERTO → sin consulta
+    imprime(resolve(c, "example.org", 1));  // fallo → consulta 2
 
     print("hits=" + to_string(c.hits) + " misses=" + to_string(c.misses));
     0

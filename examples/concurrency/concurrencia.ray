@@ -6,7 +6,6 @@
 //     cargo run -- --vm examples/concurrency/concurrencia.ray
 //
 // (Con el intérprete da un error claro pidiendo la VM.)
-
 // Una etapa productora: genera 1..n en el canal y lo cierra al terminar.
 fn generar(salida: Channel<int>, n: int) {
     var i = 1;
@@ -23,7 +22,10 @@ fn cuadrar(entrada: Channel<int>, salida: Channel<int>) {
     while (seguir) {
         match (recv(entrada)) {
             Option.Some(v) => send(salida, v * v),
-            Option.None    => { close(salida); seguir = false; },
+            Option.None => {
+                close(salida);
+                seguir = false;
+            },
         }
     }
 }
@@ -35,18 +37,27 @@ fn main() -> int {
     let cuad: Channel<int> = channel();
 
     // Pipeline de fibras: generar -> cuadrar -> main. Cada flecha es un canal.
-    spawn(fn() { generar(nums, 5); });
-    spawn(fn() { cuadrar(nums, cuad); });
+    spawn(fn() {
+    generar(nums, 5);
+});
+    spawn(fn() {
+    cuadrar(nums, cuad);
+});
 
     // El consumidor (main) suma los cuadrados que llegan, hasta que el canal se cierra.
     var total = 0;
     var seguir = true;
     while (seguir) {
         match (recv(cuad)) {
-            Option.Some(v) => { print(v); total = total + v; },   // 1, 4, 9, 16, 25
-            Option.None    => { seguir = false; },
+            Option.Some(v) => {
+                print(v);  // 1, 4, 9, 16, 25
+                total = total + v;
+            },
+            Option.None => {
+                seguir = false;
+            },
         }
     }
-    print(total);   // 55
-    total           // código de salida 55
+    print(total);  // 55
+    total  // código de salida 55
 }

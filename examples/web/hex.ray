@@ -1,7 +1,6 @@
 // Codificación hexadecimal (RFC 4648 §8) escrita EN raylang. Cero runtime nuevo. Convierte entre
 // un arreglo de octetos (`[int]`, cada uno 0..255) y su representación hexadecimal en minúsculas.
 // Importable: `from hex import hex_encode, hex_decode;`. Útil para digests, claves, fingerprints.
-
 // El dígito hexadecimal (minúscula) del valor `d` (0..15).
 fn hex_digit(d: int) -> string {
     let digits = "0123456789abcdef";
@@ -23,7 +22,7 @@ pub fn hex_encode(data: [int]) -> string {
     var i = 0;
     while (i < len(data)) {
         let o = data[i];
-        s = s + hex_digit((o >> 4) & 15);
+        s = s + hex_digit(o >> 4 & 15);
         s = s + hex_digit(o & 15);
         i = i + 1;
     }
@@ -44,7 +43,7 @@ pub fn hex_decode(s: string) -> Result<[int], string> {
         if (hi < 0 || lo < 0) {
             return Result.Err("carácter hexadecimal inválido");
         }
-        push(out, (hi << 4) | lo);
+        push(out, hi << 4 | lo);
         i = i + 2;
     }
     Result.Ok(out)

@@ -6,38 +6,43 @@
 // Un elemento de campo `gf` son 16 limbs de 16 bits en un `[int]` (i64, con signo: las restas producen
 // negativos y el desplazamiento aritmético de i64 los propaga). Un punto son 4 `gf` (X, Y, Z, T).
 // Usa SHA-512 (`sha512.ray`). Importable: `from ed25519 import ed25519_public_key, ed25519_sign, ed25519_verify;`.
-
 from sha512 import sha512_octets;
 
 // -------------------- utilidades de gf y bytes --------------------
-
 fn gf16() -> [int] { [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }
 
 fn gcopy(r: [int], a: [int]) {
     var i = 0;
-    while (i < 16) { r[i] = a[i]; i = i + 1; }
+    while (i < 16) {
+        r[i] = a[i];
+        i = i + 1;
+    }
 }
 
 fn newpoint() -> [[int]] { [gf16(), gf16(), gf16(), gf16()] }
 
 // Constantes de la curva (limbs de 16 bits, de TweetNaCl).
 fn con_D() -> [int] { [30883, 4953, 19914, 30187, 55467, 16705, 2637, 112, 59544, 30585, 16505, 36039, 65139, 11119, 27886, 20995] }
+
 fn con_D2() -> [int] { [61785, 9906, 39828, 60374, 45398, 33411, 5274, 224, 53552, 61171, 33010, 6542, 64743, 22239, 55772, 9222] }
+
 fn con_X() -> [int] { [54554, 36645, 11616, 51542, 42930, 38181, 51040, 26924, 56412, 64982, 57905, 49316, 21502, 52590, 14035, 8553] }
+
 fn con_Y() -> [int] { [26200, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214, 26214] }
+
 fn con_I() -> [int] { [41136, 18958, 6951, 50414, 58488, 44335, 6150, 12099, 55207, 15867, 153, 11085, 57099, 20417, 9344, 11139] }
+
 fn con_L() -> [int] { [237, 211, 245, 92, 26, 99, 18, 88, 214, 156, 247, 162, 222, 249, 222, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16] }
 
 // -------------------- aritmética de campo (mod 2^255−19) --------------------
-
 fn car25519(o: [int]) {
     var i = 0;
     while (i < 16) {
-        let c = o[i] >> 16;              // desplazamiento aritmético (i64) → acarreo con signo
+        let c = o[i] >> 16;  // desplazamiento aritmético (i64) → acarreo con signo
         if (i < 15) {
             o[i + 1] = o[i + 1] + c;
         } else {
-            o[0] = o[0] + 38 * c;        // 2^256 ≡ 38 (mod p)
+            o[0] = o[0] + 38 * c;  // 2^256 ≡ 38 (mod p)
         }
         o[i] = o[i] - (c << 16);
         i = i + 1;
@@ -46,18 +51,27 @@ fn car25519(o: [int]) {
 
 fn fadd(o: [int], a: [int], b: [int]) {
     var i = 0;
-    while (i < 16) { o[i] = a[i] + b[i]; i = i + 1; }
+    while (i < 16) {
+        o[i] = a[i] + b[i];
+        i = i + 1;
+    }
 }
 
 fn fsub(o: [int], a: [int], b: [int]) {
     var i = 0;
-    while (i < 16) { o[i] = a[i] - b[i]; i = i + 1; }
+    while (i < 16) {
+        o[i] = a[i] - b[i];
+        i = i + 1;
+    }
 }
 
 fn fmul(o: [int], a: [int], b: [int]) {
     var t: [int] = [];
     var i = 0;
-    while (i < 31) { push(t, 0); i = i + 1; }
+    while (i < 31) {
+        push(t, 0);
+        i = i + 1;
+    }
     i = 0;
     while (i < 16) {
         var j = 0;
@@ -69,16 +83,21 @@ fn fmul(o: [int], a: [int], b: [int]) {
     }
     i = 0;
     while (i < 15) {
-        t[i] = t[i] + 38 * t[i + 16];    // pliega el exceso (2^256 ≡ 38)
+        t[i] = t[i] + 38 * t[i + 16];  // pliega el exceso (2^256 ≡ 38)
         i = i + 1;
     }
     i = 0;
-    while (i < 16) { o[i] = t[i]; i = i + 1; }
+    while (i < 16) {
+        o[i] = t[i];
+        i = i + 1;
+    }
     car25519(o);
     car25519(o);
 }
 
-fn fsqr(o: [int], a: [int]) { fmul(o, a, a); }
+fn fsqr(o: [int], a: [int]) {
+    fmul(o, a, a);
+}
 
 // Inverso multiplicativo: a^(p−2) por cadena de cuadrados (2^255−21).
 fn finv(o: [int], a: [int]) {
@@ -87,7 +106,9 @@ fn finv(o: [int], a: [int]) {
     var i = 253;
     while (i >= 0) {
         fsqr(c, c);
-        if (i != 2 && i != 4) { fmul(c, c, a); }
+        if (i != 2 && i != 4) {
+            fmul(c, c, a);
+        }
         i = i - 1;
     }
     gcopy(o, c);
@@ -100,7 +121,9 @@ fn pow2523(o: [int], a: [int]) {
     var i = 250;
     while (i >= 0) {
         fsqr(c, c);
-        if (i != 1) { fmul(c, c, a); }
+        if (i != 1) {
+            fmul(c, c, a);
+        }
         i = i - 1;
     }
     gcopy(o, c);
@@ -122,19 +145,21 @@ fn sel25519(p: [int], q: [int], b: int) {
 fn pack25519(o: [int], n: [int]) {
     let t = gf16();
     gcopy(t, n);
-    car25519(t); car25519(t); car25519(t);
+    car25519(t);
+    car25519(t);
+    car25519(t);
     var j = 0;
     while (j < 2) {
         let m = gf16();
-        m[0] = t[0] - 65517;             // 0xffed
+        m[0] = t[0] - 65517;  // 0xffed
         var i = 1;
         while (i < 15) {
-            m[i] = t[i] - 65535 - ((m[i - 1] >> 16) & 1);
+            m[i] = t[i] - 65535 - (m[i - 1] >> 16 & 1);
             m[i - 1] = m[i - 1] & 65535;
             i = i + 1;
         }
-        m[15] = t[15] - 32767 - ((m[14] >> 16) & 1);
-        let b = (m[15] >> 16) & 1;
+        m[15] = t[15] - 32767 - (m[14] >> 16 & 1);
+        let b = m[15] >> 16 & 1;
         m[14] = m[14] & 65535;
         sel25519(t, m, 1 - b);
         j = j + 1;
@@ -142,7 +167,7 @@ fn pack25519(o: [int], n: [int]) {
     var i = 0;
     while (i < 16) {
         o[2 * i] = t[i] & 255;
-        o[2 * i + 1] = (t[i] >> 8) & 255;
+        o[2 * i + 1] = t[i] >> 8 & 255;
         i = i + 1;
     }
 }
@@ -159,14 +184,22 @@ fn unpack25519(o: [int], n: [int]) {
 
 // ¿Difieren a y b tras empaquetarlos? (0 = iguales.)
 fn neq25519(a: [int], b: [int]) -> bool {
-    let pa: [int] = []; let pb: [int] = [];
+    let pa: [int] = [];
+    let pb: [int] = [];
     var i = 0;
-    while (i < 32) { push(pa, 0); push(pb, 0); i = i + 1; }
+    while (i < 32) {
+        push(pa, 0);
+        push(pb, 0);
+        i = i + 1;
+    }
     pack25519(pa, a);
     pack25519(pb, b);
     var diff = 0;
     i = 0;
-    while (i < 32) { diff = diff | (pa[i] ^ pb[i]); i = i + 1; }
+    while (i < 32) {
+        diff = diff | pa[i] ^ pb[i];
+        i = i + 1;
+    }
     diff != 0
 }
 
@@ -174,17 +207,26 @@ fn neq25519(a: [int], b: [int]) -> bool {
 fn par25519(a: [int]) -> int {
     let d: [int] = [];
     var i = 0;
-    while (i < 32) { push(d, 0); i = i + 1; }
+    while (i < 32) {
+        push(d, 0);
+        i = i + 1;
+    }
     pack25519(d, a);
     d[0] & 1
 }
 
 // -------------------- ley de grupo de Edwards --------------------
-
 // Suma de puntos en coordenadas extendidas: p = p + q.
 fn point_add(p: [[int]], q: [[int]]) {
-    let a = gf16(); let b = gf16(); let c = gf16(); let d = gf16();
-    let t = gf16(); let e = gf16(); let f = gf16(); let g = gf16(); let h = gf16();
+    let a = gf16();
+    let b = gf16();
+    let c = gf16();
+    let d = gf16();
+    let t = gf16();
+    let e = gf16();
+    let f = gf16();
+    let g = gf16();
+    let h = gf16();
     fsub(a, p[1], p[0]);
     fsub(t, q[1], q[0]);
     fmul(a, a, t);
@@ -216,13 +258,14 @@ fn cswap(p: [[int]], q: [[int]], b: int) {
 // p = s · q, con s un escalar de 32 octetos (little-endian).
 fn scalarmult(p: [[int]], q: [[int]], s: [int]) {
     gcopy(p[0], gf16());
-    let uno = gf16(); uno[0] = 1;
+    let uno = gf16();
+    uno[0] = 1;
     gcopy(p[1], uno);
     gcopy(p[2], uno);
     gcopy(p[3], gf16());
     var i = 255;
     while (i >= 0) {
-        let b = (s[i / 8] >> (i & 7)) & 1;
+        let b = s[i / 8] >> (i & 7) & 1;
         cswap(p, q, b);
         point_add(q, p);
         point_add(p, p);
@@ -236,7 +279,8 @@ fn scalarbase(p: [[int]], s: [int]) {
     let q = newpoint();
     gcopy(q[0], con_X());
     gcopy(q[1], con_Y());
-    let uno = gf16(); uno[0] = 1;
+    let uno = gf16();
+    uno[0] = 1;
     gcopy(q[2], uno);
     fmul(q[3], con_X(), con_Y());
     scalarmult(p, q, s);
@@ -244,20 +288,28 @@ fn scalarbase(p: [[int]], s: [int]) {
 
 // Empaqueta un punto a 32 octetos (con el bit de signo de x en el bit alto).
 fn point_pack(r: [int], p: [[int]]) {
-    let tx = gf16(); let ty = gf16(); let zi = gf16();
+    let tx = gf16();
+    let ty = gf16();
+    let zi = gf16();
     finv(zi, p[2]);
     fmul(tx, p[0], zi);
     fmul(ty, p[1], zi);
     pack25519(r, ty);
-    r[31] = r[31] ^ (par25519(tx) << 7);
+    r[31] = r[31] ^ par25519(tx) << 7;
 }
 
 // Decodifica el punto NEGADO desde 32 octetos (lo que pide la verificación). Devuelve false si el
 // punto no está en la curva.
 fn unpackneg(r: [[int]], pk: [int]) -> bool {
-    let t = gf16(); let chk = gf16(); let num = gf16(); let den = gf16();
-    let den2 = gf16(); let den4 = gf16(); let den6 = gf16();
-    let uno = gf16(); uno[0] = 1;
+    let t = gf16();
+    let chk = gf16();
+    let num = gf16();
+    let den = gf16();
+    let den2 = gf16();
+    let den4 = gf16();
+    let den6 = gf16();
+    let uno = gf16();
+    uno[0] = 1;
     gcopy(r[2], uno);
     unpack25519(r[1], pk);
     fsqr(num, r[1]);
@@ -276,17 +328,22 @@ fn unpackneg(r: [[int]], pk: [int]) -> bool {
     fmul(r[0], t, den);
     fsqr(chk, r[0]);
     fmul(chk, chk, den);
-    if (neq25519(chk, num)) { fmul(r[0], r[0], con_I()); }
+    if (neq25519(chk, num)) {
+        fmul(r[0], r[0], con_I());
+    }
     fsqr(chk, r[0]);
     fmul(chk, chk, den);
-    if (neq25519(chk, num)) { return false; }
-    if (par25519(r[0]) == (pk[31] >> 7)) { fsub(r[0], gf16(), r[0]); }
+    if (neq25519(chk, num)) {
+        return false;
+    }
+    if (par25519(r[0]) == pk[31] >> 7) {
+        fsub(r[0], gf16(), r[0]);
+    }
     fmul(r[3], r[0], r[1]);
     true
 }
 
 // -------------------- escalares mod L --------------------
-
 // Reduce el número de 64 octetos `x` (i64 por posición) mod L → 32 octetos.
 fn mod_l(x: [int]) -> [int] {
     let el = con_L();
@@ -296,7 +353,7 @@ fn mod_l(x: [int]) -> [int] {
         var j = i - 32;
         while (j < i - 12) {
             x[j] = x[j] + carry - 16 * x[i] * el[j - (i - 32)];
-            carry = (x[j] + 128) >> 8;
+            carry = x[j] + 128 >> 8;
             x[j] = x[j] - (carry << 8);
             j = j + 1;
         }
@@ -307,16 +364,22 @@ fn mod_l(x: [int]) -> [int] {
     var carry = 0;
     var j = 0;
     while (j < 32) {
-        x[j] = x[j] + carry - ((x[31] >> 4) * el[j]);
+        x[j] = x[j] + carry - (x[31] >> 4) * el[j];
         carry = x[j] >> 8;
         x[j] = x[j] & 255;
         j = j + 1;
     }
     j = 0;
-    while (j < 32) { x[j] = x[j] - carry * el[j]; j = j + 1; }
+    while (j < 32) {
+        x[j] = x[j] - carry * el[j];
+        j = j + 1;
+    }
     let r: [int] = [];
     i = 0;
-    while (i < 32) { push(r, 0); i = i + 1; }
+    while (i < 32) {
+        push(r, 0);
+        i = i + 1;
+    }
     i = 0;
     while (i < 32) {
         x[i + 1] = x[i + 1] + (x[i] >> 8);
@@ -330,17 +393,22 @@ fn mod_l(x: [int]) -> [int] {
 fn sc_reduce(h: [int]) -> [int] {
     var x: [int] = [];
     var i = 0;
-    while (i < 64) { push(x, h[i]); i = i + 1; }
+    while (i < 64) {
+        push(x, h[i]);
+        i = i + 1;
+    }
     mod_l(x)
 }
 
 // -------------------- API pública --------------------
-
 // Extrae `[start, start+n)` de un arreglo.
 fn slice(a: [int], start: int, n: int) -> [int] {
     var out: [int] = [];
     var i = 0;
-    while (i < n) { push(out, a[start + i]); i = i + 1; }
+    while (i < n) {
+        push(out, a[start + i]);
+        i = i + 1;
+    }
     out
 }
 
@@ -360,7 +428,10 @@ pub fn ed25519_public_key(seed: [int]) -> [int] {
     scalarbase(p, slice(d, 0, 32));
     let pk: [int] = [];
     var i = 0;
-    while (i < 32) { push(pk, 0); i = i + 1; }
+    while (i < 32) {
+        push(pk, 0);
+        i = i + 1;
+    }
     point_pack(pk, p);
     pk
 }
@@ -372,34 +443,58 @@ pub fn ed25519_sign(seed: [int], pubkey: [int], msg: [int]) -> [int] {
     // r = SHA512(prefix ‖ msg), reducido; R = r·B.
     var pref: [int] = [];
     var i = 32;
-    while (i < 64) { push(pref, d[i]); i = i + 1; }
+    while (i < 64) {
+        push(pref, d[i]);
+        i = i + 1;
+    }
     i = 0;
-    while (i < len(msg)) { push(pref, msg[i]); i = i + 1; }
+    while (i < len(msg)) {
+        push(pref, msg[i]);
+        i = i + 1;
+    }
     let r = sc_reduce(sha512_octets(pref));
 
     let p = newpoint();
     scalarbase(p, r);
     let sig: [int] = [];
     i = 0;
-    while (i < 64) { push(sig, 0); i = i + 1; }
-    point_pack(sig, p);   // sig[0..32] = R
+    while (i < 64) {
+        push(sig, 0);
+        i = i + 1;
+    }
+    point_pack(sig, p);  // sig[0..32] = R
 
     // k = SHA512(R ‖ A ‖ msg), reducido.
     var km: [int] = [];
     i = 0;
-    while (i < 32) { push(km, sig[i]); i = i + 1; }
+    while (i < 32) {
+        push(km, sig[i]);
+        i = i + 1;
+    }
     i = 0;
-    while (i < 32) { push(km, pubkey[i]); i = i + 1; }
+    while (i < 32) {
+        push(km, pubkey[i]);
+        i = i + 1;
+    }
     i = 0;
-    while (i < len(msg)) { push(km, msg[i]); i = i + 1; }
+    while (i < len(msg)) {
+        push(km, msg[i]);
+        i = i + 1;
+    }
     let k = sc_reduce(sha512_octets(km));
 
     // S = (r + k·d) mod L.
     var x: [int] = [];
     i = 0;
-    while (i < 64) { push(x, 0); i = i + 1; }
+    while (i < 64) {
+        push(x, 0);
+        i = i + 1;
+    }
     i = 0;
-    while (i < 32) { x[i] = r[i]; i = i + 1; }
+    while (i < 32) {
+        x[i] = r[i];
+        i = i + 1;
+    }
     i = 0;
     while (i < 32) {
         var j = 0;
@@ -411,7 +506,10 @@ pub fn ed25519_sign(seed: [int], pubkey: [int], msg: [int]) -> [int] {
     }
     let s = mod_l(x);
     i = 0;
-    while (i < 32) { sig[32 + i] = s[i]; i = i + 1; }
+    while (i < 32) {
+        sig[32 + i] = s[i];
+        i = i + 1;
+    }
     sig
 }
 
@@ -424,26 +522,41 @@ pub fn ed25519_verify(pubkey: [int], msg: [int], sig: [int]) -> bool {
     // k = SHA512(R ‖ A ‖ msg), reducido.
     var km: [int] = [];
     var i = 0;
-    while (i < 32) { push(km, sig[i]); i = i + 1; }
+    while (i < 32) {
+        push(km, sig[i]);
+        i = i + 1;
+    }
     i = 0;
-    while (i < 32) { push(km, pubkey[i]); i = i + 1; }
+    while (i < 32) {
+        push(km, pubkey[i]);
+        i = i + 1;
+    }
     i = 0;
-    while (i < len(msg)) { push(km, msg[i]); i = i + 1; }
+    while (i < len(msg)) {
+        push(km, msg[i]);
+        i = i + 1;
+    }
     let k = sc_reduce(sha512_octets(km));
 
     let p = newpoint();
-    scalarmult(p, q, k);        // p = k·(−A)
+    scalarmult(p, q, k);  // p = k·(−A)
     let q2 = newpoint();
-    scalarbase(q2, slice(sig, 32, 32)); // q2 = S·B
-    point_add(p, q2);           // p = S·B − k·A
+    scalarbase(q2, slice(sig, 32, 32));  // q2 = S·B
+    point_add(p, q2);  // p = S·B − k·A
     let t: [int] = [];
     i = 0;
-    while (i < 32) { push(t, 0); i = i + 1; }
+    while (i < 32) {
+        push(t, 0);
+        i = i + 1;
+    }
     point_pack(t, p);
 
     // Debe coincidir con R = sig[0..32].
     var diff = 0;
     i = 0;
-    while (i < 32) { diff = diff | (t[i] ^ sig[i]); i = i + 1; }
+    while (i < 32) {
+        diff = diff | t[i] ^ sig[i];
+        i = i + 1;
+    }
     diff == 0
 }

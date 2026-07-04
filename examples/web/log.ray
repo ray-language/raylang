@@ -5,7 +5,6 @@
 //
 // API encadenable por UFCS (cross-module): `info(lg, "login").field("user", "ada").field_int("n", 3).emit();`
 // Niveles: DEBUG=0, INFO=1, WARN=2, ERROR=3. El logger filtra por debajo de su `min_level`.
-
 from time import now_utc, to_iso8601;
 
 pub struct Logger {
@@ -42,8 +41,11 @@ fn at(lg: Logger, level: int, msg: string) -> LogEntry {
 }
 
 pub fn debug(lg: Logger, msg: string) -> LogEntry { at(lg, 0, msg) }
+
 pub fn info(lg: Logger, msg: string) -> LogEntry { at(lg, 1, msg) }
+
 pub fn warn(lg: Logger, msg: string) -> LogEntry { at(lg, 2, msg) }
+
 pub fn error(lg: Logger, msg: string) -> LogEntry { at(lg, 3, msg) }
 
 // Añade un campo string (encadenable). Muta la entrada por referencia y la devuelve.
@@ -51,20 +53,23 @@ pub fn field(e: LogEntry, key: string, value: string) -> LogEntry {
     push(e.fields, Field { key: key, value: value, quoted: true });
     e
 }
+
 pub fn field_int(e: LogEntry, key: string, value: int) -> LogEntry {
     push(e.fields, Field { key: key, value: to_string(value), quoted: false });
     e
 }
+
 pub fn field_bool(e: LogEntry, key: string, value: bool) -> LogEntry {
     push(e.fields, Field { key: key, value: to_string(value), quoted: false });
     e
 }
 
 fn level_name(level: int) -> string {
-    if (level <= 0) { "DEBUG" }
-    else { if (level == 1) { "INFO" }
-    else { if (level == 2) { "WARN" }
-    else { "ERROR" }}}
+    if (level <= 0) { "DEBUG" } else {
+        if (level == 1) { "INFO" } else {
+            if (level == 2) { "WARN" } else { "ERROR" }
+        }
+    }
 }
 
 // Escapa una cadena para incrustarla en JSON (comillas, barra, y los controles comunes).
@@ -73,12 +78,27 @@ fn json_escape(s: string) -> string {
     var i = 0;
     while (i < len(s)) {
         let c = s[i];
-        if (c == '"') { out = out + "\\\""; }
-        else { if (c == '\\') { out = out + "\\\\"; }
-        else { if (c == '\n') { out = out + "\\n"; }
-        else { if (c == '\t') { out = out + "\\t"; }
-        else { if (c == '\r') { out = out + "\\r"; }
-        else { out = out + to_string(c); }}}}}
+        if (c == '"') {
+            out = out + "\\\"";
+        } else {
+            if (c == '\\') {
+                out = out + "\\\\";
+            } else {
+                if (c == '\n') {
+                    out = out + "\\n";
+                } else {
+                    if (c == '\t') {
+                        out = out + "\\t";
+                    } else {
+                        if (c == '\r') {
+                            out = out + "\\r";
+                        } else {
+                            out = out + to_string(c);
+                        }
+                    }
+                }
+            }
+        }
         i = i + 1;
     }
     out
@@ -87,8 +107,7 @@ fn json_escape(s: string) -> string {
 // Renderiza la entrada como una línea JSON con la marca de tiempo `ts` dada (determinista → testeable).
 // El orden de claves es fijo: ts, level, service, msg, y luego los campos en orden de adición.
 pub fn render(e: LogEntry, ts: string) -> string {
-    var out = "{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(e.level) + "\",\"service\":\""
-        + json_escape(e.lg.service) + "\",\"msg\":\"" + json_escape(e.msg) + "\"";
+    var out = "{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(e.level) + "\",\"service\":\"" + json_escape(e.lg.service) + "\",\"msg\":\"" + json_escape(e.msg) + "\"";
     var i = 0;
     while (i < len(e.fields)) {
         let f = e.fields[i];

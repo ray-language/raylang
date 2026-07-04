@@ -5,28 +5,33 @@
 //
 // Importable: `from time import now_utc, from_epoch_millis, to_iso8601, to_rfc1123, ...;`.
 // Válido para fechas desde 1970 (epoch ≥ 0): con valores positivos la división trunca = floor.
-
 struct DateTime {
     year: int,
-    month: int,   // 1..12
-    day: int,     // 1..31
-    hour: int,    // 0..23
-    minute: int,  // 0..59
-    second: int,  // 0..59
-    weekday: int, // 0=domingo .. 6=sábado
+    month: int,
+    day: int,
+    hour: int,
+    minute: int,
+    second: int,
+    weekday: int,
 }
 
+// 1..12
+// 1..31
+// 0..23
+// 0..59
+// 0..59
+// 0=domingo .. 6=sábado
 // Convierte días desde el epoch en (año, mes, día) — algoritmo de Hinnant (calendario gregoriano).
 // Devuelve un DateTime con la parte horaria a 0 (la rellena el llamador).
 fn civil_from_days(z: int) -> DateTime {
-    let zz = z + 719468; // desplaza el epoch al 0000-03-01
+    let zz = z + 719468;  // desplaza el epoch al 0000-03-01
     let era = zz / 146097;
-    let doe = zz - era * 146097;                                  // día de la era [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // año de la era [0, 399]
+    let doe = zz - era * 146097;  // día de la era [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;  // año de la era [0, 399]
     let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);            // día del año (mar=0) [0, 365]
-    let mp = (5 * doy + 2) / 153;                                 // mes desplazado [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1;                         // día [1, 31]
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);  // día del año (mar=0) [0, 365]
+    let mp = (5 * doy + 2) / 153;  // mes desplazado [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1;  // día [1, 31]
     var m = mp + 3;
     if (mp >= 10) {
         m = mp - 9;
@@ -46,7 +51,7 @@ fn days_from_civil(year: int, month: int, day: int) -> int {
     }
     let era = y / 400;
     let yoe = y - era * 400;
-    var mp = month + 9;       // mar=0
+    var mp = month + 9;  // mar=0
     if (month > 2) {
         mp = month - 3;
     }
@@ -59,12 +64,12 @@ fn days_from_civil(year: int, month: int, day: int) -> int {
 pub fn from_epoch_millis(ms: int) -> DateTime {
     let secs = ms / 1000;
     let days = secs / 86400;
-    let rem = secs - days * 86400; // segundos dentro del día [0, 86399]
+    let rem = secs - days * 86400;  // segundos dentro del día [0, 86399]
     var dt = civil_from_days(days);
     dt.hour = rem / 3600;
-    dt.minute = (rem % 3600) / 60;
+    dt.minute = rem % 3600 / 60;
     dt.second = rem % 60;
-    dt.weekday = (days + 4) % 7; // 1970-01-01 fue jueves; epoch≥0 → (days+4) mod 7, 0=domingo
+    dt.weekday = (days + 4) % 7;  // 1970-01-01 fue jueves; epoch≥0 → (days+4) mod 7, 0=domingo
     dt
 }
 
@@ -91,14 +96,12 @@ fn pad(n: int, ancho: int) -> string {
 
 // Formato ISO 8601 / RFC 3339: `YYYY-MM-DDTHH:MM:SSZ` (Z = UTC).
 pub fn to_iso8601(dt: DateTime) -> string {
-    pad(dt.year, 4) + "-" + pad(dt.month, 2) + "-" + pad(dt.day, 2)
-        + "T" + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + "Z"
+    pad(dt.year, 4) + "-" + pad(dt.month, 2) + "-" + pad(dt.day, 2) + "T" + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + "Z"
 }
 
 // Formato ISO 8601 "básico" (sin separadores): `YYYYMMDDTHHMMSSZ`. Es el `X-Amz-Date` de AWS SigV4.
 pub fn to_iso8601_basic(dt: DateTime) -> string {
-    pad(dt.year, 4) + pad(dt.month, 2) + pad(dt.day, 2)
-        + "T" + pad(dt.hour, 2) + pad(dt.minute, 2) + pad(dt.second, 2) + "Z"
+    pad(dt.year, 4) + pad(dt.month, 2) + pad(dt.day, 2) + "T" + pad(dt.hour, 2) + pad(dt.minute, 2) + pad(dt.second, 2) + "Z"
 }
 
 // Solo la fecha, sin separadores: `YYYYMMDD` (el "datestamp" del *credential scope* de AWS SigV4).
@@ -118,8 +121,7 @@ fn month_name(m: int) -> string {
 
 // Formato RFC 1123 (la cabecera `Date:` de HTTP): `Wdy, DD Mon YYYY HH:MM:SS GMT`.
 pub fn to_rfc1123(dt: DateTime) -> string {
-    weekday_name(dt.weekday) + ", " + pad(dt.day, 2) + " " + month_name(dt.month) + " " + pad(dt.year, 4)
-        + " " + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + " GMT"
+    weekday_name(dt.weekday) + ", " + pad(dt.day, 2) + " " + month_name(dt.month) + " " + pad(dt.year, 4) + " " + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + " GMT"
 }
 
 // Parsea un timestamp ISO 8601 `YYYY-MM-DDTHH:MM:SSZ` a DateTime (forma fija; UTC).
@@ -154,7 +156,7 @@ pub fn format_duration(ms: int) -> string {
     }
     let total = ms / 1000;
     let h = total / 3600;
-    let m = (total % 3600) / 60;
+    let m = total % 3600 / 60;
     let s = total % 60;
     var out = "";
     if (h > 0) {

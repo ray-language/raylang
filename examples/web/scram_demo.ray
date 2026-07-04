@@ -1,7 +1,6 @@
 // Demo de SCRAM-SHA-256 contra el vector completo del RFC 7677 §3 (usuario "user", contraseña
 // "pencil", nonce y server-first fijos): comprueba que el `client-final` (con la prueba) y la
 // verificación de la firma del servidor coinciden con el estándar.
-
 from scram import scram_first, scram_client_first_message, scram_final, scram_verify, Scram;
 
 fn main() {

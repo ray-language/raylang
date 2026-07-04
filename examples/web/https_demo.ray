@@ -2,7 +2,6 @@
 // estado y el cuerpo. Usa la librería `http.ray` (que ahora habla http:// y https://).
 //
 // Ejecútalo:  cargo run -- examples/web/https_demo.ray https://example.com/
-
 from http import fetch, Response, body_text;
 
 fn main() -> int {
@@ -12,12 +11,19 @@ fn main() -> int {
         return 1;
     }
     match (fetch(a[0])) {
-        Result.Err(e) => { eprint(e); 1 },
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
         Result.Ok(r) => {
             print("status=" + to_string(r.status));
             match (body_text(r)) {
-                Result.Ok(b) => { print("body=" + b); },
-                Result.Err(e) => { eprint("cuerpo no es texto: " + e); },
+                Result.Ok(b) => {
+                    print("body=" + b);
+                },
+                Result.Err(e) => {
+                    eprint("cuerpo no es texto: " + e);
+                },
             }
             0
         },

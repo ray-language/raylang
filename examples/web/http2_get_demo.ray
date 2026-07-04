@@ -1,6 +1,5 @@
 // Demo del cliente HTTP/2 vivo (M31.2b): recibe host y puerto por argumentos, hace un GET a "/" sobre
 // HTTP/2 (TLS + ALPN h2) e imprime el código de estado y el cuerpo de la respuesta.
-
 from http2_client import http2_get, Http2Response;
 
 fn main() {

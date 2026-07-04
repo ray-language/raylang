@@ -1,7 +1,6 @@
 // Demo de ChaCha20 (RFC 8439 §2.4.2): cifra el texto de ejemplo del RFC con la clave/nonce/contador
 // del estándar y verifica que el criptograma coincide byte a byte con el vector oficial. Además hace
 // round-trip (descifrar el criptograma recupera el texto).
-
 from chacha20 import chacha20_encrypt;
 from hex import hex_encode;
 

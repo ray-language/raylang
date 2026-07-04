@@ -7,16 +7,15 @@
 //
 //   cargo run -- --vm examples/web/metrics_server_demo.ray
 //   curl 127.0.0.1:8080/ ; curl 127.0.0.1:8080/metrics
-
 from webserver import serve, Request, Response, text, not_found;
 from metrics import registry, register_counter, register_histogram, inc, observe, render, labels2, Registry;
 
 // Los mensajes al actor de métricas. `Render` lleva un canal por el que el actor devuelve el texto
 // (enviar un canal dentro del mensaje funciona: su id es un valor primitivo, se comparte al transferir).
 enum MetricMsg {
-    Inc(string, Map<string, string>),   // nombre del counter, etiquetas
-    Observe(string, float),             // nombre del histograma, valor
-    Render(Channel<string>),            // canal de respuesta con el texto renderizado
+    Inc(string, Map<string, string>),  // nombre del counter, etiquetas
+    Observe(string, float),  // nombre del histograma, valor
+    Render(Channel<string>),  // canal de respuesta con el texto renderizado
 }
 
 // El actor: posee el `Registry` y lo muta/lee SOLO él, procesando mensajes en orden (FIFO → las cuentas
@@ -32,7 +31,9 @@ fn metrics_actor(reg: Registry, ch: Channel<MetricMsg>) {
                     MetricMsg.Render(reply) => send(reply, render(reg)),
                 }
             },
-            Option.None => { running = false; },   // canal cerrado
+            Option.None => {
+                running = false;  // canal cerrado
+            },
         }
     }
 }
@@ -51,31 +52,36 @@ fn main() -> int {
 
     // El canal del actor de métricas (su id lo capturan todos los handlers → le envían a TODOS al mismo).
     let mch: Channel<MetricMsg> = channel();
-    spawn(fn() { metrics_actor(reg, mch); });
+    spawn(fn() {
+    metrics_actor(reg, mch);
+});
 
     let r = serve("127.0.0.1", 8080, fn(req: Request) -> Response {
-        if (req.path == "/metrics") {
-            // Pide el render al actor por un canal de respuesta (todos los updates previos ya están
-            // encolados antes que este Render → cuentas correctas por el orden FIFO).
-            let reply: Channel<string> = channel();
-            send(mch, MetricMsg.Render(reply));
-            match (recv(reply)) {
-                Option.Some(s) => metrics_response(s),
-                Option.None => metrics_response(""),
-            }
-        } else {
-            // El propio /metrics no se contabiliza (convención: el scrape no infla las métricas).
-            send(mch, MetricMsg.Inc("http_requests_total", labels2("method", req.method, "path", req.path)));
-            send(mch, MetricMsg.Observe("http_request_duracion_segundos", 0.008)); // duración simulada
-            if (req.path == "/") {
-                text(200, "hola desde raylang")
-            } else {
-                not_found()
-            }
+    if (req.path == "/metrics") {
+        // Pide el render al actor por un canal de respuesta (todos los updates previos ya están
+        // encolados antes que este Render → cuentas correctas por el orden FIFO).
+        let reply: Channel<string> = channel();
+        send(mch, MetricMsg.Render(reply));
+        match (recv(reply)) {
+            Option.Some(s) => metrics_response(s),
+            Option.None => metrics_response(""),
         }
-    });
+    } else {
+        // El propio /metrics no se contabiliza (convención: el scrape no infla las métricas).
+        send(mch, MetricMsg.Inc("http_requests_total", labels2("method", req.method, "path", req.path)));
+        send(mch, MetricMsg.Observe("http_request_duracion_segundos", 0.008));  // duración simulada
+        if (req.path == "/") {
+            text(200, "hola desde raylang")
+        } else {
+            not_found()
+        }
+    }
+});
     match (r) {
         Result.Ok(_) => 0,
-        Result.Err(e) => { eprint(e); 1 },
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
     }
 }

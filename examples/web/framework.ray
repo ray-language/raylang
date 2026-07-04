@@ -7,14 +7,15 @@
 // con UFCS (`app.GET("/", h)`, `r.text(...)`, `c.param("id")`). Ver el demo en `framework_demo.ray`.
 // (UFCS ahora resuelve funciones importadas a través de `import`, así que el framework y su uso pueden
 // vivir en módulos distintos.)
-
 import webserver;
 
 // --- Tipos ---
-
 // Un parámetro de ruta capturado (`:id` → ("id", "42")). Lista de asociación (pocos por ruta) en vez de
 // un Map, para no chocar con el `get` del prelude al definir el `get` de rutas en este módulo.
-struct Param { name: string, value: string }
+struct Param {
+    name: string,
+    value: string,
+}
 
 // El contexto que ve un handler: la petición + los parámetros de ruta extraídos del patrón.
 pub struct Ctx {
@@ -57,26 +58,39 @@ pub fn new_app() -> App {
 // Los verbos van en MAYÚSCULA (`GET`/`POST`/…) por dos razones: se leen como el método HTTP, y evitan
 // el choque de `get` con el `get` del prelude (de Map) — definir `fn get` en el módulo de entrada
 // taparía el `get` de Map para todo el programa, rompiendo a `webserver.ray`, que lo usa.
-
 fn add_route(app: App, method: string, pattern: string, handler: fn(Ctx, Res)) {
     push(app.routes, Route { method: method, segments: split_path(pattern), handler: handler });
 }
 
-pub fn GET(app: App, pattern: string, handler: fn(Ctx, Res)) { add_route(app, "GET", pattern, handler); }
-pub fn POST(app: App, pattern: string, handler: fn(Ctx, Res)) { add_route(app, "POST", pattern, handler); }
-pub fn PUT(app: App, pattern: string, handler: fn(Ctx, Res)) { add_route(app, "PUT", pattern, handler); }
-pub fn DELETE(app: App, pattern: string, handler: fn(Ctx, Res)) { add_route(app, "DELETE", pattern, handler); }
+pub fn GET(app: App, pattern: string, handler: fn(Ctx, Res)) {
+    add_route(app, "GET", pattern, handler);
+}
+
+pub fn POST(app: App, pattern: string, handler: fn(Ctx, Res)) {
+    add_route(app, "POST", pattern, handler);
+}
+
+pub fn PUT(app: App, pattern: string, handler: fn(Ctx, Res)) {
+    add_route(app, "PUT", pattern, handler);
+}
+
+pub fn DELETE(app: App, pattern: string, handler: fn(Ctx, Res)) {
+    add_route(app, "DELETE", pattern, handler);
+}
 
 // Registra un middleware (corre antes del enrutado; devuelve false para detener la petición).
-pub fn use_mw(app: App, mw: fn(Ctx, Res) -> bool) { push(app.middlewares, mw); }
+pub fn use_mw(app: App, mw: fn(Ctx, Res) -> bool) {
+    push(app.middlewares, mw);
+}
 
 // --- Helpers del contexto (handler) ---
-
 // El valor de un parámetro de ruta (`:name`), o "" si no existe.
 pub fn param(ctx: Ctx, name: string) -> string {
     var i: int = 0;
     while (i < len(ctx.params)) {
-        if (ctx.params[i].name == name) { return ctx.params[i].value; }
+        if (ctx.params[i].name == name) {
+            return ctx.params[i].value;
+        }
         i = i + 1;
     }
     ""
@@ -91,25 +105,34 @@ pub fn body(ctx: Ctx) -> string {
 }
 
 // --- Helpers de la respuesta (mutan `res`; encadenables con UFCS) ---
-
 // Fija el código de estado y devuelve `res` (para encadenar: `r.status(404).text("...")`).
-pub fn status(res: Res, n: int) -> Res { res.code = n; res }
+pub fn status(res: Res, n: int) -> Res {
+    res.code = n;
+    res
+}
 
 // Responde texto plano.
-pub fn text(res: Res, txt: string) { res.body = to_bytes(txt); res.content_type = "text/plain; charset=utf-8"; }
+pub fn text(res: Res, txt: string) {
+    res.body = to_bytes(txt);
+    res.content_type = "text/plain; charset=utf-8";
+}
 
 // Responde JSON (el llamador pasa el JSON ya serializado).
-pub fn json(res: Res, txt: string) { res.body = to_bytes(txt); res.content_type = "application/json"; }
+pub fn json(res: Res, txt: string) {
+    res.body = to_bytes(txt);
+    res.content_type = "application/json";
+}
 
 // --- Enrutado ---
-
 // Parte una ruta en segmentos por "/". Mantiene el vacío inicial (de la "/" inicial) en ambos lados, así
 // el patrón y la ruta se alinean posición a posición (p. ej. "/u/:id" y "/u/7" → 3 segmentos cada uno).
 fn split_path(p: string) -> [string] { split(p, "/") }
 
 // ¿Casan los segmentos del patrón con los de la ruta? Si sí, devuelve los parámetros capturados.
 fn match_route(pat: [string], path: [string]) -> Option<[Param]> {
-    if (len(pat) != len(path)) { return Option.None; }
+    if (len(pat) != len(path)) {
+        return Option.None;
+    }
     var ps: [Param] = [];
     var i: int = 0;
     while (i < len(pat)) {
@@ -117,7 +140,9 @@ fn match_route(pat: [string], path: [string]) -> Option<[Param]> {
         if (starts_with(seg, ":")) {
             push(ps, Param { name: substring(seg, 1, len(seg)), value: path[i] });
         } else {
-            if (seg != path[i]) { return Option.None; }
+            if (seg != path[i]) {
+                return Option.None;
+            }
         }
         i = i + 1;
     }
@@ -142,10 +167,14 @@ fn handle(app: App, req: webserver.Request) -> webserver.Response {
     var m: int = 0;
     while (seguir && m < len(app.middlewares)) {
         let mw: fn(Ctx, Res) -> bool = app.middlewares[m];
-        if (!mw(ctx, res)) { seguir = false; }
+        if (!mw(ctx, res)) {
+            seguir = false;
+        }
         m = m + 1;
     }
-    if (!seguir) { return build_response(res); }
+    if (!seguir) {
+        return build_response(res);
+    }
 
     // Enrutado: primera ruta cuyo método y patrón casan.
     let path_segs: [string] = split_path(req.path);
@@ -159,7 +188,7 @@ fn handle(app: App, req: webserver.Request) -> webserver.Response {
                     rt.handler(ctx, res);
                     return build_response(res);
                 },
-                Option.None => {},
+                Option.None => { },
             }
         }
         j = j + 1;
@@ -174,9 +203,11 @@ fn handle(app: App, req: webserver.Request) -> webserver.Response {
 // Arranca el servidor: cada conexión, en su fibra, pasa por middlewares + enrutado. **Solo VM.**
 pub fn listen(app: App, host: string, port: int) -> Result<int, string> {
     webserver.serve_raw(host, port, fn(req: webserver.Request, conn: int) {
-        match (webserver.send_response(conn, handle(app, req))) {
-            Result.Ok(_) => {},
-            Result.Err(e) => { eprint("respuesta: " + e); },
-        }
-    })
+    match (webserver.send_response(conn, handle(app, req))) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            eprint("respuesta: " + e);
+        },
+    }
+})
 }

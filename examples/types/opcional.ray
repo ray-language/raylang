@@ -3,7 +3,6 @@
 // match obliga a tratar AMBOS casos, así que "olvidar el caso vacío" es un error de
 // tipos, no un fallo en ejecución.
 // (M5 — corre igual con el intérprete y con la VM: `--vm`.)
-
 enum OpInt {
     Algun(int),
     Ninguno,
@@ -22,12 +21,12 @@ fn dividir(a: int, b: int) -> OpInt {
 fn o_defecto(o: OpInt, def: int) -> int {
     match (o) {
         OpInt.Algun(v) => v,
-        OpInt.Ninguno  => def,
+        OpInt.Ninguno => def,
     }
 }
 
 fn main() -> int {
-    print(o_defecto(dividir(10, 2), -1));   // 5
-    print(o_defecto(dividir(10, 0), -1));   // -1 (división por cero evitada)
-    o_defecto(dividir(84, 2), 0)            // código de salida 42
+    print(o_defecto(dividir(10, 2), -1));  // 5
+    print(o_defecto(dividir(10, 0), -1));  // -1 (división por cero evitada)
+    o_defecto(dividir(84, 2), 0)  // código de salida 42
 }

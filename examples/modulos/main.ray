@@ -5,30 +5,29 @@
 //   from M import a [as b]; -> trae nombres al ámbito, con alias para evitar colisiones
 // y el cruce de TIPOS entre módulos (M11.3c):
 //   from M import Tipo;     -> trae un tipo `pub` al ámbito (struct/enum)
-
 import figuras;
 from figuras import area_cuadrado as cuad;
-from figuras import Rect, Orientacion, area;   // -c: tipos + función que los usa
+from figuras import Rect, Orientacion, area;  // -c: tipos + función que los usa
 
 // Una función local 'doble' que NO colisiona con la privada 'doble' de figuras.
 fn doble(n: int) -> int { n + n }
 
 fn main() -> int {
-  print(figuras.area_rect(3, 4));        // 12  (calificado)
-  print(figuras.perimetro_rect(3, 4));   // 14  (usa la 'doble' privada de figuras)
-  print(cuad(5));                        // 25  (traída con alias)
-  print(doble(10));                      // 20  (la local, intacta)
+    print(figuras.area_rect(3, 4));  // 12  (calificado)
+    print(figuras.perimetro_rect(3, 4));  // 14  (usa la 'doble' privada de figuras)
+    print(cuad(5));  // 25  (traída con alias)
+    print(doble(10));  // 20  (la local, intacta)
 
-  // Tipos de otro módulo: se construyen y se pasan como cualquier valor.
-  let r: Rect = Rect { ancho: 6, alto: 5 };
-  print(area(r, Orientacion.Horizontal));   // 30
-  print(area(r, Orientacion.Vertical));     // 30
+    // Tipos de otro módulo: se construyen y se pasan como cualquier valor.
+    let r: Rect = Rect { ancho: 6, alto: 5 };
+    print(area(r, Orientacion.Horizontal));  // 30
+    print(area(r, Orientacion.Vertical));  // 30
 
-  // M11.3c-3: también se pueden CALIFICAR sin importarlos con `from` (basta `import figuras;`):
-  //   tipo en anotación, literal de struct, y construcción de enum, todo con `figuras.`.
-  let q: figuras.Rect = figuras.Rect { ancho: 2, alto: 9 };
-  print(figuras.area(q, figuras.Orientacion.Horizontal));   // 18
+    // M11.3c-3: también se pueden CALIFICAR sin importarlos con `from` (basta `import figuras;`):
+    //   tipo en anotación, literal de struct, y construcción de enum, todo con `figuras.`.
+    let q: figuras.Rect = figuras.Rect { ancho: 2, alto: 9 };
+    print(figuras.area(q, figuras.Orientacion.Horizontal));  // 18
 
-  // Código de salida = área del cuadrado de lado 7 = 49.
-  cuad(7)
+    // Código de salida = área del cuadrado de lado 7 = 49.
+    cuad(7)
 }

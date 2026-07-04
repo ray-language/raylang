@@ -1,6 +1,5 @@
 // Demo de Poly1305 (RFC 8439 §2.5.2): calcula el tag del mensaje de ejemplo con la clave de una sola
 // vez del estándar y verifica que coincide byte a byte con el vector oficial.
-
 from poly1305 import poly1305_mac;
 from hex import hex_encode;
 
@@ -14,12 +13,9 @@ fn str_bytes(s: string) -> [int] {
 
 fn main() {
     // Clave de una sola vez (32 octetos): r ‖ s del RFC 8439 §2.5.2.
-    let key: [int] = [
-        133, 214, 190, 120, 87, 85, 109, 51, 127, 68, 82, 254, 66, 213, 6, 168,
-        1, 3, 128, 138, 251, 13, 178, 253, 74, 191, 246, 175, 65, 73, 245, 27
-    ];
+    let key: [int] = [133, 214, 190, 120, 87, 85, 109, 51, 127, 68, 82, 254, 66, 213, 6, 168, 1, 3, 128, 138, 251, 13, 178, 253, 74, 191, 246, 175, 65, 73, 245, 27];
     let msg = str_bytes("Cryptographic Forum Research Group");
 
     let tag = poly1305_mac(key, msg);
-    print(hex_encode(tag));   // esperado: a8061dc1305136c6c22b8baf0c0127a9
+    print(hex_encode(tag));  // esperado: a8061dc1305136c6c22b8baf0c0127a9
 }

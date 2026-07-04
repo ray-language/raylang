@@ -8,7 +8,6 @@
 // M19.2: el cuerpo (de la petición y de la respuesta) es **bytes** → binario correcto (imágenes, etc.),
 // no solo texto. Las cabeceras siguen siendo texto (ASCII). Los atajos de respuesta de texto (ok/text/
 // json_response) aceptan string y lo codifican; bytes_response acepta bytes crudos. TLS (https) es M19.4.
-
 pub struct Request {
     method: string,
     path: string,
@@ -23,7 +22,6 @@ pub struct Response {
 }
 
 // --- Respuestas: atajos para los casos comunes ---
-
 // Respuesta de texto: el cuerpo se codifica a UTF-8.
 pub fn text(status: int, body: string) -> Response {
     Response { status: status, headers: map_new(), body: to_bytes(body) }
@@ -56,17 +54,10 @@ pub fn request_text(req: Request) -> Result<string, string> {
 
 // La frase de estado para los códigos comunes (HTTP la exige tras el número).
 fn status_text(code: int) -> string {
-    if (code == 200) { "OK" }
-    else if (code == 201) { "Created" }
-    else if (code == 204) { "No Content" }
-    else if (code == 400) { "Bad Request" }
-    else if (code == 404) { "Not Found" }
-    else if (code == 500) { "Internal Server Error" }
-    else { "Status" }
+    if (code == 200) { "OK" } else if (code == 201) { "Created" } else if (code == 204) { "No Content" } else if (code == 400) { "Bad Request" } else if (code == 404) { "Not Found" } else if (code == 500) { "Internal Server Error" } else { "Status" }
 }
 
 // --- Lectura de la petición ---
-
 // El índice del primer "\r\n\r\n" (fin de cabeceras) en bytes, o -1. Escanea por octetos (CR=13, LF=10):
 // no se puede usar index_of (es de string) porque el cuerpo binario rompería from_utf8 del buffer entero.
 fn find_fin_cabeceras(b: bytes) -> int {
@@ -95,9 +86,15 @@ pub fn read_request(conn: int) -> Result<Request, string> {
         } else {
             match (socket_read_bytes(conn)) {
                 Result.Ok(trozo) => {
-                    if (len(trozo) == 0) { seguir = false; } else { acc = acc + trozo; }
+                    if (len(trozo) == 0) {
+                        seguir = false;
+                    } else {
+                        acc = acc + trozo;
+                    }
                 },
-                Result.Err(e) => { return Result.Err("error al leer: " + e); },
+                Result.Err(e) => {
+                    return Result.Err("error al leer: " + e);
+                },
             }
         }
     }
@@ -129,7 +126,7 @@ pub fn read_request(conn: int) -> Result<Request, string> {
                         let valor: string = trim(substring(lineas[i], c + 1, len(lineas[i])));
                         insert(headers, nombre, valor);
                     },
-                    Option.None => {},
+                    Option.None => { },
                 }
                 i = i + 1;
             }
@@ -143,16 +140,22 @@ pub fn read_request(conn: int) -> Result<Request, string> {
                             while (faltan && len(body) < n) {
                                 match (socket_read_bytes(conn)) {
                                     Result.Ok(trozo) => {
-                                        if (len(trozo) == 0) { faltan = false; } else { body = body + trozo; }
+                                        if (len(trozo) == 0) {
+                                            faltan = false;
+                                        } else {
+                                            body = body + trozo;
+                                        }
                                     },
-                                    Result.Err(e) => { return Result.Err("error al leer el cuerpo: " + e); },
+                                    Result.Err(e) => {
+                                        return Result.Err("error al leer el cuerpo: " + e);
+                                    },
                                 }
                             }
                         },
-                        Option.None => {},
+                        Option.None => { },
                     }
                 },
-                Option.None => {},
+                Option.None => { },
             }
 
             Result.Ok(Request { method: method, path: path, headers: headers, body: body })
@@ -161,7 +164,6 @@ pub fn read_request(conn: int) -> Result<Request, string> {
 }
 
 // --- Escritura de la respuesta ---
-
 pub fn send_response(conn: int, r: Response) -> Result<int, string> {
     // Cabecera = texto (Content-Length en octetos, ya correcto); cuerpo = bytes crudos. Se envía todo
     // junto como bytes para no corromper un cuerpo binario.
@@ -173,8 +175,10 @@ pub fn send_response(conn: int, r: Response) -> Result<int, string> {
     var i: int = 0;
     while (i < len(ks)) {
         match (get(r.headers, ks[i])) {
-            Option.Some(v) => { head = head + ks[i] + ": " + v + "\r\n"; },
-            Option.None => {},
+            Option.Some(v) => {
+                head = head + ks[i] + ": " + v + "\r\n";
+            },
+            Option.None => { },
         }
         i = i + 1;
     }
@@ -183,7 +187,6 @@ pub fn send_response(conn: int, r: Response) -> Result<int, string> {
 }
 
 // --- SSE (server-sent events): HTTP que no cierra y va emitiendo eventos ---
-
 // Abre un stream SSE: 200 + Content-Type: text/event-stream (mantiene la conexión viva).
 pub fn sse_open(conn: int) -> Result<int, string> {
     var out: string = "HTTP/1.1 200 OK\r\n";
@@ -199,13 +202,16 @@ pub fn sse_event(conn: int, data: string) -> Result<int, string> {
 }
 
 // --- El bucle del servidor (concurrente: una fibra por conexión) ---
-
 // Atiende UNA conexión: lee la petición y se la pasa al handler (que controla la conexión). Cierra al
 // terminar. Lo usa serve_raw; cada conexión corre en su propia fibra.
 fn atender(conn: int, handler: fn(Request, int)) {
     match (read_request(conn)) {
-        Result.Ok(req) => { handler(req, conn); },
-        Result.Err(e) => { eprint("petición: " + e); },
+        Result.Ok(req) => {
+            handler(req, conn);
+        },
+        Result.Err(e) => {
+            eprint("petición: " + e);
+        },
     }
     close(conn);
 }
@@ -220,8 +226,13 @@ pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<i
             var seguir: bool = true;
             while (seguir) {
                 match (tcp_accept(srv)) {
-                    Result.Ok(conn) => { spawn(fn() { atender(conn, handler) }); },
-                    Result.Err(e) => { eprint("aceptar: " + e); seguir = false; },
+                    Result.Ok(conn) => {
+                        spawn(fn() { atender(conn, handler) });
+                    },
+                    Result.Err(e) => {
+                        eprint("aceptar: " + e);
+                        seguir = false;
+                    },
                 }
             }
             close(srv);
@@ -234,9 +245,11 @@ pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<i
 // sobre serve_raw. **Solo VM.**
 pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Result<int, string> {
     serve_raw(host, port, fn(req: Request, conn: int) {
-        match (send_response(conn, handler(req))) {
-            Result.Ok(_) => {},
-            Result.Err(e) => { eprint("respuesta: " + e); },
-        }
-    })
+    match (send_response(conn, handler(req))) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            eprint("respuesta: " + e);
+        },
+    }
+})
 }

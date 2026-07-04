@@ -7,12 +7,17 @@
 //
 // M29.1a (núcleo): literales, `.`, `*` `+` `?`, alternancia `|`, grupos `( )`, concatenación.
 // M29.1b: clases `[...]`/`[^...]` con rangos, escapes `\d`/`\w`/`\s` (y `\D`/`\W`/`\S`), anclas `^`/`$`.
-
 // Un rango de caracteres `lo..hi` (ambos inclusive). Un carácter suelto es el rango `c..c`.
-struct Range { lo: char, hi: char }
+struct Range {
+    lo: char,
+    hi: char,
+}
 
 // Una clase de caracteres `[...]`: un conjunto de rangos, opcionalmente negado (`[^...]`).
-struct Class { neg: bool, ranges: [Range] }
+struct Class {
+    neg: bool,
+    ranges: [Range],
+}
 
 // Una instrucción de la máquina. op:
 //   0 Char(c):    si el carácter de entrada es `c`, el hilo avanza a pc+1; si no, muere.
@@ -23,10 +28,18 @@ struct Class { neg: bool, ranges: [Range] }
 //   5 Class(x):   casa si el carácter satisface `classes[x]`; avanza a pc+1.
 //   6 AssertStart: aserción de ancho cero `^`; el hilo sigue solo en la posición 0.
 //   7 AssertEnd:   aserción de ancho cero `$`; el hilo sigue solo al final del texto.
-struct Inst { op: int, x: int, y: int, c: char }
+struct Inst {
+    op: int,
+    x: int,
+    y: int,
+    c: char,
+}
 
 // El programa compilado: las instrucciones y la tabla de clases (a la que apuntan las Class por índice).
-struct Prog { insts: [Inst], classes: [Class] }
+struct Prog {
+    insts: [Inst],
+    classes: [Class],
+}
 
 // El AST del patrón. Recursivo: en raylang los enums son objetos del heap (semántica de referencia),
 // así que un payload puede volver a ser un `Re` sin tamaño infinito.
@@ -47,7 +60,6 @@ enum Re {
 // ---------------------------------------------------------------------------
 // Clases predefinidas: `\d` `\w` `\s`. Devuelven la lista de rangos correspondiente.
 // ---------------------------------------------------------------------------
-
 fn ranges_digit() -> [Range] {
     var r: [Range] = [];
     push(r, Range { lo: '0', hi: '9' });
@@ -79,21 +91,27 @@ fn ranges_space() -> [Range] {
 //   repeat := atom ('*' | '+' | '?')*
 //   atom   := '(' alt ')' | '[' class ']' | '.' | '^' | '$' | '\' esc | char
 // ---------------------------------------------------------------------------
-
-struct PS { pat: [char], pos: int }
+struct PS {
+    pat: [char],
+    pos: int,
+}
 
 fn ps_at_end(p: PS) -> bool { p.pos >= len(p.pat) }
-fn ps_peek(p: PS) -> char { p.pat[p.pos] }              // el llamador comprueba at_end antes
-fn ps_peek2(p: PS) -> char { p.pat[p.pos + 1] }         // el llamador garantiza que hay 2 más
-fn ps_advance(p: PS) -> char { let c = p.pat[p.pos]; p.pos = p.pos + 1; c }
+
+fn ps_peek(p: PS) -> char { p.pat[p.pos] }  // el llamador comprueba at_end antes
+
+fn ps_peek2(p: PS) -> char { p.pat[p.pos + 1] }  // el llamador garantiza que hay 2 más
+
+fn ps_advance(p: PS) -> char {
+    let c = p.pat[p.pos];
+    p.pos = p.pos + 1;
+    c
+}
 
 // Traduce un carácter escapado a su valor (dentro o fuera de una clase): `\n` `\t` `\r`, o el propio
 // carácter para un metacarácter literal (`\.` `\*` `\[` `\\` `\-` `\^` …).
 fn unescape(e: char) -> char {
-    if (e == 'n') { '\n' }
-    else if (e == 't') { '\t' }
-    else if (e == 'r') { '\r' }
-    else { e }
+    if (e == 'n') { '\n' } else if (e == 't') { '\t' } else if (e == 'r') { '\r' } else { e }
 }
 
 fn parse_alt(p: PS) -> Re {
@@ -165,7 +183,7 @@ fn parse_atom(p: PS) -> Re {
         return Re.AnchorEnd;
     }
     if (c == '\\') {
-        ps_advance(p);                                  // consume la barra
+        ps_advance(p);  // consume la barra
         if (ps_at_end(p)) {
             panic("regex: '\\' al final del patrón");
         }
@@ -178,13 +196,7 @@ fn parse_atom(p: PS) -> Re {
 
 // Un escape en posición de átomo: clase predefinida (`\d`/`\w`/`\s` y negadas) o literal (`\.` `\n` …).
 fn escape_atom(e: char) -> Re {
-    if (e == 'd') { Re.ClassRe(Class { neg: false, ranges: ranges_digit() }) }
-    else if (e == 'D') { Re.ClassRe(Class { neg: true, ranges: ranges_digit() }) }
-    else if (e == 'w') { Re.ClassRe(Class { neg: false, ranges: ranges_word() }) }
-    else if (e == 'W') { Re.ClassRe(Class { neg: true, ranges: ranges_word() }) }
-    else if (e == 's') { Re.ClassRe(Class { neg: false, ranges: ranges_space() }) }
-    else if (e == 'S') { Re.ClassRe(Class { neg: true, ranges: ranges_space() }) }
-    else { Re.Lit(unescape(e)) }
+    if (e == 'd') { Re.ClassRe(Class { neg: false, ranges: ranges_digit() }) } else if (e == 'D') { Re.ClassRe(Class { neg: true, ranges: ranges_digit() }) } else if (e == 'w') { Re.ClassRe(Class { neg: false, ranges: ranges_word() }) } else if (e == 'W') { Re.ClassRe(Class { neg: true, ranges: ranges_word() }) } else if (e == 's') { Re.ClassRe(Class { neg: false, ranges: ranges_space() }) } else if (e == 'S') { Re.ClassRe(Class { neg: true, ranges: ranges_space() }) } else { Re.Lit(unescape(e)) }
 }
 
 // Parsea el interior de `[...]` (el '[' ya se consumió); deja el cursor tras el ']'.
@@ -197,16 +209,21 @@ fn parse_class(p: PS) -> Class {
     var ranges: [Range] = [];
     while (!ps_at_end(p) && ps_peek(p) != ']') {
         if (ps_peek(p) == '\\') {
-            ps_advance(p);                              // barra
+            ps_advance(p);  // barra
             if (ps_at_end(p)) {
                 panic("regex: '\\' al final de la clase");
             }
             let e = ps_advance(p);
             // Clases predefinidas dentro de la clase: se fusionan sus rangos.
-            if (e == 'd') { append_all(ranges, ranges_digit()); }
-            else if (e == 'w') { append_all(ranges, ranges_word()); }
-            else if (e == 's') { append_all(ranges, ranges_space()); }
-            else { push_item(p, ranges, unescape(e)); }
+            if (e == 'd') {
+                append_all(ranges, ranges_digit());
+            } else if (e == 'w') {
+                append_all(ranges, ranges_word());
+            } else if (e == 's') {
+                append_all(ranges, ranges_space());
+            } else {
+                push_item(p, ranges, unescape(e));
+            }
         } else {
             let c = ps_advance(p);
             push_item(p, ranges, c);
@@ -215,7 +232,7 @@ fn parse_class(p: PS) -> Class {
     if (ps_at_end(p)) {
         panic("regex: falta ']' para cerrar la clase");
     }
-    ps_advance(p);                                      // consume ']'
+    ps_advance(p);  // consume ']'
     Class { neg: neg, ranges: ranges }
 }
 
@@ -230,7 +247,7 @@ fn append_all(dst: [Range], src: [Range]) {
 // Añade `lo` como rango: si le sigue `-` y el carácter tras el guion no es `]`, es un rango `lo-hi`.
 fn push_item(p: PS, ranges: [Range], lo: char) {
     if (!ps_at_end(p) && ps_peek(p) == '-' && p.pos + 1 < len(p.pat) && ps_peek2(p) != ']') {
-        ps_advance(p);                                  // '-'
+        ps_advance(p);  // '-'
         var hi = ps_advance(p);
         if (hi == '\\') {
             hi = unescape(ps_advance(p));
@@ -244,7 +261,6 @@ fn push_item(p: PS, ranges: [Range], lo: char) {
 // ---------------------------------------------------------------------------
 // Compilación Re → programa (con parcheo de saltos hacia delante).
 // ---------------------------------------------------------------------------
-
 fn emit(prog: Prog, op: int, x: int, y: int, c: char) -> int {
     let pos = len(prog.insts);
     push(prog.insts, Inst { op: op, x: x, y: y, c: c });
@@ -254,15 +270,23 @@ fn emit(prog: Prog, op: int, x: int, y: int, c: char) -> int {
 fn compile_re(re: Re, prog: Prog) {
     match (re) {
         Re.Empty => { },
-        Re.Lit(c) => { emit(prog, 0, 0, 0, c); },
-        Re.Any => { emit(prog, 1, 0, 0, ' '); },
+        Re.Lit(c) => {
+            emit(prog, 0, 0, 0, c);
+        },
+        Re.Any => {
+            emit(prog, 1, 0, 0, ' ');
+        },
         Re.ClassRe(cl) => {
             let idx = len(prog.classes);
             push(prog.classes, cl);
             emit(prog, 5, idx, 0, ' ');
         },
-        Re.AnchorStart => { emit(prog, 6, 0, 0, ' '); },
-        Re.AnchorEnd => { emit(prog, 7, 0, 0, ' '); },
+        Re.AnchorStart => {
+            emit(prog, 6, 0, 0, ' ');
+        },
+        Re.AnchorEnd => {
+            emit(prog, 7, 0, 0, ' ');
+        },
         Re.Concat(a, b) => {
             compile_re(a, prog);
             compile_re(b, prog);
@@ -317,14 +341,13 @@ fn compile_pattern(pattern: string) -> Prog {
     var classes: [Class] = [];
     let prog = Prog { insts: insts, classes: classes };
     compile_re(re, prog);
-    emit(prog, 2, 0, 0, ' ');                           // Match final
+    emit(prog, 2, 0, 0, ' ');  // Match final
     prog
 }
 
 // ---------------------------------------------------------------------------
 // Simulación (Thompson): conjunto de hilos activos. `pos`/`n` dan la posición para las aserciones.
 // ---------------------------------------------------------------------------
-
 fn new_bools(n: int) -> [bool] {
     var b: [bool] = [];
     var i = 0;
@@ -356,20 +379,25 @@ fn add_thread(prog: Prog, list: [int], seen: [bool], pc: int, pos: int, n: int) 
     }
     seen[pc] = true;
     let ins = prog.insts[pc];
-    if (ins.op == 3) {                                  // Jmp
+    if (ins.op == 3) {
+        // Jmp
         add_thread(prog, list, seen, ins.x, pos, n);
-    } else if (ins.op == 4) {                           // Split
+    } else if (ins.op == 4) {
+        // Split
         add_thread(prog, list, seen, ins.x, pos, n);
         add_thread(prog, list, seen, ins.y, pos, n);
-    } else if (ins.op == 6) {                           // AssertStart `^`
+    } else if (ins.op == 6) {
+        // AssertStart `^`
         if (pos == 0) {
             add_thread(prog, list, seen, pc + 1, pos, n);
         }
-    } else if (ins.op == 7) {                           // AssertEnd `$`
+    } else if (ins.op == 7) {
+        // AssertEnd `$`
         if (pos == n) {
             add_thread(prog, list, seen, pc + 1, pos, n);
         }
-    } else {                                            // Char / Any / Class / Match
+    } else {
+        // Char / Any / Class / Match
         push(list, pc);
     }
 }
@@ -395,11 +423,14 @@ fn step(prog: Prog, clist: [int], ch: char, pos_next: int, n: int, seed: bool) -
         let pc = clist[k];
         let ins = prog.insts[pc];
         var consume = false;
-        if (ins.op == 0 && ins.c == ch) {               // Char que casa
+        if (ins.op == 0 && ins.c == ch) {
+            // Char que casa
             consume = true;
-        } else if (ins.op == 1) {                       // Any
+        } else if (ins.op == 1) {
+            // Any
             consume = true;
-        } else if (ins.op == 5 && class_matches(prog.classes[ins.x], ch)) { // Class
+        } else if (ins.op == 5 && class_matches(prog.classes[ins.x], ch)) {
+            // Class
             consume = true;
         }
         if (consume) {
@@ -423,7 +454,7 @@ pub fn full_match(pattern: string, text: string) -> bool {
     add_thread(prog, clist, seen, 0, 0, n);
     var i = 0;
     while (i < n) {
-        clist = step(prog, clist, txt[i], i + 1, n, false); // sin sembrar: anclado al inicio
+        clist = step(prog, clist, txt[i], i + 1, n, false);  // sin sembrar: anclado al inicio
         i = i + 1;
     }
     has_match(prog, clist)
@@ -442,7 +473,7 @@ pub fn search(pattern: string, text: string) -> bool {
     }
     var i = 0;
     while (i < n) {
-        clist = step(prog, clist, txt[i], i + 1, n, true); // siembra: el match puede empezar en cualquier posición
+        clist = step(prog, clist, txt[i], i + 1, n, true);  // siembra: el match puede empezar en cualquier posición
         if (has_match(prog, clist)) {
             return true;
         }
@@ -454,7 +485,6 @@ pub fn search(pattern: string, text: string) -> bool {
 // ---------------------------------------------------------------------------
 // M29.1c — localización: find / find_all / replace_all.
 // ---------------------------------------------------------------------------
-
 // Corre el autómata ANCLADO en la posición `s` y devuelve el índice final del match **más largo**
 // que empieza en `s` (leftmost-longest), o -1 si no hay ninguno. `txt` son los caracteres del texto.
 fn match_at(prog: Prog, txt: [char], s: int, n: int) -> int {
@@ -463,17 +493,17 @@ fn match_at(prog: Prog, txt: [char], s: int, n: int) -> int {
     add_thread(prog, clist, seen, 0, s, n);
     var best = 0 - 1;
     if (has_match(prog, clist)) {
-        best = s;                                       // match de ancho cero en `s`
+        best = s;  // match de ancho cero en `s`
     }
     var i = s;
     while (i < n) {
-        clist = step(prog, clist, txt[i], i + 1, n, false); // anclado: sin sembrar
+        clist = step(prog, clist, txt[i], i + 1, n, false);  // anclado: sin sembrar
         i = i + 1;
         if (has_match(prog, clist)) {
             best = i;
         }
         if (len(clist) == 0) {
-            return best;                                // sin hilos vivos: no puede extenderse más
+            return best;  // sin hilos vivos: no puede extenderse más
         }
     }
     best
@@ -515,9 +545,9 @@ pub fn find_all(pattern: string, text: string) -> [string] {
         if (e >= 0) {
             push(out, substring(text, s, e));
             if (e > s) {
-                s = e;                                  // continúa tras la coincidencia (no solapada)
+                s = e;  // continúa tras la coincidencia (no solapada)
             } else {
-                s = s + 1;                              // coincidencia de ancho cero: avanza uno
+                s = s + 1;  // coincidencia de ancho cero: avanza uno
             }
         } else {
             s = s + 1;
@@ -541,7 +571,7 @@ pub fn replace_all(pattern: string, text: string, repl: string) -> string {
         } else {
             // sin coincidencia (o de ancho cero): copia el carácter actual y avanza.
             if (e >= 0) {
-                out = out + repl;                       // coincidencia vacía: inserta el reemplazo
+                out = out + repl;  // coincidencia vacía: inserta el reemplazo
             }
             if (s < n) {
                 out = out + substring(text, s, s + 1);

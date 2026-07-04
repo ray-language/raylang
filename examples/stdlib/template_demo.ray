@@ -1,16 +1,10 @@
 // Demo del motor de plantillas HTML: interpolación con autoescape, condicional if/else, bucle for, y
 // una interpolación cruda (sin escapar) `{{& … }}`.
-
 from template import render_template, ctx_str, ctx_int, ctx_bool, ctx_list, val_str, val_int, Bind, TVal;
 
 fn main() {
     let tpl = "<h1>Hola, {{ name }}!</h1>\n{% if admin %}<p>admin</p>{% else %}<p>user</p>{% endif %}\n<ul>{% for item in items %}<li>{{ item }}</li>{% endfor %}</ul>\nraw: {{& html }}";
-    let ctx = [
-        ctx_str("name", "<b>Ada</b>"),
-        ctx_bool("admin", true),
-        ctx_list("items", [val_str("a & b"), val_str("c"), val_int(42)]),
-        ctx_str("html", "<i>raw</i>"),
-    ];
+    let ctx = [ctx_str("name", "<b>Ada</b>"), ctx_bool("admin", true), ctx_list("items", [val_str("a & b"), val_str("c"), val_int(42)]), ctx_str("html", "<i>raw</i>")];
     match (render_template(tpl, ctx)) {
         Result.Ok(out) => print(out),
         Result.Err(e) => print("err: " + e),

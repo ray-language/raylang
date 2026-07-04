@@ -2,7 +2,6 @@
 // sockets UDP distintos a la vez. Si recv_from bloqueara el hilo del scheduler, la 2.ª fibra nunca
 // correría (deadlock) y su puerto no se imprimiría → el test colgaría. Que ambas avancen prueba que
 // recv_from CEDE la fibra al scheduler mientras espera. Lo lanza `tests/udp_yield_cli.rs`.
-
 from udp import bind, send_to, recv_from, Packet;
 
 fn texto(d: bytes) -> string {
@@ -35,10 +34,13 @@ fn main() -> int {
             match (recv_from(ha)) {
                 Result.Ok(p) => print("A:" + texto(p.data)),
                 Result.Err(e) => print("Aerr:" + e),
-            };
-            join(t); // espera a que el worker termine antes de salir (si no, la VM cerraría)
+            }
+            join(t);  // espera a que el worker termine antes de salir (si no, la VM cerraría)
             0
         },
-        Result.Err(e) => { eprint(e); 1 },
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
     }
 }

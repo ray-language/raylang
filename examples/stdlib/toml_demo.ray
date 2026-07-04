@@ -1,6 +1,5 @@
 // Demo de TOML: parsea un documento con comentarios, tablas, y valores string/int/float/bool/array,
 // y muestra cada valor por su ruta con puntos.
-
 from toml import parse_toml, toml_get, toml_show, TomlValue, TomlEntry;
 
 fn show_key(entries: [TomlEntry], key: string) {

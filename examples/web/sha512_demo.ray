@@ -1,6 +1,5 @@
 // Demo de SHA-512: comprueba los digests de "abc" y del mensaje vacío contra los vectores conocidos
 // (FIPS 180-4 / NIST). Prerrequisito de Ed25519.
-
 from sha512 import sha512_hex;
 
 fn str_bytes(s: string) -> [int] {

@@ -1,7 +1,6 @@
 // Cookies HTTP escritas EN raylang. Cero runtime nuevo. Parsea la cabecera `Cookie:` de petición y
 // construye valores `Set-Cookie:` de respuesta. Importable:
 //   from cookie import parse_cookies, cookie, set_cookie, with_path, with_max_age, with_http_only, with_secure;
-
 from url import url_encode, url_decode;
 
 // `url_decode` tolerante (devuelve el crudo si falla).
@@ -26,7 +25,7 @@ pub fn parse_cookies(header: string) -> Map<string, string> {
                     let v = decode_or(trim(substring(p, eq + 1, len(p))));
                     insert(m, k, v);
                 },
-                Option.None => {},
+                Option.None => { },
             }
         }
         i = i + 1;
@@ -40,11 +39,12 @@ struct Cookie {
     name: string,
     value: string,
     path: string,
-    max_age: int,  // < 0 = sin Max-Age
+    max_age: int,
     http_only: bool,
     secure: bool,
 }
 
+// < 0 = sin Max-Age
 // Crea una cookie con solo nombre y valor (sin atributos).
 pub fn cookie(name: string, value: string) -> Cookie {
     Cookie { name: name, value: value, path: "", max_age: 0 - 1, http_only: false, secure: false }
@@ -52,10 +52,25 @@ pub fn cookie(name: string, value: string) -> Cookie {
 
 // Setters encadenables (mutan por referencia y devuelven la cookie). Nombres `with_*` para no chocar
 // con los campos homónimos (en UFCS el campo ganaría a la función).
-pub fn with_path(c: Cookie, p: string) -> Cookie { c.path = p; c }
-pub fn with_max_age(c: Cookie, n: int) -> Cookie { c.max_age = n; c }
-pub fn with_http_only(c: Cookie) -> Cookie { c.http_only = true; c }
-pub fn with_secure(c: Cookie) -> Cookie { c.secure = true; c }
+pub fn with_path(c: Cookie, p: string) -> Cookie {
+    c.path = p;
+    c
+}
+
+pub fn with_max_age(c: Cookie, n: int) -> Cookie {
+    c.max_age = n;
+    c
+}
+
+pub fn with_http_only(c: Cookie) -> Cookie {
+    c.http_only = true;
+    c
+}
+
+pub fn with_secure(c: Cookie) -> Cookie {
+    c.secure = true;
+    c
+}
 
 // Serializa la cookie a un valor de cabecera `Set-Cookie`. El valor se url-codifica.
 pub fn set_cookie(c: Cookie) -> string {

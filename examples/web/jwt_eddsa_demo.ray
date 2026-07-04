@@ -2,7 +2,6 @@
 // comprueba que (1) la clave pública correcta lo verifica y devuelve las claims, (2) una clave pública
 // distinta lo rechaza (propiedad asimétrica), (3) un payload manipulado (con firma de otro mensaje) se
 // rechaza.
-
 from jwt_eddsa import jwt_eddsa_sign, jwt_eddsa_verify;
 from ed25519 import ed25519_public_key;
 

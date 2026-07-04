@@ -1,7 +1,6 @@
 // Demo/verificación de HMAC-SHA256, base64url y hex (M20.2) contra vectores conocidos.
 // Lo ejecuta `tests/hmac_cli.rs`. Cada línea de salida se compara con su valor de referencia
 // (RFC 4231 para HMAC, `openssl`/`python base64.urlsafe_b64encode` para el resto).
-
 from hmac import hmac_sha256_hex, hmac_sha256;
 from base64 import base64url, base64url_decode;
 from hex import hex_encode, hex_decode;
@@ -15,22 +14,21 @@ fn main() {
     // Clave más larga que el bloque (>64 octetos) → se hashea antes.
     print(hmac_sha256_hex(to_bytes("clave-larguisima-de-mas-de-sesenta-y-cuatro-octetos-para-forzar-el-hash-previo"), to_bytes("mensaje")));
     // 7d5c78edf5aae49e5d1bf1106e250485811585bcad0d78ebbea235d9f320a0dd
-
     // --- base64url (sin relleno, alfabeto URL-safe) ---
-    print(base64url(hex_decode_ok("4d616e")));               // TWFu  ("Man")
-    print(base64url([251, 255, 191]));                       // -_-_  (ejerce '-' y '_')
-    print(base64url(str_octets("{\"alg\":\"HS256\"}")));       // eyJhbGciOiJIUzI1NiJ9 (cabecera JWT)
+    print(base64url(hex_decode_ok("4d616e")));  // TWFu  ("Man")
+    print(base64url([251, 255, 191]));  // -_-_  (ejerce '-' y '_')
+    print(base64url(str_octets("{\"alg\":\"HS256\"}")));  // eyJhbGciOiJIUzI1NiJ9 (cabecera JWT)
 
     // --- round-trip: base64url_decode(base64url(x)) == x ---
     let original = hmac_sha256(to_bytes("key"), to_bytes("dato"));
     match (base64url_decode(base64url(original))) {
-        Result.Ok(vuelta) => print(hex_encode(vuelta) == hex_encode(original)), // true
+        Result.Ok(vuelta) => print(hex_encode(vuelta) == hex_encode(original)),  // true
         Result.Err(e) => print(e),
     }
 
     // --- hex round-trip ---
     match (hex_decode("deadbeef")) {
-        Result.Ok(o) => print(hex_encode(o)), // deadbeef
+        Result.Ok(o) => print(hex_encode(o)),  // deadbeef
         Result.Err(e) => print(e),
     }
 }
@@ -51,6 +49,9 @@ fn str_octets(s: string) -> [int] {
 fn hex_decode_ok(s: string) -> [int] {
     match (hex_decode(s)) {
         Result.Ok(o) => o,
-        Result.Err(e) => { panic(e); [] },
+        Result.Err(e) => {
+            panic(e);
+            []
+        },
     }
 }

@@ -1,6 +1,5 @@
 // Demo del cliente PostgreSQL (M32.1): se conecta a host:port, autentica con SCRAM-SHA-256 (usuario
 // "raylang", contraseña "secret", base "test"), ejecuta una consulta y muestra la primera fila.
-
 from postgres import pg_query;
 
 fn main() {
@@ -13,7 +12,11 @@ fn main() {
                     var s = "";
                     var primero = true;
                     for c in cols {
-                        if (primero) { primero = false; } else { s = s + "|"; }
+                        if (primero) {
+                            primero = false;
+                        } else {
+                            s = s + "|";
+                        }
                         s = s + c;
                     }
                     print("row: " + s);

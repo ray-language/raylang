@@ -23,25 +23,23 @@ fn bajo_stock(inv: [Producto], umbral: int) -> int {
     var n: int = 0;
     var i: int = 0;
     while (i < len(inv)) {
-        if (inv[i].cantidad < umbral) { n = n + 1; }
+        if (inv[i].cantidad < umbral) {
+            n = n + 1;
+        }
         i = i + 1;
     }
     n
 }
 
 fn main() -> int {
-    var inv: [Producto] = [
-        Producto { nombre: "teclado", precio: 25, cantidad: 8 },
-        Producto { nombre: "mouse",   precio: 15, cantidad: 3 },
-        Producto { nombre: "monitor", precio: 180, cantidad: 2 }
-    ];
+    var inv: [Producto] = [Producto { nombre: "teclado", precio: 25, cantidad: 8 }, Producto { nombre: "mouse", precio: 15, cantidad: 3 }, Producto { nombre: "monitor", precio: 180, cantidad: 2 }];
 
-    print(valor_total(inv));     // 25*8 + 15*3 + 180*2 = 605
-    print(bajo_stock(inv, 5));   // 2 (mouse y monitor)
+    print(valor_total(inv));  // 25*8 + 15*3 + 180*2 = 605
+    print(bajo_stock(inv, 5));  // 2 (mouse y monitor)
 
     // Reponer stock del mouse: muta el struct dentro del arreglo.
     inv[1].cantidad = 20;
-    print(bajo_stock(inv, 5));   // 1 (solo monitor)
-    print(valor_total(inv));     // 25*8 + 15*20 + 180*2 = 860
+    print(bajo_stock(inv, 5));  // 1 (solo monitor)
+    print(valor_total(inv));  // 25*8 + 15*20 + 180*2 = 860
     0
 }

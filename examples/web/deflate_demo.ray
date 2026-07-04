@@ -2,36 +2,36 @@
 // el PROPIO inflate.ray (round-trip) y reporta tamaños. Si se le pasa una ruta como argumento, escribe
 // el gzip a ese archivo para que `tests/deflate_cli.rs` verifique que Python lo descomprime (prueba de
 // compatibilidad estándar, no solo auto-consistencia). Salida determinista; lo corre en ambos motores.
-
 from deflate import deflate_raw, gzip_compress, zlib_compress;
 from inflate import inflate_raw, gunzip, zlib_inflate;
 
 fn main() -> int {
     // Texto repetitivo → el LZ77 encuentra muchas coincidencias y comprime de verdad.
-    let texto = "raylang raylang raylang es un lenguaje de aprendizaje. "
-              + "comprimir y descomprimir, comprimir y descomprimir, una y otra vez. "
-              + "raylang raylang raylang raylang raylang raylang raylang raylang!";
+    let texto = "raylang raylang raylang es un lenguaje de aprendizaje. " + "comprimir y descomprimir, comprimir y descomprimir, una y otra vez. " + "raylang raylang raylang raylang raylang raylang raylang raylang!";
     let original = to_bytes(texto);
 
     // --- DEFLATE crudo: round-trip con inflate_raw. ---
     let comp = deflate_raw(original);
-    print(round_trip_raw(comp, texto)); // true
-    print(len(comp) < len(original));    // true (comprime)
+    print(round_trip_raw(comp, texto));  // true
+    print(len(comp) < len(original));  // true (comprime)
 
     // --- gzip: round-trip con gunzip (incluye verificación de CRC-32). ---
     let g = gzip_compress(original);
-    print(round_trip_gunzip(g, texto)); // true
+    print(round_trip_gunzip(g, texto));  // true
 
     // --- zlib: round-trip con zlib_inflate. ---
     let z = zlib_compress(original);
-    print(round_trip_zlib(z, texto)); // true
+    print(round_trip_zlib(z, texto));  // true
 
     // Si hay ruta, escribe el gzip para la verificación de compatibilidad con Python.
     let a = args();
     if (len(a) > 0) {
         match (write_file_bytes(a[0], g)) {
-            Result.Ok(_) => {},
-            Result.Err(e) => { eprint(e); return 1; },
+            Result.Ok(_) => { },
+            Result.Err(e) => {
+                eprint(e);
+                return 1;
+            },
         }
     }
     0
@@ -43,12 +43,14 @@ fn round_trip_raw(comp: bytes, esperado: string) -> bool {
         Result.Err(_) => false,
     }
 }
+
 fn round_trip_gunzip(g: bytes, esperado: string) -> bool {
     match (gunzip(g)) {
         Result.Ok(b) => igual(b, esperado),
         Result.Err(_) => false,
     }
 }
+
 fn round_trip_zlib(z: bytes, esperado: string) -> bool {
     match (zlib_inflate(z)) {
         Result.Ok(b) => igual(b, esperado),

@@ -2,7 +2,6 @@
 //
 // Parsea un documento, lo re-serializa de forma canónica (claves ordenadas) y comprueba que el
 // round-trip es estable (parse → stringify → parse → stringify da lo mismo).
-
 from json import Json, parse, stringify;
 
 fn main() -> int {
@@ -19,9 +18,12 @@ fn main() -> int {
                     if (stringify(j2) == canon) { print("estable") } else { print("INESTABLE") }
                 },
                 Result.Err(e) => print("re-parse error: " + e),
-            };
+            }
             0
         },
-        Result.Err(e) => { eprint("parse error: " + e); 1 },
+        Result.Err(e) => {
+            eprint("parse error: " + e);
+            1
+        },
     }
 }

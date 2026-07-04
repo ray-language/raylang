@@ -4,12 +4,14 @@
 // Construcción: la clave de Poly1305 es el primer bloque de ChaCha20 con contador 0; el criptograma
 // usa contador 1 en adelante; el tag cubre `AAD ‖ pad ‖ criptograma ‖ pad ‖ len(AAD) ‖ len(cripto)`.
 // Importable: `from chacha20poly1305 import aead_seal, aead_open, Sealed;`.
-
 from chacha20 import chacha20_block, chacha20_encrypt;
 from poly1305 import poly1305_mac;
 
 // El resultado de sellar: el criptograma y su tag de 16 octetos.
-pub struct Sealed { ciphertext: [int], tag: [int] }
+pub struct Sealed {
+    ciphertext: [int],
+    tag: [int],
+}
 
 // La clave de Poly1305 de una sola vez: los primeros 32 octetos de ChaCha20 con contador 0.
 fn poly_key_gen(key: [int], nonce: [int]) -> [int] {
@@ -27,7 +29,7 @@ fn poly_key_gen(key: [int], nonce: [int]) -> [int] {
 fn push_len_le(m: [int], n: int) {
     var k = 0;
     while (k < 8) {
-        push(m, (n >> (k * 8)) & 255);
+        push(m, n >> k * 8 & 255);
         k = k + 1;
     }
 }
@@ -73,7 +75,7 @@ fn ct_eq(a: [int], b: [int]) -> bool {
     var diff = 0;
     var i = 0;
     while (i < len(a)) {
-        diff = diff | (a[i] ^ b[i]);
+        diff = diff | a[i] ^ b[i];
         i = i + 1;
     }
     diff == 0
@@ -85,7 +87,7 @@ pub fn aead_open(key: [int], nonce: [int], aad: [int], ct: [int], tag: [int]) ->
     let pk = poly_key_gen(key, nonce);
     let esperado = poly1305_mac(pk, mac_data(aad, ct));
     if (ct_eq(esperado, tag)) {
-        return Option.Some(chacha20_encrypt(key, 1 as u32, nonce, ct)); // XOR de nuevo = descifrar
+        return Option.Some(chacha20_encrypt(key, 1 as u32, nonce, ct));  // XOR de nuevo = descifrar
     }
     Option.None
 }

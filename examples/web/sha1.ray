@@ -6,13 +6,12 @@
 //
 // raylang opera con `int` de 64 bits; SHA-1 es aritmética de 32 bits → se enmascara con `& mask32()`
 // tras cada operación que pueda desbordar los 32 bits, y los desplazamientos rotan con `rotl`.
-
-fn mask32() -> int { 4294967295 } // 0xFFFFFFFF
+fn mask32() -> int { 4294967295 }  // 0xFFFFFFFF
 
 // Rotación de 32 bits a la izquierda: `x` se asume ya enmascarado a 32 bits (no negativo), así que
 // `x >> (32 - n)` es un desplazamiento lógico (relleno con ceros).
 fn rotl(x: int, n: int) -> int {
-    ((x << n) | (x >> (32 - n))) & mask32()
+    (x << n | x >> 32 - n) & mask32()
 }
 
 // Rellena el mensaje según SHA-1 y lo devuelve como `[int]` de octetos: el mensaje, un `0x80`, ceros
@@ -25,14 +24,14 @@ fn pad(msg: bytes) -> [int] {
         push(m, msg[i]);
         i = i + 1;
     }
-    push(m, 128); // 0x80: el bit '1' de cierre seguido de ceros
+    push(m, 128);  // 0x80: el bit '1' de cierre seguido de ceros
     while (len(m) % 64 != 56) {
         push(m, 0);
     }
     let bitlen = n * 8;
     var k = 7;
     while (k >= 0) {
-        push(m, (bitlen >> (k * 8)) & 255);
+        push(m, bitlen >> k * 8 & 255);
         k = k - 1;
     }
     m
@@ -41,19 +40,19 @@ fn pad(msg: bytes) -> [int] {
 // Añade los 4 octetos big-endian de la palabra de 32 bits `w` al final de `out` (semántica de
 // referencia: muta el arreglo del llamador).
 fn append_word(out: [int], w: int) {
-    push(out, (w >> 24) & 255);
-    push(out, (w >> 16) & 255);
-    push(out, (w >> 8) & 255);
+    push(out, w >> 24 & 255);
+    push(out, w >> 16 & 255);
+    push(out, w >> 8 & 255);
     push(out, w & 255);
 }
 
 pub fn sha1(msg: bytes) -> [int] {
     let m = pad(msg);
-    var h0 = 1732584193; // 0x67452301
-    var h1 = 4023233417; // 0xEFCDAB89
-    var h2 = 2562383102; // 0x98BADCFE
+    var h0 = 1732584193;  // 0x67452301
+    var h1 = 4023233417;  // 0xEFCDAB89
+    var h2 = 2562383102;  // 0x98BADCFE
     var h3 = 271733878;  // 0x10325476
-    var h4 = 3285377520; // 0xC3D2E1F0
+    var h4 = 3285377520;  // 0xC3D2E1F0
     let total = len(m);
     var chunk = 0;
     while (chunk < total) {
@@ -62,7 +61,7 @@ pub fn sha1(msg: bytes) -> [int] {
         var j = 0;
         while (j < 16) {
             let base = chunk + j * 4;
-            let word = (m[base] << 24) | (m[base + 1] << 16) | (m[base + 2] << 8) | m[base + 3];
+            let word = m[base] << 24 | m[base + 1] << 16 | m[base + 2] << 8 | m[base + 3];
             push(w, word & mask32());
             j = j + 1;
         }
@@ -83,23 +82,23 @@ pub fn sha1(msg: bytes) -> [int] {
             var f = 0;
             var kk = 0;
             if (idx < 20) {
-                f = (b & c) | ((~b & mask32()) & d);
-                kk = 1518500249; // 0x5A827999
+                f = b & c | ~b & mask32() & d;
+                kk = 1518500249;  // 0x5A827999
             } else {
                 if (idx < 40) {
                     f = b ^ c ^ d;
-                    kk = 1859775393; // 0x6ED9EBA1
+                    kk = 1859775393;  // 0x6ED9EBA1
                 } else {
                     if (idx < 60) {
-                        f = (b & c) | (b & d) | (c & d);
-                        kk = 2400959708; // 0x8F1BBCDC
+                        f = b & c | b & d | c & d;
+                        kk = 2400959708;  // 0x8F1BBCDC
                     } else {
                         f = b ^ c ^ d;
-                        kk = 3395469782; // 0xCA62C1D6
+                        kk = 3395469782;  // 0xCA62C1D6
                     }
                 }
             }
-            let tmp = (rotl(a, 5) + f + e + kk + w[idx]) & mask32();
+            let tmp = rotl(a, 5) + f + e + kk + w[idx] & mask32();
             e = d;
             d = c;
             c = rotl(b, 30);
@@ -107,11 +106,11 @@ pub fn sha1(msg: bytes) -> [int] {
             a = tmp;
             idx = idx + 1;
         }
-        h0 = (h0 + a) & mask32();
-        h1 = (h1 + b) & mask32();
-        h2 = (h2 + c) & mask32();
-        h3 = (h3 + d) & mask32();
-        h4 = (h4 + e) & mask32();
+        h0 = h0 + a & mask32();
+        h1 = h1 + b & mask32();
+        h2 = h2 + c & mask32();
+        h3 = h3 + d & mask32();
+        h4 = h4 + e & mask32();
         chunk = chunk + 64;
     }
     var out: [int] = [];
@@ -136,7 +135,7 @@ pub fn sha1_hex(msg: bytes) -> string {
     var i = 0;
     while (i < len(d)) {
         let octet = d[i];
-        s = s + hex_digit((octet >> 4) & 15);
+        s = s + hex_digit(octet >> 4 & 15);
         s = s + hex_digit(octet & 15);
         i = i + 1;
     }

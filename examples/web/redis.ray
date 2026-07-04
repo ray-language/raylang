@@ -10,14 +10,13 @@
 //
 // Como los sockets ceden la fibra, el camino concurrente es **solo VM**; en el intérprete corren
 // bloqueantes (un hilo), así que el cliente funciona en ambos motores contra un servidor real.
-
 // Una respuesta de Redis (RESP2).
 pub enum Reply {
-    Str(string), // simple string (+) o bulk string ($)
-    Int(int),    // entero (:)
-    Nil,         // bulk/array nulo ($-1 / *-1)
-    Arr([Reply]), // array (*)
-    Err(string), // error del servidor (-)
+    Str(string),  // simple string (+) o bulk string ($)
+    Int(int),  // entero (:)
+    Nil,  // bulk/array nulo ($-1 / *-1)
+    Arr([Reply]),  // array (*)
+    Err(string),  // error del servidor (-)
 }
 
 // Conexión: el handle del socket + un buffer de lectura no consumido (framing por encima de los
@@ -116,36 +115,44 @@ fn read_reply(c: Conn) -> Result<Reply, string> {
             let rest = substring(line, 1, len(line));
             if (t == '+') {
                 Result.Ok(Reply.Str(rest))
-            } else { if (t == '-') {
-                Result.Ok(Reply.Err(rest))
-            } else { if (t == ':') {
-                Result.Ok(Reply.Int(int_or(rest)))
-            } else { if (t == '$') {
-                let n = int_or(rest);
-                if (n < 0) {
-                    Result.Ok(Reply.Nil)
+            } else {
+                if (t == '-') {
+                    Result.Ok(Reply.Err(rest))
                 } else {
-                    match (read_n(c, n)) {
-                        Result.Err(e) => Result.Err(e),
-                        Result.Ok(data) => {
-                            // Consume el \r\n que cierra el bulk string.
-                            match (read_line(c)) {
-                                Result.Ok(_) => Result.Ok(Reply.Str(data)),
-                                Result.Err(e) => Result.Err(e),
+                    if (t == ':') {
+                        Result.Ok(Reply.Int(int_or(rest)))
+                    } else {
+                        if (t == '$') {
+                            let n = int_or(rest);
+                            if (n < 0) {
+                                Result.Ok(Reply.Nil)
+                            } else {
+                                match (read_n(c, n)) {
+                                    Result.Err(e) => Result.Err(e),
+                                    Result.Ok(data) => {
+                                        // Consume el \r\n que cierra el bulk string.
+                                        match (read_line(c)) {
+                                            Result.Ok(_) => Result.Ok(Reply.Str(data)),
+                                            Result.Err(e) => Result.Err(e),
+                                        }
+                                    },
+                                }
                             }
-                        },
+                        } else {
+                            if (t == '*') {
+                                let n = int_or(rest);
+                                if (n < 0) {
+                                    Result.Ok(Reply.Nil)
+                                } else {
+                                    read_array(c, n)
+                                }
+                            } else {
+                                Result.Err("tipo RESP desconocido: " + to_string(t))
+                            }
+                        }
                     }
                 }
-            } else { if (t == '*') {
-                let n = int_or(rest);
-                if (n < 0) {
-                    Result.Ok(Reply.Nil)
-                } else {
-                    read_array(c, n)
-                }
-            } else {
-                Result.Err("tipo RESP desconocido: " + to_string(t))
-            }}}}}
+            }
         },
     }
 }
@@ -158,7 +165,9 @@ fn read_array(c: Conn, n: int) -> Result<Reply, string> {
     while (i < n && err == "") {
         match (read_reply(c)) {
             Result.Ok(it) => push(items, it),
-            Result.Err(e) => { err = e; },
+            Result.Err(e) => {
+                err = e;
+            },
         }
         i = i + 1;
     }

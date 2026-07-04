@@ -13,12 +13,11 @@
 //   - Se importa con la ruta completa, pero se ACCEDE por el "leaf" (último segmento):
 //     `import geo/formas/circulo;`  ->  `circulo.area(...)`.
 //   - Para evitar colisiones de leaf, se usa `as`.
-
-import geo/formas/circulo;     // leaf: "circulo"
-import geo/util as u;          // leaf renombrado a "u"
+import geo/formas/circulo;  // leaf: "circulo"
+import geo/util as u;  // leaf renombrado a "u"
 
 fn main() -> int {
-  let c = circulo.Circulo { radio: 4 };   // tipo `pub` del submódulo, calificado por el leaf
-  print(u.cuadrado(4));                    // 16  (otro submódulo, leaf renombrado)
-  circulo.area(c)                          // 3 * 16 = 48  -> código de salida
+    let c = circulo.Circulo { radio: 4 };  // tipo `pub` del submódulo, calificado por el leaf
+    print(u.cuadrado(4));  // 16  (otro submódulo, leaf renombrado)
+    circulo.area(c)  // 3 * 16 = 48  -> código de salida
 }

@@ -111,7 +111,7 @@ trait Mostrable { fn mostrar(self) -> string; }
 
 struct Punto { x: int, y: int }
 impl Mostrable for Punto {
-    fn mostrar(self) -> string { "(" + to_string(self.x) + ", " + to_string(self.y) + ")" }
+    fn mostrar(self) -> string { "(${self.x}, ${self.y})" }   // interpolación de strings
 }
 
 fn imprime<T: Mostrable>(v: T) { print(v.mostrar()); }

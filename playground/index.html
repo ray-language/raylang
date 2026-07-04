@@ -6,6 +6,10 @@
 <title>raylang · playground</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 20 200 184'%3E%3Cpath d='M100 50 C108 49 113 53 115 60 C150 66 175 84 191 116 C166 127 141 137 119 150 C111 154 105 159 100 165 C95 159 89 154 81 150 C59 137 34 127 9 116 C25 84 50 66 85 60 C87 53 92 49 100 50 Z' fill='%232B7CE0'/%3E%3Cpath d='M93 55 C90 45 88 38 87 30' stroke='%232B7CE0' stroke-width='7' stroke-linecap='round' fill='none'/%3E%3Cpath d='M107 55 C110 45 112 38 113 30' stroke='%232B7CE0' stroke-width='7' stroke-linecap='round' fill='none'/%3E%3C/svg%3E">
 <style>
+  /* Fuentes de marca embebidas (SIL OFL 1.1; ver fonts/README.md). Space Grotesk (UI/títulos) es variable
+     300–700; JetBrains Mono (editor de código) es regular. `swap` para no bloquear el render. */
+  @font-face { font-family:"Space Grotesk"; src:url("fonts/space-grotesk.woff2") format("woff2"); font-weight:300 700; font-display:swap; }
+  @font-face { font-family:"JetBrains Mono"; src:url("fonts/jetbrains-mono.woff2") format("woff2"); font-weight:400; font-display:swap; }
   /* Colores de marca raylang: azul primario #2B7CE0, navy #0B1F33, acentos. */
   :root { color-scheme: dark; --bg:#0b1622; --panel:#0e1c2e; --border:#1e3454; --fg:#e6edf3; --accent:#2B7CE0; --muted:#8fa6c4; }
   * { box-sizing: border-box; }

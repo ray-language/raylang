@@ -20,9 +20,21 @@
   header .sp { flex:1; }
   button { background:var(--accent); color:#04122a; border:0; border-radius:6px; padding:7px 16px; font-weight:600; cursor:pointer; font-size:14px; }
   button:disabled { opacity:.5; cursor:default; }
-  main { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--border); height:calc(100vh - 54px); }
-  @media (max-width:800px){ main{ grid-template-columns:1fr; grid-template-rows:1fr 1fr; } }
+  main { display:grid; grid-template-columns:212px 1fr 1fr; gap:1px; background:var(--border); height:calc(100vh - 54px); }
+  @media (max-width:820px){ main{ grid-template-columns:1fr; grid-template-rows:auto 1fr 1fr; }
+    .sidebar{ max-height:none } .files{ display:flex; flex-wrap:wrap; padding:8px } .tree-header{ display:none } }
   .pane { background:var(--panel); display:flex; flex-direction:column; min-width:0; min-height:0; }
+  /* Panel lateral de "archivos" (tipo explorador de un editor). */
+  .sidebar { background:#0a131f; display:flex; flex-direction:column; min-height:0; overflow:auto; padding:6px 0; }
+  .tree-header { padding:8px 14px 6px; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    display:flex; align-items:center; gap:7px; }
+  .files { list-style:none; margin:0; padding:0; }
+  .file { display:flex; align-items:center; gap:8px; padding:5px 14px 5px 18px; font-size:13px; cursor:pointer;
+    color:var(--fg); border-left:2px solid transparent; white-space:nowrap;
+    font-family:"JetBrains Mono","SF Mono",ui-monospace,monospace; }
+  .file svg { flex:none; opacity:.9; }
+  .file:hover { background:rgba(43,124,224,.10); }
+  .file.active { background:rgba(43,124,224,.18); border-left-color:var(--accent); color:#fff; }
   .pane .label { padding:6px 14px; color:var(--muted); font-size:12px; border-bottom:1px solid var(--border); text-transform:uppercase; letter-spacing:.04em; }
   /* Editor con resaltado por OVERLAY: un <textarea> transparente (edición nativa: caret, selección) encima
      de un <pre> coloreado; se sincroniza el scroll. Ambas capas comparten métricas EXACTAS (mono → alinea). */
@@ -41,9 +53,6 @@
   .tok-kw{color:#c9a3ff} .tok-ty{color:#5bacf7} .tok-str{color:#7ee787} .tok-num{color:#f0a868}
   .tok-com{color:#6b7f99;font-style:italic} .tok-fn{color:#79c0ff} .tok-lit{color:#f0a868} .tok-ann{color:#e3b341}
   .tok-idelim{color:#8fa6c4}  /* delimitadores ${ } de interpolación */
-  .ejemplos { display:flex; gap:6px; flex-wrap:wrap; }
-  .ejemplos a { color:var(--accent); font-size:12px; text-decoration:none; cursor:pointer; }
-  .ejemplos a:hover { text-decoration:underline; }
   .status { color:var(--muted); font-size:12px; }
 </style>
 </head>
@@ -55,14 +64,17 @@
     <path d="M107 55 C110 45 112 38 113 30" stroke="#2B7CE0" stroke-width="7" stroke-linecap="round" fill="none"/>
   </svg>
   <h1>raylang <span class="tag">· playground</span></h1>
-  <span class="ejemplos" id="ejemplos"></span>
   <span class="sp"></span>
   <span class="status" id="status">cargando…</span>
   <button id="run" disabled>▶ Ejecutar (⌘/Ctrl+Enter)</button>
 </header>
 <main>
+  <aside class="sidebar">
+    <div class="tree-header">ejemplos</div>
+    <ul class="files" id="files"></ul>
+  </aside>
   <div class="pane">
-    <div class="label">fuente</div>
+    <div class="label" id="filelabel">fib.ray</div>
     <div class="editor">
       <pre aria-hidden="true"><code id="hl"></code></pre>
       <textarea id="src" spellcheck="false" wrap="off" autocapitalize="off" autocorrect="off" autocomplete="off"></textarea>
@@ -198,7 +210,8 @@ fn main() -> int {
 };
 
 const $ = (id) => document.getElementById(id);
-const srcEl = $("src"), outEl = $("out"), runEl = $("run"), statusEl = $("status"), hlEl = $("hl");
+const srcEl = $("src"), outEl = $("out"), runEl = $("run"), statusEl = $("status"), hlEl = $("hl"),
+      filesEl = $("files"), fileLabelEl = $("filelabel");
 
 // --- Resaltado de sintaxis de raylang (a mano, cero deps) ---
 // Un scanner tokeniza el fuente (robusto ante comentarios/strings) y emite <span> por token. Las
@@ -295,13 +308,32 @@ function ejecutar() {
   outEl.textContent = salida || "(sin salida)";
 }
 
-// Botones de ejemplo.
-const ejEl = $("ejemplos");
-for (const nombre of Object.keys(EJEMPLOS)) {
-  const a = document.createElement("a");
-  a.textContent = nombre;
-  a.onclick = () => { srcEl.value = EJEMPLOS[nombre]; render(); };
-  ejEl.appendChild(a);
+// --- Panel lateral de "archivos" ---
+// Cada ejemplo se presenta como un archivo .ray. Al seleccionarlo se carga en el editor y se LIMPIA la
+// salida (empiezas de cero, como al abrir otro archivo). El icono de cada archivo es el símbolo de raylang.
+const ARCHIVOS = [
+  ["fib.ray", "fib"], ["genericos.ray", "genéricos"], ["enums.ray", "enums"], ["traits.ray", "traits"],
+  ["errores.ray", "errores"], ["iteradores.ray", "iteradores"], ["dyn.ray", "dyn"], ["concurrencia.ray", "concurrencia"],
+];
+const ICONO = `<svg width="14" height="13" viewBox="0 20 200 184"><path d="M100 50 C108 49 113 53 115 60 C150 66 175 84 191 116 C166 127 141 137 119 150 C111 154 105 159 100 165 C95 159 89 154 81 150 C59 137 34 127 9 116 C25 84 50 66 85 60 C87 53 92 49 100 50 Z" fill="#2B7CE0"/><path d="M93 55 C90 45 88 38 87 30" stroke="#2B7CE0" stroke-width="7" stroke-linecap="round" fill="none"/><path d="M107 55 C110 45 112 38 113 30" stroke="#2B7CE0" stroke-width="7" stroke-linecap="round" fill="none"/></svg>`;
+let archivoActivo = null;
+function abrirArchivo(nombre, clave, li) {
+  srcEl.value = EJEMPLOS[clave];
+  render();
+  outEl.textContent = "";                 // limpia la salida al cambiar de archivo
+  fileLabelEl.textContent = nombre;
+  if (archivoActivo) archivoActivo.classList.remove("active");
+  li.classList.add("active");
+  archivoActivo = li;
+}
+let primerLi = null;
+for (const [nombre, clave] of ARCHIVOS) {
+  const li = document.createElement("li");
+  li.className = "file";
+  li.innerHTML = ICONO + `<span>${nombre}</span>`;
+  li.onclick = () => abrirArchivo(nombre, clave, li);
+  filesEl.appendChild(li);
+  if (!primerLi) primerLi = li;
 }
 
 runEl.onclick = ejecutar;
@@ -322,8 +354,7 @@ document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); ejecutar(); }
 });
 
-srcEl.value = EJEMPLOS["fib"];
-render();
+abrirArchivo(ARCHIVOS[0][0], ARCHIVOS[0][1], primerLi);   // abre fib.ray al arrancar
 cargar();
 </script>
 </body>

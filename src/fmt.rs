@@ -12,6 +12,10 @@
 //! línea de código (*trailing*) se re-pega a esa línea. Como el AST **no guarda la posición del `}`**, un
 //! comentario tras la última sentencia de un bloque no puede acotarse a ese bloque y se reubica justo
 //! **tras** el `}` (el resto va bien). La invariante fuerte: **ningún comentario se pierde**.
+//!
+//! También se **preserva la separación en blanco** entre sentencias de un bloque (una línea en blanco
+//! entre grupos se mantiene; 2+ se colapsan a una; ninguna al abrir el bloque) — es agrupación visual
+//! intencional. Los ítems de nivel superior siempre van separados por un blanco (canónico).
 
 use crate::ast::*;
 
@@ -137,15 +141,34 @@ fn collect_comments(src: &str) -> Vec<Comment> {
 }
 
 /// Cursor sobre los comentarios recolectados, consumidos **en orden de fuente** conforme el formateador
-/// emite los constructos (que se recorren en ese mismo orden). Ver el `//!` del módulo.
+/// emite los constructos (que se recorren en ese mismo orden). Ver el `//!` del módulo. También conoce
+/// las **líneas en blanco** de la fuente, para preservar la separación visual entre sentencias.
 struct Cur {
     items: Vec<Comment>,
     i: usize,
+    /// Líneas (1-basadas) que en la fuente están **en blanco** (vacías o solo espacios). Una línea que
+    /// es solo un comentario NO cuenta como blanco (tiene contenido).
+    blancos: std::collections::HashSet<usize>,
 }
 
 impl Cur {
     fn new(src: &str) -> Self {
-        Cur { items: collect_comments(src), i: 0 }
+        let blancos = src.lines().enumerate()
+            .filter(|(_, l)| l.trim().is_empty())
+            .map(|(i, _)| i + 1)
+            .collect();
+        Cur { items: collect_comments(src), i: 0, blancos }
+    }
+
+    /// ¿Emitir una línea en blanco antes del constructo que empieza en `line` (con sus comentarios
+    /// previos)? Sí si la línea de fuente **justo encima** del grupo (los comentarios sueltos que van a
+    /// volcarse + la propia línea) está en blanco. Colapsa 2+ blancos a uno (se emite a lo sumo uno).
+    fn blank_before(&self, line: usize) -> bool {
+        let inicio_grupo = match self.items.get(self.i) {
+            Some(c) if c.line < line => c.line, // el primer comentario suelto de encima
+            _ => line,
+        };
+        inicio_grupo > 1 && self.blancos.contains(&(inicio_grupo - 1))
     }
 
     /// Vuelca los comentarios **sueltos** de las líneas anteriores a `line` (los aún no emitidos), cada
@@ -532,7 +555,11 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
     }
     let inner = INDENT.repeat(base + 1);
     let mut s = String::from("{\n");
-    for st in &b.statements {
+    for (idx, st) in b.statements.iter().enumerate() {
+        // Preserva una línea en blanco entre sentencias (agrupación visual), salvo antes de la primera.
+        if idx > 0 && cur.blank_before(st.line) {
+            s.push('\n');
+        }
         s.push_str(&cur.flush_before(st.line, &inner));
         let text = fmt_stmt(cur, st, base + 1);
         s.push_str(&inner);
@@ -543,6 +570,9 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
         s.push('\n');
     }
     if let Some(tail) = &b.tail {
+        if !b.statements.is_empty() && cur.blank_before(tail.line) {
+            s.push('\n');
+        }
         s.push_str(&cur.flush_before(tail.line, &inner));
         let text = fmt_value(cur, tail, base + 1);
         s.push_str(&inner);
@@ -971,6 +1001,17 @@ mod tests {
         assert!(out.contains("import a/b;\nimport c/d as x;\nfrom e import f;"), "{out:?}");
         // …pero sí hay un blanco antes de la función.
         assert!(out.contains("from e import f;\n\nfn main"), "blanco antes de fn: {out:?}");
+    }
+
+    #[test]
+    fn preserva_lineas_en_blanco_entre_sentencias() {
+        // Un blanco entre grupos de sentencias se conserva; 2+ se colapsan a uno; sin blanco al inicio.
+        let src = "fn main() -> int {\n  let a = 1;\n  let b = 2;\n\n\n  // grupo 2\n  let c = 3;\n  c\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("let b = 2;\n\n    // grupo 2"), "un blanco antes del grupo 2: {out:?}");
+        assert!(!out.contains("\n\n\n"), "2+ blancos colapsados a uno: {out:?}");
+        assert!(out.starts_with("fn main() -> int {\n    let a = 1;"), "sin blanco tras el {{: {out:?}");
+        assert_eq!(out, fmt(&out), "idempotente");
     }
 
     #[test]

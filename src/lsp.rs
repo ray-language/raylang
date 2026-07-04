@@ -205,15 +205,43 @@ fn pos_params(msg: &Json) -> Option<(String, usize, usize)> {
 
 // ── Hover (M10.2b) ───────────────────────────────────────────────────────────────────
 
-/// El `result` de un `textDocument/hover`: el tipo del identificador bajo el cursor, o `null`.
+/// El `result` de un `textDocument/hover`: la firma/tipo del identificador bajo el cursor y, si el
+/// símbolo tiene **comentarios de documentación** (`///` encima de su declaración), también la
+/// documentación —renderizada como Markdown, con la firma en un bloque de código—. `null` si no hay
+/// identificador bajo el cursor.
 fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     let Some(src) = docs.get(&uri) else { return Json::Null };
     let Some((info, start, end)) = hover_at(Some(&uri), src, line0, char0) else { return Json::Null };
-    obj(vec![
-        ("contents", obj(vec![("kind", text("plaintext")), ("value", Json::Str(info))])),
-        ("range", rango(line0, start, end)),
-    ])
+    // Documentación: se localiza la DECLARACIÓN del símbolo (cruza archivos, como ir-a-definición) y
+    // se escanean los `///` que la preceden en su propio archivo. Reusa `raydoc::doc_lineas_arriba`.
+    let doc = doc_del_simbolo(&uri, src, line0, char0, docs);
+    let contents = match doc {
+        Some(d) => obj(vec![
+            ("kind", text("markdown")),
+            ("value", Json::Str(format!("```raylang\n{info}\n```\n\n{d}"))),
+        ]),
+        None => obj(vec![("kind", text("plaintext")), ("value", Json::Str(info))]),
+    };
+    obj(vec![("contents", contents), ("range", rango(line0, start, end))])
+}
+
+/// Los comentarios de documentación (`///`) del símbolo bajo el cursor, si los tiene. Localiza su
+/// declaración con `definition_at` (cruza archivos), abre la fuente de ESE archivo (el buffer si es
+/// el mismo, o el disco si es otro módulo) y reúne los `///` contiguos encima de la línea de la
+/// declaración. `None` si el símbolo no tiene declaración conocida (método, builtin) o no lleva docs.
+fn doc_del_simbolo(uri: &str, src: &str, line0: usize, char0: usize, docs: &HashMap<String, String>) -> Option<String> {
+    let (target_uri, def_line0, _, _) = definition_at(uri, src, line0, char0)?;
+    // Fuente del archivo donde vive la declaración: el buffer si es el mismo doc, o el disco.
+    let fuente = if target_uri == uri {
+        src.to_string()
+    } else {
+        docs.get(&target_uri).cloned()
+            .or_else(|| uri_to_path(&target_uri).and_then(|p| std::fs::read_to_string(p).ok()))?
+    };
+    let lineas: Vec<&str> = fuente.lines().collect();
+    let ls = crate::raydoc::doc_lineas_arriba(&lineas, def_line0 + 1)?; // +1: 0-basado → 1-basado
+    Some(ls.join("\n"))
 }
 
 /// El índice semántico para las consultas (hover/def/refs/rename). Si el documento es un archivo,
@@ -1908,6 +1936,41 @@ mod tests {
         let sel = punto.get("selectionRange").unwrap().get("start").unwrap();
         assert_eq!(sel.get("line"), Some(&Json::Num(1.0)));
         assert_eq!(sel.get("character"), Some(&Json::Num(7.0)));
+    }
+
+    #[test]
+    fn hover_muestra_documentacion() {
+        // Una función con `///` encima: el hover trae la firma + la doc, como Markdown.
+        let src = "/// Duplica un número.\n/// Segunda línea.\nfn duplicar(x: int) -> int { x * 2 }\nfn main() -> int {\n  duplicar(21)\n}\n";
+        // Uso de `duplicar` en la línea 5 (0-based 4), col 2.
+        let (info, _, _) = hover_at(None, src, 4, 2).expect("hover");
+        assert!(info.starts_with("duplicar: fn(int) -> int"), "{info}");
+        // La doc se localiza escaneando los `///` encima de la declaración.
+        let mut docs = HashMap::new();
+        let uri = format!("file://{}", std::env::temp_dir().join("ray_hover_doc.ray").display());
+        docs.insert(uri.clone(), src.to_string());
+        let d = doc_del_simbolo(&uri, src, 4, 2, &docs).expect("documentación");
+        assert_eq!(d, "Duplica un número.\nSegunda línea.");
+        // El result de hover la mete en un bloque Markdown con la firma.
+        let msg = obj(vec![("params", obj(vec![
+            ("textDocument", obj(vec![("uri", text(&uri))])),
+            ("position", obj(vec![("line", num(4)), ("character", num(2))])),
+        ]))]);
+        let r = hover_result(&msg, &docs);
+        let val = r.get("contents").unwrap().get("value").and_then(Json::as_str).unwrap();
+        assert!(val.contains("```raylang"), "firma en bloque de código: {val}");
+        assert!(val.contains("Duplica un número."), "incluye la doc: {val}");
+        assert_eq!(r.get("contents").unwrap().get("kind"), Some(&Json::Str("markdown".into())));
+
+        // Un símbolo SIN doc → hover en texto plano, sin bloque Markdown.
+        let src2 = "fn triple(x: int) -> int { x * 3 }\nfn main() -> int { triple(1) }\n";
+        docs.insert(uri.clone(), src2.to_string());
+        let msg2 = obj(vec![("params", obj(vec![
+            ("textDocument", obj(vec![("uri", text(&uri))])),
+            ("position", obj(vec![("line", num(1)), ("character", num(19))])),
+        ]))]);
+        let r2 = hover_result(&msg2, &docs);
+        assert_eq!(r2.get("contents").unwrap().get("kind"), Some(&Json::Str("plaintext".into())));
     }
 
     #[test]

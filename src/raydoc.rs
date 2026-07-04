@@ -81,7 +81,10 @@ fn emitir_doc(out: &mut String, lineas: &[&str], linea: usize) {
 }
 
 /// Reúne las líneas `///` **contiguas** inmediatamente encima de `linea` (1-basada), de arriba abajo.
-fn doc_arriba(lineas: &[&str], linea: usize) -> Option<String> {
+/// Devuelve el texto de cada línea de doc (sin el `///`), en orden. `None` si no hay ninguna.
+/// Compartido con el LSP (hover): raydoc las une con espacios (resumen de una línea); el hover con
+/// saltos de línea (Markdown).
+pub fn doc_lineas_arriba(lineas: &[&str], linea: usize) -> Option<Vec<String>> {
     let mut docs: Vec<String> = Vec::new();
     let mut i = linea as isize - 2; // la línea justo encima, 0-basada
     while i >= 0 {
@@ -97,7 +100,12 @@ fn doc_arriba(lineas: &[&str], linea: usize) -> Option<String> {
         return None;
     }
     docs.reverse();
-    Some(docs.join(" "))
+    Some(docs)
+}
+
+/// El doc-comment de `linea` como una sola línea (para el resumen de raydoc).
+fn doc_arriba(lineas: &[&str], linea: usize) -> Option<String> {
+    doc_lineas_arriba(lineas, linea).map(|ls| ls.join(" "))
 }
 
 /// Renderiza `<T, U: Bound>` a partir de los parámetros de tipo y sus bounds. Vacío si no hay.

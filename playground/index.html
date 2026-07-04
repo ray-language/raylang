@@ -82,30 +82,34 @@ const EJEMPLOS = {
     if (n < 2) { n } else { fib(n - 1) + fib(n - 2) }
 }
 fn main() -> int {
-    var i = 0;
-    while (i < 15) { print(fib(i)); i = i + 1; }
+    for i in range(0, 12) {
+        print("fib(\${i}) = \${fib(i)}");     // for + interpolación
+    }
     0
 }`,
-  "genéricos": `fn id<T>(x: T) -> T { x }
+  "genéricos": `fn id<T>(x: T) -> T { x }        // genérica: funciona con cualquier tipo
+
 fn main() -> int {
-    print(id(42));
-    print(id("hola"));
-    let xs = [1, 2, 3, 4, 5];
-    let cuadrados = xs.map(fn(x: int) -> int { x * x });
-    let suma = cuadrados.fold(0, fn(a: int, b: int) -> int { a + b });
-    print(suma);
+    print(id("raylang es genérico"));
+    // pipeline (|>) + iteradores perezosos: eleva al cuadrado, filtra impares, suma.
+    let suma = [1, 2, 3, 4, 5]
+        |> map(fn(x: int) -> int { x * x })
+        |> filter(fn(x: int) -> bool { x % 2 == 1 })
+        |> fold(0, fn(a: int, b: int) -> int { a + b });
+    print("suma de cuadrados impares: \${suma}");
     0
 }`,
   "enums": `enum Figura { Circulo(float), Rect(float, float) }
+
 fn area(f: Figura) -> float {
-    match (f) {
-        Figura.Circulo(r) => 3.14159 * r * r,
+    match (f) {                            // match es exhaustivo
+        Figura.Circulo(r) => pi() * r * r,  // pi() es un builtin
         Figura.Rect(w, h) => w * h,
     }
 }
 fn main() -> int {
-    print(area(Figura.Circulo(2.0)));
-    print(area(Figura.Rect(3.0, 4.0)));
+    print("círculo r=2: \${area(Figura.Circulo(2.0))}");
+    print("rect 3x4:    \${area(Figura.Rect(3.0, 4.0))}");
     0
 }`,
   "traits": `trait Saludar { fn hola(self) -> string; }

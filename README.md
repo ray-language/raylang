@@ -38,13 +38,13 @@ fn suma(a: Arbol) -> int {
 
 fn main() -> int {
     let t = Arbol.Nodo(Arbol.Nodo(Arbol.Hoja, 1, Arbol.Hoja), 2, Arbol.Nodo(Arbol.Hoja, 3, Arbol.Hoja));
-    print(t.suma());   // UFCS: t.suma() ≡ suma(t)  → 6
+    print("suma del árbol: ${t.suma()}");    // UFCS + interpolación  → 6
 
     let s = [1, 2, 3, 4, 5]
         .iter()
         .map(fn(x: int) -> int { x * x })
-        .sum();        // iteradores perezosos + closure  → 55
-    print(s);
+        .sum();                              // iteradores perezosos + closure  → 55
+    print("suma de cuadrados: ${s}");
     0
 }
 ```
@@ -144,7 +144,7 @@ fn main() -> int {
             Option.None => { seguir = false; },
         }
     }
-    print(total);   // 0+1+4+9+16 = 30
+    print("total: ${total}");   // 0+1+4+9+16 = 30
     0
 }
 ```

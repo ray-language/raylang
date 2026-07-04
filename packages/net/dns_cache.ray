@@ -8,6 +8,8 @@
 
 from net/dns import Record, DnsResult, query_full;
 
+/// A TTL-respecting DNS cache bound to one server. Entries are keyed by "qtype:name" and expire at
+/// `now() + ttl` (the response's minimum TTL, in seconds). Tracks hit/miss counters for metrics.
 pub struct Cache {
     server: string,
     port: int,
@@ -18,6 +20,7 @@ pub struct Cache {
     misses: int,
 }
 
+/// Creates an empty cache that resolves against the DNS server at `server:port`.
 pub fn new_cache(server: string, port: int) -> Cache {
     Cache { server: server, port: port, keys: [], records: [], expiry: [], hits: 0, misses: 0 }
 }
@@ -35,6 +38,9 @@ fn find_key(c: Cache, key: string) -> int {
 
 // Resuelve `name`/`qtype` usando la caché: devuelve los registros cacheados si no han caducado, o
 // consulta el servidor y los guarda con expiración `now() + ttl`.
+/// Resolves `name`/`qtype` through the cache: returns the cached records if the entry has not expired
+/// (counts a hit); otherwise queries the server, stores the result with expiry `now() + ttl`, and counts a miss.
+/// Err comes from the underlying network query; a failed query does not overwrite an existing entry.
 pub fn resolve(c: Cache, name: string, qtype: int) -> Result<[Record], string> {
     let key = to_string(qtype) + ":" + name;
     let idx = find_key(c, key);
@@ -63,6 +69,7 @@ pub fn resolve(c: Cache, name: string, qtype: int) -> Result<[Record], string> {
 
 // Vacía la caché (descarta todas las entradas). Las asignaciones no propagan el tipo del campo a `[]`,
 // así que se usan variables anotadas.
+/// Empties the cache, discarding all entries. Hit/miss counters are preserved.
 pub fn clear(c: Cache) {
     var ks: [string] = [];
     var rs: [[Record]] = [];

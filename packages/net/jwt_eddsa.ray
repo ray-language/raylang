@@ -28,6 +28,8 @@ fn header_b64() -> string {
 }
 
 // Firma las *claims* (JSON crudo) con el `seed` privado (32 octetos) y devuelve el JWT compacto `h.p.s`.
+/// Signs the claims (raw JSON string) with Ed25519 using the 32-octet private `seed` and
+/// returns the compact JWT `header.payload.signature` (RFC 8037, alg fixed to EdDSA).
 pub fn jwt_eddsa_sign(seed: [int], payload_json: string) -> string {
     let h = header_b64();
     let p = base64url(str_octets(payload_json));
@@ -40,6 +42,9 @@ pub fn jwt_eddsa_sign(seed: [int], payload_json: string) -> string {
 
 // Verifica un JWT EdDSA con la clave pública (32 octetos). `Ok(payload_json)` si la firma es válida,
 // `Err(motivo)` si no. NO comprueba `exp`/`nbf` (política de la aplicación sobre el JSON devuelto).
+/// Verifies an EdDSA JWT against the 32-octet Ed25519 public key and returns the decoded
+/// payload: `Ok(payload_json)` if the signature is valid; `Err(reason)` on malformed token,
+/// bad base64url, or invalid signature. Does NOT check `exp`/`nbf` — application policy.
 pub fn jwt_eddsa_verify(pubkey: [int], token: string) -> Result<string, string> {
     let parts = split(token, ".");
     if (len(parts) != 3) {

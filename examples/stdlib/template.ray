@@ -6,6 +6,7 @@
 // El contexto son variables tipadas (`enum TVal`): raylang es estáticamente tipado, así que los valores
 // heterogéneos van en un enum y el contexto es una lista de `(nombre, valor)`.
 // Un valor de plantilla.
+/// A template value: string, int, bool, or list (heterogeneous context values in a typed enum).
 pub enum TVal {
     VStr(string),
     VInt(int),
@@ -14,6 +15,7 @@ pub enum TVal {
 }
 
 // Una asociación nombre → valor en el contexto.
+/// A name → value binding in the template context (the context is a `[Bind]` list).
 pub struct Bind {
     name: string,
     value: TVal,
@@ -37,16 +39,22 @@ enum Node {
 }
 
 // ---- Constructores del contexto (API) ----
+/// Creates a string binding for the template context.
 pub fn ctx_str(name: string, s: string) -> Bind { Bind { name: name, value: TVal.VStr(s) } }
 
+/// Creates an int binding for the template context.
 pub fn ctx_int(name: string, n: int) -> Bind { Bind { name: name, value: TVal.VInt(n) } }
 
+/// Creates a bool binding for the template context.
 pub fn ctx_bool(name: string, b: bool) -> Bind { Bind { name: name, value: TVal.VBool(b) } }
 
+/// Creates a list binding for the template context (for `{% for %}` loops).
 pub fn ctx_list(name: string, xs: [TVal]) -> Bind { Bind { name: name, value: TVal.VList(xs) } }
 
+/// Wraps a string as a `TVal` (for building list elements).
 pub fn val_str(s: string) -> TVal { TVal.VStr(s) }
 
+/// Wraps an int as a `TVal` (for building list elements).
 pub fn val_int(n: int) -> TVal { TVal.VInt(n) }
 
 // ---- Tokenizador ----
@@ -326,6 +334,9 @@ fn render_node(node: Node, ctx: [Bind]) -> string {
 }
 
 // Renderiza `tpl` con el contexto `ctx`. Tokeniza → parsea → renderiza.
+/// Renders a Jinja-style template with the given context: `{{ var }}` interpolation
+/// (HTML-autoescaped), `{{& var }}` raw, `{% if %}…{% else %}…{% endif %}`, and
+/// `{% for x in list %}…{% endfor %}`. Missing variables render as ""; `Err` on syntax errors.
 pub fn render_template(tpl: string, ctx: [Bind]) -> Result<string, string> {
     let toks = match (tokenize(tpl)) {
         Result.Ok(t) => t,

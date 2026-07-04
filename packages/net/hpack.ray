@@ -10,11 +10,13 @@
 // los vectores oficiales del RFC 7541 Apéndice C (los que no usan Huffman: C.2.1, C.3).
 
 // Una cabecera (nombre, valor).
+/// A single header field: a (name, value) pair, as used in HPACK header lists (RFC 7541).
 pub struct HEntry {
     name: string,
     value: string,
 }
 
+/// Convenience constructor for an `HEntry` header field from a name and a value.
 pub fn header(name: string, value: string) -> HEntry {
     HEntry { name: name, value: value }
 }
@@ -45,6 +47,9 @@ fn static_table() -> [HEntry] {
 }
 
 // El estado HPACK de un extremo: su tabla dinámica (más reciente primero) + el tamaño máximo y actual.
+/// The HPACK state of one endpoint (RFC 7541): its dynamic table (most recent first)
+/// plus the current and maximum table size. Mutated by `encode`/`decode`;
+/// use a separate instance per direction (encoder and decoder).
 pub struct Hpack {
     dyn_names: [string],
     dyn_values: [string],
@@ -52,6 +57,8 @@ pub struct Hpack {
     size: int,
 }
 
+/// Creates a fresh HPACK state with an empty dynamic table and the default
+/// maximum table size of 4096 octets (RFC 7541 / RFC 7540 SETTINGS default).
 pub fn new_hpack() -> Hpack {
     Hpack { dyn_names: [], dyn_values: [], max_size: 4096, size: 0 }
 }
@@ -205,6 +212,9 @@ fn encode_one(h: Hpack, out: [int], name: string, value: string) {
 }
 
 // Codifica una lista de cabeceras a un bloque HPACK (actualizando la tabla dinámica del emisor).
+/// Encodes a header list into an HPACK header block (RFC 7541), updating the encoder's dynamic table.
+/// Uses indexed fields when possible, otherwise literals with incremental indexing;
+/// string literals are always emitted raw (no Huffman coding).
 pub fn encode(h: Hpack, headers: [HEntry]) -> bytes {
     var out: [int] = [];
     var i = 0;
@@ -268,6 +278,9 @@ fn decode_name(h: Hpack, data: bytes, ir: IntResult) -> Result<StrResult, string
 }
 
 // Decodifica un bloque HPACK a la lista de cabeceras (actualizando la tabla dinámica del receptor).
+/// Decodes an HPACK header block into its header list (RFC 7541), updating the decoder's dynamic table.
+/// Handles indexed fields, all literal forms, and dynamic table size updates.
+/// Err on an out-of-range index, invalid UTF-8, or a Huffman-coded string literal (not supported).
 pub fn decode(h: Hpack, data: bytes) -> Result<[HEntry], string> {
     var headers: [HEntry] = [];
     var pos = 0;

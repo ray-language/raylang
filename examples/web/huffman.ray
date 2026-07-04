@@ -19,6 +19,8 @@ fn huff_lens() -> [int] {
 }
 
 // Codifica octetos `[int]` a su forma Huffman de HPACK.
+/// Encodes bytes with the HPACK static Huffman code (RFC 7541 Appendix B): codes are
+/// concatenated MSB-first and the final partial byte is padded with 1s (the EOS prefix).
 pub fn huffman_encode(data: [int]) -> [int] {
     let codes = huff_codes();
     let lens = huff_lens();
@@ -99,6 +101,9 @@ fn build_trie() -> Trie {
 
 // Decodifica una secuencia Huffman de HPACK a octetos. Rechaza el relleno inválido (que no sea el
 // prefijo de EOS de 1s) y la aparición del símbolo EOS (256), como pide el RFC.
+/// Decodes an HPACK Huffman-coded byte sequence (RFC 7541) back to the original bytes.
+/// Returns `Err` on an invalid code, an explicit EOS symbol, or padding that is not the
+/// all-ones EOS prefix of at most 7 bits, as the RFC requires.
 pub fn huffman_decode(data: [int]) -> Result<[int], string> {
     let t = build_trie();
     var out: [int] = [];

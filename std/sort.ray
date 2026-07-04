@@ -3,7 +3,7 @@
 // `sort` genérico ya vive en el prelude; aquí van las utilidades que lo rodean. `import std/sort;` →
 // `sort.binary_search(xs, 7)`.
 
-/// ¿Está `a` ordenado de forma **no decreciente**? (`[]` y `[x]` → `true`).
+/// Whether `a` is sorted in **non-decreasing** order (`[]` and `[x]` → `true`).
 pub fn is_sorted<T: Ord>(a: [T]) -> bool {
     var i = 1;
     var ok = true;
@@ -14,12 +14,12 @@ pub fn is_sorted<T: Ord>(a: [T]) -> bool {
     ok
 }
 
-/// Ordena `a` de forma **descendente** (mayor a menor). Es `sort` del prelude, invertido.
+/// Sorts `a` in **descending** order (largest first). The prelude's `sort`, reversed.
 pub fn sort_desc<T: Ord>(a: [T]) -> [T] {
     reverse(sort(a))
 }
 
-/// El **mínimo** de `a`, o `None` si está vacío.
+/// The **minimum** of `a`, or `None` if it is empty.
 pub fn min<T: Ord>(a: [T]) -> Option<T> {
     if (len(a) == 0) {
         Option.None
@@ -34,7 +34,7 @@ pub fn min<T: Ord>(a: [T]) -> Option<T> {
     }
 }
 
-/// El **máximo** de `a`, o `None` si está vacío.
+/// The **maximum** of `a`, or `None` if it is empty.
 pub fn max<T: Ord>(a: [T]) -> Option<T> {
     if (len(a) == 0) {
         Option.None
@@ -49,9 +49,9 @@ pub fn max<T: Ord>(a: [T]) -> Option<T> {
     }
 }
 
-/// **Búsqueda binaria** de `x` en un arreglo `a` que se asume **ordenado** (no decreciente): devuelve
-/// `Some(i)` con `a[i] == x` (algún índice si hay repetidos), o `None` si no está. O(log n). La igualdad
-/// se deriva de `Ord`: `x == y` ⟺ ni `x < y` ni `y < x`.
+/// **Binary search** for `x` in an array `a` assumed **sorted** (non-decreasing): returns
+/// `Some(i)` with `a[i] == x` (any index if there are duplicates), or `None` if absent. O(log n).
+/// Equality is derived from `Ord`: `x == y` ⟺ neither `x < y` nor `y < x`.
 pub fn binary_search<T: Ord>(a: [T], x: T) -> Option<int> {
     var lo = 0;
     var hi = len(a);
@@ -71,7 +71,7 @@ pub fn binary_search<T: Ord>(a: [T], x: T) -> Option<int> {
     Option.None
 }
 
-/// Ordena `a` y **elimina los duplicados** (los iguales quedan una sola vez). El resultado está ordenado.
+/// Sorts `a` and **removes duplicates** (equal elements are kept once). The result is sorted.
 pub fn dedup<T: Ord>(a: [T]) -> [T] {
     let s = sort(a);
     var out: [T] = [];
@@ -86,7 +86,7 @@ pub fn dedup<T: Ord>(a: [T]) -> [T] {
     out
 }
 
-/// **Fusiona** dos arreglos **ya ordenados** `a` y `b` en uno solo ordenado (estable: ante empate, gana `a`).
+/// **Merges** two **already sorted** arrays `a` and `b` into one sorted array (stable: on ties, `a` wins).
 pub fn merge<T: Ord>(a: [T], b: [T]) -> [T] {
     var out: [T] = [];
     var i = 0;

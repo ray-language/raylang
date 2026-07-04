@@ -11,6 +11,9 @@
 // M20.10b: descompresión transparente de `Content-Encoding: gzip` (la librería INFLATE en raylang).
 from std/inflate import gunzip;
 
+/// An HTTP/1.1 response: status code, headers, and body.
+/// Header names are stored lowercased for case-insensitive lookup; the body is raw bytes
+/// (already de-chunked and gunzipped if the server used chunked transfer or gzip encoding).
 pub struct Response {
     status: int,
     headers: Map<string, string>,
@@ -261,12 +264,16 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
 }
 
 // Devuelve el valor de una cabecera por nombre (case-insensitive), o None.
+/// Returns the value of a response header by name (case-insensitive).
+/// Returns None if the header is not present.
 pub fn header(r: Response, name: string) -> Option<string> {
     get(r.headers, to_lower(name))
 }
 
 // El cuerpo de la respuesta decodificado como texto UTF-8 (para respuestas de texto/JSON). Para datos
 // binarios, usa `r.body` (bytes) directamente.
+/// Decodes the response body as UTF-8 text (for text/JSON responses).
+/// Err if the body is not valid UTF-8; for binary data use `r.body` directly.
 pub fn body_text(r: Response) -> Result<string, string> {
     from_utf8(r.body)
 }
@@ -280,12 +287,18 @@ fn conectar(u: Url) -> Result<int, string> {
     }
 }
 
+/// Performs an HTTP/1.1 request with the given method, URL, and body (blocking network I/O).
+/// Supports http:// and https:// (TLS); uses "Connection: close" and reads until EOF.
+/// Err on invalid URL, connection failure, I/O error, or a malformed response.
 pub fn request(method: string, url: string, body: string) -> Result<Response, string> {
     request_with(method, url, body, map_new())
 }
 
 // Como `request` pero con cabeceras extra (Authorization, Accept, Content-Type, …). Es la base de
 // un cliente robusto: método y cabeceras arbitrarios.
+/// Like `request` but with extra headers (Authorization, Accept, Content-Type, ...).
+/// Client headers (Host/Connection/Content-Length) are set first; extras are appended in key order.
+/// Err on invalid URL, connection failure, I/O error, or a malformed response.
 pub fn request_with(method: string, url: string, body: string, headers: Map<string, string>) -> Result<Response, string> {
     match (parse_url(url)) {
         Result.Err(e) => Result.Err(e),
@@ -317,6 +330,9 @@ fn es_redireccion(status: int) -> bool {
 
 // GET que sigue redirecciones (hasta `max` saltos). Devuelve la respuesta final, o un Err si se
 // supera el límite (posible bucle) o falla una petición. La nueva URL sale de la cabecera `Location`.
+/// GET that follows redirects (301/302/303/307/308) up to `max` hops, resolving relative Locations.
+/// Returns the final response; Err if the hop limit is exceeded (possible loop) or a request fails.
+/// A redirect without a Location header is returned as-is.
 pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
     var actual: string = url;
     var restantes: int = max;
@@ -360,6 +376,8 @@ fn absolutizar(base: string, loc: string) -> string {
 // Atajo para una petición GET. Se llama `fetch` (no `get`) a propósito: `get` ya es el accesor de
 // Map en el prelude y raylang no tiene sobrecarga, así que un `fn get` lo taparía dentro de este
 // módulo —y `header` necesita el `get` de Map—.
+/// Shorthand for a GET request with an empty body (does not follow redirects).
+/// Err on invalid URL, connection failure, I/O error, or a malformed response.
 pub fn fetch(url: string) -> Result<Response, string> {
     request("GET", url, "")
 }

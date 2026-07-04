@@ -56,6 +56,8 @@ fn days_from_civil(year: int, month: int, day: int) -> int {
 }
 
 // Construye un DateTime UTC a partir de milisegundos desde el epoch.
+/// Builds a UTC DateTime from milliseconds since the Unix epoch (1970-01-01).
+/// Valid for epoch >= 0 (dates from 1970 on); weekday is computed (0=Sunday..6=Saturday).
 pub fn from_epoch_millis(ms: int) -> DateTime {
     let secs = ms / 1000;
     let days = secs / 86400;
@@ -69,11 +71,14 @@ pub fn from_epoch_millis(ms: int) -> DateTime {
 }
 
 // El instante actual en UTC.
+/// Returns the current instant as a UTC DateTime (from the `now()` builtin).
 pub fn now_utc() -> DateTime {
     from_epoch_millis(now())
 }
 
 // Milisegundos desde el epoch de un DateTime (inverso de `from_epoch_millis`; ignora `weekday`).
+/// Converts a UTC DateTime back to milliseconds since the Unix epoch
+/// (inverse of `from_epoch_millis`; the `weekday` field is ignored).
 pub fn to_epoch_millis(dt: DateTime) -> int {
     let days = days_from_civil(dt.year, dt.month, dt.day);
     let secs = days * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second;
@@ -90,18 +95,22 @@ fn pad(n: int, ancho: int) -> string {
 }
 
 // Formato ISO 8601 / RFC 3339: `YYYY-MM-DDTHH:MM:SSZ` (Z = UTC).
+/// Formats a DateTime as ISO 8601 / RFC 3339: `YYYY-MM-DDTHH:MM:SSZ` (Z = UTC).
 pub fn to_iso8601(dt: DateTime) -> string {
     pad(dt.year, 4) + "-" + pad(dt.month, 2) + "-" + pad(dt.day, 2)
         + "T" + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + "Z"
 }
 
 // Formato ISO 8601 "básico" (sin separadores): `YYYYMMDDTHHMMSSZ`. Es el `X-Amz-Date` de AWS SigV4.
+/// Formats a DateTime as "basic" ISO 8601 (no separators): `YYYYMMDDTHHMMSSZ`.
+/// This is the `X-Amz-Date` format used by AWS Signature V4.
 pub fn to_iso8601_basic(dt: DateTime) -> string {
     pad(dt.year, 4) + pad(dt.month, 2) + pad(dt.day, 2)
         + "T" + pad(dt.hour, 2) + pad(dt.minute, 2) + pad(dt.second, 2) + "Z"
 }
 
 // Solo la fecha, sin separadores: `YYYYMMDD` (el "datestamp" del *credential scope* de AWS SigV4).
+/// Formats just the date, no separators: `YYYYMMDD` (the AWS SigV4 credential-scope datestamp).
 pub fn date_stamp(dt: DateTime) -> string {
     pad(dt.year, 4) + pad(dt.month, 2) + pad(dt.day, 2)
 }
@@ -117,12 +126,16 @@ fn month_name(m: int) -> string {
 }
 
 // Formato RFC 1123 (la cabecera `Date:` de HTTP): `Wdy, DD Mon YYYY HH:MM:SS GMT`.
+/// Formats a DateTime as RFC 1123 (the HTTP `Date:` header): `Wdy, DD Mon YYYY HH:MM:SS GMT`.
 pub fn to_rfc1123(dt: DateTime) -> string {
     weekday_name(dt.weekday) + ", " + pad(dt.day, 2) + " " + month_name(dt.month) + " " + pad(dt.year, 4)
         + " " + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + " GMT"
 }
 
 // Parsea un timestamp ISO 8601 `YYYY-MM-DDTHH:MM:SSZ` a DateTime (forma fija; UTC).
+/// Parses a fixed-form ISO 8601 UTC timestamp `YYYY-MM-DDTHH:MM:SSZ` into a DateTime.
+/// Err only if the string is shorter than 20 chars; non-numeric fields parse as 0.
+/// The weekday is recomputed from the date (the input is not trusted).
 pub fn parse_iso8601(s: string) -> Result<DateTime, string> {
     if (len(s) < 20) {
         return Result.Err("ISO 8601 demasiado corto");
@@ -148,6 +161,8 @@ fn int_or(s: string) -> int {
 }
 
 // Formatea una duración en milisegundos como `1h2m3s` / `45s` / `120ms` (forma compacta, legible).
+/// Formats a duration in milliseconds compactly: `120ms` under one second,
+/// otherwise `1h2m3s`-style with zero components omitted.
 pub fn format_duration(ms: int) -> string {
     if (ms < 1000) {
         return to_string(ms) + "ms";

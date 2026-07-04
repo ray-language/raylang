@@ -6,6 +6,9 @@
 // columnas son heterogéneas, así que dejar todo como string (y que el usuario convierta) es lo idiomático.
 // Parsea un documento CSV a filas de campos. Los campos entrecomillados (`"..."`) admiten comas, saltos
 // de línea y comillas escapadas como `""`. Acepta finales de línea LF o CRLF.
+/// Parses a CSV document (RFC 4180) into rows of string fields. Quoted fields (`"..."`) may
+/// contain commas, newlines, and quotes escaped as `""`; accepts LF or CRLF line endings.
+/// Returns `Err` on an unterminated quoted field.
 pub fn parse_csv(src: string) -> Result<[[string]], string> {
     let cs = chars(src);
     let n = len(cs);
@@ -100,6 +103,8 @@ fn write_field(s: string) -> string {
 }
 
 // Serializa filas de campos a un documento CSV (líneas separadas por `\n`).
+/// Serializes rows of fields to a CSV document (`\n` line endings). Fields containing a
+/// comma, quote, CR, or LF are quoted, with inner quotes escaped as `""` (RFC 4180).
 pub fn write_csv(rows: [[string]]) -> string {
     var out = "";
     var r = 0;

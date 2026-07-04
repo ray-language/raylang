@@ -33,6 +33,8 @@ fn sign_input(secret: bytes, signing_input: string) -> string {
 }
 
 // Firma las *claims* (JSON crudo) y devuelve el JWT compacto `h.p.s`.
+/// Signs the claims (raw JSON string) with HMAC-SHA256 and returns the compact JWT
+/// `header.payload.signature` (RFC 7519, alg fixed to HS256).
 pub fn jwt_sign(secret: bytes, payload_json: string) -> string {
     let h = header_b64();
     let p = base64url(str_octets(payload_json));
@@ -61,6 +63,9 @@ fn const_eq(a: string, b: string) -> bool {
 // Verifica la firma de un JWT con el secreto. `Ok(payload_json)` si es válida, `Err(motivo)` si no
 // (formato incorrecto, firma que no cuadra, o payload no-UTF-8). NO comprueba `exp`/`nbf` (eso es
 // política de la aplicación, sobre el JSON ya devuelto — necesita la librería de tiempo, M20.5).
+/// Verifies an HS256 JWT's signature (constant-time comparison) and returns the decoded
+/// payload: `Ok(payload_json)` if valid; `Err(reason)` on malformed token, bad signature,
+/// or non-UTF-8 payload. Does NOT check `exp`/`nbf` claims — that is application policy.
 pub fn jwt_verify(secret: bytes, token: string) -> Result<string, string> {
     let parts = split(token, ".");
     if (len(parts) != 3) {

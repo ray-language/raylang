@@ -16,6 +16,7 @@ from net/crypto import hmac_sha256_octets, hmac_sha256_hex, sha256_hex;
 from std/url import url_encode;
 
 // Las credenciales + el destino (región/servicio) de la firma.
+/// AWS credentials plus the signing target (region/service) for Signature Version 4.
 pub struct Credentials {
     access_key: string,
     secret_key: string,
@@ -23,6 +24,7 @@ pub struct Credentials {
     service: string,
 }
 
+/// Convenience constructor for `Credentials`.
 pub fn credentials(access_key: string, secret_key: string, region: string, service: string) -> Credentials {
     Credentials { access_key: access_key, secret_key: secret_key, region: region, service: service }
 }
@@ -57,6 +59,10 @@ fn hmac_bytes(key: bytes, msg: string) -> bytes {
 
 // Devuelve el valor de la cabecera `Authorization` para la petición dada. `amz_date` en formato básico
 // `YYYYMMDDTHHMMSSZ` (usa `time::to_iso8601_basic`); el "datestamp" se extrae de sus 8 primeros dígitos.
+/// Computes the AWS SigV4 `Authorization` header value for a request (canonical request →
+/// string-to-sign → derived signing key → signature). Pure computation, no network I/O.
+/// Header names in `headers` must already be lowercase; `amz_date` is basic ISO-8601
+/// (`YYYYMMDDTHHMMSSZ`) and must match the request's `x-amz-date`.
 pub fn authorization_header(cred: Credentials, method: string, path: string, query: string,
                             headers: Map<string, string>, payload: bytes, amz_date: string) -> string {
     // --- Cabeceras canónicas + signed-headers (claves ya en minúscula; `keys` las da ordenadas). ---

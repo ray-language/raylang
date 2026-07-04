@@ -10,6 +10,8 @@ from net/crypto import hmac_sha256_octets, sha256_octets;
 from std/base64 import base64, base64_decode;
 
 // El estado de una conversación SCRAM en el cliente.
+/// Client-side state of a SCRAM-SHA-256 conversation (RFC 5802 / RFC 7677).
+/// Created by `scram_first`; `scram_final` fills in the expected server signature.
 pub struct Scram {
     client_first_bare: string,   // "n=usuario,r=nonce"
     server_sig: [int],           // la firma del servidor ESPERADA (se llena en scram_final, se verifica al final)
@@ -48,6 +50,8 @@ fn pbkdf2_sha256(pw: bytes, salt: [int], iterations: int) -> [int] {
 }
 
 // El `client-first-message` completo (a enviar): "n,,n=usuario,r=nonce". `nonce` lo genera el llamador.
+/// Starts a SCRAM conversation: builds the client-first-bare message ("n=user,r=nonce").
+/// The caller supplies the random `nonce`; send `scram_client_first_message` on the wire.
 pub fn scram_first(username: string, nonce: string) -> Scram {
     Scram {
         client_first_bare: "n=" + username + ",r=" + nonce,
@@ -56,6 +60,7 @@ pub fn scram_first(username: string, nonce: string) -> Scram {
 }
 
 // El texto GS2+bare que se manda como client-first (con el header "n,,").
+/// The full client-first-message to send on the wire: GS2 header "n,," + client-first-bare.
 pub fn scram_client_first_message(sc: Scram) -> string {
     "n,," + sc.client_first_bare
 }
@@ -77,6 +82,10 @@ fn attr(msg: string, clave: string) -> string {
 
 // Procesa el `server-first` y produce el `client-final-message` (con la prueba). Guarda en `sc` la firma
 // del servidor esperada para verificarla luego con `scram_verify`.
+/// Processes the server-first-message and returns the client-final-message (with ClientProof).
+/// Runs PBKDF2-HMAC-SHA256 over the password (CPU cost grows with the iteration count) and
+/// stores the expected ServerSignature in `sc` for `scram_verify`.
+/// `Err` on an invalid iteration count or bad base64 salt in `server_first`.
 pub fn scram_final(sc: Scram, password: string, server_first: string) -> Result<string, string> {
     let rnonce = attr(server_first, "r");    // nonce combinado
     let salt_b64 = attr(server_first, "s");
@@ -106,6 +115,9 @@ pub fn scram_final(sc: Scram, password: string, server_first: string) -> Result<
 }
 
 // Verifica el `server-final` ("v=<firma en base64>"): la firma debe coincidir con la esperada.
+/// Verifies the server-final-message ("v=<base64 signature>") against the ServerSignature
+/// computed in `scram_final`, using a constant-time comparison. Call after `scram_final`;
+/// false means the server does not know the password (or the message is malformed).
 pub fn scram_verify(sc: Scram, server_final: string) -> bool {
     let v = attr(server_final, "v");
     match (base64_decode(v)) {

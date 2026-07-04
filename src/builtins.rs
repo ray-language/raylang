@@ -160,6 +160,89 @@ pub fn signature(name: &str) -> Option<(Vec<&'static str>, &'static str)> {
     })
 }
 
+/// Documentación (en inglés, cara al usuario) de un builtin, para el **hover** y el **completion**
+/// del LSP. Los builtins viven en esta tabla Rust —no hay fuente raylang donde poner `///`—, así
+/// que sus docs son metadatos aquí, como `signature()`. Cubre todos los de cara al usuario; `None`
+/// para los primitivos internos `__*`.
+pub fn doc(name: &str) -> Option<&'static str> {
+    Some(match name {
+        // --- Núcleo / salida ---
+        "print" => "Prints a value to stdout followed by a newline. Accepts any printable value (int, float, bool, string, char, arrays, structs/enums with Show).",
+        "eprint" => "Prints a value to stderr followed by a newline. Same printable values as `print`.",
+        "panic" => "Aborts the program with the given message and a non-zero exit code, reporting the call position. Use for unreachable code; prefer `Result`/`Option` for expected failures.",
+        "to_string" => "Converts an int, float, bool, char or string to its string representation (same formatting as `print`).",
+        "len" => "Returns the length of a collection: characters of a string, elements of an array, entries of a Map, or octets of a bytes value.",
+        "push" => "Appends a value to the end of an array, in place (arrays have reference semantics).",
+        "args" => "Returns the command-line arguments passed to the program (after the file path) as `[string]`.",
+        // --- Strings ---
+        "trim" => "Returns a copy of the string with leading and trailing whitespace removed.",
+        "split" => "Splits a string by a separator and returns the parts as `[string]`.",
+        "contains" => "For strings: whether the substring occurs. For arrays: whether the value is an element (structural equality).",
+        "replace" => "Returns a copy of the string with every occurrence of a substring replaced by another.",
+        "chars" => "Returns the characters of a string as `[char]`.",
+        "char_code" => "Returns the Unicode code point of a char as an int.",
+        "starts_with" => "Whether the string starts with the given prefix.",
+        "ends_with" => "Whether the string ends with the given suffix.",
+        "to_upper" => "Returns the string converted to uppercase.",
+        "to_lower" => "Returns the string converted to lowercase.",
+        "substring" => "Returns the substring `[i, j)` by character index. Out-of-range indices are clamped, so it never fails at runtime.",
+        "repeat" => "Returns the string repeated `n` times (`n <= 0` gives the empty string).",
+        "join" => "With `(array, sep)`: joins a `[string]` into one string using the separator. With `(task)`: blocks until the task finishes and returns its value (re-raises if it failed).",
+        "reverse" => "Returns a new array with the elements in reverse order.",
+        // --- bytes ---
+        "to_bytes" => "Encodes a string as UTF-8 and returns it as `bytes`.",
+        "bytes_of" => "Builds a `bytes` value from an `[int]` of octets (each 0–255).",
+        "sub_bytes" => "Returns the byte slice `[i, j)` by octet index. Out-of-range indices are clamped, so it never fails at runtime.",
+        // --- Crypto (via ring) ---
+        "sha256" => "Computes the SHA-256 digest of a bytes value; returns 32 bytes.",
+        "sha512" => "Computes the SHA-512 digest of a bytes value; returns 64 bytes.",
+        "sha1" => "Computes the SHA-1 digest of a bytes value; returns 20 bytes. Legacy algorithm: needed by some protocols (e.g. WebSocket), avoid for new designs.",
+        "hmac_sha256" => "Computes the HMAC-SHA-256 of a message with the given key: `hmac_sha256(key: bytes, msg: bytes) -> bytes` (32 bytes).",
+        "ed25519_verify" => "Verifies an Ed25519 signature: `ed25519_verify(pubkey: bytes, msg: bytes, sig: bytes) -> bool`.",
+        // --- Map ---
+        "map_new" => "Creates an empty `Map<K, V>`. The element types are inferred from the expected type (annotate the binding if indeterminate). Keys must be hashable: int, string, char or bool.",
+        "insert" => "Inserts or updates a key/value pair in a Map, in place.",
+        "contains_key" => "Whether the Map contains the given key.",
+        "keys" => "Returns the keys of a Map as a sorted array (deterministic order).",
+        "values" => "Returns the values of a Map, in the same order as `keys()`.",
+        // --- Matemáticas ---
+        "sqrt" => "Square root of a float.",
+        "sin" => "Sine of a float (radians).",
+        "cos" => "Cosine of a float (radians).",
+        "tan" => "Tangent of a float (radians).",
+        "ln" => "Natural logarithm (base e) of a float.",
+        "log10" => "Base-10 logarithm of a float.",
+        "exp" => "e raised to the given float power.",
+        "floor" => "Largest integer value not greater than the float, as float.",
+        "ceil" => "Smallest integer value not less than the float, as float.",
+        "round" => "Nearest integer value to the float, as float (half away from zero).",
+        "pow" => "Raises `base` to the power `exp` (floats).",
+        "abs" => "Absolute value. Works on int (returns int) and float (returns float).",
+        "min" => "The smaller of two numbers. Works on two ints or two floats.",
+        "max" => "The larger of two numbers. Works on two ints or two floats.",
+        "pi" => "The constant π as a float.",
+        "e" => "The constant e (Euler's number) as a float.",
+        // --- Tiempo / azar ---
+        "now" => "Current wall-clock time in milliseconds since the Unix epoch.",
+        "monotonic" => "Monotonic clock reading in milliseconds; use for measuring durations (never goes backwards).",
+        "sleep" => "Suspends the current fiber (or the program) for the given number of milliseconds.",
+        "random" => "A pseudo-random float in `[0, 1)`.",
+        "random_int" => "A pseudo-random int in `[0, n)`.",
+        // --- Concurrencia (VM) ---
+        "spawn" => "Starts a new concurrent task running the given closure and returns its `Task<T>` handle. Use `join(task)` to wait for its result. Requires the VM engine.",
+        "scope" => "Runs the closure as a structured-concurrency scope: on return it joins every task spawned inside, cancelling siblings and re-raising the first failure.",
+        "channel" => "Creates a typed channel. `channel()` is unbounded; `channel(n)` holds at most `n` values (`0` = synchronous rendezvous); senders block when full.",
+        "send" => "Sends a value into a channel. Blocks if the channel is bounded and full (backpressure).",
+        "recv" => "Receives from a channel: blocks while it is empty and open; returns `None` once it is closed and drained.",
+        "select" => "Blocks until one of the channels in the array is ready to receive and returns its index (lowest ready index; deterministic). Follow with `recv(chs[i])`.",
+        "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`). For a file handle: closes the file.",
+        // --- I/O ---
+        "exists" => "Whether a file or directory exists at the given path.",
+        "local_port" => "Returns the local port a listener socket is bound to (useful with port 0 = OS-assigned).",
+        _ => return None,
+    })
+}
+
 /// Añade `contents` al final del archivo `path` (lo crea si no existe). Helper compartido por ambos
 /// motores para el primitivo `__append_file` (M11.4b); la *impl* de ejecución no es metadato, pero
 /// es idéntica en los dos motores, así que vive aquí para no duplicarse.
@@ -1754,6 +1837,19 @@ mod tests {
         assert!(is_builtin("args"));
         assert!(!is_builtin("noexiste"));
         assert!(!is_builtin("map")); // map/filter/fold son del prelude, no builtins
+    }
+
+    #[test]
+    fn todo_builtin_de_usuario_tiene_doc() {
+        // La documentación (en inglés) es parte del contrato de la tabla: cada builtin de cara
+        // al usuario (sin prefijo `__`) debe tener su entrada en `doc()`; añadir un builtin sin
+        // documentarlo rompe este test. Los internos `__*` no la necesitan.
+        let sin_doc: Vec<&str> = names()
+            .filter(|n| !n.starts_with("__") && doc(n).is_none())
+            .collect();
+        assert!(sin_doc.is_empty(), "builtins sin doc(): {sin_doc:?}");
+        assert!(doc("__parse_int").is_none(), "los internos no llevan doc");
+        assert!(doc("noexiste").is_none());
     }
 
     #[test]

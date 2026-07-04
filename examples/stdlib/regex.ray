@@ -445,6 +445,9 @@ fn step(prog: Prog, clist: [int], ch: char, pos_next: int, n: int, seed: bool) -
 }
 
 // ¿Casa el patrón con TODO el texto (anclado a ambos extremos)?
+/// Tests whether the pattern matches the ENTIRE text (anchored at both ends).
+/// Thompson NFA simulation — linear time, no backtracking blowup. Supported syntax:
+/// literals, `.`, `*` `+` `?`, `|`, `( )`, `[...]`/`[^...]` with ranges, `\d \w \s` (and negations), `^` `$`.
 pub fn full_match(pattern: string, text: string) -> bool {
     let prog = compile_pattern(pattern);
     let txt = chars(text);
@@ -461,6 +464,8 @@ pub fn full_match(pattern: string, text: string) -> bool {
 }
 
 // ¿Casa el patrón con ALGÚN substring del texto (búsqueda no anclada)?
+/// Tests whether the pattern matches SOME substring of the text (unanchored search).
+/// Linear time (Thompson NFA); same supported syntax as `full_match`.
 pub fn search(pattern: string, text: string) -> bool {
     let prog = compile_pattern(pattern);
     let txt = chars(text);
@@ -510,6 +515,8 @@ fn match_at(prog: Prog, txt: [char], s: int, n: int) -> int {
 }
 
 // La primera coincidencia (leftmost): `Some((inicio, fin))` con índices por carácter, o `None`.
+/// Finds the first (leftmost-longest) match. Returns `Some((start, end))` as character
+/// indices (end exclusive), or `None` if the pattern does not match anywhere.
 pub fn find(pattern: string, text: string) -> Option<(int, int)> {
     let prog = compile_pattern(pattern);
     let txt = chars(text);
@@ -526,6 +533,7 @@ pub fn find(pattern: string, text: string) -> Option<(int, int)> {
 }
 
 // El substring de la primera coincidencia, o `None`.
+/// Returns the substring of the first match, or `None` if there is no match.
 pub fn find_str(pattern: string, text: string) -> Option<string> {
     match (find(pattern, text)) {
         Option.Some(par) => Option.Some(substring(text, par.0, par.1)),
@@ -534,6 +542,8 @@ pub fn find_str(pattern: string, text: string) -> Option<string> {
 }
 
 // Todas las coincidencias NO solapadas, de izquierda a derecha, como substrings.
+/// Returns all non-overlapping matches, left to right, as substrings.
+/// A zero-width match advances one character to guarantee progress.
 pub fn find_all(pattern: string, text: string) -> [string] {
     let prog = compile_pattern(pattern);
     let txt = chars(text);
@@ -557,6 +567,8 @@ pub fn find_all(pattern: string, text: string) -> [string] {
 }
 
 // Reemplaza cada coincidencia NO solapada por `repl` y devuelve el texto resultante.
+/// Replaces every non-overlapping match with `repl` (a plain string, no capture references)
+/// and returns the resulting text.
 pub fn replace_all(pattern: string, text: string, repl: string) -> string {
     let prog = compile_pattern(pattern);
     let txt = chars(text);

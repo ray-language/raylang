@@ -108,6 +108,10 @@ fn parse_datarow(payload: bytes) -> [string] {
 
 // Ejecuta `sql` como consulta simple tras autenticar con SCRAM-SHA-256, y devuelve la PRIMERA fila
 // como lista de columnas (strings). `nonce` es el nonce del cliente (aleatorio en producción).
+/// Connects to PostgreSQL at `host:port`, authenticates as `user` against `db` with
+/// SCRAM-SHA-256 (`nonce` = client nonce; use a random one in production), runs `sql` via
+/// the simple query protocol, and returns the FIRST row as column strings (NULL -> "").
+/// Blocking network I/O; Err on connection/auth failure or any server ErrorResponse.
 pub fn pg_query(host: string, port: int, user: string, db: string, password: string, nonce: string, sql: string) -> Result<[string], string> {
     let handle = match (tcp_connect(host, port)) {
         Result.Ok(h) => h,

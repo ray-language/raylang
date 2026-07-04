@@ -31,6 +31,8 @@ fn is_unreserved(c: char) -> bool {
     }
 }
 
+/// Percent-encodes a string per RFC 3986: unreserved characters (A-Z a-z 0-9 - _ . ~) pass
+/// through; everything else becomes `%XX` (uppercase hex of each UTF-8 byte).
 pub fn url_encode(s: string) -> string {
     var out = "";
     var i = 0;
@@ -52,6 +54,8 @@ pub fn url_encode(s: string) -> string {
     out
 }
 
+/// Decodes a percent-encoded string; `+` decodes to a space (application/x-www-form-urlencoded).
+/// Returns `Err` on an incomplete or invalid `%XX` escape, or if the bytes are not valid UTF-8.
 pub fn url_decode(s: string) -> Result<string, string> {
     var oct: [int] = [];
     let n = len(s);
@@ -97,6 +101,9 @@ fn url_decode_or(s: string) -> string {
 
 // Parsea una query string (`a=1&b=hola%20mundo`) en un `Map<string,string>` (la última clave gana).
 // Cada clave/valor se url-decodifica. Una clave sin `=` queda con valor "".
+/// Parses a query string (`a=1&b=hola%20mundo`) into a `Map<string,string>`; the last duplicate
+/// key wins. Keys and values are URL-decoded (malformed escapes fall back to the raw text);
+/// a key without `=` gets the value "".
 pub fn parse_query(qs: string) -> Map<string, string> {
     var m: Map<string, string> = map_new();
     if (len(qs) == 0) {
@@ -126,6 +133,8 @@ pub fn parse_query(qs: string) -> Map<string, string> {
 
 // Construye una query string a partir de un `Map<string,string>`. Las claves salen ORDENADAS
 // (`keys` es determinista) → salida reproducible. Clave y valor se url-codifican.
+/// Builds a query string from a `Map<string,string>`; keys and values are percent-encoded.
+/// Keys come out sorted, so the output is deterministic and reproducible.
 pub fn build_query(m: Map<string, string>) -> string {
     let ks = keys(m);
     var out = "";

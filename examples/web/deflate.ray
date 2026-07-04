@@ -190,6 +190,8 @@ fn find_match(lz: Lz, i: int) -> Match {
 }
 
 // Comprime `data` a un stream DEFLATE crudo (un único bloque de Huffman fijo, BFINAL=1).
+/// Compresses bytes to a raw DEFLATE stream (RFC 1951): a single fixed-Huffman block
+/// (BTYPE=01, BFINAL=1) with LZ77 back-reference matching (zlib-style hash chains, 32 KiB window).
 pub fn deflate_raw(data: bytes) -> bytes {
     let n = len(data);
     var w = BitWriter { out: [], cur: 0, nbits: 0 };
@@ -244,6 +246,8 @@ fn push_u32(out: [int], v: int) {
 }
 
 // Comprime a formato gzip (RFC 1952): cabecera + DEFLATE + CRC-32 + ISIZE.
+/// Compresses bytes to the gzip format (RFC 1952): 10-byte header + DEFLATE body +
+/// trailer with CRC-32 and ISIZE. The result is readable by standard gzip tools.
 pub fn gzip_compress(data: bytes) -> bytes {
     var out: [int] = [];
     push(out, 31);  // magia + método + flags
@@ -279,6 +283,8 @@ fn adler32(data: bytes) -> int {
 }
 
 // Comprime a formato zlib (RFC 1950): 2 octetos de cabecera + DEFLATE + Adler-32.
+/// Compresses bytes to the zlib format (RFC 1950): 2-byte header + DEFLATE body +
+/// big-endian Adler-32 checksum.
 pub fn zlib_compress(data: bytes) -> bytes {
     var out: [int] = [];
     push(out, 120);  // CMF=0x78 (deflate, ventana 32K), FLG=0x01 (check ok)

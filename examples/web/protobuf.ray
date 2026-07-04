@@ -10,10 +10,13 @@
 //
 // Cubre proto3 con varints NO negativos (los `sint`/zigzag y los negativos de int64 quedan diferidos).
 // --- Codificación (constructor de mensaje) ---
+/// A protobuf message builder: accumulates wire-format bytes as fields are written.
+/// Create with `writer()`, add fields with `write_*`, and get the bytes with `finish`.
 pub struct PbWriter {
     out: [int],
 }
 
+/// Creates an empty `PbWriter` to start building a protobuf message.
 pub fn writer() -> PbWriter {
     PbWriter { out: [] }
 }
@@ -41,12 +44,15 @@ fn append_bytes(out: [int], b: bytes) {
 }
 
 // Campo varint (wire 0): int32/int64/uint/bool/enum.
+/// Writes a varint field (wire type 0, LEB128): int32/int64/uint/bool/enum.
+/// Only non-negative values are supported (no sint/zigzag encoding).
 pub fn write_varint(w: PbWriter, field: int, value: int) {
     write_tag(w.out, field, 0);
     encode_varint(w.out, value);
 }
 
 // Campo length-delimited (wire 2) a partir de un string (UTF-8).
+/// Writes a length-delimited field (wire type 2) from a string, encoded as UTF-8 bytes.
 pub fn write_string(w: PbWriter, field: int, s: string) {
     write_tag(w.out, field, 2);
     let b = to_bytes(s);
@@ -55,6 +61,8 @@ pub fn write_string(w: PbWriter, field: int, s: string) {
 }
 
 // Campo length-delimited (wire 2) a partir de bytes crudos (o un submensaje ya serializado).
+/// Writes a length-delimited field (wire type 2) from raw bytes — also how a
+/// nested message (already serialized) is embedded.
 pub fn write_bytes(w: PbWriter, field: int, b: bytes) {
     write_tag(w.out, field, 2);
     encode_varint(w.out, len(b));
@@ -62,6 +70,7 @@ pub fn write_bytes(w: PbWriter, field: int, b: bytes) {
 }
 
 // Campo fixed64 (wire 1): 8 octetos little-endian.
+/// Writes a fixed64 field (wire type 1): 8 little-endian bytes.
 pub fn write_fixed64(w: PbWriter, field: int, value: int) {
     write_tag(w.out, field, 1);
     var k = 0;
@@ -72,6 +81,7 @@ pub fn write_fixed64(w: PbWriter, field: int, value: int) {
 }
 
 // Campo fixed32 (wire 5): 4 octetos little-endian.
+/// Writes a fixed32 field (wire type 5): 4 little-endian bytes.
 pub fn write_fixed32(w: PbWriter, field: int, value: int) {
     write_tag(w.out, field, 5);
     var k = 0;
@@ -82,12 +92,16 @@ pub fn write_fixed32(w: PbWriter, field: int, value: int) {
 }
 
 // El mensaje serializado.
+/// Returns the serialized protobuf message accumulated in the writer.
 pub fn finish(w: PbWriter) -> bytes {
     bytes_of(w.out)
 }
 
 // --- Decodificación ---
 // Un campo decodificado: número, wire type, y el valor (entero para varint/fixed; bytes para len-delim).
+/// A decoded protobuf field: field number, wire type, and the raw value —
+/// `int_val` for varint/fixed64/fixed32, `bytes_val` for length-delimited (wire 2).
+/// The wire format is schema-less, so interpreting the value is up to the caller.
 pub struct PbField {
     number: int,
     wire: int,
@@ -131,6 +145,9 @@ fn read_le(data: bytes, pos: int, nbytes: int) -> int {
 }
 
 // Parsea un mensaje protobuf a una lista de campos crudos (sin schema).
+/// Parses a protobuf message into its raw fields (schema-less: number + wire type + value).
+/// Supports wire types 0 (varint), 1 (fixed64), 2 (length-delimited), and 5 (fixed32);
+/// returns `Err` on any other wire type.
 pub fn parse(data: bytes) -> Result<[PbField], string> {
     var fields: [PbField] = [];
     var pos = 0;
@@ -170,6 +187,8 @@ pub fn parse(data: bytes) -> Result<[PbField], string> {
 }
 
 // --- Accesores por número de campo (primer campo que coincide) ---
+/// Returns the integer value of the first field with the given number, or 0 if absent
+/// (proto3 default).
 pub fn get_int(fields: [PbField], number: int) -> int {
     var i = 0;
     while (i < len(fields)) {
@@ -181,6 +200,7 @@ pub fn get_int(fields: [PbField], number: int) -> int {
     0
 }
 
+/// Returns the bytes value of the first field with the given number, or empty bytes if absent.
 pub fn get_bytes(fields: [PbField], number: int) -> bytes {
     var i = 0;
     while (i < len(fields)) {
@@ -192,6 +212,8 @@ pub fn get_bytes(fields: [PbField], number: int) -> bytes {
     b""
 }
 
+/// Returns the string value (UTF-8) of the first field with the given number,
+/// or "" if the field is absent or not valid UTF-8.
 pub fn get_string(fields: [PbField], number: int) -> string {
     match (from_utf8(get_bytes(fields, number))) {
         Result.Ok(s) => s,
@@ -202,6 +224,8 @@ pub fn get_string(fields: [PbField], number: int) -> string {
 // --- Framing de gRPC ---
 // Un mensaje gRPC sobre HTTP/2 va con un prefijo de 5 octetos: 1 octeto de flag de compresión (0 = sin
 // comprimir) + 4 octetos big-endian con la longitud del mensaje, seguidos del protobuf.
+/// Wraps a serialized message in the gRPC length-prefixed frame: 1 compression flag byte
+/// (0 = uncompressed) + 4 big-endian length bytes + the message.
 pub fn grpc_frame(message: bytes) -> bytes {
     var out: [int] = [];
     push(out, 0);  // sin comprimir
@@ -213,6 +237,8 @@ pub fn grpc_frame(message: bytes) -> bytes {
     bytes_of(out) + message
 }
 
+/// Extracts the message from a gRPC frame (strips the 5-byte prefix).
+/// Returns `Err` if the frame is shorter than 5 bytes.
 pub fn grpc_unframe(data: bytes) -> Result<bytes, string> {
     if (len(data) < 5) {
         return Result.Err("frame gRPC demasiado corto");

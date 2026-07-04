@@ -10,6 +10,8 @@ from net/http2 import preface, settings_empty, settings_ack, headers_frame, pars
 from net/hpack import new_hpack, encode, decode, header, HEntry;
 
 // La respuesta: el código de estado (`:status`) y el cuerpo (concatenación de los frames DATA).
+/// An HTTP/2 response: the `:status` pseudo-header value and the body
+/// (the concatenation of all DATA frame payloads on the request stream).
 pub struct Http2Response { status: int, body: bytes }
 
 // Busca el pseudo-header `:status` en una lista de cabeceras decodificadas.
@@ -29,6 +31,9 @@ fn extract_status(hs: [HEntry]) -> int {
 }
 
 // Hace un GET sobre HTTP/2 a `host:port` con la ruta dada (por TLS, ALPN `h2`).
+/// Performs a full HTTP/2 GET to `host:port` for `path` over TLS with ALPN `h2` (blocking I/O):
+/// connection preface + SETTINGS exchange + HEADERS on stream 1, reading until END_STREAM.
+/// Err on connect/TLS failure, I/O or HPACK errors, or if the server sends GOAWAY.
 pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response, string> {
     let h = match (tls_connect_h2(host, port)) {
         Result.Ok(x) => x,

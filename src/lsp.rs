@@ -231,17 +231,75 @@ fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 /// el mismo, o el disco si es otro módulo) y reúne los `///` contiguos encima de la línea de la
 /// declaración. `None` si el símbolo no tiene declaración conocida (método, builtin) o no lleva docs.
 fn doc_del_simbolo(uri: &str, src: &str, line0: usize, char0: usize, docs: &HashMap<String, String>) -> Option<String> {
-    let (target_uri, def_line0, _, _) = definition_at(uri, src, line0, char0)?;
-    // Fuente del archivo donde vive la declaración: el buffer si es el mismo doc, o el disco.
-    let fuente = if target_uri == uri {
-        src.to_string()
-    } else {
-        docs.get(&target_uri).cloned()
-            .or_else(|| uri_to_path(&target_uri).and_then(|p| std::fs::read_to_string(p).ok()))?
-    };
-    let lineas: Vec<&str> = fuente.lines().collect();
-    let ls = crate::raydoc::doc_lineas_arriba(&lineas, def_line0 + 1)?; // +1: 0-basado → 1-basado
-    Some(ls.join("\n"))
+    match definition_at(uri, src, line0, char0) {
+        Some((target_uri, def_line0, _, _)) => {
+            // Fuente del archivo donde vive la declaración: el buffer si es el mismo doc, o el disco.
+            let fuente = if target_uri == uri {
+                src.to_string()
+            } else {
+                docs.get(&target_uri).cloned()
+                    .or_else(|| uri_to_path(&target_uri).and_then(|p| std::fs::read_to_string(p).ok()))?
+            };
+            let lineas: Vec<&str> = fuente.lines().collect();
+            if let Some(ls) = crate::raydoc::doc_lineas_arriba(&lineas, def_line0 + 1) {
+                return Some(ls.join("\n"));
+            }
+            // La declaración resolvió FUERA del archivo (línea inexistente): es un símbolo del
+            // prelude inyectado, cuya posición vive en su propia fuente → sus `///` se buscan ahí.
+            if def_line0 >= lineas.len() {
+                let nombre = ident_bajo_cursor(src, line0, char0)?;
+                return doc_en_prelude(&nombre);
+            }
+            None
+        }
+        // Sin declaración conocida: un builtin (sus docs son metadatos en la tabla Rust) o un
+        // símbolo del prelude sin entrada en `defs`.
+        None => {
+            let nombre = ident_bajo_cursor(src, line0, char0)?;
+            crate::builtins::doc(&nombre).map(|s| s.to_string())
+                .or_else(|| doc_en_prelude(&nombre))
+        }
+    }
+}
+
+/// El identificador bajo el cursor `(line0, char0)` (0-basados), expandiendo a izquierda y derecha
+/// sobre caracteres de identificador. `None` si el cursor no está sobre uno.
+fn ident_bajo_cursor(src: &str, line0: usize, char0: usize) -> Option<String> {
+    let linea: Vec<char> = src.lines().nth(line0)?.chars().collect();
+    if char0 >= linea.len() || !is_ident_char(linea[char0]) {
+        return None;
+    }
+    let mut ini = char0;
+    while ini > 0 && is_ident_char(linea[ini - 1]) {
+        ini -= 1;
+    }
+    let mut fin = char0;
+    while fin < linea.len() && is_ident_char(linea[fin]) {
+        fin += 1;
+    }
+    Some(linea[ini..fin].iter().collect())
+}
+
+/// Los `///` de un símbolo del **prelude** (funciones, tipos y traits inyectados: `map`, `sort`,
+/// `Option`…), buscados por nombre en su propia fuente (`prelude::SOURCE`): la posición de su
+/// declaración no vive en el archivo abierto, así que no vale `doc_lineas_arriba` sobre el buffer.
+fn doc_en_prelude(nombre: &str) -> Option<String> {
+    let lineas: Vec<&str> = crate::prelude::SOURCE.lines().collect();
+    for (i, l) in lineas.iter().enumerate() {
+        let l = l.trim_start();
+        // Declaraciones de nivel superior y métodos de trait/impl: `fn nombre(`/`fn nombre<`,
+        // `enum/struct/trait Nombre`.
+        let es_decl = ["fn ", "enum ", "struct ", "trait "].iter().any(|kw| {
+            l.strip_prefix(kw).is_some_and(|resto| {
+                resto.starts_with(nombre)
+                    && !resto[nombre.len()..].chars().next().is_some_and(is_ident_char)
+            })
+        });
+        if es_decl && let Some(ls) = crate::raydoc::doc_lineas_arriba(&lineas, i + 1) {
+            return Some(ls.join("\n"));
+        }
+    }
+    None
 }
 
 /// El índice semántico para las consultas (hover/def/refs/rename). Si el documento es un archivo,
@@ -776,7 +834,19 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     items.sort();
     items.dedup();
     let lista: Vec<Json> = items.into_iter()
-        .map(|(label, kind)| obj(vec![("label", Json::Str(label)), ("kind", num(kind))]))
+        .map(|(label, kind)| {
+            // Documentación del ítem: metadatos del builtin, o los `///` del prelude.
+            let doc = crate::builtins::doc(&label).map(|s| s.to_string())
+                .or_else(|| doc_en_prelude(&label));
+            let mut campos = vec![("label", Json::Str(label)), ("kind", num(kind))];
+            if let Some(d) = doc {
+                campos.push(("documentation", obj(vec![
+                    ("kind", Json::Str("markdown".into())),
+                    ("value", Json::Str(d)),
+                ])));
+            }
+            obj(campos)
+        })
         .collect();
     Json::Arr(lista)
 }
@@ -2017,6 +2087,42 @@ mod tests {
         ]))]);
         let r2 = hover_result(&msg2, &docs);
         assert_eq!(r2.get("contents").unwrap().get("kind"), Some(&Json::Str("plaintext".into())));
+    }
+
+    #[test]
+    fn hover_doc_de_builtins_y_prelude() {
+        let mut docs = HashMap::new();
+        let uri = format!("file://{}", std::env::temp_dir().join("ray_doc_builtin.ray").display());
+        // Un builtin (`pow`) no tiene declaración en el archivo: la doc sale de la tabla
+        // (`builtins::doc`, en inglés).
+        let src = "fn main() -> int {\n  print(pow(2.0, 10.0));\n  0\n}\n";
+        docs.insert(uri.clone(), src.to_string());
+        let col = src.lines().nth(1).unwrap().find("pow").unwrap();
+        let d = doc_del_simbolo(&uri, src, 1, col, &docs).expect("doc de pow");
+        assert!(d.contains("Raises `base` to the power"), "{d}");
+        // Un símbolo del PRELUDE (`sort`): su declaración vive en la fuente inyectada, no en el
+        // buffer → la doc se busca por nombre en `prelude::SOURCE`.
+        let src2 = "fn main() -> int {\n  let xs = sort([3, 1, 2]);\n  xs[0]\n}\n";
+        docs.insert(uri.clone(), src2.to_string());
+        let col2 = src2.lines().nth(1).unwrap().find("sort").unwrap();
+        let d2 = doc_del_simbolo(&uri, src2, 1, col2, &docs).expect("doc de sort");
+        assert!(!d2.is_empty(), "doc del prelude para sort: {d2}");
+        // Una variable local que TAPA un nombre de builtin no hereda su doc: `min` local.
+        let src3 = "fn main() -> int {\n  let min = 5;\n  min\n}\n";
+        docs.insert(uri.clone(), src3.to_string());
+        let col3 = src3.lines().nth(2).unwrap().find("min").unwrap();
+        assert_eq!(doc_del_simbolo(&uri, src3, 2, col3, &docs), None, "local sin doc, aunque exista el builtin min");
+        // El completion adjunta la doc del builtin como Markdown.
+        let msg = obj(vec![("params", obj(vec![
+            ("textDocument", obj(vec![("uri", text(&uri))])),
+            ("position", obj(vec![("line", num(1)), ("character", num(2))])),
+        ]))]);
+        docs.insert(uri.clone(), src.to_string());
+        let r = completion_result(&msg, &docs);
+        let Json::Arr(items) = &r else { panic!("completion no es lista") };
+        let pow = items.iter().find(|i| i.get("label") == Some(&Json::Str("pow".into()))).expect("pow en completion");
+        let doc_val = pow.get("documentation").and_then(|d| d.get("value")).and_then(Json::as_str).expect("documentation de pow");
+        assert!(doc_val.contains("Raises"), "{doc_val}");
     }
 
     #[test]

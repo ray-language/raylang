@@ -104,6 +104,9 @@ fn do_handshake(h: int, host: string, port: int, path: string) -> Result<int, st
 }
 
 // Conecta a `host:port` por TCP (ws://), hace el handshake y devuelve el handle.
+/// Opens a plain-TCP WebSocket connection (`ws://`) to `host:port` and performs the
+/// RFC 6455 client handshake on `path`. Blocking network I/O.
+/// Returns `Ok(handle)` on success; `Err(reason)` if the TCP connect or handshake fails.
 pub fn connect(host: string, port: int, path: string) -> Result<int, string> {
     match (tcp_connect(host, port)) {
         Result.Err(e) => Result.Err("connect: " + e),
@@ -113,6 +116,9 @@ pub fn connect(host: string, port: int, path: string) -> Result<int, string> {
 
 // Conecta a `host:port` por TLS (wss://), hace el handshake y devuelve el handle. El handle TLS enruta
 // socket_read_bytes/socket_write_bytes/close por la sesión cifrada (M19.4) → el framing no cambia.
+/// Opens a TLS WebSocket connection (`wss://`) to `host:port` and performs the client
+/// handshake on `path`; the returned handle routes all I/O through the encrypted session.
+/// Returns `Ok(handle)` on success; `Err(reason)` if the TLS connect or handshake fails.
 pub fn connect_tls(host: string, port: int, path: string) -> Result<int, string> {
     match (tls_connect(host, port)) {
         Result.Err(e) => Result.Err("tls connect: " + e),
@@ -166,11 +172,16 @@ fn encode_masked(opcode: int, payload: bytes) -> bytes {
 }
 
 // Envía un mensaje de texto (trama enmascarada).
+/// Sends `message` as a masked client text frame (clients MUST mask, RFC 6455 §5.3).
+/// Returns the socket write result; `Err(reason)` on I/O failure.
 pub fn send_text(h: int, message: string) -> Result<int, string> {
     socket_write_bytes(h, encode_masked(op_text(), to_bytes(message)))
 }
 
 // Recibe el siguiente mensaje de texto (decodifica una trama; asume una trama por lectura).
+/// Receives the next text message from the server (blocking; assumes one complete frame
+/// per socket read). Returns `Ok(text)`, or `Err(reason)` on read failure, a closed
+/// connection / incomplete frame, or a non-UTF-8 payload.
 pub fn recv_text(h: int) -> Result<string, string> {
     match (socket_read_bytes(h)) {
         Result.Err(e) => Result.Err("error al leer la trama: " + e),
@@ -185,6 +196,8 @@ pub fn recv_text(h: int) -> Result<string, string> {
 }
 
 // Cierra la conexión: envía una trama close (enmascarada) y cierra el socket.
+/// Closes the WebSocket: sends a masked close frame (best-effort, write errors are
+/// ignored) and then closes the underlying socket handle.
 pub fn close_ws(h: int) {
     match (socket_write_bytes(h, encode_masked(op_close(), to_bytes("")))) {
         Result.Ok(_) => {},

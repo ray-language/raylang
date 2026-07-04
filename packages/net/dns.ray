@@ -41,6 +41,9 @@ fn encode_name(name: string) -> [int] {
 }
 
 // Construye una consulta DNS estándar (recursión deseada) para `name` y el tipo `qtype` (1 = A).
+/// Builds a standard DNS query message (RFC 1035, recursion desired) for `name`.
+/// `id` is the 16-bit transaction ID echoed back in the response; `qtype` is the record type (1 = A, 28 = AAAA, 15 = MX, ...).
+/// Returns the wire-format message: 12-byte header + one question (QNAME as length-prefixed labels, QCLASS = IN).
 pub fn build_query(id: int, name: string, qtype: int) -> bytes {
     var m: [int] = [];
     // Cabecera (12 octetos).
@@ -101,6 +104,8 @@ fn read_name(data: bytes, pos: int) -> NameResult {
 
 // Un registro de recurso ya parseado. A/AAAA llevan la dirección como texto; MX la preferencia + el
 // host de correo; Other un tipo que no parseamos (se conserva el número de tipo).
+/// A parsed DNS resource record. A/Aaaa carry the address as text; Mx carries (preference, exchange);
+/// Srv carries (priority, weight, port, target); Other preserves the numeric type of records this client does not decode.
 pub enum Record {
     A(string),       // IPv4 (tipo 1)
     Aaaa(string),    // IPv6 (tipo 28)
@@ -194,6 +199,8 @@ fn read_txt(data: bytes, rdstart: int, rdlength: int) -> string {
 
 // El resultado completo de una consulta: los registros + el TTL mínimo (en segundos) de la respuesta,
 // que es lo que una caché debe respetar para no servir datos caducados.
+/// The full result of a DNS query: the parsed records plus the minimum TTL (in seconds) across the answer section.
+/// The minimum TTL is the safe upper bound for how long a cache may serve this response.
 pub struct DnsResult {
     records: [Record],
     ttl: int,
@@ -201,6 +208,9 @@ pub struct DnsResult {
 
 // Parsea una respuesta DNS a registros tipados (A, AAAA, MX, CNAME, TXT y otros), devolviendo además el
 // TTL mínimo. (El TTL mínimo del conjunto es el límite seguro de caché.)
+/// Parses a raw DNS response message into typed records (A, AAAA, MX, CNAME, TXT, NS, SRV; others as `Other`)
+/// plus the minimum TTL of the answer section (0 if there are no answers). Follows name-compression pointers (0xC0).
+/// Returns Err if the message is shorter than a header or the response RCODE signals an error (e.g. NXDOMAIN).
 pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
     if (len(data) < 12) {
         return Result.Err("respuesta DNS demasiado corta");
@@ -269,6 +279,8 @@ pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
 }
 
 // Parsea solo los registros (sin TTL), envoltorio de `parse_full`.
+/// Parses a raw DNS response into typed records only, discarding the TTL. Thin wrapper over `parse_full`.
+/// Returns Err on a malformed message or a non-zero response RCODE.
 pub fn parse_records(data: bytes) -> Result<[Record], string> {
     match (parse_full(data)) {
         Result.Ok(r) => Result.Ok(r.records),
@@ -277,6 +289,8 @@ pub fn parse_records(data: bytes) -> Result<[Record], string> {
 }
 
 // Convierte registros a strings legibles: A/AAAA → la dirección; MX → "preferencia exchange".
+/// Formats records as human-readable strings: A/AAAA -> the address; MX -> "preference exchange";
+/// SRV -> "priority weight port target"; CNAME/TXT/NS -> their payload. `Other` records are skipped.
 pub fn format_records(recs: [Record]) -> [string] {
     var out: [string] = [];
     var i = 0;
@@ -309,6 +323,9 @@ fn nombre_rcode(rcode: int) -> string {
 
 // Consulta el servidor DNS `server:port` por UDP para `name` y `qtype`, devolviendo los registros + el
 // TTL. Un resolver real aleatoriza el ID y reintenta; aquí se usa un ID fijo (una consulta/respuesta).
+/// Queries the DNS server at `server:port` over UDP for `name` with record type `qtype`, blocking until a reply arrives.
+/// Returns the parsed records plus the minimum TTL, or Err on socket failure, a malformed reply, or a DNS error RCODE.
+/// Uses a fixed transaction ID and no retries (one query, one response) — a production resolver would randomize and retry.
 pub fn query_full(server: string, port: int, name: string, qtype: int) -> Result<DnsResult, string> {
     let consulta = build_query(4660, name, qtype); // 4660 = 0x1234
     match (bind("0.0.0.0", 0)) {
@@ -330,6 +347,7 @@ pub fn query_full(server: string, port: int, name: string, qtype: int) -> Result
 }
 
 // Como `query_full` pero devolviendo solo los registros tipados.
+/// Like `query_full` but returns only the typed records, discarding the TTL. Performs network I/O (blocking UDP).
 pub fn query(server: string, port: int, name: string, qtype: int) -> Result<[Record], string> {
     match (query_full(server, port, name, qtype)) {
         Result.Ok(r) => Result.Ok(r.records),
@@ -338,6 +356,8 @@ pub fn query(server: string, port: int, name: string, qtype: int) -> Result<[Rec
 }
 
 // Resuelve registros A (IPv4) → "a.b.c.d".
+/// Resolves A records (IPv4) for `name`, returning each address as dotted-quad text ("a.b.c.d").
+/// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_a(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 1)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
@@ -346,6 +366,8 @@ pub fn query_a(server: string, port: int, name: string) -> Result<[string], stri
 }
 
 // Resuelve registros AAAA (IPv6) → la dirección canónica.
+/// Resolves AAAA records (IPv6) for `name`, returning each address in canonical RFC 5952 form (with '::' compression).
+/// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_aaaa(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 28)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
@@ -354,6 +376,8 @@ pub fn query_aaaa(server: string, port: int, name: string) -> Result<[string], s
 }
 
 // Resuelve registros MX → "preferencia exchange" (menor preferencia = mayor prioridad).
+/// Resolves MX records for `name`, returning "preference exchange" strings (lower preference = higher priority).
+/// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_mx(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 15)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
@@ -362,6 +386,8 @@ pub fn query_mx(server: string, port: int, name: string) -> Result<[string], str
 }
 
 // Resuelve registros CNAME (nombre canónico al que apunta un alias).
+/// Resolves CNAME records for `name`, returning the canonical name(s) the alias points to.
+/// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_cname(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 5)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
@@ -370,6 +396,8 @@ pub fn query_cname(server: string, port: int, name: string) -> Result<[string], 
 }
 
 // Resuelve registros TXT (texto arbitrario: SPF, verificación de dominio, etc.).
+/// Resolves TXT records for `name` (arbitrary text: SPF, domain verification, etc.).
+/// Multi-part character-strings within a record are concatenated. Blocking UDP query; Err on network failure or DNS error.
 pub fn query_txt(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 16)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
@@ -378,6 +406,8 @@ pub fn query_txt(server: string, port: int, name: string) -> Result<[string], st
 }
 
 // Resuelve registros NS (servidores de nombres autoritativos de la zona).
+/// Resolves NS records for `name` (the zone's authoritative name servers).
+/// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_ns(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 2)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
@@ -386,6 +416,8 @@ pub fn query_ns(server: string, port: int, name: string) -> Result<[string], str
 }
 
 // Resuelve registros SRV → "prioridad peso puerto target" (descubrimiento de servicios).
+/// Resolves SRV records for `name` (service discovery), returning "priority weight port target" strings.
+/// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_srv(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 33)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),

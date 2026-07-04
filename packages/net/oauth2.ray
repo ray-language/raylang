@@ -11,6 +11,8 @@ from std/json import Json, parse;
 from std/url import url_encode;
 
 // El token devuelto por el servidor de autorización.
+/// An OAuth 2.0 access token as returned by the authorization server's token endpoint.
+/// `expires_in` is seconds until expiry (0 when the server did not report it).
 pub struct Token {
     access_token: string,
     token_type: string,
@@ -78,6 +80,10 @@ fn parse_token(body: string) -> Result<Token, string> {
 }
 
 // Grant client_credentials: POST al token endpoint con las credenciales y devuelve el `Token`.
+/// Runs the client_credentials grant (server-to-server, RFC 6749 §4.4): POSTs the
+/// credentials form-encoded to `token_url` and parses the JSON response. Blocking HTTP I/O.
+/// Pass `scope` as "" to omit it. `Err` on network failure, an OAuth `error` reply,
+/// non-JSON/missing `access_token`, or a non-UTF-8 body.
 pub fn client_credentials(token_url: string, client_id: string, client_secret: string, scope: string) -> Result<Token, string> {
     var body = "grant_type=client_credentials"
         + "&client_id=" + url_encode(client_id)
@@ -110,6 +116,8 @@ pub fn client_credentials(token_url: string, client_id: string, client_secret: s
 }
 
 // Construye la URL de autorización del flujo de código (a la que se redirige al usuario).
+/// Builds the authorization-code flow URL (RFC 6749 §4.1.1) to redirect the user to;
+/// all query parameters are URL-encoded. `state` should be unguessable (CSRF protection).
 pub fn authorize_url(endpoint: string, client_id: string, redirect_uri: string, scope: string, state: string) -> string {
     endpoint + "?response_type=code"
         + "&client_id=" + url_encode(client_id)
@@ -119,6 +127,7 @@ pub fn authorize_url(endpoint: string, client_id: string, redirect_uri: string, 
 }
 
 // La cabecera `Authorization` para llamar a una API protegida con este token.
+/// The `Authorization` header value ("Bearer <access_token>") for calling a protected API.
 pub fn bearer_header(token: Token) -> string {
     "Bearer " + token.access_token
 }

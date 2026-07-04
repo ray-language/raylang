@@ -10,6 +10,7 @@
 // lo traduce a `Result`/`Packet` → el runtime no sabe de `Result` ni de `Packet`.
 
 // Un datagrama recibido: su remitente (host, puerto) y el contenido (bytes crudos).
+/// A received datagram: the sender's address (`host`, `port`) and the raw payload bytes.
 pub struct Packet {
     host: string,
     port: int,
@@ -17,6 +18,8 @@ pub struct Packet {
 }
 
 // Enlaza un socket UDP a `host:port` (port=0 → efímero; el puerto real se consulta con `local_port`).
+/// Binds a UDP socket to `host:port` and returns its handle.
+/// `port = 0` picks an ephemeral port (query it with `local_port`). Err = OS bind error.
 pub fn bind(host: string, port: int) -> Result<int, string> {
     let r = __udp_bind(host, port); // ["ok", handle] o ["err", msg]
     if (r[0] == "ok") {
@@ -30,6 +33,8 @@ pub fn bind(host: string, port: int) -> Result<int, string> {
 }
 
 // Envía `data` al destino `host:port`; `Ok(nº de octetos enviados)`.
+/// Sends one datagram `data` from socket `h` to `host:port`.
+/// Ok = number of bytes sent; Err = OS send error. No connection is involved.
 pub fn send_to(h: int, host: string, port: int, data: bytes) -> Result<int, string> {
     let r = __udp_send_to(h, host, port, data); // ["ok", n] o ["err", msg]
     if (r[0] == "ok") {
@@ -51,6 +56,8 @@ fn texto(b: bytes) -> string {
 }
 
 // Recibe un datagrama (bloquea hasta que llega uno); `Ok(Packet)` con remitente + contenido.
+/// Receives one datagram on socket `h`, BLOCKING until one arrives (in both engines;
+/// no cooperative yield yet). Ok = Packet with sender address and payload; Err = OS error.
 pub fn recv_from(h: int) -> Result<Packet, string> {
     let r = __udp_recv_from(h); // [b"ok", host, puerto, datos] o [b"err", msg], todo en bytes
     if (texto(r[0]) == "ok") {

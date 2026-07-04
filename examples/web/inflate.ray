@@ -331,6 +331,9 @@ fn inflate_blocks(s: Inflater) -> Result<int, string> {
 }
 
 // Descomprime un stream DEFLATE crudo (sin envoltorio) a sus octetos originales.
+/// Decompresses a raw DEFLATE stream (RFC 1951, no wrapper) into the original bytes.
+/// Supports all three block types (stored, fixed Huffman, dynamic Huffman).
+/// Returns `Err` on a corrupt stream (invalid code, out-of-range distance, reserved block type).
 pub fn inflate_raw(data: bytes) -> Result<bytes, string> {
     var s = Inflater { data: data, pos: 0, bitpos: 0, out: [] };
     match (inflate_blocks(s)) {
@@ -340,6 +343,8 @@ pub fn inflate_raw(data: bytes) -> Result<bytes, string> {
 }
 
 // --- CRC-32 (RFC 1952, polinomio reflejado 0xEDB88320) para verificar gzip. ---
+/// Computes the CRC-32 checksum (RFC 1952, reflected polynomial 0xEDB88320) of the bytes,
+/// as used in the gzip trailer.
 pub fn crc32(data: bytes) -> int {
     var crc = 4294967295;  // 0xFFFFFFFF
     var i = 0;
@@ -360,6 +365,9 @@ pub fn crc32(data: bytes) -> int {
 }
 
 // Descomprime un archivo gzip (RFC 1952): cabecera + DEFLATE + tráiler (CRC32 + ISIZE). Verifica el CRC.
+/// Decompresses a gzip file (RFC 1952): parses the header (including optional FEXTRA/FNAME/
+/// FCOMMENT/FHCRC fields), inflates the DEFLATE body, and verifies the trailer CRC-32.
+/// Returns `Err` on bad magic, unsupported method, corrupt data, or CRC mismatch.
 pub fn gunzip(data: bytes) -> Result<bytes, string> {
     if (len(data) < 18) {
         return Result.Err("gzip demasiado corto");
@@ -413,6 +421,8 @@ pub fn gunzip(data: bytes) -> Result<bytes, string> {
 }
 
 // Descomprime un stream zlib (RFC 1950): 2 octetos de cabecera + DEFLATE + Adler-32 (no verificado).
+/// Decompresses a zlib stream (RFC 1950): 2-byte header + DEFLATE body. The trailing
+/// Adler-32 checksum is NOT verified. Returns `Err` on an unsupported method or corrupt data.
 pub fn zlib_inflate(data: bytes) -> Result<bytes, string> {
     if (len(data) < 6) {
         return Result.Err("zlib demasiado corto");

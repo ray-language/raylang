@@ -5,6 +5,9 @@
 // 2 bits altos del octeto 8 = 10 (variante RFC 4122). Formato canónico 8-4-4-4-12 en hex minúscula.
 from std/hex import hex_encode;
 
+/// Generates a random version-4 UUID (RFC 4122) in the canonical 8-4-4-4-12 lowercase hex
+/// format. 16 random bytes with the version nibble set to 4 and the variant bits to 10.
+/// Uses the runtime PRNG (`random_int`) — not cryptographically secure.
 pub fn uuid_v4() -> string {
     var b: [int] = [];
     var i = 0;
@@ -28,6 +31,8 @@ fn is_hex_lower(c: char) -> bool {
 
 // Valida la forma de un UUID v4 canónico (longitud, guiones, nibble de versión, bits de variante,
 // resto hexadecimal). Permite probar `uuid_v4` de forma determinista pese a su aleatoriedad.
+/// Checks whether `s` is a canonical version-4 UUID: length 36, hyphens at 8/13/18/23,
+/// version digit `4`, variant digit in 8/9/a/b, and lowercase hex everywhere else.
 pub fn is_uuid_v4(s: string) -> bool {
     if (len(s) != 36) {
         return false;

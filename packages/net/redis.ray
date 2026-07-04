@@ -12,6 +12,7 @@
 // bloqueantes (un hilo), así que el cliente funciona en ambos motores contra un servidor real.
 
 // Una respuesta de Redis (RESP2).
+/// A Redis reply (RESP2): simple/bulk string, integer, nil, array, or server error.
 pub enum Reply {
     Str(string), // simple string (+) o bulk string ($)
     Int(int),    // entero (:)
@@ -22,11 +23,15 @@ pub enum Reply {
 
 // Conexión: el handle del socket + un buffer de lectura no consumido (framing por encima de los
 // trozos que entrega `socket_read`).
+/// A Redis connection: the TCP socket handle plus an unconsumed read buffer
+/// (framing on top of the chunks `socket_read` delivers).
 pub struct Conn {
     h: int,
     buf: string,
 }
 
+/// Opens a TCP connection to a Redis server at `host:port`.
+/// Err carries the connection error message.
 pub fn connect(host: string, port: int) -> Result<Conn, string> {
     match (tcp_connect(host, port)) {
         Result.Ok(h) => Result.Ok(Conn { h: h, buf: "" }),
@@ -34,11 +39,14 @@ pub fn connect(host: string, port: int) -> Result<Conn, string> {
     }
 }
 
+/// Closes the connection's socket.
 pub fn close_conn(c: Conn) {
     close(c.h);
 }
 
 // Codifica un comando (lista de argumentos) como un array RESP de bulk strings.
+/// Encodes a command (argument list) as a RESP array of bulk strings
+/// (`*<n>\r\n` then `$<len>\r\n<arg>\r\n` per argument), the Redis request wire format.
 pub fn encode_command(args: [string]) -> string {
     var s = "*" + to_string(len(args)) + "\r\n";
     var i = 0;
@@ -170,6 +178,9 @@ fn read_array(c: Conn, n: int) -> Result<Reply, string> {
 }
 
 // Envía un comando y lee su respuesta.
+/// Sends a command (e.g. `["SET", "k", "v"]`) and blocks reading its reply.
+/// Err = transport failure (send error, connection closed mid-reply); a server-side
+/// error arrives as `Ok(Reply.Err(msg))`, not as Err.
 pub fn command(c: Conn, args: [string]) -> Result<Reply, string> {
     match (socket_write(c.h, encode_command(args))) {
         Result.Err(e) => Result.Err("error al enviar: " + e),
@@ -178,6 +189,8 @@ pub fn command(c: Conn, args: [string]) -> Result<Reply, string> {
 }
 
 // Representación legible de una respuesta (para depurar/mostrar).
+/// Human-readable rendering of a reply (for debugging/display):
+/// strings as-is, ints via to_string, `(nil)`, `(error) msg`, arrays as `[a, b, ...]`.
 pub fn reply_str(r: Reply) -> string {
     match (r) {
         Reply.Str(s) => s,

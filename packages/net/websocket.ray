@@ -14,11 +14,15 @@ from std/base64 import base64;
 fn guid() -> string { "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" }
 
 // El valor `Sec-WebSocket-Accept` para la clave del cliente: base64(SHA-1(key + GUID)).
+/// Computes the `Sec-WebSocket-Accept` value for a client's `Sec-WebSocket-Key` (RFC 6455 §4.2.2).
+/// Returns base64(SHA-1(key + protocol GUID)).
 pub fn accept_key(key: string) -> string {
     base64(sha1_octets(to_bytes(key + guid())))
 }
 
 // Extrae el valor de la cabecera `Sec-WebSocket-Key` de la petición de upgrade (o "" si no aparece).
+/// Extracts the `Sec-WebSocket-Key` header value from an HTTP upgrade request.
+/// Returns the trimmed key, or "" if the header is missing.
 pub fn extract_key(request: string) -> string {
     let lineas = split(request, "\r\n");
     var clave = "";
@@ -37,6 +41,8 @@ pub fn extract_key(request: string) -> string {
 }
 
 // La respuesta HTTP 101 que completa el handshake para la clave dada.
+/// Builds the complete HTTP `101 Switching Protocols` response that finishes the
+/// server-side WebSocket handshake for the given client key (RFC 6455 §4.2.2).
 pub fn handshake_response(key: string) -> string {
     "HTTP/1.1 101 Switching Protocols\r\n" +
     "Upgrade: websocket\r\n" +
@@ -47,13 +53,19 @@ pub fn handshake_response(key: string) -> string {
 // --- Framing ---
 
 // Opcodes de trama (RFC 6455 §5.2).
+/// Frame opcode for a text message (RFC 6455 §5.2): 1.
 pub fn op_text() -> int { 1 }
+/// Frame opcode for a binary message (RFC 6455 §5.2): 2.
 pub fn op_binary() -> int { 2 }
+/// Frame opcode for a connection close control frame (RFC 6455 §5.2): 8.
 pub fn op_close() -> int { 8 }
+/// Frame opcode for a ping control frame (RFC 6455 §5.2): 9.
 pub fn op_ping() -> int { 9 }
+/// Frame opcode for a pong control frame (RFC 6455 §5.2): 10.
 pub fn op_pong() -> int { 10 }
 
 // Una trama decodificada: su opcode, su carga útil (ya des-enmascarada) y el bit FIN.
+/// A decoded WebSocket frame: its opcode, the (already unmasked) payload, and the FIN bit.
 pub struct Frame {
     opcode: int,
     payload: bytes,
@@ -62,6 +74,9 @@ pub struct Frame {
 
 // Decodifica una trama del **cliente** (siempre enmascarada, RFC 6455 §5.3) contenida en `data`.
 // Devuelve la trama; sobre datos incompletos el comportamiento es indefinido (camino feliz).
+/// Decodes a single WebSocket frame from `data`, unmasking the payload when the MASK
+/// bit is set (client-to-server frames are always masked, RFC 6455 §5.3).
+/// Happy path only: behavior on truncated/incomplete input is undefined.
 pub fn decode_frame(data: bytes) -> Frame {
     let b0 = data[0];
     let b1 = data[1];
@@ -111,6 +126,8 @@ pub fn decode_frame(data: bytes) -> Frame {
 }
 
 // Codifica una trama del **servidor** (sin máscara, FIN activo) con el opcode y la carga dados.
+/// Encodes a server-to-client frame (unmasked, FIN=1) with the given opcode and payload,
+/// choosing the 7-bit, 16-bit or 64-bit length encoding as needed (RFC 6455 §5.2).
 pub fn encode_frame(opcode: int, payload: bytes) -> bytes {
     let plen = len(payload);
     var cabecera: [int] = [];
@@ -135,6 +152,7 @@ pub fn encode_frame(opcode: int, payload: bytes) -> bytes {
 }
 
 // Atajo: una trama de texto del servidor.
+/// Shortcut: encodes `texto` as an unmasked server text frame (opcode 1, FIN=1).
 pub fn encode_text(texto: string) -> bytes {
     encode_frame(op_text(), to_bytes(texto))
 }

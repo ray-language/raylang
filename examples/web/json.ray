@@ -6,6 +6,8 @@
 // (stringify canónico, round-trip estable). Errores como valores (Result), nunca panic.
 //
 // Limitación: los escapes \uXXXX no se soportan (convertir un code point a char pediría un builtin).
+/// A JSON value: null, bool, number (float), string, array, or object (`Map<string, Json>`).
+/// Objects use a Map, so keys come out sorted when serializing (canonical, stable round-trips).
 pub enum Json {
     JNull,
     JBool(bool),
@@ -269,6 +271,8 @@ fn parse_object(p: P) -> Result<Json, string> {
 }
 
 // Punto de entrada: parsea un documento JSON completo (sin texto sobrante).
+/// Parses a complete JSON document into a `Json` value. Returns `Err` with a message on
+/// malformed input or trailing text after the value. `\uXXXX` escapes are not supported.
 pub fn parse(s: string) -> Result<Json, string> {
     var p: P = P { s: s, i: 0, n: len(s) };
     match (parse_value(p)) {
@@ -340,6 +344,8 @@ fn stringify_object(obj: Map<string, Json>) -> string {
     out + "}"
 }
 
+/// Serializes a `Json` value to compact JSON text (no whitespace).
+/// Canonical output: object keys are emitted in sorted order.
 pub fn stringify(j: Json) -> string {
     match (j) {
         Json.JNull => "null",

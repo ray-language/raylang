@@ -6,6 +6,7 @@
 // entero, flotante, booleano (`true`/`false`) y arreglo `[v, v, …]` (posiblemente multilínea). Diferido:
 // tablas en línea `{…}`, arreglos de tablas `[[…]]`, fechas, strings multilínea/literales.
 // Un valor TOML. Recursivo (los arreglos contienen valores).
+/// A TOML value: string, int, float, bool, or array (recursive).
 pub enum TomlValue {
     TStr(string),
     TInt(int),
@@ -15,6 +16,8 @@ pub enum TomlValue {
 }
 
 // Una entrada del documento: la ruta con puntos y su valor.
+/// One document entry: the dotted key path (tables prefix their keys, e.g. `server.port`)
+/// and its value.
 pub struct TomlEntry {
     key: string,
     value: TomlValue,
@@ -200,6 +203,9 @@ fn parse_array(t: TS) -> Result<TomlValue, string> {
 }
 
 // Parsea un documento TOML a una lista de entradas (ruta con puntos → valor).
+/// Parses a TOML document (subset) into a flat list of entries (dotted key path → value).
+/// Supports `#` comments, `[a.b]` tables, bare keys, and string/int/float/bool/array values.
+/// Not supported: inline tables, arrays of tables, dates, multiline strings. `Err` on malformed input.
 pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
     let t = TS { cs: chars(src), pos: 0 };
     var entries: [TomlEntry] = [];
@@ -242,6 +248,8 @@ pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
 }
 
 // Busca el valor de una ruta con puntos.
+/// Looks up the value of a dotted key path (e.g. `"server.port"`).
+/// Returns `None` if the key is not present.
 pub fn toml_get(entries: [TomlEntry], key: string) -> Option<TomlValue> {
     var i = 0;
     while (i < len(entries)) {
@@ -254,6 +262,7 @@ pub fn toml_get(entries: [TomlEntry], key: string) -> Option<TomlValue> {
 }
 
 // Representación textual de un valor (para depurar/testear).
+/// Renders a `TomlValue` as text (strings quoted, arrays as `[a, b]`) — for debugging and tests.
 pub fn toml_show(v: TomlValue) -> string {
     match (v) {
         TomlValue.TStr(s) => "\"" + s + "\"",

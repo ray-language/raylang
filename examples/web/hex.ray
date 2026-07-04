@@ -17,6 +17,8 @@ fn hex_val(c: char) -> int {
 }
 
 // Octetos → string hexadecimal (2 dígitos por octeto, minúsculas).
+/// Encodes a byte array (`[int]`, each 0..255) as a lowercase hexadecimal string (RFC 4648 §8).
+/// Each byte produces exactly two hex digits.
 pub fn hex_encode(data: [int]) -> string {
     var s = "";
     var i = 0;
@@ -30,6 +32,8 @@ pub fn hex_encode(data: [int]) -> string {
 }
 
 // String hexadecimal → octetos. `Err` si la longitud es impar o hay un carácter no hexadecimal.
+/// Decodes a hexadecimal string (upper- or lowercase) into a byte array.
+/// Returns `Err` if the string has odd length or contains a non-hex character.
 pub fn hex_decode(s: string) -> Result<[int], string> {
     let n = len(s);
     if (n % 2 != 0) {

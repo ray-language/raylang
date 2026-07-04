@@ -78,10 +78,16 @@ La decisión de imprimir **desde el AST** (y no reescribir el texto original tok
 consecuencias, una buena y una que hay que aceptar. La buena es que la impresión sale **canónica** por
 construcción: los paréntesis se emiten según la precedencia real (`bin_prec`/`expr_prec` son el espejo de
 la jerarquía del parser), así que `a + b * c` pierde los paréntesis sobrantes y `(a + b) * c` los conserva
-— exactamente los mínimos. La que hay que aceptar es que el AST **normaliza**: el lexer no guarda los
-comentarios, así que el formateador los **descarta** (el diferido honesto de esta versión), y desazucara lo
-que el parser desazucaraba de todos modos — la interpolación `"n = ${x}"` reaparece como `+ to_string(x)`,
-los pipelines `|>` como llamadas ordinarias.
+— exactamente los mínimos. La que hay que aceptar es que el AST **normaliza**: desazucara lo que el parser
+desazucaraba de todos modos — la interpolación `"n = ${x}"` reaparece como `+ to_string(x)`, los pipelines
+`|>` como llamadas ordinarias.
+
+Los **comentarios** sí se preservan, aunque el lexer no los guarde: se recolectan aparte (respetando las
+cadenas, para no confundir un `//` dentro de un literal) y se re-insertan durante la emisión con un cursor
+que los va casando por línea — los doc-comments quedan encima de su ítem, los sueltos entre sentencias, y
+los de final de línea (*trailing*) pegados a su código. El único caso que se reubica es un comentario tras
+la última sentencia de un bloque: como el AST no guarda la posición del `}`, ese comentario aparece justo
+tras el `}` en vez de dentro. La invariante que sí se garantiza: ningún comentario se pierde.
 
 La propiedad que convierte esto en una herramienta de verdad y no en un juguete es la **idempotencia**:
 formatear algo ya formateado no lo cambia.

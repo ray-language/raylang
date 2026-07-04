@@ -4500,11 +4500,15 @@ Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
     (`bin_prec`/`expr_prec` espejo de la jerarquía del parser) → paréntesis mínimos. Indentación de 4
     espacios; ítems de nivel superior en el **orden del archivo** (se ordenan por `line`, ya que el AST los
     bucketiza por categoría); formas con bloque (`if`/`while`/`match`) indentadas por `fmt_value`. Al trabajar
-    sobre el AST, **normaliza**: descarta comentarios (el lexer no los guarda) y desazucara lo que el parser
-    (interpolación `f"…"` → `+ to_string`, pipelines `|>` → llamadas) — el resultado siempre es válido e
-    **idempotente**. `tests/fmt_cli.rs`: idempotencia (`fmt(fmt(x))==fmt(x)`) sobre 14 ejemplos + **preserva
-    el comportamiento** (original y formateado dan la misma salida+exit en ambos motores). Diferido:
-    preservar comentarios (exigiría que el lexer los adjunte al AST), reflow de líneas largas.
+    sobre el AST, **normaliza**: desazucara lo que el parser (interpolación `f"…"` → `+ to_string`, pipelines
+    `|>` → llamadas) — el resultado siempre es válido e **idempotente**. **Comentarios preservados**: el lexer
+    los descarta, así que se recolectan aparte (`collect_comments`, respetando cadenas/chars) y se re-insertan
+    durante la emisión mediante un cursor (`Cur`) — doc-comments encima de ítems, comentarios sueltos entre
+    sentencias/miembros y *trailing* al final de línea. Único caso reubicado: un comentario tras la última
+    sentencia de un bloque cae justo **tras** el `}` (el AST no guarda la posición del `}`); invariante fuerte:
+    **ningún comentario se pierde**. `tests/fmt_cli.rs`: idempotencia (`fmt(fmt(x))==fmt(x)`) + **preserva el
+    comportamiento** (original y formateado dan la misma salida+exit en ambos motores). Diferido: reflow de
+    líneas largas, colocación exacta de comentarios de fin de bloque (necesita posiciones de cierre en el AST).
 - **M29.3 Optimización de la VM** — retomar el transversal (DESIGN §27): dedup de constantes, peephole/
   plegado, `HeapValue` 32→16 B. Cobra relevancia por el coste de SHA-256/DEFLATE/HPACK. Método incremental,
   midiendo (banco `benchmarks/`), conservar solo lo que supera el ruido.

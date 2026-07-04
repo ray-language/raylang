@@ -1,8 +1,10 @@
 //! El manifiesto de proyecto `ray.toml` (M39b).
 //!
 //! Un proyecto raylang es un directorio con un `ray.toml` en su raíz. El manifiesto declara
-//! el paquete (`name`, `version`, `entry` opcional) y sus dependencias. Este módulo lo
-//! **encuentra** (subiendo desde el directorio actual, como `cargo`/`git`) y lo **parsea**.
+//! el paquete (`name`, `version`, `entry` opcional), sus dependencias y, opcionalmente, el estilo
+//! de indentación del formateador (`[fmt] indent_style`/`indent_size`, que `ray fmt` respeta como
+//! *fallback* de `.editorconfig`). Este módulo lo **encuentra** (subiendo desde el directorio actual,
+//! como `cargo`/`git`) y lo **parsea**.
 //!
 //! **El parser es un lector TOML mínimo en Rust**, no la librería `toml.ray` de M32.2: el CLI
 //! necesita leer la config *antes* de ejecutar nada, así que arrancar el intérprete solo para
@@ -26,6 +28,11 @@ pub struct Manifest {
     pub dependencies: Vec<(String, String)>,
     /// El directorio que contiene el `ray.toml` (la raíz del proyecto).
     pub root: PathBuf,
+    /// `[fmt] indent_style` — `"space"` o `"tab"`. Lo usa `ray fmt` para la sangría. `None` = no
+    /// declarado (cae a `.editorconfig` o al canónico de 4 espacios).
+    pub indent_style: Option<String>,
+    /// `[fmt] indent_size` — nº de espacios por nivel (si `indent_style = "space"`). `None` = no declarado.
+    pub indent_size: Option<usize>,
 }
 
 impl Manifest {
@@ -68,6 +75,8 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut version = None;
     let mut entry = None;
     let mut dependencies = Vec::new();
+    let mut indent_style = None;
+    let mut indent_size = None;
 
     for (i, linea_cruda) in src.lines().enumerate() {
         let num = i + 1;
@@ -93,16 +102,27 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
             .split_once('=')
             .ok_or_else(|| err(num, "se esperaba 'clave = valor' o '[seccion]'"))?;
         let clave = clave.trim();
-        let valor = desenrollar_cadena(valor.trim())
-            .ok_or_else(|| err(num, "el valor debe ir entre comillas dobles"))?;
+        let valor_raw = valor.trim();
+        // La mayoría de valores son cadenas `"..."`; `[fmt] indent_size` admite un entero sin comillas.
+        let como_cadena = || desenrollar_cadena(valor_raw)
+            .ok_or_else(|| err(num, "el valor debe ir entre comillas dobles"));
         match seccion.as_str() {
             "package" => match clave {
-                "name" => name = Some(valor),
-                "version" => version = Some(valor),
-                "entry" => entry = Some(valor),
+                "name" => name = Some(como_cadena()?),
+                "version" => version = Some(como_cadena()?),
+                "entry" => entry = Some(como_cadena()?),
                 _ => {} // claves desconocidas de [package] se ignoran (extensibilidad)
             },
-            "dependencies" => dependencies.push((clave.to_string(), valor)),
+            "dependencies" => dependencies.push((clave.to_string(), como_cadena()?)),
+            "fmt" => match clave {
+                "indent_style" => indent_style = Some(como_cadena()?),
+                // `indent_size = 2` (entero) o `"2"` (cadena); ambos se aceptan.
+                "indent_size" => {
+                    let s = desenrollar_cadena(valor_raw).unwrap_or_else(|| valor_raw.to_string());
+                    indent_size = s.parse::<usize>().ok();
+                }
+                _ => {}
+            },
             "" => return Err(err(num, "clave fuera de toda sección (falta '[package]')")),
             _ => {} // otras secciones se ignoran por ahora
         }
@@ -114,6 +134,8 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         entry: entry.unwrap_or_else(|| "src/main.ray".to_string()),
         dependencies,
         root,
+        indent_style,
+        indent_size,
     })
 }
 

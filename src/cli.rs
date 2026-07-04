@@ -419,12 +419,32 @@ fn ejecutar_tests(path: &str, filtro: Option<&str>) {
 
 /// Formateador (M29.2): imprime la versión canónica o aborta con el error.
 fn formatear(path: &str) {
-    match crate::fmt::format_source(&leer_fuente(path)) {
+    let unit = resolver_indent(std::path::Path::new(path));
+    match crate::fmt::format_source_con_indent(&leer_fuente(path), &unit) {
         Ok(out) => print!("{}", out),
         Err(e) => {
             eprintln!("error de formato: {}", e);
             process::exit(65);
         }
+    }
+}
+
+/// La **unidad de indentación** para formatear `file`, resolviendo la config del proyecto (para que
+/// `ray fmt` no imponga siempre 4 espacios). Precedencia: (1) `.editorconfig` más cercano
+/// (`indent_style`/`indent_size`), (2) `ray.toml [fmt]`, (3) canónico = 4 espacios. `.editorconfig`
+/// gana por ser el estándar dedicado; cada fuente rellena solo lo que la anterior no fijó.
+fn resolver_indent(file: &std::path::Path) -> String {
+    let (mut style, mut size) = crate::editorconfig::indent_for(file);
+    if style.is_none() || size.is_none() {
+        let dir = file.parent().unwrap_or(std::path::Path::new("."));
+        if let Ok(Some(m)) = crate::manifest::Manifest::load(dir) {
+            style = style.or(m.indent_style);
+            size = size.or(m.indent_size);
+        }
+    }
+    match style.as_deref() {
+        Some("tab") => "\t".to_string(),
+        _ => " ".repeat(size.unwrap_or(4).max(1)), // "space" o sin declarar → N espacios (def. 4)
     }
 }
 

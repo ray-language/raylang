@@ -1695,6 +1695,12 @@ mod tests {
         assert!(ds.is_empty(), "importar a un vecino interno de la propia cápsula es legítimo: {:?}",
             ds.iter().map(|d| &d.message).collect::<Vec<_>>());
 
+        // Hover DENTRO del submódulo (sin `main`): antes no daba nada porque el chequeo de main
+        // cortaba antes de recorrer los cuerpos. `circulo_src` línea 3 (0-based 2):
+        //   `pub fn area(c: Circulo) -> int { 3 * util.cuadrado(c.radio) }`  — uso de `c` en col 51.
+        let (t, _, _) = hover_at(Some(&uri), circulo_src, 2, 51).expect("hover sobre uso de 'c'");
+        assert_eq!(t, "c: Circulo", "hover de un uso dentro de un submódulo sin main");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

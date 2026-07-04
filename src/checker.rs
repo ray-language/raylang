@@ -175,6 +175,10 @@ pub fn semantic_index(program: &mut Program) -> SemanticIndex {
     }
     let mut checker = Checker::new();
     checker.gather = true;
+    // Sin exigir `main`: el chequeo de `main` es fail-fast ANTES de recorrer los cuerpos (donde se
+    // recogen los hovers/defs). Un archivo de módulo (submódulo sin entrada) cortaría ahí y no
+    // reuniría nada del cuerpo → hover/def no funcionarían. Es introspección, no ejecución.
+    checker.require_main = false;
     checker.field_name_pos = program.field_name_pos.clone(); // posiciones de nombres de campo/método
     let _ = checker.check_program(program); // best-effort: el índice parcial igual sirve
     checker.index

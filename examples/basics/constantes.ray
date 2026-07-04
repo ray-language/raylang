@@ -1,16 +1,12 @@
 // Constantes de nivel superior (M27.5): `const NAME: T = <literal>;`. Sustituyen el patrón de escribir
 // una función que devuelve un literal (`fn pi() -> float { 3.14159 }`). El valor es un literal
 // (evaluado en compilación); una referencia `NAME` se resuelve a ese valor en ambos motores.
+
 const PI: float = 3.14159265;
-
 const E: float = 2.71828182;
-
 const MAX_INTENTOS: int = 3;
-
 const APP: string = "raylang";
-
 const CERO_ABSOLUTO_C: int = -273;
-
 const NUEVA_LINEA: char = '\n';
 
 fn area_circulo(radio: float) -> float {
@@ -18,15 +14,15 @@ fn area_circulo(radio: float) -> float {
 }
 
 fn main() {
-    print(to_string(APP) + ": hasta " + to_string(MAX_INTENTOS) + " intentos");  // raylang: hasta 3 intentos
-    print("pi ~ " + to_string(PI) + ", e ~ " + to_string(E));  // pi ~ 3.14159265, e ~ 2.71828182
-    print("área de un círculo r=3: " + to_string(area_circulo(3.0)));  // 28.27433385
-    print("cero absoluto: " + to_string(CERO_ABSOLUTO_C) + "°C");  // cero absoluto: -273°C
+    print("${APP}: hasta ${MAX_INTENTOS} intentos");        // raylang: hasta 3 intentos
+    print("pi ~ ${PI}, e ~ ${E}");                           // pi ~ 3.14159265, e ~ 2.71828182
+    print("área de un círculo r=3: ${area_circulo(3.0)}");  // 28.27433385
+    print("cero absoluto: ${CERO_ABSOLUTO_C}°C");           // cero absoluto: -273°C
 
     // Las constantes son inmutables y globales: se ven en cualquier función.
     var total = 0;
     for i in 0..MAX_INTENTOS {
         total = total + i;
     }
-    print("suma de 0.." + to_string(MAX_INTENTOS) + " = " + to_string(total));  // suma de 0..3 = 3
+    print("suma de 0..${MAX_INTENTOS} = ${total}");          // suma de 0..3 = 3
 }

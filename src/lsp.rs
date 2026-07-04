@@ -976,7 +976,10 @@ pub fn analizar_todos(src: &str) -> Vec<Diag> {
     if !perrs.is_empty() {
         return perrs.into_iter().map(|e| diag(e.line, e.col, e.len, e.to_string())).collect();
     }
-    checker::check_all(&mut program)
+    // `check_all_modulo`: sin exigir `main`. Un buffer sin guardar puede ser un archivo de módulo
+    // (sin entrada); que le falte `main` es asunto de proyecto (lo cazan `ray build`/`ray run`), no
+    // un diagnóstico de este archivo. Así un módulo suelto muestra sus errores reales, no ese ruido.
+    checker::check_all_modulo(&mut program)
         .into_iter()
         .map(|e| diag(e.line, e.col, e.len, e.to_string()))
         .collect()
@@ -1064,7 +1067,9 @@ fn analizar_modular(uri: &str, src: &str) -> Option<Vec<Diag>> {
             // global). Solo publicamos SUS errores: los de otros módulos pertenecen a sus URIs.
             let entry_start = loaded.modules.iter().map(|m| m.start_line).min().unwrap_or(1);
             let mut program = loaded.program;
-            let diags = checker::check_all(&mut program)
+            // `check_all_modulo`: el archivo abierto puede ser un **submódulo sin `main`** (legítimo);
+            // no exigimos la entrada para no marcar "falta la función de entrada 'main'" en cada módulo.
+            let diags = checker::check_all_modulo(&mut program)
                 .into_iter()
                 .filter_map(|e| {
                     let m = loaded.modules.iter().rev().find(|m| m.start_line <= e.line)?;
@@ -1118,15 +1123,49 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Raíces de dependencias para el loader (M39c): la caché `.ray-deps/` del proyecto que contiene
-/// `entry` (subiendo hasta el `ray.toml`), si existe. Alinea el LSP con `ray run`.
+/// Raíces de búsqueda de módulos para el loader, desde el LSP. Dos añadidos sobre la raíz por
+/// defecto (el directorio del archivo abierto, que el loader ya usa):
+///
+/// 1. **La raíz del proyecto** (M10.2): el loader resuelve los `import` *absolutos desde la raíz*
+///    tomando como raíz el directorio de la **entrada**. Pero el LSP abre archivos de **módulo** en
+///    cualquier nivel del árbol (`geo/formas/circulo.ray`), y su `import geo/util;` debe resolverse
+///    desde la raíz del proyecto, no desde la carpeta del propio submódulo. Buscamos esa raíz —el
+///    ancestro más cercano con un `main.ray` (la entrada convencional)— y la añadimos como raíz de
+///    búsqueda; así los imports absolutos de un submódulo profundo resuelven igual que bajo `ray run`.
+/// 2. **La caché `.ray-deps/`** (M39c) del proyecto que contiene `entry`, si existe. Alinea con `ray run`.
+///
+/// El loader antepone el directorio de `entry`, así que estas son *fallbacks* que solo entran cuando
+/// la ruta no resuelve localmente (el caso de un submódulo importando a un vecino por ruta absoluta).
 fn dep_roots_for(entry: &Path) -> Vec<PathBuf> {
     let dir = entry.parent().unwrap_or(Path::new("."));
+    let mut roots = Vec::new();
+    if let Some(root) = project_root_for(entry)
+        && Some(root.as_path()) != entry.parent()
+    {
+        roots.push(root);
+    }
     let raiz = crate::manifest::Manifest::find(dir)
         .and_then(|toml| toml.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| dir.to_path_buf());
     let cache = raiz.join(".ray-deps");
-    if cache.is_dir() { vec![cache] } else { Vec::new() }
+    if cache.is_dir() {
+        roots.push(cache);
+    }
+    roots
+}
+
+/// La raíz del proyecto que contiene `entry`: el **ancestro más cercano** (subiendo desde su carpeta)
+/// que contiene un `main.ray` —la entrada convencional, y por definición la raíz desde la que son
+/// absolutos los `import` (DESIGN §20.3: "la ruta es absoluta desde la raíz del proyecto, el directorio
+/// del archivo de entrada")—. `None` si no hay ninguno (archivo suelto sin proyecto → sin raíz extra).
+fn project_root_for(entry: &Path) -> Option<PathBuf> {
+    let mut dir = entry.parent()?;
+    loop {
+        if dir.join("main.ray").is_file() {
+            return Some(dir.to_path_buf());
+        }
+        dir = dir.parent()?;
+    }
 }
 
 /// Envuelve una lista de diagnósticos en la notificación `textDocument/publishDiagnostics`.
@@ -1586,6 +1625,52 @@ mod tests {
         let ds = analizar_modular(&uri, src).expect("modular");
         assert_eq!(ds.len(), 1);
         assert!(ds[0].message.contains("noexiste"), "{}", ds[0].message);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn diagnosticos_submodulo_sin_main_y_import_por_ruta() {
+        // Reproduce dos problemas al abrir un ARCHIVO DE MÓDULO (no la entrada) en el editor:
+        //   1. Un submódulo `pub` sin `main` marcaba "falta la función de entrada 'main'".
+        //   2. Un `import geo/util;` (ruta absoluta desde la raíz) no resolvía, porque el loader
+        //      tomaba como raíz la carpeta del propio submódulo, no la raíz del proyecto.
+        // Estructura (igual a examples/proyecto):
+        //   root/main.ray                 (entrada, con main)
+        //   root/geo/util.ray             (pub fn, sin main)
+        //   root/geo/formas/circulo.ray   (import geo/util; pub struct; pub fn area, sin main)
+        let dir = std::env::temp_dir().join("ray_lsp_submod");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("geo/formas")).unwrap();
+        std::fs::write(dir.join("main.ray"),
+            "import geo/formas/circulo;\nfn main() -> int { circulo.area(circulo.Circulo { radio: 4 }) }\n").unwrap();
+        let util_src = "pub fn cuadrado(n: int) -> int { n * n }\n";
+        std::fs::write(dir.join("geo/util.ray"), util_src).unwrap();
+        let circulo_src = "import geo/util;\npub struct Circulo { radio: int }\npub fn area(c: Circulo) -> int { 3 * util.cuadrado(c.radio) }\n";
+        std::fs::write(dir.join("geo/formas/circulo.ray"), circulo_src).unwrap();
+
+        // La raíz del proyecto se detecta como el ancestro con `main.ray`, desde un submódulo profundo.
+        let root = project_root_for(&dir.join("geo/formas/circulo.ray")).expect("raíz");
+        assert_eq!(root, dir, "la raíz es el directorio con main.ray, no la del submódulo");
+
+        // (1) util.ray: submódulo sin `main` → SIN diagnósticos (antes: "falta … 'main'").
+        let uri_util = format!("file://{}", dir.join("geo/util.ray").display());
+        let ds = analizar_modular(&uri_util, util_src).expect("modular");
+        assert!(ds.is_empty(), "un submódulo sin main no debe dar errores: {:?}",
+            ds.iter().map(|d| &d.message).collect::<Vec<_>>());
+
+        // (2) circulo.ray: `import geo/util;` resuelve desde la raíz + sin `main` → SIN diagnósticos.
+        let uri_circ = format!("file://{}", dir.join("geo/formas/circulo.ray").display());
+        let ds = analizar_modular(&uri_circ, circulo_src).expect("modular");
+        assert!(ds.is_empty(), "el import por ruta absoluta debe resolver: {:?}",
+            ds.iter().map(|d| &d.message).collect::<Vec<_>>());
+
+        // (3) Un error de tipos REAL en el submódulo sí se reporta (no se traga por el modo módulo).
+        let circulo_malo = "import geo/util;\npub struct Circulo { radio: int }\npub fn area(c: Circulo) -> int { 3 * util.cuadrado(c) }\n";
+        let ds = analizar_modular(&uri_circ, circulo_malo).expect("modular");
+        assert_eq!(ds.len(), 1, "el error real del cuerpo debe verse: {:?}",
+            ds.iter().map(|d| &d.message).collect::<Vec<_>>());
+        assert_eq!(ds[0].line, 3, "línea local del submódulo");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

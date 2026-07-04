@@ -100,11 +100,24 @@ const MAX_ERRORES: usize = 20;
 /// **Solo diagnóstico** (LSP/CLI): omite el lowering, porque con errores no se ejecuta
 /// nada. El primer error es idéntico al de `check` (mismo recorrido hasta ahí).
 pub fn check_all(program: &mut Program) -> Vec<TypeError> {
+    check_all_impl(program, true)
+}
+
+/// Como [`check_all`], pero **sin exigir `main`** (M10.2): para que el LSP analice un archivo de
+/// **módulo** (submódulo `pub` sin función de entrada) y aun así reporte los diagnósticos reales de
+/// sus cuerpos, en vez de cortar con "falta la función de entrada 'main'". La entrada de un proyecto
+/// (con `main`) se sigue analizando con `check_all`.
+pub fn check_all_modulo(program: &mut Program) -> Vec<TypeError> {
+    check_all_impl(program, false)
+}
+
+fn check_all_impl(program: &mut Program, require_main: bool) -> Vec<TypeError> {
     if let Err(e) = prepare_program(program) {
         return vec![e];
     }
     let mut checker = Checker::new();
     checker.acumular = true;
+    checker.require_main = require_main;
     match checker.check_program(program) {
         Err(e) => vec![e], // pasada temprana (fail-fast): un solo error
         Ok(()) => checker.errores,
@@ -506,6 +519,11 @@ struct Checker {
     /// que `recv.f(...)` resuelva una función importada como *fallback* (tras campo/método). Vacío sin
     /// imports.
     ufcs_aliases: HashMap<String, String>,
+    /// Exigir la función de entrada `main` (DESIGN §11). `true` por defecto (`check`/`check_all`: un
+    /// programa ejecutable la necesita). El LSP la pone en `false` al analizar un **archivo de módulo**
+    /// (submódulo `pub`, sin `main`): un módulo suelto es legítimo sin entrada, y esa regla es de
+    /// **proyecto**, no de archivo. Sin ella, el chequeo prosigue a los cuerpos y da diagnósticos reales.
+    require_main: bool,
 }
 
 impl Checker {
@@ -550,6 +568,7 @@ impl Checker {
             index: SemanticIndex::default(),
             fn_defs: HashMap::new(),
             ufcs_aliases: HashMap::new(),
+            require_main: true,
         }
     }
 
@@ -743,9 +762,13 @@ impl Checker {
             self.functions.insert(e.name.clone(), sig);
         }
 
-        // 'main' es obligatoria (DESIGN.md §11): sin parámetros y con retorno int o unit.
+        // 'main' es obligatoria (DESIGN.md §11): sin parámetros y con retorno int o unit. El LSP
+        // desactiva `require_main` al analizar un archivo de módulo (submódulo sin `main`).
         match self.functions.get("main") {
-            None => return Err(self.err(1, 1, "falta la función de entrada 'main'".into())),
+            None if self.require_main => {
+                return Err(self.err(1, 1, "falta la función de entrada 'main'".into()));
+            }
+            None => {}
             Some(sig) => {
                 if !sig.params.is_empty() {
                     return Err(self.err(1, 1, "'main' no debe recibir parámetros".into()));

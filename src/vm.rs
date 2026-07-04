@@ -2638,6 +2638,9 @@ impl<'a> Vm<'a> {
     /// propaga y barre. Solo se llama en puntos seguros del bucle.
     fn collect(&mut self) {
         // M37.1: cronometramos la pausa stop-the-world para medir el objetivo de M37 (pausas acotadas).
+        // M44a: `Instant::now()` PANIQUEA en `wasm32-unknown-unknown` (sin reloj) → en wasm no se cronometra
+        // (las stats del GC solo se imprimen con `RAYLANG_GC_STATS`, que no aplica en el playground).
+        #[cfg(not(target_arch = "wasm32"))]
         let inicio = std::time::Instant::now();
         // Reunimos las raíces (handles) primero, para no tomar prestado `self.cur.stack`
         // y `self.cur.heap` a la vez. M12.1: además de la fibra en ejecución, rooteamos TODAS las fibras
@@ -2655,12 +2658,15 @@ impl<'a> Vm<'a> {
         }
         self.cur.heap.trace();
         self.cur.heap.sweep();
-        // M37.1: registra la pausa (una sola recolección stop-the-world).
-        let dt = inicio.elapsed().as_nanos();
         self.gc_count += 1;
-        self.gc_total_pause_ns += dt;
-        if dt > self.gc_max_pause_ns {
-            self.gc_max_pause_ns = dt;
+        // M37.1: registra la pausa (una sola recolección stop-the-world). Solo fuera de wasm (ver arriba).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let dt = inicio.elapsed().as_nanos();
+            self.gc_total_pause_ns += dt;
+            if dt > self.gc_max_pause_ns {
+                self.gc_max_pause_ns = dt;
+            }
         }
     }
 

@@ -370,8 +370,37 @@ fn main() -> int {
 }
 ```
 
-Un directorio con `mod.ray` es una **cápsula**: `import geo;` carga `geo/mod.ray` y sus submódulos internos
-quedan protegidos (solo accesibles desde dentro de la cápsula).
+### Cápsulas (`mod.ray`)
+
+Un directorio con un `mod.ray` es una **cápsula**: `import geo;` carga `geo/mod.ray`, que define la **cara
+pública** del directorio reexportando ítems de sus submódulos. Los submódulos internos quedan **protegidos**
+—importarlos desde fuera es un error—, así que la cápsula es una frontera de encapsulación, no solo ergonomía.
+
+```rust
+// geo/mod.ray  — su presencia convierte `geo/` en una CÁPSULA. Arma la cara pública
+//                reexportando lo que otros pueden usar (el resto queda interno).
+pub from geo/formas/circulo import Circulo, area;
+
+// geo/formas/circulo.ray  — submódulo INTERNO de la cápsula
+import geo/util;                             // un vecino interno: permitido (vive bajo `geo/`)
+pub struct Circulo { radio: int }
+pub fn area(c: Circulo) -> int { 3 * util.cuadrado(c.radio) }
+
+// geo/util.ray  — otro submódulo interno; NO se reexporta → privado a la cápsula
+pub fn cuadrado(n: int) -> int { n * n }
+
+// main.ray  — desde FUERA solo se ve la cara pública de `geo`
+import geo;                                  // carga geo/mod.ray
+fn main() -> int {
+    let c = geo.Circulo { radio: 4 };        // Circulo, reexportado por la cápsula
+    geo.area(c)                              // 3 * 16 = 48  → código de salida
+    // import geo/util;  → ERROR: 'geo/util' es interno a la cápsula 'geo'; impórtalo con 'import geo;'
+}
+```
+
+Un `pub from … import …` (con `pub`) **reexporta**: trae nombres de un submódulo interno y los añade a la
+cara pública de la cápsula. Sin `pub`, el `from`-import es privado al `mod.ray`. El ejemplo completo está en
+[`examples/capsula/`](examples/capsula/).
 
 **Paquetes** con `ray.toml`:
 

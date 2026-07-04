@@ -361,11 +361,29 @@ fn fmt_extern_block(lib: &str, externs: &[ExternFn]) -> String {
 // Tipos, genéricos, anotaciones
 // ---------------------------------------------------------------------------
 
-/// Los tipos ya se imprimen en sintaxis de fuente por su `Display` (int, `[T]`, `Map<K, V>`,
-/// `fn(...) -> R`, `Nombre<A, B>`, `dyn A + B`, `Self`, `u8`…). El AST crudo trae los nombres como
-/// `Struct(name, args)`, cuyo `Display` es exactamente la sintaxis del programador.
+/// Renderiza un tipo en sintaxis de fuente. Casi todo coincide con el `Display` de `Type`, salvo un
+/// caso: un tipo **función que retorna unit** — su `Display` es `fn(...) -> unit`, pero `unit` **no es
+/// escribible** en raylang (el retorno unit se OMITE, como en las firmas). Por eso se recorre a mano:
+/// en un `Type::Fn` el retorno se emite con `fmt_return` (que omite `-> unit`), y se recursa en los
+/// contenedores (`[T]`, `(T,…)`, `Map`/`Channel`/`Task`, args genéricos) para arreglar tipos función
+/// **anidados** (p. ej. `[fn(Ctx, Res)]`). Los tipos hoja delegan en su `Display`.
 fn fmt_type(t: &Type) -> String {
-    t.to_string()
+    match t {
+        Type::Fn(params, ret) => {
+            let ps: Vec<String> = params.iter().map(fmt_type).collect();
+            format!("fn({}){}", ps.join(", "), fmt_return(ret))
+        }
+        Type::Array(elem) => format!("[{}]", fmt_type(elem)),
+        Type::Tuple(ts) => format!("({})", ts.iter().map(fmt_type).collect::<Vec<_>>().join(", ")),
+        Type::Map(k, v) => format!("Map<{}, {}>", fmt_type(k), fmt_type(v)),
+        Type::Channel(inner) => format!("Channel<{}>", fmt_type(inner)),
+        Type::Task(inner) => format!("Task<{}>", fmt_type(inner)),
+        Type::Struct(name, args) | Type::Enum(name, args) if !args.is_empty() => {
+            format!("{}<{}>", name, args.iter().map(fmt_type).collect::<Vec<_>>().join(", "))
+        }
+        // Hojas (primitivos, Var, Self, Dyn, struct/enum sin args): su Display ya es sintaxis válida.
+        _ => t.to_string(),
+    }
 }
 
 /// `<T, U>` o `<T: A + B, U>` a partir de los parámetros de tipo y sus bounds.
@@ -1074,6 +1092,21 @@ mod tests {
         assert!(tabs.contains("\n\t\tx"), "nivel 2 = 2 tabs: {tabs:?}");
         // Unidad = 4 espacios ⇒ idéntico al canónico.
         assert_eq!(format_source_con_indent(src, "    ").unwrap(), fmt(src));
+    }
+
+    #[test]
+    fn tipo_funcion_que_retorna_unit_omite_el_retorno() {
+        // Un tipo `fn(...) -> unit` (retorno implícito) NO debe emitirse con `-> unit` (no es escribible).
+        // Antes se emitía por el `Display` de Type, corrompiendo el archivo.
+        let src = "struct R { h: fn(int, string) }\nfn f(cb: fn(int)) -> int { 0 }\nfn g(xs: [fn(int)]) -> int { 0 }\nfn main() -> int { 0 }\n";
+        let out = fmt(src);
+        assert!(!out.contains("-> unit"), "no debe aparecer '-> unit': {out:?}");
+        assert!(out.contains("h: fn(int, string)"), "campo función sin retorno: {out:?}");
+        assert!(out.contains("cb: fn(int)"), "param función sin retorno: {out:?}");
+        assert!(out.contains("xs: [fn(int)]"), "función anidada en arreglo: {out:?}");
+        // Un retorno NO-unit sí se conserva.
+        assert!(fmt("fn f(cb: fn(int) -> bool) -> int { 0 }\nfn main() -> int { 0 }\n").contains("fn(int) -> bool"));
+        assert_eq!(out, fmt(&out), "idempotente");
     }
 
     #[test]

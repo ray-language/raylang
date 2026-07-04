@@ -9,9 +9,9 @@
 //! **Comentarios.** El lexer los descarta, así que se recolectan aparte (`collect_comments`, respetando
 //! cadenas/chars) y se **re-insertan** durante la emisión (`Cur`): antes de cada ítem/sentencia/miembro
 //! se vuelcan los comentarios de las líneas anteriores (con su sangría), y un comentario al final de una
-//! línea de código (*trailing*) se re-pega a esa línea. Como el AST **no guarda la posición del `}`**, un
-//! comentario tras la última sentencia de un bloque no puede acotarse a ese bloque y se reubica justo
-//! **tras** el `}` (el resto va bien). La invariante fuerte: **ningún comentario se pierde**.
+//! línea de código (*trailing*) se re-pega a esa línea. Un comentario tras la última sentencia, antes del
+//! `}`, se acota al bloque usando `Block.end_line` (la línea del cierre). Invariante fuerte: **ningún
+//! comentario se pierde** y cada uno queda en su sitio.
 //!
 //! También se **preserva la separación en blanco** entre sentencias de un bloque (una línea en blanco
 //! entre grupos se mantiene; 2+ se colapsan a una; ninguna al abrir el bloque) — es agrupación visual
@@ -539,21 +539,29 @@ fn fmt_function(cur: &mut Cur, f: &Function) -> String {
 /// va a `base + 1`, y el `}` de cierre vuelve a `base`. Vuelca los comentarios que van **encima** de
 /// cada sentencia (con la sangría del cuerpo) y re-pega los *trailing* de sentencias de una línea.
 fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
+    let inner = INDENT.repeat(base + 1);
     if b.statements.is_empty() && b.tail.is_none() {
+        // Bloque vacío. Si es MULTILÍNEA y encierra comentarios (línea < `}`), se preservan; si no, `{ }`.
+        if b.end_line > b.line {
+            let cola = cur.flush_before(b.end_line, &inner);
+            if !cola.is_empty() {
+                return format!("{{\n{}{}}}", cola, INDENT.repeat(base));
+            }
+        }
         return "{ }".to_string();
     }
-    // Preserva un bloque **inline**: un cuerpo de solo un tail (sin sentencias) que en la FUENTE estaba
-    // en la misma línea que su `{` (`tail.line == b.line`) y no es una forma con bloque se mantiene en
-    // una línea (`{ expr }`). raylang tiene muchas funciones de una línea (`fn cuadrado(n) { n * n }`);
-    // expandirlas todas sería anti-idiomático. Como es de una sola línea, no hay comentarios dentro.
+    // Preserva un bloque **inline**: un cuerpo de solo un tail (sin sentencias) que en la FUENTE cabía
+    // ENTERO en una línea (`{`, tail y `}` en `b.line`) y no es una forma con bloque se mantiene inline
+    // (`{ expr }`). raylang tiene muchas funciones de una línea (`fn cuadrado(n) { n * n }`); expandirlas
+    // todas sería anti-idiomático. Al ser de una sola línea, no hay comentarios dentro.
     if b.statements.is_empty()
         && let Some(tail) = &b.tail
         && tail.line == b.line
+        && b.end_line == b.line
         && !is_block_form(tail)
     {
         return format!("{{ {} }}", fmt_value(cur, tail, base));
     }
-    let inner = INDENT.repeat(base + 1);
     let mut s = String::from("{\n");
     for (idx, st) in b.statements.iter().enumerate() {
         // Preserva una línea en blanco entre sentencias (agrupación visual), salvo antes de la primera.
@@ -581,6 +589,17 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
             s.push_str(&cur.trailing_on(tail.line));
         }
         s.push('\n');
+    }
+    // Comentarios que quedan DENTRO del bloque, tras la última sentencia/tail y antes del `}` (línea <
+    // `end_line`). Antes se reubicaban tras el `}` (el AST no tenía la posición de cierre); ahora se
+    // acotan al bloque. Se respeta también un blanco de separación previo.
+    let blanco_cola = cur.blank_before(b.end_line);
+    let cola = cur.flush_before(b.end_line, &inner);
+    if !cola.is_empty() {
+        if blanco_cola {
+            s.push('\n');
+        }
+        s.push_str(&cola);
     }
     s.push_str(&INDENT.repeat(base));
     s.push('}');
@@ -1001,6 +1020,17 @@ mod tests {
         assert!(out.contains("import a/b;\nimport c/d as x;\nfrom e import f;"), "{out:?}");
         // …pero sí hay un blanco antes de la función.
         assert!(out.contains("from e import f;\n\nfn main"), "blanco antes de fn: {out:?}");
+    }
+
+    #[test]
+    fn comentario_antes_del_cierre_queda_dentro() {
+        // Un comentario tras la última sentencia, antes del `}`, se acota al bloque (ya no se reubica
+        // tras el `}`). Con blanco previo, se conserva. Y un bloque vacío con solo un comentario lo mantiene.
+        let src = "fn g() -> int {\n  let z = 1;\n  z\n\n  // final\n}\nfn vacia() {\n  // solo comentario\n}\nfn main() -> int { 0 }\n";
+        let out = fmt(src);
+        assert!(out.contains("    z\n\n    // final\n}"), "comentario final dentro, con blanco: {out:?}");
+        assert!(out.contains("fn vacia() {\n    // solo comentario\n}"), "bloque vacío conserva su comentario: {out:?}");
+        assert_eq!(out, fmt(&out), "idempotente");
     }
 
     #[test]

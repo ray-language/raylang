@@ -84,10 +84,10 @@ desazucaraba de todos modos — la interpolación `"n = ${x}"` reaparece como `+
 
 Los **comentarios** sí se preservan, aunque el lexer no los guarde: se recolectan aparte (respetando las
 cadenas, para no confundir un `//` dentro de un literal) y se re-insertan durante la emisión con un cursor
-que los va casando por línea — los doc-comments quedan encima de su ítem, los sueltos entre sentencias, y
-los de final de línea (*trailing*) pegados a su código. El único caso que se reubica es un comentario tras
-la última sentencia de un bloque: como el AST no guarda la posición del `}`, ese comentario aparece justo
-tras el `}` en vez de dentro. La invariante que sí se garantiza: ningún comentario se pierde.
+que los va casando por línea — los doc-comments quedan encima de su ítem, los sueltos entre sentencias, los
+de final de línea (*trailing*) pegados a su código, y los de fin de bloque (antes del `}`) acotados con la
+posición de cierre que el AST guarda en `Block.end_line`. También se preservan las líneas en blanco entre
+sentencias. La invariante: ningún comentario se pierde y cada uno queda en su sitio.
 
 La propiedad que convierte esto en una herramienta de verdad y no en un juguete es la **idempotencia**:
 formatear algo ya formateado no lo cambia.

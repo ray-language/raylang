@@ -3226,7 +3226,7 @@ impl Checker {
             },
             line, col,
         };
-        let body = Block { statements: Vec::new(), tail: Some(Box::new(call)), line, col };
+        let body = Block { statements: Vec::new(), tail: Some(Box::new(call)), line, col, end_line: line };
         let fe = FnExpr { id: 0, params, return_type: subst_self(&sig.return_type, concrete), body, line, col };
         Ok(Expr { kind: ExprKind::Func(Box::new(fe)), line, col })
     }
@@ -4738,7 +4738,7 @@ fn lower_try_expr(expr: &mut Expr, sites: &TryConvMap) {
                 line: l, col: c,
             },
             guard: None,
-            body: mk(ExprKind::Block(Block { statements: vec![ret_stmt], tail: None, line: l, col: c })),
+            body: mk(ExprKind::Block(Block { statements: vec![ret_stmt], tail: None, line: l, col: c, end_line: l })),
             line: l, col: c,
         };
         expr.kind = ExprKind::Match { scrutinee: Box::new(inner), arms: vec![arm_ok, arm_err] };
@@ -5254,7 +5254,7 @@ fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
         });
         new_args.append(&mut args);
         let call = Expr { kind: ExprKind::Call { callee: Box::new(method_field), args: new_args }, line, col };
-        expr.kind = ExprKind::Block(Block { statements: vec![let_stmt], tail: Some(Box::new(call)), line, col });
+        expr.kind = ExprKind::Block(Block { statements: vec![let_stmt], tail: Some(Box::new(call)), line, col, end_line: line });
     }
 
     // Coerción concreto→`dyn Trait`: envolver en el struct sintetizado (la vtable). Los valores
@@ -5293,7 +5293,7 @@ fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
             fields.push((field, proj));
         }
         let lit = Expr { kind: ExprKind::StructLit { name: dyn_struct_name(target), fields }, line, col };
-        expr.kind = ExprKind::Block(Block { statements: vec![let_stmt], tail: Some(Box::new(lit)), line, col });
+        expr.kind = ExprKind::Block(Block { statements: vec![let_stmt], tail: Some(Box::new(lit)), line, col, end_line: line });
     }
 }
 

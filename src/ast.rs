@@ -430,6 +430,10 @@ pub struct Block {
     pub tail: Option<Box<Expr>>,
     pub line: usize,
     pub col: usize,
+    /// Línea (1-basada) del `}` de cierre. La usa el **formateador** para colocar un comentario que
+    /// va justo antes del `}` dentro del bloque (sin ella se reubicaba tras el `}`). En bloques
+    /// **sintéticos** (checker/desugar) vale lo mismo que `line` (nunca se formatean).
+    pub end_line: usize,
 }
 
 /// Una sentencia: se ejecuta por su efecto, no produce un valor de bloque.

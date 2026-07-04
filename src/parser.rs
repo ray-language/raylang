@@ -835,12 +835,12 @@ impl Parser {
         }
 
         let close = self.expect(&TokenKind::RBrace, "'}' para cerrar el bloque")?;
-        let _ = close;
         Ok(Block {
             statements,
             tail,
             line: open.line,
             col: open.col,
+            end_line: close.line,
         })
     }
 
@@ -1452,7 +1452,7 @@ impl Parser {
                 Expr { line: b.line, col: b.col, kind: ExprKind::Block(b) }
             }
         } else {
-            Expr { line, col, kind: ExprKind::Block(Block { statements: Vec::new(), tail: None, line, col }) }
+            Expr { line, col, kind: ExprKind::Block(Block { statements: Vec::new(), tail: None, line, col, end_line: line }) }
         };
         let arm_then = MatchArm {
             pattern,

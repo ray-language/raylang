@@ -4,16 +4,16 @@
 from sigv4 import credentials, authorization_header;
 
 fn main() {
-  let cred = credentials("AKIDEXAMPLE", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "us-east-1", "service");
+    let cred = credentials("AKIDEXAMPLE", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "us-east-1", "service");
 
-  var h: Map<string, string> = map_new();
-  insert(h, "host", "example.amazonaws.com");
-  insert(h, "x-amz-date", "20150830T123600Z");
+    var h: Map<string, string> = map_new();
+    insert(h, "host", "example.amazonaws.com");
+    insert(h, "x-amz-date", "20150830T123600Z");
 
-  // Caso 1: GET / sin query ni cuerpo (vector oficial get-vanilla).
-  print(authorization_header(cred, "GET", "/", "", h, to_bytes(""), "20150830T123600Z"));
-  // Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31
-  // Caso 2: POST con query desordenada (b=2&a=1 → debe ordenarse) y cuerpo "datos".
-  print(authorization_header(cred, "POST", "/", "b=2&a=1", h, to_bytes("datos"), "20150830T123600Z"));
-  // Signature=9eb84a4204a201b2eee292a6fd7bd72b820d6580ec32367b8ad37f7be64f8aed
+    // Caso 1: GET / sin query ni cuerpo (vector oficial get-vanilla).
+    print(authorization_header(cred, "GET", "/", "", h, to_bytes(""), "20150830T123600Z"));
+    // Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31
+    // Caso 2: POST con query desordenada (b=2&a=1 → debe ordenarse) y cuerpo "datos".
+    print(authorization_header(cred, "POST", "/", "b=2&a=1", h, to_bytes("datos"), "20150830T123600Z"));
+    // Signature=9eb84a4204a201b2eee292a6fd7bd72b820d6580ec32367b8ad37f7be64f8aed
 }

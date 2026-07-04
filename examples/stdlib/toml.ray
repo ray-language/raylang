@@ -7,23 +7,23 @@
 // tablas en línea `{…}`, arreglos de tablas `[[…]]`, fechas, strings multilínea/literales.
 // Un valor TOML. Recursivo (los arreglos contienen valores).
 pub enum TomlValue {
-  TStr(string),
-  TInt(int),
-  TFloat(float),
-  TBool(bool),
-  TArray([TomlValue]),
+    TStr(string),
+    TInt(int),
+    TFloat(float),
+    TBool(bool),
+    TArray([TomlValue]),
 }
 
 // Una entrada del documento: la ruta con puntos y su valor.
 pub struct TomlEntry {
-  key: string,
-  value: TomlValue,
+    key: string,
+    value: TomlValue,
 }
 
 // El estado del parser: los caracteres y la posición.
 struct TS {
-  cs: [char],
-  pos: int,
+    cs: [char],
+    pos: int,
 }
 
 fn ts_end(t: TS) -> bool { t.pos >= len(t.cs) }
@@ -31,246 +31,246 @@ fn ts_end(t: TS) -> bool { t.pos >= len(t.cs) }
 fn ts_peek(t: TS) -> char { t.cs[t.pos] }
 
 fn ts_adv(t: TS) -> char {
-  let c = t.cs[t.pos];
-  t.pos = t.pos + 1;
-  c
+    let c = t.cs[t.pos];
+    t.pos = t.pos + 1;
+    c
 }
 
 fn es_espacio(c: char) -> bool { c == ' ' || c == '\t' || c == '\r' || c == '\n' }
 
 // Salta espacios, saltos de línea y comentarios (`#` hasta fin de línea).
 fn skip_trivia(t: TS) {
-  var seguir = true;
-  while (seguir && !ts_end(t)) {
-    let c = ts_peek(t);
-    if (es_espacio(c)) {
-      ts_adv(t);
-    } else if (c == '#') {
-      while (!ts_end(t) && ts_peek(t) != '\n') {
-        ts_adv(t);
-      }
-    } else {
-      seguir = false;
+    var seguir = true;
+    while (seguir && !ts_end(t)) {
+        let c = ts_peek(t);
+        if (es_espacio(c)) {
+            ts_adv(t);
+        } else if (c == '#') {
+            while (!ts_end(t) && ts_peek(t) != '\n') {
+                ts_adv(t);
+            }
+        } else {
+            seguir = false;
+        }
     }
-  }
 }
 
 // Salta solo espacios/tabs (no saltos de línea), dentro de una línea `key = valor`.
 fn skip_spaces(t: TS) {
-  while (!ts_end(t) && (ts_peek(t) == ' ' || ts_peek(t) == '\t')) {
-    ts_adv(t);
-  }
+    while (!ts_end(t) && (ts_peek(t) == ' ' || ts_peek(t) == '\t')) {
+        ts_adv(t);
+    }
 }
 
 // ¿Es `c` parte de una clave desnuda o de la ruta de una tabla? (letras, dígitos, `_`, `-`, `.`)
 fn es_clave(c: char) -> bool {
-  c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-' || c == '.'
+    c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-' || c == '.'
 }
 
 fn parse_key(t: TS) -> string {
-  var k = "";
-  while (!ts_end(t) && es_clave(ts_peek(t))) {
-    k = k + to_string(ts_adv(t));
-  }
-  k
+    var k = "";
+    while (!ts_end(t) && es_clave(ts_peek(t))) {
+        k = k + to_string(ts_adv(t));
+    }
+    k
 }
 
 // Parsea un string básico `"..."` con escapes `\n \t \r \" \\`.
 fn parse_string(t: TS) -> Result<string, string> {
-  ts_adv(t);  // comilla de apertura
-  var s = "";
-  var cerrado = false;
-  while (!cerrado && !ts_end(t)) {
-    let c = ts_adv(t);
-    if (c == '"') {
-      cerrado = true;
-    } else if (c == '\\') {
-      if (ts_end(t)) {
-        return Result.Err("escape al final del string");
-      }
-      let e = ts_adv(t);
-      if (e == 'n') {
-        s = s + "\n";
-      } else if (e == 't') {
-        s = s + "\t";
-      } else if (e == 'r') {
-        s = s + "\r";
-      } else if (e == '"') {
-        s = s + "\"";
-      } else if (e == '\\') {
-        s = s + "\\";
-      } else {
-        s = s + to_string(e);
-      }
-    } else {
-      s = s + to_string(c);
+    ts_adv(t);  // comilla de apertura
+    var s = "";
+    var cerrado = false;
+    while (!cerrado && !ts_end(t)) {
+        let c = ts_adv(t);
+        if (c == '"') {
+            cerrado = true;
+        } else if (c == '\\') {
+            if (ts_end(t)) {
+                return Result.Err("escape al final del string");
+            }
+            let e = ts_adv(t);
+            if (e == 'n') {
+                s = s + "\n";
+            } else if (e == 't') {
+                s = s + "\t";
+            } else if (e == 'r') {
+                s = s + "\r";
+            } else if (e == '"') {
+                s = s + "\"";
+            } else if (e == '\\') {
+                s = s + "\\";
+            } else {
+                s = s + to_string(e);
+            }
+        } else {
+            s = s + to_string(c);
+        }
     }
-  }
-  if (!cerrado) {
-    return Result.Err("string sin cerrar");
-  }
-  Result.Ok(s)
+    if (!cerrado) {
+        return Result.Err("string sin cerrar");
+    }
+    Result.Ok(s)
 }
 
 // Clasifica un token escalar (número o booleano) ya leído.
 fn clasificar_escalar(tok: string) -> Result<TomlValue, string> {
-  if (tok == "true") {
-    return Result.Ok(TomlValue.TBool(true));
-  }
-  if (tok == "false") {
-    return Result.Ok(TomlValue.TBool(false));
-  }
-  // ¿Flotante? (tiene '.' o 'e'/'E')
-  var es_float = false;
-  var i = 0;
-  while (i < len(tok)) {
-    let c = tok[i];
-    if (c == '.' || c == 'e' || c == 'E') {
-      es_float = true;
+    if (tok == "true") {
+        return Result.Ok(TomlValue.TBool(true));
     }
-    i = i + 1;
-  }
-  if (es_float) {
-    match (parse_float(tok)) {
-      Option.Some(f) => Result.Ok(TomlValue.TFloat(f)),
-      Option.None => Result.Err("flotante inválido: " + tok),
+    if (tok == "false") {
+        return Result.Ok(TomlValue.TBool(false));
     }
-  } else {
-    match (parse_int(tok)) {
-      Option.Some(n) => Result.Ok(TomlValue.TInt(n)),
-      Option.None => Result.Err("entero inválido: " + tok),
+    // ¿Flotante? (tiene '.' o 'e'/'E')
+    var es_float = false;
+    var i = 0;
+    while (i < len(tok)) {
+        let c = tok[i];
+        if (c == '.' || c == 'e' || c == 'E') {
+            es_float = true;
+        }
+        i = i + 1;
     }
-  }
+    if (es_float) {
+        match (parse_float(tok)) {
+            Option.Some(f) => Result.Ok(TomlValue.TFloat(f)),
+            Option.None => Result.Err("flotante inválido: " + tok),
+        }
+    } else {
+        match (parse_int(tok)) {
+            Option.Some(n) => Result.Ok(TomlValue.TInt(n)),
+            Option.None => Result.Err("entero inválido: " + tok),
+        }
+    }
 }
 
 // Lee un token escalar hasta un delimitador (espacio, coma, `]`, salto de línea o `#`).
 fn read_scalar(t: TS) -> string {
-  var tok = "";
-  while (!ts_end(t)) {
-    let c = ts_peek(t);
-    if (es_espacio(c) || c == ',' || c == ']' || c == '#') {
-      return tok;
+    var tok = "";
+    while (!ts_end(t)) {
+        let c = ts_peek(t);
+        if (es_espacio(c) || c == ',' || c == ']' || c == '#') {
+            return tok;
+        }
+        tok = tok + to_string(ts_adv(t));
     }
-    tok = tok + to_string(ts_adv(t));
-  }
-  tok
+    tok
 }
 
 fn parse_value(t: TS) -> Result<TomlValue, string> {
-  skip_spaces(t);
-  if (ts_end(t)) {
-    return Result.Err("valor esperado");
-  }
-  let c = ts_peek(t);
-  if (c == '"') {
-    match (parse_string(t)) {
-      Result.Ok(s) => Result.Ok(TomlValue.TStr(s)),
-      Result.Err(e) => Result.Err(e),
+    skip_spaces(t);
+    if (ts_end(t)) {
+        return Result.Err("valor esperado");
     }
-  } else if (c == '[') {
-    parse_array(t)
-  } else {
-    clasificar_escalar(read_scalar(t))
-  }
+    let c = ts_peek(t);
+    if (c == '"') {
+        match (parse_string(t)) {
+            Result.Ok(s) => Result.Ok(TomlValue.TStr(s)),
+            Result.Err(e) => Result.Err(e),
+        }
+    } else if (c == '[') {
+        parse_array(t)
+    } else {
+        clasificar_escalar(read_scalar(t))
+    }
 }
 
 fn parse_array(t: TS) -> Result<TomlValue, string> {
-  ts_adv(t);  // '['
-  var elems: [TomlValue] = [];
-  skip_trivia(t);
-  while (!ts_end(t) && ts_peek(t) != ']') {
-    let v = match (parse_value(t)) {
-      Result.Ok(x) => x,
-      Result.Err(e) => {
-        return Result.Err(e);
-      },
-    };
-    push(elems, v);
+    ts_adv(t);  // '['
+    var elems: [TomlValue] = [];
     skip_trivia(t);
-    if (!ts_end(t) && ts_peek(t) == ',') {
-      ts_adv(t);
-      skip_trivia(t);
+    while (!ts_end(t) && ts_peek(t) != ']') {
+        let v = match (parse_value(t)) {
+            Result.Ok(x) => x,
+            Result.Err(e) => {
+                return Result.Err(e);
+            },
+        };
+        push(elems, v);
+        skip_trivia(t);
+        if (!ts_end(t) && ts_peek(t) == ',') {
+            ts_adv(t);
+            skip_trivia(t);
+        }
     }
-  }
-  if (ts_end(t)) {
-    return Result.Err("arreglo sin cerrar");
-  }
-  ts_adv(t);  // ']'
-  Result.Ok(TomlValue.TArray(elems))
+    if (ts_end(t)) {
+        return Result.Err("arreglo sin cerrar");
+    }
+    ts_adv(t);  // ']'
+    Result.Ok(TomlValue.TArray(elems))
 }
 
 // Parsea un documento TOML a una lista de entradas (ruta con puntos → valor).
 pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
-  let t = TS { cs: chars(src), pos: 0 };
-  var entries: [TomlEntry] = [];
-  var table = "";
-  skip_trivia(t);
-  while (!ts_end(t)) {
-    if (ts_peek(t) == '[') {
-      ts_adv(t);
-      table = parse_key(t);
-      skip_spaces(t);
-      if (ts_end(t) || ts_peek(t) != ']') {
-        return Result.Err("falta ']' en la cabecera de tabla");
-      }
-      ts_adv(t);
-    } else {
-      let key = parse_key(t);
-      if (key == "") {
-        return Result.Err("clave inválida");
-      }
-      skip_spaces(t);
-      if (ts_end(t) || ts_peek(t) != '=') {
-        return Result.Err("falta '=' tras la clave '" + key + "'");
-      }
-      ts_adv(t);
-      let val = match (parse_value(t)) {
-        Result.Ok(v) => v,
-        Result.Err(e) => {
-          return Result.Err(e);
-        },
-      };
-      var full = key;
-      if (table != "") {
-        full = table + "." + key;
-      }
-      push(entries, TomlEntry { key: full, value: val });
-    }
+    let t = TS { cs: chars(src), pos: 0 };
+    var entries: [TomlEntry] = [];
+    var table = "";
     skip_trivia(t);
-  }
-  Result.Ok(entries)
+    while (!ts_end(t)) {
+        if (ts_peek(t) == '[') {
+            ts_adv(t);
+            table = parse_key(t);
+            skip_spaces(t);
+            if (ts_end(t) || ts_peek(t) != ']') {
+                return Result.Err("falta ']' en la cabecera de tabla");
+            }
+            ts_adv(t);
+        } else {
+            let key = parse_key(t);
+            if (key == "") {
+                return Result.Err("clave inválida");
+            }
+            skip_spaces(t);
+            if (ts_end(t) || ts_peek(t) != '=') {
+                return Result.Err("falta '=' tras la clave '" + key + "'");
+            }
+            ts_adv(t);
+            let val = match (parse_value(t)) {
+                Result.Ok(v) => v,
+                Result.Err(e) => {
+                    return Result.Err(e);
+                },
+            };
+            var full = key;
+            if (table != "") {
+                full = table + "." + key;
+            }
+            push(entries, TomlEntry { key: full, value: val });
+        }
+        skip_trivia(t);
+    }
+    Result.Ok(entries)
 }
 
 // Busca el valor de una ruta con puntos.
 pub fn toml_get(entries: [TomlEntry], key: string) -> Option<TomlValue> {
-  var i = 0;
-  while (i < len(entries)) {
-    if (entries[i].key == key) {
-      return Option.Some(entries[i].value);
+    var i = 0;
+    while (i < len(entries)) {
+        if (entries[i].key == key) {
+            return Option.Some(entries[i].value);
+        }
+        i = i + 1;
     }
-    i = i + 1;
-  }
-  Option.None
+    Option.None
 }
 
 // Representación textual de un valor (para depurar/testear).
 pub fn toml_show(v: TomlValue) -> string {
-  match (v) {
-    TomlValue.TStr(s) => "\"" + s + "\"",
-    TomlValue.TInt(n) => to_string(n),
-    TomlValue.TFloat(f) => to_string(f),
-    TomlValue.TBool(b) => if (b) { "true" } else { "false" },
-    TomlValue.TArray(xs) => {
-      var s = "[";
-      var i = 0;
-      while (i < len(xs)) {
-        if (i > 0) {
-          s = s + ", ";
-        }
-        s = s + toml_show(xs[i]);
-        i = i + 1;
-      }
-      s + "]"
-    },
-  }
+    match (v) {
+        TomlValue.TStr(s) => "\"" + s + "\"",
+        TomlValue.TInt(n) => to_string(n),
+        TomlValue.TFloat(f) => to_string(f),
+        TomlValue.TBool(b) => if (b) { "true" } else { "false" },
+        TomlValue.TArray(xs) => {
+            var s = "[";
+            var i = 0;
+            while (i < len(xs)) {
+                if (i > 0) {
+                    s = s + ", ";
+                }
+                s = s + toml_show(xs[i]);
+                i = i + 1;
+            }
+            s + "]"
+        },
+    }
 }

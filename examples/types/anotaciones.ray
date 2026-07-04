@@ -10,34 +10,34 @@
 // @derive(Eq) sobre un enum: '==' no compara enums, pero 'igual' (derivado) sí.
 @derive(Eq, Show)
 enum Color {
-  Rojo,
-  Verde,
-  Azul,
+    Rojo,
+    Verde,
+    Azul,
 }
 
 // @derive(Eq) sobre un struct, y sobre un enum con payload.
 @derive(Eq, Show)
 struct Punto {
-  x: int,
-  y: int,
+    x: int,
+    y: int,
 }
 
 @derive(Eq, Show)
 enum Forma {
-  Circulo(int),
-  Rect(int, int),
+    Circulo(int),
+    Rect(int, int),
 }
 
 // Como Color/Punto/Forma implementan Eq (derivado), satisfacen un bound T: Eq.
 fn cuenta_iguales<T: Eq>(a: T, b: T, c: T) -> int {
-  var n = 0;
-  if (a.igual(b)) {
-    n = n + 1;
-  }
-  if (a.igual(c)) {
-    n = n + 1;
-  }
-  n
+    var n = 0;
+    if (a.igual(b)) {
+        n = n + 1;
+    }
+    if (a.igual(c)) {
+        n = n + 1;
+    }
+    n
 }
 
 // Funciones de prueba: se ignoran en la ejecución normal; se corren con --test.
@@ -46,19 +46,19 @@ fn color_igualdad() -> bool { Color.Verde.igual(Color.Verde) }
 
 @test
 fn punto_distinto() -> bool {
-  let p = Punto { x: 1, y: 2 };
-  let q = Punto { x: 1, y: 9 };
-  !p.igual(q)
+    let p = Punto { x: 1, y: 2 };
+    let q = Punto { x: 1, y: 9 };
+    !p.igual(q)
 }
 
 @test
 fn forma_con_payload() -> bool { Forma.Rect(3, 4).igual(Forma.Rect(3, 4)) }
 
 fn main() -> int {
-  let rojo = Color.Rojo;
-  // @derive(Show): mostrar() da una representación textual (recursiva en campos/payload).
-  print(rojo.mostrar());  // Color.Rojo
-  print(Punto { x: 3, y: 4 }.mostrar());  // Punto { x: 3, y: 4 }
-  print(Forma.Rect(3, 4).mostrar());  // Forma.Rect(3, 4)
-  cuenta_iguales(rojo, Color.Rojo, Color.Azul)  // a==b (1), a!=c → 1
+    let rojo = Color.Rojo;
+    // @derive(Show): mostrar() da una representación textual (recursiva en campos/payload).
+    print(rojo.mostrar());  // Color.Rojo
+    print(Punto { x: 3, y: 4 }.mostrar());  // Punto { x: 3, y: 4 }
+    print(Forma.Rect(3, 4).mostrar());  // Forma.Rect(3, 4)
+    cuenta_iguales(rojo, Color.Rojo, Color.Azul)  // a==b (1), a!=c → 1
 }

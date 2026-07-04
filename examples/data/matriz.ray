@@ -2,43 +2,43 @@
 // Muestra indexación encadenada m[i][j] y construcción dinámica.
 // Suma de la diagonal principal de una matriz cuadrada.
 fn traza(m: [[int]]) -> int {
-  var s: int = 0;
-  var i: int = 0;
-  while (i < len(m)) {
-    s = s + m[i][i];
-    i = i + 1;
-  }
-  s
+    var s: int = 0;
+    var i: int = 0;
+    while (i < len(m)) {
+        s = s + m[i][i];
+        i = i + 1;
+    }
+    s
 }
 
 // Construye una matriz identidad n x n.
 fn identidad(n: int) -> [[int]] {
-  var m: [[int]] = [];
-  var i: int = 0;
-  while (i < n) {
-    var fila: [int] = [];
-    var j: int = 0;
-    while (j < n) {
-      if (i == j) {
-        push(fila, 1);
-      } else {
-        push(fila, 0);
-      }
-      j = j + 1;
+    var m: [[int]] = [];
+    var i: int = 0;
+    while (i < n) {
+        var fila: [int] = [];
+        var j: int = 0;
+        while (j < n) {
+            if (i == j) {
+                push(fila, 1);
+            } else {
+                push(fila, 0);
+            }
+            j = j + 1;
+        }
+        push(m, fila);
+        i = i + 1;
     }
-    push(m, fila);
-    i = i + 1;
-  }
-  m
+    m
 }
 
 fn main() -> int {
-  let m: [[int]] = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
-  print(m[1][2]);  // 6  (fila 1, columna 2)
-  print(traza(m));  // 15 (1 + 5 + 9)
+    let m: [[int]] = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+    print(m[1][2]);  // 6  (fila 1, columna 2)
+    print(traza(m));  // 15 (1 + 5 + 9)
 
-  let id: [[int]] = identidad(4);
-  print(id);  // [[1, 0, 0, 0], [0, 1, 0, 0], ...]
-  print(traza(id));  // 4
-  0
+    let id: [[int]] = identidad(4);
+    print(id);  // [[1, 0, 0, 0], [0, 1, 0, 0], ...]
+    print(traza(id));  // 4
+    0
 }

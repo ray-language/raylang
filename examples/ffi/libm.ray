@@ -11,27 +11,27 @@
 //
 //   cargo run --quiet -- examples/ffi/libm.ray
 extern "m" {
-  fn sqrt(x: float) -> float;
-  fn pow(base: float, exp: float) -> float;
-  fn cbrt(x: float) -> float;
-  fn hypot(x: float, y: float) -> float;
+    fn sqrt(x: float) -> float;
+    fn pow(base: float, exp: float) -> float;
+    fn cbrt(x: float) -> float;
+    fn hypot(x: float, y: float) -> float;
 }
 
 extern "c" {
-  fn abs(n: int) -> int;
-  fn strlen(s: string) -> int;
-  fn atoi(s: string) -> int;
+    fn abs(n: int) -> int;
+    fn strlen(s: string) -> int;
+    fn atoi(s: string) -> int;
 }
 
 // M41.2: un `string` se marshala a `char*` (NUL-terminado); un `bytes` va por el puntero de su
 // buffer. (El retorno `char*` —getenv, strdup— queda para una fase posterior.)
 fn main() -> int {
-  print(sqrt(2.0));  // 1.4142135623730951
-  print(pow(2.0, 10.0));  // 1024
-  print(cbrt(27.0));  // 3
-  print(hypot(3.0, 4.0));  // 5 (la hipotenusa del 3-4-5)
-  print(abs(0 - 42));  // 42 (libc, int -> int)
-  print(strlen("hola mundo"));  // 10 (string -> char*)
-  print(atoi("42"));  // 42
-  0
+    print(sqrt(2.0));  // 1.4142135623730951
+    print(pow(2.0, 10.0));  // 1024
+    print(cbrt(27.0));  // 3
+    print(hypot(3.0, 4.0));  // 5 (la hipotenusa del 3-4-5)
+    print(abs(0 - 42));  // 42 (libc, int -> int)
+    print(strlen("hola mundo"));  // 10 (string -> char*)
+    print(atoi("42"));  // 42
+    0
 }

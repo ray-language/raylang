@@ -11,133 +11,133 @@ fn mask32() -> int { 4294967295 }  // 0xFFFFFFFF
 // Rotación de 32 bits a la izquierda: `x` se asume ya enmascarado a 32 bits (no negativo), así que
 // `x >> (32 - n)` es un desplazamiento lógico (relleno con ceros).
 fn rotl(x: int, n: int) -> int {
-  (x << n | x >> 32 - n) & mask32()
+    (x << n | x >> 32 - n) & mask32()
 }
 
 // Rellena el mensaje según SHA-1 y lo devuelve como `[int]` de octetos: el mensaje, un `0x80`, ceros
 // hasta que la longitud ≡ 56 (mod 64), y 8 octetos big-endian con la longitud en bits.
 fn pad(msg: bytes) -> [int] {
-  let n = len(msg);
-  var m: [int] = [];
-  var i = 0;
-  while (i < n) {
-    push(m, msg[i]);
-    i = i + 1;
-  }
-  push(m, 128);  // 0x80: el bit '1' de cierre seguido de ceros
-  while (len(m) % 64 != 56) {
-    push(m, 0);
-  }
-  let bitlen = n * 8;
-  var k = 7;
-  while (k >= 0) {
-    push(m, bitlen >> k * 8 & 255);
-    k = k - 1;
-  }
-  m
+    let n = len(msg);
+    var m: [int] = [];
+    var i = 0;
+    while (i < n) {
+        push(m, msg[i]);
+        i = i + 1;
+    }
+    push(m, 128);  // 0x80: el bit '1' de cierre seguido de ceros
+    while (len(m) % 64 != 56) {
+        push(m, 0);
+    }
+    let bitlen = n * 8;
+    var k = 7;
+    while (k >= 0) {
+        push(m, bitlen >> k * 8 & 255);
+        k = k - 1;
+    }
+    m
 }
 
 // Añade los 4 octetos big-endian de la palabra de 32 bits `w` al final de `out` (semántica de
 // referencia: muta el arreglo del llamador).
 fn append_word(out: [int], w: int) {
-  push(out, w >> 24 & 255);
-  push(out, w >> 16 & 255);
-  push(out, w >> 8 & 255);
-  push(out, w & 255);
+    push(out, w >> 24 & 255);
+    push(out, w >> 16 & 255);
+    push(out, w >> 8 & 255);
+    push(out, w & 255);
 }
 
 pub fn sha1(msg: bytes) -> [int] {
-  let m = pad(msg);
-  var h0 = 1732584193;  // 0x67452301
-  var h1 = 4023233417;  // 0xEFCDAB89
-  var h2 = 2562383102;  // 0x98BADCFE
-  var h3 = 271733878;  // 0x10325476
-  var h4 = 3285377520;  // 0xC3D2E1F0
-  let total = len(m);
-  var chunk = 0;
-  while (chunk < total) {
-    // 16 palabras big-endian del bloque de 64 octetos.
-    var w: [int] = [];
-    var j = 0;
-    while (j < 16) {
-      let base = chunk + j * 4;
-      let word = m[base] << 24 | m[base + 1] << 16 | m[base + 2] << 8 | m[base + 3];
-      push(w, word & mask32());
-      j = j + 1;
-    }
-    // Extiende a 80 palabras.
-    var t = 16;
-    while (t < 80) {
-      let x = w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16];
-      push(w, rotl(x, 1));
-      t = t + 1;
-    }
-    var a = h0;
-    var b = h1;
-    var c = h2;
-    var d = h3;
-    var e = h4;
-    var idx = 0;
-    while (idx < 80) {
-      var f = 0;
-      var kk = 0;
-      if (idx < 20) {
-        f = b & c | ~b & mask32() & d;
-        kk = 1518500249;  // 0x5A827999
-      } else {
-        if (idx < 40) {
-          f = b ^ c ^ d;
-          kk = 1859775393;  // 0x6ED9EBA1
-        } else {
-          if (idx < 60) {
-            f = b & c | b & d | c & d;
-            kk = 2400959708;  // 0x8F1BBCDC
-          } else {
-            f = b ^ c ^ d;
-            kk = 3395469782;  // 0xCA62C1D6
-          }
+    let m = pad(msg);
+    var h0 = 1732584193;  // 0x67452301
+    var h1 = 4023233417;  // 0xEFCDAB89
+    var h2 = 2562383102;  // 0x98BADCFE
+    var h3 = 271733878;  // 0x10325476
+    var h4 = 3285377520;  // 0xC3D2E1F0
+    let total = len(m);
+    var chunk = 0;
+    while (chunk < total) {
+        // 16 palabras big-endian del bloque de 64 octetos.
+        var w: [int] = [];
+        var j = 0;
+        while (j < 16) {
+            let base = chunk + j * 4;
+            let word = m[base] << 24 | m[base + 1] << 16 | m[base + 2] << 8 | m[base + 3];
+            push(w, word & mask32());
+            j = j + 1;
         }
-      }
-      let tmp = rotl(a, 5) + f + e + kk + w[idx] & mask32();
-      e = d;
-      d = c;
-      c = rotl(b, 30);
-      b = a;
-      a = tmp;
-      idx = idx + 1;
+        // Extiende a 80 palabras.
+        var t = 16;
+        while (t < 80) {
+            let x = w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16];
+            push(w, rotl(x, 1));
+            t = t + 1;
+        }
+        var a = h0;
+        var b = h1;
+        var c = h2;
+        var d = h3;
+        var e = h4;
+        var idx = 0;
+        while (idx < 80) {
+            var f = 0;
+            var kk = 0;
+            if (idx < 20) {
+                f = b & c | ~b & mask32() & d;
+                kk = 1518500249;  // 0x5A827999
+            } else {
+                if (idx < 40) {
+                    f = b ^ c ^ d;
+                    kk = 1859775393;  // 0x6ED9EBA1
+                } else {
+                    if (idx < 60) {
+                        f = b & c | b & d | c & d;
+                        kk = 2400959708;  // 0x8F1BBCDC
+                    } else {
+                        f = b ^ c ^ d;
+                        kk = 3395469782;  // 0xCA62C1D6
+                    }
+                }
+            }
+            let tmp = rotl(a, 5) + f + e + kk + w[idx] & mask32();
+            e = d;
+            d = c;
+            c = rotl(b, 30);
+            b = a;
+            a = tmp;
+            idx = idx + 1;
+        }
+        h0 = h0 + a & mask32();
+        h1 = h1 + b & mask32();
+        h2 = h2 + c & mask32();
+        h3 = h3 + d & mask32();
+        h4 = h4 + e & mask32();
+        chunk = chunk + 64;
     }
-    h0 = h0 + a & mask32();
-    h1 = h1 + b & mask32();
-    h2 = h2 + c & mask32();
-    h3 = h3 + d & mask32();
-    h4 = h4 + e & mask32();
-    chunk = chunk + 64;
-  }
-  var out: [int] = [];
-  append_word(out, h0);
-  append_word(out, h1);
-  append_word(out, h2);
-  append_word(out, h3);
-  append_word(out, h4);
-  out
+    var out: [int] = [];
+    append_word(out, h0);
+    append_word(out, h1);
+    append_word(out, h2);
+    append_word(out, h3);
+    append_word(out, h4);
+    out
 }
 
 // El dígito hexadecimal (minúscula) del valor `d` (0..15).
 fn hex_digit(d: int) -> string {
-  let digits = "0123456789abcdef";
-  to_string(digits[d])
+    let digits = "0123456789abcdef";
+    to_string(digits[d])
 }
 
 // El digest en hexadecimal (40 caracteres), la forma habitual de mostrar un SHA-1.
 pub fn sha1_hex(msg: bytes) -> string {
-  let d = sha1(msg);
-  var s = "";
-  var i = 0;
-  while (i < len(d)) {
-    let octet = d[i];
-    s = s + hex_digit(octet >> 4 & 15);
-    s = s + hex_digit(octet & 15);
-    i = i + 1;
-  }
-  s
+    let d = sha1(msg);
+    var s = "";
+    var i = 0;
+    while (i < len(d)) {
+        let octet = d[i];
+        s = s + hex_digit(octet >> 4 & 15);
+        s = s + hex_digit(octet & 15);
+        i = i + 1;
+    }
+    s
 }

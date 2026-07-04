@@ -3,48 +3,48 @@
 // con un campo 'tope' que marca el largo lógico: empujar crece el arreglo
 // (o reescribe una ranura ya usada), sacar solo retrocede el tope.
 struct Pila {
-  datos: [int],
-  tope: int,
+    datos: [int],
+    tope: int,
 }
 
 fn nueva() -> Pila {
-  // El [] vacío necesita un tipo; se lo damos con un 'let' anotado.
-  let vacio: [int] = [];
-  Pila { datos: vacio, tope: 0 }
+    // El [] vacío necesita un tipo; se lo damos con un 'let' anotado.
+    let vacio: [int] = [];
+    Pila { datos: vacio, tope: 0 }
 }
 
 fn empujar(p: Pila, x: int) {
-  if (p.tope < len(p.datos)) {
-    p.datos[p.tope] = x;  // reusar ranura existente
-  } else {
-    push(p.datos, x);  // crecer el arreglo
-  }
-  p.tope = p.tope + 1;
+    if (p.tope < len(p.datos)) {
+        p.datos[p.tope] = x;  // reusar ranura existente
+    } else {
+        push(p.datos, x);  // crecer el arreglo
+    }
+    p.tope = p.tope + 1;
 }
 
 // Devuelve el tope y lo quita (asume pila no vacía).
 fn sacar(p: Pila) -> int {
-  p.tope = p.tope - 1;
-  p.datos[p.tope]
+    p.tope = p.tope - 1;
+    p.datos[p.tope]
 }
 
 fn vacia(p: Pila) -> bool {
-  p.tope == 0
+    p.tope == 0
 }
 
 fn main() -> int {
-  var p: Pila = nueva();
-  empujar(p, 10);
-  empujar(p, 20);
-  empujar(p, 30);
-  print(p.tope);  // 3
+    var p: Pila = nueva();
+    empujar(p, 10);
+    empujar(p, 20);
+    empujar(p, 30);
+    print(p.tope);  // 3
 
-  print(sacar(p));  // 30
-  print(sacar(p));  // 20
-  print(p.tope);  // 1
-  print(vacia(p));  // false
+    print(sacar(p));  // 30
+    print(sacar(p));  // 20
+    print(p.tope);  // 1
+    print(vacia(p));  // false
 
-  print(sacar(p));  // 10
-  print(vacia(p));  // true
-  0
+    print(sacar(p));  // 10
+    print(vacia(p));  // true
+    0
 }

@@ -6,7 +6,7 @@
 import geo/util;
 
 pub struct Circulo {
-  radio: int,
+    radio: int,
 }
 
 // Usa el submódulo importado por ruta: util.cuadrado(...).

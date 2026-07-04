@@ -2,34 +2,34 @@
 // (o un comodín), así que no se puede olvidar un caso.
 // (M5 — corre igual con el intérprete y con la VM: `--vm`.)
 enum Figura {
-  Circulo(float),
-  Rect(float, float),
-  Punto,
+    Circulo(float),
+    Rect(float, float),
+    Punto,
 }
 
 // `area` liga el payload de cada variante a nombres y calcula con ellos.
 fn area(f: Figura) -> float {
-  match (f) {
-    Figura.Circulo(r) => 3.14159 * r * r,
-    Figura.Rect(w, h) => w * h,
-    Figura.Punto => 0.0,
-  }
+    match (f) {
+        Figura.Circulo(r) => 3.14159 * r * r,
+        Figura.Rect(w, h) => w * h,
+        Figura.Punto => 0.0,
+    }
 }
 
 // El comodín `_` dentro de una variante descarta su payload; el `_` suelto es un
 // catch-all que cubre todas las variantes restantes.
 fn es_curva(f: Figura) -> bool {
-  match (f) {
-    Figura.Circulo(_) => true,
-    _ => false,  // Rect y Punto
-  }
+    match (f) {
+        Figura.Circulo(_) => true,
+        _ => false,  // Rect y Punto
+    }
 }
 
 fn main() {
-  print(area(Figura.Circulo(2.0)));  // 12.56636
-  print(area(Figura.Rect(3.0, 4.0)));  // 12
-  print(area(Figura.Punto));  // 0
+    print(area(Figura.Circulo(2.0)));  // 12.56636
+    print(area(Figura.Rect(3.0, 4.0)));  // 12
+    print(area(Figura.Punto));  // 0
 
-  print(es_curva(Figura.Circulo(1.0)));  // true
-  print(es_curva(Figura.Rect(1.0, 1.0)));  // false
+    print(es_curva(Figura.Circulo(1.0)));  // true
+    print(es_curva(Figura.Rect(1.0, 1.0)));  // false
 }

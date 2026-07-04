@@ -16,6 +16,6 @@
 import geo;
 
 fn main() -> int {
-  let c = geo.Circulo { radio: 4 };  // tipo reexportado por la cápsula
-  geo.area(c)  // 3 * 16 = 48  -> código de salida
+    let c = geo.Circulo { radio: 4 };  // tipo reexportado por la cápsula
+    geo.area(c)  // 3 * 16 = 48  -> código de salida
 }

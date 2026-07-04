@@ -4,33 +4,33 @@
 from oauth2 import Token, client_credentials, authorize_url, bearer_header;
 
 fn main() -> int {
-  let a = args();
-  var port = 8080;
-  if (len(a) > 0) {
-    match (parse_int(a[0])) {
-      Option.Some(p) => {
-        port = p;
-      },
-      Option.None => { },
+    let a = args();
+    var port = 8080;
+    if (len(a) > 0) {
+        match (parse_int(a[0])) {
+            Option.Some(p) => {
+                port = p;
+            },
+            Option.None => { },
+        }
     }
-  }
-  let token_url = "http://127.0.0.1:" + to_string(port) + "/token";
+    let token_url = "http://127.0.0.1:" + to_string(port) + "/token";
 
-  // URL de autorización (flujo de código) — pura, no toca la red.
-  print(authorize_url("https://auth.example.com/authorize", "mi-cliente", "https://app.example.com/callback", "read write", "xyz123"));
+    // URL de autorización (flujo de código) — pura, no toca la red.
+    print(authorize_url("https://auth.example.com/authorize", "mi-cliente", "https://app.example.com/callback", "read write", "xyz123"));
 
-  // Grant client_credentials contra el token endpoint.
-  match (client_credentials(token_url, "mi-cliente", "secreto", "read")) {
-    Result.Err(e) => {
-      eprint(e);
-      1
-    },
-    Result.Ok(t) => {
-      print("access_token=" + t.access_token);
-      print("token_type=" + t.token_type);
-      print("expires_in=" + to_string(t.expires_in));
-      print("Authorization: " + bearer_header(t));
-      0
-    },
-  }
+    // Grant client_credentials contra el token endpoint.
+    match (client_credentials(token_url, "mi-cliente", "secreto", "read")) {
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
+        Result.Ok(t) => {
+            print("access_token=" + t.access_token);
+            print("token_type=" + t.token_type);
+            print("expires_in=" + to_string(t.expires_in));
+            print("Authorization: " + bearer_header(t));
+            0
+        },
+    }
 }

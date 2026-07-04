@@ -7,161 +7,161 @@ fn alphabet() -> string { "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0
 
 // El carácter base64 del valor de 6 bits `idx` (0..63).
 fn enc_char(idx: int) -> string {
-  let a = alphabet();
-  to_string(a[idx])
+    let a = alphabet();
+    to_string(a[idx])
 }
 
 pub fn base64(data: [int]) -> string {
-  let n = len(data);
-  var out = "";
-  // Bloques completos de 3 octetos → 4 caracteres.
-  var i = 0;
-  while (i + 3 <= n) {
-    let b0 = data[i] & 255;
-    let b1 = data[i + 1] & 255;
-    let b2 = data[i + 2] & 255;
-    let triple = b0 << 16 | b1 << 8 | b2;
-    out = out + enc_char(triple >> 18 & 63);
-    out = out + enc_char(triple >> 12 & 63);
-    out = out + enc_char(triple >> 6 & 63);
-    out = out + enc_char(triple & 63);
-    i = i + 3;
-  }
-  // Cola: 1 o 2 octetos sobrantes se rellenan con '='.
-  let rem = n - i;
-  if (rem == 1) {
-    let b0 = data[i] & 255;
-    let triple = b0 << 16;
-    out = out + enc_char(triple >> 18 & 63);
-    out = out + enc_char(triple >> 12 & 63);
-    out = out + "==";
-  } else {
-    if (rem == 2) {
-      let b0 = data[i] & 255;
-      let b1 = data[i + 1] & 255;
-      let triple = b0 << 16 | b1 << 8;
-      out = out + enc_char(triple >> 18 & 63);
-      out = out + enc_char(triple >> 12 & 63);
-      out = out + enc_char(triple >> 6 & 63);
-      out = out + "=";
+    let n = len(data);
+    var out = "";
+    // Bloques completos de 3 octetos → 4 caracteres.
+    var i = 0;
+    while (i + 3 <= n) {
+        let b0 = data[i] & 255;
+        let b1 = data[i + 1] & 255;
+        let b2 = data[i + 2] & 255;
+        let triple = b0 << 16 | b1 << 8 | b2;
+        out = out + enc_char(triple >> 18 & 63);
+        out = out + enc_char(triple >> 12 & 63);
+        out = out + enc_char(triple >> 6 & 63);
+        out = out + enc_char(triple & 63);
+        i = i + 3;
     }
-  }
-  out
+    // Cola: 1 o 2 octetos sobrantes se rellenan con '='.
+    let rem = n - i;
+    if (rem == 1) {
+        let b0 = data[i] & 255;
+        let triple = b0 << 16;
+        out = out + enc_char(triple >> 18 & 63);
+        out = out + enc_char(triple >> 12 & 63);
+        out = out + "==";
+    } else {
+        if (rem == 2) {
+            let b0 = data[i] & 255;
+            let b1 = data[i + 1] & 255;
+            let triple = b0 << 16 | b1 << 8;
+            out = out + enc_char(triple >> 18 & 63);
+            out = out + enc_char(triple >> 12 & 63);
+            out = out + enc_char(triple >> 6 & 63);
+            out = out + "=";
+        }
+    }
+    out
 }
 
 // --- base64url (RFC 4648 §5): alfabeto URL-safe (`-`/`_` en vez de `+`/`/`) y SIN relleno `=`. ---
 // Es la codificación que usan los JSON Web Tokens (cada segmento es base64url sin padding).
 // Reemplaza los caracteres no-URL-safe y quita el relleno de una cadena base64 estándar.
 fn to_url(s: string) -> string {
-  var out = "";
-  var i = 0;
-  while (i < len(s)) {
-    let c = s[i];
-    if (c == '+') {
-      out = out + "-";
-    } else {
-      if (c == '/') {
-        out = out + "_";
-      } else {
-        if (c == '=') {
-          out = out + "";
+    var out = "";
+    var i = 0;
+    while (i < len(s)) {
+        let c = s[i];
+        if (c == '+') {
+            out = out + "-";
         } else {
-          out = out + to_string(c);
+            if (c == '/') {
+                out = out + "_";
+            } else {
+                if (c == '=') {
+                    out = out + "";
+                } else {
+                    out = out + to_string(c);
+                }
+            }
         }
-      }
+        i = i + 1;
     }
-    i = i + 1;
-  }
-  out
+    out
 }
 
 // Octetos → base64url (sin relleno). Se reusa `base64` y se transforma el alfabeto.
 pub fn base64url(data: [int]) -> string {
-  to_url(base64(data))
+    to_url(base64(data))
 }
 
 // El valor de 6 bits (0..63) de un carácter base64url, o -1 si no pertenece al alfabeto.
 fn dec_char(c: char) -> int {
-  if (c == '-') {
-    62
-  } else {
-    if (c == '_') {
-      63
+    if (c == '-') {
+        62
     } else {
-      // El alfabeto estándar comparte A-Z/a-z/0-9 con base64url.
-      match (index_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", to_string(c))) {
-        Option.Some(i) => i,
-        Option.None => 0 - 1,
-      }
+        if (c == '_') {
+            63
+        } else {
+            // El alfabeto estándar comparte A-Z/a-z/0-9 con base64url.
+            match (index_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", to_string(c))) {
+                Option.Some(i) => i,
+                Option.None => 0 - 1,
+            }
+        }
     }
-  }
 }
 
 // El valor de 6 bits de un carácter base64 ESTÁNDAR (`+`/`/`), o -1 si no pertenece.
 fn dec_char_std(c: char) -> int {
-  if (c == '+') {
-    62
-  } else {
-    if (c == '/') {
-      63
+    if (c == '+') {
+        62
     } else {
-      match (index_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", to_string(c))) {
-        Option.Some(i) => i,
-        Option.None => 0 - 1,
-      }
+        if (c == '/') {
+            63
+        } else {
+            match (index_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", to_string(c))) {
+                Option.Some(i) => i,
+                Option.None => 0 - 1,
+            }
+        }
     }
-  }
 }
 
 // base64 estándar (con relleno `=`) → octetos. `Err` si hay un carácter fuera del alfabeto. El relleno
 // `=` marca el fin de los datos. Lo usa SCRAM/PostgreSQL (M32.1) para el salt y la firma del servidor.
 pub fn base64_decode(s: string) -> Result<[int], string> {
-  let n = len(s);
-  var out: [int] = [];
-  var acc = 0;
-  var nbits = 0;
-  var i = 0;
-  while (i < n) {
-    let c = s[i];
-    if (c == '=') {
-      i = n;  // relleno: fin de los datos
-    } else {
-      let v = dec_char_std(c);
-      if (v < 0) {
-        return Result.Err("carácter base64 inválido");
-      }
-      acc = acc << 6 | v;
-      nbits = nbits + 6;
-      if (nbits >= 8) {
-        nbits = nbits - 8;
-        push(out, acc >> nbits & 255);
-      }
-      i = i + 1;
+    let n = len(s);
+    var out: [int] = [];
+    var acc = 0;
+    var nbits = 0;
+    var i = 0;
+    while (i < n) {
+        let c = s[i];
+        if (c == '=') {
+            i = n;  // relleno: fin de los datos
+        } else {
+            let v = dec_char_std(c);
+            if (v < 0) {
+                return Result.Err("carácter base64 inválido");
+            }
+            acc = acc << 6 | v;
+            nbits = nbits + 6;
+            if (nbits >= 8) {
+                nbits = nbits - 8;
+                push(out, acc >> nbits & 255);
+            }
+            i = i + 1;
+        }
     }
-  }
-  Result.Ok(out)
+    Result.Ok(out)
 }
 
 // base64url (sin relleno) → octetos. `Err` si hay un carácter fuera del alfabeto. Decodifica grupos
 // de 4 caracteres (24 bits → 3 octetos); una cola de 2 caracteres da 1 octeto y de 3 da 2 octetos.
 pub fn base64url_decode(s: string) -> Result<[int], string> {
-  let n = len(s);
-  var out: [int] = [];
-  var acc = 0;  // acumulador de bits
-  var nbits = 0;  // bits válidos en el acumulador
-  var i = 0;
-  while (i < n) {
-    let v = dec_char(s[i]);
-    if (v < 0) {
-      return Result.Err("carácter base64url inválido");
+    let n = len(s);
+    var out: [int] = [];
+    var acc = 0;  // acumulador de bits
+    var nbits = 0;  // bits válidos en el acumulador
+    var i = 0;
+    while (i < n) {
+        let v = dec_char(s[i]);
+        if (v < 0) {
+            return Result.Err("carácter base64url inválido");
+        }
+        acc = acc << 6 | v;
+        nbits = nbits + 6;
+        if (nbits >= 8) {
+            nbits = nbits - 8;
+            push(out, acc >> nbits & 255);
+        }
+        i = i + 1;
     }
-    acc = acc << 6 | v;
-    nbits = nbits + 6;
-    if (nbits >= 8) {
-      nbits = nbits - 8;
-      push(out, acc >> nbits & 255);
-    }
-    i = i + 1;
-  }
-  Result.Ok(out)
+    Result.Ok(out)
 }

@@ -3,45 +3,45 @@
 // Las operaciones llevan prefijo `set_` (por UFCS, `s.set_add(x)` también funciona).
 @derive(Hash, Eq)
 struct Ciudad {
-  nombre: string,
-  pais: string,
+    nombre: string,
+    pais: string,
 }
 
 fn main() -> int {
-  // Un conjunto de enteros: deduplica automáticamente.
-  let visto: Set<int> = set_new();
-  let nums = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
-  var i = 0;
-  while (i < len(nums)) {
-    set_add(visto, nums[i]);
-    i = i + 1;
-  }
-  print(set_size(visto));  // 7 (3,1,4,5,9,2,6 — sin repetir)
-  print(set_has(visto, 4));  // true
-  print(set_has(visto, 7));  // false
+    // Un conjunto de enteros: deduplica automáticamente.
+    let visto: Set<int> = set_new();
+    let nums = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
+    var i = 0;
+    while (i < len(nums)) {
+        set_add(visto, nums[i]);
+        i = i + 1;
+    }
+    print(set_size(visto));  // 7 (3,1,4,5,9,2,6 — sin repetir)
+    print(set_has(visto, 4));  // true
+    print(set_has(visto, 7));  // false
 
-  // Quitar un elemento.
-  set_remove(visto, 4);
-  print(set_has(visto, 4));  // false
-  print(set_size(visto));  // 6
+    // Quitar un elemento.
+    set_remove(visto, 4);
+    print(set_has(visto, 4));  // false
+    print(set_size(visto));  // 6
 
-  // Un conjunto de un tipo de usuario: la igualdad y el hash vienen de `@derive`.
-  let ciudades: Set<Ciudad> = set_new();
-  ciudades.set_add(Ciudad { nombre: "Quito", pais: "EC" });
-  ciudades.set_add(Ciudad { nombre: "Quito", pais: "EC" });  // igual → no se añade
-  ciudades.set_add(Ciudad { nombre: "Lima", pais: "PE" });
-  print(set_size(ciudades));  // 2
-  print(ciudades.set_has(Ciudad { nombre: "Lima", pais: "PE" }));  // true
+    // Un conjunto de un tipo de usuario: la igualdad y el hash vienen de `@derive`.
+    let ciudades: Set<Ciudad> = set_new();
+    ciudades.set_add(Ciudad { nombre: "Quito", pais: "EC" });
+    ciudades.set_add(Ciudad { nombre: "Quito", pais: "EC" });  // igual → no se añade
+    ciudades.set_add(Ciudad { nombre: "Lima", pais: "PE" });
+    print(set_size(ciudades));  // 2
+    print(ciudades.set_has(Ciudad { nombre: "Lima", pais: "PE" }));  // true
 
-  // Recorrer los elementos (orden por bucket, no especificado): sumamos los enteros restantes.
-  var total = 0;
-  let items = set_items(visto);
-  var j = 0;
-  while (j < len(items)) {
-    total = total + items[j];
-    j = j + 1;
-  }
-  print(total);  // 3+1+5+9+2+6 = 26
+    // Recorrer los elementos (orden por bucket, no especificado): sumamos los enteros restantes.
+    var total = 0;
+    let items = set_items(visto);
+    var j = 0;
+    while (j < len(items)) {
+        total = total + items[j];
+        j = j + 1;
+    }
+    print(total);  // 3+1+5+9+2+6 = 26
 
-  0
+    0
 }

@@ -4,26 +4,26 @@ from grpc_client import grpc_call, GrpcResponse;
 from protobuf import writer, write_string, finish, parse, get_string;
 
 fn main() {
-  let a = args();
-  let host = a[0];
-  match (parse_int(a[1])) {
-    Option.Some(port) => {
-      // Petición: un mensaje protobuf con el campo 1 (string) = "raylang".
-      let w = writer();
-      write_string(w, 1, "raylang");
-      let req = finish(w);
+    let a = args();
+    let host = a[0];
+    match (parse_int(a[1])) {
+        Option.Some(port) => {
+            // Petición: un mensaje protobuf con el campo 1 (string) = "raylang".
+            let w = writer();
+            write_string(w, 1, "raylang");
+            let req = finish(w);
 
-      match (grpc_call(host, port, "/greet.Greeter/Hello", req)) {
-        Result.Ok(resp) => {
-          print("grpc-status: " + to_string(resp.grpc_status));
-          match (parse(resp.message)) {
-            Result.Ok(fields) => print("greeting: " + get_string(fields, 1)),
-            Result.Err(e) => print("parse err: " + e),
-          }
+            match (grpc_call(host, port, "/greet.Greeter/Hello", req)) {
+                Result.Ok(resp) => {
+                    print("grpc-status: " + to_string(resp.grpc_status));
+                    match (parse(resp.message)) {
+                        Result.Ok(fields) => print("greeting: " + get_string(fields, 1)),
+                        Result.Err(e) => print("parse err: " + e),
+                    }
+                },
+                Result.Err(e) => print("error: " + e),
+            }
         },
-        Result.Err(e) => print("error: " + e),
-      }
-    },
-    Option.None => print("puerto inválido"),
-  }
+        Option.None => print("puerto inválido"),
+    }
 }

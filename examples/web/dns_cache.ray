@@ -8,68 +8,68 @@
 from dns import Record, DnsResult, query_full;
 
 pub struct Cache {
-  server: string,
-  port: int,
-  keys: [string],
-  records: [[Record]],
-  expiry: [int],
-  hits: int,
-  misses: int,
+    server: string,
+    port: int,
+    keys: [string],
+    records: [[Record]],
+    expiry: [int],
+    hits: int,
+    misses: int,
 }
 
 // "qtype:nombre"
 // registros cacheados por clave
 // instante de expiración (ms epoch) por clave
 pub fn new_cache(server: string, port: int) -> Cache {
-  Cache { server: server, port: port, keys: [], records: [], expiry: [], hits: 0, misses: 0 }
+    Cache { server: server, port: port, keys: [], records: [], expiry: [], hits: 0, misses: 0 }
 }
 
 fn find_key(c: Cache, key: string) -> int {
-  var i = 0;
-  while (i < len(c.keys)) {
-    if (c.keys[i] == key) {
-      return i;
+    var i = 0;
+    while (i < len(c.keys)) {
+        if (c.keys[i] == key) {
+            return i;
+        }
+        i = i + 1;
     }
-    i = i + 1;
-  }
-  0 - 1
+    0 - 1
 }
 
 // Resuelve `name`/`qtype` usando la caché: devuelve los registros cacheados si no han caducado, o
 // consulta el servidor y los guarda con expiración `now() + ttl`.
 pub fn resolve(c: Cache, name: string, qtype: int) -> Result<[Record], string> {
-  let key = to_string(qtype) + ":" + name;
-  let idx = find_key(c, key);
-  if (idx >= 0 && now() < c.expiry[idx]) {
-    c.hits = c.hits + 1;
-    return Result.Ok(c.records[idx]);
-  }
-  // Fallo de caché o entrada caducada → consultar y (re)guardar.
-  match (query_full(c.server, c.port, name, qtype)) {
-    Result.Err(e) => Result.Err(e),
-    Result.Ok(res) => {
-      c.misses = c.misses + 1;
-      let exp = now() + res.ttl * 1000;
-      if (idx >= 0) {
-        c.records[idx] = res.records;
-        c.expiry[idx] = exp;
-      } else {
-        push(c.keys, key);
-        push(c.records, res.records);
-        push(c.expiry, exp);
-      }
-      Result.Ok(res.records)
-    },
-  }
+    let key = to_string(qtype) + ":" + name;
+    let idx = find_key(c, key);
+    if (idx >= 0 && now() < c.expiry[idx]) {
+        c.hits = c.hits + 1;
+        return Result.Ok(c.records[idx]);
+    }
+    // Fallo de caché o entrada caducada → consultar y (re)guardar.
+    match (query_full(c.server, c.port, name, qtype)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(res) => {
+            c.misses = c.misses + 1;
+            let exp = now() + res.ttl * 1000;
+            if (idx >= 0) {
+                c.records[idx] = res.records;
+                c.expiry[idx] = exp;
+            } else {
+                push(c.keys, key);
+                push(c.records, res.records);
+                push(c.expiry, exp);
+            }
+            Result.Ok(res.records)
+        },
+    }
 }
 
 // Vacía la caché (descarta todas las entradas). Las asignaciones no propagan el tipo del campo a `[]`,
 // así que se usan variables anotadas.
 pub fn clear(c: Cache) {
-  var ks: [string] = [];
-  var rs: [[Record]] = [];
-  var es: [int] = [];
-  c.keys = ks;
-  c.records = rs;
-  c.expiry = es;
+    var ks: [string] = [];
+    var rs: [[Record]] = [];
+    var es: [int] = [];
+    c.keys = ks;
+    c.records = rs;
+    c.expiry = es;
 }

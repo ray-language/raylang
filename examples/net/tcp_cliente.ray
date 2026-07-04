@@ -7,46 +7,46 @@
 // Necesita red al ejecutarlo (no es determinista → no entra al oráculo ni a los tests).
 // Lee del socket hasta que el servidor cierra (acumulando los trozos).
 fn leer_todo(h: int) -> string {
-  var acc: string = "";
-  var seguir: bool = true;
-  while (seguir) {
-    match (socket_read(h)) {
-      Result.Ok(trozo) => {
-        if (len(trozo) == 0) {
-          seguir = false;  // EOF: el servidor cerró
-        } else {
-          acc = acc + trozo;
+    var acc: string = "";
+    var seguir: bool = true;
+    while (seguir) {
+        match (socket_read(h)) {
+            Result.Ok(trozo) => {
+                if (len(trozo) == 0) {
+                    seguir = false;  // EOF: el servidor cerró
+                } else {
+                    acc = acc + trozo;
+                }
+            },
+            Result.Err(e) => {
+                eprint("error de lectura: " + e);
+                seguir = false;
+            },
         }
-      },
-      Result.Err(e) => {
-        eprint("error de lectura: " + e);
-        seguir = false;
-      },
     }
-  }
-  acc
+    acc
 }
 
 fn main() -> int {
-  match (tcp_connect("example.com", 80)) {
-    Result.Ok(h) => {
-      // Petición HTTP/1.1 mínima (Connection: close → el servidor cierra al terminar).
-      let req: string = "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
-      match (socket_write(h, req)) {
-        Result.Ok(_) => {
-          let resp: string = leer_todo(h);
-          // Imprime solo la primera línea (la línea de estado), p. ej. "HTTP/1.1 200 OK".
-          let lineas: [string] = resp.split("\r\n");
-          print(lineas[0]);
+    match (tcp_connect("example.com", 80)) {
+        Result.Ok(h) => {
+            // Petición HTTP/1.1 mínima (Connection: close → el servidor cierra al terminar).
+            let req: string = "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
+            match (socket_write(h, req)) {
+                Result.Ok(_) => {
+                    let resp: string = leer_todo(h);
+                    // Imprime solo la primera línea (la línea de estado), p. ej. "HTTP/1.1 200 OK".
+                    let lineas: [string] = resp.split("\r\n");
+                    print(lineas[0]);
+                },
+                Result.Err(e) => eprint("error de escritura: " + e),
+            }
+            close(h);
+            0
         },
-        Result.Err(e) => eprint("error de escritura: " + e),
-      }
-      close(h);
-      0
-    },
-    Result.Err(e) => {
-      eprint("no se pudo conectar: " + e);
-      1
-    },
-  }
+        Result.Err(e) => {
+            eprint("no se pudo conectar: " + e);
+            1
+        },
+    }
 }

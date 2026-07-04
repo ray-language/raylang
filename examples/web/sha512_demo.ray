@@ -3,17 +3,17 @@
 from sha512 import sha512_hex;
 
 fn str_bytes(s: string) -> [int] {
-  var b: [int] = [];
-  for c in s {
-    push(b, c as int);
-  }
-  b
+    var b: [int] = [];
+    for c in s {
+        push(b, c as int);
+    }
+    b
 }
 
 fn main() {
-  print(sha512_hex(str_bytes("abc")));
-  // esperado: ddaf35a1...54ca49f
-  print(sha512_hex(str_bytes("")));
-  // esperado: cf83e135...927da3e
-  print(sha512_hex(str_bytes("The quick brown fox jumps over the lazy dog")));
+    print(sha512_hex(str_bytes("abc")));
+    // esperado: ddaf35a1...54ca49f
+    print(sha512_hex(str_bytes("")));
+    // esperado: cf83e135...927da3e
+    print(sha512_hex(str_bytes("The quick brown fox jumps over the lazy dog")));
 }

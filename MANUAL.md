@@ -51,8 +51,8 @@ Un programa es un archivo `.ray` con una función `main`. `main` devuelve `int` 
 
 ```rust
 fn main() -> int {
-  print("hola, raylang");
-  0
+    print("hola, raylang");
+    0
 }
 ```
 
@@ -81,12 +81,12 @@ raylang **no tiene `null`**: la ausencia se modela con `Option` (§6).
 
 ```rust
 fn main() -> int {
-  let x = 10;          // inmutable; tipo inferido (int)
-  var total = 0;       // mutable
-  total = total + x;
-  let y: float = 2.5;  // con anotación explícita
-  print(total);
-  0
+    let x = 10;          // inmutable; tipo inferido (int)
+    var total = 0;       // mutable
+    total = total + x;
+    let y: float = 2.5;  // con anotación explícita
+    print(total);
+    0
 }
 ```
 
@@ -108,9 +108,9 @@ opcional (útil para salir antes).
 fn cuadrado(x: int) -> int { x * x }          // retorno implícito
 
 fn signo(x: int) -> int {
-  if (x > 0) { return 1; }                  // retorno explícito temprano
-  if (x < 0) { return 0 - 1; }
-  0
+    if (x > 0) { return 1; }                  // retorno explícito temprano
+    if (x < 0) { return 0 - 1; }
+    0
 }
 ```
 
@@ -148,8 +148,8 @@ va **entre paréntesis**. Para despachar sobre **primitivos** (int/bool/string) 
 
 ```rust
 let etiqueta = match (buscar(k)) {      // match: solo sobre enums
-  Option.Some(v) => "encontrado",
-  Option.None => "no está",
+    Option.Some(v) => "encontrado",
+    Option.None => "no está",
 };
 
 let clase = if (n == 0) { "cero" } else if (n < 0) { "negativo" } else { "positivo" };  // int → if/else
@@ -184,10 +184,10 @@ let (a, b) = (10, 20);         // destructuring
 struct Punto { x: int, y: int }
 
 fn main() -> int {
-  var p = Punto { x: 1, y: 2 };
-  p.x = 10;                  // semántica de referencia (mutable)
-  print(p.x);
-  0
+    var p = Punto { x: 1, y: 2 };
+    p.x = 10;                  // semántica de referencia (mutable)
+    print(p.x);
+    0
 }
 ```
 
@@ -197,11 +197,11 @@ fn main() -> int {
 enum Figura { Circulo(float), Rect(float, float), Nada }
 
 fn area(f: Figura) -> float {
-  match (f) {
-    Figura.Circulo(r) => 3.14159 * r * r,
-    Figura.Rect(w, h) => w * h,
-    Figura.Nada => 0.0,
-  }
+    match (f) {
+        Figura.Circulo(r) => 3.14159 * r * r,
+        Figura.Rect(w, h) => w * h,
+        Figura.Nada => 0.0,
+    }
 }
 ```
 
@@ -211,8 +211,8 @@ fn area(f: Figura) -> float {
 var edades: Map<string, int> = map_new();
 insert(edades, "ana", 30);
 match (get(edades, "ana")) {          // get -> Option<V>
-  Option.Some(e) => print(e),
-  Option.None => print(0 - 1),
+    Option.Some(e) => print(e),
+    Option.None => print(0 - 1),
 }
 
 var vistos: Set<int> = set_new();
@@ -242,7 +242,7 @@ No hay excepciones: los fallos son **valores** de `Option<T>` (ausencia) o `Resu
 
 ```rust
 fn dividir(a: int, b: int) -> Result<int, string> {
-  if (b == 0) { Result.Err("división por cero") } else { Result.Ok(a / b) }
+    if (b == 0) { Result.Err("división por cero") } else { Result.Ok(a / b) }
 }
 ```
 
@@ -250,9 +250,9 @@ El operador **`?`** desempaqueta el `Ok`/`Some`, o **retorna** el `Err`/`None` d
 
 ```rust
 fn calc() -> Result<int, string> {
-  let x = dividir(10, 2)?;       // si Err, calc retorna ese Err
-  let y = dividir(x, 0)?;        // aquí retorna Err("división por cero")
-  Result.Ok(x + y)
+    let x = dividir(10, 2)?;       // si Err, calc retorna ese Err
+    let y = dividir(x, 0)?;        // aquí retorna Err("división por cero")
+    Result.Ok(x + y)
 }
 ```
 
@@ -271,8 +271,8 @@ print(doblar(21));                     // 42
 
 ```rust
 let r = [1, 2, 3, 4]
-  |> map(fn(x: int) -> int { x * x })
-  |> filter(fn(x: int) -> bool { x > 4 });
+    |> map(fn(x: int) -> int { x * x })
+    |> filter(fn(x: int) -> bool { x > 4 });
 ```
 
 **Iteradores perezosos** (`.iter()` sobre arreglos, `range`, …) con adaptadores que se fusionan y no
@@ -280,10 +280,10 @@ materializan hasta un terminal:
 
 ```rust
 let suma = [1, 2, 3, 4, 5]
-  .iter()
-  .map(fn(x: int) -> int { x * x })
-  .filter(fn(x: int) -> bool { x % 2 == 1 })
-  .sum();                            // 1 + 9 + 25 = 35
+    .iter()
+    .map(fn(x: int) -> int { x * x })
+    .filter(fn(x: int) -> bool { x % 2 == 1 })
+    .sum();                            // 1 + 9 + 25 = 35
 ```
 
 Adaptadores: `map`/`filter`/`take`/`skip`/`zip`/`enumerate`. Terminales: `fold`/`collect`/`sum`.
@@ -304,11 +304,11 @@ trait Area { fn area(self) -> float; }        // firma: termina en ';'
 
 struct Circulo { r: float }
 impl Area for Circulo {
-  fn area(self) -> float { 3.14159 * self.r * self.r }
+    fn area(self) -> float { 3.14159 * self.r * self.r }
 }
 
 fn imprime_area<T: Area>(x: T) {              // bound: T debe implementar Area
-  print(x.area());
+    print(x.area());
 }
 ```
 
@@ -327,8 +327,8 @@ brazos con cuerpo de **bloque** llevan **coma** detrás.
 
 ```rust
 match (opt) {
-  Option.Some(v) => print(v),
-  Option.None => print(0),
+    Option.Some(v) => print(v),
+    Option.None => print(0),
 }
 ```
 
@@ -337,9 +337,9 @@ Patrones: variante con bindings (`Enum.V(x, y)`), binding suelto (`n`), comodín
 
 ```rust
 match (o) {
-  Option.Some(v) if v < 0 => "negativo",
-  Option.Some(v)          => "no negativo",
-  Option.None             => "sin valor",
+    Option.Some(v) if v < 0 => "negativo",
+    Option.Some(v)          => "no negativo",
+    Option.None             => "sin valor",
 }
 ```
 
@@ -363,10 +363,10 @@ import geo/punto;                 // referencia calificada por el LEAF: punto.f(
 from geo/punto import origen;     // ...o trae nombres al ámbito
 
 fn main() -> int {
-  let p = origen();             // por el from-import
-  let q = punto.origen();       // calificado — se usa el LEAF (`punto`), no la ruta
-  print(p.x + q.x);
-  0
+    let p = origen();             // por el from-import
+    let q = punto.origen();       // calificado — se usa el LEAF (`punto`), no la ruta
+    print(p.x + q.x);
+    0
 }
 ```
 
@@ -394,22 +394,22 @@ hay estado mutable compartido; corre en multicore por defecto.
 
 ```rust
 fn main() -> int {
-  let ch: Channel<int> = channel();
-  spawn(fn() {
-    var i = 0;
-    while (i < 5) { send(ch, i * i); i = i + 1; }
-    close(ch);
-  });
-  var total = 0;
-  var seguir = true;
-  while (seguir) {
-    match (recv(ch)) {                 // recv -> Option<T>; None al cerrar+vaciar
-      Option.Some(v) => { total = total + v; },
-      Option.None => { seguir = false; },
+    let ch: Channel<int> = channel();
+    spawn(fn() {
+        var i = 0;
+        while (i < 5) { send(ch, i * i); i = i + 1; }
+        close(ch);
+    });
+    var total = 0;
+    var seguir = true;
+    while (seguir) {
+        match (recv(ch)) {                 // recv -> Option<T>; None al cerrar+vaciar
+            Option.Some(v) => { total = total + v; },
+            Option.None => { seguir = false; },
+        }
     }
-  }
-  print(total);                          // 0+1+4+9+16 = 30
-  0
+    print(total);                          // 0+1+4+9+16 = 30
+    0
 }
 ```
 
@@ -437,8 +437,8 @@ fn suma_ok() -> bool { 2 + 2 == 4 }
 
 @test
 fn con_assert() {
-  assert(1 < 2);
-  assert_eq(cuadrado(3), 9);
+    assert(1 < 2);
+    assert_eq(cuadrado(3), 9);
 }
 ```
 

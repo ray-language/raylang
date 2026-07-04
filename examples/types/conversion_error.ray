@@ -8,41 +8,41 @@
 // asociado; se llama `desde` porque `from` es palabra clave del import). El usuario nunca lo
 // invoca directamente: solo el `?` lo usa al convertir.
 enum AppError {
-  Lectura(string),
-  Vacio,
+    Lectura(string),
+    Vacio,
 }
 
 // Conversión string -> AppError: cualquier `?` sobre un Result con error string, dentro de una
 // función que devuelva Result<_, AppError>, envuelve el string en AppError.Lectura.
 impl From<string> for AppError {
-  fn desde(origen: string) -> AppError { AppError.Lectura(origen) }
+    fn desde(origen: string) -> AppError { AppError.Lectura(origen) }
 }
 
 // Operación de bajo nivel que falla con un `string`.
 fn leer_config(ok: bool) -> Result<int, string> {
-  if (ok) { Result.Ok(42) } else { Result.Err("no se pudo abrir config") }
+    if (ok) { Result.Ok(42) } else { Result.Err("no se pudo abrir config") }
 }
 
 // Operación de alto nivel que expone AppError. El `?` convierte el error string -> AppError.
 fn cargar(ok: bool) -> Result<int, AppError> {
-  let valor = leer_config(ok)?;  // string -> AppError automático
-  if (valor == 0) {
-    return Result.Err(AppError.Vacio);
-  }
-  Result.Ok(valor * 2)
+    let valor = leer_config(ok)?;  // string -> AppError automático
+    if (valor == 0) {
+        return Result.Err(AppError.Vacio);
+    }
+    Result.Ok(valor * 2)
 }
 
 fn mostrar(r: Result<int, AppError>) {
-  match (r) {
-    Result.Ok(v) => print("ok: " + to_string(v)),
-    Result.Err(e) => match (e) {
-      AppError.Lectura(msg) => print("error de lectura: " + msg),
-      AppError.Vacio => print("config vacía"),
-    },
-  }
+    match (r) {
+        Result.Ok(v) => print("ok: " + to_string(v)),
+        Result.Err(e) => match (e) {
+            AppError.Lectura(msg) => print("error de lectura: " + msg),
+            AppError.Vacio => print("config vacía"),
+        },
+    }
 }
 
 fn main() {
-  mostrar(cargar(true));  // ok: 84
-  mostrar(cargar(false));  // error de lectura: no se pudo abrir config
+    mostrar(cargar(true));  // ok: 84
+    mostrar(cargar(false));  // error de lectura: no se pudo abrir config
 }

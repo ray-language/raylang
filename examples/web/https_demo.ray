@@ -5,27 +5,27 @@
 from http import fetch, Response, body_text;
 
 fn main() -> int {
-  let a = args();
-  if (len(a) < 1) {
-    eprint("uso: https_demo <url>");
-    return 1;
-  }
-  match (fetch(a[0])) {
-    Result.Err(e) => {
-      eprint(e);
-      1
-    },
-    Result.Ok(r) => {
-      print("status=" + to_string(r.status));
-      match (body_text(r)) {
-        Result.Ok(b) => {
-          print("body=" + b);
-        },
+    let a = args();
+    if (len(a) < 1) {
+        eprint("uso: https_demo <url>");
+        return 1;
+    }
+    match (fetch(a[0])) {
         Result.Err(e) => {
-          eprint("cuerpo no es texto: " + e);
+            eprint(e);
+            1
         },
-      }
-      0
-    },
-  }
+        Result.Ok(r) => {
+            print("status=" + to_string(r.status));
+            match (body_text(r)) {
+                Result.Ok(b) => {
+                    print("body=" + b);
+                },
+                Result.Err(e) => {
+                    eprint("cuerpo no es texto: " + e);
+                },
+            }
+            0
+        },
+    }
 }

@@ -6,40 +6,40 @@ from hpack import HEntry, header, new_hpack, encode, decode;
 from http2 import preface, parse_frame, Http2Frame, headers_frame;
 
 fn req1() -> [HEntry] {
-  [header(":method", "GET"), header(":scheme", "http"), header(":path", "/"), header(":authority", "www.example.com")]
+    [header(":method", "GET"), header(":scheme", "http"), header(":path", "/"), header(":authority", "www.example.com")]
 }
 
 fn main() {
-  // --- HPACK: las 3 peticiones del RFC 7541 §C.3, con la MISMA tabla dinámica (encoder). ---
-  let enc = new_hpack();
-  let block1 = encode(enc, req1());
-  print(to_string(block1));  // 828684410f7777772e6578616d706c652e636f6d
+    // --- HPACK: las 3 peticiones del RFC 7541 §C.3, con la MISMA tabla dinámica (encoder). ---
+    let enc = new_hpack();
+    let block1 = encode(enc, req1());
+    print(to_string(block1));  // 828684410f7777772e6578616d706c652e636f6d
 
-  print(to_string(encode(enc, [header(":method", "GET"), header(":scheme", "http"), header(":path", "/"), header(":authority", "www.example.com"), header("cache-control", "no-cache")])));
-  // 828684be58086e6f2d6361636865
-  print(to_string(encode(enc, [header(":method", "GET"), header(":scheme", "https"), header(":path", "/index.html"), header(":authority", "www.example.com"), header("custom-key", "custom-value")])));
-  // 828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565
-  // --- Decodificación: el bloque de C.3.1 → la lista original (round-trip). ---
-  let dec = new_hpack();
-  match (decode(dec, block1)) {
-    Result.Ok(hs) => {
-      var i = 0;
-      while (i < len(hs)) {
-        print(hs[i].name + ": " + hs[i].value);
-        i = i + 1;
-      }
-    },
-    Result.Err(e) => print("ERR decode: " + e),
-  }
+    print(to_string(encode(enc, [header(":method", "GET"), header(":scheme", "http"), header(":path", "/"), header(":authority", "www.example.com"), header("cache-control", "no-cache")])));
+    // 828684be58086e6f2d6361636865
+    print(to_string(encode(enc, [header(":method", "GET"), header(":scheme", "https"), header(":path", "/index.html"), header(":authority", "www.example.com"), header("custom-key", "custom-value")])));
+    // 828785bf400a637573746f6d2d6b65790c637573746f6d2d76616c7565
+    // --- Decodificación: el bloque de C.3.1 → la lista original (round-trip). ---
+    let dec = new_hpack();
+    match (decode(dec, block1)) {
+        Result.Ok(hs) => {
+            var i = 0;
+            while (i < len(hs)) {
+                print(hs[i].name + ": " + hs[i].value);
+                i = i + 1;
+            }
+        },
+        Result.Err(e) => print("ERR decode: " + e),
+    }
 
-  // --- HTTP/2 framing: round-trip de un HEADERS frame (stream 1, END_HEADERS+END_STREAM). ---
-  let block = encode(new_hpack(), [header(":method", "GET"), header(":path", "/")]);
-  let frame = headers_frame(1, block, true);
-  match (parse_frame(frame)) {
-    Result.Ok(f) => print("HEADERS type=" + to_string(f.ftype) + " stream=" + to_string(f.stream_id) + " flags=" + to_string(f.flags) + " blocklen=" + to_string(len(f.payload))),
-    Result.Err(e) => print("ERR frame: " + e),
-  }
+    // --- HTTP/2 framing: round-trip de un HEADERS frame (stream 1, END_HEADERS+END_STREAM). ---
+    let block = encode(new_hpack(), [header(":method", "GET"), header(":path", "/")]);
+    let frame = headers_frame(1, block, true);
+    match (parse_frame(frame)) {
+        Result.Ok(f) => print("HEADERS type=" + to_string(f.ftype) + " stream=" + to_string(f.stream_id) + " flags=" + to_string(f.flags) + " blocklen=" + to_string(len(f.payload))),
+        Result.Err(e) => print("ERR frame: " + e),
+    }
 
-  // La connection preface del cliente (los 24 octetos mágicos).
-  print(to_string(preface()));
+    // La connection preface del cliente (los 24 octetos mágicos).
+    print(to_string(preface()));
 }

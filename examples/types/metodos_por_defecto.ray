@@ -4,50 +4,50 @@
 // si lo redefine, gana su versión. Es front-end puro (erasure): el cuerpo por defecto se
 // sintetiza como un método del impl. El runtime no cambia.
 trait Saludo {
-  fn nombre(self) -> string;  // requerido: cada tipo lo da
-  fn saludar(self) -> string {
-    // por defecto: puede usar otros métodos del trait
-    self.nombre()
-  }
-  fn grito(self) -> int {
-    // por defecto independiente
-    3
-  }
+    fn nombre(self) -> string;  // requerido: cada tipo lo da
+    fn saludar(self) -> string {
+        // por defecto: puede usar otros métodos del trait
+        self.nombre()
+    }
+    fn grito(self) -> int {
+        // por defecto independiente
+        3
+    }
 }
 
 struct Persona {
-  n: string,
+    n: string,
 }
 
 impl Saludo for Persona {
-  fn nombre(self) -> string { self.n }
+    fn nombre(self) -> string { self.n }
 }
 
 // saludar y grito: heredados por defecto
 struct Robot {
-  id: int,
+    id: int,
 }
 
 impl Saludo for Robot {
-  fn nombre(self) -> string { "robot" }
+    fn nombre(self) -> string { "robot" }
 
-  fn saludar(self) -> string { "beep" }
+    fn saludar(self) -> string { "beep" }
 }
 
 // redefine el defecto
 // grito: heredado
 // Los defectos también valen a través de un bound (M9.2 + M9.3a).
 fn anunciar<T: Saludo>(x: T) -> int {
-  print(x.saludar());
-  x.grito()
+    print(x.saludar());
+    x.grito()
 }
 
 fn main() -> int {
-  let p = Persona { n: "ana" };
-  let r = Robot { id: 7 };
+    let p = Persona { n: "ana" };
+    let r = Robot { id: 7 };
 
-  print(p.saludar());  // "ana"  (defecto que llama a nombre)
-  print(r.saludar());  // "beep" (redefinido)
+    print(p.saludar());  // "ana"  (defecto que llama a nombre)
+    print(r.saludar());  // "beep" (redefinido)
 
-  anunciar(p) + anunciar(r)  // imprime "ana" y "beep"; 3 + 3 = 6
+    anunciar(p) + anunciar(r)  // imprime "ana" y "beep"; 3 + 3 = 6
 }

@@ -4,43 +4,43 @@
 //   cargo run --quiet -- examples/io/archivos.ray /tmp/saludo.txt
 // Saca el valor de un Result o, si es Err, lo informa por stderr y usa un valor por defecto.
 fn o_default(r: Result<string, string>, def: string) -> string {
-  match (r) {
-    Result.Ok(s) => s,
-    Result.Err(e) => {
-      eprint("aviso: " + e);
-      def
-    },
-  }
+    match (r) {
+        Result.Ok(s) => s,
+        Result.Err(e) => {
+            eprint("aviso: " + e);
+            def
+        },
+    }
 }
 
 fn main() -> int {
-  let xs = args();
-  if (len(xs) == 0) {
-    eprint("uso: archivos.ray <ruta>");
-    return 1;
-  }
-  let ruta = xs[0];
+    let xs = args();
+    if (len(xs) == 0) {
+        eprint("uso: archivos.ray <ruta>");
+        return 1;
+    }
+    let ruta = xs[0];
 
-  // Escribir.
-  match (write_file(ruta, "hola desde raylang\nsegunda línea\n")) {
-    Result.Ok(n) => print("escritos " + n.to_string() + " caracteres en " + ruta),
-    Result.Err(e) => {
-      eprint("no se pudo escribir: " + e);
-      return 2;
-    },
-  }
+    // Escribir.
+    match (write_file(ruta, "hola desde raylang\nsegunda línea\n")) {
+        Result.Ok(n) => print("escritos " + n.to_string() + " caracteres en " + ruta),
+        Result.Err(e) => {
+            eprint("no se pudo escribir: " + e);
+            return 2;
+        },
+    }
 
-  // Leer de vuelta y contar las líneas (split por '\n').
-  let contenido = o_default(read_file(ruta), "");
-  let lineas = contenido.trim().split("\n");
-  print("el archivo tiene " + len(lineas).to_string() + " línea(s):");
-  print(contenido);
+    // Leer de vuelta y contar las líneas (split por '\n').
+    let contenido = o_default(read_file(ruta), "");
+    let lineas = contenido.trim().split("\n");
+    print("el archivo tiene " + len(lineas).to_string() + " línea(s):");
+    print(contenido);
 
-  // Leer algo que no existe: el Result lo hace explícito.
-  match (read_file(ruta + ".no_existe")) {
-    Result.Ok(_) => print("(inesperado)"),
-    Result.Err(_) => print("(leer un inexistente da Err, como debe)"),
-  }
+    // Leer algo que no existe: el Result lo hace explícito.
+    match (read_file(ruta + ".no_existe")) {
+        Result.Ok(_) => print("(inesperado)"),
+        Result.Err(_) => print("(leer un inexistente da Err, como debe)"),
+    }
 
-  len(lineas)
+    len(lineas)
 }

@@ -12,52 +12,52 @@ fn block_size() -> int { 64 }
 
 // `bytes` → octetos `[int]` (cada uno 0..255).
 fn to_octets(b: bytes) -> [int] {
-  var o: [int] = [];
-  var i = 0;
-  while (i < len(b)) {
-    push(o, b[i]);
-    i = i + 1;
-  }
-  o
+    var o: [int] = [];
+    var i = 0;
+    while (i < len(b)) {
+        push(o, b[i]);
+        i = i + 1;
+    }
+    o
 }
 
 // Concatena `b` al final de `a` (muta `a`, semántica de referencia).
 fn append_all(a: [int], b: [int]) {
-  var i = 0;
-  while (i < len(b)) {
-    push(a, b[i]);
-    i = i + 1;
-  }
+    var i = 0;
+    while (i < len(b)) {
+        push(a, b[i]);
+        i = i + 1;
+    }
 }
 
 pub fn hmac_sha256(key: bytes, msg: bytes) -> [int] {
-  // Clave ajustada al tamaño de bloque: se hashea si es más larga, luego se rellena con ceros.
-  var k = to_octets(key);
-  if (len(k) > block_size()) {
-    k = sha256_octets(k);
-  }
-  while (len(k) < block_size()) {
-    push(k, 0);
-  }
-  // Pads: K' XOR 0x36 (ipad) y K' XOR 0x5c (opad).
-  var ipad: [int] = [];
-  var opad: [int] = [];
-  var i = 0;
-  while (i < block_size()) {
-    push(ipad, k[i] ^ 54);  // 0x36
-    push(opad, k[i] ^ 92);  // 0x5c
-    i = i + 1;
-  }
-  // inner = SHA256(ipad || msg)
-  let m = to_octets(msg);
-  append_all(ipad, m);
-  let inner = sha256_octets(ipad);
-  // HMAC = SHA256(opad || inner)
-  append_all(opad, inner);
-  sha256_octets(opad)
+    // Clave ajustada al tamaño de bloque: se hashea si es más larga, luego se rellena con ceros.
+    var k = to_octets(key);
+    if (len(k) > block_size()) {
+        k = sha256_octets(k);
+    }
+    while (len(k) < block_size()) {
+        push(k, 0);
+    }
+    // Pads: K' XOR 0x36 (ipad) y K' XOR 0x5c (opad).
+    var ipad: [int] = [];
+    var opad: [int] = [];
+    var i = 0;
+    while (i < block_size()) {
+        push(ipad, k[i] ^ 54);  // 0x36
+        push(opad, k[i] ^ 92);  // 0x5c
+        i = i + 1;
+    }
+    // inner = SHA256(ipad || msg)
+    let m = to_octets(msg);
+    append_all(ipad, m);
+    let inner = sha256_octets(ipad);
+    // HMAC = SHA256(opad || inner)
+    append_all(opad, inner);
+    sha256_octets(opad)
 }
 
 // El HMAC-SHA256 en hexadecimal (64 caracteres), la forma habitual de mostrarlo.
 pub fn hmac_sha256_hex(key: bytes, msg: bytes) -> string {
-  hex_encode(hmac_sha256(key, msg))
+    hex_encode(hmac_sha256(key, msg))
 }

@@ -17,283 +17,283 @@ from std/inflate import crc32;
 
 // --- Escritor de bits ---
 struct BitWriter {
-  out: [int],
-  cur: int,
-  nbits: int,
+    out: [int],
+    cur: int,
+    nbits: int,
 }
 
 fn write_bit(w: BitWriter, bit: int) {
-  w.cur = w.cur | bit << w.nbits;
-  w.nbits = w.nbits + 1;
-  if (w.nbits == 8) {
-    push(w.out, w.cur);
-    w.cur = 0;
-    w.nbits = 0;
-  }
+    w.cur = w.cur | bit << w.nbits;
+    w.nbits = w.nbits + 1;
+    if (w.nbits == 8) {
+        push(w.out, w.cur);
+        w.cur = 0;
+        w.nbits = 0;
+    }
 }
 
 // Escribe `n` bits LSB-first (para los bits extra de longitud/distancia).
 fn write_bits(w: BitWriter, val: int, n: int) {
-  var i = 0;
-  while (i < n) {
-    write_bit(w, val >> i & 1);
-    i = i + 1;
-  }
+    var i = 0;
+    while (i < n) {
+        write_bit(w, val >> i & 1);
+        i = i + 1;
+    }
 }
 
 // Escribe un código Huffman de `len` bits MSB-first (el bit más significativo primero).
 fn write_huff(w: BitWriter, code: int, length: int) {
-  var i = length - 1;
-  while (i >= 0) {
-    write_bit(w, code >> i & 1);
-    i = i - 1;
-  }
+    var i = length - 1;
+    while (i >= 0) {
+        write_bit(w, code >> i & 1);
+        i = i - 1;
+    }
 }
 
 // Vacía el último octeto parcial.
 fn flush(w: BitWriter) {
-  if (w.nbits > 0) {
-    push(w.out, w.cur);
-    w.cur = 0;
-    w.nbits = 0;
-  }
+    if (w.nbits > 0) {
+        push(w.out, w.cur);
+        w.cur = 0;
+        w.nbits = 0;
+    }
 }
 
 // --- Códigos Huffman FIJOS (RFC 1951 §3.2.6) ---
 // Emite el símbolo literal/longitud `sym` (0..287) con su código fijo.
 fn emit_litlen(w: BitWriter, sym: int) {
-  if (sym <= 143) {
-    write_huff(w, 48 + sym, 8);  // 0x30..0xBF, 8 bits
-  } else {
-    if (sym <= 255) {
-      write_huff(w, 400 + (sym - 144), 9);  // 0x190.., 9 bits
+    if (sym <= 143) {
+        write_huff(w, 48 + sym, 8);  // 0x30..0xBF, 8 bits
     } else {
-      if (sym <= 279) {
-        write_huff(w, sym - 256, 7);  // 0x00.., 7 bits
-      } else {
-        write_huff(w, 192 + (sym - 280), 8);  // 0xC0.., 8 bits
-      }
+        if (sym <= 255) {
+            write_huff(w, 400 + (sym - 144), 9);  // 0x190.., 9 bits
+        } else {
+            if (sym <= 279) {
+                write_huff(w, sym - 256, 7);  // 0x00.., 7 bits
+            } else {
+                write_huff(w, 192 + (sym - 280), 8);  // 0xC0.., 8 bits
+            }
+        }
     }
-  }
 }
 
 // --- Tablas de longitud/distancia (base + bits extra), iguales que en inflate.ray ---
 fn len_base() -> [int] {
-  [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+    [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
 }
 
 fn len_extra() -> [int] {
-  [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+    [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
 }
 
 fn dist_base() -> [int] {
-  [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
+    [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
 }
 
 fn dist_extra() -> [int] {
-  [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
+    [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
 }
 
 // Emite una coincidencia: el símbolo de longitud (257..285) + bits extra, y luego la distancia.
 fn emit_match(w: BitWriter, length: int, dist: int) {
-  let lbase = len_base();
-  let lext = len_extra();
-  var i = 28;
-  while (i > 0 && lbase[i] > length) {
-    i = i - 1;
-  }
-  emit_litlen(w, 257 + i);
-  write_bits(w, length - lbase[i], lext[i]);
-  // Distancia: en Huffman fijo el código de distancia ES el símbolo (0..29) en 5 bits MSB-first.
-  let dbase = dist_base();
-  let dext = dist_extra();
-  var j = 29;
-  while (j > 0 && dbase[j] > dist) {
-    j = j - 1;
-  }
-  write_huff(w, j, 5);
-  write_bits(w, dist - dbase[j], dext[j]);
+    let lbase = len_base();
+    let lext = len_extra();
+    var i = 28;
+    while (i > 0 && lbase[i] > length) {
+        i = i - 1;
+    }
+    emit_litlen(w, 257 + i);
+    write_bits(w, length - lbase[i], lext[i]);
+    // Distancia: en Huffman fijo el código de distancia ES el símbolo (0..29) en 5 bits MSB-first.
+    let dbase = dist_base();
+    let dext = dist_extra();
+    var j = 29;
+    while (j > 0 && dbase[j] > dist) {
+        j = j - 1;
+    }
+    write_huff(w, j, 5);
+    write_bits(w, dist - dbase[j], dext[j]);
 }
 
 // --- LZ77 con cadenas de hash ---
 // El estado del matcher: la entrada, el head por hash y la cadena prev por posición.
 struct Lz {
-  data: bytes,
-  n: int,
-  head: [int],
-  prev: [int],
+    data: bytes,
+    n: int,
+    head: [int],
+    prev: [int],
 }
 
 fn hmask() -> int { 8191 }  // tabla de hash de 2^13 entradas
 
 // Hash de los 3 octetos a partir de `i` (asume i+2 < n).
 fn hashof(data: bytes, i: int) -> int {
-  (data[i] << 10 ^ data[i + 1] << 5 ^ data[i + 2]) & hmask()
+    (data[i] << 10 ^ data[i + 1] << 5 ^ data[i + 2]) & hmask()
 }
 
 // Inserta la posición `pos` en la cadena de hash.
 fn insert_pos(lz: Lz, pos: int) {
-  if (pos + 2 < lz.n) {
-    let h = hashof(lz.data, pos);
-    lz.prev[pos] = lz.head[h];
-    lz.head[h] = pos;
-  }
+    if (pos + 2 < lz.n) {
+        let h = hashof(lz.data, pos);
+        lz.prev[pos] = lz.head[h];
+        lz.head[h] = pos;
+    }
 }
 
 // Longitud de la coincidencia entre las posiciones `p` e `i`, hasta `maxlen`.
 fn match_len(data: bytes, p: int, i: int, maxlen: int) -> int {
-  var l = 0;
-  while (l < maxlen && data[p + l] == data[i + l]) {
-    l = l + 1;
-  }
-  l
+    var l = 0;
+    while (l < maxlen && data[p + l] == data[i + l]) {
+        l = l + 1;
+    }
+    l
 }
 
 // La mejor coincidencia para la posición `i` (longitud y distancia); longitud 0 si no hay ≥ 3.
 struct Match {
-  length: int,
-  dist: int,
+    length: int,
+    dist: int,
 }
 
 fn find_match(lz: Lz, i: int) -> Match {
-  if (i + 2 >= lz.n) {
-    return Match { length: 0, dist: 0 };
-  }
-  var maxlen = lz.n - i;
-  if (maxlen > 258) {
-    maxlen = 258;
-  }
-  let h = hashof(lz.data, i);
-  var p = lz.head[h];
-  var best_len = 0;
-  var best_dist = 0;
-  var chain = 0;
-  while (p >= 0 && chain < 256 && i - p <= 32768) {
-    let l = match_len(lz.data, p, i, maxlen);
-    if (l > best_len) {
-      best_len = l;
-      best_dist = i - p;
-      if (l >= maxlen) {
-        p = 0 - 1;  // ya no se puede mejorar
-      }
+    if (i + 2 >= lz.n) {
+        return Match { length: 0, dist: 0 };
     }
-    if (p >= 0) {
-      p = lz.prev[p];
+    var maxlen = lz.n - i;
+    if (maxlen > 258) {
+        maxlen = 258;
     }
-    chain = chain + 1;
-  }
-  if (best_len >= 3) {
-    Match { length: best_len, dist: best_dist }
-  } else {
-    Match { length: 0, dist: 0 }
-  }
+    let h = hashof(lz.data, i);
+    var p = lz.head[h];
+    var best_len = 0;
+    var best_dist = 0;
+    var chain = 0;
+    while (p >= 0 && chain < 256 && i - p <= 32768) {
+        let l = match_len(lz.data, p, i, maxlen);
+        if (l > best_len) {
+            best_len = l;
+            best_dist = i - p;
+            if (l >= maxlen) {
+                p = 0 - 1;  // ya no se puede mejorar
+            }
+        }
+        if (p >= 0) {
+            p = lz.prev[p];
+        }
+        chain = chain + 1;
+    }
+    if (best_len >= 3) {
+        Match { length: best_len, dist: best_dist }
+    } else {
+        Match { length: 0, dist: 0 }
+    }
 }
 
 // Comprime `data` a un stream DEFLATE crudo (un único bloque de Huffman fijo, BFINAL=1).
 pub fn deflate_raw(data: bytes) -> bytes {
-  let n = len(data);
-  var w = BitWriter { out: [], cur: 0, nbits: 0 };
-  write_bit(w, 1);  // BFINAL = 1 (último bloque)
-  write_bits(w, 1, 2);  // BTYPE = 01 (Huffman fijo)
+    let n = len(data);
+    var w = BitWriter { out: [], cur: 0, nbits: 0 };
+    write_bit(w, 1);  // BFINAL = 1 (último bloque)
+    write_bits(w, 1, 2);  // BTYPE = 01 (Huffman fijo)
 
-  // Estado LZ: head lleno de -1, prev lleno de -1.
-  var head: [int] = [];
-  var i = 0;
-  while (i <= hmask()) {
-    push(head, 0 - 1);
-    i = i + 1;
-  }
-  var prev: [int] = [];
-  i = 0;
-  while (i < n) {
-    push(prev, 0 - 1);
-    i = i + 1;
-  }
-  let lz = Lz { data: data, n: n, head: head, prev: prev };
-
-  i = 0;
-  while (i < n) {
-    let m = find_match(lz, i);
-    if (m.length >= 3) {
-      emit_match(w, m.length, m.dist);
-      // Inserta el hash de cada posición cubierta y avanza.
-      var k = 0;
-      while (k < m.length) {
-        insert_pos(lz, i + k);
-        k = k + 1;
-      }
-      i = i + m.length;
-    } else {
-      emit_litlen(w, data[i]);  // literal
-      insert_pos(lz, i);
-      i = i + 1;
+    // Estado LZ: head lleno de -1, prev lleno de -1.
+    var head: [int] = [];
+    var i = 0;
+    while (i <= hmask()) {
+        push(head, 0 - 1);
+        i = i + 1;
     }
-  }
-  emit_litlen(w, 256);  // fin de bloque
-  flush(w);
-  bytes_of(w.out)
+    var prev: [int] = [];
+    i = 0;
+    while (i < n) {
+        push(prev, 0 - 1);
+        i = i + 1;
+    }
+    let lz = Lz { data: data, n: n, head: head, prev: prev };
+
+    i = 0;
+    while (i < n) {
+        let m = find_match(lz, i);
+        if (m.length >= 3) {
+            emit_match(w, m.length, m.dist);
+            // Inserta el hash de cada posición cubierta y avanza.
+            var k = 0;
+            while (k < m.length) {
+                insert_pos(lz, i + k);
+                k = k + 1;
+            }
+            i = i + m.length;
+        } else {
+            emit_litlen(w, data[i]);  // literal
+            insert_pos(lz, i);
+            i = i + 1;
+        }
+    }
+    emit_litlen(w, 256);  // fin de bloque
+    flush(w);
+    bytes_of(w.out)
 }
 
 // --- Envoltorios ---
 // Añade una palabra de 32 bits LSB-first al final de `out`.
 fn push_u32(out: [int], v: int) {
-  push(out, v & 255);
-  push(out, v >> 8 & 255);
-  push(out, v >> 16 & 255);
-  push(out, v >> 24 & 255);
+    push(out, v & 255);
+    push(out, v >> 8 & 255);
+    push(out, v >> 16 & 255);
+    push(out, v >> 24 & 255);
 }
 
 // Comprime a formato gzip (RFC 1952): cabecera + DEFLATE + CRC-32 + ISIZE.
 pub fn gzip_compress(data: bytes) -> bytes {
-  var out: [int] = [];
-  push(out, 31);  // magia + método + flags
-  push(out, 139);
-  push(out, 8);
-  push(out, 0);
-  push_u32(out, 0);  // MTIME = 0
-  push(out, 0);  // XFL=0, OS=255 (desconocido)
-  push(out, 255);
-  let comp = deflate_raw(data);
-  var i = 0;
-  while (i < len(comp)) {
-    push(out, comp[i]);
-    i = i + 1;
-  }
-  push_u32(out, crc32(data) & 4294967295);
-  push_u32(out, len(data) & 4294967295);
-  bytes_of(out)
+    var out: [int] = [];
+    push(out, 31);  // magia + método + flags
+    push(out, 139);
+    push(out, 8);
+    push(out, 0);
+    push_u32(out, 0);  // MTIME = 0
+    push(out, 0);  // XFL=0, OS=255 (desconocido)
+    push(out, 255);
+    let comp = deflate_raw(data);
+    var i = 0;
+    while (i < len(comp)) {
+        push(out, comp[i]);
+        i = i + 1;
+    }
+    push_u32(out, crc32(data) & 4294967295);
+    push_u32(out, len(data) & 4294967295);
+    bytes_of(out)
 }
 
 // Adler-32 (RFC 1950) del cuerpo, para el envoltorio zlib.
 fn adler32(data: bytes) -> int {
-  var a = 1;
-  var b = 0;
-  var i = 0;
-  while (i < len(data)) {
-    a = (a + data[i]) % 65521;
-    b = (b + a) % 65521;
-    i = i + 1;
-  }
-  let r = b << 16 | a;
-  r
+    var a = 1;
+    var b = 0;
+    var i = 0;
+    while (i < len(data)) {
+        a = (a + data[i]) % 65521;
+        b = (b + a) % 65521;
+        i = i + 1;
+    }
+    let r = b << 16 | a;
+    r
 }
 
 // Comprime a formato zlib (RFC 1950): 2 octetos de cabecera + DEFLATE + Adler-32.
 pub fn zlib_compress(data: bytes) -> bytes {
-  var out: [int] = [];
-  push(out, 120);  // CMF=0x78 (deflate, ventana 32K), FLG=0x01 (check ok)
-  push(out, 1);
-  let comp = deflate_raw(data);
-  var i = 0;
-  while (i < len(comp)) {
-    push(out, comp[i]);
-    i = i + 1;
-  }
-  let ad = adler32(data);
-  // Adler-32 va en BIG-endian (al revés que el CRC de gzip).
-  push(out, ad >> 24 & 255);
-  push(out, ad >> 16 & 255);
-  push(out, ad >> 8 & 255);
-  push(out, ad & 255);
-  bytes_of(out)
+    var out: [int] = [];
+    push(out, 120);  // CMF=0x78 (deflate, ventana 32K), FLG=0x01 (check ok)
+    push(out, 1);
+    let comp = deflate_raw(data);
+    var i = 0;
+    while (i < len(comp)) {
+        push(out, comp[i]);
+        i = i + 1;
+    }
+    let ad = adler32(data);
+    // Adler-32 va en BIG-endian (al revés que el CRC de gzip).
+    push(out, ad >> 24 & 255);
+    push(out, ad >> 16 & 255);
+    push(out, ad >> 8 & 255);
+    push(out, ad & 255);
+    bytes_of(out)
 }

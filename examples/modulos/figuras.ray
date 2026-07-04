@@ -3,8 +3,8 @@
 pub fn area_rect(ancho: int, alto: int) -> int { ancho * alto }
 
 pub fn area_cuadrado(lado: int) -> int {
-  // Reusa una función privada del propio módulo.
-  area_rect(lado, lado)
+    // Reusa una función privada del propio módulo.
+    area_rect(lado, lado)
 }
 
 pub fn perimetro_rect(ancho: int, alto: int) -> int { doble(ancho) + doble(alto) }
@@ -14,19 +14,19 @@ fn doble(n: int) -> int { n + n }
 
 // M11.3c: los TIPOS también se exportan con `pub` y se namespacan por módulo.
 pub struct Rect {
-  ancho: int,
-  alto: int,
+    ancho: int,
+    alto: int,
 }
 
 pub enum Orientacion {
-  Horizontal,
-  Vertical,
+    Horizontal,
+    Vertical,
 }
 
 // Calcula el área de un Rect según su orientación dominante (demo de uso de tipos propios).
 pub fn area(r: Rect, o: Orientacion) -> int {
-  match (o) {
-    Orientacion.Horizontal => area_rect(r.ancho, r.alto),
-    Orientacion.Vertical => area_rect(r.alto, r.ancho),
-  }
+    match (o) {
+        Orientacion.Horizontal => area_rect(r.ancho, r.alto),
+        Orientacion.Vertical => area_rect(r.alto, r.ancho),
+    }
 }

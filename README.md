@@ -30,22 +30,22 @@ consciente es TLS/criptografía (`rustls`/`ring`).
 enum Arbol { Hoja, Nodo(Arbol, int, Arbol) }
 
 fn suma(a: Arbol) -> int {
-  match (a) {
-    Arbol.Hoja => 0,
-    Arbol.Nodo(izq, v, der) => suma(izq) + v + suma(der),
-  }
+    match (a) {
+        Arbol.Hoja => 0,
+        Arbol.Nodo(izq, v, der) => suma(izq) + v + suma(der),
+    }
 }
 
 fn main() -> int {
-  let t = Arbol.Nodo(Arbol.Nodo(Arbol.Hoja, 1, Arbol.Hoja), 2, Arbol.Nodo(Arbol.Hoja, 3, Arbol.Hoja));
-  print("suma del árbol: ${t.suma()}");    // UFCS + interpolación  → 6
+    let t = Arbol.Nodo(Arbol.Nodo(Arbol.Hoja, 1, Arbol.Hoja), 2, Arbol.Nodo(Arbol.Hoja, 3, Arbol.Hoja));
+    print("suma del árbol: ${t.suma()}");    // UFCS + interpolación  → 6
 
-  let s = [1, 2, 3, 4, 5]
-    .iter()
-    .map(fn(x: int) -> int { x * x })
-    .sum();                              // iteradores perezosos + closure  → 55
-  print("suma de cuadrados: ${s}");
-  0
+    let s = [1, 2, 3, 4, 5]
+        .iter()
+        .map(fn(x: int) -> int { x * x })
+        .sum();                              // iteradores perezosos + closure  → 55
+    print("suma de cuadrados: ${s}");
+    0
 }
 ```
 
@@ -111,7 +111,7 @@ trait Mostrable { fn mostrar(self) -> string; }
 
 struct Punto { x: int, y: int }
 impl Mostrable for Punto {
-  fn mostrar(self) -> string { "(${self.x}, ${self.y})" }   // interpolación de strings
+    fn mostrar(self) -> string { "(${self.x}, ${self.y})" }   // interpolación de strings
 }
 
 fn imprime<T: Mostrable>(v: T) { print(v.mostrar()); }
@@ -121,12 +121,12 @@ fn imprime<T: Mostrable>(v: T) { print(v.mostrar()); }
 
 ```rust
 fn dividir(a: int, b: int) -> Result<int, string> {
-  if (b == 0) { Result.Err("división por cero") } else { Result.Ok(a / b) }
+    if (b == 0) { Result.Err("división por cero") } else { Result.Ok(a / b) }
 }
 
 fn calc() -> Result<int, string> {
-  let x = dividir(10, 2)?;   // desempaqueta o retorna el Err
-  Result.Ok(x + 1)
+    let x = dividir(10, 2)?;   // desempaqueta o retorna el Err
+    Result.Ok(x + 1)
 }
 ```
 
@@ -134,18 +134,18 @@ fn calc() -> Result<int, string> {
 
 ```rust
 fn main() -> int {
-  let ch: Channel<int> = channel();
-  spawn(fn() { var i = 0; while (i < 5) { send(ch, i * i); i = i + 1; } close(ch); });
-  var total = 0;
-  var seguir = true;
-  while (seguir) {
-    match (recv(ch)) {
-      Option.Some(v) => { total = total + v; },
-      Option.None => { seguir = false; },
+    let ch: Channel<int> = channel();
+    spawn(fn() { var i = 0; while (i < 5) { send(ch, i * i); i = i + 1; } close(ch); });
+    var total = 0;
+    var seguir = true;
+    while (seguir) {
+        match (recv(ch)) {
+            Option.Some(v) => { total = total + v; },
+            Option.None => { seguir = false; },
+        }
     }
-  }
-  print("total: ${total}");   // 0+1+4+9+16 = 30
-  0
+    print("total: ${total}");   // 0+1+4+9+16 = 30
+    0
 }
 ```
 

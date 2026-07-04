@@ -5,42 +5,42 @@
 from udp import bind, send_to, recv_from, Packet;
 
 fn texto(d: bytes) -> string {
-  match (from_utf8(d)) {
-    Result.Ok(s) => s,
-    Result.Err(_) => "",
-  }
+    match (from_utf8(d)) {
+        Result.Ok(s) => s,
+        Result.Err(_) => "",
+    }
 }
 
 // Fibra trabajadora: enlaza su propio socket, anuncia su puerto y espera un datagrama.
 fn worker() {
-  match (bind("127.0.0.1", 0)) {
-    Result.Ok(hb) => {
-      print("B " + to_string(local_port(hb)));
-      match (recv_from(hb)) {
-        Result.Ok(p) => print("B:" + texto(p.data)),
-        Result.Err(e) => print("Berr:" + e),
-      }
-    },
-    Result.Err(e) => print("Bbind:" + e),
-  }
+    match (bind("127.0.0.1", 0)) {
+        Result.Ok(hb) => {
+            print("B " + to_string(local_port(hb)));
+            match (recv_from(hb)) {
+                Result.Ok(p) => print("B:" + texto(p.data)),
+                Result.Err(e) => print("Berr:" + e),
+            }
+        },
+        Result.Err(e) => print("Bbind:" + e),
+    }
 }
 
 fn main() -> int {
-  match (bind("127.0.0.1", 0)) {
-    Result.Ok(ha) => {
-      print("A " + to_string(local_port(ha)));
-      let t = spawn(worker);
-      // recv_from cede aquí → el worker corre, enlaza B y también cede. Ambas fibras esperan.
-      match (recv_from(ha)) {
-        Result.Ok(p) => print("A:" + texto(p.data)),
-        Result.Err(e) => print("Aerr:" + e),
-      }
-      join(t);  // espera a que el worker termine antes de salir (si no, la VM cerraría)
-      0
-    },
-    Result.Err(e) => {
-      eprint(e);
-      1
-    },
-  }
+    match (bind("127.0.0.1", 0)) {
+        Result.Ok(ha) => {
+            print("A " + to_string(local_port(ha)));
+            let t = spawn(worker);
+            // recv_from cede aquí → el worker corre, enlaza B y también cede. Ambas fibras esperan.
+            match (recv_from(ha)) {
+                Result.Ok(p) => print("A:" + texto(p.data)),
+                Result.Err(e) => print("Aerr:" + e),
+            }
+            join(t);  // espera a que el worker termine antes de salir (si no, la VM cerraría)
+            0
+        },
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
+    }
 }

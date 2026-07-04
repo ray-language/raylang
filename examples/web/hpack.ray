@@ -10,313 +10,313 @@
 // los vectores oficiales del RFC 7541 Apéndice C (los que no usan Huffman: C.2.1, C.3).
 // Una cabecera (nombre, valor).
 pub struct HEntry {
-  name: string,
-  value: string,
+    name: string,
+    value: string,
 }
 
 pub fn header(name: string, value: string) -> HEntry {
-  HEntry { name: name, value: value }
+    HEntry { name: name, value: value }
 }
 
 // La tabla estática (RFC 7541 Apéndice A): el índice HPACK 1 es el elemento 0, etc.
 fn static_table() -> [HEntry] {
-  [header(":authority", ""), header(":method", "GET"), header(":method", "POST"), header(":path", "/"), header(":path", "/index.html"), header(":scheme", "http"), header(":scheme", "https"), header(":status", "200"), header(":status", "204"), header(":status", "206"), header(":status", "304"), header(":status", "400"), header(":status", "404"), header(":status", "500"), header("accept-charset", ""), header("accept-encoding", "gzip, deflate"), header("accept-language", ""), header("accept-ranges", ""), header("accept", ""), header("access-control-allow-origin", ""), header("age", ""), header("allow", ""), header("authorization", ""), header("cache-control", ""), header("content-disposition", ""), header("content-encoding", ""), header("content-language", ""), header("content-length", ""), header("content-location", ""), header("content-range", ""), header("content-type", ""), header("cookie", ""), header("date", ""), header("etag", ""), header("expect", ""), header("expires", ""), header("from", ""), header("host", ""), header("if-match", ""), header("if-modified-since", ""), header("if-none-match", ""), header("if-range", ""), header("if-unmodified-since", ""), header("last-modified", ""), header("link", ""), header("location", ""), header("max-forwards", ""), header("proxy-authenticate", ""), header("proxy-authorization", ""), header("range", ""), header("referer", ""), header("refresh", ""), header("retry-after", ""), header("server", ""), header("set-cookie", ""), header("strict-transport-security", ""), header("transfer-encoding", ""), header("user-agent", ""), header("vary", ""), header("via", ""), header("www-authenticate", "")]
+    [header(":authority", ""), header(":method", "GET"), header(":method", "POST"), header(":path", "/"), header(":path", "/index.html"), header(":scheme", "http"), header(":scheme", "https"), header(":status", "200"), header(":status", "204"), header(":status", "206"), header(":status", "304"), header(":status", "400"), header(":status", "404"), header(":status", "500"), header("accept-charset", ""), header("accept-encoding", "gzip, deflate"), header("accept-language", ""), header("accept-ranges", ""), header("accept", ""), header("access-control-allow-origin", ""), header("age", ""), header("allow", ""), header("authorization", ""), header("cache-control", ""), header("content-disposition", ""), header("content-encoding", ""), header("content-language", ""), header("content-length", ""), header("content-location", ""), header("content-range", ""), header("content-type", ""), header("cookie", ""), header("date", ""), header("etag", ""), header("expect", ""), header("expires", ""), header("from", ""), header("host", ""), header("if-match", ""), header("if-modified-since", ""), header("if-none-match", ""), header("if-range", ""), header("if-unmodified-since", ""), header("last-modified", ""), header("link", ""), header("location", ""), header("max-forwards", ""), header("proxy-authenticate", ""), header("proxy-authorization", ""), header("range", ""), header("referer", ""), header("refresh", ""), header("retry-after", ""), header("server", ""), header("set-cookie", ""), header("strict-transport-security", ""), header("transfer-encoding", ""), header("user-agent", ""), header("vary", ""), header("via", ""), header("www-authenticate", "")]
 }
 
 // El estado HPACK de un extremo: su tabla dinámica (más reciente primero) + el tamaño máximo y actual.
 pub struct Hpack {
-  dyn_names: [string],
-  dyn_values: [string],
-  max_size: int,
-  size: int,
+    dyn_names: [string],
+    dyn_values: [string],
+    max_size: int,
+    size: int,
 }
 
 pub fn new_hpack() -> Hpack {
-  Hpack { dyn_names: [], dyn_values: [], max_size: 4096, size: 0 }
+    Hpack { dyn_names: [], dyn_values: [], max_size: 4096, size: 0 }
 }
 
 // --- Tabla dinámica ---
 // El tamaño de una entrada (RFC 7541 §4.1): longitudes de nombre y valor + 32.
 fn entry_size(name: string, value: string) -> int {
-  len(to_bytes(name)) + len(to_bytes(value)) + 32
+    len(to_bytes(name)) + len(to_bytes(value)) + 32
 }
 
 // Evicta entradas (de la más antigua) hasta que el tamaño no supere el máximo.
 fn evict(h: Hpack) {
-  while (h.size > h.max_size && len(h.dyn_names) > 0) {
-    let ultimo = len(h.dyn_names) - 1;
-    h.size = h.size - entry_size(h.dyn_names[ultimo], h.dyn_values[ultimo]);
-    var nn: [string] = [];
-    var nv: [string] = [];
-    var i = 0;
-    while (i < ultimo) {
-      push(nn, h.dyn_names[i]);
-      push(nv, h.dyn_values[i]);
-      i = i + 1;
+    while (h.size > h.max_size && len(h.dyn_names) > 0) {
+        let ultimo = len(h.dyn_names) - 1;
+        h.size = h.size - entry_size(h.dyn_names[ultimo], h.dyn_values[ultimo]);
+        var nn: [string] = [];
+        var nv: [string] = [];
+        var i = 0;
+        while (i < ultimo) {
+            push(nn, h.dyn_names[i]);
+            push(nv, h.dyn_values[i]);
+            i = i + 1;
+        }
+        h.dyn_names = nn;
+        h.dyn_values = nv;
     }
-    h.dyn_names = nn;
-    h.dyn_values = nv;
-  }
 }
 
 // Inserta una entrada al frente de la tabla dinámica (la más reciente).
 fn add_dynamic(h: Hpack, name: string, value: string) {
-  var nn: [string] = [name];
-  var nv: [string] = [value];
-  var i = 0;
-  while (i < len(h.dyn_names)) {
-    push(nn, h.dyn_names[i]);
-    push(nv, h.dyn_values[i]);
-    i = i + 1;
-  }
-  h.dyn_names = nn;
-  h.dyn_values = nv;
-  h.size = h.size + entry_size(name, value);
-  evict(h);
+    var nn: [string] = [name];
+    var nv: [string] = [value];
+    var i = 0;
+    while (i < len(h.dyn_names)) {
+        push(nn, h.dyn_names[i]);
+        push(nv, h.dyn_values[i]);
+        i = i + 1;
+    }
+    h.dyn_names = nn;
+    h.dyn_values = nv;
+    h.size = h.size + entry_size(name, value);
+    evict(h);
 }
 
 fn set_max_size(h: Hpack, nuevo: int) {
-  h.max_size = nuevo;
-  evict(h);
+    h.max_size = nuevo;
+    evict(h);
 }
 
 // El nombre y valor del índice HPACK `idx` (1-basado): estático 1..61, dinámico 62+.
 fn table_lookup(h: Hpack, idx: int) -> Result<HEntry, string> {
-  let st = static_table();
-  if (idx >= 1 && idx <= len(st)) {
-    Result.Ok(st[idx - 1])
-  } else {
-    let d = idx - len(st) - 1;  // 0-basado en la tabla dinámica
-    if (d >= 0 && d < len(h.dyn_names)) {
-      Result.Ok(header(h.dyn_names[d], h.dyn_values[d]))
+    let st = static_table();
+    if (idx >= 1 && idx <= len(st)) {
+        Result.Ok(st[idx - 1])
     } else {
-      Result.Err("índice HPACK fuera de rango: " + to_string(idx))
+        let d = idx - len(st) - 1;  // 0-basado en la tabla dinámica
+        if (d >= 0 && d < len(h.dyn_names)) {
+            Result.Ok(header(h.dyn_names[d], h.dyn_values[d]))
+        } else {
+            Result.Err("índice HPACK fuera de rango: " + to_string(idx))
+        }
     }
-  }
 }
 
 // --- Codificación ---
 // Codifica un entero con prefijo de `prefix_bits` bits; `high` son los bits altos ya puestos del 1.er octeto.
 fn enc_int(out: [int], prefix_bits: int, high: int, value: int) {
-  let max = (1 << prefix_bits) - 1;
-  if (value < max) {
-    push(out, high | value);
-  } else {
-    push(out, high | max);
-    var v = value - max;
-    while (v >= 128) {
-      push(out, v & 127 | 128);
-      v = v >> 7;
+    let max = (1 << prefix_bits) - 1;
+    if (value < max) {
+        push(out, high | value);
+    } else {
+        push(out, high | max);
+        var v = value - max;
+        while (v >= 128) {
+            push(out, v & 127 | 128);
+            v = v >> 7;
+        }
+        push(out, v);
     }
-    push(out, v);
-  }
 }
 
 // Codifica un literal de string (sin Huffman): bit H=0 + longitud (prefijo 7) + octetos crudos.
 fn enc_str(out: [int], s: string) {
-  let b = to_bytes(s);
-  enc_int(out, 7, 0, len(b));
-  var i = 0;
-  while (i < len(b)) {
-    push(out, b[i]);
-    i = i + 1;
-  }
+    let b = to_bytes(s);
+    enc_int(out, 7, 0, len(b));
+    var i = 0;
+    while (i < len(b)) {
+        push(out, b[i]);
+        i = i + 1;
+    }
 }
 
 // Índice de la entrada EXACTA (nombre+valor) en estática+dinámica, o -1.
 fn find_exact(h: Hpack, name: string, value: string) -> int {
-  let st = static_table();
-  var i = 0;
-  while (i < len(st)) {
-    if (st[i].name == name && st[i].value == value) {
-      return i + 1;
+    let st = static_table();
+    var i = 0;
+    while (i < len(st)) {
+        if (st[i].name == name && st[i].value == value) {
+            return i + 1;
+        }
+        i = i + 1;
     }
-    i = i + 1;
-  }
-  i = 0;
-  while (i < len(h.dyn_names)) {
-    if (h.dyn_names[i] == name && h.dyn_values[i] == value) {
-      return len(st) + 1 + i;
+    i = 0;
+    while (i < len(h.dyn_names)) {
+        if (h.dyn_names[i] == name && h.dyn_values[i] == value) {
+            return len(st) + 1 + i;
+        }
+        i = i + 1;
     }
-    i = i + 1;
-  }
-  0 - 1
+    0 - 1
 }
 
 // Índice de la primera entrada con ese NOMBRE en estática+dinámica, o -1.
 fn find_name(h: Hpack, name: string) -> int {
-  let st = static_table();
-  var i = 0;
-  while (i < len(st)) {
-    if (st[i].name == name) {
-      return i + 1;
+    let st = static_table();
+    var i = 0;
+    while (i < len(st)) {
+        if (st[i].name == name) {
+            return i + 1;
+        }
+        i = i + 1;
     }
-    i = i + 1;
-  }
-  i = 0;
-  while (i < len(h.dyn_names)) {
-    if (h.dyn_names[i] == name) {
-      return len(st) + 1 + i;
+    i = 0;
+    while (i < len(h.dyn_names)) {
+        if (h.dyn_names[i] == name) {
+            return len(st) + 1 + i;
+        }
+        i = i + 1;
     }
-    i = i + 1;
-  }
-  0 - 1
+    0 - 1
 }
 
 fn encode_one(h: Hpack, out: [int], name: string, value: string) {
-  let exact = find_exact(h, name, value);
-  if (exact >= 0) {
-    enc_int(out, 7, 128, exact);  // indexado: 1xxxxxxx
-  } else {
-    // Literal con indexado incremental: 01xxxxxx (prefijo de nombre de 6 bits).
-    let nidx = find_name(h, name);
-    if (nidx >= 0) {
-      enc_int(out, 6, 64, nidx);
+    let exact = find_exact(h, name, value);
+    if (exact >= 0) {
+        enc_int(out, 7, 128, exact);  // indexado: 1xxxxxxx
     } else {
-      enc_int(out, 6, 64, 0);
-      enc_str(out, name);
+        // Literal con indexado incremental: 01xxxxxx (prefijo de nombre de 6 bits).
+        let nidx = find_name(h, name);
+        if (nidx >= 0) {
+            enc_int(out, 6, 64, nidx);
+        } else {
+            enc_int(out, 6, 64, 0);
+            enc_str(out, name);
+        }
+        enc_str(out, value);
+        add_dynamic(h, name, value);
     }
-    enc_str(out, value);
-    add_dynamic(h, name, value);
-  }
 }
 
 // Codifica una lista de cabeceras a un bloque HPACK (actualizando la tabla dinámica del emisor).
 pub fn encode(h: Hpack, headers: [HEntry]) -> bytes {
-  var out: [int] = [];
-  var i = 0;
-  while (i < len(headers)) {
-    encode_one(h, out, headers[i].name, headers[i].value);
-    i = i + 1;
-  }
-  bytes_of(out)
+    var out: [int] = [];
+    var i = 0;
+    while (i < len(headers)) {
+        encode_one(h, out, headers[i].name, headers[i].value);
+        i = i + 1;
+    }
+    bytes_of(out)
 }
 
 // --- Decodificación ---
 struct IntResult {
-  value: int,
-  next: int,
+    value: int,
+    next: int,
 }
 
 fn dec_int(data: bytes, pos: int, prefix_bits: int) -> IntResult {
-  let max = (1 << prefix_bits) - 1;
-  let first = data[pos] & max;
-  if (first < max) {
-    return IntResult { value: first, next: pos + 1 };
-  }
-  var v = max;
-  var shift = 0;
-  var p = pos + 1;
-  var seguir = true;
-  while (seguir) {
-    let b = data[p];
-    p = p + 1;
-    v = v + ((b & 127) << shift);
-    shift = shift + 7;
-    if ((b & 128) == 0) {
-      seguir = false;
+    let max = (1 << prefix_bits) - 1;
+    let first = data[pos] & max;
+    if (first < max) {
+        return IntResult { value: first, next: pos + 1 };
     }
-  }
-  IntResult { value: v, next: p }
+    var v = max;
+    var shift = 0;
+    var p = pos + 1;
+    var seguir = true;
+    while (seguir) {
+        let b = data[p];
+        p = p + 1;
+        v = v + ((b & 127) << shift);
+        shift = shift + 7;
+        if ((b & 128) == 0) {
+            seguir = false;
+        }
+    }
+    IntResult { value: v, next: p }
 }
 
 struct StrResult {
-  value: string,
-  next: int,
+    value: string,
+    next: int,
 }
 
 fn dec_str(data: bytes, pos: int) -> Result<StrResult, string> {
-  let huff = data[pos] >> 7 & 1;
-  let lr = dec_int(data, pos, 7);
-  if (huff == 1) {
-    return Result.Err("HPACK: literal Huffman no soportado en la decodificación");
-  }
-  match (from_utf8(sub_bytes(data, lr.next, lr.next + lr.value))) {
-    Result.Ok(s) => Result.Ok(StrResult { value: s, next: lr.next + lr.value }),
-    Result.Err(e) => Result.Err("HPACK: string no es UTF-8: " + e),
-  }
+    let huff = data[pos] >> 7 & 1;
+    let lr = dec_int(data, pos, 7);
+    if (huff == 1) {
+        return Result.Err("HPACK: literal Huffman no soportado en la decodificación");
+    }
+    match (from_utf8(sub_bytes(data, lr.next, lr.next + lr.value))) {
+        Result.Ok(s) => Result.Ok(StrResult { value: s, next: lr.next + lr.value }),
+        Result.Err(e) => Result.Err("HPACK: string no es UTF-8: " + e),
+    }
 }
 
 // Decodifica el nombre de un campo literal: si el índice es 0, es un string literal; si no, viene de la tabla.
 fn decode_name(h: Hpack, data: bytes, ir: IntResult) -> Result<StrResult, string> {
-  if (ir.value == 0) {
-    dec_str(data, ir.next)
-  } else {
-    match (table_lookup(h, ir.value)) {
-      Result.Ok(e) => Result.Ok(StrResult { value: e.name, next: ir.next }),
-      Result.Err(er) => Result.Err(er),
+    if (ir.value == 0) {
+        dec_str(data, ir.next)
+    } else {
+        match (table_lookup(h, ir.value)) {
+            Result.Ok(e) => Result.Ok(StrResult { value: e.name, next: ir.next }),
+            Result.Err(er) => Result.Err(er),
+        }
     }
-  }
 }
 
 // Decodifica un bloque HPACK a la lista de cabeceras (actualizando la tabla dinámica del receptor).
 pub fn decode(h: Hpack, data: bytes) -> Result<[HEntry], string> {
-  var headers: [HEntry] = [];
-  var pos = 0;
-  let n = len(data);
-  while (pos < n) {
-    let b = data[pos];
-    if ((b & 128) != 0) {
-      // Campo indexado.
-      let ir = dec_int(data, pos, 7);
-      match (table_lookup(h, ir.value)) {
-        Result.Ok(e) => {
-          push(headers, e);
-        },
-        Result.Err(er) => {
-          return Result.Err(er);
-        },
-      }
-      pos = ir.next;
-    } else {
-      if ((b & 64) != 0) {
-        // Literal con indexado incremental (prefijo de nombre 6 bits).
-        let ni = dec_int(data, pos, 6);
-        match (decode_name(h, data, ni)) {
-          Result.Err(er) => {
-            return Result.Err(er);
-          },
-          Result.Ok(nr) => {
-            match (dec_str(data, nr.next)) {
-              Result.Err(er) => {
-                return Result.Err(er);
-              },
-              Result.Ok(vr) => {
-                push(headers, header(nr.value, vr.value));
-                add_dynamic(h, nr.value, vr.value);
-                pos = vr.next;
-              },
-            }
-          },
-        }
-      } else {
-        if ((b & 32) != 0) {
-          // Actualización del tamaño máximo de la tabla dinámica (prefijo 5 bits).
-          let ir = dec_int(data, pos, 5);
-          set_max_size(h, ir.value);
-          pos = ir.next;
-        } else {
-          // Literal sin indexado / nunca indexado (prefijo de nombre 4 bits), no toca la tabla.
-          let ni = dec_int(data, pos, 4);
-          match (decode_name(h, data, ni)) {
-            Result.Err(er) => {
-              return Result.Err(er);
-            },
-            Result.Ok(nr) => {
-              match (dec_str(data, nr.next)) {
+    var headers: [HEntry] = [];
+    var pos = 0;
+    let n = len(data);
+    while (pos < n) {
+        let b = data[pos];
+        if ((b & 128) != 0) {
+            // Campo indexado.
+            let ir = dec_int(data, pos, 7);
+            match (table_lookup(h, ir.value)) {
+                Result.Ok(e) => {
+                    push(headers, e);
+                },
                 Result.Err(er) => {
-                  return Result.Err(er);
+                    return Result.Err(er);
                 },
-                Result.Ok(vr) => {
-                  push(headers, header(nr.value, vr.value));
-                  pos = vr.next;
-                },
-              }
-            },
-          }
+            }
+            pos = ir.next;
+        } else {
+            if ((b & 64) != 0) {
+                // Literal con indexado incremental (prefijo de nombre 6 bits).
+                let ni = dec_int(data, pos, 6);
+                match (decode_name(h, data, ni)) {
+                    Result.Err(er) => {
+                        return Result.Err(er);
+                    },
+                    Result.Ok(nr) => {
+                        match (dec_str(data, nr.next)) {
+                            Result.Err(er) => {
+                                return Result.Err(er);
+                            },
+                            Result.Ok(vr) => {
+                                push(headers, header(nr.value, vr.value));
+                                add_dynamic(h, nr.value, vr.value);
+                                pos = vr.next;
+                            },
+                        }
+                    },
+                }
+            } else {
+                if ((b & 32) != 0) {
+                    // Actualización del tamaño máximo de la tabla dinámica (prefijo 5 bits).
+                    let ir = dec_int(data, pos, 5);
+                    set_max_size(h, ir.value);
+                    pos = ir.next;
+                } else {
+                    // Literal sin indexado / nunca indexado (prefijo de nombre 4 bits), no toca la tabla.
+                    let ni = dec_int(data, pos, 4);
+                    match (decode_name(h, data, ni)) {
+                        Result.Err(er) => {
+                            return Result.Err(er);
+                        },
+                        Result.Ok(nr) => {
+                            match (dec_str(data, nr.next)) {
+                                Result.Err(er) => {
+                                    return Result.Err(er);
+                                },
+                                Result.Ok(vr) => {
+                                    push(headers, header(nr.value, vr.value));
+                                    pos = vr.next;
+                                },
+                            }
+                        },
+                    }
+                }
+            }
         }
-      }
     }
-  }
-  Result.Ok(headers)
+    Result.Ok(headers)
 }

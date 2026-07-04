@@ -10,57 +10,57 @@
 //   cargo run --quiet -- examples/ffi/cstrings.ray
 // strstr(haystack, needle): un puntero DENTRO de haystack a la primera coincidencia, o NULL.
 extern "c" {
-  fn strstr(haystack: string, needle: string) -> Option<string>;
-  fn strchr(s: string, c: int) -> Option<bytes>;
-  fn fopen(path: string, mode: string) -> Option<ptr>;
-  fn fgetc(stream: ptr) -> int;
-  fn fclose(stream: ptr) -> int;
+    fn strstr(haystack: string, needle: string) -> Option<string>;
+    fn strchr(s: string, c: int) -> Option<bytes>;
+    fn fopen(path: string, mode: string) -> Option<ptr>;
+    fn fgetc(stream: ptr) -> int;
+    fn fclose(stream: ptr) -> int;
 }
 
 // La misma función, pero recibiendo los bytes crudos (sin asumir UTF-8).
 fn mostrar(o: Option<string>) -> string {
-  match (o) {
-    Option.Some(s) => s,
-    Option.None => "(no encontrado)",
-  }
+    match (o) {
+        Option.Some(s) => s,
+        Option.None => "(no encontrado)",
+    }
 }
 
 // M41.4b: un handle opaco. `fopen` puede devolver NULL (fallo) → `Option<ptr>`. El `ptr` es opaco:
 // se pasa a otras funciones C (fgetc/fclose) pero NO se desreferencia ni se opera en raylang.
 // C int (32 bits); EOF = -1
 fn contar_bytes(h: ptr) -> int {
-  var n = 0;
-  var c = fgetc(h);
-  while (c >= 0) {
-    n = n + 1;
-    c = fgetc(h);
-  }
-  fclose(h);
-  n
+    var n = 0;
+    var c = fgetc(h);
+    while (c >= 0) {
+        n = n + 1;
+        c = fgetc(h);
+    }
+    fclose(h);
+    n
 }
 
 fn main() -> int {
-  print(mostrar(strstr("hola mundo", "mundo")));  // mundo
-  print(mostrar(strstr("hola mundo", "xyz")));  // (no encontrado)
+    print(mostrar(strstr("hola mundo", "mundo")));  // mundo
+    print(mostrar(strstr("hola mundo", "xyz")));  // (no encontrado)
 
-  // strchr por el código de 'l' (108): "llo mundo" (bytes crudos).
-  match (strchr("hola mundo", 108)) {
-    Option.Some(b) => {
-      print(len(b));  // 8
-    },
-    Option.None => {
-      print("sin 'l'");
-    },
-  }
+    // strchr por el código de 'l' (108): "llo mundo" (bytes crudos).
+    match (strchr("hola mundo", 108)) {
+        Option.Some(b) => {
+            print(len(b));  // 8
+        },
+        Option.None => {
+            print("sin 'l'");
+        },
+    }
 
-  // Un handle opaco fallible: abrir este mismo archivo fuente y contar sus bytes.
-  match (fopen("examples/ffi/cstrings.ray", "r")) {
-    Option.Some(h) => {
-      print(contar_bytes(h) > 0);  // true
-    },
-    Option.None => {
-      print("no se pudo abrir");
-    },
-  }
-  0
+    // Un handle opaco fallible: abrir este mismo archivo fuente y contar sus bytes.
+    match (fopen("examples/ffi/cstrings.ray", "r")) {
+        Option.Some(h) => {
+            print(contar_bytes(h) > 0);  // true
+        },
+        Option.None => {
+            print("no se pudo abrir");
+        },
+    }
+    0
 }

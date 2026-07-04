@@ -5,35 +5,35 @@
 // `==`, concatenación `+`, y conversión con `to_bytes`/`from_utf8`. La I/O binaria (read/write_file_bytes,
 // socket_*_bytes) preserva los octetos crudos, que `string` (UTF-8 lossy) corrompería.
 fn main() -> int {
-  // Literal binario: incluye un byte nulo y 0xFF, imposibles en un string normal.
-  let cabecera: bytes = b"RAY\x00\x01";
-  print("cabecera: " + to_string(len(cabecera)) + " octetos");  // 5
-  print("primer octeto: " + to_string(cabecera[0]));  // 82 ('R')
-  print("byte nulo: " + to_string(cabecera[3]));  // 0
+    // Literal binario: incluye un byte nulo y 0xFF, imposibles en un string normal.
+    let cabecera: bytes = b"RAY\x00\x01";
+    print("cabecera: " + to_string(len(cabecera)) + " octetos");  // 5
+    print("primer octeto: " + to_string(cabecera[0]));  // 82 ('R')
+    print("byte nulo: " + to_string(cabecera[3]));  // 0
 
-  // Concatenación y conversión desde/hacia string.
-  let cuerpo: bytes = to_bytes("hola");
-  let mensaje: bytes = cabecera + cuerpo;
-  print("mensaje: " + to_string(len(mensaje)) + " octetos");  // 9
+    // Concatenación y conversión desde/hacia string.
+    let cuerpo: bytes = to_bytes("hola");
+    let mensaje: bytes = cabecera + cuerpo;
+    print("mensaje: " + to_string(len(mensaje)) + " octetos");  // 9
 
-  // Round-trip a disco (binario correcto).
-  let ruta: string = "/tmp/raylang_ejemplo.bin";
-  match (write_file_bytes(ruta, mensaje)) {
-    Result.Ok(n) => print("escritos " + to_string(n) + " octetos"),
-    Result.Err(e) => eprint("error: " + e),
-  }
-  match (read_file_bytes(ruta)) {
-    Result.Ok(leido) => {
-      if (leido == mensaje) { print("round-trip OK") } else { print("CORRUPTO") }
-    },
-    Result.Err(e) => eprint("error: " + e),
-  }
+    // Round-trip a disco (binario correcto).
+    let ruta: string = "/tmp/raylang_ejemplo.bin";
+    match (write_file_bytes(ruta, mensaje)) {
+        Result.Ok(n) => print("escritos " + to_string(n) + " octetos"),
+        Result.Err(e) => eprint("error: " + e),
+    }
+    match (read_file_bytes(ruta)) {
+        Result.Ok(leido) => {
+            if (leido == mensaje) { print("round-trip OK") } else { print("CORRUPTO") }
+        },
+        Result.Err(e) => eprint("error: " + e),
+    }
 
-  // Decodificar solo el cuerpo (el cabecera no es UTF-8 válido por el byte nulo... sí lo es de hecho,
-  // pero \xff no lo sería). Aquí decodificamos el cuerpo, que sí es texto.
-  match (from_utf8(cuerpo)) {
-    Result.Ok(s) => print("cuerpo como texto: " + s),
-    Result.Err(e) => print("no es UTF-8"),
-  }
-  0
+    // Decodificar solo el cuerpo (el cabecera no es UTF-8 válido por el byte nulo... sí lo es de hecho,
+    // pero \xff no lo sería). Aquí decodificamos el cuerpo, que sí es texto.
+    match (from_utf8(cuerpo)) {
+        Result.Ok(s) => print("cuerpo como texto: " + s),
+        Result.Err(e) => print("no es UTF-8"),
+    }
+    0
 }

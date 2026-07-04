@@ -3,34 +3,34 @@
 from log import Logger, LogEntry, logger, with_level, debug, info, warn, error, field, field_int, field_bool, render;
 
 fn main() {
-  let lg = logger("api");
-  let ts = "2026-06-30T12:00:00Z";
+    let lg = logger("api");
+    let ts = "2026-06-30T12:00:00Z";
 
-  // Entrada simple.
-  print(render(info(lg, "servidor iniciado"), ts));
+    // Entrada simple.
+    print(render(info(lg, "servidor iniciado"), ts));
 
-  // Campos encadenados por UFCS (cross-module): string + int.
-  print(render(info(lg, "peticion").field("method", "GET").field("path", "/users/42").field_int("status", 200), ts));
+    // Campos encadenados por UFCS (cross-module): string + int.
+    print(render(info(lg, "peticion").field("method", "GET").field("path", "/users/42").field_int("status", 200), ts));
 
-  // Niveles + tipos de campo (int, bool).
-  print(render(warn(lg, "latencia alta").field_int("ms", 1500).field_bool("retry", true), ts));
+    // Niveles + tipos de campo (int, bool).
+    print(render(warn(lg, "latencia alta").field_int("ms", 1500).field_bool("retry", true), ts));
 
-  // Escapado JSON: comillas, barra, salto de línea en el mensaje.
-  print(render(error(lg, "fallo \"db\" en\nla conexion").field("code", "E_CONN"), ts));
+    // Escapado JSON: comillas, barra, salto de línea en el mensaje.
+    print(render(error(lg, "fallo \"db\" en\nla conexion").field("code", "E_CONN"), ts));
 
-  // El filtro por nivel: un logger con min_level=WARN descarta INFO (se decide aquí, sin la hora real).
-  let lg2 = with_level(logger("worker"), 2);
-  print(filtrado(lg2, info(lg2, "esto se descarta"), ts));  // (filtrado)
-  print(filtrado(lg2, error(lg2, "esto pasa"), ts));  // la línea JSON
+    // El filtro por nivel: un logger con min_level=WARN descarta INFO (se decide aquí, sin la hora real).
+    let lg2 = with_level(logger("worker"), 2);
+    print(filtrado(lg2, info(lg2, "esto se descarta"), ts));  // (filtrado)
+    print(filtrado(lg2, error(lg2, "esto pasa"), ts));  // la línea JSON
 }
 
 // Reproduce el filtro de `emit` de forma determinista (sin la hora del sistema).
 fn filtrado(lg: Logger, e: LogEntry, ts: string) -> string {
-  if (level_de(e) >= min_de(lg)) {
-    render(e, ts)
-  } else {
-    "(filtrado)"
-  }
+    if (level_de(e) >= min_de(lg)) {
+        render(e, ts)
+    } else {
+        "(filtrado)"
+    }
 }
 
 // Accesores (los campos son privados al módulo log; aquí se replican vía render para el test).

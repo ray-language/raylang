@@ -12,38 +12,38 @@
 // Go es "poner ese caso a nil"; aquí: quitar el canal cerrado de la lista). Para no liar el ejemplo,
 // estas fuentes NO cierran: el consumidor lee un número conocido de valores.
 fn fuente(ch: Channel<int>, base: int, cuantos: int) {
-  var i = 0;
-  while (i < cuantos) {
-    send(ch, base + i);
-    i = i + 1;
-  }
+    var i = 0;
+    while (i < cuantos) {
+        send(ch, base + i);
+        i = i + 1;
+    }
 }
 
 fn main() -> int {
-  let a: Channel<int> = channel();
-  let b: Channel<int> = channel();
-  spawn(fn() {
-  fuente(a, 100, 2);  // 100, 101
+    let a: Channel<int> = channel();
+    let b: Channel<int> = channel();
+    spawn(fn() {
+    fuente(a, 100, 2);  // 100, 101
 });
-  spawn(fn() {
-  fuente(b, 200, 2);  // 200, 201
+    spawn(fn() {
+    fuente(b, 200, 2);  // 200, 201
 });
 
-  let chs: [Channel<int>] = [a, b];
-  var total = 0;
-  var n = 0;
-  // Un solo bucle atiende AMBAS fuentes: select elige el canal que esté listo (menor índice primero).
-  while (n < 4) {
-    let i = select(chs);
-    match (recv(chs[i])) {
-      Option.Some(v) => {
-        print(v);
-        total = total + v;
-      },
-      Option.None => { },
+    let chs: [Channel<int>] = [a, b];
+    var total = 0;
+    var n = 0;
+    // Un solo bucle atiende AMBAS fuentes: select elige el canal que esté listo (menor índice primero).
+    while (n < 4) {
+        let i = select(chs);
+        match (recv(chs[i])) {
+            Option.Some(v) => {
+                print(v);
+                total = total + v;
+            },
+            Option.None => { },
+        }
+        n = n + 1;
     }
-    n = n + 1;
-  }
-  print(total);  // 100+101+200+201 = 602
-  total
+    print(total);  // 100+101+200+201 = 602
+    total
 }

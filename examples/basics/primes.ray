@@ -1,25 +1,25 @@
 // Imprime los números primos del 2 al 30.
 fn es_primo(n: int) -> bool {
-  if (n < 2) {
-    return false;
-  }
-  var d: int = 2;
-  while (d * d <= n) {
-    if (n % d == 0) {
-      return false;
+    if (n < 2) {
+        return false;
     }
-    d = d + 1;
-  }
-  true
+    var d: int = 2;
+    while (d * d <= n) {
+        if (n % d == 0) {
+            return false;
+        }
+        d = d + 1;
+    }
+    true
 }
 
 fn main() -> int {
-  var n: int = 2;
-  while (n <= 30) {
-    if (es_primo(n)) {
-      print(n);
+    var n: int = 2;
+    while (n <= 30) {
+        if (es_primo(n)) {
+            print(n);
+        }
+        n = n + 1;
     }
-    n = n + 1;
-  }
-  0
+    0
 }

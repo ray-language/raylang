@@ -5,120 +5,120 @@
 from regex import full_match, search, find_str, find_all, replace_all;
 
 fn si(b: bool) -> string {
-  if (b) { "si" } else { "no" }
+    if (b) { "si" } else { "no" }
 }
 
 fn caso_full(pat: string, txt: string) {
-  print("full  /" + to_string(pat) + "/ ~ \"" + to_string(txt) + "\" = " + to_string(si(full_match(pat, txt))));
+    print("full  /" + to_string(pat) + "/ ~ \"" + to_string(txt) + "\" = " + to_string(si(full_match(pat, txt))));
 }
 
 fn caso_search(pat: string, txt: string) {
-  print("search/" + to_string(pat) + "/ ~ \"" + to_string(txt) + "\" = " + to_string(si(search(pat, txt))));
+    print("search/" + to_string(pat) + "/ ~ \"" + to_string(txt) + "\" = " + to_string(si(search(pat, txt))));
 }
 
 fn caso_find(pat: string, txt: string) {
-  match (find_str(pat, txt)) {
-    Option.Some(m) => print("find  /" + to_string(pat) + "/ ~ \"" + to_string(txt) + "\" = \"" + to_string(m) + "\""),
-    Option.None => print("find  /" + to_string(pat) + "/ ~ \"" + to_string(txt) + "\" = <none>"),
-  }
+    match (find_str(pat, txt)) {
+        Option.Some(m) => print("find  /" + to_string(pat) + "/ ~ \"" + to_string(txt) + "\" = \"" + to_string(m) + "\""),
+        Option.None => print("find  /" + to_string(pat) + "/ ~ \"" + to_string(txt) + "\" = <none>"),
+    }
 }
 
 fn caso_findall(pat: string, txt: string) {
-  let ms = find_all(pat, txt);
-  var s = "";
-  var primero = true;
-  for m in ms {
-    if (primero) {
-      primero = false;
-    } else {
-      s = s + ",";
+    let ms = find_all(pat, txt);
+    var s = "";
+    var primero = true;
+    for m in ms {
+        if (primero) {
+            primero = false;
+        } else {
+            s = s + ",";
+        }
+        s = s + m;
     }
-    s = s + m;
-  }
-  print("all   /" + to_string(pat) + "/ ~ \"" + to_string(txt) + "\" = [" + to_string(s) + "]");
+    print("all   /" + to_string(pat) + "/ ~ \"" + to_string(txt) + "\" = [" + to_string(s) + "]");
 }
 
 fn caso_replace(pat: string, txt: string, rep: string) {
-  print("repl  /" + to_string(pat) + "/ \"" + to_string(txt) + "\" -> \"" + to_string(replace_all(pat, txt, rep)) + "\"");
+    print("repl  /" + to_string(pat) + "/ \"" + to_string(txt) + "\" -> \"" + to_string(replace_all(pat, txt, rep)) + "\"");
 }
 
 fn main() {
-  // Literales y concatenación.
-  caso_full("abc", "abc");  // si
-  caso_full("abc", "abd");  // no
-  caso_full("abc", "ab");  // no
+    // Literales y concatenación.
+    caso_full("abc", "abc");  // si
+    caso_full("abc", "abd");  // no
+    caso_full("abc", "ab");  // no
 
-  // '.' comodín.
-  caso_full("a.c", "axc");  // si
-  caso_full("a.c", "ac");  // no
+    // '.' comodín.
+    caso_full("a.c", "axc");  // si
+    caso_full("a.c", "ac");  // no
 
-  // '*' '+' '?'.
-  caso_full("ab*c", "ac");  // si
-  caso_full("ab*c", "abbbc");  // si
-  caso_full("ab+c", "ac");  // no
-  caso_full("ab+c", "abc");  // si
-  caso_full("colou?r", "color");  // si
-  caso_full("colou?r", "colour");  // si
+    // '*' '+' '?'.
+    caso_full("ab*c", "ac");  // si
+    caso_full("ab*c", "abbbc");  // si
+    caso_full("ab+c", "ac");  // no
+    caso_full("ab+c", "abc");  // si
+    caso_full("colou?r", "color");  // si
+    caso_full("colou?r", "colour");  // si
 
-  // Alternancia y grupos.
-  caso_full("gr(a|e)y", "gray");  // si
-  caso_full("gr(a|e)y", "grey");  // si
-  caso_full("gr(a|e)y", "groy");  // no
-  caso_full("(ab)+", "ababab");  // si
-  caso_full("(ab)+", "aba");  // no
+    // Alternancia y grupos.
+    caso_full("gr(a|e)y", "gray");  // si
+    caso_full("gr(a|e)y", "grey");  // si
+    caso_full("gr(a|e)y", "groy");  // no
+    caso_full("(ab)+", "ababab");  // si
+    caso_full("(ab)+", "aba");  // no
 
-  // Anidamiento y estrella de grupo.
-  caso_full("a(b|c)*d", "ad");  // si
-  caso_full("a(b|c)*d", "abccbd");  // si
-  caso_full("a(b|c)*d", "abxd");  // no
+    // Anidamiento y estrella de grupo.
+    caso_full("a(b|c)*d", "ad");  // si
+    caso_full("a(b|c)*d", "abccbd");  // si
+    caso_full("a(b|c)*d", "abxd");  // no
 
-  // Escapes: un metacarácter literal.
-  caso_full("a\\.b", "a.b");  // si
-  caso_full("a\\.b", "axb");  // no
+    // Escapes: un metacarácter literal.
+    caso_full("a\\.b", "a.b");  // si
+    caso_full("a\\.b", "axb");  // no
 
-  // Búsqueda no anclada.
-  caso_search("cd", "abcde");  // si
-  caso_search("xyz", "abcde");  // no
-  caso_search("a+", "bbbaaa");  // si
-  caso_search("", "abc");  // si (patrón vacío: casa en todas partes)
+    // Búsqueda no anclada.
+    caso_search("cd", "abcde");  // si
+    caso_search("xyz", "abcde");  // no
+    caso_search("a+", "bbbaaa");  // si
+    caso_search("", "abc");  // si (patrón vacío: casa en todas partes)
 
-  // M29.1b — clases de caracteres.
-  caso_full("[abc]+", "cabba");  // si
-  caso_full("[abc]+", "cabxa");  // no
-  caso_full("[a-z]+", "hola");  // si
-  caso_full("[a-z]+", "Hola");  // no
-  caso_full("[^0-9]+", "abc");  // si
-  caso_full("[^0-9]+", "ab3");  // no
-  caso_full("[A-Za-z0-9_]+", "var_9");  // si
+    // M29.1b — clases de caracteres.
+    caso_full("[abc]+", "cabba");  // si
+    caso_full("[abc]+", "cabxa");  // no
+    caso_full("[a-z]+", "hola");  // si
+    caso_full("[a-z]+", "Hola");  // no
+    caso_full("[^0-9]+", "abc");  // si
+    caso_full("[^0-9]+", "ab3");  // no
+    caso_full("[A-Za-z0-9_]+", "var_9");  // si
 
-  // Escapes de clase: \d \w \s (y negados).
-  caso_full("\\d+", "2024");  // si
-  caso_full("\\d+", "20a4");  // no
-  caso_full("\\w+", "hola_99");  // si
-  caso_full("a\\sb", "a b");  // si
-  caso_full("a\\sb", "a_b");  // no
-  caso_full("\\D+", "abc");  // si
-  caso_full("[\\d.]+", "3.14");  // si (dígitos y punto dentro de la clase)
+    // Escapes de clase: \d \w \s (y negados).
+    caso_full("\\d+", "2024");  // si
+    caso_full("\\d+", "20a4");  // no
+    caso_full("\\w+", "hola_99");  // si
+    caso_full("a\\sb", "a b");  // si
+    caso_full("a\\sb", "a_b");  // no
+    caso_full("\\D+", "abc");  // si
+    caso_full("[\\d.]+", "3.14");  // si (dígitos y punto dentro de la clase)
 
-  // Anclas ^ y $.
-  caso_search("^abc", "abcdef");  // si (empieza por abc)
-  caso_search("^abc", "xabcdef");  // no (no empieza por abc)
-  caso_search("def$", "abcdef");  // si (termina en def)
-  caso_search("def$", "abcdefg");  // no
-  caso_search("^\\d+$", "12345");  // si (todo dígitos, anclado)
-  caso_search("^\\d+$", "123a5");  // no
+    // Anclas ^ y $.
+    caso_search("^abc", "abcdef");  // si (empieza por abc)
+    caso_search("^abc", "xabcdef");  // no (no empieza por abc)
+    caso_search("def$", "abcdef");  // si (termina en def)
+    caso_search("def$", "abcdefg");  // no
+    caso_search("^\\d+$", "12345");  // si (todo dígitos, anclado)
+    caso_search("^\\d+$", "123a5");  // no
 
-  // Un correo de juguete.
-  caso_full("\\w+@\\w+\\.\\w+", "ana@rayala.org");  // si
-  caso_full("\\w+@\\w+\\.\\w+", "ana.rayala.org");  // no
+    // Un correo de juguete.
+    caso_full("\\w+@\\w+\\.\\w+", "ana@rayala.org");  // si
+    caso_full("\\w+@\\w+\\.\\w+", "ana.rayala.org");  // no
 
-  // M29.1c — localización.
-  caso_find("\\d+", "abc123def");  // "123"
-  caso_find("\\d+", "sin numeros");  // <none>
-  caso_find("a+", "xaaay");  // "aaa" (leftmost-longest)
-  caso_findall("\\d+", "a12b345c6");  // [12,345,6]
-  caso_findall("[a-z]+", "Hola Mundo 42");  // [ola,undo]
-  caso_replace("\\d+", "quedan 3 de 10", "N");  // "quedan N de N"
-  caso_replace("\\s+", "hola   mundo  ya", "_");  // "hola_mundo_ya"
-  caso_replace("a", "banana", "-");  // "b-n-n-"
+    // M29.1c — localización.
+    caso_find("\\d+", "abc123def");  // "123"
+    caso_find("\\d+", "sin numeros");  // <none>
+    caso_find("a+", "xaaay");  // "aaa" (leftmost-longest)
+    caso_findall("\\d+", "a12b345c6");  // [12,345,6]
+    caso_findall("[a-z]+", "Hola Mundo 42");  // [ola,undo]
+    caso_replace("\\d+", "quedan 3 de 10", "N");  // "quedan N de N"
+    caso_replace("\\s+", "hola   mundo  ya", "_");  // "hola_mundo_ya"
+    caso_replace("a", "banana", "-");  // "b-n-n-"
 }

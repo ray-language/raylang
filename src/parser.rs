@@ -71,6 +71,11 @@ pub struct Parser {
     /// Posición del nombre en un acceso `recv.name` (M10.2g): `(línea, col, nombre)` del acceso →
     /// `(línea, col)` del `name` tras el `.`. Al terminar pasa al `Program` (para el hover del LSP).
     field_name_pos: std::collections::HashMap<(usize, usize, String), (usize, usize)>,
+    /// Azúcar preservado para el formateador (M29.3): forma de superficie de interpolación y pipelines,
+    /// indexada por la posición del nodo desazucarado raíz. Al terminar pasan al `Program`. Ver
+    /// [`crate::ast::Program::interp_sites`].
+    interp_sites: std::collections::HashMap<(usize, usize), Vec<InterpSeg>>,
+    pipe_sites: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
     /// Profundidad de recursión actual (M33d): la incrementan los tres puntos recursivos
     /// (`expression`/`parse_type`/`block`); al pasar `MAX_PARSE_DEPTH` se corta con un
     /// `ParseError` — sin esto, un `((((…` hostil desborda la pila y ABORTA el proceso
@@ -88,7 +93,7 @@ type TypeParamsAndBounds = (Vec<String>, Vec<(String, String)>);
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new(), field_name_pos: std::collections::HashMap::new(), depth: 0 }
+        Parser { tokens, pos: 0, next_fn_id: 0, no_struct_lit: false, expr_spans: std::collections::HashMap::new(), field_name_pos: std::collections::HashMap::new(), interp_sites: std::collections::HashMap::new(), pipe_sites: std::collections::HashMap::new(), depth: 0 }
     }
 
     // =================================================================
@@ -103,6 +108,8 @@ impl Parser {
         }
         acc.expr_spans = std::mem::take(&mut self.expr_spans);
         acc.field_name_pos = std::mem::take(&mut self.field_name_pos);
+        acc.interp_sites = std::mem::take(&mut self.interp_sites);
+        acc.pipe_sites = std::mem::take(&mut self.pipe_sites);
         Ok(acc)
     }
 
@@ -126,6 +133,8 @@ impl Parser {
         }
         acc.expr_spans = std::mem::take(&mut self.expr_spans);
         acc.field_name_pos = std::mem::take(&mut self.field_name_pos);
+        acc.interp_sites = std::mem::take(&mut self.interp_sites);
+        acc.pipe_sites = std::mem::take(&mut self.pipe_sites);
         (acc, errores)
     }
 
@@ -898,9 +907,15 @@ impl Parser {
     /// `${…}`. Las partes literales usan la posición de la cadena.
     fn build_interp(&mut self, parts: Vec<InterpPart>, line: usize, col: usize) -> Result<Expr, ParseError> {
         let mut acc: Option<Expr> = None;
+        // M29.3: en paralelo al AST desazucarado, se guardan los segmentos de superficie (texto + exprs
+        // ya parseadas) para que el formateador reemita `"…${e}…"` sin perderla.
+        let mut segs: Vec<InterpSeg> = Vec::with_capacity(parts.len());
         for part in parts {
             let piece = match part {
-                InterpPart::Lit(s) => Expr { kind: ExprKind::Str(s), line, col },
+                InterpPart::Lit(s) => {
+                    segs.push(InterpSeg::Lit(s.clone()));
+                    Expr { kind: ExprKind::Str(s), line, col }
+                }
                 InterpPart::Expr(src, el, ec) => {
                     // Se re-lexa el fragmento ARRANCANDO en su posición real `(el, ec)`, así el
                     // sub-AST nace con posiciones de la fuente (no las de la cadena) → el LSP da
@@ -913,6 +928,11 @@ impl Parser {
                     if !sub.is_at_end() {
                         return Err(ParseError { msg: "la interpolación debe ser una sola expresión".into(), line: el, col: ec, len: 1 });
                     }
+                    // El azúcar de una expresión anidada (interpolación/pipeline dentro de `${…}`) vive en
+                    // el sub-parser → se fusiona para no perderlo al formatear.
+                    self.interp_sites.extend(std::mem::take(&mut sub.interp_sites));
+                    self.pipe_sites.extend(std::mem::take(&mut sub.pipe_sites));
+                    segs.push(InterpSeg::Expr(e.clone()));
                     // to_string(e) — convierte primitivos/string a texto para concatenar.
                     let callee = Expr { kind: ExprKind::Ident("to_string".into()), line: el, col: ec };
                     Expr { kind: ExprKind::Call { callee: Box::new(callee), args: vec![e] }, line: el, col: ec }
@@ -927,7 +947,11 @@ impl Parser {
                 },
             });
         }
-        Ok(acc.unwrap_or_else(|| crate::ice!("una cadena interpolada llegó sin partes del lexer")))
+        let root = acc.unwrap_or_else(|| crate::ice!("una cadena interpolada llegó sin partes del lexer"));
+        // Indexado por la posición del nodo RAÍZ desazucarado (el propio `to_string` si es un solo `${e}`,
+        // o el `+` externo si hay literales). El formateador lo consulta ahí para reemitir la cadena.
+        self.interp_sites.insert((root.line, root.col), segs);
+        Ok(root)
     }
 
     /// Parsea una expresión con el literal de struct desactivado (para la cabecera del `for`, M27.2).
@@ -1049,7 +1073,13 @@ impl Parser {
         while self.check(&TokenKind::PipeArrow) {
             self.advance(); // '|>'
             let rhs = self.call()?;
+            // M29.3: guardar la forma de superficie `(receptor, rhs)` para el formateador, indexada por
+            // la posición del `Call` desazucarado que produce `make_pipeline` (la de `rhs`). El receptor
+            // puede ser a su vez un pipeline (encadenado) → su clave está también en la tabla.
+            let clave = (rhs.line, rhs.col);
+            let (recv_sfc, rhs_sfc) = (left.clone(), rhs.clone());
             left = make_pipeline(left, rhs);
+            self.pipe_sites.insert(clave, (recv_sfc, rhs_sfc));
         }
         Ok(left)
     }

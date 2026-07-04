@@ -4500,8 +4500,13 @@ Hace que el lenguaje se sienta "completo"; construye sobre traits (M9).
     (`bin_prec`/`expr_prec` espejo de la jerarquía del parser) → paréntesis mínimos. Indentación de 4
     espacios; ítems de nivel superior en el **orden del archivo** (se ordenan por `line`, ya que el AST los
     bucketiza por categoría); formas con bloque (`if`/`while`/`match`) indentadas por `fmt_value`. Al trabajar
-    sobre el AST, **normaliza**: desazucara lo que el parser (interpolación `f"…"` → `+ to_string`, pipelines
-    `|>` → llamadas) — el resultado siempre es válido e **idempotente**. **Comentarios preservados**: el lexer
+    sobre el AST, **normaliza** el estilo pero **preserva las features de superficie** que el parser
+    desazucara (M29.3): la **interpolación** `"…${x}…"` y los **pipelines** `x |> f()`. El parser las baja
+    al AST (concatenación/llamada) para el checker y los motores, pero guarda la forma original en
+    `Program::interp_sites`/`pipe_sites` (por posición del nodo raíz); el formateador las reemite desde ahí
+    (`fmt_expr`→`fmt_interp`/`fmt_pipe`, quitando la entrada mientras formatea para evitar la reentrada
+    infinita por la colisión de posición raíz↔sub-expr). El resultado es válido e **idempotente**.
+    **Comentarios preservados**: el lexer
     los descarta, así que se recolectan aparte (`collect_comments`, respetando cadenas/chars) y se re-insertan
     durante la emisión mediante un cursor (`Cur`) — doc-comments encima de ítems, comentarios sueltos entre
     sentencias/miembros, *trailing* al final de línea, y los de fin de bloque (antes del `}`, acotados con

@@ -2,9 +2,11 @@
 //! sin configuración (estilo `gofmt`). **Cliente externo**: reusa `lexer`+`parser` y hace *pretty-print*
 //! del AST; no toca el núcleo (checker/motores). `ray fmt <archivo>` imprime la versión formateada.
 //!
-//! Como trabaja sobre el **AST**, el formateador **normaliza**: desazucara lo que el parser desazucara
-//! (interpolación `"…${x}…"` → `+ to_string(...)`, pipelines `|>` → llamadas). El resultado siempre es
-//! válido y `fmt(fmt(x)) == fmt(x)`.
+//! Como trabaja sobre el **AST**, el formateador **normaliza** el estilo, pero **preserva las features
+//! de superficie** que el parser desazucara: la **interpolación** `"…${x}…"` y los **pipelines** `x |>
+//! f()`. El parser las baja al AST (concatenación / llamada) para el checker y los motores, pero guarda
+//! la forma original en `Program::interp_sites`/`pipe_sites` (indexada por posición); aquí se reemiten
+//! desde ahí (`fmt_expr` → `fmt_interp`/`fmt_pipe`). El resultado siempre es válido y `fmt(fmt(x)) == fmt(x)`.
 //!
 //! **Comentarios.** El lexer los descarta, así que se recolectan aparte (`collect_comments`, respetando
 //! cadenas/chars) y se **re-insertan** durante la emisión (`Cur`): antes de cada ítem/sentencia/miembro
@@ -26,7 +28,7 @@ const INDENT: &str = "    "; // 4 espacios
 pub fn format_source(src: &str) -> Result<String, String> {
     let tokens = crate::lexer::lex(src).map_err(|e| e.to_string())?;
     let program = crate::parser::parse(tokens).map_err(|e| e.to_string())?;
-    let mut cur = Cur::new(src);
+    let mut cur = Cur::new(src, &program);
     Ok(format_program(&program, &mut cur))
 }
 
@@ -149,15 +151,25 @@ struct Cur {
     /// Líneas (1-basadas) que en la fuente están **en blanco** (vacías o solo espacios). Una línea que
     /// es solo un comentario NO cuenta como blanco (tiene contenido).
     blancos: std::collections::HashSet<usize>,
+    /// Azúcar preservado (M29.3): la forma de superficie de interpolación/pipelines por posición del
+    /// nodo desazucarado raíz. El formateador la consulta en `fmt_expr` para reemitir `"…${e}…"` / `x |> f`.
+    interp: std::collections::HashMap<(usize, usize), Vec<InterpSeg>>,
+    pipe: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
 }
 
 impl Cur {
-    fn new(src: &str) -> Self {
+    fn new(src: &str, program: &Program) -> Self {
         let blancos = src.lines().enumerate()
             .filter(|(_, l)| l.trim().is_empty())
             .map(|(i, _)| i + 1)
             .collect();
-        Cur { items: collect_comments(src), i: 0, blancos }
+        Cur {
+            items: collect_comments(src),
+            i: 0,
+            blancos,
+            interp: program.interp_sites.clone(),
+            pipe: program.pipe_sites.clone(),
+        }
     }
 
     /// ¿Emitir una línea en blanco antes del constructo que empieza en `line` (con sus comentarios
@@ -722,12 +734,76 @@ fn expr_prec(e: &Expr) -> u8 {
 
 /// Formatea `e`; si su precedencia es menor que `min_prec`, lo envuelve en paréntesis.
 fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
+    // M29.3: azúcar preservado. Si esta posición es la raíz de una interpolación o un pipeline
+    // desazucarado, se reemite la forma de superficie. Se **quita** la entrada de la tabla mientras se
+    // formatea y se restaura: el nodo raíz desazucarado y una de sus sub-expresiones comparten posición
+    // (p. ej. `"${x}"` → `to_string(x)`, ambos en la misma `(línea, col)`), así que sin quitarla la
+    // recursión reentraría infinitamente; quitándola solo LA raíz, el azúcar anidado (en otras
+    // posiciones) se sigue preservando.
+    let pos = (e.line, e.col);
+    if let Some(segs) = cur.interp.remove(&pos) {
+        let s = fmt_interp(cur, &segs); // una cadena interpolada es primaria → sin paréntesis
+        cur.interp.insert(pos, segs);
+        return s;
+    }
+    if let Some((recv, rhs)) = cur.pipe.remove(&pos) {
+        let s = fmt_pipe(cur, &recv, &rhs);
+        cur.pipe.insert(pos, (recv, rhs));
+        // El pipeline `|>` tiene la precedencia MÍNIMA: se parentiza en cualquier operando más fuerte.
+        return if min_prec > PIPE_PREC { format!("({})", s) } else { s };
+    }
     let s = fmt_expr_raw(cur, e);
     if expr_prec(e) < min_prec {
         format!("({})", s)
     } else {
         s
     }
+}
+
+/// Precedencia del pipeline `|>` (la más baja del lenguaje; menor que cualquier binario).
+const PIPE_PREC: u8 = 0;
+
+/// Reemite una cadena interpolada desde sus segmentos de superficie (M29.3): `"a${x}b"`. Las partes
+/// literales se re-escapan como un string; cada `${e}` formatea su expresión (recursivo → interpolación
+/// anidada funciona). Un `${` literal en el texto se re-escapa como `\${`.
+fn fmt_interp(cur: &mut Cur, segs: &[InterpSeg]) -> String {
+    let mut out = String::from("\"");
+    for seg in segs {
+        match seg {
+            InterpSeg::Lit(s) => {
+                // Igual que `fmt_string_lit`, salvo que un `$` seguido de `{` en el TEXTO literal se
+                // escapa `\${` para que no reabra una interpolación al re-lexar (`"\${x}"` es un `${x}`
+                // literal). Un `$` que no precede a `{` es literal por sí solo → no se escapa.
+                let chars: Vec<char> = s.chars().collect();
+                for (i, &c) in chars.iter().enumerate() {
+                    match c {
+                        '\\' => out.push_str("\\\\"),
+                        '\n' => out.push_str("\\n"),
+                        '\t' => out.push_str("\\t"),
+                        '\r' => out.push_str("\\r"),
+                        '"' => out.push_str("\\\""),
+                        '$' if chars.get(i + 1) == Some(&'{') => out.push_str("\\$"),
+                        other => out.push(other),
+                    }
+                }
+            }
+            InterpSeg::Expr(e) => {
+                out.push_str("${");
+                out.push_str(&fmt_expr(cur, e, 0));
+                out.push('}');
+            }
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Reemite un pipeline desde su forma de superficie (M29.3): `recv |> rhs`. El receptor puede ser a su
+/// vez un pipeline (encadenado `a |> b |> c`, asociativo a la izquierda → sin paréntesis).
+fn fmt_pipe(cur: &mut Cur, recv: &Expr, rhs: &Expr) -> String {
+    // El receptor liga a nivel `logic_or` (más fuerte que `|>`) o es otro pipe (izq-asociativo): en
+    // ambos casos no necesita paréntesis. El rhs es un objetivo de llamada (`f`, `f(a)`, `m.f(a)`).
+    format!("{} |> {}", fmt_expr(cur, recv, PIPE_PREC), fmt_expr(cur, rhs, 13))
 }
 
 fn bin_op_str(op: BinaryOp) -> &'static str {
@@ -1092,6 +1168,26 @@ mod tests {
         assert!(tabs.contains("\n\t\tx"), "nivel 2 = 2 tabs: {tabs:?}");
         // Unidad = 4 espacios ⇒ idéntico al canónico.
         assert_eq!(format_source_con_indent(src, "    ").unwrap(), fmt(src));
+    }
+
+    #[test]
+    fn preserva_interpolacion() {
+        // M29.3: `ray fmt` ya NO desazucara la interpolación a `+ to_string(...)`.
+        let src = "fn main() -> int {\n  let x = 7;\n  print(\"${x} al cuadrado es ${x * x}.\");\n  print(\"lit \\${no} y ${x}\");\n  0\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("\"${x} al cuadrado es ${x * x}.\""), "interpolación conservada: {out:?}");
+        assert!(!out.contains("to_string"), "no debe aparecer to_string: {out:?}");
+        // Un `${` literal (`\${no}`) se conserva escapado (no reabre interpolación).
+        assert!(out.contains("\\${no}"), "'${{' literal escapado: {out:?}");
+        assert_eq!(out, fmt(&out), "idempotente");
+    }
+
+    #[test]
+    fn preserva_pipelines() {
+        let src = "fn dob(n: int) -> int { n + n }\nfn inc(n: int) -> int { n + 1 }\nfn main() -> int {\n  5 |> dob() |> inc()\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("5 |> dob() |> inc()"), "pipeline conservado (encadenado): {out:?}");
+        assert_eq!(out, fmt(&out), "idempotente");
     }
 
     #[test]

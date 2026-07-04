@@ -78,9 +78,10 @@ La decisión de imprimir **desde el AST** (y no reescribir el texto original tok
 consecuencias, una buena y una que hay que aceptar. La buena es que la impresión sale **canónica** por
 construcción: los paréntesis se emiten según la precedencia real (`bin_prec`/`expr_prec` son el espejo de
 la jerarquía del parser), así que `a + b * c` pierde los paréntesis sobrantes y `(a + b) * c` los conserva
-— exactamente los mínimos. La que hay que aceptar es que el AST **normaliza**: desazucara lo que el parser
-desazucaraba de todos modos — la interpolación `"n = ${x}"` reaparece como `+ to_string(x)`, los pipelines
-`|>` como llamadas ordinarias.
+— exactamente los mínimos. El AST **normaliza** el estilo, pero la interpolación (`"n = ${x}"`) y los
+pipelines (`x |> f()`) —que el parser desazucara a concatenación y llamadas— se **preservan**: el parser
+guarda su forma de superficie en tablas laterales del `Program` (por la posición del nodo raíz) y el
+formateador las reemite desde ahí. Así `ray fmt` deja de convertir el código idiomático en su forma verbosa.
 
 Los **comentarios** sí se preservan, aunque el lexer no los guarde: se recolectan aparte (respetando las
 cadenas, para no confundir un `//` dentro de un literal) y se re-insertan durante la emisión con un cursor

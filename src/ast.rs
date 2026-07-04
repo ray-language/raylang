@@ -183,6 +183,23 @@ pub struct Program {
     /// marshalables (primitivos en M41.1) y las registra como llamables; los motores despachan la
     /// llamada a `ffi::call` en vez de ejecutar un cuerpo. Es **la** frontera insegura del lenguaje.
     pub externs: Vec<ExternFn>,
+    /// **Azúcar preservado para el formateador** (M29.3). El parser desazucara la interpolación
+    /// `"…${e}…"` a una concatenación `+ to_string(e)` y los pipelines `x |> f(a)` a `f(x, a)` —así el
+    /// checker y los motores nunca los ven—, PERO guarda aquí la forma de superficie, indexada por la
+    /// posición del **nodo desazucarado raíz**, para que `ray fmt` la reemita sin perderla (antes
+    /// convertía los ejemplos idiomáticos en su forma verbosa). Solo lo consulta el formateador;
+    /// están vacíos en el programa fusionado del loader (que trabaja sobre el AST desazucarado).
+    pub interp_sites: std::collections::HashMap<(usize, usize), Vec<InterpSeg>>,
+    /// Ver [`Program::interp_sites`]. `(receptor, rhs)` de un pipeline: `x |> f(a)` → `(x, f(a))`.
+    pub pipe_sites: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
+}
+
+/// Un segmento de una cadena interpolada preservada para el formateador (M29.3): texto literal o una
+/// expresión `${…}` (ya parseada). Reconstruye `"a${x}b"` a partir de `[Lit("a"), Expr(x), Lit("b")]`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InterpSeg {
+    Lit(String),
+    Expr(Expr),
 }
 
 /// Una función externa (M41, FFI): una firma sin cuerpo asociada a una librería C (`lib`). El nombre

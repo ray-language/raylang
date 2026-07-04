@@ -17,12 +17,48 @@ use crate::ast::*;
 
 const INDENT: &str = "    "; // 4 espacios
 
-/// Formatea el código fuente. Devuelve el texto canónico, o un error de lexer/parser (ya formateado).
+/// Formatea el código fuente con la indentación **canónica** (4 espacios, estilo gofmt). Es lo que usa
+/// `ray fmt`. Devuelve el texto formateado, o un error de lexer/parser (ya formateado).
 pub fn format_source(src: &str) -> Result<String, String> {
     let tokens = crate::lexer::lex(src).map_err(|e| e.to_string())?;
     let program = crate::parser::parse(tokens).map_err(|e| e.to_string())?;
     let mut cur = Cur::new(src);
     Ok(format_program(&program, &mut cur))
+}
+
+/// Como [`format_source`], pero con la **unidad de indentación** dada (`"  "` para 2 espacios, `"\t"`
+/// para tabuladores, etc.). Lo usa el **LSP** para honrar la preferencia del editor (`tabSize`/
+/// `insertSpaces` del request de formateo). Se formatea canónico (4 espacios) y luego se **reajusta**
+/// la sangría: como el canónico indenta en múltiplos de 4, cada nivel se reescribe con `unit`.
+pub fn format_source_con_indent(src: &str, unit: &str) -> Result<String, String> {
+    let canonico = format_source(src)?;
+    Ok(reindent(&canonico, unit))
+}
+
+/// Reescribe la sangría de `text` (canónico: múltiplos de 4 espacios) con la unidad `unit` por nivel.
+/// Solo toca los espacios **iniciales** de cada línea (que en el canónico son sangría pura); el resto
+/// de la línea —código, comentarios, literales— no se toca. Idempotente para `unit == "    "`.
+fn reindent(text: &str, unit: &str) -> String {
+    if unit == INDENT {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let n_spaces = line.chars().take_while(|&c| c == ' ').count();
+        let rest = &line[n_spaces..];
+        if rest.is_empty() {
+            continue; // línea en blanco: sin sangría
+        }
+        out.push_str(&unit.repeat(n_spaces / 4));
+        for _ in 0..(n_spaces % 4) {
+            out.push(' '); // resto defensivo (el canónico nunca lo produce)
+        }
+        out.push_str(rest);
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -908,6 +944,24 @@ mod tests {
         let src = "// cabecera\n\n/// doc\nfn f(x: int) -> int {\n  let y = x;  // t\n  // suelto\n  y\n}\n";
         let a = fmt(src);
         assert_eq!(a, fmt(&a), "fmt(fmt(x)) == fmt(x)");
+    }
+
+    #[test]
+    fn indent_configurable_y_canonico() {
+        let src = "fn f(x: int) -> int {\n  if (x > 0) {\n    x\n  } else {\n    0\n  }\n}\n";
+        // Canónico = 4 espacios.
+        assert!(fmt(src).contains("\n    if ("), "canónico 4 espacios");
+        // 2 espacios.
+        let dos = format_source_con_indent(src, "  ").unwrap();
+        assert!(dos.contains("\n  if ("), "2 espacios: {dos:?}");
+        assert!(dos.contains("\n    x"), "nivel 2 = 4 espacios en 2-espacios: {dos:?}");
+        assert_eq!(dos, format_source_con_indent(&dos, "  ").unwrap(), "idempotente en 2 espacios");
+        // Tabuladores.
+        let tabs = format_source_con_indent(src, "\t").unwrap();
+        assert!(tabs.contains("\n\tif ("), "1 tab por nivel: {tabs:?}");
+        assert!(tabs.contains("\n\t\tx"), "nivel 2 = 2 tabs: {tabs:?}");
+        // Unidad = 4 espacios ⇒ idéntico al canónico.
+        assert_eq!(format_source_con_indent(src, "    ").unwrap(), fmt(src));
     }
 
     #[test]

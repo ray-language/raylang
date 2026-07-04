@@ -999,9 +999,18 @@ fn as_usize(j: &Json) -> Option<usize> {
 /// así el LSP y la CLI dan idéntico resultado. Lista vacía si el documento **no parsea** (no se
 /// formatea código inválido; el editor conserva lo escrito) o si ya está formateado (nada que tocar).
 fn formatting_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
-    let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
+    let params = msg.get("params");
+    let uri = params.and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
     let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
-    let Ok(formateado) = crate::fmt::format_source(src) else { return Json::Arr(vec![]) };
+    // Honramos la preferencia de indentación del EDITOR (LSP `options.tabSize`/`insertSpaces`), en vez
+    // de imponer siempre 4 espacios: así "Format File" respeta 2 espacios/tabs si así está el editor
+    // (Sublime los deriva de su config, incl. `.editorconfig` si tiene ese plugin). El `ray fmt` de
+    // consola sigue canónico. Por defecto (sin opciones) → 4 espacios (idéntico al canónico).
+    let opts = params.and_then(|p| p.get("options"));
+    let insert_spaces = opts.and_then(|o| o.get("insertSpaces")).map(|b| matches!(b, Json::Bool(true))).unwrap_or(true);
+    let tab_size = opts.and_then(|o| o.get("tabSize")).and_then(as_usize).filter(|&n| n > 0).unwrap_or(4);
+    let unit = if insert_spaces { " ".repeat(tab_size) } else { "\t".to_string() };
+    let Ok(formateado) = crate::fmt::format_source_con_indent(src, &unit) else { return Json::Arr(vec![]) };
     if formateado == *src {
         return Json::Arr(vec![]);
     }

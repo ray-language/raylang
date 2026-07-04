@@ -93,121 +93,121 @@
 // el fuente → run(ptr,len) → u64 empaquetado (ptr<<32|len) → leer la salida → dealloc.
 const EJEMPLOS = {
   "fib": `fn fib(n: int) -> int {
-    if (n < 2) { n } else { fib(n - 1) + fib(n - 2) }
+  if (n < 2) { n } else { fib(n - 1) + fib(n - 2) }
 }
 fn main() -> int {
-    for i in range(0, 12) {
-        print("fib(\${i}) = \${fib(i)}");     // for + interpolación
-    }
-    0
+  for i in range(0, 12) {
+    print("fib(\${i}) = \${fib(i)}");     // for + interpolación
+  }
+  0
 }`,
   "genéricos": `fn id<T>(x: T) -> T { x }        // genérica: funciona con cualquier tipo
 
 fn main() -> int {
-    print(id("raylang es genérico"));
-    // pipeline (|>) + iteradores perezosos: eleva al cuadrado, filtra impares, suma.
-    let suma = [1, 2, 3, 4, 5]
-        |> map(fn(x: int) -> int { x * x })
-        |> filter(fn(x: int) -> bool { x % 2 == 1 })
-        |> fold(0, fn(a: int, b: int) -> int { a + b });
-    print("suma de cuadrados impares: \${suma}");
-    0
+  print(id("raylang es genérico"));
+  // pipeline (|>) + iteradores perezosos: eleva al cuadrado, filtra impares, suma.
+  let suma = [1, 2, 3, 4, 5]
+    |> map(fn(x: int) -> int { x * x })
+    |> filter(fn(x: int) -> bool { x % 2 == 1 })
+    |> fold(0, fn(a: int, b: int) -> int { a + b });
+  print("suma de cuadrados impares: \${suma}");
+  0
 }`,
   "enums": `enum Figura { Circulo(float), Rect(float, float) }
 
 fn area(f: Figura) -> float {
-    match (f) {                            // match es exhaustivo
-        Figura.Circulo(r) => pi() * r * r,  // pi() es un builtin
-        Figura.Rect(w, h) => w * h,
-    }
+  match (f) {                            // match es exhaustivo
+    Figura.Circulo(r) => pi() * r * r,  // pi() es un builtin
+    Figura.Rect(w, h) => w * h,
+  }
 }
 fn main() -> int {
-    print("círculo r=2: \${area(Figura.Circulo(2.0))}");
-    print("rect 3x4:    \${area(Figura.Rect(3.0, 4.0))}");
-    0
+  print("círculo r=2: \${area(Figura.Circulo(2.0))}");
+  print("rect 3x4:    \${area(Figura.Rect(3.0, 4.0))}");
+  0
 }`,
   "traits": `trait Saludar { fn hola(self) -> string; }
 struct Persona { nombre: string }
 impl Saludar for Persona {
-    fn hola(self) -> string { "hola, \${self.nombre}!" }   // interpolación de strings
+  fn hola(self) -> string { "hola, \${self.nombre}!" }   // interpolación de strings
 }
 fn main() -> int {
-    let p = Persona { nombre: "raylang" };
-    print(p.hola());
-    0
+  let p = Persona { nombre: "raylang" };
+  print(p.hola());
+  0
 }`,
   "errores": `// Sin null: la ausencia y el fallo son VALORES (Option / Result), no excepciones.
 fn dividir(a: int, b: int) -> Result<int, string> {
-    if (b == 0) { Result.Err("división por cero") } else { Result.Ok(a / b) }
+  if (b == 0) { Result.Err("división por cero") } else { Result.Ok(a / b) }
 }
 fn calcular() -> Result<int, string> {
-    let x = dividir(100, 5)?;         // ? desempaqueta el Ok, o retorna el Err
-    let y = dividir(x, 4)?;
-    Result.Ok(x + y)
+  let x = dividir(100, 5)?;         // ? desempaqueta el Ok, o retorna el Err
+  let y = dividir(x, 4)?;
+  Result.Ok(x + y)
 }
 fn main() -> int {
-    match (calcular()) {
-        Result.Ok(v)  => print("ok: \${v}"),
-        Result.Err(e) => print("error: \${e}"),
-    }
-    let nums = [10, 20, 30];
-    match (nums.position(20)) {        // position -> Option<int>
-        Option.Some(i) => print("20 está en el índice \${i}"),
-        Option.None    => print("no está"),
-    }
-    0
+  match (calcular()) {
+    Result.Ok(v)  => print("ok: \${v}"),
+    Result.Err(e) => print("error: \${e}"),
+  }
+  let nums = [10, 20, 30];
+  match (nums.position(20)) {        // position -> Option<int>
+    Option.Some(i) => print("20 está en el índice \${i}"),
+    Option.None    => print("no está"),
+  }
+  0
 }`,
   "iteradores": `fn main() -> int {
-    // Pipeline PEREZOSO: no materializa nada hasta collect; take() corta pronto.
-    let cuadrados = range(1, 100)
-        .map(fn(x: int) -> int { x * x })
-        .filter(fn(x: int) -> bool { x % 2 == 0 })
-        .take(4)
-        .collect();
-    print(cuadrados);                  // [4, 16, 36, 64]
+  // Pipeline PEREZOSO: no materializa nada hasta collect; take() corta pronto.
+  let cuadrados = range(1, 100)
+    .map(fn(x: int) -> int { x * x })
+    .filter(fn(x: int) -> bool { x % 2 == 0 })
+    .take(4)
+    .collect();
+  print(cuadrados);                  // [4, 16, 36, 64]
 
-    // enumerate + patrón de tupla en el for
-    for (i, fruta) in ["manzana", "pera", "uva"].iter().enumerate() {
-        print("\${i}: \${fruta}");
-    }
-    0
+  // enumerate + patrón de tupla en el for
+  for (i, fruta) in ["manzana", "pera", "uva"].iter().enumerate() {
+    print("\${i}: \${fruta}");
+  }
+  0
 }`,
   "dyn": `trait Forma { fn area(self) -> float; fn nombre(self) -> string; }
 struct Circulo  { r: float }
 struct Cuadrado { lado: float }
 impl Forma for Circulo {
-    fn area(self) -> float { pi() * self.r * self.r }
-    fn nombre(self) -> string { "círculo" }
+  fn area(self) -> float { pi() * self.r * self.r }
+  fn nombre(self) -> string { "círculo" }
 }
 impl Forma for Cuadrado {
-    fn area(self) -> float { self.lado * self.lado }
-    fn nombre(self) -> string { "cuadrado" }
+  fn area(self) -> float { self.lado * self.lado }
+  fn nombre(self) -> string { "cuadrado" }
 }
 fn main() -> int {
-    // Colección HETEROGÉNEA vía trait objects → despacho dinámico.
-    let formas: [dyn Forma] = [Circulo { r: 2.0 }, Cuadrado { lado: 3.0 }];
-    for f in formas {
-        print("\${f.nombre()}: \${f.area()}");
-    }
-    0
+  // Colección HETEROGÉNEA vía trait objects → despacho dinámico.
+  let formas: [dyn Forma] = [Circulo { r: 2.0 }, Cuadrado { lado: 3.0 }];
+  for f in formas {
+    print("\${f.nombre()}: \${f.area()}");
+  }
+  0
 }`,
   "concurrencia": `fn main() -> int {
-    // Modelo de actores: fibras que se comunican por canales (sin estado compartido).
-    let ch: Channel<int> = channel();
-    spawn(fn() {
-        for i in range(1, 6) { send(ch, i * i); }
-        close(ch);
-    });
-    var total = 0;
-    var seguir = true;
-    while (seguir) {
-        match (recv(ch)) {             // recv -> Option<T>; None al cerrar
-            Option.Some(v) => { print("recibí \${v}"); total = total + v; },
-            Option.None    => { seguir = false; },
-        }
+  // Modelo de actores: fibras que se comunican por canales (sin estado compartido).
+  let ch: Channel<int> = channel();
+  spawn(fn() {
+    for i in range(1, 6) { send(ch, i * i); }
+    close(ch);
+  });
+  var total = 0;
+  var seguir = true;
+  while (seguir) {
+    match (recv(ch)) {             // recv -> Option<T>; None al cerrar
+      Option.Some(v) => { print("recibí \${v}"); total = total + v; },
+      Option.None    => { seguir = false; },
     }
-    print("total: \${total}");
-    0
+  }
+  print("total: \${total}");
+  0
 }`,
 };
 

@@ -2137,8 +2137,9 @@ impl Checker {
                 let tparams = self.struct_tparams.get(&sname).cloned().unwrap_or_default();
                 let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs).collect();
                 let resultado = subst(&fty, &sigma);
-                // M10.2g: hover del **campo** en su posición (nombre tras el `.`).
-                self.record_field_hover(object.line, object.col, name, &resultado);
+                // M10.2g: hover del **campo** en su posición (nombre tras el `.`); un campo de datos
+                // no tiene declaración de función → sin `def`.
+                self.record_field_hover(object.line, object.col, name, &resultado, None);
                 Ok(resultado)
             }
             other => Err(self.err(object.line, object.col, format!("no se puede acceder a '.{}' en un {} (no es un struct)", name, other))),
@@ -2769,8 +2770,8 @@ impl Checker {
                 }
                 if let Type::Struct(sname, targs) = &recv_ty {
                     if let Some(fty) = self.struct_field_type(sname, targs, name) {
-                        // M10.2g: hover del campo-función invocado.
-                        self.record_field_hover(object.line, object.col, name, &fty);
+                        // M10.2g: hover del campo-función invocado (un campo no tiene declaración de fn).
+                        self.record_field_hover(object.line, object.col, name, &fty, None);
                         return self.call_type(fty, args, line, col);
                     }
                 }
@@ -2788,7 +2789,8 @@ impl Checker {
                     let mty = self.functions.get(&mangled)
                         .map(|s| Type::Fn(s.params.clone(), Box::new(s.ret.clone())));
                     if let Some(mty) = mty {
-                        self.record_field_hover(object.line, object.col, name, &mty);
+                        let def = self.fn_defs.get(&mangled).copied();
+                        self.record_field_hover(object.line, object.col, name, &mty, def);
                     }
                     self.ufcs_sites.insert((line, col, name.clone()), mangled);
                     return Ok(ty);
@@ -2853,7 +2855,8 @@ impl Checker {
         let mty = self.functions.get(&target)
             .map(|s| Type::Fn(s.params.clone(), Box::new(s.ret.clone())));
         if let Some(mty) = mty {
-            self.record_field_hover(object.line, object.col, name, &mty);
+            let def = self.fn_defs.get(&target).copied();
+            self.record_field_hover(object.line, object.col, name, &mty, def);
         }
         // El sitio se baja a `target(recv, args)`; para una función importada, `target` es el global.
         self.ufcs_sites.insert((line, col, name.to_string()), target);
@@ -3278,17 +3281,19 @@ impl Checker {
     /// posición del acceso es la del receptor `(recv_line, recv_col)`; el hover se coloca en la
     /// posición real del `name` tras el `.` (de `field_name_pos`, poblada por el parser). No hace
     /// nada sin `gather` ni si no se conoce la posición del nombre.
-    fn record_field_hover(&mut self, recv_line: usize, recv_col: usize, name: &str, ty: &Type) {
+    fn record_field_hover(&mut self, recv_line: usize, recv_col: usize, name: &str, ty: &Type, def: Option<(usize, usize)>) {
         if !self.gather {
             return;
         }
         if let Some(&(nl, nc)) = self.field_name_pos.get(&(recv_line, recv_col, name.to_string())) {
-            self.index.hovers.push(HoverEntry {
-                line: nl,
-                col: nc,
-                len: name.chars().count(),
-                text: format!("{}: {}", name, ty),
-            });
+            let len = name.chars().count();
+            self.index.hovers.push(HoverEntry { line: nl, col: nc, len, text: format!("{}: {}", name, ty) });
+            // M10.2h: si el método resuelve a una función conocida (manglada de un impl, o libre en
+            // UFCS), registramos su declaración → habilita ir-a-definición y documentación (`///`) del
+            // método en el hover. Un campo-función del struct no tiene `fn_defs` → sin `def` (None).
+            if let Some((def_line, def_col)) = def {
+                self.index.defs.push(DefEntry { line: nl, col: nc, len, def_line, def_col });
+            }
         }
     }
 

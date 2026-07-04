@@ -1962,6 +1962,14 @@ mod tests {
         assert!(val.contains("Duplica un número."), "incluye la doc: {val}");
         assert_eq!(r.get("contents").unwrap().get("kind"), Some(&Json::Str("markdown".into())));
 
+        // Un MÉTODO documentado con `///` también muestra su doc (M10.2h: los métodos se indexan).
+        let src_m = "trait Show { fn mostrar(self) -> string; }\nstruct P { v: int }\nimpl Show for P {\n  /// Muestra el valor.\n  fn mostrar(self) -> string { \"p\" }\n}\nfn main() -> int {\n  let p = P { v: 1 };\n  print(p.mostrar());\n  0\n}\n";
+        docs.insert(uri.clone(), src_m.to_string());
+        // `p.mostrar()` en la línea 9 (0-based 8); `mostrar` tras el punto.
+        let col_m = src_m.lines().nth(8).unwrap().find("mostrar").unwrap();
+        let d = doc_del_simbolo(&uri, src_m, 8, col_m, &docs).expect("doc del método");
+        assert_eq!(d, "Muestra el valor.", "hover-doc de método");
+
         // Un símbolo SIN doc → hover en texto plano, sin bloque Markdown.
         let src2 = "fn triple(x: int) -> int { x * 3 }\nfn main() -> int { triple(1) }\n";
         docs.insert(uri.clone(), src2.to_string());

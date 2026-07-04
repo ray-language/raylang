@@ -87,7 +87,10 @@ fn emitir_doc(out: &mut String, lineas: &[&str], linea: usize) {
 pub fn doc_lineas_arriba(lineas: &[&str], linea: usize) -> Option<Vec<String>> {
     let mut docs: Vec<String> = Vec::new();
     let mut i = linea as isize - 2; // la línea justo encima, 0-basada
-    while i >= 0 {
+    // Cota superior: `linea` puede caer FUERA de `lineas` (el LSP la usa con la posición de declaración
+    // de un símbolo que en realidad vive en OTRA fuente —una función del prelude/wrapper inyectada, cuya
+    // posición no está en el archivo abierto—). Sin esta cota, `lineas[i]` desbordaría (ICE en el LSP).
+    while i >= 0 && (i as usize) < lineas.len() {
         let l = lineas[i as usize].trim_start();
         if let Some(rest) = l.strip_prefix("///") {
             docs.push(rest.trim().to_string());
@@ -170,6 +173,17 @@ fn firma_trait(t: &TraitDef) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn doc_lineas_arriba_no_desborda_con_linea_fuera_de_rango() {
+        // Regresión (crash del LSP): `linea` puede caer fuera de `lineas` (símbolo cuya declaración
+        // vive en otra fuente —prelude/wrapper inyectado—). No debe desbordar; devuelve `None`.
+        let lineas = vec!["/// doc", "fn f() {}"];
+        assert_eq!(doc_lineas_arriba(&lineas, 726), None, "línea >> nº de líneas → None, sin panic");
+        assert_eq!(doc_lineas_arriba(&lineas, 3), None, "una más allá del final → None");
+        // El caso normal sigue funcionando.
+        assert_eq!(doc_lineas_arriba(&lineas, 2), Some(vec!["doc".to_string()]), "doc encima de la línea 2");
+    }
 
     #[test]
     fn documenta_superficie_publica() {

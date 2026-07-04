@@ -112,24 +112,46 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
 /// protegidos por el enforcement de cápsula (M11.6b) sin código nuevo. Con `dep_roots` vacío el
 /// comportamiento es idéntico a antes (un solo `root`).
 pub fn load_con_deps(entry: &Path, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
-    load_impl(entry, dep_roots, None)
+    load_impl(entry, dep_roots, None, None)
 }
 
 /// Como [`load_con_deps`], pero usa `fuente` como contenido del **archivo de entrada** en vez de
 /// leerlo del disco (los imports sí se leen de disco). Es lo que necesita el **LSP**: analizar el
 /// buffer en memoria (con cambios sin guardar) mientras resuelve sus imports desde los archivos.
 pub fn load_fuente(entry: &Path, fuente: &str, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
-    load_impl(entry, dep_roots, Some(fuente))
+    load_impl(entry, dep_roots, Some(fuente), None)
+}
+
+/// Como [`load_fuente`], pero con la **raíz del proyecto** dada explícitamente (no inferida como
+/// `entry.parent()`). Lo necesita el **LSP** al analizar un **submódulo** abierto en el editor
+/// (`geo/formas/circulo.ray`): sin esto, el loader tomaría como raíz la carpeta del propio submódulo
+/// —así los `import` absolutos desde la raíz no resolverían— e identificaría la entrada por su *stem*
+/// (`circulo`) en vez de por su ruta real (`geo/formas/circulo`) —así el enforcement de cápsula la
+/// trataría como externa a su propia cápsula—. Con la raíz correcta, la entrada se identifica por su
+/// **ruta relativa** a ella y ambos problemas desaparecen (imports y cápsulas se comportan como bajo
+/// `ray run` desde la entrada real del proyecto).
+pub fn load_fuente_modulo(entry: &Path, fuente: &str, project_root: &Path, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
+    load_impl(entry, dep_roots, Some(fuente), Some(project_root.to_path_buf()))
 }
 
 /// Núcleo de la carga. `entry_source`, si está, es el contenido del archivo de entrada (buffer en
-/// memoria); si es `None`, la entrada se lee del disco como los demás módulos.
-fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>) -> Result<Loaded, LoadError> {
-    let project_root = entry.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+/// memoria); si es `None`, la entrada se lee del disco como los demás módulos. `project_root_override`,
+/// si está, fija la raíz del proyecto (y con ella la identidad de módulo de la entrada, por su ruta
+/// relativa); si es `None`, la raíz es `entry.parent()` y la entrada se identifica por su *stem* (el
+/// comportamiento clásico: la entrada del proyecto vive en la raíz).
+fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, project_root_override: Option<PathBuf>) -> Result<Loaded, LoadError> {
+    let project_root = project_root_override.clone()
+        .unwrap_or_else(|| entry.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")));
     // Raíces de búsqueda de módulos: el proyecto primero, luego la caché de dependencias.
-    let mut roots = vec![project_root];
+    let mut roots = vec![project_root.clone()];
     roots.extend(dep_roots.iter().cloned());
-    let entry_name = module_name(entry);
+    // Identidad de la entrada: su ruta relativa a la raíz (`geo/formas/circulo`) cuando la raíz se dio
+    // explícitamente (LSP sobre un submódulo); si no, el *stem* clásico. Solo afecta a la clave del
+    // módulo y al enforcement de cápsula: la entrada NUNCA se namespaca (`module_prefix` → None).
+    let entry_name = match &project_root_override {
+        Some(root) => rel_module_name(entry, root).unwrap_or_else(|| module_name(entry)),
+        None => module_name(entry),
+    };
 
     // --- Fase 1: cargar y parsear cada módulo una vez (BFS sobre los imports) ---
     let mut modules: Vec<Module> = Vec::new();
@@ -488,6 +510,17 @@ fn shift_fn_expr(fe: &mut FnExpr, delta: usize) {
 /// El nombre de módulo de una ruta: su *stem* (`dir/math.ray` → `math`).
 fn module_name(path: &Path) -> String {
     path.file_stem().and_then(|s| s.to_str()).unwrap_or("main").to_string()
+}
+
+/// La **identidad de módulo** de `path` como su ruta relativa a `root`, con separador `/` y sin la
+/// extensión `.ray` (`.../geo/formas/circulo.ray` bajo `.../` → `geo/formas/circulo`). Un `mod.ray`
+/// toma la identidad de su **directorio** (`geo/mod.ray` → `geo`), como al resolverlo por su ruta de
+/// import. `None` si `path` no está bajo `root`. Lo usa el LSP para nombrar la entrada (un submódulo).
+fn rel_module_name(path: &Path, root: &Path) -> Option<String> {
+    let rel = path.strip_prefix(root).ok()?.to_str()?.replace('\\', "/");
+    let base = rel.strip_suffix(".ray").unwrap_or(&rel);
+    let ident = base.strip_suffix("/mod").unwrap_or(base);
+    (!ident.is_empty()).then(|| ident.to_string())
 }
 
 /// Enforcement de la cápsula (M11.6b). Una importación del módulo `target` por `importer` **cruza el

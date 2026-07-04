@@ -209,7 +209,7 @@ fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 /// construye sobre el buffer aislado (comportamiento previo). Es la misma idea que en los diagnósticos.
 fn indice_para(uri: Option<&str>, src: &str) -> Option<checker::SemanticIndex> {
     if let Some(path) = uri.and_then(uri_to_path)
-        && let Ok(loaded) = loader::load_fuente(&path, src, &dep_roots_for(&path))
+        && let Ok(loaded) = cargar(&path, src)
     {
         let mut program = loaded.program;
         return Some(checker::semantic_index(&mut program));
@@ -321,7 +321,7 @@ fn definition_at(uri: &str, src: &str, line0: usize, char0: usize) -> Option<(St
     // Camino módulo-aware: el loader da el programa fusionado + las bandas de cada módulo (con su
     // ruta). La declaración se localiza por su banda → archivo y línea local correctos.
     if let Some(path) = uri_to_path(uri)
-        && let Ok(loaded) = loader::load_fuente(&path, src, &dep_roots_for(&path))
+        && let Ok(loaded) = cargar(&path, src)
     {
         let mut program = loaded.program;
         let idx = checker::semantic_index(&mut program);
@@ -482,7 +482,7 @@ fn references_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 /// si el uri no es un archivo o el loader falla (→ el llamador cae a un solo archivo).
 fn references_cross(uri: &str, src: &str, line0: usize, char0: usize, incluir_decl: bool) -> Option<Vec<(String, Span)>> {
     let path = uri_to_path(uri)?;
-    let loaded = loader::load_fuente(&path, src, &dep_roots_for(&path)).ok()?;
+    let loaded = cargar(&path, src).ok()?;
     let mut program = loaded.program;
     let idx = checker::semantic_index(&mut program);
     let entry_lines: Vec<&str> = src.lines().collect();
@@ -587,7 +587,7 @@ fn rename_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 /// referencia **calificada** tienen otro texto → se rechaza, para no corromper el código).
 fn rename_cross(uri: &str, src: &str, line0: usize, char0: usize) -> Option<Vec<(String, Span)>> {
     let path = uri_to_path(uri)?;
-    let loaded = loader::load_fuente(&path, src, &dep_roots_for(&path)).ok()?;
+    let loaded = cargar(&path, src).ok()?;
     let mut program = loaded.program.clone();
     let idx = checker::semantic_index(&mut program);
     let entry_lines: Vec<&str> = src.lines().collect();
@@ -1060,8 +1060,7 @@ fn diagnosticos(uri: &str, src: &str) -> Json {
 /// precisos y multi-error sobre la entrada, en vez de un único error del loader).
 fn analizar_modular(uri: &str, src: &str) -> Option<Vec<Diag>> {
     let path = uri_to_path(uri)?;
-    let deps = dep_roots_for(&path);
-    match loader::load_fuente(&path, src, &deps) {
+    match cargar(&path, src) {
         Ok(loaded) => {
             // El módulo de entrada es la banda que empieza más arriba (delta 0 → línea local =
             // global). Solo publicamos SUS errores: los de otros módulos pertenecen a sus URIs.
@@ -1123,41 +1122,21 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Raíces de búsqueda de módulos para el loader, desde el LSP. Dos añadidos sobre la raíz por
-/// defecto (el directorio del archivo abierto, que el loader ya usa):
-///
-/// 1. **La raíz del proyecto** (M10.2): el loader resuelve los `import` *absolutos desde la raíz*
-///    tomando como raíz el directorio de la **entrada**. Pero el LSP abre archivos de **módulo** en
-///    cualquier nivel del árbol (`geo/formas/circulo.ray`), y su `import geo/util;` debe resolverse
-///    desde la raíz del proyecto, no desde la carpeta del propio submódulo. Buscamos esa raíz —el
-///    ancestro más cercano con un `main.ray` (la entrada convencional)— y la añadimos como raíz de
-///    búsqueda; así los imports absolutos de un submódulo profundo resuelven igual que bajo `ray run`.
-/// 2. **La caché `.ray-deps/`** (M39c) del proyecto que contiene `entry`, si existe. Alinea con `ray run`.
-///
-/// El loader antepone el directorio de `entry`, así que estas son *fallbacks* que solo entran cuando
-/// la ruta no resuelve localmente (el caso de un submódulo importando a un vecino por ruta absoluta).
+/// Raíces de dependencias para el loader (M39c): la caché `.ray-deps/` del proyecto que contiene
+/// `entry` (subiendo hasta el `ray.toml`), si existe. Alinea el LSP con `ray run`.
 fn dep_roots_for(entry: &Path) -> Vec<PathBuf> {
     let dir = entry.parent().unwrap_or(Path::new("."));
-    let mut roots = Vec::new();
-    if let Some(root) = project_root_for(entry)
-        && Some(root.as_path()) != entry.parent()
-    {
-        roots.push(root);
-    }
     let raiz = crate::manifest::Manifest::find(dir)
         .and_then(|toml| toml.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| dir.to_path_buf());
     let cache = raiz.join(".ray-deps");
-    if cache.is_dir() {
-        roots.push(cache);
-    }
-    roots
+    if cache.is_dir() { vec![cache] } else { Vec::new() }
 }
 
 /// La raíz del proyecto que contiene `entry`: el **ancestro más cercano** (subiendo desde su carpeta)
 /// que contiene un `main.ray` —la entrada convencional, y por definición la raíz desde la que son
 /// absolutos los `import` (DESIGN §20.3: "la ruta es absoluta desde la raíz del proyecto, el directorio
-/// del archivo de entrada")—. `None` si no hay ninguno (archivo suelto sin proyecto → sin raíz extra).
+/// del archivo de entrada")—. `None` si no hay ninguno (archivo suelto sin proyecto).
 fn project_root_for(entry: &Path) -> Option<PathBuf> {
     let mut dir = entry.parent()?;
     loop {
@@ -1165,6 +1144,19 @@ fn project_root_for(entry: &Path) -> Option<PathBuf> {
             return Some(dir.to_path_buf());
         }
         dir = dir.parent()?;
+    }
+}
+
+/// Carga el buffer `src` (del archivo `entry`) con el loader, resolviendo los `import` desde disco.
+/// Si `entry` vive en un proyecto (hay un `main.ray` ancestro), usa esa **raíz** y la identidad de
+/// módulo **real** del archivo (su ruta relativa): así los imports absolutos y el enforcement de
+/// cápsula funcionan aunque el archivo abierto sea un submódulo profundo dentro de una cápsula. Si no
+/// hay proyecto (archivo suelto), carga como entrada en su propia carpeta (comportamiento clásico).
+fn cargar(entry: &Path, src: &str) -> Result<loader::Loaded, loader::LoadError> {
+    let deps = dep_roots_for(entry);
+    match project_root_for(entry) {
+        Some(root) => loader::load_fuente_modulo(entry, src, &root, &deps),
+        None => loader::load_fuente(entry, src, &deps),
     }
 }
 
@@ -1671,6 +1663,37 @@ mod tests {
         assert_eq!(ds.len(), 1, "el error real del cuerpo debe verse: {:?}",
             ds.iter().map(|d| &d.message).collect::<Vec<_>>());
         assert_eq!(ds[0].line, 3, "línea local del submódulo");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn diagnosticos_submodulo_interno_de_capsula() {
+        // Un submódulo DENTRO de una cápsula que importa a un vecino interno de la MISMA cápsula.
+        // `geo/mod.ray` hace de `geo` una cápsula; `geo/util` es interno; `geo/formas/circulo.ray`
+        // (también dentro de `geo/`) hace `import geo/util;` → legítimo (el importador vive bajo la
+        // cápsula). Antes, al abrir el submódulo, el loader lo identificaba por su stem ("circulo")
+        // y el enforcement lo trataba como externo: "el módulo 'geo/util' es interno a la cápsula 'geo'".
+        let dir = std::env::temp_dir().join("ray_lsp_capsula");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("geo/formas")).unwrap();
+        std::fs::write(dir.join("main.ray"),
+            "import geo;\nfn main() -> int { geo.area(geo.Circulo { radio: 4 }) }\n").unwrap();
+        std::fs::write(dir.join("geo/mod.ray"),
+            "pub from geo/formas/circulo import Circulo, area;\n").unwrap();
+        std::fs::write(dir.join("geo/util.ray"), "pub fn cuadrado(n: int) -> int { n * n }\n").unwrap();
+        let circulo_src = "import geo/util;\npub struct Circulo { radio: int }\npub fn area(c: Circulo) -> int { 3 * util.cuadrado(c.radio) }\n";
+        std::fs::write(dir.join("geo/formas/circulo.ray"), circulo_src).unwrap();
+
+        // La identidad real del submódulo es "geo/formas/circulo" → está bajo la cápsula "geo".
+        let root = project_root_for(&dir.join("geo/formas/circulo.ray")).expect("raíz");
+        assert_eq!(root, dir);
+
+        // Abrir el submódulo interno: SIN diagnósticos (import a un vecino de la cápsula, y sin main).
+        let uri = format!("file://{}", dir.join("geo/formas/circulo.ray").display());
+        let ds = analizar_modular(&uri, circulo_src).expect("modular");
+        assert!(ds.is_empty(), "importar a un vecino interno de la propia cápsula es legítimo: {:?}",
+            ds.iter().map(|d| &d.message).collect::<Vec<_>>());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

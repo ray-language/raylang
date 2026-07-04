@@ -1843,8 +1843,8 @@ saber qué es `Option`**: solo devuelven arreglos; el prelude pone la ergonomía
 ```raylang
 // en el prelude (raylang), sobre el primitivo __parse_int(s) -> [int]:
 fn parse_int(s: string) -> Option<int> {
-  let r = __parse_int(s);
-  if len(r) == 0 { Option.None } else { Option.Some(r[0]) }
+    let r = __parse_int(s);
+    if len(r) == 0 { Option.None } else { Option.Some(r[0]) }
 }
 ```
 

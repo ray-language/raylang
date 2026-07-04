@@ -43,9 +43,9 @@ fn secreto() -> int { 99 }       // sin 'pub': privado a 'mates'
 import mates;
 fn doble(x: int) -> int { x + 1 }     // una 'doble' local, distinta
 fn main() -> int {
-  print(mates.doble(10));   // 20  — la del módulo
-  print(doble(10));         // 11  — la local, no colisiona
-  mates.doble(21)           // 42  (código de salida)
+    print(mates.doble(10));   // 20  — la del módulo
+    print(doble(10));         // 11  — la local, no colisiona
+    mates.doble(21)           // 42  (código de salida)
 }
 ```
 
@@ -69,9 +69,9 @@ opcional** para esquivar colisiones:
 from mates import doble as md, triple as tri;
 fn doble(x: int) -> int { x + 1 }     // mi propia 'doble'
 fn main() -> int {
-  print(doble(10));   // 11  — la local
-  print(md(10));      // 20  — mates.doble, traída como 'md'
-  md(10) + tri(10)    // 50
+    print(doble(10));   // 11  — la local
+    print(md(10));      // 20  — mates.doble, traída como 'md'
+    md(10) + tri(10)    // 50
 }
 ```
 
@@ -99,11 +99,11 @@ pub enum Eje { X, Y }
 // app.ray
 from geo import Punto, Eje;        // -2: 'from' también trae tipos pub
 fn coord(p: Punto, e: Eje) -> int {
-  match (e) { Eje.X => p.x, Eje.Y => p.y, }
+    match (e) { Eje.X => p.x, Eje.Y => p.y, }
 }
 fn main() -> int {
-  let p: Punto = Punto { x: 11, y: 31 };
-  coord(p, Eje.X) + coord(p, Eje.Y)   // 42
+    let p: Punto = Punto { x: 11, y: 31 };
+    coord(p, Eje.X) + coord(p, Eje.Y)   // 42
 }
 ```
 
@@ -130,14 +130,14 @@ Funciona en las cuatro posiciones donde aparece un tipo:
 import geo;
 fn dist(p: geo.Punto) -> int { p.x + p.y }      // anotación
 fn valor(c: geo.Color) -> int {
-  match (c) {                                     // patrón
-    geo.Color.Rojo => 1,
-    geo.Color.Verde(n) => n,
-  }
+    match (c) {                                     // patrón
+        geo.Color.Rojo => 1,
+        geo.Color.Verde(n) => n,
+    }
 }
 fn main() -> int {
-  let p: geo.Punto = geo.Punto { x: 10, y: 5 };  // literal de struct calificado
-  valor(geo.Color.Verde(27)) + dist(p)           // construcción de enum calificada
+    let p: geo.Punto = geo.Punto { x: 10, y: 5 };  // literal de struct calificado
+    valor(geo.Color.Verde(27)) + dist(p)           // construcción de enum calificada
 }
 ```
 
@@ -168,8 +168,8 @@ import geo/formas/circulo;          // resuelve  <raíz>/geo/formas/circulo.ray
 import geo/formas/circulo as c;     // ... con un nombre local distinto
 
 fn main() -> int {
-  let p = circulo.Punto { x: 2, y: 5 };   // se accede por el LEAF: 'circulo'
-  circulo.area(4)
+    let p = circulo.Punto { x: 2, y: 5 };   // se accede por el LEAF: 'circulo'
+    circulo.area(4)
 }
 ```
 
@@ -214,8 +214,8 @@ pub from geo/formas/circulo import Circulo, area;
 // main.ray
 import geo;                       // direccionable: carga geo/mod.ray
 fn main() -> int {
-  let c = geo.Circulo { radio: 4 };   // solo lo que mod.ray reexporta
-  geo.area(c)
+    let c = geo.Circulo { radio: 4 };   // solo lo que mod.ray reexporta
+    geo.area(c)
 }
 ```
 

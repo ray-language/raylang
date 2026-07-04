@@ -32,8 +32,8 @@ muestra el operador `?` en su salsa:
 
 ```rust
 fn read_int() -> Option<int> {
-  let s = input()?;      // si es None, retorna None aquí mismo
-  parse_int(s)
+    let s = input()?;      // si es None, retorna None aquí mismo
+    parse_int(s)
 }
 ```
 
@@ -52,8 +52,8 @@ Cada operación falible se parte en dos:
 ```rust
 // en el prelude (raylang):
 fn parse_int(s: string) -> Option<int> {
-  let r = __parse_int(s);                                   // [] o [n]  (opcode ParseInt)
-  if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    let r = __parse_int(s);                                   // [] o [n]  (opcode ParseInt)
+    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
 }
 ```
 
@@ -103,8 +103,8 @@ prelude mira `r[0]`:
 
 ```rust
 fn read_file(ruta: string) -> Result<string, string> {
-  let r = __read_file(ruta);
-  if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+    let r = __read_file(ruta);
+    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
 }
 ```
 
@@ -150,23 +150,23 @@ Hasta aquí la I/O de archivos era *de una vez* (leer/escribir el archivo entero
 
 ```rust
 match (open("salida.txt", "w")) {       // "r" lectura, "w" escritura, "a" añade
-  Result.Ok(h) => {
-    write(h, "una línea\n");            // se escribe sin recargar nada
-    write(h, "otra\n");
-    close(h);
-  },
-  Result.Err(e) => print("no se pudo abrir: " + e),
+    Result.Ok(h) => {
+        write(h, "una línea\n");            // se escribe sin recargar nada
+        write(h, "otra\n");
+        close(h);
+    },
+    Result.Err(e) => print("no se pudo abrir: " + e),
 }
 
 match (open("salida.txt", "r")) {
-  Result.Ok(h) => {
-    match (read_line(h)) {              // lee la siguiente línea; None en EOF
-      Option.Some(l) => print(l),
-      Option.None => print("vacío"),
-    }
-    close(h);
-  },
-  Result.Err(e) => print(e),
+    Result.Ok(h) => {
+        match (read_line(h)) {              // lee la siguiente línea; None en EOF
+            Option.Some(l) => print(l),
+            Option.None => print("vacío"),
+        }
+        close(h);
+    },
+    Result.Err(e) => print(e),
 }
 ```
 

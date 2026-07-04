@@ -241,11 +241,17 @@ fn format_program(p: &Program, cur: &mut Cur) -> String {
 
     // 2. Emitir en orden de fuente, volcando los comentarios de encima de cada ítem (y el trailing si el
     //    ítem cabe en una línea). El cursor avanza monótonamente porque recorremos por línea creciente.
+    let es_import = |t: &Top| matches!(t, Top::Import(_) | Top::FromImport(_));
     let mut out = String::new();
     for (idx, (line, top)) in tops.iter().enumerate() {
         let comentarios = cur.flush_before(*line, "");
         if idx > 0 {
-            out.push('\n'); // línea en blanco entre ítems de nivel superior
+            // Línea en blanco entre ítems de nivel superior, EXCEPTO entre dos imports consecutivos
+            // (se agrupan sin separación, como gofmt/rustfmt).
+            let entre_imports = es_import(&tops[idx - 1].1) && es_import(top);
+            if !entre_imports {
+                out.push('\n');
+            }
         }
         out.push_str(&comentarios);
         let text = match top {
@@ -512,6 +518,17 @@ fn fmt_function(cur: &mut Cur, f: &Function) -> String {
 fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
     if b.statements.is_empty() && b.tail.is_none() {
         return "{ }".to_string();
+    }
+    // Preserva un bloque **inline**: un cuerpo de solo un tail (sin sentencias) que en la FUENTE estaba
+    // en la misma línea que su `{` (`tail.line == b.line`) y no es una forma con bloque se mantiene en
+    // una línea (`{ expr }`). raylang tiene muchas funciones de una línea (`fn cuadrado(n) { n * n }`);
+    // expandirlas todas sería anti-idiomático. Como es de una sola línea, no hay comentarios dentro.
+    if b.statements.is_empty()
+        && let Some(tail) = &b.tail
+        && tail.line == b.line
+        && !is_block_form(tail)
+    {
+        return format!("{{ {} }}", fmt_value(cur, tail, base));
     }
     let inner = INDENT.repeat(base + 1);
     let mut s = String::from("{\n");
@@ -944,6 +961,30 @@ mod tests {
         let src = "// cabecera\n\n/// doc\nfn f(x: int) -> int {\n  let y = x;  // t\n  // suelto\n  y\n}\n";
         let a = fmt(src);
         assert_eq!(a, fmt(&a), "fmt(fmt(x)) == fmt(x)");
+    }
+
+    #[test]
+    fn imports_consecutivos_sin_linea_en_blanco() {
+        let src = "import a/b;\nimport c/d as x;\nfrom e import f;\nfn main() -> int { 0 }\n";
+        let out = fmt(src);
+        // Los tres imports quedan agrupados (sin blancos entre ellos)…
+        assert!(out.contains("import a/b;\nimport c/d as x;\nfrom e import f;"), "{out:?}");
+        // …pero sí hay un blanco antes de la función.
+        assert!(out.contains("from e import f;\n\nfn main"), "blanco antes de fn: {out:?}");
+    }
+
+    #[test]
+    fn funcion_inline_se_conserva() {
+        // Cuerpo de una línea en la fuente → se mantiene inline; multilínea → se mantiene multilínea.
+        let src = "fn cuadrado(n: int) -> int { n * n }\nfn largo(x: int) -> int {\n  let y = x;\n  y\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("fn cuadrado(n: int) -> int { n * n }"), "inline conservado: {out:?}");
+        assert!(out.contains("fn largo(x: int) -> int {\n    let y = x;"), "multilínea conservado: {out:?}");
+        // Un cuerpo multilínea con un solo tail NO se colapsa a inline (respeta la fuente).
+        let ml = "fn f() -> int {\n  1 + 2\n}\n";
+        assert!(fmt(ml).contains("fn f() -> int {\n    1 + 2\n}"), "no colapsa: {}", fmt(ml));
+        // Idempotente en ambos.
+        assert_eq!(out, fmt(&out));
     }
 
     #[test]

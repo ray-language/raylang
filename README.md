@@ -95,7 +95,7 @@ ray test               # corre las funciones @test
 ray fmt src/main.ray   # formatea
 ray doc src/main.ray   # genera documentación desde /// 
 ray repl               # REPL interactivo
-ray lsp                # servidor LSP (diagnósticos, hover, ir-a-definición, rename, completado…)
+ray lsp                # servidor LSP (diagnósticos, hover, definición, refs, rename, completado, formateo, símbolos…)
 ```
 
 El código de salida de `ray run` es el `int` que devuelve `main` (0 si es `unit`). Para embeber raylang

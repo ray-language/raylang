@@ -84,6 +84,9 @@ sin compilar un cliente.
 
 ## Alcance
 
-Diagnósticos (M10.2), **hover** e **ir-a-definición** (M10.2b). El paquete LSP de Sublime invoca
-hover (`K` / al pasar el ratón) y "Goto Definition" sin configuración extra una vez declarado el
-cliente. *Completion*, *rename* y *find-references* quedan para el futuro.
+El servidor implementa el núcleo del protocolo: **diagnósticos** en vivo, **hover**,
+**ir-a-definición** (cruza archivos), **find-references**, **rename** (seguro, cruza archivos),
+**completado**, **signature help**, **formateo** del documento (el mismo de `ray fmt`),
+**outline de símbolos** (*Goto Symbol in File*) y **resaltado de ocurrencias** del símbolo bajo el
+cursor. El paquete LSP de Sublime los expone sin configuración extra una vez declarado el cliente
+(`K` para hover, "Goto Definition", "Goto Symbol", "LSP: Format File", etc.).

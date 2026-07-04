@@ -106,6 +106,21 @@ fn serve<R: BufRead, W: Write>(reader: &mut R, out: &mut W) {
                 let id = msg.get("id").cloned().unwrap_or(Json::Null);
                 send(out, &resultado(id, signature_help_result(&msg, &docs)));
             }
+            // Formateo del documento — reusa el formateador de `ray fmt` (`fmt::format_source`).
+            "textDocument/formatting" => {
+                let id = msg.get("id").cloned().unwrap_or(Json::Null);
+                send(out, &resultado(id, formatting_result(&msg, &docs)));
+            }
+            // Outline / "ir a símbolo en el archivo": los ítems de nivel superior del documento.
+            "textDocument/documentSymbol" => {
+                let id = msg.get("id").cloned().unwrap_or(Json::Null);
+                send(out, &resultado(id, document_symbol_result(&msg, &docs)));
+            }
+            // Resaltar todas las apariciones del símbolo bajo el cursor (reusa `symbol_occurrences`).
+            "textDocument/documentHighlight" => {
+                let id = msg.get("id").cloned().unwrap_or(Json::Null);
+                send(out, &resultado(id, document_highlight_result(&msg, &docs)));
+            }
             // Petición desconocida (lleva `id`) → error JSON-RPC. Notificación → se ignora.
             _ => {
                 if let Some(id) = msg.get("id") {
@@ -949,6 +964,136 @@ fn as_usize(j: &Json) -> Option<usize> {
     }
 }
 
+// ── Formateo del documento ───────────────────────────────────────────────────────────
+
+/// El `result` de `textDocument/formatting`: un único `TextEdit` que reemplaza el documento entero
+/// por su versión formateada. Reusa `fmt::format_source` —**el mismo** formateador que `ray fmt`—,
+/// así el LSP y la CLI dan idéntico resultado. Lista vacía si el documento **no parsea** (no se
+/// formatea código inválido; el editor conserva lo escrito) o si ya está formateado (nada que tocar).
+fn formatting_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+    let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
+    let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
+    let Ok(formateado) = crate::fmt::format_source(src) else { return Json::Arr(vec![]) };
+    if formateado == *src {
+        return Json::Arr(vec![]);
+    }
+    // Un edit que cubre TODO el buffer: de (0,0) al final. `split('\n')` incluye el último segmento
+    // (vacío si el texto termina en '\n'), así el rango abarca exactamente el documento.
+    let segs: Vec<&str> = src.split('\n').collect();
+    let last_line = segs.len().saturating_sub(1);
+    let last_col = segs.last().map(|l| l.chars().count()).unwrap_or(0);
+    let pos = |l: usize, c: usize| obj(vec![("line", num(l as i64)), ("character", num(c as i64))]);
+    let range = obj(vec![("start", pos(0, 0)), ("end", pos(last_line, last_col))]);
+    let edit = obj(vec![("range", range), ("newText", Json::Str(formateado))]);
+    Json::Arr(vec![edit])
+}
+
+// ── Outline (documentSymbol) ─────────────────────────────────────────────────────────
+
+/// El `result` de `textDocument/documentSymbol`: el **outline** del archivo (funciones, structs con
+/// sus variantes, enums, traits e impls con sus métodos, constantes), jerárquico (`DocumentSymbol[]`).
+/// Se construye del AST del **propio buffer** (`parse_all`, tolerante a errores) —no del programa
+/// fusionado— para listar solo lo que el usuario escribió, sin prelude ni otros módulos. Sin spans,
+/// el rango de cada símbolo es el de su **nombre** (una línea); basta para el índice y para saltar.
+fn document_symbol_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+    let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
+    let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
+    let Ok(tokens) = lexer::lex(src) else { return Json::Arr(vec![]) };
+    let (program, _) = parser::parse_all(tokens);
+    let lines: Vec<&str> = src.lines().collect();
+    // Oculta nombres sintéticos (métodos manglados, namespacados, internos). El buffer normalmente no
+    // los tiene, pero es la misma salvaguarda que en completion.
+    let visible = |n: &str| !n.contains('#') && !n.contains("::") && !n.starts_with("__");
+
+    // Kinds de LSP SymbolKind: 6=Method, 10=Enum, 11=Interface, 12=Function, 14=Constant, 22=EnumMember,
+    // 23=Struct, 5=Class (para el bloque `impl`).
+    let mut syms: Vec<(usize, Json)> = Vec::new();
+    for f in program.functions.iter().filter(|f| visible(&f.name)) {
+        syms.push((f.line, doc_symbol(&lines, f.line, f.col, &f.name, 12, vec![])));
+    }
+    for s in program.structs.iter().filter(|s| visible(&s.name)) {
+        syms.push((s.line, doc_symbol(&lines, s.line, s.col, &s.name, 23, vec![])));
+    }
+    for e in program.enums.iter().filter(|e| visible(&e.name)) {
+        let hijos = e.variants.iter()
+            .map(|v| doc_symbol(&lines, v.line, v.col, &v.name, 22, vec![]))
+            .collect();
+        syms.push((e.line, doc_symbol(&lines, e.line, e.col, &e.name, 10, hijos)));
+    }
+    for t in program.traits.iter().filter(|t| visible(&t.name)) {
+        let hijos = t.methods.iter().filter(|m| visible(&m.name))
+            .map(|m| doc_symbol(&lines, m.line, m.col, &m.name, 6, vec![]))
+            .collect();
+        syms.push((t.line, doc_symbol(&lines, t.line, t.col, &t.name, 11, hijos)));
+    }
+    for c in program.consts.iter().filter(|c| visible(&c.name)) {
+        syms.push((c.line, doc_symbol(&lines, c.line, c.col, &c.name, 14, vec![])));
+    }
+    for im in &program.impls {
+        let etiqueta = format!("impl {} for {}", im.trait_name, im.target);
+        let hijos: Vec<Json> = im.methods.iter().filter(|m| visible(&m.name))
+            .map(|m| doc_symbol(&lines, m.line, m.col, &m.name, 6, vec![]))
+            .collect();
+        // El `range`/`selectionRange` del impl apunta al nombre del trait tras `impl`.
+        syms.push((im.line, doc_symbol_con_nombre(&lines, im.line, im.col, &im.trait_name, &etiqueta, 5, hijos)));
+    }
+    syms.sort_by_key(|(l, _)| *l);
+    Json::Arr(syms.into_iter().map(|(_, s)| s).collect())
+}
+
+/// Un `DocumentSymbol` cuyo nombre visible **es** el identificador buscado en la fuente.
+fn doc_symbol(lines: &[&str], line: usize, col: usize, name: &str, kind: i64, children: Vec<Json>) -> Json {
+    doc_symbol_con_nombre(lines, line, col, name, name, kind, children)
+}
+
+/// Un `DocumentSymbol` con `etiqueta` como nombre mostrado y `buscar` como el identificador a
+/// localizar en la fuente (p. ej. un `impl` muestra "impl T for X" pero su rango apunta a `T`).
+fn doc_symbol_con_nombre(lines: &[&str], line: usize, col: usize, buscar: &str, etiqueta: &str, kind: i64, children: Vec<Json>) -> Json {
+    // El rango del símbolo es el de su nombre (sin spans no tenemos la extensión completa del ítem;
+    // el nombre basta para listarlo y para saltar al hacer clic). `decl_name_range` escanea desde la
+    // posición de la declaración (que apunta al keyword `fn`/`struct`/… o ya al nombre).
+    let (l0, c0, len) = decl_name_range(lines, line, col, buscar)
+        .unwrap_or((line.saturating_sub(1), col.saturating_sub(1), buscar.chars().count().max(1)));
+    let r = rango(l0, c0, c0 + len);
+    let mut pares = vec![
+        ("name", Json::Str(etiqueta.to_string())),
+        ("kind", num(kind)),
+        ("range", r.clone()),
+        ("selectionRange", r),
+    ];
+    if !children.is_empty() {
+        pares.push(("children", Json::Arr(children)));
+    }
+    obj(pares)
+}
+
+// ── Resaltado de ocurrencias (documentHighlight) ─────────────────────────────────────
+
+/// El `result` de `textDocument/documentHighlight`: los rangos de **todas** las apariciones del
+/// símbolo bajo el cursor en ESTE archivo (la declaración como *Write*, los usos como *Text*). Reusa
+/// `symbol_occurrences` (el mismo motor de find-references), que ya resuelve los ámbitos y filtra a
+/// la banda de la entrada. Lista vacía si no hay un símbolo bajo el cursor.
+fn document_highlight_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
+    let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Arr(vec![]) };
+    let Some(src) = docs.get(&uri) else { return Json::Arr(vec![]) };
+    let Some((_, decl, usos, _)) = symbol_occurrences(Some(&uri), src, line0, char0) else {
+        return Json::Arr(vec![]);
+    };
+    // DocumentHighlightKind: 1=Text, 2=Read, 3=Write. La declaración = Write; los usos = Text. Se
+    // deduplica la declaración de entre los usos (si coincide) para no emitir el mismo rango dos veces.
+    let mut highlights = Vec::new();
+    if let Some((l, c, len)) = decl {
+        highlights.push(obj(vec![("range", rango(l, c, c + len)), ("kind", num(3))]));
+    }
+    for (l, c, len) in usos {
+        if decl == Some((l, c, len)) {
+            continue;
+        }
+        highlights.push(obj(vec![("range", rango(l, c, c + len)), ("kind", num(1))]));
+    }
+    Json::Arr(highlights)
+}
+
 // ── Análisis: el puente con el compilador ────────────────────────────────────────────
 
 /// Un diagnóstico del front-end: posición **1-basada** (como reportan las fases), la
@@ -1021,6 +1166,10 @@ fn respuesta_initialize(id: Json) -> Json {
         ("signatureHelpProvider", obj(vec![
             ("triggerCharacters", Json::Arr(vec![text("("), text(",")])),
         ])),
+        // Formateo del documento (reusa `ray fmt`), outline de símbolos y resaltado de ocurrencias.
+        ("documentFormattingProvider", Json::Bool(true)),
+        ("documentSymbolProvider", Json::Bool(true)),
+        ("documentHighlightProvider", Json::Bool(true)),
     ]);
     let result = obj(vec![
         ("capabilities", capabilities),
@@ -1705,6 +1854,86 @@ mod tests {
     }
 
     #[test]
+    fn formatting_reemplaza_el_documento() {
+        let mut docs = HashMap::new();
+        let uri = "file:///t.ray".to_string();
+        // Código mal formateado (espaciado irregular) → un edit que cubre todo el buffer.
+        docs.insert(uri.clone(), "fn  main( )->int{1+2}\n".to_string());
+        let msg = obj(vec![("params", obj(vec![("textDocument", obj(vec![("uri", text(&uri))]))]))]);
+        let r = formatting_result(&msg, &docs);
+        let edits = r.as_array().expect("array de edits");
+        assert_eq!(edits.len(), 1, "un único edit de documento completo");
+        let nuevo = edits[0].get("newText").and_then(Json::as_str).unwrap();
+        // El resultado es el mismo que `ray fmt` (el formateador compartido).
+        assert_eq!(nuevo, crate::fmt::format_source("fn  main( )->int{1+2}\n").unwrap());
+        assert!(nuevo.contains("fn main()"), "se normalizó el espaciado: {nuevo:?}");
+        // El rango arranca en (0,0).
+        let start = edits[0].get("range").unwrap().get("start").unwrap();
+        assert_eq!(start.get("line"), Some(&Json::Num(0.0)));
+        assert_eq!(start.get("character"), Some(&Json::Num(0.0)));
+
+        // Ya formateado → lista vacía (nada que cambiar).
+        let ya = crate::fmt::format_source("fn  main( )->int{1+2}\n").unwrap();
+        docs.insert(uri.clone(), ya);
+        assert!(formatting_result(&msg, &docs).as_array().unwrap().is_empty());
+
+        // Código que no parsea → lista vacía (no se formatea código inválido).
+        docs.insert(uri.clone(), "fn main( { ".to_string());
+        assert!(formatting_result(&msg, &docs).as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn document_symbol_lista_el_outline() {
+        let mut docs = HashMap::new();
+        let uri = "file:///t.ray".to_string();
+        let src = "const K: int = 3;\nstruct Punto { x: int, y: int }\nenum Color { Rojo, Verde }\ntrait Show { fn mostrar(self) -> string; }\nimpl Show for Punto { fn mostrar(self) -> string { \"p\" } }\nfn main() -> int { 0 }\n";
+        docs.insert(uri.clone(), src.to_string());
+        let msg = obj(vec![("params", obj(vec![("textDocument", obj(vec![("uri", text(&uri))]))]))]);
+        let syms = document_symbol_result(&msg, &docs);
+        let arr = syms.as_array().expect("array");
+        let nombres: Vec<&str> = arr.iter().filter_map(|s| s.get("name").and_then(Json::as_str)).collect();
+        // Todos los ítems de nivel superior, en orden de archivo.
+        assert_eq!(nombres, vec!["K", "Punto", "Color", "Show", "impl Show for Punto", "main"], "{nombres:?}");
+        // El enum lleva sus variantes como hijos.
+        let color = arr.iter().find(|s| s.get("name").and_then(Json::as_str) == Some("Color")).unwrap();
+        let vars: Vec<&str> = color.get("children").unwrap().as_array().unwrap().iter()
+            .filter_map(|c| c.get("name").and_then(Json::as_str)).collect();
+        assert_eq!(vars, vec!["Rojo", "Verde"]);
+        // El trait lleva su método como hijo; el kind del struct es 23 (Struct).
+        let show = arr.iter().find(|s| s.get("name").and_then(Json::as_str) == Some("Show")).unwrap();
+        assert_eq!(show.get("children").unwrap().as_array().unwrap().len(), 1);
+        let punto = arr.iter().find(|s| s.get("name").and_then(Json::as_str) == Some("Punto")).unwrap();
+        assert_eq!(punto.get("kind"), Some(&Json::Num(23.0)));
+        // El selectionRange del struct apunta a su NOMBRE (col 7 0-based en "struct Punto").
+        let sel = punto.get("selectionRange").unwrap().get("start").unwrap();
+        assert_eq!(sel.get("line"), Some(&Json::Num(1.0)));
+        assert_eq!(sel.get("character"), Some(&Json::Num(7.0)));
+    }
+
+    #[test]
+    fn document_highlight_resalta_ocurrencias() {
+        let mut docs = HashMap::new();
+        let uri = "file:///t.ray".to_string();
+        // `x` se declara y se usa dos veces.
+        let src = "fn main() -> int {\n  let x = 3;\n  x + x\n}\n";
+        docs.insert(uri.clone(), src.to_string());
+        // Cursor sobre el primer uso de `x` (línea 3 0-based 2, col 2).
+        let msg = obj(vec![
+            ("params", obj(vec![
+                ("textDocument", obj(vec![("uri", text(&uri))])),
+                ("position", obj(vec![("line", num(2)), ("character", num(2))])),
+            ])),
+        ]);
+        let hl = document_highlight_result(&msg, &docs);
+        let arr = hl.as_array().expect("array");
+        // Declaración (let x) + dos usos = 3 rangos, sin duplicados.
+        assert_eq!(arr.len(), 3, "decl + 2 usos: {arr:?}");
+        // Exactamente uno es Write (kind 3, la declaración); el resto Text (kind 1).
+        let writes = arr.iter().filter(|h| h.get("kind") == Some(&Json::Num(3.0))).count();
+        assert_eq!(writes, 1, "la declaración es el único Write");
+    }
+
+    #[test]
     fn hover_con_modulos() {
         // Antes: un archivo con `import` no daba NINGÚN hover (el checker fallaba por el import).
         let dir = std::env::temp_dir().join("ray_lsp_hover_mod");
@@ -1961,6 +2190,10 @@ mod tests {
 
         assert!(out.contains("\"id\":1"));
         assert!(out.contains("\"capabilities\""));
+        // Las capacidades nuevas se anuncian (el cliente las descubre aquí).
+        assert!(out.contains("documentFormattingProvider"));
+        assert!(out.contains("documentSymbolProvider"));
+        assert!(out.contains("documentHighlightProvider"));
         assert!(out.contains("textDocument/publishDiagnostics"));
         assert!(out.contains("\"severity\":1"));
     }
@@ -1980,7 +2213,7 @@ mod tests {
 
     #[test]
     fn serve_metodo_desconocido_con_id_da_error() {
-        let body = r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/formatting","params":{}}"#;
+        let body = r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/inexistente","params":{}}"#;
         let mut entrada = frame(body);
         entrada.push_str(&frame(r#"{"jsonrpc":"2.0","method":"exit"}"#));
 

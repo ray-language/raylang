@@ -3,8 +3,10 @@
 // Un tipo de usuario puede usar los operadores aritméticos `+ - * /` y el `-` unario si
 // implementa los traits del prelude `Add`/`Sub`/`Mul`/`Div`/`Neg`. El checker baja `a + b`
 // (con `a`/`b` de ese tipo) a `a.add(b)`, una llamada ordinaria: cero cambios en el runtime.
-
-struct Vec2 { x: int, y: int }
+struct Vec2 {
+    x: int,
+    y: int,
+}
 
 impl Add for Vec2 {
     fn add(self, o: Vec2) -> Vec2 { Vec2 { x: self.x + o.x, y: self.y + o.y } }
@@ -31,12 +33,12 @@ fn main() {
     let a = Vec2 { x: 1, y: 2 };
     let b = Vec2 { x: 3, y: 4 };
 
-    print((a + b).mostrar());   // (4, 6)
-    print((b - a).mostrar());   // (2, 2)
-    print((a * b).mostrar());   // (3, 8)
-    print((-a).mostrar());      // (-1, -2)
+    print((a + b).mostrar());  // (4, 6)
+    print((b - a).mostrar());  // (2, 2)
+    print((a * b).mostrar());  // (3, 8)
+    print((-a).mostrar());  // (-1, -2)
 
     // Encadenado: los operadores componen como cualquier expresión.
     let s = a + b + Vec2 { x: 10, y: 10 };
-    print(s.mostrar());         // (14, 16)
+    print(s.mostrar());  // (14, 16)
 }

@@ -14,9 +14,10 @@
 // Ejecuta con:
 //   cargo run --quiet -- examples/stdlib/stdlib.ray
 //   cargo run --quiet -- --vm examples/stdlib/stdlib.ray
-
 fn doble(x: int) -> int { x * 2 }
+
 fn es_par(x: int) -> bool { x % 2 == 0 }
+
 fn suma(a: int, b: int) -> int { a + b }
 
 fn main() -> int {
@@ -24,18 +25,15 @@ fn main() -> int {
 
     // --- Estilo UFCS: se lee como métodos encadenados ---
     //   dobla cada uno -> [2,4,6,8,10,12], filtra pares (todos) -> suma
-    let a: int = xs.map(doble).filter(es_par).fold(0, suma);   // 42
+    let a: int = xs.map(doble).filter(es_par).fold(0, suma);  // 42
 
     // --- Estilo pipeline: el mismo cálculo como una tubería ---
     let b: int = xs |> filter(es_par) |> map(doble) |> fold(0, suma);
     //   filtra pares [2,4,6] -> dobla [4,8,12] -> suma = 24
-
     // --- Con closures anónimos en línea ---
-    let c: int =
-        xs
-        |> map(fn(x: int) -> int { x * x })          // [1,4,9,16,25,36]
-        |> filter(fn(x: int) -> bool { x > 10 })     // [16,25,36]
-        |> fold(0, suma);                             // 77
-
-    a + b + c                                          // 42 + 24 + 77 = 143
+    let c: int = xs |> map(fn(x: int) -> int { x * x }) |> filter(fn(x: int) -> bool { x > 10 }) |> fold(0, suma);
+    // [1,4,9,16,25,36]
+    // [16,25,36]
+    // 77
+    a + b + c  // 42 + 24 + 77 = 143
 }

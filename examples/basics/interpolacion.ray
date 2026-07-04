@@ -9,23 +9,23 @@ fn main() {
     let anio = 1815;
 
     // Variables y texto — en vez de `to_string(nombre) + " nació en " + to_string(anio) + "."`.
-    print("${nombre} nació en ${anio}.");                       // Ada nació en 1815.
+    print("${nombre} nació en ${anio}.");  // Ada nació en 1815.
 
     // Expresiones arbitrarias dentro de `${}`.
-    print("Un triángulo 6x4 tiene área ${area(6, 4)}.");        // ... área 12.
+    print("Un triángulo 6x4 tiene área ${area(6, 4)}.");  // ... área 12.
 
     let x = 7;
     print("${x} al cuadrado es ${x * x}, y su mitad ${x / 2}.");  // 7 ... 49 ... 3.
 
     // Cualquier tipo imprimible: int, float, bool, char, string.
-    print("bool=${true}, float=${2.5}, char=${'!'}");            // bool=true, float=2.5, char=!
+    print("bool=${true}, float=${2.5}, char=${'!'}");  // bool=true, float=2.5, char=!
 
     // Las llaves son literales (sin doblar); solo `${` interpola.
-    print("un objeto JSON: { \"clave\": ${x} }");               // un objeto JSON: { "clave": 7 }
+    print("un objeto JSON: { \"clave\": ${x} }");  // un objeto JSON: { "clave": 7 }
 
     // Se combina con `for` (M27.2) y tuplas (M27.1).
     for i in 1..4 {
         let par = (i, i * i);
-        print("  ${par.0}² = ${par.1}");                        // 1²=1, 2²=4, 3²=9
+        print("  ${par.0}² = ${par.1}");  // 1²=1, 2²=4, 3²=9
     }
 }

@@ -11,17 +11,25 @@
 // PARSER: el AST ya lleva llamadas ordinarias. Ejecuta con:
 //   cargo run --quiet -- examples/stdlib/pipelines.ray
 //   cargo run --quiet -- --vm examples/stdlib/pipelines.ray
-
 fn doble(x: int) -> int { x * 2 }
+
 fn inc(x: int) -> int { x + 1 }
+
 fn suma(a: int, b: int) -> int { a + b }
 
 // Operaciones sobre arreglos (el valor que fluye por la tubería es un [int]).
-fn agregar(xs: [int], x: int) -> [int] { push(xs, x); xs }
+fn agregar(xs: [int], x: int) -> [int] {
+    push(xs, x);
+    xs
+}
+
 fn total(xs: [int]) -> int {
     var s: int = 0;
     var i: int = 0;
-    while (i < len(xs)) { s = s + xs[i]; i = i + 1; }
+    while (i < len(xs)) {
+        s = s + xs[i];
+        i = i + 1;
+    }
     s
 }
 
@@ -29,17 +37,17 @@ fn main() -> int {
     let v: int = 5;
 
     // Tubería simple: cada paso recibe el resultado del anterior como primer argumento.
-    let a: int = v |> doble |> inc |> doble;     // doble(inc(doble(5))) = 22
+    let a: int = v |> doble |> inc |> doble;  // doble(inc(doble(5))) = 22
 
     // Con argumentos extra: el receptor va primero, el resto se mantiene.
-    let b: int = v |> suma(20) |> inc;           // inc(suma(5, 20)) = 26
+    let b: int = v |> suma(20) |> inc;  // inc(suma(5, 20)) = 26
 
     // El operando izquierdo puede ser una expresión completa (precedencia mínima).
-    let c: int = 1 + 2 |> doble;                 // doble(1 + 2) = 6
+    let c: int = 1 + 2 |> doble;  // doble(1 + 2) = 6
 
     // Tubería sobre un arreglo, combinando con UFCS (.total()).
     let xs: [int] = [10, 20, 30];
-    let d: int = xs |> agregar(40) |> total;     // total(agregar(xs, 40)) = 100
+    let d: int = xs |> agregar(40) |> total;  // total(agregar(xs, 40)) = 100
 
-    a + b + c + d                                 // 22 + 26 + 6 + 100 = 154
+    a + b + c + d  // 22 + 26 + 6 + 100 = 154
 }

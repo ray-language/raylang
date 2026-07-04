@@ -60,16 +60,20 @@ sin compilar un cliente.
      "clients": {
        "raylang": {
          "enabled": true,
-         // Si 'raylang' no está en el PATH, pon la ruta absoluta al binario:
-         //   "command": ["/ruta/a/target/release/raylang", "--lsp"],
-         "command": ["raylang", "--lsp"],
+         // ⚠️ Usa la RUTA ABSOLUTA al binario, no solo "ray"/"raylang". Sublime es una app
+         // de GUI y en macOS/Linux las apps de GUI NO heredan el PATH de tu shell (arrancan
+         // con un PATH mínimo del sistema), así que un comando a secas falla con
+         // "[Errno 2] No such file or directory: 'ray'" aunque tu terminal sí lo encuentre.
+         "command": ["/Users/TU_USUARIO/.local/bin/ray", "lsp"],
+         // El instalador (curl|sh) deja el binario ahí; si compilaste a mano, apunta a
+         // ".../target/release/ray". Un símlink estable evita tener que reeditar tras recompilar.
          "selector": "source.raylang"
        }
      }
    }
    ```
 
-4. Reabre un `.ray`. El paquete LSP lanza `raylang --lsp` y subraya los errores que el checker
+4. Reabre un `.ray`. El paquete LSP lanza `ray lsp` y subraya los errores que el checker
    reporta (un error a la vez: el compilador es *fail-fast*; al corregirlo aparece el siguiente).
 
 > **Por qué solo configuración.** El protocolo (LSP/JSON-RPC) lo implementa por un lado nuestro

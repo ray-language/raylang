@@ -1289,11 +1289,16 @@ fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
             let vis: Vec<Json> = variantes.iter().map(|v| {
                 let mut campos = vec![("label", Json::Str(v.name.clone())), ("kind", num(20))];
                 if !v.payload.is_empty() {
-                    let args = v.payload.iter().enumerate()
+                    let tipos: Vec<String> = v.payload.iter().map(|t| format!("{}", t)).collect();
+                    let args = tipos.iter().enumerate()
                         .map(|(i, t)| format!("${{{}:{}}}", i + 1, t))
                         .collect::<Vec<_>>().join(", ");
                     campos.push(("insertText", Json::Str(format!("{}({})", v.name, args))));
                     campos.push(("insertTextFormat", num(2)));
+                    // Muestra los tipos del payload en el popup, como la firma de una función (M46a).
+                    let inline = format!("({})", tipos.join(", "));
+                    campos.push(("labelDetails", obj(vec![("detail", Json::Str(inline.clone()))])));
+                    campos.push(("detail", Json::Str(inline)));
                 }
                 obj(campos)
             }).collect();
@@ -3354,6 +3359,19 @@ mod tests {
         assert!(vars.iter().any(|(l, k)| l == "Horizontal" && *k == 20), "variante Horizontal: {vars:?}");
         assert!(vars.iter().any(|(l, _)| l == "Vertical"), "variante Vertical: {vars:?}");
         assert!(!vars.iter().any(|(l, _)| l == "figuras"), "tras el punto NO sale la completion de archivo: {vars:?}");
+
+        // Una variante con payload muestra los tipos en el popup (`labelDetails.detail`).
+        let src = "enum Figura { Circulo(float), Rect(float, float), Punto }\nfn main() -> int {\n    Figura.\n0\n}\n";
+        let mut docs = HashMap::new();
+        docs.insert(uri.clone(), src.to_string());
+        let msg = json::parse(&format!(
+            r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":11}}}}}}"#
+        )).unwrap();
+        let vs = completion_result(&msg, &docs);
+        let rect = vs.as_array().unwrap().iter()
+            .find(|i| i.get("label").and_then(Json::as_str) == Some("Rect")).unwrap();
+        let det = rect.get("labelDetails").and_then(|d| d.get("detail")).and_then(Json::as_str);
+        assert_eq!(det, Some("(float, float)"), "tipos del payload en el popup: {rect:?}");
 
         let _ = std::fs::remove_dir_all(&base);
     }

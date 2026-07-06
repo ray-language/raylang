@@ -1343,7 +1343,10 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     items.sort();
     items.dedup();
     let ctx = SigCtx::nuevo(src, entry_path.as_deref()); // M46a: firmas para el detalle
-    let lista: Vec<Json> = items.into_iter()
+    // M47b: los structs ofrecibles (kind 22) para el ítem-extra del literal, más abajo.
+    let structs_ofrecibles: Vec<String> = items.iter()
+        .filter(|(_, k)| *k == 22).map(|(l, _)| l.clone()).collect();
+    let mut lista: Vec<Json> = items.into_iter()
         .map(|(label, kind)| {
             // Documentación del ítem: metadatos del builtin, o los `///` del prelude.
             let doc = crate::builtins::doc(&label).map(|s| s.to_string())
@@ -1376,6 +1379,26 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
             obj(campos)
         })
         .collect();
+    // M47b: por cada struct ofrecible, un ítem EXTRA `Nombre {…}` que inserta el **literal completo**
+    // con un placeholder por campo (`Nombre { c1: ${1:T1}, … }`), al estilo rust-analyzer. Va aparte
+    // del tipo pelado (que sigue para las posiciones de tipo, `let x: Nombre`); `filterText` = el
+    // nombre, así aparece al teclear el tipo. Solo para structs con campos conocidos.
+    for label in structs_ofrecibles {
+        if let Some(campos) = ctx.struct_campos(&label) {
+            if campos.is_empty() { continue; }
+            let cuerpo = campos.iter().enumerate()
+                .map(|(i, (f, t))| format!("{}: ${{{}:{}}}", f, i + 1, t))
+                .collect::<Vec<_>>().join(", ");
+            lista.push(obj(vec![
+                ("label", Json::Str(format!("{} {{…}}", label))),
+                ("kind", num(15)), // 15 = Snippet
+                ("detail", Json::Str("literal de struct".into())),
+                ("filterText", Json::Str(label.clone())),
+                ("insertText", Json::Str(format!("{} {{ {} }}", label, cuerpo))),
+                ("insertTextFormat", num(2)), // 2 = Snippet
+            ]));
+        }
+    }
     Json::Arr(lista)
 }
 
@@ -3339,6 +3362,13 @@ mod tests {
         // `Punto { x: dob|` (posición de VALOR) → cae a la completion de archivo (dobla), no campos.
         let valor = labels("    let p = Punto { x: dob", 3, 26);
         assert!(valor.iter().any(|(l, _, _)| l == "dobla"), "en posición de valor, completion de archivo: {valor:?}");
+
+        // M47b: al teclear el TIPO, un ítem extra `Punto {…}` que inserta el literal con placeholders,
+        // aparte del tipo pelado `Punto`.
+        let tipo = labels("    let p = Pun", 3, 15);
+        assert!(tipo.iter().any(|(l, k, _)| l == "Punto" && *k == 22), "el tipo pelado sigue: {tipo:?}");
+        assert!(tipo.iter().any(|(l, k, ins)| l == "Punto {…}" && *k == 15
+            && ins.as_deref() == Some("Punto { x: ${1:int}, y: ${2:int} }")), "el literal-snippet: {tipo:?}");
     }
 
     #[test]

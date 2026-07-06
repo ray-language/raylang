@@ -6268,3 +6268,17 @@ firma de `SigCtx` (`snippet_args` toma el nombre de cada `"p: T"`); en un **mét
 receptor (`s.split` → `split(${1:sep})`); sin firma pero con args se cae a `nombre($0)`, y sin args a
 `nombre()`. Cubre tanto el completion de miembros como el de archivo (que además ganó `insertText`,
 que antes no tenía). **M46 COMPLETO** (48.1 detalle + 48.2 signature help + 48.3 placeholders).
+
+## 49. M47 — completion de literales de struct
+
+- **M47a — campos dentro del literal**: dentro de `Nombre { … | … }` (posición de nombre de campo) se
+  ofrecen los **campos** del struct que faltan (kind Field, tipo como detalle, insertText `campo: `),
+  en vez de los símbolos del archivo. `struct_literal_completion_items` detecta el contexto (escanea
+  al `{` sin cerrar; el identificador previo es el struct), lo busca en el cierre de imports
+  (`SigCtx::struct_campos` → archivo/importado/reexportado, `geo.Circulo { }`), y guarda contra
+  falsos positivos de bloque (`-> T {`, `for T {`, `struct/enum/trait T {`). Excluye los campos ya
+  escritos; en posición de VALOR (`campo: …`) cede a la completion normal.
+- **M47b — snippet del literal al teclear el tipo**: por cada struct ofrecible, un ítem EXTRA
+  `Nombre {…}` (kind Snippet) que inserta el literal completo con un placeholder por campo (`Nombre {
+  c1: ${1:T1}, … }`), al estilo rust-analyzer. Aparte del tipo pelado `Nombre` (que sigue para las
+  anotaciones); `filterText` = el nombre, así aparece al teclear el tipo. Cliente-LSP; cero runtime.

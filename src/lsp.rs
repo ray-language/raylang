@@ -1016,13 +1016,19 @@ fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
             if let Some(d) = m.detail {
                 campos.push(("detail", Json::Str(d)));
             }
-            // M45b: para los invocables (método/función) insertamos `nombre(…)` como *snippet* y,
-            // si toma argumentos, dejamos el cursor dentro y disparamos el signature help. M46a: el
-            // detalle muestra la firma (sin el receptor: solo los argumentos que faltan).
+            // Invocables (método/función): detalle de firma (M46a, sin el receptor) + snippet con
+            // placeholders por parámetro (M46c) + disparo del signature help.
             if m.kind == 2 || m.kind == 3 {
-                empujar_firma(&mut campos, &ctx, &m.label, true);
-                let insert = if m.has_args { format!("{}($0)", m.label) } else { format!("{}()", m.label) };
-                campos.push(("insertText", Json::Str(insert)));
+                // Params en contexto de método: la firma sin el receptor.
+                let params_metodo = ctx.firma(&m.label).map(|(mut ps, ret)| {
+                    if !ps.is_empty() { ps.remove(0); } // el receptor
+                    (ps, ret)
+                });
+                if let Some((ps, ret)) = &params_metodo {
+                    empujar_firma_raw(&mut campos, ps.clone(), ret.clone(), false);
+                }
+                let ps_ref = params_metodo.as_ref().map(|(ps, _)| ps.as_slice());
+                campos.push(("insertText", Json::Str(insert_llamada(&m.label, ps_ref, m.has_args))));
                 campos.push(("insertTextFormat", num(2))); // 2 = Snippet
                 if m.has_args {
                     campos.push(("command", obj(vec![
@@ -1153,9 +1159,23 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
             let doc = crate::builtins::doc(&label).map(|s| s.to_string())
                 .or_else(|| doc_en_prelude(&label));
             let mut campos = vec![("label", Json::Str(label.clone())), ("kind", num(kind))];
-            // M46a: las funciones/builtins (kind 3) muestran su firma completa en el detalle.
+            // M46a/M46c: las funciones/builtins (kind 3) muestran su firma en el detalle e insertan
+            // un snippet `nombre(${1:p}, …)` con placeholders navegables por Tab.
             if kind == 3 {
-                empujar_firma(&mut campos, &ctx, &label, false);
+                let firma = ctx.firma(&label);
+                if let Some((ps, ret)) = &firma {
+                    empujar_firma_raw(&mut campos, ps.clone(), ret.clone(), false);
+                }
+                let ps_ref = firma.as_ref().map(|(ps, _)| ps.as_slice());
+                let tiene_args = ps_ref.map(|p| !p.is_empty()).unwrap_or(false);
+                campos.push(("insertText", Json::Str(insert_llamada(&label, ps_ref, tiene_args))));
+                campos.push(("insertTextFormat", num(2))); // 2 = Snippet
+                if tiene_args {
+                    campos.push(("command", obj(vec![
+                        ("title", Json::Str("signature".into())),
+                        ("command", Json::Str("editor.action.triggerParameterHints".into())),
+                    ])));
+                }
             }
             if let Some(d) = doc {
                 campos.push(("documentation", obj(vec![
@@ -1352,13 +1372,27 @@ impl SigCtx {
     }
 }
 
-/// Añade a `campos` el detalle de firma de `name` para el popup (M46a): `labelDetails.detail`
-/// (los parámetros, inline tras el label) + `labelDetails.description` (el retorno, a la derecha) +
-/// el clásico `detail` (panel). Si `metodo`, recorta el **primer** parámetro (el receptor) → un
-/// método muestra solo los argumentos que faltan. No hace nada si no se resuelve la firma.
-fn empujar_firma(campos: &mut Vec<(&'static str, Json)>, ctx: &SigCtx, name: &str, metodo: bool) {
-    if let Some((params, ret)) = ctx.firma(name) {
-        empujar_firma_raw(campos, params, ret, metodo);
+/// El cuerpo del snippet de argumentos a partir de los params `["p: P", "k: int"]` (M46c):
+/// `${1:p}, ${2:k}` —solo el **nombre** como placeholder, para teclear encima y recorrer con Tab—.
+/// Vacío si no hay params (→ `nombre()`).
+fn snippet_args(params: &[String]) -> String {
+    params.iter().enumerate()
+        .map(|(i, p)| {
+            let nombre = p.split(':').next().unwrap_or(p).trim();
+            format!("${{{}:{}}}", i + 1, nombre)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// El `insertText` (snippet) de una llamada (M46c): con los params resueltos, `nombre(${1:p}, …)`
+/// (placeholders navegables); sin firma pero con args, `nombre($0)` (cursor dentro); si no, `nombre()`.
+fn insert_llamada(label: &str, params: Option<&[String]>, has_args: bool) -> String {
+    match params {
+        Some(ps) if !ps.is_empty() => format!("{}({})", label, snippet_args(ps)),
+        Some(_) => format!("{}()", label),               // firma conocida, sin argumentos
+        None if has_args => format!("{}($0)", label),    // firma desconocida, con args → cursor dentro
+        None => format!("{}()", label),
     }
 }
 
@@ -2843,8 +2877,8 @@ mod tests {
 
     #[test]
     fn completion_de_miembros_snippet_y_doc() {
-        // M45b: un método con args → insertText snippet `m($0)`; sin args → `m()`; los métodos
-        // del usuario traen su doc `///`.
+        // M45b/M46c: un método con args → snippet con placeholders por parámetro, sin el receptor
+        // (`doblar(${1:k})`); un campo no inserta `()`; los métodos del usuario traen su doc `///`.
         let src = "struct P { x: int }\n/// Duplica x.\nfn doblar(p: P, k: int) -> int { p.x * k }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.\n    0\n}\n";
         let msg = json::parse(
             r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":5,"character":6}}}"#
@@ -2854,7 +2888,7 @@ mod tests {
         let items = completion_result(&msg, &docs);
         let arr = items.as_array().unwrap();
         let doblar = arr.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some("doblar")).expect("doblar");
-        assert_eq!(doblar.get("insertText").and_then(|t| t.as_str()), Some("doblar($0)"), "snippet con args");
+        assert_eq!(doblar.get("insertText").and_then(|t| t.as_str()), Some("doblar(${1:k})"), "snippet con placeholder, sin receptor");
         assert!(doblar.get("command").is_some(), "dispara signature help");
         let doc = doblar.get("documentation").and_then(|d| d.get("value")).and_then(|v| v.as_str()).unwrap_or("");
         assert!(doc.contains("Duplica x"), "doc /// del método: {doc}");
@@ -2961,6 +2995,30 @@ mod tests {
         // Builtin: pow(.
         assert_eq!(sig("fn main() -> int {\n    let x = pow(\n    0\n}\n", 1, 16),
                    Some(("fn pow(base: float, exp: float) -> float".into(), 0)));
+    }
+
+    #[test]
+    fn completion_snippet_con_placeholders_por_parametro() {
+        // M46c: el insertText usa un placeholder por parámetro (nombre), navegable con Tab.
+        let insert = |src: &str, line: usize, ch: usize, label: &str| -> Option<String> {
+            let mut docs = HashMap::new();
+            docs.insert("file:///t.ray".to_string(), src.to_string());
+            let msg = json::parse(&format!(
+                r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
+            )).unwrap();
+            completion_result(&msg, &docs).as_array().unwrap().iter()
+                .find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label))
+                .and_then(|i| i.get("insertText")).and_then(Json::as_str).map(|s| s.to_string())
+        };
+        // Función de archivo con dos params.
+        let f = "fn doblar(p: int, k: int) -> int { p }\nfn main() -> int {\n    dob\n    0\n}\n";
+        assert_eq!(insert(f, 2, 7, "doblar").as_deref(), Some("doblar(${1:p}, ${2:k})"));
+        // Método: receptor recortado → solo el resto.
+        let m = "struct P { x: int }\nfn tri(p: P, k: int) -> int { p.x }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.\n    0\n}\n";
+        assert_eq!(insert(m, 4, 6, "tri").as_deref(), Some("tri(${1:k})"));
+        // Builtin sin argumentos → `()`.
+        let a = "fn main() -> int {\n    let xs = [1];\n    xs.\n    0\n}\n";
+        assert_eq!(insert(a, 2, 7, "len").as_deref(), Some("len()"));
     }
 
     #[test]

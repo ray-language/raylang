@@ -6258,3 +6258,13 @@ calificada de módulo**: `enclosing_call` devuelve el receptor; si es un **valor
 recorta el receptor y el `activeParameter` cuenta los args visibles (`(k: int)`); si es un **módulo**
 importado (`u.cuadrado(`, detectado con `es_modulo_importado`) se muestra la firma completa. Reusa
 todo M46a; cero runtime.
+
+### 48.3 M46c — snippet con placeholders por parámetro
+
+Al aceptar una función/método, en vez de `nombre($0)` (cursor entre paréntesis vacíos) se inserta un
+**snippet con un placeholder por parámetro** —`nombre(${1:p}, ${2:k})`—: caes en el primer argumento
+y recorres los demás con Tab, cada uno con el nombre del parámetro como texto seleccionado. Reusa la
+firma de `SigCtx` (`snippet_args` toma el nombre de cada `"p: T"`); en un **método** se omite el
+receptor (`s.split` → `split(${1:sep})`); sin firma pero con args se cae a `nombre($0)`, y sin args a
+`nombre()`. Cubre tanto el completion de miembros como el de archivo (que además ganó `insertText`,
+que antes no tenía). **M46 COMPLETO** (48.1 detalle + 48.2 signature help + 48.3 placeholders).

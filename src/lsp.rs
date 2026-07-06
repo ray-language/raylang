@@ -834,6 +834,47 @@ fn import_roots(entry: &Path) -> Vec<PathBuf> {
 /// Los nombres **`pub`** exportados por el módulo en `ruta` (M45c-1): funciones, tipos (struct/enum/
 /// trait), constantes y re-exports (`pub from … import …`). Cada uno con su `CompletionItemKind`.
 /// `None` si el módulo no se resuelve o no parsea.
+/// Clasifica el símbolo `name` en la fuente `fuente` (M46c): su `CompletionItemKind` (3=Function,
+/// 22=Struct, 13=Enum, 8=Trait) y su firma si es función. `None` si no está definido ahí. Se usa para
+/// los **re-exports** de una cápsula (`pub from … import …`), cuya declaración vive en el submódulo
+/// interno, no en `mod.ray`.
+fn clasificar_simbolo_de_fuente(fuente: &str, name: &str) -> Option<(i64, Option<(Vec<String>, String)>)> {
+    let tokens = lexer::lex(fuente).ok()?;
+    let (program, _) = parser::parse_all(tokens);
+    if program.functions.iter().any(|f| f.name == name) {
+        return Some((3, find_fn_signature(fuente, name)));
+    }
+    if program.structs.iter().any(|s| s.name == name) {
+        return Some((22, None));
+    }
+    if program.enums.iter().any(|e| e.name == name) {
+        return Some((13, None));
+    }
+    if program.traits.iter().any(|t| t.name == name) {
+        return Some((8, None));
+    }
+    None
+}
+
+/// Construye el `CompletionItem` de un símbolo `pub` de módulo (M46a/M46c): label + kind + —si es
+/// función con firma— el detalle y el snippet con placeholders. El calificador de módulo NO es un
+/// receptor (`figuras.area_cuadrado(4)` pasa 4), así que la firma va **completa**.
+fn item_simbolo_modulo(label: String, kind: i64, firma: Option<(Vec<String>, String)>) -> Json {
+    let mut campos = vec![("label", Json::Str(label.clone())), ("kind", num(kind))];
+    if let Some((params, ret)) = firma {
+        empujar_firma_raw(&mut campos, params.clone(), ret, false);
+        campos.push(("insertText", Json::Str(insert_llamada(&label, Some(&params), !params.is_empty()))));
+        campos.push(("insertTextFormat", num(2))); // 2 = Snippet
+        if !params.is_empty() {
+            campos.push(("command", obj(vec![
+                ("title", Json::Str("signature".into())),
+                ("command", Json::Str("editor.action.triggerParameterHints".into())),
+            ])));
+        }
+    }
+    obj(campos)
+}
+
 fn simbolos_pub_de_modulo(entry: &Path, ruta: &str) -> Option<Vec<(String, i64, Option<(Vec<String>, String)>)>> {
     let roots = import_roots(entry);
     let path = loader::resolve_module_path(&roots, ruta).ok()??;
@@ -858,11 +899,18 @@ fn simbolos_pub_de_modulo(entry: &Path, ruta: &str) -> Option<Vec<(String, i64, 
     for c in &program.consts {
         if c.is_pub { items.push((c.name.clone(), 21, None)); }
     }
-    // Re-exports: `pub from … import a [as b]` expone el nombre local (alias u original).
+    // Re-exports: `pub from M import a [as b]` expone el nombre local (alias u original). La
+    // declaración (kind + firma) vive en el módulo origen `M` (M46c: la firma se resuelve allí, no
+    // en `mod.ray`); si no se resuelve, se cae a función sin firma.
     for fi in &program.from_imports {
         if fi.is_pub {
+            let origen = loader::resolve_module_path(&roots, &fi.module).ok().flatten()
+                .and_then(|p| std::fs::read_to_string(p).ok());
             for n in &fi.names {
-                items.push((n.local().to_string(), 3, None));
+                let (kind, firma) = origen.as_deref()
+                    .and_then(|s| clasificar_simbolo_de_fuente(s, &n.name))
+                    .unwrap_or((3, None));
+                items.push((n.local().to_string(), kind, firma));
             }
         }
     }
@@ -885,11 +933,7 @@ fn import_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
         ImportCtx::Symbols(ruta) => {
             let items = simbolos_pub_de_modulo(&entry, &ruta).unwrap_or_default();
             let lista: Vec<Json> = items.into_iter()
-                .map(|(label, kind, firma)| {
-                    let mut campos = vec![("label", Json::Str(label)), ("kind", num(kind))];
-                    if let Some((p, r)) = firma { empujar_firma_raw(&mut campos, p, r, false); }
-                    obj(campos)
-                })
+                .map(|(label, kind, firma)| item_simbolo_modulo(label, kind, firma))
                 .collect();
             Some(Json::Arr(lista))
         }
@@ -1073,12 +1117,7 @@ fn module_alias_symbols(uri: Option<&str>, src: &str, receptor: &str) -> Option<
         .map(|d| d.module.clone())?;
     let items = simbolos_pub_de_modulo(&entry, &modpath).unwrap_or_default();
     let lista: Vec<Json> = items.into_iter()
-        .map(|(label, kind, firma)| {
-            let mut campos = vec![("label", Json::Str(label)), ("kind", num(kind))];
-            // `u.cuadrado(4)` pasa 4 como único arg (el calificador de módulo no es receptor) → firma completa.
-            if let Some((p, r)) = firma { empujar_firma_raw(&mut campos, p, r, false); }
-            obj(campos)
-        })
+        .map(|(label, kind, firma)| item_simbolo_modulo(label, kind, firma))
         .collect();
     Some(Json::Arr(lista))
 }
@@ -2962,6 +3001,28 @@ mod tests {
         assert!(!poru.contains(&"interno".to_string()), "no expone lo privado del módulo: {poru:?}");
         let porleaf = cual("    circulo.", 3, 12); // leaf `circulo` (geo/formas/circulo.ray)
         assert!(porleaf.contains(&"dibujar".to_string()), "leaf circulo.: {porleaf:?}");
+
+        // M46c: en el acceso calificado, las funciones traen firma + snippet con placeholders, y las
+        // firmas de un RE-EXPORT de cápsula se resuelven en el módulo origen (no en `mod.ray`).
+        std::fs::write(base.join("util/mod.ray"),
+            "pub from util/interno import saludar;\npub fn publico() -> int { 0 }\n").unwrap();
+        std::fs::write(base.join("util/interno.ray"),
+            "pub fn saludar(nombre: string, veces: int) -> string { nombre }\n").unwrap();
+        let items_de = |cuerpo: &str, line: usize, ch: usize| -> Json {
+            let src = format!("import util;\nfn main() -> int {{\n{cuerpo}\n0\n}}\n");
+            let mut docs = HashMap::new();
+            docs.insert(uri.clone(), src);
+            let msg = json::parse(&format!(
+                r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
+            )).unwrap();
+            completion_result(&msg, &docs)
+        };
+        let it = |arr: &Json, label: &str| arr.as_array().unwrap().iter()
+            .find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label)).cloned();
+        let items = items_de("    util.", 2, 9);
+        let saludar = it(&items, "saludar").expect("re-export saludar");
+        assert_eq!(saludar.get("insertText").and_then(Json::as_str), Some("saludar(${1:nombre}, ${2:veces})"),
+                   "firma del re-export resuelta en el módulo origen + placeholders");
 
         let _ = std::fs::remove_dir_all(&base);
     }

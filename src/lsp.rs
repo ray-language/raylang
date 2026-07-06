@@ -1299,6 +1299,11 @@ fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
                     let inline = format!("({})", tipos.join(", "));
                     campos.push(("labelDetails", obj(vec![("detail", Json::Str(inline.clone()))])));
                     campos.push(("detail", Json::Str(inline)));
+                    // Al aceptar, dispara el signature help (que muestra los tipos del payload, M46c).
+                    campos.push(("command", obj(vec![
+                        ("title", Json::Str("signature".into())),
+                        ("command", Json::Str("editor.action.triggerParameterHints".into())),
+                    ])));
                 }
                 obj(campos)
             }).collect();
@@ -1546,6 +1551,24 @@ fn signature_help_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     //    *declaración* `fn nombre(...) -> ...` esté bien formada). Así el signature help funciona
     //    también para funciones importadas (`u.cuadrado(`) y del prelude, no solo las del archivo.
     let ctx = SigCtx::nuevo(src, uri_to_path(&uri).as_deref());
+    // La construcción de una variante de enum (`Figura.Circulo(`) no es una `fn`: si el receptor es un
+    // enum con esa variante, se arma la firma con los tipos del payload (`Figura.Circulo(float, …)`).
+    if let Some(recv) = receptor.as_deref()
+        && ctx.firma(&name).is_none()
+        && let Some(variantes) = ctx.enum_variantes(recv)
+        && let Some(v) = variantes.iter().find(|v| v.name == name)
+    {
+        let params: Vec<String> = v.payload.iter().map(|t| format!("{}", t)).collect();
+        let label = format!("{}.{}({})", recv, name, params.join(", "));
+        let parametros: Vec<Json> = params.iter().map(|p| obj(vec![("label", Json::Str(p.clone()))])).collect();
+        let activo = activo.min(params.len().saturating_sub(1));
+        let firma = obj(vec![("label", Json::Str(label)), ("parameters", Json::Arr(parametros))]);
+        return obj(vec![
+            ("signatures", Json::Arr(vec![firma])),
+            ("activeSignature", num(0)),
+            ("activeParameter", num(activo as i64)),
+        ]);
+    }
     let Some((mut params, ret)) = ctx.firma(&name) else { return Json::Null };
     // En un **método** (`recv.m(args)` con `recv` un valor) el receptor es implícito → se recorta el
     // primer parámetro para que el `activeParameter` (que cuenta los args visibles) case. Un receptor
@@ -3405,6 +3428,10 @@ mod tests {
         // Builtin: pow(.
         assert_eq!(sig("fn main() -> int {\n    let x = pow(\n    0\n}\n", 1, 16),
                    Some(("fn pow(base: float, exp: float) -> float".into(), 0)));
+        // Construcción de variante de enum: `Figura.Rect(1.0, ` → firma con los tipos del payload,
+        // param activo 1. No es una `fn`, pero el receptor es un enum con esa variante.
+        let e = "enum Figura { Circulo(float), Rect(float, float) }\nfn main() -> int {\n    let r: Figura = Figura.Rect(1.0, \n    0\n}\n";
+        assert_eq!(sig(e, 2, 36), Some(("Figura.Rect(float, float)".into(), 1)));
     }
 
     #[test]

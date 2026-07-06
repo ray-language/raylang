@@ -2049,10 +2049,16 @@ impl Checker {
     /// Verifica que `pat` casa con un valor de tipo `ty` y recolecta sus bindings (nombre → tipo).
     /// Recursivo (M40.1c): un sub-patrón de variante puede ser otra variante anidada; su enum se
     /// resuelve del **tipo** del sub-valor (el payload sustituido), no de un parámetro externo.
-    fn check_subpattern(&self, pat: &Pattern, ty: &Type) -> Result<Vec<(String, Type)>, TypeError> {
+    fn check_subpattern(&mut self, pat: &Pattern, ty: &Type) -> Result<Vec<(String, Type)>, TypeError> {
         match &pat.kind {
             PatternKind::Wildcard => Ok(Vec::new()),
-            PatternKind::Binding(name) => Ok(vec![(name.clone(), ty.clone())]),
+            PatternKind::Binding(name) => {
+                // M10.2f: hover del binding del patrón (su declaración) → `nombre: Tipo`.
+                if self.gather {
+                    self.record_ident(pat.line, pat.col, name, ty, Some((pat.line, pat.col)));
+                }
+                Ok(vec![(name.clone(), ty.clone())])
+            }
             PatternKind::Variant { enum_name: pat_enum, variant, subpatterns } => {
                 let (ty_enum, targs) = match ty {
                     Type::Enum(n, args) => (n.clone(), args.clone()),
@@ -2079,6 +2085,20 @@ impl Checker {
                         "el patrón '{}.{}' liga {} valor(es), pero la variante tiene {}",
                         ty_enum, variant, subpatterns.len(), payload.len()
                     )));
+                }
+                // M10.2f: hover del enum y la variante en el patrón (como en la construcción). La
+                // variante va tras `enum.` (grafía canónica sin espacios); el `+1` es el punto.
+                if self.gather {
+                    let def = self.type_defs.get(&ty_enum).copied();
+                    self.record_named(pat.line, pat.col, ty_enum.chars().count(), format!("enum {}", ty_enum), def);
+                    let vcol = pat.col + ty_enum.chars().count() + 1;
+                    let firma = if payload.is_empty() {
+                        format!("{}.{}", ty_enum, variant)
+                    } else {
+                        let tipos: Vec<String> = payload.iter().map(|t| format!("{}", t)).collect();
+                        format!("{}.{}({})", ty_enum, variant, tipos.join(", "))
+                    };
+                    self.record_named(pat.line, vcol, variant.chars().count(), firma, def);
                 }
                 // σ del enum del sub-valor: liga sus parámetros de tipo con los argumentos del tipo.
                 let tparams = self.enum_tparams.get(&ty_enum).cloned().unwrap_or_default();
@@ -6603,6 +6623,21 @@ fn main() -> int {
         // Hover de la **variante** `Rojo` (tras el `.`): su firma. `Color.Rojo` no tiene payload.
         let hv = idx.hovers.iter().find(|h| h.line == 5 && h.text == "Color.Rojo").expect("hover de Rojo");
         assert!(hv.col > he.col, "la variante va tras el enum: {} vs {}", hv.col, he.col);
+    }
+
+    #[test]
+    fn indice_semantico_hover_en_match() {
+        // M10.2f: dentro de un `match` el índice registra el escrutinio, el enum y la variante del
+        // patrón, y los bindings que liga (tanto en el patrón como en el cuerpo).
+        let src = "enum Figura { Circulo(float), Punto }\nfn area(f: Figura) -> float {\n  match (f) {\n    Figura.Circulo(r) => r,\n    Figura.Punto => 0.0,\n  }\n}\nfn main() -> int { 0 }";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        let idx = semantic_index(&mut prog);
+        // Enum y variante en el patrón (línea 4).
+        assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "enum Figura"), "hover enum en patrón");
+        assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "Figura.Circulo(float)"), "hover variante en patrón");
+        // Binding `r` del patrón → su tipo.
+        assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "r: float"), "hover binding en patrón");
     }
 
     #[test]

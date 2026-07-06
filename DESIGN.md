@@ -6141,3 +6141,37 @@ VM, como desde M12.)
 M38.3) y se conserva solo si los datos la respaldan. **Nota de invariante cero-deps**: el pool de hilos usa
 `std::thread` (sin `rayon`/`tokio`); la sincronización, `std::sync` (`Arc`/`Mutex`/`Condvar`) — todo de la
 librería estándar, sin dependencias de Cargo nuevas.
+
+## 47. M45 — Completion de miembros en el LSP
+
+Cierra el diferido de M10.2e/f (el completion era "de archivo", sin `recv.`). Tras `.`, el LSP ofrece
+los **miembros del tipo del receptor**: campos del struct, métodos de trait/impl (incl. `@derive`),
+builtins invocables como método (`s.len()`, `xs.push(...)`), y funciones UFCS del usuario/prelude
+(`xs.map(f)`, `xs.sort()`). Cliente-LSP + una consulta al checker; cero runtime.
+
+**El reto** es que el completion ocurre sobre código **incompleto** (`recv.` no parsea). En vez de
+inferir el tipo textualmente (como el signature help), se **repara** la fuente insertando un
+**centinela** en lugar de la palabra-miembro: `recv.par|` → `recv.__raycomplete__;`. Eso es sintaxis
+válida, sobrevive a la recuperación de errores del parser (M33c, `parse_all`), y el checker recorre el
+**mismo camino de tipado del receptor que ya usa el hover de campos** (M10.2g). El `;` termina la
+sentencia para que el bloque parsee (si no, `parse_all` descartaría la función al resincronizar); se
+omite si sigue un `(` (edición de una llamada `recv.m(args)`, ya válida).
+
+**Consulta al checker** (`checker::member_completion`, hermana de `semantic_index`): corre el front-end
+best-effort con un flag `completing`; al tipar el acceso `recv.__raycomplete__`, en vez de dar error
+por miembro inexistente, enumera en `enumerate_members(tipo_receptor)`:
+1. **Campos** del struct (con su tipo sustituido como *detail*).
+2. **Métodos** de trait/impl del tipo concreto (tabla `methods`, por constructor → `Caja<int>`/`Caja<bool>`
+   comparten).
+3. **Builtins** de la categoría del tipo (`builtins::methods_for`: string/bytes/char/array/map/…), lista
+   curada porque son ad-hoc polimórficos.
+4. **UFCS libre** — funciones cuyo primer parámetro acepta el receptor (unificación), **solo para
+   receptores compuestos** (array/map/struct/enum/tupla): ahí `recv.f()` es idiomático (captura
+   `map`/`filter`/`fold`/`sort` y las UFCS del usuario). Para **primitivos NO**: una función que toma un
+   `string` suele tratarlo como DATO (`read_file(path)`, `env(name)`), no como método → sería ruido; los
+   primitivos ya reciben builtins (3) y métodos de trait (2). Se excluyen sintéticos (`#`/`::`/`__`) y el
+   primer parámetro genérico pelado (`Var`, que unificaría con todo, p. ej. `assert_eq`).
+
+Cada ítem lleva su `CompletionItemKind` (Field/Method/Function) y documentación (`builtins::doc` / los
+`///` del prelude). `.` se añade a los `triggerCharacters`. **Diferidos**: docs `///` de métodos de impl
+del usuario, receptores que son expresiones complejas (`f(x).`), y UFCS del usuario sobre primitivos.

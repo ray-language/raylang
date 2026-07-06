@@ -528,6 +528,27 @@ struct Checker {
     /// (submódulo `pub`, sin `main`): un módulo suelto es legítimo sin entrada, y esa regla es de
     /// **proyecto**, no de archivo. Sin ella, el chequeo prosigue a los cuerpos y da diagnósticos reales.
     require_main: bool,
+    /// Modo **completion de miembros** (M45): al tipar un acceso `recv.<centinela>`, en vez de dar
+    /// error por miembro inexistente, enumera los miembros del tipo del receptor en `member_hits`.
+    /// `false` en el chequeo normal (coste cero). Lo activa la entrada `member_completion`.
+    completing: bool,
+    /// Miembros enumerados en modo `completing` (M45): campos, métodos, builtins-como-método y
+    /// funciones UFCS aplicables al tipo del receptor bajo el cursor.
+    member_hits: Vec<MemberItem>,
+}
+
+/// El nombre-centinela que el LSP inserta tras el `.` (`recv.__raycomplete__`) para marcar el
+/// punto de completion (M45). Empieza por `__` → ya se filtra como sintético en el resto del LSP,
+/// y el usuario no puede escribirlo.
+pub const COMPLETION_SENTINEL: &str = "__raycomplete__";
+
+/// Un miembro ofrecible en `recv.` (M45): su etiqueta, el `CompletionItemKind` de LSP
+/// (2=Method, 3=Function, 5=Field) y un detalle opcional (p. ej. el tipo del campo).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemberItem {
+    pub label: String,
+    pub kind: u8,
+    pub detail: Option<String>,
 }
 
 impl Checker {
@@ -573,6 +594,8 @@ impl Checker {
             fn_defs: HashMap::new(),
             ufcs_aliases: HashMap::new(),
             require_main: true,
+            completing: false,
+            member_hits: Vec::new(),
         }
     }
 
@@ -2117,6 +2140,13 @@ impl Checker {
     /// `primero: A` de `Par<int, bool>` es un `int`.
     fn check_field(&mut self, object: &Expr, name: &str) -> Result<Type, TypeError> {
         let ot = self.check_expr(object)?;
+        // M45: completion de miembros. El LSP repara `recv.` como `recv.<centinela>`; aquí, con el
+        // tipo del receptor ya calculado, enumeramos sus miembros en vez de dar error por miembro
+        // inexistente. Devolvemos Unit para que el chequeo (best-effort) no aborte antes de recogerlo.
+        if self.completing && name == COMPLETION_SENTINEL {
+            self.member_hits = self.enumerate_members(&ot);
+            return Ok(Type::Unit);
+        }
         // Acceso a **tupla** `t.0` (M27.1): un nombre de campo numérico solo es válido sobre una tupla.
         if let Type::Tuple(elems) = &ot {
             let idx: usize = name.parse().map_err(|_| self.err(object.line, object.col,
@@ -2765,6 +2795,11 @@ impl Checker {
             // baja a una llamada ordinaria tras verificar (`lower_ufcs`).
             ExprKind::Field { object, name } => {
                 let recv_ty = self.check_expr(object)?;
+                // M45: completion de miembros cuando el reparado dejó una llamada `recv.<centinela>(…)`.
+                if self.completing && name == COMPLETION_SENTINEL {
+                    self.member_hits = self.enumerate_members(&recv_ty);
+                    return Ok(Type::Unit);
+                }
                 // M9.3b/M9.5: receptor `dyn A + B` → despacho dinámico por la vtable del objeto.
                 if let Type::Dyn(traits) = &recv_ty {
                     let traits = traits.clone();
@@ -2817,6 +2852,82 @@ impl Checker {
                 self.call_type(ty, args, line, col)
             }
         }
+    }
+
+    /// Enumera los miembros ofrecibles en `recv.` para un receptor de tipo `rt` (M45): campos del
+    /// struct, métodos de trait/impl (incl. `@derive`), builtins-como-método de la categoría del
+    /// tipo, y funciones libres UFCS cuyo primer parámetro acepta el receptor (esto cubre
+    /// `map`/`filter`/`fold`/`sort` del prelude y las UFCS del usuario). Dedup por etiqueta.
+    fn enumerate_members(&self, rt: &Type) -> Vec<MemberItem> {
+        let mut out: Vec<MemberItem> = Vec::new();
+        let mut vistos: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let add = |out: &mut Vec<MemberItem>, vistos: &mut std::collections::HashSet<String>,
+                   label: String, kind: u8, detail: Option<String>| {
+            if vistos.insert(label.clone()) {
+                out.push(MemberItem { label, kind, detail });
+            }
+        };
+
+        // 1. Campos del struct (kind 5 = Field), con su tipo sustituido como detalle.
+        if let Type::Struct(sname, targs) = rt {
+            if let Some(fields) = self.structs.get(sname) {
+                let tparams = self.struct_tparams.get(sname).cloned().unwrap_or_default();
+                let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs.iter().cloned()).collect();
+                for (fname, fty) in fields {
+                    let ty = subst(fty, &sigma);
+                    add(&mut out, &mut vistos, fname.clone(), 5, Some(format!("{}", ty)));
+                }
+            }
+        }
+
+        // 2. Métodos de trait/impl del tipo concreto (kind 2 = Method). La tabla `methods` va por
+        //    constructor (`type_key_of`): `Caja<int>` y `Caja<bool>` comparten métodos.
+        if let Some(key) = type_key_of(rt) {
+            for ((k, m), _mangled) in &self.methods {
+                if k == &key {
+                    add(&mut out, &mut vistos, m.clone(), 2, None);
+                }
+            }
+        }
+
+        // 3. Builtins invocables como método sobre la categoría del tipo (kind 2 = Method).
+        if let Some(cat) = member_category(rt) {
+            for b in crate::builtins::methods_for(cat) {
+                add(&mut out, &mut vistos, (*b).to_string(), 2, None);
+            }
+        }
+
+        // 4. Funciones libres UFCS: primer parámetro que acepta el receptor (kind 3 = Function).
+        //    Solo para receptores **compuestos** (array/map/struct/enum/tupla): ahí la función opera
+        //    SOBRE la estructura y `recv.f()` es idiomático (captura `map`/`filter`/`fold`/`sort` del
+        //    prelude y las UFCS del usuario). Para primitivos NO se enumeran: una función que toma un
+        //    `string` suele tratarlo como DATO (`read_file(path)`, `env(name)`), no como método —los
+        //    primitivos ya reciben sus builtins (paso 3) y sus métodos de trait (paso 2)—.
+        //    Excluye además sintéticos (`#`/`::`/`__`) y primer parámetro genérico pelado (`Var`, que
+        //    unificaría con todo, p. ej. `assert_eq`).
+        let receptor_compuesto = matches!(
+            rt,
+            Type::Array(_) | Type::Map(_, _) | Type::Struct(_, _) | Type::Enum(_, _) | Type::Tuple(_)
+        );
+        if receptor_compuesto {
+            for (fname, sig) in &self.functions {
+                if fname.contains('#') || fname.contains("::") || fname.starts_with("__") {
+                    continue;
+                }
+                if let Some(p0) = sig.params.first() {
+                    if matches!(p0, Type::Var(_)) {
+                        continue;
+                    }
+                    let mut sigma: HashMap<String, Type> = HashMap::new();
+                    if unify(p0, rt, &mut sigma).is_ok() {
+                        add(&mut out, &mut vistos, fname.clone(), 3, None);
+                    }
+                }
+            }
+        }
+
+        out.sort_by(|a, b| a.label.cmp(&b.label));
+        out
     }
 
     /// Tipo del campo `fname` de un struct `sname` con argumentos de tipo `targs`, ya
@@ -3780,6 +3891,38 @@ fn type_key_of(ty: &Type) -> Option<String> {
         Type::Struct(n, _) | Type::Enum(n, _) => n.clone(),
         _ => return None,
     })
+}
+
+/// La **categoría** de un tipo para los builtins-como-método del completion (M45): la clave que
+/// entiende `builtins::methods_for`. Cubre también arreglos y `Map`, que no tienen `type_key_of`.
+fn member_category(ty: &Type) -> Option<&'static str> {
+    Some(match ty {
+        Type::String => "string",
+        Type::Bytes => "bytes",
+        Type::Char => "char",
+        Type::Int => "int",
+        Type::Float => "float",
+        Type::Bool => "bool",
+        Type::Array(_) => "array",
+        Type::Map(_, _) => "map",
+        _ => return None,
+    })
+}
+
+/// Completion de miembros (M45): los símbolos ofrecibles tras `recv.`. El LSP repara la fuente
+/// insertando el centinela `__raycomplete__` tras el `.`; aquí corremos el front-end best-effort
+/// (con recuperación de errores) y, al tipar ese acceso, enumeramos los miembros del tipo del
+/// receptor. Devuelve `[]` si el receptor no tipa o no tiene miembros. No exige `main` (puede ser
+/// un fragmento a medio escribir).
+pub fn member_completion(program: &mut Program) -> Vec<MemberItem> {
+    if prepare_program(program).is_err() {
+        return Vec::new();
+    }
+    let mut checker = Checker::new();
+    checker.completing = true;
+    checker.require_main = false;
+    let _ = checker.check_program(program); // best-effort: el error de tipos del fragmento es esperado
+    checker.member_hits
 }
 
 // =====================================================================
@@ -5327,6 +5470,34 @@ mod tests {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         let mut prog = crate::parser::parse(tokens).expect("parse ok");
         check(&mut prog)
+    }
+
+    /// M45: etiquetas de `member_completion` sobre una fuente que YA lleva el centinela.
+    fn miembros(src: &str) -> Vec<String> {
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let (mut prog, _) = crate::parser::parse_all(tokens);
+        member_completion(&mut prog).into_iter().map(|m| m.label).collect()
+    }
+
+    #[test]
+    fn member_completion_campos_metodos_y_builtins() {
+        // Struct: campos + método de trait + UFCS del usuario; kinds correctos.
+        let src = "struct P { x: int, y: int }\ntrait Ver { fn ver(self) -> int; }\nimpl Ver for P { fn ver(self) -> int { self.x } }\nfn doblar(p: P) -> int { p.x }\nfn main() -> int { let p = P { x: 1, y: 2 }; p.__raycomplete__; 0 }\n";
+        let m = miembros(src);
+        for esperado in ["x", "y", "ver", "doblar"] {
+            assert!(m.contains(&esperado.to_string()), "falta '{esperado}': {m:?}");
+        }
+        // string: builtins de string, sin funciones de E/S sobre una ruta string.
+        let s = miembros("fn main() -> int { let s = \"h\"; s.__raycomplete__; 0 }");
+        assert!(s.contains(&"trim".to_string()) && s.contains(&"split".to_string()), "{s:?}");
+        assert!(!s.contains(&"read_file".to_string()), "sin E/S sobre string: {s:?}");
+        // array: builtins + orden superior del prelude.
+        let a = miembros("fn main() -> int { let xs = [1,2,3]; xs.__raycomplete__; 0 }");
+        for esperado in ["len", "push", "map", "filter", "fold", "sort"] {
+            assert!(a.contains(&esperado.to_string()), "array falta '{esperado}': {a:?}");
+        }
+        // receptor sin tipo conocido → sin miembros (sin pánico).
+        assert!(miembros("fn main() -> int { desconocido.__raycomplete__; 0 }").is_empty());
     }
 
     /// Atajo: ¿el mensaje de error contiene esta subcadena?

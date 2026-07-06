@@ -137,6 +137,29 @@ pub fn names() -> impl Iterator<Item = &'static str> {
     BUILTINS.iter().map(|b| b.name)
 }
 
+/// Builtins invocables como **método** (UFCS `recv.f(...)`) sobre un tipo de la categoría dada,
+/// para el completion de miembros del LSP (M45). Los builtins son ad-hoc polimórficos (no tienen
+/// una firma raylang uniforme que permita inferir "aplica a este tipo"), así que se listan a mano
+/// por categoría. Solo los de **cara al usuario** con receptor claro; las operaciones de orden
+/// superior (`map`/`filter`/`fold`/`sort`) y los envoltorios (`pop`/`position`/`get`/`remove`/
+/// `index_of`) son funciones del **prelude**, no builtins, y las aporta la enumeración UFCS.
+/// Categorías: `string`/`bytes`/`char`/`int`/`float`/`bool`/`array`/`map`. El test-guardián
+/// `methods_for_solo_nombra_builtins_reales` verifica que cada nombre exista.
+pub fn methods_for(category: &str) -> &'static [&'static str] {
+    match category {
+        "string" => &[
+            "len", "trim", "split", "contains", "replace", "chars", "starts_with", "ends_with",
+            "to_upper", "to_lower", "substring", "repeat", "join", "to_bytes", "to_string",
+        ],
+        "bytes" => &["len", "sub_bytes", "contains", "to_string"],
+        "char" => &["char_code", "to_string"],
+        "int" | "float" | "bool" => &["to_string"],
+        "array" => &["len", "push", "reverse", "contains", "join"],
+        "map" => &["len", "insert", "contains_key", "keys", "values"],
+        _ => &[],
+    }
+}
+
 /// Firma legible de un builtin para el **signature help** del LSP: `(params, retorno)`. Cubre los
 /// builtins de cara al usuario con **firma fija**; los ad-hoc polimórficos (int|float, `min`/`max`) se
 /// muestran con un tipo representativo. `None` para los que no tienen firma fija sensata (`print`/`len`
@@ -1850,6 +1873,18 @@ mod tests {
         assert!(sin_doc.is_empty(), "builtins sin doc(): {sin_doc:?}");
         assert!(doc("__parse_int").is_none(), "los internos no llevan doc");
         assert!(doc("noexiste").is_none());
+    }
+
+    #[test]
+    fn methods_for_solo_nombra_builtins_reales() {
+        // M45: cada nombre listado por categoría debe ser un builtin real (evita que un
+        // rename de builtin deje `methods_for` ofreciendo un método inexistente).
+        for cat in ["string", "bytes", "char", "int", "float", "bool", "array", "map"] {
+            for m in methods_for(cat) {
+                assert!(is_builtin(m), "methods_for({cat:?}) nombra '{m}', que no es un builtin");
+            }
+        }
+        assert!(methods_for("noexiste").is_empty());
     }
 
     #[test]

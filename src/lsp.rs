@@ -785,12 +785,98 @@ fn def_global_name(program: &crate::ast::Program, line: usize, col: usize) -> Op
         .or_else(|| program.traits.iter().find(|t| en(t.line, t.col)).map(|t| t.name.clone()))
 }
 
+/// Completion de **miembros** (M45): si el cursor `(line0, char0)` (0-basados) está tras un `.`,
+/// devuelve `Some(items)` con los campos/métodos/builtins/UFCS del tipo del receptor; `None` si no
+/// es un contexto de miembro (entonces el llamador hace la completion de archivo). La lista puede
+/// venir vacía (receptor sin tipo conocido): sigue siendo `Some` (no hay que ofrecer todo el archivo
+/// tras un punto).
+///
+/// Estrategia: **reparar** la fuente insertando el centinela `__raycomplete__` en lugar de la
+/// palabra-miembro que se está escribiendo (`recv.par|` → `recv.__raycomplete__`), que es sintaxis
+/// válida y sobrevive a la recuperación de errores del parser (M33c). El checker enumera los
+/// miembros al tipar ese acceso.
+fn member_completion_items(src: &str, line0: usize, char0: usize, docs: &HashMap<String, String>) -> Option<Json> {
+    let lineas: Vec<&str> = src.split('\n').collect();
+    let linea = lineas.get(line0)?;
+    let chars: Vec<char> = linea.chars().collect();
+    let col = char0.min(chars.len());
+    // Retrocede sobre la palabra-miembro parcial (identificador) que se está escribiendo.
+    let mut ini = col;
+    while ini > 0 && es_ident_char(chars[ini - 1]) {
+        ini -= 1;
+    }
+    // El carácter inmediatamente anterior a la palabra debe ser un `.` para ser acceso a miembro.
+    if ini == 0 || chars[ini - 1] != '.' {
+        return None;
+    }
+    // Avanza sobre el resto de la palabra parcial (a la derecha del cursor) para reemplazarla entera.
+    let mut fin = col;
+    while fin < chars.len() && es_ident_char(chars[fin]) {
+        fin += 1;
+    }
+    // Reconstruye la fuente con la palabra-miembro sustituida por el centinela. Terminamos la
+    // sentencia con `;` para que el bloque parsee (si no, `parse_all` descartaría la función entera
+    // al resincronizar y no habría acceso que tipar); salvo que siga un `(` —edición de una llamada
+    // `recv.metodo(args)`—, donde `recv.__raycomplete__(args)` ya es una llamada válida.
+    let mut nueva_linea: String = chars[..ini].iter().collect();
+    nueva_linea.push_str(crate::checker::COMPLETION_SENTINEL);
+    if chars.get(fin) != Some(&'(') {
+        nueva_linea.push(';');
+    }
+    nueva_linea.extend(chars[fin..].iter());
+    let mut reparadas: Vec<String> = lineas.iter().map(|s| s.to_string()).collect();
+    reparadas[line0] = nueva_linea;
+    let reparada = reparadas.join("\n");
+
+    // Corre el front-end sobre la fuente reparada (con recuperación de errores) y enumera.
+    let tokens = lexer::lex(&reparada).ok()?;
+    let (mut program, _errs) = parser::parse_all(tokens);
+    let miembros = checker::member_completion(&mut program);
+
+    let items: Vec<Json> = miembros
+        .into_iter()
+        .map(|m| {
+            let doc = crate::builtins::doc(&m.label).map(|s| s.to_string())
+                .or_else(|| doc_en_prelude(&m.label));
+            let mut campos = vec![
+                ("label", Json::Str(m.label)),
+                ("kind", num(m.kind as i64)),
+            ];
+            if let Some(d) = m.detail {
+                campos.push(("detail", Json::Str(d)));
+            }
+            if let Some(d) = doc {
+                campos.push(("documentation", obj(vec![
+                    ("kind", Json::Str("markdown".into())),
+                    ("value", Json::Str(d)),
+                ])));
+            }
+            obj(campos)
+        })
+        .collect();
+    let _ = docs; // (los docs de método por `///` de impl se resuelven en una fase futura)
+    Some(Json::Arr(items))
+}
+
+/// ¿`c` es un carácter válido de identificador raylang (letra, dígito o `_`)?
+fn es_ident_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
 /// El `result` de `textDocument/completion`: los símbolos ofrecibles en el documento (funciones y
 /// tipos definidos —incluido el prelude—, builtins y palabras clave). No filtra por ámbito ni por
 /// prefijo (el cliente filtra por lo ya escrito); es una completion "de archivo", el primer escalón.
 fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
     let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
+    // M45: si el cursor viene tras un `.` (acceso a miembro), ofrecemos los miembros del tipo del
+    // receptor, no los símbolos de archivo. Un contexto de miembro con lista vacía (receptor sin
+    // tipo conocido) devuelve `[]` —mejor que inundar con todo el archivo tras un punto—.
+    if let Some((line0, char0)) = pos_params(msg).map(|(_, l, c)| (l, c)) {
+        if let Some(items) = member_completion_items(src, line0, char0, docs) {
+            return items;
+        }
+    }
     let Ok(tokens) = lexer::lex(src) else { return Json::Arr(vec![]) };
     let Ok(mut program) = parser::parse(tokens) else { return Json::Arr(vec![]) };
     // Corre el front-end (inyecta el prelude y los métodos manglados) para ofrecer también sus
@@ -1273,8 +1359,11 @@ fn respuesta_initialize(id: Json) -> Json {
         // Cluster 4: find-references y rename (sobre el índice semántico + la fuente).
         ("referencesProvider", Json::Bool(true)),
         ("renameProvider", Json::Bool(true)),
-        // Cluster 4: completion (objeto vacío = sin resolveProvider ni triggerCharacters).
-        ("completionProvider", obj(vec![])),
+        // Cluster 4 + M45: completion. `.` dispara el completion de **miembros** (`recv.` →
+        // campos/métodos/builtins/UFCS del tipo del receptor).
+        ("completionProvider", obj(vec![
+            ("triggerCharacters", Json::Arr(vec![text(".")])),
+        ])),
         // M10.2f: signature help — la firma de la función mientras se escriben los argumentos.
         ("signatureHelpProvider", obj(vec![
             ("triggerCharacters", Json::Arr(vec![text("("), text(",")])),
@@ -2361,6 +2450,54 @@ mod tests {
         assert!(labels.contains(&"while"), "palabra clave");
         // No expone nombres sintéticos (manglados, internos).
         assert!(!labels.iter().any(|l| l.contains('#') || l.starts_with("__")), "sin nombres sintéticos");
+    }
+
+    /// Helper: labels de la completion en `(line, character)` (0-basados) sobre `src`.
+    fn completion_labels(src: &str, line: usize, character: usize) -> Vec<String> {
+        let msg = json::parse(&format!(
+            r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{character}}}}}}}"#
+        )).unwrap();
+        let mut docs = HashMap::new();
+        docs.insert("file:///t.ray".to_string(), src.to_string());
+        completion_result(&msg, &docs).as_array().unwrap().iter()
+            .filter_map(|i| i.get("label").and_then(|l| l.as_str()).map(|s| s.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn completion_de_miembros_de_struct() {
+        // M45: `p.` sobre un struct ofrece sus campos y sus métodos de trait, no los símbolos de archivo.
+        let src = "struct P { x: int, y: int }\ntrait Ver { fn ver(self) -> int; }\nimpl Ver for P { fn ver(self) -> int { self.x } }\nfn suma(p: P) -> int { p.x + p.y }\nfn main() -> int {\n    let p = P { x: 1, y: 2 };\n    p.\n    0\n}\n";
+        let labels = completion_labels(src, 6, 6); // línea "    p." (0-basada), tras el punto
+        assert!(labels.contains(&"x".to_string()) && labels.contains(&"y".to_string()), "campos: {labels:?}");
+        assert!(labels.contains(&"ver".to_string()), "método de trait: {labels:?}");
+        assert!(labels.contains(&"suma".to_string()), "UFCS del usuario: {labels:?}");
+        // NO ofrece los símbolos de archivo (no es una completion de archivo tras el punto).
+        assert!(!labels.contains(&"print".to_string()), "sin builtins globales: {labels:?}");
+        assert!(!labels.contains(&"while".to_string()), "sin palabras clave: {labels:?}");
+    }
+
+    #[test]
+    fn completion_de_miembros_de_string_y_array() {
+        // string: builtins de string + métodos de trait; NADA de funciones de E/S que toman una ruta.
+        let s = "fn main() -> int {\n    let s = \"h\";\n    s.\n    0\n}\n";
+        let ls = completion_labels(s, 2, 6);
+        assert!(ls.contains(&"trim".to_string()) && ls.contains(&"split".to_string()) && ls.contains(&"len".to_string()), "string builtins: {ls:?}");
+        assert!(!ls.contains(&"read_file".to_string()) && !ls.contains(&"env".to_string()), "sin E/S sobre string: {ls:?}");
+        // array: builtins + orden superior del prelude por UFCS.
+        let a = "fn main() -> int {\n    let xs = [1, 2, 3];\n    xs.\n    0\n}\n";
+        let la = completion_labels(a, 2, 7);
+        for m in ["len", "push", "reverse", "map", "filter", "fold", "sort"] {
+            assert!(la.contains(&m.to_string()), "array debe ofrecer '{m}': {la:?}");
+        }
+    }
+
+    #[test]
+    fn completion_sin_punto_sigue_siendo_de_archivo() {
+        // Sin `.` delante, la completion es la de archivo (regresión de M10.2e).
+        let src = "fn doble(n: int) -> int { n + n }\nfn main() -> int { 0 }\n";
+        let labels = completion_labels(src, 1, 19);
+        assert!(labels.contains(&"doble".to_string()) && labels.contains(&"print".to_string()), "{labels:?}");
     }
 
     #[test]

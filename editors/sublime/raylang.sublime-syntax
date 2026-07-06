@@ -53,14 +53,14 @@ contexts:
           scope: constant.character.escape.raylang
         # Interpolación: el '$' solo es especial seguido de '{'. El interior se resalta como código.
         - match: '\$\{'
-          scope: punctuation.section.interpolation.begin.raylang
+          scope: punctuation.section.interpolation.begin.raylang support.function.builtin.raylang
           push:
             # `clear_scopes: 1` suelta el scope `string.quoted.double` heredado, para que el
             # interior se pinte como CÓDIGO (identificadores/literales/operadores), no como cadena.
             - clear_scopes: 1
             - meta_scope: meta.interpolation.raylang
             - match: '\}'
-              scope: punctuation.section.interpolation.end.raylang
+              scope: punctuation.section.interpolation.end.raylang support.function.builtin.raylang
               pop: true
             # Llaves anidadas en la expresión (p. ej. `${f({a: 1})}`) para no cerrar de más.
             - match: '\{'

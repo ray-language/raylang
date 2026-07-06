@@ -243,8 +243,27 @@ fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
                 ("range", rango(line0, ini, fin)),
             ]);
         }
+        // Tipos incorporados / del prelude (Channel, Task, Map, Option, Result): descripción breve.
+        if let Some(d) = doc_tipo_incorporado(&nombre) {
+            return obj(vec![
+                ("contents", obj(vec![("kind", text("markdown")), ("value", Json::Str(d.to_string()))])),
+                ("range", rango(line0, ini, fin)),
+            ]);
+        }
     }
     Json::Null
+}
+
+/// Descripción breve (Markdown) de un tipo genérico incorporado o del prelude, para el hover.
+fn doc_tipo_incorporado(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "Channel" => "`Channel<T>` — canal tipado para comunicar fibras (CSP). Se crea con `channel()` / `channel(n)`; se usa con `send`, `recv`, `close`, `select`.",
+        "Task" => "`Task<T>` — el resultado en curso de un `spawn(f)`. `join(t)` bloquea hasta que la tarea termina y devuelve su valor.",
+        "Map" => "`Map<K, V>` — diccionario de claves hashables a valores. `map_new()`, `insert`, `get`, `remove`, `keys`, `values`, `contains_key`, `len`.",
+        "Option" => "`Option<T>` — un valor opcional: `Some(T)` o `None`. raylang no tiene `null`.",
+        "Result" => "`Result<T, E>` — el resultado de una operación falible: `Ok(T)` o `Err(E)`. Se propaga con `?`.",
+        _ => return None,
+    })
 }
 
 /// El identificador bajo el cursor y su rango de columnas `[ini, fin)` (0-basadas). Como
@@ -3442,6 +3461,25 @@ mod tests {
         let r = hover_result(&msg, &docs);
         let v = r.get("contents").and_then(|c| c.get("value")).and_then(Json::as_str).unwrap_or("");
         assert!(v.contains("typed channel"), "hover de channel: {v}");
+    }
+
+    #[test]
+    fn hover_de_const_y_tipo_incorporado() {
+        let hov = |src: &str, line: usize, ch: usize| -> String {
+            let mut docs = HashMap::new();
+            docs.insert("file:///t.ray".to_string(), src.to_string());
+            let msg = json::parse(&format!(
+                r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
+            )).unwrap();
+            let r = hover_result(&msg, &docs);
+            r.get("contents").and_then(|c| c.get("value")).and_then(Json::as_str).unwrap_or("").to_string()
+        };
+        // Uso de una constante → su tipo (como una variable).
+        let c = hov("const MAXIMO: int = 100;\nfn main() -> int {\n    let x = MAXIMO;\n    x\n}\n", 2, 13);
+        assert!(c.contains("MAXIMO: int"), "hover de const en uso: {c}");
+        // Tipo incorporado (Channel) → descripción breve.
+        let t = hov("fn main() -> int {\n    let ch: Channel<int> = channel();\n    0\n}\n", 1, 13);
+        assert!(t.contains("Channel<T>"), "hover de tipo Channel: {t}");
     }
 
     #[test]

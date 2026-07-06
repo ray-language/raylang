@@ -519,6 +519,8 @@ struct Checker {
     fn_defs: HashMap<String, (usize, usize)>,
     /// Posición de declaración de cada tipo (struct/enum/trait) — hover/def de tipos (M10.2f).
     type_defs: HashMap<String, (usize, usize)>,
+    /// Posición de declaración de cada constante de nivel superior — hover/def de consts.
+    const_defs: HashMap<String, (usize, usize)>,
     /// Alias UFCS de funciones `from`-importadas (nombre local → global), que deja el loader. Permiten
     /// que `recv.f(...)` resuelva una función importada como *fallback* (tras campo/método). Vacío sin
     /// imports.
@@ -592,6 +594,7 @@ impl Checker {
             dyn_dispatch: HashSet::new(),
             dyn_upcasts: HashMap::new(),
             type_defs: HashMap::new(),
+            const_defs: HashMap::new(),
             gather: false,
             field_name_pos: std::collections::HashMap::new(),
             index: SemanticIndex::default(),
@@ -632,6 +635,9 @@ impl Checker {
             }
             if self.consts.insert(c.name.clone(), declared).is_some() {
                 return Err(self.err(c.line, c.col, format!("constante '{}' declarada dos veces", c.name)));
+            }
+            if self.gather {
+                self.const_defs.entry(c.name.clone()).or_insert((c.line, c.col));
             }
         }
         // M10.2f: posición de declaración de cada tipo (struct/enum/trait), para hover/ir-a-definición
@@ -2427,7 +2433,10 @@ impl Checker {
                 // `fn(...)` concreto): hay que llamarla directamente (M6.1).
                 // M27.5: una constante de nivel superior (global) resuelve a su tipo.
                 if let Some(ty) = self.consts.get(name) {
-                    return Ok(ty.clone());
+                    let ty = ty.clone();
+                    let def = self.const_defs.get(name).copied();
+                    self.record_ident(expr.line, expr.col, name, &ty, def); // hover/def de la const
+                    return Ok(ty);
                 }
                 if let Some(sig) = self.functions.get(name) {
                     if !sig.type_params.is_empty() {

@@ -977,6 +977,113 @@ fn module_path_completion_items(entry: &Path, line0: usize, col: usize, chars: &
     Some(Json::Arr(items))
 }
 
+/// Completion de **campos de un literal de struct** (M47a): dentro de `Nombre { … | … }` ofrece los
+/// campos del struct que faltan por poner, en vez de la completion de archivo. `None` si el cursor no
+/// está en la **posición de nombre de campo** de un literal de struct conocido (entonces se sigue con
+/// miembro/archivo).
+fn struct_literal_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<Json> {
+    // Prefijo (todo el texto hasta el cursor) como vector de chars.
+    let mut prefijo = String::new();
+    for (i, linea) in src.split('\n').enumerate() {
+        use std::cmp::Ordering::*;
+        match i.cmp(&line0) {
+            Less => { prefijo.push_str(linea); prefijo.push('\n'); }
+            Equal => { prefijo.extend(linea.chars().take(char0)); break; }
+            Greater => break,
+        }
+    }
+    let cs: Vec<char> = prefijo.chars().collect();
+    // El `{` sin cerrar más cercano (el literal en curso).
+    let (mut depth, mut i, mut brace) = (0i32, cs.len(), None);
+    while i > 0 {
+        i -= 1;
+        match cs[i] {
+            '}' => depth += 1,
+            '{' if depth == 0 => { brace = Some(i); break; }
+            '{' => depth -= 1,
+            _ => {}
+        }
+    }
+    let brace = brace?;
+    // El identificador (último segmento) justo antes del `{`: el nombre del struct.
+    let mut fin = brace;
+    while fin > 0 && cs[fin - 1].is_whitespace() { fin -= 1; }
+    let mut ini = fin;
+    while ini > 0 && es_ident_char(cs[ini - 1]) { ini -= 1; }
+    if ini == fin { return None; } // no hay identificador antes del `{` → es un bloque, no un literal
+    let nombre: String = cs[ini..fin].iter().collect();
+    // Guarda: descartar posiciones que NO son un literal aunque lleven un nombre de tipo antes del `{`
+    // — cuerpo de función (`-> T {`), impl (`for T {`), definición (`struct/enum/trait T {`).
+    let mut k = ini;
+    while k > 0 && cs[k - 1].is_whitespace() { k -= 1; }
+    if k >= 2 && cs[k - 1] == '>' && cs[k - 2] == '-' { return None; } // `-> T {`
+    if let Some((prev, _)) = ident_before(&cs, ini) {
+        if matches!(prev.as_str(), "for" | "struct" | "enum" | "trait" | "impl") { return None; }
+    }
+    // ¿El struct existe (en el archivo o el cierre de imports)?
+    let ctx = SigCtx::nuevo(src, uri.and_then(uri_to_path).as_deref());
+    let campos = ctx.struct_campos(&nombre)?;
+
+    // El texto del literal desde el `{` hasta el cursor: separa la ENTRADA de campo actual (tras la
+    // última coma de nivel superior) y detecta si estamos escribiendo un VALOR (`campo: …`) — en ese
+    // caso NO es posición de nombre de campo (se sigue con miembro/archivo).
+    let cuerpo = &cs[brace + 1..];
+    let (mut d, mut ini_entry) = (0i32, 0usize);
+    for (idx, &c) in cuerpo.iter().enumerate() {
+        match c {
+            '{' | '(' | '[' => d += 1,
+            '}' | ')' | ']' => d -= 1,
+            ',' if d == 0 => ini_entry = idx + 1,
+            _ => {}
+        }
+    }
+    let mut d2 = 0i32;
+    let en_valor = cuerpo[ini_entry..].iter().any(|&c| match c {
+        '{' | '(' | '[' => { d2 += 1; false }
+        '}' | ')' | ']' => { d2 -= 1; false }
+        ':' if d2 == 0 => true,
+        _ => false,
+    });
+    if en_valor { return None; }
+
+    // Campos ya escritos en el literal (todos los `ident:` de nivel superior) para no repetirlos.
+    let ya = campos_ya_escritos(cuerpo);
+    let items: Vec<Json> = campos.into_iter()
+        .filter(|(f, _)| !ya.contains(f))
+        .map(|(f, ty)| obj(vec![
+            ("label", Json::Str(f.clone())),
+            ("kind", num(5)), // 5 = Field
+            ("detail", Json::Str(ty)),
+            ("insertText", Json::Str(format!("{}: ", f))),
+        ]))
+        .collect();
+    Some(Json::Arr(items))
+}
+
+/// Los nombres de campo ya escritos en el cuerpo de un literal de struct (`ident:` de nivel superior).
+fn campos_ya_escritos(cuerpo: &[char]) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let (mut depth, mut i) = (0i32, 0usize);
+    while i < cuerpo.len() {
+        match cuerpo[i] {
+            '{' | '(' | '[' => depth += 1,
+            '}' | ')' | ']' => depth -= 1,
+            c if depth == 0 && es_ident_char(c) => {
+                let start = i;
+                while i < cuerpo.len() && es_ident_char(cuerpo[i]) { i += 1; }
+                let name: String = cuerpo[start..i].iter().collect();
+                let mut j = i;
+                while j < cuerpo.len() && cuerpo[j].is_whitespace() { j += 1; }
+                if cuerpo.get(j) == Some(&':') { out.insert(name); }
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Completion de **miembros** (M45): si el cursor `(line0, char0)` (0-basados) está tras un `.`,
 /// devuelve `Some(items)` con los campos/métodos/builtins/UFCS del tipo del receptor; `None` si no
 /// es un contexto de miembro (entonces el llamador hace la completion de archivo). La lista puede
@@ -1153,6 +1260,10 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
         // M45c: en una línea de `import`/`from … import`, ofrecemos rutas de módulo o símbolos `pub`,
         // no los símbolos de archivo.
         if let Some(items) = import_completion_items(uri, src, line0, char0) {
+            return items;
+        }
+        // M47a: dentro de `Nombre { … }` (posición de nombre de campo), los campos del struct.
+        if let Some(items) = struct_literal_completion_items(uri, src, line0, char0) {
             return items;
         }
         // M45: si el cursor viene tras un `.` (acceso a miembro), ofrecemos los miembros del tipo del
@@ -1452,6 +1563,21 @@ impl SigCtx {
         }
         fuentes.push(crate::prelude::SOURCE.to_string());
         SigCtx { fuentes }
+    }
+
+    /// Los campos `(nombre, tipo)` del struct `name` (completion de literal `Nombre { … }`, M47a),
+    /// buscándolo en las fuentes del contexto (buffer + módulos importados/reexportados). `None` si
+    /// no hay un struct con ese nombre.
+    fn struct_campos(&self, name: &str) -> Option<Vec<(String, String)>> {
+        for fuente in &self.fuentes {
+            if let Ok(tokens) = lexer::lex(fuente) {
+                let (program, _) = parser::parse_all(tokens);
+                if let Some(s) = program.structs.iter().find(|s| s.name == name) {
+                    return Some(s.fields.iter().map(|(n, t)| (n.clone(), format!("{}", t))).collect());
+                }
+            }
+        }
+        None
     }
 
     /// Las variantes del enum `name` (completion `Enum.`), buscándolo en las fuentes del contexto
@@ -3183,6 +3309,36 @@ mod tests {
         // Builtin sin argumentos → `()`.
         let a = "fn main() -> int {\n    let xs = [1];\n    xs.\n    0\n}\n";
         assert_eq!(insert(a, 2, 7, "len").as_deref(), Some("len()"));
+    }
+
+    #[test]
+    fn completion_de_campos_de_literal_de_struct() {
+        // M47a: dentro de `Nombre { … }` (posición de nombre de campo), los campos del struct.
+        let labels = |cuerpo: &str, line: usize, ch: usize| -> Vec<(String, i64, Option<String>)> {
+            let src = format!("struct Punto {{ x: int, y: int }}\nfn dobla(n: int) -> int {{ n }}\nfn main() -> int {{\n{cuerpo}\n0\n}}\n");
+            let mut docs = HashMap::new();
+            docs.insert("file:///t.ray".to_string(), src);
+            let msg = json::parse(&format!(
+                r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
+            )).unwrap();
+            completion_result(&msg, &docs).as_array().unwrap().iter()
+                .map(|i| (i.get("label").unwrap().as_str().unwrap().to_string(),
+                          as_usize(i.get("kind").unwrap()).unwrap() as i64,
+                          i.get("insertText").and_then(Json::as_str).map(|s| s.to_string())))
+                .collect()
+        };
+        // `Punto { |` → ambos campos, kind Field (5), insertText `campo: `.
+        let vacio = labels("    let p = Punto { ", 3, 20);
+        assert!(vacio.iter().any(|(l, k, ins)| l == "x" && *k == 5 && ins.as_deref() == Some("x: ")), "campo x: {vacio:?}");
+        assert!(vacio.iter().any(|(l, _, _)| l == "y"), "campo y: {vacio:?}");
+        assert!(!vacio.iter().any(|(l, _, _)| l == "print"), "no cae a la completion de archivo: {vacio:?}");
+        // `Punto { x: 1, |` → solo el campo que falta.
+        let uno = labels("    let p = Punto { x: 1, ", 3, 26);
+        assert!(uno.iter().any(|(l, _, _)| l == "y") && !uno.iter().any(|(l, _, _)| l == "x"),
+                "excluye el campo ya escrito: {uno:?}");
+        // `Punto { x: dob|` (posición de VALOR) → cae a la completion de archivo (dobla), no campos.
+        let valor = labels("    let p = Punto { x: dob", 3, 26);
+        assert!(valor.iter().any(|(l, _, _)| l == "dobla"), "en posición de valor, completion de archivo: {valor:?}");
     }
 
     #[test]

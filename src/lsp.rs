@@ -814,13 +814,16 @@ fn member_completion_items(src: &str, line0: usize, char0: usize, docs: &HashMap
     while fin < chars.len() && es_ident_char(chars[fin]) {
         fin += 1;
     }
-    // Reconstruye la fuente con la palabra-miembro sustituida por el centinela. Terminamos la
-    // sentencia con `;` para que el bloque parsee (si no, `parse_all` descartaría la función entera
-    // al resincronizar y no habría acceso que tipar); salvo que siga un `(` —edición de una llamada
-    // `recv.metodo(args)`—, donde `recv.__raycomplete__(args)` ya es una llamada válida.
+    // Reconstruye la fuente con la palabra-miembro sustituida por el centinela. En **posición de
+    // sentencia** (`x.` al final de una línea) hay que terminar con `;`, o el bloque no parsea y
+    // `parse_all` descartaría la función al resincronizar. En **posición de expresión** (dentro de
+    // `sum(x.)`, `[x.]`, `{ x. }`) NO se añade `;` —rompería la llamada/lista—: el delimitador que
+    // sigue ya cierra la expresión. Se decide por el siguiente carácter no-espacio de la línea.
+    let siguiente = chars[fin..].iter().find(|c| !c.is_whitespace()).copied();
+    let en_expresion = matches!(siguiente, Some(')') | Some(']') | Some('}') | Some(',') | Some('('));
     let mut nueva_linea: String = chars[..ini].iter().collect();
     nueva_linea.push_str(crate::checker::COMPLETION_SENTINEL);
-    if chars.get(fin) != Some(&'(') {
+    if !en_expresion {
         nueva_linea.push(';');
     }
     nueva_linea.extend(chars[fin..].iter());
@@ -833,17 +836,41 @@ fn member_completion_items(src: &str, line0: usize, char0: usize, docs: &HashMap
     let (mut program, _errs) = parser::parse_all(tokens);
     let miembros = checker::member_completion(&mut program);
 
+    let lineas_orig: Vec<&str> = src.split('\n').collect();
     let items: Vec<Json> = miembros
         .into_iter()
         .map(|m| {
+            // Documentación: builtin → `///` sobre la declaración del método/UFCS (M45b) → prelude.
             let doc = crate::builtins::doc(&m.label).map(|s| s.to_string())
+                .or_else(|| m.def.and_then(|(dl, _)| {
+                    // La def vive en la fuente original (el reparado no cambia números de línea);
+                    // si cae fuera (símbolo del prelude), se intenta el prelude más abajo.
+                    if dl >= 1 && dl <= lineas_orig.len() {
+                        crate::raydoc::doc_lineas_arriba(&lineas_orig, dl).map(|ls| ls.join("\n"))
+                    } else {
+                        None
+                    }
+                }))
                 .or_else(|| doc_en_prelude(&m.label));
             let mut campos = vec![
-                ("label", Json::Str(m.label)),
+                ("label", Json::Str(m.label.clone())),
                 ("kind", num(m.kind as i64)),
             ];
             if let Some(d) = m.detail {
                 campos.push(("detail", Json::Str(d)));
+            }
+            // M45b: para los invocables (método/función) insertamos `nombre(…)` como *snippet* y,
+            // si toma argumentos, dejamos el cursor dentro y disparamos el signature help.
+            if m.kind == 2 || m.kind == 3 {
+                let insert = if m.has_args { format!("{}($0)", m.label) } else { format!("{}()", m.label) };
+                campos.push(("insertText", Json::Str(insert)));
+                campos.push(("insertTextFormat", num(2))); // 2 = Snippet
+                if m.has_args {
+                    campos.push(("command", obj(vec![
+                        ("title", Json::Str("signature".into())),
+                        ("command", Json::Str("editor.action.triggerParameterHints".into())),
+                    ])));
+                }
             }
             if let Some(d) = doc {
                 campos.push(("documentation", obj(vec![
@@ -854,7 +881,7 @@ fn member_completion_items(src: &str, line0: usize, char0: usize, docs: &HashMap
             obj(campos)
         })
         .collect();
-    let _ = docs; // (los docs de método por `///` de impl se resuelven en una fase futura)
+    let _ = docs;
     Some(Json::Arr(items))
 }
 
@@ -2490,6 +2517,47 @@ mod tests {
         for m in ["len", "push", "reverse", "map", "filter", "fold", "sort"] {
             assert!(la.contains(&m.to_string()), "array debe ofrecer '{m}': {la:?}");
         }
+    }
+
+    #[test]
+    fn completion_de_miembros_en_contexto_de_expresion() {
+        // M45b: `x.` como argumento de una llamada NO debe romper el parseo (bug del `;` dentro
+        // del paréntesis). `sum(x.)` ofrece los miembros del array.
+        let src = "fn sum(xs: [int]) -> int { 0 }\nfn main() -> int {\n    let x = [1, 2];\n    let y = sum(x.);\n    0\n}\n";
+        let labels = completion_labels(src, 3, 18); // tras "sum(x." (el punto está en col 17, cursor 18)
+        assert!(labels.contains(&"len".to_string()) && labels.contains(&"map".to_string()), "en expresión: {labels:?}");
+    }
+
+    #[test]
+    fn completion_de_miembros_snippet_y_doc() {
+        // M45b: un método con args → insertText snippet `m($0)`; sin args → `m()`; los métodos
+        // del usuario traen su doc `///`.
+        let src = "struct P { x: int }\n/// Duplica x.\nfn doblar(p: P, k: int) -> int { p.x * k }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.\n    0\n}\n";
+        let msg = json::parse(
+            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":5,"character":6}}}"#
+        ).unwrap();
+        let mut docs = HashMap::new();
+        docs.insert("file:///t.ray".to_string(), src.to_string());
+        let items = completion_result(&msg, &docs);
+        let arr = items.as_array().unwrap();
+        let doblar = arr.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some("doblar")).expect("doblar");
+        assert_eq!(doblar.get("insertText").and_then(|t| t.as_str()), Some("doblar($0)"), "snippet con args");
+        assert!(doblar.get("command").is_some(), "dispara signature help");
+        let doc = doblar.get("documentation").and_then(|d| d.get("value")).and_then(|v| v.as_str()).unwrap_or("");
+        assert!(doc.contains("Duplica x"), "doc /// del método: {doc}");
+        // el campo x no es invocable → sin insertText de llamada.
+        let x = arr.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some("x")).expect("x");
+        assert!(x.get("insertText").is_none(), "un campo no inserta ()");
+    }
+
+    #[test]
+    fn completion_de_miembros_en_interpolacion() {
+        // M45b: dentro de `${x.}` el LSP ofrece los miembros (el reparado no rompe la cadena).
+        let src = "fn main() -> int {\n    let x = [1, 2];\n    let y = \"n ${x.}\";\n    0\n}\n";
+        let linea = "    let y = \"n ${x.}\";";
+        let col = linea.find("x.").unwrap() + 2; // tras el punto
+        let labels = completion_labels(src, 2, col);
+        assert!(labels.contains(&"len".to_string()) && labels.contains(&"push".to_string()), "en interpolación: {labels:?}");
     }
 
     #[test]

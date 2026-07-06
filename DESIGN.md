@@ -6175,3 +6175,28 @@ por miembro inexistente, enumera en `enumerate_members(tipo_receptor)`:
 Cada ítem lleva su `CompletionItemKind` (Field/Method/Function) y documentación (`builtins::doc` / los
 `///` del prelude). `.` se añade a los `triggerCharacters`. **Diferidos**: docs `///` de métodos de impl
 del usuario, receptores que son expresiones complejas (`f(x).`), y UFCS del usuario sobre primitivos.
+
+### 47.1 M45b — refinamientos del completion de miembros
+
+Sobre M45, cuatro mejoras a partir de casos reales:
+- **Contexto de expresión** (bug): el reparado añadía `;` siempre, rompiendo `sum(x.)` →
+  `sum(x.__raycomplete__;)` (inválido → `parse_all` descartaba la función). Ahora el `;` solo se
+  añade en **posición de sentencia**; si el siguiente carácter no-espacio es `)`/`]`/`}`/`,`/`(` es
+  posición de **expresión** y se omite. Cubre argumentos de llamada, elementos de arreglo e
+  interpolación. (Los receptores-expresión `f(x).` ya funcionaban al ser posición de sentencia.)
+- **Snippet de argumentos**: los miembros invocables (método/función) insertan `nombre($0)` como
+  *snippet* (cursor entre paréntesis) y disparan el **signature help** (`triggerParameterHints`) si
+  toman argumentos; sin argumentos, `nombre()`. La aridad sale del `FnSig` (métodos/UFCS) o de
+  `builtins::method_takes_args` (los builtins ad-hoc, con lista curada de los sin-args). Los campos
+  no reciben `()`.
+- **Docs `///` de métodos de impl/UFCS**: `MemberItem` lleva la posición de declaración (`def`) del
+  método/función destino (poblada con `gather`); el LSP resuelve sus `///` con `raydoc::
+  doc_lineas_arriba` sobre la fuente original (el reparado no cambia números de línea). Prioridad:
+  builtin → `///` de la def → prelude.
+- **Interpolación** `"…${x.}…"`: el LSP ya la maneja (el centinela cae dentro de la interpolación,
+  que se re-lexea como expresión). El bloqueo era de VSCode, que suprime sugerencias dentro de
+  strings; se resuelve con un `configurationDefaults` por lenguaje (`editor.quickSuggestions.strings
+  = true` para `[raylang]`) en la extensión.
+
+Sigue diferido: hover/def de métodos sobre el nombre (comparte `(línea,col)` con el receptor, sin
+spans) y el completion por ámbito de bloque (sin spans, el alcance es la función).

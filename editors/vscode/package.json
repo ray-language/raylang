@@ -2,7 +2,7 @@
   "name": "raylang",
   "displayName": "raylang",
   "description": "Soporte para el lenguaje raylang (.ray): resaltado de sintaxis + cliente del Language Server (diagnósticos en vivo).",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "publisher": "rayala",
   "engines": {
     "vscode": "^1.75.0"
@@ -47,6 +47,15 @@
           "type": "boolean",
           "default": true,
           "description": "Activa el cliente del Language Server (diagnósticos en vivo). Si se desactiva, la extensión solo colorea."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[raylang]": {
+        "editor.quickSuggestions": {
+          "other": true,
+          "comments": false,
+          "strings": true
         }
       }
     }

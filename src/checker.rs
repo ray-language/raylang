@@ -543,12 +543,16 @@ struct Checker {
 pub const COMPLETION_SENTINEL: &str = "__raycomplete__";
 
 /// Un miembro ofrecible en `recv.` (M45): su etiqueta, el `CompletionItemKind` de LSP
-/// (2=Method, 3=Function, 5=Field) y un detalle opcional (p. ej. el tipo del campo).
+/// (2=Method, 3=Function, 5=Field), un detalle opcional (p. ej. el tipo del campo), si toma
+/// argumentos más allá del receptor (para el snippet `m(…)`), y la posición de declaración de la
+/// función destino (método de impl / función UFCS), para resolver sus `///` docs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MemberItem {
     pub label: String,
     pub kind: u8,
     pub detail: Option<String>,
+    pub has_args: bool,
+    pub def: Option<(usize, usize)>,
 }
 
 impl Checker {
@@ -2862,9 +2866,10 @@ impl Checker {
         let mut out: Vec<MemberItem> = Vec::new();
         let mut vistos: std::collections::HashSet<String> = std::collections::HashSet::new();
         let add = |out: &mut Vec<MemberItem>, vistos: &mut std::collections::HashSet<String>,
-                   label: String, kind: u8, detail: Option<String>| {
+                   label: String, kind: u8, detail: Option<String>, has_args: bool,
+                   def: Option<(usize, usize)>| {
             if vistos.insert(label.clone()) {
-                out.push(MemberItem { label, kind, detail });
+                out.push(MemberItem { label, kind, detail, has_args, def });
             }
         };
 
@@ -2875,17 +2880,21 @@ impl Checker {
                 let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs.iter().cloned()).collect();
                 for (fname, fty) in fields {
                     let ty = subst(fty, &sigma);
-                    add(&mut out, &mut vistos, fname.clone(), 5, Some(format!("{}", ty)));
+                    add(&mut out, &mut vistos, fname.clone(), 5, Some(format!("{}", ty)), false, None);
                 }
             }
         }
 
         // 2. Métodos de trait/impl del tipo concreto (kind 2 = Method). La tabla `methods` va por
-        //    constructor (`type_key_of`): `Caja<int>` y `Caja<bool>` comparten métodos.
+        //    constructor (`type_key_of`): `Caja<int>` y `Caja<bool>` comparten métodos. Del mangled
+        //    sacamos la aridad (para el snippet) y la posición de declaración (para sus `///` docs).
         if let Some(key) = type_key_of(rt) {
-            for ((k, m), _mangled) in &self.methods {
+            for ((k, m), mangled) in &self.methods {
                 if k == &key {
-                    add(&mut out, &mut vistos, m.clone(), 2, None);
+                    let sig = self.functions.get(mangled);
+                    let has_args = sig.map(|s| s.params.len() > 1).unwrap_or(false); // > self
+                    let def = self.fn_defs.get(mangled).copied();
+                    add(&mut out, &mut vistos, m.clone(), 2, None, has_args, def);
                 }
             }
         }
@@ -2893,7 +2902,8 @@ impl Checker {
         // 3. Builtins invocables como método sobre la categoría del tipo (kind 2 = Method).
         if let Some(cat) = member_category(rt) {
             for b in crate::builtins::methods_for(cat) {
-                add(&mut out, &mut vistos, (*b).to_string(), 2, None);
+                let has_args = crate::builtins::method_takes_args(b);
+                add(&mut out, &mut vistos, (*b).to_string(), 2, None, has_args, None);
             }
         }
 
@@ -2920,7 +2930,9 @@ impl Checker {
                     }
                     let mut sigma: HashMap<String, Type> = HashMap::new();
                     if unify(p0, rt, &mut sigma).is_ok() {
-                        add(&mut out, &mut vistos, fname.clone(), 3, None);
+                        let has_args = sig.params.len() > 1; // > el receptor
+                        let def = self.fn_defs.get(fname).copied();
+                        add(&mut out, &mut vistos, fname.clone(), 3, None, has_args, def);
                     }
                 }
             }
@@ -3921,6 +3933,7 @@ pub fn member_completion(program: &mut Program) -> Vec<MemberItem> {
     let mut checker = Checker::new();
     checker.completing = true;
     checker.require_main = false;
+    checker.gather = true; // puebla `fn_defs` → posición de los métodos/UFCS para sus `///` docs
     let _ = checker.check_program(program); // best-effort: el error de tipos del fragmento es esperado
     checker.member_hits
 }

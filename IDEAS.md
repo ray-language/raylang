@@ -40,7 +40,7 @@
 | **Habilitadores de self-hosting** (`Map<K,V>`, `assert`/test, recursión profunda) | Runtime + GC (Map) · runner (test) · hilo/límites (recursión) | **M13** | ✅ **completo** (DESIGN §22): **M13.1** `Map<K,V>` heap obj en ambos motores · **M13.2** `panic`/`assert`/`assert_eq` + runner aislado por prueba (`@test` unit/bool, filtro) · **M13.3** pila grande (hilo worker) + límite de marcos con error limpio + **TCO en ambos motores** (no quedó diferido). Genérica vía `Hash` sigue diferida |
 | **Self-hosting** (raylang en raylang) | Capstone: lexer/parser/checker/intérprete/loader en raylang | **M14** | ✅ **LOGRADO — meta-circularidad** (DESIGN §23): el compilador entero escrito en raylang corre **sobre el intérprete auto-alojado** (lex/parse/check + run-on-run idénticos a Rust). Decisiones: intérprete (no VM), checker = validador, resolución en runtime (= *erasure* gratis). Oráculo Rust (texto canónico para front-end, conductual para back-end) |
 | **VM auto-alojada** (compilador→bytecode + VM en raylang) | Back-end alternativo en raylang | **M14.5** (opcional) | 💤 diferido: el M2 de este módulo. El intérprete auto-alojado es el oráculo, igual que en Rust M1→M2 |
-| **Tooling de editor** (coloreado / LSP) | Front-end (reutiliza el checker) | **M10** | ✅ coloreado (VSCode/Sublime) + **LSP completo**: diagnósticos, hover/def, find-references, rename, completion, signature help (M10.2b–f). Clientes VSCode/Sublime/Neovim/Helix |
+| **Tooling de editor** (coloreado / LSP) | Front-end (reutiliza el checker) | **M10** | ✅ coloreado (VSCode/Sublime) + **LSP completo**: diagnósticos, hover/def, find-references, rename, completion (de archivo + **de miembros** `recv.`, M45), signature help (M10.2b–f). Clientes VSCode/Sublime/Neovim/Helix |
 | **Anotaciones** (`@test`, `@derive`, …) | Parser + fase que las consume | **M10** | ✅ conjunto cerrado: `@test` + runner, `@derive(Eq, Show)` (genera el `impl`). `@delegate`/macros de usuario → diferidos |
 | **API de runtime / I/O** (`args`, `input`, `env`) | Builtins / stdlib | **M11** | ✅ `args`/`input`/`read_int`/`env`/`eprint` + I/O de archivos (`read_file`/`write_file`/`exists`/`append_file`/handles con buffering). `main` sin parámetros |
 | **stdlib** (orden superior / string / I/O / arreglos) | prelude + builtins | **M7/M11** | ✅ `map`/`filter`/`fold` (M7.3) + string completa (M11.1/4/7a) + arreglos (`+`/`reverse`/`pop`/`contains`/`position`, M11.7b) + `sort`+`Ord` (M11.7d). Registro único de builtins (L1) |
@@ -216,6 +216,11 @@ Soporte de los archivos `.ray` en editores. Tiene dos mitades muy distintas:
     funciones y tipos), **find-references**, **rename**, **completion** (de archivo y por
     ámbito) y **signature help**. El checker pasó de *validador* a *consultable*
     (`semantic_index` recolecta un `SemanticIndex` antes de cualquier lowering).
+  - **M45** ✅ **completion de miembros** (`recv.` → campos/métodos/builtins/UFCS del tipo del
+    receptor; DESIGN §47). Repara la fuente con un centinela (`recv.__raycomplete__;`) y consulta
+    `checker::member_completion`; incluye los **builtins de string/array/map** y el orden superior
+    del prelude (`map`/`filter`/`fold`/`sort`). Diferido: docs `///` de métodos de impl del usuario,
+    receptores que son expresiones (`f(x).`), UFCS del usuario sobre primitivos.
   - Diferido: hover/def de **métodos** (comparten `(línea,col)` con el receptor, sin spans).
 
 ## 9. Anotaciones (`@test`, `@derive`, …)

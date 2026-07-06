@@ -329,7 +329,7 @@ fn shift_program(program: &mut Program, delta: usize) {
     // M10.2g: la posición del nombre de campo/método también (clave y valor llevan línea).
     program.field_name_pos = std::mem::take(&mut program.field_name_pos)
         .into_iter()
-        .map(|((l, c, n), (nl, nc))| ((l + delta, c, n), (nl + delta, nc)))
+        .map(|((l, c, n), ps)| ((l + delta, c, n), ps.into_iter().map(|(nl, nc)| (nl + delta, nc)).collect()))
         .collect();
     for f in &mut program.functions {
         shift_function(f, delta);

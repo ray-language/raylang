@@ -512,7 +512,7 @@ struct Checker {
     /// Posición del nombre de campo/método en `recv.name` (M10.2g), copiada del `Program` en modo
     /// `gather`: `(línea, col, nombre)` del acceso → `(línea, col)` del `name`. Para registrar el
     /// hover del campo/método en su posición (el AST `Field` no la lleva). Vacío sin `gather`.
-    field_name_pos: std::collections::HashMap<(usize, usize, String), (usize, usize)>,
+    field_name_pos: std::collections::HashMap<(usize, usize, String), Vec<(usize, usize)>>,
     /// El índice semántico recolectado (M10.2b). Vacío si `gather` es `false`.
     index: SemanticIndex,
     /// Posición de declaración de cada función de nivel superior (M10.2b: ir-a-definición).
@@ -3465,14 +3465,19 @@ impl Checker {
         if !self.gather {
             return;
         }
-        if let Some(&(nl, nc)) = self.field_name_pos.get(&(recv_line, recv_col, name.to_string())) {
+        // Todas las posiciones de este `(receptor, nombre)`: en una cadena (`v.doble().inc().doble()`)
+        // dos `.doble()` comparten clave (misma posición de receptor) → se registra el hover en ambas.
+        // Todas resuelven a la misma función (mismo `name` sobre el mismo receptor) → misma firma.
+        if let Some(posiciones) = self.field_name_pos.get(&(recv_line, recv_col, name.to_string())).cloned() {
             let len = name.chars().count();
-            self.index.hovers.push(HoverEntry { line: nl, col: nc, len, text: format!("{}: {}", name, ty) });
-            // M10.2h: si el método resuelve a una función conocida (manglada de un impl, o libre en
-            // UFCS), registramos su declaración → habilita ir-a-definición y documentación (`///`) del
-            // método en el hover. Un campo-función del struct no tiene `fn_defs` → sin `def` (None).
-            if let Some((def_line, def_col)) = def {
-                self.index.defs.push(DefEntry { line: nl, col: nc, len, def_line, def_col });
+            for (nl, nc) in posiciones {
+                self.index.hovers.push(HoverEntry { line: nl, col: nc, len, text: format!("{}: {}", name, ty) });
+                // M10.2h: si el método resuelve a una función conocida (manglada de un impl, o libre en
+                // UFCS), registramos su declaración → habilita ir-a-definición y documentación (`///`) del
+                // método en el hover. Un campo-función del struct no tiene `fn_defs` → sin `def` (None).
+                if let Some((def_line, def_col)) = def {
+                    self.index.defs.push(DefEntry { line: nl, col: nc, len, def_line, def_col });
+                }
             }
         }
     }
@@ -6623,6 +6628,22 @@ fn main() -> int {
         // Hover de la **variante** `Rojo` (tras el `.`): su firma. `Color.Rojo` no tiene payload.
         let hv = idx.hovers.iter().find(|h| h.line == 5 && h.text == "Color.Rojo").expect("hover de Rojo");
         assert!(hv.col > he.col, "la variante va tras el enum: {} vs {}", hv.col, he.col);
+    }
+
+    #[test]
+    fn indice_semantico_hover_en_cadena_ufcs() {
+        // En una cadena `v.doble().inc().doble()` todos los eslabones comparten la posición del
+        // receptor: las dos `.doble()` colisionaban en `field_name_pos` y la primera perdía su hover.
+        // Ahora se registran ambas posiciones.
+        let src = "fn doble(x: int) -> int { x * 2 }\nfn inc(x: int) -> int { x + 1 }\nfn main() -> int {\n  let v: int = 5;\n  v.doble().inc().doble()\n}";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        let idx = semantic_index(&mut prog);
+        // Los dos `doble` de la línea 5 tienen hover en posiciones distintas.
+        let cols: Vec<usize> = idx.hovers.iter()
+            .filter(|h| h.line == 5 && h.text == "doble: fn(int) -> int").map(|h| h.col).collect();
+        assert!(cols.len() >= 2, "ambas `.doble()` con hover: {cols:?}");
+        assert!(cols[0] != cols[1], "en columnas distintas: {cols:?}");
     }
 
     #[test]

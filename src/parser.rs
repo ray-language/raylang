@@ -70,7 +70,7 @@ pub struct Parser {
     expr_spans: std::collections::HashMap<(usize, usize), (usize, usize)>,
     /// Posición del nombre en un acceso `recv.name` (M10.2g): `(línea, col, nombre)` del acceso →
     /// `(línea, col)` del `name` tras el `.`. Al terminar pasa al `Program` (para el hover del LSP).
-    field_name_pos: std::collections::HashMap<(usize, usize, String), (usize, usize)>,
+    field_name_pos: std::collections::HashMap<(usize, usize, String), Vec<(usize, usize)>>,
     /// Azúcar preservado para el formateador (M29.3): forma de superficie de interpolación y pipelines,
     /// indexada por la posición del nodo desazucarado raíz. Al terminar pasan al `Program`. Ver
     /// [`crate::ast::Program::interp_sites`].
@@ -1300,7 +1300,7 @@ impl Parser {
                 if let TokenKind::Int(n) = self.peek().kind {
                     let (nl, nc) = (self.peek().line, self.peek().col);
                     self.advance();
-                    self.field_name_pos.insert((line, col, n.to_string()), (nl, nc));
+                    self.field_name_pos.entry((line, col, n.to_string())).or_default().push((nl, nc));
                     expr = Expr {
                         kind: ExprKind::Field { object: Box::new(expr), name: n.to_string() },
                         line,
@@ -1310,7 +1310,7 @@ impl Parser {
                 }
                 let (name, nl, nc) = self.expect_ident("el nombre del campo tras '.'")?;
                 // Posición del nombre del campo/método, para el hover del LSP (M10.2g).
-                self.field_name_pos.insert((line, col, name.clone()), (nl, nc));
+                self.field_name_pos.entry((line, col, name.clone())).or_default().push((nl, nc));
                 // `M.Tipo { ... }`: literal de struct calificado por módulo (M11.3c-3). Solo si el
                 // receptor del `.` es un `Ident` (el módulo); el nombre calificado guarda el `.`,
                 // que el loader resuelve a `M::Tipo`. (Mismo compromiso struct-literal-vs-bloque

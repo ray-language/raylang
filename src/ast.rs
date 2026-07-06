@@ -172,11 +172,13 @@ pub struct Program {
     /// El loader lo desplaza y fusiona con las bandas de líneas de cada módulo (L3).
     pub expr_spans: std::collections::HashMap<(usize, usize), (usize, usize)>,
     /// Posición del **nombre del campo/método** en un acceso `recv.name` (M10.2g): la clave es la
-    /// posición del acceso `(línea, col)` —que es la del receptor— más el nombre, y el valor es la
-    /// `(línea, col)` del propio `name` tras el `.`. El AST `Field` no la guarda (comparte posición
-    /// con el receptor); esta tabla la registra el parser para que el LSP dé **hover del campo/
-    /// método** en su posición. Mismo esquema de clave que `ufcs_sites`. El loader la desplaza.
-    pub field_name_pos: std::collections::HashMap<(usize, usize, String), (usize, usize)>,
+    /// posición del acceso `(línea, col)` —que es la del receptor— más el nombre, y el valor son las
+    /// `(línea, col)` de cada `name` tras el `.`. El AST `Field` no la guarda (comparte posición con
+    /// el receptor); esta tabla la registra el parser para que el LSP dé **hover del campo/método**
+    /// en su posición. Mismo esquema de clave que `ufcs_sites`. El loader la desplaza. Es un **`Vec`**
+    /// porque en una cadena (`v.doble().inc().doble()`) todos los eslabones comparten la posición del
+    /// receptor: dos `.doble()` colapsarían a la misma clave; se guardan ambas posiciones.
+    pub field_name_pos: std::collections::HashMap<(usize, usize, String), Vec<(usize, usize)>>,
     /// Funciones externas (M41, FFI): `extern "lib" { fn nombre(params) -> ret; … }`. Cada una es
     /// una firma **sin cuerpo** cuya implementación vive en una librería C nativa, cargada por
     /// `dlopen`/`dlsym` en tiempo de ejecución (`src/ffi.rs`). El checker valida que los tipos sean

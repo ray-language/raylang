@@ -938,7 +938,7 @@ fn module_path_completion_items(entry: &Path, line0: usize, col: usize, chars: &
 /// palabra-miembro que se está escribiendo (`recv.par|` → `recv.__raycomplete__`), que es sintaxis
 /// válida y sobrevive a la recuperación de errores del parser (M33c). El checker enumera los
 /// miembros al tipar ese acceso.
-fn member_completion_items(src: &str, line0: usize, char0: usize, docs: &HashMap<String, String>) -> Option<Json> {
+fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize, docs: &HashMap<String, String>) -> Option<Json> {
     let lineas: Vec<&str> = src.split('\n').collect();
     let linea = lineas.get(line0)?;
     let chars: Vec<char> = linea.chars().collect();
@@ -952,6 +952,14 @@ fn member_completion_items(src: &str, line0: usize, char0: usize, docs: &HashMap
     if ini == 0 || chars[ini - 1] != '.' {
         return None;
     }
+    // El **receptor**: el identificador simple justo antes del `.` (para el acceso calificado a un
+    // módulo, `u.` / `circulo.`, M45c-3). Vacío si el receptor es una expresión compleja (`).`).
+    let dot = ini - 1;
+    let mut r_ini = dot;
+    while r_ini > 0 && es_ident_char(chars[r_ini - 1]) {
+        r_ini -= 1;
+    }
+    let receptor: String = chars[r_ini..dot].iter().collect();
     // Avanza sobre el resto de la palabra parcial (a la derecha del cursor) para reemplazarla entera.
     let mut fin = col;
     while fin < chars.len() && es_ident_char(chars[fin]) {
@@ -1025,7 +1033,35 @@ fn member_completion_items(src: &str, line0: usize, char0: usize, docs: &HashMap
         })
         .collect();
     let _ = docs;
+    // M45c-3: si no hay miembros de valor y el receptor es el **leaf de un `import`** (`import geo/util
+    // as u;` → `u.`), ofrecemos los símbolos `pub` de ESE módulo (acceso calificado). Va después del
+    // intento de valor, así un local que tape al módulo (el resolutor prefiere el local) gana.
+    if items.is_empty() {
+        if let Some(mods) = module_alias_symbols(uri, src, &receptor) {
+            return Some(mods);
+        }
+    }
     Some(Json::Arr(items))
+}
+
+/// Los símbolos `pub` del módulo cuyo **leaf** de import es `receptor` (M45c-3): `import a/b/c [as x];`
+/// liga el leaf `x` (o `c`), y `x.` / `c.` accede calificado a sus `pub`. `None` si `receptor` no es
+/// el leaf de ningún `import` del archivo (o no hay URI para resolver desde disco).
+fn module_alias_symbols(uri: Option<&str>, src: &str, receptor: &str) -> Option<Json> {
+    if receptor.is_empty() {
+        return None;
+    }
+    let entry = uri.and_then(uri_to_path)?;
+    let tokens = lexer::lex(src).ok()?;
+    let (program, _errs) = parser::parse_all(tokens);
+    let modpath = program.imports.iter()
+        .find(|d| d.leaf() == receptor)
+        .map(|d| d.module.clone())?;
+    let items = simbolos_pub_de_modulo(&entry, &modpath).unwrap_or_default();
+    let lista: Vec<Json> = items.into_iter()
+        .map(|(label, kind)| obj(vec![("label", Json::Str(label)), ("kind", num(kind))]))
+        .collect();
+    Some(Json::Arr(lista))
 }
 
 /// ¿`c` es un carácter válido de identificador raylang (letra, dígito o `_`)?
@@ -1048,7 +1084,7 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
         // M45: si el cursor viene tras un `.` (acceso a miembro), ofrecemos los miembros del tipo del
         // receptor, no los símbolos de archivo. Un contexto de miembro con lista vacía (receptor sin
         // tipo conocido) devuelve `[]` —mejor que inundar con todo el archivo tras un punto—.
-        if let Some(items) = member_completion_items(src, line0, char0, docs) {
+        if let Some(items) = member_completion_items(uri, src, line0, char0, docs) {
             return items;
         }
     }
@@ -2746,6 +2782,23 @@ mod tests {
         assert!(rutas.contains(&"geo/formas/circulo".to_string()), "ruta de directorios: {rutas:?}");
         assert!(rutas.contains(&"util".to_string()), "la cápsula util: {rutas:?}");
         assert!(!rutas.contains(&"util/interno".to_string()), "el interno de la cápsula queda oculto: {rutas:?}");
+
+        // M45c-3: acceso calificado `u.` (alias) / `circulo.` (leaf) → símbolos `pub` del módulo.
+        let cual = |cuerpo: &str, line: usize, ch: usize| -> Vec<String> {
+            let src = format!("import geo/formas/circulo;\nimport geo as u;\nfn main() -> int {{\n{cuerpo}\n0\n}}\n");
+            let mut docs = HashMap::new();
+            docs.insert(uri.clone(), src);
+            let msg = json::parse(&format!(
+                r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
+            )).unwrap();
+            completion_result(&msg, &docs).as_array().unwrap().iter()
+                .filter_map(|i| i.get("label").and_then(|l| l.as_str()).map(|s| s.to_string())).collect()
+        };
+        let poru = cual("    u.", 3, 6); // `import geo as u` → símbolos pub de geo
+        assert!(poru.contains(&"Circulo".to_string()) && poru.contains(&"area".to_string()), "alias u.: {poru:?}");
+        assert!(!poru.contains(&"interno".to_string()), "no expone lo privado del módulo: {poru:?}");
+        let porleaf = cual("    circulo.", 3, 12); // leaf `circulo` (geo/formas/circulo.ray)
+        assert!(porleaf.contains(&"dibujar".to_string()), "leaf circulo.: {porleaf:?}");
 
         let _ = std::fs::remove_dir_all(&base);
     }

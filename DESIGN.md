@@ -6220,4 +6220,12 @@ Detección de contexto textual (el import a medio escribir no parsea), como el `
 
 Las raíces (proyecto con `main.ray` ancestro + caché `.ray-deps`) las dan `project_root_for`/
 `dep_roots_for`, reusadas de los diagnósticos modulares. Cliente-LSP + consultas al loader; cero
-runtime. Diferido: alias (`as`), y completar el nombre calificado `M.x` en expresiones.
+runtime.
+
+- **M45c-3 — acceso calificado por el leaf/alias** (`import geo/util as u;` → `u.` , o `circulo.`
+  del leaf): al pedir miembros con `recv.`, si el receptor no tipa como valor (un módulo no es un
+  valor → sin miembros) **y** es el `leaf()` de algún `import` del archivo, se ofrecen los símbolos
+  `pub` de ese módulo (reusa `simbolos_pub_de_modulo`). Va **después** del intento de valor, así un
+  local que tape al módulo (el resolutor prefiere el local) gana. Cierra el `u.` que no autocompletaba.
+
+Diferido: nombre calificado en expresiones más allá del leaf (`M.Color.Rojo` en dos saltos).

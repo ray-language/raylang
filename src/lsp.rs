@@ -212,18 +212,53 @@ fn pos_params(msg: &Json) -> Option<(String, usize, usize)> {
 fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     let Some(src) = docs.get(&uri) else { return Json::Null };
-    let Some((info, start, end)) = hover_at(Some(&uri), src, line0, char0) else { return Json::Null };
     // Documentación: se localiza la DECLARACIÓN del símbolo (cruza archivos, como ir-a-definición) y
     // se escanean los `///` que la preceden en su propio archivo. Reusa `raydoc::doc_lineas_arriba`.
     let doc = doc_del_simbolo(&uri, src, line0, char0, docs);
-    let contents = match doc {
-        Some(d) => obj(vec![
-            ("kind", text("markdown")),
-            ("value", Json::Str(format!("```raylang\n{info}\n```\n\n{d}"))),
-        ]),
-        None => obj(vec![("kind", text("plaintext")), ("value", Json::Str(info))]),
-    };
-    obj(vec![("contents", contents), ("range", rango(line0, start, end))])
+    if let Some((info, start, end)) = hover_at(Some(&uri), src, line0, char0) {
+        let contents = match doc {
+            Some(d) => obj(vec![
+                ("kind", text("markdown")),
+                ("value", Json::Str(format!("```raylang\n{info}\n```\n\n{d}"))),
+            ]),
+            None => obj(vec![("kind", text("plaintext")), ("value", Json::Str(info))]),
+        };
+        return obj(vec![("contents", contents), ("range", rango(line0, start, end))]);
+    }
+    // Fallback: un **builtin** sin entrada en el índice semántico (tipo indeterminado por contexto:
+    // `channel`, `map_new`, `send`/`recv`, `spawn`, …). Se muestra su firma (si tiene) + doc.
+    if let Some((nombre, ini, fin)) = ident_rango_bajo_cursor(src, line0, char0) {
+        if crate::builtins::is_builtin(&nombre) {
+            let firma = crate::builtins::signature(&nombre)
+                .map(|(ps, r)| format!("{}({}) -> {}", nombre, ps.join(", "), r));
+            let doc_bi = crate::builtins::doc(&nombre);
+            let value = match (firma, doc_bi) {
+                (Some(f), Some(d)) => format!("```raylang\n{f}\n```\n\n{d}"),
+                (Some(f), None) => format!("```raylang\n{f}\n```"),
+                (None, Some(d)) => d.to_string(),
+                (None, None) => return Json::Null,
+            };
+            return obj(vec![
+                ("contents", obj(vec![("kind", text("markdown")), ("value", Json::Str(value))])),
+                ("range", rango(line0, ini, fin)),
+            ]);
+        }
+    }
+    Json::Null
+}
+
+/// El identificador bajo el cursor y su rango de columnas `[ini, fin)` (0-basadas). Como
+/// `ident_bajo_cursor` pero devolviendo también el rango, para el hover de builtins.
+fn ident_rango_bajo_cursor(src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
+    let linea: Vec<char> = src.lines().nth(line0)?.chars().collect();
+    if char0 >= linea.len() || !is_ident_char(linea[char0]) {
+        return None;
+    }
+    let mut ini = char0;
+    while ini > 0 && is_ident_char(linea[ini - 1]) { ini -= 1; }
+    let mut fin = char0;
+    while fin < linea.len() && is_ident_char(linea[fin]) { fin += 1; }
+    Some((linea[ini..fin].iter().collect(), ini, fin))
 }
 
 /// Los comentarios de documentación (`///`) del símbolo bajo el cursor, si los tiene. Localiza su
@@ -853,13 +888,16 @@ fn clasificar_simbolo_de_fuente(fuente: &str, name: &str) -> Option<(i64, Option
     if program.traits.iter().any(|t| t.name == name) {
         return Some((8, None));
     }
+    if program.consts.iter().any(|c| c.name == name) {
+        return Some((21, None)); // 21 = Constant
+    }
     None
 }
 
 /// Construye el `CompletionItem` de un símbolo `pub` de módulo (M46a/M46c): label + kind + —si es
 /// función con firma— el detalle y el snippet con placeholders. El calificador de módulo NO es un
 /// receptor (`figuras.area_cuadrado(4)` pasa 4), así que la firma va **completa**.
-fn item_simbolo_modulo(label: String, kind: i64, firma: Option<(Vec<String>, String)>) -> Json {
+fn item_simbolo_modulo(label: String, kind: i64, firma: Option<(Vec<String>, String)>, ctx: &SigCtx) -> Vec<Json> {
     let mut campos = vec![("label", Json::Str(label.clone())), ("kind", num(kind))];
     if let Some((params, ret)) = firma {
         empujar_firma_raw(&mut campos, params.clone(), ret, false);
@@ -872,7 +910,31 @@ fn item_simbolo_modulo(label: String, kind: i64, firma: Option<(Vec<String>, Str
             ])));
         }
     }
-    obj(campos)
+    let mut out = vec![obj(campos)];
+    // M47b: para un struct calificado (`geo.Circulo`), el ítem-extra del literal `Circulo {…}`. Los
+    // campos se resuelven en el cierre de imports (que incluye los internos de la cápsula).
+    if kind == 22 {
+        if let Some(cs) = ctx.struct_campos(&label).filter(|c| !c.is_empty()) {
+            out.push(item_struct_literal(&label, &cs));
+        }
+    }
+    out
+}
+
+/// El ítem-extra `Nombre {…}` (kind Snippet) que inserta el literal completo con un placeholder por
+/// campo (M47b): `Nombre { c1: ${1:T1}, … }`. Compartido por la completion de archivo y la calificada.
+fn item_struct_literal(nombre: &str, campos: &[(String, String)]) -> Json {
+    let cuerpo = campos.iter().enumerate()
+        .map(|(i, (f, t))| format!("{}: ${{{}:{}}}", f, i + 1, t))
+        .collect::<Vec<_>>().join(", ");
+    obj(vec![
+        ("label", Json::Str(format!("{} {{…}}", nombre))),
+        ("kind", num(15)), // 15 = Snippet
+        ("detail", Json::Str("literal de struct".into())),
+        ("filterText", Json::Str(nombre.to_string())),
+        ("insertText", Json::Str(format!("{} {{ {} }}", nombre, cuerpo))),
+        ("insertTextFormat", num(2)), // 2 = Snippet
+    ])
 }
 
 fn simbolos_pub_de_modulo(entry: &Path, ruta: &str) -> Option<Vec<(String, i64, Option<(Vec<String>, String)>)>> {
@@ -932,8 +994,9 @@ fn import_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
     match ctx {
         ImportCtx::Symbols(ruta) => {
             let items = simbolos_pub_de_modulo(&entry, &ruta).unwrap_or_default();
+            let ctx = SigCtx::nuevo(src, Some(&entry));
             let lista: Vec<Json> = items.into_iter()
-                .map(|(label, kind, firma)| item_simbolo_modulo(label, kind, firma))
+                .flat_map(|(label, kind, firma)| item_simbolo_modulo(label, kind, firma, &ctx))
                 .collect();
             Some(Json::Arr(lista))
         }
@@ -1239,8 +1302,9 @@ fn module_alias_symbols(uri: Option<&str>, src: &str, receptor: &str) -> Option<
         .find(|d| d.leaf() == receptor)
         .map(|d| d.module.clone())?;
     let items = simbolos_pub_de_modulo(&entry, &modpath).unwrap_or_default();
+    let ctx = SigCtx::nuevo(src, Some(&entry));
     let lista: Vec<Json> = items.into_iter()
-        .map(|(label, kind, firma)| item_simbolo_modulo(label, kind, firma))
+        .flat_map(|(label, kind, firma)| item_simbolo_modulo(label, kind, firma, &ctx))
         .collect();
     Some(Json::Arr(lista))
 }
@@ -1297,6 +1361,9 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     for t in &program.traits {
         if visible(&t.name) { items.push((t.name.clone(), 8)); }
     }
+    for c in &program.consts {
+        if visible(&c.name) { items.push((c.name.clone(), 21)); } // 21 = Constant
+    }
     for b in crate::builtins::names().filter(|n| visible(n)) {
         items.push((b.to_string(), 3));
     }
@@ -1307,6 +1374,10 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
         "int", "float", "bool", "string", "char", "bytes", "u8", "u32", "u64",
     ] {
         items.push((kw.to_string(), 14));
+    }
+    // Tipos genéricos incorporados y del prelude, que no son palabras clave pero se escriben como tipo.
+    for (t, k) in [("Option", 13), ("Result", 13), ("Map", 7), ("Channel", 7), ("Task", 7)] {
+        items.push((t.to_string(), k)); // 13 = Enum, 7 = Class
     }
     // M46: símbolos que NO viven en este archivo pero están en ámbito — el **nombre de cada módulo
     // importado** (`import figuras;` → `figuras`, kind 9=Module) y los **`from`-imports** (`cuad`/
@@ -1384,19 +1455,8 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     // del tipo pelado (que sigue para las posiciones de tipo, `let x: Nombre`); `filterText` = el
     // nombre, así aparece al teclear el tipo. Solo para structs con campos conocidos.
     for label in structs_ofrecibles {
-        if let Some(campos) = ctx.struct_campos(&label) {
-            if campos.is_empty() { continue; }
-            let cuerpo = campos.iter().enumerate()
-                .map(|(i, (f, t))| format!("{}: ${{{}:{}}}", f, i + 1, t))
-                .collect::<Vec<_>>().join(", ");
-            lista.push(obj(vec![
-                ("label", Json::Str(format!("{} {{…}}", label))),
-                ("kind", num(15)), // 15 = Snippet
-                ("detail", Json::Str("literal de struct".into())),
-                ("filterText", Json::Str(label.clone())),
-                ("insertText", Json::Str(format!("{} {{ {} }}", label, cuerpo))),
-                ("insertTextFormat", num(2)), // 2 = Snippet
-            ]));
+        if let Some(campos) = ctx.struct_campos(&label).filter(|c| !c.is_empty()) {
+            lista.push(item_struct_literal(&label, &campos));
         }
     }
     Json::Arr(lista)
@@ -3369,6 +3429,39 @@ mod tests {
         assert!(tipo.iter().any(|(l, k, _)| l == "Punto" && *k == 22), "el tipo pelado sigue: {tipo:?}");
         assert!(tipo.iter().any(|(l, k, ins)| l == "Punto {…}" && *k == 15
             && ins.as_deref() == Some("Punto { x: ${1:int}, y: ${2:int} }")), "el literal-snippet: {tipo:?}");
+    }
+
+    #[test]
+    fn hover_de_builtin_sin_tipo_indexado() {
+        // Un builtin de tipo indeterminado (channel) no está en el índice semántico; el hover cae a
+        // su doc de la tabla de builtins.
+        let src = "fn main() -> int {\n    let ch = channel();\n    0\n}\n";
+        let mut docs = HashMap::new();
+        docs.insert("file:///t.ray".to_string(), src.to_string());
+        let msg = json::parse(r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":1,"character":15}}}"#).unwrap();
+        let r = hover_result(&msg, &docs);
+        let v = r.get("contents").and_then(|c| c.get("value")).and_then(Json::as_str).unwrap_or("");
+        assert!(v.contains("typed channel"), "hover de channel: {v}");
+    }
+
+    #[test]
+    fn completion_ofrece_consts_y_tipos_incorporados() {
+        let comp = |src: &str, line: usize, ch: usize| -> Vec<String> {
+            let mut docs = HashMap::new();
+            docs.insert("file:///t.ray".to_string(), src.to_string());
+            let msg = json::parse(&format!(
+                r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
+            )).unwrap();
+            completion_result(&msg, &docs).as_array().unwrap().iter()
+                .filter_map(|i| i.get("label").and_then(Json::as_str).map(|s| s.to_string())).collect()
+        };
+        // Constante de nivel superior.
+        let c = comp("const MAXIMO: int = 100;\nfn main() -> int {\n    x\n    0\n}\n", 2, 5);
+        assert!(c.contains(&"MAXIMO".to_string()), "const MAXIMO: {c:?}");
+        // Tipos genéricos incorporados / del prelude.
+        for t in ["Channel", "Task", "Map", "Option", "Result"] {
+            assert!(c.contains(&t.to_string()), "tipo {t}: {c:?}");
+        }
     }
 
     #[test]

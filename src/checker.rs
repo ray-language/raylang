@@ -1803,6 +1803,16 @@ impl Checker {
         if self.gather {
             let def = self.type_defs.get(enum_name).copied();
             self.record_named(line, col, enum_name.chars().count(), format!("enum {}", enum_name), def);
+            // Y el hover de la **variante** (el identificador tras el `.`): su firma con el payload.
+            // La posición asume `Enum.Variante` sin espacios (la grafía canónica); el `+1` es el punto.
+            let vcol = col + enum_name.chars().count() + 1;
+            let firma = if payload.is_empty() {
+                format!("{}.{}", enum_name, variant)
+            } else {
+                let tipos: Vec<String> = payload.iter().map(|t| format!("{}", t)).collect();
+                format!("{}.{}({})", enum_name, variant, tipos.join(", "))
+            };
+            self.record_named(line, vcol, variant.chars().count(), firma, def);
         }
         let orig_tparams = self.enum_tparams.get(enum_name).cloned().unwrap_or_default();
         if args.len() != payload.len() {
@@ -6590,6 +6600,9 @@ fn main() -> int {
         // Hover del enum `Color` en la construcción (línea 5).
         let he = idx.hovers.iter().find(|h| h.line == 5 && h.text == "enum Color").expect("hover de Color");
         assert_eq!(he.line, 5);
+        // Hover de la **variante** `Rojo` (tras el `.`): su firma. `Color.Rojo` no tiene payload.
+        let hv = idx.hovers.iter().find(|h| h.line == 5 && h.text == "Color.Rojo").expect("hover de Rojo");
+        assert!(hv.col > he.col, "la variante va tras el enum: {} vs {}", hv.col, he.col);
     }
 
     #[test]

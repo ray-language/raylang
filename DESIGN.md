@@ -6229,3 +6229,23 @@ runtime.
   local que tape al módulo (el resolutor prefiere el local) gana. Cierra el `u.` que no autocompletaba.
 
 Diferido: nombre calificado en expresiones más allá del leaf (`M.Color.Rojo` en dos saltos).
+
+## 48. M46 — firmas visibles al completar
+
+Ataca la fricción #1 del completion: aceptar una función sin ver qué parámetros toma. Idea central:
+un **resolutor de firma unificado** (`SigCtx`, cliente-LSP) que halla la declaración `fn` de un
+nombre —**textualmente**, tolerando el archivo a medio escribir— buscando en el buffer + los módulos
+importados (leídos de disco) + el prelude, con `builtins::signature` para los ad-hoc. Reusa
+`find_fn_signature` (la misma del signature help).
+
+### 48.1 M46a — firma en el detalle del popup
+
+Cada ítem invocable (función de archivo, método, builtin, UFCS, símbolo de módulo) lleva
+`labelDetails` (`detail` = params inline tras el label, `description` = retorno a la derecha) + el
+clásico `detail` (panel): `doblar(p: P, k: int)  int`. Así **ves los tipos en la lista** antes de
+aceptar. En contexto de **método** (`recv.f`) se recorta el primer parámetro (el receptor) → se
+muestran solo los argumentos que faltan (`s.split` → `(sep: string)`). `builtins::signature` se
+extendió a los builtins-método (string/array/map), con test-guardián. Bonus: la completion de archivo
+pasó a `parse_all` (recuperación) → ya no se queda **vacía** en archivos incompletos (el caso normal
+al teclear). Queda **M46b** (signature help cross-módulo, reusando `SigCtx`) y **M46c** (snippet con
+placeholders por parámetro).

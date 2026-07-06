@@ -190,6 +190,29 @@ pub fn signature(name: &str) -> Option<(Vec<&'static str>, &'static str)> {
         "sleep" => (vec!["ms: int"], "unit"),
         "random_int" => (vec!["n: int"], "int"),
         "panic" => (vec!["msg: string"], "unit"),
+        // Builtins-método (M46a): firma con el receptor como primer parámetro (el completion de
+        // miembros lo recorta para mostrar solo los argumentos). Tipos genéricos como texto de ayuda.
+        "len" => (vec!["c"], "int"),
+        "trim" => (vec!["s: string"], "string"),
+        "split" => (vec!["s: string", "sep: string"], "[string]"),
+        "contains" => (vec!["c", "item"], "bool"), // ad-hoc: string (subcadena) o arreglo (pertenencia)
+        "replace" => (vec!["s: string", "from: string", "to: string"], "string"),
+        "chars" => (vec!["s: string"], "[char]"),
+        "starts_with" | "ends_with" => (vec!["s: string", "affix: string"], "bool"),
+        "to_upper" | "to_lower" => (vec!["s: string"], "string"),
+        "substring" => (vec!["s: string", "i: int", "j: int"], "string"),
+        "repeat" => (vec!["s: string", "n: int"], "string"),
+        "join" => (vec!["a: [string]", "sep: string"], "string"),
+        "to_bytes" => (vec!["s: string"], "bytes"),
+        "to_string" => (vec!["value"], "string"),
+        "sub_bytes" => (vec!["b: bytes", "i: int", "j: int"], "bytes"),
+        "char_code" => (vec!["c: char"], "int"),
+        "push" => (vec!["arr: [T]", "value: T"], "unit"),
+        "reverse" => (vec!["arr: [T]"], "[T]"),
+        "insert" => (vec!["m: Map<K, V>", "key: K", "value: V"], "unit"),
+        "contains_key" => (vec!["m: Map<K, V>", "key: K"], "bool"),
+        "keys" => (vec!["m: Map<K, V>"], "[K]"),
+        "values" => (vec!["m: Map<K, V>"], "[V]"),
         _ => return None,
     })
 }
@@ -1896,6 +1919,16 @@ mod tests {
             }
         }
         assert!(methods_for("noexiste").is_empty());
+    }
+
+    #[test]
+    fn todo_builtin_metodo_tiene_firma() {
+        // M46a: cada builtin ofrecible como método debe tener firma (para el detalle del popup).
+        for cat in ["string", "bytes", "char", "int", "float", "bool", "array", "map"] {
+            for m in methods_for(cat) {
+                assert!(signature(m).is_some(), "methods_for({cat:?}) nombra '{m}' sin signature()");
+            }
+        }
     }
 
     #[test]

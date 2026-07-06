@@ -834,34 +834,35 @@ fn import_roots(entry: &Path) -> Vec<PathBuf> {
 /// Los nombres **`pub`** exportados por el módulo en `ruta` (M45c-1): funciones, tipos (struct/enum/
 /// trait), constantes y re-exports (`pub from … import …`). Cada uno con su `CompletionItemKind`.
 /// `None` si el módulo no se resuelve o no parsea.
-fn simbolos_pub_de_modulo(entry: &Path, ruta: &str) -> Option<Vec<(String, i64)>> {
+fn simbolos_pub_de_modulo(entry: &Path, ruta: &str) -> Option<Vec<(String, i64, Option<(Vec<String>, String)>)>> {
     let roots = import_roots(entry);
     let path = loader::resolve_module_path(&roots, ruta).ok()??;
     let fuente = std::fs::read_to_string(&path).ok()?;
     let tokens = lexer::lex(&fuente).ok()?;
     let (program, _errs) = parser::parse_all(tokens);
-    let mut items: Vec<(String, i64)> = Vec::new();
-    // Kinds LSP: 3=Function, 22=Struct, 13=Enum, 8=Interface(trait), 21=Constant.
+    let mut items: Vec<(String, i64, Option<(Vec<String>, String)>)> = Vec::new();
+    // Kinds LSP: 3=Function, 22=Struct, 13=Enum, 8=Interface(trait), 21=Constant. Las funciones
+    // llevan su firma (M46a), extraída de la fuente del módulo.
     for f in &program.functions {
-        if f.is_pub { items.push((f.name.clone(), 3)); }
+        if f.is_pub { items.push((f.name.clone(), 3, find_fn_signature(&fuente, &f.name))); }
     }
     for s in &program.structs {
-        if s.is_pub { items.push((s.name.clone(), 22)); }
+        if s.is_pub { items.push((s.name.clone(), 22, None)); }
     }
     for e in &program.enums {
-        if e.is_pub { items.push((e.name.clone(), 13)); }
+        if e.is_pub { items.push((e.name.clone(), 13, None)); }
     }
     for tr in &program.traits {
-        if tr.is_pub { items.push((tr.name.clone(), 8)); }
+        if tr.is_pub { items.push((tr.name.clone(), 8, None)); }
     }
     for c in &program.consts {
-        if c.is_pub { items.push((c.name.clone(), 21)); }
+        if c.is_pub { items.push((c.name.clone(), 21, None)); }
     }
     // Re-exports: `pub from … import a [as b]` expone el nombre local (alias u original).
     for fi in &program.from_imports {
         if fi.is_pub {
             for n in &fi.names {
-                items.push((n.local().to_string(), 3));
+                items.push((n.local().to_string(), 3, None));
             }
         }
     }
@@ -884,7 +885,11 @@ fn import_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
         ImportCtx::Symbols(ruta) => {
             let items = simbolos_pub_de_modulo(&entry, &ruta).unwrap_or_default();
             let lista: Vec<Json> = items.into_iter()
-                .map(|(label, kind)| obj(vec![("label", Json::Str(label)), ("kind", num(kind))]))
+                .map(|(label, kind, firma)| {
+                    let mut campos = vec![("label", Json::Str(label)), ("kind", num(kind))];
+                    if let Some((p, r)) = firma { empujar_firma_raw(&mut campos, p, r, false); }
+                    obj(campos)
+                })
                 .collect();
             Some(Json::Arr(lista))
         }
@@ -988,6 +993,7 @@ fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
     let miembros = checker::member_completion(&mut program);
 
     let lineas_orig: Vec<&str> = src.split('\n').collect();
+    let ctx = SigCtx::nuevo(src, uri.and_then(uri_to_path).as_deref()); // M46a: firmas para el detalle
     let items: Vec<Json> = miembros
         .into_iter()
         .map(|m| {
@@ -1011,8 +1017,10 @@ fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
                 campos.push(("detail", Json::Str(d)));
             }
             // M45b: para los invocables (método/función) insertamos `nombre(…)` como *snippet* y,
-            // si toma argumentos, dejamos el cursor dentro y disparamos el signature help.
+            // si toma argumentos, dejamos el cursor dentro y disparamos el signature help. M46a: el
+            // detalle muestra la firma (sin el receptor: solo los argumentos que faltan).
             if m.kind == 2 || m.kind == 3 {
+                empujar_firma(&mut campos, &ctx, &m.label, true);
                 let insert = if m.has_args { format!("{}($0)", m.label) } else { format!("{}()", m.label) };
                 campos.push(("insertText", Json::Str(insert)));
                 campos.push(("insertTextFormat", num(2))); // 2 = Snippet
@@ -1059,7 +1067,12 @@ fn module_alias_symbols(uri: Option<&str>, src: &str, receptor: &str) -> Option<
         .map(|d| d.module.clone())?;
     let items = simbolos_pub_de_modulo(&entry, &modpath).unwrap_or_default();
     let lista: Vec<Json> = items.into_iter()
-        .map(|(label, kind)| obj(vec![("label", Json::Str(label)), ("kind", num(kind))]))
+        .map(|(label, kind, firma)| {
+            let mut campos = vec![("label", Json::Str(label)), ("kind", num(kind))];
+            // `u.cuadrado(4)` pasa 4 como único arg (el calificador de módulo no es receptor) → firma completa.
+            if let Some((p, r)) = firma { empujar_firma_raw(&mut campos, p, r, false); }
+            obj(campos)
+        })
         .collect();
     Some(Json::Arr(lista))
 }
@@ -1089,7 +1102,10 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
         }
     }
     let Ok(tokens) = lexer::lex(src) else { return Json::Arr(vec![]) };
-    let Ok(mut program) = parser::parse(tokens) else { return Json::Arr(vec![]) };
+    // `parse_all` (con recuperación de errores) en vez de `parse` fail-fast: mientras escribes, el
+    // archivo casi nunca parsea entero; así la completion de archivo sigue ofreciendo los símbolos de
+    // las funciones bien formadas en vez de quedarse vacía (M46a).
+    let (mut program, _errs) = parser::parse_all(tokens);
     // Corre el front-end (inyecta el prelude y los métodos manglados) para ofrecer también sus
     // funciones; tolera errores (info parcial). Se filtran los nombres sintéticos (`#`, `::`, `__`).
     let _ = checker::semantic_index(&mut program);
@@ -1130,12 +1146,17 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     }
     items.sort();
     items.dedup();
+    let ctx = SigCtx::nuevo(src, uri.and_then(uri_to_path).as_deref()); // M46a: firmas para el detalle
     let lista: Vec<Json> = items.into_iter()
         .map(|(label, kind)| {
             // Documentación del ítem: metadatos del builtin, o los `///` del prelude.
             let doc = crate::builtins::doc(&label).map(|s| s.to_string())
                 .or_else(|| doc_en_prelude(&label));
-            let mut campos = vec![("label", Json::Str(label)), ("kind", num(kind))];
+            let mut campos = vec![("label", Json::Str(label.clone())), ("kind", num(kind))];
+            // M46a: las funciones/builtins (kind 3) muestran su firma completa en el detalle.
+            if kind == 3 {
+                empujar_firma(&mut campos, &ctx, &label, false);
+            }
             if let Some(d) = doc {
                 campos.push(("documentation", obj(vec![
                     ("kind", Json::Str("markdown".into())),
@@ -1281,6 +1302,74 @@ fn find_fn_signature(src: &str, name: &str) -> Option<(Vec<String>, String)> {
         return Some((params, if ret.is_empty() { "unit".to_string() } else { ret }));
     }
     None
+}
+
+/// Contexto para resolver la firma legible de una función (M46a): las fuentes donde buscar su
+/// declaración `fn` —el buffer, los módulos importados (leídos de disco) y el prelude—. Se construye
+/// **una vez** por petición de completion y se consulta por nombre. Textual (tolera archivo a medio
+/// escribir); reusa `find_fn_signature`/`builtins::signature`, las mismas que el signature help.
+struct SigCtx {
+    fuentes: Vec<String>,
+}
+
+impl SigCtx {
+    /// Construye el contexto para `entry` con buffer `src`: buffer + fuentes de los módulos que
+    /// importa (`import`/`from`) + prelude.
+    fn nuevo(src: &str, entry: Option<&Path>) -> SigCtx {
+        let mut fuentes = vec![src.to_string()];
+        if let Some(entry) = entry {
+            let roots = import_roots(entry);
+            if let Ok(tokens) = lexer::lex(src) {
+                let (program, _) = parser::parse_all(tokens);
+                let mut rutas: Vec<String> = program.imports.iter().map(|d| d.module.clone()).collect();
+                rutas.extend(program.from_imports.iter().map(|f| f.module.clone()));
+                rutas.sort();
+                rutas.dedup();
+                for r in rutas {
+                    if let Ok(Some(path)) = loader::resolve_module_path(&roots, &r) {
+                        if let Ok(fuente) = std::fs::read_to_string(&path) {
+                            fuentes.push(fuente);
+                        }
+                    }
+                }
+            }
+        }
+        fuentes.push(crate::prelude::SOURCE.to_string());
+        SigCtx { fuentes }
+    }
+
+    /// La firma `(params_con_nombre, retorno)` de `name`: builtin, o la primera declaración `fn name`
+    /// hallada en las fuentes. `None` si no se encuentra.
+    fn firma(&self, name: &str) -> Option<(Vec<String>, String)> {
+        if let Some((ps, r)) = crate::builtins::signature(name) {
+            return Some((ps.iter().map(|p| p.to_string()).collect(), r.to_string()));
+        }
+        self.fuentes.iter().find_map(|f| find_fn_signature(f, name))
+    }
+}
+
+/// Añade a `campos` el detalle de firma de `name` para el popup (M46a): `labelDetails.detail`
+/// (los parámetros, inline tras el label) + `labelDetails.description` (el retorno, a la derecha) +
+/// el clásico `detail` (panel). Si `metodo`, recorta el **primer** parámetro (el receptor) → un
+/// método muestra solo los argumentos que faltan. No hace nada si no se resuelve la firma.
+fn empujar_firma(campos: &mut Vec<(&'static str, Json)>, ctx: &SigCtx, name: &str, metodo: bool) {
+    if let Some((params, ret)) = ctx.firma(name) {
+        empujar_firma_raw(campos, params, ret, metodo);
+    }
+}
+
+/// Empuja el detalle de una firma **ya resuelta** (M46a): `labelDetails.detail` (params) +
+/// `labelDetails.description` (retorno) + `detail` (panel). Si `metodo`, recorta el receptor.
+fn empujar_firma_raw(campos: &mut Vec<(&'static str, Json)>, mut params: Vec<String>, ret: String, metodo: bool) {
+    if metodo && !params.is_empty() {
+        params.remove(0); // el receptor
+    }
+    let inline = format!("({})", params.join(", "));
+    campos.push(("labelDetails", obj(vec![
+        ("detail", Json::Str(inline.clone())),
+        ("description", Json::Str(ret.clone())),
+    ])));
+    campos.push(("detail", Json::Str(format!("{} -> {}", inline, ret))));
 }
 
 /// Parte una lista de parámetros por comas de **nivel superior** (ignora las anidadas en `<…>` o
@@ -2343,7 +2432,9 @@ mod tests {
         // Signature help de un builtin con firma fija.
         let (ps, ret) = crate::builtins::signature("pow").expect("firma de pow");
         assert_eq!((ps, ret), (vec!["base: float", "exp: float"], "float"));
-        assert!(crate::builtins::signature("len").is_none(), "los ad-hoc (len) no tienen firma fija");
+        // M46a: los builtins-método también llevan firma (para el detalle del popup).
+        assert_eq!(crate::builtins::signature("len"), Some((vec!["c"], "int")));
+        assert!(crate::builtins::signature("print").is_none(), "print es variádico ad-hoc, sin firma fija");
     }
 
     #[test]
@@ -2801,6 +2892,34 @@ mod tests {
         assert!(porleaf.contains(&"dibujar".to_string()), "leaf circulo.: {porleaf:?}");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn completion_muestra_la_firma_en_el_detalle() {
+        // M46a: los ítems invocables llevan `labelDetails` con params y retorno.
+        let detalle = |src: &str, line: usize, ch: usize, label: &str| -> Option<(String, String)> {
+            let mut docs = HashMap::new();
+            docs.insert("file:///t.ray".to_string(), src.to_string());
+            let msg = json::parse(&format!(
+                r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
+            )).unwrap();
+            completion_result(&msg, &docs).as_array().unwrap().iter()
+                .find(|i| i.get("label").and_then(|l| l.as_str()) == Some(label))
+                .and_then(|i| i.get("labelDetails"))
+                .map(|ld| (
+                    ld.get("detail").and_then(Json::as_str).unwrap_or("").to_string(),
+                    ld.get("description").and_then(Json::as_str).unwrap_or("").to_string(),
+                ))
+        };
+        // Función de archivo (incompleta: `parse_all` la recupera) → firma completa.
+        let src = "fn doblar(p: int, k: int) -> int { p * k }\nfn main() -> int {\n    dob\n    0\n}\n";
+        assert_eq!(detalle(src, 2, 7, "doblar"), Some(("(p: int, k: int)".into(), "int".into())));
+        // Método → sin el receptor.
+        let m = "struct P { x: int }\nfn tri(p: P, k: int) -> int { p.x }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.\n    0\n}\n";
+        assert_eq!(detalle(m, 4, 6, "tri"), Some(("(k: int)".into(), "int".into())));
+        // Builtin-método → firma sin receptor.
+        let a = "fn main() -> int {\n    let xs = [1, 2];\n    xs.\n    0\n}\n";
+        assert_eq!(detalle(a, 2, 7, "push"), Some(("(value: T)".into(), "unit".into())));
     }
 
     #[test]

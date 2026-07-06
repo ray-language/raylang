@@ -3060,7 +3060,12 @@ impl Checker {
                     // M10.2i: hover del builtin en su nombre — su firma con los tipos de ESTA llamada
                     // (`pow: fn(float, float) -> float`). Solo en llamada directa (posición correcta) y
                     // modo gather. Los builtins internos (`__…`) no se muestran (el usuario no los escribe).
-                    if hover_directo && self.gather && !name.starts_with("__") {
+                    // Se omite además un **wrapper sintético**: el `to_string(e)` que el parser inserta al
+                    // desazucarar una interpolación `${e}` comparte la posición de su argumento (ambos en
+                    // `(el, ec)`); su hover solaparía —y taparía por menor `len`— al del propio `e`. Una
+                    // llamada escrita a mano nunca tiene el argumento en la misma columna que el callee.
+                    let wrapper_sintetico = args.len() == 1 && args[0].line == line && args[0].col == col;
+                    if hover_directo && self.gather && !name.starts_with("__") && !wrapper_sintetico {
                         let fn_ty = Type::Fn(arg_types.clone(), Box::new(t.clone()));
                         self.record_ident(line, col, name, &fn_ty, None);
                     }
@@ -6628,6 +6633,22 @@ fn main() -> int {
         // Hover de la **variante** `Rojo` (tras el `.`): su firma. `Color.Rojo` no tiene payload.
         let hv = idx.hovers.iter().find(|h| h.line == 5 && h.text == "Color.Rojo").expect("hover de Rojo");
         assert!(hv.col > he.col, "la variante va tras el enum: {} vs {}", hv.col, he.col);
+    }
+
+    #[test]
+    fn indice_semantico_hover_en_interpolacion() {
+        // El `to_string(e)` sintético de `${e}` comparte posición con `e`; su hover NO debe taparlo.
+        // Hover sobre `area` dentro de `${area(3.0)}` → la función, nunca `to_string`.
+        let src = "fn area(r: float) -> float { r * r }\nfn main() {\n  print(\"x: ${area(3.0)}\");\n}";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        let idx = semantic_index(&mut prog);
+        // En la línea 3, NINGÚN hover debe ser de `to_string` (el wrapper sintético se omite).
+        assert!(!idx.hovers.iter().any(|h| h.line == 3 && h.text.starts_with("to_string:")),
+            "el to_string sintético no registra hover");
+        // Y `area` sí tiene su hover de función.
+        assert!(idx.hovers.iter().any(|h| h.line == 3 && h.text == "area: fn(float) -> float"),
+            "hover de area en la interpolación");
     }
 
     #[test]

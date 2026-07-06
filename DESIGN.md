@@ -6247,5 +6247,14 @@ aceptar. En contexto de **método** (`recv.f`) se recorta el primer parámetro (
 muestran solo los argumentos que faltan (`s.split` → `(sep: string)`). `builtins::signature` se
 extendió a los builtins-método (string/array/map), con test-guardián. Bonus: la completion de archivo
 pasó a `parse_all` (recuperación) → ya no se queda **vacía** en archivos incompletos (el caso normal
-al teclear). Queda **M46b** (signature help cross-módulo, reusando `SigCtx`) y **M46c** (snippet con
-placeholders por parámetro).
+al teclear). Queda **M46c** (snippet con placeholders por parámetro).
+
+### 48.2 M46b — signature help cross-módulo y de métodos
+
+El signature help (`f(` → firma con el parámetro activo) usaba `find_fn_signature(buffer)`: solo
+funciones del archivo + builtins. Ahora usa el **`SigCtx`** de M46a → resuelve también funciones
+**importadas** (`u.cuadrado(`) y del **prelude** (`sort(`). Además distingue **método** de **llamada
+calificada de módulo**: `enclosing_call` devuelve el receptor; si es un **valor** (`p.doblar(`) se
+recorta el receptor y el `activeParameter` cuenta los args visibles (`(k: int)`); si es un **módulo**
+importado (`u.cuadrado(`, detectado con `es_modulo_importado`) se muestra la firma completa. Reusa
+todo M46a; cero runtime.

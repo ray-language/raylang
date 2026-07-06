@@ -1221,18 +1221,22 @@ fn collect_lets(block: &crate::ast::Block, cursor_line: usize, out: &mut Vec<Str
 fn signature_help_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     let Some(src) = docs.get(&uri) else { return Json::Null };
-    // 1. Hallar la llamada en curso: el nombre de función y cuántas comas la preceden (param activo).
-    let Some((name, activo)) = enclosing_call(src, line0, char0) else { return Json::Null };
-    // 2. Extraer la firma **textualmente** de la fuente. Es robusto ante el documento a medio
-    //    escribir (mientras tecleas los argumentos, el parse del archivo falla); solo necesita que
-    //    la *declaración* `fn nombre(...) -> ...` esté bien formada. Si no es una función del archivo,
-    //    se prueba con la firma fija de un **builtin** (`pow`/`sqrt`/…), que no vive en la fuente.
-    let Some((params, ret)) = find_fn_signature(src, &name).or_else(|| {
-        crate::builtins::signature(&name)
-            .map(|(ps, r)| (ps.iter().map(|p| p.to_string()).collect(), r.to_string()))
-    }) else {
-        return Json::Null;
-    };
+    // 1. Hallar la llamada en curso: el nombre, cuántas comas la preceden (param activo) y el receptor
+    //    si es una llamada por punto (`recv.m(`).
+    let Some((name, activo, receptor)) = enclosing_call(src, line0, char0) else { return Json::Null };
+    // 2. Resolver la firma con el resolutor unificado (M46b): buffer + módulos importados + prelude +
+    //    builtins. Textual → robusto ante el documento a medio escribir (solo exige que la
+    //    *declaración* `fn nombre(...) -> ...` esté bien formada). Así el signature help funciona
+    //    también para funciones importadas (`u.cuadrado(`) y del prelude, no solo las del archivo.
+    let ctx = SigCtx::nuevo(src, uri_to_path(&uri).as_deref());
+    let Some((mut params, ret)) = ctx.firma(&name) else { return Json::Null };
+    // En un **método** (`recv.m(args)` con `recv` un valor) el receptor es implícito → se recorta el
+    // primer parámetro para que el `activeParameter` (que cuenta los args visibles) case. Un receptor
+    // que es un **módulo** importado (`u.cuadrado(`) NO es un método: se muestra la firma completa.
+    let es_metodo = receptor.as_deref().is_some_and(|r| !es_modulo_importado(src, r));
+    if es_metodo && !params.is_empty() {
+        params.remove(0);
+    }
     // 3. Construir el label `fn nombre(p: T, …) -> R` y la lista de parámetros (para resaltar).
     let label = format!("fn {}({}) -> {}", name, params.join(", "), ret);
     let parametros: Vec<Json> = params.iter().map(|p| obj(vec![("label", Json::Str(p.clone()))])).collect();
@@ -1399,7 +1403,7 @@ fn split_top_commas(s: &str) -> Vec<String> {
 /// y el nº de comas de nivel superior antes del cursor (el índice del parámetro activo). Escanea el
 /// texto hasta el cursor hacia atrás contando paréntesis: el primer `(` sin cerrar abre la llamada
 /// actual, y el identificador inmediatamente anterior es su nombre.
-fn enclosing_call(src: &str, line0: usize, char0: usize) -> Option<(String, usize)> {
+fn enclosing_call(src: &str, line0: usize, char0: usize) -> Option<(String, usize, Option<String>)> {
     // Prefijo: todo el texto desde el inicio hasta el cursor.
     let mut prefijo = String::new();
     for (i, linea) in src.lines().enumerate() {
@@ -1416,7 +1420,7 @@ fn enclosing_call(src: &str, line0: usize, char0: usize) -> Option<(String, usiz
         i -= 1;
         match cs[i] {
             ')' => depth += 1,
-            '(' if depth == 0 => return ident_before(&cs, i).map(|n| (n, comas)),
+            '(' if depth == 0 => return ident_before(&cs, i).map(|(n, r)| (n, comas, r)),
             '(' => depth -= 1,
             ',' if depth == 0 => comas += 1,
             _ => {}
@@ -1425,8 +1429,11 @@ fn enclosing_call(src: &str, line0: usize, char0: usize) -> Option<(String, usiz
     None
 }
 
-/// El identificador que termina justo antes del índice `i` (saltando espacios). `None` si no lo hay.
-fn ident_before(cs: &[char], i: usize) -> Option<String> {
+/// El identificador que termina justo antes del índice `i` (saltando espacios), y —si es una llamada
+/// por **punto** (`recv.nombre`)— el **receptor** (`recv`). `None` (el receptor) si no hay `.`. Se usa
+/// para el signature help: si el receptor es un **valor** se recorta el primer parámetro (es un
+/// método); si es un **módulo** importado, no (llamada calificada, M46b).
+fn ident_before(cs: &[char], i: usize) -> Option<(String, Option<String>)> {
     let mut j = i;
     while j > 0 && cs[j - 1].is_whitespace() {
         j -= 1;
@@ -1443,7 +1450,38 @@ fn ident_before(cs: &[char], i: usize) -> Option<String> {
     if nombre.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         return None;
     }
-    Some(nombre)
+    // ¿Llamada por punto? El primer char no-espacio antes del nombre es un `.`; si lo hay, el
+    // identificador anterior es el receptor.
+    let mut k = j;
+    while k > 0 && cs[k - 1].is_whitespace() {
+        k -= 1;
+    }
+    let receptor = if k > 0 && cs[k - 1] == '.' {
+        let mut b = k - 1; // el `.`
+        while b > 0 && cs[b - 1].is_whitespace() {
+            b -= 1;
+        }
+        let rfin = b;
+        while b > 0 && is_ident_char(cs[b - 1]) {
+            b -= 1;
+        }
+        (b < rfin).then(|| cs[b..rfin].iter().collect::<String>())
+    } else {
+        None
+    };
+    Some((nombre, receptor))
+}
+
+/// ¿`name` es el **leaf** de algún `import` del archivo (un módulo calificable, no un valor)?
+/// (M46b: un `u.cuadrado(` no recorta el receptor, a diferencia de un método `p.doblar(`.)
+fn es_modulo_importado(src: &str, name: &str) -> bool {
+    lexer::lex(src)
+        .ok()
+        .map(|t| {
+            let (program, _) = parser::parse_all(t);
+            program.imports.iter().any(|d| d.leaf() == name)
+        })
+        .unwrap_or(false)
 }
 
 /// Lee un `Json::Num` como `usize` (las posiciones LSP son enteros).
@@ -2892,6 +2930,37 @@ mod tests {
         assert!(porleaf.contains(&"dibujar".to_string()), "leaf circulo.: {porleaf:?}");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn signature_help_metodos_y_prelude() {
+        // M46b: el signature help resuelve funciones del prelude y recorta el receptor en un método,
+        // pero NO en una llamada calificada de módulo (esa parte cross-módulo se cubre en el CLI).
+        let sig = |src: &str, line: usize, ch: usize| -> Option<(String, usize)> {
+            let mut docs = HashMap::new();
+            docs.insert("file:///t.ray".to_string(), src.to_string());
+            let msg = json::parse(&format!(
+                r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
+            )).unwrap();
+            let r = signature_help_result(&msg, &docs);
+            if r == Json::Null { return None; }
+            let label = r.get("signatures").and_then(|s| s.as_array()).and_then(|a| a.first())
+                .and_then(|s| s.get("label")).and_then(Json::as_str)?.to_string();
+            let activo = r.get("activeParameter").and_then(as_usize).unwrap_or(0);
+            Some((label, activo))
+        };
+        // Prelude: sort(.
+        assert_eq!(sig("fn main() -> int {\n    let xs = [3,1];\n    sort(\n}\n", 2, 9),
+                   Some(("fn sort(a: [T]) -> [T]".into(), 0)));
+        // Método: p.doblar( → receptor recortado, `(k: int)`.
+        let m = "struct P { x: int }\nfn doblar(p: P, k: int) -> int { p.x }\nfn main() -> int {\n    let p = P { x: 1 };\n    p.doblar(\n}\n";
+        assert_eq!(sig(m, 4, 13), Some(("fn doblar(k: int) -> int".into(), 0)));
+        // Función libre con una coma: doblar(1, → firma completa, param activo 1.
+        let libre = "fn doblar(p: int, k: int) -> int { p }\nfn main() -> int {\n    doblar(1, \n}\n";
+        assert_eq!(sig(libre, 2, 13), Some(("fn doblar(p: int, k: int) -> int".into(), 1)));
+        // Builtin: pow(.
+        assert_eq!(sig("fn main() -> int {\n    let x = pow(\n    0\n}\n", 1, 16),
+                   Some(("fn pow(base: float, exp: float) -> float".into(), 0)));
     }
 
     #[test]

@@ -216,7 +216,8 @@ Soporte de los archivos `.ray` en editores. Tiene dos mitades muy distintas:
     funciones y tipos), **find-references**, **rename**, **completion** (de archivo y por
     ámbito) y **signature help**. El checker pasó de *validador* a *consultable*
     (`semantic_index` recolecta un `SemanticIndex` antes de cualquier lowering).
-  - **M45** ✅ **completion de miembros** (`recv.` → campos/métodos/builtins/UFCS del tipo del
+  - **M45** ✅ **completion de miembros** (`recv.`, DESIGN §47) + **de imports** (`from M import …`
+    símbolos `pub`; `import …` rutas de módulo con encapsulación, DESIGN §47.2). El de miembros: campos/métodos/builtins/UFCS del tipo del
     receptor; DESIGN §47). Repara la fuente con un centinela (`recv.__raycomplete__;`) y consulta
     `checker::member_completion`; incluye los **builtins de string/array/map** y el orden superior
     del prelude (`map`/`filter`/`fold`/`sort`). Diferido: docs `///` de métodos de impl del usuario,

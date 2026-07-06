@@ -547,12 +547,45 @@ fn capsula_violada(roots: &[PathBuf], importer: &str, target: &str) -> Option<St
     None
 }
 
+/// Las **rutas de módulo importables** desde el archivo `entry`, para el completion de `import`
+/// (M45c-2). Recorre las `roots` (proyecto + dependencias), toma la identidad de cada `.ray`
+/// (`rel_module_name`) y **descarta** las que cruzarían el borde de una cápsula desde `entry`
+/// (`capsula_violada`) — así solo se ofrece lo que el checker aceptaría. Excluye la propia entrada y
+/// los puntos de entrada `main`. Ordenadas y sin duplicados.
+pub fn modulos_disponibles(roots: &[PathBuf], entry: &Path) -> Vec<String> {
+    let importer = roots.iter().find_map(|r| rel_module_name(entry, r));
+    let imp = importer.as_deref().unwrap_or("");
+    let mut set = std::collections::BTreeSet::new();
+    for root in roots {
+        recolectar_modulos(root, root, &mut set);
+    }
+    set.into_iter()
+        .filter(|m| m != imp && m != "main")
+        .filter(|m| capsula_violada(roots, imp, m).is_none())
+        .collect()
+}
+
+/// Recorre `dir` (bajo `root`) recolectando la identidad de módulo de cada `.ray` (recursivo).
+fn recolectar_modulos(dir: &Path, root: &Path, out: &mut std::collections::BTreeSet<String>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            recolectar_modulos(&p, root, out);
+        } else if p.extension().and_then(|s| s.to_str()) == Some("ray") {
+            if let Some(m) = rel_module_name(&p, root) {
+                out.insert(m);
+            }
+        }
+    }
+}
+
 /// Resuelve la **ruta de módulo** `dep` (p. ej. `geo/formas/circulo` o `geo`) a un archivo bajo
 /// `root` (M11.6a). Prueba primero `dep.ray` (módulo-archivo) y, si no, `dep/mod.ray` (módulo-
 /// directorio: el `mod.ray` *es* el módulo de identidad `dep`). Una sola forma canónica: si **ambos**
 /// existen, es ambiguo (error) —evita el lío histórico de `foo.rs`-vs-`foo/mod.rs`—. `None` si no
 /// existe ninguno.
-fn resolve_module_path(roots: &[PathBuf], dep: &str) -> Result<Option<PathBuf>, String> {
+pub fn resolve_module_path(roots: &[PathBuf], dep: &str) -> Result<Option<PathBuf>, String> {
     // Se prueban las raíces en orden (proyecto → caché de dependencias); la primera que resuelva
     // gana. La ambigüedad archivo-vs-directorio se comprueba **dentro** de cada raíz.
     for root in roots {

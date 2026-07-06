@@ -6200,3 +6200,24 @@ Sobre M45, cuatro mejoras a partir de casos reales:
 
 Sigue diferido: hover/def de métodos sobre el nombre (comparte `(línea,col)` con el receptor, sin
 spans) y el completion por ámbito de bloque (sin spans, el alcance es la función).
+
+### 47.2 M45c — completion en los `import`
+
+Extiende el completion a las líneas de `import` (antes caían al completion de archivo, inútil ahí).
+Detección de contexto textual (el import a medio escribir no parsea), como el `.` de M45.
+
+- **M45c-1 — símbolos de `from M import …`**: al detectar `[pub] from <ruta> import <cursor>`, se
+  resuelve `<ruta>` desde disco (`loader::resolve_module_path` sobre las raíces del proyecto), se
+  parsea y se ofrecen sus nombres **`pub`** (funciones/tipos/consts + re-exports `pub from`), con su
+  kind. Lo privado no aparece.
+- **M45c-2 — rutas de módulo** (`import <cursor>`, `from <cursor> import`): `loader::
+  modulos_disponibles` recorre las raíces recolectando la identidad de cada `.ray`
+  (`rel_module_name`) y **descarta las que cruzan el borde de una cápsula** desde el archivo actual
+  (`capsula_violada`) — solo se ofrece lo que el checker aceptaría (un `util/interno` de la cápsula
+  `util` no se ve desde fuera). Como las rutas llevan `/` (que VSCode no cuenta como carácter de
+  palabra), cada ítem usa un **`textEdit`** que cubre la ruta parcial entera → el fuzzy match del
+  editor funciona sobre `geo/for` y al aceptar reemplaza la ruta completa.
+
+Las raíces (proyecto con `main.ray` ancestro + caché `.ray-deps`) las dan `project_root_for`/
+`dep_roots_for`, reusadas de los diagnósticos modulares. Cliente-LSP + consultas al loader; cero
+runtime. Diferido: alias (`as`), y completar el nombre calificado `M.x` en expresiones.

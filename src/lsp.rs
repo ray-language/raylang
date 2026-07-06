@@ -785,6 +785,149 @@ fn def_global_name(program: &crate::ast::Program, line: usize, col: usize) -> Op
         .or_else(|| program.traits.iter().find(|t| en(t.line, t.col)).map(|t| t.name.clone()))
 }
 
+/// El contexto de import en el que está el cursor (M45c), detectado textualmente sobre el prefijo
+/// de la línea (el import a medio escribir no parsea).
+enum ImportCtx {
+    /// `from <ruta> import <cursor>` — completar los **símbolos `pub`** del módulo `<ruta>`.
+    Symbols(String),
+    /// `import <cursor>` / `from <cursor> import` — completar **rutas de módulo** del proyecto.
+    ModulePath,
+}
+
+/// Detecta el contexto de import a partir del prefijo de la línea hasta el cursor (M45c).
+/// Reconoce `import <ruta>`, `[pub] from <ruta> import <símbolos>` (y su fase de ruta). Devuelve
+/// `None` si la línea no es un import.
+fn import_context(prefijo: &str) -> Option<ImportCtx> {
+    let t = prefijo.trim_start();
+    // `from <ruta> import <símbolos>` (con o sin `pub`). Si ya apareció `import`, estamos en los símbolos.
+    let desde = t.strip_prefix("pub ").unwrap_or(t);
+    if let Some(rest) = desde.strip_prefix("from ") {
+        // ¿hay ya un `import ` (palabra) antes del cursor? Entonces completamos símbolos.
+        if let Some(pos) = rest.find(" import ").or_else(|| rest.strip_suffix(" import").map(|_| rest.len() - 7)) {
+            let ruta = rest[..pos].trim();
+            if !ruta.is_empty() {
+                return Some(ImportCtx::Symbols(ruta.to_string()));
+            }
+        }
+        // Aún en la ruta del módulo (`from ge|`).
+        return Some(ImportCtx::ModulePath);
+    }
+    // `import <ruta>` (sin `pub`).
+    if t.strip_prefix("import ").is_some() {
+        return Some(ImportCtx::ModulePath);
+    }
+    None
+}
+
+/// Las raíces de resolución de módulos para el archivo `entry` (M45c): la raíz del proyecto (si hay
+/// `main.ray` ancestro) seguida de las de dependencias (`.ray-deps`). Reusa la lógica de los
+/// diagnósticos modulares.
+fn import_roots(entry: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(root) = project_root_for(entry) {
+        roots.push(root);
+    }
+    roots.extend(dep_roots_for(entry));
+    roots
+}
+
+/// Los nombres **`pub`** exportados por el módulo en `ruta` (M45c-1): funciones, tipos (struct/enum/
+/// trait), constantes y re-exports (`pub from … import …`). Cada uno con su `CompletionItemKind`.
+/// `None` si el módulo no se resuelve o no parsea.
+fn simbolos_pub_de_modulo(entry: &Path, ruta: &str) -> Option<Vec<(String, i64)>> {
+    let roots = import_roots(entry);
+    let path = loader::resolve_module_path(&roots, ruta).ok()??;
+    let fuente = std::fs::read_to_string(&path).ok()?;
+    let tokens = lexer::lex(&fuente).ok()?;
+    let (program, _errs) = parser::parse_all(tokens);
+    let mut items: Vec<(String, i64)> = Vec::new();
+    // Kinds LSP: 3=Function, 22=Struct, 13=Enum, 8=Interface(trait), 21=Constant.
+    for f in &program.functions {
+        if f.is_pub { items.push((f.name.clone(), 3)); }
+    }
+    for s in &program.structs {
+        if s.is_pub { items.push((s.name.clone(), 22)); }
+    }
+    for e in &program.enums {
+        if e.is_pub { items.push((e.name.clone(), 13)); }
+    }
+    for tr in &program.traits {
+        if tr.is_pub { items.push((tr.name.clone(), 8)); }
+    }
+    for c in &program.consts {
+        if c.is_pub { items.push((c.name.clone(), 21)); }
+    }
+    // Re-exports: `pub from … import a [as b]` expone el nombre local (alias u original).
+    for fi in &program.from_imports {
+        if fi.is_pub {
+            for n in &fi.names {
+                items.push((n.local().to_string(), 3));
+            }
+        }
+    }
+    items.sort();
+    items.dedup();
+    Some(items)
+}
+
+/// Completion en un **import** (M45c): símbolos `pub` de `from M import …`. `None` si el cursor no
+/// está en un contexto de import completable (entonces se sigue con miembro/archivo). Las rutas de
+/// módulo (`import …`) se resuelven en `module_path_completion_items`.
+fn import_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<Json> {
+    let linea = src.split('\n').nth(line0)?;
+    let chars: Vec<char> = linea.chars().collect();
+    let col = char0.min(chars.len());
+    let prefijo: String = chars[..col].iter().collect();
+    let ctx = import_context(&prefijo)?;
+    let entry = uri.and_then(uri_to_path)?;
+    match ctx {
+        ImportCtx::Symbols(ruta) => {
+            let items = simbolos_pub_de_modulo(&entry, &ruta).unwrap_or_default();
+            let lista: Vec<Json> = items.into_iter()
+                .map(|(label, kind)| obj(vec![("label", Json::Str(label)), ("kind", num(kind))]))
+                .collect();
+            Some(Json::Arr(lista))
+        }
+        ImportCtx::ModulePath => {
+            let chars: Vec<char> = linea.chars().collect();
+            module_path_completion_items(&entry, line0, col, &chars)
+        }
+    }
+}
+
+/// Completion de **rutas de módulo** (M45c-2): `import <cursor>` / `from <cursor> import`. Ofrece las
+/// rutas importables del proyecto (`loader::modulos_disponibles`, con la encapsulación aplicada).
+///
+/// Las rutas llevan `/`, que VSCode no cuenta como carácter de palabra → filtrar `geo/for` contra
+/// `geo/formas/circulo` fallaría. Se resuelve con un **`textEdit`** cuyo rango cubre toda la ruta
+/// parcial (desde su primer carácter hasta el cursor): así el editor usa el texto completo `geo/for`
+/// para el *fuzzy match* contra `filterText`, y al aceptar reemplaza la ruta entera.
+fn module_path_completion_items(entry: &Path, line0: usize, col: usize, chars: &[char]) -> Option<Json> {
+    let roots = import_roots(entry);
+    if roots.is_empty() {
+        return Some(Json::Arr(vec![]));
+    }
+    // Inicio de la ruta parcial que se está escribiendo: el último tramo sin espacios antes del cursor.
+    let mut inicio = col;
+    while inicio > 0 && !chars[inicio - 1].is_whitespace() {
+        inicio -= 1;
+    }
+    let rango = obj(vec![
+        ("start", obj(vec![("line", num(line0 as i64)), ("character", num(inicio as i64))])),
+        ("end", obj(vec![("line", num(line0 as i64)), ("character", num(col as i64))])),
+    ]);
+    let items: Vec<Json> = loader::modulos_disponibles(&roots, entry)
+        .into_iter()
+        .map(|ruta| obj(vec![
+            ("label", Json::Str(ruta.clone())),
+            ("kind", num(9)), // 9 = Module
+            ("filterText", Json::Str(ruta.clone())),
+            ("textEdit", obj(vec![("range", rango.clone()), ("newText", Json::Str(ruta))])),
+        ]))
+        .collect();
+    Some(Json::Arr(items))
+}
+
 /// Completion de **miembros** (M45): si el cursor `(line0, char0)` (0-basados) está tras un `.`,
 /// devuelve `Some(items)` con los campos/métodos/builtins/UFCS del tipo del receptor; `None` si no
 /// es un contexto de miembro (entonces el llamador hace la completion de archivo). La lista puede
@@ -896,10 +1039,15 @@ fn es_ident_char(c: char) -> bool {
 fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
     let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
-    // M45: si el cursor viene tras un `.` (acceso a miembro), ofrecemos los miembros del tipo del
-    // receptor, no los símbolos de archivo. Un contexto de miembro con lista vacía (receptor sin
-    // tipo conocido) devuelve `[]` —mejor que inundar con todo el archivo tras un punto—.
     if let Some((line0, char0)) = pos_params(msg).map(|(_, l, c)| (l, c)) {
+        // M45c: en una línea de `import`/`from … import`, ofrecemos rutas de módulo o símbolos `pub`,
+        // no los símbolos de archivo.
+        if let Some(items) = import_completion_items(uri, src, line0, char0) {
+            return items;
+        }
+        // M45: si el cursor viene tras un `.` (acceso a miembro), ofrecemos los miembros del tipo del
+        // receptor, no los símbolos de archivo. Un contexto de miembro con lista vacía (receptor sin
+        // tipo conocido) devuelve `[]` —mejor que inundar con todo el archivo tras un punto—.
         if let Some(items) = member_completion_items(src, line0, char0, docs) {
             return items;
         }
@@ -2558,6 +2706,48 @@ mod tests {
         let col = linea.find("x.").unwrap() + 2; // tras el punto
         let labels = completion_labels(src, 2, col);
         assert!(labels.contains(&"len".to_string()) && labels.contains(&"push".to_string()), "en interpolación: {labels:?}");
+    }
+
+    #[test]
+    fn completion_de_import_simbolos_y_rutas() {
+        // M45c: crea un proyecto temporal en disco y comprueba el completion de import.
+        let base = std::env::temp_dir().join("ray_lsp_import_test");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("geo/formas")).unwrap();
+        std::fs::create_dir_all(base.join("util")).unwrap();
+        let w = |rel: &str, txt: &str| std::fs::write(base.join(rel), txt).unwrap();
+        w("main.ray", "fn main() -> int { 0 }\n");
+        w("geo.ray", "pub struct Circulo { r: int }\npub fn area(c: Circulo) -> int { c.r }\nfn interno() -> int { 0 }\n");
+        w("geo/formas/circulo.ray", "pub fn dibujar() -> int { 0 }\n");
+        w("util/mod.ray", "pub fn publico() -> int { 0 }\n"); // cápsula
+        w("util/interno.ray", "pub fn oculto() -> int { 0 }\n"); // interno a la cápsula
+
+        let uri = format!("file://{}/main.ray", base.display());
+        let labels = |linea: &str, ch: usize| -> Vec<String> {
+            let src = format!("{linea}\nfn main() -> int {{ 0 }}\n");
+            let mut docs = HashMap::new();
+            docs.insert(uri.clone(), src);
+            let msg = json::parse(&format!(
+                r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":0,"character":{ch}}}}}}}"#
+            )).unwrap();
+            completion_result(&msg, &docs).as_array().unwrap().iter()
+                .filter_map(|i| i.get("label").and_then(|l| l.as_str()).map(|s| s.to_string())).collect()
+        };
+
+        // from geo import <cursor> → símbolos `pub` (no `interno`).
+        let syms = labels("from geo import ", 16);
+        assert!(syms.contains(&"Circulo".to_string()) && syms.contains(&"area".to_string()), "pub de geo: {syms:?}");
+        assert!(!syms.contains(&"interno".to_string()), "no expone lo privado: {syms:?}");
+        assert!(!syms.contains(&"print".to_string()), "no cae al completion de archivo: {syms:?}");
+
+        // import <cursor> → rutas de módulo; la cápsula `util` sí, su interno NO.
+        let rutas = labels("import ", 7);
+        assert!(rutas.contains(&"geo".to_string()), "módulo geo: {rutas:?}");
+        assert!(rutas.contains(&"geo/formas/circulo".to_string()), "ruta de directorios: {rutas:?}");
+        assert!(rutas.contains(&"util".to_string()), "la cápsula util: {rutas:?}");
+        assert!(!rutas.contains(&"util/interno".to_string()), "el interno de la cápsula queda oculto: {rutas:?}");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

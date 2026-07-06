@@ -1091,10 +1091,26 @@ fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
         })
         .collect();
     let _ = docs;
-    // M45c-3: si no hay miembros de valor y el receptor es el **leaf de un `import`** (`import geo/util
-    // as u;` → `u.`), ofrecemos los símbolos `pub` de ESE módulo (acceso calificado). Va después del
-    // intento de valor, así un local que tape al módulo (el resolutor prefiere el local) gana.
+    // Sin miembros de valor, el receptor puede ser un TIPO o un MÓDULO (van tras el intento de valor,
+    // así un local que los tape gana, como en el resolutor):
     if items.is_empty() {
+        // (a) un ENUM (`Orientacion.` → sus variantes; kind 20 = EnumMember). Las variantes con
+        //     payload insertan placeholders por el tipo de cada campo.
+        if let Some(variantes) = ctx.enum_variantes(&receptor) {
+            let vis: Vec<Json> = variantes.iter().map(|v| {
+                let mut campos = vec![("label", Json::Str(v.name.clone())), ("kind", num(20))];
+                if !v.payload.is_empty() {
+                    let args = v.payload.iter().enumerate()
+                        .map(|(i, t)| format!("${{{}:{}}}", i + 1, t))
+                        .collect::<Vec<_>>().join(", ");
+                    campos.push(("insertText", Json::Str(format!("{}({})", v.name, args))));
+                    campos.push(("insertTextFormat", num(2)));
+                }
+                obj(campos)
+            }).collect();
+            return Some(Json::Arr(vis));
+        }
+        // (b) el **leaf de un `import`** (`import geo/util as u;` → `u.` accede calificado a sus `pub`).
         if let Some(mods) = module_alias_symbols(uri, src, &receptor) {
             return Some(mods);
         }
@@ -1181,6 +1197,30 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     ] {
         items.push((kw.to_string(), 14));
     }
+    // M46: símbolos que NO viven en este archivo pero están en ámbito — el **nombre de cada módulo
+    // importado** (`import figuras;` → `figuras`, kind 9=Module) y los **`from`-imports** (`cuad`/
+    // `area`/`Rect`/`Orientacion`), clasificados en su módulo origen (fn/struct/enum/trait).
+    let entry_path = uri.and_then(uri_to_path);
+    for d in &program.imports {
+        items.push((d.leaf().to_string(), 9));
+    }
+    if let Some(entry) = &entry_path {
+        let roots = import_roots(entry);
+        let mut cache: HashMap<String, Option<String>> = HashMap::new();
+        for fi in &program.from_imports {
+            let origen = cache.entry(fi.module.clone()).or_insert_with(|| {
+                loader::resolve_module_path(&roots, &fi.module).ok().flatten()
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+            }).clone();
+            for n in &fi.names {
+                let kind = origen.as_deref()
+                    .and_then(|s| clasificar_simbolo_de_fuente(s, &n.name))
+                    .map(|(k, _)| k)
+                    .unwrap_or(3);
+                items.push((n.local().to_string(), kind));
+            }
+        }
+    }
     // M10.2f: completion **por ámbito** — los parámetros y locales (let/var) de la función que
     // contiene el cursor, declarados en o antes de su línea. Kind 6 = Variable. Sin spans no se
     // distinguen bloques anidados; basta el alcance de la función (degradación honesta).
@@ -1191,7 +1231,7 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     }
     items.sort();
     items.dedup();
-    let ctx = SigCtx::nuevo(src, uri.and_then(uri_to_path).as_deref()); // M46a: firmas para el detalle
+    let ctx = SigCtx::nuevo(src, entry_path.as_deref()); // M46a: firmas para el detalle
     let lista: Vec<Json> = items.into_iter()
         .map(|(label, kind)| {
             // Documentación del ítem: metadatos del builtin, o los `///` del prelude.
@@ -1375,6 +1415,16 @@ struct SigCtx {
     fuentes: Vec<String>,
 }
 
+/// Las rutas de módulo que `src` importa o reexporta (`import M;` / `[pub] from M import …`), para
+/// el cierre transitivo de `SigCtx`.
+fn rutas_importadas(src: &str) -> Vec<String> {
+    let Ok(tokens) = lexer::lex(src) else { return Vec::new() };
+    let (program, _) = parser::parse_all(tokens);
+    let mut rutas: Vec<String> = program.imports.iter().map(|d| d.module.clone()).collect();
+    rutas.extend(program.from_imports.iter().map(|f| f.module.clone()));
+    rutas
+}
+
 impl SigCtx {
     /// Construye el contexto para `entry` con buffer `src`: buffer + fuentes de los módulos que
     /// importa (`import`/`from`) + prelude.
@@ -1382,23 +1432,40 @@ impl SigCtx {
         let mut fuentes = vec![src.to_string()];
         if let Some(entry) = entry {
             let roots = import_roots(entry);
-            if let Ok(tokens) = lexer::lex(src) {
-                let (program, _) = parser::parse_all(tokens);
-                let mut rutas: Vec<String> = program.imports.iter().map(|d| d.module.clone()).collect();
-                rutas.extend(program.from_imports.iter().map(|f| f.module.clone()));
-                rutas.sort();
-                rutas.dedup();
-                for r in rutas {
-                    if let Ok(Some(path)) = loader::resolve_module_path(&roots, &r) {
-                        if let Ok(fuente) = std::fs::read_to_string(&path) {
-                            fuentes.push(fuente);
-                        }
+            // Cierre TRANSITIVO de imports (BFS): además de los módulos que el archivo importa, se
+            // siguen los que ELLOS importan/reexportan. Necesario para las cápsulas: `import geo;`
+            // trae `geo/mod.ray`, cuya `pub from geo/formas/circulo import area` apunta a la
+            // definición real de `area` en `circulo.ray` — que así también entra al contexto.
+            let mut visitados: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut cola: Vec<String> = rutas_importadas(src);
+            while let Some(r) = cola.pop() {
+                if !visitados.insert(r.clone()) {
+                    continue;
+                }
+                if let Ok(Some(path)) = loader::resolve_module_path(&roots, &r) {
+                    if let Ok(fuente) = std::fs::read_to_string(&path) {
+                        cola.extend(rutas_importadas(&fuente));
+                        fuentes.push(fuente);
                     }
                 }
             }
         }
         fuentes.push(crate::prelude::SOURCE.to_string());
         SigCtx { fuentes }
+    }
+
+    /// Las variantes del enum `name` (completion `Enum.`), buscándolo en las fuentes del contexto
+    /// (buffer + módulos importados/reexportados). `None` si no hay un enum con ese nombre.
+    fn enum_variantes(&self, name: &str) -> Option<Vec<crate::ast::VariantDef>> {
+        for fuente in &self.fuentes {
+            if let Ok(tokens) = lexer::lex(fuente) {
+                let (program, _) = parser::parse_all(tokens);
+                if let Some(e) = program.enums.iter().find(|e| e.name == name) {
+                    return Some(e.variants.clone());
+                }
+            }
+        }
+        None
     }
 
     /// La firma `(params_con_nombre, retorno)` de `name`: builtin, o la primera declaración `fn name`
@@ -3023,6 +3090,42 @@ mod tests {
         let saludar = it(&items, "saludar").expect("re-export saludar");
         assert_eq!(saludar.get("insertText").and_then(Json::as_str), Some("saludar(${1:nombre}, ${2:veces})"),
                    "firma del re-export resuelta en el módulo origen + placeholders");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn completion_simbolos_importados_y_variantes_de_enum() {
+        // Proyecto: un módulo `figuras` con una función `pub`, un struct y un enum; el archivo de
+        // entrada los importa.
+        let base = std::env::temp_dir().join("ray_lsp_import_syms_test");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("main.ray"), "fn main() -> int { 0 }\n").unwrap();
+        std::fs::write(base.join("figuras.ray"),
+            "pub fn area(a: int, b: int) -> int { a * b }\npub struct Rect { ancho: int }\npub enum Orientacion { Horizontal, Vertical }\n").unwrap();
+        let uri = format!("file://{}/main.ray", base.display());
+        let items = |cuerpo: &str, line: usize, ch: usize| -> Vec<(String, i64)> {
+            let src = format!("import figuras;\nfrom figuras import Orientacion, area;\nfn main() -> int {{\n{cuerpo}\n0\n}}\n");
+            let mut docs = HashMap::new();
+            docs.insert(uri.clone(), src);
+            let msg = json::parse(&format!(
+                r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":{line},"character":{ch}}}}}}}"#
+            )).unwrap();
+            completion_result(&msg, &docs).as_array().unwrap().iter()
+                .filter_map(|i| Some((i.get("label")?.as_str()?.to_string(), as_usize(i.get("kind")?)? as i64)))
+                .collect()
+        };
+        // Completion de archivo: el nombre de módulo `figuras` (kind 9) y los from-imports.
+        let arch = items("    x", 3, 5);
+        assert!(arch.iter().any(|(l, k)| l == "figuras" && *k == 9), "módulo figuras (kind Module): {arch:?}");
+        assert!(arch.iter().any(|(l, _)| l == "Orientacion"), "from-import Orientacion: {arch:?}");
+        assert!(arch.iter().any(|(l, _)| l == "area"), "from-import area: {arch:?}");
+        // `Orientacion.` → sus variantes (kind 20 = EnumMember).
+        let vars = items("    Orientacion.", 3, 16);
+        assert!(vars.iter().any(|(l, k)| l == "Horizontal" && *k == 20), "variante Horizontal: {vars:?}");
+        assert!(vars.iter().any(|(l, _)| l == "Vertical"), "variante Vertical: {vars:?}");
+        assert!(!vars.iter().any(|(l, _)| l == "figuras"), "tras el punto NO sale la completion de archivo: {vars:?}");
 
         let _ = std::fs::remove_dir_all(&base);
     }

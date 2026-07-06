@@ -257,11 +257,11 @@ fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 /// Descripción breve (Markdown) de un tipo genérico incorporado o del prelude, para el hover.
 fn doc_tipo_incorporado(name: &str) -> Option<&'static str> {
     Some(match name {
-        "Channel" => "`Channel<T>` — canal tipado para comunicar fibras (CSP). Se crea con `channel()` / `channel(n)`; se usa con `send`, `recv`, `close`, `select`.",
-        "Task" => "`Task<T>` — el resultado en curso de un `spawn(f)`. `join(t)` bloquea hasta que la tarea termina y devuelve su valor.",
-        "Map" => "`Map<K, V>` — diccionario de claves hashables a valores. `map_new()`, `insert`, `get`, `remove`, `keys`, `values`, `contains_key`, `len`.",
-        "Option" => "`Option<T>` — un valor opcional: `Some(T)` o `None`. raylang no tiene `null`.",
-        "Result" => "`Result<T, E>` — el resultado de una operación falible: `Ok(T)` o `Err(E)`. Se propaga con `?`.",
+        "Channel" => "`Channel<T>` — a typed channel for communicating between fibers (CSP). Created with `channel()` / `channel(n)`; used with `send`, `recv`, `close`, `select`.",
+        "Task" => "`Task<T>` — the in-progress result of a `spawn(f)`. `join(t)` blocks until the task finishes and returns its value.",
+        "Map" => "`Map<K, V>` — a dictionary from hashable keys to values. `map_new()`, `insert`, `get`, `remove`, `keys`, `values`, `contains_key`, `len`.",
+        "Option" => "`Option<T>` — an optional value: `Some(T)` or `None`. raylang has no `null`.",
+        "Result" => "`Result<T, E>` — the result of a fallible operation: `Ok(T)` or `Err(E)`. Propagated with `?`.",
         _ => return None,
     })
 }

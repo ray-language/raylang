@@ -21,10 +21,17 @@ use crate::ast::{EnumDef, Function, StructDef, TraitDef};
 pub const SOURCE: &str = r#"
 /// An optional value: `Some(T)` when present, `None` when absent.
 /// raylang has no null; use `Option` to model a possibly-missing value.
-enum Option<T> { Some(T), None }
+enum Option<T> {
+    Some(T),
+    None,
+}
+
 /// The result of a fallible operation: `Ok(T)` on success, `Err(E)` with the error value on failure.
 /// Works with the `?` operator to propagate errors.
-enum Result<T, E> { Ok(T), Err(E) }
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
 
 // Igualdad estructural (M10.1). `@derive(Eq)` genera el `impl` para un struct/enum.
 // Usa `Self` en posición de argumento, así que no es invocable sobre un `dyn Eq`
@@ -51,10 +58,22 @@ trait Ord {
     /// Returns true when `self` orders strictly before `otro`.
     fn menor(self, otro: Self) -> bool;
 }
-impl Ord for int { fn menor(self, otro: int) -> bool { self < otro } }
-impl Ord for float { fn menor(self, otro: float) -> bool { self < otro } }
-impl Ord for string { fn menor(self, otro: string) -> bool { self < otro } }
-impl Ord for char { fn menor(self, otro: char) -> bool { self < otro } }
+
+impl Ord for int {
+    fn menor(self, otro: int) -> bool { self < otro }
+}
+
+impl Ord for float {
+    fn menor(self, otro: float) -> bool { self < otro }
+}
+
+impl Ord for string {
+    fn menor(self, otro: string) -> bool { self < otro }
+}
+
+impl Ord for char {
+    fn menor(self, otro: char) -> bool { self < otro }
+}
 
 // Longitud (M48.4): número de elementos/caracteres/entradas/octetos de una colección. Los tipos
 // incorporados lo implementan vía el primitivo `__len` (mismo opcode que el antiguo builtin `len`);
@@ -64,10 +83,22 @@ trait Len {
     /// Returns the length of `self`.
     fn len(self) -> int;
 }
-impl Len for string { fn len(self) -> int { __len(self) } }
-impl<T> Len for [T] { fn len(self) -> int { __len(self) } }
-impl<K, V> Len for Map<K, V> { fn len(self) -> int { __len(self) } }
-impl Len for bytes { fn len(self) -> int { __len(self) } }
+
+impl Len for string {
+    fn len(self) -> int { __len(self) }
+}
+
+impl<T> Len for [T] {
+    fn len(self) -> int { __len(self) }
+}
+
+impl<K, V> Len for Map<K, V> {
+    fn len(self) -> int { __len(self) }
+}
+
+impl Len for bytes {
+    fn len(self) -> int { __len(self) }
+}
 
 // Agregar al final (M48.4b): añade un elemento a una colección, mutándola. Los arreglos lo
 // implementan vía `__push`; un tipo del usuario (una pila, una cola…) puede implementarlo.
@@ -76,7 +107,10 @@ trait Push<T> {
     /// Appends `x` to the end of `self`.
     fn push(self, x: T);
 }
-impl<T> Push<T> for [T] { fn push(self, x: T) { __push(self, x) } }
+
+impl<T> Push<T> for [T] {
+    fn push(self, x: T) { __push(self, x) }
+}
 
 // Invertir (M48.4b): devuelve una nueva colección con los elementos en orden inverso.
 /// Returns a copy of `self` with its elements in reverse order.
@@ -84,7 +118,10 @@ trait Reverse {
     /// Returns `self` reversed.
     fn reverse(self) -> Self;
 }
-impl<T> Reverse for [T] { fn reverse(self) -> [T] { __reverse(self) } }
+
+impl<T> Reverse for [T] {
+    fn reverse(self) -> [T] { __reverse(self) }
+}
 
 // Pertenencia/subcadena (M48.4b): ¿`self` contiene `x`? En un string/bytes es subcadena; en un
 // arreglo, pertenencia por igualdad. Un solo trait genérico (se acepta la conflación).
@@ -93,8 +130,14 @@ trait Contains<T> {
     /// Returns true when `self` contains `x`.
     fn contains(self, x: T) -> bool;
 }
-impl Contains<string> for string { fn contains(self, x: string) -> bool { __contains(self, x) } }
-impl<T> Contains<T> for [T] { fn contains(self, x: T) -> bool { __contains(self, x) } }
+
+impl Contains<string> for string {
+    fn contains(self, x: string) -> bool { __contains(self, x) }
+}
+
+impl<T> Contains<T> for [T] {
+    fn contains(self, x: T) -> bool { __contains(self, x) }
+}
 
 // Operaciones de Map (M48.4c): insertar, consultar la clave y listar claves/valores. Un solo impl
 // (Map<K,V>); agrupadas en un trait porque son específicas de Map. `get`/`remove` (que devuelven
@@ -110,10 +153,14 @@ trait MapOps<K, V> {
     /// The values, in the same order as `keys()`.
     fn values(self) -> [V];
 }
+
 impl<K, V> MapOps<K, V> for Map<K, V> {
     fn insert(self, k: K, v: V) { __insert(self, k, v) }
+
     fn contains_key(self, k: K) -> bool { __contains_key(self, k) }
+
     fn keys(self) -> [K] { __keys(self) }
+
     fn values(self) -> [V] { __values(self) }
 }
 
@@ -145,17 +192,28 @@ trait StrOps {
     /// The UTF-8 encoding of the string.
     fn to_bytes(self) -> bytes;
 }
+
 impl StrOps for string {
     fn trim(self) -> string { __trim(self) }
+
     fn split(self, sep: string) -> [string] { __split(self, sep) }
+
     fn replace(self, de: string, a: string) -> string { __replace(self, de, a) }
+
     fn chars(self) -> [char] { __chars(self) }
+
     fn starts_with(self, prefijo: string) -> bool { __starts_with(self, prefijo) }
+
     fn ends_with(self, sufijo: string) -> bool { __ends_with(self, sufijo) }
+
     fn to_upper(self) -> string { __to_upper(self) }
+
     fn to_lower(self) -> string { __to_lower(self) }
+
     fn substring(self, inicio: int, fin: int) -> string { __substring(self, inicio, fin) }
+
     fn repeat(self, veces: int) -> string { __repeat(self, veces) }
+
     fn to_bytes(self) -> bytes { __to_bytes(self) }
 }
 
@@ -165,6 +223,7 @@ trait BytesOps {
     /// The byte slice `[inicio, fin)` by octet index (clamped).
     fn sub_bytes(self, inicio: int, fin: int) -> bytes;
 }
+
 impl BytesOps for bytes {
     fn sub_bytes(self, inicio: int, fin: int) -> bytes { __sub_bytes(self, inicio, fin) }
 }
@@ -175,16 +234,30 @@ impl BytesOps for bytes {
 // `float` NO es hashable (como en `Map`): un struct con campo float no puede derivar Hash.
 /// Hashes a value to an `int`. Derivable with `@derive(Hash)`; consumed by the hash-based `Set`.
 /// `float` is not hashable.
-trait Hash { fn hash(self) -> int; }
-impl Hash for int { fn hash(self) -> int { self } }
-impl Hash for bool { fn hash(self) -> int { if (self) { 1 } else { 0 } } }
-impl Hash for char { fn hash(self) -> int { char_code(self) } }
+trait Hash {
+    fn hash(self) -> int;
+}
+
+impl Hash for int {
+    fn hash(self) -> int { self }
+}
+
+impl Hash for bool {
+    fn hash(self) -> int {
+        if (self) { 1 } else { 0 }
+    }
+}
+
+impl Hash for char {
+    fn hash(self) -> int { char_code(self) }
+}
+
 impl Hash for string {
     fn hash(self) -> int {
         var h = 17;
-        let cs = chars(self);
+        let cs = self.chars();
         var i = 0;
-        while (i < len(cs)) {
+        while (i < cs.len()) {
             h = h * 31 + char_code(cs[i]);
             i = i + 1;
         }
@@ -198,7 +271,9 @@ impl Hash for string {
 // `Result<_, E2>`, si hay `impl From<E1> for E2` el error se convierte automáticamente.
 /// Conversion from a value of type `S` into `Self`, via the associated function `desde`.
 /// The `?` operator uses it to auto-convert error types when an `impl From<E1> for E2` exists.
-trait From<S> { fn desde(origen: S) -> Self; }
+trait From<S> {
+    fn desde(origen: S) -> Self;
+}
 
 // Iteración (M40.2): un tipo que implemente `Iterator<T>` produce una secuencia de `T` — `next`
 // devuelve `Some(elemento)` y avanza el cursor, o `None` cuando se agota. Habilita `for x in it`
@@ -222,27 +297,34 @@ trait Iterator<T> {
     /// Nothing is computed until the result is consumed.
     fn map<U>(self, f: fn(T) -> U) -> Iter<U> {
         Iter { paso: fn() -> Option<U> {
-            match (self.next()) {
-                Option.Some(x) => Option.Some(f(x)),
-                Option.None => Option.None,
-            }
-        } }
+    match (self.next()) {
+        Option.Some(x) => Option.Some(f(x)),
+        Option.None => Option.None,
+    }
+} }
     }
     // Conserva solo los elementos que cumplen `pred`, perezosamente. Avanza el iterador de origen
     // hasta el próximo que pasa el filtro (o `None` si se agota).
     /// Lazily keeps only the elements for which `pred` returns true.
     fn filter(self, pred: fn(T) -> bool) -> Iter<T> {
         Iter { paso: fn() -> Option<T> {
-            var res: Option<T> = Option.None;
-            var seguir = true;
-            while (seguir) {
-                match (self.next()) {
-                    Option.Some(x) => { if (pred(x)) { res = Option.Some(x); seguir = false; } },
-                    Option.None => { seguir = false; },
+    var res: Option<T> = Option.None;
+    var seguir = true;
+    while (seguir) {
+        match (self.next()) {
+            Option.Some(x) => {
+                if (pred(x)) {
+                    res = Option.Some(x);
+                    seguir = false;
                 }
-            }
-            res
-        } }
+            },
+            Option.None => {
+                seguir = false;
+            },
+        }
+    }
+    res
+} }
     }
     // Perezoso: entrega a lo sumo los primeros `n` elementos, luego se agota. Corta la cadena sin
     // consumir el resto del origen (útil sobre iteradores infinitos/largos).
@@ -250,13 +332,13 @@ trait Iterator<T> {
     fn take(self, n: int) -> Iter<T> {
         var restantes = n;
         Iter { paso: fn() -> Option<T> {
-            if (restantes <= 0) {
-                Option.None
-            } else {
-                restantes = restantes - 1;
-                self.next()
-            }
-        } }
+    if (restantes <= 0) {
+        Option.None
+    } else {
+        restantes = restantes - 1;
+        self.next()
+    }
+} }
     }
     // Perezoso: descarta los primeros `n` elementos y entrega el resto. El descarte ocurre en la
     // primera llamada a `next` (el contador capturado se agota una vez).
@@ -264,12 +346,12 @@ trait Iterator<T> {
     fn skip(self, n: int) -> Iter<T> {
         var saltar = n;
         Iter { paso: fn() -> Option<T> {
-            while (saltar > 0) {
-                saltar = saltar - 1;
-                self.next();
-            }
-            self.next()
-        } }
+    while (saltar > 0) {
+        saltar = saltar - 1;
+        self.next();
+    }
+    self.next()
+} }
     }
     // Perezoso: empareja este iterador con `otra` posición a posición en tuplas `(T, U)`; se agota
     // cuando cualquiera de los dos lo hace. `otra` ha de ser un `Iter<U>` (los adaptadores devuelven
@@ -278,14 +360,14 @@ trait Iterator<T> {
     /// stops as soon as either side is exhausted.
     fn zip<U>(self, otra: Iter<U>) -> Iter<(T, U)> {
         Iter { paso: fn() -> Option<(T, U)> {
-            match (self.next()) {
-                Option.Some(a) => match (otra.next()) {
-                    Option.Some(b) => Option.Some((a, b)),
-                    Option.None => Option.None,
-                },
-                Option.None => Option.None,
-            }
-        } }
+    match (self.next()) {
+        Option.Some(a) => match (otra.next()) {
+            Option.Some(b) => Option.Some((a, b)),
+            Option.None => Option.None,
+        },
+        Option.None => Option.None,
+    }
+} }
     }
     // Perezoso: empareja cada elemento con su índice (0, 1, 2, …) en una tupla `(int, T)`. Consúmelo
     // destructurando: `for par in it.enumerate() { let (i, x) = par; … }`.
@@ -293,15 +375,15 @@ trait Iterator<T> {
     fn enumerate(self) -> Iter<(int, T)> {
         var i = 0;
         Iter { paso: fn() -> Option<(int, T)> {
-            match (self.next()) {
-                Option.Some(x) => {
-                    let par = (i, x);
-                    i = i + 1;
-                    Option.Some(par)
-                },
-                Option.None => Option.None,
-            }
-        } }
+    match (self.next()) {
+        Option.Some(x) => {
+            let par = (i, x);
+            i = i + 1;
+            Option.Some(par)
+        },
+        Option.None => Option.None,
+    }
+} }
     }
     // TERMINAL: reduce el iterador a un único valor, acumulando de izquierda a derecha desde `init`.
     // A diferencia de map/filter, consume el iterador aquí mismo (no es perezoso). Método genérico
@@ -313,8 +395,12 @@ trait Iterator<T> {
         var seguir = true;
         while (seguir) {
             match (self.next()) {
-                Option.Some(x) => { acc = f(acc, x); },
-                Option.None => { seguir = false; },
+                Option.Some(x) => {
+                    acc = f(acc, x);
+                },
+                Option.None => {
+                    seguir = false;
+                },
             }
         }
         acc
@@ -327,8 +413,12 @@ trait Iterator<T> {
         var seguir = true;
         while (seguir) {
             match (self.next()) {
-                Option.Some(x) => { push(out, x); },
-                Option.None => { seguir = false; },
+                Option.Some(x) => {
+                    out.push(x);
+                },
+                Option.None => {
+                    seguir = false;
+                },
             }
         }
         out
@@ -342,9 +432,12 @@ trait Iterator<T> {
 // estado (posición, cursor) vive en variables capturadas por el closure (mutadas por referencia).
 /// A first-class iterator: a closure `paso` that returns the next element or `None`.
 /// `iter`, `range` and all the adapters (`map`, `filter`, ...) produce this same type.
-struct Iter<T> { paso: fn() -> Option<T> }
+struct Iter<T> {
+    paso: fn() -> Option<T>,
+}
+
 impl<T> Iterator<T> for Iter<T> {
-    fn next(self) -> Option<T> { (self.paso)() }
+    fn next(self) -> Option<T> { self.paso() }
 }
 
 // Iterador sobre los elementos del arreglo, en orden. `xs.iter()` == `iter(xs)` (UFCS).
@@ -352,14 +445,14 @@ impl<T> Iterator<T> for Iter<T> {
 fn iter<T>(xs: [T]) -> Iter<T> {
     var i = 0;
     Iter { paso: fn() -> Option<T> {
-        if (i < len(xs)) {
-            let v = xs[i];
-            i = i + 1;
-            Option.Some(v)
-        } else {
-            Option.None
-        }
-    } }
+    if (i < xs.len()) {
+        let v = xs[i];
+        i = i + 1;
+        Option.Some(v)
+    } else {
+        Option.None
+    }
+} }
 }
 
 // Iterador sobre los enteros de `desde` (inclusivo) a `hasta` (exclusivo) — el `a..b` del `for`,
@@ -368,14 +461,14 @@ fn iter<T>(xs: [T]) -> Iter<T> {
 fn range(desde: int, hasta: int) -> Iter<int> {
     var i = desde;
     Iter { paso: fn() -> Option<int> {
-        if (i < hasta) {
-            let v = i;
-            i = i + 1;
-            Option.Some(v)
-        } else {
-            Option.None
-        }
-    } }
+    if (i < hasta) {
+        let v = i;
+        i = i + 1;
+        Option.Some(v)
+    } else {
+        Option.None
+    }
+} }
 }
 
 // TERMINAL: suma los elementos de un iterador de enteros (`it.sum()` vía UFCS). Es función libre —no
@@ -393,7 +486,10 @@ fn sum(it: Iter<int>) -> int {
 // el tipo esperado (inferencia bidireccional en la llamada, M40.3b). Nº de buckets fijo (sin resize aún).
 /// A hash set of `T`, backed by buckets. `T` must implement `Hash` and `Eq`.
 /// Operate on it with the `set_*` functions (`set_add`, `set_has`, `set_remove`, ...).
-struct Set<T> { buckets: [[T]], tam: int }
+struct Set<T> {
+    buckets: [[T]],
+    tam: int,
+}
 
 /// Creates an empty set. The element type is fixed by the expected type at the call site.
 fn set_new<T>() -> Set<T> {
@@ -401,7 +497,7 @@ fn set_new<T>() -> Set<T> {
     var i = 0;
     while (i < 16) {
         var e: [T] = [];
-        push(bs, e);
+        bs.push(e);
         i = i + 1;
     }
     Set { buckets: bs, tam: 0 }
@@ -411,15 +507,17 @@ fn set_new<T>() -> Set<T> {
 /// Internal helper: bucket index for `x` (hash modulo `n`, normalized to be non-negative).
 fn set_bucket<T: Hash>(x: T, n: int) -> int {
     let h = x.hash();
-    ((h % n) + n) % n
+    (h % n + n) % n
 }
 
 // ¿Está `x` en el bucket `b`? Búsqueda lineal por igualdad (`Eq`).
 /// Internal helper: linear search for `x` in bucket `b` using `Eq`; true if present.
 fn set_en_bucket<T: Eq>(b: [T], x: T) -> bool {
     var i = 0;
-    while (i < len(b)) {
-        if (b[i].igual(x)) { return true; }
+    while (i < b.len()) {
+        if (b[i].igual(x)) {
+            return true;
+        }
         i = i + 1;
     }
     false
@@ -428,10 +526,10 @@ fn set_en_bucket<T: Eq>(b: [T], x: T) -> bool {
 // Añade `x` al conjunto (si no estaba ya). Muta `s`.
 /// Adds `x` to the set if it is not already present. Mutates `s`.
 fn set_add<T: Hash + Eq>(s: Set<T>, x: T) {
-    let idx = set_bucket(x, len(s.buckets));
+    let idx = set_bucket(x, s.buckets.len());
     let b = s.buckets[idx];
     if (!set_en_bucket(b, x)) {
-        push(b, x);
+        b.push(x);
         s.tam = s.tam + 1;
     }
 }
@@ -439,20 +537,24 @@ fn set_add<T: Hash + Eq>(s: Set<T>, x: T) {
 // ¿Pertenece `x` al conjunto?
 /// Returns true if `x` is a member of the set.
 fn set_has<T: Hash + Eq>(s: Set<T>, x: T) -> bool {
-    let idx = set_bucket(x, len(s.buckets));
+    let idx = set_bucket(x, s.buckets.len());
     set_en_bucket(s.buckets[idx], x)
 }
 
 // Quita `x` del conjunto (si estaba). Muta `s` reconstruyendo el bucket sin `x`.
 /// Removes `x` from the set if present. Mutates `s`.
 fn set_remove<T: Hash + Eq>(s: Set<T>, x: T) {
-    let idx = set_bucket(x, len(s.buckets));
+    let idx = set_bucket(x, s.buckets.len());
     let b = s.buckets[idx];
     var nuevo: [T] = [];
     var i = 0;
     var quitado = false;
-    while (i < len(b)) {
-        if (b[i].igual(x)) { quitado = true; } else { push(nuevo, b[i]); }
+    while (i < b.len()) {
+        if (b[i].igual(x)) {
+            quitado = true;
+        } else {
+            nuevo.push(b[i]);
+        }
         i = i + 1;
     }
     if (quitado) {
@@ -466,14 +568,18 @@ fn set_remove<T: Hash + Eq>(s: Set<T>, x: T) {
 // bucle (cada `+` copia todo lo acumulado). Prefijo `sb_` (para no chocar con `push`). UFCS: `sb.sb_push(s)`.
 /// Accumulates string chunks and joins them once at the end, avoiding the O(n²) cost of
 /// repeated `+` concatenation in a loop. Operate on it with the `sb_*` functions.
-struct StringBuilder { partes: [string] }
+struct StringBuilder {
+    partes: [string],
+}
 
 /// Creates an empty StringBuilder.
 fn sb_new() -> StringBuilder { StringBuilder { partes: [] } }
 
 // Añade un trozo al final (O(1) amortizado; no copia lo ya acumulado).
 /// Appends a chunk to the builder (amortized O(1); does not copy what is already accumulated).
-fn sb_push(sb: StringBuilder, s: string) { push(sb.partes, s); }
+fn sb_push(sb: StringBuilder, s: string) {
+    sb.partes.push(s);
+}
 
 // Une todo lo acumulado en un solo string (O(total), una vez).
 /// Joins all accumulated chunks into a single string (O(total), done once).
@@ -481,7 +587,7 @@ fn sb_build(sb: StringBuilder) -> string { join(sb.partes, "") }
 
 // Número de trozos acumulados (no de caracteres).
 /// Returns the number of accumulated chunks (not characters).
-fn sb_count(sb: StringBuilder) -> int { len(sb.partes) }
+fn sb_count(sb: StringBuilder) -> int { sb.partes.len() }
 
 // --- Cola doble: Deque<T> (M40.3d) ---
 // Respaldada por un arreglo + un índice `head` (los elementos vivos son `datos[head..]`). Así
@@ -490,7 +596,10 @@ fn sb_count(sb: StringBuilder) -> int { len(sb.partes) }
 // vacía). `deque_new()` es un constructor vacío (T lo fija el contexto, M40.3b). Prefijo `deque_`.
 /// A double-ended queue backed by an array plus a `head` index; `push_back`, `pop_front` and
 /// `pop_back` are O(1). Operate on it with the `deque_*` functions.
-struct Deque<T> { datos: [T], head: int }
+struct Deque<T> {
+    datos: [T],
+    head: int,
+}
 
 /// Creates an empty deque. The element type is fixed by the expected type at the call site.
 fn deque_new<T>() -> Deque<T> {
@@ -500,18 +609,21 @@ fn deque_new<T>() -> Deque<T> {
 
 // Número de elementos vivos.
 /// Returns the number of live elements in the deque.
-fn deque_len<T>(d: Deque<T>) -> int { len(d.datos) - d.head }
+fn deque_len<T>(d: Deque<T>) -> int { d.datos.len() - d.head }
+
 /// Returns true if the deque has no elements.
 fn deque_is_empty<T>(d: Deque<T>) -> bool { deque_len(d) == 0 }
 
 // Encola por detrás (O(1) amortizado).
 /// Appends `x` at the back of the deque (amortized O(1)).
-fn deque_push_back<T>(d: Deque<T>, x: T) { push(d.datos, x); }
+fn deque_push_back<T>(d: Deque<T>, x: T) {
+    d.datos.push(x);
+}
 
 // Desencola por delante; None si vacía (O(1): solo avanza `head`).
 /// Removes and returns the front element, or `None` if the deque is empty (O(1)).
 fn deque_pop_front<T>(d: Deque<T>) -> Option<T> {
-    if (d.head < len(d.datos)) {
+    if (d.head < d.datos.len()) {
         let v = d.datos[d.head];
         d.head = d.head + 1;
         Option.Some(v)
@@ -523,7 +635,7 @@ fn deque_pop_front<T>(d: Deque<T>) -> Option<T> {
 // Desencola por detrás; None si vacía.
 /// Removes and returns the back element, or `None` if the deque is empty.
 fn deque_pop_back<T>(d: Deque<T>) -> Option<T> {
-    if (len(d.datos) > d.head) { pop(d.datos) } else { Option.None }
+    if (d.datos.len() > d.head) { pop(d.datos) } else { Option.None }
 }
 
 // Encola por delante (O(1) si hay hueco; si no, reconstruye O(n)).
@@ -534,9 +646,12 @@ fn deque_push_front<T>(d: Deque<T>, x: T) {
         d.datos[d.head] = x;
     } else {
         var nuevo: [T] = [];
-        push(nuevo, x);
+        nuevo.push(x);
         var i = d.head;
-        while (i < len(d.datos)) { push(nuevo, d.datos[i]); i = i + 1; }
+        while (i < d.datos.len()) {
+            nuevo.push(d.datos[i]);
+            i = i + 1;
+        }
         d.datos = nuevo;
         d.head = 0;
     }
@@ -545,7 +660,7 @@ fn deque_push_front<T>(d: Deque<T>, x: T) {
 // Mira el frente sin desencolar; None si vacía.
 /// Returns the front element without removing it, or `None` if the deque is empty.
 fn deque_peek_front<T>(d: Deque<T>) -> Option<T> {
-    if (d.head < len(d.datos)) { Option.Some(d.datos[d.head]) } else { Option.None }
+    if (d.head < d.datos.len()) { Option.Some(d.datos[d.head]) } else { Option.None }
 }
 
 // Número de elementos del conjunto.
@@ -557,10 +672,13 @@ fn set_size<T>(s: Set<T>) -> int { s.tam }
 fn set_items<T>(s: Set<T>) -> [T] {
     var out: [T] = [];
     var i = 0;
-    while (i < len(s.buckets)) {
+    while (i < s.buckets.len()) {
         let b = s.buckets[i];
         var j = 0;
-        while (j < len(b)) { push(out, b[j]); j = j + 1; }
+        while (j < b.len()) {
+            out.push(b[j]);
+            j = j + 1;
+        }
         i = i + 1;
     }
     out
@@ -569,29 +687,72 @@ fn set_items<T>(s: Set<T>) -> [T] {
 // Traits de sobrecarga de operadores (M28.1): un tipo que implemente estos traits puede usar los
 // operadores aritméticos. El checker baja `a + b` (con `a`/`b` de un tipo de usuario) a `a.add(b)`.
 /// Operator overloading: `a + b` on a user type dispatches to `a.add(b)`.
-trait Add { fn add(self, otro: Self) -> Self; }
+trait Add {
+    fn add(self, otro: Self) -> Self;
+}
+
 /// Operator overloading: `a - b` on a user type dispatches to `a.sub(b)`.
-trait Sub { fn sub(self, otro: Self) -> Self; }
+trait Sub {
+    fn sub(self, otro: Self) -> Self;
+}
+
 /// Operator overloading: `a * b` on a user type dispatches to `a.mul(b)`.
-trait Mul { fn mul(self, otro: Self) -> Self; }
+trait Mul {
+    fn mul(self, otro: Self) -> Self;
+}
+
 /// Operator overloading: `a / b` on a user type dispatches to `a.div(b)`.
-trait Div { fn div(self, otro: Self) -> Self; }
+trait Div {
+    fn div(self, otro: Self) -> Self;
+}
+
 /// Operator overloading: unary `-a` on a user type dispatches to `a.neg()`.
-trait Neg { fn neg(self) -> Self; }
+trait Neg {
+    fn neg(self) -> Self;
+}
 
 // Eq/Show para los primitivos (M13.2a): los habilita `assert_eq` (que pide `T: Eq + Show`) y, en
 // general, cualquier genérico acotado por Eq/Show sobre un primitivo. Vía `==` y `to_string`, que
 // ya operan sobre int/float/bool/string/char. (Un tipo del usuario los obtiene con `@derive`.)
-impl Eq for int { fn igual(self, otro: int) -> bool { self == otro } }
-impl Eq for float { fn igual(self, otro: float) -> bool { self == otro } }
-impl Eq for string { fn igual(self, otro: string) -> bool { self == otro } }
-impl Eq for bool { fn igual(self, otro: bool) -> bool { self == otro } }
-impl Eq for char { fn igual(self, otro: char) -> bool { self == otro } }
-impl Show for int { fn mostrar(self) -> string { to_string(self) } }
-impl Show for float { fn mostrar(self) -> string { to_string(self) } }
-impl Show for string { fn mostrar(self) -> string { to_string(self) } }
-impl Show for bool { fn mostrar(self) -> string { to_string(self) } }
-impl Show for char { fn mostrar(self) -> string { to_string(self) } }
+impl Eq for int {
+    fn igual(self, otro: int) -> bool { self == otro }
+}
+
+impl Eq for float {
+    fn igual(self, otro: float) -> bool { self == otro }
+}
+
+impl Eq for string {
+    fn igual(self, otro: string) -> bool { self == otro }
+}
+
+impl Eq for bool {
+    fn igual(self, otro: bool) -> bool { self == otro }
+}
+
+impl Eq for char {
+    fn igual(self, otro: char) -> bool { self == otro }
+}
+
+impl Show for int {
+    fn mostrar(self) -> string { to_string(self) }
+}
+
+impl Show for float {
+    fn mostrar(self) -> string { to_string(self) }
+}
+
+impl Show for string {
+    fn mostrar(self) -> string { to_string(self) }
+}
+
+impl Show for bool {
+    fn mostrar(self) -> string { to_string(self) }
+}
+
+impl Show for char {
+    fn mostrar(self) -> string { to_string(self) }
+}
 
 // Ordena ascendente, devolviendo un arreglo NUEVO (insertion sort). `T` debe implementar `Ord`;
 // el bound se baja a paso de diccionarios (M9.2), así que `sort` es front-end puro (cero opcodes).
@@ -599,10 +760,10 @@ impl Show for char { fn mostrar(self) -> string { to_string(self) } }
 fn sort<T: Ord>(a: [T]) -> [T] {
     var out: [T] = [];
     var i: int = 0;
-    while (i < len(a)) {
+    while (i < a.len()) {
         let x: T = a[i];
-        push(out, x);
-        var j: int = len(out) - 1;
+        out.push(x);
+        var j: int = out.len() - 1;
         while (j > 0 && x.menor(out[j - 1])) {
             out[j] = out[j - 1];
             j = j - 1;
@@ -617,31 +778,31 @@ fn sort<T: Ord>(a: [T]) -> [T] {
 // `get` envuelve el primitivo `__map_get` (que devuelve [V]) en un Option, como los demás
 // envoltorios. Las claves son hashables (int/string/char/bool); el checker lo garantiza al
 // instanciar K. `map_new`/`insert`/`contains_key`/`len` son builtins (operan directo).
-
 // Valor asociado a la clave `k`, o None si no está.
 /// Returns the value associated with key `k` in the map, or `None` if the key is absent.
 fn get<K, V>(m: Map<K, V>, k: K) -> Option<V> {
     let r = __map_get(m, k);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // M13.1b: quita la clave `k` del mapa y devuelve su valor (None si no estaba).
 /// Removes key `k` from the map and returns its value, or `None` if it was not present.
 fn remove<K, V>(m: Map<K, V>, k: K) -> Option<V> {
     let r = __map_remove(m, k);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // --- Aserciones (M13.2a) ---
 // Sobre el primitivo `panic` (el único toque de runtime). No hay sobrecarga, así que en vez de
 // `assert(cond)` y `assert(cond, msg)` se ofrece `assert(cond)` (mensaje genérico), `assert_eq`
 // (mensaje detallado con los valores) y, para un mensaje a medida, `panic("...")` directo.
-
 // Falla con un mensaje genérico si la condición no se cumple.
 /// Panics with a generic message if the condition is false.
 /// For a custom message, call `panic("...")` directly.
 fn assert(cond: bool) {
-    if (!cond) { panic("aserción falló"); }
+    if (!cond) {
+        panic("aserción falló");
+    }
 }
 
 // Falla mostrando ambos valores si no son iguales. `T` debe ser Eq (comparar) y Show (mostrar);
@@ -662,7 +823,6 @@ fn assert_eq<T: Eq + Show>(a: T, b: T) {
 // cuerpos, `iter(xs)` es un `Iter<T>`, así que `.map`/`.filter`/`.fold` resuelven al MÉTODO del trait
 // (campo→método→UFCS), nunca a estas funciones libres. Cara eager (materializa) vs. cara lazy
 // (`xs.iter().map(f).filter(g).collect()`, fusiona sin arreglos intermedios): ver el libro, m40/iteradores.
-
 // Aplica `f` a cada elemento, devolviendo un arreglo nuevo con los resultados.
 /// Applies `f` to each element of the array and returns a new array with the results (eager).
 fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
@@ -684,19 +844,18 @@ fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A {
 // --- I/O (M11.2): envoltorios sobre primitivos builtin que devuelven [T] (vacío/único) ---
 // El runtime no sabe de Option: los primitivos devuelven un arreglo de 0 o 1 elementos y aquí,
 // en raylang, se traducen a Option con Some/None corrientes (el patrón de la stdlib, M7.3).
-
 // Parsea un entero; None si el texto no es un entero válido.
 /// Parses a string as an integer; `None` if the text is not a valid integer.
 fn parse_int(s: string) -> Option<int> {
     let r = __parse_int(s);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // Parsea un flotante; None si el texto no es un flotante válido (M14).
 /// Parses a string as a float; `None` if the text is not a valid float.
 fn parse_float(s: string) -> Option<float> {
     let r = __parse_float(s);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // Ed25519 (M43.3, cripto de producción vía ring). La semilla privada es de 32 octetos; None si no lo es.
@@ -705,7 +864,7 @@ fn parse_float(s: string) -> Option<float> {
 /// `None` if the seed is not exactly 32 bytes.
 fn ed25519_public_key(seed: bytes) -> Option<bytes> {
     let r = __ed25519_public_key(seed);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // Firma (64 octetos) de msg con la semilla. Determinista (RFC 8032). None si la semilla no mide 32.
@@ -713,7 +872,7 @@ fn ed25519_public_key(seed: bytes) -> Option<bytes> {
 /// signature (RFC 8032); `None` if the seed is not exactly 32 bytes.
 fn ed25519_sign(seed: bytes, msg: bytes) -> Option<bytes> {
     let r = __ed25519_sign(seed, msg);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // ChaCha20-Poly1305 AEAD (M43.4). Clave de 32 octetos, nonce de 12. seal → texto_cifrado||etiqueta;
@@ -722,7 +881,7 @@ fn ed25519_sign(seed: bytes, msg: bytes) -> Option<bytes> {
 /// The key must be 32 bytes and the nonce 12; `None` if the sizes are wrong.
 fn chacha20poly1305_seal(key: bytes, nonce: bytes, aad: bytes, plaintext: bytes) -> Option<bytes> {
     let r = __chacha20poly1305_seal(key, nonce, aad, plaintext);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // open verifica y descifra; None si la autenticación falla (dato manipulado) o los tamaños no cuadran.
@@ -730,14 +889,14 @@ fn chacha20poly1305_seal(key: bytes, nonce: bytes, aad: bytes, plaintext: bytes)
 /// `None` if authentication fails (tampered data) or the sizes are wrong.
 fn chacha20poly1305_open(key: bytes, nonce: bytes, aad: bytes, ciphertext: bytes) -> Option<bytes> {
     let r = __chacha20poly1305_open(key, nonce, aad, ciphertext);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // Lee una línea de stdin (sin el salto de línea); None en fin de entrada (EOF).
 /// Reads one line from stdin (without the trailing newline); `None` on end of input (EOF).
 fn input() -> Option<string> {
     let r = __read_line();
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // Lee una línea y la parsea como entero; None en EOF o si no es un entero.
@@ -753,40 +912,39 @@ fn read_int() -> Option<int> {
 /// closed and empty. Blocks while the channel is empty and open. VM only.
 fn recv<T>(ch: Channel<T>) -> Option<T> {
     let r = __recv(ch);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // Valor de una variable de entorno; None si no está definida.
 /// Returns the value of an environment variable, or `None` if it is not set.
 fn env(nombre: string) -> Option<string> {
     let r = __env(nombre);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // M11.7a: índice (de carácter) de la primera ocurrencia de `sub` en `s`; None si no aparece.
 /// Returns the character index of the first occurrence of `sub` in `s`, or `None` if absent.
 fn index_of(s: string, sub: string) -> Option<int> {
     let r = __index_of(s, sub);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // M11.7b: quita y devuelve el último elemento del arreglo (lo muta); None si está vacío.
 /// Removes and returns the last element of the array (mutating it), or `None` if it is empty.
 fn pop<T>(a: [T]) -> Option<T> {
     let r = __pop(a);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // M11.7b: índice de la primera ocurrencia de `x` en el arreglo; None si no aparece.
 /// Returns the index of the first occurrence of `x` in the array, or `None` if absent.
 fn position<T>(a: [T], x: T) -> Option<int> {
     let r = __position(a, x);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // --- Archivos (M11.2c): el primitivo devuelve un arreglo ETIQUETADO (primer elemento "ok"/"err");
 // aquí se traduce a Result. Así el runtime tampoco sabe de Result (como con Option). ---
-
 // Lee el archivo completo; Ok(contenido) u Err(mensaje del sistema).
 /// Reads the whole file as a string; `Ok(contents)` or `Err(system error message)`.
 fn read_file(ruta: string) -> Result<string, string> {
@@ -819,7 +977,7 @@ fn read_file_bytes(ruta: string) -> Result<bytes, string> {
 /// Writes raw bytes to the file (creating or overwriting it); `Ok(byte count)` or `Err(message)`.
 fn write_file_bytes(ruta: string, datos: bytes) -> Result<int, string> {
     let r = __write_file_bytes(ruta, datos);
-    if (r[0] == "ok") { Result.Ok(len(datos)) } else { Result.Err(r[1]) }
+    if (r[0] == "ok") { Result.Ok(datos.len()) } else { Result.Err(r[1]) }
 }
 
 /// Performs one raw read from the socket; `Ok(bytes)` (empty = EOF) or `Err(message)`.
@@ -838,21 +996,21 @@ fn socket_read_bytes(h: int) -> Result<bytes, string> {
 /// Writes raw bytes to the socket; `Ok(byte count)` or `Err(message)`.
 fn socket_write_bytes(h: int, datos: bytes) -> Result<int, string> {
     let r = __socket_write_bytes(h, datos);
-    if (r[0] == "ok") { Result.Ok(len(datos)) } else { Result.Err(r[1]) }
+    if (r[0] == "ok") { Result.Ok(datos.len()) } else { Result.Err(r[1]) }
 }
 
 // Escribe el contenido en el archivo (lo crea/sobrescribe); Ok(nº de caracteres) u Err(mensaje).
 /// Writes the string to the file (creating or overwriting it); `Ok(character count)` or `Err(message)`.
 fn write_file(ruta: string, contenido: string) -> Result<int, string> {
     let r = __write_file(ruta, contenido);
-    if (r[0] == "ok") { Result.Ok(len(contenido)) } else { Result.Err(r[1]) }
+    if (r[0] == "ok") { Result.Ok(contenido.len()) } else { Result.Err(r[1]) }
 }
 
 // Añade el contenido al final del archivo (lo crea si no existe); Ok(nº de caracteres) u Err(mensaje).
 /// Appends the string to the end of the file (creating it if needed); `Ok(character count)` or `Err(message)`.
 fn append_file(ruta: string, contenido: string) -> Result<int, string> {
     let r = __append_file(ruta, contenido);
-    if (r[0] == "ok") { Result.Ok(len(contenido)) } else { Result.Err(r[1]) }
+    if (r[0] == "ok") { Result.Ok(contenido.len()) } else { Result.Err(r[1]) }
 }
 
 // M11.7c: borra un archivo; Ok(0) u Err(mensaje del sistema).
@@ -870,7 +1028,10 @@ fn list_dir(ruta: string) -> Result<[string], string> {
     if (r[0] == "ok") {
         var nombres: [string] = [];
         var i = 1;
-        while (i < len(r)) { push(nombres, r[i]); i = i + 1; }
+        while (i < r.len()) {
+            nombres.push(r[i]);
+            i = i + 1;
+        }
         Result.Ok(nombres)
     } else {
         Result.Err(r[1])
@@ -878,7 +1039,6 @@ fn list_dir(ruta: string) -> Result<[string], string> {
 }
 
 // --- I/O con buffering: handles de archivo (M11.8). open/read_line/write/close. ---
-
 // Abre un archivo (modo "r"/"w"/"a") y devuelve un handle (int); Err(mensaje) si falla.
 /// Opens a file in mode "r" (read), "w" (write) or "a" (append) and returns a
 /// buffered handle; `Ok(handle)` or `Err(message)`. Close it with `close(h)`.
@@ -899,18 +1059,17 @@ fn open(ruta: string, modo: string) -> Result<int, string> {
 /// (or on a handle that is not open for reading).
 fn read_line(h: int) -> Option<string> {
     let r = __read_line_handle(h);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // Escribe en el handle; Ok(nº de caracteres) u Err(mensaje).
 /// Writes the string to the file handle; `Ok(character count)` or `Err(message)`.
 fn write(h: int, s: string) -> Result<int, string> {
     let r = __write_handle(h, s);
-    if (r[0] == "ok") { Result.Ok(len(s)) } else { Result.Err(r[1]) }
+    if (r[0] == "ok") { Result.Ok(s.len()) } else { Result.Err(r[1]) }
 }
 
 // --- Cliente TCP (M15.2). Sobre los primitivos __tcp_connect/__socket_read/__socket_write. ---
-
 // Conecta a host:port (resuelve el nombre); Ok(handle) u Err(mensaje).
 /// Opens a TCP connection to host:port (resolving the host name); `Ok(socket handle)` or `Err(message)`.
 fn tcp_connect(host: string, port: int) -> Result<int, string> {
@@ -983,11 +1142,10 @@ fn socket_read(h: int) -> Result<string, string> {
 /// Writes the string to the socket; `Ok(byte count)` or `Err(message)`.
 fn socket_write(h: int, s: string) -> Result<int, string> {
     let r = __socket_write(h, s);
-    if (r[0] == "ok") { Result.Ok(len(s)) } else { Result.Err(r[1]) }
+    if (r[0] == "ok") { Result.Ok(s.len()) } else { Result.Err(r[1]) }
 }
 
 // --- Servidor TCP (M15.3). Sobre __tcp_listen/__tcp_accept. ---
-
 // Escucha en host:port (port=0 → puerto efímero); Ok(handle de escucha) u Err(mensaje).
 /// Listens for TCP connections on host:port (port 0 picks an ephemeral port);
 /// `Ok(listener handle)` or `Err(message)`.

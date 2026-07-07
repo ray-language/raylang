@@ -1477,6 +1477,21 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "codemod auxiliar (M48.4e-3): migra el archivo en RAY_MIGRATE_FILE (p. ej. el prelude extraído)"]
+    fn migrar_archivo_env() {
+        let path = std::env::var("RAY_MIGRATE_FILE").expect("RAY_MIGRATE_FILE");
+        let src = std::fs::read_to_string(&path).expect("lee");
+        let tokens = crate::lexer::lex(&src).unwrap_or_else(|e| panic!("lex: {e}"));
+        let mut program = crate::parser::parse(tokens).unwrap_or_else(|e| panic!("parse: {e}"));
+        let mut n = 0;
+        cm_program(&mut program, &mut n);
+        let mut cur = Cur::new(&src, &program);
+        let out = format_program(&program, &mut cur);
+        std::fs::write(&path, &out).expect("escribe");
+        println!("{n} sitios migrados en {path}");
+    }
+
+    #[test]
     #[ignore = "codemod de un solo uso (M48.4e-2); corre con --ignored"]
     fn migrar_builtins_prefijos() {
         let root = env!("CARGO_MANIFEST_DIR");

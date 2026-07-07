@@ -20,6 +20,7 @@
 /// (`src/stdlib.rs` → `../std/…`).
 const MODULOS: &[(&str, &str)] = &[
     // Utilidades escritas para la stdlib (viven en `std/`).
+    ("std/fs", include_str!("../std/fs.ray")), // M50.1
     ("std/math", include_str!("../std/math.ray")),
     ("std/random", include_str!("../std/random.ray")), // M49.2a
     ("std/time", include_str!("../std/time.ray")), // M49.2b

@@ -116,6 +116,7 @@ fn args_y_env_en_ambos_motores() {
 }
 
 const FILE_PROG: &str = r#"
+import std/fs;
 fn cuerpo(r: Result<string, string>) -> string {
   match (r) {
     Result.Ok(s) => s,
@@ -124,12 +125,12 @@ fn cuerpo(r: Result<string, string>) -> string {
 }
 fn main() -> int {
   let ruta = args()[0];
-  match (write_file(ruta, "hola\nmundo")) {
+  match (fs.write_file(ruta, "hola\nmundo")) {
     Result.Ok(n) => print("escritos:" + n.to_string()),
     Result.Err(e) => print("err:" + e),
   }
-  print(cuerpo(read_file(ruta)));
-  match (read_file(ruta + ".noexiste")) {
+  print(cuerpo(fs.read_file(ruta)));
+  match (fs.read_file(ruta + ".noexiste")) {
     Result.Ok(_) => print("inesperado"),
     Result.Err(_) => print("err-al-leer-inexistente"),
   }
@@ -164,15 +165,16 @@ fn read_write_file_ida_y_vuelta_en_ambos_motores() {
 }
 
 const APPEND_PROG: &str = r#"
+import std/fs;
 fn n_de(r: Result<int, string>) -> int {
   match (r) { Result.Ok(n) => n, Result.Err(e) => 0 - 1, }
 }
 fn main() -> int {
   let ruta = args()[0];
-  print(if (exists(ruta)) { "existe" } else { "no-existe" });   // no-existe
-  let a = n_de(append_file(ruta, "uno\n"));
-  let b = n_de(append_file(ruta, "dos\n"));
-  print(if (exists(ruta)) { "existe" } else { "no-existe" });   // existe
+  print(if (fs.exists(ruta)) { "existe" } else { "no-existe" });   // no-existe
+  let a = n_de(fs.append_file(ruta, "uno\n"));
+  let b = n_de(fs.append_file(ruta, "dos\n"));
+  print(if (fs.exists(ruta)) { "existe" } else { "no-existe" });   // existe
   a + b
 }
 "#;
@@ -232,16 +234,17 @@ fn list_dir_y_remove_file_en_ambos_motores() {
         let d = dir.to_string_lossy().replace('\\', "/");
 
         let src = format!(r#"
+import std/fs;
 fn main() -> int {{
-  match (list_dir("{d}")) {{
+  match (fs.list_dir("{d}")) {{
     Result.Ok(ns) => print(join(ns, ",")),
     Result.Err(e) => print("err: " + e),
   }}
-  match (remove_file("{d}/a.txt")) {{
+  match (fs.remove_file("{d}/a.txt")) {{
     Result.Ok(_) => print("borrado"),
     Result.Err(e) => print("err: " + e),
   }}
-  match (list_dir("{d}")) {{
+  match (fs.list_dir("{d}")) {{
     Result.Ok(ns) => ns.len(),
     Result.Err(_) => 0 - 1,
   }}
@@ -271,21 +274,22 @@ fn handles_de_archivo_open_write_read_close() {
         let f = dir.join("out.txt").to_string_lossy().replace('\\', "/");
 
         let src = format!(r#"
+import std/fs;
 fn main() -> int {{
-  match (open("{f}", "w")) {{
+  match (fs.open("{f}", "w")) {{
     Result.Ok(h) => {{
-      write(h, "uno\n");
-      write(h, "dos\n");
+      fs.write(h, "uno\n");
+      fs.write(h, "dos\n");
       close(h);
     }},
     Result.Err(e) => print("err: " + e),
   }}
   var total: int = 0;
-  match (open("{f}", "r")) {{
+  match (fs.open("{f}", "r")) {{
     Result.Ok(h) => {{
-      match (read_line(h)) {{ Option.Some(l) => print("L1=" + l), Option.None => print("vacio"), }}
-      match (read_line(h)) {{ Option.Some(l) => print("L2=" + l), Option.None => print("vacio"), }}
-      match (read_line(h)) {{ Option.Some(l) => print("hay mas"), Option.None => print("EOF"), }}
+      match (fs.read_line(h)) {{ Option.Some(l) => print("L1=" + l), Option.None => print("vacio"), }}
+      match (fs.read_line(h)) {{ Option.Some(l) => print("L2=" + l), Option.None => print("vacio"), }}
+      match (fs.read_line(h)) {{ Option.Some(l) => print("hay mas"), Option.None => print("EOF"), }}
       close(h);
       total = 2;
     }},
@@ -315,8 +319,9 @@ fn open_de_archivo_inexistente_da_err() {
     let mut path = std::env::temp_dir();
     path.push("ray_open_err.ray");
     let src = r#"
+import std/fs;
 fn main() -> int {
-  match (open("/no/existe/para/nada.txt", "r")) {
+  match (fs.open("/no/existe/para/nada.txt", "r")) {
     Result.Ok(h) => 0,
     Result.Err(e) => 1,
   }

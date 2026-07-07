@@ -1348,8 +1348,8 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
-            // M11.4b: ¿existe la ruta? (total, no falla).
-            "exists" => match &values[0] {
+            // M11.4b (M50.1: __x): ¿existe la ruta? (total, no falla).
+            "__exists" => match &values[0] {
                 Value::Str(path) => Value::Bool(std::path::Path::new(path).exists()),
                 _ => unreachable!("el checker garantiza un string"),
             },

@@ -26,13 +26,14 @@ fn archivo_binario_round_trip() {
         let dat = std::env::temp_dir().join(format!("ray_bin_{}.dat", if vm { "vm" } else { "in" }));
         let src = format!(
             r#"
+import std/fs;
 fn main() -> int {{
     let datos: bytes = b"RAY\x00\xff\x01\x02bin";
-    match (write_file_bytes("{ruta}", datos)) {{
+    match (fs.write_file_bytes("{ruta}", datos)) {{
         Result.Ok(n) => print(to_string(n)),
         Result.Err(e) => {{ eprint(e); return 1; }},
     }};
-    match (read_file_bytes("{ruta}")) {{
+    match (fs.read_file_bytes("{ruta}")) {{
         Result.Ok(leido) => {{
             print(to_string(leido.len()));
             if (leido == datos) {{ print("identico") }} else {{ print("CORRUPTO") }}

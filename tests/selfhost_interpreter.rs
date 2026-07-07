@@ -451,16 +451,17 @@ fn assert_y_sort() {
 
 #[test]
 fn io_de_archivos() {
-    // M14.6d: write_file/read_file (Result, vía __write_file/__read_file etiquetados) + exists (bool).
+    // M14.6d (M50.1: fs → std/fs; el oráculo es pre-loader → usa los primitivos __x directamente):
+    // __write_file/__read_file (arreglo etiquetado [string]) + __exists (bool).
     // Determinista para el oráculo conductual: ambos pipelines escriben el MISMO contenido a un
     // temporal y lo releen → mismo stdout. (args/input/env quedan diferidos: no deterministas o
     // divergentes entre los dos pipelines.)
     comparar_fuente(
         "fn main() -> int { \
-            match (write_file(\"/tmp/raylang_d_oraculo.txt\", \"abc\\ndef\")) { Result.Ok(n) => print(n), Result.Err(e) => print(e) } \
-            match (read_file(\"/tmp/raylang_d_oraculo.txt\")) { Result.Ok(s) => print(s), Result.Err(e) => print(e) } \
-            match (read_file(\"/tmp/raylang_d_no_existe_zzz.txt\")) { Result.Ok(s) => print(s), Result.Err(_) => print(\"ERR\") } \
-            print(exists(\"/tmp/raylang_d_oraculo.txt\")); print(exists(\"/tmp/raylang_d_no_existe_zzz.txt\")); \
+            let w = __write_file(\"/tmp/raylang_d_oraculo.txt\", \"abc\\ndef\"); print(w[0]) \
+            let r = __read_file(\"/tmp/raylang_d_oraculo.txt\"); if (r[0] == \"ok\") { print(r[1]) } else { print(\"ERR\") } \
+            let r2 = __read_file(\"/tmp/raylang_d_no_existe_zzz.txt\"); if (r2[0] == \"ok\") { print(r2[1]) } else { print(\"ERR\") } \
+            print(__exists(\"/tmp/raylang_d_oraculo.txt\")); print(__exists(\"/tmp/raylang_d_no_existe_zzz.txt\")); \
             0 \
         }",
         "in_io.ray",

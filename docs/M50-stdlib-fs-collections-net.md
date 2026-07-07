@@ -58,6 +58,15 @@ TCP/TLS/UDP/sockets → `net.X`. Es el grupo mayor pero acotado.
 - Uso: **~15 archivos** (el stack web: `http`/`websocket`/`webserver`/`redis`/`dns`/… en examples +
   packages). **Ninguno embebido usa red** → sin embebido-importa-embebido; migración directa.
 
+## Principio de organización de la stdlib (general)
+
+Cuando un `std/X` **tenga conflictos de nombres** (dentro de un módulo sin sobrecarga) **o agrupe muchos
+conceptos**, se organiza en **submódulos** (`std/X/a`, `std/X/b`, leaf-binding M11.5 → `a.fn()`) o en una
+**cápsula** (`std/X/mod.ray` que reexporta una cara pública y encapsula los internos). Reusa los mecanismos
+que ya existen (directorios + std embebida por match exacto de nombre); cero maquinaria nueva. `std/
+collections/{set,deque,stringbuilder}` es el primer caso. Vale para futuros `std/` (p. ej. `std/net/{tcp,
+tls,udp}` si conviene, o una cápsula `std/net` que los reexporte).
+
 ## Mecanismo y verificación (los tres)
 
 - **Patrón M49**: renombrar el builtin a `__x` (o cortar el envoltorio del prelude) → crear `std/X.ray`

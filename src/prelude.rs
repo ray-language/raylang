@@ -914,13 +914,6 @@ fn position<T>(a: [T], x: T) -> Option<int> {
 
 // --- Archivos (M11.2c): el primitivo devuelve un arreglo ETIQUETADO (primer elemento "ok"/"err");
 // aquí se traduce a Result. Así el runtime tampoco sabe de Result (como con Option). ---
-// Lee el archivo completo; Ok(contenido) u Err(mensaje del sistema).
-/// Reads the whole file as a string; `Ok(contents)` or `Err(system error message)`.
-fn read_file(ruta: string) -> Result<string, string> {
-    let r = __read_file(ruta);
-    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
-}
-
 // M16.1b: decodifica bytes como UTF-8; Ok(string) u Err(mensaje) si no es válido.
 /// Decodes bytes as UTF-8; `Ok(string)`, or `Err(message)` if the bytes are not valid UTF-8.
 fn from_utf8(b: bytes) -> Result<string, string> {
@@ -930,25 +923,6 @@ fn from_utf8(b: bytes) -> Result<string, string> {
 
 // M16.1c: I/O binaria. Las lecturas devuelven [bytes] etiquetado (tag en bytes para arreglo
 // homogéneo); el mensaje de error viene como bytes y se decoda con from_utf8.
-/// Reads the whole file as raw bytes; `Ok(bytes)` or `Err(message)` on I/O failure.
-fn read_file_bytes(ruta: string) -> Result<bytes, string> {
-    let r = __read_file_bytes(ruta);
-    if (r[0] == b"ok") {
-        Result.Ok(r[1])
-    } else {
-        match (from_utf8(r[1])) {
-            Result.Ok(m) => Result.Err(m),
-            Result.Err(e) => Result.Err("error de E/S"),
-        }
-    }
-}
-
-/// Writes raw bytes to the file (creating or overwriting it); `Ok(byte count)` or `Err(message)`.
-fn write_file_bytes(ruta: string, datos: bytes) -> Result<int, string> {
-    let r = __write_file_bytes(ruta, datos);
-    if (r[0] == "ok") { Result.Ok(datos.len()) } else { Result.Err(r[1]) }
-}
-
 /// Performs one raw read from the socket; `Ok(bytes)` (empty = EOF) or `Err(message)`.
 fn socket_read_bytes(h: int) -> Result<bytes, string> {
     let r = __socket_read_bytes(h);
@@ -966,76 +940,6 @@ fn socket_read_bytes(h: int) -> Result<bytes, string> {
 fn socket_write_bytes(h: int, datos: bytes) -> Result<int, string> {
     let r = __socket_write_bytes(h, datos);
     if (r[0] == "ok") { Result.Ok(datos.len()) } else { Result.Err(r[1]) }
-}
-
-// Escribe el contenido en el archivo (lo crea/sobrescribe); Ok(nº de caracteres) u Err(mensaje).
-/// Writes the string to the file (creating or overwriting it); `Ok(character count)` or `Err(message)`.
-fn write_file(ruta: string, contenido: string) -> Result<int, string> {
-    let r = __write_file(ruta, contenido);
-    if (r[0] == "ok") { Result.Ok(contenido.len()) } else { Result.Err(r[1]) }
-}
-
-// Añade el contenido al final del archivo (lo crea si no existe); Ok(nº de caracteres) u Err(mensaje).
-/// Appends the string to the end of the file (creating it if needed); `Ok(character count)` or `Err(message)`.
-fn append_file(ruta: string, contenido: string) -> Result<int, string> {
-    let r = __append_file(ruta, contenido);
-    if (r[0] == "ok") { Result.Ok(contenido.len()) } else { Result.Err(r[1]) }
-}
-
-// M11.7c: borra un archivo; Ok(0) u Err(mensaje del sistema).
-/// Deletes a file; `Ok(0)` or `Err(system error message)`.
-fn remove_file(ruta: string) -> Result<int, string> {
-    let r = __remove_file(ruta);
-    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
-}
-
-// M11.7c: nombres de las entradas de un directorio (ordenados); Ok([nombres]) u Err(mensaje).
-// El primitivo devuelve ["ok", n0, n1, …] o ["err", msg]; aquí se reconstruye el [string].
-/// Returns the names of a directory's entries, sorted; `Ok(names)` or `Err(message)`.
-fn list_dir(ruta: string) -> Result<[string], string> {
-    let r = __list_dir(ruta);
-    if (r[0] == "ok") {
-        var nombres: [string] = [];
-        var i = 1;
-        while (i < r.len()) {
-            nombres.push(r[i]);
-            i = i + 1;
-        }
-        Result.Ok(nombres)
-    } else {
-        Result.Err(r[1])
-    }
-}
-
-// --- I/O con buffering: handles de archivo (M11.8). open/read_line/write/close. ---
-// Abre un archivo (modo "r"/"w"/"a") y devuelve un handle (int); Err(mensaje) si falla.
-/// Opens a file in mode "r" (read), "w" (write) or "a" (append) and returns a
-/// buffered handle; `Ok(handle)` or `Err(message)`. Close it with `close(h)`.
-fn open(ruta: string, modo: string) -> Result<int, string> {
-    let r = __open(ruta, modo);
-    if (r[0] == "ok") {
-        match (parse_int(r[1])) {
-            Option.Some(h) => Result.Ok(h),
-            Option.None => Result.Err("handle inválido"),
-        }
-    } else {
-        Result.Err(r[1])
-    }
-}
-
-// Lee la siguiente línea del handle (sin el salto); None en EOF (o handle no-lector).
-/// Reads the next line from the file handle (without the newline); `None` on EOF
-/// (or on a handle that is not open for reading).
-fn read_line(h: int) -> Option<string> {
-    let r = __read_line_handle(h);
-    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
-}
-
-// Escribe en el handle; Ok(nº de caracteres) u Err(mensaje).
-/// Writes the string to the file handle; `Ok(character count)` or `Err(message)`.
-fn write(h: int, s: string) -> Result<int, string> {
-    let r = __write_handle(h, s);
-    if (r[0] == "ok") { Result.Ok(s.len()) } else { Result.Err(r[1]) }
 }
 
 // --- Cliente TCP (M15.2). Sobre los primitivos __tcp_connect/__socket_read/__socket_write. ---

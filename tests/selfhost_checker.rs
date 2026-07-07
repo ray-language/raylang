@@ -414,12 +414,13 @@ fn panic_y_parse() {
     comparar("fn main() -> int { let xs = sort([\"b\", \"a\"]); 0 }", "scpp_sortstr.ray");
     // sort sobre un tipo sin Ord → error de bound (mensaje byte-idéntico a Rust).
     comparar("struct P { v: int } fn main() -> int { let xs = sort([P { v: 1 }]); 0 }", "scpp_sortnoord.ray");
-    // M14.6d: I/O de archivos — read_file/write_file (Result) + exists (bool).
-    comparar("fn main() -> int { match (read_file(\"x\")) { Result.Ok(s) => 0, Result.Err(e) => 1 } }", "scpp_rf.ray");
-    comparar("fn main() -> int { match (write_file(\"x\", \"y\")) { Result.Ok(n) => n, Result.Err(e) => 0 } }", "scpp_wf.ray");
-    comparar("fn main() -> int { if (exists(\"x\")) { 1 } else { 0 } }", "scpp_exists.ray");
-    // Error de tipo en exists (mensaje byte-idéntico a Rust).
-    comparar("fn main() -> int { if (exists(5)) { 1 } else { 0 } }", "scpp_existstype.ray");
+    // M14.6d (M50.1: fs → std/fs; el oráculo es pre-loader → usa los primitivos __x): __read_file/
+    // __write_file (arreglo etiquetado [string]) + __exists (bool).
+    comparar("fn main() -> int { let r = __read_file(\"x\"); if (r[0] == \"ok\") { 0 } else { 1 } }", "scpp_rf.ray");
+    comparar("fn main() -> int { let r = __write_file(\"x\", \"y\"); if (r[0] == \"ok\") { 0 } else { 1 } }", "scpp_wf.ray");
+    comparar("fn main() -> int { if (__exists(\"x\")) { 1 } else { 0 } }", "scpp_exists.ray");
+    // Error de tipo en __exists (mensaje byte-idéntico a Rust).
+    comparar("fn main() -> int { if (__exists(5)) { 1 } else { 0 } }", "scpp_existstype.ray");
 }
 
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.

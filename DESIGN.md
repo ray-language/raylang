@@ -6511,3 +6511,33 @@ key/sign, chacha seal/open) **se mueven del prelude** a `std/crypto.ray` (llaman
 **Verificación**: el oráculo VM↔intérprete prueba los **primitivos `__x`** (sha/hmac directos; ed25519/chacha
 vía el arreglo etiquetado `[bytes]` en vez del `Option`); los envoltorios `crypto.*` los cubren
 `cli_cli` (crypto.sha256/hmac/chacha end-to-end) y las suites de M20. **M49.3 / M49 COMPLETO.**
+
+## 52. M50 — cerrar la descongestión del namespace (`std/fs`/`std/collections`/`std/net`)
+
+Continúa M48/M49: mueve del **prelude global** (auto-inyectado) a **módulos `std/` opt-in** los tres
+grupos grandes que aún ensucian el namespace de valores — archivos, colecciones y red —. Mismo mecanismo
+que M49 (`__x`+envoltorio; migración dirigida por errores). Se **quedan globales** los esenciales
+(`Option`/`Result`+`?`, `map`/`filter`/`fold`, `print`/`eprint`/`panic`/`assert`/`assert_eq`, `to_string`,
+`close`, `input`/`read_int`/`env`).
+
+### 52.1 M50.1 — `std/fs` (sistema de archivos)
+
+Todo lo que toca disco → `fs.X` con `import std/fs;` (*capability hint* suave: importar `std/fs` señala
+"este archivo toca el sistema de archivos"). Los **10 envoltorios** del prelude (`read_file`/`write_file`/
+`read_file_bytes`/`write_file_bytes`/`append_file`/`remove_file`/`list_dir`/`open`/`read_line`/`write`) se
+**cortan del prelude** a `std/fs.ray` (llaman a los primitivos `__x`, que devuelven el arreglo etiquetado
+`["ok",…]`/`["err",msg]`). El builtin **`exists`** se renombra a **`__exists`** (Rust `builtins.rs` +
+`interpreter.rs`; la VM no cambia, despacha por opcode `Exists`) y `std/fs` añade el envoltorio total
+`fs.exists`. `std/fs` se registra en `stdlib::MODULOS` (embebido con `include_str!`).
+
+**El self-hosting usa los primitivos `__x`** (no `import std/fs;`): su loader (M14.7) lee de **disco** y no
+conoce la `std/` embebida, así que los drivers/loader del compilador auto-alojado (`lex_dump`/`parse_dump`/
+`check_dump`/`loader`) llevan un **wrapper local** `fn read_file` sobre `__read_file`, y el intérprete +
+checker auto-alojados usan `__exists` (patrón D5: el self-hosted trata los builtins como builtins). El
+oráculo VM↔intérprete es **pre-loader** → sus fixtures fs también usan los primitivos `__x` directamente.
+
+**Verificación**: no determinista (disco) → integración por subproceso (`io_cli`/`bytes_io_cli`, con
+`import std/fs; fs.X`, ambos motores); el borrado/lectura de inexistente sí es determinista → oráculo con
+`__read_file`. Corpus migrado (dirigido por errores): `examples/io/archivos.ray`/`binario.ray`,
+`examples/web/deflate_demo.ray`/`wss_echo.ray`. Self-hosting revalidado (checker/interpreter/vm oráculos +
+metacircular). **M50.1 COMPLETO.**

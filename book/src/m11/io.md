@@ -88,6 +88,13 @@ entorno, de los argumentos). Por eso se prueba en dos capas:
 
 ## Archivos: el truco del `[T]` crece a `Result` (M11.2c)
 
+> **Nota (M50.1):** desde M50.1 las funciones de archivos ya **no** son globales; viven en el módulo
+> **`std/fs`**. Impórtalo con `import std/fs;` y llámalas calificadas: `fs.read_file(ruta)`,
+> `fs.write_file(...)`, `fs.exists(...)`, etc. Importar `std/fs` funciona como un *capability hint*
+> suave (señala que el archivo toca el disco). Los ejemplos de abajo usan los nombres sin calificar por
+> claridad histórica; en código real, antepón `fs.`. Los primitivos `__read_file`/`__write_file`/
+> `__exists` siguen siendo builtins globales (el envoltorio de `std/fs` los envuelve en `Result`/`bool`).
+
 Leer y escribir archivos puede fallar, así que devuelven **`Result`** —el otro productor natural de
 errores-como-valores—. Pero `Result` carga **dos** payloads (el valor en `Ok`, el mensaje en `Err`),
 y el truco del `[T]` (vacío/único) solo distinguía "hay valor / no hay". La solución: un **arreglo

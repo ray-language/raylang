@@ -4,6 +4,7 @@
 // compatibilidad estándar, no solo auto-consistencia). Salida determinista; lo corre en ambos motores.
 from deflate import deflate_raw, gzip_compress, zlib_compress;
 from inflate import inflate_raw, gunzip, zlib_inflate;
+import std/fs; // M50.1: write_file_bytes vive en std/fs.
 
 fn main() -> int {
     // Texto repetitivo → el LZ77 encuentra muchas coincidencias y comprime de verdad.
@@ -26,7 +27,7 @@ fn main() -> int {
     // Si hay ruta, escribe el gzip para la verificación de compatibilidad con Python.
     let a = args();
     if (a.len() > 0) {
-        match (write_file_bytes(a[0], g)) {
+        match (fs.write_file_bytes(a[0], g)) {
             Result.Ok(_) => { },
             Result.Err(e) => {
                 eprint(e);

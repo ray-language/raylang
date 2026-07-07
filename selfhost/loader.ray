@@ -133,6 +133,12 @@ fn local_of_alias(alias: Option<string>, name: string) -> string {
 // =====================================================================
 // Fase 1: BFS — cargar y parsear cada módulo una vez (ciclos seguros)
 // =====================================================================
+// M50.1: el self-hosted no importa std/fs; lee con el primitivo __read_file (arreglo etiquetado).
+fn read_file(path: string) -> Result<string, string> {
+    let r = __read_file(path);
+    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+}
+
 // Lee + lexea + parsea un módulo; traduce los errores a LoadError con el nombre del módulo.
 fn load_one(name: string, path: string) -> Result<Program, LoadError> {
     match (read_file(path)) {

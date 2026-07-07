@@ -5810,13 +5810,12 @@ mod tests {
     #[test]
     fn read_file_inexistente_es_err_oraculo() {
         // Leer un archivo inexistente es determinista (misma llamada a std::fs en ambos motores) →
-        // oráculo. Construye Result en el prelude vía el arreglo etiquetado; debe coincidir.
+        // oráculo. El oráculo es pre-loader (M50.1: read_file vive en std/fs), así que usa el
+        // primitivo __read_file directamente (arreglo etiquetado ["ok",…]/["err",msg]); debe coincidir.
         oracle_program(r#"
             fn main() -> int {
-                match (read_file("/raylang_no_existe_xyz_123.txt")) {
-                    Result.Ok(_) => 0,
-                    Result.Err(_) => 1,
-                }
+                let r = __read_file("/raylang_no_existe_xyz_123.txt");
+                if (r[0] == "ok") { 0 } else { 1 }
             }
         "#);
     }

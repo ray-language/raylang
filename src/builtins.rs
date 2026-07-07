@@ -339,7 +339,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "select" => "Blocks until one of the channels in the array is ready to receive and returns its index (lowest ready index; deterministic). Follow with `recv(chs[i])`.",
         "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`). For a file handle: closes the file.",
         // --- I/O ---
-        "exists" => "Whether a file or directory exists at the given path.",
+        "__exists" => "Whether a file or directory exists at the given path.",
         "local_port" => "Returns the local port a listener socket is bound to (useful with port 0 = OS-assigned).",
         _ => return None,
     })
@@ -1863,9 +1863,9 @@ static BUILTINS: &[Builtin] = &[
             other => Err((Some(0), format!("close espera un handle (int) o un Channel, no {}", other))),
         }
     } },
-    // exists(ruta) -> bool (M11.4b): ¿existe la ruta? Total (no falla).
-    Builtin { name: "exists", opcode: OpCode::Exists, check: |a| {
-        arity(a, 1, "exists", "")?;
+    // __exists(ruta) -> bool (M11.4b; M50.1 lo renombra a __x): ¿existe la ruta? Total. Envoltorio fs.exists.
+    Builtin { name: "__exists", opcode: OpCode::Exists, check: |a| {
+        arity(a, 1, "__exists", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("exists espera un string (la ruta), no {}", a[0]))); }
         Ok(Type::Bool)
     } },

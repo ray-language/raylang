@@ -994,8 +994,8 @@ pub fn dispatch_builtin(prog_args: [string], name: string, vals: [Value], line: 
     if (name == "__write_file") {
         return Result.Ok(strs_to_value(__write_file(as_str(vals[0]), as_str(vals[1]))));
     }
-    if (name == "exists") {
-        return Result.Ok(Value.VBool(exists(as_str(vals[0]))));
+    if (name == "__exists") {
+        return Result.Ok(Value.VBool(__exists(as_str(vals[0]))));
     }
     if (name == "args") {
         return Result.Ok(strs_to_value(prog_args));

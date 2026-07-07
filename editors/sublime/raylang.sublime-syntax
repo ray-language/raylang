@@ -129,6 +129,10 @@ contexts:
   types:
     - match: '\b(int|float|bool|string|char|bytes|u8|u32|u64)\b'
       scope: support.type.primitive.raylang
+    # Constante en SCREAMING_SNAKE (2+ chars, todo mayúsculas): PI, MAX_INTENTOS. Antes del tipo de
+    # usuario para ganar; una sola letra (T/E/K) queda como type param.
+    - match: '\b[A-Z][A-Z0-9_]*[A-Z0-9]\b'
+      scope: constant.other.raylang
     # Nombre de tipo de usuario por convención (empieza en mayúscula): struct/enum/variante/etc.
     - match: '\b{{user_type}}\b'
       scope: entity.name.type.raylang

@@ -389,15 +389,19 @@ fn hover_at(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<
     let start = e.col - 1;
     // Recorta el fin al identificador real de la fuente (el `len` namespacado puede excederlo).
     let end = start + e.len.min(token_len(src, line0, start));
-    Some((nombre_fachada(&e.text), start, end))
+    Some((nombre_fachada(&e.text, &imports_de(src)), start, end))
 }
 
 /// Presenta los nombres globales para el usuario: convierte cada ruta namespacada del loader
-/// (`geo::formas::circulo::Circulo`) a su **forma de fachada** `primer.último` (`geo.Circulo`).
-/// Respeta la cápsula (no expone la estructura interna `formas/circulo`) y usa el separador `.`
-/// del lenguaje en vez del interno `::` —que el usuario nunca escribe—. Un nombre sin `::` (tipo
-/// local, primitivo) se deja igual.
-fn nombre_fachada(texto: &str) -> String {
+/// (`std::math::sqrt`, `geo::formas::circulo::Circulo`) a la **forma que el usuario escribe**
+/// (`math.sqrt`, `geo.Circulo`) — el `leaf` con el que importó el módulo + el nombre —, usando el
+/// separador `.` del lenguaje en vez del interno `::`. `imports` son los `(leaf, ns_prefix)` del
+/// archivo (`import std/math;` → `("math", "std::math")`): se elige el import cuyo `ns_prefix` es
+/// prefijo de la ruta (el más largo), de modo que un módulo directo muestra su leaf (`math`) y una
+/// **cápsula** su raíz (`geo`, cuyo `ns_prefix` también es prefijo) — respetando la encapsulación.
+/// Sin `imports` (o sin match) cae a `primer.último` (comportamiento previo). Un nombre sin `::` se
+/// deja igual.
+fn nombre_fachada(texto: &str, imports: &[(String, String)]) -> String {
     let chars: Vec<char> = texto.chars().collect();
     let seg = |c: char| c.is_alphanumeric() || c == '_';
     let mut out = String::new();
@@ -408,31 +412,48 @@ fn nombre_fachada(texto: &str) -> String {
             i += 1;
             continue;
         }
-        // Lee una ruta `seg (:: seg)*`, quedándonos con el primer y el último segmento.
-        let inicio = i;
-        while i < chars.len() && seg(chars[i]) {
-            i += 1;
-        }
-        let primero: String = chars[inicio..i].iter().collect();
-        let mut ultimo: Option<String> = None;
-        while i + 1 < chars.len() && chars[i] == ':' && chars[i + 1] == ':' {
-            i += 2;
+        // Lee una ruta `seg (:: seg)*` completa.
+        let mut segs: Vec<String> = Vec::new();
+        loop {
             let s = i;
             while i < chars.len() && seg(chars[i]) {
                 i += 1;
             }
-            ultimo = Some(chars[s..i].iter().collect());
-        }
-        match ultimo {
-            Some(u) => {
-                out.push_str(&primero);
-                out.push('.');
-                out.push_str(&u);
+            segs.push(chars[s..i].iter().collect());
+            if i + 1 < chars.len() && chars[i] == ':' && chars[i + 1] == ':' {
+                i += 2;
+            } else {
+                break;
             }
-            None => out.push_str(&primero),
         }
+        if segs.len() == 1 {
+            out.push_str(&segs[0]);
+            continue;
+        }
+        let full = segs.join("::");
+        let Some(name) = segs.last() else { continue }; // segs tiene ≥2 aquí; evita el unwrap a pelo
+        // Import cuyo ns_prefix sea prefijo de la ruta (el más largo gana): su leaf es cómo se accede.
+        let leaf = imports.iter()
+            .filter(|(_, ns)| full == *ns || full.starts_with(&format!("{ns}::")))
+            .max_by_key(|(_, ns)| ns.len())
+            .map(|(leaf, _)| leaf.as_str())
+            .unwrap_or(&segs[0]); // fallback: el primer segmento (cápsula/desconocido)
+        out.push_str(leaf);
+        out.push('.');
+        out.push_str(name);
     }
     out
+}
+
+/// Los `(leaf, ns_prefix)` de los `import a/b/c [as x];` del archivo. Reusa lex + `parse_all` (con
+/// recuperación de errores): los `import` van al principio, así que se recogen aunque el resto del
+/// documento no parsee a medio escribir (`math.`). Si ni lexa, devuelve vacío.
+fn imports_de(src: &str) -> Vec<(String, String)> {
+    let Ok(tokens) = lexer::lex(src) else { return Vec::new() };
+    let (program, _errs) = parser::parse_all(tokens);
+    program.imports.iter()
+        .map(|imp| (imp.leaf().to_string(), imp.module.replace('/', "::")))
+        .collect()
 }
 
 /// Longitud del identificador que empieza en `(line0, col0)` (0-basados) en la fuente: cuántos
@@ -1176,6 +1197,69 @@ fn campos_ya_escritos(cuerpo: &[char]) -> std::collections::HashSet<String> {
 /// palabra-miembro que se está escribiendo (`recv.par|` → `recv.__raycomplete__`), que es sintaxis
 /// válida y sobrevive a la recuperación de errores del parser (M33c). El checker enumera los
 /// miembros al tipar ese acceso.
+/// Completion de miembros de un **módulo** importado (M49.1): si el cursor está tras `<leaf>.` y
+/// `<leaf>` es el nombre de un módulo importado (`import std/math;` → `math`), ofrece los ítems `pub`
+/// de ese módulo —funciones, `const`, structs/enums/traits— por su nombre corto. Devuelve `None` si el
+/// receptor no es un módulo importado (para que el llamador siga con la completion de miembros por tipo).
+fn module_member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<Json> {
+    let linea = src.split('\n').nth(line0)?;
+    let chars: Vec<char> = linea.chars().collect();
+    let col = char0.min(chars.len());
+    // La palabra-miembro parcial a la izquierda del cursor, y el `.` que la precede.
+    let mut ini = col;
+    while ini > 0 && es_ident_char(chars[ini - 1]) {
+        ini -= 1;
+    }
+    if ini == 0 || chars[ini - 1] != '.' {
+        return None;
+    }
+    // El receptor: el identificador simple justo antes del `.`.
+    let dot = ini - 1;
+    let mut r_ini = dot;
+    while r_ini > 0 && es_ident_char(chars[r_ini - 1]) {
+        r_ini -= 1;
+    }
+    let receptor: String = chars[r_ini..dot].iter().collect();
+    if receptor.is_empty() {
+        return None;
+    }
+    // ¿El receptor es un leaf de import? → su `ns_prefix` (`math` → `std::math`).
+    let ns = imports_de(src).into_iter().find(|(leaf, _)| *leaf == receptor).map(|(_, n)| n)?;
+    // El buffer del usuario puede NO parsear a medio escribir (`math.`), así que se carga el módulo con
+    // un programa **sintético válido** (`import <ruta>; fn main…`), no el buffer. Se filtran luego los
+    // ítems `pub` de ese módulo (nombre `ns::corto`, sin `#` ni sub-namespaces). Kinds LSP: 3=Function,
+    // 21=Constant, 22=Struct, 13=Enum, 8=Interface(trait).
+    let path = uri_to_path(uri?)?;
+    let sintetico = format!("import {};\nfn main() -> int {{ 0 }}\n", ns.replace("::", "/"));
+    let loaded = cargar(&path, &sintetico).ok()?;
+    let prog = loaded.program;
+    let prefix = format!("{ns}::");
+    let corto = |nombre: &str| -> Option<String> {
+        let n = nombre.strip_prefix(&prefix)?;
+        if n.contains("::") || n.contains('#') { None } else { Some(n.to_string()) }
+    };
+    let mut items: Vec<Json> = Vec::new();
+    let mut push = |label: String, kind: i64| {
+        items.push(obj(vec![("label", text(&label)), ("kind", num(kind))]));
+    };
+    for f in &prog.functions {
+        if f.is_pub && let Some(n) = corto(&f.name) { push(n, 3); }
+    }
+    for c in &prog.consts {
+        if c.is_pub && let Some(n) = corto(&c.name) { push(n, 21); }
+    }
+    for s in &prog.structs {
+        if s.is_pub && let Some(n) = corto(&s.name) { push(n, 22); }
+    }
+    for e in &prog.enums {
+        if e.is_pub && let Some(n) = corto(&e.name) { push(n, 13); }
+    }
+    for t in &prog.traits {
+        if t.is_pub && let Some(n) = corto(&t.name) { push(n, 8); }
+    }
+    Some(Json::Arr(items))
+}
+
 fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize, docs: &HashMap<String, String>) -> Option<Json> {
     let lineas: Vec<&str> = src.split('\n').collect();
     let linea = lineas.get(line0)?;
@@ -1394,6 +1478,12 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
         // receptor, no los símbolos de archivo. Un contexto de miembro con lista vacía (receptor sin
         // tipo conocido) devuelve `[]` —mejor que inundar con todo el archivo tras un punto—.
         if let Some(items) = member_completion_items(uri, src, line0, char0, docs) {
+            // M49.1: si no dio miembros, el receptor puede ser un MÓDULO importado (`math.`) —que no tiene
+            // "tipo"—: se ofrecen sus ítems `pub` (funciones/consts/tipos) como fallback.
+            let vacio = items.as_array().map(|a| a.is_empty()).unwrap_or(true);
+            if vacio && let Some(m) = module_member_completion_items(uri, src, line0, char0) {
+                return m;
+            }
             return items;
         }
     }
@@ -3093,14 +3183,21 @@ mod tests {
 
     #[test]
     fn nombre_fachada_colapsa_namespaces() {
-        // Ruta interna → fachada `primer.último` (respeta la cápsula, sin `::`).
-        assert_eq!(nombre_fachada("geo::formas::circulo::Circulo"), "geo.Circulo");
-        assert_eq!(nombre_fachada("geo::area: fn(geo::formas::circulo::Circulo) -> int"),
+        // Sin imports conocidos → fallback `primer.último` (respeta la cápsula, sin `::`).
+        assert_eq!(nombre_fachada("geo::formas::circulo::Circulo", &[]), "geo.Circulo");
+        assert_eq!(nombre_fachada("geo::area: fn(geo::formas::circulo::Circulo) -> int", &[]),
             "geo.area: fn(geo.Circulo) -> int");
         // Nombres sin namespacing (locales, primitivos) intactos.
-        assert_eq!(nombre_fachada("c: Punto"), "c: Punto");
-        assert_eq!(nombre_fachada("n: int"), "n: int");
-        assert_eq!(nombre_fachada("f: fn(int, bool) -> string"), "f: fn(int, bool) -> string");
+        assert_eq!(nombre_fachada("c: Punto", &[]), "c: Punto");
+        assert_eq!(nombre_fachada("n: int", &[]), "n: int");
+        assert_eq!(nombre_fachada("f: fn(int, bool) -> string", &[]), "f: fn(int, bool) -> string");
+        // M49: con el import `std/math` (leaf `math`, ns_prefix `std::math`), la fachada usa el LEAF
+        // con el que el usuario accede: `math.sqrt`, no `std.sqrt`. Una cápsula `geo` (ns_prefix `geo`)
+        // sigue mostrando su raíz (`geo.Circulo`) porque su ns_prefix también es prefijo.
+        let imp = vec![("math".to_string(), "std::math".to_string()), ("geo".to_string(), "geo".to_string())];
+        assert_eq!(nombre_fachada("std::math::sqrt: fn(float) -> float", &imp), "math.sqrt: fn(float) -> float");
+        assert_eq!(nombre_fachada("std::math::PI: float", &imp), "math.PI: float");
+        assert_eq!(nombre_fachada("geo::formas::circulo::Circulo", &imp), "geo.Circulo");
     }
 
     #[test]

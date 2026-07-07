@@ -102,6 +102,29 @@ fn completion_ofrece_simbolos() {
 }
 
 #[test]
+fn completion_de_miembros_de_modulo() {
+    // M49.1: tras `math.` (módulo importado) el LSP ofrece los ítems pub del módulo: funciones, consts.
+    // Usa un archivo real (la resolución del `import` necesita un path de proyecto válido, no `/t.ray`).
+    let dir = std::env::temp_dir().join("ray_lsp_modcomp");
+    std::fs::create_dir_all(&dir).unwrap();
+    let archivo = dir.join("m.ray");
+    std::fs::write(&archivo, "import std/math;\nfn main() -> int {\n    math.\n    0\n}").unwrap();
+    let uri = format!("file://{}", archivo.display());
+    let open = format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":"import std/math;\nfn main() -> int {{\n    math.\n    0\n}}"}}}}}}"#
+    );
+    let comp = format!(
+        r#"{{"jsonrpc":"2.0","id":9,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":9}}}}}}"#
+    );
+    let entrada = frame(&open) + &frame(&comp) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("\"id\":9"), "responde a la completion\n{out}");
+    assert!(out.contains("\"label\":\"sqrt\""), "ofrece la función sqrt de std/math\n{out}");
+    assert!(out.contains("\"label\":\"PI\""), "ofrece la constante PI\n{out}");
+    assert!(!out.contains("\"label\":\"print\""), "NO ofrece builtins globales tras `math.`\n{out}");
+}
+
+#[test]
 fn publica_diagnostico_ante_un_error() {
     let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int { 1 + true }"}}}"#;
     let entrada = frame(open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);

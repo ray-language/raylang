@@ -18,6 +18,7 @@
     { "include": "#storage" },
     { "include": "#builtins" },
     { "include": "#types" },
+    { "include": "#constants" },
     { "include": "#user-types" },
     { "include": "#booleans" },
     { "include": "#numbers" },
@@ -146,6 +147,11 @@
     "types": {
       "name": "support.type.primitive.raylang",
       "match": "\\b(int|float|bool|string|char|bytes|u8|u32|u64)\\b"
+    },
+    "constants": {
+      "comment": "Constantes en SCREAMING_SNAKE (2+ caracteres, todo mayúsculas/dígitos/_): PI, MAX_INTENTOS. Antes de #user-types para ganar; una sola letra (T/E/K) queda como type param.",
+      "name": "constant.other.raylang",
+      "match": "\\b[A-Z][A-Z0-9_]*[A-Z0-9]\\b"
     },
     "user-types": {
       "name": "entity.name.type.raylang",

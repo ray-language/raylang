@@ -53,6 +53,7 @@
     font:13px/1.5 "JetBrains Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace; }
   /* Tokens (tema oscuro sobre el navy de marca). */
   .tok-kw{color:#c9a3ff} .tok-ty{color:#5bacf7} .tok-str{color:#7ee787} .tok-num{color:#f0a868}
+  .tok-const{color:#f0a868}  /* constantes SCREAMING_SNAKE (PI, MAX_…), como los números */
   .tok-com{color:#6b7f99;font-style:italic} .tok-fn{color:#79c0ff} .tok-lit{color:#f0a868} .tok-ann{color:#e3b341}
   .tok-idelim{color:#8fa6c4}  /* delimitadores ${ } de interpolación */
   .status { color:var(--muted); font-size:12px; }
@@ -267,6 +268,7 @@ function highlight(code){
       let k = j; while (k < n && /\s/.test(code[k])) k++;
       let cls = KW.has(w) ? "tok-kw" : TY.has(w) ? "tok-ty" : LIT.has(w) ? "tok-lit"
               : (w === "self" || w === "Self") ? "tok-kw"
+              : /^[A-Z][A-Z0-9_]*[A-Z0-9]$/.test(w) ? "tok-const"  // SCREAMING (2+): PI, MAX_INTENTOS
               : /^[A-Z]/.test(w) ? "tok-ty"
               : code[k] === "(" ? "tok-fn" : null;
       out += cls ? span(cls, w) : esc(w); i = j;

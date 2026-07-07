@@ -207,9 +207,9 @@ fn read_txt(data: bytes, rdstart: int, rdlength: int) -> string {
         let slen = data[p];
         p = p + 1;
         s = s + match (from_utf8(sub_bytes(data, p, p + slen))) {
-    Result.Ok(t) => t,
-    Result.Err(_) => "?",
-};
+            Result.Ok(t) => t,
+            Result.Err(_) => "?",
+        };
         p = p + slen;
     }
     s

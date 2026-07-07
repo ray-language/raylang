@@ -1,6 +1,5 @@
 // std/math (M40.4b) — utilidades enteras que complementan los builtins matemáticos (sqrt/pow/abs/
 // min/max/…). Todo `pub`: se importa con `import std/math;` y se usa calificado (`math.gcd(12, 18)`).
-
 /// Absolute value of `x`.
 pub fn iabs(x: int) -> int {
     if (x < 0) { 0 - x } else { x }
@@ -8,12 +7,16 @@ pub fn iabs(x: int) -> int {
 
 /// Sign of `x`: -1 if negative, 0 if zero, 1 if positive.
 pub fn sign(x: int) -> int {
-    if (x < 0) { 0 - 1 } else { if (x > 0) { 1 } else { 0 } }
+    if (x < 0) { 0 - 1 } else {
+        if (x > 0) { 1 } else { 0 }
+    }
 }
 
 /// Clamps `x` to the closed range `[lo, hi]` (assumes `lo <= hi`).
 pub fn clamp(x: int, lo: int, hi: int) -> int {
-    if (x < lo) { lo } else { if (x > hi) { hi } else { x } }
+    if (x < lo) { lo } else {
+        if (x > hi) { hi } else { x }
+    }
 }
 
 /// Greatest common divisor of `a` and `b` (Euclid's algorithm). Always non-negative;
@@ -48,7 +51,9 @@ pub fn ipow(base: int, exp: int) -> int {
         var b = base;
         var e = exp;
         while (e > 0) {
-            if (e % 2 == 1) { resultado = resultado * b; }
+            if (e % 2 == 1) {
+                resultado = resultado * b;
+            }
             b = b * b;
             e = e / 2;
         }
@@ -79,7 +84,9 @@ pub fn is_prime(n: int) -> bool {
         var i = 2;
         var primo = true;
         while (i * i <= n && primo) {
-            if (n % i == 0) { primo = false; }
+            if (n % i == 0) {
+                primo = false;
+            }
             i = i + 1;
         }
         primo

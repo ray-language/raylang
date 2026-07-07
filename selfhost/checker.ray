@@ -19,24 +19,43 @@
 // El `Type` del parser DOBLA como representación del tipo inferido (un struct y un enum son ambos
 // `TNamed(nombre, args)`; se distinguen por en qué tabla —`structs`/`enums`— está el nombre). Los
 // ámbitos y las tablas de tipos usan `Map<K,V>`.
-
 from parser import Type, Expr, EKind, Stmt, SKind, Block, Func, Param, Program, BinOp, UnOp, FieldInit, FieldDef, VariantDef, MatchArm, Pattern, PKind, FnExpr, TraitDef, MethodSig, ImplBlock, Bound, Annotation;
 
 // Error de tipos con ubicación (espejo de `TypeError` en Rust).
-pub struct TypeError { msg: string, line: int, col: int }
+pub struct TypeError {
+    msg: string,
+    line: int,
+    col: int,
+}
 
 // Información de una variable en un ámbito.
-struct VarInfo { ty: Type, mutable: bool, dline: int, dcol: int }
+struct VarInfo {
+    ty: Type,
+    mutable: bool,
+    dline: int,
+    dcol: int,
+}
 
 // Firma de una función. `type_params` son sus parámetros de tipo (M14.3c); `bounds` los acota (M14.3d:
 // `T: Trait`), comprobados en cada sitio de llamada (satisfacción del bound).
-struct FnSig { params: [Type], ret: Type, type_params: [string], bounds: [Bound] }
+struct FnSig {
+    params: [Type],
+    ret: Type,
+    type_params: [string],
+    bounds: [Bound],
+}
 
 // Una variable ligada por un patrón de `match`: su nombre y el tipo que recibe.
-struct Bind { name: string, ty: Type }
+struct Bind {
+    name: string,
+    ty: Type,
+}
 
 // Estado mutable de la comprobación de un `match`: variantes ya cubiertas y si hay catch-all.
-struct MatchState { covered: [string], catchall: bool }
+struct MatchState {
+    covered: [string],
+    catchall: bool,
+}
 
 // El estado del checker: firmas de funciones, tablas de tipos nominales (structs/enums, con los
 // campos/variantes ya resueltos, y sus parámetros de tipo para la aridad/sustitución), pila de
@@ -65,17 +84,37 @@ fn terr(line: int, col: int, msg: string) -> TypeError {
 // =====================================================================
 // Tipos: igualdad, presentación (Display), predicados
 // =====================================================================
-
 // Igualdad estructural de tipos (raylang no deriva == sobre enums recursivos).
 fn type_eq(a: Type, b: Type) -> bool {
     match (a) {
-        Type.TInt => match (b) { Type.TInt => true, _ => false },
-        Type.TFloat => match (b) { Type.TFloat => true, _ => false },
-        Type.TBool => match (b) { Type.TBool => true, _ => false },
-        Type.TString => match (b) { Type.TString => true, _ => false },
-        Type.TChar => match (b) { Type.TChar => true, _ => false },
-        Type.TUnit => match (b) { Type.TUnit => true, _ => false },
-        Type.TArray(ea) => match (b) { Type.TArray(eb) => type_eq(ea, eb), _ => false },
+        Type.TInt => match (b) {
+            Type.TInt => true,
+            _ => false,
+        },
+        Type.TFloat => match (b) {
+            Type.TFloat => true,
+            _ => false,
+        },
+        Type.TBool => match (b) {
+            Type.TBool => true,
+            _ => false,
+        },
+        Type.TString => match (b) {
+            Type.TString => true,
+            _ => false,
+        },
+        Type.TChar => match (b) {
+            Type.TChar => true,
+            _ => false,
+        },
+        Type.TUnit => match (b) {
+            Type.TUnit => true,
+            _ => false,
+        },
+        Type.TArray(ea) => match (b) {
+            Type.TArray(eb) => type_eq(ea, eb),
+            _ => false,
+        },
         Type.TFn(pa, ra) => match (b) {
             Type.TFn(pb, rb) => types_eq(pa, pb) && type_eq(ra, rb),
             _ => false,
@@ -92,20 +131,28 @@ fn type_eq(a: Type, b: Type) -> bool {
 }
 
 fn types_eq(a: [Type], b: [Type]) -> bool {
-    if (len(a) != len(b)) { return false; }
+    if (len(a) != len(b)) {
+        return false;
+    }
     var i = 0;
     while (i < len(a)) {
-        if (!type_eq(a[i], b[i])) { return false; }
+        if (!type_eq(a[i], b[i])) {
+            return false;
+        }
         i = i + 1;
     }
     true
 }
 
 fn strs_eq(a: [string], b: [string]) -> bool {
-    if (len(a) != len(b)) { return false; }
+    if (len(a) != len(b)) {
+        return false;
+    }
     var i = 0;
     while (i < len(a)) {
-        if (a[i] != b[i]) { return false; }
+        if (a[i] != b[i]) {
+            return false;
+        }
         i = i + 1;
     }
     true
@@ -122,7 +169,9 @@ fn type_str(t: Type) -> string {
         Type.TUnit => "unit",
         Type.TArray(e) => "[" + type_str(e) + "]",
         Type.TFn(ps, r) => "fn(" + join_types(ps) + ") -> " + type_str(r),
-        Type.TNamed(n, args) => { if (len(args) == 0) { n } else { n + "<" + join_types(args) + ">" } },
+        Type.TNamed(n, args) => {
+            if (len(args) == 0) { n } else { n + "<" + join_types(args) + ">" }
+        },
         Type.TDyn(ts) => "dyn " + join_strs(ts),
     }
 }
@@ -131,7 +180,9 @@ fn join_types(ps: [Type]) -> string {
     var s = "";
     var i = 0;
     while (i < len(ps)) {
-        if (i > 0) { s = s + ", "; }
+        if (i > 0) {
+            s = s + ", ";
+        }
         s = s + type_str(ps[i]);
         i = i + 1;
     }
@@ -142,7 +193,9 @@ fn join_strs(xs: [string]) -> string {
     var s = "";
     var i = 0;
     while (i < len(xs)) {
-        if (i > 0) { s = s + " + "; }
+        if (i > 0) {
+            s = s + " + ";
+        }
         s = s + xs[i];
         i = i + 1;
     }
@@ -178,41 +231,64 @@ fn is_comparable(t: Type) -> bool {
 }
 
 fn is_array(t: Type) -> bool {
-    match (t) { Type.TArray(_) => true, _ => false }
+    match (t) {
+        Type.TArray(_) => true,
+        _ => false,
+    }
 }
 
 // ¿Operandos válidos para los comparadores de orden (< <= > >=)? Mismo tipo, y de int/float/string/char.
 fn order_ok(lt: Type, rt: Type) -> bool {
-    type_eq(lt, rt) && (type_eq(lt, Type.TInt) || type_eq(lt, Type.TFloat)
-        || type_eq(lt, Type.TString) || type_eq(lt, Type.TChar))
+    type_eq(lt, rt) && (type_eq(lt, Type.TInt) || type_eq(lt, Type.TFloat) || type_eq(lt, Type.TString) || type_eq(lt, Type.TChar))
 }
 
 // Clase de un operador binario: 0=aritmético, 1=orden, 2=igualdad, 3=lógico.
 fn op_kind(op: BinOp) -> int {
     match (op) {
-        BinOp.Add => 0, BinOp.Sub => 0, BinOp.Mul => 0, BinOp.Div => 0, BinOp.Rem => 0,
-        BinOp.Lt => 1, BinOp.Le => 1, BinOp.Gt => 1, BinOp.Ge => 1,
-        BinOp.Eq => 2, BinOp.Ne => 2,
-        BinOp.And => 3, BinOp.Or => 3,
+        BinOp.Add => 0,
+        BinOp.Sub => 0,
+        BinOp.Mul => 0,
+        BinOp.Div => 0,
+        BinOp.Rem => 0,
+        BinOp.Lt => 1,
+        BinOp.Le => 1,
+        BinOp.Gt => 1,
+        BinOp.Ge => 1,
+        BinOp.Eq => 2,
+        BinOp.Ne => 2,
+        BinOp.And => 3,
+        BinOp.Or => 3,
     }
 }
 
 fn is_add(op: BinOp) -> bool {
-    match (op) { BinOp.Add => true, _ => false }
+    match (op) {
+        BinOp.Add => true,
+        _ => false,
+    }
 }
 
 fn bin_op_str(op: BinOp) -> string {
     match (op) {
-        BinOp.Add => "+", BinOp.Sub => "-", BinOp.Mul => "*", BinOp.Div => "/", BinOp.Rem => "%",
-        BinOp.Eq => "==", BinOp.Ne => "!=", BinOp.Lt => "<", BinOp.Le => "<=", BinOp.Gt => ">", BinOp.Ge => ">=",
-        BinOp.And => "&&", BinOp.Or => "||",
+        BinOp.Add => "+",
+        BinOp.Sub => "-",
+        BinOp.Mul => "*",
+        BinOp.Div => "/",
+        BinOp.Rem => "%",
+        BinOp.Eq => "==",
+        BinOp.Ne => "!=",
+        BinOp.Lt => "<",
+        BinOp.Le => "<=",
+        BinOp.Gt => ">",
+        BinOp.Ge => ">=",
+        BinOp.And => "&&",
+        BinOp.Or => "||",
     }
 }
 
 // =====================================================================
 // Resolución y validación de tipos (M14.3a: monomórfico)
 // =====================================================================
-
 // Normaliza un tipo de anotación. Monomórfico: no reclasifica nombres (struct y enum comparten
 // `TNamed`); solo recorre arreglos/funciones/args para resolver recursivamente. (En Rust aquí se
 // reclasifica `Struct`→`Enum`/`Var`; aquí ese trabajo no existe porque el `Type` es unificado.)
@@ -222,13 +298,19 @@ fn resolve_type(t: Type) -> Type {
         Type.TFn(ps, r) => {
             var rps: [Type] = [];
             var i = 0;
-            while (i < len(ps)) { push(rps, resolve_type(ps[i])); i = i + 1; }
+            while (i < len(ps)) {
+                push(rps, resolve_type(ps[i]));
+                i = i + 1;
+            }
             Type.TFn(rps, resolve_type(r))
         },
         Type.TNamed(n, args) => {
             var ra: [Type] = [];
             var i = 0;
-            while (i < len(args)) { push(ra, resolve_type(args[i])); i = i + 1; }
+            while (i < len(args)) {
+                push(ra, resolve_type(args[i]));
+                i = i + 1;
+            }
             Type.TNamed(n, ra)
         },
         _ => t,
@@ -243,7 +325,10 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
         Type.TArray(e) => ensure_type(c, e, line, col),
         Type.TFn(ps, r) => {
             var i = 0;
-            while (i < len(ps)) { ensure_type(c, ps[i], line, col)?; i = i + 1; }
+            while (i < len(ps)) {
+                ensure_type(c, ps[i], line, col)?;
+                i = i + 1;
+            }
             ensure_type(c, r, line, col)
         },
         Type.TNamed(name, args) => {
@@ -270,11 +355,13 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
             if (contains_key(c.structs, name) || contains_key(c.enums, name)) {
                 let arity = type_arity(c, name);
                 if (len(args) != arity) {
-                    return Result.Err(terr(line, col, "'" + name + "' espera " + to_string(arity)
-                        + " argumento(s) de tipo, se le dieron " + to_string(len(args))));
+                    return Result.Err(terr(line, col, "'" + name + "' espera " + to_string(arity) + " argumento(s) de tipo, se le dieron " + to_string(len(args))));
                 }
                 var i = 0;
-                while (i < len(args)) { ensure_type(c, args[i], line, col)?; i = i + 1; }
+                while (i < len(args)) {
+                    ensure_type(c, args[i], line, col)?;
+                    i = i + 1;
+                }
                 Result.Ok(0)
             } else {
                 Result.Err(terr(line, col, "tipo desconocido: '" + name + "' no declarado"))
@@ -289,7 +376,9 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
             while (i < len(traits)) {
                 let tr = traits[i];
                 match (get(c.traits, tr)) {
-                    Option.None => { return Result.Err(terr(line, col, "trait '" + tr + "' no declarado (en 'dyn " + join_strs(traits) + "')")); },
+                    Option.None => {
+                        return Result.Err(terr(line, col, "trait '" + tr + "' no declarado (en 'dyn " + join_strs(traits) + "')"));
+                    },
                     Option.Some(ms) => {
                         var mi = 0;
                         while (mi < len(ms)) {
@@ -338,13 +427,18 @@ fn is_hashable_key(c: Checker, t: Type) -> bool {
 // ¿`t` es un `Map<K, V>`? Devuelve `Some([K, V])` o `None`.
 fn map_kv(t: Type) -> Option<[Type]> {
     match (t) {
-        Type.TNamed(n, margs) => { if (n == "Map" && len(margs) == 2) { Option.Some(margs) } else { Option.None } },
+        Type.TNamed(n, margs) => {
+            if (n == "Map" && len(margs) == 2) { Option.Some(margs) } else { Option.None }
+        },
         _ => Option.None,
     }
 }
 
 fn is_map(t: Type) -> bool {
-    match (map_kv(t)) { Option.Some(_) => true, Option.None => false }
+    match (map_kv(t)) {
+        Option.Some(_) => true,
+        Option.None => false,
+    }
 }
 
 // Un arreglo de strings vacío, ya tipado (para reiniciar `c.tparams`: asignar `[]` directamente a un
@@ -355,7 +449,9 @@ fn no_tparams() -> [string] { [] }
 fn contains_str(xs: [string], s: string) -> bool {
     var i = 0;
     while (i < len(xs)) {
-        if (xs[i] == s) { return true; }
+        if (xs[i] == s) {
+            return true;
+        }
         i = i + 1;
     }
     false
@@ -366,7 +462,9 @@ fn join_comma(xs: [string]) -> string {
     var s = "";
     var i = 0;
     while (i < len(xs)) {
-        if (i > 0) { s = s + ", "; }
+        if (i > 0) {
+            s = s + ", ";
+        }
         s = s + xs[i];
         i = i + 1;
     }
@@ -376,7 +474,6 @@ fn join_comma(xs: [string]) -> string {
 // =====================================================================
 // Genéricos: unificación y sustitución (M14.3c)
 // =====================================================================
-
 // **Sustitución**: reemplaza cada variable de tipo `TNamed(n, [])` con `n` en `sigma` por `sigma[n]`,
 // recursivamente. Instancia un tipo genérico una vez inferidos sus parámetros (`subst([U], {U↦int})
 // = [int]`). `sigma` solo contiene los nombres-incógnita, así que un nombre nominal (struct/enum
@@ -385,11 +482,17 @@ fn subst(ty: Type, sigma: Map<string, Type>) -> Type {
     match (ty) {
         Type.TNamed(n, args) => {
             if (len(args) == 0) {
-                match (get(sigma, n)) { Option.Some(t) => t, Option.None => ty }
+                match (get(sigma, n)) {
+                    Option.Some(t) => t,
+                    Option.None => ty,
+                }
             } else {
                 var ra: [Type] = [];
                 var i = 0;
-                while (i < len(args)) { push(ra, subst(args[i], sigma)); i = i + 1; }
+                while (i < len(args)) {
+                    push(ra, subst(args[i], sigma));
+                    i = i + 1;
+                }
                 Type.TNamed(n, ra)
             }
         },
@@ -397,7 +500,10 @@ fn subst(ty: Type, sigma: Map<string, Type>) -> Type {
         Type.TFn(ps, r) => {
             var rps: [Type] = [];
             var i = 0;
-            while (i < len(ps)) { push(rps, subst(ps[i], sigma)); i = i + 1; }
+            while (i < len(ps)) {
+                push(rps, subst(ps[i], sigma));
+                i = i + 1;
+            }
             Type.TFn(rps, subst(r, sigma))
         },
         _ => ty,
@@ -419,7 +525,10 @@ fn unify(param: Type, arg: Type, sigma: Map<string, Type>, holes: [string]) -> R
                             Result.Err("'" + n + "' no puede ser " + type_str(prev) + " y " + type_str(arg) + " a la vez")
                         } else { Result.Ok(0) }
                     },
-                    Option.None => { insert(sigma, n, arg); Result.Ok(0) },
+                    Option.None => {
+                        insert(sigma, n, arg);
+                        Result.Ok(0)
+                    },
                 }
             } else {
                 // Tipo nominal (o variable rígida): mismo nombre, misma aridad, unificar argumentos.
@@ -456,8 +565,7 @@ fn unify(param: Type, arg: Type, sigma: Map<string, Type>, holes: [string]) -> R
         },
         // Primitivos (y variable rígida vs lo que sea): igualdad exacta.
         _ => {
-            if (type_eq(param, arg)) { Result.Ok(0) }
-            else { Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg)) }
+            if (type_eq(param, arg)) { Result.Ok(0) } else { Result.Err("se esperaba " + type_str(param) + ", se pasó " + type_str(arg)) }
         },
     }
 }
@@ -475,10 +583,11 @@ fn unify_list(ps: [Type], bs: [Type], sigma: Map<string, Type>, holes: [string])
 // =====================================================================
 // Pila de ámbitos
 // =====================================================================
-
 fn new_scope() -> Map<string, VarInfo> { Map.new() }
 
-fn push_scope(c: Checker) { push(c.scopes, new_scope()); }
+fn push_scope(c: Checker) {
+    push(c.scopes, new_scope());
+}
 
 fn pop_scope(c: Checker) {
     let removed = pop(c.scopes);
@@ -494,8 +603,10 @@ fn lookup(c: Checker, name: string) -> Option<VarInfo> {
     var i = len(c.scopes) - 1;
     while (i >= 0) {
         match (get(c.scopes[i], name)) {
-            Option.Some(v) => { return Option.Some(v); },
-            Option.None => {},
+            Option.Some(v) => {
+                return Option.Some(v);
+            },
+            Option.None => { },
         }
         i = i - 1;
     }
@@ -505,11 +616,12 @@ fn lookup(c: Checker, name: string) -> Option<VarInfo> {
 // =====================================================================
 // Análisis de divergencia (¿todos los caminos retornan/abortan?)
 // =====================================================================
-
 fn block_diverges(b: Block) -> bool {
     var i = 0;
     while (i < len(b.stmts)) {
-        if (stmt_diverges(b.stmts[i])) { return true; }
+        if (stmt_diverges(b.stmts[i])) {
+            return true;
+        }
         i = i + 1;
     }
     match (b.tail) {
@@ -536,10 +648,14 @@ fn expr_diverges(e: Expr) -> bool {
         },
         EKind.EBlock(b) => block_diverges(b),
         EKind.EMatch(_, arms) => {
-            if (len(arms) == 0) { return false; }
+            if (len(arms) == 0) {
+                return false;
+            }
             var i = 0;
             while (i < len(arms)) {
-                if (!expr_diverges(arms[i].body)) { return false; }
+                if (!expr_diverges(arms[i].body)) {
+                    return false;
+                }
                 i = i + 1;
             }
             true
@@ -558,7 +674,6 @@ fn expr_diverges(e: Expr) -> bool {
 // =====================================================================
 // Las dos pasadas
 // =====================================================================
-
 // Inyecta el prelude que necesita M14.3c-3: `Option<T>` y `Result<T, E>` como enums genéricos. En
 // Rust el prelude se parsea de un fuente raylang compartido; aquí el checker es un VALIDADOR que solo
 // recibe el AST, así que se registran sus definiciones directamente (mismo efecto para el veredicto).
@@ -613,9 +728,13 @@ fn inject_prelude_traits(c: Checker, prog: Program) {
 }
 
 fn self_param() -> Param { Param { name: "self", ty: Type.TNamed("Self", []), line: 0, col: 0 } }
+
 fn otro_param() -> Param { Param { name: "otro", ty: Type.TNamed("Self", []), line: 0, col: 0 } }
+
 fn eq_sig() -> MethodSig { MethodSig { name: "igual", params: [self_param(), otro_param()], ret: Type.TBool, default_body: Option.None, line: 0, col: 0 } }
+
 fn show_sig() -> MethodSig { MethodSig { name: "mostrar", params: [self_param()], ret: Type.TString, default_body: Option.None, line: 0, col: 0 } }
+
 fn ord_sig() -> MethodSig { MethodSig { name: "menor", params: [self_param(), otro_param()], ret: Type.TBool, default_body: Option.None, line: 0, col: 0 } }
 
 // Registra un método de impl del prelude (FnSig monomórfica) + la marca en `impl_traits`.
@@ -623,15 +742,26 @@ fn inject_method_impl(c: Checker, key: string, trait_name: string, method: strin
     insert(c.methods, mangle(key, method), FnSig { params: params, ret: ret, type_params: no_tparams(), bounds: no_bounds() });
     insert(c.impl_traits, mangle(key, trait_name), true);
 }
-fn inject_prim_eq(c: Checker, ty: Type, key: string) { inject_method_impl(c, key, "Eq", "igual", [ty, ty], Type.TBool); }
-fn inject_prim_show(c: Checker, ty: Type, key: string) { inject_method_impl(c, key, "Show", "mostrar", [ty], Type.TString); }
-fn inject_prim_ord(c: Checker, ty: Type, key: string) { inject_method_impl(c, key, "Ord", "menor", [ty, ty], Type.TBool); }
+
+fn inject_prim_eq(c: Checker, ty: Type, key: string) {
+    inject_method_impl(c, key, "Eq", "igual", [ty, ty], Type.TBool);
+}
+
+fn inject_prim_show(c: Checker, ty: Type, key: string) {
+    inject_method_impl(c, key, "Show", "mostrar", [ty], Type.TString);
+}
+
+fn inject_prim_ord(c: Checker, ty: Type, key: string) {
+    inject_method_impl(c, key, "Ord", "menor", [ty, ty], Type.TBool);
+}
 
 // ¿El usuario declara un trait con ese nombre?
 fn user_declares_trait(prog: Program, name: string) -> bool {
     var i = 0;
     while (i < len(prog.traits)) {
-        if (prog.traits[i].name == name) { return true; }
+        if (prog.traits[i].name == name) {
+            return true;
+        }
         i = i + 1;
     }
     false
@@ -645,60 +775,40 @@ fn inject_prelude_fns(c: Checker, prog: Program) {
     let u = Type.TNamed("U", []);
     let a = Type.TNamed("A", []);
     // map<T, U>(xs: [T], f: fn(T) -> U) -> [U]
-    inject_fn(c, prog, "map", FnSig {
-        params: [Type.TArray(t), Type.TFn([t], u)], ret: Type.TArray(u), type_params: ["T", "U"], bounds: no_bounds(),
-    });
+    inject_fn(c, prog, "map", FnSig { params: [Type.TArray(t), Type.TFn([t], u)], ret: Type.TArray(u), type_params: ["T", "U"], bounds: no_bounds() });
     // filter<T>(xs: [T], pred: fn(T) -> bool) -> [T]
-    inject_fn(c, prog, "filter", FnSig {
-        params: [Type.TArray(t), Type.TFn([t], Type.TBool)], ret: Type.TArray(t), type_params: ["T"], bounds: no_bounds(),
-    });
+    inject_fn(c, prog, "filter", FnSig { params: [Type.TArray(t), Type.TFn([t], Type.TBool)], ret: Type.TArray(t), type_params: ["T"], bounds: no_bounds() });
     // fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A
-    inject_fn(c, prog, "fold", FnSig {
-        params: [Type.TArray(t), a, Type.TFn([a, t], a)], ret: a, type_params: ["T", "A"], bounds: no_bounds(),
-    });
+    inject_fn(c, prog, "fold", FnSig { params: [Type.TArray(t), a, Type.TFn([a, t], a)], ret: a, type_params: ["T", "A"], bounds: no_bounds() });
     // parse_int(s: string) -> Option<int> / parse_float(s: string) -> Option<float> (M14.6c).
-    inject_fn(c, prog, "parse_int", FnSig {
-        params: [Type.TString], ret: Type.TNamed("Option", [Type.TInt]), type_params: no_tparams(), bounds: no_bounds(),
-    });
-    inject_fn(c, prog, "parse_float", FnSig {
-        params: [Type.TString], ret: Type.TNamed("Option", [Type.TFloat]), type_params: no_tparams(), bounds: no_bounds(),
-    });
+    inject_fn(c, prog, "parse_int", FnSig { params: [Type.TString], ret: Type.TNamed("Option", [Type.TInt]), type_params: no_tparams(), bounds: no_bounds() });
+    inject_fn(c, prog, "parse_float", FnSig { params: [Type.TString], ret: Type.TNamed("Option", [Type.TFloat]), type_params: no_tparams(), bounds: no_bounds() });
     // assert(cond: bool) (M14.6c-2). assert_eq<T: Eq + Show>(a: T, b: T). sort<T: Ord>(a: [T]) -> [T].
-    inject_fn(c, prog, "assert", FnSig {
-        params: [Type.TBool], ret: Type.TUnit, type_params: no_tparams(), bounds: no_bounds(),
-    });
-    inject_fn(c, prog, "assert_eq", FnSig {
-        params: [t, t], ret: Type.TUnit, type_params: ["T"],
-        bounds: [Bound { param: "T", trait_name: "Eq" }, Bound { param: "T", trait_name: "Show" }],
-    });
-    inject_fn(c, prog, "sort", FnSig {
-        params: [Type.TArray(t)], ret: Type.TArray(t), type_params: ["T"],
-        bounds: [Bound { param: "T", trait_name: "Ord" }],
-    });
+    inject_fn(c, prog, "assert", FnSig { params: [Type.TBool], ret: Type.TUnit, type_params: no_tparams(), bounds: no_bounds() });
+    inject_fn(c, prog, "assert_eq", FnSig { params: [t, t], ret: Type.TUnit, type_params: ["T"], bounds: [Bound { param: "T", trait_name: "Eq" }, Bound { param: "T", trait_name: "Show" }] });
+    inject_fn(c, prog, "sort", FnSig { params: [Type.TArray(t)], ret: Type.TArray(t), type_params: ["T"], bounds: [Bound { param: "T", trait_name: "Ord" }] });
     // I/O de archivos (M14.6d): read_file(ruta) -> Result<string,string>,
     // write_file(ruta, contenido) -> Result<int,string>. (exists es builtin directo -> bool.)
-    inject_fn(c, prog, "read_file", FnSig {
-        params: [Type.TString], ret: Type.TNamed("Result", [Type.TString, Type.TString]), type_params: no_tparams(), bounds: no_bounds(),
-    });
-    inject_fn(c, prog, "write_file", FnSig {
-        params: [Type.TString, Type.TString], ret: Type.TNamed("Result", [Type.TInt, Type.TString]), type_params: no_tparams(), bounds: no_bounds(),
-    });
+    inject_fn(c, prog, "read_file", FnSig { params: [Type.TString], ret: Type.TNamed("Result", [Type.TString, Type.TString]), type_params: no_tparams(), bounds: no_bounds() });
+    inject_fn(c, prog, "write_file", FnSig { params: [Type.TString, Type.TString], ret: Type.TNamed("Result", [Type.TInt, Type.TString]), type_params: no_tparams(), bounds: no_bounds() });
     // pop<T>(a: [T]) -> Option<T> (M14.7c): quita y devuelve el último (None si vacío).
-    inject_fn(c, prog, "pop", FnSig {
-        params: [Type.TArray(t)], ret: Type.TNamed("Option", [t]), type_params: ["T"], bounds: no_bounds(),
-    });
+    inject_fn(c, prog, "pop", FnSig { params: [Type.TArray(t)], ret: Type.TNamed("Option", [t]), type_params: ["T"], bounds: no_bounds() });
 }
 
 // Registra una función del prelude (su firma) si el usuario no la define con ese nombre.
 fn inject_fn(c: Checker, prog: Program, name: string, sig: FnSig) {
-    if (!user_declares_fn(prog, name)) { insert(c.funcs, name, sig); }
+    if (!user_declares_fn(prog, name)) {
+        insert(c.funcs, name, sig);
+    }
 }
 
 // ¿El usuario declara una función con ese nombre?
 fn user_declares_fn(prog: Program, name: string) -> bool {
     var i = 0;
     while (i < len(prog.funcs)) {
-        if (prog.funcs[i].name == name) { return true; }
+        if (prog.funcs[i].name == name) {
+            return true;
+        }
         i = i + 1;
     }
     false
@@ -707,9 +817,19 @@ fn user_declares_fn(prog: Program, name: string) -> bool {
 // ¿El usuario declara un struct/enum con ese nombre? (Para no pisar su definición con la del prelude.)
 fn user_declares_type(prog: Program, name: string) -> bool {
     var i = 0;
-    while (i < len(prog.enums)) { if (prog.enums[i].name == name) { return true; } i = i + 1; }
+    while (i < len(prog.enums)) {
+        if (prog.enums[i].name == name) {
+            return true;
+        }
+        i = i + 1;
+    }
     var j = 0;
-    while (j < len(prog.structs)) { if (prog.structs[j].name == name) { return true; } j = j + 1; }
+    while (j < len(prog.structs)) {
+        if (prog.structs[j].name == name) {
+            return true;
+        }
+        j = j + 1;
+    }
     false
 }
 
@@ -738,7 +858,10 @@ fn register_types(c: Checker, prog: Program) -> Result<int, TypeError> {
             push(seen, v.name);
             var rp: [Type] = [];
             var pi = 0;
-            while (pi < len(v.payload)) { push(rp, resolve_type(v.payload[pi])); pi = pi + 1; }
+            while (pi < len(v.payload)) {
+                push(rp, resolve_type(v.payload[pi]));
+                pi = pi + 1;
+            }
             push(variants, VariantDef { name: v.name, payload: rp, line: v.line, col: v.col });
             vi = vi + 1;
         }
@@ -778,7 +901,10 @@ fn register_types(c: Checker, prog: Program) -> Result<int, TypeError> {
         while (vi < len(variants)) {
             let payload = variants[vi].payload;
             var pi = 0;
-            while (pi < len(payload)) { ensure_type(c, payload[pi], e.line, e.col)?; pi = pi + 1; }
+            while (pi < len(payload)) {
+                ensure_type(c, payload[pi], e.line, e.col)?;
+                pi = pi + 1;
+            }
             vi = vi + 1;
         }
         ev = ev + 1;
@@ -789,7 +915,10 @@ fn register_types(c: Checker, prog: Program) -> Result<int, TypeError> {
         c.tparams = s.type_params;
         let fields = struct_fields(c, s.name);
         var fi = 0;
-        while (fi < len(fields)) { ensure_type(c, fields[fi].ty, s.line, s.col)?; fi = fi + 1; }
+        while (fi < len(fields)) {
+            ensure_type(c, fields[fi].ty, s.line, s.col)?;
+            fi = fi + 1;
+        }
         sv = sv + 1;
     }
     c.tparams = no_tparams();
@@ -798,12 +927,18 @@ fn register_types(c: Checker, prog: Program) -> Result<int, TypeError> {
 
 // Las variantes (resueltas) de un enum registrado (lista vacía si no está, no ocurre tras registrar).
 fn enum_variants(c: Checker, name: string) -> [VariantDef] {
-    match (get(c.enums, name)) { Option.Some(v) => v, Option.None => [] }
+    match (get(c.enums, name)) {
+        Option.Some(v) => v,
+        Option.None => [],
+    }
 }
 
 // Los campos (resueltos) de un struct registrado.
 fn struct_fields(c: Checker, name: string) -> [FieldDef] {
-    match (get(c.structs, name)) { Option.Some(f) => f, Option.None => [] }
+    match (get(c.structs, name)) {
+        Option.Some(f) => f,
+        Option.None => [],
+    }
 }
 
 // program = registrar tipos → registrar firmas → registrar traits/impls → exigir main → verificar
@@ -819,7 +954,10 @@ fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
         check_unique_tparams(f.type_params, f.name, f.line, f.col)?;
         var ps: [Type] = [];
         var pi = 0;
-        while (pi < len(f.params)) { push(ps, resolve_type(f.params[pi].ty)); pi = pi + 1; }
+        while (pi < len(f.params)) {
+            push(ps, resolve_type(f.params[pi].ty));
+            pi = pi + 1;
+        }
         insert(c.funcs, f.name, FnSig { params: ps, ret: resolve_type(f.ret), type_params: f.type_params, bounds: f.bounds });
         fi = fi + 1;
     }
@@ -828,7 +966,9 @@ fn check_program(c: Checker, prog: Program) -> Result<int, TypeError> {
     check_annotations(c, prog)?;
     // 'main' es obligatoria: sin parámetros, retorno int o unit.
     match (get(c.funcs, "main")) {
-        Option.None => { return Result.Err(terr(1, 1, "falta la función de entrada 'main'")); },
+        Option.None => {
+            return Result.Err(terr(1, 1, "falta la función de entrada 'main'"));
+        },
         Option.Some(sig) => {
             if (len(sig.params) != 0) {
                 return Result.Err(terr(1, 1, "'main' no debe recibir parámetros"));
@@ -917,8 +1057,11 @@ fn check_fn_body(c: Checker, params: [Param], ret_ann: Type, body: Block, line: 
     var eline = line;
     var ecol = col;
     match (body.tail) {
-        Option.Some(t) => { eline = t.line; ecol = t.col; },
-        Option.None => {},
+        Option.Some(t) => {
+            eline = t.line;
+            ecol = t.col;
+        },
+        Option.None => { },
     }
     pop_scope(c);
     if (type_eq(ret, Type.TUnit)) {
@@ -936,7 +1079,6 @@ fn check_fn_body(c: Checker, params: [Param], ret_ann: Type, body: Block, line: 
 // =====================================================================
 // Sentencias
 // =====================================================================
-
 fn check_stmt(c: Checker, stmt: Stmt) -> Result<int, TypeError> {
     match (stmt.kind) {
         SKind.SLet(name, tyopt, value, mutable) => {
@@ -947,8 +1089,7 @@ fn check_stmt(c: Checker, stmt: Stmt) -> Result<int, TypeError> {
                     // El tipo declarado es el esperado del valor (chequeo bidireccional: fija el `[]`).
                     let vt = check_expr_expected(c, value, ty)?;
                     if (!type_eq(vt, ty)) {
-                        return Result.Err(terr(value.line, value.col,
-                            "'" + name + "' se declara como " + type_str(ty) + " pero se inicializa con " + type_str(vt)));
+                        return Result.Err(terr(value.line, value.col, "'" + name + "' se declara como " + type_str(ty) + " pero se inicializa con " + type_str(vt)));
                     }
                     declare(c, name, ty, mutable, stmt.line, stmt.col);
                 },
@@ -963,16 +1104,20 @@ fn check_stmt(c: Checker, stmt: Stmt) -> Result<int, TypeError> {
         SKind.SReturn(valopt) => {
             var vt = Type.TUnit;
             match (valopt) {
-                Option.Some(e) => { vt = check_expr_expected(c, e, c.current_return)?; },
-                Option.None => {},
+                Option.Some(e) => {
+                    vt = check_expr_expected(c, e, c.current_return)?;
+                },
+                Option.None => { },
             }
             if (!type_eq(vt, c.current_return)) {
-                return Result.Err(terr(stmt.line, stmt.col,
-                    "se devuelve " + type_str(vt) + " pero la función declara retorno " + type_str(c.current_return)));
+                return Result.Err(terr(stmt.line, stmt.col, "se devuelve " + type_str(vt) + " pero la función declara retorno " + type_str(c.current_return)));
             }
             Result.Ok(0)
         },
-        SKind.SExpr(e) => { check_expr(c, e)?; Result.Ok(0) },
+        SKind.SExpr(e) => {
+            check_expr(c, e)?;
+            Result.Ok(0)
+        },
     }
 }
 
@@ -985,13 +1130,11 @@ fn check_assign(c: Checker, target: Expr, value: Expr, line: int, col: int) -> R
                 Option.None => Result.Err(terr(target.line, target.col, "variable '" + name + "' no declarada")),
                 Option.Some(v) => {
                     if (!v.mutable) {
-                        return Result.Err(terr(line, col,
-                            "no se puede asignar a '" + name + "': es inmutable (declarada con 'let'; usa 'var')"));
+                        return Result.Err(terr(line, col, "no se puede asignar a '" + name + "': es inmutable (declarada con 'let'; usa 'var')"));
                     }
                     let vt = check_expr(c, value)?;
                     if (!type_eq(vt, v.ty)) {
-                        return Result.Err(terr(value.line, value.col,
-                            "'" + name + "' es " + type_str(v.ty) + " pero se le asigna " + type_str(vt)));
+                        return Result.Err(terr(value.line, value.col, "'" + name + "' es " + type_str(v.ty) + " pero se le asigna " + type_str(vt)));
                     }
                     Result.Ok(0)
                 },
@@ -1001,14 +1144,12 @@ fn check_assign(c: Checker, target: Expr, value: Expr, line: int, col: int) -> R
             // Los strings son inmutables: `s[i] = c` no se permite (sí se lee `s[i]`).
             let at = check_expr(c, array)?;
             if (type_eq(at, Type.TString)) {
-                return Result.Err(terr(target.line, target.col,
-                    "no se puede asignar a un carácter de un string (los strings son inmutables)"));
+                return Result.Err(terr(target.line, target.col, "no se puede asignar a un carácter de un string (los strings son inmutables)"));
             }
             let elem = check_index(c, array, index)?;
             let vt = check_expr(c, value)?;
             if (!type_eq(vt, elem)) {
-                return Result.Err(terr(value.line, value.col,
-                    "el elemento es " + type_str(elem) + " pero se le asigna " + type_str(vt)));
+                return Result.Err(terr(value.line, value.col, "el elemento es " + type_str(elem) + " pero se le asigna " + type_str(vt)));
             }
             Result.Ok(0)
         },
@@ -1016,8 +1157,7 @@ fn check_assign(c: Checker, target: Expr, value: Expr, line: int, col: int) -> R
             let fty = check_field(c, object, name)?;
             let vt = check_expr(c, value)?;
             if (!type_eq(vt, fty)) {
-                return Result.Err(terr(value.line, value.col,
-                    "el campo '" + name + "' es " + type_str(fty) + " pero se le asigna " + type_str(vt)));
+                return Result.Err(terr(value.line, value.col, "el campo '" + name + "' es " + type_str(fty) + " pero se le asigna " + type_str(vt)));
             }
             Result.Ok(0)
         },
@@ -1028,7 +1168,6 @@ fn check_assign(c: Checker, target: Expr, value: Expr, line: int, col: int) -> R
 // =====================================================================
 // Expresiones
 // =====================================================================
-
 fn check_expr(c: Checker, e: Expr) -> Result<Type, TypeError> {
     match (e.kind) {
         EKind.EInt(_) => Result.Ok(Type.TInt),
@@ -1071,7 +1210,10 @@ fn check_func_expr(c: Checker, fe: FnExpr) -> Result<Type, TypeError> {
     r?;
     var ps: [Type] = [];
     pi = 0;
-    while (pi < len(fe.params)) { push(ps, resolve_type(fe.params[pi].ty)); pi = pi + 1; }
+    while (pi < len(fe.params)) {
+        push(ps, resolve_type(fe.params[pi].ty));
+        pi = pi + 1;
+    }
     Result.Ok(Type.TFn(ps, resolve_type(fe.ret)))
 }
 
@@ -1090,12 +1232,10 @@ fn check_try(c: Checker, inner: Expr, line: int, col: int) -> Result<Type, TypeE
                         if (rn == "Result" && len(rargs) == 2 && type_eq(rargs[1], err_ty)) {
                             Result.Ok(ok_ty)
                         } else {
-                            Result.Err(terr(line, col, "'?' sobre " + type_str(it) + " requiere que la función devuelva Result<_, "
-                                + type_str(err_ty) + ">, pero devuelve " + type_str(c.current_return)))
+                            Result.Err(terr(line, col, "'?' sobre " + type_str(it) + " requiere que la función devuelva Result<_, " + type_str(err_ty) + ">, pero devuelve " + type_str(c.current_return)))
                         }
                     },
-                    _ => Result.Err(terr(line, col, "'?' sobre " + type_str(it) + " requiere que la función devuelva Result<_, "
-                        + type_str(err_ty) + ">, pero devuelve " + type_str(c.current_return))),
+                    _ => Result.Err(terr(line, col, "'?' sobre " + type_str(it) + " requiere que la función devuelva Result<_, " + type_str(err_ty) + ">, pero devuelve " + type_str(c.current_return))),
                 }
             } else if (n == "Option" && len(args) == 1) {
                 let some_ty = args[0];
@@ -1104,12 +1244,10 @@ fn check_try(c: Checker, inner: Expr, line: int, col: int) -> Result<Type, TypeE
                         if (rn == "Option" && len(rargs) == 1) {
                             Result.Ok(some_ty)
                         } else {
-                            Result.Err(terr(line, col, "'?' sobre " + type_str(it)
-                                + " requiere que la función devuelva Option<_>, pero devuelve " + type_str(c.current_return)))
+                            Result.Err(terr(line, col, "'?' sobre " + type_str(it) + " requiere que la función devuelva Option<_>, pero devuelve " + type_str(c.current_return)))
                         }
                     },
-                    _ => Result.Err(terr(line, col, "'?' sobre " + type_str(it)
-                        + " requiere que la función devuelva Option<_>, pero devuelve " + type_str(c.current_return))),
+                    _ => Result.Err(terr(line, col, "'?' sobre " + type_str(it) + " requiere que la función devuelva Option<_>, pero devuelve " + type_str(c.current_return))),
                 }
             } else {
                 Result.Err(terr(inner.line, inner.col, "'?' requiere un Result o un Option, no " + type_str(it)))
@@ -1129,9 +1267,11 @@ fn check_expr_expected(c: Checker, e: Expr, expected: Type) -> Result<Type, Type
     // hojas (cada rama), igual que el resto del chequeo bidireccional.
     match (expected) {
         Type.TDyn(traits) => {
-            if (!propaga_esperado(e)) { return coerce_to_dyn(c, e, traits, e.line, e.col); }
+            if (!propaga_esperado(e)) {
+                return coerce_to_dyn(c, e, traits, e.line, e.col);
+            }
         },
-        _ => {},
+        _ => { },
     }
     match (e.kind) {
         EKind.EArray(elems) => {
@@ -1141,8 +1281,7 @@ fn check_expr_expected(c: Checker, e: Expr, expected: Type) -> Result<Type, Type
                     while (i < len(elems)) {
                         let t = check_expr_expected(c, elems[i], elem_exp)?;
                         if (!type_eq(t, elem_exp)) {
-                            return Result.Err(terr(elems[i].line, elems[i].col,
-                                "los elementos del arreglo deben ser " + type_str(elem_exp) + ", no " + type_str(t)));
+                            return Result.Err(terr(elems[i].line, elems[i].col, "los elementos del arreglo deben ser " + type_str(elem_exp) + ", no " + type_str(t)));
                         }
                         i = i + 1;
                     }
@@ -1177,12 +1316,10 @@ fn check_unary(c: Checker, op: UnOp, inner: Expr, line: int, col: int) -> Result
     let t = check_expr(c, inner)?;
     match (op) {
         UnOp.Neg => {
-            if (type_eq(t, Type.TInt) || type_eq(t, Type.TFloat)) { Result.Ok(t) }
-            else { Result.Err(terr(line, col, "no se puede negar (-) un " + type_str(t))) }
+            if (type_eq(t, Type.TInt) || type_eq(t, Type.TFloat)) { Result.Ok(t) } else { Result.Err(terr(line, col, "no se puede negar (-) un " + type_str(t))) }
         },
         UnOp.Not => {
-            if (type_eq(t, Type.TBool)) { Result.Ok(Type.TBool) }
-            else { Result.Err(terr(line, col, "el '!' requiere bool, no " + type_str(t))) }
+            if (type_eq(t, Type.TBool)) { Result.Ok(Type.TBool) } else { Result.Err(terr(line, col, "el '!' requiere bool, no " + type_str(t))) }
         },
     }
 }
@@ -1192,31 +1329,20 @@ fn check_binary(c: Checker, op: BinOp, l: Expr, r: Expr, line: int, col: int) ->
     let rt = check_expr(c, r)?;
     let kind = op_kind(op);
     if (kind == 0) {
-        if (type_eq(lt, Type.TInt) && type_eq(rt, Type.TInt)) { Result.Ok(Type.TInt) }
-        else if (type_eq(lt, Type.TFloat) && type_eq(rt, Type.TFloat)) { Result.Ok(Type.TFloat) }
-        else if (is_add(op) && type_eq(lt, Type.TString) && type_eq(rt, Type.TString)) { Result.Ok(Type.TString) }
-        else if (is_add(op) && is_array(lt) && type_eq(lt, rt)) { Result.Ok(lt) }
-        else {
-            Result.Err(terr(line, col, "el operador '" + bin_op_str(op)
-                + "' requiere ambos operandos int o ambos float, no " + type_str(lt) + " y " + type_str(rt)))
+        if (type_eq(lt, Type.TInt) && type_eq(rt, Type.TInt)) { Result.Ok(Type.TInt) } else if (type_eq(lt, Type.TFloat) && type_eq(rt, Type.TFloat)) { Result.Ok(Type.TFloat) } else if (is_add(op) && type_eq(lt, Type.TString) && type_eq(rt, Type.TString)) { Result.Ok(Type.TString) } else if (is_add(op) && is_array(lt) && type_eq(lt, rt)) { Result.Ok(lt) } else {
+            Result.Err(terr(line, col, "el operador '" + bin_op_str(op) + "' requiere ambos operandos int o ambos float, no " + type_str(lt) + " y " + type_str(rt)))
         }
     } else if (kind == 1) {
-        if (order_ok(lt, rt)) { Result.Ok(Type.TBool) }
-        else {
-            Result.Err(terr(line, col, "el operador '" + bin_op_str(op)
-                + "' compara int/float/string/char del mismo tipo, no " + type_str(lt) + " y " + type_str(rt)))
+        if (order_ok(lt, rt)) { Result.Ok(Type.TBool) } else {
+            Result.Err(terr(line, col, "el operador '" + bin_op_str(op) + "' compara int/float/string/char del mismo tipo, no " + type_str(lt) + " y " + type_str(rt)))
         }
     } else if (kind == 2) {
-        if (type_eq(lt, rt) && is_comparable(lt)) { Result.Ok(Type.TBool) }
-        else {
-            Result.Err(terr(line, col, "el operador '" + bin_op_str(op)
-                + "' requiere ambos operandos del mismo tipo comparable, no " + type_str(lt) + " y " + type_str(rt)))
+        if (type_eq(lt, rt) && is_comparable(lt)) { Result.Ok(Type.TBool) } else {
+            Result.Err(terr(line, col, "el operador '" + bin_op_str(op) + "' requiere ambos operandos del mismo tipo comparable, no " + type_str(lt) + " y " + type_str(rt)))
         }
     } else {
-        if (type_eq(lt, Type.TBool) && type_eq(rt, Type.TBool)) { Result.Ok(Type.TBool) }
-        else {
-            Result.Err(terr(line, col, "el operador '" + bin_op_str(op)
-                + "' requiere operandos bool, no " + type_str(lt) + " y " + type_str(rt)))
+        if (type_eq(lt, Type.TBool) && type_eq(rt, Type.TBool)) { Result.Ok(Type.TBool) } else {
+            Result.Err(terr(line, col, "el operador '" + bin_op_str(op) + "' requiere operandos bool, no " + type_str(lt) + " y " + type_str(rt)))
         }
     }
 }
@@ -1246,7 +1372,7 @@ fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], expected
                 return check_assoc_map_new(c, cargs, expected, line, col);
             }
         },
-        _ => {},
+        _ => { },
     }
     // (1) ¿el receptor nombra un enum? → construcción de variante.
     match (obj.kind) {
@@ -1255,45 +1381,53 @@ fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], expected
                 return check_enum_lit(c, en, name, cargs, expected, line, col);
             }
         },
-        _ => {},
+        _ => { },
     }
     let recv_ty = check_expr(c, obj)?;
     // (1.5) receptor `dyn Trait` → despacho dinámico por la vtable del objeto.
     match (recv_ty) {
-        Type.TDyn(traits) => { return dispatch_dyn_method(c, traits, name, cargs, line, col); },
-        _ => {},
+        Type.TDyn(traits) => {
+            return dispatch_dyn_method(c, traits, name, cargs, line, col);
+        },
+        _ => { },
     }
     // (2) ¿un campo del struct receptor con ese nombre (de tipo función)? Gana sobre el método/UFCS.
     match (recv_ty) {
         Type.TNamed(sname, targs) => {
             match (struct_field_type(c, sname, targs, name)) {
-                Option.Some(fty) => { return call_type(c, fty, cargs, line, col); },
-                Option.None => {},
+                Option.Some(fty) => {
+                    return call_type(c, fty, cargs, line, col);
+                },
+                Option.None => { },
             }
         },
-        _ => {},
+        _ => { },
     }
     // (3) ¿un método de trait del tipo concreto del receptor? Gana sobre la función libre (UFCS).
     match (type_key_of(recv_ty)) {
         Option.Some(key) => {
             match (get(c.methods, mangle(key, name))) {
-                Option.Some(sig) => { return call_method(c, sig, mangle(key, name), obj, cargs, line, col); },
-                Option.None => {},
+                Option.Some(sig) => {
+                    return call_method(c, sig, mangle(key, name), obj, cargs, line, col);
+                },
+                Option.None => { },
             }
         },
-        Option.None => {},
+        Option.None => { },
     }
     // (3b) ¿un método de un trait que ACOTA al tipo del receptor? (`x.m()` con `x: T`, `T: Trait`).
     match (recv_ty) {
         Type.TNamed(tp, targs) => {
             if (len(targs) == 0 && contains_str(c.tparams, tp)) {
                 match (resolve_bound_method(c, tp, name, cargs, line, col)?) {
-                    Option.Some(ret) => { return Result.Ok(ret); },
-                    Option.None => {},
+                    Option.Some(ret) => {
+                        return Result.Ok(ret);
+                    },
+                    Option.None => { },
                 }
             }
         },
-        _ => {},
+        _ => { },
     }
     // (4) UFCS: `name(recv, args)`.
     check_ufcs(c, name, recv_ty, obj, cargs, line, col)
@@ -1309,13 +1443,19 @@ fn resolve_bound_method(c: Checker, tp: string, method: string, cargs: [Expr], l
         let b = c.bounds[i];
         if (b.param == tp) {
             match (get(c.traits, b.trait_name)) {
-                Option.Some(ms) => { if (trait_has_method(ms, method)) { push(hits, b.trait_name); } },
-                Option.None => {},
+                Option.Some(ms) => {
+                    if (trait_has_method(ms, method)) {
+                        push(hits, b.trait_name);
+                    }
+                },
+                Option.None => { },
             }
         }
         i = i + 1;
     }
-    if (len(hits) == 0) { return Result.Ok(Option.None); }
+    if (len(hits) == 0) {
+        return Result.Ok(Option.None);
+    }
     if (len(hits) > 1) {
         return Result.Err(terr(line, col, "método '" + method + "' ambiguo para '" + tp + "': lo declaran varios traits acotados (" + join_comma(hits) + ")"));
     }
@@ -1323,22 +1463,25 @@ fn resolve_bound_method(c: Checker, tp: string, method: string, cargs: [Expr], l
     let self_ty = Type.TNamed(tp, []);
     let sig = match (find_method_sig(trait_methods_of(c, trait_name), method)) {
         Option.Some(m) => m,
-        Option.None => { return Result.Err(terr(line, col, "método '" + method + "' no encontrado")); },
+        Option.None => {
+            return Result.Err(terr(line, col, "método '" + method + "' no encontrado"));
+        },
     };
     // Argumentos esperados: los del método sin el receptor (self), con Self→T.
     var expected: [Type] = [];
     var j = 1;
-    while (j < len(sig.params)) { push(expected, resolve_type(subst_self(sig.params[j].ty, self_ty))); j = j + 1; }
+    while (j < len(sig.params)) {
+        push(expected, resolve_type(subst_self(sig.params[j].ty, self_ty)));
+        j = j + 1;
+    }
     if (len(cargs) != len(expected)) {
-        return Result.Err(terr(line, col, "el método '" + method + "' espera " + to_string(len(expected))
-            + " argumento(s) (sin contar el receptor), se le pasaron " + to_string(len(cargs))));
+        return Result.Err(terr(line, col, "el método '" + method + "' espera " + to_string(len(expected)) + " argumento(s) (sin contar el receptor), se le pasaron " + to_string(len(cargs))));
     }
     var k = 0;
     while (k < len(cargs)) {
         let at = check_expr_expected(c, cargs[k], expected[k])?;
         if (!type_eq(at, expected[k])) {
-            return Result.Err(terr(cargs[k].line, cargs[k].col,
-                "argumento " + to_string(k + 1) + " del método '" + method + "': se esperaba " + type_str(expected[k]) + ", se pasó " + type_str(at)));
+            return Result.Err(terr(cargs[k].line, cargs[k].col, "argumento " + to_string(k + 1) + " del método '" + method + "': se esperaba " + type_str(expected[k]) + ", se pasó " + type_str(at)));
         }
         k = k + 1;
     }
@@ -1347,14 +1490,19 @@ fn resolve_bound_method(c: Checker, tp: string, method: string, cargs: [Expr], l
 
 // Las firmas de un trait registrado (vacío si no está).
 fn trait_methods_of(c: Checker, name: string) -> [MethodSig] {
-    match (get(c.traits, name)) { Option.Some(ms) => ms, Option.None => [] }
+    match (get(c.traits, name)) {
+        Option.Some(ms) => ms,
+        Option.None => [],
+    }
 }
 
 // ¿La lista de firmas declara un método con ese nombre?
 fn trait_has_method(ms: [MethodSig], method: string) -> bool {
     var i = 0;
     while (i < len(ms)) {
-        if (ms[i].name == method) { return true; }
+        if (ms[i].name == method) {
+            return true;
+        }
         i = i + 1;
     }
     false
@@ -1368,7 +1516,10 @@ fn call_method(c: Checker, sig: FnSig, label: string, obj: Expr, cargs: [Expr], 
     var all: [Expr] = [];
     push(all, obj);
     var i = 0;
-    while (i < len(cargs)) { push(all, cargs[i]); i = i + 1; }
+    while (i < len(cargs)) {
+        push(all, cargs[i]);
+        i = i + 1;
+    }
     if (len(sig.type_params) == 0) {
         check_args(c, sig.params, sig.ret, all, "'" + label + "'", line, col)
     } else {
@@ -1379,7 +1530,6 @@ fn call_method(c: Checker, sig: FnSig, label: string, obj: Expr, cargs: [Expr], 
 // =====================================================================
 // Trait objects (M14.3d-4a: dyn — despacho dinámico)
 // =====================================================================
-
 // ¿`e` propaga el tipo esperado a sus hojas? (if/match/bloque: la coerción a dyn ocurre en cada rama.)
 fn propaga_esperado(e: Expr) -> bool {
     match (e.kind) {
@@ -1394,7 +1544,9 @@ fn propaga_esperado(e: Expr) -> bool {
 fn subset_strs(ts: [string], whole: [string]) -> bool {
     var i = 0;
     while (i < len(ts)) {
-        if (!contains_str(whole, ts[i])) { return false; }
+        if (!contains_str(whole, ts[i])) {
+            return false;
+        }
         i = i + 1;
     }
     true
@@ -1406,12 +1558,15 @@ fn coerce_to_dyn(c: Checker, e: Expr, traits: [string], line: int, col: int) -> 
     let actual = check_expr(c, e)?;
     match (actual) {
         Type.TDyn(source) => {
-            if (strs_eq(source, traits)) { return Result.Ok(actual); }
-            if (subset_strs(traits, source)) { return Result.Ok(Type.TDyn(traits)); }
-            return Result.Err(terr(line, col, "no se puede convertir 'dyn " + join_strs(source) + "' en 'dyn "
-                + join_strs(traits) + "': solo se puede upcastear a un subconjunto de traits"));
+            if (strs_eq(source, traits)) {
+                return Result.Ok(actual);
+            }
+            if (subset_strs(traits, source)) {
+                return Result.Ok(Type.TDyn(traits));
+            }
+            return Result.Err(terr(line, col, "no se puede convertir 'dyn " + join_strs(source) + "' en 'dyn " + join_strs(traits) + "': solo se puede upcastear a un subconjunto de traits"));
         },
-        _ => {},
+        _ => { },
     }
     match (type_key_of(actual)) {
         Option.None => Result.Err(terr(line, col, "no se puede convertir " + type_str(actual) + " en 'dyn " + join_strs(traits) + "'")),
@@ -1434,7 +1589,9 @@ fn coerce_to_dyn(c: Checker, e: Expr, traits: [string], line: int, col: int) -> 
 fn dispatch_dyn_method(c: Checker, traits: [string], method: string, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     let sig = match (find_dyn_method(c, traits, method)) {
         Option.Some(m) => m,
-        Option.None => { return Result.Err(terr(line, col, "'dyn " + join_strs(traits) + "' no declara un método '" + method + "'")); },
+        Option.None => {
+            return Result.Err(terr(line, col, "'dyn " + join_strs(traits) + "' no declara un método '" + method + "'"));
+        },
     };
     // Object safety: si `Self` aparece fuera del receptor (en un param o el retorno), no es invocable.
     if (method_uses_self(sig)) {
@@ -1443,17 +1600,18 @@ fn dispatch_dyn_method(c: Checker, traits: [string], method: string, cargs: [Exp
     // Argumentos (sin el receptor, que es el propio objeto).
     var expected: [Type] = [];
     var j = 1;
-    while (j < len(sig.params)) { push(expected, resolve_type(sig.params[j].ty)); j = j + 1; }
+    while (j < len(sig.params)) {
+        push(expected, resolve_type(sig.params[j].ty));
+        j = j + 1;
+    }
     if (len(cargs) != len(expected)) {
-        return Result.Err(terr(line, col, "el método '" + method + "' espera " + to_string(len(expected))
-            + " argumento(s) (sin contar el receptor), se le pasaron " + to_string(len(cargs))));
+        return Result.Err(terr(line, col, "el método '" + method + "' espera " + to_string(len(expected)) + " argumento(s) (sin contar el receptor), se le pasaron " + to_string(len(cargs))));
     }
     var k = 0;
     while (k < len(cargs)) {
         let at = check_expr_expected(c, cargs[k], expected[k])?;
         if (!type_eq(at, expected[k])) {
-            return Result.Err(terr(cargs[k].line, cargs[k].col,
-                "argumento " + to_string(k + 1) + " del método '" + method + "': se esperaba " + type_str(expected[k]) + ", se pasó " + type_str(at)));
+            return Result.Err(terr(cargs[k].line, cargs[k].col, "argumento " + to_string(k + 1) + " del método '" + method + "': se esperaba " + type_str(expected[k]) + ", se pasó " + type_str(at)));
         }
         k = k + 1;
     }
@@ -1465,8 +1623,10 @@ fn find_dyn_method(c: Checker, traits: [string], method: string) -> Option<Metho
     var i = 0;
     while (i < len(traits)) {
         match (find_method_sig(trait_methods_of(c, traits[i]), method)) {
-            Option.Some(m) => { return Option.Some(m); },
-            Option.None => {},
+            Option.Some(m) => {
+                return Option.Some(m);
+            },
+            Option.None => { },
         }
         i = i + 1;
     }
@@ -1477,7 +1637,9 @@ fn find_dyn_method(c: Checker, traits: [string], method: string) -> Option<Metho
 fn method_uses_self(sig: MethodSig) -> bool {
     var i = 1;
     while (i < len(sig.params)) {
-        if (type_uses_self(sig.params[i].ty)) { return true; }
+        if (type_uses_self(sig.params[i].ty)) {
+            return true;
+        }
         i = i + 1;
     }
     type_uses_self(sig.ret)
@@ -1495,10 +1657,13 @@ fn type_uses_self(t: Type) -> bool {
         _ => false,
     }
 }
+
 fn types_use_self(ts: [Type]) -> bool {
     var i = 0;
     while (i < len(ts)) {
-        if (type_uses_self(ts[i])) { return true; }
+        if (type_uses_self(ts[i])) {
+            return true;
+        }
         i = i + 1;
     }
     false
@@ -1528,28 +1693,29 @@ fn check_ufcs(c: Checker, name: string, recv_ty: Type, obj: Expr, cargs: [Expr],
     var all: [Expr] = [];
     push(all, obj);
     var i = 0;
-    while (i < len(cargs)) { push(all, cargs[i]); i = i + 1; }
+    while (i < len(cargs)) {
+        push(all, cargs[i]);
+        i = i + 1;
+    }
     check_named_call(c, name, all, line, col)
 }
 
 // ¿`name` nombra un builtin que el checker auto-alojado conoce? (Los mismos que `check_named_call`.)
 fn is_known_builtin(name: string) -> bool {
-    name == "print" || name == "eprint" || name == "len" || name == "push"
-        || name == "to_string" || name == "trim" || name == "split" || name == "chars"
-        || name == "contains" || name == "replace" || name == "starts_with" || name == "ends_with"
-        || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat"
-        || name == "join"
-        || name == "insert" || name == "get" || name == "contains_key"
-        || name == "keys" || name == "values" || name == "remove"
-        || name == "panic" || name == "__parse_int" || name == "__parse_float"
-        || name == "__read_file" || name == "__write_file" || name == "exists" || name == "args"
-        || name == "__pop"
+    name == "print" || name == "eprint" || name == "len" || name == "push" || name == "to_string" || name == "trim" || name == "split" || name == "chars" || name == "contains" || name == "replace" || name == "starts_with" || name == "ends_with" || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat" || name == "join" || name == "insert" || name == "get" || name == "contains_key" || name == "keys" || name == "values" || name == "remove" || name == "panic" || name == "__parse_int" || name == "__parse_float" || name == "__read_file" || name == "__write_file" || name == "exists" || name == "args" || name == "__pop"
 }
 
 // ¿`name` nombra algo llamable? (builtin, variable local de función, o función de nivel superior.)
 fn name_is_callable(c: Checker, name: string) -> bool {
-    if (is_known_builtin(name)) { return true; }
-    match (lookup(c, name)) { Option.Some(_) => { return true; }, Option.None => {}, }
+    if (is_known_builtin(name)) {
+        return true;
+    }
+    match (lookup(c, name)) {
+        Option.Some(_) => {
+            return true;
+        },
+        Option.None => { },
+    }
     contains_key(c.funcs, name)
 }
 
@@ -1573,38 +1739,98 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
     if (name == "print" || name == "eprint") {
         return check_print(c, name, cargs, line, col);
     }
-    if (name == "len") { return check_len(c, cargs, line, col); }
-    if (name == "push") { return check_push(c, cargs, line, col); }
-    if (name == "to_string") { return check_to_string(c, cargs, line, col); }
-    if (name == "trim") { return check_trim(c, cargs, line, col); }
-    if (name == "to_upper") { return check_to_upper(c, cargs, line, col); }
-    if (name == "to_lower") { return check_to_lower(c, cargs, line, col); }
-    if (name == "chars") { return check_chars(c, cargs, line, col); }
-    if (name == "split") { return check_split(c, cargs, line, col); }
-    if (name == "replace") { return check_replace(c, cargs, line, col); }
-    if (name == "starts_with") { return check_starts_with(c, cargs, line, col); }
-    if (name == "ends_with") { return check_ends_with(c, cargs, line, col); }
-    if (name == "substring") { return check_substring(c, cargs, line, col); }
-    if (name == "repeat") { return check_repeat(c, cargs, line, col); }
-    if (name == "join") { return check_join(c, cargs, line, col); }
-    if (name == "contains") { return check_contains(c, cargs, line, col); }
-    if (name == "insert") { return check_insert(c, cargs, line, col); }
-    if (name == "get") { return check_get(c, cargs, line, col); }
-    if (name == "contains_key") { return check_contains_key(c, cargs, line, col); }
-    if (name == "remove") { return check_remove(c, cargs, line, col); }
-    if (name == "keys") { return check_keys(c, cargs, line, col); }
-    if (name == "values") { return check_values(c, cargs, line, col); }
-    if (name == "panic") { return check_panic(c, cargs, line, col); }
-    if (name == "__parse_int") { return check_parse_prim(c, "__parse_int", Type.TInt, cargs, line, col); }
-    if (name == "__parse_float") { return check_parse_prim(c, "__parse_float", Type.TFloat, cargs, line, col); }
-    if (name == "__read_file") { return check_read_file(c, cargs, line, col); }
-    if (name == "__write_file") { return check_write_file(c, cargs, line, col); }
-    if (name == "exists") { return check_exists(c, cargs, line, col); }
-    if (name == "args") { return check_args_builtin(c, cargs, line, col); }
-    if (name == "__pop") { return check_pop_prim(c, cargs, line, col); }
+    if (name == "len") {
+        return check_len(c, cargs, line, col);
+    }
+    if (name == "push") {
+        return check_push(c, cargs, line, col);
+    }
+    if (name == "to_string") {
+        return check_to_string(c, cargs, line, col);
+    }
+    if (name == "trim") {
+        return check_trim(c, cargs, line, col);
+    }
+    if (name == "to_upper") {
+        return check_to_upper(c, cargs, line, col);
+    }
+    if (name == "to_lower") {
+        return check_to_lower(c, cargs, line, col);
+    }
+    if (name == "chars") {
+        return check_chars(c, cargs, line, col);
+    }
+    if (name == "split") {
+        return check_split(c, cargs, line, col);
+    }
+    if (name == "replace") {
+        return check_replace(c, cargs, line, col);
+    }
+    if (name == "starts_with") {
+        return check_starts_with(c, cargs, line, col);
+    }
+    if (name == "ends_with") {
+        return check_ends_with(c, cargs, line, col);
+    }
+    if (name == "substring") {
+        return check_substring(c, cargs, line, col);
+    }
+    if (name == "repeat") {
+        return check_repeat(c, cargs, line, col);
+    }
+    if (name == "join") {
+        return check_join(c, cargs, line, col);
+    }
+    if (name == "contains") {
+        return check_contains(c, cargs, line, col);
+    }
+    if (name == "insert") {
+        return check_insert(c, cargs, line, col);
+    }
+    if (name == "get") {
+        return check_get(c, cargs, line, col);
+    }
+    if (name == "contains_key") {
+        return check_contains_key(c, cargs, line, col);
+    }
+    if (name == "remove") {
+        return check_remove(c, cargs, line, col);
+    }
+    if (name == "keys") {
+        return check_keys(c, cargs, line, col);
+    }
+    if (name == "values") {
+        return check_values(c, cargs, line, col);
+    }
+    if (name == "panic") {
+        return check_panic(c, cargs, line, col);
+    }
+    if (name == "__parse_int") {
+        return check_parse_prim(c, "__parse_int", Type.TInt, cargs, line, col);
+    }
+    if (name == "__parse_float") {
+        return check_parse_prim(c, "__parse_float", Type.TFloat, cargs, line, col);
+    }
+    if (name == "__read_file") {
+        return check_read_file(c, cargs, line, col);
+    }
+    if (name == "__write_file") {
+        return check_write_file(c, cargs, line, col);
+    }
+    if (name == "exists") {
+        return check_exists(c, cargs, line, col);
+    }
+    if (name == "args") {
+        return check_args_builtin(c, cargs, line, col);
+    }
+    if (name == "__pop") {
+        return check_pop_prim(c, cargs, line, col);
+    }
     match (lookup(c, name)) {
-        Option.Some(v) => { return call_type(c, v.ty, cargs, line, col); },
-        Option.None => {},
+        Option.Some(v) => {
+            return call_type(c, v.ty, cargs, line, col);
+        },
+        Option.None => { },
     }
     match (get(c.funcs, name)) {
         Option.Some(sig) => {
@@ -1623,18 +1849,16 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
 // parámetro de tipo no queda determinado por los argumentos, es error (M6.1 no usa el tipo esperado).
 fn check_generic_call(c: Checker, type_params: [string], params: [Type], ret: Type, bounds: [Bound], cargs: [Expr], label: string, line: int, col: int) -> Result<Type, TypeError> {
     if (len(cargs) != len(params)) {
-        return Result.Err(terr(line, col,
-            label + " espera " + to_string(len(params)) + " argumento(s), se le pasaron " + to_string(len(cargs))));
+        return Result.Err(terr(line, col, label + " espera " + to_string(len(params)) + " argumento(s), se le pasaron " + to_string(len(cargs))));
     }
     let sigma: Map<string, Type> = Map.new();
     var i = 0;
     while (i < len(cargs)) {
         let at = check_expr(c, cargs[i])?;
         match (unify(params[i], at, sigma, type_params)) {
-            Result.Ok(_) => {},
+            Result.Ok(_) => { },
             Result.Err(reason) => {
-                return Result.Err(terr(cargs[i].line, cargs[i].col,
-                    "argumento " + to_string(i + 1) + " de " + label + ": " + reason));
+                return Result.Err(terr(cargs[i].line, cargs[i].col, "argumento " + to_string(i + 1) + " de " + label + ": " + reason));
             },
         }
         i = i + 1;
@@ -1643,8 +1867,7 @@ fn check_generic_call(c: Checker, type_params: [string], params: [Type], ret: Ty
     var ti = 0;
     while (ti < len(type_params)) {
         if (!contains_key(sigma, type_params[ti])) {
-            return Result.Err(terr(line, col,
-                "no se pudo inferir el parámetro de tipo '" + type_params[ti] + "' de " + label + " (no aparece en los argumentos)"));
+            return Result.Err(terr(line, col, "no se pudo inferir el parámetro de tipo '" + type_params[ti] + "' de " + label + " (no aparece en los argumentos)"));
         }
         ti = ti + 1;
     }
@@ -1659,7 +1882,10 @@ fn check_call_bounds(c: Checker, bounds: [Bound], sigma: Map<string, Type>, line
     var i = 0;
     while (i < len(bounds)) {
         let b = bounds[i];
-        let concrete = match (get(sigma, b.param)) { Option.Some(t) => t, Option.None => Type.TNamed(b.param, []) };
+        let concrete = match (get(sigma, b.param)) {
+            Option.Some(t) => t,
+            Option.None => Type.TNamed(b.param, []),
+        };
         check_bound_satisfied(c, concrete, b.trait_name, line, col)?;
         i = i + 1;
     }
@@ -1672,17 +1898,17 @@ fn check_bound_satisfied(c: Checker, concrete: Type, trait_name: string, line: i
     match (concrete) {
         Type.TNamed(u, args) => {
             if (len(args) == 0 && contains_str(c.tparams, u)) {
-                if (bounds_has(c.bounds, u, trait_name)) { return Result.Ok(0); }
+                if (bounds_has(c.bounds, u, trait_name)) {
+                    return Result.Ok(0);
+                }
                 return Result.Err(terr(line, col, "el parámetro de tipo '" + u + "' no está acotado por '" + trait_name + "' (requerido por la llamada)"));
             }
-            if (contains_key(c.impl_traits, mangle(u, trait_name))) { Result.Ok(0) }
-            else { Result.Err(terr(line, col, type_str(concrete) + " no implementa '" + trait_name + "' (requerido por la llamada)")) }
+            if (contains_key(c.impl_traits, mangle(u, trait_name))) { Result.Ok(0) } else { Result.Err(terr(line, col, type_str(concrete) + " no implementa '" + trait_name + "' (requerido por la llamada)")) }
         },
         _ => {
             match (type_key_of(concrete)) {
                 Option.Some(key) => {
-                    if (contains_key(c.impl_traits, mangle(key, trait_name))) { Result.Ok(0) }
-                    else { Result.Err(terr(line, col, type_str(concrete) + " no implementa '" + trait_name + "' (requerido por la llamada)")) }
+                    if (contains_key(c.impl_traits, mangle(key, trait_name))) { Result.Ok(0) } else { Result.Err(terr(line, col, type_str(concrete) + " no implementa '" + trait_name + "' (requerido por la llamada)")) }
                 },
                 Option.None => Result.Err(terr(line, col, type_str(concrete) + " no puede implementar el trait '" + trait_name + "'")),
             }
@@ -1694,7 +1920,9 @@ fn check_bound_satisfied(c: Checker, concrete: Type, trait_name: string, line: i
 fn bounds_has(bounds: [Bound], param: string, trait_name: string) -> bool {
     var i = 0;
     while (i < len(bounds)) {
-        if (bounds[i].param == param && bounds[i].trait_name == trait_name) { return true; }
+        if (bounds[i].param == param && bounds[i].trait_name == trait_name) {
+            return true;
+        }
         i = i + 1;
     }
     false
@@ -1735,8 +1963,7 @@ fn check_push(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, Ty
     match (a0) {
         Type.TArray(elem) => {
             if (!type_eq(a1, elem)) {
-                return Result.Err(terr(cargs[1].line, cargs[1].col,
-                    "push: el arreglo es de " + type_str(elem) + " pero se empuja " + type_str(a1)));
+                return Result.Err(terr(cargs[1].line, cargs[1].col, "push: el arreglo es de " + type_str(elem) + " pero se empuja " + type_str(a1)));
             }
             Result.Ok(Type.TUnit)
         },
@@ -1748,7 +1975,6 @@ fn check_push(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, Ty
 // Builtins de string (M14.6a): to_string/trim/split/chars/contains/replace/starts_with/ends_with/
 // to_upper/to_lower/substring/repeat/join. Reglas y mensajes idénticos a `src/builtins.rs`.
 // =====================================================================
-
 // Mensaje de aridad idéntico al helper `arity` de Rust.
 fn b_arity(name: string, n: int, det: string, got: int, line: int, col: int) -> Result<int, TypeError> {
     if (got != n) {
@@ -1948,13 +2174,17 @@ fn check_contains(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type
     b_arity("contains", 2, " (string/arreglo, valor)", len(cargs), line, col)?;
     let a = check_args_types(c, cargs)?;
     match (a[0]) {
-        Type.TString => { want_string(a, cargs, 1, "contains espera un string como subcadena, no ")?; },
+        Type.TString => {
+            want_string(a, cargs, 1, "contains espera un string como subcadena, no ")?;
+        },
         Type.TArray(elem) => {
             if (!type_eq(a[1], elem)) {
                 return Result.Err(terr(cargs[1].line, cargs[1].col, "contains: el arreglo es de " + type_str(elem) + " pero se busca " + type_str(a[1])));
             }
         },
-        _ => { return Result.Err(terr(cargs[0].line, cargs[0].col, "contains espera un string o un arreglo, no " + type_str(a[0]))); },
+        _ => {
+            return Result.Err(terr(cargs[0].line, cargs[0].col, "contains espera un string o un arreglo, no " + type_str(a[0])));
+        },
     }
     Result.Ok(Type.TBool)
 }
@@ -1963,7 +2193,6 @@ fn check_contains(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type
 // Builtins de Map (M14.6b): map_new/insert/get/contains_key/keys/values. Reglas/mensajes idénticos a
 // `src/builtins.rs` (get refleja el envoltorio del prelude: (Map<K,V>, K) -> Option<V>).
 // =====================================================================
-
 // M48.1: `Map.new()` — función asociada. Como `Map.new()` (indeterminado) pero con mensajes "Map.new"
 // idénticos a `try_assoc_call` de Rust. La aridad se valida primero (como en Rust).
 fn check_assoc_map_new(c: Checker, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
@@ -1973,12 +2202,14 @@ fn check_assoc_map_new(c: Checker, cargs: [Expr], expected: Option<Type>, line: 
     match (expected) {
         Option.Some(t) => {
             match (map_kv(t)) {
-                Option.Some(_) => { ensure_type(c, t, line, col)?; Result.Ok(t) },
+                Option.Some(_) => {
+                    ensure_type(c, t, line, col)?;
+                    Result.Ok(t)
+                },
                 Option.None => Result.Err(terr(line, col, "'Map.new' produce un Map, pero aquí se espera " + type_str(t))),
             }
         },
-        Option.None => Result.Err(terr(line, col,
-            "no se puede inferir el tipo de 'Map.new'; anótalo, p. ej. 'let m: Map<string, int> = Map.new()'")),
+        Option.None => Result.Err(terr(line, col, "no se puede inferir el tipo de 'Map.new'; anótalo, p. ej. 'let m: Map<string, int> = Map.new()'")),
     }
 }
 
@@ -2070,16 +2301,14 @@ fn call_type(c: Checker, ty: Type, cargs: [Expr], line: int, col: int) -> Result
 
 fn check_args(c: Checker, params: [Type], ret: Type, cargs: [Expr], label: string, line: int, col: int) -> Result<Type, TypeError> {
     if (len(cargs) != len(params)) {
-        return Result.Err(terr(line, col,
-            label + " espera " + to_string(len(params)) + " argumento(s), se le pasaron " + to_string(len(cargs))));
+        return Result.Err(terr(line, col, label + " espera " + to_string(len(params)) + " argumento(s), se le pasaron " + to_string(len(cargs))));
     }
     var i = 0;
     while (i < len(cargs)) {
         // El tipo del parámetro es el esperado del argumento (propaga a `[]`, etc.).
         let at = check_expr_expected(c, cargs[i], params[i])?;
         if (!type_eq(at, params[i])) {
-            return Result.Err(terr(cargs[i].line, cargs[i].col,
-                "argumento " + to_string(i + 1) + " de " + label + ": se esperaba " + type_str(params[i]) + ", se pasó " + type_str(at)));
+            return Result.Err(terr(cargs[i].line, cargs[i].col, "argumento " + to_string(i + 1) + " de " + label + ": se esperaba " + type_str(params[i]) + ", se pasó " + type_str(at)));
         }
         i = i + 1;
     }
@@ -2096,18 +2325,20 @@ fn check_if(c: Checker, cond: Expr, then_b: Block, elseopt: Option<Expr>, expect
     match (elseopt) {
         Option.None => {
             if (!type_eq(then_ty, Type.TUnit)) {
-                return Result.Err(terr(line, col,
-                    "un if sin else tiene tipo unit, pero su rama produce " + type_str(then_ty) + " (añade un else)"));
+                return Result.Err(terr(line, col, "un if sin else tiene tipo unit, pero su rama produce " + type_str(then_ty) + " (añade un else)"));
             }
             Result.Ok(Type.TUnit)
         },
         Option.Some(else_e) => {
             let else_ty = check_expr_opt(c, else_e, expected)?;
-            if (block_diverges(then_b)) { return Result.Ok(else_ty); }
-            if (expr_diverges(else_e)) { return Result.Ok(then_ty); }
+            if (block_diverges(then_b)) {
+                return Result.Ok(else_ty);
+            }
+            if (expr_diverges(else_e)) {
+                return Result.Ok(then_ty);
+            }
             if (!type_eq(then_ty, else_ty)) {
-                return Result.Err(terr(line, col,
-                    "las ramas del if tienen tipos distintos: " + type_str(then_ty) + " y " + type_str(else_ty)));
+                return Result.Err(terr(line, col, "las ramas del if tienen tipos distintos: " + type_str(then_ty) + " y " + type_str(else_ty)));
             }
             Result.Ok(then_ty)
         },
@@ -2150,8 +2381,10 @@ fn check_block(c: Checker, block: Block) -> Result<Type, TypeError> {
     }
     var ty = Type.TUnit;
     match (block.tail) {
-        Option.Some(e) => { ty = check_expr(c, e)?; },
-        Option.None => {},
+        Option.Some(e) => {
+            ty = check_expr(c, e)?;
+        },
+        Option.None => { },
     }
     pop_scope(c);
     Result.Ok(ty)
@@ -2167,8 +2400,10 @@ fn check_block_expected(c: Checker, block: Block, expected: Type) -> Result<Type
     }
     var ty = Type.TUnit;
     match (block.tail) {
-        Option.Some(e) => { ty = check_expr_expected(c, e, expected)?; },
-        Option.None => {},
+        Option.Some(e) => {
+            ty = check_expr_expected(c, e, expected)?;
+        },
+        Option.None => { },
     }
     pop_scope(c);
     Result.Ok(ty)
@@ -2177,7 +2412,6 @@ fn check_block_expected(c: Checker, block: Block, expected: Type) -> Result<Type
 // =====================================================================
 // Datos: arreglos, structs, enums, match (M14.3b)
 // =====================================================================
-
 // Un literal de arreglo `[e0, e1, ...]`. Todos los elementos deben ser del mismo tipo. El vacío `[]`
 // es indeterminado aquí (necesita un tipo esperado, vía `check_expr_expected`).
 fn check_array(c: Checker, elems: [Expr], line: int, col: int) -> Result<Type, TypeError> {
@@ -2189,8 +2423,7 @@ fn check_array(c: Checker, elems: [Expr], line: int, col: int) -> Result<Type, T
     while (i < len(elems)) {
         let t = check_expr(c, elems[i])?;
         if (!type_eq(t, first)) {
-            return Result.Err(terr(elems[i].line, elems[i].col,
-                "los elementos del arreglo deben ser del mismo tipo: " + type_str(first) + " y " + type_str(t)));
+            return Result.Err(terr(elems[i].line, elems[i].col, "los elementos del arreglo deben ser del mismo tipo: " + type_str(first) + " y " + type_str(t)));
         }
         i = i + 1;
     }
@@ -2238,10 +2471,17 @@ fn check_field(c: Checker, object: Expr, name: string) -> Result<Type, TypeError
 
 // Los parámetros de tipo de un struct/enum registrado (lista vacía si monomórfico o desconocido).
 fn struct_tparams(c: Checker, name: string) -> [string] {
-    match (get(c.struct_tparams, name)) { Option.Some(tp) => tp, Option.None => no_tparams() }
+    match (get(c.struct_tparams, name)) {
+        Option.Some(tp) => tp,
+        Option.None => no_tparams(),
+    }
 }
+
 fn enum_tparams(c: Checker, name: string) -> [string] {
-    match (get(c.enum_tparams, name)) { Option.Some(tp) => tp, Option.None => no_tparams() }
+    match (get(c.enum_tparams, name)) {
+        Option.Some(tp) => tp,
+        Option.None => no_tparams(),
+    }
 }
 
 // σ que liga cada parámetro de tipo con su argumento (zip), para sustituir campos/payloads.
@@ -2265,13 +2505,16 @@ fn seed_sigma_from_expected(expected: Option<Type>, name: string, tparams: [stri
                 Type.TNamed(en, eargs) => {
                     if (en == name && len(eargs) == len(tparams)) {
                         var i = 0;
-                        while (i < len(tparams)) { insert(sigma, tparams[i], eargs[i]); i = i + 1; }
+                        while (i < len(tparams)) {
+                            insert(sigma, tparams[i], eargs[i]);
+                            i = i + 1;
+                        }
                     }
                 },
-                _ => {},
+                _ => { },
             }
         },
-        Option.None => {},
+        Option.None => { },
     }
     sigma
 }
@@ -2280,18 +2523,20 @@ fn seed_sigma_from_expected(expected: Option<Type>, name: string, tparams: [stri
 fn type_has_var(t: Type, holes: [string]) -> bool {
     match (t) {
         Type.TNamed(n, args) => {
-            if (len(args) == 0 && contains_str(holes, n)) { true }
-            else { types_have_var(args, holes) }
+            if (len(args) == 0 && contains_str(holes, n)) { true } else { types_have_var(args, holes) }
         },
         Type.TArray(e) => type_has_var(e, holes),
         Type.TFn(ps, r) => types_have_var(ps, holes) || type_has_var(r, holes),
         _ => false,
     }
 }
+
 fn types_have_var(ts: [Type], holes: [string]) -> bool {
     var i = 0;
     while (i < len(ts)) {
-        if (type_has_var(ts[i], holes)) { return true; }
+        if (type_has_var(ts[i], holes)) {
+            return true;
+        }
         i = i + 1;
     }
     false
@@ -2302,8 +2547,7 @@ fn types_have_var(ts: [Type], holes: [string]) -> bool {
 // no aporta y se chequea normal.
 fn check_value_against(c: Checker, value: Expr, declared: Type, sigma: Map<string, Type>, holes: [string]) -> Result<Type, TypeError> {
     let exp = subst(declared, sigma);
-    if (type_has_var(exp, holes)) { check_expr(c, value) }
-    else { check_expr_expected(c, value, exp) }
+    if (type_has_var(exp, holes)) { check_expr(c, value) } else { check_expr_expected(c, value, exp) }
 }
 
 // Para cada parámetro de tipo, recupera lo inferido en σ (en orden), o error si quedó indeterminado.
@@ -2312,10 +2556,11 @@ fn finalize_type_args(tparams: [string], sigma: Map<string, Type>, label: string
     var i = 0;
     while (i < len(tparams)) {
         match (get(sigma, tparams[i])) {
-            Option.Some(t) => { push(targs, t); },
+            Option.Some(t) => {
+                push(targs, t);
+            },
             Option.None => {
-                return Result.Err(terr(line, col,
-                    "no se pudo inferir el parámetro de tipo '" + tparams[i] + "' de " + label + "; anota el tipo"));
+                return Result.Err(terr(line, col, "no se pudo inferir el parámetro de tipo '" + tparams[i] + "' de " + label + "; anota el tipo"));
             },
         }
         i = i + 1;
@@ -2327,7 +2572,9 @@ fn finalize_type_args(tparams: [string], sigma: Map<string, Type>, label: string
 fn find_field(fields: [FieldDef], name: string) -> Option<Type> {
     var i = 0;
     while (i < len(fields)) {
-        if (fields[i].name == name) { return Option.Some(fields[i].ty); }
+        if (fields[i].name == name) {
+            return Option.Some(fields[i].ty);
+        }
         i = i + 1;
     }
     Option.None
@@ -2365,7 +2612,7 @@ fn check_struct_lit(c: Checker, name: string, fields: [FieldInit], expected: Opt
                 let value = field_value(fields, df.name);
                 let vt = check_value_against(c, value, df.ty, sigma, tparams)?;
                 match (unify(df.ty, vt, sigma, tparams)) {
-                    Result.Ok(_) => {},
+                    Result.Ok(_) => { },
                     Result.Err(reason) => {
                         return Result.Err(terr(value.line, value.col, "campo '" + df.name + "' de '" + name + "': " + reason));
                     },
@@ -2382,7 +2629,9 @@ fn check_struct_lit(c: Checker, name: string, fields: [FieldInit], expected: Opt
 fn field_declared(declared: [FieldDef], name: string) -> bool {
     var i = 0;
     while (i < len(declared)) {
-        if (declared[i].name == name) { return true; }
+        if (declared[i].name == name) {
+            return true;
+        }
         i = i + 1;
     }
     false
@@ -2393,7 +2642,9 @@ fn count_field(fields: [FieldInit], name: string) -> int {
     var n = 0;
     var i = 0;
     while (i < len(fields)) {
-        if (fields[i].name == name) { n = n + 1; }
+        if (fields[i].name == name) {
+            n = n + 1;
+        }
         i = i + 1;
     }
     n
@@ -2403,7 +2654,9 @@ fn count_field(fields: [FieldInit], name: string) -> int {
 fn field_value(fields: [FieldInit], name: string) -> Expr {
     var i = 0;
     while (i < len(fields)) {
-        if (fields[i].name == name) { return fields[i].value; }
+        if (fields[i].name == name) {
+            return fields[i].value;
+        }
         i = i + 1;
     }
     fields[0].value
@@ -2420,8 +2673,7 @@ fn check_enum_lit(c: Checker, enum_name: string, variant: string, cargs: [Expr],
                 Option.None => Result.Err(terr(line, col, "el enum '" + enum_name + "' no tiene la variante '" + variant + "'")),
                 Option.Some(payload) => {
                     if (len(cargs) != len(payload)) {
-                        return Result.Err(terr(line, col, "la variante '" + enum_name + "." + variant
-                            + "' espera " + to_string(len(payload)) + " argumento(s), se dieron " + to_string(len(cargs))));
+                        return Result.Err(terr(line, col, "la variante '" + enum_name + "." + variant + "' espera " + to_string(len(payload)) + " argumento(s), se dieron " + to_string(len(cargs))));
                     }
                     let tparams = enum_tparams(c, enum_name);
                     let sigma = seed_sigma_from_expected(expected, enum_name, tparams);
@@ -2430,10 +2682,9 @@ fn check_enum_lit(c: Checker, enum_name: string, variant: string, cargs: [Expr],
                         let pty = payload[i];
                         let at = check_value_against(c, cargs[i], pty, sigma, tparams)?;
                         match (unify(pty, at, sigma, tparams)) {
-                            Result.Ok(_) => {},
+                            Result.Ok(_) => { },
                             Result.Err(reason) => {
-                                return Result.Err(terr(cargs[i].line, cargs[i].col,
-                                    "'" + enum_name + "." + variant + "': " + reason));
+                                return Result.Err(terr(cargs[i].line, cargs[i].col, "'" + enum_name + "." + variant + "': " + reason));
                             },
                         }
                         i = i + 1;
@@ -2450,7 +2701,9 @@ fn check_enum_lit(c: Checker, enum_name: string, variant: string, cargs: [Expr],
 fn find_variant(variants: [VariantDef], name: string) -> Option<[Type]> {
     var i = 0;
     while (i < len(variants)) {
-        if (variants[i].name == name) { return Option.Some(variants[i].payload); }
+        if (variants[i].name == name) {
+            return Option.Some(variants[i].payload);
+        }
         i = i + 1;
     }
     Option.None
@@ -2464,10 +2717,16 @@ fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], expected: Option<Type>
     var enum_targs: [Type] = [];
     match (scrut_ty) {
         Type.TNamed(n, targs) => {
-            if (is_enum(c, n)) { enum_name = n; enum_targs = targs; }
-            else { return Result.Err(terr(scrut.line, scrut.col, "match requiere un enum, pero el escrutinio es " + type_str(scrut_ty))); }
+            if (is_enum(c, n)) {
+                enum_name = n;
+                enum_targs = targs;
+            } else {
+                return Result.Err(terr(scrut.line, scrut.col, "match requiere un enum, pero el escrutinio es " + type_str(scrut_ty)));
+            }
         },
-        _ => { return Result.Err(terr(scrut.line, scrut.col, "match requiere un enum, pero el escrutinio es " + type_str(scrut_ty))); },
+        _ => {
+            return Result.Err(terr(scrut.line, scrut.col, "match requiere un enum, pero el escrutinio es " + type_str(scrut_ty)));
+        },
     }
     if (len(arms) == 0) {
         return Result.Err(terr(line, col, "un match no puede estar vacío"));
@@ -2496,11 +2755,12 @@ fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], expected: Option<Type>
         // Un brazo que diverge (panic/return) no fija el tipo del match; lo ceden los demás.
         if (!expr_diverges(arm.body)) {
             match (result_ty) {
-                Option.None => { result_ty = Option.Some(body_ty); },
+                Option.None => {
+                    result_ty = Option.Some(body_ty);
+                },
                 Option.Some(prev) => {
                     if (!type_eq(prev, body_ty)) {
-                        return Result.Err(terr(arm.body.line, arm.body.col,
-                            "los brazos del match producen tipos distintos: " + type_str(prev) + " y " + type_str(body_ty)));
+                        return Result.Err(terr(arm.body.line, arm.body.col, "los brazos del match producen tipos distintos: " + type_str(prev) + " y " + type_str(body_ty)));
                     }
                 },
             }
@@ -2513,7 +2773,9 @@ fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], expected: Option<Type>
         var vi = 0;
         while (vi < len(variants)) {
             let vname = variants[vi].name;
-            if (!contains_str(st.covered, vname)) { push(missing, vname); }
+            if (!contains_str(st.covered, vname)) {
+                push(missing, vname);
+            }
             vi = vi + 1;
         }
         if (len(missing) > 0) {
@@ -2530,7 +2792,10 @@ fn check_match(c: Checker, scrut: Expr, arms: [MatchArm], expected: Option<Type>
 // del brazo). Actualiza el estado (variantes cubiertas, catch-all) por referencia.
 fn check_pattern(c: Checker, pat: Pattern, scrut_ty: Type, enum_name: string, variants: [VariantDef], enum_sigma: Map<string, Type>, st: MatchState) -> Result<[Bind], TypeError> {
     match (pat.kind) {
-        PKind.PWild => { st.catchall = true; Result.Ok([]) },
+        PKind.PWild => {
+            st.catchall = true;
+            Result.Ok([])
+        },
         PKind.PBind(name) => {
             // Liga el escrutinio completo; cubre todo lo restante.
             st.catchall = true;
@@ -2546,8 +2811,7 @@ fn check_pattern(c: Checker, pat: Pattern, scrut_ty: Type, enum_name: string, va
                 Option.None => Result.Err(terr(pat.line, pat.col, "el enum '" + enum_name + "' no tiene la variante '" + variant + "'")),
                 Option.Some(payload) => {
                     if (len(bindings) != len(payload)) {
-                        return Result.Err(terr(pat.line, pat.col, "el patrón '" + enum_name + "." + variant
-                            + "' liga " + to_string(len(bindings)) + " valor(es), pero la variante tiene " + to_string(len(payload))));
+                        return Result.Err(terr(pat.line, pat.col, "el patrón '" + enum_name + "." + variant + "' liga " + to_string(len(bindings)) + " valor(es), pero la variante tiene " + to_string(len(payload))));
                     }
                     if (contains_str(st.covered, variant)) {
                         return Result.Err(terr(pat.line, pat.col, "la variante '" + variant + "' ya está cubierta por un brazo anterior"));
@@ -2559,8 +2823,10 @@ fn check_pattern(c: Checker, pat: Pattern, scrut_ty: Type, enum_name: string, va
                     var i = 0;
                     while (i < len(bindings)) {
                         match (bindings[i]) {
-                            Option.Some(bn) => { push(binds, Bind { name: bn, ty: subst(payload[i], enum_sigma) }); },
-                            Option.None => {},
+                            Option.Some(bn) => {
+                                push(binds, Bind { name: bn, ty: subst(payload[i], enum_sigma) });
+                            },
+                            Option.None => { },
                         }
                         i = i + 1;
                     }
@@ -2574,7 +2840,6 @@ fn check_pattern(c: Checker, pat: Pattern, scrut_ty: Type, enum_name: string, va
 // =====================================================================
 // Traits e impls (M14.3d-2: despacho estático, Self, métodos por defecto)
 // =====================================================================
-
 // Nombre manglado de un método: `Tipo#metodo` (`#` ilegal en identificadores → no choca con nombres
 // del usuario). Es la clave de la tabla de métodos y el nombre que aparece en los errores de llamada.
 fn mangle(type_key: string, method: string) -> string { type_key + "#" + method }
@@ -2597,11 +2862,13 @@ fn type_key_of(t: Type) -> Option<string> {
 fn subst_self(ty: Type, target: Type) -> Type {
     match (ty) {
         Type.TNamed(n, args) => {
-            if (n == "Self" && len(args) == 0) { target }
-            else {
+            if (n == "Self" && len(args) == 0) { target } else {
                 var ra: [Type] = [];
                 var i = 0;
-                while (i < len(args)) { push(ra, subst_self(args[i], target)); i = i + 1; }
+                while (i < len(args)) {
+                    push(ra, subst_self(args[i], target));
+                    i = i + 1;
+                }
                 Type.TNamed(n, ra)
             }
         },
@@ -2609,7 +2876,10 @@ fn subst_self(ty: Type, target: Type) -> Type {
         Type.TFn(ps, r) => {
             var rps: [Type] = [];
             var i = 0;
-            while (i < len(ps)) { push(rps, subst_self(ps[i], target)); i = i + 1; }
+            while (i < len(ps)) {
+                push(rps, subst_self(ps[i], target));
+                i = i + 1;
+            }
             Type.TFn(rps, subst_self(r, target))
         },
         _ => ty,
@@ -2618,21 +2888,30 @@ fn subst_self(ty: Type, target: Type) -> Type {
 
 fn is_primitive(t: Type) -> bool {
     match (t) {
-        Type.TInt => true, Type.TFloat => true, Type.TBool => true, Type.TString => true, Type.TChar => true,
+        Type.TInt => true,
+        Type.TFloat => true,
+        Type.TBool => true,
+        Type.TString => true,
+        Type.TChar => true,
         _ => false,
     }
 }
 
 // ¿La firma de trait `tm` trae cuerpo por defecto?
 fn has_default(tm: MethodSig) -> bool {
-    match (tm.default_body) { Option.Some(_) => true, Option.None => false }
+    match (tm.default_body) {
+        Option.Some(_) => true,
+        Option.None => false,
+    }
 }
 
 // La firma de trait con nombre `name` (o `None`).
 fn find_method_sig(methods: [MethodSig], name: string) -> Option<MethodSig> {
     var i = 0;
     while (i < len(methods)) {
-        if (methods[i].name == name) { return Option.Some(methods[i]); }
+        if (methods[i].name == name) {
+            return Option.Some(methods[i]);
+        }
         i = i + 1;
     }
     Option.None
@@ -2642,7 +2921,9 @@ fn find_method_sig(methods: [MethodSig], name: string) -> Option<MethodSig> {
 fn impl_overrides(imp: ImplBlock, name: string) -> bool {
     var i = 0;
     while (i < len(imp.methods)) {
-        if (imp.methods[i].name == name) { return true; }
+        if (imp.methods[i].name == name) {
+            return true;
+        }
         i = i + 1;
     }
     false
@@ -2654,7 +2935,10 @@ fn impl_overrides(imp: ImplBlock, name: string) -> bool {
 fn method_fnsig(params: [Param], ret: Type, target: Type, type_params: [string], bounds: [Bound]) -> FnSig {
     var ps: [Type] = [];
     var i = 0;
-    while (i < len(params)) { push(ps, resolve_type(subst_self(params[i].ty, target))); i = i + 1; }
+    while (i < len(params)) {
+        push(ps, resolve_type(subst_self(params[i].ty, target)));
+        i = i + 1;
+    }
     FnSig { params: ps, ret: resolve_type(subst_self(ret, target)), type_params: type_params, bounds: bounds }
 }
 
@@ -2696,7 +2980,9 @@ fn register_traits_impls(c: Checker, prog: Program) -> Result<int, TypeError> {
 fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
     let trait_methods = match (get(c.traits, imp.trait_name)) {
         Option.Some(ms) => ms,
-        Option.None => { return Result.Err(terr(imp.line, imp.col, "trait '" + imp.trait_name + "' no declarado")); },
+        Option.None => {
+            return Result.Err(terr(imp.line, imp.col, "trait '" + imp.trait_name + "' no declarado"));
+        },
     };
     // M9.2b: los parámetros de tipo del impl entran en ámbito (`Caja<T>` y `x: T` válidos).
     c.tparams = imp.type_params;
@@ -2720,8 +3006,7 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
     while (tj < len(trait_methods)) {
         let tm = trait_methods[tj];
         if (!contains_str(impl_names, tm.name) && !has_default(tm)) {
-            return Result.Err(terr(imp.line, imp.col, "el impl de '" + imp.trait_name + "' para "
-                + type_str(target) + " no implementa el método '" + tm.name + "'"));
+            return Result.Err(terr(imp.line, imp.col, "el impl de '" + imp.trait_name + "' para " + type_str(target) + " no implementa el método '" + tm.name + "'"));
         }
         tj = tj + 1;
     }
@@ -2730,7 +3015,9 @@ fn register_impl(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
     while (mi < len(imp.methods)) {
         let m = imp.methods[mi];
         match (find_method_sig(trait_methods, m.name)) {
-            Option.None => { return Result.Err(terr(m.line, m.col, "el trait '" + imp.trait_name + "' no declara un método '" + m.name + "'")); },
+            Option.None => {
+                return Result.Err(terr(m.line, m.col, "el trait '" + imp.trait_name + "' no declara un método '" + m.name + "'"));
+            },
             Option.Some(tm) => {
                 check_method_sig(tm, m, target)?;
                 let mangled = mangle(key, m.name);
@@ -2780,13 +3067,15 @@ fn check_impl_bounds(c: Checker, imp: ImplBlock) -> Result<int, TypeError> {
 
 // La clave de tipo de un objetivo de impl ya validado (siempre existe).
 fn type_key_str(t: Type) -> string {
-    match (type_key_of(t)) { Option.Some(k) => k, Option.None => "" }
+    match (type_key_of(t)) {
+        Option.Some(k) => k,
+        Option.None => "",
+    }
 }
 
 // =====================================================================
 // @derive y anotaciones (M14.3d-4c)
 // =====================================================================
-
 // Genera los impls de `@derive(Eq, Show)` sobre struct/enum no genérico: registra los métodos
 // derivados (`igual`/`mostrar`) y la marca en `impl_traits`. En Rust se genera el FUENTE del impl y se
 // baja con M9; el validador solo necesita las firmas (no chequea el cuerpo: es codegen conocido).
@@ -2844,7 +3133,9 @@ fn validate_derive(a: Annotation, name: string, type_params: [string]) -> Result
 // Registra el impl derivado de un trait (`Eq`→`igual`, `Show`→`mostrar`) para un tipo. Idempotente:
 // si ya hay un impl (del usuario o derivado), no lo pisa.
 fn register_derived_impl(c: Checker, type_name: string, trait_name: string) {
-    if (contains_key(c.impl_traits, mangle(type_name, trait_name))) { return; }
+    if (contains_key(c.impl_traits, mangle(type_name, trait_name))) {
+        return;
+    }
     let target = Type.TNamed(type_name, []);
     if (trait_name == "Eq") {
         insert(c.methods, mangle(type_name, "igual"), FnSig { params: [target, target], ret: Type.TBool, type_params: no_tparams(), bounds: no_bounds() });
@@ -2865,8 +3156,12 @@ fn check_annotations(c: Checker, prog: Program) -> Result<int, TypeError> {
         while (ai < len(f.annotations)) {
             let a = f.annotations[ai];
             if (a.name == "test") {
-                if (len(a.args) != 0) { return Result.Err(terr(a.line, a.col, "'@test' no recibe argumentos")); }
-                if (len(f.params) != 0) { return Result.Err(terr(a.line, a.col, "la función de prueba '@test' '" + f.name + "' no debe recibir parámetros")); }
+                if (len(a.args) != 0) {
+                    return Result.Err(terr(a.line, a.col, "'@test' no recibe argumentos"));
+                }
+                if (len(f.params) != 0) {
+                    return Result.Err(terr(a.line, a.col, "la función de prueba '@test' '" + f.name + "' no debe recibir parámetros"));
+                }
                 let ret = resolve_type(f.ret);
                 if (!type_eq(ret, Type.TBool) && !type_eq(ret, Type.TUnit)) {
                     return Result.Err(terr(a.line, a.col, "una función '@test' debe devolver bool o unit, no " + type_str(f.ret)));
@@ -2913,7 +3208,9 @@ fn check_type_annotations(annotations: [Annotation]) -> Result<int, TypeError> {
 // primitivo). Los impls genéricos (`impl<T> ... for Caja<T>`) y bounds → d-3.
 fn ensure_impl_target(c: Checker, target: Type, type_params: [string], line: int, col: int) -> Result<int, TypeError> {
     if (is_primitive(target)) {
-        if (len(type_params) == 0) { return Result.Ok(0); }
+        if (len(type_params) == 0) {
+            return Result.Ok(0);
+        }
         return Result.Err(terr(line, col, "un tipo primitivo no es genérico: no admite parámetros de tipo en el impl"));
     }
     match (target) {
@@ -2939,8 +3236,7 @@ fn ensure_impl_target(c: Checker, target: Type, type_params: [string], line: int
 // de tipo del impl (cada uno un `Var` distinto): `impl<T> ... for Caja<T>`.
 fn ensure_generic_impl_target(n: string, args: [Type], type_params: [string], arity: int, line: int, col: int) -> Result<int, TypeError> {
     if (arity != len(type_params)) {
-        return Result.Err(terr(line, col, "'" + n + "' espera " + to_string(arity)
-            + " parámetro(s) de tipo, el impl declara " + to_string(len(type_params))));
+        return Result.Err(terr(line, col, "'" + n + "' espera " + to_string(arity) + " parámetro(s) de tipo, el impl declara " + to_string(len(type_params))));
     }
     var bien = len(args) == len(type_params);
     var vistos: [string] = [];
@@ -2948,16 +3244,20 @@ fn ensure_generic_impl_target(n: string, args: [Type], type_params: [string], ar
     while (bien && i < len(args)) {
         match (args[i]) {
             Type.TNamed(an, aargs) => {
-                if (len(aargs) != 0 || !contains_str(type_params, an) || contains_str(vistos, an)) { bien = false; }
-                else { push(vistos, an); }
+                if (len(aargs) != 0 || !contains_str(type_params, an) || contains_str(vistos, an)) {
+                    bien = false;
+                } else {
+                    push(vistos, an);
+                }
             },
-            _ => { bien = false; },
+            _ => {
+                bien = false;
+            },
         }
         i = i + 1;
     }
     if (!bien) {
-        return Result.Err(terr(line, col, "el impl genérico debe aplicarse a '" + n + "<" + join_comma(type_params)
-            + ">' (sus propios parámetros de tipo, distintos)"));
+        return Result.Err(terr(line, col, "el impl genérico debe aplicarse a '" + n + "<" + join_comma(type_params) + ">' (sus propios parámetros de tipo, distintos)"));
     }
     Result.Ok(0)
 }
@@ -2966,16 +3266,14 @@ fn ensure_generic_impl_target(n: string, args: [Type], type_params: [string], ar
 // tipo implementador en ambas.
 fn check_method_sig(tm: MethodSig, m: Func, target: Type) -> Result<int, TypeError> {
     if (len(tm.params) != len(m.params)) {
-        return Result.Err(terr(m.line, m.col, "el método '" + m.name + "' toma " + to_string(len(m.params))
-            + " parámetro(s) (incluido self), pero el trait pide " + to_string(len(tm.params))));
+        return Result.Err(terr(m.line, m.col, "el método '" + m.name + "' toma " + to_string(len(m.params)) + " parámetro(s) (incluido self), pero el trait pide " + to_string(len(tm.params))));
     }
     var i = 0;
     while (i < len(tm.params)) {
         let want = resolve_type(subst_self(tm.params[i].ty, target));
         let got = resolve_type(subst_self(m.params[i].ty, target));
         if (!type_eq(want, got)) {
-            return Result.Err(terr(m.params[i].line, m.params[i].col, "el parámetro " + to_string(i + 1)
-                + " del método '" + m.name + "' es " + type_str(got) + ", pero el trait pide " + type_str(want)));
+            return Result.Err(terr(m.params[i].line, m.params[i].col, "el parámetro " + to_string(i + 1) + " del método '" + m.name + "' es " + type_str(got) + ", pero el trait pide " + type_str(want)));
         }
         i = i + 1;
     }
@@ -3007,14 +3305,19 @@ fn check_impl_bodies(c: Checker, prog: Program) -> Result<int, TypeError> {
             mi = mi + 1;
         }
         // Defectos heredados: se verifican con `self` del tipo concreto.
-        let trait_methods: [MethodSig] = match (get(c.traits, imp.trait_name)) { Option.Some(ms) => ms, Option.None => [] };
+        let trait_methods: [MethodSig] = match (get(c.traits, imp.trait_name)) {
+            Option.Some(ms) => ms,
+            Option.None => [],
+        };
         var tj = 0;
         while (tj < len(trait_methods)) {
             let tm = trait_methods[tj];
             if (has_default(tm) && !impl_overrides(imp, tm.name)) {
                 match (tm.default_body) {
-                    Option.Some(body) => { check_method_body(c, tm.params, tm.ret, body, tm.line, tm.col, mangle(key, tm.name), target)?; },
-                    Option.None => {},
+                    Option.Some(body) => {
+                        check_method_body(c, tm.params, tm.ret, body, tm.line, tm.col, mangle(key, tm.name), target)?;
+                    },
+                    Option.None => { },
                 }
             }
             tj = tj + 1;
@@ -3041,12 +3344,7 @@ fn check_method_body(c: Checker, params: [Param], ret: Type, body: Block, line: 
 
 // Punto de entrada: valida un programa (o devuelve el primer TypeError).
 pub fn check(prog: Program) -> Result<int, TypeError> {
-    let c = Checker {
-        funcs: Map.new(), structs: Map.new(), enums: Map.new(),
-        struct_tparams: Map.new(), enum_tparams: Map.new(),
-        traits: Map.new(), methods: Map.new(), impl_traits: Map.new(),
-        scopes: [], current_return: Type.TUnit, tparams: [], bounds: [],
-    };
+    let c = Checker { funcs: Map.new(), structs: Map.new(), enums: Map.new(), struct_tparams: Map.new(), enum_tparams: Map.new(), traits: Map.new(), methods: Map.new(), impl_traits: Map.new(), scopes: [], current_return: Type.TUnit, tparams: [], bounds: [] };
     check_program(c, prog)
 }
 

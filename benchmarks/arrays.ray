@@ -5,9 +5,15 @@ fn main() -> int {
     while (r < 2000) {
         var a: [int] = [];
         var i: int = 0;
-        while (i < 500) { push(a, i); i = i + 1; }
+        while (i < 500) {
+            push(a, i);
+            i = i + 1;
+        }
         var j: int = 0;
-        while (j < len(a)) { total = total + a[j]; j = j + 1; }
+        while (j < len(a)) {
+            total = total + a[j];
+            j = j + 1;
+        }
         r = r + 1;
     }
     total % 1000

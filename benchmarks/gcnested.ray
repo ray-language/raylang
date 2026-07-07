@@ -8,7 +8,10 @@ fn main() -> int {
         while (k < 50) {
             var inner: [int] = [];
             var i: int = 0;
-            while (i < 20) { push(inner, i); i = i + 1; }
+            while (i < 20) {
+                push(inner, i);
+                i = i + 1;
+            }
             push(outer, inner);
             k = k + 1;
         }

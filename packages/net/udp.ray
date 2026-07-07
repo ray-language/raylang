@@ -8,7 +8,6 @@
 //
 // Patrón de los primitivos (como M11.2c): el builtin devuelve un arreglo etiquetado y este envoltorio
 // lo traduce a `Result`/`Packet` → el runtime no sabe de `Result` ni de `Packet`.
-
 // Un datagrama recibido: su remitente (host, puerto) y el contenido (bytes crudos).
 /// A received datagram: the sender's address (`host`, `port`) and the raw payload bytes.
 pub struct Packet {
@@ -21,7 +20,7 @@ pub struct Packet {
 /// Binds a UDP socket to `host:port` and returns its handle.
 /// `port = 0` picks an ephemeral port (query it with `local_port`). Err = OS bind error.
 pub fn bind(host: string, port: int) -> Result<int, string> {
-    let r = __udp_bind(host, port); // ["ok", handle] o ["err", msg]
+    let r = __udp_bind(host, port);  // ["ok", handle] o ["err", msg]
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(h) => Result.Ok(h),
@@ -36,7 +35,7 @@ pub fn bind(host: string, port: int) -> Result<int, string> {
 /// Sends one datagram `data` from socket `h` to `host:port`.
 /// Ok = number of bytes sent; Err = OS send error. No connection is involved.
 pub fn send_to(h: int, host: string, port: int, data: bytes) -> Result<int, string> {
-    let r = __udp_send_to(h, host, port, data); // ["ok", n] o ["err", msg]
+    let r = __udp_send_to(h, host, port, data);  // ["ok", n] o ["err", msg]
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(n) => Result.Ok(n),
@@ -59,7 +58,7 @@ fn texto(b: bytes) -> string {
 /// Receives one datagram on socket `h`, BLOCKING until one arrives (in both engines;
 /// no cooperative yield yet). Ok = Packet with sender address and payload; Err = OS error.
 pub fn recv_from(h: int) -> Result<Packet, string> {
-    let r = __udp_recv_from(h); // [b"ok", host, puerto, datos] o [b"err", msg], todo en bytes
+    let r = __udp_recv_from(h);  // [b"ok", host, puerto, datos] o [b"err", msg], todo en bytes
     if (texto(r[0]) == "ok") {
         let host = texto(r[1]);
         let port = match (parse_int(texto(r[2]))) {

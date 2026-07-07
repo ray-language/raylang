@@ -5,7 +5,6 @@
 //
 // API encadenable por UFCS (cross-module): `info(lg, "login").field("user", "ada").field_int("n", 3).emit();`
 // Niveles: DEBUG=0, INFO=1, WARN=2, ERROR=3. El logger filtra por debajo de su `min_level`.
-
 from net/time import now_utc, to_iso8601;
 
 /// A structured JSON logger: a service name plus a minimum level.
@@ -49,10 +48,13 @@ fn at(lg: Logger, level: int, msg: string) -> LogEntry {
 
 /// Starts a DEBUG-level entry with message `msg` (add fields, then `emit`).
 pub fn debug(lg: Logger, msg: string) -> LogEntry { at(lg, 0, msg) }
+
 /// Starts an INFO-level entry with message `msg` (add fields, then `emit`).
 pub fn info(lg: Logger, msg: string) -> LogEntry { at(lg, 1, msg) }
+
 /// Starts a WARN-level entry with message `msg` (add fields, then `emit`).
 pub fn warn(lg: Logger, msg: string) -> LogEntry { at(lg, 2, msg) }
+
 /// Starts an ERROR-level entry with message `msg` (add fields, then `emit`).
 pub fn error(lg: Logger, msg: string) -> LogEntry { at(lg, 3, msg) }
 
@@ -63,11 +65,13 @@ pub fn field(e: LogEntry, key: string, value: string) -> LogEntry {
     push(e.fields, Field { key: key, value: value, quoted: true });
     e
 }
+
 /// Appends an integer field to the entry (rendered as a bare JSON number). Chainable.
 pub fn field_int(e: LogEntry, key: string, value: int) -> LogEntry {
     push(e.fields, Field { key: key, value: to_string(value), quoted: false });
     e
 }
+
 /// Appends a boolean field to the entry (rendered as a bare JSON true/false). Chainable.
 pub fn field_bool(e: LogEntry, key: string, value: bool) -> LogEntry {
     push(e.fields, Field { key: key, value: to_string(value), quoted: false });
@@ -75,10 +79,11 @@ pub fn field_bool(e: LogEntry, key: string, value: bool) -> LogEntry {
 }
 
 fn level_name(level: int) -> string {
-    if (level <= 0) { "DEBUG" }
-    else { if (level == 1) { "INFO" }
-    else { if (level == 2) { "WARN" }
-    else { "ERROR" }}}
+    if (level <= 0) { "DEBUG" } else {
+        if (level == 1) { "INFO" } else {
+            if (level == 2) { "WARN" } else { "ERROR" }
+        }
+    }
 }
 
 // Escapa una cadena para incrustarla en JSON (comillas, barra, y los controles comunes).
@@ -87,12 +92,27 @@ fn json_escape(s: string) -> string {
     var i = 0;
     while (i < len(s)) {
         let c = s[i];
-        if (c == '"') { out = out + "\\\""; }
-        else { if (c == '\\') { out = out + "\\\\"; }
-        else { if (c == '\n') { out = out + "\\n"; }
-        else { if (c == '\t') { out = out + "\\t"; }
-        else { if (c == '\r') { out = out + "\\r"; }
-        else { out = out + to_string(c); }}}}}
+        if (c == '"') {
+            out = out + "\\\"";
+        } else {
+            if (c == '\\') {
+                out = out + "\\\\";
+            } else {
+                if (c == '\n') {
+                    out = out + "\\n";
+                } else {
+                    if (c == '\t') {
+                        out = out + "\\t";
+                    } else {
+                        if (c == '\r') {
+                            out = out + "\\r";
+                        } else {
+                            out = out + to_string(c);
+                        }
+                    }
+                }
+            }
+        }
         i = i + 1;
     }
     out
@@ -103,8 +123,7 @@ fn json_escape(s: string) -> string {
 /// Renders the entry as one JSON line using the given timestamp `ts` (deterministic, testable).
 /// Key order is fixed: ts, level, service, msg, then fields in insertion order; strings are escaped.
 pub fn render(e: LogEntry, ts: string) -> string {
-    var out = "{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(e.level) + "\",\"service\":\""
-        + json_escape(e.lg.service) + "\",\"msg\":\"" + json_escape(e.msg) + "\"";
+    var out = "{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(e.level) + "\",\"service\":\"" + json_escape(e.lg.service) + "\",\"msg\":\"" + json_escape(e.msg) + "\"";
     var i = 0;
     while (i < len(e.fields)) {
         let f = e.fields[i];

@@ -6,7 +6,6 @@
 // Ed25519(seed, "header.payload"). El header está fijo a `{"alg":"EdDSA","typ":"JWT"}`. El payload
 // (las *claims*) se pasa y se devuelve como string JSON crudo (como en HS256). Importable:
 //   from jwt_eddsa import jwt_eddsa_sign, jwt_eddsa_verify;
-
 from net/crypto import ed_sign, ed_verify;
 from std/base64 import base64url, base64url_decode;
 
@@ -53,7 +52,9 @@ pub fn jwt_eddsa_verify(pubkey: [int], token: string) -> Result<string, string> 
     let signing_input = parts[0] + "." + parts[1];
     let sig = match (base64url_decode(parts[2])) {
         Result.Ok(s) => s,
-        Result.Err(e) => { return Result.Err(e); },
+        Result.Err(e) => {
+            return Result.Err(e);
+        },
     };
     if (!ed_verify(pubkey, str_octets(signing_input), sig)) {
         return Result.Err("firma inválida");

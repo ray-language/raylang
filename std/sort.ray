@@ -2,13 +2,14 @@
 // con `menor`; hay impl para int/float/string/char y para tipos de usuario que lo implementen). El
 // `sort` genérico ya vive en el prelude; aquí van las utilidades que lo rodean. `import std/sort;` →
 // `sort.binary_search(xs, 7)`.
-
 /// Whether `a` is sorted in **non-decreasing** order (`[]` and `[x]` → `true`).
 pub fn is_sorted<T: Ord>(a: [T]) -> bool {
     var i = 1;
     var ok = true;
     while (i < len(a) && ok) {
-        if (a[i].menor(a[i - 1])) { ok = false; }
+        if (a[i].menor(a[i - 1])) {
+            ok = false;
+        }
         i = i + 1;
     }
     ok
@@ -27,7 +28,9 @@ pub fn min<T: Ord>(a: [T]) -> Option<T> {
         var m: T = a[0];
         var i = 1;
         while (i < len(a)) {
-            if (a[i].menor(m)) { m = a[i]; }
+            if (a[i].menor(m)) {
+                m = a[i];
+            }
             i = i + 1;
         }
         Option.Some(m)
@@ -42,7 +45,9 @@ pub fn max<T: Ord>(a: [T]) -> Option<T> {
         var m: T = a[0];
         var i = 1;
         while (i < len(a)) {
-            if (m.menor(a[i])) { m = a[i]; }
+            if (m.menor(a[i])) {
+                m = a[i];
+            }
             i = i + 1;
         }
         Option.Some(m)
@@ -100,7 +105,13 @@ pub fn merge<T: Ord>(a: [T], b: [T]) -> [T] {
             i = i + 1;
         }
     }
-    while (i < len(a)) { push(out, a[i]); i = i + 1; }
-    while (j < len(b)) { push(out, b[j]); j = j + 1; }
+    while (i < len(a)) {
+        push(out, a[i]);
+        i = i + 1;
+    }
+    while (j < len(b)) {
+        push(out, b[j]);
+        j = j + 1;
+    }
     out
 }

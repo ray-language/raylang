@@ -7,7 +7,6 @@
 //
 // El test `tests/selfhost_interpreter.rs` compara, para cada `.ray`, el stdout + el código de salida de
 // este driver contra los del runner de Rust (el ORÁCULO conductual; ver DESIGN §23.5).
-
 from loader import load, LoadError;
 from parser import Func, Program;
 from checker import check, TypeError;
@@ -25,7 +24,9 @@ fn exit_code(v: Value) -> int {
 fn user_has_func(user: Program, name: string) -> bool {
     var i = 0;
     while (i < len(user.funcs)) {
-        if (user.funcs[i].name == name) { return true; }
+        if (user.funcs[i].name == name) {
+            return true;
+        }
         i = i + 1;
     }
     false
@@ -38,7 +39,9 @@ fn add_prelude(prelude: Program, user: Program) {
     var extra: [Func] = [];
     var i = 0;
     while (i < len(prelude.funcs)) {
-        if (!user_has_func(user, prelude.funcs[i].name)) { push(extra, prelude.funcs[i]); }
+        if (!user_has_func(user, prelude.funcs[i].name)) {
+            push(extra, prelude.funcs[i]);
+        }
         i = i + 1;
     }
     user.funcs = extra + user.funcs;
@@ -60,7 +63,10 @@ fn load_prelude() -> Program {
 fn rest_args(argv: [string]) -> [string] {
     var out: [string] = [];
     var i = 1;
-    while (i < len(argv)) { push(out, argv[i]); i = i + 1; }
+    while (i < len(argv)) {
+        push(out, argv[i]);
+        i = i + 1;
+    }
     out
 }
 
@@ -73,7 +79,7 @@ fn main() -> int {
     // M14.7: el loader aplana el programa (entrada + sus `import`/`from` transitivos) en un Program plano.
     match (load(argv[0])) {
         Result.Ok(prog) => {
-            add_prelude(load_prelude(), prog); // fusiona map/filter/fold/... del prelude
+            add_prelude(load_prelude(), prog);  // fusiona map/filter/fold/... del prelude
             match (check(prog)) {
                 Result.Ok(_) => {
                     match (run(prog, rest_args(argv))) {

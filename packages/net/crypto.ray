@@ -5,7 +5,6 @@
 // son de **tiempo constante y auditadas** (requisito para tocar secretos reales), no bit-twiddling sobre
 // la VM. Nombres distintos de los builtins a propósito: un builtin gana a una función homónima, así que
 // un envoltorio con el mismo nombre quedaría muerto (por eso `hmac_sha256_octets`, `sha1_octets`, `ed_*`).
-
 // Octetos (`[int]`) de un `bytes`. El puente entre el mundo `bytes` de los builtins y el `[int]` del `net`.
 fn octetos(b: bytes) -> [int] {
     var out: [int] = [];
@@ -18,7 +17,6 @@ fn octetos(b: bytes) -> [int] {
 }
 
 // --- Hashes ---
-
 // SHA-256 de un mensaje dado como octetos, devuelto como octetos (como el `sha256_octets` pedagógico).
 /// SHA-256 digest of a message given as octets, returned as 32 octets.
 /// Backed by the audited `ring` builtin (constant-time, production-grade).
@@ -40,7 +38,6 @@ pub fn sha1_octets(msg: bytes) -> [int] {
 }
 
 // --- HMAC ---
-
 // HMAC-SHA256 como octetos (renombrado desde `hmac_sha256` para no chocar con el builtin homónimo).
 /// HMAC-SHA256 of `msg` under `key`, returned as 32 octets.
 /// Named `_octets` because a plain `hmac_sha256` would be shadowed by the builtin.
@@ -59,7 +56,6 @@ pub fn hmac_sha256_hex(key: bytes, msg: bytes) -> string {
 // `ring` deriva la clave pública de la semilla al firmar, así que `ed_sign` NO recibe la clave pública
 // (a diferencia del `ed25519_sign` pedagógico de 3 argumentos). La semilla son 32 octetos; una semilla
 // de mal tamaño da `[]` (degradación honesta; los consumidores pasan semillas válidas).
-
 /// Derives the Ed25519 public key (32 octets) from a 32-octet private seed.
 /// Returns `[]` if the seed has the wrong length.
 pub fn ed_public_key(seed: [int]) -> [int] {

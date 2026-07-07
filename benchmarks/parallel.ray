@@ -6,11 +6,12 @@ fn trabajo(iters: int) -> int {
     var suma = 0;
     var i = 0;
     while (i < iters) {
-        suma = suma + (i * i) % 7;
+        suma = suma + i * i % 7;
         i = i + 1;
     }
     suma
 }
+
 fn main() -> int {
     let n = 40000000;
     let t0 = spawn(fn() -> int { trabajo(n) });

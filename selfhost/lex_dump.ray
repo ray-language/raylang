@@ -8,7 +8,6 @@
 //   - con valor:  Int(42)@1:1   Float(3.14)@..   Ident(foo)@..   Str("a\nb")@..   Char('x')@..
 // Las cadenas/caracteres se re-escapan (\\ \n \t \r \") para caber en una línea; el lexer de Rust
 // hace el mismo escape, así que las salidas coinciden carácter a carácter.
-
 from lexer import lex, TokKind, LexError;
 
 // Re-escapa una cadena para imprimirla en una sola línea, de forma idéntica al oráculo.
@@ -18,12 +17,19 @@ fn escape(s: string) -> string {
     var i = 0;
     while (i < len(cs)) {
         let c = cs[i];
-        if (c == '\\') { out = out + "\\\\"; }
-        else if (c == '\n') { out = out + "\\n"; }
-        else if (c == '\t') { out = out + "\\t"; }
-        else if (c == '\r') { out = out + "\\r"; }
-        else if (c == '"') { out = out + "\\\""; }
-        else { out = out + to_string(c); }
+        if (c == '\\') {
+            out = out + "\\\\";
+        } else if (c == '\n') {
+            out = out + "\\n";
+        } else if (c == '\t') {
+            out = out + "\\t";
+        } else if (c == '\r') {
+            out = out + "\\r";
+        } else if (c == '"') {
+            out = out + "\\\"";
+        } else {
+            out = out + to_string(c);
+        }
         i = i + 1;
     }
     out

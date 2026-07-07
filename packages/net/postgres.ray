@@ -4,26 +4,31 @@
 //
 // El protocolo: mensajes `[tipo:1][longitud:4][carga]` (la longitud incluye sus 4 octetos, no el tipo);
 // el StartupMessage no lleva octeto de tipo. Importable: `from postgres import pg_query;`.
-
 from net/scram import scram_first, scram_client_first_message, scram_final, scram_verify, Scram;
 
 // Una conexión con su buffer de lectura (los mensajes pueden partirse entre lecturas del socket).
-struct PgConn { handle: int, buf: bytes }
+struct PgConn {
+    handle: int,
+    buf: bytes,
+}
 
 // Un mensaje del servidor: su octeto de tipo y la carga (sin el tipo ni la longitud).
-struct PgMsg { mtype: int, payload: bytes }
+struct PgMsg {
+    mtype: int,
+    payload: bytes,
+}
 
 // Un entero de 32 bits big-endian desde `b[off]`.
 fn be32(b: bytes, off: int) -> int {
-    (b[off] << 24) | (b[off + 1] << 16) | (b[off + 2] << 8) | b[off + 3]
+    b[off] << 24 | b[off + 1] << 16 | b[off + 2] << 8 | b[off + 3]
 }
 
 // Los 4 octetos big-endian de `n`.
 fn be32_bytes(n: int) -> [int] {
     var o: [int] = [];
-    push(o, (n >> 24) & 255);
-    push(o, (n >> 16) & 255);
-    push(o, (n >> 8) & 255);
+    push(o, n >> 24 & 255);
+    push(o, n >> 16 & 255);
+    push(o, n >> 8 & 255);
     push(o, n & 255);
     o
 }
@@ -47,9 +52,15 @@ fn pg_send(c: PgConn, mtype: int, payload: [int]) -> Result<int, string> {
     push(m, mtype);
     var lb = be32_bytes(4 + len(payload));
     var i = 0;
-    while (i < 4) { push(m, lb[i]); i = i + 1; }
+    while (i < 4) {
+        push(m, lb[i]);
+        i = i + 1;
+    }
     i = 0;
-    while (i < len(payload)) { push(m, payload[i]); i = i + 1; }
+    while (i < len(payload)) {
+        push(m, payload[i]);
+        i = i + 1;
+    }
     socket_write_bytes(c.handle, bytes_of(m))
 }
 
@@ -59,7 +70,7 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
     var listo = false;
     while (!listo) {
         if (len(c.buf) >= 5) {
-            let mlen = be32(c.buf, 1);      // longitud (incluye sus 4 octetos)
+            let mlen = be32(c.buf, 1);  // longitud (incluye sus 4 octetos)
             let total = 1 + mlen;
             if (len(c.buf) >= total) {
                 out = PgMsg { mtype: c.buf[0], payload: sub_bytes(c.buf, 5, total) };
@@ -75,7 +86,9 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
                     }
                     c.buf = c.buf + chunk;
                 },
-                Result.Err(e) => { return Result.Err(e); },
+                Result.Err(e) => {
+                    return Result.Err(e);
+                },
             }
         }
     }
@@ -85,7 +98,7 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
 // Parsea un DataRow ('D'): `[nº columnas:2]` y por columna `[longitud:4][valor]` (-1 = NULL → "").
 fn parse_datarow(payload: bytes) -> [string] {
     var cols: [string] = [];
-    let ncol = (payload[0] << 8) | payload[1];
+    let ncol = payload[0] << 8 | payload[1];
     var pos = 2;
     var i = 0;
     while (i < ncol) {
@@ -96,8 +109,12 @@ fn parse_datarow(payload: bytes) -> [string] {
         } else {
             let v = sub_bytes(payload, pos, pos + vlen);
             match (from_utf8(v)) {
-                Result.Ok(s) => { push(cols, s); },
-                Result.Err(e) => { push(cols, ""); },
+                Result.Ok(s) => {
+                    push(cols, s);
+                },
+                Result.Err(e) => {
+                    push(cols, "");
+                },
             }
             pos = pos + vlen;
         }
@@ -115,7 +132,9 @@ fn parse_datarow(payload: bytes) -> [string] {
 pub fn pg_query(host: string, port: int, user: string, db: string, password: string, nonce: string, sql: string) -> Result<[string], string> {
     let handle = match (tcp_connect(host, port)) {
         Result.Ok(h) => h,
-        Result.Err(e) => { return Result.Err(e); },
+        Result.Err(e) => {
+            return Result.Err(e);
+        },
     };
     let c = PgConn { handle: handle, buf: b"" };
 
@@ -123,20 +142,35 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
     var body: [int] = [];
     var pv = be32_bytes(196608);
     var i = 0;
-    while (i < 4) { push(body, pv[i]); i = i + 1; }
+    while (i < 4) {
+        push(body, pv[i]);
+        i = i + 1;
+    }
     let params = cstr("user") + cstr(user) + cstr("database") + cstr(db);
     i = 0;
-    while (i < len(params)) { push(body, params[i]); i = i + 1; }
+    while (i < len(params)) {
+        push(body, params[i]);
+        i = i + 1;
+    }
     push(body, 0);
     var startup: [int] = [];
     var sl = be32_bytes(4 + len(body));
     i = 0;
-    while (i < 4) { push(startup, sl[i]); i = i + 1; }
+    while (i < 4) {
+        push(startup, sl[i]);
+        i = i + 1;
+    }
     i = 0;
-    while (i < len(body)) { push(startup, body[i]); i = i + 1; }
+    while (i < len(body)) {
+        push(startup, body[i]);
+        i = i + 1;
+    }
     match (socket_write_bytes(c.handle, bytes_of(startup))) {
         Result.Ok(n) => { },
-        Result.Err(e) => { close(handle); return Result.Err(e); },
+        Result.Err(e) => {
+            close(handle);
+            return Result.Err(e);
+        },
     }
 
     let sc = scram_first(user, nonce);
@@ -147,44 +181,77 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
     while (!done) {
         let msg = match (pg_read(c)) {
             Result.Ok(m) => m,
-            Result.Err(e) => { close(handle); return Result.Err(e); },
+            Result.Err(e) => {
+                close(handle);
+                return Result.Err(e);
+            },
         };
-        if (msg.mtype == 82) {                 // 'R' Authentication
+        if (msg.mtype == 82) {
+            // 'R' Authentication
             let code = be32(msg.payload, 0);
-            if (code == 10) {                  // AuthenticationSASL
+            if (code == 10) {
+                // AuthenticationSASL
                 let cf = scram_client_first_message(sc);
                 let ir = cstr("SCRAM-SHA-256") + be32_bytes(len(to_bytes(cf)));
                 var pl: [int] = [];
                 var k = 0;
-                while (k < len(ir)) { push(pl, ir[k]); k = k + 1; }
+                while (k < len(ir)) {
+                    push(pl, ir[k]);
+                    k = k + 1;
+                }
                 let cfb = to_bytes(cf);
                 k = 0;
-                while (k < len(cfb)) { push(pl, cfb[k]); k = k + 1; }
-                match (pg_send(c, 112, pl)) {  // 'p'
-                    Result.Ok(x) => { },
-                    Result.Err(e) => { close(handle); return Result.Err(e); },
+                while (k < len(cfb)) {
+                    push(pl, cfb[k]);
+                    k = k + 1;
                 }
-            } else if (code == 11) {           // AuthenticationSASLContinue (server-first)
+                match (pg_send(c, 112, pl)) {
+                    // 'p'
+                    Result.Ok(x) => { },
+                    Result.Err(e) => {
+                        close(handle);
+                        return Result.Err(e);
+                    },
+                }
+            } else if (code == 11) {
+                // AuthenticationSASLContinue (server-first)
                 let sf = match (from_utf8(sub_bytes(msg.payload, 4, len(msg.payload)))) {
                     Result.Ok(s) => s,
-                    Result.Err(e) => { close(handle); return Result.Err("server-first no utf8"); },
+                    Result.Err(e) => {
+                        close(handle);
+                        return Result.Err("server-first no utf8");
+                    },
                 };
                 let final_msg = match (scram_final(sc, password, sf)) {
                     Result.Ok(f) => f,
-                    Result.Err(e) => { close(handle); return Result.Err(e); },
+                    Result.Err(e) => {
+                        close(handle);
+                        return Result.Err(e);
+                    },
                 };
                 let fb = to_bytes(final_msg);
                 var pl: [int] = [];
                 var k = 0;
-                while (k < len(fb)) { push(pl, fb[k]); k = k + 1; }
-                match (pg_send(c, 112, pl)) {  // 'p'
-                    Result.Ok(x) => { },
-                    Result.Err(e) => { close(handle); return Result.Err(e); },
+                while (k < len(fb)) {
+                    push(pl, fb[k]);
+                    k = k + 1;
                 }
-            } else if (code == 12) {           // AuthenticationSASLFinal (server-final)
+                match (pg_send(c, 112, pl)) {
+                    // 'p'
+                    Result.Ok(x) => { },
+                    Result.Err(e) => {
+                        close(handle);
+                        return Result.Err(e);
+                    },
+                }
+            } else if (code == 12) {
+                // AuthenticationSASLFinal (server-final)
                 let sfin = match (from_utf8(sub_bytes(msg.payload, 4, len(msg.payload)))) {
                     Result.Ok(s) => s,
-                    Result.Err(e) => { close(handle); return Result.Err("server-final no utf8"); },
+                    Result.Err(e) => {
+                        close(handle);
+                        return Result.Err("server-final no utf8");
+                    },
                 };
                 if (!scram_verify(sc, sfin)) {
                     close(handle);
@@ -192,22 +259,29 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
                 }
             }
             // code 0 = AuthenticationOk: nada que hacer.
-        } else if (msg.mtype == 90) {          // 'Z' ReadyForQuery
+        } else if (msg.mtype == 90) {
+            // 'Z' ReadyForQuery
             if (!query_sent) {
-                match (pg_send(c, 81, cstr(sql))) {   // 'Q'
+                match (pg_send(c, 81, cstr(sql))) {
+                    // 'Q'
                     Result.Ok(x) => { },
-                    Result.Err(e) => { close(handle); return Result.Err(e); },
+                    Result.Err(e) => {
+                        close(handle);
+                        return Result.Err(e);
+                    },
                 }
                 query_sent = true;
             } else {
-                done = true;                   // ya llegó la respuesta a la consulta
+                done = true;  // ya llegó la respuesta a la consulta
             }
-        } else if (msg.mtype == 68) {          // 'D' DataRow
+        } else if (msg.mtype == 68) {
+            // 'D' DataRow
             if (!tengo_fila) {
                 fila = parse_datarow(msg.payload);
                 tengo_fila = true;
             }
-        } else if (msg.mtype == 69) {          // 'E' ErrorResponse
+        } else if (msg.mtype == 69) {
+            // 'E' ErrorResponse
             close(handle);
             return Result.Err("error del servidor PostgreSQL");
         }

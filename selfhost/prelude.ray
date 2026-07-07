@@ -9,7 +9,6 @@
 //
 // (Option/Result, Eq/Show/Ord y los impls de primitivos los conoce el checker auto-alojado por inyección
 // directa, y el intérprete reconoce Option/Result + deriva igual/mostrar; por eso no van aquí.)
-
 fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
     var out: [U] = [];
     var i: int = 0;
@@ -25,7 +24,9 @@ fn filter<T>(xs: [T], pred: fn(T) -> bool) -> [T] {
     var i: int = 0;
     while (i < len(xs)) {
         let x: T = xs[i];
-        if (pred(x)) { push(out, x); }
+        if (pred(x)) {
+            push(out, x);
+        }
         i = i + 1;
     }
     out
@@ -56,7 +57,9 @@ fn parse_float(s: string) -> Option<float> {
 // M14.6c-2: aserciones y orden. Construidas sobre `panic` + los traits Eq/Show/Ord (que el checker
 // conoce por inyección y el intérprete resuelve por etiqueta de valor). Port de `src/prelude.rs`.
 fn assert(cond: bool) {
-    if (!cond) { panic("aserción falló"); }
+    if (!cond) {
+        panic("aserción falló");
+    }
 }
 
 fn assert_eq<T: Eq + Show>(a: T, b: T) {

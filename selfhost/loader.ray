@@ -11,46 +11,71 @@
 //
 // M14.7a: la máquina de carga (BFS de dependencias) + el cruce de **funciones** (el `Resolver`:
 // namespacing `modulo::fn` + reescritura de referencias). El cruce de **tipos** (TypeRewriter) → M14.7b.
-
 from lexer import lex, LexError;
 from parser import parse, ParseError, Program, Func, Block, Stmt, SKind, Expr, EKind, Pattern, PKind, FnExpr;
 from parser import Type, StructDef, EnumDef, TraitDef, ImplBlock, MethodSig, Bound;
 
 // Error de carga: mensaje + ubicación + módulo donde ocurrió (espejo recortado del de Rust).
-pub struct LoadError { msg: string, line: int, col: int, module: string }
+pub struct LoadError {
+    msg: string,
+    line: int,
+    col: int,
+    module: string,
+}
 
 // Un módulo ya cargado y parseado. `is_entry` distingue el de entrada (sus nombres no se namespacan).
-struct Module { name: string, is_entry: bool, prog: Program }
+struct Module {
+    name: string,
+    is_entry: bool,
+    prog: Program,
+}
 
 // Una entrada pendiente en el BFS: el nombre del módulo, su ruta de archivo y si es el de entrada.
-struct PendingMod { name: string, path: string, is_entry: bool }
+struct PendingMod {
+    name: string,
+    path: string,
+    is_entry: bool,
+}
 
 // La superficie pública de un módulo: nombre exportado → global, separado en valores (funciones) y
 // tipos (struct/enum/trait), M14.7b.
-struct Surface { values: Map<string, string>, types: Map<string, string> }
+struct Surface {
+    values: Map<string, string>,
+    types: Map<string, string>,
+}
 
 // El resultado de clasificar los `from M import …` de un módulo: nombres de valor y de tipo (local→global).
-struct FromMaps { values: Map<string, string>, types: Map<string, string> }
+struct FromMaps {
+    values: Map<string, string>,
+    types: Map<string, string>,
+}
 
 // El reescritor de **tipos**: `types` mapea nombre local de tipo → global (`modulo::Tipo`); `tparams`
 // es la pila de parámetros de tipo en ámbito (un `T` en `<T>` NO es un tipo nominal → no se reescribe).
-struct TypeRewriter { types: Map<string, string>, tparams: [[string]] }
+struct TypeRewriter {
+    types: Map<string, string>,
+    tparams: [[string]],
+}
 
 // El resolutor de **valores**: `own` mapea nombre local → nombre global (`modulo::fn`) de las funciones
 // visibles sin calificar (propias + `from`-importadas); `scopes` es la pila de ámbitos locales (un
 // nombre local tapa a una función de nivel superior). Reescribe las referencias `EIdent` en los cuerpos.
-struct Resolver { own: Map<string, string>, scopes: [[string]] }
+struct Resolver {
+    own: Map<string, string>,
+    scopes: [[string]],
+}
 
 // =====================================================================
 // Helpers de strings (rutas) y de listas
 // =====================================================================
-
 fn no_strs() -> [string] { [] }
 
 fn contains_str(xs: [string], s: string) -> bool {
     var i = 0;
     while (i < len(xs)) {
-        if (xs[i] == s) { return true; }
+        if (xs[i] == s) {
+            return true;
+        }
         i = i + 1;
     }
     false
@@ -62,7 +87,9 @@ fn last_slash(s: string) -> int {
     var idx = 0 - 1;
     var i = 0;
     while (i < len(cs)) {
-        if (cs[i] == '/') { idx = i; }
+        if (cs[i] == '/') {
+            idx = i;
+        }
         i = i + 1;
     }
     idx
@@ -97,13 +124,15 @@ fn global_of(m: Module, name: string) -> string {
 
 // El nombre LOCAL con el que entra un `from`-import: el alias si lo hay, o el nombre original.
 fn local_of_alias(alias: Option<string>, name: string) -> string {
-    match (alias) { Option.Some(a) => a, Option.None => name }
+    match (alias) {
+        Option.Some(a) => a,
+        Option.None => name,
+    }
 }
 
 // =====================================================================
 // Fase 1: BFS — cargar y parsear cada módulo una vez (ciclos seguros)
 // =====================================================================
-
 // Lee + lexea + parsea un módulo; traduce los errores a LoadError con el nombre del módulo.
 fn load_one(name: string, path: string) -> Result<Program, LoadError> {
     match (read_file(path)) {
@@ -125,7 +154,6 @@ fn load_one(name: string, path: string) -> Result<Program, LoadError> {
 // =====================================================================
 // Fase 2: superficies públicas (nombre pub → global)
 // =====================================================================
-
 fn build_surfaces(modules: [Module]) -> Map<string, Surface> {
     var surfaces: Map<string, Surface> = Map.new();
     var i = 0;
@@ -135,26 +163,34 @@ fn build_surfaces(modules: [Module]) -> Map<string, Surface> {
         var fi = 0;
         while (fi < len(m.prog.funcs)) {
             let f = m.prog.funcs[fi];
-            if (f.is_pub) { insert(vals, f.name, global_of(m, f.name)); }
+            if (f.is_pub) {
+                insert(vals, f.name, global_of(m, f.name));
+            }
             fi = fi + 1;
         }
         var tys: Map<string, string> = Map.new();
         var si = 0;
         while (si < len(m.prog.structs)) {
             let s = m.prog.structs[si];
-            if (s.is_pub) { insert(tys, s.name, global_of(m, s.name)); }
+            if (s.is_pub) {
+                insert(tys, s.name, global_of(m, s.name));
+            }
             si = si + 1;
         }
         var ei = 0;
         while (ei < len(m.prog.enums)) {
             let e = m.prog.enums[ei];
-            if (e.is_pub) { insert(tys, e.name, global_of(m, e.name)); }
+            if (e.is_pub) {
+                insert(tys, e.name, global_of(m, e.name));
+            }
             ei = ei + 1;
         }
         var ti = 0;
         while (ti < len(m.prog.traits)) {
             let t = m.prog.traits[ti];
-            if (t.is_pub) { insert(tys, t.name, global_of(m, t.name)); }
+            if (t.is_pub) {
+                insert(tys, t.name, global_of(m, t.name));
+            }
             ti = ti + 1;
         }
         insert(surfaces, m.name, Surface { values: vals, types: tys });
@@ -178,10 +214,14 @@ fn clasificar_from(m: Module, surfaces: Map<string, Surface>) -> Result<FromMaps
             match (get(surfaces, fi.module)) {
                 Option.Some(surf) => {
                     match (get(surf.values, n.name)) {
-                        Option.Some(g) => { insert(values, local, g); },
+                        Option.Some(g) => {
+                            insert(values, local, g);
+                        },
                         Option.None => {
                             match (get(surf.types, n.name)) {
-                                Option.Some(g) => { insert(types, local, g); },
+                                Option.Some(g) => {
+                                    insert(types, local, g);
+                                },
                                 Option.None => {
                                     return Result.Err(LoadError { msg: "el módulo '" + fi.module + "' no exporta '" + n.name + "' (¿falta 'pub'?)", line: n.line, col: n.col, module: m.name });
                                 },
@@ -203,7 +243,6 @@ fn clasificar_from(m: Module, surfaces: Map<string, Surface>) -> Result<FromMaps
 // =====================================================================
 // Fase 3: el Resolver — reescribir referencias de valor a nombres globales
 // =====================================================================
-
 // El mapa `own`: funciones propias del módulo (local → global) + las `from`-importadas.
 fn build_own(m: Module, from_values: Map<string, string>) -> Map<string, string> {
     var own: Map<string, string> = Map.new();
@@ -216,7 +255,12 @@ fn build_own(m: Module, from_values: Map<string, string>) -> Map<string, string>
     let ks = keys(from_values);
     var j = 0;
     while (j < len(ks)) {
-        match (get(from_values, ks[j])) { Option.Some(g) => { insert(own, ks[j], g); }, Option.None => {} }
+        match (get(from_values, ks[j])) {
+            Option.Some(g) => {
+                insert(own, ks[j], g);
+            },
+            Option.None => { },
+        }
         j = j + 1;
     }
     own
@@ -225,28 +269,42 @@ fn build_own(m: Module, from_values: Map<string, string>) -> Map<string, string>
 fn rs_is_local(r: Resolver, name: string) -> bool {
     var i = 0;
     while (i < len(r.scopes)) {
-        if (contains_str(r.scopes[i], name)) { return true; }
+        if (contains_str(r.scopes[i], name)) {
+            return true;
+        }
         i = i + 1;
     }
     false
 }
 
 fn rs_declare(r: Resolver, name: string) {
-    if (len(r.scopes) > 0) { push(r.scopes[len(r.scopes) - 1], name); }
+    if (len(r.scopes) > 0) {
+        push(r.scopes[len(r.scopes) - 1], name);
+    }
 }
 
-fn rs_push(r: Resolver) { push(r.scopes, no_strs()); }
+fn rs_push(r: Resolver) {
+    push(r.scopes, no_strs());
+}
 
-fn rs_pop(r: Resolver) { pop(r.scopes); }
+fn rs_pop(r: Resolver) {
+    pop(r.scopes);
+}
 
 fn resolve_program(r: Resolver, prog: Program) {
     var i = 0;
-    while (i < len(prog.funcs)) { resolve_fn(r, prog.funcs[i]); i = i + 1; }
+    while (i < len(prog.funcs)) {
+        resolve_fn(r, prog.funcs[i]);
+        i = i + 1;
+    }
     var j = 0;
     while (j < len(prog.impls)) {
         let imp = prog.impls[j];
         var k = 0;
-        while (k < len(imp.methods)) { resolve_fn(r, imp.methods[k]); k = k + 1; }
+        while (k < len(imp.methods)) {
+            resolve_fn(r, imp.methods[k]);
+            k = k + 1;
+        }
         j = j + 1;
     }
 }
@@ -254,7 +312,10 @@ fn resolve_program(r: Resolver, prog: Program) {
 fn resolve_fn(r: Resolver, f: Func) {
     rs_push(r);
     var i = 0;
-    while (i < len(f.params)) { rs_declare(r, f.params[i].name); i = i + 1; }
+    while (i < len(f.params)) {
+        rs_declare(r, f.params[i].name);
+        i = i + 1;
+    }
     resolve_block(r, f.body);
     rs_pop(r);
 }
@@ -262,16 +323,33 @@ fn resolve_fn(r: Resolver, f: Func) {
 fn resolve_block(r: Resolver, b: Block) {
     rs_push(r);
     var i = 0;
-    while (i < len(b.stmts)) { resolve_stmt(r, b.stmts[i]); i = i + 1; }
-    match (b.tail) { Option.Some(t) => resolve_expr(r, t), Option.None => {} }
+    while (i < len(b.stmts)) {
+        resolve_stmt(r, b.stmts[i]);
+        i = i + 1;
+    }
+    match (b.tail) {
+        Option.Some(t) => resolve_expr(r, t),
+        Option.None => { },
+    }
     rs_pop(r);
 }
 
 fn resolve_stmt(r: Resolver, s: Stmt) {
     match (s.kind) {
-        SKind.SLet(name, _, value, _) => { resolve_expr(r, value); rs_declare(r, name); },
-        SKind.SAssign(target, value) => { resolve_expr(r, target); resolve_expr(r, value); },
-        SKind.SReturn(opt) => { match (opt) { Option.Some(v) => resolve_expr(r, v), Option.None => {} } },
+        SKind.SLet(name, _, value, _) => {
+            resolve_expr(r, value);
+            rs_declare(r, name);
+        },
+        SKind.SAssign(target, value) => {
+            resolve_expr(r, target);
+            resolve_expr(r, value);
+        },
+        SKind.SReturn(opt) => {
+            match (opt) {
+                Option.Some(v) => resolve_expr(r, v),
+                Option.None => { },
+            }
+        },
         SKind.SExpr(e) => resolve_expr(r, e),
     }
 }
@@ -283,23 +361,46 @@ fn resolve_expr(r: Resolver, e: Expr) {
         EKind.EIdent(name) => {
             if (!rs_is_local(r, name)) {
                 match (get(r.own, name)) {
-                    Option.Some(g) => { e.kind = EKind.EIdent(g); },
-                    Option.None => {},
+                    Option.Some(g) => {
+                        e.kind = EKind.EIdent(g);
+                    },
+                    Option.None => { },
                 }
             }
         },
         EKind.ECall(callee, cargs) => {
             resolve_expr(r, callee);
             var i = 0;
-            while (i < len(cargs)) { resolve_expr(r, cargs[i]); i = i + 1; }
+            while (i < len(cargs)) {
+                resolve_expr(r, cargs[i]);
+                i = i + 1;
+            }
         },
         EKind.EUnary(_, inner) => resolve_expr(r, inner),
-        EKind.EBinary(_, l, rr) => { resolve_expr(r, l); resolve_expr(r, rr); },
-        EKind.EIndex(arr, idx) => { resolve_expr(r, arr); resolve_expr(r, idx); },
+        EKind.EBinary(_, l, rr) => {
+            resolve_expr(r, l);
+            resolve_expr(r, rr);
+        },
+        EKind.EIndex(arr, idx) => {
+            resolve_expr(r, arr);
+            resolve_expr(r, idx);
+        },
         // `obj.campo`: solo se resuelve el objeto (el nombre del campo/método no es una referencia).
         EKind.EField(obj, _) => resolve_expr(r, obj),
-        EKind.EArray(elems) => { var i = 0; while (i < len(elems)) { resolve_expr(r, elems[i]); i = i + 1; } },
-        EKind.EStructLit(_, fields) => { var i = 0; while (i < len(fields)) { resolve_expr(r, fields[i].value); i = i + 1; } },
+        EKind.EArray(elems) => {
+            var i = 0;
+            while (i < len(elems)) {
+                resolve_expr(r, elems[i]);
+                i = i + 1;
+            }
+        },
+        EKind.EStructLit(_, fields) => {
+            var i = 0;
+            while (i < len(fields)) {
+                resolve_expr(r, fields[i].value);
+                i = i + 1;
+            }
+        },
         EKind.EFunc(fe) => resolve_fn_expr(r, fe),
         EKind.EMatch(scrut, arms) => {
             resolve_expr(r, scrut);
@@ -316,23 +417,32 @@ fn resolve_expr(r: Resolver, e: Expr) {
         EKind.EIf(cond, then_b, elseopt) => {
             resolve_expr(r, cond);
             resolve_block(r, then_b);
-            match (elseopt) { Option.Some(els) => resolve_expr(r, els), Option.None => {} }
+            match (elseopt) {
+                Option.Some(els) => resolve_expr(r, els),
+                Option.None => { },
+            }
         },
-        EKind.EWhile(cond, body) => { resolve_expr(r, cond); resolve_block(r, body); },
+        EKind.EWhile(cond, body) => {
+            resolve_expr(r, cond);
+            resolve_block(r, body);
+        },
         EKind.EBlock(b) => resolve_block(r, b),
-        _ => {},
+        _ => { },
     }
 }
 
 // Los nombres que liga un patrón (entran en el ámbito del cuerpo del brazo).
 fn declare_pattern(r: Resolver, p: Pattern) {
     match (p.kind) {
-        PKind.PWild => {},
+        PKind.PWild => { },
         PKind.PBind(n) => rs_declare(r, n),
         PKind.PVariant(_, _, binds) => {
             var i = 0;
             while (i < len(binds)) {
-                match (binds[i]) { Option.Some(b) => rs_declare(r, b), Option.None => {} }
+                match (binds[i]) {
+                    Option.Some(b) => rs_declare(r, b),
+                    Option.None => { },
+                }
                 i = i + 1;
             }
         },
@@ -342,7 +452,10 @@ fn declare_pattern(r: Resolver, p: Pattern) {
 fn resolve_fn_expr(r: Resolver, fe: FnExpr) {
     rs_push(r);
     var i = 0;
-    while (i < len(fe.params)) { rs_declare(r, fe.params[i].name); i = i + 1; }
+    while (i < len(fe.params)) {
+        rs_declare(r, fe.params[i].name);
+        i = i + 1;
+    }
     resolve_block(r, fe.body);
     rs_pop(r);
 }
@@ -350,16 +463,24 @@ fn resolve_fn_expr(r: Resolver, fe: FnExpr) {
 // =====================================================================
 // Fase 3b: el TypeRewriter — namespacing de tipos (M14.7b)
 // =====================================================================
-
 // Mapa nombre local de tipo → global, de los struct/enum/trait propios del módulo.
 fn build_own_types(m: Module) -> Map<string, string> {
     var map: Map<string, string> = Map.new();
     var si = 0;
-    while (si < len(m.prog.structs)) { insert(map, m.prog.structs[si].name, global_of(m, m.prog.structs[si].name)); si = si + 1; }
+    while (si < len(m.prog.structs)) {
+        insert(map, m.prog.structs[si].name, global_of(m, m.prog.structs[si].name));
+        si = si + 1;
+    }
     var ei = 0;
-    while (ei < len(m.prog.enums)) { insert(map, m.prog.enums[ei].name, global_of(m, m.prog.enums[ei].name)); ei = ei + 1; }
+    while (ei < len(m.prog.enums)) {
+        insert(map, m.prog.enums[ei].name, global_of(m, m.prog.enums[ei].name));
+        ei = ei + 1;
+    }
     var ti = 0;
-    while (ti < len(m.prog.traits)) { insert(map, m.prog.traits[ti].name, global_of(m, m.prog.traits[ti].name)); ti = ti + 1; }
+    while (ti < len(m.prog.traits)) {
+        insert(map, m.prog.traits[ti].name, global_of(m, m.prog.traits[ti].name));
+        ti = ti + 1;
+    }
     map
 }
 
@@ -368,7 +489,12 @@ fn merge_maps(a: Map<string, string>, b: Map<string, string>) -> Map<string, str
     let ks = keys(b);
     var i = 0;
     while (i < len(ks)) {
-        match (get(b, ks[i])) { Option.Some(v) => { insert(a, ks[i], v); }, Option.None => {} }
+        match (get(b, ks[i])) {
+            Option.Some(v) => {
+                insert(a, ks[i], v);
+            },
+            Option.None => { },
+        }
         i = i + 1;
     }
     a
@@ -378,17 +504,32 @@ fn merge_maps(a: Map<string, string>, b: Map<string, string>) -> Map<string, str
 fn rename_type_defs(prog: Program, own_types: Map<string, string>) {
     var si = 0;
     while (si < len(prog.structs)) {
-        match (get(own_types, prog.structs[si].name)) { Option.Some(g) => { prog.structs[si].name = g; }, Option.None => {} }
+        match (get(own_types, prog.structs[si].name)) {
+            Option.Some(g) => {
+                prog.structs[si].name = g;
+            },
+            Option.None => { },
+        }
         si = si + 1;
     }
     var ei = 0;
     while (ei < len(prog.enums)) {
-        match (get(own_types, prog.enums[ei].name)) { Option.Some(g) => { prog.enums[ei].name = g; }, Option.None => {} }
+        match (get(own_types, prog.enums[ei].name)) {
+            Option.Some(g) => {
+                prog.enums[ei].name = g;
+            },
+            Option.None => { },
+        }
         ei = ei + 1;
     }
     var ti = 0;
     while (ti < len(prog.traits)) {
-        match (get(own_types, prog.traits[ti].name)) { Option.Some(g) => { prog.traits[ti].name = g; }, Option.None => {} }
+        match (get(own_types, prog.traits[ti].name)) {
+            Option.Some(g) => {
+                prog.traits[ti].name = g;
+            },
+            Option.None => { },
+        }
         ti = ti + 1;
     }
 }
@@ -396,33 +537,51 @@ fn rename_type_defs(prog: Program, own_types: Map<string, string>) {
 fn tw_is_tparam(tw: TypeRewriter, name: string) -> bool {
     var i = 0;
     while (i < len(tw.tparams)) {
-        if (contains_str(tw.tparams[i], name)) { return true; }
+        if (contains_str(tw.tparams[i], name)) {
+            return true;
+        }
         i = i + 1;
     }
     false
 }
 
-fn tw_push(tw: TypeRewriter, params: [string]) { push(tw.tparams, params); }
-fn tw_pop(tw: TypeRewriter) { pop(tw.tparams); }
+fn tw_push(tw: TypeRewriter, params: [string]) {
+    push(tw.tparams, params);
+}
+
+fn tw_pop(tw: TypeRewriter) {
+    pop(tw.tparams);
+}
 
 // Un nombre de tipo/trait → su global: un parámetro de tipo en ámbito se deja; lo demás se busca en el
 // mapa (un nombre no nominal, como "Map" o "T" libre, no está → se deja igual).
 fn tw_name(tw: TypeRewriter, name: string) -> string {
-    if (tw_is_tparam(tw, name)) { return name; }
-    match (get(tw.types, name)) { Option.Some(g) => g, Option.None => name }
+    if (tw_is_tparam(tw, name)) {
+        return name;
+    }
+    match (get(tw.types, name)) {
+        Option.Some(g) => g,
+        Option.None => name,
+    }
 }
 
 fn tw_types(tw: TypeRewriter, ts: [Type]) -> [Type] {
     var out: [Type] = [];
     var i = 0;
-    while (i < len(ts)) { push(out, tw_type(tw, ts[i])); i = i + 1; }
+    while (i < len(ts)) {
+        push(out, tw_type(tw, ts[i]));
+        i = i + 1;
+    }
     out
 }
 
 fn tw_names(tw: TypeRewriter, ns: [string]) -> [string] {
     var out: [string] = [];
     var i = 0;
-    while (i < len(ns)) { push(out, tw_name(tw, ns[i])); i = i + 1; }
+    while (i < len(ns)) {
+        push(out, tw_name(tw, ns[i]));
+        i = i + 1;
+    }
     out
 }
 
@@ -440,26 +599,47 @@ fn tw_type(tw: TypeRewriter, t: Type) -> Type {
 // Reescribe los `T: Trait` de un parámetro de tipo: el trait se namespaca como cualquier tipo (M9.4).
 fn tw_bounds(tw: TypeRewriter, bounds: [Bound]) {
     var i = 0;
-    while (i < len(bounds)) { bounds[i].trait_name = tw_name(tw, bounds[i].trait_name); i = i + 1; }
+    while (i < len(bounds)) {
+        bounds[i].trait_name = tw_name(tw, bounds[i].trait_name);
+        i = i + 1;
+    }
 }
 
 fn tw_program(tw: TypeRewriter, prog: Program) {
     var si = 0;
-    while (si < len(prog.structs)) { tw_struct(tw, prog.structs[si]); si = si + 1; }
+    while (si < len(prog.structs)) {
+        tw_struct(tw, prog.structs[si]);
+        si = si + 1;
+    }
     var ei = 0;
-    while (ei < len(prog.enums)) { tw_enum(tw, prog.enums[ei]); ei = ei + 1; }
+    while (ei < len(prog.enums)) {
+        tw_enum(tw, prog.enums[ei]);
+        ei = ei + 1;
+    }
     var ti = 0;
-    while (ti < len(prog.traits)) { tw_trait(tw, prog.traits[ti]); ti = ti + 1; }
+    while (ti < len(prog.traits)) {
+        tw_trait(tw, prog.traits[ti]);
+        ti = ti + 1;
+    }
     var fi = 0;
-    while (fi < len(prog.funcs)) { tw_func(tw, prog.funcs[fi]); fi = fi + 1; }
+    while (fi < len(prog.funcs)) {
+        tw_func(tw, prog.funcs[fi]);
+        fi = fi + 1;
+    }
     var ii = 0;
-    while (ii < len(prog.impls)) { tw_impl(tw, prog.impls[ii]); ii = ii + 1; }
+    while (ii < len(prog.impls)) {
+        tw_impl(tw, prog.impls[ii]);
+        ii = ii + 1;
+    }
 }
 
 fn tw_struct(tw: TypeRewriter, s: StructDef) {
     tw_push(tw, s.type_params);
     var i = 0;
-    while (i < len(s.fields)) { s.fields[i].ty = tw_type(tw, s.fields[i].ty); i = i + 1; }
+    while (i < len(s.fields)) {
+        s.fields[i].ty = tw_type(tw, s.fields[i].ty);
+        i = i + 1;
+    }
     tw_bounds(tw, s.bounds);
     tw_pop(tw);
 }
@@ -467,29 +647,44 @@ fn tw_struct(tw: TypeRewriter, s: StructDef) {
 fn tw_enum(tw: TypeRewriter, e: EnumDef) {
     tw_push(tw, e.type_params);
     var i = 0;
-    while (i < len(e.variants)) { e.variants[i].payload = tw_types(tw, e.variants[i].payload); i = i + 1; }
+    while (i < len(e.variants)) {
+        e.variants[i].payload = tw_types(tw, e.variants[i].payload);
+        i = i + 1;
+    }
     tw_bounds(tw, e.bounds);
     tw_pop(tw);
 }
 
 fn tw_trait(tw: TypeRewriter, t: TraitDef) {
-    tw_push(tw, no_strs()); // los traits no llevan parámetros de tipo
+    tw_push(tw, no_strs());  // los traits no llevan parámetros de tipo
     var i = 0;
-    while (i < len(t.methods)) { tw_method(tw, t.methods[i]); i = i + 1; }
+    while (i < len(t.methods)) {
+        tw_method(tw, t.methods[i]);
+        i = i + 1;
+    }
     tw_pop(tw);
 }
 
 fn tw_method(tw: TypeRewriter, m: MethodSig) {
     var i = 0;
-    while (i < len(m.params)) { m.params[i].ty = tw_type(tw, m.params[i].ty); i = i + 1; }
+    while (i < len(m.params)) {
+        m.params[i].ty = tw_type(tw, m.params[i].ty);
+        i = i + 1;
+    }
     m.ret = tw_type(tw, m.ret);
-    match (m.default_body) { Option.Some(b) => tw_block(tw, b), Option.None => {} }
+    match (m.default_body) {
+        Option.Some(b) => tw_block(tw, b),
+        Option.None => { },
+    }
 }
 
 fn tw_func(tw: TypeRewriter, f: Func) {
     tw_push(tw, f.type_params);
     var i = 0;
-    while (i < len(f.params)) { f.params[i].ty = tw_type(tw, f.params[i].ty); i = i + 1; }
+    while (i < len(f.params)) {
+        f.params[i].ty = tw_type(tw, f.params[i].ty);
+        i = i + 1;
+    }
     f.ret = tw_type(tw, f.ret);
     tw_bounds(tw, f.bounds);
     tw_block(tw, f.body);
@@ -502,14 +697,23 @@ fn tw_impl(tw: TypeRewriter, imp: ImplBlock) {
     imp.trait_name = tw_name(tw, imp.trait_name);
     tw_bounds(tw, imp.bounds);
     var i = 0;
-    while (i < len(imp.methods)) { tw_func(tw, imp.methods[i]); i = i + 1; }
+    while (i < len(imp.methods)) {
+        tw_func(tw, imp.methods[i]);
+        i = i + 1;
+    }
     tw_pop(tw);
 }
 
 fn tw_block(tw: TypeRewriter, b: Block) {
     var i = 0;
-    while (i < len(b.stmts)) { tw_stmt(tw, b.stmts[i]); i = i + 1; }
-    match (b.tail) { Option.Some(t) => tw_expr(tw, t), Option.None => {} }
+    while (i < len(b.stmts)) {
+        tw_stmt(tw, b.stmts[i]);
+        i = i + 1;
+    }
+    match (b.tail) {
+        Option.Some(t) => tw_expr(tw, t),
+        Option.None => { },
+    }
 }
 
 fn tw_stmt(tw: TypeRewriter, s: Stmt) {
@@ -517,12 +721,22 @@ fn tw_stmt(tw: TypeRewriter, s: Stmt) {
         SKind.SLet(name, tyopt, value, mutable) => {
             tw_expr(tw, value);
             match (tyopt) {
-                Option.Some(t) => { s.kind = SKind.SLet(name, Option.Some(tw_type(tw, t)), value, mutable); },
-                Option.None => {},
+                Option.Some(t) => {
+                    s.kind = SKind.SLet(name, Option.Some(tw_type(tw, t)), value, mutable);
+                },
+                Option.None => { },
             }
         },
-        SKind.SAssign(target, value) => { tw_expr(tw, target); tw_expr(tw, value); },
-        SKind.SReturn(opt) => { match (opt) { Option.Some(v) => tw_expr(tw, v), Option.None => {} } },
+        SKind.SAssign(target, value) => {
+            tw_expr(tw, target);
+            tw_expr(tw, value);
+        },
+        SKind.SReturn(opt) => {
+            match (opt) {
+                Option.Some(v) => tw_expr(tw, v),
+                Option.None => { },
+            }
+        },
         SKind.SExpr(e) => tw_expr(tw, e),
     }
 }
@@ -533,54 +747,85 @@ fn tw_expr(tw: TypeRewriter, e: Expr) {
     match (e.kind) {
         EKind.EStructLit(name, fields) => {
             var i = 0;
-            while (i < len(fields)) { tw_expr(tw, fields[i].value); i = i + 1; }
+            while (i < len(fields)) {
+                tw_expr(tw, fields[i].value);
+                i = i + 1;
+            }
             e.kind = EKind.EStructLit(tw_name(tw, name), fields);
         },
         // `Tipo.Variante`: si la cabeza es un identificador-tipo, se reescribe; un valor (`p.x`) no casa
         // con ningún tipo, así que `tw_name` lo deja igual.
         EKind.EField(obj, fname) => {
             match (obj.kind) {
-                EKind.EIdent(tn) => { obj.kind = EKind.EIdent(tw_name(tw, tn)); },
+                EKind.EIdent(tn) => {
+                    obj.kind = EKind.EIdent(tw_name(tw, tn));
+                },
                 _ => tw_expr(tw, obj),
             }
         },
         EKind.ECall(callee, cargs) => {
             tw_expr(tw, callee);
             var i = 0;
-            while (i < len(cargs)) { tw_expr(tw, cargs[i]); i = i + 1; }
+            while (i < len(cargs)) {
+                tw_expr(tw, cargs[i]);
+                i = i + 1;
+            }
         },
         EKind.EMatch(scrut, arms) => {
             tw_expr(tw, scrut);
             var i = 0;
             while (i < len(arms)) {
                 match (arms[i].pat.kind) {
-                    PKind.PVariant(en, va, binds) => { arms[i].pat.kind = PKind.PVariant(tw_name(tw, en), va, binds); },
-                    _ => {},
+                    PKind.PVariant(en, va, binds) => {
+                        arms[i].pat.kind = PKind.PVariant(tw_name(tw, en), va, binds);
+                    },
+                    _ => { },
                 }
                 tw_expr(tw, arms[i].body);
                 i = i + 1;
             }
         },
         EKind.EUnary(_, inner) => tw_expr(tw, inner),
-        EKind.EBinary(_, l, rr) => { tw_expr(tw, l); tw_expr(tw, rr); },
-        EKind.EIndex(arr, idx) => { tw_expr(tw, arr); tw_expr(tw, idx); },
-        EKind.EArray(elems) => { var i = 0; while (i < len(elems)) { tw_expr(tw, elems[i]); i = i + 1; } },
+        EKind.EBinary(_, l, rr) => {
+            tw_expr(tw, l);
+            tw_expr(tw, rr);
+        },
+        EKind.EIndex(arr, idx) => {
+            tw_expr(tw, arr);
+            tw_expr(tw, idx);
+        },
+        EKind.EArray(elems) => {
+            var i = 0;
+            while (i < len(elems)) {
+                tw_expr(tw, elems[i]);
+                i = i + 1;
+            }
+        },
         EKind.EFunc(fe) => tw_fn_expr(tw, fe),
         EKind.ETry(inner) => tw_expr(tw, inner),
         EKind.EIf(cond, then_b, elseopt) => {
             tw_expr(tw, cond);
             tw_block(tw, then_b);
-            match (elseopt) { Option.Some(els) => tw_expr(tw, els), Option.None => {} }
+            match (elseopt) {
+                Option.Some(els) => tw_expr(tw, els),
+                Option.None => { },
+            }
         },
-        EKind.EWhile(cond, body) => { tw_expr(tw, cond); tw_block(tw, body); },
+        EKind.EWhile(cond, body) => {
+            tw_expr(tw, cond);
+            tw_block(tw, body);
+        },
         EKind.EBlock(b) => tw_block(tw, b),
-        _ => {},
+        _ => { },
     }
 }
 
 fn tw_fn_expr(tw: TypeRewriter, fe: FnExpr) {
     var i = 0;
-    while (i < len(fe.params)) { fe.params[i].ty = tw_type(tw, fe.params[i].ty); i = i + 1; }
+    while (i < len(fe.params)) {
+        fe.params[i].ty = tw_type(tw, fe.params[i].ty);
+        i = i + 1;
+    }
     fe.ret = tw_type(tw, fe.ret);
     tw_block(tw, fe.body);
 }
@@ -588,7 +833,6 @@ fn tw_fn_expr(tw: TypeRewriter, fe: FnExpr) {
 // =====================================================================
 // Fase 4: renombrar definiciones de función a su global y fusionar
 // =====================================================================
-
 fn rename_and_merge(m: Module, fused: Program) {
     var i = 0;
     while (i < len(m.prog.funcs)) {
@@ -599,19 +843,30 @@ fn rename_and_merge(m: Module, fused: Program) {
     }
     // M14.7a: los tipos (struct/enum/trait/impl) se fusionan SIN namespacar (el cruce de tipos → M14.7b).
     var si = 0;
-    while (si < len(m.prog.structs)) { push(fused.structs, m.prog.structs[si]); si = si + 1; }
+    while (si < len(m.prog.structs)) {
+        push(fused.structs, m.prog.structs[si]);
+        si = si + 1;
+    }
     var ei = 0;
-    while (ei < len(m.prog.enums)) { push(fused.enums, m.prog.enums[ei]); ei = ei + 1; }
+    while (ei < len(m.prog.enums)) {
+        push(fused.enums, m.prog.enums[ei]);
+        ei = ei + 1;
+    }
     var ti = 0;
-    while (ti < len(m.prog.traits)) { push(fused.traits, m.prog.traits[ti]); ti = ti + 1; }
+    while (ti < len(m.prog.traits)) {
+        push(fused.traits, m.prog.traits[ti]);
+        ti = ti + 1;
+    }
     var ii = 0;
-    while (ii < len(m.prog.impls)) { push(fused.impls, m.prog.impls[ii]); ii = ii + 1; }
+    while (ii < len(m.prog.impls)) {
+        push(fused.impls, m.prog.impls[ii]);
+        ii = ii + 1;
+    }
 }
 
 // =====================================================================
 // Punto de entrada
 // =====================================================================
-
 pub fn load(entry_path: string) -> Result<Program, LoadError> {
     let root = dir_of(entry_path);
     let entry_name = stem_of(entry_path);

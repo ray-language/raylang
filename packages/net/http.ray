@@ -7,7 +7,6 @@
 // M19.2: el cuerpo de la respuesta es **bytes** (octetos crudos intactos → descargas binarias
 // correctas, no solo texto). Las cabeceras siguen siendo texto (ASCII): se decodifican con from_utf8
 // para parsearlas. Para leer el cuerpo como texto, usa `body_text(r)`.
-
 // M20.10b: descompresión transparente de `Content-Encoding: gzip` (la librería INFLATE en raylang).
 from std/inflate import gunzip;
 
@@ -20,7 +19,12 @@ pub struct Response {
     body: bytes,
 }
 
-struct Url { host: string, port: int, path: string, tls: bool }
+struct Url {
+    host: string,
+    port: int,
+    path: string,
+    tls: bool,
+}
 
 // Parsea "http://host[:port]/path" o "https://…" (puertos 80/443 por defecto). M19.4a: `https` usa TLS.
 fn parse_url(url: string) -> Result<Url, string> {
@@ -47,7 +51,7 @@ fn parse_url(url: string) -> Result<Url, string> {
             hostport = substring(resto, 0, idx);
             path = substring(resto, idx, len(resto));
         },
-        Option.None => {},
+        Option.None => { },
     }
 
     // Separar host de puerto (un ':' explícito gana al puerto por defecto del esquema).
@@ -57,11 +61,15 @@ fn parse_url(url: string) -> Result<Url, string> {
             host = substring(hostport, 0, idx);
             let ps: string = substring(hostport, idx + 1, len(hostport));
             match (parse_int(ps)) {
-                Option.Some(n) => { port = n; },
-                Option.None => { return Result.Err("puerto inválido: " + ps); },
+                Option.Some(n) => {
+                    port = n;
+                },
+                Option.None => {
+                    return Result.Err("puerto inválido: " + ps);
+                },
             }
         },
-        Option.None => {},
+        Option.None => { },
     }
     Result.Ok(Url { host: host, port: port, path: path, tls: tls })
 }
@@ -84,8 +92,10 @@ fn build_request_h(method: string, u: Url, body: string, extra: Map<string, stri
     while (i < len(nombres)) {
         let nombre: string = nombres[i];
         match (get(extra, nombre)) {
-            Option.Some(valor) => { req = req + nombre + ": " + valor + "\r\n"; },
-            Option.None => {},
+            Option.Some(valor) => {
+                req = req + nombre + ": " + valor + "\r\n";
+            },
+            Option.None => { },
         }
         i = i + 1;
     }
@@ -101,9 +111,16 @@ fn leer_todo(h: int) -> Result<bytes, string> {
     while (seguir) {
         match (socket_read_bytes(h)) {
             Result.Ok(trozo) => {
-                if (len(trozo) == 0) { seguir = false; } else { acc = acc + trozo; }
+                if (len(trozo) == 0) {
+                    seguir = false;
+                } else {
+                    acc = acc + trozo;
+                }
             },
-            Result.Err(e) => { err = e; seguir = false; },
+            Result.Err(e) => {
+                err = e;
+                seguir = false;
+            },
         }
     }
     if (err == "") { Result.Ok(acc) } else { Result.Err(err) }
@@ -138,13 +155,17 @@ fn find_crlf(b: bytes, desde: int) -> int {
 fn hex_byte_val(o: int) -> int {
     if (o >= 48 && o <= 57) {
         o - 48
-    } else { if (o >= 97 && o <= 102) {
-        o - 87 // 'a'..'f'
-    } else { if (o >= 65 && o <= 70) {
-        o - 55 // 'A'..'F'
     } else {
-        0 - 1
-    }}}
+        if (o >= 97 && o <= 102) {
+            o - 87  // 'a'..'f'
+        } else {
+            if (o >= 65 && o <= 70) {
+                o - 55  // 'A'..'F'
+            } else {
+                0 - 1
+            }
+        }
+    }
 }
 
 // Tamaño (decimal) de un chunk a partir de su línea hex `[start, end)`. Se detiene en `;` (extensiones)
@@ -154,7 +175,8 @@ fn parse_chunk_size(b: bytes, start: int, end: int) -> int {
     var i: int = start;
     while (i < end) {
         let o: int = b[i];
-        if (o == 59) { // ';'
+        if (o == 59) {
+            // ';'
             return size;
         }
         let v: int = hex_byte_val(o);
@@ -182,13 +204,13 @@ fn decode_chunked(body: bytes) -> Result<bytes, string> {
         let size: int = parse_chunk_size(body, pos, line_end);
         pos = line_end + 2;
         if (size <= 0) {
-            seguir = false; // chunk final (0)
+            seguir = false;  // chunk final (0)
         } else {
             if (pos + size > n) {
                 return Result.Err("chunk truncado");
             }
             out = out + sub_bytes(body, pos, pos + size);
-            pos = pos + size + 2; // salta el \r\n tras los datos
+            pos = pos + size + 2;  // salta el \r\n tras los datos
         }
     }
     Result.Ok(out)
@@ -213,8 +235,12 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
             }
             var status: int = 0;
             match (parse_int(partes[1])) {
-                Option.Some(n) => { status = n; },
-                Option.None => { return Result.Err("código de estado inválido: " + partes[1]); },
+                Option.Some(n) => {
+                    status = n;
+                },
+                Option.None => {
+                    return Result.Err("código de estado inválido: " + partes[1]);
+                },
             }
 
             // Cabeceras: "Nombre: Valor" (nombre en minúsculas para lookup case-insensitive).
@@ -228,7 +254,7 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                         let valor: string = trim(substring(linea, c + 1, len(linea)));
                         insert(headers, nombre, valor);
                     },
-                    Option.None => {},
+                    Option.None => { },
                 }
                 i = i + 1;
             }
@@ -239,24 +265,32 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                 Option.Some(te) => {
                     if (contains(to_lower(te), "chunked")) {
                         match (decode_chunked(cuerpo)) {
-                            Result.Ok(d) => { cuerpo_final = d; },
-                            Result.Err(e) => { return Result.Err(e); },
+                            Result.Ok(d) => {
+                                cuerpo_final = d;
+                            },
+                            Result.Err(e) => {
+                                return Result.Err(e);
+                            },
                         }
                     }
                 },
-                Option.None => {},
+                Option.None => { },
             }
             // Content-Encoding: gzip → descomprimir el cuerpo (M20.10b, librería INFLATE).
             match (get(headers, "content-encoding")) {
                 Option.Some(ce) => {
                     if (contains(to_lower(ce), "gzip")) {
                         match (gunzip(cuerpo_final)) {
-                            Result.Ok(d) => { cuerpo_final = d; },
-                            Result.Err(e) => { return Result.Err("gzip: " + e); },
+                            Result.Ok(d) => {
+                                cuerpo_final = d;
+                            },
+                            Result.Err(e) => {
+                                return Result.Err("gzip: " + e);
+                            },
                         }
                     }
                 },
-                Option.None => {},
+                Option.None => { },
             }
             Result.Ok(Response { status: status, headers: headers, body: cuerpo_final })
         },
@@ -307,7 +341,10 @@ pub fn request_with(method: string, url: string, body: string, headers: Map<stri
                 Result.Err(e) => Result.Err("no se pudo conectar: " + e),
                 Result.Ok(h) => {
                     match (socket_write_bytes(h, to_bytes(build_request_h(method, u, body, headers)))) {
-                        Result.Err(e) => { close(h); Result.Err("error al enviar: " + e) },
+                        Result.Err(e) => {
+                            close(h);
+                            Result.Err("error al enviar: " + e)
+                        },
                         Result.Ok(_) => {
                             let r = leer_todo(h);
                             close(h);
@@ -338,7 +375,9 @@ pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
     var restantes: int = max;
     while (true) {
         match (fetch(actual)) {
-            Result.Err(e) => { return Result.Err(e); },
+            Result.Err(e) => {
+                return Result.Err(e);
+            },
             Result.Ok(resp) => {
                 if (!es_redireccion(resp.status)) {
                     return Result.Ok(resp);
@@ -347,8 +386,12 @@ pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
                     return Result.Err("demasiadas redirecciones");
                 }
                 match (header(resp, "location")) {
-                    Option.Some(loc) => { actual = absolutizar(actual, loc); },
-                    Option.None => { return Result.Ok(resp); }, // redirección sin Location: se devuelve
+                    Option.Some(loc) => {
+                        actual = absolutizar(actual, loc);
+                    },
+                    Option.None => {
+                        return Result.Ok(resp);  // redirección sin Location: se devuelve
+                    },
                 }
                 restantes = restantes - 1;
             },

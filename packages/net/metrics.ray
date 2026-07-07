@@ -7,20 +7,25 @@
 // Modelo simple con arreglos paralelos + búsqueda lineal (suficiente para unos pocos cientos de series).
 // Counters/gauges admiten labels; los histogramas (por simplicidad) son sin labels. El orden de salida
 // es determinista (métricas en orden de registro; series en orden de creación; labels ordenados).
-
 /// A metrics registry holding counters, gauges and histograms with their time series.
 /// Metrics are stored in registration order; series in creation order (parallel arrays,
 /// linear lookup — fine for a few hundred series).
 pub struct Registry {
-    names: [string],    // métricas registradas, en orden
+    names: [string],
     helps: [string],
-    kinds: [int],       // 0=counter, 1=gauge, 2=histogram
-    bucketses: [[float]], // límites de bucket (solo histogramas; [] para los demás)
-    s_metric: [int],    // serie → índice de su métrica
-    s_text: [string],   // prefijo de la línea: "nombre{labels}" / "nombre_bucket{le=...}" / "_sum" / "_count"
-    s_val: [float],     // valor de la serie
+    kinds: [int],
+    bucketses: [[float]],
+    s_metric: [int],
+    s_text: [string],
+    s_val: [float],
 }
 
+// métricas registradas, en orden
+// 0=counter, 1=gauge, 2=histogram
+// límites de bucket (solo histogramas; [] para los demás)
+// serie → índice de su métrica
+// prefijo de la línea: "nombre{labels}" / "nombre_bucket{le=...}" / "_sum" / "_count"
+// valor de la serie
 /// Creates a new, empty metrics registry.
 pub fn registry() -> Registry {
     Registry { names: [], helps: [], kinds: [], bucketses: [], s_metric: [], s_text: [], s_val: [] }
@@ -36,12 +41,14 @@ fn no_buckets() -> [float] {
 pub fn no_labels() -> Map<string, string> {
     Map.new()
 }
+
 /// Builds a label set with a single key/value pair.
 pub fn labels1(k: string, v: string) -> Map<string, string> {
     var m: Map<string, string> = Map.new();
     insert(m, k, v);
     m
 }
+
 /// Builds a label set with two key/value pairs.
 pub fn labels2(k1: string, v1: string, k2: string, v2: string) -> Map<string, string> {
     var m: Map<string, string> = Map.new();
@@ -56,10 +63,19 @@ fn label_escape(s: string) -> string {
     var i = 0;
     while (i < len(s)) {
         let c = s[i];
-        if (c == '\\') { out = out + "\\\\"; }
-        else { if (c == '"') { out = out + "\\\""; }
-        else { if (c == '\n') { out = out + "\\n"; }
-        else { out = out + to_string(c); }}}
+        if (c == '\\') {
+            out = out + "\\\\";
+        } else {
+            if (c == '"') {
+                out = out + "\\\"";
+            } else {
+                if (c == '\n') {
+                    out = out + "\\n";
+                } else {
+                    out = out + to_string(c);
+                }
+            }
+        }
         i = i + 1;
     }
     out
@@ -74,7 +90,9 @@ fn render_labels(labels: Map<string, string>) -> string {
     var out = "{";
     var i = 0;
     while (i < len(ks)) {
-        if (i > 0) { out = out + ","; }
+        if (i > 0) {
+            out = out + ",";
+        }
         let k = ks[i];
         let v = match (get(labels, k)) {
             Option.Some(x) => x,
@@ -100,6 +118,7 @@ fn add_metric(reg: Registry, name: string, help: string, kind: int, buckets: [fl
 pub fn register_counter(reg: Registry, name: string, help: string) {
     add_metric(reg, name, help, 0, no_buckets());
 }
+
 /// Registers a gauge metric under `name` with the given help text.
 /// Series are created lazily, on first `set`/`add` per label set.
 pub fn register_gauge(reg: Registry, name: string, help: string) {
@@ -168,8 +187,10 @@ fn with_le(labels: Map<string, string>, le: string) -> Map<string, string> {
     var i = 0;
     while (i < len(ks)) {
         match (get(labels, ks[i])) {
-            Option.Some(v) => { insert(m, ks[i], v); },
-            Option.None => {},
+            Option.Some(v) => {
+                insert(m, ks[i], v);
+            },
+            Option.None => { },
         }
         i = i + 1;
     }
@@ -257,9 +278,9 @@ pub fn observe(reg: Registry, name: string, v: float) {
 }
 
 fn kind_name(k: int) -> string {
-    if (k == 0) { "counter" }
-    else { if (k == 1) { "gauge" }
-    else { "histogram" }}
+    if (k == 0) { "counter" } else {
+        if (k == 1) { "gauge" } else { "histogram" }
+    }
 }
 
 // Renderiza todo el registro al formato de exposición de Prometheus.

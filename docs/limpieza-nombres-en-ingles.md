@@ -1,9 +1,9 @@
 # Limpieza: identificadores en inglés (deuda técnica, DIFERIDA)
 
 **Regla** (ya en `CLAUDE.md` § Convenciones): los **identificadores** —nombres de funciones/métodos,
-variables, parámetros, tipos y campos— van en **inglés**; los **comentarios y la documentación** (`///`)
-en **español**. El código antiguo mezcla los dos idiomas en los nombres (`cargar`, `analizar`,
-`nombre_fachada`, `receptor`, `otro`, …); esta limpieza lo unifica a inglés.
+variables, parámetros, tipos y campos— van en **inglés**; los **comentarios** (`//`) en **español**, y la
+**documentación** `///` (visible en el LSP/raydoc) en **inglés**. El código antiguo mezcla los dos idiomas
+en los nombres (`cargar`, `analizar`, `nombre_fachada`, `receptor`, `otro`, …); esta limpieza lo unifica a inglés.
 
 **Cuándo**: DIFERIDA — se hace **después de cerrar los puntos pendientes** en curso (M49.2 `std/time`+
 `std/random`, M49.3 `std/crypto`, y lo que el usuario tenga en cola). Código **nuevo** ya se escribe en

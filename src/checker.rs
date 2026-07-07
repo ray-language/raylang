@@ -112,6 +112,9 @@ pub fn check_all_modulo(program: &mut Program) -> Vec<TypeError> {
 }
 
 fn check_all_impl(program: &mut Program, require_main: bool) -> Vec<TypeError> {
+    if let Err(e) = check_builtin_redefinition(program) {
+        return vec![e];
+    }
     if let Err(e) = prepare_program(program) {
         return vec![e];
     }
@@ -124,7 +127,32 @@ fn check_all_impl(program: &mut Program, require_main: bool) -> Vec<TypeError> {
     }
 }
 
+/// M48.3: un builtin del lenguaje (`len`, `push`, `insert`, `print`…) NO puede redefinirse como
+/// función libre — se resuelve **antes** que cualquier función del usuario, así que un `fn len` sería
+/// inalcanzable (shadowing silencioso al revés). Se comprueba ANTES de inyectar el prelude (aquí
+/// `program.functions` son solo las del usuario ya fusionadas): las de un módulo van namespacadas
+/// (`M::len`) → no colisionan; solo las del archivo de entrada (nombre pelado) o traídas sin calificar
+/// llegan como `len`. Las funciones del prelude (map/filter/fold/sort/assert…) NO son builtins → el
+/// usuario SÍ puede redefinirlas (override). Los internos `__x` no son de cara al usuario. Lo llaman
+/// tanto `check` (fail-fast) como `check_all` (recuperación de errores) para que el mensaje se emita.
+fn check_builtin_redefinition(program: &Program) -> Result<(), TypeError> {
+    for f in &program.functions {
+        if !f.name.contains("::") && !f.name.contains('#') && !f.name.starts_with("__")
+            && crate::builtins::is_builtin(&f.name)
+        {
+            return Err(TypeError {
+                msg: format!("'{}' es un builtin del lenguaje y no puede redefinirse", f.name),
+                line: f.line,
+                col: f.col,
+                len: f.name.chars().count(),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub fn check(program: &mut Program) -> Result<(), TypeError> {
+    check_builtin_redefinition(program)?;
     // Pasos 0–1: inyectar el prelude, generar derivaciones, bajar los métodos de impl y
     // resolver la construcción de enums (compartido con `semantic_index`).
     prepare_program(program)?;
@@ -5653,6 +5681,22 @@ mod tests {
         let idx = semantic_index(&mut prog);
         assert!(idx.hovers.iter().any(|h| h.line == 2 && h.text == "Map.new() -> Map<K, V>"),
             "hover de Map.new: {:?}", idx.hovers.iter().filter(|h| h.line == 2).map(|h| &h.text).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn redefinir_builtin_es_error() {
+        // M48.3: un builtin (len/push/insert/print…) no puede redefinirse como función libre.
+        for nombre in ["len", "push", "insert", "print", "keys", "reverse"] {
+            let src = format!("fn {nombre}(x: int) -> int {{ x }}\nfn main() -> int {{ 0 }}");
+            let e = check_src(&src).unwrap_err();
+            assert!(format!("{e}").contains(&format!("'{nombre}' es un builtin del lenguaje")),
+                "redefinir {nombre}: {e}");
+        }
+        // Pero una función del PRELUDE (map/filter/fold/sort) SÍ puede redefinirse (override).
+        assert!(check_src("fn map(x: int) -> int { x + 1 }\nfn main() -> int { map(5) }").is_ok());
+        assert!(check_src("fn sort(x: int) -> int { x }\nfn main() -> int { sort(3) }").is_ok());
+        // Y un nombre normal, obviamente, es válido.
+        assert!(check_src("fn doblar(x: int) -> int { x * 2 }\nfn main() -> int { doblar(2) }").is_ok());
     }
 
     #[test]

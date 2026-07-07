@@ -115,6 +115,16 @@ fn publica_diagnostico_ante_un_error() {
 }
 
 #[test]
+fn publica_diagnostico_al_redefinir_un_builtin() {
+    // M48.3: redefinir un builtin (`fn len`) → diagnóstico en vivo.
+    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn len(x: int) -> int { x }\nfn main() -> int { 0 }"}}}"#;
+    let entrada = frame(open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("textDocument/publishDiagnostics"), "publica diagnósticos\n{out}");
+    assert!(out.contains("es un builtin del lenguaje"), "mensaje del footgun\n{out}");
+}
+
+#[test]
 fn programa_valido_publica_lista_vacia() {
     let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///ok.ray","text":"fn main() -> int { 42 }"}}}"#;
     let entrada = frame(open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);

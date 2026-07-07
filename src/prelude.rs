@@ -96,6 +96,27 @@ trait Contains<T> {
 impl Contains<string> for string { fn contains(self, x: string) -> bool { __contains(self, x) } }
 impl<T> Contains<T> for [T] { fn contains(self, x: T) -> bool { __contains(self, x) } }
 
+// Operaciones de Map (M48.4c): insertar, consultar la clave y listar claves/valores. Un solo impl
+// (Map<K,V>); agrupadas en un trait porque son específicas de Map. `get`/`remove` (que devuelven
+// Option) siguen siendo funciones del prelude, no métodos de este trait.
+/// Core map operations: `insert`, `contains_key`, `keys`, `values`.
+trait MapOps<K, V> {
+    /// Inserts or updates the pair `(k, v)`, in place.
+    fn insert(self, k: K, v: V);
+    /// Whether the map contains `k`.
+    fn contains_key(self, k: K) -> bool;
+    /// The keys, as a sorted array (deterministic order).
+    fn keys(self) -> [K];
+    /// The values, in the same order as `keys()`.
+    fn values(self) -> [V];
+}
+impl<K, V> MapOps<K, V> for Map<K, V> {
+    fn insert(self, k: K, v: V) { __insert(self, k, v) }
+    fn contains_key(self, k: K) -> bool { __contains_key(self, k) }
+    fn keys(self) -> [K] { __keys(self) }
+    fn values(self) -> [V] { __values(self) }
+}
+
 // Hash (M40.3a): un valor hashable produce un `int`. `@derive(Hash)` lo genera para un struct/enum
 // (combinando `.hash()` de sus campos); los primitivos lo implementan aquí, en raylang (el string
 // itera sus caracteres con `char_code`). Lo consumen las tablas hash del prelude (Set, M40.3b).

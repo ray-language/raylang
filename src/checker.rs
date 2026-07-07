@@ -5727,6 +5727,17 @@ mod tests {
     }
 
     #[test]
+    fn trait_mapops() {
+        // M48.4c: insert/contains_key/keys/values como métodos del trait MapOps.
+        assert!(check_src(
+            "fn main() -> int { let m: Map<int, int> = [1: 10]; m.insert(2, 20); \
+             m.keys().len() + m.values()[0] + (if (m.contains_key(1)) { 1 } else { 0 }) }").is_ok());
+        // clave del tipo equivocado → error.
+        let e = check_src("fn main() { let m: Map<int, int> = [:]; m.insert(\"x\", 1); }").unwrap_err();
+        assert!(format!("{e}").contains("clave") || format!("{e}").contains("int"), "{e}");
+    }
+
+    #[test]
     fn traits_push_reverse_contains() {
         // M48.4b: los tres traits despachan como método; extensibles a tipos de usuario.
         assert!(check_src("fn main() -> int { var a = [1,2]; a.push(3); a.reverse().len() }").is_ok());

@@ -913,7 +913,8 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza un arreglo, string, Map o bytes"),
             },
             // --- Mapas (M13.1) --- (`Map.new()` es una función asociada, M48.1: se evalúa en `eval_call`)
-            "insert" => {
+            // M48.4c: los `__*` son los primitivos internos a los que baja el trait `MapOps`.
+            "insert" | "__insert" => {
                 match &values[0] {
                     Value::Map(rc) => {
                         rc.borrow_mut().insert(MapKey::from_value(&values[1]), values[2].clone());
@@ -922,7 +923,7 @@ impl<'a> Interpreter<'a> {
                 }
                 Value::Unit
             }
-            "contains_key" => match &values[0] {
+            "contains_key" | "__contains_key" => match &values[0] {
                 Value::Map(rc) => Value::Bool(rc.borrow().contains_key(&MapKey::from_value(&values[1]))),
                 _ => unreachable!("el checker garantiza un Map"),
             },
@@ -949,7 +950,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza un Map"),
             },
             // M13.1b: claves ordenadas (determinista).
-            "keys" => match &values[0] {
+            "keys" | "__keys" => match &values[0] {
                 Value::Map(rc) => {
                     let mut ks: Vec<MapKey> = rc.borrow().keys().cloned().collect();
                     ks.sort();
@@ -959,7 +960,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza un Map"),
             },
             // M13.1b: valores en orden de clave ordenada (casa posición a posición con keys).
-            "values" => match &values[0] {
+            "values" | "__values" => match &values[0] {
                 Value::Map(rc) => {
                     let m = rc.borrow();
                     let mut pares: Vec<(&MapKey, &Value)> = m.iter().collect();

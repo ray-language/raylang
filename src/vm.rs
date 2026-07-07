@@ -4232,6 +4232,27 @@ mod tests {
         );
     }
 
+    /// M48.4c: `insert`/`contains_key`/`keys`/`values` como métodos del trait `MapOps` bajan a sus
+    /// primitivos `__x`. `keys`/`values` asignan heap y son deterministas (orden de clave) → oráculo.
+    #[test]
+    fn trait_mapops_oraculo() {
+        oracle_stress(
+            "fn main() -> int {
+                let m: Map<int, [int]> = [:];
+                var i = 0;
+                while (i < 20) { m.insert(i, [i, i * 3]); i = i + 1; }
+                var suma = 0;
+                let ks = m.keys();      // ordenadas 0..19
+                let vs = m.values();    // en el mismo orden
+                var j = 0;
+                while (j < m.len()) { suma = suma + ks[j] + vs[j][1]; j = j + 1; }
+                if (m.contains_key(7)) { suma = suma + 10000; }
+                if (!m.contains_key(99)) { suma = suma + 100; }
+                suma
+             }",
+        );
+    }
+
     /// M48.4b: `push`/`reverse`/`contains` como métodos de trait (`Push`/`Reverse`/`Contains`) bajan a
     /// sus primitivos `__x`. `push`/`reverse` asignan heap → estrés del GC.
     #[test]

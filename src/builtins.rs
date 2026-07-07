@@ -1665,6 +1665,40 @@ static BUILTINS: &[Builtin] = &[
         if a[2] != vt { return Err((Some(2), format!("insert: el valor del Map es {} pero se pasó {}", vt, a[2]))); }
         Ok(Type::Unit)
     } },
+    // M48.4c: primitivos internos de los métodos de `MapOps` (mismos opcodes que los públicos, ocultos).
+    Builtin { name: "__insert", opcode: OpCode::MapInsert, check: |a| {
+        arity(a, 3, "__insert", " (mapa, clave, valor)")?;
+        let (kt, vt) = match &a[0] {
+            Type::Map(k, v) => ((**k).clone(), (**v).clone()),
+            other => return Err((Some(0), format!("__insert espera un Map como primer argumento, no {}", other))),
+        };
+        if a[1] != kt { return Err((Some(1), format!("__insert: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
+        if a[2] != vt { return Err((Some(2), format!("__insert: el valor del Map es {} pero se pasó {}", vt, a[2]))); }
+        Ok(Type::Unit)
+    } },
+    Builtin { name: "__contains_key", opcode: OpCode::MapContainsKey, check: |a| {
+        arity(a, 2, "__contains_key", " (mapa, clave)")?;
+        let kt = match &a[0] {
+            Type::Map(k, _) => (**k).clone(),
+            other => return Err((Some(0), format!("__contains_key espera un Map como primer argumento, no {}", other))),
+        };
+        if a[1] != kt { return Err((Some(1), format!("__contains_key: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
+        Ok(Type::Bool)
+    } },
+    Builtin { name: "__keys", opcode: OpCode::MapKeys, check: |a| {
+        arity(a, 1, "__keys", " (mapa)")?;
+        match &a[0] {
+            Type::Map(k, _) => Ok(Type::Array(k.clone())),
+            other => Err((Some(0), format!("__keys espera un Map, no {}", other))),
+        }
+    } },
+    Builtin { name: "__values", opcode: OpCode::MapValues, check: |a| {
+        arity(a, 1, "__values", " (mapa)")?;
+        match &a[0] {
+            Type::Map(_, v) => Ok(Type::Array(v.clone())),
+            other => Err((Some(0), format!("__values espera un Map, no {}", other))),
+        }
+    } },
     // contains_key(m, k) -> bool: ¿está la clave k en el mapa m?
     Builtin { name: "contains_key", opcode: OpCode::MapContainsKey, check: |a| {
         arity(a, 2, "contains_key", " (mapa, clave)")?;

@@ -242,9 +242,14 @@ Cada fase toca superficie del lenguaje ⇒ hay que barrer **todo** el corpus, no
 - **Editores** (`editors/vscode`, `editors/sublime`): podar la lista `builtins` de la
   gramática y bump de versión (M48.2 revisar `[:]`; M48.4 podar nombres migrados).
 
-**Regla de oro**: ninguna fase se da por cerrada hasta que `cargo test` (suite completa)
-y los ejemplos deterministas corran verdes. Durante el desarrollo, tests **acotados** a
-los archivos tocados (preferencia del usuario); el barrido completo, al cerrar la fase.
+**Tests (preferencia del usuario — acotar siempre que se pueda)**: durante el
+desarrollo y al cerrar cada sub-fase, correr **solo los tests de los archivos tocados**
+(p. ej. `cargo test --lib checker`, `cargo test --test lsp_cli`, el binario de
+integración afectado), **no** la suite completa —es lenta—. El barrido completo
+(`cargo test`) se reserva para hitos puntuales donde el cambio es transversal de verdad
+(típicamente el cierre de M48.4e, que toca prelude + self-hosting) o cuando un test
+acotado deja dudas de regresión en otro módulo. Verificar además que los **ejemplos
+migrados** corren (`ray run <archivo>`), pero solo los tocados en esa fase, no los 156.
 
 ## LSP: resumen de impacto por fase
 

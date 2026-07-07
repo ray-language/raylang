@@ -6330,3 +6330,20 @@ Sintaxis idiomática para construir mapas, estilo Swift, en vez de `Map.new()` +
   el lowering (`?`/UFCS/dyn/dicts) alcance las claves y valores; fmt lo reemite (`[:]` / `[k: v]`).
 - Diferido: el literal en el compilador **auto-alojado** (parser/checker/intérprete/VM); el ejemplo
   `examples/data/mapa_literal.ray` se excluye del escaneo de `selfhost_parser`.
+
+### 50.3 M48.3 — redefinir un builtin es error (footgun)
+
+Un builtin (`len`/`push`/`insert`/`print`/…) se resuelve **antes** que cualquier función del usuario
+(`un builtin no se tapa`), así que un `fn len` quedaba **inalcanzable** — un shadowing silencioso al
+revés. Ahora es un error claro: *"'len' es un builtin del lenguaje y no puede redefinirse"*.
+
+- **`check_builtin_redefinition`** corre **antes** de inyectar el prelude (ve solo las funciones del
+  usuario ya fusionadas por el loader), llamado por `check` (fail-fast) **y** por `check_all`
+  (recuperación M33c; sin ambos, el mensaje no se emitía y el CLI salía 65 sin diagnóstico).
+- Solo nombres **pelados**: las de un módulo van namespacadas (`M::len`, con `::`) → no colisionan; las
+  del prelude (`map`/`filter`/`fold`/`sort`/`assert`…) **no son builtins** → siguen siendo redefinibles
+  (override); los internos `__x` se ignoran. La stdlib con nombres de builtin (`std/text.reverse`,
+  `std/sort.min`/`max`, `redis.read_line`) solo se importa (namespacada) → no la afecta.
+- El override real de un builtin llegará gratis con la Fase 3 (cuando `len` deje de ser builtin y pase a
+  ser un método de trait, redefinir `fn len` como función libre será legal).
+- Puro checker (sin runtime). Diagnóstico en vivo en el LSP (vía `analizar`).

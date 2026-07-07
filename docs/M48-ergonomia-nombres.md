@@ -104,7 +104,7 @@ Mata `map_new()` de raíz para el caso común.
 
 ## Fase 2 — Footgun: diagnóstico en vez de silencio (barato, alto valor)
 
-### M48.3 — Colisión de nombre con un builtin → error claro
+### M48.3 — Colisión de nombre con un builtin → error claro — ✅ COMPLETO (ver DESIGN.md §50.3)
 
 Antes del refactor grande, eliminar la sorpresa.
 

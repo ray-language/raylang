@@ -629,7 +629,7 @@ fn returns_immediately(code: [Op], start: int) -> bool {
 // método es una función con `self` como primer parámetro (lo antepone el despacho). Por constructor:
 // `type_key_of_type(Caja<T>) = "Caja"` → un impl genérico cubre toda la familia (genéricos = erasure).
 fn compile_methods(comp: Comp, prog: Program, methods: Map<string, int>) {
-    let traitmap: Map<string, [MethodSig]> = map_new();
+    let traitmap: Map<string, [MethodSig]> = Map.new();
     var ti = 0;
     while (ti < len(prog.traits)) { insert(traitmap, prog.traits[ti].name, prog.traits[ti].methods); ti = ti + 1; }
 
@@ -699,15 +699,15 @@ fn placeholder_fn() -> CompiledFn {
 }
 
 pub fn compile(prog: Program) -> CProgram {
-    var indices: Map<string, int> = map_new();
+    var indices: Map<string, int> = Map.new();
     var i = 0;
     while (i < len(prog.funcs)) { insert(indices, prog.funcs[i].name, i); i = i + 1; }
 
-    var structs: Map<string, [FieldDef]> = map_new();
+    var structs: Map<string, [FieldDef]> = Map.new();
     var s = 0;
     while (s < len(prog.structs)) { insert(structs, prog.structs[s].name, prog.structs[s].fields); s = s + 1; }
 
-    var enums: Map<string, [VariantDef]> = map_new();
+    var enums: Map<string, [VariantDef]> = Map.new();
     inject_prelude_enums(enums);
     var e = 0;
     while (e < len(prog.enums)) { insert(enums, prog.enums[e].name, prog.enums[e].variants); e = e + 1; }
@@ -723,7 +723,7 @@ pub fn compile(prog: Program) -> CProgram {
         comp.out[j] = cfn;
         j = j + 1;
     }
-    var methods: Map<string, int> = map_new();
+    var methods: Map<string, int> = Map.new();
     compile_methods(comp, prog, methods);
     CProgram { fns: comp.out, indices: indices, methods: methods }
 }

@@ -26,7 +26,7 @@ fn main() {
     print("vocales = " + to_string(vocales));  // 5
 
     // Sobre un Map: el patrón es una tupla `(clave, valor)`. Las claves salen ORDENADAS (determinista).
-    var inventario: Map<string, int> = map_new();
+    var inventario: Map<string, int> = Map.new();
     insert(inventario, "manzanas", 12);
     insert(inventario, "peras", 7);
     insert(inventario, "kiwis", 20);

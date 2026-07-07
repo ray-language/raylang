@@ -20,8 +20,8 @@ fn fuente(ch: Channel<int>, base: int, cuantos: int) {
 }
 
 fn main() -> int {
-    let a: Channel<int> = channel();
-    let b: Channel<int> = channel();
+    let a: Channel<int> = Channel.new();
+    let b: Channel<int> = Channel.new();
     spawn(fn() {
     fuente(a, 100, 2);  // 100, 101
 });

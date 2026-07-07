@@ -68,7 +68,7 @@ fn productor(ch: Channel<int>, base: int) {
     while (i <= 100) { send(ch, base + i); i = i + 1; }
 }
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     spawn(fn() { productor(ch, 0); });
     spawn(fn() { productor(ch, 1000); });
     spawn(fn() { productor(ch, 2000); });
@@ -172,7 +172,7 @@ fn deterministic_reproducible() {
     // para un programa con varias fibras cuyo orden bajo multicore variaría.
     let src = r#"
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     spawn(fn() { var i = 0; while (i < 4) { send(ch, i); i = i + 1; } close(ch); });
     var seguir = true;
     while (seguir) {
@@ -205,7 +205,7 @@ fn deadlock_detectado_en_paralelo() {
     // ejecutando (running == 0), el scheduler M:N debe detectar el deadlock (no colgarse indefinidamente).
     let src = r#"
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     match (recv(ch)) {
         Option.Some(v) => print(v),
         Option.None => print(0),

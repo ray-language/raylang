@@ -13,7 +13,7 @@ fn decode_or(s: string) -> string {
 
 // Parsea la cabecera de petición `Cookie: a=1; b=hola%20mundo` en un `Map<string,string>`.
 pub fn parse_cookies(header: string) -> Map<string, string> {
-    var m: Map<string, string> = map_new();
+    var m: Map<string, string> = Map.new();
     let parts = split(header, ";");
     var i = 0;
     while (i < len(parts)) {

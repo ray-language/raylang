@@ -319,7 +319,7 @@ pub fn struct_set(fields: [SField], fname: string, v: Value) {
 // Ámbitos: declarar, buscar, asignar
 // =====================================================================
 
-fn new_scope() -> Map<string, Cell> { map_new() }
+fn new_scope() -> Map<string, Cell> { Map.new() }
 
 fn push_scope(c: Interp) { push(c.scopes, new_scope()); }
 
@@ -372,7 +372,7 @@ fn assign(c: Interp, name: string, v: Value) {
 // hacia dentro, para que una variable interior tape a una exterior del mismo nombre). Comparte las celdas
 // (no las copia) → mutar la variable después se ve en la closure.
 fn capture_env(c: Interp) -> [Capture] {
-    let m: Map<string, Cell> = map_new();
+    let m: Map<string, Cell> = Map.new();
     var i = 0;
     while (i < len(c.scopes)) {
         let scope = c.scopes[i];
@@ -922,7 +922,7 @@ pub fn prepend(recv: Value, args: [Value]) -> [Value] {
 // Puebla la tabla de métodos (`Tipo#metodo`) desde los `impl` del programa, más los métodos por DEFECTO
 // del trait no redefinidos por el impl. El despacho mira esta tabla con la clave de tipo del receptor.
 fn register_methods(c: Interp, prog: Program) {
-    let traitmap: Map<string, [MethodSig]> = map_new();
+    let traitmap: Map<string, [MethodSig]> = Map.new();
     var ti = 0;
     while (ti < len(prog.traits)) {
         insert(traitmap, prog.traits[ti].name, prog.traits[ti].methods);
@@ -1453,7 +1453,7 @@ fn inject_prelude_enums(c: Interp) {
 // Ejecuta el programa llamando a `main` y devuelve su valor (o un error de ejecución). El checker ya
 // garantizó que `main` existe.
 pub fn run(prog: Program, prog_args: [string]) -> Result<Value, RuntimeError> {
-    let c = Interp { funcs: map_new(), structs: map_new(), enums: map_new(), methods: map_new(), scopes: empty_scopes(), args: prog_args };
+    let c = Interp { funcs: Map.new(), structs: Map.new(), enums: Map.new(), methods: Map.new(), scopes: empty_scopes(), args: prog_args };
     inject_prelude_enums(c); // Option/Result (los del programa, abajo, sobrescriben si el usuario redefine)
     var i = 0;
     while (i < len(prog.funcs)) {

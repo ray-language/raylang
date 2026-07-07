@@ -259,7 +259,7 @@ fn doc_tipo_incorporado(name: &str) -> Option<&'static str> {
     Some(match name {
         "Channel" => "`Channel<T>` — a typed channel for communicating between fibers (CSP). Created with `channel()` / `channel(n)`; used with `send`, `recv`, `close`, `select`.",
         "Task" => "`Task<T>` — the in-progress result of a `spawn(f)`. `join(t)` blocks until the task finishes and returns its value.",
-        "Map" => "`Map<K, V>` — a dictionary from hashable keys to values. `map_new()`, `insert`, `get`, `remove`, `keys`, `values`, `contains_key`, `len`.",
+        "Map" => "`Map<K, V>` — a dictionary from hashable keys to values. `Map.new()`, `insert`, `get`, `remove`, `keys`, `values`, `contains_key`, `len`.",
         "Option" => "`Option<T>` — an optional value: `Some(T)` or `None`. raylang has no `null`.",
         "Result" => "`Result<T, E>` — the result of a fallible operation: `Ok(T)` or `Err(E)`. Propagated with `?`.",
         _ => return None,

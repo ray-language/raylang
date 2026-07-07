@@ -24,12 +24,12 @@ pub struct Response {
 // --- Respuestas: atajos para los casos comunes ---
 // Respuesta de texto: el cuerpo se codifica a UTF-8.
 pub fn text(status: int, body: string) -> Response {
-    Response { status: status, headers: map_new(), body: to_bytes(body) }
+    Response { status: status, headers: Map.new(), body: to_bytes(body) }
 }
 
 // Respuesta binaria: el cuerpo va tal cual (octetos crudos).
 pub fn bytes_response(status: int, body: bytes) -> Response {
-    Response { status: status, headers: map_new(), body: body }
+    Response { status: status, headers: Map.new(), body: body }
 }
 
 pub fn ok(body: string) -> Response {
@@ -41,7 +41,7 @@ pub fn not_found() -> Response {
 }
 
 pub fn json_response(body: string) -> Response {
-    var h: Map<string, string> = map_new();
+    var h: Map<string, string> = Map.new();
     insert(h, "Content-Type", "application/json");
     Response { status: 200, headers: h, body: to_bytes(body) }
 }
@@ -117,7 +117,7 @@ pub fn read_request(conn: int) -> Result<Request, string> {
             let path: string = partes[1];
 
             // Cabeceras (nombre en minúsculas para lookup case-insensitive).
-            var headers: Map<string, string> = map_new();
+            var headers: Map<string, string> = Map.new();
             var i: int = 1;
             while (i < len(lineas)) {
                 match (index_of(lineas[i], ":")) {

@@ -151,7 +151,7 @@ fn match_route(pat: [string], path: [string]) -> Option<[Param]> {
 
 // Construye la `webserver.Response` final a partir de la `Res` que rellenó el handler.
 fn build_response(res: Res) -> webserver.Response {
-    var h: Map<string, string> = map_new();
+    var h: Map<string, string> = Map.new();
     insert(h, "Content-Type", res.content_type);
     webserver.Response { status: res.code, headers: h, body: res.body }
 }

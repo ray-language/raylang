@@ -91,7 +91,7 @@ pub fn client_credentials(token_url: string, client_id: string, client_secret: s
     if (len(scope) > 0) {
         body = body + "&scope=" + url_encode(scope);
     }
-    var h: Map<string, string> = map_new();
+    var h: Map<string, string> = Map.new();
     insert(h, "Content-Type", "application/x-www-form-urlencoded");
     insert(h, "Accept", "application/json");
     match (request_with("POST", token_url, body, h)) {

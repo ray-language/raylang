@@ -6,7 +6,7 @@ from sigv4 import credentials, authorization_header;
 fn main() {
     let cred = credentials("AKIDEXAMPLE", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "us-east-1", "service");
 
-    var h: Map<string, string> = map_new();
+    var h: Map<string, string> = Map.new();
     insert(h, "host", "example.amazonaws.com");
     insert(h, "x-amz-date", "20150830T123600Z");
 

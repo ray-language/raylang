@@ -476,7 +476,7 @@ fn unify_list(ps: [Type], bs: [Type], sigma: Map<string, Type>, holes: [string])
 // Pila de ámbitos
 // =====================================================================
 
-fn new_scope() -> Map<string, VarInfo> { map_new() }
+fn new_scope() -> Map<string, VarInfo> { Map.new() }
 
 fn push_scope(c: Checker) { push(c.scopes, new_scope()); }
 
@@ -1223,7 +1223,7 @@ fn check_binary(c: Checker, op: BinOp, l: Expr, r: Expr, line: int, col: int) ->
 
 fn check_call(c: Checker, callee: Expr, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     match (callee.kind) {
-        // map_new() es indeterminado: necesita el tipo esperado (bidireccional) para fijar Map<K,V>.
+        // Map.new() es indeterminado: necesita el tipo esperado (bidireccional) para fijar Map<K,V>.
         EKind.EIdent(n) => {
             if (n == "map_new") { check_map_new(c, cargs, expected, line, col) }
             else { check_named_call(c, n, cargs, line, col) }
@@ -1242,7 +1242,7 @@ fn check_call(c: Checker, callee: Expr, cargs: [Expr], expected: Option<Type>, l
 // `name` del struct receptor (de tipo función) —gana sobre UFCS—; (3) **UFCS** (M7.1): `name(recv,
 // args)`, el receptor como primer argumento. (Métodos de trait / bound / `dyn` → M14.3d-2/3/4.)
 fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
-    // M48.1: función asociada `Map.new()` (el checker auto-alojado no maneja canales). Como `map_new()`
+    // M48.1: función asociada `Map.new()` (el checker auto-alojado no maneja canales). Como `Map.new()`
     // pero indexado por el tipo; mensajes idénticos a `try_assoc_call` de Rust.
     match (obj.kind) {
         EKind.EIdent(tn) => {
@@ -1631,7 +1631,7 @@ fn check_generic_call(c: Checker, type_params: [string], params: [Type], ret: Ty
         return Result.Err(terr(line, col,
             label + " espera " + to_string(len(params)) + " argumento(s), se le pasaron " + to_string(len(cargs))));
     }
-    let sigma: Map<string, Type> = map_new();
+    let sigma: Map<string, Type> = Map.new();
     var i = 0;
     while (i < len(cargs)) {
         let at = check_expr(c, cargs[i])?;
@@ -1969,7 +1969,7 @@ fn check_contains(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type
 // `src/builtins.rs` (get refleja el envoltorio del prelude: (Map<K,V>, K) -> Option<V>).
 // =====================================================================
 
-// M48.1: `Map.new()` — función asociada. Como `map_new()` (indeterminado) pero con mensajes "Map.new"
+// M48.1: `Map.new()` — función asociada. Como `Map.new()` (indeterminado) pero con mensajes "Map.new"
 // idénticos a `try_assoc_call` de Rust. La aridad se valida primero (como en Rust).
 fn check_assoc_map_new(c: Checker, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     if (len(cargs) != 0) {
@@ -1987,7 +1987,7 @@ fn check_assoc_map_new(c: Checker, cargs: [Expr], expected: Option<Type>, line: 
     }
 }
 
-// map_new() es INDETERMINADO (como `[]`/`None`): su tipo lo fija el esperado (bidireccional).
+// Map.new() es INDETERMINADO (como `[]`/`None`): su tipo lo fija el esperado (bidireccional).
 fn check_map_new(c: Checker, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     match (expected) {
         Option.Some(t) => {
@@ -2000,7 +2000,7 @@ fn check_map_new(c: Checker, cargs: [Expr], expected: Option<Type>, line: int, c
             }
         },
         Option.None => Result.Err(terr(line, col,
-            "no se puede inferir el tipo de map_new; anótalo, p. ej. 'let m: Map<string, int> = map_new()'")),
+            "no se puede inferir el tipo de map_new; anótalo, p. ej. 'let m: Map<string, int> = Map.new()'")),
     }
 }
 
@@ -2268,7 +2268,7 @@ fn enum_tparams(c: Checker, name: string) -> [string] {
 
 // σ que liga cada parámetro de tipo con su argumento (zip), para sustituir campos/payloads.
 fn build_sigma(tparams: [string], targs: [Type]) -> Map<string, Type> {
-    let sigma: Map<string, Type> = map_new();
+    let sigma: Map<string, Type> = Map.new();
     var i = 0;
     while (i < len(tparams) && i < len(targs)) {
         insert(sigma, tparams[i], targs[i]);
@@ -2280,7 +2280,7 @@ fn build_sigma(tparams: [string], targs: [Type]) -> Map<string, Type> {
 // Siembra σ desde el tipo esperado: si se espera `Nombre<a, b>` (misma aridad), liga cada parámetro
 // con su argumento esperado. Así `Caja.Vacia` con esperado `Caja<int>` fija `T = int`.
 fn seed_sigma_from_expected(expected: Option<Type>, name: string, tparams: [string]) -> Map<string, Type> {
-    let sigma: Map<string, Type> = map_new();
+    let sigma: Map<string, Type> = Map.new();
     match (expected) {
         Option.Some(t) => {
             match (t) {
@@ -3064,9 +3064,9 @@ fn check_method_body(c: Checker, params: [Param], ret: Type, body: Block, line: 
 // Punto de entrada: valida un programa (o devuelve el primer TypeError).
 pub fn check(prog: Program) -> Result<int, TypeError> {
     let c = Checker {
-        funcs: map_new(), structs: map_new(), enums: map_new(),
-        struct_tparams: map_new(), enum_tparams: map_new(),
-        traits: map_new(), methods: map_new(), impl_traits: map_new(),
+        funcs: Map.new(), structs: Map.new(), enums: Map.new(),
+        struct_tparams: Map.new(), enum_tparams: Map.new(),
+        traits: Map.new(), methods: Map.new(), impl_traits: Map.new(),
         scopes: [], current_return: Type.TUnit, tparams: [], bounds: [],
     };
     check_program(c, prog)

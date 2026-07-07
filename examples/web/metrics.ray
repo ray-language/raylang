@@ -34,17 +34,17 @@ fn no_buckets() -> [float] {
 
 // --- Helpers de labels ---
 pub fn no_labels() -> Map<string, string> {
-    map_new()
+    Map.new()
 }
 
 pub fn labels1(k: string, v: string) -> Map<string, string> {
-    var m: Map<string, string> = map_new();
+    var m: Map<string, string> = Map.new();
     insert(m, k, v);
     m
 }
 
 pub fn labels2(k1: string, v1: string, k2: string, v2: string) -> Map<string, string> {
-    var m: Map<string, string> = map_new();
+    var m: Map<string, string> = Map.new();
     insert(m, k1, v1);
     insert(m, k2, v2);
     m
@@ -168,7 +168,7 @@ fn touch_series(reg: Registry, mi: int, text: string) -> int {
 
 // Copia un conjunto de labels añadiéndole `le` (para las series _bucket de un histograma).
 fn with_le(labels: Map<string, string>, le: string) -> Map<string, string> {
-    var m: Map<string, string> = map_new();
+    var m: Map<string, string> = Map.new();
     let ks = keys(labels);
     var i = 0;
     while (i < len(ks)) {

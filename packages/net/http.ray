@@ -67,7 +67,7 @@ fn parse_url(url: string) -> Result<Url, string> {
 }
 
 fn build_request(method: string, u: Url, body: string) -> string {
-    build_request_h(method, u, body, map_new())
+    build_request_h(method, u, body, Map.new())
 }
 
 // Como `build_request` pero con cabeceras extra (nombre→valor). Las del cliente (Host/Connection/
@@ -218,7 +218,7 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
             }
 
             // Cabeceras: "Nombre: Valor" (nombre en minúsculas para lookup case-insensitive).
-            var headers: Map<string, string> = map_new();
+            var headers: Map<string, string> = Map.new();
             var i: int = 1;
             while (i < len(lineas)) {
                 let linea: string = lineas[i];
@@ -291,7 +291,7 @@ fn conectar(u: Url) -> Result<int, string> {
 /// Supports http:// and https:// (TLS); uses "Connection: close" and reads until EOF.
 /// Err on invalid URL, connection failure, I/O error, or a malformed response.
 pub fn request(method: string, url: string, body: string) -> Result<Response, string> {
-    request_with(method, url, body, map_new())
+    request_with(method, url, body, Map.new())
 }
 
 // Como `request` pero con cabeceras extra (Authorization, Accept, Content-Type, …). Es la base de

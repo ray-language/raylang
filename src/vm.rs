@@ -4112,8 +4112,8 @@ mod tests {
         oracle_program("fn main() -> int { var s = 0; for i in 0..5 { s = s + i; } s }"); // 10
         oracle_program("fn main() -> int { var t = 0; for x in [10, 20, 30] { t = t + x; } t }"); // 60
         oracle_program("fn main() -> int { var n = 0; for c in \"hola\" { n = n + 1; } n }"); // 4
-        oracle_program("fn main() -> int { var m: Map<string, int> = map_new(); insert(m, \"a\", 1); insert(m, \"b\", 5); var s = 0; for (k, v) in m { s = s + v; } s }"); // 6
-        oracle_program("fn main() -> int { var m: Map<int, int> = map_new(); insert(m, 1, 10); insert(m, 2, 20); var c = 0; for (k, _) in m { c = c + k; } c }"); // 3
+        oracle_program("fn main() -> int { var m: Map<string, int> = Map.new(); insert(m, \"a\", 1); insert(m, \"b\", 5); var s = 0; for (k, v) in m { s = s + v; } s }"); // 6
+        oracle_program("fn main() -> int { var m: Map<int, int> = Map.new(); insert(m, 1, 10); insert(m, 2, 20); var c = 0; for (k, _) in m { c = c + k; } c }"); // 3
         // for anidado.
         oracle_program("fn main() -> int { var s = 0; for i in 0..3 { for j in 0..3 { s = s + 1; } } s }"); // 9
         // `for` sobre un valor con return dentro (propaga).
@@ -4222,7 +4222,7 @@ mod tests {
     fn map_basico_oraculo() {
         oracle_program(
             "fn main() -> int {
-                let m: Map<string, int> = map_new();
+                let m: Map<string, int> = Map.new();
                 insert(m, \"a\", 1);
                 insert(m, \"b\", 2);
                 insert(m, \"a\", 10);
@@ -4232,7 +4232,7 @@ mod tests {
         );
     }
 
-    /// M48.1: `Map.new()` (función asociada) baja al mismo opcode `MapNew` que el antiguo `map_new()`
+    /// M48.1: `Map.new()` (función asociada) baja al mismo opcode `MapNew` que el antiguo `Map.new()`
     /// → ambos motores coinciden. Mismo programa que `map_basico_oraculo` con la sintaxis nueva.
     #[test]
     fn map_new_asociada_oraculo() {
@@ -4255,7 +4255,7 @@ mod tests {
         oracle_stress(
             "fn celda(n: int) -> [int] { [n, n * 2] }
              fn main() -> int {
-                let m: Map<int, [int]> = map_new();
+                let m: Map<int, [int]> = Map.new();
                 var i = 0;
                 while (i < 30) { insert(m, i, celda(i)); i = i + 1; }
                 var suma = 0;
@@ -4277,11 +4277,11 @@ mod tests {
     fn map_claves_variadas_oraculo() {
         oracle_program(
             "fn main() -> int {
-                let porInt: Map<int, int> = map_new();
+                let porInt: Map<int, int> = Map.new();
                 insert(porInt, 7, 70);
-                let porChar: Map<char, int> = map_new();
+                let porChar: Map<char, int> = Map.new();
                 insert(porChar, 'z', 100);
-                let porBool: Map<bool, int> = map_new();
+                let porBool: Map<bool, int> = Map.new();
                 insert(porBool, true, 1);
                 insert(porBool, false, 2);
                 let a = match (porInt.get(7)) { Option.Some(v) => v, Option.None => 0 };
@@ -4297,7 +4297,7 @@ mod tests {
         // M16 (diferido): `bytes` como clave de Map. Incluye octetos crudos (\x00/\xff).
         oracle_program(
             "fn main() -> int {
-                let m: Map<bytes, int> = map_new();
+                let m: Map<bytes, int> = Map.new();
                 insert(m, b\"uno\", 10);
                 insert(m, b\"\\x00\\xff\", 99);
                 insert(m, b\"dos\", 20);
@@ -4314,7 +4314,7 @@ mod tests {
         // keys/values con clave bytes: orden determinista (MapKey::Bytes es Ord lexicográfico).
         oracle_program(
             "fn main() -> int {
-                let m: Map<bytes, int> = map_new();
+                let m: Map<bytes, int> = Map.new();
                 insert(m, b\"c\", 3);
                 insert(m, b\"a\", 1);
                 insert(m, b\"b\", 2);
@@ -4334,7 +4334,7 @@ mod tests {
         oracle_program(
             "fn suma(a: [int]) -> int { var s = 0; var i = 0; while (i < len(a)) { s = s + a[i]; i = i + 1; } s }
              fn main() -> int {
-                let m: Map<int, int> = map_new();
+                let m: Map<int, int> = Map.new();
                 insert(m, 3, 30);
                 insert(m, 1, 10);
                 insert(m, 2, 20);
@@ -4352,7 +4352,7 @@ mod tests {
         oracle_stress(
             "fn suma(a: [int]) -> int { var s = 0; var i = 0; while (i < len(a)) { s = s + a[i]; i = i + 1; } s }
              fn main() -> int {
-                let m: Map<int, int> = map_new();
+                let m: Map<int, int> = Map.new();
                 var i = 0;
                 while (i < 25) { insert(m, i, i * i); i = i + 1; }
                 let total = suma(values(m)) + suma(keys(m));

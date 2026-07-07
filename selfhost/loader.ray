@@ -127,18 +127,18 @@ fn load_one(name: string, path: string) -> Result<Program, LoadError> {
 // =====================================================================
 
 fn build_surfaces(modules: [Module]) -> Map<string, Surface> {
-    var surfaces: Map<string, Surface> = map_new();
+    var surfaces: Map<string, Surface> = Map.new();
     var i = 0;
     while (i < len(modules)) {
         let m = modules[i];
-        var vals: Map<string, string> = map_new();
+        var vals: Map<string, string> = Map.new();
         var fi = 0;
         while (fi < len(m.prog.funcs)) {
             let f = m.prog.funcs[fi];
             if (f.is_pub) { insert(vals, f.name, global_of(m, f.name)); }
             fi = fi + 1;
         }
-        var tys: Map<string, string> = map_new();
+        var tys: Map<string, string> = Map.new();
         var si = 0;
         while (si < len(m.prog.structs)) {
             let s = m.prog.structs[si];
@@ -166,8 +166,8 @@ fn build_surfaces(modules: [Module]) -> Map<string, Surface> {
 // Clasifica los `from M import a [as b]` de un módulo en dos mapas local → global: **funciones** `pub`
 // y **tipos** `pub` (M14.7b). El orden prioriza funciones (un módulo no debería tener ambos homónimos).
 fn clasificar_from(m: Module, surfaces: Map<string, Surface>) -> Result<FromMaps, LoadError> {
-    var values: Map<string, string> = map_new();
-    var types: Map<string, string> = map_new();
+    var values: Map<string, string> = Map.new();
+    var types: Map<string, string> = Map.new();
     var i = 0;
     while (i < len(m.prog.from_imports)) {
         let fi = m.prog.from_imports[i];
@@ -206,7 +206,7 @@ fn clasificar_from(m: Module, surfaces: Map<string, Surface>) -> Result<FromMaps
 
 // El mapa `own`: funciones propias del módulo (local → global) + las `from`-importadas.
 fn build_own(m: Module, from_values: Map<string, string>) -> Map<string, string> {
-    var own: Map<string, string> = map_new();
+    var own: Map<string, string> = Map.new();
     var i = 0;
     while (i < len(m.prog.funcs)) {
         let f = m.prog.funcs[i];
@@ -353,7 +353,7 @@ fn resolve_fn_expr(r: Resolver, fe: FnExpr) {
 
 // Mapa nombre local de tipo → global, de los struct/enum/trait propios del módulo.
 fn build_own_types(m: Module) -> Map<string, string> {
-    var map: Map<string, string> = map_new();
+    var map: Map<string, string> = Map.new();
     var si = 0;
     while (si < len(m.prog.structs)) { insert(map, m.prog.structs[si].name, global_of(m, m.prog.structs[si].name)); si = si + 1; }
     var ei = 0;
@@ -618,7 +618,7 @@ pub fn load(entry_path: string) -> Result<Program, LoadError> {
 
     // Fase 1: BFS sobre los `from M import …` (y los `import M;`, no usados en el self-hosting).
     var modules: [Module] = [];
-    var visited: Map<string, bool> = map_new();
+    var visited: Map<string, bool> = Map.new();
     var pending: [PendingMod] = [PendingMod { name: entry_name, path: entry_path, is_entry: true }];
     var head = 0;
     while (head < len(pending)) {

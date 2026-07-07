@@ -16,7 +16,7 @@ fn decode_or(s: string) -> string {
 /// Parses a request `Cookie:` header value (e.g. "a=1; b=hola%20mundo") into a name -> value map.
 /// Values are URL-decoded (kept raw if decoding fails); malformed pairs without '=' are skipped.
 pub fn parse_cookies(header: string) -> Map<string, string> {
-    var m: Map<string, string> = map_new();
+    var m: Map<string, string> = Map.new();
     let parts = split(header, ";");
     var i = 0;
     while (i < len(parts)) {

@@ -211,7 +211,7 @@ fn parse_array(p: P) -> Result<Json, string> {
 
 fn parse_object(p: P) -> Result<Json, string> {
     p.i = p.i + 1;  // saltar '{'
-    var obj: Map<string, Json> = map_new();
+    var obj: Map<string, Json> = Map.new();
     skip_ws(p);
     if (!at_end(p) && cur(p) == '}') {
         p.i = p.i + 1;

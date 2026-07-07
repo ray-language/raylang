@@ -105,7 +105,7 @@ fn url_decode_or(s: string) -> string {
 /// key wins. Keys and values are URL-decoded (malformed escapes fall back to the raw text);
 /// a key without `=` gets the value "".
 pub fn parse_query(qs: string) -> Map<string, string> {
-    var m: Map<string, string> = map_new();
+    var m: Map<string, string> = Map.new();
     if (len(qs) == 0) {
         return m;
     }

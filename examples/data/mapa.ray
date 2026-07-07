@@ -3,12 +3,12 @@
 // Un Map asocia claves hashables (int/string/char/bool) con valores. Es la estructura
 // que faltaba para tablas de símbolos, contadores, índices… (camino al self-hosting).
 //
-// Operaciones: map_new() (necesita anotación de tipo, como `[]`), insert(m, k, v),
+// Operaciones: Map.new() (necesita anotación de tipo, como `[]`), insert(m, k, v),
 // get(m, k) -> Option<V>, contains_key(m, k) -> bool, len(m). Lucen con UFCS:
 // m.insert(k, v), m.get(k), m.contains_key(k).
 // Cuenta cuántas veces aparece cada palabra en un texto.
 fn contar_palabras(texto: string) -> Map<string, int> {
-    let cuenta: Map<string, int> = map_new();
+    let cuenta: Map<string, int> = Map.new();
     let palabras = texto.split(" ");
     var i = 0;
     while (i < len(palabras)) {

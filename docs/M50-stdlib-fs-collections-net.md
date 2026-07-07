@@ -24,8 +24,9 @@ Todo lo que toca **disco** → `fs.X` (con `import std/fs;`). Es un *capability 
 
 ## M50.2 — `std/collections` (`Set`/`Deque`/`StringBuilder`)
 
-Estructuras de datos **puras en raylang** (sin `__x`) → se **cortan del prelude** a `std/collections.ray`
-(funciones **y** los `struct Set`/`Deque`/`StringBuilder`, que se namespacan a `collections.Set`, etc.).
+Estructuras de datos **puras en raylang** (sin `__x`) → se **cortan del prelude** a submódulos bajo
+`std/collections/` (ver la decisión de naming abajo): las funciones **y** los `struct Set`/`Deque`/
+`StringBuilder` se namespacan a su submódulo.
 - **Set**: `set_new`/`set_add`/`set_has`/`set_remove`/`set_size`/`set_items` (+ helpers internos
   `set_bucket`/`set_en_bucket`, a ocultar como no-`pub`).
 - **Deque**: `deque_new`/`deque_push_back`/`deque_push_front`/`deque_pop_back`/`deque_pop_front`/
@@ -34,16 +35,17 @@ Estructuras de datos **puras en raylang** (sin `__x`) → se **cortan del prelud
 - **Determinista** → **oráculo** VM↔intérprete (+ el de self-hosting).
 - Uso en el corpus: **muy pequeño** (~2 archivos).
 
-**Decisión de diseño abierta (naming)** — dos opciones:
-- **A) un módulo `std/collections`** con los prefijos actuales: `collections.set_new(…)`,
-  `collections.deque_push_back(…)`. Los prefijos `set_`/`deque_`/`sb_` son **necesarios** para desambiguar
-  dentro de un mismo módulo (si no, tres `new`/`push` chocarían). Redundante (`collections.set_new`) pero
-  un solo módulo. *(Lo que pediste.)*
-- **B) módulos por tipo** `std/set`/`std/deque`/`std/stringbuilder`: `set.new()`, `set.add(s, x)`,
-  `deque.push_back(d, x)`, `sb.push(b, s)`. Se **cae el prefijo** → mucho más limpio, y espeja `Map.new()`.
-  Coste: tres módulos + tres imports si usas los tres.
-- **Recomendación**: B (más limpio), pero como pediste `std/collections`, lo dejo a tu confirmación al
-  arrancar M50.2.
+**Naming — DECIDIDO: submódulos bajo `std/collections/`** (lo mejor de las dos vías, sin maquinaria nueva):
+`std/collections/set`, `std/collections/deque`, `std/collections/stringbuilder`. Se usan con leaf-binding
+(M11.5): `import std/collections/set;` → `set.new()`/`set.add(s, x)`; `import std/collections/deque;` →
+`deque.push_back(d, x)`; `import std/collections/stringbuilder;` → `sb.push(b, s)` (leaf `stringbuilder`, o
+`as sb`). **Agrupa bajo `std/collections/` Y cae el prefijo redundante** (el leaf da la desambiguación que
+dentro de un solo módulo exigía `set_`/`deque_`/`sb_`). Espeja `Map.new()`. Mecanismo: `stdlib::embedded`
+hace match exacto por nombre (`("std/collections/set", include_str!("../std/collections/set.ray"))`, etc.) +
+el leaf-binding de directorios ya probado (`import geo/formas/circulo;`). Los `struct Set`/`Deque`/
+`StringBuilder` se namespacan a `set.Set`/`deque.Deque`/`stringbuilder.StringBuilder` (o vía from-import).
+Descartadas: un solo `std/collections` con prefijos (`collections.set_new`, redundante) y `std/set` plano
+(sin agrupar).
 
 ## M50.3 — `std/net` (transporte)
 

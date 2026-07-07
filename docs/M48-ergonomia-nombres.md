@@ -46,9 +46,10 @@ Un namespace **indexado por el tipo**, estilo `Vec::new()`. Reusa el parseo de
   `Channel.bounded` → lo que hoy es `channel()` / `channel(n)`. Se reusa el mecanismo
   "indeterminado + tipo fijado por el esperado" (`check_expr_expected`,
   `check_map_new`) — solo cambia la **superficie** (de `map_new()` a `Map.new()`).
-- **Compat**: mantener `map_new()`/`channel()` como alias **deprecados** durante la
-  transición (o migrar los ejemplos de golpe; decidir con el usuario). Los tests que
-  usan `map_new` se migran.
+- **Compat**: **decidido — migración de golpe.** `map_new()`/`channel()` se
+  **retiran** y todos los ejemplos/tests/stdlib se migran a `Map.new()`/`Channel.new()`
+  /`Channel.bounded(n)` en el mismo cambio (un commit de churn, más limpio). No hay
+  alias deprecado.
 - **Runtime**: intacto (mismo opcode `MapNew`/`ChannelNew`; solo cambia cómo el
   front-end reconoce la llamada). Sin oráculo nuevo (el comportamiento no cambia).
 - **Diferido**: funciones asociadas **definidas por el usuario** (`impl Tipo { fn
@@ -61,9 +62,8 @@ Un namespace **indexado por el tipo**, estilo `Vec::new()`. Reusa el parseo de
 
 Mata `map_new()` de raíz para el caso común.
 
-- **Sintaxis** (decidir con el usuario): candidata `[:]` (vacío) y `[k: v, …]`
-  (poblado), estilo Swift, para no chocar con `{}` (bloque/struct-literal). Alternativa
-  `#{…}`. **Punto de decisión de diseño** (clasificar en IDEAS.md).
+- **Sintaxis**: **decidido — `[:]` (vacío) y `[k: v, …]` (poblado)**, estilo Swift,
+  para no chocar con `{}` (bloque/struct-literal). Extiende el literal de array.
 - **Semántica**: `[:]` es indeterminado (como `map_new()`), su tipo lo fija el
   esperado; `[1: "a", 2: "b"]` infiere `Map<int,string>` de los pares (unificando
   claves y valores, como el literal de array infiere `[T]`).
@@ -81,12 +81,12 @@ Mata `map_new()` de raíz para el caso común.
 
 Antes del refactor grande, eliminar la sorpresa.
 
-- **Regla**: si el usuario declara una función de nivel superior cuyo nombre es un
-  builtin (`fn len(…)`), el checker emite un **error claro** en la declaración:
-  *"'len' es un builtin y no puede redefinirse"* (o, si se decide permitir override,
-  darle prioridad al usuario con un aviso — **punto de decisión**, ver abajo).
-- **Recomendación**: por ahora **error** (conservador y honesto); el override real
-  llega gratis con C (cuando `len` deje de ser un builtin, redefinirlo será legal).
+- **Regla**: **decidido — error duro.** Si el usuario declara una función de nivel
+  superior cuyo nombre es un builtin (`fn len(…)`), el checker emite un **error claro**
+  en la declaración: *"'len' es un builtin y no puede redefinirse"*. Conservador y
+  honesto; el override real llega gratis con la Fase 3 (cuando `len` deje de ser un
+  builtin y pase a ser un método de trait, redefinir `fn len` como función libre será
+  legal porque ya no colisiona).
 - **Alcance**: solo funciones top-level. No afecta locales (una local que tape a una
   función libre ya es válido y deseado; y un builtin no se tapa por una local — eso
   se mantiene).
@@ -169,12 +169,14 @@ builtins como métodos).
 2. **M48.3** (footgun → diagnóstico).
 3. **M48.4a…e** (traits de contenedor, una sub-fase a la vez).
 
-## Decisiones abiertas (para el usuario, clasificar en IDEAS.md)
+## Decisiones tomadas
 
-- Sintaxis del literal de Map: `[:]`/`[k:v]` vs `#{…}`.
-- `map_new()`/`channel()`: ¿alias deprecados durante la transición o migración de
-  golpe?
-- M48.3: ¿error duro al redefinir un builtin, o override con aviso?
+- **Literal de Map**: `[:]` (vacío) y `[k: v, …]` (poblado), estilo Swift.
+- **Transición `map_new()`/`channel()`**: migración de golpe (se retiran, sin alias).
+- **M48.3**: error duro al redefinir un builtin.
+
+## Decisiones aún abiertas (se resuelven al llegar a la Fase 3)
+
 - Corte de traits en M48.4: `Contains` (uno o dos), `Index` (traitificar o no),
   string-ops (trait o sueltos).
 - Alcance self-hosting en M48.4e.

@@ -1663,20 +1663,44 @@ impl Parser {
     }
 
     /// arrayLiteral = '[' [ expression { ',' expression } ] ']'
+    /// Literal entre corchetes: **arreglo** `[e, …]` o **Map** `[k: v, …]` (M48.2). Se decide por el `:`:
+    /// `[:]` es el Map vacío; si tras el primer elemento viene `:`, es un Map; si no, un arreglo.
     fn array_literal(&mut self) -> Result<Expr, ParseError> {
         let open = self.expect(&TokenKind::LBracket, "'['")?;
-        let mut elems = Vec::new();
-        if !self.check(&TokenKind::RBracket) {
-            loop {
-                elems.push(self.expression()?);
-                if !self.eat(&TokenKind::Comma) {
-                    break;
-                }
-                // Coma final permitida (`[1, 2, 3,]`), como en los campos de struct.
+        // `[:]` — el Map vacío (indeterminado). El `:` justo tras `[` solo puede ser esto.
+        if self.check(&TokenKind::Colon) {
+            self.advance(); // ':'
+            self.expect(&TokenKind::RBracket, "']' para cerrar el Map vacío '[:]'")?;
+            return Ok(Expr { kind: ExprKind::MapLit(Vec::new()), line: open.line, col: open.col });
+        }
+        // `[]` — el arreglo vacío.
+        if self.check(&TokenKind::RBracket) {
+            self.advance();
+            return Ok(Expr { kind: ExprKind::ArrayLit(Vec::new()), line: open.line, col: open.col });
+        }
+        // Primer elemento; el `:` que le siga decide arreglo vs Map.
+        let first = self.expression()?;
+        if self.eat(&TokenKind::Colon) {
+            // Map: `k: v { , k: v }`. Ya consumimos `first` (clave) y el `:`.
+            let mut pares = vec![(first, self.expression()?)];
+            while self.eat(&TokenKind::Comma) {
                 if self.check(&TokenKind::RBracket) {
-                    break;
+                    break; // coma final `[a: 1,]`
                 }
+                let k = self.expression()?;
+                self.expect(&TokenKind::Colon, "':' entre la clave y el valor del Map")?;
+                pares.push((k, self.expression()?));
             }
+            self.expect(&TokenKind::RBracket, "']' para cerrar el Map")?;
+            return Ok(Expr { kind: ExprKind::MapLit(pares), line: open.line, col: open.col });
+        }
+        // Arreglo: el resto de elementos separados por comas.
+        let mut elems = vec![first];
+        while self.eat(&TokenKind::Comma) {
+            if self.check(&TokenKind::RBracket) {
+                break; // coma final `[1, 2, 3,]`
+            }
+            elems.push(self.expression()?);
         }
         self.expect(&TokenKind::RBracket, "']' para cerrar el arreglo")?;
         Ok(Expr { kind: ExprKind::ArrayLit(elems), line: open.line, col: open.col })
@@ -2033,6 +2057,10 @@ mod tests {
                 let e: Vec<String> = elems.iter().map(sx).collect();
                 format!("[{}]", e.join(", "))
             }
+            ExprKind::MapLit(pares) => {
+                let e: Vec<String> = pares.iter().map(|(k, v)| format!("{}: {}", sx(k), sx(v))).collect();
+                format!("[{}]", e.join(", "))
+            }
             ExprKind::TupleLit(elems) => {
                 let e: Vec<String> = elems.iter().map(sx).collect();
                 format!("({})", e.join(", "))
@@ -2151,6 +2179,17 @@ mod tests {
     fn precedencia_multiplicacion_sobre_suma() {
         assert_eq!(sx(&parse_expr("1 + 2 * 3")), "(+ 1 (* 2 3))");
         assert_eq!(sx(&parse_expr("1 * 2 + 3")), "(+ (* 1 2) 3)");
+    }
+
+    #[test]
+    fn literal_map_vs_arreglo() {
+        // M48.2: el `:` distingue Map de arreglo; `[:]` es el Map vacío, `[]` el arreglo vacío.
+        assert!(matches!(parse_expr("[]").kind, ExprKind::ArrayLit(ref e) if e.is_empty()));
+        assert!(matches!(parse_expr("[:]").kind, ExprKind::MapLit(ref p) if p.is_empty()));
+        assert!(matches!(parse_expr("[1, 2, 3]").kind, ExprKind::ArrayLit(_)));
+        assert_eq!(sx(&parse_expr("[1: \"a\", 2: \"b\"]")), "[1: \"a\", 2: \"b\"]");
+        // Coma final permitida en el Map.
+        assert!(matches!(parse_expr("[1: 2,]").kind, ExprKind::MapLit(ref p) if p.len() == 1));
     }
 
     #[test]

@@ -897,6 +897,27 @@ impl<'a> Compiler<'a> {
                 self.emit(OpCode::MakeArray(elems.len()), line, col);
             }
 
+            // M48.2: literal de Map `[k: v, …]` → `Map.new()` + `insert` por par. Como `MapInsert`
+            // consume el handle (deja unit) y no hay `Dup`, se guarda el Map en un local temporal y se
+            // recupera al final (mismo patrón que el escrutinio del `match`).
+            ExprKind::MapLit(pares) => {
+                self.emit(OpCode::MapNew, line, col);
+                if pares.is_empty() {
+                    // `[:]` — el Map vacío; ya está en la pila.
+                } else {
+                    let slot = self.declare_local("$maplit");
+                    self.emit(OpCode::InitLocal(slot), line, col);
+                    for (k, v) in pares {
+                        self.emit(OpCode::GetLocal(slot), line, col);
+                        self.emit_expr(k)?;
+                        self.emit_expr(v)?;
+                        self.emit(OpCode::MapInsert, line, col);
+                        self.emit(OpCode::Pop, line, col); // insert devuelve unit
+                    }
+                    self.emit(OpCode::GetLocal(slot), line, col);
+                }
+            }
+
             // M27.4: conversión numérica `as`. El destino ya lo normalizó el checker (int/float/char).
             ExprKind::Cast { expr: inner, ty } => {
                 self.emit_expr(inner)?;

@@ -728,6 +728,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
                         // aún no soportados por el parser auto-alojado (M14.2c).
         "libm.ray",     // M41: bloques `extern "lib" { … }` (FFI), aún no en el parser auto-alojado.
         "cstrings.ray", // M41: idem.
+        "mapa_literal.ray", // M48.2: literal de Map `[k: v]`/`[:]`, aún no en el parser auto-alojado.
     ];
     // Los ejemplos viven en subdirectorios por categoría (basics/, types/, web/, …) → se recorre
     // `examples/` **recursivamente**. Se saltan los directorios de ejemplos de MÓDULOS (multi-archivo,

@@ -2305,6 +2305,28 @@ impl Checker {
                 }
                 _ => self.check_expr(expr),
             },
+            // M48.2: literal de Map `[k: v, …]` con tipo esperado `Map<K,V>` → cada clave contra K, cada
+            // valor contra V. `[:]` vacío se fija aquí (indeterminado, como `[]`). Sin esperado-Map, cae
+            // a `check_expr` (que infiere de los pares o exige anotar el vacío).
+            ExprKind::MapLit(pares) => match expected {
+                Type::Map(kexp, vexp) => {
+                    self.ensure_type(expected, expr.line, expr.col)?; // clave hashable
+                    for (k, v) in pares {
+                        let kt = self.check_expr_expected(k, kexp)?;
+                        if kt != **kexp {
+                            return Err(self.err(k.line, k.col, format!(
+                                "las claves del Map deben ser {}, no {}", kexp, kt)));
+                        }
+                        let vt = self.check_expr_expected(v, vexp)?;
+                        if vt != **vexp {
+                            return Err(self.err(v.line, v.col, format!(
+                                "los valores del Map deben ser {}, no {}", vexp, vt)));
+                        }
+                    }
+                    Ok(expected.clone())
+                }
+                _ => self.check_expr(expr),
+            },
             ExprKind::If { cond, then_branch, else_branch } => {
                 let ct = self.check_expr(cond)?;
                 if ct != Type::Bool {
@@ -2494,6 +2516,33 @@ impl Checker {
                     }
                 }
                 Ok(Type::Array(Box::new(first)))
+            }
+
+            // M48.2: literal de Map sin tipo esperado. `[:]` vacío es indeterminado (como `[]`) → error de
+            // "anota el tipo". `[k: v, …]` infiere `Map<K,V>` del primer par y exige que el resto coincida
+            // (claves homogéneas, valores homogéneos); la clave debe ser hashable.
+            ExprKind::MapLit(pares) => {
+                if pares.is_empty() {
+                    return Err(self.err(expr.line, expr.col,
+                        "no se puede inferir el tipo de [:] aquí; anótalo (p. ej. let m: Map<string, int> = [:];)".into()));
+                }
+                let kty = self.check_expr(&pares[0].0)?;
+                let vty = self.check_expr(&pares[0].1)?;
+                for (k, v) in &pares[1..] {
+                    let kt = self.check_expr(k)?;
+                    if kt != kty {
+                        return Err(self.err(k.line, k.col, format!(
+                            "las claves del Map deben ser del mismo tipo: {} y {}", kty, kt)));
+                    }
+                    let vt = self.check_expr(v)?;
+                    if vt != vty {
+                        return Err(self.err(v.line, v.col, format!(
+                            "los valores del Map deben ser del mismo tipo: {} y {}", vty, vt)));
+                    }
+                }
+                let mty = Type::Map(Box::new(kty), Box::new(vty));
+                self.ensure_type(&mty, expr.line, expr.col)?; // clave hashable
+                Ok(mty)
             }
 
             ExprKind::TupleLit(elems) => {
@@ -3862,6 +3911,9 @@ fn resolve_expr(expr: &mut Expr, enums: &HashSet<String>) {
                 resolve_expr(e, enums);
             }
         }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { resolve_expr(k, enums); resolve_expr(v, enums); }
+        }
         ExprKind::Index { array, index } => {
             resolve_expr(array, enums);
             resolve_expr(index, enums);
@@ -4332,6 +4384,9 @@ fn freshen_expr(expr: &mut Expr, next: &mut usize) {
                 freshen_expr(e, next);
             }
         }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { freshen_expr(k, next); freshen_expr(v, next); }
+        }
         ExprKind::Index { array, index } => {
             freshen_expr(array, next);
             freshen_expr(index, next);
@@ -4431,6 +4486,9 @@ fn renumber_expr(expr: &mut Expr, next: &mut usize) {
                 renumber_expr(e, next);
             }
         }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { renumber_expr(k, next); renumber_expr(v, next); }
+        }
         ExprKind::Index { array, index } => {
             renumber_expr(array, next);
             renumber_expr(index, next);
@@ -4522,6 +4580,7 @@ fn lower_for_iters_expr(expr: &mut Expr, sites: &HashMap<(usize, usize), String>
         ExprKind::Binary { left, right, .. } => { lower_for_iters_expr(left, sites); lower_for_iters_expr(right, sites); }
         ExprKind::Call { callee, args } => { lower_for_iters_expr(callee, sites); for a in args { lower_for_iters_expr(a, sites); } }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { lower_for_iters_expr(e, sites); } }
+        ExprKind::MapLit(pares) => { for (k, v) in pares { lower_for_iters_expr(k, sites); lower_for_iters_expr(v, sites); } }
         ExprKind::Index { array, index } => { lower_for_iters_expr(array, sites); lower_for_iters_expr(index, sites); }
         ExprKind::StructLit { fields, .. } => { for (_, e) in fields { lower_for_iters_expr(e, sites); } }
         ExprKind::EnumLit { args, .. } => { for a in args { lower_for_iters_expr(a, sites); } }
@@ -4623,6 +4682,7 @@ fn subst_named_expr(expr: &mut Expr, sigma: &HashMap<String, Type>) {
         ExprKind::Binary { left, right, .. } => { subst_named_expr(left, sigma); subst_named_expr(right, sigma); }
         ExprKind::Call { callee, args } => { subst_named_expr(callee, sigma); for a in args { subst_named_expr(a, sigma); } }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { subst_named_expr(e, sigma); } }
+        ExprKind::MapLit(pares) => { for (k, v) in pares { subst_named_expr(k, sigma); subst_named_expr(v, sigma); } }
         ExprKind::Index { array, index } => { subst_named_expr(array, sigma); subst_named_expr(index, sigma); }
         ExprKind::StructLit { fields, .. } => { for (_, e) in fields { subst_named_expr(e, sigma); } }
         ExprKind::EnumLit { args, .. } => { for a in args { subst_named_expr(a, sigma); } }
@@ -4776,6 +4836,9 @@ fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
                 lower_ufcs_expr(e, sites);
             }
         }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { lower_ufcs_expr(k, sites); lower_ufcs_expr(v, sites); }
+        }
         ExprKind::Index { array, index } => {
             lower_ufcs_expr(array, sites);
             lower_ufcs_expr(index, sites);
@@ -4879,6 +4942,7 @@ fn lower_uintlit_expr(expr: &mut Expr, sites: &UIntLitMap) {
             for a in args { lower_uintlit_expr(a, sites); }
         }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { lower_uintlit_expr(e, sites); } }
+        ExprKind::MapLit(pares) => { for (k, v) in pares { lower_uintlit_expr(k, sites); lower_uintlit_expr(v, sites); } }
         ExprKind::Index { array, index } => { lower_uintlit_expr(array, sites); lower_uintlit_expr(index, sites); }
         ExprKind::StructLit { fields, .. } => { for (_, e) in fields { lower_uintlit_expr(e, sites); } }
         ExprKind::EnumLit { args, .. } => { for a in args { lower_uintlit_expr(a, sites); } }
@@ -5002,6 +5066,7 @@ fn lower_try_expr(expr: &mut Expr, sites: &TryConvMap) {
             for a in args { lower_try_expr(a, sites); }
         }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { lower_try_expr(e, sites); } }
+        ExprKind::MapLit(pares) => { for (k, v) in pares { lower_try_expr(k, sites); lower_try_expr(v, sites); } }
         ExprKind::Index { array, index } => { lower_try_expr(array, sites); lower_try_expr(index, sites); }
         ExprKind::StructLit { fields, .. } => { for (_, e) in fields { lower_try_expr(e, sites); } }
         ExprKind::EnumLit { args, .. } => { for a in args { lower_try_expr(a, sites); } }
@@ -5111,6 +5176,9 @@ fn lower_operators_expr(expr: &mut Expr, sites: &SiteMap) {
             for a in args {
                 lower_operators_expr(a, sites);
             }
+        }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { lower_operators_expr(k, sites); lower_operators_expr(v, sites); }
         }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
@@ -5250,6 +5318,9 @@ fn lower_dict_calls_expr(expr: &mut Expr, sites: &DictSites) {
             for a in args.iter_mut() {
                 lower_dict_calls_expr(a, sites);
             }
+        }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { lower_dict_calls_expr(k, sites); lower_dict_calls_expr(v, sites); }
         }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
@@ -5428,6 +5499,12 @@ fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
                 lower_dyn_expr(a, coercions, dispatch, upcasts, tm, counter);
             }
         }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares {
+                lower_dyn_expr(k, coercions, dispatch, upcasts, tm, counter);
+                lower_dyn_expr(v, coercions, dispatch, upcasts, tm, counter);
+            }
+        }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
                 lower_dyn_expr(e, coercions, dispatch, upcasts, tm, counter);
@@ -5576,6 +5653,27 @@ mod tests {
         let idx = semantic_index(&mut prog);
         assert!(idx.hovers.iter().any(|h| h.line == 2 && h.text == "Map.new() -> Map<K, V>"),
             "hover de Map.new: {:?}", idx.hovers.iter().filter(|h| h.line == 2).map(|h| &h.text).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn literal_de_map() {
+        // M48.2: `[k: v]` infiere `Map<K,V>`; `[:]` lo fija el esperado.
+        assert!(check_src("fn main() -> int { let m = [1: \"a\", 2: \"b\"]; m.len() }").is_ok());
+        assert!(check_src("fn main() { let m: Map<string, int> = [:]; }").is_ok());
+        assert!(check_src("fn main() { let m: Map<int, string> = [1: \"a\"]; }").is_ok());
+        // `[:]` sin anotar → error de "anota el tipo".
+        let e = check_src("fn main() -> int { let m = [:]; 0 }").unwrap_err();
+        assert!(format!("{e}").contains("no se puede inferir el tipo de [:]"), "{e}");
+        // Claves/valores heterogéneos → error.
+        let k = check_src("fn main() -> int { let m = [1: \"a\", \"b\": \"c\"]; 0 }").unwrap_err();
+        assert!(format!("{k}").contains("las claves del Map deben ser del mismo tipo"), "{k}");
+        let v = check_src("fn main() -> int { let m = [1: \"a\", 2: 3]; 0 }").unwrap_err();
+        assert!(format!("{v}").contains("los valores del Map deben ser del mismo tipo"), "{v}");
+        // Clave no hashable (float) → error.
+        let f = check_src("fn main() -> int { let m = [1.5: \"a\"]; 0 }").unwrap_err();
+        assert!(format!("{f}").contains("clave de un Map"), "{f}");
+        // Contra un esperado que no es Map → error de tipos del `let`.
+        assert!(check_src("fn main() { let xs: [int] = [1: 2]; }").is_err());
     }
 
     #[test]

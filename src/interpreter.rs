@@ -609,6 +609,18 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Array(Rc::new(RefCell::new(vec))))
             }
 
+            // M48.2: literal de Map `[k: v, …]` (`[:]` vacío) → un Map con los pares insertados. Las
+            // claves y valores se evalúan en orden; una clave repetida gana la última (como `insert`).
+            ExprKind::MapLit(pares) => {
+                let mut m = HashMap::new();
+                for (k, v) in pares {
+                    let kv = self.eval_expr(k)?;
+                    let vv = self.eval_expr(v)?;
+                    m.insert(MapKey::from_value(&kv), vv);
+                }
+                Ok(Value::Map(Rc::new(RefCell::new(m))))
+            }
+
             // M27.4: conversión numérica `as`. El checker garantiza una combinación válida.
             ExprKind::Cast { expr: inner, ty } => {
                 let v = self.eval_expr(inner)?;

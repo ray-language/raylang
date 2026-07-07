@@ -852,6 +852,17 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
             let a: Vec<String> = elems.iter().map(|x| fmt_expr(cur, x, 0)).collect();
             format!("[{}]", a.join(", "))
         }
+        // M48.2: literal de Map. `[:]` vacío; `[k: v, …]` poblado.
+        ExprKind::MapLit(pares) => {
+            if pares.is_empty() {
+                "[:]".to_string()
+            } else {
+                let a: Vec<String> = pares.iter()
+                    .map(|(k, v)| format!("{}: {}", fmt_expr(cur, k, 0), fmt_expr(cur, v, 0)))
+                    .collect();
+                format!("[{}]", a.join(", "))
+            }
+        }
         ExprKind::TupleLit(elems) => {
             let a: Vec<String> = elems.iter().map(|x| fmt_expr(cur, x, 0)).collect();
             format!("({})", a.join(", "))

@@ -559,6 +559,11 @@ pub enum ExprKind {
     /// Literal de arreglo: `[1, 2, 3]` (o `[]` vacío). (M3)
     ArrayLit(Vec<Expr>),
 
+    /// Literal de **Map**: `[k1: v1, k2: v2]` (o `[:]` vacío), estilo Swift (M48.2). El `:` tras el
+    /// primer elemento lo distingue del literal de arreglo. `[:]` es **indeterminado** (como `[]`/
+    /// `Map.new()`): su tipo lo fija el esperado. Baja a `Map.new()` + `insert` por par (erasure).
+    MapLit(Vec<(Expr, Expr)>),
+
     /// Literal de **tupla**: `(a, b, …)` de 2+ elementos (M27.1). El checker le da un `Type::Tuple` y lo
     /// **baja a `ArrayLit`** para el runtime (erasure). Un `(e)` de un solo elemento es un paréntesis, no
     /// una tupla.
@@ -727,6 +732,12 @@ fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
                 walk_expr(e, acc);
+            }
+        }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares {
+                walk_expr(k, acc);
+                walk_expr(v, acc);
             }
         }
         ExprKind::Index { array, index } => {

@@ -457,6 +457,9 @@ fn shift_expr(e: &mut Expr, delta: usize) {
                 shift_expr(x, delta);
             }
         }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { shift_expr(k, delta); shift_expr(v, delta); }
+        }
         ExprKind::Index { array, index } => {
             shift_expr(array, delta);
             shift_expr(index, delta);
@@ -1073,6 +1076,12 @@ impl<'a> Resolver<'a> {
                     self.resolve_expr(e, src, module)?;
                 }
             }
+            ExprKind::MapLit(pares) => {
+                for (k, v) in pares {
+                    self.resolve_expr(k, src, module)?;
+                    self.resolve_expr(v, src, module)?;
+                }
+            }
             ExprKind::Index { array, index } => {
                 self.resolve_expr(array, src, module)?;
                 self.resolve_expr(index, src, module)?;
@@ -1435,6 +1444,9 @@ impl<'a> TypeRewriter<'a> {
                 for e in elems {
                     self.rewrite_expr(e);
                 }
+            }
+            ExprKind::MapLit(pares) => {
+                for (k, v) in pares { self.rewrite_expr(k); self.rewrite_expr(v); }
             }
             ExprKind::Index { array, index } => {
                 self.rewrite_expr(array);

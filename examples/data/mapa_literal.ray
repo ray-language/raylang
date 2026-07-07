@@ -1,0 +1,33 @@
+// Literal de Map (M48.2), estilo Swift: `[clave: valor, …]` para un Map poblado y `[:]` para el
+// vacío. El `:` lo distingue del literal de arreglo `[a, b]`. El tipo se infiere de los pares (o lo
+// fija la anotación en el caso vacío, como `[]`). Baja a `Map.new()` + `insert` por par.
+
+fn main() {
+    // Poblado: infiere Map<string, int> de los pares.
+    let edades = ["ana": 30, "beto": 25, "caro": 41];
+    print("beto:");
+    print(match (edades.get("beto")) { Option.Some(v) => v, Option.None => 0 }); // 25
+    print("cuántas personas:");
+    print(edades.len()); // 3
+
+    // Vacío: indeterminado, lo fija la anotación (como `[]`/`Map.new()`).
+    var conteo: Map<char, int> = [:];
+    let texto = "banana";
+    var i = 0;
+    while (i < texto.len()) {
+        let c = texto[i];
+        let previo = match (conteo.get(c)) { Option.Some(n) => n, Option.None => 0 };
+        conteo.insert(c, previo + 1);
+        i = i + 1;
+    }
+    print("veces que aparece 'a':");
+    print(match (conteo.get('a')) { Option.Some(n) => n, Option.None => 0 }); // 3
+
+    // Las claves pueden ser cualquier tipo hashable (aquí int); los valores, cualquiera (aquí [string]).
+    let grupos: Map<int, [string]> = [1: ["uno", "one"], 2: ["dos", "two"]];
+    print("nombres del 2:");
+    match (grupos.get(2)) {
+        Option.Some(ns) => { print(ns[0]); print(ns[1]); }, // dos, two
+        Option.None => print("(ninguno)"),
+    }
+}

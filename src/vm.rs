@@ -4232,7 +4232,45 @@ mod tests {
         );
     }
 
-    /// M48.1: `Map.new()` (función asociada) baja al mismo opcode `MapNew` que el antiguo `Map.new()`
+    /// M48.2: el literal de Map `[k: v, …]` baja a `Map.new()` + `insert` por par → ambos motores
+    /// coinciden. Cubre poblado, `[:]` vacío, clave repetida (gana la última) y un valor con UFCS.
+    #[test]
+    fn map_literal_oraculo() {
+        oracle_program(
+            "fn dup(x: int) -> int { x * 2 }
+             fn main() -> int {
+                let m = [1: 10, 2: 20, 1: 30];
+                let vacio: Map<int, int> = [:];
+                vacio.insert(9, dup(5));
+                let a = match (m.get(1)) { Option.Some(v) => v, Option.None => 0 };
+                let b = match (vacio.get(9)) { Option.Some(v) => v, Option.None => 0 };
+                a + b + m.len() + vacio.len()
+             }",
+        );
+    }
+
+    /// M48.2: el literal de Map asigna en el heap (Map + valores) → estrés del GC. Un literal con
+    /// varios pares dentro de un bucle debe mantener sus valores vivos en cada recolección.
+    #[test]
+    fn map_literal_estres_gc_oraculo() {
+        oracle_stress(
+            "fn main() -> int {
+                var suma = 0;
+                var i = 0;
+                while (i < 20) {
+                    let m = [i: [i, i + 1], i + 100: [i + 2, i + 3]];
+                    match (m.get(i)) {
+                        Option.Some(par) => { suma = suma + par[0] + par[1]; },
+                        Option.None => { suma = suma - 1; },
+                    }
+                    i = i + 1;
+                }
+                suma
+             }",
+        );
+    }
+
+    /// M48.1: `Map.new()` (función asociada) baja al mismo opcode `MapNew` que el antiguo `map_new()`
     /// → ambos motores coinciden. Mismo programa que `map_basico_oraculo` con la sintaxis nueva.
     #[test]
     fn map_new_asociada_oraculo() {

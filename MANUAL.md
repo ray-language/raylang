@@ -96,7 +96,7 @@ Los **parámetros son inmutables**. Las **firmas de función se anotan siempre**
 Constantes globales con `const` (su valor debe ser un literal):
 
 ```rust
-const GRAVEDAD: float = 9.81;     // para π/e usa `math.pi()`/`math.e()` (import std/math), no una const
+const GRAVEDAD: float = 9.81;     // para π/e usa `math.PI`/`math.E` (import std/math), no una const
 const MAX_INTENTOS: int = 3;
 ```
 
@@ -199,7 +199,7 @@ enum Figura { Circulo(float), Rect(float, float), Nada }
 
 fn area(f: Figura) -> float {
     match (f) {
-        Figura.Circulo(r) => math.pi() * r * r,   // math.pi(): de std/math (con `import std/math;`)
+        Figura.Circulo(r) => math.PI * r * r,   // math.PI: de std/math (con `import std/math;`)
         Figura.Rect(w, h) => w * h,
         Figura.Nada => 0.0,
     }
@@ -305,7 +305,7 @@ trait Area { fn area(self) -> float; }        // firma: termina en ';'
 
 struct Circulo { r: float }
 impl Area for Circulo {
-    fn area(self) -> float { math.pi() * self.r * self.r }   // math.pi(): de std/math
+    fn area(self) -> float { math.PI * self.r * self.r }   // math.PI: de std/math
 }
 
 fn imprime_area<T: Area>(x: T) {              // bound: T debe implementar Area

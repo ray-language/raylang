@@ -6446,14 +6446,26 @@ T) -> T { x.abs() }`; `pi`/`e` como **funciones nularias** (`math.pi()`). **Se p
 adelgaza. Un tipo de usuario que `impl Signed`/`Ord` funciona con `math.abs`/`math.min` (extensibilidad,
 como los contenedores de M48.4).
 
-**Desviación del plan**: `pi`/`e` quedaron como **funciones** (`math.pi()`), no `const` (`math.PI`): el
-acceso calificado a un `const` de módulo (`M.PI`) no lo soporta aún el loader (los `const` no entran en la
-`Surface` ni se namespacan) — sería una feature aparte, fuera del alcance de M49.1b.
+Inicialmente `pi`/`e` quedaron como **funciones** (`math.pi()`) porque el acceso calificado a un `const`
+de módulo no existía; **M49.1c** lo habilitó → ahora son `const` (`math.PI`/`math.E`).
 
 **Verificación**: el oráculo de math (`matematicas_oraculo`) se reduce a los primitivos `__x` (abs/min/max
 ya no son builtins → no hay opcode que oraculizar); `matematicas.ray` + `tests/math_cli.rs` cubren
-`math.abs`/`min`/`max`/`pi` end-to-end en ambos motores (int y float, y `min` sobre string). LSP: los tests
-de hover/completion de builtin pasaron a `char_code` (builtin estable). **M49.1b / M49.1 (`std/math`)
-COMPLETO.** Suite completa verde (77 binarios, 510 lib).
+`math.abs`/`min`/`max`/`PI` end-to-end en ambos motores (int y float, y `min` sobre string). LSP: los tests
+de hover/completion de builtin pasaron a `char_code` (builtin estable). Suite completa verde.
+
+### 51.3 M49.1c — acceso calificado a `const` de módulo (`M.CONST`)
+
+Habilita `math.PI`/`math.E` (y cualquier `pub const` de un módulo). Los `const` de un módulo pasan a
+**namespacarse como las funciones** (`modulo::CONST`) en vez de fusionarse globales por su nombre bare:
+tres toques mínimos en el loader (reusando la maquinaria de funciones) — (1) el `Resolver.own` incluye los
+`const` propios (una referencia interna `PI` → `modulo::PI`), (2) las **defs** de `const` de un módulo
+no-entrada se renombran a `modulo::CONST` al fusionar, y (3) `build_surfaces` mete los `pub const` en la
+**cara de valores** (`Surface.values`) → `qualified_field` resuelve `M.CONST` como una función pub. El
+checker y los motores ya resolvían los `const` **por nombre** (`consts: HashMap<String, _>`), así que el
+nombre namespacado funciona sin más. **Consecuencia (mejora de encapsulación)**: importar un módulo ya
+**no filtra** sus `const` al ámbito global —solo son accesibles calificados (`M.CONST`)— y un `const`
+no-`pub` no es accesible. Test `const_calificado_de_modulo` (acceso + encapsulación + no-pub) en
+`tests/modules_cli.rs`. **M49.1c / M49.1 (`std/math`) COMPLETO.** Suite completa verde (77 binarios, 510 lib).
 
 Siguiente: **M49.2** (`std/time`+`std/random`) y **M49.3** (`std/crypto`).

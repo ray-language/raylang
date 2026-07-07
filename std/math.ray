@@ -3,12 +3,11 @@
 // internos `__x` (mismo opcode que antes; el cálculo lo hacen los motores); `abs`/`min`/`max` son puros
 // en raylang (M49.1b, vía los traits `Signed`/`Ord`). Las utilidades enteras van más abajo.
 
-/// The mathematical constant π. (A function, not a `const`: `math.pi()` — qualified access to a module
-/// `const` is not yet supported by the loader.)
-pub fn pi() -> float { 3.141592653589793 }
+/// The mathematical constant π. Use qualified: `math.PI`.
+pub const PI: float = 3.141592653589793;
 
-/// Euler's number e.
-pub fn e() -> float { 2.718281828459045 }
+/// Euler's number e. Use qualified: `math.E`.
+pub const E: float = 2.718281828459045;
 
 /// Square root of `x`.
 pub fn sqrt(x: float) -> float { __sqrt(x) }

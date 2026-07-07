@@ -34,7 +34,7 @@ fn main() -> int {
     print(math.min(3, 8));        // 3   (int)
     print(math.max(1.5, 9.0));    // 9   (float)
     print(math.min("b", "a"));    // a   (Ord: string)
-    print(math.pi() > 3.14);      // true
+    print(math.PI > 3.14);      // true
     0
 }
 "#;

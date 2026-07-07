@@ -292,7 +292,12 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         }
         fusionado.structs.append(&mut m.program.structs);
         fusionado.enums.append(&mut m.program.enums);
-        fusionado.consts.append(&mut m.program.consts); // M27.5
+        // M49.1c: los `const` de un módulo no-entrada se namespacan como las funciones (`modulo::CONST`)
+        // → encapsulados: solo accesibles calificados (`M.CONST`), no como un `CONST` global filtrado.
+        for mut c in std::mem::take(&mut m.program.consts) {
+            c.name = global_fn(&prefix, &c.name);
+            fusionado.consts.push(c);
+        }
         fusionado.traits.append(&mut m.program.traits);
         fusionado.impls.append(&mut m.program.impls);
         // M41: las funciones externas (FFI) NO se namespacan: su `name` es a la vez el identificador
@@ -725,6 +730,12 @@ fn build_surfaces(modules: &[Module]) -> Surfaces {
                 s.values.insert(f.name.clone(), global_fn(&prefix, &f.name));
             }
         }
+        // M49.1c: los `pub const` entran en la cara de valores del módulo → acceso calificado `M.CONST`.
+        for c in &m.program.consts {
+            if c.is_pub {
+                s.values.insert(c.name.clone(), global_fn(&prefix, &c.name));
+            }
+        }
         for st in &m.program.structs {
             if st.is_pub {
                 s.types.insert(st.name.clone(), global_fn(&prefix, &st.name));
@@ -936,6 +947,11 @@ impl<'a> Resolver<'a> {
         let mut own = HashMap::new();
         for f in &m.program.functions {
             own.insert(f.name.clone(), global_fn(&prefix, &f.name));
+        }
+        // M49.1c: una referencia propia a un `const` del módulo se reescribe a su nombre global (como
+        // las funciones), para que el `const` quede namespacado y solo sea accesible calificado (`M.CONST`).
+        for c in &m.program.consts {
+            own.insert(c.name.clone(), global_fn(&prefix, &c.name));
         }
         // M11.3b: los `from M import a [as b]` de función entran como nombres locales → `M::a`.
         for (local, global) in from_values {

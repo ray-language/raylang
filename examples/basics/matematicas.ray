@@ -2,7 +2,7 @@
 //
 // Todo vive en el módulo `std/math` (M49): se importa y se usa calificado (`math.sqrt(2.0)`). Las
 // funciones float envuelven primitivos internos; `abs`/`min`/`max` son genéricas (traits `Signed`/`Ord`)
-// y `pi`/`e` son funciones nularias.
+// y `PI`/`E` son constantes.
 import std/math;
 
 fn main() {
@@ -16,7 +16,7 @@ fn main() {
     // Trigonometría y logaritmos.
     print(math.sin(0.0));  // 0
     print(math.cos(0.0));  // 1
-    print(math.ln(math.e()));  // 1
+    print(math.ln(math.E));  // 1
     print(math.log10(1000.0));  // 3
 
     // Polimórficas (genéricas sobre Signed/Ord): conservan el tipo numérico.
@@ -25,6 +25,6 @@ fn main() {
     print(math.min(3, 8));  // 3  (int)
     print(math.max(1.5, 9.0));  // 9  (float)
 
-    let area: float = math.pi() * math.pow(2.0, 2.0);  // π·r² con r=2
+    let area: float = math.PI * math.pow(2.0, 2.0);  // π·r² con r=2
     print(area);  // 12.566370614359172
 }

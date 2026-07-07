@@ -46,6 +46,34 @@ fn import_calificado_en_ambos_motores() {
 }
 
 #[test]
+fn const_calificado_de_modulo() {
+    // M49.1c: un `pub const` de un módulo se accede CALIFICADO (`M.CONST`), en ambos motores.
+    let files = &[
+        ("fisica", "pub const G: float = 9.81;\n"),
+        ("app", "import fisica;\nfn main() -> int { print(fisica.G); if (fisica.G > 9.0) { 0 } else { 1 } }\n"),
+    ];
+    for vm in [false, true] {
+        let (out, code) = run_modules("m49_const", "app", files, vm);
+        assert_eq!(code, 0, "sale 0 (vm={vm})");
+        assert!(out.contains("9.81"), "imprime el const calificado (vm={vm}): {out}");
+    }
+    // Encapsulación: `G` sin calificar NO filtra al ámbito global (aunque se importe `fisica`).
+    let bare = &[
+        ("fisica", "pub const G: float = 9.81;\n"),
+        ("app", "import fisica;\nfn main() -> int { print(G); 0 }\n"),
+    ];
+    let (_o, code) = run_modules("m49_const_bare", "app", bare, true);
+    assert_ne!(code, 0, "bare `G` no debe resolver (const encapsulado en su módulo)");
+    // Un `const` NO-`pub` no es accesible ni calificado.
+    let privado = &[
+        ("fisica", "const SECRETO: int = 42;\n"),
+        ("app", "import fisica;\nfn main() -> int { fisica.SECRETO }\n"),
+    ];
+    let (_o2, code2) = run_modules("m49_const_priv", "app", privado, true);
+    assert_ne!(code2, 0, "un const no-pub no es accesible calificado");
+}
+
+#[test]
 fn import_transitivo() {
     let files = &[
         ("base", "pub fn uno() -> int { 1 }\n"),

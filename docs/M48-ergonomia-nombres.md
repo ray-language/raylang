@@ -30,7 +30,12 @@ al cambiar el lenguaje.
 
 ## Fase 1 — Funciones asociadas + literal de Map (azúcar, alto ROI)
 
-### M48.1 — Funciones asociadas a tipos (`Tipo.fn()`)
+### M48.1 — Funciones asociadas a tipos (`Tipo.fn()`) — ✅ COMPLETO
+
+Implementado en 5 pasos (a: motores Rust; b: compilador auto-alojado; c: migración de todo el corpus;
+d: retiro de `map_new`/`channel`; e: LSP). `Map.new()`/`Channel.new()`/`Channel.bounded(n)` sustituyen a
+`map_new()`/`channel()`, retirados. Ver DESIGN.md §50.1. Detalle de diseño abajo (conservado).
+
 
 Un namespace **indexado por el tipo**, estilo `Vec::new()`. Reusa el parseo de
 `Tipo.algo` que ya existe para la construcción de enums (`Color.Rojo`).

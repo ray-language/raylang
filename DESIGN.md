@@ -6282,3 +6282,32 @@ que antes no tenía). **M46 COMPLETO** (48.1 detalle + 48.2 signature help + 48.
   `Nombre {…}` (kind Snippet) que inserta el literal completo con un placeholder por campo (`Nombre {
   c1: ${1:T1}, … }`), al estilo rust-analyzer. Aparte del tipo pelado `Nombre` (que sigue para las
   anotaciones); `filterText` = el nombre, así aparece al teclear el tipo. Cliente-LSP; cero runtime.
+
+## 50. M48 — ergonomía de nombres y stdlib
+
+Diagnóstico: raylang ya tiene varios espacios de nombres (tipos, rutas de módulo `::`, métodos de trait
+`Tipo#metodo`); el saturado es el de **valores** (funciones libres + locales + builtins). Plan en tres
+fases (ver `docs/M48-ergonomia-nombres.md`): (1) funciones asociadas + literal de Map; (2) diagnóstico al
+redefinir un builtin; (3) builtins de contenedor → traits.
+
+### 50.1 M48.1 — funciones asociadas a tipos (`Tipo.fn()`)
+
+Un namespace **indexado por el tipo**, estilo `Vec::new()`. Sustituye los constructores poco idiomáticos
+`map_new()`/`channel()` por **`Map.new()`**, **`Channel.new()`**, **`Channel.bounded(n)`**.
+
+- **Registro** `ASSOC_FNS` en `src/builtins.rs` (`type_name`, `fn_name`, `arity`, `opcode`, `doc`, `sig`),
+  consultado por checker/compilador/intérprete/LSP. `assoc_lookup`/`assoc_for_type`.
+- **Sintaxis**: llega como `Call(Field(Ident(Tipo), fn))` —igual que la construcción de enum—; el checker
+  lo reconoce en `try_assoc_call` **antes** de la resolución campo/método/UFCS. El resultado (Map/Channel)
+  es **indeterminado**: lo fija el tipo esperado (bidireccional, como `[]`/`None`); sin él, error de
+  "anota el tipo". Valida aridad y el arg `int` de `bounded`.
+- **Runtime intacto**: se baja al mismo opcode (`MapNew`/`ChannelNew`/`ChannelNewBounded`); el intérprete
+  construye el Map vacío (`Map.new()`) o da el error "requiere la VM" (canales).
+- **Migración de golpe** (decisión con el usuario): `map_new`/`channel` **retirados** como builtins; todo
+  el corpus (156 ejemplos + `std`/`packages` + `selfhost`) migrado. `map_new()` ahora es "función no
+  declarada". El compilador **auto-alojado** se actualizó en paralelo (checker/interpreter/compiler) para
+  reconocer `Map.new()` y preservar la meta-circularidad; el primitivo interno `"map_new"` sobrevive solo
+  en `dispatch_builtin` (la VM auto-alojada baja `Map.new()` a `OBuiltin("map_new", 0)`).
+- **LSP**: completado `Map.`/`Channel.` (kind Function, snippet + firma), hover del nombre asociado (su
+  firma, vía `try_assoc_call` bajo `gather`), y signature help dentro de `Map.new(`/`Channel.bounded(`.
+- Diferido: funciones asociadas **definidas por el usuario** (`impl Tipo { fn new() {…} }` sin `self`).

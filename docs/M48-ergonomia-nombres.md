@@ -76,7 +76,7 @@ Un namespace **indexado por el tipo**, estilo `Vec::new()`. Reusa el parseo de
   new() {…} }` sin `self`) → M48.x posterior o parte de C. En M48.1 solo las
   incorporadas.
 
-### M48.2 — Literal de Map
+### M48.2 — Literal de Map — ✅ COMPLETO (ver DESIGN.md §50.2)
 
 Mata `map_new()` de raíz para el caso común.
 

@@ -6311,3 +6311,22 @@ Un namespace **indexado por el tipo**, estilo `Vec::new()`. Sustituye los constr
 - **LSP**: completado `Map.`/`Channel.` (kind Function, snippet + firma), hover del nombre asociado (su
   firma, vía `try_assoc_call` bajo `gather`), y signature help dentro de `Map.new(`/`Channel.bounded(`.
 - Diferido: funciones asociadas **definidas por el usuario** (`impl Tipo { fn new() {…} }` sin `self`).
+
+### 50.2 M48.2 — literal de Map (`[:]` / `[k: v]`)
+
+Sintaxis idiomática para construir mapas, estilo Swift, en vez de `Map.new()` + `insert` manual.
+
+- **Sintaxis**: `[k: v, …]` (poblado) y `[:]` (vacío). Nodo `ExprKind::MapLit(Vec<(Expr, Expr)>)`. El
+  parser extiende el literal de corchetes: `[:]` es el Map vacío; el `:` tras el **primer** elemento
+  decide Map vs arreglo (`[a, b]` arreglo, `[a: b]` Map); coma final permitida. No choca con `{}`
+  (bloque/struct).
+- **Tipado**: `[k: v]` infiere `Map<K,V>` del primer par (claves homogéneas, valores homogéneos, clave
+  hashable). `[:]` es **indeterminado** (como `[]`): lo fija el esperado, o error de "anota el tipo".
+- **Runtime**: baja a `Map.new()` + `insert` por par (erasure). Como `MapInsert` consume el handle del
+  Map y no hay `Dup`, el compilador guarda el Map en un local temporal (`$maplit`, como el escrutinio del
+  `match`) y lo recupera al final; el intérprete lo construye directo. Clave repetida → gana la última.
+  Oráculo VM↔intérprete + estrés de GC.
+- **Front-end**: `MapLit` se añadió a las ~14 pasadas de lowering/traversal (loader + checker) para que
+  el lowering (`?`/UFCS/dyn/dicts) alcance las claves y valores; fmt lo reemite (`[:]` / `[k: v]`).
+- Diferido: el literal en el compilador **auto-alojado** (parser/checker/intérprete/VM); el ejemplo
+  `examples/data/mapa_literal.ray` se excluye del escaneo de `selfhost_parser`.

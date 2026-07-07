@@ -902,7 +902,7 @@ impl<'a> Interpreter<'a> {
                 Value::Unit
             }
             // M48.4: `__len` es el primitivo interno al que baja el trait `Len`; idéntico a `len`.
-            "len" | "__len" => match &values[0] {
+            "__len" => match &values[0] {
                 Value::Array(rc) => Value::Int(rc.borrow().len() as i64),
                 // M11.1a: len de string = nº de caracteres (Unicode scalar values).
                 Value::Str(s) => Value::Int(s.chars().count() as i64),
@@ -914,7 +914,7 @@ impl<'a> Interpreter<'a> {
             },
             // --- Mapas (M13.1) --- (`Map.new()` es una función asociada, M48.1: se evalúa en `eval_call`)
             // M48.4c: los `__*` son los primitivos internos a los que baja el trait `MapOps`.
-            "insert" | "__insert" => {
+            "__insert" => {
                 match &values[0] {
                     Value::Map(rc) => {
                         rc.borrow_mut().insert(MapKey::from_value(&values[1]), values[2].clone());
@@ -923,7 +923,7 @@ impl<'a> Interpreter<'a> {
                 }
                 Value::Unit
             }
-            "contains_key" | "__contains_key" => match &values[0] {
+            "__contains_key" => match &values[0] {
                 Value::Map(rc) => Value::Bool(rc.borrow().contains_key(&MapKey::from_value(&values[1]))),
                 _ => unreachable!("el checker garantiza un Map"),
             },
@@ -950,7 +950,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza un Map"),
             },
             // M13.1b: claves ordenadas (determinista).
-            "keys" | "__keys" => match &values[0] {
+            "__keys" => match &values[0] {
                 Value::Map(rc) => {
                     let mut ks: Vec<MapKey> = rc.borrow().keys().cloned().collect();
                     ks.sort();
@@ -960,7 +960,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza un Map"),
             },
             // M13.1b: valores en orden de clave ordenada (casa posición a posición con keys).
-            "values" | "__values" => match &values[0] {
+            "__values" => match &values[0] {
                 Value::Map(rc) => {
                     let m = rc.borrow();
                     let mut pares: Vec<(&MapKey, &Value)> = m.iter().collect();
@@ -972,7 +972,7 @@ impl<'a> Interpreter<'a> {
             },
             // M48.4b: `__push`/`__reverse`/`__contains` son los primitivos internos a los que bajan
             // los traits `Push`/`Reverse`/`Contains`; idénticos a sus públicos.
-            "push" | "__push" => {
+            "__push" => {
                 match &values[0] {
                     Value::Array(rc) => rc.borrow_mut().push(values[1].clone()),
                     _ => unreachable!("el checker garantiza un arreglo"),
@@ -982,12 +982,12 @@ impl<'a> Interpreter<'a> {
             // M11.1a: representación textual de un primitivo (la misma que `print`/Display).
             "to_string" => Value::Str(format!("{}", values[0])),
             // M11.1b: recorta los extremos.
-            "trim" | "__trim" => match &values[0] {
+            "__trim" => match &values[0] {
                 Value::Str(s) => Value::Str(s.trim().to_string()),
                 _ => unreachable!("el checker garantiza un string"),
             },
             // M11.1b: parte por el separador → arreglo de strings.
-            "split" | "__split" => match (&values[0], &values[1]) {
+            "__split" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sep)) => {
                     let parts: Vec<Value> = s.split(sep.as_str()).map(|p| Value::Str(p.to_string())).collect();
                     Value::Array(Rc::new(RefCell::new(parts)))
@@ -995,7 +995,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza dos strings"),
             },
             // M11.4c-2: los caracteres del string → arreglo de char.
-            "chars" | "__chars" => match &values[0] {
+            "__chars" => match &values[0] {
                 Value::Str(s) => {
                     let cs: Vec<Value> = s.chars().map(Value::Char).collect();
                     Value::Array(Rc::new(RefCell::new(cs)))
@@ -1008,7 +1008,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza un char"),
             },
             // M16.1b: los octetos UTF-8 del string → bytes.
-            "to_bytes" | "__to_bytes" => match &values[0] {
+            "__to_bytes" => match &values[0] {
                 Value::Str(s) => Value::Bytes(Rc::new(s.clone().into_bytes())),
                 _ => unreachable!("el checker garantiza un string"),
             },
@@ -1172,45 +1172,45 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M11.4a/M11.7b: ¿el string contiene la subcadena? / ¿el arreglo contiene el elemento?
-            "contains" | "__contains" => match (&values[0], &values[1]) {
+            "__contains" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sub)) => Value::Bool(s.contains(sub.as_str())),
                 (Value::Array(rc), x) => Value::Bool(rc.borrow().iter().any(|e| e == x)),
                 _ => unreachable!("el checker garantiza string+string o arreglo+elemento"),
             },
             // M11.4a: reemplaza todas las ocurrencias de `de` por `a`.
-            "replace" | "__replace" => match (&values[0], &values[1], &values[2]) {
+            "__replace" => match (&values[0], &values[1], &values[2]) {
                 (Value::Str(s), Value::Str(de), Value::Str(a)) => {
                     Value::Str(s.replace(de.as_str(), a.as_str()))
                 }
                 _ => unreachable!("el checker garantiza tres strings"),
             },
             // M11.7a: ¿empieza/termina con la subcadena?
-            "starts_with" | "__starts_with" => match (&values[0], &values[1]) {
+            "__starts_with" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(p)) => Value::Bool(s.starts_with(p.as_str())),
                 _ => unreachable!("el checker garantiza dos strings"),
             },
-            "ends_with" | "__ends_with" => match (&values[0], &values[1]) {
+            "__ends_with" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(p)) => Value::Bool(s.ends_with(p.as_str())),
                 _ => unreachable!("el checker garantiza dos strings"),
             },
             // M11.7a: mayúsculas/minúsculas.
-            "to_upper" | "__to_upper" => match &values[0] {
+            "__to_upper" => match &values[0] {
                 Value::Str(s) => Value::Str(s.to_uppercase()),
                 _ => unreachable!("el checker garantiza un string"),
             },
-            "to_lower" | "__to_lower" => match &values[0] {
+            "__to_lower" => match &values[0] {
                 Value::Str(s) => Value::Str(s.to_lowercase()),
                 _ => unreachable!("el checker garantiza un string"),
             },
             // M11.7a: subcadena por índice de carácter (con clamp); repetir.
-            "substring" | "__substring" => match (&values[0], &values[1], &values[2]) {
+            "__substring" => match (&values[0], &values[1], &values[2]) {
                 (Value::Str(s), Value::Int(i), Value::Int(j)) => {
                     Value::Str(crate::builtins::substring_chars(s, *i, *j))
                 }
                 _ => unreachable!("el checker garantiza string, int, int"),
             },
             // M19.2: sub-secuencia de bytes por octeto (con clamp).
-            "sub_bytes" | "__sub_bytes" => match (&values[0], &values[1], &values[2]) {
+            "__sub_bytes" => match (&values[0], &values[1], &values[2]) {
                 (Value::Bytes(b), Value::Int(i), Value::Int(j)) => {
                     Value::Bytes(Rc::new(crate::builtins::sub_bytes_octets(b, *i, *j)))
                 }
@@ -1227,7 +1227,7 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza un arreglo"),
             },
-            "repeat" | "__repeat" => match (&values[0], &values[1]) {
+            "__repeat" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Int(n)) => Value::Str(crate::builtins::repeat_str(s, *n)),
                 _ => unreachable!("el checker garantiza string, int"),
             },
@@ -1254,7 +1254,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza [string], string"),
             },
             // M11.7b: arreglo nuevo en orden inverso.
-            "reverse" | "__reverse" => match &values[0] {
+            "__reverse" => match &values[0] {
                 Value::Array(rc) => {
                     let mut v = rc.borrow().clone();
                     v.reverse();

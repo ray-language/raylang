@@ -173,45 +173,80 @@ como hoy. (Lección: por qué la referencia ahorra el sistema de préstamos.)
   la realidad (los que ya no son builtins). Aplicar a VSCode + Sublime (paridad) y bump
   de versión.
 
-**El diseño real está en cómo se cortan los traits** (clasificar cada decisión en
-IDEAS.md). Catálogo tentativo:
-- `Len` (len) → `[T]`, `string`, `Map`, `bytes`.
-- `Push` / `Pop` → `[T]`.
-- `Index` (`a[i]`, `s[i]`, `m[k]`) → `[T]`, `string`, `Map` (esto ya es sintaxis del
-  lenguaje; decidir si se traitifica o se queda como operador con reglas ad-hoc).
-- `MapOps<K,V>` (get/insert/remove/keys/values/contains_key) → `Map` (**trait
-  genérico**; ya existe la maquinaria, cf. `Iterator<T>` de M40.2).
-- `Contains` → hoy ad-hoc (subcadena en string, pertenencia en array): con traits hay
-  que **comprometerse** (¿uno o dos traits?). Punto de decisión.
-- string-específicos (trim/split/replace/…): decidir si van a un `StrOps` o siguen
-  como métodos sueltos.
+### Prerrequisito de viabilidad (verificado en el código)
 
-**Fuera de alcance de C** (se quedan como builtins de verdad — lección honesta "no
-todo es un método"):
-- `print`/`eprint` (universal/variádico de facto).
-- `to_string` → puede enrutar por el `Show`/`mostrar` que ya existe.
-- `map`/`filter`/`fold`/`sort` ya son **funciones del prelude** (no builtins), ya van
-  por UFCS; opcionalmente moverlas a un trait tipo `Iterator` por coherencia total.
+Hoy `impl Trait for X` (`ensure_impl_target`) acepta solo **primitivos** (`int/float/
+bool/string/char`) y **struct/enum**; **NO** `[T]`, `Map<K,V>` ni `bytes`. Y `type_key_of`
+(la clave de despacho de métodos) devuelve `None` para arreglos/Map/bytes/tuplas. Por
+tanto `impl Len for string` YA funciona (string es primitivo; cf. `impl Ord for string`),
+pero `impl Len for [T]`/`Map<K,V>`/`bytes` **no compilan aún**. La **primera pieza de
+M48.4a** es extender esa maquinaria (se paga una vez, luego todo es incremental):
+- `ensure_impl_target` + `ensure_generic_impl_target`: aceptar `Type::Array`,
+  `Type::Map`, `Type::Bytes` como objetivos (Array/Map genéricos; bytes concreto).
+- `type_key_of`: dar clave estable — p. ej. `"[]"` (array), `"Map"`, `"bytes"`.
+- Resolución de impl genérico por constructor (M9.2b) para esas claves.
 
-**Sub-fases sugeridas de M48.4** (una a la vez, oráculo por cada una que toque heap):
-- **M48.4a** — `Len` (el caso más simple y multi-tipo; valida el patrón end-to-end).
-- **M48.4b** — `Push`/`Pop` sobre `[T]` (mutación por referencia).
-- **M48.4c** — `MapOps<K,V>` (trait genérico; get/insert/remove/keys/values).
-- **M48.4d** — decidir e implementar `Contains`/`Index` (los ambiguos).
-- **M48.4e** — limpieza y cierre: retirar los builtins ya migrados (la forma prefija
-  `len(xs)` deja de existir), migrar **todos** los ejemplos/stdlib/`packages`/`selfhost`
-  que usaban la forma prefija a `.metodo()`, podar la gramática de resaltado, actualizar
-  DESIGN.md + libro + raydoc. Ver "Migración transversal" abajo.
+### Catálogo de traits — alcance COMPLETO (decidido con el usuario)
 
-**Transición sin romper**: durante M48.4, un builtin puede coexistir con su trait
-(el trait gana por prioridad de resolución) para no romper los 156 ejemplos de golpe;
-se migran y se retira el builtin en M48.4e.
+Granularidad: **traits finos y cross-type** donde la operación se comparte (mejor
+extensibilidad); **traits agrupados por tipo** donde las operaciones son específicas de
+un tipo (un solo impl). Solo se traitifican los **builtins** (los que contaminan el
+namespace); los envoltorios del prelude (`pop`/`get`/`remove`/`position`/`index_of`) ya
+son funciones y no se tocan.
 
-**Riesgo self-hosting**: el checker/intérprete/VM auto-alojados (M14) replican el
-manejo de builtins. Traitificar cambia qué es builtin y qué es prelude → hay que
-reflejarlo en `selfhost/*.ray` para no romper la meta-circularidad. Evaluar el
-alcance en M48.4e (puede quedar diferido si el corpus self-hosted no usa esos
-builtins como métodos).
+- **`Len { fn len(self) -> int }`** → `string`, `[T]`, `Map<K,V>`, `bytes`. (estrella:
+  cross-type, bounds `T: Len`, extensible.)
+- **`Contains<T> { fn contains(self, x: T) -> bool }`** → `string`(sub-cadena),
+  `[T]`(pertenencia), `bytes`(sub-cadena). **D2 resuelto: un trait genérico** (unifica el
+  nombre; se acepta la conflación subcadena/pertenencia, documentada).
+- **`Push<T> { fn push(self, x: T) }`** → `[T]`. **D3 resuelto: trait genérico**
+  (`impl<T> Push<T> for [T]`; muta por referencia, sin `&mut`).
+- **`Reverse { fn reverse(self) -> Self }`** → `[T]` (el builtin `reverse` es solo de
+  arreglos; string-reverse vive en `std/text`, no es builtin).
+- **`MapOps<K,V> { insert; contains_key; keys; values }`** → `Map<K,V>` (agrupado, un
+  impl). `get`/`remove` son envoltorios del prelude (Option) → **se quedan** como
+  funciones del prelude, no entran al trait (no son builtins).
+- **`StrOps { trim; split; replace; chars; starts_with; ends_with; to_upper; to_lower;
+  substring; repeat; join; char_code }`** → `string` (agrupado, un impl). `index_of` es
+  prelude → fuera.
+- **`BytesOps { sub_bytes }`** → `bytes`. (`to_bytes` es string→bytes: entra a `StrOps`;
+  `bytes_of` es `[int]`→bytes, constructor: **se queda builtin**, no tiene receptor claro.)
+
+**Fuera de M48.4** (se quedan como builtins — "no todo es un método"):
+- `print`/`eprint` (universal/variádico), `panic`.
+- **`to_string`** (D4 diferido): universal/ad-hoc sobre primitivos; solaparía `Show`/
+  `mostrar`. Se queda builtin por ahora; enrutar por `Show` es una mejora aparte.
+- `a[i]` **Index** (D-Index resuelto: **no**): es sintaxis/operador, no un builtin-
+  función; traitificarlo sería *operator overloading de `[]`*, otra fase. Se queda con
+  reglas ad-hoc (array/string). Map no se indexa (usa `get`/`insert`).
+- `bytes_of`, constructores sin receptor; matemáticas (`sqrt`/`pow`/…, sobre `float`,
+  ya monomórficas); concurrencia (`spawn`/`send`/`select`/`scope`), I/O (`open`/`write`/…).
+- `map`/`filter`/`fold`/`sort` ya son **funciones del prelude** (no builtins).
+
+### Sub-fases de M48.4 (una a la vez, oráculo por cada una que toque heap)
+
+- **M48.4a** — **maquinaria** (impl-para-`[T]`/`Map`/`bytes`) + **`Len`**. Valida el
+  patrón end-to-end sobre los 4 tipos; entrega bounds `T: Len`.
+- **M48.4b** — `Push<T>` + `Reverse` (builtins de arreglo) + `Contains<T>` (cross-type).
+- **M48.4c** — `MapOps<K,V>` (builtins de Map: insert/contains_key/keys/values).
+- **M48.4d** — `StrOps` + `BytesOps` (builtins de string/bytes).
+- **M48.4e** — limpieza y cierre: retirar los builtins migrados (la forma prefija
+  `len(xs)` deja de existir), migrar **todo** el corpus (ejemplos/stdlib/`packages`) de
+  la forma prefija a `.metodo()`, **reconciliar el self-hosted** (D5), podar la gramática
+  de resaltado, actualizar DESIGN.md + libro + raydoc.
+
+**Transición sin romper**: cada sub-fase usa **coexistencia** (builtin + trait a la vez;
+el método de trait gana por prioridad de resolución en `check_call_field`) hasta el
+retiro en M48.4e — así los 156 ejemplos siguen verdes durante toda la fase.
+
+**Self-hosting (D5)**: el checker/intérprete/VM auto-alojados replican el manejo de
+builtins. Como `.len()` etc. se resuelven por UFCS→builtin en el self-hosted (que no
+tiene el lowering de M9), lo más simple es que el self-hosted **siga tratándolos como
+builtins internamente** (sus fuentes usan `.len()` que cae en la rama UFCS→builtin ya
+existente) — así la meta-circularidad se mantiene **sin** reimplementar los traits en
+raylang. Es decir: en Rust `len` pasa a trait; en el self-hosted `len` sigue siendo el
+builtin que el intérprete/VM despachan. Divergencia interna, comportamiento idéntico
+(el oráculo es conductual). Se confirma al llegar a M48.4e.
 
 ---
 
@@ -276,9 +311,14 @@ migrados** corren (`ray run <archivo>`), pero solo los tocados en esa fase, no l
 - **Literal de Map**: `[:]` (vacío) y `[k: v, …]` (poblado), estilo Swift.
 - **Transición `map_new()`/`channel()`**: migración de golpe (se retiran, sin alias).
 - **M48.3**: error duro al redefinir un builtin.
-
-## Decisiones aún abiertas (se resuelven al llegar a la Fase 3)
-
-- Corte de traits en M48.4: `Contains` (uno o dos), `Index` (traitificar o no),
-  string-ops (trait o sueltos).
-- Alcance self-hosting en M48.4e.
+- **D1 — Alcance de M48.4**: **COMPLETO** (Len + Push/Reverse + Contains + MapOps +
+  StrOps/BytesOps).
+- **D2 — `Contains`**: un solo trait genérico `Contains<T>` (unifica el nombre; conflación
+  subcadena/pertenencia documentada).
+- **D3 — `Push`**: trait genérico `Push<T>` (`impl<T> Push<T> for [T]`).
+- **D-Index**: `a[i]` NO se traitifica (es sintaxis/operador; queda ad-hoc).
+- **D4 — `to_string`**: diferido (se queda builtin; enrutar por `Show` es mejora aparte).
+- **D5 — Self-hosting**: el self-hosted **sigue tratando los builtins como builtins**
+  internamente (sus fuentes usan `.metodo()` que cae en la rama UFCS→builtin ya
+  existente); la meta-circularidad se mantiene sin reimplementar los traits en raylang
+  (oráculo conductual). Se confirma en M48.4e.

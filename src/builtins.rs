@@ -1267,6 +1267,15 @@ static BUILTINS: &[Builtin] = &[
         }
         Ok(Type::Int)
     } },
+    // M48.4: `__len` — primitivo interno de `len`, al que baja el trait `Len` (`impl Len for [T]` etc.
+    // → `__len(self)`). Mismo opcode que `len`; oculto (`__`). Sobrevive al retiro de `len` (M48.4e).
+    Builtin { name: "__len", opcode: OpCode::Len, check: |a| {
+        arity(a, 1, "__len", "")?;
+        if !matches!(a[0], Type::Array(_) | Type::String | Type::Map(_, _) | Type::Bytes) {
+            return Err((Some(0), format!("__len espera un arreglo, un string, un Map o bytes, no {}", a[0])));
+        }
+        Ok(Type::Int)
+    } },
     // push(a, x) -> unit: agrega x al final del arreglo a (lo muta).
     Builtin { name: "push", opcode: OpCode::Push, check: |a| {
         arity(a, 2, "push", " (arreglo, valor)")?;

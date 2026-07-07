@@ -56,6 +56,19 @@ impl Ord for float { fn menor(self, otro: float) -> bool { self < otro } }
 impl Ord for string { fn menor(self, otro: string) -> bool { self < otro } }
 impl Ord for char { fn menor(self, otro: char) -> bool { self < otro } }
 
+// Longitud (M48.4): número de elementos/caracteres/entradas/octetos de una colección. Los tipos
+// incorporados lo implementan vía el primitivo `__len` (mismo opcode que el antiguo builtin `len`);
+// un tipo del usuario puede implementarlo para su propia colección y usarse con `fn f<T: Len>(...)`.
+/// The number of elements/characters/entries/octets in a collection.
+trait Len {
+    /// Returns the length of `self`.
+    fn len(self) -> int;
+}
+impl Len for string { fn len(self) -> int { __len(self) } }
+impl<T> Len for [T] { fn len(self) -> int { __len(self) } }
+impl<K, V> Len for Map<K, V> { fn len(self) -> int { __len(self) } }
+impl Len for bytes { fn len(self) -> int { __len(self) } }
+
 // Hash (M40.3a): un valor hashable produce un `int`. `@derive(Hash)` lo genera para un struct/enum
 // (combinando `.hash()` de sus campos); los primitivos lo implementan aquí, en raylang (el string
 // itera sus caracteres con `char_code`). Lo consumen las tablas hash del prelude (Set, M40.3b).

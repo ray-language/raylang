@@ -1181,12 +1181,34 @@ impl Checker {
     /// - **genérico** (M9.2b): `Caja<T>` cuyos argumentos son **exactamente** los parámetros
     ///   de tipo del impl (cada uno un `Var` distinto), y cuya aridad casa con la del tipo.
     fn ensure_impl_target(&self, target: &Type, type_params: &[String], line: usize, col: usize) -> Result<(), TypeError> {
-        // Primitivos: solo como objetivo concreto.
-        if matches!(target, Type::Int | Type::Float | Type::Bool | Type::String | Type::Char) {
+        // Primitivos + bytes: solo como objetivo concreto (sin parámetros de tipo). M48.4 añade `bytes`.
+        if matches!(target, Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes) {
             if type_params.is_empty() {
                 return Ok(());
             }
             return Err(self.err(line, col, "un tipo primitivo no es genérico: no admite parámetros de tipo en el impl".into()));
+        }
+        // M48.4: constructores incorporados `[T]` (aridad 1) y `Map<K,V>` (aridad 2). Siempre genéricos,
+        // como `Caja<T>` (M9.2b): solo impls PLENAMENTE genéricos (`impl<T> ... for [T]`, no `[int]`),
+        // con cada argumento un `Var` distinto de los propios parámetros del impl.
+        let ctor_incorporado: Option<(&str, Vec<&Type>)> = match target {
+            Type::Array(e) => Some(("[]", vec![e.as_ref()])),
+            Type::Map(k, v) => Some(("Map", vec![k.as_ref(), v.as_ref()])),
+            _ => None,
+        };
+        if let Some((nombre, args)) = ctor_incorporado {
+            if type_params.len() != args.len() {
+                return Err(self.err(line, col, format!(
+                    "'{}' espera {} parámetro(s) de tipo, el impl declara {}", nombre, args.len(), type_params.len())));
+            }
+            let mut vistos = HashSet::new();
+            let bien = args.iter().all(|a|
+                matches!(a, Type::Var(n) if type_params.contains(n) && vistos.insert(n.clone())));
+            if !bien {
+                return Err(self.err(line, col, format!(
+                    "el impl de un tipo incorporado debe aplicarse a sus propios parámetros de tipo distintos, p. ej. 'impl<T> ... for [T]' o 'impl<K, V> ... for Map<K, V>'")));
+            }
+            return Ok(());
         }
         let (name, args) = match target {
             Type::Struct(n, a) | Type::Enum(n, a) => (n, a),
@@ -4056,6 +4078,11 @@ fn type_key_of(ty: &Type) -> Option<String> {
         Type::String => "string".into(),
         Type::Char => "char".into(),
         Type::Struct(n, _) | Type::Enum(n, _) => n.clone(),
+        // M48.4: constructores incorporados como objetivo de impl (`impl Len for [T]`/`Map<K,V>`/`bytes`).
+        // La clave va por CONSTRUCTOR (como `Caja<int>`→"Caja"): `[int]`/`[bool]` comparten "[]".
+        Type::Array(_) => "[]".into(),
+        Type::Map(_, _) => "Map".into(),
+        Type::Bytes => "bytes".into(),
         _ => return None,
     })
 }
@@ -5681,6 +5708,29 @@ mod tests {
         let idx = semantic_index(&mut prog);
         assert!(idx.hovers.iter().any(|h| h.line == 2 && h.text == "Map.new() -> Map<K, V>"),
             "hover de Map.new: {:?}", idx.hovers.iter().filter(|h| h.line == 2).map(|h| &h.text).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn trait_len_para_tipos_incorporados() {
+        // M48.4a: el trait `Len` (prelude) se implementa para string/[T]/Map/bytes → `.len()` despacha
+        // por trait; funciona con un bound `T: Len` y con un tipo de usuario que lo implemente.
+        assert!(check_src("fn main() -> int { \"hola\".len() + [1,2,3].len() + to_bytes(\"a\").len() }").is_ok());
+        assert!(check_src("fn f<T: Len>(x: T) -> int { x.len() }\nfn main() -> int { f([1,2]) + f(\"ab\") }").is_ok());
+        assert!(check_src("fn main() -> int { let m: Map<int, int> = [1: 2]; m.len() }").is_ok());
+        // Un tipo del usuario puede implementar Len y usarse con el bound.
+        assert!(check_src(
+            "struct P { d: [int] }\nimpl Len for P { fn len(self) -> int { self.d.len() } }\n\
+             fn f<T: Len>(x: T) -> int { x.len() }\nfn main() -> int { f(P { d: [1,2,3] }) }").is_ok());
+        // Un tipo SIN Len no satisface el bound.
+        let e = check_src("struct Q { x: int }\nfn f<T: Len>(x: T) -> int { x.len() }\nfn main() -> int { f(Q { x: 1 }) }").unwrap_err();
+        assert!(format!("{e}").contains("Len"), "Q no implementa Len: {e}");
+    }
+
+    #[test]
+    fn impl_para_tipo_incorporado_debe_ser_generico() {
+        // M48.4a: `impl X for [int]` (no plenamente genérico) se rechaza, como `impl X for Caja<int>`.
+        let e = check_src("trait X { fn m(self) -> int; }\nimpl X for [int] { fn m(self) -> int { 0 } }\nfn main() -> int { 0 }").unwrap_err();
+        assert!(format!("{e}").contains("parámetros de tipo distintos") || format!("{e}").contains("espera 1 parámetro"), "{e}");
     }
 
     #[test]

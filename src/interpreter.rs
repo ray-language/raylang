@@ -901,7 +901,8 @@ impl<'a> Interpreter<'a> {
                 crate::host_print(&values[0].to_string());
                 Value::Unit
             }
-            "len" => match &values[0] {
+            // M48.4: `__len` es el primitivo interno al que baja el trait `Len`; idéntico a `len`.
+            "len" | "__len" => match &values[0] {
                 Value::Array(rc) => Value::Int(rc.borrow().len() as i64),
                 // M11.1a: len de string = nº de caracteres (Unicode scalar values).
                 Value::Str(s) => Value::Int(s.chars().count() as i64),

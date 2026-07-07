@@ -4232,6 +4232,23 @@ mod tests {
         );
     }
 
+    /// M48.4a: `.len()` como método del trait `Len` (string/[T]/Map/bytes + tipo de usuario) baja al
+    /// primitivo `__len` (mismo opcode `Len`) → ambos motores coinciden.
+    #[test]
+    fn trait_len_oraculo() {
+        oracle_program(
+            "struct Pila { d: [int] }
+             impl Len for Pila { fn len(self) -> int { self.d.len() } }
+             fn describir<T: Len>(x: T) -> int { x.len() }
+             fn main() -> int {
+                let m: Map<int, int> = [1: 10, 2: 20, 3: 30];
+                let p = Pila { d: [7, 8, 9] };
+                \"hola\".len() + [1,2,3,4,5].len() + m.len() + to_bytes(\"ab\").len()
+                    + p.len() + describir([1,2]) + describir(p)
+             }",
+        );
+    }
+
     /// M48.2: el literal de Map `[k: v, …]` baja a `Map.new()` + `insert` por par → ambos motores
     /// coinciden. Cubre poblado, `[:]` vacío, clave repetida (gana la última) y un valor con UFCS.
     #[test]

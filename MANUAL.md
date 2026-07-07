@@ -424,7 +424,7 @@ hay estado mutable compartido; corre en multicore por defecto.
 
 ```rust
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     spawn(fn() {
         var i = 0;
         while (i < 5) { send(ch, i * i); i = i + 1; }
@@ -443,7 +443,7 @@ fn main() -> int {
 }
 ```
 
-- `channel()` / `channel(n)` (acotado, backpressure) · `send` · `recv` · `close` · `select([chs])`.
+- `Channel.new()` / `Channel.bounded(n)` (acotado, backpressure) · `send` · `recv` · `close` · `select([chs])`.
 - **Structured concurrency**: `scope(fn() -> R { … })` posee y une las tareas lanzadas dentro; `spawn` devuelve
   un `Task<T>` y `join(t)` espera su valor.
 - Para **salida reproducible** (tests): `ray run --deterministic` (o `RAYLANG_THREADS=1`) fuerza un solo hilo

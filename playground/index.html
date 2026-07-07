@@ -193,7 +193,7 @@ fn main() -> int {
 }`,
   "concurrencia": `fn main() -> int {
     // Modelo de actores: fibras que se comunican por canales (sin estado compartido).
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     spawn(fn() {
         for i in range(1, 6) { send(ch, i * i); }
         close(ch);

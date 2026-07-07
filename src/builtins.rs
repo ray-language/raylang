@@ -1230,29 +1230,8 @@ fn mathf_check(a: &[Type], nombre: &str) -> Result<Type, BuiltinError> {
     Ok(Type::Float)
 }
 
-/// Regla de tipado de un builtin numérico **ad-hoc polimórfico** unario (`abs`): `int -> int` o
-/// `float -> float`. Conserva el tipo numérico del argumento.
-fn numeric_unary_check(a: &[Type], nombre: &str) -> Result<Type, BuiltinError> {
-    arity(a, 1, nombre, "")?;
-    match a[0] {
-        Type::Int => Ok(Type::Int),
-        Type::Float => Ok(Type::Float),
-        _ => Err((Some(0), format!("{} espera un int o un float, no {}", nombre, a[0]))),
-    }
-}
-
-/// Regla de tipado de un builtin numérico ad-hoc polimórfico binario (`min`/`max`): ambos
-/// argumentos del mismo tipo numérico (`int` o `float`); devuelve ese tipo.
-fn numeric_binary_check(a: &[Type], nombre: &str) -> Result<Type, BuiltinError> {
-    arity(a, 2, nombre, "")?;
-    if !matches!(a[0], Type::Int | Type::Float) {
-        return Err((Some(0), format!("{} espera un int o un float, no {}", nombre, a[0])));
-    }
-    if a[1] != a[0] {
-        return Err((Some(1), format!("{}: ambos argumentos deben ser del mismo tipo ({} vs {})", nombre, a[0], a[1])));
-    }
-    Ok(a[0].clone())
-}
+// M49.1b: `numeric_unary_check`/`numeric_binary_check` (regla ad-hoc de abs/min/max) se eliminaron al
+// mover esas funciones a `std/math` (puras en raylang, tipadas por sus bounds `Signed`/`Ord`).
 
 /// La tabla. El orden no importa (la búsqueda es por nombre).
 static BUILTINS: &[Builtin] = &[
@@ -1676,14 +1655,8 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::Float { return Err((Some(1), format!("pow espera un float, no {}", a[1]))); }
         Ok(Type::Float)
     } },
-    // abs(x): int -> int / float -> float (ad-hoc polimórfico).
-    Builtin { name: "abs", opcode: OpCode::Abs, check: |a| numeric_unary_check(a, "abs") },
-    // min/max(a, b): mismo tipo numérico (ad-hoc polimórfico).
-    Builtin { name: "min", opcode: OpCode::Min, check: |a| numeric_binary_check(a, "min") },
-    Builtin { name: "max", opcode: OpCode::Max, check: |a| numeric_binary_check(a, "max") },
-    // Constantes π y e (Euler).
-    Builtin { name: "pi", opcode: OpCode::Pi, check: |a| { nullary(a, "pi")?; Ok(Type::Float) } },
-    Builtin { name: "e",  opcode: OpCode::E,  check: |a| { nullary(a, "e")?; Ok(Type::Float) } },
+    // M49.1b: abs/min/max/pi/e se movieron a `std/math` como funciones puras en raylang (abs vía el
+    // trait `Signed`; min/max vía `Ord`; pi/e nularias) → ya no son builtins ni tienen opcode.
 
     // --- Reloj y aleatoriedad (M15.1b) ---
     Builtin { name: "now",       opcode: OpCode::Now,       check: |a| { nullary(a, "now")?; Ok(Type::Int) } },

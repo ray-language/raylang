@@ -2912,14 +2912,14 @@ mod tests {
 
     #[test]
     fn hover_y_signature_de_builtins() {
-        // M10.2i: los builtins (print/abs/…) no viven en la fuente; aun así el hover muestra su firma
-        // (con los tipos de la llamada) y el signature help su firma fija. (M49.1a: sqrt/pow/… pasaron a
-        // `std/math`, ya no son builtins → se prueba con `abs`, que sigue siéndolo.)
-        let src = "fn main() -> int {\n  let x = abs(-3);\n  print(x);\n  0\n}\n";
-        // `abs(-3)` → int (ad-hoc polimórfico resuelto a int en esta llamada).
-        let cabs = src.lines().nth(1).unwrap().find("abs").unwrap();
-        let (ta, _, _) = hover_at(None, src, 1, cabs).expect("hover de abs");
-        assert_eq!(ta, "abs: fn(int) -> int");
+        // M10.2i: los builtins (print/char_code/…) no viven en la fuente; aun así el hover muestra su
+        // firma (con los tipos de la llamada) y el signature help su firma fija. (M49: sqrt/pow/abs/… se
+        // movieron a `std/math`, ya no son builtins → se prueba con `char_code`, que sí lo sigue siendo.)
+        let src = "fn main() -> int {\n  let x = char_code('a');\n  print(x);\n  0\n}\n";
+        // `char_code('a')` → int.
+        let cc = src.lines().nth(1).unwrap().find("char_code").unwrap();
+        let (ta, _, _) = hover_at(None, src, 1, cc).expect("hover de char_code");
+        assert_eq!(ta, "char_code: fn(char) -> int");
         // `print(x)` → unit.
         let cp = src.lines().nth(2).unwrap().find("print").unwrap();
         let (tp, _, _) = hover_at(None, src, 2, cp).expect("hover de print");
@@ -3007,11 +3007,11 @@ mod tests {
         docs.insert(uri.clone(), src.to_string());
         let r = completion_result(&msg, &docs);
         let Json::Arr(items) = &r else { panic!("completion no es lista") };
-        // M49.1a: `pow`/`sqrt`/… pasaron a `std/math` (ya no en el completion global de builtins); se
-        // prueba con `abs`, que sigue siendo builtin.
-        let abs = items.iter().find(|i| i.get("label") == Some(&Json::Str("abs".into()))).expect("abs en completion");
-        let doc_val = abs.get("documentation").and_then(|d| d.get("value")).and_then(Json::as_str).expect("documentation de abs");
-        assert!(doc_val.contains("Absolute"), "{doc_val}");
+        // M49: `pow`/`sqrt`/`abs`/… se movieron a `std/math` (ya no en el completion global de builtins);
+        // se prueba con `char_code`, que sigue siendo builtin.
+        let cc = items.iter().find(|i| i.get("label") == Some(&Json::Str("char_code".into()))).expect("char_code en completion");
+        let doc_val = cc.get("documentation").and_then(|d| d.get("value")).and_then(Json::as_str).expect("documentation de char_code");
+        assert!(doc_val.contains("Unicode"), "{doc_val}");
     }
 
     #[test]

@@ -1547,24 +1547,7 @@ impl<'a> Interpreter<'a> {
                 (Value::Float(b), Value::Float(e)) => Value::Float(b.powf(*e)),
                 _ => unreachable!("el checker garantiza dos floats"),
             },
-            // abs/min/max son ad-hoc polimórficos: conservan el tipo numérico (int o float).
-            "abs" => match &values[0] {
-                Value::Int(x) => Value::Int(x.abs()),
-                Value::Float(x) => Value::Float(x.abs()),
-                _ => unreachable!("el checker garantiza int o float"),
-            },
-            "min" => match (&values[0], &values[1]) {
-                (Value::Int(a), Value::Int(b)) => Value::Int(*a.min(b)),
-                (Value::Float(a), Value::Float(b)) => Value::Float(a.min(*b)),
-                _ => unreachable!("el checker garantiza dos números del mismo tipo"),
-            },
-            "max" => match (&values[0], &values[1]) {
-                (Value::Int(a), Value::Int(b)) => Value::Int(*a.max(b)),
-                (Value::Float(a), Value::Float(b)) => Value::Float(a.max(*b)),
-                _ => unreachable!("el checker garantiza dos números del mismo tipo"),
-            },
-            "pi" => Value::Float(std::f64::consts::PI),
-            "e" => Value::Float(std::f64::consts::E),
+            // M49.1b: abs/min/max/pi/e ya no son builtins (funciones puras en `std/math`).
             // --- Reloj y aleatoriedad (M15.1b): no deterministas, delegan en los helpers compartidos. ---
             "now" => Value::Int(crate::builtins::now_millis()),
             "monotonic" => Value::Int(crate::builtins::monotonic_millis()),

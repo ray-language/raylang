@@ -113,11 +113,13 @@ fn main() -> int {
     print("suma de cuadrados impares: \${suma}");
     0
 }`,
-  "enums": `enum Figura { Circulo(float), Rect(float, float) }
+  "enums": `import std/math;
+
+enum Figura { Circulo(float), Rect(float, float) }
 
 fn area(f: Figura) -> float {
-    match (f) {                            // match es exhaustivo
-        Figura.Circulo(r) => pi() * r * r,  // pi() es un builtin
+    match (f) {                                // match es exhaustivo
+        Figura.Circulo(r) => math.pi() * r * r,  // math.pi(): de std/math
         Figura.Rect(w, h) => w * h,
     }
 }
@@ -172,11 +174,13 @@ fn main() -> int {
     }
     0
 }`,
-  "dyn": `trait Forma { fn area(self) -> float; fn nombre(self) -> string; }
+  "dyn": `import std/math;
+
+trait Forma { fn area(self) -> float; fn nombre(self) -> string; }
 struct Circulo  { r: float }
 struct Cuadrado { lado: float }
 impl Forma for Circulo {
-    fn area(self) -> float { pi() * self.r * self.r }
+    fn area(self) -> float { math.pi() * self.r * self.r }
     fn nombre(self) -> string { "círculo" }
 }
 impl Forma for Cuadrado {

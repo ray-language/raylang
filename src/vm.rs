@@ -2143,31 +2143,7 @@ impl<'a> Vm<'a> {
                     };
                     self.push(HeapValue::Float(base.powf(exp)));
                 }
-                OpCode::Abs => match self.pop() {
-                    HeapValue::Int(x) => self.push(HeapValue::Int(x.abs())),
-                    HeapValue::Float(x) => self.push(HeapValue::Float(x.abs())),
-                    _ => unreachable!("el checker garantiza int o float"),
-                },
-                OpCode::Min => {
-                    let b = self.pop();
-                    let a = self.pop();
-                    match (a, b) {
-                        (HeapValue::Int(a), HeapValue::Int(b)) => self.push(HeapValue::Int(a.min(b))),
-                        (HeapValue::Float(a), HeapValue::Float(b)) => self.push(HeapValue::Float(a.min(b))),
-                        _ => unreachable!("el checker garantiza dos números del mismo tipo"),
-                    }
-                }
-                OpCode::Max => {
-                    let b = self.pop();
-                    let a = self.pop();
-                    match (a, b) {
-                        (HeapValue::Int(a), HeapValue::Int(b)) => self.push(HeapValue::Int(a.max(b))),
-                        (HeapValue::Float(a), HeapValue::Float(b)) => self.push(HeapValue::Float(a.max(b))),
-                        _ => unreachable!("el checker garantiza dos números del mismo tipo"),
-                    }
-                }
-                OpCode::Pi => self.push(HeapValue::Float(std::f64::consts::PI)),
-                OpCode::E => self.push(HeapValue::Float(std::f64::consts::E)),
+                // M49.1b: abs/min/max/pi/e ya no tienen opcode (funciones puras en `std/math`).
 
                 // --- Reloj y aleatoriedad (M15.1b): delegan en los helpers compartidos. ---
                 OpCode::Now => self.push(HeapValue::Int(crate::builtins::now_millis())),
@@ -3955,28 +3931,20 @@ mod tests {
     /// **borde** de `f64`: `sqrt(-1.0)` da `NaN` en ambos motores → `NaN == NaN` es `false` → `0`.
     #[test]
     fn matematicas_oraculo() {
-        // Polimórficas sobre int → resultado int directo.
-        oracle_int("abs(-7)");
-        oracle_int("abs(7)");
-        oracle_int("min(3, 8)");
-        oracle_int("max(3, 8)");
-        // Funciones float (M49.1a: pasaron a `std/math`; el ORÁCULO prueba el primitivo interno `__x`
-        // —el que computa, aún builtin, sin necesidad del loader—; el wrapper `math.sqrt` lo cubre el
-        // ejemplo `matematicas.ray` por integración). Verificadas por igualdad (ambos motores idéntico).
+        // M49: abs/min/max/pi/e se movieron a `std/math` (funciones puras en raylang; las cubre la
+        // integración `math_cli`, en ambos motores). El ORÁCULO prueba solo los primitivos internos `__x`
+        // —el que computa, aún builtin, sin necesidad del loader—; el envoltorio `math.sqrt` lo cierra el
+        // ejemplo `matematicas.ray`. Verificados por igualdad (ambos motores calculan idéntico).
         oracle_int("if (__sqrt(16.0) == 4.0) { 1 } else { 0 }");
         oracle_int("if (__pow(2.0, 10.0) == 1024.0) { 1 } else { 0 }");
         oracle_int("if (__floor(3.7) == 3.0) { 1 } else { 0 }");
         oracle_int("if (__ceil(3.2) == 4.0) { 1 } else { 0 }");
         oracle_int("if (__round(2.5) == 3.0) { 1 } else { 0 }");
-        oracle_int("if (abs(-2.5) == 2.5) { 1 } else { 0 }");
-        oracle_int("if (min(1.5, 9.0) == 1.5) { 1 } else { 0 }");
-        oracle_int("if (max(1.5, 9.0) == 9.0) { 1 } else { 0 }");
         oracle_int("if (__sin(0.0) == 0.0) { 1 } else { 0 }");
         oracle_int("if (__cos(0.0) == 1.0) { 1 } else { 0 }");
-        oracle_int("if (__ln(e()) == 1.0) { 1 } else { 0 }");
+        oracle_int("if (__ln(1.0) == 0.0) { 1 } else { 0 }");
         oracle_int("if (__log10(1000.0) == 3.0) { 1 } else { 0 }");
         oracle_int("if (__exp(0.0) == 1.0) { 1 } else { 0 }");
-        oracle_int("if (pi() > 3.14) { 1 } else { 0 }");
         // Borde: NaN se comporta igual en ambos motores (NaN != NaN → la rama else).
         oracle_int("if (__sqrt(0.0 - 1.0) == __sqrt(0.0 - 1.0)) { 1 } else { 0 }");
     }

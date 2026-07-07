@@ -1,6 +1,14 @@
-// std/math (M40.4b; M49.1a) — la biblioteca de matemáticas. Se importa con `import std/math;` y se usa
-// calificado (`math.sqrt(2.0)`, `math.gcd(12, 18)`). Las funciones float envuelven primitivos internos
-// `__x` (mismo opcode que antes; el cálculo lo hacen los motores). Las utilidades enteras van más abajo.
+// std/math (M40.4b; M49) — la biblioteca de matemáticas. Se importa con `import std/math;` y se usa
+// calificado (`math.sqrt(2.0)`, `math.min(3, 8)`, `math.PI`). Las funciones float envuelven primitivos
+// internos `__x` (mismo opcode que antes; el cálculo lo hacen los motores); `abs`/`min`/`max` son puros
+// en raylang (M49.1b, vía los traits `Signed`/`Ord`). Las utilidades enteras van más abajo.
+
+/// The mathematical constant π. (A function, not a `const`: `math.pi()` — qualified access to a module
+/// `const` is not yet supported by the loader.)
+pub fn pi() -> float { 3.141592653589793 }
+
+/// Euler's number e.
+pub fn e() -> float { 2.718281828459045 }
 
 /// Square root of `x`.
 pub fn sqrt(x: float) -> float { __sqrt(x) }
@@ -34,6 +42,30 @@ pub fn ceil(x: float) -> float { __ceil(x) }
 
 /// `x` rounded to the nearest integer, as a float (ties away from zero).
 pub fn round(x: float) -> float { __round(x) }
+
+/// A numeric type that has an absolute value (M49.1b). Implemented for `int` and `float`; a user numeric
+/// type can `impl Signed for T` to work with `math.abs`.
+pub trait Signed {
+    /// Absolute value of `self`.
+    fn abs(self) -> Self;
+}
+
+impl Signed for int {
+    fn abs(self) -> int { if (self < 0) { 0 - self } else { self } }
+}
+
+impl Signed for float {
+    fn abs(self) -> float { if (self < 0.0) { 0.0 - self } else { self } }
+}
+
+/// Absolute value of `x` (any `Signed` type: `int`, `float`, …). Keeps the numeric type.
+pub fn abs<T: Signed>(x: T) -> T { x.abs() }
+
+/// The smaller of `a` and `b` (any `Ord` type: int/float/string/char). Ties return `a`.
+pub fn min<T: Ord>(a: T, b: T) -> T { if (a.menor(b)) { a } else { b } }
+
+/// The larger of `a` and `b` (any `Ord` type). Ties return `a`.
+pub fn max<T: Ord>(a: T, b: T) -> T { if (b.menor(a)) { a } else { b } }
 
 /// Absolute value of `x`.
 pub fn iabs(x: int) -> int {

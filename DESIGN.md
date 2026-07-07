@@ -6435,6 +6435,25 @@ migrado del corpus fue mínimo (1 ejemplo, `matematicas.ray`; `libm.ray`/tests-F
 no el builtin → intactos). LSP: las tablas `signature()`/`doc()` conservan las entradas (ahora sirven al
 signature-help de `math.X`); dos tests de hover pasaron a un builtin conservado (`abs`). **M49.1a COMPLETO.**
 
-Siguiente: **M49.1b** (`abs`/`min`/`max` genéricos vía `Ord` + trait `Signed`; `pi`/`e` como `const` —
-puros en raylang, podan los opcodes `Abs`/`Min`/`Max`/`Pi`/`E`), luego **M49.2** (`std/time`+`std/random`)
-y **M49.3** (`std/crypto`).
+### 51.2 M49.1b — `abs`/`min`/`max`/`pi`/`e` a `std/math` (puros en raylang)
+
+Cierra `std/math`. Las polimórficas y las constantes dejan de ser builtins y pasan a `std/math` como
+**raylang puro** (sin opcode): `min`/`max` genéricos sobre el trait **`Ord`** (`fn min<T: Ord>(a: T, b: T)
+-> T { if (a.menor(b)) { a } else { b } }` → sirve int/float/string/char); `abs` sobre un trait nuevo
+**`Signed { fn abs(self) -> Self; }`** con `impl` para int/float (cuerpos puros) y `fn abs<T: Signed>(x:
+T) -> T { x.abs() }`; `pi`/`e` como **funciones nularias** (`math.pi()`). **Se podan los opcodes**
+`Abs`/`Min`/`Max`/`Pi`/`E` (+ sus arms en VM/intérprete y las reglas `numeric_*_check`) → el runtime
+adelgaza. Un tipo de usuario que `impl Signed`/`Ord` funciona con `math.abs`/`math.min` (extensibilidad,
+como los contenedores de M48.4).
+
+**Desviación del plan**: `pi`/`e` quedaron como **funciones** (`math.pi()`), no `const` (`math.PI`): el
+acceso calificado a un `const` de módulo (`M.PI`) no lo soporta aún el loader (los `const` no entran en la
+`Surface` ni se namespacan) — sería una feature aparte, fuera del alcance de M49.1b.
+
+**Verificación**: el oráculo de math (`matematicas_oraculo`) se reduce a los primitivos `__x` (abs/min/max
+ya no son builtins → no hay opcode que oraculizar); `matematicas.ray` + `tests/math_cli.rs` cubren
+`math.abs`/`min`/`max`/`pi` end-to-end en ambos motores (int y float, y `min` sobre string). LSP: los tests
+de hover/completion de builtin pasaron a `char_code` (builtin estable). **M49.1b / M49.1 (`std/math`)
+COMPLETO.** Suite completa verde (77 binarios, 510 lib).
+
+Siguiente: **M49.2** (`std/time`+`std/random`) y **M49.3** (`std/crypto`).

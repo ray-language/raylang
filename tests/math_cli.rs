@@ -28,13 +28,20 @@ fn main() -> int {
     print(math.sin(0.0));         // 0
     print(math.cos(0.0));         // 1
     print(math.log10(1000.0));    // 3
+    // M49.1b: abs/min/max genéricos (Signed/Ord) + pi/e nularias.
+    print(math.abs(-7));          // 7   (int)
+    print(math.abs(-2.5));        // 2.5 (float)
+    print(math.min(3, 8));        // 3   (int)
+    print(math.max(1.5, 9.0));    // 9   (float)
+    print(math.min("b", "a"));    // a   (Ord: string)
+    print(math.pi() > 3.14);      // true
     0
 }
 "#;
 
 #[test]
 fn std_math_envoltorios() {
-    let esperado = "4\n1024\n3\n4\n3\n0\n1\n3\n";
+    let esperado = "4\n1024\n3\n4\n3\n0\n1\n3\n7\n2.5\n3\n9\na\ntrue\n";
     let (o_in, c_in) = run("m49_math_in", PROG, false);
     let (o_vm, c_vm) = run("m49_math_vm", PROG, true);
     assert_eq!(c_in, 0, "intérprete sale 0");

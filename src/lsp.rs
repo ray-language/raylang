@@ -287,12 +287,15 @@ fn ident_rango_bajo_cursor(src: &str, line0: usize, char0: usize) -> Option<(Str
 fn doc_del_simbolo(uri: &str, src: &str, line0: usize, char0: usize, docs: &HashMap<String, String>) -> Option<String> {
     match definition_at(uri, src, line0, char0) {
         Some((target_uri, def_line0, _, _)) => {
-            // Fuente del archivo donde vive la declaración: el buffer si es el mismo doc, o el disco.
+            // Fuente del archivo donde vive la declaración: el buffer si es el mismo doc, el disco, o
+            // —para un módulo EMBEBIDO de la std (`std/*`, sin archivo real)— su `source` del programa
+            // cargado. Así el hover de `math.sqrt`/`math.PI` muestra también sus `///` (M49.1).
             let fuente = if target_uri == uri {
                 src.to_string()
             } else {
                 docs.get(&target_uri).cloned()
-                    .or_else(|| uri_to_path(&target_uri).and_then(|p| std::fs::read_to_string(p).ok()))?
+                    .or_else(|| uri_to_path(&target_uri).and_then(|p| std::fs::read_to_string(p).ok()))
+                    .or_else(|| fuente_de_modulo_cargado(uri, src, &target_uri))?
             };
             let lineas: Vec<&str> = fuente.lines().collect();
             if let Some(ls) = crate::raydoc::doc_lineas_arriba(&lineas, def_line0 + 1) {
@@ -314,6 +317,17 @@ fn doc_del_simbolo(uri: &str, src: &str, line0: usize, char0: usize, docs: &Hash
                 .or_else(|| doc_en_prelude(&nombre))
         }
     }
+}
+
+/// La `source` de un módulo por su URI de destino, tomada del programa **cargado**. Sirve para los
+/// módulos **embebidos** de la std (`std/*`): su declaración vive en una fuente sin archivo en disco
+/// (`LoadedModule.source`), así que el hover/def no puede leerla del sistema de archivos. `None` si no
+/// carga o no hay un módulo con ese path.
+fn fuente_de_modulo_cargado(entry_uri: &str, entry_src: &str, target_uri: &str) -> Option<String> {
+    let entry_path = uri_to_path(entry_uri)?;
+    let target_path = uri_to_path(target_uri)?;
+    let loaded = cargar(&entry_path, entry_src).ok()?;
+    loaded.modules.into_iter().find(|m| m.path == target_path).map(|m| m.source)
 }
 
 /// El identificador bajo el cursor `(line0, char0)` (0-basados), expandiendo a izquierda y derecha

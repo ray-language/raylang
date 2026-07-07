@@ -2787,6 +2787,12 @@ impl Checker {
         let ExprKind::Field { object, name } = &callee.kind else { return None };
         let ExprKind::Ident(tn) = &object.kind else { return None };
         let assoc = crate::builtins::assoc_lookup(tn, name)?;
+        // M48.1/LSP: hover del nombre asociado (`new`/`bounded`), tras `Tipo.` (grafía canónica sin
+        // espacios; el `+1` es el punto). Muestra la firma legible del registro.
+        if self.gather {
+            let ncol = object.col + tn.chars().count() + 1;
+            self.record_named(object.line, ncol, name.chars().count(), assoc.sig.to_string(), None);
+        }
         Some((|| {
             if args.len() != assoc.arity {
                 return Err(self.err(line, col, format!(
@@ -5559,6 +5565,17 @@ mod tests {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         let (mut prog, _) = crate::parser::parse_all(tokens);
         member_completion(&mut prog).into_iter().map(|m| m.label).collect()
+    }
+
+    #[test]
+    fn hover_de_funcion_asociada() {
+        // M48.1/LSP: hover sobre el nombre asociado (`new`/`bounded`) → su firma del registro.
+        let src = "fn main() -> int {\n  let m: Map<string, int> = Map.new();\n  m.len()\n}";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        let idx = semantic_index(&mut prog);
+        assert!(idx.hovers.iter().any(|h| h.line == 2 && h.text == "Map.new() -> Map<K, V>"),
+            "hover de Map.new: {:?}", idx.hovers.iter().filter(|h| h.line == 2).map(|h| &h.text).collect::<Vec<_>>());
     }
 
     #[test]

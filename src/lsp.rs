@@ -1283,6 +1283,37 @@ fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
     // Sin miembros de valor, el receptor puede ser un TIPO o un MÓDULO (van tras el intento de valor,
     // así un local que los tape gana, como en el resolutor):
     if items.is_empty() {
+        // (a0) FUNCIONES ASOCIADAS de un tipo incorporado (`Map.`/`Channel.` → `new`/`bounded`, M48.1;
+        //      kind 3 = Function). Snippet con placeholders + firma en el popup + disparo del sig help.
+        if crate::builtins::assoc_for_type(&receptor).next().is_some() {
+            let vis: Vec<Json> = crate::builtins::assoc_for_type(&receptor).map(|a| {
+                let params = assoc_param_names(a.sig);
+                let snippet = params.iter().enumerate()
+                    .map(|(i, p)| format!("${{{}:{}}}", i + 1, p.split(':').next().unwrap_or(p).trim()))
+                    .collect::<Vec<_>>().join(", ");
+                let inline = format!("({})", params.join(", "));
+                let mut campos = vec![
+                    ("label", Json::Str(a.fn_name.to_string())),
+                    ("kind", num(3)),
+                    ("insertText", Json::Str(format!("{}({})", a.fn_name, snippet))),
+                    ("insertTextFormat", num(2)),
+                    ("labelDetails", obj(vec![("detail", Json::Str(inline))])),
+                    ("detail", Json::Str(a.sig.to_string())),
+                    ("documentation", obj(vec![
+                        ("kind", Json::Str("markdown".into())),
+                        ("value", Json::Str(a.doc.to_string())),
+                    ])),
+                ];
+                if a.arity > 0 {
+                    campos.push(("command", obj(vec![
+                        ("title", Json::Str("signature".into())),
+                        ("command", Json::Str("editor.action.triggerParameterHints".into())),
+                    ])));
+                }
+                obj(campos)
+            }).collect();
+            return Some(Json::Arr(vis));
+        }
         // (a) un ENUM (`Orientacion.` → sus variantes; kind 20 = EnumMember). Las variantes con
         //     payload insertan placeholders por el tipo de cada campo.
         if let Some(variantes) = ctx.enum_variantes(&receptor) {
@@ -1551,6 +1582,21 @@ fn signature_help_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     //    *declaración* `fn nombre(...) -> ...` esté bien formada). Así el signature help funciona
     //    también para funciones importadas (`u.cuadrado(`) y del prelude, no solo las del archivo.
     let ctx = SigCtx::nuevo(src, uri_to_path(&uri).as_deref());
+    // M48.1: función asociada de un tipo incorporado (`Map.new(`/`Channel.bounded(`): la firma sale del
+    // registro (`assoc.sig`), no de una `fn`.
+    if let Some(recv) = receptor.as_deref()
+        && let Some(a) = crate::builtins::assoc_lookup(recv, &name)
+    {
+        let params = assoc_param_names(a.sig);
+        let parametros: Vec<Json> = params.iter().map(|p| obj(vec![("label", Json::Str(p.clone()))])).collect();
+        let activo = activo.min(params.len().saturating_sub(1));
+        let firma = obj(vec![("label", Json::Str(a.sig.to_string())), ("parameters", Json::Arr(parametros))]);
+        return obj(vec![
+            ("signatures", Json::Arr(vec![firma])),
+            ("activeSignature", num(0)),
+            ("activeParameter", num(activo as i64)),
+        ]);
+    }
     // La construcción de una variante de enum (`Figura.Circulo(`) no es una `fn`: si el receptor es un
     // enum con esa variante, se arma la firma con los tipos del payload (`Figura.Circulo(float, …)`).
     if let Some(recv) = receptor.as_deref()
@@ -1756,6 +1802,24 @@ fn insert_llamada(label: &str, params: Option<&[String]>, has_args: bool) -> Str
         None if has_args => format!("{}($0)", label),    // firma desconocida, con args → cursor dentro
         None => format!("{}()", label),
     }
+}
+
+/// M48.1: los parámetros de una función asociada, extraídos textualmente de su firma del registro
+/// (`Channel.bounded(n: int) -> Channel<T>` → `["n: int"]`; `Map.new() -> Map<K, V>` → `[]`). Toma el
+/// contenido entre el primer `(` y su `)` de cierre y lo parte por comas de nivel superior.
+fn assoc_param_names(sig: &str) -> Vec<String> {
+    let cs: Vec<char> = sig.chars().collect();
+    let Some(abre) = cs.iter().position(|&c| c == '(') else { return Vec::new() };
+    let (mut depth, mut fin) = (0i32, abre);
+    for (i, &c) in cs.iter().enumerate().skip(abre) {
+        match c {
+            '(' => depth += 1,
+            ')' => { depth -= 1; if depth == 0 { fin = i; break; } }
+            _ => {}
+        }
+    }
+    let dentro: String = cs[abre + 1..fin].iter().collect();
+    split_top_commas(&dentro)
 }
 
 /// Empuja el detalle de una firma **ya resuelta** (M46a): `labelDetails.detail` (params) +
@@ -3400,6 +3464,33 @@ mod tests {
     }
 
     #[test]
+    fn completion_y_signature_de_funciones_asociadas() {
+        // M48.1: `Channel.` completa `new`/`bounded` (kind 3); el sig help de `Channel.bounded(` sale
+        // del registro de asociadas.
+        let uri = "file:///t.ray";
+        let src = "fn main() -> int {\n    let c: Channel<int> = Channel.\n    0\n}\n";
+        let mut docs = HashMap::new();
+        docs.insert(uri.to_string(), src.to_string());
+        let msg = json::parse(&format!(
+            r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":1,"character":34}}}}}}"#
+        )).unwrap();
+        let vs = completion_result(&msg, &docs);
+        let labels: Vec<&str> = vs.as_array().unwrap().iter()
+            .filter_map(|i| i.get("label").and_then(Json::as_str)).collect();
+        assert!(labels.contains(&"new") && labels.contains(&"bounded"), "asociadas de Channel: {labels:?}");
+        // Signature help dentro de `Channel.bounded(`.
+        let src2 = "fn main() -> int {\n    let c: Channel<int> = Channel.bounded(\n    0\n}\n";
+        docs.insert(uri.to_string(), src2.to_string());
+        let msg2 = json::parse(&format!(
+            r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":1,"character":42}}}}}}"#
+        )).unwrap();
+        let r = signature_help_result(&msg2, &docs);
+        let label = r.get("signatures").and_then(|s| s.as_array()).and_then(|a| a.first())
+            .and_then(|s| s.get("label")).and_then(Json::as_str).unwrap_or("");
+        assert_eq!(label, "Channel.bounded(n: int) -> Channel<T>", "sig de Channel.bounded: {r:?}");
+    }
+
+    #[test]
     fn signature_help_metodos_y_prelude() {
         // M46b: el signature help resuelve funciones del prelude y recorta el receptor en un método,
         // pero NO en una llamada calificada de módulo (esa parte cross-módulo se cubre en el CLI).
@@ -3496,16 +3587,19 @@ mod tests {
     }
 
     #[test]
-    fn hover_de_builtin_sin_tipo_indexado() {
-        // Un builtin de tipo indeterminado (channel) no está en el índice semántico; el hover cae a
-        // su doc de la tabla de builtins.
-        let src = "fn main() -> int {\n    let ch = channel();\n    0\n}\n";
+    fn hover_de_funcion_asociada() {
+        // M48.1: hover sobre el nombre asociado (`Channel.new`) → su firma del registro de asociadas.
+        let src = "fn main() -> int {\n    let ch: Channel<int> = Channel.new();\n    0\n}\n";
         let mut docs = HashMap::new();
         docs.insert("file:///t.ray".to_string(), src.to_string());
-        let msg = json::parse(r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":1,"character":15}}}"#).unwrap();
+        // Posición sobre `new` (tras `Channel.`).
+        let cn = src.lines().nth(1).unwrap().find("Channel.new").unwrap() + "Channel.".len() + 1;
+        let msg = json::parse(&format!(
+            r#"{{"params":{{"textDocument":{{"uri":"file:///t.ray"}},"position":{{"line":1,"character":{cn}}}}}}}"#
+        )).unwrap();
         let r = hover_result(&msg, &docs);
         let v = r.get("contents").and_then(|c| c.get("value")).and_then(Json::as_str).unwrap_or("");
-        assert!(v.contains("typed channel"), "hover de channel: {v}");
+        assert_eq!(v, "Channel.new() -> Channel<T>", "hover de Channel.new: {v}");
     }
 
     #[test]

@@ -117,6 +117,58 @@ impl<K, V> MapOps<K, V> for Map<K, V> {
     fn values(self) -> [V] { __values(self) }
 }
 
+// Operaciones de string (M48.4d): un solo impl (`string`). Durante la coexistencia los cuerpos llaman
+// a los builtins públicos (que siguen vivos); M48.4e los renombra a los primitivos `__x` al retirarlos.
+// (`char_code` es de `char` y `join` es de `[string]` —no impl-able para un array concreto—: builtins.)
+/// String operations: trim, split, replace, chars, case, substring, repeat, to_bytes.
+trait StrOps {
+    /// Removes leading/trailing whitespace.
+    fn trim(self) -> string;
+    /// Splits by a separator into parts.
+    fn split(self, sep: string) -> [string];
+    /// Replaces every occurrence of `de` with `a`.
+    fn replace(self, de: string, a: string) -> string;
+    /// The characters of the string.
+    fn chars(self) -> [char];
+    /// Whether the string starts with `prefijo`.
+    fn starts_with(self, prefijo: string) -> bool;
+    /// Whether the string ends with `sufijo`.
+    fn ends_with(self, sufijo: string) -> bool;
+    /// The string in uppercase.
+    fn to_upper(self) -> string;
+    /// The string in lowercase.
+    fn to_lower(self) -> string;
+    /// The substring `[inicio, fin)` by character index (clamped).
+    fn substring(self, inicio: int, fin: int) -> string;
+    /// The string repeated `veces` times.
+    fn repeat(self, veces: int) -> string;
+    /// The UTF-8 encoding of the string.
+    fn to_bytes(self) -> bytes;
+}
+impl StrOps for string {
+    fn trim(self) -> string { trim(self) }
+    fn split(self, sep: string) -> [string] { split(self, sep) }
+    fn replace(self, de: string, a: string) -> string { replace(self, de, a) }
+    fn chars(self) -> [char] { chars(self) }
+    fn starts_with(self, prefijo: string) -> bool { starts_with(self, prefijo) }
+    fn ends_with(self, sufijo: string) -> bool { ends_with(self, sufijo) }
+    fn to_upper(self) -> string { to_upper(self) }
+    fn to_lower(self) -> string { to_lower(self) }
+    fn substring(self, inicio: int, fin: int) -> string { substring(self, inicio, fin) }
+    fn repeat(self, veces: int) -> string { repeat(self, veces) }
+    fn to_bytes(self) -> bytes { to_bytes(self) }
+}
+
+// Operaciones de bytes (M48.4d): un solo impl (`bytes`).
+/// Bytes operations: slice by octet index.
+trait BytesOps {
+    /// The byte slice `[inicio, fin)` by octet index (clamped).
+    fn sub_bytes(self, inicio: int, fin: int) -> bytes;
+}
+impl BytesOps for bytes {
+    fn sub_bytes(self, inicio: int, fin: int) -> bytes { sub_bytes(self, inicio, fin) }
+}
+
 // Hash (M40.3a): un valor hashable produce un `int`. `@derive(Hash)` lo genera para un struct/enum
 // (combinando `.hash()` de sus campos); los primitivos lo implementan aquí, en raylang (el string
 // itera sus caracteres con `char_code`). Lo consumen las tablas hash del prelude (Set, M40.3b).

@@ -5727,6 +5727,18 @@ mod tests {
     }
 
     #[test]
+    fn traits_strops_bytesops() {
+        // M48.4d: los métodos de string/bytes despachan por trait (StrOps/BytesOps).
+        assert!(check_src(
+            "fn main() -> int { let s = \"hola\"; \
+             s.trim().split(\",\").len() + s.to_upper().len() + s.substring(0, 2).len() \
+             + s.to_bytes().sub_bytes(0, 1).len() + s.chars().len() }").is_ok());
+        // to_upper sobre un no-string → error.
+        let e = check_src("fn main() -> int { (42).to_upper().len() }").unwrap_err();
+        assert!(!format!("{e}").is_empty(), "int no tiene to_upper: {e}");
+    }
+
+    #[test]
     fn trait_mapops() {
         // M48.4c: insert/contains_key/keys/values como métodos del trait MapOps.
         assert!(check_src(

@@ -4232,6 +4232,29 @@ mod tests {
         );
     }
 
+    /// M48.4d: los métodos de `StrOps`/`BytesOps` (trim/split/replace/…/sub_bytes) despachan por trait
+    /// y bajan a los builtins de string/bytes. Varios asignan heap → estrés del GC.
+    #[test]
+    fn trait_strops_bytesops_oraculo() {
+        oracle_stress(
+            "fn main() -> int {
+                let s = \"  Hola Mundo  \";
+                let t = s.trim();
+                let up = t.to_upper();
+                let partes = t.split(\" \");
+                let r = t.replace(\"Mundo\", \"Ray\");
+                let cs = t.chars();
+                let rep = \"xy\".repeat(4);
+                let b = t.to_bytes();
+                let sb = b.sub_bytes(0, 4);
+                t.len() + up.len() + partes.len() + r.len() + cs.len() + rep.len()
+                    + b.len() + sb.len() + t.substring(0, 4).len()
+                    + (if (t.starts_with(\"Hola\")) { 1 } else { 0 })
+                    + (if (t.ends_with(\"Mundo\")) { 1 } else { 0 })
+             }",
+        );
+    }
+
     /// M48.4c: `insert`/`contains_key`/`keys`/`values` como métodos del trait `MapOps` bajan a sus
     /// primitivos `__x`. `keys`/`values` asignan heap y son deterministas (orden de clave) → oráculo.
     #[test]

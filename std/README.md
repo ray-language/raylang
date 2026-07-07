@@ -12,8 +12,8 @@ fn main() -> int {
 ```
 
 A diferencia del **prelude** (que se inyecta automáticamente en cada programa: `Option`/`Result`,
-`map`/`filter`/`fold`, `Set`/`Deque`/`StringBuilder`, `Iterator`, …), la `std/` es **opcional**: solo
-se carga lo que se importa.
+`map`/`filter`/`fold`, `Iterator`, …), la `std/` es **opcional**: solo se carga lo que se importa. (Las
+colecciones `Set`/`Deque`/`StringBuilder` vivían en el prelude; M50.2 las movió a `std/collections/`.)
 
 ## Empaquetado en el binario
 
@@ -36,6 +36,12 @@ con `ray doc std/math.ray` (que lee el archivo directamente).
   `capitalize`, `reverse`, `count`, `words`.
 - **`std/sort`** — orden y búsqueda sobre arreglos genéricos (`T: Ord`), alrededor del `sort` del prelude:
   `is_sorted`, `sort_desc`, `min`, `max`, `binary_search`, `dedup`, `merge`.
+- **`std/collections/{set,deque,stringbuilder}`** (M50.2) — estructuras de datos puras en raylang, en
+  submódulos (leaf-binding): `import std/collections/set;` → `set.new`/`add`/`has`/`remove`/`size`/`items`
+  (hash set sobre `Hash`+`Eq`); `import std/collections/deque;` → `deque.new`/`push_back`/`push_front`/
+  `pop_back`/`pop_front`/`peek_front`/`len`/`is_empty`; `import std/collections/stringbuilder;` (o `as sb`)
+  → `sb.new`/`push`/`build`/`count`. Los tipos se namespacan al submódulo (`set.Set`/`deque.Deque`/
+  `stringbuilder.StringBuilder`).
 
 ### Encoding (promovidas de `examples/`, M40.7a)
 

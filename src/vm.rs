@@ -3582,52 +3582,6 @@ mod tests {
             }");
     }
 
-    /// M40.3b: `Set<T>` (tabla hash bucketed del prelude, sobre Hash + Eq). Cubre `set_new()` (con
-    /// inferencia bidireccional del tipo elemento), add/has/remove/size con primitivos Y un tipo de
-    /// usuario (`@derive(Hash, Eq)`), incl. deduplicación. Oráculo VM↔intérprete (tamaño/pertenencia
-    /// son deterministas; el orden de `set_items` no).
-    #[test]
-    fn set_oraculo() {
-        oracle_program("\
-            @derive(Hash, Eq)\n\
-            struct P { x: int, y: int }\n\
-            fn main() -> int {\n\
-            \x20 let s: Set<int> = set_new();\n\
-            \x20 set_add(s, 3); set_add(s, 7); set_add(s, 3); set_add(s, 100);\n\
-            \x20 set_remove(s, 7);\n\
-            \x20 let ps: Set<P> = set_new();\n\
-            \x20 set_add(ps, P { x: 1, y: 2 });\n\
-            \x20 set_add(ps, P { x: 1, y: 2 });\n\
-            \x20 set_add(ps, P { x: 5, y: 6 });\n\
-            \x20 let a = if (set_has(s, 3)) { 1 } else { 0 };\n\
-            \x20 let b = if (set_has(s, 7)) { 1 } else { 0 };\n\
-            \x20 let c = if (ps.set_has(P { x: 1, y: 2 })) { 1 } else { 0 };\n\
-            \x20 set_size(s) * 1000 + set_size(ps) * 100 + a * 10 + b + c\n\
-            }"); // size(s)=2, size(ps)=2, a=1, b=0, c=1 → 2000+200+10+0+1 = 2211
-    }
-
-    /// M40.3c: `StringBuilder` (acumula trozos, une una vez con `join`) y `Deque<T>` (cola doble
-    /// sobre arreglo + índice head). Oráculo VM↔interp: sb_build determinista; deque con push/pop por
-    /// ambos extremos, incl. el vaciado (None) y la reconstrucción de push_front.
-    #[test]
-    fn sb_deque_oraculo() {
-        oracle_program("\
-            fn dv(o: Option<int>) -> int { match (o) { Option.Some(v) => v, Option.None => 0 - 1, } }\n\
-            fn main() -> int {\n\
-            \x20 let sb = sb_new();\n\
-            \x20 var i = 1;\n\
-            \x20 while (i <= 4) { sb.sb_push(to_string(i)); sb.sb_push(\",\"); i = i + 1; }\n\
-            \x20 let texto = sb.sb_build();\n\
-            \x20 let d: Deque<int> = deque_new();\n\
-            \x20 deque_push_back(d, 1); deque_push_back(d, 2); deque_push_front(d, 0);\n\
-            \x20 let a = dv(deque_pop_front(d));\n\
-            \x20 let b = dv(deque_pop_back(d));\n\
-            \x20 deque_push_front(d, 9);\n\
-            \x20 let c = dv(deque_pop_front(d));\n\
-            \x20 texto.len() * 1000 + a * 100 + b * 10 + c\n\
-            }"); // texto=\"1,2,3,4,\" (len 8), a=0, b=2, c=9 → 8000+0+20+9 = 8029
-    }
-
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
     /// punto seguro) y exige que el resultado coincida con el intérprete. Es la
     /// prueba clave del GC: si una raíz faltara, un valor vivo se liberaría y el

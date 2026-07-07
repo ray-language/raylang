@@ -6541,3 +6541,25 @@ oráculo VM↔intérprete es **pre-loader** → sus fixtures fs también usan lo
 `__read_file`. Corpus migrado (dirigido por errores): `examples/io/archivos.ray`/`binario.ray`,
 `examples/web/deflate_demo.ray`/`wss_echo.ray`. Self-hosting revalidado (checker/interpreter/vm oráculos +
 metacircular). **M50.1 COMPLETO.**
+
+### 52.2 M50.2 — `std/collections/{set,deque,stringbuilder}` (colecciones)
+
+Las tres estructuras de datos **puras en raylang** (sin primitivos `__x`) del prelude (`Set<T>` hash set,
+`Deque<T>` cola doble, `StringBuilder`) se **cortan del prelude** a **submódulos** bajo `std/collections/`.
+Con leaf-binding (M11.5) cada submódulo se usa por su hoja y **cae el prefijo** que dentro de un solo
+módulo hacía falta (`set_`/`deque_`/`sb_`): `import std/collections/set;` → `set.new()`/`set.add(s, x)`/…;
+`import std/collections/deque;` → `deque.push_back(d, x)`/…; `import std/collections/stringbuilder;` (o
+`as sb`) → `sb.push(b, s)`/… Los tipos se namespacan al submódulo (`set.Set`/`deque.Deque`/
+`stringbuilder.StringBuilder`); en el ejemplo se usan calificados en posición de tipo (`set.Set<int>`).
+Mecanismo: tres filas en `stdlib::MODULOS` con match exacto por nombre anidado + el leaf-binding de
+directorios ya probado. **Cero maquinaria nueva.** Los helpers internos del set (`bucket`/`en_bucket`) se
+ocultan como no-`pub`. `Hash`/`Eq`/`Ord`/`join`/`pop` siguen globales (prelude), así que los submódulos no
+importan nada.
+
+**Verificación**: son deterministas, pero el uso pasa por el **loader** (resuelve el import) → el oráculo
+de `vm.rs` (pre-loader) ya no aplica; se sustituye por un **oráculo por subproceso** (`collections_cli`)
+que corre los ejemplos migrados (`conjunto.ray`, `builder_deque.ray`) por **ambos motores** y exige que
+coincidan + la salida esperada, más un test de que las formas globales (`set_new`/…) ya no existen. Los
+dos oráculos in-process de `vm.rs` (que usaban los nombres globales) se retiran. El self-hosting no usa
+colecciones (su corpus no las incluye) → sin impacto; el oráculo del parser auto-alojado revalida que los
+ejemplos migrados (con `import std/collections/…`) parsean idénticos. **M50.2 COMPLETO.**

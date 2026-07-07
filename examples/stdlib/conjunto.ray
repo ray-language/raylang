@@ -1,6 +1,8 @@
-// Conjuntos: `Set<T>` (M40.3b). Una tabla hash escrita en raylang sobre `@derive(Hash)` + `Eq`: el
-// tipo del elemento debe implementar ambos (los primitivos ya lo hacen; un tipo de usuario los deriva).
-// Las operaciones llevan prefijo `set_` (por UFCS, `s.set_add(x)` también funciona).
+// Conjuntos: `set.Set<T>` (M40.3b; M50.2 lo mueve a `std/collections/set`). Una tabla hash escrita en
+// raylang sobre `@derive(Hash)` + `Eq`: el tipo del elemento debe implementar ambos (los primitivos ya
+// lo hacen; un tipo de usuario los deriva). Con leaf-binding se usa calificado: `set.add(s, x)`, etc.
+import std/collections/set;
+
 @derive(Hash, Eq)
 struct Ciudad {
     nombre: string,
@@ -9,33 +11,33 @@ struct Ciudad {
 
 fn main() -> int {
     // Un conjunto de enteros: deduplica automáticamente.
-    let visto: Set<int> = set_new();
+    let visto: set.Set<int> = set.new();
     let nums = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
     var i = 0;
     while (i < nums.len()) {
-        set_add(visto, nums[i]);
+        set.add(visto, nums[i]);
         i = i + 1;
     }
-    print(set_size(visto));  // 7 (3,1,4,5,9,2,6 — sin repetir)
-    print(set_has(visto, 4));  // true
-    print(set_has(visto, 7));  // false
+    print(set.size(visto));  // 7 (3,1,4,5,9,2,6 — sin repetir)
+    print(set.has(visto, 4));  // true
+    print(set.has(visto, 7));  // false
 
     // Quitar un elemento.
-    set_remove(visto, 4);
-    print(set_has(visto, 4));  // false
-    print(set_size(visto));  // 6
+    set.remove(visto, 4);
+    print(set.has(visto, 4));  // false
+    print(set.size(visto));  // 6
 
     // Un conjunto de un tipo de usuario: la igualdad y el hash vienen de `@derive`.
-    let ciudades: Set<Ciudad> = set_new();
-    ciudades.set_add(Ciudad { nombre: "Quito", pais: "EC" });
-    ciudades.set_add(Ciudad { nombre: "Quito", pais: "EC" });  // igual → no se añade
-    ciudades.set_add(Ciudad { nombre: "Lima", pais: "PE" });
-    print(set_size(ciudades));  // 2
-    print(ciudades.set_has(Ciudad { nombre: "Lima", pais: "PE" }));  // true
+    let ciudades: set.Set<Ciudad> = set.new();
+    set.add(ciudades, Ciudad { nombre: "Quito", pais: "EC" });
+    set.add(ciudades, Ciudad { nombre: "Quito", pais: "EC" });  // igual → no se añade
+    set.add(ciudades, Ciudad { nombre: "Lima", pais: "PE" });
+    print(set.size(ciudades));  // 2
+    print(set.has(ciudades, Ciudad { nombre: "Lima", pais: "PE" }));  // true
 
     // Recorrer los elementos (orden por bucket, no especificado): sumamos los enteros restantes.
     var total = 0;
-    let items = set_items(visto);
+    let items = set.items(visto);
     var j = 0;
     while (j < items.len()) {
         total = total + items[j];

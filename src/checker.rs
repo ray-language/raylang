@@ -2906,10 +2906,9 @@ impl Checker {
                 }
             }
             // El tipo del resultado lo fija el contexto esperado (indeterminado, como `map_new()`).
-            let kind_ok = matches!((tn.as_str(), expected),
-                ("Map", Some(Type::Map(_, _))) | ("Channel", Some(Type::Channel(_))));
             match expected {
-                _ if kind_ok => Ok(expected.unwrap().clone()),
+                Some(e) if matches!((tn.as_str(), e),
+                    ("Map", Type::Map(_, _)) | ("Channel", Type::Channel(_))) => Ok(e.clone()),
                 Some(e) => Err(self.err(line, col, format!(
                     "'{}.{}' produce un {}, pero aquí se espera {}", tn, name, tn, e))),
                 None => {

@@ -6287,8 +6287,8 @@ que antes no tenía). **M46 COMPLETO** (48.1 detalle + 48.2 signature help + 48.
 
 Diagnóstico: raylang ya tiene varios espacios de nombres (tipos, rutas de módulo `::`, métodos de trait
 `Tipo#metodo`); el saturado es el de **valores** (funciones libres + locales + builtins). Plan en tres
-fases (ver `docs/M48-ergonomia-nombres.md`): (1) funciones asociadas + literal de Map; (2) diagnóstico al
-redefinir un builtin; (3) builtins de contenedor → traits.
+fases (ver `docs/M48-ergonomia-nombres.md`), **las tres completas**: (1) funciones asociadas + literal de
+Map; (2) diagnóstico al redefinir un builtin; (3) builtins de contenedor → traits **+ retiro** (§50.5).
 
 ### 50.1 M48.1 — funciones asociadas a tipos (`Tipo.fn()`)
 
@@ -6370,13 +6370,40 @@ oculto), o —para `StrOps`/`BytesOps` durante la coexistencia— llama al built
   to_bytes }` → string; `BytesOps { sub_bytes }` → bytes (M48.4d). `char_code` (char) y `join`
   (`[string]`, no impl-able para un array concreto) se quedan builtins.
 
-**Coexistencia (estado enviado en esta rama)**: los builtins públicos **siguen vivos** junto a los
-traits; `recv.metodo()` resuelve por el trait (prioridad campo→método→UFCS), la forma prefija
-`metodo(args)` por el builtin. Los 156 ejemplos siguen intactos.
+**Coexistencia (M48.4a–d)** — estado intermedio: los builtins públicos convivían con los traits;
+`recv.metodo()` resolvía por el trait (prioridad campo→método→UFCS), la forma prefija `metodo(args)` por
+el builtin. Sirvió para migrar el corpus sin romper nada; lo cierra el retiro (M48.4e).
 
-**Retiro de los builtins (M48.4e) — DIFERIDO a una rama de seguimiento.** Vaciar de verdad el namespace
-(que `fn len` libre sea legal, que desaparezca la forma prefija) exige reescribir ~1.346 sitios prefijos
-del corpus a `.metodo()` —una transformación **basada en AST** (extraer el receptor respetando paréntesis
-balanceados; un regex no basta)— y reformatear ~121 archivos. Como el valor de la Fase 3 (extensibilidad
-+ bounds) ya está entregado con la coexistencia, el retiro se hace aparte, con un reescritor prefijo→UFCS
-sobre el parser. El self-hosting se mantiene tratando estos builtins como builtins internamente (D5).
+### 50.5 M48.4e — retiro de los builtins de contenedor
+
+Vaciar el namespace **de verdad**: los 20 builtins de contenedor (`len`/`push`/`reverse`/`contains`/
+`insert`/`contains_key`/`keys`/`values`, `trim`/`split`/`replace`/`chars`/`starts_with`/`ends_with`/
+`to_upper`/`to_lower`/`substring`/`repeat`/`to_bytes`/`sub_bytes`) dejan de ser builtins y quedan **solo**
+como métodos de trait. Así `fn len` libre pasa a ser legal (el footgun de §50.3 ya no dispara sobre estos
+nombres) y la forma prefija `len(x)` **desaparece** (sola forma canónica: `x.len()`). Es un cambio
+**incompatible** acotado (la forma de método existe desde M48.4a).
+
+- **Prerrequisito — `ray fmt` sano + corpus canónico.** El retiro reescribe cada sitio prefijo a
+  `.metodo()` sobre el **AST** y reemite con el formateador; para que el diff toque **solo** los sitios
+  migrados (sin ruido de estilo) el corpus debía estar ya en forma canónica. Al canonizarlo se
+  descubrieron y repararon **dos bugs de `fmt`**: (1) un `match`/bloque como **sub-expresión** (argumento
+  de llamada, operando…) se des-indentaba desde la columna 0 (`fmt_expr` no llevaba la indentación del
+  contexto → ahora `Cur.base`); (2) —**semántico**— un block-form como **última sentencia sin tail** se
+  reemitía sin `;`, y al re-parsear un block-form final sin `;` es el **tail** → el bloque pasaba de
+  `unit` al tipo del block-form (rompía el compilador auto-alojado). `fmt_block` conserva el `;` en ese
+  caso.
+- **El reescritor (codemod AST).** `Call(Ident(builtin), [recv, ...resto])` → `Call(Field(recv, builtin),
+  [...resto])`, en post-orden (los anidados componen: `reverse(sort(a))` → `sort(a).reverse()`). Seguro
+  porque se verificó **0** ocurrencias en el azúcar (pipes/interpolación) y **0** shadowing por
+  locales/params del mismo nombre. Migró 2115 sitios del corpus (137 archivos) + 51 del prelude + ~247
+  **fixtures de test embebidas en Rust** (a mano, mismo criterio). Los cuerpos de los impl de trait siguen
+  llamando a los primitivos `__x` (evitan la recursión infinita).
+- **El retiro.** Se quitan las 20 entradas públicas de `BUILTINS` (los gemelos `__x`, mismo opcode,
+  quedan como impl → **runtime intacto**). Las tablas del LSP (`methods_for`/`signature`/`doc`) se
+  conservan (ahora describen métodos de trait). Gramáticas VSCode/Sublime podadas.
+- **Self-hosting (D5).** El checker auto-alojado es un **subconjunto** que sigue modelando estos como
+  builtins de arreglo/string; para los 3 tests de error sobre tipo incorrecto (`xs.push(true)`,
+  `(3).push(1)`, `(3).len()`) el oráculo exige misma **posición** de rechazo, tolerando la redacción (Rust
+  los ve como métodos de trait, p. ej. `argumento 2 de '[]#push': …`). El resto (lexer/parser/checker/
+  intérprete/VM/metacircular) sigue byte-idéntico; sus fuentes usan la forma de método (resuelta por su
+  propia rama UFCS→builtin). **M48.4e / M48 COMPLETOS.**

@@ -130,10 +130,12 @@ Antes del refactor grande, eliminar la sorpresa.
 
 ### M48.4 — La familia de traits de contenedor
 
-> **Estado**: M48.4a–d ✅ COMPLETOS (traits en coexistencia con los builtins; ver DESIGN.md §50.4).
-> **M48.4e (retiro de los builtins) DIFERIDO** a una rama de seguimiento: exige reescribir ~1.346 sitios
-> prefijos del corpus a `.metodo()` (transformación por AST, no regex) + reformatear ~121 archivos. El
-> valor (extensibilidad + bounds) ya está entregado con la coexistencia. Rama: `feature/stdlib-builtin-removal`.
+> **Estado**: M48.4a–d ✅ COMPLETOS (traits, primero en coexistencia con los builtins; ver DESIGN.md §50.4).
+> **M48.4e (retiro de los 20 builtins) ✅ COMPLETO** (ver DESIGN.md §50.5 y `docs/M48.4e-retiro-builtins.md`):
+> reescritor AST que migró 2115 sitios del corpus + 51 del prelude + ~247 fixtures de test a `.metodo()`,
+> retiro de `BUILTINS`, footgun, gramáticas y reconciliación del self-hosting. Requirió reparar antes dos
+> bugs de `ray fmt` (indentación de block-form como sub-expresión; pérdida del `;` de un block-form final).
+> Suite completa verde. **Fase 3 y M48 COMPLETOS.** Rama: `feature/stdlib-builtin-removal`.
 
 
 De cara al usuario: **la forma con punto no cambia** (`xs.len()` idéntico); se pierde

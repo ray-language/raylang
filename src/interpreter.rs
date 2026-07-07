@@ -969,7 +969,9 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza un Map"),
             },
-            "push" => {
+            // M48.4b: `__push`/`__reverse`/`__contains` son los primitivos internos a los que bajan
+            // los traits `Push`/`Reverse`/`Contains`; idénticos a sus públicos.
+            "push" | "__push" => {
                 match &values[0] {
                     Value::Array(rc) => rc.borrow_mut().push(values[1].clone()),
                     _ => unreachable!("el checker garantiza un arreglo"),
@@ -1169,7 +1171,7 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M11.4a/M11.7b: ¿el string contiene la subcadena? / ¿el arreglo contiene el elemento?
-            "contains" => match (&values[0], &values[1]) {
+            "contains" | "__contains" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sub)) => Value::Bool(s.contains(sub.as_str())),
                 (Value::Array(rc), x) => Value::Bool(rc.borrow().iter().any(|e| e == x)),
                 _ => unreachable!("el checker garantiza string+string o arreglo+elemento"),
@@ -1251,7 +1253,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza [string], string"),
             },
             // M11.7b: arreglo nuevo en orden inverso.
-            "reverse" => match &values[0] {
+            "reverse" | "__reverse" => match &values[0] {
                 Value::Array(rc) => {
                     let mut v = rc.borrow().clone();
                     v.reverse();

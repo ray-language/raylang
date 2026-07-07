@@ -69,6 +69,33 @@ impl<T> Len for [T] { fn len(self) -> int { __len(self) } }
 impl<K, V> Len for Map<K, V> { fn len(self) -> int { __len(self) } }
 impl Len for bytes { fn len(self) -> int { __len(self) } }
 
+// Agregar al final (M48.4b): añade un elemento a una colección, mutándola. Los arreglos lo
+// implementan vía `__push`; un tipo del usuario (una pila, una cola…) puede implementarlo.
+/// Appends a value to a growable collection, in place.
+trait Push<T> {
+    /// Appends `x` to the end of `self`.
+    fn push(self, x: T);
+}
+impl<T> Push<T> for [T] { fn push(self, x: T) { __push(self, x) } }
+
+// Invertir (M48.4b): devuelve una nueva colección con los elementos en orden inverso.
+/// Returns a copy of `self` with its elements in reverse order.
+trait Reverse {
+    /// Returns `self` reversed.
+    fn reverse(self) -> Self;
+}
+impl<T> Reverse for [T] { fn reverse(self) -> [T] { __reverse(self) } }
+
+// Pertenencia/subcadena (M48.4b): ¿`self` contiene `x`? En un string/bytes es subcadena; en un
+// arreglo, pertenencia por igualdad. Un solo trait genérico (se acepta la conflación).
+/// Whether `self` contains `x` (substring for strings, membership for arrays).
+trait Contains<T> {
+    /// Returns true when `self` contains `x`.
+    fn contains(self, x: T) -> bool;
+}
+impl Contains<string> for string { fn contains(self, x: string) -> bool { __contains(self, x) } }
+impl<T> Contains<T> for [T] { fn contains(self, x: T) -> bool { __contains(self, x) } }
+
 // Hash (M40.3a): un valor hashable produce un `int`. `@derive(Hash)` lo genera para un struct/enum
 // (combinando `.hash()` de sus campos); los primitivos lo implementan aquí, en raylang (el string
 // itera sus caracteres con `char_code`). Lo consumen las tablas hash del prelude (Set, M40.3b).

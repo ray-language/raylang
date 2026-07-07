@@ -5727,6 +5727,20 @@ mod tests {
     }
 
     #[test]
+    fn traits_push_reverse_contains() {
+        // M48.4b: los tres traits despachan como método; extensibles a tipos de usuario.
+        assert!(check_src("fn main() -> int { var a = [1,2]; a.push(3); a.reverse().len() }").is_ok());
+        assert!(check_src("fn ok(b: bool) -> int { if (b) { 1 } else { 0 } }\nfn main() -> int { ok([1,2,3].contains(2)) + ok(\"hola\".contains(\"la\")) }").is_ok());
+        // Un tipo del usuario implementa Push<int>/Contains<int>.
+        assert!(check_src(
+            "struct C { d: [int] }\nimpl Push<int> for C { fn push(self, x: int) { self.d.push(x) } }\n\
+             fn main() { let c = C { d: [] }; c.push(5); }").is_ok());
+        // contains con el tipo de elemento equivocado → error.
+        let e = check_src("fn main() -> int { if ([1,2,3].contains(\"x\")) { 1 } else { 0 } }").unwrap_err();
+        assert!(format!("{e}").contains("string") || format!("{e}").contains("contains"), "{e}");
+    }
+
+    #[test]
     fn impl_para_tipo_incorporado_debe_ser_generico() {
         // M48.4a: `impl X for [int]` (no plenamente genérico) se rechaza, como `impl X for Caja<int>`.
         let e = check_src("trait X { fn m(self) -> int; }\nimpl X for [int] { fn m(self) -> int { 0 } }\nfn main() -> int { 0 }").unwrap_err();

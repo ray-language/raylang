@@ -4232,6 +4232,29 @@ mod tests {
         );
     }
 
+    /// M48.4b: `push`/`reverse`/`contains` como métodos de trait (`Push`/`Reverse`/`Contains`) bajan a
+    /// sus primitivos `__x`. `push`/`reverse` asignan heap → estrés del GC.
+    #[test]
+    fn trait_push_reverse_contains_oraculo() {
+        oracle_stress(
+            "struct Cola { items: [int] }
+             impl Push<int> for Cola { fn push(self, x: int) { self.items.push(x) } }
+             fn main() -> int {
+                var a: [int] = [];
+                var i = 0;
+                while (i < 30) { a.push(i * 2); i = i + 1; }   // Push
+                let r = a.reverse();                            // Reverse: [58, 56, …]
+                let c = Cola { items: [7] };
+                c.push(9);                                      // Push sobre tipo de usuario
+                var suma = 0;
+                if (a.contains(58)) { suma = suma + 1000; }     // Contains en arreglo
+                if (\"abcdef\".contains(\"cde\")) { suma = suma + 100; } // Contains en string
+                if (!a.contains(999)) { suma = suma + 10; }
+                suma + a.len() + r[0] + c.items.len()           // 1110 + 30 + 58 + 2 = 1200
+             }",
+        );
+    }
+
     /// M48.4a: `.len()` como método del trait `Len` (string/[T]/Map/bytes + tipo de usuario) baja al
     /// primitivo `__len` (mismo opcode `Len`) → ambos motores coinciden.
     #[test]

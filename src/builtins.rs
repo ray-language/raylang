@@ -1288,6 +1288,18 @@ static BUILTINS: &[Builtin] = &[
         }
         Ok(Type::Unit)
     } },
+    // M48.4b: `__push` — primitivo interno de `push`, al que baja `impl<T> Push<T> for [T]`.
+    Builtin { name: "__push", opcode: OpCode::Push, check: |a| {
+        arity(a, 2, "__push", " (arreglo, valor)")?;
+        let elem = match &a[0] {
+            Type::Array(e) => (**e).clone(),
+            other => return Err((Some(0), format!("__push espera un arreglo como primer argumento, no {}", other))),
+        };
+        if a[1] != elem {
+            return Err((Some(1), format!("__push: el arreglo es de {} pero se empuja {}", elem, a[1])));
+        }
+        Ok(Type::Unit)
+    } },
     // to_string(x) -> string (M11.1a): representación textual de un primitivo imprimible.
     Builtin { name: "to_string", opcode: OpCode::ToString, check: |a| {
         arity(a, 1, "to_string", "")?;
@@ -1321,6 +1333,21 @@ static BUILTINS: &[Builtin] = &[
                 if a[1] != **elem { return Err((Some(1), format!("contains: el arreglo es de {} pero se busca {}", elem, a[1]))); }
             }
             _ => return Err((Some(0), format!("contains espera un string o un arreglo, no {}", a[0]))),
+        }
+        Ok(Type::Bool)
+    } },
+    // M48.4b: `__contains` — primitivo interno de `contains`, al que bajan los impls de `Contains<T>`
+    // (subcadena en string, pertenencia en arreglo). Bytes queda fuera (el builtin tampoco lo cubre).
+    Builtin { name: "__contains", opcode: OpCode::Contains, check: |a| {
+        arity(a, 2, "__contains", " (string/arreglo, valor)")?;
+        match &a[0] {
+            Type::String => {
+                if a[1] != Type::String { return Err((Some(1), format!("__contains espera un string como subcadena, no {}", a[1]))); }
+            }
+            Type::Array(elem) => {
+                if a[1] != **elem { return Err((Some(1), format!("__contains: el arreglo es de {} pero se busca {}", elem, a[1]))); }
+            }
+            _ => return Err((Some(0), format!("__contains espera un string o un arreglo, no {}", a[0]))),
         }
         Ok(Type::Bool)
     } },
@@ -1535,6 +1562,14 @@ static BUILTINS: &[Builtin] = &[
         match &a[0] {
             Type::Array(_) => Ok(a[0].clone()),
             other => Err((Some(0), format!("reverse espera un arreglo, no {}", other))),
+        }
+    } },
+    // M48.4b: `__reverse` — primitivo interno de `reverse`, al que baja `impl<T> Reverse for [T]`.
+    Builtin { name: "__reverse", opcode: OpCode::Reverse, check: |a| {
+        arity(a, 1, "__reverse", "")?;
+        match &a[0] {
+            Type::Array(_) => Ok(a[0].clone()),
+            other => Err((Some(0), format!("__reverse espera un arreglo, no {}", other))),
         }
     } },
     // __pop(a) -> [T] (M11.7b): muta `a` quitando el último; [] si vacío, [x] si no. Prelude → Option<T>.

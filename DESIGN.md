@@ -6347,3 +6347,36 @@ revés. Ahora es un error claro: *"'len' es un builtin del lenguaje y no puede r
 - El override real de un builtin llegará gratis con la Fase 3 (cuando `len` deje de ser builtin y pase a
   ser un método de trait, redefinir `fn len` como función libre será legal).
 - Puro checker (sin runtime). Diagnóstico en vivo en el LSP (vía `analizar`).
+
+### 50.4 M48.4 — builtins de contenedor → traits
+
+Los builtins de contenedor pueden ser **métodos de trait**: misma sintaxis con punto (`xs.len()`),
+pero **extensibles a tipos propios** e **usables en bounds** (`fn f<T: Len>(x: T)`). Runtime intacto.
+
+**Maquinaria (M48.4a)** — prerrequisito reutilizable: `impl Trait for X` y el despacho de métodos ahora
+aceptan los tipos incorporados `[T]`/`Map<K,V>`/`bytes` como objetivos (antes solo primitivos +
+struct/enum). `ensure_impl_target` valida `[T]`/`Map<K,V>` como constructores siempre-genéricos (como
+`Caja<T>`; solo impls plenamente genéricos) y `bytes` como concreto; `type_key_of` da las claves de
+despacho `[]`/`Map`/`bytes`.
+
+**Traits (prelude)** — cada método del trait baja a un **primitivo `__x`** (mismo opcode que el builtin,
+oculto), o —para `StrOps`/`BytesOps` durante la coexistencia— llama al builtin público:
+- `Len { len }` → string, `[T]`, `Map<K,V>`, bytes (M48.4a).
+- `Push<T> { push }` / `Reverse { reverse -> Self }` / `Contains<T> { contains }` → `[T]` (Contains
+  también string); bytes fuera de Contains (M48.4b).
+- `MapOps<K,V> { insert; contains_key; keys; values }` → `Map<K,V>` (M48.4c). `get`/`remove` siguen
+  siendo funciones del prelude (Option).
+- `StrOps { trim; split; replace; chars; starts_with; ends_with; to_upper; to_lower; substring; repeat;
+  to_bytes }` → string; `BytesOps { sub_bytes }` → bytes (M48.4d). `char_code` (char) y `join`
+  (`[string]`, no impl-able para un array concreto) se quedan builtins.
+
+**Coexistencia (estado enviado en esta rama)**: los builtins públicos **siguen vivos** junto a los
+traits; `recv.metodo()` resuelve por el trait (prioridad campo→método→UFCS), la forma prefija
+`metodo(args)` por el builtin. Los 156 ejemplos siguen intactos.
+
+**Retiro de los builtins (M48.4e) — DIFERIDO a una rama de seguimiento.** Vaciar de verdad el namespace
+(que `fn len` libre sea legal, que desaparezca la forma prefija) exige reescribir ~1.346 sitios prefijos
+del corpus a `.metodo()` —una transformación **basada en AST** (extraer el receptor respetando paréntesis
+balanceados; un regex no basta)— y reformatear ~121 archivos. Como el valor de la Fase 3 (extensibilidad
++ bounds) ya está entregado con la coexistencia, el retiro se hace aparte, con un reescritor prefijo→UFCS
+sobre el parser. El self-hosting se mantiene tratando estos builtins como builtins internamente (D5).

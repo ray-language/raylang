@@ -1,5 +1,40 @@
-// std/math (M40.4b) — utilidades enteras que complementan los builtins matemáticos (sqrt/pow/abs/
-// min/max/…). Todo `pub`: se importa con `import std/math;` y se usa calificado (`math.gcd(12, 18)`).
+// std/math (M40.4b; M49.1a) — la biblioteca de matemáticas. Se importa con `import std/math;` y se usa
+// calificado (`math.sqrt(2.0)`, `math.gcd(12, 18)`). Las funciones float envuelven primitivos internos
+// `__x` (mismo opcode que antes; el cálculo lo hacen los motores). Las utilidades enteras van más abajo.
+
+/// Square root of `x`.
+pub fn sqrt(x: float) -> float { __sqrt(x) }
+
+/// `base` raised to the floating-point power `exp`.
+pub fn pow(base: float, exp: float) -> float { __pow(base, exp) }
+
+/// Sine of `x` (radians).
+pub fn sin(x: float) -> float { __sin(x) }
+
+/// Cosine of `x` (radians).
+pub fn cos(x: float) -> float { __cos(x) }
+
+/// Tangent of `x` (radians).
+pub fn tan(x: float) -> float { __tan(x) }
+
+/// Natural logarithm (base e) of `x`.
+pub fn ln(x: float) -> float { __ln(x) }
+
+/// Base-10 logarithm of `x`.
+pub fn log10(x: float) -> float { __log10(x) }
+
+/// e raised to the power `x`.
+pub fn exp(x: float) -> float { __exp(x) }
+
+/// Largest integer value not greater than `x`, as a float.
+pub fn floor(x: float) -> float { __floor(x) }
+
+/// Smallest integer value not less than `x`, as a float.
+pub fn ceil(x: float) -> float { __ceil(x) }
+
+/// `x` rounded to the nearest integer, as a float (ties away from zero).
+pub fn round(x: float) -> float { __round(x) }
+
 /// Absolute value of `x`.
 pub fn iabs(x: int) -> int {
     if (x < 0) { 0 - x } else { x }

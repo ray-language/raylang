@@ -6407,3 +6407,34 @@ nombres) y la forma prefija `len(x)` **desaparece** (sola forma canónica: `x.le
   los ve como métodos de trait, p. ej. `argumento 2 de '[]#push': …`). El resto (lexer/parser/checker/
   intérprete/VM/metacircular) sigue byte-idéntico; sus fuentes usan la forma de método (resuelta por su
   propia rama UFCS→builtin). **M48.4e / M48 COMPLETOS.**
+
+## 51. M49 — stdlib importable (familias de builtins → módulos `std/…`)
+
+Continuación de M48 (descongestionar el namespace de **valores**). Igual que M48 movió los builtins de
+contenedor a métodos de trait, M49 mueve las familias **matemática / tiempo / criptografía** del global a
+módulos importables `std/…`, dejando globales solo lo universal (`print`/`panic`/`assert`) y **core la
+concurrencia** (atada al modelo de ejecución). Plan completo en `docs/M49-stdlib-importable.md`.
+
+**Cero maquinaria nueva** — dos piezas probadas se combinan: (1) la **std embebida en el binario** (M40.5,
+`src/stdlib.rs` + `include_str!`: `import std/math;` resuelve a la fuente embebida) y (2) el patrón **`__x`
+interno + envoltorio `pub fn`** (el mismo de la I/O: `read_file`/`__read_file`).
+
+### 51.1 M49.1a — `std/math`, funciones float
+
+Las 11 funciones float (`sqrt sin cos tan ln log10 exp floor ceil round` + `pow`) dejan de ser builtins
+globales y pasan a `std/math`: cada builtin se **renombra** a su primitivo interno `__x` (mismo opcode
+`MathF(...)`/`Pow`; la VM despacha por opcode → intacta; el intérprete renombra su arm por nombre) y
+`std/math.ray` lo expone con `pub fn sqrt(x: float) -> float { __sqrt(x) }`. Uso: `import std/math;
+math.sqrt(2.0)`. La forma prefija global `sqrt(x)` **desaparece** (error "función no declarada"). Las
+polimórficas `abs`/`min`/`max` y las constantes `pi()`/`e()` siguen globales (→ M49.1b).
+
+**Verificación**: el **oráculo** VM↔intérprete prueba los **primitivos `__x`** directamente (el que computa;
+sigue siendo builtin, no necesita el loader) y un test de integración (`tests/math_cli.rs`) cierra el
+**envoltorio** end-to-end (`import std/math; math.sqrt(…)` compila y corre igual en ambos motores). El
+migrado del corpus fue mínimo (1 ejemplo, `matematicas.ray`; `libm.ray`/tests-FFI usan `extern fn sqrt`,
+no el builtin → intactos). LSP: las tablas `signature()`/`doc()` conservan las entradas (ahora sirven al
+signature-help de `math.X`); dos tests de hover pasaron a un builtin conservado (`abs`). **M49.1a COMPLETO.**
+
+Siguiente: **M49.1b** (`abs`/`min`/`max` genéricos vía `Ord` + trait `Signed`; `pi`/`e` como `const` —
+puros en raylang, podan los opcodes `Abs`/`Min`/`Max`/`Pi`/`E`), luego **M49.2** (`std/time`+`std/random`)
+y **M49.3** (`std/crypto`).

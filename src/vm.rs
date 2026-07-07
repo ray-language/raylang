@@ -3960,23 +3960,25 @@ mod tests {
         oracle_int("abs(7)");
         oracle_int("min(3, 8)");
         oracle_int("max(3, 8)");
-        // Funciones float, verificadas por igualdad (ambos motores calculan idéntico).
-        oracle_int("if (sqrt(16.0) == 4.0) { 1 } else { 0 }");
-        oracle_int("if (pow(2.0, 10.0) == 1024.0) { 1 } else { 0 }");
-        oracle_int("if (floor(3.7) == 3.0) { 1 } else { 0 }");
-        oracle_int("if (ceil(3.2) == 4.0) { 1 } else { 0 }");
-        oracle_int("if (round(2.5) == 3.0) { 1 } else { 0 }");
+        // Funciones float (M49.1a: pasaron a `std/math`; el ORÁCULO prueba el primitivo interno `__x`
+        // —el que computa, aún builtin, sin necesidad del loader—; el wrapper `math.sqrt` lo cubre el
+        // ejemplo `matematicas.ray` por integración). Verificadas por igualdad (ambos motores idéntico).
+        oracle_int("if (__sqrt(16.0) == 4.0) { 1 } else { 0 }");
+        oracle_int("if (__pow(2.0, 10.0) == 1024.0) { 1 } else { 0 }");
+        oracle_int("if (__floor(3.7) == 3.0) { 1 } else { 0 }");
+        oracle_int("if (__ceil(3.2) == 4.0) { 1 } else { 0 }");
+        oracle_int("if (__round(2.5) == 3.0) { 1 } else { 0 }");
         oracle_int("if (abs(-2.5) == 2.5) { 1 } else { 0 }");
         oracle_int("if (min(1.5, 9.0) == 1.5) { 1 } else { 0 }");
         oracle_int("if (max(1.5, 9.0) == 9.0) { 1 } else { 0 }");
-        oracle_int("if (sin(0.0) == 0.0) { 1 } else { 0 }");
-        oracle_int("if (cos(0.0) == 1.0) { 1 } else { 0 }");
-        oracle_int("if (ln(e()) == 1.0) { 1 } else { 0 }");
-        oracle_int("if (log10(1000.0) == 3.0) { 1 } else { 0 }");
-        oracle_int("if (exp(0.0) == 1.0) { 1 } else { 0 }");
+        oracle_int("if (__sin(0.0) == 0.0) { 1 } else { 0 }");
+        oracle_int("if (__cos(0.0) == 1.0) { 1 } else { 0 }");
+        oracle_int("if (__ln(e()) == 1.0) { 1 } else { 0 }");
+        oracle_int("if (__log10(1000.0) == 3.0) { 1 } else { 0 }");
+        oracle_int("if (__exp(0.0) == 1.0) { 1 } else { 0 }");
         oracle_int("if (pi() > 3.14) { 1 } else { 0 }");
         // Borde: NaN se comporta igual en ambos motores (NaN != NaN → la rama else).
-        oracle_int("if (sqrt(0.0 - 1.0) == sqrt(0.0 - 1.0)) { 1 } else { 0 }");
+        oracle_int("if (__sqrt(0.0 - 1.0) == __sqrt(0.0 - 1.0)) { 1 } else { 0 }");
     }
 
     /// M27.1: tuplas — retorno múltiple, acceso `.N`, desestructuración (`_`), heterogéneas. Erasure a

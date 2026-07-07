@@ -1659,18 +1659,18 @@ static BUILTINS: &[Builtin] = &[
     } },
     // --- Matemáticas (M15.1a) ---
     // Funciones unarias float -> float, todas bajo el opcode parametrizado MathF(MathFn).
-    Builtin { name: "sqrt",  opcode: OpCode::MathF(MathFn::Sqrt),  check: |a| mathf_check(a, "sqrt") },
-    Builtin { name: "sin",   opcode: OpCode::MathF(MathFn::Sin),   check: |a| mathf_check(a, "sin") },
-    Builtin { name: "cos",   opcode: OpCode::MathF(MathFn::Cos),   check: |a| mathf_check(a, "cos") },
-    Builtin { name: "tan",   opcode: OpCode::MathF(MathFn::Tan),   check: |a| mathf_check(a, "tan") },
-    Builtin { name: "ln",    opcode: OpCode::MathF(MathFn::Ln),    check: |a| mathf_check(a, "ln") },
-    Builtin { name: "log10", opcode: OpCode::MathF(MathFn::Log10), check: |a| mathf_check(a, "log10") },
-    Builtin { name: "exp",   opcode: OpCode::MathF(MathFn::Exp),   check: |a| mathf_check(a, "exp") },
-    Builtin { name: "floor", opcode: OpCode::MathF(MathFn::Floor), check: |a| mathf_check(a, "floor") },
-    Builtin { name: "ceil",  opcode: OpCode::MathF(MathFn::Ceil),  check: |a| mathf_check(a, "ceil") },
-    Builtin { name: "round", opcode: OpCode::MathF(MathFn::Round), check: |a| mathf_check(a, "round") },
+    Builtin { name: "__sqrt",  opcode: OpCode::MathF(MathFn::Sqrt),  check: |a| mathf_check(a, "sqrt") },
+    Builtin { name: "__sin",   opcode: OpCode::MathF(MathFn::Sin),   check: |a| mathf_check(a, "sin") },
+    Builtin { name: "__cos",   opcode: OpCode::MathF(MathFn::Cos),   check: |a| mathf_check(a, "cos") },
+    Builtin { name: "__tan",   opcode: OpCode::MathF(MathFn::Tan),   check: |a| mathf_check(a, "tan") },
+    Builtin { name: "__ln",    opcode: OpCode::MathF(MathFn::Ln),    check: |a| mathf_check(a, "ln") },
+    Builtin { name: "__log10", opcode: OpCode::MathF(MathFn::Log10), check: |a| mathf_check(a, "log10") },
+    Builtin { name: "__exp",   opcode: OpCode::MathF(MathFn::Exp),   check: |a| mathf_check(a, "exp") },
+    Builtin { name: "__floor", opcode: OpCode::MathF(MathFn::Floor), check: |a| mathf_check(a, "floor") },
+    Builtin { name: "__ceil",  opcode: OpCode::MathF(MathFn::Ceil),  check: |a| mathf_check(a, "ceil") },
+    Builtin { name: "__round", opcode: OpCode::MathF(MathFn::Round), check: |a| mathf_check(a, "round") },
     // pow(base, exp) -> float.
-    Builtin { name: "pow", opcode: OpCode::Pow, check: |a| {
+    Builtin { name: "__pow", opcode: OpCode::Pow, check: |a| {
         arity(a, 2, "pow", " (base, exponente)")?;
         if a[0] != Type::Float { return Err((Some(0), format!("pow espera un float, no {}", a[0]))); }
         if a[1] != Type::Float { return Err((Some(1), format!("pow espera un float, no {}", a[1]))); }

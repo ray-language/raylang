@@ -1524,18 +1524,18 @@ impl<'a> Interpreter<'a> {
             // --- Matemáticas (M15.1a) ---
             // Funciones unarias float -> float: el nombre fija qué MathFn aplicar; el cálculo lo hace
             // `builtins::apply_mathf` (compartido con la VM → el oráculo cuadra, incl. NaN/inf).
-            "sqrt" | "sin" | "cos" | "tan" | "ln" | "log10" | "exp" | "floor" | "ceil" | "round" => {
+            "__sqrt" | "__sin" | "__cos" | "__tan" | "__ln" | "__log10" | "__exp" | "__floor" | "__ceil" | "__round" => {
                 let f = match name {
-                    "sqrt" => MathFn::Sqrt,
-                    "sin" => MathFn::Sin,
-                    "cos" => MathFn::Cos,
-                    "tan" => MathFn::Tan,
-                    "ln" => MathFn::Ln,
-                    "log10" => MathFn::Log10,
-                    "exp" => MathFn::Exp,
-                    "floor" => MathFn::Floor,
-                    "ceil" => MathFn::Ceil,
-                    "round" => MathFn::Round,
+                    "__sqrt" => MathFn::Sqrt,
+                    "__sin" => MathFn::Sin,
+                    "__cos" => MathFn::Cos,
+                    "__tan" => MathFn::Tan,
+                    "__ln" => MathFn::Ln,
+                    "__log10" => MathFn::Log10,
+                    "__exp" => MathFn::Exp,
+                    "__floor" => MathFn::Floor,
+                    "__ceil" => MathFn::Ceil,
+                    "__round" => MathFn::Round,
                     _ => unreachable!(),
                 };
                 match &values[0] {
@@ -1543,7 +1543,7 @@ impl<'a> Interpreter<'a> {
                     _ => unreachable!("el checker garantiza un float"),
                 }
             }
-            "pow" => match (&values[0], &values[1]) {
+            "__pow" => match (&values[0], &values[1]) {
                 (Value::Float(b), Value::Float(e)) => Value::Float(b.powf(*e)),
                 _ => unreachable!("el checker garantiza dos floats"),
             },

@@ -2912,22 +2912,20 @@ mod tests {
 
     #[test]
     fn hover_y_signature_de_builtins() {
-        // M10.2i: los builtins (print/pow/abs/…) no viven en la fuente; aun así el hover muestra su
-        // firma (con los tipos de la llamada) y el signature help su firma fija.
-        let src = "fn main() -> int {\n  let x = abs(-3);\n  let y = pow(2.0, 8.0);\n  print(x);\n  0\n}\n";
-        // Hover sobre `pow` (línea 3, 0-based 2) → firma con los tipos reales.
-        let col = src.lines().nth(2).unwrap().find("pow").unwrap();
-        let (t, _, _) = hover_at(None, src, 2, col).expect("hover de pow");
-        assert_eq!(t, "pow: fn(float, float) -> float");
+        // M10.2i: los builtins (print/abs/…) no viven en la fuente; aun así el hover muestra su firma
+        // (con los tipos de la llamada) y el signature help su firma fija. (M49.1a: sqrt/pow/… pasaron a
+        // `std/math`, ya no son builtins → se prueba con `abs`, que sigue siéndolo.)
+        let src = "fn main() -> int {\n  let x = abs(-3);\n  print(x);\n  0\n}\n";
         // `abs(-3)` → int (ad-hoc polimórfico resuelto a int en esta llamada).
         let cabs = src.lines().nth(1).unwrap().find("abs").unwrap();
         let (ta, _, _) = hover_at(None, src, 1, cabs).expect("hover de abs");
         assert_eq!(ta, "abs: fn(int) -> int");
         // `print(x)` → unit.
-        let cp = src.lines().nth(3).unwrap().find("print").unwrap();
-        let (tp, _, _) = hover_at(None, src, 3, cp).expect("hover de print");
+        let cp = src.lines().nth(2).unwrap().find("print").unwrap();
+        let (tp, _, _) = hover_at(None, src, 2, cp).expect("hover de print");
         assert_eq!(tp, "print: fn(int) -> unit");
-        // Signature help de un builtin con firma fija.
+        // Signature help por firma fija de la tabla (`signature`): sigue sirviendo a `math.pow(` (el
+        // envoltorio de `std/math`) aunque `pow` ya no sea builtin.
         let (ps, ret) = crate::builtins::signature("pow").expect("firma de pow");
         assert_eq!((ps, ret), (vec!["base: float", "exp: float"], "float"));
         // M46a: los builtins-método también llevan firma (para el detalle del popup).
@@ -3009,9 +3007,11 @@ mod tests {
         docs.insert(uri.clone(), src.to_string());
         let r = completion_result(&msg, &docs);
         let Json::Arr(items) = &r else { panic!("completion no es lista") };
-        let pow = items.iter().find(|i| i.get("label") == Some(&Json::Str("pow".into()))).expect("pow en completion");
-        let doc_val = pow.get("documentation").and_then(|d| d.get("value")).and_then(Json::as_str).expect("documentation de pow");
-        assert!(doc_val.contains("Raises"), "{doc_val}");
+        // M49.1a: `pow`/`sqrt`/… pasaron a `std/math` (ya no en el completion global de builtins); se
+        // prueba con `abs`, que sigue siendo builtin.
+        let abs = items.iter().find(|i| i.get("label") == Some(&Json::Str("abs".into()))).expect("abs en completion");
+        let doc_val = abs.get("documentation").and_then(|d| d.get("value")).and_then(Json::as_str).expect("documentation de abs");
+        assert!(doc_val.contains("Absolute"), "{doc_val}");
     }
 
     #[test]

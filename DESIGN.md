@@ -6478,4 +6478,18 @@ palabras reservadas `float`/`int`). Mismo patrón `__x`+envoltorio de M49.1a (re
 (demo), `websocket_client` (examples + packages) y `std/uuid` (embebido → `import std/random;`, un módulo
 embebido importando otro). `now`/`monotonic`/`sleep` siguen globales (→ M49.2b). **M49.2a COMPLETO.**
 
-Siguiente: **M49.2b** (`std/time`: now/monotonic/sleep) y **M49.3** (`std/crypto`).
+### 51.5 M49.2b — `std/time` (reloj)
+
+`now`/`monotonic`/`sleep` dejan de ser builtins globales y pasan a `std/time`: `import std/time;
+time.now()` (epoch ms UTC), `time.monotonic()` (reloj monótono para intervalos), `time.sleep(ms)`. Mismo
+patrón `__x`+envoltorio (renombra a `__now`/`__monotonic`/`__sleep`; VM por opcode intacta). No
+deterministas → sin oráculo; los cubre `tests/time_random_cli.rs` por subproceso. Migrado: dns_cache
+(examples+packages), webserver_demo, reloj_aleatorio, y la **librería de fechas** `time.ray` (examples+
+packages) + su demo `time_demo.ray` (usan `time.now()` para `now_utc`). **M49.2b / M49.2 COMPLETO.**
+
+> **Nota de naming**: la librería de fechas se llama módulo `time` (`examples/web/time.ray`, no embebida)
+> y el reloj es `std/time` (embebido). Ambos usan el leaf `time`, así que un archivo que importe los dos
+> necesitaría `as` (colisión de leaf). No colisionan hoy (la de fechas se usa vía `from time import …`).
+> Un futuro rename (`std/datetime`) lo limpiaría; fuera de alcance de M49.2.
+
+Siguiente: **M49.3** (`std/crypto`).

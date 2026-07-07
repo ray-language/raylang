@@ -1658,15 +1658,14 @@ static BUILTINS: &[Builtin] = &[
     // M49.1b: abs/min/max/pi/e se movieron a `std/math` como funciones puras en raylang (abs vía el
     // trait `Signed`; min/max vía `Ord`; pi/e nularias) → ya no son builtins ni tienen opcode.
 
-    // --- Reloj y aleatoriedad (M15.1b) ---
-    Builtin { name: "now",       opcode: OpCode::Now,       check: |a| { nullary(a, "now")?; Ok(Type::Int) } },
-    Builtin { name: "monotonic", opcode: OpCode::Monotonic, check: |a| { nullary(a, "monotonic")?; Ok(Type::Int) } },
-    // M49.2a: `random`/`random_int` → módulo `std/random` (`random.next()`/`random.below(n)`); aquí
-    // quedan solo los primitivos internos `__random`/`__random_int` (mismo opcode).
+    // --- Reloj (M15.1b) y aleatoriedad → M49.2: `std/time` (now/monotonic/sleep) y `std/random`. Aquí
+    // solo los primitivos internos `__now`/`__monotonic`/`__sleep`/`__random`/`__random_int`. ---
+    Builtin { name: "__now",       opcode: OpCode::Now,       check: |a| { nullary(a, "__now")?; Ok(Type::Int) } },
+    Builtin { name: "__monotonic", opcode: OpCode::Monotonic, check: |a| { nullary(a, "__monotonic")?; Ok(Type::Int) } },
     Builtin { name: "__random",  opcode: OpCode::Random,    check: |a| { nullary(a, "__random")?; Ok(Type::Float) } },
-    Builtin { name: "sleep", opcode: OpCode::Sleep, check: |a| {
-        arity(a, 1, "sleep", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("sleep espera un int (ms), no {}", a[0]))); }
+    Builtin { name: "__sleep", opcode: OpCode::Sleep, check: |a| {
+        arity(a, 1, "__sleep", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__sleep espera un int (ms), no {}", a[0]))); }
         Ok(Type::Unit)
     } },
     Builtin { name: "__random_int", opcode: OpCode::RandomInt, check: |a| {

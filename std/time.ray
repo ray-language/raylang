@@ -1,0 +1,13 @@
+// std/time (M49.2b) — the system clock. Import with `import std/time;` and use qualified
+// (`time.now()`, `time.sleep(500)`). Non-deterministic (real time): wraps internal primitives
+// (`__now`/`__monotonic`/`__sleep`). For dates/formatting build on top of `time.now()`.
+
+/// The current wall-clock time as **milliseconds since the Unix epoch** (UTC).
+pub fn now() -> int { __now() }
+
+/// A monotonic clock reading in **milliseconds**, from an arbitrary origin: never goes backwards, so
+/// it is the right choice for measuring elapsed intervals (unlike `now`, which can jump).
+pub fn monotonic() -> int { __monotonic() }
+
+/// Suspends the current fiber for `ms` milliseconds (`ms <= 0` returns immediately).
+pub fn sleep(ms: int) { __sleep(ms) }

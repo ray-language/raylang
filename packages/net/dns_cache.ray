@@ -2,13 +2,14 @@
 // las respuestas hasta que caduca su TTL (el mínimo de la respuesta, en segundos, vía `query_full`).
 // Importable: `from dns_cache import Cache, new_cache, resolve;`.
 //
-// Respeta el TTL como pide el DNS: una entrada se sirve de la caché mientras `now() < expiración`; al
+// Respeta el TTL como pide el DNS: una entrada se sirve de la caché mientras `time.now() < expiración`; al
 // caducar (o si nunca se vio) se consulta y se reescribe. Clave de caché = "qtype:nombre". Lleva
 // contadores de aciertos/fallos (útiles para métricas o para verificar el comportamiento).
 from net/dns import Record, DnsResult, query_full;
+import std/time;
 
 /// A TTL-respecting DNS cache bound to one server. Entries are keyed by "qtype:name" and expire at
-/// `now() + ttl` (the response's minimum TTL, in seconds). Tracks hit/miss counters for metrics.
+/// `time.now() + ttl` (the response's minimum TTL, in seconds). Tracks hit/miss counters for metrics.
 pub struct Cache {
     server: string,
     port: int,
@@ -39,14 +40,14 @@ fn find_key(c: Cache, key: string) -> int {
 }
 
 // Resuelve `name`/`qtype` usando la caché: devuelve los registros cacheados si no han caducado, o
-// consulta el servidor y los guarda con expiración `now() + ttl`.
+// consulta el servidor y los guarda con expiración `time.now() + ttl`.
 /// Resolves `name`/`qtype` through the cache: returns the cached records if the entry has not expired
-/// (counts a hit); otherwise queries the server, stores the result with expiry `now() + ttl`, and counts a miss.
+/// (counts a hit); otherwise queries the server, stores the result with expiry `time.now() + ttl`, and counts a miss.
 /// Err comes from the underlying network query; a failed query does not overwrite an existing entry.
 pub fn resolve(c: Cache, name: string, qtype: int) -> Result<[Record], string> {
     let key = to_string(qtype) + ":" + name;
     let idx = find_key(c, key);
-    if (idx >= 0 && now() < c.expiry[idx]) {
+    if (idx >= 0 && time.now() < c.expiry[idx]) {
         c.hits = c.hits + 1;
         return Result.Ok(c.records[idx]);
     }
@@ -55,7 +56,7 @@ pub fn resolve(c: Cache, name: string, qtype: int) -> Result<[Record], string> {
         Result.Err(e) => Result.Err(e),
         Result.Ok(res) => {
             c.misses = c.misses + 1;
-            let exp = now() + res.ttl * 1000;
+            let exp = time.now() + res.ttl * 1000;
             if (idx >= 0) {
                 c.records[idx] = res.records;
                 c.expiry[idx] = exp;

@@ -24,10 +24,11 @@ fn run(name: &str, src: &str, vm: bool) -> (String, i32) {
 #[test]
 fn monotonic_y_sleep_miden_intervalos() {
     let src = r#"
+import std/time;
 fn main() -> int {
-    let t0: int = monotonic();
-    sleep(50);
-    let dt: int = monotonic() - t0;
+    let t0: int = time.monotonic();
+    time.sleep(50);
+    let dt: int = time.monotonic() - t0;
     // Holgura amplia para no ser flaky: basta con que haya dormido "casi" lo pedido.
     if (dt >= 40) { print("ok") } else { print("corto") }
     0
@@ -44,8 +45,9 @@ fn main() -> int {
 #[test]
 fn now_es_un_epoch_razonable() {
     let src = r#"
+import std/time;
 fn main() -> int {
-    if (now() > 1700000000000) { print("ok") } else { print("mal") }
+    if (time.now() > 1700000000000) { print("ok") } else { print("mal") }
     0
 }
 "#;

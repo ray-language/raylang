@@ -8,6 +8,7 @@
 //
 // Cada conexión se atiende en su propia fibra (spawn): muchas a la vez sobre un hilo. **Solo VM.**
 import webserver;
+import std/time;
 
 // El handler de serve_raw recibe la petición YA parseada + la conexión (para responder o hacer SSE).
 fn enrutar(req: webserver.Request, conn: int) {
@@ -26,7 +27,7 @@ fn enrutar(req: webserver.Request, conn: int) {
                     i = 5;
                 },
             }
-            sleep(1000);
+            time.sleep(1000);
             i = i + 1;
         }
     } else {

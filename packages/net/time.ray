@@ -1,10 +1,12 @@
-// Fechas y horas UTC escritas EN raylang. Cero runtime nuevo: `now()` ya da los milisegundos UTC
+// Fechas y horas UTC escritas EN raylang. Cero runtime nuevo: `time.now()` ya da los milisegundos UTC
 // desde el epoch (1970-01-01); convertir eso en (año, mes, día, hora, …) es aritmética pura (el
 // algoritmo "civil from days" de Howard Hinnant). No hay base de zonas horarias → **solo UTC**, que
 // es lo que necesitan las cabeceras HTTP, los timestamps de logs y la expiración de tokens (JWT `exp`).
 //
 // Importable: `from time import now_utc, from_epoch_millis, to_iso8601, to_rfc1123, ...;`.
 // Válido para fechas desde 1970 (epoch ≥ 0): con valores positivos la división trunca = floor.
+import std/time;
+
 struct DateTime {
     year: int,
     month: int,
@@ -76,9 +78,9 @@ pub fn from_epoch_millis(ms: int) -> DateTime {
 }
 
 // El instante actual en UTC.
-/// Returns the current instant as a UTC DateTime (from the `now()` builtin).
+/// Returns the current instant as a UTC DateTime (from the `time.now()` builtin).
 pub fn now_utc() -> DateTime {
-    from_epoch_millis(now())
+    from_epoch_millis(time.now())
 }
 
 // Milisegundos desde el epoch de un DateTime (inverso de `from_epoch_millis`; ignora `weekday`).

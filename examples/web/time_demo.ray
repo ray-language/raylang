@@ -1,6 +1,7 @@
 // Demo/verificación de fechas/horas UTC (M20.5). Salida determinista (timestamps fijos), la ejecuta
 // `tests/time_cli.rs`. Referencias de `datetime.utcfromtimestamp` (Python).
 from time import from_epoch_millis, to_iso8601, to_rfc1123, to_epoch_millis, parse_iso8601, now_utc, format_duration;
+import std/time;
 
 fn main() {
     // --- conversión epoch → fecha civil (ISO 8601 + RFC 1123) ---
@@ -23,9 +24,9 @@ fn main() {
         Result.Err(e) => print(e),
     }
 
-    // --- now_utc coherente con now() (propiedad, no valor) ---
+    // --- now_utc coherente con time.now() (propiedad, no valor) ---
     let ahora = now_utc();
-    let delta = now() - to_epoch_millis(ahora);
+    let delta = time.now() - to_epoch_millis(ahora);
     print(delta >= 0 && delta < 1000);  // true (la diferencia es solo el resto sub-segundo)
 
     // --- duraciones ---

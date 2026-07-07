@@ -1549,9 +1549,9 @@ impl<'a> Interpreter<'a> {
             },
             // M49.1b: abs/min/max/pi/e ya no son builtins (funciones puras en `std/math`).
             // --- Reloj y aleatoriedad (M15.1b): no deterministas, delegan en los helpers compartidos. ---
-            "now" => Value::Int(crate::builtins::now_millis()),
-            "monotonic" => Value::Int(crate::builtins::monotonic_millis()),
-            "sleep" => match &values[0] {
+            "__now" => Value::Int(crate::builtins::now_millis()),
+            "__monotonic" => Value::Int(crate::builtins::monotonic_millis()),
+            "__sleep" => match &values[0] {
                 Value::Int(ms) => {
                     crate::builtins::sleep_millis(*ms);
                     Value::Unit

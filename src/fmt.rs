@@ -610,6 +610,16 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
         let text = fmt_stmt(cur, st, base + 1);
         s.push_str(&inner);
         s.push_str(&text);
+        // Una forma con bloque (if/while/match/bloque) como sentencia-expresión normalmente NO lleva `;`.
+        // PERO si es la ÚLTIMA sentencia y el bloque no tiene tail, omitir el `;` la promovería, al
+        // re-parsear, a **tail** del bloque (un block-form final sin `;` es el tail) — cambiando el valor
+        // del bloque de `unit` al del block-form. Ahí el `;` es semánticamente necesario: se preserva.
+        if idx + 1 == b.statements.len()
+            && b.tail.is_none()
+            && matches!(&st.kind, StmtKind::Expr(e) if is_block_form(e))
+        {
+            s.push(';');
+        }
         if !text.contains('\n') {
             s.push_str(&cur.trailing_on(st.line));
         }
@@ -1239,6 +1249,23 @@ mod tests {
             "ambos matches en base 1: {ob:?}");
         assert_eq!(out, fmt(&out), "idempotente");
         assert_eq!(ob, fmt(&ob), "idempotente");
+    }
+
+    #[test]
+    fn preserva_punto_y_coma_en_block_form_final() {
+        // Regresión (grave: cambiaba semántica): un `match`/`if`/bloque como sentencia-expresión ÚLTIMA de
+        // un bloque sin tail se emitía SIN `;`; al re-parsear, un block-form final sin `;` es el **tail**,
+        // así que el bloque pasaba de producir `unit` a producir el valor del block-form. El `;` debe
+        // preservarse ahí.
+        let src = "enum Op { A, B }\nfn emit(o: Op) -> int { 5 }\nfn f(o: Op) {\n  emit(o);\n  match (o) { Op.A => emit(o), Op.B => emit(o) };\n}\nfn main() -> int { f(Op.A); 0 }\n";
+        let out = fmt(src);
+        assert!(out.contains("    };\n}"), "match final conserva `;`: {out:?}");
+        // En cambio, un block-form seguido de TAIL no lleva `;` (el tail lo mantiene como sentencia).
+        let con_tail = "enum Op { A, B }\nfn emit(o: Op) -> int { 5 }\nfn f(o: Op) -> int {\n  match (o) { Op.A => emit(o), Op.B => emit(o) }\n  7\n}\nfn main() -> int { f(Op.A) }\n";
+        let ot = fmt(con_tail);
+        assert!(ot.contains("    }\n    7\n"), "block-form con tail NO lleva `;`: {ot:?}");
+        assert_eq!(out, fmt(&out), "idempotente");
+        assert_eq!(ot, fmt(&ot), "idempotente");
     }
 
     #[test]

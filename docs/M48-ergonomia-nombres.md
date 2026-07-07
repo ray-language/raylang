@@ -52,11 +52,24 @@ Un namespace **indexado por el tipo**, estilo `Vec::new()`. Reusa el parseo de
   alias deprecado.
 - **Runtime**: intacto (mismo opcode `MapNew`/`ChannelNew`; solo cambia cómo el
   front-end reconoce la llamada). Sin oráculo nuevo (el comportamiento no cambia).
+- **Implementaciones asociadas** (Rust): el **registro de asociadas** (nombre de tipo
+  → {fn asociada → firma/opcode}) lo consultan checker (resolución + tipado), compilador
+  (bajada al opcode) y —para el LSP— completado/hover/firma. Retirar `map_new`/`channel`
+  del registro de builtins (`BUILTINS`) y su `doc`/`signature`; trasladar esa doc a la
+  asociada.
+- **LSP** (necesario, no opcional):
+  - *Completado* `Map.` / `Channel.` → ofrecer `new`/`bounded` (kind Function) con su
+    firma. Hoy `member_completion` sobre un **nombre de tipo** cae en la rama de enum
+    (`enum_variantes`); añadir una rama "asociadas del tipo" antes/junto a esa.
+  - *Hover* sobre `Map.new` → su firma (`Map.new() -> Map<K,V>`), registrado en la
+    posición del nombre asociado (como el hover de variante de M48-previo).
+  - *Signature help* dentro de `Map.new(` / `Channel.bounded(` → la firma de la
+    asociada (extender `signature_help_result`, como se hizo con las variantes de enum).
+  - *Builtins doc/hover incorporado*: si `map_new`/`channel` desaparecen como builtins,
+    quitar su entrada de `builtins::doc`/`signature`; la doc vive ahora en la asociada.
 - **Diferido**: funciones asociadas **definidas por el usuario** (`impl Tipo { fn
   new() {…} }` sin `self`) → M48.x posterior o parte de C. En M48.1 solo las
   incorporadas.
-- **LSP**: `Map.` / `Channel.` deberían completar `new`/`bounded` (aprovechar el
-  trabajo reciente de completado de miembros).
 
 ### M48.2 — Literal de Map
 
@@ -71,7 +84,16 @@ Mata `map_new()` de raíz para el caso común.
   (map) por el `:` tras el primer elemento; `[:]` es el mapa vacío.
 - **Runtime**: baja a `MapNew` + `MapInsert` por par (o un opcode nuevo si conviene;
   medir). Asigna heap ⇒ **oráculo con estrés de GC**.
-- **DESIGN.md**: nueva sección de literal de Map.
+- **LSP**: el analizador debe tragar `[:]`/`[k: v]` sin falsos diagnósticos (reusa el
+  pipeline `analizar`). Sin completado especial. Verificar que hover/def dentro de las
+  claves/valores del literal siguen funcionando (son expresiones normales).
+- **Editores (resaltado)**: la gramática TextMate de VSCode
+  (`editors/vscode/syntaxes/raylang.tmLanguage.json`) y la de Sublime
+  (`editors/sublime/raylang.sublime-syntax`) ya colorean `:` como operador y `[…]`; con
+  `[:]`/`[k: v]` probablemente no haga falta nada, pero **revisar** que `[:]` no se
+  pinte raro (bump de versión de la extensión si se toca).
+- **DESIGN.md**: nueva sección de literal de Map. **Libro** (`book/`): añadir/actualizar
+  el ejemplo de Map.
 
 ---
 
@@ -91,8 +113,11 @@ Antes del refactor grande, eliminar la sorpresa.
   función libre ya es válido y deseado; y un builtin no se tapa por una local — eso
   se mantiene).
 - **Runtime**: intacto (puro checker). Sin oráculo.
+- **LSP**: el nuevo error se propaga **gratis** por el pipeline de diagnósticos
+  (`analizar` devuelve el primer error). Verificar que renderiza bien (posición en la
+  declaración). Nada específico que implementar.
 - **Tests**: unitarios del checker (declarar `fn len` → error con la redacción
-  exacta).
+  exacta) + un caso en `tests/lsp_cli.rs` que confirme el diagnóstico.
 
 ---
 
@@ -123,6 +148,26 @@ envolviendo en `impl Trait` en vez de en función libre (mismo movimiento de M11
 de referencia de arrays/maps hace que `self` (una referencia) se mute en el sitio,
 como hoy. (Lección: por qué la referencia ahorra el sistema de préstamos.)
 
+**LSP** (en cada sub-fase que migre un grupo de builtins):
+- *Completado* `xs.` — hoy `enumerate_members` ofrece los builtins-como-método por
+  categoría (`methods_for`) **y** los métodos de trait (paso 2). Al migrar `len` a
+  trait, hay que **quitarlo de `methods_for`/`method_takes_args`** y dejar que salga por
+  la rama de métodos de trait; si no, aparecería **duplicado**. Verificar que la lista
+  no duplica ni pierde entradas tras cada migración.
+- *Hover* `xs.len()` — pasa de mostrar la doc del builtin (`builtins::doc`) a la firma
+  del método de trait + su `///` (ya soportado por `record_field_hover` de métodos). La
+  doc del trait method se escribe en el prelude con `///`.
+- *Signature help* `xs.len(` — hoy sale de `builtins::signature`; tras migrar, de la
+  firma manglada del método (que `SigCtx.firma` ya busca en las fuentes del prelude).
+  Verificar que sigue resolviendo.
+- *Doc incorporada*: retirar de `builtins::doc`/`signature`/`methods_for`/
+  `method_takes_args` cada nombre migrado.
+- **Editores (resaltado)**: la lista `builtins` (regex) de la gramática TextMate incluye
+  `len|push|get|keys|…`. Al migrar, esos nombres siguen coloreándose bien por la regla
+  `function-call` (`name(`), pero conviene **podar** la lista de builtins para reflejar
+  la realidad (los que ya no son builtins). Aplicar a VSCode + Sublime (paridad) y bump
+  de versión.
+
 **El diseño real está en cómo se cortan los traits** (clasificar cada decisión en
 IDEAS.md). Catálogo tentativo:
 - `Len` (len) → `[T]`, `string`, `Map`, `bytes`.
@@ -148,11 +193,13 @@ todo es un método"):
 - **M48.4b** — `Push`/`Pop` sobre `[T]` (mutación por referencia).
 - **M48.4c** — `MapOps<K,V>` (trait genérico; get/insert/remove/keys/values).
 - **M48.4d** — decidir e implementar `Contains`/`Index` (los ambiguos).
-- **M48.4e** — limpieza: quitar los alias deprecados, migrar ejemplos/stdlib,
-  actualizar el self-hosted si procede, DESIGN.md.
+- **M48.4e** — limpieza y cierre: retirar los builtins ya migrados (la forma prefija
+  `len(xs)` deja de existir), migrar **todos** los ejemplos/stdlib/`packages`/`selfhost`
+  que usaban la forma prefija a `.metodo()`, podar la gramática de resaltado, actualizar
+  DESIGN.md + libro + raydoc. Ver "Migración transversal" abajo.
 
 **Transición sin romper**: durante M48.4, un builtin puede coexistir con su trait
-(el trait gana por prioridad de resolución) para no romper los ~35 ejemplos de golpe;
+(el trait gana por prioridad de resolución) para no romper los 156 ejemplos de golpe;
 se migran y se retira el builtin en M48.4e.
 
 **Riesgo self-hosting**: el checker/intérprete/VM auto-alojados (M14) replican el
@@ -162,6 +209,51 @@ alcance en M48.4e (puede quedar diferido si el corpus self-hosted no usa esos
 builtins como métodos).
 
 ---
+
+---
+
+## Migración transversal (ejemplos, stdlib, editores, docs)
+
+Cada fase toca superficie del lenguaje ⇒ hay que barrer **todo** el corpus, no solo
+`examples/`. Inventario de sitios a migrar y en qué fase:
+
+- **`examples/`** (156 archivos `.ray`): `map_new()`→`Map.new()`,
+  `channel()`→`Channel.new()`, `channel(n)`→`Channel.bounded(n)` (M48.1); usar
+  `[:]`/`[k: v]` donde aplique (M48.2); `len(x)`/`push(x,…)` prefijos → `x.len()`/
+  `x.push(…)` (M48.4e). Verificar que **corren** (`ray run`) tras cada migración, no solo
+  que compilan.
+- **`std/`** (3 archivos: `math.ray`, `sort.ray`, `text.ray`): mismos reemplazos.
+- **`packages/net/`** (23 archivos): idem; usan Map/canales intensivamente.
+- (Referencia: ~25 archivos del corpus usan hoy `map_new`/`channel(`; los usos de `len`/
+  `push` prefijos se cuentan al llegar a M48.4e.)
+- **`selfhost/*.ray`** (lexer/parser/checker/interpreter/vm/prelude/loader): **crítico**.
+  El compilador auto-alojado usa estos builtins. Si M48.4 cambia qué es builtin vs
+  método, el `selfhost/checker.ray` y `selfhost/interpreter.ray`/`vm.ray` deben
+  reflejarlo, y sus fuentes migrarse, para no romper la **meta-circularidad**
+  (`tests/selfhost_metacircular*.rs`). Es el punto de mayor riesgo; se aborda en M48.4e
+  (o se difiere explícitamente si el corpus self-hosted no toca los builtins migrados
+  como métodos, documentándolo).
+- **Tests** (`tests/*.rs` + `#[cfg(test)]` en `src/`): los que construyen fuente raylang
+  con `map_new`/`channel`/`len(x)` se migran junto a cada fase.
+- **`book/`** (mdBook): capítulos de Map, concurrencia, stdlib — actualizar la sintaxis
+  y añadir el literal `[:]`.
+- **raydoc / prelude docs**: si `map_new`/`channel`/`len` dejan de ser builtins, su doc
+  se mueve a la asociada / al `///` del método de trait en el prelude.
+- **Editores** (`editors/vscode`, `editors/sublime`): podar la lista `builtins` de la
+  gramática y bump de versión (M48.2 revisar `[:]`; M48.4 podar nombres migrados).
+
+**Regla de oro**: ninguna fase se da por cerrada hasta que `cargo test` (suite completa)
+y los ejemplos deterministas corran verdes. Durante el desarrollo, tests **acotados** a
+los archivos tocados (preferencia del usuario); el barrido completo, al cerrar la fase.
+
+## LSP: resumen de impacto por fase
+
+| Fase | Completado | Hover | Signature help | Diagnóstico | Gramática |
+|------|-----------|-------|----------------|-------------|-----------|
+| M48.1 `Tipo.fn()` | `Map.`/`Channel.` → asociadas | `Map.new` → firma | `Map.new(` → firma | — | — |
+| M48.2 `[:]` | — | claves/valores (ya) | — | no falsos positivos | revisar `[:]` |
+| M48.3 footgun | — | — | — | error nuevo (gratis) | — |
+| M48.4 traits | quitar de `methods_for` (evitar duplicados) | builtin→método de trait | builtin→firma manglada | — | podar builtins |
 
 ## Orden de ejecución
 

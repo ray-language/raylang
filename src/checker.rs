@@ -5713,7 +5713,7 @@ mod tests {
     fn trait_len_para_tipos_incorporados() {
         // M48.4a: el trait `Len` (prelude) se implementa para string/[T]/Map/bytes → `.len()` despacha
         // por trait; funciona con un bound `T: Len` y con un tipo de usuario que lo implemente.
-        assert!(check_src("fn main() -> int { \"hola\".len() + [1,2,3].len() + to_bytes(\"a\").len() }").is_ok());
+        assert!(check_src("fn main() -> int { \"hola\".len() + [1,2,3].len() + \"a\".to_bytes().len() }").is_ok());
         assert!(check_src("fn f<T: Len>(x: T) -> int { x.len() }\nfn main() -> int { f([1,2]) + f(\"ab\") }").is_ok());
         assert!(check_src("fn main() -> int { let m: Map<int, int> = [1: 2]; m.len() }").is_ok());
         // Un tipo del usuario puede implementar Len y usarse con el bound.
@@ -5771,14 +5771,20 @@ mod tests {
 
     #[test]
     fn redefinir_builtin_es_error() {
-        // M48.3: un builtin (len/push/insert/print…) no puede redefinirse como función libre.
-        for nombre in ["len", "push", "insert", "print", "keys", "reverse"] {
+        // M48.3: un builtin del núcleo (print/to_string/panic…) no puede redefinirse como función libre.
+        for nombre in ["print", "to_string", "panic"] {
             let src = format!("fn {nombre}(x: int) -> int {{ x }}\nfn main() -> int {{ 0 }}");
             let e = check_src(&src).unwrap_err();
             assert!(format!("{e}").contains(&format!("'{nombre}' es un builtin del lenguaje")),
                 "redefinir {nombre}: {e}");
         }
-        // Pero una función del PRELUDE (map/filter/fold/sort) SÍ puede redefinirse (override).
+        // M48.4e: los builtins de contenedor RETIRADOS (len/push/… → ahora métodos de trait) dejaron el
+        // namespace libre → una función libre con ese nombre YA es legal (el footgun no dispara).
+        for nombre in ["len", "push", "insert", "keys", "reverse", "contains", "split", "chars"] {
+            let src = format!("fn {nombre}(x: int) -> int {{ x }}\nfn main() -> int {{ {nombre}(1) }}");
+            assert!(check_src(&src).is_ok(), "'{nombre}' como función libre ahora debe compilar");
+        }
+        // Una función del PRELUDE (map/filter/fold/sort) SÍ puede redefinirse (override).
         assert!(check_src("fn map(x: int) -> int { x + 1 }\nfn main() -> int { map(5) }").is_ok());
         assert!(check_src("fn sort(x: int) -> int { x }\nfn main() -> int { sort(3) }").is_ok());
         // Y un nombre normal, obviamente, es válido.
@@ -6089,7 +6095,7 @@ fn main() -> int {
     #[test]
     fn arreglos_validos() {
         assert!(check_src("fn main() -> int { let a: [int] = [1, 2, 3]; a[0] }").is_ok());
-        assert!(check_src("fn main() -> int { let a: [int] = []; push(a, 1); len(a) }").is_ok());
+        assert!(check_src("fn main() -> int { let a: [int] = []; a.push(1); a.len() }").is_ok());
         assert!(check_src("fn main() { var a: [int] = [1]; a[0] = 9; }").is_ok());
         // Arreglos anidados.
         assert!(check_src("fn main() -> int { let m: [[int]] = [[1, 2], [3, 4]]; m[1][0] }").is_ok());
@@ -6102,8 +6108,8 @@ fn main() -> int {
         err_contains("fn main() -> int { let x: int = 5; x[0] }", "no es un arreglo");
         err_contains("fn main() { let x: int = []; }", "no se puede inferir");
         err_contains("fn main() -> int { let a: [int] = [1]; a[0] = true; a[0] }", "se le asigna bool");
-        err_contains("fn main() -> int { len(5) }", "len espera un arreglo");
-        err_contains("fn main() { let a: [int] = [1]; push(a, true); }", "se empuja bool");
+        err_contains("fn main() -> int { 5.len() }", "no existe campo ni función 'len' aplicable a int");
+        err_contains("fn main() { let a: [int] = [1]; a.push(true); }", "'T' no puede ser int y bool a la vez");
     }
 
     // ----- M3.2: structs -----
@@ -6508,7 +6514,7 @@ fn main() -> int {
     #[test]
     fn arreglo_vacio_adopta_el_tipo_esperado() {
         // El chequeo bidireccional arregla la aspereza histórica del [] vacío.
-        assert!(check_src("fn main() -> int { let xs: [int] = []; len(xs) }").is_ok());
+        assert!(check_src("fn main() -> int { let xs: [int] = []; xs.len() }").is_ok());
     }
 
     // ----- M6.3: Option/Result (prelude) y el operador ? -----
@@ -6534,7 +6540,7 @@ fn calc(x: int, y: int) -> Result<int, string> {
     let q: int = d(x, y)?;
     Result.Ok(q + 1)
 }
-fn raw(xs: [int]) -> Option<int> { if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) } }
+fn raw(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } }
 fn primero(xs: [int]) -> Option<int> {
     let v: int = raw(xs)?;
     Option.Some(v)
@@ -6763,7 +6769,7 @@ fn main() -> int {
     fn inferencia_no_aplica_a_lo_indeterminado() {
         // Sin anotación, '[]' no se puede inferir: pide la anotación.
         err_contains(
-            "fn main() -> int { let xs = []; len(xs) }",
+            "fn main() -> int { let xs = []; xs.len() }",
             "no se puede inferir el tipo de []",
         );
     }
@@ -7136,7 +7142,7 @@ fn main() -> int {
             impl Figura for Rect { fn area(self) -> int { self.ancho * self.alto } }
             fn total(xs: [dyn Figura]) -> int {
                 var s = 0; var i = 0;
-                while (i < len(xs)) { s = s + xs[i].area(); i = i + 1; }
+                while (i < xs.len()) { s = s + xs[i].area(); i = i + 1; }
                 s
             }
             fn main() -> int {

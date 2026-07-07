@@ -445,7 +445,7 @@ fn ufcs_resuelve_funcion_importada() {
     // módulo de entrada—. El loader deja el alias local→global (`Program.ufcs_aliases`) y el checker
     // lo usa como *fallback* tras campo/método. Encadenado: `"x".saluda().grita()`.
     let files = &[
-        ("texto", "pub fn saluda(n: string) -> string { \"hola \" + n }\npub fn grita(s: string) -> string { to_upper(s) }\n"),
+        ("texto", "pub fn saluda(n: string) -> string { \"hola \" + n }\npub fn grita(s: string) -> string { s.to_upper() }\n"),
         ("main", "from texto import saluda, grita;\nfn main() -> int { print(\"mundo\".saluda().grita()); 0 }\n"),
     ];
     for vm in [false, true] {

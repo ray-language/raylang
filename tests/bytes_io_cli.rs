@@ -34,7 +34,7 @@ fn main() -> int {{
     }};
     match (read_file_bytes("{ruta}")) {{
         Result.Ok(leido) => {{
-            print(to_string(len(leido)));
+            print(to_string(leido.len()));
             if (leido == datos) {{ print("identico") }} else {{ print("CORRUPTO") }}
         }},
         Result.Err(e) => print("err: " + e),
@@ -75,7 +75,7 @@ fn main() -> int {
                 Result.Ok(_) => {
                     match (socket_read_bytes(h)) {
                         Result.Ok(b) => {
-                            print(to_string(len(b)));
+                            print(to_string(b.len()));
                             print(to_string(b[0]));
                             print(to_string(b[1]));
                             print(to_string(b[2]));

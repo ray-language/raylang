@@ -145,7 +145,7 @@ fn structs_snippets() {
     );
     // Arreglo de structs + mutación por índice.
     comparar_fuente(
-        "struct P { x: int, y: int } fn main() -> int { var ps: [P] = []; push(ps, P { x: 1, y: 2 }); ps[0].x = 99; print(ps[0]); print(len(ps)); 0 }",
+        "struct P { x: int, y: int } fn main() -> int { var ps: [P] = []; ps.push(P { x: 1, y: 2 }); ps[0].x = 99; print(ps[0]); print(ps.len()); 0 }",
         "in_arrstruct.ray",
     );
 }
@@ -171,12 +171,12 @@ fn enums_y_match_snippets() {
 #[test]
 fn arreglos_snippets() {
     comparar_fuente(
-        "fn main() -> int { let a = [3, 1, 4, 1, 5]; print(a); print(a[2]); print(len(a)); 0 }",
+        "fn main() -> int { let a = [3, 1, 4, 1, 5]; print(a); print(a[2]); print(a.len()); 0 }",
         "in_array.ray",
     );
     // Construcción dinámica + asignación por índice.
     comparar_fuente(
-        "fn main() -> int { var a: [int] = []; var i = 0; while (i < 4) { push(a, i * i); i = i + 1; } a[0] = 100; print(a); 0 }",
+        "fn main() -> int { var a: [int] = []; var i = 0; while (i < 4) { a.push(i * i); i = i + 1; } a[0] = 100; print(a); 0 }",
         "in_arrpush.ray",
     );
     // Arreglos anidados con indexación encadenada.
@@ -283,7 +283,7 @@ fn traits_y_bounds_snippets() {
 fn dyn_y_derive_snippets() {
     // dyn: valor concreto + despacho por etiqueta + método por defecto sobre el objeto.
     comparar_fuente(
-        "trait An { fn voz(self) -> string; fn di(self) -> int { print(self.voz()); 1 } } struct Pe { } impl An for Pe { fn voz(self) -> string { \"guau\" } } struct Ga { } impl An for Ga { fn voz(self) -> string { \"miau\" } } fn coro(xs: [dyn An]) -> int { var n = 0; var i = 0; while (i < len(xs)) { n = n + xs[i].di(); i = i + 1; } n } fn main() -> int { let xs: [dyn An] = [Pe { }, Ga { }]; coro(xs) }",
+        "trait An { fn voz(self) -> string; fn di(self) -> int { print(self.voz()); 1 } } struct Pe { } impl An for Pe { fn voz(self) -> string { \"guau\" } } struct Ga { } impl An for Ga { fn voz(self) -> string { \"miau\" } } fn coro(xs: [dyn An]) -> int { var n = 0; var i = 0; while (i < xs.len()) { n = n + xs[i].di(); i = i + 1; } n } fn main() -> int { let xs: [dyn An] = [Pe { }, Ga { }]; coro(xs) }",
         "in_dyn.ray",
     );
     // @derive(Eq, Show) anidado: igual recursivo, mostrar recursivo.
@@ -337,7 +337,7 @@ fn string_builtins() {
             print(s.replace(\"o\", \"0\")); print(s.substring(0, 4)); print(\"ab\".repeat(3)); \
             print(\"  x  \".trim()); \
             let parts = \"a,b,c\".split(\",\"); print(parts); print(parts.len()); print(join(parts, \"-\")); \
-            let cs = chars(\"xyz\"); print(cs); print(cs[1]); \
+            let cs = \"xyz\".chars(); print(cs); print(cs[1]); \
             print([1, 2, 3].contains(2)); \
             0 \
         }",
@@ -357,8 +357,8 @@ fn map_builtins() {
     comparar_fuente(
         "fn main() -> int { \
             var m: Map<string, int> = Map.new(); \
-            insert(m, \"uno\", 1); insert(m, \"dos\", 2); insert(m, \"tres\", 3); insert(m, \"dos\", 22); \
-            print(len(m)); print(contains_key(m, \"uno\")); print(contains_key(m, \"x\")); \
+            m.insert(\"uno\", 1); m.insert(\"dos\", 2); m.insert(\"tres\", 3); m.insert(\"dos\", 22); \
+            print(m.len()); print(m.contains_key(\"uno\")); print(m.contains_key(\"x\")); \
             match (get(m, \"dos\")) { Option.Some(v) => print(v), Option.None => print(0 - 1) } \
             match (get(m, \"x\")) { Option.Some(v) => print(v), Option.None => print(0 - 1) } \
             print(m.keys()); print(m.values()); \
@@ -370,7 +370,7 @@ fn map_builtins() {
     comparar_fuente(
         "fn main() -> int { \
             var n: Map<int, string> = Map.new(); \
-            insert(n, 3, \"c\"); insert(n, 1, \"a\"); insert(n, 2, \"b\"); \
+            n.insert(3, \"c\"); n.insert(1, \"a\"); n.insert(2, \"b\"); \
             print(n.keys()); print(n.values()); \
             0 \
         }",
@@ -380,10 +380,10 @@ fn map_builtins() {
     comparar_fuente(
         "fn main() -> int { \
             var m: Map<string, int> = Map.new(); \
-            insert(m, \"a\", 1); insert(m, \"b\", 2); insert(m, \"c\", 3); \
+            m.insert(\"a\", 1); m.insert(\"b\", 2); m.insert(\"c\", 3); \
             match (remove(m, \"b\")) { Option.Some(v) => print(v), Option.None => print(0 - 1) } \
             match (remove(m, \"x\")) { Option.Some(v) => print(v), Option.None => print(0 - 1) } \
-            print(len(m)); print(m.keys()); print(contains_key(m, \"b\")); \
+            print(m.len()); print(m.keys()); print(m.contains_key(\"b\")); \
             0 \
         }",
         "in_map_remove.ray",

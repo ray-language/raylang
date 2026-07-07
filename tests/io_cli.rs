@@ -80,12 +80,12 @@ const ARGS_ENV_PROG: &str = r#"
 fn main() -> int {
   let xs = args();
   var i = 0;
-  while (i < len(xs)) { print(xs[i]); i = i + 1; }
+  while (i < xs.len()) { print(xs[i]); i = i + 1; }
   match (env("RAY_TEST_VAR")) {
     Option.Some(v) => print("env=" + v),
     Option.None => print("env=?"),
   }
-  len(xs)
+  xs.len()
 }
 "#;
 
@@ -242,7 +242,7 @@ fn main() -> int {{
     Result.Err(e) => print("err: " + e),
   }}
   match (list_dir("{d}")) {{
-    Result.Ok(ns) => len(ns),
+    Result.Ok(ns) => ns.len(),
     Result.Err(_) => 0 - 1,
   }}
 }}

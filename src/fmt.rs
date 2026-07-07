@@ -1294,7 +1294,7 @@ mod tests {
     #[test]
     fn bytes_literal_alto_round_trip() {
         // Un byte alto se emite como \xNN y round-trippea (idempotente).
-        let src = "fn main() -> int {\n  let b = b\"\\x8b\\xff\\x00A\";\n  len(b)\n}\n";
+        let src = "fn main() -> int {\n  let b = b\"\\x8b\\xff\\x00A\";\n  b.len()\n}\n";
         let a = fmt(src);
         assert!(a.contains("\\x8b") && a.contains("\\xff") && a.contains("\\x00"), "{a}");
         assert!(a.contains('A'), "ASCII imprimible tal cual: {a}");

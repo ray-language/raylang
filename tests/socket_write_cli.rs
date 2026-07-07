@@ -18,7 +18,7 @@ const BLOB: usize = 8_000_000; // > buffers del SO en loopback → la escritura 
 const DRIVER: &str = r#"
 fn serve(conn: int) {
     match (socket_write(conn, "READY\n")) { Result.Ok(_) => {}, Result.Err(e) => eprint(e) }
-    let blob = repeat("X", 8000000);
+    let blob = "X".repeat(8000000);
     match (socket_write(conn, blob)) { Result.Ok(_) => {}, Result.Err(e) => eprint(e) }
     close(conn);
 }

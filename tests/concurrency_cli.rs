@@ -394,12 +394,12 @@ fn main() -> int {
         var i = 1;
         while (i <= 5) {
             let n = i;
-            push(tareas, spawn(fn() -> int { n * n }));
+            tareas.push(spawn(fn() -> int { n * n }));
             i = i + 1;
         }
         var total = 0;
         var j = 0;
-        while (j < len(tareas)) {
+        while (j < tareas.len()) {
             total = total + join(tareas[j]);
             j = j + 1;
         }

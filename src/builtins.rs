@@ -198,8 +198,11 @@ pub fn method_takes_args(name: &str) -> bool {
 /// por categoría. Solo los de **cara al usuario** con receptor claro; las operaciones de orden
 /// superior (`map`/`filter`/`fold`/`sort`) y los envoltorios (`pop`/`position`/`get`/`remove`/
 /// `index_of`) son funciones del **prelude**, no builtins, y las aporta la enumeración UFCS.
-/// Categorías: `string`/`bytes`/`char`/`int`/`float`/`bool`/`array`/`map`. El test-guardián
-/// `methods_for_solo_nombra_builtins_reales` verifica que cada nombre exista.
+/// Categorías: `string`/`bytes`/`char`/`int`/`float`/`bool`/`array`/`map`. Tras M48.4e-3 varios de
+/// estos nombres (len/push/trim/split/…) ya NO son builtins de función libre sino **métodos de los
+/// traits del prelude** (`Len`/`Push`/`StrOps`/`MapOps`/…); el test-guardián
+/// `methods_for_solo_nombra_builtins_reales` verifica que cada nombre sea un builtin O un método
+/// conocido con `signature()`.
 pub fn methods_for(category: &str) -> &'static [&'static str] {
     match category {
         "string" => &[
@@ -1259,14 +1262,6 @@ static BUILTINS: &[Builtin] = &[
         if !printable(&a[0]) { return Err((Some(0), format!("print no puede imprimir un {}", a[0]))); }
         Ok(Type::Unit)
     } },
-    // len(a) -> int: longitud de un arreglo, un string (M11.1a: nº de caracteres) o un Map (M13.1).
-    Builtin { name: "len", opcode: OpCode::Len, check: |a| {
-        arity(a, 1, "len", "")?;
-        if !matches!(a[0], Type::Array(_) | Type::String | Type::Map(_, _) | Type::Bytes) {
-            return Err((Some(0), format!("len espera un arreglo, un string, un Map o bytes, no {}", a[0])));
-        }
-        Ok(Type::Int)
-    } },
     // M48.4: `__len` — primitivo interno de `len`, al que baja el trait `Len` (`impl Len for [T]` etc.
     // → `__len(self)`). Mismo opcode que `len`; oculto (`__`). Sobrevive al retiro de `len` (M48.4e).
     Builtin { name: "__len", opcode: OpCode::Len, check: |a| {
@@ -1275,18 +1270,6 @@ static BUILTINS: &[Builtin] = &[
             return Err((Some(0), format!("__len espera un arreglo, un string, un Map o bytes, no {}", a[0])));
         }
         Ok(Type::Int)
-    } },
-    // push(a, x) -> unit: agrega x al final del arreglo a (lo muta).
-    Builtin { name: "push", opcode: OpCode::Push, check: |a| {
-        arity(a, 2, "push", " (arreglo, valor)")?;
-        let elem = match &a[0] {
-            Type::Array(e) => (**e).clone(),
-            other => return Err((Some(0), format!("push espera un arreglo como primer argumento, no {}", other))),
-        };
-        if a[1] != elem {
-            return Err((Some(1), format!("push: el arreglo es de {} pero se empuja {}", elem, a[1])));
-        }
-        Ok(Type::Unit)
     } },
     // M48.4b: `__push` — primitivo interno de `push`, al que baja `impl<T> Push<T> for [T]`.
     Builtin { name: "__push", opcode: OpCode::Push, check: |a| {
@@ -1308,34 +1291,6 @@ static BUILTINS: &[Builtin] = &[
         }
         Ok(Type::String)
     } },
-    // trim(s) -> string (M11.1b): quita el espacio en blanco de los extremos.
-    Builtin { name: "trim", opcode: OpCode::Trim, check: |a| {
-        arity(a, 1, "trim", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("trim espera un string, no {}", a[0]))); }
-        Ok(Type::String)
-    } },
-    // split(s, sep) -> [string] (M11.1b): parte s por el separador sep.
-    Builtin { name: "split", opcode: OpCode::Split, check: |a| {
-        arity(a, 2, "split", " (string, separador)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("split espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("split espera un string como separador, no {}", a[1]))); }
-        Ok(Type::Array(Box::new(Type::String)))
-    } },
-    // contains(x, y) -> bool: ad-hoc polimórfico. String: ¿s contiene la subcadena sub? (M11.4a).
-    // Arreglo: ¿el arreglo contiene el elemento x (por igualdad estructural)? (M11.7b).
-    Builtin { name: "contains", opcode: OpCode::Contains, check: |a| {
-        arity(a, 2, "contains", " (string/arreglo, valor)")?;
-        match &a[0] {
-            Type::String => {
-                if a[1] != Type::String { return Err((Some(1), format!("contains espera un string como subcadena, no {}", a[1]))); }
-            }
-            Type::Array(elem) => {
-                if a[1] != **elem { return Err((Some(1), format!("contains: el arreglo es de {} pero se busca {}", elem, a[1]))); }
-            }
-            _ => return Err((Some(0), format!("contains espera un string o un arreglo, no {}", a[0]))),
-        }
-        Ok(Type::Bool)
-    } },
     // M48.4b: `__contains` — primitivo interno de `contains`, al que bajan los impls de `Contains<T>`
     // (subcadena en string, pertenencia en arreglo). Bytes queda fuera (el builtin tampoco lo cubre).
     Builtin { name: "__contains", opcode: OpCode::Contains, check: |a| {
@@ -1351,32 +1306,12 @@ static BUILTINS: &[Builtin] = &[
         }
         Ok(Type::Bool)
     } },
-    // replace(s, de, a) -> string (M11.4a): reemplaza todas las ocurrencias de `de` por `a`.
-    Builtin { name: "replace", opcode: OpCode::Replace, check: |a| {
-        arity(a, 3, "replace", " (string, de, a)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("replace espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("replace espera un string en 'de', no {}", a[1]))); }
-        if a[2] != Type::String { return Err((Some(2), format!("replace espera un string en 'a', no {}", a[2]))); }
-        Ok(Type::String)
-    } },
-    // chars(s) -> [char] (M11.4c-2): los caracteres del string, en orden.
-    Builtin { name: "chars", opcode: OpCode::Chars, check: |a| {
-        arity(a, 1, "chars", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("chars espera un string, no {}", a[0]))); }
-        Ok(Type::Array(Box::new(Type::Char)))
-    } },
     // char_code(c) -> int (M40.3a): el code point Unicode del carácter. Habilita hashear strings/chars
     // en raylang (para `Hash`) y ordenar por code point.
     Builtin { name: "char_code", opcode: OpCode::CharCode, check: |a| {
         arity(a, 1, "char_code", "")?;
         if a[0] != Type::Char { return Err((Some(0), format!("char_code espera un char, no {}", a[0]))); }
         Ok(Type::Int)
-    } },
-    // to_bytes(s) -> bytes (M16.1b): los octetos UTF-8 del string.
-    Builtin { name: "to_bytes", opcode: OpCode::ToBytes, check: |a| {
-        arity(a, 1, "to_bytes", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("to_bytes espera un string, no {}", a[0]))); }
-        Ok(Type::Bytes)
     } },
     // M43: hashes de producción vía `ring` (bytes -> bytes). Ver el bloque de helpers arriba.
     Builtin { name: "sha256", opcode: OpCode::Sha256, check: |a| {
@@ -1470,50 +1405,6 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::Bytes { return Err((Some(1), format!("__socket_write_bytes espera bytes (los datos), no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
-    // starts_with(s, pre) -> bool (M11.7a): ¿`s` empieza con `pre`?
-    Builtin { name: "starts_with", opcode: OpCode::StartsWith, check: |a| {
-        arity(a, 2, "starts_with", " (string, prefijo)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("starts_with espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("starts_with espera un string como prefijo, no {}", a[1]))); }
-        Ok(Type::Bool)
-    } },
-    // ends_with(s, suf) -> bool (M11.7a): ¿`s` termina con `suf`?
-    Builtin { name: "ends_with", opcode: OpCode::EndsWith, check: |a| {
-        arity(a, 2, "ends_with", " (string, sufijo)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("ends_with espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("ends_with espera un string como sufijo, no {}", a[1]))); }
-        Ok(Type::Bool)
-    } },
-    // to_upper(s) -> string (M11.7a): en MAYÚSCULAS.
-    Builtin { name: "to_upper", opcode: OpCode::ToUpper, check: |a| {
-        arity(a, 1, "to_upper", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("to_upper espera un string, no {}", a[0]))); }
-        Ok(Type::String)
-    } },
-    // to_lower(s) -> string (M11.7a): en minúsculas.
-    Builtin { name: "to_lower", opcode: OpCode::ToLower, check: |a| {
-        arity(a, 1, "to_lower", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("to_lower espera un string, no {}", a[0]))); }
-        Ok(Type::String)
-    } },
-    // substring(s, i, j) -> string (M11.7a): subcadena [i, j) por índice de carácter (con clamp).
-    Builtin { name: "substring", opcode: OpCode::Substring, check: |a| {
-        arity(a, 3, "substring", " (string, inicio, fin)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("substring espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("substring espera un int como inicio, no {}", a[1]))); }
-        if a[2] != Type::Int { return Err((Some(2), format!("substring espera un int como fin, no {}", a[2]))); }
-        Ok(Type::String)
-    } },
-    // sub_bytes(b, i, j) -> bytes (M19.2): sub-secuencia [i, j) por índice de octeto (con clamp). El
-    // análogo de substring para datos binarios; corta cabeceras/cuerpo de HTTP sobre bytes.
-    Builtin { name: "sub_bytes", opcode: OpCode::SubBytes, check: |a| {
-        arity(a, 3, "sub_bytes", " (bytes, inicio, fin)")?;
-        if a[0] != Type::Bytes { return Err((Some(0), format!("sub_bytes espera bytes como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("sub_bytes espera un int como inicio, no {}", a[1]))); }
-        if a[2] != Type::Int { return Err((Some(2), format!("sub_bytes espera un int como fin, no {}", a[2]))); }
-        Ok(Type::Bytes)
-    } },
-
     // M48.4e-1: primitivos internos de `StrOps`/`BytesOps` (mismos opcodes que los builtins públicos,
     // ocultos). Los cuerpos de sus impls (M48.4d) los llaman; sobreviven al retiro de los públicos (e-3).
     Builtin { name: "__trim", opcode: OpCode::Trim, check: |a| {
@@ -1596,13 +1487,6 @@ static BUILTINS: &[Builtin] = &[
             _ => Err((Some(0), format!("bytes_of espera un [int], no {}", a[0]))),
         }
     } },
-    // repeat(s, n) -> string (M11.7a): `s` repetido `n` veces (`n<=0` → "").
-    Builtin { name: "repeat", opcode: OpCode::Repeat, check: |a| {
-        arity(a, 2, "repeat", " (string, veces)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("repeat espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("repeat espera un int como nº de veces, no {}", a[1]))); }
-        Ok(Type::String)
-    } },
     // __index_of(s, sub) -> [int] (M11.7a): [] o [i] (índice de carácter). El prelude → Option<int>.
     Builtin { name: "__index_of", opcode: OpCode::IndexOf, check: |a| {
         arity(a, 2, "__index_of", " (string, subcadena)")?;
@@ -1628,14 +1512,6 @@ static BUILTINS: &[Builtin] = &[
         }
         if a[1] != Type::String { return Err((Some(1), format!("join espera un string como separador, no {}", a[1]))); }
         Ok(Type::String)
-    } },
-    // reverse(a) -> [T] (M11.7b): arreglo nuevo con los elementos en orden inverso.
-    Builtin { name: "reverse", opcode: OpCode::Reverse, check: |a| {
-        arity(a, 1, "reverse", "")?;
-        match &a[0] {
-            Type::Array(_) => Ok(a[0].clone()),
-            other => Err((Some(0), format!("reverse espera un arreglo, no {}", other))),
-        }
     } },
     // M48.4b: `__reverse` — primitivo interno de `reverse`, al que baja `impl<T> Reverse for [T]`.
     Builtin { name: "__reverse", opcode: OpCode::Reverse, check: |a| {
@@ -1727,17 +1603,6 @@ static BUILTINS: &[Builtin] = &[
     // (int, M11.8) → int. Una sola entrada `close` (más abajo) lo cubre; NO se duplica aquí (raylang no
     // tiene sobrecarga). El canal se cierra con `close(ch)` igual que un handle con `close(h)`.
 
-    // insert(m, k, v) -> unit: inserta/actualiza la clave k con el valor v en el mapa m (lo muta).
-    Builtin { name: "insert", opcode: OpCode::MapInsert, check: |a| {
-        arity(a, 3, "insert", " (mapa, clave, valor)")?;
-        let (kt, vt) = match &a[0] {
-            Type::Map(k, v) => ((**k).clone(), (**v).clone()),
-            other => return Err((Some(0), format!("insert espera un Map como primer argumento, no {}", other))),
-        };
-        if a[1] != kt { return Err((Some(1), format!("insert: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
-        if a[2] != vt { return Err((Some(2), format!("insert: el valor del Map es {} pero se pasó {}", vt, a[2]))); }
-        Ok(Type::Unit)
-    } },
     // M48.4c: primitivos internos de los métodos de `MapOps` (mismos opcodes que los públicos, ocultos).
     Builtin { name: "__insert", opcode: OpCode::MapInsert, check: |a| {
         arity(a, 3, "__insert", " (mapa, clave, valor)")?;
@@ -1772,16 +1637,6 @@ static BUILTINS: &[Builtin] = &[
             other => Err((Some(0), format!("__values espera un Map, no {}", other))),
         }
     } },
-    // contains_key(m, k) -> bool: ¿está la clave k en el mapa m?
-    Builtin { name: "contains_key", opcode: OpCode::MapContainsKey, check: |a| {
-        arity(a, 2, "contains_key", " (mapa, clave)")?;
-        let kt = match &a[0] {
-            Type::Map(k, _) => (**k).clone(),
-            other => return Err((Some(0), format!("contains_key espera un Map como primer argumento, no {}", other))),
-        };
-        if a[1] != kt { return Err((Some(1), format!("contains_key: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
-        Ok(Type::Bool)
-    } },
     // __map_get(m, k) -> [V]: [] si la clave no está, [v] si está. El prelude → Option<V>.
     Builtin { name: "__map_get", opcode: OpCode::MapGet, check: |a| {
         arity(a, 2, "__map_get", " (mapa, clave)")?;
@@ -1802,23 +1657,6 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != kt { return Err((Some(1), format!("__map_remove: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
         Ok(Type::Array(Box::new(vt)))
     } },
-    // keys(m) -> [K] (M13.1b): las claves del mapa, ordenadas (determinista).
-    Builtin { name: "keys", opcode: OpCode::MapKeys, check: |a| {
-        arity(a, 1, "keys", " (mapa)")?;
-        match &a[0] {
-            Type::Map(k, _) => Ok(Type::Array(k.clone())),
-            other => Err((Some(0), format!("keys espera un Map, no {}", other))),
-        }
-    } },
-    // values(m) -> [V] (M13.1b): los valores, en orden de clave ordenada (casa con keys).
-    Builtin { name: "values", opcode: OpCode::MapValues, check: |a| {
-        arity(a, 1, "values", " (mapa)")?;
-        match &a[0] {
-            Type::Map(_, v) => Ok(Type::Array(v.clone())),
-            other => Err((Some(0), format!("values espera un Map, no {}", other))),
-        }
-    } },
-
     // --- Matemáticas (M15.1a) ---
     // Funciones unarias float -> float, todas bajo el opcode parametrizado MathF(MathFn).
     Builtin { name: "sqrt",  opcode: OpCode::MathF(MathFn::Sqrt),  check: |a| mathf_check(a, "sqrt") },
@@ -2097,7 +1935,7 @@ mod tests {
         // rename de builtin deje `methods_for` ofreciendo un método inexistente).
         for cat in ["string", "bytes", "char", "int", "float", "bool", "array", "map"] {
             for m in methods_for(cat) {
-                assert!(is_builtin(m), "methods_for({cat:?}) nombra '{m}', que no es un builtin");
+                assert!(is_builtin(m) || signature(m).is_some(), "methods_for({cat:?}) nombra '{m}', que no es builtin ni método conocido con signature()");
             }
         }
         assert!(methods_for("noexiste").is_empty());
@@ -2115,7 +1953,8 @@ mod tests {
 
     #[test]
     fn regla_ok_y_errores() {
-        let split = lookup("split").unwrap();
+        // M48.4e-3: `split` público se retiró; su gemelo interno `__split` conserva la misma regla.
+        let split = lookup("__split").unwrap();
         // Firma correcta → tipo de retorno.
         assert_eq!((split.check)(&[Type::String, Type::String]), Ok(Type::Array(Box::new(Type::String))));
         // Aridad mal → error general (índice None: lo ubica el sitio de llamada).
@@ -2126,7 +1965,8 @@ mod tests {
 
     #[test]
     fn push_es_homogeneo() {
-        let push = lookup("push").unwrap();
+        // M48.4e-3: `push` público se retiró; su gemelo interno `__push` conserva la misma regla.
+        let push = lookup("__push").unwrap();
         let xs_int = Type::Array(Box::new(Type::Int));
         assert_eq!((push.check)(&[xs_int.clone(), Type::Int]), Ok(Type::Unit));
         assert!(matches!((push.check)(&[xs_int, Type::String]), Err((Some(1), _))));

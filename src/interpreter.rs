@@ -2153,7 +2153,7 @@ fn main() -> int {
     #[test]
     fn try_option_none_propaga() {
         let src = r#"
-fn primero(xs: [int]) -> Option<int> { if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) } }
+fn primero(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } }
 fn mas_uno(xs: [int]) -> Option<int> { let v: int = primero(xs)?; Option.Some(v + 1) }
 fn desemp(o: Option<int>) -> int { match (o) { Option.Some(v) => v, Option.None => -99 } }
 fn main() -> int { desemp(mas_uno([41])) * 100 + desemp(mas_uno([])) }

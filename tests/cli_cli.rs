@@ -56,7 +56,7 @@ fn run_pasa_los_args_del_programa() {
     let base = tmp("run_args");
     std::fs::write(
         base.join("prog.ray"),
-        "fn main() -> int { print(len(args())); 0 }\n",
+        "fn main() -> int { print(args().len()); 0 }\n",
     )
     .unwrap();
     // Los argumentos tras el archivo llegan a `args()`.
@@ -382,10 +382,10 @@ fn crypto_builtins_hashing_vectores() {
     std::fs::write(
         &archivo,
         "fn main() -> int {\n\
-             print(to_string(sha256(to_bytes(\"abc\"))));\n\
-             print(to_string(sha512(to_bytes(\"\"))));\n\
-             print(to_string(hmac_sha256(to_bytes(\"\"), to_bytes(\"\"))));\n\
-             print(to_string(sha1(to_bytes(\"abc\"))));\n\
+             print(to_string(sha256(\"abc\".to_bytes())));\n\
+             print(to_string(sha512(\"\".to_bytes())));\n\
+             print(to_string(hmac_sha256(\"\".to_bytes(), \"\".to_bytes())));\n\
+             print(to_string(sha1(\"abc\".to_bytes())));\n\
              0\n\
          }\n",
     )
@@ -409,7 +409,7 @@ fn stdlib_compresion_roundtrip() {
          import std/deflate;\n\
          import std/huffman;\n\
          fn main() -> int {\n\
-             let comp = deflate.deflate_raw(to_bytes(\"raylang raylang raylang comprime\"));\n\
+             let comp = deflate.deflate_raw(\"raylang raylang raylang comprime\".to_bytes());\n\
              match (inflate.inflate_raw(comp)) {\n\
                  Result.Ok(back) => { match (from_utf8(back)) {\n\
                      Result.Ok(s) => { print(s); }, Result.Err(e) => { print(e); },\n\
@@ -470,11 +470,11 @@ fn stdlib_cripto_aead_y_protobuf() {
         &archivo,
         "import std/protobuf;\n\
          fn main() -> int {\n\
-             let key = to_bytes(\"0123456789abcdef0123456789abcdef\");\n\
-             let nonce = to_bytes(\"noncenonce12\");\n\
-             match (chacha20poly1305_seal(key, nonce, to_bytes(\"\"), to_bytes(\"Hi\"))) {\n\
+             let key = \"0123456789abcdef0123456789abcdef\".to_bytes();\n\
+             let nonce = \"noncenonce12\".to_bytes();\n\
+             match (chacha20poly1305_seal(key, nonce, \"\".to_bytes(), \"Hi\".to_bytes())) {\n\
                  Option.Some(ct) => {\n\
-                     match (chacha20poly1305_open(key, nonce, to_bytes(\"\"), ct)) {\n\
+                     match (chacha20poly1305_open(key, nonce, \"\".to_bytes(), ct)) {\n\
                          Option.Some(pt) => { print(to_string(pt)); },\n\
                          Option.None => { print(\"auth\"); },\n\
                      }\n\
@@ -505,7 +505,7 @@ fn stdlib_uuid_genera_y_valida() {
          fn main() -> int {\n\
              print(uuid.is_uuid_v4(uuid.uuid_v4()));\n\
              print(uuid.is_uuid_v4(\"not-a-uuid\"));\n\
-             print(len(uuid.uuid_v4()));\n\
+             print(uuid.uuid_v4().len());\n\
              0\n\
          }\n",
     )
@@ -711,11 +711,11 @@ fn paquete_net_jwt_via_path_dep() {
         base.join("src/main.ray"),
         "import net/jwt;\n\
          fn main() -> int {\n\
-         \x20 let tok = jwt.jwt_sign(to_bytes(\"secreto\"), \"{\\\"sub\\\":\\\"ada\\\"}\");\n\
-         \x20 match (jwt.jwt_verify(to_bytes(\"secreto\"), tok)) {\n\
+         \x20 let tok = jwt.jwt_sign(\"secreto\".to_bytes(), \"{\\\"sub\\\":\\\"ada\\\"}\");\n\
+         \x20 match (jwt.jwt_verify(\"secreto\".to_bytes(), tok)) {\n\
          \x20   Result.Ok(p) => { print(p); }, Result.Err(e) => { print(\"err\"); },\n\
          \x20 }\n\
-         \x20 match (jwt.jwt_verify(to_bytes(\"mala\"), tok)) {\n\
+         \x20 match (jwt.jwt_verify(\"mala\".to_bytes(), tok)) {\n\
          \x20   Result.Ok(p) => { print(\"¿?\"); }, Result.Err(e) => { print(\"rechazado\"); },\n\
          \x20 }\n\
          \x20 0\n\
@@ -749,7 +749,7 @@ fn paquete_net_hpack_roundtrip() {
          \x20 let blob = hpack.encode(enc, hs);\n\
          \x20 let dec = hpack.new_hpack();\n\
          \x20 match (hpack.decode(dec, blob)) {\n\
-         \x20   Result.Ok(out) => { print(len(out)); }, Result.Err(e) => { print(\"err\"); },\n\
+         \x20   Result.Ok(out) => { print(out.len()); }, Result.Err(e) => { print(\"err\"); },\n\
          \x20 }\n\
          \x20 0\n\
          }\n",
@@ -842,7 +842,7 @@ fn tope_de_heap_aborta_un_programa_glotón() {
     let archivo = base.join("main.ray");
     std::fs::write(
         &archivo,
-        "fn main() -> int { var xs: [[int]] = []; var i = 0; while (i < 1000000) { push(xs, [i]); i = i + 1; } 0 }\n",
+        "fn main() -> int { var xs: [[int]] = []; var i = 0; while (i < 1000000) { xs.push([i]); i = i + 1; } 0 }\n",
     )
     .unwrap();
     let (_out, err, code) = ray(&base, &["run", "--heap", "5000", archivo.to_str().unwrap()]);

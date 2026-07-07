@@ -151,7 +151,7 @@ fn structs_snippets() {
     );
     // Arreglo de structs + mutación por índice.
     comparar_fuente(
-        "struct P { x: int, y: int } fn main() -> int { var ps: [P] = []; push(ps, P { x: 1, y: 2 }); ps[0].x = 99; print(ps[0]); print(len(ps)); 0 }",
+        "struct P { x: int, y: int } fn main() -> int { var ps: [P] = []; ps.push(P { x: 1, y: 2 }); ps[0].x = 99; print(ps[0]); print(ps.len()); 0 }",
         "vm_arrstruct.ray",
     );
 }
@@ -177,12 +177,12 @@ fn enums_y_match_snippets() {
 #[test]
 fn arreglos_snippets() {
     comparar_fuente(
-        "fn main() -> int { let a = [3, 1, 4, 1, 5]; print(a); print(a[2]); print(len(a)); 0 }",
+        "fn main() -> int { let a = [3, 1, 4, 1, 5]; print(a); print(a[2]); print(a.len()); 0 }",
         "vm_array.ray",
     );
     // Construcción dinámica + asignación por índice.
     comparar_fuente(
-        "fn main() -> int { var a: [int] = []; var i = 0; while (i < 4) { push(a, i * i); i = i + 1; } a[0] = 100; print(a); 0 }",
+        "fn main() -> int { var a: [int] = []; var i = 0; while (i < 4) { a.push(i * i); i = i + 1; } a[0] = 100; print(a); 0 }",
         "vm_arrpush.ray",
     );
     // Arreglos anidados con indexación encadenada.

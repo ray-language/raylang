@@ -21,7 +21,7 @@ variables:
   user_type: '[A-Z][A-Za-z0-9_]*'
   # Builtins + funciones del prelude de uso común (M11–M13). No exhaustivo; el resto lo colorea
   # la regla de llamada. Mismo conjunto que la gramática de VSCode.
-  builtins: 'print|eprint|len|push|pop|to_string|to_bytes|bytes_of|trim|split|contains|replace|chars|starts_with|ends_with|to_upper|to_lower|substring|sub_bytes|repeat|join|reverse|index_of|position|sort|map|filter|fold|map_new|insert|get|remove|contains_key|keys|values|spawn|channel|send|recv|select|scope|panic|assert|assert_eq|input|read_int|parse_int|parse_float|args|env|read_file|write_file|append_file|remove_file|list_dir|exists|open|read_line|write|close|sqrt|sin|cos|tan|ln|exp|floor|ceil|round|pow|abs|min|max|pi|now|monotonic|sleep|random|random_int'
+  builtins: 'print|eprint|pop|to_string|bytes_of|join|index_of|position|sort|map|filter|fold|map_new|get|remove|spawn|channel|send|recv|select|scope|panic|assert|assert_eq|input|read_int|parse_int|parse_float|args|env|read_file|write_file|append_file|remove_file|list_dir|exists|open|read_line|write|close|sqrt|sin|cos|tan|ln|exp|floor|ceil|round|pow|abs|min|max|pi|now|monotonic|sleep|random|random_int'
 
 contexts:
   main:

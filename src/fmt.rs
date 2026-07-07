@@ -155,6 +155,13 @@ struct Cur {
     /// nodo desazucarado raíz. El formateador la consulta en `fmt_expr` para reemitir `"…${e}…"` / `x |> f`.
     interp: std::collections::HashMap<(usize, usize), Vec<InterpSeg>>,
     pipe: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
+    /// Indentación (nivel, no columnas) del contexto en curso. `fmt_expr`/`fmt_expr_raw` no llevan la
+    /// indentación como parámetro (son muchísimos sitios de llamada); en su lugar, las funciones que sí la
+    /// conocen (`fmt_stmt`/`fmt_value`/`fmt_expr_indented`) la depositan aquí y la rama block-form de
+    /// `fmt_expr_raw` la lee, para que un `match`/bloque **como sub-expresión** (argumento de llamada,
+    /// operando, elemento de arreglo…) se indente relativo a su línea y no a la columna 0. Se guarda y
+    /// restaura en cada mutación para no contaminar el formateo de expresiones hermanas.
+    base: usize,
 }
 
 impl Cur {
@@ -169,6 +176,7 @@ impl Cur {
             blancos,
             interp: program.interp_sites.clone(),
             pipe: program.pipe_sites.clone(),
+            base: 0,
         }
     }
 
@@ -637,6 +645,16 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
 }
 
 fn fmt_stmt(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
+    // La sentencia vive en `indent`: cualquier forma con bloque anidada en una sub-expresión no-valor
+    // (p. ej. `print(match …)`) debe indentarse relativa a aquí. `fmt_value` refina el valor por caso.
+    let saved = cur.base;
+    cur.base = indent;
+    let r = fmt_stmt_inner(cur, st, indent);
+    cur.base = saved;
+    r
+}
+
+fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
     match &st.kind {
         StmtKind::Let { name, ty, value, mutable } => {
             let kw = if *mutable { "var" } else { "let" };
@@ -695,7 +713,13 @@ fn fmt_value(cur: &mut Cur, e: &Expr, ind: usize) -> String {
     if is_block_form(e) {
         fmt_expr_indented(cur, e, ind)
     } else {
-        fmt_expr(cur, e, 0)
+        // No es una forma con bloque en la raíz, pero puede contenerla anidada (`print(match …)`): deja la
+        // indentación del contexto en `cur.base` para que la rama block-form de `fmt_expr_raw` la use.
+        let saved = cur.base;
+        cur.base = ind;
+        let s = fmt_expr(cur, e, 0);
+        cur.base = saved;
+        s
     }
 }
 
@@ -899,8 +923,9 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
         }
         ExprKind::Try(inner) => format!("{}?", fmt_expr(cur, inner, 13)),
         ExprKind::Match { .. } | ExprKind::If { .. } | ExprKind::While { .. } | ExprKind::Block(_) => {
-            // Estas formas son multilínea; se formatean con indentación explícita (nivel 0 aquí).
-            fmt_expr_indented(cur, e, 0)
+            // Forma multilínea como SUB-expresión (argumento de llamada, operando, elemento…): se indenta
+            // relativa a la línea del contexto, que `fmt_stmt`/`fmt_value` dejaron en `cur.base`.
+            fmt_expr_indented(cur, e, cur.base)
         }
     }
 }
@@ -941,11 +966,16 @@ fn fmt_expr_indented(cur: &mut Cur, e: &Expr, base: usize) -> String {
             let mut s = format!("match ({}) {{\n", fmt_expr(cur, scrutinee, 0));
             for arm in arms {
                 s.push_str(&cur.flush_before(arm.body.line, &inner)); // comentarios encima del brazo
+                // El cuerpo del brazo vive en `base + 1`: una forma con bloque anidada en una sub-expresión
+                // no-valor del cuerpo (`A => print(match …)`) debe indentarse desde aquí.
+                let saved = cur.base;
+                cur.base = base + 1;
                 let body = if is_block_form(&arm.body) {
                     fmt_expr_indented(cur, &arm.body, base + 1)
                 } else {
                     fmt_expr(cur, &arm.body, 0)
                 };
+                cur.base = saved;
                 // Guarda opcional (M40.1a): `patrón if <cond> => …`.
                 let guarda = match &arm.guard {
                     Some(g) => format!(" if {}", fmt_expr(cur, g, 0)),
@@ -1191,6 +1221,24 @@ mod tests {
         // Un `${` literal (`\${no}`) se conserva escapado (no reabre interpolación).
         assert!(out.contains("\\${no}"), "'${{' literal escapado: {out:?}");
         assert_eq!(out, fmt(&out), "idempotente");
+    }
+
+    #[test]
+    fn forma_con_bloque_como_subexpresion_se_indenta() {
+        // Regresión: un `match`/bloque como ARGUMENTO de llamada (u otra sub-expresión no-valor) se
+        // indentaba desde la columna 0 (`fmt_expr` no llevaba la indentación). Debe indentarse relativo
+        // a su línea: brazos a base+1, cierre a base.
+        let src = "fn main() {\n  print(match (x) {\n    A => 1,\n    B => 2,\n  });\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("    print(match (x) {\n        A => 1,\n        B => 2,\n    });"),
+            "match en call bien indentado: {out:?}");
+        // Hermanas independientes: `f(match) + g(match)` no se contaminan (base guardada/restaurada).
+        let bin = "fn main() {\n  let y = f(match (x) { A => 1 }) + g(match (z) { C => 3 });\n}\n";
+        let ob = fmt(bin);
+        assert!(ob.contains("    let y = f(match (x) {\n        A => 1,\n    }) + g(match (z) {\n        C => 3,\n    });"),
+            "ambos matches en base 1: {ob:?}");
+        assert_eq!(out, fmt(&out), "idempotente");
+        assert_eq!(ob, fmt(&ob), "idempotente");
     }
 
     #[test]

@@ -4232,6 +4232,22 @@ mod tests {
         );
     }
 
+    /// M48.1: `Map.new()` (función asociada) baja al mismo opcode `MapNew` que el antiguo `map_new()`
+    /// → ambos motores coinciden. Mismo programa que `map_basico_oraculo` con la sintaxis nueva.
+    #[test]
+    fn map_new_asociada_oraculo() {
+        oracle_program(
+            "fn main() -> int {
+                let m: Map<string, int> = Map.new();
+                m.insert(\"a\", 1);
+                m.insert(\"b\", 2);
+                m.insert(\"a\", 10);
+                let total = match (m.get(\"a\")) { Option.Some(v) => v, Option.None => 0 };
+                total + m.len()
+             }",
+        );
+    }
+
     /// M13.1: el Map asigna en el heap y guarda valores → estrés del GC (recolecta en cada paso).
     /// Si una raíz faltara, los valores guardados se liberarían y el resultado cambiaría.
     #[test]

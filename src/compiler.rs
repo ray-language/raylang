@@ -979,6 +979,20 @@ impl<'a> Compiler<'a> {
     /// global, identificada por nombre y no tapada por una variable) del **indirecto**
     /// (un valor-función en la pila), que usa `CallValue` (M4.1).
     fn emit_call(&mut self, callee: &Expr, args: &[Expr], line: usize, col: usize) -> Result<(), CompileError> {
+        // M48.1: función asociada `Tipo.fn(args)` (`Map.new()`, `Channel.new()`, `Channel.bounded(n)`):
+        // se empujan los argumentos y se emite el opcode que declara el registro (`MapNew`/`ChannelNew`/
+        // `ChannelNewBounded`). No es UFCS (el checker no la baja) → llega como `Call(Field)` intacta.
+        if let ExprKind::Field { object, name } = &callee.kind {
+            if let ExprKind::Ident(tn) = &object.kind {
+                if let Some(assoc) = crate::builtins::assoc_lookup(tn, name) {
+                    for arg in args {
+                        self.emit_expr(arg)?;
+                    }
+                    self.emit(assoc.opcode.clone(), line, col);
+                    return Ok(());
+                }
+            }
+        }
         if let ExprKind::Ident(name) = &callee.kind {
             // Solo es directo si el nombre NO es una variable (local o upvalue).
             if !self.name_is_variable(name) {

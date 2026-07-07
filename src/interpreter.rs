@@ -786,6 +786,19 @@ impl<'a> Interpreter<'a> {
     }
 
     fn eval_call(&mut self, callee: &'a Expr, args: &'a [Expr]) -> EvalResult {
+        // M48.1: función asociada `Tipo.fn(args)`. `Map.new()` construye un Map vacío; los canales
+        // (`Channel.*`) solo corren en la VM (como el antiguo `channel()`), aquí error limpio.
+        if let ExprKind::Field { object, name } = &callee.kind {
+            if let ExprKind::Ident(tn) = &object.kind {
+                if crate::builtins::assoc_lookup(tn, name).is_some() {
+                    if tn == "Map" && name == "new" {
+                        return Ok(Value::Map(Rc::new(RefCell::new(HashMap::new()))));
+                    }
+                    return Err(runtime_error(callee.line, callee.col,
+                        "la concurrencia (spawn/channel/send/recv/join/scope/select) requiere la VM; el intérprete es solo el oráculo secuencial (no uses --interp)"));
+                }
+            }
+        }
         // Camino directo: el callee es un nombre que NO está tapado por una variable
         // local — un builtin o una función global. Es la vía eficiente (no se
         // construye un valor-función intermedio).

@@ -137,6 +137,50 @@ pub fn names() -> impl Iterator<Item = &'static str> {
     BUILTINS.iter().map(|b| b.name)
 }
 
+/// Una función **asociada** a un tipo incorporado (M48.1): `Tipo.fn(args)`, un namespace indexado por
+/// el tipo (estilo `Vec::new()` de Rust), en vez de una función libre global. Sustituye a los antiguos
+/// `map_new()`/`channel()`. Como el resultado es un tipo genérico **indeterminado** (Map/Channel), su
+/// tipo lo fija el contexto esperado (como `[]`/`None`); por eso el **tipado** (result-desde-esperado)
+/// vive en el checker y solo la **bajada al opcode** se lee de aquí. La tabla aporta existencia,
+/// aridad, opcode y metadatos (doc/firma) para el LSP.
+pub struct AssocFn {
+    pub type_name: &'static str, // "Map" | "Channel"
+    pub fn_name: &'static str,   // "new" | "bounded"
+    pub arity: usize,            // nº de argumentos (sin receptor: no hay `self`)
+    pub opcode: OpCode,          // el compilador empuja los args y emite este opcode
+    pub doc: &'static str,       // hover del LSP
+    pub sig: &'static str,       // firma legible: hover / signature help
+}
+
+/// Las funciones asociadas a tipos incorporados. `Map.new()`, `Channel.new()`, `Channel.bounded(n)`.
+pub const ASSOC_FNS: &[AssocFn] = &[
+    AssocFn {
+        type_name: "Map", fn_name: "new", arity: 0, opcode: OpCode::MapNew,
+        doc: "Creates an empty `Map<K, V>`. The element types are inferred from the expected type (annotate the binding if indeterminate). Keys must be hashable: int, string, char or bool.",
+        sig: "Map.new() -> Map<K, V>",
+    },
+    AssocFn {
+        type_name: "Channel", fn_name: "new", arity: 0, opcode: OpCode::ChannelNew,
+        doc: "Creates an unbounded typed channel (`Channel<T>`); `send` never blocks. The element type is inferred from the expected type. Only runs on the VM.",
+        sig: "Channel.new() -> Channel<T>",
+    },
+    AssocFn {
+        type_name: "Channel", fn_name: "bounded", arity: 1, opcode: OpCode::ChannelNewBounded,
+        doc: "Creates a bounded channel holding at most `n` values (`0` = synchronous rendezvous); senders block when full. The element type is inferred from the expected type. Only runs on the VM.",
+        sig: "Channel.bounded(n: int) -> Channel<T>",
+    },
+];
+
+/// Busca una función asociada por `(tipo, nombre)`.
+pub fn assoc_lookup(type_name: &str, fn_name: &str) -> Option<&'static AssocFn> {
+    ASSOC_FNS.iter().find(|a| a.type_name == type_name && a.fn_name == fn_name)
+}
+
+/// Las funciones asociadas de un tipo dado (para el completado `Tipo.` del LSP).
+pub fn assoc_for_type(type_name: &str) -> impl Iterator<Item = &'static AssocFn> {
+    ASSOC_FNS.iter().filter(move |a| a.type_name == type_name)
+}
+
 /// ¿El builtin, usado como **método** (`recv.f(...)`), toma argumentos más allá del receptor?
 /// (M45b: para el snippet de completion — `push($0)` con args, `len()` sin ellos.) Los builtins son
 /// ad-hoc polimórficos y muchos no tienen `signature()`, así que se lista el conjunto **sin args**.
@@ -257,7 +301,8 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "hmac_sha256" => "Computes the HMAC-SHA-256 of a message with the given key: `hmac_sha256(key: bytes, msg: bytes) -> bytes` (32 bytes).",
         "ed25519_verify" => "Verifies an Ed25519 signature: `ed25519_verify(pubkey: bytes, msg: bytes, sig: bytes) -> bool`.",
         // --- Map ---
-        "map_new" => "Creates an empty `Map<K, V>`. The element types are inferred from the expected type (annotate the binding if indeterminate). Keys must be hashable: int, string, char or bool.",
+        "map_new" => "Creates an empty `Map<K, V>` (legacy; prefer `Map.new()`). Keys must be hashable: int, string, char or bool.",
+        "channel" => "Creates a typed channel (legacy; prefer `Channel.new()` / `Channel.bounded(n)`). `channel()` is unbounded; `channel(n)` holds at most `n` values.",
         "insert" => "Inserts or updates a key/value pair in a Map, in place.",
         "contains_key" => "Whether the Map contains the given key.",
         "keys" => "Returns the keys of a Map as a sorted array (deterministic order).",
@@ -288,7 +333,6 @@ pub fn doc(name: &str) -> Option<&'static str> {
         // --- Concurrencia (VM) ---
         "spawn" => "Starts a new concurrent task running the given closure and returns its `Task<T>` handle. Use `join(task)` to wait for its result. Requires the VM engine.",
         "scope" => "Runs the closure as a structured-concurrency scope: on return it joins every task spawned inside, cancelling siblings and re-raising the first failure.",
-        "channel" => "Creates a typed channel. `channel()` is unbounded; `channel(n)` holds at most `n` values (`0` = synchronous rendezvous); senders block when full.",
         "send" => "Sends a value into a channel. Blocks if the channel is bounded and full (backpressure).",
         "recv" => "Receives from a channel: blocks while it is empty and open; returns `None` once it is closed and drained.",
         "select" => "Blocks until one of the channels in the array is ready to receive and returns its index (lowest ready index; deterministic). Follow with `recv(chs[i])`.",
@@ -1509,9 +1553,12 @@ static BUILTINS: &[Builtin] = &[
     // map_new() -> Map<K,V>: mapa vacío. Su tipo es INDETERMINADO (como `[]`/`None`): lo fija el
     // tipo esperado en `check_expr_expected`. Por eso esta regla (sin tipo esperado) es un error;
     // el camino normal lo intercepta antes de llegar aquí.
+    // `Map.new()` (M48.1) es la forma idiomática; se baja con la **función asociada** (`ASSOC_FNS`).
+    // El builtin `map_new` se mantiene en **coexistencia temporal** durante la migración (se retira al
+    // cerrar M48.1, cuando ningún `.ray` lo use). Comparten el opcode `MapNew`.
     Builtin { name: "map_new", opcode: OpCode::MapNew, check: |a| {
         arity(a, 0, "map_new", "")?;
-        Err((None, "no se puede inferir el tipo de map_new; anótalo, p. ej. 'let m: Map<string, int> = map_new()'".into()))
+        Err((None, "no se puede inferir el tipo de map_new; anótalo, p. ej. 'let m: Map<string, int> = Map.new()'".into()))
     } },
 
     // --- Concurrencia: CSP sobre la VM (M12.1). Solo la VM las ejecuta; el intérprete da error limpio. ---
@@ -1547,6 +1594,9 @@ static BUILTINS: &[Builtin] = &[
     // channel() / channel(n) -> Channel<T>: crea un canal (no acotado, o acotado a la capacidad n: int ≥ 0,
     // M12.2). Indeterminado en el tipo de elemento (como map_new): el camino con tipo esperado lo
     // intercepta; aquí solo validamos la aridad/capacidad y damos el error de inferencia.
+    // `Channel.new()` / `Channel.bounded(n)` (M48.1) son la forma idiomática; se bajan con las
+    // **funciones asociadas** (`ASSOC_FNS`). El builtin `channel` se mantiene en **coexistencia
+    // temporal** durante la migración (se retira al cerrar M48.1). Comparten los opcodes.
     Builtin { name: "channel", opcode: OpCode::ChannelNew, check: |a| {
         if a.len() > 1 {
             return Err((Some(1), "channel recibe a lo sumo un argumento (la capacidad)".into()));
@@ -1554,7 +1604,7 @@ static BUILTINS: &[Builtin] = &[
         if matches!(a.first(), Some(t) if !matches!(t, Type::Int)) {
             return Err((Some(0), format!("la capacidad de channel debe ser int, no {}", a[0])));
         }
-        Err((None, "no se puede inferir el tipo de channel; anótalo, p. ej. 'let c: Channel<int> = channel()'".into()))
+        Err((None, "no se puede inferir el tipo de channel; anótalo, p. ej. 'let c: Channel<int> = Channel.new()'".into()))
     } },
     // send(ch, v) -> unit: envía v por el canal ch.
     Builtin { name: "send", opcode: OpCode::ChanSend, check: |a| {

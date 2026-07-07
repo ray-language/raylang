@@ -2252,8 +2252,17 @@ impl Checker {
                 }
             }
         }
+        // M48.1: función asociada `Tipo.fn(args)` (`Map.new()`, `Channel.new()`, `Channel.bounded(n)`)
+        // con tipo esperado → su resultado (Map/Channel) se fija desde el esperado (indeterminado, como
+        // `[]`/`None`). Antes eran `map_new()`/`channel()` (builtins de función libre).
+        if let ExprKind::Call { callee, args } = &expr.kind {
+            if let Some(r) = self.try_assoc_call(callee, args, Some(expected), expr.line, expr.col) {
+                return r;
+            }
+        }
+        // M13.1/M12: coexistencia — `map_new()`/`channel()` (forma legada) siguen siendo builtins
+        // indeterminados; su tipo lo fija el esperado igual que las asociadas nuevas.
         match &expr.kind {
-            // M13.1: `map_new()` es indeterminado (como `[]`/`None`); su tipo lo fija el esperado.
             ExprKind::Call { callee, args }
                 if matches!(&callee.kind, ExprKind::Ident(n) if n == "map_new") =>
             {
@@ -2267,8 +2276,6 @@ impl Checker {
                     ))),
                 }
             }
-            // M12.1: `channel()` es indeterminado (como `map_new()`); su tipo lo fija el esperado.
-            // M12.2: `channel(n)` admite una capacidad `int` (el tipo de elemento sigue indeterminado).
             ExprKind::Call { callee, args }
                 if matches!(&callee.kind, ExprKind::Ident(n) if n == "channel") =>
             {
@@ -2805,6 +2812,50 @@ impl Checker {
         Ok((lt, rt))
     }
 
+    /// M48.1: reconoce y tipa una llamada a una **función asociada** `Tipo.fn(args)` (`Map.new()`,
+    /// `Channel.new()`, `Channel.bounded(n)`). Llega como `Call(Field(Ident(tipo), fn), args)`. Devuelve
+    /// `Some(resultado)` si `(tipo, fn)` es una asociada registrada; `None` si no lo es (el llamador
+    /// sigue su camino normal: campo/método/UFCS). El resultado es un tipo genérico **indeterminado**
+    /// (Map/Channel) → se toma del `expected`; sin él, error pidiendo anotar (como `[]`/`None`).
+    fn try_assoc_call(&mut self, callee: &Expr, args: &[Expr], expected: Option<&Type>, line: usize, col: usize)
+        -> Option<Result<Type, TypeError>>
+    {
+        let ExprKind::Field { object, name } = &callee.kind else { return None };
+        let ExprKind::Ident(tn) = &object.kind else { return None };
+        let assoc = crate::builtins::assoc_lookup(tn, name)?;
+        Some((|| {
+            if args.len() != assoc.arity {
+                return Err(self.err(line, col, format!(
+                    "'{}.{}' espera {} argumento(s), se dieron {}", tn, name, assoc.arity, args.len())));
+            }
+            // Todos los argumentos actuales de asociadas son una capacidad `int` (`Channel.bounded`).
+            for a in args {
+                let at = self.check_expr(a)?;
+                if !matches!(at, Type::Int) {
+                    return Err(self.err(a.line, a.col, format!(
+                        "el argumento de '{}.{}' debe ser int, no {}", tn, name, at)));
+                }
+            }
+            // El tipo del resultado lo fija el contexto esperado (indeterminado, como `map_new()`).
+            let kind_ok = matches!((tn.as_str(), expected),
+                ("Map", Some(Type::Map(_, _))) | ("Channel", Some(Type::Channel(_))));
+            match expected {
+                _ if kind_ok => Ok(expected.unwrap().clone()),
+                Some(e) => Err(self.err(line, col, format!(
+                    "'{}.{}' produce un {}, pero aquí se espera {}", tn, name, tn, e))),
+                None => {
+                    let ejemplo = if tn == "Map" {
+                        "let m: Map<string, int> = Map.new()"
+                    } else {
+                        "let c: Channel<int> = Channel.new()"
+                    };
+                    Err(self.err(line, col, format!(
+                        "no se puede inferir el tipo de '{}.{}'; anótalo, p. ej. '{}'", tn, name, ejemplo)))
+                }
+            }
+        })())
+    }
+
     fn check_call(
         &mut self,
         callee: &Expr,
@@ -2812,6 +2863,11 @@ impl Checker {
         line: usize,
         col: usize,
     ) -> Result<Type, TypeError> {
+        // M48.1: función asociada `Tipo.fn(args)` sin tipo esperado (contexto no tipado) → error de
+        // "anota el tipo". Con tipo esperado, la intercepta `check_expr_expected` (devuelve el tipo).
+        if let Some(r) = self.try_assoc_call(callee, args, None, line, col) {
+            return r;
+        }
         match &callee.kind {
             // Llamada directa por nombre: `f(a, b)`.
             ExprKind::Ident(n) => {
@@ -5539,6 +5595,26 @@ mod tests {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         let (mut prog, _) = crate::parser::parse_all(tokens);
         member_completion(&mut prog).into_iter().map(|m| m.label).collect()
+    }
+
+    #[test]
+    fn funciones_asociadas_de_tipo() {
+        // M48.1: `Map.new()`/`Channel.new()`/`Channel.bounded(n)` — el tipo lo fija el esperado.
+        assert!(check_src("fn main() -> int { let m: Map<string, int> = Map.new(); m.len() }").is_ok());
+        assert!(check_src("fn main() { let c: Channel<int> = Channel.new(); }").is_ok());
+        assert!(check_src("fn main() { let c: Channel<int> = Channel.bounded(2); }").is_ok());
+        // Sin tipo esperado → error de "anota el tipo".
+        let e = check_src("fn main() -> int { let m = Map.new(); 0 }").unwrap_err();
+        assert!(format!("{e}").contains("no se puede inferir el tipo de 'Map.new'"), "{e}");
+        // Aridad: `Map.new` no recibe argumentos; `Channel.bounded` exige uno.
+        let a = check_src("fn main() { let m: Map<int, int> = Map.new(1); }").unwrap_err();
+        assert!(format!("{a}").contains("espera 0 argumento(s)"), "{a}");
+        // El argumento de `bounded` debe ser int.
+        let b = check_src("fn main() { let c: Channel<int> = Channel.bounded(\"x\"); }").unwrap_err();
+        assert!(format!("{b}").contains("debe ser int"), "{b}");
+        // El tipo esperado debe casar la familia (Map.new no produce un Channel).
+        let f = check_src("fn main() { let c: Channel<int> = Map.new(); }").unwrap_err();
+        assert!(format!("{f}").contains("produce un Map"), "{f}");
     }
 
     #[test]

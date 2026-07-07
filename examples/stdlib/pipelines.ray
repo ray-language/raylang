@@ -19,14 +19,14 @@ fn suma(a: int, b: int) -> int { a + b }
 
 // Operaciones sobre arreglos (el valor que fluye por la tubería es un [int]).
 fn agregar(xs: [int], x: int) -> [int] {
-    push(xs, x);
+    xs.push(x);
     xs
 }
 
 fn total(xs: [int]) -> int {
     var s: int = 0;
     var i: int = 0;
-    while (i < len(xs)) {
+    while (i < xs.len()) {
         s = s + xs[i];
         i = i + 1;
     }

@@ -12,7 +12,7 @@ fn main() -> int {
     let visto: Set<int> = set_new();
     let nums = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
     var i = 0;
-    while (i < len(nums)) {
+    while (i < nums.len()) {
         set_add(visto, nums[i]);
         i = i + 1;
     }
@@ -37,7 +37,7 @@ fn main() -> int {
     var total = 0;
     let items = set_items(visto);
     var j = 0;
-    while (j < len(items)) {
+    while (j < items.len()) {
         total = total + items[j];
         j = j + 1;
     }

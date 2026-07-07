@@ -26,7 +26,7 @@ pub fn new_cache(server: string, port: int) -> Cache {
 
 fn find_key(c: Cache, key: string) -> int {
     var i = 0;
-    while (i < len(c.keys)) {
+    while (i < c.keys.len()) {
         if (c.keys[i] == key) {
             return i;
         }
@@ -54,9 +54,9 @@ pub fn resolve(c: Cache, name: string, qtype: int) -> Result<[Record], string> {
                 c.records[idx] = res.records;
                 c.expiry[idx] = exp;
             } else {
-                push(c.keys, key);
-                push(c.records, res.records);
-                push(c.expiry, exp);
+                c.keys.push(key);
+                c.records.push(res.records);
+                c.expiry.push(exp);
             }
             Result.Ok(res.records)
         },

@@ -45,20 +45,20 @@ pub fn new_hpack() -> Hpack {
 // --- Tabla dinámica ---
 // El tamaño de una entrada (RFC 7541 §4.1): longitudes de nombre y valor + 32.
 fn entry_size(name: string, value: string) -> int {
-    len(to_bytes(name)) + len(to_bytes(value)) + 32
+    name.to_bytes().len() + value.to_bytes().len() + 32
 }
 
 // Evicta entradas (de la más antigua) hasta que el tamaño no supere el máximo.
 fn evict(h: Hpack) {
-    while (h.size > h.max_size && len(h.dyn_names) > 0) {
-        let ultimo = len(h.dyn_names) - 1;
+    while (h.size > h.max_size && h.dyn_names.len() > 0) {
+        let ultimo = h.dyn_names.len() - 1;
         h.size = h.size - entry_size(h.dyn_names[ultimo], h.dyn_values[ultimo]);
         var nn: [string] = [];
         var nv: [string] = [];
         var i = 0;
         while (i < ultimo) {
-            push(nn, h.dyn_names[i]);
-            push(nv, h.dyn_values[i]);
+            nn.push(h.dyn_names[i]);
+            nv.push(h.dyn_values[i]);
             i = i + 1;
         }
         h.dyn_names = nn;
@@ -71,9 +71,9 @@ fn add_dynamic(h: Hpack, name: string, value: string) {
     var nn: [string] = [name];
     var nv: [string] = [value];
     var i = 0;
-    while (i < len(h.dyn_names)) {
-        push(nn, h.dyn_names[i]);
-        push(nv, h.dyn_values[i]);
+    while (i < h.dyn_names.len()) {
+        nn.push(h.dyn_names[i]);
+        nv.push(h.dyn_values[i]);
         i = i + 1;
     }
     h.dyn_names = nn;
@@ -90,11 +90,11 @@ fn set_max_size(h: Hpack, nuevo: int) {
 // El nombre y valor del índice HPACK `idx` (1-basado): estático 1..61, dinámico 62+.
 fn table_lookup(h: Hpack, idx: int) -> Result<HEntry, string> {
     let st = static_table();
-    if (idx >= 1 && idx <= len(st)) {
+    if (idx >= 1 && idx <= st.len()) {
         Result.Ok(st[idx - 1])
     } else {
-        let d = idx - len(st) - 1;  // 0-basado en la tabla dinámica
-        if (d >= 0 && d < len(h.dyn_names)) {
+        let d = idx - st.len() - 1;  // 0-basado en la tabla dinámica
+        if (d >= 0 && d < h.dyn_names.len()) {
             Result.Ok(header(h.dyn_names[d], h.dyn_values[d]))
         } else {
             Result.Err("índice HPACK fuera de rango: " + to_string(idx))
@@ -107,25 +107,25 @@ fn table_lookup(h: Hpack, idx: int) -> Result<HEntry, string> {
 fn enc_int(out: [int], prefix_bits: int, high: int, value: int) {
     let max = (1 << prefix_bits) - 1;
     if (value < max) {
-        push(out, high | value);
+        out.push(high | value);
     } else {
-        push(out, high | max);
+        out.push(high | max);
         var v = value - max;
         while (v >= 128) {
-            push(out, v & 127 | 128);
+            out.push(v & 127 | 128);
             v = v >> 7;
         }
-        push(out, v);
+        out.push(v);
     }
 }
 
 // Codifica un literal de string (sin Huffman): bit H=0 + longitud (prefijo 7) + octetos crudos.
 fn enc_str(out: [int], s: string) {
-    let b = to_bytes(s);
-    enc_int(out, 7, 0, len(b));
+    let b = s.to_bytes();
+    enc_int(out, 7, 0, b.len());
     var i = 0;
-    while (i < len(b)) {
-        push(out, b[i]);
+    while (i < b.len()) {
+        out.push(b[i]);
         i = i + 1;
     }
 }
@@ -134,16 +134,16 @@ fn enc_str(out: [int], s: string) {
 fn find_exact(h: Hpack, name: string, value: string) -> int {
     let st = static_table();
     var i = 0;
-    while (i < len(st)) {
+    while (i < st.len()) {
         if (st[i].name == name && st[i].value == value) {
             return i + 1;
         }
         i = i + 1;
     }
     i = 0;
-    while (i < len(h.dyn_names)) {
+    while (i < h.dyn_names.len()) {
         if (h.dyn_names[i] == name && h.dyn_values[i] == value) {
-            return len(st) + 1 + i;
+            return st.len() + 1 + i;
         }
         i = i + 1;
     }
@@ -154,16 +154,16 @@ fn find_exact(h: Hpack, name: string, value: string) -> int {
 fn find_name(h: Hpack, name: string) -> int {
     let st = static_table();
     var i = 0;
-    while (i < len(st)) {
+    while (i < st.len()) {
         if (st[i].name == name) {
             return i + 1;
         }
         i = i + 1;
     }
     i = 0;
-    while (i < len(h.dyn_names)) {
+    while (i < h.dyn_names.len()) {
         if (h.dyn_names[i] == name) {
-            return len(st) + 1 + i;
+            return st.len() + 1 + i;
         }
         i = i + 1;
     }
@@ -195,7 +195,7 @@ fn encode_one(h: Hpack, out: [int], name: string, value: string) {
 pub fn encode(h: Hpack, headers: [HEntry]) -> bytes {
     var out: [int] = [];
     var i = 0;
-    while (i < len(headers)) {
+    while (i < headers.len()) {
         encode_one(h, out, headers[i].name, headers[i].value);
         i = i + 1;
     }
@@ -241,7 +241,7 @@ fn dec_str(data: bytes, pos: int) -> Result<StrResult, string> {
     if (huff == 1) {
         return Result.Err("HPACK: literal Huffman no soportado en la decodificación");
     }
-    match (from_utf8(sub_bytes(data, lr.next, lr.next + lr.value))) {
+    match (from_utf8(data.sub_bytes(lr.next, lr.next + lr.value))) {
         Result.Ok(s) => Result.Ok(StrResult { value: s, next: lr.next + lr.value }),
         Result.Err(e) => Result.Err("HPACK: string no es UTF-8: " + e),
     }
@@ -266,7 +266,7 @@ fn decode_name(h: Hpack, data: bytes, ir: IntResult) -> Result<StrResult, string
 pub fn decode(h: Hpack, data: bytes) -> Result<[HEntry], string> {
     var headers: [HEntry] = [];
     var pos = 0;
-    let n = len(data);
+    let n = data.len();
     while (pos < n) {
         let b = data[pos];
         if ((b & 128) != 0) {
@@ -274,7 +274,7 @@ pub fn decode(h: Hpack, data: bytes) -> Result<[HEntry], string> {
             let ir = dec_int(data, pos, 7);
             match (table_lookup(h, ir.value)) {
                 Result.Ok(e) => {
-                    push(headers, e);
+                    headers.push(e);
                 },
                 Result.Err(er) => {
                     return Result.Err(er);
@@ -295,7 +295,7 @@ pub fn decode(h: Hpack, data: bytes) -> Result<[HEntry], string> {
                                 return Result.Err(er);
                             },
                             Result.Ok(vr) => {
-                                push(headers, header(nr.value, vr.value));
+                                headers.push(header(nr.value, vr.value));
                                 add_dynamic(h, nr.value, vr.value);
                                 pos = vr.next;
                             },
@@ -321,7 +321,7 @@ pub fn decode(h: Hpack, data: bytes) -> Result<[HEntry], string> {
                                     return Result.Err(er);
                                 },
                                 Result.Ok(vr) => {
-                                    push(headers, header(nr.value, vr.value));
+                                    headers.push(header(nr.value, vr.value));
                                     pos = vr.next;
                                 },
                             }

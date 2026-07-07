@@ -36,7 +36,7 @@ fn word_be(b: [int], i: int) -> u64 {
 fn push_be64(out: [int], w: u64) {
     var j = 56;
     while (j >= 0) {
-        push(out, (w >> j as u64 & 255) as int);
+        out.push((w >> j as u64 & 255) as int);
         j = j - 8;
     }
 }
@@ -44,26 +44,26 @@ fn push_be64(out: [int], w: u64) {
 // Rellena el mensaje: los octetos, un 0x80, ceros hasta longitud ≡ 112 (mod 128), y 16 octetos con la
 // longitud en bits big-endian (los 8 altos son 0 para mensajes normales).
 fn pad(msg: [int]) -> [int] {
-    let n = len(msg);
+    let n = msg.len();
     var m: [int] = [];
     var i = 0;
     while (i < n) {
-        push(m, msg[i]);
+        m.push(msg[i]);
         i = i + 1;
     }
-    push(m, 128);
-    while (len(m) % 128 != 112) {
-        push(m, 0);
+    m.push(128);
+    while (m.len() % 128 != 112) {
+        m.push(0);
     }
     var k = 0;
     while (k < 8) {
-        push(m, 0);  // los 8 octetos altos de la longitud de 128 bits
+        m.push(0);  // los 8 octetos altos de la longitud de 128 bits
         k = k + 1;
     }
     let bitlen = n * 8;
     k = 7;
     while (k >= 0) {
-        push(m, bitlen >> k * 8 & 255);
+        m.push(bitlen >> k * 8 & 255);
         k = k - 1;
     }
     m
@@ -75,18 +75,18 @@ pub fn sha512_octets(msg: [int]) -> [int] {
     let k = k_table();
     var h = h_init();
     var off = 0;
-    while (off < len(m)) {
+    while (off < m.len()) {
         // Agenda de mensaje W[0..79].
         var w: [u64] = [];
         var t = 0;
         while (t < 16) {
-            push(w, word_be(m, off + t * 8));
+            w.push(word_be(m, off + t * 8));
             t = t + 1;
         }
         while (t < 80) {
             let s0 = rotr64(w[t - 15], 1) ^ rotr64(w[t - 15], 8) ^ w[t - 15] >> 7;
             let s1 = rotr64(w[t - 2], 19) ^ rotr64(w[t - 2], 61) ^ w[t - 2] >> 6;
-            push(w, w[t - 16] + s0 + w[t - 7] + s1);
+            w.push(w[t - 16] + s0 + w[t - 7] + s1);
             t = t + 1;
         }
         // Compresión: 80 rondas sobre el estado a..h.

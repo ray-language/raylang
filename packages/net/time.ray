@@ -93,7 +93,7 @@ pub fn to_epoch_millis(dt: DateTime) -> int {
 // Rellena un entero no negativo con ceros a la izquierda hasta `ancho` dígitos.
 fn pad(n: int, ancho: int) -> string {
     var s = to_string(n);
-    while (len(s) < ancho) {
+    while (s.len() < ancho) {
         s = "0" + s;
     }
     s
@@ -139,15 +139,15 @@ pub fn to_rfc1123(dt: DateTime) -> string {
 /// Err only if the string is shorter than 20 chars; non-numeric fields parse as 0.
 /// The weekday is recomputed from the date (the input is not trusted).
 pub fn parse_iso8601(s: string) -> Result<DateTime, string> {
-    if (len(s) < 20) {
+    if (s.len() < 20) {
         return Result.Err("ISO 8601 demasiado corto");
     }
-    let year = int_or(substring(s, 0, 4));
-    let month = int_or(substring(s, 5, 7));
-    let day = int_or(substring(s, 8, 10));
-    let hour = int_or(substring(s, 11, 13));
-    let minute = int_or(substring(s, 14, 16));
-    let second = int_or(substring(s, 17, 19));
+    let year = int_or(s.substring(0, 4));
+    let month = int_or(s.substring(5, 7));
+    let day = int_or(s.substring(8, 10));
+    let hour = int_or(s.substring(11, 13));
+    let minute = int_or(s.substring(14, 16));
+    let second = int_or(s.substring(17, 19));
     // El día de la semana se recalcula desde la fecha civil (no se confía en la entrada).
     let days = days_from_civil(year, month, day);
     let wd = ((days + 4) % 7 + 7) % 7;

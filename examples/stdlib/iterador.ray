@@ -100,7 +100,7 @@ fn main() -> int {
 
     // `.collect()` cierra la cadena perezosa devolviendo un `[int]` de verdad.
     let cuadrados = range(1, 6).map(fn(n: int) -> int { n * n }).collect();
-    print(len(cuadrados));  // 5
+    print(cuadrados.len());  // 5
     print(cuadrados[4]);  // 25
 
     // `.take(n)` corta la cadena a los primeros `n` (perezoso: no toca el resto del origen).

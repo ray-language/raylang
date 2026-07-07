@@ -10,7 +10,7 @@ struct Producto {
 fn valor_total(inv: [Producto]) -> int {
     var total: int = 0;
     var i: int = 0;
-    while (i < len(inv)) {
+    while (i < inv.len()) {
         let p: Producto = inv[i];
         total = total + p.precio * p.cantidad;
         i = i + 1;
@@ -22,7 +22,7 @@ fn valor_total(inv: [Producto]) -> int {
 fn bajo_stock(inv: [Producto], umbral: int) -> int {
     var n: int = 0;
     var i: int = 0;
-    while (i < len(inv)) {
+    while (i < inv.len()) {
         if (inv[i].cantidad < umbral) {
             n = n + 1;
         }

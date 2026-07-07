@@ -10,7 +10,7 @@ fn stats(xs: [int]) -> (int, int, int) {
     var suma = 0;
     var maxi = xs[0];
     var i = 0;
-    while (i < len(xs)) {
+    while (i < xs.len()) {
         suma = suma + xs[i];
         if (xs[i] > maxi) {
             maxi = xs[i];
@@ -18,7 +18,7 @@ fn stats(xs: [int]) -> (int, int, int) {
         i = i + 1;
     }
     // `return` explícito: un `(…)` de tupla justo tras un `while {}` se parsearía como una llamada.
-    return (suma, maxi, len(xs));
+    return (suma, maxi, xs.len());
 }
 
 fn main() {

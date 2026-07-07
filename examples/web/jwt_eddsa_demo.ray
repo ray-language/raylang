@@ -29,8 +29,8 @@ fn main() {
 
     // Payload manipulado: header.payload originales pero con la firma de OTRO mensaje.
     let token2 = jwt_eddsa_sign(seed, "{\"sub\":\"eve\",\"admin\":true}");
-    let a = split(token, ".");
-    let b = split(token2, ".");
+    let a = token.split(".");
+    let b = token2.split(".");
     let forjado = a[0] + "." + a[1] + "." + b[2];
     match (jwt_eddsa_verify(pk, forjado)) {
         Result.Ok(c) => print("manipulado ACEPTADO"),

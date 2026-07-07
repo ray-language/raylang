@@ -23,7 +23,7 @@ fn exit_code(v: Value) -> int {
 // ¿El programa del usuario ya define una función con ese nombre? (para no pisar un override del prelude).
 fn user_has_func(user: Program, name: string) -> bool {
     var i = 0;
-    while (i < len(user.funcs)) {
+    while (i < user.funcs.len()) {
         if (user.funcs[i].name == name) {
             return true;
         }
@@ -38,9 +38,9 @@ fn user_has_func(user: Program, name: string) -> bool {
 fn add_prelude(prelude: Program, user: Program) {
     var extra: [Func] = [];
     var i = 0;
-    while (i < len(prelude.funcs)) {
+    while (i < prelude.funcs.len()) {
         if (!user_has_func(user, prelude.funcs[i].name)) {
-            push(extra, prelude.funcs[i]);
+            extra.push(prelude.funcs[i]);
         }
         i = i + 1;
     }
@@ -63,8 +63,8 @@ fn load_prelude() -> Program {
 fn rest_args(argv: [string]) -> [string] {
     var out: [string] = [];
     var i = 1;
-    while (i < len(argv)) {
-        push(out, argv[i]);
+    while (i < argv.len()) {
+        out.push(argv[i]);
         i = i + 1;
     }
     out
@@ -72,7 +72,7 @@ fn rest_args(argv: [string]) -> [string] {
 
 fn main() -> int {
     let argv = args();
-    if (len(argv) == 0) {
+    if (argv.len() == 0) {
         eprint("uso: raylang selfhost/run.ray <archivo> [args...]");
         return 1;
     }

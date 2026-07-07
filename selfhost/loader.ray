@@ -72,7 +72,7 @@ fn no_strs() -> [string] { [] }
 
 fn contains_str(xs: [string], s: string) -> bool {
     var i = 0;
-    while (i < len(xs)) {
+    while (i < xs.len()) {
         if (xs[i] == s) {
             return true;
         }
@@ -83,10 +83,10 @@ fn contains_str(xs: [string], s: string) -> bool {
 
 // El índice del último '/' en `s`, o -1 si no hay (para separar directorio y base de una ruta).
 fn last_slash(s: string) -> int {
-    let cs = chars(s);
+    let cs = s.chars();
     var idx = 0 - 1;
     var i = 0;
-    while (i < len(cs)) {
+    while (i < cs.len()) {
         if (cs[i] == '/') {
             idx = i;
         }
@@ -98,23 +98,23 @@ fn last_slash(s: string) -> int {
 // El directorio de una ruta (`/tmp/a.ray` → `/tmp`); `.` si la ruta no tiene '/'.
 fn dir_of(path: string) -> string {
     let idx = last_slash(path);
-    if (idx < 0) { "." } else { substring(path, 0, idx) }
+    if (idx < 0) { "." } else { path.substring(0, idx) }
 }
 
 // El nombre base (`/tmp/a.ray` → `a.ray`).
 fn base_of(path: string) -> string {
     let idx = last_slash(path);
-    if (idx < 0) { path } else { substring(path, idx + 1, len(path)) }
+    if (idx < 0) { path } else { path.substring(idx + 1, path.len()) }
 }
 
 // El *stem* de una ruta (`/tmp/a.ray` → `a`): la base sin la extensión `.ray`.
 fn stem_of(path: string) -> string {
     let b = base_of(path);
-    if (ends_with(b, ".ray")) { substring(b, 0, len(b) - 4) } else { b }
+    if (b.ends_with(".ray")) { b.substring(0, b.len() - 4) } else { b }
 }
 
 // El prefijo de namespacing de un módulo (M11.5): `/`→`::`. Sin directorios (self-hosting) es identidad.
-fn ns_prefix(name: string) -> string { replace(name, "/", "::") }
+fn ns_prefix(name: string) -> string { name.replace("/", "::") }
 
 // El nombre global de una función/tipo: el propio nombre para el de entrada, `modulo::nombre` para uno
 // importado (sus nombres se namespacan; `::` es ilegal en identificadores → nunca chocan con los suyos).
@@ -157,43 +157,43 @@ fn load_one(name: string, path: string) -> Result<Program, LoadError> {
 fn build_surfaces(modules: [Module]) -> Map<string, Surface> {
     var surfaces: Map<string, Surface> = Map.new();
     var i = 0;
-    while (i < len(modules)) {
+    while (i < modules.len()) {
         let m = modules[i];
         var vals: Map<string, string> = Map.new();
         var fi = 0;
-        while (fi < len(m.prog.funcs)) {
+        while (fi < m.prog.funcs.len()) {
             let f = m.prog.funcs[fi];
             if (f.is_pub) {
-                insert(vals, f.name, global_of(m, f.name));
+                vals.insert(f.name, global_of(m, f.name));
             }
             fi = fi + 1;
         }
         var tys: Map<string, string> = Map.new();
         var si = 0;
-        while (si < len(m.prog.structs)) {
+        while (si < m.prog.structs.len()) {
             let s = m.prog.structs[si];
             if (s.is_pub) {
-                insert(tys, s.name, global_of(m, s.name));
+                tys.insert(s.name, global_of(m, s.name));
             }
             si = si + 1;
         }
         var ei = 0;
-        while (ei < len(m.prog.enums)) {
+        while (ei < m.prog.enums.len()) {
             let e = m.prog.enums[ei];
             if (e.is_pub) {
-                insert(tys, e.name, global_of(m, e.name));
+                tys.insert(e.name, global_of(m, e.name));
             }
             ei = ei + 1;
         }
         var ti = 0;
-        while (ti < len(m.prog.traits)) {
+        while (ti < m.prog.traits.len()) {
             let t = m.prog.traits[ti];
             if (t.is_pub) {
-                insert(tys, t.name, global_of(m, t.name));
+                tys.insert(t.name, global_of(m, t.name));
             }
             ti = ti + 1;
         }
-        insert(surfaces, m.name, Surface { values: vals, types: tys });
+        surfaces.insert(m.name, Surface { values: vals, types: tys });
         i = i + 1;
     }
     surfaces
@@ -205,22 +205,22 @@ fn clasificar_from(m: Module, surfaces: Map<string, Surface>) -> Result<FromMaps
     var values: Map<string, string> = Map.new();
     var types: Map<string, string> = Map.new();
     var i = 0;
-    while (i < len(m.prog.from_imports)) {
+    while (i < m.prog.from_imports.len()) {
         let fi = m.prog.from_imports[i];
         var j = 0;
-        while (j < len(fi.names)) {
+        while (j < fi.names.len()) {
             let n = fi.names[j];
             let local = local_of_alias(n.alias, n.name);
             match (get(surfaces, fi.module)) {
                 Option.Some(surf) => {
                     match (get(surf.values, n.name)) {
                         Option.Some(g) => {
-                            insert(values, local, g);
+                            values.insert(local, g);
                         },
                         Option.None => {
                             match (get(surf.types, n.name)) {
                                 Option.Some(g) => {
-                                    insert(types, local, g);
+                                    types.insert(local, g);
                                 },
                                 Option.None => {
                                     return Result.Err(LoadError { msg: "el módulo '" + fi.module + "' no exporta '" + n.name + "' (¿falta 'pub'?)", line: n.line, col: n.col, module: m.name });
@@ -247,17 +247,17 @@ fn clasificar_from(m: Module, surfaces: Map<string, Surface>) -> Result<FromMaps
 fn build_own(m: Module, from_values: Map<string, string>) -> Map<string, string> {
     var own: Map<string, string> = Map.new();
     var i = 0;
-    while (i < len(m.prog.funcs)) {
+    while (i < m.prog.funcs.len()) {
         let f = m.prog.funcs[i];
-        insert(own, f.name, global_of(m, f.name));
+        own.insert(f.name, global_of(m, f.name));
         i = i + 1;
     }
-    let ks = keys(from_values);
+    let ks = from_values.keys();
     var j = 0;
-    while (j < len(ks)) {
+    while (j < ks.len()) {
         match (get(from_values, ks[j])) {
             Option.Some(g) => {
-                insert(own, ks[j], g);
+                own.insert(ks[j], g);
             },
             Option.None => { },
         }
@@ -268,7 +268,7 @@ fn build_own(m: Module, from_values: Map<string, string>) -> Map<string, string>
 
 fn rs_is_local(r: Resolver, name: string) -> bool {
     var i = 0;
-    while (i < len(r.scopes)) {
+    while (i < r.scopes.len()) {
         if (contains_str(r.scopes[i], name)) {
             return true;
         }
@@ -278,13 +278,13 @@ fn rs_is_local(r: Resolver, name: string) -> bool {
 }
 
 fn rs_declare(r: Resolver, name: string) {
-    if (len(r.scopes) > 0) {
-        push(r.scopes[len(r.scopes) - 1], name);
+    if (r.scopes.len() > 0) {
+        r.scopes[r.scopes.len() - 1].push(name);
     }
 }
 
 fn rs_push(r: Resolver) {
-    push(r.scopes, no_strs());
+    r.scopes.push(no_strs());
 }
 
 fn rs_pop(r: Resolver) {
@@ -293,15 +293,15 @@ fn rs_pop(r: Resolver) {
 
 fn resolve_program(r: Resolver, prog: Program) {
     var i = 0;
-    while (i < len(prog.funcs)) {
+    while (i < prog.funcs.len()) {
         resolve_fn(r, prog.funcs[i]);
         i = i + 1;
     }
     var j = 0;
-    while (j < len(prog.impls)) {
+    while (j < prog.impls.len()) {
         let imp = prog.impls[j];
         var k = 0;
-        while (k < len(imp.methods)) {
+        while (k < imp.methods.len()) {
             resolve_fn(r, imp.methods[k]);
             k = k + 1;
         }
@@ -312,7 +312,7 @@ fn resolve_program(r: Resolver, prog: Program) {
 fn resolve_fn(r: Resolver, f: Func) {
     rs_push(r);
     var i = 0;
-    while (i < len(f.params)) {
+    while (i < f.params.len()) {
         rs_declare(r, f.params[i].name);
         i = i + 1;
     }
@@ -323,7 +323,7 @@ fn resolve_fn(r: Resolver, f: Func) {
 fn resolve_block(r: Resolver, b: Block) {
     rs_push(r);
     var i = 0;
-    while (i < len(b.stmts)) {
+    while (i < b.stmts.len()) {
         resolve_stmt(r, b.stmts[i]);
         i = i + 1;
     }
@@ -371,7 +371,7 @@ fn resolve_expr(r: Resolver, e: Expr) {
         EKind.ECall(callee, cargs) => {
             resolve_expr(r, callee);
             var i = 0;
-            while (i < len(cargs)) {
+            while (i < cargs.len()) {
                 resolve_expr(r, cargs[i]);
                 i = i + 1;
             }
@@ -389,14 +389,14 @@ fn resolve_expr(r: Resolver, e: Expr) {
         EKind.EField(obj, _) => resolve_expr(r, obj),
         EKind.EArray(elems) => {
             var i = 0;
-            while (i < len(elems)) {
+            while (i < elems.len()) {
                 resolve_expr(r, elems[i]);
                 i = i + 1;
             }
         },
         EKind.EStructLit(_, fields) => {
             var i = 0;
-            while (i < len(fields)) {
+            while (i < fields.len()) {
                 resolve_expr(r, fields[i].value);
                 i = i + 1;
             }
@@ -405,7 +405,7 @@ fn resolve_expr(r: Resolver, e: Expr) {
         EKind.EMatch(scrut, arms) => {
             resolve_expr(r, scrut);
             var i = 0;
-            while (i < len(arms)) {
+            while (i < arms.len()) {
                 rs_push(r);
                 declare_pattern(r, arms[i].pat);
                 resolve_expr(r, arms[i].body);
@@ -438,7 +438,7 @@ fn declare_pattern(r: Resolver, p: Pattern) {
         PKind.PBind(n) => rs_declare(r, n),
         PKind.PVariant(_, _, binds) => {
             var i = 0;
-            while (i < len(binds)) {
+            while (i < binds.len()) {
                 match (binds[i]) {
                     Option.Some(b) => rs_declare(r, b),
                     Option.None => { },
@@ -452,7 +452,7 @@ fn declare_pattern(r: Resolver, p: Pattern) {
 fn resolve_fn_expr(r: Resolver, fe: FnExpr) {
     rs_push(r);
     var i = 0;
-    while (i < len(fe.params)) {
+    while (i < fe.params.len()) {
         rs_declare(r, fe.params[i].name);
         i = i + 1;
     }
@@ -467,18 +467,18 @@ fn resolve_fn_expr(r: Resolver, fe: FnExpr) {
 fn build_own_types(m: Module) -> Map<string, string> {
     var map: Map<string, string> = Map.new();
     var si = 0;
-    while (si < len(m.prog.structs)) {
-        insert(map, m.prog.structs[si].name, global_of(m, m.prog.structs[si].name));
+    while (si < m.prog.structs.len()) {
+        map.insert(m.prog.structs[si].name, global_of(m, m.prog.structs[si].name));
         si = si + 1;
     }
     var ei = 0;
-    while (ei < len(m.prog.enums)) {
-        insert(map, m.prog.enums[ei].name, global_of(m, m.prog.enums[ei].name));
+    while (ei < m.prog.enums.len()) {
+        map.insert(m.prog.enums[ei].name, global_of(m, m.prog.enums[ei].name));
         ei = ei + 1;
     }
     var ti = 0;
-    while (ti < len(m.prog.traits)) {
-        insert(map, m.prog.traits[ti].name, global_of(m, m.prog.traits[ti].name));
+    while (ti < m.prog.traits.len()) {
+        map.insert(m.prog.traits[ti].name, global_of(m, m.prog.traits[ti].name));
         ti = ti + 1;
     }
     map
@@ -486,12 +486,12 @@ fn build_own_types(m: Module) -> Map<string, string> {
 
 // Vuelca `b` sobre `a` (las claves de `b` ganan). Para unir tipos propios + `from`-importados.
 fn merge_maps(a: Map<string, string>, b: Map<string, string>) -> Map<string, string> {
-    let ks = keys(b);
+    let ks = b.keys();
     var i = 0;
-    while (i < len(ks)) {
+    while (i < ks.len()) {
         match (get(b, ks[i])) {
             Option.Some(v) => {
-                insert(a, ks[i], v);
+                a.insert(ks[i], v);
             },
             Option.None => { },
         }
@@ -503,7 +503,7 @@ fn merge_maps(a: Map<string, string>, b: Map<string, string>) -> Map<string, str
 // Renombra las DEFINICIONES de tipo del módulo a su global (las referencias las hace el TypeRewriter).
 fn rename_type_defs(prog: Program, own_types: Map<string, string>) {
     var si = 0;
-    while (si < len(prog.structs)) {
+    while (si < prog.structs.len()) {
         match (get(own_types, prog.structs[si].name)) {
             Option.Some(g) => {
                 prog.structs[si].name = g;
@@ -513,7 +513,7 @@ fn rename_type_defs(prog: Program, own_types: Map<string, string>) {
         si = si + 1;
     }
     var ei = 0;
-    while (ei < len(prog.enums)) {
+    while (ei < prog.enums.len()) {
         match (get(own_types, prog.enums[ei].name)) {
             Option.Some(g) => {
                 prog.enums[ei].name = g;
@@ -523,7 +523,7 @@ fn rename_type_defs(prog: Program, own_types: Map<string, string>) {
         ei = ei + 1;
     }
     var ti = 0;
-    while (ti < len(prog.traits)) {
+    while (ti < prog.traits.len()) {
         match (get(own_types, prog.traits[ti].name)) {
             Option.Some(g) => {
                 prog.traits[ti].name = g;
@@ -536,7 +536,7 @@ fn rename_type_defs(prog: Program, own_types: Map<string, string>) {
 
 fn tw_is_tparam(tw: TypeRewriter, name: string) -> bool {
     var i = 0;
-    while (i < len(tw.tparams)) {
+    while (i < tw.tparams.len()) {
         if (contains_str(tw.tparams[i], name)) {
             return true;
         }
@@ -546,7 +546,7 @@ fn tw_is_tparam(tw: TypeRewriter, name: string) -> bool {
 }
 
 fn tw_push(tw: TypeRewriter, params: [string]) {
-    push(tw.tparams, params);
+    tw.tparams.push(params);
 }
 
 fn tw_pop(tw: TypeRewriter) {
@@ -568,8 +568,8 @@ fn tw_name(tw: TypeRewriter, name: string) -> string {
 fn tw_types(tw: TypeRewriter, ts: [Type]) -> [Type] {
     var out: [Type] = [];
     var i = 0;
-    while (i < len(ts)) {
-        push(out, tw_type(tw, ts[i]));
+    while (i < ts.len()) {
+        out.push(tw_type(tw, ts[i]));
         i = i + 1;
     }
     out
@@ -578,8 +578,8 @@ fn tw_types(tw: TypeRewriter, ts: [Type]) -> [Type] {
 fn tw_names(tw: TypeRewriter, ns: [string]) -> [string] {
     var out: [string] = [];
     var i = 0;
-    while (i < len(ns)) {
-        push(out, tw_name(tw, ns[i]));
+    while (i < ns.len()) {
+        out.push(tw_name(tw, ns[i]));
         i = i + 1;
     }
     out
@@ -599,7 +599,7 @@ fn tw_type(tw: TypeRewriter, t: Type) -> Type {
 // Reescribe los `T: Trait` de un parámetro de tipo: el trait se namespaca como cualquier tipo (M9.4).
 fn tw_bounds(tw: TypeRewriter, bounds: [Bound]) {
     var i = 0;
-    while (i < len(bounds)) {
+    while (i < bounds.len()) {
         bounds[i].trait_name = tw_name(tw, bounds[i].trait_name);
         i = i + 1;
     }
@@ -607,27 +607,27 @@ fn tw_bounds(tw: TypeRewriter, bounds: [Bound]) {
 
 fn tw_program(tw: TypeRewriter, prog: Program) {
     var si = 0;
-    while (si < len(prog.structs)) {
+    while (si < prog.structs.len()) {
         tw_struct(tw, prog.structs[si]);
         si = si + 1;
     }
     var ei = 0;
-    while (ei < len(prog.enums)) {
+    while (ei < prog.enums.len()) {
         tw_enum(tw, prog.enums[ei]);
         ei = ei + 1;
     }
     var ti = 0;
-    while (ti < len(prog.traits)) {
+    while (ti < prog.traits.len()) {
         tw_trait(tw, prog.traits[ti]);
         ti = ti + 1;
     }
     var fi = 0;
-    while (fi < len(prog.funcs)) {
+    while (fi < prog.funcs.len()) {
         tw_func(tw, prog.funcs[fi]);
         fi = fi + 1;
     }
     var ii = 0;
-    while (ii < len(prog.impls)) {
+    while (ii < prog.impls.len()) {
         tw_impl(tw, prog.impls[ii]);
         ii = ii + 1;
     }
@@ -636,7 +636,7 @@ fn tw_program(tw: TypeRewriter, prog: Program) {
 fn tw_struct(tw: TypeRewriter, s: StructDef) {
     tw_push(tw, s.type_params);
     var i = 0;
-    while (i < len(s.fields)) {
+    while (i < s.fields.len()) {
         s.fields[i].ty = tw_type(tw, s.fields[i].ty);
         i = i + 1;
     }
@@ -647,7 +647,7 @@ fn tw_struct(tw: TypeRewriter, s: StructDef) {
 fn tw_enum(tw: TypeRewriter, e: EnumDef) {
     tw_push(tw, e.type_params);
     var i = 0;
-    while (i < len(e.variants)) {
+    while (i < e.variants.len()) {
         e.variants[i].payload = tw_types(tw, e.variants[i].payload);
         i = i + 1;
     }
@@ -658,7 +658,7 @@ fn tw_enum(tw: TypeRewriter, e: EnumDef) {
 fn tw_trait(tw: TypeRewriter, t: TraitDef) {
     tw_push(tw, no_strs());  // los traits no llevan parámetros de tipo
     var i = 0;
-    while (i < len(t.methods)) {
+    while (i < t.methods.len()) {
         tw_method(tw, t.methods[i]);
         i = i + 1;
     }
@@ -667,7 +667,7 @@ fn tw_trait(tw: TypeRewriter, t: TraitDef) {
 
 fn tw_method(tw: TypeRewriter, m: MethodSig) {
     var i = 0;
-    while (i < len(m.params)) {
+    while (i < m.params.len()) {
         m.params[i].ty = tw_type(tw, m.params[i].ty);
         i = i + 1;
     }
@@ -681,7 +681,7 @@ fn tw_method(tw: TypeRewriter, m: MethodSig) {
 fn tw_func(tw: TypeRewriter, f: Func) {
     tw_push(tw, f.type_params);
     var i = 0;
-    while (i < len(f.params)) {
+    while (i < f.params.len()) {
         f.params[i].ty = tw_type(tw, f.params[i].ty);
         i = i + 1;
     }
@@ -697,7 +697,7 @@ fn tw_impl(tw: TypeRewriter, imp: ImplBlock) {
     imp.trait_name = tw_name(tw, imp.trait_name);
     tw_bounds(tw, imp.bounds);
     var i = 0;
-    while (i < len(imp.methods)) {
+    while (i < imp.methods.len()) {
         tw_func(tw, imp.methods[i]);
         i = i + 1;
     }
@@ -706,7 +706,7 @@ fn tw_impl(tw: TypeRewriter, imp: ImplBlock) {
 
 fn tw_block(tw: TypeRewriter, b: Block) {
     var i = 0;
-    while (i < len(b.stmts)) {
+    while (i < b.stmts.len()) {
         tw_stmt(tw, b.stmts[i]);
         i = i + 1;
     }
@@ -747,7 +747,7 @@ fn tw_expr(tw: TypeRewriter, e: Expr) {
     match (e.kind) {
         EKind.EStructLit(name, fields) => {
             var i = 0;
-            while (i < len(fields)) {
+            while (i < fields.len()) {
                 tw_expr(tw, fields[i].value);
                 i = i + 1;
             }
@@ -766,7 +766,7 @@ fn tw_expr(tw: TypeRewriter, e: Expr) {
         EKind.ECall(callee, cargs) => {
             tw_expr(tw, callee);
             var i = 0;
-            while (i < len(cargs)) {
+            while (i < cargs.len()) {
                 tw_expr(tw, cargs[i]);
                 i = i + 1;
             }
@@ -774,7 +774,7 @@ fn tw_expr(tw: TypeRewriter, e: Expr) {
         EKind.EMatch(scrut, arms) => {
             tw_expr(tw, scrut);
             var i = 0;
-            while (i < len(arms)) {
+            while (i < arms.len()) {
                 match (arms[i].pat.kind) {
                     PKind.PVariant(en, va, binds) => {
                         arms[i].pat.kind = PKind.PVariant(tw_name(tw, en), va, binds);
@@ -796,7 +796,7 @@ fn tw_expr(tw: TypeRewriter, e: Expr) {
         },
         EKind.EArray(elems) => {
             var i = 0;
-            while (i < len(elems)) {
+            while (i < elems.len()) {
                 tw_expr(tw, elems[i]);
                 i = i + 1;
             }
@@ -822,7 +822,7 @@ fn tw_expr(tw: TypeRewriter, e: Expr) {
 
 fn tw_fn_expr(tw: TypeRewriter, fe: FnExpr) {
     var i = 0;
-    while (i < len(fe.params)) {
+    while (i < fe.params.len()) {
         fe.params[i].ty = tw_type(tw, fe.params[i].ty);
         i = i + 1;
     }
@@ -835,31 +835,31 @@ fn tw_fn_expr(tw: TypeRewriter, fe: FnExpr) {
 // =====================================================================
 fn rename_and_merge(m: Module, fused: Program) {
     var i = 0;
-    while (i < len(m.prog.funcs)) {
+    while (i < m.prog.funcs.len()) {
         let f = m.prog.funcs[i];
         f.name = global_of(m, f.name);
-        push(fused.funcs, f);
+        fused.funcs.push(f);
         i = i + 1;
     }
     // M14.7a: los tipos (struct/enum/trait/impl) se fusionan SIN namespacar (el cruce de tipos → M14.7b).
     var si = 0;
-    while (si < len(m.prog.structs)) {
-        push(fused.structs, m.prog.structs[si]);
+    while (si < m.prog.structs.len()) {
+        fused.structs.push(m.prog.structs[si]);
         si = si + 1;
     }
     var ei = 0;
-    while (ei < len(m.prog.enums)) {
-        push(fused.enums, m.prog.enums[ei]);
+    while (ei < m.prog.enums.len()) {
+        fused.enums.push(m.prog.enums[ei]);
         ei = ei + 1;
     }
     var ti = 0;
-    while (ti < len(m.prog.traits)) {
-        push(fused.traits, m.prog.traits[ti]);
+    while (ti < m.prog.traits.len()) {
+        fused.traits.push(m.prog.traits[ti]);
         ti = ti + 1;
     }
     var ii = 0;
-    while (ii < len(m.prog.impls)) {
-        push(fused.impls, m.prog.impls[ii]);
+    while (ii < m.prog.impls.len()) {
+        fused.impls.push(m.prog.impls[ii]);
         ii = ii + 1;
     }
 }
@@ -876,25 +876,25 @@ pub fn load(entry_path: string) -> Result<Program, LoadError> {
     var visited: Map<string, bool> = Map.new();
     var pending: [PendingMod] = [PendingMod { name: entry_name, path: entry_path, is_entry: true }];
     var head = 0;
-    while (head < len(pending)) {
+    while (head < pending.len()) {
         let pm = pending[head];
         head = head + 1;
-        if (!contains_key(visited, pm.name)) {
-            insert(visited, pm.name, true);
+        if (!visited.contains_key(pm.name)) {
+            visited.insert(pm.name, true);
             let prog = load_one(pm.name, pm.path)?;
             var di = 0;
-            while (di < len(prog.from_imports)) {
+            while (di < prog.from_imports.len()) {
                 let dep = prog.from_imports[di].module;
-                push(pending, PendingMod { name: dep, path: root + "/" + dep + ".ray", is_entry: false });
+                pending.push(PendingMod { name: dep, path: root + "/" + dep + ".ray", is_entry: false });
                 di = di + 1;
             }
             var ii = 0;
-            while (ii < len(prog.imports)) {
+            while (ii < prog.imports.len()) {
                 let dep = prog.imports[ii].module;
-                push(pending, PendingMod { name: dep, path: root + "/" + dep + ".ray", is_entry: false });
+                pending.push(PendingMod { name: dep, path: root + "/" + dep + ".ray", is_entry: false });
                 ii = ii + 1;
             }
-            push(modules, Module { name: pm.name, is_entry: pm.is_entry, prog: prog });
+            modules.push(Module { name: pm.name, is_entry: pm.is_entry, prog: prog });
         }
     }
 
@@ -902,7 +902,7 @@ pub fn load(entry_path: string) -> Result<Program, LoadError> {
     let surfaces = build_surfaces(modules);
     var fused = Program { funcs: [], structs: [], enums: [], traits: [], impls: [], imports: [], from_imports: [] };
     var mi = 0;
-    while (mi < len(modules)) {
+    while (mi < modules.len()) {
         let m = modules[mi];
         let fm = clasificar_from(m, surfaces)?;
         // Resolución de VALORES (funciones propias + from-importadas).

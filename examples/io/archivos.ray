@@ -15,7 +15,7 @@ fn o_default(r: Result<string, string>, def: string) -> string {
 
 fn main() -> int {
     let xs = args();
-    if (len(xs) == 0) {
+    if (xs.len() == 0) {
         eprint("uso: archivos.ray <ruta>");
         return 1;
     }
@@ -33,7 +33,7 @@ fn main() -> int {
     // Leer de vuelta y contar las líneas (split por '\n').
     let contenido = o_default(read_file(ruta), "");
     let lineas = contenido.trim().split("\n");
-    print("el archivo tiene " + len(lineas).to_string() + " línea(s):");
+    print("el archivo tiene " + lineas.len().to_string() + " línea(s):");
     print(contenido);
 
     // Leer algo que no existe: el Result lo hace explícito.
@@ -42,5 +42,5 @@ fn main() -> int {
         Result.Err(_) => print("(leer un inexistente da Err, como debe)"),
     }
 
-    len(lineas)
+    lineas.len()
 }

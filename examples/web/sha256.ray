@@ -22,21 +22,21 @@ fn k_table() -> [int] {
 // Rellena el mensaje (octetos `[int]`) según SHA-256: el mensaje, un `0x80`, ceros hasta que la
 // longitud ≡ 56 (mod 64), y 8 octetos big-endian con la longitud en bits. (Idéntico a SHA-1.)
 fn pad(msg: [int]) -> [int] {
-    let n = len(msg);
+    let n = msg.len();
     var m: [int] = [];
     var i = 0;
     while (i < n) {
-        push(m, msg[i]);
+        m.push(msg[i]);
         i = i + 1;
     }
-    push(m, 128);  // 0x80: el bit '1' de cierre seguido de ceros
-    while (len(m) % 64 != 56) {
-        push(m, 0);
+    m.push(128);  // 0x80: el bit '1' de cierre seguido de ceros
+    while (m.len() % 64 != 56) {
+        m.push(0);
     }
     let bitlen = n * 8;
     var k = 7;
     while (k >= 0) {
-        push(m, bitlen >> k * 8 & 255);
+        m.push(bitlen >> k * 8 & 255);
         k = k - 1;
     }
     m
@@ -44,10 +44,10 @@ fn pad(msg: [int]) -> [int] {
 
 // Añade los 4 octetos big-endian de la palabra de 32 bits `w` al final de `out`.
 fn append_word(out: [int], w: int) {
-    push(out, w >> 24 & 255);
-    push(out, w >> 16 & 255);
-    push(out, w >> 8 & 255);
-    push(out, w & 255);
+    out.push(w >> 24 & 255);
+    out.push(w >> 16 & 255);
+    out.push(w >> 8 & 255);
+    out.push(w & 255);
 }
 
 // SHA-256 sobre octetos (`[int]`, cada uno 0..255). Entrada interna que permite encadenar hashes
@@ -64,7 +64,7 @@ pub fn sha256_octets(msg: [int]) -> [int] {
     var h5 = 2600822924;
     var h6 = 528734635;
     var h7 = 1541459225;
-    let total = len(m);
+    let total = m.len();
     var chunk = 0;
     while (chunk < total) {
         // 16 palabras big-endian del bloque de 64 octetos.
@@ -73,7 +73,7 @@ pub fn sha256_octets(msg: [int]) -> [int] {
         while (j < 16) {
             let base = chunk + j * 4;
             let word = m[base] << 24 | m[base + 1] << 16 | m[base + 2] << 8 | m[base + 3];
-            push(w, word & mask32());
+            w.push(word & mask32());
             j = j + 1;
         }
         // Extiende a 64 palabras con la planificación de mensaje.
@@ -83,7 +83,7 @@ pub fn sha256_octets(msg: [int]) -> [int] {
             let s0 = rotr(x, 7) ^ rotr(x, 18) ^ x >> 3;
             let y = w[t - 2];
             let s1 = rotr(y, 17) ^ rotr(y, 19) ^ y >> 10;
-            push(w, w[t - 16] + s0 + w[t - 7] + s1 & mask32());
+            w.push(w[t - 16] + s0 + w[t - 7] + s1 & mask32());
             t = t + 1;
         }
         var a = h0;
@@ -138,8 +138,8 @@ pub fn sha256_octets(msg: [int]) -> [int] {
 pub fn sha256(msg: bytes) -> [int] {
     var oct: [int] = [];
     var i = 0;
-    while (i < len(msg)) {
-        push(oct, msg[i]);
+    while (i < msg.len()) {
+        oct.push(msg[i]);
         i = i + 1;
     }
     sha256_octets(oct)
@@ -156,7 +156,7 @@ pub fn sha256_hex(msg: bytes) -> string {
     let d = sha256(msg);
     var s = "";
     var i = 0;
-    while (i < len(d)) {
+    while (i < d.len()) {
         let octet = d[i];
         s = s + hex_digit(octet >> 4 & 15);
         s = s + hex_digit(octet & 15);

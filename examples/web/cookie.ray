@@ -14,16 +14,16 @@ fn decode_or(s: string) -> string {
 // Parsea la cabecera de petición `Cookie: a=1; b=hola%20mundo` en un `Map<string,string>`.
 pub fn parse_cookies(header: string) -> Map<string, string> {
     var m: Map<string, string> = Map.new();
-    let parts = split(header, ";");
+    let parts = header.split(";");
     var i = 0;
-    while (i < len(parts)) {
-        let p = trim(parts[i]);
-        if (len(p) > 0) {
+    while (i < parts.len()) {
+        let p = parts[i].trim();
+        if (p.len() > 0) {
             match (index_of(p, "=")) {
                 Option.Some(eq) => {
-                    let k = trim(substring(p, 0, eq));
-                    let v = decode_or(trim(substring(p, eq + 1, len(p))));
-                    insert(m, k, v);
+                    let k = p.substring(0, eq).trim();
+                    let v = decode_or(p.substring(eq + 1, p.len()).trim());
+                    m.insert(k, v);
                 },
                 Option.None => { },
             }
@@ -75,7 +75,7 @@ pub fn with_secure(c: Cookie) -> Cookie {
 // Serializa la cookie a un valor de cabecera `Set-Cookie`. El valor se url-codifica.
 pub fn set_cookie(c: Cookie) -> string {
     var s = c.name + "=" + url_encode(c.value);
-    if (len(c.path) > 0) {
+    if (c.path.len() > 0) {
         s = s + "; Path=" + c.path;
     }
     if (c.max_age >= 0) {

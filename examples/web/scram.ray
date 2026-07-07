@@ -21,8 +21,8 @@ pub struct Scram {
 fn xor_bytes(a: [int], b: [int]) -> [int] {
     var out: [int] = [];
     var i = 0;
-    while (i < len(a)) {
-        push(out, a[i] ^ b[i]);
+    while (i < a.len()) {
+        out.push(a[i] ^ b[i]);
         i = i + 1;
     }
     out
@@ -33,14 +33,14 @@ fn xor_bytes(a: [int], b: [int]) -> [int] {
 fn pbkdf2_sha256(pw: bytes, salt: [int], iterations: int) -> [int] {
     var msg: [int] = [];
     var i = 0;
-    while (i < len(salt)) {
-        push(msg, salt[i]);
+    while (i < salt.len()) {
+        msg.push(salt[i]);
         i = i + 1;
     }
-    push(msg, 0);  // INT(1) big-endian
-    push(msg, 0);
-    push(msg, 0);
-    push(msg, 1);
+    msg.push(0);  // INT(1) big-endian
+    msg.push(0);
+    msg.push(0);
+    msg.push(1);
     var u = hmac_sha256(pw, bytes_of(msg));  // U1
     var result = u;
     var c = 1;
@@ -64,13 +64,13 @@ pub fn scram_client_first_message(sc: Scram) -> string {
 
 // Devuelve el valor de un atributo `k=valor` en un mensaje `a=..,b=..,..` separado por comas.
 fn attr(msg: string, clave: string) -> string {
-    let partes = split(msg, ",");
+    let partes = msg.split(",");
     var v = "";
     var i = 0;
-    while (i < len(partes)) {
+    while (i < partes.len()) {
         let p = partes[i];
-        if (len(p) >= 2 && p[0] == clave[0] && p[1] == '=') {
-            v = substring(p, 2, len(p));
+        if (p.len() >= 2 && p[0] == clave[0] && p[1] == '=') {
+            v = p.substring(2, p.len());
         }
         i = i + 1;
     }
@@ -99,14 +99,14 @@ pub fn scram_final(sc: Scram, password: string, server_first: string) -> Result<
     let client_final_noproof = "c=biws,r=" + rnonce;
     let auth_msg = sc.client_first_bare + "," + server_first + "," + client_final_noproof;
 
-    let salted = pbkdf2_sha256(to_bytes(password), salt, iterations);
-    let client_key = hmac_sha256(bytes_of(salted), to_bytes("Client Key"));
+    let salted = pbkdf2_sha256(password.to_bytes(), salt, iterations);
+    let client_key = hmac_sha256(bytes_of(salted), "Client Key".to_bytes());
     let stored_key = sha256_octets(client_key);
-    let client_sig = hmac_sha256(bytes_of(stored_key), to_bytes(auth_msg));
+    let client_sig = hmac_sha256(bytes_of(stored_key), auth_msg.to_bytes());
     let proof = xor_bytes(client_key, client_sig);
 
-    let server_key = hmac_sha256(bytes_of(salted), to_bytes("Server Key"));
-    sc.server_sig = hmac_sha256(bytes_of(server_key), to_bytes(auth_msg));
+    let server_key = hmac_sha256(bytes_of(salted), "Server Key".to_bytes());
+    sc.server_sig = hmac_sha256(bytes_of(server_key), auth_msg.to_bytes());
 
     Result.Ok(client_final_noproof + ",p=" + base64(proof))
 }
@@ -116,12 +116,12 @@ pub fn scram_verify(sc: Scram, server_final: string) -> bool {
     let v = attr(server_final, "v");
     match (base64_decode(v)) {
         Result.Ok(sig) => {
-            if (len(sig) != len(sc.server_sig)) {
+            if (sig.len() != sc.server_sig.len()) {
                 return false;
             }
             var diff = 0;
             var i = 0;
-            while (i < len(sig)) {
+            while (i < sig.len()) {
                 diff = diff | sig[i] ^ sc.server_sig[i];
                 i = i + 1;
             }

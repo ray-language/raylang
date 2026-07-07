@@ -59,7 +59,7 @@ pub fn new_app() -> App {
 // el choque de `get` con el `get` del prelude (de Map) — definir `fn get` en el módulo de entrada
 // taparía el `get` de Map para todo el programa, rompiendo a `webserver.ray`, que lo usa.
 fn add_route(app: App, method: string, pattern: string, handler: fn(Ctx, Res)) {
-    push(app.routes, Route { method: method, segments: split_path(pattern), handler: handler });
+    app.routes.push(Route { method: method, segments: split_path(pattern), handler: handler });
 }
 
 pub fn GET(app: App, pattern: string, handler: fn(Ctx, Res)) {
@@ -80,14 +80,14 @@ pub fn DELETE(app: App, pattern: string, handler: fn(Ctx, Res)) {
 
 // Registra un middleware (corre antes del enrutado; devuelve false para detener la petición).
 pub fn use_mw(app: App, mw: fn(Ctx, Res) -> bool) {
-    push(app.middlewares, mw);
+    app.middlewares.push(mw);
 }
 
 // --- Helpers del contexto (handler) ---
 // El valor de un parámetro de ruta (`:name`), o "" si no existe.
 pub fn param(ctx: Ctx, name: string) -> string {
     var i: int = 0;
-    while (i < len(ctx.params)) {
+    while (i < ctx.params.len()) {
         if (ctx.params[i].name == name) {
             return ctx.params[i].value;
         }
@@ -113,32 +113,32 @@ pub fn status(res: Res, n: int) -> Res {
 
 // Responde texto plano.
 pub fn text(res: Res, txt: string) {
-    res.body = to_bytes(txt);
+    res.body = txt.to_bytes();
     res.content_type = "text/plain; charset=utf-8";
 }
 
 // Responde JSON (el llamador pasa el JSON ya serializado).
 pub fn json(res: Res, txt: string) {
-    res.body = to_bytes(txt);
+    res.body = txt.to_bytes();
     res.content_type = "application/json";
 }
 
 // --- Enrutado ---
 // Parte una ruta en segmentos por "/". Mantiene el vacío inicial (de la "/" inicial) en ambos lados, así
 // el patrón y la ruta se alinean posición a posición (p. ej. "/u/:id" y "/u/7" → 3 segmentos cada uno).
-fn split_path(p: string) -> [string] { split(p, "/") }
+fn split_path(p: string) -> [string] { p.split("/") }
 
 // ¿Casan los segmentos del patrón con los de la ruta? Si sí, devuelve los parámetros capturados.
 fn match_route(pat: [string], path: [string]) -> Option<[Param]> {
-    if (len(pat) != len(path)) {
+    if (pat.len() != path.len()) {
         return Option.None;
     }
     var ps: [Param] = [];
     var i: int = 0;
-    while (i < len(pat)) {
+    while (i < pat.len()) {
         let seg: string = pat[i];
-        if (starts_with(seg, ":")) {
-            push(ps, Param { name: substring(seg, 1, len(seg)), value: path[i] });
+        if (seg.starts_with(":")) {
+            ps.push(Param { name: seg.substring(1, seg.len()), value: path[i] });
         } else {
             if (seg != path[i]) {
                 return Option.None;
@@ -152,7 +152,7 @@ fn match_route(pat: [string], path: [string]) -> Option<[Param]> {
 // Construye la `webserver.Response` final a partir de la `Res` que rellenó el handler.
 fn build_response(res: Res) -> webserver.Response {
     var h: Map<string, string> = Map.new();
-    insert(h, "Content-Type", res.content_type);
+    h.insert("Content-Type", res.content_type);
     webserver.Response { status: res.code, headers: h, body: res.body }
 }
 
@@ -165,7 +165,7 @@ fn handle(app: App, req: webserver.Request) -> webserver.Response {
     // Middlewares: si alguno devuelve false, se corta y se responde lo que haya dejado.
     var seguir: bool = true;
     var m: int = 0;
-    while (seguir && m < len(app.middlewares)) {
+    while (seguir && m < app.middlewares.len()) {
         let mw: fn(Ctx, Res) -> bool = app.middlewares[m];
         if (!mw(ctx, res)) {
             seguir = false;
@@ -179,7 +179,7 @@ fn handle(app: App, req: webserver.Request) -> webserver.Response {
     // Enrutado: primera ruta cuyo método y patrón casan.
     let path_segs: [string] = split_path(req.path);
     var j: int = 0;
-    while (j < len(app.routes)) {
+    while (j < app.routes.len()) {
         let rt: Route = app.routes[j];
         if (rt.method == req.method) {
             match (match_route(rt.segments, path_segs)) {

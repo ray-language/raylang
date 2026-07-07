@@ -1300,4 +1300,208 @@ mod tests {
         assert!(a.contains('A'), "ASCII imprimible tal cual: {a}");
         assert_eq!(a, fmt(&a), "idempotente");
     }
+
+    // ─── Codemod M48.4e-2 (uso único): builtins de contenedor prefijos → `.metodo()` ───────────────────
+    //
+    // Reescribe `Call(Ident(builtin), [recv, ...resto])` → `Call(Field(recv, builtin), [...resto])` para
+    // los 20 builtins traitificados (M48.4a–d) en todo el AST de cada `.ray` del corpus, y reemite con el
+    // formateador. Como el corpus ya es **canónico** (fmt idempotente) y NO hay builtins retirados en el
+    // azúcar (pipes/interpolación) ni **shadowing** por locales/params del mismo nombre —ambos verificados
+    // antes de correrlo—, el diff resultante toca **solo** los sitios migrados. En e-2 los builtins siguen
+    // vivos: `recv.metodo()` resuelve por el trait (coexistencia), así que el corpus corre igual.
+    //
+    //   cargo test --lib fmt::tests::migrar_builtins_prefijos -- --ignored --nocapture
+
+    const RETIRADOS: &[&str] = &[
+        "len", "push", "reverse", "contains", "insert", "contains_key", "keys", "values", "trim", "split",
+        "replace", "chars", "starts_with", "ends_with", "to_upper", "to_lower", "substring", "repeat",
+        "to_bytes", "sub_bytes",
+    ];
+
+    fn cm_expr(e: &mut Expr, n: &mut usize) {
+        // Post-orden: transformar los hijos antes que el nodo (así `len(push(a, x))` → `a.push(x).len()`).
+        match &mut e.kind {
+            ExprKind::Unary { expr, .. } => cm_expr(expr, n),
+            ExprKind::Binary { left, right, .. } => {
+                cm_expr(left, n);
+                cm_expr(right, n);
+            }
+            ExprKind::Call { callee, args } => {
+                cm_expr(callee, n);
+                for a in args.iter_mut() {
+                    cm_expr(a, n);
+                }
+            }
+            ExprKind::ArrayLit(xs) | ExprKind::TupleLit(xs) => {
+                for x in xs {
+                    cm_expr(x, n);
+                }
+            }
+            ExprKind::MapLit(ps) => {
+                for (k, v) in ps {
+                    cm_expr(k, n);
+                    cm_expr(v, n);
+                }
+            }
+            ExprKind::Index { array, index } => {
+                cm_expr(array, n);
+                cm_expr(index, n);
+            }
+            ExprKind::Cast { expr, .. } => cm_expr(expr, n),
+            ExprKind::StructLit { fields, .. } => {
+                for (_, v) in fields {
+                    cm_expr(v, n);
+                }
+            }
+            ExprKind::Field { object, .. } => cm_expr(object, n),
+            ExprKind::EnumLit { args, .. } => {
+                for a in args {
+                    cm_expr(a, n);
+                }
+            }
+            ExprKind::Func(fe) => cm_block(&mut fe.body, n),
+            ExprKind::Match { scrutinee, arms } => {
+                cm_expr(scrutinee, n);
+                for arm in arms {
+                    if let Some(g) = &mut arm.guard {
+                        cm_expr(g, n);
+                    }
+                    cm_expr(&mut arm.body, n);
+                }
+            }
+            ExprKind::Try(inner) => cm_expr(inner, n),
+            ExprKind::If { cond, then_branch, else_branch } => {
+                cm_expr(cond, n);
+                cm_block(then_branch, n);
+                if let Some(eb) = else_branch {
+                    cm_expr(eb, n);
+                }
+            }
+            ExprKind::While { cond, body } => {
+                cm_expr(cond, n);
+                cm_block(body, n);
+            }
+            ExprKind::Block(b) => cm_block(b, n),
+            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
+            | ExprKind::Char(_) | ExprKind::Bytes(_) | ExprKind::Ident(_) => {}
+        }
+        // ¿Este nodo es una llamada prefija a un builtin retirado? → `recv.builtin(resto)`.
+        let migrar = matches!(&e.kind, ExprKind::Call { callee, args }
+            if !args.is_empty()
+                && matches!(&callee.kind, ExprKind::Ident(nm) if RETIRADOS.contains(&nm.as_str())));
+        if migrar {
+            if let ExprKind::Call { callee, args } = std::mem::replace(&mut e.kind, ExprKind::Bool(false)) {
+                let (nombre, cl, cc) = match callee.kind {
+                    ExprKind::Ident(nm) => (nm, callee.line, callee.col),
+                    _ => unreachable!(),
+                };
+                let mut it = args.into_iter();
+                let recv = it.next().expect("args no vacío");
+                let resto: Vec<Expr> = it.collect();
+                let field = Expr { kind: ExprKind::Field { object: Box::new(recv), name: nombre }, line: cl, col: cc };
+                e.kind = ExprKind::Call { callee: Box::new(field), args: resto };
+                *n += 1;
+            }
+        }
+    }
+
+    fn cm_block(b: &mut Block, n: &mut usize) {
+        for st in &mut b.statements {
+            cm_stmt(st, n);
+        }
+        if let Some(t) = &mut b.tail {
+            cm_expr(t, n);
+        }
+    }
+
+    fn cm_stmt(st: &mut Stmt, n: &mut usize) {
+        match &mut st.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => cm_expr(value, n),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => {
+                        cm_expr(start, n);
+                        cm_expr(end, n);
+                    }
+                    ForIter::In(e) => cm_expr(e, n),
+                    ForIter::Iter { expr, .. } => cm_expr(expr, n),
+                }
+                cm_block(body, n);
+            }
+            StmtKind::Assign { target, value } => {
+                cm_expr(target, n);
+                cm_expr(value, n);
+            }
+            StmtKind::Return { value } => {
+                if let Some(e) = value {
+                    cm_expr(e, n);
+                }
+            }
+            StmtKind::Expr(e) => cm_expr(e, n),
+        }
+    }
+
+    fn cm_program(p: &mut Program, n: &mut usize) {
+        for f in &mut p.functions {
+            cm_block(&mut f.body, n);
+        }
+        for im in &mut p.impls {
+            for m in &mut im.methods {
+                cm_block(&mut m.body, n);
+            }
+        }
+        for tr in &mut p.traits {
+            for m in &mut tr.methods {
+                if let Some(b) = &mut m.default_body {
+                    cm_block(b, n);
+                }
+            }
+        }
+        for c in &mut p.consts {
+            cm_expr(&mut c.value, n);
+        }
+        // Azúcar (pipes/interpolación): verificado 0 casos de builtin retirado; se dejan intactos (el
+        // `rhs` de un pipe es parcial —sin receptor— y transformarlo sería incorrecto).
+    }
+
+    fn recolectar_ray(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                recolectar_ray(&p, out);
+            } else if p.extension().map(|x| x == "ray").unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "codemod de un solo uso (M48.4e-2); corre con --ignored"]
+    fn migrar_builtins_prefijos() {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let mut files = Vec::new();
+        for d in ["examples", "std", "packages", "selfhost", "benchmarks"] {
+            recolectar_ray(&std::path::Path::new(root).join(d), &mut files);
+        }
+        files.sort();
+        let (mut sitios, mut cambiados) = (0usize, 0usize);
+        for f in &files {
+            let src = std::fs::read_to_string(f).expect("lee");
+            let tokens = crate::lexer::lex(&src).unwrap_or_else(|e| panic!("lex {f:?}: {e}"));
+            let mut program = crate::parser::parse(tokens).unwrap_or_else(|e| panic!("parse {f:?}: {e}"));
+            let mut n = 0;
+            cm_program(&mut program, &mut n);
+            if n == 0 {
+                continue;
+            }
+            let mut cur = Cur::new(&src, &program);
+            let out = format_program(&program, &mut cur);
+            std::fs::write(f, &out).expect("escribe");
+            sitios += n;
+            cambiados += 1;
+            println!("{sitios:>5}  (+{n:>3})  {}", f.strip_prefix(root).unwrap().display());
+        }
+        println!("TOTAL: {sitios} sitios migrados en {cambiados} archivos");
+    }
 }

@@ -6,7 +6,7 @@
 pub fn is_sorted<T: Ord>(a: [T]) -> bool {
     var i = 1;
     var ok = true;
-    while (i < len(a) && ok) {
+    while (i < a.len() && ok) {
         if (a[i].menor(a[i - 1])) {
             ok = false;
         }
@@ -17,17 +17,17 @@ pub fn is_sorted<T: Ord>(a: [T]) -> bool {
 
 /// Sorts `a` in **descending** order (largest first). The prelude's `sort`, reversed.
 pub fn sort_desc<T: Ord>(a: [T]) -> [T] {
-    reverse(sort(a))
+    sort(a).reverse()
 }
 
 /// The **minimum** of `a`, or `None` if it is empty.
 pub fn min<T: Ord>(a: [T]) -> Option<T> {
-    if (len(a) == 0) {
+    if (a.len() == 0) {
         Option.None
     } else {
         var m: T = a[0];
         var i = 1;
-        while (i < len(a)) {
+        while (i < a.len()) {
             if (a[i].menor(m)) {
                 m = a[i];
             }
@@ -39,12 +39,12 @@ pub fn min<T: Ord>(a: [T]) -> Option<T> {
 
 /// The **maximum** of `a`, or `None` if it is empty.
 pub fn max<T: Ord>(a: [T]) -> Option<T> {
-    if (len(a) == 0) {
+    if (a.len() == 0) {
         Option.None
     } else {
         var m: T = a[0];
         var i = 1;
-        while (i < len(a)) {
+        while (i < a.len()) {
             if (m.menor(a[i])) {
                 m = a[i];
             }
@@ -59,7 +59,7 @@ pub fn max<T: Ord>(a: [T]) -> Option<T> {
 /// Equality is derived from `Ord`: `x == y` ⟺ neither `x < y` nor `y < x`.
 pub fn binary_search<T: Ord>(a: [T], x: T) -> Option<int> {
     var lo = 0;
-    var hi = len(a);
+    var hi = a.len();
     while (lo < hi) {
         let mid = lo + (hi - lo) / 2;
         let m: T = a[mid];
@@ -81,10 +81,10 @@ pub fn dedup<T: Ord>(a: [T]) -> [T] {
     let s = sort(a);
     var out: [T] = [];
     var i = 0;
-    while (i < len(s)) {
+    while (i < s.len()) {
         // Como `s` está ordenado, los iguales son adyacentes: se añade si el último es estrictamente menor.
-        if (len(out) == 0 || out[len(out) - 1].menor(s[i])) {
-            push(out, s[i]);
+        if (out.len() == 0 || out[out.len() - 1].menor(s[i])) {
+            out.push(s[i]);
         }
         i = i + 1;
     }
@@ -96,21 +96,21 @@ pub fn merge<T: Ord>(a: [T], b: [T]) -> [T] {
     var out: [T] = [];
     var i = 0;
     var j = 0;
-    while (i < len(a) && j < len(b)) {
+    while (i < a.len() && j < b.len()) {
         if (b[j].menor(a[i])) {
-            push(out, b[j]);
+            out.push(b[j]);
             j = j + 1;
         } else {
-            push(out, a[i]);
+            out.push(a[i]);
             i = i + 1;
         }
     }
-    while (i < len(a)) {
-        push(out, a[i]);
+    while (i < a.len()) {
+        out.push(a[i]);
         i = i + 1;
     }
-    while (j < len(b)) {
-        push(out, b[j]);
+    while (j < b.len()) {
+        out.push(b[j]);
         j = j + 1;
     }
     out

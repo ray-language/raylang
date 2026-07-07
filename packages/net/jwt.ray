@@ -11,11 +11,11 @@ from std/base64 import base64url, base64url_decode;
 
 // Octetos (`[int]`) de un string vía `to_bytes` (UTF-8) + indexado de bytes.
 fn str_octets(s: string) -> [int] {
-    let b = to_bytes(s);
+    let b = s.to_bytes();
     var out: [int] = [];
     var i = 0;
-    while (i < len(b)) {
-        push(out, b[i]);
+    while (i < b.len()) {
+        out.push(b[i]);
         i = i + 1;
     }
     out
@@ -28,7 +28,7 @@ fn header_b64() -> string {
 
 // La firma base64url de un "header.payload" dado, con el secreto.
 fn sign_input(secret: bytes, signing_input: string) -> string {
-    base64url(hmac_sha256_octets(secret, to_bytes(signing_input)))
+    base64url(hmac_sha256_octets(secret, signing_input.to_bytes()))
 }
 
 // Firma las *claims* (JSON crudo) y devuelve el JWT compacto `h.p.s`.
@@ -45,12 +45,12 @@ pub fn jwt_sign(secret: bytes, payload_json: string) -> string {
 // Comparación de strings en tiempo (casi) constante: recorre SIEMPRE toda la longitud, acumulando
 // las diferencias, para no filtrar por el momento del primer byte distinto (mitiga timing attacks).
 fn const_eq(a: string, b: string) -> bool {
-    if (len(a) != len(b)) {
+    if (a.len() != b.len()) {
         return false;
     }
     var diff = 0;
     var i = 0;
-    while (i < len(a)) {
+    while (i < a.len()) {
         if (a[i] != b[i]) {
             diff = diff + 1;
         }
@@ -66,8 +66,8 @@ fn const_eq(a: string, b: string) -> bool {
 /// payload: `Ok(payload_json)` if valid; `Err(reason)` on malformed token, bad signature,
 /// or non-UTF-8 payload. Does NOT check `exp`/`nbf` claims — that is application policy.
 pub fn jwt_verify(secret: bytes, token: string) -> Result<string, string> {
-    let parts = split(token, ".");
-    if (len(parts) != 3) {
+    let parts = token.split(".");
+    if (parts.len() != 3) {
         return Result.Err("JWT mal formado: se esperaban 3 segmentos");
     }
     let h = parts[0];

@@ -11,11 +11,11 @@ from std/base64 import base64url, base64url_decode;
 
 // Octetos (`[int]`) de un string (UTF-8).
 fn str_octets(s: string) -> [int] {
-    let b = to_bytes(s);
+    let b = s.to_bytes();
     var out: [int] = [];
     var i = 0;
-    while (i < len(b)) {
-        push(out, b[i]);
+    while (i < b.len()) {
+        out.push(b[i]);
         i = i + 1;
     }
     out
@@ -45,8 +45,8 @@ pub fn jwt_eddsa_sign(seed: [int], payload_json: string) -> string {
 /// payload: `Ok(payload_json)` if the signature is valid; `Err(reason)` on malformed token,
 /// bad base64url, or invalid signature. Does NOT check `exp`/`nbf` — application policy.
 pub fn jwt_eddsa_verify(pubkey: [int], token: string) -> Result<string, string> {
-    let parts = split(token, ".");
-    if (len(parts) != 3) {
+    let parts = token.split(".");
+    if (parts.len() != 3) {
         return Result.Err("JWT mal formado: se esperaban 3 segmentos");
     }
     let signing_input = parts[0] + "." + parts[1];

@@ -15,22 +15,22 @@ fn guid() -> string { "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" }
 /// Computes the `Sec-WebSocket-Accept` value for a client's `Sec-WebSocket-Key` (RFC 6455 §4.2.2).
 /// Returns base64(SHA-1(key + protocol GUID)).
 pub fn accept_key(key: string) -> string {
-    base64(sha1_octets(to_bytes(key + guid())))
+    base64(sha1_octets((key + guid()).to_bytes()))
 }
 
 // Extrae el valor de la cabecera `Sec-WebSocket-Key` de la petición de upgrade (o "" si no aparece).
 /// Extracts the `Sec-WebSocket-Key` header value from an HTTP upgrade request.
 /// Returns the trimmed key, or "" if the header is missing.
 pub fn extract_key(request: string) -> string {
-    let lineas = split(request, "\r\n");
+    let lineas = request.split("\r\n");
     var clave = "";
     var i = 0;
-    while (i < len(lineas)) {
+    while (i < lineas.len()) {
         let linea = lineas[i];
-        if (starts_with(linea, "Sec-WebSocket-Key:")) {
+        if (linea.starts_with("Sec-WebSocket-Key:")) {
             match (index_of(linea, ":")) {
                 Option.Some(idx) => {
-                    clave = trim(substring(linea, idx + 1, len(linea)));
+                    clave = linea.substring(idx + 1, linea.len()).trim();
                 },
                 Option.None => { },
             }
@@ -116,9 +116,9 @@ pub fn decode_frame(data: bytes) -> Frame {
     var i = 0;
     while (i < plen) {
         if (masked) {
-            push(octetos, data[off + i] ^ mask[i % 4]);
+            octetos.push(data[off + i] ^ mask[i % 4]);
         } else {
-            push(octetos, data[off + i]);
+            octetos.push(data[off + i]);
         }
         i = i + 1;
     }
@@ -129,21 +129,21 @@ pub fn decode_frame(data: bytes) -> Frame {
 /// Encodes a server-to-client frame (unmasked, FIN=1) with the given opcode and payload,
 /// choosing the 7-bit, 16-bit or 64-bit length encoding as needed (RFC 6455 §5.2).
 pub fn encode_frame(opcode: int, payload: bytes) -> bytes {
-    let plen = len(payload);
+    let plen = payload.len();
     var cabecera: [int] = [];
-    push(cabecera, 128 | opcode);  // FIN=1 + opcode
+    cabecera.push(128 | opcode);  // FIN=1 + opcode
     if (plen < 126) {
-        push(cabecera, plen);
+        cabecera.push(plen);
     } else {
         if (plen < 65536) {
-            push(cabecera, 126);
-            push(cabecera, plen >> 8 & 255);
-            push(cabecera, plen & 255);
+            cabecera.push(126);
+            cabecera.push(plen >> 8 & 255);
+            cabecera.push(plen & 255);
         } else {
-            push(cabecera, 127);
+            cabecera.push(127);
             var k = 7;
             while (k >= 0) {
-                push(cabecera, plen >> k * 8 & 255);
+                cabecera.push(plen >> k * 8 & 255);
                 k = k - 1;
             }
         }
@@ -154,5 +154,5 @@ pub fn encode_frame(opcode: int, payload: bytes) -> bytes {
 // Atajo: una trama de texto del servidor.
 /// Shortcut: encodes `texto` as an unmasked server text frame (opcode 1, FIN=1).
 pub fn encode_text(texto: string) -> bytes {
-    encode_frame(op_text(), to_bytes(texto))
+    encode_frame(op_text(), texto.to_bytes())
 }

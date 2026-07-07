@@ -14,7 +14,7 @@ fn main() -> int {
     var big: [int] = [];
     var j = 0;
     while (j < 5000) {
-        push(big, j);  // 5000 elementos
+        big.push(j);  // 5000 elementos
         j = j + 1;
     }
     let ch: Channel<[int]> = channel(1);  // acotado

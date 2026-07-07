@@ -25,7 +25,7 @@ fn handshake(conn: int) -> bool {
         },
         Result.Ok(req) => {
             let clave = websocket.extract_key(req);
-            match (socket_write_bytes(conn, to_bytes(websocket.handshake_response(clave)))) {
+            match (socket_write_bytes(conn, websocket.handshake_response(clave).to_bytes())) {
                 Result.Ok(_) => true,
                 Result.Err(e) => {
                     eprint(e);
@@ -45,12 +45,12 @@ fn eco(conn: int) {
                 seguir = false;
             },
             Result.Ok(datos) => {
-                if (len(datos) < 2) {
+                if (datos.len() < 2) {
                     seguir = false;
                 } else {
                     let f = websocket.decode_frame(datos);
                     if (f.opcode == websocket.op_close()) {
-                        let cierre = websocket.encode_frame(websocket.op_close(), to_bytes(""));
+                        let cierre = websocket.encode_frame(websocket.op_close(), "".to_bytes());
                         match (socket_write_bytes(conn, cierre)) {
                             Result.Ok(_) => { },
                             Result.Err(_) => { },
@@ -79,7 +79,7 @@ fn eco(conn: int) {
 
 fn main() -> int {
     let a = args();
-    if (len(a) < 2) {
+    if (a.len() < 2) {
         eprint("uso: wss_echo <cert.pem> <key.pem>");
         return 1;
     }

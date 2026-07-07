@@ -36,13 +36,13 @@ fn eco(conn: int) {
                 seguir = false;
             },
             Result.Ok(datos) => {
-                if (len(datos) < 2) {
+                if (datos.len() < 2) {
                     seguir = false;  // conexión cerrada o trama incompleta
                 } else {
                     let f = websocket.decode_frame(datos);
                     if (f.opcode == websocket.op_close()) {
                         // Devuelve un close de cortesía y termina esta conexión.
-                        let cierre = websocket.encode_frame(websocket.op_close(), to_bytes(""));
+                        let cierre = websocket.encode_frame(websocket.op_close(), "".to_bytes());
                         match (socket_write_bytes(conn, cierre)) {
                             Result.Ok(_) => { },
                             Result.Err(_) => { },

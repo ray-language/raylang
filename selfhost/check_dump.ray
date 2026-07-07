@@ -11,7 +11,7 @@ from checker import check, TypeError;
 
 fn main() -> int {
     let argv = args();
-    if (len(argv) == 0) {
+    if (argv.len() == 0) {
         eprint("uso: raylang selfhost/check_dump.ray <archivo>");
         return 1;
     }

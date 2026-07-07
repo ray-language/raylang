@@ -28,13 +28,13 @@ pub fn huffman_encode(data: [int]) -> [int] {
     var acc = 0;  // acumulador de bits (los `nbits` de menor peso son los pendientes)
     var nbits = 0;
     var i = 0;
-    while (i < len(data)) {
+    while (i < data.len()) {
         let s = data[i];
         acc = acc << lens[s] | codes[s];
         nbits = nbits + lens[s];
         while (nbits >= 8) {
             nbits = nbits - 8;
-            push(out, acc >> nbits & 255);
+            out.push(acc >> nbits & 255);
         }
         acc = acc & (1 << nbits) - 1;  // conserva solo los bits pendientes (< 8)
         i = i + 1;
@@ -42,7 +42,7 @@ pub fn huffman_encode(data: [int]) -> [int] {
     if (nbits > 0) {
         let pad = 8 - nbits;
         acc = acc << pad | (1 << pad) - 1;  // relleno con 1s (prefijo de EOS)
-        push(out, acc & 255);
+        out.push(acc & 255);
     }
     out
 }
@@ -60,10 +60,10 @@ fn trie_new() -> Trie {
 }
 
 fn trie_add_node(t: Trie) -> int {
-    push(t.left, 0 - 1);
-    push(t.right, 0 - 1);
-    push(t.sym, 0 - 1);
-    len(t.left) - 1
+    t.left.push(0 - 1);
+    t.right.push(0 - 1);
+    t.sym.push(0 - 1);
+    t.left.len() - 1
 }
 
 fn trie_insert(t: Trie, code: int, nbits: int, symbol: int) {
@@ -109,7 +109,7 @@ pub fn huffman_decode(data: [int]) -> Result<[int], string> {
     var out: [int] = [];
     var node = 0;
     var i = 0;
-    while (i < len(data)) {
+    while (i < data.len()) {
         let byte = data[i];
         var b = 7;
         while (b >= 0) {
@@ -126,7 +126,7 @@ pub fn huffman_decode(data: [int]) -> Result<[int], string> {
                 if (t.sym[node] == 256) {
                     return Result.Err("EOS no permitido en el flujo");
                 }
-                push(out, t.sym[node]);
+                out.push(t.sym[node]);
                 node = 0;  // vuelve a la raíz
             }
             b = b - 1;

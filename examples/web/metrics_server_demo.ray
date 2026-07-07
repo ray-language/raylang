@@ -41,8 +41,8 @@ fn metrics_actor(reg: Registry, ch: Channel<MetricMsg>) {
 // Respuesta /metrics con el Content-Type que espera Prometheus.
 fn metrics_response(cuerpo: string) -> Response {
     var h: Map<string, string> = Map.new();
-    insert(h, "Content-Type", "text/plain; version=0.0.4");
-    Response { status: 200, headers: h, body: to_bytes(cuerpo) }
+    h.insert("Content-Type", "text/plain; version=0.0.4");
+    Response { status: 200, headers: h, body: cuerpo.to_bytes() }
 }
 
 fn main() -> int {

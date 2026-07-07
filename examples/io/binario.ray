@@ -7,14 +7,14 @@
 fn main() -> int {
     // Literal binario: incluye un byte nulo y 0xFF, imposibles en un string normal.
     let cabecera: bytes = b"RAY\x00\x01";
-    print("cabecera: " + to_string(len(cabecera)) + " octetos");  // 5
+    print("cabecera: " + to_string(cabecera.len()) + " octetos");  // 5
     print("primer octeto: " + to_string(cabecera[0]));  // 82 ('R')
     print("byte nulo: " + to_string(cabecera[3]));  // 0
 
     // Concatenación y conversión desde/hacia string.
-    let cuerpo: bytes = to_bytes("hola");
+    let cuerpo: bytes = "hola".to_bytes();
     let mensaje: bytes = cabecera + cuerpo;
-    print("mensaje: " + to_string(len(mensaje)) + " octetos");  // 9
+    print("mensaje: " + to_string(mensaje.len()) + " octetos");  // 9
 
     // Round-trip a disco (binario correcto).
     let ruta: string = "/tmp/raylang_ejemplo.bin";

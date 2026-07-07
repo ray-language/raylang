@@ -69,7 +69,7 @@ fn fmul(o: [int], a: [int], b: [int]) {
     var t: [int] = [];
     var i = 0;
     while (i < 31) {
-        push(t, 0);
+        t.push(0);
         i = i + 1;
     }
     i = 0;
@@ -188,8 +188,8 @@ fn neq25519(a: [int], b: [int]) -> bool {
     let pb: [int] = [];
     var i = 0;
     while (i < 32) {
-        push(pa, 0);
-        push(pb, 0);
+        pa.push(0);
+        pb.push(0);
         i = i + 1;
     }
     pack25519(pa, a);
@@ -208,7 +208,7 @@ fn par25519(a: [int]) -> int {
     let d: [int] = [];
     var i = 0;
     while (i < 32) {
-        push(d, 0);
+        d.push(0);
         i = i + 1;
     }
     pack25519(d, a);
@@ -377,7 +377,7 @@ fn mod_l(x: [int]) -> [int] {
     let r: [int] = [];
     i = 0;
     while (i < 32) {
-        push(r, 0);
+        r.push(0);
         i = i + 1;
     }
     i = 0;
@@ -394,7 +394,7 @@ fn sc_reduce(h: [int]) -> [int] {
     var x: [int] = [];
     var i = 0;
     while (i < 64) {
-        push(x, h[i]);
+        x.push(h[i]);
         i = i + 1;
     }
     mod_l(x)
@@ -406,7 +406,7 @@ fn slice(a: [int], start: int, n: int) -> [int] {
     var out: [int] = [];
     var i = 0;
     while (i < n) {
-        push(out, a[start + i]);
+        out.push(a[start + i]);
         i = i + 1;
     }
     out
@@ -429,7 +429,7 @@ pub fn ed25519_public_key(seed: [int]) -> [int] {
     let pk: [int] = [];
     var i = 0;
     while (i < 32) {
-        push(pk, 0);
+        pk.push(0);
         i = i + 1;
     }
     point_pack(pk, p);
@@ -444,12 +444,12 @@ pub fn ed25519_sign(seed: [int], pubkey: [int], msg: [int]) -> [int] {
     var pref: [int] = [];
     var i = 32;
     while (i < 64) {
-        push(pref, d[i]);
+        pref.push(d[i]);
         i = i + 1;
     }
     i = 0;
-    while (i < len(msg)) {
-        push(pref, msg[i]);
+    while (i < msg.len()) {
+        pref.push(msg[i]);
         i = i + 1;
     }
     let r = sc_reduce(sha512_octets(pref));
@@ -459,7 +459,7 @@ pub fn ed25519_sign(seed: [int], pubkey: [int], msg: [int]) -> [int] {
     let sig: [int] = [];
     i = 0;
     while (i < 64) {
-        push(sig, 0);
+        sig.push(0);
         i = i + 1;
     }
     point_pack(sig, p);  // sig[0..32] = R
@@ -468,17 +468,17 @@ pub fn ed25519_sign(seed: [int], pubkey: [int], msg: [int]) -> [int] {
     var km: [int] = [];
     i = 0;
     while (i < 32) {
-        push(km, sig[i]);
+        km.push(sig[i]);
         i = i + 1;
     }
     i = 0;
     while (i < 32) {
-        push(km, pubkey[i]);
+        km.push(pubkey[i]);
         i = i + 1;
     }
     i = 0;
-    while (i < len(msg)) {
-        push(km, msg[i]);
+    while (i < msg.len()) {
+        km.push(msg[i]);
         i = i + 1;
     }
     let k = sc_reduce(sha512_octets(km));
@@ -487,7 +487,7 @@ pub fn ed25519_sign(seed: [int], pubkey: [int], msg: [int]) -> [int] {
     var x: [int] = [];
     i = 0;
     while (i < 64) {
-        push(x, 0);
+        x.push(0);
         i = i + 1;
     }
     i = 0;
@@ -523,17 +523,17 @@ pub fn ed25519_verify(pubkey: [int], msg: [int], sig: [int]) -> bool {
     var km: [int] = [];
     var i = 0;
     while (i < 32) {
-        push(km, sig[i]);
+        km.push(sig[i]);
         i = i + 1;
     }
     i = 0;
     while (i < 32) {
-        push(km, pubkey[i]);
+        km.push(pubkey[i]);
         i = i + 1;
     }
     i = 0;
-    while (i < len(msg)) {
-        push(km, msg[i]);
+    while (i < msg.len()) {
+        km.push(msg[i]);
         i = i + 1;
     }
     let k = sc_reduce(sha512_octets(km));
@@ -546,7 +546,7 @@ pub fn ed25519_verify(pubkey: [int], msg: [int], sig: [int]) -> bool {
     let t: [int] = [];
     i = 0;
     while (i < 32) {
-        push(t, 0);
+        t.push(0);
         i = i + 1;
     }
     point_pack(t, p);

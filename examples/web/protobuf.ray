@@ -25,10 +25,10 @@ pub fn writer() -> PbWriter {
 fn encode_varint(out: [int], value: int) {
     var v = value;
     while (v >= 128) {
-        push(out, v & 127 | 128);
+        out.push(v & 127 | 128);
         v = v >> 7;
     }
-    push(out, v & 127);
+    out.push(v & 127);
 }
 
 fn write_tag(out: [int], field: int, wire: int) {
@@ -37,8 +37,8 @@ fn write_tag(out: [int], field: int, wire: int) {
 
 fn append_bytes(out: [int], b: bytes) {
     var i = 0;
-    while (i < len(b)) {
-        push(out, b[i]);
+    while (i < b.len()) {
+        out.push(b[i]);
         i = i + 1;
     }
 }
@@ -55,8 +55,8 @@ pub fn write_varint(w: PbWriter, field: int, value: int) {
 /// Writes a length-delimited field (wire type 2) from a string, encoded as UTF-8 bytes.
 pub fn write_string(w: PbWriter, field: int, s: string) {
     write_tag(w.out, field, 2);
-    let b = to_bytes(s);
-    encode_varint(w.out, len(b));
+    let b = s.to_bytes();
+    encode_varint(w.out, b.len());
     append_bytes(w.out, b);
 }
 
@@ -65,7 +65,7 @@ pub fn write_string(w: PbWriter, field: int, s: string) {
 /// nested message (already serialized) is embedded.
 pub fn write_bytes(w: PbWriter, field: int, b: bytes) {
     write_tag(w.out, field, 2);
-    encode_varint(w.out, len(b));
+    encode_varint(w.out, b.len());
     append_bytes(w.out, b);
 }
 
@@ -75,7 +75,7 @@ pub fn write_fixed64(w: PbWriter, field: int, value: int) {
     write_tag(w.out, field, 1);
     var k = 0;
     while (k < 8) {
-        push(w.out, value >> k * 8 & 255);
+        w.out.push(value >> k * 8 & 255);
         k = k + 1;
     }
 }
@@ -86,7 +86,7 @@ pub fn write_fixed32(w: PbWriter, field: int, value: int) {
     write_tag(w.out, field, 5);
     var k = 0;
     while (k < 4) {
-        push(w.out, value >> k * 8 & 255);
+        w.out.push(value >> k * 8 & 255);
         k = k + 1;
     }
 }
@@ -151,7 +151,7 @@ fn read_le(data: bytes, pos: int, nbytes: int) -> int {
 pub fn parse(data: bytes) -> Result<[PbField], string> {
     var fields: [PbField] = [];
     var pos = 0;
-    let n = len(data);
+    let n = data.len();
     while (pos < n) {
         let tag = decode_varint(data, pos);
         pos = tag.next;
@@ -160,21 +160,21 @@ pub fn parse(data: bytes) -> Result<[PbField], string> {
         if (wire == 0) {
             let v = decode_varint(data, pos);
             pos = v.next;
-            push(fields, PbField { number: number, wire: 0, int_val: v.value, bytes_val: b"" });
+            fields.push(PbField { number: number, wire: 0, int_val: v.value, bytes_val: b"" });
         } else {
             if (wire == 2) {
                 let lenv = decode_varint(data, pos);
                 pos = lenv.next;
-                let b = sub_bytes(data, pos, pos + lenv.value);
+                let b = data.sub_bytes(pos, pos + lenv.value);
                 pos = pos + lenv.value;
-                push(fields, PbField { number: number, wire: 2, int_val: 0, bytes_val: b });
+                fields.push(PbField { number: number, wire: 2, int_val: 0, bytes_val: b });
             } else {
                 if (wire == 1) {
-                    push(fields, PbField { number: number, wire: 1, int_val: read_le(data, pos, 8), bytes_val: b"" });
+                    fields.push(PbField { number: number, wire: 1, int_val: read_le(data, pos, 8), bytes_val: b"" });
                     pos = pos + 8;
                 } else {
                     if (wire == 5) {
-                        push(fields, PbField { number: number, wire: 5, int_val: read_le(data, pos, 4), bytes_val: b"" });
+                        fields.push(PbField { number: number, wire: 5, int_val: read_le(data, pos, 4), bytes_val: b"" });
                         pos = pos + 4;
                     } else {
                         return Result.Err("wire type no soportado: " + to_string(wire));
@@ -191,7 +191,7 @@ pub fn parse(data: bytes) -> Result<[PbField], string> {
 /// (proto3 default).
 pub fn get_int(fields: [PbField], number: int) -> int {
     var i = 0;
-    while (i < len(fields)) {
+    while (i < fields.len()) {
         if (fields[i].number == number) {
             return fields[i].int_val;
         }
@@ -203,7 +203,7 @@ pub fn get_int(fields: [PbField], number: int) -> int {
 /// Returns the bytes value of the first field with the given number, or empty bytes if absent.
 pub fn get_bytes(fields: [PbField], number: int) -> bytes {
     var i = 0;
-    while (i < len(fields)) {
+    while (i < fields.len()) {
         if (fields[i].number == number) {
             return fields[i].bytes_val;
         }
@@ -228,21 +228,21 @@ pub fn get_string(fields: [PbField], number: int) -> string {
 /// (0 = uncompressed) + 4 big-endian length bytes + the message.
 pub fn grpc_frame(message: bytes) -> bytes {
     var out: [int] = [];
-    push(out, 0);  // sin comprimir
-    let n = len(message);
-    push(out, n >> 24 & 255);
-    push(out, n >> 16 & 255);
-    push(out, n >> 8 & 255);
-    push(out, n & 255);
+    out.push(0);  // sin comprimir
+    let n = message.len();
+    out.push(n >> 24 & 255);
+    out.push(n >> 16 & 255);
+    out.push(n >> 8 & 255);
+    out.push(n & 255);
     bytes_of(out) + message
 }
 
 /// Extracts the message from a gRPC frame (strips the 5-byte prefix).
 /// Returns `Err` if the frame is shorter than 5 bytes.
 pub fn grpc_unframe(data: bytes) -> Result<bytes, string> {
-    if (len(data) < 5) {
+    if (data.len() < 5) {
         return Result.Err("frame gRPC demasiado corto");
     }
     let n = data[1] << 24 | data[2] << 16 | data[3] << 8 | data[4];
-    Result.Ok(sub_bytes(data, 5, 5 + n))
+    Result.Ok(data.sub_bytes(5, 5 + n))
 }

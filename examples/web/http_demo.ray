@@ -17,7 +17,7 @@ fn main() -> int {
             }
             // Si el cuerpo fuese JSON, lo normalizaríamos; example.com devuelve HTML, así que
             // mostramos solo su tamaño.
-            print("cuerpo: " + to_string(len(resp.body)) + " bytes");
+            print("cuerpo: " + to_string(resp.body.len()) + " bytes");
             0
         },
         Result.Err(e) => {

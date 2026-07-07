@@ -4,12 +4,12 @@ from sha256 import sha256_hex;
 
 fn main() {
     // Vectores estándar.
-    print(sha256_hex(to_bytes("")));  // e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-    print(sha256_hex(to_bytes("abc")));  // ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+    print(sha256_hex("".to_bytes()));  // e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    print(sha256_hex("abc".to_bytes()));  // ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
     // Mensaje de 448 bits (56 octetos) → exige un segundo bloque por el padding.
-    print(sha256_hex(to_bytes("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")));
+    print(sha256_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq".to_bytes()));
     // "The quick brown fox jumps over the lazy dog".
-    print(sha256_hex(to_bytes("The quick brown fox jumps over the lazy dog")));
+    print(sha256_hex("The quick brown fox jumps over the lazy dog".to_bytes()));
     // Un cambio mínimo (punto final) altera por completo el digest (efecto avalancha).
-    print(sha256_hex(to_bytes("The quick brown fox jumps over the lazy dog.")));
+    print(sha256_hex("The quick brown fox jumps over the lazy dog.".to_bytes()));
 }

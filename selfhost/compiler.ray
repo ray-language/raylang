@@ -148,24 +148,24 @@ struct Comp {
 // Emisión y manejo de slots/ámbitos/upvalues
 // =====================================================================
 // El ámbito de función actual (la cima de la pila) y su profundidad-índice.
-fn top(comp: Comp) -> Fscope { comp.scopes[len(comp.scopes) - 1] }
+fn top(comp: Comp) -> Fscope { comp.scopes[comp.scopes.len() - 1] }
 
-fn cur_depth(comp: Comp) -> int { len(comp.scopes) - 1 }
+fn cur_depth(comp: Comp) -> int { comp.scopes.len() - 1 }
 
 fn emit(comp: Comp, op: Op) -> int {
     let s = top(comp);
 
-    push(s.code, op);
+    s.code.push(op);
 
-    len(s.code) - 1
+    s.code.len() - 1
 }
 
 fn add_const(comp: Comp, v: Value) -> int {
     let s = top(comp);
 
-    push(s.consts, v);
+    s.consts.push(v);
 
-    len(s.consts) - 1
+    s.consts.len() - 1
 }
 
 // Declara un local en el ámbito actual: le asigna el siguiente slot (monotónico; los slots no se reusan →
@@ -177,7 +177,7 @@ fn declare_local(comp: Comp, name: string) -> int {
     if (s.next_slot > s.max_slots) {
         s.max_slots = s.next_slot;
     }
-    push(s.locals, Local { name: name, slot: slot, depth: s.depth });
+    s.locals.push(Local { name: name, slot: slot, depth: s.depth });
     slot
 }
 
@@ -186,7 +186,7 @@ fn resolve_local(comp: Comp, name: string) -> int { resolve_local_at(comp, cur_d
 // Resuelve un nombre como local de la función en `d` (el más interno gana), o -1.
 fn resolve_local_at(comp: Comp, d: int, name: string) -> int {
     let s = comp.scopes[d];
-    var i = len(s.locals) - 1;
+    var i = s.locals.len() - 1;
     while (i >= 0) {
         if (s.locals[i].name == name) {
             return s.locals[i].slot;
@@ -219,14 +219,14 @@ fn resolve_upvalue(comp: Comp, d: int, name: string) -> int {
 fn add_upvalue(comp: Comp, d: int, src: UpSrc) -> int {
     let s = comp.scopes[d];
     var i = 0;
-    while (i < len(s.upvalues)) {
+    while (i < s.upvalues.len()) {
         if (upsrc_eq(s.upvalues[i], src)) {
             return i;
         }
         i = i + 1;
     }
-    push(s.upvalues, src);
-    len(s.upvalues) - 1
+    s.upvalues.push(src);
+    s.upvalues.len() - 1
 }
 
 fn upsrc_eq(a: UpSrc, b: UpSrc) -> bool {
@@ -265,9 +265,9 @@ fn end_scope(comp: Comp, saved: int) {
     s.depth = s.depth - 1;
     var kept: [Local] = [];
     var i = 0;
-    while (i < len(s.locals)) {
+    while (i < s.locals.len()) {
         if (s.locals[i].depth <= s.depth) {
-            push(kept, s.locals[i]);
+            kept.push(s.locals[i]);
         }
         i = i + 1;
     }
@@ -278,7 +278,7 @@ fn end_scope(comp: Comp, saved: int) {
 // Parchea un salto emitido con destino provisional para que apunte al final actual del código.
 fn patch_jump(comp: Comp, at: int) {
     let s = top(comp);
-    let target = len(s.code);
+    let target = s.code.len();
     s.code[at] = match (s.code[at]) {
         Op.OJump(_) => Op.OJump(target),
         Op.OJumpIfFalse(_) => Op.OJumpIfFalse(target),
@@ -315,7 +315,7 @@ fn struct_field_defs(comp: Comp, name: string) -> [FieldDef] {
 // La expresión del campo `fname` en un literal de struct (el checker garantiza que está presente).
 fn find_init(inits: [FieldInit], fname: string) -> Expr {
     var i = 0;
-    while (i < len(inits)) {
+    while (i < inits.len()) {
         if (inits[i].name == fname) {
             return inits[i].value;
         }
@@ -330,7 +330,7 @@ fn enum_has_variant_c(comp: Comp, name: string, variant: string) -> bool {
     match (get(comp.enums, name)) {
         Option.Some(variants) => {
             var i = 0;
-            while (i < len(variants)) {
+            while (i < variants.len()) {
                 if (variants[i].name == variant) {
                     return true;
                 }
@@ -393,7 +393,7 @@ fn emit_expr(comp: Comp, e: Expr) {
             patch_jump(comp, to_end);
         },
         EKind.EWhile(cond, body) => {
-            let loop_start = len(top(comp).code);
+            let loop_start = top(comp).code.len();
             emit_expr(comp, cond);
             let exit = emit(comp, Op.OJumpIfFalse(0));
             emit(comp, Op.OPop);
@@ -408,7 +408,7 @@ fn emit_expr(comp: Comp, e: Expr) {
         // --- M14.5b: datos ---
         EKind.EArray(elems) => {
             emit_args(comp, elems);
-            emit(comp, Op.OMakeArray(len(elems)));
+            emit(comp, Op.OMakeArray(elems.len()));
         },
         EKind.EIndex(arr, idx) => {
             emit_expr(comp, arr);
@@ -483,13 +483,13 @@ fn emit_call(comp: Comp, callee: Expr, cargs: [Expr]) {
             if (!is_variable(comp, name)) {
                 if (is_builtin(name)) {
                     emit_args(comp, cargs);
-                    emit(comp, Op.OBuiltin(name, len(cargs)));
+                    emit(comp, Op.OBuiltin(name, cargs.len()));
                     return;
                 }
                 match (get(comp.indices, name)) {
                     Option.Some(idx) => {
                         emit_args(comp, cargs);
-                        emit(comp, Op.OCall(idx, len(cargs)));
+                        emit(comp, Op.OCall(idx, cargs.len()));
                         return;
                     },
                     Option.None => { },
@@ -513,7 +513,7 @@ fn emit_call(comp: Comp, callee: Expr, cargs: [Expr]) {
                 EKind.EIdent(en) => {
                     if (resolve_local(comp, en) < 0 && enum_has_variant_c(comp, en, fname)) {
                         emit_args(comp, cargs);
-                        emit(comp, Op.OMakeEnum(en, fname, len(cargs)));
+                        emit(comp, Op.OMakeEnum(en, fname, cargs.len()));
                         return;
                     }
                 },
@@ -523,7 +523,7 @@ fn emit_call(comp: Comp, callee: Expr, cargs: [Expr]) {
             // etiqueta del valor en runtime, como el intérprete; `dyn`/bounds/genéricos son no-ops).
             emit_expr(comp, recv);
             emit_args(comp, cargs);
-            emit(comp, Op.ODispatch(fname, len(cargs)));
+            emit(comp, Op.ODispatch(fname, cargs.len()));
             return;
         },
         _ => { },
@@ -531,12 +531,12 @@ fn emit_call(comp: Comp, callee: Expr, cargs: [Expr]) {
     // Indirecto: el valor-función, luego los argumentos, luego `OCallValue`.
     emit_expr(comp, callee);
     emit_args(comp, cargs);
-    emit(comp, Op.OCallValue(len(cargs)));
+    emit(comp, Op.OCallValue(cargs.len()));
 }
 
 fn emit_args(comp: Comp, cargs: [Expr]) {
     var i = 0;
-    while (i < len(cargs)) {
+    while (i < cargs.len()) {
         emit_expr(comp, cargs[i]);
         i = i + 1;
     }
@@ -545,7 +545,7 @@ fn emit_args(comp: Comp, cargs: [Expr]) {
 fn emit_block(comp: Comp, b: Block) {
     let saved = begin_scope(comp);
     var i = 0;
-    while (i < len(b.stmts)) {
+    while (i < b.stmts.len()) {
         emit_stmt(comp, b.stmts[i]);
         i = i + 1;
     }
@@ -619,9 +619,9 @@ fn emit_struct_lit(comp: Comp, name: string, inits: [FieldInit]) {
     let defs = struct_field_defs(comp, name);
     var fnames: [string] = [];
     var i = 0;
-    while (i < len(defs)) {
+    while (i < defs.len()) {
         emit_expr(comp, find_init(inits, defs[i].name));
-        push(fnames, defs[i].name);
+        fnames.push(defs[i].name);
         i = i + 1;
     }
     emit(comp, Op.OMakeStruct(name, fnames));
@@ -655,7 +655,7 @@ fn emit_match(comp: Comp, scr: Expr, arms: [MatchArm]) {
     var to_end: [int] = [];
     var has_catchall = false;
     var i = 0;
-    while (i < len(arms)) {
+    while (i < arms.len()) {
         match (arms[i].pat.kind) {
             PKind.PVariant(_, variant, bindings) => {
                 emit(comp, Op.OGetLocal(scrut));
@@ -664,7 +664,7 @@ fn emit_match(comp: Comp, scr: Expr, arms: [MatchArm]) {
                 emit(comp, Op.OPop);  // casó → descartar el bool true
                 let arm_saved = begin_scope(comp);
                 var b = 0;
-                while (b < len(bindings)) {
+                while (b < bindings.len()) {
                     match (bindings[b]) {
                         Option.Some(nm) => {
                             emit(comp, Op.OGetLocal(scrut));
@@ -678,14 +678,14 @@ fn emit_match(comp: Comp, scr: Expr, arms: [MatchArm]) {
                 }
                 emit_expr(comp, arms[i].body);
                 end_scope(comp, arm_saved);
-                push(to_end, emit(comp, Op.OJump(0)));
+                to_end.push(emit(comp, Op.OJump(0)));
                 patch_jump(comp, to_next);
                 emit(comp, Op.OPop);  // no casó → descartar el bool false
             },
             PKind.PWild => {
                 has_catchall = true;
                 emit_expr(comp, arms[i].body);
-                push(to_end, emit(comp, Op.OJump(0)));
+                to_end.push(emit(comp, Op.OJump(0)));
             },
             PKind.PBind(name) => {
                 has_catchall = true;
@@ -695,7 +695,7 @@ fn emit_match(comp: Comp, scr: Expr, arms: [MatchArm]) {
                 emit(comp, Op.OInitLocal(slot));
                 emit_expr(comp, arms[i].body);
                 end_scope(comp, arm_saved);
-                push(to_end, emit(comp, Op.OJump(0)));
+                to_end.push(emit(comp, Op.OJump(0)));
             },
         }
         i = i + 1;
@@ -704,7 +704,7 @@ fn emit_match(comp: Comp, scr: Expr, arms: [MatchArm]) {
         emit(comp, Op.OMatchFail);
     }
     var j = 0;
-    while (j < len(to_end)) {
+    while (j < to_end.len()) {
         patch_jump(comp, to_end[j]);
         j = j + 1;
     }
@@ -715,21 +715,21 @@ fn emit_match(comp: Comp, scr: Expr, arms: [MatchArm]) {
 // envolventes para resolver upvalues), se deposita en `comp.out` y en el ámbito envolvente se emite un
 // `OClosure` (si capturó upvalues) o un `OFunc` simple (si no).
 fn emit_func_expr(comp: Comp, fe: FnExpr) {
-    push(comp.scopes, new_fscope());
+    comp.scopes.push(new_fscope());
     var i = 0;
-    while (i < len(fe.params)) {
+    while (i < fe.params.len()) {
         declare_local(comp, fe.params[i].name);
         i = i + 1;
     }
     emit_block(comp, fe.body);
     emit(comp, Op.OReturn);
     let s = top(comp);
-    let cfn = CompiledFn { name: "<fn>", arity: len(fe.params), nslots: s.max_slots, chunk: Chunk { code: s.code, consts: s.consts } };
+    let cfn = CompiledFn { name: "<fn>", arity: fe.params.len(), nslots: s.max_slots, chunk: Chunk { code: s.code, consts: s.consts } };
     let ups = s.upvalues;
     pop(comp.scopes);
-    push(comp.out, cfn);
-    let idx = len(comp.out) - 1;
-    if (len(ups) == 0) {
+    comp.out.push(cfn);
+    let idx = comp.out.len() - 1;
+    if (ups.len() == 0) {
         emit(comp, Op.OFunc(idx));
     } else {
         emit(comp, Op.OClosure(idx, ups));
@@ -742,9 +742,9 @@ fn emit_func_expr(comp: Comp, fe: FnExpr) {
 // Compila un cuerpo (función nombrada o método de impl) en su propio ámbito y devuelve su `CompiledFn`.
 // Las fn-exprs anidadas en su cuerpo se compilan en línea (recursivamente) y se ANEXAN a `comp.out`.
 fn compile_body(comp: Comp, name: string, params: [Param], body: Block) -> CompiledFn {
-    push(comp.scopes, new_fscope());
+    comp.scopes.push(new_fscope());
     var i = 0;
-    while (i < len(params)) {
+    while (i < params.len()) {
         declare_local(comp, params[i].name);
         i = i + 1;
     }
@@ -752,7 +752,7 @@ fn compile_body(comp: Comp, name: string, params: [Param], body: Block) -> Compi
     emit(comp, Op.OReturn);  // ...que se retorna
     let s = top(comp);
     optimize_tail_calls(s.code);  // M14.5e: las llamadas en posición de cola → variantes TailCall
-    let cfn = CompiledFn { name: name, arity: len(params), nslots: s.max_slots, chunk: Chunk { code: s.code, consts: s.consts } };
+    let cfn = CompiledFn { name: name, arity: params.len(), nslots: s.max_slots, chunk: Chunk { code: s.code, consts: s.consts } };
     pop(comp.scopes);
     cfn
 }
@@ -764,7 +764,7 @@ fn compile_body(comp: Comp, name: string, params: [Param], body: Block) -> Compi
 // así que basta reconocerlo en el bytecode ya generado.
 fn optimize_tail_calls(code: [Op]) {
     var i = 0;
-    while (i < len(code)) {
+    while (i < code.len()) {
         let nuevo: Option<Op> = match (code[i]) {
             Op.OCall(idx, argc) => if (returns_immediately(code, i + 1)) { Option.Some(Op.OTailCall(idx, argc)) } else { Option.None },
             Op.OCallValue(argc) => if (returns_immediately(code, i + 1)) { Option.Some(Op.OTailCallValue(argc)) } else { Option.None },
@@ -788,8 +788,8 @@ fn returns_immediately(code: [Op], start: int) -> bool {
     var steps = 0;
     var result = false;
     var done = false;
-    while (!done && steps <= len(code)) {
-        if (j < 0 || j >= len(code)) {
+    while (!done && steps <= code.len()) {
+        if (j < 0 || j >= code.len()) {
             done = true;
         } else {
             match (code[j]) {
@@ -817,37 +817,37 @@ fn returns_immediately(code: [Op], start: int) -> bool {
 fn compile_methods(comp: Comp, prog: Program, methods: Map<string, int>) {
     let traitmap: Map<string, [MethodSig]> = Map.new();
     var ti = 0;
-    while (ti < len(prog.traits)) {
-        insert(traitmap, prog.traits[ti].name, prog.traits[ti].methods);
+    while (ti < prog.traits.len()) {
+        traitmap.insert(prog.traits[ti].name, prog.traits[ti].methods);
         ti = ti + 1;
     }
 
     var ii = 0;
-    while (ii < len(prog.impls)) {
+    while (ii < prog.impls.len()) {
         let imp = prog.impls[ii];
         let key = type_key_of_type(imp.target);
         var defined: [string] = [];
         var mi = 0;
-        while (mi < len(imp.methods)) {
+        while (mi < imp.methods.len()) {
             let m = imp.methods[mi];
             let cfn = compile_body(comp, m.name, m.params, m.body);
-            push(comp.out, cfn);
-            insert(methods, key + "#" + m.name, len(comp.out) - 1);
-            push(defined, m.name);
+            comp.out.push(cfn);
+            methods.insert(key + "#" + m.name, comp.out.len() - 1);
+            defined.push(m.name);
             mi = mi + 1;
         }
         // métodos por defecto del trait no redefinidos por este impl
         match (get(traitmap, imp.trait_name)) {
             Option.Some(sigs) => {
                 var si = 0;
-                while (si < len(sigs)) {
+                while (si < sigs.len()) {
                     let sig = sigs[si];
                     if (!contains_name(defined, sig.name)) {
                         match (sig.default_body) {
                             Option.Some(body) => {
                                 let cfn = compile_body(comp, sig.name, sig.params, body);
-                                push(comp.out, cfn);
-                                insert(methods, key + "#" + sig.name, len(comp.out) - 1);
+                                comp.out.push(cfn);
+                                methods.insert(key + "#" + sig.name, comp.out.len() - 1);
                             },
                             Option.None => { },
                         }
@@ -863,7 +863,7 @@ fn compile_methods(comp: Comp, prog: Program, methods: Map<string, int>) {
 
 fn contains_name(xs: [string], s: string) -> bool {
     var i = 0;
-    while (i < len(xs)) {
+    while (i < xs.len()) {
         if (xs[i] == s) {
             return true;
         }
@@ -876,8 +876,8 @@ fn contains_name(xs: [string], s: string) -> bool {
 // en compilación, como el intérprete los inyecta en runtime (`inject_prelude_enums`). Solo importan los
 // nombres de las variantes (la aridad la da el sitio de llamada).
 fn inject_prelude_enums(enums: Map<string, [VariantDef]>) {
-    insert(enums, "Option", [VariantDef { name: "Some", payload: [], line: 0, col: 0 }, VariantDef { name: "None", payload: [], line: 0, col: 0 }]);
-    insert(enums, "Result", [VariantDef { name: "Ok", payload: [], line: 0, col: 0 }, VariantDef { name: "Err", payload: [], line: 0, col: 0 }]);
+    enums.insert("Option", [VariantDef { name: "Some", payload: [], line: 0, col: 0 }, VariantDef { name: "None", payload: [], line: 0, col: 0 }]);
+    enums.insert("Result", [VariantDef { name: "Ok", payload: [], line: 0, col: 0 }, VariantDef { name: "Err", payload: [], line: 0, col: 0 }]);
 }
 
 // Una `CompiledFn` de relleno para reservar los slots de las funciones nombradas (índices 0..n) antes de
@@ -889,32 +889,32 @@ fn placeholder_fn() -> CompiledFn {
 pub fn compile(prog: Program) -> CProgram {
     var indices: Map<string, int> = Map.new();
     var i = 0;
-    while (i < len(prog.funcs)) {
-        insert(indices, prog.funcs[i].name, i);
+    while (i < prog.funcs.len()) {
+        indices.insert(prog.funcs[i].name, i);
         i = i + 1;
     }
 
     var structs: Map<string, [FieldDef]> = Map.new();
     var s = 0;
-    while (s < len(prog.structs)) {
-        insert(structs, prog.structs[s].name, prog.structs[s].fields);
+    while (s < prog.structs.len()) {
+        structs.insert(prog.structs[s].name, prog.structs[s].fields);
         s = s + 1;
     }
 
     var enums: Map<string, [VariantDef]> = Map.new();
     inject_prelude_enums(enums);
     var e = 0;
-    while (e < len(prog.enums)) {
-        insert(enums, prog.enums[e].name, prog.enums[e].variants);
+    while (e < prog.enums.len()) {
+        enums.insert(prog.enums[e].name, prog.enums[e].variants);
         e = e + 1;
     }
 
     let comp = Comp { indices: indices, structs: structs, enums: enums, scopes: [], out: [] };
     // Reservamos un hueco por función nombrada (índices 0..n); las anónimas/métodos se anexarán después.
-    let n = len(prog.funcs);
+    let n = prog.funcs.len();
     var r = 0;
     while (r < n) {
-        push(comp.out, placeholder_fn());
+        comp.out.push(placeholder_fn());
         r = r + 1;
     }
     var j = 0;

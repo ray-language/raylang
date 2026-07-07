@@ -10,31 +10,31 @@ fn worker() -> int {
     var i = 0;
     while (i < 5000) {
         var a: [int] = [];
-        push(a, i);
-        push(vivo, a);
+        a.push(i);
+        vivo.push(a);
         i = i + 1;
     }
     var j = 0;
     var s = 0;
     while (j < 30000) {
         var t: [int] = [];
-        push(t, j);
+        t.push(j);
         s = s + t[0];
         j = j + 1;
     }
-    s % 100 + len(vivo) - len(vivo)
+    s % 100 + vivo.len() - vivo.len()
 }
 
 fn main() -> int {
     var tasks: [Task<int>] = [];
     var k = 0;
     while (k < 60) {
-        push(tasks, spawn(fn() -> int { worker() }));
+        tasks.push(spawn(fn() -> int { worker() }));
         k = k + 1;
     }
     var sum = 0;
     var j = 0;
-    while (j < len(tasks)) {
+    while (j < tasks.len()) {
         sum = sum + join(tasks[j]);
         j = j + 1;
     }

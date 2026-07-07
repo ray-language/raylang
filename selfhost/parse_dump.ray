@@ -19,9 +19,9 @@ from parser import Annotation, ImportDecl, ImportName, FromImport, ParseError;
 // Re-escapa una cadena para una sola línea, idéntico al oráculo (y al lexer-dump).
 fn escape(s: string) -> string {
     var out = "";
-    let cs = chars(s);
+    let cs = s.chars();
     var i = 0;
-    while (i < len(cs)) {
+    while (i < cs.len()) {
         let c = cs[i];
         if (c == '\\') {
             out = out + "\\\\";
@@ -54,7 +54,7 @@ fn dump_type(t: Type) -> string {
         Type.TArray(e) => "[" + dump_type(e) + "]",
         Type.TFn(ps, r) => "fn(" + join_types(ps) + ") -> " + dump_type(r),
         Type.TNamed(n, args) => {
-            if (len(args) == 0) { n } else { n + "<" + join_types(args) + ">" }
+            if (args.len() == 0) { n } else { n + "<" + join_types(args) + ">" }
         },
         Type.TDyn(traits) => "dyn " + join_strings(traits, " + "),
     }
@@ -64,7 +64,7 @@ fn dump_type(t: Type) -> string {
 fn join_strings(xs: [string], sep: string) -> string {
     var s = "";
     var i = 0;
-    while (i < len(xs)) {
+    while (i < xs.len()) {
         if (i > 0) {
             s = s + sep;
         }
@@ -78,7 +78,7 @@ fn join_strings(xs: [string], sep: string) -> string {
 fn join_types(ps: [Type]) -> string {
     var s = "";
     var i = 0;
-    while (i < len(ps)) {
+    while (i < ps.len()) {
         if (i > 0) {
             s = s + ", ";
         }
@@ -142,7 +142,7 @@ fn dump_expr(e: Expr) -> string {
 fn dump_inits(fields: [FieldInit]) -> string {
     var s = "";
     var i = 0;
-    while (i < len(fields)) {
+    while (i < fields.len()) {
         let fi = fields[i];
         s = s + " (init " + fi.name + " " + dump_expr(fi.value) + ")";
         i = i + 1;
@@ -158,7 +158,7 @@ fn dump_fnexpr(fe: FnExpr) -> string {
 fn dump_arms(arms: [MatchArm]) -> string {
     var s = "";
     var i = 0;
-    while (i < len(arms)) {
+    while (i < arms.len()) {
         let a = arms[i];
         s = s + " (arm " + dump_pattern(a.pat) + " " + dump_expr(a.body) + ")" + pos(a.line, a.col);
         i = i + 1;
@@ -179,7 +179,7 @@ fn dump_pattern(pat: Pattern) -> string {
 fn dump_binds(binds: [Option<string>]) -> string {
     var s = "";
     var i = 0;
-    while (i < len(binds)) {
+    while (i < binds.len()) {
         match (binds[i]) {
             Option.Some(n) => {
                 s = s + " " + n;
@@ -197,7 +197,7 @@ fn dump_binds(binds: [Option<string>]) -> string {
 fn dump_exprs(es: [Expr]) -> string {
     var s = "";
     var i = 0;
-    while (i < len(es)) {
+    while (i < es.len()) {
         s = s + " " + dump_expr(es[i]);
         i = i + 1;
     }
@@ -234,7 +234,7 @@ fn dump_stmt(st: Stmt) -> string {
 fn dump_block(b: Block) -> string {
     var s = "(block";
     var i = 0;
-    while (i < len(b.stmts)) {
+    while (i < b.stmts.len()) {
         s = s + " " + dump_stmt(b.stmts[i]);
         i = i + 1;
     }
@@ -245,7 +245,7 @@ fn dump_block(b: Block) -> string {
 fn dump_params(ps: [Param]) -> string {
     var s = "";
     var i = 0;
-    while (i < len(ps)) {
+    while (i < ps.len()) {
         let pm = ps[i];
         s = s + " (param " + pm.name + " " + dump_type(pm.ty) + ")" + pos(pm.line, pm.col);
         i = i + 1;
@@ -260,16 +260,16 @@ fn dump_pub(is_pub: bool) -> string {
 
 // Segmento de anotaciones ` (anns (ann derive Eq Show) ...)`, o "" si no hay.
 fn dump_anns(anns: [Annotation]) -> string {
-    if (len(anns) == 0) {
+    if (anns.len() == 0) {
         return "";
     }
     var s = " (anns";
     var i = 0;
-    while (i < len(anns)) {
+    while (i < anns.len()) {
         let a = anns[i];
         var args = "";
         var j = 0;
-        while (j < len(a.args)) {
+        while (j < a.args.len()) {
             args = args + " " + a.args[j];
             j = j + 1;
         }
@@ -281,17 +281,17 @@ fn dump_anns(anns: [Annotation]) -> string {
 
 // Segmento de genéricos ` (generics T U (bound T A) (bound U B))`, o "" si no hay ninguno.
 fn dump_generics(tparams: [string], bounds: [Bound]) -> string {
-    if (len(tparams) == 0 && len(bounds) == 0) {
+    if (tparams.len() == 0 && bounds.len() == 0) {
         return "";
     }
     var s = " (generics";
     var i = 0;
-    while (i < len(tparams)) {
+    while (i < tparams.len()) {
         s = s + " " + tparams[i];
         i = i + 1;
     }
     var j = 0;
-    while (j < len(bounds)) {
+    while (j < bounds.len()) {
         let b = bounds[j];
         s = s + " (bound " + b.param + " " + b.trait_name + ")";
         j = j + 1;
@@ -306,7 +306,7 @@ fn dump_func(f: Func) -> string {
 fn dump_struct(s: StructDef) -> string {
     var inner = "";
     var i = 0;
-    while (i < len(s.fields)) {
+    while (i < s.fields.len()) {
         let fd = s.fields[i];
         inner = inner + " (field " + fd.name + " " + dump_type(fd.ty) + ")";
         i = i + 1;
@@ -317,11 +317,11 @@ fn dump_struct(s: StructDef) -> string {
 fn dump_enum(e: EnumDef) -> string {
     var inner = "";
     var i = 0;
-    while (i < len(e.variants)) {
+    while (i < e.variants.len()) {
         let v = e.variants[i];
         var payload = "";
         var j = 0;
-        while (j < len(v.payload)) {
+        while (j < v.payload.len()) {
             payload = payload + " " + dump_type(v.payload[j]);
             j = j + 1;
         }
@@ -345,7 +345,7 @@ fn dump_methodsig(m: MethodSig) -> string {
 fn dump_trait(t: TraitDef) -> string {
     var inner = "";
     var i = 0;
-    while (i < len(t.methods)) {
+    while (i < t.methods.len()) {
         inner = inner + " " + dump_methodsig(t.methods[i]);
         i = i + 1;
     }
@@ -355,7 +355,7 @@ fn dump_trait(t: TraitDef) -> string {
 fn dump_impl(b: ImplBlock) -> string {
     var inner = "";
     var i = 0;
-    while (i < len(b.methods)) {
+    while (i < b.methods.len()) {
         inner = inner + " " + dump_func(b.methods[i]);
         i = i + 1;
     }
@@ -376,7 +376,7 @@ fn dump_import(d: ImportDecl) -> string {
 fn dump_from_import(fi: FromImport) -> string {
     var names = "";
     var i = 0;
-    while (i < len(fi.names)) {
+    while (i < fi.names.len()) {
         let n = fi.names[i];
         var one = "(name " + n.name;
         match (n.alias) {
@@ -403,37 +403,37 @@ fn lex_or_die(src: string) -> [Token] {
 // structs, enums, traits, impls.
 fn dump_program(prog: Program) {
     var im = 0;
-    while (im < len(prog.imports)) {
+    while (im < prog.imports.len()) {
         print(dump_import(prog.imports[im]));
         im = im + 1;
     }
     var fr = 0;
-    while (fr < len(prog.from_imports)) {
+    while (fr < prog.from_imports.len()) {
         print(dump_from_import(prog.from_imports[fr]));
         fr = fr + 1;
     }
     var i = 0;
-    while (i < len(prog.funcs)) {
+    while (i < prog.funcs.len()) {
         print(dump_func(prog.funcs[i]));
         i = i + 1;
     }
     var s = 0;
-    while (s < len(prog.structs)) {
+    while (s < prog.structs.len()) {
         print(dump_struct(prog.structs[s]));
         s = s + 1;
     }
     var e = 0;
-    while (e < len(prog.enums)) {
+    while (e < prog.enums.len()) {
         print(dump_enum(prog.enums[e]));
         e = e + 1;
     }
     var t = 0;
-    while (t < len(prog.traits)) {
+    while (t < prog.traits.len()) {
         print(dump_trait(prog.traits[t]));
         t = t + 1;
     }
     var m = 0;
-    while (m < len(prog.impls)) {
+    while (m < prog.impls.len()) {
         print(dump_impl(prog.impls[m]));
         m = m + 1;
     }
@@ -441,7 +441,7 @@ fn dump_program(prog: Program) {
 
 fn main() -> int {
     let argv = args();
-    if (len(argv) == 0) {
+    if (argv.len() == 0) {
         eprint("uso: raylang selfhost/parse_dump.ray <archivo>");
         return 1;
     }

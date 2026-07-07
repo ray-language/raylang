@@ -13,9 +13,9 @@ from lexer import lex, TokKind, LexError;
 // Re-escapa una cadena para imprimirla en una sola línea, de forma idéntica al oráculo.
 fn escape(s: string) -> string {
     var out = "";
-    let cs = chars(s);
+    let cs = s.chars();
     var i = 0;
-    while (i < len(cs)) {
+    while (i < cs.len()) {
         let c = cs[i];
         if (c == '\\') {
             out = out + "\\\\";
@@ -108,7 +108,7 @@ fn dump(src: string) {
     match (lex(src)) {
         Result.Ok(toks) => {
             var i = 0;
-            while (i < len(toks)) {
+            while (i < toks.len()) {
                 let t = toks[i];
                 print(kind_str(t.kind) + "@" + to_string(t.line) + ":" + to_string(t.col));
                 i = i + 1;
@@ -122,7 +122,7 @@ fn dump(src: string) {
 
 fn main() -> int {
     let argv = args();
-    if (len(argv) == 0) {
+    if (argv.len() == 0) {
         eprint("uso: raylang selfhost/lex_dump.ray <archivo>");
         return 1;
     }

@@ -6,7 +6,7 @@ from hex import hex_encode;
 fn str_bytes(s: string) -> [int] {
     var b: [int] = [];
     for c in s {
-        push(b, c as int);
+        b.push(c as int);
     }
     b
 }

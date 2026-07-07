@@ -453,7 +453,7 @@ fn check(p: Parser, name: string) -> bool { tok_name(cur_kind(p)) == name }
 
 // El token SIGUIENTE (uno por delante) es `name`. Para el lookahead de `pub from …`.
 fn check_next(p: Parser, name: string) -> bool {
-    if (p.pos + 1 < len(p.toks)) { tok_name(p.toks[p.pos + 1].kind) == name } else { false }
+    if (p.pos + 1 < p.toks.len()) { tok_name(p.toks[p.pos + 1].kind) == name } else { false }
 }
 
 // Consume y devuelve el token actual (no avanza más allá de Eof).
@@ -514,12 +514,12 @@ fn parse_program(p: Parser) -> Result<Program, ParseError> {
     var from_imports: [FromImport] = [];
     while (!at_end(p)) {
         if (check(p, "import")) {
-            push(imports, import_decl(p)?);
+            imports.push(import_decl(p)?);
         } else if (check(p, "from")) {
-            push(from_imports, import_from_decl(p, false)?);
+            from_imports.push(import_from_decl(p, false)?);
         } else if (check(p, "pub") && check_next(p, "from")) {
             advance(p);  // 'pub'
-            push(from_imports, import_from_decl(p, true)?);  // reexport
+            from_imports.push(import_from_decl(p, true)?);  // reexport
         } else {
             // Anotaciones (@nombre[(args)]) y luego `pub`, antes de la declaración.
             let anns = annotations(p)?;
@@ -536,32 +536,32 @@ fn parse_program(p: Parser) -> Result<Program, ParseError> {
                 var s = struct_def(p)?;
                 s.annotations = anns;
                 s.is_pub = is_pub;
-                push(structs, s);
+                structs.push(s);
             } else if (check(p, "enum")) {
                 var e = enum_def(p)?;
                 e.annotations = anns;
                 e.is_pub = is_pub;
-                push(enums, e);
+                enums.push(e);
             } else if (check(p, "trait")) {
-                if (len(anns) > 0) {
+                if (anns.len() > 0) {
                     return Result.Err(perr_at(anns[0].line, anns[0].col, "no se permiten anotaciones sobre un trait"));
                 }
                 var t = trait_def(p)?;
                 t.is_pub = is_pub;
-                push(traits, t);
+                traits.push(t);
             } else if (check(p, "impl")) {
                 if (is_pub) {
                     return Result.Err(perr_at(pub_line, pub_col, "'pub' no se admite en un impl (exporta el trait/tipo, no el impl)"));
                 }
-                if (len(anns) > 0) {
+                if (anns.len() > 0) {
                     return Result.Err(perr_at(anns[0].line, anns[0].col, "no se permiten anotaciones sobre un impl"));
                 }
-                push(impls, impl_block(p)?);
+                impls.push(impl_block(p)?);
             } else {
                 var f = function(p)?;
                 f.annotations = anns;
                 f.is_pub = is_pub;
-                push(funcs, f);
+                funcs.push(f);
             }
         }
     }
@@ -579,7 +579,7 @@ fn annotations(p: Parser) -> Result<[Annotation], ParseError> {
             if (!check(p, ")")) {
                 var seguir = true;
                 while (seguir) {
-                    push(args, expect_ident(p, "un argumento de la anotación")?);
+                    args.push(expect_ident(p, "un argumento de la anotación")?);
                     if (!eat(p, ",")) {
                         seguir = false;
                     }
@@ -587,7 +587,7 @@ fn annotations(p: Parser) -> Result<[Annotation], ParseError> {
             }
             expect(p, ")", "')' para cerrar los argumentos de la anotación")?;
         }
-        push(anns, Annotation { name: name, args: args, line: at.line, col: at.col });
+        anns.push(Annotation { name: name, args: args, line: at.line, col: at.col });
     }
     Result.Ok(anns)
 }
@@ -628,7 +628,7 @@ fn import_from_decl(p: Parser, is_pub: bool) -> Result<FromImport, ParseError> {
         if (eat(p, "as")) {
             alias = Option.Some(expect_ident(p, "el alias tras 'as'")?);
         }
-        push(names, ImportName { name: nm, alias: alias, line: t.line, col: t.col });
+        names.push(ImportName { name: nm, alias: alias, line: t.line, col: t.col });
         if (!eat(p, ",")) {
             seguir = false;
         }
@@ -649,7 +649,7 @@ fn struct_def(p: Parser) -> Result<StructDef, ParseError> {
         let fname = expect_ident(p, "el nombre de un campo")?;
         expect(p, ":", "':' tras el nombre del campo")?;
         let ty = parse_type(p)?;
-        push(fields, FieldDef { name: fname, ty: ty });
+        fields.push(FieldDef { name: fname, ty: ty });
         if (!eat(p, ",")) {
             done = true;
         }
@@ -674,14 +674,14 @@ fn enum_def(p: Parser) -> Result<EnumDef, ParseError> {
         if (eat(p, "(")) {
             var seguir = true;
             while (seguir) {
-                push(payload, parse_type(p)?);
+                payload.push(parse_type(p)?);
                 if (!eat(p, ",")) {
                     seguir = false;
                 }
             }
             expect(p, ")", "')' para cerrar el payload de la variante")?;
         }
-        push(variants, VariantDef { name: vname, payload: payload, line: vt.line, col: vt.col });
+        variants.push(VariantDef { name: vname, payload: payload, line: vt.line, col: vt.col });
         if (!eat(p, ",")) {
             done = true;
         }
@@ -697,7 +697,7 @@ fn trait_def(p: Parser) -> Result<TraitDef, ParseError> {
     expect(p, "{", "'{' tras el nombre del trait")?;
     var methods: [MethodSig] = [];
     while (!check(p, "}") && !at_end(p)) {
-        push(methods, method_sig(p)?);
+        methods.push(method_sig(p)?);
     }
     expect(p, "}", "'}' para cerrar el trait")?;
     Result.Ok(TraitDef { is_pub: false, name: name, methods: methods, line: kw.line, col: kw.col })
@@ -738,7 +738,7 @@ fn impl_block(p: Parser) -> Result<ImplBlock, ParseError> {
     expect(p, "{", "'{' para abrir el cuerpo del impl")?;
     var methods: [Func] = [];
     while (!check(p, "}") && !at_end(p)) {
-        push(methods, impl_method(p)?);
+        methods.push(impl_method(p)?);
     }
     expect(p, "}", "'}' para cerrar el impl")?;
     Result.Ok(ImplBlock { trait_name: trait_name, type_params: g.params, bounds: g.bounds, target: target, methods: methods, line: kw.line, col: kw.col })
@@ -781,7 +781,7 @@ fn method_params(p: Parser) -> Result<[Param], ParseError> {
     if (es_self) {
         let t = cur_tok(p);
         advance(p);
-        push(params, Param { name: "self", ty: Type.TNamed("Self", []), line: t.line, col: t.col });
+        params.push(Param { name: "self", ty: Type.TNamed("Self", []), line: t.line, col: t.col });
         if (!eat(p, ",")) {
             return Result.Ok(params);
         }
@@ -792,7 +792,7 @@ fn method_params(p: Parser) -> Result<[Param], ParseError> {
         let name = expect_ident(p, "el nombre de un parámetro")?;
         expect(p, ":", "':' tras el nombre del parámetro")?;
         let ty = parse_type(p)?;
-        push(params, Param { name: name, ty: ty, line: t.line, col: t.col });
+        params.push(Param { name: name, ty: ty, line: t.line, col: t.col });
         if (!eat(p, ",")) {
             seguir = false;
         }
@@ -828,7 +828,7 @@ fn parse_params(p: Parser) -> Result<[Param], ParseError> {
         let name = expect_ident(p, "el nombre de un parámetro")?;
         expect(p, ":", "':' tras el nombre del parámetro")?;
         let ty = parse_type(p)?;
-        push(params, Param { name: name, ty: ty, line: t.line, col: t.col });
+        params.push(Param { name: name, ty: ty, line: t.line, col: t.col });
         if (!eat(p, ",")) {
             seguir = false;
         }
@@ -844,7 +844,7 @@ fn parse_type(p: Parser) -> Result<Type, ParseError> {
         var traits: [string] = [];
         var seguir = true;
         while (seguir) {
-            push(traits, expect_ident(p, "el nombre del trait tras 'dyn'")?);
+            traits.push(expect_ident(p, "el nombre del trait tras 'dyn'")?);
             if (!eat(p, "+")) {
                 seguir = false;
             }
@@ -864,7 +864,7 @@ fn parse_type(p: Parser) -> Result<Type, ParseError> {
         if (!check(p, ")")) {
             var seguir = true;
             while (seguir) {
-                push(ps, parse_type(p)?);
+                ps.push(parse_type(p)?);
                 if (!eat(p, ",")) {
                     seguir = false;
                 }
@@ -900,7 +900,7 @@ fn type_args(p: Parser) -> Result<[Type], ParseError> {
     if (eat(p, "<")) {
         var seguir = true;
         while (seguir) {
-            push(args, parse_type(p)?);
+            args.push(parse_type(p)?);
             if (!eat(p, ",")) {
                 seguir = false;
             }
@@ -922,13 +922,13 @@ fn type_params_with_bounds(p: Parser) -> Result<Generics, ParseError> {
                 var more = true;
                 while (more) {
                     let tr = expect_ident(p, "el nombre de un trait en el bound")?;
-                    push(bounds, Bound { param: name, trait_name: tr });
+                    bounds.push(Bound { param: name, trait_name: tr });
                     if (!eat(p, "+")) {
                         more = false;
                     }
                 }
             }
-            push(params, name);
+            params.push(name);
             if (!eat(p, ",")) {
                 seguir = false;
             }
@@ -943,9 +943,9 @@ fn sort_dedup(xs: [string]) -> [string] {
     let ordenado = sort(xs);
     var out: [string] = [];
     var i = 0;
-    while (i < len(ordenado)) {
+    while (i < ordenado.len()) {
         if (i == 0 || ordenado[i] != ordenado[i - 1]) {
-            push(out, ordenado[i]);
+            out.push(ordenado[i]);
         }
         i = i + 1;
     }
@@ -962,9 +962,9 @@ fn block(p: Parser) -> Result<Block, ParseError> {
     var done = false;
     while (!done && !check(p, "}") && !at_end(p)) {
         if (check(p, "let") || check(p, "var")) {
-            push(stmts, let_stmt(p)?);
+            stmts.push(let_stmt(p)?);
         } else if (check(p, "return")) {
-            push(stmts, return_stmt(p)?);
+            stmts.push(return_stmt(p)?);
         } else {
             let e = expression(p)?;
             let line = e.line;
@@ -975,15 +975,15 @@ fn block(p: Parser) -> Result<Block, ParseError> {
                 }
                 let value = expression(p)?;
                 expect(p, ";", "';' al final de la asignación")?;
-                push(stmts, Stmt { kind: SKind.SAssign(e, value), line: line, col: col });
+                stmts.push(Stmt { kind: SKind.SAssign(e, value), line: line, col: col });
             } else if (eat(p, ";")) {
-                push(stmts, Stmt { kind: SKind.SExpr(e), line: line, col: col });
+                stmts.push(Stmt { kind: SKind.SExpr(e), line: line, col: col });
             } else if (check(p, "}")) {
                 tail = Option.Some(e);
                 done = true;
             } else if (expr_has_block(e)) {
                 // Expresión-con-bloque usada como sentencia: no necesita `;` (DESIGN §6).
-                push(stmts, Stmt { kind: SKind.SExpr(e), line: line, col: col });
+                stmts.push(Stmt { kind: SKind.SExpr(e), line: line, col: col });
             } else {
                 return Result.Err(perr_here(p, "se esperaba ';' después de la expresión"));
             }
@@ -1221,7 +1221,7 @@ fn parse_args(p: Parser) -> Result<[Expr], ParseError> {
     var a: [Expr] = [];
     var seguir = true;
     while (seguir) {
-        push(a, expression(p)?);
+        a.push(expression(p)?);
         if (!eat(p, ",")) {
             seguir = false;
         }
@@ -1330,7 +1330,7 @@ fn array_literal(p: Parser) -> Result<Expr, ParseError> {
     if (!check(p, "]")) {
         var seguir = true;
         while (seguir) {
-            push(elems, expression(p)?);
+            elems.push(expression(p)?);
             if (!eat(p, ",")) {
                 seguir = false;
             } else if (check(p, "]")) {
@@ -1375,7 +1375,7 @@ fn match_expr(p: Parser) -> Result<Expr, ParseError> {
     var arms: [MatchArm] = [];
     var done = false;
     while (!done && !check(p, "}")) {
-        push(arms, match_arm(p)?);
+        arms.push(match_arm(p)?);
         if (!eat(p, ",")) {
             done = true;
         }
@@ -1421,7 +1421,7 @@ fn pattern(p: Parser) -> Result<Pattern, ParseError> {
                 if (b != "_") {
                     bv = Option.Some(b);
                 }
-                push(bindings, bv);
+                bindings.push(bv);
                 if (!eat(p, ",")) {
                     seguir = false;
                 }
@@ -1443,7 +1443,7 @@ fn struct_literal(p: Parser, name: string, line: int, col: int) -> Result<Expr, 
         let fname = expect_ident(p, "el nombre de un campo")?;
         expect(p, ":", "':' tras el nombre del campo")?;
         let value = expression(p)?;
-        push(fields, FieldInit { name: fname, value: value });
+        fields.push(FieldInit { name: fname, value: value });
         if (!eat(p, ",")) {
             done = true;
         }
@@ -1466,10 +1466,10 @@ fn make_pipeline(recv: Expr, rhs: Expr) -> Expr {
     match (rhs.kind) {
         EKind.ECall(callee, args) => {
             var new_args: [Expr] = [];
-            push(new_args, recv);
+            new_args.push(recv);
             var i = 0;
-            while (i < len(args)) {
-                push(new_args, args[i]);
+            while (i < args.len()) {
+                new_args.push(args[i]);
                 i = i + 1;
             }
             Expr { kind: EKind.ECall(callee, new_args), line: line, col: col }

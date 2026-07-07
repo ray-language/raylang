@@ -15,7 +15,7 @@ fn hex(b: bytes) -> string {
     let digitos = "0123456789abcdef";
     var s = "";
     var i = 0;
-    while (i < len(b)) {
+    while (i < b.len()) {
         let o = b[i];
         s = s + to_string(digitos[o >> 4 & 15]);
         s = s + to_string(digitos[o & 15]);
@@ -30,7 +30,7 @@ fn main() {
     print(extract_key(req));  // dGhlIHNhbXBsZSBub25jZQ==
     print(accept_key(extract_key(req)));  // s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
     // La línea de estado de la respuesta de upgrade.
-    print(split(handshake_response("dGhlIHNhbXBsZSBub25jZQ=="), "\r\n")[0]);  // HTTP/1.1 101 Switching Protocols
+    print(handshake_response("dGhlIHNhbXBsZSBub25jZQ==").split("\r\n")[0]);  // HTTP/1.1 101 Switching Protocols
 
     // --- Decodificar una trama de texto ENMASCARADA del cliente ("Hi") ---
     // b0=0x81 (FIN+texto), b1=0x82 (mask+len 2), clave 37 fa 21 3d, carga 'H'^37='7f', 'i'^fa='93'.
@@ -43,7 +43,7 @@ fn main() {
     // --- Codificar una trama de texto del servidor (sin máscara) ---
     print(hex(encode_text("Hi")));  // 81024869  (FIN+texto, len 2, "Hi")
     // Carga de 126 octetos → longitud extendida de 16 bits.
-    print(hex(encode_frame(op_close(), to_bytes(""))));  // 8800  (close, sin carga)
+    print(hex(encode_frame(op_close(), "".to_bytes())));  // 8800  (close, sin carga)
 
     // Round-trip: decodificar lo que el servidor codifica (las tramas del servidor no van enmascaradas).
     let g = decode_frame(encode_text("pong!"));

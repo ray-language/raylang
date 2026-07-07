@@ -41,7 +41,7 @@ fn ejec(c: Conn, args: [string]) -> Reply {
 
 fn puerto_de_args() -> int {
     let a = args();
-    if (len(a) == 0) {
+    if (a.len() == 0) {
         return 6379;
     }
     match (parse_int(a[0])) {

@@ -177,7 +177,7 @@ pub fn value_str(v: Value) -> string {
         Value.VArray(elems) => "[" + join_vals(elems) + "]",
         Value.VStruct(name, fields) => name + " { " + join_fields(fields) + " }",
         Value.VEnum(en, vr, payload) => {
-            if (len(payload) == 0) { en + "." + vr } else { en + "." + vr + "(" + join_vals(payload) + ")" }
+            if (payload.len() == 0) { en + "." + vr } else { en + "." + vr + "(" + join_vals(payload) + ")" }
         },
         Value.VFunc(_) => "<fn>",
         Value.VClosure(_, _) => "<fn>",
@@ -187,8 +187,8 @@ pub fn value_str(v: Value) -> string {
         Value.VMap(d) => {
             var parts: [string] = [];
             var i = 0;
-            while (i < len(d.keys)) {
-                push(parts, value_str(d.keys[i]) + ": " + value_str(d.vals[i]));
+            while (i < d.keys.len()) {
+                parts.push(value_str(d.keys[i]) + ": " + value_str(d.vals[i]));
                 i = i + 1;
             }
             "Map{" + join(sort(parts), ", ") + "}"
@@ -200,7 +200,7 @@ pub fn value_str(v: Value) -> string {
 fn join_vals(vals: [Value]) -> string {
     var s = "";
     var i = 0;
-    while (i < len(vals)) {
+    while (i < vals.len()) {
         if (i > 0) {
             s = s + ", ";
         }
@@ -214,7 +214,7 @@ fn join_vals(vals: [Value]) -> string {
 fn join_fields(fields: [SField]) -> string {
     var s = "";
     var i = 0;
-    while (i < len(fields)) {
+    while (i < fields.len()) {
         if (i > 0) {
             s = s + ", ";
         }
@@ -275,11 +275,11 @@ pub fn values_equal(a: Value, b: Value) -> bool {
 }
 
 fn vals_equal_list(a: [Value], b: [Value]) -> bool {
-    if (len(a) != len(b)) {
+    if (a.len() != b.len()) {
         return false;
     }
     var i = 0;
-    while (i < len(a)) {
+    while (i < a.len()) {
         if (!values_equal(a[i], b[i])) {
             return false;
         }
@@ -289,11 +289,11 @@ fn vals_equal_list(a: [Value], b: [Value]) -> bool {
 }
 
 fn fields_equal(a: [SField], b: [SField]) -> bool {
-    if (len(a) != len(b)) {
+    if (a.len() != b.len()) {
         return false;
     }
     var i = 0;
-    while (i < len(a)) {
+    while (i < a.len()) {
         if (a[i].name != b[i].name) {
             return false;
         }
@@ -339,7 +339,7 @@ fn enum_has_variant(c: Interp, name: string, variant: string) -> bool {
     match (get(c.enums, name)) {
         Option.Some(variants) => {
             var i = 0;
-            while (i < len(variants)) {
+            while (i < variants.len()) {
                 if (variants[i].name == variant) {
                     return true;
                 }
@@ -354,7 +354,7 @@ fn enum_has_variant(c: Interp, name: string, variant: string) -> bool {
 // La expresión del campo `fname` en un literal de struct (el checker garantiza que está presente).
 fn find_field_init(inits: [FieldInit], fname: string) -> Expr {
     var i = 0;
-    while (i < len(inits)) {
+    while (i < inits.len()) {
         if (inits[i].name == fname) {
             return inits[i].value;
         }
@@ -367,7 +367,7 @@ fn find_field_init(inits: [FieldInit], fname: string) -> Expr {
 // reusa la VM (M14.5b) en `OGetField`.
 pub fn struct_get(fields: [SField], fname: string) -> Value {
     var i = 0;
-    while (i < len(fields)) {
+    while (i < fields.len()) {
         if (fields[i].name == fname) {
             return fields[i].value;
         }
@@ -380,7 +380,7 @@ pub fn struct_get(fields: [SField], fname: string) -> Value {
 // reusa la VM (M14.5b) en `OSetField`.
 pub fn struct_set(fields: [SField], fname: string, v: Value) {
     var i = 0;
-    while (i < len(fields)) {
+    while (i < fields.len()) {
         if (fields[i].name == fname) {
             fields[i].value = v;
             return;
@@ -396,7 +396,7 @@ pub fn struct_set(fields: [SField], fname: string, v: Value) {
 fn new_scope() -> Map<string, Cell> { Map.new() }
 
 fn push_scope(c: Interp) {
-    push(c.scopes, new_scope());
+    c.scopes.push(new_scope());
 }
 
 fn pop_scope(c: Interp) {
@@ -406,21 +406,21 @@ fn pop_scope(c: Interp) {
 // Declara una variable: una CELDA NUEVA en el ámbito más interno. Como cada declaración crea su propia
 // celda, el shadowing es seguro aunque una closure haya capturado la celda anterior (se queda con la vieja).
 fn define(c: Interp, name: string, v: Value) {
-    let top = c.scopes[len(c.scopes) - 1];
-    insert(top, name, Cell { v: v });
+    let top = c.scopes[c.scopes.len() - 1];
+    top.insert(name, Cell { v: v });
 }
 
 // Inserta una celda YA EXISTENTE (compartida) en el ámbito más interno. Lo usa `call_body` para ligar las
 // celdas capturadas por una closure: comparten el mismo objeto con su origen.
 fn insert_cell(c: Interp, name: string, cell: Cell) {
-    let top = c.scopes[len(c.scopes) - 1];
-    insert(top, name, cell);
+    let top = c.scopes[c.scopes.len() - 1];
+    top.insert(name, cell);
 }
 
 // Busca una variable de adentro hacia afuera y devuelve su valor; `None` si no es una variable (en ese
 // caso el nombre es una función usada como valor).
 fn lookup_opt(c: Interp, name: string) -> Option<Value> {
-    var i = len(c.scopes) - 1;
+    var i = c.scopes.len() - 1;
     while (i >= 0) {
         match (get(c.scopes[i], name)) {
             Option.Some(cell) => {
@@ -436,7 +436,7 @@ fn lookup_opt(c: Interp, name: string) -> Option<Value> {
 // Asigna a una variable ya declarada MUTANDO su celda (no reemplazándola): así el cambio se ve a través
 // de cualquier closure que la haya capturado.
 fn assign(c: Interp, name: string, v: Value) {
-    var i = len(c.scopes) - 1;
+    var i = c.scopes.len() - 1;
     while (i >= 0) {
         match (get(c.scopes[i], name)) {
             Option.Some(cell) => {
@@ -455,14 +455,14 @@ fn assign(c: Interp, name: string, v: Value) {
 fn capture_env(c: Interp) -> [Capture] {
     let m: Map<string, Cell> = Map.new();
     var i = 0;
-    while (i < len(c.scopes)) {
+    while (i < c.scopes.len()) {
         let scope = c.scopes[i];
-        let ks = keys(scope);
+        let ks = scope.keys();
         var j = 0;
-        while (j < len(ks)) {
+        while (j < ks.len()) {
             match (get(scope, ks[j])) {
                 Option.Some(cell) => {
-                    insert(m, ks[j], cell);
+                    m.insert(ks[j], cell);
                 },
                 Option.None => { },
             }
@@ -471,12 +471,12 @@ fn capture_env(c: Interp) -> [Capture] {
         i = i + 1;
     }
     var caps: [Capture] = [];
-    let mk = keys(m);
+    let mk = m.keys();
     var t = 0;
-    while (t < len(mk)) {
+    while (t < mk.len()) {
         match (get(m, mk[t])) {
             Option.Some(cell) => {
-                push(caps, Capture { name: mk[t], cell: cell });
+                caps.push(Capture { name: mk[t], cell: cell });
             },
             Option.None => { },
         }
@@ -556,13 +556,13 @@ pub fn eval_add(l: Value, r: Value) -> Result<Value, Flow> {
 fn concat_values(a: [Value], b: [Value]) -> [Value] {
     var out: [Value] = [];
     var i = 0;
-    while (i < len(a)) {
-        push(out, a[i]);
+    while (i < a.len()) {
+        out.push(a[i]);
         i = i + 1;
     }
     var j = 0;
-    while (j < len(b)) {
-        push(out, b[j]);
+    while (j < b.len()) {
+        out.push(b[j]);
         j = j + 1;
     }
     out
@@ -708,9 +708,9 @@ pub fn is_builtin(name: string) -> bool {
 // `len` de un arreglo, un string (nº de caracteres) o un Map (nº de entradas).
 fn builtin_len(v: Value) -> int {
     match (v) {
-        Value.VArray(elems) => len(elems),
-        Value.VStr(s) => len(s),
-        Value.VMap(d) => len(d.keys),
+        Value.VArray(elems) => elems.len(),
+        Value.VStr(s) => s.len(),
+        Value.VMap(d) => d.keys.len(),
         _ => panic("len: se esperaba un arreglo, string o Map"),
     }
 }
@@ -721,7 +721,7 @@ fn builtin_len(v: Value) -> int {
 // El índice de la clave `k` en el mapa, o -1 si no está.
 fn map_find(d: MapData, k: Value) -> int {
     var i = 0;
-    while (i < len(d.keys)) {
+    while (i < d.keys.len()) {
         if (values_equal(d.keys[i], k)) {
             return i;
         }
@@ -736,8 +736,8 @@ fn map_put(d: MapData, k: Value, v: Value) {
     if (idx >= 0) {
         d.vals[idx] = v;
     } else {
-        push(d.keys, k);
-        push(d.vals, v);
+        d.keys.push(k);
+        d.vals.push(v);
     }
 }
 
@@ -748,7 +748,7 @@ fn map_take(d: MapData, k: Value) -> Value {
         return Value.VEnum("Option", "None", no_vals());
     }
     let v = d.vals[idx];
-    let last = len(d.keys) - 1;
+    let last = d.keys.len() - 1;
     d.keys[idx] = d.keys[last];
     d.vals[idx] = d.vals[last];
     let kr = pop(d.keys);
@@ -809,12 +809,12 @@ pub fn value_lt(a: Value, b: Value) -> bool {
 fn map_sorted_order(ks: [Value]) -> [int] {
     var order: [int] = [];
     var i = 0;
-    while (i < len(ks)) {
-        push(order, i);
+    while (i < ks.len()) {
+        order.push(i);
         i = i + 1;
     }
     var a = 1;
-    while (a < len(order)) {
+    while (a < order.len()) {
         let cur = order[a];
         var b = a;
         while (b > 0 && key_lt(ks[cur], ks[order[b - 1]])) {
@@ -831,8 +831,8 @@ fn map_sorted_order(ks: [Value]) -> [int] {
 fn chars_to_value(cs: [char]) -> Value {
     var out: [Value] = [];
     var i = 0;
-    while (i < len(cs)) {
-        push(out, Value.VChar(cs[i]));
+    while (i < cs.len()) {
+        out.push(Value.VChar(cs[i]));
         i = i + 1;
     }
     Value.VArray(out)
@@ -841,8 +841,8 @@ fn chars_to_value(cs: [char]) -> Value {
 fn strs_to_value(ss: [string]) -> Value {
     var out: [Value] = [];
     var i = 0;
-    while (i < len(ss)) {
-        push(out, Value.VStr(ss[i]));
+    while (i < ss.len()) {
+        out.push(Value.VStr(ss[i]));
         i = i + 1;
     }
     Value.VArray(out)
@@ -854,7 +854,7 @@ fn builtin_join(arrv: Value, sep: string) -> string {
         Value.VArray(elems) => {
             var s = "";
             var i = 0;
-            while (i < len(elems)) {
+            while (i < elems.len()) {
                 if (i > 0) {
                     s = s + sep;
                 }
@@ -870,10 +870,10 @@ fn builtin_join(arrv: Value, sep: string) -> string {
 // contains(x, y): ad-hoc — subcadena (string) o pertenencia por igualdad estructural (arreglo).
 fn builtin_contains(x: Value, y: Value) -> bool {
     match (x) {
-        Value.VStr(s) => contains(s, as_str(y)),
+        Value.VStr(s) => s.contains(as_str(y)),
         Value.VArray(elems) => {
             var i = 0;
-            while (i < len(elems)) {
+            while (i < elems.len()) {
                 if (values_equal(elems[i], y)) {
                     return true;
                 }
@@ -889,9 +889,9 @@ fn builtin_contains(x: Value, y: Value) -> bool {
 fn eval_args(c: Interp, args: [Expr]) -> Result<[Value], Flow> {
     var vals: [Value] = [];
     var i = 0;
-    while (i < len(args)) {
+    while (i < args.len()) {
         let v = eval_expr(c, args[i])?;
-        push(vals, v);
+        vals.push(v);
         i = i + 1;
     }
     Result.Ok(vals)
@@ -928,7 +928,7 @@ pub fn dispatch_builtin(prog_args: [string], name: string, vals: [Value], line: 
         // push(arr, x): muta el arreglo compartido (semántica de referencia del host).
         return match (vals[0]) {
             Value.VArray(elems) => {
-                push(elems, vals[1]);
+                elems.push(vals[1]);
                 Result.Ok(Value.VUnit)
             },
             _ => panic("push: se esperaba un arreglo"),
@@ -936,34 +936,34 @@ pub fn dispatch_builtin(prog_args: [string], name: string, vals: [Value], line: 
     }
     // --- Builtins de string (M14.6a): delegan en los del host ---
     if (name == "trim") {
-        return Result.Ok(Value.VStr(trim(as_str(vals[0]))));
+        return Result.Ok(Value.VStr(as_str(vals[0]).trim()));
     }
     if (name == "to_upper") {
-        return Result.Ok(Value.VStr(to_upper(as_str(vals[0]))));
+        return Result.Ok(Value.VStr(as_str(vals[0]).to_upper()));
     }
     if (name == "to_lower") {
-        return Result.Ok(Value.VStr(to_lower(as_str(vals[0]))));
+        return Result.Ok(Value.VStr(as_str(vals[0]).to_lower()));
     }
     if (name == "chars") {
-        return Result.Ok(chars_to_value(chars(as_str(vals[0]))));
+        return Result.Ok(chars_to_value(as_str(vals[0]).chars()));
     }
     if (name == "split") {
-        return Result.Ok(strs_to_value(split(as_str(vals[0]), as_str(vals[1]))));
+        return Result.Ok(strs_to_value(as_str(vals[0]).split(as_str(vals[1]))));
     }
     if (name == "replace") {
-        return Result.Ok(Value.VStr(replace(as_str(vals[0]), as_str(vals[1]), as_str(vals[2]))));
+        return Result.Ok(Value.VStr(as_str(vals[0]).replace(as_str(vals[1]), as_str(vals[2]))));
     }
     if (name == "starts_with") {
-        return Result.Ok(Value.VBool(starts_with(as_str(vals[0]), as_str(vals[1]))));
+        return Result.Ok(Value.VBool(as_str(vals[0]).starts_with(as_str(vals[1]))));
     }
     if (name == "ends_with") {
-        return Result.Ok(Value.VBool(ends_with(as_str(vals[0]), as_str(vals[1]))));
+        return Result.Ok(Value.VBool(as_str(vals[0]).ends_with(as_str(vals[1]))));
     }
     if (name == "substring") {
-        return Result.Ok(Value.VStr(substring(as_str(vals[0]), as_int(vals[1]), as_int(vals[2]))));
+        return Result.Ok(Value.VStr(as_str(vals[0]).substring(as_int(vals[1]), as_int(vals[2]))));
     }
     if (name == "repeat") {
-        return Result.Ok(Value.VStr(repeat(as_str(vals[0]), as_int(vals[1]))));
+        return Result.Ok(Value.VStr(as_str(vals[0]).repeat(as_int(vals[1]))));
     }
     if (name == "join") {
         return Result.Ok(Value.VStr(builtin_join(vals[0], as_str(vals[1]))));
@@ -1067,8 +1067,8 @@ pub fn dispatch_builtin(prog_args: [string], name: string, vals: [Value], line: 
 fn map_collect(src: [Value], order: [int]) -> Value {
     var out: [Value] = [];
     var i = 0;
-    while (i < len(order)) {
-        push(out, src[order[i]]);
+    while (i < order.len()) {
+        out.push(src[order[i]]);
         i = i + 1;
     }
     Value.VArray(out)
@@ -1113,7 +1113,7 @@ pub fn type_key_of_type(t: Type) -> string {
 
 fn contains_str(xs: [string], s: string) -> bool {
     var i = 0;
-    while (i < len(xs)) {
+    while (i < xs.len()) {
         if (xs[i] == s) {
             return true;
         }
@@ -1124,7 +1124,7 @@ fn contains_str(xs: [string], s: string) -> bool {
 
 pub fn struct_has_field(fields: [SField], fname: string) -> bool {
     var i = 0;
-    while (i < len(fields)) {
+    while (i < fields.len()) {
         if (fields[i].name == fname) {
             return true;
         }
@@ -1138,8 +1138,8 @@ pub fn struct_has_field(fields: [SField], fname: string) -> bool {
 pub fn prepend(recv: Value, args: [Value]) -> [Value] {
     var all: [Value] = [recv];
     var i = 0;
-    while (i < len(args)) {
-        push(all, args[i]);
+    while (i < args.len()) {
+        all.push(args[i]);
         i = i + 1;
     }
     all
@@ -1150,32 +1150,32 @@ pub fn prepend(recv: Value, args: [Value]) -> [Value] {
 fn register_methods(c: Interp, prog: Program) {
     let traitmap: Map<string, [MethodSig]> = Map.new();
     var ti = 0;
-    while (ti < len(prog.traits)) {
-        insert(traitmap, prog.traits[ti].name, prog.traits[ti].methods);
+    while (ti < prog.traits.len()) {
+        traitmap.insert(prog.traits[ti].name, prog.traits[ti].methods);
         ti = ti + 1;
     }
     var ii = 0;
-    while (ii < len(prog.impls)) {
+    while (ii < prog.impls.len()) {
         let imp = prog.impls[ii];
         let key = type_key_of_type(imp.target);
         var defined: [string] = [];
         var mi = 0;
-        while (mi < len(imp.methods)) {
+        while (mi < imp.methods.len()) {
             let m = imp.methods[mi];
-            insert(c.methods, key + "#" + m.name, Method { params: m.params, body: m.body });
-            push(defined, m.name);
+            c.methods.insert(key + "#" + m.name, Method { params: m.params, body: m.body });
+            defined.push(m.name);
             mi = mi + 1;
         }
         // métodos por defecto del trait no redefinidos por este impl
         match (get(traitmap, imp.trait_name)) {
             Option.Some(sigs) => {
                 var si = 0;
-                while (si < len(sigs)) {
+                while (si < sigs.len()) {
                     let sig = sigs[si];
                     if (!contains_str(defined, sig.name)) {
                         match (sig.default_body) {
                             Option.Some(body) => {
-                                insert(c.methods, key + "#" + sig.name, Method { params: sig.params, body: body });
+                                c.methods.insert(key + "#" + sig.name, Method { params: sig.params, body: body });
                             },
                             Option.None => { },
                         }
@@ -1327,13 +1327,13 @@ fn call_body(c: Interp, params: [Param], body: Block, args: [Value], captured: [
     c.scopes = empty_scopes();
     push_scope(c);  // ámbito base: las capturas
     var k = 0;
-    while (k < len(captured)) {
+    while (k < captured.len()) {
         insert_cell(c, captured[k].name, captured[k].cell);
         k = k + 1;
     }
     push_scope(c);  // ámbito de los parámetros (tapan capturas con el mismo nombre)
     var i = 0;
-    while (i < len(params)) {
+    while (i < params.len()) {
         define(c, params[i].name, args[i]);
         i = i + 1;
     }
@@ -1403,7 +1403,7 @@ fn exec_stmt(c: Interp, s: Stmt) -> Result<Value, Flow> {
 // Ejecuta las sentencias de un bloque en orden; el primer `return`/error corta y se propaga (vía `?`).
 fn run_stmts(c: Interp, b: Block) -> Result<Value, Flow> {
     var i = 0;
-    while (i < len(b.stmts)) {
+    while (i < b.stmts.len()) {
         exec_stmt(c, b.stmts[i])?;
         i = i + 1;
     }
@@ -1497,9 +1497,9 @@ fn oob(idx_e: Expr, i: int, n: int) -> RuntimeError {
 fn eval_array(c: Interp, elems: [Expr]) -> Result<Value, Flow> {
     var vals: [Value] = [];
     var i = 0;
-    while (i < len(elems)) {
+    while (i < elems.len()) {
         let v = eval_expr(c, elems[i])?;
-        push(vals, v);
+        vals.push(v);
         i = i + 1;
     }
     Result.Ok(Value.VArray(vals))
@@ -1511,15 +1511,15 @@ fn eval_index(c: Interp, arr_e: Expr, idx_e: Expr) -> Result<Value, Flow> {
     let i = as_int(eval_expr(c, idx_e)?);
     match (target) {
         Value.VArray(elems) => {
-            if (i < 0 || i >= len(elems)) {
-                return Result.Err(Flow.FError(oob(idx_e, i, len(elems))));
+            if (i < 0 || i >= elems.len()) {
+                return Result.Err(Flow.FError(oob(idx_e, i, elems.len())));
             }
             Result.Ok(elems[i])
         },
         Value.VStr(s) => {
-            let cs = chars(s);
-            if (i < 0 || i >= len(cs)) {
-                return Result.Err(Flow.FError(oob(idx_e, i, len(cs))));
+            let cs = s.chars();
+            if (i < 0 || i >= cs.len()) {
+                return Result.Err(Flow.FError(oob(idx_e, i, cs.len())));
             }
             Result.Ok(Value.VChar(cs[i]))
         },
@@ -1559,10 +1559,10 @@ fn eval_struct_lit(c: Interp, name: string, inits: [FieldInit]) -> Result<Value,
     let defs = struct_fields(c, name);
     var built: [SField] = [];
     var i = 0;
-    while (i < len(defs)) {
+    while (i < defs.len()) {
         let fname = defs[i].name;
         let v = eval_expr(c, find_field_init(inits, fname))?;
-        push(built, SField { name: fname, value: v });
+        built.push(SField { name: fname, value: v });
         i = i + 1;
     }
     Result.Ok(Value.VStruct(name, built))
@@ -1573,8 +1573,8 @@ fn assign_index(c: Interp, arr_e: Expr, idx_e: Expr, v: Value) -> Result<Value, 
     let i = as_int(eval_expr(c, idx_e)?);
     match (target) {
         Value.VArray(elems) => {
-            if (i < 0 || i >= len(elems)) {
-                return Result.Err(Flow.FError(oob(idx_e, i, len(elems))));
+            if (i < 0 || i >= elems.len()) {
+                return Result.Err(Flow.FError(oob(idx_e, i, elems.len())));
             }
             elems[i] = v;  // muta el arreglo compartido
             Result.Ok(Value.VUnit)
@@ -1606,10 +1606,10 @@ fn try_match(pat: Pattern, v: Value) -> Option<[Binding]> {
                     if (variant == var2) {
                         var binds: [Binding] = [];
                         var i = 0;
-                        while (i < len(subs)) {
+                        while (i < subs.len()) {
                             match (subs[i]) {
                                 Option.Some(nm) => {
-                                    push(binds, Binding { name: nm, value: payload[i] });
+                                    binds.push(Binding { name: nm, value: payload[i] });
                                 },
                                 Option.None => { },
                             }
@@ -1628,7 +1628,7 @@ fn try_match(pat: Pattern, v: Value) -> Option<[Binding]> {
 
 fn bind_all(c: Interp, binds: [Binding]) {
     var i = 0;
-    while (i < len(binds)) {
+    while (i < binds.len()) {
         define(c, binds[i].name, binds[i].value);
         i = i + 1;
     }
@@ -1639,7 +1639,7 @@ fn bind_all(c: Interp, binds: [Binding]) {
 fn eval_match(c: Interp, scr: Expr, arms: [MatchArm]) -> Result<Value, Flow> {
     let v = eval_expr(c, scr)?;
     var i = 0;
-    while (i < len(arms)) {
+    while (i < arms.len()) {
         match (try_match(arms[i].pat, v)) {
             Option.Some(binds) => {
                 push_scope(c);
@@ -1675,8 +1675,8 @@ fn eval_try(c: Interp, inner: Expr) -> Result<Value, Flow> {
 // (`Option.Some`/`Result.Ok`/…) en runtime. El intérprete solo necesita los nombres de las variantes
 // (no los tipos del payload). Si el usuario redefine uno, sus definiciones lo sobrescriben luego.
 fn inject_prelude_enums(c: Interp) {
-    insert(c.enums, "Option", [VariantDef { name: "Some", payload: no_types(), line: 0, col: 0 }, VariantDef { name: "None", payload: no_types(), line: 0, col: 0 }]);
-    insert(c.enums, "Result", [VariantDef { name: "Ok", payload: no_types(), line: 0, col: 0 }, VariantDef { name: "Err", payload: no_types(), line: 0, col: 0 }]);
+    c.enums.insert("Option", [VariantDef { name: "Some", payload: no_types(), line: 0, col: 0 }, VariantDef { name: "None", payload: no_types(), line: 0, col: 0 }]);
+    c.enums.insert("Result", [VariantDef { name: "Ok", payload: no_types(), line: 0, col: 0 }, VariantDef { name: "Err", payload: no_types(), line: 0, col: 0 }]);
 }
 
 // =====================================================================
@@ -1688,18 +1688,18 @@ pub fn run(prog: Program, prog_args: [string]) -> Result<Value, RuntimeError> {
     let c = Interp { funcs: Map.new(), structs: Map.new(), enums: Map.new(), methods: Map.new(), scopes: empty_scopes(), args: prog_args };
     inject_prelude_enums(c);  // Option/Result (los del programa, abajo, sobrescriben si el usuario redefine)
     var i = 0;
-    while (i < len(prog.funcs)) {
-        insert(c.funcs, prog.funcs[i].name, prog.funcs[i]);
+    while (i < prog.funcs.len()) {
+        c.funcs.insert(prog.funcs[i].name, prog.funcs[i]);
         i = i + 1;
     }
     var si = 0;
-    while (si < len(prog.structs)) {
-        insert(c.structs, prog.structs[si].name, prog.structs[si].fields);
+    while (si < prog.structs.len()) {
+        c.structs.insert(prog.structs[si].name, prog.structs[si].fields);
         si = si + 1;
     }
     var ei = 0;
-    while (ei < len(prog.enums)) {
-        insert(c.enums, prog.enums[ei].name, prog.enums[ei].variants);
+    while (ei < prog.enums.len()) {
+        c.enums.insert(prog.enums[ei].name, prog.enums[ei].variants);
         ei = ei + 1;
     }
     register_methods(c, prog);

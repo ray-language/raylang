@@ -2,36 +2,36 @@
 // to_upper/substring/repeat/index_of/join/…). Todo `pub`: `import std/text;` → `text.capitalize(s)`.
 /// Whether the string is empty.
 pub fn is_empty(s: string) -> bool {
-    len(s) == 0
+    s.len() == 0
 }
 
 /// Pads `s` on the LEFT with the string `relleno` until it reaches `ancho` characters (returned
 /// unchanged if already that long). `relleno` is repeated whole (use a single character for an exact width).
 pub fn pad_left(s: string, ancho: int, relleno: string) -> string {
-    let faltan = ancho - len(s);
-    if (faltan <= 0) { s } else { repeat(relleno, faltan) + s }
+    let faltan = ancho - s.len();
+    if (faltan <= 0) { s } else { relleno.repeat(faltan) + s }
 }
 
 /// Like `pad_left`, but padding on the RIGHT.
 pub fn pad_right(s: string, ancho: int, relleno: string) -> string {
-    let faltan = ancho - len(s);
-    if (faltan <= 0) { s } else { s + repeat(relleno, faltan) }
+    let faltan = ancho - s.len();
+    if (faltan <= 0) { s } else { s + relleno.repeat(faltan) }
 }
 
 /// Uppercases the first character and leaves the rest unchanged. Empty string → empty.
 pub fn capitalize(s: string) -> string {
-    if (len(s) == 0) {
+    if (s.len() == 0) {
         s
     } else {
-        to_upper(substring(s, 0, 1)) + substring(s, 1, len(s))
+        s.substring(0, 1).to_upper() + s.substring(1, s.len())
     }
 }
 
 /// Reverses the string character by character.
 pub fn reverse(s: string) -> string {
-    let cs = chars(s);
+    let cs = s.chars();
     var out = "";
-    var i = len(cs) - 1;
+    var i = cs.len() - 1;
     while (i >= 0) {
         out = out + to_string(cs[i]);
         i = i - 1;
@@ -41,7 +41,7 @@ pub fn reverse(s: string) -> string {
 
 /// Number of **non-overlapping** occurrences of `sub` in `s` (empty `sub` → 0).
 pub fn count(s: string, sub: string) -> int {
-    if (len(sub) == 0) {
+    if (sub.len() == 0) {
         0
     } else {
         var n = 0;
@@ -51,7 +51,7 @@ pub fn count(s: string, sub: string) -> int {
             match (index_of(resto, sub)) {
                 Option.Some(i) => {
                     n = n + 1;
-                    resto = substring(resto, i + len(sub), len(resto));
+                    resto = resto.substring(i + sub.len(), resto.len());
                 },
                 Option.None => {
                     seguir = false;
@@ -64,12 +64,12 @@ pub fn count(s: string, sub: string) -> int {
 
 /// Splits `s` into words separated by spaces, discarding empty ones (repeated spaces).
 pub fn words(s: string) -> [string] {
-    let partes = split(s, " ");
+    let partes = s.split(" ");
     var out: [string] = [];
     var i = 0;
-    while (i < len(partes)) {
-        if (len(partes[i]) > 0) {
-            push(out, partes[i]);
+    while (i < partes.len()) {
+        if (partes[i].len() > 0) {
+            out.push(partes[i]);
         }
         i = i + 1;
     }

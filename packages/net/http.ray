@@ -31,13 +31,13 @@ fn parse_url(url: string) -> Result<Url, string> {
     var resto: string = "";
     var port: int = 80;
     var tls: bool = false;
-    if (starts_with(url, "https://")) {
-        resto = substring(url, 8, len(url));
+    if (url.starts_with("https://")) {
+        resto = url.substring(8, url.len());
         port = 443;
         tls = true;
     } else {
-        if (starts_with(url, "http://")) {
-            resto = substring(url, 7, len(url));
+        if (url.starts_with("http://")) {
+            resto = url.substring(7, url.len());
         } else {
             return Result.Err("solo se soporta http:// o https://");
         }
@@ -48,8 +48,8 @@ fn parse_url(url: string) -> Result<Url, string> {
     var path: string = "/";
     match (index_of(resto, "/")) {
         Option.Some(idx) => {
-            hostport = substring(resto, 0, idx);
-            path = substring(resto, idx, len(resto));
+            hostport = resto.substring(0, idx);
+            path = resto.substring(idx, resto.len());
         },
         Option.None => { },
     }
@@ -58,8 +58,8 @@ fn parse_url(url: string) -> Result<Url, string> {
     var host: string = hostport;
     match (index_of(hostport, ":")) {
         Option.Some(idx) => {
-            host = substring(hostport, 0, idx);
-            let ps: string = substring(hostport, idx + 1, len(hostport));
+            host = hostport.substring(0, idx);
+            let ps: string = hostport.substring(idx + 1, hostport.len());
             match (parse_int(ps)) {
                 Option.Some(n) => {
                     port = n;
@@ -84,12 +84,12 @@ fn build_request_h(method: string, u: Url, body: string, extra: Map<string, stri
     var req: string = method + " " + u.path + " HTTP/1.1\r\n";
     req = req + "Host: " + u.host + "\r\n";
     req = req + "Connection: close\r\n";
-    if (len(body) > 0) {
-        req = req + "Content-Length: " + to_string(len(body)) + "\r\n";
+    if (body.len() > 0) {
+        req = req + "Content-Length: " + to_string(body.len()) + "\r\n";
     }
-    let nombres: [string] = keys(extra);
+    let nombres: [string] = extra.keys();
     var i: int = 0;
-    while (i < len(nombres)) {
+    while (i < nombres.len()) {
         let nombre: string = nombres[i];
         match (get(extra, nombre)) {
             Option.Some(valor) => {
@@ -111,7 +111,7 @@ fn leer_todo(h: int) -> Result<bytes, string> {
     while (seguir) {
         match (socket_read_bytes(h)) {
             Result.Ok(trozo) => {
-                if (len(trozo) == 0) {
+                if (trozo.len() == 0) {
                     seguir = false;
                 } else {
                     acc = acc + trozo;
@@ -130,7 +130,7 @@ fn leer_todo(h: int) -> Result<bytes, string> {
 // no se puede usar index_of (es de string) porque el cuerpo binario rompería from_utf8 del buffer entero.
 fn find_fin_cabeceras(b: bytes) -> int {
     var i: int = 0;
-    while (i + 3 < len(b)) {
+    while (i + 3 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10) {
             return i;
         }
@@ -142,7 +142,7 @@ fn find_fin_cabeceras(b: bytes) -> int {
 // El índice del primer "\r\n" en bytes desde `from`, o -1. (Para el framing de transfer-encoding chunked.)
 fn find_crlf(b: bytes, desde: int) -> int {
     var i: int = desde;
-    while (i + 1 < len(b)) {
+    while (i + 1 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10) {
             return i;
         }
@@ -194,7 +194,7 @@ fn parse_chunk_size(b: bytes, start: int, end: int) -> int {
 fn decode_chunked(body: bytes) -> Result<bytes, string> {
     var out: bytes = b"";
     var pos: int = 0;
-    let n: int = len(body);
+    let n: int = body.len();
     var seguir: bool = true;
     while (seguir && pos < n) {
         let line_end: int = find_crlf(body, pos);
@@ -209,7 +209,7 @@ fn decode_chunked(body: bytes) -> Result<bytes, string> {
             if (pos + size > n) {
                 return Result.Err("chunk truncado");
             }
-            out = out + sub_bytes(body, pos, pos + size);
+            out = out + body.sub_bytes(pos, pos + size);
             pos = pos + size + 2;  // salta el \r\n tras los datos
         }
     }
@@ -222,15 +222,15 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
         return Result.Err("respuesta HTTP malformada (sin separador de cabeceras)");
     }
     // Cabeceras = texto (ASCII): se decodifican para parsearlas. Cuerpo = bytes crudos.
-    let cuerpo: bytes = sub_bytes(raw, sep + 4, len(raw));
-    match (from_utf8(sub_bytes(raw, 0, sep))) {
+    let cuerpo: bytes = raw.sub_bytes(sep + 4, raw.len());
+    match (from_utf8(raw.sub_bytes(0, sep))) {
         Result.Err(e) => Result.Err("cabeceras HTTP no son UTF-8: " + e),
         Result.Ok(cabeceras_raw) => {
-            let lineas: [string] = split(cabeceras_raw, "\r\n");
+            let lineas: [string] = cabeceras_raw.split("\r\n");
 
             // Línea de estado: "HTTP/1.1 200 OK".
-            let partes: [string] = split(lineas[0], " ");
-            if (len(partes) < 2) {
+            let partes: [string] = lineas[0].split(" ");
+            if (partes.len() < 2) {
                 return Result.Err("línea de estado malformada: " + lineas[0]);
             }
             var status: int = 0;
@@ -246,13 +246,13 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
             // Cabeceras: "Nombre: Valor" (nombre en minúsculas para lookup case-insensitive).
             var headers: Map<string, string> = Map.new();
             var i: int = 1;
-            while (i < len(lineas)) {
+            while (i < lineas.len()) {
                 let linea: string = lineas[i];
                 match (index_of(linea, ":")) {
                     Option.Some(c) => {
-                        let nombre: string = to_lower(trim(substring(linea, 0, c)));
-                        let valor: string = trim(substring(linea, c + 1, len(linea)));
-                        insert(headers, nombre, valor);
+                        let nombre: string = linea.substring(0, c).trim().to_lower();
+                        let valor: string = linea.substring(c + 1, linea.len()).trim();
+                        headers.insert(nombre, valor);
                     },
                     Option.None => { },
                 }
@@ -263,7 +263,7 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
             var cuerpo_final: bytes = cuerpo;
             match (get(headers, "transfer-encoding")) {
                 Option.Some(te) => {
-                    if (contains(to_lower(te), "chunked")) {
+                    if (te.to_lower().contains("chunked")) {
                         match (decode_chunked(cuerpo)) {
                             Result.Ok(d) => {
                                 cuerpo_final = d;
@@ -279,7 +279,7 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
             // Content-Encoding: gzip → descomprimir el cuerpo (M20.10b, librería INFLATE).
             match (get(headers, "content-encoding")) {
                 Option.Some(ce) => {
-                    if (contains(to_lower(ce), "gzip")) {
+                    if (ce.to_lower().contains("gzip")) {
                         match (gunzip(cuerpo_final)) {
                             Result.Ok(d) => {
                                 cuerpo_final = d;
@@ -301,7 +301,7 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
 /// Returns the value of a response header by name (case-insensitive).
 /// Returns None if the header is not present.
 pub fn header(r: Response, name: string) -> Option<string> {
-    get(r.headers, to_lower(name))
+    get(r.headers, name.to_lower())
 }
 
 // El cuerpo de la respuesta decodificado como texto UTF-8 (para respuestas de texto/JSON). Para datos
@@ -340,7 +340,7 @@ pub fn request_with(method: string, url: string, body: string, headers: Map<stri
             match (conectar(u)) {
                 Result.Err(e) => Result.Err("no se pudo conectar: " + e),
                 Result.Ok(h) => {
-                    match (socket_write_bytes(h, to_bytes(build_request_h(method, u, body, headers)))) {
+                    match (socket_write_bytes(h, build_request_h(method, u, body, headers).to_bytes())) {
                         Result.Err(e) => {
                             close(h);
                             Result.Err("error al enviar: " + e)
@@ -402,7 +402,7 @@ pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
 
 // Resuelve una Location que puede ser absoluta (`http://…`) o relativa al host actual (`/otra`).
 fn absolutizar(base: string, loc: string) -> string {
-    if (starts_with(loc, "http://") || starts_with(loc, "https://")) {
+    if (loc.starts_with("http://") || loc.starts_with("https://")) {
         loc
     } else {
         match (parse_url(base)) {

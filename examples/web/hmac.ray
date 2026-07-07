@@ -14,8 +14,8 @@ fn block_size() -> int { 64 }
 fn to_octets(b: bytes) -> [int] {
     var o: [int] = [];
     var i = 0;
-    while (i < len(b)) {
-        push(o, b[i]);
+    while (i < b.len()) {
+        o.push(b[i]);
         i = i + 1;
     }
     o
@@ -24,8 +24,8 @@ fn to_octets(b: bytes) -> [int] {
 // Concatena `b` al final de `a` (muta `a`, semántica de referencia).
 fn append_all(a: [int], b: [int]) {
     var i = 0;
-    while (i < len(b)) {
-        push(a, b[i]);
+    while (i < b.len()) {
+        a.push(b[i]);
         i = i + 1;
     }
 }
@@ -33,19 +33,19 @@ fn append_all(a: [int], b: [int]) {
 pub fn hmac_sha256(key: bytes, msg: bytes) -> [int] {
     // Clave ajustada al tamaño de bloque: se hashea si es más larga, luego se rellena con ceros.
     var k = to_octets(key);
-    if (len(k) > block_size()) {
+    if (k.len() > block_size()) {
         k = sha256_octets(k);
     }
-    while (len(k) < block_size()) {
-        push(k, 0);
+    while (k.len() < block_size()) {
+        k.push(0);
     }
     // Pads: K' XOR 0x36 (ipad) y K' XOR 0x5c (opad).
     var ipad: [int] = [];
     var opad: [int] = [];
     var i = 0;
     while (i < block_size()) {
-        push(ipad, k[i] ^ 54);  // 0x36
-        push(opad, k[i] ^ 92);  // 0x5c
+        ipad.push(k[i] ^ 54);  // 0x36
+        opad.push(k[i] ^ 92);  // 0x5c
         i = i + 1;
     }
     // inner = SHA256(ipad || msg)

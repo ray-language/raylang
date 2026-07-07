@@ -9,8 +9,8 @@
 fn octetos(b: bytes) -> [int] {
     var out: [int] = [];
     var i = 0;
-    while (i < len(b)) {
-        push(out, b[i]);
+    while (i < b.len()) {
+        out.push(b[i]);
         i = i + 1;
     }
     out

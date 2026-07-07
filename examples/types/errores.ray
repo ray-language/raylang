@@ -28,7 +28,7 @@ fn mostrar(r: Result<int, string>) -> int {
 
 // Option<T>: el primer elemento de un arreglo, o None si está vacío.
 fn primero(xs: [int]) -> Option<int> {
-    if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) }
+    if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) }
 }
 
 fn main() -> int {

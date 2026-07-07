@@ -19,7 +19,7 @@ fn poly_key_gen(key: [int], nonce: [int]) -> [int] {
     var k: [int] = [];
     var i = 0;
     while (i < 32) {
-        push(k, blk[i]);
+        k.push(blk[i]);
         i = i + 1;
     }
     k
@@ -29,7 +29,7 @@ fn poly_key_gen(key: [int], nonce: [int]) -> [int] {
 fn push_len_le(m: [int], n: int) {
     var k = 0;
     while (k < 8) {
-        push(m, n >> k * 8 & 255);
+        m.push(n >> k * 8 & 255);
         k = k + 1;
     }
 }
@@ -39,23 +39,23 @@ fn push_len_le(m: [int], n: int) {
 fn mac_data(aad: [int], ct: [int]) -> [int] {
     var m: [int] = [];
     var i = 0;
-    while (i < len(aad)) {
-        push(m, aad[i]);
+    while (i < aad.len()) {
+        m.push(aad[i]);
         i = i + 1;
     }
-    while (len(m) % 16 != 0) {
-        push(m, 0);
+    while (m.len() % 16 != 0) {
+        m.push(0);
     }
     i = 0;
-    while (i < len(ct)) {
-        push(m, ct[i]);
+    while (i < ct.len()) {
+        m.push(ct[i]);
         i = i + 1;
     }
-    while (len(m) % 16 != 0) {
-        push(m, 0);
+    while (m.len() % 16 != 0) {
+        m.push(0);
     }
-    push_len_le(m, len(aad));
-    push_len_le(m, len(ct));
+    push_len_le(m, aad.len());
+    push_len_le(m, ct.len());
     m
 }
 
@@ -69,12 +69,12 @@ pub fn aead_seal(key: [int], nonce: [int], aad: [int], plaintext: [int]) -> Seal
 
 // Comparación de tags en tiempo constante (no revela dónde difieren).
 fn ct_eq(a: [int], b: [int]) -> bool {
-    if (len(a) != len(b)) {
+    if (a.len() != b.len()) {
         return false;
     }
     var diff = 0;
     var i = 0;
-    while (i < len(a)) {
+    while (i < a.len()) {
         diff = diff | a[i] ^ b[i];
         i = i + 1;
     }

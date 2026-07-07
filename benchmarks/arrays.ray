@@ -6,11 +6,11 @@ fn main() -> int {
         var a: [int] = [];
         var i: int = 0;
         while (i < 500) {
-            push(a, i);
+            a.push(i);
             i = i + 1;
         }
         var j: int = 0;
-        while (j < len(a)) {
+        while (j < a.len()) {
             total = total + a[j];
             j = j + 1;
         }

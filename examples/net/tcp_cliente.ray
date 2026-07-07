@@ -12,7 +12,7 @@ fn leer_todo(h: int) -> string {
     while (seguir) {
         match (socket_read(h)) {
             Result.Ok(trozo) => {
-                if (len(trozo) == 0) {
+                if (trozo.len() == 0) {
                     seguir = false;  // EOF: el servidor cerró
                 } else {
                     acc = acc + trozo;

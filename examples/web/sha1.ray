@@ -17,21 +17,21 @@ fn rotl(x: int, n: int) -> int {
 // Rellena el mensaje según SHA-1 y lo devuelve como `[int]` de octetos: el mensaje, un `0x80`, ceros
 // hasta que la longitud ≡ 56 (mod 64), y 8 octetos big-endian con la longitud en bits.
 fn pad(msg: bytes) -> [int] {
-    let n = len(msg);
+    let n = msg.len();
     var m: [int] = [];
     var i = 0;
     while (i < n) {
-        push(m, msg[i]);
+        m.push(msg[i]);
         i = i + 1;
     }
-    push(m, 128);  // 0x80: el bit '1' de cierre seguido de ceros
-    while (len(m) % 64 != 56) {
-        push(m, 0);
+    m.push(128);  // 0x80: el bit '1' de cierre seguido de ceros
+    while (m.len() % 64 != 56) {
+        m.push(0);
     }
     let bitlen = n * 8;
     var k = 7;
     while (k >= 0) {
-        push(m, bitlen >> k * 8 & 255);
+        m.push(bitlen >> k * 8 & 255);
         k = k - 1;
     }
     m
@@ -40,10 +40,10 @@ fn pad(msg: bytes) -> [int] {
 // Añade los 4 octetos big-endian de la palabra de 32 bits `w` al final de `out` (semántica de
 // referencia: muta el arreglo del llamador).
 fn append_word(out: [int], w: int) {
-    push(out, w >> 24 & 255);
-    push(out, w >> 16 & 255);
-    push(out, w >> 8 & 255);
-    push(out, w & 255);
+    out.push(w >> 24 & 255);
+    out.push(w >> 16 & 255);
+    out.push(w >> 8 & 255);
+    out.push(w & 255);
 }
 
 pub fn sha1(msg: bytes) -> [int] {
@@ -53,7 +53,7 @@ pub fn sha1(msg: bytes) -> [int] {
     var h2 = 2562383102;  // 0x98BADCFE
     var h3 = 271733878;  // 0x10325476
     var h4 = 3285377520;  // 0xC3D2E1F0
-    let total = len(m);
+    let total = m.len();
     var chunk = 0;
     while (chunk < total) {
         // 16 palabras big-endian del bloque de 64 octetos.
@@ -62,14 +62,14 @@ pub fn sha1(msg: bytes) -> [int] {
         while (j < 16) {
             let base = chunk + j * 4;
             let word = m[base] << 24 | m[base + 1] << 16 | m[base + 2] << 8 | m[base + 3];
-            push(w, word & mask32());
+            w.push(word & mask32());
             j = j + 1;
         }
         // Extiende a 80 palabras.
         var t = 16;
         while (t < 80) {
             let x = w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16];
-            push(w, rotl(x, 1));
+            w.push(rotl(x, 1));
             t = t + 1;
         }
         var a = h0;
@@ -133,7 +133,7 @@ pub fn sha1_hex(msg: bytes) -> string {
     let d = sha1(msg);
     var s = "";
     var i = 0;
-    while (i < len(d)) {
+    while (i < d.len()) {
         let octet = d[i];
         s = s + hex_digit(octet >> 4 & 15);
         s = s + hex_digit(octet & 15);

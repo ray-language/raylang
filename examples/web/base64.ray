@@ -13,7 +13,7 @@ fn enc_char(idx: int) -> string {
 
 /// Encodes a byte array (`[int]`, each 0..255) as standard base64 (RFC 4648) with `=` padding.
 pub fn base64(data: [int]) -> string {
-    let n = len(data);
+    let n = data.len();
     var out = "";
     // Bloques completos de 3 octetos → 4 caracteres.
     var i = 0;
@@ -56,7 +56,7 @@ pub fn base64(data: [int]) -> string {
 fn to_url(s: string) -> string {
     var out = "";
     var i = 0;
-    while (i < len(s)) {
+    while (i < s.len()) {
         let c = s[i];
         if (c == '+') {
             out = out + "-";
@@ -121,7 +121,7 @@ fn dec_char_std(c: char) -> int {
 /// Decodes a standard base64 string (RFC 4648, `+`/`/` alphabet) into a byte array.
 /// `=` padding marks the end of the data. Returns `Err` on a character outside the alphabet.
 pub fn base64_decode(s: string) -> Result<[int], string> {
-    let n = len(s);
+    let n = s.len();
     var out: [int] = [];
     var acc = 0;
     var nbits = 0;
@@ -139,7 +139,7 @@ pub fn base64_decode(s: string) -> Result<[int], string> {
             nbits = nbits + 6;
             if (nbits >= 8) {
                 nbits = nbits - 8;
-                push(out, acc >> nbits & 255);
+                out.push(acc >> nbits & 255);
             }
             i = i + 1;
         }
@@ -152,7 +152,7 @@ pub fn base64_decode(s: string) -> Result<[int], string> {
 /// Decodes an unpadded base64url string (RFC 4648 §5, `-`/`_` alphabet) into a byte array.
 /// Returns `Err` on a character outside the alphabet.
 pub fn base64url_decode(s: string) -> Result<[int], string> {
-    let n = len(s);
+    let n = s.len();
     var out: [int] = [];
     var acc = 0;  // acumulador de bits
     var nbits = 0;  // bits válidos en el acumulador
@@ -166,7 +166,7 @@ pub fn base64url_decode(s: string) -> Result<[int], string> {
         nbits = nbits + 6;
         if (nbits >= 8) {
             nbits = nbits - 8;
-            push(out, acc >> nbits & 255);
+            out.push(acc >> nbits & 255);
         }
         i = i + 1;
     }

@@ -22,19 +22,19 @@ fn be32(data: bytes, i: int) -> int {
 // Codifica un nombre de dominio como labels: cada parte precedida por su longitud, terminado en 0.
 fn encode_name(name: string) -> [int] {
     var out: [int] = [];
-    let parts = split(name, ".");
+    let parts = name.split(".");
     var i = 0;
-    while (i < len(parts)) {
-        let b = to_bytes(parts[i]);
-        push(out, len(b));
+    while (i < parts.len()) {
+        let b = parts[i].to_bytes();
+        out.push(b.len());
         var j = 0;
-        while (j < len(b)) {
-            push(out, b[j]);
+        while (j < b.len()) {
+            out.push(b[j]);
             j = j + 1;
         }
         i = i + 1;
     }
-    push(out, 0);
+    out.push(0);
     out
 }
 
@@ -45,29 +45,29 @@ fn encode_name(name: string) -> [int] {
 pub fn build_query(id: int, name: string, qtype: int) -> bytes {
     var m: [int] = [];
     // Cabecera (12 octetos).
-    push(m, id >> 8 & 255);  // ID
-    push(m, id & 255);
-    push(m, 1);  // flags: RD=1 (recursión deseada)
-    push(m, 0);
-    push(m, 0);  // QDCOUNT = 1
-    push(m, 1);
-    push(m, 0);  // ANCOUNT = 0
-    push(m, 0);
-    push(m, 0);  // NSCOUNT = 0
-    push(m, 0);
-    push(m, 0);  // ARCOUNT = 0
-    push(m, 0);
+    m.push(id >> 8 & 255);  // ID
+    m.push(id & 255);
+    m.push(1);  // flags: RD=1 (recursión deseada)
+    m.push(0);
+    m.push(0);  // QDCOUNT = 1
+    m.push(1);
+    m.push(0);  // ANCOUNT = 0
+    m.push(0);
+    m.push(0);  // NSCOUNT = 0
+    m.push(0);
+    m.push(0);  // ARCOUNT = 0
+    m.push(0);
     // Pregunta.
     let qn = encode_name(name);
     var i = 0;
-    while (i < len(qn)) {
-        push(m, qn[i]);
+    while (i < qn.len()) {
+        m.push(qn[i]);
         i = i + 1;
     }
-    push(m, qtype >> 8 & 255);  // QTYPE
-    push(m, qtype & 255);
-    push(m, 0);  // QCLASS = IN
-    push(m, 1);
+    m.push(qtype >> 8 & 255);  // QTYPE
+    m.push(qtype & 255);
+    m.push(0);  // QCLASS = IN
+    m.push(1);
     bytes_of(m)
 }
 
@@ -102,11 +102,11 @@ fn read_name(data: bytes, pos: int) -> NameResult {
                 p = (lenb & 63) << 8 | data[p + 1];
             } else {
                 // label: `lenb` octetos a partir de p+1.
-                let etiqueta = match (from_utf8(sub_bytes(data, p + 1, p + 1 + lenb))) {
+                let etiqueta = match (from_utf8(data.sub_bytes(p + 1, p + 1 + lenb))) {
                     Result.Ok(s) => s,
                     Result.Err(_) => "?",
                 };
-                push(labels, etiqueta);
+                labels.push(etiqueta);
                 p = p + 1 + lenb;
             }
         }
@@ -155,7 +155,7 @@ fn format_ipv6(data: bytes, start: int) -> string {
     var groups: [int] = [];
     var i = 0;
     while (i < 8) {
-        push(groups, data[start + i * 2] << 8 | data[start + i * 2 + 1]);
+        groups.push(data[start + i * 2] << 8 | data[start + i * 2 + 1]);
         i = i + 1;
     }
     // Racha más larga de ceros consecutivos.
@@ -192,7 +192,7 @@ fn format_ipv6(data: bytes, start: int) -> string {
             out = out + "::";
             i = i + best_len;
         } else {
-            if (len(out) > 0 && !ends_with(out, ":")) {
+            if (out.len() > 0 && !out.ends_with(":")) {
                 out = out + ":";
             }
             out = out + hex_group(groups[i]);
@@ -211,7 +211,7 @@ fn read_txt(data: bytes, rdstart: int, rdlength: int) -> string {
     while (p < fin) {
         let slen = data[p];
         p = p + 1;
-        s = s + match (from_utf8(sub_bytes(data, p, p + slen))) {
+        s = s + match (from_utf8(data.sub_bytes(p, p + slen))) {
             Result.Ok(t) => t,
             Result.Err(_) => "?",
         };
@@ -235,7 +235,7 @@ pub struct DnsResult {
 /// plus the minimum TTL of the answer section (0 if there are no answers). Follows name-compression pointers (0xC0).
 /// Returns Err if the message is shorter than a header or the response RCODE signals an error (e.g. NXDOMAIN).
 pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
-    if (len(data) < 12) {
+    if (data.len() < 12) {
         return Result.Err("respuesta DNS demasiado corta");
     }
     let flags = be16(data, 2);
@@ -268,28 +268,28 @@ pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
         let rdlength = be16(data, pos + 8);  // tras TYPE(2)+CLASS(2)+TTL(4)
         let rdstart = pos + 10;
         if (atype == 1 && rdlength == 4) {
-            push(recs, Record.A(format_ipv4(data, rdstart)));
+            recs.push(Record.A(format_ipv4(data, rdstart)));
         } else {
             if (atype == 28 && rdlength == 16) {
-                push(recs, Record.Aaaa(format_ipv6(data, rdstart)));
+                recs.push(Record.Aaaa(format_ipv6(data, rdstart)));
             } else {
                 if (atype == 15) {
                     // MX: preferencia (2 octetos) + nombre del exchange (puede llevar compresión).
                     let pref = be16(data, rdstart);
                     let ex = read_name(data, rdstart + 2);
-                    push(recs, Record.Mx(pref, ex.name));
+                    recs.push(Record.Mx(pref, ex.name));
                 } else {
                     if (atype == 5) {
                         // CNAME: un solo nombre de dominio (puede llevar compresión).
-                        push(recs, Record.Cname(read_name(data, rdstart).name));
+                        recs.push(Record.Cname(read_name(data, rdstart).name));
                     } else {
                         if (atype == 16) {
                             // TXT: una o más "character-strings" (octeto de longitud + texto), concatenadas.
-                            push(recs, Record.Txt(read_txt(data, rdstart, rdlength)));
+                            recs.push(Record.Txt(read_txt(data, rdstart, rdlength)));
                         } else {
                             if (atype == 2) {
                                 // NS: un nombre de dominio (con compresión).
-                                push(recs, Record.Ns(read_name(data, rdstart).name));
+                                recs.push(Record.Ns(read_name(data, rdstart).name));
                             } else {
                                 if (atype == 33) {
                                     // SRV: prioridad + peso + puerto (cada uno 2 octetos) + target (nombre, con compresión).
@@ -297,9 +297,9 @@ pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
                                     let peso = be16(data, rdstart + 2);
                                     let puerto = be16(data, rdstart + 4);
                                     let target = read_name(data, rdstart + 6).name;
-                                    push(recs, Record.Srv(prio, peso, puerto, target));
+                                    recs.push(Record.Srv(prio, peso, puerto, target));
                                 } else {
-                                    push(recs, Record.Other(atype));
+                                    recs.push(Record.Other(atype));
                                 }
                             }
                         }
@@ -333,28 +333,28 @@ pub fn parse_records(data: bytes) -> Result<[Record], string> {
 pub fn format_records(recs: [Record]) -> [string] {
     var out: [string] = [];
     var i = 0;
-    while (i < len(recs)) {
+    while (i < recs.len()) {
         match (recs[i]) {
             Record.A(ip) => {
-                push(out, ip);
+                out.push(ip);
             },
             Record.Aaaa(ip) => {
-                push(out, ip);
+                out.push(ip);
             },
             Record.Mx(pref, ex) => {
-                push(out, to_string(pref) + " " + ex);
+                out.push(to_string(pref) + " " + ex);
             },
             Record.Cname(name) => {
-                push(out, name);
+                out.push(name);
             },
             Record.Txt(t) => {
-                push(out, t);
+                out.push(t);
             },
             Record.Ns(name) => {
-                push(out, name);
+                out.push(name);
             },
             Record.Srv(prio, peso, puerto, target) => {
-                push(out, to_string(prio) + " " + to_string(peso) + " " + to_string(puerto) + " " + target);
+                out.push(to_string(prio) + " " + to_string(peso) + " " + to_string(puerto) + " " + target);
             },
             Record.Other(_) => { },
         }

@@ -2,7 +2,7 @@
 // Muestra la semántica de referencia — 'ordenar' modifica el mismo arreglo
 // que ve 'main', sin devolverlo.
 fn ordenar(a: [int]) {
-    var n: int = len(a);
+    var n: int = a.len();
     var i: int = 0;
     while (i < n) {
         var j: int = 0;

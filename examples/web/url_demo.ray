@@ -26,8 +26,8 @@ fn main() {
 
     // build_query: claves ordenadas → reproducible.
     var m: Map<string, string> = Map.new();
-    insert(m, "q", "raylang lang");
-    insert(m, "page", "2");
+    m.insert("q", "raylang lang");
+    m.insert("page", "2");
     print(build_query(m));  // page=2&q=raylang%20lang
 
     // --- cookies ---

@@ -14,10 +14,10 @@ fn le32(b: [int], i: int) -> u64 {
 
 // Añade los 4 octetos little-endian de la palabra de 32 bits `w` al final de `out`.
 fn push_le32(out: [int], w: u64) {
-    push(out, (w & 255) as int);
-    push(out, (w >> 8 & 255) as int);
-    push(out, (w >> 16 & 255) as int);
-    push(out, (w >> 24 & 255) as int);
+    out.push((w & 255) as int);
+    out.push((w >> 8 & 255) as int);
+    out.push((w >> 16 & 255) as int);
+    out.push((w >> 24 & 255) as int);
 }
 
 pub fn poly1305_mac(key: [int], msg: [int]) -> [int] {
@@ -40,7 +40,7 @@ pub fn poly1305_mac(key: [int], msg: [int]) -> [int] {
     var h3: u64 = 0;
     var h4: u64 = 0;
 
-    let n = len(msg);
+    let n = msg.len();
     var i = 0;
     while (i < n) {
         // Bloque de 16 octetos (el último se rellena con un 0x01 tras el mensaje).
@@ -48,9 +48,9 @@ pub fn poly1305_mac(key: [int], msg: [int]) -> [int] {
         var j = 0;
         while (j < 16) {
             if (i + j < n) {
-                push(blk, msg[i + j]);
+                blk.push(msg[i + j]);
             } else {
-                push(blk, 0);
+                blk.push(0);
             }
             j = j + 1;
         }

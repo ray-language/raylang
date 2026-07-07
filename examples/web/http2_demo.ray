@@ -24,7 +24,7 @@ fn main() {
     match (decode(dec, block1)) {
         Result.Ok(hs) => {
             var i = 0;
-            while (i < len(hs)) {
+            while (i < hs.len()) {
                 print(hs[i].name + ": " + hs[i].value);
                 i = i + 1;
             }
@@ -36,7 +36,7 @@ fn main() {
     let block = encode(new_hpack(), [header(":method", "GET"), header(":path", "/")]);
     let frame = headers_frame(1, block, true);
     match (parse_frame(frame)) {
-        Result.Ok(f) => print("HEADERS type=" + to_string(f.ftype) + " stream=" + to_string(f.stream_id) + " flags=" + to_string(f.flags) + " blocklen=" + to_string(len(f.payload))),
+        Result.Ok(f) => print("HEADERS type=" + to_string(f.ftype) + " stream=" + to_string(f.stream_id) + " flags=" + to_string(f.flags) + " blocklen=" + to_string(f.payload.len())),
         Result.Err(e) => print("ERR frame: " + e),
     }
 

@@ -8,12 +8,12 @@ from inflate import inflate_raw, gunzip, zlib_inflate;
 fn main() -> int {
     // Texto repetitivo → el LZ77 encuentra muchas coincidencias y comprime de verdad.
     let texto = "raylang raylang raylang es un lenguaje de aprendizaje. " + "comprimir y descomprimir, comprimir y descomprimir, una y otra vez. " + "raylang raylang raylang raylang raylang raylang raylang raylang!";
-    let original = to_bytes(texto);
+    let original = texto.to_bytes();
 
     // --- DEFLATE crudo: round-trip con inflate_raw. ---
     let comp = deflate_raw(original);
     print(round_trip_raw(comp, texto));  // true
-    print(len(comp) < len(original));  // true (comprime)
+    print(comp.len() < original.len());  // true (comprime)
 
     // --- gzip: round-trip con gunzip (incluye verificación de CRC-32). ---
     let g = gzip_compress(original);
@@ -25,7 +25,7 @@ fn main() -> int {
 
     // Si hay ruta, escribe el gzip para la verificación de compatibilidad con Python.
     let a = args();
-    if (len(a) > 0) {
+    if (a.len() > 0) {
         match (write_file_bytes(a[0], g)) {
             Result.Ok(_) => { },
             Result.Err(e) => {

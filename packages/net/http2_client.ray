@@ -19,7 +19,7 @@ pub struct Http2Response {
 fn extract_status(hs: [HEntry]) -> int {
     var st = 0;
     var i = 0;
-    while (i < len(hs)) {
+    while (i < hs.len()) {
         if (hs[i].name == ":status") {
             match (parse_int(hs[i].value)) {
                 Option.Some(n) => {
@@ -70,7 +70,7 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
     while (!done) {
         match (socket_read_bytes(h)) {
             Result.Ok(chunk) => {
-                if (len(chunk) == 0) {
+                if (chunk.len() == 0) {
                     done = true;  // el peer cerró
                 }
                 buf = buf + chunk;
@@ -80,10 +80,10 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
                 return Result.Err(e);
             },
         }
-        while (frame_size(buf) > 0 && len(buf) >= frame_size(buf)) {
+        while (frame_size(buf) > 0 && buf.len() >= frame_size(buf)) {
             let fsz = frame_size(buf);
-            let fbytes = sub_bytes(buf, 0, fsz);
-            buf = sub_bytes(buf, fsz, len(buf));
+            let fbytes = buf.sub_bytes(0, fsz);
+            buf = buf.sub_bytes(fsz, buf.len());
             match (parse_frame(fbytes)) {
                 Result.Ok(fr) => {
                     if (fr.ftype == ft_settings()) {

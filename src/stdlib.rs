@@ -21,6 +21,7 @@
 const MODULOS: &[(&str, &str)] = &[
     // Utilidades escritas para la stdlib (viven en `std/`).
     ("std/math", include_str!("../std/math.ray")),
+    ("std/random", include_str!("../std/random.ray")), // M49.2a
     ("std/text", include_str!("../std/text.ray")),
     ("std/sort", include_str!("../std/sort.ray")),
     // Librerías **promovidas** desde `examples/` (M40.7): se embeben apuntando al archivo original —fuente

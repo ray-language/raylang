@@ -4,6 +4,7 @@
 // 16 octetos aleatorios con dos campos fijos: los 4 bits altos del octeto 6 = 0100 (versión 4) y los
 // 2 bits altos del octeto 8 = 10 (variante RFC 4122). Formato canónico 8-4-4-4-12 en hex minúscula.
 from std/hex import hex_encode;
+import std/random;
 
 /// Generates a random version-4 UUID (RFC 4122) in the canonical 8-4-4-4-12 lowercase hex
 /// format. 16 random bytes with the version nibble set to 4 and the variant bits to 10.
@@ -12,7 +13,7 @@ pub fn uuid_v4() -> string {
     var b: [int] = [];
     var i = 0;
     while (i < 16) {
-        b.push(random_int(256));
+        b.push(random.below(256));
         i = i + 1;
     }
     b[6] = b[6] & 15 | 64;  // versión 4: 0x40 en el nibble alto

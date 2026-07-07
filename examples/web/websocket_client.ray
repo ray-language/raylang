@@ -8,6 +8,7 @@
 // (`wss` añadiría `tls_connect`), sin fragmentación.
 from sha1 import sha1;
 from base64 import base64;
+import std/random;
 from websocket import accept_key, decode_frame, Frame, op_text, op_close;
 
 // --- Handshake del cliente ---
@@ -16,7 +17,7 @@ fn make_key() -> string {
     var b: [int] = [];
     var i = 0;
     while (i < 16) {
-        b.push(random_int(256));
+        b.push(random.below(256));
         i = i + 1;
     }
     base64(b)
@@ -155,7 +156,7 @@ fn encode_masked(opcode: int, payload: bytes) -> bytes {
     var mask: [int] = [];
     var i = 0;
     while (i < 4) {
-        mask.push(random_int(256));
+        mask.push(random.below(256));
         i = i + 1;
     }
     var m = 0;

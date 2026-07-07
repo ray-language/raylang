@@ -1,7 +1,9 @@
 // M15.1b — reloj y aleatoriedad.
 //
-// now()/monotonic()/sleep() (reloj) y random()/random_int() (PRNG propio, SplitMix64).
+// now()/monotonic()/sleep() (reloj) y random.next()/random.below() (PRNG propio, SplitMix64).
 // Son NO deterministas (su salida cambia entre ejecuciones); por eso no entran al oráculo.
+import std/random;
+
 fn main() -> int {
     // Medir un intervalo con el reloj monótono.
     let t0: int = monotonic();
@@ -11,11 +13,11 @@ fn main() -> int {
     // Tirar un dado 5 veces.
     var i: int = 0;
     while (i < 5) {
-        print("dado: " + to_string(random_int(6) + 1));
+        print("dado: " + to_string(random.below(6) + 1));
         i = i + 1;
     }
 
     // Un float en [0, 1).
-    print("random: " + to_string(random()));
+    print("random: " + to_string(random.next()));
     0
 }

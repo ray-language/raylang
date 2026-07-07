@@ -6468,4 +6468,14 @@ nombre namespacado funciona sin más. **Consecuencia (mejora de encapsulación)*
 no-`pub` no es accesible. Test `const_calificado_de_modulo` (acceso + encapsulación + no-pub) en
 `tests/modules_cli.rs`. **M49.1c / M49.1 (`std/math`) COMPLETO.** Suite completa verde (77 binarios, 510 lib).
 
-Siguiente: **M49.2** (`std/time`+`std/random`) y **M49.3** (`std/crypto`).
+### 51.4 M49.2a — `std/random` (RNG)
+
+`random`/`random_int` dejan de ser builtins globales y pasan a `std/random`: `import std/random;
+random.next()` (float en `[0,1)`) y `random.below(n)` (int en `[0,n)`; nombres en inglés, evitando las
+palabras reservadas `float`/`int`). Mismo patrón `__x`+envoltorio de M49.1a (renombra `random`→`__random`,
+`random_int`→`__random_int`; VM por opcode intacta). **No deterministas** → sin oráculo; los cubre
+`tests/time_random_cli.rs` por subproceso en ambos motores (rango + variedad). Migrado: `reloj_aleatorio`
+(demo), `websocket_client` (examples + packages) y `std/uuid` (embebido → `import std/random;`, un módulo
+embebido importando otro). `now`/`monotonic`/`sleep` siguen globales (→ M49.2b). **M49.2a COMPLETO.**
+
+Siguiente: **M49.2b** (`std/time`: now/monotonic/sleep) y **M49.3** (`std/crypto`).

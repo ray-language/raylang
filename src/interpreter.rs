@@ -1558,8 +1558,8 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza un int"),
             },
-            "random" => Value::Float(crate::builtins::random_f64()),
-            "random_int" => match &values[0] {
+            "__random" => Value::Float(crate::builtins::random_f64()),
+            "__random_int" => match &values[0] {
                 Value::Int(n) => Value::Int(crate::builtins::random_int(*n)),
                 _ => unreachable!("el checker garantiza un int"),
             },

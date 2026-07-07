@@ -7,6 +7,7 @@
 // `websocket.ray`. Sobre los sockets TCP (M15): funciona en ambos motores (cliente bloqueante). Sin TLS
 // (`wss` añadiría `tls_connect`), sin fragmentación.
 from std/base64 import base64;
+import std/random;
 from net/websocket import accept_key, decode_frame, Frame, op_text, op_close;
 
 // --- Handshake del cliente ---
@@ -15,7 +16,7 @@ fn make_key() -> string {
     var b: [int] = [];
     var i = 0;
     while (i < 16) {
-        b.push(random_int(256));
+        b.push(random.below(256));
         i = i + 1;
     }
     base64(b)
@@ -160,7 +161,7 @@ fn encode_masked(opcode: int, payload: bytes) -> bytes {
     var mask: [int] = [];
     var i = 0;
     while (i < 4) {
-        mask.push(random_int(256));
+        mask.push(random.below(256));
         i = i + 1;
     }
     var m = 0;

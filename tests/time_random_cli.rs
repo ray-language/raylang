@@ -55,23 +55,24 @@ fn main() -> int {
     }
 }
 
-/// `random` siempre cae en `[0, 1)`; `random_int(n)` en `[0, n)`; los casos de borde son totales.
+/// `random.next()` siempre cae en `[0, 1)`; `random.below(n)` en `[0, n)`; los casos de borde son totales.
 #[test]
 fn random_respeta_sus_rangos() {
     let src = r#"
+import std/random;
 fn main() -> int {
     var i: int = 0;
     var fuera: int = 0;
     while (i < 2000) {
-        let r: float = random();
+        let r: float = random.next();
         if (r < 0.0 || r >= 1.0) { fuera = fuera + 1; }
-        let x: int = random_int(6);
+        let x: int = random.below(6);
         if (x < 0 || x >= 6) { fuera = fuera + 1; }
         i = i + 1;
     }
-    // Casos de borde: random_int(1) siempre 0; n<=0 → 0 (sin error).
-    if (random_int(1) != 0) { fuera = fuera + 1; }
-    if (random_int(0) != 0) { fuera = fuera + 1; }
+    // Casos de borde: random.below(1) siempre 0; n<=0 → 0 (sin error).
+    if (random.below(1) != 0) { fuera = fuera + 1; }
+    if (random.below(0) != 0) { fuera = fuera + 1; }
     print(fuera);
     0
 }
@@ -88,11 +89,12 @@ fn main() -> int {
 #[test]
 fn random_int_tiene_variedad() {
     let src = r#"
+import std/random;
 fn main() -> int {
     var caras: [int] = [0, 0, 0, 0, 0, 0];
     var i: int = 0;
     while (i < 2000) {
-        let x: int = random_int(6);
+        let x: int = random.below(6);
         caras[x] = caras[x] + 1;
         i = i + 1;
     }

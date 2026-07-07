@@ -1661,15 +1661,17 @@ static BUILTINS: &[Builtin] = &[
     // --- Reloj y aleatoriedad (M15.1b) ---
     Builtin { name: "now",       opcode: OpCode::Now,       check: |a| { nullary(a, "now")?; Ok(Type::Int) } },
     Builtin { name: "monotonic", opcode: OpCode::Monotonic, check: |a| { nullary(a, "monotonic")?; Ok(Type::Int) } },
-    Builtin { name: "random",    opcode: OpCode::Random,    check: |a| { nullary(a, "random")?; Ok(Type::Float) } },
+    // M49.2a: `random`/`random_int` → módulo `std/random` (`random.next()`/`random.below(n)`); aquí
+    // quedan solo los primitivos internos `__random`/`__random_int` (mismo opcode).
+    Builtin { name: "__random",  opcode: OpCode::Random,    check: |a| { nullary(a, "__random")?; Ok(Type::Float) } },
     Builtin { name: "sleep", opcode: OpCode::Sleep, check: |a| {
         arity(a, 1, "sleep", "")?;
         if a[0] != Type::Int { return Err((Some(0), format!("sleep espera un int (ms), no {}", a[0]))); }
         Ok(Type::Unit)
     } },
-    Builtin { name: "random_int", opcode: OpCode::RandomInt, check: |a| {
-        arity(a, 1, "random_int", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("random_int espera un int, no {}", a[0]))); }
+    Builtin { name: "__random_int", opcode: OpCode::RandomInt, check: |a| {
+        arity(a, 1, "__random_int", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__random_int espera un int, no {}", a[0]))); }
         Ok(Type::Int)
     } },
 

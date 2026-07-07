@@ -1242,6 +1242,16 @@ fn check_call(c: Checker, callee: Expr, cargs: [Expr], expected: Option<Type>, l
 // `name` del struct receptor (de tipo función) —gana sobre UFCS—; (3) **UFCS** (M7.1): `name(recv,
 // args)`, el receptor como primer argumento. (Métodos de trait / bound / `dyn` → M14.3d-2/3/4.)
 fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
+    // M48.1: función asociada `Map.new()` (el checker auto-alojado no maneja canales). Como `map_new()`
+    // pero indexado por el tipo; mensajes idénticos a `try_assoc_call` de Rust.
+    match (obj.kind) {
+        EKind.EIdent(tn) => {
+            if (tn == "Map" && name == "new") {
+                return check_assoc_map_new(c, cargs, expected, line, col);
+            }
+        },
+        _ => {},
+    }
     // (1) ¿el receptor nombra un enum? → construcción de variante.
     match (obj.kind) {
         EKind.EIdent(en) => {
@@ -1958,6 +1968,24 @@ fn check_contains(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type
 // Builtins de Map (M14.6b): map_new/insert/get/contains_key/keys/values. Reglas/mensajes idénticos a
 // `src/builtins.rs` (get refleja el envoltorio del prelude: (Map<K,V>, K) -> Option<V>).
 // =====================================================================
+
+// M48.1: `Map.new()` — función asociada. Como `map_new()` (indeterminado) pero con mensajes "Map.new"
+// idénticos a `try_assoc_call` de Rust. La aridad se valida primero (como en Rust).
+fn check_assoc_map_new(c: Checker, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
+    if (len(cargs) != 0) {
+        return Result.Err(terr(line, col, "'Map.new' espera 0 argumento(s), se dieron " + to_string(len(cargs))));
+    }
+    match (expected) {
+        Option.Some(t) => {
+            match (map_kv(t)) {
+                Option.Some(_) => { ensure_type(c, t, line, col)?; Result.Ok(t) },
+                Option.None => Result.Err(terr(line, col, "'Map.new' produce un Map, pero aquí se espera " + type_str(t))),
+            }
+        },
+        Option.None => Result.Err(terr(line, col,
+            "no se puede inferir el tipo de 'Map.new'; anótalo, p. ej. 'let m: Map<string, int> = Map.new()'")),
+    }
+}
 
 // map_new() es INDETERMINADO (como `[]`/`None`): su tipo lo fija el esperado (bidireccional).
 fn check_map_new(c: Checker, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {

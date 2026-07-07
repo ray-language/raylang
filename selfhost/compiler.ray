@@ -358,6 +358,17 @@ fn emit_call(comp: Comp, callee: Expr, cargs: [Expr]) {
         },
         // `recv.f(args)`: construcción de enum `Enum.Variante(args)`, o despacho de método/UFCS (runtime).
         EKind.EField(recv, fname) => {
+            // M48.1: función asociada `Map.new()` → mismo primitivo que map_new (la VM lo despacha por
+            // nombre vía `dispatch_builtin`). Los canales no corren en la VM auto-alojada.
+            match (recv.kind) {
+                EKind.EIdent(tn) => {
+                    if (tn == "Map" && fname == "new") {
+                        emit(comp, Op.OBuiltin("map_new", 0));
+                        return;
+                    }
+                },
+                _ => {},
+            }
             match (recv.kind) {
                 EKind.EIdent(en) => {
                     if (resolve_local(comp, en) < 0 && enum_has_variant_c(comp, en, fname)) {

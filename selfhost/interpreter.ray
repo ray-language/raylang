@@ -1049,6 +1049,15 @@ fn eval_call(c: Interp, callee: Expr, args: [Expr]) -> Result<Value, Flow> {
             }
         },
         EKind.EField(obj, fname) => {
+            // M48.1: función asociada `Map.new()` → Map vacío (los canales no corren en el intérprete).
+            match (obj.kind) {
+                EKind.EIdent(tn) => {
+                    if (tn == "Map" && fname == "new") {
+                        return Result.Ok(Value.VMap(MapData { keys: no_vals(), vals: no_vals() }));
+                    }
+                },
+                _ => {},
+            }
             // ¿Construcción de variante con payload, `Enum.Variante(args)`? (receptor = nombre de enum
             // que no es una variable local). Si no, es despacho de método/UFCS sobre el receptor.
             match (obj.kind) {

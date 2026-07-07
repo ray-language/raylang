@@ -996,18 +996,8 @@ impl<'a> Compiler<'a> {
         if let ExprKind::Ident(name) = &callee.kind {
             // Solo es directo si el nombre NO es una variable (local o upvalue).
             if !self.name_is_variable(name) {
-                // M12.2: `channel()` vs `channel(n)` → dos opcodes (no acotado / acotado). Se trata aparte
-                // porque la capacidad cambia el opcode (el resto de builtins tiene un opcode fijo en la
-                // tabla). Mismo special-case que ya tiene `channel` en el checker por ser indeterminado.
-                if name == "channel" {
-                    if let Some(cap) = args.first() {
-                        self.emit_expr(cap)?;
-                        self.emit(OpCode::ChannelNewBounded, line, col);
-                    } else {
-                        self.emit(OpCode::ChannelNew, line, col);
-                    }
-                    return Ok(());
-                }
+                // M48.1: `Channel.new()`/`Channel.bounded(n)` (antes `channel()`/`channel(n)`) bajan por la
+                // rama de funciones asociadas de arriba (`Call(Field)` → `ChannelNew`/`ChannelNewBounded`).
                 // M12.3: `scope(body)` se baja a ScopeBegin; body(); ScopeEnd. Se trata aparte porque el
                 // cuerpo se llama ENTRE los dos opcodes de scope (para poseer las tareas que lance) — no es
                 // un builtin ordinario que reciba sus args en la pila. La llamada al cuerpo NO está en

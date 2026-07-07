@@ -2260,43 +2260,7 @@ impl Checker {
                 return r;
             }
         }
-        // M13.1/M12: coexistencia — `map_new()`/`channel()` (forma legada) siguen siendo builtins
-        // indeterminados; su tipo lo fija el esperado igual que las asociadas nuevas.
         match &expr.kind {
-            ExprKind::Call { callee, args }
-                if matches!(&callee.kind, ExprKind::Ident(n) if n == "map_new") =>
-            {
-                if !args.is_empty() {
-                    return Err(self.err(expr.line, expr.col, "map_new no recibe argumentos".into()));
-                }
-                match expected {
-                    Type::Map(_, _) => Ok(expected.clone()),
-                    _ => Err(self.err(expr.line, expr.col, format!(
-                        "map_new produce un Map, pero aquí se espera {}", expected
-                    ))),
-                }
-            }
-            ExprKind::Call { callee, args }
-                if matches!(&callee.kind, ExprKind::Ident(n) if n == "channel") =>
-            {
-                if args.len() > 1 {
-                    return Err(self.err(expr.line, expr.col,
-                        "channel recibe a lo sumo un argumento (la capacidad)".into()));
-                }
-                if let Some(cap) = args.first() {
-                    let ct = self.check_expr(cap)?;
-                    if !matches!(ct, Type::Int) {
-                        return Err(self.err(cap.line, cap.col,
-                            format!("la capacidad de channel debe ser int, no {}", ct)));
-                    }
-                }
-                match expected {
-                    Type::Channel(_) => Ok(expected.clone()),
-                    _ => Err(self.err(expr.line, expr.col, format!(
-                        "channel produce un Channel, pero aquí se espera {}", expected
-                    ))),
-                }
-            }
             // M40.3b: llamada a una función **genérica** de usuario en contexto tipado. Se pasa el
             // esperado para rellenar los parámetros de tipo que los argumentos no determinen (p. ej.
             // un constructor vacío `set_new() -> Set<T>`). No afecta a builtins/variables-función ni a

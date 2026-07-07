@@ -1223,13 +1223,9 @@ fn check_binary(c: Checker, op: BinOp, l: Expr, r: Expr, line: int, col: int) ->
 
 fn check_call(c: Checker, callee: Expr, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
     match (callee.kind) {
-        // Map.new() es indeterminado: necesita el tipo esperado (bidireccional) para fijar Map<K,V>.
-        EKind.EIdent(n) => {
-            if (n == "map_new") { check_map_new(c, cargs, expected, line, col) }
-            else { check_named_call(c, n, cargs, line, col) }
-        },
-        // `recv.f(args)`: construcción de enum `Enum.Variante(args)`, o llamada al valor de un campo.
-        // (UFCS / métodos de trait quedan diferidos a M14.3d.)
+        EKind.EIdent(n) => check_named_call(c, n, cargs, line, col),
+        // `recv.f(args)`: construcción de enum `Enum.Variante(args)`, `Map.new()` (M48.1), o llamada al
+        // valor de un campo. (UFCS / métodos de trait quedan diferidos a M14.3d.)
         EKind.EField(obj, name) => check_call_field(c, obj, name, cargs, expected, line, col),
         _ => {
             let ty = check_expr(c, callee)?;
@@ -1543,7 +1539,7 @@ fn is_known_builtin(name: string) -> bool {
         || name == "contains" || name == "replace" || name == "starts_with" || name == "ends_with"
         || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat"
         || name == "join"
-        || name == "map_new" || name == "insert" || name == "get" || name == "contains_key"
+        || name == "insert" || name == "get" || name == "contains_key"
         || name == "keys" || name == "values" || name == "remove"
         || name == "panic" || name == "__parse_int" || name == "__parse_float"
         || name == "__read_file" || name == "__write_file" || name == "exists" || name == "args"
@@ -1598,7 +1594,6 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
     if (name == "remove") { return check_remove(c, cargs, line, col); }
     if (name == "keys") { return check_keys(c, cargs, line, col); }
     if (name == "values") { return check_values(c, cargs, line, col); }
-    if (name == "map_new") { return check_map_new(c, cargs, Option.None, line, col); }
     if (name == "panic") { return check_panic(c, cargs, line, col); }
     if (name == "__parse_int") { return check_parse_prim(c, "__parse_int", Type.TInt, cargs, line, col); }
     if (name == "__parse_float") { return check_parse_prim(c, "__parse_float", Type.TFloat, cargs, line, col); }
@@ -1984,23 +1979,6 @@ fn check_assoc_map_new(c: Checker, cargs: [Expr], expected: Option<Type>, line: 
         },
         Option.None => Result.Err(terr(line, col,
             "no se puede inferir el tipo de 'Map.new'; anótalo, p. ej. 'let m: Map<string, int> = Map.new()'")),
-    }
-}
-
-// Map.new() es INDETERMINADO (como `[]`/`None`): su tipo lo fija el esperado (bidireccional).
-fn check_map_new(c: Checker, cargs: [Expr], expected: Option<Type>, line: int, col: int) -> Result<Type, TypeError> {
-    match (expected) {
-        Option.Some(t) => {
-            if (len(cargs) != 0) {
-                return Result.Err(terr(line, col, "map_new no recibe argumentos"));
-            }
-            match (map_kv(t)) {
-                Option.Some(_) => { ensure_type(c, t, line, col)?; Result.Ok(t) },
-                Option.None => Result.Err(terr(line, col, "map_new produce un Map, pero aquí se espera " + type_str(t))),
-            }
-        },
-        Option.None => Result.Err(terr(line, col,
-            "no se puede inferir el tipo de map_new; anótalo, p. ej. 'let m: Map<string, int> = Map.new()'")),
     }
 }
 

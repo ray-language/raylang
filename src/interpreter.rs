@@ -828,7 +828,7 @@ impl<'a> Interpreter<'a> {
                     // corre en el intérprete; un canal nunca llega al intérprete (channel() ya da error).
                     // `join` NO va aquí: es ad-hoc polimórfico y su forma de strings (M11.7a) corre en el
                     // intérprete; la forma de Task nunca llega (spawn ya da error → no existen Tasks aquí).
-                    if name == "spawn" || name == "channel" || name == "send" || name == "__recv"
+                    if name == "spawn" || name == "send" || name == "__recv"
                         || name == "scope" || name == "select" {
                         return Err(runtime_error(callee.line, callee.col,
                             "la concurrencia (spawn/channel/send/recv/join/scope/select) requiere la VM; el intérprete es solo el oráculo secuencial (no uses --interp)"));
@@ -899,8 +899,7 @@ impl<'a> Interpreter<'a> {
                 Value::Bytes(b) => Value::Int(b.len() as i64),
                 _ => unreachable!("el checker garantiza un arreglo, string, Map o bytes"),
             },
-            // --- Mapas (M13.1) ---
-            "map_new" => Value::Map(Rc::new(RefCell::new(HashMap::new()))),
+            // --- Mapas (M13.1) --- (`Map.new()` es una función asociada, M48.1: se evalúa en `eval_call`)
             "insert" => {
                 match &values[0] {
                     Value::Map(rc) => {

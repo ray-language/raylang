@@ -567,7 +567,7 @@ pub fn is_builtin(name: string) -> bool {
         || name == "replace" || name == "starts_with" || name == "ends_with"
         || name == "to_upper" || name == "to_lower" || name == "substring" || name == "repeat"
         || name == "join"
-        || name == "map_new" || name == "insert" || name == "get" || name == "contains_key"
+        || name == "insert" || name == "get" || name == "contains_key"
         || name == "keys" || name == "values" || name == "remove"
         || name == "__parse_int" || name == "__parse_float"
         || name == "__read_file" || name == "__write_file" || name == "exists" || name == "args"
@@ -803,6 +803,8 @@ pub fn dispatch_builtin(prog_args: [string], name: string, vals: [Value], line: 
         };
     }
     // --- Builtins de Map (M14.6b) ---
+    // "map_new" ya no es un builtin de usuario (M48.1): es el **primitivo interno** al que el compilador
+    // baja `Map.new()` (`OBuiltin("map_new", 0)`). Sigue aquí porque la VM lo despacha por nombre.
     if (name == "map_new") { return Result.Ok(Value.VMap(MapData { keys: no_vals(), vals: no_vals() })); }
     if (name == "insert") {
         return match (vals[0]) {

@@ -1513,6 +1513,79 @@ static BUILTINS: &[Builtin] = &[
         if a[2] != Type::Int { return Err((Some(2), format!("sub_bytes espera un int como fin, no {}", a[2]))); }
         Ok(Type::Bytes)
     } },
+
+    // M48.4e-1: primitivos internos de `StrOps`/`BytesOps` (mismos opcodes que los builtins públicos,
+    // ocultos). Los cuerpos de sus impls (M48.4d) los llaman; sobreviven al retiro de los públicos (e-3).
+    Builtin { name: "__trim", opcode: OpCode::Trim, check: |a| {
+        arity(a, 1, "__trim", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__trim espera un string, no {}", a[0]))); }
+        Ok(Type::String)
+    } },
+    Builtin { name: "__split", opcode: OpCode::Split, check: |a| {
+        arity(a, 2, "__split", " (string, separador)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__split espera un string, no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__split espera un string como separador, no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__replace", opcode: OpCode::Replace, check: |a| {
+        arity(a, 3, "__replace", " (string, de, a)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__replace espera un string, no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__replace espera un string en 'de', no {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__replace espera un string en 'a', no {}", a[2]))); }
+        Ok(Type::String)
+    } },
+    Builtin { name: "__chars", opcode: OpCode::Chars, check: |a| {
+        arity(a, 1, "__chars", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__chars espera un string, no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Char)))
+    } },
+    Builtin { name: "__starts_with", opcode: OpCode::StartsWith, check: |a| {
+        arity(a, 2, "__starts_with", " (string, prefijo)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__starts_with espera un string, no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__starts_with espera un string como prefijo, no {}", a[1]))); }
+        Ok(Type::Bool)
+    } },
+    Builtin { name: "__ends_with", opcode: OpCode::EndsWith, check: |a| {
+        arity(a, 2, "__ends_with", " (string, sufijo)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__ends_with espera un string, no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__ends_with espera un string como sufijo, no {}", a[1]))); }
+        Ok(Type::Bool)
+    } },
+    Builtin { name: "__to_upper", opcode: OpCode::ToUpper, check: |a| {
+        arity(a, 1, "__to_upper", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__to_upper espera un string, no {}", a[0]))); }
+        Ok(Type::String)
+    } },
+    Builtin { name: "__to_lower", opcode: OpCode::ToLower, check: |a| {
+        arity(a, 1, "__to_lower", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__to_lower espera un string, no {}", a[0]))); }
+        Ok(Type::String)
+    } },
+    Builtin { name: "__substring", opcode: OpCode::Substring, check: |a| {
+        arity(a, 3, "__substring", " (string, inicio, fin)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__substring espera un string, no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__substring espera un int como inicio, no {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__substring espera un int como fin, no {}", a[2]))); }
+        Ok(Type::String)
+    } },
+    Builtin { name: "__repeat", opcode: OpCode::Repeat, check: |a| {
+        arity(a, 2, "__repeat", " (string, veces)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__repeat espera un string, no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__repeat espera un int como nº de veces, no {}", a[1]))); }
+        Ok(Type::String)
+    } },
+    Builtin { name: "__to_bytes", opcode: OpCode::ToBytes, check: |a| {
+        arity(a, 1, "__to_bytes", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__to_bytes espera un string, no {}", a[0]))); }
+        Ok(Type::Bytes)
+    } },
+    Builtin { name: "__sub_bytes", opcode: OpCode::SubBytes, check: |a| {
+        arity(a, 3, "__sub_bytes", " (bytes, inicio, fin)")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("__sub_bytes espera bytes, no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__sub_bytes espera un int como inicio, no {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__sub_bytes espera un int como fin, no {}", a[2]))); }
+        Ok(Type::Bytes)
+    } },
     // bytes_of(xs) -> bytes (M19.3c): construye bytes a partir de un [int] (cada elemento se trunca a
     // octeto con `& 255`). Es el **dual del indexado** `b[i]` (que ya lee un octeto como int, M16.1a):
     // permite *construir* datos binarios octeto a octeto (tramas de WebSocket, cabeceras).

@@ -982,12 +982,12 @@ impl<'a> Interpreter<'a> {
             // M11.1a: representación textual de un primitivo (la misma que `print`/Display).
             "to_string" => Value::Str(format!("{}", values[0])),
             // M11.1b: recorta los extremos.
-            "trim" => match &values[0] {
+            "trim" | "__trim" => match &values[0] {
                 Value::Str(s) => Value::Str(s.trim().to_string()),
                 _ => unreachable!("el checker garantiza un string"),
             },
             // M11.1b: parte por el separador → arreglo de strings.
-            "split" => match (&values[0], &values[1]) {
+            "split" | "__split" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sep)) => {
                     let parts: Vec<Value> = s.split(sep.as_str()).map(|p| Value::Str(p.to_string())).collect();
                     Value::Array(Rc::new(RefCell::new(parts)))
@@ -995,7 +995,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza dos strings"),
             },
             // M11.4c-2: los caracteres del string → arreglo de char.
-            "chars" => match &values[0] {
+            "chars" | "__chars" => match &values[0] {
                 Value::Str(s) => {
                     let cs: Vec<Value> = s.chars().map(Value::Char).collect();
                     Value::Array(Rc::new(RefCell::new(cs)))
@@ -1008,7 +1008,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza un char"),
             },
             // M16.1b: los octetos UTF-8 del string → bytes.
-            "to_bytes" => match &values[0] {
+            "to_bytes" | "__to_bytes" => match &values[0] {
                 Value::Str(s) => Value::Bytes(Rc::new(s.clone().into_bytes())),
                 _ => unreachable!("el checker garantiza un string"),
             },
@@ -1178,39 +1178,39 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza string+string o arreglo+elemento"),
             },
             // M11.4a: reemplaza todas las ocurrencias de `de` por `a`.
-            "replace" => match (&values[0], &values[1], &values[2]) {
+            "replace" | "__replace" => match (&values[0], &values[1], &values[2]) {
                 (Value::Str(s), Value::Str(de), Value::Str(a)) => {
                     Value::Str(s.replace(de.as_str(), a.as_str()))
                 }
                 _ => unreachable!("el checker garantiza tres strings"),
             },
             // M11.7a: ¿empieza/termina con la subcadena?
-            "starts_with" => match (&values[0], &values[1]) {
+            "starts_with" | "__starts_with" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(p)) => Value::Bool(s.starts_with(p.as_str())),
                 _ => unreachable!("el checker garantiza dos strings"),
             },
-            "ends_with" => match (&values[0], &values[1]) {
+            "ends_with" | "__ends_with" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(p)) => Value::Bool(s.ends_with(p.as_str())),
                 _ => unreachable!("el checker garantiza dos strings"),
             },
             // M11.7a: mayúsculas/minúsculas.
-            "to_upper" => match &values[0] {
+            "to_upper" | "__to_upper" => match &values[0] {
                 Value::Str(s) => Value::Str(s.to_uppercase()),
                 _ => unreachable!("el checker garantiza un string"),
             },
-            "to_lower" => match &values[0] {
+            "to_lower" | "__to_lower" => match &values[0] {
                 Value::Str(s) => Value::Str(s.to_lowercase()),
                 _ => unreachable!("el checker garantiza un string"),
             },
             // M11.7a: subcadena por índice de carácter (con clamp); repetir.
-            "substring" => match (&values[0], &values[1], &values[2]) {
+            "substring" | "__substring" => match (&values[0], &values[1], &values[2]) {
                 (Value::Str(s), Value::Int(i), Value::Int(j)) => {
                     Value::Str(crate::builtins::substring_chars(s, *i, *j))
                 }
                 _ => unreachable!("el checker garantiza string, int, int"),
             },
             // M19.2: sub-secuencia de bytes por octeto (con clamp).
-            "sub_bytes" => match (&values[0], &values[1], &values[2]) {
+            "sub_bytes" | "__sub_bytes" => match (&values[0], &values[1], &values[2]) {
                 (Value::Bytes(b), Value::Int(i), Value::Int(j)) => {
                     Value::Bytes(Rc::new(crate::builtins::sub_bytes_octets(b, *i, *j)))
                 }
@@ -1227,7 +1227,7 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza un arreglo"),
             },
-            "repeat" => match (&values[0], &values[1]) {
+            "repeat" | "__repeat" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Int(n)) => Value::Str(crate::builtins::repeat_str(s, *n)),
                 _ => unreachable!("el checker garantiza string, int"),
             },

@@ -146,17 +146,17 @@ trait StrOps {
     fn to_bytes(self) -> bytes;
 }
 impl StrOps for string {
-    fn trim(self) -> string { trim(self) }
-    fn split(self, sep: string) -> [string] { split(self, sep) }
-    fn replace(self, de: string, a: string) -> string { replace(self, de, a) }
-    fn chars(self) -> [char] { chars(self) }
-    fn starts_with(self, prefijo: string) -> bool { starts_with(self, prefijo) }
-    fn ends_with(self, sufijo: string) -> bool { ends_with(self, sufijo) }
-    fn to_upper(self) -> string { to_upper(self) }
-    fn to_lower(self) -> string { to_lower(self) }
-    fn substring(self, inicio: int, fin: int) -> string { substring(self, inicio, fin) }
-    fn repeat(self, veces: int) -> string { repeat(self, veces) }
-    fn to_bytes(self) -> bytes { to_bytes(self) }
+    fn trim(self) -> string { __trim(self) }
+    fn split(self, sep: string) -> [string] { __split(self, sep) }
+    fn replace(self, de: string, a: string) -> string { __replace(self, de, a) }
+    fn chars(self) -> [char] { __chars(self) }
+    fn starts_with(self, prefijo: string) -> bool { __starts_with(self, prefijo) }
+    fn ends_with(self, sufijo: string) -> bool { __ends_with(self, sufijo) }
+    fn to_upper(self) -> string { __to_upper(self) }
+    fn to_lower(self) -> string { __to_lower(self) }
+    fn substring(self, inicio: int, fin: int) -> string { __substring(self, inicio, fin) }
+    fn repeat(self, veces: int) -> string { __repeat(self, veces) }
+    fn to_bytes(self) -> bytes { __to_bytes(self) }
 }
 
 // Operaciones de bytes (M48.4d): un solo impl (`bytes`).
@@ -166,7 +166,7 @@ trait BytesOps {
     fn sub_bytes(self, inicio: int, fin: int) -> bytes;
 }
 impl BytesOps for bytes {
-    fn sub_bytes(self, inicio: int, fin: int) -> bytes { sub_bytes(self, inicio, fin) }
+    fn sub_bytes(self, inicio: int, fin: int) -> bytes { __sub_bytes(self, inicio, fin) }
 }
 
 // Hash (M40.3a): un valor hashable produce un `int`. `@derive(Hash)` lo genera para un struct/enum

@@ -381,11 +381,12 @@ fn crypto_builtins_hashing_vectores() {
     let archivo = base.join("main.ray");
     std::fs::write(
         &archivo,
-        "fn main() -> int {\n\
-             print(to_string(sha256(\"abc\".to_bytes())));\n\
-             print(to_string(sha512(\"\".to_bytes())));\n\
-             print(to_string(hmac_sha256(\"\".to_bytes(), \"\".to_bytes())));\n\
-             print(to_string(sha1(\"abc\".to_bytes())));\n\
+        "import std/crypto;\n\
+         fn main() -> int {\n\
+             print(to_string(crypto.sha256(\"abc\".to_bytes())));\n\
+             print(to_string(crypto.sha512(\"\".to_bytes())));\n\
+             print(to_string(crypto.hmac_sha256(\"\".to_bytes(), \"\".to_bytes())));\n\
+             print(to_string(crypto.sha1(\"abc\".to_bytes())));\n\
              0\n\
          }\n",
     )
@@ -469,12 +470,13 @@ fn stdlib_cripto_aead_y_protobuf() {
     std::fs::write(
         &archivo,
         "import std/protobuf;\n\
+         import std/crypto;\n\
          fn main() -> int {\n\
              let key = \"0123456789abcdef0123456789abcdef\".to_bytes();\n\
              let nonce = \"noncenonce12\".to_bytes();\n\
-             match (chacha20poly1305_seal(key, nonce, \"\".to_bytes(), \"Hi\".to_bytes())) {\n\
+             match (crypto.chacha20poly1305_seal(key, nonce, \"\".to_bytes(), \"Hi\".to_bytes())) {\n\
                  Option.Some(ct) => {\n\
-                     match (chacha20poly1305_open(key, nonce, \"\".to_bytes(), ct)) {\n\
+                     match (crypto.chacha20poly1305_open(key, nonce, \"\".to_bytes(), ct)) {\n\
                          Option.Some(pt) => { print(to_string(pt)); },\n\
                          Option.None => { print(\"auth\"); },\n\
                      }\n\

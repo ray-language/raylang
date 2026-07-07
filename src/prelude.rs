@@ -858,39 +858,8 @@ fn parse_float(s: string) -> Option<float> {
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
-// Ed25519 (M43.3, cripto de producción vía ring). La semilla privada es de 32 octetos; None si no lo es.
-// Clave pública (32 octetos) derivada de la semilla.
-/// Derives the Ed25519 public key (32 bytes) from a 32-byte private seed;
-/// `None` if the seed is not exactly 32 bytes.
-fn ed25519_public_key(seed: bytes) -> Option<bytes> {
-    let r = __ed25519_public_key(seed);
-    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
-}
-
-// Firma (64 octetos) de msg con la semilla. Determinista (RFC 8032). None si la semilla no mide 32.
-/// Signs `msg` with the 32-byte Ed25519 seed, returning a 64-byte deterministic
-/// signature (RFC 8032); `None` if the seed is not exactly 32 bytes.
-fn ed25519_sign(seed: bytes, msg: bytes) -> Option<bytes> {
-    let r = __ed25519_sign(seed, msg);
-    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
-}
-
-// ChaCha20-Poly1305 AEAD (M43.4). Clave de 32 octetos, nonce de 12. seal → texto_cifrado||etiqueta;
-// None si los tamaños no cuadran.
-/// ChaCha20-Poly1305 AEAD encryption: returns ciphertext followed by the authentication tag.
-/// The key must be 32 bytes and the nonce 12; `None` if the sizes are wrong.
-fn chacha20poly1305_seal(key: bytes, nonce: bytes, aad: bytes, plaintext: bytes) -> Option<bytes> {
-    let r = __chacha20poly1305_seal(key, nonce, aad, plaintext);
-    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
-}
-
-// open verifica y descifra; None si la autenticación falla (dato manipulado) o los tamaños no cuadran.
-/// ChaCha20-Poly1305 AEAD decryption: verifies and decrypts;
-/// `None` if authentication fails (tampered data) or the sizes are wrong.
-fn chacha20poly1305_open(key: bytes, nonce: bytes, aad: bytes, ciphertext: bytes) -> Option<bytes> {
-    let r = __chacha20poly1305_open(key, nonce, aad, ciphertext);
-    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
-}
+// M49.3: los envoltorios de cripto (ed25519_public_key/sign, chacha20poly1305 seal/open) se movieron al
+// módulo `std/crypto` junto a sha*/hmac/ed25519_verify. Aquí quedan solo sus primitivos `__x` (builtins).
 
 // Lee una línea de stdin (sin el salto de línea); None en fin de entrada (EOF).
 /// Reads one line from stdin (without the trailing newline); `None` on end of input (EOF).

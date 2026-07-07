@@ -6,6 +6,8 @@
 // la VM. Nombres distintos de los builtins a propósito: un builtin gana a una función homónima, así que
 // un envoltorio con el mismo nombre quedaría muerto (por eso `hmac_sha256_octets`, `sha1_octets`, `ed_*`).
 // Octetos (`[int]`) de un `bytes`. El puente entre el mundo `bytes` de los builtins y el `[int]` del `net`.
+import std/crypto;
+
 fn octetos(b: bytes) -> [int] {
     var out: [int] = [];
     var i = 0;
@@ -21,20 +23,20 @@ fn octetos(b: bytes) -> [int] {
 /// SHA-256 digest of a message given as octets, returned as 32 octets.
 /// Backed by the audited `ring` builtin (constant-time, production-grade).
 pub fn sha256_octets(msg: [int]) -> [int] {
-    octetos(sha256(bytes_of(msg)))
+    octetos(crypto.sha256(bytes_of(msg)))
 }
 
 // SHA-256 en hexadecimal (`to_string` de un `bytes` ya da hex).
 /// SHA-256 digest of `msg` as a lowercase hexadecimal string (64 chars).
 pub fn sha256_hex(msg: bytes) -> string {
-    to_string(sha256(msg))
+    to_string(crypto.sha256(msg))
 }
 
 // SHA-1 (legado; solo para el accept-key de WebSocket, RFC 6455) como octetos.
 /// SHA-1 digest of `msg` as 20 octets. Legacy algorithm: kept ONLY for the WebSocket
 /// accept-key computation (RFC 6455); do not use it for new security purposes.
 pub fn sha1_octets(msg: bytes) -> [int] {
-    octetos(sha1(msg))
+    octetos(crypto.sha1(msg))
 }
 
 // --- HMAC ---
@@ -42,13 +44,13 @@ pub fn sha1_octets(msg: bytes) -> [int] {
 /// HMAC-SHA256 of `msg` under `key`, returned as 32 octets.
 /// Named `_octets` because a plain `hmac_sha256` would be shadowed by the builtin.
 pub fn hmac_sha256_octets(key: bytes, msg: bytes) -> [int] {
-    octetos(hmac_sha256(key, msg))
+    octetos(crypto.hmac_sha256(key, msg))
 }
 
 // HMAC-SHA256 en hexadecimal.
 /// HMAC-SHA256 of `msg` under `key`, as a lowercase hexadecimal string (64 chars).
 pub fn hmac_sha256_hex(key: bytes, msg: bytes) -> string {
-    to_string(hmac_sha256(key, msg))
+    to_string(crypto.hmac_sha256(key, msg))
 }
 
 // --- Ed25519 (API en `[int]`, como la usaba `jwt_eddsa`) ---
@@ -59,7 +61,7 @@ pub fn hmac_sha256_hex(key: bytes, msg: bytes) -> string {
 /// Derives the Ed25519 public key (32 octets) from a 32-octet private seed.
 /// Returns `[]` if the seed has the wrong length.
 pub fn ed_public_key(seed: [int]) -> [int] {
-    match (ed25519_public_key(bytes_of(seed))) {
+    match (crypto.ed25519_public_key(bytes_of(seed))) {
         Option.Some(pk) => octetos(pk),
         Option.None => [],
     }
@@ -68,7 +70,7 @@ pub fn ed_public_key(seed: [int]) -> [int] {
 /// Signs `msg` with Ed25519 using the 32-octet private seed; returns the 64-octet signature.
 /// The public key is derived from the seed internally. Returns `[]` on an invalid seed.
 pub fn ed_sign(seed: [int], msg: [int]) -> [int] {
-    match (ed25519_sign(bytes_of(seed), bytes_of(msg))) {
+    match (crypto.ed25519_sign(bytes_of(seed), bytes_of(msg))) {
         Option.Some(sig) => octetos(sig),
         Option.None => [],
     }
@@ -77,5 +79,5 @@ pub fn ed_sign(seed: [int], msg: [int]) -> [int] {
 /// Verifies an Ed25519 signature: true iff `sig` is a valid signature of `msg`
 /// under the 32-octet public key `pubkey`.
 pub fn ed_verify(pubkey: [int], msg: [int], sig: [int]) -> bool {
-    ed25519_verify(bytes_of(pubkey), bytes_of(msg), bytes_of(sig))
+    crypto.ed25519_verify(bytes_of(pubkey), bytes_of(msg), bytes_of(sig))
 }

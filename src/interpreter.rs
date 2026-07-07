@@ -1014,19 +1014,19 @@ impl<'a> Interpreter<'a> {
             },
             // M43: hashes de producción vía `ring`. Delegan en los helpers de `builtins` (compartidos
             // con la VM → salida idéntica, el oráculo se mantiene).
-            "sha256" => match &values[0] {
+            "__sha256" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha256(b))),
                 _ => unreachable!("el checker garantiza bytes"),
             },
-            "sha512" => match &values[0] {
+            "__sha512" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha512(b))),
                 _ => unreachable!("el checker garantiza bytes"),
             },
-            "sha1" => match &values[0] {
+            "__sha1" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha1(b))),
                 _ => unreachable!("el checker garantiza bytes"),
             },
-            "hmac_sha256" => match (&values[0], &values[1]) {
+            "__hmac_sha256" => match (&values[0], &values[1]) {
                 (Value::Bytes(k), Value::Bytes(m)) => Value::Bytes(Rc::new(crate::builtins::hmac_sha256(k, m))),
                 _ => unreachable!("el checker garantiza bytes, bytes"),
             },
@@ -1051,7 +1051,7 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza bytes, bytes"),
             },
-            "ed25519_verify" => match (&values[0], &values[1], &values[2]) {
+            "__ed25519_verify" => match (&values[0], &values[1], &values[2]) {
                 (Value::Bytes(pk), Value::Bytes(msg), Value::Bytes(sig)) => {
                     Value::Bool(crate::builtins::ed25519_verify(pk, msg, sig))
                 }

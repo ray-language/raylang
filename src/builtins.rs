@@ -1293,23 +1293,23 @@ static BUILTINS: &[Builtin] = &[
         Ok(Type::Int)
     } },
     // M43: hashes de producción vía `ring` (bytes -> bytes). Ver el bloque de helpers arriba.
-    Builtin { name: "sha256", opcode: OpCode::Sha256, check: |a| {
+    Builtin { name: "__sha256", opcode: OpCode::Sha256, check: |a| {
         arity(a, 1, "sha256", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("sha256 espera bytes, no {}", a[0]))); }
         Ok(Type::Bytes)
     } },
-    Builtin { name: "sha512", opcode: OpCode::Sha512, check: |a| {
+    Builtin { name: "__sha512", opcode: OpCode::Sha512, check: |a| {
         arity(a, 1, "sha512", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("sha512 espera bytes, no {}", a[0]))); }
         Ok(Type::Bytes)
     } },
-    Builtin { name: "sha1", opcode: OpCode::Sha1, check: |a| {
+    Builtin { name: "__sha1", opcode: OpCode::Sha1, check: |a| {
         arity(a, 1, "sha1", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("sha1 espera bytes, no {}", a[0]))); }
         Ok(Type::Bytes)
     } },
     // M43.2: HMAC-SHA256 (clave, mensaje) -> etiqueta de 32 octetos.
-    Builtin { name: "hmac_sha256", opcode: OpCode::HmacSha256, check: |a| {
+    Builtin { name: "__hmac_sha256", opcode: OpCode::HmacSha256, check: |a| {
         arity(a, 2, "hmac_sha256", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("hmac_sha256 espera bytes (clave), no {}", a[0]))); }
         if a[1] != Type::Bytes { return Err((Some(1), format!("hmac_sha256 espera bytes (mensaje), no {}", a[1]))); }
@@ -1328,7 +1328,7 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::Bytes { return Err((Some(1), format!("ed25519_sign espera bytes (mensaje), no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
-    Builtin { name: "ed25519_verify", opcode: OpCode::Ed25519Verify, check: |a| {
+    Builtin { name: "__ed25519_verify", opcode: OpCode::Ed25519Verify, check: |a| {
         arity(a, 3, "ed25519_verify", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("ed25519_verify espera bytes (clave pública), no {}", a[0]))); }
         if a[1] != Type::Bytes { return Err((Some(1), format!("ed25519_verify espera bytes (mensaje), no {}", a[1]))); }

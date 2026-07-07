@@ -6492,4 +6492,22 @@ packages) + su demo `time_demo.ray` (usan `time.now()` para `now_utc`). **M49.2b
 > necesitaría `as` (colisión de leaf). No colisionan hoy (la de fechas se usa vía `from time import …`).
 > Un futuro rename (`std/datetime`) lo limpiaría; fuera de alcance de M49.2.
 
-Siguiente: **M49.3** (`std/crypto`).
+### 51.6 M49.3 — `std/crypto` (criptografía de producción)
+
+La cripto de producción (builtins de `ring`, M43) pasa a `std/crypto`: hashes/MAC `crypto.sha256`/
+`sha512`/`sha1`/`hmac_sha256` (bytes→bytes), firma `crypto.ed25519_verify`/`ed25519_public_key`/
+`ed25519_sign` y AEAD `crypto.chacha20poly1305_seal`/`open` (los fallibles → `Option<bytes>`). Los 5
+builtins directos (sha*/hmac/ed25519_verify) se renombran a `__x`; los 4 envoltorios `Option` (ed25519
+key/sign, chacha seal/open) **se mueven del prelude** a `std/crypto.ray` (llaman a los primitivos `__x`).
+
+**Decisiones (afinan el plan)**:
+- **`bytes_of` NO se mueve** — es un constructor de `bytes` desde `[int]` (como `b"…"` en runtime), no
+  cripto; se usa en ~46 sitios (websocket/deflate/…); se queda **builtin**.
+- **Colisión de nombres resuelta sola**: las impls **pedagógicas** en raylang puro (`sha256.ray`/`sha1.ray`/
+  `hmac.ray`/…) definen su propio `sha256`/`sha1`/`hmac_sha256` y las usa el stack web (jwt/scram/sigv4/
+  websocket vía `from … import`); NO tocan los builtins. Solo `packages/net/crypto.ray` (el wrapper de
+  producción) y unas fixtures llamaban al builtin global → migración **dirigida por qué falla al compilar**.
+
+**Verificación**: el oráculo VM↔intérprete prueba los **primitivos `__x`** (sha/hmac directos; ed25519/chacha
+vía el arreglo etiquetado `[bytes]` en vez del `Option`); los envoltorios `crypto.*` los cubren
+`cli_cli` (crypto.sha256/hmac/chacha end-to-end) y las suites de M20. **M49.3 / M49 COMPLETO.**

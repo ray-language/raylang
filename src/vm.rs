@@ -5510,14 +5510,14 @@ mod tests {
     #[test]
     fn sha_digests_oraculo() {
         let casos = [
-            ("sha256", "abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
-            ("sha256", "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            ("__sha256", "abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            ("__sha256", "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
             (
-                "sha512",
+                "__sha512",
                 "abc",
                 "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
             ),
-            ("sha1", "abc", "a9993e364706816aba3e25717850c26c9cd0d89d"),
+            ("__sha1", "abc", "a9993e364706816aba3e25717850c26c9cd0d89d"),
         ];
         for (f, input, hex) in casos {
             let src = format!(
@@ -5540,9 +5540,9 @@ mod tests {
                 var acc = "semilla".to_bytes();
                 var i = 0;
                 while (i < 50) {
-                    acc = sha256(acc);       // 32 octetos, heap nuevo cada vuelta
-                    acc = sha512(acc);       // 64 octetos
-                    acc = sha1(acc);         // 20 octetos
+                    acc = __sha256(acc);       // 32 octetos, heap nuevo cada vuelta
+                    acc = __sha512(acc);       // 64 octetos
+                    acc = __sha1(acc);         // 20 octetos
                     i = i + 1;
                 }
                 acc.len()                     // 20 (último es sha1)
@@ -5556,7 +5556,7 @@ mod tests {
     #[test]
     fn hmac_sha256_oraculo() {
         let src = format!(
-            "fn main() -> int {{ if (to_string(hmac_sha256(\"Jefe\".to_bytes(), \"{}\".to_bytes())) == \"{}\") {{ 1 }} else {{ 0 }} }}",
+            "fn main() -> int {{ if (to_string(__hmac_sha256(\"Jefe\".to_bytes(), \"{}\".to_bytes())) == \"{}\") {{ 1 }} else {{ 0 }} }}",
             "what do ya want for nothing?",
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
         );
@@ -5576,9 +5576,9 @@ mod tests {
                 var m = "mensaje".to_bytes();
                 var i = 0;
                 while (i < 50) {
-                    let t = hmac_sha256(k, m);
+                    let t = __hmac_sha256(k, m);
                     k = t;
-                    m = sha256(t);
+                    m = __sha256(t);
                     i = i + 1;
                 }
                 k.len()                       // 32
@@ -5594,31 +5594,26 @@ mod tests {
     /// ASCII (`to_bytes` de 32 chars) para no depender de literales de byte largos.
     #[test]
     fn ed25519_oraculo() {
+        // M49.3: la cripto pasó a `std/crypto`; el ORÁCULO (pre-loader) prueba los primitivos internos
+        // `__ed25519_*` (arreglo etiquetado `[bytes]`: vacío = None), el envoltorio `crypto.ed25519_*`
+        // (Option) lo cubren los tests de integración. Misma validación relacional con `ring`.
         let src = r#"
             fn main() -> int {
                 let seed = "0123456789abcdef0123456789abcdef".to_bytes();   // 32 octetos
                 let msg = "mensaje firmado".to_bytes();
-                match (ed25519_public_key(seed)) {
-                    Option.Some(pk) => {
-                        match (ed25519_sign(seed, msg)) {
-                            Option.Some(sig) => {
-                                let ok = ed25519_verify(pk, msg, sig);                       // true
-                                let alterado = ed25519_verify(pk, "mensaje alterad".to_bytes(), sig); // false
-                                let otra = ed25519_sign(seed, msg);                           // determinista
-                                let det = match (otra) {
-                                    Option.Some(s2) => to_string(s2) == to_string(sig),       // true
-                                    Option.None => false,
-                                };
-                                let corta = match (ed25519_public_key("corta".to_bytes())) {   // None (no 32)
-                                    Option.Some(x) => false,
-                                    Option.None => true,
-                                };
-                                if (ok && !alterado && det && corta) { 1 } else { 0 }
-                            },
-                            Option.None => 0,
-                        }
-                    },
-                    Option.None => 0,
+                let pk_arr = __ed25519_public_key(seed);
+                if (pk_arr.len() == 0) { 0 } else {
+                    let pk = pk_arr[0];
+                    let sig_arr = __ed25519_sign(seed, msg);
+                    if (sig_arr.len() == 0) { 0 } else {
+                        let sig = sig_arr[0];
+                        let ok = __ed25519_verify(pk, msg, sig);                       // true
+                        let alterado = __ed25519_verify(pk, "mensaje alterad".to_bytes(), sig); // false
+                        let otra = __ed25519_sign(seed, msg);                          // determinista
+                        let det = otra.len() > 0 && to_string(otra[0]) == to_string(sig);
+                        let corta = __ed25519_public_key("corta".to_bytes()).len() == 0; // no 32 → vacío
+                        if (ok && !alterado && det && corta) { 1 } else { 0 }
+                    }
                 }
             }
         "#;
@@ -5637,29 +5632,22 @@ mod tests {
     /// clave de mal tamaño da `None` en `seal`. Devuelve 1 solo si todo cuadra.
     #[test]
     fn chacha20poly1305_oraculo() {
+        // M49.3: primitivos internos `__chacha20poly1305_*` (arreglo etiquetado `[bytes]`: vacío = None);
+        // el envoltorio `crypto.*` (Option) lo cubren los tests de integración. Validación relacional.
         let src = r#"
             fn main() -> int {
                 let key = "0123456789abcdef0123456789abcdef".to_bytes();   // 32 octetos
                 let nonce = "nonce-de-12b".to_bytes();                     // 12 octetos
                 let aad = "cabecera".to_bytes();
                 let pt = "texto secreto".to_bytes();
-                match (chacha20poly1305_seal(key, nonce, aad, pt)) {
-                    Option.Some(ct) => {
-                        let recuperado = match (chacha20poly1305_open(key, nonce, aad, ct)) {
-                            Option.Some(p) => to_string(p) == to_string(pt),
-                            Option.None => false,
-                        };
-                        let manipulado = match (chacha20poly1305_open(key, nonce, "otra cab".to_bytes(), ct)) {
-                            Option.Some(p) => false,
-                            Option.None => true,
-                        };
-                        let corta = match (chacha20poly1305_seal("corta".to_bytes(), nonce, aad, pt)) {
-                            Option.Some(x) => false,
-                            Option.None => true,
-                        };
-                        if (recuperado && manipulado && corta) { 1 } else { 0 }
-                    },
-                    Option.None => 0,
+                let ct_arr = __chacha20poly1305_seal(key, nonce, aad, pt);
+                if (ct_arr.len() == 0) { 0 } else {
+                    let ct = ct_arr[0];
+                    let rec = __chacha20poly1305_open(key, nonce, aad, ct);
+                    let recuperado = rec.len() > 0 && to_string(rec[0]) == to_string(pt);
+                    let manipulado = __chacha20poly1305_open(key, nonce, "otra cab".to_bytes(), ct).len() == 0;
+                    let corta = __chacha20poly1305_seal("corta".to_bytes(), nonce, aad, pt).len() == 0;
+                    if (recuperado && manipulado && corta) { 1 } else { 0 }
                 }
             }
         "#;

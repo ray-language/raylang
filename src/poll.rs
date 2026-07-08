@@ -136,8 +136,8 @@ mod sys {
                 // EINTR u otro error transitorio: que el scheduler reintente vía el busy-poll de respaldo.
                 return PollResult::Ready(Vec::new());
             }
-            let listos = events[..n as usize].iter().map(|e| e.ident as i32).collect();
-            PollResult::Ready(listos)
+            let ready = events[..n as usize].iter().map(|e| e.ident as i32).collect();
+            PollResult::Ready(ready)
         }
     }
 }
@@ -188,17 +188,17 @@ mod sys {
             }
             // Interés por fd: lectura (EPOLLIN), escritura (EPOLLOUT) o ambos. Se combinan en un solo
             // `EPOLL_CTL_ADD` por fd (añadir el mismo fd dos veces daría EEXIST).
-            let mut interes: std::collections::HashMap<i32, u32> = std::collections::HashMap::new();
-            for &fd in read_fds { *interes.entry(fd).or_insert(0) |= EPOLLIN; }
-            for &fd in write_fds { *interes.entry(fd).or_insert(0) |= EPOLLOUT; }
-            for (&fd, &evs) in &interes {
+            let mut interest: std::collections::HashMap<i32, u32> = std::collections::HashMap::new();
+            for &fd in read_fds { *interest.entry(fd).or_insert(0) |= EPOLLIN; }
+            for &fd in write_fds { *interest.entry(fd).or_insert(0) |= EPOLLOUT; }
+            for (&fd, &evs) in &interest {
                 let mut ev = EpollEvent {
                     events: evs,
                     data: fd as u64, // guardamos el fd para recuperarlo del evento listo
                 };
                 epoll_ctl(ep, EPOLL_CTL_ADD, fd, &mut ev as *mut EpollEvent);
             }
-            let mut events: Vec<EpollEvent> = (0..interes.len())
+            let mut events: Vec<EpollEvent> = (0..interest.len())
                 .map(|_| EpollEvent { events: 0, data: 0 })
                 .collect();
             let n = epoll_wait(ep, events.as_mut_ptr(), events.len() as i32, timeout_ms);
@@ -206,14 +206,14 @@ mod sys {
             if n < 0 {
                 return PollResult::Ready(Vec::new());
             }
-            let listos = events[..n as usize]
+            let ready = events[..n as usize]
                 .iter()
                 .map(|e| {
                     let d = e.data; // copia: no se puede referenciar un campo de un struct empaquetado
                     d as i32
                 })
                 .collect();
-            PollResult::Ready(listos)
+            PollResult::Ready(ready)
         }
     }
 }

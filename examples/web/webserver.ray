@@ -247,11 +247,11 @@ pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<i
 // sobre serve_raw. **Solo VM.**
 pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Result<int, string> {
     serve_raw(host, port, fn(req: Request, conn: int) {
-    match (send_response(conn, handler(req))) {
-        Result.Ok(_) => { },
-        Result.Err(e) => {
-            eprint("respuesta: " + e);
-        },
-    }
-})
+        match (send_response(conn, handler(req))) {
+            Result.Ok(_) => { },
+            Result.Err(e) => {
+                eprint("respuesta: " + e);
+            },
+        }
+    })
 }

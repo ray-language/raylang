@@ -38,11 +38,11 @@ fn main() -> int {
 
     // Pipeline de fibras: generar -> cuadrar -> main. Cada flecha es un canal.
     spawn(fn() {
-    generar(nums, 5);
-});
+        generar(nums, 5);
+    });
     spawn(fn() {
-    cuadrar(nums, cuad);
-});
+        cuadrar(nums, cuad);
+    });
 
     // El consumidor (main) suma los cuadrados que llegan, hasta que el canal se cierra.
     var total = 0;

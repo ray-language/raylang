@@ -7,7 +7,7 @@ pub fn is_sorted<T: Ord>(a: [T]) -> bool {
     var i = 1;
     var ok = true;
     while (i < a.len() && ok) {
-        if (a[i].menor(a[i - 1])) {
+        if (a[i].less(a[i - 1])) {
             ok = false;
         }
         i = i + 1;
@@ -28,7 +28,7 @@ pub fn min<T: Ord>(a: [T]) -> Option<T> {
         var m: T = a[0];
         var i = 1;
         while (i < a.len()) {
-            if (a[i].menor(m)) {
+            if (a[i].less(m)) {
                 m = a[i];
             }
             i = i + 1;
@@ -45,7 +45,7 @@ pub fn max<T: Ord>(a: [T]) -> Option<T> {
         var m: T = a[0];
         var i = 1;
         while (i < a.len()) {
-            if (m.menor(a[i])) {
+            if (m.less(a[i])) {
                 m = a[i];
             }
             i = i + 1;
@@ -63,10 +63,10 @@ pub fn binary_search<T: Ord>(a: [T], x: T) -> Option<int> {
     while (lo < hi) {
         let mid = lo + (hi - lo) / 2;
         let m: T = a[mid];
-        if (m.menor(x)) {
+        if (m.less(x)) {
             lo = mid + 1;
         } else {
-            if (x.menor(m)) {
+            if (x.less(m)) {
                 hi = mid;
             } else {
                 return Option.Some(mid);
@@ -83,7 +83,7 @@ pub fn dedup<T: Ord>(a: [T]) -> [T] {
     var i = 0;
     while (i < s.len()) {
         // Como `s` está ordenado, los iguales son adyacentes: se añade si el último es estrictamente menor.
-        if (out.len() == 0 || out[out.len() - 1].menor(s[i])) {
+        if (out.len() == 0 || out[out.len() - 1].less(s[i])) {
             out.push(s[i]);
         }
         i = i + 1;
@@ -97,7 +97,7 @@ pub fn merge<T: Ord>(a: [T], b: [T]) -> [T] {
     var i = 0;
     var j = 0;
     while (i < a.len() && j < b.len()) {
-        if (b[j].menor(a[i])) {
+        if (b[j].less(a[i])) {
             out.push(b[j]);
             j = j + 1;
         } else {

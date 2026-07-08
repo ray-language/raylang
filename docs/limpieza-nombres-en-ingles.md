@@ -1,4 +1,11 @@
-# Limpieza: identificadores en inglés (deuda técnica, DIFERIDA)
+# Limpieza: identificadores en inglés (COMPLETA — L1+L2+L3)
+
+> **Estado: COMPLETA.** L1 (Rust `src/`, 7 clústeres), L2 (core raylang: prelude SOURCE +
+> `std/` + `selfhost/`) y L3 (métodos `Eq`/`Show`/`Ord`: `igual`/`mostrar`/`menor` →
+> `eq`/`show`/`less`, param `otro`→`other`) están hechos. Suite completa verde (871) +
+> oráculos VM↔intérprete + self-hosting byte-idéntico. El resto del documento es el plan
+> histórico.
+
 
 **Regla** (ya en `CLAUDE.md` § Convenciones): los **identificadores** —nombres de funciones/métodos,
 variables, parámetros, tipos y campos— van en **inglés**; los **comentarios** (`//`) en **español**, y la

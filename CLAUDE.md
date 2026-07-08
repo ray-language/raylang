@@ -60,12 +60,13 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Convenciones
 
-- **Idioma: los IDENTIFICADORES en inglés; los comentarios y la documentación en
-  español.** Nombres de funciones/métodos, variables, parámetros, tipos y campos
-  → **inglés** (`load`, `analyze`, `receiver`, `source`, `other`). Comentarios y
-  `///` → español. (El código antiguo mezcla ambos idiomas en los nombres; hay una
-  **limpieza pendiente** para pasarlo todo a inglés — ver `docs/limpieza-nombres-en-ingles.md`.
-  Código nuevo: ya en inglés.)
+- **Idioma: los IDENTIFICADORES en inglés; los comentarios `//` en español; la
+  documentación `///` (visible en LSP/raydoc) en inglés.** Nombres de funciones/
+  métodos, variables, parámetros, tipos y campos → **inglés** (`load`, `analyze`,
+  `receiver`, `source`, `other`; los métodos de trait son `eq`/`show`/`less`).
+  (La **limpieza de identificadores a inglés** L1+L2+L3 está **COMPLETA** — todo el
+  core Rust, el core raylang y los métodos Eq/Show/Ord; ver
+  `docs/limpieza-nombres-en-ingles.md`.)
 - **Comentarios y documentación en español**, en el propio código.
 - Cada fase lleva sus tests (`#[cfg(test)] mod tests` en su archivo).
 - **Todo token/nodo lleva `(línea, columna)`**; los errores siempre reportan
@@ -259,9 +260,9 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   conocido por el compilador (`check_annotations`). **`@test`** (función `() -> bool`) +
   runner `--test` (cliente externo `src/test_runner.rs` que sintetiza un `main` y devuelve
   el número de fallos como código de salida). **`@derive(Eq)`** sobre struct/enum no genérico:
-  el checker **genera el `impl Eq`** (sintetiza el fuente `impl Eq for T { fn igual(...) }`,
+  el checker **genera el `impl Eq`** (sintetiza el fuente `impl Eq for T { fn eq(...) }`,
   lo parsea y lo añade a `program.impls`; M9 lo baja) — `generate_eq_derives`. Trait `Eq` en
-  el prelude (`igual(self, otro: Self) -> bool`). Igualdad: struct = `&&` de campos; enum =
+  el prelude (`eq(self, otro: Self) -> bool`). Igualdad: struct = `&&` de campos; enum =
   `match` anidado, payload con `==`. Compone con bounds (`T: Eq`). Runtime intacto (erasure).
 - **M10.2 COMPLETO** (281 tests + integración CLI verdes, incl. `tests/lsp_cli.rs`): **LSP**
   (Language Server, diagnósticos en vivo). `raylang --lsp` habla **LSP por stdin/stdout**.
@@ -350,7 +351,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   `generate_derives` (que genera fuente y la parsea). Solución: el loader **expande `@derive` por
   módulo con nombres locales** (re-lexables) antes de namespacar, y `generate_derives` se hizo **pub +
   idempotente** (salta `(trait,tipo)` ya implementados) para que el checker la reejecute sin duplicar
-  ni intentar lexar `::`. Bonus: el `mostrar` de Show muestra el nombre **local** (el `::` no entra en
+  ni intentar lexar `::`. Bonus: el `show` de Show muestra el nombre **local** (el `::` no entra en
   los string literals). Runtime intacto.
 - **M11.3c-2 COMPLETO** (305 tests + 14 en `tests/modules_cli.rs`): **`from M import Tipo [as T]`** —
   cruzar **tipos `pub`** entre módulos. Cierra M11.3c. Idea: el `from`-import deja de ser solo de
@@ -434,7 +435,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `__list_dir -> ["ok", n0, …]/["err",msg]`; los envoltorios del prelude lo traducen a `Result`
     (list_dir reconstruye el `[string]` con un `while`+`push`, no hay slice de arreglos). I/O real
     no determinista → integración por subproceso (no oráculo).
-  - **M11.7d COMPLETO** (334 tests lib): **sort + trait `Ord`**. Trait `Ord { fn menor(self, otro:
+  - **M11.7d COMPLETO** (334 tests lib): **sort + trait `Ord`**. Trait `Ord { fn less(self, otro:
     Self) -> bool }` en el prelude, con `impl Ord for int/float/string/char` (vía `<`) y
     `sort<T: Ord>(a: [T]) -> [T]` (insertion sort) **escrito en raylang** → reusa bounds/diccionarios
     de M9.2: **front-end puro, cero opcodes**. Habilitadores: (1) se **extienden** los comparadores
@@ -515,10 +516,10 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   tabla en Rust (opción B) frente a `@builtin fn` porque 4 builtins son **ad-hoc polimórficos**
   (`print`/`eprint`/`len`/`to_string`) y no tendrían firma raylang ordinaria.
 - **Limpieza post-M11 L2 COMPLETO** (303 tests + integración verdes): **`@derive(Show)`**. Segundo
-  trait derivable, en paralelo a `@derive(Eq)` (M10.1): genera `impl Show { fn mostrar(self) ->
+  trait derivable, en paralelo a `@derive(Eq)` (M10.1): genera `impl Show { fn show(self) ->
   string }` (trait `Show` en el prelude). `generate_derives`/`validate_derive` se generalizan a
   ambos; `@derive(Eq, Show)` genera los dos. El cuerpo renderiza **por tipo**: primitivos vía
-  `to_string`, struct/enum vía `mostrar()` recursivo → **Show sí va con enums recursivos** (a
+  `to_string`, struct/enum vía `show()` recursivo → **Show sí va con enums recursivos** (a
   diferencia de Eq). Formato `Nombre { c: v, … }` / `Nombre.Variante(v0, …)`. Difiere arrays/
   funciones (error claro) y genéricos. Inyección de traits del prelude pasó a **per-trait** (Show
   se inyecta aunque el usuario redefina Eq). Front-end puro (M9 baja el impl); runtime intacto.
@@ -552,7 +553,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     builtin **`panic(msg)`** (opcode `Panic`) que aborta con `msg` en la posición de la llamada — el
     intérprete lo intercepta en `eval_call` (devuelve `Flow::Error`), la VM lo baja al opcode `Panic`;
     ambos motores dan el mismo mensaje (oráculo `panic_y_assert_falla_oraculo`). Sobre él, en el
-    **prelude (raylang)**: `assert(cond)` y `assert_eq<T: Eq + Show>(a, b)` (vía `.igual()`+`.mostrar()`,
+    **prelude (raylang)**: `assert(cond)` y `assert_eq<T: Eq + Show>(a, b)` (vía `.eq()`+`.show()`,
     bounds→dicts M9.2). Sin sobrecarga → no hay `assert(cond, msg)`; para mensaje a medida, `panic("…")`.
     Habilitadores: `impl Eq`/`impl Show` para **primitivos** en el prelude (los pedía `assert_eq`) y
     **`panic` diverge** (`expr_diverges` lo reconoce → una rama que termina en panic cede el tipo a la
@@ -805,10 +806,10 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     **checker auto-alojado — @derive + Eq/Show/Ord + anotaciones**. `inject_prelude_traits` registra
     `Eq`/`Show`/`Ord` (firmas) + impls de primitivos (`int#igual`/`int#mostrar`/… en `methods`+
     `impl_traits`). **`@derive(Eq, Show)`** (`generate_derives`/`validate_derive`) sobre struct/enum no
-    genérico: registra los métodos derivados (`igual`/`mostrar`) + `impl_traits`, idempotente; NO chequea
+    genérico: registra los métodos derivados (`eq`/`show`) + `impl_traits`, idempotente; NO chequea
     el cuerpo (codegen conocido; un campo no derivable no se detecta: limitación). **`check_annotations`**:
     `@test` solo en funciones `()->bool`/`()->unit`, `@derive` solo en tipos, otras desconocidas (mensajes
-    byte-idénticos). Un tipo derivado satisface `T: Eq` y responde a `.igual()`/`.mostrar()`. Oráculo:
+    byte-idénticos). Un tipo derivado satisface `T: Eq` y responde a `.eq()`/`.show()`. Oráculo:
     6 válidos + 8 errores + `anotaciones.ray`. **El checker auto-alojado valida el LENGUAJE COMPLETO**
     (núcleo+datos+genéricos+traits/impls/bounds/dyn+prelude+derive), byte-idéntico a Rust sobre 22
     ejemplos reales + ~80 casos. Diferidos (fuera del corpus): `Map` en el checker, bounds anidados
@@ -932,8 +933,8 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       `panic` + Eq/Show/Ord). **Checker**: firmas en `inject_prelude_fns` (`assert(bool)`, `assert_eq<T:
       Eq+Show>(T,T)`, `sort<T: Ord>([T])->[T]`; los bounds resuelven contra los traits+impls de primitivos
       de M14.3d-4c). **Cuerpos** en `selfhost/prelude.ray` (fusionados por el driver). **Intérprete**: `sort`
-      usa `.menor()` (Ord) pero el validador omitió el lowering de diccionarios → se resuelve **`.menor()`
-      sobre primitivos por fallback** en `dispatch_method` (junto a `igual`/`mostrar`; helper `value_lt` para
+      usa `.less()` (Ord) pero el validador omitió el lowering de diccionarios → se resuelve **`.less()`
+      sobre primitivos por fallback** en `dispatch_method` (junto a `eq`/`show`; helper `value_lt` para
       int/float/string/char); un tipo de usuario con `impl Ord` se resuelve antes por la tabla `Tipo#menor`,
       así que el fallback solo ve los 4 primitivos (lo que garantiza `T: Ord`). Oráculo: intérprete (sort
       int/string/float, tipo de usuario con `impl Ord`, assert/assert_eq ok y assert_eq que falla → exit 70,
@@ -1047,7 +1048,7 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
       `self` y puebla `CProgram.methods` (`Tipo#metodo → índice`, por constructor: `Caja<T>`→"Caja"); `CProgram`
       también lleva `indices` (función libre → índice, para UFCS). La VM resuelve en `resolve_dispatch` (espejo
       de `dispatch_method`): (a) campo-función del struct → (b) método (tabla) → (c) `@derive`
-      igual/mostrar/`menor` de Ord sobre primitivos (vía `values_equal`/`value_str`/`value_lt`, reusados del
+      igual/mostrar/`less` de Ord sobre primitivos (vía `values_equal`/`value_str`/`value_lt`, reusados del
       intérprete) → (d) UFCS a función libre → (e) builtin como método; devuelve un `Dispatch` (apilar marco o
       empujar valor) para no usar `return` dentro del bucle. **Prelude completo fusionado** en `run_vm.ray` (como
       `run.ray`): map/filter/fold (indirectas) + sort/assert_eq (métodos por `ODispatch`) ya compilan. Gotcha

@@ -93,7 +93,7 @@ struct VarInfo {
 /// es parte del front-end compartido: el intérprete y la VM reciben el AST ya
 /// resuelto, sin duplicar la regla.
 /// Tope de errores acumulados por `check_all` (M33c).
-const MAX_ERRORES: usize = 20;
+const MAX_ERRORS: usize = 20;
 
 /// Variante acumuladora de `check` (M33c): devuelve TODOS los errores de tipos (hasta
 /// `MAX_ERRORES`), con granularidad por función — las pasadas tempranas siguen fail-fast.
@@ -119,11 +119,11 @@ fn check_all_impl(program: &mut Program, require_main: bool) -> Vec<TypeError> {
         return vec![e];
     }
     let mut checker = Checker::new();
-    checker.acumular = true;
+    checker.accumulate = true;
     checker.require_main = require_main;
     match checker.check_program(program) {
         Err(e) => vec![e], // pasada temprana (fail-fast): un solo error
-        Ok(()) => checker.errores,
+        Ok(()) => checker.errors,
     }
 }
 
@@ -346,10 +346,10 @@ fn prepare_program(program: &mut Program) -> Result<(), TypeError> {
         }
         // M9.3a: métodos por defecto no redefinidos → se sintetizan desde el cuerpo del
         // trait (con `Self` = el tipo destino). El impl los hereda como funciones propias.
-        let provistos: HashSet<&str> = imp.methods.iter().map(|m| m.name.as_str()).collect();
+        let provided: HashSet<&str> = imp.methods.iter().map(|m| m.name.as_str()).collect();
         for tm in trait_sigs.get(&imp.trait_name).into_iter().flatten() {
             let Some(body) = &tm.default_body else { continue };
-            if provistos.contains(tm.name.as_str()) {
+            if provided.contains(tm.name.as_str()) {
                 continue; // el impl lo redefine: gana el del impl
             }
             let params = tm.params.iter()
@@ -449,8 +449,8 @@ struct Checker {
     /// `errores` y sigue con la siguiente función, en vez de cortar en el primero. Las
     /// pasadas tempranas (tipos/firmas) siguen fail-fast: sus tablas a medias
     /// envenenarían todo lo demás. Apagado (fail-fast) en `check`, el camino de ejecución.
-    acumular: bool,
-    errores: Vec<TypeError>,
+    accumulate: bool,
+    errors: Vec<TypeError>,
     /// Pila de ámbitos de variables. El último es el más interno.
     scopes: Vec<HashMap<String, VarInfo>>,
     /// Tipo de retorno de la función que estamos verificando ahora mismo, para
@@ -599,8 +599,8 @@ impl Checker {
             enum_bounds: HashMap::new(),
             scopes: Vec::new(),
             expr_spans: HashMap::new(),
-            acumular: false,
-            errores: Vec::new(),
+            accumulate: false,
+            errors: Vec::new(),
             current_return: Type::Unit,
             type_params: HashSet::new(),
             ufcs_sites: HashMap::new(),
@@ -849,17 +849,17 @@ impl Checker {
 
         // --- Verificación de cada función ---
         for f in &program.functions {
-            let profundidad = self.scopes.len();
+            let depth = self.scopes.len();
             if let Err(e) = self.check_function(f) {
-                if !self.acumular {
+                if !self.accumulate {
                     return Err(e);
                 }
                 // M33c: un cuerpo fallido no contamina al siguiente — `check_function` ya
                 // restaura type_params/current_self/bounds incluso en error; los ámbitos
                 // que el cuerpo dejó a medias se truncan aquí.
-                self.scopes.truncate(profundidad);
-                self.errores.push(e);
-                if self.errores.len() >= MAX_ERRORES {
+                self.scopes.truncate(depth);
+                self.errors.push(e);
+                if self.errors.len() >= MAX_ERRORS {
                     break;
                 }
             }
@@ -897,9 +897,9 @@ impl Checker {
                 }
             }
         }
-        let tipos = program.structs.iter().map(|s| &s.annotations)
+        let type_items = program.structs.iter().map(|s| &s.annotations)
             .chain(program.enums.iter().map(|e| &e.annotations));
-        for anns in tipos {
+        for anns in type_items {
             for a in anns {
                 match a.name.as_str() {
                     // `@derive` ya se validó y generó en `generate_eq_derives` (antes de
@@ -1191,20 +1191,20 @@ impl Checker {
         // M48.4: constructores incorporados `[T]` (aridad 1) y `Map<K,V>` (aridad 2). Siempre genéricos,
         // como `Caja<T>` (M9.2b): solo impls PLENAMENTE genéricos (`impl<T> ... for [T]`, no `[int]`),
         // con cada argumento un `Var` distinto de los propios parámetros del impl.
-        let ctor_incorporado: Option<(&str, Vec<&Type>)> = match target {
+        let builtin_ctor: Option<(&str, Vec<&Type>)> = match target {
             Type::Array(e) => Some(("[]", vec![e.as_ref()])),
             Type::Map(k, v) => Some(("Map", vec![k.as_ref(), v.as_ref()])),
             _ => None,
         };
-        if let Some((nombre, args)) = ctor_incorporado {
+        if let Some((name, args)) = builtin_ctor {
             if type_params.len() != args.len() {
                 return Err(self.err(line, col, format!(
-                    "'{}' espera {} parámetro(s) de tipo, el impl declara {}", nombre, args.len(), type_params.len())));
+                    "'{}' espera {} parámetro(s) de tipo, el impl declara {}", name, args.len(), type_params.len())));
             }
-            let mut vistos = HashSet::new();
-            let bien = args.iter().all(|a|
-                matches!(a, Type::Var(n) if type_params.contains(n) && vistos.insert(n.clone())));
-            if !bien {
+            let mut seen = HashSet::new();
+            let valid = args.iter().all(|a|
+                matches!(a, Type::Var(n) if type_params.contains(n) && seen.insert(n.clone())));
+            if !valid {
                 return Err(self.err(line, col, format!(
                     "el impl de un tipo incorporado debe aplicarse a sus propios parámetros de tipo distintos, p. ej. 'impl<T> ... for [T]' o 'impl<K, V> ... for Map<K, V>'")));
             }
@@ -1235,10 +1235,10 @@ impl Checker {
                 "'{}' espera {} parámetro(s) de tipo, el impl declara {}", name, arity, type_params.len()
             )));
         }
-        let mut vistos = HashSet::new();
-        let bien = args.len() == type_params.len()
-            && args.iter().all(|a| matches!(a, Type::Var(n) if type_params.contains(n) && vistos.insert(n.clone())));
-        if !bien {
+        let mut seen = HashSet::new();
+        let valid = args.len() == type_params.len()
+            && args.iter().all(|a| matches!(a, Type::Var(n) if type_params.contains(n) && seen.insert(n.clone())));
+        if !valid {
             return Err(self.err(line, col, format!(
                 "el impl genérico debe aplicarse a '{}<{}>' (sus propios parámetros de tipo, distintos)",
                 name, type_params.join(", ")
@@ -1259,9 +1259,9 @@ impl Checker {
         // Los tipos del trait se sustituyen: `Self`→target y los parámetros de tipo del trait por los
         // argumentos del impl (`T`→`int` para `impl Iterator<int>`, M40.2). Se resuelve ANTES de la σ
         // del trait: `resolve_type` normaliza `T` (`Struct`) a `Var`, que es lo que `subst` sustituye.
-        let esperado = |ty: &Type| subst(&self.resolve_type(&subst_self(ty, target)), trait_sigma);
+        let expected = |ty: &Type| subst(&self.resolve_type(&subst_self(ty, target)), trait_sigma);
         for (i, (tp, ip)) in tm.params.iter().zip(&m.params).enumerate() {
-            let want = esperado(&tp.ty);
+            let want = expected(&tp.ty);
             let got = self.resolve_type(&subst_self(&ip.ty, target));
             if want != got {
                 return Err(self.err(ip.line, ip.col, format!(
@@ -1270,7 +1270,7 @@ impl Checker {
                 )));
             }
         }
-        let want_ret = esperado(&tm.return_type);
+        let want_ret = expected(&tm.return_type);
         let got_ret = self.resolve_type(&subst_self(&m.return_type, target));
         if want_ret != got_ret {
             return Err(self.err(m.line, m.col, format!(
@@ -1430,7 +1430,7 @@ impl Checker {
                             (Type::Map(_, _), ForPat::Single(_)) => return Err(self.err(stmt.line, stmt.col,
                                 "iterar un Map requiere una tupla `(clave, valor)`".into())),
                             // M40.2: un tipo que implementa `Iterator<T>` → se itera llamando a `next`.
-                            (other, ForPat::Single(n)) => match self.iterator_de(other) {
+                            (other, ForPat::Single(n)) => match self.iterator_of(other) {
                                 Some((elem, next_fn)) => {
                                     self.for_iter_sites.insert((stmt.line, stmt.col), next_fn);
                                     vec![(n.clone(), elem)]
@@ -1440,7 +1440,7 @@ impl Checker {
                             },
                             // M40.2e: `for (a, b) in it` sobre un iterador cuyo elemento es una tupla
                             // (p. ej. `enumerate()` → `(int, T)`). Cada nombre liga una posición.
-                            (other, ForPat::Tuple(names)) => match self.iterator_de(other) {
+                            (other, ForPat::Tuple(names)) => match self.iterator_of(other) {
                                 Some((elem, next_fn)) => {
                                     let comps = match &elem {
                                         Type::Tuple(ts) if ts.len() == names.len() => ts.clone(),
@@ -1856,13 +1856,13 @@ impl Checker {
             // Y el hover de la **variante** (el identificador tras el `.`): su firma con el payload.
             // La posición asume `Enum.Variante` sin espacios (la grafía canónica); el `+1` es el punto.
             let vcol = col + enum_name.chars().count() + 1;
-            let firma = if payload.is_empty() {
+            let signature = if payload.is_empty() {
                 format!("{}.{}", enum_name, variant)
             } else {
-                let tipos: Vec<String> = payload.iter().map(|t| format!("{}", t)).collect();
-                format!("{}.{}({})", enum_name, variant, tipos.join(", "))
+                let type_strs: Vec<String> = payload.iter().map(|t| format!("{}", t)).collect();
+                format!("{}.{}({})", enum_name, variant, type_strs.join(", "))
             };
-            self.record_named(line, vcol, variant.chars().count(), firma, def);
+            self.record_named(line, vcol, variant.chars().count(), signature, def);
         }
         let orig_tparams = self.enum_tparams.get(enum_name).cloned().unwrap_or_default();
         if args.len() != payload.len() {
@@ -1954,7 +1954,7 @@ impl Checker {
             // (M40.1a) puede no casar aunque el patrón ligue → no cuenta para exhaustividad/alcance.
             let binds = self.check_subpattern(&arm.pattern, &scrut_ty)?;
             if arm.guard.is_none() {
-                self.registrar_cobertura(&arm.pattern, &mut covered, &mut catchall)?;
+                self.register_coverage(&arm.pattern, &mut covered, &mut catchall)?;
             }
             // Verifica la guarda (bool) y el cuerpo con esas variables en un ámbito propio,
             // propagando el tipo esperado del match a cada brazo (para construcciones como `None`).
@@ -2070,7 +2070,7 @@ impl Checker {
     /// Si `ty` implementa `Iterator<T>` (M40.2), devuelve `(T, next_manglado)`: el tipo de elemento
     /// (el argumento de `Option` en el retorno de `next`) y el nombre manglado de su método `next`,
     /// para que `for x in it` lo consuma. `None` si el tipo no es un iterador.
-    fn iterator_de(&self, ty: &Type) -> Option<(Type, String)> {
+    fn iterator_of(&self, ty: &Type) -> Option<(Type, String)> {
         let key = type_key_of(ty)?;
         if !self.impl_traits.contains(&(key.clone(), "Iterator".to_string())) {
             return None;
@@ -2142,13 +2142,13 @@ impl Checker {
                     let def = self.type_defs.get(&ty_enum).copied();
                     self.record_named(pat.line, pat.col, ty_enum.chars().count(), format!("enum {}", ty_enum), def);
                     let vcol = pat.col + ty_enum.chars().count() + 1;
-                    let firma = if payload.is_empty() {
+                    let signature = if payload.is_empty() {
                         format!("{}.{}", ty_enum, variant)
                     } else {
-                        let tipos: Vec<String> = payload.iter().map(|t| format!("{}", t)).collect();
-                        format!("{}.{}({})", ty_enum, variant, tipos.join(", "))
+                        let type_strs: Vec<String> = payload.iter().map(|t| format!("{}", t)).collect();
+                        format!("{}.{}({})", ty_enum, variant, type_strs.join(", "))
                     };
-                    self.record_named(pat.line, vcol, variant.chars().count(), firma, def);
+                    self.record_named(pat.line, vcol, variant.chars().count(), signature, def);
                 }
                 // σ del enum del sub-valor: liga sus parámetros de tipo con los argumentos del tipo.
                 let tparams = self.enum_tparams.get(&ty_enum).cloned().unwrap_or_default();
@@ -2172,14 +2172,14 @@ impl Checker {
                         "el patrón es del struct '{}', pero aquí el valor es del struct '{}'", name, sname
                     )));
                 }
-                let campos = self.structs.get(&sname)
+                let struct_fields = self.structs.get(&sname)
                     .unwrap_or_else(|| crate::ice!("el struct '{}' no está en la tabla del checker", sname)).clone();
                 // σ del struct: liga sus parámetros de tipo con los argumentos (`Par<int,bool>`).
                 let tparams = self.struct_tparams.get(&sname).cloned().unwrap_or_default();
                 let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs).collect();
                 let mut binds = Vec::new();
                 for (fname, fpat) in fields {
-                    let fty = match campos.iter().find(|(f, _)| f == fname) {
+                    let fty = match struct_fields.iter().find(|(f, _)| f == fname) {
                         Some((_, t)) => subst(t, &sigma),
                         None => return Err(self.err(fpat.line, fpat.col, format!(
                             "el struct '{}' no tiene un campo '{}'", sname, fname
@@ -2196,7 +2196,7 @@ impl Checker {
     /// M40.1c): una variante cuenta como cubierta solo si TODOS sus sub-patrones son catch-all
     /// (`_`/binding); si alguno es una variante anidada, NO se marca (hace falta un fallback). Un
     /// `_`/binding de primer nivel es catch-all total. Repetir una variante ya cubierta = inalcanzable.
-    fn registrar_cobertura(
+    fn register_coverage(
         &self,
         pat: &Pattern,
         covered: &mut HashSet<String>,
@@ -2208,7 +2208,7 @@ impl Checker {
                 // Cubre la variante si todos sus sub-patrones son **irrefutables** (siempre casan):
                 // `_`/binding o un struct de campos irrefutables (`Punto { x, y }`). Una variante
                 // anidada es refutable → no cubre (conservador; hace falta un fallback).
-                let cubre_todo = subpatterns.iter().all(es_irrefutable);
+                let cubre_todo = subpatterns.iter().all(is_irrefutable);
                 if cubre_todo {
                     if !covered.insert(variant.clone()) {
                         return Err(self.err(pat.line, pat.col, format!(
@@ -2256,11 +2256,11 @@ impl Checker {
                 };
                 let tparams = self.struct_tparams.get(&sname).cloned().unwrap_or_default();
                 let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs).collect();
-                let resultado = subst(&fty, &sigma);
+                let result = subst(&fty, &sigma);
                 // M10.2g: hover del **campo** en su posición (nombre tras el `.`); un campo de datos
                 // no tiene declaración de función → sin `def`.
-                self.record_field_hover(object.line, object.col, name, &resultado, None);
-                Ok(resultado)
+                self.record_field_hover(object.line, object.col, name, &result, None);
+                Ok(result)
             }
             other => Err(self.err(object.line, object.col, format!("no se puede acceder a '.{}' en un {} (no es un struct)", name, other))),
         }
@@ -2940,6 +2940,17 @@ impl Checker {
             // Llamada directa por nombre: `f(a, b)`.
             ExprKind::Ident(n) => {
                 let n = n.clone();
+                // Completion tras `|>`: el LSP repara `x |> parc` como `x |> __raycomplete__`, que el
+                // parser desazucara a `__raycomplete__(x)`. Como `x |> f` ≡ `f(x)`, enumeramos los
+                // miembros del tipo del receptor (el primer argumento) —las mismas funciones que ofrece
+                // `x.`— en vez de dar error por función desconocida (M7.2 + M45).
+                if self.completing && n == COMPLETION_SENTINEL {
+                    if let Some(recv) = args.first() {
+                        let ty = self.check_expr(recv)?;
+                        self.member_hits = self.enumerate_pipeable(&ty);
+                    }
+                    return Ok(Type::Unit);
+                }
                 // M10.2b: hover/def sobre el nombre llamado, si es una función conocida (no un
                 // builtin ni una variable-función, que ya pasan por la rama de `check_expr`).
                 let fn_ty = self.gather
@@ -3026,24 +3037,43 @@ impl Checker {
     /// tipo, y funciones libres UFCS cuyo primer parámetro acepta el receptor (esto cubre
     /// `map`/`filter`/`fold`/`sort` del prelude y las UFCS del usuario). Dedup por etiqueta.
     fn enumerate_members(&self, rt: &Type) -> Vec<MemberItem> {
+        self.enumerate_members_impl(rt, false)
+    }
+
+    /// Los miembros ofrecibles tras un `|>` (pipeline, M7.2), que difieren de los de `recv.`: como
+    /// `x |> f(a)` ≡ `f(x, a)` (desugaring puro del parser), lo pipeable son **funciones libres**
+    /// (para CUALQUIER tipo, incluidos primitivos: `n |> duplicar`, `path |> read_file`) + los
+    /// builtins invocables por nombre; NO los campos ni los **métodos de trait** (`n |> show` sería
+    /// `show(n)`, y no existe una función libre `show` —solo `int#show`—).
+    fn enumerate_pipeable(&self, rt: &Type) -> Vec<MemberItem> {
+        self.enumerate_members_impl(rt, true)
+    }
+
+    /// Núcleo compartido por `enumerate_members` (para `recv.`) y `enumerate_pipeable` (para `x |>`).
+    /// El flag `pipeable` cambia dos cosas: (a) omite campos y métodos de trait (no son pipeable), y
+    /// (b) enumera funciones libres para todo tipo, no solo receptores compuestos.
+    fn enumerate_members_impl(&self, rt: &Type, pipeable: bool) -> Vec<MemberItem> {
         let mut out: Vec<MemberItem> = Vec::new();
-        let mut vistos: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let add = |out: &mut Vec<MemberItem>, vistos: &mut std::collections::HashSet<String>,
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let add = |out: &mut Vec<MemberItem>, seen: &mut std::collections::HashSet<String>,
                    label: String, kind: u8, detail: Option<String>, has_args: bool,
                    def: Option<(usize, usize)>| {
-            if vistos.insert(label.clone()) {
+            if seen.insert(label.clone()) {
                 out.push(MemberItem { label, kind, detail, has_args, def });
             }
         };
 
-        // 1. Campos del struct (kind 5 = Field), con su tipo sustituido como detalle.
-        if let Type::Struct(sname, targs) = rt {
-            if let Some(fields) = self.structs.get(sname) {
-                let tparams = self.struct_tparams.get(sname).cloned().unwrap_or_default();
-                let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs.iter().cloned()).collect();
-                for (fname, fty) in fields {
-                    let ty = subst(fty, &sigma);
-                    add(&mut out, &mut vistos, fname.clone(), 5, Some(format!("{}", ty)), false, None);
+        // 1. Campos del struct (kind 5 = Field), con su tipo sustituido como detalle. No pipeable
+        //    (`p |> x` sería `x(p)`; un campo no es una función libre).
+        if !pipeable {
+            if let Type::Struct(sname, targs) = rt {
+                if let Some(fields) = self.structs.get(sname) {
+                    let tparams = self.struct_tparams.get(sname).cloned().unwrap_or_default();
+                    let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs.iter().cloned()).collect();
+                    for (fname, fty) in fields {
+                        let ty = subst(fty, &sigma);
+                        add(&mut out, &mut seen, fname.clone(), 5, Some(format!("{}", ty)), false, None);
+                    }
                 }
             }
         }
@@ -3051,38 +3081,43 @@ impl Checker {
         // 2. Métodos de trait/impl del tipo concreto (kind 2 = Method). La tabla `methods` va por
         //    constructor (`type_key_of`): `Caja<int>` y `Caja<bool>` comparten métodos. Del mangled
         //    sacamos la aridad (para el snippet) y la posición de declaración (para sus `///` docs).
-        if let Some(key) = type_key_of(rt) {
-            for ((k, m), mangled) in &self.methods {
-                if k == &key {
-                    let sig = self.functions.get(mangled);
-                    let has_args = sig.map(|s| s.params.len() > 1).unwrap_or(false); // > self
-                    let def = self.fn_defs.get(mangled).copied();
-                    add(&mut out, &mut vistos, m.clone(), 2, None, has_args, def);
+        //    No pipeable: un método de trait no es una función libre invocable por su nombre pelado.
+        if !pipeable {
+            if let Some(key) = type_key_of(rt) {
+                for ((k, m), mangled) in &self.methods {
+                    if k == &key {
+                        let sig = self.functions.get(mangled);
+                        let has_args = sig.map(|s| s.params.len() > 1).unwrap_or(false); // > self
+                        let def = self.fn_defs.get(mangled).copied();
+                        add(&mut out, &mut seen, m.clone(), 2, None, has_args, def);
+                    }
                 }
             }
         }
 
-        // 3. Builtins invocables como método sobre la categoría del tipo (kind 2 = Method).
+        // 3. Builtins invocables como método sobre la categoría del tipo (kind 2 = Method). Sí son
+        //    pipeable (son globales invocables por nombre: `xs |> len`, `n |> to_string`).
         if let Some(cat) = member_category(rt) {
             for b in crate::builtins::methods_for(cat) {
                 let has_args = crate::builtins::method_takes_args(b);
-                add(&mut out, &mut vistos, (*b).to_string(), 2, None, has_args, None);
+                add(&mut out, &mut seen, (*b).to_string(), 2, None, has_args, None);
             }
         }
 
         // 4. Funciones libres UFCS: primer parámetro que acepta el receptor (kind 3 = Function).
-        //    Solo para receptores **compuestos** (array/map/struct/enum/tupla): ahí la función opera
-        //    SOBRE la estructura y `recv.f()` es idiomático (captura `map`/`filter`/`fold`/`sort` del
-        //    prelude y las UFCS del usuario). Para primitivos NO se enumeran: una función que toma un
-        //    `string` suele tratarlo como DATO (`read_file(path)`, `env(name)`), no como método —los
-        //    primitivos ya reciben sus builtins (paso 3) y sus métodos de trait (paso 2)—.
-        //    Excluye además sintéticos (`#`/`::`/`__`) y primer parámetro genérico pelado (`Var`, que
+        //    Para `recv.` solo se enumeran con receptores **compuestos** (array/map/struct/enum/tupla):
+        //    ahí la función opera SOBRE la estructura y `recv.f()` es idiomático (captura
+        //    `map`/`filter`/`fold`/`sort` del prelude y las UFCS del usuario); para primitivos NO,
+        //    porque una función que toma un `string` suele tratarlo como DATO (`read_file(path)`), no
+        //    como método. Para `x |>` (pipeable) SÍ se enumeran para todo tipo: piping un primitivo a
+        //    una función libre es justo el caso de uso del `|>`.
+        //    Excluye sintéticos (`#`/`::`/`__`) y primer parámetro genérico pelado (`Var`, que
         //    unificaría con todo, p. ej. `assert_eq`).
-        let receptor_compuesto = matches!(
+        let composite_receiver = matches!(
             rt,
             Type::Array(_) | Type::Map(_, _) | Type::Struct(_, _) | Type::Enum(_, _) | Type::Tuple(_)
         );
-        if receptor_compuesto {
+        if pipeable || composite_receiver {
             for (fname, sig) in &self.functions {
                 if fname.contains('#') || fname.contains("::") || fname.starts_with("__") {
                     continue;
@@ -3095,7 +3130,7 @@ impl Checker {
                     if unify(p0, rt, &mut sigma).is_ok() {
                         let has_args = sig.params.len() > 1; // > el receptor
                         let def = self.fn_defs.get(fname).copied();
-                        add(&mut out, &mut vistos, fname.clone(), 3, None, has_args, def);
+                        add(&mut out, &mut seen, fname.clone(), 3, None, has_args, def);
                     }
                 }
             }
@@ -3473,10 +3508,10 @@ impl Checker {
         // M9.2b: si el impl es **genérico y acotado**, su función manglada lleva sus propios
         // parámetros-diccionario, así que no se puede pasar plana: hay que envolverla en un
         // **closure** que rellene los diccionarios internos (anidados).
-        let gi_acotado = self.generic_impls.get(&(key.clone(), trait_name.to_string()))
+        let bounded_gi = self.generic_impls.get(&(key.clone(), trait_name.to_string()))
             .filter(|gi| !gi.bounds.is_empty())
             .cloned();
-        if let Some(gi) = gi_acotado {
+        if let Some(gi) = bounded_gi {
             let sig = self.traits.get(trait_name)
                 .and_then(|ms| ms.iter().find(|m| m.name == method))
                 .cloned()
@@ -3597,9 +3632,9 @@ impl Checker {
         // Todas las posiciones de este `(receptor, nombre)`: en una cadena (`v.doble().inc().doble()`)
         // dos `.doble()` comparten clave (misma posición de receptor) → se registra el hover en ambas.
         // Todas resuelven a la misma función (mismo `name` sobre el mismo receptor) → misma firma.
-        if let Some(posiciones) = self.field_name_pos.get(&(recv_line, recv_col, name.to_string())).cloned() {
+        if let Some(positions) = self.field_name_pos.get(&(recv_line, recv_col, name.to_string())).cloned() {
             let len = name.chars().count();
-            for (nl, nc) in posiciones {
+            for (nl, nc) in positions {
                 self.index.hovers.push(HoverEntry { line: nl, col: nc, len, text: format!("{}: {}", name, ty) });
                 // M10.2h: si el método resuelve a una función conocida (manglada de un impl, o libre en
                 // UFCS), registramos su declaración → habilita ir-a-definición y documentación (`///`) del
@@ -3845,10 +3880,10 @@ fn stmt_diverges(stmt: &Stmt) -> bool {
 /// de struct cuyos campos son todos irrefutables (`Punto { x, y }`). Una variante es **refutable**
 /// (solo casa una de las variantes). Se usa para la exhaustividad conservadora (M40.1c/1d): una
 /// variante de primer nivel cubre solo si sus sub-patrones son irrefutables.
-fn es_irrefutable(p: &Pattern) -> bool {
+fn is_irrefutable(p: &Pattern) -> bool {
     match &p.kind {
         PatternKind::Wildcard | PatternKind::Binding(_) => true,
-        PatternKind::Struct { fields, .. } => fields.iter().all(|(_, f)| es_irrefutable(f)),
+        PatternKind::Struct { fields, .. } => fields.iter().all(|(_, f)| is_irrefutable(f)),
         PatternKind::Variant { .. } => false,
     }
 }
@@ -4140,7 +4175,7 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
         .iter()
         .filter_map(|i| impl_target_name(&i.target).map(|n| (i.trait_name.clone(), n.to_string())))
         .collect();
-    let mut nuevos: Vec<ImplBlock> = Vec::new();
+    let mut new_impls: Vec<ImplBlock> = Vec::new();
     for s in &program.structs {
         for a in &s.annotations {
             if a.name != "derive" {
@@ -4152,9 +4187,9 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                     continue; // ya existe ese impl → idempotente
                 }
                 match trait_arg.as_str() {
-                    "Eq" => nuevos.push(parse_derived_impl("Eq", &s.name, "fn igual(self, otro: Self) -> bool", &struct_eq_body(&s.fields))),
-                    "Show" => nuevos.push(parse_derived_impl("Show", &s.name, "fn mostrar(self) -> string", &struct_show_body(a, &s.name, &s.fields)?)),
-                    "Hash" => nuevos.push(parse_derived_impl("Hash", &s.name, "fn hash(self) -> int", &struct_hash_body(&s.fields))),
+                    "Eq" => new_impls.push(parse_derived_impl("Eq", &s.name, "fn eq(self, other: Self) -> bool", &struct_eq_body(&s.fields))),
+                    "Show" => new_impls.push(parse_derived_impl("Show", &s.name, "fn show(self) -> string", &struct_show_body(a, &s.name, &s.fields)?)),
+                    "Hash" => new_impls.push(parse_derived_impl("Hash", &s.name, "fn hash(self) -> int", &struct_hash_body(&s.fields))),
                     _ => crate::ice!("validate_derive garantiza un trait conocido"),
                 }
             }
@@ -4171,9 +4206,9 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                     continue;
                 }
                 match trait_arg.as_str() {
-                    "Eq" => nuevos.push(parse_derived_impl("Eq", &e.name, "fn igual(self, otro: Self) -> bool", &enum_eq_body(&e.name, &e.variants))),
-                    "Show" => nuevos.push(parse_derived_impl("Show", &e.name, "fn mostrar(self) -> string", &enum_show_body(a, &e.name, &e.variants)?)),
-                    "Hash" => nuevos.push(parse_derived_impl("Hash", &e.name, "fn hash(self) -> int", &enum_hash_body(&e.name, &e.variants))),
+                    "Eq" => new_impls.push(parse_derived_impl("Eq", &e.name, "fn eq(self, other: Self) -> bool", &enum_eq_body(&e.name, &e.variants))),
+                    "Show" => new_impls.push(parse_derived_impl("Show", &e.name, "fn show(self) -> string", &enum_show_body(a, &e.name, &e.variants)?)),
+                    "Hash" => new_impls.push(parse_derived_impl("Hash", &e.name, "fn hash(self) -> int", &enum_hash_body(&e.name, &e.variants))),
                     _ => crate::ice!("validate_derive garantiza un trait conocido"),
                 }
             }
@@ -4189,13 +4224,13 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
     // mismo tipo). Ver `freshen_positions`.
     use std::sync::atomic::{AtomicUsize, Ordering};
     static DERIVE_FRESH: AtomicUsize = AtomicUsize::new(49_000_000);
-    for imp in &mut nuevos {
+    for imp in &mut new_impls {
         for m in &mut imp.methods {
             let mut next = DERIVE_FRESH.fetch_add(1_000_000, Ordering::Relaxed);
             freshen_positions(&mut m.body, &mut next);
         }
     }
-    program.impls.extend(nuevos);
+    program.impls.extend(new_impls);
     Ok(())
 }
 
@@ -4232,9 +4267,9 @@ fn render_to_string(a: &Annotation, expr: &str, ty: &Type) -> Result<String, Typ
         Type::Int | Type::Float | Type::Bool | Type::String | Type::Char => Ok(format!("to_string({expr})")),
         // En esta fase un tipo de usuario llega como `Struct` (el checker aún no lo resolvió a
         // `Enum`); ambos se imprimen con su propio `mostrar` (deben implementar Show).
-        Type::Struct(_, _) | Type::Enum(_, _) => Ok(format!("{expr}.mostrar()")),
-        otro => Err(TypeError {
-            msg: format!("no se puede derivar Show para un campo de tipo {} (por ahora primitivos, struct y enum)", otro),
+        Type::Struct(_, _) | Type::Enum(_, _) => Ok(format!("{expr}.show()")),
+        other => Err(TypeError {
+            msg: format!("no se puede derivar Show para un campo de tipo {} (por ahora primitivos, struct y enum)", other),
             line: a.line,
             col: a.col,
             len: 1,
@@ -4279,9 +4314,9 @@ fn enum_show_body(a: &Annotation, name: &str, variants: &[VariantDef]) -> Result
 }
 
 /// Construye y parsea `impl Trait for <name> {{ <firma> {{ body }} }}` para un derive.
-fn parse_derived_impl(trait_name: &str, name: &str, firma: &str, body: &str) -> ImplBlock {
+fn parse_derived_impl(trait_name: &str, name: &str, signature: &str, body: &str) -> ImplBlock {
     let src = format!(
-        "impl {trait_name} for {name} {{\n    {firma} {{\n{body}\n    }}\n}}"
+        "impl {trait_name} for {name} {{\n    {signature} {{\n{body}\n    }}\n}}"
     );
     let toks = crate::lexer::lex(&src).unwrap_or_else(|e| crate::ice!("el impl derivado no lexea: {e}"));
     let mut prog = crate::parser::parse(toks).unwrap_or_else(|e| crate::ice!("el impl derivado no parsea: {e}"));
@@ -4328,7 +4363,7 @@ fn struct_eq_body(fields: &[(String, Type)]) -> String {
     if fields.is_empty() {
         return "        true".into();
     }
-    let cmps: Vec<String> = fields.iter().map(|(n, _)| format!("self.{n} == otro.{n}")).collect();
+    let cmps: Vec<String> = fields.iter().map(|(n, _)| format!("self.{n} == other.{n}")).collect();
     format!("        {}", cmps.join(" && "))
 }
 
@@ -4340,7 +4375,7 @@ fn enum_eq_body(name: &str, variants: &[VariantDef]) -> String {
         let k = v.payload.len();
         if k == 0 {
             arms.push_str(&format!(
-                "            {name}.{v} => match (otro) {{ {name}.{v} => true, _ => false }},\n",
+                "            {name}.{v} => match (other) {{ {name}.{v} => true, _ => false }},\n",
                 v = v.name
             ));
         } else {
@@ -4348,7 +4383,7 @@ fn enum_eq_body(name: &str, variants: &[VariantDef]) -> String {
             let b: Vec<String> = (0..k).map(|i| format!("b{i}")).collect();
             let cmp: Vec<String> = (0..k).map(|i| format!("a{i} == b{i}")).collect();
             arms.push_str(&format!(
-                "            {name}.{v}({a}) => match (otro) {{ {name}.{v}({b}) => {cmp}, _ => false }},\n",
+                "            {name}.{v}({a}) => match (other) {{ {name}.{v}({b}) => {cmp}, _ => false }},\n",
                 v = v.name, a = a.join(", "), b = b.join(", "), cmp = cmp.join(" && ")
             ));
         }
@@ -5093,11 +5128,11 @@ fn lower_try_expr(expr: &mut Expr, sites: &TryConvMap) {
             line: l, col: c,
         };
         // Rama Err: `Result.Err($te) => { return Result.Err(<from>($te)); }`.
-        let convertido = mk(ExprKind::Call {
+        let converted = mk(ExprKind::Call {
             callee: Box::new(mk(ExprKind::Ident(mangled))),
             args: vec![mk(ExprKind::Ident("$te".into()))],
         });
-        let err_val = mk(ExprKind::EnumLit { enum_name: "Result".into(), variant: "Err".into(), args: vec![convertido] });
+        let err_val = mk(ExprKind::EnumLit { enum_name: "Result".into(), variant: "Err".into(), args: vec![converted] });
         let ret_stmt = Stmt { kind: StmtKind::Return { value: Some(err_val) }, line: l, col: c };
         let arm_err = MatchArm {
             pattern: Pattern {
@@ -5692,7 +5727,7 @@ mod tests {
     }
 
     /// M45: etiquetas de `member_completion` sobre una fuente que YA lleva el centinela.
-    fn miembros(src: &str) -> Vec<String> {
+    fn members(src: &str) -> Vec<String> {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         let (mut prog, _) = crate::parser::parse_all(tokens);
         member_completion(&mut prog).into_iter().map(|m| m.label).collect()
@@ -5772,17 +5807,17 @@ mod tests {
     #[test]
     fn redefinir_builtin_es_error() {
         // M48.3: un builtin del núcleo (print/to_string/panic…) no puede redefinirse como función libre.
-        for nombre in ["print", "to_string", "panic"] {
-            let src = format!("fn {nombre}(x: int) -> int {{ x }}\nfn main() -> int {{ 0 }}");
+        for name in ["print", "to_string", "panic"] {
+            let src = format!("fn {name}(x: int) -> int {{ x }}\nfn main() -> int {{ 0 }}");
             let e = check_src(&src).unwrap_err();
-            assert!(format!("{e}").contains(&format!("'{nombre}' es un builtin del lenguaje")),
-                "redefinir {nombre}: {e}");
+            assert!(format!("{e}").contains(&format!("'{name}' es un builtin del lenguaje")),
+                "redefinir {name}: {e}");
         }
         // M48.4e: los builtins de contenedor RETIRADOS (len/push/… → ahora métodos de trait) dejaron el
         // namespace libre → una función libre con ese nombre YA es legal (el footgun no dispara).
-        for nombre in ["len", "push", "insert", "keys", "reverse", "contains", "split", "chars"] {
-            let src = format!("fn {nombre}(x: int) -> int {{ x }}\nfn main() -> int {{ {nombre}(1) }}");
-            assert!(check_src(&src).is_ok(), "'{nombre}' como función libre ahora debe compilar");
+        for name in ["len", "push", "insert", "keys", "reverse", "contains", "split", "chars"] {
+            let src = format!("fn {name}(x: int) -> int {{ x }}\nfn main() -> int {{ {name}(1) }}");
+            assert!(check_src(&src).is_ok(), "'{name}' como función libre ahora debe compilar");
         }
         // Una función del PRELUDE (map/filter/fold/sort) SÍ puede redefinirse (override).
         assert!(check_src("fn map(x: int) -> int { x + 1 }\nfn main() -> int { map(5) }").is_ok());
@@ -5836,21 +5871,21 @@ mod tests {
     fn member_completion_campos_metodos_y_builtins() {
         // Struct: campos + método de trait + UFCS del usuario; kinds correctos.
         let src = "struct P { x: int, y: int }\ntrait Ver { fn ver(self) -> int; }\nimpl Ver for P { fn ver(self) -> int { self.x } }\nfn doblar(p: P) -> int { p.x }\nfn main() -> int { let p = P { x: 1, y: 2 }; p.__raycomplete__; 0 }\n";
-        let m = miembros(src);
-        for esperado in ["x", "y", "ver", "doblar"] {
-            assert!(m.contains(&esperado.to_string()), "falta '{esperado}': {m:?}");
+        let m = members(src);
+        for expected in ["x", "y", "ver", "doblar"] {
+            assert!(m.contains(&expected.to_string()), "falta '{expected}': {m:?}");
         }
         // string: builtins de string, sin funciones de E/S sobre una ruta string.
-        let s = miembros("fn main() -> int { let s = \"h\"; s.__raycomplete__; 0 }");
+        let s = members("fn main() -> int { let s = \"h\"; s.__raycomplete__; 0 }");
         assert!(s.contains(&"trim".to_string()) && s.contains(&"split".to_string()), "{s:?}");
         assert!(!s.contains(&"read_file".to_string()), "sin E/S sobre string: {s:?}");
         // array: builtins + orden superior del prelude.
-        let a = miembros("fn main() -> int { let xs = [1,2,3]; xs.__raycomplete__; 0 }");
-        for esperado in ["len", "push", "map", "filter", "fold", "sort"] {
-            assert!(a.contains(&esperado.to_string()), "array falta '{esperado}': {a:?}");
+        let a = members("fn main() -> int { let xs = [1,2,3]; xs.__raycomplete__; 0 }");
+        for expected in ["len", "push", "map", "filter", "fold", "sort"] {
+            assert!(a.contains(&expected.to_string()), "array falta '{expected}': {a:?}");
         }
         // receptor sin tipo conocido → sin miembros (sin pánico).
-        assert!(miembros("fn main() -> int { desconocido.__raycomplete__; 0 }").is_empty());
+        assert!(members("fn main() -> int { desconocido.__raycomplete__; 0 }").is_empty());
     }
 
     /// Atajo: ¿el mensaje de error contiene esta subcadena?
@@ -5946,10 +5981,10 @@ struct Q { n: int }
     #[test]
     fn bound_struct_propaga_a_funcion_generica() {
         // Construir Caja<U> exige que U lleve el bound: sin él, error; con él, OK.
-        let malo = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn env<U>(x: U) -> Caja<U> {{ Caja {{ v: x }} }}\nfn main() -> int {{ 0 }}\n", BOUND_PRELUDE);
-        err_contains(&malo, "requiere que 'T' sea 'Show2'");
-        let bueno = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn env<U: Show2>(x: U) -> Caja<U> {{ Caja {{ v: x }} }}\nfn main() -> int {{ 0 }}\n", BOUND_PRELUDE);
-        check_src(&bueno).expect("con U: Show2 la propagación se satisface");
+        let bad = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn env<U>(x: U) -> Caja<U> {{ Caja {{ v: x }} }}\nfn main() -> int {{ 0 }}\n", BOUND_PRELUDE);
+        err_contains(&bad, "requiere que 'T' sea 'Show2'");
+        let good = format!("{}struct Caja<T: Show2> {{ v: T }}\nfn env<U: Show2>(x: U) -> Caja<U> {{ Caja {{ v: x }} }}\nfn main() -> int {{ 0 }}\n", BOUND_PRELUDE);
+        check_src(&good).expect("con U: Show2 la propagación se satisface");
     }
 
     #[test]
@@ -6788,10 +6823,10 @@ fn main() -> int {
     #[test]
     fn trait_e_impl_validos() {
         check_src(r#"
-            trait Mostrable { fn mostrar(self) -> string; }
+            trait Mostrable { fn show(self) -> string; }
             struct Punto { x: int, y: int }
-            impl Mostrable for Punto { fn mostrar(self) -> string { "p" } }
-            fn main() -> int { let p = Punto { x: 1, y: 2 }; print(p.mostrar()); 0 }
+            impl Mostrable for Punto { fn show(self) -> string { "p" } }
+            fn main() -> int { let p = Punto { x: 1, y: 2 }; print(p.show()); 0 }
         "#).expect("trait/impl válidos");
     }
 
@@ -7059,9 +7094,9 @@ fn main() -> int {
     fn bound_metodo_fuera_del_trait() {
         err_contains(
             r#"trait Valor { fn valor(self) -> int; }
-               fn usar<T: Valor>(x: T) -> int { x.otro() }
+               fn usar<T: Valor>(x: T) -> int { x.other() }
                fn main() -> int { 0 }"#,
-            "no existe campo ni función 'otro'",
+            "no existe campo ni función 'other'",
         );
     }
 
@@ -7238,7 +7273,7 @@ fn main() -> int {
                 let p = Punto { x: 1, y: 2 };
                 let c = Color.Rojo;
                 let f = Forma.Rect(1, 2);
-                if (p.igual(p)) { 0 } else { 1 }
+                if (p.eq(p)) { 0 } else { 1 }
             }
         "#).expect("@derive(Eq) para struct y enum (unit y con payload)");
     }
@@ -7248,7 +7283,7 @@ fn main() -> int {
         check_src(r#"
             @derive(Eq)
             enum Color { Rojo, Verde }
-            fn iguales<T: Eq>(a: T, b: T) -> bool { a.igual(b) }
+            fn iguales<T: Eq>(a: T, b: T) -> bool { a.eq(b) }
             fn main() -> int { if (iguales(Color.Rojo, Color.Rojo)) { 0 } else { 1 } }
         "#).expect("un tipo derivado satisface el bound T: Eq");
     }
@@ -7280,7 +7315,7 @@ fn main() -> int {
             struct Etiqueta { nombre: string, donde: Punto, color: Color }
             fn main() -> int {
                 let e = Etiqueta { nombre: "o", donde: Punto { x: 1, y: 2 }, color: Color.Rojo };
-                print(e.mostrar());
+                print(e.show());
                 0
             }
         "#).expect("@derive(Show) para struct, enum y struct anidado");
@@ -7291,7 +7326,7 @@ fn main() -> int {
         check_src(r#"
             @derive(Eq, Show)
             struct P { x: int }
-            fn main() -> int { if (P { x: 1 }.igual(P { x: 1 })) { 0 } else { 1 } }
+            fn main() -> int { if (P { x: 1 }.eq(P { x: 1 })) { 0 } else { 1 } }
         "#).expect("@derive(Eq, Show) genera ambos impls");
     }
 

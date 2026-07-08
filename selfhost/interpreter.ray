@@ -781,7 +781,7 @@ fn key_lt(a: Value, b: Value) -> bool {
 }
 
 // Orden `<` de Ord sobre los primitivos comparables (int/float/string/char). Lo usa el fallback de
-// `.menor()` en el despacho (M14.6c-2); a diferencia de `key_lt` (claves de Map) cubre también float.
+// `.less()` en el despacho (M14.6c-2); a diferencia de `key_lt` (claves de Map) cubre también float.
 // `pub`: la VM (M14.5d) lo reusa en su despacho dinámico.
 pub fn value_lt(a: Value, b: Value) -> bool {
     match (a) {
@@ -1219,17 +1219,17 @@ fn dispatch_method(c: Interp, recv: Value, fname: string, args: [Expr], line: in
     // (c) @derive: igual ≡ igualdad estructural, mostrar ≡ representación (= value_str). El checker
     // garantiza que solo se llaman sobre tipos con Eq/Show, así que el tipo deriva (o tiene impl, ya
     // resuelto en (b)) → aquí solo queda el caso derivado.
-    if (fname == "igual") {
+    if (fname == "eq") {
         let vals = eval_args(c, args)?;
         return Result.Ok(Value.VBool(values_equal(recv, vals[0])));
     }
-    if (fname == "mostrar") {
+    if (fname == "show") {
         return Result.Ok(Value.VStr(value_str(recv)));
     }
     // `menor` de Ord sobre PRIMITIVOS (impl del prelude `impl Ord for int/float/string/char`, vía `<`).
     // Un tipo de usuario con `impl Ord` ya se resolvió en (b); el checker exige `T: Ord`, así que aquí
     // solo llegan esos cuatro primitivos. (M14.6c-2: lo que `sort` necesita.)
-    if (fname == "menor") {
+    if (fname == "less") {
         let vals = eval_args(c, args)?;
         return Result.Ok(Value.VBool(value_lt(recv, vals[0])));
     }

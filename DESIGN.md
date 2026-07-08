@@ -1146,20 +1146,20 @@ por defecto, e integración limpia con UFCS y genéricos.
 
 ```rust
 trait Mostrable {
-    fn mostrar(self) -> string;       // firma: cuerpo ausente, termina en ';'
+    fn show(self) -> string;       // firma: cuerpo ausente, termina en ';'
 }
 
 struct Punto { x: int, y: int }
 
 impl Mostrable for Punto {
-    fn mostrar(self) -> string {       // 'self' es el Punto receptor
+    fn show(self) -> string {       // 'self' es el Punto receptor
         "punto"
     }
 }
 
 fn main() -> int {
     let p = Punto { x: 1, y: 2 };
-    print(p.mostrar());                // UFCS: resuelve al método del impl
+    print(p.show());                // UFCS: resuelve al método del impl
     0
 }
 ```
@@ -1236,7 +1236,7 @@ VM↔intérprete sigue valiendo sin tocar `vm.rs`.
 ### 18.6 M9.2 — Bounds de genéricos (paso de diccionarios)
 
 Un *bound* acota un parámetro de tipo: `fn imprimir_todo<T: Mostrable>(xs: [T])` permite
-llamar `x.mostrar()` dentro del cuerpo, porque `T` **garantiza** implementar `Mostrable`. El
+llamar `x.show()` dentro del cuerpo, porque `T` **garantiza** implementar `Mostrable`. El
 reto es que, con **erasure**, `T` no existe en runtime: hay **un solo cuerpo** compilado
 para todos los `T`, así que dentro del genérico no se puede "elegir la función en tiempo de
 chequeo". Tres salidas clásicas: paso de diccionarios, monomorfización y despacho por tipo
@@ -1257,15 +1257,15 @@ funciones del impl. raylang ya sabe pasar funciones como valores, así que un bo
    método con `Self → T` (p. ej. `fn(T) -> string`).
 
    ```rust
-   fn imprimir<T: Mostrable>(x: T) { ... x.mostrar() ... }
+   fn imprimir<T: Mostrable>(x: T) { ... x.show() ... }
            │
            ▼  (parámetro oculto añadido en el checker)
    fn imprimir<T>(x: T, «T#Mostrable#mostrar»: fn(T) -> string) { ... }
    ```
 
-2. **Llamada de método sobre `T`.** Dentro del cuerpo, `x.mostrar()` con `x: T` acotado se
+2. **Llamada de método sobre `T`.** Dentro del cuerpo, `x.show()` con `x: T` acotado se
    resuelve al **parámetro-diccionario** y se baja como una llamada a ese valor función:
-   `x.mostrar()` → `«T#Mostrable#mostrar»(x)`. Reusa exactamente el lowering de UFCS/M9.1
+   `x.show()` → `«T#Mostrable#mostrar»(x)`. Reusa exactamente el lowering de UFCS/M9.1
    (el destino registrado es el nombre del diccionario en vez de un `Tipo#metodo`).
 
 3. **Sitio de llamada.** Al llamar `imprimir(p)`, la inferencia ya calcula `σ` (M6); con él
@@ -1316,7 +1316,7 @@ implementar un trait para un **constructor de tipos** —toda una familia `Caja<
 ```rust
 impl<T> Contar for Caja<T> { fn contar(self) -> int { 1 } }      // para cualquier T
 impl<T: Mostrable> Mostrable for Caja<T> {                       // si T es Mostrable
-    fn mostrar(self) -> string { self.contenido.mostrar() }
+    fn show(self) -> string { self.contenido.show() }
 }
 ```
 
@@ -1334,7 +1334,7 @@ eso:
 - el `self` se tipa sustituyendo `Self → Caja<T>` (con `T` como `Var`, no concreto).
 
 **Resolución de instancia.** La clave de la tabla de métodos sigue siendo el **constructor**
-(`type_key_of(Caja<T>) = "Caja"`). Por eso `caja.mostrar()` con `caja: Caja<int>` despacha a
+(`type_key_of(Caja<T>) = "Caja"`). Por eso `caja.show()` con `caja: Caja<int>` despacha a
 `Caja#mostrar`; como ahora es genérica, `check_generic_call` infiere `T=int` y el sitio registra
 el diccionario interno que necesita. *Alcance:* solo impls **plenamente genéricos** (los args del
 objetivo son exactamente los parámetros de tipo del impl: `Caja<T>`, no `Caja<int>`), **un impl
@@ -1344,7 +1344,7 @@ por `(constructor, trait)`** — sin instancias solapadas ni especializadas (se 
 genérico acotado, su diccionario ya **no es una función plana**:
 
 ```rust
-fn imprime<X: Mostrable>(x: X) { ... x.mostrar() ... }
+fn imprime<X: Mostrable>(x: X) { ... x.show() ... }
 imprime(caja)        // caja: Caja<int>; σ: X = Caja<int>
 ```
 
@@ -1538,7 +1538,7 @@ entre los traits del conjunto son error (no se sabría a cuál despachar).
 - **Instancias solapadas/especializadas** (`impl Trait for Caja<int>` junto a `Caja<T>`) → futuro
   (coherencia/especialización; research-grade, no se hará a la ligera).
 - **Traits con `Self` en posición de argumento** que exija dos receptores del mismo tipo
-  (p. ej. `fn igual(self, otro: Self) -> bool`) → soportado por M9.1 (ambos = destino), pero
+  (p. ej. `fn eq(self, otro: Self) -> bool`) → soportado por M9.1 (ambos = destino), pero
   sin la garantía de igualdad estructural que daría un trait `Eq` del prelude (futuro).
 
 ## 19. M10 — Tooling: anotaciones y LSP
@@ -1583,12 +1583,12 @@ ejecuta. **Cero cambios** en checker/intérprete por el runner (solo la validaci
 
 **`@derive(Eq)`** — sobre un struct/enum **no genérico**, genera su `impl Eq`. Es el "pago"
 de M9: una anotación que **genera código** sobre traits. Mecánica:
-- El prelude aporta `trait Eq { fn igual(self, otro: Self) -> bool; }` (inyectado como los
+- El prelude aporta `trait Eq { fn eq(self, otro: Self) -> bool; }` (inyectado como los
   enums/funciones del prelude; se salta si el usuario define `Eq`).
 - Por cada tipo con `@derive(Eq)`, el checker **sintetiza un `ImplBlock`** `impl Eq for T`
-  con el método `igual`, y lo añade a `program.impls`. **El resto lo hace M9** (la bajada de
+  con el método `eq`, y lo añade a `program.impls`. **El resto lo hace M9** (la bajada de
   M9.1 lo convierte en `T#igual`, etc.): `@derive` solo *genera el AST del impl*.
-- El cuerpo de `igual`:
+- El cuerpo de `eq`:
   - **struct**: conjunción de los campos, `self.f1 == otro.f1 && … && self.fn == otro.fn`
     (struct sin campos → `true`).
   - **enum**: `match` sobre `self`; por cada variante, `match` sobre `otro`: misma variante
@@ -1600,18 +1600,18 @@ de M9: una anotación que **genera código** sobre traits. Mecánica:
   anidados se difiere). `@derive(Eq)` sobre un tipo **genérico** también se difiere (M9.1 no
   admite impls genéricos).
 
-> **Por qué `igual` y no `==` para enums.** `==` ya compara structs estructuralmente, pero
+> **Por qué `eq` y no `==` para enums.** `==` ya compara structs estructuralmente, pero
 > **no** enums (pueden ser recursivos / portar funciones; §M5). `@derive(Eq)` da una
-> igualdad **explícita** (`a.igual(b)`) para enums, demostrando codegen sobre traits sin
+> igualdad **explícita** (`a.eq(b)`) para enums, demostrando codegen sobre traits sin
 > tocar la semántica de `==` (sobrecarga de operadores queda fuera de alcance).
 
 **`@derive(Show)`** (limpieza post-M11, L2) — sobre un struct/enum **no genérico**, genera su
-`impl Show` con `mostrar(self) -> string` (trait `Show { fn mostrar(self) -> string; }` en el
+`impl Show` con `show(self) -> string` (trait `Show { fn show(self) -> string; }` en el
 prelude). Misma mecánica que `@derive(Eq)` (sintetiza el `ImplBlock`, lo baja M9); se generaliza
 `generate_derives`/`validate_derive` para ambos traits, y `@derive(Eq, Show)` genera los dos. El
-cuerpo de `mostrar` renderiza por tipo de cada campo/payload: primitivos vía `to_string`;
-struct/enum vía `mostrar()` recursivo (los anidados deben implementar Show). A diferencia de `Eq`,
-**Show sí funciona para enums recursivos** (la recursión está en los datos, no impide `mostrar()`).
+cuerpo de `show` renderiza por tipo de cada campo/payload: primitivos vía `to_string`;
+struct/enum vía `show()` recursivo (los anidados deben implementar Show). A diferencia de `Eq`,
+**Show sí funciona para enums recursivos** (la recursión está en los datos, no impide `show()`).
 Se difieren campos de tipo arreglo/función/etc. (error claro) y los tipos genéricos. Formato:
 `Nombre { campo: v, … }` para structs, `Nombre.Variante(v0, …)` para enums.
 
@@ -2172,7 +2172,7 @@ arreglos (idiomático, estilo Rust `Iterator::position`).
 - **M11.7c — I/O**: `remove_file(ruta) -> Result<int,string>` y `list_dir(ruta) ->
   Result<[string],string>` (arreglo etiquetado + envoltorio; no deterministas → integración por
   subproceso, no oráculo).
-- **M11.7d — sort**: trait **`Ord`** en el prelude (`fn menor(self, otro: Self) -> bool`), impl para
+- **M11.7d — sort**: trait **`Ord`** en el prelude (`fn less(self, otro: Self) -> bool`), impl para
   `int`/`float`/`string`/`char`, y `sort<T: Ord>(a: [T]) -> [T]` **escrito en raylang** (reusa bounds/
   diccionarios de M9.2 + `len`/`push`/índice): **front-end puro, cero opcodes nuevos**.
 
@@ -2550,8 +2550,8 @@ expuesto al usuario.
   la llamada — en el intérprete se intercepta en `eval_call` (devuelve `Flow::Error`); en la VM es el
   opcode `Panic` (saca el string, retorna `Err`). Ambos motores dan el **mismo mensaje** ⇒ oráculo
   (`panic_y_assert_falla_oraculo`). Sobre él, en el **prelude (raylang puro)**: `assert(cond)`
-  (mensaje genérico) y `assert_eq<T: Eq + Show>(a, b)` (mensaje con ambos valores, vía `.igual()` +
-  `.mostrar()`; los bounds se bajan a diccionarios M9.2). **Sin sobrecarga** en raylang, así que en
+  (mensaje genérico) y `assert_eq<T: Eq + Show>(a, b)` (mensaje con ambos valores, vía `.eq()` +
+  `.show()`; los bounds se bajan a diccionarios M9.2). **Sin sobrecarga** en raylang, así que en
   vez de `assert(cond)` + `assert(cond, msg)` se ofrece `assert` + `assert_eq` + `panic("…")` directo
   para el mensaje a medida. Habilitadores: (1) `impl Eq`/`impl Show` para los **primitivos** en el
   prelude (faltaban; los pide `assert_eq`); (2) **`panic` diverge** (`expr_diverges` reconoce la
@@ -2938,12 +2938,12 @@ Es la fase más grande del proyecto; serán varios commits por sub-fase. Tras el
 - **M14.3d-4c COMPLETO — M14.3d COMPLETO — M14.3 COMPLETO** — `@derive` + Eq/Show/Ord + anotaciones.
   `inject_prelude_traits` registra los traits `Eq`/`Show`/`Ord` (firmas) y sus impls para primitivos
   (`int#igual`, `int#mostrar`, …, en `methods`+`impl_traits`). **`@derive(Eq, Show)`** (`generate_derives`/
-  `validate_derive`): sobre struct/enum no genérico, registra los métodos derivados (`igual`/`mostrar`) +
+  `validate_derive`): sobre struct/enum no genérico, registra los métodos derivados (`eq`/`show`) +
   `impl_traits` (idempotente: no pisa un impl existente); NO genera/chequea el cuerpo (es codegen
   conocido → un campo no derivable, p. ej. función, no se detecta: limitación). **`check_annotations`**:
   `@test` solo en funciones `() -> bool`/`() -> unit` (sin args/params), `@derive` solo en tipos, otras
   son desconocidas (mensajes byte-idénticos). Así un tipo derivado satisface `T: Eq` y responde a
-  `.igual()`/`.mostrar()`. Oráculo: 6 válidos + 8 errores + `anotaciones.ray`. **El checker auto-alojado
+  `.eq()`/`.show()`. Oráculo: 6 válidos + 8 errores + `anotaciones.ray`. **El checker auto-alojado
   valida el LENGUAJE COMPLETO** (núcleo + datos + genéricos + traits/impls/bounds/dyn + prelude + derive),
   con veredicto byte-idéntico a Rust sobre 22 ejemplos reales + ~80 casos. Diferidos (no en el corpus):
   `Map` en el checker, satisfacción de bounds anidada profunda, posición de cuerpos de defecto inválidos,
@@ -3101,7 +3101,7 @@ Tras el intérprete, el self-hosting está **cerrado** (raylang lexea/parsea/che
   `struct Method { params, body }`), poblado por `register_methods` desde los `impl` del programa más los
   **métodos por defecto** del trait no redefinidos. `dispatch_method(recv, fname, args)` resuelve por
   orden: (a) **campo-función** del struct (gana sobre UFCS), (b) **método** (clave
-  `type_key_of_value(recv) + "#" + fname`), (c) **`@derive`** (`igual` ≡ `values_equal`, `mostrar` ≡
+  `type_key_of_value(recv) + "#" + fname`), (c) **`@derive`** (`eq` ≡ `values_equal`, `show` ≡
   `value_str` —el checker garantiza Eq/Show, así que (b) cubre los impls explícitos y aquí solo queda el
   caso derivado, sin leer la anotación—), (d) **UFCS** a función libre `fname(recv, args)`, (e) **builtin
   como método** (`xs.len()`). **Consecuencias elegantes**: **bounds y genéricos son no-ops** (`x.m()`
@@ -3187,12 +3187,12 @@ diferido aditivo (fila en el checker + impl en el intérprete, como M11.4).
   `inject_prelude_fns`: `assert(bool)`, `assert_eq<T: Eq + Show>(T, T)`, `sort<T: Ord>([T]) -> [T]` (los
   bounds resuelven contra los traits + impls de primitivos ya registrados en M14.3d-4c). Sus **cuerpos**
   (port de `src/prelude.rs`) van a `selfhost/prelude.ray` (fusionados por el driver, chequeados por ambos
-  pipelines). El punto delicado: `sort` usa `x.menor(out[j-1])` (Ord) y el intérprete-validador omitió el
-  lowering de diccionarios → el intérprete resuelve **`.menor()` sobre primitivos por fallback** en
-  `dispatch_method` (junto a `igual`/`mostrar`; helper `value_lt` para int/float/string/char). Un tipo de
+  pipelines). El punto delicado: `sort` usa `x.less(out[j-1])` (Ord) y el intérprete-validador omitió el
+  lowering de diccionarios → el intérprete resuelve **`.less()` sobre primitivos por fallback** en
+  `dispatch_method` (junto a `eq`/`show`; helper `value_lt` para int/float/string/char). Un tipo de
   usuario con `impl Ord` se resuelve antes, por la tabla de métodos (`Tipo#menor`), así que el fallback
   solo ve los cuatro primitivos —exactamente lo que el checker garantiza vía `T: Ord`—. `assert_eq` reusa
-  el fallback de `igual`/`mostrar`. Oráculo: intérprete (22 tests: `sort` de int/string/float, tipo de
+  el fallback de `eq`/`show`. Oráculo: intérprete (22 tests: `sort` de int/string/float, tipo de
   usuario con `impl Ord`, `assert`/`assert_eq` ok y `assert_eq` que falla → exit 70, + **`examples/data/mapa.ray`**
   que estaba diferido por `assert_eq`/`assert` en M14.6b); checker (25 tests: válidos + error de bound
   `sort` sin Ord, byte-idéntico). **M14.6c COMPLETO** (`panic` + `parse_int`/`parse_float` + `assert`/
@@ -3375,12 +3375,12 @@ cortocircuito, locales, if/while, llamadas nombradas, recursión, builtins escal
   `CProgram.methods` (`Tipo#metodo → índice`, clave por constructor vía `type_key_of_type`: `Caja<T>`→"Caja", un
   impl genérico cubre la familia). `CProgram` lleva además `indices` (función libre → índice) para la UFCS. La
   VM resuelve en `resolve_dispatch` (espejo de `dispatch_method`): (a) campo-función del struct (gana, sin
-  anteponer el receptor) → (b) método de la tabla (antepone `self`) → (c) `@derive` `igual`≡`values_equal`,
-  `mostrar`≡`value_str` y `menor` de Ord sobre primitivos≡`value_lt` (todos reusados del intérprete, hechos
+  anteponer el receptor) → (b) método de la tabla (antepone `self`) → (c) `@derive` `eq`≡`values_equal`,
+  `show`≡`value_str` y `less` de Ord sobre primitivos≡`value_lt` (todos reusados del intérprete, hechos
   `pub`) → (d) UFCS a función libre (`indices`) → (e) builtin como método (`dispatch_builtin`). Devuelve un
   `Dispatch` (`DFrame(idx, args, cells)` apila marco / `DValue(v)` empuja valor) para separar la resolución de
   la acción y NO usar `return` dentro del bucle de la VM. **Prelude completo fusionado** en `run_vm.ray` (como
-  `run.ray`): map/filter/fold (indirectas, M14.5c) + sort/assert_eq (métodos `.menor()`/`.igual()`/`.mostrar()`
+  `run.ray`): map/filter/fold (indirectas, M14.5c) + sort/assert_eq (métodos `.less()`/`.eq()`/`.show()`
   por `ODispatch`) ya compilan. Gotcha reusado (M14.6a): un `match` con todas las ramas divergentes no tipa en
   el checker de Rust → el `match` interno del caso (a) cede un valor en el brazo normal. Oráculo conductual =
   corpus de despacho del intérprete (`ufcs`/`traits`/`bounds`/`metodos_por_defecto`/`impls_genericos`/
@@ -3398,7 +3398,7 @@ cortocircuito, locales, if/while, llamadas nombradas, recursión, builtins escal
   así la recursión de cola corre en O(1) marcos. A diferencia de Rust —que solo tiene `TailCall`/
   `TailCallValue` porque sus métodos se bajan a `Call`—, aquí también hay `OTailDispatch` (los métodos/UFCS van
   por `ODispatch`): reutiliza el marco si el despacho resuelve a una función (campo-función/método/UFCS), o
-  empuja el valor si es directo (`@derive`/`menor` primitivo/builtin) y deja que el `OReturn` siguiente lo
+  empuja el valor si es directo (`@derive`/`less` primitivo/builtin) y deja que el `OReturn` siguiente lo
   retorne. El compilador ya emite el patrón llamada→`Return` de forma natural (rama-else cae al `Return` final,
   un `return e` lo emite tras `e`), así que basta reconocerlo. Gotcha: el `Option.None` del peephole no infería
   su `T` (la inferencia no cruza del `then` al `else` del `if`) → se anotó `let nuevo: Option<Op>`. Verificado:
@@ -4384,7 +4384,7 @@ Lo que más limpia el código existente y futuro. Toca lexer/parser/checker/ambo
   mansalva) siguen siendo **literales sin escape** (las llaves ya no necesitan `{{`/`}}`); solo `${` debe
   escaparse, con `\$`. Esto da la ergonomía de "interpolar sin recordar prefijo" sin la fragilidad del `{`
   siempre-especial de Python. Cualquier tipo con `to_string` (primitivos/string); para structs, interpolar un
-  campo o `.mostrar()`. Ambos motores lo ven como concatenación (cero cambios de runtime). Verificado en el
+  campo o `.show()`. Ambos motores lo ven como concatenación (cero cambios de runtime). Verificado en el
   oráculo (`interpolacion_oraculo`: `${}`, `$` literal, `\$`, llaves literales) + tests del lexer
   (`interpolacion_de_cadenas`) + ejemplo `basics/interpolacion.ray`. Excluido del oráculo de self-hosting.
 - **M27.4 Casts numéricos** ✅ (`x as int` / `y as float` / `c as int` / `n as char`). Cierra el papercut de
@@ -5482,7 +5482,7 @@ loader para módulos no-entrada).
 sobre `@derive(Hash)` + `Eq` (`T` implementa ambos; los bounds se bajan a diccionarios, M9.2). API con
 prefijo `set_` (para no chocar con builtins ya tomados: `contains`/`insert`/`remove`): `set_new`,
 `set_add`, `set_has`, `set_remove`, `set_size`, `set_items`. `s.set_add(x)` por UFCS. Nº de buckets fijo
-(sin resize aún). Deduplica por `.igual()`; el índice de bucket es `x.hash()` normalizado.
+(sin resize aún). Deduplica por `.eq()`; el índice de bucket es `x.hash()` normalizado.
 
 Habilitador: **inferencia bidireccional en llamadas genéricas** (M40.3b). `set_new() -> Set<T>` es un
 constructor **vacío**: `T` no aparece en los argumentos, así que antes no se podía inferir (`let s:
@@ -6439,7 +6439,7 @@ signature-help de `math.X`); dos tests de hover pasaron a un builtin conservado 
 
 Cierra `std/math`. Las polimórficas y las constantes dejan de ser builtins y pasan a `std/math` como
 **raylang puro** (sin opcode): `min`/`max` genéricos sobre el trait **`Ord`** (`fn min<T: Ord>(a: T, b: T)
--> T { if (a.menor(b)) { a } else { b } }` → sirve int/float/string/char); `abs` sobre un trait nuevo
+-> T { if (a.less(b)) { a } else { b } }` → sirve int/float/string/char); `abs` sobre un trait nuevo
 **`Signed { fn abs(self) -> Self; }`** con `impl` para int/float (cuerpos puros) y `fn abs<T: Signed>(x:
 T) -> T { x.abs() }`; `pi`/`e` como **funciones nularias** (`math.pi()`). **Se podan los opcodes**
 `Abs`/`Min`/`Max`/`Pi`/`E` (+ sus arms en VM/intérprete y las reglas `numeric_*_check`) → el runtime
@@ -6588,3 +6588,175 @@ suites que corren los archivos migrados: `http`/`redis`/`postgres`/`grpc`/`http2
 `websocket`/`dns`/`oauth2`/`scram`/`sigv4`/…). **M50.3 COMPLETO. M50 COMPLETO** (fs + collections + net):
 el namespace global queda con los esenciales (`Option`/`Result`+`?`, `map`/`filter`/`fold`, `print`/
 `eprint`/`panic`/`assert`/`assert_eq`, `to_string`, `close`, `input`/`read_int`/`env`) + los primitivos `__x`.
+
+## 53. Política de tiers de librerías (gobernanza del ecosistema)
+
+Toda capacidad de raylang que no sea del **núcleo del lenguaje** (sintaxis, checker, motores) vive en uno
+de **tres tiers**. Esta sección fija *dónde* va cada cosa y *cómo se promueve* — la regla era implícita
+(se aplicó a lo largo de M40/M49/M50); aquí queda explícita para que futuras decisiones sean consistentes.
+
+### 53.1 Los tres tiers
+
+1. **stdlib embebida (`std/`)** — módulos compilados en el binario base (`include_str!` en `src/stdlib.rs`,
+   tabla `MODULES`). Cero instalación: `import std/math;` siempre funciona. Es la promesa de "baterías
+   incluidas" y su API se versiona **con el lenguaje** (compromiso de estabilidad). Coste: cada módulo
+   embebido es peso en **todos** los binarios, aunque no se use.
+
+2. **paquetes adicionales (`packages/<pkg>/`, y externos)** — **no** embebidos. Se traen por `ray.toml`
+   (dep por `path:`/git; §41.7–41.8, y por nombre desde el índice cuando exista §54). Se apoyan en `std/`
+   para lo fundacional. Cada paquete versiona su API con su **propio** semver, independiente del lenguaje.
+   Hoy existe `packages/net` (red y protocolos). Ejemplo de uso idéntico al de `std/`: `import net/http;`.
+
+3. **`examples/`** — implementaciones de referencia y demos (`*_demo.ray`). **Material pedagógico**, no
+   pensado para importarse desde un proyecto real. Muchos son el espejo didáctico de un módulo ya promovido
+   a los tiers 1/2 (p. ej. `examples/stdlib/regex.ray` refleja `std/regex`).
+
+### 53.2 Criterios de colocación (en orden de prioridad)
+
+1. **Universalidad** — ¿lo necesitaría la mayoría de programas? Sí → candidato a `std/`. Nicho → paquete.
+2. **Peso e independencia** — ¿sería peso muerto en el binario de quien no lo use, o depende de
+   sockets/TLS/servicios externos? → paquete. (Es la razón de que todo el stack de red viva en `packages/net`
+   y no en el binario base.)
+3. **Estabilidad de API** — `std/` implica estabilidad atada al versionado del lenguaje (§39). Algo que
+   aún itera su superficie → paquete primero (su semver absorbe los cambios sin tocar el del lenguaje).
+4. **Superficie de seguridad** — cripto que toca **secretos reales** va en un paquete respaldado por `ring`
+   (tiempo constante, auditado: `net/crypto`), **no** en la impl pura embebida; la versión en raylang puro
+   se queda como **demo** del lenguaje (correcta, pero sobre la VM interpretada no garantiza resistencia a
+   canales laterales). Regla ya vigente (M43; ver `packages/net/README.md`).
+5. **Determinismo/pureza** — no decide el tier, pero orienta el *testing*: un módulo puro se verifica con el
+   **oráculo** (ambos motores); uno con I/O no determinista, por **subproceso** (`*_cli`).
+
+### 53.3 El ciclo de vida de un addon (pipeline de promoción)
+
+`examples/` (prototipo/demo) → si madura y pasa los criterios → **`std/`** (universal, ligero, estable) o
+**`packages/<pkg>/`** (nicho, pesado, o de API propia). La promoción a paquete reescribe los `import` del
+prototipo a `std/` (lo fundacional embebido) y añade sus tests distribuibles; la demo original **se conserva**
+en `examples/` como material del lenguaje. Un módulo puede además **degradarse** (deprecación → salir de `std/`
+a un paquete, o retirarse), lo que en `std/` exige un cambio de versión mayor del lenguaje.
+
+### 53.4 Clasificación actual (snapshot)
+
+- **`std/` (embebida):** `math`, `text`, `fs`, `sort`, `random`, `time`, `collections/{set,deque,stringbuilder}`,
+  `crypto`, `hex`, `url`, `uuid`, `json`, `csv`, `toml`, `template`, `regex`, `deflate`/`inflate`/`huffman`,
+  `protobuf`, `net` (transporte básico sobre los builtins de socket).
+- **`packages/net` (adicional):** `http`/`http2`/`webserver`, `websocket`(+cliente), `dns`/`dns_cache`, `udp`,
+  `redis`, `postgres`, `grpc_client`, `oauth2`, `jwt`/`jwt_eddsa`, `sigv4`, `scram`, `cookie`, `hpack`, `metrics`,
+  `log`, `time`, `crypto` (respaldo `ring`).
+- **Solo `examples/` (aún sin promover):** `framework` (mini-framework web) — candidato natural a un futuro
+  paquete `web` (o a `packages/net`); los servidores de eco (`websocket_echo`, `wss_echo`) **se quedan** como
+  demos (son aplicaciones, no librerías). Las impls de cripto puro (`sha*`, `hmac`, `ed25519`, `chacha20`,
+  `poly1305`, `base64`) permanecen como demos: su versión de producción es `net/crypto`.
+
+## 54. M51 — Registro central de paquetes y `ray publish` (arco C, DISEÑO)
+
+El gestor de paquetes (M39c) resuelve dependencias por **git** (`git+URL@ref`) y por **ruta** (`path:dir`):
+para instalar hay que conocer y escribir la URL exacta. Falta la última pieza de "ecosistema": **instalar por
+nombre** (`ray add foo`) contra un **índice** compartido, y **publicar** (`ray publish`) para poblarlo. Es la
+brecha nº1 que `PRODUCCION.md` (Parte I §2) marca como "flexible en el lenguaje, ❌ en el ecosistema".
+
+### 54.1 Decisión central: un índice **respaldado por git**, sin servidor propio
+
+Coherente con la filosofía del proyecto (cero dependencias de Cargo salvo TLS; *shell out* a `git`; tests
+deterministas *offline*): el "registro" **no** es un servicio web que operemos, sino un **repositorio git**
+que mapea `nombre → metadatos` (URL del código + versiones publicadas + hash de contenido). Es el modelo del
+*crates.io-index* (un repo git) o del enfoque proxy-less de Go, recortado. Ventajas:
+
+- **Reusa toda la maquinaria existente**: el índice solo aporta el `nombre → (git URL, hash)`; la descarga,
+  la cápsula (M39c-1), el lock/verificación (M39c-2b), el BFS transitivo y el MVS (M39c-3) son los mismos.
+- **Sin infraestructura que mantener** (ni cuentas, ni base de datos, ni *uptime*): alojar el índice es
+  *hostear un repo git*. Cualquiera puede tener el suyo; no baked-in un índice por defecto en v1.
+- **Confianza = git + hash**: la integridad la sigue dando `ray.lock` (SHA-256 por versión, M39c-2b);
+  el índice añade solo el **descubrimiento por nombre**. Sin tokens en v1: publicar = *commitear* al repo
+  del índice (quien controle el repo controla el namespace; anti-squatting es política del repo, no del CLI).
+
+Alternativa descartada: **índice hospedado** (servidor + API + auth). Contradice de raíz el "sin servidor";
+además su valor (búsqueda web, cuentas, firmas) es ortogonal y se puede añadir después sobre el mismo índice git.
+
+### 54.2 Formato del índice y del `ray.toml` por nombre
+
+- **Índice** = repo git con **un archivo por paquete** (`index/<nombre>.toml`; el subconjunto de TOML de
+  `manifest.rs`). Cada archivo lista versiones **inmutables** y **ordenadas**:
+  ```toml
+  [[version]]
+  num  = "1.2.0"
+  git  = "git+https://ejemplo/foo@v1.2.0"   # de dónde sale el código de ESA versión
+  hash = "<sha256 del contenido>"            # el mismo hash Merkle de M39c-2b
+  yanked = false                              # M51c: retirada sin borrar (como crates.io)
+  ```
+  Publicar **añade** una entrada (append-only); una versión ya publicada **no se sobrescribe** (build
+  reproducible). El hash permite verificar sin volver a clonar.
+- **`ray.toml` por nombre**: `foo = "1.2.0"` (una cadena de versión **sin** prefijo `git+`/`path:`) significa
+  "resuélvelo por el índice". El resolutor busca `foo` en el índice, elige la versión (semver), saca su
+  `git`+`hash` y **delega en la descarga git+lock existente**. Convive con `git+`/`path:` (que siguen para
+  deps no publicadas / desarrollo local).
+
+### 54.3 Prerrequisito: rangos semver de verdad
+
+El índice hace que un nombre mapee a **muchas** versiones → hay que **elegir**. Hoy las specs son refs
+**exactas** (M39c dejó "rangos de verdad" como diferido). M51 los necesita: `foo = "^1.2"` (compatible),
+`"~1.2.3"`, `"1.2.0"` (exacta). Se extiende `semver`/`mvs` (§41.6) para casar un **requisito** contra las
+versiones del índice y elegir la mayor compatible (MVS: la mínima que satisface, subiendo en conflicto).
+
+### 54.4 Subcomandos nuevos
+
+- **`ray add <nombre>[@<req>]`** — resuelve `<req>` (o la última) en el índice, **escribe** la dep en
+  `ray.toml` y hace `fetch`. El azúcar de instalación que hoy falta.
+- **`ray publish`** — desde un proyecto: **valida** (tiene `name`/`version` en su `ray.toml`, es importable
+  —`mod.ray`/raíz—, **compila** con `ray build`), calcula el **hash de contenido** (`deps::hash_package`,
+  reusado de M39c-2b) y **genera la entrada de versión** para el índice. Publicar de verdad = *commit* +
+  *push* al repo del índice (acción del autor, con sus credenciales git); el CLI produce/aplica el commit
+  sobre un clon del índice. Rechaza sobrescribir una versión existente.
+- **`ray update`** (M51c) — recomputa el lock a las versiones más nuevas que aún satisfagan los requisitos.
+- **`ray yank <nombre>@<ver>`** (M51c) — marca `yanked = true` (un commit al índice); la resolución **salta**
+  las yanked salvo que el `ray.lock` ya las hubiera fijado (no rompe builds existentes).
+
+### 54.5 Fases
+
+- **M51a — leer del índice + `ray add` + rangos semver. ✅ COMPLETO.** `src/index.rs`: `VersionReq`
+  (exacta `1.2.0`/`=`, caret `^`, tilde `~`, `*`; regla de cargo para caret con `0.x`) + lector del
+  índice (`<index>/<nombre>.toml`, secciones `[<versión>]` con `git`/`hash`/`yanked`, mismo subconjunto
+  TOML que `manifest.rs`) + `resolve`/`latest` (elige la **más alta no retirada** que casa). El índice
+  se localiza por `RAY_INDEX` o `[registry] index` del `ray.toml` (`Manifest.registry_index`; un índice
+  **remoto git** aún no, avisa → M51c). `deps::ensure` resuelve las specs por nombre vía el índice
+  (`to_gitspec`, tanto directas como transitivas) y **delega en la descarga git + lock existente** —el
+  lock guarda la `git URL@ref` resuelta, sin cambios de formato—. `ray add <nombre>[@<req>]`
+  (`manifest::upsert_dependency`, edición mínima del `ray.toml`): sin versión escribe `^<latest>`, con
+  versión respeta el requisito; valida contra el índice **antes** de tocar el manifiesto. Tests: unit
+  (`index.rs`: parseo/casado de reqs, lectura/resolución; `manifest.rs`: upsert) + integración
+  **offline** (`tests/registry_cli.rs`: índice local + repos git `file://`; dep por nombre, `ray add`
+  con/sin versión, caret elige la mayor, paquete inexistente, falta de índice). **Cero runtime.**
+  Limitación (→ M51c): re-resuelve del índice en cada `ensure` (no fija la versión resuelta en el lock),
+  así un caret podría subir si el índice gana una versión; con índice fijo (tests) es determinista.
+- **M51b — `ray publish`. ✅ COMPLETO.** `ray publish [--repo <git+URL@ref>]`: valida (name+version semver;
+  la cara del paquete —`mod.ray` en la raíz, o la entrada— lexea+parsea), calcula el **hash de contenido**
+  (`deps::hash_package`) y **añade** la entrada de versión al índice vía `index::append_version`
+  (append-only, **inmutable**: rechaza sobrescribir una versión ya publicada). La spec git de dónde vive
+  el código: `--repo`, o **derivada** del remoto `origin` del repo + el tag `v<version>` (que debe existir
+  → se publica un punto fijo). El `ray publish` **no** hace commit/push del repo del índice —eso es acción
+  del autor—. Probado *offline* con un bare repo local + `origin` (`tests/registry_cli.rs`): publicar,
+  inmutabilidad al republicar, un consumidor que resuelve por nombre lo publicado, y el error claro si
+  falta el tag.
+- **M51c — índice remoto + mantenimiento. ✅ COMPLETO. → M51 COMPLETO.** (1) **Índice remoto por git**:
+  `[registry] index = "git+<URL>[@ref]"` (o `RAY_INDEX`) se **clona/cachea** en `.ray-deps/.index`
+  (`ensure_index_clone`; clona si falta, no re-clona en cada resolución) y se usa como dir local. (2)
+  **Reproducibilidad (lock-pinning)**: `resolve_pinned` reusa la versión ya bloqueada si sigue satisfaciendo
+  el requisito → un caret no sube solo porque el índice gane una versión; se cierra la limitación de M51a.
+  (3) **`ray update`** (`deps::update`): refresca el índice (`git pull`) y **re-resuelve** a la más alta
+  compatible ignorando el lock; requirió que `ensure` **re-descargue cuando el disco (según el lock) no
+  es la versión elegida** —antes no refrescaba `.ray-deps/<dep>` si existía, un bug latente que solo se
+  manifiesta al cambiar de versión entre ejecuciones—. (4) **`ray yank <n>@<v> [--undo]`**
+  (`index::set_yanked`): marca una versión como retirada (no se elige en nuevas resoluciones; un lock que
+  ya la fijó la sigue usando). Tests offline (`tests/registry_cli.rs`): índice git `file://` clonado, lock
+  que fija la versión + `update` que la sube, yank que excluye y `--undo` que restaura.
+
+### 54.6 Testing (offline y determinista, como M39c)
+
+El índice de prueba es un **repo git local** servido por `file://` (`git init` + archivos `index/*.toml` +
+paquetes-repo con tags). `ray add`/`ray fetch`/`ray publish` operan sobre él sin red; `publish` commitea la
+entrada y una segunda resolución la usa. Reusa `deps_cli`/`cli_cli`. **Cero runtime nuevo**: todo es
+resolución en el front-end/CLI; los motores nunca ven un paquete.
+
+### 54.7 Diferido (fuera de M51)
+
+Búsqueda/UI web del índice; cuentas y **firmas de publicación** (estilo sigstore) sobre el hash ya existente;
+mirrors/proxy; *namespaces* con dueño; `ray.lock` con el propio índice como fuente (hoy fija el commit git).

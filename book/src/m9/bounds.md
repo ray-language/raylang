@@ -5,29 +5,29 @@ M9.1 resuelve `recv.metodo()` cuando se conoce el tipo concreto del receptor. Pe
 
 ```rust
 fn imprimir_todo<T>(xs: [T]) {
-    // ... xs[0].mostrar() ...   // ERROR: ¿qué es T? ¿sabe 'mostrar'?
+    // ... xs[0].show() ...   // ERROR: ¿qué es T? ¿sabe 'mostrar'?
 }
 ```
 
-El checker no puede permitir `xs[0].mostrar()`: `T` podría ser cualquier cosa, y no toda
+El checker no puede permitir `xs[0].show()`: `T` podría ser cualquier cosa, y no toda
 cosa sabe mostrarse. Un **bound** arregla esto: acota `T` a los tipos que implementan un
 trait.
 
 ```rust
 fn imprimir_todo<T: Mostrable>(xs: [T]) {
-    // ... xs[0].mostrar() ...   // OK: T: Mostrable lo garantiza
+    // ... xs[0].show() ...   // OK: T: Mostrable lo garantiza
 }
 ```
 
 Ahora `imprimir_todo` sirve para **cualquier** tipo con un `impl Mostrable` —`Punto`, `int`,
-los que vengan— y el checker acepta `.mostrar()` porque el bound es una promesa: quien llame
+los que vengan— y el checker acepta `.show()` porque el bound es una promesa: quien llame
 debe pasar un `T` que cumpla.
 
 ## El problema del *erasure*
 
 Aquí choca con una invariante del proyecto. Desde M6, los genéricos son **erasure**: `T` se
 borra antes de ejecutar y hay **una sola copia** compilada de `imprimir_todo`, para todos
-los `T`. Pero entonces, en runtime, ¿qué función concreta es `.mostrar()`? La de `Punto`
+los `T`. Pero entonces, en runtime, ¿qué función concreta es `.show()`? La de `Punto`
 suma sus campos; la de `int` se devuelve a sí mismo. Con `T` borrado, el cuerpo único no
 sabe a cuál llamar.
 
@@ -42,7 +42,7 @@ Lo que el bound aporta es "saber cómo llamar los métodos del trait para `T`". 
 valores (M4). Así que un bound se baja a **parámetros ocultos de tipo función**:
 
 ```text
-fn imprimir<T: Mostrable>(x: T) { ... x.mostrar() ... }
+fn imprimir<T: Mostrable>(x: T) { ... x.show() ... }
         │
         ▼  (el checker añade un parámetro oculto)
 fn imprimir<T>(x: T, «T#Mostrable#mostrar»: fn(T) -> string) {
@@ -54,7 +54,7 @@ Dos reescrituras coordinadas, ambas en el front-end:
 
 1. La función gana un parámetro función por cada método del trait acotado. Su nombre lleva
    `#` para no chocar con nada que el usuario pueda escribir.
-2. La llamada de método `x.mostrar()` se baja a una llamada a ese parámetro:
+2. La llamada de método `x.show()` se baja a una llamada a ese parámetro:
    `«T#Mostrable#mostrar»(x)`. (Es el mismo *lowering* de UFCS/M9.1; solo cambia el destino.)
 
 ## Quién llena el diccionario: el sitio de llamada

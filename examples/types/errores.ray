@@ -19,7 +19,7 @@ fn evaluar(a: int, b: int, c: int) -> Result<int, string> {
 }
 
 // Consumir un Result con match (no hay forma de "olvidar" el caso de error).
-fn mostrar(r: Result<int, string>) -> int {
+fn show(r: Result<int, string>) -> int {
     match (r) {
         Result.Ok(v) => v,
         Result.Err(_) => -1,
@@ -32,14 +32,14 @@ fn primero(xs: [int]) -> Option<int> {
 }
 
 fn main() -> int {
-    print(mostrar(evaluar(100, 5, 2)));  // 100/5=20, 20/2=10 -> Ok(11)  -> 11
-    print(mostrar(evaluar(100, 0, 2)));  // Err en el primer paso        -> -1
-    print(mostrar(evaluar(100, 5, 0)));  // Err en el segundo paso       -> -1
+    print(show(evaluar(100, 5, 2)));  // 100/5=20, 20/2=10 -> Ok(11)  -> 11
+    print(show(evaluar(100, 0, 2)));  // Err en el primer paso        -> -1
+    print(show(evaluar(100, 5, 0)));  // Err en el segundo paso       -> -1
 
     match (primero([7, 8, 9])) {
         Option.Some(v) => print(v),  // 7
         Option.None => print(-1),
     }
 
-    mostrar(evaluar(100, 5, 2))  // código de salida 11
+    show(evaluar(100, 5, 2))  // código de salida 11
 }

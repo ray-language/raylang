@@ -35,12 +35,12 @@ enum Result<T, E> {
 
 // Igualdad estructural (M10.1). `@derive(Eq)` genera el `impl` para un struct/enum.
 // Usa `Self` en posición de argumento, así que no es invocable sobre un `dyn Eq`
-// (object safety): se compara entre valores concretos, `a.igual(b)`.
+// (object safety): se compara entre valores concretos, `a.eq(b)`.
 /// Structural equality between two values of the same concrete type.
 /// Derivable with `@derive(Eq)`; not object-safe (uses `Self` as an argument).
 trait Eq {
     /// Returns true when `self` and `otro` are structurally equal.
-    fn igual(self, otro: Self) -> bool;
+    fn eq(self, other: Self) -> bool;
 }
 
 // Representación textual (limpieza post-M11, L2). `@derive(Show)` genera el `impl` para un
@@ -48,31 +48,31 @@ trait Eq {
 /// Textual representation of a value. Derivable with `@derive(Show)`; object-safe (`dyn Show`).
 trait Show {
     /// Returns a human-readable string representation of `self`.
-    fn mostrar(self) -> string;
+    fn show(self) -> string;
 }
 
-// Orden total (M11.7d): `self < otro`. Lo usa `sort`. Los primitivos lo implementan vía el
+// Orden total (M11.7d): `self < other`. Lo usa `sort`. Los primitivos lo implementan vía el
 // operador `<` (extendido a string/char en M11.7d); un tipo del usuario lo implementa a mano.
-/// Total ordering (`self < otro`). Used by `sort`; primitives implement it via the `<` operator.
+/// Total ordering (`self < other`). Used by `sort`; primitives implement it via the `<` operator.
 trait Ord {
     /// Returns true when `self` orders strictly before `otro`.
-    fn menor(self, otro: Self) -> bool;
+    fn less(self, other: Self) -> bool;
 }
 
 impl Ord for int {
-    fn menor(self, otro: int) -> bool { self < otro }
+    fn less(self, other: int) -> bool { self < other }
 }
 
 impl Ord for float {
-    fn menor(self, otro: float) -> bool { self < otro }
+    fn less(self, other: float) -> bool { self < other }
 }
 
 impl Ord for string {
-    fn menor(self, otro: string) -> bool { self < otro }
+    fn less(self, other: string) -> bool { self < other }
 }
 
 impl Ord for char {
-    fn menor(self, otro: char) -> bool { self < otro }
+    fn less(self, other: char) -> bool { self < other }
 }
 
 // Longitud (M48.4): número de elementos/caracteres/entradas/octetos de una colección. Los tipos
@@ -173,22 +173,22 @@ trait StrOps {
     fn trim(self) -> string;
     /// Splits by a separator into parts.
     fn split(self, sep: string) -> [string];
-    /// Replaces every occurrence of `de` with `a`.
-    fn replace(self, de: string, a: string) -> string;
+    /// Replaces every occurrence of `old` with `new`.
+    fn replace(self, old: string, new: string) -> string;
     /// The characters of the string.
     fn chars(self) -> [char];
-    /// Whether the string starts with `prefijo`.
-    fn starts_with(self, prefijo: string) -> bool;
-    /// Whether the string ends with `sufijo`.
-    fn ends_with(self, sufijo: string) -> bool;
+    /// Whether the string starts with `prefix`.
+    fn starts_with(self, prefix: string) -> bool;
+    /// Whether the string ends with `suffix`.
+    fn ends_with(self, suffix: string) -> bool;
     /// The string in uppercase.
     fn to_upper(self) -> string;
     /// The string in lowercase.
     fn to_lower(self) -> string;
-    /// The substring `[inicio, fin)` by character index (clamped).
-    fn substring(self, inicio: int, fin: int) -> string;
-    /// The string repeated `veces` times.
-    fn repeat(self, veces: int) -> string;
+    /// The substring `[start, end)` by character index (clamped).
+    fn substring(self, start: int, end: int) -> string;
+    /// The string repeated `times` times.
+    fn repeat(self, times: int) -> string;
     /// The UTF-8 encoding of the string.
     fn to_bytes(self) -> bytes;
 }
@@ -198,21 +198,21 @@ impl StrOps for string {
 
     fn split(self, sep: string) -> [string] { __split(self, sep) }
 
-    fn replace(self, de: string, a: string) -> string { __replace(self, de, a) }
+    fn replace(self, old: string, new: string) -> string { __replace(self, old, new) }
 
     fn chars(self) -> [char] { __chars(self) }
 
-    fn starts_with(self, prefijo: string) -> bool { __starts_with(self, prefijo) }
+    fn starts_with(self, prefix: string) -> bool { __starts_with(self, prefix) }
 
-    fn ends_with(self, sufijo: string) -> bool { __ends_with(self, sufijo) }
+    fn ends_with(self, suffix: string) -> bool { __ends_with(self, suffix) }
 
     fn to_upper(self) -> string { __to_upper(self) }
 
     fn to_lower(self) -> string { __to_lower(self) }
 
-    fn substring(self, inicio: int, fin: int) -> string { __substring(self, inicio, fin) }
+    fn substring(self, start: int, end: int) -> string { __substring(self, start, end) }
 
-    fn repeat(self, veces: int) -> string { __repeat(self, veces) }
+    fn repeat(self, times: int) -> string { __repeat(self, times) }
 
     fn to_bytes(self) -> bytes { __to_bytes(self) }
 }
@@ -220,12 +220,12 @@ impl StrOps for string {
 // Operaciones de bytes (M48.4d): un solo impl (`bytes`).
 /// Bytes operations: slice by octet index.
 trait BytesOps {
-    /// The byte slice `[inicio, fin)` by octet index (clamped).
-    fn sub_bytes(self, inicio: int, fin: int) -> bytes;
+    /// The byte slice `[start, end)` by octet index (clamped).
+    fn sub_bytes(self, start: int, end: int) -> bytes;
 }
 
 impl BytesOps for bytes {
-    fn sub_bytes(self, inicio: int, fin: int) -> bytes { __sub_bytes(self, inicio, fin) }
+    fn sub_bytes(self, start: int, end: int) -> bytes { __sub_bytes(self, start, end) }
 }
 
 // Hash (M40.3a): un valor hashable produce un `int`. `@derive(Hash)` lo genera para un struct/enum
@@ -272,7 +272,7 @@ impl Hash for string {
 /// Conversion from a value of type `S` into `Self`, via the associated function `desde`.
 /// The `?` operator uses it to auto-convert error types when an `impl From<E1> for E2` exists.
 trait From<S> {
-    fn desde(origen: S) -> Self;
+    fn desde(source: S) -> Self;
 }
 
 // Iteración (M40.2): un tipo que implemente `Iterator<T>` produce una secuencia de `T` — `next`
@@ -296,7 +296,7 @@ trait Iterator<T> {
     /// Lazily transforms each element with `f`, yielding an `Iter<U>`.
     /// Nothing is computed until the result is consumed.
     fn map<U>(self, f: fn(T) -> U) -> Iter<U> {
-        Iter { paso: fn() -> Option<U> {
+        Iter { step: fn() -> Option<U> {
     match (self.next()) {
         Option.Some(x) => Option.Some(f(x)),
         Option.None => Option.None,
@@ -307,19 +307,19 @@ trait Iterator<T> {
     // hasta el próximo que pasa el filtro (o `None` si se agota).
     /// Lazily keeps only the elements for which `pred` returns true.
     fn filter(self, pred: fn(T) -> bool) -> Iter<T> {
-        Iter { paso: fn() -> Option<T> {
+        Iter { step: fn() -> Option<T> {
     var res: Option<T> = Option.None;
-    var seguir = true;
-    while (seguir) {
+    var keep_going = true;
+    while (keep_going) {
         match (self.next()) {
             Option.Some(x) => {
                 if (pred(x)) {
                     res = Option.Some(x);
-                    seguir = false;
+                    keep_going = false;
                 }
             },
             Option.None => {
-                seguir = false;
+                keep_going = false;
             },
         }
     }
@@ -330,12 +330,12 @@ trait Iterator<T> {
     // consumir el resto del origen (útil sobre iteradores infinitos/largos).
     /// Lazily yields at most the first `n` elements, then stops without consuming the rest of the source.
     fn take(self, n: int) -> Iter<T> {
-        var restantes = n;
-        Iter { paso: fn() -> Option<T> {
-    if (restantes <= 0) {
+        var remaining = n;
+        Iter { step: fn() -> Option<T> {
+    if (remaining <= 0) {
         Option.None
     } else {
-        restantes = restantes - 1;
+        remaining = remaining - 1;
         self.next()
     }
 } }
@@ -344,10 +344,10 @@ trait Iterator<T> {
     // primera llamada a `next` (el contador capturado se agota una vez).
     /// Lazily discards the first `n` elements and yields the rest.
     fn skip(self, n: int) -> Iter<T> {
-        var saltar = n;
-        Iter { paso: fn() -> Option<T> {
-    while (saltar > 0) {
-        saltar = saltar - 1;
+        var to_skip = n;
+        Iter { step: fn() -> Option<T> {
+    while (to_skip > 0) {
+        to_skip = to_skip - 1;
         self.next();
     }
     self.next()
@@ -356,12 +356,12 @@ trait Iterator<T> {
     // Perezoso: empareja este iterador con `otra` posición a posición en tuplas `(T, U)`; se agota
     // cuando cualquiera de los dos lo hace. `otra` ha de ser un `Iter<U>` (los adaptadores devuelven
     // `Iter`; un iterador de usuario se convierte con `.map(...)` o similar). Método genérico sobre `U`.
-    /// Lazily pairs this iterator with `otra`, position by position, into `(T, U)` tuples;
+    /// Lazily pairs this iterator with `other`, position by position, into `(T, U)` tuples;
     /// stops as soon as either side is exhausted.
-    fn zip<U>(self, otra: Iter<U>) -> Iter<(T, U)> {
-        Iter { paso: fn() -> Option<(T, U)> {
+    fn zip<U>(self, other: Iter<U>) -> Iter<(T, U)> {
+        Iter { step: fn() -> Option<(T, U)> {
     match (self.next()) {
-        Option.Some(a) => match (otra.next()) {
+        Option.Some(a) => match (other.next()) {
             Option.Some(b) => Option.Some((a, b)),
             Option.None => Option.None,
         },
@@ -374,12 +374,12 @@ trait Iterator<T> {
     /// Lazily pairs each element with its index, yielding `(int, T)` tuples starting at 0.
     fn enumerate(self) -> Iter<(int, T)> {
         var i = 0;
-        Iter { paso: fn() -> Option<(int, T)> {
+        Iter { step: fn() -> Option<(int, T)> {
     match (self.next()) {
         Option.Some(x) => {
-            let par = (i, x);
+            let pair = (i, x);
             i = i + 1;
-            Option.Some(par)
+            Option.Some(pair)
         },
         Option.None => Option.None,
     }
@@ -392,14 +392,14 @@ trait Iterator<T> {
     /// and returns the final accumulator.
     fn fold<A>(self, init: A, f: fn(A, T) -> A) -> A {
         var acc: A = init;
-        var seguir = true;
-        while (seguir) {
+        var keep_going = true;
+        while (keep_going) {
             match (self.next()) {
                 Option.Some(x) => {
                     acc = f(acc, x);
                 },
                 Option.None => {
-                    seguir = false;
+                    keep_going = false;
                 },
             }
         }
@@ -410,14 +410,14 @@ trait Iterator<T> {
     /// Terminal: consumes the iterator and materializes its elements into a new array `[T]`.
     fn collect(self) -> [T] {
         var out: [T] = [];
-        var seguir = true;
-        while (seguir) {
+        var keep_going = true;
+        while (keep_going) {
             match (self.next()) {
                 Option.Some(x) => {
                     out.push(x);
                 },
                 Option.None => {
-                    seguir = false;
+                    keep_going = false;
                 },
             }
         }
@@ -426,25 +426,25 @@ trait Iterator<T> {
 }
 
 // `.iter()` sobre arreglos y `range` (M40.2b/c): iteradores de PRIMERA CLASE. La representación es
-// **un closure** `paso: fn() -> Option<T>` (type-erasure): un iterador ES una función con estado que
+// **un closure** `step: fn() -> Option<T>` (type-erasure): un iterador ES una función con estado que
 // entrega el siguiente elemento o `None`. Así `iter`/`range`/`map`/`filter` producen todos el MISMO
 // tipo `Iter<T>` y se encadenan sin bounds sobre traits parametrizados (que raylang no permite). El
 // estado (posición, cursor) vive en variables capturadas por el closure (mutadas por referencia).
-/// A first-class iterator: a closure `paso` that returns the next element or `None`.
+/// A first-class iterator: a closure `step` that returns the next element or `None`.
 /// `iter`, `range` and all the adapters (`map`, `filter`, ...) produce this same type.
 struct Iter<T> {
-    paso: fn() -> Option<T>,
+    step: fn() -> Option<T>,
 }
 
 impl<T> Iterator<T> for Iter<T> {
-    fn next(self) -> Option<T> { self.paso() }
+    fn next(self) -> Option<T> { self.step() }
 }
 
 // Iterador sobre los elementos del arreglo, en orden. `xs.iter()` == `iter(xs)` (UFCS).
 /// Returns an iterator over the elements of the array, in order. UFCS: `xs.iter()`.
 fn iter<T>(xs: [T]) -> Iter<T> {
     var i = 0;
-    Iter { paso: fn() -> Option<T> {
+    Iter { step: fn() -> Option<T> {
     if (i < xs.len()) {
         let v = xs[i];
         i = i + 1;
@@ -457,11 +457,11 @@ fn iter<T>(xs: [T]) -> Iter<T> {
 
 // Iterador sobre los enteros de `desde` (inclusivo) a `hasta` (exclusivo) — el `a..b` del `for`,
 // pero como valor de primera clase que se puede pasar, guardar, recorrer y encadenar con map/filter.
-/// Returns an iterator over the integers from `desde` (inclusive) to `hasta` (exclusive).
-fn range(desde: int, hasta: int) -> Iter<int> {
-    var i = desde;
-    Iter { paso: fn() -> Option<int> {
-    if (i < hasta) {
+/// Returns an iterator over the integers from `start` (inclusive) to `end` (exclusive).
+fn range(start: int, end: int) -> Iter<int> {
+    var i = start;
+    Iter { step: fn() -> Option<int> {
+    if (i < end) {
         let v = i;
         i = i + 1;
         Option.Some(v)
@@ -483,22 +483,22 @@ fn sum(it: Iter<int>) -> int {
 // operadores aritméticos. El checker baja `a + b` (con `a`/`b` de un tipo de usuario) a `a.add(b)`.
 /// Operator overloading: `a + b` on a user type dispatches to `a.add(b)`.
 trait Add {
-    fn add(self, otro: Self) -> Self;
+    fn add(self, other: Self) -> Self;
 }
 
 /// Operator overloading: `a - b` on a user type dispatches to `a.sub(b)`.
 trait Sub {
-    fn sub(self, otro: Self) -> Self;
+    fn sub(self, other: Self) -> Self;
 }
 
 /// Operator overloading: `a * b` on a user type dispatches to `a.mul(b)`.
 trait Mul {
-    fn mul(self, otro: Self) -> Self;
+    fn mul(self, other: Self) -> Self;
 }
 
 /// Operator overloading: `a / b` on a user type dispatches to `a.div(b)`.
 trait Div {
-    fn div(self, otro: Self) -> Self;
+    fn div(self, other: Self) -> Self;
 }
 
 /// Operator overloading: unary `-a` on a user type dispatches to `a.neg()`.
@@ -510,43 +510,43 @@ trait Neg {
 // general, cualquier genérico acotado por Eq/Show sobre un primitivo. Vía `==` y `to_string`, que
 // ya operan sobre int/float/bool/string/char. (Un tipo del usuario los obtiene con `@derive`.)
 impl Eq for int {
-    fn igual(self, otro: int) -> bool { self == otro }
+    fn eq(self, other: int) -> bool { self == other }
 }
 
 impl Eq for float {
-    fn igual(self, otro: float) -> bool { self == otro }
+    fn eq(self, other: float) -> bool { self == other }
 }
 
 impl Eq for string {
-    fn igual(self, otro: string) -> bool { self == otro }
+    fn eq(self, other: string) -> bool { self == other }
 }
 
 impl Eq for bool {
-    fn igual(self, otro: bool) -> bool { self == otro }
+    fn eq(self, other: bool) -> bool { self == other }
 }
 
 impl Eq for char {
-    fn igual(self, otro: char) -> bool { self == otro }
+    fn eq(self, other: char) -> bool { self == other }
 }
 
 impl Show for int {
-    fn mostrar(self) -> string { to_string(self) }
+    fn show(self) -> string { to_string(self) }
 }
 
 impl Show for float {
-    fn mostrar(self) -> string { to_string(self) }
+    fn show(self) -> string { to_string(self) }
 }
 
 impl Show for string {
-    fn mostrar(self) -> string { to_string(self) }
+    fn show(self) -> string { to_string(self) }
 }
 
 impl Show for bool {
-    fn mostrar(self) -> string { to_string(self) }
+    fn show(self) -> string { to_string(self) }
 }
 
 impl Show for char {
-    fn mostrar(self) -> string { to_string(self) }
+    fn show(self) -> string { to_string(self) }
 }
 
 // Ordena ascendente, devolviendo un arreglo NUEVO (insertion sort). `T` debe implementar `Ord`;
@@ -559,7 +559,7 @@ fn sort<T: Ord>(a: [T]) -> [T] {
         let x: T = a[i];
         out.push(x);
         var j: int = out.len() - 1;
-        while (j > 0 && x.menor(out[j - 1])) {
+        while (j > 0 && x.less(out[j - 1])) {
             out[j] = out[j - 1];
             j = j - 1;
         }
@@ -605,8 +605,8 @@ fn assert(cond: bool) {
 /// Panics showing both values if they are not equal.
 /// `T` must implement `Eq` (to compare) and `Show` (to display the values).
 fn assert_eq<T: Eq + Show>(a: T, b: T) {
-    if (!a.igual(b)) {
-        panic("assert_eq falló: " + a.mostrar() + " != " + b.mostrar());
+    if (!a.eq(b)) {
+        panic("assert_eq falló: " + a.show() + " != " + b.show());
     }
 }
 
@@ -681,8 +681,8 @@ fn recv<T>(ch: Channel<T>) -> Option<T> {
 
 // Valor de una variable de entorno; None si no está definida.
 /// Returns the value of an environment variable, or `None` if it is not set.
-fn env(nombre: string) -> Option<string> {
-    let r = __env(nombre);
+fn env(name: string) -> Option<string> {
+    let r = __env(name);
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 

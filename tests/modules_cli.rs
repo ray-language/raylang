@@ -202,7 +202,7 @@ fn tipos_por_modulo_reusan_nombre() {
     // Dos módulos definen `struct Node` y `enum Estado` (distintos) sin colisionar: los tipos se
     // namespacan por módulo (M11.3c). Cada uno usa los suyos (incl. @derive, match, construcción).
     let files = &[
-        ("a", "@derive(Show)\nstruct Node { v: int }\nenum Estado { On, Off }\npub fn f() -> int {\n  let n = Node { v: 7 };\n  let e = Estado.On;\n  print(n.mostrar());\n  match (e) { Estado.On => n.v + 100, Estado.Off => 0, }\n}\n"),
+        ("a", "@derive(Show)\nstruct Node { v: int }\nenum Estado { On, Off }\npub fn f() -> int {\n  let n = Node { v: 7 };\n  let e = Estado.On;\n  print(n.show());\n  match (e) { Estado.On => n.v + 100, Estado.Off => 0, }\n}\n"),
         ("main", "import a;\nstruct Node { propio: bool }\nfn main() -> int {\n  let n = Node { propio: true };\n  a.f()\n}\n"),
     ];
     for vm in [false, true] {

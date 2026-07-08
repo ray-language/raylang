@@ -19,12 +19,12 @@ use std::cell::RefCell;
 thread_local! {
     /// Buffer de salida del programa en curso (`print`/`eprint`). Se limpia al empezar cada `run` y se
     /// vuelca al final. En el navegador no hay stdout, así que ES la salida.
-    static SALIDA: RefCell<String> = const { RefCell::new(String::new()) };
+    static OUTPUT: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 /// Acumula una línea de `print` (la llama [`crate::host_print`] en wasm).
 pub fn push_stdout(s: &str) {
-    SALIDA.with(|o| {
+    OUTPUT.with(|o| {
         let mut b = o.borrow_mut();
         b.push_str(s);
         b.push('\n');
@@ -37,8 +37,8 @@ pub fn push_stderr(s: &str) {
 }
 
 /// Vacía y devuelve el buffer de salida acumulado.
-fn tomar_salida() -> String {
-    SALIDA.with(|o| std::mem::take(&mut *o.borrow_mut()))
+fn take_output() -> String {
+    OUTPUT.with(|o| std::mem::take(&mut *o.borrow_mut()))
 }
 
 /// Reserva `len` bytes en la memoria lineal del módulo y devuelve el puntero. JS escribe ahí el fuente
@@ -75,13 +75,13 @@ pub unsafe extern "C" fn run(src_ptr: *mut u8, src_len: usize) -> u64 {
         let v = unsafe { Vec::from_raw_parts(src_ptr, src_len, src_len) };
         String::from_utf8_lossy(&v).into_owned()
     };
-    SALIDA.with(|o| o.borrow_mut().clear());
+    OUTPUT.with(|o| o.borrow_mut().clear());
 
-    let salida = ejecutar_fuente(&src);
+    let output = run_source(&src);
 
     // Deja la salida en la memoria lineal y devuelve (ptr, len) empaquetados. `shrink_to_fit` fuerza
     // capacidad == longitud para que `dealloc` reconstruya el `Vec` con `(len, len)` sin UB.
-    let mut bytes = salida.into_bytes();
+    let mut bytes = output.into_bytes();
     bytes.shrink_to_fit();
     let len = bytes.len();
     let ptr = bytes.as_mut_ptr();
@@ -91,7 +91,7 @@ pub unsafe extern "C" fn run(src_ptr: *mut u8, src_len: usize) -> u64 {
 
 /// El pipeline del playground: lex → parse → check → VM, capturando la salida y renderizando cualquier
 /// error con contexto de fuente. Sin loader (un solo archivo; `import` daría un error de tipos claro).
-fn ejecutar_fuente(src: &str) -> String {
+fn run_source(src: &str) -> String {
     use crate::{checker, diagnostic, lexer, parser};
 
     let tokens = match lexer::lex(src) {
@@ -103,11 +103,11 @@ fn ejecutar_fuente(src: &str) -> String {
         Err(e) => return diagnostic::render(src, e.line, e.col, e.len, &e.to_string()),
     };
     if let Err(e) = checker::check(&mut program) {
-        return tomar_salida() + &diagnostic::render(src, e.line, e.col, e.len, &e.to_string());
+        return take_output() + &diagnostic::render(src, e.line, e.col, e.len, &e.to_string());
     }
     match crate::run_on_vm(&program) {
-        Ok(_) => tomar_salida(),
+        Ok(_) => take_output(),
         // Un error de ejecución no lleva `len`; subrayamos 1 columna.
-        Err(e) => tomar_salida() + &diagnostic::render(src, e.line, e.col, 1, &e.to_string()),
+        Err(e) => take_output() + &diagnostic::render(src, e.line, e.col, 1, &e.to_string()),
     }
 }

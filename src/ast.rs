@@ -734,8 +734,8 @@ fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
                 walk_expr(e, acc);
             }
         }
-        ExprKind::MapLit(pares) => {
-            for (k, v) in pares {
+        ExprKind::MapLit(pairs) => {
+            for (k, v) in pairs {
                 walk_expr(k, acc);
                 walk_expr(v, acc);
             }

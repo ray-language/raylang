@@ -611,9 +611,9 @@ impl<'a> Interpreter<'a> {
 
             // M48.2: literal de Map `[k: v, …]` (`[:]` vacío) → un Map con los pares insertados. Las
             // claves y valores se evalúan en orden; una clave repetida gana la última (como `insert`).
-            ExprKind::MapLit(pares) => {
+            ExprKind::MapLit(pairs) => {
                 let mut m = HashMap::new();
-                for (k, v) in pares {
+                for (k, v) in pairs {
                     let kv = self.eval_expr(k)?;
                     let vv = self.eval_expr(v)?;
                     m.insert(MapKey::from_value(&kv), vv);
@@ -963,9 +963,9 @@ impl<'a> Interpreter<'a> {
             "__values" => match &values[0] {
                 Value::Map(rc) => {
                     let m = rc.borrow();
-                    let mut pares: Vec<(&MapKey, &Value)> = m.iter().collect();
-                    pares.sort_by(|a, b| a.0.cmp(b.0));
-                    let elems: Vec<Value> = pares.iter().map(|(_, v)| (*v).clone()).collect();
+                    let mut pairs: Vec<(&MapKey, &Value)> = m.iter().collect();
+                    pairs.sort_by(|a, b| a.0.cmp(b.0));
+                    let elems: Vec<Value> = pairs.iter().map(|(_, v)| (*v).clone()).collect();
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
                 _ => unreachable!("el checker garantiza un Map"),
@@ -1379,9 +1379,9 @@ impl<'a> Interpreter<'a> {
             "__list_dir" => {
                 let arr = match &values[0] {
                     Value::Str(path) => match crate::builtins::list_dir(path) {
-                        Ok(nombres) => {
+                        Ok(names) => {
                             let mut v = vec![Value::Str("ok".to_string())];
-                            v.extend(nombres.into_iter().map(Value::Str));
+                            v.extend(names.into_iter().map(Value::Str));
                             v
                         }
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],

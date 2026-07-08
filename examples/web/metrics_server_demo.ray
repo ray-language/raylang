@@ -53,30 +53,30 @@ fn main() -> int {
     // El canal del actor de métricas (su id lo capturan todos los handlers → le envían a TODOS al mismo).
     let mch: Channel<MetricMsg> = Channel.new();
     spawn(fn() {
-    metrics_actor(reg, mch);
-});
+        metrics_actor(reg, mch);
+    });
 
     let r = serve("127.0.0.1", 8080, fn(req: Request) -> Response {
-    if (req.path == "/metrics") {
-        // Pide el render al actor por un canal de respuesta (todos los updates previos ya están
-        // encolados antes que este Render → cuentas correctas por el orden FIFO).
-        let reply: Channel<string> = Channel.new();
-        send(mch, MetricMsg.Render(reply));
-        match (recv(reply)) {
-            Option.Some(s) => metrics_response(s),
-            Option.None => metrics_response(""),
-        }
-    } else {
-        // El propio /metrics no se contabiliza (convención: el scrape no infla las métricas).
-        send(mch, MetricMsg.Inc("http_requests_total", labels2("method", req.method, "path", req.path)));
-        send(mch, MetricMsg.Observe("http_request_duracion_segundos", 0.008));  // duración simulada
-        if (req.path == "/") {
-            text(200, "hola desde raylang")
+        if (req.path == "/metrics") {
+            // Pide el render al actor por un canal de respuesta (todos los updates previos ya están
+            // encolados antes que este Render → cuentas correctas por el orden FIFO).
+            let reply: Channel<string> = Channel.new();
+            send(mch, MetricMsg.Render(reply));
+            match (recv(reply)) {
+                Option.Some(s) => metrics_response(s),
+                Option.None => metrics_response(""),
+            }
         } else {
-            not_found()
+            // El propio /metrics no se contabiliza (convención: el scrape no infla las métricas).
+            send(mch, MetricMsg.Inc("http_requests_total", labels2("method", req.method, "path", req.path)));
+            send(mch, MetricMsg.Observe("http_request_duracion_segundos", 0.008));  // duración simulada
+            if (req.path == "/") {
+                text(200, "hola desde raylang")
+            } else {
+                not_found()
+            }
         }
-    }
-});
+    });
     match (r) {
         Result.Ok(_) => 0,
         Result.Err(e) => {

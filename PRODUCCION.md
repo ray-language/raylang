@@ -51,8 +51,12 @@ PostgreSQL) sin tocar el runtime. La arquitectura de builtins (registro único L
 extender la frontera con el host.
 
 La **inflexibilidad está fuera del lenguaje**:
-- **Sin gestor de paquetes**: las "librerías" son archivos copiados de `examples/`. No hay
-  manifiesto, versiones, ni resolución de dependencias. Es el bloqueo nº 1 para cualquier adopción.
+- **Gestor de paquetes**: ✅ **resuelto en el arco C** (M39c): manifiesto `ray.toml`, dependencias git
+  (`git+URL@ref`) y por ruta (`path:`), caché-cápsula `.ray-deps/`, lockfile con hashes (supply-chain),
+  transitivas + MVS. Y el **modelo de tiers** (embebido `std/` vs paquete `packages/*` vs demo
+  `examples/`) quedó explícito (DESIGN §53). **Falta la última milla**: instalar **por nombre** desde un
+  **registro central** (`ray add`/`ray publish` contra un índice git) — diseñado como **M51** (DESIGN §54).
+  Hasta entonces, instalar = apuntar a una URL git o carpeta.
 - **Sin FFI**: la única vía de escape es escribir un builtin en Rust y recompilar el compilador.
   Producción necesita `extern fn` con frontera C documentada.
 - **Sin metaprogramación**: `@derive` es un conjunto cerrado (Eq, Show). Sin macros ni derive de

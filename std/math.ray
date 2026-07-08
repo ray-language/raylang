@@ -61,10 +61,10 @@ impl Signed for float {
 pub fn abs<T: Signed>(x: T) -> T { x.abs() }
 
 /// The smaller of `a` and `b` (any `Ord` type: int/float/string/char). Ties return `a`.
-pub fn min<T: Ord>(a: T, b: T) -> T { if (a.menor(b)) { a } else { b } }
+pub fn min<T: Ord>(a: T, b: T) -> T { if (a.less(b)) { a } else { b } }
 
 /// The larger of `a` and `b` (any `Ord` type). Ties return `a`.
-pub fn max<T: Ord>(a: T, b: T) -> T { if (b.menor(a)) { a } else { b } }
+pub fn max<T: Ord>(a: T, b: T) -> T { if (b.less(a)) { a } else { b } }
 
 /// Absolute value of `x`.
 pub fn iabs(x: int) -> int {
@@ -113,17 +113,17 @@ pub fn ipow(base: int, exp: int) -> int {
     if (exp < 0) {
         0
     } else {
-        var resultado = 1;
+        var result = 1;
         var b = base;
         var e = exp;
         while (e > 0) {
             if (e % 2 == 1) {
-                resultado = resultado * b;
+                result = result * b;
             }
             b = b * b;
             e = e / 2;
         }
-        resultado
+        result
     }
 }
 
@@ -148,13 +148,13 @@ pub fn is_prime(n: int) -> bool {
         false
     } else {
         var i = 2;
-        var primo = true;
-        while (i * i <= n && primo) {
+        var prime = true;
+        while (i * i <= n && prime) {
             if (n % i == 0) {
-                primo = false;
+                prime = false;
             }
             i = i + 1;
         }
-        primo
+        prime
     }
 }

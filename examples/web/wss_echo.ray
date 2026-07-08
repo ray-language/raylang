@@ -8,7 +8,7 @@
 // Imprime el puerto efímero en la primera línea.
 import websocket;
 import std/net;
-import std/fs; // M50.1: read_file (cert/clave) vive en std/fs.
+import std/fs;  // M50.1: read_file (cert/clave) vive en std/fs.
 
 // Lee una tanda y la devuelve como string (UTF-8) para parsear la petición de upgrade.
 fn leer_texto(conn: int) -> Result<string, string> {

@@ -4,12 +4,12 @@
 // (los bounds se bajan a diccionarios, M9.2). Con leaf-binding (`import std/collections/set;`) las
 // operaciones se usan calificadas: `set.new()`/`set.add(s, x)`/`set.has(s, x)`/… `set.new()` es un
 // constructor vacío: su `T` lo fija el tipo esperado (inferencia bidireccional en la llamada). Nº de
-// buckets fijo (sin resize aún). Los helpers `bucket`/`en_bucket` no son `pub` (internos).
+// buckets fijo (sin resize aún). Los helpers `bucket`/`in_bucket` no son `pub` (internos).
 /// A hash set of `T`, backed by buckets. `T` must implement `Hash` and `Eq`.
 /// Import with `import std/collections/set;` and operate on it with `set.new`, `set.add`, `set.has`, …
 pub struct Set<T> {
     buckets: [[T]],
-    tam: int,
+    count: int,
 }
 
 /// Creates an empty set. The element type is fixed by the expected type at the call site.
@@ -21,7 +21,7 @@ pub fn new<T>() -> Set<T> {
         bs.push(e);
         i = i + 1;
     }
-    Set { buckets: bs, tam: 0 }
+    Set { buckets: bs, count: 0 }
 }
 
 // Índice de bucket de `x` (hash módulo nº de buckets, normalizado a 0..n aunque el hash sea negativo).
@@ -33,10 +33,10 @@ fn bucket<T: Hash>(x: T, n: int) -> int {
 
 // ¿Está `x` en el bucket `b`? Búsqueda lineal por igualdad (`Eq`).
 /// Internal helper: linear search for `x` in bucket `b` using `Eq`; true if present.
-fn en_bucket<T: Eq>(b: [T], x: T) -> bool {
+fn in_bucket<T: Eq>(b: [T], x: T) -> bool {
     var i = 0;
     while (i < b.len()) {
-        if (b[i].igual(x)) {
+        if (b[i].eq(x)) {
             return true;
         }
         i = i + 1;
@@ -49,9 +49,9 @@ fn en_bucket<T: Eq>(b: [T], x: T) -> bool {
 pub fn add<T: Hash + Eq>(s: Set<T>, x: T) {
     let idx = bucket(x, s.buckets.len());
     let b = s.buckets[idx];
-    if (!en_bucket(b, x)) {
+    if (!in_bucket(b, x)) {
         b.push(x);
-        s.tam = s.tam + 1;
+        s.count = s.count + 1;
     }
 }
 
@@ -59,7 +59,7 @@ pub fn add<T: Hash + Eq>(s: Set<T>, x: T) {
 /// Returns true if `x` is a member of the set.
 pub fn has<T: Hash + Eq>(s: Set<T>, x: T) -> bool {
     let idx = bucket(x, s.buckets.len());
-    en_bucket(s.buckets[idx], x)
+    in_bucket(s.buckets[idx], x)
 }
 
 // Quita `x` del conjunto (si estaba). Muta `s` reconstruyendo el bucket sin `x`.
@@ -67,26 +67,26 @@ pub fn has<T: Hash + Eq>(s: Set<T>, x: T) -> bool {
 pub fn remove<T: Hash + Eq>(s: Set<T>, x: T) {
     let idx = bucket(x, s.buckets.len());
     let b = s.buckets[idx];
-    var nuevo: [T] = [];
+    var out: [T] = [];
     var i = 0;
-    var quitado = false;
+    var removed = false;
     while (i < b.len()) {
-        if (b[i].igual(x)) {
-            quitado = true;
+        if (b[i].eq(x)) {
+            removed = true;
         } else {
-            nuevo.push(b[i]);
+            out.push(b[i]);
         }
         i = i + 1;
     }
-    if (quitado) {
-        s.buckets[idx] = nuevo;
-        s.tam = s.tam - 1;
+    if (removed) {
+        s.buckets[idx] = out;
+        s.count = s.count - 1;
     }
 }
 
 // Número de elementos del conjunto.
 /// Returns the number of elements in the set.
-pub fn size<T>(s: Set<T>) -> int { s.tam }
+pub fn size<T>(s: Set<T>) -> int { s.count }
 
 // Los elementos del conjunto en un arreglo (orden no especificado — por bucket).
 /// Returns the elements of the set as an array (order unspecified — by bucket).

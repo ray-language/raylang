@@ -15,6 +15,11 @@ A diferencia del **prelude** (que se inyecta automáticamente en cada programa: 
 `map`/`filter`/`fold`, `Iterator`, …), la `std/` es **opcional**: solo se carga lo que se importa. (Las
 colecciones `Set`/`Deque`/`StringBuilder` vivían en el prelude; M50.2 las movió a `std/collections/`.)
 
+`std/` es el **tier 1** del ecosistema (embebido, universal, estable). Qué va aquí vs. en un paquete
+adicional (`packages/*`) vs. queda como demo en `examples/` lo fija la **política de tiers** en
+[DESIGN.md](../DESIGN.md) §53 (criterios: universalidad · peso e independencia · estabilidad de API ·
+seguridad). La instalación de paquetes adicionales (por nombre, cuando exista el registro) → §54.
+
 ## Empaquetado en el binario
 
 Desde M40.5 la `std/` va **embebida en el ejecutable** (`include_str!`, como el prelude): estos `.ray`

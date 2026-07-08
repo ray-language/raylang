@@ -729,13 +729,13 @@ fn inject_prelude_traits(c: Checker, prog: Program) {
 
 fn self_param() -> Param { Param { name: "self", ty: Type.TNamed("Self", []), line: 0, col: 0 } }
 
-fn otro_param() -> Param { Param { name: "otro", ty: Type.TNamed("Self", []), line: 0, col: 0 } }
+fn other_param() -> Param { Param { name: "other", ty: Type.TNamed("Self", []), line: 0, col: 0 } }
 
-fn eq_sig() -> MethodSig { MethodSig { name: "igual", params: [self_param(), otro_param()], ret: Type.TBool, default_body: Option.None, line: 0, col: 0 } }
+fn eq_sig() -> MethodSig { MethodSig { name: "eq", params: [self_param(), other_param()], ret: Type.TBool, default_body: Option.None, line: 0, col: 0 } }
 
-fn show_sig() -> MethodSig { MethodSig { name: "mostrar", params: [self_param()], ret: Type.TString, default_body: Option.None, line: 0, col: 0 } }
+fn show_sig() -> MethodSig { MethodSig { name: "show", params: [self_param()], ret: Type.TString, default_body: Option.None, line: 0, col: 0 } }
 
-fn ord_sig() -> MethodSig { MethodSig { name: "menor", params: [self_param(), otro_param()], ret: Type.TBool, default_body: Option.None, line: 0, col: 0 } }
+fn ord_sig() -> MethodSig { MethodSig { name: "less", params: [self_param(), other_param()], ret: Type.TBool, default_body: Option.None, line: 0, col: 0 } }
 
 // Registra un método de impl del prelude (FnSig monomórfica) + la marca en `impl_traits`.
 fn inject_method_impl(c: Checker, key: string, trait_name: string, method: string, params: [Type], ret: Type) {
@@ -744,15 +744,15 @@ fn inject_method_impl(c: Checker, key: string, trait_name: string, method: strin
 }
 
 fn inject_prim_eq(c: Checker, ty: Type, key: string) {
-    inject_method_impl(c, key, "Eq", "igual", [ty, ty], Type.TBool);
+    inject_method_impl(c, key, "Eq", "eq", [ty, ty], Type.TBool);
 }
 
 fn inject_prim_show(c: Checker, ty: Type, key: string) {
-    inject_method_impl(c, key, "Show", "mostrar", [ty], Type.TString);
+    inject_method_impl(c, key, "Show", "show", [ty], Type.TString);
 }
 
 fn inject_prim_ord(c: Checker, ty: Type, key: string) {
-    inject_method_impl(c, key, "Ord", "menor", [ty, ty], Type.TBool);
+    inject_method_impl(c, key, "Ord", "less", [ty, ty], Type.TBool);
 }
 
 // ¿El usuario declara un trait con ese nombre?
@@ -1267,7 +1267,7 @@ fn check_expr_expected(c: Checker, e: Expr, expected: Type) -> Result<Type, Type
     // hojas (cada rama), igual que el resto del chequeo bidireccional.
     match (expected) {
         Type.TDyn(traits) => {
-            if (!propaga_esperado(e)) {
+            if (!propagates_expected(e)) {
                 return coerce_to_dyn(c, e, traits, e.line, e.col);
             }
         },
@@ -1531,7 +1531,7 @@ fn call_method(c: Checker, sig: FnSig, label: string, obj: Expr, cargs: [Expr], 
 // Trait objects (M14.3d-4a: dyn — despacho dinámico)
 // =====================================================================
 // ¿`e` propaga el tipo esperado a sus hojas? (if/match/bloque: la coerción a dyn ocurre en cada rama.)
-fn propaga_esperado(e: Expr) -> bool {
+fn propagates_expected(e: Expr) -> bool {
     match (e.kind) {
         EKind.EIf(_, _, _) => true,
         EKind.EMatch(_, _) => true,
@@ -1555,11 +1555,11 @@ fn subset_strs(ts: [string], whole: [string]) -> bool {
 // Coerciona una expresión a `dyn Trait`: un valor concreto que implemente todos los traits del
 // conjunto, o un `dyn` del mismo conjunto (no-op) o un superconjunto (upcasting: olvidar traits).
 fn coerce_to_dyn(c: Checker, e: Expr, traits: [string], line: int, col: int) -> Result<Type, TypeError> {
-    let actual = check_expr(c, e)?;
-    match (actual) {
+    let current = check_expr(c, e)?;
+    match (current) {
         Type.TDyn(source) => {
             if (strs_eq(source, traits)) {
-                return Result.Ok(actual);
+                return Result.Ok(current);
             }
             if (subset_strs(traits, source)) {
                 return Result.Ok(Type.TDyn(traits));
@@ -1568,13 +1568,13 @@ fn coerce_to_dyn(c: Checker, e: Expr, traits: [string], line: int, col: int) -> 
         },
         _ => { },
     }
-    match (type_key_of(actual)) {
-        Option.None => Result.Err(terr(line, col, "no se puede convertir " + type_str(actual) + " en 'dyn " + join_strs(traits) + "'")),
+    match (type_key_of(current)) {
+        Option.None => Result.Err(terr(line, col, "no se puede convertir " + type_str(current) + " en 'dyn " + join_strs(traits) + "'")),
         Option.Some(key) => {
             var i = 0;
             while (i < traits.len()) {
                 if (!c.impl_traits.contains_key(mangle(key, traits[i]))) {
-                    return Result.Err(terr(line, col, type_str(actual) + " no implementa '" + traits[i] + "': no puede usarse como 'dyn " + join_strs(traits) + "'"));
+                    return Result.Err(terr(line, col, type_str(current) + " no implementa '" + traits[i] + "': no puede usarse como 'dyn " + join_strs(traits) + "'"));
                 }
                 i = i + 1;
             }
@@ -3138,10 +3138,10 @@ fn register_derived_impl(c: Checker, type_name: string, trait_name: string) {
     }
     let target = Type.TNamed(type_name, []);
     if (trait_name == "Eq") {
-        c.methods.insert(mangle(type_name, "igual"), FnSig { params: [target, target], ret: Type.TBool, type_params: no_tparams(), bounds: no_bounds() });
+        c.methods.insert(mangle(type_name, "eq"), FnSig { params: [target, target], ret: Type.TBool, type_params: no_tparams(), bounds: no_bounds() });
     }
     if (trait_name == "Show") {
-        c.methods.insert(mangle(type_name, "mostrar"), FnSig { params: [target], ret: Type.TString, type_params: no_tparams(), bounds: no_bounds() });
+        c.methods.insert(mangle(type_name, "show"), FnSig { params: [target], ret: Type.TString, type_params: no_tparams(), bounds: no_bounds() });
     }
     c.impl_traits.insert(mangle(type_name, trait_name), true);
 }
@@ -3238,25 +3238,25 @@ fn ensure_generic_impl_target(n: string, args: [Type], type_params: [string], ar
     if (arity != type_params.len()) {
         return Result.Err(terr(line, col, "'" + n + "' espera " + to_string(arity) + " parámetro(s) de tipo, el impl declara " + to_string(type_params.len())));
     }
-    var bien = args.len() == type_params.len();
-    var vistos: [string] = [];
+    var ok = args.len() == type_params.len();
+    var seen: [string] = [];
     var i = 0;
-    while (bien && i < args.len()) {
+    while (ok && i < args.len()) {
         match (args[i]) {
             Type.TNamed(an, aargs) => {
-                if (aargs.len() != 0 || !contains_str(type_params, an) || contains_str(vistos, an)) {
-                    bien = false;
+                if (aargs.len() != 0 || !contains_str(type_params, an) || contains_str(seen, an)) {
+                    ok = false;
                 } else {
-                    vistos.push(an);
+                    seen.push(an);
                 }
             },
             _ => {
-                bien = false;
+                ok = false;
             },
         }
         i = i + 1;
     }
-    if (!bien) {
+    if (!ok) {
         return Result.Err(terr(line, col, "el impl genérico debe aplicarse a '" + n + "<" + join_comma(type_params) + ">' (sus propios parámetros de tipo, distintos)"));
     }
     Result.Ok(0)

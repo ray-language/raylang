@@ -288,7 +288,7 @@ fn dyn_y_derive_snippets() {
     );
     // @derive(Eq, Show) anidado: igual recursivo, mostrar recursivo.
     comparar_fuente(
-        "@derive(Eq, Show) struct P { x: int, y: int } @derive(Eq, Show) enum F { C(int), B(P) } fn main() -> int { let a = F.B(P { x: 1, y: 2 }); let b = F.B(P { x: 1, y: 2 }); print(a.mostrar()); print(a.igual(b)); print(a.igual(F.C(5))); 0 }",
+        "@derive(Eq, Show) struct P { x: int, y: int } @derive(Eq, Show) enum F { C(int), B(P) } fn main() -> int { let a = F.B(P { x: 1, y: 2 }); let b = F.B(P { x: 1, y: 2 }); print(a.show()); print(a.eq(b)); print(a.eq(F.C(5))); 0 }",
         "in_derive.ray",
     );
 }
@@ -420,7 +420,7 @@ fn parse_y_panic() {
 
 #[test]
 fn assert_y_sort() {
-    // M14.6c-2: sort<T: Ord> sobre int/string/float (bounds→.menor(); el intérprete resuelve `menor`
+    // M14.6c-2: sort<T: Ord> sobre int/string/float (bounds→.less(); el intérprete resuelve `menor`
     // sobre primitivos por fallback, como igual/mostrar) + assert/assert_eq (sobre panic + Eq/Show).
     comparar_fuente(
         "fn main() -> int { \
@@ -441,7 +441,7 @@ fn assert_y_sort() {
     // métodos (`P#menor`), no por el fallback de primitivos.
     comparar_fuente(
         "struct P { v: int } \
-         impl Ord for P { fn menor(self, otro: P) -> bool { self.v < otro.v } } \
+         impl Ord for P { fn less(self, otro: P) -> bool { self.v < otro.v } } \
          fn main() -> int { let ps = sort([P { v: 3 }, P { v: 1 }, P { v: 2 }]); print(ps[0].v); print(ps[2].v); 0 }",
         "in_sort_user.ray",
     );

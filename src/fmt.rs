@@ -36,9 +36,9 @@ pub fn format_source(src: &str) -> Result<String, String> {
 /// para tabuladores, etc.). Lo usa el **LSP** para honrar la preferencia del editor (`tabSize`/
 /// `insertSpaces` del request de formateo). Se formatea canónico (4 espacios) y luego se **reajusta**
 /// la sangría: como el canónico indenta en múltiplos de 4, cada nivel se reescribe con `unit`.
-pub fn format_source_con_indent(src: &str, unit: &str) -> Result<String, String> {
-    let canonico = format_source(src)?;
-    Ok(reindent(&canonico, unit))
+pub fn format_source_with_indent(src: &str, unit: &str) -> Result<String, String> {
+    let canonical = format_source(src)?;
+    Ok(reindent(&canonical, unit))
 }
 
 /// Reescribe la sangría de `text` (canónico: múltiplos de 4 espacios) con la unidad `unit` por nivel.
@@ -87,39 +87,39 @@ fn collect_comments(src: &str) -> Vec<Comment> {
     let mut out = Vec::new();
     let mut i = 0;
     let mut line = 1usize;
-    let mut line_tiene_codigo = false;
-    let (mut en_str, mut en_char) = (false, false);
+    let mut line_has_code = false;
+    let (mut in_str, mut in_char) = (false, false);
     while i < chars.len() {
         let c = chars[i];
         if c == '\n' {
             line += 1;
-            line_tiene_codigo = false;
-            en_str = false;
-            en_char = false;
+            line_has_code = false;
+            in_str = false;
+            in_char = false;
             i += 1;
             continue;
         }
-        if en_str || en_char {
+        if in_str || in_char {
             if c == '\\' {
                 i += 2; // salta el carácter escapado
                 continue;
             }
-            if (en_str && c == '"') || (en_char && c == '\'') {
-                en_str = false;
-                en_char = false;
+            if (in_str && c == '"') || (in_char && c == '\'') {
+                in_str = false;
+                in_char = false;
             }
             i += 1;
             continue;
         }
         match c {
             '"' => {
-                en_str = true;
-                line_tiene_codigo = true;
+                in_str = true;
+                line_has_code = true;
                 i += 1;
             }
             '\'' => {
-                en_char = true;
-                line_tiene_codigo = true;
+                in_char = true;
+                line_has_code = true;
                 i += 1;
             }
             '/' if i + 1 < chars.len() && chars[i + 1] == '/' => {
@@ -128,12 +128,12 @@ fn collect_comments(src: &str) -> Vec<Comment> {
                     j += 1;
                 }
                 let text: String = chars[i..j].iter().collect::<String>().trim_end().to_string();
-                out.push(Comment { line, text, trailing: line_tiene_codigo });
+                out.push(Comment { line, text, trailing: line_has_code });
                 i = j; // al `\n` (o EOF)
             }
             _ => {
                 if !c.is_whitespace() {
-                    line_tiene_codigo = true;
+                    line_has_code = true;
                 }
                 i += 1;
             }
@@ -150,7 +150,7 @@ struct Cur {
     i: usize,
     /// Líneas (1-basadas) que en la fuente están **en blanco** (vacías o solo espacios). Una línea que
     /// es solo un comentario NO cuenta como blanco (tiene contenido).
-    blancos: std::collections::HashSet<usize>,
+    blanks: std::collections::HashSet<usize>,
     /// Azúcar preservado (M29.3): la forma de superficie de interpolación/pipelines por posición del
     /// nodo desazucarado raíz. El formateador la consulta en `fmt_expr` para reemitir `"…${e}…"` / `x |> f`.
     interp: std::collections::HashMap<(usize, usize), Vec<InterpSeg>>,
@@ -166,14 +166,14 @@ struct Cur {
 
 impl Cur {
     fn new(src: &str, program: &Program) -> Self {
-        let blancos = src.lines().enumerate()
+        let blanks = src.lines().enumerate()
             .filter(|(_, l)| l.trim().is_empty())
             .map(|(i, _)| i + 1)
             .collect();
         Cur {
             items: collect_comments(src),
             i: 0,
-            blancos,
+            blanks,
             interp: program.interp_sites.clone(),
             pipe: program.pipe_sites.clone(),
             base: 0,
@@ -184,11 +184,11 @@ impl Cur {
     /// previos)? Sí si la línea de fuente **justo encima** del grupo (los comentarios sueltos que van a
     /// volcarse + la propia línea) está en blanco. Colapsa 2+ blancos a uno (se emite a lo sumo uno).
     fn blank_before(&self, line: usize) -> bool {
-        let inicio_grupo = match self.items.get(self.i) {
+        let group_start = match self.items.get(self.i) {
             Some(c) if c.line < line => c.line, // el primer comentario suelto de encima
             _ => line,
         };
-        inicio_grupo > 1 && self.blancos.contains(&(inicio_grupo - 1))
+        group_start > 1 && self.blanks.contains(&(group_start - 1))
     }
 
     /// Vuelca los comentarios **sueltos** de las líneas anteriores a `line` (los aún no emitidos), cada
@@ -277,26 +277,26 @@ fn format_program(p: &Program, cur: &mut Cur) -> String {
         tops.push((it.line, Top::Fn(it)));
     }
     // M41: los `extern "lib" { … }` se reagrupan por librería (orden de primera aparición).
-    for (lib, line) in extern_libs_en_orden(&p.externs) {
+    for (lib, line) in extern_libs_in_order(&p.externs) {
         tops.push((line, Top::Extern(lib)));
     }
     tops.sort_by_key(|(line, _)| *line);
 
     // 2. Emitir en orden de fuente, volcando los comentarios de encima de cada ítem (y el trailing si el
     //    ítem cabe en una línea). El cursor avanza monótonamente porque recorremos por línea creciente.
-    let es_import = |t: &Top| matches!(t, Top::Import(_) | Top::FromImport(_));
+    let is_import = |t: &Top| matches!(t, Top::Import(_) | Top::FromImport(_));
     let mut out = String::new();
     for (idx, (line, top)) in tops.iter().enumerate() {
-        let comentarios = cur.flush_before(*line, "");
+        let comments = cur.flush_before(*line, "");
         if idx > 0 {
             // Línea en blanco entre ítems de nivel superior, EXCEPTO entre dos imports consecutivos
             // (se agrupan sin separación, como gofmt/rustfmt).
-            let entre_imports = es_import(&tops[idx - 1].1) && es_import(top);
-            if !entre_imports {
+            let between_imports = is_import(&tops[idx - 1].1) && is_import(top);
+            if !between_imports {
                 out.push('\n');
             }
         }
-        out.push_str(&comentarios);
+        out.push_str(&comments);
         let text = match top {
             Top::Import(it) => fmt_import(it),
             Top::FromImport(it) => fmt_from_import(it),
@@ -318,10 +318,10 @@ fn format_program(p: &Program, cur: &mut Cur) -> String {
     if tops.is_empty() {
         out.push_str(&cur.flush_rest(""));
     } else {
-        let cola = cur.flush_rest("");
-        if !cola.is_empty() {
+        let tail = cur.flush_rest("");
+        if !tail.is_empty() {
             out.push('\n');
-            out.push_str(&cola);
+            out.push_str(&tail);
         }
     }
     out
@@ -339,12 +339,12 @@ fn fmt_import(it: &ImportDecl) -> String {
 }
 
 fn fmt_from_import(it: &FromImport) -> String {
-    let nombres: Vec<String> = it.names.iter().map(|n| match &n.alias {
+    let names: Vec<String> = it.names.iter().map(|n| match &n.alias {
         Some(a) => format!("{} as {}", n.name, a),
         None => n.name.clone(),
     }).collect();
     let pref = if it.is_pub { "pub " } else { "" };
-    format!("{}from {} import {};", pref, it.module, nombres.join(", "))
+    format!("{}from {} import {};", pref, it.module, names.join(", "))
 }
 
 fn fmt_const(cur: &mut Cur, it: &ConstDef) -> String {
@@ -354,14 +354,14 @@ fn fmt_const(cur: &mut Cur, it: &ConstDef) -> String {
 
 /// Las librerías de los bloques `extern` en orden de primera aparición, con la línea de esa primera
 /// firma (para ordenar el bloque entre los ítems de nivel superior). (M41)
-fn extern_libs_en_orden(externs: &[ExternFn]) -> Vec<(String, usize)> {
-    let mut vistos: Vec<(String, usize)> = Vec::new();
+fn extern_libs_in_order(externs: &[ExternFn]) -> Vec<(String, usize)> {
+    let mut seen: Vec<(String, usize)> = Vec::new();
     for e in externs {
-        if !vistos.iter().any(|(l, _)| *l == e.lib) {
-            vistos.push((e.lib.clone(), e.line));
+        if !seen.iter().any(|(l, _)| *l == e.lib) {
+            seen.push((e.lib.clone(), e.line));
         }
     }
-    vistos
+    seen
 }
 
 /// Formatea un bloque `extern "lib" { fn …; … }` con todas las firmas de esa librería. (M41)
@@ -411,7 +411,7 @@ fn fmt_generics(type_params: &[String], bounds: &[(String, String)]) -> String {
     if type_params.is_empty() {
         return String::new();
     }
-    let partes: Vec<String> = type_params.iter().map(|tp| {
+    let parts: Vec<String> = type_params.iter().map(|tp| {
         let bs: Vec<&str> = bounds.iter().filter(|(p, _)| p == tp).map(|(_, t)| t.as_str()).collect();
         if bs.is_empty() {
             tp.clone()
@@ -419,7 +419,7 @@ fn fmt_generics(type_params: &[String], bounds: &[(String, String)]) -> String {
             format!("{}: {}", tp, bs.join(" + "))
         }
     }).collect();
-    format!("<{}>", partes.join(", "))
+    format!("<{}>", parts.join(", "))
 }
 
 fn fmt_annotations(anns: &[Annotation]) -> String {
@@ -435,7 +435,7 @@ fn fmt_annotations(anns: &[Annotation]) -> String {
 }
 
 fn fmt_params(params: &[Param]) -> String {
-    let partes: Vec<String> = params.iter().map(|p| {
+    let parts: Vec<String> = params.iter().map(|p| {
         // El receptor `self` de un método se imprime sin tipo.
         if p.name == "self" && matches!(p.ty, Type::SelfType) {
             "self".to_string()
@@ -443,7 +443,7 @@ fn fmt_params(params: &[Param]) -> String {
             format!("{}: {}", p.name, fmt_type(&p.ty))
         }
     }).collect();
-    partes.join(", ")
+    parts.join(", ")
 }
 
 /// `-> T` salvo que el retorno sea unit (se omite, canónico).
@@ -546,11 +546,11 @@ fn fmt_impl(cur: &mut Cur, it: &ImplBlock) -> String {
     }
     let mut s = format!("{} {{\n", head);
     for (i, m) in it.methods.iter().enumerate() {
-        let comentarios = cur.flush_before(m.line, INDENT); // comentarios encima del método (1 nivel)
+        let comments = cur.flush_before(m.line, INDENT); // comentarios encima del método (1 nivel)
         if i > 0 {
             s.push('\n');
         }
-        s.push_str(&comentarios);
+        s.push_str(&comments);
         s.push_str(&indent_lines(&fmt_function(cur, m), 1));
         s.push('\n');
     }
@@ -581,9 +581,9 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
     if b.statements.is_empty() && b.tail.is_none() {
         // Bloque vacío. Si es MULTILÍNEA y encierra comentarios (línea < `}`), se preservan; si no, `{ }`.
         if b.end_line > b.line {
-            let cola = cur.flush_before(b.end_line, &inner);
-            if !cola.is_empty() {
-                return format!("{{\n{}{}}}", cola, INDENT.repeat(base));
+            let tail_comments = cur.flush_before(b.end_line, &inner);
+            if !tail_comments.is_empty() {
+                return format!("{{\n{}{}}}", tail_comments, INDENT.repeat(base));
             }
         }
         return "{ }".to_string();
@@ -641,13 +641,13 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
     // Comentarios que quedan DENTRO del bloque, tras la última sentencia/tail y antes del `}` (línea <
     // `end_line`). Antes se reubicaban tras el `}` (el AST no tenía la posición de cierre); ahora se
     // acotan al bloque. Se respeta también un blanco de separación previo.
-    let blanco_cola = cur.blank_before(b.end_line);
-    let cola = cur.flush_before(b.end_line, &inner);
-    if !cola.is_empty() {
-        if blanco_cola {
+    let blank_tail = cur.blank_before(b.end_line);
+    let tail_comments = cur.flush_before(b.end_line, &inner);
+    if !tail_comments.is_empty() {
+        if blank_tail {
             s.push('\n');
         }
-        s.push_str(&cola);
+        s.push_str(&tail_comments);
     }
     s.push_str(&INDENT.repeat(base));
     s.push('}');
@@ -706,7 +706,14 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
             if is_block_form(e) {
                 fmt_expr_indented(cur, e, indent)
             } else {
-                format!("{};", fmt_expr(cur, e, 0))
+                // Deja la indentación del contexto en `cur.base` para las formas con bloque anidadas en
+                // la expresión (una función anónima con cuerpo `spawn(fn() { … })`, o un `match` dentro
+                // de un argumento), igual que `fmt_value`.
+                let saved = cur.base;
+                cur.base = indent;
+                let s = format!("{};", fmt_expr(cur, e, 0));
+                cur.base = saved;
+                s
             }
         }
     }
@@ -887,11 +894,11 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
             format!("[{}]", a.join(", "))
         }
         // M48.2: literal de Map. `[:]` vacío; `[k: v, …]` poblado.
-        ExprKind::MapLit(pares) => {
-            if pares.is_empty() {
+        ExprKind::MapLit(pairs) => {
+            if pairs.is_empty() {
                 "[:]".to_string()
             } else {
-                let a: Vec<String> = pares.iter()
+                let a: Vec<String> = pairs.iter()
                     .map(|(k, v)| format!("{}: {}", fmt_expr(cur, k, 0), fmt_expr(cur, v, 0)))
                     .collect();
                 format!("[{}]", a.join(", "))
@@ -929,7 +936,10 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
             }
         }
         ExprKind::Func(fe) => {
-            format!("fn({}){} {}", fmt_params(&fe.params), fmt_return(&fe.return_type), fmt_block(cur, &fe.body, 0))
+            // El cuerpo se indenta relativo a la línea donde aparece el `fn(...)` (`cur.base`), no a 0:
+            // una función anónima como argumento de llamada (`spawn(fn() { … })`) o inicializador vive
+            // dentro de un contexto ya indentado. `cur.base` lo dejan `fmt_value`/`fmt_stmt`.
+            format!("fn({}){} {}", fmt_params(&fe.params), fmt_return(&fe.return_type), fmt_block(cur, &fe.body, cur.base))
         }
         ExprKind::Try(inner) => format!("{}?", fmt_expr(cur, inner, 13)),
         ExprKind::Match { .. } | ExprKind::If { .. } | ExprKind::While { .. } | ExprKind::Block(_) => {
@@ -987,12 +997,12 @@ fn fmt_expr_indented(cur: &mut Cur, e: &Expr, base: usize) -> String {
                 };
                 cur.base = saved;
                 // Guarda opcional (M40.1a): `patrón if <cond> => …`.
-                let guarda = match &arm.guard {
+                let guard = match &arm.guard {
                     Some(g) => format!(" if {}", fmt_expr(cur, g, 0)),
                     None => String::new(),
                 };
-                let linea = format!("{}{}{} => {},", inner, fmt_pattern(&arm.pattern), guarda, body);
-                s.push_str(&linea);
+                let line = format!("{}{}{} => {},", inner, fmt_pattern(&arm.pattern), guard, body);
+                s.push_str(&line);
                 if !body.contains('\n') {
                     s.push_str(&cur.trailing_on(arm.body.line));
                 }
@@ -1039,14 +1049,14 @@ fn fmt_float(f: f64) -> String {
     s
 }
 
-fn escape_char(c: char, out: &mut String, en_comillas_dobles: bool) {
+fn escape_char(c: char, out: &mut String, in_double_quotes: bool) {
     match c {
         '\\' => out.push_str("\\\\"),
         '\n' => out.push_str("\\n"),
         '\t' => out.push_str("\\t"),
         '\r' => out.push_str("\\r"),
-        '"' if en_comillas_dobles => out.push_str("\\\""),
-        '\'' if !en_comillas_dobles => out.push_str("\\'"),
+        '"' if in_double_quotes => out.push_str("\\\""),
+        '\'' if !in_double_quotes => out.push_str("\\'"),
         other => out.push(other),
     }
 }
@@ -1124,6 +1134,20 @@ mod tests {
     }
 
     #[test]
+    fn fn_anonima_como_argumento_indenta_el_cuerpo() {
+        // Regresión: `spawn(fn() { … })` como sentencia — el cuerpo va un nivel más adentro que la
+        // llamada y el `});` alinea con ella (antes el cuerpo se quedaba al nivel de la llamada y el
+        // cierre en la columna 0).
+        let src = "fn main() -> int {\n    spawn(fn() {\n        work(1);\n    });\n    0\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("    spawn(fn() {\n        work(1);\n    });"), "cuerpo a +1, cierre alineado: {out:?}");
+        assert_eq!(fmt(&out), out, "idempotente");
+        // Anidado: `scope(fn() { spawn(fn() { … }) })`.
+        let nested = "fn main() -> int {\n    scope(fn() {\n        spawn(fn() {\n            send(ch, 7);\n        });\n    });\n    0\n}\n";
+        assert_eq!(fmt(nested), nested, "función anónima anidada, idempotente: {:?}", fmt(nested));
+    }
+
+    #[test]
     fn preserva_comentarios_entre_variantes() {
         let src = "enum Color {\n  Rojo,   // primario\n  // el ultimo\n  Azul,\n}\nfn main() -> int { 0 }\n";
         let out = fmt(src);
@@ -1143,11 +1167,11 @@ mod tests {
         // Cuenta las líneas de comentario de entrada y de salida: no debe faltar ninguna.
         let src = "// a\n// b\nfn f() -> int {\n  // c\n  let x = 1;  // d\n  x\n}\n// e\n";
         let out = fmt(src);
-        let cuenta = |s: &str| s.lines().filter(|l| l.trim_start().starts_with("//")).count();
+        let count = |s: &str| s.lines().filter(|l| l.trim_start().starts_with("//")).count();
         // 'd' es trailing (no cuenta como línea de solo comentario en la salida) → se cuenta aparte.
         assert!(out.contains("// d"), "trailing preservado");
-        assert_eq!(cuenta(src), cuenta(&out) + /* d es trailing en ambos */ 0 + 1 - 1,
-            "in={} out={}\n{out}", cuenta(src), cuenta(&out));
+        assert_eq!(count(src), count(&out) + /* d es trailing en ambos */ 0 + 1 - 1,
+            "in={} out={}\n{out}", count(src), count(&out));
     }
 
     #[test]
@@ -1209,16 +1233,16 @@ mod tests {
         // Canónico = 4 espacios.
         assert!(fmt(src).contains("\n    if ("), "canónico 4 espacios");
         // 2 espacios.
-        let dos = format_source_con_indent(src, "  ").unwrap();
+        let dos = format_source_with_indent(src, "  ").unwrap();
         assert!(dos.contains("\n  if ("), "2 espacios: {dos:?}");
         assert!(dos.contains("\n    x"), "nivel 2 = 4 espacios en 2-espacios: {dos:?}");
-        assert_eq!(dos, format_source_con_indent(&dos, "  ").unwrap(), "idempotente en 2 espacios");
+        assert_eq!(dos, format_source_with_indent(&dos, "  ").unwrap(), "idempotente en 2 espacios");
         // Tabuladores.
-        let tabs = format_source_con_indent(src, "\t").unwrap();
+        let tabs = format_source_with_indent(src, "\t").unwrap();
         assert!(tabs.contains("\n\tif ("), "1 tab por nivel: {tabs:?}");
         assert!(tabs.contains("\n\t\tx"), "nivel 2 = 2 tabs: {tabs:?}");
         // Unidad = 4 espacios ⇒ idéntico al canónico.
-        assert_eq!(format_source_con_indent(src, "    ").unwrap(), fmt(src));
+        assert_eq!(format_source_with_indent(src, "    ").unwrap(), fmt(src));
     }
 
     #[test]
@@ -1312,7 +1336,7 @@ mod tests {
     //
     //   cargo test --lib fmt::tests::migrar_builtins_prefijos -- --ignored --nocapture
 
-    const RETIRADOS: &[&str] = &[
+    const RETIRED: &[&str] = &[
         "len", "push", "reverse", "contains", "insert", "contains_key", "keys", "values", "trim", "split",
         "replace", "chars", "starts_with", "ends_with", "to_upper", "to_lower", "substring", "repeat",
         "to_bytes", "sub_bytes",
@@ -1386,20 +1410,20 @@ mod tests {
             | ExprKind::Char(_) | ExprKind::Bytes(_) | ExprKind::Ident(_) => {}
         }
         // ¿Este nodo es una llamada prefija a un builtin retirado? → `recv.builtin(resto)`.
-        let migrar = matches!(&e.kind, ExprKind::Call { callee, args }
+        let migrate = matches!(&e.kind, ExprKind::Call { callee, args }
             if !args.is_empty()
-                && matches!(&callee.kind, ExprKind::Ident(nm) if RETIRADOS.contains(&nm.as_str())));
-        if migrar {
+                && matches!(&callee.kind, ExprKind::Ident(nm) if RETIRED.contains(&nm.as_str())));
+        if migrate {
             if let ExprKind::Call { callee, args } = std::mem::replace(&mut e.kind, ExprKind::Bool(false)) {
-                let (nombre, cl, cc) = match callee.kind {
+                let (name, cl, cc) = match callee.kind {
                     ExprKind::Ident(nm) => (nm, callee.line, callee.col),
                     _ => unreachable!(),
                 };
                 let mut it = args.into_iter();
                 let recv = it.next().expect("args no vacío");
-                let resto: Vec<Expr> = it.collect();
-                let field = Expr { kind: ExprKind::Field { object: Box::new(recv), name: nombre }, line: cl, col: cc };
-                e.kind = ExprKind::Call { callee: Box::new(field), args: resto };
+                let rest: Vec<Expr> = it.collect();
+                let field = Expr { kind: ExprKind::Field { object: Box::new(recv), name }, line: cl, col: cc };
+                e.kind = ExprKind::Call { callee: Box::new(field), args: rest };
                 *n += 1;
             }
         }
@@ -1464,12 +1488,12 @@ mod tests {
         // `rhs` de un pipe es parcial —sin receptor— y transformarlo sería incorrecto).
     }
 
-    fn recolectar_ray(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    fn collect_ray(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
         for entry in rd.flatten() {
             let p = entry.path();
             if p.is_dir() {
-                recolectar_ray(&p, out);
+                collect_ray(&p, out);
             } else if p.extension().map(|x| x == "ray").unwrap_or(false) {
                 out.push(p);
             }
@@ -1497,10 +1521,10 @@ mod tests {
         let root = env!("CARGO_MANIFEST_DIR");
         let mut files = Vec::new();
         for d in ["examples", "std", "packages", "selfhost", "benchmarks"] {
-            recolectar_ray(&std::path::Path::new(root).join(d), &mut files);
+            collect_ray(&std::path::Path::new(root).join(d), &mut files);
         }
         files.sort();
-        let (mut sitios, mut cambiados) = (0usize, 0usize);
+        let (mut sites, mut changed) = (0usize, 0usize);
         for f in &files {
             let src = std::fs::read_to_string(f).expect("lee");
             let tokens = crate::lexer::lex(&src).unwrap_or_else(|e| panic!("lex {f:?}: {e}"));
@@ -1513,10 +1537,10 @@ mod tests {
             let mut cur = Cur::new(&src, &program);
             let out = format_program(&program, &mut cur);
             std::fs::write(f, &out).expect("escribe");
-            sitios += n;
-            cambiados += 1;
-            println!("{sitios:>5}  (+{n:>3})  {}", f.strip_prefix(root).unwrap().display());
+            sites += n;
+            changed += 1;
+            println!("{sites:>5}  (+{n:>3})  {}", f.strip_prefix(root).unwrap().display());
         }
-        println!("TOTAL: {sitios} sitios migrados en {cambiados} archivos");
+        println!("TOTAL: {sites} sitios migrados en {changed} archivos");
     }
 }

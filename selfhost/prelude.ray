@@ -63,12 +63,12 @@ fn assert(cond: bool) {
 }
 
 fn assert_eq<T: Eq + Show>(a: T, b: T) {
-    if (!a.igual(b)) {
-        panic("assert_eq falló: " + a.mostrar() + " != " + b.mostrar());
+    if (!a.eq(b)) {
+        panic("assert_eq falló: " + a.show() + " != " + b.show());
     }
 }
 
-// Ordena ascendente devolviendo un arreglo NUEVO (insertion sort). `T: Ord` → `.menor()`.
+// Ordena ascendente devolviendo un arreglo NUEVO (insertion sort). `T: Ord` → `.less()`.
 fn sort<T: Ord>(a: [T]) -> [T] {
     var out: [T] = [];
     var i: int = 0;
@@ -76,7 +76,7 @@ fn sort<T: Ord>(a: [T]) -> [T] {
         let x: T = a[i];
         out.push(x);
         var j: int = out.len() - 1;
-        while (j > 0 && x.menor(out[j - 1])) {
+        while (j > 0 && x.less(out[j - 1])) {
             out[j] = out[j - 1];
             j = j - 1;
         }
@@ -89,14 +89,14 @@ fn sort<T: Ord>(a: [T]) -> [T] {
 // M14.6d: I/O de archivos. Envoltorios sobre los primitivos `__read_file`/`__write_file` (que devuelven
 // un arreglo etiquetado ["ok",…]/["err",msg]) traducidos a Result — el runtime no sabe de Result, como
 // en Rust (`src/prelude.rs`). `exists` es un builtin directo (-> bool), no necesita envoltorio.
-fn read_file(ruta: string) -> Result<string, string> {
-    let r = __read_file(ruta);
+fn read_file(path: string) -> Result<string, string> {
+    let r = __read_file(path);
     if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
 }
 
-fn write_file(ruta: string, contenido: string) -> Result<int, string> {
-    let r = __write_file(ruta, contenido);
-    if (r[0] == "ok") { Result.Ok(contenido.len()) } else { Result.Err(r[1]) }
+fn write_file(path: string, content: string) -> Result<int, string> {
+    let r = __write_file(path, content);
+    if (r[0] == "ok") { Result.Ok(content.len()) } else { Result.Err(r[1]) }
 }
 
 // M14.7c: quita y devuelve el último elemento (None si vacío); muta `a`. Envoltorio sobre `__pop`.

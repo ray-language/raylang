@@ -29,7 +29,7 @@ enum Kind {
 /// Ejecuta las pruebas del fuente y devuelve el código de salida (número de fallos, o un
 /// código de error si el front-end falla). `filtro`, si está, selecciona solo las pruebas cuyo
 /// nombre lo **contiene** (subcadena). Imprime el informe y los errores con contexto.
-pub fn run(src: &str, filtro: Option<&str>) -> i32 {
+pub fn run(src: &str, filter: Option<&str>) -> i32 {
     let tokens = match lexer::lex(src) {
         Ok(t) => t,
         Err(e) => {
@@ -57,12 +57,12 @@ pub fn run(src: &str, filtro: Option<&str>) -> i32 {
         .collect();
 
     // Filtro por nombre (subcadena), si se pidió.
-    if let Some(pat) = filtro {
+    if let Some(pat) = filter {
         tests.retain(|(n, _)| n.contains(pat));
     }
 
     if tests.is_empty() {
-        match filtro {
+        match filter {
             Some(p) => println!("no hay pruebas (@test) que contengan '{}'", p),
             None => println!("no hay pruebas (@test) en el archivo"),
         }
@@ -72,8 +72,8 @@ pub fn run(src: &str, filtro: Option<&str>) -> i32 {
     // Chequeo único del programa completo: sintetiza un `main` que llama a TODAS las pruebas
     // seleccionadas, para **surfacing** de errores de compilación una sola vez (no por prueba).
     {
-        let nombres: Vec<&str> = tests.iter().map(|(n, _)| n.as_str()).collect();
-        let mut prog = swap_main(pristine.clone(), &synth_main_all(&nombres));
+        let names: Vec<&str> = tests.iter().map(|(n, _)| n.as_str()).collect();
+        let mut prog = swap_main(pristine.clone(), &synth_main_all(&names));
         if let Err(e) = checker::check(&mut prog) {
             eprintln!("{}", diagnostic::render(src, e.line, e.col, e.len, &e.to_string()));
             return 65;
@@ -81,31 +81,31 @@ pub fn run(src: &str, filtro: Option<&str>) -> i32 {
     }
 
     println!("corriendo {} prueba(s)\n", tests.len());
-    let mut fallos = 0;
+    let mut failures = 0;
     for (name, kind) in &tests {
-        match ejecutar_una(&pristine, name, kind) {
+        match run_one(&pristine, name, kind) {
             Ok(()) => println!("ok    {}", name),
-            Err(motivo) => {
+            Err(reason) => {
                 println!("FALLO {}", name);
-                println!("        {}", motivo);
-                fallos += 1;
+                println!("        {}", reason);
+                failures += 1;
             }
         }
     }
 
     println!();
-    if fallos == 0 {
+    if failures == 0 {
         println!("resultado: {} prueba(s), todas pasaron ✓", tests.len());
     } else {
-        println!("resultado: {} de {} prueba(s) fallaron ✗", fallos, tests.len());
+        println!("resultado: {} de {} prueba(s) fallaron ✗", failures, tests.len());
     }
-    fallos & 0xFF
+    failures & 0xFF
 }
 
 /// Ejecuta una sola prueba en aislamiento. Clona el programa base, le pone un `main` que llama
 /// solo a esa prueba, lo verifica y lo corre. `Ok(())` = pasó; `Err(motivo)` = falló (devolvió
 /// `false`, o disparó un `assert`/`panic` cuyo mensaje se devuelve).
-fn ejecutar_una(pristine: &crate::ast::Program, name: &str, kind: &Kind) -> Result<(), String> {
+fn run_one(pristine: &crate::ast::Program, name: &str, kind: &Kind) -> Result<(), String> {
     let main_src = match kind {
         // bool: 0 si pasó (true), 1 si devolvió false.
         Kind::Bool => format!("fn main() -> int {{ if ({name}()) {{ 0 }} else {{ 1 }} }}"),

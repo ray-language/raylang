@@ -11,21 +11,21 @@ fn main() -> int {
     // `scope` corre el cuerpo y, al volver, espera a TODAS las tareas lanzadas dentro. El valor del
     // scope es el del cuerpo. `spawn(f)` devuelve un `Task<T>`; `join(t)` bloquea y da su valor.
     let total = scope(fn() -> int {
-    let a: Task<int> = spawn(fn() -> int { cuadrado(3) });  // 9
-    let b: Task<int> = spawn(fn() -> int { cuadrado(4) });  // 16
-    let c: Task<int> = spawn(fn() -> int { cuadrado(5) });  // 25
-    join(a) + join(b) + join(c)
-});
+        let a: Task<int> = spawn(fn() -> int { cuadrado(3) });  // 9
+        let b: Task<int> = spawn(fn() -> int { cuadrado(4) });  // 16
+        let c: Task<int> = spawn(fn() -> int { cuadrado(5) });  // 25
+        join(a) + join(b) + join(c)
+    });
     print(total);  // 50
 
     // El scope también UNE las tareas que no unas tú: aquí no hay `join`, pero al salir del scope la
     // tarea ya terminó (escribió en el canal). Si la tarea fallara, el scope propagaría el panic.
     let ch: Channel<int> = Channel.new();
     scope(fn() {
-    spawn(fn() {
-    send(ch, 7);
-});
-});
+        spawn(fn() {
+            send(ch, 7);
+        });
+    });
     match (recv(ch)) {
         Option.Some(v) => print(v),  // 7
         Option.None => print(0 - 1),

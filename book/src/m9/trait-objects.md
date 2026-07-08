@@ -88,7 +88,7 @@ que existe un trait object. El oráculo VM↔intérprete sigue valiendo sin toca
 ## *Object safety*
 
 Una vtable no puede llevar métodos que dependan del tipo concreto borrado. Si un método usa
-`Self` fuera del receptor —`fn copia(self) -> Self`, `fn igual(self, otro: Self)`—, no hay
+`Self` fuera del receptor —`fn copia(self) -> Self`, `fn eq(self, otro: Self)`—, no hay
 forma de tipar su resultado sobre un objeto cuyo tipo se perdió. Esos métodos **no son
 invocables** sobre un `dyn Trait`:
 
@@ -126,11 +126,11 @@ La solución reusa la pieza de los bounds: la vtable se arma con `dict_for`, que
 el método plano y un **closure anidado** que rellena los diccionarios internos. Así:
 
 ```rust
-trait Mostrar { fn mostrar(self) -> string; }
+trait Mostrar { fn show(self) -> string; }
 struct Caja<T> { v: T }
-impl<T: Mostrar> Mostrar for Caja<T> { fn mostrar(self) -> string { "Caja(" + self.v.mostrar() + ")" } }
+impl<T: Mostrar> Mostrar for Caja<T> { fn show(self) -> string { "Caja(" + self.v.show() + ")" } }
 
-fn describe(d: dyn Mostrar) -> string { d.mostrar() }
+fn describe(d: dyn Mostrar) -> string { d.show() }
 describe(Caja { v: Caja { v: N {} } });   // "Caja(Caja(N))" — coerción de un impl genérico anidado
 ```
 

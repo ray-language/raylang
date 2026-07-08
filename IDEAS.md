@@ -46,6 +46,7 @@
 | **stdlib** (orden superior / string / I/O / arreglos) | prelude + builtins | **M7/M11** | ✅ `map`/`filter`/`fold` (M7.3) + string completa (M11.1/4/7a) + arreglos (`+`/`reverse`/`pop`/`contains`/`position`, M11.7b) + `sort`+`Ord` (M11.7d). Registro único de builtins (L1) |
 | **stdlib importable** (math/tiempo/cripto → módulos `std/…`) | Contenido: builtins → `std/*.ray` (cero maquinaria) | **M49** | 📌 **PLAN FIJADO** ([docs/M49-stdlib-importable.md](docs/M49-stdlib-importable.md)). Continúa M48 (descongestionar el namespace de **valores**): saca las familias matemática/tiempo/cripto del global a módulos importables (`import std/math; math.sqrt(x)`), dejando globales solo lo universal (`print`/`panic`/`assert`) y **core la concurrencia** (atada al modelo de ejecución). **Cero maquinaria nueva**: reusa la std **embebida** (M40.5, `src/stdlib.rs`+`include_str!`) + el patrón `__x`+envoltorio (como la I/O). **Empieza por `std/math`** (mayor liberación de nombres —`min`/`max`/`abs`/`round`— + ya está a medias). Decisiones recomendadas (a confirmar): `min`/`max` genéricos sobre `Ord` y `abs` sobre un trait nuevo `Signed` → **puros en raylang, sin opcode** (poda `Abs`/`Min`/`Max`); `pi`/`e` → `const PI`/`const E` (poda `Pi`/`E`); `random`/`random_int` → `std/random` (no deterministas, aparte del `math` puro); corte en seco con el **reescritor AST** de M48.4e (+ auto-`import`). Sub-fases: 49.1 `std/math` (a: float; b: abs/min/max+consts) · 49.2 `std/time`+`std/random` · 49.3 `std/crypto`. Verificación: oráculo (deterministas) + subproceso (RNG/tiempo). **Restricción hoy**: no bloquea nada (el embedding + wrappers ya existen; la migración es mecánica) |
 | **stdlib importable II** (fs/collections/net → `std/…`) | Contenido: prelude/builtins → `std/*.ray` (molde M49) | **M50** | 📌 **PLAN FIJADO** ([docs/M50-stdlib-fs-collections-net.md](docs/M50-stdlib-fs-collections-net.md)). Cierra la descongestión del namespace de valores (tras M48/M49): saca del prelude global los 3 grupos grandes que quedan → **`std/fs`** (read_file/write_file/…/open/exists; disco = opt-in, *capability hint*), **`std/collections`** (Set/Deque/StringBuilder, puras), **`std/net`** (tcp/tls/socket/udp). Se quedan globales los esenciales (`Option`/`Result`/`?`, map/filter/fold, print/eprint/panic/assert) + `close` (ad-hoc); stdin/`env` a decisión aparte. Mecanismo M49 (`__x`+envoltorio, migración dirigida por errores). Alcance tratable: collections ~2 archivos, net ~15 (ninguno embebido usa red), fs moderado. Collections en **submódulos** `std/collections/set`·`deque`·`stringbuilder` (leaf-binding M11.5: `import std/collections/set; set.new()` — agrupa Y sin prefijo redundante; sin maquinaria nueva). Verificación: oráculo (collections) + subproceso (fs/net). Sub-fases 50.1 fs · 50.2 collections · 50.3 net |
+| **Ecosistema de paquetes** (registro central + política de tiers) | CLI (`ray add`/`publish`) + índice git + gobernanza de `std/` vs paquetes | **M51** | 📌 **DISEÑO FIJADO** (DESIGN §53 política de tiers, §54 registro). Dos piezas: (a) **política de tiers** (gobernanza, ya explícita): `std/` embebida (universal/ligera/estable) vs paquetes `packages/*` (nicho/pesado/API propia) vs `examples/` (demos); criterios de colocación + pipeline de promoción `examples/→std|paquete`. (b) **Registro central** = cierra la brecha nº1 de PRODUCCION.md ("flexible en el lenguaje, ❌ en el ecosistema"): **índice respaldado por git** (repo `nombre → git URL + versiones + hash`, sin servidor propio, reusa toda la maquinaria de M39c: cápsula/lock/transitivas/MVS), `ray.toml` **por nombre** (`foo = "1.2.0"`), `ray add`/`ray publish`/`ray yank`. Prereq: **rangos semver de verdad** (diferido de M39c). Fases: ✅ **51a** leer índice+`ray add`+rangos semver (`src/index.rs`: `VersionReq` exacta/caret/tilde/`*`, lector `<index>/<name>.toml`, `resolve`/`latest`; `deps::ensure` resuelve por nombre vía índice y delega en git+lock; `ray add` con `manifest::upsert_dependency`; índice por `RAY_INDEX`/`[registry] index`; tests offline `tests/registry_cli.rs`) · ✅ **51b** `ray publish` (valida name+version+parseo · `deps::hash_package` · `index::append_version` inmutable · spec git de `--repo` o derivada de `origin`+tag `v<ver>`; tests offline con bare repo) · ✅ **51c** índice remoto por git (clonado/cacheado en `.ray-deps/.index`) + lock-pinning (reproducibilidad de caret) + `ray update` (re-resuelve + `git pull`) + `ray yank`/`--undo`. **M51 COMPLETO** (tests offline en `tests/registry_cli.rs`, 11 casos; cero runtime). Diferido: UI/búsqueda web, firmas de publicación, mirrors, namespaces con dueño |
 | **Identificadores en inglés** (deuda: nombres mezclados es/en) | Rename transversal (Rust `src/` + core raylang) | **diferida (tras M49)** | 📌 **REGLA FIJADA + PLAN** ([docs/limpieza-nombres-en-ingles.md](docs/limpieza-nombres-en-ingles.md), regla en CLAUDE.md § Convenciones). Los **identificadores** (funciones/métodos/variables/params/tipos/campos) deben ir en **inglés**; comentarios/`///` en español. El código antiguo mezcla ambos (`cargar`/`analizar`/`nombre_fachada`/`receptor`/`otro`…). Tres tiers por riesgo: **A** Rust `src/` interno (~66+ fns + vars, NO rompe) · **B** core raylang interno (selfhost/prelude/std vars privadas, NO rompe; `std/` ya casi todo inglés) · **C** ⚠️ **INCOMPATIBLE**: los métodos de trait user-facing `Eq.igual`/`Show.mostrar`/`Ord.menor` → inglés (toca cada `impl`+llamada del corpus + `@derive` + reescritor AST + self-hosted + docs; fase aparte, la última). Código **nuevo ya en inglés**. Se hace **tras cerrar los puntos pendientes** (M49.2/49.3). Verificación: suite completa (A/B) + oráculo/self-hosting byte-idéntico (C) |
 | **Optimización de la VM** | `bytecode`/`compiler`/`vm` | transversal **(activo)** | 🚧 DESIGN §27, registro medido en §11. Foco tras **aparcar M18** (backend nativo) por decisión del usuario. Principio: **incremental y midiendo** — banco `benchmarks/` (`bench.sh`+hyperfine o `measure.py` sin deps) y se conserva solo lo que supera el ruido (~3–5 %), oráculo VM↔intérprete intacto. Opt.1/Opt.2 ✅ (pase previo); Opt.3 `Rc<str>` ❌. ✅ **Opt.4** fast-path entero en ops binarias (fib −5 %, bucle −6 %); ✅ **Opt.7** posición `(línea,col)` perezosa con `pos!()` (quita la lectura de `lines[ip]` por instrucción del camino caliente → **fib −7 %, loop −9 %, arrays −8 %**, consistente; señal destapada con mejor-de-15); Opt.5 (`new_locals`)/Opt.6 (safepoint GC)/Opt.8 (`children()` con buffer reusado, dentro del ruido incluso con `gcnested.ray`)/LTO ❌ descartados. Pendiente: dedup constantes, peephole/plegado, `HeapValue` 32→16 B |
 | **Backend nativo** (bootstrap sin Rust) | codegen a máquina/asm/C/Rust | **M18** | 💤 **aparcado** (decisión del usuario, 2026-06): no perseguir lo nativo/sin-toolchain por ahora; el esfuerzo va a la optimización de la VM. Opciones barajadas: asm (as+ld), máquina directa, C, transpilar a Rust→rustc. Se retoma más adelante |
@@ -225,6 +226,12 @@ Soporte de los archivos `.ray` en editores. Tiene dos mitades muy distintas:
     `checker::member_completion`; incluye los **builtins de string/array/map** y el orden superior
     del prelude (`map`/`filter`/`fold`/`sort`). Diferido: docs `///` de métodos de impl del usuario,
     receptores que son expresiones (`f(x).`), UFCS del usuario sobre primitivos.
+  - **Completion type-aware tras `|>`** (pipeline) — el `|>` no tiene tratamiento propio en la
+    completion: sin un `.` delante, cae al camino **de archivo** (ofrece TODAS las funciones, no
+    filtradas). Idea: en `x |> ` filtrar a las funciones libres cuyo **primer parámetro** acepte el
+    tipo del operando izquierdo (`x`), igual que `member_completion_items` hace para el `.`. Reusa la
+    inferencia del checker sobre el operando. Impacto **bajo** (cliente LSP, front-end puro; cero
+    runtime). Ergonomía, no corrección.
   - Diferido: hover/def de **métodos** (comparten `(línea,col)` con el receptor, sin spans).
 
 ## 9. Anotaciones (`@test`, `@derive`, …)
@@ -406,6 +413,50 @@ lenguaje es consistente— sino refinamientos de ergonomía.
 
 **Impacto**: bajo y aditivo; ningún cambio de semántica del lenguaje, solo acepta
 más programas que hoy se rechazan. No bloquea nada.
+
+---
+
+## 13. Ecosistema de paquetes (registro central + política de tiers)
+
+Cómo se distribuyen las **librerías** de raylang y cómo se decide dónde vive cada una. El gestor de
+paquetes (M39c) ya resuelve dependencias por **git** y por **ruta**; faltan dos piezas, diseñadas en
+**DESIGN §53 (política de tiers)** y **§54 (registro central, M51)**.
+
+### 13.1 Política de tiers (gobernanza) — ya explícita
+
+Toda capacidad fuera del núcleo vive en uno de tres tiers, decididos por **universalidad · peso e
+independencia · estabilidad de API · superficie de seguridad**:
+
+- **`std/` embebida** — universal, ligera, estable; en el binario base (`import std/math;`). API atada al
+  versionado del lenguaje.
+- **paquetes `packages/*`** — nicho, pesado o dependiente de sockets/TLS; vía `ray.toml`. API con su propio
+  semver. Hoy: `packages/net`.
+- **`examples/`** — demos y material pedagógico; no importables como librería.
+
+**Pipeline de promoción**: `examples/` (prototipo) → si madura → `std/` (universal) o `packages/*` (nicho).
+Regla de seguridad ya vigente: cripto que toca secretos reales → paquete respaldado por `ring` (`net/crypto`),
+no la impl pura embebida (que se queda como demo del lenguaje).
+
+### 13.2 Registro central (M51) — la brecha nº1 del ecosistema
+
+Hoy "instalar" = escribir la URL git exacta. Falta **instalar por nombre** (`ray add foo`) contra un
+**índice** y **publicar** (`ray publish`). Es la brecha que `PRODUCCION.md` (Parte I §2) marca como
+"flexible en el lenguaje, ❌ en el ecosistema".
+
+**Decisión central: índice respaldado por git, sin servidor propio** (coherente con "cero deps de Cargo /
+*shell out* a git / tests offline"). El índice es un **repo git** que mapea `nombre → (git URL, versiones,
+hash)`; todo lo demás (descarga, cápsula, lock, transitivas, MVS) es la **maquinaria existente de M39c**.
+Descartado el índice hospedado (contradice el "sin servidor"; su valor —búsqueda, cuentas, firmas— es
+ortogonal y se añade después sobre el mismo índice git).
+
+- **`ray.toml` por nombre**: `foo = "1.2.0"` (sin prefijo `git+`/`path:`) → resuelve por el índice.
+- **Subcomandos**: `ray add`, `ray publish` (valida+hashea+añade entrada inmutable), `ray update`, `ray yank`.
+- **Prereq**: rangos semver de verdad (diferido de M39c; el índice mapea un nombre a muchas versiones).
+- **Fases**: 51a leer índice + `ray add` + rangos · 51b `ray publish` · 51c índice remoto + `update`/`yank`.
+
+**Impacto**: **medio-alto en adopción, cero en runtime y en el lenguaje** — es CLI + resolución en el
+front-end; los motores nunca ven un paquete. Es aditivo (git/`path:` siguen). Diferido: UI/búsqueda web,
+firmas de publicación (sobre el hash existente), mirrors/proxy, namespaces con dueño.
 
 ---
 

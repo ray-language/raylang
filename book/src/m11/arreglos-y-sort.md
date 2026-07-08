@@ -62,9 +62,9 @@ raylang y reusa toda la maquinaria de traits de M9.
 Primero, un trait de orden en el prelude, con impls para los primitivos:
 
 ```rust
-trait Ord { fn menor(self, otro: Self) -> bool; }
-impl Ord for int    { fn menor(self, otro: int)    -> bool { self < otro } }
-impl Ord for string { fn menor(self, otro: string) -> bool { self < otro } }
+trait Ord { fn less(self, otro: Self) -> bool; }
+impl Ord for int    { fn less(self, otro: int)    -> bool { self < otro } }
+impl Ord for string { fn less(self, otro: string) -> bool { self < otro } }
 // … float, char
 ```
 
@@ -78,7 +78,7 @@ fn sort<T: Ord>(a: [T]) -> [T] {        // insertion sort
         let x = a[i];
         push(out, x);
         var j = len(out) - 1;
-        while (j > 0 && x.menor(out[j - 1])) { out[j] = out[j - 1]; j = j - 1; }
+        while (j > 0 && x.less(out[j - 1])) { out[j] = out[j - 1]; j = j - 1; }
         out[j] = x;
         i = i + 1;
     }
@@ -86,7 +86,7 @@ fn sort<T: Ord>(a: [T]) -> [T] {        // insertion sort
 }
 ```
 
-El `T: Ord` se baja al **paso de diccionarios** de M9.2: `sort` recibe el método `menor` como un
+El `T: Ord` se baja al **paso de diccionarios** de M9.2: `sort` recibe el método `less` como un
 argumento oculto. Así que `sort` es **front-end puro, cero opcodes nuevos**. Cualquier tipo del
 usuario que implemente `Ord` es ordenable —y el oráculo lo prueba—.
 

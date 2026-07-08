@@ -274,7 +274,7 @@ fn corpus_despacho_dinamico() {
 }
 
 // El prelude COMPLETO ya compila por la VM (M14.5d): map/filter/fold (llamadas indirectas, M14.5c) +
-// sort/assert_eq (métodos `.menor()`/`.igual()`/`.mostrar()`, resueltos por ODispatch). `run_vm.ray` lo
+// sort/assert_eq (métodos `.less()`/`.eq()`/`.show()`, resueltos por ODispatch). `run_vm.ray` lo
 // fusiona como `run.ray`.
 #[test]
 fn corpus_prelude() {
@@ -300,10 +300,10 @@ fn metodos_y_ufcs_snippets() {
     );
     // @derive(Eq, Show): igualdad e impresión derivadas (resueltas por valor, sin tabla de métodos).
     comparar_fuente(
-        "@derive(Eq, Show) struct Punto { x: int, y: int } fn main() -> int { let a = Punto { x: 1, y: 2 }; let b = Punto { x: 1, y: 2 }; print(a.igual(b)); print(a.mostrar()); 0 }",
+        "@derive(Eq, Show) struct Punto { x: int, y: int } fn main() -> int { let a = Punto { x: 1, y: 2 }; let b = Punto { x: 1, y: 2 }; print(a.eq(b)); print(a.show()); 0 }",
         "vm_derive.ray",
     );
-    // sort del prelude sobre un arreglo de int (usa `.menor()` de Ord sobre primitivos).
+    // sort del prelude sobre un arreglo de int (usa `.less()` de Ord sobre primitivos).
     comparar_fuente(
         "fn main() -> int { let xs = sort([3, 1, 2]); print(xs); 0 }",
         "vm_sort.ray",

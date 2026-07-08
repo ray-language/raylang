@@ -23,11 +23,11 @@ fn main() -> int {
     let a: Channel<int> = Channel.new();
     let b: Channel<int> = Channel.new();
     spawn(fn() {
-    fuente(a, 100, 2);  // 100, 101
-});
+        fuente(a, 100, 2);  // 100, 101
+    });
     spawn(fn() {
-    fuente(b, 200, 2);  // 200, 201
-});
+        fuente(b, 200, 2);  // 200, 201
+    });
 
     let chs: [Channel<int>] = [a, b];
     var total = 0;

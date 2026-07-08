@@ -9,7 +9,7 @@
 //!
 //! Los `std/*.ray` del repo siguen siendo la **única fuente de verdad**: `include_str!` los compila
 //! dentro, y `ray doc std/math.ray` los lee directamente del disco (en el repo). Añadir un módulo =
-//! una fila en [`MODULOS`].
+//! una fila en [`MODULES`].
 //!
 //! El [`loader`](crate::loader) consulta [`embedded`] **antes** de tocar el disco: si el nombre de
 //! módulo (`std/math`) está aquí, usa la fuente embebida y no busca en el filesystem. El prefijo
@@ -18,7 +18,7 @@
 /// Los módulos embebidos: `(nombre de módulo, fuente)`. El nombre es la **ruta de import** sin `.ray`
 /// (`import std/math;` → `"std/math"`). Las rutas de `include_str!` son relativas a este archivo
 /// (`src/stdlib.rs` → `../std/…`).
-const MODULOS: &[(&str, &str)] = &[
+const MODULES: &[(&str, &str)] = &[
     // Utilidades escritas para la stdlib (viven en `std/`).
     ("std/fs", include_str!("../std/fs.ray")), // M50.1
     ("std/net", include_str!("../std/net.ray")), // M50.3
@@ -60,8 +60,8 @@ const MODULOS: &[(&str, &str)] = &[
 ];
 
 /// La fuente embebida del módulo `nombre` (`"std/math"`), o `None` si no es un módulo de la stdlib.
-pub fn embedded(nombre: &str) -> Option<&'static str> {
-    MODULOS.iter().find(|(n, _)| *n == nombre).map(|(_, src)| *src)
+pub fn embedded(name: &str) -> Option<&'static str> {
+    MODULES.iter().find(|(n, _)| *n == name).map(|(_, src)| *src)
 }
 
 #[cfg(test)]

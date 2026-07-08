@@ -33,19 +33,24 @@ pub struct Manifest {
     pub indent_style: Option<String>,
     /// `[fmt] indent_size` — nº de espacios por nivel (si `indent_style = "space"`). `None` = no declarado.
     pub indent_size: Option<usize>,
+    /// `[registry] index` — el **índice de paquetes** para resolver dependencias por nombre (M51). Un
+    /// directorio local (M51a) o, más adelante, una URL git del repo del índice (M51c). Relativo a la
+    /// raíz del proyecto si no es absoluto. `None` = sin índice (solo deps git/`path:`). Lo puede
+    /// sobrescribir la variable de entorno `RAY_INDEX`.
+    pub registry_index: Option<String>,
 }
 
 impl Manifest {
     /// Busca la raíz del proyecto que contiene `dir`: sube por los ancestros hasta hallar un
     /// `ray.toml`. Devuelve la ruta del `ray.toml`, o `None` si no hay proyecto por encima.
     pub fn find(dir: &Path) -> Option<PathBuf> {
-        let mut actual = Some(dir);
-        while let Some(d) = actual {
-            let candidato = d.join("ray.toml");
-            if candidato.is_file() {
-                return Some(candidato);
+        let mut current = Some(dir);
+        while let Some(d) = current {
+            let candidate = d.join("ray.toml");
+            if candidate.is_file() {
+                return Some(candidate);
             }
-            actual = d.parent();
+            current = d.parent();
         }
         None
     }
@@ -53,13 +58,13 @@ impl Manifest {
     /// Carga el manifiesto del proyecto que contiene `dir` (subiendo). `Ok(None)` si no hay
     /// proyecto; `Err` si el `ray.toml` existe pero está mal formado o le falta algo.
     pub fn load(dir: &Path) -> Result<Option<Manifest>, String> {
-        let Some(ruta) = Manifest::find(dir) else {
+        let Some(path) = Manifest::find(dir) else {
             return Ok(None);
         };
-        let raiz = ruta.parent().unwrap_or(Path::new(".")).to_path_buf();
-        let fuente = std::fs::read_to_string(&ruta)
-            .map_err(|e| format!("no se pudo leer '{}': {e}", ruta.display()))?;
-        parse(&fuente, raiz).map(Some)
+        let root = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let source = std::fs::read_to_string(&path)
+            .map_err(|e| format!("no se pudo leer '{}': {e}", path.display()))?;
+        parse(&source, root).map(Some)
     }
 
     /// La ruta absoluta del archivo de entrada (raíz + `entry`).
@@ -70,58 +75,63 @@ impl Manifest {
 
 /// Parsea el subconjunto de TOML que `ray.toml` usa. `root` es el directorio del manifiesto.
 fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
-    let mut seccion = String::new();
+    let mut section = String::new();
     let mut name = None;
     let mut version = None;
     let mut entry = None;
     let mut dependencies = Vec::new();
     let mut indent_style = None;
     let mut indent_size = None;
+    let mut registry_index = None;
 
-    for (i, linea_cruda) in src.lines().enumerate() {
+    for (i, raw_line) in src.lines().enumerate() {
         let num = i + 1;
         // Quitar comentario (`#`) y espacios. No hay `#` dentro de las cadenas de un manifiesto.
-        let linea = match linea_cruda.split_once('#') {
-            Some((antes, _)) => antes,
-            None => linea_cruda,
+        let line = match raw_line.split_once('#') {
+            Some((before, _)) => before,
+            None => raw_line,
         }
         .trim();
-        if linea.is_empty() {
+        if line.is_empty() {
             continue;
         }
         // Cabecera de sección `[tabla]`.
-        if let Some(resto) = linea.strip_prefix('[') {
-            let nombre = resto
+        if let Some(rest) = line.strip_prefix('[') {
+            let name = rest
                 .strip_suffix(']')
                 .ok_or_else(|| err(num, "cabecera de sección sin ']'"))?;
-            seccion = nombre.trim().to_string();
+            section = name.trim().to_string();
             continue;
         }
         // Par `clave = valor`.
-        let (clave, valor) = linea
+        let (key, value) = line
             .split_once('=')
             .ok_or_else(|| err(num, "se esperaba 'clave = valor' o '[seccion]'"))?;
-        let clave = clave.trim();
-        let valor_raw = valor.trim();
+        let key = key.trim();
+        let value_raw = value.trim();
         // La mayoría de valores son cadenas `"..."`; `[fmt] indent_size` admite un entero sin comillas.
-        let como_cadena = || desenrollar_cadena(valor_raw)
+        let as_string = || unquote_string(value_raw)
             .ok_or_else(|| err(num, "el valor debe ir entre comillas dobles"));
-        match seccion.as_str() {
-            "package" => match clave {
-                "name" => name = Some(como_cadena()?),
-                "version" => version = Some(como_cadena()?),
-                "entry" => entry = Some(como_cadena()?),
+        match section.as_str() {
+            "package" => match key {
+                "name" => name = Some(as_string()?),
+                "version" => version = Some(as_string()?),
+                "entry" => entry = Some(as_string()?),
                 _ => {} // claves desconocidas de [package] se ignoran (extensibilidad)
             },
-            "dependencies" => dependencies.push((clave.to_string(), como_cadena()?)),
-            "fmt" => match clave {
-                "indent_style" => indent_style = Some(como_cadena()?),
+            "dependencies" => dependencies.push((key.to_string(), as_string()?)),
+            "fmt" => match key {
+                "indent_style" => indent_style = Some(as_string()?),
                 // `indent_size = 2` (entero) o `"2"` (cadena); ambos se aceptan.
                 "indent_size" => {
-                    let s = desenrollar_cadena(valor_raw).unwrap_or_else(|| valor_raw.to_string());
+                    let s = unquote_string(value_raw).unwrap_or_else(|| value_raw.to_string());
                     indent_size = s.parse::<usize>().ok();
                 }
                 _ => {}
+            },
+            "registry" => match key {
+                "index" => registry_index = Some(as_string()?),
+                _ => {} // otras claves del registro (M51c: mirrors, etc.) se ignoran por ahora
             },
             "" => return Err(err(num, "clave fuera de toda sección (falta '[package]')")),
             _ => {} // otras secciones se ignoran por ahora
@@ -136,30 +146,76 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         root,
         indent_style,
         indent_size,
+        registry_index,
     })
+}
+
+/// Inserta o actualiza `nombre = "<req>"` en la sección `[dependencies]` del fuente de un `ray.toml`
+/// (para `ray add`, M51a). Si el nombre ya está, reemplaza su requisito; si no, lo añade al final de
+/// la sección. Si no hay sección `[dependencies]`, la crea al final del archivo. Preserva el resto
+/// (comentarios, otras secciones) — es una edición mínima línea a línea, no un reserializado.
+pub fn upsert_dependency(src: &str, name: &str, req: &str) -> String {
+    let new_line = format!("{name} = \"{req}\"");
+    let mut lines: Vec<String> = src.lines().map(str::to_string).collect();
+    // ¿Existe ya la sección [dependencies]? Localiza su rango [inicio+1, fin_exclusivo).
+    let dep_header = lines.iter().position(|l| l.trim() == "[dependencies]");
+    if let Some(start) = dep_header {
+        // Fin de la sección: la siguiente cabecera `[...]`, o el final del archivo.
+        let end = lines[start + 1..]
+            .iter()
+            .position(|l| l.trim().starts_with('['))
+            .map(|off| start + 1 + off)
+            .unwrap_or(lines.len());
+        // ¿Ya existe una entrada para `name`? (clave antes del `=`, ignorando espacios).
+        let existing = lines[start + 1..end].iter().position(|l| {
+            l.split_once('=').is_some_and(|(k, _)| k.trim() == name)
+        });
+        match existing {
+            Some(off) => lines[start + 1 + off] = new_line, // reemplaza el requisito
+            None => {
+                // Inserta tras la última línea no vacía de la sección (antes de los blancos finales).
+                let mut insert_at = end;
+                while insert_at > start + 1 && lines[insert_at - 1].trim().is_empty() {
+                    insert_at -= 1;
+                }
+                lines.insert(insert_at, new_line);
+            }
+        }
+    } else {
+        if !lines.is_empty() && !lines.last().is_some_and(|l| l.trim().is_empty()) {
+            lines.push(String::new());
+        }
+        lines.push("[dependencies]".to_string());
+        lines.push(new_line);
+    }
+    let mut out = lines.join("\n");
+    if src.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 /// Desenrolla una cadena TOML `"..."` a su contenido. `None` si no está entre comillas.
 /// (Subconjunto: sin escapes; ni las URLs ni los nombres los necesitan.)
-fn desenrollar_cadena(s: &str) -> Option<String> {
+fn unquote_string(s: &str) -> Option<String> {
     s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).map(str::to_string)
 }
 
-fn err(linea: usize, msg: &str) -> String {
-    format!("ray.toml:{linea}: {msg}")
+fn err(line: usize, msg: &str) -> String {
+    format!("ray.toml:{line}: {msg}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn parsear(src: &str) -> Result<Manifest, String> {
+    fn parse_src(src: &str) -> Result<Manifest, String> {
         parse(src, PathBuf::from("/proj"))
     }
 
     #[test]
     fn manifiesto_minimo() {
-        let m = parsear("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\n").unwrap();
+        let m = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\n").unwrap();
         assert_eq!(m.name, "demo");
         assert_eq!(m.version, "0.1.0");
         assert_eq!(m.entry, "src/main.ray"); // por defecto
@@ -180,17 +236,39 @@ entry = \"src/app.ray\"
 geo = \"git+https://ejemplo/geo@v1.0\"
 util = \"git+https://ejemplo/util@v2.1\"
 ";
-        let m = parsear(src).unwrap();
+        let m = parse_src(src).unwrap();
         assert_eq!(m.entry, "src/app.ray");
         assert_eq!(m.dependencies.len(), 2);
         assert_eq!(m.dependencies[0], ("geo".into(), "git+https://ejemplo/geo@v1.0".into()));
     }
 
     #[test]
+    fn upsert_añade_reemplaza_y_crea_seccion() {
+        // Añade a una sección [dependencies] existente (vacía).
+        let base = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\n";
+        let a = upsert_dependency(base, "geo", "^1.2");
+        assert!(a.contains("[dependencies]\ngeo = \"^1.2\""), "añade a la sección:\n{a}");
+        // Reemplaza el requisito de una dep existente, sin duplicar.
+        let b = upsert_dependency(&a, "geo", "2.0.0");
+        assert!(b.contains("geo = \"2.0.0\""), "reemplaza:\n{b}");
+        assert!(!b.contains("^1.2"), "sin duplicar:\n{b}");
+        assert_eq!(b.matches("geo =").count(), 1);
+        // Crea la sección si no existe.
+        let c = upsert_dependency("[package]\nname = \"x\"\nversion = \"0.1.0\"\n", "util", "1.0.0");
+        assert!(c.contains("[dependencies]\nutil = \"1.0.0\""), "crea la sección:\n{c}");
+        // No mete la dep en otra sección posterior.
+        let d = upsert_dependency("[package]\nname=\"x\"\nversion=\"1\"\n\n[dependencies]\na = \"1.0.0\"\n\n[fmt]\nindent_size = 2\n", "b", "2.0.0");
+        let deps_idx = d.find("[dependencies]").unwrap();
+        let fmt_idx = d.find("[fmt]").unwrap();
+        let b_idx = d.find("b = ").unwrap();
+        assert!(deps_idx < b_idx && b_idx < fmt_idx, "b va dentro de [dependencies], antes de [fmt]:\n{d}");
+    }
+
+    #[test]
     fn errores_claros() {
-        assert!(parsear("name = \"x\"\n").unwrap_err().contains("fuera de toda sección"));
-        assert!(parsear("[package]\nname = x\n").unwrap_err().contains("comillas"));
-        assert!(parsear("[package]\nname = \"x\"\n").unwrap_err().contains("falta 'version'"));
-        assert!(parsear("[package\n").unwrap_err().contains("sin ']'"));
+        assert!(parse_src("name = \"x\"\n").unwrap_err().contains("fuera de toda sección"));
+        assert!(parse_src("[package]\nname = x\n").unwrap_err().contains("comillas"));
+        assert!(parse_src("[package]\nname = \"x\"\n").unwrap_err().contains("falta 'version'"));
+        assert!(parse_src("[package\n").unwrap_err().contains("sin ']'"));
     }
 }

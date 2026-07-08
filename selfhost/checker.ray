@@ -729,13 +729,13 @@ fn inject_prelude_traits(c: Checker, prog: Program) {
 
 fn self_param() -> Param { Param { name: "self", ty: Type.TNamed("Self", []), line: 0, col: 0 } }
 
-fn other_param() -> Param { Param { name: "otro", ty: Type.TNamed("Self", []), line: 0, col: 0 } }
+fn other_param() -> Param { Param { name: "other", ty: Type.TNamed("Self", []), line: 0, col: 0 } }
 
-fn eq_sig() -> MethodSig { MethodSig { name: "igual", params: [self_param(), other_param()], ret: Type.TBool, default_body: Option.None, line: 0, col: 0 } }
+fn eq_sig() -> MethodSig { MethodSig { name: "eq", params: [self_param(), other_param()], ret: Type.TBool, default_body: Option.None, line: 0, col: 0 } }
 
-fn show_sig() -> MethodSig { MethodSig { name: "mostrar", params: [self_param()], ret: Type.TString, default_body: Option.None, line: 0, col: 0 } }
+fn show_sig() -> MethodSig { MethodSig { name: "show", params: [self_param()], ret: Type.TString, default_body: Option.None, line: 0, col: 0 } }
 
-fn ord_sig() -> MethodSig { MethodSig { name: "menor", params: [self_param(), other_param()], ret: Type.TBool, default_body: Option.None, line: 0, col: 0 } }
+fn ord_sig() -> MethodSig { MethodSig { name: "less", params: [self_param(), other_param()], ret: Type.TBool, default_body: Option.None, line: 0, col: 0 } }
 
 // Registra un método de impl del prelude (FnSig monomórfica) + la marca en `impl_traits`.
 fn inject_method_impl(c: Checker, key: string, trait_name: string, method: string, params: [Type], ret: Type) {
@@ -744,15 +744,15 @@ fn inject_method_impl(c: Checker, key: string, trait_name: string, method: strin
 }
 
 fn inject_prim_eq(c: Checker, ty: Type, key: string) {
-    inject_method_impl(c, key, "Eq", "igual", [ty, ty], Type.TBool);
+    inject_method_impl(c, key, "Eq", "eq", [ty, ty], Type.TBool);
 }
 
 fn inject_prim_show(c: Checker, ty: Type, key: string) {
-    inject_method_impl(c, key, "Show", "mostrar", [ty], Type.TString);
+    inject_method_impl(c, key, "Show", "show", [ty], Type.TString);
 }
 
 fn inject_prim_ord(c: Checker, ty: Type, key: string) {
-    inject_method_impl(c, key, "Ord", "menor", [ty, ty], Type.TBool);
+    inject_method_impl(c, key, "Ord", "less", [ty, ty], Type.TBool);
 }
 
 // ¿El usuario declara un trait con ese nombre?
@@ -3138,10 +3138,10 @@ fn register_derived_impl(c: Checker, type_name: string, trait_name: string) {
     }
     let target = Type.TNamed(type_name, []);
     if (trait_name == "Eq") {
-        c.methods.insert(mangle(type_name, "igual"), FnSig { params: [target, target], ret: Type.TBool, type_params: no_tparams(), bounds: no_bounds() });
+        c.methods.insert(mangle(type_name, "eq"), FnSig { params: [target, target], ret: Type.TBool, type_params: no_tparams(), bounds: no_bounds() });
     }
     if (trait_name == "Show") {
-        c.methods.insert(mangle(type_name, "mostrar"), FnSig { params: [target], ret: Type.TString, type_params: no_tparams(), bounds: no_bounds() });
+        c.methods.insert(mangle(type_name, "show"), FnSig { params: [target], ret: Type.TString, type_params: no_tparams(), bounds: no_bounds() });
     }
     c.impl_traits.insert(mangle(type_name, trait_name), true);
 }

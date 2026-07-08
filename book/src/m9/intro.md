@@ -19,11 +19,11 @@ para "ser" ese trait. Un `impl Trait for Tipo` cumple el contrato para un tipo c
 
 ```rust
 trait Mostrable {
-    fn mostrar(self) -> string;     // el contrato: una firma, sin cuerpo
+    fn show(self) -> string;     // el contrato: una firma, sin cuerpo
 }
 
 impl Mostrable for Punto {
-    fn mostrar(self) -> string {     // el cumplimiento, para Punto
+    fn show(self) -> string {     // el cumplimiento, para Punto
         "un punto"
     }
 }

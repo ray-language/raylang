@@ -61,10 +61,10 @@ impl Signed for float {
 pub fn abs<T: Signed>(x: T) -> T { x.abs() }
 
 /// The smaller of `a` and `b` (any `Ord` type: int/float/string/char). Ties return `a`.
-pub fn min<T: Ord>(a: T, b: T) -> T { if (a.menor(b)) { a } else { b } }
+pub fn min<T: Ord>(a: T, b: T) -> T { if (a.less(b)) { a } else { b } }
 
 /// The larger of `a` and `b` (any `Ord` type). Ties return `a`.
-pub fn max<T: Ord>(a: T, b: T) -> T { if (b.menor(a)) { a } else { b } }
+pub fn max<T: Ord>(a: T, b: T) -> T { if (b.less(a)) { a } else { b } }
 
 /// Absolute value of `x`.
 pub fn iabs(x: int) -> int {

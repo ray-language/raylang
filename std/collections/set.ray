@@ -36,7 +36,7 @@ fn bucket<T: Hash>(x: T, n: int) -> int {
 fn in_bucket<T: Eq>(b: [T], x: T) -> bool {
     var i = 0;
     while (i < b.len()) {
-        if (b[i].igual(x)) {
+        if (b[i].eq(x)) {
             return true;
         }
         i = i + 1;
@@ -71,7 +71,7 @@ pub fn remove<T: Hash + Eq>(s: Set<T>, x: T) {
     var i = 0;
     var removed = false;
     while (i < b.len()) {
-        if (b[i].igual(x)) {
+        if (b[i].eq(x)) {
             removed = true;
         } else {
             out.push(b[i]);

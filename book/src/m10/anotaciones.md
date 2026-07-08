@@ -89,20 +89,20 @@ Esta es la cara interesante —y el pago de M9—. `@derive(Eq)` sobre un struct
 `impl Eq`, donde `Eq` es un trait del prelude:
 
 ```rust
-trait Eq { fn igual(self, otro: Self) -> bool; }   // en el prelude
+trait Eq { fn eq(self, otro: Self) -> bool; }   // en el prelude
 
 @derive(Eq)
 enum Color { Rojo, Verde, Azul }
-// genera: impl Eq for Color { fn igual(self, otro: Self) -> bool { ... } }
+// genera: impl Eq for Color { fn eq(self, otro: Self) -> bool { ... } }
 ```
 
-¿Por qué `igual` y no `==`? Porque `==` ya compara structs estructuralmente, pero **no**
+¿Por qué `eq` y no `==`? Porque `==` ya compara structs estructuralmente, pero **no**
 enums (pueden ser recursivos / portar funciones). `@derive(Eq)` da una igualdad **explícita**
-para enums (`a.igual(b)`), sin tocar la semántica de `==`.
+para enums (`a.eq(b)`), sin tocar la semántica de `==`.
 
 **La implementación es sorprendentemente pequeña**, porque se apoya en todo lo anterior. El
 checker no arma el `impl` nodo a nodo: **genera su fuente y lo parsea**, y deja que **M9**
-haga el resto (bajarlo a `Color#igual`, registrarlo). El cuerpo de `igual`:
+haga el resto (bajarlo a `Color#igual`, registrarlo). El cuerpo de `eq`:
 
 - **struct**: conjunción de los campos —`self.x == otro.x && self.y == otro.y`—.
 - **enum**: `match` sobre `self`; por cada variante, `match` sobre `otro`: misma variante →
@@ -113,7 +113,7 @@ haga el resto (bajarlo a `Color#igual`, registrarlo). El cuerpo de `igual`:
         │
         ▼  (el checker genera y parsea este impl)
 impl Eq for Forma {
-    fn igual(self, otro: Self) -> bool {
+    fn eq(self, otro: Self) -> bool {
         match (self) {
             Forma.Circulo(a0)    => match (otro) { Forma.Circulo(b0)    => a0 == b0,            _ => false },
             Forma.Rect(a0, a1)   => match (otro) { Forma.Rect(b0, b1)   => a0 == b0 && a1 == b1, _ => false },
@@ -126,7 +126,7 @@ Y como el resultado es un `impl Eq` normal, **compone con todo M9**: un tipo der
 satisface un bound `T: Eq`, se puede usar en código genérico, etc.
 
 ```rust
-fn iguales<T: Eq>(a: T, b: T) -> bool { a.igual(b) }
+fn iguales<T: Eq>(a: T, b: T) -> bool { a.eq(b) }
 iguales(Color.Rojo, Color.Verde)   // false — funciona porque Color deriva Eq
 ```
 
@@ -137,22 +137,22 @@ que sea **otro enum** no es comparable (derivación recursiva, futura); y `@deri
 ### `@derive(Show)` (añadido en L2)
 
 La consolidación post-M11 amplió el mecanismo a un segundo trait, `Show`, que genera
-`mostrar(self) -> string` —una representación textual—. La generalización fue mínima
+`show(self) -> string` —una representación textual—. La generalización fue mínima
 (`generate_derives`/`validate_derive` pasan a aceptar ambos), y `@derive(Eq, Show)` genera los
 dos impls:
 
 ```rust
-trait Show { fn mostrar(self) -> string; }   // en el prelude
+trait Show { fn show(self) -> string; }   // en el prelude
 
 @derive(Show)
 struct Punto { x: int, y: int }
-// "Punto { x: 3, y: 4 }"   ──  p.mostrar()
+// "Punto { x: 3, y: 4 }"   ──  p.show()
 ```
 
-El cuerpo renderiza **por tipo**: primitivos vía `to_string`, struct/enum vía `mostrar()`
+El cuerpo renderiza **por tipo**: primitivos vía `to_string`, struct/enum vía `show()`
 recursivo (los anidados deben implementar Show). Por eso `Show` **sí funciona con enums
 recursivos** (una lista enlazada se imprime entera) donde `Eq` no llegaba: la recursión vive en
-los datos, no impide la llamada a `mostrar`. Se difieren los campos de tipo arreglo/función
+los datos, no impide la llamada a `show`. Se difieren los campos de tipo arreglo/función
 (error claro) y los tipos genéricos, como en `Eq`.
 
 > **La lección.** `@derive(Eq)` ronda las ~60 líneas de checker, no porque hagamos trampa,

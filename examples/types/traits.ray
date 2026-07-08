@@ -40,13 +40,13 @@ impl Valor for int {
 
 // Un trait con `Self` en el retorno y un método que llama a otro del mismo impl.
 trait Punteable {
-    fn sumar(self, otro: Punto) -> Punto;
+    fn sumar(self, other: Punto) -> Punto;
     fn doble(self) -> Self;  // 'Self' = el tipo implementador
 }
 
 impl Punteable for Punto {
-    fn sumar(self, otro: Punto) -> Punto {
-        Punto { x: self.x + otro.x, y: self.y + otro.y }
+    fn sumar(self, other: Punto) -> Punto {
+        Punto { x: self.x + other.x, y: self.y + other.y }
     }
 
     fn doble(self) -> Self { self.sumar(self) }

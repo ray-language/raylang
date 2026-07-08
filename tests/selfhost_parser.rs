@@ -597,14 +597,14 @@ fn tipos_genericos_dyn_y_map() {
 
 #[test]
 fn traits_e_impls() {
-    comparar("trait Show { fn mostrar(self) -> string; }", "sp_trait.ray");
+    comparar("trait Show { fn show(self) -> string; }", "sp_trait.ray");
     comparar(
         "trait Saludo { fn hola(self) -> string { \"hola\" } fn chau(self) -> string; }",
         "sp_trait_default.ray",
     );
-    comparar("impl Show for int { fn mostrar(self) -> string { \"i\" } }", "sp_impl.ray");
+    comparar("impl Show for int { fn show(self) -> string { \"i\" } }", "sp_impl.ray");
     comparar(
-        "impl<T: Show> Show for Caja<T> { fn mostrar(self) -> string { self.v.mostrar() } }",
+        "impl<T: Show> Show for Caja<T> { fn show(self) -> string { self.v.show() } }",
         "sp_impl_gen.ray",
     );
 }

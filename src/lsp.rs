@@ -2986,7 +2986,7 @@ mod tests {
     fn document_symbol_lista_el_outline() {
         let mut docs = HashMap::new();
         let uri = "file:///t.ray".to_string();
-        let src = "const K: int = 3;\nstruct Punto { x: int, y: int }\nenum Color { Rojo, Verde }\ntrait Show { fn mostrar(self) -> string; }\nimpl Show for Punto { fn mostrar(self) -> string { \"p\" } }\nfn main() -> int { 0 }\n";
+        let src = "const K: int = 3;\nstruct Punto { x: int, y: int }\nenum Color { Rojo, Verde }\ntrait Show { fn show(self) -> string; }\nimpl Show for Punto { fn show(self) -> string { \"p\" } }\nfn main() -> int { 0 }\n";
         docs.insert(uri.clone(), src.to_string());
         let msg = obj(vec![("params", obj(vec![("textDocument", obj(vec![("uri", text(&uri))]))]))]);
         let syms = document_symbol_result(&msg, &docs);
@@ -3058,10 +3058,10 @@ mod tests {
         assert_eq!(r.get("contents").unwrap().get("kind"), Some(&Json::Str("markdown".into())));
 
         // Un MÉTODO documentado con `///` también muestra su doc (M10.2h: los métodos se indexan).
-        let src_m = "trait Show { fn mostrar(self) -> string; }\nstruct P { v: int }\nimpl Show for P {\n  /// Muestra el valor.\n  fn mostrar(self) -> string { \"p\" }\n}\nfn main() -> int {\n  let p = P { v: 1 };\n  print(p.mostrar());\n  0\n}\n";
+        let src_m = "trait Show { fn show(self) -> string; }\nstruct P { v: int }\nimpl Show for P {\n  /// Muestra el valor.\n  fn show(self) -> string { \"p\" }\n}\nfn main() -> int {\n  let p = P { v: 1 };\n  print(p.show());\n  0\n}\n";
         docs.insert(uri.clone(), src_m.to_string());
-        // `p.mostrar()` en la línea 9 (0-based 8); `mostrar` tras el punto.
-        let col_m = src_m.lines().nth(8).unwrap().find("mostrar").unwrap();
+        // `p.show()` en la línea 9 (0-based 8); `mostrar` tras el punto.
+        let col_m = src_m.lines().nth(8).unwrap().find("show").unwrap();
         let d = doc_of_symbol(&uri, src_m, 8, col_m, &docs).expect("doc del método");
         assert_eq!(d, "Muestra el valor.", "hover-doc de método");
 

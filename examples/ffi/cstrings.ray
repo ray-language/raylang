@@ -18,7 +18,7 @@ extern "c" {
 }
 
 // La misma función, pero recibiendo los bytes crudos (sin asumir UTF-8).
-fn mostrar(o: Option<string>) -> string {
+fn show(o: Option<string>) -> string {
     match (o) {
         Option.Some(s) => s,
         Option.None => "(no encontrado)",
@@ -40,8 +40,8 @@ fn contar_bytes(h: ptr) -> int {
 }
 
 fn main() -> int {
-    print(mostrar(strstr("hola mundo", "mundo")));  // mundo
-    print(mostrar(strstr("hola mundo", "xyz")));  // (no encontrado)
+    print(show(strstr("hola mundo", "mundo")));  // mundo
+    print(show(strstr("hola mundo", "xyz")));  // (no encontrado)
 
     // strchr por el código de 'l' (108): "llo mundo" (bytes crudos).
     match (strchr("hola mundo", 108)) {

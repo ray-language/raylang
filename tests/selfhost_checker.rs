@@ -369,16 +369,16 @@ fn prelude_map_filter_fold() {
 
 #[test]
 fn derive_y_anotaciones_validos() {
-    // @derive(Eq): .igual() sobre struct.
-    comparar("@derive(Eq) struct P { x: int } fn main() -> int { let a = P { x: 1 }; let b = P { x: 1 }; if (a.igual(b)) { 1 } else { 0 } }", "scan_eq.ray");
-    // @derive(Show): .mostrar() sobre enum.
-    comparar("@derive(Show) enum C { Rojo, Azul } fn main() -> int { print(C.Rojo.mostrar()); 0 }", "scan_show.ray");
+    // @derive(Eq): .eq() sobre struct.
+    comparar("@derive(Eq) struct P { x: int } fn main() -> int { let a = P { x: 1 }; let b = P { x: 1 }; if (a.eq(b)) { 1 } else { 0 } }", "scan_eq.ray");
+    // @derive(Show): .show() sobre enum.
+    comparar("@derive(Show) enum C { Rojo, Azul } fn main() -> int { print(C.Rojo.show()); 0 }", "scan_show.ray");
     // @derive(Eq, Show) a la vez.
-    comparar("@derive(Eq, Show) struct P { x: int, y: int } fn main() -> int { let p = P { x: 1, y: 2 }; print(p.mostrar()); if (p.igual(p)) { 1 } else { 0 } }", "scan_both.ray");
+    comparar("@derive(Eq, Show) struct P { x: int, y: int } fn main() -> int { let p = P { x: 1, y: 2 }; print(p.show()); if (p.eq(p)) { 1 } else { 0 } }", "scan_both.ray");
     // El tipo derivado satisface un bound T: Eq.
-    comparar("@derive(Eq) enum C { A, B } fn ci<T: Eq>(a: T, b: T) -> int { if (a.igual(b)) { 1 } else { 0 } } fn main() -> int { ci(C.A, C.A) }", "scan_bound.ray");
+    comparar("@derive(Eq) enum C { A, B } fn ci<T: Eq>(a: T, b: T) -> int { if (a.eq(b)) { 1 } else { 0 } } fn main() -> int { ci(C.A, C.A) }", "scan_bound.ray");
     // Eq/Show del prelude sobre primitivos.
-    comparar("fn main() -> int { print(42.mostrar()); if (1.igual(1)) { 0 } else { 1 } }", "scan_prim.ray");
+    comparar("fn main() -> int { print(42.show()); if (1.eq(1)) { 0 } else { 1 } }", "scan_prim.ray");
     // @test (función de prueba).
     comparar("@test fn t() -> bool { true } fn main() -> int { 0 }", "scan_test.ray");
 }

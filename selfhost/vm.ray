@@ -455,13 +455,13 @@ fn resolve_dispatch(cp: CProgram, prog_args: [string], recv: Value, fname: strin
         Option.None => { },
     }
     // (c) @derive (igual ≡ igualdad estructural, mostrar ≡ value_str) y `menor` de Ord sobre primitivos.
-    if (fname == "igual") {
+    if (fname == "eq") {
         return Result.Ok(Dispatch.DValue(Value.VBool(values_equal(recv, args[0]))));
     }
-    if (fname == "mostrar") {
+    if (fname == "show") {
         return Result.Ok(Dispatch.DValue(Value.VStr(value_str(recv))));
     }
-    if (fname == "menor") {
+    if (fname == "less") {
         return Result.Ok(Dispatch.DValue(Value.VBool(value_lt(recv, args[0]))));
     }
     // (d) UFCS a función libre: fname(recv, args).

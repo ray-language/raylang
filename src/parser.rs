@@ -2478,10 +2478,10 @@ fn main() -> int {
     #[test]
     fn parse_trait_y_impl() {
         let prog = parse_prog(r#"
-            trait Mostrable { fn mostrar(self) -> string; fn n(self, k: int) -> int; }
+            trait Mostrable { fn show(self) -> string; fn n(self, k: int) -> int; }
             struct Punto { x: int }
             impl Mostrable for Punto {
-                fn mostrar(self) -> string { "p" }
+                fn show(self) -> string { "p" }
                 fn n(self, k: int) -> int { k }
             }
             fn main() -> int { 0 }

@@ -4152,8 +4152,8 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                     continue; // ya existe ese impl → idempotente
                 }
                 match trait_arg.as_str() {
-                    "Eq" => new_impls.push(parse_derived_impl("Eq", &s.name, "fn igual(self, otro: Self) -> bool", &struct_eq_body(&s.fields))),
-                    "Show" => new_impls.push(parse_derived_impl("Show", &s.name, "fn mostrar(self) -> string", &struct_show_body(a, &s.name, &s.fields)?)),
+                    "Eq" => new_impls.push(parse_derived_impl("Eq", &s.name, "fn eq(self, other: Self) -> bool", &struct_eq_body(&s.fields))),
+                    "Show" => new_impls.push(parse_derived_impl("Show", &s.name, "fn show(self) -> string", &struct_show_body(a, &s.name, &s.fields)?)),
                     "Hash" => new_impls.push(parse_derived_impl("Hash", &s.name, "fn hash(self) -> int", &struct_hash_body(&s.fields))),
                     _ => crate::ice!("validate_derive garantiza un trait conocido"),
                 }
@@ -4171,8 +4171,8 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                     continue;
                 }
                 match trait_arg.as_str() {
-                    "Eq" => new_impls.push(parse_derived_impl("Eq", &e.name, "fn igual(self, otro: Self) -> bool", &enum_eq_body(&e.name, &e.variants))),
-                    "Show" => new_impls.push(parse_derived_impl("Show", &e.name, "fn mostrar(self) -> string", &enum_show_body(a, &e.name, &e.variants)?)),
+                    "Eq" => new_impls.push(parse_derived_impl("Eq", &e.name, "fn eq(self, other: Self) -> bool", &enum_eq_body(&e.name, &e.variants))),
+                    "Show" => new_impls.push(parse_derived_impl("Show", &e.name, "fn show(self) -> string", &enum_show_body(a, &e.name, &e.variants)?)),
                     "Hash" => new_impls.push(parse_derived_impl("Hash", &e.name, "fn hash(self) -> int", &enum_hash_body(&e.name, &e.variants))),
                     _ => crate::ice!("validate_derive garantiza un trait conocido"),
                 }
@@ -4232,7 +4232,7 @@ fn render_to_string(a: &Annotation, expr: &str, ty: &Type) -> Result<String, Typ
         Type::Int | Type::Float | Type::Bool | Type::String | Type::Char => Ok(format!("to_string({expr})")),
         // En esta fase un tipo de usuario llega como `Struct` (el checker aún no lo resolvió a
         // `Enum`); ambos se imprimen con su propio `mostrar` (deben implementar Show).
-        Type::Struct(_, _) | Type::Enum(_, _) => Ok(format!("{expr}.mostrar()")),
+        Type::Struct(_, _) | Type::Enum(_, _) => Ok(format!("{expr}.show()")),
         other => Err(TypeError {
             msg: format!("no se puede derivar Show para un campo de tipo {} (por ahora primitivos, struct y enum)", other),
             line: a.line,
@@ -4328,7 +4328,7 @@ fn struct_eq_body(fields: &[(String, Type)]) -> String {
     if fields.is_empty() {
         return "        true".into();
     }
-    let cmps: Vec<String> = fields.iter().map(|(n, _)| format!("self.{n} == otro.{n}")).collect();
+    let cmps: Vec<String> = fields.iter().map(|(n, _)| format!("self.{n} == other.{n}")).collect();
     format!("        {}", cmps.join(" && "))
 }
 
@@ -4340,7 +4340,7 @@ fn enum_eq_body(name: &str, variants: &[VariantDef]) -> String {
         let k = v.payload.len();
         if k == 0 {
             arms.push_str(&format!(
-                "            {name}.{v} => match (otro) {{ {name}.{v} => true, _ => false }},\n",
+                "            {name}.{v} => match (other) {{ {name}.{v} => true, _ => false }},\n",
                 v = v.name
             ));
         } else {
@@ -4348,7 +4348,7 @@ fn enum_eq_body(name: &str, variants: &[VariantDef]) -> String {
             let b: Vec<String> = (0..k).map(|i| format!("b{i}")).collect();
             let cmp: Vec<String> = (0..k).map(|i| format!("a{i} == b{i}")).collect();
             arms.push_str(&format!(
-                "            {name}.{v}({a}) => match (otro) {{ {name}.{v}({b}) => {cmp}, _ => false }},\n",
+                "            {name}.{v}({a}) => match (other) {{ {name}.{v}({b}) => {cmp}, _ => false }},\n",
                 v = v.name, a = a.join(", "), b = b.join(", "), cmp = cmp.join(" && ")
             ));
         }
@@ -6788,10 +6788,10 @@ fn main() -> int {
     #[test]
     fn trait_e_impl_validos() {
         check_src(r#"
-            trait Mostrable { fn mostrar(self) -> string; }
+            trait Mostrable { fn show(self) -> string; }
             struct Punto { x: int, y: int }
-            impl Mostrable for Punto { fn mostrar(self) -> string { "p" } }
-            fn main() -> int { let p = Punto { x: 1, y: 2 }; print(p.mostrar()); 0 }
+            impl Mostrable for Punto { fn show(self) -> string { "p" } }
+            fn main() -> int { let p = Punto { x: 1, y: 2 }; print(p.show()); 0 }
         "#).expect("trait/impl válidos");
     }
 
@@ -7059,9 +7059,9 @@ fn main() -> int {
     fn bound_metodo_fuera_del_trait() {
         err_contains(
             r#"trait Valor { fn valor(self) -> int; }
-               fn usar<T: Valor>(x: T) -> int { x.otro() }
+               fn usar<T: Valor>(x: T) -> int { x.other() }
                fn main() -> int { 0 }"#,
-            "no existe campo ni función 'otro'",
+            "no existe campo ni función 'other'",
         );
     }
 
@@ -7238,7 +7238,7 @@ fn main() -> int {
                 let p = Punto { x: 1, y: 2 };
                 let c = Color.Rojo;
                 let f = Forma.Rect(1, 2);
-                if (p.igual(p)) { 0 } else { 1 }
+                if (p.eq(p)) { 0 } else { 1 }
             }
         "#).expect("@derive(Eq) para struct y enum (unit y con payload)");
     }
@@ -7248,7 +7248,7 @@ fn main() -> int {
         check_src(r#"
             @derive(Eq)
             enum Color { Rojo, Verde }
-            fn iguales<T: Eq>(a: T, b: T) -> bool { a.igual(b) }
+            fn iguales<T: Eq>(a: T, b: T) -> bool { a.eq(b) }
             fn main() -> int { if (iguales(Color.Rojo, Color.Rojo)) { 0 } else { 1 } }
         "#).expect("un tipo derivado satisface el bound T: Eq");
     }
@@ -7280,7 +7280,7 @@ fn main() -> int {
             struct Etiqueta { nombre: string, donde: Punto, color: Color }
             fn main() -> int {
                 let e = Etiqueta { nombre: "o", donde: Punto { x: 1, y: 2 }, color: Color.Rojo };
-                print(e.mostrar());
+                print(e.show());
                 0
             }
         "#).expect("@derive(Show) para struct, enum y struct anidado");
@@ -7291,7 +7291,7 @@ fn main() -> int {
         check_src(r#"
             @derive(Eq, Show)
             struct P { x: int }
-            fn main() -> int { if (P { x: 1 }.igual(P { x: 1 })) { 0 } else { 1 } }
+            fn main() -> int { if (P { x: 1 }.eq(P { x: 1 })) { 0 } else { 1 } }
         "#).expect("@derive(Eq, Show) genera ambos impls");
     }
 

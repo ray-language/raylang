@@ -32,7 +32,7 @@ fn cargar(ok: bool) -> Result<int, AppError> {
     Result.Ok(valor * 2)
 }
 
-fn mostrar(r: Result<int, AppError>) {
+fn show(r: Result<int, AppError>) {
     match (r) {
         Result.Ok(v) => print("ok: " + to_string(v)),
         Result.Err(e) => match (e) {
@@ -43,6 +43,6 @@ fn mostrar(r: Result<int, AppError>) {
 }
 
 fn main() {
-    mostrar(cargar(true));  // ok: 84
-    mostrar(cargar(false));  // error de lectura: no se pudo abrir config
+    show(cargar(true));  // ok: 84
+    show(cargar(false));  // error de lectura: no se pudo abrir config
 }

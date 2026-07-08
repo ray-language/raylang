@@ -32,7 +32,7 @@ fn user_has_func(user: Program, name: string) -> bool {
 
 // Fusiona las funciones del prelude (map/filter/fold/sort/assert/...) en el programa del usuario —las que no
 // redefina—, igual que en `run.ray` (M14.4d-2). Desde M14.5d la VM compila el prelude COMPLETO: map/filter/
-// fold usan llamadas indirectas (M14.5c) y sort/assert_eq usan métodos (`.menor()`/`.igual()`/`.mostrar()`),
+// fold usan llamadas indirectas (M14.5c) y sort/assert_eq usan métodos (`.less()`/`.eq()`/`.show()`),
 // resueltos por `ODispatch`.
 fn add_prelude(prelude: Program, user: Program) {
     var extra: [Func] = [];

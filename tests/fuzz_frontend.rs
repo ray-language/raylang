@@ -84,7 +84,7 @@ fn cargar_corpus() -> Vec<String> {
     // Unos cuantos snippets mínimos garantizan variedad de tokens aunque el corpus del disco falte.
     for s in [
         "fn main() -> int { 0 }",
-        "fn f<T: Show>(x: T) -> string { x.mostrar() }",
+        "fn f<T: Show>(x: T) -> string { x.show() }",
         "enum E { A, B(int) } fn main() -> int { match (E.A) { E.A => 0, E.B(n) => n } }",
         "struct P { x: int, y: int }",
         "extern \"m\" { fn sqrt(x: float) -> float; }",

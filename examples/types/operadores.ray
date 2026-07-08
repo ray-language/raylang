@@ -26,19 +26,19 @@ impl Neg for Vec2 {
 }
 
 impl Show for Vec2 {
-    fn mostrar(self) -> string { "(${self.x}, ${self.y})" }
+    fn show(self) -> string { "(${self.x}, ${self.y})" }
 }
 
 fn main() {
     let a = Vec2 { x: 1, y: 2 };
     let b = Vec2 { x: 3, y: 4 };
 
-    print((a + b).mostrar());  // (4, 6)
-    print((b - a).mostrar());  // (2, 2)
-    print((a * b).mostrar());  // (3, 8)
-    print((-a).mostrar());  // (-1, -2)
+    print((a + b).show());  // (4, 6)
+    print((b - a).show());  // (2, 2)
+    print((a * b).show());  // (3, 8)
+    print((-a).show());  // (-1, -2)
 
     // Encadenado: los operadores componen como cualquier expresión.
     let s = a + b + Vec2 { x: 10, y: 10 };
-    print(s.mostrar());  // (14, 16)
+    print(s.show());  // (14, 16)
 }

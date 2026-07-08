@@ -35,12 +35,12 @@ enum Result<T, E> {
 
 // Igualdad estructural (M10.1). `@derive(Eq)` genera el `impl` para un struct/enum.
 // Usa `Self` en posición de argumento, así que no es invocable sobre un `dyn Eq`
-// (object safety): se compara entre valores concretos, `a.igual(b)`.
+// (object safety): se compara entre valores concretos, `a.eq(b)`.
 /// Structural equality between two values of the same concrete type.
 /// Derivable with `@derive(Eq)`; not object-safe (uses `Self` as an argument).
 trait Eq {
     /// Returns true when `self` and `otro` are structurally equal.
-    fn igual(self, otro: Self) -> bool;
+    fn eq(self, other: Self) -> bool;
 }
 
 // Representación textual (limpieza post-M11, L2). `@derive(Show)` genera el `impl` para un
@@ -48,31 +48,31 @@ trait Eq {
 /// Textual representation of a value. Derivable with `@derive(Show)`; object-safe (`dyn Show`).
 trait Show {
     /// Returns a human-readable string representation of `self`.
-    fn mostrar(self) -> string;
+    fn show(self) -> string;
 }
 
-// Orden total (M11.7d): `self < otro`. Lo usa `sort`. Los primitivos lo implementan vía el
+// Orden total (M11.7d): `self < other`. Lo usa `sort`. Los primitivos lo implementan vía el
 // operador `<` (extendido a string/char en M11.7d); un tipo del usuario lo implementa a mano.
-/// Total ordering (`self < otro`). Used by `sort`; primitives implement it via the `<` operator.
+/// Total ordering (`self < other`). Used by `sort`; primitives implement it via the `<` operator.
 trait Ord {
     /// Returns true when `self` orders strictly before `otro`.
-    fn menor(self, otro: Self) -> bool;
+    fn less(self, other: Self) -> bool;
 }
 
 impl Ord for int {
-    fn menor(self, otro: int) -> bool { self < otro }
+    fn less(self, other: int) -> bool { self < other }
 }
 
 impl Ord for float {
-    fn menor(self, otro: float) -> bool { self < otro }
+    fn less(self, other: float) -> bool { self < other }
 }
 
 impl Ord for string {
-    fn menor(self, otro: string) -> bool { self < otro }
+    fn less(self, other: string) -> bool { self < other }
 }
 
 impl Ord for char {
-    fn menor(self, otro: char) -> bool { self < otro }
+    fn less(self, other: char) -> bool { self < other }
 }
 
 // Longitud (M48.4): número de elementos/caracteres/entradas/octetos de una colección. Los tipos
@@ -510,43 +510,43 @@ trait Neg {
 // general, cualquier genérico acotado por Eq/Show sobre un primitivo. Vía `==` y `to_string`, que
 // ya operan sobre int/float/bool/string/char. (Un tipo del usuario los obtiene con `@derive`.)
 impl Eq for int {
-    fn igual(self, otro: int) -> bool { self == otro }
+    fn eq(self, other: int) -> bool { self == other }
 }
 
 impl Eq for float {
-    fn igual(self, otro: float) -> bool { self == otro }
+    fn eq(self, other: float) -> bool { self == other }
 }
 
 impl Eq for string {
-    fn igual(self, otro: string) -> bool { self == otro }
+    fn eq(self, other: string) -> bool { self == other }
 }
 
 impl Eq for bool {
-    fn igual(self, otro: bool) -> bool { self == otro }
+    fn eq(self, other: bool) -> bool { self == other }
 }
 
 impl Eq for char {
-    fn igual(self, otro: char) -> bool { self == otro }
+    fn eq(self, other: char) -> bool { self == other }
 }
 
 impl Show for int {
-    fn mostrar(self) -> string { to_string(self) }
+    fn show(self) -> string { to_string(self) }
 }
 
 impl Show for float {
-    fn mostrar(self) -> string { to_string(self) }
+    fn show(self) -> string { to_string(self) }
 }
 
 impl Show for string {
-    fn mostrar(self) -> string { to_string(self) }
+    fn show(self) -> string { to_string(self) }
 }
 
 impl Show for bool {
-    fn mostrar(self) -> string { to_string(self) }
+    fn show(self) -> string { to_string(self) }
 }
 
 impl Show for char {
-    fn mostrar(self) -> string { to_string(self) }
+    fn show(self) -> string { to_string(self) }
 }
 
 // Ordena ascendente, devolviendo un arreglo NUEVO (insertion sort). `T` debe implementar `Ord`;
@@ -559,7 +559,7 @@ fn sort<T: Ord>(a: [T]) -> [T] {
         let x: T = a[i];
         out.push(x);
         var j: int = out.len() - 1;
-        while (j > 0 && x.menor(out[j - 1])) {
+        while (j > 0 && x.less(out[j - 1])) {
             out[j] = out[j - 1];
             j = j - 1;
         }
@@ -605,8 +605,8 @@ fn assert(cond: bool) {
 /// Panics showing both values if they are not equal.
 /// `T` must implement `Eq` (to compare) and `Show` (to display the values).
 fn assert_eq<T: Eq + Show>(a: T, b: T) {
-    if (!a.igual(b)) {
-        panic("assert_eq falló: " + a.mostrar() + " != " + b.mostrar());
+    if (!a.eq(b)) {
+        panic("assert_eq falló: " + a.show() + " != " + b.show());
     }
 }
 

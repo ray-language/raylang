@@ -4703,9 +4703,9 @@ mod tests {
              struct Punto { x: int, y: int }
              fn main() -> int {
                  let p = Punto { x: 3, y: 40 };
-                 print(p.mostrar());
-                 print(Color.RGB(1, 2, 3).mostrar());
-                 p.mostrar().len() + Color.RGB(1, 2, 3).mostrar().len()
+                 print(p.show());
+                 print(Color.RGB(1, 2, 3).show());
+                 p.show().len() + Color.RGB(1, 2, 3).show().len()
              }",
         );
     }
@@ -5292,7 +5292,7 @@ mod tests {
 
     #[test]
     fn impl_generico_acotado_llamada_directa_oraculo() {
-        // `impl<T: Mostrable> Mostrable for Caja<T>`: el cuerpo usa T.mostrar() (vía el
+        // `impl<T: Mostrable> Mostrable for Caja<T>`: el cuerpo usa T.show() (vía el
         // diccionario interno). Llamada directa sobre Caja<int> → el dict interno es el de
         // int (plano). Es M9.2b-1: el caso anidado (pasar Caja a otro genérico) es -2.
         oracle_stress(r#"
@@ -5408,8 +5408,8 @@ mod tests {
                 print(to_string('x') + "!");           // x!
                 print('a' == 'a');                     // true
                 let t = Tecla { c: 'q', repetida: false };
-                print(t.mostrar());                    // Tecla { c: q, repetida: false }
-                print(t.igual(Tecla { c: 'q', repetida: false }));  // true
+                print(t.show());                    // Tecla { c: q, repetida: false }
+                print(t.eq(Tecla { c: 'q', repetida: false }));  // true
                 clase('a') + clase('\n') + clase('z')  // 1 + 2 + 0 = 3
             }
         "#);
@@ -5679,7 +5679,7 @@ mod tests {
         oracle_stress(r#"
             struct Caja { peso: int }
             impl Ord for Caja {
-                fn menor(self, otro: Caja) -> bool { self.peso < otro.peso }
+                fn less(self, otro: Caja) -> bool { self.peso < otro.peso }
             }
             fn main() -> int {
                 let xs = sort([3, 1, 4, 1, 5, 9, 2, 6]);
@@ -5911,14 +5911,14 @@ mod tests {
         // lleva un closure anidado (como un diccionario), no el método manglado plano. Incluye
         // anidamiento Caja<Caja<N>> y un impl concreto en el mismo arreglo heterogéneo.
         oracle_program(r#"
-            trait Mostrar { fn mostrar(self) -> string; }
+            trait Mostrar { fn show(self) -> string; }
             struct N { x: int }
-            impl Mostrar for N { fn mostrar(self) -> string { "N" } }
+            impl Mostrar for N { fn show(self) -> string { "N" } }
             struct Caja<T> { v: T }
             impl<T: Mostrar> Mostrar for Caja<T> {
-                fn mostrar(self) -> string { "Caja(" + self.v.mostrar() + ")" }
+                fn show(self) -> string { "Caja(" + self.v.show() + ")" }
             }
-            fn describe(d: dyn Mostrar) -> string { d.mostrar() }
+            fn describe(d: dyn Mostrar) -> string { d.show() }
             fn main() -> int {
                 let xs: [dyn Mostrar] = [N{x:1}, Caja{v:N{x:2}}, Caja{v:Caja{v:N{x:3}}}];
                 var total = 0; var i = 0;
@@ -5988,10 +5988,10 @@ mod tests {
                 let p = Punto { x: 1, y: 2 };
                 let q = Punto { x: 1, y: 2 };
                 let r = Punto { x: 9, y: 2 };
-                let e1 = b2i(p.igual(q)) + b2i(p.igual(r));               // 1 + 0
-                let e2 = b2i(Color.Verde.igual(Color.Verde)) + b2i(Color.Rojo.igual(Color.Azul)); // 1 + 0
+                let e1 = b2i(p.eq(q)) + b2i(p.eq(r));               // 1 + 0
+                let e2 = b2i(Color.Verde.eq(Color.Verde)) + b2i(Color.Rojo.eq(Color.Azul)); // 1 + 0
                 let f = Forma.Rect(3, 4);
-                let e3 = b2i(f.igual(Forma.Rect(3, 4))) + b2i(f.igual(Forma.Circulo(3)));         // 1 + 0
+                let e3 = b2i(f.eq(Forma.Rect(3, 4))) + b2i(f.eq(Forma.Circulo(3)));         // 1 + 0
                 e1 + e2 + e3   // 3
             }
         "#);

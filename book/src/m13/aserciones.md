@@ -47,14 +47,14 @@ fn assert(cond: bool) {
 }
 
 fn assert_eq<T: Eq + Show>(a: T, b: T) {
-    if (!a.igual(b)) {
-        panic("assert_eq falló: " + a.mostrar() + " != " + b.mostrar());
+    if (!a.eq(b)) {
+        panic("assert_eq falló: " + a.show() + " != " + b.show());
     }
 }
 ```
 
-`assert_eq` es genérica con dos bounds: `T: Eq` para comparar (`.igual()`) y `T: Show` para
-mostrar el mensaje (`.mostrar()`). Los bounds se bajan al paso de diccionarios de M9.2, así que esto
+`assert_eq` es genérica con dos bounds: `T: Eq` para comparar (`.eq()`) y `T: Show` para
+mostrar el mensaje (`.show()`). Los bounds se bajan al paso de diccionarios de M9.2, así que esto
 es front-end puro sobre `panic`. Para que funcione con primitivos, el prelude trae los `impl Eq` e
 `impl Show` de `int`/`float`/`bool`/`string`/`char` que `assert_eq` necesita.
 

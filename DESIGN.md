@@ -6727,8 +6727,15 @@ versiones del índice y elegir la mayor compatible (MVS: la mínima que satisfac
   con/sin versión, caret elige la mayor, paquete inexistente, falta de índice). **Cero runtime.**
   Limitación (→ M51c): re-resuelve del índice en cada `ensure` (no fija la versión resuelta en el lock),
   así un caret podría subir si el índice gana una versión; con índice fijo (tests) es determinista.
-- **M51b — `ray publish`.** Validación + hash + generación de la entrada (append-only, inmutable). Probado
-  *offline* con un repo git de índice local (el truco `file://` de `deps_cli`, ya usado en M39c-2a).
+- **M51b — `ray publish`. ✅ COMPLETO.** `ray publish [--repo <git+URL@ref>]`: valida (name+version semver;
+  la cara del paquete —`mod.ray` en la raíz, o la entrada— lexea+parsea), calcula el **hash de contenido**
+  (`deps::hash_package`) y **añade** la entrada de versión al índice vía `index::append_version`
+  (append-only, **inmutable**: rechaza sobrescribir una versión ya publicada). La spec git de dónde vive
+  el código: `--repo`, o **derivada** del remoto `origin` del repo + el tag `v<version>` (que debe existir
+  → se publica un punto fijo). El `ray publish` **no** hace commit/push del repo del índice —eso es acción
+  del autor—. Probado *offline* con un bare repo local + `origin` (`tests/registry_cli.rs`): publicar,
+  inmutabilidad al republicar, un consumidor que resuelve por nombre lo publicado, y el error claro si
+  falta el tag.
 - **M51c — índice remoto + mantenimiento.** Clonar/cachear el repo del índice (`RAY_INDEX` o `[registry]` en
   `ray.toml`; caché global `~/.ray/index`), `ray update`, `ray yank`.
 

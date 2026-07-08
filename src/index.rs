@@ -138,6 +138,12 @@ pub struct IndexEntry {
     pub yanked: bool,
 }
 
+/// Parsea una versión `X[.Y[.Z]]` (rellenando con 0). `None` si no es semver. Para validar la
+/// versión de un paquete a publicar (M51b).
+pub fn parse_version(s: &str) -> Option<Version> {
+    parse_partial(s).ok().map(|(v, _)| v)
+}
+
 /// ¿La spec de una dependencia se resuelve por el **índice** (por nombre)? Lo es si NO es una dep
 /// git (`git+…`) ni por ruta (`path:…`) — es decir, un requisito de versión pelado (`1.2.0`, `^1.2`, …).
 pub fn is_registry_spec(spec: &str) -> bool {
@@ -231,6 +237,47 @@ pub fn resolve(index_dir: &Path, name: &str, req: &str) -> Result<GitSpec, Strin
     })
 }
 
+/// Añade una versión al archivo de índice de `name` (`<index_dir>/<name>.toml`), creándolo si no
+/// existe (M51b, `ray publish`). **Inmutabilidad**: rechaza sobrescribir una versión ya publicada
+/// (build reproducible). Escribe `git` y, si se da, `hash`. No hace commit/push del repo del índice
+/// —eso es acción del autor (o M51c)—: solo edita el archivo local.
+pub fn append_version(
+    index_dir: &Path,
+    name: &str,
+    num: &str,
+    git: &str,
+    hash: Option<&str>,
+) -> Result<(), String> {
+    let (target, _) = parse_partial(num).map_err(|e| format!("versión a publicar inválida: {e}"))?;
+    let path = index_dir.join(format!("{name}.toml"));
+    if path.exists() {
+        // Inmutabilidad: comparar por versión parseada (`1.2` y `1.2.0` son la misma).
+        if read_package(index_dir, name)?.iter().any(|e| e.version == target) {
+            return Err(format!(
+                "la versión '{num}' de '{name}' ya está publicada (las versiones son inmutables); \
+                 sube el número de versión"
+            ));
+        }
+    } else {
+        std::fs::create_dir_all(index_dir)
+            .map_err(|e| format!("no se pudo crear el índice '{}': {e}", index_dir.display()))?;
+    }
+    let mut s = if path.exists() {
+        std::fs::read_to_string(&path)
+            .map_err(|e| format!("no se pudo leer el índice de '{name}': {e}"))?
+    } else {
+        format!("# índice de {name}\n")
+    };
+    if !s.ends_with('\n') {
+        s.push('\n');
+    }
+    s.push_str(&format!("\n[{num}]\ngit = \"{git}\"\n"));
+    if let Some(h) = hash {
+        s.push_str(&format!("hash = \"{h}\"\n"));
+    }
+    std::fs::write(&path, s).map_err(|e| format!("no se pudo escribir el índice de '{name}': {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,5 +346,20 @@ mod tests {
         assert!(resolve(&dir, "bar", "*").unwrap_err().contains("no está en el índice"));
         // ninguna casa.
         assert!(resolve(&dir, "foo", "^3.0").unwrap_err().contains("ninguna versión"));
+    }
+
+    #[test]
+    fn append_version_es_inmutable() {
+        let dir = std::env::temp_dir().join("ray_index_test_append");
+        let _ = std::fs::remove_dir_all(&dir);
+        // Publica 1.0.0 en un índice nuevo (se crea el archivo).
+        append_version(&dir, "foo", "1.0.0", "git+https://ej/foo@v1.0.0", Some("sha256:aa")).unwrap();
+        assert_eq!(resolve(&dir, "foo", "1.0.0").unwrap().git_ref, "v1.0.0");
+        // Otra versión se añade sin problema.
+        append_version(&dir, "foo", "1.1.0", "git+https://ej/foo@v1.1.0", None).unwrap();
+        assert_eq!(latest(&dir, "foo").unwrap(), "1.1.0");
+        // Re-publicar la misma versión (incluso escrita distinto) → error de inmutabilidad.
+        let e = append_version(&dir, "foo", "1.0.0", "git+https://ej/foo@otro", None).unwrap_err();
+        assert!(e.contains("ya está publicada"), "{e}");
     }
 }

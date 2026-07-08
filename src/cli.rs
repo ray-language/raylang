@@ -49,6 +49,7 @@ fn run() {
         Some("build") => cmd_build(&rest[1..]),
         Some("test") => cmd_test_sub(&rest[1..]),
         Some("add") => cmd_add(&rest[1..]),
+        Some("publish") => cmd_publish(&rest[1..]),
         Some("fetch") => cmd_fetch(&rest[1..]),
         Some("fmt") => cmd_fmt(&rest[1..]),
         Some("doc") => cmd_doc(&rest[1..]),
@@ -75,6 +76,7 @@ Uso: ray <subcomando> [opciones]
   build [archivo]   chequea y compila sin ejecutar (0 ok / 65 error)
   test [archivo]    corre las funciones @test [filtro]
   add <nombre>[@req]  añade una dependencia del índice a ray.toml y la descarga
+  publish [--repo S]  publica la versión de este paquete en el índice
   fetch             descarga las dependencias de ray.toml a .ray-deps/
   fmt <archivo>     imprime la versión canónica por stdout
   doc <archivo>     genera la documentación Markdown de su superficie pública
@@ -270,6 +272,139 @@ fn cmd_add(args: &[String]) {
             }
         },
         Ok(None) | Err(_) => {} // el manifiesto acaba de escribirse; improbable
+    }
+}
+
+/// `ray publish [--repo <git+URL@ref>]`: publica la versión de este paquete en el índice (M51b).
+/// Valida (name+version semver, la cara del paquete —`mod.ray` o la entrada— parsea), calcula el
+/// **hash de contenido** (`deps::hash_package`) y **añade** la entrada de versión al índice, de forma
+/// **inmutable** (no sobrescribe). La spec git de dónde vive el código: `--repo` si se da, o se deriva
+/// del remoto `origin` del repo + el tag `v<version>` (que debe existir). El índice se localiza como
+/// en `ray add` (`RAY_INDEX`/`[registry] index`). No hace commit/push del índice —eso lo hace el autor.
+fn cmd_publish(args: &[String]) {
+    let repo_override = match args.split_first() {
+        Some((flag, rest)) if flag == "--repo" => match rest.first() {
+            Some(spec) => Some(spec.clone()),
+            None => {
+                eprintln!("--repo requiere una spec 'git+<URL>@<ref>'");
+                process::exit(64);
+            }
+        },
+        _ => None,
+    };
+    let Some(m) = load_manifest() else {
+        eprintln!("no hay proyecto: falta 'ray.toml' (crea uno con 'ray new')");
+        process::exit(64);
+    };
+    // Validación: version semver.
+    if crate::index::parse_version(&m.version).is_none() {
+        eprintln!("la versión del paquete '{}' no es semver válido: '{}'", m.name, m.version);
+        process::exit(65);
+    }
+    // Validación: la cara del paquete (mod.ray en la raíz, o la entrada) parsea.
+    let face = {
+        let mod_ray = m.root.join("mod.ray");
+        if mod_ray.is_file() { mod_ray } else { m.entry_path() }
+    };
+    match fs::read_to_string(&face) {
+        Ok(src) => {
+            if let Ok(tokens) = crate::lexer::lex(&src) {
+                if let Err(e) = crate::parser::parse(tokens) {
+                    eprintln!("el paquete no parsea ('{}'): {e}", face.display());
+                    process::exit(65);
+                }
+            } else {
+                eprintln!("el paquete no lexea ('{}')", face.display());
+                process::exit(65);
+            }
+        }
+        Err(e) => {
+            eprintln!("no se pudo leer la cara del paquete '{}': {e}", face.display());
+            process::exit(66);
+        }
+    }
+    // Spec git: la dada, o derivada de `origin` + tag `v<version>`.
+    let git_spec = match repo_override {
+        Some(s) => s,
+        None => match derive_git_spec(&m.root, &m.version) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{e}");
+                process::exit(65);
+            }
+        },
+    };
+    // Índice de destino.
+    let index = match crate::deps::index_dir(&m) {
+        Ok(Some(dir)) => dir,
+        Ok(None) => {
+            eprintln!(
+                "no hay índice configurado: declara '[registry] index = \"<dir>\"' en ray.toml o \
+                 exporta RAY_INDEX"
+            );
+            process::exit(65);
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            process::exit(65);
+        }
+    };
+    // Hash de contenido del paquete (advisory; el lock del consumidor lo re-verifica).
+    let hash = match crate::deps::hash_package(&m.root) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("no se pudo hashear el paquete: {e}");
+            process::exit(65);
+        }
+    };
+    match crate::index::append_version(&index, &m.name, &m.version, &git_spec, Some(&hash)) {
+        Ok(()) => {
+            println!("publicado {} {} en el índice", m.name, m.version);
+            println!("  git:  {git_spec}");
+            println!("  hash: {hash}");
+            println!(
+                "nota: el índice es un repo git; haz commit y push de '{}.toml' para compartirlo.",
+                m.name
+            );
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            process::exit(65);
+        }
+    }
+}
+
+/// Deriva la spec git de un paquete a publicar: `git+<origin>@v<version>`, tomando la URL del remoto
+/// `origin` del repo en `root` y exigiendo que el tag `v<version>` exista (se publica un commit fijado).
+fn derive_git_spec(root: &Path, version: &str) -> Result<String, String> {
+    let origin = git_capture(root, &["remote", "get-url", "origin"]).map_err(|_| {
+        "el paquete no tiene remoto 'origin' (publica desde un repo git con remoto, o pasa \
+         --repo 'git+<URL>@<ref>')"
+            .to_string()
+    })?;
+    let origin = origin.trim();
+    if origin.is_empty() {
+        return Err("el remoto 'origin' está vacío; usa --repo 'git+<URL>@<ref>'".to_string());
+    }
+    let tag = format!("v{version}");
+    // El tag debe existir (se publica un punto fijo, no el working tree).
+    git_capture(root, &["rev-parse", "--verify", "--quiet", &format!("refs/tags/{tag}")])
+        .map_err(|_| format!("no existe el tag '{tag}' en el repo; créalo (git tag {tag}) antes de publicar"))?;
+    Ok(format!("git+{origin}@{tag}"))
+}
+
+/// Corre `git -C <cwd> <args>` y devuelve su stdout, o `Err` si el estado no es 0.
+fn git_capture(cwd: &Path, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .map_err(|e| format!("no se pudo ejecutar git: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
     }
 }
 

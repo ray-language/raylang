@@ -173,6 +173,83 @@ fn paquete_inexistente_da_error_claro() {
     assert!(!toml.contains("noexiste"), "no escribió la dep fallida:\n{toml}");
 }
 
+/// Un repo git "publicable" con remoto `origin` (un bare local): crea el bare, clona a un working
+/// dir con `ray.toml`+`mod.ray`, commitea, taggea `v<ver>` y empuja rama + tags. Devuelve el working dir.
+fn repo_con_origin(base: &Path, nombre: &str, ver: &str, mod_ray: &str) -> std::path::PathBuf {
+    let bare = base.join(format!("{nombre}.git"));
+    std::fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "--bare", "-q"]);
+    let work = base.join(format!("{nombre}-work"));
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "-q"]);
+    git(&work, &["remote", "add", "origin", &bare.to_string_lossy()]);
+    std::fs::write(work.join("mod.ray"), mod_ray).unwrap();
+    std::fs::write(
+        work.join("ray.toml"),
+        format!("[package]\nname = \"{nombre}\"\nversion = \"{ver}\"\n"),
+    )
+    .unwrap();
+    git(&work, &["add", "-A"]);
+    git(&work, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "pub"]);
+    git(&work, &["tag", &format!("v{ver}")]);
+    git(&work, &["push", "-q", "origin", "HEAD"]);
+    git(&work, &["push", "-q", "origin", "--tags"]);
+    work
+}
+
+#[test]
+fn ray_publish_añade_al_indice_y_un_consumidor_lo_resuelve() {
+    let base = tmp("publish");
+    let index = base.join("index");
+    std::fs::create_dir_all(&index).unwrap();
+    // Paquete `mate` con remoto origin + tag v1.0.0.
+    let work = repo_con_origin(&base, "mate", "1.0.0", "pub fn triple(x: int) -> int { x * 3 }\n");
+
+    // `ray publish` desde el paquete: deriva git+<origin>@v1.0.0, hashea y añade la entrada al índice.
+    let (out, err, code) = ray_idx(&work, &index, &["publish"]);
+    assert_eq!(code, 0, "publish OK\n{err}");
+    assert!(out.contains("publicado mate 1.0.0"), "{out}");
+    let entry = std::fs::read_to_string(index.join("mate.toml")).unwrap();
+    assert!(entry.contains("[1.0.0]") && entry.contains("@v1.0.0") && entry.contains("hash ="), "entrada en el índice:\n{entry}");
+
+    // Republicar la MISMA versión → error de inmutabilidad, sin duplicar en el índice.
+    let (_o, err, code) = ray_idx(&work, &index, &["publish"]);
+    assert_eq!(code, 65, "republicar la misma versión falla");
+    assert!(err.contains("ya está publicada"), "{err}");
+
+    // Un consumidor la resuelve por nombre desde el índice y la ejecuta (clona del origin al tag).
+    let app = app(&base, "from mate import triple;\nfn main() -> int { print(triple(14)); 0 }\n");
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nmate = \"1.0.0\"\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray_idx(&app, &index, &["run"]);
+    assert_eq!(code, 0, "el consumidor corre\n{err}");
+    assert!(out.contains("42"), "usó el paquete publicado\n{out}\n{err}");
+}
+
+#[test]
+fn ray_publish_sin_tag_falla_claro() {
+    let base = tmp("publishnotag");
+    let index = base.join("index");
+    // Repo con origin pero SIN el tag v2.0.0 que declara su versión.
+    let bare = base.join("x.git");
+    std::fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "--bare", "-q"]);
+    let work = base.join("x-work");
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "-q"]);
+    git(&work, &["remote", "add", "origin", &bare.to_string_lossy()]);
+    std::fs::write(work.join("mod.ray"), "pub fn f() -> int { 1 }\n").unwrap();
+    std::fs::write(work.join("ray.toml"), "[package]\nname = \"x\"\nversion = \"2.0.0\"\n").unwrap();
+    git(&work, &["add", "-A"]);
+    git(&work, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c"]);
+    let (_o, err, code) = ray_idx(&work, &index, &["publish"]);
+    assert_eq!(code, 65, "sin tag falla");
+    assert!(err.contains("no existe el tag 'v2.0.0'"), "mensaje claro:\n{err}");
+}
+
 #[test]
 fn spec_por_nombre_sin_indice_configurado_avisa() {
     let base = tmp("noindex");

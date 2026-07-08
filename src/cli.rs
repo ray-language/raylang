@@ -455,7 +455,7 @@ type Locate = Box<dyn Fn(usize) -> (String, String, usize)>;
 /// Carga el archivo de entrada y sus imports (loader, M11.3), devolviendo el programa
 /// fusionado, un localizador de líneas y si hay más de un módulo.
 fn cargar_y_localizar(path: &str) -> (crate::ast::Program, Locate, bool) {
-    let loaded = match loader::load_con_deps(Path::new(path), &raices_de_dependencias()) {
+    let loaded = match loader::load_with_deps(Path::new(path), &raices_de_dependencias()) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("{}", e.message);

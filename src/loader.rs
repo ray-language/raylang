@@ -74,7 +74,7 @@ pub struct LoadedModule {
 
 impl Loaded {
     /// ¿El programa abarca más de un módulo? (Para decidir si prefijar errores con `[módulo]`.)
-    pub fn multi_modulo(&self) -> bool {
+    pub fn multi_module(&self) -> bool {
         self.modules.len() > 1
     }
 
@@ -102,7 +102,7 @@ struct Module {
 
 /// Carga el archivo de entrada y sus imports (transitivos), y devuelve el programa fusionado.
 pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
-    load_con_deps(entry, &[])
+    load_with_deps(entry, &[])
 }
 
 /// Como [`load`], pero además busca los módulos en las **raíces de dependencias** `dep_roots`
@@ -111,18 +111,18 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
 /// **cápsula** (`<dep>/mod.ray`): `import geo;` la trae y sus submódulos internos quedan
 /// protegidos por el enforcement de cápsula (M11.6b) sin código nuevo. Con `dep_roots` vacío el
 /// comportamiento es idéntico a antes (un solo `root`).
-pub fn load_con_deps(entry: &Path, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
+pub fn load_with_deps(entry: &Path, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
     load_impl(entry, dep_roots, None, None)
 }
 
-/// Como [`load_con_deps`], pero usa `fuente` como contenido del **archivo de entrada** en vez de
+/// Como [`load_with_deps`], pero usa `source` como contenido del **archivo de entrada** en vez de
 /// leerlo del disco (los imports sí se leen de disco). Es lo que necesita el **LSP**: analizar el
 /// buffer en memoria (con cambios sin guardar) mientras resuelve sus imports desde los archivos.
-pub fn load_fuente(entry: &Path, fuente: &str, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
-    load_impl(entry, dep_roots, Some(fuente), None)
+pub fn load_source(entry: &Path, source: &str, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
+    load_impl(entry, dep_roots, Some(source), None)
 }
 
-/// Como [`load_fuente`], pero con la **raíz del proyecto** dada explícitamente (no inferida como
+/// Como [`load_source`], pero con la **raíz del proyecto** dada explícitamente (no inferida como
 /// `entry.parent()`). Lo necesita el **LSP** al analizar un **submódulo** abierto en el editor
 /// (`geo/formas/circulo.ray`): sin esto, el loader tomaría como raíz la carpeta del propio submódulo
 /// —así los `import` absolutos desde la raíz no resolverían— e identificaría la entrada por su *stem*
@@ -130,8 +130,8 @@ pub fn load_fuente(entry: &Path, fuente: &str, dep_roots: &[PathBuf]) -> Result<
 /// trataría como externa a su propia cápsula—. Con la raíz correcta, la entrada se identifica por su
 /// **ruta relativa** a ella y ambos problemas desaparecen (imports y cápsulas se comportan como bajo
 /// `ray run` desde la entrada real del proyecto).
-pub fn load_fuente_modulo(entry: &Path, fuente: &str, project_root: &Path, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
-    load_impl(entry, dep_roots, Some(fuente), Some(project_root.to_path_buf()))
+pub fn load_source_module(entry: &Path, source: &str, project_root: &Path, dep_roots: &[PathBuf]) -> Result<Loaded, LoadError> {
+    load_impl(entry, dep_roots, Some(source), Some(project_root.to_path_buf()))
 }
 
 /// Núcleo de la carga. `entry_source`, si está, es el contenido del archivo de entrada (buffer en
@@ -155,10 +155,10 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
 
     // --- Fase 1: cargar y parsear cada módulo una vez (BFS sobre los imports) ---
     let mut modules: Vec<Module> = Vec::new();
-    let mut visitados: HashSet<String> = HashSet::new();
-    let mut pendientes: Vec<(String, PathBuf, bool)> = vec![(entry_name.clone(), entry.to_path_buf(), true)];
-    while let Some((name, path, is_entry)) = pendientes.pop() {
-        if !visitados.insert(name.clone()) {
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut pending: Vec<(String, PathBuf, bool)> = vec![(entry_name.clone(), entry.to_path_buf(), true)];
+    while let Some((name, path, is_entry)) = pending.pop() {
+        if !visited.insert(name.clone()) {
             continue; // ya cargado (los ciclos se cierran aquí)
         }
         // El archivo de entrada puede venir de un buffer en memoria (LSP); un módulo de la stdlib,
@@ -179,22 +179,22 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         for (dep, line, col) in deps {
             // M11.6b: la arista de import debe respetar el borde de cápsula (aunque `dep` ya
             // esté visitado: cada sitio que importa un submódulo interno desde fuera es ilegal).
-            if let Some(c) = capsula_violada(&roots, &name, dep) {
+            if let Some(c) = capsule_violated(&roots, &name, dep) {
                 return Err(render(&source, line, col, 1, &name, &format!(
                     "el módulo '{}' es interno a la cápsula '{}'; impórtalo con 'import {};'",
                     dep, c, c
                 )));
             }
-            if !visitados.contains(dep) {
+            if !visited.contains(dep) {
                 // M40.5: un módulo de la stdlib se resuelve a su fuente embebida (sin disco). La ruta
                 // es una sentinela solo para mensajes; la lectura la intercepta `stdlib::embedded`.
                 if crate::stdlib::embedded(dep).is_some() {
-                    pendientes.push((dep.clone(), PathBuf::from(format!("<std>/{dep}.ray")), false));
+                    pending.push((dep.clone(), PathBuf::from(format!("<std>/{dep}.ray")), false));
                     continue;
                 }
                 match resolve_module_path(&roots, dep) {
                     Err(msg) => return Err(render(&source, line, col, 1, &name, &msg)),
-                    Ok(Some(mp)) => pendientes.push((dep.clone(), mp, false)),
+                    Ok(Some(mp)) => pending.push((dep.clone(), mp, false)),
                     Ok(None) => return Err(render(&source, line, col, 1, &name, &format!(
                         "no se encuentra el módulo '{}' (se esperaba '{}.ray' o '{}/mod.ray' en: {})",
                         dep, dep, dep,
@@ -207,15 +207,15 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
     }
 
     // --- Fase 2: tipos únicos **dentro de cada módulo** (M11.3c: ya no globales) ---
-    comprobar_tipos_unicos(&modules)?;
+    check_unique_types(&modules)?;
 
     // --- Fase 3: namespacing + resolución + desambiguación de posiciones (L3) ---
     // La **superficie pública** por módulo: nombre exportado → nombre global de destino (M11.6a).
     // Unifica ítems `pub` definidos y reexports (`pub from …`); la consultan el Resolver, el
     // TypeRewriter y la clasificación de `from`-imports.
     let surfaces = build_surfaces(&modules);
-    let tipos = recolectar_tipos(&modules); // todos los tipos: para distinguir "privado" de "no existe"
-    let mut fusionado = Program {
+    let types = collect_types(&modules); // todos los tipos: para distinguir "privado" de "no existe"
+    let mut merged = Program {
         functions: Vec::new(), structs: Vec::new(), enums: Vec::new(), consts: Vec::new(),
         traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
         ufcs_aliases: HashMap::new(), expr_spans: HashMap::new(), field_name_pos: HashMap::new(),
@@ -227,7 +227,7 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
     // Un nombre que mapee a DOS globales distintos en módulos distintos es ambiguo sin contexto de
     // módulo → se **excluye** (degradación segura: ese nombre cae al comportamiento previo).
     let mut ufcs_aliases: HashMap<String, String> = HashMap::new();
-    let mut ufcs_ambiguos: HashSet<String> = HashSet::new();
+    let mut ufcs_ambiguous: HashSet<String> = HashSet::new();
 
     // El módulo de **entrada** se fusiona primero, en `delta` 0 (sus líneas coinciden con su
     // archivo): un programa de un solo archivo queda **idéntico** a antes. Cada módulo siguiente
@@ -251,13 +251,13 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         // 2. Clasificar los `from M import …` (M11.3b/-2): funciones `pub` → mapa de **valores**
         //    (al `own` del Resolver); tipos `pub` → mapa de **tipos** (al TypeRewriter).
         let (from_values, from_types) =
-            clasificar_from_imports(&m, &surfaces, &tipos, &mut from_import_sites)?;
+            classify_from_imports(&m, &surfaces, &types, &mut from_import_sites)?;
 
         // Acumular los alias UFCS de este módulo (función from-importada: local → global). Un alias
         // que ya existía con OTRO global es ambiguo entre módulos → se marca para excluir.
         for (local, global) in &from_values {
             match ufcs_aliases.get(local) {
-                Some(g) if g != global => { ufcs_ambiguos.insert(local.clone()); }
+                Some(g) if g != global => { ufcs_ambiguous.insert(local.clone()); }
                 _ => { ufcs_aliases.insert(local.clone(), global.clone()); }
             }
         }
@@ -288,33 +288,33 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         // 6. Renombrar las definiciones de función a su nombre global y fusionar.
         for mut f in std::mem::take(&mut m.program.functions) {
             f.name = global_fn(&prefix, &f.name);
-            fusionado.functions.push(f);
+            merged.functions.push(f);
         }
-        fusionado.structs.append(&mut m.program.structs);
-        fusionado.enums.append(&mut m.program.enums);
+        merged.structs.append(&mut m.program.structs);
+        merged.enums.append(&mut m.program.enums);
         // M49.1c: los `const` de un módulo no-entrada se namespacan como las funciones (`modulo::CONST`)
         // → encapsulados: solo accesibles calificados (`M.CONST`), no como un `CONST` global filtrado.
         for mut c in std::mem::take(&mut m.program.consts) {
             c.name = global_fn(&prefix, &c.name);
-            fusionado.consts.push(c);
+            merged.consts.push(c);
         }
-        fusionado.traits.append(&mut m.program.traits);
-        fusionado.impls.append(&mut m.program.impls);
+        merged.traits.append(&mut m.program.traits);
+        merged.impls.append(&mut m.program.impls);
         // M41: las funciones externas (FFI) NO se namespacan: su `name` es a la vez el identificador
         // raylang y el símbolo C a resolver con dlsym. Se fusionan tal cual (efectivamente globales por
         // su símbolo). Colisiones de símbolo entre módulos → diferido.
-        fusionado.externs.append(&mut m.program.externs);
-        fusionado.expr_spans.extend(std::mem::take(&mut m.program.expr_spans));
-        fusionado.field_name_pos.extend(std::mem::take(&mut m.program.field_name_pos));
+        merged.externs.append(&mut m.program.externs);
+        merged.expr_spans.extend(std::mem::take(&mut m.program.expr_spans));
+        merged.field_name_pos.extend(std::mem::take(&mut m.program.field_name_pos));
 
         loaded_modules.push(LoadedModule { name: m.name, source: m.source, start_line: start, path: m.path });
     }
     loaded_modules.sort_by_key(|m| m.start_line);
-    for amb in &ufcs_ambiguos {
-        ufcs_aliases.remove(amb);
+    for ambiguous in &ufcs_ambiguous {
+        ufcs_aliases.remove(ambiguous);
     }
-    fusionado.ufcs_aliases = ufcs_aliases;
-    Ok(Loaded { program: fusionado, modules: loaded_modules, from_import_sites })
+    merged.ufcs_aliases = ufcs_aliases;
+    Ok(Loaded { program: merged, modules: loaded_modules, from_import_sites })
 }
 
 /// Desplaza **todas** las posiciones (línea) de un módulo por `delta` (L3). La columna se conserva.
@@ -462,8 +462,8 @@ fn shift_expr(e: &mut Expr, delta: usize) {
                 shift_expr(x, delta);
             }
         }
-        ExprKind::MapLit(pares) => {
-            for (k, v) in pares { shift_expr(k, delta); shift_expr(v, delta); }
+        ExprKind::MapLit(pairs) => {
+            for (k, v) in pairs { shift_expr(k, delta); shift_expr(v, delta); }
         }
         ExprKind::Index { array, index } => {
             shift_expr(array, delta);
@@ -540,7 +540,7 @@ fn rel_module_name(path: &Path, root: &Path) -> Option<String> {
 /// propia cápsula (`importer == C`, su `mod.ray`) o vive bajo `C/`. Devuelve `Some(C)` si la viola.
 /// Las cápsulas anidadas componen: estar dentro de la interior implica estar dentro de la exterior,
 /// así que basta comprobar la más cercana.
-fn capsula_violada(roots: &[PathBuf], importer: &str, target: &str) -> Option<String> {
+fn capsule_violated(roots: &[PathBuf], importer: &str, target: &str) -> Option<String> {
     let segs: Vec<&str> = target.split('/').collect();
     for k in (1..segs.len()).rev() {
         let c = segs[..k].join("/");
@@ -548,8 +548,8 @@ fn capsula_violada(roots: &[PathBuf], importer: &str, target: &str) -> Option<St
         // descargada es una cápsula en la caché; sus internos quedan protegidos igual que los del
         // proyecto). La más profunda gana (cápsulas anidadas componen).
         if roots.iter().any(|r| r.join(&c).join("mod.ray").exists()) {
-            let dentro = importer == c || importer.starts_with(&format!("{}/", c));
-            return if dentro { None } else { Some(c) };
+            let inside = importer == c || importer.starts_with(&format!("{}/", c));
+            return if inside { None } else { Some(c) };
         }
     }
     None
@@ -558,28 +558,28 @@ fn capsula_violada(roots: &[PathBuf], importer: &str, target: &str) -> Option<St
 /// Las **rutas de módulo importables** desde el archivo `entry`, para el completion de `import`
 /// (M45c-2). Recorre las `roots` (proyecto + dependencias), toma la identidad de cada `.ray`
 /// (`rel_module_name`) y **descarta** las que cruzarían el borde de una cápsula desde `entry`
-/// (`capsula_violada`) — así solo se ofrece lo que el checker aceptaría. Excluye la propia entrada y
+/// (`capsule_violated`) — así solo se ofrece lo que el checker aceptaría. Excluye la propia entrada y
 /// los puntos de entrada `main`. Ordenadas y sin duplicados.
-pub fn modulos_disponibles(roots: &[PathBuf], entry: &Path) -> Vec<String> {
+pub fn available_modules(roots: &[PathBuf], entry: &Path) -> Vec<String> {
     let importer = roots.iter().find_map(|r| rel_module_name(entry, r));
     let imp = importer.as_deref().unwrap_or("");
     let mut set = std::collections::BTreeSet::new();
     for root in roots {
-        recolectar_modulos(root, root, &mut set);
+        collect_modules(root, root, &mut set);
     }
     set.into_iter()
         .filter(|m| m != imp && m != "main")
-        .filter(|m| capsula_violada(roots, imp, m).is_none())
+        .filter(|m| capsule_violated(roots, imp, m).is_none())
         .collect()
 }
 
 /// Recorre `dir` (bajo `root`) recolectando la identidad de módulo de cada `.ray` (recursivo).
-fn recolectar_modulos(dir: &Path, root: &Path, out: &mut std::collections::BTreeSet<String>) {
+fn collect_modules(dir: &Path, root: &Path, out: &mut std::collections::BTreeSet<String>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
-            recolectar_modulos(&p, root, out);
+            collect_modules(&p, root, out);
         } else if p.extension().and_then(|s| s.to_str()) == Some("ray") {
             if let Some(m) = rel_module_name(&p, root) {
                 out.insert(m);
@@ -683,14 +683,14 @@ fn render(source: &str, line: usize, col: usize, len: usize, module: &str, msg: 
 
 /// Los tipos (struct/enum/trait) se namespacan por módulo (M11.3c), así que dos **módulos** pueden
 /// reusar un nombre. Pero **dentro** de un módulo siguen debiendo ser únicos (dos `Foo` colisionan).
-fn comprobar_tipos_unicos(modules: &[Module]) -> Result<(), LoadError> {
+fn check_unique_types(modules: &[Module]) -> Result<(), LoadError> {
     for m in modules {
-        let mut visto: HashSet<String> = HashSet::new();
-        let nombres = m.program.structs.iter().map(|s| (s.name.clone(), s.line, s.col))
+        let mut seen: HashSet<String> = HashSet::new();
+        let names = m.program.structs.iter().map(|s| (s.name.clone(), s.line, s.col))
             .chain(m.program.enums.iter().map(|e| (e.name.clone(), e.line, e.col)))
             .chain(m.program.traits.iter().map(|t| (t.name.clone(), t.line, t.col)));
-        for (name, line, col) in nombres {
-            if !visto.insert(name.clone()) {
+        for (name, line, col) in names {
+            if !seen.insert(name.clone()) {
                 return Err(render(&m.source, line, col, 1, &m.name, &format!(
                     "el tipo '{}' ya está definido en este módulo", name
                 )));
@@ -754,7 +754,7 @@ fn build_surfaces(modules: &[Module]) -> Surfaces {
     }
     // Pasada 2: reexports, a punto fijo.
     loop {
-        // (módulo destino, nombre local, global, es_tipo)
+        // (módulo destino, nombre local, global, is_type)
         let mut additions: Vec<(String, String, String, bool)> = Vec::new();
         for m in modules {
             for fi in m.program.from_imports.iter().filter(|f| f.is_pub) {
@@ -778,9 +778,9 @@ fn build_surfaces(modules: &[Module]) -> Surfaces {
         if additions.is_empty() {
             break;
         }
-        for (module, local, global, es_tipo) in additions {
+        for (module, local, global, is_type) in additions {
             let s = surfaces.entry(module).or_default();
-            if es_tipo {
+            if is_type {
                 s.types.insert(local, global);
             } else {
                 s.values.insert(local, global);
@@ -793,7 +793,7 @@ fn build_surfaces(modules: &[Module]) -> Surfaces {
 /// Por módulo, el conjunto de **todos** los nombres de tipos (struct/enum/trait, `pub` o no). Sirve
 /// para distinguir, en un `from M import X` que no resuelve, un tipo **privado** (falta `pub`) de un
 /// nombre **inexistente**.
-fn recolectar_tipos(modules: &[Module]) -> HashMap<String, HashSet<String>> {
+fn collect_types(modules: &[Module]) -> HashMap<String, HashSet<String>> {
     let mut map: HashMap<String, HashSet<String>> = HashMap::new();
     for m in modules {
         let set = map.entry(m.name.clone()).or_default();
@@ -821,12 +821,12 @@ fn build_import_map(m: &Module) -> Result<ImportMap, LoadError> {
     let mut map = ImportMap::new();
     for i in &m.program.imports {
         let leaf = i.leaf().to_string();
-        if let Some(otra) = map.insert(leaf.clone(), i.module.clone())
-            && otra != i.module
+        if let Some(other) = map.insert(leaf.clone(), i.module.clone())
+            && other != i.module
         {
             return Err(render(&m.source, i.line, i.col, 1, &m.name, &format!(
                 "el nombre de módulo '{}' ya nombra a '{}'; usa 'as' para renombrar esta importación",
-                leaf, otra
+                leaf, other
             )));
         }
     }
@@ -836,33 +836,33 @@ fn build_import_map(m: &Module) -> Result<ImportMap, LoadError> {
 /// El destino global de un nombre `from`-importado: una **función** (va al `own` del Resolver) o un
 /// **tipo** (va al mapa del TypeRewriter). Ambos guardan el nombre global `M::nombre`.
 enum FromTarget {
-    Funcion(String),
-    Tipo(String),
+    Func(String),
+    Type(String),
 }
 
 /// Clasifica **todos** los `from M import a [as b]{, …}` de un módulo en dos mapas `local → global`:
 /// uno de **valores** (funciones `pub`) y otro de **tipos** (tipos `pub`, M11.3c-2). Valida la
 /// exportación (`pub`) y la unicidad del nombre local (contra las definiciones propias del módulo y
 /// entre los propios imports): una colisión pide renombrar con `as`.
-fn clasificar_from_imports(
+fn classify_from_imports(
     m: &Module,
     surfaces: &Surfaces,
-    tipos: &HashMap<String, HashSet<String>>,
+    all_types: &HashMap<String, HashSet<String>>,
     sites: &mut Vec<FromImportSite>,
 ) -> Result<(NameMap, NameMap), LoadError> {
     // Nombres ya ocupados en el módulo: funciones y tipos propios (para detectar colisiones).
-    let mut locales: HashSet<String> = m.program.functions.iter().map(|f| f.name.clone()).collect();
-    locales.extend(m.program.structs.iter().map(|s| s.name.clone()));
-    locales.extend(m.program.enums.iter().map(|e| e.name.clone()));
-    locales.extend(m.program.traits.iter().map(|t| t.name.clone()));
+    let mut locals: HashSet<String> = m.program.functions.iter().map(|f| f.name.clone()).collect();
+    locals.extend(m.program.structs.iter().map(|s| s.name.clone()));
+    locals.extend(m.program.enums.iter().map(|e| e.name.clone()));
+    locals.extend(m.program.traits.iter().map(|t| t.name.clone()));
 
     let (mut values, mut types) = (HashMap::new(), HashMap::new());
     for fi in &m.program.from_imports {
         let from = &fi.module;
         for n in &fi.names {
-            let target = clasificar_from_name(&m.source, &m.name, from, n, surfaces, tipos)?;
+            let target = classify_from_name(&m.source, &m.name, from, n, surfaces, all_types)?;
             let local = n.local().to_string();
-            if !locales.insert(local.clone()) {
+            if !locals.insert(local.clone()) {
                 return Err(render(&m.source, n.line, n.col, 1, &m.name, &format!(
                     "el nombre '{}' ya está definido o importado en este módulo; usa 'as' para renombrarlo",
                     local
@@ -871,7 +871,7 @@ fn clasificar_from_imports(
             // M10.2h: registra el sitio del especificador para el rename del LSP (posición local
             // del `nombre`, el global al que resuelve, si lleva `as alias`).
             let global = match &target {
-                FromTarget::Funcion(g) | FromTarget::Tipo(g) => g.clone(),
+                FromTarget::Func(g) | FromTarget::Type(g) => g.clone(),
             };
             sites.push(FromImportSite {
                 global,
@@ -882,8 +882,8 @@ fn clasificar_from_imports(
                 aliased: n.alias.is_some(),
             });
             match target {
-                FromTarget::Funcion(g) => { values.insert(local, g); }
-                FromTarget::Tipo(g) => { types.insert(local, g); }
+                FromTarget::Func(g) => { values.insert(local, g); }
+                FromTarget::Type(g) => { types.insert(local, g); }
             }
         }
     }
@@ -892,22 +892,22 @@ fn clasificar_from_imports(
 
 /// Clasifica un único nombre `from`-importado: función `pub`, tipo `pub`, o error (tipo privado /
 /// inexistente). El orden prioriza funciones; un módulo no debería tener función y tipo homónimos.
-fn clasificar_from_name(
+fn classify_from_name(
     src: &str,
     module: &str,
     from: &str,
     name: &crate::ast::ImportName,
     surfaces: &Surfaces,
-    tipos: &HashMap<String, HashSet<String>>,
+    all_types: &HashMap<String, HashSet<String>>,
 ) -> Result<FromTarget, LoadError> {
     if let Some(g) = surfaces.get(from).and_then(|s| s.values.get(&name.name)) {
-        return Ok(FromTarget::Funcion(g.clone()));
+        return Ok(FromTarget::Func(g.clone()));
     }
     if let Some(g) = surfaces.get(from).and_then(|s| s.types.get(&name.name)) {
-        return Ok(FromTarget::Tipo(g.clone()));
+        return Ok(FromTarget::Type(g.clone()));
     }
     // No exporta el nombre: ¿existe como tipo privado? (mensaje más preciso que "no existe").
-    if tipos.get(from).is_some_and(|s| s.contains(&name.name)) {
+    if all_types.get(from).is_some_and(|s| s.contains(&name.name)) {
         return Err(render(src, name.line, name.col, 1, module, &format!(
             "'{}' es un tipo privado del módulo '{}' (¿falta 'pub'?)", name.name, from
         )));
@@ -936,7 +936,7 @@ struct Resolver<'a> {
 
 impl<'a> Resolver<'a> {
     /// `from_values` son los `from M import <fn>` ya clasificados (local → `M::fn`); las colisiones
-    /// y la validación `pub` las hizo `clasificar_from_imports`, así que aquí solo se vuelcan.
+    /// y la validación `pub` las hizo `classify_from_imports`, así que aquí solo se vuelcan.
     fn new(
         m: &Module,
         surfaces: &'a Surfaces,
@@ -982,11 +982,11 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    fn declarado_local(&self, name: &str) -> bool {
+    fn declared_local(&self, name: &str) -> bool {
         self.scopes.iter().any(|s| s.contains(name))
     }
 
-    fn declarar(&mut self, name: &str) {
+    fn declare(&mut self, name: &str) {
         if let Some(s) = self.scopes.last_mut() {
             s.insert(name.to_string());
         }
@@ -1008,12 +1008,12 @@ impl<'a> Resolver<'a> {
         match &mut stmt.kind {
             StmtKind::Let { name, value, .. } => {
                 self.resolve_expr(value, src, module)?;
-                self.declarar(name); // el binding entra en ámbito tras su inicializador
+                self.declare(name); // el binding entra en ámbito tras su inicializador
             }
             StmtKind::LetTuple { names, value, .. } => {
                 self.resolve_expr(value, src, module)?;
                 for n in names.iter().flatten() {
-                    self.declarar(n);
+                    self.declare(n);
                 }
             }
             StmtKind::For { pat, iter, body } => {
@@ -1027,10 +1027,10 @@ impl<'a> Resolver<'a> {
                 }
                 self.scopes.push(std::collections::HashSet::new()); // ámbito de la(s) variable(s) del for
                 match pat {
-                    ForPat::Single(n) => self.declarar(n),
+                    ForPat::Single(n) => self.declare(n),
                     ForPat::Tuple(names) => {
                         for n in names.iter().flatten() {
-                            self.declarar(n);
+                            self.declare(n);
                         }
                     }
                 }
@@ -1069,7 +1069,7 @@ impl<'a> Resolver<'a> {
             ExprKind::Ident(name) => {
                 // Una referencia a una función propia del módulo (no tapada por una local) se
                 // reescribe a su nombre global; lo demás (prelude/builtin/local) lo deja el checker.
-                let global = self.own.get(name).filter(|_| !self.declarado_local(name)).cloned();
+                let global = self.own.get(name).filter(|_| !self.declared_local(name)).cloned();
                 if let Some(g) = global {
                     *name = g;
                 }
@@ -1092,8 +1092,8 @@ impl<'a> Resolver<'a> {
                     self.resolve_expr(e, src, module)?;
                 }
             }
-            ExprKind::MapLit(pares) => {
-                for (k, v) in pares {
+            ExprKind::MapLit(pairs) => {
+                for (k, v) in pairs {
                     self.resolve_expr(k, src, module)?;
                     self.resolve_expr(v, src, module)?;
                 }
@@ -1162,18 +1162,18 @@ impl<'a> Resolver<'a> {
     /// la cabeza `M.Color` colapsa a `Ident("M::Color")` y el checker la trata como enum normal.
     fn qualified_field(&self, object: &Expr, name: &str, src: &str, module: &str) -> Result<Option<String>, LoadError> {
         let ExprKind::Ident(leaf) = &object.kind else { return Ok(None) };
-        if self.declarado_local(leaf) {
+        if self.declared_local(leaf) {
             return Ok(None); // una local tapa al módulo
         }
-        let Some(ruta) = self.imports.get(leaf) else {
+        let Some(path) = self.imports.get(leaf) else {
             return Ok(None); // no es un módulo importado (su leaf)
         };
-        let surf = self.surfaces.get(ruta);
+        let surf = self.surfaces.get(path);
         let global = surf.and_then(|s| s.values.get(name).or_else(|| s.types.get(name)));
         match global {
             Some(g) => Ok(Some(g.clone())),
             None => Err(render(src, object.line, object.col, 1, module, &format!(
-                "el módulo '{}' no exporta '{}' (¿falta 'pub'?)", ruta, name
+                "el módulo '{}' no exporta '{}' (¿falta 'pub'?)", path, name
             ))),
         }
     }
@@ -1204,7 +1204,7 @@ impl<'a> TypeRewriter<'a> {
         TypeRewriter { types, imports, surfaces, tparams: Vec::new() }
     }
 
-    fn en_ambito(&self, name: &str) -> bool {
+    fn in_scope(&self, name: &str) -> bool {
         self.tparams.iter().any(|s| s.contains(name))
     }
 
@@ -1216,14 +1216,14 @@ impl<'a> TypeRewriter<'a> {
     /// - **Tipo propio o importado** del módulo: → su nombre global (mapa `types`).
     fn rewrite_name(&self, name: &mut String) {
         if let Some((leaf, ty)) = name.split_once('.') {
-            if let Some(ruta) = self.imports.get(leaf)
-                && let Some(g) = self.surfaces.get(ruta).and_then(|s| s.types.get(ty))
+            if let Some(path) = self.imports.get(leaf)
+                && let Some(g) = self.surfaces.get(path).and_then(|s| s.types.get(ty))
             {
                 *name = g.clone();
             }
             return; // calificado: resuelto o dejado para que el checker lo rechace
         }
-        if self.en_ambito(name) {
+        if self.in_scope(name) {
             return; // es un parámetro de tipo (`T`), no un tipo nominal
         }
         if let Some(g) = self.types.get(name) {
@@ -1461,8 +1461,8 @@ impl<'a> TypeRewriter<'a> {
                     self.rewrite_expr(e);
                 }
             }
-            ExprKind::MapLit(pares) => {
-                for (k, v) in pares { self.rewrite_expr(k); self.rewrite_expr(v); }
+            ExprKind::MapLit(pairs) => {
+                for (k, v) in pairs { self.rewrite_expr(k); self.rewrite_expr(v); }
             }
             ExprKind::Index { array, index } => {
                 self.rewrite_expr(array);
@@ -1499,12 +1499,12 @@ impl<'a> TypeRewriter<'a> {
 /// sub-patrones anidados (M40.1c).
 fn arm_bindings(arm: &crate::ast::MatchArm) -> HashSet<String> {
     let mut set = HashSet::new();
-    recolectar_bindings(&arm.pattern, &mut set);
+    collect_bindings(&arm.pattern, &mut set);
     set
 }
 
 /// Añade a `set` los nombres que liga un patrón (recursivo, M40.1c).
-fn recolectar_bindings(p: &Pattern, set: &mut HashSet<String>) {
+fn collect_bindings(p: &Pattern, set: &mut HashSet<String>) {
     match &p.kind {
         PatternKind::Wildcard => {}
         PatternKind::Binding(n) => {
@@ -1512,12 +1512,12 @@ fn recolectar_bindings(p: &Pattern, set: &mut HashSet<String>) {
         }
         PatternKind::Variant { subpatterns, .. } => {
             for sub in subpatterns {
-                recolectar_bindings(sub, set);
+                collect_bindings(sub, set);
             }
         }
         PatternKind::Struct { fields, .. } => {
             for (_, sub) in fields {
-                recolectar_bindings(sub, set);
+                collect_bindings(sub, set);
             }
         }
     }

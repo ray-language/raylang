@@ -1062,7 +1062,7 @@ fn import_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
 }
 
 /// Completion de **rutas de módulo** (M45c-2): `import <cursor>` / `from <cursor> import`. Ofrece las
-/// rutas importables del proyecto (`loader::modulos_disponibles`, con la encapsulación aplicada).
+/// rutas importables del proyecto (`loader::available_modules`, con la encapsulación aplicada).
 ///
 /// Las rutas llevan `/`, que VSCode no cuenta como carácter de palabra → filtrar `geo/for` contra
 /// `geo/formas/circulo` fallaría. Se resuelve con un **`textEdit`** cuyo rango cubre toda la ruta
@@ -1082,7 +1082,7 @@ fn module_path_completion_items(entry: &Path, line0: usize, col: usize, chars: &
         ("start", obj(vec![("line", num(line0 as i64)), ("character", num(inicio as i64))])),
         ("end", obj(vec![("line", num(line0 as i64)), ("character", num(col as i64))])),
     ]);
-    let items: Vec<Json> = loader::modulos_disponibles(&roots, entry)
+    let items: Vec<Json> = loader::available_modules(&roots, entry)
         .into_iter()
         .map(|ruta| obj(vec![
             ("label", Json::Str(ruta.clone())),
@@ -2408,8 +2408,8 @@ fn project_root_for(entry: &Path) -> Option<PathBuf> {
 fn cargar(entry: &Path, src: &str) -> Result<loader::Loaded, loader::LoadError> {
     let deps = dep_roots_for(entry);
     match project_root_for(entry) {
-        Some(root) => loader::load_fuente_modulo(entry, src, &root, &deps),
-        None => loader::load_fuente(entry, src, &deps),
+        Some(root) => loader::load_source_module(entry, src, &root, &deps),
+        None => loader::load_source(entry, src, &deps),
     }
 }
 

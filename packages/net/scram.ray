@@ -5,22 +5,25 @@
 // Flujo del cliente: envía `client-first` (n=usuario, r=nonce); recibe `server-first` (r=nonce+snonce,
 // s=salt, i=iteraciones); calcula la prueba del cliente (ClientProof) y envía `client-final`; verifica
 // la firma del servidor del `server-final`. Importable: `from scram import scram_first, scram_final, scram_verify, Scram;`.
-
 from net/crypto import hmac_sha256_octets, sha256_octets;
 from std/base64 import base64, base64_decode;
 
 // El estado de una conversación SCRAM en el cliente.
+/// Client-side state of a SCRAM-SHA-256 conversation (RFC 5802 / RFC 7677).
+/// Created by `scram_first`; `scram_final` fills in the expected server signature.
 pub struct Scram {
-    client_first_bare: string,   // "n=usuario,r=nonce"
-    server_sig: [int],           // la firma del servidor ESPERADA (se llena en scram_final, se verifica al final)
+    client_first_bare: string,
+    server_sig: [int],
 }
 
+// "n=usuario,r=nonce"
+// la firma del servidor ESPERADA (se llena en scram_final, se verifica al final)
 // XOR de dos arreglos de octetos de igual longitud.
 fn xor_bytes(a: [int], b: [int]) -> [int] {
     var out: [int] = [];
     var i = 0;
-    while (i < len(a)) {
-        push(out, a[i] ^ b[i]);
+    while (i < a.len()) {
+        out.push(a[i] ^ b[i]);
         i = i + 1;
     }
     out
@@ -31,16 +34,19 @@ fn xor_bytes(a: [int], b: [int]) -> [int] {
 fn pbkdf2_sha256(pw: bytes, salt: [int], iterations: int) -> [int] {
     var msg: [int] = [];
     var i = 0;
-    while (i < len(salt)) {
-        push(msg, salt[i]);
+    while (i < salt.len()) {
+        msg.push(salt[i]);
         i = i + 1;
     }
-    push(msg, 0); push(msg, 0); push(msg, 0); push(msg, 1);   // INT(1) big-endian
-    var u = hmac_sha256_octets(pw, bytes_of(msg));                   // U1
+    msg.push(0);  // INT(1) big-endian
+    msg.push(0);
+    msg.push(0);
+    msg.push(1);
+    var u = hmac_sha256_octets(pw, bytes_of(msg));  // U1
     var result = u;
     var c = 1;
     while (c < iterations) {
-        u = hmac_sha256_octets(pw, bytes_of(u));                     // Ui = HMAC(pw, U_{i-1})
+        u = hmac_sha256_octets(pw, bytes_of(u));  // Ui = HMAC(pw, U_{i-1})
         result = xor_bytes(result, u);
         c = c + 1;
     }
@@ -48,27 +54,27 @@ fn pbkdf2_sha256(pw: bytes, salt: [int], iterations: int) -> [int] {
 }
 
 // El `client-first-message` completo (a enviar): "n,,n=usuario,r=nonce". `nonce` lo genera el llamador.
+/// Starts a SCRAM conversation: builds the client-first-bare message ("n=user,r=nonce").
+/// The caller supplies the random `nonce`; send `scram_client_first_message` on the wire.
 pub fn scram_first(username: string, nonce: string) -> Scram {
-    Scram {
-        client_first_bare: "n=" + username + ",r=" + nonce,
-        server_sig: [],
-    }
+    Scram { client_first_bare: "n=" + username + ",r=" + nonce, server_sig: [] }
 }
 
 // El texto GS2+bare que se manda como client-first (con el header "n,,").
+/// The full client-first-message to send on the wire: GS2 header "n,," + client-first-bare.
 pub fn scram_client_first_message(sc: Scram) -> string {
     "n,," + sc.client_first_bare
 }
 
 // Devuelve el valor de un atributo `k=valor` en un mensaje `a=..,b=..,..` separado por comas.
 fn attr(msg: string, clave: string) -> string {
-    let partes = split(msg, ",");
+    let partes = msg.split(",");
     var v = "";
     var i = 0;
-    while (i < len(partes)) {
+    while (i < partes.len()) {
         let p = partes[i];
-        if (len(p) >= 2 && p[0] == clave[0] && p[1] == '=') {
-            v = substring(p, 2, len(p));
+        if (p.len() >= 2 && p[0] == clave[0] && p[1] == '=') {
+            v = p.substring(2, p.len());
         }
         i = i + 1;
     }
@@ -77,46 +83,57 @@ fn attr(msg: string, clave: string) -> string {
 
 // Procesa el `server-first` y produce el `client-final-message` (con la prueba). Guarda en `sc` la firma
 // del servidor esperada para verificarla luego con `scram_verify`.
+/// Processes the server-first-message and returns the client-final-message (with ClientProof).
+/// Runs PBKDF2-HMAC-SHA256 over the password (CPU cost grows with the iteration count) and
+/// stores the expected ServerSignature in `sc` for `scram_verify`.
+/// `Err` on an invalid iteration count or bad base64 salt in `server_first`.
 pub fn scram_final(sc: Scram, password: string, server_first: string) -> Result<string, string> {
-    let rnonce = attr(server_first, "r");    // nonce combinado
+    let rnonce = attr(server_first, "r");  // nonce combinado
     let salt_b64 = attr(server_first, "s");
     let iter_str = attr(server_first, "i");
     let iterations = match (parse_int(iter_str)) {
         Option.Some(n) => n,
-        Option.None => { return Result.Err("iteraciones inválidas en server-first"); },
+        Option.None => {
+            return Result.Err("iteraciones inválidas en server-first");
+        },
     };
     let salt = match (base64_decode(salt_b64)) {
         Result.Ok(s) => s,
-        Result.Err(e) => { return Result.Err("salt base64 inválido: " + e); },
+        Result.Err(e) => {
+            return Result.Err("salt base64 inválido: " + e);
+        },
     };
 
     let client_final_noproof = "c=biws,r=" + rnonce;
     let auth_msg = sc.client_first_bare + "," + server_first + "," + client_final_noproof;
 
-    let salted = pbkdf2_sha256(to_bytes(password), salt, iterations);
-    let client_key = hmac_sha256_octets(bytes_of(salted), to_bytes("Client Key"));
+    let salted = pbkdf2_sha256(password.to_bytes(), salt, iterations);
+    let client_key = hmac_sha256_octets(bytes_of(salted), "Client Key".to_bytes());
     let stored_key = sha256_octets(client_key);
-    let client_sig = hmac_sha256_octets(bytes_of(stored_key), to_bytes(auth_msg));
+    let client_sig = hmac_sha256_octets(bytes_of(stored_key), auth_msg.to_bytes());
     let proof = xor_bytes(client_key, client_sig);
 
-    let server_key = hmac_sha256_octets(bytes_of(salted), to_bytes("Server Key"));
-    sc.server_sig = hmac_sha256_octets(bytes_of(server_key), to_bytes(auth_msg));
+    let server_key = hmac_sha256_octets(bytes_of(salted), "Server Key".to_bytes());
+    sc.server_sig = hmac_sha256_octets(bytes_of(server_key), auth_msg.to_bytes());
 
     Result.Ok(client_final_noproof + ",p=" + base64(proof))
 }
 
 // Verifica el `server-final` ("v=<firma en base64>"): la firma debe coincidir con la esperada.
+/// Verifies the server-final-message ("v=<base64 signature>") against the ServerSignature
+/// computed in `scram_final`, using a constant-time comparison. Call after `scram_final`;
+/// false means the server does not know the password (or the message is malformed).
 pub fn scram_verify(sc: Scram, server_final: string) -> bool {
     let v = attr(server_final, "v");
     match (base64_decode(v)) {
         Result.Ok(sig) => {
-            if (len(sig) != len(sc.server_sig)) {
+            if (sig.len() != sc.server_sig.len()) {
                 return false;
             }
             var diff = 0;
             var i = 0;
-            while (i < len(sig)) {
-                diff = diff | (sig[i] ^ sc.server_sig[i]);
+            while (i < sig.len()) {
+                diff = diff | sig[i] ^ sc.server_sig[i];
                 i = i + 1;
             }
             diff == 0

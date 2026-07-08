@@ -7,7 +7,7 @@ from hex import hex_encode;
 fn str_bytes(s: string) -> [int] {
     var b: [int] = [];
     for c in s {
-        push(b, c as int);
+        b.push(c as int);
     }
     b
 }
@@ -17,7 +17,7 @@ fn main() {
     var key: [int] = [];
     var i = 128;
     while (i < 160) {
-        push(key, i);
+        key.push(i);
         i = i + 1;
     }
     // Nonce (12 octetos): 07 00 00 00 ‖ 40 41 42 43 44 45 46 47.
@@ -34,9 +34,9 @@ fn main() {
     // Abrir el sellado auténtico: recupera el texto.
     match (aead_open(key, nonce, aad, sellado.ciphertext, sellado.tag)) {
         Option.Some(claro) => {
-            var ok = len(claro) == len(pt);
+            var ok = claro.len() == pt.len();
             var j = 0;
-            while (j < len(pt)) {
+            while (j < pt.len()) {
                 if (claro[j] != pt[j]) {
                     ok = false;
                 }
@@ -54,8 +54,8 @@ fn main() {
     // Manipular un octeto del criptograma debe hacer que la apertura RECHACE.
     var ct2: [int] = [];
     var k = 0;
-    while (k < len(sellado.ciphertext)) {
-        push(ct2, sellado.ciphertext[k]);
+    while (k < sellado.ciphertext.len()) {
+        ct2.push(sellado.ciphertext[k]);
         k = k + 1;
     }
     ct2[0] = ct2[0] ^ 1;  // voltea un bit

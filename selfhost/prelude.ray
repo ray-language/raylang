@@ -9,12 +9,11 @@
 //
 // (Option/Result, Eq/Show/Ord y los impls de primitivos los conoce el checker auto-alojado por inyección
 // directa, y el intérprete reconoce Option/Result + deriva igual/mostrar; por eso no van aquí.)
-
 fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
     var out: [U] = [];
     var i: int = 0;
-    while (i < len(xs)) {
-        push(out, f(xs[i]));
+    while (i < xs.len()) {
+        out.push(f(xs[i]));
         i = i + 1;
     }
     out
@@ -23,9 +22,11 @@ fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
 fn filter<T>(xs: [T], pred: fn(T) -> bool) -> [T] {
     var out: [T] = [];
     var i: int = 0;
-    while (i < len(xs)) {
+    while (i < xs.len()) {
         let x: T = xs[i];
-        if (pred(x)) { push(out, x); }
+        if (pred(x)) {
+            out.push(x);
+        }
         i = i + 1;
     }
     out
@@ -34,7 +35,7 @@ fn filter<T>(xs: [T], pred: fn(T) -> bool) -> [T] {
 fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A {
     var acc: A = init;
     var i: int = 0;
-    while (i < len(xs)) {
+    while (i < xs.len()) {
         acc = f(acc, xs[i]);
         i = i + 1;
     }
@@ -45,18 +46,20 @@ fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A {
 // traducidos a Option con Some/None corrientes — el runtime no sabe de Option (patrón de la stdlib).
 fn parse_int(s: string) -> Option<int> {
     let r = __parse_int(s);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 fn parse_float(s: string) -> Option<float> {
     let r = __parse_float(s);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
 // M14.6c-2: aserciones y orden. Construidas sobre `panic` + los traits Eq/Show/Ord (que el checker
 // conoce por inyección y el intérprete resuelve por etiqueta de valor). Port de `src/prelude.rs`.
 fn assert(cond: bool) {
-    if (!cond) { panic("aserción falló"); }
+    if (!cond) {
+        panic("aserción falló");
+    }
 }
 
 fn assert_eq<T: Eq + Show>(a: T, b: T) {
@@ -69,10 +72,10 @@ fn assert_eq<T: Eq + Show>(a: T, b: T) {
 fn sort<T: Ord>(a: [T]) -> [T] {
     var out: [T] = [];
     var i: int = 0;
-    while (i < len(a)) {
+    while (i < a.len()) {
         let x: T = a[i];
-        push(out, x);
-        var j: int = len(out) - 1;
+        out.push(x);
+        var j: int = out.len() - 1;
         while (j > 0 && x.menor(out[j - 1])) {
             out[j] = out[j - 1];
             j = j - 1;
@@ -93,11 +96,11 @@ fn read_file(ruta: string) -> Result<string, string> {
 
 fn write_file(ruta: string, contenido: string) -> Result<int, string> {
     let r = __write_file(ruta, contenido);
-    if (r[0] == "ok") { Result.Ok(len(contenido)) } else { Result.Err(r[1]) }
+    if (r[0] == "ok") { Result.Ok(contenido.len()) } else { Result.Err(r[1]) }
 }
 
 // M14.7c: quita y devuelve el último elemento (None si vacío); muta `a`. Envoltorio sobre `__pop`.
 fn pop<T>(a: [T]) -> Option<T> {
     let r = __pop(a);
-    if (len(r) == 0) { Option.None } else { Option.Some(r[0]) }
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }

@@ -2143,31 +2143,7 @@ impl<'a> Vm<'a> {
                     };
                     self.push(HeapValue::Float(base.powf(exp)));
                 }
-                OpCode::Abs => match self.pop() {
-                    HeapValue::Int(x) => self.push(HeapValue::Int(x.abs())),
-                    HeapValue::Float(x) => self.push(HeapValue::Float(x.abs())),
-                    _ => unreachable!("el checker garantiza int o float"),
-                },
-                OpCode::Min => {
-                    let b = self.pop();
-                    let a = self.pop();
-                    match (a, b) {
-                        (HeapValue::Int(a), HeapValue::Int(b)) => self.push(HeapValue::Int(a.min(b))),
-                        (HeapValue::Float(a), HeapValue::Float(b)) => self.push(HeapValue::Float(a.min(b))),
-                        _ => unreachable!("el checker garantiza dos números del mismo tipo"),
-                    }
-                }
-                OpCode::Max => {
-                    let b = self.pop();
-                    let a = self.pop();
-                    match (a, b) {
-                        (HeapValue::Int(a), HeapValue::Int(b)) => self.push(HeapValue::Int(a.max(b))),
-                        (HeapValue::Float(a), HeapValue::Float(b)) => self.push(HeapValue::Float(a.max(b))),
-                        _ => unreachable!("el checker garantiza dos números del mismo tipo"),
-                    }
-                }
-                OpCode::Pi => self.push(HeapValue::Float(std::f64::consts::PI)),
-                OpCode::E => self.push(HeapValue::Float(std::f64::consts::E)),
+                // M49.1b: abs/min/max/pi/e ya no tienen opcode (funciones puras en `std/math`).
 
                 // --- Reloj y aleatoriedad (M15.1b): delegan en los helpers compartidos. ---
                 OpCode::Now => self.push(HeapValue::Int(crate::builtins::now_millis())),
@@ -3274,7 +3250,11 @@ mod tests {
         let mut prog = crate::parser::parse(tokens).expect("parse ok");
         crate::checker::check(&mut prog).expect("check ok");
         let interp = crate::interpreter::run(&prog).expect("intérprete ok");
-        let vm = run_vm(src);
+        // La VM ejecuta el programa **ya chequeado** (no la expresión cruda): así se
+        // aplican las bajadas del checker —UFCS/métodos— que la forma de método de los
+        // builtins de contenedor (`s.len()`, `b.sub_bytes(...)`) necesita para compilar.
+        let compiled = compile_program(&prog).expect("compila");
+        let vm = run_program(&compiled).expect("vm ok");
         assert_eq!(interp, vm, "VM y intérprete difieren en `{}`", src);
     }
 
@@ -3344,7 +3324,7 @@ mod tests {
         oracle_program(
             "extern \"c\" { fn strstr(h: string, n: string) -> Option<string>; }\n\
              fn d(o: Option<string>) -> int {\n\
-             \x20 match (o) { Option.Some(s) => len(s), Option.None => 0 - 1 }\n\
+             \x20 match (o) { Option.Some(s) => s.len(), Option.None => 0 - 1 }\n\
              }\n\
              fn main() -> int {\n\
              \x20 d(strstr(\"hello world\", \"world\")) * 10 + (d(strstr(\"abc\", \"z\")) + 1)\n\
@@ -3354,7 +3334,7 @@ mod tests {
         oracle_program(
             "extern \"c\" { fn strstr(h: string, n: string) -> Option<bytes>; }\n\
              fn main() -> int {\n\
-             \x20 match (strstr(\"raylang\", \"lang\")) { Option.Some(b) => len(b), Option.None => 0 }\n\
+             \x20 match (strstr(\"raylang\", \"lang\")) { Option.Some(b) => b.len(), Option.None => 0 }\n\
              }",
         ); // "lang" ⇒ len 4
     }
@@ -3543,7 +3523,7 @@ mod tests {
             \x20   .collect();\n\
             \x20 let b = ys.fold(0, fn(ac: int, x: int) -> int { ac + x });\n\
             \x20 let zs = [3, 1, 2].iter().map(fn(n: int) -> int { n + 10 }).collect();\n\
-            \x20 a * 100000 + b * 100 + len(ys) * 10 + zs[0]\n\
+            \x20 a * 100000 + b * 100 + ys.len() * 10 + zs[0]\n\
             }"); // a=15, b=165 (1+9+25+49+81), len=5, zs[0]=13
     }
 
@@ -3574,7 +3554,7 @@ mod tests {
             fn main() -> int {\n\
             \x20 let a = sum(range(0, 100).skip(5).take(3));\n\
             \x20 var b = 0;\n\
-            \x20 for (n, c) in range(1, 50).zip([\"a\", \"bb\", \"ccc\"].iter()) { b = b + n * len(c); }\n\
+            \x20 for (n, c) in range(1, 50).zip([\"a\", \"bb\", \"ccc\"].iter()) { b = b + n * c.len(); }\n\
             \x20 let d = range(1, 6).map(fn(n: int) -> int { n * n }).sum();\n\
             \x20 a * 100000 + b * 100 + d\n\
             }"); // a=5+6+7=18, b=1*1+2*2+3*3=14, d=55 → 18*100000+14*100+55
@@ -3600,52 +3580,6 @@ mod tests {
             \x20 let mismo = if (p.hash() == (Punto { x: 3, y: 4 }).hash()) { 1 } else { 0 };\n\
             \x20 p.hash() + a.hash() * 7 + Color.RGB(1, 2, 3).hash() * 13 + char_code('Z') + mismo * 100000\n\
             }");
-    }
-
-    /// M40.3b: `Set<T>` (tabla hash bucketed del prelude, sobre Hash + Eq). Cubre `set_new()` (con
-    /// inferencia bidireccional del tipo elemento), add/has/remove/size con primitivos Y un tipo de
-    /// usuario (`@derive(Hash, Eq)`), incl. deduplicación. Oráculo VM↔intérprete (tamaño/pertenencia
-    /// son deterministas; el orden de `set_items` no).
-    #[test]
-    fn set_oraculo() {
-        oracle_program("\
-            @derive(Hash, Eq)\n\
-            struct P { x: int, y: int }\n\
-            fn main() -> int {\n\
-            \x20 let s: Set<int> = set_new();\n\
-            \x20 set_add(s, 3); set_add(s, 7); set_add(s, 3); set_add(s, 100);\n\
-            \x20 set_remove(s, 7);\n\
-            \x20 let ps: Set<P> = set_new();\n\
-            \x20 set_add(ps, P { x: 1, y: 2 });\n\
-            \x20 set_add(ps, P { x: 1, y: 2 });\n\
-            \x20 set_add(ps, P { x: 5, y: 6 });\n\
-            \x20 let a = if (set_has(s, 3)) { 1 } else { 0 };\n\
-            \x20 let b = if (set_has(s, 7)) { 1 } else { 0 };\n\
-            \x20 let c = if (ps.set_has(P { x: 1, y: 2 })) { 1 } else { 0 };\n\
-            \x20 set_size(s) * 1000 + set_size(ps) * 100 + a * 10 + b + c\n\
-            }"); // size(s)=2, size(ps)=2, a=1, b=0, c=1 → 2000+200+10+0+1 = 2211
-    }
-
-    /// M40.3c: `StringBuilder` (acumula trozos, une una vez con `join`) y `Deque<T>` (cola doble
-    /// sobre arreglo + índice head). Oráculo VM↔interp: sb_build determinista; deque con push/pop por
-    /// ambos extremos, incl. el vaciado (None) y la reconstrucción de push_front.
-    #[test]
-    fn sb_deque_oraculo() {
-        oracle_program("\
-            fn dv(o: Option<int>) -> int { match (o) { Option.Some(v) => v, Option.None => 0 - 1, } }\n\
-            fn main() -> int {\n\
-            \x20 let sb = sb_new();\n\
-            \x20 var i = 1;\n\
-            \x20 while (i <= 4) { sb.sb_push(to_string(i)); sb.sb_push(\",\"); i = i + 1; }\n\
-            \x20 let texto = sb.sb_build();\n\
-            \x20 let d: Deque<int> = deque_new();\n\
-            \x20 deque_push_back(d, 1); deque_push_back(d, 2); deque_push_front(d, 0);\n\
-            \x20 let a = dv(deque_pop_front(d));\n\
-            \x20 let b = dv(deque_pop_back(d));\n\
-            \x20 deque_push_front(d, 9);\n\
-            \x20 let c = dv(deque_pop_front(d));\n\
-            \x20 len(texto) * 1000 + a * 100 + b * 10 + c\n\
-            }"); // texto=\"1,2,3,4,\" (len 8), a=0, b=2, c=9 → 8000+0+20+9 = 8029
     }
 
     /// Ejecuta un programa en la VM con el GC en **modo estrés** (recolecta en cada
@@ -3885,7 +3819,7 @@ mod tests {
         // Retiene objetos vivos sin parar (cada iteración empuja un arreglo nuevo a `xs`, que sigue
         // alcanzable). Con un tope bajo, el GC no puede liberarlos → aborta.
         let crece = compilar(
-            "fn main() -> int { var xs: [[int]] = []; var i = 0; while (i < 100000) { push(xs, [i]); i = i + 1; } 0 }",
+            "fn main() -> int { var xs: [[int]] = []; var i = 0; while (i < 100000) { xs.push([i]); i = i + 1; } 0 }",
         );
         let err = run_program_con_limite(&crece, None, Some(1_000)).expect_err("debe rebasar el tope");
         assert!(err.msg.contains("tope de heap"), "mensaje de tope: {}", err.msg);
@@ -3951,28 +3885,22 @@ mod tests {
     /// **borde** de `f64`: `sqrt(-1.0)` da `NaN` en ambos motores → `NaN == NaN` es `false` → `0`.
     #[test]
     fn matematicas_oraculo() {
-        // Polimórficas sobre int → resultado int directo.
-        oracle_int("abs(-7)");
-        oracle_int("abs(7)");
-        oracle_int("min(3, 8)");
-        oracle_int("max(3, 8)");
-        // Funciones float, verificadas por igualdad (ambos motores calculan idéntico).
-        oracle_int("if (sqrt(16.0) == 4.0) { 1 } else { 0 }");
-        oracle_int("if (pow(2.0, 10.0) == 1024.0) { 1 } else { 0 }");
-        oracle_int("if (floor(3.7) == 3.0) { 1 } else { 0 }");
-        oracle_int("if (ceil(3.2) == 4.0) { 1 } else { 0 }");
-        oracle_int("if (round(2.5) == 3.0) { 1 } else { 0 }");
-        oracle_int("if (abs(-2.5) == 2.5) { 1 } else { 0 }");
-        oracle_int("if (min(1.5, 9.0) == 1.5) { 1 } else { 0 }");
-        oracle_int("if (max(1.5, 9.0) == 9.0) { 1 } else { 0 }");
-        oracle_int("if (sin(0.0) == 0.0) { 1 } else { 0 }");
-        oracle_int("if (cos(0.0) == 1.0) { 1 } else { 0 }");
-        oracle_int("if (ln(e()) == 1.0) { 1 } else { 0 }");
-        oracle_int("if (log10(1000.0) == 3.0) { 1 } else { 0 }");
-        oracle_int("if (exp(0.0) == 1.0) { 1 } else { 0 }");
-        oracle_int("if (pi() > 3.14) { 1 } else { 0 }");
+        // M49: abs/min/max/pi/e se movieron a `std/math` (funciones puras en raylang; las cubre la
+        // integración `math_cli`, en ambos motores). El ORÁCULO prueba solo los primitivos internos `__x`
+        // —el que computa, aún builtin, sin necesidad del loader—; el envoltorio `math.sqrt` lo cierra el
+        // ejemplo `matematicas.ray`. Verificados por igualdad (ambos motores calculan idéntico).
+        oracle_int("if (__sqrt(16.0) == 4.0) { 1 } else { 0 }");
+        oracle_int("if (__pow(2.0, 10.0) == 1024.0) { 1 } else { 0 }");
+        oracle_int("if (__floor(3.7) == 3.0) { 1 } else { 0 }");
+        oracle_int("if (__ceil(3.2) == 4.0) { 1 } else { 0 }");
+        oracle_int("if (__round(2.5) == 3.0) { 1 } else { 0 }");
+        oracle_int("if (__sin(0.0) == 0.0) { 1 } else { 0 }");
+        oracle_int("if (__cos(0.0) == 1.0) { 1 } else { 0 }");
+        oracle_int("if (__ln(1.0) == 0.0) { 1 } else { 0 }");
+        oracle_int("if (__log10(1000.0) == 3.0) { 1 } else { 0 }");
+        oracle_int("if (__exp(0.0) == 1.0) { 1 } else { 0 }");
         // Borde: NaN se comporta igual en ambos motores (NaN != NaN → la rama else).
-        oracle_int("if (sqrt(0.0 - 1.0) == sqrt(0.0 - 1.0)) { 1 } else { 0 }");
+        oracle_int("if (__sqrt(0.0 - 1.0) == __sqrt(0.0 - 1.0)) { 1 } else { 0 }");
     }
 
     /// M27.1: tuplas — retorno múltiple, acceso `.N`, desestructuración (`_`), heterogéneas. Erasure a
@@ -4016,17 +3944,17 @@ mod tests {
     /// motores coinciden. Se enruta a `int` comparando la longitud (print diferido en `oracle_int`).
     #[test]
     fn interpolacion_oraculo() {
-        oracle_int("len(\"x=${1}\")");                     // "x=1" → 3
-        oracle_int("len(\"${1}+${2}=${3}\")");             // "1+2=3" → 5
+        oracle_int("\"x=${1}\".len()");                     // "x=1" → 3
+        oracle_int("\"${1}+${2}=${3}\".len()");             // "1+2=3" → 5
         oracle_int("if (\"a${1}b\" == \"a1b\") { 1 } else { 0 }");   // 1
         oracle_int("if (\"${2 + 3}\" == \"5\") { 1 } else { 0 }");   // 1
         oracle_int("if (\"${true}/${'z'}\" == \"true/z\") { 1 } else { 0 }"); // 1
         // Las llaves son SIEMPRE literales (sin `{{`/`}}`); solo `${` es especial.
-        oracle_int("len(\"llave {lit}\")"); // "llave {lit}" = 11
+        oracle_int("\"llave {lit}\".len()"); // "llave {lit}" = 11
         // Un `$` que no precede a `{` es literal (sin escape): "$5" → 2 caracteres.
-        oracle_int("len(\"$5\")");                         // 2
+        oracle_int("\"$5\".len()");                         // 2
         // `\$` escapa un `${` literal: "\${x}" → "${x}" = 4 caracteres, sin interpolar.
-        oracle_int("len(\"\\${x}\")");                     // 4 (literal "${x}")
+        oracle_int("\"\\${x}\".len()");                     // 4 (literal "${x}")
         // Interpolación con una variable local.
         oracle_program("fn main() -> int { let n = 42; if (\"n=${n}\" == \"n=42\") { 1 } else { 0 } }");
     }
@@ -4112,8 +4040,8 @@ mod tests {
         oracle_program("fn main() -> int { var s = 0; for i in 0..5 { s = s + i; } s }"); // 10
         oracle_program("fn main() -> int { var t = 0; for x in [10, 20, 30] { t = t + x; } t }"); // 60
         oracle_program("fn main() -> int { var n = 0; for c in \"hola\" { n = n + 1; } n }"); // 4
-        oracle_program("fn main() -> int { var m: Map<string, int> = map_new(); insert(m, \"a\", 1); insert(m, \"b\", 5); var s = 0; for (k, v) in m { s = s + v; } s }"); // 6
-        oracle_program("fn main() -> int { var m: Map<int, int> = map_new(); insert(m, 1, 10); insert(m, 2, 20); var c = 0; for (k, _) in m { c = c + k; } c }"); // 3
+        oracle_program("fn main() -> int { var m: Map<string, int> = Map.new(); m.insert(\"a\", 1); m.insert(\"b\", 5); var s = 0; for (k, v) in m { s = s + v; } s }"); // 6
+        oracle_program("fn main() -> int { var m: Map<int, int> = Map.new(); m.insert(1, 10); m.insert(2, 20); var c = 0; for (k, _) in m { c = c + k; } c }"); // 3
         // for anidado.
         oracle_program("fn main() -> int { var s = 0; for i in 0..3 { for j in 0..3 { s = s + 1; } } s }"); // 9
         // `for` sobre un valor con return dentro (propaga).
@@ -4144,24 +4072,24 @@ mod tests {
     /// igualdad. Se enruta a `int` (el booleano de `==` vía `if`) porque `print(bytes)` está diferido.
     #[test]
     fn bytes_oraculo() {
-        oracle_int("len(b\"AB\")");                    // 2
-        oracle_int("len(b\"hola\")");                  // 4
+        oracle_int("b\"AB\".len()");                    // 2
+        oracle_int("b\"hola\".len()");                  // 4
         oracle_int("b\"\\x00\\xff\"[1]");              // 255
         oracle_int("b\"AB\\x00\"[0]");                 // 65
         oracle_int("b\"AB\\x00\"[2]");                 // 0
-        oracle_int("len(b\"\")");                      // 0 (vacío)
+        oracle_int("b\"\".len()");                      // 0 (vacío)
         // Igualdad estructural (misma secuencia / distinta) → 1/0.
         oracle_int("if (b\"AB\\xff\" == b\"AB\\xff\") { 1 } else { 0 }");
         oracle_int("if (b\"AB\" == b\"AC\") { 1 } else { 0 }");
         oracle_int("if (b\"AB\" == b\"ABC\") { 1 } else { 0 }");
         // Los caracteres no-ASCII se codifican como UTF-8 (á = 2 octetos).
-        oracle_int("len(b\"á\")");                     // 2
+        oracle_int("b\"á\".len()");                     // 2
         // M16.1b: to_bytes (builtin) + concatenación (opcode Add).
-        oracle_int("len(to_bytes(\"hola, mundo\"))");                   // 11
-        oracle_int("len(to_bytes(\"á\"))");                            // 2 (UTF-8)
-        oracle_int("len(to_bytes(\"AB\") + to_bytes(\"CD\"))");        // 4
-        oracle_int("if (to_bytes(\"AB\") == b\"AB\") { 1 } else { 0 }");
-        oracle_int("if (to_bytes(\"A\") + to_bytes(\"B\") == b\"AB\") { 1 } else { 0 }");
+        oracle_int("\"hola, mundo\".to_bytes().len()");                   // 11
+        oracle_int("\"á\".to_bytes().len()");                            // 2 (UTF-8)
+        oracle_int("(\"AB\".to_bytes() + \"CD\".to_bytes()).len()");        // 4
+        oracle_int("if (\"AB\".to_bytes() == b\"AB\") { 1 } else { 0 }");
+        oracle_int("if (\"A\".to_bytes() + \"B\".to_bytes() == b\"AB\") { 1 } else { 0 }");
     }
 
     #[test]
@@ -4170,8 +4098,8 @@ mod tests {
         oracle_int("if (to_string(b\"Hi\\xff\") == \"4869ff\") { 1 } else { 0 }");   // H=48 i=69 ff
         oracle_int("if (to_string(b\"\\x00\\x01\\x02\") == \"000102\") { 1 } else { 0 }");
         oracle_int("if (to_string(b\"\") == \"\") { 1 } else { 0 }");                  // vacío
-        oracle_int("if (to_string(to_bytes(\"raylang\")) == \"7261796c616e67\") { 1 } else { 0 }");
-        oracle_int("len(to_string(b\"AB\\xff\"))");                                    // 6 (2 hex por octeto)
+        oracle_int("if (to_string(\"raylang\".to_bytes()) == \"7261796c616e67\") { 1 } else { 0 }");
+        oracle_int("to_string(b\"AB\\xff\").len()");                                    // 6 (2 hex por octeto)
     }
 
     /// M16.1b: `from_utf8` es un envoltorio del **prelude** (no un opcode), así que se prueba con el
@@ -4179,34 +4107,34 @@ mod tests {
     #[test]
     fn bytes_from_utf8_oraculo() {
         // Round-trip válido: decodifica y mide la longitud del string.
-        oracle_program("fn main() -> int { match (from_utf8(b\"hola\")) { Result.Ok(s) => len(s), Result.Err(e) => -1, } }");
+        oracle_program("fn main() -> int { match (from_utf8(b\"hola\")) { Result.Ok(s) => s.len(), Result.Err(e) => -1, } }");
         // UTF-8 inválido → Err → 0.
         oracle_program("fn main() -> int { match (from_utf8(b\"\\xff\\xfe\")) { Result.Ok(s) => 1, Result.Err(e) => 0, } }");
         // to_bytes ∘ from_utf8 es identidad sobre texto válido.
-        oracle_program("fn main() -> int { match (from_utf8(to_bytes(\"raylang\"))) { Result.Ok(s) => len(s), Result.Err(e) => -1, } }");
+        oracle_program("fn main() -> int { match (from_utf8(\"raylang\".to_bytes())) { Result.Ok(s) => s.len(), Result.Err(e) => -1, } }");
     }
 
     /// M19.2: `sub_bytes` (sub-secuencia por octeto, con clamp). Enrutado a int/bool (len/index/==),
     /// como el resto de oráculos de bytes (print de bytes diferido).
     #[test]
     fn sub_bytes_oraculo() {
-        oracle_int("len(sub_bytes(b\"hello\", 1, 4))");                       // 3 ("ell")
-        oracle_int("sub_bytes(b\"hello\", 1, 4)[0]");                          // 101 ('e')
-        oracle_int("if (sub_bytes(b\"ABCD\", 0, 2) == b\"AB\") { 1 } else { 0 }"); // 1
-        oracle_int("if (sub_bytes(b\"ABCD\", 2, 4) == b\"CD\") { 1 } else { 0 }"); // 1
+        oracle_int("b\"hello\".sub_bytes(1, 4).len()");                       // 3 ("ell")
+        oracle_int("b\"hello\".sub_bytes(1, 4)[0]");                          // 101 ('e')
+        oracle_int("if (b\"ABCD\".sub_bytes(0, 2) == b\"AB\") { 1 } else { 0 }"); // 1
+        oracle_int("if (b\"ABCD\".sub_bytes(2, 4) == b\"CD\") { 1 } else { 0 }"); // 1
         // Clamp: fin fuera de rango → recorta; inicio > n → vacío; i > j → vacío.
-        oracle_int("len(sub_bytes(b\"AB\", 0, 100))");                         // 2
-        oracle_int("len(sub_bytes(b\"AB\", 5, 10))");                          // 0
-        oracle_int("len(sub_bytes(b\"AB\", 1, 0))");                           // 0
+        oracle_int("b\"AB\".sub_bytes(0, 100).len()");                         // 2
+        oracle_int("b\"AB\".sub_bytes(5, 10).len()");                          // 0
+        oracle_int("b\"AB\".sub_bytes(1, 0).len()");                           // 0
         // Octetos crudos (incl. \x00/\xff) intactos.
-        oracle_int("sub_bytes(b\"\\x00\\xff\\x10\", 1, 2)[0]");               // 255
-        oracle_int("len(sub_bytes(b\"\\x00\\xff\\x10\", 0, 3))");             // 3
+        oracle_int("b\"\\x00\\xff\\x10\".sub_bytes(1, 2)[0]");               // 255
+        oracle_int("b\"\\x00\\xff\\x10\".sub_bytes(0, 3).len()");             // 3
     }
 
     #[test]
     fn bytes_of_oraculo() {
         // M19.3c: construir bytes desde [int]. Indexar de vuelta da el mismo octeto.
-        oracle_int("len(bytes_of([72, 105]))");                               // 2
+        oracle_int("bytes_of([72, 105]).len()");                               // 2
         oracle_int("bytes_of([72, 105, 33])[1]");                             // 105
         // Truncado a octeto (`& 255`): 256 → 0, 511 → 255, negativos envuelven.
         oracle_int("bytes_of([256])[0]");                                     // 0
@@ -4214,7 +4142,7 @@ mod tests {
         // Round-trip con sub_bytes / igualdad de bytes.
         oracle_int("if (bytes_of([65, 66]) == b\"AB\") { 1 } else { 0 }");    // 1
         // Compone con concatenación de bytes (M16.1b): cabecera + carga.
-        oracle_int("len(bytes_of([129, 5]) + b\"hello\")");                   // 7
+        oracle_int("(bytes_of([129, 5]) + b\"hello\").len()");                   // 7
     }
 
     /// M13.1: Map en el oráculo. Las operaciones básicas dan el mismo resultado en ambos motores.
@@ -4222,12 +4150,150 @@ mod tests {
     fn map_basico_oraculo() {
         oracle_program(
             "fn main() -> int {
-                let m: Map<string, int> = map_new();
-                insert(m, \"a\", 1);
-                insert(m, \"b\", 2);
-                insert(m, \"a\", 10);
+                let m: Map<string, int> = Map.new();
+                m.insert(\"a\", 1);
+                m.insert(\"b\", 2);
+                m.insert(\"a\", 10);
                 let total = match (m.get(\"a\")) { Option.Some(v) => v, Option.None => 0 };
-                total + len(m)
+                total + m.len()
+             }",
+        );
+    }
+
+    /// M48.4d: los métodos de `StrOps`/`BytesOps` (trim/split/replace/…/sub_bytes) despachan por trait
+    /// y bajan a los builtins de string/bytes. Varios asignan heap → estrés del GC.
+    #[test]
+    fn trait_strops_bytesops_oraculo() {
+        oracle_stress(
+            "fn main() -> int {
+                let s = \"  Hola Mundo  \";
+                let t = s.trim();
+                let up = t.to_upper();
+                let partes = t.split(\" \");
+                let r = t.replace(\"Mundo\", \"Ray\");
+                let cs = t.chars();
+                let rep = \"xy\".repeat(4);
+                let b = t.to_bytes();
+                let sb = b.sub_bytes(0, 4);
+                t.len() + up.len() + partes.len() + r.len() + cs.len() + rep.len()
+                    + b.len() + sb.len() + t.substring(0, 4).len()
+                    + (if (t.starts_with(\"Hola\")) { 1 } else { 0 })
+                    + (if (t.ends_with(\"Mundo\")) { 1 } else { 0 })
+             }",
+        );
+    }
+
+    /// M48.4c: `insert`/`contains_key`/`keys`/`values` como métodos del trait `MapOps` bajan a sus
+    /// primitivos `__x`. `keys`/`values` asignan heap y son deterministas (orden de clave) → oráculo.
+    #[test]
+    fn trait_mapops_oraculo() {
+        oracle_stress(
+            "fn main() -> int {
+                let m: Map<int, [int]> = [:];
+                var i = 0;
+                while (i < 20) { m.insert(i, [i, i * 3]); i = i + 1; }
+                var suma = 0;
+                let ks = m.keys();      // ordenadas 0..19
+                let vs = m.values();    // en el mismo orden
+                var j = 0;
+                while (j < m.len()) { suma = suma + ks[j] + vs[j][1]; j = j + 1; }
+                if (m.contains_key(7)) { suma = suma + 10000; }
+                if (!m.contains_key(99)) { suma = suma + 100; }
+                suma
+             }",
+        );
+    }
+
+    /// M48.4b: `push`/`reverse`/`contains` como métodos de trait (`Push`/`Reverse`/`Contains`) bajan a
+    /// sus primitivos `__x`. `push`/`reverse` asignan heap → estrés del GC.
+    #[test]
+    fn trait_push_reverse_contains_oraculo() {
+        oracle_stress(
+            "struct Cola { items: [int] }
+             impl Push<int> for Cola { fn push(self, x: int) { self.items.push(x) } }
+             fn main() -> int {
+                var a: [int] = [];
+                var i = 0;
+                while (i < 30) { a.push(i * 2); i = i + 1; }   // Push
+                let r = a.reverse();                            // Reverse: [58, 56, …]
+                let c = Cola { items: [7] };
+                c.push(9);                                      // Push sobre tipo de usuario
+                var suma = 0;
+                if (a.contains(58)) { suma = suma + 1000; }     // Contains en arreglo
+                if (\"abcdef\".contains(\"cde\")) { suma = suma + 100; } // Contains en string
+                if (!a.contains(999)) { suma = suma + 10; }
+                suma + a.len() + r[0] + c.items.len()           // 1110 + 30 + 58 + 2 = 1200
+             }",
+        );
+    }
+
+    /// M48.4a: `.len()` como método del trait `Len` (string/[T]/Map/bytes + tipo de usuario) baja al
+    /// primitivo `__len` (mismo opcode `Len`) → ambos motores coinciden.
+    #[test]
+    fn trait_len_oraculo() {
+        oracle_program(
+            "struct Pila { d: [int] }
+             impl Len for Pila { fn len(self) -> int { self.d.len() } }
+             fn describir<T: Len>(x: T) -> int { x.len() }
+             fn main() -> int {
+                let m: Map<int, int> = [1: 10, 2: 20, 3: 30];
+                let p = Pila { d: [7, 8, 9] };
+                \"hola\".len() + [1,2,3,4,5].len() + m.len() + \"ab\".to_bytes().len()
+                    + p.len() + describir([1,2]) + describir(p)
+             }",
+        );
+    }
+
+    /// M48.2: el literal de Map `[k: v, …]` baja a `Map.new()` + `insert` por par → ambos motores
+    /// coinciden. Cubre poblado, `[:]` vacío, clave repetida (gana la última) y un valor con UFCS.
+    #[test]
+    fn map_literal_oraculo() {
+        oracle_program(
+            "fn dup(x: int) -> int { x * 2 }
+             fn main() -> int {
+                let m = [1: 10, 2: 20, 1: 30];
+                let vacio: Map<int, int> = [:];
+                vacio.insert(9, dup(5));
+                let a = match (m.get(1)) { Option.Some(v) => v, Option.None => 0 };
+                let b = match (vacio.get(9)) { Option.Some(v) => v, Option.None => 0 };
+                a + b + m.len() + vacio.len()
+             }",
+        );
+    }
+
+    /// M48.2: el literal de Map asigna en el heap (Map + valores) → estrés del GC. Un literal con
+    /// varios pares dentro de un bucle debe mantener sus valores vivos en cada recolección.
+    #[test]
+    fn map_literal_estres_gc_oraculo() {
+        oracle_stress(
+            "fn main() -> int {
+                var suma = 0;
+                var i = 0;
+                while (i < 20) {
+                    let m = [i: [i, i + 1], i + 100: [i + 2, i + 3]];
+                    match (m.get(i)) {
+                        Option.Some(par) => { suma = suma + par[0] + par[1]; },
+                        Option.None => { suma = suma - 1; },
+                    }
+                    i = i + 1;
+                }
+                suma
+             }",
+        );
+    }
+
+    /// M48.1: `Map.new()` (función asociada) baja al mismo opcode `MapNew` que el antiguo `map_new()`
+    /// → ambos motores coinciden. Mismo programa que `map_basico_oraculo` con la sintaxis nueva.
+    #[test]
+    fn map_new_asociada_oraculo() {
+        oracle_program(
+            "fn main() -> int {
+                let m: Map<string, int> = Map.new();
+                m.insert(\"a\", 1);
+                m.insert(\"b\", 2);
+                m.insert(\"a\", 10);
+                let total = match (m.get(\"a\")) { Option.Some(v) => v, Option.None => 0 };
+                total + m.len()
              }",
         );
     }
@@ -4239,9 +4305,9 @@ mod tests {
         oracle_stress(
             "fn celda(n: int) -> [int] { [n, n * 2] }
              fn main() -> int {
-                let m: Map<int, [int]> = map_new();
+                let m: Map<int, [int]> = Map.new();
                 var i = 0;
-                while (i < 30) { insert(m, i, celda(i)); i = i + 1; }
+                while (i < 30) { m.insert(i, celda(i)); i = i + 1; }
                 var suma = 0;
                 var j = 0;
                 while (j < 30) {
@@ -4251,7 +4317,7 @@ mod tests {
                     }
                     j = j + 1;
                 }
-                suma + len(m)
+                suma + m.len()
              }",
         );
     }
@@ -4261,17 +4327,17 @@ mod tests {
     fn map_claves_variadas_oraculo() {
         oracle_program(
             "fn main() -> int {
-                let porInt: Map<int, int> = map_new();
-                insert(porInt, 7, 70);
-                let porChar: Map<char, int> = map_new();
-                insert(porChar, 'z', 100);
-                let porBool: Map<bool, int> = map_new();
-                insert(porBool, true, 1);
-                insert(porBool, false, 2);
+                let porInt: Map<int, int> = Map.new();
+                porInt.insert(7, 70);
+                let porChar: Map<char, int> = Map.new();
+                porChar.insert('z', 100);
+                let porBool: Map<bool, int> = Map.new();
+                porBool.insert(true, 1);
+                porBool.insert(false, 2);
                 let a = match (porInt.get(7)) { Option.Some(v) => v, Option.None => 0 };
                 let b = match (porChar.get('z')) { Option.Some(v) => v, Option.None => 0 };
                 let c = match (porBool.get(true)) { Option.Some(v) => v, Option.None => 0 };
-                a + b + c + len(porBool)
+                a + b + c + porBool.len()
              }",
         );
     }
@@ -4281,14 +4347,14 @@ mod tests {
         // M16 (diferido): `bytes` como clave de Map. Incluye octetos crudos (\x00/\xff).
         oracle_program(
             "fn main() -> int {
-                let m: Map<bytes, int> = map_new();
-                insert(m, b\"uno\", 10);
-                insert(m, b\"\\x00\\xff\", 99);
-                insert(m, b\"dos\", 20);
+                let m: Map<bytes, int> = Map.new();
+                m.insert(b\"uno\", 10);
+                m.insert(b\"\\x00\\xff\", 99);
+                m.insert(b\"dos\", 20);
                 let a = match (m.get(b\"uno\")) { Option.Some(v) => v, Option.None => 0 };
                 let b = match (m.get(b\"\\x00\\xff\")) { Option.Some(v) => v, Option.None => 0 };
                 let c = if (m.contains_key(b\"dos\")) { 1 } else { 0 };
-                a + b + c + len(m)
+                a + b + c + m.len()
              }",
         );
     }
@@ -4298,16 +4364,16 @@ mod tests {
         // keys/values con clave bytes: orden determinista (MapKey::Bytes es Ord lexicográfico).
         oracle_program(
             "fn main() -> int {
-                let m: Map<bytes, int> = map_new();
-                insert(m, b\"c\", 3);
-                insert(m, b\"a\", 1);
-                insert(m, b\"b\", 2);
+                let m: Map<bytes, int> = Map.new();
+                m.insert(b\"c\", 3);
+                m.insert(b\"a\", 1);
+                m.insert(b\"b\", 2);
                 let ks = m.keys();   // ordenadas: a, b, c
                 let vs = m.values(); // 1, 2, 3
                 var total = 0;
                 var i = 0;
-                while (i < len(vs)) { total = total + vs[i] * (i + 1); i = i + 1; }
-                total + len(ks)
+                while (i < vs.len()) { total = total + vs[i] * (i + 1); i = i + 1; }
+                total + ks.len()
              }",
         );
     }
@@ -4316,16 +4382,16 @@ mod tests {
     #[test]
     fn map_keys_values_remove_oraculo() {
         oracle_program(
-            "fn suma(a: [int]) -> int { var s = 0; var i = 0; while (i < len(a)) { s = s + a[i]; i = i + 1; } s }
+            "fn suma(a: [int]) -> int { var s = 0; var i = 0; while (i < a.len()) { s = s + a[i]; i = i + 1; } s }
              fn main() -> int {
-                let m: Map<int, int> = map_new();
-                insert(m, 3, 30);
-                insert(m, 1, 10);
-                insert(m, 2, 20);
-                let ks = keys(m);              // [1, 2, 3]
-                let vs = values(m);            // [10, 20, 30]
+                let m: Map<int, int> = Map.new();
+                m.insert(3, 30);
+                m.insert(1, 10);
+                m.insert(2, 20);
+                let ks = m.keys();              // [1, 2, 3]
+                let vs = m.values();            // [10, 20, 30]
                 let quitado = match (remove(m, 2)) { Option.Some(v) => v, Option.None => 0 };
-                ks[0] * 100 + ks[2] + suma(vs) + quitado + len(m)
+                ks[0] * 100 + ks[2] + suma(vs) + quitado + m.len()
              }",
         );
     }
@@ -4334,12 +4400,12 @@ mod tests {
     #[test]
     fn map_keys_values_estres_gc_oraculo() {
         oracle_stress(
-            "fn suma(a: [int]) -> int { var s = 0; var i = 0; while (i < len(a)) { s = s + a[i]; i = i + 1; } s }
+            "fn suma(a: [int]) -> int { var s = 0; var i = 0; while (i < a.len()) { s = s + a[i]; i = i + 1; } s }
              fn main() -> int {
-                let m: Map<int, int> = map_new();
+                let m: Map<int, int> = Map.new();
                 var i = 0;
-                while (i < 25) { insert(m, i, i * i); i = i + 1; }
-                let total = suma(values(m)) + suma(keys(m));
+                while (i < 25) { m.insert(i, i * i); i = i + 1; }
+                let total = suma(m.values()) + suma(m.keys());
                 var quitados = 0;
                 var j = 0;
                 while (j < 25) {
@@ -4349,7 +4415,7 @@ mod tests {
                     }
                     j = j + 2;
                 }
-                total + quitados + len(m)
+                total + quitados + m.len()
              }",
         );
     }
@@ -4408,14 +4474,14 @@ mod tests {
     #[test]
     fn arreglos_indexar_len_y_suma() {
         oracle_program("fn main() -> int { let a: [int] = [10, 20, 30]; a[0] + a[2] }");
-        oracle_program("fn main() -> int { let a: [int] = [1, 2, 3, 4]; len(a) }");
+        oracle_program("fn main() -> int { let a: [int] = [1, 2, 3, 4]; a.len() }");
     }
 
     #[test]
     fn arreglos_mutacion_y_push() {
         oracle_program("fn main() -> int { var a: [int] = [1, 2, 3]; a[1] = 99; a[1] }");
         oracle_program(
-            "fn main() -> int { let a: [int] = []; push(a, 5); push(a, 7); a[0] + a[1] }",
+            "fn main() -> int { let a: [int] = []; a.push(5); a.push(7); a[0] + a[1] }",
         );
     }
 
@@ -4429,7 +4495,7 @@ mod tests {
         oracle_program(
             "fn suma(a: [int]) -> int {
                 var s: int = 0; var i: int = 0;
-                while (i < len(a)) { s = s + a[i]; i = i + 1; }
+                while (i < a.len()) { s = s + a[i]; i = i + 1; }
                 s
              }
              fn main() -> int { suma([5, 10, 15, 20]) }",
@@ -4474,7 +4540,7 @@ mod tests {
         );
         oracle_program(
             "struct Pila { datos: [int] }
-             fn main() -> int { let s: Pila = Pila { datos: [10, 20] }; push(s.datos, 30); s.datos[2] }",
+             fn main() -> int { let s: Pila = Pila { datos: [10, 20] }; s.datos.push(30); s.datos[2] }",
         );
     }
 
@@ -4530,7 +4596,7 @@ mod tests {
         oracle_program(
             "fn mapear(a: [int], f: fn(int) -> int) {
                  var i: int = 0;
-                 while (i < len(a)) { a[i] = f(a[i]); i = i + 1; }
+                 while (i < a.len()) { a[i] = f(a[i]); i = i + 1; }
              }
              fn main() -> int {
                  var xs: [int] = [1, 2, 3, 4];
@@ -4639,7 +4705,7 @@ mod tests {
                  let p = Punto { x: 3, y: 40 };
                  print(p.mostrar());
                  print(Color.RGB(1, 2, 3).mostrar());
-                 len(p.mostrar()) + len(Color.RGB(1, 2, 3).mostrar())
+                 p.mostrar().len() + Color.RGB(1, 2, 3).mostrar().len()
              }",
         );
     }
@@ -4838,7 +4904,7 @@ mod tests {
     #[test]
     fn try_option_oraculo() {
         oracle_program(
-            "fn primero(xs: [int]) -> Option<int> { if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) } }
+            "fn primero(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } }
              fn mas_uno(xs: [int]) -> Option<int> { let v: int = primero(xs)?; Option.Some(v + 1) }
              fn desemp(o: Option<int>) -> int { match (o) { Option.Some(v) => v, Option.None => -99 } }
              fn main() -> int { desemp(mas_uno([41])) * 100 + desemp(mas_uno([])) }",
@@ -4879,9 +4945,9 @@ mod tests {
             "fn main() -> int {
                  var xs: [int] = [];
                  var i: int = 0;
-                 while (i < 30) { push(xs, i * i); i = i + 1; }
+                 while (i < 30) { xs.push(i * i); i = i + 1; }
                  var s: int = 0; var j: int = 0;
-                 while (j < len(xs)) { s = s + xs[j]; j = j + 1; }
+                 while (j < xs.len()) { s = s + xs[j]; j = j + 1; }
                  s
              }",
         );
@@ -4983,7 +5049,7 @@ mod tests {
             fn cola_suma(xs: [int]) -> int {
                 var s: int = 0;
                 var i: int = 1;
-                while (i < len(xs)) { s = s + xs[i]; i = i + 1; }
+                while (i < xs.len()) { s = s + xs[i]; i = i + 1; }
                 s
             }
             fn main() -> int {
@@ -5030,10 +5096,10 @@ mod tests {
             fn suma_todo(xs: [int]) -> int {
                 var s: int = 0;
                 var i: int = 0;
-                while (i < len(xs)) { s = s + xs[i]; i = i + 1; }
+                while (i < xs.len()) { s = s + xs[i]; i = i + 1; }
                 s
             }
-            fn con_extra(xs: [int], x: int) -> [int] { push(xs, x); xs }
+            fn con_extra(xs: [int], x: int) -> [int] { xs.push(x); xs }
             fn main() -> int {
                 let xs: [int] = [1, 2, 3];
                 xs |> con_extra(4) |> suma_todo     // suma_todo(con_extra(xs, 4)) = 10
@@ -5283,9 +5349,9 @@ mod tests {
         oracle_program(r#"
             fn main() -> int {
                 let s = "hola, " + "mundo";       // concat
-                let etiqueta = "n=" + to_string(len(s));
+                let etiqueta = "n=" + to_string(s.len());
                 print(etiqueta);                   // n=11
-                len(s) + len("123")               // 11 + 3 = 14
+                s.len() + "123".len()               // 11 + 3 = 14
             }
         "#);
     }
@@ -5297,7 +5363,7 @@ mod tests {
                 print(to_string(42));      // 42
                 print(to_string(true));    // true
                 print(to_string("ya"));    // ya (identidad)
-                len(to_string(true)) + len(to_string(false))   // 4 + 5 = 9
+                to_string(true).len() + to_string(false).len()   // 4 + 5 = 9
             }
         "#);
     }
@@ -5318,11 +5384,11 @@ mod tests {
     fn string_trim_split_oraculo() {
         oracle_program(r#"
             fn main() -> int {
-                let limpio = trim("  hola  ");
+                let limpio = "  hola  ".trim();
                 print("[" + limpio + "]");        // [hola]
-                let campos = split("a,bb,ccc", ",");
+                let campos = "a,bb,ccc".split(",");
                 print(campos[1]);                  // bb
-                len(campos) + len(limpio)          // 3 + 4 = 7
+                campos.len() + limpio.len()          // 3 + 4 = 7
             }
         "#);
     }
@@ -5356,7 +5422,7 @@ mod tests {
             fn cuenta(s: string, c: char) -> int {
                 var n = 0;
                 var i = 0;
-                while (i < len(s)) {
+                while (i < s.len()) {
                     if (s[i] == c) { n = n + 1; }
                     i = i + 1;
                 }
@@ -5366,10 +5432,10 @@ mod tests {
                 let s = "racecar";
                 print(s[0]);                       // r
                 print(s[3]);                       // e
-                let cs = chars(s);
+                let cs = s.chars();
                 print(cs[1]);                      // a
-                print(len(cs));                    // 7
-                cuenta(s, 'r') + cuenta(s, 'c') + len(chars("hola"))  // 2 + 2 + 4 = 8
+                print(cs.len());                    // 7
+                cuenta(s, 'r') + cuenta(s, 'c') + "hola".chars().len()  // 2 + 2 + 4 = 8
             }
         "#);
     }
@@ -5385,7 +5451,7 @@ mod tests {
                 let r = s.replace("hola", "HOLA");
                 print(r);                              // HOLA mundo, HOLA raylang
                 print("a.b.c".replace(".", "/"));      // a/b/c
-                if (s.contains("raylang")) { len(r) } else { 0 }  // 24
+                if (s.contains("raylang")) { r.len() } else { 0 }  // 24
             }
         "#);
     }
@@ -5398,18 +5464,18 @@ mod tests {
     #[test]
     fn sha_digests_oraculo() {
         let casos = [
-            ("sha256", "abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
-            ("sha256", "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            ("__sha256", "abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            ("__sha256", "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
             (
-                "sha512",
+                "__sha512",
                 "abc",
                 "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
             ),
-            ("sha1", "abc", "a9993e364706816aba3e25717850c26c9cd0d89d"),
+            ("__sha1", "abc", "a9993e364706816aba3e25717850c26c9cd0d89d"),
         ];
         for (f, input, hex) in casos {
             let src = format!(
-                "fn main() -> int {{ if (to_string({f}(to_bytes(\"{input}\"))) == \"{hex}\") {{ 1 }} else {{ 0 }} }}"
+                "fn main() -> int {{ if (to_string({f}(\"{input}\".to_bytes())) == \"{hex}\") {{ 1 }} else {{ 0 }} }}"
             );
             let tokens = crate::lexer::lex(&src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");
@@ -5425,15 +5491,15 @@ mod tests {
         oracle_stress(
             r#"
             fn main() -> int {
-                var acc = to_bytes("semilla");
+                var acc = "semilla".to_bytes();
                 var i = 0;
                 while (i < 50) {
-                    acc = sha256(acc);       // 32 octetos, heap nuevo cada vuelta
-                    acc = sha512(acc);       // 64 octetos
-                    acc = sha1(acc);         // 20 octetos
+                    acc = __sha256(acc);       // 32 octetos, heap nuevo cada vuelta
+                    acc = __sha512(acc);       // 64 octetos
+                    acc = __sha1(acc);         // 20 octetos
                     i = i + 1;
                 }
-                len(acc)                     // 20 (último es sha1)
+                acc.len()                     // 20 (último es sha1)
             }
         "#,
         );
@@ -5444,7 +5510,7 @@ mod tests {
     #[test]
     fn hmac_sha256_oraculo() {
         let src = format!(
-            "fn main() -> int {{ if (to_string(hmac_sha256(to_bytes(\"Jefe\"), to_bytes(\"{}\"))) == \"{}\") {{ 1 }} else {{ 0 }} }}",
+            "fn main() -> int {{ if (to_string(__hmac_sha256(\"Jefe\".to_bytes(), \"{}\".to_bytes())) == \"{}\") {{ 1 }} else {{ 0 }} }}",
             "what do ya want for nothing?",
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
         );
@@ -5460,16 +5526,16 @@ mod tests {
         oracle_stress(
             r#"
             fn main() -> int {
-                var k = to_bytes("clave");
-                var m = to_bytes("mensaje");
+                var k = "clave".to_bytes();
+                var m = "mensaje".to_bytes();
                 var i = 0;
                 while (i < 50) {
-                    let t = hmac_sha256(k, m);
+                    let t = __hmac_sha256(k, m);
                     k = t;
-                    m = sha256(t);
+                    m = __sha256(t);
                     i = i + 1;
                 }
-                len(k)                       // 32
+                k.len()                       // 32
             }
         "#,
         );
@@ -5482,31 +5548,26 @@ mod tests {
     /// ASCII (`to_bytes` de 32 chars) para no depender de literales de byte largos.
     #[test]
     fn ed25519_oraculo() {
+        // M49.3: la cripto pasó a `std/crypto`; el ORÁCULO (pre-loader) prueba los primitivos internos
+        // `__ed25519_*` (arreglo etiquetado `[bytes]`: vacío = None), el envoltorio `crypto.ed25519_*`
+        // (Option) lo cubren los tests de integración. Misma validación relacional con `ring`.
         let src = r#"
             fn main() -> int {
-                let seed = to_bytes("0123456789abcdef0123456789abcdef");   // 32 octetos
-                let msg = to_bytes("mensaje firmado");
-                match (ed25519_public_key(seed)) {
-                    Option.Some(pk) => {
-                        match (ed25519_sign(seed, msg)) {
-                            Option.Some(sig) => {
-                                let ok = ed25519_verify(pk, msg, sig);                       // true
-                                let alterado = ed25519_verify(pk, to_bytes("mensaje alterad"), sig); // false
-                                let otra = ed25519_sign(seed, msg);                           // determinista
-                                let det = match (otra) {
-                                    Option.Some(s2) => to_string(s2) == to_string(sig),       // true
-                                    Option.None => false,
-                                };
-                                let corta = match (ed25519_public_key(to_bytes("corta"))) {   // None (no 32)
-                                    Option.Some(x) => false,
-                                    Option.None => true,
-                                };
-                                if (ok && !alterado && det && corta) { 1 } else { 0 }
-                            },
-                            Option.None => 0,
-                        }
-                    },
-                    Option.None => 0,
+                let seed = "0123456789abcdef0123456789abcdef".to_bytes();   // 32 octetos
+                let msg = "mensaje firmado".to_bytes();
+                let pk_arr = __ed25519_public_key(seed);
+                if (pk_arr.len() == 0) { 0 } else {
+                    let pk = pk_arr[0];
+                    let sig_arr = __ed25519_sign(seed, msg);
+                    if (sig_arr.len() == 0) { 0 } else {
+                        let sig = sig_arr[0];
+                        let ok = __ed25519_verify(pk, msg, sig);                       // true
+                        let alterado = __ed25519_verify(pk, "mensaje alterad".to_bytes(), sig); // false
+                        let otra = __ed25519_sign(seed, msg);                          // determinista
+                        let det = otra.len() > 0 && to_string(otra[0]) == to_string(sig);
+                        let corta = __ed25519_public_key("corta".to_bytes()).len() == 0; // no 32 → vacío
+                        if (ok && !alterado && det && corta) { 1 } else { 0 }
+                    }
                 }
             }
         "#;
@@ -5525,29 +5586,22 @@ mod tests {
     /// clave de mal tamaño da `None` en `seal`. Devuelve 1 solo si todo cuadra.
     #[test]
     fn chacha20poly1305_oraculo() {
+        // M49.3: primitivos internos `__chacha20poly1305_*` (arreglo etiquetado `[bytes]`: vacío = None);
+        // el envoltorio `crypto.*` (Option) lo cubren los tests de integración. Validación relacional.
         let src = r#"
             fn main() -> int {
-                let key = to_bytes("0123456789abcdef0123456789abcdef");   // 32 octetos
-                let nonce = to_bytes("nonce-de-12b");                     // 12 octetos
-                let aad = to_bytes("cabecera");
-                let pt = to_bytes("texto secreto");
-                match (chacha20poly1305_seal(key, nonce, aad, pt)) {
-                    Option.Some(ct) => {
-                        let recuperado = match (chacha20poly1305_open(key, nonce, aad, ct)) {
-                            Option.Some(p) => to_string(p) == to_string(pt),
-                            Option.None => false,
-                        };
-                        let manipulado = match (chacha20poly1305_open(key, nonce, to_bytes("otra cab"), ct)) {
-                            Option.Some(p) => false,
-                            Option.None => true,
-                        };
-                        let corta = match (chacha20poly1305_seal(to_bytes("corta"), nonce, aad, pt)) {
-                            Option.Some(x) => false,
-                            Option.None => true,
-                        };
-                        if (recuperado && manipulado && corta) { 1 } else { 0 }
-                    },
-                    Option.None => 0,
+                let key = "0123456789abcdef0123456789abcdef".to_bytes();   // 32 octetos
+                let nonce = "nonce-de-12b".to_bytes();                     // 12 octetos
+                let aad = "cabecera".to_bytes();
+                let pt = "texto secreto".to_bytes();
+                let ct_arr = __chacha20poly1305_seal(key, nonce, aad, pt);
+                if (ct_arr.len() == 0) { 0 } else {
+                    let ct = ct_arr[0];
+                    let rec = __chacha20poly1305_open(key, nonce, aad, ct);
+                    let recuperado = rec.len() > 0 && to_string(rec[0]) == to_string(pt);
+                    let manipulado = __chacha20poly1305_open(key, nonce, "otra cab".to_bytes(), ct).len() == 0;
+                    let corta = __chacha20poly1305_seal("corta".to_bytes(), nonce, aad, pt).len() == 0;
+                    if (recuperado && manipulado && corta) { 1 } else { 0 }
                 }
             }
         "#;
@@ -5583,7 +5637,7 @@ mod tests {
                 print(join(partes, "-"));          // a-b-c
                 print(pos(index_of(s, "Mundo"), 0 - 1));   // 6
                 print(pos(index_of(s, "zzz"), 0 - 1));      // -1
-                len(s.substring(6, 11)) + pos(index_of(s, "Mundo"), 0)  // 5 + 6 = 11
+                s.substring(6, 11).len() + pos(index_of(s, "Mundo"), 0)  // 5 + 6 = 11
             }
         "#);
     }
@@ -5603,8 +5657,8 @@ mod tests {
                 let a = [1, 2, 3];
                 let b = [4, 5];
                 let c = a + b;                      // [1,2,3,4,5]
-                print(len(c));                      // 5
-                let r = reverse(c);                 // [5,4,3,2,1]
+                print(c.len());                      // 5
+                let r = c.reverse();                 // [5,4,3,2,1]
                 print(r[0]);                        // 5
                 print(c.contains(4));               // true
                 print(c.contains(99));              // false
@@ -5612,8 +5666,8 @@ mod tests {
                 print(idx(position(c, 99), 0 - 1)); // -1
                 let v = [10, 20, 30];
                 let x = ult(pop(v), 0);             // 30, y v queda [10,20]
-                print(len(v));                      // 2
-                x + len(c) + r[1]                   // 30 + 5 + 4 = 39
+                print(v.len());                      // 2
+                x + c.len() + r[1]                   // 30 + 5 + 4 = 39
             }
         "#);
     }
@@ -5647,7 +5701,7 @@ mod tests {
         oracle_stress(r#"
             fn main() -> int {
                 let partes = "uno:dos:tres:cuatro".trim().split(":");
-                let total = len(partes) + len(partes[0]) + len(partes[3]);
+                let total = partes.len() + partes[0].len() + partes[3].len();
                 print(partes[2]);                  // tres
                 total                              // 4 + 3 + 6 = 13
             }
@@ -5697,7 +5751,7 @@ mod tests {
         // motores deben coincidir. (El comportamiento "real" se prueba por subproceso en io_cli.)
         oracle_program(r#"
             fn main() -> int {
-                let n = len(args());                       // 0
+                let n = args().len();                       // 0
                 let e = match (env("RAYLANG_NO_EXISTE_XYZ")) {
                     Option.Some(_) => 1,
                     Option.None => 0,
@@ -5710,13 +5764,12 @@ mod tests {
     #[test]
     fn read_file_inexistente_es_err_oraculo() {
         // Leer un archivo inexistente es determinista (misma llamada a std::fs en ambos motores) →
-        // oráculo. Construye Result en el prelude vía el arreglo etiquetado; debe coincidir.
+        // oráculo. El oráculo es pre-loader (M50.1: read_file vive en std/fs), así que usa el
+        // primitivo __read_file directamente (arreglo etiquetado ["ok",…]/["err",msg]); debe coincidir.
         oracle_program(r#"
             fn main() -> int {
-                match (read_file("/raylang_no_existe_xyz_123.txt")) {
-                    Result.Ok(_) => 0,
-                    Result.Err(_) => 1,
-                }
+                let r = __read_file("/raylang_no_existe_xyz_123.txt");
+                if (r[0] == "ok") { 0 } else { 1 }
             }
         "#);
     }
@@ -5730,7 +5783,7 @@ mod tests {
                 let xs = ["1", "2", "no", "4"];
                 var suma = 0;
                 var i = 0;
-                while (i < len(xs)) {
+                while (i < xs.len()) {
                     match (parse_int(xs[i])) {
                         Option.Some(n) => { suma = suma + n; },
                         Option.None => {},
@@ -5798,7 +5851,7 @@ mod tests {
             impl Figura for Rect { fn area(self) -> int { self.ancho * self.alto } }
             fn total(xs: [dyn Figura]) -> int {
                 var s = 0; var i = 0;
-                while (i < len(xs)) { s = s + xs[i].area(); i = i + 1; }
+                while (i < xs.len()) { s = s + xs[i].area(); i = i + 1; }
                 s
             }
             fn main() -> int {
@@ -5821,11 +5874,11 @@ mod tests {
             struct Circ { r: int }
             impl Area for Circ { fn area(self) -> int { 3 * self.r * self.r } }
             impl Nombre for Circ { fn nombre(self) -> string { "circ" } }
-            fn describe(x: dyn Nombre + Area) -> int { len(x.nombre()) + x.area() }
+            fn describe(x: dyn Nombre + Area) -> int { x.nombre().len() + x.area() }
             fn main() -> int {
                 let xs: [dyn Area + Nombre] = [Cuadrado{lado:4}, Circ{r:2}];
                 var s = 0; var i = 0;
-                while (i < len(xs)) { s = s + describe(xs[i]); i = i + 1; }
+                while (i < xs.len()) { s = s + describe(xs[i]); i = i + 1; }
                 // (4 + 16) + (4 + 12) = 20 + 16 = 36
                 s
             }
@@ -5869,7 +5922,7 @@ mod tests {
             fn main() -> int {
                 let xs: [dyn Mostrar] = [N{x:1}, Caja{v:N{x:2}}, Caja{v:Caja{v:N{x:3}}}];
                 var total = 0; var i = 0;
-                while (i < len(xs)) { total = total + len(describe(xs[i])); i = i + 1; }
+                while (i < xs.len()) { total = total + describe(xs[i]).len(); i = i + 1; }
                 // len("N")=1, len("Caja(N)")=7, len("Caja(Caja(N))")=13 -> 21
                 total
             }

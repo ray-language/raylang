@@ -4,7 +4,7 @@ from jwt import jwt_sign, jwt_verify;
 from uuid import uuid_v4, is_uuid_v4;
 
 fn main() {
-    let secreto = to_bytes("super-secreto-de-pruebas");
+    let secreto = "super-secreto-de-pruebas".to_bytes();
     let claims = "{\"sub\":\"1234567890\",\"name\":\"Ada\",\"admin\":true}";
 
     // Firma: el JWT compacto h.p.s. Reproducible con el mismo secreto y claims (verificable con jwt.io).
@@ -18,13 +18,13 @@ fn main() {
     }
 
     // Verificación con un secreto incorrecto → Err("firma inválida").
-    match (jwt_verify(to_bytes("otro-secreto"), token)) {
+    match (jwt_verify("otro-secreto".to_bytes(), token)) {
         Result.Ok(_) => print("ERR: debería fallar"),
         Result.Err(e) => print(e),  // firma inválida
     }
 
     // Token manipulado (se altera el último carácter de la firma) → Err.
-    let manipulado = substring(token, 0, len(token) - 1) + manipular(token);
+    let manipulado = token.substring(0, token.len() - 1) + manipular(token);
     match (jwt_verify(secreto, manipulado)) {
         Result.Ok(_) => print("ERR: tamper no detectado"),
         Result.Err(_) => print("tamper detectado"),
@@ -45,6 +45,6 @@ fn main() {
 
 // Devuelve un carácter distinto al último de `token` (para invertir la firma sin adivinar hex).
 fn manipular(token: string) -> string {
-    let ultimo = token[len(token) - 1];
+    let ultimo = token[token.len() - 1];
     if (ultimo == 'A') { "B" } else { "A" }
 }

@@ -6,9 +6,12 @@
 // columnas son heterogéneas, así que dejar todo como string (y que el usuario convierta) es lo idiomático.
 // Parsea un documento CSV a filas de campos. Los campos entrecomillados (`"..."`) admiten comas, saltos
 // de línea y comillas escapadas como `""`. Acepta finales de línea LF o CRLF.
+/// Parses a CSV document (RFC 4180) into rows of string fields. Quoted fields (`"..."`) may
+/// contain commas, newlines, and quotes escaped as `""`; accepts LF or CRLF line endings.
+/// Returns `Err` on an unterminated quoted field.
 pub fn parse_csv(src: string) -> Result<[[string]], string> {
-    let cs = chars(src);
-    let n = len(cs);
+    let cs = src.chars();
+    let n = cs.len();
     var rows: [[string]] = [];
     var row: [string] = [];
     var field = "";
@@ -39,13 +42,13 @@ pub fn parse_csv(src: string) -> Result<[[string]], string> {
                 return Result.Err("comilla sin cerrar en el CSV");
             }
         } else if (c == ',') {
-            push(row, field);
+            row.push(field);
             field = "";
             vivo = true;
             i = i + 1;
         } else if (c == '\n') {
-            push(row, field);
-            push(rows, row);
+            row.push(field);
+            rows.push(row);
             row = [];
             field = "";
             vivo = false;
@@ -59,9 +62,9 @@ pub fn parse_csv(src: string) -> Result<[[string]], string> {
         }
     }
     // Flushea la última fila si el documento no terminó en salto de línea.
-    if (vivo || len(field) > 0 || len(row) > 0) {
-        push(row, field);
-        push(rows, row);
+    if (vivo || field.len() > 0 || row.len() > 0) {
+        row.push(field);
+        rows.push(row);
     }
     Result.Ok(rows)
 }
@@ -70,7 +73,7 @@ pub fn parse_csv(src: string) -> Result<[[string]], string> {
 fn necesita_comillas(s: string) -> bool {
     var q = false;
     var i = 0;
-    while (i < len(s)) {
+    while (i < s.len()) {
         let c = s[i];
         if (c == ',' || c == '"' || c == '\n' || c == '\r') {
             q = true;
@@ -87,7 +90,7 @@ fn write_field(s: string) -> string {
     }
     var out = "\"";
     var i = 0;
-    while (i < len(s)) {
+    while (i < s.len()) {
         let c = s[i];
         if (c == '"') {
             out = out + "\"\"";
@@ -100,13 +103,15 @@ fn write_field(s: string) -> string {
 }
 
 // Serializa filas de campos a un documento CSV (líneas separadas por `\n`).
+/// Serializes rows of fields to a CSV document (`\n` line endings). Fields containing a
+/// comma, quote, CR, or LF are quoted, with inner quotes escaped as `""` (RFC 4180).
 pub fn write_csv(rows: [[string]]) -> string {
     var out = "";
     var r = 0;
-    while (r < len(rows)) {
+    while (r < rows.len()) {
         let fila = rows[r];
         var c = 0;
-        while (c < len(fila)) {
+        while (c < fila.len()) {
             if (c > 0) {
                 out = out + ",";
             }

@@ -25,9 +25,9 @@ fn main() {
     print(get_or(q, "x"));  // 1&2  (el %26 decodificado dentro del valor)
 
     // build_query: claves ordenadas → reproducible.
-    var m: Map<string, string> = map_new();
-    insert(m, "q", "raylang lang");
-    insert(m, "page", "2");
+    var m: Map<string, string> = Map.new();
+    m.insert("q", "raylang lang");
+    m.insert("page", "2");
     print(build_query(m));  // page=2&q=raylang%20lang
 
     // --- cookies ---

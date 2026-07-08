@@ -10,7 +10,7 @@
 fn sumar_args(xs: [string]) -> int {
     var total = 0;
     var i = 0;
-    while (i < len(xs)) {
+    while (i < xs.len()) {
         match (parse_int(xs[i])) {
             Option.Some(n) => {
                 total = total + n;
@@ -33,7 +33,7 @@ fn main() -> int {
     print("hola, " + nombre);
 
     let xs = args();
-    if (len(xs) > 0) {
+    if (xs.len() > 0) {
         // Modo CLI: sumar los argumentos.
         let total = sumar_args(xs);
         print("suma de args = " + total.to_string());

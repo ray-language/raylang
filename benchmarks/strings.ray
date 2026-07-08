@@ -4,14 +4,15 @@ fn procesa(s: string, veces: int) -> int {
     var i = 0;
     var total = 0;
     while (i < veces) {
-        let u = s.to_upper();          // crea string
-        let t = u.to_lower();          // crea string
-        let c = t.len();               // recorre
+        let u = s.to_upper();  // crea string
+        let t = u.to_lower();  // crea string
+        let c = t.len();  // recorre
         total = total + c;
         i = i + 1;
     }
     total
 }
+
 fn main() -> int {
     let base = "el veloz murcielago hindu comia feliz cardillo y kiwi";
     procesa(base, 300000);

@@ -31,6 +31,11 @@ canales de M12); ahora cubre también los sockets, sin una línea de código nue
 
 ## El cliente (M15.2) y el servidor (M15.3)
 
+> **Nota (M50.3):** desde M50.3 estas funciones ya **no** son globales; viven en el módulo **`std/net`**.
+> Impórtalo con `import std/net;` y llámalas calificadas: `net.tcp_connect(...)`, `net.socket_read(h)`,
+> `net.local_port(h)`, etc. Los ejemplos de abajo usan los nombres sin calificar por claridad histórica;
+> en código real, antepón `net.`. `close(h)` sigue siendo global (cierra socket o handle de archivo).
+
 La API es deliberadamente pequeña:
 
 ```raylang

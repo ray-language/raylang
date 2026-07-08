@@ -46,7 +46,7 @@ fn main() -> int {
     // strchr por el código de 'l' (108): "llo mundo" (bytes crudos).
     match (strchr("hola mundo", 108)) {
         Option.Some(b) => {
-            print(len(b));  // 8
+            print(b.len());  // 8
         },
         Option.None => {
             print("sin 'l'");

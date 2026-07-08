@@ -1,0 +1,28 @@
+// std/collections/stringbuilder — constructor de strings (M50.2; antes en el prelude, M40.3c).
+//
+// Acumula trozos y los une UNA vez al final (`join`), evitando el O(n²) de concatenar con `+` en un
+// bucle (cada `+` copia todo lo acumulado). Con leaf-binding (`import std/collections/stringbuilder;`,
+// o `as sb`) se usa calificado: `sb.new()`/`sb.push(b, s)`/`sb.build(b)`/`sb.count(b)`.
+/// Accumulates string chunks and joins them once at the end, avoiding the O(n²) cost of
+/// repeated `+` concatenation in a loop. Import with `import std/collections/stringbuilder;` (or
+/// `as sb`) and operate with `sb.new`, `sb.push`, `sb.build`, `sb.count`.
+pub struct StringBuilder {
+    partes: [string],
+}
+
+/// Creates an empty StringBuilder.
+pub fn new() -> StringBuilder { StringBuilder { partes: [] } }
+
+// Añade un trozo al final (O(1) amortizado; no copia lo ya acumulado).
+/// Appends a chunk to the builder (amortized O(1); does not copy what is already accumulated).
+pub fn push(sb: StringBuilder, s: string) {
+    sb.partes.push(s);
+}
+
+// Une todo lo acumulado en un solo string (O(total), una vez).
+/// Joins all accumulated chunks into a single string (O(total), done once).
+pub fn build(sb: StringBuilder) -> string { join(sb.partes, "") }
+
+// Número de trozos acumulados (no de caracteres).
+/// Returns the number of accumulated chunks (not characters).
+pub fn count(sb: StringBuilder) -> int { sb.partes.len() }

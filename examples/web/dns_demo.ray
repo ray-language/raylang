@@ -9,7 +9,7 @@ fn main() -> int {
     let a = args();
     var server = "8.8.8.8";
     var port = 53;
-    if (len(a) > 0) {
+    if (a.len() > 0) {
         server = "127.0.0.1";
         match (parse_int(a[0])) {
             Option.Some(p) => {
@@ -34,7 +34,7 @@ fn imprime(tipo: string, r: Result<[string], string>) {
     match (r) {
         Result.Ok(vals) => {
             var i = 0;
-            while (i < len(vals)) {
+            while (i < vals.len()) {
                 print(tipo + " " + vals[i]);
                 i = i + 1;
             }

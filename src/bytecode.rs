@@ -366,19 +366,10 @@ pub enum OpCode {
     /// `tan`/`ln`/`log10`/`exp`/`floor`/`ceil`/`round`. **Un solo opcode parametrizado** (en vez de
     /// uno por función) para no inflar el `match` de la VM; delega en `builtins::apply_mathf`.
     MathF(MathFn),
-    /// Saca el exponente y la base (`float`, `float`); empuja `base.powf(exp)`. Builtin `pow`.
+    /// Saca el exponente y la base (`float`, `float`); empuja `base.powf(exp)`. Primitivo `__pow`
+    /// (envuelto por `math.pow`). M49.1b: `abs`/`min`/`max`/`pi`/`e` dejaron de tener opcode (son
+    /// funciones puras en `std/math`).
     Pow,
-    /// Saca un número; empuja su valor absoluto. **Ad-hoc polimórfico**: `int -> int` / `float ->
-    /// float`. Builtin `abs`.
-    Abs,
-    /// Saca dos números del mismo tipo numérico; empuja el menor. Builtin `min` (poli. int/float).
-    Min,
-    /// Saca dos números del mismo tipo numérico; empuja el mayor. Builtin `max` (poli. int/float).
-    Max,
-    /// No saca nada; empuja la constante π como `float`. Builtin `pi`.
-    Pi,
-    /// No saca nada; empuja la constante e (Euler) como `float`. Builtin `e`.
-    E,
 
     // --- Reloj y aleatoriedad (M15.1b) ---
     /// No saca nada; empuja los milisegundos desde la época Unix (`int`). Builtin `now`.

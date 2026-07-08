@@ -26,15 +26,16 @@ fn archivo_binario_round_trip() {
         let dat = std::env::temp_dir().join(format!("ray_bin_{}.dat", if vm { "vm" } else { "in" }));
         let src = format!(
             r#"
+import std/fs;
 fn main() -> int {{
     let datos: bytes = b"RAY\x00\xff\x01\x02bin";
-    match (write_file_bytes("{ruta}", datos)) {{
+    match (fs.write_file_bytes("{ruta}", datos)) {{
         Result.Ok(n) => print(to_string(n)),
         Result.Err(e) => {{ eprint(e); return 1; }},
     }};
-    match (read_file_bytes("{ruta}")) {{
+    match (fs.read_file_bytes("{ruta}")) {{
         Result.Ok(leido) => {{
-            print(to_string(len(leido)));
+            print(to_string(leido.len()));
             if (leido == datos) {{ print("identico") }} else {{ print("CORRUPTO") }}
         }},
         Result.Err(e) => print("err: " + e),
@@ -68,14 +69,15 @@ fn toy_bin_server() -> u16 {
 #[test]
 fn socket_binario_lee_octetos_crudos() {
     const CLIENTE: &str = r#"
+import std/net;
 fn main() -> int {
-    match (tcp_connect("127.0.0.1", __PORT__)) {
+    match (net.tcp_connect("127.0.0.1", __PORT__)) {
         Result.Ok(h) => {
-            match (socket_write_bytes(h, b"req")) {
+            match (net.socket_write_bytes(h, b"req")) {
                 Result.Ok(_) => {
-                    match (socket_read_bytes(h)) {
+                    match (net.socket_read_bytes(h)) {
                         Result.Ok(b) => {
-                            print(to_string(len(b)));
+                            print(to_string(b.len()));
                             print(to_string(b[0]));
                             print(to_string(b[1]));
                             print(to_string(b[2]));

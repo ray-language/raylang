@@ -7,7 +7,7 @@ from websocket_client import connect, connect_tls, send_text, recv_text, close_w
 fn main() -> int {
     let a = args();
     var port = 8080;
-    if (len(a) > 0) {
+    if (a.len() > 0) {
         match (parse_int(a[0])) {
             Option.Some(p) => {
                 port = p;
@@ -18,7 +18,7 @@ fn main() -> int {
     // El segundo argumento "wss" usa TLS (host "localhost", el CN del cert de prueba).
     var usar_tls = false;
     var host = "127.0.0.1";
-    if (len(a) > 1 && a[1] == "wss") {
+    if (a.len() > 1 && a[1] == "wss") {
         usar_tls = true;
         host = "localhost";
     }

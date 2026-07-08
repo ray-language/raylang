@@ -6,7 +6,7 @@ from hex import hex_encode;
 fn str_bytes(s: string) -> [int] {
     var b: [int] = [];
     for c in s {
-        push(b, c as int);
+        b.push(c as int);
     }
     b
 }
@@ -17,9 +17,9 @@ fn probar(s: string) {
     match (huffman_decode(enc)) {
         Result.Ok(dec) => {
             let orig = str_bytes(s);
-            var ok = len(dec) == len(orig);
+            var ok = dec.len() == orig.len();
             var i = 0;
-            while (i < len(orig)) {
+            while (i < orig.len()) {
                 if (dec[i] != orig[i]) {
                     ok = false;
                 }

@@ -7,17 +7,26 @@
 // Modelo simple con arreglos paralelos + búsqueda lineal (suficiente para unos pocos cientos de series).
 // Counters/gauges admiten labels; los histogramas (por simplicidad) son sin labels. El orden de salida
 // es determinista (métricas en orden de registro; series en orden de creación; labels ordenados).
-
+/// A metrics registry holding counters, gauges and histograms with their time series.
+/// Metrics are stored in registration order; series in creation order (parallel arrays,
+/// linear lookup — fine for a few hundred series).
 pub struct Registry {
-    names: [string],    // métricas registradas, en orden
+    names: [string],
     helps: [string],
-    kinds: [int],       // 0=counter, 1=gauge, 2=histogram
-    bucketses: [[float]], // límites de bucket (solo histogramas; [] para los demás)
-    s_metric: [int],    // serie → índice de su métrica
-    s_text: [string],   // prefijo de la línea: "nombre{labels}" / "nombre_bucket{le=...}" / "_sum" / "_count"
-    s_val: [float],     // valor de la serie
+    kinds: [int],
+    bucketses: [[float]],
+    s_metric: [int],
+    s_text: [string],
+    s_val: [float],
 }
 
+// métricas registradas, en orden
+// 0=counter, 1=gauge, 2=histogram
+// límites de bucket (solo histogramas; [] para los demás)
+// serie → índice de su métrica
+// prefijo de la línea: "nombre{labels}" / "nombre_bucket{le=...}" / "_sum" / "_count"
+// valor de la serie
+/// Creates a new, empty metrics registry.
 pub fn registry() -> Registry {
     Registry { names: [], helps: [], kinds: [], bucketses: [], s_metric: [], s_text: [], s_val: [] }
 }
@@ -28,18 +37,23 @@ fn no_buckets() -> [float] {
 }
 
 // --- Helpers de labels ---
+/// Returns an empty label set (for metrics without labels).
 pub fn no_labels() -> Map<string, string> {
-    map_new()
+    Map.new()
 }
+
+/// Builds a label set with a single key/value pair.
 pub fn labels1(k: string, v: string) -> Map<string, string> {
-    var m: Map<string, string> = map_new();
-    insert(m, k, v);
+    var m: Map<string, string> = Map.new();
+    m.insert(k, v);
     m
 }
+
+/// Builds a label set with two key/value pairs.
 pub fn labels2(k1: string, v1: string, k2: string, v2: string) -> Map<string, string> {
-    var m: Map<string, string> = map_new();
-    insert(m, k1, v1);
-    insert(m, k2, v2);
+    var m: Map<string, string> = Map.new();
+    m.insert(k1, v1);
+    m.insert(k2, v2);
     m
 }
 
@@ -47,12 +61,21 @@ pub fn labels2(k1: string, v1: string, k2: string, v2: string) -> Map<string, st
 fn label_escape(s: string) -> string {
     var out = "";
     var i = 0;
-    while (i < len(s)) {
+    while (i < s.len()) {
         let c = s[i];
-        if (c == '\\') { out = out + "\\\\"; }
-        else { if (c == '"') { out = out + "\\\""; }
-        else { if (c == '\n') { out = out + "\\n"; }
-        else { out = out + to_string(c); }}}
+        if (c == '\\') {
+            out = out + "\\\\";
+        } else {
+            if (c == '"') {
+                out = out + "\\\"";
+            } else {
+                if (c == '\n') {
+                    out = out + "\\n";
+                } else {
+                    out = out + to_string(c);
+                }
+            }
+        }
         i = i + 1;
     }
     out
@@ -60,14 +83,16 @@ fn label_escape(s: string) -> string {
 
 // Renderiza un conjunto de labels como `{k="v",...}` (claves ordenadas) o "" si está vacío.
 fn render_labels(labels: Map<string, string>) -> string {
-    let ks = keys(labels);
-    if (len(ks) == 0) {
+    let ks = labels.keys();
+    if (ks.len() == 0) {
         return "";
     }
     var out = "{";
     var i = 0;
-    while (i < len(ks)) {
-        if (i > 0) { out = out + ","; }
+    while (i < ks.len()) {
+        if (i > 0) {
+            out = out + ",";
+        }
         let k = ks[i];
         let v = match (get(labels, k)) {
             Option.Some(x) => x,
@@ -81,16 +106,21 @@ fn render_labels(labels: Map<string, string>) -> string {
 
 // --- Registro de métricas ---
 fn add_metric(reg: Registry, name: string, help: string, kind: int, buckets: [float]) -> int {
-    push(reg.names, name);
-    push(reg.helps, help);
-    push(reg.kinds, kind);
-    push(reg.bucketses, buckets);
-    len(reg.names) - 1
+    reg.names.push(name);
+    reg.helps.push(help);
+    reg.kinds.push(kind);
+    reg.bucketses.push(buckets);
+    reg.names.len() - 1
 }
 
+/// Registers a counter metric under `name` with the given help text.
+/// Series are created lazily, on first `inc`/`add` per label set.
 pub fn register_counter(reg: Registry, name: string, help: string) {
     add_metric(reg, name, help, 0, no_buckets());
 }
+
+/// Registers a gauge metric under `name` with the given help text.
+/// Series are created lazily, on first `set`/`add` per label set.
 pub fn register_gauge(reg: Registry, name: string, help: string) {
     add_metric(reg, name, help, 1, no_buckets());
 }
@@ -101,12 +131,15 @@ fn fmt_float(v: float) -> string {
 
 // Crea una serie (valor 0) y devuelve su índice.
 fn create_series(reg: Registry, mi: int, text: string) -> int {
-    push(reg.s_metric, mi);
-    push(reg.s_text, text);
-    push(reg.s_val, 0.0);
-    len(reg.s_metric) - 1
+    reg.s_metric.push(mi);
+    reg.s_text.push(text);
+    reg.s_val.push(0.0);
+    reg.s_metric.len() - 1
 }
 
+/// Registers a histogram metric with the given ascending bucket upper bounds (`le` limits).
+/// The +Inf bucket, `_sum` and `_count` series are added automatically per label set on
+/// first observation.
 pub fn register_histogram(reg: Registry, name: string, help: string, buckets: [float]) {
     // Las series NO se crean aquí: el conjunto de labels no se conoce al registrar. Se crean en orden
     // canónico la primera vez que se observa cada conjunto de labels (`ensure_hist_series`).
@@ -116,7 +149,7 @@ pub fn register_histogram(reg: Registry, name: string, help: string, buckets: [f
 // --- Búsqueda ---
 fn find_metric(reg: Registry, name: string) -> int {
     var i = 0;
-    while (i < len(reg.names)) {
+    while (i < reg.names.len()) {
         if (reg.names[i] == name) {
             return i;
         }
@@ -128,7 +161,7 @@ fn find_metric(reg: Registry, name: string) -> int {
 // Índice de la serie con ese texto dentro de la métrica `mi`, o -1 si no existe.
 fn find_series(reg: Registry, mi: int, text: string) -> int {
     var i = 0;
-    while (i < len(reg.s_text)) {
+    while (i < reg.s_text.len()) {
         if (reg.s_metric[i] == mi && reg.s_text[i] == text) {
             return i;
         }
@@ -149,17 +182,19 @@ fn touch_series(reg: Registry, mi: int, text: string) -> int {
 
 // Copia un conjunto de labels añadiéndole `le` (para las series _bucket de un histograma).
 fn with_le(labels: Map<string, string>, le: string) -> Map<string, string> {
-    var m: Map<string, string> = map_new();
-    let ks = keys(labels);
+    var m: Map<string, string> = Map.new();
+    let ks = labels.keys();
     var i = 0;
-    while (i < len(ks)) {
+    while (i < ks.len()) {
         match (get(labels, ks[i])) {
-            Option.Some(v) => { insert(m, ks[i], v); },
-            Option.None => {},
+            Option.Some(v) => {
+                m.insert(ks[i], v);
+            },
+            Option.None => { },
         }
         i = i + 1;
     }
-    insert(m, "le", le);
+    m.insert("le", le);
     m
 }
 
@@ -170,7 +205,7 @@ fn ensure_hist_series(reg: Registry, mi: int, name: string, buckets: [float], la
         return;
     }
     var i = 0;
-    while (i < len(buckets)) {
+    while (i < buckets.len()) {
         create_series(reg, mi, name + "_bucket" + render_labels(with_le(labels, fmt_float(buckets[i]))));
         i = i + 1;
     }
@@ -180,6 +215,8 @@ fn ensure_hist_series(reg: Registry, mi: int, name: string, buckets: [float], la
 }
 
 // --- Operaciones ---
+/// Adds `v` to the series of metric `name` with the given labels (creating it at 0 if new).
+/// Panics if the metric was never registered.
 pub fn add(reg: Registry, name: string, labels: Map<string, string>, v: float) {
     let mi = find_metric(reg, name);
     if (mi < 0) {
@@ -189,10 +226,13 @@ pub fn add(reg: Registry, name: string, labels: Map<string, string>, v: float) {
     reg.s_val[si] = reg.s_val[si] + v;
 }
 
+/// Increments a counter by 1 for the given label set (sugar for `add(reg, name, labels, 1.0)`).
 pub fn inc(reg: Registry, name: string, labels: Map<string, string>) {
     add(reg, name, labels, 1.0);
 }
 
+/// Sets a gauge to `v` for the given label set (creating the series if new).
+/// Panics if the metric was never registered.
 pub fn set(reg: Registry, name: string, labels: Map<string, string>, v: float) {
     let mi = find_metric(reg, name);
     if (mi < 0) {
@@ -205,6 +245,9 @@ pub fn set(reg: Registry, name: string, labels: Map<string, string>, v: float) {
 // Observa un valor en un histograma con un conjunto de labels: incrementa los buckets cuyo `le` ≥ v,
 // el bucket +Inf y _count, y suma a _sum. Las series del conjunto de labels se crean en orden canónico
 // la primera vez (`ensure_hist_series`). Los buckets llevan los labels + `le`; _sum/_count solo los labels.
+/// Records an observation `v` in a histogram for the given label set: increments every
+/// bucket with `le >= v`, the +Inf bucket and `_count`, and adds `v` to `_sum`.
+/// Panics if the histogram was never registered.
 pub fn observe_l(reg: Registry, name: string, labels: Map<string, string>, v: float) {
     let mi = find_metric(reg, name);
     if (mi < 0) {
@@ -213,7 +256,7 @@ pub fn observe_l(reg: Registry, name: string, labels: Map<string, string>, v: fl
     let bks = reg.bucketses[mi];
     ensure_hist_series(reg, mi, name, bks, labels);
     var i = 0;
-    while (i < len(bks)) {
+    while (i < bks.len()) {
         if (v <= bks[i]) {
             let si = touch_series(reg, mi, name + "_bucket" + render_labels(with_le(labels, fmt_float(bks[i]))));
             reg.s_val[si] = reg.s_val[si] + 1.0;
@@ -229,25 +272,29 @@ pub fn observe_l(reg: Registry, name: string, labels: Map<string, string>, v: fl
 }
 
 // Observa un valor en un histograma sin labels (azúcar de `observe_l` con el conjunto vacío).
+/// Records an observation in a histogram without labels (sugar for `observe_l` with an empty set).
 pub fn observe(reg: Registry, name: string, v: float) {
     observe_l(reg, name, no_labels(), v);
 }
 
 fn kind_name(k: int) -> string {
-    if (k == 0) { "counter" }
-    else { if (k == 1) { "gauge" }
-    else { "histogram" }}
+    if (k == 0) { "counter" } else {
+        if (k == 1) { "gauge" } else { "histogram" }
+    }
 }
 
 // Renderiza todo el registro al formato de exposición de Prometheus.
+/// Renders the whole registry in the Prometheus text exposition format
+/// (`# HELP`/`# TYPE` headers plus one line per series), ready to serve at `/metrics`.
+/// Output is deterministic: metrics in registration order, series in creation order.
 pub fn render(reg: Registry) -> string {
     var out = "";
     var mi = 0;
-    while (mi < len(reg.names)) {
+    while (mi < reg.names.len()) {
         out = out + "# HELP " + reg.names[mi] + " " + reg.helps[mi] + "\n";
         out = out + "# TYPE " + reg.names[mi] + " " + kind_name(reg.kinds[mi]) + "\n";
         var si = 0;
-        while (si < len(reg.s_metric)) {
+        while (si < reg.s_metric.len()) {
             if (reg.s_metric[si] == mi) {
                 out = out + reg.s_text[si] + " " + fmt_float(reg.s_val[si]) + "\n";
             }

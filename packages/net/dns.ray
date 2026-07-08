@@ -6,64 +6,72 @@
 // secciones de respuesta (RRs). La parte difícil es la **compresión de nombres**: un nombre puede
 // terminar en un puntero `0xC0xx` a un offset anterior del mensaje (para no repetir sufijos) → el
 // parser debe seguir los punteros pero devolver la posición SIGUIENTE en el flujo original.
-
 from net/udp import bind, send_to, recv_from, Packet;
 
 // Entero de 16 bits big-endian en la posición `i`.
 fn be16(data: bytes, i: int) -> int {
-    (data[i] << 8) | data[i + 1]
+    data[i] << 8 | data[i + 1]
 }
 
 // Entero de 32 bits big-endian en la posición `i` (para el TTL).
 fn be32(data: bytes, i: int) -> int {
-    (data[i] << 24) | (data[i + 1] << 16) | (data[i + 2] << 8) | data[i + 3]
+    data[i] << 24 | data[i + 1] << 16 | data[i + 2] << 8 | data[i + 3]
 }
 
 // --- Construcción de la consulta ---
-
 // Codifica un nombre de dominio como labels: cada parte precedida por su longitud, terminado en 0.
 fn encode_name(name: string) -> [int] {
     var out: [int] = [];
-    let parts = split(name, ".");
+    let parts = name.split(".");
     var i = 0;
-    while (i < len(parts)) {
-        let b = to_bytes(parts[i]);
-        push(out, len(b));
+    while (i < parts.len()) {
+        let b = parts[i].to_bytes();
+        out.push(b.len());
         var j = 0;
-        while (j < len(b)) {
-            push(out, b[j]);
+        while (j < b.len()) {
+            out.push(b[j]);
             j = j + 1;
         }
         i = i + 1;
     }
-    push(out, 0);
+    out.push(0);
     out
 }
 
 // Construye una consulta DNS estándar (recursión deseada) para `name` y el tipo `qtype` (1 = A).
+/// Builds a standard DNS query message (RFC 1035, recursion desired) for `name`.
+/// `id` is the 16-bit transaction ID echoed back in the response; `qtype` is the record type (1 = A, 28 = AAAA, 15 = MX, ...).
+/// Returns the wire-format message: 12-byte header + one question (QNAME as length-prefixed labels, QCLASS = IN).
 pub fn build_query(id: int, name: string, qtype: int) -> bytes {
     var m: [int] = [];
     // Cabecera (12 octetos).
-    push(m, (id >> 8) & 255); push(m, id & 255); // ID
-    push(m, 1); push(m, 0);                       // flags: RD=1 (recursión deseada)
-    push(m, 0); push(m, 1);                       // QDCOUNT = 1
-    push(m, 0); push(m, 0);                       // ANCOUNT = 0
-    push(m, 0); push(m, 0);                       // NSCOUNT = 0
-    push(m, 0); push(m, 0);                       // ARCOUNT = 0
+    m.push(id >> 8 & 255);  // ID
+    m.push(id & 255);
+    m.push(1);  // flags: RD=1 (recursión deseada)
+    m.push(0);
+    m.push(0);  // QDCOUNT = 1
+    m.push(1);
+    m.push(0);  // ANCOUNT = 0
+    m.push(0);
+    m.push(0);  // NSCOUNT = 0
+    m.push(0);
+    m.push(0);  // ARCOUNT = 0
+    m.push(0);
     // Pregunta.
     let qn = encode_name(name);
     var i = 0;
-    while (i < len(qn)) {
-        push(m, qn[i]);
+    while (i < qn.len()) {
+        m.push(qn[i]);
         i = i + 1;
     }
-    push(m, (qtype >> 8) & 255); push(m, qtype & 255); // QTYPE
-    push(m, 0); push(m, 1);                             // QCLASS = IN
+    m.push(qtype >> 8 & 255);  // QTYPE
+    m.push(qtype & 255);
+    m.push(0);  // QCLASS = IN
+    m.push(1);
     bytes_of(m)
 }
 
 // --- Parseo de la respuesta ---
-
 // El resultado de leer un nombre: el nombre y la posición SIGUIENTE en el flujo (tras seguir punteros).
 struct NameResult {
     name: string,
@@ -81,41 +89,49 @@ fn read_name(data: bytes, pos: int) -> NameResult {
         let lenb = data[p];
         if (lenb == 0) {
             p = p + 1;
-            if (next < 0) { next = p; }
+            if (next < 0) {
+                next = p;
+            }
             seguir = false;
-        } else { if ((lenb & 192) == 192) { // puntero 0xC0xx
-            if (next < 0) { next = p + 2; }
-            p = ((lenb & 63) << 8) | data[p + 1];
         } else {
-            // label: `lenb` octetos a partir de p+1.
-            let etiqueta = match (from_utf8(sub_bytes(data, p + 1, p + 1 + lenb))) {
-                Result.Ok(s) => s,
-                Result.Err(_) => "?",
-            };
-            push(labels, etiqueta);
-            p = p + 1 + lenb;
-        }}
+            if ((lenb & 192) == 192) {
+                // puntero 0xC0xx
+                if (next < 0) {
+                    next = p + 2;
+                }
+                p = (lenb & 63) << 8 | data[p + 1];
+            } else {
+                // label: `lenb` octetos a partir de p+1.
+                let etiqueta = match (from_utf8(data.sub_bytes(p + 1, p + 1 + lenb))) {
+                    Result.Ok(s) => s,
+                    Result.Err(_) => "?",
+                };
+                labels.push(etiqueta);
+                p = p + 1 + lenb;
+            }
+        }
     }
     NameResult { name: join(labels, "."), next: next }
 }
 
 // Un registro de recurso ya parseado. A/AAAA llevan la dirección como texto; MX la preferencia + el
 // host de correo; Other un tipo que no parseamos (se conserva el número de tipo).
+/// A parsed DNS resource record. A/Aaaa carry the address as text; Mx carries (preference, exchange);
+/// Srv carries (priority, weight, port, target); Other preserves the numeric type of records this client does not decode.
 pub enum Record {
-    A(string),       // IPv4 (tipo 1)
-    Aaaa(string),    // IPv6 (tipo 28)
-    Mx(int, string), // preferencia, exchange (tipo 15)
-    Cname(string),   // nombre canónico (tipo 5)
-    Txt(string),     // texto (tipo 16)
-    Ns(string),      // servidor de nombres (tipo 2)
-    Srv(int, int, int, string), // prioridad, peso, puerto, target (tipo 33)
-    Other(int),      // otro tipo (número)
+    A(string),  // IPv4 (tipo 1)
+    Aaaa(string),  // IPv6 (tipo 28)
+    Mx(int, string),  // preferencia, exchange (tipo 15)
+    Cname(string),  // nombre canónico (tipo 5)
+    Txt(string),  // texto (tipo 16)
+    Ns(string),  // servidor de nombres (tipo 2)
+    Srv(int, int, int, string),  // prioridad, peso, puerto, target (tipo 33)
+    Other(int),  // otro tipo (número)
 }
 
 // Formatea los 4 octetos en `start` como una IPv4 "a.b.c.d".
 fn format_ipv4(data: bytes, start: int) -> string {
-    to_string(data[start]) + "." + to_string(data[start + 1]) + "."
-        + to_string(data[start + 2]) + "." + to_string(data[start + 3])
+    to_string(data[start]) + "." + to_string(data[start + 1]) + "." + to_string(data[start + 2]) + "." + to_string(data[start + 3])
 }
 
 // Un grupo de 16 bits en hexadecimal (minúscula, sin ceros a la izquierda).
@@ -139,7 +155,7 @@ fn format_ipv6(data: bytes, start: int) -> string {
     var groups: [int] = [];
     var i = 0;
     while (i < 8) {
-        push(groups, (data[start + i * 2] << 8) | data[start + i * 2 + 1]);
+        groups.push(data[start + i * 2] << 8 | data[start + i * 2 + 1]);
         i = i + 1;
     }
     // Racha más larga de ceros consecutivos.
@@ -150,15 +166,25 @@ fn format_ipv6(data: bytes, start: int) -> string {
     i = 0;
     while (i < 8) {
         if (groups[i] == 0) {
-            if (run_start < 0) { run_start = i; run_len = 1; } else { run_len = run_len + 1; }
-            if (run_len > best_len) { best_len = run_len; best_start = run_start; }
+            if (run_start < 0) {
+                run_start = i;
+                run_len = 1;
+            } else {
+                run_len = run_len + 1;
+            }
+            if (run_len > best_len) {
+                best_len = run_len;
+                best_start = run_start;
+            }
         } else {
             run_start = 0 - 1;
             run_len = 0;
         }
         i = i + 1;
     }
-    if (best_len < 2) { best_start = 0 - 1; } // no comprimir una sola posición
+    if (best_len < 2) {
+        best_start = 0 - 1;  // no comprimir una sola posición
+    }
     var out = "";
     i = 0;
     while (i < 8) {
@@ -166,7 +192,9 @@ fn format_ipv6(data: bytes, start: int) -> string {
             out = out + "::";
             i = i + best_len;
         } else {
-            if (len(out) > 0 && !ends_with(out, ":")) { out = out + ":"; }
+            if (out.len() > 0 && !out.ends_with(":")) {
+                out = out + ":";
+            }
             out = out + hex_group(groups[i]);
             i = i + 1;
         }
@@ -183,7 +211,7 @@ fn read_txt(data: bytes, rdstart: int, rdlength: int) -> string {
     while (p < fin) {
         let slen = data[p];
         p = p + 1;
-        s = s + match (from_utf8(sub_bytes(data, p, p + slen))) {
+        s = s + match (from_utf8(data.sub_bytes(p, p + slen))) {
             Result.Ok(t) => t,
             Result.Err(_) => "?",
         };
@@ -194,6 +222,8 @@ fn read_txt(data: bytes, rdstart: int, rdlength: int) -> string {
 
 // El resultado completo de una consulta: los registros + el TTL mínimo (en segundos) de la respuesta,
 // que es lo que una caché debe respetar para no servir datos caducados.
+/// The full result of a DNS query: the parsed records plus the minimum TTL (in seconds) across the answer section.
+/// The minimum TTL is the safe upper bound for how long a cache may serve this response.
 pub struct DnsResult {
     records: [Record],
     ttl: int,
@@ -201,8 +231,11 @@ pub struct DnsResult {
 
 // Parsea una respuesta DNS a registros tipados (A, AAAA, MX, CNAME, TXT y otros), devolviendo además el
 // TTL mínimo. (El TTL mínimo del conjunto es el límite seguro de caché.)
+/// Parses a raw DNS response message into typed records (A, AAAA, MX, CNAME, TXT, NS, SRV; others as `Other`)
+/// plus the minimum TTL of the answer section (0 if there are no answers). Follows name-compression pointers (0xC0).
+/// Returns Err if the message is shorter than a header or the response RCODE signals an error (e.g. NXDOMAIN).
 pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
-    if (len(data) < 12) {
+    if (data.len() < 12) {
         return Result.Err("respuesta DNS demasiado corta");
     }
     let flags = be16(data, 2);
@@ -222,53 +255,71 @@ pub fn parse_full(data: bytes) -> Result<DnsResult, string> {
     }
     // Recorre las respuestas.
     var recs: [Record] = [];
-    var min_ttl = 0 - 1; // -1 = sin respuestas todavía
+    var min_ttl = 0 - 1;  // -1 = sin respuestas todavía
     var a = 0;
     while (a < ancount) {
         let nr = read_name(data, pos);
         pos = nr.next;
         let atype = be16(data, pos);
         let ttl = be32(data, pos + 4);
-        if (min_ttl < 0 || ttl < min_ttl) { min_ttl = ttl; }
-        let rdlength = be16(data, pos + 8); // tras TYPE(2)+CLASS(2)+TTL(4)
+        if (min_ttl < 0 || ttl < min_ttl) {
+            min_ttl = ttl;
+        }
+        let rdlength = be16(data, pos + 8);  // tras TYPE(2)+CLASS(2)+TTL(4)
         let rdstart = pos + 10;
         if (atype == 1 && rdlength == 4) {
-            push(recs, Record.A(format_ipv4(data, rdstart)));
-        } else { if (atype == 28 && rdlength == 16) {
-            push(recs, Record.Aaaa(format_ipv6(data, rdstart)));
-        } else { if (atype == 15) {
-            // MX: preferencia (2 octetos) + nombre del exchange (puede llevar compresión).
-            let pref = be16(data, rdstart);
-            let ex = read_name(data, rdstart + 2);
-            push(recs, Record.Mx(pref, ex.name));
-        } else { if (atype == 5) {
-            // CNAME: un solo nombre de dominio (puede llevar compresión).
-            push(recs, Record.Cname(read_name(data, rdstart).name));
-        } else { if (atype == 16) {
-            // TXT: una o más "character-strings" (octeto de longitud + texto), concatenadas.
-            push(recs, Record.Txt(read_txt(data, rdstart, rdlength)));
-        } else { if (atype == 2) {
-            // NS: un nombre de dominio (con compresión).
-            push(recs, Record.Ns(read_name(data, rdstart).name));
-        } else { if (atype == 33) {
-            // SRV: prioridad + peso + puerto (cada uno 2 octetos) + target (nombre, con compresión).
-            let prio = be16(data, rdstart);
-            let peso = be16(data, rdstart + 2);
-            let puerto = be16(data, rdstart + 4);
-            let target = read_name(data, rdstart + 6).name;
-            push(recs, Record.Srv(prio, peso, puerto, target));
+            recs.push(Record.A(format_ipv4(data, rdstart)));
         } else {
-            push(recs, Record.Other(atype));
-        }}}}}}}
+            if (atype == 28 && rdlength == 16) {
+                recs.push(Record.Aaaa(format_ipv6(data, rdstart)));
+            } else {
+                if (atype == 15) {
+                    // MX: preferencia (2 octetos) + nombre del exchange (puede llevar compresión).
+                    let pref = be16(data, rdstart);
+                    let ex = read_name(data, rdstart + 2);
+                    recs.push(Record.Mx(pref, ex.name));
+                } else {
+                    if (atype == 5) {
+                        // CNAME: un solo nombre de dominio (puede llevar compresión).
+                        recs.push(Record.Cname(read_name(data, rdstart).name));
+                    } else {
+                        if (atype == 16) {
+                            // TXT: una o más "character-strings" (octeto de longitud + texto), concatenadas.
+                            recs.push(Record.Txt(read_txt(data, rdstart, rdlength)));
+                        } else {
+                            if (atype == 2) {
+                                // NS: un nombre de dominio (con compresión).
+                                recs.push(Record.Ns(read_name(data, rdstart).name));
+                            } else {
+                                if (atype == 33) {
+                                    // SRV: prioridad + peso + puerto (cada uno 2 octetos) + target (nombre, con compresión).
+                                    let prio = be16(data, rdstart);
+                                    let peso = be16(data, rdstart + 2);
+                                    let puerto = be16(data, rdstart + 4);
+                                    let target = read_name(data, rdstart + 6).name;
+                                    recs.push(Record.Srv(prio, peso, puerto, target));
+                                } else {
+                                    recs.push(Record.Other(atype));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         pos = rdstart + rdlength;
         a = a + 1;
     }
     var ttl_final = min_ttl;
-    if (ttl_final < 0) { ttl_final = 0; } // sin respuestas → TTL 0
+    if (ttl_final < 0) {
+        ttl_final = 0;  // sin respuestas → TTL 0
+    }
     Result.Ok(DnsResult { records: recs, ttl: ttl_final })
 }
 
 // Parsea solo los registros (sin TTL), envoltorio de `parse_full`.
+/// Parses a raw DNS response into typed records only, discarding the TTL. Thin wrapper over `parse_full`.
+/// Returns Err on a malformed message or a non-zero response RCODE.
 pub fn parse_records(data: bytes) -> Result<[Record], string> {
     match (parse_full(data)) {
         Result.Ok(r) => Result.Ok(r.records),
@@ -277,21 +328,35 @@ pub fn parse_records(data: bytes) -> Result<[Record], string> {
 }
 
 // Convierte registros a strings legibles: A/AAAA → la dirección; MX → "preferencia exchange".
+/// Formats records as human-readable strings: A/AAAA -> the address; MX -> "preference exchange";
+/// SRV -> "priority weight port target"; CNAME/TXT/NS -> their payload. `Other` records are skipped.
 pub fn format_records(recs: [Record]) -> [string] {
     var out: [string] = [];
     var i = 0;
-    while (i < len(recs)) {
+    while (i < recs.len()) {
         match (recs[i]) {
-            Record.A(ip) => { push(out, ip); },
-            Record.Aaaa(ip) => { push(out, ip); },
-            Record.Mx(pref, ex) => { push(out, to_string(pref) + " " + ex); },
-            Record.Cname(name) => { push(out, name); },
-            Record.Txt(t) => { push(out, t); },
-            Record.Ns(name) => { push(out, name); },
-            Record.Srv(prio, peso, puerto, target) => {
-                push(out, to_string(prio) + " " + to_string(peso) + " " + to_string(puerto) + " " + target);
+            Record.A(ip) => {
+                out.push(ip);
             },
-            Record.Other(_) => {},
+            Record.Aaaa(ip) => {
+                out.push(ip);
+            },
+            Record.Mx(pref, ex) => {
+                out.push(to_string(pref) + " " + ex);
+            },
+            Record.Cname(name) => {
+                out.push(name);
+            },
+            Record.Txt(t) => {
+                out.push(t);
+            },
+            Record.Ns(name) => {
+                out.push(name);
+            },
+            Record.Srv(prio, peso, puerto, target) => {
+                out.push(to_string(prio) + " " + to_string(peso) + " " + to_string(puerto) + " " + target);
+            },
+            Record.Other(_) => { },
         }
         i = i + 1;
     }
@@ -299,23 +364,29 @@ pub fn format_records(recs: [Record]) -> [string] {
 }
 
 fn nombre_rcode(rcode: int) -> string {
-    if (rcode == 1) { " (error de formato)" }
-    else { if (rcode == 2) { " (fallo del servidor)" }
-    else { if (rcode == 3) { " (nombre inexistente)" }
-    else { "" }}}
+    if (rcode == 1) { " (error de formato)" } else {
+        if (rcode == 2) { " (fallo del servidor)" } else {
+            if (rcode == 3) { " (nombre inexistente)" } else { "" }
+        }
+    }
 }
 
 // --- Resolución de alto nivel ---
-
 // Consulta el servidor DNS `server:port` por UDP para `name` y `qtype`, devolviendo los registros + el
 // TTL. Un resolver real aleatoriza el ID y reintenta; aquí se usa un ID fijo (una consulta/respuesta).
+/// Queries the DNS server at `server:port` over UDP for `name` with record type `qtype`, blocking until a reply arrives.
+/// Returns the parsed records plus the minimum TTL, or Err on socket failure, a malformed reply, or a DNS error RCODE.
+/// Uses a fixed transaction ID and no retries (one query, one response) — a production resolver would randomize and retry.
 pub fn query_full(server: string, port: int, name: string, qtype: int) -> Result<DnsResult, string> {
-    let consulta = build_query(4660, name, qtype); // 4660 = 0x1234
+    let consulta = build_query(4660, name, qtype);  // 4660 = 0x1234
     match (bind("0.0.0.0", 0)) {
         Result.Err(e) => Result.Err("bind: " + e),
         Result.Ok(h) => {
             match (send_to(h, server, port, consulta)) {
-                Result.Err(e) => { close(h); Result.Err("send: " + e) },
+                Result.Err(e) => {
+                    close(h);
+                    Result.Err("send: " + e)
+                },
                 Result.Ok(_) => {
                     let r = recv_from(h);
                     close(h);
@@ -330,6 +401,7 @@ pub fn query_full(server: string, port: int, name: string, qtype: int) -> Result
 }
 
 // Como `query_full` pero devolviendo solo los registros tipados.
+/// Like `query_full` but returns only the typed records, discarding the TTL. Performs network I/O (blocking UDP).
 pub fn query(server: string, port: int, name: string, qtype: int) -> Result<[Record], string> {
     match (query_full(server, port, name, qtype)) {
         Result.Ok(r) => Result.Ok(r.records),
@@ -338,6 +410,8 @@ pub fn query(server: string, port: int, name: string, qtype: int) -> Result<[Rec
 }
 
 // Resuelve registros A (IPv4) → "a.b.c.d".
+/// Resolves A records (IPv4) for `name`, returning each address as dotted-quad text ("a.b.c.d").
+/// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_a(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 1)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
@@ -346,6 +420,8 @@ pub fn query_a(server: string, port: int, name: string) -> Result<[string], stri
 }
 
 // Resuelve registros AAAA (IPv6) → la dirección canónica.
+/// Resolves AAAA records (IPv6) for `name`, returning each address in canonical RFC 5952 form (with '::' compression).
+/// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_aaaa(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 28)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
@@ -354,6 +430,8 @@ pub fn query_aaaa(server: string, port: int, name: string) -> Result<[string], s
 }
 
 // Resuelve registros MX → "preferencia exchange" (menor preferencia = mayor prioridad).
+/// Resolves MX records for `name`, returning "preference exchange" strings (lower preference = higher priority).
+/// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_mx(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 15)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
@@ -362,6 +440,8 @@ pub fn query_mx(server: string, port: int, name: string) -> Result<[string], str
 }
 
 // Resuelve registros CNAME (nombre canónico al que apunta un alias).
+/// Resolves CNAME records for `name`, returning the canonical name(s) the alias points to.
+/// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_cname(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 5)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
@@ -370,6 +450,8 @@ pub fn query_cname(server: string, port: int, name: string) -> Result<[string], 
 }
 
 // Resuelve registros TXT (texto arbitrario: SPF, verificación de dominio, etc.).
+/// Resolves TXT records for `name` (arbitrary text: SPF, domain verification, etc.).
+/// Multi-part character-strings within a record are concatenated. Blocking UDP query; Err on network failure or DNS error.
 pub fn query_txt(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 16)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
@@ -378,6 +460,8 @@ pub fn query_txt(server: string, port: int, name: string) -> Result<[string], st
 }
 
 // Resuelve registros NS (servidores de nombres autoritativos de la zona).
+/// Resolves NS records for `name` (the zone's authoritative name servers).
+/// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_ns(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 2)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),
@@ -386,6 +470,8 @@ pub fn query_ns(server: string, port: int, name: string) -> Result<[string], str
 }
 
 // Resuelve registros SRV → "prioridad peso puerto target" (descubrimiento de servicios).
+/// Resolves SRV records for `name` (service discovery), returning "priority weight port target" strings.
+/// Blocking UDP query; Err on network failure or DNS error.
 pub fn query_srv(server: string, port: int, name: string) -> Result<[string], string> {
     match (query(server, port, name, 33)) {
         Result.Ok(recs) => Result.Ok(format_records(recs)),

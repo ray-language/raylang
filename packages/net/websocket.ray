@@ -4,30 +4,34 @@
 // Alcance pedagógico: el camino feliz de un echo server de texto. El framing asume que una trama
 // completa cabe en una sola lectura del socket (suficiente para mensajes cortos), como los servidores
 // `.ray` acotados de M19.1. Sin TLS (`wss` → M19.4), sin fragmentación ni extensiones.
-
 from net/crypto import sha1_octets;
 from std/base64 import base64;
 
 // --- Handshake ---
-
 // El GUID mágico del protocolo (RFC 6455 §1.3): se concatena a la clave del cliente antes del SHA-1.
 fn guid() -> string { "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" }
 
 // El valor `Sec-WebSocket-Accept` para la clave del cliente: base64(SHA-1(key + GUID)).
+/// Computes the `Sec-WebSocket-Accept` value for a client's `Sec-WebSocket-Key` (RFC 6455 §4.2.2).
+/// Returns base64(SHA-1(key + protocol GUID)).
 pub fn accept_key(key: string) -> string {
-    base64(sha1_octets(to_bytes(key + guid())))
+    base64(sha1_octets((key + guid()).to_bytes()))
 }
 
 // Extrae el valor de la cabecera `Sec-WebSocket-Key` de la petición de upgrade (o "" si no aparece).
+/// Extracts the `Sec-WebSocket-Key` header value from an HTTP upgrade request.
+/// Returns the trimmed key, or "" if the header is missing.
 pub fn extract_key(request: string) -> string {
-    let lineas = split(request, "\r\n");
+    let lineas = request.split("\r\n");
     var clave = "";
     var i = 0;
-    while (i < len(lineas)) {
+    while (i < lineas.len()) {
         let linea = lineas[i];
-        if (starts_with(linea, "Sec-WebSocket-Key:")) {
+        if (linea.starts_with("Sec-WebSocket-Key:")) {
             match (index_of(linea, ":")) {
-                Option.Some(idx) => { clave = trim(substring(linea, idx + 1, len(linea))); },
+                Option.Some(idx) => {
+                    clave = linea.substring(idx + 1, linea.len()).trim();
+                },
                 Option.None => { },
             }
         }
@@ -37,23 +41,31 @@ pub fn extract_key(request: string) -> string {
 }
 
 // La respuesta HTTP 101 que completa el handshake para la clave dada.
+/// Builds the complete HTTP `101 Switching Protocols` response that finishes the
+/// server-side WebSocket handshake for the given client key (RFC 6455 §4.2.2).
 pub fn handshake_response(key: string) -> string {
-    "HTTP/1.1 101 Switching Protocols\r\n" +
-    "Upgrade: websocket\r\n" +
-    "Connection: Upgrade\r\n" +
-    "Sec-WebSocket-Accept: " + accept_key(key) + "\r\n\r\n"
+    "HTTP/1.1 101 Switching Protocols\r\n" + "Upgrade: websocket\r\n" + "Connection: Upgrade\r\n" + "Sec-WebSocket-Accept: " + accept_key(key) + "\r\n\r\n"
 }
 
 // --- Framing ---
-
 // Opcodes de trama (RFC 6455 §5.2).
+/// Frame opcode for a text message (RFC 6455 §5.2): 1.
 pub fn op_text() -> int { 1 }
+
+/// Frame opcode for a binary message (RFC 6455 §5.2): 2.
 pub fn op_binary() -> int { 2 }
+
+/// Frame opcode for a connection close control frame (RFC 6455 §5.2): 8.
 pub fn op_close() -> int { 8 }
+
+/// Frame opcode for a ping control frame (RFC 6455 §5.2): 9.
 pub fn op_ping() -> int { 9 }
+
+/// Frame opcode for a pong control frame (RFC 6455 §5.2): 10.
 pub fn op_pong() -> int { 10 }
 
 // Una trama decodificada: su opcode, su carga útil (ya des-enmascarada) y el bit FIN.
+/// A decoded WebSocket frame: its opcode, the (already unmasked) payload, and the FIN bit.
 pub struct Frame {
     opcode: int,
     payload: bytes,
@@ -62,18 +74,21 @@ pub struct Frame {
 
 // Decodifica una trama del **cliente** (siempre enmascarada, RFC 6455 §5.3) contenida en `data`.
 // Devuelve la trama; sobre datos incompletos el comportamiento es indefinido (camino feliz).
+/// Decodes a single WebSocket frame from `data`, unmasking the payload when the MASK
+/// bit is set (client-to-server frames are always masked, RFC 6455 §5.3).
+/// Happy path only: behavior on truncated/incomplete input is undefined.
 pub fn decode_frame(data: bytes) -> Frame {
     let b0 = data[0];
     let b1 = data[1];
-    let fin = ((b0 >> 7) & 1) == 1;
+    let fin = (b0 >> 7 & 1) == 1;
     let opcode = b0 & 15;
-    let masked = ((b1 >> 7) & 1) == 1;
+    let masked = (b1 >> 7 & 1) == 1;
     let len7 = b1 & 127;
     // Longitud de la carga + desplazamiento al inicio de la clave de máscara.
     var plen = len7;
     var off = 2;
     if (len7 == 126) {
-        plen = (data[2] << 8) | data[3];
+        plen = data[2] << 8 | data[3];
         off = 4;
     } else {
         if (len7 == 127) {
@@ -81,7 +96,7 @@ pub fn decode_frame(data: bytes) -> Frame {
             plen = 0;
             var k = 0;
             while (k < 8) {
-                plen = (plen << 8) | data[2 + k];
+                plen = plen << 8 | data[2 + k];
                 k = k + 1;
             }
             off = 10;
@@ -101,9 +116,9 @@ pub fn decode_frame(data: bytes) -> Frame {
     var i = 0;
     while (i < plen) {
         if (masked) {
-            push(octetos, data[off + i] ^ mask[i % 4]);
+            octetos.push(data[off + i] ^ mask[i % 4]);
         } else {
-            push(octetos, data[off + i]);
+            octetos.push(data[off + i]);
         }
         i = i + 1;
     }
@@ -111,22 +126,24 @@ pub fn decode_frame(data: bytes) -> Frame {
 }
 
 // Codifica una trama del **servidor** (sin máscara, FIN activo) con el opcode y la carga dados.
+/// Encodes a server-to-client frame (unmasked, FIN=1) with the given opcode and payload,
+/// choosing the 7-bit, 16-bit or 64-bit length encoding as needed (RFC 6455 §5.2).
 pub fn encode_frame(opcode: int, payload: bytes) -> bytes {
-    let plen = len(payload);
+    let plen = payload.len();
     var cabecera: [int] = [];
-    push(cabecera, 128 | opcode); // FIN=1 + opcode
+    cabecera.push(128 | opcode);  // FIN=1 + opcode
     if (plen < 126) {
-        push(cabecera, plen);
+        cabecera.push(plen);
     } else {
         if (plen < 65536) {
-            push(cabecera, 126);
-            push(cabecera, (plen >> 8) & 255);
-            push(cabecera, plen & 255);
+            cabecera.push(126);
+            cabecera.push(plen >> 8 & 255);
+            cabecera.push(plen & 255);
         } else {
-            push(cabecera, 127);
+            cabecera.push(127);
             var k = 7;
             while (k >= 0) {
-                push(cabecera, (plen >> (k * 8)) & 255);
+                cabecera.push(plen >> k * 8 & 255);
                 k = k - 1;
             }
         }
@@ -135,6 +152,7 @@ pub fn encode_frame(opcode: int, payload: bytes) -> bytes {
 }
 
 // Atajo: una trama de texto del servidor.
+/// Shortcut: encodes `texto` as an unmasked server text frame (opcode 1, FIN=1).
 pub fn encode_text(texto: string) -> bytes {
-    encode_frame(op_text(), to_bytes(texto))
+    encode_frame(op_text(), texto.to_bytes())
 }

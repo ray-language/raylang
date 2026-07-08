@@ -18,6 +18,7 @@
     { "include": "#storage" },
     { "include": "#builtins" },
     { "include": "#types" },
+    { "include": "#constants" },
     { "include": "#user-types" },
     { "include": "#booleans" },
     { "include": "#numbers" },
@@ -44,13 +45,13 @@
       ]
     },
     "interpolation": {
-      "comment": "Interpolación `${expr}` (M27.3): toda cadena interpola; el '$' solo es especial seguido de '{'. `contentName: meta.embedded` hace que VSCode pinte el interior como CÓDIGO (resetea el color de string heredado), no como texto de cadena; así los identificadores planos, literales y operadores dentro de `${…}` se ven como código. El interior se resalta recursivamente; las llaves anidadas se balancean.",
+      "comment": "Interpolación `${expr}` (M27.3): toda cadena interpola; el '$' solo es especial seguido de '{'. `contentName: meta.embedded` hace que VSCode pinte el interior como CÓDIGO (resetea el color de string heredado), no como texto de cadena; así los identificadores planos, literales y operadores dentro de `${…}` se ven como código. El interior se resalta recursivamente; las llaves anidadas se balancean. Los delimitadores `${` y `}` llevan además el scope `support.function.builtin` para que resalten con el color de una función nativa (el desugaring es una llamada a `to_string`).",
       "name": "meta.interpolation.raylang",
       "contentName": "meta.embedded.line.raylang",
       "begin": "\\$\\{",
       "end": "\\}",
-      "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.raylang" } },
-      "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.raylang" } },
+      "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.raylang support.function.builtin.raylang" } },
+      "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.raylang support.function.builtin.raylang" } },
       "patterns": [
         {
           "comment": "Llaves anidadas dentro de la expresión (p. ej. `${f({a: 1})}`).",
@@ -141,11 +142,16 @@
     "builtins": {
       "comment": "Builtins + funciones del prelude de uso común (M11–M13). No es exhaustivo; el resto se colorea por la regla de llamada. Solo con '(' detrás para no chocar con variables.",
       "name": "support.function.builtin.raylang",
-      "match": "\\b(print|eprint|len|push|pop|to_string|to_bytes|bytes_of|trim|split|contains|replace|chars|starts_with|ends_with|to_upper|to_lower|substring|sub_bytes|repeat|join|reverse|index_of|position|sort|map|filter|fold|map_new|insert|get|remove|contains_key|keys|values|spawn|channel|send|recv|select|scope|panic|assert|assert_eq|input|read_int|parse_int|parse_float|args|env|read_file|write_file|append_file|remove_file|list_dir|exists|open|read_line|write|close|sqrt|sin|cos|tan|ln|exp|floor|ceil|round|pow|abs|min|max|pi|now|monotonic|sleep|random|random_int)\\b(?=\\s*\\()"
+      "match": "\\b(print|eprint|pop|to_string|bytes_of|join|index_of|position|sort|map|filter|fold|map_new|get|remove|spawn|channel|send|recv|select|scope|panic|assert|assert_eq|input|read_int|parse_int|parse_float|args|env|read_file|write_file|append_file|remove_file|list_dir|exists|open|read_line|write|close|sqrt|sin|cos|tan|ln|exp|floor|ceil|round|pow|abs|min|max|pi|now|monotonic|sleep|random|random_int)\\b(?=\\s*\\()"
     },
     "types": {
       "name": "support.type.primitive.raylang",
       "match": "\\b(int|float|bool|string|char|bytes|u8|u32|u64)\\b"
+    },
+    "constants": {
+      "comment": "Constantes en SCREAMING_SNAKE (2+ caracteres, todo mayúsculas/dígitos/_): PI, MAX_INTENTOS. Antes de #user-types para ganar; una sola letra (T/E/K) queda como type param.",
+      "name": "constant.other.raylang",
+      "match": "\\b[A-Z][A-Z0-9_]*[A-Z0-9]\\b"
     },
     "user-types": {
       "name": "entity.name.type.raylang",
@@ -175,7 +181,7 @@
     },
     "pipeline-target": {
       "comment": "El objetivo de un pipeline desnudo (`x |> doble`) es una función aunque no lleve '('. Se excluyen los builtins: en `|> map(...)` el paréntesis ya los colorea como tales.",
-      "match": "(\\|>)\\s*(?!(?:print|len|push|map|filter|fold|to_string|trim|split|eprint|input|read_int|parse_int|args|env|read_file|write_file)\\b)([A-Za-z_][A-Za-z0-9_]*)",
+      "match": "(\\|>)\\s*(?!(?:print|map|filter|fold|to_string|eprint|input|read_int|parse_int|args|env|read_file|write_file)\\b)([A-Za-z_][A-Za-z0-9_]*)",
       "captures": {
         "1": { "name": "keyword.operator.raylang" },
         "2": { "name": "entity.name.function.raylang" }

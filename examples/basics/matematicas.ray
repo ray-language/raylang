@@ -1,28 +1,30 @@
-// M15.1a — la stdlib de matemáticas.
+// M15.1a / M49 — la stdlib de matemáticas.
 //
-// Funciones float -> float (sqrt, trig, log…), pow, las polimórficas abs/min/max (int o float)
-// y las constantes pi()/e(). Builtins → UFCS gratis: `(2.0).sqrt()`, `x.abs()`.
+// Todo vive en el módulo `std/math` (M49): se importa y se usa calificado (`math.sqrt(2.0)`). Las
+// funciones float envuelven primitivos internos; `abs`/`min`/`max` son genéricas (traits `Signed`/`Ord`)
+// y `PI`/`E` son constantes.
+import std/math;
+
 fn main() {
     // Raíz, potencia y redondeo.
-    print(sqrt(16.0));  // 4
-    print(pow(2.0, 10.0));  // 1024
-    print(floor(3.7));  // 3
-    print(ceil(3.2));  // 4
-    print(round(2.5));  // 3
+    print(math.sqrt(16.0));  // 4
+    print(math.pow(2.0, 10.0));  // 1024
+    print(math.floor(3.7));  // 3
+    print(math.ceil(3.2));  // 4
+    print(math.round(2.5));  // 3
 
-    // Trigonometría y logaritmos (sobre las constantes).
-    print(sin(0.0));  // 0
-    print(cos(0.0));  // 1
-    print(ln(e()));  // 1
-    print(log10(1000.0));  // 3
+    // Trigonometría y logaritmos.
+    print(math.sin(0.0));  // 0
+    print(math.cos(0.0));  // 1
+    print(math.ln(math.E));  // 1
+    print(math.log10(1000.0));  // 3
 
-    // Polimórficas: conservan el tipo numérico.
-    print(abs(-7));  // 7  (int)
-    print(abs(-2.5));  // 2.5 (float)
-    print(min(3, 8));  // 3  (int)
-    print(max(1.5, 9.0));  // 9  (float)
+    // Polimórficas (genéricas sobre Signed/Ord): conservan el tipo numérico.
+    print(math.abs(-7));  // 7  (int)
+    print(math.abs(-2.5));  // 2.5 (float)
+    print(math.min(3, 8));  // 3  (int)
+    print(math.max(1.5, 9.0));  // 9  (float)
 
-    // UFCS: las builtins también se invocan como métodos.
-    let area: float = pi() * pow(2.0, 2.0);  // π·r² con r=2
+    let area: float = math.PI * math.pow(2.0, 2.0);  // π·r² con r=2
     print(area);  // 12.566370614359172
 }

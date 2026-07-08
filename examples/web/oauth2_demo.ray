@@ -6,7 +6,7 @@ from oauth2 import Token, client_credentials, authorize_url, bearer_header;
 fn main() -> int {
     let a = args();
     var port = 8080;
-    if (len(a) > 0) {
+    if (a.len() > 0) {
         match (parse_int(a[0])) {
             Option.Some(p) => {
                 port = p;

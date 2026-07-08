@@ -6,7 +6,7 @@ from http import fetch, Response, body_text;
 
 fn main() -> int {
     let a = args();
-    if (len(a) < 1) {
+    if (a.len() < 1) {
         eprint("uso: https_demo <url>");
         return 1;
     }

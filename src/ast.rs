@@ -172,11 +172,13 @@ pub struct Program {
     /// El loader lo desplaza y fusiona con las bandas de líneas de cada módulo (L3).
     pub expr_spans: std::collections::HashMap<(usize, usize), (usize, usize)>,
     /// Posición del **nombre del campo/método** en un acceso `recv.name` (M10.2g): la clave es la
-    /// posición del acceso `(línea, col)` —que es la del receptor— más el nombre, y el valor es la
-    /// `(línea, col)` del propio `name` tras el `.`. El AST `Field` no la guarda (comparte posición
-    /// con el receptor); esta tabla la registra el parser para que el LSP dé **hover del campo/
-    /// método** en su posición. Mismo esquema de clave que `ufcs_sites`. El loader la desplaza.
-    pub field_name_pos: std::collections::HashMap<(usize, usize, String), (usize, usize)>,
+    /// posición del acceso `(línea, col)` —que es la del receptor— más el nombre, y el valor son las
+    /// `(línea, col)` de cada `name` tras el `.`. El AST `Field` no la guarda (comparte posición con
+    /// el receptor); esta tabla la registra el parser para que el LSP dé **hover del campo/método**
+    /// en su posición. Mismo esquema de clave que `ufcs_sites`. El loader la desplaza. Es un **`Vec`**
+    /// porque en una cadena (`v.doble().inc().doble()`) todos los eslabones comparten la posición del
+    /// receptor: dos `.doble()` colapsarían a la misma clave; se guardan ambas posiciones.
+    pub field_name_pos: std::collections::HashMap<(usize, usize, String), Vec<(usize, usize)>>,
     /// Funciones externas (M41, FFI): `extern "lib" { fn nombre(params) -> ret; … }`. Cada una es
     /// una firma **sin cuerpo** cuya implementación vive en una librería C nativa, cargada por
     /// `dlopen`/`dlsym` en tiempo de ejecución (`src/ffi.rs`). El checker valida que los tipos sean
@@ -557,6 +559,11 @@ pub enum ExprKind {
     /// Literal de arreglo: `[1, 2, 3]` (o `[]` vacío). (M3)
     ArrayLit(Vec<Expr>),
 
+    /// Literal de **Map**: `[k1: v1, k2: v2]` (o `[:]` vacío), estilo Swift (M48.2). El `:` tras el
+    /// primer elemento lo distingue del literal de arreglo. `[:]` es **indeterminado** (como `[]`/
+    /// `Map.new()`): su tipo lo fija el esperado. Baja a `Map.new()` + `insert` por par (erasure).
+    MapLit(Vec<(Expr, Expr)>),
+
     /// Literal de **tupla**: `(a, b, …)` de 2+ elementos (M27.1). El checker le da un `Type::Tuple` y lo
     /// **baja a `ArrayLit`** para el runtime (erasure). Un `(e)` de un solo elemento es un paréntesis, no
     /// una tupla.
@@ -725,6 +732,12 @@ fn walk_expr<'a>(expr: &'a Expr, acc: &mut Vec<&'a FnExpr>) {
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
                 walk_expr(e, acc);
+            }
+        }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares {
+                walk_expr(k, acc);
+                walk_expr(v, acc);
             }
         }
         ExprKind::Index { array, index } => {

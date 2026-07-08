@@ -102,6 +102,51 @@ fn completion_ofrece_simbolos() {
 }
 
 #[test]
+fn hover_de_miembro_de_modulo_incluye_doc() {
+    // M49.1: el hover de `math.sqrt` muestra la firma + el `///` de std/math (módulo embebido, sin
+    // archivo en disco → su fuente se toma del programa cargado).
+    let dir = std::env::temp_dir().join("ray_lsp_hoverdoc");
+    std::fs::create_dir_all(&dir).unwrap();
+    let archivo = dir.join("m.ray");
+    std::fs::write(&archivo, "import std/math;\nfn main() -> int {\n    print(math.sqrt(16.0));\n    0\n}").unwrap();
+    let uri = format!("file://{}", archivo.display());
+    let open = format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":"import std/math;\nfn main() -> int {{\n    print(math.sqrt(16.0));\n    0\n}}"}}}}}}"#
+    );
+    // hover sobre `sqrt` (línea 2, char 16).
+    let hov = format!(
+        r#"{{"jsonrpc":"2.0","id":10,"method":"textDocument/hover","params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":16}}}}}}"#
+    );
+    let entrada = frame(&open) + &frame(&hov) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("math.sqrt: fn(float) -> float"), "firma calificada\n{out}");
+    assert!(out.contains("Square root"), "incluye el /// de std/math\n{out}");
+}
+
+#[test]
+fn completion_de_miembros_de_modulo() {
+    // M49.1: tras `math.` (módulo importado) el LSP ofrece los ítems pub del módulo: funciones, consts.
+    // Usa un archivo real (la resolución del `import` necesita un path de proyecto válido, no `/t.ray`).
+    let dir = std::env::temp_dir().join("ray_lsp_modcomp");
+    std::fs::create_dir_all(&dir).unwrap();
+    let archivo = dir.join("m.ray");
+    std::fs::write(&archivo, "import std/math;\nfn main() -> int {\n    math.\n    0\n}").unwrap();
+    let uri = format!("file://{}", archivo.display());
+    let open = format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{uri}","text":"import std/math;\nfn main() -> int {{\n    math.\n    0\n}}"}}}}}}"#
+    );
+    let comp = format!(
+        r#"{{"jsonrpc":"2.0","id":9,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":9}}}}}}"#
+    );
+    let entrada = frame(&open) + &frame(&comp) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("\"id\":9"), "responde a la completion\n{out}");
+    assert!(out.contains("\"label\":\"sqrt\""), "ofrece la función sqrt de std/math\n{out}");
+    assert!(out.contains("\"label\":\"PI\""), "ofrece la constante PI\n{out}");
+    assert!(!out.contains("\"label\":\"print\""), "NO ofrece builtins globales tras `math.`\n{out}");
+}
+
+#[test]
 fn publica_diagnostico_ante_un_error() {
     let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn main() -> int { 1 + true }"}}}"#;
     let entrada = frame(open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
@@ -112,6 +157,17 @@ fn publica_diagnostico_ante_un_error() {
     );
     assert!(out.contains("\"severity\":1"), "severidad Error\n{out}");
     assert!(out.contains("\"source\":\"raylang\""), "la fuente es raylang\n{out}");
+}
+
+#[test]
+fn publica_diagnostico_al_redefinir_un_builtin() {
+    // M48.3: redefinir un builtin del núcleo (`fn print`) → diagnóstico en vivo. (M48.4e: los builtins de
+    // contenedor como `len` se retiraron y ya NO disparan el footgun; `print` sigue siendo builtin.)
+    let open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///t.ray","text":"fn print(x: int) -> int { x }\nfn main() -> int { 0 }"}}}"#;
+    let entrada = frame(open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("textDocument/publishDiagnostics"), "publica diagnósticos\n{out}");
+    assert!(out.contains("es un builtin del lenguaje"), "mensaje del footgun\n{out}");
 }
 
 #[test]

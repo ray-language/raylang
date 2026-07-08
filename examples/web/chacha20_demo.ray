@@ -8,7 +8,7 @@ from hex import hex_encode;
 fn str_bytes(s: string) -> [int] {
     var b: [int] = [];
     for c in s {
-        push(b, c as int);
+        b.push(c as int);
     }
     b
 }
@@ -18,7 +18,7 @@ fn main() {
     var key: [int] = [];
     var i = 0;
     while (i < 32) {
-        push(key, i);
+        key.push(i);
         i = i + 1;
     }
     // Nonce (12 octetos): 00 00 00 00 00 00 00 4a 00 00 00 00.
@@ -34,9 +34,9 @@ fn main() {
 
     // Round-trip: descifrar (XOR de nuevo) recupera el texto original.
     let back = chacha20_encrypt(key, counter, nonce, ct);
-    var igual = len(back) == len(pt);
+    var igual = back.len() == pt.len();
     var j = 0;
-    while (j < len(pt)) {
+    while (j < pt.len()) {
         if (back[j] != pt[j]) {
             igual = false;
         }

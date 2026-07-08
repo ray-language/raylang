@@ -1,22 +1,91 @@
-// std/math (M40.4b) — utilidades enteras que complementan los builtins matemáticos (sqrt/pow/abs/
-// min/max/…). Todo `pub`: se importa con `import std/math;` y se usa calificado (`math.gcd(12, 18)`).
+// std/math (M40.4b; M49) — la biblioteca de matemáticas. Se importa con `import std/math;` y se usa
+// calificado (`math.sqrt(2.0)`, `math.min(3, 8)`, `math.PI`). Las funciones float envuelven primitivos
+// internos `__x` (mismo opcode que antes; el cálculo lo hacen los motores); `abs`/`min`/`max` son puros
+// en raylang (M49.1b, vía los traits `Signed`/`Ord`). Las utilidades enteras van más abajo.
 
-/// Valor absoluto de `x`.
+/// The mathematical constant π. Use qualified: `math.PI`.
+pub const PI: float = 3.141592653589793;
+
+/// Euler's number e. Use qualified: `math.E`.
+pub const E: float = 2.718281828459045;
+
+/// Square root of `x`.
+pub fn sqrt(x: float) -> float { __sqrt(x) }
+
+/// `base` raised to the floating-point power `exp`.
+pub fn pow(base: float, exp: float) -> float { __pow(base, exp) }
+
+/// Sine of `x` (radians).
+pub fn sin(x: float) -> float { __sin(x) }
+
+/// Cosine of `x` (radians).
+pub fn cos(x: float) -> float { __cos(x) }
+
+/// Tangent of `x` (radians).
+pub fn tan(x: float) -> float { __tan(x) }
+
+/// Natural logarithm (base e) of `x`.
+pub fn ln(x: float) -> float { __ln(x) }
+
+/// Base-10 logarithm of `x`.
+pub fn log10(x: float) -> float { __log10(x) }
+
+/// e raised to the power `x`.
+pub fn exp(x: float) -> float { __exp(x) }
+
+/// Largest integer value not greater than `x`, as a float.
+pub fn floor(x: float) -> float { __floor(x) }
+
+/// Smallest integer value not less than `x`, as a float.
+pub fn ceil(x: float) -> float { __ceil(x) }
+
+/// `x` rounded to the nearest integer, as a float (ties away from zero).
+pub fn round(x: float) -> float { __round(x) }
+
+/// A numeric type that has an absolute value (M49.1b). Implemented for `int` and `float`; a user numeric
+/// type can `impl Signed for T` to work with `math.abs`.
+pub trait Signed {
+    /// Absolute value of `self`.
+    fn abs(self) -> Self;
+}
+
+impl Signed for int {
+    fn abs(self) -> int { if (self < 0) { 0 - self } else { self } }
+}
+
+impl Signed for float {
+    fn abs(self) -> float { if (self < 0.0) { 0.0 - self } else { self } }
+}
+
+/// Absolute value of `x` (any `Signed` type: `int`, `float`, …). Keeps the numeric type.
+pub fn abs<T: Signed>(x: T) -> T { x.abs() }
+
+/// The smaller of `a` and `b` (any `Ord` type: int/float/string/char). Ties return `a`.
+pub fn min<T: Ord>(a: T, b: T) -> T { if (a.menor(b)) { a } else { b } }
+
+/// The larger of `a` and `b` (any `Ord` type). Ties return `a`.
+pub fn max<T: Ord>(a: T, b: T) -> T { if (b.menor(a)) { a } else { b } }
+
+/// Absolute value of `x`.
 pub fn iabs(x: int) -> int {
     if (x < 0) { 0 - x } else { x }
 }
 
-/// Signo de `x`: -1 si es negativo, 0 si es cero, 1 si es positivo.
+/// Sign of `x`: -1 if negative, 0 if zero, 1 if positive.
 pub fn sign(x: int) -> int {
-    if (x < 0) { 0 - 1 } else { if (x > 0) { 1 } else { 0 } }
+    if (x < 0) { 0 - 1 } else {
+        if (x > 0) { 1 } else { 0 }
+    }
 }
 
-/// Restringe `x` al rango cerrado `[lo, hi]` (se asume `lo <= hi`).
+/// Clamps `x` to the closed range `[lo, hi]` (assumes `lo <= hi`).
 pub fn clamp(x: int, lo: int, hi: int) -> int {
-    if (x < lo) { lo } else { if (x > hi) { hi } else { x } }
+    if (x < lo) { lo } else {
+        if (x > hi) { hi } else { x }
+    }
 }
 
-/// Máximo común divisor de `a` y `b` por el algoritmo de Euclides. Siempre no-negativo;
+/// Greatest common divisor of `a` and `b` (Euclid's algorithm). Always non-negative;
 /// `gcd(0, 0) == 0`.
 pub fn gcd(a: int, b: int) -> int {
     var x = iabs(a);
@@ -29,7 +98,7 @@ pub fn gcd(a: int, b: int) -> int {
     x
 }
 
-/// Mínimo común múltiplo de `a` y `b`. `lcm(_, 0) == 0`.
+/// Least common multiple of `a` and `b`. `lcm(_, 0) == 0`.
 pub fn lcm(a: int, b: int) -> int {
     if (a == 0 || b == 0) {
         0
@@ -39,7 +108,7 @@ pub fn lcm(a: int, b: int) -> int {
     }
 }
 
-/// `base` elevado a `exp` (con `exp >= 0`) por exponenciación rápida (binaria). `exp < 0` → 0.
+/// `base` raised to `exp` (with `exp >= 0`) by fast binary exponentiation. `exp < 0` → 0.
 pub fn ipow(base: int, exp: int) -> int {
     if (exp < 0) {
         0
@@ -48,7 +117,9 @@ pub fn ipow(base: int, exp: int) -> int {
         var b = base;
         var e = exp;
         while (e > 0) {
-            if (e % 2 == 1) { resultado = resultado * b; }
+            if (e % 2 == 1) {
+                resultado = resultado * b;
+            }
             b = b * b;
             e = e / 2;
         }
@@ -56,7 +127,7 @@ pub fn ipow(base: int, exp: int) -> int {
     }
 }
 
-/// Factorial de `n` (con `n >= 0`). `n < 0` → 0.
+/// Factorial of `n` (with `n >= 0`). `n < 0` → 0.
 pub fn factorial(n: int) -> int {
     if (n < 0) {
         0
@@ -71,7 +142,7 @@ pub fn factorial(n: int) -> int {
     }
 }
 
-/// ¿Es `n` un número primo? (`n < 2` → false). Prueba por divisores hasta la raíz.
+/// Whether `n` is prime (`n < 2` → false). Trial division up to the square root.
 pub fn is_prime(n: int) -> bool {
     if (n < 2) {
         false
@@ -79,7 +150,9 @@ pub fn is_prime(n: int) -> bool {
         var i = 2;
         var primo = true;
         while (i * i <= n && primo) {
-            if (n % i == 0) { primo = false; }
+            if (n % i == 0) {
+                primo = false;
+            }
             i = i + 1;
         }
         primo

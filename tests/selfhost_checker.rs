@@ -67,6 +67,22 @@ fn comparar(src: &str, nombre_tmp: &str) {
     assert_eq!(obtenido, esperado, "el checker auto-alojado difiere del oráculo para:\n{src}");
 }
 
+/// Como [`comparar`], pero solo exige que ambos pipelines **rechacen en la misma posición** (mismo
+/// prefijo `error de tipos en L:C`), tolerando el texto del mensaje. M48.4e: al retirar los builtins de
+/// contenedor, el checker de Rust los ve como **métodos de trait** (`xs.push(true)` → error de inferencia
+/// de `[]#push`; `(3).push(1)` → "no existe campo ni función 'push' aplicable a int"), mientras este
+/// validador auto-alojado —un subconjunto que los sigue modelando como **builtins de arreglo/string**—
+/// da su propio mensaje. Ambos rechazan el mismo error en el mismo sitio; la redacción difiere por diseño.
+fn comparar_pos(src: &str, nombre_tmp: &str) {
+    let esperado = canonical(src);
+    let obtenido = check_dump(src, nombre_tmp);
+    let pos = |s: &str| s.split(": ").next().unwrap_or("").to_string();
+    assert!(esperado.starts_with("error de tipos en"), "el oráculo no rechazó:\n{src}\n  {esperado}");
+    assert!(obtenido.starts_with("error de tipos en"), "el auto-alojado no rechazó:\n{src}\n  {obtenido}");
+    assert_eq!(pos(&obtenido), pos(&esperado),
+        "posición del rechazo difiere para:\n{src}\n  auto: {obtenido}\n  rust: {esperado}");
+}
+
 #[test]
 fn programas_validos() {
     comparar("fn main() -> int { 0 }", "sc_min.ray");
@@ -116,7 +132,7 @@ fn datos_validos() {
     comparar("struct P { x: int } fn main() -> int { var p = P { x: 1 }; p.x = 9; p.x }", "scd_fassign.ray");
     comparar("struct Q { p: int } struct R { q: Q } fn main() -> int { var r = R { q: Q { p: 1 } }; r.q.p = 5; r.q.p }", "scd_nested.ray");
     // Arreglos: literal anotado vacío, push, len, índice y asignación por índice.
-    comparar("fn main() -> int { var xs: [int] = []; push(xs, 3); xs[0] = 4; len(xs) }", "scd_arr.ray");
+    comparar("fn main() -> int { var xs: [int] = []; xs.push(3); xs[0] = 4; xs.len() }", "scd_arr.ray");
     comparar("fn main() -> int { let m: [[int]] = [[1, 2], [3, 4]]; m[1][0] }", "scd_matriz.ray");
     // Enums: construcción con/sin payload, match con bindings, comodín, catch-all.
     comparar("enum E { A, B(int) } fn f(e: E) -> int { match (e) { E.A => 0, E.B(n) => n } } fn main() -> int { f(E.B(7)) }", "scd_match.ray");
@@ -141,9 +157,11 @@ fn errores_de_datos() {
     comparar("fn main() -> int { let xs: [int] = [1]; xs[true] }", "scde_idxty.ray");
     comparar("fn main() -> int { let n = 3; n[0] }", "scde_idx_nonarr.ray");
     comparar("fn main() -> int { var xs: [int] = [1]; xs[0] = true; 0 }", "scde_iassign_ty.ray");
-    comparar("fn main() -> int { var xs: [int] = []; push(xs, true); 0 }", "scde_push_ty.ray");
-    comparar("fn main() -> int { push(3, 1); 0 }", "scde_push_nonarr.ray");
-    comparar("fn main() -> int { len(3) }", "scde_len_nonarr.ray");
+    // M48.4e: builtins de contenedor retirados → métodos de trait en Rust; el validador auto-alojado los
+    // sigue modelando como builtins de arreglo. Ambos rechazan en el mismo sitio, con distinta redacción.
+    comparar_pos("fn main() -> int { var xs: [int] = []; xs.push(true); 0 }", "scde_push_ty.ray");
+    comparar_pos("fn main() -> int { (3).push(1); 0 }", "scde_push_nonarr.ray");
+    comparar_pos("fn main() -> int { (3).len() }", "scde_len_nonarr.ray");
     // Enums.
     comparar("enum E { A } fn main() -> int { let x = E.C; 0 }", "scde_unkvariant.ray");
     comparar("enum F { C(float) } fn main() -> int { let x = F.C(); 0 }", "scde_enum_arity.ray");
@@ -170,7 +188,7 @@ fn genericos_validos() {
     // Genérica de orden superior (tipo función con T, U).
     comparar("fn ap<T, U>(f: fn(T) -> U, x: T) -> U { f(x) } fn doble(n: int) -> int { n * 2 } fn main() -> int { ap(doble, 21) }", "scg_ap.ray");
     // Genérica sobre arreglos.
-    comparar("fn ultimo<T>(xs: [T]) -> T { xs[len(xs) - 1] } fn main() -> int { ultimo([1, 2, 3]) }", "scg_last.ray");
+    comparar("fn ultimo<T>(xs: [T]) -> T { xs[xs.len() - 1] } fn main() -> int { ultimo([1, 2, 3]) }", "scg_last.ray");
     comparar("fn par<T>(a: T, b: T) -> [T] { [a, b] } fn main() -> int { let xs: [int] = par(10, 20); xs[0] }", "scg_par.ray");
 }
 
@@ -211,8 +229,8 @@ fn prelude_y_try_validos() {
     // El operador `?` sobre Result.
     comparar("fn div(a: int, b: int) -> Result<int, string> { if (b == 0) { Result.Err(\"cero\") } else { Result.Ok(a / b) } } fn ev(a: int, b: int) -> Result<int, string> { let p: int = div(a, b)?; Result.Ok(p + 1) } fn main() -> int { match (ev(6, 2)) { Result.Ok(v) => v, Result.Err(_) => -1 } }", "scp_try.ray");
     // Option del prelude + `?` sobre Option.
-    comparar("fn primero(xs: [int]) -> Option<int> { if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) } } fn main() -> int { match (primero([7])) { Option.Some(v) => v, Option.None => -1 } }", "scp_option.ray");
-    comparar("fn g(xs: [int]) -> Option<int> { if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) } } fn f(xs: [int]) -> Option<int> { let x: int = g(xs)?; Option.Some(x + 1) } fn main() -> int { match (f([3])) { Option.Some(v) => v, Option.None => -1 } }", "scp_tryopt.ray");
+    comparar("fn primero(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } } fn main() -> int { match (primero([7])) { Option.Some(v) => v, Option.None => -1 } }", "scp_option.ray");
+    comparar("fn g(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } } fn f(xs: [int]) -> Option<int> { let x: int = g(xs)?; Option.Some(x + 1) } fn main() -> int { match (f([3])) { Option.Some(v) => v, Option.None => -1 } }", "scp_tryopt.ray");
 }
 
 #[test]
@@ -315,7 +333,7 @@ fn errores_impls_genericos() {
 fn dyn_validos() {
     let f = "trait F { fn area(self) -> int; } struct C { l: int } impl F for C { fn area(self) -> int { self.l * self.l } } ";
     // Coerción concreto→dyn en un arreglo + despacho dinámico.
-    comparar(&format!("{f}fn total(fs: [dyn F]) -> int {{ var s = 0; var i = 0; while (i < len(fs)) {{ s = s + fs[i].area(); i = i + 1; }} s }} fn main() -> int {{ let fs: [dyn F] = [C {{ l: 3 }}, C {{ l: 2 }}]; total(fs) }}"), "scd_coerce.ray");
+    comparar(&format!("{f}fn total(fs: [dyn F]) -> int {{ var s = 0; var i = 0; while (i < fs.len()) {{ s = s + fs[i].area(); i = i + 1; }} s }} fn main() -> int {{ let fs: [dyn F] = [C {{ l: 3 }}, C {{ l: 2 }}]; total(fs) }}"), "scd_coerce.ray");
     // Método por defecto despachado sobre el objeto.
     comparar("trait F { fn area(self) -> int; fn d(self) -> int { self.area() } } struct C { l: int } impl F for C { fn area(self) -> int { self.l } } fn main() -> int { let x: dyn F = C { l: 5 }; x.d() }", "scd_default.ray");
     // dyn multi-trait (dyn A + B).
@@ -396,12 +414,13 @@ fn panic_y_parse() {
     comparar("fn main() -> int { let xs = sort([\"b\", \"a\"]); 0 }", "scpp_sortstr.ray");
     // sort sobre un tipo sin Ord → error de bound (mensaje byte-idéntico a Rust).
     comparar("struct P { v: int } fn main() -> int { let xs = sort([P { v: 1 }]); 0 }", "scpp_sortnoord.ray");
-    // M14.6d: I/O de archivos — read_file/write_file (Result) + exists (bool).
-    comparar("fn main() -> int { match (read_file(\"x\")) { Result.Ok(s) => 0, Result.Err(e) => 1 } }", "scpp_rf.ray");
-    comparar("fn main() -> int { match (write_file(\"x\", \"y\")) { Result.Ok(n) => n, Result.Err(e) => 0 } }", "scpp_wf.ray");
-    comparar("fn main() -> int { if (exists(\"x\")) { 1 } else { 0 } }", "scpp_exists.ray");
-    // Error de tipo en exists (mensaje byte-idéntico a Rust).
-    comparar("fn main() -> int { if (exists(5)) { 1 } else { 0 } }", "scpp_existstype.ray");
+    // M14.6d (M50.1: fs → std/fs; el oráculo es pre-loader → usa los primitivos __x): __read_file/
+    // __write_file (arreglo etiquetado [string]) + __exists (bool).
+    comparar("fn main() -> int { let r = __read_file(\"x\"); if (r[0] == \"ok\") { 0 } else { 1 } }", "scpp_rf.ray");
+    comparar("fn main() -> int { let r = __write_file(\"x\", \"y\"); if (r[0] == \"ok\") { 0 } else { 1 } }", "scpp_wf.ray");
+    comparar("fn main() -> int { if (__exists(\"x\")) { 1 } else { 0 } }", "scpp_exists.ray");
+    // Error de tipo en __exists (mensaje byte-idéntico a Rust).
+    comparar("fn main() -> int { if (__exists(5)) { 1 } else { 0 } }", "scpp_existstype.ray");
 }
 
 /// El test fuerte: los ejemplos reales deben dar el mismo veredicto (`ok`) que Rust.

@@ -137,6 +137,87 @@ pub fn names() -> impl Iterator<Item = &'static str> {
     BUILTINS.iter().map(|b| b.name)
 }
 
+/// Una función **asociada** a un tipo incorporado (M48.1): `Tipo.fn(args)`, un namespace indexado por
+/// el tipo (estilo `Vec::new()` de Rust), en vez de una función libre global. Sustituye a los antiguos
+/// `map_new()`/`channel()`. Como el resultado es un tipo genérico **indeterminado** (Map/Channel), su
+/// tipo lo fija el contexto esperado (como `[]`/`None`); por eso el **tipado** (result-desde-esperado)
+/// vive en el checker y solo la **bajada al opcode** se lee de aquí. La tabla aporta existencia,
+/// aridad, opcode y metadatos (doc/firma) para el LSP.
+pub struct AssocFn {
+    pub type_name: &'static str, // "Map" | "Channel"
+    pub fn_name: &'static str,   // "new" | "bounded"
+    pub arity: usize,            // nº de argumentos (sin receptor: no hay `self`)
+    pub opcode: OpCode,          // el compilador empuja los args y emite este opcode
+    pub doc: &'static str,       // hover del LSP
+    pub sig: &'static str,       // firma legible: hover / signature help
+}
+
+/// Las funciones asociadas a tipos incorporados. `Map.new()`, `Channel.new()`, `Channel.bounded(n)`.
+pub const ASSOC_FNS: &[AssocFn] = &[
+    AssocFn {
+        type_name: "Map", fn_name: "new", arity: 0, opcode: OpCode::MapNew,
+        doc: "Creates an empty `Map<K, V>`. The element types are inferred from the expected type (annotate the binding if indeterminate). Keys must be hashable: int, string, char or bool.",
+        sig: "Map.new() -> Map<K, V>",
+    },
+    AssocFn {
+        type_name: "Channel", fn_name: "new", arity: 0, opcode: OpCode::ChannelNew,
+        doc: "Creates an unbounded typed channel (`Channel<T>`); `send` never blocks. The element type is inferred from the expected type. Only runs on the VM.",
+        sig: "Channel.new() -> Channel<T>",
+    },
+    AssocFn {
+        type_name: "Channel", fn_name: "bounded", arity: 1, opcode: OpCode::ChannelNewBounded,
+        doc: "Creates a bounded channel holding at most `n` values (`0` = synchronous rendezvous); senders block when full. The element type is inferred from the expected type. Only runs on the VM.",
+        sig: "Channel.bounded(n: int) -> Channel<T>",
+    },
+];
+
+/// Busca una función asociada por `(tipo, nombre)`.
+pub fn assoc_lookup(type_name: &str, fn_name: &str) -> Option<&'static AssocFn> {
+    ASSOC_FNS.iter().find(|a| a.type_name == type_name && a.fn_name == fn_name)
+}
+
+/// Las funciones asociadas de un tipo dado (para el completado `Tipo.` del LSP).
+pub fn assoc_for_type(type_name: &str) -> impl Iterator<Item = &'static AssocFn> {
+    ASSOC_FNS.iter().filter(move |a| a.type_name == type_name)
+}
+
+/// ¿El builtin, usado como **método** (`recv.f(...)`), toma argumentos más allá del receptor?
+/// (M45b: para el snippet de completion — `push($0)` con args, `len()` sin ellos.) Los builtins son
+/// ad-hoc polimórficos y muchos no tienen `signature()`, así que se lista el conjunto **sin args**.
+pub fn method_takes_args(name: &str) -> bool {
+    const SIN_ARGS: &[&str] = &[
+        "len", "trim", "chars", "reverse", "keys", "values", "to_upper", "to_lower", "to_string",
+        "to_bytes",
+    ];
+    !SIN_ARGS.contains(&name)
+}
+
+/// Builtins invocables como **método** (UFCS `recv.f(...)`) sobre un tipo de la categoría dada,
+/// para el completion de miembros del LSP (M45). Los builtins son ad-hoc polimórficos (no tienen
+/// una firma raylang uniforme que permita inferir "aplica a este tipo"), así que se listan a mano
+/// por categoría. Solo los de **cara al usuario** con receptor claro; las operaciones de orden
+/// superior (`map`/`filter`/`fold`/`sort`) y los envoltorios (`pop`/`position`/`get`/`remove`/
+/// `index_of`) son funciones del **prelude**, no builtins, y las aporta la enumeración UFCS.
+/// Categorías: `string`/`bytes`/`char`/`int`/`float`/`bool`/`array`/`map`. Tras M48.4e-3 varios de
+/// estos nombres (len/push/trim/split/…) ya NO son builtins de función libre sino **métodos de los
+/// traits del prelude** (`Len`/`Push`/`StrOps`/`MapOps`/…); el test-guardián
+/// `methods_for_solo_nombra_builtins_reales` verifica que cada nombre sea un builtin O un método
+/// conocido con `signature()`.
+pub fn methods_for(category: &str) -> &'static [&'static str] {
+    match category {
+        "string" => &[
+            "len", "trim", "split", "contains", "replace", "chars", "starts_with", "ends_with",
+            "to_upper", "to_lower", "substring", "repeat", "join", "to_bytes", "to_string",
+        ],
+        "bytes" => &["len", "sub_bytes", "contains", "to_string"],
+        "char" => &["char_code", "to_string"],
+        "int" | "float" | "bool" => &["to_string"],
+        "array" => &["len", "push", "reverse", "contains", "join"],
+        "map" => &["len", "insert", "contains_key", "keys", "values"],
+        _ => &[],
+    }
+}
+
 /// Firma legible de un builtin para el **signature help** del LSP: `(params, retorno)`. Cubre los
 /// builtins de cara al usuario con **firma fija**; los ad-hoc polimórficos (int|float, `min`/`max`) se
 /// muestran con un tipo representativo. `None` para los que no tienen firma fija sensata (`print`/`len`
@@ -156,6 +237,110 @@ pub fn signature(name: &str) -> Option<(Vec<&'static str>, &'static str)> {
         "sleep" => (vec!["ms: int"], "unit"),
         "random_int" => (vec!["n: int"], "int"),
         "panic" => (vec!["msg: string"], "unit"),
+        // Builtins-método (M46a): firma con el receptor como primer parámetro (el completion de
+        // miembros lo recorta para mostrar solo los argumentos). Tipos genéricos como texto de ayuda.
+        "len" => (vec!["c"], "int"),
+        "trim" => (vec!["s: string"], "string"),
+        "split" => (vec!["s: string", "sep: string"], "[string]"),
+        "contains" => (vec!["c", "item"], "bool"), // ad-hoc: string (subcadena) o arreglo (pertenencia)
+        "replace" => (vec!["s: string", "from: string", "to: string"], "string"),
+        "chars" => (vec!["s: string"], "[char]"),
+        "starts_with" | "ends_with" => (vec!["s: string", "affix: string"], "bool"),
+        "to_upper" | "to_lower" => (vec!["s: string"], "string"),
+        "substring" => (vec!["s: string", "i: int", "j: int"], "string"),
+        "repeat" => (vec!["s: string", "n: int"], "string"),
+        "join" => (vec!["a: [string]", "sep: string"], "string"),
+        "to_bytes" => (vec!["s: string"], "bytes"),
+        "to_string" => (vec!["value"], "string"),
+        "sub_bytes" => (vec!["b: bytes", "i: int", "j: int"], "bytes"),
+        "char_code" => (vec!["c: char"], "int"),
+        "push" => (vec!["arr: [T]", "value: T"], "unit"),
+        "reverse" => (vec!["arr: [T]"], "[T]"),
+        "insert" => (vec!["m: Map<K, V>", "key: K", "value: V"], "unit"),
+        "contains_key" => (vec!["m: Map<K, V>", "key: K"], "bool"),
+        "keys" => (vec!["m: Map<K, V>"], "[K]"),
+        "values" => (vec!["m: Map<K, V>"], "[V]"),
+        _ => return None,
+    })
+}
+
+/// Documentación (en inglés, cara al usuario) de un builtin, para el **hover** y el **completion**
+/// del LSP. Los builtins viven en esta tabla Rust —no hay fuente raylang donde poner `///`—, así
+/// que sus docs son metadatos aquí, como `signature()`. Cubre todos los de cara al usuario; `None`
+/// para los primitivos internos `__*`.
+pub fn doc(name: &str) -> Option<&'static str> {
+    Some(match name {
+        // --- Núcleo / salida ---
+        "print" => "Prints a value to stdout followed by a newline. Accepts any printable value (int, float, bool, string, char, arrays, structs/enums with Show).",
+        "eprint" => "Prints a value to stderr followed by a newline. Same printable values as `print`.",
+        "panic" => "Aborts the program with the given message and a non-zero exit code, reporting the call position. Use for unreachable code; prefer `Result`/`Option` for expected failures.",
+        "to_string" => "Converts an int, float, bool, char or string to its string representation (same formatting as `print`).",
+        "len" => "Returns the length of a collection: characters of a string, elements of an array, entries of a Map, or octets of a bytes value.",
+        "push" => "Appends a value to the end of an array, in place (arrays have reference semantics).",
+        "args" => "Returns the command-line arguments passed to the program (after the file path) as `[string]`.",
+        // --- Strings ---
+        "trim" => "Returns a copy of the string with leading and trailing whitespace removed.",
+        "split" => "Splits a string by a separator and returns the parts as `[string]`.",
+        "contains" => "For strings: whether the substring occurs. For arrays: whether the value is an element (structural equality).",
+        "replace" => "Returns a copy of the string with every occurrence of a substring replaced by another.",
+        "chars" => "Returns the characters of a string as `[char]`.",
+        "char_code" => "Returns the Unicode code point of a char as an int.",
+        "starts_with" => "Whether the string starts with the given prefix.",
+        "ends_with" => "Whether the string ends with the given suffix.",
+        "to_upper" => "Returns the string converted to uppercase.",
+        "to_lower" => "Returns the string converted to lowercase.",
+        "substring" => "Returns the substring `[i, j)` by character index. Out-of-range indices are clamped, so it never fails at runtime.",
+        "repeat" => "Returns the string repeated `n` times (`n <= 0` gives the empty string).",
+        "join" => "With `(array, sep)`: joins a `[string]` into one string using the separator. With `(task)`: blocks until the task finishes and returns its value (re-raises if it failed).",
+        "reverse" => "Returns a new array with the elements in reverse order.",
+        // --- bytes ---
+        "to_bytes" => "Encodes a string as UTF-8 and returns it as `bytes`.",
+        "bytes_of" => "Builds a `bytes` value from an `[int]` of octets (each 0–255).",
+        "sub_bytes" => "Returns the byte slice `[i, j)` by octet index. Out-of-range indices are clamped, so it never fails at runtime.",
+        // --- Crypto (via ring) ---
+        "sha256" => "Computes the SHA-256 digest of a bytes value; returns 32 bytes.",
+        "sha512" => "Computes the SHA-512 digest of a bytes value; returns 64 bytes.",
+        "sha1" => "Computes the SHA-1 digest of a bytes value; returns 20 bytes. Legacy algorithm: needed by some protocols (e.g. WebSocket), avoid for new designs.",
+        "hmac_sha256" => "Computes the HMAC-SHA-256 of a message with the given key: `hmac_sha256(key: bytes, msg: bytes) -> bytes` (32 bytes).",
+        "ed25519_verify" => "Verifies an Ed25519 signature: `ed25519_verify(pubkey: bytes, msg: bytes, sig: bytes) -> bool`.",
+        // --- Map ---
+        "insert" => "Inserts or updates a key/value pair in a Map, in place.",
+        "contains_key" => "Whether the Map contains the given key.",
+        "keys" => "Returns the keys of a Map as a sorted array (deterministic order).",
+        "values" => "Returns the values of a Map, in the same order as `keys()`.",
+        // --- Matemáticas ---
+        "sqrt" => "Square root of a float.",
+        "sin" => "Sine of a float (radians).",
+        "cos" => "Cosine of a float (radians).",
+        "tan" => "Tangent of a float (radians).",
+        "ln" => "Natural logarithm (base e) of a float.",
+        "log10" => "Base-10 logarithm of a float.",
+        "exp" => "e raised to the given float power.",
+        "floor" => "Largest integer value not greater than the float, as float.",
+        "ceil" => "Smallest integer value not less than the float, as float.",
+        "round" => "Nearest integer value to the float, as float (half away from zero).",
+        "pow" => "Raises `base` to the power `exp` (floats).",
+        "abs" => "Absolute value. Works on int (returns int) and float (returns float).",
+        "min" => "The smaller of two numbers. Works on two ints or two floats.",
+        "max" => "The larger of two numbers. Works on two ints or two floats.",
+        "pi" => "The constant π as a float.",
+        "e" => "The constant e (Euler's number) as a float.",
+        // --- Tiempo / azar ---
+        "now" => "Current wall-clock time in milliseconds since the Unix epoch.",
+        "monotonic" => "Monotonic clock reading in milliseconds; use for measuring durations (never goes backwards).",
+        "sleep" => "Suspends the current fiber (or the program) for the given number of milliseconds.",
+        "random" => "A pseudo-random float in `[0, 1)`.",
+        "random_int" => "A pseudo-random int in `[0, n)`.",
+        // --- Concurrencia (VM) ---
+        "spawn" => "Starts a new concurrent task running the given closure and returns its `Task<T>` handle. Use `join(task)` to wait for its result. Requires the VM engine.",
+        "scope" => "Runs the closure as a structured-concurrency scope: on return it joins every task spawned inside, cancelling siblings and re-raising the first failure.",
+        "send" => "Sends a value into a channel. Blocks if the channel is bounded and full (backpressure).",
+        "recv" => "Receives from a channel: blocks while it is empty and open; returns `None` once it is closed and drained.",
+        "select" => "Blocks until one of the channels in the array is ready to receive and returns its index (lowest ready index; deterministic). Follow with `recv(chs[i])`.",
+        "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`). For a file handle: closes the file.",
+        // --- I/O ---
+        "__exists" => "Whether a file or directory exists at the given path.",
+        "__local_port" => "Returns the local port a listener socket is bound to (useful with port 0 = OS-assigned).",
         _ => return None,
     })
 }
@@ -1045,29 +1230,8 @@ fn mathf_check(a: &[Type], nombre: &str) -> Result<Type, BuiltinError> {
     Ok(Type::Float)
 }
 
-/// Regla de tipado de un builtin numérico **ad-hoc polimórfico** unario (`abs`): `int -> int` o
-/// `float -> float`. Conserva el tipo numérico del argumento.
-fn numeric_unary_check(a: &[Type], nombre: &str) -> Result<Type, BuiltinError> {
-    arity(a, 1, nombre, "")?;
-    match a[0] {
-        Type::Int => Ok(Type::Int),
-        Type::Float => Ok(Type::Float),
-        _ => Err((Some(0), format!("{} espera un int o un float, no {}", nombre, a[0]))),
-    }
-}
-
-/// Regla de tipado de un builtin numérico ad-hoc polimórfico binario (`min`/`max`): ambos
-/// argumentos del mismo tipo numérico (`int` o `float`); devuelve ese tipo.
-fn numeric_binary_check(a: &[Type], nombre: &str) -> Result<Type, BuiltinError> {
-    arity(a, 2, nombre, "")?;
-    if !matches!(a[0], Type::Int | Type::Float) {
-        return Err((Some(0), format!("{} espera un int o un float, no {}", nombre, a[0])));
-    }
-    if a[1] != a[0] {
-        return Err((Some(1), format!("{}: ambos argumentos deben ser del mismo tipo ({} vs {})", nombre, a[0], a[1])));
-    }
-    Ok(a[0].clone())
-}
+// M49.1b: `numeric_unary_check`/`numeric_binary_check` (regla ad-hoc de abs/min/max) se eliminaron al
+// mover esas funciones a `std/math` (puras en raylang, tipadas por sus bounds `Signed`/`Ord`).
 
 /// La tabla. El orden no importa (la búsqueda es por nombre).
 static BUILTINS: &[Builtin] = &[
@@ -1077,23 +1241,24 @@ static BUILTINS: &[Builtin] = &[
         if !printable(&a[0]) { return Err((Some(0), format!("print no puede imprimir un {}", a[0]))); }
         Ok(Type::Unit)
     } },
-    // len(a) -> int: longitud de un arreglo, un string (M11.1a: nº de caracteres) o un Map (M13.1).
-    Builtin { name: "len", opcode: OpCode::Len, check: |a| {
-        arity(a, 1, "len", "")?;
+    // M48.4: `__len` — primitivo interno de `len`, al que baja el trait `Len` (`impl Len for [T]` etc.
+    // → `__len(self)`). Mismo opcode que `len`; oculto (`__`). Sobrevive al retiro de `len` (M48.4e).
+    Builtin { name: "__len", opcode: OpCode::Len, check: |a| {
+        arity(a, 1, "__len", "")?;
         if !matches!(a[0], Type::Array(_) | Type::String | Type::Map(_, _) | Type::Bytes) {
-            return Err((Some(0), format!("len espera un arreglo, un string, un Map o bytes, no {}", a[0])));
+            return Err((Some(0), format!("__len espera un arreglo, un string, un Map o bytes, no {}", a[0])));
         }
         Ok(Type::Int)
     } },
-    // push(a, x) -> unit: agrega x al final del arreglo a (lo muta).
-    Builtin { name: "push", opcode: OpCode::Push, check: |a| {
-        arity(a, 2, "push", " (arreglo, valor)")?;
+    // M48.4b: `__push` — primitivo interno de `push`, al que baja `impl<T> Push<T> for [T]`.
+    Builtin { name: "__push", opcode: OpCode::Push, check: |a| {
+        arity(a, 2, "__push", " (arreglo, valor)")?;
         let elem = match &a[0] {
             Type::Array(e) => (**e).clone(),
-            other => return Err((Some(0), format!("push espera un arreglo como primer argumento, no {}", other))),
+            other => return Err((Some(0), format!("__push espera un arreglo como primer argumento, no {}", other))),
         };
         if a[1] != elem {
-            return Err((Some(1), format!("push: el arreglo es de {} pero se empuja {}", elem, a[1])));
+            return Err((Some(1), format!("__push: el arreglo es de {} pero se empuja {}", elem, a[1])));
         }
         Ok(Type::Unit)
     } },
@@ -1105,47 +1270,20 @@ static BUILTINS: &[Builtin] = &[
         }
         Ok(Type::String)
     } },
-    // trim(s) -> string (M11.1b): quita el espacio en blanco de los extremos.
-    Builtin { name: "trim", opcode: OpCode::Trim, check: |a| {
-        arity(a, 1, "trim", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("trim espera un string, no {}", a[0]))); }
-        Ok(Type::String)
-    } },
-    // split(s, sep) -> [string] (M11.1b): parte s por el separador sep.
-    Builtin { name: "split", opcode: OpCode::Split, check: |a| {
-        arity(a, 2, "split", " (string, separador)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("split espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("split espera un string como separador, no {}", a[1]))); }
-        Ok(Type::Array(Box::new(Type::String)))
-    } },
-    // contains(x, y) -> bool: ad-hoc polimórfico. String: ¿s contiene la subcadena sub? (M11.4a).
-    // Arreglo: ¿el arreglo contiene el elemento x (por igualdad estructural)? (M11.7b).
-    Builtin { name: "contains", opcode: OpCode::Contains, check: |a| {
-        arity(a, 2, "contains", " (string/arreglo, valor)")?;
+    // M48.4b: `__contains` — primitivo interno de `contains`, al que bajan los impls de `Contains<T>`
+    // (subcadena en string, pertenencia en arreglo). Bytes queda fuera (el builtin tampoco lo cubre).
+    Builtin { name: "__contains", opcode: OpCode::Contains, check: |a| {
+        arity(a, 2, "__contains", " (string/arreglo, valor)")?;
         match &a[0] {
             Type::String => {
-                if a[1] != Type::String { return Err((Some(1), format!("contains espera un string como subcadena, no {}", a[1]))); }
+                if a[1] != Type::String { return Err((Some(1), format!("__contains espera un string como subcadena, no {}", a[1]))); }
             }
             Type::Array(elem) => {
-                if a[1] != **elem { return Err((Some(1), format!("contains: el arreglo es de {} pero se busca {}", elem, a[1]))); }
+                if a[1] != **elem { return Err((Some(1), format!("__contains: el arreglo es de {} pero se busca {}", elem, a[1]))); }
             }
-            _ => return Err((Some(0), format!("contains espera un string o un arreglo, no {}", a[0]))),
+            _ => return Err((Some(0), format!("__contains espera un string o un arreglo, no {}", a[0]))),
         }
         Ok(Type::Bool)
-    } },
-    // replace(s, de, a) -> string (M11.4a): reemplaza todas las ocurrencias de `de` por `a`.
-    Builtin { name: "replace", opcode: OpCode::Replace, check: |a| {
-        arity(a, 3, "replace", " (string, de, a)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("replace espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("replace espera un string en 'de', no {}", a[1]))); }
-        if a[2] != Type::String { return Err((Some(2), format!("replace espera un string en 'a', no {}", a[2]))); }
-        Ok(Type::String)
-    } },
-    // chars(s) -> [char] (M11.4c-2): los caracteres del string, en orden.
-    Builtin { name: "chars", opcode: OpCode::Chars, check: |a| {
-        arity(a, 1, "chars", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("chars espera un string, no {}", a[0]))); }
-        Ok(Type::Array(Box::new(Type::Char)))
     } },
     // char_code(c) -> int (M40.3a): el code point Unicode del carácter. Habilita hashear strings/chars
     // en raylang (para `Hash`) y ordenar por code point.
@@ -1154,30 +1292,24 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Char { return Err((Some(0), format!("char_code espera un char, no {}", a[0]))); }
         Ok(Type::Int)
     } },
-    // to_bytes(s) -> bytes (M16.1b): los octetos UTF-8 del string.
-    Builtin { name: "to_bytes", opcode: OpCode::ToBytes, check: |a| {
-        arity(a, 1, "to_bytes", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("to_bytes espera un string, no {}", a[0]))); }
-        Ok(Type::Bytes)
-    } },
     // M43: hashes de producción vía `ring` (bytes -> bytes). Ver el bloque de helpers arriba.
-    Builtin { name: "sha256", opcode: OpCode::Sha256, check: |a| {
+    Builtin { name: "__sha256", opcode: OpCode::Sha256, check: |a| {
         arity(a, 1, "sha256", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("sha256 espera bytes, no {}", a[0]))); }
         Ok(Type::Bytes)
     } },
-    Builtin { name: "sha512", opcode: OpCode::Sha512, check: |a| {
+    Builtin { name: "__sha512", opcode: OpCode::Sha512, check: |a| {
         arity(a, 1, "sha512", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("sha512 espera bytes, no {}", a[0]))); }
         Ok(Type::Bytes)
     } },
-    Builtin { name: "sha1", opcode: OpCode::Sha1, check: |a| {
+    Builtin { name: "__sha1", opcode: OpCode::Sha1, check: |a| {
         arity(a, 1, "sha1", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("sha1 espera bytes, no {}", a[0]))); }
         Ok(Type::Bytes)
     } },
     // M43.2: HMAC-SHA256 (clave, mensaje) -> etiqueta de 32 octetos.
-    Builtin { name: "hmac_sha256", opcode: OpCode::HmacSha256, check: |a| {
+    Builtin { name: "__hmac_sha256", opcode: OpCode::HmacSha256, check: |a| {
         arity(a, 2, "hmac_sha256", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("hmac_sha256 espera bytes (clave), no {}", a[0]))); }
         if a[1] != Type::Bytes { return Err((Some(1), format!("hmac_sha256 espera bytes (mensaje), no {}", a[1]))); }
@@ -1196,7 +1328,7 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::Bytes { return Err((Some(1), format!("ed25519_sign espera bytes (mensaje), no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
-    Builtin { name: "ed25519_verify", opcode: OpCode::Ed25519Verify, check: |a| {
+    Builtin { name: "__ed25519_verify", opcode: OpCode::Ed25519Verify, check: |a| {
         arity(a, 3, "ed25519_verify", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("ed25519_verify espera bytes (clave pública), no {}", a[0]))); }
         if a[1] != Type::Bytes { return Err((Some(1), format!("ed25519_verify espera bytes (mensaje), no {}", a[1]))); }
@@ -1252,47 +1384,76 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::Bytes { return Err((Some(1), format!("__socket_write_bytes espera bytes (los datos), no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
-    // starts_with(s, pre) -> bool (M11.7a): ¿`s` empieza con `pre`?
-    Builtin { name: "starts_with", opcode: OpCode::StartsWith, check: |a| {
-        arity(a, 2, "starts_with", " (string, prefijo)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("starts_with espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("starts_with espera un string como prefijo, no {}", a[1]))); }
+    // M48.4e-1: primitivos internos de `StrOps`/`BytesOps` (mismos opcodes que los builtins públicos,
+    // ocultos). Los cuerpos de sus impls (M48.4d) los llaman; sobreviven al retiro de los públicos (e-3).
+    Builtin { name: "__trim", opcode: OpCode::Trim, check: |a| {
+        arity(a, 1, "__trim", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__trim espera un string, no {}", a[0]))); }
+        Ok(Type::String)
+    } },
+    Builtin { name: "__split", opcode: OpCode::Split, check: |a| {
+        arity(a, 2, "__split", " (string, separador)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__split espera un string, no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__split espera un string como separador, no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__replace", opcode: OpCode::Replace, check: |a| {
+        arity(a, 3, "__replace", " (string, de, a)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__replace espera un string, no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__replace espera un string en 'de', no {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__replace espera un string en 'a', no {}", a[2]))); }
+        Ok(Type::String)
+    } },
+    Builtin { name: "__chars", opcode: OpCode::Chars, check: |a| {
+        arity(a, 1, "__chars", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__chars espera un string, no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Char)))
+    } },
+    Builtin { name: "__starts_with", opcode: OpCode::StartsWith, check: |a| {
+        arity(a, 2, "__starts_with", " (string, prefijo)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__starts_with espera un string, no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__starts_with espera un string como prefijo, no {}", a[1]))); }
         Ok(Type::Bool)
     } },
-    // ends_with(s, suf) -> bool (M11.7a): ¿`s` termina con `suf`?
-    Builtin { name: "ends_with", opcode: OpCode::EndsWith, check: |a| {
-        arity(a, 2, "ends_with", " (string, sufijo)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("ends_with espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("ends_with espera un string como sufijo, no {}", a[1]))); }
+    Builtin { name: "__ends_with", opcode: OpCode::EndsWith, check: |a| {
+        arity(a, 2, "__ends_with", " (string, sufijo)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__ends_with espera un string, no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__ends_with espera un string como sufijo, no {}", a[1]))); }
         Ok(Type::Bool)
     } },
-    // to_upper(s) -> string (M11.7a): en MAYÚSCULAS.
-    Builtin { name: "to_upper", opcode: OpCode::ToUpper, check: |a| {
-        arity(a, 1, "to_upper", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("to_upper espera un string, no {}", a[0]))); }
+    Builtin { name: "__to_upper", opcode: OpCode::ToUpper, check: |a| {
+        arity(a, 1, "__to_upper", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__to_upper espera un string, no {}", a[0]))); }
         Ok(Type::String)
     } },
-    // to_lower(s) -> string (M11.7a): en minúsculas.
-    Builtin { name: "to_lower", opcode: OpCode::ToLower, check: |a| {
-        arity(a, 1, "to_lower", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("to_lower espera un string, no {}", a[0]))); }
+    Builtin { name: "__to_lower", opcode: OpCode::ToLower, check: |a| {
+        arity(a, 1, "__to_lower", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__to_lower espera un string, no {}", a[0]))); }
         Ok(Type::String)
     } },
-    // substring(s, i, j) -> string (M11.7a): subcadena [i, j) por índice de carácter (con clamp).
-    Builtin { name: "substring", opcode: OpCode::Substring, check: |a| {
-        arity(a, 3, "substring", " (string, inicio, fin)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("substring espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("substring espera un int como inicio, no {}", a[1]))); }
-        if a[2] != Type::Int { return Err((Some(2), format!("substring espera un int como fin, no {}", a[2]))); }
+    Builtin { name: "__substring", opcode: OpCode::Substring, check: |a| {
+        arity(a, 3, "__substring", " (string, inicio, fin)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__substring espera un string, no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__substring espera un int como inicio, no {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__substring espera un int como fin, no {}", a[2]))); }
         Ok(Type::String)
     } },
-    // sub_bytes(b, i, j) -> bytes (M19.2): sub-secuencia [i, j) por índice de octeto (con clamp). El
-    // análogo de substring para datos binarios; corta cabeceras/cuerpo de HTTP sobre bytes.
-    Builtin { name: "sub_bytes", opcode: OpCode::SubBytes, check: |a| {
-        arity(a, 3, "sub_bytes", " (bytes, inicio, fin)")?;
-        if a[0] != Type::Bytes { return Err((Some(0), format!("sub_bytes espera bytes como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("sub_bytes espera un int como inicio, no {}", a[1]))); }
-        if a[2] != Type::Int { return Err((Some(2), format!("sub_bytes espera un int como fin, no {}", a[2]))); }
+    Builtin { name: "__repeat", opcode: OpCode::Repeat, check: |a| {
+        arity(a, 2, "__repeat", " (string, veces)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__repeat espera un string, no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__repeat espera un int como nº de veces, no {}", a[1]))); }
+        Ok(Type::String)
+    } },
+    Builtin { name: "__to_bytes", opcode: OpCode::ToBytes, check: |a| {
+        arity(a, 1, "__to_bytes", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__to_bytes espera un string, no {}", a[0]))); }
+        Ok(Type::Bytes)
+    } },
+    Builtin { name: "__sub_bytes", opcode: OpCode::SubBytes, check: |a| {
+        arity(a, 3, "__sub_bytes", " (bytes, inicio, fin)")?;
+        if a[0] != Type::Bytes { return Err((Some(0), format!("__sub_bytes espera bytes, no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__sub_bytes espera un int como inicio, no {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__sub_bytes espera un int como fin, no {}", a[2]))); }
         Ok(Type::Bytes)
     } },
     // bytes_of(xs) -> bytes (M19.3c): construye bytes a partir de un [int] (cada elemento se trunca a
@@ -1304,13 +1465,6 @@ static BUILTINS: &[Builtin] = &[
             Type::Array(el) if **el == Type::Int => Ok(Type::Bytes),
             _ => Err((Some(0), format!("bytes_of espera un [int], no {}", a[0]))),
         }
-    } },
-    // repeat(s, n) -> string (M11.7a): `s` repetido `n` veces (`n<=0` → "").
-    Builtin { name: "repeat", opcode: OpCode::Repeat, check: |a| {
-        arity(a, 2, "repeat", " (string, veces)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("repeat espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("repeat espera un int como nº de veces, no {}", a[1]))); }
-        Ok(Type::String)
     } },
     // __index_of(s, sub) -> [int] (M11.7a): [] o [i] (índice de carácter). El prelude → Option<int>.
     Builtin { name: "__index_of", opcode: OpCode::IndexOf, check: |a| {
@@ -1338,12 +1492,12 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::String { return Err((Some(1), format!("join espera un string como separador, no {}", a[1]))); }
         Ok(Type::String)
     } },
-    // reverse(a) -> [T] (M11.7b): arreglo nuevo con los elementos en orden inverso.
-    Builtin { name: "reverse", opcode: OpCode::Reverse, check: |a| {
-        arity(a, 1, "reverse", "")?;
+    // M48.4b: `__reverse` — primitivo interno de `reverse`, al que baja `impl<T> Reverse for [T]`.
+    Builtin { name: "__reverse", opcode: OpCode::Reverse, check: |a| {
+        arity(a, 1, "__reverse", "")?;
         match &a[0] {
             Type::Array(_) => Ok(a[0].clone()),
-            other => Err((Some(0), format!("reverse espera un arreglo, no {}", other))),
+            other => Err((Some(0), format!("__reverse espera un arreglo, no {}", other))),
         }
     } },
     // __pop(a) -> [T] (M11.7b): muta `a` quitando el último; [] si vacío, [x] si no. Prelude → Option<T>.
@@ -1369,10 +1523,8 @@ static BUILTINS: &[Builtin] = &[
     // map_new() -> Map<K,V>: mapa vacío. Su tipo es INDETERMINADO (como `[]`/`None`): lo fija el
     // tipo esperado en `check_expr_expected`. Por eso esta regla (sin tipo esperado) es un error;
     // el camino normal lo intercepta antes de llegar aquí.
-    Builtin { name: "map_new", opcode: OpCode::MapNew, check: |a| {
-        arity(a, 0, "map_new", "")?;
-        Err((None, "no se puede inferir el tipo de map_new; anótalo, p. ej. 'let m: Map<string, int> = map_new()'".into()))
-    } },
+    // `Map.new()` (M48.1): construir un Map vacío es una **función asociada** (`ASSOC_FNS`), no un
+    // builtin de función libre. El opcode `MapNew` sigue; lo emite el compilador para la asociada.
 
     // --- Concurrencia: CSP sobre la VM (M12.1). Solo la VM las ejecuta; el intérprete da error limpio. ---
     // spawn(f: fn() -> T) -> Task<T>: lanza f (sin parámetros) como green thread y devuelve su handle
@@ -1404,18 +1556,9 @@ static BUILTINS: &[Builtin] = &[
             other => Err((Some(0), format!("scope espera una función, no {}", other))),
         }
     } },
-    // channel() / channel(n) -> Channel<T>: crea un canal (no acotado, o acotado a la capacidad n: int ≥ 0,
-    // M12.2). Indeterminado en el tipo de elemento (como map_new): el camino con tipo esperado lo
-    // intercepta; aquí solo validamos la aridad/capacidad y damos el error de inferencia.
-    Builtin { name: "channel", opcode: OpCode::ChannelNew, check: |a| {
-        if a.len() > 1 {
-            return Err((Some(1), "channel recibe a lo sumo un argumento (la capacidad)".into()));
-        }
-        if matches!(a.first(), Some(t) if !matches!(t, Type::Int)) {
-            return Err((Some(0), format!("la capacidad de channel debe ser int, no {}", a[0])));
-        }
-        Err((None, "no se puede inferir el tipo de channel; anótalo, p. ej. 'let c: Channel<int> = channel()'".into()))
-    } },
+    // `Channel.new()` / `Channel.bounded(n)` (M48.1): crear un canal es una **función asociada**
+    // (`ASSOC_FNS`), no un builtin `channel`. Los opcodes `ChannelNew`/`ChannelNewBounded` siguen; los
+    // emite el compilador para la asociada (no acotado / acotado a la capacidad `n: int ≥ 0`).
     // send(ch, v) -> unit: envía v por el canal ch.
     Builtin { name: "send", opcode: OpCode::ChanSend, check: |a| {
         arity(a, 2, "send", " (canal, valor)")?;
@@ -1439,26 +1582,39 @@ static BUILTINS: &[Builtin] = &[
     // (int, M11.8) → int. Una sola entrada `close` (más abajo) lo cubre; NO se duplica aquí (raylang no
     // tiene sobrecarga). El canal se cierra con `close(ch)` igual que un handle con `close(h)`.
 
-    // insert(m, k, v) -> unit: inserta/actualiza la clave k con el valor v en el mapa m (lo muta).
-    Builtin { name: "insert", opcode: OpCode::MapInsert, check: |a| {
-        arity(a, 3, "insert", " (mapa, clave, valor)")?;
+    // M48.4c: primitivos internos de los métodos de `MapOps` (mismos opcodes que los públicos, ocultos).
+    Builtin { name: "__insert", opcode: OpCode::MapInsert, check: |a| {
+        arity(a, 3, "__insert", " (mapa, clave, valor)")?;
         let (kt, vt) = match &a[0] {
             Type::Map(k, v) => ((**k).clone(), (**v).clone()),
-            other => return Err((Some(0), format!("insert espera un Map como primer argumento, no {}", other))),
+            other => return Err((Some(0), format!("__insert espera un Map como primer argumento, no {}", other))),
         };
-        if a[1] != kt { return Err((Some(1), format!("insert: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
-        if a[2] != vt { return Err((Some(2), format!("insert: el valor del Map es {} pero se pasó {}", vt, a[2]))); }
+        if a[1] != kt { return Err((Some(1), format!("__insert: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
+        if a[2] != vt { return Err((Some(2), format!("__insert: el valor del Map es {} pero se pasó {}", vt, a[2]))); }
         Ok(Type::Unit)
     } },
-    // contains_key(m, k) -> bool: ¿está la clave k en el mapa m?
-    Builtin { name: "contains_key", opcode: OpCode::MapContainsKey, check: |a| {
-        arity(a, 2, "contains_key", " (mapa, clave)")?;
+    Builtin { name: "__contains_key", opcode: OpCode::MapContainsKey, check: |a| {
+        arity(a, 2, "__contains_key", " (mapa, clave)")?;
         let kt = match &a[0] {
             Type::Map(k, _) => (**k).clone(),
-            other => return Err((Some(0), format!("contains_key espera un Map como primer argumento, no {}", other))),
+            other => return Err((Some(0), format!("__contains_key espera un Map como primer argumento, no {}", other))),
         };
-        if a[1] != kt { return Err((Some(1), format!("contains_key: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
+        if a[1] != kt { return Err((Some(1), format!("__contains_key: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
         Ok(Type::Bool)
+    } },
+    Builtin { name: "__keys", opcode: OpCode::MapKeys, check: |a| {
+        arity(a, 1, "__keys", " (mapa)")?;
+        match &a[0] {
+            Type::Map(k, _) => Ok(Type::Array(k.clone())),
+            other => Err((Some(0), format!("__keys espera un Map, no {}", other))),
+        }
+    } },
+    Builtin { name: "__values", opcode: OpCode::MapValues, check: |a| {
+        arity(a, 1, "__values", " (mapa)")?;
+        match &a[0] {
+            Type::Map(_, v) => Ok(Type::Array(v.clone())),
+            other => Err((Some(0), format!("__values espera un Map, no {}", other))),
+        }
     } },
     // __map_get(m, k) -> [V]: [] si la clave no está, [v] si está. El prelude → Option<V>.
     Builtin { name: "__map_get", opcode: OpCode::MapGet, check: |a| {
@@ -1480,63 +1636,41 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != kt { return Err((Some(1), format!("__map_remove: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
         Ok(Type::Array(Box::new(vt)))
     } },
-    // keys(m) -> [K] (M13.1b): las claves del mapa, ordenadas (determinista).
-    Builtin { name: "keys", opcode: OpCode::MapKeys, check: |a| {
-        arity(a, 1, "keys", " (mapa)")?;
-        match &a[0] {
-            Type::Map(k, _) => Ok(Type::Array(k.clone())),
-            other => Err((Some(0), format!("keys espera un Map, no {}", other))),
-        }
-    } },
-    // values(m) -> [V] (M13.1b): los valores, en orden de clave ordenada (casa con keys).
-    Builtin { name: "values", opcode: OpCode::MapValues, check: |a| {
-        arity(a, 1, "values", " (mapa)")?;
-        match &a[0] {
-            Type::Map(_, v) => Ok(Type::Array(v.clone())),
-            other => Err((Some(0), format!("values espera un Map, no {}", other))),
-        }
-    } },
-
     // --- Matemáticas (M15.1a) ---
     // Funciones unarias float -> float, todas bajo el opcode parametrizado MathF(MathFn).
-    Builtin { name: "sqrt",  opcode: OpCode::MathF(MathFn::Sqrt),  check: |a| mathf_check(a, "sqrt") },
-    Builtin { name: "sin",   opcode: OpCode::MathF(MathFn::Sin),   check: |a| mathf_check(a, "sin") },
-    Builtin { name: "cos",   opcode: OpCode::MathF(MathFn::Cos),   check: |a| mathf_check(a, "cos") },
-    Builtin { name: "tan",   opcode: OpCode::MathF(MathFn::Tan),   check: |a| mathf_check(a, "tan") },
-    Builtin { name: "ln",    opcode: OpCode::MathF(MathFn::Ln),    check: |a| mathf_check(a, "ln") },
-    Builtin { name: "log10", opcode: OpCode::MathF(MathFn::Log10), check: |a| mathf_check(a, "log10") },
-    Builtin { name: "exp",   opcode: OpCode::MathF(MathFn::Exp),   check: |a| mathf_check(a, "exp") },
-    Builtin { name: "floor", opcode: OpCode::MathF(MathFn::Floor), check: |a| mathf_check(a, "floor") },
-    Builtin { name: "ceil",  opcode: OpCode::MathF(MathFn::Ceil),  check: |a| mathf_check(a, "ceil") },
-    Builtin { name: "round", opcode: OpCode::MathF(MathFn::Round), check: |a| mathf_check(a, "round") },
+    Builtin { name: "__sqrt",  opcode: OpCode::MathF(MathFn::Sqrt),  check: |a| mathf_check(a, "sqrt") },
+    Builtin { name: "__sin",   opcode: OpCode::MathF(MathFn::Sin),   check: |a| mathf_check(a, "sin") },
+    Builtin { name: "__cos",   opcode: OpCode::MathF(MathFn::Cos),   check: |a| mathf_check(a, "cos") },
+    Builtin { name: "__tan",   opcode: OpCode::MathF(MathFn::Tan),   check: |a| mathf_check(a, "tan") },
+    Builtin { name: "__ln",    opcode: OpCode::MathF(MathFn::Ln),    check: |a| mathf_check(a, "ln") },
+    Builtin { name: "__log10", opcode: OpCode::MathF(MathFn::Log10), check: |a| mathf_check(a, "log10") },
+    Builtin { name: "__exp",   opcode: OpCode::MathF(MathFn::Exp),   check: |a| mathf_check(a, "exp") },
+    Builtin { name: "__floor", opcode: OpCode::MathF(MathFn::Floor), check: |a| mathf_check(a, "floor") },
+    Builtin { name: "__ceil",  opcode: OpCode::MathF(MathFn::Ceil),  check: |a| mathf_check(a, "ceil") },
+    Builtin { name: "__round", opcode: OpCode::MathF(MathFn::Round), check: |a| mathf_check(a, "round") },
     // pow(base, exp) -> float.
-    Builtin { name: "pow", opcode: OpCode::Pow, check: |a| {
+    Builtin { name: "__pow", opcode: OpCode::Pow, check: |a| {
         arity(a, 2, "pow", " (base, exponente)")?;
         if a[0] != Type::Float { return Err((Some(0), format!("pow espera un float, no {}", a[0]))); }
         if a[1] != Type::Float { return Err((Some(1), format!("pow espera un float, no {}", a[1]))); }
         Ok(Type::Float)
     } },
-    // abs(x): int -> int / float -> float (ad-hoc polimórfico).
-    Builtin { name: "abs", opcode: OpCode::Abs, check: |a| numeric_unary_check(a, "abs") },
-    // min/max(a, b): mismo tipo numérico (ad-hoc polimórfico).
-    Builtin { name: "min", opcode: OpCode::Min, check: |a| numeric_binary_check(a, "min") },
-    Builtin { name: "max", opcode: OpCode::Max, check: |a| numeric_binary_check(a, "max") },
-    // Constantes π y e (Euler).
-    Builtin { name: "pi", opcode: OpCode::Pi, check: |a| { nullary(a, "pi")?; Ok(Type::Float) } },
-    Builtin { name: "e",  opcode: OpCode::E,  check: |a| { nullary(a, "e")?; Ok(Type::Float) } },
+    // M49.1b: abs/min/max/pi/e se movieron a `std/math` como funciones puras en raylang (abs vía el
+    // trait `Signed`; min/max vía `Ord`; pi/e nularias) → ya no son builtins ni tienen opcode.
 
-    // --- Reloj y aleatoriedad (M15.1b) ---
-    Builtin { name: "now",       opcode: OpCode::Now,       check: |a| { nullary(a, "now")?; Ok(Type::Int) } },
-    Builtin { name: "monotonic", opcode: OpCode::Monotonic, check: |a| { nullary(a, "monotonic")?; Ok(Type::Int) } },
-    Builtin { name: "random",    opcode: OpCode::Random,    check: |a| { nullary(a, "random")?; Ok(Type::Float) } },
-    Builtin { name: "sleep", opcode: OpCode::Sleep, check: |a| {
-        arity(a, 1, "sleep", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("sleep espera un int (ms), no {}", a[0]))); }
+    // --- Reloj (M15.1b) y aleatoriedad → M49.2: `std/time` (now/monotonic/sleep) y `std/random`. Aquí
+    // solo los primitivos internos `__now`/`__monotonic`/`__sleep`/`__random`/`__random_int`. ---
+    Builtin { name: "__now",       opcode: OpCode::Now,       check: |a| { nullary(a, "__now")?; Ok(Type::Int) } },
+    Builtin { name: "__monotonic", opcode: OpCode::Monotonic, check: |a| { nullary(a, "__monotonic")?; Ok(Type::Int) } },
+    Builtin { name: "__random",  opcode: OpCode::Random,    check: |a| { nullary(a, "__random")?; Ok(Type::Float) } },
+    Builtin { name: "__sleep", opcode: OpCode::Sleep, check: |a| {
+        arity(a, 1, "__sleep", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__sleep espera un int (ms), no {}", a[0]))); }
         Ok(Type::Unit)
     } },
-    Builtin { name: "random_int", opcode: OpCode::RandomInt, check: |a| {
-        arity(a, 1, "random_int", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("random_int espera un int, no {}", a[0]))); }
+    Builtin { name: "__random_int", opcode: OpCode::RandomInt, check: |a| {
+        arity(a, 1, "__random_int", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__random_int espera un int, no {}", a[0]))); }
         Ok(Type::Int)
     } },
 
@@ -1689,9 +1823,10 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__tcp_accept espera un int (el handle de escucha), no {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
-    // local_port(h) -> int (M15.3): el puerto local del socket (0 si no aplica). Total.
-    Builtin { name: "local_port", opcode: OpCode::LocalPort, check: |a| {
-        arity(a, 1, "local_port", "")?;
+    // __local_port(h) -> int (M15.3; M50.3: __x): el puerto local del socket (0 si no aplica). Total.
+    // Envoltorio net.local_port en std/net.
+    Builtin { name: "__local_port", opcode: OpCode::LocalPort, check: |a| {
+        arity(a, 1, "__local_port", "")?;
         if a[0] != Type::Int { return Err((Some(0), format!("local_port espera un int (el handle), no {}", a[0]))); }
         Ok(Type::Int)
     } },
@@ -1729,9 +1864,9 @@ static BUILTINS: &[Builtin] = &[
             other => Err((Some(0), format!("close espera un handle (int) o un Channel, no {}", other))),
         }
     } },
-    // exists(ruta) -> bool (M11.4b): ¿existe la ruta? Total (no falla).
-    Builtin { name: "exists", opcode: OpCode::Exists, check: |a| {
-        arity(a, 1, "exists", "")?;
+    // __exists(ruta) -> bool (M11.4b; M50.1 lo renombra a __x): ¿existe la ruta? Total. Envoltorio fs.exists.
+    Builtin { name: "__exists", opcode: OpCode::Exists, check: |a| {
+        arity(a, 1, "__exists", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("exists espera un string (la ruta), no {}", a[0]))); }
         Ok(Type::Bool)
     } },
@@ -1757,8 +1892,44 @@ mod tests {
     }
 
     #[test]
+    fn todo_builtin_de_usuario_tiene_doc() {
+        // La documentación (en inglés) es parte del contrato de la tabla: cada builtin de cara
+        // al usuario (sin prefijo `__`) debe tener su entrada en `doc()`; añadir un builtin sin
+        // documentarlo rompe este test. Los internos `__*` no la necesitan.
+        let sin_doc: Vec<&str> = names()
+            .filter(|n| !n.starts_with("__") && doc(n).is_none())
+            .collect();
+        assert!(sin_doc.is_empty(), "builtins sin doc(): {sin_doc:?}");
+        assert!(doc("__parse_int").is_none(), "los internos no llevan doc");
+        assert!(doc("noexiste").is_none());
+    }
+
+    #[test]
+    fn methods_for_solo_nombra_builtins_reales() {
+        // M45: cada nombre listado por categoría debe ser un builtin real (evita que un
+        // rename de builtin deje `methods_for` ofreciendo un método inexistente).
+        for cat in ["string", "bytes", "char", "int", "float", "bool", "array", "map"] {
+            for m in methods_for(cat) {
+                assert!(is_builtin(m) || signature(m).is_some(), "methods_for({cat:?}) nombra '{m}', que no es builtin ni método conocido con signature()");
+            }
+        }
+        assert!(methods_for("noexiste").is_empty());
+    }
+
+    #[test]
+    fn todo_builtin_metodo_tiene_firma() {
+        // M46a: cada builtin ofrecible como método debe tener firma (para el detalle del popup).
+        for cat in ["string", "bytes", "char", "int", "float", "bool", "array", "map"] {
+            for m in methods_for(cat) {
+                assert!(signature(m).is_some(), "methods_for({cat:?}) nombra '{m}' sin signature()");
+            }
+        }
+    }
+
+    #[test]
     fn regla_ok_y_errores() {
-        let split = lookup("split").unwrap();
+        // M48.4e-3: `split` público se retiró; su gemelo interno `__split` conserva la misma regla.
+        let split = lookup("__split").unwrap();
         // Firma correcta → tipo de retorno.
         assert_eq!((split.check)(&[Type::String, Type::String]), Ok(Type::Array(Box::new(Type::String))));
         // Aridad mal → error general (índice None: lo ubica el sitio de llamada).
@@ -1769,7 +1940,8 @@ mod tests {
 
     #[test]
     fn push_es_homogeneo() {
-        let push = lookup("push").unwrap();
+        // M48.4e-3: `push` público se retiró; su gemelo interno `__push` conserva la misma regla.
+        let push = lookup("__push").unwrap();
         let xs_int = Type::Array(Box::new(Type::Int));
         assert_eq!((push.check)(&[xs_int.clone(), Type::Int]), Ok(Type::Unit));
         assert!(matches!((push.check)(&[xs_int, Type::String]), Err((Some(1), _))));

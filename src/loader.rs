@@ -292,7 +292,12 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
         }
         fusionado.structs.append(&mut m.program.structs);
         fusionado.enums.append(&mut m.program.enums);
-        fusionado.consts.append(&mut m.program.consts); // M27.5
+        // M49.1c: los `const` de un módulo no-entrada se namespacan como las funciones (`modulo::CONST`)
+        // → encapsulados: solo accesibles calificados (`M.CONST`), no como un `CONST` global filtrado.
+        for mut c in std::mem::take(&mut m.program.consts) {
+            c.name = global_fn(&prefix, &c.name);
+            fusionado.consts.push(c);
+        }
         fusionado.traits.append(&mut m.program.traits);
         fusionado.impls.append(&mut m.program.impls);
         // M41: las funciones externas (FFI) NO se namespacan: su `name` es a la vez el identificador
@@ -329,7 +334,7 @@ fn shift_program(program: &mut Program, delta: usize) {
     // M10.2g: la posición del nombre de campo/método también (clave y valor llevan línea).
     program.field_name_pos = std::mem::take(&mut program.field_name_pos)
         .into_iter()
-        .map(|((l, c, n), (nl, nc))| ((l + delta, c, n), (nl + delta, nc)))
+        .map(|((l, c, n), ps)| ((l + delta, c, n), ps.into_iter().map(|(nl, nc)| (nl + delta, nc)).collect()))
         .collect();
     for f in &mut program.functions {
         shift_function(f, delta);
@@ -457,6 +462,9 @@ fn shift_expr(e: &mut Expr, delta: usize) {
                 shift_expr(x, delta);
             }
         }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { shift_expr(k, delta); shift_expr(v, delta); }
+        }
         ExprKind::Index { array, index } => {
             shift_expr(array, delta);
             shift_expr(index, delta);
@@ -547,12 +555,45 @@ fn capsula_violada(roots: &[PathBuf], importer: &str, target: &str) -> Option<St
     None
 }
 
+/// Las **rutas de módulo importables** desde el archivo `entry`, para el completion de `import`
+/// (M45c-2). Recorre las `roots` (proyecto + dependencias), toma la identidad de cada `.ray`
+/// (`rel_module_name`) y **descarta** las que cruzarían el borde de una cápsula desde `entry`
+/// (`capsula_violada`) — así solo se ofrece lo que el checker aceptaría. Excluye la propia entrada y
+/// los puntos de entrada `main`. Ordenadas y sin duplicados.
+pub fn modulos_disponibles(roots: &[PathBuf], entry: &Path) -> Vec<String> {
+    let importer = roots.iter().find_map(|r| rel_module_name(entry, r));
+    let imp = importer.as_deref().unwrap_or("");
+    let mut set = std::collections::BTreeSet::new();
+    for root in roots {
+        recolectar_modulos(root, root, &mut set);
+    }
+    set.into_iter()
+        .filter(|m| m != imp && m != "main")
+        .filter(|m| capsula_violada(roots, imp, m).is_none())
+        .collect()
+}
+
+/// Recorre `dir` (bajo `root`) recolectando la identidad de módulo de cada `.ray` (recursivo).
+fn recolectar_modulos(dir: &Path, root: &Path, out: &mut std::collections::BTreeSet<String>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            recolectar_modulos(&p, root, out);
+        } else if p.extension().and_then(|s| s.to_str()) == Some("ray") {
+            if let Some(m) = rel_module_name(&p, root) {
+                out.insert(m);
+            }
+        }
+    }
+}
+
 /// Resuelve la **ruta de módulo** `dep` (p. ej. `geo/formas/circulo` o `geo`) a un archivo bajo
 /// `root` (M11.6a). Prueba primero `dep.ray` (módulo-archivo) y, si no, `dep/mod.ray` (módulo-
 /// directorio: el `mod.ray` *es* el módulo de identidad `dep`). Una sola forma canónica: si **ambos**
 /// existen, es ambiguo (error) —evita el lío histórico de `foo.rs`-vs-`foo/mod.rs`—. `None` si no
 /// existe ninguno.
-fn resolve_module_path(roots: &[PathBuf], dep: &str) -> Result<Option<PathBuf>, String> {
+pub fn resolve_module_path(roots: &[PathBuf], dep: &str) -> Result<Option<PathBuf>, String> {
     // Se prueban las raíces en orden (proyecto → caché de dependencias); la primera que resuelva
     // gana. La ambigüedad archivo-vs-directorio se comprueba **dentro** de cada raíz.
     for root in roots {
@@ -687,6 +728,12 @@ fn build_surfaces(modules: &[Module]) -> Surfaces {
         for f in &m.program.functions {
             if f.is_pub {
                 s.values.insert(f.name.clone(), global_fn(&prefix, &f.name));
+            }
+        }
+        // M49.1c: los `pub const` entran en la cara de valores del módulo → acceso calificado `M.CONST`.
+        for c in &m.program.consts {
+            if c.is_pub {
+                s.values.insert(c.name.clone(), global_fn(&prefix, &c.name));
             }
         }
         for st in &m.program.structs {
@@ -901,6 +948,11 @@ impl<'a> Resolver<'a> {
         for f in &m.program.functions {
             own.insert(f.name.clone(), global_fn(&prefix, &f.name));
         }
+        // M49.1c: una referencia propia a un `const` del módulo se reescribe a su nombre global (como
+        // las funciones), para que el `const` quede namespacado y solo sea accesible calificado (`M.CONST`).
+        for c in &m.program.consts {
+            own.insert(c.name.clone(), global_fn(&prefix, &c.name));
+        }
         // M11.3b: los `from M import a [as b]` de función entran como nombres locales → `M::a`.
         for (local, global) in from_values {
             own.insert(local.clone(), global.clone());
@@ -1038,6 +1090,12 @@ impl<'a> Resolver<'a> {
             ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
                 for e in elems {
                     self.resolve_expr(e, src, module)?;
+                }
+            }
+            ExprKind::MapLit(pares) => {
+                for (k, v) in pares {
+                    self.resolve_expr(k, src, module)?;
+                    self.resolve_expr(v, src, module)?;
                 }
             }
             ExprKind::Index { array, index } => {
@@ -1402,6 +1460,9 @@ impl<'a> TypeRewriter<'a> {
                 for e in elems {
                     self.rewrite_expr(e);
                 }
+            }
+            ExprKind::MapLit(pares) => {
+                for (k, v) in pares { self.rewrite_expr(k); self.rewrite_expr(v); }
             }
             ExprKind::Index { array, index } => {
                 self.rewrite_expr(array);

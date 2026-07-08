@@ -7,30 +7,38 @@
 // M19.2: el cuerpo de la respuesta es **bytes** (octetos crudos intactos → descargas binarias
 // correctas, no solo texto). Las cabeceras siguen siendo texto (ASCII): se decodifican con from_utf8
 // para parsearlas. Para leer el cuerpo como texto, usa `body_text(r)`.
-
 // M20.10b: descompresión transparente de `Content-Encoding: gzip` (la librería INFLATE en raylang).
 from std/inflate import gunzip;
+import std/net;
 
+/// An HTTP/1.1 response: status code, headers, and body.
+/// Header names are stored lowercased for case-insensitive lookup; the body is raw bytes
+/// (already de-chunked and gunzipped if the server used chunked transfer or gzip encoding).
 pub struct Response {
     status: int,
     headers: Map<string, string>,
     body: bytes,
 }
 
-struct Url { host: string, port: int, path: string, tls: bool }
+struct Url {
+    host: string,
+    port: int,
+    path: string,
+    tls: bool,
+}
 
 // Parsea "http://host[:port]/path" o "https://…" (puertos 80/443 por defecto). M19.4a: `https` usa TLS.
 fn parse_url(url: string) -> Result<Url, string> {
     var resto: string = "";
     var port: int = 80;
     var tls: bool = false;
-    if (starts_with(url, "https://")) {
-        resto = substring(url, 8, len(url));
+    if (url.starts_with("https://")) {
+        resto = url.substring(8, url.len());
         port = 443;
         tls = true;
     } else {
-        if (starts_with(url, "http://")) {
-            resto = substring(url, 7, len(url));
+        if (url.starts_with("http://")) {
+            resto = url.substring(7, url.len());
         } else {
             return Result.Err("solo se soporta http:// o https://");
         }
@@ -41,30 +49,34 @@ fn parse_url(url: string) -> Result<Url, string> {
     var path: string = "/";
     match (index_of(resto, "/")) {
         Option.Some(idx) => {
-            hostport = substring(resto, 0, idx);
-            path = substring(resto, idx, len(resto));
+            hostport = resto.substring(0, idx);
+            path = resto.substring(idx, resto.len());
         },
-        Option.None => {},
+        Option.None => { },
     }
 
     // Separar host de puerto (un ':' explícito gana al puerto por defecto del esquema).
     var host: string = hostport;
     match (index_of(hostport, ":")) {
         Option.Some(idx) => {
-            host = substring(hostport, 0, idx);
-            let ps: string = substring(hostport, idx + 1, len(hostport));
+            host = hostport.substring(0, idx);
+            let ps: string = hostport.substring(idx + 1, hostport.len());
             match (parse_int(ps)) {
-                Option.Some(n) => { port = n; },
-                Option.None => { return Result.Err("puerto inválido: " + ps); },
+                Option.Some(n) => {
+                    port = n;
+                },
+                Option.None => {
+                    return Result.Err("puerto inválido: " + ps);
+                },
             }
         },
-        Option.None => {},
+        Option.None => { },
     }
     Result.Ok(Url { host: host, port: port, path: path, tls: tls })
 }
 
 fn build_request(method: string, u: Url, body: string) -> string {
-    build_request_h(method, u, body, map_new())
+    build_request_h(method, u, body, Map.new())
 }
 
 // Como `build_request` pero con cabeceras extra (nombre→valor). Las del cliente (Host/Connection/
@@ -73,16 +85,18 @@ fn build_request_h(method: string, u: Url, body: string, extra: Map<string, stri
     var req: string = method + " " + u.path + " HTTP/1.1\r\n";
     req = req + "Host: " + u.host + "\r\n";
     req = req + "Connection: close\r\n";
-    if (len(body) > 0) {
-        req = req + "Content-Length: " + to_string(len(body)) + "\r\n";
+    if (body.len() > 0) {
+        req = req + "Content-Length: " + to_string(body.len()) + "\r\n";
     }
-    let nombres: [string] = keys(extra);
+    let nombres: [string] = extra.keys();
     var i: int = 0;
-    while (i < len(nombres)) {
+    while (i < nombres.len()) {
         let nombre: string = nombres[i];
         match (get(extra, nombre)) {
-            Option.Some(valor) => { req = req + nombre + ": " + valor + "\r\n"; },
-            Option.None => {},
+            Option.Some(valor) => {
+                req = req + nombre + ": " + valor + "\r\n";
+            },
+            Option.None => { },
         }
         i = i + 1;
     }
@@ -96,11 +110,18 @@ fn leer_todo(h: int) -> Result<bytes, string> {
     var seguir: bool = true;
     var err: string = "";
     while (seguir) {
-        match (socket_read_bytes(h)) {
+        match (net.socket_read_bytes(h)) {
             Result.Ok(trozo) => {
-                if (len(trozo) == 0) { seguir = false; } else { acc = acc + trozo; }
+                if (trozo.len() == 0) {
+                    seguir = false;
+                } else {
+                    acc = acc + trozo;
+                }
             },
-            Result.Err(e) => { err = e; seguir = false; },
+            Result.Err(e) => {
+                err = e;
+                seguir = false;
+            },
         }
     }
     if (err == "") { Result.Ok(acc) } else { Result.Err(err) }
@@ -110,7 +131,7 @@ fn leer_todo(h: int) -> Result<bytes, string> {
 // no se puede usar index_of (es de string) porque el cuerpo binario rompería from_utf8 del buffer entero.
 fn find_fin_cabeceras(b: bytes) -> int {
     var i: int = 0;
-    while (i + 3 < len(b)) {
+    while (i + 3 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10) {
             return i;
         }
@@ -122,7 +143,7 @@ fn find_fin_cabeceras(b: bytes) -> int {
 // El índice del primer "\r\n" en bytes desde `from`, o -1. (Para el framing de transfer-encoding chunked.)
 fn find_crlf(b: bytes, desde: int) -> int {
     var i: int = desde;
-    while (i + 1 < len(b)) {
+    while (i + 1 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10) {
             return i;
         }
@@ -135,13 +156,17 @@ fn find_crlf(b: bytes, desde: int) -> int {
 fn hex_byte_val(o: int) -> int {
     if (o >= 48 && o <= 57) {
         o - 48
-    } else { if (o >= 97 && o <= 102) {
-        o - 87 // 'a'..'f'
-    } else { if (o >= 65 && o <= 70) {
-        o - 55 // 'A'..'F'
     } else {
-        0 - 1
-    }}}
+        if (o >= 97 && o <= 102) {
+            o - 87  // 'a'..'f'
+        } else {
+            if (o >= 65 && o <= 70) {
+                o - 55  // 'A'..'F'
+            } else {
+                0 - 1
+            }
+        }
+    }
 }
 
 // Tamaño (decimal) de un chunk a partir de su línea hex `[start, end)`. Se detiene en `;` (extensiones)
@@ -151,7 +176,8 @@ fn parse_chunk_size(b: bytes, start: int, end: int) -> int {
     var i: int = start;
     while (i < end) {
         let o: int = b[i];
-        if (o == 59) { // ';'
+        if (o == 59) {
+            // ';'
             return size;
         }
         let v: int = hex_byte_val(o);
@@ -169,7 +195,7 @@ fn parse_chunk_size(b: bytes, start: int, end: int) -> int {
 fn decode_chunked(body: bytes) -> Result<bytes, string> {
     var out: bytes = b"";
     var pos: int = 0;
-    let n: int = len(body);
+    let n: int = body.len();
     var seguir: bool = true;
     while (seguir && pos < n) {
         let line_end: int = find_crlf(body, pos);
@@ -179,13 +205,13 @@ fn decode_chunked(body: bytes) -> Result<bytes, string> {
         let size: int = parse_chunk_size(body, pos, line_end);
         pos = line_end + 2;
         if (size <= 0) {
-            seguir = false; // chunk final (0)
+            seguir = false;  // chunk final (0)
         } else {
             if (pos + size > n) {
                 return Result.Err("chunk truncado");
             }
-            out = out + sub_bytes(body, pos, pos + size);
-            pos = pos + size + 2; // salta el \r\n tras los datos
+            out = out + body.sub_bytes(pos, pos + size);
+            pos = pos + size + 2;  // salta el \r\n tras los datos
         }
     }
     Result.Ok(out)
@@ -197,35 +223,39 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
         return Result.Err("respuesta HTTP malformada (sin separador de cabeceras)");
     }
     // Cabeceras = texto (ASCII): se decodifican para parsearlas. Cuerpo = bytes crudos.
-    let cuerpo: bytes = sub_bytes(raw, sep + 4, len(raw));
-    match (from_utf8(sub_bytes(raw, 0, sep))) {
+    let cuerpo: bytes = raw.sub_bytes(sep + 4, raw.len());
+    match (from_utf8(raw.sub_bytes(0, sep))) {
         Result.Err(e) => Result.Err("cabeceras HTTP no son UTF-8: " + e),
         Result.Ok(cabeceras_raw) => {
-            let lineas: [string] = split(cabeceras_raw, "\r\n");
+            let lineas: [string] = cabeceras_raw.split("\r\n");
 
             // Línea de estado: "HTTP/1.1 200 OK".
-            let partes: [string] = split(lineas[0], " ");
-            if (len(partes) < 2) {
+            let partes: [string] = lineas[0].split(" ");
+            if (partes.len() < 2) {
                 return Result.Err("línea de estado malformada: " + lineas[0]);
             }
             var status: int = 0;
             match (parse_int(partes[1])) {
-                Option.Some(n) => { status = n; },
-                Option.None => { return Result.Err("código de estado inválido: " + partes[1]); },
+                Option.Some(n) => {
+                    status = n;
+                },
+                Option.None => {
+                    return Result.Err("código de estado inválido: " + partes[1]);
+                },
             }
 
             // Cabeceras: "Nombre: Valor" (nombre en minúsculas para lookup case-insensitive).
-            var headers: Map<string, string> = map_new();
+            var headers: Map<string, string> = Map.new();
             var i: int = 1;
-            while (i < len(lineas)) {
+            while (i < lineas.len()) {
                 let linea: string = lineas[i];
                 match (index_of(linea, ":")) {
                     Option.Some(c) => {
-                        let nombre: string = to_lower(trim(substring(linea, 0, c)));
-                        let valor: string = trim(substring(linea, c + 1, len(linea)));
-                        insert(headers, nombre, valor);
+                        let nombre: string = linea.substring(0, c).trim().to_lower();
+                        let valor: string = linea.substring(c + 1, linea.len()).trim();
+                        headers.insert(nombre, valor);
                     },
-                    Option.None => {},
+                    Option.None => { },
                 }
                 i = i + 1;
             }
@@ -234,26 +264,34 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
             var cuerpo_final: bytes = cuerpo;
             match (get(headers, "transfer-encoding")) {
                 Option.Some(te) => {
-                    if (contains(to_lower(te), "chunked")) {
+                    if (te.to_lower().contains("chunked")) {
                         match (decode_chunked(cuerpo)) {
-                            Result.Ok(d) => { cuerpo_final = d; },
-                            Result.Err(e) => { return Result.Err(e); },
+                            Result.Ok(d) => {
+                                cuerpo_final = d;
+                            },
+                            Result.Err(e) => {
+                                return Result.Err(e);
+                            },
                         }
                     }
                 },
-                Option.None => {},
+                Option.None => { },
             }
             // Content-Encoding: gzip → descomprimir el cuerpo (M20.10b, librería INFLATE).
             match (get(headers, "content-encoding")) {
                 Option.Some(ce) => {
-                    if (contains(to_lower(ce), "gzip")) {
+                    if (ce.to_lower().contains("gzip")) {
                         match (gunzip(cuerpo_final)) {
-                            Result.Ok(d) => { cuerpo_final = d; },
-                            Result.Err(e) => { return Result.Err("gzip: " + e); },
+                            Result.Ok(d) => {
+                                cuerpo_final = d;
+                            },
+                            Result.Err(e) => {
+                                return Result.Err("gzip: " + e);
+                            },
                         }
                     }
                 },
-                Option.None => {},
+                Option.None => { },
             }
             Result.Ok(Response { status: status, headers: headers, body: cuerpo_final })
         },
@@ -261,12 +299,16 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
 }
 
 // Devuelve el valor de una cabecera por nombre (case-insensitive), o None.
+/// Returns the value of a response header by name (case-insensitive).
+/// Returns None if the header is not present.
 pub fn header(r: Response, name: string) -> Option<string> {
-    get(r.headers, to_lower(name))
+    get(r.headers, name.to_lower())
 }
 
 // El cuerpo de la respuesta decodificado como texto UTF-8 (para respuestas de texto/JSON). Para datos
 // binarios, usa `r.body` (bytes) directamente.
+/// Decodes the response body as UTF-8 text (for text/JSON responses).
+/// Err if the body is not valid UTF-8; for binary data use `r.body` directly.
 pub fn body_text(r: Response) -> Result<string, string> {
     from_utf8(r.body)
 }
@@ -274,18 +316,24 @@ pub fn body_text(r: Response) -> Result<string, string> {
 // Abre la conexión adecuada al esquema: TLS para https, TCP en claro para http (M19.4a).
 fn conectar(u: Url) -> Result<int, string> {
     if (u.tls) {
-        tls_connect(u.host, u.port)
+        net.tls_connect(u.host, u.port)
     } else {
-        tcp_connect(u.host, u.port)
+        net.tcp_connect(u.host, u.port)
     }
 }
 
+/// Performs an HTTP/1.1 request with the given method, URL, and body (blocking network I/O).
+/// Supports http:// and https:// (TLS); uses "Connection: close" and reads until EOF.
+/// Err on invalid URL, connection failure, I/O error, or a malformed response.
 pub fn request(method: string, url: string, body: string) -> Result<Response, string> {
-    request_with(method, url, body, map_new())
+    request_with(method, url, body, Map.new())
 }
 
 // Como `request` pero con cabeceras extra (Authorization, Accept, Content-Type, …). Es la base de
 // un cliente robusto: método y cabeceras arbitrarios.
+/// Like `request` but with extra headers (Authorization, Accept, Content-Type, ...).
+/// Client headers (Host/Connection/Content-Length) are set first; extras are appended in key order.
+/// Err on invalid URL, connection failure, I/O error, or a malformed response.
 pub fn request_with(method: string, url: string, body: string, headers: Map<string, string>) -> Result<Response, string> {
     match (parse_url(url)) {
         Result.Err(e) => Result.Err(e),
@@ -293,8 +341,11 @@ pub fn request_with(method: string, url: string, body: string, headers: Map<stri
             match (conectar(u)) {
                 Result.Err(e) => Result.Err("no se pudo conectar: " + e),
                 Result.Ok(h) => {
-                    match (socket_write_bytes(h, to_bytes(build_request_h(method, u, body, headers)))) {
-                        Result.Err(e) => { close(h); Result.Err("error al enviar: " + e) },
+                    match (net.socket_write_bytes(h, build_request_h(method, u, body, headers).to_bytes())) {
+                        Result.Err(e) => {
+                            close(h);
+                            Result.Err("error al enviar: " + e)
+                        },
                         Result.Ok(_) => {
                             let r = leer_todo(h);
                             close(h);
@@ -317,12 +368,17 @@ fn es_redireccion(status: int) -> bool {
 
 // GET que sigue redirecciones (hasta `max` saltos). Devuelve la respuesta final, o un Err si se
 // supera el límite (posible bucle) o falla una petición. La nueva URL sale de la cabecera `Location`.
+/// GET that follows redirects (301/302/303/307/308) up to `max` hops, resolving relative Locations.
+/// Returns the final response; Err if the hop limit is exceeded (possible loop) or a request fails.
+/// A redirect without a Location header is returned as-is.
 pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
     var actual: string = url;
     var restantes: int = max;
     while (true) {
         match (fetch(actual)) {
-            Result.Err(e) => { return Result.Err(e); },
+            Result.Err(e) => {
+                return Result.Err(e);
+            },
             Result.Ok(resp) => {
                 if (!es_redireccion(resp.status)) {
                     return Result.Ok(resp);
@@ -331,8 +387,12 @@ pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
                     return Result.Err("demasiadas redirecciones");
                 }
                 match (header(resp, "location")) {
-                    Option.Some(loc) => { actual = absolutizar(actual, loc); },
-                    Option.None => { return Result.Ok(resp); }, // redirección sin Location: se devuelve
+                    Option.Some(loc) => {
+                        actual = absolutizar(actual, loc);
+                    },
+                    Option.None => {
+                        return Result.Ok(resp);  // redirección sin Location: se devuelve
+                    },
                 }
                 restantes = restantes - 1;
             },
@@ -343,7 +403,7 @@ pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
 
 // Resuelve una Location que puede ser absoluta (`http://…`) o relativa al host actual (`/otra`).
 fn absolutizar(base: string, loc: string) -> string {
-    if (starts_with(loc, "http://") || starts_with(loc, "https://")) {
+    if (loc.starts_with("http://") || loc.starts_with("https://")) {
         loc
     } else {
         match (parse_url(base)) {
@@ -360,6 +420,8 @@ fn absolutizar(base: string, loc: string) -> string {
 // Atajo para una petición GET. Se llama `fetch` (no `get`) a propósito: `get` ya es el accesor de
 // Map en el prelude y raylang no tiene sobrecarga, así que un `fn get` lo taparía dentro de este
 // módulo —y `header` necesita el `get` de Map—.
+/// Shorthand for a GET request with an empty body (does not follow redirects).
+/// Err on invalid URL, connection failure, I/O error, or a malformed response.
 pub fn fetch(url: string) -> Result<Response, string> {
     request("GET", url, "")
 }

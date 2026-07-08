@@ -7,10 +7,12 @@
 // Ejecútalo:  cargo run -- --vm examples/web/wss_echo.ray <cert.pem> <key.pem>
 // Imprime el puerto efímero en la primera línea.
 import websocket;
+import std/net;
+import std/fs; // M50.1: read_file (cert/clave) vive en std/fs.
 
 // Lee una tanda y la devuelve como string (UTF-8) para parsear la petición de upgrade.
 fn leer_texto(conn: int) -> Result<string, string> {
-    match (socket_read_bytes(conn)) {
+    match (net.socket_read_bytes(conn)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(datos) => from_utf8(datos),
     }
@@ -25,7 +27,7 @@ fn handshake(conn: int) -> bool {
         },
         Result.Ok(req) => {
             let clave = websocket.extract_key(req);
-            match (socket_write_bytes(conn, to_bytes(websocket.handshake_response(clave)))) {
+            match (net.socket_write_bytes(conn, websocket.handshake_response(clave).to_bytes())) {
                 Result.Ok(_) => true,
                 Result.Err(e) => {
                     eprint(e);
@@ -40,18 +42,18 @@ fn handshake(conn: int) -> bool {
 fn eco(conn: int) {
     var seguir = true;
     while (seguir) {
-        match (socket_read_bytes(conn)) {
+        match (net.socket_read_bytes(conn)) {
             Result.Err(_) => {
                 seguir = false;
             },
             Result.Ok(datos) => {
-                if (len(datos) < 2) {
+                if (datos.len() < 2) {
                     seguir = false;
                 } else {
                     let f = websocket.decode_frame(datos);
                     if (f.opcode == websocket.op_close()) {
-                        let cierre = websocket.encode_frame(websocket.op_close(), to_bytes(""));
-                        match (socket_write_bytes(conn, cierre)) {
+                        let cierre = websocket.encode_frame(websocket.op_close(), "".to_bytes());
+                        match (net.socket_write_bytes(conn, cierre)) {
                             Result.Ok(_) => { },
                             Result.Err(_) => { },
                         }
@@ -59,7 +61,7 @@ fn eco(conn: int) {
                     } else {
                         match (from_utf8(f.payload)) {
                             Result.Ok(txt) => {
-                                match (socket_write_bytes(conn, websocket.encode_text(txt))) {
+                                match (net.socket_write_bytes(conn, websocket.encode_text(txt))) {
                                     Result.Ok(_) => { },
                                     Result.Err(_) => {
                                         seguir = false;
@@ -79,13 +81,13 @@ fn eco(conn: int) {
 
 fn main() -> int {
     let a = args();
-    if (len(a) < 2) {
+    if (a.len() < 2) {
         eprint("uso: wss_echo <cert.pem> <key.pem>");
         return 1;
     }
     var cert = "";
     var key = "";
-    match (read_file(a[0])) {
+    match (fs.read_file(a[0])) {
         Result.Ok(c) => {
             cert = c;
         },
@@ -94,7 +96,7 @@ fn main() -> int {
             return 1;
         },
     }
-    match (read_file(a[1])) {
+    match (fs.read_file(a[1])) {
         Result.Ok(k) => {
             key = k;
         },
@@ -103,23 +105,23 @@ fn main() -> int {
             return 1;
         },
     }
-    match (tcp_listen("127.0.0.1", 0)) {
+    match (net.tcp_listen("127.0.0.1", 0)) {
         Result.Err(e) => {
             eprint("no se pudo escuchar: " + e);
             1
         },
         Result.Ok(srv) => {
-            print(to_string(local_port(srv)));
+            print(to_string(net.local_port(srv)));
             var seguir = true;
             while (seguir) {
-                match (tcp_accept(srv)) {
+                match (net.tcp_accept(srv)) {
                     Result.Err(e) => {
                         eprint(e);
                         seguir = false;
                     },
                     Result.Ok(tcp) => {
                         // Envuelve la conexión aceptada en TLS de servidor antes de hablar WebSocket.
-                        match (tls_accept(tcp, cert, key)) {
+                        match (net.tls_accept(tcp, cert, key)) {
                             Result.Ok(conn) => {
                                 if (handshake(conn)) {
                                     eco(conn);

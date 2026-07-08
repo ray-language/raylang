@@ -1,7 +1,6 @@
 // Cookies HTTP escritas EN raylang. Cero runtime nuevo. Parsea la cabecera `Cookie:` de petición y
 // construye valores `Set-Cookie:` de respuesta. Importable:
 //   from cookie import parse_cookies, cookie, set_cookie, with_path, with_max_age, with_http_only, with_secure;
-
 from std/url import url_encode, url_decode;
 
 // `url_decode` tolerante (devuelve el crudo si falla).
@@ -13,20 +12,22 @@ fn decode_or(s: string) -> string {
 }
 
 // Parsea la cabecera de petición `Cookie: a=1; b=hola%20mundo` en un `Map<string,string>`.
+/// Parses a request `Cookie:` header value (e.g. "a=1; b=hola%20mundo") into a name -> value map.
+/// Values are URL-decoded (kept raw if decoding fails); malformed pairs without '=' are skipped.
 pub fn parse_cookies(header: string) -> Map<string, string> {
-    var m: Map<string, string> = map_new();
-    let parts = split(header, ";");
+    var m: Map<string, string> = Map.new();
+    let parts = header.split(";");
     var i = 0;
-    while (i < len(parts)) {
-        let p = trim(parts[i]);
-        if (len(p) > 0) {
+    while (i < parts.len()) {
+        let p = parts[i].trim();
+        if (p.len() > 0) {
             match (index_of(p, "=")) {
                 Option.Some(eq) => {
-                    let k = trim(substring(p, 0, eq));
-                    let v = decode_or(trim(substring(p, eq + 1, len(p))));
-                    insert(m, k, v);
+                    let k = p.substring(0, eq).trim();
+                    let v = decode_or(p.substring(eq + 1, p.len()).trim());
+                    m.insert(k, v);
                 },
-                Option.None => {},
+                Option.None => { },
             }
         }
         i = i + 1;
@@ -40,27 +41,51 @@ struct Cookie {
     name: string,
     value: string,
     path: string,
-    max_age: int,  // < 0 = sin Max-Age
+    max_age: int,
     http_only: bool,
     secure: bool,
 }
 
+// < 0 = sin Max-Age
 // Crea una cookie con solo nombre y valor (sin atributos).
+/// Creates a cookie with just a name and value, no attributes set.
+/// Add attributes with the chainable `with_*` setters, e.g. `cookie("sid","abc").with_path("/").with_http_only()`.
 pub fn cookie(name: string, value: string) -> Cookie {
     Cookie { name: name, value: value, path: "", max_age: 0 - 1, http_only: false, secure: false }
 }
 
 // Setters encadenables (mutan por referencia y devuelven la cookie). Nombres `with_*` para no chocar
 // con los campos homónimos (en UFCS el campo ganaría a la función).
-pub fn with_path(c: Cookie, p: string) -> Cookie { c.path = p; c }
-pub fn with_max_age(c: Cookie, n: int) -> Cookie { c.max_age = n; c }
-pub fn with_http_only(c: Cookie) -> Cookie { c.http_only = true; c }
-pub fn with_secure(c: Cookie) -> Cookie { c.secure = true; c }
+/// Sets the cookie's `Path` attribute. Chainable: mutates the cookie by reference and returns it.
+pub fn with_path(c: Cookie, p: string) -> Cookie {
+    c.path = p;
+    c
+}
+
+/// Sets the cookie's `Max-Age` attribute in seconds (0 tells the client to delete it). Chainable.
+pub fn with_max_age(c: Cookie, n: int) -> Cookie {
+    c.max_age = n;
+    c
+}
+
+/// Marks the cookie `HttpOnly` (not readable from client-side JavaScript). Chainable.
+pub fn with_http_only(c: Cookie) -> Cookie {
+    c.http_only = true;
+    c
+}
+
+/// Marks the cookie `Secure` (sent only over HTTPS). Chainable.
+pub fn with_secure(c: Cookie) -> Cookie {
+    c.secure = true;
+    c
+}
 
 // Serializa la cookie a un valor de cabecera `Set-Cookie`. El valor se url-codifica.
+/// Serializes the cookie to a `Set-Cookie` header value ("name=value; Path=...; Max-Age=...; HttpOnly; Secure").
+/// The value is URL-encoded; only attributes that were set are emitted.
 pub fn set_cookie(c: Cookie) -> string {
     var s = c.name + "=" + url_encode(c.value);
-    if (len(c.path) > 0) {
+    if (c.path.len() > 0) {
         s = s + "; Path=" + c.path;
     }
     if (c.max_age >= 0) {

@@ -20,7 +20,7 @@ fn main() -> int {
 
     // El scope también UNE las tareas que no unas tú: aquí no hay `join`, pero al salir del scope la
     // tarea ya terminó (escribió en el canal). Si la tarea fallara, el scope propagaría el panic.
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     scope(fn() {
     spawn(fn() {
     send(ch, 7);

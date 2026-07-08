@@ -6,20 +6,24 @@
 // trailers) + DATA (grpc_frame(mensaje)) con END_STREAM; la respuesta trae HEADERS (:status) + DATA
 // (mensaje gRPC-framed) + un HEADERS de **trailers** con `grpc-status`. Importable:
 //   from grpc_client import grpc_call, GrpcResponse;
-
-from net/http2 import preface, settings_empty, settings_ack, encode_frame, parse_frame, frame_size,
-     ft_settings, ft_headers, ft_data, ft_goaway, fl_ack, fl_end_stream, fl_end_headers, Http2Frame;
+from net/http2 import preface, settings_empty, settings_ack, encode_frame, parse_frame, frame_size, ft_settings, ft_headers, ft_data, ft_goaway, fl_ack, fl_end_stream, fl_end_headers, Http2Frame;
 from net/hpack import new_hpack, encode, decode, header, HEntry;
 from std/protobuf import grpc_frame, grpc_unframe;
+import std/net;
 
 // La respuesta de una llamada gRPC: el mensaje (bytes protobuf) y el `grpc-status` (0 = OK).
-pub struct GrpcResponse { message: bytes, grpc_status: int }
+/// The response of a unary gRPC call: the serialized protobuf response message
+/// and the `grpc-status` code from the trailers (0 = OK).
+pub struct GrpcResponse {
+    message: bytes,
+    grpc_status: int,
+}
 
 // Extrae un header (por nombre) de una lista decodificada; "" si no está.
 fn find_header(hs: [HEntry], name: string) -> string {
     var v = "";
     var i = 0;
-    while (i < len(hs)) {
+    while (i < hs.len()) {
         if (hs[i].name == name) {
             v = hs[i].value;
         }
@@ -30,58 +34,66 @@ fn find_header(hs: [HEntry], name: string) -> string {
 
 // Hace una llamada gRPC unaria a `host:port` con la ruta `/paquete.Servicio/Metodo` y el `mensaje`
 // protobuf ya serializado. Devuelve el mensaje de respuesta + el grpc-status.
+/// Performs a unary gRPC call to `host:port` (TLS + ALPN `h2`, blocking I/O): POSTs the
+/// gRPC-framed `mensaje` to `path` ("/package.Service/Method") and reads until END_STREAM.
+/// Err on connect/I-O/HPACK errors, GOAWAY, a non-200 `:status`, or a malformed gRPC frame.
 pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Result<GrpcResponse, string> {
-    let h = match (tls_connect_h2(host, port)) {
+    let h = match (net.tls_connect_h2(host, port)) {
         Result.Ok(x) => x,
-        Result.Err(e) => { return Result.Err(e); },
+        Result.Err(e) => {
+            return Result.Err(e);
+        },
     };
 
     // HEADERS de la petición (sin END_STREAM: sigue un DATA con el mensaje).
     let enc = new_hpack();
-    let reqhdrs = [
-        header(":method", "POST"),
-        header(":path", path),
-        header(":scheme", "https"),
-        header(":authority", host),
-        header("te", "trailers"),
-        header("content-type", "application/grpc"),
-        header("user-agent", "grpc-raylang/1"),
-    ];
+    let reqhdrs = [header(":method", "POST"), header(":path", path), header(":scheme", "https"), header(":authority", host), header("te", "trailers"), header("content-type", "application/grpc"), header("user-agent", "grpc-raylang/1")];
     let block = encode(enc, reqhdrs);
     let hframe = encode_frame(ft_headers(), fl_end_headers(), 1, block);
     let dframe = encode_frame(ft_data(), fl_end_stream(), 1, grpc_frame(mensaje));
-    match (socket_write_bytes(h, preface() + settings_empty() + hframe + dframe)) {
+    match (net.socket_write_bytes(h, preface() + settings_empty() + hframe + dframe)) {
         Result.Ok(n) => { },
-        Result.Err(e) => { close(h); return Result.Err(e); },
+        Result.Err(e) => {
+            close(h);
+            return Result.Err(e);
+        },
     }
 
     // Respuesta.
     let dec = new_hpack();
     var buf = b"";
-    var body = b"";        // acumulado de los DATA (mensaje gRPC-framed)
+    var body = b"";  // acumulado de los DATA (mensaje gRPC-framed)
     var status = 0;
     var grpc_status = 0;
     var tuvo_grpc_status = false;
     var done = false;
     while (!done) {
-        match (socket_read_bytes(h)) {
+        match (net.socket_read_bytes(h)) {
             Result.Ok(chunk) => {
-                if (len(chunk) == 0) { done = true; }
+                if (chunk.len() == 0) {
+                    done = true;
+                }
                 buf = buf + chunk;
             },
-            Result.Err(e) => { close(h); return Result.Err(e); },
+            Result.Err(e) => {
+                close(h);
+                return Result.Err(e);
+            },
         }
-        while (frame_size(buf) > 0 && len(buf) >= frame_size(buf)) {
+        while (frame_size(buf) > 0 && buf.len() >= frame_size(buf)) {
             let fsz = frame_size(buf);
-            let fbytes = sub_bytes(buf, 0, fsz);
-            buf = sub_bytes(buf, fsz, len(buf));
+            let fbytes = buf.sub_bytes(0, fsz);
+            buf = buf.sub_bytes(fsz, buf.len());
             match (parse_frame(fbytes)) {
                 Result.Ok(fr) => {
                     if (fr.ftype == ft_settings()) {
                         if ((fr.flags & fl_ack()) == 0) {
-                            match (socket_write_bytes(h, settings_ack())) {
+                            match (net.socket_write_bytes(h, settings_ack())) {
                                 Result.Ok(x) => { },
-                                Result.Err(e) => { close(h); return Result.Err(e); },
+                                Result.Err(e) => {
+                                    close(h);
+                                    return Result.Err(e);
+                                },
                             }
                         }
                     } else if (fr.ftype == ft_headers()) {
@@ -91,20 +103,31 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                                 let st = find_header(hs, ":status");
                                 if (st != "") {
                                     match (parse_int(st)) {
-                                        Option.Some(n) => { status = n; },
-                                        Option.None => { status = 0; },
+                                        Option.Some(n) => {
+                                            status = n;
+                                        },
+                                        Option.None => {
+                                            status = 0;
+                                        },
                                     }
                                 }
                                 let gs = find_header(hs, "grpc-status");
                                 if (gs != "") {
                                     tuvo_grpc_status = true;
                                     match (parse_int(gs)) {
-                                        Option.Some(n) => { grpc_status = n; },
-                                        Option.None => { grpc_status = 0; },
+                                        Option.Some(n) => {
+                                            grpc_status = n;
+                                        },
+                                        Option.None => {
+                                            grpc_status = 0;
+                                        },
                                     }
                                 }
                             },
-                            Result.Err(e) => { close(h); return Result.Err("HPACK: " + e); },
+                            Result.Err(e) => {
+                                close(h);
+                                return Result.Err("HPACK: " + e);
+                            },
                         }
                     } else if (fr.ftype == ft_data()) {
                         body = body + fr.payload;
@@ -116,7 +139,10 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                         done = true;
                     }
                 },
-                Result.Err(e) => { close(h); return Result.Err(e); },
+                Result.Err(e) => {
+                    close(h);
+                    return Result.Err(e);
+                },
             }
         }
     }

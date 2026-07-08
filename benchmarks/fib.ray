@@ -7,6 +7,6 @@ fn fib(n: int) -> int {
 }
 
 fn main() -> int {
-    fib(32); // el valor se descarta; lo que medimos es el cómputo
+    fib(32);  // el valor se descarta; lo que medimos es el cómputo
     0
 }

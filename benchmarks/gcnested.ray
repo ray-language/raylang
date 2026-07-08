@@ -8,11 +8,14 @@ fn main() -> int {
         while (k < 50) {
             var inner: [int] = [];
             var i: int = 0;
-            while (i < 20) { push(inner, i); i = i + 1; }
-            push(outer, inner);
+            while (i < 20) {
+                inner.push(i);
+                i = i + 1;
+            }
+            outer.push(inner);
             k = k + 1;
         }
-        total = total + len(outer);
+        total = total + outer.len();
         r = r + 1;
     }
     total % 1000

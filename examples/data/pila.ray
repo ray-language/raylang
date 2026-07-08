@@ -14,10 +14,10 @@ fn nueva() -> Pila {
 }
 
 fn empujar(p: Pila, x: int) {
-    if (p.tope < len(p.datos)) {
+    if (p.tope < p.datos.len()) {
         p.datos[p.tope] = x;  // reusar ranura existente
     } else {
-        push(p.datos, x);  // crecer el arreglo
+        p.datos.push(x);  // crecer el arreglo
     }
     p.tope = p.tope + 1;
 }

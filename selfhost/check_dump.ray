@@ -5,14 +5,19 @@
 // (también imprime el error léxico/sintáctico si la fuente no llega siquiera al checker).
 // El test `tests/selfhost_checker.rs` compara este stdout con el veredicto del checker de Rust (el
 // ORÁCULO): misma fuente por ambos pipelines, mismo veredicto.
-
 from lexer import lex, LexError;
 from parser import parse, Program, ParseError;
 from checker import check, TypeError;
 
+// M50.1: el self-hosted no importa std/fs; lee con el primitivo __read_file (arreglo etiquetado).
+fn read_file(path: string) -> Result<string, string> {
+    let r = __read_file(path);
+    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+}
+
 fn main() -> int {
     let argv = args();
-    if (len(argv) == 0) {
+    if (argv.len() == 0) {
         eprint("uso: raylang selfhost/check_dump.ray <archivo>");
         return 1;
     }
@@ -23,7 +28,9 @@ fn main() -> int {
                     match (parse(toks)) {
                         Result.Ok(prog) => {
                             match (check(prog)) {
-                                Result.Ok(_) => { print("ok"); },
+                                Result.Ok(_) => {
+                                    print("ok");
+                                },
                                 Result.Err(te) => {
                                     print("error de tipos en " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
                                 },

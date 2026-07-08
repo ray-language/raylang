@@ -71,8 +71,8 @@ from http import request_with, fetch_follow, fetch, header, body_text, Response;
 
 fn main() -> int {
     // 1. Cabecera personalizada (request_with) → el servidor la hace eco.
-    var hdrs: Map<string, string> = map_new();
-    insert(hdrs, "X-Token", "secreto42");
+    var hdrs: Map<string, string> = Map.new();
+    hdrs.insert("X-Token", "secreto42");
     match (request_with("GET", "http://127.0.0.1:__PORT__/headers", "", hdrs)) {
         Result.Ok(r) => print(texto(r)),
         Result.Err(e) => print("err: " + e),

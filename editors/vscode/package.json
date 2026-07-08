@@ -2,7 +2,7 @@
   "name": "raylang",
   "displayName": "raylang",
   "description": "Soporte para el lenguaje raylang (.ray): resaltado de sintaxis + cliente del Language Server (diagnósticos en vivo).",
-  "version": "0.11.0",
+  "version": "0.15.0",
   "publisher": "rayala",
   "engines": {
     "vscode": "^1.75.0"
@@ -40,13 +40,22 @@
       "properties": {
         "raylang.serverPath": {
           "type": "string",
-          "default": "raylang",
-          "description": "Ruta al binario de raylang que provee el Language Server. Por defecto 'raylang' (se busca en el PATH). El cliente lo lanza con '--lsp'."
+          "default": "ray",
+          "description": "Ruta al binario de raylang que provee el Language Server. Por defecto 'ray' (se busca en el PATH). El cliente lo lanza con el subcomando 'lsp'. Si VSCode no encuentra 'ray' (p. ej. lanzado desde el Dock en macOS, sin ~/.local/bin en el PATH), pon aquí la ruta absoluta."
         },
         "raylang.enableLsp": {
           "type": "boolean",
           "default": true,
           "description": "Activa el cliente del Language Server (diagnósticos en vivo). Si se desactiva, la extensión solo colorea."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[raylang]": {
+        "editor.quickSuggestions": {
+          "other": true,
+          "comments": false,
+          "strings": true
         }
       }
     }

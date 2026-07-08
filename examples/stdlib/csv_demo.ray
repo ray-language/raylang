@@ -5,7 +5,7 @@ from csv import parse_csv, write_csv;
 fn fila_str(f: [string]) -> string {
     var s = "";
     var c = 0;
-    while (c < len(f)) {
+    while (c < f.len()) {
         if (c > 0) {
             s = s + "|";
         }
@@ -16,11 +16,11 @@ fn fila_str(f: [string]) -> string {
 }
 
 fn iguales(a: [[string]], b: [[string]]) -> bool {
-    if (len(a) != len(b)) {
+    if (a.len() != b.len()) {
         return false;
     }
     var i = 0;
-    while (i < len(a)) {
+    while (i < a.len()) {
         if (fila_str(a[i]) != fila_str(b[i])) {
             return false;
         }
@@ -34,7 +34,7 @@ fn main() {
     match (parse_csv(doc)) {
         Result.Ok(rows) => {
             var r = 0;
-            while (r < len(rows)) {
+            while (r < rows.len()) {
                 print(fila_str(rows[r]));
                 r = r + 1;
             }

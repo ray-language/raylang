@@ -8,7 +8,6 @@
 // raylang), en un bucle iterativo, sin usar la pila del host para los marcos del lenguaje.
 //
 // M14.5a — el núcleo (escalares, control, locales, llamadas, recursión, builtins escalares).
-
 from compiler import Op, CProgram, CompiledFn, Chunk, UpSrc;
 from interpreter import Value, Flow, RuntimeError, value_str, values_equal, eval_add, eval_arith, eval_cmp, dispatch_builtin, rt_error, no_vals;
 from interpreter import SField, struct_get, struct_set, as_int, Cell;
@@ -19,23 +18,38 @@ from parser import BinOp;
 // las celdas capturadas (upvalues) y su propia pila de operandos. Darle pila propia a cada marco evita la
 // aritmética de *base pointer*. M14.5c: cada local es una `Cell` (como el intérprete) → una closure que la
 // capture comparte la celda y ve sus mutaciones; el GC del host la mantiene viva tras el marco.
-struct Frame { fni: int, ip: int, locals: [Cell], stack: [Value], upvalues: [Cell] }
+struct Frame {
+    fni: int,
+    ip: int,
+    locals: [Cell],
+    stack: [Value],
+    upvalues: [Cell],
+}
 
 fn no_cells() -> [Cell] { [] }
 
 // Saca el valor de la cima (el compilador garantiza que hay uno).
 fn pop_val(stack: [Value]) -> Value {
-    match (pop(stack)) { Option.Some(v) => v, Option.None => panic("VM: pila de operandos vacía") }
+    match (pop(stack)) {
+        Option.Some(v) => v,
+        Option.None => panic("VM: pila de operandos vacía"),
+    }
 }
 
 // Saca `n` valores y los devuelve en ORDEN de empuje (arg0 primero), para alimentar params/builtins.
 fn pop_n(stack: [Value], n: int) -> [Value] {
     var rev: [Value] = [];
     var i = 0;
-    while (i < n) { push(rev, pop_val(stack)); i = i + 1; }
+    while (i < n) {
+        rev.push(pop_val(stack));
+        i = i + 1;
+    }
     var out: [Value] = [];
-    var j = len(rev) - 1;
-    while (j >= 0) { push(out, rev[j]); j = j - 1; }
+    var j = rev.len() - 1;
+    while (j >= 0) {
+        out.push(rev[j]);
+        j = j - 1;
+    }
     out
 }
 
@@ -45,21 +59,35 @@ fn new_frame(cp: CProgram, idx: int, args: [Value], upvalues: [Cell]) -> Frame {
     let cf = cp.fns[idx];
     var locals: [Cell] = [];
     var i = 0;
-    while (i < cf.nslots) { push(locals, Cell { v: Value.VUnit }); i = i + 1; }
+    while (i < cf.nslots) {
+        locals.push(Cell { v: Value.VUnit });
+        i = i + 1;
+    }
     var k = 0;
-    while (k < len(args)) { locals[k] = Cell { v: args[k] }; k = k + 1; }
+    while (k < args.len()) {
+        locals[k] = Cell { v: args[k] };
+        k = k + 1;
+    }
     Frame { fni: idx, ip: 0, locals: locals, stack: [], upvalues: upvalues }
 }
 
 // ¿La cima de la pila es `false`? (para `OJumpIfFalse`, que OJEA sin sacar).
 fn peek_false(stack: [Value]) -> bool {
-    match (stack[len(stack) - 1]) { Value.VBool(b) => !b, _ => false }
+    match (stack[stack.len() - 1]) {
+        Value.VBool(b) => !b,
+        _ => false,
+    }
 }
 
 // El índice de la función `main` en el programa compilado.
 fn find_main(cp: CProgram) -> int {
     var i = 0;
-    while (i < len(cp.fns)) { if (cp.fns[i].name == "main") { return i; } i = i + 1; }
+    while (i < cp.fns.len()) {
+        if (cp.fns[i].name == "main") {
+            return i;
+        }
+        i = i + 1;
+    }
     0 - 1
 }
 
@@ -67,68 +95,148 @@ fn find_main(cp: CProgram) -> int {
 // de marcos. Devuelve el valor que retorna `main`.
 fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
     let main_idx = find_main(cp);
-    if (main_idx < 0) { return Result.Err(Flow.FError(rt_error(0, 0, "no hay función 'main'"))); }
+    if (main_idx < 0) {
+        return Result.Err(Flow.FError(rt_error(0, 0, "no hay función 'main'")));
+    }
     var frames: [Frame] = [new_frame(cp, main_idx, no_vals(), no_cells())];
 
     var running = true;
     var result = Value.VUnit;
     while (running) {
-        let fr = frames[len(frames) - 1];
+        let fr = frames[frames.len() - 1];
         let cf = cp.fns[fr.fni];
         let op = cf.chunk.code[fr.ip];
         fr.ip = fr.ip + 1;
         match (op) {
-            Op.OConst(idx) => { push(fr.stack, cf.chunk.consts[idx]); },
-            Op.OTrue => { push(fr.stack, Value.VBool(true)); },
-            Op.OFalse => { push(fr.stack, Value.VBool(false)); },
-            Op.OUnit => { push(fr.stack, Value.VUnit); },
-            Op.OPop => { pop_val(fr.stack); },
-            Op.OAdd => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_add(a, b)?); },
-            Op.OSub => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_arith(BinOp.Sub, a, b, 0, 0)?); },
-            Op.OMul => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_arith(BinOp.Mul, a, b, 0, 0)?); },
-            Op.ODiv => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_arith(BinOp.Div, a, b, 0, 0)?); },
-            Op.ORem => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_arith(BinOp.Rem, a, b, 0, 0)?); },
-            Op.ONeg => { let a = pop_val(fr.stack); push(fr.stack, negate(a)); },
-            Op.ONot => { let a = pop_val(fr.stack); push(fr.stack, not_val(a)); },
-            Op.OEq => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, Value.VBool(values_equal(a, b))); },
-            Op.ONe => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, Value.VBool(!values_equal(a, b))); },
-            Op.OLt => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_cmp(BinOp.Lt, a, b)?); },
-            Op.OLe => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_cmp(BinOp.Le, a, b)?); },
-            Op.OGt => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_cmp(BinOp.Gt, a, b)?); },
-            Op.OGe => { let b = pop_val(fr.stack); let a = pop_val(fr.stack); push(fr.stack, eval_cmp(BinOp.Ge, a, b)?); },
-            Op.OJump(t) => { fr.ip = t; },
-            Op.OJumpIfFalse(t) => { if (peek_false(fr.stack)) { fr.ip = t; } },
-            Op.OGetLocal(slot) => { push(fr.stack, fr.locals[slot].v); },
-            Op.OSetLocal(slot) => { fr.locals[slot].v = pop_val(fr.stack); }, // muta la celda (la ven las closures)
-            Op.OInitLocal(slot) => { fr.locals[slot] = Cell { v: pop_val(fr.stack) }; }, // celda FRESCA (shadowing/bucle)
-            Op.OGetUpvalue(i) => { push(fr.stack, fr.upvalues[i].v); },
-            Op.OSetUpvalue(i) => { fr.upvalues[i].v = pop_val(fr.stack); },
+            Op.OConst(idx) => {
+                fr.stack.push(cf.chunk.consts[idx]);
+            },
+            Op.OTrue => {
+                fr.stack.push(Value.VBool(true));
+            },
+            Op.OFalse => {
+                fr.stack.push(Value.VBool(false));
+            },
+            Op.OUnit => {
+                fr.stack.push(Value.VUnit);
+            },
+            Op.OPop => {
+                pop_val(fr.stack);
+            },
+            Op.OAdd => {
+                let b = pop_val(fr.stack);
+                let a = pop_val(fr.stack);
+                fr.stack.push(eval_add(a, b)?);
+            },
+            Op.OSub => {
+                let b = pop_val(fr.stack);
+                let a = pop_val(fr.stack);
+                fr.stack.push(eval_arith(BinOp.Sub, a, b, 0, 0)?);
+            },
+            Op.OMul => {
+                let b = pop_val(fr.stack);
+                let a = pop_val(fr.stack);
+                fr.stack.push(eval_arith(BinOp.Mul, a, b, 0, 0)?);
+            },
+            Op.ODiv => {
+                let b = pop_val(fr.stack);
+                let a = pop_val(fr.stack);
+                fr.stack.push(eval_arith(BinOp.Div, a, b, 0, 0)?);
+            },
+            Op.ORem => {
+                let b = pop_val(fr.stack);
+                let a = pop_val(fr.stack);
+                fr.stack.push(eval_arith(BinOp.Rem, a, b, 0, 0)?);
+            },
+            Op.ONeg => {
+                let a = pop_val(fr.stack);
+                fr.stack.push(negate(a));
+            },
+            Op.ONot => {
+                let a = pop_val(fr.stack);
+                fr.stack.push(not_val(a));
+            },
+            Op.OEq => {
+                let b = pop_val(fr.stack);
+                let a = pop_val(fr.stack);
+                fr.stack.push(Value.VBool(values_equal(a, b)));
+            },
+            Op.ONe => {
+                let b = pop_val(fr.stack);
+                let a = pop_val(fr.stack);
+                fr.stack.push(Value.VBool(!values_equal(a, b)));
+            },
+            Op.OLt => {
+                let b = pop_val(fr.stack);
+                let a = pop_val(fr.stack);
+                fr.stack.push(eval_cmp(BinOp.Lt, a, b)?);
+            },
+            Op.OLe => {
+                let b = pop_val(fr.stack);
+                let a = pop_val(fr.stack);
+                fr.stack.push(eval_cmp(BinOp.Le, a, b)?);
+            },
+            Op.OGt => {
+                let b = pop_val(fr.stack);
+                let a = pop_val(fr.stack);
+                fr.stack.push(eval_cmp(BinOp.Gt, a, b)?);
+            },
+            Op.OGe => {
+                let b = pop_val(fr.stack);
+                let a = pop_val(fr.stack);
+                fr.stack.push(eval_cmp(BinOp.Ge, a, b)?);
+            },
+            Op.OJump(t) => {
+                fr.ip = t;
+            },
+            Op.OJumpIfFalse(t) => {
+                if (peek_false(fr.stack)) {
+                    fr.ip = t;
+                }
+            },
+            Op.OGetLocal(slot) => {
+                fr.stack.push(fr.locals[slot].v);
+            },
+            Op.OSetLocal(slot) => {
+                fr.locals[slot].v = pop_val(fr.stack);  // muta la celda (la ven las closures)
+            },
+            Op.OInitLocal(slot) => {
+                fr.locals[slot] = Cell { v: pop_val(fr.stack) };  // celda FRESCA (shadowing/bucle)
+            },
+            Op.OGetUpvalue(i) => {
+                fr.stack.push(fr.upvalues[i].v);
+            },
+            Op.OSetUpvalue(i) => {
+                fr.upvalues[i].v = pop_val(fr.stack);
+            },
             Op.OBuiltin(name, argc) => {
                 let args = pop_n(fr.stack, argc);
-                push(fr.stack, dispatch_builtin(prog_args, name, args, 0, 0)?);
+                fr.stack.push(dispatch_builtin(prog_args, name, args, 0, 0)?);
             },
             Op.OCall(idx, argc) => {
                 let args = pop_n(fr.stack, argc);
-                push(frames, new_frame(cp, idx, args, no_cells()));
+                frames.push(new_frame(cp, idx, args, no_cells()));
             },
-            Op.OFunc(idx) => { push(fr.stack, Value.VVmClosure(idx, no_cells())); },
+            Op.OFunc(idx) => {
+                fr.stack.push(Value.VVmClosure(idx, no_cells()));
+            },
             Op.OClosure(idx, srcs) => {
                 var cells: [Cell] = [];
                 var i = 0;
-                while (i < len(srcs)) {
+                while (i < srcs.len()) {
                     match (srcs[i]) {
                         // Captura POR REFERENCIA: se empuja la celda misma (compartida), no su valor.
-                        UpSrc.ULocal(slot) => push(cells, fr.locals[slot]),
-                        UpSrc.UUp(u) => push(cells, fr.upvalues[u]),
-                    };
+                        UpSrc.ULocal(slot) => cells.push(fr.locals[slot]),
+                        UpSrc.UUp(u) => cells.push(fr.upvalues[u]),
+                    }
                     i = i + 1;
                 }
-                push(fr.stack, Value.VVmClosure(idx, cells));
+                fr.stack.push(Value.VVmClosure(idx, cells));
             },
             Op.OCallValue(argc) => {
                 let args = pop_n(fr.stack, argc);
                 match (pop_val(fr.stack)) {
-                    Value.VVmClosure(idx, cells) => push(frames, new_frame(cp, idx, args, cells)),
+                    Value.VVmClosure(idx, cells) => frames.push(new_frame(cp, idx, args, cells)),
                     _ => panic("VM: llamada a un valor que no es función"),
                 };
             },
@@ -136,13 +244,18 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                 let v = pop_val(fr.stack);
                 match (v) {
                     Value.VEnum(_, variant, payload) => {
-                        if (variant == "Ok" || variant == "Some") { push(fr.stack, payload[0]); }
-                        else {
+                        if (variant == "Ok" || variant == "Some") {
+                            fr.stack.push(payload[0]);
+                        } else {
                             // Error/None: retornar ESE valor (entero, sin perder el nombre del enum) de la
                             // función actual, como `OReturn`.
                             pop(frames);
-                            if (len(frames) == 0) { result = v; running = false; }
-                            else { push(frames[len(frames) - 1].stack, v); }
+                            if (frames.len() == 0) {
+                                result = v;
+                                running = false;
+                            } else {
+                                frames[frames.len() - 1].stack.push(v);
+                            }
                         }
                     },
                     _ => panic("VM: ? sobre un valor que no es Result/Option"),
@@ -154,21 +267,23 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                 let recv = pop_val(fr.stack);
                 match (resolve_dispatch(cp, prog_args, recv, fname, args)?) {
                     // Marco nuevo (campo-función / método / UFCS): los args ya llevan o no el receptor.
-                    Dispatch.DFrame(idx, callargs, cells) => push(frames, new_frame(cp, idx, callargs, cells)),
+                    Dispatch.DFrame(idx, callargs, cells) => frames.push(new_frame(cp, idx, callargs, cells)),
                     // Valor directo (@derive igual/mostrar, primitivo menor, builtin como método).
-                    Dispatch.DValue(v) => push(fr.stack, v),
+                    Dispatch.DValue(v) => fr.stack.push(v),
                 };
             },
             // --- M14.5e: llamadas en cola. REUTILIZAN el marco actual (lo reemplazan) en vez de apilar →
             // la recursión de cola corre en O(1) marcos. Al retornar, el valor va al llamador ORIGINAL.
             Op.OTailCall(idx, argc) => {
                 let args = pop_n(fr.stack, argc);
-                frames[len(frames) - 1] = new_frame(cp, idx, args, no_cells());
+                frames[frames.len() - 1] = new_frame(cp, idx, args, no_cells());
             },
             Op.OTailCallValue(argc) => {
                 let args = pop_n(fr.stack, argc);
                 match (pop_val(fr.stack)) {
-                    Value.VVmClosure(idx, cells) => { frames[len(frames) - 1] = new_frame(cp, idx, args, cells); },
+                    Value.VVmClosure(idx, cells) => {
+                        frames[frames.len() - 1] = new_frame(cp, idx, args, cells);
+                    },
                     _ => panic("VM: llamada a un valor que no es función"),
                 };
             },
@@ -178,22 +293,31 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                 match (resolve_dispatch(cp, prog_args, recv, fname, args)?) {
                     // En cola: reutiliza el marco. Si resuelve a un valor directo, lo empuja y el `OReturn`
                     // que sigue lo retorna (sin optimización de cola, pero correcto).
-                    Dispatch.DFrame(idx, callargs, cells) => { frames[len(frames) - 1] = new_frame(cp, idx, callargs, cells); },
-                    Dispatch.DValue(v) => push(fr.stack, v),
+                    Dispatch.DFrame(idx, callargs, cells) => {
+                        frames[frames.len() - 1] = new_frame(cp, idx, callargs, cells);
+                    },
+                    Dispatch.DValue(v) => fr.stack.push(v),
                 };
             },
             Op.OReturn => {
                 let rv = pop_val(fr.stack);
                 pop(frames);
-                if (len(frames) == 0) { result = rv; running = false; }
-                else { push(frames[len(frames) - 1].stack, rv); }
+                if (frames.len() == 0) {
+                    result = rv;
+                    running = false;
+                } else {
+                    frames[frames.len() - 1].stack.push(rv);
+                }
             },
             // --- M14.5b: datos (mismo Value que el intérprete; semántica de referencia del host) ---
-            Op.OMakeArray(n) => { let elems = pop_n(fr.stack, n); push(fr.stack, Value.VArray(elems)); },
+            Op.OMakeArray(n) => {
+                let elems = pop_n(fr.stack, n);
+                fr.stack.push(Value.VArray(elems));
+            },
             Op.OIndex => {
                 let i = as_int(pop_val(fr.stack));
                 let target = pop_val(fr.stack);
-                push(fr.stack, vm_index(target, i)?);
+                fr.stack.push(vm_index(target, i)?);
             },
             Op.OSetIndex => {
                 let v = pop_val(fr.stack);
@@ -201,22 +325,27 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                 let target = pop_val(fr.stack);
                 match (target) {
                     Value.VArray(elems) => {
-                        if (i < 0 || i >= len(elems)) { return Result.Err(Flow.FError(vm_oob(i, len(elems)))); }
-                        elems[i] = v; // muta el arreglo compartido (referencia del host)
+                        if (i < 0 || i >= elems.len()) {
+                            return Result.Err(Flow.FError(vm_oob(i, elems.len())));
+                        }
+                        elems[i] = v;  // muta el arreglo compartido (referencia del host)
                     },
                     _ => panic("VM: asignar índice sobre un no-arreglo"),
                 }
             },
             Op.OMakeStruct(name, fnames) => {
-                let vals = pop_n(fr.stack, len(fnames));
+                let vals = pop_n(fr.stack, fnames.len());
                 var fields: [SField] = [];
                 var k = 0;
-                while (k < len(fnames)) { push(fields, SField { name: fnames[k], value: vals[k] }); k = k + 1; }
-                push(fr.stack, Value.VStruct(name, fields));
+                while (k < fnames.len()) {
+                    fields.push(SField { name: fnames[k], value: vals[k] });
+                    k = k + 1;
+                }
+                fr.stack.push(Value.VStruct(name, fields));
             },
             Op.OGetField(name) => {
                 match (pop_val(fr.stack)) {
-                    Value.VStruct(_, fields) => push(fr.stack, struct_get(fields, name)),
+                    Value.VStruct(_, fields) => fr.stack.push(struct_get(fields, name)),
                     _ => panic("VM: acceso a campo sobre un no-struct"),
                 };
             },
@@ -229,17 +358,17 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
             },
             Op.OMakeEnum(en, variant, arity) => {
                 let payload = pop_n(fr.stack, arity);
-                push(fr.stack, Value.VEnum(en, variant, payload));
+                fr.stack.push(Value.VEnum(en, variant, payload));
             },
             Op.OEnumTagEq(variant) => {
                 match (pop_val(fr.stack)) {
-                    Value.VEnum(_, v2, _) => push(fr.stack, Value.VBool(v2 == variant)),
+                    Value.VEnum(_, v2, _) => fr.stack.push(Value.VBool(v2 == variant)),
                     _ => panic("VM: EnumTagEq sobre un no-enum"),
                 };
             },
             Op.OGetEnumField(i) => {
                 match (pop_val(fr.stack)) {
-                    Value.VEnum(_, _, payload) => push(fr.stack, payload[i]),
+                    Value.VEnum(_, _, payload) => fr.stack.push(payload[i]),
                     _ => panic("VM: GetEnumField sobre un no-enum"),
                 };
             },
@@ -261,12 +390,16 @@ fn vm_oob(i: int, n: int) -> RuntimeError {
 fn vm_index(target: Value, i: int) -> Result<Value, Flow> {
     match (target) {
         Value.VArray(elems) => {
-            if (i < 0 || i >= len(elems)) { return Result.Err(Flow.FError(vm_oob(i, len(elems)))); }
+            if (i < 0 || i >= elems.len()) {
+                return Result.Err(Flow.FError(vm_oob(i, elems.len())));
+            }
             Result.Ok(elems[i])
         },
         Value.VStr(s) => {
-            let cs = chars(s);
-            if (i < 0 || i >= len(cs)) { return Result.Err(Flow.FError(vm_oob(i, len(cs)))); }
+            let cs = s.chars();
+            if (i < 0 || i >= cs.len()) {
+                return Result.Err(Flow.FError(vm_oob(i, cs.len())));
+            }
             Result.Ok(Value.VChar(cs[i]))
         },
         _ => panic("VM: indexar sobre un no-arreglo/string"),
@@ -282,15 +415,18 @@ fn negate(v: Value) -> Value {
 }
 
 fn not_val(v: Value) -> Value {
-    match (v) { Value.VBool(b) => Value.VBool(!b), _ => panic("VM: ! de un no-booleano") }
+    match (v) {
+        Value.VBool(b) => Value.VBool(!b),
+        _ => panic("VM: ! de un no-booleano"),
+    }
 }
 
 // El resultado de resolver `recv.fname(args)`: o apilar un marco (campo-función/método/UFCS), o empujar un
 // valor ya calculado (@derive, primitivo `menor`, builtin como método). Separa la RESOLUCIÓN de la acción
 // para no usar `return` dentro del bucle de la VM (raylang no tiene `break`/early-return del bucle).
 enum Dispatch {
-    DFrame(int, [Value], [Cell]),   // índice de la fn compilada, argumentos (con/sin recv), upvalues
-    DValue(Value),                  // valor directo a empujar en la pila de operandos
+    DFrame(int, [Value], [Cell]),  // índice de la fn compilada, argumentos (con/sin recv), upvalues
+    DValue(Value),  // valor directo a empujar en la pila de operandos
 }
 
 // Resuelve `recv.fname(args)` por la ETIQUETA del valor (como `dispatch_method` del intérprete, M14.4d):
@@ -309,21 +445,31 @@ fn resolve_dispatch(cp: CProgram, prog_args: [string], recv: Value, fname: strin
                 return Result.Ok(d);
             }
         },
-        _ => {},
+        _ => { },
     }
     // (b) método del tipo (impl o defecto): antepone el receptor como `self`.
     match (get(cp.methods, type_key_of_value(recv) + "#" + fname)) {
-        Option.Some(idx) => { return Result.Ok(Dispatch.DFrame(idx, prepend(recv, args), no_cells())); },
-        Option.None => {},
+        Option.Some(idx) => {
+            return Result.Ok(Dispatch.DFrame(idx, prepend(recv, args), no_cells()));
+        },
+        Option.None => { },
     }
     // (c) @derive (igual ≡ igualdad estructural, mostrar ≡ value_str) y `menor` de Ord sobre primitivos.
-    if (fname == "igual") { return Result.Ok(Dispatch.DValue(Value.VBool(values_equal(recv, args[0])))); }
-    if (fname == "mostrar") { return Result.Ok(Dispatch.DValue(Value.VStr(value_str(recv)))); }
-    if (fname == "menor") { return Result.Ok(Dispatch.DValue(Value.VBool(value_lt(recv, args[0])))); }
+    if (fname == "igual") {
+        return Result.Ok(Dispatch.DValue(Value.VBool(values_equal(recv, args[0]))));
+    }
+    if (fname == "mostrar") {
+        return Result.Ok(Dispatch.DValue(Value.VStr(value_str(recv))));
+    }
+    if (fname == "menor") {
+        return Result.Ok(Dispatch.DValue(Value.VBool(value_lt(recv, args[0]))));
+    }
     // (d) UFCS a función libre: fname(recv, args).
     match (get(cp.indices, fname)) {
-        Option.Some(idx) => { return Result.Ok(Dispatch.DFrame(idx, prepend(recv, args), no_cells())); },
-        Option.None => {},
+        Option.Some(idx) => {
+            return Result.Ok(Dispatch.DFrame(idx, prepend(recv, args), no_cells()));
+        },
+        Option.None => { },
     }
     // (e) builtin como método: el receptor como primer argumento (p. ej. `xs.len()`).
     if (is_builtin(fname)) {

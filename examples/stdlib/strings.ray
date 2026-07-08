@@ -11,7 +11,7 @@ fn saludar(nombre: string) -> string {
 fn main() -> int {
     let nombre = "raylang";
     print(saludar(nombre));  // hola, raylang!
-    print(len(nombre));  // 7  (nº de caracteres)
+    print(nombre.len());  // 7  (nº de caracteres)
 
     // to_string: convertir primitivos a texto y componer mensajes.
     let n = 3 + 4;
@@ -21,9 +21,9 @@ fn main() -> int {
     // trim + split para descomponer (split devuelve [string]).
     let csv = "  rojo, verde , azul  ";
     let campos = csv.trim().split(",");  // UFCS encadenado
-    print(len(campos));  // 3
-    print(trim(campos[0]));  // rojo
+    print(campos.len());  // 3
+    print(campos[0].trim());  // rojo
     print(campos[1].trim());  // verde
 
-    len(campos)  // código de salida: 3
+    campos.len()  // código de salida: 3
 }

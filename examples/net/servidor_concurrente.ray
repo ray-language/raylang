@@ -7,10 +7,12 @@
 //
 // Prueba: cargo run -- --vm examples/net/servidor_concurrente.ray  (y conéctate con varios `nc`; Ctrl-C
 // para parar). Compáralo con tcp_servidor.ray (M15.3), que es secuencial y atiende de uno en uno.
+import std/net;
+
 fn atender(conn: int) {
-    match (socket_read(conn)) {
+    match (net.socket_read(conn)) {
         Result.Ok(msg) => {
-            match (socket_write(conn, "eco: " + msg)) {
+            match (net.socket_write(conn, "eco: " + msg)) {
                 Result.Ok(_) => { },
                 Result.Err(e) => eprint("error al escribir: " + e),
             }
@@ -21,12 +23,12 @@ fn atender(conn: int) {
 }
 
 fn main() -> int {
-    match (tcp_listen("127.0.0.1", 8080)) {
+    match (net.tcp_listen("127.0.0.1", 8080)) {
         Result.Ok(srv) => {
-            print("escuchando (concurrente) en el puerto " + to_string(local_port(srv)));
+            print("escuchando (concurrente) en el puerto " + to_string(net.local_port(srv)));
             var seguir: bool = true;
             while (seguir) {
-                match (tcp_accept(srv)) {
+                match (net.tcp_accept(srv)) {
                     // Una fibra por conexión: el bucle vuelve a `accept` de inmediato (cede mientras
                     // no haya conexión nueva), y cada `atender` cede mientras espera datos.
                     Result.Ok(conn) => {

@@ -11,6 +11,8 @@
 // Como los sockets ceden la fibra, el camino concurrente es **solo VM**; en el intérprete corren
 // bloqueantes (un hilo), así que el cliente funciona en ambos motores contra un servidor real.
 // Una respuesta de Redis (RESP2).
+import std/net;
+
 pub enum Reply {
     Str(string),  // simple string (+) o bulk string ($)
     Int(int),  // entero (:)
@@ -27,7 +29,7 @@ pub struct Conn {
 }
 
 pub fn connect(host: string, port: int) -> Result<Conn, string> {
-    match (tcp_connect(host, port)) {
+    match (net.tcp_connect(host, port)) {
         Result.Ok(h) => Result.Ok(Conn { h: h, buf: "" }),
         Result.Err(e) => Result.Err(e),
     }
@@ -39,11 +41,11 @@ pub fn close_conn(c: Conn) {
 
 // Codifica un comando (lista de argumentos) como un array RESP de bulk strings.
 pub fn encode_command(args: [string]) -> string {
-    var s = "*" + to_string(len(args)) + "\r\n";
+    var s = "*" + to_string(args.len()) + "\r\n";
     var i = 0;
-    while (i < len(args)) {
+    while (i < args.len()) {
         let a = args[i];
-        s = s + "$" + to_string(len(a)) + "\r\n" + a + "\r\n";
+        s = s + "$" + to_string(a.len()) + "\r\n" + a + "\r\n";
         i = i + 1;
     }
     s
@@ -51,9 +53,9 @@ pub fn encode_command(args: [string]) -> string {
 
 // Lee un trozo más del socket al buffer; false si la conexión se cerró (EOF) o falló.
 fn pull(c: Conn) -> bool {
-    match (socket_read(c.h)) {
+    match (net.socket_read(c.h)) {
         Result.Ok(chunk) => {
-            if (len(chunk) == 0) {
+            if (chunk.len() == 0) {
                 false
             } else {
                 c.buf = c.buf + chunk;
@@ -69,8 +71,8 @@ fn read_line(c: Conn) -> Result<string, string> {
     while (true) {
         match (index_of(c.buf, "\r\n")) {
             Option.Some(pos) => {
-                let line = substring(c.buf, 0, pos);
-                c.buf = substring(c.buf, pos + 2, len(c.buf));
+                let line = c.buf.substring(0, pos);
+                c.buf = c.buf.substring(pos + 2, c.buf.len());
                 return Result.Ok(line);
             },
             Option.None => {
@@ -85,13 +87,13 @@ fn read_line(c: Conn) -> Result<string, string> {
 
 // Lee exactamente `n` caracteres, rellenando desde el socket si hace falta.
 fn read_n(c: Conn, n: int) -> Result<string, string> {
-    while (len(c.buf) < n) {
+    while (c.buf.len() < n) {
         if (!pull(c)) {
             return Result.Err("conexión cerrada al leer el cuerpo");
         }
     }
-    let s = substring(c.buf, 0, n);
-    c.buf = substring(c.buf, n, len(c.buf));
+    let s = c.buf.substring(0, n);
+    c.buf = c.buf.substring(n, c.buf.len());
     Result.Ok(s)
 }
 
@@ -108,11 +110,11 @@ fn read_reply(c: Conn) -> Result<Reply, string> {
     match (read_line(c)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(line) => {
-            if (len(line) == 0) {
+            if (line.len() == 0) {
                 return Result.Err("respuesta RESP vacía");
             }
             let t = line[0];
-            let rest = substring(line, 1, len(line));
+            let rest = line.substring(1, line.len());
             if (t == '+') {
                 Result.Ok(Reply.Str(rest))
             } else {
@@ -164,7 +166,7 @@ fn read_array(c: Conn, n: int) -> Result<Reply, string> {
     var err = "";
     while (i < n && err == "") {
         match (read_reply(c)) {
-            Result.Ok(it) => push(items, it),
+            Result.Ok(it) => items.push(it),
             Result.Err(e) => {
                 err = e;
             },
@@ -180,7 +182,7 @@ fn read_array(c: Conn, n: int) -> Result<Reply, string> {
 
 // Envía un comando y lee su respuesta.
 pub fn command(c: Conn, args: [string]) -> Result<Reply, string> {
-    match (socket_write(c.h, encode_command(args))) {
+    match (net.socket_write(c.h, encode_command(args))) {
         Result.Err(e) => Result.Err("error al enviar: " + e),
         Result.Ok(_) => read_reply(c),
     }
@@ -200,7 +202,7 @@ pub fn reply_str(r: Reply) -> string {
 fn join_replies(items: [Reply]) -> string {
     var s = "";
     var i = 0;
-    while (i < len(items)) {
+    while (i < items.len()) {
         if (i > 0) {
             s = s + ", ";
         }

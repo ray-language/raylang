@@ -33,25 +33,25 @@ fn word_le(b: [int], i: int) -> u32 {
 // flujo de clave. El estado inicial son 16 palabras: 4 constantes + 8 de clave + contador + 3 de nonce.
 pub fn chacha20_block(key: [int], counter: u32, nonce: [int]) -> [int] {
     var st: [u32] = [];
-    push(st, 1634760805 as u32);  // "expa" (0x61707865)
-    push(st, 857760878 as u32);  // "nd 3" (0x3320646e)
-    push(st, 2036477234 as u32);  // "2-by" (0x79622d32)
-    push(st, 1797285236 as u32);  // "te k" (0x6b206574)
+    st.push(1634760805 as u32);  // "expa" (0x61707865)
+    st.push(857760878 as u32);  // "nd 3" (0x3320646e)
+    st.push(2036477234 as u32);  // "2-by" (0x79622d32)
+    st.push(1797285236 as u32);  // "te k" (0x6b206574)
     var i = 0;
     while (i < 8) {
-        push(st, word_le(key, i * 4));
+        st.push(word_le(key, i * 4));
         i = i + 1;
     }
-    push(st, counter);
-    push(st, word_le(nonce, 0));
-    push(st, word_le(nonce, 4));
-    push(st, word_le(nonce, 8));
+    st.push(counter);
+    st.push(word_le(nonce, 0));
+    st.push(word_le(nonce, 4));
+    st.push(word_le(nonce, 8));
 
     // Copia de trabajo sobre la que se aplican las rondas.
     var work: [u32] = [];
     i = 0;
     while (i < 16) {
-        push(work, st[i]);
+        work.push(st[i]);
         i = i + 1;
     }
 
@@ -74,10 +74,10 @@ pub fn chacha20_block(key: [int], counter: u32, nonce: [int]) -> [int] {
     i = 0;
     while (i < 16) {
         let w = work[i] + st[i];
-        push(out, (w & 255) as int);
-        push(out, (w >> 8 & 255) as int);
-        push(out, (w >> 16 & 255) as int);
-        push(out, (w >> 24 & 255) as int);
+        out.push((w & 255) as int);
+        out.push((w >> 8 & 255) as int);
+        out.push((w >> 16 & 255) as int);
+        out.push((w >> 24 & 255) as int);
         i = i + 1;
     }
     out
@@ -87,14 +87,14 @@ pub fn chacha20_block(key: [int], counter: u32, nonce: [int]) -> [int] {
 // contador de bloque inicial (1 en el AEAD del RFC; 0 para el flujo puro).
 pub fn chacha20_encrypt(key: [int], counter: u32, nonce: [int], data: [int]) -> [int] {
     var out: [int] = [];
-    let n = len(data);
+    let n = data.len();
     var bc = counter;
     var i = 0;
     while (i < n) {
         let ks = chacha20_block(key, bc, nonce);
         var j = 0;
         while (j < 64 && i + j < n) {
-            push(out, data[i + j] ^ ks[j]);
+            out.push(data[i + j] ^ ks[j]);
             j = j + 1;
         }
         i = i + 64;

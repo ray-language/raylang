@@ -19,7 +19,7 @@ fn probar(seed: [int], msg: [int]) {
     var bad: [int] = [];
     var i = 0;
     while (i < 64) {
-        push(bad, sig[i]);
+        bad.push(sig[i]);
         i = i + 1;
     }
     bad[40] = bad[40] ^ 1;

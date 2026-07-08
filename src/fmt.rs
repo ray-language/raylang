@@ -155,6 +155,13 @@ struct Cur {
     /// nodo desazucarado raíz. El formateador la consulta en `fmt_expr` para reemitir `"…${e}…"` / `x |> f`.
     interp: std::collections::HashMap<(usize, usize), Vec<InterpSeg>>,
     pipe: std::collections::HashMap<(usize, usize), (Expr, Expr)>,
+    /// Indentación (nivel, no columnas) del contexto en curso. `fmt_expr`/`fmt_expr_raw` no llevan la
+    /// indentación como parámetro (son muchísimos sitios de llamada); en su lugar, las funciones que sí la
+    /// conocen (`fmt_stmt`/`fmt_value`/`fmt_expr_indented`) la depositan aquí y la rama block-form de
+    /// `fmt_expr_raw` la lee, para que un `match`/bloque **como sub-expresión** (argumento de llamada,
+    /// operando, elemento de arreglo…) se indente relativo a su línea y no a la columna 0. Se guarda y
+    /// restaura en cada mutación para no contaminar el formateo de expresiones hermanas.
+    base: usize,
 }
 
 impl Cur {
@@ -169,6 +176,7 @@ impl Cur {
             blancos,
             interp: program.interp_sites.clone(),
             pipe: program.pipe_sites.clone(),
+            base: 0,
         }
     }
 
@@ -602,6 +610,16 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
         let text = fmt_stmt(cur, st, base + 1);
         s.push_str(&inner);
         s.push_str(&text);
+        // Una forma con bloque (if/while/match/bloque) como sentencia-expresión normalmente NO lleva `;`.
+        // PERO si es la ÚLTIMA sentencia y el bloque no tiene tail, omitir el `;` la promovería, al
+        // re-parsear, a **tail** del bloque (un block-form final sin `;` es el tail) — cambiando el valor
+        // del bloque de `unit` al del block-form. Ahí el `;` es semánticamente necesario: se preserva.
+        if idx + 1 == b.statements.len()
+            && b.tail.is_none()
+            && matches!(&st.kind, StmtKind::Expr(e) if is_block_form(e))
+        {
+            s.push(';');
+        }
         if !text.contains('\n') {
             s.push_str(&cur.trailing_on(st.line));
         }
@@ -637,6 +655,16 @@ fn fmt_block(cur: &mut Cur, b: &Block, base: usize) -> String {
 }
 
 fn fmt_stmt(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
+    // La sentencia vive en `indent`: cualquier forma con bloque anidada en una sub-expresión no-valor
+    // (p. ej. `print(match …)`) debe indentarse relativa a aquí. `fmt_value` refina el valor por caso.
+    let saved = cur.base;
+    cur.base = indent;
+    let r = fmt_stmt_inner(cur, st, indent);
+    cur.base = saved;
+    r
+}
+
+fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
     match &st.kind {
         StmtKind::Let { name, ty, value, mutable } => {
             let kw = if *mutable { "var" } else { "let" };
@@ -695,7 +723,13 @@ fn fmt_value(cur: &mut Cur, e: &Expr, ind: usize) -> String {
     if is_block_form(e) {
         fmt_expr_indented(cur, e, ind)
     } else {
-        fmt_expr(cur, e, 0)
+        // No es una forma con bloque en la raíz, pero puede contenerla anidada (`print(match …)`): deja la
+        // indentación del contexto en `cur.base` para que la rama block-form de `fmt_expr_raw` la use.
+        let saved = cur.base;
+        cur.base = ind;
+        let s = fmt_expr(cur, e, 0);
+        cur.base = saved;
+        s
     }
 }
 
@@ -852,6 +886,17 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
             let a: Vec<String> = elems.iter().map(|x| fmt_expr(cur, x, 0)).collect();
             format!("[{}]", a.join(", "))
         }
+        // M48.2: literal de Map. `[:]` vacío; `[k: v, …]` poblado.
+        ExprKind::MapLit(pares) => {
+            if pares.is_empty() {
+                "[:]".to_string()
+            } else {
+                let a: Vec<String> = pares.iter()
+                    .map(|(k, v)| format!("{}: {}", fmt_expr(cur, k, 0), fmt_expr(cur, v, 0)))
+                    .collect();
+                format!("[{}]", a.join(", "))
+            }
+        }
         ExprKind::TupleLit(elems) => {
             let a: Vec<String> = elems.iter().map(|x| fmt_expr(cur, x, 0)).collect();
             format!("({})", a.join(", "))
@@ -888,8 +933,9 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
         }
         ExprKind::Try(inner) => format!("{}?", fmt_expr(cur, inner, 13)),
         ExprKind::Match { .. } | ExprKind::If { .. } | ExprKind::While { .. } | ExprKind::Block(_) => {
-            // Estas formas son multilínea; se formatean con indentación explícita (nivel 0 aquí).
-            fmt_expr_indented(cur, e, 0)
+            // Forma multilínea como SUB-expresión (argumento de llamada, operando, elemento…): se indenta
+            // relativa a la línea del contexto, que `fmt_stmt`/`fmt_value` dejaron en `cur.base`.
+            fmt_expr_indented(cur, e, cur.base)
         }
     }
 }
@@ -930,11 +976,16 @@ fn fmt_expr_indented(cur: &mut Cur, e: &Expr, base: usize) -> String {
             let mut s = format!("match ({}) {{\n", fmt_expr(cur, scrutinee, 0));
             for arm in arms {
                 s.push_str(&cur.flush_before(arm.body.line, &inner)); // comentarios encima del brazo
+                // El cuerpo del brazo vive en `base + 1`: una forma con bloque anidada en una sub-expresión
+                // no-valor del cuerpo (`A => print(match …)`) debe indentarse desde aquí.
+                let saved = cur.base;
+                cur.base = base + 1;
                 let body = if is_block_form(&arm.body) {
                     fmt_expr_indented(cur, &arm.body, base + 1)
                 } else {
                     fmt_expr(cur, &arm.body, 0)
                 };
+                cur.base = saved;
                 // Guarda opcional (M40.1a): `patrón if <cond> => …`.
                 let guarda = match &arm.guard {
                     Some(g) => format!(" if {}", fmt_expr(cur, g, 0)),
@@ -1183,6 +1234,41 @@ mod tests {
     }
 
     #[test]
+    fn forma_con_bloque_como_subexpresion_se_indenta() {
+        // Regresión: un `match`/bloque como ARGUMENTO de llamada (u otra sub-expresión no-valor) se
+        // indentaba desde la columna 0 (`fmt_expr` no llevaba la indentación). Debe indentarse relativo
+        // a su línea: brazos a base+1, cierre a base.
+        let src = "fn main() {\n  print(match (x) {\n    A => 1,\n    B => 2,\n  });\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("    print(match (x) {\n        A => 1,\n        B => 2,\n    });"),
+            "match en call bien indentado: {out:?}");
+        // Hermanas independientes: `f(match) + g(match)` no se contaminan (base guardada/restaurada).
+        let bin = "fn main() {\n  let y = f(match (x) { A => 1 }) + g(match (z) { C => 3 });\n}\n";
+        let ob = fmt(bin);
+        assert!(ob.contains("    let y = f(match (x) {\n        A => 1,\n    }) + g(match (z) {\n        C => 3,\n    });"),
+            "ambos matches en base 1: {ob:?}");
+        assert_eq!(out, fmt(&out), "idempotente");
+        assert_eq!(ob, fmt(&ob), "idempotente");
+    }
+
+    #[test]
+    fn preserva_punto_y_coma_en_block_form_final() {
+        // Regresión (grave: cambiaba semántica): un `match`/`if`/bloque como sentencia-expresión ÚLTIMA de
+        // un bloque sin tail se emitía SIN `;`; al re-parsear, un block-form final sin `;` es el **tail**,
+        // así que el bloque pasaba de producir `unit` a producir el valor del block-form. El `;` debe
+        // preservarse ahí.
+        let src = "enum Op { A, B }\nfn emit(o: Op) -> int { 5 }\nfn f(o: Op) {\n  emit(o);\n  match (o) { Op.A => emit(o), Op.B => emit(o) };\n}\nfn main() -> int { f(Op.A); 0 }\n";
+        let out = fmt(src);
+        assert!(out.contains("    };\n}"), "match final conserva `;`: {out:?}");
+        // En cambio, un block-form seguido de TAIL no lleva `;` (el tail lo mantiene como sentencia).
+        let con_tail = "enum Op { A, B }\nfn emit(o: Op) -> int { 5 }\nfn f(o: Op) -> int {\n  match (o) { Op.A => emit(o), Op.B => emit(o) }\n  7\n}\nfn main() -> int { f(Op.A) }\n";
+        let ot = fmt(con_tail);
+        assert!(ot.contains("    }\n    7\n"), "block-form con tail NO lleva `;`: {ot:?}");
+        assert_eq!(out, fmt(&out), "idempotente");
+        assert_eq!(ot, fmt(&ot), "idempotente");
+    }
+
+    #[test]
     fn preserva_pipelines() {
         let src = "fn dob(n: int) -> int { n + n }\nfn inc(n: int) -> int { n + 1 }\nfn main() -> int {\n  5 |> dob() |> inc()\n}\n";
         let out = fmt(src);
@@ -1208,10 +1294,229 @@ mod tests {
     #[test]
     fn bytes_literal_alto_round_trip() {
         // Un byte alto se emite como \xNN y round-trippea (idempotente).
-        let src = "fn main() -> int {\n  let b = b\"\\x8b\\xff\\x00A\";\n  len(b)\n}\n";
+        let src = "fn main() -> int {\n  let b = b\"\\x8b\\xff\\x00A\";\n  b.len()\n}\n";
         let a = fmt(src);
         assert!(a.contains("\\x8b") && a.contains("\\xff") && a.contains("\\x00"), "{a}");
         assert!(a.contains('A'), "ASCII imprimible tal cual: {a}");
         assert_eq!(a, fmt(&a), "idempotente");
+    }
+
+    // ─── Codemod M48.4e-2 (uso único): builtins de contenedor prefijos → `.metodo()` ───────────────────
+    //
+    // Reescribe `Call(Ident(builtin), [recv, ...resto])` → `Call(Field(recv, builtin), [...resto])` para
+    // los 20 builtins traitificados (M48.4a–d) en todo el AST de cada `.ray` del corpus, y reemite con el
+    // formateador. Como el corpus ya es **canónico** (fmt idempotente) y NO hay builtins retirados en el
+    // azúcar (pipes/interpolación) ni **shadowing** por locales/params del mismo nombre —ambos verificados
+    // antes de correrlo—, el diff resultante toca **solo** los sitios migrados. En e-2 los builtins siguen
+    // vivos: `recv.metodo()` resuelve por el trait (coexistencia), así que el corpus corre igual.
+    //
+    //   cargo test --lib fmt::tests::migrar_builtins_prefijos -- --ignored --nocapture
+
+    const RETIRADOS: &[&str] = &[
+        "len", "push", "reverse", "contains", "insert", "contains_key", "keys", "values", "trim", "split",
+        "replace", "chars", "starts_with", "ends_with", "to_upper", "to_lower", "substring", "repeat",
+        "to_bytes", "sub_bytes",
+    ];
+
+    fn cm_expr(e: &mut Expr, n: &mut usize) {
+        // Post-orden: transformar los hijos antes que el nodo (así `len(push(a, x))` → `a.push(x).len()`).
+        match &mut e.kind {
+            ExprKind::Unary { expr, .. } => cm_expr(expr, n),
+            ExprKind::Binary { left, right, .. } => {
+                cm_expr(left, n);
+                cm_expr(right, n);
+            }
+            ExprKind::Call { callee, args } => {
+                cm_expr(callee, n);
+                for a in args.iter_mut() {
+                    cm_expr(a, n);
+                }
+            }
+            ExprKind::ArrayLit(xs) | ExprKind::TupleLit(xs) => {
+                for x in xs {
+                    cm_expr(x, n);
+                }
+            }
+            ExprKind::MapLit(ps) => {
+                for (k, v) in ps {
+                    cm_expr(k, n);
+                    cm_expr(v, n);
+                }
+            }
+            ExprKind::Index { array, index } => {
+                cm_expr(array, n);
+                cm_expr(index, n);
+            }
+            ExprKind::Cast { expr, .. } => cm_expr(expr, n),
+            ExprKind::StructLit { fields, .. } => {
+                for (_, v) in fields {
+                    cm_expr(v, n);
+                }
+            }
+            ExprKind::Field { object, .. } => cm_expr(object, n),
+            ExprKind::EnumLit { args, .. } => {
+                for a in args {
+                    cm_expr(a, n);
+                }
+            }
+            ExprKind::Func(fe) => cm_block(&mut fe.body, n),
+            ExprKind::Match { scrutinee, arms } => {
+                cm_expr(scrutinee, n);
+                for arm in arms {
+                    if let Some(g) = &mut arm.guard {
+                        cm_expr(g, n);
+                    }
+                    cm_expr(&mut arm.body, n);
+                }
+            }
+            ExprKind::Try(inner) => cm_expr(inner, n),
+            ExprKind::If { cond, then_branch, else_branch } => {
+                cm_expr(cond, n);
+                cm_block(then_branch, n);
+                if let Some(eb) = else_branch {
+                    cm_expr(eb, n);
+                }
+            }
+            ExprKind::While { cond, body } => {
+                cm_expr(cond, n);
+                cm_block(body, n);
+            }
+            ExprKind::Block(b) => cm_block(b, n),
+            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
+            | ExprKind::Char(_) | ExprKind::Bytes(_) | ExprKind::Ident(_) => {}
+        }
+        // ¿Este nodo es una llamada prefija a un builtin retirado? → `recv.builtin(resto)`.
+        let migrar = matches!(&e.kind, ExprKind::Call { callee, args }
+            if !args.is_empty()
+                && matches!(&callee.kind, ExprKind::Ident(nm) if RETIRADOS.contains(&nm.as_str())));
+        if migrar {
+            if let ExprKind::Call { callee, args } = std::mem::replace(&mut e.kind, ExprKind::Bool(false)) {
+                let (nombre, cl, cc) = match callee.kind {
+                    ExprKind::Ident(nm) => (nm, callee.line, callee.col),
+                    _ => unreachable!(),
+                };
+                let mut it = args.into_iter();
+                let recv = it.next().expect("args no vacío");
+                let resto: Vec<Expr> = it.collect();
+                let field = Expr { kind: ExprKind::Field { object: Box::new(recv), name: nombre }, line: cl, col: cc };
+                e.kind = ExprKind::Call { callee: Box::new(field), args: resto };
+                *n += 1;
+            }
+        }
+    }
+
+    fn cm_block(b: &mut Block, n: &mut usize) {
+        for st in &mut b.statements {
+            cm_stmt(st, n);
+        }
+        if let Some(t) = &mut b.tail {
+            cm_expr(t, n);
+        }
+    }
+
+    fn cm_stmt(st: &mut Stmt, n: &mut usize) {
+        match &mut st.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => cm_expr(value, n),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => {
+                        cm_expr(start, n);
+                        cm_expr(end, n);
+                    }
+                    ForIter::In(e) => cm_expr(e, n),
+                    ForIter::Iter { expr, .. } => cm_expr(expr, n),
+                }
+                cm_block(body, n);
+            }
+            StmtKind::Assign { target, value } => {
+                cm_expr(target, n);
+                cm_expr(value, n);
+            }
+            StmtKind::Return { value } => {
+                if let Some(e) = value {
+                    cm_expr(e, n);
+                }
+            }
+            StmtKind::Expr(e) => cm_expr(e, n),
+        }
+    }
+
+    fn cm_program(p: &mut Program, n: &mut usize) {
+        for f in &mut p.functions {
+            cm_block(&mut f.body, n);
+        }
+        for im in &mut p.impls {
+            for m in &mut im.methods {
+                cm_block(&mut m.body, n);
+            }
+        }
+        for tr in &mut p.traits {
+            for m in &mut tr.methods {
+                if let Some(b) = &mut m.default_body {
+                    cm_block(b, n);
+                }
+            }
+        }
+        for c in &mut p.consts {
+            cm_expr(&mut c.value, n);
+        }
+        // Azúcar (pipes/interpolación): verificado 0 casos de builtin retirado; se dejan intactos (el
+        // `rhs` de un pipe es parcial —sin receptor— y transformarlo sería incorrecto).
+    }
+
+    fn recolectar_ray(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                recolectar_ray(&p, out);
+            } else if p.extension().map(|x| x == "ray").unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "codemod auxiliar (M48.4e-3): migra el archivo en RAY_MIGRATE_FILE (p. ej. el prelude extraído)"]
+    fn migrar_archivo_env() {
+        let path = std::env::var("RAY_MIGRATE_FILE").expect("RAY_MIGRATE_FILE");
+        let src = std::fs::read_to_string(&path).expect("lee");
+        let tokens = crate::lexer::lex(&src).unwrap_or_else(|e| panic!("lex: {e}"));
+        let mut program = crate::parser::parse(tokens).unwrap_or_else(|e| panic!("parse: {e}"));
+        let mut n = 0;
+        cm_program(&mut program, &mut n);
+        let mut cur = Cur::new(&src, &program);
+        let out = format_program(&program, &mut cur);
+        std::fs::write(&path, &out).expect("escribe");
+        println!("{n} sitios migrados en {path}");
+    }
+
+    #[test]
+    #[ignore = "codemod de un solo uso (M48.4e-2); corre con --ignored"]
+    fn migrar_builtins_prefijos() {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let mut files = Vec::new();
+        for d in ["examples", "std", "packages", "selfhost", "benchmarks"] {
+            recolectar_ray(&std::path::Path::new(root).join(d), &mut files);
+        }
+        files.sort();
+        let (mut sitios, mut cambiados) = (0usize, 0usize);
+        for f in &files {
+            let src = std::fs::read_to_string(f).expect("lee");
+            let tokens = crate::lexer::lex(&src).unwrap_or_else(|e| panic!("lex {f:?}: {e}"));
+            let mut program = crate::parser::parse(tokens).unwrap_or_else(|e| panic!("parse {f:?}: {e}"));
+            let mut n = 0;
+            cm_program(&mut program, &mut n);
+            if n == 0 {
+                continue;
+            }
+            let mut cur = Cur::new(&src, &program);
+            let out = format_program(&program, &mut cur);
+            std::fs::write(f, &out).expect("escribe");
+            sitios += n;
+            cambiados += 1;
+            println!("{sitios:>5}  (+{n:>3})  {}", f.strip_prefix(root).unwrap().display());
+        }
+        println!("TOTAL: {sitios} sitios migrados en {cambiados} archivos");
     }
 }

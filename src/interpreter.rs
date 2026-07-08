@@ -609,6 +609,18 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Array(Rc::new(RefCell::new(vec))))
             }
 
+            // M48.2: literal de Map `[k: v, …]` (`[:]` vacío) → un Map con los pares insertados. Las
+            // claves y valores se evalúan en orden; una clave repetida gana la última (como `insert`).
+            ExprKind::MapLit(pares) => {
+                let mut m = HashMap::new();
+                for (k, v) in pares {
+                    let kv = self.eval_expr(k)?;
+                    let vv = self.eval_expr(v)?;
+                    m.insert(MapKey::from_value(&kv), vv);
+                }
+                Ok(Value::Map(Rc::new(RefCell::new(m))))
+            }
+
             // M27.4: conversión numérica `as`. El checker garantiza una combinación válida.
             ExprKind::Cast { expr: inner, ty } => {
                 let v = self.eval_expr(inner)?;
@@ -786,6 +798,19 @@ impl<'a> Interpreter<'a> {
     }
 
     fn eval_call(&mut self, callee: &'a Expr, args: &'a [Expr]) -> EvalResult {
+        // M48.1: función asociada `Tipo.fn(args)`. `Map.new()` construye un Map vacío; los canales
+        // (`Channel.*`) solo corren en la VM (como el antiguo `channel()`), aquí error limpio.
+        if let ExprKind::Field { object, name } = &callee.kind {
+            if let ExprKind::Ident(tn) = &object.kind {
+                if crate::builtins::assoc_lookup(tn, name).is_some() {
+                    if tn == "Map" && name == "new" {
+                        return Ok(Value::Map(Rc::new(RefCell::new(HashMap::new()))));
+                    }
+                    return Err(runtime_error(callee.line, callee.col,
+                        "la concurrencia (spawn/channel/send/recv/join/scope/select) requiere la VM; el intérprete es solo el oráculo secuencial (no uses --interp)"));
+                }
+            }
+        }
         // Camino directo: el callee es un nombre que NO está tapado por una variable
         // local — un builtin o una función global. Es la vía eficiente (no se
         // construye un valor-función intermedio).
@@ -815,7 +840,7 @@ impl<'a> Interpreter<'a> {
                     // corre en el intérprete; un canal nunca llega al intérprete (channel() ya da error).
                     // `join` NO va aquí: es ad-hoc polimórfico y su forma de strings (M11.7a) corre en el
                     // intérprete; la forma de Task nunca llega (spawn ya da error → no existen Tasks aquí).
-                    if name == "spawn" || name == "channel" || name == "send" || name == "__recv"
+                    if name == "spawn" || name == "send" || name == "__recv"
                         || name == "scope" || name == "select" {
                         return Err(runtime_error(callee.line, callee.col,
                             "la concurrencia (spawn/channel/send/recv/join/scope/select) requiere la VM; el intérprete es solo el oráculo secuencial (no uses --interp)"));
@@ -876,7 +901,8 @@ impl<'a> Interpreter<'a> {
                 crate::host_print(&values[0].to_string());
                 Value::Unit
             }
-            "len" => match &values[0] {
+            // M48.4: `__len` es el primitivo interno al que baja el trait `Len`; idéntico a `len`.
+            "__len" => match &values[0] {
                 Value::Array(rc) => Value::Int(rc.borrow().len() as i64),
                 // M11.1a: len de string = nº de caracteres (Unicode scalar values).
                 Value::Str(s) => Value::Int(s.chars().count() as i64),
@@ -886,9 +912,9 @@ impl<'a> Interpreter<'a> {
                 Value::Bytes(b) => Value::Int(b.len() as i64),
                 _ => unreachable!("el checker garantiza un arreglo, string, Map o bytes"),
             },
-            // --- Mapas (M13.1) ---
-            "map_new" => Value::Map(Rc::new(RefCell::new(HashMap::new()))),
-            "insert" => {
+            // --- Mapas (M13.1) --- (`Map.new()` es una función asociada, M48.1: se evalúa en `eval_call`)
+            // M48.4c: los `__*` son los primitivos internos a los que baja el trait `MapOps`.
+            "__insert" => {
                 match &values[0] {
                     Value::Map(rc) => {
                         rc.borrow_mut().insert(MapKey::from_value(&values[1]), values[2].clone());
@@ -897,7 +923,7 @@ impl<'a> Interpreter<'a> {
                 }
                 Value::Unit
             }
-            "contains_key" => match &values[0] {
+            "__contains_key" => match &values[0] {
                 Value::Map(rc) => Value::Bool(rc.borrow().contains_key(&MapKey::from_value(&values[1]))),
                 _ => unreachable!("el checker garantiza un Map"),
             },
@@ -924,7 +950,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza un Map"),
             },
             // M13.1b: claves ordenadas (determinista).
-            "keys" => match &values[0] {
+            "__keys" => match &values[0] {
                 Value::Map(rc) => {
                     let mut ks: Vec<MapKey> = rc.borrow().keys().cloned().collect();
                     ks.sort();
@@ -934,7 +960,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza un Map"),
             },
             // M13.1b: valores en orden de clave ordenada (casa posición a posición con keys).
-            "values" => match &values[0] {
+            "__values" => match &values[0] {
                 Value::Map(rc) => {
                     let m = rc.borrow();
                     let mut pares: Vec<(&MapKey, &Value)> = m.iter().collect();
@@ -944,7 +970,9 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza un Map"),
             },
-            "push" => {
+            // M48.4b: `__push`/`__reverse`/`__contains` son los primitivos internos a los que bajan
+            // los traits `Push`/`Reverse`/`Contains`; idénticos a sus públicos.
+            "__push" => {
                 match &values[0] {
                     Value::Array(rc) => rc.borrow_mut().push(values[1].clone()),
                     _ => unreachable!("el checker garantiza un arreglo"),
@@ -954,12 +982,12 @@ impl<'a> Interpreter<'a> {
             // M11.1a: representación textual de un primitivo (la misma que `print`/Display).
             "to_string" => Value::Str(format!("{}", values[0])),
             // M11.1b: recorta los extremos.
-            "trim" => match &values[0] {
+            "__trim" => match &values[0] {
                 Value::Str(s) => Value::Str(s.trim().to_string()),
                 _ => unreachable!("el checker garantiza un string"),
             },
             // M11.1b: parte por el separador → arreglo de strings.
-            "split" => match (&values[0], &values[1]) {
+            "__split" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sep)) => {
                     let parts: Vec<Value> = s.split(sep.as_str()).map(|p| Value::Str(p.to_string())).collect();
                     Value::Array(Rc::new(RefCell::new(parts)))
@@ -967,7 +995,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza dos strings"),
             },
             // M11.4c-2: los caracteres del string → arreglo de char.
-            "chars" => match &values[0] {
+            "__chars" => match &values[0] {
                 Value::Str(s) => {
                     let cs: Vec<Value> = s.chars().map(Value::Char).collect();
                     Value::Array(Rc::new(RefCell::new(cs)))
@@ -980,25 +1008,25 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza un char"),
             },
             // M16.1b: los octetos UTF-8 del string → bytes.
-            "to_bytes" => match &values[0] {
+            "__to_bytes" => match &values[0] {
                 Value::Str(s) => Value::Bytes(Rc::new(s.clone().into_bytes())),
                 _ => unreachable!("el checker garantiza un string"),
             },
             // M43: hashes de producción vía `ring`. Delegan en los helpers de `builtins` (compartidos
             // con la VM → salida idéntica, el oráculo se mantiene).
-            "sha256" => match &values[0] {
+            "__sha256" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha256(b))),
                 _ => unreachable!("el checker garantiza bytes"),
             },
-            "sha512" => match &values[0] {
+            "__sha512" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha512(b))),
                 _ => unreachable!("el checker garantiza bytes"),
             },
-            "sha1" => match &values[0] {
+            "__sha1" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha1(b))),
                 _ => unreachable!("el checker garantiza bytes"),
             },
-            "hmac_sha256" => match (&values[0], &values[1]) {
+            "__hmac_sha256" => match (&values[0], &values[1]) {
                 (Value::Bytes(k), Value::Bytes(m)) => Value::Bytes(Rc::new(crate::builtins::hmac_sha256(k, m))),
                 _ => unreachable!("el checker garantiza bytes, bytes"),
             },
@@ -1023,7 +1051,7 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza bytes, bytes"),
             },
-            "ed25519_verify" => match (&values[0], &values[1], &values[2]) {
+            "__ed25519_verify" => match (&values[0], &values[1], &values[2]) {
                 (Value::Bytes(pk), Value::Bytes(msg), Value::Bytes(sig)) => {
                     Value::Bool(crate::builtins::ed25519_verify(pk, msg, sig))
                 }
@@ -1144,45 +1172,45 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M11.4a/M11.7b: ¿el string contiene la subcadena? / ¿el arreglo contiene el elemento?
-            "contains" => match (&values[0], &values[1]) {
+            "__contains" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sub)) => Value::Bool(s.contains(sub.as_str())),
                 (Value::Array(rc), x) => Value::Bool(rc.borrow().iter().any(|e| e == x)),
                 _ => unreachable!("el checker garantiza string+string o arreglo+elemento"),
             },
             // M11.4a: reemplaza todas las ocurrencias de `de` por `a`.
-            "replace" => match (&values[0], &values[1], &values[2]) {
+            "__replace" => match (&values[0], &values[1], &values[2]) {
                 (Value::Str(s), Value::Str(de), Value::Str(a)) => {
                     Value::Str(s.replace(de.as_str(), a.as_str()))
                 }
                 _ => unreachable!("el checker garantiza tres strings"),
             },
             // M11.7a: ¿empieza/termina con la subcadena?
-            "starts_with" => match (&values[0], &values[1]) {
+            "__starts_with" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(p)) => Value::Bool(s.starts_with(p.as_str())),
                 _ => unreachable!("el checker garantiza dos strings"),
             },
-            "ends_with" => match (&values[0], &values[1]) {
+            "__ends_with" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(p)) => Value::Bool(s.ends_with(p.as_str())),
                 _ => unreachable!("el checker garantiza dos strings"),
             },
             // M11.7a: mayúsculas/minúsculas.
-            "to_upper" => match &values[0] {
+            "__to_upper" => match &values[0] {
                 Value::Str(s) => Value::Str(s.to_uppercase()),
                 _ => unreachable!("el checker garantiza un string"),
             },
-            "to_lower" => match &values[0] {
+            "__to_lower" => match &values[0] {
                 Value::Str(s) => Value::Str(s.to_lowercase()),
                 _ => unreachable!("el checker garantiza un string"),
             },
             // M11.7a: subcadena por índice de carácter (con clamp); repetir.
-            "substring" => match (&values[0], &values[1], &values[2]) {
+            "__substring" => match (&values[0], &values[1], &values[2]) {
                 (Value::Str(s), Value::Int(i), Value::Int(j)) => {
                     Value::Str(crate::builtins::substring_chars(s, *i, *j))
                 }
                 _ => unreachable!("el checker garantiza string, int, int"),
             },
             // M19.2: sub-secuencia de bytes por octeto (con clamp).
-            "sub_bytes" => match (&values[0], &values[1], &values[2]) {
+            "__sub_bytes" => match (&values[0], &values[1], &values[2]) {
                 (Value::Bytes(b), Value::Int(i), Value::Int(j)) => {
                     Value::Bytes(Rc::new(crate::builtins::sub_bytes_octets(b, *i, *j)))
                 }
@@ -1199,7 +1227,7 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("el checker garantiza un arreglo"),
             },
-            "repeat" => match (&values[0], &values[1]) {
+            "__repeat" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Int(n)) => Value::Str(crate::builtins::repeat_str(s, *n)),
                 _ => unreachable!("el checker garantiza string, int"),
             },
@@ -1226,7 +1254,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!("el checker garantiza [string], string"),
             },
             // M11.7b: arreglo nuevo en orden inverso.
-            "reverse" => match &values[0] {
+            "__reverse" => match &values[0] {
                 Value::Array(rc) => {
                     let mut v = rc.borrow().clone();
                     v.reverse();
@@ -1320,8 +1348,8 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
-            // M11.4b: ¿existe la ruta? (total, no falla).
-            "exists" => match &values[0] {
+            // M11.4b (M50.1: __x): ¿existe la ruta? (total, no falla).
+            "__exists" => match &values[0] {
                 Value::Str(path) => Value::Bool(std::path::Path::new(path).exists()),
                 _ => unreachable!("el checker garantiza un string"),
             },
@@ -1480,8 +1508,8 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
-            // M15.3: puerto local del socket (total).
-            "local_port" => match &values[0] {
+            // M15.3 (M50.3: __x): puerto local del socket (total).
+            "__local_port" => match &values[0] {
                 Value::Int(h) => Value::Int(crate::builtins::local_port(*h)),
                 _ => unreachable!("el checker garantiza un int"),
             },
@@ -1496,18 +1524,18 @@ impl<'a> Interpreter<'a> {
             // --- Matemáticas (M15.1a) ---
             // Funciones unarias float -> float: el nombre fija qué MathFn aplicar; el cálculo lo hace
             // `builtins::apply_mathf` (compartido con la VM → el oráculo cuadra, incl. NaN/inf).
-            "sqrt" | "sin" | "cos" | "tan" | "ln" | "log10" | "exp" | "floor" | "ceil" | "round" => {
+            "__sqrt" | "__sin" | "__cos" | "__tan" | "__ln" | "__log10" | "__exp" | "__floor" | "__ceil" | "__round" => {
                 let f = match name {
-                    "sqrt" => MathFn::Sqrt,
-                    "sin" => MathFn::Sin,
-                    "cos" => MathFn::Cos,
-                    "tan" => MathFn::Tan,
-                    "ln" => MathFn::Ln,
-                    "log10" => MathFn::Log10,
-                    "exp" => MathFn::Exp,
-                    "floor" => MathFn::Floor,
-                    "ceil" => MathFn::Ceil,
-                    "round" => MathFn::Round,
+                    "__sqrt" => MathFn::Sqrt,
+                    "__sin" => MathFn::Sin,
+                    "__cos" => MathFn::Cos,
+                    "__tan" => MathFn::Tan,
+                    "__ln" => MathFn::Ln,
+                    "__log10" => MathFn::Log10,
+                    "__exp" => MathFn::Exp,
+                    "__floor" => MathFn::Floor,
+                    "__ceil" => MathFn::Ceil,
+                    "__round" => MathFn::Round,
                     _ => unreachable!(),
                 };
                 match &values[0] {
@@ -1515,40 +1543,23 @@ impl<'a> Interpreter<'a> {
                     _ => unreachable!("el checker garantiza un float"),
                 }
             }
-            "pow" => match (&values[0], &values[1]) {
+            "__pow" => match (&values[0], &values[1]) {
                 (Value::Float(b), Value::Float(e)) => Value::Float(b.powf(*e)),
                 _ => unreachable!("el checker garantiza dos floats"),
             },
-            // abs/min/max son ad-hoc polimórficos: conservan el tipo numérico (int o float).
-            "abs" => match &values[0] {
-                Value::Int(x) => Value::Int(x.abs()),
-                Value::Float(x) => Value::Float(x.abs()),
-                _ => unreachable!("el checker garantiza int o float"),
-            },
-            "min" => match (&values[0], &values[1]) {
-                (Value::Int(a), Value::Int(b)) => Value::Int(*a.min(b)),
-                (Value::Float(a), Value::Float(b)) => Value::Float(a.min(*b)),
-                _ => unreachable!("el checker garantiza dos números del mismo tipo"),
-            },
-            "max" => match (&values[0], &values[1]) {
-                (Value::Int(a), Value::Int(b)) => Value::Int(*a.max(b)),
-                (Value::Float(a), Value::Float(b)) => Value::Float(a.max(*b)),
-                _ => unreachable!("el checker garantiza dos números del mismo tipo"),
-            },
-            "pi" => Value::Float(std::f64::consts::PI),
-            "e" => Value::Float(std::f64::consts::E),
+            // M49.1b: abs/min/max/pi/e ya no son builtins (funciones puras en `std/math`).
             // --- Reloj y aleatoriedad (M15.1b): no deterministas, delegan en los helpers compartidos. ---
-            "now" => Value::Int(crate::builtins::now_millis()),
-            "monotonic" => Value::Int(crate::builtins::monotonic_millis()),
-            "sleep" => match &values[0] {
+            "__now" => Value::Int(crate::builtins::now_millis()),
+            "__monotonic" => Value::Int(crate::builtins::monotonic_millis()),
+            "__sleep" => match &values[0] {
                 Value::Int(ms) => {
                     crate::builtins::sleep_millis(*ms);
                     Value::Unit
                 }
                 _ => unreachable!("el checker garantiza un int"),
             },
-            "random" => Value::Float(crate::builtins::random_f64()),
-            "random_int" => match &values[0] {
+            "__random" => Value::Float(crate::builtins::random_f64()),
+            "__random_int" => match &values[0] {
                 Value::Int(n) => Value::Int(crate::builtins::random_int(*n)),
                 _ => unreachable!("el checker garantiza un int"),
             },
@@ -2125,7 +2136,7 @@ fn main() -> int {
     #[test]
     fn try_option_none_propaga() {
         let src = r#"
-fn primero(xs: [int]) -> Option<int> { if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) } }
+fn primero(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } }
 fn mas_uno(xs: [int]) -> Option<int> { let v: int = primero(xs)?; Option.Some(v + 1) }
 fn desemp(o: Option<int>) -> int { match (o) { Option.Some(v) => v, Option.None => -99 } }
 fn main() -> int { desemp(mas_uno([41])) * 100 + desemp(mas_uno([])) }

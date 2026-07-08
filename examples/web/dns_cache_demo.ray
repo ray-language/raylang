@@ -8,7 +8,7 @@ from dns_cache import Cache, new_cache, resolve;
 fn main() -> int {
     let a = args();
     var port = 53;
-    if (len(a) > 0) {
+    if (a.len() > 0) {
         match (parse_int(a[0])) {
             Option.Some(p) => {
                 port = p;
@@ -31,7 +31,7 @@ fn imprime(r: Result<[Record], string>) {
         Result.Ok(recs) => {
             let ss = format_records(recs);
             var i = 0;
-            while (i < len(ss)) {
+            while (i < ss.len()) {
                 print(ss[i]);
                 i = i + 1;
             }

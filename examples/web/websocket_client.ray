@@ -8,7 +8,9 @@
 // (`wss` añadiría `tls_connect`), sin fragmentación.
 from sha1 import sha1;
 from base64 import base64;
+import std/random;
 from websocket import accept_key, decode_frame, Frame, op_text, op_close;
+import std/net;
 
 // --- Handshake del cliente ---
 // Genera una `Sec-WebSocket-Key`: 16 octetos aleatorios en base64 (RFC 6455 §4.1).
@@ -16,7 +18,7 @@ fn make_key() -> string {
     var b: [int] = [];
     var i = 0;
     while (i < 16) {
-        push(b, random_int(256));
+        b.push(random.below(256));
         i = i + 1;
     }
     base64(b)
@@ -29,17 +31,17 @@ fn upgrade_request(host: string, path: string, key: string) -> string {
 
 // Verifica la respuesta 101: estado correcto + `Sec-WebSocket-Accept` == base64(SHA-1(key + GUID)).
 fn verify_handshake(response: string, key: string) -> bool {
-    if (!contains(response, "101")) {
+    if (!response.contains("101")) {
         return false;
     }
     let esperado = accept_key(key);
-    let lineas = split(response, "\r\n");
+    let lineas = response.split("\r\n");
     var i = 0;
-    while (i < len(lineas)) {
-        if (starts_with(lineas[i], "Sec-WebSocket-Accept:")) {
+    while (i < lineas.len()) {
+        if (lineas[i].starts_with("Sec-WebSocket-Accept:")) {
             match (index_of(lineas[i], ":")) {
                 Option.Some(idx) => {
-                    return trim(substring(lineas[i], idx + 1, len(lineas[i]))) == esperado;
+                    return lineas[i].substring(idx + 1, lineas[i].len()).trim() == esperado;
                 },
                 Option.None => { },
             }
@@ -65,9 +67,9 @@ fn read_handshake(h: int) -> Result<string, string> {
             },
             Result.Err(_) => { },  // bytes UTF-8 a medias → seguir leyendo
         }
-        match (socket_read_bytes(h)) {
+        match (net.socket_read_bytes(h)) {
             Result.Ok(trozo) => {
-                if (len(trozo) == 0) {
+                if (trozo.len() == 0) {
                     seguir = false;
                 } else {
                     acc = acc + trozo;
@@ -87,7 +89,7 @@ fn read_handshake(h: int) -> Result<string, string> {
 fn do_handshake(h: int, host: string, port: int, path: string) -> Result<int, string> {
     let key = make_key();
     let req = upgrade_request(host + ":" + to_string(port), path, key);
-    match (socket_write_bytes(h, to_bytes(req))) {
+    match (net.socket_write_bytes(h, req.to_bytes())) {
         Result.Err(e) => {
             close(h);
             Result.Err("upgrade: " + e)
@@ -113,7 +115,7 @@ fn do_handshake(h: int, host: string, port: int, path: string) -> Result<int, st
 
 // Conecta a `host:port` por TCP (ws://), hace el handshake y devuelve el handle.
 pub fn connect(host: string, port: int, path: string) -> Result<int, string> {
-    match (tcp_connect(host, port)) {
+    match (net.tcp_connect(host, port)) {
         Result.Err(e) => Result.Err("connect: " + e),
         Result.Ok(h) => do_handshake(h, host, port, path),
     }
@@ -122,7 +124,7 @@ pub fn connect(host: string, port: int, path: string) -> Result<int, string> {
 // Conecta a `host:port` por TLS (wss://), hace el handshake y devuelve el handle. El handle TLS enruta
 // socket_read_bytes/socket_write_bytes/close por la sesión cifrada (M19.4) → el framing no cambia.
 pub fn connect_tls(host: string, port: int, path: string) -> Result<int, string> {
-    match (tls_connect(host, port)) {
+    match (net.tls_connect(host, port)) {
         Result.Err(e) => Result.Err("tls connect: " + e),
         Result.Ok(h) => do_handshake(h, host, port, path),
     }
@@ -132,21 +134,21 @@ pub fn connect_tls(host: string, port: int, path: string) -> Result<int, string>
 // Codifica una trama del CLIENTE: FIN + opcode, bit MASK activo, clave de máscara de 4 octetos
 // aleatorios, y la carga enmascarada (payload[i] XOR mask[i % 4]).
 fn encode_masked(opcode: int, payload: bytes) -> bytes {
-    let plen = len(payload);
+    let plen = payload.len();
     var out: [int] = [];
-    push(out, 128 | opcode);  // FIN=1 + opcode
+    out.push(128 | opcode);  // FIN=1 + opcode
     if (plen < 126) {
-        push(out, 128 | plen);  // bit MASK + longitud
+        out.push(128 | plen);  // bit MASK + longitud
     } else {
         if (plen < 65536) {
-            push(out, 128 | 126);
-            push(out, plen >> 8 & 255);
-            push(out, plen & 255);
+            out.push(128 | 126);
+            out.push(plen >> 8 & 255);
+            out.push(plen & 255);
         } else {
-            push(out, 128 | 127);
+            out.push(128 | 127);
             var k = 7;
             while (k >= 0) {
-                push(out, plen >> k * 8 & 255);
+                out.push(plen >> k * 8 & 255);
                 k = k - 1;
             }
         }
@@ -155,18 +157,18 @@ fn encode_masked(opcode: int, payload: bytes) -> bytes {
     var mask: [int] = [];
     var i = 0;
     while (i < 4) {
-        push(mask, random_int(256));
+        mask.push(random.below(256));
         i = i + 1;
     }
     var m = 0;
     while (m < 4) {
-        push(out, mask[m]);
+        out.push(mask[m]);
         m = m + 1;
     }
     // Carga enmascarada.
     i = 0;
     while (i < plen) {
-        push(out, payload[i] ^ mask[i % 4]);
+        out.push(payload[i] ^ mask[i % 4]);
         i = i + 1;
     }
     bytes_of(out)
@@ -174,15 +176,15 @@ fn encode_masked(opcode: int, payload: bytes) -> bytes {
 
 // Envía un mensaje de texto (trama enmascarada).
 pub fn send_text(h: int, message: string) -> Result<int, string> {
-    socket_write_bytes(h, encode_masked(op_text(), to_bytes(message)))
+    net.socket_write_bytes(h, encode_masked(op_text(), message.to_bytes()))
 }
 
 // Recibe el siguiente mensaje de texto (decodifica una trama; asume una trama por lectura).
 pub fn recv_text(h: int) -> Result<string, string> {
-    match (socket_read_bytes(h)) {
+    match (net.socket_read_bytes(h)) {
         Result.Err(e) => Result.Err("error al leer la trama: " + e),
         Result.Ok(data) => {
-            if (len(data) < 2) {
+            if (data.len() < 2) {
                 Result.Err("conexión cerrada o trama incompleta")
             } else {
                 from_utf8(decode_frame(data).payload)
@@ -193,7 +195,7 @@ pub fn recv_text(h: int) -> Result<string, string> {
 
 // Cierra la conexión: envía una trama close (enmascarada) y cierra el socket.
 pub fn close_ws(h: int) {
-    match (socket_write_bytes(h, encode_masked(op_close(), to_bytes("")))) {
+    match (net.socket_write_bytes(h, encode_masked(op_close(), "".to_bytes()))) {
         Result.Ok(_) => { },
         Result.Err(_) => { },
     }

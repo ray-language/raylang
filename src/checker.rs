@@ -112,6 +112,9 @@ pub fn check_all_modulo(program: &mut Program) -> Vec<TypeError> {
 }
 
 fn check_all_impl(program: &mut Program, require_main: bool) -> Vec<TypeError> {
+    if let Err(e) = check_builtin_redefinition(program) {
+        return vec![e];
+    }
     if let Err(e) = prepare_program(program) {
         return vec![e];
     }
@@ -124,7 +127,32 @@ fn check_all_impl(program: &mut Program, require_main: bool) -> Vec<TypeError> {
     }
 }
 
+/// M48.3: un builtin del lenguaje (`len`, `push`, `insert`, `print`…) NO puede redefinirse como
+/// función libre — se resuelve **antes** que cualquier función del usuario, así que un `fn len` sería
+/// inalcanzable (shadowing silencioso al revés). Se comprueba ANTES de inyectar el prelude (aquí
+/// `program.functions` son solo las del usuario ya fusionadas): las de un módulo van namespacadas
+/// (`M::len`) → no colisionan; solo las del archivo de entrada (nombre pelado) o traídas sin calificar
+/// llegan como `len`. Las funciones del prelude (map/filter/fold/sort/assert…) NO son builtins → el
+/// usuario SÍ puede redefinirlas (override). Los internos `__x` no son de cara al usuario. Lo llaman
+/// tanto `check` (fail-fast) como `check_all` (recuperación de errores) para que el mensaje se emita.
+fn check_builtin_redefinition(program: &Program) -> Result<(), TypeError> {
+    for f in &program.functions {
+        if !f.name.contains("::") && !f.name.contains('#') && !f.name.starts_with("__")
+            && crate::builtins::is_builtin(&f.name)
+        {
+            return Err(TypeError {
+                msg: format!("'{}' es un builtin del lenguaje y no puede redefinirse", f.name),
+                line: f.line,
+                col: f.col,
+                len: f.name.chars().count(),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub fn check(program: &mut Program) -> Result<(), TypeError> {
+    check_builtin_redefinition(program)?;
     // Pasos 0–1: inyectar el prelude, generar derivaciones, bajar los métodos de impl y
     // resolver la construcción de enums (compartido con `semantic_index`).
     prepare_program(program)?;
@@ -512,13 +540,15 @@ struct Checker {
     /// Posición del nombre de campo/método en `recv.name` (M10.2g), copiada del `Program` en modo
     /// `gather`: `(línea, col, nombre)` del acceso → `(línea, col)` del `name`. Para registrar el
     /// hover del campo/método en su posición (el AST `Field` no la lleva). Vacío sin `gather`.
-    field_name_pos: std::collections::HashMap<(usize, usize, String), (usize, usize)>,
+    field_name_pos: std::collections::HashMap<(usize, usize, String), Vec<(usize, usize)>>,
     /// El índice semántico recolectado (M10.2b). Vacío si `gather` es `false`.
     index: SemanticIndex,
     /// Posición de declaración de cada función de nivel superior (M10.2b: ir-a-definición).
     fn_defs: HashMap<String, (usize, usize)>,
     /// Posición de declaración de cada tipo (struct/enum/trait) — hover/def de tipos (M10.2f).
     type_defs: HashMap<String, (usize, usize)>,
+    /// Posición de declaración de cada constante de nivel superior — hover/def de consts.
+    const_defs: HashMap<String, (usize, usize)>,
     /// Alias UFCS de funciones `from`-importadas (nombre local → global), que deja el loader. Permiten
     /// que `recv.f(...)` resuelva una función importada como *fallback* (tras campo/método). Vacío sin
     /// imports.
@@ -528,6 +558,31 @@ struct Checker {
     /// (submódulo `pub`, sin `main`): un módulo suelto es legítimo sin entrada, y esa regla es de
     /// **proyecto**, no de archivo. Sin ella, el chequeo prosigue a los cuerpos y da diagnósticos reales.
     require_main: bool,
+    /// Modo **completion de miembros** (M45): al tipar un acceso `recv.<centinela>`, en vez de dar
+    /// error por miembro inexistente, enumera los miembros del tipo del receptor en `member_hits`.
+    /// `false` en el chequeo normal (coste cero). Lo activa la entrada `member_completion`.
+    completing: bool,
+    /// Miembros enumerados en modo `completing` (M45): campos, métodos, builtins-como-método y
+    /// funciones UFCS aplicables al tipo del receptor bajo el cursor.
+    member_hits: Vec<MemberItem>,
+}
+
+/// El nombre-centinela que el LSP inserta tras el `.` (`recv.__raycomplete__`) para marcar el
+/// punto de completion (M45). Empieza por `__` → ya se filtra como sintético en el resto del LSP,
+/// y el usuario no puede escribirlo.
+pub const COMPLETION_SENTINEL: &str = "__raycomplete__";
+
+/// Un miembro ofrecible en `recv.` (M45): su etiqueta, el `CompletionItemKind` de LSP
+/// (2=Method, 3=Function, 5=Field), un detalle opcional (p. ej. el tipo del campo), si toma
+/// argumentos más allá del receptor (para el snippet `m(…)`), y la posición de declaración de la
+/// función destino (método de impl / función UFCS), para resolver sus `///` docs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemberItem {
+    pub label: String,
+    pub kind: u8,
+    pub detail: Option<String>,
+    pub has_args: bool,
+    pub def: Option<(usize, usize)>,
 }
 
 impl Checker {
@@ -567,12 +622,15 @@ impl Checker {
             dyn_dispatch: HashSet::new(),
             dyn_upcasts: HashMap::new(),
             type_defs: HashMap::new(),
+            const_defs: HashMap::new(),
             gather: false,
             field_name_pos: std::collections::HashMap::new(),
             index: SemanticIndex::default(),
             fn_defs: HashMap::new(),
             ufcs_aliases: HashMap::new(),
             require_main: true,
+            completing: false,
+            member_hits: Vec::new(),
         }
     }
 
@@ -605,6 +663,9 @@ impl Checker {
             }
             if self.consts.insert(c.name.clone(), declared).is_some() {
                 return Err(self.err(c.line, c.col, format!("constante '{}' declarada dos veces", c.name)));
+            }
+            if self.gather {
+                self.const_defs.entry(c.name.clone()).or_insert((c.line, c.col));
             }
         }
         // M10.2f: posición de declaración de cada tipo (struct/enum/trait), para hover/ir-a-definición
@@ -1120,12 +1181,34 @@ impl Checker {
     /// - **genérico** (M9.2b): `Caja<T>` cuyos argumentos son **exactamente** los parámetros
     ///   de tipo del impl (cada uno un `Var` distinto), y cuya aridad casa con la del tipo.
     fn ensure_impl_target(&self, target: &Type, type_params: &[String], line: usize, col: usize) -> Result<(), TypeError> {
-        // Primitivos: solo como objetivo concreto.
-        if matches!(target, Type::Int | Type::Float | Type::Bool | Type::String | Type::Char) {
+        // Primitivos + bytes: solo como objetivo concreto (sin parámetros de tipo). M48.4 añade `bytes`.
+        if matches!(target, Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes) {
             if type_params.is_empty() {
                 return Ok(());
             }
             return Err(self.err(line, col, "un tipo primitivo no es genérico: no admite parámetros de tipo en el impl".into()));
+        }
+        // M48.4: constructores incorporados `[T]` (aridad 1) y `Map<K,V>` (aridad 2). Siempre genéricos,
+        // como `Caja<T>` (M9.2b): solo impls PLENAMENTE genéricos (`impl<T> ... for [T]`, no `[int]`),
+        // con cada argumento un `Var` distinto de los propios parámetros del impl.
+        let ctor_incorporado: Option<(&str, Vec<&Type>)> = match target {
+            Type::Array(e) => Some(("[]", vec![e.as_ref()])),
+            Type::Map(k, v) => Some(("Map", vec![k.as_ref(), v.as_ref()])),
+            _ => None,
+        };
+        if let Some((nombre, args)) = ctor_incorporado {
+            if type_params.len() != args.len() {
+                return Err(self.err(line, col, format!(
+                    "'{}' espera {} parámetro(s) de tipo, el impl declara {}", nombre, args.len(), type_params.len())));
+            }
+            let mut vistos = HashSet::new();
+            let bien = args.iter().all(|a|
+                matches!(a, Type::Var(n) if type_params.contains(n) && vistos.insert(n.clone())));
+            if !bien {
+                return Err(self.err(line, col, format!(
+                    "el impl de un tipo incorporado debe aplicarse a sus propios parámetros de tipo distintos, p. ej. 'impl<T> ... for [T]' o 'impl<K, V> ... for Map<K, V>'")));
+            }
+            return Ok(());
         }
         let (name, args) = match target {
             Type::Struct(n, a) | Type::Enum(n, a) => (n, a),
@@ -1770,6 +1853,16 @@ impl Checker {
         if self.gather {
             let def = self.type_defs.get(enum_name).copied();
             self.record_named(line, col, enum_name.chars().count(), format!("enum {}", enum_name), def);
+            // Y el hover de la **variante** (el identificador tras el `.`): su firma con el payload.
+            // La posición asume `Enum.Variante` sin espacios (la grafía canónica); el `+1` es el punto.
+            let vcol = col + enum_name.chars().count() + 1;
+            let firma = if payload.is_empty() {
+                format!("{}.{}", enum_name, variant)
+            } else {
+                let tipos: Vec<String> = payload.iter().map(|t| format!("{}", t)).collect();
+                format!("{}.{}({})", enum_name, variant, tipos.join(", "))
+            };
+            self.record_named(line, vcol, variant.chars().count(), firma, def);
         }
         let orig_tparams = self.enum_tparams.get(enum_name).cloned().unwrap_or_default();
         if args.len() != payload.len() {
@@ -2006,10 +2099,16 @@ impl Checker {
     /// Verifica que `pat` casa con un valor de tipo `ty` y recolecta sus bindings (nombre → tipo).
     /// Recursivo (M40.1c): un sub-patrón de variante puede ser otra variante anidada; su enum se
     /// resuelve del **tipo** del sub-valor (el payload sustituido), no de un parámetro externo.
-    fn check_subpattern(&self, pat: &Pattern, ty: &Type) -> Result<Vec<(String, Type)>, TypeError> {
+    fn check_subpattern(&mut self, pat: &Pattern, ty: &Type) -> Result<Vec<(String, Type)>, TypeError> {
         match &pat.kind {
             PatternKind::Wildcard => Ok(Vec::new()),
-            PatternKind::Binding(name) => Ok(vec![(name.clone(), ty.clone())]),
+            PatternKind::Binding(name) => {
+                // M10.2f: hover del binding del patrón (su declaración) → `nombre: Tipo`.
+                if self.gather {
+                    self.record_ident(pat.line, pat.col, name, ty, Some((pat.line, pat.col)));
+                }
+                Ok(vec![(name.clone(), ty.clone())])
+            }
             PatternKind::Variant { enum_name: pat_enum, variant, subpatterns } => {
                 let (ty_enum, targs) = match ty {
                     Type::Enum(n, args) => (n.clone(), args.clone()),
@@ -2036,6 +2135,20 @@ impl Checker {
                         "el patrón '{}.{}' liga {} valor(es), pero la variante tiene {}",
                         ty_enum, variant, subpatterns.len(), payload.len()
                     )));
+                }
+                // M10.2f: hover del enum y la variante en el patrón (como en la construcción). La
+                // variante va tras `enum.` (grafía canónica sin espacios); el `+1` es el punto.
+                if self.gather {
+                    let def = self.type_defs.get(&ty_enum).copied();
+                    self.record_named(pat.line, pat.col, ty_enum.chars().count(), format!("enum {}", ty_enum), def);
+                    let vcol = pat.col + ty_enum.chars().count() + 1;
+                    let firma = if payload.is_empty() {
+                        format!("{}.{}", ty_enum, variant)
+                    } else {
+                        let tipos: Vec<String> = payload.iter().map(|t| format!("{}", t)).collect();
+                        format!("{}.{}({})", ty_enum, variant, tipos.join(", "))
+                    };
+                    self.record_named(pat.line, vcol, variant.chars().count(), firma, def);
                 }
                 // σ del enum del sub-valor: liga sus parámetros de tipo con los argumentos del tipo.
                 let tparams = self.enum_tparams.get(&ty_enum).cloned().unwrap_or_default();
@@ -2117,6 +2230,13 @@ impl Checker {
     /// `primero: A` de `Par<int, bool>` es un `int`.
     fn check_field(&mut self, object: &Expr, name: &str) -> Result<Type, TypeError> {
         let ot = self.check_expr(object)?;
+        // M45: completion de miembros. El LSP repara `recv.` como `recv.<centinela>`; aquí, con el
+        // tipo del receptor ya calculado, enumeramos sus miembros en vez de dar error por miembro
+        // inexistente. Devolvemos Unit para que el chequeo (best-effort) no aborte antes de recogerlo.
+        if self.completing && name == COMPLETION_SENTINEL {
+            self.member_hits = self.enumerate_members(&ot);
+            return Ok(Type::Unit);
+        }
         // Acceso a **tupla** `t.0` (M27.1): un nombre de campo numérico solo es válido sobre una tupla.
         if let Type::Tuple(elems) = &ot {
             let idx: usize = name.parse().map_err(|_| self.err(object.line, object.col,
@@ -2182,44 +2302,15 @@ impl Checker {
                 }
             }
         }
+        // M48.1: función asociada `Tipo.fn(args)` (`Map.new()`, `Channel.new()`, `Channel.bounded(n)`)
+        // con tipo esperado → su resultado (Map/Channel) se fija desde el esperado (indeterminado, como
+        // `[]`/`None`). Antes eran `map_new()`/`channel()` (builtins de función libre).
+        if let ExprKind::Call { callee, args } = &expr.kind {
+            if let Some(r) = self.try_assoc_call(callee, args, Some(expected), expr.line, expr.col) {
+                return r;
+            }
+        }
         match &expr.kind {
-            // M13.1: `map_new()` es indeterminado (como `[]`/`None`); su tipo lo fija el esperado.
-            ExprKind::Call { callee, args }
-                if matches!(&callee.kind, ExprKind::Ident(n) if n == "map_new") =>
-            {
-                if !args.is_empty() {
-                    return Err(self.err(expr.line, expr.col, "map_new no recibe argumentos".into()));
-                }
-                match expected {
-                    Type::Map(_, _) => Ok(expected.clone()),
-                    _ => Err(self.err(expr.line, expr.col, format!(
-                        "map_new produce un Map, pero aquí se espera {}", expected
-                    ))),
-                }
-            }
-            // M12.1: `channel()` es indeterminado (como `map_new()`); su tipo lo fija el esperado.
-            // M12.2: `channel(n)` admite una capacidad `int` (el tipo de elemento sigue indeterminado).
-            ExprKind::Call { callee, args }
-                if matches!(&callee.kind, ExprKind::Ident(n) if n == "channel") =>
-            {
-                if args.len() > 1 {
-                    return Err(self.err(expr.line, expr.col,
-                        "channel recibe a lo sumo un argumento (la capacidad)".into()));
-                }
-                if let Some(cap) = args.first() {
-                    let ct = self.check_expr(cap)?;
-                    if !matches!(ct, Type::Int) {
-                        return Err(self.err(cap.line, cap.col,
-                            format!("la capacidad de channel debe ser int, no {}", ct)));
-                    }
-                }
-                match expected {
-                    Type::Channel(_) => Ok(expected.clone()),
-                    _ => Err(self.err(expr.line, expr.col, format!(
-                        "channel produce un Channel, pero aquí se espera {}", expected
-                    ))),
-                }
-            }
             // M40.3b: llamada a una función **genérica** de usuario en contexto tipado. Se pasa el
             // esperado para rellenar los parámetros de tipo que los argumentos no determinen (p. ej.
             // un constructor vacío `set_new() -> Set<T>`). No afecta a builtins/variables-función ni a
@@ -2261,6 +2352,28 @@ impl Checker {
                         }
                     }
                     Ok(Type::Array(elem_exp.clone()))
+                }
+                _ => self.check_expr(expr),
+            },
+            // M48.2: literal de Map `[k: v, …]` con tipo esperado `Map<K,V>` → cada clave contra K, cada
+            // valor contra V. `[:]` vacío se fija aquí (indeterminado, como `[]`). Sin esperado-Map, cae
+            // a `check_expr` (que infiere de los pares o exige anotar el vacío).
+            ExprKind::MapLit(pares) => match expected {
+                Type::Map(kexp, vexp) => {
+                    self.ensure_type(expected, expr.line, expr.col)?; // clave hashable
+                    for (k, v) in pares {
+                        let kt = self.check_expr_expected(k, kexp)?;
+                        if kt != **kexp {
+                            return Err(self.err(k.line, k.col, format!(
+                                "las claves del Map deben ser {}, no {}", kexp, kt)));
+                        }
+                        let vt = self.check_expr_expected(v, vexp)?;
+                        if vt != **vexp {
+                            return Err(self.err(v.line, v.col, format!(
+                                "los valores del Map deben ser {}, no {}", vexp, vt)));
+                        }
+                    }
+                    Ok(expected.clone())
                 }
                 _ => self.check_expr(expr),
             },
@@ -2393,7 +2506,10 @@ impl Checker {
                 // `fn(...)` concreto): hay que llamarla directamente (M6.1).
                 // M27.5: una constante de nivel superior (global) resuelve a su tipo.
                 if let Some(ty) = self.consts.get(name) {
-                    return Ok(ty.clone());
+                    let ty = ty.clone();
+                    let def = self.const_defs.get(name).copied();
+                    self.record_ident(expr.line, expr.col, name, &ty, def); // hover/def de la const
+                    return Ok(ty);
                 }
                 if let Some(sig) = self.functions.get(name) {
                     if !sig.type_params.is_empty() {
@@ -2450,6 +2566,33 @@ impl Checker {
                     }
                 }
                 Ok(Type::Array(Box::new(first)))
+            }
+
+            // M48.2: literal de Map sin tipo esperado. `[:]` vacío es indeterminado (como `[]`) → error de
+            // "anota el tipo". `[k: v, …]` infiere `Map<K,V>` del primer par y exige que el resto coincida
+            // (claves homogéneas, valores homogéneos); la clave debe ser hashable.
+            ExprKind::MapLit(pares) => {
+                if pares.is_empty() {
+                    return Err(self.err(expr.line, expr.col,
+                        "no se puede inferir el tipo de [:] aquí; anótalo (p. ej. let m: Map<string, int> = [:];)".into()));
+                }
+                let kty = self.check_expr(&pares[0].0)?;
+                let vty = self.check_expr(&pares[0].1)?;
+                for (k, v) in &pares[1..] {
+                    let kt = self.check_expr(k)?;
+                    if kt != kty {
+                        return Err(self.err(k.line, k.col, format!(
+                            "las claves del Map deben ser del mismo tipo: {} y {}", kty, kt)));
+                    }
+                    let vt = self.check_expr(v)?;
+                    if vt != vty {
+                        return Err(self.err(v.line, v.col, format!(
+                            "los valores del Map deben ser del mismo tipo: {} y {}", vty, vt)));
+                    }
+                }
+                let mty = Type::Map(Box::new(kty), Box::new(vty));
+                self.ensure_type(&mty, expr.line, expr.col)?; // clave hashable
+                Ok(mty)
             }
 
             ExprKind::TupleLit(elems) => {
@@ -2732,6 +2875,55 @@ impl Checker {
         Ok((lt, rt))
     }
 
+    /// M48.1: reconoce y tipa una llamada a una **función asociada** `Tipo.fn(args)` (`Map.new()`,
+    /// `Channel.new()`, `Channel.bounded(n)`). Llega como `Call(Field(Ident(tipo), fn), args)`. Devuelve
+    /// `Some(resultado)` si `(tipo, fn)` es una asociada registrada; `None` si no lo es (el llamador
+    /// sigue su camino normal: campo/método/UFCS). El resultado es un tipo genérico **indeterminado**
+    /// (Map/Channel) → se toma del `expected`; sin él, error pidiendo anotar (como `[]`/`None`).
+    fn try_assoc_call(&mut self, callee: &Expr, args: &[Expr], expected: Option<&Type>, line: usize, col: usize)
+        -> Option<Result<Type, TypeError>>
+    {
+        let ExprKind::Field { object, name } = &callee.kind else { return None };
+        let ExprKind::Ident(tn) = &object.kind else { return None };
+        let assoc = crate::builtins::assoc_lookup(tn, name)?;
+        // M48.1/LSP: hover del nombre asociado (`new`/`bounded`), tras `Tipo.` (grafía canónica sin
+        // espacios; el `+1` es el punto). Muestra la firma legible del registro.
+        if self.gather {
+            let ncol = object.col + tn.chars().count() + 1;
+            self.record_named(object.line, ncol, name.chars().count(), assoc.sig.to_string(), None);
+        }
+        Some((|| {
+            if args.len() != assoc.arity {
+                return Err(self.err(line, col, format!(
+                    "'{}.{}' espera {} argumento(s), se dieron {}", tn, name, assoc.arity, args.len())));
+            }
+            // Todos los argumentos actuales de asociadas son una capacidad `int` (`Channel.bounded`).
+            for a in args {
+                let at = self.check_expr(a)?;
+                if !matches!(at, Type::Int) {
+                    return Err(self.err(a.line, a.col, format!(
+                        "el argumento de '{}.{}' debe ser int, no {}", tn, name, at)));
+                }
+            }
+            // El tipo del resultado lo fija el contexto esperado (indeterminado, como `map_new()`).
+            match expected {
+                Some(e) if matches!((tn.as_str(), e),
+                    ("Map", Type::Map(_, _)) | ("Channel", Type::Channel(_))) => Ok(e.clone()),
+                Some(e) => Err(self.err(line, col, format!(
+                    "'{}.{}' produce un {}, pero aquí se espera {}", tn, name, tn, e))),
+                None => {
+                    let ejemplo = if tn == "Map" {
+                        "let m: Map<string, int> = Map.new()"
+                    } else {
+                        "let c: Channel<int> = Channel.new()"
+                    };
+                    Err(self.err(line, col, format!(
+                        "no se puede inferir el tipo de '{}.{}'; anótalo, p. ej. '{}'", tn, name, ejemplo)))
+                }
+            }
+        })())
+    }
+
     fn check_call(
         &mut self,
         callee: &Expr,
@@ -2739,6 +2931,11 @@ impl Checker {
         line: usize,
         col: usize,
     ) -> Result<Type, TypeError> {
+        // M48.1: función asociada `Tipo.fn(args)` sin tipo esperado (contexto no tipado) → error de
+        // "anota el tipo". Con tipo esperado, la intercepta `check_expr_expected` (devuelve el tipo).
+        if let Some(r) = self.try_assoc_call(callee, args, None, line, col) {
+            return r;
+        }
         match &callee.kind {
             // Llamada directa por nombre: `f(a, b)`.
             ExprKind::Ident(n) => {
@@ -2765,6 +2962,11 @@ impl Checker {
             // baja a una llamada ordinaria tras verificar (`lower_ufcs`).
             ExprKind::Field { object, name } => {
                 let recv_ty = self.check_expr(object)?;
+                // M45: completion de miembros cuando el reparado dejó una llamada `recv.<centinela>(…)`.
+                if self.completing && name == COMPLETION_SENTINEL {
+                    self.member_hits = self.enumerate_members(&recv_ty);
+                    return Ok(Type::Unit);
+                }
                 // M9.3b/M9.5: receptor `dyn A + B` → despacho dinámico por la vtable del objeto.
                 if let Type::Dyn(traits) = &recv_ty {
                     let traits = traits.clone();
@@ -2817,6 +3019,90 @@ impl Checker {
                 self.call_type(ty, args, line, col)
             }
         }
+    }
+
+    /// Enumera los miembros ofrecibles en `recv.` para un receptor de tipo `rt` (M45): campos del
+    /// struct, métodos de trait/impl (incl. `@derive`), builtins-como-método de la categoría del
+    /// tipo, y funciones libres UFCS cuyo primer parámetro acepta el receptor (esto cubre
+    /// `map`/`filter`/`fold`/`sort` del prelude y las UFCS del usuario). Dedup por etiqueta.
+    fn enumerate_members(&self, rt: &Type) -> Vec<MemberItem> {
+        let mut out: Vec<MemberItem> = Vec::new();
+        let mut vistos: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let add = |out: &mut Vec<MemberItem>, vistos: &mut std::collections::HashSet<String>,
+                   label: String, kind: u8, detail: Option<String>, has_args: bool,
+                   def: Option<(usize, usize)>| {
+            if vistos.insert(label.clone()) {
+                out.push(MemberItem { label, kind, detail, has_args, def });
+            }
+        };
+
+        // 1. Campos del struct (kind 5 = Field), con su tipo sustituido como detalle.
+        if let Type::Struct(sname, targs) = rt {
+            if let Some(fields) = self.structs.get(sname) {
+                let tparams = self.struct_tparams.get(sname).cloned().unwrap_or_default();
+                let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs.iter().cloned()).collect();
+                for (fname, fty) in fields {
+                    let ty = subst(fty, &sigma);
+                    add(&mut out, &mut vistos, fname.clone(), 5, Some(format!("{}", ty)), false, None);
+                }
+            }
+        }
+
+        // 2. Métodos de trait/impl del tipo concreto (kind 2 = Method). La tabla `methods` va por
+        //    constructor (`type_key_of`): `Caja<int>` y `Caja<bool>` comparten métodos. Del mangled
+        //    sacamos la aridad (para el snippet) y la posición de declaración (para sus `///` docs).
+        if let Some(key) = type_key_of(rt) {
+            for ((k, m), mangled) in &self.methods {
+                if k == &key {
+                    let sig = self.functions.get(mangled);
+                    let has_args = sig.map(|s| s.params.len() > 1).unwrap_or(false); // > self
+                    let def = self.fn_defs.get(mangled).copied();
+                    add(&mut out, &mut vistos, m.clone(), 2, None, has_args, def);
+                }
+            }
+        }
+
+        // 3. Builtins invocables como método sobre la categoría del tipo (kind 2 = Method).
+        if let Some(cat) = member_category(rt) {
+            for b in crate::builtins::methods_for(cat) {
+                let has_args = crate::builtins::method_takes_args(b);
+                add(&mut out, &mut vistos, (*b).to_string(), 2, None, has_args, None);
+            }
+        }
+
+        // 4. Funciones libres UFCS: primer parámetro que acepta el receptor (kind 3 = Function).
+        //    Solo para receptores **compuestos** (array/map/struct/enum/tupla): ahí la función opera
+        //    SOBRE la estructura y `recv.f()` es idiomático (captura `map`/`filter`/`fold`/`sort` del
+        //    prelude y las UFCS del usuario). Para primitivos NO se enumeran: una función que toma un
+        //    `string` suele tratarlo como DATO (`read_file(path)`, `env(name)`), no como método —los
+        //    primitivos ya reciben sus builtins (paso 3) y sus métodos de trait (paso 2)—.
+        //    Excluye además sintéticos (`#`/`::`/`__`) y primer parámetro genérico pelado (`Var`, que
+        //    unificaría con todo, p. ej. `assert_eq`).
+        let receptor_compuesto = matches!(
+            rt,
+            Type::Array(_) | Type::Map(_, _) | Type::Struct(_, _) | Type::Enum(_, _) | Type::Tuple(_)
+        );
+        if receptor_compuesto {
+            for (fname, sig) in &self.functions {
+                if fname.contains('#') || fname.contains("::") || fname.starts_with("__") {
+                    continue;
+                }
+                if let Some(p0) = sig.params.first() {
+                    if matches!(p0, Type::Var(_)) {
+                        continue;
+                    }
+                    let mut sigma: HashMap<String, Type> = HashMap::new();
+                    if unify(p0, rt, &mut sigma).is_ok() {
+                        let has_args = sig.params.len() > 1; // > el receptor
+                        let def = self.fn_defs.get(fname).copied();
+                        add(&mut out, &mut vistos, fname.clone(), 3, None, has_args, def);
+                    }
+                }
+            }
+        }
+
+        out.sort_by(|a, b| a.label.cmp(&b.label));
+        out
     }
 
     /// Tipo del campo `fname` de un struct `sname` con argumentos de tipo `targs`, ya
@@ -2898,7 +3184,12 @@ impl Checker {
                     // M10.2i: hover del builtin en su nombre — su firma con los tipos de ESTA llamada
                     // (`pow: fn(float, float) -> float`). Solo en llamada directa (posición correcta) y
                     // modo gather. Los builtins internos (`__…`) no se muestran (el usuario no los escribe).
-                    if hover_directo && self.gather && !name.starts_with("__") {
+                    // Se omite además un **wrapper sintético**: el `to_string(e)` que el parser inserta al
+                    // desazucarar una interpolación `${e}` comparte la posición de su argumento (ambos en
+                    // `(el, ec)`); su hover solaparía —y taparía por menor `len`— al del propio `e`. Una
+                    // llamada escrita a mano nunca tiene el argumento en la misma columna que el callee.
+                    let wrapper_sintetico = args.len() == 1 && args[0].line == line && args[0].col == col;
+                    if hover_directo && self.gather && !name.starts_with("__") && !wrapper_sintetico {
                         let fn_ty = Type::Fn(arg_types.clone(), Box::new(t.clone()));
                         self.record_ident(line, col, name, &fn_ty, None);
                     }
@@ -3303,14 +3594,19 @@ impl Checker {
         if !self.gather {
             return;
         }
-        if let Some(&(nl, nc)) = self.field_name_pos.get(&(recv_line, recv_col, name.to_string())) {
+        // Todas las posiciones de este `(receptor, nombre)`: en una cadena (`v.doble().inc().doble()`)
+        // dos `.doble()` comparten clave (misma posición de receptor) → se registra el hover en ambas.
+        // Todas resuelven a la misma función (mismo `name` sobre el mismo receptor) → misma firma.
+        if let Some(posiciones) = self.field_name_pos.get(&(recv_line, recv_col, name.to_string())).cloned() {
             let len = name.chars().count();
-            self.index.hovers.push(HoverEntry { line: nl, col: nc, len, text: format!("{}: {}", name, ty) });
-            // M10.2h: si el método resuelve a una función conocida (manglada de un impl, o libre en
-            // UFCS), registramos su declaración → habilita ir-a-definición y documentación (`///`) del
-            // método en el hover. Un campo-función del struct no tiene `fn_defs` → sin `def` (None).
-            if let Some((def_line, def_col)) = def {
-                self.index.defs.push(DefEntry { line: nl, col: nc, len, def_line, def_col });
+            for (nl, nc) in posiciones {
+                self.index.hovers.push(HoverEntry { line: nl, col: nc, len, text: format!("{}: {}", name, ty) });
+                // M10.2h: si el método resuelve a una función conocida (manglada de un impl, o libre en
+                // UFCS), registramos su declaración → habilita ir-a-definición y documentación (`///`) del
+                // método en el hover. Un campo-función del struct no tiene `fn_defs` → sin `def` (None).
+                if let Some((def_line, def_col)) = def {
+                    self.index.defs.push(DefEntry { line: nl, col: nc, len, def_line, def_col });
+                }
             }
         }
     }
@@ -3664,6 +3960,9 @@ fn resolve_expr(expr: &mut Expr, enums: &HashSet<String>) {
                 resolve_expr(e, enums);
             }
         }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { resolve_expr(k, enums); resolve_expr(v, enums); }
+        }
         ExprKind::Index { array, index } => {
             resolve_expr(array, enums);
             resolve_expr(index, enums);
@@ -3778,8 +4077,46 @@ fn type_key_of(ty: &Type) -> Option<String> {
         Type::String => "string".into(),
         Type::Char => "char".into(),
         Type::Struct(n, _) | Type::Enum(n, _) => n.clone(),
+        // M48.4: constructores incorporados como objetivo de impl (`impl Len for [T]`/`Map<K,V>`/`bytes`).
+        // La clave va por CONSTRUCTOR (como `Caja<int>`→"Caja"): `[int]`/`[bool]` comparten "[]".
+        Type::Array(_) => "[]".into(),
+        Type::Map(_, _) => "Map".into(),
+        Type::Bytes => "bytes".into(),
         _ => return None,
     })
+}
+
+/// La **categoría** de un tipo para los builtins-como-método del completion (M45): la clave que
+/// entiende `builtins::methods_for`. Cubre también arreglos y `Map`, que no tienen `type_key_of`.
+fn member_category(ty: &Type) -> Option<&'static str> {
+    Some(match ty {
+        Type::String => "string",
+        Type::Bytes => "bytes",
+        Type::Char => "char",
+        Type::Int => "int",
+        Type::Float => "float",
+        Type::Bool => "bool",
+        Type::Array(_) => "array",
+        Type::Map(_, _) => "map",
+        _ => return None,
+    })
+}
+
+/// Completion de miembros (M45): los símbolos ofrecibles tras `recv.`. El LSP repara la fuente
+/// insertando el centinela `__raycomplete__` tras el `.`; aquí corremos el front-end best-effort
+/// (con recuperación de errores) y, al tipar ese acceso, enumeramos los miembros del tipo del
+/// receptor. Devuelve `[]` si el receptor no tipa o no tiene miembros. No exige `main` (puede ser
+/// un fragmento a medio escribir).
+pub fn member_completion(program: &mut Program) -> Vec<MemberItem> {
+    if prepare_program(program).is_err() {
+        return Vec::new();
+    }
+    let mut checker = Checker::new();
+    checker.completing = true;
+    checker.require_main = false;
+    checker.gather = true; // puebla `fn_defs` → posición de los métodos/UFCS para sus `///` docs
+    let _ = checker.check_program(program); // best-effort: el error de tipos del fragmento es esperado
+    checker.member_hits
 }
 
 // =====================================================================
@@ -4101,6 +4438,9 @@ fn freshen_expr(expr: &mut Expr, next: &mut usize) {
                 freshen_expr(e, next);
             }
         }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { freshen_expr(k, next); freshen_expr(v, next); }
+        }
         ExprKind::Index { array, index } => {
             freshen_expr(array, next);
             freshen_expr(index, next);
@@ -4200,6 +4540,9 @@ fn renumber_expr(expr: &mut Expr, next: &mut usize) {
                 renumber_expr(e, next);
             }
         }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { renumber_expr(k, next); renumber_expr(v, next); }
+        }
         ExprKind::Index { array, index } => {
             renumber_expr(array, next);
             renumber_expr(index, next);
@@ -4291,6 +4634,7 @@ fn lower_for_iters_expr(expr: &mut Expr, sites: &HashMap<(usize, usize), String>
         ExprKind::Binary { left, right, .. } => { lower_for_iters_expr(left, sites); lower_for_iters_expr(right, sites); }
         ExprKind::Call { callee, args } => { lower_for_iters_expr(callee, sites); for a in args { lower_for_iters_expr(a, sites); } }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { lower_for_iters_expr(e, sites); } }
+        ExprKind::MapLit(pares) => { for (k, v) in pares { lower_for_iters_expr(k, sites); lower_for_iters_expr(v, sites); } }
         ExprKind::Index { array, index } => { lower_for_iters_expr(array, sites); lower_for_iters_expr(index, sites); }
         ExprKind::StructLit { fields, .. } => { for (_, e) in fields { lower_for_iters_expr(e, sites); } }
         ExprKind::EnumLit { args, .. } => { for a in args { lower_for_iters_expr(a, sites); } }
@@ -4392,6 +4736,7 @@ fn subst_named_expr(expr: &mut Expr, sigma: &HashMap<String, Type>) {
         ExprKind::Binary { left, right, .. } => { subst_named_expr(left, sigma); subst_named_expr(right, sigma); }
         ExprKind::Call { callee, args } => { subst_named_expr(callee, sigma); for a in args { subst_named_expr(a, sigma); } }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { subst_named_expr(e, sigma); } }
+        ExprKind::MapLit(pares) => { for (k, v) in pares { subst_named_expr(k, sigma); subst_named_expr(v, sigma); } }
         ExprKind::Index { array, index } => { subst_named_expr(array, sigma); subst_named_expr(index, sigma); }
         ExprKind::StructLit { fields, .. } => { for (_, e) in fields { subst_named_expr(e, sigma); } }
         ExprKind::EnumLit { args, .. } => { for a in args { subst_named_expr(a, sigma); } }
@@ -4545,6 +4890,9 @@ fn lower_ufcs_expr(expr: &mut Expr, sites: &SiteMap) {
                 lower_ufcs_expr(e, sites);
             }
         }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { lower_ufcs_expr(k, sites); lower_ufcs_expr(v, sites); }
+        }
         ExprKind::Index { array, index } => {
             lower_ufcs_expr(array, sites);
             lower_ufcs_expr(index, sites);
@@ -4648,6 +4996,7 @@ fn lower_uintlit_expr(expr: &mut Expr, sites: &UIntLitMap) {
             for a in args { lower_uintlit_expr(a, sites); }
         }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { lower_uintlit_expr(e, sites); } }
+        ExprKind::MapLit(pares) => { for (k, v) in pares { lower_uintlit_expr(k, sites); lower_uintlit_expr(v, sites); } }
         ExprKind::Index { array, index } => { lower_uintlit_expr(array, sites); lower_uintlit_expr(index, sites); }
         ExprKind::StructLit { fields, .. } => { for (_, e) in fields { lower_uintlit_expr(e, sites); } }
         ExprKind::EnumLit { args, .. } => { for a in args { lower_uintlit_expr(a, sites); } }
@@ -4771,6 +5120,7 @@ fn lower_try_expr(expr: &mut Expr, sites: &TryConvMap) {
             for a in args { lower_try_expr(a, sites); }
         }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => { for e in elems { lower_try_expr(e, sites); } }
+        ExprKind::MapLit(pares) => { for (k, v) in pares { lower_try_expr(k, sites); lower_try_expr(v, sites); } }
         ExprKind::Index { array, index } => { lower_try_expr(array, sites); lower_try_expr(index, sites); }
         ExprKind::StructLit { fields, .. } => { for (_, e) in fields { lower_try_expr(e, sites); } }
         ExprKind::EnumLit { args, .. } => { for a in args { lower_try_expr(a, sites); } }
@@ -4880,6 +5230,9 @@ fn lower_operators_expr(expr: &mut Expr, sites: &SiteMap) {
             for a in args {
                 lower_operators_expr(a, sites);
             }
+        }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { lower_operators_expr(k, sites); lower_operators_expr(v, sites); }
         }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
@@ -5019,6 +5372,9 @@ fn lower_dict_calls_expr(expr: &mut Expr, sites: &DictSites) {
             for a in args.iter_mut() {
                 lower_dict_calls_expr(a, sites);
             }
+        }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares { lower_dict_calls_expr(k, sites); lower_dict_calls_expr(v, sites); }
         }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
@@ -5197,6 +5553,12 @@ fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
                 lower_dyn_expr(a, coercions, dispatch, upcasts, tm, counter);
             }
         }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares {
+                lower_dyn_expr(k, coercions, dispatch, upcasts, tm, counter);
+                lower_dyn_expr(v, coercions, dispatch, upcasts, tm, counter);
+            }
+        }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
                 lower_dyn_expr(e, coercions, dispatch, upcasts, tm, counter);
@@ -5327,6 +5689,168 @@ mod tests {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         let mut prog = crate::parser::parse(tokens).expect("parse ok");
         check(&mut prog)
+    }
+
+    /// M45: etiquetas de `member_completion` sobre una fuente que YA lleva el centinela.
+    fn miembros(src: &str) -> Vec<String> {
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let (mut prog, _) = crate::parser::parse_all(tokens);
+        member_completion(&mut prog).into_iter().map(|m| m.label).collect()
+    }
+
+    #[test]
+    fn hover_de_funcion_asociada() {
+        // M48.1/LSP: hover sobre el nombre asociado (`new`/`bounded`) → su firma del registro.
+        let src = "fn main() -> int {\n  let m: Map<string, int> = Map.new();\n  m.len()\n}";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        let idx = semantic_index(&mut prog);
+        assert!(idx.hovers.iter().any(|h| h.line == 2 && h.text == "Map.new() -> Map<K, V>"),
+            "hover de Map.new: {:?}", idx.hovers.iter().filter(|h| h.line == 2).map(|h| &h.text).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn trait_len_para_tipos_incorporados() {
+        // M48.4a: el trait `Len` (prelude) se implementa para string/[T]/Map/bytes → `.len()` despacha
+        // por trait; funciona con un bound `T: Len` y con un tipo de usuario que lo implemente.
+        assert!(check_src("fn main() -> int { \"hola\".len() + [1,2,3].len() + \"a\".to_bytes().len() }").is_ok());
+        assert!(check_src("fn f<T: Len>(x: T) -> int { x.len() }\nfn main() -> int { f([1,2]) + f(\"ab\") }").is_ok());
+        assert!(check_src("fn main() -> int { let m: Map<int, int> = [1: 2]; m.len() }").is_ok());
+        // Un tipo del usuario puede implementar Len y usarse con el bound.
+        assert!(check_src(
+            "struct P { d: [int] }\nimpl Len for P { fn len(self) -> int { self.d.len() } }\n\
+             fn f<T: Len>(x: T) -> int { x.len() }\nfn main() -> int { f(P { d: [1,2,3] }) }").is_ok());
+        // Un tipo SIN Len no satisface el bound.
+        let e = check_src("struct Q { x: int }\nfn f<T: Len>(x: T) -> int { x.len() }\nfn main() -> int { f(Q { x: 1 }) }").unwrap_err();
+        assert!(format!("{e}").contains("Len"), "Q no implementa Len: {e}");
+    }
+
+    #[test]
+    fn traits_strops_bytesops() {
+        // M48.4d: los métodos de string/bytes despachan por trait (StrOps/BytesOps).
+        assert!(check_src(
+            "fn main() -> int { let s = \"hola\"; \
+             s.trim().split(\",\").len() + s.to_upper().len() + s.substring(0, 2).len() \
+             + s.to_bytes().sub_bytes(0, 1).len() + s.chars().len() }").is_ok());
+        // to_upper sobre un no-string → error.
+        let e = check_src("fn main() -> int { (42).to_upper().len() }").unwrap_err();
+        assert!(!format!("{e}").is_empty(), "int no tiene to_upper: {e}");
+    }
+
+    #[test]
+    fn trait_mapops() {
+        // M48.4c: insert/contains_key/keys/values como métodos del trait MapOps.
+        assert!(check_src(
+            "fn main() -> int { let m: Map<int, int> = [1: 10]; m.insert(2, 20); \
+             m.keys().len() + m.values()[0] + (if (m.contains_key(1)) { 1 } else { 0 }) }").is_ok());
+        // clave del tipo equivocado → error.
+        let e = check_src("fn main() { let m: Map<int, int> = [:]; m.insert(\"x\", 1); }").unwrap_err();
+        assert!(format!("{e}").contains("clave") || format!("{e}").contains("int"), "{e}");
+    }
+
+    #[test]
+    fn traits_push_reverse_contains() {
+        // M48.4b: los tres traits despachan como método; extensibles a tipos de usuario.
+        assert!(check_src("fn main() -> int { var a = [1,2]; a.push(3); a.reverse().len() }").is_ok());
+        assert!(check_src("fn ok(b: bool) -> int { if (b) { 1 } else { 0 } }\nfn main() -> int { ok([1,2,3].contains(2)) + ok(\"hola\".contains(\"la\")) }").is_ok());
+        // Un tipo del usuario implementa Push<int>/Contains<int>.
+        assert!(check_src(
+            "struct C { d: [int] }\nimpl Push<int> for C { fn push(self, x: int) { self.d.push(x) } }\n\
+             fn main() { let c = C { d: [] }; c.push(5); }").is_ok());
+        // contains con el tipo de elemento equivocado → error.
+        let e = check_src("fn main() -> int { if ([1,2,3].contains(\"x\")) { 1 } else { 0 } }").unwrap_err();
+        assert!(format!("{e}").contains("string") || format!("{e}").contains("contains"), "{e}");
+    }
+
+    #[test]
+    fn impl_para_tipo_incorporado_debe_ser_generico() {
+        // M48.4a: `impl X for [int]` (no plenamente genérico) se rechaza, como `impl X for Caja<int>`.
+        let e = check_src("trait X { fn m(self) -> int; }\nimpl X for [int] { fn m(self) -> int { 0 } }\nfn main() -> int { 0 }").unwrap_err();
+        assert!(format!("{e}").contains("parámetros de tipo distintos") || format!("{e}").contains("espera 1 parámetro"), "{e}");
+    }
+
+    #[test]
+    fn redefinir_builtin_es_error() {
+        // M48.3: un builtin del núcleo (print/to_string/panic…) no puede redefinirse como función libre.
+        for nombre in ["print", "to_string", "panic"] {
+            let src = format!("fn {nombre}(x: int) -> int {{ x }}\nfn main() -> int {{ 0 }}");
+            let e = check_src(&src).unwrap_err();
+            assert!(format!("{e}").contains(&format!("'{nombre}' es un builtin del lenguaje")),
+                "redefinir {nombre}: {e}");
+        }
+        // M48.4e: los builtins de contenedor RETIRADOS (len/push/… → ahora métodos de trait) dejaron el
+        // namespace libre → una función libre con ese nombre YA es legal (el footgun no dispara).
+        for nombre in ["len", "push", "insert", "keys", "reverse", "contains", "split", "chars"] {
+            let src = format!("fn {nombre}(x: int) -> int {{ x }}\nfn main() -> int {{ {nombre}(1) }}");
+            assert!(check_src(&src).is_ok(), "'{nombre}' como función libre ahora debe compilar");
+        }
+        // Una función del PRELUDE (map/filter/fold/sort) SÍ puede redefinirse (override).
+        assert!(check_src("fn map(x: int) -> int { x + 1 }\nfn main() -> int { map(5) }").is_ok());
+        assert!(check_src("fn sort(x: int) -> int { x }\nfn main() -> int { sort(3) }").is_ok());
+        // Y un nombre normal, obviamente, es válido.
+        assert!(check_src("fn doblar(x: int) -> int { x * 2 }\nfn main() -> int { doblar(2) }").is_ok());
+    }
+
+    #[test]
+    fn literal_de_map() {
+        // M48.2: `[k: v]` infiere `Map<K,V>`; `[:]` lo fija el esperado.
+        assert!(check_src("fn main() -> int { let m = [1: \"a\", 2: \"b\"]; m.len() }").is_ok());
+        assert!(check_src("fn main() { let m: Map<string, int> = [:]; }").is_ok());
+        assert!(check_src("fn main() { let m: Map<int, string> = [1: \"a\"]; }").is_ok());
+        // `[:]` sin anotar → error de "anota el tipo".
+        let e = check_src("fn main() -> int { let m = [:]; 0 }").unwrap_err();
+        assert!(format!("{e}").contains("no se puede inferir el tipo de [:]"), "{e}");
+        // Claves/valores heterogéneos → error.
+        let k = check_src("fn main() -> int { let m = [1: \"a\", \"b\": \"c\"]; 0 }").unwrap_err();
+        assert!(format!("{k}").contains("las claves del Map deben ser del mismo tipo"), "{k}");
+        let v = check_src("fn main() -> int { let m = [1: \"a\", 2: 3]; 0 }").unwrap_err();
+        assert!(format!("{v}").contains("los valores del Map deben ser del mismo tipo"), "{v}");
+        // Clave no hashable (float) → error.
+        let f = check_src("fn main() -> int { let m = [1.5: \"a\"]; 0 }").unwrap_err();
+        assert!(format!("{f}").contains("clave de un Map"), "{f}");
+        // Contra un esperado que no es Map → error de tipos del `let`.
+        assert!(check_src("fn main() { let xs: [int] = [1: 2]; }").is_err());
+    }
+
+    #[test]
+    fn funciones_asociadas_de_tipo() {
+        // M48.1: `Map.new()`/`Channel.new()`/`Channel.bounded(n)` — el tipo lo fija el esperado.
+        assert!(check_src("fn main() -> int { let m: Map<string, int> = Map.new(); m.len() }").is_ok());
+        assert!(check_src("fn main() { let c: Channel<int> = Channel.new(); }").is_ok());
+        assert!(check_src("fn main() { let c: Channel<int> = Channel.bounded(2); }").is_ok());
+        // Sin tipo esperado → error de "anota el tipo".
+        let e = check_src("fn main() -> int { let m = Map.new(); 0 }").unwrap_err();
+        assert!(format!("{e}").contains("no se puede inferir el tipo de 'Map.new'"), "{e}");
+        // Aridad: `Map.new` no recibe argumentos; `Channel.bounded` exige uno.
+        let a = check_src("fn main() { let m: Map<int, int> = Map.new(1); }").unwrap_err();
+        assert!(format!("{a}").contains("espera 0 argumento(s)"), "{a}");
+        // El argumento de `bounded` debe ser int.
+        let b = check_src("fn main() { let c: Channel<int> = Channel.bounded(\"x\"); }").unwrap_err();
+        assert!(format!("{b}").contains("debe ser int"), "{b}");
+        // El tipo esperado debe casar la familia (Map.new no produce un Channel).
+        let f = check_src("fn main() { let c: Channel<int> = Map.new(); }").unwrap_err();
+        assert!(format!("{f}").contains("produce un Map"), "{f}");
+    }
+
+    #[test]
+    fn member_completion_campos_metodos_y_builtins() {
+        // Struct: campos + método de trait + UFCS del usuario; kinds correctos.
+        let src = "struct P { x: int, y: int }\ntrait Ver { fn ver(self) -> int; }\nimpl Ver for P { fn ver(self) -> int { self.x } }\nfn doblar(p: P) -> int { p.x }\nfn main() -> int { let p = P { x: 1, y: 2 }; p.__raycomplete__; 0 }\n";
+        let m = miembros(src);
+        for esperado in ["x", "y", "ver", "doblar"] {
+            assert!(m.contains(&esperado.to_string()), "falta '{esperado}': {m:?}");
+        }
+        // string: builtins de string, sin funciones de E/S sobre una ruta string.
+        let s = miembros("fn main() -> int { let s = \"h\"; s.__raycomplete__; 0 }");
+        assert!(s.contains(&"trim".to_string()) && s.contains(&"split".to_string()), "{s:?}");
+        assert!(!s.contains(&"read_file".to_string()), "sin E/S sobre string: {s:?}");
+        // array: builtins + orden superior del prelude.
+        let a = miembros("fn main() -> int { let xs = [1,2,3]; xs.__raycomplete__; 0 }");
+        for esperado in ["len", "push", "map", "filter", "fold", "sort"] {
+            assert!(a.contains(&esperado.to_string()), "array falta '{esperado}': {a:?}");
+        }
+        // receptor sin tipo conocido → sin miembros (sin pánico).
+        assert!(miembros("fn main() -> int { desconocido.__raycomplete__; 0 }").is_empty());
     }
 
     /// Atajo: ¿el mensaje de error contiene esta subcadena?
@@ -5571,7 +6095,7 @@ fn main() -> int {
     #[test]
     fn arreglos_validos() {
         assert!(check_src("fn main() -> int { let a: [int] = [1, 2, 3]; a[0] }").is_ok());
-        assert!(check_src("fn main() -> int { let a: [int] = []; push(a, 1); len(a) }").is_ok());
+        assert!(check_src("fn main() -> int { let a: [int] = []; a.push(1); a.len() }").is_ok());
         assert!(check_src("fn main() { var a: [int] = [1]; a[0] = 9; }").is_ok());
         // Arreglos anidados.
         assert!(check_src("fn main() -> int { let m: [[int]] = [[1, 2], [3, 4]]; m[1][0] }").is_ok());
@@ -5584,8 +6108,8 @@ fn main() -> int {
         err_contains("fn main() -> int { let x: int = 5; x[0] }", "no es un arreglo");
         err_contains("fn main() { let x: int = []; }", "no se puede inferir");
         err_contains("fn main() -> int { let a: [int] = [1]; a[0] = true; a[0] }", "se le asigna bool");
-        err_contains("fn main() -> int { len(5) }", "len espera un arreglo");
-        err_contains("fn main() { let a: [int] = [1]; push(a, true); }", "se empuja bool");
+        err_contains("fn main() -> int { 5.len() }", "no existe campo ni función 'len' aplicable a int");
+        err_contains("fn main() { let a: [int] = [1]; a.push(true); }", "'T' no puede ser int y bool a la vez");
     }
 
     // ----- M3.2: structs -----
@@ -5990,7 +6514,7 @@ fn main() -> int {
     #[test]
     fn arreglo_vacio_adopta_el_tipo_esperado() {
         // El chequeo bidireccional arregla la aspereza histórica del [] vacío.
-        assert!(check_src("fn main() -> int { let xs: [int] = []; len(xs) }").is_ok());
+        assert!(check_src("fn main() -> int { let xs: [int] = []; xs.len() }").is_ok());
     }
 
     // ----- M6.3: Option/Result (prelude) y el operador ? -----
@@ -6016,7 +6540,7 @@ fn calc(x: int, y: int) -> Result<int, string> {
     let q: int = d(x, y)?;
     Result.Ok(q + 1)
 }
-fn raw(xs: [int]) -> Option<int> { if (len(xs) == 0) { Option.None } else { Option.Some(xs[0]) } }
+fn raw(xs: [int]) -> Option<int> { if (xs.len() == 0) { Option.None } else { Option.Some(xs[0]) } }
 fn primero(xs: [int]) -> Option<int> {
     let v: int = raw(xs)?;
     Option.Some(v)
@@ -6245,7 +6769,7 @@ fn main() -> int {
     fn inferencia_no_aplica_a_lo_indeterminado() {
         // Sin anotación, '[]' no se puede inferir: pide la anotación.
         err_contains(
-            "fn main() -> int { let xs = []; len(xs) }",
+            "fn main() -> int { let xs = []; xs.len() }",
             "no se puede inferir el tipo de []",
         );
     }
@@ -6397,6 +6921,56 @@ fn main() -> int {
         // Hover del enum `Color` en la construcción (línea 5).
         let he = idx.hovers.iter().find(|h| h.line == 5 && h.text == "enum Color").expect("hover de Color");
         assert_eq!(he.line, 5);
+        // Hover de la **variante** `Rojo` (tras el `.`): su firma. `Color.Rojo` no tiene payload.
+        let hv = idx.hovers.iter().find(|h| h.line == 5 && h.text == "Color.Rojo").expect("hover de Rojo");
+        assert!(hv.col > he.col, "la variante va tras el enum: {} vs {}", hv.col, he.col);
+    }
+
+    #[test]
+    fn indice_semantico_hover_en_interpolacion() {
+        // El `to_string(e)` sintético de `${e}` comparte posición con `e`; su hover NO debe taparlo.
+        // Hover sobre `area` dentro de `${area(3.0)}` → la función, nunca `to_string`.
+        let src = "fn area(r: float) -> float { r * r }\nfn main() {\n  print(\"x: ${area(3.0)}\");\n}";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        let idx = semantic_index(&mut prog);
+        // En la línea 3, NINGÚN hover debe ser de `to_string` (el wrapper sintético se omite).
+        assert!(!idx.hovers.iter().any(|h| h.line == 3 && h.text.starts_with("to_string:")),
+            "el to_string sintético no registra hover");
+        // Y `area` sí tiene su hover de función.
+        assert!(idx.hovers.iter().any(|h| h.line == 3 && h.text == "area: fn(float) -> float"),
+            "hover de area en la interpolación");
+    }
+
+    #[test]
+    fn indice_semantico_hover_en_cadena_ufcs() {
+        // En una cadena `v.doble().inc().doble()` todos los eslabones comparten la posición del
+        // receptor: las dos `.doble()` colisionaban en `field_name_pos` y la primera perdía su hover.
+        // Ahora se registran ambas posiciones.
+        let src = "fn doble(x: int) -> int { x * 2 }\nfn inc(x: int) -> int { x + 1 }\nfn main() -> int {\n  let v: int = 5;\n  v.doble().inc().doble()\n}";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        let idx = semantic_index(&mut prog);
+        // Los dos `doble` de la línea 5 tienen hover en posiciones distintas.
+        let cols: Vec<usize> = idx.hovers.iter()
+            .filter(|h| h.line == 5 && h.text == "doble: fn(int) -> int").map(|h| h.col).collect();
+        assert!(cols.len() >= 2, "ambas `.doble()` con hover: {cols:?}");
+        assert!(cols[0] != cols[1], "en columnas distintas: {cols:?}");
+    }
+
+    #[test]
+    fn indice_semantico_hover_en_match() {
+        // M10.2f: dentro de un `match` el índice registra el escrutinio, el enum y la variante del
+        // patrón, y los bindings que liga (tanto en el patrón como en el cuerpo).
+        let src = "enum Figura { Circulo(float), Punto }\nfn area(f: Figura) -> float {\n  match (f) {\n    Figura.Circulo(r) => r,\n    Figura.Punto => 0.0,\n  }\n}\nfn main() -> int { 0 }";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        let idx = semantic_index(&mut prog);
+        // Enum y variante en el patrón (línea 4).
+        assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "enum Figura"), "hover enum en patrón");
+        assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "Figura.Circulo(float)"), "hover variante en patrón");
+        // Binding `r` del patrón → su tipo.
+        assert!(idx.hovers.iter().any(|h| h.line == 4 && h.text == "r: float"), "hover binding en patrón");
     }
 
     #[test]
@@ -6568,7 +7142,7 @@ fn main() -> int {
             impl Figura for Rect { fn area(self) -> int { self.ancho * self.alto } }
             fn total(xs: [dyn Figura]) -> int {
                 var s = 0; var i = 0;
-                while (i < len(xs)) { s = s + xs[i].area(); i = i + 1; }
+                while (i < xs.len()) { s = s + xs[i].area(); i = i + 1; }
                 s
             }
             fn main() -> int {

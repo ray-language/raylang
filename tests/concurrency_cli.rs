@@ -39,7 +39,7 @@ fn productor_consumidor() {
     // Una fibra produce 5 valores y cierra; main los consume vía recv -> Option, sumando.
     let src = r#"
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     spawn(fn() {
         var i = 1;
         while (i <= 5) { send(ch, i * 10); i = i + 1; }
@@ -71,7 +71,7 @@ fn productor(ch: Channel<int>, base: int) {
     while (i < 3) { send(ch, base + i); i = i + 1; }
 }
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     spawn(fn() { productor(ch, 100); });
     spawn(fn() { productor(ch, 200); });
     var n = 0;
@@ -92,7 +92,7 @@ fn closure_captura_en_fibra() {
     // La función spawneada es una closure que captura una variable de main (por celda compartida).
     let src = r#"
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     let factor = 7;
     spawn(fn() {
         var i = 1;
@@ -116,7 +116,7 @@ fn close_da_none() {
     // recv sobre un canal cerrado y vacío devuelve None (sin bloquear).
     let src = r#"
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     close(ch);
     match (recv(ch)) {
         Option.Some(_) => print("algo"),
@@ -135,7 +135,7 @@ fn deadlock_detectado() {
     // recv sobre un canal vacío que nadie alimentará ni cerrará → deadlock (error de ejecución limpio).
     let src = r#"
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     match (recv(ch)) { Option.Some(v) => print(v), Option.None => print(0 - 1) }
     0
 }
@@ -150,7 +150,7 @@ fn main() -> int {
 fn send_a_canal_cerrado_es_error() {
     let src = r#"
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     close(ch);
     send(ch, 1);
     0
@@ -166,7 +166,7 @@ fn interprete_da_error_limpio() {
     // La concurrencia requiere la VM: el intérprete (sin --vm) da un error de ejecución claro, no un panic.
     let src = r#"
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     send(ch, 1);
     0
 }
@@ -181,8 +181,8 @@ fn pipeline_de_fibras() {
     // Pipeline CSP: generador -> cuadrador -> main. Cada etapa es una fibra; comunican por canales.
     let src = r#"
 fn main() -> int {
-    let nums: Channel<int> = channel();
-    let sqrs: Channel<int> = channel();
+    let nums: Channel<int> = Channel.new();
+    let sqrs: Channel<int> = Channel.new();
     // Generador: 1..4 -> nums
     spawn(fn() {
         var i = 1;
@@ -223,7 +223,7 @@ fn backpressure_canal_acotado() {
     // el `send` se bloquea al llenarse la cola (no se desborda); el consumidor recibe todo en orden.
     let src = r#"
 fn main() -> int {
-    let ch: Channel<int> = channel(2);
+    let ch: Channel<int> = Channel.bounded(2);
     spawn(fn() {
         var i = 1;
         while (i <= 5) { send(ch, i); i = i + 1; }
@@ -251,7 +251,7 @@ fn rendezvous_capacidad_cero() {
     // Canal de capacidad 0 (síncrono): cada `send` se completa solo cuando hay un `recv` esperando.
     let src = r#"
 fn main() -> int {
-    let ch: Channel<int> = channel(0);
+    let ch: Channel<int> = Channel.bounded(0);
     spawn(fn() {
         send(ch, 10); send(ch, 20); send(ch, 30);
         close(ch);
@@ -279,7 +279,7 @@ fn close_con_emisor_bloqueado_es_error() {
     let src = r#"
 fn productor(ch: Channel<int>) { send(ch, 1); send(ch, 2); send(ch, 3); }
 fn main() -> int {
-    let ch: Channel<int> = channel(1);
+    let ch: Channel<int> = Channel.bounded(1);
     spawn(fn() { productor(ch); });
     let primero: Option<int> = recv(ch);  // recibe 1; el productor bufferiza 2 y se bloquea en send(3)
     close(ch);                            // emisor bloqueado -> error
@@ -296,7 +296,7 @@ fn deadlock_por_emisor_bloqueado() {
     // Un `send` sobre un canal síncrono que nadie recibirá bloquea al emisor para siempre → deadlock.
     let src = r#"
 fn main() -> int {
-    let ch: Channel<int> = channel(0);
+    let ch: Channel<int> = Channel.bounded(0);
     send(ch, 1);
     0
 }
@@ -333,7 +333,7 @@ fn scope_une_tareas_no_unidas() {
     // El scope espera a una tarea aunque no se la una explícitamente: al salir, ya terminó.
     let src = r#"
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     scope(fn() {
         spawn(fn() { send(ch, 42); });
     });
@@ -394,12 +394,12 @@ fn main() -> int {
         var i = 1;
         while (i <= 5) {
             let n = i;
-            push(tareas, spawn(fn() -> int { n * n }));
+            tareas.push(spawn(fn() -> int { n * n }));
             i = i + 1;
         }
         var total = 0;
         var j = 0;
-        while (j < len(tareas)) {
+        while (j < tareas.len()) {
             total = total + join(tareas[j]);
             j = j + 1;
         }
@@ -421,8 +421,8 @@ fn select_multiplexa_dos_canales() {
     // Dos productores en canales distintos; main multiplexa con select (devuelve el índice listo).
     let src = r#"
 fn main() -> int {
-    let a: Channel<int> = channel();
-    let b: Channel<int> = channel();
+    let a: Channel<int> = Channel.new();
+    let b: Channel<int> = Channel.new();
     spawn(fn() { send(a, 10); });
     spawn(fn() { send(b, 20); });
     let chs: [Channel<int>] = [a, b];
@@ -450,7 +450,7 @@ fn select_detecta_canal_cerrado() {
     // Un canal cerrado cuenta como "listo": select lo devuelve y el recv da None.
     let src = r#"
 fn main() -> int {
-    let a: Channel<int> = channel();
+    let a: Channel<int> = Channel.new();
     spawn(fn() { close(a); });
     let chs: [Channel<int>] = [a];
     let i = select(chs);
@@ -476,8 +476,8 @@ fn productor(ch: Channel<int>) {
     send(ch, 99);
 }
 fn main() -> int {
-    let a: Channel<int> = channel();
-    let b: Channel<int> = channel();
+    let a: Channel<int> = Channel.new();
+    let b: Channel<int> = Channel.new();
     spawn(fn() { productor(b); });
     let chs: [Channel<int>] = [a, b];
     let i = select(chs);
@@ -496,7 +496,7 @@ fn select_sin_fuente_es_deadlock() {
     // select sobre un canal que nadie alimenta ni cierra → deadlock (error de ejecución limpio).
     let src = r#"
 fn main() -> int {
-    let a: Channel<int> = channel();
+    let a: Channel<int> = Channel.new();
     let chs: [Channel<int>] = [a];
     let i = select(chs);
     print(i);
@@ -519,7 +519,7 @@ fn main() -> int {
     scope(fn() -> int {
         spawn(fn() -> int { panic("boom") });
         spawn(fn() -> int {
-            let ch: Channel<int> = channel();
+            let ch: Channel<int> = Channel.new();
             recv(ch);
             print(777);
             0
@@ -546,7 +546,7 @@ fn main() -> int {
     let t: Task<int> = spawn(fn() -> int {
         scope(fn() -> int {
             spawn(fn() -> int {
-                let ch: Channel<int> = channel();
+                let ch: Channel<int> = Channel.new();
                 recv(ch);
                 print(555);
                 0

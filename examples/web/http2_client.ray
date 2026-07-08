@@ -6,6 +6,7 @@
 // Es el transporte que necesita un cliente gRPC (M31.3): gRPC = HTTP/2 + framing de mensajes en DATA.
 from http2 import preface, settings_empty, settings_ack, headers_frame, parse_frame, frame_size, ft_settings, ft_headers, ft_data, ft_goaway, fl_ack, fl_end_stream, Http2Frame;
 from hpack import new_hpack, encode, decode, header, HEntry;
+import std/net;
 
 // La respuesta: el código de estado (`:status`) y el cuerpo (concatenación de los frames DATA).
 pub struct Http2Response {
@@ -17,7 +18,7 @@ pub struct Http2Response {
 fn extract_status(hs: [HEntry]) -> int {
     var st = 0;
     var i = 0;
-    while (i < len(hs)) {
+    while (i < hs.len()) {
         if (hs[i].name == ":status") {
             match (parse_int(hs[i].value)) {
                 Option.Some(n) => {
@@ -35,7 +36,7 @@ fn extract_status(hs: [HEntry]) -> int {
 
 // Hace un GET sobre HTTP/2 a `host:port` con la ruta dada (por TLS, ALPN `h2`).
 pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response, string> {
-    let h = match (tls_connect_h2(host, port)) {
+    let h = match (net.tls_connect_h2(host, port)) {
         Result.Ok(x) => x,
         Result.Err(e) => {
             return Result.Err(e);
@@ -48,7 +49,7 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
     let reqhdrs = [header(":method", "GET"), header(":path", path), header(":scheme", "https"), header(":authority", host)];
     let block = encode(enc, reqhdrs);
     let salida = preface() + settings_empty() + headers_frame(1, block, true);
-    match (socket_write_bytes(h, salida)) {
+    match (net.socket_write_bytes(h, salida)) {
         Result.Ok(n) => { },
         Result.Err(e) => {
             close(h);
@@ -63,9 +64,9 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
     var body = b"";
     var done = false;
     while (!done) {
-        match (socket_read_bytes(h)) {
+        match (net.socket_read_bytes(h)) {
             Result.Ok(chunk) => {
-                if (len(chunk) == 0) {
+                if (chunk.len() == 0) {
                     done = true;  // el peer cerró
                 }
                 buf = buf + chunk;
@@ -75,16 +76,16 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
                 return Result.Err(e);
             },
         }
-        while (frame_size(buf) > 0 && len(buf) >= frame_size(buf)) {
+        while (frame_size(buf) > 0 && buf.len() >= frame_size(buf)) {
             let fsz = frame_size(buf);
-            let fbytes = sub_bytes(buf, 0, fsz);
-            buf = sub_bytes(buf, fsz, len(buf));
+            let fbytes = buf.sub_bytes(0, fsz);
+            buf = buf.sub_bytes(fsz, buf.len());
             match (parse_frame(fbytes)) {
                 Result.Ok(fr) => {
                     if (fr.ftype == ft_settings()) {
                         if ((fr.flags & fl_ack()) == 0) {
                             // SETTINGS del servidor → responder ACK.
-                            match (socket_write_bytes(h, settings_ack())) {
+                            match (net.socket_write_bytes(h, settings_ack())) {
                                 Result.Ok(x) => { },
                                 Result.Err(e) => {
                                     close(h);

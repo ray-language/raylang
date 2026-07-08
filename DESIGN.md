@@ -6141,3 +6141,450 @@ VM, como desde M12.)
 M38.3) y se conserva solo si los datos la respaldan. **Nota de invariante cero-deps**: el pool de hilos usa
 `std::thread` (sin `rayon`/`tokio`); la sincronización, `std::sync` (`Arc`/`Mutex`/`Condvar`) — todo de la
 librería estándar, sin dependencias de Cargo nuevas.
+
+## 47. M45 — Completion de miembros en el LSP
+
+Cierra el diferido de M10.2e/f (el completion era "de archivo", sin `recv.`). Tras `.`, el LSP ofrece
+los **miembros del tipo del receptor**: campos del struct, métodos de trait/impl (incl. `@derive`),
+builtins invocables como método (`s.len()`, `xs.push(...)`), y funciones UFCS del usuario/prelude
+(`xs.map(f)`, `xs.sort()`). Cliente-LSP + una consulta al checker; cero runtime.
+
+**El reto** es que el completion ocurre sobre código **incompleto** (`recv.` no parsea). En vez de
+inferir el tipo textualmente (como el signature help), se **repara** la fuente insertando un
+**centinela** en lugar de la palabra-miembro: `recv.par|` → `recv.__raycomplete__;`. Eso es sintaxis
+válida, sobrevive a la recuperación de errores del parser (M33c, `parse_all`), y el checker recorre el
+**mismo camino de tipado del receptor que ya usa el hover de campos** (M10.2g). El `;` termina la
+sentencia para que el bloque parsee (si no, `parse_all` descartaría la función al resincronizar); se
+omite si sigue un `(` (edición de una llamada `recv.m(args)`, ya válida).
+
+**Consulta al checker** (`checker::member_completion`, hermana de `semantic_index`): corre el front-end
+best-effort con un flag `completing`; al tipar el acceso `recv.__raycomplete__`, en vez de dar error
+por miembro inexistente, enumera en `enumerate_members(tipo_receptor)`:
+1. **Campos** del struct (con su tipo sustituido como *detail*).
+2. **Métodos** de trait/impl del tipo concreto (tabla `methods`, por constructor → `Caja<int>`/`Caja<bool>`
+   comparten).
+3. **Builtins** de la categoría del tipo (`builtins::methods_for`: string/bytes/char/array/map/…), lista
+   curada porque son ad-hoc polimórficos.
+4. **UFCS libre** — funciones cuyo primer parámetro acepta el receptor (unificación), **solo para
+   receptores compuestos** (array/map/struct/enum/tupla): ahí `recv.f()` es idiomático (captura
+   `map`/`filter`/`fold`/`sort` y las UFCS del usuario). Para **primitivos NO**: una función que toma un
+   `string` suele tratarlo como DATO (`read_file(path)`, `env(name)`), no como método → sería ruido; los
+   primitivos ya reciben builtins (3) y métodos de trait (2). Se excluyen sintéticos (`#`/`::`/`__`) y el
+   primer parámetro genérico pelado (`Var`, que unificaría con todo, p. ej. `assert_eq`).
+
+Cada ítem lleva su `CompletionItemKind` (Field/Method/Function) y documentación (`builtins::doc` / los
+`///` del prelude). `.` se añade a los `triggerCharacters`. **Diferidos**: docs `///` de métodos de impl
+del usuario, receptores que son expresiones complejas (`f(x).`), y UFCS del usuario sobre primitivos.
+
+### 47.1 M45b — refinamientos del completion de miembros
+
+Sobre M45, cuatro mejoras a partir de casos reales:
+- **Contexto de expresión** (bug): el reparado añadía `;` siempre, rompiendo `sum(x.)` →
+  `sum(x.__raycomplete__;)` (inválido → `parse_all` descartaba la función). Ahora el `;` solo se
+  añade en **posición de sentencia**; si el siguiente carácter no-espacio es `)`/`]`/`}`/`,`/`(` es
+  posición de **expresión** y se omite. Cubre argumentos de llamada, elementos de arreglo e
+  interpolación. (Los receptores-expresión `f(x).` ya funcionaban al ser posición de sentencia.)
+- **Snippet de argumentos**: los miembros invocables (método/función) insertan `nombre($0)` como
+  *snippet* (cursor entre paréntesis) y disparan el **signature help** (`triggerParameterHints`) si
+  toman argumentos; sin argumentos, `nombre()`. La aridad sale del `FnSig` (métodos/UFCS) o de
+  `builtins::method_takes_args` (los builtins ad-hoc, con lista curada de los sin-args). Los campos
+  no reciben `()`.
+- **Docs `///` de métodos de impl/UFCS**: `MemberItem` lleva la posición de declaración (`def`) del
+  método/función destino (poblada con `gather`); el LSP resuelve sus `///` con `raydoc::
+  doc_lineas_arriba` sobre la fuente original (el reparado no cambia números de línea). Prioridad:
+  builtin → `///` de la def → prelude.
+- **Interpolación** `"…${x.}…"`: el LSP ya la maneja (el centinela cae dentro de la interpolación,
+  que se re-lexea como expresión). El bloqueo era de VSCode, que suprime sugerencias dentro de
+  strings; se resuelve con un `configurationDefaults` por lenguaje (`editor.quickSuggestions.strings
+  = true` para `[raylang]`) en la extensión.
+
+Sigue diferido: hover/def de métodos sobre el nombre (comparte `(línea,col)` con el receptor, sin
+spans) y el completion por ámbito de bloque (sin spans, el alcance es la función).
+
+### 47.2 M45c — completion en los `import`
+
+Extiende el completion a las líneas de `import` (antes caían al completion de archivo, inútil ahí).
+Detección de contexto textual (el import a medio escribir no parsea), como el `.` de M45.
+
+- **M45c-1 — símbolos de `from M import …`**: al detectar `[pub] from <ruta> import <cursor>`, se
+  resuelve `<ruta>` desde disco (`loader::resolve_module_path` sobre las raíces del proyecto), se
+  parsea y se ofrecen sus nombres **`pub`** (funciones/tipos/consts + re-exports `pub from`), con su
+  kind. Lo privado no aparece.
+- **M45c-2 — rutas de módulo** (`import <cursor>`, `from <cursor> import`): `loader::
+  modulos_disponibles` recorre las raíces recolectando la identidad de cada `.ray`
+  (`rel_module_name`) y **descarta las que cruzan el borde de una cápsula** desde el archivo actual
+  (`capsula_violada`) — solo se ofrece lo que el checker aceptaría (un `util/interno` de la cápsula
+  `util` no se ve desde fuera). Como las rutas llevan `/` (que VSCode no cuenta como carácter de
+  palabra), cada ítem usa un **`textEdit`** que cubre la ruta parcial entera → el fuzzy match del
+  editor funciona sobre `geo/for` y al aceptar reemplaza la ruta completa.
+
+Las raíces (proyecto con `main.ray` ancestro + caché `.ray-deps`) las dan `project_root_for`/
+`dep_roots_for`, reusadas de los diagnósticos modulares. Cliente-LSP + consultas al loader; cero
+runtime.
+
+- **M45c-3 — acceso calificado por el leaf/alias** (`import geo/util as u;` → `u.` , o `circulo.`
+  del leaf): al pedir miembros con `recv.`, si el receptor no tipa como valor (un módulo no es un
+  valor → sin miembros) **y** es el `leaf()` de algún `import` del archivo, se ofrecen los símbolos
+  `pub` de ese módulo (reusa `simbolos_pub_de_modulo`). Va **después** del intento de valor, así un
+  local que tape al módulo (el resolutor prefiere el local) gana. Cierra el `u.` que no autocompletaba.
+
+Diferido: nombre calificado en expresiones más allá del leaf (`M.Color.Rojo` en dos saltos).
+
+## 48. M46 — firmas visibles al completar
+
+Ataca la fricción #1 del completion: aceptar una función sin ver qué parámetros toma. Idea central:
+un **resolutor de firma unificado** (`SigCtx`, cliente-LSP) que halla la declaración `fn` de un
+nombre —**textualmente**, tolerando el archivo a medio escribir— buscando en el buffer + los módulos
+importados (leídos de disco) + el prelude, con `builtins::signature` para los ad-hoc. Reusa
+`find_fn_signature` (la misma del signature help).
+
+### 48.1 M46a — firma en el detalle del popup
+
+Cada ítem invocable (función de archivo, método, builtin, UFCS, símbolo de módulo) lleva
+`labelDetails` (`detail` = params inline tras el label, `description` = retorno a la derecha) + el
+clásico `detail` (panel): `doblar(p: P, k: int)  int`. Así **ves los tipos en la lista** antes de
+aceptar. En contexto de **método** (`recv.f`) se recorta el primer parámetro (el receptor) → se
+muestran solo los argumentos que faltan (`s.split` → `(sep: string)`). `builtins::signature` se
+extendió a los builtins-método (string/array/map), con test-guardián. Bonus: la completion de archivo
+pasó a `parse_all` (recuperación) → ya no se queda **vacía** en archivos incompletos (el caso normal
+al teclear). Queda **M46c** (snippet con placeholders por parámetro).
+
+### 48.2 M46b — signature help cross-módulo y de métodos
+
+El signature help (`f(` → firma con el parámetro activo) usaba `find_fn_signature(buffer)`: solo
+funciones del archivo + builtins. Ahora usa el **`SigCtx`** de M46a → resuelve también funciones
+**importadas** (`u.cuadrado(`) y del **prelude** (`sort(`). Además distingue **método** de **llamada
+calificada de módulo**: `enclosing_call` devuelve el receptor; si es un **valor** (`p.doblar(`) se
+recorta el receptor y el `activeParameter` cuenta los args visibles (`(k: int)`); si es un **módulo**
+importado (`u.cuadrado(`, detectado con `es_modulo_importado`) se muestra la firma completa. Reusa
+todo M46a; cero runtime.
+
+### 48.3 M46c — snippet con placeholders por parámetro
+
+Al aceptar una función/método, en vez de `nombre($0)` (cursor entre paréntesis vacíos) se inserta un
+**snippet con un placeholder por parámetro** —`nombre(${1:p}, ${2:k})`—: caes en el primer argumento
+y recorres los demás con Tab, cada uno con el nombre del parámetro como texto seleccionado. Reusa la
+firma de `SigCtx` (`snippet_args` toma el nombre de cada `"p: T"`); en un **método** se omite el
+receptor (`s.split` → `split(${1:sep})`); sin firma pero con args se cae a `nombre($0)`, y sin args a
+`nombre()`. Cubre tanto el completion de miembros como el de archivo (que además ganó `insertText`,
+que antes no tenía). **M46 COMPLETO** (48.1 detalle + 48.2 signature help + 48.3 placeholders).
+
+## 49. M47 — completion de literales de struct
+
+- **M47a — campos dentro del literal**: dentro de `Nombre { … | … }` (posición de nombre de campo) se
+  ofrecen los **campos** del struct que faltan (kind Field, tipo como detalle, insertText `campo: `),
+  en vez de los símbolos del archivo. `struct_literal_completion_items` detecta el contexto (escanea
+  al `{` sin cerrar; el identificador previo es el struct), lo busca en el cierre de imports
+  (`SigCtx::struct_campos` → archivo/importado/reexportado, `geo.Circulo { }`), y guarda contra
+  falsos positivos de bloque (`-> T {`, `for T {`, `struct/enum/trait T {`). Excluye los campos ya
+  escritos; en posición de VALOR (`campo: …`) cede a la completion normal.
+- **M47b — snippet del literal al teclear el tipo**: por cada struct ofrecible, un ítem EXTRA
+  `Nombre {…}` (kind Snippet) que inserta el literal completo con un placeholder por campo (`Nombre {
+  c1: ${1:T1}, … }`), al estilo rust-analyzer. Aparte del tipo pelado `Nombre` (que sigue para las
+  anotaciones); `filterText` = el nombre, así aparece al teclear el tipo. Cliente-LSP; cero runtime.
+
+## 50. M48 — ergonomía de nombres y stdlib
+
+Diagnóstico: raylang ya tiene varios espacios de nombres (tipos, rutas de módulo `::`, métodos de trait
+`Tipo#metodo`); el saturado es el de **valores** (funciones libres + locales + builtins). Plan en tres
+fases (ver `docs/M48-ergonomia-nombres.md`), **las tres completas**: (1) funciones asociadas + literal de
+Map; (2) diagnóstico al redefinir un builtin; (3) builtins de contenedor → traits **+ retiro** (§50.5).
+
+### 50.1 M48.1 — funciones asociadas a tipos (`Tipo.fn()`)
+
+Un namespace **indexado por el tipo**, estilo `Vec::new()`. Sustituye los constructores poco idiomáticos
+`map_new()`/`channel()` por **`Map.new()`**, **`Channel.new()`**, **`Channel.bounded(n)`**.
+
+- **Registro** `ASSOC_FNS` en `src/builtins.rs` (`type_name`, `fn_name`, `arity`, `opcode`, `doc`, `sig`),
+  consultado por checker/compilador/intérprete/LSP. `assoc_lookup`/`assoc_for_type`.
+- **Sintaxis**: llega como `Call(Field(Ident(Tipo), fn))` —igual que la construcción de enum—; el checker
+  lo reconoce en `try_assoc_call` **antes** de la resolución campo/método/UFCS. El resultado (Map/Channel)
+  es **indeterminado**: lo fija el tipo esperado (bidireccional, como `[]`/`None`); sin él, error de
+  "anota el tipo". Valida aridad y el arg `int` de `bounded`.
+- **Runtime intacto**: se baja al mismo opcode (`MapNew`/`ChannelNew`/`ChannelNewBounded`); el intérprete
+  construye el Map vacío (`Map.new()`) o da el error "requiere la VM" (canales).
+- **Migración de golpe** (decisión con el usuario): `map_new`/`channel` **retirados** como builtins; todo
+  el corpus (156 ejemplos + `std`/`packages` + `selfhost`) migrado. `map_new()` ahora es "función no
+  declarada". El compilador **auto-alojado** se actualizó en paralelo (checker/interpreter/compiler) para
+  reconocer `Map.new()` y preservar la meta-circularidad; el primitivo interno `"map_new"` sobrevive solo
+  en `dispatch_builtin` (la VM auto-alojada baja `Map.new()` a `OBuiltin("map_new", 0)`).
+- **LSP**: completado `Map.`/`Channel.` (kind Function, snippet + firma), hover del nombre asociado (su
+  firma, vía `try_assoc_call` bajo `gather`), y signature help dentro de `Map.new(`/`Channel.bounded(`.
+- Diferido: funciones asociadas **definidas por el usuario** (`impl Tipo { fn new() {…} }` sin `self`).
+
+### 50.2 M48.2 — literal de Map (`[:]` / `[k: v]`)
+
+Sintaxis idiomática para construir mapas, estilo Swift, en vez de `Map.new()` + `insert` manual.
+
+- **Sintaxis**: `[k: v, …]` (poblado) y `[:]` (vacío). Nodo `ExprKind::MapLit(Vec<(Expr, Expr)>)`. El
+  parser extiende el literal de corchetes: `[:]` es el Map vacío; el `:` tras el **primer** elemento
+  decide Map vs arreglo (`[a, b]` arreglo, `[a: b]` Map); coma final permitida. No choca con `{}`
+  (bloque/struct).
+- **Tipado**: `[k: v]` infiere `Map<K,V>` del primer par (claves homogéneas, valores homogéneos, clave
+  hashable). `[:]` es **indeterminado** (como `[]`): lo fija el esperado, o error de "anota el tipo".
+- **Runtime**: baja a `Map.new()` + `insert` por par (erasure). Como `MapInsert` consume el handle del
+  Map y no hay `Dup`, el compilador guarda el Map en un local temporal (`$maplit`, como el escrutinio del
+  `match`) y lo recupera al final; el intérprete lo construye directo. Clave repetida → gana la última.
+  Oráculo VM↔intérprete + estrés de GC.
+- **Front-end**: `MapLit` se añadió a las ~14 pasadas de lowering/traversal (loader + checker) para que
+  el lowering (`?`/UFCS/dyn/dicts) alcance las claves y valores; fmt lo reemite (`[:]` / `[k: v]`).
+- Diferido: el literal en el compilador **auto-alojado** (parser/checker/intérprete/VM); el ejemplo
+  `examples/data/mapa_literal.ray` se excluye del escaneo de `selfhost_parser`.
+
+### 50.3 M48.3 — redefinir un builtin es error (footgun)
+
+Un builtin (`len`/`push`/`insert`/`print`/…) se resuelve **antes** que cualquier función del usuario
+(`un builtin no se tapa`), así que un `fn len` quedaba **inalcanzable** — un shadowing silencioso al
+revés. Ahora es un error claro: *"'len' es un builtin del lenguaje y no puede redefinirse"*.
+
+- **`check_builtin_redefinition`** corre **antes** de inyectar el prelude (ve solo las funciones del
+  usuario ya fusionadas por el loader), llamado por `check` (fail-fast) **y** por `check_all`
+  (recuperación M33c; sin ambos, el mensaje no se emitía y el CLI salía 65 sin diagnóstico).
+- Solo nombres **pelados**: las de un módulo van namespacadas (`M::len`, con `::`) → no colisionan; las
+  del prelude (`map`/`filter`/`fold`/`sort`/`assert`…) **no son builtins** → siguen siendo redefinibles
+  (override); los internos `__x` se ignoran. La stdlib con nombres de builtin (`std/text.reverse`,
+  `std/sort.min`/`max`, `redis.read_line`) solo se importa (namespacada) → no la afecta.
+- El override real de un builtin llegará gratis con la Fase 3 (cuando `len` deje de ser builtin y pase a
+  ser un método de trait, redefinir `fn len` como función libre será legal).
+- Puro checker (sin runtime). Diagnóstico en vivo en el LSP (vía `analizar`).
+
+### 50.4 M48.4 — builtins de contenedor → traits
+
+Los builtins de contenedor pueden ser **métodos de trait**: misma sintaxis con punto (`xs.len()`),
+pero **extensibles a tipos propios** e **usables en bounds** (`fn f<T: Len>(x: T)`). Runtime intacto.
+
+**Maquinaria (M48.4a)** — prerrequisito reutilizable: `impl Trait for X` y el despacho de métodos ahora
+aceptan los tipos incorporados `[T]`/`Map<K,V>`/`bytes` como objetivos (antes solo primitivos +
+struct/enum). `ensure_impl_target` valida `[T]`/`Map<K,V>` como constructores siempre-genéricos (como
+`Caja<T>`; solo impls plenamente genéricos) y `bytes` como concreto; `type_key_of` da las claves de
+despacho `[]`/`Map`/`bytes`.
+
+**Traits (prelude)** — cada método del trait baja a un **primitivo `__x`** (mismo opcode que el builtin,
+oculto), o —para `StrOps`/`BytesOps` durante la coexistencia— llama al builtin público:
+- `Len { len }` → string, `[T]`, `Map<K,V>`, bytes (M48.4a).
+- `Push<T> { push }` / `Reverse { reverse -> Self }` / `Contains<T> { contains }` → `[T]` (Contains
+  también string); bytes fuera de Contains (M48.4b).
+- `MapOps<K,V> { insert; contains_key; keys; values }` → `Map<K,V>` (M48.4c). `get`/`remove` siguen
+  siendo funciones del prelude (Option).
+- `StrOps { trim; split; replace; chars; starts_with; ends_with; to_upper; to_lower; substring; repeat;
+  to_bytes }` → string; `BytesOps { sub_bytes }` → bytes (M48.4d). `char_code` (char) y `join`
+  (`[string]`, no impl-able para un array concreto) se quedan builtins.
+
+**Coexistencia (M48.4a–d)** — estado intermedio: los builtins públicos convivían con los traits;
+`recv.metodo()` resolvía por el trait (prioridad campo→método→UFCS), la forma prefija `metodo(args)` por
+el builtin. Sirvió para migrar el corpus sin romper nada; lo cierra el retiro (M48.4e).
+
+### 50.5 M48.4e — retiro de los builtins de contenedor
+
+Vaciar el namespace **de verdad**: los 20 builtins de contenedor (`len`/`push`/`reverse`/`contains`/
+`insert`/`contains_key`/`keys`/`values`, `trim`/`split`/`replace`/`chars`/`starts_with`/`ends_with`/
+`to_upper`/`to_lower`/`substring`/`repeat`/`to_bytes`/`sub_bytes`) dejan de ser builtins y quedan **solo**
+como métodos de trait. Así `fn len` libre pasa a ser legal (el footgun de §50.3 ya no dispara sobre estos
+nombres) y la forma prefija `len(x)` **desaparece** (sola forma canónica: `x.len()`). Es un cambio
+**incompatible** acotado (la forma de método existe desde M48.4a).
+
+- **Prerrequisito — `ray fmt` sano + corpus canónico.** El retiro reescribe cada sitio prefijo a
+  `.metodo()` sobre el **AST** y reemite con el formateador; para que el diff toque **solo** los sitios
+  migrados (sin ruido de estilo) el corpus debía estar ya en forma canónica. Al canonizarlo se
+  descubrieron y repararon **dos bugs de `fmt`**: (1) un `match`/bloque como **sub-expresión** (argumento
+  de llamada, operando…) se des-indentaba desde la columna 0 (`fmt_expr` no llevaba la indentación del
+  contexto → ahora `Cur.base`); (2) —**semántico**— un block-form como **última sentencia sin tail** se
+  reemitía sin `;`, y al re-parsear un block-form final sin `;` es el **tail** → el bloque pasaba de
+  `unit` al tipo del block-form (rompía el compilador auto-alojado). `fmt_block` conserva el `;` en ese
+  caso.
+- **El reescritor (codemod AST).** `Call(Ident(builtin), [recv, ...resto])` → `Call(Field(recv, builtin),
+  [...resto])`, en post-orden (los anidados componen: `reverse(sort(a))` → `sort(a).reverse()`). Seguro
+  porque se verificó **0** ocurrencias en el azúcar (pipes/interpolación) y **0** shadowing por
+  locales/params del mismo nombre. Migró 2115 sitios del corpus (137 archivos) + 51 del prelude + ~247
+  **fixtures de test embebidas en Rust** (a mano, mismo criterio). Los cuerpos de los impl de trait siguen
+  llamando a los primitivos `__x` (evitan la recursión infinita).
+- **El retiro.** Se quitan las 20 entradas públicas de `BUILTINS` (los gemelos `__x`, mismo opcode,
+  quedan como impl → **runtime intacto**). Las tablas del LSP (`methods_for`/`signature`/`doc`) se
+  conservan (ahora describen métodos de trait). Gramáticas VSCode/Sublime podadas.
+- **Self-hosting (D5).** El checker auto-alojado es un **subconjunto** que sigue modelando estos como
+  builtins de arreglo/string; para los 3 tests de error sobre tipo incorrecto (`xs.push(true)`,
+  `(3).push(1)`, `(3).len()`) el oráculo exige misma **posición** de rechazo, tolerando la redacción (Rust
+  los ve como métodos de trait, p. ej. `argumento 2 de '[]#push': …`). El resto (lexer/parser/checker/
+  intérprete/VM/metacircular) sigue byte-idéntico; sus fuentes usan la forma de método (resuelta por su
+  propia rama UFCS→builtin). **M48.4e / M48 COMPLETOS.**
+
+## 51. M49 — stdlib importable (familias de builtins → módulos `std/…`)
+
+Continuación de M48 (descongestionar el namespace de **valores**). Igual que M48 movió los builtins de
+contenedor a métodos de trait, M49 mueve las familias **matemática / tiempo / criptografía** del global a
+módulos importables `std/…`, dejando globales solo lo universal (`print`/`panic`/`assert`) y **core la
+concurrencia** (atada al modelo de ejecución). Plan completo en `docs/M49-stdlib-importable.md`.
+
+**Cero maquinaria nueva** — dos piezas probadas se combinan: (1) la **std embebida en el binario** (M40.5,
+`src/stdlib.rs` + `include_str!`: `import std/math;` resuelve a la fuente embebida) y (2) el patrón **`__x`
+interno + envoltorio `pub fn`** (el mismo de la I/O: `read_file`/`__read_file`).
+
+### 51.1 M49.1a — `std/math`, funciones float
+
+Las 11 funciones float (`sqrt sin cos tan ln log10 exp floor ceil round` + `pow`) dejan de ser builtins
+globales y pasan a `std/math`: cada builtin se **renombra** a su primitivo interno `__x` (mismo opcode
+`MathF(...)`/`Pow`; la VM despacha por opcode → intacta; el intérprete renombra su arm por nombre) y
+`std/math.ray` lo expone con `pub fn sqrt(x: float) -> float { __sqrt(x) }`. Uso: `import std/math;
+math.sqrt(2.0)`. La forma prefija global `sqrt(x)` **desaparece** (error "función no declarada"). Las
+polimórficas `abs`/`min`/`max` y las constantes `pi()`/`e()` siguen globales (→ M49.1b).
+
+**Verificación**: el **oráculo** VM↔intérprete prueba los **primitivos `__x`** directamente (el que computa;
+sigue siendo builtin, no necesita el loader) y un test de integración (`tests/math_cli.rs`) cierra el
+**envoltorio** end-to-end (`import std/math; math.sqrt(…)` compila y corre igual en ambos motores). El
+migrado del corpus fue mínimo (1 ejemplo, `matematicas.ray`; `libm.ray`/tests-FFI usan `extern fn sqrt`,
+no el builtin → intactos). LSP: las tablas `signature()`/`doc()` conservan las entradas (ahora sirven al
+signature-help de `math.X`); dos tests de hover pasaron a un builtin conservado (`abs`). **M49.1a COMPLETO.**
+
+### 51.2 M49.1b — `abs`/`min`/`max`/`pi`/`e` a `std/math` (puros en raylang)
+
+Cierra `std/math`. Las polimórficas y las constantes dejan de ser builtins y pasan a `std/math` como
+**raylang puro** (sin opcode): `min`/`max` genéricos sobre el trait **`Ord`** (`fn min<T: Ord>(a: T, b: T)
+-> T { if (a.menor(b)) { a } else { b } }` → sirve int/float/string/char); `abs` sobre un trait nuevo
+**`Signed { fn abs(self) -> Self; }`** con `impl` para int/float (cuerpos puros) y `fn abs<T: Signed>(x:
+T) -> T { x.abs() }`; `pi`/`e` como **funciones nularias** (`math.pi()`). **Se podan los opcodes**
+`Abs`/`Min`/`Max`/`Pi`/`E` (+ sus arms en VM/intérprete y las reglas `numeric_*_check`) → el runtime
+adelgaza. Un tipo de usuario que `impl Signed`/`Ord` funciona con `math.abs`/`math.min` (extensibilidad,
+como los contenedores de M48.4).
+
+Inicialmente `pi`/`e` quedaron como **funciones** (`math.pi()`) porque el acceso calificado a un `const`
+de módulo no existía; **M49.1c** lo habilitó → ahora son `const` (`math.PI`/`math.E`).
+
+**Verificación**: el oráculo de math (`matematicas_oraculo`) se reduce a los primitivos `__x` (abs/min/max
+ya no son builtins → no hay opcode que oraculizar); `matematicas.ray` + `tests/math_cli.rs` cubren
+`math.abs`/`min`/`max`/`PI` end-to-end en ambos motores (int y float, y `min` sobre string). LSP: los tests
+de hover/completion de builtin pasaron a `char_code` (builtin estable). Suite completa verde.
+
+### 51.3 M49.1c — acceso calificado a `const` de módulo (`M.CONST`)
+
+Habilita `math.PI`/`math.E` (y cualquier `pub const` de un módulo). Los `const` de un módulo pasan a
+**namespacarse como las funciones** (`modulo::CONST`) en vez de fusionarse globales por su nombre bare:
+tres toques mínimos en el loader (reusando la maquinaria de funciones) — (1) el `Resolver.own` incluye los
+`const` propios (una referencia interna `PI` → `modulo::PI`), (2) las **defs** de `const` de un módulo
+no-entrada se renombran a `modulo::CONST` al fusionar, y (3) `build_surfaces` mete los `pub const` en la
+**cara de valores** (`Surface.values`) → `qualified_field` resuelve `M.CONST` como una función pub. El
+checker y los motores ya resolvían los `const` **por nombre** (`consts: HashMap<String, _>`), así que el
+nombre namespacado funciona sin más. **Consecuencia (mejora de encapsulación)**: importar un módulo ya
+**no filtra** sus `const` al ámbito global —solo son accesibles calificados (`M.CONST`)— y un `const`
+no-`pub` no es accesible. Test `const_calificado_de_modulo` (acceso + encapsulación + no-pub) en
+`tests/modules_cli.rs`. **M49.1c / M49.1 (`std/math`) COMPLETO.** Suite completa verde (77 binarios, 510 lib).
+
+### 51.4 M49.2a — `std/random` (RNG)
+
+`random`/`random_int` dejan de ser builtins globales y pasan a `std/random`: `import std/random;
+random.next()` (float en `[0,1)`) y `random.below(n)` (int en `[0,n)`; nombres en inglés, evitando las
+palabras reservadas `float`/`int`). Mismo patrón `__x`+envoltorio de M49.1a (renombra `random`→`__random`,
+`random_int`→`__random_int`; VM por opcode intacta). **No deterministas** → sin oráculo; los cubre
+`tests/time_random_cli.rs` por subproceso en ambos motores (rango + variedad). Migrado: `reloj_aleatorio`
+(demo), `websocket_client` (examples + packages) y `std/uuid` (embebido → `import std/random;`, un módulo
+embebido importando otro). `now`/`monotonic`/`sleep` siguen globales (→ M49.2b). **M49.2a COMPLETO.**
+
+### 51.5 M49.2b — `std/time` (reloj)
+
+`now`/`monotonic`/`sleep` dejan de ser builtins globales y pasan a `std/time`: `import std/time;
+time.now()` (epoch ms UTC), `time.monotonic()` (reloj monótono para intervalos), `time.sleep(ms)`. Mismo
+patrón `__x`+envoltorio (renombra a `__now`/`__monotonic`/`__sleep`; VM por opcode intacta). No
+deterministas → sin oráculo; los cubre `tests/time_random_cli.rs` por subproceso. Migrado: dns_cache
+(examples+packages), webserver_demo, reloj_aleatorio, y la **librería de fechas** `time.ray` (examples+
+packages) + su demo `time_demo.ray` (usan `time.now()` para `now_utc`). **M49.2b / M49.2 COMPLETO.**
+
+> **Nota de naming**: la librería de fechas se llama módulo `time` (`examples/web/time.ray`, no embebida)
+> y el reloj es `std/time` (embebido). Ambos usan el leaf `time`, así que un archivo que importe los dos
+> necesitaría `as` (colisión de leaf). No colisionan hoy (la de fechas se usa vía `from time import …`).
+> Un futuro rename (`std/datetime`) lo limpiaría; fuera de alcance de M49.2.
+
+### 51.6 M49.3 — `std/crypto` (criptografía de producción)
+
+La cripto de producción (builtins de `ring`, M43) pasa a `std/crypto`: hashes/MAC `crypto.sha256`/
+`sha512`/`sha1`/`hmac_sha256` (bytes→bytes), firma `crypto.ed25519_verify`/`ed25519_public_key`/
+`ed25519_sign` y AEAD `crypto.chacha20poly1305_seal`/`open` (los fallibles → `Option<bytes>`). Los 5
+builtins directos (sha*/hmac/ed25519_verify) se renombran a `__x`; los 4 envoltorios `Option` (ed25519
+key/sign, chacha seal/open) **se mueven del prelude** a `std/crypto.ray` (llaman a los primitivos `__x`).
+
+**Decisiones (afinan el plan)**:
+- **`bytes_of` NO se mueve** — es un constructor de `bytes` desde `[int]` (como `b"…"` en runtime), no
+  cripto; se usa en ~46 sitios (websocket/deflate/…); se queda **builtin**.
+- **Colisión de nombres resuelta sola**: las impls **pedagógicas** en raylang puro (`sha256.ray`/`sha1.ray`/
+  `hmac.ray`/…) definen su propio `sha256`/`sha1`/`hmac_sha256` y las usa el stack web (jwt/scram/sigv4/
+  websocket vía `from … import`); NO tocan los builtins. Solo `packages/net/crypto.ray` (el wrapper de
+  producción) y unas fixtures llamaban al builtin global → migración **dirigida por qué falla al compilar**.
+
+**Verificación**: el oráculo VM↔intérprete prueba los **primitivos `__x`** (sha/hmac directos; ed25519/chacha
+vía el arreglo etiquetado `[bytes]` en vez del `Option`); los envoltorios `crypto.*` los cubren
+`cli_cli` (crypto.sha256/hmac/chacha end-to-end) y las suites de M20. **M49.3 / M49 COMPLETO.**
+
+## 52. M50 — cerrar la descongestión del namespace (`std/fs`/`std/collections`/`std/net`)
+
+Continúa M48/M49: mueve del **prelude global** (auto-inyectado) a **módulos `std/` opt-in** los tres
+grupos grandes que aún ensucian el namespace de valores — archivos, colecciones y red —. Mismo mecanismo
+que M49 (`__x`+envoltorio; migración dirigida por errores). Se **quedan globales** los esenciales
+(`Option`/`Result`+`?`, `map`/`filter`/`fold`, `print`/`eprint`/`panic`/`assert`/`assert_eq`, `to_string`,
+`close`, `input`/`read_int`/`env`).
+
+### 52.1 M50.1 — `std/fs` (sistema de archivos)
+
+Todo lo que toca disco → `fs.X` con `import std/fs;` (*capability hint* suave: importar `std/fs` señala
+"este archivo toca el sistema de archivos"). Los **10 envoltorios** del prelude (`read_file`/`write_file`/
+`read_file_bytes`/`write_file_bytes`/`append_file`/`remove_file`/`list_dir`/`open`/`read_line`/`write`) se
+**cortan del prelude** a `std/fs.ray` (llaman a los primitivos `__x`, que devuelven el arreglo etiquetado
+`["ok",…]`/`["err",msg]`). El builtin **`exists`** se renombra a **`__exists`** (Rust `builtins.rs` +
+`interpreter.rs`; la VM no cambia, despacha por opcode `Exists`) y `std/fs` añade el envoltorio total
+`fs.exists`. `std/fs` se registra en `stdlib::MODULOS` (embebido con `include_str!`).
+
+**El self-hosting usa los primitivos `__x`** (no `import std/fs;`): su loader (M14.7) lee de **disco** y no
+conoce la `std/` embebida, así que los drivers/loader del compilador auto-alojado (`lex_dump`/`parse_dump`/
+`check_dump`/`loader`) llevan un **wrapper local** `fn read_file` sobre `__read_file`, y el intérprete +
+checker auto-alojados usan `__exists` (patrón D5: el self-hosted trata los builtins como builtins). El
+oráculo VM↔intérprete es **pre-loader** → sus fixtures fs también usan los primitivos `__x` directamente.
+
+**Verificación**: no determinista (disco) → integración por subproceso (`io_cli`/`bytes_io_cli`, con
+`import std/fs; fs.X`, ambos motores); el borrado/lectura de inexistente sí es determinista → oráculo con
+`__read_file`. Corpus migrado (dirigido por errores): `examples/io/archivos.ray`/`binario.ray`,
+`examples/web/deflate_demo.ray`/`wss_echo.ray`. Self-hosting revalidado (checker/interpreter/vm oráculos +
+metacircular). **M50.1 COMPLETO.**
+
+### 52.2 M50.2 — `std/collections/{set,deque,stringbuilder}` (colecciones)
+
+Las tres estructuras de datos **puras en raylang** (sin primitivos `__x`) del prelude (`Set<T>` hash set,
+`Deque<T>` cola doble, `StringBuilder`) se **cortan del prelude** a **submódulos** bajo `std/collections/`.
+Con leaf-binding (M11.5) cada submódulo se usa por su hoja y **cae el prefijo** que dentro de un solo
+módulo hacía falta (`set_`/`deque_`/`sb_`): `import std/collections/set;` → `set.new()`/`set.add(s, x)`/…;
+`import std/collections/deque;` → `deque.push_back(d, x)`/…; `import std/collections/stringbuilder;` (o
+`as sb`) → `sb.push(b, s)`/… Los tipos se namespacan al submódulo (`set.Set`/`deque.Deque`/
+`stringbuilder.StringBuilder`); en el ejemplo se usan calificados en posición de tipo (`set.Set<int>`).
+Mecanismo: tres filas en `stdlib::MODULOS` con match exacto por nombre anidado + el leaf-binding de
+directorios ya probado. **Cero maquinaria nueva.** Los helpers internos del set (`bucket`/`en_bucket`) se
+ocultan como no-`pub`. `Hash`/`Eq`/`Ord`/`join`/`pop` siguen globales (prelude), así que los submódulos no
+importan nada.
+
+**Verificación**: son deterministas, pero el uso pasa por el **loader** (resuelve el import) → el oráculo
+de `vm.rs` (pre-loader) ya no aplica; se sustituye por un **oráculo por subproceso** (`collections_cli`)
+que corre los ejemplos migrados (`conjunto.ray`, `builder_deque.ray`) por **ambos motores** y exige que
+coincidan + la salida esperada, más un test de que las formas globales (`set_new`/…) ya no existen. Los
+dos oráculos in-process de `vm.rs` (que usaban los nombres globales) se retiran. El self-hosting no usa
+colecciones (su corpus no las incluye) → sin impacto; el oráculo del parser auto-alojado revalida que los
+ejemplos migrados (con `import std/collections/…`) parsean idénticos. **M50.2 COMPLETO.**
+
+### 52.3 M50.3 — `std/net` (transporte de red)
+
+Los **10 envoltorios** de red del prelude —I/O binaria de socket (`socket_read_bytes`/`socket_write_bytes`),
+cliente TCP (`tcp_connect`), TLS (`tls_connect`/`tls_connect_h2`/`tls_accept`), I/O de socket
+(`socket_read`/`socket_write`) y servidor TCP (`tcp_listen`/`tcp_accept`)— se **cortan del prelude** a
+`std/net` (un solo módulo; se conserva la distinción en los nombres: `net.tcp_connect`/`net.tls_connect`/…).
+El builtin `local_port` se renombra a `__local_port` (la VM no cambia, opcode `LocalPort`) y `std/net` añade
+el envoltorio `net.local_port`. Los primitivos `__tcp_connect`/`__socket_read`/… siguen builtins; `close`
+(cerrar socket **o** handle de archivo) sigue global. **UDP no entra**: sus envoltorios ya vivían en el
+módulo `net/udp` del paquete `net` (sobre `__udp_*`), así que nunca ensuciaron el namespace global.
+
+**Migración**: es el grupo mayor (~21 archivos del stack web: `examples/net/*`, `examples/web/{http,
+webserver,websocket_*,grpc_client,postgres,redis,http2_client,…}` y `packages/net/*`). Sin llamadas por
+UFCS (todas planas) → codemod: prefijar las llamadas con `net.` (lookbehind que respeta `__x` y `net.` ya
+puesto) + insertar `import std/net;`. **Ningún módulo embebido usa red** (los `std/*` promovidos son
+hex/json/deflate/… sin sockets) → sin "embebido-importa-embebido"; y el paquete `net` importa por ruta
+(`net/hpack`, `from net/crypto …`), nunca bare `import net;`, así que el leaf `net` de `std/net` no colisiona.
+
+**Verificación**: no determinista (red) → integración por subproceso (`net_cli`/`socket_write_cli`/
+`concurrency_net_cli`/`webserver_cli`/`bytes_io_cli` con fixtures migradas `import std/net; net.X`, más las
+suites que corren los archivos migrados: `http`/`redis`/`postgres`/`grpc`/`http2`/`h2_alpn`/`tls`/
+`websocket`/`dns`/`oauth2`/`scram`/`sigv4`/…). **M50.3 COMPLETO. M50 COMPLETO** (fs + collections + net):
+el namespace global queda con los esenciales (`Option`/`Result`+`?`, `map`/`filter`/`fold`, `print`/
+`eprint`/`panic`/`assert`/`assert_eq`, `to_string`, `close`, `input`/`read_int`/`env`) + los primitivos `__x`.

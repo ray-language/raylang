@@ -9,7 +9,7 @@ fn aplicar(f: fn(int) -> int, x: int) -> int {
 // Aplica una función a cada elemento de un arreglo (lo muta in situ).
 fn mapear(a: [int], f: fn(int) -> int) {
     var i: int = 0;
-    while (i < len(a)) {
+    while (i < a.len()) {
         a[i] = f(a[i]);
         i = i + 1;
     }

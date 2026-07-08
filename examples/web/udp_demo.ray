@@ -11,7 +11,7 @@ fn main() -> int {
             1
         },
         Result.Ok(h) => {
-            match (send_to(h, "127.0.0.1", puerto, to_bytes("hola udp"))) {
+            match (send_to(h, "127.0.0.1", puerto, "hola udp".to_bytes())) {
                 Result.Err(e) => {
                     eprint("send: " + e);
                     1
@@ -37,7 +37,7 @@ fn main() -> int {
 
 fn puerto_de_args() -> int {
     let a = args();
-    if (len(a) == 0) {
+    if (a.len() == 0) {
         return 9999;
     }
     match (parse_int(a[0])) {

@@ -11,11 +11,11 @@ from base64 import base64url, base64url_decode;
 
 // Octetos (`[int]`) de un string (UTF-8).
 fn str_octets(s: string) -> [int] {
-    let b = to_bytes(s);
+    let b = s.to_bytes();
     var out: [int] = [];
     var i = 0;
-    while (i < len(b)) {
-        push(out, b[i]);
+    while (i < b.len()) {
+        out.push(b[i]);
         i = i + 1;
     }
     out
@@ -39,8 +39,8 @@ pub fn jwt_eddsa_sign(seed: [int], payload_json: string) -> string {
 // Verifica un JWT EdDSA con la clave pública (32 octetos). `Ok(payload_json)` si la firma es válida,
 // `Err(motivo)` si no. NO comprueba `exp`/`nbf` (política de la aplicación sobre el JSON devuelto).
 pub fn jwt_eddsa_verify(pubkey: [int], token: string) -> Result<string, string> {
-    let parts = split(token, ".");
-    if (len(parts) != 3) {
+    let parts = token.split(".");
+    if (parts.len() != 3) {
         return Result.Err("JWT mal formado: se esperaban 3 segmentos");
     }
     let signing_input = parts[0] + "." + parts[1];

@@ -50,17 +50,17 @@ pub fn error(lg: Logger, msg: string) -> LogEntry { at(lg, 3, msg) }
 
 // Añade un campo string (encadenable). Muta la entrada por referencia y la devuelve.
 pub fn field(e: LogEntry, key: string, value: string) -> LogEntry {
-    push(e.fields, Field { key: key, value: value, quoted: true });
+    e.fields.push(Field { key: key, value: value, quoted: true });
     e
 }
 
 pub fn field_int(e: LogEntry, key: string, value: int) -> LogEntry {
-    push(e.fields, Field { key: key, value: to_string(value), quoted: false });
+    e.fields.push(Field { key: key, value: to_string(value), quoted: false });
     e
 }
 
 pub fn field_bool(e: LogEntry, key: string, value: bool) -> LogEntry {
-    push(e.fields, Field { key: key, value: to_string(value), quoted: false });
+    e.fields.push(Field { key: key, value: to_string(value), quoted: false });
     e
 }
 
@@ -76,7 +76,7 @@ fn level_name(level: int) -> string {
 fn json_escape(s: string) -> string {
     var out = "";
     var i = 0;
-    while (i < len(s)) {
+    while (i < s.len()) {
         let c = s[i];
         if (c == '"') {
             out = out + "\\\"";
@@ -109,7 +109,7 @@ fn json_escape(s: string) -> string {
 pub fn render(e: LogEntry, ts: string) -> string {
     var out = "{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(e.level) + "\",\"service\":\"" + json_escape(e.lg.service) + "\",\"msg\":\"" + json_escape(e.msg) + "\"";
     var i = 0;
-    while (i < len(e.fields)) {
+    while (i < e.fields.len()) {
         let f = e.fields[i];
         out = out + ",\"" + json_escape(f.key) + "\":";
         if (f.quoted) {

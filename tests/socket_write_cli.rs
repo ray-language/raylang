@@ -16,20 +16,21 @@ const BLOB: usize = 8_000_000; // > buffers del SO en loopback → la escritura 
 /// Servidor acotado: atiende 2 conexiones, cada una en su fibra; manda "READY\n" y luego un blob de
 /// `BLOB` 'X'. La escritura del blob a un cliente que no lee se APARCA (cede), no gira.
 const DRIVER: &str = r#"
+import std/net;
 fn serve(conn: int) {
-    match (socket_write(conn, "READY\n")) { Result.Ok(_) => {}, Result.Err(e) => eprint(e) }
-    let blob = repeat("X", 8000000);
-    match (socket_write(conn, blob)) { Result.Ok(_) => {}, Result.Err(e) => eprint(e) }
+    match (net.socket_write(conn, "READY\n")) { Result.Ok(_) => {}, Result.Err(e) => eprint(e) }
+    let blob = "X".repeat(8000000);
+    match (net.socket_write(conn, blob)) { Result.Ok(_) => {}, Result.Err(e) => eprint(e) }
     close(conn);
 }
 fn main() -> int {
-    match (tcp_listen("127.0.0.1", 0)) {
+    match (net.tcp_listen("127.0.0.1", 0)) {
         Result.Ok(srv) => {
-            print(to_string(local_port(srv)));
+            print(to_string(net.local_port(srv)));
             scope(fn() {
                 var i = 0;
                 while (i < 2) {
-                    match (tcp_accept(srv)) {
+                    match (net.tcp_accept(srv)) {
                         Result.Ok(conn) => { spawn(fn() { serve(conn) }); },
                         Result.Err(e) => { eprint(e); i = 2; },
                     }

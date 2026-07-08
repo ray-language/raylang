@@ -53,11 +53,11 @@ fn read_bits(s: Inflater, n: int) -> int {
 
 // Construye un Huff canónico a partir del arreglo de longitudes de código (símbolo i → lengths[i]).
 fn build_huff(lengths: [int]) -> Huff {
-    let n = len(lengths);
+    let n = lengths.len();
     var counts: [int] = [];
     var i = 0;
     while (i < 16) {
-        push(counts, 0);
+        counts.push(0);
         i = i + 1;
     }
     i = 0;
@@ -70,7 +70,7 @@ fn build_huff(lengths: [int]) -> Huff {
     var offs: [int] = [];
     i = 0;
     while (i < 16) {
-        push(offs, 0);
+        offs.push(0);
         i = i + 1;
     }
     var l = 1;
@@ -82,7 +82,7 @@ fn build_huff(lengths: [int]) -> Huff {
     var symbols: [int] = [];
     i = 0;
     while (i < n) {
-        push(symbols, 0);
+        symbols.push(0);
         i = i + 1;
     }
     i = 0;
@@ -149,7 +149,7 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
             return Result.Ok(0);  // fin del bloque
         }
         if (sym < 256) {
-            push(s.out, sym);  // literal
+            s.out.push(sym);  // literal
         } else {
             let li = sym - 257;
             if (li >= 29) {
@@ -161,13 +161,13 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
                 return Result.Err("código de distancia inválido");
             }
             let distance = dbase[dsym] + read_bits(s, dext[dsym]);
-            if (distance > len(s.out)) {
+            if (distance > s.out.len()) {
                 return Result.Err("distancia fuera de rango");
             }
-            let start = len(s.out) - distance;
+            let start = s.out.len() - distance;
             var k = 0;
             while (k < length) {
-                push(s.out, s.out[start + k]);  // copia (puede solaparse → run-length)
+                s.out.push(s.out[start + k]);  // copia (puede solaparse → run-length)
                 k = k + 1;
             }
         }
@@ -185,7 +185,7 @@ fn stored_block(s: Inflater) -> Result<int, string> {
     s.pos = s.pos + 4;  // salta LEN (2) + NLEN (2)
     var k = 0;
     while (k < length) {
-        push(s.out, s.data[s.pos]);
+        s.out.push(s.data[s.pos]);
         s.pos = s.pos + 1;
         k = k + 1;
     }
@@ -197,19 +197,19 @@ fn fixed_litlen() -> Huff {
     var l: [int] = [];
     var i = 0;
     while (i < 144) {
-        push(l, 8);
+        l.push(8);
         i = i + 1;
     }
     while (i < 256) {
-        push(l, 9);
+        l.push(9);
         i = i + 1;
     }
     while (i < 280) {
-        push(l, 7);
+        l.push(7);
         i = i + 1;
     }
     while (i < 288) {
-        push(l, 8);
+        l.push(8);
         i = i + 1;
     }
     build_huff(l)
@@ -219,7 +219,7 @@ fn fixed_dist() -> Huff {
     var l: [int] = [];
     var i = 0;
     while (i < 30) {
-        push(l, 5);
+        l.push(5);
         i = i + 1;
     }
     build_huff(l)
@@ -235,7 +235,7 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
     var cl_lengths: [int] = [];
     var i = 0;
     while (i < 19) {
-        push(cl_lengths, 0);
+        cl_lengths.push(0);
         i = i + 1;
     }
     i = 0;
@@ -246,23 +246,23 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
     let cl_huff = build_huff(cl_lengths);
     // Decodifica las hlit+hdist longitudes (con los códigos de repetición 16/17/18).
     var all_lengths: [int] = [];
-    while (len(all_lengths) < hlit + hdist) {
+    while (all_lengths.len() < hlit + hdist) {
         let sym = decode(s, cl_huff);
         if (sym < 0) {
             return Result.Err("código de longitud de código inválido");
         }
         if (sym < 16) {
-            push(all_lengths, sym);
+            all_lengths.push(sym);
         } else {
             if (sym == 16) {
-                if (len(all_lengths) == 0) {
+                if (all_lengths.len() == 0) {
                     return Result.Err("repetición 16 sin longitud previa");
                 }
-                let prev = all_lengths[len(all_lengths) - 1];
+                let prev = all_lengths[all_lengths.len() - 1];
                 let rep = read_bits(s, 2) + 3;
                 var k = 0;
                 while (k < rep) {
-                    push(all_lengths, prev);
+                    all_lengths.push(prev);
                     k = k + 1;
                 }
             } else {
@@ -270,7 +270,7 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
                     let rep = read_bits(s, 3) + 3;
                     var k = 0;
                     while (k < rep) {
-                        push(all_lengths, 0);
+                        all_lengths.push(0);
                         k = k + 1;
                     }
                 } else {
@@ -278,7 +278,7 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
                     let rep = read_bits(s, 7) + 11;
                     var k = 0;
                     while (k < rep) {
-                        push(all_lengths, 0);
+                        all_lengths.push(0);
                         k = k + 1;
                     }
                 }
@@ -290,11 +290,11 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
     var dist_lengths: [int] = [];
     i = 0;
     while (i < hlit) {
-        push(lit_lengths, all_lengths[i]);
+        lit_lengths.push(all_lengths[i]);
         i = i + 1;
     }
     while (i < hlit + hdist) {
-        push(dist_lengths, all_lengths[i]);
+        dist_lengths.push(all_lengths[i]);
         i = i + 1;
     }
     inflate_codes(s, build_huff(lit_lengths), build_huff(dist_lengths))
@@ -331,6 +331,9 @@ fn inflate_blocks(s: Inflater) -> Result<int, string> {
 }
 
 // Descomprime un stream DEFLATE crudo (sin envoltorio) a sus octetos originales.
+/// Decompresses a raw DEFLATE stream (RFC 1951, no wrapper) into the original bytes.
+/// Supports all three block types (stored, fixed Huffman, dynamic Huffman).
+/// Returns `Err` on a corrupt stream (invalid code, out-of-range distance, reserved block type).
 pub fn inflate_raw(data: bytes) -> Result<bytes, string> {
     var s = Inflater { data: data, pos: 0, bitpos: 0, out: [] };
     match (inflate_blocks(s)) {
@@ -340,10 +343,12 @@ pub fn inflate_raw(data: bytes) -> Result<bytes, string> {
 }
 
 // --- CRC-32 (RFC 1952, polinomio reflejado 0xEDB88320) para verificar gzip. ---
+/// Computes the CRC-32 checksum (RFC 1952, reflected polynomial 0xEDB88320) of the bytes,
+/// as used in the gzip trailer.
 pub fn crc32(data: bytes) -> int {
     var crc = 4294967295;  // 0xFFFFFFFF
     var i = 0;
-    while (i < len(data)) {
+    while (i < data.len()) {
         crc = crc ^ data[i];
         var j = 0;
         while (j < 8) {
@@ -360,8 +365,11 @@ pub fn crc32(data: bytes) -> int {
 }
 
 // Descomprime un archivo gzip (RFC 1952): cabecera + DEFLATE + tráiler (CRC32 + ISIZE). Verifica el CRC.
+/// Decompresses a gzip file (RFC 1952): parses the header (including optional FEXTRA/FNAME/
+/// FCOMMENT/FHCRC fields), inflates the DEFLATE body, and verifies the trailer CRC-32.
+/// Returns `Err` on bad magic, unsupported method, corrupt data, or CRC mismatch.
 pub fn gunzip(data: bytes) -> Result<bytes, string> {
-    if (len(data) < 18) {
+    if (data.len() < 18) {
         return Result.Err("gzip demasiado corto");
     }
     if (data[0] != 31 || data[1] != 139) {
@@ -395,12 +403,12 @@ pub fn gunzip(data: bytes) -> Result<bytes, string> {
         // FHCRC
         pos = pos + 2;
     }
-    let comprimido = sub_bytes(data, pos, len(data) - 8);
+    let comprimido = data.sub_bytes(pos, data.len() - 8);
     match (inflate_raw(comprimido)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(salida) => {
             // Verifica el CRC-32 del tráiler (4 octetos LSB-first antes de ISIZE).
-            let n = len(data);
+            let n = data.len();
             let crc_esperado = data[n - 8] | data[n - 7] << 8 | data[n - 6] << 16 | data[n - 5] << 24;
             let crc_real = crc32(salida);
             if ((crc_real & 4294967295) != (crc_esperado & 4294967295)) {
@@ -413,14 +421,16 @@ pub fn gunzip(data: bytes) -> Result<bytes, string> {
 }
 
 // Descomprime un stream zlib (RFC 1950): 2 octetos de cabecera + DEFLATE + Adler-32 (no verificado).
+/// Decompresses a zlib stream (RFC 1950): 2-byte header + DEFLATE body. The trailing
+/// Adler-32 checksum is NOT verified. Returns `Err` on an unsupported method or corrupt data.
 pub fn zlib_inflate(data: bytes) -> Result<bytes, string> {
-    if (len(data) < 6) {
+    if (data.len() < 6) {
         return Result.Err("zlib demasiado corto");
     }
     // CMF/FLG: el nibble bajo de CMF debe ser 8 (método deflate).
     if ((data[0] & 15) != 8) {
         return Result.Err("método de compresión zlib no soportado");
     }
-    let comprimido = sub_bytes(data, 2, len(data) - 4);
+    let comprimido = data.sub_bytes(2, data.len() - 4);
     inflate_raw(comprimido)
 }

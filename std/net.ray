@@ -1,0 +1,142 @@
+// std/net — transporte de red: TCP, TLS y sockets (M50.3; antes en el prelude).
+//
+// Todo lo que abre conexiones o lee/escribe sockets vive aquí (opt-in con `import std/net;`). Los
+// envoltorios se apoyan en los primitivos globales `__tcp_connect`/`__socket_read`/… (que devuelven un
+// arreglo etiquetado `["ok", …]` / `["err", msg]`, o `[bytes]` en la I/O binaria) y los traducen a
+// `Result`. Se conserva la distinción en los nombres (`net.tcp_connect`/`net.tls_connect`/…). El único
+// builtin no-envoltorio es `local_port` (`__local_port`). Los sockets se cierran con `close` (global).
+//
+// UDP no está aquí: sus envoltorios ya viven en el módulo `net/udp` del paquete `net` (sobre los
+// primitivos `__udp_*`), así que nunca ensuciaron el namespace global.
+
+// --- I/O binaria de sockets (M16.1c) ---
+/// Performs one raw read from the socket; `Ok(bytes)` (empty = EOF) or `Err(message)`.
+pub fn socket_read_bytes(h: int) -> Result<bytes, string> {
+    let r = __socket_read_bytes(h);
+    if (r[0] == b"ok") {
+        Result.Ok(r[1])
+    } else {
+        match (from_utf8(r[1])) {
+            Result.Ok(m) => Result.Err(m),
+            Result.Err(e) => Result.Err("error de socket"),
+        }
+    }
+}
+
+/// Writes raw bytes to the socket; `Ok(byte count)` or `Err(message)`.
+pub fn socket_write_bytes(h: int, datos: bytes) -> Result<int, string> {
+    let r = __socket_write_bytes(h, datos);
+    if (r[0] == "ok") { Result.Ok(datos.len()) } else { Result.Err(r[1]) }
+}
+
+// --- Cliente TCP (M15.2). Sobre los primitivos __tcp_connect/__socket_read/__socket_write. ---
+// Conecta a host:port (resuelve el nombre); Ok(handle) u Err(mensaje).
+/// Opens a TCP connection to host:port (resolving the host name); `Ok(socket handle)` or `Err(message)`.
+pub fn tcp_connect(host: string, port: int) -> Result<int, string> {
+    let r = __tcp_connect(host, port);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+// M19.4a: conecta por TLS a host:port (verifica el certificado del servidor); Ok(handle) u Err. El handle
+// se lee/escribe con net.socket_read_bytes/net.socket_write_bytes (que desvían a TLS) y se cierra con close.
+/// Opens a TLS connection to host:port, verifying the server certificate; `Ok(handle)` or
+/// `Err(message)`. Read/write with `net.socket_read_bytes`/`net.socket_write_bytes`; close with `close`.
+pub fn tls_connect(host: string, port: int) -> Result<int, string> {
+    let r = __tls_connect(host, port);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+// M31.2a: conexión TLS con ALPN 'h2' (HTTP/2); error si el servidor no lo negocia.
+/// Opens a TLS connection negotiating ALPN "h2" (HTTP/2); `Ok(handle)`, or `Err(message)`
+/// if the connection fails or the server does not negotiate h2.
+pub fn tls_connect_h2(host: string, port: int) -> Result<int, string> {
+    let r = __tls_connect_h2(host, port);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+// M19.4b: envuelve un socket TCP ya aceptado (handle de net.tcp_accept) en una sesión TLS de servidor con
+// el certificado y la clave en PEM; Ok(handle) u Err. Reusa el handle. Solo VM (servidor concurrente).
+/// Wraps an already-accepted TCP socket in a server-side TLS session, using a PEM certificate
+/// and private key; `Ok(handle)` or `Err(message)`. VM only.
+pub fn tls_accept(handle: int, cert: string, key: string) -> Result<int, string> {
+    let r = __tls_accept(handle, cert, key);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+// Hace una lectura del socket; Ok(datos) ("" = EOF) u Err(mensaje).
+/// Performs one read from the socket; `Ok(data)` (empty string = EOF) or `Err(message)`.
+pub fn socket_read(h: int) -> Result<string, string> {
+    let r = __socket_read(h);
+    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+}
+
+// Escribe en el socket; Ok(nº de bytes) u Err(mensaje).
+/// Writes the string to the socket; `Ok(byte count)` or `Err(message)`.
+pub fn socket_write(h: int, s: string) -> Result<int, string> {
+    let r = __socket_write(h, s);
+    if (r[0] == "ok") { Result.Ok(s.len()) } else { Result.Err(r[1]) }
+}
+
+// --- Servidor TCP (M15.3). Sobre __tcp_listen/__tcp_accept. ---
+// Escucha en host:port (port=0 → puerto efímero); Ok(handle de escucha) u Err(mensaje).
+/// Listens for TCP connections on host:port (port 0 picks an ephemeral port);
+/// `Ok(listener handle)` or `Err(message)`.
+pub fn tcp_listen(host: string, port: int) -> Result<int, string> {
+    let r = __tcp_listen(host, port);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+// Bloquea hasta una conexión; Ok(handle de conexión) u Err(mensaje).
+/// Blocks until a client connects to the listener; `Ok(connection handle)` or `Err(message)`.
+pub fn tcp_accept(listener: int) -> Result<int, string> {
+    let r = __tcp_accept(listener);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+// El puerto local al que está enlazado un socket de escucha (útil con port 0 = asignado por el SO).
+/// Returns the local port a listener socket is bound to (useful with port 0 = OS-assigned).
+pub fn local_port(h: int) -> int {
+    __local_port(h)
+}

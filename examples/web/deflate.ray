@@ -26,7 +26,7 @@ fn write_bit(w: BitWriter, bit: int) {
     w.cur = w.cur | bit << w.nbits;
     w.nbits = w.nbits + 1;
     if (w.nbits == 8) {
-        push(w.out, w.cur);
+        w.out.push(w.cur);
         w.cur = 0;
         w.nbits = 0;
     }
@@ -53,7 +53,7 @@ fn write_huff(w: BitWriter, code: int, length: int) {
 // Vacía el último octeto parcial.
 fn flush(w: BitWriter) {
     if (w.nbits > 0) {
-        push(w.out, w.cur);
+        w.out.push(w.cur);
         w.cur = 0;
         w.nbits = 0;
     }
@@ -190,8 +190,10 @@ fn find_match(lz: Lz, i: int) -> Match {
 }
 
 // Comprime `data` a un stream DEFLATE crudo (un único bloque de Huffman fijo, BFINAL=1).
+/// Compresses bytes to a raw DEFLATE stream (RFC 1951): a single fixed-Huffman block
+/// (BTYPE=01, BFINAL=1) with LZ77 back-reference matching (zlib-style hash chains, 32 KiB window).
 pub fn deflate_raw(data: bytes) -> bytes {
-    let n = len(data);
+    let n = data.len();
     var w = BitWriter { out: [], cur: 0, nbits: 0 };
     write_bit(w, 1);  // BFINAL = 1 (último bloque)
     write_bits(w, 1, 2);  // BTYPE = 01 (Huffman fijo)
@@ -200,13 +202,13 @@ pub fn deflate_raw(data: bytes) -> bytes {
     var head: [int] = [];
     var i = 0;
     while (i <= hmask()) {
-        push(head, 0 - 1);
+        head.push(0 - 1);
         i = i + 1;
     }
     var prev: [int] = [];
     i = 0;
     while (i < n) {
-        push(prev, 0 - 1);
+        prev.push(0 - 1);
         i = i + 1;
     }
     let lz = Lz { data: data, n: n, head: head, prev: prev };
@@ -237,30 +239,32 @@ pub fn deflate_raw(data: bytes) -> bytes {
 // --- Envoltorios ---
 // Añade una palabra de 32 bits LSB-first al final de `out`.
 fn push_u32(out: [int], v: int) {
-    push(out, v & 255);
-    push(out, v >> 8 & 255);
-    push(out, v >> 16 & 255);
-    push(out, v >> 24 & 255);
+    out.push(v & 255);
+    out.push(v >> 8 & 255);
+    out.push(v >> 16 & 255);
+    out.push(v >> 24 & 255);
 }
 
 // Comprime a formato gzip (RFC 1952): cabecera + DEFLATE + CRC-32 + ISIZE.
+/// Compresses bytes to the gzip format (RFC 1952): 10-byte header + DEFLATE body +
+/// trailer with CRC-32 and ISIZE. The result is readable by standard gzip tools.
 pub fn gzip_compress(data: bytes) -> bytes {
     var out: [int] = [];
-    push(out, 31);  // magia + método + flags
-    push(out, 139);
-    push(out, 8);
-    push(out, 0);
+    out.push(31);  // magia + método + flags
+    out.push(139);
+    out.push(8);
+    out.push(0);
     push_u32(out, 0);  // MTIME = 0
-    push(out, 0);  // XFL=0, OS=255 (desconocido)
-    push(out, 255);
+    out.push(0);  // XFL=0, OS=255 (desconocido)
+    out.push(255);
     let comp = deflate_raw(data);
     var i = 0;
-    while (i < len(comp)) {
-        push(out, comp[i]);
+    while (i < comp.len()) {
+        out.push(comp[i]);
         i = i + 1;
     }
     push_u32(out, crc32(data) & 4294967295);
-    push_u32(out, len(data) & 4294967295);
+    push_u32(out, data.len() & 4294967295);
     bytes_of(out)
 }
 
@@ -269,7 +273,7 @@ fn adler32(data: bytes) -> int {
     var a = 1;
     var b = 0;
     var i = 0;
-    while (i < len(data)) {
+    while (i < data.len()) {
         a = (a + data[i]) % 65521;
         b = (b + a) % 65521;
         i = i + 1;
@@ -279,21 +283,23 @@ fn adler32(data: bytes) -> int {
 }
 
 // Comprime a formato zlib (RFC 1950): 2 octetos de cabecera + DEFLATE + Adler-32.
+/// Compresses bytes to the zlib format (RFC 1950): 2-byte header + DEFLATE body +
+/// big-endian Adler-32 checksum.
 pub fn zlib_compress(data: bytes) -> bytes {
     var out: [int] = [];
-    push(out, 120);  // CMF=0x78 (deflate, ventana 32K), FLG=0x01 (check ok)
-    push(out, 1);
+    out.push(120);  // CMF=0x78 (deflate, ventana 32K), FLG=0x01 (check ok)
+    out.push(1);
     let comp = deflate_raw(data);
     var i = 0;
-    while (i < len(comp)) {
-        push(out, comp[i]);
+    while (i < comp.len()) {
+        out.push(comp[i]);
         i = i + 1;
     }
     let ad = adler32(data);
     // Adler-32 va en BIG-endian (al revés que el CRC de gzip).
-    push(out, ad >> 24 & 255);
-    push(out, ad >> 16 & 255);
-    push(out, ad >> 8 & 255);
-    push(out, ad & 255);
+    out.push(ad >> 24 & 255);
+    out.push(ad >> 16 & 255);
+    out.push(ad >> 8 & 255);
+    out.push(ad & 255);
     bytes_of(out)
 }

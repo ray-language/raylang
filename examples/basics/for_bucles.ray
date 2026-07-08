@@ -14,7 +14,7 @@ fn main() {
     for n in notas {
         total = total + n;
     }
-    print("media = " + to_string(total / len(notas)));  // 8
+    print("media = " + to_string(total / notas.len()));  // 8
 
     // Sobre un string: la variable es un `char`.
     var vocales = 0;
@@ -26,10 +26,10 @@ fn main() {
     print("vocales = " + to_string(vocales));  // 5
 
     // Sobre un Map: el patrón es una tupla `(clave, valor)`. Las claves salen ORDENADAS (determinista).
-    var inventario: Map<string, int> = map_new();
-    insert(inventario, "manzanas", 12);
-    insert(inventario, "peras", 7);
-    insert(inventario, "kiwis", 20);
+    var inventario: Map<string, int> = Map.new();
+    inventario.insert("manzanas", 12);
+    inventario.insert("peras", 7);
+    inventario.insert("kiwis", 20);
     for (fruta, cantidad) in inventario {
         print("  " + fruta + ": " + to_string(cantidad));
     }

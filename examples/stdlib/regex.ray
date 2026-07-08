@@ -62,25 +62,25 @@ enum Re {
 // ---------------------------------------------------------------------------
 fn ranges_digit() -> [Range] {
     var r: [Range] = [];
-    push(r, Range { lo: '0', hi: '9' });
+    r.push(Range { lo: '0', hi: '9' });
     r
 }
 
 fn ranges_word() -> [Range] {
     var r: [Range] = [];
-    push(r, Range { lo: '0', hi: '9' });
-    push(r, Range { lo: 'A', hi: 'Z' });
-    push(r, Range { lo: 'a', hi: 'z' });
-    push(r, Range { lo: '_', hi: '_' });
+    r.push(Range { lo: '0', hi: '9' });
+    r.push(Range { lo: 'A', hi: 'Z' });
+    r.push(Range { lo: 'a', hi: 'z' });
+    r.push(Range { lo: '_', hi: '_' });
     r
 }
 
 fn ranges_space() -> [Range] {
     var r: [Range] = [];
-    push(r, Range { lo: ' ', hi: ' ' });
-    push(r, Range { lo: '\t', hi: '\t' });
-    push(r, Range { lo: '\n', hi: '\n' });
-    push(r, Range { lo: '\r', hi: '\r' });
+    r.push(Range { lo: ' ', hi: ' ' });
+    r.push(Range { lo: '\t', hi: '\t' });
+    r.push(Range { lo: '\n', hi: '\n' });
+    r.push(Range { lo: '\r', hi: '\r' });
     r
 }
 
@@ -96,7 +96,7 @@ struct PS {
     pos: int,
 }
 
-fn ps_at_end(p: PS) -> bool { p.pos >= len(p.pat) }
+fn ps_at_end(p: PS) -> bool { p.pos >= p.pat.len() }
 
 fn ps_peek(p: PS) -> char { p.pat[p.pos] }  // el llamador comprueba at_end antes
 
@@ -238,23 +238,23 @@ fn parse_class(p: PS) -> Class {
 
 fn append_all(dst: [Range], src: [Range]) {
     var i = 0;
-    while (i < len(src)) {
-        push(dst, src[i]);
+    while (i < src.len()) {
+        dst.push(src[i]);
         i = i + 1;
     }
 }
 
 // Añade `lo` como rango: si le sigue `-` y el carácter tras el guion no es `]`, es un rango `lo-hi`.
 fn push_item(p: PS, ranges: [Range], lo: char) {
-    if (!ps_at_end(p) && ps_peek(p) == '-' && p.pos + 1 < len(p.pat) && ps_peek2(p) != ']') {
+    if (!ps_at_end(p) && ps_peek(p) == '-' && p.pos + 1 < p.pat.len() && ps_peek2(p) != ']') {
         ps_advance(p);  // '-'
         var hi = ps_advance(p);
         if (hi == '\\') {
             hi = unescape(ps_advance(p));
         }
-        push(ranges, Range { lo: lo, hi: hi });
+        ranges.push(Range { lo: lo, hi: hi });
     } else {
-        push(ranges, Range { lo: lo, hi: lo });
+        ranges.push(Range { lo: lo, hi: lo });
     }
 }
 
@@ -262,8 +262,8 @@ fn push_item(p: PS, ranges: [Range], lo: char) {
 // Compilación Re → programa (con parcheo de saltos hacia delante).
 // ---------------------------------------------------------------------------
 fn emit(prog: Prog, op: int, x: int, y: int, c: char) -> int {
-    let pos = len(prog.insts);
-    push(prog.insts, Inst { op: op, x: x, y: y, c: c });
+    let pos = prog.insts.len();
+    prog.insts.push(Inst { op: op, x: x, y: y, c: c });
     pos
 }
 
@@ -277,8 +277,8 @@ fn compile_re(re: Re, prog: Prog) {
             emit(prog, 1, 0, 0, ' ');
         },
         Re.ClassRe(cl) => {
-            let idx = len(prog.classes);
-            push(prog.classes, cl);
+            let idx = prog.classes.len();
+            prog.classes.push(cl);
             emit(prog, 5, idx, 0, ' ');
         },
         Re.AnchorStart => {
@@ -295,44 +295,44 @@ fn compile_re(re: Re, prog: Prog) {
             // Split L1, L2 ; L1: <a> ; Jmp L3 ; L2: <b> ; L3:
             let sp = emit(prog, 4, 0, 0, ' ');
             let si = prog.insts[sp];
-            si.x = len(prog.insts);
+            si.x = prog.insts.len();
             compile_re(a, prog);
             let jp = emit(prog, 3, 0, 0, ' ');
-            si.y = len(prog.insts);
+            si.y = prog.insts.len();
             compile_re(b, prog);
             let ji = prog.insts[jp];
-            ji.x = len(prog.insts);
+            ji.x = prog.insts.len();
         },
         Re.Star(a) => {
             // L1: Split L2, L3 ; L2: <a> ; Jmp L1 ; L3:
             let sp = emit(prog, 4, 0, 0, ' ');
             let si = prog.insts[sp];
-            si.x = len(prog.insts);
+            si.x = prog.insts.len();
             compile_re(a, prog);
             emit(prog, 3, sp, 0, ' ');
-            si.y = len(prog.insts);
+            si.y = prog.insts.len();
         },
         Re.Plus(a) => {
             // L1: <a> ; Split L1, L3 ; L3:
-            let l1 = len(prog.insts);
+            let l1 = prog.insts.len();
             compile_re(a, prog);
             let sp = emit(prog, 4, l1, 0, ' ');
             let si = prog.insts[sp];
-            si.y = len(prog.insts);
+            si.y = prog.insts.len();
         },
         Re.Opt(a) => {
             // Split L1, L2 ; L1: <a> ; L2:
             let sp = emit(prog, 4, 0, 0, ' ');
             let si = prog.insts[sp];
-            si.x = len(prog.insts);
+            si.x = prog.insts.len();
             compile_re(a, prog);
-            si.y = len(prog.insts);
+            si.y = prog.insts.len();
         },
     }
 }
 
 fn compile_pattern(pattern: string) -> Prog {
-    let p = PS { pat: chars(pattern), pos: 0 };
+    let p = PS { pat: pattern.chars(), pos: 0 };
     let re = parse_alt(p);
     if (!ps_at_end(p)) {
         panic("regex: carácter inesperado en el patrón (¿')' de más?)");
@@ -352,7 +352,7 @@ fn new_bools(n: int) -> [bool] {
     var b: [bool] = [];
     var i = 0;
     while (i < n) {
-        push(b, false);
+        b.push(false);
         i = i + 1;
     }
     b
@@ -361,7 +361,7 @@ fn new_bools(n: int) -> [bool] {
 fn class_matches(cl: Class, ch: char) -> bool {
     var m = false;
     var i = 0;
-    while (i < len(cl.ranges)) {
+    while (i < cl.ranges.len()) {
         let r = cl.ranges[i];
         if (r.lo <= ch && ch <= r.hi) {
             m = true;
@@ -398,13 +398,13 @@ fn add_thread(prog: Prog, list: [int], seen: [bool], pc: int, pos: int, n: int) 
         }
     } else {
         // Char / Any / Class / Match
-        push(list, pc);
+        list.push(pc);
     }
 }
 
 fn has_match(prog: Prog, list: [int]) -> bool {
     var i = 0;
-    while (i < len(list)) {
+    while (i < list.len()) {
         if (prog.insts[list[i]].op == 2) {
             return true;
         }
@@ -417,9 +417,9 @@ fn has_match(prog: Prog, list: [int]) -> bool {
 // también un hilo en pc 0 (búsqueda: el match puede empezar aquí).
 fn step(prog: Prog, clist: [int], ch: char, pos_next: int, n: int, seed: bool) -> [int] {
     var nlist: [int] = [];
-    let nseen = new_bools(len(prog.insts));
+    let nseen = new_bools(prog.insts.len());
     var k = 0;
-    while (k < len(clist)) {
+    while (k < clist.len()) {
         let pc = clist[k];
         let ins = prog.insts[pc];
         var consume = false;
@@ -445,12 +445,15 @@ fn step(prog: Prog, clist: [int], ch: char, pos_next: int, n: int, seed: bool) -
 }
 
 // ¿Casa el patrón con TODO el texto (anclado a ambos extremos)?
+/// Tests whether the pattern matches the ENTIRE text (anchored at both ends).
+/// Thompson NFA simulation — linear time, no backtracking blowup. Supported syntax:
+/// literals, `.`, `*` `+` `?`, `|`, `( )`, `[...]`/`[^...]` with ranges, `\d \w \s` (and negations), `^` `$`.
 pub fn full_match(pattern: string, text: string) -> bool {
     let prog = compile_pattern(pattern);
-    let txt = chars(text);
-    let n = len(txt);
+    let txt = text.chars();
+    let n = txt.len();
     var clist: [int] = [];
-    let seen = new_bools(len(prog.insts));
+    let seen = new_bools(prog.insts.len());
     add_thread(prog, clist, seen, 0, 0, n);
     var i = 0;
     while (i < n) {
@@ -461,12 +464,14 @@ pub fn full_match(pattern: string, text: string) -> bool {
 }
 
 // ¿Casa el patrón con ALGÚN substring del texto (búsqueda no anclada)?
+/// Tests whether the pattern matches SOME substring of the text (unanchored search).
+/// Linear time (Thompson NFA); same supported syntax as `full_match`.
 pub fn search(pattern: string, text: string) -> bool {
     let prog = compile_pattern(pattern);
-    let txt = chars(text);
-    let n = len(txt);
+    let txt = text.chars();
+    let n = txt.len();
     var clist: [int] = [];
-    let seen = new_bools(len(prog.insts));
+    let seen = new_bools(prog.insts.len());
     add_thread(prog, clist, seen, 0, 0, n);
     if (has_match(prog, clist)) {
         return true;
@@ -489,7 +494,7 @@ pub fn search(pattern: string, text: string) -> bool {
 // que empieza en `s` (leftmost-longest), o -1 si no hay ninguno. `txt` son los caracteres del texto.
 fn match_at(prog: Prog, txt: [char], s: int, n: int) -> int {
     var clist: [int] = [];
-    let seen = new_bools(len(prog.insts));
+    let seen = new_bools(prog.insts.len());
     add_thread(prog, clist, seen, 0, s, n);
     var best = 0 - 1;
     if (has_match(prog, clist)) {
@@ -502,7 +507,7 @@ fn match_at(prog: Prog, txt: [char], s: int, n: int) -> int {
         if (has_match(prog, clist)) {
             best = i;
         }
-        if (len(clist) == 0) {
+        if (clist.len() == 0) {
             return best;  // sin hilos vivos: no puede extenderse más
         }
     }
@@ -510,10 +515,12 @@ fn match_at(prog: Prog, txt: [char], s: int, n: int) -> int {
 }
 
 // La primera coincidencia (leftmost): `Some((inicio, fin))` con índices por carácter, o `None`.
+/// Finds the first (leftmost-longest) match. Returns `Some((start, end))` as character
+/// indices (end exclusive), or `None` if the pattern does not match anywhere.
 pub fn find(pattern: string, text: string) -> Option<(int, int)> {
     let prog = compile_pattern(pattern);
-    let txt = chars(text);
-    let n = len(txt);
+    let txt = text.chars();
+    let n = txt.len();
     var s = 0;
     while (s <= n) {
         let e = match_at(prog, txt, s, n);
@@ -526,24 +533,27 @@ pub fn find(pattern: string, text: string) -> Option<(int, int)> {
 }
 
 // El substring de la primera coincidencia, o `None`.
+/// Returns the substring of the first match, or `None` if there is no match.
 pub fn find_str(pattern: string, text: string) -> Option<string> {
     match (find(pattern, text)) {
-        Option.Some(par) => Option.Some(substring(text, par.0, par.1)),
+        Option.Some(par) => Option.Some(text.substring(par.0, par.1)),
         Option.None => Option.None,
     }
 }
 
 // Todas las coincidencias NO solapadas, de izquierda a derecha, como substrings.
+/// Returns all non-overlapping matches, left to right, as substrings.
+/// A zero-width match advances one character to guarantee progress.
 pub fn find_all(pattern: string, text: string) -> [string] {
     let prog = compile_pattern(pattern);
-    let txt = chars(text);
-    let n = len(txt);
+    let txt = text.chars();
+    let n = txt.len();
     var out: [string] = [];
     var s = 0;
     while (s <= n) {
         let e = match_at(prog, txt, s, n);
         if (e >= 0) {
-            push(out, substring(text, s, e));
+            out.push(text.substring(s, e));
             if (e > s) {
                 s = e;  // continúa tras la coincidencia (no solapada)
             } else {
@@ -557,10 +567,12 @@ pub fn find_all(pattern: string, text: string) -> [string] {
 }
 
 // Reemplaza cada coincidencia NO solapada por `repl` y devuelve el texto resultante.
+/// Replaces every non-overlapping match with `repl` (a plain string, no capture references)
+/// and returns the resulting text.
 pub fn replace_all(pattern: string, text: string, repl: string) -> string {
     let prog = compile_pattern(pattern);
-    let txt = chars(text);
-    let n = len(txt);
+    let txt = text.chars();
+    let n = txt.len();
     var out = "";
     var s = 0;
     while (s <= n) {
@@ -574,7 +586,7 @@ pub fn replace_all(pattern: string, text: string, repl: string) -> string {
                 out = out + repl;  // coincidencia vacía: inserta el reemplazo
             }
             if (s < n) {
-                out = out + substring(text, s, s + 1);
+                out = out + text.substring(s, s + 1);
             }
             s = s + 1;
         }

@@ -4,25 +4,27 @@
 // de ser UTF-8 válido. Literal `b"..."` con `\xNN` para octetos arbitrarios; `len`, indexar (→int),
 // `==`, concatenación `+`, y conversión con `to_bytes`/`from_utf8`. La I/O binaria (read/write_file_bytes,
 // socket_*_bytes) preserva los octetos crudos, que `string` (UTF-8 lossy) corrompería.
+import std/fs; // M50.1: read_file_bytes/write_file_bytes viven en std/fs.
+
 fn main() -> int {
     // Literal binario: incluye un byte nulo y 0xFF, imposibles en un string normal.
     let cabecera: bytes = b"RAY\x00\x01";
-    print("cabecera: " + to_string(len(cabecera)) + " octetos");  // 5
+    print("cabecera: " + to_string(cabecera.len()) + " octetos");  // 5
     print("primer octeto: " + to_string(cabecera[0]));  // 82 ('R')
     print("byte nulo: " + to_string(cabecera[3]));  // 0
 
     // Concatenación y conversión desde/hacia string.
-    let cuerpo: bytes = to_bytes("hola");
+    let cuerpo: bytes = "hola".to_bytes();
     let mensaje: bytes = cabecera + cuerpo;
-    print("mensaje: " + to_string(len(mensaje)) + " octetos");  // 9
+    print("mensaje: " + to_string(mensaje.len()) + " octetos");  // 9
 
     // Round-trip a disco (binario correcto).
     let ruta: string = "/tmp/raylang_ejemplo.bin";
-    match (write_file_bytes(ruta, mensaje)) {
+    match (fs.write_file_bytes(ruta, mensaje)) {
         Result.Ok(n) => print("escritos " + to_string(n) + " octetos"),
         Result.Err(e) => eprint("error: " + e),
     }
-    match (read_file_bytes(ruta)) {
+    match (fs.read_file_bytes(ruta)) {
         Result.Ok(leido) => {
             if (leido == mensaje) { print("round-trip OK") } else { print("CORRUPTO") }
         },

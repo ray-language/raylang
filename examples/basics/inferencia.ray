@@ -46,5 +46,5 @@ fn main() -> int {
     let vacio: [int] = [];  // anotada, sí
     if (activo) { } else { }
 
-    total + suma + cv + dentro + len(vacio)  // 6 + 60 + 13 + 5 + 0 = 84
+    total + suma + cv + dentro + vacio.len()  // 6 + 60 + 13 + 5 + 0 = 84
 }

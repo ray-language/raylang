@@ -5,18 +5,20 @@
 // Cubre el grant **client_credentials** (de servidor a servidor: POST application/x-www-form-urlencoded
 // al token endpoint → access_token), la construcción de la **URL de autorización** del flujo de código,
 // y el armado de la cabecera `Authorization: Bearer <token>` para llamar a las APIs protegidas.
-
 from net/http import request_with, body_text, Response;
 from std/json import Json, parse;
 from std/url import url_encode;
 
 // El token devuelto por el servidor de autorización.
+/// An OAuth 2.0 access token as returned by the authorization server's token endpoint.
+/// `expires_in` is seconds until expiry (0 when the server did not report it).
 pub struct Token {
     access_token: string,
     token_type: string,
-    expires_in: int, // segundos hasta la expiración (0 si no se indica)
+    expires_in: int,
 }
 
+// segundos hasta la expiración (0 si no se indica)
 // --- Extractores sobre el JSON parseado ---
 fn obj_get(j: Json, key: string) -> Option<Json> {
     match (j) {
@@ -24,12 +26,14 @@ fn obj_get(j: Json, key: string) -> Option<Json> {
         _ => Option.None,
     }
 }
+
 fn as_str(j: Json) -> string {
     match (j) {
         Json.JStr(s) => s,
         _ => "",
     }
 }
+
 // JSON solo tiene números float; expires_in es entero → se convierte vía texto (whole floats → sin punto).
 fn as_int(j: Json) -> int {
     match (j) {
@@ -40,12 +44,14 @@ fn as_int(j: Json) -> int {
         _ => 0,
     }
 }
+
 fn str_field(j: Json, key: string) -> string {
     match (obj_get(j, key)) {
         Option.Some(v) => as_str(v),
         Option.None => "",
     }
 }
+
 fn int_field(j: Json, key: string) -> int {
     match (obj_get(j, key)) {
         Option.Some(v) => as_int(v),
@@ -59,18 +65,14 @@ fn parse_token(body: string) -> Result<Token, string> {
         Result.Err(e) => Result.Err("respuesta del token no es JSON: " + e),
         Result.Ok(j) => {
             let err = str_field(j, "error");
-            if (len(err) > 0) {
+            if (err.len() > 0) {
                 Result.Err("error OAuth: " + err)
             } else {
                 let at = str_field(j, "access_token");
-                if (len(at) == 0) {
+                if (at.len() == 0) {
                     Result.Err("la respuesta no trae access_token")
                 } else {
-                    Result.Ok(Token {
-                        access_token: at,
-                        token_type: str_field(j, "token_type"),
-                        expires_in: int_field(j, "expires_in"),
-                    })
+                    Result.Ok(Token { access_token: at, token_type: str_field(j, "token_type"), expires_in: int_field(j, "expires_in") })
                 }
             }
         },
@@ -78,16 +80,18 @@ fn parse_token(body: string) -> Result<Token, string> {
 }
 
 // Grant client_credentials: POST al token endpoint con las credenciales y devuelve el `Token`.
+/// Runs the client_credentials grant (server-to-server, RFC 6749 §4.4): POSTs the
+/// credentials form-encoded to `token_url` and parses the JSON response. Blocking HTTP I/O.
+/// Pass `scope` as "" to omit it. `Err` on network failure, an OAuth `error` reply,
+/// non-JSON/missing `access_token`, or a non-UTF-8 body.
 pub fn client_credentials(token_url: string, client_id: string, client_secret: string, scope: string) -> Result<Token, string> {
-    var body = "grant_type=client_credentials"
-        + "&client_id=" + url_encode(client_id)
-        + "&client_secret=" + url_encode(client_secret);
-    if (len(scope) > 0) {
+    var body = "grant_type=client_credentials" + "&client_id=" + url_encode(client_id) + "&client_secret=" + url_encode(client_secret);
+    if (scope.len() > 0) {
         body = body + "&scope=" + url_encode(scope);
     }
-    var h: Map<string, string> = map_new();
-    insert(h, "Content-Type", "application/x-www-form-urlencoded");
-    insert(h, "Accept", "application/json");
+    var h: Map<string, string> = Map.new();
+    h.insert("Content-Type", "application/x-www-form-urlencoded");
+    h.insert("Accept", "application/json");
     match (request_with("POST", token_url, body, h)) {
         Result.Err(e) => Result.Err("no se pudo contactar el token endpoint: " + e),
         Result.Ok(resp) => {
@@ -110,15 +114,14 @@ pub fn client_credentials(token_url: string, client_id: string, client_secret: s
 }
 
 // Construye la URL de autorización del flujo de código (a la que se redirige al usuario).
+/// Builds the authorization-code flow URL (RFC 6749 §4.1.1) to redirect the user to;
+/// all query parameters are URL-encoded. `state` should be unguessable (CSRF protection).
 pub fn authorize_url(endpoint: string, client_id: string, redirect_uri: string, scope: string, state: string) -> string {
-    endpoint + "?response_type=code"
-        + "&client_id=" + url_encode(client_id)
-        + "&redirect_uri=" + url_encode(redirect_uri)
-        + "&scope=" + url_encode(scope)
-        + "&state=" + url_encode(state)
+    endpoint + "?response_type=code" + "&client_id=" + url_encode(client_id) + "&redirect_uri=" + url_encode(redirect_uri) + "&scope=" + url_encode(scope) + "&state=" + url_encode(state)
 }
 
 // La cabecera `Authorization` para llamar a una API protegida con este token.
+/// The `Authorization` header value ("Bearer <access_token>") for calling a protected API.
 pub fn bearer_header(token: Token) -> string {
     "Bearer " + token.access_token
 }

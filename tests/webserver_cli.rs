@@ -60,6 +60,7 @@ fn cuerpo(resp: &[u8]) -> &[u8] {
 // Driver: servidor concurrente acotado a 2 conexiones (cada una en su fibra) que enruta /hola.
 const SRV_HTTP: &str = r#"
 import webserver;
+import std/net;
 fn manejar(conn: int) {
     match (webserver.read_request(conn)) {
         Result.Ok(req) => {
@@ -74,13 +75,13 @@ fn manejar(conn: int) {
     close(conn);
 }
 fn main() -> int {
-    match (tcp_listen("127.0.0.1", 0)) {
+    match (net.tcp_listen("127.0.0.1", 0)) {
         Result.Ok(srv) => {
-            print(local_port(srv));
+            print(net.local_port(srv));
             scope(fn() {
                 var i: int = 0;
                 while (i < 2) {
-                    match (tcp_accept(srv)) {
+                    match (net.tcp_accept(srv)) {
                         Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
                         Result.Err(e) => { eprint(e); i = 2; },
                     }
@@ -113,6 +114,7 @@ fn servidor_http_responde_y_enruta() {
 // Driver: servidor SSE acotado a 1 conexión que emite 3 eventos y cierra.
 const SRV_SSE: &str = r#"
 import webserver;
+import std/net;
 fn manejar(conn: int) {
     match (webserver.read_request(conn)) {
         Result.Ok(req) => {
@@ -130,11 +132,11 @@ fn manejar(conn: int) {
     close(conn);
 }
 fn main() -> int {
-    match (tcp_listen("127.0.0.1", 0)) {
+    match (net.tcp_listen("127.0.0.1", 0)) {
         Result.Ok(srv) => {
-            print(local_port(srv));
+            print(net.local_port(srv));
             scope(fn() {
-                match (tcp_accept(srv)) {
+                match (net.tcp_accept(srv)) {
                     Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
                     Result.Err(e) => eprint(e),
                 }
@@ -164,6 +166,7 @@ fn servidor_sse_emite_eventos() {
 // cuerpo binario (con \x00/\xff) cruza intacto read_request (por Content-Length) y send_response (M19.2).
 const SRV_ECO_BIN: &str = r#"
 import webserver;
+import std/net;
 fn manejar(conn: int) {
     match (webserver.read_request(conn)) {
         Result.Ok(req) => {
@@ -176,11 +179,11 @@ fn manejar(conn: int) {
     close(conn);
 }
 fn main() -> int {
-    match (tcp_listen("127.0.0.1", 0)) {
+    match (net.tcp_listen("127.0.0.1", 0)) {
         Result.Ok(srv) => {
-            print(local_port(srv));
+            print(net.local_port(srv));
             scope(fn() {
-                match (tcp_accept(srv)) {
+                match (net.tcp_accept(srv)) {
                     Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
                     Result.Err(e) => eprint(e),
                 }

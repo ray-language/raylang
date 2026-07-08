@@ -897,6 +897,27 @@ impl<'a> Compiler<'a> {
                 self.emit(OpCode::MakeArray(elems.len()), line, col);
             }
 
+            // M48.2: literal de Map `[k: v, …]` → `Map.new()` + `insert` por par. Como `MapInsert`
+            // consume el handle (deja unit) y no hay `Dup`, se guarda el Map en un local temporal y se
+            // recupera al final (mismo patrón que el escrutinio del `match`).
+            ExprKind::MapLit(pares) => {
+                self.emit(OpCode::MapNew, line, col);
+                if pares.is_empty() {
+                    // `[:]` — el Map vacío; ya está en la pila.
+                } else {
+                    let slot = self.declare_local("$maplit");
+                    self.emit(OpCode::InitLocal(slot), line, col);
+                    for (k, v) in pares {
+                        self.emit(OpCode::GetLocal(slot), line, col);
+                        self.emit_expr(k)?;
+                        self.emit_expr(v)?;
+                        self.emit(OpCode::MapInsert, line, col);
+                        self.emit(OpCode::Pop, line, col); // insert devuelve unit
+                    }
+                    self.emit(OpCode::GetLocal(slot), line, col);
+                }
+            }
+
             // M27.4: conversión numérica `as`. El destino ya lo normalizó el checker (int/float/char).
             ExprKind::Cast { expr: inner, ty } => {
                 self.emit_expr(inner)?;
@@ -979,21 +1000,25 @@ impl<'a> Compiler<'a> {
     /// global, identificada por nombre y no tapada por una variable) del **indirecto**
     /// (un valor-función en la pila), que usa `CallValue` (M4.1).
     fn emit_call(&mut self, callee: &Expr, args: &[Expr], line: usize, col: usize) -> Result<(), CompileError> {
+        // M48.1: función asociada `Tipo.fn(args)` (`Map.new()`, `Channel.new()`, `Channel.bounded(n)`):
+        // se empujan los argumentos y se emite el opcode que declara el registro (`MapNew`/`ChannelNew`/
+        // `ChannelNewBounded`). No es UFCS (el checker no la baja) → llega como `Call(Field)` intacta.
+        if let ExprKind::Field { object, name } = &callee.kind {
+            if let ExprKind::Ident(tn) = &object.kind {
+                if let Some(assoc) = crate::builtins::assoc_lookup(tn, name) {
+                    for arg in args {
+                        self.emit_expr(arg)?;
+                    }
+                    self.emit(assoc.opcode.clone(), line, col);
+                    return Ok(());
+                }
+            }
+        }
         if let ExprKind::Ident(name) = &callee.kind {
             // Solo es directo si el nombre NO es una variable (local o upvalue).
             if !self.name_is_variable(name) {
-                // M12.2: `channel()` vs `channel(n)` → dos opcodes (no acotado / acotado). Se trata aparte
-                // porque la capacidad cambia el opcode (el resto de builtins tiene un opcode fijo en la
-                // tabla). Mismo special-case que ya tiene `channel` en el checker por ser indeterminado.
-                if name == "channel" {
-                    if let Some(cap) = args.first() {
-                        self.emit_expr(cap)?;
-                        self.emit(OpCode::ChannelNewBounded, line, col);
-                    } else {
-                        self.emit(OpCode::ChannelNew, line, col);
-                    }
-                    return Ok(());
-                }
+                // M48.1: `Channel.new()`/`Channel.bounded(n)` (antes `channel()`/`channel(n)`) bajan por la
+                // rama de funciones asociadas de arriba (`Call(Field)` → `ChannelNew`/`ChannelNewBounded`).
                 // M12.3: `scope(body)` se baja a ScopeBegin; body(); ScopeEnd. Se trata aparte porque el
                 // cuerpo se llama ENTRE los dos opcodes de scope (para poseer las tareas que lance) — no es
                 // un builtin ordinario que reciba sus args en la pila. La llamada al cuerpo NO está en

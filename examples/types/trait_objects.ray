@@ -42,7 +42,7 @@ impl Figura for Rect {
 fn area_total(figuras: [dyn Figura]) -> int {
     var suma = 0;
     var i = 0;
-    while (i < len(figuras)) {
+    while (i < figuras.len()) {
         suma = suma + figuras[i].describir();  // despacha area() y nombre() en runtime
         i = i + 1;
     }

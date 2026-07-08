@@ -5,7 +5,7 @@
 //          o:   cargo run --quiet -- --vm examples/basics/palindromo.ray
 // El código de salida es el nº de palíndromos encontrados.
 fn es_palindromo(s: string) -> bool {
-    let n = len(s);
+    let n = s.len();
     var i = 0;
     var ok = true;
     // Compara el carácter i con su simétrico desde el final.
@@ -23,9 +23,9 @@ fn es_palindromo(s: string) -> bool {
 // Cuenta cuántas vocales tiene una palabra (otro recorrido con char y chars()).
 fn vocales(s: string) -> int {
     var n = 0;
-    let cs = chars(s);
+    let cs = s.chars();
     var i = 0;
-    while (i < len(cs)) {
+    while (i < cs.len()) {
         let c = cs[i];
         if (c == 'a') {
             n = n + 1;

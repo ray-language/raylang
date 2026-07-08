@@ -96,7 +96,7 @@ Los **parámetros son inmutables**. Las **firmas de función se anotan siempre**
 Constantes globales con `const` (su valor debe ser un literal):
 
 ```rust
-const GRAVEDAD: float = 9.81;     // para π/e usa los builtins `pi()`/`e()`, no una const
+const GRAVEDAD: float = 9.81;     // para π/e usa `math.PI`/`math.E` (import std/math), no una const
 const MAX_INTENTOS: int = 3;
 ```
 
@@ -160,15 +160,15 @@ let clase = if (n == 0) { "cero" } else if (n < 0) { "negativo" } else { "positi
 
 ### Arreglos `[T]`
 
-Semántica de **referencia** (se comparten al pasarlos/asignarlos). Se mutan con `push`/`a[i] = v`.
+Semántica de **referencia** (se comparten al pasarlos/asignarlos). Se mutan con `.push(x)`/`a[i] = v`.
 
 ```rust
 var xs: [int] = [1, 2, 3];
-push(xs, 4);
+xs.push(4);
 xs[0] = 99;
 print(xs[0]);          // 99
-print(len(xs));        // 4
-print(xs.contains(4)); // true (UFCS: xs.f() ≡ f(xs))
+print(xs.len());       // 4
+print(xs.contains(4)); // true — len/push/contains/… son métodos (traits Len/Push/Contains)
 ```
 
 ### Tuplas
@@ -199,7 +199,7 @@ enum Figura { Circulo(float), Rect(float, float), Nada }
 
 fn area(f: Figura) -> float {
     match (f) {
-        Figura.Circulo(r) => pi() * r * r,     // pi() es un builtin de matemáticas
+        Figura.Circulo(r) => math.PI * r * r,   // math.PI: de std/math (con `import std/math;`)
         Figura.Rect(w, h) => w * h,
         Figura.Nada => 0.0,
     }
@@ -209,9 +209,9 @@ fn area(f: Figura) -> float {
 ### `Map<K,V>` y `Set<T>`
 
 ```rust
-var edades: Map<string, int> = map_new();
-insert(edades, "ana", 30);
-match (get(edades, "ana")) {          // get -> Option<V>
+var edades: Map<string, int> = Map.new();
+edades.insert("ana", 30);
+match (edades.get("ana")) {           // get -> Option<V>
     Option.Some(e) => print(e),
     Option.None => print(0 - 1),
 }
@@ -233,7 +233,7 @@ print("hola ${nombre}, ${n} veces");     // "a${x}b" ≡ "a" + to_string(x) + "b
 print("Hola".to_upper());                // "HOLA"
 print("a,b,c".split(","));               // ["a", "b", "c"]
 print("  x  ".trim());                   // "x"
-print(len("café"));                      // 4 (por carácter)
+print("café".len());                     // 4 (por carácter)
 print("abc" + "def");                    // concatenación
 ```
 
@@ -305,7 +305,7 @@ trait Area { fn area(self) -> float; }        // firma: termina en ';'
 
 struct Circulo { r: float }
 impl Area for Circulo {
-    fn area(self) -> float { pi() * self.r * self.r }   // pi(): builtin de matemáticas
+    fn area(self) -> float { math.PI * self.r * self.r }   // math.PI: de std/math
 }
 
 fn imprime_area<T: Area>(x: T) {              // bound: T debe implementar Area
@@ -424,7 +424,7 @@ hay estado mutable compartido; corre en multicore por defecto.
 
 ```rust
 fn main() -> int {
-    let ch: Channel<int> = channel();
+    let ch: Channel<int> = Channel.new();
     spawn(fn() {
         var i = 0;
         while (i < 5) { send(ch, i * i); i = i + 1; }
@@ -443,7 +443,7 @@ fn main() -> int {
 }
 ```
 
-- `channel()` / `channel(n)` (acotado, backpressure) · `send` · `recv` · `close` · `select([chs])`.
+- `Channel.new()` / `Channel.bounded(n)` (acotado, backpressure) · `send` · `recv` · `close` · `select([chs])`.
 - **Structured concurrency**: `scope(fn() -> R { … })` posee y une las tareas lanzadas dentro; `spawn` devuelve
   un `Task<T>` y `join(t)` espera su valor.
 - Para **salida reproducible** (tests): `ray run --deterministic` (o `RAYLANG_THREADS=1`) fuerza un solo hilo

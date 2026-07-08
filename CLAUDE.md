@@ -60,6 +60,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Convenciones
 
+- **Idioma: los IDENTIFICADORES en inglés; los comentarios y la documentación en
+  español.** Nombres de funciones/métodos, variables, parámetros, tipos y campos
+  → **inglés** (`load`, `analyze`, `receiver`, `source`, `other`). Comentarios y
+  `///` → español. (El código antiguo mezcla ambos idiomas en los nombres; hay una
+  **limpieza pendiente** para pasarlo todo a inglés — ver `docs/limpieza-nombres-en-ingles.md`.
+  Código nuevo: ya en inglés.)
 - **Comentarios y documentación en español**, en el propio código.
 - Cada fase lleva sus tests (`#[cfg(test)] mod tests` en su archivo).
 - **Todo token/nodo lleva `(línea, columna)`**; los errores siempre reportan

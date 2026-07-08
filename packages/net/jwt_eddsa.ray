@@ -6,17 +6,16 @@
 // Ed25519(seed, "header.payload"). El header está fijo a `{"alg":"EdDSA","typ":"JWT"}`. El payload
 // (las *claims*) se pasa y se devuelve como string JSON crudo (como en HS256). Importable:
 //   from jwt_eddsa import jwt_eddsa_sign, jwt_eddsa_verify;
-
 from net/crypto import ed_sign, ed_verify;
 from std/base64 import base64url, base64url_decode;
 
 // Octetos (`[int]`) de un string (UTF-8).
 fn str_octets(s: string) -> [int] {
-    let b = to_bytes(s);
+    let b = s.to_bytes();
     var out: [int] = [];
     var i = 0;
-    while (i < len(b)) {
-        push(out, b[i]);
+    while (i < b.len()) {
+        out.push(b[i]);
         i = i + 1;
     }
     out
@@ -28,6 +27,8 @@ fn header_b64() -> string {
 }
 
 // Firma las *claims* (JSON crudo) con el `seed` privado (32 octetos) y devuelve el JWT compacto `h.p.s`.
+/// Signs the claims (raw JSON string) with Ed25519 using the 32-octet private `seed` and
+/// returns the compact JWT `header.payload.signature` (RFC 8037, alg fixed to EdDSA).
 pub fn jwt_eddsa_sign(seed: [int], payload_json: string) -> string {
     let h = header_b64();
     let p = base64url(str_octets(payload_json));
@@ -40,15 +41,20 @@ pub fn jwt_eddsa_sign(seed: [int], payload_json: string) -> string {
 
 // Verifica un JWT EdDSA con la clave pública (32 octetos). `Ok(payload_json)` si la firma es válida,
 // `Err(motivo)` si no. NO comprueba `exp`/`nbf` (política de la aplicación sobre el JSON devuelto).
+/// Verifies an EdDSA JWT against the 32-octet Ed25519 public key and returns the decoded
+/// payload: `Ok(payload_json)` if the signature is valid; `Err(reason)` on malformed token,
+/// bad base64url, or invalid signature. Does NOT check `exp`/`nbf` — application policy.
 pub fn jwt_eddsa_verify(pubkey: [int], token: string) -> Result<string, string> {
-    let parts = split(token, ".");
-    if (len(parts) != 3) {
+    let parts = token.split(".");
+    if (parts.len() != 3) {
         return Result.Err("JWT mal formado: se esperaban 3 segmentos");
     }
     let signing_input = parts[0] + "." + parts[1];
     let sig = match (base64url_decode(parts[2])) {
         Result.Ok(s) => s,
-        Result.Err(e) => { return Result.Err(e); },
+        Result.Err(e) => {
+            return Result.Err(e);
+        },
     };
     if (!ed_verify(pubkey, str_octets(signing_input), sig)) {
         return Result.Err("firma inválida");

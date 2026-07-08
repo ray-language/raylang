@@ -1,0 +1,10 @@
+// std/random (M49.2a) — pseudo-random numbers. Import with `import std/random;` and use qualified
+// (`random.next()`, `random.below(6)`). Non-deterministic: seeded from the clock (SplitMix64), so the
+// same program yields different values across runs. The functions wrap internal primitives (`__random`/
+// `__random_int`, the engine-side PRNG).
+
+/// A pseudo-random float uniformly distributed in `[0.0, 1.0)`.
+pub fn next() -> float { __random() }
+
+/// A pseudo-random integer in `[0, n)` (so `below(6)` is a fair d6 minus one). `n <= 0` returns `0`.
+pub fn below(n: int) -> int { __random_int(n) }

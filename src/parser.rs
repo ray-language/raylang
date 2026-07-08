@@ -70,7 +70,7 @@ pub struct Parser {
     expr_spans: std::collections::HashMap<(usize, usize), (usize, usize)>,
     /// Posición del nombre en un acceso `recv.name` (M10.2g): `(línea, col, nombre)` del acceso →
     /// `(línea, col)` del `name` tras el `.`. Al terminar pasa al `Program` (para el hover del LSP).
-    field_name_pos: std::collections::HashMap<(usize, usize, String), (usize, usize)>,
+    field_name_pos: std::collections::HashMap<(usize, usize, String), Vec<(usize, usize)>>,
     /// Azúcar preservado para el formateador (M29.3): forma de superficie de interpolación y pipelines,
     /// indexada por la posición del nodo desazucarado raíz. Al terminar pasan al `Program`. Ver
     /// [`crate::ast::Program::interp_sites`].
@@ -1300,7 +1300,7 @@ impl Parser {
                 if let TokenKind::Int(n) = self.peek().kind {
                     let (nl, nc) = (self.peek().line, self.peek().col);
                     self.advance();
-                    self.field_name_pos.insert((line, col, n.to_string()), (nl, nc));
+                    self.field_name_pos.entry((line, col, n.to_string())).or_default().push((nl, nc));
                     expr = Expr {
                         kind: ExprKind::Field { object: Box::new(expr), name: n.to_string() },
                         line,
@@ -1310,7 +1310,7 @@ impl Parser {
                 }
                 let (name, nl, nc) = self.expect_ident("el nombre del campo tras '.'")?;
                 // Posición del nombre del campo/método, para el hover del LSP (M10.2g).
-                self.field_name_pos.insert((line, col, name.clone()), (nl, nc));
+                self.field_name_pos.entry((line, col, name.clone())).or_default().push((nl, nc));
                 // `M.Tipo { ... }`: literal de struct calificado por módulo (M11.3c-3). Solo si el
                 // receptor del `.` es un `Ident` (el módulo); el nombre calificado guarda el `.`,
                 // que el loader resuelve a `M::Tipo`. (Mismo compromiso struct-literal-vs-bloque
@@ -1663,20 +1663,44 @@ impl Parser {
     }
 
     /// arrayLiteral = '[' [ expression { ',' expression } ] ']'
+    /// Literal entre corchetes: **arreglo** `[e, …]` o **Map** `[k: v, …]` (M48.2). Se decide por el `:`:
+    /// `[:]` es el Map vacío; si tras el primer elemento viene `:`, es un Map; si no, un arreglo.
     fn array_literal(&mut self) -> Result<Expr, ParseError> {
         let open = self.expect(&TokenKind::LBracket, "'['")?;
-        let mut elems = Vec::new();
-        if !self.check(&TokenKind::RBracket) {
-            loop {
-                elems.push(self.expression()?);
-                if !self.eat(&TokenKind::Comma) {
-                    break;
-                }
-                // Coma final permitida (`[1, 2, 3,]`), como en los campos de struct.
+        // `[:]` — el Map vacío (indeterminado). El `:` justo tras `[` solo puede ser esto.
+        if self.check(&TokenKind::Colon) {
+            self.advance(); // ':'
+            self.expect(&TokenKind::RBracket, "']' para cerrar el Map vacío '[:]'")?;
+            return Ok(Expr { kind: ExprKind::MapLit(Vec::new()), line: open.line, col: open.col });
+        }
+        // `[]` — el arreglo vacío.
+        if self.check(&TokenKind::RBracket) {
+            self.advance();
+            return Ok(Expr { kind: ExprKind::ArrayLit(Vec::new()), line: open.line, col: open.col });
+        }
+        // Primer elemento; el `:` que le siga decide arreglo vs Map.
+        let first = self.expression()?;
+        if self.eat(&TokenKind::Colon) {
+            // Map: `k: v { , k: v }`. Ya consumimos `first` (clave) y el `:`.
+            let mut pares = vec![(first, self.expression()?)];
+            while self.eat(&TokenKind::Comma) {
                 if self.check(&TokenKind::RBracket) {
-                    break;
+                    break; // coma final `[a: 1,]`
                 }
+                let k = self.expression()?;
+                self.expect(&TokenKind::Colon, "':' entre la clave y el valor del Map")?;
+                pares.push((k, self.expression()?));
             }
+            self.expect(&TokenKind::RBracket, "']' para cerrar el Map")?;
+            return Ok(Expr { kind: ExprKind::MapLit(pares), line: open.line, col: open.col });
+        }
+        // Arreglo: el resto de elementos separados por comas.
+        let mut elems = vec![first];
+        while self.eat(&TokenKind::Comma) {
+            if self.check(&TokenKind::RBracket) {
+                break; // coma final `[1, 2, 3,]`
+            }
+            elems.push(self.expression()?);
         }
         self.expect(&TokenKind::RBracket, "']' para cerrar el arreglo")?;
         Ok(Expr { kind: ExprKind::ArrayLit(elems), line: open.line, col: open.col })
@@ -2033,6 +2057,10 @@ mod tests {
                 let e: Vec<String> = elems.iter().map(sx).collect();
                 format!("[{}]", e.join(", "))
             }
+            ExprKind::MapLit(pares) => {
+                let e: Vec<String> = pares.iter().map(|(k, v)| format!("{}: {}", sx(k), sx(v))).collect();
+                format!("[{}]", e.join(", "))
+            }
             ExprKind::TupleLit(elems) => {
                 let e: Vec<String> = elems.iter().map(sx).collect();
                 format!("({})", e.join(", "))
@@ -2151,6 +2179,17 @@ mod tests {
     fn precedencia_multiplicacion_sobre_suma() {
         assert_eq!(sx(&parse_expr("1 + 2 * 3")), "(+ 1 (* 2 3))");
         assert_eq!(sx(&parse_expr("1 * 2 + 3")), "(+ (* 1 2) 3)");
+    }
+
+    #[test]
+    fn literal_map_vs_arreglo() {
+        // M48.2: el `:` distingue Map de arreglo; `[:]` es el Map vacío, `[]` el arreglo vacío.
+        assert!(matches!(parse_expr("[]").kind, ExprKind::ArrayLit(ref e) if e.is_empty()));
+        assert!(matches!(parse_expr("[:]").kind, ExprKind::MapLit(ref p) if p.is_empty()));
+        assert!(matches!(parse_expr("[1, 2, 3]").kind, ExprKind::ArrayLit(_)));
+        assert_eq!(sx(&parse_expr("[1: \"a\", 2: \"b\"]")), "[1: \"a\", 2: \"b\"]");
+        // Coma final permitida en el Map.
+        assert!(matches!(parse_expr("[1: 2,]").kind, ExprKind::MapLit(ref p) if p.len() == 1));
     }
 
     #[test]

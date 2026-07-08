@@ -1,0 +1,76 @@
+// std/collections/deque — cola doble (M50.2; antes en el prelude, M40.3d).
+//
+// Respaldada por un arreglo + un índice `head` (los elementos vivos son `datos[head..]`). Así
+// `push_back`/`pop_front` (uso de cola) son O(1); `pop_back` también; `push_front` es O(1) si hay
+// hueco al frente (head>0), O(n) si toca reconstruir. `pop_*`/`peek_*` devuelven `Option<T>` (None si
+// vacía). Con leaf-binding (`import std/collections/deque;`) se usa calificado: `deque.new()`/
+// `deque.push_back(d, x)`/`deque.pop_front(d)`/… `deque.new()` es un constructor vacío (T lo fija el contexto).
+/// A double-ended queue backed by an array plus a `head` index; `push_back`, `pop_front` and
+/// `pop_back` are O(1). Import with `import std/collections/deque;` and operate with `deque.new`,
+/// `deque.push_back`, `deque.pop_front`, …
+pub struct Deque<T> {
+    datos: [T],
+    head: int,
+}
+
+/// Creates an empty deque. The element type is fixed by the expected type at the call site.
+pub fn new<T>() -> Deque<T> {
+    var d: [T] = [];
+    Deque { datos: d, head: 0 }
+}
+
+// Número de elementos vivos.
+/// Returns the number of live elements in the deque.
+pub fn len<T>(d: Deque<T>) -> int { d.datos.len() - d.head }
+
+/// Returns true if the deque has no elements.
+pub fn is_empty<T>(d: Deque<T>) -> bool { len(d) == 0 }
+
+// Encola por detrás (O(1) amortizado).
+/// Appends `x` at the back of the deque (amortized O(1)).
+pub fn push_back<T>(d: Deque<T>, x: T) {
+    d.datos.push(x);
+}
+
+// Desencola por delante; None si vacía (O(1): solo avanza `head`).
+/// Removes and returns the front element, or `None` if the deque is empty (O(1)).
+pub fn pop_front<T>(d: Deque<T>) -> Option<T> {
+    if (d.head < d.datos.len()) {
+        let v = d.datos[d.head];
+        d.head = d.head + 1;
+        Option.Some(v)
+    } else {
+        Option.None
+    }
+}
+
+// Desencola por detrás; None si vacía.
+/// Removes and returns the back element, or `None` if the deque is empty.
+pub fn pop_back<T>(d: Deque<T>) -> Option<T> {
+    if (d.datos.len() > d.head) { pop(d.datos) } else { Option.None }
+}
+
+// Encola por delante (O(1) si hay hueco; si no, reconstruye O(n)).
+/// Inserts `x` at the front (O(1) if there is room at the front, otherwise an O(n) rebuild).
+pub fn push_front<T>(d: Deque<T>, x: T) {
+    if (d.head > 0) {
+        d.head = d.head - 1;
+        d.datos[d.head] = x;
+    } else {
+        var nuevo: [T] = [];
+        nuevo.push(x);
+        var i = d.head;
+        while (i < d.datos.len()) {
+            nuevo.push(d.datos[i]);
+            i = i + 1;
+        }
+        d.datos = nuevo;
+        d.head = 0;
+    }
+}
+
+// Mira el frente sin desencolar; None si vacía.
+/// Returns the front element without removing it, or `None` if the deque is empty.
+pub fn peek_front<T>(d: Deque<T>) -> Option<T> {
+    if (d.head < d.datos.len()) { Option.Some(d.datos[d.head]) } else { Option.None }
+}

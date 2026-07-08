@@ -6,7 +6,7 @@ Soporte para archivos `.ray`: **resaltado de sintaxis** + **cliente del Language
 El **coloreado** clasifica palabras clave, tipos, literales, comentarios, operadores,
 definiciones y llamadas a funciones para que el tema de color de tu editor las pinte; es
 estático (no entiende el programa). La **validación real** —errores de léxico, sintaxis y
-tipos subrayados mientras escribes— la da el **Language Server** (`raylang --lsp`), al que esta
+tipos subrayados mientras escribes— la da el **Language Server** (`ray lsp`), al que esta
 extensión se conecta como cliente (ver "Diagnósticos en vivo" al final).
 
 ## Qué colorea
@@ -142,13 +142,13 @@ subrayados mientras escribes) la da el **Language Server**, que reusa el checker
 una sola vez para todos los editores. El servidor es el propio binario de raylang:
 
 ```sh
-raylang --lsp        # habla LSP por stdin/stdout hasta recibir 'exit'
+ray lsp              # habla LSP por stdin/stdout hasta recibir 'exit'
 ```
 
 No tiene dependencias: el *framing* y el JSON están escritos a mano (DESIGN §19.2). Cualquier
 editor que hable LSP lo consume apuntándolo a los archivos `.ray`. Para **VSCode**, esta
 extensión incluye el **cliente** (`src/extension.ts`, sobre `vscode-languageclient`); para
-**Neovim/Helix** basta un par de líneas de config (`cmd = { "raylang", "--lsp" }`; ver el
+**Neovim/Helix** basta un par de líneas de config (`cmd = { "ray", "lsp" }`; ver el
 capítulo "El LSP" del libro).
 
 ### Cómo usarlo en VSCode
@@ -156,7 +156,7 @@ capítulo "El LSP" del libro).
 1. **Compila el binario** de raylang y ponlo en el PATH (o anota su ruta):
 
    ```sh
-   cargo build --release      # genera ./target/release/raylang
+   cargo build --release      # genera ./target/release/ray (y el alias raylang)
    ```
 
 2. **Compila el cliente** de la extensión (TypeScript → JavaScript):
@@ -170,15 +170,16 @@ capítulo "El LSP" del libro).
 3. **Enlaza e instala** la extensión (igual que para el coloreado):
 
    ```sh
-   ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.11.0
+   ln -s "$(pwd)" ~/.vscode/extensions/raylang-0.12.0
    # recarga VSCode: Cmd/Ctrl+Shift+P → "Developer: Reload Window"
    ```
 
-4. Abre un `.ray`. Si `raylang` no está en el PATH, indica su ruta en los ajustes:
-   **`raylang.serverPath`** (p. ej. `/ruta/a/target/release/raylang`). El ajuste
+4. Abre un `.ray`. Si `ray` no está en el PATH que ve VSCode (p. ej. lanzado desde el
+   Dock en macOS), indica su ruta en los ajustes:
+   **`raylang.serverPath`** (p. ej. `/ruta/a/target/release/ray`). El ajuste
    **`raylang.enableLsp`** permite desactivar el cliente y quedarse en solo-coloreado.
 
-> El cliente arranca el servidor (`raylang --lsp`) al abrir el primer `.ray` y conecta sus
+> El cliente arranca el servidor (`ray lsp`) al abrir el primer `.ray` y conecta sus
 > diagnósticos a los subrayados de VSCode. Es el único código JS de la extensión; la lógica de
 > análisis vive toda en el binario de Rust (cero duplicación).
 

@@ -1,0 +1,51 @@
+// std/crypto (M49.3) — production cryptography (constant-time, audited: backed by `ring`, M43). Import
+// with `import std/crypto;` and use qualified (`crypto.sha256(data)`, `crypto.hmac_sha256(key, msg)`).
+// Hashes/MACs take and return `bytes`; the fallible ones (Ed25519 sign/key from a 32-byte seed,
+// ChaCha20-Poly1305 whose sizes must match, `open` which also authenticates) return `Option<bytes>`.
+// The functions wrap engine-side primitives (`__sha256`, `__ed25519_sign`, …).
+
+/// SHA-256 digest of `data` (32 bytes).
+pub fn sha256(data: bytes) -> bytes { __sha256(data) }
+
+/// SHA-512 digest of `data` (64 bytes).
+pub fn sha512(data: bytes) -> bytes { __sha512(data) }
+
+/// SHA-1 digest of `data` (20 bytes). Legacy algorithm — needed by some protocols (e.g. WebSocket);
+/// avoid for new designs.
+pub fn sha1(data: bytes) -> bytes { __sha1(data) }
+
+/// HMAC-SHA-256 of `msg` under `key` (32 bytes).
+pub fn hmac_sha256(key: bytes, msg: bytes) -> bytes { __hmac_sha256(key, msg) }
+
+/// Derives the Ed25519 public key (32 bytes) from a 32-byte private seed; `None` if the seed is not
+/// exactly 32 bytes.
+pub fn ed25519_public_key(seed: bytes) -> Option<bytes> {
+    let r = __ed25519_public_key(seed);
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+/// Signs `msg` with the 32-byte Ed25519 seed, returning a 64-byte deterministic signature (RFC 8032);
+/// `None` if the seed is not exactly 32 bytes.
+pub fn ed25519_sign(seed: bytes, msg: bytes) -> Option<bytes> {
+    let r = __ed25519_sign(seed, msg);
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+/// Verifies an Ed25519 signature: `true` if `sig` is a valid signature of `msg` under `pubkey`.
+pub fn ed25519_verify(pubkey: bytes, msg: bytes, sig: bytes) -> bool {
+    __ed25519_verify(pubkey, msg, sig)
+}
+
+/// ChaCha20-Poly1305 AEAD encryption: returns ciphertext followed by the authentication tag. The key
+/// must be 32 bytes and the nonce 12; `None` if the sizes are wrong.
+pub fn chacha20poly1305_seal(key: bytes, nonce: bytes, aad: bytes, plaintext: bytes) -> Option<bytes> {
+    let r = __chacha20poly1305_seal(key, nonce, aad, plaintext);
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
+/// ChaCha20-Poly1305 AEAD decryption: verifies and decrypts; `None` if authentication fails (tampered
+/// data) or the sizes are wrong.
+pub fn chacha20poly1305_open(key: bytes, nonce: bytes, aad: bytes, ciphertext: bytes) -> Option<bytes> {
+    let r = __chacha20poly1305_open(key, nonce, aad, ciphertext);
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}

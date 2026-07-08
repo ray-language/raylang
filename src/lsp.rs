@@ -2074,7 +2074,7 @@ fn formatting_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let insert_spaces = opts.and_then(|o| o.get("insertSpaces")).map(|b| matches!(b, Json::Bool(true))).unwrap_or(true);
     let tab_size = opts.and_then(|o| o.get("tabSize")).and_then(as_usize).filter(|&n| n > 0).unwrap_or(4);
     let unit = if insert_spaces { " ".repeat(tab_size) } else { "\t".to_string() };
-    let Ok(formateado) = crate::fmt::format_source_con_indent(src, &unit) else { return Json::Arr(vec![]) };
+    let Ok(formateado) = crate::fmt::format_source_with_indent(src, &unit) else { return Json::Arr(vec![]) };
     if formateado == *src {
         return Json::Arr(vec![]);
     }

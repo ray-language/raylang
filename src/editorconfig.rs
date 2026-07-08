@@ -19,7 +19,7 @@ pub fn indent_for(file: &Path) -> (Option<String>, Option<usize>) {
     let mut dir = file.parent();
     while let Some(d) = dir {
         if let Ok(src) = std::fs::read_to_string(d.join(".editorconfig")) {
-            let (s, z, es_root) = parse(&src, name);
+            let (s, z, is_root) = parse(&src, name);
             // Más cercano gana: solo rellenamos lo que aún no tengamos.
             if style.is_none() {
                 style = s;
@@ -27,7 +27,7 @@ pub fn indent_for(file: &Path) -> (Option<String>, Option<usize>) {
             if size.is_none() {
                 size = z;
             }
-            if es_root {
+            if is_root {
                 break; // `root = true` corta el ascenso
             }
         }
@@ -40,32 +40,32 @@ pub fn indent_for(file: &Path) -> (Option<String>, Option<usize>) {
 /// **última** sección que casa (semántica del formato).
 fn parse(src: &str, filename: &str) -> (Option<String>, Option<usize>, bool) {
     let (mut style, mut size, mut root) = (None, None, false);
-    let mut vista_seccion = false;
-    let mut casa = false;
-    for linea in src.lines() {
+    let mut seen_section = false;
+    let mut matched = false;
+    for line in src.lines() {
         // Comentarios: `#` o `;` a inicio de token.
-        let l = linea.split(['#', ';']).next().unwrap_or("").trim();
+        let l = line.split(['#', ';']).next().unwrap_or("").trim();
         if l.is_empty() {
             continue;
         }
-        if let Some(resto) = l.strip_prefix('[') {
-            if let Some(glob) = resto.strip_suffix(']') {
-                vista_seccion = true;
-                casa = glob_casa(glob.trim(), filename);
+        if let Some(rest) = l.strip_prefix('[') {
+            if let Some(glob) = rest.strip_suffix(']') {
+                seen_section = true;
+                matched = glob_matches(glob.trim(), filename);
             }
             continue;
         }
-        let Some((clave, valor)) = l.split_once('=') else { continue };
-        let (clave, valor) = (clave.trim().to_lowercase(), valor.trim());
+        let Some((key, value)) = l.split_once('=') else { continue };
+        let (key, value) = (key.trim().to_lowercase(), value.trim());
         // `root = true` solo cuenta en el preámbulo (antes de cualquier sección).
-        if !vista_seccion && clave == "root" {
-            root = valor.eq_ignore_ascii_case("true");
+        if !seen_section && key == "root" {
+            root = value.eq_ignore_ascii_case("true");
             continue;
         }
-        if casa {
-            match clave.as_str() {
-                "indent_style" => style = Some(valor.to_lowercase()),
-                "indent_size" => size = valor.parse::<usize>().ok(),
+        if matched {
+            match key.as_str() {
+                "indent_style" => style = Some(value.to_lowercase()),
+                "indent_size" => size = value.parse::<usize>().ok(),
                 _ => {}
             }
         }
@@ -75,16 +75,16 @@ fn parse(src: &str, filename: &str) -> (Option<String>, Option<usize>, bool) {
 
 /// ¿El glob de una sección de `.editorconfig` casa con `filename`? Subconjunto: `*`, `*.ext`,
 /// `*.{a,b,c}` y nombre exacto.
-fn glob_casa(glob: &str, filename: &str) -> bool {
+fn glob_matches(glob: &str, filename: &str) -> bool {
     if glob == "*" {
         return true;
     }
-    if let Some(resto) = glob.strip_prefix("*.") {
+    if let Some(rest) = glob.strip_prefix("*.") {
         // `*.{ray,foo}` (lista) o `*.ray` (una extensión).
-        if let Some(lista) = resto.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-            return lista.split(',').any(|ext| filename.ends_with(&format!(".{}", ext.trim())));
+        if let Some(list) = rest.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+            return list.split(',').any(|ext| filename.ends_with(&format!(".{}", ext.trim())));
         }
-        return filename.ends_with(&format!(".{}", resto));
+        return filename.ends_with(&format!(".{}", rest));
     }
     glob == filename
 }
@@ -95,12 +95,12 @@ mod tests {
 
     #[test]
     fn glob_basico() {
-        assert!(glob_casa("*", "main.ray"));
-        assert!(glob_casa("*.ray", "main.ray"));
-        assert!(!glob_casa("*.rs", "main.ray"));
-        assert!(glob_casa("*.{ray,toml}", "ray.toml"));
-        assert!(glob_casa("main.ray", "main.ray"));
-        assert!(!glob_casa("otro.ray", "main.ray"));
+        assert!(glob_matches("*", "main.ray"));
+        assert!(glob_matches("*.ray", "main.ray"));
+        assert!(!glob_matches("*.rs", "main.ray"));
+        assert!(glob_matches("*.{ray,toml}", "ray.toml"));
+        assert!(glob_matches("main.ray", "main.ray"));
+        assert!(!glob_matches("otro.ray", "main.ray"));
     }
 
     #[test]

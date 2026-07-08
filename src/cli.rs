@@ -203,7 +203,7 @@ fn cmd_fetch(_args: &[String]) {
         return;
     }
     // `asegurar` resuelve el grafo COMPLETO (directas + transitivas) y devuelve cuántas descargó.
-    match crate::deps::asegurar(&m) {
+    match crate::deps::ensure(&m) {
         Ok(0) => println!("dependencias al día"),
         Ok(n) => println!("{n} dependencia(s) descargada(s) (incluidas transitivas)"),
         Err(e) => {
@@ -310,7 +310,7 @@ fn resolver_entrada(explicito: Option<&str>, banner: bool) -> String {
         // `.ray-deps/` antes de cargar el programa. Las presentes se saltan (sin red); si falta
         // alguna se clona de git. Un fallo de descarga aborta con 65 (no se puede compilar sin ella).
         if !m.dependencies.is_empty()
-            && let Err(e) = crate::deps::asegurar(m)
+            && let Err(e) = crate::deps::ensure(m)
         {
             eprintln!("error resolviendo dependencias: {e}");
             process::exit(65);
@@ -355,7 +355,7 @@ fn raices_de_dependencias() -> Vec<PathBuf> {
     // como cualquier dependencia. Se añade el **padre** de `<dir>` (el loader busca `<raíz>/<nombre>/…`).
     if let Ok(Some(m)) = Manifest::load(&cwd) {
         for (_name, spec) in &m.dependencies {
-            if let Some(p) = crate::deps::ruta_de_path_dep(spec) {
+            if let Some(p) = crate::deps::path_of_path_dep(spec) {
                 let dir = m.root.join(p);
                 if let Some(parent) = dir.parent().map(Path::to_path_buf)
                     && dir.exists()
@@ -420,7 +420,7 @@ fn ejecutar_tests(path: &str, filtro: Option<&str>) {
 /// Formateador (M29.2): imprime la versión canónica o aborta con el error.
 fn formatear(path: &str) {
     let unit = resolver_indent(std::path::Path::new(path));
-    match crate::fmt::format_source_con_indent(&leer_fuente(path), &unit) {
+    match crate::fmt::format_source_with_indent(&leer_fuente(path), &unit) {
         Ok(out) => print!("{}", out),
         Err(e) => {
             eprintln!("error de formato: {}", e);

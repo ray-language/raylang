@@ -89,14 +89,14 @@ fn sort<T: Ord>(a: [T]) -> [T] {
 // M14.6d: I/O de archivos. Envoltorios sobre los primitivos `__read_file`/`__write_file` (que devuelven
 // un arreglo etiquetado ["ok",…]/["err",msg]) traducidos a Result — el runtime no sabe de Result, como
 // en Rust (`src/prelude.rs`). `exists` es un builtin directo (-> bool), no necesita envoltorio.
-fn read_file(ruta: string) -> Result<string, string> {
-    let r = __read_file(ruta);
+fn read_file(path: string) -> Result<string, string> {
+    let r = __read_file(path);
     if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
 }
 
-fn write_file(ruta: string, contenido: string) -> Result<int, string> {
-    let r = __write_file(ruta, contenido);
-    if (r[0] == "ok") { Result.Ok(contenido.len()) } else { Result.Err(r[1]) }
+fn write_file(path: string, content: string) -> Result<int, string> {
+    let r = __write_file(path, content);
+    if (r[0] == "ok") { Result.Ok(content.len()) } else { Result.Err(r[1]) }
 }
 
 // M14.7c: quita y devuelve el último elemento (None si vacío); muta `a`. Envoltorio sobre `__pop`.

@@ -207,7 +207,7 @@ fn build_surfaces(modules: [Module]) -> Map<string, Surface> {
 
 // Clasifica los `from M import a [as b]` de un módulo en dos mapas local → global: **funciones** `pub`
 // y **tipos** `pub` (M14.7b). El orden prioriza funciones (un módulo no debería tener ambos homónimos).
-fn clasificar_from(m: Module, surfaces: Map<string, Surface>) -> Result<FromMaps, LoadError> {
+fn classify_from(m: Module, surfaces: Map<string, Surface>) -> Result<FromMaps, LoadError> {
     var values: Map<string, string> = Map.new();
     var types: Map<string, string> = Map.new();
     var i = 0;
@@ -910,7 +910,7 @@ pub fn load(entry_path: string) -> Result<Program, LoadError> {
     var mi = 0;
     while (mi < modules.len()) {
         let m = modules[mi];
-        let fm = clasificar_from(m, surfaces)?;
+        let fm = classify_from(m, surfaces)?;
         // Resolución de VALORES (funciones propias + from-importadas).
         let r = Resolver { own: build_own(m, fm.values), scopes: [] };
         resolve_program(r, m.prog);

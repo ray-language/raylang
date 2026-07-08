@@ -577,11 +577,11 @@ fn annotations(p: Parser) -> Result<[Annotation], ParseError> {
         var args: [string] = [];
         if (eat(p, "(")) {
             if (!check(p, ")")) {
-                var seguir = true;
-                while (seguir) {
+                var keep_going = true;
+                while (keep_going) {
                     args.push(expect_ident(p, "un argumento de la anotación")?);
                     if (!eat(p, ",")) {
-                        seguir = false;
+                        keep_going = false;
                     }
                 }
             }
@@ -620,8 +620,8 @@ fn import_from_decl(p: Parser, is_pub: bool) -> Result<FromImport, ParseError> {
     let modpath = module_path(p)?;
     expect(p, "import", "'import' tras 'from M'")?;
     var names: [ImportName] = [];
-    var seguir = true;
-    while (seguir) {
+    var keep_going = true;
+    while (keep_going) {
         let t = cur_tok(p);
         let nm = expect_ident(p, "un nombre a importar")?;
         var alias: Option<string> = Option.None;
@@ -630,7 +630,7 @@ fn import_from_decl(p: Parser, is_pub: bool) -> Result<FromImport, ParseError> {
         }
         names.push(ImportName { name: nm, alias: alias, line: t.line, col: t.col });
         if (!eat(p, ",")) {
-            seguir = false;
+            keep_going = false;
         }
     }
     expect(p, ";", "';' para cerrar el 'from M import …'")?;
@@ -672,11 +672,11 @@ fn enum_def(p: Parser) -> Result<EnumDef, ParseError> {
         let vname = expect_ident(p, "el nombre de una variante")?;
         var payload: [Type] = [];
         if (eat(p, "(")) {
-            var seguir = true;
-            while (seguir) {
+            var keep_going = true;
+            while (keep_going) {
                 payload.push(parse_type(p)?);
                 if (!eat(p, ",")) {
-                    seguir = false;
+                    keep_going = false;
                 }
             }
             expect(p, ")", "')' para cerrar el payload de la variante")?;
@@ -769,16 +769,16 @@ fn method_params(p: Parser) -> Result<[Param], ParseError> {
         return Result.Ok(params);
     }
     // ¿El primer parámetro es 'self'? (un IDENT con ese nombre, sin anotación).
-    var es_self = false;
+    var is_self = false;
     match (cur_kind(p)) {
         TokKind.Ident(n) => {
             if (n == "self") {
-                es_self = true;
+                is_self = true;
             }
         },
         _ => { },
     }
-    if (es_self) {
+    if (is_self) {
         let t = cur_tok(p);
         advance(p);
         params.push(Param { name: "self", ty: Type.TNamed("Self", []), line: t.line, col: t.col });
@@ -786,15 +786,15 @@ fn method_params(p: Parser) -> Result<[Param], ParseError> {
             return Result.Ok(params);
         }
     }
-    var seguir = true;
-    while (seguir) {
+    var keep_going = true;
+    while (keep_going) {
         let t = cur_tok(p);
         let name = expect_ident(p, "el nombre de un parámetro")?;
         expect(p, ":", "':' tras el nombre del parámetro")?;
         let ty = parse_type(p)?;
         params.push(Param { name: name, ty: ty, line: t.line, col: t.col });
         if (!eat(p, ",")) {
-            seguir = false;
+            keep_going = false;
         }
     }
     Result.Ok(params)
@@ -822,15 +822,15 @@ fn function(p: Parser) -> Result<Func, ParseError> {
 // params = param { ',' param } ;  param = IDENT ':' type
 fn parse_params(p: Parser) -> Result<[Param], ParseError> {
     var params: [Param] = [];
-    var seguir = true;
-    while (seguir) {
+    var keep_going = true;
+    while (keep_going) {
         let t = cur_tok(p);
         let name = expect_ident(p, "el nombre de un parámetro")?;
         expect(p, ":", "':' tras el nombre del parámetro")?;
         let ty = parse_type(p)?;
         params.push(Param { name: name, ty: ty, line: t.line, col: t.col });
         if (!eat(p, ",")) {
-            seguir = false;
+            keep_going = false;
         }
     }
     Result.Ok(params)
@@ -842,11 +842,11 @@ fn parse_type(p: Parser) -> Result<Type, ParseError> {
     // Trait object: dyn A [+ B ...]. El conjunto se guarda canónico (ordenado, sin duplicados).
     if (eat(p, "dyn")) {
         var traits: [string] = [];
-        var seguir = true;
-        while (seguir) {
+        var keep_going = true;
+        while (keep_going) {
             traits.push(expect_ident(p, "el nombre del trait tras 'dyn'")?);
             if (!eat(p, "+")) {
-                seguir = false;
+                keep_going = false;
             }
         }
         return Result.Ok(Type.TDyn(sort_dedup(traits)));
@@ -862,11 +862,11 @@ fn parse_type(p: Parser) -> Result<Type, ParseError> {
         expect(p, "(", "'(' tras 'fn' en un tipo función")?;
         var ps: [Type] = [];
         if (!check(p, ")")) {
-            var seguir = true;
-            while (seguir) {
+            var keep_going = true;
+            while (keep_going) {
                 ps.push(parse_type(p)?);
                 if (!eat(p, ",")) {
-                    seguir = false;
+                    keep_going = false;
                 }
             }
         }
@@ -898,11 +898,11 @@ fn parse_type(p: Parser) -> Result<Type, ParseError> {
 fn type_args(p: Parser) -> Result<[Type], ParseError> {
     var args: [Type] = [];
     if (eat(p, "<")) {
-        var seguir = true;
-        while (seguir) {
+        var keep_going = true;
+        while (keep_going) {
             args.push(parse_type(p)?);
             if (!eat(p, ",")) {
-                seguir = false;
+                keep_going = false;
             }
         }
         expect(p, ">", "'>' para cerrar los argumentos de tipo")?;
@@ -915,8 +915,8 @@ fn type_params_with_bounds(p: Parser) -> Result<Generics, ParseError> {
     var params: [string] = [];
     var bounds: [Bound] = [];
     if (eat(p, "<")) {
-        var seguir = true;
-        while (seguir) {
+        var keep_going = true;
+        while (keep_going) {
             let name = expect_ident(p, "el nombre de un parámetro de tipo")?;
             if (eat(p, ":")) {
                 var more = true;
@@ -930,7 +930,7 @@ fn type_params_with_bounds(p: Parser) -> Result<Generics, ParseError> {
             }
             params.push(name);
             if (!eat(p, ",")) {
-                seguir = false;
+                keep_going = false;
             }
         }
         expect(p, ">", "'>' para cerrar los parámetros de tipo")?;
@@ -940,12 +940,12 @@ fn type_params_with_bounds(p: Parser) -> Result<Generics, ParseError> {
 
 // Ordena un arreglo de strings y elimina duplicados adyacentes (para el conjunto canónico de `dyn`).
 fn sort_dedup(xs: [string]) -> [string] {
-    let ordenado = sort(xs);
+    let sorted = sort(xs);
     var out: [string] = [];
     var i = 0;
-    while (i < ordenado.len()) {
-        if (i == 0 || ordenado[i] != ordenado[i - 1]) {
-            out.push(ordenado[i]);
+    while (i < sorted.len()) {
+        if (i == 0 || sorted[i] != sorted[i - 1]) {
+            out.push(sorted[i]);
         }
         i = i + 1;
     }
@@ -1061,8 +1061,8 @@ fn logic_and(p: Parser) -> Result<Expr, ParseError> {
 // equality = comparison { ('==' | '!=') comparison }
 fn equality(p: Parser) -> Result<Expr, ParseError> {
     var left = comparison(p)?;
-    var seguir = true;
-    while (seguir) {
+    var keep_going = true;
+    while (keep_going) {
         if (check(p, "==")) {
             advance(p);
             let r = comparison(p)?;
@@ -1072,7 +1072,7 @@ fn equality(p: Parser) -> Result<Expr, ParseError> {
             let r = comparison(p)?;
             left = make_binary(BinOp.Ne, left, r);
         } else {
-            seguir = false;
+            keep_going = false;
         }
     }
     Result.Ok(left)
@@ -1081,8 +1081,8 @@ fn equality(p: Parser) -> Result<Expr, ParseError> {
 // comparison = term { ('<' | '<=' | '>' | '>=') term }
 fn comparison(p: Parser) -> Result<Expr, ParseError> {
     var left = term(p)?;
-    var seguir = true;
-    while (seguir) {
+    var keep_going = true;
+    while (keep_going) {
         if (check(p, "<")) {
             advance(p);
             let r = term(p)?;
@@ -1100,7 +1100,7 @@ fn comparison(p: Parser) -> Result<Expr, ParseError> {
             let r = term(p)?;
             left = make_binary(BinOp.Ge, left, r);
         } else {
-            seguir = false;
+            keep_going = false;
         }
     }
     Result.Ok(left)
@@ -1109,8 +1109,8 @@ fn comparison(p: Parser) -> Result<Expr, ParseError> {
 // term = factor { ('+' | '-') factor }
 fn term(p: Parser) -> Result<Expr, ParseError> {
     var left = factor(p)?;
-    var seguir = true;
-    while (seguir) {
+    var keep_going = true;
+    while (keep_going) {
         if (check(p, "+")) {
             advance(p);
             let r = factor(p)?;
@@ -1120,7 +1120,7 @@ fn term(p: Parser) -> Result<Expr, ParseError> {
             let r = factor(p)?;
             left = make_binary(BinOp.Sub, left, r);
         } else {
-            seguir = false;
+            keep_going = false;
         }
     }
     Result.Ok(left)
@@ -1129,8 +1129,8 @@ fn term(p: Parser) -> Result<Expr, ParseError> {
 // factor = unary { ('*' | '/' | '%') unary }
 fn factor(p: Parser) -> Result<Expr, ParseError> {
     var left = unary(p)?;
-    var seguir = true;
-    while (seguir) {
+    var keep_going = true;
+    while (keep_going) {
         if (check(p, "*")) {
             advance(p);
             let r = unary(p)?;
@@ -1144,7 +1144,7 @@ fn factor(p: Parser) -> Result<Expr, ParseError> {
             let r = unary(p)?;
             left = make_binary(BinOp.Rem, left, r);
         } else {
-            seguir = false;
+            keep_going = false;
         }
     }
     Result.Ok(left)
@@ -1169,8 +1169,8 @@ fn unary(p: Parser) -> Result<Expr, ParseError> {
 // call = primary { '(' [ args ] ')' | '[' expression ']' | '.' IDENT | '?' }
 fn call(p: Parser) -> Result<Expr, ParseError> {
     var expr = primary(p)?;
-    var seguir = true;
-    while (seguir) {
+    var keep_going = true;
+    while (keep_going) {
         let line = expr.line;
         let col = expr.col;
         if (check(p, "(")) {
@@ -1210,7 +1210,7 @@ fn call(p: Parser) -> Result<Expr, ParseError> {
             advance(p);  // '?' postfijo (propagación de errores)
             expr = Expr { kind: EKind.ETry(expr), line: line, col: col };
         } else {
-            seguir = false;
+            keep_going = false;
         }
     }
     Result.Ok(expr)
@@ -1219,11 +1219,11 @@ fn call(p: Parser) -> Result<Expr, ParseError> {
 // args = expression { ',' expression }
 fn parse_args(p: Parser) -> Result<[Expr], ParseError> {
     var a: [Expr] = [];
-    var seguir = true;
-    while (seguir) {
+    var keep_going = true;
+    while (keep_going) {
         a.push(expression(p)?);
         if (!eat(p, ",")) {
-            seguir = false;
+            keep_going = false;
         }
     }
     Result.Ok(a)
@@ -1328,13 +1328,13 @@ fn array_literal(p: Parser) -> Result<Expr, ParseError> {
     let open = expect(p, "[", "'['")?;
     var elems: [Expr] = [];
     if (!check(p, "]")) {
-        var seguir = true;
-        while (seguir) {
+        var keep_going = true;
+        while (keep_going) {
             elems.push(expression(p)?);
             if (!eat(p, ",")) {
-                seguir = false;
+                keep_going = false;
             } else if (check(p, "]")) {
-                seguir = false;  // coma final permitida
+                keep_going = false;  // coma final permitida
             }
         }
     }
@@ -1413,8 +1413,8 @@ fn pattern(p: Parser) -> Result<Pattern, ParseError> {
         }
         var bindings: [Option<string>] = [];
         if (eat(p, "(")) {
-            var seguir = true;
-            while (seguir) {
+            var keep_going = true;
+            while (keep_going) {
                 let b = expect_ident(p, "un sub-patrón (nombre o '_')")?;
                 // El tipo declarado de `bv` fija el `Option.None` (no inferible suelto).
                 var bv: Option<string> = Option.None;
@@ -1423,7 +1423,7 @@ fn pattern(p: Parser) -> Result<Pattern, ParseError> {
                 }
                 bindings.push(bv);
                 if (!eat(p, ",")) {
-                    seguir = false;
+                    keep_going = false;
                 }
             }
             expect(p, ")", "')' para cerrar el patrón de variante")?;

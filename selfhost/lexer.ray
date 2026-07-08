@@ -150,10 +150,10 @@ fn lex_error(lx: Lexer, msg: string) -> LexError {
 
 // --- Saltar lo que no produce tokens ---
 fn skip_ws_comments(lx: Lexer) {
-    var seguir = true;
-    while (seguir) {
+    var keep_going = true;
+    while (keep_going) {
         if (at_end(lx)) {
-            seguir = false;
+            keep_going = false;
         } else {
             let c = cur(lx);
             if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
@@ -164,7 +164,7 @@ fn skip_ws_comments(lx: Lexer) {
                     advance(lx);
                 }
             } else {
-                seguir = false;
+                keep_going = false;
             }
         }
     }
@@ -189,15 +189,15 @@ fn number(lx: Lexer) -> Result<TokKind, LexError> {
     while (!at_end(lx) && is_digit(cur(lx))) {
         advance(lx);
     }
-    let es_float = !at_end(lx) && cur(lx) == '.' && lx.pos + 1 < lx.chars.len() && is_digit(lx.chars[lx.pos + 1]);
-    if (es_float) {
+    let is_float = !at_end(lx) && cur(lx) == '.' && lx.pos + 1 < lx.chars.len() && is_digit(lx.chars[lx.pos + 1]);
+    if (is_float) {
         advance(lx);  // el '.'
         while (!at_end(lx) && is_digit(cur(lx))) {
             advance(lx);
         }
     }
     let text = substr(lx, start, lx.pos);
-    if (es_float) {
+    if (is_float) {
         match (parse_float(text)) {
             Option.Some(f) => Result.Ok(TokKind.Float(f)),
             Option.None => Result.Err(lex_error(lx, "flotante inválido '" + text + "'")),
@@ -333,15 +333,15 @@ fn next_token(lx: Lexer) -> Result<TokKind, LexError> {
 pub fn lex(src: string) -> Result<[Token], LexError> {
     let lx = Lexer { chars: src.chars(), pos: 0, line: 1, col: 1, start_line: 1, start_col: 1 };
     var tokens: [Token] = [];
-    var seguir = true;
-    while (seguir) {
+    var keep_going = true;
+    while (keep_going) {
         skip_ws_comments(lx);
         // Congelar la posición de inicio del próximo token.
         lx.start_line = lx.line;
         lx.start_col = lx.col;
         if (at_end(lx)) {
             tokens.push(Token { kind: TokKind.Eof, line: lx.start_line, col: lx.start_col });
-            seguir = false;
+            keep_going = false;
         } else {
             // `?` propaga el LexError del primer token mal formado (errores como valores).
             let k = next_token(lx)?;

@@ -9,6 +9,7 @@
 from net/http2 import preface, settings_empty, settings_ack, encode_frame, parse_frame, frame_size, ft_settings, ft_headers, ft_data, ft_goaway, fl_ack, fl_end_stream, fl_end_headers, Http2Frame;
 from net/hpack import new_hpack, encode, decode, header, HEntry;
 from std/protobuf import grpc_frame, grpc_unframe;
+import std/net;
 
 // La respuesta de una llamada gRPC: el mensaje (bytes protobuf) y el `grpc-status` (0 = OK).
 /// The response of a unary gRPC call: the serialized protobuf response message
@@ -37,7 +38,7 @@ fn find_header(hs: [HEntry], name: string) -> string {
 /// gRPC-framed `mensaje` to `path` ("/package.Service/Method") and reads until END_STREAM.
 /// Err on connect/I-O/HPACK errors, GOAWAY, a non-200 `:status`, or a malformed gRPC frame.
 pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Result<GrpcResponse, string> {
-    let h = match (tls_connect_h2(host, port)) {
+    let h = match (net.tls_connect_h2(host, port)) {
         Result.Ok(x) => x,
         Result.Err(e) => {
             return Result.Err(e);
@@ -50,7 +51,7 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
     let block = encode(enc, reqhdrs);
     let hframe = encode_frame(ft_headers(), fl_end_headers(), 1, block);
     let dframe = encode_frame(ft_data(), fl_end_stream(), 1, grpc_frame(mensaje));
-    match (socket_write_bytes(h, preface() + settings_empty() + hframe + dframe)) {
+    match (net.socket_write_bytes(h, preface() + settings_empty() + hframe + dframe)) {
         Result.Ok(n) => { },
         Result.Err(e) => {
             close(h);
@@ -67,7 +68,7 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
     var tuvo_grpc_status = false;
     var done = false;
     while (!done) {
-        match (socket_read_bytes(h)) {
+        match (net.socket_read_bytes(h)) {
             Result.Ok(chunk) => {
                 if (chunk.len() == 0) {
                     done = true;
@@ -87,7 +88,7 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                 Result.Ok(fr) => {
                     if (fr.ftype == ft_settings()) {
                         if ((fr.flags & fl_ack()) == 0) {
-                            match (socket_write_bytes(h, settings_ack())) {
+                            match (net.socket_write_bytes(h, settings_ack())) {
                                 Result.Ok(x) => { },
                                 Result.Err(e) => {
                                     close(h);

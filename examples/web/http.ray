@@ -9,6 +9,7 @@
 // para parsearlas. Para leer el cuerpo como texto, usa `body_text(r)`.
 // M20.10b: descompresión transparente de `Content-Encoding: gzip` (la librería INFLATE en raylang).
 from inflate import gunzip;
+import std/net;
 
 pub struct Response {
     status: int,
@@ -106,7 +107,7 @@ fn leer_todo(h: int) -> Result<bytes, string> {
     var seguir: bool = true;
     var err: string = "";
     while (seguir) {
-        match (socket_read_bytes(h)) {
+        match (net.socket_read_bytes(h)) {
             Result.Ok(trozo) => {
                 if (trozo.len() == 0) {
                     seguir = false;
@@ -308,9 +309,9 @@ pub fn body_text(r: Response) -> Result<string, string> {
 // Abre la conexión adecuada al esquema: TLS para https, TCP en claro para http (M19.4a).
 fn conectar(u: Url) -> Result<int, string> {
     if (u.tls) {
-        tls_connect(u.host, u.port)
+        net.tls_connect(u.host, u.port)
     } else {
-        tcp_connect(u.host, u.port)
+        net.tcp_connect(u.host, u.port)
     }
 }
 
@@ -327,7 +328,7 @@ pub fn request_with(method: string, url: string, body: string, headers: Map<stri
             match (conectar(u)) {
                 Result.Err(e) => Result.Err("no se pudo conectar: " + e),
                 Result.Ok(h) => {
-                    match (socket_write_bytes(h, build_request_h(method, u, body, headers).to_bytes())) {
+                    match (net.socket_write_bytes(h, build_request_h(method, u, body, headers).to_bytes())) {
                         Result.Err(e) => {
                             close(h);
                             Result.Err("error al enviar: " + e)

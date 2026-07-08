@@ -8,6 +8,8 @@
 // M19.2: el cuerpo (de la petición y de la respuesta) es **bytes** → binario correcto (imágenes, etc.),
 // no solo texto. Las cabeceras siguen siendo texto (ASCII). Los atajos de respuesta de texto (ok/text/
 // json_response) aceptan string y lo codifican; bytes_response acepta bytes crudos. TLS (https) es M19.4.
+import std/net;
+
 pub struct Request {
     method: string,
     path: string,
@@ -84,7 +86,7 @@ pub fn read_request(conn: int) -> Result<Request, string> {
             sep = s;
             seguir = false;
         } else {
-            match (socket_read_bytes(conn)) {
+            match (net.socket_read_bytes(conn)) {
                 Result.Ok(trozo) => {
                     if (trozo.len() == 0) {
                         seguir = false;
@@ -138,7 +140,7 @@ pub fn read_request(conn: int) -> Result<Request, string> {
                         Option.Some(n) => {
                             var faltan: bool = true;
                             while (faltan && body.len() < n) {
-                                match (socket_read_bytes(conn)) {
+                                match (net.socket_read_bytes(conn)) {
                                     Result.Ok(trozo) => {
                                         if (trozo.len() == 0) {
                                             faltan = false;
@@ -183,7 +185,7 @@ pub fn send_response(conn: int, r: Response) -> Result<int, string> {
         i = i + 1;
     }
     head = head + "\r\n";
-    socket_write_bytes(conn, head.to_bytes() + r.body)
+    net.socket_write_bytes(conn, head.to_bytes() + r.body)
 }
 
 // --- SSE (server-sent events): HTTP que no cierra y va emitiendo eventos ---
@@ -193,12 +195,12 @@ pub fn sse_open(conn: int) -> Result<int, string> {
     out = out + "Content-Type: text/event-stream\r\n";
     out = out + "Cache-Control: no-cache\r\n";
     out = out + "Connection: keep-alive\r\n\r\n";
-    socket_write(conn, out)
+    net.socket_write(conn, out)
 }
 
 // Emite un evento SSE: "data: <texto>\n\n".
 pub fn sse_event(conn: int, data: string) -> Result<int, string> {
-    socket_write(conn, "data: " + data + "\n\n")
+    net.socket_write(conn, "data: " + data + "\n\n")
 }
 
 // --- El bucle del servidor (concurrente: una fibra por conexión) ---
@@ -219,13 +221,13 @@ fn atender(conn: int, handler: fn(Request, int)) {
 // Servidor de bajo nivel: el handler recibe la petición Y la conexión (para responder o hacer streaming
 // SSE). Bucle infinito; cada conexión en su fibra. **Solo VM.**
 pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<int, string> {
-    match (tcp_listen(host, port)) {
+    match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
-            print("escuchando en el puerto " + to_string(local_port(srv)));
+            print("escuchando en el puerto " + to_string(net.local_port(srv)));
             var seguir: bool = true;
             while (seguir) {
-                match (tcp_accept(srv)) {
+                match (net.tcp_accept(srv)) {
                     Result.Ok(conn) => {
                         spawn(fn() { atender(conn, handler) });
                     },

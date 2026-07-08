@@ -12,10 +12,11 @@ use std::time::Duration;
 // Servidor de eco concurrente que atiende EXACTAMENTE 2 conexiones (vía `scope`) y termina. Cada
 // conexión se atiende en su propia fibra (`spawn`); accept/read ceden al scheduler.
 const SERVIDOR: &str = r#"
+import std/net;
 fn atender(conn: int) {
-    match (socket_read(conn)) {
+    match (net.socket_read(conn)) {
         Result.Ok(msg) => {
-            match (socket_write(conn, "eco:" + msg)) {
+            match (net.socket_write(conn, "eco:" + msg)) {
                 Result.Ok(_) => {},
                 Result.Err(e) => eprint("write: " + e),
             }
@@ -26,13 +27,13 @@ fn atender(conn: int) {
 }
 
 fn main() -> int {
-    match (tcp_listen("127.0.0.1", 0)) {
+    match (net.tcp_listen("127.0.0.1", 0)) {
         Result.Ok(srv) => {
-            print(local_port(srv));
+            print(net.local_port(srv));
             scope(fn() {
                 var i: int = 0;
                 while (i < 2) {
-                    match (tcp_accept(srv)) {
+                    match (net.tcp_accept(srv)) {
                         Result.Ok(conn) => { spawn(fn() { atender(conn) }); },
                         Result.Err(e) => { eprint("accept: " + e); i = 2; },
                     }

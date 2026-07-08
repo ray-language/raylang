@@ -5,6 +5,7 @@
 // El protocolo: mensajes `[tipo:1][longitud:4][carga]` (la longitud incluye sus 4 octetos, no el tipo);
 // el StartupMessage no lleva octeto de tipo. Importable: `from postgres import pg_query;`.
 from scram import scram_first, scram_client_first_message, scram_final, scram_verify, Scram;
+import std/net;
 
 // Una conexión con su buffer de lectura (los mensajes pueden partirse entre lecturas del socket).
 struct PgConn {
@@ -61,7 +62,7 @@ fn pg_send(c: PgConn, mtype: int, payload: [int]) -> Result<int, string> {
         m.push(payload[i]);
         i = i + 1;
     }
-    socket_write_bytes(c.handle, bytes_of(m))
+    net.socket_write_bytes(c.handle, bytes_of(m))
 }
 
 // Lee un mensaje COMPLETO del servidor (acumulando en el buffer lo que haga falta).
@@ -79,7 +80,7 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
             }
         }
         if (!listo) {
-            match (socket_read_bytes(c.handle)) {
+            match (net.socket_read_bytes(c.handle)) {
                 Result.Ok(chunk) => {
                     if (chunk.len() == 0) {
                         return Result.Err("conexión cerrada por el servidor");
@@ -126,7 +127,7 @@ fn parse_datarow(payload: bytes) -> [string] {
 // Ejecuta `sql` como consulta simple tras autenticar con SCRAM-SHA-256, y devuelve la PRIMERA fila
 // como lista de columnas (strings). `nonce` es el nonce del cliente (aleatorio en producción).
 pub fn pg_query(host: string, port: int, user: string, db: string, password: string, nonce: string, sql: string) -> Result<[string], string> {
-    let handle = match (tcp_connect(host, port)) {
+    let handle = match (net.tcp_connect(host, port)) {
         Result.Ok(h) => h,
         Result.Err(e) => {
             return Result.Err(e);
@@ -161,7 +162,7 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
         startup.push(body[i]);
         i = i + 1;
     }
-    match (socket_write_bytes(c.handle, bytes_of(startup))) {
+    match (net.socket_write_bytes(c.handle, bytes_of(startup))) {
         Result.Ok(n) => { },
         Result.Err(e) => {
             close(handle);

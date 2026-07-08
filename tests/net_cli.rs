@@ -42,12 +42,13 @@ fn toy_echo_server() -> u16 {
 }
 
 const CLIENTE: &str = r#"
+import std/net;
 fn main() -> int {
-    match (tcp_connect("127.0.0.1", __PORT__)) {
+    match (net.tcp_connect("127.0.0.1", __PORT__)) {
         Result.Ok(h) => {
-            match (socket_write(h, "ping")) {
+            match (net.socket_write(h, "ping")) {
                 Result.Ok(_) => {
-                    match (socket_read(h)) {
+                    match (net.socket_read(h)) {
                         Result.Ok(s) => print(s),
                         Result.Err(e) => print("read err: " + e),
                     }
@@ -78,15 +79,16 @@ fn cliente_tcp_intercambia_con_un_servidor() {
 /// lee y responde con eco. El test lee el puerto de su stdout EN VIVO (el servidor bloquea en accept,
 /// así que no se puede usar `.output()` que espera a que termine) y se conecta como cliente.
 const SERVIDOR: &str = r#"
+import std/net;
 fn main() -> int {
-    match (tcp_listen("127.0.0.1", 0)) {
+    match (net.tcp_listen("127.0.0.1", 0)) {
         Result.Ok(srv) => {
-            print(local_port(srv));            // primera línea: el puerto efímero asignado
-            match (tcp_accept(srv)) {
+            print(net.local_port(srv));            // primera línea: el puerto efímero asignado
+            match (net.tcp_accept(srv)) {
                 Result.Ok(conn) => {
-                    match (socket_read(conn)) {
+                    match (net.socket_read(conn)) {
                         Result.Ok(msg) => {
-                            match (socket_write(conn, "echo:" + msg)) {
+                            match (net.socket_write(conn, "echo:" + msg)) {
                                 Result.Ok(_) => 0,
                                 Result.Err(e) => { eprint("write: " + e); 1 },
                             }

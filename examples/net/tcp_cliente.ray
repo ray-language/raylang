@@ -6,11 +6,13 @@
 //
 // Necesita red al ejecutarlo (no es determinista → no entra al oráculo ni a los tests).
 // Lee del socket hasta que el servidor cierra (acumulando los trozos).
+import std/net;
+
 fn leer_todo(h: int) -> string {
     var acc: string = "";
     var seguir: bool = true;
     while (seguir) {
-        match (socket_read(h)) {
+        match (net.socket_read(h)) {
             Result.Ok(trozo) => {
                 if (trozo.len() == 0) {
                     seguir = false;  // EOF: el servidor cerró
@@ -28,11 +30,11 @@ fn leer_todo(h: int) -> string {
 }
 
 fn main() -> int {
-    match (tcp_connect("example.com", 80)) {
+    match (net.tcp_connect("example.com", 80)) {
         Result.Ok(h) => {
             // Petición HTTP/1.1 mínima (Connection: close → el servidor cierra al terminar).
             let req: string = "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
-            match (socket_write(h, req)) {
+            match (net.socket_write(h, req)) {
                 Result.Ok(_) => {
                     let resp: string = leer_todo(h);
                     // Imprime solo la primera línea (la línea de estado), p. ej. "HTTP/1.1 200 OK".

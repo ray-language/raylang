@@ -36,6 +36,10 @@ con `ray doc std/math.ray` (que lee el archivo directamente).
   `capitalize`, `reverse`, `count`, `words`.
 - **`std/sort`** — orden y búsqueda sobre arreglos genéricos (`T: Ord`), alrededor del `sort` del prelude:
   `is_sorted`, `sort_desc`, `min`, `max`, `binary_search`, `dedup`, `merge`.
+- **`std/net`** (M50.3) — transporte de red: `net.tcp_connect`/`tcp_listen`/`tcp_accept`,
+  `net.tls_connect`/`tls_connect_h2`/`tls_accept`, `net.socket_read`/`socket_write`/`socket_read_bytes`/
+  `socket_write_bytes`, `net.local_port`. Los sockets se cierran con `close` (global). UDP vive aparte en
+  el módulo `net/udp` del paquete `net`.
 - **`std/collections/{set,deque,stringbuilder}`** (M50.2) — estructuras de datos puras en raylang, en
   submódulos (leaf-binding): `import std/collections/set;` → `set.new`/`add`/`has`/`remove`/`size`/`items`
   (hash set sobre `Hash`+`Eq`); `import std/collections/deque;` → `deque.new`/`push_back`/`push_front`/

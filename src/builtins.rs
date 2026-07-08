@@ -340,7 +340,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`). For a file handle: closes the file.",
         // --- I/O ---
         "__exists" => "Whether a file or directory exists at the given path.",
-        "local_port" => "Returns the local port a listener socket is bound to (useful with port 0 = OS-assigned).",
+        "__local_port" => "Returns the local port a listener socket is bound to (useful with port 0 = OS-assigned).",
         _ => return None,
     })
 }
@@ -1823,9 +1823,10 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__tcp_accept espera un int (el handle de escucha), no {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
-    // local_port(h) -> int (M15.3): el puerto local del socket (0 si no aplica). Total.
-    Builtin { name: "local_port", opcode: OpCode::LocalPort, check: |a| {
-        arity(a, 1, "local_port", "")?;
+    // __local_port(h) -> int (M15.3; M50.3: __x): el puerto local del socket (0 si no aplica). Total.
+    // Envoltorio net.local_port en std/net.
+    Builtin { name: "__local_port", opcode: OpCode::LocalPort, check: |a| {
+        arity(a, 1, "__local_port", "")?;
         if a[0] != Type::Int { return Err((Some(0), format!("local_port espera un int (el handle), no {}", a[0]))); }
         Ok(Type::Int)
     } },

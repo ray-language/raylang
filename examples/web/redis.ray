@@ -11,6 +11,8 @@
 // Como los sockets ceden la fibra, el camino concurrente es **solo VM**; en el intérprete corren
 // bloqueantes (un hilo), así que el cliente funciona en ambos motores contra un servidor real.
 // Una respuesta de Redis (RESP2).
+import std/net;
+
 pub enum Reply {
     Str(string),  // simple string (+) o bulk string ($)
     Int(int),  // entero (:)
@@ -27,7 +29,7 @@ pub struct Conn {
 }
 
 pub fn connect(host: string, port: int) -> Result<Conn, string> {
-    match (tcp_connect(host, port)) {
+    match (net.tcp_connect(host, port)) {
         Result.Ok(h) => Result.Ok(Conn { h: h, buf: "" }),
         Result.Err(e) => Result.Err(e),
     }
@@ -51,7 +53,7 @@ pub fn encode_command(args: [string]) -> string {
 
 // Lee un trozo más del socket al buffer; false si la conexión se cerró (EOF) o falló.
 fn pull(c: Conn) -> bool {
-    match (socket_read(c.h)) {
+    match (net.socket_read(c.h)) {
         Result.Ok(chunk) => {
             if (chunk.len() == 0) {
                 false
@@ -180,7 +182,7 @@ fn read_array(c: Conn, n: int) -> Result<Reply, string> {
 
 // Envía un comando y lee su respuesta.
 pub fn command(c: Conn, args: [string]) -> Result<Reply, string> {
-    match (socket_write(c.h, encode_command(args))) {
+    match (net.socket_write(c.h, encode_command(args))) {
         Result.Err(e) => Result.Err("error al enviar: " + e),
         Result.Ok(_) => read_reply(c),
     }

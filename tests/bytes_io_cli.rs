@@ -69,12 +69,13 @@ fn toy_bin_server() -> u16 {
 #[test]
 fn socket_binario_lee_octetos_crudos() {
     const CLIENTE: &str = r#"
+import std/net;
 fn main() -> int {
-    match (tcp_connect("127.0.0.1", __PORT__)) {
+    match (net.tcp_connect("127.0.0.1", __PORT__)) {
         Result.Ok(h) => {
-            match (socket_write_bytes(h, b"req")) {
+            match (net.socket_write_bytes(h, b"req")) {
                 Result.Ok(_) => {
-                    match (socket_read_bytes(h)) {
+                    match (net.socket_read_bytes(h)) {
                         Result.Ok(b) => {
                             print(to_string(b.len()));
                             print(to_string(b[0]));

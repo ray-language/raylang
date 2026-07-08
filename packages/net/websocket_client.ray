@@ -9,6 +9,7 @@
 from std/base64 import base64;
 import std/random;
 from net/websocket import accept_key, decode_frame, Frame, op_text, op_close;
+import std/net;
 
 // --- Handshake del cliente ---
 // Genera una `Sec-WebSocket-Key`: 16 octetos aleatorios en base64 (RFC 6455 §4.1).
@@ -65,7 +66,7 @@ fn read_handshake(h: int) -> Result<string, string> {
             },
             Result.Err(_) => { },  // bytes UTF-8 a medias → seguir leyendo
         }
-        match (socket_read_bytes(h)) {
+        match (net.socket_read_bytes(h)) {
             Result.Ok(trozo) => {
                 if (trozo.len() == 0) {
                     seguir = false;
@@ -87,7 +88,7 @@ fn read_handshake(h: int) -> Result<string, string> {
 fn do_handshake(h: int, host: string, port: int, path: string) -> Result<int, string> {
     let key = make_key();
     let req = upgrade_request(host + ":" + to_string(port), path, key);
-    match (socket_write_bytes(h, req.to_bytes())) {
+    match (net.socket_write_bytes(h, req.to_bytes())) {
         Result.Err(e) => {
             close(h);
             Result.Err("upgrade: " + e)
@@ -116,7 +117,7 @@ fn do_handshake(h: int, host: string, port: int, path: string) -> Result<int, st
 /// RFC 6455 client handshake on `path`. Blocking network I/O.
 /// Returns `Ok(handle)` on success; `Err(reason)` if the TCP connect or handshake fails.
 pub fn connect(host: string, port: int, path: string) -> Result<int, string> {
-    match (tcp_connect(host, port)) {
+    match (net.tcp_connect(host, port)) {
         Result.Err(e) => Result.Err("connect: " + e),
         Result.Ok(h) => do_handshake(h, host, port, path),
     }
@@ -128,7 +129,7 @@ pub fn connect(host: string, port: int, path: string) -> Result<int, string> {
 /// handshake on `path`; the returned handle routes all I/O through the encrypted session.
 /// Returns `Ok(handle)` on success; `Err(reason)` if the TLS connect or handshake fails.
 pub fn connect_tls(host: string, port: int, path: string) -> Result<int, string> {
-    match (tls_connect(host, port)) {
+    match (net.tls_connect(host, port)) {
         Result.Err(e) => Result.Err("tls connect: " + e),
         Result.Ok(h) => do_handshake(h, host, port, path),
     }
@@ -182,7 +183,7 @@ fn encode_masked(opcode: int, payload: bytes) -> bytes {
 /// Sends `message` as a masked client text frame (clients MUST mask, RFC 6455 §5.3).
 /// Returns the socket write result; `Err(reason)` on I/O failure.
 pub fn send_text(h: int, message: string) -> Result<int, string> {
-    socket_write_bytes(h, encode_masked(op_text(), message.to_bytes()))
+    net.socket_write_bytes(h, encode_masked(op_text(), message.to_bytes()))
 }
 
 // Recibe el siguiente mensaje de texto (decodifica una trama; asume una trama por lectura).
@@ -190,7 +191,7 @@ pub fn send_text(h: int, message: string) -> Result<int, string> {
 /// per socket read). Returns `Ok(text)`, or `Err(reason)` on read failure, a closed
 /// connection / incomplete frame, or a non-UTF-8 payload.
 pub fn recv_text(h: int) -> Result<string, string> {
-    match (socket_read_bytes(h)) {
+    match (net.socket_read_bytes(h)) {
         Result.Err(e) => Result.Err("error al leer la trama: " + e),
         Result.Ok(data) => {
             if (data.len() < 2) {
@@ -206,7 +207,7 @@ pub fn recv_text(h: int) -> Result<string, string> {
 /// Closes the WebSocket: sends a masked close frame (best-effort, write errors are
 /// ignored) and then closes the underlying socket handle.
 pub fn close_ws(h: int) {
-    match (socket_write_bytes(h, encode_masked(op_close(), "".to_bytes()))) {
+    match (net.socket_write_bytes(h, encode_masked(op_close(), "".to_bytes()))) {
         Result.Ok(_) => { },
         Result.Err(_) => { },
     }

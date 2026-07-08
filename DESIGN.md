@@ -6563,3 +6563,28 @@ coincidan + la salida esperada, más un test de que las formas globales (`set_ne
 dos oráculos in-process de `vm.rs` (que usaban los nombres globales) se retiran. El self-hosting no usa
 colecciones (su corpus no las incluye) → sin impacto; el oráculo del parser auto-alojado revalida que los
 ejemplos migrados (con `import std/collections/…`) parsean idénticos. **M50.2 COMPLETO.**
+
+### 52.3 M50.3 — `std/net` (transporte de red)
+
+Los **10 envoltorios** de red del prelude —I/O binaria de socket (`socket_read_bytes`/`socket_write_bytes`),
+cliente TCP (`tcp_connect`), TLS (`tls_connect`/`tls_connect_h2`/`tls_accept`), I/O de socket
+(`socket_read`/`socket_write`) y servidor TCP (`tcp_listen`/`tcp_accept`)— se **cortan del prelude** a
+`std/net` (un solo módulo; se conserva la distinción en los nombres: `net.tcp_connect`/`net.tls_connect`/…).
+El builtin `local_port` se renombra a `__local_port` (la VM no cambia, opcode `LocalPort`) y `std/net` añade
+el envoltorio `net.local_port`. Los primitivos `__tcp_connect`/`__socket_read`/… siguen builtins; `close`
+(cerrar socket **o** handle de archivo) sigue global. **UDP no entra**: sus envoltorios ya vivían en el
+módulo `net/udp` del paquete `net` (sobre `__udp_*`), así que nunca ensuciaron el namespace global.
+
+**Migración**: es el grupo mayor (~21 archivos del stack web: `examples/net/*`, `examples/web/{http,
+webserver,websocket_*,grpc_client,postgres,redis,http2_client,…}` y `packages/net/*`). Sin llamadas por
+UFCS (todas planas) → codemod: prefijar las llamadas con `net.` (lookbehind que respeta `__x` y `net.` ya
+puesto) + insertar `import std/net;`. **Ningún módulo embebido usa red** (los `std/*` promovidos son
+hex/json/deflate/… sin sockets) → sin "embebido-importa-embebido"; y el paquete `net` importa por ruta
+(`net/hpack`, `from net/crypto …`), nunca bare `import net;`, así que el leaf `net` de `std/net` no colisiona.
+
+**Verificación**: no determinista (red) → integración por subproceso (`net_cli`/`socket_write_cli`/
+`concurrency_net_cli`/`webserver_cli`/`bytes_io_cli` con fixtures migradas `import std/net; net.X`, más las
+suites que corren los archivos migrados: `http`/`redis`/`postgres`/`grpc`/`http2`/`h2_alpn`/`tls`/
+`websocket`/`dns`/`oauth2`/`scram`/`sigv4`/…). **M50.3 COMPLETO. M50 COMPLETO** (fs + collections + net):
+el namespace global queda con los esenciales (`Option`/`Result`+`?`, `map`/`filter`/`fold`, `print`/
+`eprint`/`panic`/`assert`/`assert_eq`, `to_string`, `close`, `input`/`read_int`/`env`) + los primitivos `__x`.

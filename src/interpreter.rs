@@ -1508,8 +1508,8 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
-            // M15.3: puerto local del socket (total).
-            "local_port" => match &values[0] {
+            // M15.3 (M50.3: __x): puerto local del socket (total).
+            "__local_port" => match &values[0] {
                 Value::Int(h) => Value::Int(crate::builtins::local_port(*h)),
                 _ => unreachable!("el checker garantiza un int"),
             },

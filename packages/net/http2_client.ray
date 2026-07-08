@@ -6,6 +6,7 @@
 // Es el transporte que necesita un cliente gRPC (M31.3): gRPC = HTTP/2 + framing de mensajes en DATA.
 from net/http2 import preface, settings_empty, settings_ack, headers_frame, parse_frame, frame_size, ft_settings, ft_headers, ft_data, ft_goaway, fl_ack, fl_end_stream, Http2Frame;
 from net/hpack import new_hpack, encode, decode, header, HEntry;
+import std/net;
 
 // La respuesta: el código de estado (`:status`) y el cuerpo (concatenación de los frames DATA).
 /// An HTTP/2 response: the `:status` pseudo-header value and the body
@@ -40,7 +41,7 @@ fn extract_status(hs: [HEntry]) -> int {
 /// connection preface + SETTINGS exchange + HEADERS on stream 1, reading until END_STREAM.
 /// Err on connect/TLS failure, I/O or HPACK errors, or if the server sends GOAWAY.
 pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response, string> {
-    let h = match (tls_connect_h2(host, port)) {
+    let h = match (net.tls_connect_h2(host, port)) {
         Result.Ok(x) => x,
         Result.Err(e) => {
             return Result.Err(e);
@@ -53,7 +54,7 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
     let reqhdrs = [header(":method", "GET"), header(":path", path), header(":scheme", "https"), header(":authority", host)];
     let block = encode(enc, reqhdrs);
     let salida = preface() + settings_empty() + headers_frame(1, block, true);
-    match (socket_write_bytes(h, salida)) {
+    match (net.socket_write_bytes(h, salida)) {
         Result.Ok(n) => { },
         Result.Err(e) => {
             close(h);
@@ -68,7 +69,7 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
     var body = b"";
     var done = false;
     while (!done) {
-        match (socket_read_bytes(h)) {
+        match (net.socket_read_bytes(h)) {
             Result.Ok(chunk) => {
                 if (chunk.len() == 0) {
                     done = true;  // el peer cerró
@@ -89,7 +90,7 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
                     if (fr.ftype == ft_settings()) {
                         if ((fr.flags & fl_ack()) == 0) {
                             // SETTINGS del servidor → responder ACK.
-                            match (socket_write_bytes(h, settings_ack())) {
+                            match (net.socket_write_bytes(h, settings_ack())) {
                                 Result.Ok(x) => { },
                                 Result.Err(e) => {
                                     close(h);

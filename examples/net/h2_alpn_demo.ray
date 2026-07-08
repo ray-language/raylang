@@ -1,11 +1,13 @@
 // Demo de la conexión TLS con ALPN 'h2' (M31.2a): recibe host y puerto por argumentos, intenta
 // negociar HTTP/2 y reporta el resultado. Es el enganche para el transporte HTTP/2 vivo (M31.2b).
+import std/net;
+
 fn main() {
     let a = args();
     let host = a[0];
     match (parse_int(a[1])) {
         Option.Some(port) => {
-            match (tls_connect_h2(host, port)) {
+            match (net.tls_connect_h2(host, port)) {
                 Result.Ok(h) => {
                     close(h);
                     print("h2 ok");

@@ -118,7 +118,7 @@ pub fn run_program(program: &CompiledProgram) -> Result<Value, RuntimeError> {
 /// - `heap_cap` (M42.2): tope de **objetos vivos**; al rebasarlo (tras un GC), aborta.
 ///
 /// `None` en ambos = sin límite (idéntico a `run_program`).
-pub fn run_program_con_limite(
+pub fn run_program_with_limit(
     program: &CompiledProgram,
     fuel: Option<u64>,
     heap_cap: Option<usize>,
@@ -356,7 +356,7 @@ impl<'a> Vm<'a> {
     fn run(&mut self) -> Result<HeapValue, RuntimeError> {
         // Marco inicial: main, con su arreglo de locales (sin argumentos). Se encola como una fibra más en
         // `ready`; un worker la tomará (con N=1, este mismo Vm). La fibra de main **reutiliza el heap de
-        // `self.cur`** (no un `Heap::new()`): `run_program_con_limite` fija ahí el tope de heap (M42.2) antes
+        // `self.cur`** (no un `Heap::new()`): `run_program_with_limit` fija ahí el tope de heap (M42.2) antes
         // de `run()`, y hay que conservarlo.
         let main = self.program.main;
         let locals = self.new_locals(main);
@@ -880,11 +880,11 @@ impl<'a> Vm<'a> {
                 OpCode::MapContainsKey => {
                     let k = heap_to_key(&self.pop());
                     let h = self.pop_obj();
-                    let presente = match self.cur.heap.get(h) {
+                    let present = match self.cur.heap.get(h) {
                         Obj::Map(m) => m.contains_key(&k),
                         _ => unreachable!("el checker garantiza un Map"),
                     };
-                    self.push(HeapValue::Bool(presente));
+                    self.push(HeapValue::Bool(present));
                 }
                 OpCode::MapGet => {
                     // Primitivo: [] o [v]; el prelude lo envuelve en Option<V>.
@@ -931,9 +931,9 @@ impl<'a> Vm<'a> {
                     let h = self.pop_obj();
                     let elems: Vec<HeapValue> = match self.cur.heap.get(h) {
                         Obj::Map(m) => {
-                            let mut pares: Vec<(&MapKey, &HeapValue)> = m.iter().collect();
-                            pares.sort_by(|a, b| a.0.cmp(b.0));
-                            pares.iter().map(|(_, v)| (*v).clone()).collect()
+                            let mut pairs: Vec<(&MapKey, &HeapValue)> = m.iter().collect();
+                            pairs.sort_by(|a, b| a.0.cmp(b.0));
+                            pairs.iter().map(|(_, v)| (*v).clone()).collect()
                         }
                         _ => unreachable!("el checker garantiza un Map"),
                     };
@@ -1781,9 +1781,9 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("el checker garantiza un string"),
                     };
                     let elems = match crate::builtins::list_dir(&path) {
-                        Ok(nombres) => {
+                        Ok(names) => {
                             let mut v = vec![HeapValue::Str("ok".to_string())];
-                            v.extend(nombres.into_iter().map(HeapValue::Str));
+                            v.extend(names.into_iter().map(HeapValue::Str));
                             v
                         }
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
@@ -2375,7 +2375,7 @@ impl<'a> Vm<'a> {
     /// completa (o falla), empuja el resultado etiquetado (`["ok",""]`/`["err",msg]`) en su pila y la pone
     /// lista; si aún bloquea, la re-aparca con el resto. (`allocate` no colecta aquí → sin riesgo de GC.)
     fn finish_parked_write(shared: &mut Shared, fd: i32, mut fiber: Fiber, mut pw: PendingWrite) {
-        let resultado = match crate::builtins::socket_write_nb(pw.handle, &pw.remaining) {
+        let result = match crate::builtins::socket_write_nb(pw.handle, &pw.remaining) {
             Ok(n) if n == pw.remaining.len() => Ok(()),
             Ok(n) => {
                 pw.remaining.drain(..n); // descarta lo ya enviado y re-aparca el resto
@@ -2384,7 +2384,7 @@ impl<'a> Vm<'a> {
             }
             Err(e) => Err(e),
         };
-        let elems = match resultado {
+        let elems = match result {
             Ok(()) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(String::new())],
             Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
         };
@@ -2457,14 +2457,14 @@ impl<'a> Vm<'a> {
         // Cada fibra espera **lectura** (pending_write None) o **escritura** (Some) de su socket.
         let read_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.pending_write.is_none()).map(|p| p.fd).collect();
         let write_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.pending_write.is_some()).map(|p| p.fd).collect();
-        if let crate::poll::PollResult::Ready(listos) = crate::poll::wait(&read_fds, &write_fds, -1)
-            && !listos.is_empty()
+        if let crate::poll::PollResult::Ready(ready) = crate::poll::wait(&read_fds, &write_fds, -1)
+            && !ready.is_empty()
         {
             // Saca las fibras cuyo socket quedó listo; las demás siguen aparcadas.
             let mut woken: Vec<IoParked> = Vec::new();
             let mut i = 0;
             while i < shared.io_parked.len() {
-                if listos.contains(&shared.io_parked[i].fd) {
+                if ready.contains(&shared.io_parked[i].fd) {
                     woken.push(shared.io_parked.remove(i));
                 } else {
                     i += 1;
@@ -2617,7 +2617,7 @@ impl<'a> Vm<'a> {
         // M44a: `Instant::now()` PANIQUEA en `wasm32-unknown-unknown` (sin reloj) → en wasm no se cronometra
         // (las stats del GC solo se imprimen con `RAYLANG_GC_STATS`, que no aplica en el playground).
         #[cfg(not(target_arch = "wasm32"))]
-        let inicio = std::time::Instant::now();
+        let start = std::time::Instant::now();
         // Reunimos las raíces (handles) primero, para no tomar prestado `self.cur.stack`
         // y `self.cur.heap` a la vez. M12.1: además de la fibra en ejecución, rooteamos TODAS las fibras
         // (listas y bloqueadas) y los canales que esperan.
@@ -2638,7 +2638,7 @@ impl<'a> Vm<'a> {
         // M37.1: registra la pausa (una sola recolección stop-the-world). Solo fuera de wasm (ver arriba).
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let dt = inicio.elapsed().as_nanos();
+            let dt = start.elapsed().as_nanos();
             self.gc_total_pause_ns += dt;
             if dt > self.gc_max_pause_ns {
                 self.gc_max_pause_ns = dt;
@@ -3086,7 +3086,7 @@ pub fn transfer_value(
     match v {
         HeapValue::Obj(h) => HeapValue::Obj(transfer_obj(src, dst, *h, remap)),
         // Escalares inline (Int/Float/Bool/Str/Char/UInt/Bytes/Ptr/Unit/Function): copia directa.
-        otro => otro.clone(),
+        other => other.clone(),
     }
 }
 
@@ -3102,7 +3102,7 @@ fn transfer_obj(src: &Heap, dst: &mut Heap, h: Handle, remap: &mut HashMap<Handl
     // Se **clona** la estructura del objeto origen para soltar el préstamo de `src` antes de transferir
     // los hijos (que mutan `dst`). El clon copia los `HeapValue` hijos (baratos salvo Str/Bytes); sus
     // handles se remapean al transferirlos.
-    let nuevo: Obj = match src.get(h) {
+    let new_obj: Obj = match src.get(h) {
         Obj::Array(elems) => {
             let elems = elems.clone();
             Obj::Array(elems.iter().map(|e| transfer_value(src, dst, e, remap)).collect())
@@ -3137,16 +3137,16 @@ fn transfer_obj(src: &Heap, dst: &mut Heap, h: Handle, remap: &mut HashMap<Handl
             Obj::Cell(transfer_value(src, dst, &inner, remap))
         }
         Obj::Map(m) => {
-            let pares: Vec<(MapKey, HeapValue)> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            let mut nm: HashMap<MapKey, HeapValue> = HashMap::with_capacity(pares.len());
-            for (k, val) in pares {
+            let pairs: Vec<(MapKey, HeapValue)> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let mut nm: HashMap<MapKey, HeapValue> = HashMap::with_capacity(pairs.len());
+            for (k, val) in pairs {
                 let nv = transfer_value(src, dst, &val, remap);
                 nm.insert(k, nv); // las claves son primitivos (sin handles)
             }
             Obj::Map(nm)
         }
     };
-    *dst.get_mut(nh) = nuevo;
+    *dst.get_mut(nh) = new_obj;
     nh
 }
 
@@ -3740,20 +3740,20 @@ mod tests {
     /// (no cuelga); un programa que termina dentro del presupuesto da su resultado normal.
     #[test]
     fn fuel_limita_la_ejecucion() {
-        fn compilar(src: &str) -> CompiledProgram {
+        fn compile(src: &str) -> CompiledProgram {
             let tokens = crate::lexer::lex(src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");
             crate::checker::check(&mut prog).expect("check ok");
             compile_program(&prog).expect("compila")
         }
         // Bucle infinito: con fuel finito, aborta (sin fuel colgaría, así que no se prueba sin límite).
-        let inf = compilar("fn main() -> int { var i = 0; while (true) { i = i + 1; } 0 }");
-        let err = run_program_con_limite(&inf, Some(50_000), None).expect_err("debe agotar el fuel");
+        let inf = compile("fn main() -> int { var i = 0; while (true) { i = i + 1; } 0 }");
+        let err = run_program_with_limit(&inf, Some(50_000), None).expect_err("debe agotar el fuel");
         assert!(err.msg.contains("fuel"), "mensaje de fuel: {}", err.msg);
         // Un programa que termina dentro del presupuesto da el mismo resultado que sin límite.
-        let ok = compilar("fn main() -> int { var s = 0; var i = 0; while (i < 100) { s = s + i; i = i + 1; } s }");
-        assert_eq!(run_program_con_limite(&ok, Some(1_000_000), None).unwrap(), Value::Int(4950));
-        assert_eq!(run_program_con_limite(&ok, None, None).unwrap(), Value::Int(4950)); // None = sin límite
+        let ok = compile("fn main() -> int { var s = 0; var i = 0; while (i < 100) { s = s + i; i = i + 1; } s }");
+        assert_eq!(run_program_with_limit(&ok, Some(1_000_000), None).unwrap(), Value::Int(4950));
+        assert_eq!(run_program_with_limit(&ok, None, None).unwrap(), Value::Int(4950)); // None = sin límite
     }
 
     /// M38.1a: `transfer_value` re-aloja un subgrafo de un heap a otro con handles del destino.
@@ -3810,7 +3810,7 @@ mod tests {
     /// de objetos (aquí, un arreglo que crece sin cesar) aborta al rebasar el tope; uno frugal, no.
     #[test]
     fn tope_de_heap_limita_los_objetos_vivos() {
-        fn compilar(src: &str) -> CompiledProgram {
+        fn compile(src: &str) -> CompiledProgram {
             let tokens = crate::lexer::lex(src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");
             crate::checker::check(&mut prog).expect("check ok");
@@ -3818,14 +3818,14 @@ mod tests {
         }
         // Retiene objetos vivos sin parar (cada iteración empuja un arreglo nuevo a `xs`, que sigue
         // alcanzable). Con un tope bajo, el GC no puede liberarlos → aborta.
-        let crece = compilar(
+        let crece = compile(
             "fn main() -> int { var xs: [[int]] = []; var i = 0; while (i < 100000) { xs.push([i]); i = i + 1; } 0 }",
         );
-        let err = run_program_con_limite(&crece, None, Some(1_000)).expect_err("debe rebasar el tope");
+        let err = run_program_with_limit(&crece, None, Some(1_000)).expect_err("debe rebasar el tope");
         assert!(err.msg.contains("tope de heap"), "mensaje de tope: {}", err.msg);
         // Un programa frugal (no retiene) termina normal aun con tope bajo: el GC recicla la basura.
-        let frugal = compilar("fn main() -> int { var s = 0; var i = 0; while (i < 10000) { s = s + i; i = i + 1; } s }");
-        assert_eq!(run_program_con_limite(&frugal, None, Some(1_000)).unwrap(), Value::Int(49995000));
+        let frugal = compile("fn main() -> int { var s = 0; var i = 0; while (i < 10000) { s = s + i; i = i + 1; } s }");
+        assert_eq!(run_program_with_limit(&frugal, None, Some(1_000)).unwrap(), Value::Int(49995000));
     }
 
     #[test]
@@ -3863,7 +3863,7 @@ mod tests {
     /// M13.2a: `panic` / `assert_eq` que falla → ambos motores cortan con el MISMO mensaje.
     #[test]
     fn panic_y_assert_falla_oraculo() {
-        for (src, esperado) in [
+        for (src, expected) in [
             ("fn main() -> int { panic(\"boom\"); 0 }", "boom"),
             ("fn main() -> int { assert_eq(2 + 2, 5); 0 }", "assert_eq falló: 4 != 5"),
             ("fn main() -> int { assert(false); 0 }", "aserción falló"),
@@ -3874,8 +3874,8 @@ mod tests {
             let interp = crate::interpreter::run(&prog).expect_err("el intérprete debe errar");
             let compiled = compile_program(&prog).expect("compila");
             let vm = run_program(&compiled).expect_err("la VM debe errar");
-            assert_eq!(interp.msg, esperado, "intérprete: {}", src);
-            assert_eq!(vm.msg, esperado, "vm: {}", src);
+            assert_eq!(interp.msg, expected, "intérprete: {}", src);
+            assert_eq!(vm.msg, expected, "vm: {}", src);
         }
     }
 

@@ -516,7 +516,7 @@ fn ejecutar(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u
         }
     } else {
         match compiler::compile_program(&program) {
-            Ok(compiled) => vm::run_program_con_limite(&compiled, fuel, heap),
+            Ok(compiled) => vm::run_program_with_limit(&compiled, fuel, heap),
             Err(mut e) => {
                 let (source, name, local) = locate(e.line);
                 e.line = local;

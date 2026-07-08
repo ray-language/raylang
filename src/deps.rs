@@ -96,9 +96,48 @@ fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
 /// Ciclos seguros (mapa de elegidos). Conflictos (mismo nombre, distinto spec): **MVS ligero** —el
 /// mayor tag semver de la misma URL, o error si no son comparables (caché plana: un slot por nombre)—.
 /// Para cada paquete recomputa el hash y lo compara con el bloqueado; un desajuste = *supply-chain*.
+/// El directorio del **índice de paquetes** (M51a), para resolver deps por nombre. Precedencia:
+/// la variable de entorno `RAY_INDEX`, luego `[registry] index` del `ray.toml` (relativo a la raíz
+/// si no es absoluto). `Ok(None)` = sin índice (solo deps git/`path:`). Un índice remoto por git → M51c.
+pub(crate) fn index_dir(manifest: &Manifest) -> Result<Option<std::path::PathBuf>, String> {
+    let raw = std::env::var("RAY_INDEX")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| manifest.registry_index.clone());
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    if raw.starts_with("git+") {
+        return Err(format!(
+            "el índice remoto por git ('{raw}') aún no está soportado (llega en M51c); usa un \
+             directorio local en '[registry] index' o exporta RAY_INDEX"
+        ));
+    }
+    let p = Path::new(&raw);
+    Ok(Some(if p.is_absolute() { p.to_path_buf() } else { manifest.root.join(&raw) }))
+}
+
+/// Resuelve la spec de una dependencia a una `GitSpec` descargable: `git+…` se parsea directo;
+/// un **requisito de versión** (`1.2.0`/`^1.2`/…) se resuelve **por el índice** (M51a). Las `path:`
+/// se filtran antes de llegar aquí.
+fn to_gitspec(name: &str, spec: &str, index: Option<&Path>) -> Result<GitSpec, String> {
+    if crate::index::is_registry_spec(spec) {
+        let dir = index.ok_or_else(|| {
+            format!(
+                "la dependencia '{name} = \"{spec}\"' se resuelve por nombre, pero no hay índice \
+                 configurado (declara '[registry] index = \"<dir>\"' en ray.toml o exporta RAY_INDEX)"
+            )
+        })?;
+        crate::index::resolve(dir, name, spec)
+    } else {
+        parse_spec(spec)
+    }
+}
+
 pub fn ensure(manifest: &Manifest) -> Result<usize, String> {
     let cache = manifest.root.join(".ray-deps");
     let locked = read_lock(&manifest.root)?;
+    let index = index_dir(manifest)?;
 
     // BFS del grafo. `chosen` = spec resuelto por nombre (tras MVS); `cached` = spec que esta
     // ejecución dejó en la caché (para re-descargar si un conflicto lo actualiza).
@@ -110,7 +149,7 @@ pub fn ensure(manifest: &Manifest) -> Result<usize, String> {
         if path_of_path_dep(s).is_some() {
             continue; // M40.8a: las path-deps son locales; no se descargan (las registra el CLI)
         }
-        queue.push_back((n.clone(), parse_spec(s)?));
+        queue.push_back((n.clone(), to_gitspec(n, s, index.as_deref())?));
     }
 
     while let Some((name, spec)) = queue.pop_front() {
@@ -141,11 +180,13 @@ pub fn ensure(manifest: &Manifest) -> Result<usize, String> {
         }
 
         // Dependencias transitivas: leer el `ray.toml` del paquete y encolarlas (saltando path-deps).
+        // Una transitiva también puede ser del índice (`foo = "^1.2"`) → se resuelve igual.
         for (dn, ds) in package_deps(&dest)? {
             if path_of_path_dep(&ds).is_some() {
                 continue;
             }
-            queue.push_back((dn, parse_spec(&ds)?));
+            let gs = to_gitspec(&dn, &ds, index.as_deref())?;
+            queue.push_back((dn, gs));
         }
     }
 
@@ -198,7 +239,7 @@ fn mvs(name: &str, a: &GitSpec, b: &GitSpec) -> Result<GitSpec, String> {
 
 /// Parsea un ref semver `vX.Y.Z` / `X.Y.Z` (ignora un sufijo de pre-release tras `-`) a `(mayor,
 /// menor, parche)`. `None` si no es semver (un commit, una rama…). Para ordenar en `mvs`.
-fn semver(git_ref: &str) -> Option<(u64, u64, u64)> {
+pub(crate) fn semver(git_ref: &str) -> Option<(u64, u64, u64)> {
     let core = git_ref.strip_prefix('v').unwrap_or(git_ref);
     let core = core.split('-').next().unwrap_or(core); // corta pre-release
     let mut it = core.split('.');

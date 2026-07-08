@@ -6712,8 +6712,21 @@ versiones del índice y elegir la mayor compatible (MVS: la mínima que satisfac
 
 ### 54.5 Fases
 
-- **M51a — leer del índice + `ray add`.** Rangos semver (54.3). Resolver `foo = "<req>"` contra un índice
-  **local/por ruta** (para tests deterministas), reusando descarga git + lock. `ray add` escribe el `ray.toml`.
+- **M51a — leer del índice + `ray add` + rangos semver. ✅ COMPLETO.** `src/index.rs`: `VersionReq`
+  (exacta `1.2.0`/`=`, caret `^`, tilde `~`, `*`; regla de cargo para caret con `0.x`) + lector del
+  índice (`<index>/<nombre>.toml`, secciones `[<versión>]` con `git`/`hash`/`yanked`, mismo subconjunto
+  TOML que `manifest.rs`) + `resolve`/`latest` (elige la **más alta no retirada** que casa). El índice
+  se localiza por `RAY_INDEX` o `[registry] index` del `ray.toml` (`Manifest.registry_index`; un índice
+  **remoto git** aún no, avisa → M51c). `deps::ensure` resuelve las specs por nombre vía el índice
+  (`to_gitspec`, tanto directas como transitivas) y **delega en la descarga git + lock existente** —el
+  lock guarda la `git URL@ref` resuelta, sin cambios de formato—. `ray add <nombre>[@<req>]`
+  (`manifest::upsert_dependency`, edición mínima del `ray.toml`): sin versión escribe `^<latest>`, con
+  versión respeta el requisito; valida contra el índice **antes** de tocar el manifiesto. Tests: unit
+  (`index.rs`: parseo/casado de reqs, lectura/resolución; `manifest.rs`: upsert) + integración
+  **offline** (`tests/registry_cli.rs`: índice local + repos git `file://`; dep por nombre, `ray add`
+  con/sin versión, caret elige la mayor, paquete inexistente, falta de índice). **Cero runtime.**
+  Limitación (→ M51c): re-resuelve del índice en cada `ensure` (no fija la versión resuelta en el lock),
+  así un caret podría subir si el índice gana una versión; con índice fijo (tests) es determinista.
 - **M51b — `ray publish`.** Validación + hash + generación de la entrada (append-only, inmutable). Probado
   *offline* con un repo git de índice local (el truco `file://` de `deps_cli`, ya usado en M39c-2a).
 - **M51c — índice remoto + mantenimiento.** Clonar/cachear el repo del índice (`RAY_INDEX` o `[registry]` en

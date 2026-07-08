@@ -20,6 +20,7 @@ pub mod editorconfig;
 pub mod ffi;
 pub mod fmt;
 pub mod gc;
+pub mod index;
 #[cfg(feature = "interp")]
 pub mod interpreter;
 pub mod lexer;

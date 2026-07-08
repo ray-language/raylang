@@ -48,6 +48,7 @@ fn run() {
         Some("run") => cmd_run(&rest[1..]),
         Some("build") => cmd_build(&rest[1..]),
         Some("test") => cmd_test_sub(&rest[1..]),
+        Some("add") => cmd_add(&rest[1..]),
         Some("fetch") => cmd_fetch(&rest[1..]),
         Some("fmt") => cmd_fmt(&rest[1..]),
         Some("doc") => cmd_doc(&rest[1..]),
@@ -73,6 +74,7 @@ Uso: ray <subcomando> [opciones]
   run [archivo]     ejecuta (por defecto src/main.ray) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
   build [archivo]   chequea y compila sin ejecutar (0 ok / 65 error)
   test [archivo]    corre las funciones @test [filtro]
+  add <nombre>[@req]  añade una dependencia del índice a ray.toml y la descarga
   fetch             descarga las dependencias de ray.toml a .ray-deps/
   fmt <archivo>     imprime la versión canónica por stdout
   doc <archivo>     genera la documentación Markdown de su superficie pública
@@ -189,6 +191,86 @@ fn cmd_test_sub(args: &[String]) {
     let path = resolve_entry(args.first().map(String::as_str), false);
     let filter = args.get(1).map(String::as_str);
     run_tests(&path, filter);
+}
+
+/// `ray add <nombre>[@<req>]`: añade una dependencia **del índice** (por nombre) a `ray.toml` y la
+/// descarga (M51a). Sin `@<req>`, usa la versión más alta publicada como `^<latest>` (compatible,
+/// estilo cargo); con `@<req>`, lo respeta (`1.2.0` exacta, `^1.2`, `~1.2.3`, `*`). Valida que la
+/// versión exista en el índice **antes** de tocar el manifiesto (fail-fast ante un typo).
+fn cmd_add(args: &[String]) {
+    let Some(spec) = args.first().map(String::as_str) else {
+        eprintln!("uso: ray add <nombre>[@<versión>]");
+        process::exit(64);
+    };
+    let (name, req_opt) = match spec.split_once('@') {
+        Some((n, r)) => (n, Some(r)),
+        None => (spec, None),
+    };
+    if name.is_empty() {
+        eprintln!("uso: ray add <nombre>[@<versión>]");
+        process::exit(64);
+    }
+    let Some(m) = load_manifest() else {
+        eprintln!("no hay proyecto: falta 'ray.toml' (crea uno con 'ray new')");
+        process::exit(64);
+    };
+    // Localiza el índice (RAY_INDEX o [registry] index).
+    let index = match crate::deps::index_dir(&m) {
+        Ok(Some(dir)) => dir,
+        Ok(None) => {
+            eprintln!(
+                "no hay índice de paquetes configurado: declara '[registry] index = \"<dir>\"' en \
+                 ray.toml o exporta RAY_INDEX (para deps git usa 'nombre = \"git+URL@ref\"' a mano)"
+            );
+            process::exit(65);
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            process::exit(65);
+        }
+    };
+    // Requisito: el dado, o `^<latest>` si no se especifica versión.
+    let req = match req_opt {
+        Some(r) => r.to_string(),
+        None => match crate::index::latest(&index, name) {
+            Ok(v) => format!("^{v}"),
+            Err(e) => {
+                eprintln!("{e}");
+                process::exit(65);
+            }
+        },
+    };
+    // Fail-fast: valida que la versión exista antes de escribir el manifiesto.
+    if let Err(e) = crate::index::resolve(&index, name, &req) {
+        eprintln!("{e}");
+        process::exit(65);
+    }
+    // Edición mínima del ray.toml (inserta/reemplaza en [dependencies]).
+    let toml_path = m.root.join("ray.toml");
+    let src = match fs::read_to_string(&toml_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("no se pudo leer '{}': {e}", toml_path.display());
+            process::exit(66);
+        }
+    };
+    let updated = crate::manifest::upsert_dependency(&src, name, &req);
+    if let Err(e) = fs::write(&toml_path, &updated) {
+        eprintln!("no se pudo escribir '{}': {e}", toml_path.display());
+        process::exit(73);
+    }
+    println!("añadida la dependencia '{name} = \"{req}\"'");
+    // Descarga (recarga el manifiesto para que `ensure` vea la nueva dep).
+    match crate::manifest::Manifest::load(&m.root) {
+        Ok(Some(m2)) => match crate::deps::ensure(&m2) {
+            Ok(_) => println!("dependencias al día"),
+            Err(e) => {
+                eprintln!("error descargando: {e}");
+                process::exit(65);
+            }
+        },
+        Ok(None) | Err(_) => {} // el manifiesto acaba de escribirse; improbable
+    }
 }
 
 /// `ray fetch`: descarga a `.ray-deps/` las dependencias declaradas en `ray.toml` que aún no

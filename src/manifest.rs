@@ -33,6 +33,11 @@ pub struct Manifest {
     pub indent_style: Option<String>,
     /// `[fmt] indent_size` — nº de espacios por nivel (si `indent_style = "space"`). `None` = no declarado.
     pub indent_size: Option<usize>,
+    /// `[registry] index` — el **índice de paquetes** para resolver dependencias por nombre (M51). Un
+    /// directorio local (M51a) o, más adelante, una URL git del repo del índice (M51c). Relativo a la
+    /// raíz del proyecto si no es absoluto. `None` = sin índice (solo deps git/`path:`). Lo puede
+    /// sobrescribir la variable de entorno `RAY_INDEX`.
+    pub registry_index: Option<String>,
 }
 
 impl Manifest {
@@ -77,6 +82,7 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut dependencies = Vec::new();
     let mut indent_style = None;
     let mut indent_size = None;
+    let mut registry_index = None;
 
     for (i, raw_line) in src.lines().enumerate() {
         let num = i + 1;
@@ -123,6 +129,10 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 }
                 _ => {}
             },
+            "registry" => match key {
+                "index" => registry_index = Some(as_string()?),
+                _ => {} // otras claves del registro (M51c: mirrors, etc.) se ignoran por ahora
+            },
             "" => return Err(err(num, "clave fuera de toda sección (falta '[package]')")),
             _ => {} // otras secciones se ignoran por ahora
         }
@@ -136,7 +146,53 @@ fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         root,
         indent_style,
         indent_size,
+        registry_index,
     })
+}
+
+/// Inserta o actualiza `nombre = "<req>"` en la sección `[dependencies]` del fuente de un `ray.toml`
+/// (para `ray add`, M51a). Si el nombre ya está, reemplaza su requisito; si no, lo añade al final de
+/// la sección. Si no hay sección `[dependencies]`, la crea al final del archivo. Preserva el resto
+/// (comentarios, otras secciones) — es una edición mínima línea a línea, no un reserializado.
+pub fn upsert_dependency(src: &str, name: &str, req: &str) -> String {
+    let new_line = format!("{name} = \"{req}\"");
+    let mut lines: Vec<String> = src.lines().map(str::to_string).collect();
+    // ¿Existe ya la sección [dependencies]? Localiza su rango [inicio+1, fin_exclusivo).
+    let dep_header = lines.iter().position(|l| l.trim() == "[dependencies]");
+    if let Some(start) = dep_header {
+        // Fin de la sección: la siguiente cabecera `[...]`, o el final del archivo.
+        let end = lines[start + 1..]
+            .iter()
+            .position(|l| l.trim().starts_with('['))
+            .map(|off| start + 1 + off)
+            .unwrap_or(lines.len());
+        // ¿Ya existe una entrada para `name`? (clave antes del `=`, ignorando espacios).
+        let existing = lines[start + 1..end].iter().position(|l| {
+            l.split_once('=').is_some_and(|(k, _)| k.trim() == name)
+        });
+        match existing {
+            Some(off) => lines[start + 1 + off] = new_line, // reemplaza el requisito
+            None => {
+                // Inserta tras la última línea no vacía de la sección (antes de los blancos finales).
+                let mut insert_at = end;
+                while insert_at > start + 1 && lines[insert_at - 1].trim().is_empty() {
+                    insert_at -= 1;
+                }
+                lines.insert(insert_at, new_line);
+            }
+        }
+    } else {
+        if !lines.is_empty() && !lines.last().is_some_and(|l| l.trim().is_empty()) {
+            lines.push(String::new());
+        }
+        lines.push("[dependencies]".to_string());
+        lines.push(new_line);
+    }
+    let mut out = lines.join("\n");
+    if src.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 /// Desenrolla una cadena TOML `"..."` a su contenido. `None` si no está entre comillas.
@@ -184,6 +240,28 @@ util = \"git+https://ejemplo/util@v2.1\"
         assert_eq!(m.entry, "src/app.ray");
         assert_eq!(m.dependencies.len(), 2);
         assert_eq!(m.dependencies[0], ("geo".into(), "git+https://ejemplo/geo@v1.0".into()));
+    }
+
+    #[test]
+    fn upsert_añade_reemplaza_y_crea_seccion() {
+        // Añade a una sección [dependencies] existente (vacía).
+        let base = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\n";
+        let a = upsert_dependency(base, "geo", "^1.2");
+        assert!(a.contains("[dependencies]\ngeo = \"^1.2\""), "añade a la sección:\n{a}");
+        // Reemplaza el requisito de una dep existente, sin duplicar.
+        let b = upsert_dependency(&a, "geo", "2.0.0");
+        assert!(b.contains("geo = \"2.0.0\""), "reemplaza:\n{b}");
+        assert!(!b.contains("^1.2"), "sin duplicar:\n{b}");
+        assert_eq!(b.matches("geo =").count(), 1);
+        // Crea la sección si no existe.
+        let c = upsert_dependency("[package]\nname = \"x\"\nversion = \"0.1.0\"\n", "util", "1.0.0");
+        assert!(c.contains("[dependencies]\nutil = \"1.0.0\""), "crea la sección:\n{c}");
+        // No mete la dep en otra sección posterior.
+        let d = upsert_dependency("[package]\nname=\"x\"\nversion=\"1\"\n\n[dependencies]\na = \"1.0.0\"\n\n[fmt]\nindent_size = 2\n", "b", "2.0.0");
+        let deps_idx = d.find("[dependencies]").unwrap();
+        let fmt_idx = d.find("[fmt]").unwrap();
+        let b_idx = d.find("b = ").unwrap();
+        assert!(deps_idx < b_idx && b_idx < fmt_idx, "b va dentro de [dependencies], antes de [fmt]:\n{d}");
     }
 
     #[test]

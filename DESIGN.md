@@ -6588,3 +6588,145 @@ suites que corren los archivos migrados: `http`/`redis`/`postgres`/`grpc`/`http2
 `websocket`/`dns`/`oauth2`/`scram`/`sigv4`/…). **M50.3 COMPLETO. M50 COMPLETO** (fs + collections + net):
 el namespace global queda con los esenciales (`Option`/`Result`+`?`, `map`/`filter`/`fold`, `print`/
 `eprint`/`panic`/`assert`/`assert_eq`, `to_string`, `close`, `input`/`read_int`/`env`) + los primitivos `__x`.
+
+## 53. Política de tiers de librerías (gobernanza del ecosistema)
+
+Toda capacidad de raylang que no sea del **núcleo del lenguaje** (sintaxis, checker, motores) vive en uno
+de **tres tiers**. Esta sección fija *dónde* va cada cosa y *cómo se promueve* — la regla era implícita
+(se aplicó a lo largo de M40/M49/M50); aquí queda explícita para que futuras decisiones sean consistentes.
+
+### 53.1 Los tres tiers
+
+1. **stdlib embebida (`std/`)** — módulos compilados en el binario base (`include_str!` en `src/stdlib.rs`,
+   tabla `MODULES`). Cero instalación: `import std/math;` siempre funciona. Es la promesa de "baterías
+   incluidas" y su API se versiona **con el lenguaje** (compromiso de estabilidad). Coste: cada módulo
+   embebido es peso en **todos** los binarios, aunque no se use.
+
+2. **paquetes adicionales (`packages/<pkg>/`, y externos)** — **no** embebidos. Se traen por `ray.toml`
+   (dep por `path:`/git; §41.7–41.8, y por nombre desde el índice cuando exista §54). Se apoyan en `std/`
+   para lo fundacional. Cada paquete versiona su API con su **propio** semver, independiente del lenguaje.
+   Hoy existe `packages/net` (red y protocolos). Ejemplo de uso idéntico al de `std/`: `import net/http;`.
+
+3. **`examples/`** — implementaciones de referencia y demos (`*_demo.ray`). **Material pedagógico**, no
+   pensado para importarse desde un proyecto real. Muchos son el espejo didáctico de un módulo ya promovido
+   a los tiers 1/2 (p. ej. `examples/stdlib/regex.ray` refleja `std/regex`).
+
+### 53.2 Criterios de colocación (en orden de prioridad)
+
+1. **Universalidad** — ¿lo necesitaría la mayoría de programas? Sí → candidato a `std/`. Nicho → paquete.
+2. **Peso e independencia** — ¿sería peso muerto en el binario de quien no lo use, o depende de
+   sockets/TLS/servicios externos? → paquete. (Es la razón de que todo el stack de red viva en `packages/net`
+   y no en el binario base.)
+3. **Estabilidad de API** — `std/` implica estabilidad atada al versionado del lenguaje (§39). Algo que
+   aún itera su superficie → paquete primero (su semver absorbe los cambios sin tocar el del lenguaje).
+4. **Superficie de seguridad** — cripto que toca **secretos reales** va en un paquete respaldado por `ring`
+   (tiempo constante, auditado: `net/crypto`), **no** en la impl pura embebida; la versión en raylang puro
+   se queda como **demo** del lenguaje (correcta, pero sobre la VM interpretada no garantiza resistencia a
+   canales laterales). Regla ya vigente (M43; ver `packages/net/README.md`).
+5. **Determinismo/pureza** — no decide el tier, pero orienta el *testing*: un módulo puro se verifica con el
+   **oráculo** (ambos motores); uno con I/O no determinista, por **subproceso** (`*_cli`).
+
+### 53.3 El ciclo de vida de un addon (pipeline de promoción)
+
+`examples/` (prototipo/demo) → si madura y pasa los criterios → **`std/`** (universal, ligero, estable) o
+**`packages/<pkg>/`** (nicho, pesado, o de API propia). La promoción a paquete reescribe los `import` del
+prototipo a `std/` (lo fundacional embebido) y añade sus tests distribuibles; la demo original **se conserva**
+en `examples/` como material del lenguaje. Un módulo puede además **degradarse** (deprecación → salir de `std/`
+a un paquete, o retirarse), lo que en `std/` exige un cambio de versión mayor del lenguaje.
+
+### 53.4 Clasificación actual (snapshot)
+
+- **`std/` (embebida):** `math`, `text`, `fs`, `sort`, `random`, `time`, `collections/{set,deque,stringbuilder}`,
+  `crypto`, `hex`, `url`, `uuid`, `json`, `csv`, `toml`, `template`, `regex`, `deflate`/`inflate`/`huffman`,
+  `protobuf`, `net` (transporte básico sobre los builtins de socket).
+- **`packages/net` (adicional):** `http`/`http2`/`webserver`, `websocket`(+cliente), `dns`/`dns_cache`, `udp`,
+  `redis`, `postgres`, `grpc_client`, `oauth2`, `jwt`/`jwt_eddsa`, `sigv4`, `scram`, `cookie`, `hpack`, `metrics`,
+  `log`, `time`, `crypto` (respaldo `ring`).
+- **Solo `examples/` (aún sin promover):** `framework` (mini-framework web) — candidato natural a un futuro
+  paquete `web` (o a `packages/net`); los servidores de eco (`websocket_echo`, `wss_echo`) **se quedan** como
+  demos (son aplicaciones, no librerías). Las impls de cripto puro (`sha*`, `hmac`, `ed25519`, `chacha20`,
+  `poly1305`, `base64`) permanecen como demos: su versión de producción es `net/crypto`.
+
+## 54. M51 — Registro central de paquetes y `ray publish` (arco C, DISEÑO)
+
+El gestor de paquetes (M39c) resuelve dependencias por **git** (`git+URL@ref`) y por **ruta** (`path:dir`):
+para instalar hay que conocer y escribir la URL exacta. Falta la última pieza de "ecosistema": **instalar por
+nombre** (`ray add foo`) contra un **índice** compartido, y **publicar** (`ray publish`) para poblarlo. Es la
+brecha nº1 que `PRODUCCION.md` (Parte I §2) marca como "flexible en el lenguaje, ❌ en el ecosistema".
+
+### 54.1 Decisión central: un índice **respaldado por git**, sin servidor propio
+
+Coherente con la filosofía del proyecto (cero dependencias de Cargo salvo TLS; *shell out* a `git`; tests
+deterministas *offline*): el "registro" **no** es un servicio web que operemos, sino un **repositorio git**
+que mapea `nombre → metadatos` (URL del código + versiones publicadas + hash de contenido). Es el modelo del
+*crates.io-index* (un repo git) o del enfoque proxy-less de Go, recortado. Ventajas:
+
+- **Reusa toda la maquinaria existente**: el índice solo aporta el `nombre → (git URL, hash)`; la descarga,
+  la cápsula (M39c-1), el lock/verificación (M39c-2b), el BFS transitivo y el MVS (M39c-3) son los mismos.
+- **Sin infraestructura que mantener** (ni cuentas, ni base de datos, ni *uptime*): alojar el índice es
+  *hostear un repo git*. Cualquiera puede tener el suyo; no baked-in un índice por defecto en v1.
+- **Confianza = git + hash**: la integridad la sigue dando `ray.lock` (SHA-256 por versión, M39c-2b);
+  el índice añade solo el **descubrimiento por nombre**. Sin tokens en v1: publicar = *commitear* al repo
+  del índice (quien controle el repo controla el namespace; anti-squatting es política del repo, no del CLI).
+
+Alternativa descartada: **índice hospedado** (servidor + API + auth). Contradice de raíz el "sin servidor";
+además su valor (búsqueda web, cuentas, firmas) es ortogonal y se puede añadir después sobre el mismo índice git.
+
+### 54.2 Formato del índice y del `ray.toml` por nombre
+
+- **Índice** = repo git con **un archivo por paquete** (`index/<nombre>.toml`; el subconjunto de TOML de
+  `manifest.rs`). Cada archivo lista versiones **inmutables** y **ordenadas**:
+  ```toml
+  [[version]]
+  num  = "1.2.0"
+  git  = "git+https://ejemplo/foo@v1.2.0"   # de dónde sale el código de ESA versión
+  hash = "<sha256 del contenido>"            # el mismo hash Merkle de M39c-2b
+  yanked = false                              # M51c: retirada sin borrar (como crates.io)
+  ```
+  Publicar **añade** una entrada (append-only); una versión ya publicada **no se sobrescribe** (build
+  reproducible). El hash permite verificar sin volver a clonar.
+- **`ray.toml` por nombre**: `foo = "1.2.0"` (una cadena de versión **sin** prefijo `git+`/`path:`) significa
+  "resuélvelo por el índice". El resolutor busca `foo` en el índice, elige la versión (semver), saca su
+  `git`+`hash` y **delega en la descarga git+lock existente**. Convive con `git+`/`path:` (que siguen para
+  deps no publicadas / desarrollo local).
+
+### 54.3 Prerrequisito: rangos semver de verdad
+
+El índice hace que un nombre mapee a **muchas** versiones → hay que **elegir**. Hoy las specs son refs
+**exactas** (M39c dejó "rangos de verdad" como diferido). M51 los necesita: `foo = "^1.2"` (compatible),
+`"~1.2.3"`, `"1.2.0"` (exacta). Se extiende `semver`/`mvs` (§41.6) para casar un **requisito** contra las
+versiones del índice y elegir la mayor compatible (MVS: la mínima que satisface, subiendo en conflicto).
+
+### 54.4 Subcomandos nuevos
+
+- **`ray add <nombre>[@<req>]`** — resuelve `<req>` (o la última) en el índice, **escribe** la dep en
+  `ray.toml` y hace `fetch`. El azúcar de instalación que hoy falta.
+- **`ray publish`** — desde un proyecto: **valida** (tiene `name`/`version` en su `ray.toml`, es importable
+  —`mod.ray`/raíz—, **compila** con `ray build`), calcula el **hash de contenido** (`deps::hash_package`,
+  reusado de M39c-2b) y **genera la entrada de versión** para el índice. Publicar de verdad = *commit* +
+  *push* al repo del índice (acción del autor, con sus credenciales git); el CLI produce/aplica el commit
+  sobre un clon del índice. Rechaza sobrescribir una versión existente.
+- **`ray update`** (M51c) — recomputa el lock a las versiones más nuevas que aún satisfagan los requisitos.
+- **`ray yank <nombre>@<ver>`** (M51c) — marca `yanked = true` (un commit al índice); la resolución **salta**
+  las yanked salvo que el `ray.lock` ya las hubiera fijado (no rompe builds existentes).
+
+### 54.5 Fases
+
+- **M51a — leer del índice + `ray add`.** Rangos semver (54.3). Resolver `foo = "<req>"` contra un índice
+  **local/por ruta** (para tests deterministas), reusando descarga git + lock. `ray add` escribe el `ray.toml`.
+- **M51b — `ray publish`.** Validación + hash + generación de la entrada (append-only, inmutable). Probado
+  *offline* con un repo git de índice local (el truco `file://` de `deps_cli`, ya usado en M39c-2a).
+- **M51c — índice remoto + mantenimiento.** Clonar/cachear el repo del índice (`RAY_INDEX` o `[registry]` en
+  `ray.toml`; caché global `~/.ray/index`), `ray update`, `ray yank`.
+
+### 54.6 Testing (offline y determinista, como M39c)
+
+El índice de prueba es un **repo git local** servido por `file://` (`git init` + archivos `index/*.toml` +
+paquetes-repo con tags). `ray add`/`ray fetch`/`ray publish` operan sobre él sin red; `publish` commitea la
+entrada y una segunda resolución la usa. Reusa `deps_cli`/`cli_cli`. **Cero runtime nuevo**: todo es
+resolución en el front-end/CLI; los motores nunca ven un paquete.
+
+### 54.7 Diferido (fuera de M51)
+
+Búsqueda/UI web del índice; cuentas y **firmas de publicación** (estilo sigstore) sobre el hash ya existente;
+mirrors/proxy; *namespaces* con dueño; `ray.lock` con el propio índice como fuente (hoy fija el commit git).

@@ -5,6 +5,11 @@ protocolos** vive aquí, en un **paquete adicional**: son librerías que depende
 interesan a quien construye servicios, y serían peso muerto en el binario de todo el mundo. Se apoyan en
 las `std/` embebidas para lo fundacional (`from std/base64 import …`).
 
+Este es el **tier 2** del ecosistema (paquete adicional, no embebido). La regla de qué va aquí vs. en `std/`
+vs. como demo en `examples/` está en la **política de tiers** ([DESIGN.md](../../DESIGN.md) §53); la
+instalación por nombre desde un registro central se diseña en §54 (M51). Hoy se consume por dependencia de
+ruta/git en `ray.toml`.
+
 **Criptografía de producción (M43)**: el módulo `net/crypto` expone SHA/HMAC/Ed25519 respaldados por
 `ring` (tiempo constante, auditado) en la forma (`[int]`/hex) que estos módulos consumen. Las
 implementaciones en raylang puro (`examples/web/sha256.ray`, etc.) se conservan como **demostración del

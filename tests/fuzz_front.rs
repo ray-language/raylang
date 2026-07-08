@@ -6,7 +6,7 @@
 //! propios, en vez de `cargo-fuzz` (nightly + libFuzzer; el coverage-guided queda
 //! diferido). El corpus semilla son los `.ray` reales del repo (`examples/` + `selfhost/`).
 //!
-//! Objetivo: `lsp::analizar_todos` (corre el front-end SIN ejecutar — fuzzeamos el
+//! Objetivo: `lsp::analyze_all` (corre el front-end SIN ejecutar — fuzzeamos el
 //! compilador, no el programa del usuario; la variante multi-error ejercita además la
 //! recuperación del parser y el `check_all` sobre programas parciales, M33c) y
 //! `fmt::format_source`. Cada caso corre en un hilo con pila grande; un `join` con
@@ -147,7 +147,7 @@ fn correr(caso: &[u8]) -> Option<String> {
         .spawn(move || {
             // M33c: la variante multi-error ejercita también la RECUPERACIÓN del parser
             // (sync_item) y el check_all sobre programas parciales — superficie nueva.
-            let _ = raylang::lsp::analizar_todos(&src2); // lex → parse_all → check_all
+            let _ = raylang::lsp::analyze_all(&src2); // lex → parse_all → check_all
             let _ = raylang::fmt::format_source(&src2); // rayfmt: lex → parse → pretty-print
         })
         .expect("hilo del caso");

@@ -5,9 +5,9 @@
 fn contador() -> fn() -> int {
     var n: int = 0;
     fn() -> int {
-    n = n + 1;  // muta la variable capturada
-    n
-}
+        n = n + 1;  // muta la variable capturada
+        n
+    }
 }
 
 // Captura transitiva: 'x' es local de 'sumador'; la closure interna lo captura.

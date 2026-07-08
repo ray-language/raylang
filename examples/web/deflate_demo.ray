@@ -4,7 +4,7 @@
 // compatibilidad estándar, no solo auto-consistencia). Salida determinista; lo corre en ambos motores.
 from deflate import deflate_raw, gzip_compress, zlib_compress;
 from inflate import inflate_raw, gunzip, zlib_inflate;
-import std/fs; // M50.1: write_file_bytes vive en std/fs.
+import std/fs;  // M50.1: write_file_bytes vive en std/fs.
 
 fn main() -> int {
     // Texto repetitivo → el LZ77 encuentra muchas coincidencias y comprime de verdad.

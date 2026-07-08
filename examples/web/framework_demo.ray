@@ -23,24 +23,24 @@ fn main() -> int {
     app.use_mw(logger);
 
     app.GET("/", fn(c: Ctx, r: Res) {
-    r.text("¡Hola desde el micro-framework de raylang!");
-});
+        r.text("¡Hola desde el micro-framework de raylang!");
+    });
 
     // Parámetro de ruta: /users/:id → c.param("id").
     app.GET("/users/:id", fn(c: Ctx, r: Res) {
-    let id: string = c.param("id");
-    r.json("{\"id\": \"" + id + "\", \"nombre\": \"usuario-" + id + "\"}");
-});
+        let id: string = c.param("id");
+        r.json("{\"id\": \"" + id + "\", \"nombre\": \"usuario-" + id + "\"}");
+    });
 
     // Eco del cuerpo de la petición.
     app.POST("/echo", fn(c: Ctx, r: Res) {
-    r.text(c.body());
-});
+        r.text(c.body());
+    });
 
     // Estado a medida, encadenado: r.status(418).text(...).
     app.GET("/teapot", fn(c: Ctx, r: Res) {
-    r.status(418).text("Soy una tetera");
-});
+        r.status(418).text("Soy una tetera");
+    });
 
     match (app.listen("127.0.0.1", 8080)) {
         Result.Ok(_) => 0,

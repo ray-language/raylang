@@ -706,7 +706,14 @@ fn fmt_stmt_inner(cur: &mut Cur, st: &Stmt, indent: usize) -> String {
             if is_block_form(e) {
                 fmt_expr_indented(cur, e, indent)
             } else {
-                format!("{};", fmt_expr(cur, e, 0))
+                // Deja la indentación del contexto en `cur.base` para las formas con bloque anidadas en
+                // la expresión (una función anónima con cuerpo `spawn(fn() { … })`, o un `match` dentro
+                // de un argumento), igual que `fmt_value`.
+                let saved = cur.base;
+                cur.base = indent;
+                let s = format!("{};", fmt_expr(cur, e, 0));
+                cur.base = saved;
+                s
             }
         }
     }
@@ -929,7 +936,10 @@ fn fmt_expr_raw(cur: &mut Cur, e: &Expr) -> String {
             }
         }
         ExprKind::Func(fe) => {
-            format!("fn({}){} {}", fmt_params(&fe.params), fmt_return(&fe.return_type), fmt_block(cur, &fe.body, 0))
+            // El cuerpo se indenta relativo a la línea donde aparece el `fn(...)` (`cur.base`), no a 0:
+            // una función anónima como argumento de llamada (`spawn(fn() { … })`) o inicializador vive
+            // dentro de un contexto ya indentado. `cur.base` lo dejan `fmt_value`/`fmt_stmt`.
+            format!("fn({}){} {}", fmt_params(&fe.params), fmt_return(&fe.return_type), fmt_block(cur, &fe.body, cur.base))
         }
         ExprKind::Try(inner) => format!("{}?", fmt_expr(cur, inner, 13)),
         ExprKind::Match { .. } | ExprKind::If { .. } | ExprKind::While { .. } | ExprKind::Block(_) => {
@@ -1121,6 +1131,20 @@ mod tests {
         assert!(out.contains("/// Documenta."), "doc comment: {out}");
         assert!(out.contains("let y = x * 2;  // el doble"), "trailing: {out}");
         assert!(out.contains("    // resultado"), "suelto en el cuerpo: {out}");
+    }
+
+    #[test]
+    fn fn_anonima_como_argumento_indenta_el_cuerpo() {
+        // Regresión: `spawn(fn() { … })` como sentencia — el cuerpo va un nivel más adentro que la
+        // llamada y el `});` alinea con ella (antes el cuerpo se quedaba al nivel de la llamada y el
+        // cierre en la columna 0).
+        let src = "fn main() -> int {\n    spawn(fn() {\n        work(1);\n    });\n    0\n}\n";
+        let out = fmt(src);
+        assert!(out.contains("    spawn(fn() {\n        work(1);\n    });"), "cuerpo a +1, cierre alineado: {out:?}");
+        assert_eq!(fmt(&out), out, "idempotente");
+        // Anidado: `scope(fn() { spawn(fn() { … }) })`.
+        let nested = "fn main() -> int {\n    scope(fn() {\n        spawn(fn() {\n            send(ch, 7);\n        });\n    });\n    0\n}\n";
+        assert_eq!(fmt(nested), nested, "función anónima anidada, idempotente: {:?}", fmt(nested));
     }
 
     #[test]

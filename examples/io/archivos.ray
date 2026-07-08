@@ -2,7 +2,7 @@
 //
 // Ejecuta pasando una ruta como argumento:
 //   cargo run --quiet -- examples/io/archivos.ray /tmp/saludo.txt
-import std/fs; // M50.1: la I/O de archivos vive en std/fs (fs.read_file, fs.write_file, …).
+import std/fs;  // M50.1: la I/O de archivos vive en std/fs (fs.read_file, fs.write_file, …).
 
 // Saca el valor de un Result o, si es Err, lo informa por stderr y usa un valor por defecto.
 fn o_default(r: Result<string, string>, def: string) -> string {

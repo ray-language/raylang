@@ -50,6 +50,8 @@ fn run() {
         Some("test") => cmd_test_sub(&rest[1..]),
         Some("add") => cmd_add(&rest[1..]),
         Some("publish") => cmd_publish(&rest[1..]),
+        Some("update") => cmd_update(&rest[1..]),
+        Some("yank") => cmd_yank(&rest[1..]),
         Some("fetch") => cmd_fetch(&rest[1..]),
         Some("fmt") => cmd_fmt(&rest[1..]),
         Some("doc") => cmd_doc(&rest[1..]),
@@ -77,6 +79,8 @@ Uso: ray <subcomando> [opciones]
   test [archivo]    corre las funciones @test [filtro]
   add <nombre>[@req]  añade una dependencia del índice a ray.toml y la descarga
   publish [--repo S]  publica la versión de este paquete en el índice
+  update            re-resuelve las dependencias del índice a las más nuevas compatibles
+  yank <nom>@<ver>  retira (o --undo restaura) una versión publicada en el índice
   fetch             descarga las dependencias de ray.toml a .ray-deps/
   fmt <archivo>     imprime la versión canónica por stdout
   doc <archivo>     genera la documentación Markdown de su superficie pública
@@ -405,6 +409,68 @@ fn git_capture(cwd: &Path, args: &[&str]) -> Result<String, String> {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// `ray update`: refresca el índice remoto y **re-resuelve** las dependencias del índice a la versión
+/// más alta que satisface su requisito (ignora el lock previo), reescribiendo `ray.lock` (M51c).
+fn cmd_update(_args: &[String]) {
+    let Some(m) = load_manifest() else {
+        eprintln!("no hay proyecto: falta 'ray.toml'");
+        process::exit(64);
+    };
+    if m.dependencies.is_empty() {
+        println!("'{}' no declara dependencias", m.name);
+        return;
+    }
+    match crate::deps::update(&m) {
+        Ok(_) => println!("dependencias actualizadas a las versiones más nuevas compatibles"),
+        Err(e) => {
+            eprintln!("error actualizando dependencias: {e}");
+            process::exit(65);
+        }
+    }
+}
+
+/// `ray yank <nombre>@<versión> [--undo]`: marca una versión publicada como **retirada** en el índice
+/// (o la restaura con `--undo`), M51c. Una versión retirada no se elige en nuevas resoluciones, pero
+/// un lock que ya la fijó la sigue usando (no rompe builds existentes). Edita el índice local; el
+/// autor hace commit/push del repo del índice.
+fn cmd_yank(args: &[String]) {
+    let (undo, rest) = take_flag_bool(args, "--undo");
+    let Some(spec) = rest.first().map(String::as_str) else {
+        eprintln!("uso: ray yank <nombre>@<versión> [--undo]");
+        process::exit(64);
+    };
+    let Some((name, ver)) = spec.split_once('@') else {
+        eprintln!("uso: ray yank <nombre>@<versión> (la versión es obligatoria)");
+        process::exit(64);
+    };
+    let Some(m) = load_manifest() else {
+        eprintln!("no hay proyecto: falta 'ray.toml' (para localizar el índice)");
+        process::exit(64);
+    };
+    let index = match crate::deps::index_dir(&m) {
+        Ok(Some(dir)) => dir,
+        Ok(None) => {
+            eprintln!("no hay índice configurado ('[registry] index' o RAY_INDEX)");
+            process::exit(65);
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            process::exit(65);
+        }
+    };
+    match crate::index::set_yanked(&index, name, ver, !undo) {
+        Ok(()) => {
+            let verb = if undo { "restaurada" } else { "retirada" };
+            println!("versión {name} {ver} {verb} en el índice");
+            println!("nota: haz commit y push de '{name}.toml' para compartir el cambio.");
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            process::exit(65);
+        }
     }
 }
 

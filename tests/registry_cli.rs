@@ -23,6 +23,21 @@ fn ray_idx(cwd: &Path, index: &Path, args: &[&str]) -> (String, String, i32) {
     )
 }
 
+/// Como `ray_idx` pero SIN `RAY_INDEX` (para probar `[registry] index` del ray.toml).
+fn ray_plain(cwd: &Path, args: &[&str]) -> (String, String, i32) {
+    let out = Command::new(BIN)
+        .args(args)
+        .current_dir(cwd)
+        .env_remove("RAY_INDEX")
+        .output()
+        .expect("lanza el binario");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
 fn git(cwd: &Path, args: &[&str]) {
     let out = Command::new("git").args(args).current_dir(cwd).output().expect("git disponible");
     assert!(out.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&out.stderr));
@@ -248,6 +263,99 @@ fn ray_publish_sin_tag_falla_claro() {
     let (_o, err, code) = ray_idx(&work, &index, &["publish"]);
     assert_eq!(code, 65, "sin tag falla");
     assert!(err.contains("no existe el tag 'v2.0.0'"), "mensaje claro:\n{err}");
+}
+
+#[test]
+fn yank_excluye_la_version_de_nuevas_resoluciones() {
+    let base = tmp("yank");
+    let index = base.join("index");
+    let r120 = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
+    let r130 = publicar(&base, "geo", "1.3.0", "pub fn v() -> int { 130 }\n");
+    indexar(&index, "geo", &[("1.2.0", &r120), ("1.3.0", &r130)]);
+    let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"^1.2\"\n",
+    )
+    .unwrap();
+
+    // Retira la 1.3.0 (usa el proyecto solo para localizar el índice vía RAY_INDEX).
+    let (out, err, code) = ray_idx(&app, &index, &["yank", "geo@1.3.0"]);
+    assert_eq!(code, 0, "yank OK\n{err}");
+    assert!(out.contains("retirada"), "{out}");
+
+    // Una resolución NUEVA (sin lock previo) elige la 1.2.0 (la 1.3.0 está retirada).
+    let (out, err, _c) = ray_idx(&app, &index, &["run"]);
+    assert!(out.contains("120"), "yank excluye la 1.3.0 en nueva resolución\n{out}\n{err}");
+
+    // --undo la restaura; `ray update` re-resuelve a la 1.3.0 (el lock estaba fijado en 1.2.0).
+    let (_o, _e, code) = ray_idx(&app, &index, &["yank", "geo@1.3.0", "--undo"]);
+    assert_eq!(code, 0);
+    let (_o, err, code) = ray_idx(&app, &index, &["update"]);
+    assert_eq!(code, 0, "update tras --undo\n{err}");
+    let (out, _e, _c) = ray_idx(&app, &index, &["run"]);
+    assert!(out.contains("130"), "--undo + update restaura la 1.3.0\n{out}");
+}
+
+#[test]
+fn el_lock_fija_la_version_y_update_la_sube() {
+    let base = tmp("update");
+    let index = base.join("index");
+    let r120 = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
+    indexar(&index, "geo", &[("1.2.0", &r120)]);
+    let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"^1.2\"\n",
+    )
+    .unwrap();
+
+    // Primera resolución: 1.2.0 (la única). Queda fijada en el lock.
+    let (out, _e, _c) = ray_idx(&app, &index, &["run"]);
+    assert!(out.contains("120"), "resuelve 1.2.0\n{out}");
+
+    // Ahora aparece la 1.3.0 en el índice.
+    let r130 = publicar(&base, "geo", "1.3.0", "pub fn v() -> int { 130 }\n");
+    indexar(&index, "geo", &[("1.2.0", &r120), ("1.3.0", &r130)]);
+
+    // `ray run` (sin update) RESPETA el lock → sigue en 1.2.0 (reproducible).
+    let (out, _e, _c) = ray_idx(&app, &index, &["run"]);
+    assert!(out.contains("120"), "el lock fija la versión pese a la nueva del índice\n{out}");
+
+    // `ray update` sube a la 1.3.0 (la más alta que satisface ^1.2).
+    let (_o, err, code) = ray_idx(&app, &index, &["update"]);
+    assert_eq!(code, 0, "update OK\n{err}");
+    let (out, _e, _c) = ray_idx(&app, &index, &["run"]);
+    assert!(out.contains("130"), "update sube a la 1.3.0\n{out}");
+}
+
+#[test]
+fn indice_remoto_por_git_se_clona_y_resuelve() {
+    let base = tmp("remoteidx");
+    // El índice es un REPO git (no un dir suelto): se crea, se escriben sus archivos y se commitea.
+    let index_repo = base.join("index-repo");
+    let repo = publicar(&base, "geo", "1.0.0", "pub fn v() -> int { 99 }\n");
+    indexar(&index_repo, "geo", &[("1.0.0", &repo)]);
+    git(&index_repo, &["init", "-q"]);
+    git(&index_repo, &["add", "-A"]);
+    git(&index_repo, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "idx"]);
+
+    // El proyecto apunta al índice por git+file:// en [registry].
+    let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
+    std::fs::write(
+        app.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[registry]\nindex = \"git+file://{}\"\n\n[dependencies]\ngeo = \"1.0.0\"\n",
+            index_repo.display()
+        ),
+    )
+    .unwrap();
+
+    // `ray run` clona el índice a .ray-deps/.index, resuelve geo y lo ejecuta.
+    let (out, err, code) = ray_plain(&app, &["run"]);
+    assert_eq!(code, 0, "run con índice remoto OK\n{err}");
+    assert!(out.contains("99"), "resolvió por el índice remoto clonado\n{out}\n{err}");
+    assert!(app.join(".ray-deps/.index/geo.toml").is_file(), "el índice quedó cacheado");
 }
 
 #[test]

@@ -6736,8 +6736,18 @@ versiones del índice y elegir la mayor compatible (MVS: la mínima que satisfac
   del autor—. Probado *offline* con un bare repo local + `origin` (`tests/registry_cli.rs`): publicar,
   inmutabilidad al republicar, un consumidor que resuelve por nombre lo publicado, y el error claro si
   falta el tag.
-- **M51c — índice remoto + mantenimiento.** Clonar/cachear el repo del índice (`RAY_INDEX` o `[registry]` en
-  `ray.toml`; caché global `~/.ray/index`), `ray update`, `ray yank`.
+- **M51c — índice remoto + mantenimiento. ✅ COMPLETO. → M51 COMPLETO.** (1) **Índice remoto por git**:
+  `[registry] index = "git+<URL>[@ref]"` (o `RAY_INDEX`) se **clona/cachea** en `.ray-deps/.index`
+  (`ensure_index_clone`; clona si falta, no re-clona en cada resolución) y se usa como dir local. (2)
+  **Reproducibilidad (lock-pinning)**: `resolve_pinned` reusa la versión ya bloqueada si sigue satisfaciendo
+  el requisito → un caret no sube solo porque el índice gane una versión; se cierra la limitación de M51a.
+  (3) **`ray update`** (`deps::update`): refresca el índice (`git pull`) y **re-resuelve** a la más alta
+  compatible ignorando el lock; requirió que `ensure` **re-descargue cuando el disco (según el lock) no
+  es la versión elegida** —antes no refrescaba `.ray-deps/<dep>` si existía, un bug latente que solo se
+  manifiesta al cambiar de versión entre ejecuciones—. (4) **`ray yank <n>@<v> [--undo]`**
+  (`index::set_yanked`): marca una versión como retirada (no se elige en nuevas resoluciones; un lock que
+  ya la fijó la sigue usando). Tests offline (`tests/registry_cli.rs`): índice git `file://` clonado, lock
+  que fija la versión + `update` que la sube, yank que excluye y `--undo` que restaura.
 
 ### 54.6 Testing (offline y determinista, como M39c)
 

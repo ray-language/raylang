@@ -107,20 +107,70 @@ pub(crate) fn index_dir(manifest: &Manifest) -> Result<Option<std::path::PathBuf
     let Some(raw) = raw else {
         return Ok(None);
     };
-    if raw.starts_with("git+") {
-        return Err(format!(
-            "el índice remoto por git ('{raw}') aún no está soportado (llega en M51c); usa un \
-             directorio local en '[registry] index' o exporta RAY_INDEX"
-        ));
+    // Índice remoto por git (M51c): se clona/cachea en `.ray-deps/.index` y se usa como dir local.
+    if let Some(without) = raw.strip_prefix("git+") {
+        let cache = manifest.root.join(".ray-deps").join(".index");
+        // `git+URL` o `git+URL@ref` (ref opcional; no confundir un '/' de la ruta con un ref).
+        let (url, git_ref) = match without.rsplit_once('@') {
+            Some((u, r)) if !u.is_empty() && !r.contains('/') => (u, Some(r)),
+            _ => (without, None),
+        };
+        ensure_index_clone(url, git_ref, &cache)?;
+        return Ok(Some(cache));
     }
     let p = Path::new(&raw);
     Ok(Some(if p.is_absolute() { p.to_path_buf() } else { manifest.root.join(&raw) }))
 }
 
+/// Clona el repo del índice en `cache` si aún no está (M51c). No re-clona en cada resolución (sería
+/// lento y no determinista); `ray update` refresca (`git pull`). Con `git_ref`, hace checkout de él.
+fn ensure_index_clone(url: &str, git_ref: Option<&str>, cache: &Path) -> Result<(), String> {
+    if cache.exists() {
+        return Ok(()); // ya cacheado; `ray update` lo refresca
+    }
+    if let Some(parent) = cache.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    git(&["clone", "--quiet", url, &cache.to_string_lossy()], None)
+        .map_err(|e| format!("no se pudo clonar el índice de paquetes ({url}): {e}"))?;
+    if let Some(r) = git_ref
+        && let Err(e) = git(&["checkout", "--quiet", r], Some(cache))
+    {
+        let _ = std::fs::remove_dir_all(cache);
+        return Err(format!("no se pudo hacer checkout de '{r}' en el índice: {e}"));
+    }
+    Ok(())
+}
+
+/// Refresca el índice remoto cacheado (`git pull`), si existe. Para `ray update` (M51c). No-op para
+/// un índice local (directorio) o si no hay caché.
+pub fn refresh_index(manifest: &Manifest) -> Result<(), String> {
+    let raw = std::env::var("RAY_INDEX")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| manifest.registry_index.clone());
+    if !raw.is_some_and(|r| r.starts_with("git+")) {
+        return Ok(()); // índice local o sin índice → nada que refrescar
+    }
+    let cache = manifest.root.join(".ray-deps").join(".index");
+    if cache.exists() {
+        git(&["pull", "--quiet"], Some(&cache))
+            .map(|_| ())
+            .map_err(|e| format!("no se pudo refrescar el índice de paquetes: {e}"))?;
+    }
+    Ok(())
+}
+
 /// Resuelve la spec de una dependencia a una `GitSpec` descargable: `git+…` se parsea directo;
-/// un **requisito de versión** (`1.2.0`/`^1.2`/…) se resuelve **por el índice** (M51a). Las `path:`
-/// se filtran antes de llegar aquí.
-fn to_gitspec(name: &str, spec: &str, index: Option<&Path>) -> Result<GitSpec, String> {
+/// un **requisito de versión** (`1.2.0`/`^1.2`/…) se resuelve **por el índice** (M51a), respetando
+/// el lock salvo `update` (M51c). Las `path:` se filtran antes de llegar aquí.
+fn to_gitspec(
+    name: &str,
+    spec: &str,
+    index: Option<&Path>,
+    locked: Option<&GitSpec>,
+    update: bool,
+) -> Result<GitSpec, String> {
     if crate::index::is_registry_spec(spec) {
         let dir = index.ok_or_else(|| {
             format!(
@@ -128,16 +178,32 @@ fn to_gitspec(name: &str, spec: &str, index: Option<&Path>) -> Result<GitSpec, S
                  configurado (declara '[registry] index = \"<dir>\"' en ray.toml o exporta RAY_INDEX)"
             )
         })?;
-        crate::index::resolve(dir, name, spec)
+        crate::index::resolve_pinned(dir, name, spec, locked, update)
     } else {
         parse_spec(spec)
     }
 }
 
+/// Asegura las dependencias respetando el lock (build reproducible). Ver `ensure` / `update`.
 pub fn ensure(manifest: &Manifest) -> Result<usize, String> {
+    ensure_impl(manifest, false)
+}
+
+/// Como `ensure`, pero **re-resuelve** las deps del índice a la versión más alta que satisface su
+/// requisito (ignora el lock previo) y refresca el índice remoto — `ray update` (M51c).
+pub fn update(manifest: &Manifest) -> Result<usize, String> {
+    refresh_index(manifest)?;
+    ensure_impl(manifest, true)
+}
+
+fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
     let cache = manifest.root.join(".ray-deps");
     let locked = read_lock(&manifest.root)?;
     let index = index_dir(manifest)?;
+    // El `GitSpec` bloqueado por nombre (para `resolve_pinned`): reproducibilidad de los requisitos.
+    let locked_spec = |name: &str| -> Option<GitSpec> {
+        locked.get(name).map(|e| GitSpec { url: e.url.clone(), git_ref: e.git_ref.clone() })
+    };
 
     // BFS del grafo. `chosen` = spec resuelto por nombre (tras MVS); `cached` = spec que esta
     // ejecución dejó en la caché (para re-descargar si un conflicto lo actualiza).
@@ -149,7 +215,7 @@ pub fn ensure(manifest: &Manifest) -> Result<usize, String> {
         if path_of_path_dep(s).is_some() {
             continue; // M40.8a: las path-deps son locales; no se descargan (las registra el CLI)
         }
-        queue.push_back((n.clone(), to_gitspec(n, s, index.as_deref())?));
+        queue.push_back((n.clone(), to_gitspec(n, s, index.as_deref(), locked_spec(n).as_ref(), update)?));
     }
 
     while let Some((name, spec)) = queue.pop_front() {
@@ -165,11 +231,17 @@ pub fn ensure(manifest: &Manifest) -> Result<usize, String> {
             continue; // ya procesado con este spec (dedup / ciclo)
         }
 
-        // Descargar (o re-descargar si esta ejecución tenía otra versión por un conflicto).
+        // Descargar (o re-descargar si esta ejecución tenía otra versión por un conflicto, o si lo
+        // que hay EN DISCO —según el lock previo— no es la versión ya elegida: pasa al resolver por
+        // el índice cambiando de versión entre ejecuciones, p. ej. tras `ray update` o un yank).
         let dest = cache.join(&name);
+        let on_disk_stale = dest.exists()
+            && locked.get(&name).is_some_and(|e| {
+                e.git_ref != chosen_spec.git_ref || e.url != chosen_spec.url
+            });
         if cached.get(&name) != Some(&chosen_spec) {
-            if cached.contains_key(&name) && dest.exists() {
-                let _ = std::fs::remove_dir_all(&dest); // upgrade dentro de esta resolución
+            if (cached.contains_key(&name) || on_disk_stale) && dest.exists() {
+                let _ = std::fs::remove_dir_all(&dest); // upgrade dentro de esta resolución o vs. disco
             }
             if !dest.exists() {
                 eprintln!("  descargando {name} ({}@{})", chosen_spec.url, chosen_spec.git_ref);
@@ -185,7 +257,7 @@ pub fn ensure(manifest: &Manifest) -> Result<usize, String> {
             if path_of_path_dep(&ds).is_some() {
                 continue;
             }
-            let gs = to_gitspec(&dn, &ds, index.as_deref())?;
+            let gs = to_gitspec(&dn, &ds, index.as_deref(), locked_spec(&dn).as_ref(), update)?;
             queue.push_back((dn, gs));
         }
     }

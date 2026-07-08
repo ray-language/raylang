@@ -225,7 +225,28 @@ pub fn latest(index_dir: &Path, name: &str) -> Result<String, String> {
 /// Resuelve `name` con el requisito `req` contra el índice → la `GitSpec` de la versión **más alta
 /// no retirada** que lo satisface. Error si el paquete no existe o ninguna versión casa.
 pub fn resolve(index_dir: &Path, name: &str, req: &str) -> Result<GitSpec, String> {
+    resolve_pinned(index_dir, name, req, None, true)
+}
+
+/// Como `resolve`, pero **respeta el lock** (M51c): si `locked` (la versión ya bloqueada de `name`)
+/// sigue satisfaciendo `req` y no se pide `update`, la reusa —build reproducible: un caret no sube
+/// solo porque el índice gane una versión—. Con `update = true` o sin lock válido, re-resuelve la
+/// más alta del índice.
+pub fn resolve_pinned(
+    index_dir: &Path,
+    name: &str,
+    req: &str,
+    locked: Option<&GitSpec>,
+    update: bool,
+) -> Result<GitSpec, String> {
     let req_parsed = VersionReq::parse(req)?;
+    if !update
+        && let Some(l) = locked
+        && let Some(v) = deps::semver(&l.git_ref)
+        && req_parsed.matches(v)
+    {
+        return Ok(l.clone()); // el lock sigue satisfaciendo el requisito → reproducible
+    }
     let mut versions = read_package(index_dir, name)?;
     versions.retain(|e| !e.yanked && req_parsed.matches(e.version));
     versions.sort_by(|a, b| a.version.cmp(&b.version));
@@ -235,6 +256,43 @@ pub fn resolve(index_dir: &Path, name: &str, req: &str) -> Result<GitSpec, Strin
     deps::parse_spec(&chosen.git).map_err(|e| {
         format!("la versión '{}' de '{name}' tiene una spec git inválida en el índice: {e}", chosen.num)
     })
+}
+
+/// Marca (o desmarca) como **retirada** (`yanked`) la versión `num` de `name` en el índice (M51c,
+/// `ray yank`). Una versión retirada no se elige en nuevas resoluciones, pero un lock que ya la fijó
+/// la sigue usando (no rompe builds existentes). Edición mínima línea a línea (preserva el resto).
+pub fn set_yanked(index_dir: &Path, name: &str, num: &str, yanked: bool) -> Result<(), String> {
+    let (target, _) = parse_partial(num).map_err(|e| format!("versión inválida: {e}"))?;
+    let path = index_dir.join(format!("{name}.toml"));
+    let source = std::fs::read_to_string(&path)
+        .map_err(|_| format!("el paquete '{name}' no está en el índice ({})", index_dir.display()))?;
+    let mut lines: Vec<String> = source.lines().map(str::to_string).collect();
+    // Localiza la sección `[<versión>]` cuyo número parsea a `target`.
+    let sec = lines.iter().position(|l| {
+        l.trim()
+            .strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .and_then(|n| parse_partial(n.trim()).ok())
+            .is_some_and(|(v, _)| v == target)
+    });
+    let Some(start) = sec else {
+        return Err(format!("la versión '{num}' de '{name}' no está en el índice"));
+    };
+    let end = lines[start + 1..]
+        .iter()
+        .position(|l| l.trim().starts_with('['))
+        .map(|off| start + 1 + off)
+        .unwrap_or(lines.len());
+    let value = format!("yanked = \"{}\"", if yanked { "true" } else { "false" });
+    match lines[start + 1..end].iter().position(|l| l.trim_start().starts_with("yanked")) {
+        Some(off) => lines[start + 1 + off] = value,
+        None => lines.insert(end, value),
+    }
+    let mut out = lines.join("\n");
+    if source.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    std::fs::write(&path, out).map_err(|e| format!("no se pudo escribir el índice de '{name}': {e}"))
 }
 
 /// Añade una versión al archivo de índice de `name` (`<index_dir>/<name>.toml`), creándolo si no

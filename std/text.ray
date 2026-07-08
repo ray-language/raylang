@@ -5,17 +5,17 @@ pub fn is_empty(s: string) -> bool {
     s.len() == 0
 }
 
-/// Pads `s` on the LEFT with the string `relleno` until it reaches `ancho` characters (returned
-/// unchanged if already that long). `relleno` is repeated whole (use a single character for an exact width).
-pub fn pad_left(s: string, ancho: int, relleno: string) -> string {
-    let faltan = ancho - s.len();
-    if (faltan <= 0) { s } else { relleno.repeat(faltan) + s }
+/// Pads `s` on the LEFT with the string `fill` until it reaches `width` characters (returned
+/// unchanged if already that long). `fill` is repeated whole (use a single character for an exact width).
+pub fn pad_left(s: string, width: int, fill: string) -> string {
+    let missing = width - s.len();
+    if (missing <= 0) { s } else { fill.repeat(missing) + s }
 }
 
 /// Like `pad_left`, but padding on the RIGHT.
-pub fn pad_right(s: string, ancho: int, relleno: string) -> string {
-    let faltan = ancho - s.len();
-    if (faltan <= 0) { s } else { s + relleno.repeat(faltan) }
+pub fn pad_right(s: string, width: int, fill: string) -> string {
+    let missing = width - s.len();
+    if (missing <= 0) { s } else { s + fill.repeat(missing) }
 }
 
 /// Uppercases the first character and leaves the rest unchanged. Empty string → empty.
@@ -45,16 +45,16 @@ pub fn count(s: string, sub: string) -> int {
         0
     } else {
         var n = 0;
-        var resto = s;
-        var seguir = true;
-        while (seguir) {
-            match (index_of(resto, sub)) {
+        var rest = s;
+        var keep_going = true;
+        while (keep_going) {
+            match (index_of(rest, sub)) {
                 Option.Some(i) => {
                     n = n + 1;
-                    resto = resto.substring(i + sub.len(), resto.len());
+                    rest = rest.substring(i + sub.len(), rest.len());
                 },
                 Option.None => {
-                    seguir = false;
+                    keep_going = false;
                 },
             }
         }
@@ -64,12 +64,12 @@ pub fn count(s: string, sub: string) -> int {
 
 /// Splits `s` into words separated by spaces, discarding empty ones (repeated spaces).
 pub fn words(s: string) -> [string] {
-    let partes = s.split(" ");
+    let parts = s.split(" ");
     var out: [string] = [];
     var i = 0;
-    while (i < partes.len()) {
-        if (partes[i].len() > 0) {
-            out.push(partes[i]);
+    while (i < parts.len()) {
+        if (parts[i].len() > 0) {
+            out.push(parts[i]);
         }
         i = i + 1;
     }

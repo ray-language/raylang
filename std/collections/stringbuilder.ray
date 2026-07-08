@@ -7,22 +7,22 @@
 /// repeated `+` concatenation in a loop. Import with `import std/collections/stringbuilder;` (or
 /// `as sb`) and operate with `sb.new`, `sb.push`, `sb.build`, `sb.count`.
 pub struct StringBuilder {
-    partes: [string],
+    parts: [string],
 }
 
 /// Creates an empty StringBuilder.
-pub fn new() -> StringBuilder { StringBuilder { partes: [] } }
+pub fn new() -> StringBuilder { StringBuilder { parts: [] } }
 
 // Añade un trozo al final (O(1) amortizado; no copia lo ya acumulado).
 /// Appends a chunk to the builder (amortized O(1); does not copy what is already accumulated).
 pub fn push(sb: StringBuilder, s: string) {
-    sb.partes.push(s);
+    sb.parts.push(s);
 }
 
 // Une todo lo acumulado en un solo string (O(total), una vez).
 /// Joins all accumulated chunks into a single string (O(total), done once).
-pub fn build(sb: StringBuilder) -> string { join(sb.partes, "") }
+pub fn build(sb: StringBuilder) -> string { join(sb.parts, "") }
 
 // Número de trozos acumulados (no de caracteres).
 /// Returns the number of accumulated chunks (not characters).
-pub fn count(sb: StringBuilder) -> int { sb.partes.len() }
+pub fn count(sb: StringBuilder) -> int { sb.parts.len() }

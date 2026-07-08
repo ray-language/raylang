@@ -113,17 +113,17 @@ pub fn ipow(base: int, exp: int) -> int {
     if (exp < 0) {
         0
     } else {
-        var resultado = 1;
+        var result = 1;
         var b = base;
         var e = exp;
         while (e > 0) {
             if (e % 2 == 1) {
-                resultado = resultado * b;
+                result = result * b;
             }
             b = b * b;
             e = e / 2;
         }
-        resultado
+        result
     }
 }
 
@@ -148,13 +148,13 @@ pub fn is_prime(n: int) -> bool {
         false
     } else {
         var i = 2;
-        var primo = true;
-        while (i * i <= n && primo) {
+        var prime = true;
+        while (i * i <= n && prime) {
             if (n % i == 0) {
-                primo = false;
+                prime = false;
             }
             i = i + 1;
         }
-        primo
+        prime
     }
 }

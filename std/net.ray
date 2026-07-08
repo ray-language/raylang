@@ -24,9 +24,9 @@ pub fn socket_read_bytes(h: int) -> Result<bytes, string> {
 }
 
 /// Writes raw bytes to the socket; `Ok(byte count)` or `Err(message)`.
-pub fn socket_write_bytes(h: int, datos: bytes) -> Result<int, string> {
-    let r = __socket_write_bytes(h, datos);
-    if (r[0] == "ok") { Result.Ok(datos.len()) } else { Result.Err(r[1]) }
+pub fn socket_write_bytes(h: int, data: bytes) -> Result<int, string> {
+    let r = __socket_write_bytes(h, data);
+    if (r[0] == "ok") { Result.Ok(data.len()) } else { Result.Err(r[1]) }
 }
 
 // --- Cliente TCP (M15.2). Sobre los primitivos __tcp_connect/__socket_read/__socket_write. ---

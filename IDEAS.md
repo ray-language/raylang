@@ -225,6 +225,12 @@ Soporte de los archivos `.ray` en editores. Tiene dos mitades muy distintas:
     `checker::member_completion`; incluye los **builtins de string/array/map** y el orden superior
     del prelude (`map`/`filter`/`fold`/`sort`). Diferido: docs `///` de métodos de impl del usuario,
     receptores que son expresiones (`f(x).`), UFCS del usuario sobre primitivos.
+  - **Completion type-aware tras `|>`** (pipeline) — el `|>` no tiene tratamiento propio en la
+    completion: sin un `.` delante, cae al camino **de archivo** (ofrece TODAS las funciones, no
+    filtradas). Idea: en `x |> ` filtrar a las funciones libres cuyo **primer parámetro** acepte el
+    tipo del operando izquierdo (`x`), igual que `member_completion_items` hace para el `.`. Reusa la
+    inferencia del checker sobre el operando. Impacto **bajo** (cliente LSP, front-end puro; cero
+    runtime). Ergonomía, no corrección.
   - Diferido: hover/def de **métodos** (comparten `(línea,col)` con el receptor, sin spans).
 
 ## 9. Anotaciones (`@test`, `@derive`, …)

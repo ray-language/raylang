@@ -2940,6 +2940,17 @@ impl Checker {
             // Llamada directa por nombre: `f(a, b)`.
             ExprKind::Ident(n) => {
                 let n = n.clone();
+                // Completion tras `|>`: el LSP repara `x |> parc` como `x |> __raycomplete__`, que el
+                // parser desazucara a `__raycomplete__(x)`. Como `x |> f` ≡ `f(x)`, enumeramos los
+                // miembros del tipo del receptor (el primer argumento) —las mismas funciones que ofrece
+                // `x.`— en vez de dar error por función desconocida (M7.2 + M45).
+                if self.completing && n == COMPLETION_SENTINEL {
+                    if let Some(recv) = args.first() {
+                        let ty = self.check_expr(recv)?;
+                        self.member_hits = self.enumerate_pipeable(&ty);
+                    }
+                    return Ok(Type::Unit);
+                }
                 // M10.2b: hover/def sobre el nombre llamado, si es una función conocida (no un
                 // builtin ni una variable-función, que ya pasan por la rama de `check_expr`).
                 let fn_ty = self.gather
@@ -3026,6 +3037,22 @@ impl Checker {
     /// tipo, y funciones libres UFCS cuyo primer parámetro acepta el receptor (esto cubre
     /// `map`/`filter`/`fold`/`sort` del prelude y las UFCS del usuario). Dedup por etiqueta.
     fn enumerate_members(&self, rt: &Type) -> Vec<MemberItem> {
+        self.enumerate_members_impl(rt, false)
+    }
+
+    /// Los miembros ofrecibles tras un `|>` (pipeline, M7.2), que difieren de los de `recv.`: como
+    /// `x |> f(a)` ≡ `f(x, a)` (desugaring puro del parser), lo pipeable son **funciones libres**
+    /// (para CUALQUIER tipo, incluidos primitivos: `n |> duplicar`, `path |> read_file`) + los
+    /// builtins invocables por nombre; NO los campos ni los **métodos de trait** (`n |> show` sería
+    /// `show(n)`, y no existe una función libre `show` —solo `int#show`—).
+    fn enumerate_pipeable(&self, rt: &Type) -> Vec<MemberItem> {
+        self.enumerate_members_impl(rt, true)
+    }
+
+    /// Núcleo compartido por `enumerate_members` (para `recv.`) y `enumerate_pipeable` (para `x |>`).
+    /// El flag `pipeable` cambia dos cosas: (a) omite campos y métodos de trait (no son pipeable), y
+    /// (b) enumera funciones libres para todo tipo, no solo receptores compuestos.
+    fn enumerate_members_impl(&self, rt: &Type, pipeable: bool) -> Vec<MemberItem> {
         let mut out: Vec<MemberItem> = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let add = |out: &mut Vec<MemberItem>, seen: &mut std::collections::HashSet<String>,
@@ -3036,14 +3063,17 @@ impl Checker {
             }
         };
 
-        // 1. Campos del struct (kind 5 = Field), con su tipo sustituido como detalle.
-        if let Type::Struct(sname, targs) = rt {
-            if let Some(fields) = self.structs.get(sname) {
-                let tparams = self.struct_tparams.get(sname).cloned().unwrap_or_default();
-                let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs.iter().cloned()).collect();
-                for (fname, fty) in fields {
-                    let ty = subst(fty, &sigma);
-                    add(&mut out, &mut seen, fname.clone(), 5, Some(format!("{}", ty)), false, None);
+        // 1. Campos del struct (kind 5 = Field), con su tipo sustituido como detalle. No pipeable
+        //    (`p |> x` sería `x(p)`; un campo no es una función libre).
+        if !pipeable {
+            if let Type::Struct(sname, targs) = rt {
+                if let Some(fields) = self.structs.get(sname) {
+                    let tparams = self.struct_tparams.get(sname).cloned().unwrap_or_default();
+                    let sigma: HashMap<String, Type> = tparams.into_iter().zip(targs.iter().cloned()).collect();
+                    for (fname, fty) in fields {
+                        let ty = subst(fty, &sigma);
+                        add(&mut out, &mut seen, fname.clone(), 5, Some(format!("{}", ty)), false, None);
+                    }
                 }
             }
         }
@@ -3051,18 +3081,22 @@ impl Checker {
         // 2. Métodos de trait/impl del tipo concreto (kind 2 = Method). La tabla `methods` va por
         //    constructor (`type_key_of`): `Caja<int>` y `Caja<bool>` comparten métodos. Del mangled
         //    sacamos la aridad (para el snippet) y la posición de declaración (para sus `///` docs).
-        if let Some(key) = type_key_of(rt) {
-            for ((k, m), mangled) in &self.methods {
-                if k == &key {
-                    let sig = self.functions.get(mangled);
-                    let has_args = sig.map(|s| s.params.len() > 1).unwrap_or(false); // > self
-                    let def = self.fn_defs.get(mangled).copied();
-                    add(&mut out, &mut seen, m.clone(), 2, None, has_args, def);
+        //    No pipeable: un método de trait no es una función libre invocable por su nombre pelado.
+        if !pipeable {
+            if let Some(key) = type_key_of(rt) {
+                for ((k, m), mangled) in &self.methods {
+                    if k == &key {
+                        let sig = self.functions.get(mangled);
+                        let has_args = sig.map(|s| s.params.len() > 1).unwrap_or(false); // > self
+                        let def = self.fn_defs.get(mangled).copied();
+                        add(&mut out, &mut seen, m.clone(), 2, None, has_args, def);
+                    }
                 }
             }
         }
 
-        // 3. Builtins invocables como método sobre la categoría del tipo (kind 2 = Method).
+        // 3. Builtins invocables como método sobre la categoría del tipo (kind 2 = Method). Sí son
+        //    pipeable (son globales invocables por nombre: `xs |> len`, `n |> to_string`).
         if let Some(cat) = member_category(rt) {
             for b in crate::builtins::methods_for(cat) {
                 let has_args = crate::builtins::method_takes_args(b);
@@ -3071,18 +3105,19 @@ impl Checker {
         }
 
         // 4. Funciones libres UFCS: primer parámetro que acepta el receptor (kind 3 = Function).
-        //    Solo para receptores **compuestos** (array/map/struct/enum/tupla): ahí la función opera
-        //    SOBRE la estructura y `recv.f()` es idiomático (captura `map`/`filter`/`fold`/`sort` del
-        //    prelude y las UFCS del usuario). Para primitivos NO se enumeran: una función que toma un
-        //    `string` suele tratarlo como DATO (`read_file(path)`, `env(name)`), no como método —los
-        //    primitivos ya reciben sus builtins (paso 3) y sus métodos de trait (paso 2)—.
-        //    Excluye además sintéticos (`#`/`::`/`__`) y primer parámetro genérico pelado (`Var`, que
+        //    Para `recv.` solo se enumeran con receptores **compuestos** (array/map/struct/enum/tupla):
+        //    ahí la función opera SOBRE la estructura y `recv.f()` es idiomático (captura
+        //    `map`/`filter`/`fold`/`sort` del prelude y las UFCS del usuario); para primitivos NO,
+        //    porque una función que toma un `string` suele tratarlo como DATO (`read_file(path)`), no
+        //    como método. Para `x |>` (pipeable) SÍ se enumeran para todo tipo: piping un primitivo a
+        //    una función libre es justo el caso de uso del `|>`.
+        //    Excluye sintéticos (`#`/`::`/`__`) y primer parámetro genérico pelado (`Var`, que
         //    unificaría con todo, p. ej. `assert_eq`).
         let composite_receiver = matches!(
             rt,
             Type::Array(_) | Type::Map(_, _) | Type::Struct(_, _) | Type::Enum(_, _) | Type::Tuple(_)
         );
-        if composite_receiver {
+        if pipeable || composite_receiver {
             for (fname, sig) in &self.functions {
                 if fname.contains('#') || fname.contains("::") || fname.starts_with("__") {
                     continue;

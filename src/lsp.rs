@@ -1288,6 +1288,121 @@ fn module_member_completion_items(uri: Option<&str>, src: &str, line0: usize, ch
     Some(Json::Arr(items))
 }
 
+/// Convierte los miembros enumerados por el checker (para `recv.` o `x |>`) en ítems de completion:
+/// etiqueta + kind + documentación (`///` del método/UFCS o del prelude) + —para invocables— la firma
+/// sin el receptor, un snippet con placeholders por parámetro y el disparo del signature help (M45b/M46).
+/// `insert_prefix` se antepone al texto insertado (para `x |>` pegado al operador se usa `" "` → `|> f`,
+/// no `|>f`); vacío para `recv.`.
+fn members_to_completion_items(members: Vec<crate::checker::MemberItem>, src: &str, uri: Option<&str>, insert_prefix: &str) -> Vec<Json> {
+    let orig_lines: Vec<&str> = src.split('\n').collect();
+    let ctx = SigCtx::new(src, uri.and_then(uri_to_path).as_deref()); // M46a: firmas para el detalle
+    members
+        .into_iter()
+        .map(|m| {
+            // Documentación: builtin → `///` sobre la declaración del método/UFCS (M45b) → prelude.
+            let doc = crate::builtins::doc(&m.label).map(|s| s.to_string())
+                .or_else(|| m.def.and_then(|(dl, _)| {
+                    // La def vive en la fuente original (el reparado no cambia números de línea);
+                    // si cae fuera (símbolo del prelude), se intenta el prelude más abajo.
+                    if dl >= 1 && dl <= orig_lines.len() {
+                        crate::raydoc::doc_lines_above(&orig_lines, dl).map(|ls| ls.join("\n"))
+                    } else {
+                        None
+                    }
+                }))
+                .or_else(|| doc_in_prelude(&m.label));
+            let mut fields = vec![
+                ("label", Json::Str(m.label.clone())),
+                ("kind", num(m.kind as i64)),
+            ];
+            if let Some(d) = m.detail {
+                fields.push(("detail", Json::Str(d)));
+            }
+            // Invocables (método/función): detalle de firma (M46a, sin el receptor) + snippet con
+            // placeholders por parámetro (M46c) + disparo del signature help.
+            if m.kind == 2 || m.kind == 3 {
+                // Params en contexto de método: la firma sin el receptor.
+                let method_params = ctx.signature(&m.label).map(|(mut ps, ret)| {
+                    if !ps.is_empty() { ps.remove(0); } // el receptor
+                    (ps, ret)
+                });
+                if let Some((ps, ret)) = &method_params {
+                    push_signature_raw(&mut fields, ps.clone(), ret.clone(), false);
+                }
+                let ps_ref = method_params.as_ref().map(|(ps, _)| ps.as_slice());
+                fields.push(("insertText", Json::Str(format!("{}{}", insert_prefix, insert_call(&m.label, ps_ref, m.has_args)))));
+                fields.push(("insertTextFormat", num(2))); // 2 = Snippet
+                if m.has_args {
+                    fields.push(("command", obj(vec![
+                        ("title", Json::Str("signature".into())),
+                        ("command", Json::Str("editor.action.triggerParameterHints".into())),
+                    ])));
+                }
+            }
+            if let Some(d) = doc {
+                fields.push(("documentation", obj(vec![
+                    ("kind", Json::Str("markdown".into())),
+                    ("value", Json::Str(d)),
+                ])));
+            }
+            obj(fields)
+        })
+        .collect()
+}
+
+/// Completion tras un `|>` (pipeline, M7.2). Como `x |> f(a)` ≡ `f(x, a)` ≡ `x.f(a)`, el conjunto de
+/// funciones "pipeables" es el mismo que enumera el acceso a miembro: se **repara** `x |> parc` como
+/// `x |> __raycomplete__`, que el parser desazucara a `__raycomplete__(x)`; el checker (en modo
+/// `completing`) enumera los miembros del tipo del operando izquierdo —incluidas las funciones libres
+/// aplicables por UFCS—. Se ofrecen también métodos/campos del tipo (ligera sobre-inclusión inocua: el
+/// editor filtra por el prefijo tecleado). `None` si el cursor no está tras un `|>`.
+fn pipeline_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize) -> Option<Json> {
+    let lines: Vec<&str> = src.split('\n').collect();
+    let line = lines.get(line0)?;
+    let chars: Vec<char> = line.chars().collect();
+    let col = char0.min(chars.len());
+    // Retrocede sobre la palabra parcial (nombre de función) que se teclea tras el `|>`.
+    let mut start = col;
+    while start > 0 && is_ident_char(chars[start - 1]) {
+        start -= 1;
+    }
+    // Antes de la palabra (saltando espacios) debe venir el operador `|>`.
+    let mut p = start;
+    while p > 0 && chars[p - 1].is_whitespace() {
+        p -= 1;
+    }
+    if p < 2 || chars[p - 1] != '>' || chars[p - 2] != '|' {
+        return None;
+    }
+    // ¿La palabra está **pegada** al `|>` (sin espacio entre medias)? Entonces el texto insertado
+    // lleva un espacio inicial para que quede `|> f`, no `|>f`. Si ya hay un espacio, no se duplica.
+    let glued = p == start;
+    let insert_prefix = if glued { " " } else { "" };
+    // Avanza sobre el resto de la palabra parcial (a la derecha del cursor) para reemplazarla entera.
+    let mut end = col;
+    while end < chars.len() && is_ident_char(chars[end]) {
+        end += 1;
+    }
+    // Reconstruye `LEFT |> __raycomplete__`. En posición de sentencia hace falta `;` (o el bloque no
+    // parsea); en posición de expresión NO —el delimitador que sigue ya la cierra— (como en `recv.`).
+    let next = chars[end..].iter().find(|c| !c.is_whitespace()).copied();
+    let in_expression = matches!(next, Some(')') | Some(']') | Some('}') | Some(',') | Some('('));
+    let mut new_line: String = chars[..start].iter().collect();
+    new_line.push_str(crate::checker::COMPLETION_SENTINEL);
+    if !in_expression {
+        new_line.push(';');
+    }
+    new_line.extend(chars[end..].iter());
+    let mut repaired_lines: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+    repaired_lines[line0] = new_line;
+    let repaired = repaired_lines.join("\n");
+
+    let tokens = lexer::lex(&repaired).ok()?;
+    let (mut program, _errs) = parser::parse_all(tokens);
+    let members = checker::member_completion(&mut program);
+    Some(Json::Arr(members_to_completion_items(members, src, uri, insert_prefix)))
+}
+
 fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: usize, docs: &HashMap<String, String>) -> Option<Json> {
     let lines: Vec<&str> = src.split('\n').collect();
     let line = lines.get(line0)?;
@@ -1337,60 +1452,7 @@ fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
     let (mut program, _errs) = parser::parse_all(tokens);
     let members = checker::member_completion(&mut program);
 
-    let orig_lines: Vec<&str> = src.split('\n').collect();
-    let ctx = SigCtx::new(src, uri.and_then(uri_to_path).as_deref()); // M46a: firmas para el detalle
-    let items: Vec<Json> = members
-        .into_iter()
-        .map(|m| {
-            // Documentación: builtin → `///` sobre la declaración del método/UFCS (M45b) → prelude.
-            let doc = crate::builtins::doc(&m.label).map(|s| s.to_string())
-                .or_else(|| m.def.and_then(|(dl, _)| {
-                    // La def vive en la fuente original (el reparado no cambia números de línea);
-                    // si cae fuera (símbolo del prelude), se intenta el prelude más abajo.
-                    if dl >= 1 && dl <= orig_lines.len() {
-                        crate::raydoc::doc_lines_above(&orig_lines, dl).map(|ls| ls.join("\n"))
-                    } else {
-                        None
-                    }
-                }))
-                .or_else(|| doc_in_prelude(&m.label));
-            let mut fields = vec![
-                ("label", Json::Str(m.label.clone())),
-                ("kind", num(m.kind as i64)),
-            ];
-            if let Some(d) = m.detail {
-                fields.push(("detail", Json::Str(d)));
-            }
-            // Invocables (método/función): detalle de firma (M46a, sin el receptor) + snippet con
-            // placeholders por parámetro (M46c) + disparo del signature help.
-            if m.kind == 2 || m.kind == 3 {
-                // Params en contexto de método: la firma sin el receptor.
-                let method_params = ctx.signature(&m.label).map(|(mut ps, ret)| {
-                    if !ps.is_empty() { ps.remove(0); } // el receptor
-                    (ps, ret)
-                });
-                if let Some((ps, ret)) = &method_params {
-                    push_signature_raw(&mut fields, ps.clone(), ret.clone(), false);
-                }
-                let ps_ref = method_params.as_ref().map(|(ps, _)| ps.as_slice());
-                fields.push(("insertText", Json::Str(insert_call(&m.label, ps_ref, m.has_args))));
-                fields.push(("insertTextFormat", num(2))); // 2 = Snippet
-                if m.has_args {
-                    fields.push(("command", obj(vec![
-                        ("title", Json::Str("signature".into())),
-                        ("command", Json::Str("editor.action.triggerParameterHints".into())),
-                    ])));
-                }
-            }
-            if let Some(d) = doc {
-                fields.push(("documentation", obj(vec![
-                    ("kind", Json::Str("markdown".into())),
-                    ("value", Json::Str(d)),
-                ])));
-            }
-            obj(fields)
-        })
-        .collect();
+    let items = members_to_completion_items(members, src, uri, "");
     let _ = docs;
     // Sin miembros de valor, el receptor puede ser un TIPO o un MÓDULO (van tras el intento de valor,
     // así un local que los tape gana, como en el resolutor):
@@ -1428,6 +1490,7 @@ fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
         }
         // (a) un ENUM (`Orientacion.` → sus variantes; kind 20 = EnumMember). Las variantes con
         //     payload insertan placeholders por el tipo de cada campo.
+        let ctx = SigCtx::new(src, uri.and_then(uri_to_path).as_deref());
         if let Some(variants) = ctx.enum_variants(&receiver) {
             let visible_items: Vec<Json> = variants.iter().map(|v| {
                 let mut fields = vec![("label", Json::Str(v.name.clone())), ("kind", num(20))];
@@ -1489,6 +1552,15 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
     let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
     if let Some((line0, char0)) = pos_params(msg).map(|(_, l, c)| (l, c)) {
+        // El espacio es un trigger char, pero SOLO ofrece algo en contexto de pipeline (`|> `): así,
+        // tras teclear un espacio después de `|>`, la lista de funciones vuelve a aparecer, sin
+        // inundar con la completion de archivo tras cada espacio del documento. Una invocación manual
+        // o por letra no trae `triggerCharacter` → sigue el flujo normal de abajo.
+        let space_triggered = msg.get("params").and_then(|p| p.get("context"))
+            .and_then(|c| c.get("triggerCharacter")).and_then(|t| t.as_str()) == Some(" ");
+        if space_triggered {
+            return pipeline_completion_items(uri, src, line0, char0).unwrap_or_else(|| Json::Arr(vec![]));
+        }
         // M45c: en una línea de `import`/`from … import`, ofrecemos rutas de módulo o símbolos `pub`,
         // no los símbolos de archivo.
         if let Some(items) = import_completion_items(uri, src, line0, char0) {
@@ -1508,6 +1580,11 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
             if empty && let Some(m) = module_member_completion_items(uri, src, line0, char0) {
                 return m;
             }
+            return items;
+        }
+        // Tras un `|>` (pipeline): funciones aplicables al tipo del operando izquierdo (type-aware,
+        // como el acceso a miembro). Va antes de la completion de archivo genérica.
+        if let Some(items) = pipeline_completion_items(uri, src, line0, char0) {
             return items;
         }
     }
@@ -2279,9 +2356,13 @@ fn initialize_response(id: Json) -> Json {
         ("referencesProvider", Json::Bool(true)),
         ("renameProvider", Json::Bool(true)),
         // Cluster 4 + M45: completion. `.` dispara el completion de **miembros** (`recv.` →
-        // campos/métodos/builtins/UFCS del tipo del receptor).
+        // campos/métodos/builtins/UFCS del tipo del receptor); `>` lo dispara tras un `|>`
+        // (pipeline) para ofrecer las funciones aplicables sin teclear la primera letra —el
+        // segundo carácter de `|>` es la señal—. El espacio ` ` también dispara, pero **solo**
+        // ofrece algo en contexto de pipeline (`|> `): fuera de él devuelve vacío, para no inundar
+        // tras cada espacio del archivo. Tras `->`/`>` sueltos cae a completion de archivo.
         ("completionProvider", obj(vec![
-            ("triggerCharacters", Json::Arr(vec![text(".")])),
+            ("triggerCharacters", Json::Arr(vec![text("."), text(">"), text(" ")])),
         ])),
         // M10.2f: signature help — la firma de la función mientras se escriben los argumentos.
         ("signatureHelpProvider", obj(vec![
@@ -3476,6 +3557,67 @@ mod tests {
         // el campo x no es invocable → sin insertText de llamada.
         let x = arr.iter().find(|i| i.get("label").and_then(|l| l.as_str()) == Some("x")).expect("x");
         assert!(x.get("insertText").is_none(), "un campo no inserta ()");
+    }
+
+    #[test]
+    fn completion_tras_pipe_es_type_aware() {
+        // La completion tras `|>` ofrece las funciones aplicables al tipo del operando izquierdo
+        // (`x |> f` ≡ `f(x)`), como el acceso a miembro: `duplicar(int)` sí, `saludar(string)` no.
+        let src = "fn duplicar(n: int) -> int { n * 2 }\nfn saludar(s: string) -> string { s }\nfn main() -> int {\n    let x = 5;\n    x |> d\n    0\n}\n";
+        // Línea 4 = "    x |> d"; el cursor va tras la `d` (columna 10).
+        let labels = completion_labels(src, 4, 10);
+        assert!(labels.contains(&"duplicar".to_string()), "ofrece la función de int: {labels:?}");
+        assert!(!labels.contains(&"saludar".to_string()), "NO ofrece la función de string: {labels:?}");
+        // También un builtin aplicable a int (to_string) — enumera builtins-como-método.
+        assert!(labels.contains(&"to_string".to_string()), "ofrece builtins de int: {labels:?}");
+        // Un método de trait (show) NO es pipeable: `n |> show` sería `show(n)`, y no hay `show` libre.
+        assert!(!labels.contains(&"show".to_string()), "NO ofrece métodos de trait: {labels:?}");
+
+        // Segundo pipe SIN prefijo, cursor justo tras `|>` (lo dispara el trigger char `>`): sobre
+        // `v |> duplicar() |>` el operando izquierdo sigue siendo int → ofrece las mismas funciones.
+        let src2 = "fn duplicar(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v |> duplicar() |>\n    0\n}\n";
+        let line = "    v |> duplicar() |>"; // cursor al final (tras el segundo `|>`)
+        let labels2 = completion_labels(src2, 3, line.chars().count());
+        assert!(labels2.contains(&"duplicar".to_string()), "segundo pipe sin prefijo: {labels2:?}");
+    }
+
+    #[test]
+    fn completion_tras_pipe_inserta_con_espacio_y_espacio_dispara() {
+        let src = "fn duplicar(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v |>\n    0\n}\n";
+        // (a) Pegado al `|>` (cursor tras `>`): el insertText lleva un espacio inicial → `|> duplicar()`.
+        let msg = json::parse(
+            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":3,"character":8}}}"#
+        ).unwrap();
+        let mut docs = HashMap::new();
+        docs.insert("file:///t.ray".to_string(), src.to_string());
+        let arr = completion_result(&msg, &docs);
+        let dup = arr.as_array().unwrap().iter()
+            .find(|i| i.get("label").and_then(|l| l.as_str()) == Some("duplicar")).expect("duplicar");
+        assert_eq!(dup.get("insertText").and_then(|t| t.as_str()), Some(" duplicar()"), "pegado → espacio inicial");
+
+        // (b) El espacio como trigger dispara el pipeline: `v |> ` (con espacio) sigue ofreciendo.
+        let src_sp = "fn duplicar(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v |> \n    0\n}\n";
+        let msg_sp = json::parse(
+            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":3,"character":9},"context":{"triggerKind":2,"triggerCharacter":" "}}}"#
+        ).unwrap();
+        docs.insert("file:///t.ray".to_string(), src_sp.to_string());
+        let arr_sp = completion_result(&msg_sp, &docs);
+        let has = arr_sp.as_array().unwrap().iter()
+            .any(|i| i.get("label").and_then(|l| l.as_str()) == Some("duplicar"));
+        assert!(has, "el espacio-trigger sigue ofreciendo en pipeline");
+        // Y su insertText NO duplica el espacio (ya hay uno antes del cursor).
+        let dup_sp = arr_sp.as_array().unwrap().iter()
+            .find(|i| i.get("label").and_then(|l| l.as_str()) == Some("duplicar")).unwrap();
+        assert_eq!(dup_sp.get("insertText").and_then(|t| t.as_str()), Some("duplicar()"), "con espacio previo → sin duplicar");
+
+        // (c) El espacio como trigger FUERA de un pipeline no ofrece nada (no inunda el archivo).
+        let src_no = "fn main() -> int {\n    let w = \n    0\n}\n";
+        let msg_no = json::parse(
+            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":1,"character":12},"context":{"triggerKind":2,"triggerCharacter":" "}}}"#
+        ).unwrap();
+        docs.insert("file:///t.ray".to_string(), src_no.to_string());
+        let arr_no = completion_result(&msg_no, &docs);
+        assert!(arr_no.as_array().unwrap().is_empty(), "espacio fuera de pipeline → vacío");
     }
 
     #[test]

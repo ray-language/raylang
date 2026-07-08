@@ -47,7 +47,7 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
 
 /// Variante acumuladora (M33c): parsea recuperándose de los errores — ante uno, lo guarda,
 /// **resincroniza** al próximo ítem top-level (`sync_item`) y sigue. Devuelve el programa
-/// **parcial** (los ítems que sí parsearon) y todos los errores (hasta `MAX_ERRORES`). El
+/// **parcial** (los ítems que sí parsearon) y todos los errores (hasta `MAX_ERRORS`). El
 /// primer error es **idéntico** al de `parse` (mismo recorrido hasta ahí). Es la variante
 /// de *diagnóstico* (LSP/CLI); el camino de ejecución sigue usando `parse` (fail-fast).
 pub fn parse_all(tokens: Vec<Token>) -> (Program, Vec<ParseError>) {
@@ -55,7 +55,7 @@ pub fn parse_all(tokens: Vec<Token>) -> (Program, Vec<ParseError>) {
 }
 
 /// Tope de errores acumulados (M33c): la cascada tras una recuperación imperfecta no inunda.
-const MAX_ERRORES: usize = 20;
+const MAX_ERRORS: usize = 20;
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -117,15 +117,15 @@ impl Parser {
     /// **resincroniza** al próximo ítem; el programa devuelto es parcial.
     pub fn parse_program_all(&mut self) -> (Program, Vec<ParseError>) {
         let mut acc = Program::default();
-        let mut errores = Vec::new();
+        let mut errors = Vec::new();
         while !self.is_at_end() {
-            let antes = self.pos;
+            let before = self.pos;
             if let Err(e) = self.parse_item(&mut acc) {
-                errores.push(e);
-                if errores.len() >= MAX_ERRORES {
+                errors.push(e);
+                if errors.len() >= MAX_ERRORS {
                     break;
                 }
-                if self.pos == antes {
+                if self.pos == before {
                     self.advance(); // progreso garantizado: nunca reintentar el mismo token
                 }
                 self.sync_item();
@@ -135,7 +135,7 @@ impl Parser {
         acc.field_name_pos = std::mem::take(&mut self.field_name_pos);
         acc.interp_sites = std::mem::take(&mut self.interp_sites);
         acc.pipe_sites = std::mem::take(&mut self.pipe_sites);
-        (acc, errores)
+        (acc, errors)
     }
 
     /// Resincronización (M33c): avanza hasta el próximo arranque plausible de ítem
@@ -294,11 +294,11 @@ impl Parser {
 
     /// Error si hay `pub` donde no se admite (hoy: un `impl`, que no se exporta por sí mismo;
     /// se exporta el trait y el tipo).
-    fn no_pub(&self, pub_tok: &Option<crate::token::Token>, donde: &str) -> Result<(), ParseError> {
+    fn no_pub(&self, pub_tok: &Option<crate::token::Token>, context: &str) -> Result<(), ParseError> {
         match pub_tok {
             None => Ok(()),
             Some(t) => Err(ParseError {
-                msg: format!("'pub' no se admite en {} (exporta el trait/tipo, no el impl)", donde),
+                msg: format!("'pub' no se admite en {} (exporta el trait/tipo, no el impl)", context),
                 line: t.line,
                 col: t.col,
                 len: t.len,
@@ -332,11 +332,11 @@ impl Parser {
     }
 
     /// Error si hay anotaciones donde M10.1 no las admite (trait/impl).
-    fn no_annotations(&self, anns: &[Annotation], donde: &str) -> Result<(), ParseError> {
+    fn no_annotations(&self, anns: &[Annotation], context: &str) -> Result<(), ParseError> {
         match anns.first() {
             None => Ok(()),
             Some(a) => Err(ParseError {
-                msg: format!("no se permiten anotaciones sobre {}", donde),
+                msg: format!("no se permiten anotaciones sobre {}", context),
                 line: a.line,
                 col: a.col,
                 len: 1, // la anotación no guarda su extensión; el '@' basta
@@ -1076,10 +1076,10 @@ impl Parser {
             // M29.3: guardar la forma de superficie `(receptor, rhs)` para el formateador, indexada por
             // la posición del `Call` desazucarado que produce `make_pipeline` (la de `rhs`). El receptor
             // puede ser a su vez un pipeline (encadenado) → su clave está también en la tabla.
-            let clave = (rhs.line, rhs.col);
-            let (recv_sfc, rhs_sfc) = (left.clone(), rhs.clone());
+            let key = (rhs.line, rhs.col);
+            let (recv_surface, rhs_surface) = (left.clone(), rhs.clone());
             left = make_pipeline(left, rhs);
-            self.pipe_sites.insert(clave, (recv_sfc, rhs_sfc));
+            self.pipe_sites.insert(key, (recv_surface, rhs_surface));
         }
         Ok(left)
     }
@@ -1643,14 +1643,14 @@ impl Parser {
         if self.eat(&TokenKind::LBrace) {
             let mut fields = Vec::new();
             while !self.check(&TokenKind::RBrace) {
-                let (campo, fl, fc) = self.expect_ident("el nombre de un campo")?;
+                let (field_name, fl, fc) = self.expect_ident("el nombre de un campo")?;
                 // Forma larga `campo: <patrón>` o corta `campo` (≡ `campo: campo`, un binding).
                 let sub = if self.eat(&TokenKind::Colon) {
                     self.pattern()?
                 } else {
-                    Pattern { kind: PatternKind::Binding(campo.clone()), line: fl, col: fc }
+                    Pattern { kind: PatternKind::Binding(field_name.clone()), line: fl, col: fc }
                 };
-                fields.push((campo, sub));
+                fields.push((field_name, sub));
                 if !self.eat(&TokenKind::Comma) {
                     break;
                 }
@@ -1682,17 +1682,17 @@ impl Parser {
         let first = self.expression()?;
         if self.eat(&TokenKind::Colon) {
             // Map: `k: v { , k: v }`. Ya consumimos `first` (clave) y el `:`.
-            let mut pares = vec![(first, self.expression()?)];
+            let mut pairs = vec![(first, self.expression()?)];
             while self.eat(&TokenKind::Comma) {
                 if self.check(&TokenKind::RBracket) {
                     break; // coma final `[a: 1,]`
                 }
                 let k = self.expression()?;
                 self.expect(&TokenKind::Colon, "':' entre la clave y el valor del Map")?;
-                pares.push((k, self.expression()?));
+                pairs.push((k, self.expression()?));
             }
             self.expect(&TokenKind::RBracket, "']' para cerrar el Map")?;
-            return Ok(Expr { kind: ExprKind::MapLit(pares), line: open.line, col: open.col });
+            return Ok(Expr { kind: ExprKind::MapLit(pairs), line: open.line, col: open.col });
         }
         // Arreglo: el resto de elementos separados por comas.
         let mut elems = vec![first];
@@ -1901,11 +1901,11 @@ mod tests {
         let (prog, errs) = parse_all(toks.clone());
         assert_eq!(errs.len(), 2, "{errs:?}");
         // El primer error es byte-idéntico al de la variante fail-fast (oráculos).
-        let solo = parse(toks).unwrap_err();
-        assert_eq!(errs[0], solo);
+        let only = parse(toks).unwrap_err();
+        assert_eq!(errs[0], only);
         // El programa parcial conserva los ítems que sí parsearon.
-        let nombres: Vec<&str> = prog.functions.iter().map(|f| f.name.as_str()).collect();
-        assert!(nombres.contains(&"buena") && nombres.contains(&"main"), "{nombres:?}");
+        let names: Vec<&str> = prog.functions.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"buena") && names.contains(&"main"), "{names:?}");
     }
 
     #[test]
@@ -2057,8 +2057,8 @@ mod tests {
                 let e: Vec<String> = elems.iter().map(sx).collect();
                 format!("[{}]", e.join(", "))
             }
-            ExprKind::MapLit(pares) => {
-                let e: Vec<String> = pares.iter().map(|(k, v)| format!("{}: {}", sx(k), sx(v))).collect();
+            ExprKind::MapLit(pairs) => {
+                let e: Vec<String> = pairs.iter().map(|(k, v)| format!("{}: {}", sx(k), sx(v))).collect();
                 format!("[{}]", e.join(", "))
             }
             ExprKind::TupleLit(elems) => {

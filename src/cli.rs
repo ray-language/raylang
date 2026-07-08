@@ -90,36 +90,36 @@ Uso: ray <subcomando> [opciones]
 /// `ray new <nombre>`: crea el esqueleto de un proyecto — `ray.toml` (el manifiesto que
 /// leerá el gestor de paquetes, M39b) + `src/main.ray` con un hola-mundo + `.gitignore`.
 fn cmd_new(args: &[String]) {
-    let Some(nombre) = args.first() else {
+    let Some(name) = args.first() else {
         eprintln!("uso: ray new <nombre>");
         process::exit(64);
     };
-    let raiz = Path::new(nombre);
-    if raiz.exists() {
-        eprintln!("'{nombre}' ya existe");
+    let root = Path::new(name);
+    if root.exists() {
+        eprintln!("'{name}' ya existe");
         process::exit(65);
     }
-    let manifiesto = format!(
-        "[package]\nname = \"{nombre}\"\nversion = \"0.1.0\"\n\n[dependencies]\n"
+    let manifest = format!(
+        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n\n[dependencies]\n"
     );
-    let main_ray = format!("fn main() -> int {{\n    print(\"hola desde {nombre}\");\n    0\n}}\n");
+    let main_ray = format!("fn main() -> int {{\n    print(\"hola desde {name}\");\n    0\n}}\n");
     let gitignore = "# dependencias descargadas por el gestor de paquetes (M39c)\n.ray-deps/\n";
-    let escribir = |ruta: std::path::PathBuf, contenido: &str| {
-        if let Some(padre) = ruta.parent()
-            && let Err(e) = fs::create_dir_all(padre)
+    let write_file = |path: std::path::PathBuf, content: &str| {
+        if let Some(parent) = path.parent()
+            && let Err(e) = fs::create_dir_all(parent)
         {
-            eprintln!("no se pudo crear '{}': {e}", padre.display());
+            eprintln!("no se pudo crear '{}': {e}", parent.display());
             process::exit(73); // EX_CANTCREAT
         }
-        if let Err(e) = fs::write(&ruta, contenido) {
-            eprintln!("no se pudo escribir '{}': {e}", ruta.display());
+        if let Err(e) = fs::write(&path, content) {
+            eprintln!("no se pudo escribir '{}': {e}", path.display());
             process::exit(73);
         }
     };
-    escribir(raiz.join("ray.toml"), &manifiesto);
-    escribir(raiz.join("src/main.ray"), &main_ray);
-    escribir(raiz.join(".gitignore"), gitignore);
-    println!("proyecto '{nombre}' creado. Para correrlo:\n  cd {nombre} && ray run");
+    write_file(root.join("ray.toml"), &manifest);
+    write_file(root.join("src/main.ray"), &main_ray);
+    write_file(root.join(".gitignore"), gitignore);
+    println!("proyecto '{name}' creado. Para correrlo:\n  cd {name} && ray run");
 }
 
 /// `ray run [--interp] [archivo] [args...]`: ejecuta el programa. Sin archivo usa
@@ -127,25 +127,25 @@ fn cmd_new(args: &[String]) {
 fn cmd_run(args: &[String]) {
     // M38.4: `--deterministic` fuerza el scheduler M:1 reproducible (un hilo, orden FIFO), aunque el default
     // sea multicore. Útil para salida reproducible; inocuo con `--interp` (ya es secuencial).
-    let (deterministic, args) = tomar_flag_bool(args, "--deterministic");
+    let (deterministic, args) = take_flag_bool(args, "--deterministic");
     if deterministic {
         crate::vm::set_deterministic(true);
     }
-    let (use_interp, resto) = tomar_interp(&args);
-    let (fuel, resto) = tomar_flag_num(&resto, "--fuel", "un número de instrucciones (p. ej. --fuel 1000000)");
-    let (heap, resto) = tomar_flag_num(&resto, "--heap", "un número de objetos (p. ej. --heap 1000000)");
-    let (explicito, prog_args) = match resto.split_first() {
+    let (use_interp, rest) = take_interp(&args);
+    let (fuel, rest) = take_flag_num(&rest, "--fuel", "un número de instrucciones (p. ej. --fuel 1000000)");
+    let (heap, rest) = take_flag_num(&rest, "--heap", "un número de objetos (p. ej. --heap 1000000)");
+    let (explicit, prog_args) = match rest.split_first() {
         Some((p, rest)) => (Some(p.as_str()), rest.to_vec()),
         None => (None, Vec::new()),
     };
-    let path = resolver_entrada(explicito, false);
-    ejecutar(&path, prog_args, use_interp, fuel, heap.map(|n| n as usize));
+    let path = resolve_entry(explicit, false);
+    run_file(&path, prog_args, use_interp, fuel, heap.map(|n| n as usize));
 }
 
 /// Separa una opción `--flag <N>` inicial con valor entero. La usan `--fuel` (M42.1, límite de
 /// instrucciones) y `--heap` (M42.2, tope de objetos vivos), los dos recursos de la VM para embeber
 /// raylang confinado. `<N>` debe ser un entero no negativo; `descripcion` es el texto de ayuda al fallar.
-fn tomar_flag_num(args: &[String], flag: &str, descripcion: &str) -> (Option<u64>, Vec<String>) {
+fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>, Vec<String>) {
     if let Some((f, rest)) = args.split_first()
         && f == flag
     {
@@ -153,12 +153,12 @@ fn tomar_flag_num(args: &[String], flag: &str, descripcion: &str) -> (Option<u64
             Some((n, tail)) => match n.parse::<u64>() {
                 Ok(v) => return (Some(v), tail.to_vec()),
                 Err(_) => {
-                    eprintln!("{flag} requiere {descripcion}");
+                    eprintln!("{flag} requiere {description}");
                     process::exit(64);
                 }
             },
             None => {
-                eprintln!("{flag} requiere {descripcion}");
+                eprintln!("{flag} requiere {description}");
                 process::exit(64);
             }
         }
@@ -169,9 +169,9 @@ fn tomar_flag_num(args: &[String], flag: &str, descripcion: &str) -> (Option<u64
 /// `ray build [archivo]`: chequea y **compila** el programa sin ejecutarlo (útil para CI y
 /// para validar antes de publicar). Sale 0 si compila, 65 si hay errores de compilación.
 fn cmd_build(args: &[String]) {
-    let path = resolver_entrada(args.first().map(String::as_str), true);
-    let (mut program, locate, multi) = cargar_y_localizar(&path);
-    verificar_o_salir(&mut program, &locate, multi);
+    let path = resolve_entry(args.first().map(String::as_str), true);
+    let (mut program, locate, multi) = load_and_locate(&path);
+    check_or_exit(&mut program, &locate, multi);
     match compiler::compile_program(&program) {
         Ok(_) => println!("ok: '{path}' compila"),
         Err(mut e) => {
@@ -186,15 +186,15 @@ fn cmd_build(args: &[String]) {
 
 /// `ray test [archivo] [filtro]`: corre las funciones `@test`.
 fn cmd_test_sub(args: &[String]) {
-    let path = resolver_entrada(args.first().map(String::as_str), false);
-    let filtro = args.get(1).map(String::as_str);
-    ejecutar_tests(&path, filtro);
+    let path = resolve_entry(args.first().map(String::as_str), false);
+    let filter = args.get(1).map(String::as_str);
+    run_tests(&path, filter);
 }
 
 /// `ray fetch`: descarga a `.ray-deps/` las dependencias declaradas en `ray.toml` que aún no
 /// estén presentes (M39c-2a). Requiere estar en un proyecto (con manifiesto).
 fn cmd_fetch(_args: &[String]) {
-    let Some(m) = cargar_manifiesto() else {
+    let Some(m) = load_manifest() else {
         eprintln!("no hay proyecto: falta 'ray.toml' con las dependencias a descargar");
         process::exit(64);
     };
@@ -219,7 +219,7 @@ fn cmd_fmt(args: &[String]) {
         eprintln!("uso: ray fmt <archivo>");
         process::exit(64);
     };
-    formatear(path);
+    format_file(path);
 }
 
 // M40.4: `ray doc <archivo>` imprime la documentación Markdown de la superficie pública del archivo.
@@ -228,11 +228,11 @@ fn cmd_doc(args: &[String]) {
         eprintln!("uso: ray doc <archivo>");
         process::exit(64);
     };
-    let titulo = std::path::Path::new(path)
+    let title = std::path::Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(path);
-    match crate::raydoc::generate(&leer_fuente(path), titulo) {
+    match crate::raydoc::generate(&read_source(path), title) {
         Ok(md) => print!("{md}"),
         Err(e) => {
             eprintln!("error de documentación: {e}");
@@ -246,7 +246,7 @@ fn cmd_doc(args: &[String]) {
 fn legacy(rest: &[String]) {
     // M38.4: `--deterministic` (order-independent) fuerza el scheduler M:1 reproducible. Se extrae antes de
     // todo el parseo por-posición del modo legado.
-    let (deterministic, rest) = tomar_flag_bool(rest, "--deterministic");
+    let (deterministic, rest) = take_flag_bool(rest, "--deterministic");
     if deterministic {
         crate::vm::set_deterministic(true);
     }
@@ -262,7 +262,7 @@ fn legacy(rest: &[String]) {
     }
     // --fmt <archivo>.
     if rest.len() == 2 && rest[0] == "--fmt" {
-        formatear(&rest[1]);
+        format_file(&rest[1]);
         return;
     }
     // [--vm | --interp | --test] <archivo> [args...].
@@ -286,23 +286,23 @@ fn legacy(rest: &[String]) {
     }
     let path = rest[idx].clone();
     if test_mode {
-        ejecutar_tests(&path, rest.get(idx + 1).map(String::as_str));
+        run_tests(&path, rest.get(idx + 1).map(String::as_str));
     } else {
-        ejecutar(&path, rest[idx + 1..].to_vec(), use_interp, None, None);
+        run_file(&path, rest[idx + 1..].to_vec(), use_interp, None, None);
     }
 }
 
 // ── Piezas compartidas ───────────────────────────────────────────────────────────────
 
 /// Resuelve el archivo a procesar (run/build/test) y el contexto de proyecto (M39b).
-/// `explicito`: el archivo dado en la línea de comandos, si lo hay. `banner`: imprime
+/// `explicit`: el archivo dado en la línea de comandos, si lo hay. `banner`: imprime
 /// "compilando <nombre> v<versión>" (para `build`). Prioridad: (1) el archivo explícito;
 /// (2) la entrada del manifiesto (`ray.toml` subiendo desde el cwd); (3) `src/main.ray` en
 /// el cwd; si nada, error de uso. Avisa —una vez— si el manifiesto declara dependencias
 /// (aún no se resuelven, M39c).
-fn resolver_entrada(explicito: Option<&str>, banner: bool) -> String {
-    let manifiesto = cargar_manifiesto();
-    if let Some(m) = &manifiesto {
+fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
+    let manifest = load_manifest();
+    if let Some(m) = &manifest {
         if banner {
             eprintln!("compilando {} v{}", m.name, m.version);
         }
@@ -316,10 +316,10 @@ fn resolver_entrada(explicito: Option<&str>, banner: bool) -> String {
             process::exit(65);
         }
     }
-    if let Some(p) = explicito {
+    if let Some(p) = explicit {
         return p.to_string();
     }
-    if let Some(m) = &manifiesto {
+    if let Some(m) = &manifest {
         let entry = m.entry_path();
         if !entry.is_file() {
             eprintln!("el manifiesto '{}' apunta a una entrada inexistente: '{}'", m.name, entry.display());
@@ -340,12 +340,12 @@ fn resolver_entrada(explicito: Option<&str>, banner: bool) -> String {
 /// proyecto (junto al `ray.toml`), si existe. Un paquete descargado vive en `.ray-deps/<dep>/`
 /// como cápsula; el loader busca ahí tras la raíz del proyecto. Sin proyecto ni caché, `[]`
 /// (comportamiento idéntico a antes: el loader resuelve solo contra la raíz del archivo).
-fn raices_de_dependencias() -> Vec<PathBuf> {
+fn dependency_roots() -> Vec<PathBuf> {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let raiz = Manifest::find(&cwd)
+    let root = Manifest::find(&cwd)
         .and_then(|toml| toml.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| cwd.clone());
-    let cache = raiz.join(".ray-deps");
+    let cache = root.join(".ray-deps");
     let mut roots = Vec::new();
     if cache.is_dir() {
         roots.push(cache);
@@ -373,7 +373,7 @@ fn raices_de_dependencias() -> Vec<PathBuf> {
 
 /// Carga el manifiesto del proyecto que contiene el directorio actual. `None` si no hay
 /// proyecto; un `ray.toml` mal formado aborta con 65 (error de compilación de la config).
-fn cargar_manifiesto() -> Option<Manifest> {
+fn load_manifest() -> Option<Manifest> {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     match Manifest::load(&cwd) {
         Ok(m) => m,
@@ -385,7 +385,7 @@ fn cargar_manifiesto() -> Option<Manifest> {
 }
 
 /// Separa un `--interp` inicial del resto de argumentos.
-fn tomar_interp(args: &[String]) -> (bool, Vec<String>) {
+fn take_interp(args: &[String]) -> (bool, Vec<String>) {
     match args.split_first() {
         Some((f, rest)) if f == "--interp" => (true, rest.to_vec()),
         _ => (false, args.to_vec()),
@@ -393,16 +393,16 @@ fn tomar_interp(args: &[String]) -> (bool, Vec<String>) {
 }
 
 /// M38.4: extrae un flag booleano sin valor (p. ej. `--deterministic`) de CUALQUIER posición de la lista y
-/// devuelve `(presente, resto_sin_el_flag)`. Order-independent (a diferencia de `tomar_interp`), para que
+/// devuelve `(presente, resto_sin_el_flag)`. Order-independent (a diferencia de `take_interp`), para que
 /// `--deterministic` pueda combinarse libremente con `--interp`/`--fuel`/el archivo.
-fn tomar_flag_bool(args: &[String], flag: &str) -> (bool, Vec<String>) {
-    let presente = args.iter().any(|a| a == flag);
-    let resto = args.iter().filter(|a| a.as_str() != flag).cloned().collect();
-    (presente, resto)
+fn take_flag_bool(args: &[String], flag: &str) -> (bool, Vec<String>) {
+    let present = args.iter().any(|a| a == flag);
+    let rest = args.iter().filter(|a| a.as_str() != flag).cloned().collect();
+    (present, rest)
 }
 
 /// Lee el fuente de un archivo o aborta con el código de E/S adecuado.
-fn leer_fuente(path: &str) -> String {
+fn read_source(path: &str) -> String {
     match fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -413,14 +413,14 @@ fn leer_fuente(path: &str) -> String {
 }
 
 /// Runner de `@test` (M10.1): sale con el número de fallos como código.
-fn ejecutar_tests(path: &str, filtro: Option<&str>) {
-    process::exit(test_runner::run(&leer_fuente(path), filtro));
+fn run_tests(path: &str, filter: Option<&str>) {
+    process::exit(test_runner::run(&read_source(path), filter));
 }
 
 /// Formateador (M29.2): imprime la versión canónica o aborta con el error.
-fn formatear(path: &str) {
-    let unit = resolver_indent(std::path::Path::new(path));
-    match crate::fmt::format_source_with_indent(&leer_fuente(path), &unit) {
+fn format_file(path: &str) {
+    let unit = resolve_indent(std::path::Path::new(path));
+    match crate::fmt::format_source_with_indent(&read_source(path), &unit) {
         Ok(out) => print!("{}", out),
         Err(e) => {
             eprintln!("error de formato: {}", e);
@@ -433,7 +433,7 @@ fn formatear(path: &str) {
 /// `ray fmt` no imponga siempre 4 espacios). Precedencia: (1) `.editorconfig` más cercano
 /// (`indent_style`/`indent_size`), (2) `ray.toml [fmt]`, (3) canónico = 4 espacios. `.editorconfig`
 /// gana por ser el estándar dedicado; cada fuente rellena solo lo que la anterior no fijó.
-fn resolver_indent(file: &std::path::Path) -> String {
+fn resolve_indent(file: &std::path::Path) -> String {
     let (mut style, mut size) = crate::editorconfig::indent_for(file);
     if style.is_none() || size.is_none() {
         let dir = file.parent().unwrap_or(std::path::Path::new("."));
@@ -454,8 +454,8 @@ type Locate = Box<dyn Fn(usize) -> (String, String, usize)>;
 
 /// Carga el archivo de entrada y sus imports (loader, M11.3), devolviendo el programa
 /// fusionado, un localizador de líneas y si hay más de un módulo.
-fn cargar_y_localizar(path: &str) -> (crate::ast::Program, Locate, bool) {
-    let loaded = match loader::load_with_deps(Path::new(path), &raices_de_dependencias()) {
+fn load_and_locate(path: &str) -> (crate::ast::Program, Locate, bool) {
+    let loaded = match loader::load_with_deps(Path::new(path), &dependency_roots()) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("{}", e.message);
@@ -476,11 +476,11 @@ fn cargar_y_localizar(path: &str) -> (crate::ast::Program, Locate, bool) {
 
 /// Chequea el programa; si falla, re-corre la variante acumuladora y muestra TODOS los
 /// errores (M33c) contra su módulo, y sale con 65.
-fn verificar_o_salir(program: &mut crate::ast::Program, locate: &Locate, multi: bool) {
+fn check_or_exit(program: &mut crate::ast::Program, locate: &Locate, multi: bool) {
     let backup = program.clone();
     if checker::check(program).is_err() {
-        let mut copia = backup;
-        for mut e in checker::check_all(&mut copia) {
+        let mut copy = backup;
+        for mut e in checker::check_all(&mut copy) {
             let (source, name, local) = locate(e.line);
             e.line = local;
             let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
@@ -491,14 +491,14 @@ fn verificar_o_salir(program: &mut crate::ast::Program, locate: &Locate, multi: 
 }
 
 /// Carga, chequea y ejecuta un archivo (VM por defecto, `--interp` para el intérprete).
-fn ejecutar(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u64>, heap: Option<usize>) {
+fn run_file(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u64>, heap: Option<usize>) {
     if (fuel.is_some() || heap.is_some()) && use_interp {
         eprintln!("--fuel/--heap son límites de la VM (motor de producto); no se aplican con --interp");
         process::exit(64);
     }
     runtime::set_program_args(prog_args);
-    let (mut program, locate, multi) = cargar_y_localizar(path);
-    verificar_o_salir(&mut program, &locate, multi);
+    let (mut program, locate, multi) = load_and_locate(path);
+    check_or_exit(&mut program, &locate, multi);
 
     // Backend: VM por defecto (M35, el motor de producto), intérprete con `--interp`.
     // M35b: el intérprete solo está si la feature `interp` está activa; una release mínima

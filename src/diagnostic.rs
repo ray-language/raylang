@@ -31,9 +31,9 @@ macro_rules! ice {
 /// El banner que ve el usuario cuando el compilador panica (M33b): distingue el ICE de un
 /// error de su programa y pide el reporte. `detalle` es el payload del pánico (el mensaje de
 /// `ice!` o el de un pánico no auditado, p. ej. un índice fuera de rango).
-pub fn ice_banner(detalle: &str) -> String {
+pub fn ice_banner(detail: &str) -> String {
     format!(
-        "error interno del compilador (ICE): {detalle}\n\
+        "error interno del compilador (ICE): {detail}\n\
          Esto es un bug de raylang, no de tu programa. Por favor repórtalo\n\
          junto con el fuente que lo causó."
     )
@@ -59,18 +59,18 @@ pub fn render(source: &str, line: usize, col: usize, len: usize, headline: &str)
     // Una línea patológicamente larga (p. ej. un archivo de una sola línea generado) se
     // recorta a una VENTANA alrededor de la columna del error, con `…` en los bordes
     // (M33d: sin esto, el diagnóstico de un `((((…` de 200 KB imprimía la línea entera).
-    const VENTANA: usize = 160;
+    const WINDOW: usize = 160;
     let chars: Vec<char> = src_line.chars().collect();
-    let (visible, col_vis) = if chars.len() <= VENTANA {
+    let (visible, col_vis) = if chars.len() <= WINDOW {
         (src_line.to_string(), col)
     } else {
-        let ini = col.saturating_sub(1).saturating_sub(VENTANA / 2).min(chars.len());
-        let fin = (ini + VENTANA).min(chars.len());
-        let pre = if ini > 0 { "…" } else { "" };
-        let post = if fin < chars.len() { "…" } else { "" };
-        let trozo: String = chars[ini..fin].iter().collect();
+        let start = col.saturating_sub(1).saturating_sub(WINDOW / 2).min(chars.len());
+        let end = (start + WINDOW).min(chars.len());
+        let pre = if start > 0 { "…" } else { "" };
+        let post = if end < chars.len() { "…" } else { "" };
+        let chunk: String = chars[start..end].iter().collect();
         // La columna del cursor, relativa a la ventana (el `…` de prefijo ocupa 1).
-        (format!("{pre}{trozo}{post}"), col - ini + if ini > 0 { 1 } else { 0 })
+        (format!("{pre}{chunk}{post}"), col - start + if start > 0 { 1 } else { 0 })
     };
     // La línea de fuente, con un canalón "  N | ".
     out.push('\n');
@@ -78,8 +78,8 @@ pub fn render(source: &str, line: usize, col: usize, len: usize, headline: &str)
     // La línea del subrayado, alineada bajo la columna del error. La extensión se
     // acota a lo que queda de ventana (y como mínimo un `^`, aunque apunte al final).
     let caret_pad = " ".repeat(col_vis.saturating_sub(1));
-    let resto = visible.chars().count().saturating_sub(col_vis.saturating_sub(1));
-    let width = len.max(1).min(resto.max(1));
+    let rest = visible.chars().count().saturating_sub(col_vis.saturating_sub(1));
+    let width = len.max(1).min(rest.max(1));
     out.push('\n');
     out.push_str(&format!("  {} | {}{}", gutter, caret_pad, "^".repeat(width)));
     out
@@ -93,11 +93,11 @@ mod tests {
     fn dibuja_la_linea_y_el_cursor() {
         let src = "fn main() -> int {\n    let x = 1 + true;\n    x\n}\n";
         let out = render(src, 2, 13, 1, "error de tipos en 2:13: no se pueden sumar int y bool");
-        let esperado = "\
+        let expected = "\
 error de tipos en 2:13: no se pueden sumar int y bool
   2 |     let x = 1 + true;
     |             ^";
-        assert_eq!(out, esperado);
+        assert_eq!(out, expected);
     }
 
     #[test]
@@ -105,11 +105,11 @@ error de tipos en 2:13: no se pueden sumar int y bool
         // M33a: un error con extensión subraya el lexema entero.
         let src = "let x = 1 + while;\n";
         let out = render(src, 1, 13, 5, "error de sintaxis en 1:13: se esperaba una expresión, se encontró While");
-        let esperado = "\
+        let expected = "\
 error de sintaxis en 1:13: se esperaba una expresión, se encontró While
   1 | let x = 1 + while;
     |             ^^^^^";
-        assert_eq!(out, esperado);
+        assert_eq!(out, expected);
     }
 
     #[test]
@@ -133,18 +133,18 @@ error de sintaxis en 1:13: se esperaba una expresión, se encontró While
     #[test]
     fn una_linea_larguisima_se_recorta_a_una_ventana() {
         // M33d: la línea se acota alrededor de la columna del error, con `…` en los bordes.
-        let linea = format!("{}AQUI{}", "x".repeat(500), "y".repeat(500));
-        let out = render(&linea, 1, 501, 4, "err");
-        let lineas: Vec<&str> = out.lines().collect();
-        assert!(lineas[1].starts_with("  1 | …"), "{out}");
-        assert!(lineas[1].ends_with("…"), "{out}");
-        assert!(lineas[1].contains("AQUI"), "{out}");
-        assert!(lineas[1].chars().count() < 200, "acotada: {}", lineas[1].chars().count());
+        let line = format!("{}AQUI{}", "x".repeat(500), "y".repeat(500));
+        let out = render(&line, 1, 501, 4, "err");
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines[1].starts_with("  1 | …"), "{out}");
+        assert!(lines[1].ends_with("…"), "{out}");
+        assert!(lines[1].contains("AQUI"), "{out}");
+        assert!(lines[1].chars().count() < 200, "acotada: {}", lines[1].chars().count());
         // El cursor sigue alineado bajo la A de AQUI.
-        let col_a = lineas[1].chars().position(|c| c == 'A').unwrap();
-        let col_caret = lineas[2].chars().position(|c| c == '^').unwrap();
+        let col_a = lines[1].chars().position(|c| c == 'A').unwrap();
+        let col_caret = lines[2].chars().position(|c| c == '^').unwrap();
         assert_eq!(col_a, col_caret, "{out}");
-        assert!(lineas[2].contains("^^^^"), "{out}");
+        assert!(lines[2].contains("^^^^"), "{out}");
     }
 
     #[test]

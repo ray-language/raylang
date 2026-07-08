@@ -35,10 +35,10 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 
     let mut h = H0;
     // --- Procesa cada bloque de 512 bits (64 bytes). ---
-    for bloque in msg.chunks_exact(64) {
+    for block in msg.chunks_exact(64) {
         let mut w = [0u32; 64];
-        for (i, palabra) in bloque.chunks_exact(4).enumerate() {
-            w[i] = u32::from_be_bytes([palabra[0], palabra[1], palabra[2], palabra[3]]);
+        for (i, word) in block.chunks_exact(4).enumerate() {
+            w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
@@ -76,8 +76,8 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     }
 
     let mut out = [0u8; 32];
-    for (i, palabra) in h.iter().enumerate() {
-        out[i * 4..i * 4 + 4].copy_from_slice(&palabra.to_be_bytes());
+    for (i, word) in h.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
     }
     out
 }
@@ -121,9 +121,9 @@ mod tests {
     #[test]
     fn cruza_los_bloques() {
         // Una entrada > 55 bytes fuerza un segundo bloque (el padding no cabe en el primero).
-        let un_millon_de_a = vec![b'a'; 1_000_000];
+        let a_million_a = vec![b'a'; 1_000_000];
         assert_eq!(
-            sha256_hex(&un_millon_de_a),
+            sha256_hex(&a_million_a),
             "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
         );
     }

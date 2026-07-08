@@ -123,12 +123,12 @@ where
     match spawn_big_stack(f) {
         Ok(v) => v,
         Err(payload) => {
-            let detalle = payload
+            let detail = payload
                 .downcast_ref::<String>()
                 .cloned()
                 .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
                 .unwrap_or_else(|| "pánico sin mensaje".to_string());
-            eprintln!("{}", diagnostic::ice_banner(&detalle));
+            eprintln!("{}", diagnostic::ice_banner(&detail));
             std::process::exit(101);
         }
     }

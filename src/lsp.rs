@@ -213,7 +213,7 @@ fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     let Some(src) = docs.get(&uri) else { return Json::Null };
     // Documentación: se localiza la DECLARACIÓN del símbolo (cruza archivos, como ir-a-definición) y
-    // se escanean los `///` que la preceden en su propio archivo. Reusa `raydoc::doc_lineas_arriba`.
+    // se escanean los `///` que la preceden en su propio archivo. Reusa `raydoc::doc_lines_above`.
     let doc = doc_of_symbol(&uri, src, line0, char0, docs);
     if let Some((info, start, end)) = hover_at(Some(&uri), src, line0, char0) {
         let contents = match doc {
@@ -298,7 +298,7 @@ fn doc_of_symbol(uri: &str, src: &str, line0: usize, char0: usize, docs: &HashMa
                     .or_else(|| loaded_module_source(uri, src, &target_uri))?
             };
             let lines: Vec<&str> = source.lines().collect();
-            if let Some(ls) = crate::raydoc::doc_lineas_arriba(&lines, def_line0 + 1) {
+            if let Some(ls) = crate::raydoc::doc_lines_above(&lines, def_line0 + 1) {
                 return Some(ls.join("\n"));
             }
             // La declaración resolvió FUERA del archivo (línea inexistente): es un símbolo del
@@ -350,7 +350,7 @@ fn ident_under_cursor(src: &str, line0: usize, char0: usize) -> Option<String> {
 
 /// Los `///` de un símbolo del **prelude** (funciones, tipos y traits inyectados: `map`, `sort`,
 /// `Option`…), buscados por nombre en su propia fuente (`prelude::SOURCE`): la posición de su
-/// declaración no vive en el archivo abierto, así que no vale `doc_lineas_arriba` sobre el buffer.
+/// declaración no vive en el archivo abierto, así que no vale `doc_lines_above` sobre el buffer.
 fn doc_in_prelude(name: &str) -> Option<String> {
     let lines: Vec<&str> = crate::prelude::SOURCE.lines().collect();
     for (i, l) in lines.iter().enumerate() {
@@ -363,7 +363,7 @@ fn doc_in_prelude(name: &str) -> Option<String> {
                     && !rest[name.len()..].chars().next().is_some_and(is_ident_char)
             })
         });
-        if is_decl && let Some(ls) = crate::raydoc::doc_lineas_arriba(&lines, i + 1) {
+        if is_decl && let Some(ls) = crate::raydoc::doc_lines_above(&lines, i + 1) {
             return Some(ls.join("\n"));
         }
     }
@@ -1334,7 +1334,7 @@ fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
                     // La def vive en la fuente original (el reparado no cambia números de línea);
                     // si cae fuera (símbolo del prelude), se intenta el prelude más abajo.
                     if dl >= 1 && dl <= orig_lines.len() {
-                        crate::raydoc::doc_lineas_arriba(&orig_lines, dl).map(|ls| ls.join("\n"))
+                        crate::raydoc::doc_lines_above(&orig_lines, dl).map(|ls| ls.join("\n"))
                     } else {
                         None
                     }

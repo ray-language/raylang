@@ -991,6 +991,20 @@ fn item_struct_literal(name: &str, fields: &[(String, String)]) -> Json {
     ])
 }
 
+/// El ítem-extra de completion de un builtin que toma una **función anónima** (`spawn`/`scope`):
+/// inserta `name(fn() {\n\t$0\n});` —la forma con cuerpo, cursor dentro— además del builtin pelado,
+/// al estilo del literal de struct (M47b). El `\t` lo reindenta el editor según su config.
+fn item_closure_snippet(name: &str) -> Json {
+    obj(vec![
+        ("label", Json::Str(format!("{}(fn() {{…}})", name))),
+        ("kind", num(15)), // 15 = Snippet
+        ("detail", Json::Str("con función anónima".into())),
+        ("filterText", Json::Str(name.to_string())),
+        ("insertText", Json::Str(format!("{}(fn() {{\n\t$0\n}});", name))),
+        ("insertTextFormat", num(2)), // 2 = Snippet
+    ])
+}
+
 fn module_pub_symbols(entry: &Path, path: &str) -> Option<Vec<(String, i64, Option<(Vec<String>, String)>)>> {
     let roots = import_roots(entry);
     let path = loader::resolve_module_path(&roots, path).ok()??;
@@ -1617,6 +1631,13 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     for label in structs_ofrecibles {
         if let Some(fields) = ctx.struct_fields(&label).filter(|c| !c.is_empty()) {
             list.push(item_struct_literal(&label, &fields));
+        }
+    }
+    // Ítem-extra de closure para los builtins que toman una función anónima (`spawn(fn() { … })`,
+    // `scope(fn() { … })`): inserta la forma con cuerpo, aparte del builtin pelado.
+    for name in ["spawn", "scope"] {
+        if crate::builtins::names().any(|n| n == name) {
+            list.push(item_closure_snippet(name));
         }
     }
     Json::Arr(list)
@@ -3357,6 +3378,33 @@ mod tests {
         assert!(labels.contains(&"while"), "palabra clave");
         // No expone nombres sintéticos (manglados, internos).
         assert!(!labels.iter().any(|l| l.contains('#') || l.starts_with("__")), "sin nombres sintéticos");
+    }
+
+    #[test]
+    fn completion_ofrece_snippet_de_closure_para_spawn_y_scope() {
+        // `spawn`/`scope` toman una función anónima → un ítem-extra inserta `name(fn() { … });`.
+        let src = "fn main() -> int { 0 }\n";
+        let msg = json::parse(
+            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":0,"character":19}}}"#
+        ).unwrap();
+        let mut docs = HashMap::new();
+        docs.insert("file:///t.ray".to_string(), src.to_string());
+        let res = completion_result(&msg, &docs);
+        let items = res.as_array().unwrap();
+        for name in ["spawn", "scope"] {
+            let snippet = items.iter().find(|i|
+                i.get("label").and_then(|l| l.as_str()) == Some(&format!("{name}(fn() {{…}})")));
+            let snippet = snippet.unwrap_or_else(|| panic!("falta el ítem de closure para {name}"));
+            assert_eq!(snippet.get("insertTextFormat"), Some(&Json::Num(2.0)), "{name}: es snippet");
+            assert_eq!(
+                snippet.get("insertText").and_then(|t| t.as_str()),
+                Some(format!("{name}(fn() {{\n\t$0\n}});").as_str()),
+                "{name}: inserta el cuerpo de la función anónima"
+            );
+            // El builtin pelado sigue ofreciéndose aparte.
+            assert!(items.iter().any(|i| i.get("label").and_then(|l| l.as_str()) == Some(name)),
+                "{name}: builtin pelado también presente");
+        }
     }
 
     /// Helper: labels de la completion en `(line, character)` (0-basados) sobre `src`.

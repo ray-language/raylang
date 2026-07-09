@@ -1563,7 +1563,10 @@ fn module_alias_symbols(uri: Option<&str>, src: &str, receiver: &str) -> Option<
 fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
     if uri.is_some_and(is_template_uri) {
-        return Json::Null; // M55: un .ray.html no es fuente raylang
+        // M55: en un template, completion de sus PROPIOS símbolos (params tipados + vars de for).
+        let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
+        let Some((_, line0, char0)) = pos_params(msg) else { return Json::Arr(vec![]) };
+        return template_completion_items(src, line0, char0);
     }
     let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
     if let Some((line0, char0)) = pos_params(msg).map(|(_, l, c)| (l, c)) {
@@ -1731,6 +1734,92 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
         if crate::builtins::names().any(|n| n == name) {
             list.push(item_closure_snippet(name));
         }
+    }
+    Json::Arr(list)
+}
+
+/// Completion dentro de un template `.ray.html` (M55): SOLO ofrece algo con el cursor **dentro de
+/// los delimitadores** `{{ … }}` / `{% … %}` (el HTML no es nuestro; fuera se devuelve `[]` y el
+/// editor sigue con su completion de HTML). Ofrece los **params tipados** de la cabecera
+/// `{% params %}` (kind Variable, el tipo como detalle), las **variables de los `{% for %}` que
+/// encierran el cursor** (tipo inferido: iterar un param `[T]` → `T`; un rango `a..b` → `int`) y,
+/// en contexto de etiqueta `{%`, las palabras clave del template. Todo por escaneo textual: el
+/// template está a medio escribir mientras se pide completion, no se puede tokenizar entero.
+fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
+    // El texto hasta el cursor (la línea del cursor cortada en char0, por caracteres).
+    let mut prefix = String::new();
+    for (i, l) in src.lines().enumerate() {
+        if i < line0 {
+            prefix.push_str(l);
+            prefix.push('\n');
+        } else if i == line0 {
+            prefix.extend(l.chars().take(char0));
+            break;
+        }
+    }
+    // ¿Dentro de un delimitador? El último abridor (`{{` o `{%`) antes del cursor, sin su cerrador.
+    let (open_at, is_tag) = match (prefix.rfind("{{"), prefix.rfind("{%")) {
+        (Some(e), Some(t)) if t > e => (t, true),
+        (Some(e), _) => (e, false),
+        (None, Some(t)) => (t, true),
+        (None, None) => return Json::Arr(vec![]),
+    };
+    if prefix[open_at..].contains(if is_tag { "%}" } else { "}}" }) {
+        return Json::Arr(vec![]); // el cursor está fuera de los delimitadores (en el HTML)
+    }
+
+    let params = crate::templ::header_params(src);
+    // Variables de bucle EN ÁMBITO: pila de los `{% for v in expr %}` abiertos (sin `endfor`)
+    // antes del cursor. Solo cuentan las etiquetas completas (cerradas con `%}`) del prefijo.
+    let mut fors: Vec<(String, String)> = Vec::new();
+    let mut rest = prefix.as_str();
+    while let Some(i) = rest.find("{%") {
+        rest = &rest[i + 2..];
+        let Some(j) = rest.find("%}") else { break };
+        let tag = rest[..j].trim();
+        rest = &rest[j + 2..];
+        if tag == "endfor" {
+            fors.pop();
+        } else if let Some(cuerpo) = tag.strip_prefix("for ")
+            && let Some((v, expr)) = cuerpo.split_once(" in ")
+        {
+            let expr = expr.trim();
+            let tipo = if expr.contains("..") {
+                "int".to_string()
+            } else {
+                params.iter().find(|(n, _)| n == expr)
+                    .and_then(|(_, t)| t.strip_prefix('[').and_then(|t| t.strip_suffix(']')))
+                    .map(|t| t.trim().to_string())
+                    .unwrap_or_default()
+            };
+            fors.push((v.trim().to_string(), tipo));
+        }
+    }
+
+    // Kinds LSP: 6 = Variable, 14 = Keyword. Los sortText ponen las variables antes que las keywords.
+    let mut list: Vec<Json> = Vec::new();
+    for (nombre, tipo) in params.iter().chain(fors.iter()) {
+        let mut fields = vec![
+            ("label", Json::Str(nombre.clone())),
+            ("kind", num(6)),
+            ("sortText", Json::Str(format!("0{nombre}"))),
+        ];
+        if !tipo.is_empty() {
+            fields.push(("detail", Json::Str(tipo.clone())));
+        }
+        list.push(obj(fields));
+    }
+    let keywords: &[&str] = if is_tag {
+        &["params", "if", "elif", "else", "endif", "for", "endfor", "in", "true", "false"]
+    } else {
+        &["true", "false"]
+    };
+    for kw in keywords {
+        list.push(obj(vec![
+            ("label", Json::Str(kw.to_string())),
+            ("kind", num(14)),
+            ("sortText", Json::Str(format!("1{kw}"))),
+        ]));
     }
     Json::Arr(list)
 }
@@ -4112,6 +4201,53 @@ mod tests {
         serve(&mut reader, &mut output);
         let out = String::from_utf8(output).unwrap();
         assert!(out.contains("\"diagnostics\":[]"));
+    }
+
+    #[test]
+    fn completion_en_un_template_ofrece_params_y_vars_de_for() {
+        // M55: dentro de `{{ }}` se ofrecen los params tipados de la cabecera; dentro de un
+        // `{% for %}` abierto, también la variable de bucle (con su tipo inferido del `[T]`);
+        // en contexto de etiqueta `{%`, además las keywords; fuera de los delimitadores, nada.
+        let tpl = "{% params titulo: string, filas: [string], total: int %}\n\
+                   <h1>{{ ti }}</h1>\n\
+                   {% for fila in filas %}<li>{{ f }}</li>{% endfor %}\n\
+                   {% if total > 0 %}<p>hay</p>{% endif %}\n\
+                   <p>fuera</p>\n";
+        let labels = |line0: usize, char0: usize| -> Vec<(String, Option<String>)> {
+            template_completion_items(tpl, line0, char0).as_array().unwrap().iter()
+                .map(|i| (
+                    i.get("label").and_then(Json::as_str).unwrap().to_string(),
+                    i.get("detail").and_then(Json::as_str).map(|s| s.to_string()),
+                ))
+                .collect()
+        };
+        // Dentro de `{{ ti| }}` (línea 2): los tres params con su tipo; sin keywords de etiqueta.
+        let en_expr = labels(1, 10);
+        assert!(en_expr.contains(&("titulo".into(), Some("string".into()))), "{en_expr:?}");
+        assert!(en_expr.contains(&("filas".into(), Some("[string]".into()))), "{en_expr:?}");
+        assert!(en_expr.contains(&("total".into(), Some("int".into()))), "{en_expr:?}");
+        assert!(!en_expr.iter().any(|(l, _)| l == "endif"), "sin keywords de tag en {{{{ }}}}: {en_expr:?}");
+        assert!(!en_expr.iter().any(|(l, _)| l == "fila"), "el for aún no está abierto: {en_expr:?}");
+        // Dentro del for (línea 3, `{{ f| }}`): la variable de bucle con el tipo del elemento.
+        let en_for = labels(2, 31);
+        assert!(en_for.contains(&("fila".into(), Some("string".into()))), "{en_for:?}");
+        // En una etiqueta `{% if |` (línea 4): params + keywords.
+        let en_tag = labels(3, 6);
+        assert!(en_tag.iter().any(|(l, _)| l == "total"), "{en_tag:?}");
+        assert!(en_tag.iter().any(|(l, _)| l == "endif"), "{en_tag:?}");
+        // Fuera de los delimitadores (línea 5): lista vacía (el HTML no es nuestro).
+        assert!(labels(4, 3).is_empty());
+
+        // Y el enrutado: un completion sobre una URI `.ray.html` pasa por este camino.
+        let uri = "file:///tmp/vista.ray.html";
+        let mut docs = HashMap::new();
+        docs.insert(uri.to_string(), tpl.to_string());
+        let msg = json::parse(&format!(
+            r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":1,"character":10}}}}}}"#
+        )).unwrap();
+        let items = completion_result(&msg, &docs);
+        assert!(items.as_array().unwrap().iter()
+            .any(|i| i.get("label").and_then(Json::as_str) == Some("titulo")));
     }
 
     #[test]

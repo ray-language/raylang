@@ -102,6 +102,21 @@ pub fn fn_suffix_of(input: &Path) -> Result<String, String> {
     Ok(name)
 }
 
+/// Los parámetros de la cabecera `{% params nombre: tipo, … %}` como pares `(nombre, tipo)`.
+/// **Tolerante** a un template a medio escribir (no tokeniza entero, solo escanea la cabecera):
+/// es para la completion del LSP, no para validar — con cabecera ausente o rota devuelve `[]`.
+pub fn header_params(tpl: &str) -> Vec<(String, String)> {
+    let Some(i) = tpl.find("{%") else { return vec![] };
+    let rest = tpl[i + 2..].trim_start();
+    let Some(body) = rest.strip_prefix("params") else { return vec![] };
+    let Some(j) = body.find("%}") else { return vec![] };
+    split_params(&body[..j])
+        .into_iter()
+        .filter_map(|p| p.split_once(':').map(|(n, t)| (n.trim().to_string(), t.trim().to_string())))
+        .filter(|(n, t)| !n.is_empty() && !t.is_empty())
+        .collect()
+}
+
 // Tokeniza el template: texto literal, `{{ expr }}`, `{{& expr }}`, `{% tag %}`. Cada token lleva
 // la línea (1-basada) del template donde empieza.
 fn tokenize(tpl: &str) -> Result<Vec<Tok>, TplError> {

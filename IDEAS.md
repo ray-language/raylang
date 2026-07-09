@@ -516,11 +516,21 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
   (DESIGN §55.2: `db/postgres.ray` — conexión persistente + SCRAM + protocolo extendido Parse/Bind/
   Describe/Execute/Sync → parámetros `$1`/`$2` en texto/anti-inyección + todas las filas + transacciones
   vía SQL; reusa `net/scram` como cápsula hermana; toy server con eco de params + oráculo ambos motores en
-  `tests/postgres_v2_cli.rs`) · **M53.3** FFI out-params (cierra diferido de M41; superficie por decidir: retorno
-  extra en tupla vs. slot explícito) · **M53.4** SQLite sobre M53.3 (test condicionado a libsqlite3;
-  macOS la trae) · **M53.5** opcional: libro + ejemplo CRUD integrador.
-- **Impacto**: 53.1/53.2 cero compilador (librería pura). 53.3 toca checker+FFI+ambos motores
-  (acotado). Todo aditivo.
+  `tests/postgres_v2_cli.rs`) · **M53.3** ✅ **COMPLETO — REFORMULADO** (jul 2026, giro a foco
+  producción): en vez de extender el FFI con out-params, **builtins `__sqlite_open/exec/query` sobre
+  `rusqlite` (bundled)** — patrón `ring`/M43: el binding maduro resuelve dobles punteros, lifetimes de
+  statements y destructores de bind; SQLite compilado dentro del binario (cero deps del sistema, sin
+  test condicionado); la conexión vive en el registro común de handles (`close(h)` la cierra); stubs
+  wasm (DESIGN §55.3) · **M53.4** ✅ **COMPLETO** (`db/sqlite.ray`: `connect(path)`/`query`/`exec` con
+  `?N` posicionales/`disconnect`, celdas texto NULL→""; test determinista `:memory:` ambos motores en
+  `tests/sqlite_cli.rs`; demo `examples/db/sqlite_demo.ray`) · **M53.5** opcional: libro + ejemplo CRUD
+  integrador. **M53 COMPLETO** (los tres clientes).
+- **Impacto**: 53.1/53.2 cero compilador (librería pura). 53.3 reformulado: 3 opcodes + impls por motor
+  (mecánico, patrón M11.4); cero cambios de checker/superficie. Todo aditivo.
+- **Diferido — FFI out-params (ex-M53.3, cierra el diferido de M41)**: la extensión que vuelve al FFI
+  útil para APIs C con dobles punteros (`f(&handle)`); superficie por decidir (retorno extra en tupla
+  vs. slot explícito `out ptr`). Sin fecha: hacerla cuando aparezca la **segunda** librería C que la
+  necesite, con un caso de uso real guiando el diseño (SQLite ya no la necesita).
 
 ---
 

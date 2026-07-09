@@ -708,6 +708,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "postgres_demo.ray", // M32.1b: demo importa postgres (idem). También cubre, por basename,
                              // examples/db/postgres_demo.ray (M53.2), que usa `for`/paquete `db`.
         "mysql_demo.ray", // M53.1: demo del cliente MySQL (examples/db); usa `for` (M27.2, idem)
+        "sqlite_demo.ray", // M53.4: demo del cliente SQLite (examples/db); usa `for` (M27.2, idem)
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops

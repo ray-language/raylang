@@ -1,0 +1,57 @@
+// Demo del cliente SQLite (M53.4, `db/sqlite`). A diferencia de los demos de MySQL/PostgreSQL,
+// NO necesita servidor: SQLite es una base embebida (compilada dentro del binario `ray`). Crea una
+// tabla, inserta con parámetros, consulta, y muestra una transacción con ROLLBACK.
+//
+// Uso (corre tal cual, sin argumentos → base en memoria; con argumento → archivo):
+//   cd examples/db
+//   ray run sqlite_demo.ray              # en memoria, efímera
+//   ray run sqlite_demo.ray demo.db      # persistida en un archivo
+
+import db/sqlite;
+
+fn main() -> int {
+    let a = args();
+    let path = if (a.len() > 0) { a[0] } else { ":memory:" };
+
+    // 1. Abrir (o crear) la base. ":memory:" vive solo lo que el proceso.
+    var c = match (sqlite.connect(path)) {
+        Result.Ok(conn) => conn,
+        Result.Err(e) => { print("no se pudo abrir: " + e); return 1; },
+    };
+    print("base abierta: " + path);
+
+    let sin: [string] = [];
+    let _ = sqlite.exec(c, "CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY, nombre TEXT, nota REAL)", sin);
+
+    // 2. Insertar con parámetros posicionales (?1, ?2, … enlazados aparte del SQL → anti-inyección).
+    let _ = sqlite.exec(c, "INSERT INTO usuarios (nombre, nota) VALUES (?1, ?2)", ["ada", "9.5"]);
+    match (sqlite.exec(c, "INSERT INTO usuarios (nombre) VALUES (?1)", ["grace"])) {
+        Result.Ok(n) => { print("filas insertadas: " + to_string(n)); },
+        Result.Err(e) => { print("error en el insert: " + e); },
+    }
+
+    // 3. Consultar (celdas como texto; un NULL llega como "").
+    match (sqlite.query(c, "SELECT id, nombre, nota FROM usuarios ORDER BY id", sin)) {
+        Result.Ok(rows) => {
+            print("usuarios (" + to_string(rows.len()) + "):");
+            for fila in rows {
+                print("  " + fila.join(" | "));
+            }
+        },
+        Result.Err(e) => { print("error en la consulta: " + e); },
+    }
+
+    // 4. Transacción: el INSERT de dentro no sobrevive al ROLLBACK.
+    let _ = sqlite.exec(c, "BEGIN", sin);
+    let _ = sqlite.exec(c, "INSERT INTO usuarios (nombre) VALUES (?1)", ["fantasma"]);
+    let _ = sqlite.exec(c, "ROLLBACK", sin);
+    match (sqlite.query(c, "SELECT count(*) FROM usuarios", sin)) {
+        Result.Ok(rows) => { print("usuarios tras el rollback: " + rows[0][0]); },
+        Result.Err(e) => { print("error: " + e); },
+    }
+
+    // 5. Cerrar (libera el handle; usarla después falla limpio, como valor).
+    sqlite.disconnect(c);
+    print("base cerrada");
+    0
+}

@@ -6837,8 +6837,8 @@ revisión de jul 2026 quedaron cerrados: pre-releases (M51e), check semántico a
 ## 55. M53 — Clientes de bases de datos (`packages/db`)
 
 Plan completo y análisis de factibilidad en IDEAS.md §14. Resumen: MySQL (raylang puro, protocolo wire),
-Postgres (evolución del cliente de `packages/net`) y SQLite (vía FFI a `libsqlite3`; exige los out-params
-de doble puntero, extensión M53.3 del FFI de M41). Ubicación: paquete **`packages/db`** (tier 2; SQLite no
+Postgres (evolución del cliente de `packages/net`) y SQLite (embebido: primitivos del host sobre
+`rusqlite`, §55.3 — el plan FFI original se reformuló). Ubicación: paquete **`packages/db`** (tier 2; SQLite no
 es red → no encaja en `net`), con API uniforme tipada-a-texto v1: `connect -> Result<Conn>`,
 `query(c, sql) -> Result<[[string]]>`, `exec(c, sql) -> Result<int>` y `disconnect(c)` (no `close`: dentro
 del módulo taparía al builtin global que cierra el socket).
@@ -6910,4 +6910,53 @@ sirve una segunda fila fija, un CommandComplete con filas afectadas para `exec`,
 BEGIN + INSERT con param + error). **Diferido**: parámetros binarios/tipados, sentencias preparadas con
 estado, TLS, COPY, multi-statement.
 
-Siguiente: **M53.3** (extensión FFI para out-params de doble puntero) + **M53.4** (SQLite sobre libsqlite3).
+### 55.3 M53.3 — primitivos SQLite sobre `rusqlite`. ✅ COMPLETO (REFORMULADO)
+
+El plan original era extender el FFI de M41 con *out-params* de doble puntero y envolver `libsqlite3`
+a mano. **Se reformuló con el giro a foco producción** (jul 2026): SQLite se integra como los builtins
+de cripto de M43 — una **dependencia Rust madura** (`rusqlite`, con `bundled`) expuesta como primitivos
+del host. La comparación que decidió:
+
+- **Seguridad**: envolver la API C a mano exponía por primera vez a raylang a segfaults reales
+  (use-after-finalize, lifetimes de `sqlite3_column_text`, destructores `SQLITE_TRANSIENT`). Con
+  `rusqlite` el borrow checker vigila todo eso y el peor caso vuelve a ser un `Result.Err`.
+- **Portabilidad**: `bundled` compila SQLite **dentro del binario** → sin `dlopen`, sin nombres de
+  librería por plataforma, sin test condicionado a que el sistema traiga `libsqlite3`, versión
+  determinista.
+- **Costo**: 3 opcodes + impls por motor (mecánico, patrón M11.4) vs. tocar checker+FFI+ambos motores
+  y decidir superficie nueva del lenguaje.
+
+La extensión FFI de out-params **queda como diferido propio** (IDEAS §14): se hará cuando aparezca la
+segunda librería C que la necesite, con un caso real guiando el diseño.
+
+**Primitivos** (`src/builtins.rs`, arreglo etiquetado como los de I/O; stubs en wasm — el playground no
+compila la librería C):
+
+- `__sqlite_open(path) -> [string]`: `["ok", handle]`/`["err", msg]`. La conexión vive en el **registro
+  común de handles** (`OpenHandle::Sqlite`) → `close(h)` la cierra (el `Drop` de `Connection` cierra la
+  base); un handle cerrado o de otro tipo da error claro.
+- `__sqlite_exec(h, sql, params: [string]) -> [string]`: `["ok", n_afectadas]`/`["err", msg]`.
+- `__sqlite_query(h, sql, params) -> [string]`: `["ok", ncols, celda0, …]` (celdas **aplanadas** fila a
+  fila; el envoltorio reconstruye) o `["err", msg]`.
+
+Parámetros posicionales `?1`, `?2`, … enlazados como **texto** (la afinidad de tipos de SQLite convierte).
+Celdas a texto: INTEGER/REAL → repr decimal, NULL → `""` (consistente con `db/mysql`), BLOB → hex. El
+ciclo prepare→bind→step→finalize ocurre **entero dentro de cada helper** (el statement jamás escapa) →
+sin use-after-finalize posible; cada celda se copia **antes** de avanzar (un `ValueRef` solo vive hasta
+el siguiente paso). Nota: la conexión no es clonable → el lock del registro se retiene durante la
+consulta (I/O local; serializa entre fibras).
+
+### 55.4 M53.4 — cliente `db/sqlite`. ✅ COMPLETO
+
+`packages/db/sqlite.ray`: la **misma API** que mysql/postgres — `connect(path) -> Result<Conn, string>`
+(`":memory:"` = en memoria), `query(c, sql, params) -> Result<[[string]], string>` (reconstruye las
+filas desde el arreglo aplanado), `exec -> Result<int, string>`, `disconnect` (libera el handle; usar
+la conexión después falla limpio, como valor). Transacciones = SQL corriente (`BEGIN`/`COMMIT`/
+`ROLLBACK`).
+
+**Verificación** (`tests/sqlite_cli.rs`): al ser embebida y `":memory:"` determinista, **no hay servidor
+de juguete** — oráculo conductual puro por ambos motores (DDL + INSERT con params + SELECT con NULL→"" +
+consulta con parámetro + transacción con ROLLBACK + error SQL como valor + uso tras disconnect), más el
+caso de ruta inválida (abrir un directorio → `Result.Err`). Demo autónomo `examples/db/sqlite_demo.ray`
+(corre sin servidor). **M53 COMPLETO**: los tres clientes (MySQL wire, PostgreSQL extendido, SQLite
+embebido) con API uniforme. Diferido: tipos nativos (celdas no-texto), `last_insert_rowid`, modo WAL.

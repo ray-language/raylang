@@ -86,9 +86,41 @@ fn main() -> int {
   conserva aparte.
 - **Diferido**: parámetros binarios/tipados, sentencias preparadas con estado, TLS, COPY.
 
-### Próximos (plan M53, IDEAS §14)
+### `db/sqlite` (M53.4)
 
-- `db/sqlite` (M53.4) — vía FFI a `libsqlite3` (tras los out-params del FFI, M53.3).
+Base de datos **embebida**: sin servidor ni socket. A diferencia de mysql/postgres (protocolo wire
+en raylang puro), SQLite es una librería C: los primitivos `__sqlite_*` viven en el host sobre
+**`rusqlite`** (patrón `ring`/M43 — el binding maduro resuelve dobles punteros, lifetimes de
+statements y destructores de bind). SQLite va **compilado dentro del binario** (`bundled`): cero
+dependencias del sistema.
+
+```raylang
+import db/sqlite;
+
+fn main() -> int {
+    var c = match (sqlite.connect(":memory:")) {   // o una ruta de archivo
+        Result.Ok(conn) => conn,
+        Result.Err(e) => { print(e); return 1; },
+    };
+    let sin: [string] = [];
+    let _ = sqlite.exec(c, "CREATE TABLE u (id INTEGER, nombre TEXT)", sin);
+    let _ = sqlite.exec(c, "INSERT INTO u VALUES (?1, ?2)", ["1", "ada"]);
+    match (sqlite.query(c, "SELECT nombre FROM u WHERE id = ?1", ["1"])) {
+        Result.Ok(rows) => { print(rows[0][0]); },
+        Result.Err(e) => { print(e); },
+    }
+    sqlite.disconnect(c);
+    0
+}
+```
+
+- **API uniforme** con los otros clientes: `connect(path) -> Result<Conn, string>`,
+  `query`/`exec` con `params: [string]` (marcadores **`?1`, `?2`, …** enlazados aparte del SQL →
+  anti-inyección), `disconnect`. Transacciones = SQL corriente (`BEGIN`/`COMMIT`/`ROLLBACK`).
+- **Celdas como texto** (misma convención): INTEGER/REAL → repr decimal, `NULL` → `""`, BLOB → hex.
+- `disconnect` libera el handle; usar la conexión después falla **limpio** (error como valor, no
+  crash: el ciclo prepare→step→finalize ocurre entero dentro del host, un statement nunca escapa).
+- **No disponible en el playground web** (wasm no compila la librería C).
 
 ## Verificación
 
@@ -96,3 +128,7 @@ fn main() -> int {
 plano) con scramble fijo y la respuesta de auth **precomputada** → offline y determinista; el
 servidor verifica la auth octeto a octeto y sirve un result set (con `NULL`), un OK de `exec` y
 un `ERR`. Oráculo conductual: VM e intérprete producen el mismo stdout.
+
+`tests/sqlite_cli.rs`: sin servidor — `":memory:"` da una base determinista, así que el test es
+un oráculo conductual puro (DDL + INSERT con parámetros + SELECT con `NULL` + transacción con
+`ROLLBACK` + error SQL como valor + uso tras `disconnect`), mismo stdout en ambos motores.

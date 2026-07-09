@@ -1792,6 +1792,19 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
 
+                // Diferido JSON-1: code point → [char] de 0/1 (vacío si inválido).
+                OpCode::CharFromCode => {
+                    let HeapValue::Int(n) = self.pop() else { unreachable!("el checker garantiza un int") };
+                    // El guard de rango evita que un int enorme haga wrap al castear a u32.
+                    let elems = if (0..=0x10FFFF).contains(&n) {
+                        char::from_u32(n as u32).map(|c| vec![HeapValue::Char(c)]).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+
                 // --- Bits de float (M54.1): totales, sin heap. ---
                 OpCode::FloatBits => {
                     let HeapValue::Float(f) = self.pop() else { unreachable!("el checker garantiza un float") };
@@ -5778,6 +5791,25 @@ mod tests {
                 let b = valor(parse_int("  -7 "), 0);     // -7 (trim)
                 let c = valor(parse_int("xyz"), 100);     // 100 (None)
                 a + b + c                                 // 135
+            }
+        "#);
+    }
+
+    #[test]
+    fn char_from_code_oraculo() {
+        // Diferido JSON-1: char_from_code es el char::from_u32 de Rust en ambos motores. Válidos
+        // (ASCII, multi-byte, astral) e inválidos (surrogate, fuera de rango, negativo, enorme —
+        // este último caza un wrap del cast a u32).
+        oracle_program(r#"
+            fn main() -> int {
+                let a: int = match (char_from_code(65)) { Option.Some(c) => if (c == 'A') { 1 } else { -1 }, Option.None => -1 };
+                let e: int = match (char_from_code(233)) { Option.Some(c) => if (to_string(c) == "é") { 10 } else { -1 }, Option.None => -1 };
+                let astral: int = match (char_from_code(128512)) { Option.Some(c) => if (char_code(c) == 128512) { 100 } else { -1 }, Option.None => -1 };
+                let sur: int = match (char_from_code(55296)) { Option.Some(_) => -1, Option.None => 1000 };
+                let fuera: int = match (char_from_code(1114112)) { Option.Some(_) => -1, Option.None => 10000 };
+                let neg: int = match (char_from_code(0 - 1)) { Option.Some(_) => -1, Option.None => 100000 };
+                let wrap: int = match (char_from_code(4294967361)) { Option.Some(_) => -1, Option.None => 1000000 };
+                a + e + astral + sur + fuera + neg + wrap
             }
         "#);
     }

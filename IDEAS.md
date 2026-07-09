@@ -570,11 +570,11 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
 `enum Json` + `parse -> Result` + `stringify` canónico; lo usa `net/oauth2`). Huecos detectados
 (jul 2026, al analizar la superficie del cliente MongoDB):
 
-- **Escapes `\uXXXX` no soportados** (limitación documentada del módulo). La causa es un hueco del
-  LENGUAJE: existe `char_code(c) -> int` (M40.3a) pero no su inverso. Fix acotado: builtin
-  **`char_from_code(int) -> Option<char>`** (valida el rango de code points; patrón M11.4) + los
-  escapes en `std/json` (~15 líneas, con pares surrogate para los astrales) + vectores de test.
-  Hoy un JSON real de una API con `"é"` da error de parseo.
+- ✅ **Escapes `\uXXXX`** — CERRADO (jul 2026): primitivo `__char_from_code -> [char]` (opcode
+  `CharFromCode`; guard de rango contra el wrap del cast a u32) + `char_from_code -> Option<char>`
+  en el prelude (el inverso de `char_code`) + los escapes en `std/json` con **pares surrogate**
+  (astrales) y errores como valores (surrogate suelto, par incompleto, dígito no hex). Oráculo
+  `char_from_code_oraculo` + test `escapes_unicode` en `tests/json_cli.rs`.
 - **`JNum` es solo `float`**: fiel a JSON, pero un int64 > 2^53 pierde precisión. Irrelevante para
   APIs web; importa para un puente con BSON (abajo). Cambiarlo rompería a los usuarios del enum →
   decidir solo si el puente lo exige.

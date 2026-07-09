@@ -195,6 +195,11 @@ pub enum OpCode {
     ChaChaPolySeal,
     ChaChaPolyOpen,
 
+    /// Diferido JSON-1: el inverso de `char_code`. Saca un `int`; empuja `[char]` de 0/1 elementos
+    /// (vacío si no es un code point válido: surrogates D800–DFFF o fuera de rango). Primitivo
+    /// `__char_from_code`; el prelude → `char_from_code -> Option<char>`. Habilita los escapes
+    /// `\uXXXX` de `std/json`.
+    CharFromCode,
     /// M54.1: bits IEEE 754 de un float. Saca un `float`; empuja sus 64 bits como `int` (dos
     /// complemento). Primitivo `__float_bits`; `std/math` → `float_bits`. Lo pide el `double` de
     /// BSON (y serviría a protobuf).

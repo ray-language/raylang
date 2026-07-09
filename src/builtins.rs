@@ -1446,6 +1446,13 @@ static BUILTINS: &[Builtin] = &[
         }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
+    // __char_from_code(n) -> [char] (diferido JSON-1): [] si n no es un code point válido.
+    // El prelude → char_from_code -> Option<char>. El inverso de char_code.
+    Builtin { name: "__char_from_code", opcode: OpCode::CharFromCode, check: |a| {
+        arity(a, 1, "__char_from_code", " (el code point)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__char_from_code espera un int, no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Char)))
+    } },
     // --- Bits de float (M54.1): primitivos totales; `std/math` → float_bits/float_from_bits. ---
     Builtin { name: "__float_bits", opcode: OpCode::FloatBits, check: |a| {
         arity(a, 1, "__float_bits", " (el float)")?;

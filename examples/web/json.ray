@@ -5,7 +5,8 @@
 // cero código de runtime. Los objetos usan Map<string, Json> → claves ordenadas al serializar
 // (stringify canónico, round-trip estable). Errores como valores (Result), nunca panic.
 //
-// Limitación: los escapes \uXXXX no se soportan (convertir un code point a char pediría un builtin).
+// Los escapes \uXXXX se soportan (diferido JSON-1), incluidos los pares surrogate de los astrales
+// (p. ej. "😀" → 😀), vía char_from_code (el inverso de char_code, del prelude).
 /// A JSON value: null, bool, number (float), string, array, or object (`Map<string, Json>`).
 /// Objects use a Map, so keys come out sorted when serializing (canonical, stable round-trips).
 pub enum Json {
@@ -119,6 +120,70 @@ fn unescape(e: char) -> Option<string> {
     if (e == '"') { Option.Some("\"") } else if (e == '\\') { Option.Some("\\") } else if (e == '/') { Option.Some("/") } else if (e == 'n') { Option.Some("\n") } else if (e == 't') { Option.Some("\t") } else if (e == 'r') { Option.Some("\r") } else { Option.None }
 }
 
+// El valor de un dígito hex (mayúsculas o minúsculas); -1 si no lo es.
+fn hex_val(c: char) -> int {
+    let code = char_code(c);
+    if (code >= 48 && code <= 57) {
+        code - 48
+    } else if (code >= 97 && code <= 102) {
+        code - 87
+    } else if (code >= 65 && code <= 70) {
+        code - 55
+    } else {
+        0 - 1
+    }
+}
+
+// Lee exactamente 4 dígitos hex en el cursor (la unidad de un \uXXXX).
+fn hex4(p: P) -> Result<int, string> {
+    var v = 0;
+    var k = 0;
+    while (k < 4) {
+        if (at_end(p)) {
+            return Result.Err("escape \\u incompleto");
+        }
+        let d = hex_val(cur(p));
+        if (d < 0) {
+            return Result.Err("escape \\u con dígito no hexadecimal");
+        }
+        v = v * 16 + d;
+        p.i = p.i + 1;
+        k = k + 1;
+    }
+    Result.Ok(v)
+}
+
+// Un escape \uXXXX (el cursor está tras la 'u'). Una unidad BMP va directa; un high surrogate
+// (D800–DBFF) exige el low surrogate (\uDC00–DFFF) a continuación → code point astral.
+fn parse_u_escape(p: P) -> Result<string, string> {
+    let hi = hex4(p)?;
+    if (hi >= 56320 && hi <= 57343) {
+        // 0xDC00–0xDFFF: un low surrogate suelto no es un code point.
+        return Result.Err("escape \\u con surrogate suelto");
+    }
+    var cp = hi;
+    if (hi >= 55296 && hi <= 56319) {
+        // 0xD800–0xDBFF: par surrogate — debe venir \uDC00–DFFF.
+        if (at_end(p) || cur(p) != '\\') {
+            return Result.Err("par surrogate incompleto en \\u");
+        }
+        p.i = p.i + 1;
+        if (at_end(p) || cur(p) != 'u') {
+            return Result.Err("par surrogate incompleto en \\u");
+        }
+        p.i = p.i + 1;
+        let lo = hex4(p)?;
+        if (lo < 56320 || lo > 57343) {
+            return Result.Err("par surrogate inválido en \\u");
+        }
+        cp = 65536 + (hi - 55296) * 1024 + (lo - 56320);
+    }
+    return match (char_from_code(cp)) {
+        Option.Some(c) => Result.Ok(to_string(c)),
+        Option.None => Result.Err("escape \\u con code point inválido"),
+    };
+}
+
 // Lee un string entre comillas (el cursor está en la comilla de apertura). Devuelve el texto crudo.
 fn parse_str_raw(p: P) -> Result<string, string> {
     p.i = p.i + 1;  // saltar la comilla de apertura
@@ -139,6 +204,18 @@ fn parse_str_raw(p: P) -> Result<string, string> {
                 if (at_end(p)) {
                     err = "escape sin cerrar";
                     seguir = false;
+                } else if (cur(p) == 'u') {
+                    // \uXXXX (con par surrogate si es un astral).
+                    p.i = p.i + 1;
+                    match (parse_u_escape(p)) {
+                        Result.Ok(rep) => {
+                            out = out + rep;
+                        },
+                        Result.Err(m) => {
+                            err = m;
+                            seguir = false;
+                        },
+                    }
                 } else {
                     match (unescape(cur(p))) {
                         Option.Some(rep) => {
@@ -272,7 +349,8 @@ fn parse_object(p: P) -> Result<Json, string> {
 
 // Punto de entrada: parsea un documento JSON completo (sin texto sobrante).
 /// Parses a complete JSON document into a `Json` value. Returns `Err` with a message on
-/// malformed input or trailing text after the value. `\uXXXX` escapes are not supported.
+/// malformed input or trailing text after the value. `\uXXXX` escapes are supported, including
+/// surrogate pairs for astral code points.
 pub fn parse(s: string) -> Result<Json, string> {
     var p: P = P { s: s, i: 0, n: s.len() };
     match (parse_value(p)) {

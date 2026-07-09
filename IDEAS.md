@@ -394,6 +394,18 @@ bloquea nada y se hace de forma incremental, midiendo con `benchmarks/`.
     (Opt.1/2/4/7) ya están exprimidas. El salto restante sería algorítmico (locales en la pila estilo clox,
     reducir el coste de llamada/GC), refactor grande de ROI decreciente. **M29.3 cerrado** con el dedup + este
     registro. La VM sigue a ~3.2× del intérprete.
+- **REGRESIÓN detectada (revisión jul 2026, `measure.py` mejor-de-15): arrays +38 % / gcnested +39 %**
+  (fib/loop intactos). **Bisecada a M48.4** (builtins de contenedor → métodos de trait): `a.push(i)`/`a.len()`
+  ya no bajan al opcode directo (`Push`/`Len`) sino al método del trait (`impl<T> Push<T> for [T]`), cuyo
+  cuerpo es un *forwarder* de una línea a `__push`/`__len` → cada push/len paga **una llamada VM completa
+  (marco + call + return) para ejecutar UN opcode**. M38 exonerado (medido ≈ baseline en `233532f`).
+  - **Plan (M52 — inlining de forwarders triviales)**: pase del compilador (o reescritura en el lowering del
+    checker, que beneficia a AMBOS motores y mantiene el oráculo): si el destino de una llamada es una
+    función cuyo cuerpo es **exactamente una llamada a builtin pasando sus params en orden**
+    (`fn push(self, x) { __push(self, x) }`), emitir el opcode del builtin en el sitio en vez del `Call`.
+    Recupera el rendimiento pre-M48.4 sin revertir el diseño de traits (los traits siguen siendo la
+    superficie; el forwarder solo desaparece del código generado). Verificar con `measure.py` y actualizar
+    `baseline.json`. Alcance acotado: no es inlining general (ROI decreciente), solo el patrón forwarder.
 
 ## 12. Asperezas de M3
 

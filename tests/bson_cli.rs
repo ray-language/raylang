@@ -84,6 +84,8 @@ fn main() -> int {
         bson.field("t", bson.Bson.Bool(true)),
         bson.field("n", bson.Bson.Null),
         bson.field("big", bson.Bson.Int(9007199254740993)),
+        bson.field("dt", bson.Bson.Date(1783600496789)),
+        bson.field("ts", bson.Bson.Timestamp(7660503669145600007)),
     ];
     let enc3 = bson.encode(doc3);
     match (bson.decode(enc3)) {
@@ -125,7 +127,7 @@ fn correr(app: &std::path::Path, flags: &[&str]) -> String {
 
 const ESPERADO: &str = "enc1: 160000000268656c6c6f0006000000776f726c640000\n\
 dec2: {BSON: [\"awesome\", 5.05, 1986]}\n\
-dec3: {d: -2.5, s: \"café\", sub: {ok: 1}, a: [-42, null], bin: bin(0102ff), id: oid(000102030405060708090a0b), t: true, n: null, big: 9007199254740993}\n\
+dec3: {d: -2.5, s: \"café\", sub: {ok: 1}, a: [-42, null], bin: bin(0102ff), id: oid(000102030405060708090a0b), t: true, n: null, big: 9007199254740993, dt: date(2026-07-09T12:34:56.789Z), ts: timestamp(1783600000,7)}\n\
 rt: true\n\
 trunc: BSON inválido (octeto 0): longitud de documento inválida: 49\n\
 tipo: BSON inválido (octeto 6): tipo BSON no soportado: 14\n";

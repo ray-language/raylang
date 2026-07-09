@@ -12,14 +12,15 @@
 //   - `Double` usa los bits IEEE 754 (`float_bits`/`float_from_bits` de std/math, M54.1a). Es
 //     obligatorio para un cliente: el propio servidor responde `{ ok: 1.0 }` como double.
 //   - `Bin` decodifica cualquier subtipo (se descarta) y codifica subtipo 0 (genérico).
-//   - Tipos no soportados (Date, Regex, Decimal128, …) → error claro al decodificar; se añadirán
-//     cuando el cliente los necesite (Date probablemente en M54.2+).
+//   - `Date` (0x09, epoch-ms) y `Timestamp` (0x11, interno) soportados; los no soportados
+//     (Regex, Decimal128, …) → error claro al decodificar.
 //
 // Gramática (recordatorios): el enum recursivo va por el heap ([Field]/[Bson]); los enteros LE
 // se arman por mitades de 32 bits (b7<<56 desbordaría i64; hi*2^32+lo es exacto y total).
 
 import std/math;
 from std/json import Json, parse;
+from net/time import from_epoch_millis, to_iso8601;
 
 /// A BSON value. `Doc` and `Arr` are recursive; `ObjectId` carries the raw 12 bytes.
 pub enum Bson {
@@ -32,6 +33,12 @@ pub enum Bson {
     Bool(bool),
     Null,
     Int(int),
+    /// UTC datetime: milliseconds since the Unix epoch (BSON type 0x09). What MongoDB stores
+    /// for date fields; `dump` renders it as ISO 8601.
+    Date(int),
+    /// MongoDB's internal timestamp (type 0x11): `(seconds << 32) | counter`, kept raw
+    /// (it is for replication/oplog bookkeeping, not a wall-clock value).
+    Timestamp(int),
 }
 
 /// One element of a document: a name and its value.
@@ -71,6 +78,8 @@ fn type_byte(v: Bson) -> int {
         Bson.Bool(_) => 8,
         Bson.Null => 10,
         Bson.Int(_) => 18,
+        Bson.Date(_) => 9,
+        Bson.Timestamp(_) => 17,
     };
 }
 
@@ -152,6 +161,8 @@ fn enc_value(out: [int], v: Bson) {
         Bson.Bool(x) => { out.push(if (x) { 1 } else { 0 }); },
         Bson.Null => {},
         Bson.Int(n) => { enc_le64(out, n); },
+        Bson.Date(ms) => { enc_le64(out, ms); },
+        Bson.Timestamp(t) => { enc_le64(out, t); },
     }
 }
 
@@ -319,6 +330,14 @@ fn rd_value(d: Dec, t: int) -> Result<Bson, string> {
         let v = rd_le64(d)?;
         return Result.Ok(Bson.Int(v));
     }
+    if (t == 9) {
+        let ms = rd_le64(d)?;
+        return Result.Ok(Bson.Date(ms));
+    }
+    if (t == 17) {
+        let v = rd_le64(d)?;
+        return Result.Ok(Bson.Timestamp(v));
+    }
     Result.Err(dec_err("tipo BSON no soportado: " + to_string(t), d.pos - 1))
 }
 
@@ -435,6 +454,8 @@ pub fn to_json(v: Bson) -> Json {
         Bson.Bool(x) => Json.JBool(x),
         Bson.Null => Json.JNull,
         Bson.Int(n) => Json.JNum(int_to_float(n)),
+        Bson.Date(ms) => Json.JStr(iso_ms(ms)),
+        Bson.Timestamp(t) => Json.JNum(int_to_float(t)),
     };
 }
 
@@ -482,7 +503,29 @@ pub fn dump(v: Bson) -> string {
         Bson.Bool(x) => to_string(x),
         Bson.Null => "null",
         Bson.Int(n) => to_string(n),
+        Bson.Date(ms) => "date(" + iso_ms(ms) + ")",
+        Bson.Timestamp(t) => "timestamp(" + to_string(t >> 32) + "," + to_string(t & 4294967295) + ")",
     };
+}
+
+// Un epoch-ms como ISO 8601 (con los milisegundos si los hay). Antes de 1970, el crudo.
+fn iso_ms(ms: int) -> string {
+    if (ms < 0) {
+        return to_string(ms) + "ms";
+    }
+    let iso = to_iso8601(from_epoch_millis(ms));
+    let rem = ms % 1000;
+    if (rem == 0) {
+        return iso;
+    }
+    // Los milisegundos van antes de la 'Z' final.
+    return iso.substring(0, iso.len() - 1) + "." + pad3(rem) + "Z";
+}
+
+fn pad3(n: int) -> string {
+    if (n < 10) { return "00" + to_string(n); }
+    if (n < 100) { return "0" + to_string(n); }
+    to_string(n)
 }
 
 /// Renders a whole document (see `dump`).

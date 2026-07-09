@@ -39,6 +39,11 @@ fn main() -> int {
         Result.Ok(n) => { print("afectadas: " + to_string(n)); },
         Result.Err(e) => { print(e); return 1; },
     }
+    // El rowid del último INSERT (raylang puro sobre la misma conexión).
+    match (sqlite.last_insert_rowid(c)) {
+        Result.Ok(id) => { print("rowid: " + to_string(id)); },
+        Result.Err(e) => { print(e); return 1; },
+    }
     match (sqlite.query(c, "SELECT nombre, nota FROM alumnos ORDER BY id", sin)) {
         Result.Ok(rows) => {
             var i = 0;
@@ -93,7 +98,7 @@ fn correr(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
     (String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code().unwrap_or(-1))
 }
 
-const ESPERADO: &str = "afectadas: 1\nada|36\ngrace|\nnota de ada: 36\ntras rollback: 2\nsqlite: no such table: no_existe\ncerrada: handle inválido o ya cerrado\n";
+const ESPERADO: &str = "afectadas: 1\nrowid: 2\nada|36\ngrace|\nnota de ada: 36\ntras rollback: 2\nsqlite: no such table: no_existe\ncerrada: handle inválido o ya cerrado\n";
 
 #[test]
 fn sqlite_crud_transaccion_y_errores() {

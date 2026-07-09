@@ -7178,3 +7178,22 @@ primera celda (el binding fluye), más una fila binaria con LONGLONG **negativo*
 (2.5), DATETIME empaquetado (2026-07-09 12:34:56), NULLs por bitmap (bits desplazados 2) y un
 datetime cero; INSERT preparado → OK; BOOM → ERR en el execute. Ambos motores, mismo stdout.
 Diferido: sentencias con estado (cachear el stmt_id), tipos binarios en los PARÁMETROS (hoy texto).
+
+### 56.6 Diferidos menores del arco DB (rowid · Date/Timestamp · Mongo-TLS). ✅ COMPLETOS
+
+Tres cierres pequeños de la lista consolidada de IDEAS §15:
+
+- **`sqlite.last_insert_rowid(c) -> Result<int, string>`**: raylang puro — `SELECT
+  last_insert_rowid()` sobre la MISMA conexión (el registro de handles la conserva) → cero soporte
+  del host. El modo WAL ya era posible sin código: `query(c, "PRAGMA journal_mode=WAL", [])` (los
+  PRAGMA que devuelven una fila van por `query`, no `exec`).
+- **BSON `Date` (0x09) y `Timestamp` (0x11)** en `db/bson`: dos variantes nuevas del enum (epoch-ms
+  UTC / crudo interno de replicación, ambos int64). `dump` renderiza la fecha como **ISO 8601 con
+  milisegundos** reusando `net/time` (from_epoch_millis + to_iso8601 — tercera cápsula de `net` que
+  `db` consume) y el timestamp como `(segundos, contador)`; `to_json` degrada a string ISO / número.
+  Round-trip exacto en octetos verificado. Sin esto, decodificar cualquier colección real con
+  campos de fecha daba "tipo BSON no soportado: 9".
+- **`mongo.connect_tls`**: MongoDB cifra desde el octeto 0 (NO es STARTTLS) → `net.tls_connect` y
+  la sesión entera (hello + SCRAM + comandos) corre sin cambios sobre el canal (refactor: `connect`/
+  `connect_tls` → `session(handle, …)`). Toy server TLS (rustls desde el accept) + find cifrado,
+  ambos motores. Con esto los TRES clientes de red del paquete tienen su variante TLS.

@@ -131,6 +131,8 @@ fn main() -> int {
 - **Celdas como texto** (misma convención): INTEGER/REAL → repr decimal, `NULL` → `""`, BLOB → hex.
 - `disconnect` libera el handle; usar la conexión después falla **limpio** (error como valor, no
   crash: el ciclo prepare→step→finalize ocurre entero dentro del host, un statement nunca escapa).
+- **`last_insert_rowid(c)`** devuelve el rowid del último INSERT (misma conexión). Para el modo
+  WAL: `query(c, "PRAGMA journal_mode=WAL", [])` (los PRAGMA que devuelven fila van por `query`).
 - **No disponible en el playground web** (wasm no compila la librería C).
 
 ### `db/bson` (M54.1)
@@ -186,7 +188,11 @@ mongo.disconnect(c);
   el usuario (fiel al protocolo).
 - `find` **agota el cursor**: firstBatch + rondas de `getMore` hasta que el servidor reporta id 0 —
   un resultado grande llega completo, no truncado al primer batch.
-- **Diferido**: tipos Date/Timestamp/Decimal128, `batchSize`/`killCursors`, compresión, TLS.
+- **TLS**: `connect_tls(...)` (mismos parámetros) — MongoDB cifra desde el octeto 0, así que es
+  `tls_connect` + la misma sesión (cert verificado contra `host`).
+- **Fechas**: `Bson.Date` (epoch-ms; `dump` la muestra como ISO 8601) y `Bson.Timestamp` (interno)
+  se decodifican/codifican; una colección real con fechas ya no da "tipo no soportado".
+- **Diferido**: Decimal128, `batchSize`/`killCursors`, compresión OP_COMPRESSED, Extended JSON.
 
 ## Verificación
 

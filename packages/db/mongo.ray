@@ -159,6 +159,19 @@ fn check_ok(fields: [bson.Field]) -> Result<int, string> {
 /// The nonce must be random in production. Authenticates against `database`.
 pub fn connect(host: string, port: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
     let handle = net.tcp_connect(host, port)?;
+    session(handle, user, password, database, nonce)
+}
+
+/// Like `connect`, over TLS. MongoDB encrypts from byte zero (no STARTTLS): the socket is a TLS
+/// client session from the start (`net.tls_connect`, certificate verified against `host`) and the
+/// whole protocol — hello, SCRAM, commands — runs unchanged over it.
+pub fn connect_tls(host: string, port: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
+    let handle = net.tls_connect(host, port)?;
+    session(handle, user, password, database, nonce)
+}
+
+// hello + SCRAM sobre un handle ya conectado (plano o TLS: el I/O se desvía por el tipo del handle).
+fn session(handle: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
     let c = Conn { handle: handle, buf: b"", req_id: 1, db: database };
 
     // 1. hello: presentación. v1 solo exige ok (sin negociar compresión/versiones).

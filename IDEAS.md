@@ -573,11 +573,11 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
   - **Postgres**: parámetros binarios/tipados, sentencias preparadas con estado (hoy anónimas, una
     por ronda), COPY, `sslmode` negociable estilo libpq (hoy: `connect` = nunca TLS /
     `connect_tls` = obligatorio).
-  - **SQLite**: `last_insert_rowid`, modo WAL, tipos nativos (celdas no-texto).
-  - **MongoDB**: tipos BSON Date/Timestamp/Decimal128 (error claro al decodificar), `batchSize`
-    configurable + `killCursors` (abandonar un cursor a medias), compresión OP_COMPRESSED,
-    Mongo-sobre-TLS (trivial: `tls_connect` desde el arranque, no STARTTLS), Extended JSON
-    riguroso ($oid/$numberLong) en el puente (§16).
+  - **SQLite**: `last_insert_rowid` ✅ (raylang puro, DESIGN §56.6) y WAL ✅ (ya posible:
+    `query(c, "PRAGMA journal_mode=WAL", [])`). Queda: tipos nativos (celdas no-texto).
+  - **MongoDB**: Date/Timestamp ✅ y `connect_tls` ✅ (DESIGN §56.6). Quedan: Decimal128 (error
+    claro al decodificar), `batchSize` configurable + `killCursors`, compresión OP_COMPRESSED,
+    Extended JSON riguroso ($oid/$numberLong) en el puente (§16).
 
 ---
 

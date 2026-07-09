@@ -117,7 +117,7 @@ fn op_msg(response_to: i32, d: Vec<u8>) -> Vec<u8> {
 }
 
 /// Lee un OP_MSG del cliente: devuelve (requestID, mensaje completo). None en EOF.
-fn read_op_msg(s: &mut TcpStream) -> Option<(i32, Vec<u8>)> {
+fn read_op_msg<S: Read>(s: &mut S) -> Option<(i32, Vec<u8>)> {
     let mut hdr = [0u8; 4];
     if s.read_exact(&mut hdr).is_err() {
         return None;
@@ -138,7 +138,12 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 /// El servidor de juguete: hello → ok; saslStart (verifica el client-first) → server-first;
 /// saslContinue → server-final. Un usuario desconocido recibe ok: 0.0 + errmsg.
 fn atender(mut s: TcpStream) {
-    while let Some((req, msg)) = read_op_msg(&mut s) {
+    atender_stream(&mut s);
+}
+
+/// La sesión en sí, genérica sobre el flujo (TCP plano o rustls::Stream → sirve para el test TLS).
+fn atender_stream<S: Read + Write>(s: &mut S) {
+    while let Some((req, msg)) = read_op_msg(&mut *s) {
         let reply = if contains(&msg, b"hello") {
             doc(&[elem_double("ok", 1.0)])
         } else if contains(&msg, b"saslStart") {
@@ -432,4 +437,113 @@ fn mongo_crud_y_error_del_servidor() {
 
     assert_eq!(correr(&app, &[]), ESPERADO_CRUD, "VM");
     assert_eq!(correr(&app, &["--interp"]), ESPERADO_CRUD, "intérprete");
+}
+
+// --- TLS: connect_tls (cifrado desde el octeto 0, sin STARTTLS) ---
+
+fn lanzar_servidor_tls() -> u16 {
+    use rustls::pki_types::pem::PemObject;
+    let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+        rustls::pki_types::CertificateDer::pem_slice_iter(include_str!("fixtures/tls_cert.pem").as_bytes())
+            .collect::<Result<_, _>>()
+            .expect("certificado de prueba válido");
+    let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(include_str!("fixtures/tls_key.pem").as_bytes())
+        .expect("clave de prueba válida");
+    let config = std::sync::Arc::new(
+        rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .expect("config de servidor"),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    thread::spawn(move || {
+        for mut s in listener.incoming().flatten() {
+            // TLS desde el octeto 0: el ClientHello es lo primero que llega.
+            let mut conn = rustls::ServerConnection::new(config.clone()).expect("server conn");
+            let mut tls = rustls::Stream::new(&mut conn, &mut s);
+            atender_stream(&mut tls);
+            conn.send_close_notify();
+            let _ = conn.complete_io(&mut s);
+        }
+    });
+    port
+}
+
+fn proyecto_tls(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(
+        app.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ndb = \"path:{}\"\n",
+            db.display()
+        ),
+    )
+    .unwrap();
+    let main = format!(
+        r#"import db/mongo;
+import db/bson;
+
+fn main() -> int {{
+    // Conexión TLS completa (handshake rustls + hello + SCRAM) y un find sobre el canal cifrado.
+    var c = match (mongo.connect_tls("localhost", {port}, "raylang", "secret", "test", "clientnonce123456")) {{
+        Result.Ok(conn) => conn,
+        Result.Err(e) => {{ print(e); return 1; }},
+    }};
+    print("conectado seguro");
+    let filter = [bson.field("nombre", bson.Bson.Str("ada"))];
+    match (mongo.find(c, "usuarios", filter)) {{
+        Result.Ok(rows) => {{
+            var i = 0;
+            while (i < rows.len()) {{
+                print(bson.dump_doc(rows[i]));
+                i = i + 1;
+            }}
+        }},
+        Result.Err(e) => {{ print(e); return 1; }},
+    }}
+    mongo.disconnect(c);
+    0
+}}
+"#
+    );
+    std::fs::write(app.join("src/main.ray"), main).unwrap();
+    app
+}
+
+fn correr_tls(app: &std::path::Path, flags: &[&str]) -> String {
+    let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
+    let mut args = vec!["run"];
+    args.extend_from_slice(flags);
+    let out = Command::new(BIN)
+        .args(&args)
+        .current_dir(app)
+        .env("SSL_CERT_FILE", &ca)
+        .output()
+        .expect("lanza el binario");
+    assert!(
+        out.status.success(),
+        "corre sin error\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+const ESPERADO_TLS: &str = "conectado seguro\n\
+{nombre: \"ada\", nota: 36}\n\
+{nombre: \"grace\"}\n";
+
+#[test]
+fn mongo_tls_conexion_y_find_cifrados() {
+    let base = std::env::temp_dir().join("ray_mongo_cli_tls");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let port = lanzar_servidor_tls();
+    let app = proyecto_tls(&base, port);
+
+    assert_eq!(correr_tls(&app, &[]), ESPERADO_TLS, "VM");
+    assert_eq!(correr_tls(&app, &["--interp"]), ESPERADO_TLS, "intérprete");
 }

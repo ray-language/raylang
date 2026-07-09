@@ -26,7 +26,7 @@ fn pkt(seq: u8, payload: &[u8]) -> Vec<u8> {
     m
 }
 
-fn read_pkt(s: &mut TcpStream) -> (u8, Vec<u8>) {
+fn read_pkt<S: Read>(s: &mut S) -> (u8, Vec<u8>) {
     let mut hdr = [0u8; 4];
     s.read_exact(&mut hdr).expect("cabecera");
     let len = hdr[0] as usize | (hdr[1] as usize) << 8 | (hdr[2] as usize) << 16;
@@ -38,6 +38,11 @@ fn read_pkt(s: &mut TcpStream) -> (u8, Vec<u8>) {
 /// El handshake v10 del servidor de juguete: versión, thread id, scramble en dos partes,
 /// capacidades con PLUGIN_AUTH, y el nombre del plugin.
 fn handshake_v10() -> Vec<u8> {
+    handshake_v10_plugin("mysql_native_password")
+}
+
+/// Como `handshake_v10` pero anunciando el plugin dado (el test TLS usa caching_sha2_password).
+fn handshake_v10_plugin(plugin: &str) -> Vec<u8> {
     let mut p = vec![10u8]; // protocolo v10
     p.extend_from_slice(b"8.0.0-juguete\0");
     p.extend_from_slice(&[1, 0, 0, 0]); // thread id
@@ -51,7 +56,8 @@ fn handshake_v10() -> Vec<u8> {
     p.extend_from_slice(&[0; 10]); // reservado
     p.extend_from_slice(&SCRAMBLE[8..]); // auth-data parte 2 (12 octetos)
     p.push(0); // NUL del scramble
-    p.extend_from_slice(b"mysql_native_password\0");
+    p.extend_from_slice(plugin.as_bytes());
+    p.push(0);
     p
 }
 
@@ -105,8 +111,11 @@ fn atender(mut s: TcpStream) {
         return;
     }
     s.write_all(&pkt(2, &[0x00, 0, 0, 0, 0, 0, 0])).unwrap(); // OK
+    fase_comandos(&mut s);
+}
 
-    // Fase de comandos.
+/// La fase de comandos (COM_QUERY/COM_QUIT), genérica sobre el flujo (TCP plano o rustls::Stream).
+fn fase_comandos<S: Read + Write>(s: &mut S) {
     loop {
         let mut hdr = [0u8; 4];
         if s.read_exact(&mut hdr).is_err() {
@@ -250,4 +259,145 @@ fn mysql_password_incorrecta_da_error_claro() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("acceso denegado"), "ERR del servidor visible:\n{stdout}");
     assert_eq!(out.status.code(), Some(1), "el programa sale con 1");
+}
+
+// --- TLS: connect_tls (SSLRequest → tls_upgrade → full-path de caching_sha2) ---
+
+/// Atiende una sesión TLS con `caching_sha2_password` forzando el **full-path**: handshake en
+/// claro → SSLRequest (verificado octeto a octeto) → TLS → respuesta completa cifrada →
+/// AuthMoreData(full auth) → contraseña EN CLARO por el canal cifrado (verificada) → OK → comandos.
+fn atender_tls(mut s: TcpStream, config: std::sync::Arc<rustls::ServerConfig>) {
+    s.write_all(&pkt(0, &handshake_v10_plugin("caching_sha2_password"))).unwrap();
+    // SSLRequest: el prefijo de la respuesta (32 octetos), con CLIENT_SSL encendido.
+    let (_seq, ssl_req) = read_pkt(&mut s);
+    assert_eq!(ssl_req.len(), 32, "longitud del SSLRequest");
+    let caps = u32::from_le_bytes([ssl_req[0], ssl_req[1], ssl_req[2], ssl_req[3]]);
+    assert_ne!(caps & 2048, 0, "CLIENT_SSL debe estar encendido");
+    // El mismo socket sube a TLS; el resto de la sesión va cifrado.
+    let mut conn = rustls::ServerConnection::new(config).expect("server conn");
+    let mut tls = rustls::Stream::new(&mut conn, &mut s);
+    let (_seq2, resp) = read_pkt(&mut tls);
+    let mut i = 32; // capacidades(4) + max(4) + charset(1) + reservado(23)
+    let user_start = i;
+    while resp[i] != 0 {
+        i += 1;
+    }
+    let user = String::from_utf8_lossy(&resp[user_start..i]).into_owned();
+    // Full auth: se ignora la respuesta al scramble (la caché está "fría") y se exige la
+    // contraseña en claro — solo posible porque el canal ya es TLS.
+    tls.write_all(&pkt(3, &[1, 4])).unwrap(); // AuthMoreData + full-auth
+    let (_seq3, pw) = read_pkt(&mut tls);
+    if user != "raylang" || pw != b"secret\0" {
+        let mut err = vec![0xffu8, 0x15, 0x04];
+        err.extend_from_slice(b"#28000acceso denegado");
+        tls.write_all(&pkt(5, &err)).unwrap();
+        return;
+    }
+    tls.write_all(&pkt(5, &[0x00, 0, 0, 0, 0, 0, 0])).unwrap(); // OK
+    fase_comandos(&mut tls);
+    conn.send_close_notify();
+    let _ = conn.complete_io(&mut s);
+}
+
+fn lanzar_servidor_tls() -> u16 {
+    use rustls::pki_types::pem::PemObject;
+    let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+        rustls::pki_types::CertificateDer::pem_slice_iter(include_str!("fixtures/tls_cert.pem").as_bytes())
+            .collect::<Result<_, _>>()
+            .expect("certificado de prueba válido");
+    let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(include_str!("fixtures/tls_key.pem").as_bytes())
+        .expect("clave de prueba válida");
+    let config = std::sync::Arc::new(
+        rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .expect("config de servidor"),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    thread::spawn(move || {
+        for s in listener.incoming().flatten() {
+            atender_tls(s, config.clone());
+        }
+    });
+    port
+}
+
+/// Cliente TLS: conexión buena (full-path completo) + contraseña mala (ERR sobre el canal cifrado).
+fn proyecto_tls(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(
+        app.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ndb = \"path:{}\"\n",
+            db.display()
+        ),
+    )
+    .unwrap();
+    let main = format!(
+        r#"import db/mysql;
+
+fn main() -> int {{
+    var c = match (mysql.connect_tls("localhost", {port}, "raylang", "secret", "")) {{
+        Result.Ok(conn) => conn,
+        Result.Err(e) => {{ print(e); return 1; }},
+    }};
+    print("conectado seguro");
+    match (mysql.query(c, "SELECT nombre, nota FROM alumnos")) {{
+        Result.Ok(rows) => {{
+            var i = 0;
+            while (i < rows.len()) {{
+                print(rows[i].join("|"));
+                i = i + 1;
+            }}
+        }},
+        Result.Err(e) => {{ print(e); return 1; }},
+    }}
+    mysql.disconnect(c);
+    // Contraseña mala: el full-path la manda por TLS y el servidor la rechaza.
+    match (mysql.connect_tls("localhost", {port}, "raylang", "malaclave", "")) {{
+        Result.Ok(_) => {{ print("no debería"); return 1; }},
+        Result.Err(e) => {{ print(e); }},
+    }}
+    0
+}}
+"#
+    );
+    std::fs::write(app.join("src/main.ray"), main).unwrap();
+    app
+}
+
+fn correr_tls(app: &std::path::Path, flags: &[&str]) -> String {
+    let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
+    let mut args = vec!["run"];
+    args.extend_from_slice(flags);
+    let out = Command::new(BIN)
+        .args(&args)
+        .current_dir(app)
+        .env("SSL_CERT_FILE", &ca)
+        .output()
+        .expect("lanza el binario");
+    assert!(
+        out.status.success(),
+        "corre sin error\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+const ESPERADO_TLS: &str = "conectado seguro\nada|36\ngrace|\nmysql: acceso denegado\n";
+
+#[test]
+fn mysql_tls_full_path_de_caching_sha2() {
+    let base = std::env::temp_dir().join("ray_mysql_cli_tls");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let port = lanzar_servidor_tls();
+    let app = proyecto_tls(&base, port);
+
+    assert_eq!(correr_tls(&app, &[]), ESPERADO_TLS, "VM");
+    assert_eq!(correr_tls(&app, &["--interp"]), ESPERADO_TLS, "intérprete");
 }

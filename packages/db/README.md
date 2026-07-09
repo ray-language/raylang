@@ -45,11 +45,13 @@ fn main() -> int {
 - **API**: `connect(host, port, user, password, database) -> Result<Conn, string>` ·
   `query(c, sql) -> Result<[[string]], string>` (filas como texto; `NULL` → `""`) ·
   `exec(c, sql) -> Result<int, string>` (filas afectadas) · `disconnect(c)`.
-- **Auth**: `mysql_native_password` (completa) y `caching_sha2_password` solo en su **fast-path**
-  (funciona cuando el servidor ya cacheó la contraseña); el full-path exige TLS *upgrade* a mitad
-  de conexión — el primitivo ya existe (`net.tls_upgrade`, DESIGN §57), falta cablearlo en el
-  cliente → mientras tanto, error claro con el remedio.
-- **Diferido**: protocolo binario (prepared statements / parámetros / tipos), cablear TLS.
+- **Auth**: `mysql_native_password` (completa) y `caching_sha2_password` — el **fast-path** por
+  cualquier conexión, y el **full-path** vía `connect_tls` (la contraseña en claro viaja solo
+  dentro del canal cifrado). Con `connect` plano y caché fría, error claro con el remedio.
+- **TLS**: `connect_tls(...)` (mismos parámetros) — SSLRequest a mitad del handshake, upgrade del
+  mismo socket (`net.tls_upgrade`, cert verificado contra `host`) y el resto de la sesión cifrada.
+- **Diferido**: protocolo binario (prepared statements / parámetros / tipos), full-path sin TLS
+  (intercambio RSA).
 
 ### `db/postgres` (M53.2)
 

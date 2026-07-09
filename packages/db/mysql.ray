@@ -192,6 +192,19 @@ fn err_msg(p: [int]) -> string {
 
 /// Abre una conexión y autentica. `database` puede ser "" (sin esquema por defecto).
 pub fn connect(host: string, port: int, user: string, password: string, database: string) -> Result<Conn, string> {
+    connect_opts(host, port, user, password, database, false)
+}
+
+/// Connects over TLS: sends the protocol's SSLRequest packet after the server handshake, upgrades
+/// the socket (certificate verified against `host`), and completes the handshake over the
+/// encrypted channel. Enables the `caching_sha2_password` **full path** (the cleartext password
+/// travels only inside TLS), so it works even when the server has not cached the credential.
+pub fn connect_tls(host: string, port: int, user: string, password: string, database: string) -> Result<Conn, string> {
+    connect_opts(host, port, user, password, database, true)
+}
+
+// La conexión real; `tls` decide si se intercala el SSLRequest + upgrade antes de la respuesta.
+fn connect_opts(host: string, port: int, user: string, password: string, database: string, tls: bool) -> Result<Conn, string> {
     let sock = net.tcp_connect(host, port)?;
     let empty: [int] = [];
     let c = Conn { sock: sock, seq: 0, buf: empty, pos: 0 };
@@ -243,19 +256,33 @@ pub fn connect(host: string, port: int, user: string, password: string, database
     if (database.len() > 0) {
         caps = caps | 8; // CLIENT_CONNECT_WITH_DB
     }
-    var out: [int] = [];
-    out.push(caps & 255);
-    out.push(caps >> 8 & 255);
-    out.push(caps >> 16 & 255);
-    out.push(caps >> 24 & 255);
-    out = out + [0, 0, 0, 1]; // paquete máximo 16 MiB (LE)
-    out.push(33); // charset utf8_general_ci
+    if (tls) {
+        caps = caps | 2048; // CLIENT_SSL
+    }
+    // Prefijo común: capacidades + paquete máximo + charset + 23 reservados. Es también el
+    // paquete SSLRequest completo (la respuesta truncada antes del usuario).
+    var pre: [int] = [];
+    pre.push(caps & 255);
+    pre.push(caps >> 8 & 255);
+    pre.push(caps >> 16 & 255);
+    pre.push(caps >> 24 & 255);
+    pre = pre + [0, 0, 0, 1]; // paquete máximo 16 MiB (LE)
+    pre.push(33); // charset utf8_general_ci
     k = 0;
     while (k < 23) {
-        out.push(0); // reservado
+        pre.push(0); // reservado
         k = k + 1;
     }
-    out = out + bytes_to_ints(user.to_bytes()) + [0];
+    if (tls) {
+        // SSLRequest en claro (sigue la secuencia: handshake=0, SSLRequest=1, respuesta=2);
+        // después el MISMO socket sube a TLS y el resto de la sesión va cifrado.
+        let _ = write_packet(c, pre)?;
+        let _ = match (net.tls_upgrade(sock, host)) {
+            Result.Ok(h) => h,
+            Result.Err(e) => { close(sock); return Result.Err("mysql: " + e); },
+        };
+    }
+    var out = pre + bytes_to_ints(user.to_bytes()) + [0];
     let auth = auth_for(plugin, scramble, password)?;
     out.push(auth.len());
     out = out + auth;
@@ -292,9 +319,17 @@ pub fn connect(host: string, port: int, user: string, password: string, database
                 if (r.len() > 1 && r[1] == 3) {
                     // sigue el OK en el bucle
                 } else {
-                    return Result.Err(
-                        "mysql: caching_sha2_password exige el full-path (TLS), no soportado; usa un "
-                            + "usuario con mysql_native_password o calienta la caché del servidor con otro cliente");
+                    if (tls) {
+                        // Full-path por el canal cifrado: la contraseña en claro (con NUL). Solo
+                        // es seguro DENTRO de TLS; en claro exigiría el intercambio RSA (diferido).
+                        let _ = write_packet(c, bytes_to_ints(password.to_bytes()) + [0])?;
+                        // sigue el OK/ERR en el bucle
+                    } else {
+                        return Result.Err(
+                            "mysql: caching_sha2_password exige el full-path; usa connect_tls (la "
+                                + "contraseña viaja cifrada), un usuario con mysql_native_password, o "
+                                + "calienta la caché del servidor con otro cliente");
+                    }
                 }
             } else {
                 return Result.Err("mysql: respuesta de autenticación inesperada");

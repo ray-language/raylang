@@ -7125,3 +7125,27 @@ real (rustls + cert de fixtures): el servidor valida el sslRequest octeto a octe
 cifra. Cliente confía vía `SSL_CERT_FILE`. Ambos motores. Diferido: el full-path de
 `caching_sha2_password` de MySQL (mismo primitivo, protocolo distinto) y `sslmode` negociable
 (hoy: `connect` = nunca TLS, `connect_tls` = obligatorio).
+
+### 57.2 TLS cableado en el cliente MySQL (`connect_tls` + full-path). ✅ COMPLETO
+
+Segundo consumidor del primitivo, y el que **cierra el hueco de autenticación** de M53.1:
+`mysql.connect_tls(host, port, user, password, database)`.
+
+- **SSLRequest**: en MySQL el upgrade va A MITAD del handshake — tras leer el handshake v10 del
+  servidor, el cliente manda el paquete SSLRequest (= el **prefijo** de la respuesta: capacidades
+  con `CLIENT_SSL` (2048) + paquete máximo + charset + 23 reservados, truncada antes del usuario),
+  sube el MISMO socket con `net.tls_upgrade`, y manda la respuesta completa **cifrada** (la
+  secuencia de paquetes continúa: handshake=0, SSLRequest=1, respuesta=2 — la lleva la `Conn`).
+  Refactor: `connect`/`connect_tls` → `connect_opts(…, tls)`; el prefijo se comparte (`pre`).
+- **Full-path de `caching_sha2_password`**: con la caché fría el servidor responde
+  `AuthMoreData(0x04)`; ahora, si la conexión es TLS, el cliente manda la **contraseña en claro
+  (con NUL) por el canal cifrado** y sigue el OK/ERR. En claro, el error se mantiene pero el
+  remedio cambió: "usa connect_tls". (El intercambio RSA — full-path sin TLS — sigue diferido.)
+
+**Verificación** (`tests/mysql_cli.rs`): `read_pkt`/la fase de comandos se generalizaron sobre
+`Read`/`Read + Write` → el toy server TLS anuncia `caching_sha2_password`, **valida el SSLRequest
+octeto a octeto** (32 octetos, `CLIENT_SSL` encendido), hace el handshake rustls sobre el mismo
+socket, fuerza el full-auth y **verifica la contraseña en claro** recibida por TLS; contraseña mala
+→ ERR cifrado ("acceso denegado"). Después sirve la fase de comandos de siempre, cifrada. Ambos
+motores. **El hilo TLS de los clientes de bases de datos queda CERRADO** (Postgres §57.1 + MySQL
+§57.2; Mongo-TLS sería `tls_connect` desde el arranque — trivial, cuando haga falta).

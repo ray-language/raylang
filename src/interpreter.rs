@@ -1522,6 +1522,17 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // Diferido TLS: STARTTLS de cliente sobre un TCP plano → ["ok", handle] o ["err", msg].
+            "__tls_upgrade" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Int(h), Value::Str(host)) => match crate::builtins::tls_upgrade(*h, host) {
+                        Ok(nh) => vec![Value::Str("ok".to_string()), Value::Str(nh.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza int, string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M15.2: lee del socket → ["ok", datos] o ["err", msg].
             "__socket_read" => {
                 let arr = match &values[0] {

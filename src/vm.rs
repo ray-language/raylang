@@ -2038,6 +2038,21 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // Diferido TLS: STARTTLS de cliente — envuelve un TCP plano (ya no bloqueante en la
+                // VM) en una sesión TLS de cliente; el handshake lo conduce el primer I/O, cediendo.
+                OpCode::TlsUpgrade => {
+                    let host = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Str(host)) = (handle, host) else {
+                        unreachable!("el checker garantiza int, string");
+                    };
+                    let elems = match crate::builtins::tls_upgrade(handle, &host) {
+                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::SocketRead => {
                     let handle = match self.pop() {
                         HeapValue::Int(h) => h,

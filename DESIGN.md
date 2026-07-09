@@ -7083,3 +7083,27 @@ agotado). Refactor: `cursor_of`/`append_batch` (firstBatch y nextBatch comparten
 id 88 → getMore 88 → nextBatch final con id 0), verificando que **cada id viaja** como int64 LE en el
 comando siguiente; un id desconocido responde error (código 43, CursorNotFound). Ambos motores.
 Diferido: `batchSize` configurable, `killCursors` (abandonar un cursor a medias).
+
+## 57. Diferido TLS — `tls_upgrade` (STARTTLS de cliente). ✅ COMPLETO
+
+El primitivo que faltaba del lado cliente: **envolver un socket TCP plano YA conectado en una sesión
+TLS de cliente** — el simétrico exacto de `tls_accept` (M19.4b, que ya hacía el upgrade del lado
+servidor). Habilita los protocolos que negocian en claro y luego suben a TLS: **Postgres
+`sslRequest`**, el **full-path de `caching_sha2_password` de MySQL** (mandar la contraseña en claro
+exige canal cifrado), SMTP STARTTLS, etc.
+
+- **`__tls_upgrade(h, host) -> [string]`** (opcode `TlsUpgrade`) + `net.tls_upgrade -> Result<int,
+  string>` en std/net. Verifica el certificado del servidor contra `host` con la misma config que
+  `tls_connect` (raíces Mozilla + `SSL_CERT_FILE`).
+- **Reusa el MISMO handle**: saca el `OpenHandle::Tcp` del registro y lo reinsierta como
+  `OpenHandle::Tls` con el mismo id → el I/O existente (`socket_read/write_bytes`) se desvía solo a
+  TLS vía `is_tls_handle`, cero cambios en los llamadores. Un handle que no es TCP plano (ya-TLS,
+  archivo, listener) da error limpio como valor.
+- **Modo del socket conservado**: en la VM el TCP ya es no bloqueante → el handshake lo conduce el
+  primer I/O cediendo la fibra (como `tls_accept`); en el intérprete, bloqueante (rustls::Stream).
+
+**Verificación** (`tests/tls_upgrade_cli.rs`): servidor STARTTLS de juguete (rustls + cert
+autofirmado de `tests/fixtures/`) — fase en claro (`STARTTLS` → `GO`), handshake TLS **sobre el mismo
+socket**, eco cifrado, y el doble-upgrade como error-valor. El cliente confía en la CA de prueba vía
+`SSL_CERT_FILE`. Ambos motores, mismo stdout. Siguiente natural (diferido): cablearlo en los
+clientes — `postgres.connect` con `sslRequest` y el full-path de MySQL.

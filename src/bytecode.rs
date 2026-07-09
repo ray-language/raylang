@@ -195,6 +195,12 @@ pub enum OpCode {
     ChaChaPolySeal,
     ChaChaPolyOpen,
 
+    /// Diferido TLS (STARTTLS): envuelve un socket TCP plano YA CONECTADO en una sesión TLS de
+    /// CLIENTE (el simétrico de `TlsAccept`). Saca host (string) y handle (int); empuja
+    /// `["ok", handle]`/`["err", msg]`. Reusa el mismo handle → el I/O existente se desvía solo a
+    /// TLS. Primitivo `__tls_upgrade`; `std/net` → `tls_upgrade`. Habilita STARTTLS (Postgres
+    /// sslRequest, MySQL caching_sha2 full-path, SMTP…).
+    TlsUpgrade,
     /// Diferido JSON-1: el inverso de `char_code`. Saca un `int`; empuja `[char]` de 0/1 elementos
     /// (vacío si no es un code point válido: surrogates D800–DFFF o fuera de rango). Primitivo
     /// `__char_from_code`; el prelude → `char_from_code -> Option<char>`. Habilita los escapes

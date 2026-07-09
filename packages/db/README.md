@@ -47,8 +47,9 @@ fn main() -> int {
   `exec(c, sql) -> Result<int, string>` (filas afectadas) · `disconnect(c)`.
 - **Auth**: `mysql_native_password` (completa) y `caching_sha2_password` solo en su **fast-path**
   (funciona cuando el servidor ya cacheó la contraseña); el full-path exige TLS *upgrade* a mitad
-  de conexión, que `std/net` aún no ofrece → error claro con el remedio.
-- **Diferido**: protocolo binario (prepared statements / parámetros / tipos), TLS.
+  de conexión — el primitivo ya existe (`net.tls_upgrade`, DESIGN §57), falta cablearlo en el
+  cliente → mientras tanto, error claro con el remedio.
+- **Diferido**: protocolo binario (prepared statements / parámetros / tipos), cablear TLS.
 
 ### `db/postgres` (M53.2)
 

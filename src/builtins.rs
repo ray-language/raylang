@@ -933,6 +933,30 @@ pub fn tls_accept(h: i64, cert_pem: &str, key_pem: &str) -> Result<i64, String> 
 #[cfg(target_arch = "wasm32")]
 pub fn tls_accept(_h: i64, _cert_pem: &str, _key_pem: &str) -> Result<i64, String> { Err("TLS no disponible en el playground web (wasm)".to_string()) }
 
+/// Envuelve un socket TCP plano YA CONECTADO (handle `h`) en una sesión TLS de **cliente** —
+/// el simétrico de `tls_accept`, para STARTTLS (Postgres sslRequest, MySQL caching_sha2
+/// full-path, SMTP…). Verifica el certificado del servidor contra `host` con la misma config
+/// (raíces Mozilla + SSL_CERT_FILE) que `tls_connect`. **Reusa el mismo handle**: el I/O
+/// existente se desvía solo a TLS vía `is_tls_handle`; el modo (no) bloqueante del socket se
+/// conserva (en la VM ya es no bloqueante → el handshake lo conduce el primer I/O, cediendo).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn tls_upgrade(h: i64, host: &str) -> Result<i64, String> {
+    let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|_| format!("nombre de servidor inválido para TLS: {host}"))?;
+    let client = rustls::ClientConnection::new(tls_client_config(), server_name)
+        .map_err(|e| e.to_string())?;
+    let mut reg = registry().lock().unwrap();
+    let sock = match reg.open.remove(&h) {
+        Some(OpenHandle::Tcp(s)) => s,
+        Some(otro) => { reg.open.insert(h, otro); return Err(format!("el handle {h} no es un socket TCP plano")); }
+        None => return Err(format!("handle inválido: {h}")),
+    };
+    reg.open.insert(h, OpenHandle::Tls(Box::new(TlsConn { conn: rustls::Connection::Client(client), sock })));
+    Ok(h)
+}
+#[cfg(target_arch = "wasm32")]
+pub fn tls_upgrade(_h: i64, _host: &str) -> Result<i64, String> { Err("TLS no disponible en el playground web (wasm)".to_string()) }
+
 /// ¿El handle `h` es una conexión TLS? Lo consultan los caminos de socket para desviarse al I/O TLS.
 /// M44a: en wasm nunca hay handles TLS (no se pueden crear) → siempre `false`, y los caminos TLS de
 /// `socket_write_raw`/`socket_read_bytes_blocking`/la VM quedan muertos.
@@ -1930,6 +1954,14 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__tls_accept espera un int (el handle), no {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__tls_accept espera un string (el certificado PEM), no {}", a[1]))); }
         if a[2] != Type::String { return Err((Some(2), format!("__tls_accept espera un string (la clave PEM), no {}", a[2]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __tls_upgrade(h, host) -> [string] (diferido TLS): STARTTLS de cliente sobre un TCP plano;
+    // ["ok", handle] (el MISMO handle) o ["err", msg]. std/net → tls_upgrade.
+    Builtin { name: "__tls_upgrade", opcode: OpCode::TlsUpgrade, check: |a| {
+        arity(a, 2, "__tls_upgrade", " (handle, host)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__tls_upgrade espera un int (el handle), no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__tls_upgrade espera un string (el host), no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __socket_read(h) -> [string]: ["ok", datos] o ["err", msg]. Prelude → Result<string,string>.

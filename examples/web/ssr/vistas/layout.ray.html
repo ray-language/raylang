@@ -1,0 +1,9 @@
+{% params titulo: string, contenido: string %}
+<!DOCTYPE html>
+<html>
+<head><title>{{ titulo }}</title></head>
+<body>
+{% include contenido %}
+  <footer>servido por raylang &middot; {{ titulo }}</footer>
+</body>
+</html>

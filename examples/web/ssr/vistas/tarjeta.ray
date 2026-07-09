@@ -1,0 +1,12 @@
+// GENERADO por `ray templ` desde tarjeta.ray.html — NO editar a mano; regenera con
+// `ray templ <ruta>`. El template es la fuente de verdad.
+from std/template import escape_html;
+
+/// Renders the `tarjeta` template (generated; the `.ray.html` file is the source of truth).
+pub fn render_tarjeta(lang: string) -> string {
+    var out: [string] = [];
+    out.push("<li class=\"tarjeta\">");
+    out.push(escape_html(to_string(lang)));
+    out.push("</li>\n");
+    out.join("")
+}

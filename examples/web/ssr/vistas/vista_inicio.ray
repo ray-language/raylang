@@ -1,13 +1,12 @@
 // GENERADO por `ray templ` desde vista_inicio.ray.html — NO editar a mano; regenera con
 // `ray templ <ruta>`. El template es la fuente de verdad.
 from std/template import escape_html;
+import vistas/tarjeta;
 
 /// Renders the `vista_inicio` template (generated; the `.ray.html` file is the source of truth).
 pub fn render_vista_inicio(titulo: string, saludo: string, popular: bool, lenguajes: [string]) -> string {
     var out: [string] = [];
-    out.push("<!DOCTYPE html>\n<html>\n<head><title>");
-    out.push(escape_html(to_string(titulo)));
-    out.push("</title></head>\n<body>\n  <h1>");
+    out.push("\n  <h1>");
     out.push(escape_html(to_string(titulo)));
     out.push("</h1>\n  <p>");
     out.push(escape_html(to_string(saludo)));
@@ -19,12 +18,10 @@ pub fn render_vista_inicio(titulo: string, saludo: string, popular: bool, lengua
     }
     out.push("\n  <ul>\n  ");
     for lang in lenguajes {
-        out.push("  <li>");
-        out.push(escape_html(to_string(lang)));
-        out.push("</li>\n  ");
+        out.push("  ");
+        out.push(to_string(tarjeta.render_tarjeta(lang)));
+        out.push("\n  ");
     }
-    out.push("</ul>\n  <footer>servido por raylang &middot; ");
-    out.push(escape_html(to_string(titulo)));
-    out.push("</footer>\n</body>\n</html>\n");
+    out.push("</ul>\n");
     out.join("")
 }

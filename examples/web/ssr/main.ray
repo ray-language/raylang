@@ -1,20 +1,22 @@
 // Demo de SSR (server-side rendering) con TEMPLATES COMPILADOS (M55): el servidor web del paquete
-// `net` sirve una página renderizada por la función que `ray templ` generó desde
-// `vistas/vista_inicio.ray.html` — parámetros TIPADOS (un typo en el template no compila) y cero
-// parseo en runtime.
+// `net` sirve una página renderizada por las funciones que `ray templ` genera desde los
+// `vistas/*.ray.html` — parámetros TIPADOS (un typo en el template no compila) y cero parseo en
+// runtime. Los templates COMPONEN: `layout.ray.html` envuelve la vista (`{% include contenido %}`)
+// y `vista_inicio.ray.html` importa e incluye el partial `tarjeta.ray.html` por cada elemento.
 //
 // La página se construye A PARTIR DE LA PETICIÓN: `/` saluda genérico; `/lang/<nombre>` saluda a ese
 // lenguaje y marca los "populares". Nota de diseño: raylang usa actores de HEAP AISLADO — cada
 // conexión corre en su propia fibra sin estado mutable compartido; por eso el handler es una función
 // PURA de la petición (lo idiomático para SSR), no un contador global.
 //
-// Uso (el .ray generado está commiteado; regenera con `ray templ vistas/` si tocas el .ray.html):
+// Uso (los .ray generados van commiteados; `ray run` regenera solo los desactualizados):
 //   cd examples/web/ssr
 //   ray run                                  # escucha en el puerto 8080
 //   curl http://127.0.0.1:8080/
 //   curl http://127.0.0.1:8080/lang/rust
 
 import net/webserver;
+import vistas/layout;
 import vistas/vista_inicio;
 
 // El último segmento de la ruta ("/lang/rust" -> "rust"; "/" -> "").
@@ -27,9 +29,15 @@ fn es_popular(lang: string) -> bool {
     lang == "rust" || lang == "python" || lang == "javascript"
 }
 
+// Composición: el layout envuelve el HTML ya renderizado de la vista (que a su vez incluye el
+// partial `tarjeta` por cada lenguaje). Cada nivel escapó SUS datos; el include no re-escapa.
+fn render(titulo: string, saludo: string, popular: bool, lenguajes: [string]) -> string {
+    layout.render_layout(titulo, vista_inicio.render_vista_inicio(titulo, saludo, popular, lenguajes))
+}
+
 fn pagina(req: webserver.Request) -> webserver.Response {
     if (req.path == "/") {
-        let html = vista_inicio.render_vista_inicio(
+        let html = render(
             "raylang SSR",
             "Elige un lenguaje: prueba /lang/rust",
             false,
@@ -38,7 +46,7 @@ fn pagina(req: webserver.Request) -> webserver.Response {
     }
     if (req.path.starts_with("/lang/")) {
         let lang = ultimo_segmento(req.path);
-        let html = vista_inicio.render_vista_inicio(
+        let html = render(
             "raylang SSR — " + lang,
             "Estás viendo: " + lang,
             es_popular(lang),

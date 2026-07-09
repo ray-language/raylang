@@ -1,8 +1,8 @@
 # SSR con templates compilados (`examples/web/ssr`)
 
-Un servidor web que hace **server-side rendering** con un **template compilado** (M55): el HTML es un
-archivo `vistas/vista_inicio.ray.html` con firma tipada; `ray templ` lo compila a la función raylang
-`render_vista_inicio(...)`, y el servidor del paquete `net` la llama por petición. La respuesta usa `webserver.html_response`
+Un servidor web que hace **server-side rendering** con **templates compilados que componen** (M55):
+el HTML son archivos `vistas/*.ray.html` con firma tipada; `ray templ` los compila a funciones
+raylang, y el servidor del paquete `net` las llama por petición. La respuesta usa `webserver.html_response`
 (no `text`), que declara `Content-Type: text/html; charset=utf-8` — sin ese header el navegador lee
 el UTF-8 como Latin-1 y estropea los acentos.
 
@@ -12,12 +12,13 @@ el UTF-8 como Latin-1 y estropea los acentos.
 ssr/
 ├── ray.toml                          # dependencia por ruta a packages/net
 ├── main.ray                          # el servidor (handler puro: petición → HTML)
-└── vistas/
-    ├── vista_inicio.ray.html         # el TEMPLATE (la fuente de verdad)
-    └── vista_inicio.ray              # GENERADO por `ray templ` (commiteado)
+└── vistas/                           # los TEMPLATES (fuente de verdad) + sus .ray GENERADOS
+    ├── layout.ray.html               # el layout: envuelve el contenido ({% include contenido %})
+    ├── vista_inicio.ray.html         # la vista: {% import %}a e incluye el partial por elemento
+    └── tarjeta.ray.html              # el partial: un <li> por lenguaje
 ```
 
-El template declara su firma en la primera línea:
+Cada template declara su firma en la primera línea:
 
 ```html
 {% params titulo: string, saludo: string, popular: bool, lenguajes: [string] %}
@@ -26,12 +27,16 @@ El template declara su firma en la primera línea:
 y usa `{{ expr }}` (autoescape HTML), `{% if %}`/`{% elif %}`/`{% else %}` y `{% for %}`. Un typo en
 una variable **no compila** (a diferencia del motor runtime `std/template`, que renderiza `""`).
 
+**Composición**: la vista hace `{% import vistas/tarjeta %}` y `{% include
+tarjeta.render_tarjeta(lang) %}` (empalma HTML ya renderizado, sin re-escapar: cada nivel escapó sus
+datos); el layout es un template más con un param `contenido: string`, y `main.ray` compone:
+`layout.render_layout(titulo, vista_inicio.render_vista_inicio(…))`.
+
 ## Correrlo
 
 ```sh
 cd examples/web/ssr
-ray templ vistas/                     # regenera vista_inicio.ray (solo si tocas el .ray.html)
-ray run                               # escucha en el puerto 8080
+ray run                               # escucha en el 8080 (regenera solo los .ray desactualizados)
 ```
 
 ```sh

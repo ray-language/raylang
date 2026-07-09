@@ -7216,3 +7216,37 @@ Revisión del FFI de M41 bajo el foco de producción. Dos arreglos y un plan:
 - **FFI v2 (anotado en IDEAS §14, sin fecha)**: `libffi` cuando aparezca la segunda librería C real
   — aridad libre, structs por valor y **callbacks** (closures de raylang como punteros a función C).
   Pendiente conocido documentado: variádicas (printf) son UB en arm64; indetectable desde la firma.
+
+## 59. M55 — Templates compilados (`ray templ`). ✅ COMPLETO
+
+La versión "limpia" de la localidad de PHP (decidida con el usuario tras optimizar `std/template`,
+IDEAS §14b): el archivo ES la página, pero el código incrustado se limita a la sintaxis restringida
+del template y las variables son **parámetros tipados**. Un `.ray.html` se compila a una FUNCIÓN
+raylang, en la línea de `templ` (Go) / `askama` (Rust).
+
+- **Superficie** (las 3 decisiones fijadas con el usuario): (1) la firma va INLINE como primera
+  directiva — `{% params titulo: string, filas: [string] %}` (tipos = sintaxis raylang normal;
+  `split_params` respeta comas anidadas de `Map<K,V>`/tuplas/`fn(A) -> R`); (2) comando explícito
+  **`ray templ <archivo|dir>…`** que genera el `.ray` AL LADO (commiteable, inspeccionable, cero
+  magia; recursivo en directorios); (3) nombre `render_<stem>` en el módulo homónimo
+  (`vistas/lista.ray.html` → `import vistas/lista;` → `lista.render_lista(…)`).
+- **Generador** (`src/templ.rs`, cliente del front-end como fmt/raydoc): tokeniza el template
+  (espejo en Rust del de std/template) y emite raylang legible — texto → `out.push("literal")` (con
+  `\ " $ \n \t \r` escapados: un `${` del HTML jamás se vuelve interpolación del generado);
+  `{{ e }}` → `out.push(escape_html(to_string(e)))` (la EXPRESIÓN se empalma verbatim: `{{ p.nombre
+  }}`, `{{ n + 1 }}`); `{{& e }}` sin escape; `{% if/elif/else %}` → cadena `if/else if/else` de
+  raylang; `{% for pat in expr %}` → el `for` real (arreglos, rangos, Map con `(k, v)`,
+  iteradores). Pila de marcos valida el anidamiento (endif/endfor casados). El escape reusa
+  **`escape_html` de std/template (ahora pub)**. Tras generar, se valida que el `.ray` **parsea**
+  (error temprano contra el template); el checker/pipeline lo validan del todo al compilar el
+  programa.
+- **La promesa del diseño, probada**: un typo en `{{ titluo }}` genera código que NO compila — el
+  error de tipos señala el nombre — en vez del `""` silencioso del motor runtime (probado en
+  `tests/templ_cli.rs`).
+- **Rendimiento** (página 21 KB / 500 filas, release): **0.6 ms por render** — 2× sobre el motor
+  runtime optimizado (1.3 ms) y 7.7× sobre el original pre-optimización (4.6 ms). Cero parseo, cero
+  TVal, cero lookup por nombre en runtime.
+- **Convivencia**: `std/template` (compile/render con contexto `TVal`) sigue para plantillas
+  dinámicas (de BD/disco en caliente); `ray templ` es la vía para las vistas del propio código.
+- Diferido: `{% include %}`/layouts entre templates compilados, regeneración automática en
+  `ray build`, `{% let %}` locales.

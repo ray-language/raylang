@@ -251,7 +251,9 @@ fn parse_seq(pc: PC, stops: [string]) -> Result<SeqResult, string> {
 // Escape HTML apoyado en los builtins NATIVOS (`contains`/`replace` corren en Rust): el caso común
 // (texto limpio) devuelve el string original tras 5 escaneos O(n); el sucio, 5 pasadas de replace.
 // (No iterar `s[i]` en bucle: indexar un string es O(len) por acceso → un bucle así es cuadrático.)
-fn escape_html(s: string) -> string {
+// Pub: también lo usan los módulos GENERADOS por `ray templ` (M55).
+/// Escapes HTML special characters (`& < > " '`) as entities. Clean text is returned as-is.
+pub fn escape_html(s: string) -> string {
     if (!(s.contains("&") || s.contains("<") || s.contains(">") || s.contains("\"") || s.contains("'"))) {
         return s;
     }

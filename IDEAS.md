@@ -571,12 +571,12 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
   MUTA por iteración (antes copiaba el contexto entero por vuelta); (6) **`{% elif %}`** (desazucara
   a if anidado en la rama else; `SeqResult.stop_tag` conserva la condición). Golden extendido
   (`tests/template_cli.rs`, ambos motores).
-- **Fase 2 — TEMPLATES COMPILADOS (diseño pendiente con el usuario, dirección aprobada)**: el
-  "PHP bien hecho" — un archivo de plantilla que un paso de build compila a una FUNCIÓN raylang
-  tipada (estilo templ de Go / askama de Rust): parámetros tipados (un typo en `{{ var }}` = error
-  de compilación, no "" silencioso), cero parseo/TVal en runtime, escape decidido en build. Piezas a
-  diseñar: extensión (`.ray.html`), declaración de la firma dentro del template, CLI (`ray templ` o
-  integrado en `ray build`), y si el `for` itera `[T]` tipado en vez de `VList`.
+- **Fase 2 ✅ COMPLETA — M55 TEMPLATES COMPILADOS** (DESIGN §59): `ray templ` compila `.ray.html`
+  (firma inline `{% params nombre: tipo, … %}`) a `pub fn render_<stem>(…) -> string` en un módulo
+  generado al lado (commiteable). Expresiones raylang verbatim en `{{ }}`/`{% if %}`/`{% for %}`;
+  typo en una variable = error de compilación (probado); **0.6 ms por render** (2× sobre el motor
+  runtime optimizado, 7.7× sobre el original). Diferido: include/layouts, regeneración en `ray
+  build`, `{% let %}`.
 - Diferido de fase 1: `{% include %}`/parciales (pide diseño de resolución: mapa de parciales en
   compile vs. filesystem), filtros, `s[i]` O(1) en la VM (cachear los chars del string — optimización
   del runtime que beneficiaría a todo el ecosistema, no solo templates).

@@ -971,6 +971,33 @@ fn con_assert() {
 
 `ray test` sale con el número de fallos como código (0 = todo verde, ideal para CI).
 
+### Templates compilados (`ray templ`)
+
+Para SSR, además del motor runtime (`std/template`, §12), un template puede **compilarse a una
+función raylang tipada**: el archivo `vistas/lista.ray.html` declara su firma en la primera línea y
+`ray templ` genera `vistas/lista.ray` al lado (commiteable):
+
+```html
+{% params titulo: string, filas: [string] %}
+<h1>{{ titulo }}</h1>
+<ul>{% for fila in filas %}<li>{{ fila }}</li>{% endfor %}</ul>
+```
+
+```sh
+ray templ vistas/        # genera vistas/lista.ray (pub fn render_lista(...) -> string)
+```
+
+```rust
+import vistas/lista;
+let html = lista.render_lista("Informe", filas);
+```
+
+Los `{{ expr }}` admiten expresiones raylang (`{{ p.nombre }}`, `{{ n + 1 }}`) con autoescape HTML
+(`{{& expr }}` crudo); `{% if/elif/else %}` y `{% for %}` son los de raylang. La ventaja sobre el
+motor runtime: **un typo en una variable es error de compilación** (no un `""` silencioso) y el
+render es ~2× más rápido (cero parseo en runtime). El motor runtime queda para plantillas dinámicas
+(cargadas de disco/BD en caliente).
+
 **Editores**: extensión de VSCode (`editors/vscode`) y paquete de Sublime Text (`editors/sublime`), ambos
 sobre `ray lsp`; Neovim/Helix lo usan directo. **Playground web**: la VM compilada a WASM corre el lenguaje
 núcleo en el navegador (sin red/FFI/cripto).

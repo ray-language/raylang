@@ -56,6 +56,7 @@ fn run() {
         Some("yank") => cmd_yank(&rest[1..]),
         Some("fetch") => cmd_fetch(&rest[1..]),
         Some("fmt") => cmd_fmt(&rest[1..]),
+        Some("templ") => cmd_templ(&rest[1..]),
         Some("doc") => cmd_doc(&rest[1..]),
         Some("lsp") => lsp::run(),
         Some("repl") | None => repl::run(),
@@ -87,6 +88,7 @@ Uso: ray <subcomando> [opciones]
   yank <nom>@<ver>  retira (o --undo restaura) una versión publicada en el índice
   fetch             descarga las dependencias de ray.toml a .ray-deps/
   fmt <archivo>     imprime la versión canónica por stdout
+  templ <ruta>...   compila templates .ray.html a módulos raylang tipados
   doc <archivo>     genera la documentación Markdown de su superficie pública
   lsp               arranca el Language Server
   repl              REPL interactivo
@@ -703,6 +705,55 @@ fn cmd_fmt(args: &[String]) {
 }
 
 // M40.4: `ray doc <archivo>` imprime la documentación Markdown de la superficie pública del archivo.
+/// `ray templ <ruta>...`: compila cada template `.ray.html` (o todos los de un directorio,
+/// recursivo) a su módulo raylang generado (`.ray` al lado, commiteable). M55.
+fn cmd_templ(args: &[String]) {
+    if args.is_empty() {
+        eprintln!("uso: ray templ <archivo.ray.html | directorio>...");
+        process::exit(64);
+    }
+    let mut entradas: Vec<PathBuf> = Vec::new();
+    for a in args {
+        let p = Path::new(a);
+        if p.is_dir() {
+            collect_templates(p, &mut entradas);
+        } else if a.ends_with(".ray.html") {
+            entradas.push(p.to_path_buf());
+        } else {
+            eprintln!("'{a}' no es un .ray.html ni un directorio");
+            process::exit(64);
+        }
+    }
+    entradas.sort();
+    if entradas.is_empty() {
+        eprintln!("no se encontraron templates .ray.html");
+        process::exit(64);
+    }
+    for e in &entradas {
+        match crate::templ::generate_file(e) {
+            Ok(out) => println!("generado: {}", out.display()),
+            Err(msg) => {
+                eprintln!("{msg}");
+                process::exit(65);
+            }
+        }
+    }
+}
+
+// Recolecta los `.ray.html` de un directorio, recursivo (orden estable: se ordenan al final).
+fn collect_templates(dir: &Path, out: &mut Vec<PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                collect_templates(&p, out);
+            } else if p.to_string_lossy().ends_with(".ray.html") {
+                out.push(p);
+            }
+        }
+    }
+}
+
 fn cmd_doc(args: &[String]) {
     let Some(path) = args.first() else {
         eprintln!("uso: ray doc <archivo>");

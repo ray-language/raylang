@@ -378,7 +378,7 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/regex` | motor Thompson NFA (tiempo lineal): `full_match search find find_str find_all replace_all`. Soporta `. * + ? \| ( ) [a-z] [^…] \d \w \s ^ $` |
 | `std/csv` | `parse_csv -> Result<[[string]], string>` (RFC 4180) · `write_csv` |
 | `std/toml` | `parse_toml toml_get toml_show` (subconjunto: tablas, escalares, arrays) |
-| `std/template` | plantillas estilo Jinja: `render_template(tpl, ctx)` con `{{ var }}` (autoescape HTML), `{{& var }}`, `{% if %}`, `{% for %}` · contexto: `ctx_str ctx_int ctx_bool ctx_list val_str val_int` |
+| `std/template` | plantillas estilo Jinja: `compile(tpl) -> Result<Template, _>` + `render(t, ctx)` (SSR: compilar 1 vez) · `render_template` (una vez) · `{{ var }}` (autoescape), `{{& var }}`, `{% if/elif/else %}`, `{% for %}` · contexto: `ctx_str ctx_int ctx_bool ctx_list val_str val_int` · `escape_html` · templates COMPILADOS: `ray templ` (§14) |
 | `std/inflate` | `inflate_raw gunzip zlib_inflate` (→ `Result<bytes, string>`) · `crc32` |
 | `std/deflate` | `deflate_raw gzip_compress zlib_compress` |
 | `std/huffman` | `huffman_encode huffman_decode` (la tabla HPACK del RFC 7541) |
@@ -459,6 +459,7 @@ Fuera de contrato: funciones **variádicas** (`printf` — UB en arm64), structs
 | `ray build [archivo]` | chequea y compila sin ejecutar (0 ok / 65 error) |
 | `ray test [archivo] [filtro]` | corre las `@test` (filtro por subcadena del nombre) |
 | `ray fmt <archivo>` | imprime la versión canónica |
+| `ray templ <ruta>…` | compila templates `.ray.html` (firma `{% params %}`) a módulos raylang tipados |
 | `ray doc <archivo>` | documentación Markdown de la superficie pública (`///`) |
 | `ray repl` | REPL interactivo |
 | `ray lsp` | Language Server (diagnósticos, hover, ir-a-definición, references, rename, completion, signature help) |

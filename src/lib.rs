@@ -36,6 +36,7 @@ pub mod runtime;
 pub mod semver;
 pub mod sha256;
 pub mod stdlib;
+pub mod templ;
 pub mod test_runner;
 pub mod token;
 pub mod vm;

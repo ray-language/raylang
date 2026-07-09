@@ -25,6 +25,25 @@ pub struct GitSpec {
     pub git_ref: String,
 }
 
+/// ¿Es un **nombre de paquete** válido? (M51d) Solo letras/dígitos ASCII, `-` y `_`, empezando por
+/// alfanumérico. La regla importa por **seguridad**, no por estética: el nombre viene del `ray.toml`
+/// —incluido el de paquetes transitivos NO confiables— y se usa para construir rutas
+/// (`.ray-deps/<nombre>`, `<índice>/<nombre>.toml`); sin esta valla, un nombre como `../../x`
+/// escaparía de la caché (y el camino de re-descarga hace `remove_dir_all` sobre esa ruta).
+pub fn valid_package_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// El error estándar para un nombre de paquete inválido, con el contexto de dónde apareció.
+fn bad_name_err(name: &str, origin: &str) -> String {
+    format!(
+        "nombre de paquete inválido '{name}' ({origin}): solo letras, dígitos, '-' y '_', \
+         empezando por letra o dígito"
+    )
+}
+
 /// Si el spec es una **dependencia por ruta local** (`path:<dir>`), devuelve el `<dir>` (relativo a la
 /// raíz del proyecto, o absoluto). A diferencia de las git, no se descargan ni se bloquean/hashean (son
 /// locales y mutables, pensadas para desarrollo o un paquete que vive en el mismo repo): el CLI registra
@@ -100,34 +119,57 @@ fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
 /// la variable de entorno `RAY_INDEX`, luego `[registry] index` del `ray.toml` (relativo a la raíz
 /// si no es absoluto). `Ok(None)` = sin índice (solo deps git/`path:`). Un índice remoto por git → M51c.
 pub(crate) fn index_dir(manifest: &Manifest) -> Result<Option<std::path::PathBuf>, String> {
-    let raw = std::env::var("RAY_INDEX")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| manifest.registry_index.clone());
-    let Some(raw) = raw else {
+    let Some(raw) = index_raw(manifest) else {
         return Ok(None);
     };
     // Índice remoto por git (M51c): se clona/cachea en `.ray-deps/.index` y se usa como dir local.
-    if let Some(without) = raw.strip_prefix("git+") {
+    if raw.strip_prefix("git+").is_some() {
         let cache = manifest.root.join(".ray-deps").join(".index");
-        // `git+URL` o `git+URL@ref` (ref opcional; no confundir un '/' de la ruta con un ref).
-        let (url, git_ref) = match without.rsplit_once('@') {
-            Some((u, r)) if !u.is_empty() && !r.contains('/') => (u, Some(r)),
-            _ => (without, None),
-        };
-        ensure_index_clone(url, git_ref, &cache)?;
+        ensure_index_clone(&raw, &cache)?;
         return Ok(Some(cache));
     }
     let p = Path::new(&raw);
     Ok(Some(if p.is_absolute() { p.to_path_buf() } else { manifest.root.join(&raw) }))
 }
 
-/// Clona el repo del índice en `cache` si aún no está (M51c). No re-clona en cada resolución (sería
-/// lento y no determinista); `ray update` refresca (`git pull`). Con `git_ref`, hace checkout de él.
-fn ensure_index_clone(url: &str, git_ref: Option<&str>, cache: &Path) -> Result<(), String> {
-    if cache.exists() {
-        return Ok(()); // ya cacheado; `ray update` lo refresca
+/// La spec cruda del índice configurado: `RAY_INDEX`, o `[registry] index` del `ray.toml`.
+fn index_raw(manifest: &Manifest) -> Option<String> {
+    std::env::var("RAY_INDEX")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| manifest.registry_index.clone())
+}
+
+/// Parte una spec de índice remoto `git+URL[@ref]` en `(url, ref)`. La ref es opcional y no debe
+/// confundirse con un `/` de la ruta (por eso el filtro `!r.contains('/')`).
+fn parse_index_spec(raw: &str) -> (&str, Option<&str>) {
+    let without = raw.strip_prefix("git+").unwrap_or(raw);
+    match without.rsplit_once('@') {
+        Some((u, r)) if !u.is_empty() && !r.contains('/') => (u, Some(r)),
+        _ => (without, None),
     }
+}
+
+/// El archivo hermano de la caché del índice que registra **con qué spec** se clonó (M51d): si la
+/// spec configurada cambia (otra URL u otra ref), la caché se descarta y se re-clona — antes se
+/// quedaba obsoleta en silencio.
+fn index_spec_file(cache: &Path) -> std::path::PathBuf {
+    cache.with_extension("spec")
+}
+
+/// Clona el repo del índice en `cache` si aún no está (M51c). No re-clona en cada resolución (sería
+/// lento y no determinista); `ray update` refresca (`refresh_index`). Con `@ref` en la spec, hace
+/// checkout de él. M51d: registra la spec usada y **re-clona si cambió** desde el último clon.
+fn ensure_index_clone(raw: &str, cache: &Path) -> Result<(), String> {
+    let spec_file = index_spec_file(cache);
+    if cache.exists() {
+        if std::fs::read_to_string(&spec_file).is_ok_and(|s| s.trim() == raw) {
+            return Ok(()); // cacheado con la misma spec; `ray update` lo refresca
+        }
+        // La spec cambió (URL o ref distinta) → descartar la caché y volver a clonar.
+        let _ = std::fs::remove_dir_all(cache);
+    }
+    let (url, git_ref) = parse_index_spec(raw);
     if let Some(parent) = cache.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -139,38 +181,55 @@ fn ensure_index_clone(url: &str, git_ref: Option<&str>, cache: &Path) -> Result<
         let _ = std::fs::remove_dir_all(cache);
         return Err(format!("no se pudo hacer checkout de '{r}' en el índice: {e}"));
     }
+    std::fs::write(&spec_file, raw)
+        .map_err(|e| format!("no se pudo registrar la spec del índice: {e}"))?;
     Ok(())
 }
 
-/// Refresca el índice remoto cacheado (`git pull`), si existe. Para `ray update` (M51c). No-op para
-/// un índice local (directorio) o si no hay caché.
+/// Refresca el índice remoto cacheado, si existe — para `ray update` (M51c). No-op para un índice
+/// local (directorio) o si no hay caché. M51d: un índice **pinneado** (`@ref`) queda en checkout
+/// *detached* donde `git pull` no funciona → se refresca con `fetch` + re-checkout de la ref
+/// (`origin/<ref>` si es una rama; la ref a secas si es un tag/SHA).
 pub fn refresh_index(manifest: &Manifest) -> Result<(), String> {
-    let raw = std::env::var("RAY_INDEX")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| manifest.registry_index.clone());
-    if !raw.is_some_and(|r| r.starts_with("git+")) {
+    let Some(raw) = index_raw(manifest).filter(|r| r.starts_with("git+")) else {
         return Ok(()); // índice local o sin índice → nada que refrescar
-    }
+    };
     let cache = manifest.root.join(".ray-deps").join(".index");
-    if cache.exists() {
-        git(&["pull", "--quiet"], Some(&cache))
-            .map(|_| ())
-            .map_err(|e| format!("no se pudo refrescar el índice de paquetes: {e}"))?;
+    if !cache.exists() {
+        return Ok(());
     }
-    Ok(())
+    let (_url, git_ref) = parse_index_spec(&raw);
+    match git_ref {
+        None => git(&["pull", "--quiet"], Some(&cache))
+            .map(|_| ())
+            .map_err(|e| format!("no se pudo refrescar el índice de paquetes: {e}")),
+        Some(r) => {
+            git(&["fetch", "--quiet", "--tags", "--force", "origin"], Some(&cache))
+                .map_err(|e| format!("no se pudo refrescar el índice de paquetes: {e}"))?;
+            // Rama → seguir la punta remota; tag/SHA → la ref tal cual (posiblemente actualizada).
+            let remote = format!("origin/{r}");
+            if git(&["checkout", "--quiet", "--detach", &remote], Some(&cache)).is_err() {
+                git(&["checkout", "--quiet", "--detach", r], Some(&cache)).map_err(|e| {
+                    format!("no se pudo re-checkout de '{r}' al refrescar el índice: {e}")
+                })?;
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Resuelve la spec de una dependencia a una `GitSpec` descargable: `git+…` se parsea directo;
 /// un **requisito de versión** (`1.2.0`/`^1.2`/…) se resuelve **por el índice** (M51a), respetando
-/// el lock salvo `update` (M51c). Las `path:` se filtran antes de llegar aquí.
+/// el lock salvo `update` (M51c). Las `path:` se filtran antes de llegar aquí. Devuelve también el
+/// **hash publicado** en el índice para la versión elegida (M51d; `None` para deps git directas o
+/// sin hash publicado): `ensure` lo verifica contra el contenido descargado.
 fn to_gitspec(
     name: &str,
     spec: &str,
     index: Option<&Path>,
     locked: Option<&GitSpec>,
     update: bool,
-) -> Result<GitSpec, String> {
+) -> Result<(GitSpec, Option<String>), String> {
     if crate::index::is_registry_spec(spec) {
         let dir = index.ok_or_else(|| {
             format!(
@@ -180,7 +239,7 @@ fn to_gitspec(
         })?;
         crate::index::resolve_pinned(dir, name, spec, locked, update)
     } else {
-        parse_spec(spec)
+        parse_spec(spec).map(|s| (s, None))
     }
 }
 
@@ -209,13 +268,32 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
     // ejecución dejó en la caché (para re-descargar si un conflicto lo actualiza).
     let mut chosen: std::collections::HashMap<String, GitSpec> = std::collections::HashMap::new();
     let mut cached: std::collections::HashMap<String, GitSpec> = std::collections::HashMap::new();
+    // M51d: hash **publicado en el índice** por paquete (con la spec a la que corresponde), para
+    // verificar el contenido descargado contra lo que el índice avala (cierra el TOFU del lock).
+    let mut index_hash: std::collections::HashMap<String, (GitSpec, String)> =
+        std::collections::HashMap::new();
     let mut queue: std::collections::VecDeque<(String, GitSpec)> = std::collections::VecDeque::new();
     let mut downloaded = 0usize;
+    let enqueue = |n: &str,
+                   s: &str,
+                   queue: &mut std::collections::VecDeque<(String, GitSpec)>,
+                   index_hash: &mut std::collections::HashMap<String, (GitSpec, String)>|
+     -> Result<(), String> {
+        let (gs, h) = to_gitspec(n, s, index.as_deref(), locked_spec(n).as_ref(), update)?;
+        if let Some(h) = h {
+            index_hash.insert(n.to_string(), (gs.clone(), h));
+        }
+        queue.push_back((n.to_string(), gs));
+        Ok(())
+    };
     for (n, s) in &manifest.dependencies {
+        if !valid_package_name(n) {
+            return Err(bad_name_err(n, "declarado en ray.toml"));
+        }
         if path_of_path_dep(s).is_some() {
             continue; // M40.8a: las path-deps son locales; no se descargan (las registra el CLI)
         }
-        queue.push_back((n.clone(), to_gitspec(n, s, index.as_deref(), locked_spec(n).as_ref(), update)?));
+        enqueue(n, s, &mut queue, &mut index_hash)?;
     }
 
     while let Some((name, spec)) = queue.pop_front() {
@@ -253,12 +331,31 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
 
         // Dependencias transitivas: leer el `ray.toml` del paquete y encolarlas (saltando path-deps).
         // Una transitiva también puede ser del índice (`foo = "^1.2"`) → se resuelve igual.
-        for (dn, ds) in package_deps(&dest)? {
+        let (pkg_deps, pkg_registry) = package_deps(&dest)?;
+        // M51e (aviso de *dependency confusion*, DESIGN §54.7): las deps por nombre de una
+        // transitiva se resuelven contra el índice de ESTE proyecto. Si el paquete declara su
+        // PROPIO índice y difiere, el mismo nombre podría referirse a otro paquete allí → avisar
+        // (solo si de verdad tiene deps por nombre; el lock + hash del índice mitigan después).
+        if let Some(pr) = &pkg_registry
+            && index_raw(manifest).as_deref() != Some(pr.as_str())
+            && pkg_deps.iter().any(|(_, s)| crate::index::is_registry_spec(s) && path_of_path_dep(s).is_none())
+        {
+            eprintln!(
+                "  aviso: '{name}' declara su propio índice ('{pr}'); sus dependencias por nombre \
+                 se resuelven contra el índice de ESTE proyecto (riesgo de dependency confusion \
+                 si los nombres difieren entre índices)"
+            );
+        }
+        for (dn, ds) in pkg_deps {
+            // M51d: el `ray.toml` de una transitiva NO es confiable — validar su nombre ANTES de
+            // usarlo en cualquier ruta (es la valla contra `../../x` → escape de la caché).
+            if !valid_package_name(&dn) {
+                return Err(bad_name_err(&dn, &format!("declarado por la dependencia '{name}'")));
+            }
             if path_of_path_dep(&ds).is_some() {
                 continue;
             }
-            let gs = to_gitspec(&dn, &ds, index.as_deref(), locked_spec(&dn).as_ref(), update)?;
-            queue.push_back((dn, gs));
+            enqueue(&dn, &ds, &mut queue, &mut index_hash)?;
         }
     }
 
@@ -278,6 +375,18 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
                  se bloqueó (posible manipulación).\n  esperado: {}\n  actual:   {}\n  Si el cambio es \
                  legítimo, borra '.ray-deps/{name}' y 'ray.lock' y vuelve a resolver.",
                 b.hash, hash
+            ));
+        }
+        // M51d: verificar contra el hash **publicado en el índice** (si esa versión lo trae). A
+        // diferencia del lock (TOFU: confía en la primera descarga), esto ancla la confianza en el
+        // índice: lo descargado debe ser EXACTAMENTE lo que el autor publicó.
+        if let Some((ispec, ihash)) = index_hash.get(name)
+            && ispec == spec
+            && *ihash != hash
+        {
+            return Err(format!(
+                "la dependencia '{name}' no coincide con el hash publicado en el índice (posible \
+                 manipulación del repositorio del paquete).\n  publicado: {ihash}\n  descargado: {hash}"
             ));
         }
         new_lock.push(LockEntry {
@@ -309,44 +418,49 @@ fn mvs(name: &str, a: &GitSpec, b: &GitSpec) -> Result<GitSpec, String> {
     ))
 }
 
-/// Parsea un ref semver `vX.Y.Z` / `X.Y.Z` (ignora un sufijo de pre-release tras `-`) a `(mayor,
-/// menor, parche)`. `None` si no es semver (un commit, una rama…). Para ordenar en `mvs`.
-pub(crate) fn semver(git_ref: &str) -> Option<(u64, u64, u64)> {
+/// Parsea un ref semver `vX.Y.Z[-pre]` / `X.Y.Z[-pre]` a una [`crate::semver::Version`] completa
+/// (M51e: la pre-release ya NO se recorta — `v2.0.0-rc1 < v2.0.0` en el orden de `mvs`, y el
+/// lock-pinning de una rc casa solo contra un requisito que la mencione). `None` si no es semver
+/// (un commit, una rama…).
+pub(crate) fn semver(git_ref: &str) -> Option<crate::semver::Version> {
     let core = git_ref.strip_prefix('v').unwrap_or(git_ref);
-    let core = core.split('-').next().unwrap_or(core); // corta pre-release
-    let mut it = core.split('.');
-    let major = it.next()?.parse().ok()?;
-    let minor = it.next()?.parse().ok()?;
-    let patch = it.next().unwrap_or("0").parse().ok()?;
-    Some((major, minor, patch))
+    crate::semver::parse_version(core)
 }
 
-/// Las dependencias declaradas en el `ray.toml` de un paquete descargado (su `[dependencies]`), para
-/// la resolución transitiva. Vacío si el paquete no tiene `ray.toml` (paquete hoja). Lenient: no
+/// Las dependencias declaradas en el `ray.toml` de un paquete descargado (su `[dependencies]`),
+/// para la resolución transitiva, más el índice `[registry] index` que ese paquete declare (M51e:
+/// solo para AVISAR de una posible *dependency confusion*; las transitivas se resuelven contra el
+/// índice del CONSUMIDOR). Vacío si el paquete no tiene `ray.toml` (paquete hoja). Lenient: no
 /// exige `name`/`version` (a un paquete-dependencia solo le miramos sus dependencias).
-fn package_deps(pkg_dir: &Path) -> Result<Vec<(String, String)>, String> {
+type PackageMeta = (Vec<(String, String)>, Option<String>); // (dependencias, índice propio)
+
+fn package_deps(pkg_dir: &Path) -> Result<PackageMeta, String> {
     let Ok(source) = std::fs::read_to_string(pkg_dir.join("ray.toml")) else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     };
     let mut deps = Vec::new();
-    let mut in_deps = false;
+    let mut registry = None;
+    let mut section = String::new();
     for line in source.lines() {
         let line = line.split_once('#').map_or(line, |(a, _)| a).trim();
         if line.is_empty() {
             continue;
         }
-        if let Some(section) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-            in_deps = section.trim() == "dependencies";
+        if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            section = s.trim().to_string();
             continue;
         }
-        if in_deps
-            && let Some((key, value)) = line.split_once('=')
+        if let Some((key, value)) = line.split_once('=')
             && let Some(val) = value.trim().strip_prefix('"').and_then(|v| v.strip_suffix('"'))
         {
-            deps.push((key.trim().to_string(), val.to_string()));
+            match (section.as_str(), key.trim()) {
+                ("dependencies", k) => deps.push((k.to_string(), val.to_string())),
+                ("registry", "index") => registry = Some(val.to_string()),
+                _ => {}
+            }
         }
     }
-    Ok(deps)
+    Ok((deps, registry))
 }
 
 // ── Hash de contenido de un paquete ──────────────────────────────────────────────────
@@ -373,7 +487,11 @@ pub fn hash_package(dir: &Path) -> Result<String, String> {
 
 /// Recolecta recursivamente los archivos bajo `dir` como `(ruta_relativa_a_base, ruta_absoluta)`,
 /// saltando `.git`. Las rutas usan `/` (portable y determinista entre plataformas).
-fn collect_files(base: &Path, dir: &Path, out: &mut Vec<(String, std::path::PathBuf)>) -> Result<(), String> {
+pub(crate) fn collect_files(
+    base: &Path,
+    dir: &Path,
+    out: &mut Vec<(String, std::path::PathBuf)>,
+) -> Result<(), String> {
     let entries = std::fs::read_dir(dir)
         .map_err(|e| format!("no se pudo listar '{}': {e}", dir.display()))?;
     for entry in entries {
@@ -453,6 +571,43 @@ fn read_lock(root: &Path) -> Result<std::collections::HashMap<String, LockEntry>
     Ok(map)
 }
 
+/// Los nombres presentes en `ray.lock` (M51f): tras `ray remove` + re-resolver, dice si la caché
+/// `.ray-deps/<nombre>` sigue en uso (el paquete puede seguir siendo transitiva de otra dep).
+pub fn locked_names(root: &Path) -> Vec<String> {
+    read_lock(root).map(|m| m.keys().cloned().collect()).unwrap_or_default()
+}
+
+/// Las raíces de módulos de dependencias para el proyecto que contiene `dir`: el caché
+/// `.ray-deps/` (git/registro, si existe) y el **padre** de cada dependencia por ruta
+/// (`nombre = "path:<dir>"` — el loader busca `<raíz>/<nombre>/…`). No descarga nada: usa lo que
+/// haya en disco (por eso sirve también para el LSP, que no debe tocar la red al diagnosticar).
+/// Compartida por el CLI (`ray run/build/…`) y el LSP → un archivo diagnostica con las MISMAS
+/// raíces con las que corre.
+pub fn dependency_roots_for(dir: &Path) -> Vec<std::path::PathBuf> {
+    let root = Manifest::find(dir)
+        .and_then(|toml| toml.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| dir.to_path_buf());
+    let cache = root.join(".ray-deps");
+    let mut roots = Vec::new();
+    if cache.is_dir() {
+        roots.push(cache);
+    }
+    if let Ok(Some(m)) = Manifest::load(dir) {
+        for (_name, spec) in &m.dependencies {
+            if let Some(p) = path_of_path_dep(spec) {
+                let pdir = m.root.join(p);
+                if let Some(parent) = pdir.parent().map(Path::to_path_buf)
+                    && pdir.exists()
+                    && !roots.contains(&parent)
+                {
+                    roots.push(parent);
+                }
+            }
+        }
+    }
+    roots
+}
+
 /// Escribe `ray.lock` en `root` con las entradas **ordenadas por nombre** (determinista → diffs
 /// limpios en control de versiones). El lockfile SÍ se commitea (fija las versiones para el equipo).
 fn write_lock(root: &Path, entries: &mut [LockEntry]) -> Result<(), String> {
@@ -474,6 +629,20 @@ fn write_lock(root: &Path, entries: &mut [LockEntry]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn valida_nombres_de_paquete() {
+        // M51d: el nombre construye rutas (caché/índice) → charset estricto.
+        assert!(valid_package_name("geo"));
+        assert!(valid_package_name("mi-paquete_2"));
+        assert!(valid_package_name("9lives"));
+        assert!(!valid_package_name(""));
+        assert!(!valid_package_name("../evil"));
+        assert!(!valid_package_name("a/b"));
+        assert!(!valid_package_name("a.b"));
+        assert!(!valid_package_name("-a")); // no empieza por alfanumérico
+        assert!(!valid_package_name("con espacios"));
+    }
 
     #[test]
     fn parsea_spec_git() {
@@ -508,9 +677,15 @@ mod tests {
 
     #[test]
     fn parsea_semver() {
-        assert_eq!(semver("v1.2.3"), Some((1, 2, 3)));
-        assert_eq!(semver("1.2"), Some((1, 2, 0)));
-        assert_eq!(semver("v2.0.0-rc1"), Some((2, 0, 0))); // corta el pre-release
+        use crate::semver::Version;
+        assert_eq!(semver("v1.2.3"), Some(Version::new(1, 2, 3)));
+        assert_eq!(semver("1.2"), Some(Version::new(1, 2, 0)));
+        // M51e: la pre-release ya NO se recorta (v2.0.0-rc1 < v2.0.0 para mvs/lock-pinning).
+        assert_eq!(
+            semver("v2.0.0-rc1"),
+            Some(Version { major: 2, minor: 0, patch: 0, pre: Some("rc1".to_string()) })
+        );
+        assert!(semver("v2.0.0-rc1") < semver("v2.0.0"));
         assert_eq!(semver("main"), None);
         assert_eq!(semver("abc123def"), None); // un commit no es semver
     }

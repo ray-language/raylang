@@ -1792,6 +1792,73 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
 
+                // Diferido JSON-1: code point → [char] de 0/1 (vacío si inválido).
+                OpCode::CharFromCode => {
+                    let HeapValue::Int(n) = self.pop() else { unreachable!("el checker garantiza un int") };
+                    // El guard de rango evita que un int enorme haga wrap al castear a u32.
+                    let elems = if (0..=0x10FFFF).contains(&n) {
+                        char::from_u32(n as u32).map(|c| vec![HeapValue::Char(c)]).unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+
+                // --- Bits de float (M54.1): totales, sin heap. ---
+                OpCode::FloatBits => {
+                    let HeapValue::Float(f) = self.pop() else { unreachable!("el checker garantiza un float") };
+                    self.push(HeapValue::Int(f.to_bits() as i64));
+                }
+                OpCode::FloatFromBits => {
+                    let HeapValue::Int(n) = self.pop() else { unreachable!("el checker garantiza un int") };
+                    self.push(HeapValue::Float(f64::from_bits(n as u64)));
+                }
+
+                // --- SQLite embebido (M53.3): arreglo etiquetado, como los primitivos de I/O. ---
+                OpCode::SqliteOpen => {
+                    let path = self.pop();
+                    let HeapValue::Str(path) = path else {
+                        unreachable!("el checker garantiza un string");
+                    };
+                    let elems = match crate::builtins::sqlite_open(&path) {
+                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::SqliteExec | OpCode::SqliteQuery => {
+                    // Orden en la pila: handle, sql, params → se saca params primero.
+                    let ps = self.pop();
+                    let sql = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Str(sql), HeapValue::Obj(ph)) = (handle, sql, ps) else {
+                        unreachable!("el checker garantiza int, string, [string]");
+                    };
+                    let params: Vec<String> = self.as_array(ph).iter().map(|v| match v {
+                        HeapValue::Str(s) => s.clone(),
+                        _ => unreachable!("el checker garantiza [string]"),
+                    }).collect();
+                    let elems = if matches!(instr, OpCode::SqliteExec) {
+                        match crate::builtins::sqlite_exec(handle, &sql, &params) {
+                            Ok(n) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(n.to_string())],
+                            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        }
+                    } else {
+                        match crate::builtins::sqlite_query(handle, &sql, &params) {
+                            Ok((ncols, cells)) => {
+                                let mut v = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(ncols.to_string())];
+                                v.extend(cells.into_iter().map(HeapValue::Str));
+                                v
+                            }
+                            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        }
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+
                 // --- I/O con buffering: handles de archivo (M11.8) ---
                 OpCode::Open => {
                     let mode = self.pop();
@@ -1965,6 +2032,21 @@ impl<'a> Vm<'a> {
                         unreachable!("el checker garantiza int, string, string");
                     };
                     let elems = match crate::builtins::tls_accept(handle, &cert, &key) {
+                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // Diferido TLS: STARTTLS de cliente — envuelve un TCP plano (ya no bloqueante en la
+                // VM) en una sesión TLS de cliente; el handshake lo conduce el primer I/O, cediendo.
+                OpCode::TlsUpgrade => {
+                    let host = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Str(host)) = (handle, host) else {
+                        unreachable!("el checker garantiza int, string");
+                    };
+                    let elems = match crate::builtins::tls_upgrade(handle, &host) {
                         Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
                         Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
                     };
@@ -5724,6 +5806,42 @@ mod tests {
                 let b = valor(parse_int("  -7 "), 0);     // -7 (trim)
                 let c = valor(parse_int("xyz"), 100);     // 100 (None)
                 a + b + c                                 // 135
+            }
+        "#);
+    }
+
+    #[test]
+    fn char_from_code_oraculo() {
+        // Diferido JSON-1: char_from_code es el char::from_u32 de Rust en ambos motores. Válidos
+        // (ASCII, multi-byte, astral) e inválidos (surrogate, fuera de rango, negativo, enorme —
+        // este último caza un wrap del cast a u32).
+        oracle_program(r#"
+            fn main() -> int {
+                let a: int = match (char_from_code(65)) { Option.Some(c) => if (c == 'A') { 1 } else { -1 }, Option.None => -1 };
+                let e: int = match (char_from_code(233)) { Option.Some(c) => if (to_string(c) == "é") { 10 } else { -1 }, Option.None => -1 };
+                let astral: int = match (char_from_code(128512)) { Option.Some(c) => if (char_code(c) == 128512) { 100 } else { -1 }, Option.None => -1 };
+                let sur: int = match (char_from_code(55296)) { Option.Some(_) => -1, Option.None => 1000 };
+                let fuera: int = match (char_from_code(1114112)) { Option.Some(_) => -1, Option.None => 10000 };
+                let neg: int = match (char_from_code(0 - 1)) { Option.Some(_) => -1, Option.None => 100000 };
+                let wrap: int = match (char_from_code(4294967361)) { Option.Some(_) => -1, Option.None => 1000000 };
+                a + e + astral + sur + fuera + neg + wrap
+            }
+        "#);
+    }
+
+    #[test]
+    fn float_bits_oraculo() {
+        // M54.1: __float_bits/__float_from_bits son el f64 de Rust en ambos motores → oráculo.
+        // Round-trip exacto (incl. negativos y el caso 5.05 del vector BSON) y bits conocidos:
+        // 1.0 = 0x3FF0000000000000 = 4607182418800017408.
+        oracle_program(r#"
+            fn main() -> int {
+                let uno = __float_bits(1.0);
+                let a: int = if (uno == 4607182418800017408) { 1 } else { -1 };
+                let b: int = if (__float_from_bits(uno) == 1.0) { 10 } else { -1 };
+                let c: int = if (__float_from_bits(__float_bits(5.05)) == 5.05) { 100 } else { -1 };
+                let d: int = if (__float_from_bits(__float_bits(0.0 - 2.5)) == 0.0 - 2.5) { 1000 } else { -1 };
+                a + b + c + d
             }
         "#);
     }

@@ -1,0 +1,3 @@
+# el lock de un proyecto solo-path-deps queda vacío; y las deps por ruta no se cachean
+ray.lock
+.ray-deps/

@@ -1,0 +1,70 @@
+// Demo del cliente MongoDB (M54, `db/mongo`). Se conecta con SCRAM-SHA-256 (SASL sobre OP_MSG),
+// inserta documentos BSON, consulta con un filtro, actualiza con $set, borra y se despide.
+//
+// Uso (necesita un servidor MongoDB de verdad, con un usuario SCRAM-SHA-256):
+//   cd examples/db
+//   ray run mongo_demo.ray <host> <puerto> <usuario> <contraseña> <base>
+//
+// Ejemplo contra un MongoDB local:
+//   ray run mongo_demo.ray 127.0.0.1 27017 raylang secret test
+
+import db/mongo;
+import db/bson;
+
+fn main() -> int {
+    let a = args();
+    if (a.len() < 5) {
+        print("uso: ray run mongo_demo.ray <host> <puerto> <usuario> <contraseña> <base>");
+        return 64;
+    }
+    let host = a[0];
+    let port = match (parse_int(a[1])) {
+        Option.Some(p) => p,
+        Option.None => { print("puerto inválido: " + a[1]); return 64; },
+    };
+
+    // 1. Conectar (hello + SCRAM-SHA-256). El nonce sería aleatorio en producción.
+    var c = match (mongo.connect(host, port, a[2], a[3], a[4], "clientnonce123456")) {
+        Result.Ok(conn) => conn,
+        Result.Err(e) => { print("no se pudo conectar: " + e); return 1; },
+    };
+    print("conectado a MongoDB en " + host + ":" + to_string(port));
+
+    // 2. Insertar documentos (el _id lo asigna el servidor).
+    let docs = [
+        [bson.field("nombre", bson.Bson.Str("ada")), bson.field("nota", bson.Bson.Int(36))],
+        [bson.field("nombre", bson.Bson.Str("grace"))],
+    ];
+    match (mongo.insert(c, "usuarios", docs)) {
+        Result.Ok(n) => { print("documentos insertados: " + to_string(n)); },
+        Result.Err(e) => { print("error en el insert: " + e); },
+    }
+
+    // 3. Consultar con un filtro (documento BSON, no un string → anti-inyección por construcción).
+    let filter = [bson.field("nombre", bson.Bson.Str("ada"))];
+    match (mongo.find(c, "usuarios", filter)) {
+        Result.Ok(rows) => {
+            print("usuarios llamados 'ada' (" + to_string(rows.len()) + "):");
+            for doc in rows {
+                print("  " + bson.dump_doc(doc));
+            }
+        },
+        Result.Err(e) => { print("error en la consulta: " + e); },
+    }
+
+    // 4. Actualizar con $set explícito y borrar.
+    let set = [bson.field("$set", bson.Bson.Doc([bson.field("nota", bson.Bson.Int(37))]))];
+    match (mongo.update(c, "usuarios", filter, set, false)) {
+        Result.Ok(n) => { print("modificados: " + to_string(n)); },
+        Result.Err(e) => { print("error en el update: " + e); },
+    }
+    match (mongo.delete(c, "usuarios", filter)) {
+        Result.Ok(n) => { print("borrados: " + to_string(n)); },
+        Result.Err(e) => { print("error en el delete: " + e); },
+    }
+
+    // 5. Despedirse (el protocolo no tiene adiós; se cierra el socket).
+    mongo.disconnect(c);
+    print("desconectado");
+    0
+}

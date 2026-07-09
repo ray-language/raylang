@@ -705,7 +705,11 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "scram.ray", // M32.1a: SCRAM-SHA-256, importa hmac/sha256 (bytes/bitops, idem)
         "scram_demo.ray", // M32.1a: demo importa scram (idem)
         "postgres.ray", // M32.1b: cliente PostgreSQL, importa scram (bytes/bitops, idem)
-        "postgres_demo.ray", // M32.1b: demo importa postgres (idem)
+        "postgres_demo.ray", // M32.1b: demo importa postgres (idem). También cubre, por basename,
+                             // examples/db/postgres_demo.ray (M53.2), que usa `for`/paquete `db`.
+        "mysql_demo.ray", // M53.1: demo del cliente MySQL (examples/db); usa `for` (M27.2, idem)
+        "sqlite_demo.ray", // M53.4: demo del cliente SQLite (examples/db); usa `for` (M27.2, idem)
+        "mongo_demo.ray", // M54.3: demo del cliente MongoDB (examples/db); usa `for` (M27.2, idem)
         "sha1.ray", "base64.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops

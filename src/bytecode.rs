@@ -195,6 +195,37 @@ pub enum OpCode {
     ChaChaPolySeal,
     ChaChaPolyOpen,
 
+    /// Diferido TLS (STARTTLS): envuelve un socket TCP plano YA CONECTADO en una sesión TLS de
+    /// CLIENTE (el simétrico de `TlsAccept`). Saca host (string) y handle (int); empuja
+    /// `["ok", handle]`/`["err", msg]`. Reusa el mismo handle → el I/O existente se desvía solo a
+    /// TLS. Primitivo `__tls_upgrade`; `std/net` → `tls_upgrade`. Habilita STARTTLS (Postgres
+    /// sslRequest, MySQL caching_sha2 full-path, SMTP…).
+    TlsUpgrade,
+    /// Diferido JSON-1: el inverso de `char_code`. Saca un `int`; empuja `[char]` de 0/1 elementos
+    /// (vacío si no es un code point válido: surrogates D800–DFFF o fuera de rango). Primitivo
+    /// `__char_from_code`; el prelude → `char_from_code -> Option<char>`. Habilita los escapes
+    /// `\uXXXX` de `std/json`.
+    CharFromCode,
+    /// M54.1: bits IEEE 754 de un float. Saca un `float`; empuja sus 64 bits como `int` (dos
+    /// complemento). Primitivo `__float_bits`; `std/math` → `float_bits`. Lo pide el `double` de
+    /// BSON (y serviría a protobuf).
+    FloatBits,
+    /// M54.1: el inverso — saca un `int` (los 64 bits) y empuja el `float`. Total (cualquier patrón
+    /// de bits es un f64 válido, incl. NaN/Inf). Primitivo `__float_from_bits`.
+    FloatFromBits,
+
+    // --- SQLite embebido (M53.3, vía rusqlite). El handle es un `int` en el registro de proceso
+    // (como archivos/sockets); `close(h)` lo cierra. Resultados como arreglo etiquetado. ---
+    /// Saca la ruta (string; `":memory:"` = en memoria); empuja `["ok", handle]`/`["err", msg]`.
+    /// Primitivo `__sqlite_open`; el paquete `db/sqlite` → `Result<Conn, string>`.
+    SqliteOpen,
+    /// Saca params (`[string]`), sql (string) y handle (int); ejecuta una sentencia sin filas y
+    /// empuja `["ok", n_afectadas]`/`["err", msg]`. Primitivo `__sqlite_exec`.
+    SqliteExec,
+    /// Como `SqliteExec` pero para consultas con filas: empuja `["ok", ncols, v0, v1, …]` (las celdas
+    /// aplanadas por fila; NULL = "") o `["err", msg]`. Primitivo `__sqlite_query`.
+    SqliteQuery,
+
     // --- I/O binaria (M16.1c). Lecturas → [bytes] etiquetado; escrituras → [string]. ---
     /// Saca la ruta (string); lee el archivo y empuja `[bytes]` (`[b"ok", datos]`/`[b"err", msg]`).
     /// Primitivo `__read_file_bytes`; el prelude → `Result<bytes, string>`.

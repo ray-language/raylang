@@ -653,6 +653,15 @@ fn parse_float(s: string) -> Option<float> {
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
+// El inverso de char_code (diferido JSON-1); None si n no es un code point válido
+// (surrogates D800-DFFF o fuera de [0, 10FFFF]). Habilita los escapes \uXXXX de std/json.
+/// Builds a char from a Unicode code point; `None` if the value is not a valid code point
+/// (surrogates or out of range). The inverse of `char_code`.
+fn char_from_code(n: int) -> Option<char> {
+    let r = __char_from_code(n);
+    if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
+}
+
 // M49.3: los envoltorios de cripto (ed25519_public_key/sign, chacha20poly1305 seal/open) se movieron al
 // módulo `std/crypto` junto a sha*/hmac/ed25519_verify. Aquí quedan solo sus primitivos `__x` (builtins).
 

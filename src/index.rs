@@ -27,104 +27,7 @@
 use std::path::Path;
 
 use crate::deps::{self, GitSpec};
-
-/// Una versión semver `(mayor, menor, parche)`.
-pub type Version = (u64, u64, u64);
-
-/// Un requisito de versión declarado en `ray.toml` (`foo = "<req>"`). Semántica (DESIGN §54.3):
-/// - **`1.2.0`** (pelado) o **`=1.2.0`** → exacta (rellena con 0 lo omitido: `1.2` = `1.2.0`).
-/// - **`^1.2.0`** → *caret*: compatible sin cambiar el componente distinto de cero más a la izquierda
-///   (`^1.2.3` = `[1.2.3, 2.0.0)`; `^0.2.3` = `[0.2.3, 0.3.0)`).
-/// - **`~1.2.3`** → *tilde*: solo parche (`[1.2.3, 1.3.0)`); `~1.2` = `[1.2.0, 1.3.0)`; `~1` = `[1.0.0, 2.0.0)`.
-/// - **`*`** o vacío → cualquiera (la más alta publicada).
-#[derive(Debug, Clone, PartialEq)]
-enum VersionReq {
-    /// Igualdad exacta con la versión dada.
-    Exact(Version),
-    /// Rango `[low, high)` (low inclusivo, high exclusivo). Caret y tilde se compilan a esto.
-    Range(Version, Version),
-    /// Cualquier versión.
-    Any,
-}
-
-impl VersionReq {
-    /// Parsea el texto del requisito. Nunca falla: un texto no reconocible se trata como exacto de
-    /// `(0,0,0)` no casaría nada útil, así que devolvemos error explícito para avisar al usuario.
-    fn parse(s: &str) -> Result<VersionReq, String> {
-        let s = s.trim();
-        if s.is_empty() || s == "*" {
-            return Ok(VersionReq::Any);
-        }
-        if let Some(rest) = s.strip_prefix('^') {
-            let (v, _prec) = parse_partial(rest)?;
-            return Ok(VersionReq::Range(v, caret_upper(v)));
-        }
-        if let Some(rest) = s.strip_prefix('~') {
-            let (v, prec) = parse_partial(rest)?;
-            return Ok(VersionReq::Range(v, tilde_upper(v, prec)));
-        }
-        let core = s.strip_prefix('=').unwrap_or(s);
-        let (v, _prec) = parse_partial(core)?;
-        Ok(VersionReq::Exact(v))
-    }
-
-    /// ¿La versión `v` satisface el requisito?
-    fn matches(&self, v: Version) -> bool {
-        match self {
-            VersionReq::Exact(e) => v == *e,
-            VersionReq::Range(lo, hi) => *lo <= v && v < *hi,
-            VersionReq::Any => true,
-        }
-    }
-}
-
-/// El límite superior (exclusivo) de un requisito *caret* `^X.Y.Z`: sube el componente distinto de
-/// cero más a la izquierda (regla de cargo, que preserva la compatibilidad semver con `0.x`).
-fn caret_upper((major, minor, patch): Version) -> Version {
-    if major > 0 {
-        (major + 1, 0, 0)
-    } else if minor > 0 {
-        (major, minor + 1, 0)
-    } else {
-        (major, minor, patch + 1)
-    }
-}
-
-/// El límite superior (exclusivo) de un requisito *tilde*: con menor especificado (`~1.2`/`~1.2.3`)
-/// sube el menor; con solo el mayor (`~1`) sube el mayor. `prec` = nº de componentes escritos.
-fn tilde_upper((major, minor, _patch): Version, prec: u8) -> Version {
-    if prec >= 2 {
-        (major, minor + 1, 0)
-    } else {
-        (major + 1, 0, 0)
-    }
-}
-
-/// Parsea `X[.Y[.Z]]` a `(versión, precisión)`, rellenando con 0 lo omitido (`1.2` → `(1,2,0)`,
-/// precisión 2). Rechaza un componente no numérico o vacío.
-fn parse_partial(s: &str) -> Result<(Version, u8), String> {
-    let mut it = s.split('.');
-    let mut nums = [0u64; 3];
-    let mut prec = 0u8;
-    for slot in nums.iter_mut() {
-        match it.next() {
-            Some(part) => {
-                *slot = part.trim().parse::<u64>().map_err(|_| {
-                    format!("requisito de versión inválido: '{s}' (se esperaba X.Y.Z)")
-                })?;
-                prec += 1;
-            }
-            None => break,
-        }
-    }
-    if prec == 0 {
-        return Err(format!("requisito de versión vacío: '{s}'"));
-    }
-    if it.next().is_some() {
-        return Err(format!("requisito de versión con demasiados componentes: '{s}'"));
-    }
-    Ok(((nums[0], nums[1], nums[2]), prec))
-}
+use crate::semver::{parse_partial, Version, VersionReq};
 
 /// Una versión publicada de un paquete, leída del índice.
 #[derive(Debug, Clone, PartialEq)]
@@ -138,12 +41,6 @@ pub struct IndexEntry {
     pub yanked: bool,
 }
 
-/// Parsea una versión `X[.Y[.Z]]` (rellenando con 0). `None` si no es semver. Para validar la
-/// versión de un paquete a publicar (M51b).
-pub fn parse_version(s: &str) -> Option<Version> {
-    parse_partial(s).ok().map(|(v, _)| v)
-}
-
 /// ¿La spec de una dependencia se resuelve por el **índice** (por nombre)? Lo es si NO es una dep
 /// git (`git+…`) ni por ruta (`path:…`) — es decir, un requisito de versión pelado (`1.2.0`, `^1.2`, …).
 pub fn is_registry_spec(spec: &str) -> bool {
@@ -153,6 +50,11 @@ pub fn is_registry_spec(spec: &str) -> bool {
 /// Lee el archivo de índice de `name` (`<index_dir>/<name>.toml`) y devuelve sus versiones. Error
 /// si el paquete no está en el índice. Ignora entradas sin `git` (malformadas) con un error claro.
 pub fn read_package(index_dir: &Path, name: &str) -> Result<Vec<IndexEntry>, String> {
+    // M51d: el nombre construye una ruta dentro del índice — validarlo (defensa en profundidad;
+    // `deps::ensure` ya validó las deps, pero esta API también la llaman los comandos directamente).
+    if !deps::valid_package_name(name) {
+        return Err(format!("nombre de paquete inválido '{name}' (solo letras, dígitos, '-' y '_')"));
+    }
     let path = index_dir.join(format!("{name}.toml"));
     let source = std::fs::read_to_string(&path).map_err(|_| {
         format!("el paquete '{name}' no está en el índice ({})", index_dir.display())
@@ -210,58 +112,73 @@ pub fn read_package(index_dir: &Path, name: &str) -> Result<Vec<IndexEntry>, Str
     Ok(entries)
 }
 
-/// La versión **más alta no retirada** publicada de `name` (para `ray add` sin versión). Error si
-/// no hay ninguna instalable.
+/// La versión **más alta no retirada y FINAL** publicada de `name` (para `ray add` sin versión).
+/// Las pre-releases no cuentan (M51e: instalarlas es opt-in explícito, `ray add foo@1.0.0-rc1`).
+/// Error si no hay ninguna instalable.
 pub fn latest(index_dir: &Path, name: &str) -> Result<String, String> {
     let mut versions = read_package(index_dir, name)?;
-    versions.retain(|e| !e.yanked);
+    let had_pre = versions.iter().any(|e| e.version.pre.is_some() && !e.yanked);
+    versions.retain(|e| !e.yanked && e.version.pre.is_none());
     versions.sort_by(|a, b| a.version.cmp(&b.version));
-    versions
-        .last()
-        .map(|e| e.num.clone())
-        .ok_or_else(|| format!("el paquete '{name}' no tiene versiones publicadas (todas retiradas)"))
+    versions.last().map(|e| e.num.clone()).ok_or_else(|| {
+        if had_pre {
+            format!(
+                "el paquete '{name}' solo tiene pre-releases publicadas; pide una explícita \
+                 (p. ej. 'ray add {name}@<X.Y.Z-pre>')"
+            )
+        } else {
+            format!("el paquete '{name}' no tiene versiones publicadas (todas retiradas)")
+        }
+    })
 }
 
 /// Resuelve `name` con el requisito `req` contra el índice → la `GitSpec` de la versión **más alta
 /// no retirada** que lo satisface. Error si el paquete no existe o ninguna versión casa.
 pub fn resolve(index_dir: &Path, name: &str, req: &str) -> Result<GitSpec, String> {
-    resolve_pinned(index_dir, name, req, None, true)
+    resolve_pinned(index_dir, name, req, None, true).map(|(spec, _)| spec)
 }
 
 /// Como `resolve`, pero **respeta el lock** (M51c): si `locked` (la versión ya bloqueada de `name`)
 /// sigue satisfaciendo `req` y no se pide `update`, la reusa —build reproducible: un caret no sube
 /// solo porque el índice gane una versión—. Con `update = true` o sin lock válido, re-resuelve la
-/// más alta del índice.
+/// más alta del índice. Devuelve también el **hash publicado** de la versión elegida (M51d): el
+/// llamador lo verifica contra el contenido descargado — el índice pasa de "descubrimiento" a raíz
+/// de confianza (cierra el TOFU del lock, que confía en la primera descarga). `None` en el atajo del
+/// lock (ya verificado en su primera descarga) o si el índice no publicó hash.
 pub fn resolve_pinned(
     index_dir: &Path,
     name: &str,
     req: &str,
     locked: Option<&GitSpec>,
     update: bool,
-) -> Result<GitSpec, String> {
+) -> Result<(GitSpec, Option<String>), String> {
     let req_parsed = VersionReq::parse(req)?;
     if !update
         && let Some(l) = locked
         && let Some(v) = deps::semver(&l.git_ref)
-        && req_parsed.matches(v)
+        && req_parsed.matches(&v)
     {
-        return Ok(l.clone()); // el lock sigue satisfaciendo el requisito → reproducible
+        return Ok((l.clone(), None)); // el lock sigue satisfaciendo el requisito → reproducible
     }
     let mut versions = read_package(index_dir, name)?;
-    versions.retain(|e| !e.yanked && req_parsed.matches(e.version));
+    versions.retain(|e| !e.yanked && req_parsed.matches(&e.version));
     versions.sort_by(|a, b| a.version.cmp(&b.version));
     let chosen = versions.last().ok_or_else(|| {
         format!("ninguna versión de '{name}' satisface '{req}' en el índice")
     })?;
-    deps::parse_spec(&chosen.git).map_err(|e| {
+    let spec = deps::parse_spec(&chosen.git).map_err(|e| {
         format!("la versión '{}' de '{name}' tiene una spec git inválida en el índice: {e}", chosen.num)
-    })
+    })?;
+    Ok((spec, chosen.hash.clone()))
 }
 
 /// Marca (o desmarca) como **retirada** (`yanked`) la versión `num` de `name` en el índice (M51c,
 /// `ray yank`). Una versión retirada no se elige en nuevas resoluciones, pero un lock que ya la fijó
 /// la sigue usando (no rompe builds existentes). Edición mínima línea a línea (preserva el resto).
 pub fn set_yanked(index_dir: &Path, name: &str, num: &str, yanked: bool) -> Result<(), String> {
+    if !deps::valid_package_name(name) {
+        return Err(format!("nombre de paquete inválido '{name}' (solo letras, dígitos, '-' y '_')"));
+    }
     let (target, _) = parse_partial(num).map_err(|e| format!("versión inválida: {e}"))?;
     let path = index_dir.join(format!("{name}.toml"));
     let source = std::fs::read_to_string(&path)
@@ -306,6 +223,9 @@ pub fn append_version(
     git: &str,
     hash: Option<&str>,
 ) -> Result<(), String> {
+    if !deps::valid_package_name(name) {
+        return Err(format!("nombre de paquete inválido '{name}' (solo letras, dígitos, '-' y '_')"));
+    }
     let (target, _) = parse_partial(num).map_err(|e| format!("versión a publicar inválida: {e}"))?;
     let path = index_dir.join(format!("{name}.toml"));
     if path.exists() {
@@ -339,38 +259,6 @@ pub fn append_version(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn v(a: u64, b: u64, c: u64) -> Version {
-        (a, b, c)
-    }
-
-    #[test]
-    fn parsea_requisitos() {
-        assert_eq!(VersionReq::parse("1.2.0").unwrap(), VersionReq::Exact(v(1, 2, 0)));
-        assert_eq!(VersionReq::parse("=1.2.0").unwrap(), VersionReq::Exact(v(1, 2, 0)));
-        assert_eq!(VersionReq::parse("1.2").unwrap(), VersionReq::Exact(v(1, 2, 0)));
-        assert_eq!(VersionReq::parse("*").unwrap(), VersionReq::Any);
-        assert_eq!(VersionReq::parse("").unwrap(), VersionReq::Any);
-        assert_eq!(VersionReq::parse("^1.2.3").unwrap(), VersionReq::Range(v(1, 2, 3), v(2, 0, 0)));
-        assert_eq!(VersionReq::parse("^0.2.3").unwrap(), VersionReq::Range(v(0, 2, 3), v(0, 3, 0)));
-        assert_eq!(VersionReq::parse("^0.0.3").unwrap(), VersionReq::Range(v(0, 0, 3), v(0, 0, 4)));
-        assert_eq!(VersionReq::parse("~1.2.3").unwrap(), VersionReq::Range(v(1, 2, 3), v(1, 3, 0)));
-        assert_eq!(VersionReq::parse("~1.2").unwrap(), VersionReq::Range(v(1, 2, 0), v(1, 3, 0)));
-        assert_eq!(VersionReq::parse("~1").unwrap(), VersionReq::Range(v(1, 0, 0), v(2, 0, 0)));
-        assert!(VersionReq::parse("abc").is_err());
-        assert!(VersionReq::parse("1.2.3.4").is_err());
-    }
-
-    #[test]
-    fn casa_requisitos() {
-        assert!(VersionReq::parse("^1.2.0").unwrap().matches(v(1, 5, 0)));
-        assert!(!VersionReq::parse("^1.2.0").unwrap().matches(v(2, 0, 0)));
-        assert!(!VersionReq::parse("^1.2.0").unwrap().matches(v(1, 1, 0)));
-        assert!(VersionReq::parse("~1.2.0").unwrap().matches(v(1, 2, 9)));
-        assert!(!VersionReq::parse("~1.2.0").unwrap().matches(v(1, 3, 0)));
-        assert!(VersionReq::parse("1.2.0").unwrap().matches(v(1, 2, 0)));
-        assert!(!VersionReq::parse("1.2.0").unwrap().matches(v(1, 2, 1)));
-    }
 
     #[test]
     fn distingue_specs_de_registro() {

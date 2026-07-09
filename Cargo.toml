@@ -41,3 +41,8 @@ rustls-pki-types = { version = "1", features = ["std"] }
 # primitivas de tiempo constante y auditadas (SHA/HMAC/Ed25519/AEAD) que raylang puro no puede garantizar.
 # Las implementaciones en raylang (`examples/web/*.ray`) se conservan como DEMOSTRACIÓN DEL LENGUAJE.
 ring = "0.17"
+# M53.3 — SQLite de PRODUCCIÓN. Igual que `ring` (M43): territorio donde envolver la librería C a mano
+# (FFI + dobles punteros + lifetimes de statements) es peor ingeniería que delegar en el binding maduro.
+# `bundled` compila SQLite dentro del binario → cero dependencia del sistema, versión determinista.
+# El wrapper de usuario vive en `packages/db/sqlite.ray` sobre los primitivos `__sqlite_*`.
+rusqlite = { version = "0.32", features = ["bundled"] }

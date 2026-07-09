@@ -2476,12 +2476,12 @@ fn percent_decode(s: &str) -> String {
 /// Raíces de dependencias para el loader (M39c): la caché `.ray-deps/` del proyecto que contiene
 /// `entry` (subiendo hasta el `ray.toml`), si existe. Alinea el LSP con `ray run`.
 fn dep_roots_for(entry: &Path) -> Vec<PathBuf> {
+    // Compartida con el CLI (`deps::dependency_roots_for`): caché `.ray-deps/` + el PADRE de cada
+    // dependencia por ruta (`nombre = "path:<dir>"`). Sin esto, un proyecto con path-deps (como
+    // `examples/db`) compilaba con `ray run` pero el editor marcaba "no se encuentra el módulo".
+    // No descarga nada (el LSP no toca la red al diagnosticar).
     let dir = entry.parent().unwrap_or(Path::new("."));
-    let root = crate::manifest::Manifest::find(dir)
-        .and_then(|toml| toml.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| dir.to_path_buf());
-    let cache = root.join(".ray-deps");
-    if cache.is_dir() { vec![cache] } else { Vec::new() }
+    crate::deps::dependency_roots_for(dir)
 }
 
 /// La raíz del proyecto que contiene `entry`: el **ancestro más cercano** (subiendo desde su carpeta)

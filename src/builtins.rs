@@ -536,6 +536,11 @@ enum OpenHandle {
     /// M20.8: un socket UDP (sin conexión). Se enlaza con `udp_bind` y se usa con `udp_send_to`/
     /// `udp_recv_from` (cada datagrama lleva su remitente). En el mismo registro de handles.
     Udp(std::net::UdpSocket),
+    /// M53.3: una conexión SQLite embebida (rusqlite). En el mismo registro: `close(h)` la quita del
+    /// mapa y el `Drop` de `Connection` cierra la base (statements ya finalizados: nunca escapan del
+    /// helper). No existe en `wasm32` (rusqlite compila C).
+    #[cfg(not(target_arch = "wasm32"))]
+    Sqlite(rusqlite::Connection),
 }
 
 /// Una conexión TLS: la sesión rustls (cliente **o** servidor, vía el enum unificado `Connection`) +
@@ -602,6 +607,8 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
         #[cfg(not(target_arch = "wasm32"))]
         Some(OpenHandle::Tls(_)) => Err("el handle es una conexión TLS; usa socket_write".to_string()),
         Some(OpenHandle::Udp(_)) => Err("el handle es un socket UDP; usa udp_send_to".to_string()),
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(OpenHandle::Sqlite(_)) => Err("el handle es una conexión SQLite; usa db/sqlite".to_string()),
         None => Err(format!("handle de archivo inválido: {}", h)),
     }
 }
@@ -610,6 +617,94 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
 pub fn close_handle(h: i64) {
     registry().lock().unwrap().open.remove(&h);
 }
+
+// --- SQLite embebido (M53.3, vía rusqlite) ---
+//
+// Como la cripto de M43 (`ring`): territorio donde envolver la librería C a mano (dobles punteros,
+// lifetimes de statements, destructores de bind) es peor ingeniería que delegar en el binding maduro.
+// El handle es un `int` en el MISMO registro que archivos/sockets → `close(h)` cierra la conexión.
+// El ciclo prepare→bind→step→finalize ocurre ENTERO dentro de cada helper (el statement nunca escapa)
+// → sin use-after-finalize posible. Las celdas se devuelven como texto (INTEGER/REAL → repr decimal,
+// NULL → "", BLOB → hex), consistente con la API `[[string]]` de `db/mysql` y `db/postgres`.
+// Nota: a diferencia de los sockets (que clonan el descriptor), la conexión no es clonable → el lock
+// del registro se retiene durante la consulta. Aceptable: es I/O local, y serializa entre fibras.
+
+/// Convierte una celda SQLite a su representación de texto para la API `[[string]]`.
+#[cfg(not(target_arch = "wasm32"))]
+fn sqlite_value_str(v: rusqlite::types::ValueRef<'_>) -> String {
+    use rusqlite::types::ValueRef;
+    match v {
+        ValueRef::Null => String::new(),
+        ValueRef::Integer(i) => i.to_string(),
+        ValueRef::Real(f) => f.to_string(),
+        ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
+        ValueRef::Blob(b) => b.iter().map(|x| format!("{x:02x}")).collect(),
+    }
+}
+
+/// Abre (o crea) la base en `path` (`":memory:"` = en memoria) y devuelve un handle (M53.3).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn sqlite_open(path: &str) -> Result<i64, String> {
+    let conn = rusqlite::Connection::open(path).map_err(|e| e.to_string())?;
+    let mut reg = registry().lock().unwrap();
+    let id = reg.next;
+    reg.next += 1;
+    reg.open.insert(id, OpenHandle::Sqlite(conn));
+    Ok(id)
+}
+#[cfg(target_arch = "wasm32")]
+pub fn sqlite_open(_path: &str) -> Result<i64, String> { Err("SQLite no disponible en el playground web (wasm)".to_string()) }
+
+/// Recupera la conexión del handle o el error apropiado. Factoriza la validación de exec/query.
+#[cfg(not(target_arch = "wasm32"))]
+fn sqlite_conn(reg: &mut FileRegistry, h: i64) -> Result<&mut rusqlite::Connection, String> {
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Sqlite(conn)) => Ok(conn),
+        Some(_) => Err("el handle no es una conexión SQLite".to_string()),
+        None => Err("handle inválido o ya cerrado".to_string()),
+    }
+}
+
+/// Ejecuta una sentencia sin filas (INSERT/UPDATE/DDL/BEGIN/…) con parámetros posicionales (`?1`…)
+/// enlazados como texto; devuelve el número de filas afectadas (M53.3).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn sqlite_exec(h: i64, sql: &str, params: &[String]) -> Result<i64, String> {
+    let mut reg = registry().lock().unwrap();
+    let conn = sqlite_conn(&mut reg, h)?;
+    conn.execute(sql, rusqlite::params_from_iter(params.iter()))
+        .map(|n| n as i64)
+        .map_err(|e| e.to_string())
+}
+#[cfg(target_arch = "wasm32")]
+pub fn sqlite_exec(_h: i64, _sql: &str, _params: &[String]) -> Result<i64, String> { Err("SQLite no disponible en el playground web (wasm)".to_string()) }
+
+/// Ejecuta una consulta con filas; devuelve `(ncols, celdas)` con las celdas aplanadas fila a fila
+/// (el envoltorio raylang reconstruye el `[[string]]`) (M53.3).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn sqlite_query(h: i64, sql: &str, params: &[String]) -> Result<(usize, Vec<String>), String> {
+    let mut reg = registry().lock().unwrap();
+    let conn = sqlite_conn(&mut reg, h)?;
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let ncols = stmt.column_count();
+    let mut rows = stmt.query(rusqlite::params_from_iter(params.iter())).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    loop {
+        match rows.next() {
+            Ok(Some(row)) => {
+                // Copiar cada celda ANTES de avanzar: el texto de un ValueRef solo vive hasta el
+                // siguiente paso del statement.
+                for i in 0..ncols {
+                    out.push(sqlite_value_str(row.get_ref(i).map_err(|e| e.to_string())?));
+                }
+            }
+            Ok(None) => break,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok((ncols, out))
+}
+#[cfg(target_arch = "wasm32")]
+pub fn sqlite_query(_h: i64, _sql: &str, _params: &[String]) -> Result<(usize, Vec<String>), String> { Err("SQLite no disponible en el playground web (wasm)".to_string()) }
 
 // --- Cliente TCP (M15.2) ---
 //
@@ -837,6 +932,30 @@ pub fn tls_accept(h: i64, cert_pem: &str, key_pem: &str) -> Result<i64, String> 
 }
 #[cfg(target_arch = "wasm32")]
 pub fn tls_accept(_h: i64, _cert_pem: &str, _key_pem: &str) -> Result<i64, String> { Err("TLS no disponible en el playground web (wasm)".to_string()) }
+
+/// Envuelve un socket TCP plano YA CONECTADO (handle `h`) en una sesión TLS de **cliente** —
+/// el simétrico de `tls_accept`, para STARTTLS (Postgres sslRequest, MySQL caching_sha2
+/// full-path, SMTP…). Verifica el certificado del servidor contra `host` con la misma config
+/// (raíces Mozilla + SSL_CERT_FILE) que `tls_connect`. **Reusa el mismo handle**: el I/O
+/// existente se desvía solo a TLS vía `is_tls_handle`; el modo (no) bloqueante del socket se
+/// conserva (en la VM ya es no bloqueante → el handshake lo conduce el primer I/O, cediendo).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn tls_upgrade(h: i64, host: &str) -> Result<i64, String> {
+    let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|_| format!("nombre de servidor inválido para TLS: {host}"))?;
+    let client = rustls::ClientConnection::new(tls_client_config(), server_name)
+        .map_err(|e| e.to_string())?;
+    let mut reg = registry().lock().unwrap();
+    let sock = match reg.open.remove(&h) {
+        Some(OpenHandle::Tcp(s)) => s,
+        Some(otro) => { reg.open.insert(h, otro); return Err(format!("el handle {h} no es un socket TCP plano")); }
+        None => return Err(format!("handle inválido: {h}")),
+    };
+    reg.open.insert(h, OpenHandle::Tls(Box::new(TlsConn { conn: rustls::Connection::Client(client), sock })));
+    Ok(h)
+}
+#[cfg(target_arch = "wasm32")]
+pub fn tls_upgrade(_h: i64, _host: &str) -> Result<i64, String> { Err("TLS no disponible en el playground web (wasm)".to_string()) }
 
 /// ¿El handle `h` es una conexión TLS? Lo consultan los caminos de socket para desviarse al I/O TLS.
 /// M44a: en wasm nunca hay handles TLS (no se pueden crear) → siempre `false`, y los caminos TLS de
@@ -1351,6 +1470,47 @@ static BUILTINS: &[Builtin] = &[
         }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
+    // __char_from_code(n) -> [char] (diferido JSON-1): [] si n no es un code point válido.
+    // El prelude → char_from_code -> Option<char>. El inverso de char_code.
+    Builtin { name: "__char_from_code", opcode: OpCode::CharFromCode, check: |a| {
+        arity(a, 1, "__char_from_code", " (el code point)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__char_from_code espera un int, no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Char)))
+    } },
+    // --- Bits de float (M54.1): primitivos totales; `std/math` → float_bits/float_from_bits. ---
+    Builtin { name: "__float_bits", opcode: OpCode::FloatBits, check: |a| {
+        arity(a, 1, "__float_bits", " (el float)")?;
+        if a[0] != Type::Float { return Err((Some(0), format!("__float_bits espera un float, no {}", a[0]))); }
+        Ok(Type::Int)
+    } },
+    Builtin { name: "__float_from_bits", opcode: OpCode::FloatFromBits, check: |a| {
+        arity(a, 1, "__float_from_bits", " (los 64 bits como int)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__float_from_bits espera un int, no {}", a[0]))); }
+        Ok(Type::Float)
+    } },
+    // --- SQLite embebido (M53.3): primitivos con arreglo etiquetado; `db/sqlite` → Result. ---
+    // __sqlite_open(path) -> [string]: ["ok", handle] o ["err", msg].
+    Builtin { name: "__sqlite_open", opcode: OpCode::SqliteOpen, check: |a| {
+        arity(a, 1, "__sqlite_open", " (la ruta de la base)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__sqlite_open espera un string (la ruta), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __sqlite_exec(h, sql, params) -> [string]: ["ok", n_afectadas] o ["err", msg].
+    Builtin { name: "__sqlite_exec", opcode: OpCode::SqliteExec, check: |a| {
+        arity(a, 3, "__sqlite_exec", " (handle, sql, params)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__sqlite_exec espera un int (el handle), no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__sqlite_exec espera un string (el SQL), no {}", a[1]))); }
+        if a[2] != Type::Array(Box::new(Type::String)) { return Err((Some(2), format!("__sqlite_exec espera un [string] (los parámetros), no {}", a[2]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __sqlite_query(h, sql, params) -> [string]: ["ok", ncols, celdas…] o ["err", msg].
+    Builtin { name: "__sqlite_query", opcode: OpCode::SqliteQuery, check: |a| {
+        arity(a, 3, "__sqlite_query", " (handle, sql, params)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__sqlite_query espera un int (el handle), no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__sqlite_query espera un string (el SQL), no {}", a[1]))); }
+        if a[2] != Type::Array(Box::new(Type::String)) { return Err((Some(2), format!("__sqlite_query espera un [string] (los parámetros), no {}", a[2]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
     // __from_utf8(b) -> [string] (M16.1b): ["ok", s] o ["err", msg]. El prelude → Result<string,string>.
     Builtin { name: "__from_utf8", opcode: OpCode::FromUtf8, check: |a| {
         arity(a, 1, "__from_utf8", "")?;
@@ -1796,6 +1956,14 @@ static BUILTINS: &[Builtin] = &[
         if a[2] != Type::String { return Err((Some(2), format!("__tls_accept espera un string (la clave PEM), no {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // __tls_upgrade(h, host) -> [string] (diferido TLS): STARTTLS de cliente sobre un TCP plano;
+    // ["ok", handle] (el MISMO handle) o ["err", msg]. std/net → tls_upgrade.
+    Builtin { name: "__tls_upgrade", opcode: OpCode::TlsUpgrade, check: |a| {
+        arity(a, 2, "__tls_upgrade", " (handle, host)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__tls_upgrade espera un int (el handle), no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__tls_upgrade espera un string (el host), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
     // __socket_read(h) -> [string]: ["ok", datos] o ["err", msg]. Prelude → Result<string,string>.
     Builtin { name: "__socket_read", opcode: OpCode::SocketRead, check: |a| {
         arity(a, 1, "__socket_read", "")?;
@@ -1936,6 +2104,24 @@ mod tests {
         assert!(matches!((split.check)(&[Type::String]), Err((None, _))));
         // Tipo de un arg mal → error con el índice del argumento culpable.
         assert!(matches!((split.check)(&[Type::Int, Type::String]), Err((Some(0), _))));
+    }
+
+    /// M53.3: los helpers de SQLite (rusqlite) — abrir en memoria, exec con parámetros, query con
+    /// celdas aplanadas (NULL → ""), error SQL como valor, y close vía el registro común.
+    #[test]
+    fn sqlite_abre_ejecuta_y_consulta() {
+        let h = sqlite_open(":memory:").unwrap();
+        sqlite_exec(h, "CREATE TABLE t (id INTEGER, nombre TEXT, nota REAL)", &[]).unwrap();
+        let n = sqlite_exec(h, "INSERT INTO t VALUES (?1, ?2, ?3)", &["1".into(), "ada".into(), "9.5".into()]).unwrap();
+        assert_eq!(n, 1);
+        sqlite_exec(h, "INSERT INTO t (id, nombre) VALUES (?1, ?2)", &["2".into(), "grace".into()]).unwrap();
+        let (ncols, cells) = sqlite_query(h, "SELECT id, nombre, nota FROM t ORDER BY id", &[]).unwrap();
+        assert_eq!(ncols, 3);
+        assert_eq!(cells, vec!["1", "ada", "9.5", "2", "grace", ""]); // NULL → ""
+        // Error SQL = valor, no panic; handle cerrado = error claro.
+        assert!(sqlite_query(h, "SELECT * FROM no_existe", &[]).unwrap_err().contains("no_existe"));
+        close_handle(h);
+        assert!(sqlite_exec(h, "SELECT 1", &[]).unwrap_err().contains("inválido o ya cerrado"));
     }
 
     #[test]

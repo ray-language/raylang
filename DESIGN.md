@@ -6702,13 +6702,21 @@ versiones del índice y elegir la mayor compatible (MVS: la mínima que satisfac
 - **`ray add <nombre>[@<req>]`** — resuelve `<req>` (o la última) en el índice, **escribe** la dep en
   `ray.toml` y hace `fetch`. El azúcar de instalación que hoy falta.
 - **`ray publish`** — desde un proyecto: **valida** (tiene `name`/`version` en su `ray.toml`, es importable
-  —`mod.ray`/raíz—, **compila** con `ray build`), calcula el **hash de contenido** (`deps::hash_package`,
-  reusado de M39c-2b) y **genera la entrada de versión** para el índice. Publicar de verdad = *commit* +
+  —`mod.ray`/raíz—, todos los `.ray` lexean+parsean, y **supera el check semántico completo** (M51e):
+  se resuelven sus dependencias y la cara se carga+chequea con el checker sin exigir `main`) y calcula el
+  **hash de contenido** (`deps::hash_package`,
+  reusado de M39c-2b) — todo **sobre un clon limpio del tag publicado** (M51d), no sobre el working tree—,
+  y **genera la entrada de versión** para el índice. Publicar de verdad = *commit* +
   *push* al repo del índice (acción del autor, con sus credenciales git); el CLI produce/aplica el commit
   sobre un clon del índice. Rechaza sobrescribir una versión existente.
 - **`ray update`** (M51c) — recomputa el lock a las versiones más nuevas que aún satisfagan los requisitos.
 - **`ray yank <nombre>@<ver>`** (M51c) — marca `yanked = true` (un commit al índice); la resolución **salta**
   las yanked salvo que el `ray.lock` ya las hubiera fijado (no rompe builds existentes).
+- **`ray remove <nombre>`** (M51f) — la inversa de `add`: quita la dep de `ray.toml`, re-resuelve (el lock
+  se reescribe sin ella) y borra `.ray-deps/<nombre>` solo si el lock ya no la lista (podría seguir siendo
+  transitiva de otra dep).
+- **`ray search [patrón]`** (M51f) — lista los paquetes del índice (un `<nombre>.toml` por paquete) cuyo
+  nombre contenga el patrón, con su versión instalable más alta (final, no retirada — como `ray add`).
 
 ### 54.5 Fases
 
@@ -6749,6 +6757,66 @@ versiones del índice y elegir la mayor compatible (MVS: la mínima que satisfac
   ya la fijó la sigue usando). Tests offline (`tests/registry_cli.rs`): índice git `file://` clonado, lock
   que fija la versión + `update` que la sube, yank que excluye y `--undo` que restaura.
 
+- **M51d — endurecimiento. ✅ COMPLETO. → cierra la revisión de diseño (jul 2026).** Tres cierres de
+  seguridad/confianza detectados en la revisión del gestor+registro:
+  1. **Nombres de paquete validados** (`deps::valid_package_name`: alfanumérico ASCII + `-`/`_`, empezando
+     por alfanumérico). El nombre construye rutas (`.ray-deps/<nombre>`, `<índice>/<nombre>.toml`) y viene
+     también del `ray.toml` de **transitivas no confiables**: sin la valla, un nombre `../../x` escapaba de
+     la caché (y el camino de re-descarga hace `remove_dir_all` sobre esa ruta). Se valida en `ray add`,
+     en las deps directas, en cada transitiva (señalando al culpable) y en las APIs del índice (defensa en
+     profundidad).
+  2. **El hash del índice se VERIFICA** (antes se publicaba y parseaba pero nadie lo consultaba —decorativo—).
+     `resolve_pinned` devuelve el hash publicado de la versión elegida y `ensure` compara `hash_package` de lo
+     descargado contra él → el índice pasa de "descubrimiento" a **raíz de confianza** (cierra el TOFU del
+     lock, que confía en la primera descarga). Sin hash publicado no hay verificación (compat).
+  3. **`ray publish` valida y hashea el TAG, no el working tree** (`hash_publicado` en `cli.rs`): clona el
+     repo local en la ref publicada a un temporal —exactamente lo que un consumidor descargará—, exige la
+     cara del paquete en el clon, lexea+parsea **todos** los `.ray`, y hashea eso. Antes, cambios sin
+     commitear o archivos sueltos contaminaban el hash (y con la verificación de (2) habrían roto a los
+     consumidores).
+  4. **Índice remoto pinneado que no se queda obsoleto**: la caché `.ray-deps/.index` registra la spec con
+     la que se clonó (`.index.spec`) y **se re-clona si cambia** (URL o ref); `ray update` refresca un índice
+     con `@ref` vía `fetch` + re-checkout (el `git pull` de antes falla en checkout *detached*).
+  Tests: unit (`valida_nombres_de_paquete`) + 4 de integración offline (`registry_cli`: nombre malicioso
+  directo/transitivo, publish con working tree sucio + consumidor verde, hash del índice manipulado corta la
+  resolución con mensaje claro, índice re-cacheado al cambiar la spec).
+- **M51e — cierre de límites de v1. ✅ COMPLETO. → M51 COMPLETO (revisión cerrada).** Cierra H5/H6/H7 de
+  la revisión de jul 2026:
+  1. **Check semántico completo en `ray publish`** (cierra el diferido de M51d): `check_publicado`
+     (`cli.rs`) resuelve las **dependencias del clon del tag** (por el índice o git; escriben dentro del
+     temporal, DESPUÉS de calcular el hash), carga la cara con el loader (imports internos + deps + `std/`)
+     y la verifica con `check_all_modulo` (el checker **sin exigir `main`**: un paquete es una librería —el
+     mismo modo que usa el LSP para módulos). Un error se reporta contra su archivo y línea local
+     (`Loaded::locate`): "el paquete no supera el check semántico (mod.ray, línea N): …".
+  2. **Pre-releases** (`1.0.0-rc1`): `Version` pasa de tupla a struct con componente `pre` y orden semver
+     §11 (pre < final a triple igual; identificadores numéricos por valor, alfanuméricos ASCII, prefijo
+     corto menor). **Matching (regla de cargo)**: una pre-release solo casa si el requisito la menciona
+     explícitamente con el mismo triple (`^1.0` jamás elige `1.1.0-rc1`; `1.3.0-rc1` o `^1.3.0-rc1` sí);
+     `*` y `latest`/`ray add` sin versión eligen solo finales (con sugerencia si solo hay pre-releases).
+     `deps::semver` (refs git) deja de recortar la pre → `mvs` y el lock-pinning la ordenan/casan bien.
+     Una pre exige el triple completo (`1.0-rc1` es error: ambiguo).
+  3. **Aviso de *dependency confusion***: si una dependencia descargada declara su **propio**
+     `[registry] index` distinto del de este proyecto Y tiene deps por nombre, `ensure` avisa (sus
+     transitivas se resuelven contra el índice del CONSUMIDOR). Mitigan además el lock (URL+hash) y la
+     verificación del hash del índice (M51d).
+  Tests: unit (orden/matching de pre-releases, `semver` con pre) + 3 de integración offline
+  (`registry_cli`: publish rechaza un paquete que no chequea y acepta uno cuyo check resuelve una dep por
+  nombre; el caret y `ray add` excluyen la rc y el requisito explícito la instala; la transitiva con índice
+  propio avisa y corre).
+
+- **M51f — `ray remove` + `ray search` + limpieza de módulos. ✅ COMPLETO.** Cierra los dos diferidos de
+  ergonomía de §54.7: (1) **`ray remove <nombre>`** (`manifest::remove_dependency`, edición mínima línea a
+  línea como `upsert_dependency`) — quita la dep, **re-resuelve** (lock reescrito) y borra la caché
+  `.ray-deps/<nombre>` **solo si el lock ya no la lista** (`deps::locked_names`: la dep podría seguir
+  siendo transitiva de otra). (2) **`ray search [patrón]`** — enumera los `<nombre>.toml` del índice
+  (local o remoto cacheado), filtra por subcadena (case-insensitive) y muestra la versión instalable más
+  alta por paquete (`index::latest`: final, no retirada). (3) **Limpieza**: `index.rs` mezclaba dos
+  responsabilidades → el semver (`Version` + orden §11 + `VersionReq` + parsing, ~250 líneas que también
+  consume `deps.rs` para refs git y el CLI para validar en publish) se extrae a **`src/semver.rs`**;
+  `index.rs` queda solo con el índice (lectura/escritura/resolución). Tests: unit
+  (`remove_quita_la_dep_y_preserva_el_resto`) + 2 de integración offline (`registry_cli`: remove quita
+  manifiesto+lock+caché y falla claro si no está; search con patrón / completo / sin resultados).
+
 ### 54.6 Testing (offline y determinista, como M39c)
 
 El índice de prueba es un **repo git local** servido por `file://` (`git init` + archivos `index/*.toml` +
@@ -6759,4 +6827,373 @@ resolución en el front-end/CLI; los motores nunca ven un paquete.
 ### 54.7 Diferido (fuera de M51)
 
 Búsqueda/UI web del índice; cuentas y **firmas de publicación** (estilo sigstore) sobre el hash ya existente;
-mirrors/proxy; *namespaces* con dueño; `ray.lock` con el propio índice como fuente (hoy fija el commit git).
+mirrors/proxy; *namespaces* con dueño; `ray.lock` con el propio índice como fuente (hoy fija el commit git);
+**multi-índice** (hoy el índice es único por proyecto: una dep transitiva por
+nombre se resuelve contra el índice del CONSUMIDOR — M51e lo detecta y **avisa** cuando el paquete declara
+un índice propio; mitigan el lock (URL+hash) y la verificación del hash del índice). Los otros límites de la
+revisión de jul 2026 quedaron cerrados: pre-releases (M51e), check semántico al publicar (M51e) y
+`ray remove`/`ray search` (M51f).
+
+## 55. M53 — Clientes de bases de datos (`packages/db`)
+
+Plan completo y análisis de factibilidad en IDEAS.md §14. Resumen: MySQL (raylang puro, protocolo wire),
+Postgres (evolución del cliente de `packages/net`) y SQLite (embebido: primitivos del host sobre
+`rusqlite`, §55.3 — el plan FFI original se reformuló). Ubicación: paquete **`packages/db`** (tier 2; SQLite no
+es red → no encaja en `net`), con API uniforme tipada-a-texto v1: `connect -> Result<Conn>`,
+`query(c, sql) -> Result<[[string]]>`, `exec(c, sql) -> Result<int>` y `disconnect(c)` (no `close`: dentro
+del módulo taparía al builtin global que cierra el socket).
+
+### 55.1 M53.1 — cliente MySQL. ✅ COMPLETO
+
+`packages/db/mysql.ray` habla el protocolo cliente/servidor clásico sobre los sockets de `std/net` y la
+cripto de `std/crypto` (SHA1/SHA256, respaldadas por `ring` desde M43):
+
+- **Framing**: paquetes `[longitud:3 LE][secuencia:1][carga]`, sobre un **búfer de lectura** en la `Conn`
+  (`fill`/`take`: los sockets entregan trozos arbitrarios; el framing exige cantidades exactas — el mismo
+  problema que resolvió `redis.ray` con `read_n`, aquí sobre `bytes`). La secuencia se resetea a 0 por
+  comando y se rastrea por paquete leído.
+- **Handshake v10**: se parsea versión/thread-id/capacidades y el **scramble en dos partes** (8 + 12
+  octetos); la respuesta declara `CLIENT_PROTOCOL_41 | SECURE_CONNECTION | PLUGIN_AUTH` (+
+  `CONNECT_WITH_DB` si hay esquema).
+- **Auth**: `mysql_native_password` completa (`SHA1(pass) XOR SHA1(scramble + SHA1(SHA1(pass)))`) y
+  `caching_sha2_password` en su **fast-path** (`SHA256(pass) XOR SHA256(SHA256(SHA256(pass)) + scramble)`;
+  vale con la contraseña ya cacheada en el servidor). Soporta **AuthSwitchRequest** (recomputa para el
+  plugin pedido). El **full-path** de caching_sha2 exige TLS *upgrade* a mitad de conexión (SSLRequest) y
+  `std/net` solo cifra desde el octeto 0 (`tls_connect`) → error claro con el remedio. Diferido: un
+  primitivo `__tls_upgrade(handle)` habilitaría el full-path (y STARTTLS en general).
+- **Consultas**: `COM_QUERY` (protocolo de texto). `query` parsea el result set clásico (columna-count
+  length-encoded, definiciones de columna, EOF, filas de lenc-strings con `0xfb` = NULL → `""`, EOF);
+  `exec` lee el paquete OK (filas afectadas como lenc-int). Errores `ERR` (`0xff`) → `Result.Err` con el
+  mensaje del servidor (saltando el sqlstate).
+- **Gotcha de gramática** (documentado en CLAUDE.md como el struct-literal-vs-bloque): un literal de
+  **tupla en posición de tail tras un `while`** se parsea como *llamada* al bloque (`while {…} (v, 9)`) →
+  `return (v, 9);` explícito.
+
+**Verificación** (`tests/mysql_cli.rs`, patrón de `postgres_cli.rs`): servidor MySQL **de juguete** en el
+test (Rust std, TCP plano, sin cripto: scramble fijo + respuesta de auth **precomputada** con python) que
+verifica la auth octeto a octeto, sirve un result set con NULL, un OK de `exec` (3 filas afectadas) y un
+`ERR`; el cliente corre por **ambos motores** con stdout idéntico (oráculo conductual), más el caso de
+contraseña incorrecta (ERR de acceso denegado visible y exit 1). **Diferido** (fases siguientes o futuras):
+protocolo binario (prepared statements/parámetros/tipos), TLS, multi-result sets, `caching_sha2` full-path.
+
+Siguiente: **M53.2** (Postgres v2: conexión persistente + protocolo extendido) y **M53.3/53.4** (FFI
+out-params + SQLite).
+
+### 55.2 M53.2 — cliente PostgreSQL v2 (protocolo extendido). ✅ COMPLETO
+
+`packages/db/postgres.ray` evoluciona el cliente de una-consulta de `net/postgres.ray` (M32.1, simple
+query protocol, devolvía la primera fila) a una API con **conexión persistente** y el **protocolo
+extendido**:
+
+- **Conexión persistente**: `connect` hace startup + handshake SCRAM-SHA-256 (reusa `net/scram`:
+  AuthenticationSASL → SASLContinue → SASLFinal, verificando la firma del servidor) y deja la `Conn`
+  lista; `query`/`exec` la reusan; `disconnect` manda Terminate ('X'). El búfer de lectura va en la
+  `Conn` (un mensaje puede partirse entre lecturas, o venir varios juntos).
+- **Protocolo extendido** (`send_extended`): por consulta manda **Parse** ('P', el SQL con marcadores
+  `$1`/`$2`/…) → **Bind** ('B', los parámetros en **formato texto**, enlazados aparte del SQL →
+  **anti-inyección**) → **Describe** ('D', portal) → **Execute** ('E') → **Sync** ('S'); `collect_response`
+  drena '1'/'2'/'T' y recoge los **DataRow** ('D') hasta CommandComplete ('C') + ReadyForQuery ('Z').
+  `query` devuelve **todas** las filas (`[[string]]`, NULL → ""); `exec` saca las filas afectadas del tag
+  de CommandComplete ("INSERT 0 N"/"UPDATE N"/… → el último entero). Un ErrorResponse ('E') se decodifica
+  (campo 'M') y se drena hasta ReadyForQuery para no dejar la conexión a medias.
+- **Transacciones**: SQL corriente sobre la misma conexión (`exec(c, "BEGIN", [])` / `"COMMIT"` /
+  `"ROLLBACK"`) — la persistencia es lo que las hace útiles.
+- **Dependencia entre paquetes**: `db/postgres` importa `net/scram`. Con path-deps, el loader añade el
+  **padre** de la dep (`packages/`) como raíz de módulos, así `net/scram` resuelve como cápsula hermana
+  sin que el consumidor declare `net` aparte (ambas viven bajo `packages/`).
+
+**Verificación** (`tests/postgres_v2_cli.rs`): servidor PostgreSQL **de juguete** que hace SCRAM con los
+mismos valores **precomputados** que `postgres_cli.rs` y habla el protocolo extendido — **parsea el Bind,
+extrae los parámetros y los devuelve como primera fila** (prueba que el binding fluye: anti-inyección),
+sirve una segunda fila fija, un CommandComplete con filas afectadas para `exec`, y un ErrorResponse para
+"BOOM". El cliente corre por **ambos motores** con stdout idéntico (query multi-fila con params +
+BEGIN + INSERT con param + error). **Diferido**: parámetros binarios/tipados, sentencias preparadas con
+estado, TLS, COPY, multi-statement.
+
+### 55.3 M53.3 — primitivos SQLite sobre `rusqlite`. ✅ COMPLETO (REFORMULADO)
+
+El plan original era extender el FFI de M41 con *out-params* de doble puntero y envolver `libsqlite3`
+a mano. **Se reformuló con el giro a foco producción** (jul 2026): SQLite se integra como los builtins
+de cripto de M43 — una **dependencia Rust madura** (`rusqlite`, con `bundled`) expuesta como primitivos
+del host. La comparación que decidió:
+
+- **Seguridad**: envolver la API C a mano exponía por primera vez a raylang a segfaults reales
+  (use-after-finalize, lifetimes de `sqlite3_column_text`, destructores `SQLITE_TRANSIENT`). Con
+  `rusqlite` el borrow checker vigila todo eso y el peor caso vuelve a ser un `Result.Err`.
+- **Portabilidad**: `bundled` compila SQLite **dentro del binario** → sin `dlopen`, sin nombres de
+  librería por plataforma, sin test condicionado a que el sistema traiga `libsqlite3`, versión
+  determinista.
+- **Costo**: 3 opcodes + impls por motor (mecánico, patrón M11.4) vs. tocar checker+FFI+ambos motores
+  y decidir superficie nueva del lenguaje.
+
+La extensión FFI de out-params **queda como diferido propio** (IDEAS §14): se hará cuando aparezca la
+segunda librería C que la necesite, con un caso real guiando el diseño.
+
+**Primitivos** (`src/builtins.rs`, arreglo etiquetado como los de I/O; stubs en wasm — el playground no
+compila la librería C):
+
+- `__sqlite_open(path) -> [string]`: `["ok", handle]`/`["err", msg]`. La conexión vive en el **registro
+  común de handles** (`OpenHandle::Sqlite`) → `close(h)` la cierra (el `Drop` de `Connection` cierra la
+  base); un handle cerrado o de otro tipo da error claro.
+- `__sqlite_exec(h, sql, params: [string]) -> [string]`: `["ok", n_afectadas]`/`["err", msg]`.
+- `__sqlite_query(h, sql, params) -> [string]`: `["ok", ncols, celda0, …]` (celdas **aplanadas** fila a
+  fila; el envoltorio reconstruye) o `["err", msg]`.
+
+Parámetros posicionales `?1`, `?2`, … enlazados como **texto** (la afinidad de tipos de SQLite convierte).
+Celdas a texto: INTEGER/REAL → repr decimal, NULL → `""` (consistente con `db/mysql`), BLOB → hex. El
+ciclo prepare→bind→step→finalize ocurre **entero dentro de cada helper** (el statement jamás escapa) →
+sin use-after-finalize posible; cada celda se copia **antes** de avanzar (un `ValueRef` solo vive hasta
+el siguiente paso). Nota: la conexión no es clonable → el lock del registro se retiene durante la
+consulta (I/O local; serializa entre fibras).
+
+### 55.4 M53.4 — cliente `db/sqlite`. ✅ COMPLETO
+
+`packages/db/sqlite.ray`: la **misma API** que mysql/postgres — `connect(path) -> Result<Conn, string>`
+(`":memory:"` = en memoria), `query(c, sql, params) -> Result<[[string]], string>` (reconstruye las
+filas desde el arreglo aplanado), `exec -> Result<int, string>`, `disconnect` (libera el handle; usar
+la conexión después falla limpio, como valor). Transacciones = SQL corriente (`BEGIN`/`COMMIT`/
+`ROLLBACK`).
+
+**Verificación** (`tests/sqlite_cli.rs`): al ser embebida y `":memory:"` determinista, **no hay servidor
+de juguete** — oráculo conductual puro por ambos motores (DDL + INSERT con params + SELECT con NULL→"" +
+consulta con parámetro + transacción con ROLLBACK + error SQL como valor + uso tras disconnect), más el
+caso de ruta inválida (abrir un directorio → `Result.Err`). Demo autónomo `examples/db/sqlite_demo.ray`
+(corre sin servidor). **M53 COMPLETO**: los tres clientes (MySQL wire, PostgreSQL extendido, SQLite
+embebido) con API uniforme. Diferido: tipos nativos (celdas no-texto), `last_insert_rowid`, modo WAL.
+
+## 56. M54 — Cliente MongoDB (`packages/db/mongo`)
+
+Plan y factibilidad en IDEAS.md §15. Resumen: raylang puro (tier 2), auth = **SCRAM-SHA-256 vía SASL**
+(reusa `net/scram`, como Postgres), wire = **OP_MSG** (cabecera 16 bytes LE + flags + un documento
+BSON). La pieza central es BSON (§56.1). Superficie: `enum Bson` recursivo (no JSON strings — no hay
+parser JSON en el ecosistema y JSON pierde tipos). `_id` lo asigna el servidor (determinismo de los
+tests); `find` v1 = `firstBatch`.
+
+### 56.1 M54.1 — BSON. ✅ COMPLETO
+
+**(a) Habilitador — bits de float** (los primeros builtins nuevos tras M53): `__float_bits(float) ->
+int` / `__float_from_bits(int) -> float` (opcodes `FloatBits`/`FloatFromBits`; el f64 de Rust en ambos
+motores → oráculo `float_bits_oraculo`), expuestos como `math.float_bits`/`math.float_from_bits` en
+std/math. Totales (cualquier patrón de bits es un f64 válido). Los pedía el `double` de BSON —
+obligatorio para un cliente: el propio servidor responde `{ ok: 1.0 }` como double — y sirven a
+cualquier formato binario con doubles (protobuf).
+
+**(b) `packages/db/bson.ray`** — codificador/decodificador del formato de documentos de MongoDB
+(bsonspec.org), raylang puro:
+
+- **Representación**: `enum Bson { Double, Str, Doc([Field]), Arr([Bson]), Bin(bytes),
+  ObjectId(bytes), Bool, Null, Int }` + `struct Field { name, value }` + azúcar `field(name, v)`.
+  Recursivo vía el heap (`[Field]`/`[Bson]`).
+- **`Int` único**: codifica como int64 (0x12) y decodifica **ambos** (int32 0x10 e int64) a `Int` —
+  el int de raylang es i64. La fidelidad de round-trip es semántica, no de octetos.
+- **`encode(doc) -> bytes`**: documentos anidados por composición (`enc_doc` devuelve `[int]`); un
+  arreglo ES un documento con claves `"0"`, `"1"`, … (spec). `ObjectId` con longitud ≠ 12 = error del
+  programador → `panic`.
+- **`decode(bytes) -> Result<[Field], string>`**: errores como valores con la **posición del octeto**
+  (truncado, longitudes inválidas, string sin terminador, UTF-8 malo, tipo no soportado, datos
+  sobrantes). Cursor `struct Dec` mutado por referencia. **Gotcha aritmético**: un int64 LE no se arma
+  con `b[7] << 56` (desbordaría el i64) → por mitades `hi (int32 con signo) * 2^32 + lo` (exacto y
+  total); el int32 con signo se corrige restando 2^32.
+- **`dump`/`dump_doc`**: repr JSON-ish determinista (para depuración y el oráculo de los tests).
+
+**Verificación** (`tests/bson_cli.rs`, sin servidor): la codificación de `{"hello": "world"}`
+reproduce **byte a byte** el vector canónico de bsonspec.org; el segundo vector del spec
+(`{"BSON": ["awesome", 5.05, 1986]}`, double + int32) se decodifica; round-trip **exacto en octetos**
+de todos los tipos v1 (anidados, negativos, UTF-8 multi-byte, int64 > 2^53); errores como valores.
+Ambos motores, mismo stdout. Diferido: Date/Timestamp/Regex/Decimal128 (error claro al decodificar;
+se añadirán cuando el cliente los necesite).
+
+Siguiente: **M54.2** (conexión: OP_MSG + `hello` + auth SCRAM con toy server) → **M54.3** (CRUD + demo).
+
+### 56.2 M54.2 — conexión: OP_MSG + `hello` + auth SCRAM. ✅ COMPLETO
+
+`packages/db/mongo.ray` — la conexión autenticada, raylang puro sobre `db/bson` + `std/net`:
+
+- **Framing OP_MSG** (opCode 2013, MongoDB ≥ 3.6): `[longitud][requestID][responseTo][opCode]
+  [flagBits][kind=0][documento BSON]`. `send_msg` arma el sobre (flags 0, una sección kind 0);
+  `read_msg` acumula en el búfer de la `Conn` (una respuesta puede partirse entre lecturas), valida
+  opCode/kind y decodifica con `bson.decode`. **`run_command(c, doc)`** (pub) = enviar + leer: el
+  ladrillo de toda operación. `bson.get(fields, name)` (helper nuevo en db/bson) inspecciona las
+  respuestas; `ok` llega como **double 1.0** (por eso BSON necesitaba float_bits) y se acepta int.
+- **Auth = `net/scram` reusado tal cual** (la apuesta del plan, confirmada): MongoDB moderno hace
+  SCRAM-SHA-256 vía SASL — el mismo mecanismo que PostgreSQL, solo cambia el **sobre**: client-first/
+  client-final viajan como campo `payload` (binario) de los comandos `saslStart`/`saslContinue`
+  (con `$db`), y server-first/server-final vuelven en el `payload` de las respuestas. `connect` =
+  `hello` (mínimo v1: solo exige ok) → `saslStart` → `saslContinue` → **`scram_verify`** de la firma
+  del servidor (una clave mala se detecta EN EL CLIENTE aunque el servidor mienta con ok).
+- `disconnect` cierra el socket (el protocolo no tiene despedida). `Conn` lleva `req_id` y `db`.
+
+**Verificación** (`tests/mongo_cli.rs`): servidor MongoDB **de juguete** (Rust std, TCP plano) que
+habla OP_MSG con respuestas BSON armadas a mano y reusa las constantes SCRAM **precomputadas** del
+toy de PostgreSQL (mismo user/clave/nonce/sal/i → sin cripto en Rust). Cubre: conexión completa;
+**contraseña mala** (el proof difiere → la firma del servidor no verifica, camino del cliente);
+**usuario desconocido** (el servidor responde `ok: 0.0` + errmsg → el cliente lo surfacea). Ambos
+motores, mismo stdout. Diferido v1: negociación de `hello` (compresión/versiones), checksum OP_MSG,
+más de una sección. Siguiente: **M54.3** (CRUD: insert/find/update/delete + demo).
+
+### 56.3 M54.3 — CRUD. ✅ COMPLETO — **M54 COMPLETO**
+
+Las cuatro operaciones sobre `run_command` (cada una es un comando BSON con la colección en el campo
+homónimo y `$db` de la `Conn`):
+
+- **`insert(c, coll, docs: [[bson.Field]]) -> Result<int, string>`** (`n` insertados; `_id` lo asigna
+  el servidor — decisión de M54: sin ObjectId en cliente → sin aleatoriedad → tests deterministas).
+- **`find(c, coll, filter) -> Result<[[bson.Field]], string>`**: navega `cursor.firstBatch` del reply
+  (v1 sin `getMore`); cada elemento del batch debe ser un documento.
+- **`update(c, coll, filter, u, multi) -> Result<int, string>`** (`nModified`): el documento de
+  actualización lo arma el usuario (`{$set: {...}}` explícito — fiel al protocolo, sin azúcar que
+  esconda semántica).
+- **`delete(c, coll, filter) -> Result<int, string>`** (`n`; `limit: 0` = todas las coincidencias).
+
+Los filtros/documentos son `[bson.Field]` — **anti-inyección por construcción** (no hay string de
+consulta que interpolar). **Verificación** (`tests/mongo_cli.rs`, segundo test): el toy server sirve
+un cursor con firstBatch de dos documentos (uno sin campo → dump distinto), verifica que el documento
+insertado y el `$set` VIAJAN dentro del comando (el binding fluye), y responde `ok: 0.0` + errmsg para
+la colección `no_existe` (error del servidor como valor). Ambos motores, mismo stdout. Demo
+`examples/db/mongo_demo.ray`. **M54 COMPLETO**: el paquete `db` cubre MySQL (wire), PostgreSQL
+(extendido), SQLite (embebido) y MongoDB (documental). Diferido: `getMore`/cursores, tipos BSON
+Date/Timestamp/Decimal128, `char_from_code`+`\uXXXX` y puente Json↔Bson (IDEAS §16), TLS.
+
+### 56.4 Diferidos JSON (IDEAS §16) — `\uXXXX` + puente Json↔Bson. ✅ COMPLETOS
+
+**(a) Escapes `\uXXXX` en `std/json`.** La causa raíz era un hueco del lenguaje: existía `char_code`
+(M40.3a) pero no su inverso. Nuevo primitivo `__char_from_code(int) -> [char]` (opcode
+`CharFromCode`; `[]` si no es un code point válido — surrogates o fuera de [0, 10FFFF]; **guard de
+rango contra el wrap del cast a u32**: 2^32+65 NO es 'A') + envoltorio `char_from_code ->
+Option<char>` en el prelude. `std/json` parsea `\uXXXX` con **pares surrogate** para los astrales y
+errores como valores (surrogate suelto, par incompleto, dígito no hex). Oráculo
+`char_from_code_oraculo` + `escapes_unicode` en `tests/json_cli.rs`.
+
+**(b) Puente Json↔Bson en `db/bson`** (sobre `std/json`, que SÍ existía — M15.4a, embebido):
+`from_json` (número JSON → `Double`; claves ordenadas, el objeto es Map), `to_json` (degradación
+EXPLÍCITA, JSON es el sistema de tipos menor: `Int` → número con pérdida > 2^53, `ObjectId`/`Bin` →
+hex, orden de campos perdido) y `doc_from_json(s) -> Result<[Field], string>` — la ruta ergonómica
+para filtros: `mongo.find(c, coll, bson.doc_from_json("{\"nombre\": \"ada\"}")?)`, con el tope
+obligado a objeto. Test `bson_puente_json` (compone con los escapes: `"café"` → `café`).
+Diferido: Extended JSON riguroso ($oid/$numberLong).
+
+### 56.5 Diferido — cursores `getMore`. ✅ COMPLETO
+
+`find` deja de truncarse en el primer batch (el límite real: ~101 documentos con un servidor de
+verdad) y **agota el cursor**: lee `firstBatch` y, mientras el `cursor.id` de la respuesta sea ≠ 0,
+emite `getMore` (`{getMore: <id>, collection, $db}`; el id es un **int64** del wire — 0x12, justo lo
+que codifica nuestro `Int`) acumulando cada `nextBatch`, hasta que el servidor responde id 0 (cursor
+agotado). Refactor: `cursor_of`/`append_batch` (firstBatch y nextBatch comparten la extracción).
+**Verificación**: el toy server pagina en 3 rondas (firstBatch con id 77 → getMore 77 → nextBatch con
+id 88 → getMore 88 → nextBatch final con id 0), verificando que **cada id viaja** como int64 LE en el
+comando siguiente; un id desconocido responde error (código 43, CursorNotFound). Ambos motores.
+Diferido: `batchSize` configurable, `killCursors` (abandonar un cursor a medias).
+
+## 57. Diferido TLS — `tls_upgrade` (STARTTLS de cliente). ✅ COMPLETO
+
+El primitivo que faltaba del lado cliente: **envolver un socket TCP plano YA conectado en una sesión
+TLS de cliente** — el simétrico exacto de `tls_accept` (M19.4b, que ya hacía el upgrade del lado
+servidor). Habilita los protocolos que negocian en claro y luego suben a TLS: **Postgres
+`sslRequest`**, el **full-path de `caching_sha2_password` de MySQL** (mandar la contraseña en claro
+exige canal cifrado), SMTP STARTTLS, etc.
+
+- **`__tls_upgrade(h, host) -> [string]`** (opcode `TlsUpgrade`) + `net.tls_upgrade -> Result<int,
+  string>` en std/net. Verifica el certificado del servidor contra `host` con la misma config que
+  `tls_connect` (raíces Mozilla + `SSL_CERT_FILE`).
+- **Reusa el MISMO handle**: saca el `OpenHandle::Tcp` del registro y lo reinsierta como
+  `OpenHandle::Tls` con el mismo id → el I/O existente (`socket_read/write_bytes`) se desvía solo a
+  TLS vía `is_tls_handle`, cero cambios en los llamadores. Un handle que no es TCP plano (ya-TLS,
+  archivo, listener) da error limpio como valor.
+- **Modo del socket conservado**: en la VM el TCP ya es no bloqueante → el handshake lo conduce el
+  primer I/O cediendo la fibra (como `tls_accept`); en el intérprete, bloqueante (rustls::Stream).
+
+**Verificación** (`tests/tls_upgrade_cli.rs`): servidor STARTTLS de juguete (rustls + cert
+autofirmado de `tests/fixtures/`) — fase en claro (`STARTTLS` → `GO`), handshake TLS **sobre el mismo
+socket**, eco cifrado, y el doble-upgrade como error-valor. El cliente confía en la CA de prueba vía
+`SSL_CERT_FILE`. Ambos motores, mismo stdout. Siguiente natural (diferido): cablearlo en los
+clientes — `postgres.connect` con `sslRequest` y el full-path de MySQL.
+
+### 57.1 TLS cableado en el cliente PostgreSQL (`connect_tls`). ✅ COMPLETO
+
+Primer consumidor del primitivo: **`postgres.connect_tls(host, port, user, password, database,
+nonce)`**. Manda el **sslRequest** del protocolo por el socket plano (`[longitud=8][código
+80877103]`, sin octeto de tipo), espera el octeto `'S'` (un `'N'` = el servidor no soporta TLS →
+error como valor), hace `net.tls_upgrade(handle, host)` (verificación del cert contra `host`) y
+corre el startup + SCRAM de siempre **sobre el canal cifrado** — refactor: el cuerpo de `connect`
+se extrajo a `startup_and_auth(handle, …)`, compartido por ambos (el I/O se desvía solo por el tipo
+del handle → cero cambios en query/exec/disconnect).
+
+**Verificación** (`tests/postgres_v2_cli.rs`): los helpers del toy server se generalizaron de
+`&mut TcpStream` a `S: Read + Write` (`atender_stream`) → la MISMA sesión de juguete (SCRAM
+precomputado + protocolo extendido con eco de params) se sirve ahora también tras un handshake TLS
+real (rustls + cert de fixtures): el servidor valida el sslRequest octeto a octeto, responde 'S' y
+cifra. Cliente confía vía `SSL_CERT_FILE`. Ambos motores. Diferido: el full-path de
+`caching_sha2_password` de MySQL (mismo primitivo, protocolo distinto) y `sslmode` negociable
+(hoy: `connect` = nunca TLS, `connect_tls` = obligatorio).
+
+### 57.2 TLS cableado en el cliente MySQL (`connect_tls` + full-path). ✅ COMPLETO
+
+Segundo consumidor del primitivo, y el que **cierra el hueco de autenticación** de M53.1:
+`mysql.connect_tls(host, port, user, password, database)`.
+
+- **SSLRequest**: en MySQL el upgrade va A MITAD del handshake — tras leer el handshake v10 del
+  servidor, el cliente manda el paquete SSLRequest (= el **prefijo** de la respuesta: capacidades
+  con `CLIENT_SSL` (2048) + paquete máximo + charset + 23 reservados, truncada antes del usuario),
+  sube el MISMO socket con `net.tls_upgrade`, y manda la respuesta completa **cifrada** (la
+  secuencia de paquetes continúa: handshake=0, SSLRequest=1, respuesta=2 — la lleva la `Conn`).
+  Refactor: `connect`/`connect_tls` → `connect_opts(…, tls)`; el prefijo se comparte (`pre`).
+- **Full-path de `caching_sha2_password`**: con la caché fría el servidor responde
+  `AuthMoreData(0x04)`; ahora, si la conexión es TLS, el cliente manda la **contraseña en claro
+  (con NUL) por el canal cifrado** y sigue el OK/ERR. En claro, el error se mantiene pero el
+  remedio cambió: "usa connect_tls". (El intercambio RSA — full-path sin TLS — sigue diferido.)
+
+**Verificación** (`tests/mysql_cli.rs`): `read_pkt`/la fase de comandos se generalizaron sobre
+`Read`/`Read + Write` → el toy server TLS anuncia `caching_sha2_password`, **valida el SSLRequest
+octeto a octeto** (32 octetos, `CLIENT_SSL` encendido), hace el handshake rustls sobre el mismo
+socket, fuerza el full-auth y **verifica la contraseña en claro** recibida por TLS; contraseña mala
+→ ERR cifrado ("acceso denegado"). Después sirve la fase de comandos de siempre, cifrada. Ambos
+motores. **El hilo TLS de los clientes de bases de datos queda CERRADO** (Postgres §57.1 + MySQL
+§57.2; Mongo-TLS sería `tls_connect` desde el arranque — trivial, cuando haga falta).
+
+### 55.5 Protocolo binario de MySQL (prepared statements). ✅ COMPLETO
+
+Cierra la asimetría de seguridad del paquete `db`: MySQL era el único cliente sin anti-inyección
+por binding. **API**: `query(c, sql, params)` / `exec(c, sql, params)` (uniforme con postgres) —
+con `params` la sentencia se **prepara** (protocolo binario, una ronda COM_STMT_PREPARE →
+COM_STMT_EXECUTE → COM_STMT_CLOSE, como el portal anónimo de postgres); con `[]`, el COM_QUERY de
+texto de siempre (cero regresión, sin round-trip extra).
+
+- **Execute**: todos los parámetros se enlazan como `VAR_STRING` (texto; la afinidad del servidor
+  convierte), bitmap de NULLs a cero (la API no distingue NULL de ""), `lenc_of` (el inverso de
+  `lenc_int`).
+- **La fila binaria se decodifica POR TIPO de columna** (leído de su definición,
+  `col_type_flags`): ints de 1/2/4 con/sin signo (flag UNSIGNED), LONGLONG por mitades (b7<<56
+  desbordaría; UNSIGNED ≥ 2^63 se muestra envuelto — documentado), **FLOAT reconstruido desde sus
+  bits f32** (raylang solo tiene bits de f64 → mantisa + `math.pow(2, e)`, exacto), DOUBLE vía
+  `math.float_from_bits`, DATE/DATETIME/TIMESTAMP/TIME **empaquetados** (longitudes 0/4/7/11-12,
+  ceros → "0000-00-00", TIME acumula días en horas, micro `.%06d`), y el resto (DECIMAL/VARCHAR/
+  BLOB/JSON/…) length-encoded. Salida = texto → misma API `[[string]]` que el protocolo de texto.
+- **Gotchas del lenguaje cazados**: (1) un literal `[…]` en cola tras un if-sentencia se parsea
+  como INDEXACIÓN (mismo compromiso que las tuplas-como-llamada, §55.1) → `return` explícito;
+  (2) precedencia estilo C: `&` liga más flojo que `==` → `(flags & 32) != 0` necesita paréntesis.
+
+**Verificación** (`tests/mysql_cli.rs`): el toy server gana los tres comandos — el prepare cuenta
+los `?`, el execute **parsea el binding** (bitmap/tipos/valores lenc) y devuelve el parámetro como
+primera celda (el binding fluye), más una fila binaria con LONGLONG **negativo** (-5), DOUBLE
+(2.5), DATETIME empaquetado (2026-07-09 12:34:56), NULLs por bitmap (bits desplazados 2) y un
+datetime cero; INSERT preparado → OK; BOOM → ERR en el execute. Ambos motores, mismo stdout.
+Diferido: sentencias con estado (cachear el stmt_id), tipos binarios en los PARÁMETROS (hoy texto).
+
+### 56.6 Diferidos menores del arco DB (rowid · Date/Timestamp · Mongo-TLS). ✅ COMPLETOS
+
+Tres cierres pequeños de la lista consolidada de IDEAS §15:
+
+- **`sqlite.last_insert_rowid(c) -> Result<int, string>`**: raylang puro — `SELECT
+  last_insert_rowid()` sobre la MISMA conexión (el registro de handles la conserva) → cero soporte
+  del host. El modo WAL ya era posible sin código: `query(c, "PRAGMA journal_mode=WAL", [])` (los
+  PRAGMA que devuelven una fila van por `query`, no `exec`).
+- **BSON `Date` (0x09) y `Timestamp` (0x11)** en `db/bson`: dos variantes nuevas del enum (epoch-ms
+  UTC / crudo interno de replicación, ambos int64). `dump` renderiza la fecha como **ISO 8601 con
+  milisegundos** reusando `net/time` (from_epoch_millis + to_iso8601 — tercera cápsula de `net` que
+  `db` consume) y el timestamp como `(segundos, contador)`; `to_json` degrada a string ISO / número.
+  Round-trip exacto en octetos verificado. Sin esto, decodificar cualquier colección real con
+  campos de fecha daba "tipo BSON no soportado: 9".
+- **`mongo.connect_tls`**: MongoDB cifra desde el octeto 0 (NO es STARTTLS) → `net.tls_connect` y
+  la sesión entera (hello + SCRAM + comandos) corre sin cambios sobre el canal (refactor: `connect`/
+  `connect_tls` → `session(handle, …)`). Toy server TLS (rustls desde el accept) + find cifrado,
+  ambos motores. Con esto los TRES clientes de red del paquete tienen su variante TLS.

@@ -5,10 +5,12 @@ cambiar el lenguaje.
 
 ## Qué es
 
-raylang es un lenguaje de programación construido como **proyecto de aprendizaje**
-(no para producción): el objetivo es tocar todas las fases y problemáticas de
-construir un lenguaje. Host: **Rust**. Estáticamente tipado, orientado a
-expresiones, sintaxis de llaves.
+raylang es un lenguaje de programación. Nació como proyecto de aprendizaje (tocar
+todas las fases de construir un lenguaje); desde **julio 2026 el foco es
+PRODUCCIÓN REAL** (la etapa pedagógica está archivada): las decisiones se toman
+por mejor ingeniería, y las dependencias de Cargo son aceptables cuando lo son
+(precedentes: `ring` M43, `rusqlite` M53.3). Host: **Rust**. Estáticamente
+tipado, orientado a expresiones, sintaxis de llaves.
 
 ## Documentos-contrato (fuente de verdad — leer antes de tocar comportamiento)
 
@@ -84,8 +86,9 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
 
 ## Método de trabajo (IMPORTANTE)
 
-- Proyecto pedagógico: **avanzar UNA fase a la vez**, explicando el diseño y el
-  código a fondo mientras se escribe. No adelantarse a fases futuras.
+- **Avanzar UNA fase a la vez**, sin adelantarse a fases futuras. (Con el foco en
+  producción, la explicación didáctica extendida ya no es necesaria: nivel colega
+  senior.)
 - **Al terminar cada paso, preparar un commit** con los cambios de ese paso; el
   usuario lo autoriza. Conventional Commits en español (`feat(parser): ...`); cada
   commit debe compilar.

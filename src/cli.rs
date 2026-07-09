@@ -49,6 +49,8 @@ fn run() {
         Some("build") => cmd_build(&rest[1..]),
         Some("test") => cmd_test_sub(&rest[1..]),
         Some("add") => cmd_add(&rest[1..]),
+        Some("remove") => cmd_remove(&rest[1..]),
+        Some("search") => cmd_search(&rest[1..]),
         Some("publish") => cmd_publish(&rest[1..]),
         Some("update") => cmd_update(&rest[1..]),
         Some("yank") => cmd_yank(&rest[1..]),
@@ -78,6 +80,8 @@ Uso: ray <subcomando> [opciones]
   build [archivo]   chequea y compila sin ejecutar (0 ok / 65 error)
   test [archivo]    corre las funciones @test [filtro]
   add <nombre>[@req]  añade una dependencia del índice a ray.toml y la descarga
+  remove <nombre>   elimina una dependencia de ray.toml (y su caché si nadie más la usa)
+  search [patrón]   lista los paquetes del índice (que contengan el patrón)
   publish [--repo S]  publica la versión de este paquete en el índice
   update            re-resuelve las dependencias del índice a las más nuevas compatibles
   yank <nom>@<ver>  retira (o --undo restaura) una versión publicada en el índice
@@ -216,6 +220,11 @@ fn cmd_add(args: &[String]) {
         eprintln!("uso: ray add <nombre>[@<versión>]");
         process::exit(64);
     }
+    // M51d: el nombre construye rutas (caché, archivo del índice) — validarlo antes de nada.
+    if !crate::deps::valid_package_name(name) {
+        eprintln!("nombre de paquete inválido '{name}': solo letras, dígitos, '-' y '_'");
+        process::exit(64);
+    }
     let Some(m) = load_manifest() else {
         eprintln!("no hay proyecto: falta 'ray.toml' (crea uno con 'ray new')");
         process::exit(64);
@@ -279,12 +288,120 @@ fn cmd_add(args: &[String]) {
     }
 }
 
+/// `ray remove <nombre>`: elimina una dependencia de `ray.toml` (M51f, la operación inversa de
+/// `ray add`), **re-resuelve** el grafo (reescribe `ray.lock` sin ella) y borra su caché
+/// `.ray-deps/<nombre>` **solo si ya nadie la usa** (podría seguir siendo transitiva de otra dep;
+/// el `ray.lock` recién escrito es quien lo sabe).
+fn cmd_remove(args: &[String]) {
+    let Some(name) = args.first().map(String::as_str) else {
+        eprintln!("uso: ray remove <nombre>");
+        process::exit(64);
+    };
+    if !crate::deps::valid_package_name(name) {
+        eprintln!("nombre de paquete inválido '{name}': solo letras, dígitos, '-' y '_'");
+        process::exit(64);
+    }
+    let Some(m) = load_manifest() else {
+        eprintln!("no hay proyecto: falta 'ray.toml'");
+        process::exit(64);
+    };
+    let toml_path = m.root.join("ray.toml");
+    let src = match fs::read_to_string(&toml_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("no se pudo leer '{}': {e}", toml_path.display());
+            process::exit(66);
+        }
+    };
+    let Some(updated) = crate::manifest::remove_dependency(&src, name) else {
+        eprintln!("la dependencia '{name}' no está declarada en ray.toml");
+        process::exit(65);
+    };
+    if let Err(e) = fs::write(&toml_path, &updated) {
+        eprintln!("no se pudo escribir '{}': {e}", toml_path.display());
+        process::exit(73);
+    }
+    println!("dependencia '{name}' eliminada de ray.toml");
+    // Re-resolver con el manifiesto ya editado: reescribe `ray.lock` sin la dep (o con ella si
+    // sigue siendo transitiva de otra). Después, la caché se borra solo si el lock ya no la lista.
+    match crate::manifest::Manifest::load(&m.root) {
+        Ok(Some(m2)) => {
+            if let Err(e) = crate::deps::ensure(&m2) {
+                eprintln!("error re-resolviendo dependencias: {e}");
+                process::exit(65);
+            }
+            let cache = m.root.join(".ray-deps").join(name);
+            if cache.is_dir() && !crate::deps::locked_names(&m.root).iter().any(|n| n == name) {
+                let _ = fs::remove_dir_all(&cache);
+                println!("caché '.ray-deps/{name}' eliminada");
+            }
+        }
+        Ok(None) | Err(_) => {} // el manifiesto acaba de escribirse; improbable
+    }
+}
+
+/// `ray search [patrón]`: lista los paquetes del **índice** (M51f) cuyo nombre contenga el patrón
+/// (sin patrón, todos), con su versión instalable más alta (final, no retirada — como `ray add`).
+/// El índice se localiza como siempre (`RAY_INDEX`/`[registry] index`; el remoto se clona/cachea).
+fn cmd_search(args: &[String]) {
+    let pattern = args.first().map(|s| s.to_lowercase()).unwrap_or_default();
+    let Some(m) = load_manifest() else {
+        eprintln!("no hay proyecto: falta 'ray.toml' (para localizar el índice)");
+        process::exit(64);
+    };
+    let index = match crate::deps::index_dir(&m) {
+        Ok(Some(dir)) => dir,
+        Ok(None) => {
+            eprintln!("no hay índice configurado ('[registry] index' o RAY_INDEX)");
+            process::exit(65);
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            process::exit(65);
+        }
+    };
+    let entries = match fs::read_dir(&index) {
+        Ok(rd) => rd,
+        Err(e) => {
+            eprintln!("no se pudo listar el índice '{}': {e}", index.display());
+            process::exit(66);
+        }
+    };
+    // Un paquete = un `<nombre>.toml` en el índice (se ignora cualquier otro archivo del repo).
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            let name = (p.extension().is_some_and(|x| x == "toml"))
+                .then(|| p.file_stem()?.to_str().map(str::to_string))
+                .flatten()?;
+            (crate::deps::valid_package_name(&name) && name.to_lowercase().contains(&pattern))
+                .then_some(name)
+        })
+        .collect();
+    names.sort();
+    if names.is_empty() {
+        println!("sin resultados en el índice{}", if pattern.is_empty() { String::new() } else { format!(" para '{pattern}'") });
+        return;
+    }
+    for name in &names {
+        match crate::index::latest(&index, name) {
+            Ok(v) => println!("{name} {v}"),
+            Err(_) => println!("{name} (sin versión instalable)"),
+        }
+    }
+    println!("{} paquete(s)", names.len());
+}
+
 /// `ray publish [--repo <git+URL@ref>]`: publica la versión de este paquete en el índice (M51b).
-/// Valida (name+version semver, la cara del paquete —`mod.ray` o la entrada— parsea), calcula el
-/// **hash de contenido** (`deps::hash_package`) y **añade** la entrada de versión al índice, de forma
-/// **inmutable** (no sobrescribe). La spec git de dónde vive el código: `--repo` si se da, o se deriva
-/// del remoto `origin` del repo + el tag `v<version>` (que debe existir). El índice se localiza como
-/// en `ray add` (`RAY_INDEX`/`[registry] index`). No hace commit/push del índice —eso lo hace el autor.
+/// Valida (name+version semver) y **añade** la entrada de versión al índice, de forma **inmutable**
+/// (no sobrescribe). La spec git de dónde vive el código: `--repo` si se da, o se deriva del remoto
+/// `origin` del repo + el tag `v<version>` (que debe existir). **M51d**: la validación (la cara del
+/// paquete existe, todos los `.ray` lexean+parsean) y el **hash de contenido** se calculan sobre un
+/// **clon limpio de la ref publicada** (el tag), NO sobre el working tree — lo que se avala en el
+/// índice es EXACTAMENTE lo que un consumidor descargará (cambios sin commitear no contaminan el
+/// hash). El índice se localiza como en `ray add` (`RAY_INDEX`/`[registry] index`). No hace
+/// commit/push del índice —eso lo hace el autor.
 fn cmd_publish(args: &[String]) {
     let repo_override = match args.split_first() {
         Some((flag, rest)) if flag == "--repo" => match rest.first() {
@@ -300,32 +417,14 @@ fn cmd_publish(args: &[String]) {
         eprintln!("no hay proyecto: falta 'ray.toml' (crea uno con 'ray new')");
         process::exit(64);
     };
-    // Validación: version semver.
-    if crate::index::parse_version(&m.version).is_none() {
-        eprintln!("la versión del paquete '{}' no es semver válido: '{}'", m.name, m.version);
+    // Validación: nombre válido (construye rutas en índice/caché, M51d) + version semver.
+    if !crate::deps::valid_package_name(&m.name) {
+        eprintln!("nombre de paquete inválido '{}': solo letras, dígitos, '-' y '_'", m.name);
         process::exit(65);
     }
-    // Validación: la cara del paquete (mod.ray en la raíz, o la entrada) parsea.
-    let face = {
-        let mod_ray = m.root.join("mod.ray");
-        if mod_ray.is_file() { mod_ray } else { m.entry_path() }
-    };
-    match fs::read_to_string(&face) {
-        Ok(src) => {
-            if let Ok(tokens) = crate::lexer::lex(&src) {
-                if let Err(e) = crate::parser::parse(tokens) {
-                    eprintln!("el paquete no parsea ('{}'): {e}", face.display());
-                    process::exit(65);
-                }
-            } else {
-                eprintln!("el paquete no lexea ('{}')", face.display());
-                process::exit(65);
-            }
-        }
-        Err(e) => {
-            eprintln!("no se pudo leer la cara del paquete '{}': {e}", face.display());
-            process::exit(66);
-        }
+    if crate::semver::parse_version(&m.version).is_none() {
+        eprintln!("la versión del paquete '{}' no es semver válido: '{}'", m.name, m.version);
+        process::exit(65);
     }
     // Spec git: la dada, o derivada de `origin` + tag `v<version>`.
     let git_spec = match repo_override {
@@ -353,11 +452,13 @@ fn cmd_publish(args: &[String]) {
             process::exit(65);
         }
     };
-    // Hash de contenido del paquete (advisory; el lock del consumidor lo re-verifica).
-    let hash = match crate::deps::hash_package(&m.root) {
+    // M51d: validar y hashear el **contenido de la ref publicada** (clon limpio del repo local en
+    // el tag), no el working tree — el hash del índice debe corresponder a lo que el consumidor
+    // descargará; cambios sin commitear o archivos sueltos no cuentan.
+    let hash = match hash_publicado(&m, &git_spec) {
         Ok(h) => h,
         Err(e) => {
-            eprintln!("no se pudo hashear el paquete: {e}");
+            eprintln!("{e}");
             process::exit(65);
         }
     };
@@ -376,6 +477,102 @@ fn cmd_publish(args: &[String]) {
             process::exit(65);
         }
     }
+}
+
+/// M51d: valida y hashea el **contenido publicado** de un paquete: clona el repo local (`m.root`)
+/// haciendo checkout de la ref de `git_spec` en un directorio temporal —exactamente lo que un
+/// consumidor obtendrá—, comprueba que la cara del paquete existe (`mod.ray` o la entrada), que
+/// **todos** los `.ray` lexean y parsean, y (M51e) que el paquete **supera el check semántico
+/// completo** (carga la cara con el loader —resolviendo antes sus dependencias, si las declara— y
+/// lo verifica con el checker, sin exigir `main`). Devuelve su `deps::hash_package` — calculado
+/// ANTES de resolver las deps del clon, que escriben `.ray-deps/`/`ray.lock` dentro y no son parte
+/// del contenido. El clon temporal se borra siempre.
+fn hash_publicado(m: &crate::manifest::Manifest, git_spec: &str) -> Result<String, String> {
+    let spec = crate::deps::parse_spec(git_spec)?;
+    let tmp = std::env::temp_dir().join(format!("ray-publish-{}-{}", m.name, process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    // Clon del repo LOCAL en la ref publicada (para --repo, la ref debe existir también aquí).
+    crate::deps::fetch(&m.name, &crate::deps::GitSpec { url: m.root.to_string_lossy().into_owned(), git_ref: spec.git_ref.clone() }, &tmp)
+        .map_err(|e| {
+            format!(
+                "no se pudo obtener el contenido de la ref '{}' desde el repo local (el contenido \
+                 publicado se valida y hashea desde un clon limpio): {e}",
+                spec.git_ref
+            )
+        })?;
+    let result = (|| {
+        // La cara del paquete debe existir EN EL CLON (no solo en el working tree).
+        let face = if tmp.join("mod.ray").is_file() { tmp.join("mod.ray") } else { tmp.join(&m.entry) };
+        if !face.is_file() {
+            return Err(format!(
+                "el contenido de '{}' no tiene cara de paquete: falta 'mod.ray' (o la entrada '{}'); \
+                 ¿olvidaste commitearla antes de taggear?",
+                spec.git_ref, m.entry
+            ));
+        }
+        // Todos los .ray publicados deben lexear y parsear (también los no importados por la cara).
+        let mut files: Vec<(String, std::path::PathBuf)> = Vec::new();
+        crate::deps::collect_files(&tmp, &tmp, &mut files)?;
+        for (rel, abs) in files.iter().filter(|(r, _)| r.ends_with(".ray")) {
+            let src = fs::read_to_string(abs)
+                .map_err(|e| format!("no se pudo leer '{rel}' del contenido publicado: {e}"))?;
+            let tokens = crate::lexer::lex(&src)
+                .map_err(|e| format!("'{rel}' del contenido publicado no lexea: {e}"))?;
+            crate::parser::parse(tokens)
+                .map_err(|e| format!("'{rel}' del contenido publicado no parsea: {e}"))?;
+        }
+        // El hash, ANTES del check: resolver deps escribe `.ray-deps/`/`ray.lock` dentro del clon.
+        let hash = crate::deps::hash_package(&tmp)?;
+        check_publicado(&tmp, &face)?;
+        Ok(hash)
+    })();
+    let _ = fs::remove_dir_all(&tmp);
+    result
+}
+
+/// M51e: el **check semántico completo** del contenido a publicar (cierra el diferido de M51d):
+/// resuelve las dependencias que el clon declare (por el índice o por git; escriben dentro del
+/// clon temporal), carga la cara con el loader (imports internos + deps + `std/` embebida) y la
+/// verifica con `check_all_modulo` (el checker SIN exigir `main`: un paquete es una librería).
+/// Un error se reporta contra su archivo y línea local (vía `Loaded::locate`).
+fn check_publicado(tmp: &Path, face: &Path) -> Result<(), String> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if tmp.join("ray.toml").is_file()
+        && let Ok(Some(mc)) = crate::manifest::Manifest::load(tmp)
+    {
+        if mc.dependencies.iter().any(|(_, s)| crate::deps::path_of_path_dep(s).is_none()) {
+            crate::deps::ensure(&mc).map_err(|e| {
+                format!("no se pudieron resolver las dependencias del paquete para el check: {e}")
+            })?;
+        }
+        let cache = mc.root.join(".ray-deps");
+        if cache.is_dir() {
+            roots.push(cache);
+        }
+        // Path-deps del paquete (raras al publicar, pero el check las honra igual que `ray run`).
+        for (_n, s) in &mc.dependencies {
+            if let Some(p) = crate::deps::path_of_path_dep(s) {
+                let dir = mc.root.join(p);
+                if let Some(parent) = dir.parent().map(Path::to_path_buf)
+                    && dir.exists()
+                    && !roots.contains(&parent)
+                {
+                    roots.push(parent);
+                }
+            }
+        }
+    }
+    let mut loaded = crate::loader::load_with_deps(face, &roots)
+        .map_err(|e| format!("el paquete no carga: {}", e.message))?;
+    let errors = crate::checker::check_all_modulo(&mut loaded.program);
+    if let Some(e) = errors.first() {
+        let (modulo, _fuente, linea) = loaded.locate(e.line);
+        return Err(format!(
+            "el paquete no supera el check semántico ({modulo}.ray, línea {linea}): {}",
+            e.msg
+        ));
+    }
+    Ok(())
 }
 
 /// Deriva la spec git de un paquete a publicar: `git+<origin>@v<version>`, tomando la URL del remoto
@@ -624,34 +821,11 @@ fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
 /// como cápsula; el loader busca ahí tras la raíz del proyecto. Sin proyecto ni caché, `[]`
 /// (comportamiento idéntico a antes: el loader resuelve solo contra la raíz del archivo).
 fn dependency_roots() -> Vec<PathBuf> {
+    // M40.8a: caché `.ray-deps/` + el padre de cada dependencia por ruta. La lógica vive en
+    // `deps::dependency_roots_for` (compartida con el LSP → un archivo diagnostica con las MISMAS
+    // raíces con las que corre). La stdlib no es raíz de disco: va embebida (M40.5).
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let root = Manifest::find(&cwd)
-        .and_then(|toml| toml.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| cwd.clone());
-    let cache = root.join(".ray-deps");
-    let mut roots = Vec::new();
-    if cache.is_dir() {
-        roots.push(cache);
-    }
-    // M40.8a: dependencias por **ruta local** (`nombre = "path:<dir>"`). No se descargan; la carpeta del
-    // paquete se registra como raíz de módulos, así `import <nombre>;` resuelve `<dir>/mod.ray` (cápsula)
-    // como cualquier dependencia. Se añade el **padre** de `<dir>` (el loader busca `<raíz>/<nombre>/…`).
-    if let Ok(Some(m)) = Manifest::load(&cwd) {
-        for (_name, spec) in &m.dependencies {
-            if let Some(p) = crate::deps::path_of_path_dep(spec) {
-                let dir = m.root.join(p);
-                if let Some(parent) = dir.parent().map(Path::to_path_buf)
-                    && dir.exists()
-                    && !roots.contains(&parent)
-                {
-                    roots.push(parent);
-                }
-            }
-        }
-    }
-    // La biblioteca estándar (`import std/…`) ya no es una raíz de disco: desde M40.5 va **embebida**
-    // en el binario (`crate::stdlib`, auto-contención), y el loader la resuelve antes que el filesystem.
-    roots
+    crate::deps::dependency_roots_for(&cwd)
 }
 
 /// Carga el manifiesto del proyecto que contiene el directorio actual. `None` si no hay

@@ -91,6 +91,25 @@ pub fn tls_accept(handle: int, cert: string, key: string) -> Result<int, string>
     }
 }
 
+// STARTTLS de cliente (diferido TLS): envuelve un socket TCP plano YA conectado en una sesión TLS,
+// verificando el certificado del servidor contra `host`. Reusa el MISMO handle (el simétrico de
+// tls_accept). Habilita los protocolos que negocian en claro y luego suben a TLS (Postgres
+// sslRequest, MySQL caching_sha2 full-path, SMTP STARTTLS…).
+/// Upgrades an already-connected plain TCP socket to a client-side TLS session (STARTTLS),
+/// verifying the server certificate against `host`; `Ok(handle)` (the same handle) or
+/// `Err(message)`. The counterpart of `tls_accept`.
+pub fn tls_upgrade(handle: int, host: string) -> Result<int, string> {
+    let r = __tls_upgrade(handle, host);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("handle inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
 // Hace una lectura del socket; Ok(datos) ("" = EOF) u Err(mensaje).
 /// Performs one read from the socket; `Ok(data)` (empty string = EOF) or `Err(message)`.
 pub fn socket_read(h: int) -> Result<string, string> {

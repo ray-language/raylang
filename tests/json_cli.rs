@@ -69,6 +69,32 @@ fn main() -> int {
 }
 
 #[test]
+fn escapes_unicode() {
+    // Diferido JSON-1: \uXXXX — BMP de 1 y 2 octetos UTF-8, par surrogate (astral), y los
+    // errores como valores: surrogate suelto, par incompleto, dígito no hex.
+    let driver = r#"
+from json import parse, stringify, Json;
+fn reporta(s: string) {
+    match (parse(s)) {
+        Result.Ok(j) => { print(stringify(j)); },
+        Result.Err(e) => { print("err: " + e); },
+    }
+}
+fn main() -> int {
+    reporta("\"caf\\u00e9\"");
+    reporta("\"\\u0041\\u2764\"");
+    reporta("\"\\ud83d\\ude00\"");
+    reporta("\"\\udc00\"");
+    reporta("\"\\ud83dx\"");
+    reporta("\"\\u12g4\"");
+    0
+}
+"#;
+    let esperado = "\"café\"\n\"A❤\"\n\"😀\"\nerr: escape \\u con surrogate suelto\nerr: par surrogate incompleto en \\u\nerr: escape \\u con dígito no hexadecimal";
+    check("unicode", driver, esperado);
+}
+
+#[test]
 fn vacios_y_anidamiento() {
     let driver = r#"
 from json import parse, stringify;

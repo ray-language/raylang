@@ -1,0 +1,63 @@
+// Demo del cliente PostgreSQL v2 (M53.2, `db/postgres`). Se conecta con SCRAM-SHA-256, ejecuta una
+// consulta con **parámetros** (`$1` enlazado aparte del SQL → anti-inyección), muestra las filas,
+// hace un INSERT dentro de una transacción y se despide. Usa el protocolo extendido.
+//
+// Uso (necesita un servidor PostgreSQL de verdad):
+//   cd examples/db
+//   ray run postgres_demo.ray <host> <puerto> <usuario> <contraseña> <base>
+//
+// Ejemplo contra un PostgreSQL local:
+//   ray run postgres_demo.ray 127.0.0.1 5432 raylang secret test
+
+import db/postgres;
+
+fn main() -> int {
+    let a = args();
+    if (a.len() < 5) {
+        print("uso: ray run postgres_demo.ray <host> <puerto> <usuario> <contraseña> <base>");
+        return 64;
+    }
+    let host = a[0];
+    let port = match (parse_int(a[1])) {
+        Option.Some(p) => p,
+        Option.None => { print("puerto inválido: " + a[1]); return 64; },
+    };
+
+    // 1. Conectar (startup + SCRAM-SHA-256). El nonce sería aleatorio en producción.
+    var c = match (postgres.connect(host, port, a[2], a[3], a[4], "clientnonce123456")) {
+        Result.Ok(conn) => conn,
+        Result.Err(e) => { print("no se pudo conectar: " + e); return 1; },
+    };
+    print("conectado a PostgreSQL en " + host + ":" + to_string(port));
+
+    // 2. Consultar con un parámetro ($1). El valor va en el mensaje Bind, no interpolado en el SQL.
+    match (postgres.query(c, "SELECT id, nombre FROM usuarios WHERE nombre = $1", ["ada"])) {
+        Result.Ok(rows) => {
+            print("usuarios llamados 'ada' (" + to_string(rows.len()) + "):");
+            for fila in rows {
+                print("  " + fila.join(" | "));
+            }
+        },
+        Result.Err(e) => { print("error en la consulta: " + e); },
+    }
+
+    // 3. Insertar dentro de una transacción (BEGIN / INSERT con parámetro / COMMIT).
+    let _ = postgres.exec(c, "BEGIN", []);
+    match (postgres.exec(c, "INSERT INTO usuarios (nombre) VALUES ($1)", ["grace"])) {
+        Result.Ok(n) => {
+            print("filas insertadas: " + to_string(n));
+            let _ = postgres.exec(c, "COMMIT", []);
+            print("transacción confirmada");
+        },
+        Result.Err(e) => {
+            print("error en el insert: " + e);
+            let _ = postgres.exec(c, "ROLLBACK", []);
+            print("transacción revertida");
+        },
+    }
+
+    // 4. Despedirse (Terminate + cerrar el socket).
+    postgres.disconnect(c);
+    print("desconectado");
+    0
+}

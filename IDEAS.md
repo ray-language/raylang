@@ -394,6 +394,23 @@ bloquea nada y se hace de forma incremental, midiendo con `benchmarks/`.
     (Opt.1/2/4/7) ya están exprimidas. El salto restante sería algorítmico (locales en la pila estilo clox,
     reducir el coste de llamada/GC), refactor grande de ROI decreciente. **M29.3 cerrado** con el dedup + este
     registro. La VM sigue a ~3.2× del intérprete.
+- **REGRESIÓN detectada (revisión jul 2026, `measure.py` mejor-de-15): arrays +38 % / gcnested +39 %**
+  (fib/loop intactos). **Bisecada a M48.4** (builtins de contenedor → métodos de trait): `a.push(i)`/`a.len()`
+  ya no bajan al opcode directo (`Push`/`Len`) sino al método del trait (`impl<T> Push<T> for [T]`), cuyo
+  cuerpo es un *forwarder* de una línea a `__push`/`__len` → cada push/len paga **una llamada VM completa
+  (marco + call + return) para ejecutar UN opcode**. M38 exonerado (medido ≈ baseline en `233532f`).
+  - ✅ **M52 — inlining de forwarders triviales, COMPLETO** (jul 2026): pase `inline_forwarders` en el
+    checker (paso 8 de `check`, tras todo el lowering → beneficia a AMBOS motores, oráculo intacto): si el
+    destino de una llamada es un método **manglado** (`Tipo#metodo`; un local no puede llamarse así) cuyo
+    cuerpo es **exactamente una llamada a builtin pasando sus params en orden** (`fn push(self, x) {
+    __push(self, x) }`), el sitio se reescribe a la llamada al builtin (`__push(a, i)`) → la VM emite el
+    opcode directo y el intérprete se ahorra el marco. El forwarder NO se elimina (sigue referenciable como
+    valor: vtables de `dyn`, diccionarios). **Guarda de sonoridad**: el compilador resuelve variable-local
+    antes que builtin → si el programa liga una variable con el nombre de un builtin objetivo (`let __push
+    = …`, legal), ese builtin se excluye del inlining (aproximación programa-completo, coste cero en la
+    práctica). **Medido (`measure.py` mejor-de-15): arrays 0.250 → 0.184 s, gcnested 0.403 → 0.291 s —
+    regresión de M48.4 recuperada al completo** (≈ baseline pre-M48.4; fib/loop sin cambio). Baseline
+    actualizada. Los traits siguen siendo la superficie del lenguaje; solo desaparece del código generado.
 
 ## 12. Asperezas de M3
 
@@ -452,11 +469,140 @@ ortogonal y se añade después sobre el mismo índice git).
 - **`ray.toml` por nombre**: `foo = "1.2.0"` (sin prefijo `git+`/`path:`) → resuelve por el índice.
 - **Subcomandos**: `ray add`, `ray publish` (valida+hashea+añade entrada inmutable), `ray update`, `ray yank`.
 - **Prereq**: rangos semver de verdad (diferido de M39c; el índice mapea un nombre a muchas versiones).
-- **Fases**: 51a leer índice + `ray add` + rangos · 51b `ray publish` · 51c índice remoto + `update`/`yank`.
+- **Fases**: 51a leer índice + `ray add` + rangos · 51b `ray publish` · 51c índice remoto + `update`/`yank`
+  · **51d endurecimiento** ✅ (revisión jul 2026, DESIGN §54.5): nombres de paquete validados (un nombre
+  `../../x` de una transitiva no confiable escapaba de la caché), el **hash del índice se verifica** al
+  descargar (antes era decorativo; cierra el TOFU del lock → el índice es raíz de confianza), `ray publish`
+  valida+hashea el **tag** publicado (no el working tree), e índice remoto pinneado que se re-clona si su
+  spec cambia (antes quedaba obsoleto en silencio)
+  · **51e cierre de límites** ✅ (DESIGN §54.5): `ray publish` corre el **check semántico completo** del
+  clon del tag (resuelve sus deps; `check_all_modulo`, sin exigir `main`); **pre-releases** de verdad
+  (`1.0.0-rc1`: orden semver §11 + regla de cargo — solo casan si el requisito las menciona; `latest`/`*`
+  eligen finales); y **aviso de dependency confusion** cuando una transitiva declara su propio
+  `[registry] index`
+  · **51f ergonomía** ✅ (DESIGN §54.5): **`ray remove`** (inversa de add: manifiesto + lock re-resuelto +
+  caché borrada solo si nadie más la usa) y **`ray search [patrón]`** (lista el índice con la versión
+  instalable más alta); limpieza: el semver se extrae de `index.rs` a **`src/semver.rs`** (lo consumen
+  índice, resolutor y CLI). **M51 COMPLETO, revisión de diseño cerrada** (queda diferido: multi-índice,
+  firmas de publicación — §54.7).
 
 **Impacto**: **medio-alto en adopción, cero en runtime y en el lenguaje** — es CLI + resolución en el
 front-end; los motores nunca ven un paquete. Es aditivo (git/`path:` siguen). Diferido: UI/búsqueda web,
 firmas de publicación (sobre el hash existente), mirrors/proxy, namespaces con dueño.
+
+---
+
+## 14. Clientes de bases de datos (MySQL · PostgreSQL · SQLite) — M53, PLAN
+
+Análisis de factibilidad (jul 2026). Punto de partida: `packages/net` ya tiene **PostgreSQL** (SCRAM +
+protocolo simple, `pg_query`) y redis; el patrón de verificación (servidor de juguete en Rust + oráculo
+ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA1/SHA256/HMAC.
+
+- **Factibilidad**: Postgres = **evolución** de lo existente. MySQL = **factible en raylang puro**
+  (handshake v10; `mysql_native_password` = SHA1 ✓, caching_sha2 fast-path = SHA256 ✓, full-path sobre
+  `tls_connect` ✓; `COM_QUERY` texto). SQLite = **factible SOLO vía FFI** (no es red: librería C
+  embebida; `extern "sqlite3"` resuelve `libsqlite3` del sistema) con UN bloqueador: los *out-params*
+  de doble puntero (`sqlite3_open(path, sqlite3**)`) que el FFI de M41 no marshalea → extensión
+  acotada `out ptr` (M41.5, la ruta recomendada) o el hack `malloc(8)`+`memcpy`+puntero-como-`u64`
+  (spike, no diseño). Reimplementar el formato de archivo en raylang puro: descartado (solo-lectura y
+  enorme).
+- **Ubicación**: nuevo paquete **`packages/db`** (SQLite no encaja en `net`; API uniforme para los
+  tres: `connect`/`query(conn, sql, params) -> Result<[[string]]>`/`exec`/`close`, tipado-a-texto v1).
+  `db` → path-dep a `net` (scram); `net/postgres` se conserva (compat).
+- **Fases**: **M53.1** MySQL ✅ **COMPLETO** (DESIGN §55.1: `db/mysql.ray` — handshake v10 +
+  mysql_native_password completa + caching_sha2 fast-path + AuthSwitchRequest + COM_QUERY texto;
+  `connect/query/exec/disconnect`; toy server con auth precomputada + oráculo ambos motores en
+  `tests/mysql_cli.rs`) · **M53.2** Postgres v2 ✅ **COMPLETO**
+  (DESIGN §55.2: `db/postgres.ray` — conexión persistente + SCRAM + protocolo extendido Parse/Bind/
+  Describe/Execute/Sync → parámetros `$1`/`$2` en texto/anti-inyección + todas las filas + transacciones
+  vía SQL; reusa `net/scram` como cápsula hermana; toy server con eco de params + oráculo ambos motores en
+  `tests/postgres_v2_cli.rs`) · **M53.3** ✅ **COMPLETO — REFORMULADO** (jul 2026, giro a foco
+  producción): en vez de extender el FFI con out-params, **builtins `__sqlite_open/exec/query` sobre
+  `rusqlite` (bundled)** — patrón `ring`/M43: el binding maduro resuelve dobles punteros, lifetimes de
+  statements y destructores de bind; SQLite compilado dentro del binario (cero deps del sistema, sin
+  test condicionado); la conexión vive en el registro común de handles (`close(h)` la cierra); stubs
+  wasm (DESIGN §55.3) · **M53.4** ✅ **COMPLETO** (`db/sqlite.ray`: `connect(path)`/`query`/`exec` con
+  `?N` posicionales/`disconnect`, celdas texto NULL→""; test determinista `:memory:` ambos motores en
+  `tests/sqlite_cli.rs`; demo `examples/db/sqlite_demo.ray`) · **M53.5** opcional: libro + ejemplo CRUD
+  integrador. **M53 COMPLETO** (los tres clientes).
+- **Impacto**: 53.1/53.2 cero compilador (librería pura). 53.3 reformulado: 3 opcodes + impls por motor
+  (mecánico, patrón M11.4); cero cambios de checker/superficie. Todo aditivo.
+- **Diferido — FFI out-params (ex-M53.3, cierra el diferido de M41)**: la extensión que vuelve al FFI
+  útil para APIs C con dobles punteros (`f(&handle)`); superficie por decidir (retorno extra en tupla
+  vs. slot explícito `out ptr`). Sin fecha: hacerla cuando aparezca la **segunda** librería C que la
+  necesite, con un caso de uso real guiando el diseño (SQLite ya no la necesita).
+
+---
+
+## 15. Cliente MongoDB — M54, PLAN
+
+Análisis de factibilidad (jul 2026): **raylang puro, tier 2** (`packages/db/mongo.ray`), cero cambios
+de compilador salvo el habilitador de bits de float (M54.1a, ya hecho). Punto fuerte de partida: la
+autenticación de MongoDB moderno es **SCRAM-SHA-256 vía SASL** (`saslStart`/`saslContinue`) — el mismo
+mecanismo que ya usa `db/postgres` → `net/scram` se reusa tal cual. El wire (**OP_MSG**: cabecera 16
+bytes LE + flags + un documento BSON) es más simple que el de MySQL.
+
+- **Superficie elegida**: `enum Bson` recursivo (no JSON strings: no hay parser JSON en el ecosistema
+  y JSON pierde tipos — int64/double/ObjectId/binario). Un puente JSON queda como fase posterior si el
+  ecosistema lo pide.
+- **Cuidados fijados**: `_id` lo asigna el **servidor** (generar ObjectId en cliente exige
+  aleatoriedad+tiempo → rompería el determinismo de los tests); `find` v1 usa `firstBatch` (cursores
+  `getMore` diferidos); sin compresión (`OP_COMPRESSED` diferido); comando `hello` moderno.
+- **Fases**: **M54.1** ✅ **COMPLETO** (DESIGN §56.1: (a) builtins `__float_bits`/`__float_from_bits`
+  + `float_bits`/`float_from_bits` en std/math — habilitador del double IEEE 754, sirve también a
+  protobuf; (b) `packages/db/bson.ray`: `enum Bson` (Double/Str/Doc/Arr/Bin/ObjectId/Bool/Null/Int) +
+  `encode`/`decode` con errores como valores + `dump`; oráculo `tests/bson_cli.rs` contra los vectores
+  canónicos de bsonspec.org + round-trip exacto) · **M54.2** ✅ **COMPLETO** (DESIGN §56.2:
+  `db/mongo.ray` — framing OP_MSG + `run_command` + `connect` (`hello` + saslStart/saslContinue con
+  `net/scram` reusado tal cual, verificación de la firma del servidor) + `disconnect`; toy server
+  OP_MSG con las constantes SCRAM precomputadas de postgres en `tests/mongo_cli.rs`) · **M54.3** ✅
+  **COMPLETO** (DESIGN §56.3: `insert`/`find` (firstBatch)/`update` ($set explícito)/`delete` sobre
+  `run_command`; filtros = documentos BSON → anti-inyección por construcción; toy server extendido +
+  demo `examples/db/mongo_demo.ray`). **M54 COMPLETO** (el paquete `db` cubre los 4: MySQL, PostgreSQL,
+  SQLite, MongoDB). Post-M54 cerrados: getMore ✅ (DESIGN §56.5), puente Json↔Bson ✅ (§16), y el
+  hilo TLS COMPLETO ✅ (primitivo `tls_upgrade` §57 + `postgres.connect_tls` §57.1 +
+  `mysql.connect_tls` con full-path de caching_sha2 §57.2).
+- **Impacto**: todo aditivo; BSON es el grueso (comparable al protobuf de M25 en naturaleza).
+- **Diferidos del arco DB** (consolidado, jul 2026 — ninguno bloquea; el paquete `db` está
+  funcionalmente completo para los 4 motores, con transporte cifrado donde importa):
+  - **MySQL**: protocolo binario ✅ **CERRADO** (DESIGN §55.5: `query`/`exec` ganan `params` —
+    prepare/execute/close de una ronda, fila binaria decodificada por tipo; con `[]`, texto como
+    siempre). Quedan: sentencias con estado (cachear stmt_id), tipos binarios en los parámetros
+    (hoy texto), full-path de caching_sha2 **sin** TLS (RSA; con `connect_tls` pierde casi todo el
+    sentido), BIGINT UNSIGNED ≥ 2^63 (se muestra envuelto).
+  - **Postgres**: parámetros binarios/tipados, sentencias preparadas con estado (hoy anónimas, una
+    por ronda), COPY, `sslmode` negociable estilo libpq (hoy: `connect` = nunca TLS /
+    `connect_tls` = obligatorio).
+  - **SQLite**: `last_insert_rowid` ✅ (raylang puro, DESIGN §56.6) y WAL ✅ (ya posible:
+    `query(c, "PRAGMA journal_mode=WAL", [])`). Queda: tipos nativos (celdas no-texto).
+  - **MongoDB**: Date/Timestamp ✅ y `connect_tls` ✅ (DESIGN §56.6). Quedan: Decimal128 (error
+    claro al decodificar), `batchSize` configurable + `killCursors`, compresión OP_COMPRESSED,
+    Extended JSON riguroso ($oid/$numberLong) en el puente (§16).
+
+---
+
+## 16. JSON — huecos pendientes de `std/json`
+
+`std/json` EXISTE y está completo en lo esencial (M15.4a, embebido desde `examples/web/json.ray`:
+`enum Json` + `parse -> Result` + `stringify` canónico; lo usa `net/oauth2`). Huecos detectados
+(jul 2026, al analizar la superficie del cliente MongoDB):
+
+- ✅ **Escapes `\uXXXX`** — CERRADO (jul 2026): primitivo `__char_from_code -> [char]` (opcode
+  `CharFromCode`; guard de rango contra el wrap del cast a u32) + `char_from_code -> Option<char>`
+  en el prelude (el inverso de `char_code`) + los escapes en `std/json` con **pares surrogate**
+  (astrales) y errores como valores (surrogate suelto, par incompleto, dígito no hex). Oráculo
+  `char_from_code_oraculo` + test `escapes_unicode` en `tests/json_cli.rs`.
+- **`JNum` es solo `float`**: fiel a JSON, pero un int64 > 2^53 pierde precisión. Irrelevante para
+  APIs web; importa para un puente con BSON (abajo). Cambiarlo rompería a los usuarios del enum →
+  decidir solo si el puente lo exige.
+- **Menores**: sin pretty-print (solo compacto); sin helpers de acceso (navegar es a `match` puro).
+- ✅ **Puente `Json ↔ Bson`** — CERRADO (jul 2026): `bson.from_json` (número JSON → `Double`; las
+  claves salen ordenadas, el objeto es Map), `bson.to_json` (degradación documentada: `Int` →
+  número con pérdida > 2^53, `ObjectId`/`Bin` → hex, orden de campos perdido) y **`doc_from_json(s)
+  -> Result<[Field], string>`** — la ruta ergonómica para filtros de mongo (`mongo.find(c, coll,
+  bson.doc_from_json("{...}")?)`); el tope debe ser un objeto. Test `bson_puente_json` (compone con
+  los escapes `\uXXXX`). Diferido: Extended JSON riguroso ($oid/$numberLong) si algún consumidor lo
+  exige.
 
 ---
 

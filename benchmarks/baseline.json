@@ -2,9 +2,9 @@
   "fingerprint": "Darwin-arm64-cpus11-Apple M3 Pro",
   "n": 15,
   "cases": {
-    "fib35": 2.0721,
-    "loop10M": 0.9924,
-    "arrays": 0.1810,
-    "gcnested": 0.2897
+    "fib35": 2.0681,
+    "loop10M": 0.9986,
+    "arrays": 0.1841,
+    "gcnested": 0.2913
   }
 }

@@ -195,6 +195,8 @@ Los archivos `*.ray.html` se colorean como **raylang template** (HTML + los deli
 vivo** del mismo Language Server: errores del propio template (etiquetas sin cerrar, `params` mal
 formados) y errores de tipos del módulo generado, **mapeados a la línea del template** (un typo en
 `{{ variable }}` se subraya en el HTML). Dentro de `{{ }}`/`{% %}` hay además **autocompletado**
-(los parámetros tipados de la cabecera `{% params %}` con su tipo, las variables de los
-`{% for %}` que encierran el cursor y las palabras clave del template) y **hover** sobre esas
-variables (`nombre: tipo`). Genera el módulo con `ray templ <dir>`.
+(los parámetros tipados de la cabecera `{% params %}`, las variables de los `{% for %}` que
+encierran el cursor, las palabras clave del template y, tras un `.`, los **miembros del
+receptor** — métodos y builtins aplicables a su tipo), **hover** con el tipo real de la
+expresión, **ir-a-definición** (un param lleva a su `{% params %}`) y **signature help** al
+escribir los argumentos. Genera el módulo con `ray templ <dir>`.

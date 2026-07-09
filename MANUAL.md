@@ -998,8 +998,10 @@ motor runtime: **un typo en una variable es error de compilación** (no un `""` 
 render es ~2× más rápido (cero parseo en runtime). El motor runtime queda para plantillas dinámicas
 (cargadas de disco/BD en caliente). En el editor (VSCode/Sublime + `ray lsp`), un `.ray.html` tiene
 diagnósticos en vivo (errores del template y de tipos, mapeados a su línea), **autocompletado
-dentro de `{{ }}`/`{% %}`** (los params tipados de la cabecera y las variables de los `{% for %}`
-en ámbito) y **hover** sobre esas variables (`nombre: tipo`).
+dentro de `{{ }}`/`{% %}`** (los params tipados de la cabecera, las variables de los `{% for %}`
+en ámbito, y tras un `.` los métodos/builtins del receptor), **hover** con el tipo real de la
+expresión, **ir-a-definición** (un param lleva a su `{% params %}`) y **signature help** al
+escribir los argumentos de una llamada.
 
 **Editores**: extensión de VSCode (`editors/vscode`) y paquete de Sublime Text (`editors/sublime`), ambos
 sobre `ray lsp`; Neovim/Helix lo usan directo. **Playground web**: la VM compilada a WASM corre el lenguaje

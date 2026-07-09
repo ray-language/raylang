@@ -212,9 +212,12 @@ fn pos_params(msg: &Json) -> Option<(String, usize, usize)> {
 fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     if is_template_uri(&uri) {
-        // M55: hover de los símbolos del PROPIO template (params + vars de for) → `nombre: tipo`.
+        // M55: hover en un template — primero el semántico (vía el módulo generado: tipos REALES,
+        // p. ej. `fila.precio: float`); si el template no genera o la posición no mapea, el textual
+        // (params + vars de for → `nombre: tipo`).
         if let Some(src) = docs.get(&uri)
-            && let Some((info, start, end)) = template_hover_at(src, line0, char0)
+            && let Some((info, start, end)) = template_semantic_hover(&uri, src, line0, char0)
+                .or_else(|| template_hover_at(src, line0, char0))
         {
             return obj(vec![
                 ("contents", obj(vec![("kind", text("plaintext")), ("value", Json::Str(info))])),
@@ -505,7 +508,11 @@ fn range(line0: usize, start: usize, end: usize) -> Json {
 fn definition_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     if is_template_uri(&uri) {
-        return Json::Null; // M55: un .ray.html no es fuente raylang
+        // M55: la posición se traduce al módulo generado y se resuelve ahí; una declaración en el
+        // propio generado (un param) vuelve traducida al template (la línea del `{% params %}`).
+        return docs.get(&uri)
+            .and_then(|src| template_definition(&uri, src, line0, char0))
+            .unwrap_or(Json::Null);
     }
     let Some(src) = docs.get(&uri) else { return Json::Null };
     let Some((target_uri, def_line0, def_col0, len)) = definition_at(&uri, src, line0, char0) else {
@@ -1572,9 +1579,26 @@ fn module_alias_symbols(uri: Option<&str>, src: &str, receiver: &str) -> Option<
 fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
     if uri.is_some_and(is_template_uri) {
-        // M55: en un template, completion de sus PROPIOS símbolos (params tipados + vars de for).
-        let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
+        // M55: en un template — tras un `.`, los MIEMBROS del receptor (vía el módulo generado:
+        // campos del struct, métodos, builtins aplicables); si no, sus propios símbolos (params
+        // tipados + vars de for + keywords).
+        let (Some(u), Some(src)) = (uri, uri.and_then(|x| docs.get(x))) else { return Json::Arr(vec![]) };
         let Some((_, line0, char0)) = pos_params(msg) else { return Json::Arr(vec![]) };
+        if let Some((code, map, gen_uri)) = template_generated(u, src)
+            && let Some((gl, gc)) = template_pos_to_generated(src, &code, &map, line0, char0)
+        {
+            // `member_completion_items` es de un solo buffer (sin loader): el `from std/template
+            // import escape_html;` del generado quedaría sin resolver y el checker abortaría antes
+            // del centinela. Se sustituye por un stub local (misma cantidad de líneas).
+            let code_sb = code.replacen(
+                "from std/template import escape_html;",
+                "fn escape_html(s: string) -> string { s }",
+                1,
+            );
+            if let Some(items) = member_completion_items(Some(&gen_uri), &code_sb, gl, gc, docs) {
+                return items;
+            }
+        }
         return template_completion_items(src, line0, char0);
     }
     let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
@@ -1862,6 +1886,143 @@ fn template_hover_at(src: &str, line0: usize, char0: usize) -> Option<(String, u
     Some((format!("{name}: {tipo}"), start, end))
 }
 
+// ── Templates: inteligencia DENTRO de las expresiones, vía el módulo generado ────────────────────
+//
+// La heurística textual de arriba (params + vars de for) cubre lo básico sin compilar nada. Para lo
+// semántico —hover con el tipo REAL de una subexpresión, completar miembros tras `.`, ir a la
+// definición de un tipo en otro archivo— el truco es el mismo que en los diagnósticos (M55): el
+// template GENERA un módulo raylang (con line map), las expresiones se empalman VERBATIM en él, así
+// que basta con **traducir la posición del cursor al generado**, correr la maquinaria existente
+// (hover_at/definition_at/member_completion_items/signature_help_at) sobre el generado, y traducir
+// el resultado de vuelta. Cero lógica semántica nueva.
+
+/// El módulo generado de un template + su line map + el URI del `.ray` hermano (con el que el
+/// loader resuelve `from std/template import …` y las path-deps). `None` si el template no genera
+/// (con error de sintaxis del template no hay semántica; la heurística textual sigue funcionando).
+fn template_generated(uri: &str, src: &str) -> Option<(String, Vec<usize>, String)> {
+    let path = uri_to_path(uri);
+    let name = path
+        .as_deref()
+        .and_then(|p| crate::templ::fn_suffix_of(p).ok())
+        .unwrap_or_else(|| "vista".to_string());
+    let (code, map) = crate::templ::generate_with_map(src, &name).ok()?;
+    let gen_uri = uri.trim_end_matches(".html").to_string();
+    Some((code, map, gen_uri))
+}
+
+/// Busca `needle` en `hay` con **fronteras de identificador** (si la aguja empieza/termina en un
+/// carácter de identificador, el vecino no puede serlo): evita casar `n` dentro de `nombre`.
+fn find_frag(hay: &str, needle: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(i) = hay[from..].find(needle) {
+        let p = from + i;
+        let pre_ok = !(needle.starts_with(is_ident_char)
+            && hay[..p].chars().next_back().is_some_and(is_ident_char));
+        let post_ok = !(needle.ends_with(is_ident_char)
+            && hay[p + needle.len()..].chars().next().is_some_and(is_ident_char));
+        if pre_ok && post_ok {
+            return Some(p);
+        }
+        from = p + needle.len().max(1);
+    }
+    None
+}
+
+/// Mapea una posición del template (0-basada, con el cursor dentro de un `{{ … }}`/`{% … %}`
+/// abierto y cerrado en su misma línea) a la posición equivalente `(línea0, col0-en-chars)` del
+/// módulo generado. Como la expresión se empalma verbatim, se usa como aguja el contenido del
+/// delimitador (en una etiqueta, sin la palabra clave: `{% if cond %}` → `cond`, que sí aparece en
+/// el `if cond {` generado; en `{% params … %}` la lista aparece en la firma de la función) y se
+/// localiza en la línea generada que el line map atribuye a esta línea del template.
+fn template_pos_to_generated(src: &str, code: &str, map: &[usize], line0: usize, char0: usize) -> Option<(usize, usize)> {
+    let line = src.lines().nth(line0)?;
+    let cursor_b = line.char_indices().nth(char0).map(|(b, _)| b).unwrap_or(line.len());
+    // El abridor más cercano a la izquierda del cursor (en esta línea). En `{{&`, `{{` casa en la
+    // misma posición: el max por (posición, largo) elige el delimitador completo.
+    let (open_b, open_len) = ["{{", "{{&", "{%"].iter()
+        .filter_map(|d| line[..cursor_b].rfind(d).map(|i| (i, d.len())))
+        .max()?;
+    let is_tag = &line[open_b..open_b + 2] == "{%";
+    let close_b = open_b + line[open_b..].find(if is_tag { "%}" } else { "}}" })?;
+    if cursor_b > close_b {
+        return None; // el cursor está tras el cierre → HTML
+    }
+    let content = &line[open_b + open_len..close_b];
+    let needle = if is_tag {
+        // Sin la palabra clave: `if cond` → `cond`, `for v in e` → `v in e`, `params a: T` → `a: T`
+        // (el `elif` se reescribe a `else if` en el generado; la condición sola casa en todos).
+        let t = content.trim_start();
+        t.find(char::is_whitespace).map(|i| t[i..].trim()).unwrap_or("")
+    } else {
+        content.trim()
+    };
+    if needle.is_empty() {
+        return None;
+    }
+    let needle_start_b = open_b + open_len + content.find(needle)?;
+    let off = cursor_b.saturating_sub(needle_start_b).min(needle.len());
+    // La línea generada que provenga de ESTA línea del template y contenga la aguja.
+    let tpl_line1 = line0 + 1;
+    for (i, gline) in code.lines().enumerate() {
+        if map.get(i).copied() != Some(tpl_line1) {
+            continue;
+        }
+        if let Some(p) = find_frag(gline, needle) {
+            return Some((i, gline[..p + off].chars().count()));
+        }
+    }
+    None
+}
+
+/// Hover semántico en un template: la posición se traduce al módulo generado y el hover corre ahí
+/// (tipos REALES del checker: `fila.precio` → `float`). El rango devuelto es el del identificador
+/// en el TEMPLATE (las columnas del generado no significan nada para el editor).
+fn template_semantic_hover(uri: &str, src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
+    let (name, start, end) = ident_range_under_cursor(src, line0, char0)?;
+    let (code, map, gen_uri) = template_generated(uri, src)?;
+    let (gl, gc) = template_pos_to_generated(src, &code, &map, line0, char0)?;
+    let (info, _, _) = hover_at(Some(&gen_uri), &code, gl, gc)?;
+    // El hover debe ser DEL identificador bajo el cursor: un nombre sin entrada propia (un typo no
+    // declarado) puede caer dentro del rango de un nodo envolvente con `len` namespacado (p. ej.
+    // `std::template::escape_html` cubre sus argumentos) — eso no es un hover de este símbolo.
+    let subject = info.split(':').next().unwrap_or("");
+    if subject != name && !subject.ends_with(&format!(".{name}")) {
+        return None;
+    }
+    Some((info, start, end))
+}
+
+/// Ir-a-definición desde un template: la posición se traduce al generado y se resuelve ahí. Una
+/// declaración que cae en OTRO archivo (un struct importado, una función del proyecto) se devuelve
+/// tal cual; una que cae en el propio generado (un param, una var de for) se traduce de vuelta al
+/// template con el line map (p. ej. un param lleva a la línea del `{% params %}`).
+fn template_definition(uri: &str, src: &str, line0: usize, char0: usize) -> Option<Json> {
+    let (code, map, gen_uri) = template_generated(uri, src)?;
+    let (gl, gc) = template_pos_to_generated(src, &code, &map, line0, char0)?;
+    let (target_uri, dl0, dc0, len) = definition_at(&gen_uri, &code, gl, gc)?;
+    if target_uri != gen_uri {
+        return Some(obj(vec![
+            ("uri", Json::Str(target_uri)),
+            ("range", range(dl0, dc0, dc0 + len)),
+        ]));
+    }
+    // Dentro del generado → la línea del template. La columna se relocaliza buscando el nombre en
+    // esa línea (las columnas del generado no se traducen); si no aparece, el inicio de la línea.
+    let glines: Vec<&str> = code.split('\n').collect();
+    let name = token_at(&glines, dl0, dc0).unwrap_or_default();
+    let tl0 = map.get(dl0).copied().unwrap_or(1).max(1) - 1;
+    let (start, end) = src.lines().nth(tl0)
+        .and_then(|l| find_frag(l, &name).map(|b| {
+            let s = l[..b].chars().count();
+            (s, s + name.chars().count())
+        }))
+        .unwrap_or((0, 1));
+    Some(obj(vec![
+        ("uri", Json::Str(uri.to_string())),
+        ("range", range(tl0, start, end)),
+    ]))
+}
+
 /// Los nombres en ámbito local (params + `let`/`var`) de la función que contiene `cursor_line`
 /// (1-basado), declarados en o antes de esa línea (M10.2f). Sin spans, el alcance es la **función**
 /// envolvente (la de mayor línea de inicio que no la supera), no el bloque exacto: degradación honesta.
@@ -1913,10 +2074,23 @@ fn collect_lets(block: &crate::ast::Block, cursor_line: usize, out: &mut Vec<Str
 /// curso o la función no se conoce.
 fn signature_help_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
-    if is_template_uri(&uri) {
-        return Json::Null; // M55: un .ray.html no es fuente raylang
-    }
     let Some(src) = docs.get(&uri) else { return Json::Null };
+    if is_template_uri(&uri) {
+        // M55: la posición se traduce al módulo generado y el signature help corre ahí (la firma
+        // es información, no posiciones → no hay nada que traducir de vuelta).
+        if let Some((code, map, gen_uri)) = template_generated(&uri, src)
+            && let Some((gl, gc)) = template_pos_to_generated(src, &code, &map, line0, char0)
+        {
+            return signature_help_at(&gen_uri, &code, gl, gc);
+        }
+        return Json::Null;
+    }
+    signature_help_at(&uri, src, line0, char0)
+}
+
+/// El signature help en una posición concreta de una fuente raylang (extraído de
+/// `signature_help_result` para que los templates lo reusen sobre su módulo generado).
+fn signature_help_at(uri: &str, src: &str, line0: usize, char0: usize) -> Json {
     // 1. Hallar la llamada en curso: el nombre, cuántas comas la preceden (param activo) y el receptor
     //    si es una llamada por punto (`recv.m(`).
     let Some((name, active, receiver)) = enclosing_call(src, line0, char0) else { return Json::Null };
@@ -1924,7 +2098,7 @@ fn signature_help_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     //    builtins. Textual → robusto ante el documento a medio escribir (solo exige que la
     //    *declaración* `fn nombre(...) -> ...` esté bien formada). Así el signature help funciona
     //    también para funciones importadas (`u.cuadrado(`) y del prelude, no solo las del archivo.
-    let ctx = SigCtx::new(src, uri_to_path(&uri).as_deref());
+    let ctx = SigCtx::new(src, uri_to_path(uri).as_deref());
     // M48.1: función asociada de un tipo incorporado (`Map.new(`/`Channel.bounded(`): la firma sale del
     // registro (`assoc.sig`), no de una `fn`.
     if let Some(recv) = receiver.as_deref()
@@ -4299,6 +4473,65 @@ mod tests {
         )).unwrap();
         let h = hover_result(&hmsg, &docs);
         assert!(h.serialize().contains("total: int"), "{h:?}");
+    }
+
+    #[test]
+    fn inteligencia_semantica_en_templates() {
+        // M55: hover con tipos REALES, completion de miembros tras `.`, ir-a-definición y
+        // signature help DENTRO de las expresiones del template — todo vía el módulo generado +
+        // el line map (la posición del cursor se traduce al generado y de vuelta).
+        let base = std::env::temp_dir().join("ray_lsp_tpl_sem_test");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("std")).unwrap();
+        // El generado importa `from std/template import escape_html` → resoluble bajo la base.
+        std::fs::write(base.join("std/template.ray"),
+            "pub fn escape_html(s: string) -> string { s }\n").unwrap();
+        let uri = format!("file://{}/vista.ray.html", base.display());
+        let tpl = "{% params titulo: string, filas: [string] %}\n\
+                   <h1>{{ titulo }}</h1>\n\
+                   {% for fila in filas %}<li>{{ fila.trim() }}</li>{% endfor %}\n";
+
+        // Hover semántico: sobre `fila` dentro de `{{ fila.trim() }}` → su tipo REAL (string,
+        // inferido por el checker del `for` sobre `[string]`); el rango es el del template.
+        let l2 = tpl.lines().nth(2).unwrap();
+        let col_fila = l2.rfind("fila.trim").unwrap() + 1; // dentro de `fila` (ASCII: byte == char)
+        let (info, start, end) = template_semantic_hover(&uri, tpl, 2, col_fila).expect("hover de fila");
+        assert!(info.contains("string"), "{info}");
+        assert_eq!((start, end), (l2.rfind("fila.trim").unwrap(), l2.rfind("fila.trim").unwrap() + 4));
+
+        // Ir-a-definición: sobre `titulo` en `{{ titulo }}` → la línea del `{% params %}` del
+        // PROPIO template (la declaración vive en la firma del generado, que mapea a la línea 1).
+        let l1 = tpl.lines().nth(1).unwrap();
+        let d = template_definition(&uri, tpl, 1, l1.find("titulo").unwrap() + 2).expect("def de titulo");
+        let ser = d.serialize();
+        assert!(ser.contains(&uri), "la def vuelve al template: {ser}");
+        assert!(ser.contains("\"line\":0"), "línea del params: {ser}");
+        assert!(ser.contains(&format!("\"character\":{}", tpl.lines().next().unwrap().find("titulo").unwrap())), "{ser}");
+
+        // Completion de miembros: `{{ titulo. }}` ofrece los builtins de string (len/trim/…).
+        let tpl2 = "{% params titulo: string %}\n<p>{{ titulo. }}</p>\n";
+        let (code, map, gen_uri) = template_generated(&uri, tpl2).unwrap();
+        let l = "<p>{{ titulo. }}</p>";
+        let (gl, gc) = template_pos_to_generated(tpl2, &code, &map, 1, l.find('.').unwrap() + 1).expect("mapea tras el punto");
+        let docs = HashMap::new();
+        // Como en completion_result: stub local en vez del import (member_completion es de un buffer).
+        let code_sb = code.replacen("from std/template import escape_html;",
+            "fn escape_html(s: string) -> string { s }", 1);
+        let items = member_completion_items(Some(&gen_uri), &code_sb, gl, gc, &docs).expect("miembros de string");
+        let labels: Vec<String> = items.as_array().unwrap().iter()
+            .filter_map(|i| i.get("label").and_then(Json::as_str).map(|s| s.to_string())).collect();
+        assert!(labels.iter().any(|l| l == "len"), "{labels:?}");
+        assert!(labels.iter().any(|l| l == "trim"), "{labels:?}");
+
+        // Signature help: `{{ titulo.substring( }}` muestra la firma del builtin.
+        let tpl3 = "{% params titulo: string %}\n<p>{{ titulo.substring( }}</p>\n";
+        let (code3, map3, gen_uri3) = template_generated(&uri, tpl3).unwrap();
+        let l3 = "<p>{{ titulo.substring( }}</p>";
+        let (gl3, gc3) = template_pos_to_generated(tpl3, &code3, &map3, 1, l3.find('(').unwrap() + 1).expect("mapea tras el paréntesis");
+        let sh = signature_help_at(&gen_uri3, &code3, gl3, gc3);
+        assert!(sh.serialize().contains("substring"), "{sh:?}");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

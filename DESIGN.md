@@ -7261,7 +7261,17 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   encierran el cursor** (tipo inferido: `[T]` → `T`, rango → `int`) y, en etiqueta, las palabras
   clave del template (`templ::header_params` tolerante + escaneo textual del prefijo — el buffer a
   medio escribir no tokeniza entero); hover sobre un param o var de bucle → `nombre: tipo`
-  (`template_hover_at`, mismo ámbito `template_scope`); (c) **coloreado**: gramática de VSCode
+  (`template_hover_at`, mismo ámbito `template_scope`); (b3) **inteligencia semántica en las
+  expresiones**: como la expresión se empalma VERBATIM en el módulo generado, la posición del
+  cursor se **traduce al generado** (`template_pos_to_generated`: la aguja es el contenido del
+  delimitador —en etiquetas sin la keyword— localizada en la línea generada que el line map
+  atribuye a esa línea) y ahí corre la maquinaria existente — **hover con tipos reales** del
+  checker (`fila.precio: float`), **completion de miembros** tras `.` (builtins/métodos del
+  receptor; el `from std/template import` se stubbea porque member_completion es de un buffer),
+  **ir-a-definición** (una def en otro archivo se devuelve tal cual; una en el generado —un
+  param— vuelve al template por el line map: lleva al `{% params %}`) y **signature help**
+  (`signature_help_at`, extraído). Cero lógica semántica nueva: solo traducción de posiciones;
+  (c) **coloreado**: gramática de VSCode
   `raylang-template` (`text.html.raylang`: HTML base + `{{ }}`/`{% %}` con la expresión embebida
   como `source.raylang`; el cliente LSP añade el selector) y sintaxis de Sublime
   (`raylang-template.sublime-syntax`, `extends` HTML + `prototype` con los delimitadores; selector

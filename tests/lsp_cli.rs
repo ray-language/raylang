@@ -255,12 +255,14 @@ fn diagnostica_templates_ray_html() {
     // M55: un buffer `.ray.html` se diagnostica con el pipeline de `ray templ`. (1) Un typo en una
     // variable ({{ titluo }}) genera código que no compila y el error vuelve TRADUCIDO a la línea
     // del template (línea 2 → 1 en 0-based) con el prefijo "template:". (2) Un error del propio
-    // template (if sin endif) sale con su línea. (3) hover sobre un template devuelve null (no es
-    // fuente raylang).
+    // template (if sin endif) sale con su línea. (3) hover sobre el TYPO (no declarado) devuelve
+    // null — no hereda el hover de un nodo envolvente del generado. (4) hover sobre un nombre
+    // declarado (el param en la cabecera) da su tipo, vía el módulo generado.
     let open_typo = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///vista.ray.html","text":"{% params titulo: string %}\n<h1>{{ titluo }}</h1>\n"}}}"#;
     let open_sin_endif = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///rota.ray.html","text":"{% params x: int %}\n{% if x > 0 %}abierto\n"}}}"#;
     let hover = r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///vista.ray.html"},"position":{"line":1,"character":9}}}"#;
-    let entrada = frame(open_typo) + &frame(open_sin_endif) + &frame(hover)
+    let hover_param = r#"{"jsonrpc":"2.0","id":10,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///vista.ray.html"},"position":{"line":0,"character":12}}}"#;
+    let entrada = frame(open_typo) + &frame(open_sin_endif) + &frame(hover) + &frame(hover_param)
         + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
     let out = lsp(&entrada);
     assert!(out.contains("titluo"), "el typo llega como diagnóstico\n{out}");
@@ -269,5 +271,7 @@ fn diagnostica_templates_ray_html() {
     let seccion_typo = out.split("vista.ray.html").nth(1).unwrap_or("");
     assert!(seccion_typo.contains("\"line\":1"), "el error mapea a la línea del template\n{out}");
     assert!(out.contains("endif"), "el if sin cerrar se reporta\n{out}");
-    assert!(out.contains("\"id\":9,\"result\":null"), "hover sobre template = null\n{out}");
+    assert!(out.contains("\"id\":9,\"result\":null"), "hover sobre el typo = null\n{out}");
+    let seccion_param = out.split("\"id\":10").nth(1).unwrap_or("");
+    assert!(seccion_param.contains("titulo: string"), "hover del param da su tipo\n{out}");
 }

@@ -37,7 +37,7 @@ Cliente y servidor TCP; servidor concurrente (solo VM).
 
 ## `web/` — la capa web
 Librerías en raylang (importables) + sus demos. **El servidor es solo VM.**
-- **Librerías**: `http` (cliente HTTP/HTTPS), `json` (parse/stringify), `webserver` (servidor + SSE),
+- **Librerías**: `http` (cliente HTTP/HTTPS), `json` (parse/stringify), `webserver` (servidor + SSE + `html_response`),
   `websocket` (handshake + framing), `sha1` / `sha256` / `hmac` / `base64` / `hex` (cripto),
   `jwt` (JSON Web Tokens HS256), `uuid` (v4), `url` (percent-encoding + query string), `cookie`,
   `time` (fechas/horas UTC: ISO 8601, RFC 1123, duraciones), `redis` (cliente RESP2 sobre TCP),

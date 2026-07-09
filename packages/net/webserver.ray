@@ -53,8 +53,19 @@ pub fn not_found() -> Response {
 /// Builds a 200 response with `Content-Type: application/json`. `body` must already be serialized JSON text.
 pub fn json_response(body: string) -> Response {
     var h: Map<string, string> = Map.new();
-    h.insert("Content-Type", "application/json");
+    h.insert("Content-Type", "application/json; charset=utf-8");
     Response { status: 200, headers: h, body: body.to_bytes() }
+}
+
+// Respuesta HTML con el charset declarado. `text`/`ok` NO ponen Content-Type → el navegador adivina
+// el encoding (Latin-1 en la práctica), que estropea el UTF-8 (acentos, «—»). Para servir HTML usa
+// esto, que declara `text/html; charset=utf-8`. El cuerpo es UTF-8 (los strings de raylang lo son).
+/// Builds an HTML response with the given status and `Content-Type: text/html; charset=utf-8` — the
+/// header a browser needs to render UTF-8 correctly. Prefer this over `text`/`ok` for HTML.
+pub fn html_response(status: int, body: string) -> Response {
+    var h: Map<string, string> = Map.new();
+    h.insert("Content-Type", "text/html; charset=utf-8");
+    Response { status: status, headers: h, body: body.to_bytes() }
 }
 
 // El cuerpo de una petición decodificado como texto UTF-8 (para formularios/JSON entrantes). Para datos

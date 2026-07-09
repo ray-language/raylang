@@ -34,7 +34,7 @@ fn pagina(req: webserver.Request) -> webserver.Response {
             "Elige un lenguaje: prueba /lang/rust",
             false,
             ["raylang", "rust", "lua", "python"]);
-        return webserver.text(200, html);
+        return webserver.html_response(200, html);
     }
     if (req.path.starts_with("/lang/")) {
         let lang = ultimo_segmento(req.path);
@@ -43,7 +43,7 @@ fn pagina(req: webserver.Request) -> webserver.Response {
             "Estás viendo: " + lang,
             es_popular(lang),
             [lang]);
-        return webserver.text(200, html);
+        return webserver.html_response(200, html);
     }
     webserver.not_found()
 }

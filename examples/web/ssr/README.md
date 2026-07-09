@@ -2,7 +2,9 @@
 
 Un servidor web que hace **server-side rendering** con un **template compilado** (M55): el HTML es un
 archivo `vistas/vista_inicio.ray.html` con firma tipada; `ray templ` lo compila a la función raylang
-`render_vista_inicio(...)`, y el servidor del paquete `net` la llama por petición.
+`render_vista_inicio(...)`, y el servidor del paquete `net` la llama por petición. La respuesta usa `webserver.html_response`
+(no `text`), que declara `Content-Type: text/html; charset=utf-8` — sin ese header el navegador lee
+el UTF-8 como Latin-1 y estropea los acentos.
 
 ## Piezas
 

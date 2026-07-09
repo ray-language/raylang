@@ -1792,6 +1792,16 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
 
+                // --- Bits de float (M54.1): totales, sin heap. ---
+                OpCode::FloatBits => {
+                    let HeapValue::Float(f) = self.pop() else { unreachable!("el checker garantiza un float") };
+                    self.push(HeapValue::Int(f.to_bits() as i64));
+                }
+                OpCode::FloatFromBits => {
+                    let HeapValue::Int(n) = self.pop() else { unreachable!("el checker garantiza un int") };
+                    self.push(HeapValue::Float(f64::from_bits(n as u64)));
+                }
+
                 // --- SQLite embebido (M53.3): arreglo etiquetado, como los primitivos de I/O. ---
                 OpCode::SqliteOpen => {
                     let path = self.pop();
@@ -5768,6 +5778,23 @@ mod tests {
                 let b = valor(parse_int("  -7 "), 0);     // -7 (trim)
                 let c = valor(parse_int("xyz"), 100);     // 100 (None)
                 a + b + c                                 // 135
+            }
+        "#);
+    }
+
+    #[test]
+    fn float_bits_oraculo() {
+        // M54.1: __float_bits/__float_from_bits son el f64 de Rust en ambos motores → oráculo.
+        // Round-trip exacto (incl. negativos y el caso 5.05 del vector BSON) y bits conocidos:
+        // 1.0 = 0x3FF0000000000000 = 4607182418800017408.
+        oracle_program(r#"
+            fn main() -> int {
+                let uno = __float_bits(1.0);
+                let a: int = if (uno == 4607182418800017408) { 1 } else { -1 };
+                let b: int = if (__float_from_bits(uno) == 1.0) { 10 } else { -1 };
+                let c: int = if (__float_from_bits(__float_bits(5.05)) == 5.05) { 100 } else { -1 };
+                let d: int = if (__float_from_bits(__float_bits(0.0 - 2.5)) == 0.0 - 2.5) { 1000 } else { -1 };
+                a + b + c + d
             }
         "#);
     }

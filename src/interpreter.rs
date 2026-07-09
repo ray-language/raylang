@@ -1421,6 +1421,15 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M15.2: conecta por TCP → ["ok", handle] o ["err", msg].
+            // M54.1: bits IEEE 754 de un float, y el inverso. Totales.
+            "__float_bits" => match &values[0] {
+                Value::Float(f) => Value::Int(f.to_bits() as i64),
+                _ => unreachable!("el checker garantiza un float"),
+            },
+            "__float_from_bits" => match &values[0] {
+                Value::Int(n) => Value::Float(f64::from_bits(*n as u64)),
+                _ => unreachable!("el checker garantiza un int"),
+            },
             // M53.3: SQLite embebido → arreglo etiquetado; el paquete `db/sqlite` lo traduce a Result.
             "__sqlite_open" => {
                 let arr = match &values[0] {

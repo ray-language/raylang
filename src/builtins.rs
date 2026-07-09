@@ -1446,6 +1446,17 @@ static BUILTINS: &[Builtin] = &[
         }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
+    // --- Bits de float (M54.1): primitivos totales; `std/math` → float_bits/float_from_bits. ---
+    Builtin { name: "__float_bits", opcode: OpCode::FloatBits, check: |a| {
+        arity(a, 1, "__float_bits", " (el float)")?;
+        if a[0] != Type::Float { return Err((Some(0), format!("__float_bits espera un float, no {}", a[0]))); }
+        Ok(Type::Int)
+    } },
+    Builtin { name: "__float_from_bits", opcode: OpCode::FloatFromBits, check: |a| {
+        arity(a, 1, "__float_from_bits", " (los 64 bits como int)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__float_from_bits espera un int, no {}", a[0]))); }
+        Ok(Type::Float)
+    } },
     // --- SQLite embebido (M53.3): primitivos con arreglo etiquetado; `db/sqlite` → Result. ---
     // __sqlite_open(path) -> [string]: ["ok", handle] o ["err", msg].
     Builtin { name: "__sqlite_open", opcode: OpCode::SqliteOpen, check: |a| {

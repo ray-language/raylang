@@ -158,3 +158,11 @@ pub fn is_prime(n: int) -> bool {
         prime
     }
 }
+
+/// The raw IEEE 754 bits of a float, as a two's-complement int (M54.1). Enables binary formats
+/// that carry doubles (BSON, protobuf).
+pub fn float_bits(f: float) -> int { __float_bits(f) }
+
+/// Builds a float from its raw IEEE 754 bits. Total: any bit pattern is a valid f64
+/// (including NaN and the infinities).
+pub fn float_from_bits(n: int) -> float { __float_from_bits(n) }

@@ -195,6 +195,14 @@ pub enum OpCode {
     ChaChaPolySeal,
     ChaChaPolyOpen,
 
+    /// M54.1: bits IEEE 754 de un float. Saca un `float`; empuja sus 64 bits como `int` (dos
+    /// complemento). Primitivo `__float_bits`; `std/math` → `float_bits`. Lo pide el `double` de
+    /// BSON (y serviría a protobuf).
+    FloatBits,
+    /// M54.1: el inverso — saca un `int` (los 64 bits) y empuja el `float`. Total (cualquier patrón
+    /// de bits es un f64 válido, incl. NaN/Inf). Primitivo `__float_from_bits`.
+    FloatFromBits,
+
     // --- SQLite embebido (M53.3, vía rusqlite). El handle es un `int` en el registro de proceso
     // (como archivos/sockets); `close(h)` lo cierra. Resultados como arreglo etiquetado. ---
     /// Saca la ruta (string; `":memory:"` = en memoria); empuja `["ok", handle]`/`["err", msg]`.

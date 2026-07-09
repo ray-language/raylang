@@ -153,6 +153,7 @@ fn cmd_run(args: &[String]) {
         None => (None, Vec::new()),
     };
     let path = resolve_entry(explicit, false);
+    regen_stale_templates(Path::new(&path)); // M55: los .ray.html desactualizados, al día
     run_file(&path, prog_args, use_interp, fuel, heap.map(|n| n as usize));
 }
 
@@ -184,6 +185,7 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// para validar antes de publicar). Sale 0 si compila, 65 si hay errores de compilación.
 fn cmd_build(args: &[String]) {
     let path = resolve_entry(args.first().map(String::as_str), true);
+    regen_stale_templates(Path::new(&path)); // M55: los .ray.html desactualizados, al día
     let (mut program, locate, multi) = load_and_locate(&path);
     check_or_exit(&mut program, &locate, multi);
     match compiler::compile_program(&program) {
@@ -201,6 +203,7 @@ fn cmd_build(args: &[String]) {
 /// `ray test [archivo] [filtro]`: corre las funciones `@test`.
 fn cmd_test_sub(args: &[String]) {
     let path = resolve_entry(args.first().map(String::as_str), false);
+    regen_stale_templates(Path::new(&path)); // M55: los .ray.html desactualizados, al día
     let filter = args.get(1).map(String::as_str);
     run_tests(&path, filter);
 }
@@ -741,14 +744,53 @@ fn cmd_templ(args: &[String]) {
 }
 
 // Recolecta los `.ray.html` de un directorio, recursivo (orden estable: se ordenan al final).
+// Salta los directorios ocultos (`.git`, `.ray-deps`): sus templates no son del proyecto.
 fn collect_templates(dir: &Path, out: &mut Vec<PathBuf>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let p = entry.path();
             if p.is_dir() {
+                if entry.file_name().to_string_lossy().starts_with('.') {
+                    continue;
+                }
                 collect_templates(&p, out);
             } else if p.to_string_lossy().ends_with(".ray.html") {
                 out.push(p);
+            }
+        }
+    }
+}
+
+/// M55: **regeneración automática de templates** — antes de compilar/correr, cada `.ray.html` bajo
+/// el directorio de la entrada cuyo `.ray` generado **falte** o esté **desactualizado** (mtime
+/// anterior al del template) se regenera, como si se hubiera corrido `ray templ`. El aviso va por
+/// **stderr** (stdout es del programa). Un template con error de sintaxis aborta con 65 (el build
+/// habría fallado igual al compilar el generado viejo, pero con peor señal). Con los generados al
+/// día el coste es un stat por template (cero sin `.ray.html`).
+fn regen_stale_templates(entry: &Path) {
+    let dir = match entry.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let mut tpls = Vec::new();
+    collect_templates(dir, &mut tpls);
+    tpls.sort();
+    for t in tpls {
+        let generated = PathBuf::from(t.to_string_lossy().trim_end_matches(".html").to_string());
+        let mtime = |p: &Path| fs::metadata(p).and_then(|m| m.modified());
+        let stale = match (mtime(&t), mtime(&generated)) {
+            (Ok(tm), Ok(gm)) => gm < tm,
+            (_, Err(_)) => true,  // no hay generado
+            (Err(_), _) => false, // el template ni se puede leer: lo reportará quien lo importe
+        };
+        if !stale {
+            continue;
+        }
+        match crate::templ::generate_file(&t) {
+            Ok(out) => eprintln!("template regenerado: {}", out.display()),
+            Err(msg) => {
+                eprintln!("{msg}");
+                process::exit(65);
             }
         }
     }

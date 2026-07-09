@@ -987,6 +987,9 @@ función raylang tipada**: el archivo `vistas/lista.ray.html` declara su firma e
 ray templ vistas/        # genera vistas/lista.ray (pub fn render_lista(...) -> string)
 ```
 
+No hace falta acordarse de regenerar: `ray run`/`ray build`/`ray test` **regeneran solos** los
+templates cuyo `.ray` falte o esté desactualizado (aviso por stderr).
+
 ```rust
 import vistas/lista;
 let html = lista.render_lista("Informe", filas);

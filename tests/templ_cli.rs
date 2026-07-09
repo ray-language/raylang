@@ -97,6 +97,44 @@ fn un_typo_en_una_variable_es_error_de_compilacion() {
 }
 
 #[test]
+fn run_y_build_regeneran_templates_desactualizados() {
+    // M55: `ray run`/`ray build` regeneran los `.ray.html` cuyo `.ray` falte o esté viejo — no hay
+    // que acordarse de `ray templ`. El aviso va por stderr (stdout es del programa).
+    let base = std::env::temp_dir().join("ray_templ_autoregen");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let tpl = "{% params t: string %}<h1>{{ t }}</h1>\n";
+    let main = "import vistas/lista;\n\nfn main() -> int {\n    print(lista.render_lista(\"hola\"));\n    0\n}\n";
+    let app = proyecto(&base, tpl, main);
+
+    // 1) Sin `ray templ` previo: el generado FALTA → `ray run` lo genera y el programa corre.
+    let out = Command::new(BIN).args(["run", "main.ray"]).current_dir(&app).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("<h1>hola</h1>"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("template regenerado"), "aviso por stderr");
+
+    // 2) Editar el template → el generado queda VIEJO → `ray run` lo regenera solo.
+    std::thread::sleep(std::time::Duration::from_millis(30)); // mtime estrictamente posterior
+    std::fs::write(app.join("vistas/lista.ray.html"), "{% params t: string %}<h2>{{ t }}</h2>\n").unwrap();
+    let out = Command::new(BIN).args(["run", "main.ray"]).current_dir(&app).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("<h2>hola</h2>"), "corre el template NUEVO");
+
+    // 3) Sin cambios: nada que regenerar (ni aviso).
+    let out = Command::new(BIN).args(["build", "main.ray"]).current_dir(&app).output().unwrap();
+    assert!(out.status.success());
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("regenerado"), "al día → silencio");
+
+    // 4) Un template ROTO aborta el build con 65 y el error del template (mejor señal que
+    //    compilar el generado viejo).
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    std::fs::write(app.join("vistas/lista.ray.html"), "{% params t: string %}{% if t %}sin cierre\n").unwrap();
+    let out = Command::new(BIN).args(["build", "main.ray"]).current_dir(&app).output().unwrap();
+    assert_eq!(out.status.code(), Some(65));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("endif"), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
 fn errores_del_template() {
     let base = std::env::temp_dir().join("ray_templ_cli_err");
     let _ = std::fs::remove_dir_all(&base);

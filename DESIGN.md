@@ -7276,6 +7276,10 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   como `source.raylang`; el cliente LSP añade el selector) y sintaxis de Sublime
   (`raylang-template.sublime-syntax`, `extends` HTML + `prototype` con los delimitadores; selector
   LSP `source.raylang | text.html.raylang` en el README).
-- Diferido: `{% include %}`/layouts entre templates compilados, regeneración automática en
-  `ray build`, `{% let %}` locales; hover y completion de MIEMBROS (`param.`) dentro de las
-  expresiones del template.
+- **Regeneración automática** (misma sesión, cierra el diferido): `ray run`/`ray build`/`ray test`
+  regeneran antes de compilar cada `.ray.html` bajo el directorio de la entrada cuyo `.ray` falte o
+  esté desactualizado (mtime; `regen_stale_templates` en `cli.rs`) — aviso por stderr (stdout es
+  del programa); template roto → 65 con su error (mejor señal que compilar el generado viejo);
+  generados al día → un stat por template. `collect_templates` salta directorios ocultos
+  (`.git`, `.ray-deps`).
+- Diferido: `{% include %}`/layouts entre templates compilados, `{% let %}` locales.

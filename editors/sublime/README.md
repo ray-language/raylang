@@ -34,8 +34,9 @@ nombre `raylang`:
 3. Abre cualquier `.ray`. Abajo a la derecha debería decir **raylang**; si no, elígelo en el
    selector de sintaxis (o **View → Syntax → raylang**). Los templates compilados (`*.ray.html`,
    M55) usan la sintaxis **raylang template** (HTML + los delimitadores `{{ }}`/`{% %}` con la
-   expresión coloreada como raylang) y reciben del mismo LSP los diagnósticos del template y el
-   autocompletado dentro de `{{ }}`/`{% %}` (params tipados de la cabecera + variables de `for`).
+   expresión coloreada como raylang) y reciben del mismo LSP los diagnósticos del template, el
+   autocompletado dentro de `{{ }}`/`{% %}` (params tipados de la cabecera + variables de `for`)
+   y el hover sobre esas variables (`nombre: tipo`).
 
 No hay que compilar nada: el `.sublime-syntax` es declarativo (a diferencia del cliente de
 VSCode, que sí es TypeScript a compilar).

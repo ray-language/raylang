@@ -212,7 +212,16 @@ fn pos_params(msg: &Json) -> Option<(String, usize, usize)> {
 fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
     if is_template_uri(&uri) {
-        return Json::Null; // M55: un .ray.html no es fuente raylang
+        // M55: hover de los símbolos del PROPIO template (params + vars de for) → `nombre: tipo`.
+        if let Some(src) = docs.get(&uri)
+            && let Some((info, start, end)) = template_hover_at(src, line0, char0)
+        {
+            return obj(vec![
+                ("contents", obj(vec![("kind", text("plaintext")), ("value", Json::Str(info))])),
+                ("range", range(line0, start, end)),
+            ]);
+        }
+        return Json::Null;
     }
     let Some(src) = docs.get(&uri) else { return Json::Null };
     // Documentación: se localiza la DECLARACIÓN del símbolo (cruza archivos, como ir-a-definición) y
@@ -1746,6 +1755,44 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 /// en contexto de etiqueta `{%`, las palabras clave del template. Todo por escaneo textual: el
 /// template está a medio escribir mientras se pide completion, no se puede tokenizar entero.
 fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
+    let Some((is_tag, vars)) = template_scope(src, line0, char0) else {
+        return Json::Arr(vec![]); // el cursor está fuera de los delimitadores (en el HTML)
+    };
+
+    // Kinds LSP: 6 = Variable, 14 = Keyword. Los sortText ponen las variables antes que las keywords.
+    let mut list: Vec<Json> = Vec::new();
+    for (nombre, tipo) in &vars {
+        let mut fields = vec![
+            ("label", Json::Str(nombre.clone())),
+            ("kind", num(6)),
+            ("sortText", Json::Str(format!("0{nombre}"))),
+        ];
+        if !tipo.is_empty() {
+            fields.push(("detail", Json::Str(tipo.clone())));
+        }
+        list.push(obj(fields));
+    }
+    let keywords: &[&str] = if is_tag {
+        &["params", "if", "elif", "else", "endif", "for", "endfor", "in", "true", "false"]
+    } else {
+        &["true", "false"]
+    };
+    for kw in keywords {
+        list.push(obj(vec![
+            ("label", Json::Str(kw.to_string())),
+            ("kind", num(14)),
+            ("sortText", Json::Str(format!("1{kw}"))),
+        ]));
+    }
+    Json::Arr(list)
+}
+
+/// El ámbito de un template en una posición: `None` si el cursor está FUERA de `{{ … }}`/`{% … %}`
+/// (el HTML no es nuestro); si está dentro, `(es_etiqueta, variables)` — los params tipados de la
+/// cabecera `{% params %}` más las variables de los `{% for %}` que encierran el cursor (con su
+/// tipo inferido: iterar un param `[T]` → `T`, un rango `a..b` → `int`). Escaneo textual del
+/// prefijo hasta el cursor: mientras escribes, el template no tokeniza entero.
+fn template_scope(src: &str, line0: usize, char0: usize) -> Option<(bool, Vec<(String, String)>)> {
     // El texto hasta el cursor (la línea del cursor cortada en char0, por caracteres).
     let mut prefix = String::new();
     for (i, l) in src.lines().enumerate() {
@@ -1762,10 +1809,10 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
         (Some(e), Some(t)) if t > e => (t, true),
         (Some(e), _) => (e, false),
         (None, Some(t)) => (t, true),
-        (None, None) => return Json::Arr(vec![]),
+        (None, None) => return None,
     };
     if prefix[open_at..].contains(if is_tag { "%}" } else { "}}" }) {
-        return Json::Arr(vec![]); // el cursor está fuera de los delimitadores (en el HTML)
+        return None;
     }
 
     let params = crate::templ::header_params(src);
@@ -1795,33 +1842,24 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
             fors.push((v.trim().to_string(), tipo));
         }
     }
+    let mut vars = params;
+    vars.extend(fors);
+    Some((is_tag, vars))
+}
 
-    // Kinds LSP: 6 = Variable, 14 = Keyword. Los sortText ponen las variables antes que las keywords.
-    let mut list: Vec<Json> = Vec::new();
-    for (nombre, tipo) in params.iter().chain(fors.iter()) {
-        let mut fields = vec![
-            ("label", Json::Str(nombre.clone())),
-            ("kind", num(6)),
-            ("sortText", Json::Str(format!("0{nombre}"))),
-        ];
-        if !tipo.is_empty() {
-            fields.push(("detail", Json::Str(tipo.clone())));
-        }
-        list.push(obj(fields));
+/// Hover en un template `.ray.html` (M55): sobre un **param** de la cabecera o una **variable de
+/// `{% for %}`** en ámbito, dentro de los delimitadores → `nombre: tipo` con el rango del
+/// identificador. `None` en cualquier otro sitio (el HTML no es nuestro).
+fn template_hover_at(src: &str, line0: usize, char0: usize) -> Option<(String, usize, usize)> {
+    let (name, start, end) = ident_range_under_cursor(src, line0, char0)?;
+    // El ámbito se calcula en el INICIO del identificador (así el propio nombre no cuenta como
+    // texto del prefijo y un cursor al final del ident no cambia el resultado).
+    let (_, vars) = template_scope(src, line0, start)?;
+    let (_, tipo) = vars.iter().find(|(n, _)| *n == name)?;
+    if tipo.is_empty() {
+        return None;
     }
-    let keywords: &[&str] = if is_tag {
-        &["params", "if", "elif", "else", "endif", "for", "endfor", "in", "true", "false"]
-    } else {
-        &["true", "false"]
-    };
-    for kw in keywords {
-        list.push(obj(vec![
-            ("label", Json::Str(kw.to_string())),
-            ("kind", num(14)),
-            ("sortText", Json::Str(format!("1{kw}"))),
-        ]));
-    }
-    Json::Arr(list)
+    Some((format!("{name}: {tipo}"), start, end))
 }
 
 /// Los nombres en ámbito local (params + `let`/`var`) de la función que contiene `cursor_line`
@@ -4248,6 +4286,19 @@ mod tests {
         let items = completion_result(&msg, &docs);
         assert!(items.as_array().unwrap().iter()
             .any(|i| i.get("label").and_then(Json::as_str) == Some("titulo")));
+
+        // Hover: sobre `ti` de `{{ ti }}`... no hay símbolo; sobre `filas` del for (línea 3,
+        // "{% for fila in filas %}" → `filas` empieza en col 15) → `filas: [string]`; sobre la
+        // variable de bucle usada dentro (no cubierta aquí: `f` no es `fila`); y sobre HTML, nada.
+        assert_eq!(template_hover_at(tpl, 2, 16), Some(("filas: [string]".into(), 15, 20)));
+        assert_eq!(template_hover_at(tpl, 3, 7), Some(("total: int".into(), 6, 11))); // {% if total
+        assert!(template_hover_at(tpl, 4, 4).is_none(), "sobre el HTML no hay hover");
+        // Y el enrutado por hover_result con URI .ray.html.
+        let hmsg = json::parse(&format!(
+            r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":3,"character":7}}}}}}"#
+        )).unwrap();
+        let h = hover_result(&hmsg, &docs);
+        assert!(h.serialize().contains("total: int"), "{h:?}");
     }
 
     #[test]

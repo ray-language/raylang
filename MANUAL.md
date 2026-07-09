@@ -997,9 +997,9 @@ Los `{{ expr }}` admiten expresiones raylang (`{{ p.nombre }}`, `{{ n + 1 }}`) c
 motor runtime: **un typo en una variable es error de compilación** (no un `""` silencioso) y el
 render es ~2× más rápido (cero parseo en runtime). El motor runtime queda para plantillas dinámicas
 (cargadas de disco/BD en caliente). En el editor (VSCode/Sublime + `ray lsp`), un `.ray.html` tiene
-diagnósticos en vivo (errores del template y de tipos, mapeados a su línea) y **autocompletado
-dentro de `{{ }}`/`{% %}`**: los params tipados de la cabecera y las variables de los `{% for %}`
-en ámbito.
+diagnósticos en vivo (errores del template y de tipos, mapeados a su línea), **autocompletado
+dentro de `{{ }}`/`{% %}`** (los params tipados de la cabecera y las variables de los `{% for %}`
+en ámbito) y **hover** sobre esas variables (`nombre: tipo`).
 
 **Editores**: extensión de VSCode (`editors/vscode`) y paquete de Sublime Text (`editors/sublime`), ambos
 sobre `ray lsp`; Neovim/Helix lo usan directo. **Playground web**: la VM compilada a WASM corre el lenguaje

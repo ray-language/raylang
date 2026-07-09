@@ -7254,13 +7254,14 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   buffers `.ray.html` — errores del propio template con su línea, y errores de TIPOS del módulo
   generado (analizado con el loader contra la ruta del `.ray` hermano → std/template y path-deps
   resuelven) **traducidos de vuelta al template** con el mapa: el typo en `{{ titluo }}` se subraya
-  en el HTML (probado en `tests/lsp_cli.rs`); hover/definición/rename/formatting devuelven null
-  sobre un template (no es fuente raylang); (b2) **completion en el template**: dentro de
+  en el HTML (probado en `tests/lsp_cli.rs`); definición/rename/formatting devuelven null sobre
+  un template (no es fuente raylang); (b2) **completion y hover en el template**: dentro de
   `{{ … }}`/`{% … %}` (y solo ahí — fuera, el HTML es del editor) se ofrecen los **params tipados**
   de la cabecera `{% params %}` (el tipo como detalle), las **variables de los `{% for %}` que
   encierran el cursor** (tipo inferido: `[T]` → `T`, rango → `int`) y, en etiqueta, las palabras
   clave del template (`templ::header_params` tolerante + escaneo textual del prefijo — el buffer a
-  medio escribir no tokeniza entero); (c) **coloreado**: gramática de VSCode
+  medio escribir no tokeniza entero); hover sobre un param o var de bucle → `nombre: tipo`
+  (`template_hover_at`, mismo ámbito `template_scope`); (c) **coloreado**: gramática de VSCode
   `raylang-template` (`text.html.raylang`: HTML base + `{{ }}`/`{% %}` con la expresión embebida
   como `source.raylang`; el cliente LSP añade el selector) y sintaxis de Sublime
   (`raylang-template.sublime-syntax`, `extends` HTML + `prototype` con los delimitadores; selector

@@ -1421,6 +1421,42 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M15.2: conecta por TCP → ["ok", handle] o ["err", msg].
+            // M53.3: SQLite embebido → arreglo etiquetado; el paquete `db/sqlite` lo traduce a Result.
+            "__sqlite_open" => {
+                let arr = match &values[0] {
+                    Value::Str(path) => match crate::builtins::sqlite_open(path) {
+                        Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("el checker garantiza un string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__sqlite_exec" | "__sqlite_query" => {
+                let (Value::Int(h), Value::Str(sql), Value::Array(ps)) = (&values[0], &values[1], &values[2]) else {
+                    unreachable!("el checker garantiza int, string, [string]");
+                };
+                let params: Vec<String> = ps.borrow().iter().map(|v| match v {
+                    Value::Str(s) => s.clone(),
+                    _ => unreachable!("el checker garantiza [string]"),
+                }).collect();
+                let arr = if name == "__sqlite_exec" {
+                    match crate::builtins::sqlite_exec(*h, sql, &params) {
+                        Ok(n) => vec![Value::Str("ok".to_string()), Value::Str(n.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    }
+                } else {
+                    match crate::builtins::sqlite_query(*h, sql, &params) {
+                        Ok((ncols, cells)) => {
+                            let mut v = vec![Value::Str("ok".to_string()), Value::Str(ncols.to_string())];
+                            v.extend(cells.into_iter().map(Value::Str));
+                            v
+                        }
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    }
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__tcp_connect" => {
                 let arr = match (&values[0], &values[1]) {
                     (Value::Str(host), Value::Int(port)) => match crate::builtins::tcp_connect(host, *port) {

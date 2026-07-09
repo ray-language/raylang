@@ -195,6 +195,18 @@ pub enum OpCode {
     ChaChaPolySeal,
     ChaChaPolyOpen,
 
+    // --- SQLite embebido (M53.3, vía rusqlite). El handle es un `int` en el registro de proceso
+    // (como archivos/sockets); `close(h)` lo cierra. Resultados como arreglo etiquetado. ---
+    /// Saca la ruta (string; `":memory:"` = en memoria); empuja `["ok", handle]`/`["err", msg]`.
+    /// Primitivo `__sqlite_open`; el paquete `db/sqlite` → `Result<Conn, string>`.
+    SqliteOpen,
+    /// Saca params (`[string]`), sql (string) y handle (int); ejecuta una sentencia sin filas y
+    /// empuja `["ok", n_afectadas]`/`["err", msg]`. Primitivo `__sqlite_exec`.
+    SqliteExec,
+    /// Como `SqliteExec` pero para consultas con filas: empuja `["ok", ncols, v0, v1, …]` (las celdas
+    /// aplanadas por fila; NULL = "") o `["err", msg]`. Primitivo `__sqlite_query`.
+    SqliteQuery,
+
     // --- I/O binaria (M16.1c). Lecturas → [bytes] etiquetado; escrituras → [string]. ---
     /// Saca la ruta (string); lee el archivo y empuja `[bytes]` (`[b"ok", datos]`/`[b"err", msg]`).
     /// Primitivo `__read_file_bytes`; el prelude → `Result<bytes, string>`.

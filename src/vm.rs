@@ -1792,6 +1792,50 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
 
+                // --- SQLite embebido (M53.3): arreglo etiquetado, como los primitivos de I/O. ---
+                OpCode::SqliteOpen => {
+                    let path = self.pop();
+                    let HeapValue::Str(path) = path else {
+                        unreachable!("el checker garantiza un string");
+                    };
+                    let elems = match crate::builtins::sqlite_open(&path) {
+                        Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                OpCode::SqliteExec | OpCode::SqliteQuery => {
+                    // Orden en la pila: handle, sql, params → se saca params primero.
+                    let ps = self.pop();
+                    let sql = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Str(sql), HeapValue::Obj(ph)) = (handle, sql, ps) else {
+                        unreachable!("el checker garantiza int, string, [string]");
+                    };
+                    let params: Vec<String> = self.as_array(ph).iter().map(|v| match v {
+                        HeapValue::Str(s) => s.clone(),
+                        _ => unreachable!("el checker garantiza [string]"),
+                    }).collect();
+                    let elems = if matches!(instr, OpCode::SqliteExec) {
+                        match crate::builtins::sqlite_exec(handle, &sql, &params) {
+                            Ok(n) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(n.to_string())],
+                            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        }
+                    } else {
+                        match crate::builtins::sqlite_query(handle, &sql, &params) {
+                            Ok((ncols, cells)) => {
+                                let mut v = vec![HeapValue::Str("ok".to_string()), HeapValue::Str(ncols.to_string())];
+                                v.extend(cells.into_iter().map(HeapValue::Str));
+                                v
+                            }
+                            Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e)],
+                        }
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+
                 // --- I/O con buffering: handles de archivo (M11.8) ---
                 OpCode::Open => {
                     let mode = self.pop();

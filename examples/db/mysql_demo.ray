@@ -1,0 +1,53 @@
+// Demo del cliente MySQL (M53.1, `db/mysql`). Se conecta a un servidor MySQL, ejecuta un SELECT,
+// muestra las filas, hace un INSERT y se despide. Un CRUD mínimo sobre el protocolo wire.
+//
+// Uso (necesita un servidor MySQL de verdad):
+//   cd examples/db
+//   ray run mysql_demo.ray <host> <puerto> <usuario> <contraseña> <base>
+//
+// Ejemplo contra un MySQL local con un usuario `mysql_native_password`:
+//   ray run mysql_demo.ray 127.0.0.1 3306 raylang secret demo
+
+import db/mysql;
+
+fn main() -> int {
+    let a = args();
+    if (a.len() < 5) {
+        print("uso: ray run mysql_demo.ray <host> <puerto> <usuario> <contraseña> <base>");
+        return 64;
+    }
+    let host = a[0];
+    let port = match (parse_int(a[1])) {
+        Option.Some(p) => p,
+        Option.None => { print("puerto inválido: " + a[1]); return 64; },
+    };
+
+    // 1. Conectar (handshake v10 + autenticación).
+    var c = match (mysql.connect(host, port, a[2], a[3], a[4])) {
+        Result.Ok(conn) => conn,
+        Result.Err(e) => { print("no se pudo conectar: " + e); return 1; },
+    };
+    print("conectado a MySQL en " + host + ":" + to_string(port));
+
+    // 2. Consultar (protocolo de texto; las filas llegan como strings, un NULL como "").
+    match (mysql.query(c, "SELECT id, nombre FROM usuarios ORDER BY id LIMIT 5")) {
+        Result.Ok(rows) => {
+            print("usuarios (" + to_string(rows.len()) + "):");
+            for fila in rows {
+                print("  " + fila.join(" | "));
+            }
+        },
+        Result.Err(e) => { print("error en la consulta: " + e); },
+    }
+
+    // 3. Insertar (sentencia sin filas → nº de filas afectadas).
+    match (mysql.exec(c, "INSERT INTO usuarios (nombre) VALUES ('ada')")) {
+        Result.Ok(n) => { print("filas insertadas: " + to_string(n)); },
+        Result.Err(e) => { print("error en el insert: " + e); },
+    }
+
+    // 4. Despedirse (COM_QUIT + cerrar el socket).
+    mysql.disconnect(c);
+    print("desconectado");
+    0
+}

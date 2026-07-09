@@ -1,0 +1,10 @@
+[package]
+name = "db-demos"
+version = "0.1.0"
+
+# Los clientes de base de datos viven en el paquete `packages/db` (tier 2, no embebido). Se declara
+# como dependencia por ruta (relativa a este manifiesto). El cliente de Postgres, además, importa
+# `net/scram`; el loader resuelve `net` como cápsula hermana bajo `packages/`, así que no hace falta
+# declararlo aparte.
+[dependencies]
+db = "path:../../packages/db"

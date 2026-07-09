@@ -499,6 +499,12 @@ fn range(line0: usize, start: usize, end: usize) -> Json {
     obj(vec![("start", pos(start)), ("end", pos(end))])
 }
 
+/// Un `range` LSP que cruza líneas (0-basadas): de `(l1, c1)` a `(l2, c2)`.
+fn range_multiline(l1: usize, c1: usize, l2: usize, c2: usize) -> Json {
+    let pos = |l: usize, ch: usize| obj(vec![("line", num(l as i64)), ("character", num(ch as i64))]);
+    obj(vec![("start", pos(l1, c1)), ("end", pos(l2, c2))])
+}
+
 // ── Ir-a-definición (M10.2b) ─────────────────────────────────────────────────────────
 
 /// El `result` de un `textDocument/definition`: una `Location` (uri + rango de la declaración), o
@@ -664,14 +670,26 @@ fn symbol_occurrences(
 /// módulos devuelve sus usos en cada archivo. Lista vacía si no hay símbolo.
 fn references_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Arr(vec![]) };
-    if is_template_uri(&uri) {
-        return Json::Null; // M55: un .ray.html no es fuente raylang
-    }
     let Some(src) = docs.get(&uri) else { return Json::Arr(vec![]) };
     let include_decl = msg.get("params").and_then(|p| p.get("context"))
         .and_then(|c| c.get("includeDeclaration"))
         .map(|b| matches!(b, Json::Bool(true)))
         .unwrap_or(true);
+    if is_template_uri(&uri) {
+        // M55: las apariciones del símbolo (param / var de for) DENTRO del template.
+        let occs = template_occurrences(src);
+        let Some(cur) = template_occurrence_at(&occs, line0, char0).cloned() else {
+            return Json::Arr(vec![]);
+        };
+        let list: Vec<Json> = occs.iter()
+            .filter(|(_, _, _, k, is_decl)| *k == cur.3 && (include_decl || !*is_decl))
+            .map(|(l, c, len, _, _)| obj(vec![
+                ("uri", Json::Str(uri.clone())),
+                ("range", range(*l, *c, *c + *len)),
+            ]))
+            .collect();
+        return Json::Arr(list);
+    }
     // Camino cross-archivo (si es un archivo); si no (buffer sin guardar), un solo archivo.
     let locs: Vec<(String, Span)> = references_cross(&uri, src, line0, char0, include_decl)
         .unwrap_or_else(|| {
@@ -757,13 +775,31 @@ fn references_cross(uri: &str, src: &str, line0: usize, char0: usize, include_de
 /// + usos) por el nuevo nombre. `null` si no hay símbolo o falta `newName`.
 fn rename_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
-    if is_template_uri(&uri) {
-        return Json::Null; // M55: un .ray.html no es fuente raylang
-    }
     let Some(src) = docs.get(&uri) else { return Json::Null };
     let Some(new_name) = msg.get("params").and_then(|p| p.get("newName")).and_then(|n| n.as_str()) else {
         return Json::Null;
     };
+    if is_template_uri(&uri) {
+        // M55: renombrar un param o una var de for DENTRO del template (declaración + usos). Es
+        // seguro hacia afuera: los llamadores del `render_<x>` generado pasan args POSICIONALES.
+        let valid = new_name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+            && new_name.chars().all(is_ident_char);
+        if !valid {
+            return Json::Null;
+        }
+        let occs = template_occurrences(src);
+        let Some(cur) = template_occurrence_at(&occs, line0, char0).cloned() else {
+            return Json::Null;
+        };
+        let edits: Vec<Json> = occs.iter()
+            .filter(|(_, _, _, k, _)| *k == cur.3)
+            .map(|(l, c, len, _, _)| obj(vec![
+                ("range", range(*l, *c, *c + *len)),
+                ("newText", Json::Str(new_name.to_string())),
+            ]))
+            .collect();
+        return obj(vec![("changes", obj(vec![(uri.as_str(), Json::Arr(edits))]))]);
+    }
     // Camino cross-archivo (si es un archivo). Agrupa las ediciones por URI. Un rename que no puede
     // hacerse de forma **completa y segura** (alias, refs calificadas, símbolo no resoluble)
     // devuelve `None` → aquí `null` (el editor avisa de que no se puede renombrar).
@@ -1974,6 +2010,107 @@ fn template_pos_to_generated(src: &str, code: &str, map: &[usize], line0: usize,
     None
 }
 
+/// Una ocurrencia de identificador dentro de los delimitadores del template:
+/// `(línea0, col0 en chars, largo en chars, clave del binding, es_declaración)`. La clave liga
+/// todas las apariciones del MISMO símbolo: `p:<nombre>` para un param de la cabecera,
+/// `f:<línea>:<col>` para una variable de `{% for %}` (su posición de declaración la identifica,
+/// así dos `for` anidados con el mismo nombre no se confunden).
+type TplOcc = (usize, usize, usize, String, bool);
+
+/// Escanea TODO el template y resuelve cada identificador de los `{{ }}`/`{% %}` a su binding —
+/// el motor común de find-references / rename / highlight / outline del template. Textual con
+/// ámbitos: pila de bloques `for` (cada uno puede declarar varias variables: `for (k, v) in m`);
+/// un ident precedido por `.` (miembro), una palabra clave o un nombre de tipo de la cabecera
+/// no ligan. Solo cuenta delimitadores abiertos y cerrados en la misma línea.
+fn template_occurrences(src: &str) -> Vec<TplOcc> {
+    let params: Vec<String> = crate::templ::header_params(src).into_iter().map(|(n, _)| n).collect();
+    let keywords = ["params", "if", "elif", "else", "endif", "for", "endfor", "in", "true", "false"];
+    let mut out: Vec<TplOcc> = Vec::new();
+    let mut for_stack: Vec<Vec<(String, String)>> = Vec::new(); // grupos de (var, clave) por bloque
+    for (l0, line) in src.lines().enumerate() {
+        let mut from = 0usize; // byte
+        loop {
+            // El siguiente abridor a partir de `from`.
+            let rest = &line[from..];
+            let (rel, olen, is_tag) = match (rest.find("{{"), rest.find("{%")) {
+                (Some(e), Some(t)) if t < e => (t, 2, true),
+                (Some(e), _) => (e, if rest[e..].starts_with("{{&") { 3 } else { 2 }, false),
+                (None, Some(t)) => (t, 2, true),
+                (None, None) => break,
+            };
+            let content_start = from + rel + olen;
+            let Some(crel) = line[content_start..].find(if is_tag { "%}" } else { "}}" }) else { break };
+            let close_b = content_start + crel;
+            let content = &line[content_start..close_b];
+            let first_word = content.split_whitespace().next().unwrap_or("");
+            // Los identificadores del contenido, con su offset en bytes.
+            let mut idents: Vec<(usize, &str)> = Vec::new();
+            let mut it = content.char_indices().peekable();
+            while let Some((i, c)) = it.next() {
+                if c.is_alphabetic() || c == '_' {
+                    let mut end = i + c.len_utf8();
+                    while let Some(&(j, d)) = it.peek() {
+                        if is_ident_char(d) { end = j + d.len_utf8(); it.next(); } else { break }
+                    }
+                    idents.push((i, &content[i..end]));
+                } else if c.is_ascii_digit() {
+                    // Un número no arranca un ident; consumir sus dígitos evita `0..2` raro.
+                    while it.peek().is_some_and(|&(_, d)| is_ident_char(d)) { it.next(); }
+                }
+            }
+            // En un `{% for a, (k, v) in expr %}`: los idents entre `for` y el `in` son DECLS.
+            let in_idx = (is_tag && first_word == "for")
+                .then(|| idents.iter().position(|(_, n)| *n == "in").unwrap_or(idents.len()))
+                .unwrap_or(0);
+            let mut group: Vec<(String, String)> = Vec::new();
+            for (k, (off, name)) in idents.iter().enumerate() {
+                if content[..*off].trim_end().ends_with('.') {
+                    continue; // miembro (`fila.trim`): no liga a variables
+                }
+                let col0 = line[..content_start + off].chars().count();
+                let len = name.chars().count();
+                if is_tag && first_word == "params" {
+                    // Declaración de param: el ident seguido de `:` (los nombres de TIPO no ligan).
+                    let is_decl = k > 0
+                        && content[off + name.len()..].trim_start().starts_with(':')
+                        && params.iter().any(|p| p == name);
+                    if is_decl {
+                        out.push((l0, col0, len, format!("p:{name}"), true));
+                    }
+                    continue;
+                }
+                if is_tag && first_word == "for" && k >= 1 && k < in_idx {
+                    let key = format!("f:{l0}:{col0}");
+                    out.push((l0, col0, len, key.clone(), true));
+                    group.push((name.to_string(), key));
+                    continue;
+                }
+                if keywords.contains(name) {
+                    continue;
+                }
+                // Uso: la variable de for más interna con ese nombre gana; si no, un param.
+                if let Some((_, key)) = for_stack.iter().rev().flatten().find(|(v, _)| v == name) {
+                    out.push((l0, col0, len, key.clone(), false));
+                } else if params.iter().any(|p| p == name) {
+                    out.push((l0, col0, len, format!("p:{name}"), false));
+                }
+            }
+            if is_tag && first_word == "for" {
+                for_stack.push(group);
+            } else if is_tag && first_word == "endfor" {
+                for_stack.pop();
+            }
+            from = close_b + 2;
+        }
+    }
+    out
+}
+
+/// La ocurrencia del template que contiene la posición `(line0, char0)`, si la hay.
+fn template_occurrence_at(occs: &[TplOcc], line0: usize, char0: usize) -> Option<&TplOcc> {
+    occs.iter().find(|(l, c, len, _, _)| *l == line0 && char0 >= *c && char0 < *c + *len)
+}
+
 /// Hover semántico en un template: la posición se traduce al módulo generado y el hover corre ahí
 /// (tipos REALES del checker: `fila.precio` → `float`). El rango devuelto es el del identificador
 /// en el TEMPLATE (las columnas del generado no significan nada para el editor).
@@ -2515,6 +2652,40 @@ fn formatting_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 fn document_symbol_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
     let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
+    if uri.is_some_and(is_template_uri) {
+        // M55: outline del template — la función `render_<stem>` como raíz (abarca el documento)
+        // y, como hijos, cada param de la cabecera y cada variable de `{% for %}` (kind Variable).
+        let name = uri.and_then(uri_to_path)
+            .and_then(|p| crate::templ::fn_suffix_of(&p).ok())
+            .map(|s| format!("render_{s}"))
+            .unwrap_or_else(|| "render".to_string());
+        let lines: Vec<&str> = src.split('\n').collect();
+        let text_at = |l: usize, c: usize, len: usize| -> String {
+            lines.get(l).map(|s| s.chars().skip(c).take(len).collect()).unwrap_or_default()
+        };
+        let children: Vec<Json> = template_occurrences(src).iter()
+            .filter(|(_, _, _, _, is_decl)| *is_decl)
+            .map(|(l, c, len, _, _)| {
+                let r = range(*l, *c, *c + *len);
+                obj(vec![
+                    ("name", Json::Str(text_at(*l, *c, *len))),
+                    ("kind", num(13)), // Variable
+                    ("range", r.clone()),
+                    ("selectionRange", r),
+                ])
+            })
+            .collect();
+        // El rango de la raíz debe CONTENER a los hijos → el documento entero.
+        let last = lines.len().saturating_sub(1);
+        let full = range_multiline(0, 0, last, lines.last().map(|s| s.chars().count()).unwrap_or(0));
+        return Json::Arr(vec![obj(vec![
+            ("name", Json::Str(name)),
+            ("kind", num(12)), // Function
+            ("range", full),
+            ("selectionRange", range(0, 0, lines.first().map(|s| s.chars().count()).unwrap_or(1))),
+            ("children", Json::Arr(children)),
+        ])]);
+    }
     let Ok(tokens) = lexer::lex(src) else { return Json::Arr(vec![]) };
     let (program, _) = parser::parse_all(tokens);
     let lines: Vec<&str> = src.lines().collect();
@@ -2593,6 +2764,21 @@ fn doc_symbol_named(lines: &[&str], line: usize, col: usize, search_name: &str, 
 fn document_highlight_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Arr(vec![]) };
     let Some(src) = docs.get(&uri) else { return Json::Arr(vec![]) };
+    if is_template_uri(&uri) {
+        // M55: resalta las apariciones del param/var de for bajo el cursor (decl = Write).
+        let occs = template_occurrences(src);
+        let Some(cur) = template_occurrence_at(&occs, line0, char0).cloned() else {
+            return Json::Arr(vec![]);
+        };
+        let list: Vec<Json> = occs.iter()
+            .filter(|(_, _, _, k, _)| *k == cur.3)
+            .map(|(l, c, len, _, is_decl)| obj(vec![
+                ("range", range(*l, *c, *c + *len)),
+                ("kind", num(if *is_decl { 3 } else { 1 })),
+            ]))
+            .collect();
+        return Json::Arr(list);
+    }
     let Some((_, decl, uses, _)) = symbol_occurrences(Some(&uri), src, line0, char0) else {
         return Json::Arr(vec![]);
     };
@@ -4532,6 +4718,58 @@ mod tests {
         assert!(sh.serialize().contains("substring"), "{sh:?}");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rename_references_highlight_y_outline_en_templates() {
+        // M55: el escáner de ocurrencias del template resuelve cada ident de los delimitadores a su
+        // binding (param / var de for, con shadowing) y sobre él corren references / rename /
+        // highlight / outline. El HTML de fuera de los delimitadores NUNCA se toca.
+        let uri = "file:///tmp/lista.ray.html".to_string();
+        let tpl = "{% params fila: string, filas: [string] %}\n\
+                   <p>fila {{ fila }}</p>\n\
+                   {% for fila in filas %}<li>{{ fila.trim() }}</li>{% endfor %}\n\
+                   <i>{{ fila }}</i>\n";
+        let occs = template_occurrences(tpl);
+        // El `fila` del texto HTML (línea 2, "fila " literal) NO es ocurrencia.
+        assert!(!occs.iter().any(|(l, c, _, _, _)| *l == 1 && *c == 3), "{occs:?}");
+        // `trim` (miembro tras `.`) no liga.
+        assert!(!occs.iter().any(|(l, c, _, _, _)| *l == 2 && tpl.lines().nth(2).unwrap().chars().skip(*c).take(4).collect::<String>() == "trim"), "{occs:?}");
+        // El `fila` DENTRO del for liga a la var del for (shadowing del param).
+        let l2 = tpl.lines().nth(2).unwrap();
+        let col_uso = l2.rfind("fila.trim").unwrap(); // ASCII: byte == char
+        let uso = template_occurrence_at(&occs, 2, col_uso + 1).expect("uso de fila en el for");
+        assert!(uso.3.starts_with("f:"), "liga al for, no al param: {uso:?}");
+        // Los `fila` de FUERA del for ligan al param (línea 2 y línea 4 + su decl en la cabecera).
+        let param_occs: Vec<_> = occs.iter().filter(|o| o.3 == "p:fila").collect();
+        assert_eq!(param_occs.len(), 3, "decl + 2 usos: {param_occs:?}");
+
+        let mut docs = HashMap::new();
+        docs.insert(uri.clone(), tpl.to_string());
+        let at = |line: usize, ch: usize, extra: &str| -> Json {
+            json::parse(&format!(
+                r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":{line},"character":{ch}}}{extra}}}}}"#
+            )).unwrap()
+        };
+        // Rename del param `fila` → 3 ediciones (cabecera + 2 usos), sin tocar el for ni el HTML.
+        let col_p = tpl.lines().nth(1).unwrap().rfind("fila").unwrap();
+        let w = rename_result(&at(1, col_p + 1, r#","newName":"registro""#), &docs);
+        let ser = w.serialize();
+        assert_eq!(ser.matches("registro").count(), 3, "{ser}");
+        // Un nombre nuevo inválido → null.
+        assert!(matches!(rename_result(&at(1, col_p + 1, r#","newName":"1x""#), &docs), Json::Null));
+        // References sobre la var del for → decl + uso (2), no los del param.
+        let refs = references_result(&at(2, col_uso + 1, ""), &docs);
+        assert_eq!(refs.as_array().unwrap().len(), 2, "{}", refs.serialize());
+        // Highlight: mismas 2, la decl como Write (kind 3).
+        let hl = document_highlight_result(&at(2, col_uso + 1, ""), &docs);
+        assert_eq!(hl.as_array().unwrap().len(), 2);
+        assert!(hl.serialize().contains("\"kind\":3"), "{}", hl.serialize());
+        // Outline: raíz `render_lista` con las decls como hijas (2 params + 1 var de for).
+        let syms = document_symbol_result(&at(0, 0, ""), &docs);
+        let ser = syms.serialize();
+        assert!(ser.contains("render_lista"), "{ser}");
+        assert_eq!(ser.matches("\"kind\":13").count(), 3, "{ser}");
     }
 
     #[test]

@@ -7271,7 +7271,12 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   **ir-a-definición** (una def en otro archivo se devuelve tal cual; una en el generado —un
   param— vuelve al template por el line map: lleva al `{% params %}`) y **signature help**
   (`signature_help_at`, extraído). Cero lógica semántica nueva: solo traducción de posiciones;
-  (c) **coloreado**: gramática de VSCode
+  (b4) **references / rename / highlight / outline** en el template, sobre un motor común:
+  `template_occurrences` escanea los delimitadores y resuelve cada ident a su binding (`p:<nombre>`
+  param / `f:<línea>:<col>` var de for, con shadowing por pila de bloques; un miembro tras `.`, una
+  keyword o un nombre de tipo no ligan) — rename de un param es seguro hacia afuera (los llamadores
+  del `render_<x>` pasan args posicionales); el outline lista `render_<stem>` con params y vars de
+  for como hijas; (c) **coloreado**: gramática de VSCode
   `raylang-template` (`text.html.raylang`: HTML base + `{{ }}`/`{% %}` con la expresión embebida
   como `source.raylang`; el cliente LSP añade el selector) y sintaxis de Sublime
   (`raylang-template.sublime-syntax`, `extends` HTML + `prototype` con los delimitadores; selector

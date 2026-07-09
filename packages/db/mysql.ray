@@ -2,20 +2,25 @@
 //
 // Habla el protocolo cliente/servidor clásico (handshake v10 + COM_QUERY en protocolo de texto):
 //   - Framing: paquetes de [longitud:3 LE][secuencia:1][carga].
-//   - Auth: `mysql_native_password` (SHA1, completa) y `caching_sha2_password` SOLO en su
-//     fast-path (SHA256; vale cuando el servidor ya tiene la contraseña en caché). El full-path
-//     de caching_sha2 exige TLS *upgrade* a mitad de conexión (SSLRequest), que los sockets de
-//     `std/net` aún no ofrecen (`tls_connect` cifra desde el octeto 0) → error claro; el remedio
-//     es usar un usuario con `mysql_native_password` o calentar la caché con otro cliente.
-//   - Consultas: `COM_QUERY` (texto). Las filas llegan como strings (un NULL → ""); el protocolo
-//     binario (prepared statements / parámetros) queda diferido a una fase posterior.
+//   - Auth: `mysql_native_password` (SHA1, completa) y `caching_sha2_password` — fast-path
+//     (SHA256) por cualquier conexión, y full-path vía `connect_tls` (SSLRequest a mitad del
+//     handshake + `net.tls_upgrade`; la contraseña en claro viaja solo dentro del canal cifrado).
+//   - Consultas SIN parámetros: `COM_QUERY` (protocolo de texto), como siempre.
+//   - Consultas CON parámetros: **protocolo binario** (prepared statements de una ronda:
+//     COM_STMT_PREPARE → COM_STMT_EXECUTE → COM_STMT_CLOSE). Los `?` se enlazan aparte del SQL
+//     (anti-inyección por binding); los parámetros van como VAR_STRING (texto). La fila binaria
+//     se decodifica POR TIPO de columna (ints con/sin signo, float/double vía bits IEEE 754,
+//     DATE/DATETIME/TIMESTAMP/TIME empaquetados, el resto length-encoded) y se entrega como
+//     texto — la misma API `[[string]]` (un NULL → "").
 //
-// API (uniforme con el resto de `packages/db`): `connect` → `Conn`, `query` → filas
-// `[[string]]`, `exec` → filas afectadas, `disconnect` (no se llama `close` para no tapar,
-// dentro del módulo, al builtin global `close` que cierra el socket).
+// API (uniforme con el resto de `packages/db`): `connect`/`connect_tls` → `Conn`,
+// `query(c, sql, params)` → filas `[[string]]`, `exec(c, sql, params)` → filas afectadas,
+// `disconnect` (no se llama `close` para no tapar, dentro del módulo, al builtin global `close`
+// que cierra el socket).
 
 import std/net;
 import std/crypto;
+import std/math;
 
 /// Una conexión abierta: el socket, la secuencia de paquete en curso y el búfer de lectura
 /// (los sockets entregan trozos arbitrarios; el framing exige leer cantidades exactas).
@@ -355,10 +360,27 @@ fn send_query(c: Conn, sql: string) -> Result<[int], string> {
     read_packet(c)
 }
 
-/// Ejecuta un SELECT (o cualquier consulta que devuelva filas) y entrega las filas como
-/// strings (protocolo de texto). Un NULL llega como "" (el protocolo binario, diferido,
-/// traerá tipos de verdad).
-pub fn query(c: Conn, sql: string) -> Result<[[string]], string> {
+/// Runs a query that returns rows. With `params` the statement is prepared and the `?` markers
+/// are bound apart from the SQL (binary protocol → injection-proof); with `[]` it goes through
+/// the classic text protocol. Rows arrive as text either way (a NULL becomes `""`).
+pub fn query(c: Conn, sql: string, params: [string]) -> Result<[[string]], string> {
+    if (params.len() == 0) {
+        return query_text(c, sql);
+    }
+    query_prepared(c, sql, params)
+}
+
+/// Runs a statement that returns no rows (INSERT/UPDATE/DELETE/DDL); returns the affected-row
+/// count. Same rule as `query`: with `params`, prepared (binary); with `[]`, plain text.
+pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
+    if (params.len() == 0) {
+        return exec_text(c, sql);
+    }
+    exec_prepared(c, sql, params)
+}
+
+// El camino clásico de texto (COM_QUERY), para consultas sin parámetros.
+fn query_text(c: Conn, sql: string) -> Result<[[string]], string> {
     let first = send_query(c, sql)?;
     if (first[0] == 255) {
         return Result.Err(err_msg(first));
@@ -419,8 +441,8 @@ pub fn query(c: Conn, sql: string) -> Result<[[string]], string> {
     Result.Ok(rows)
 }
 
-/// Ejecuta una sentencia sin filas (INSERT/UPDATE/DELETE/DDL) y devuelve las filas afectadas.
-pub fn exec(c: Conn, sql: string) -> Result<int, string> {
+// El camino clásico de texto para sentencias sin filas.
+fn exec_text(c: Conn, sql: string) -> Result<int, string> {
     let first = send_query(c, sql)?;
     if (first[0] == 255) {
         return Result.Err(err_msg(first));
@@ -429,6 +451,364 @@ pub fn exec(c: Conn, sql: string) -> Result<int, string> {
         return Result.Err("mysql: la sentencia devuelve filas; usa query");
     }
     let af = lenc_int(first, 1); // OK: [0x00][afectadas lenc][last_insert_id lenc]…
+    Result.Ok(af.0)
+}
+
+// ── Protocolo binario: prepared statements de una ronda ─────────────────────────────────
+//
+// prepare → execute → close por llamada (sin estado de sentencia, como el portal anónimo de
+// postgres). Los parámetros se enlazan todos como VAR_STRING (texto; la afinidad del servidor
+// convierte); la FILA de respuesta llega en formato binario y se decodifica por el TIPO de cada
+// columna (que viaja en su definición) de vuelta a texto → misma API [[string]] que el texto.
+
+// Codifica un entero length-encoded (el inverso de lenc_int).
+fn lenc_of(n: int) -> [int] {
+    if (n < 251) {
+        return [n];
+    }
+    if (n < 65536) {
+        return [252, n & 255, (n >> 8) & 255];
+    }
+    // `return` explícito: un literal `[…]` en cola tras un if-sentencia se parsearía como
+    // indexación (mismo compromiso gramatical que el de las tuplas, DESIGN §55.1).
+    return [253, n & 255, (n >> 8) & 255, (n >> 16) & 255];
+}
+
+// COM_STMT_PREPARE (0x16): devuelve (stmt_id, num_params). Las definiciones de parámetros y
+// columnas del prepare se saltan (el execute trae las suyas).
+fn stmt_prepare(c: Conn, sql: string) -> Result<(int, int), string> {
+    c.seq = 0;
+    let _ = write_packet(c, [22] + bytes_to_ints(sql.to_bytes()))?;
+    let ok = read_packet(c)?;
+    if (ok[0] == 255) {
+        return Result.Err(err_msg(ok));
+    }
+    if (ok[0] != 0) {
+        return Result.Err("mysql: respuesta de prepare inesperada");
+    }
+    let stmt_id = ok[1] | (ok[2] << 8) | (ok[3] << 16) | (ok[4] << 24);
+    let ncols = ok[5] | (ok[6] << 8);
+    let nparams = ok[7] | (ok[8] << 8);
+    var k = 0;
+    while (k < nparams) {
+        let _ = read_packet(c)?;
+        k = k + 1;
+    }
+    if (nparams > 0) {
+        let _ = read_packet(c)?; // EOF del bloque de parámetros
+    }
+    k = 0;
+    while (k < ncols) {
+        let _ = read_packet(c)?;
+        k = k + 1;
+    }
+    if (ncols > 0) {
+        let _ = read_packet(c)?; // EOF del bloque de columnas
+    }
+    return Result.Ok((stmt_id, nparams));
+}
+
+// COM_STMT_EXECUTE (0x17): todos los parámetros como VAR_STRING (0xfd). El bitmap de NULLs va a
+// cero (la API no distingue NULL de ""; mismo compromiso que las celdas). Devuelve el primer
+// paquete de la respuesta.
+fn stmt_execute(c: Conn, stmt_id: int, params: [string]) -> Result<[int], string> {
+    c.seq = 0;
+    var out: [int] = [23];
+    out.push(stmt_id & 255);
+    out.push((stmt_id >> 8) & 255);
+    out.push((stmt_id >> 16) & 255);
+    out.push((stmt_id >> 24) & 255);
+    out.push(0); // flags: CURSOR_TYPE_NO_CURSOR
+    out = out + [1, 0, 0, 0]; // iteration count = 1
+    if (params.len() > 0) {
+        var k = 0;
+        let nb = (params.len() + 7) / 8;
+        while (k < nb) {
+            out.push(0); // bitmap de NULLs: ninguno
+            k = k + 1;
+        }
+        out.push(1); // new-params-bound
+        k = 0;
+        while (k < params.len()) {
+            out.push(253); // MYSQL_TYPE_VAR_STRING
+            out.push(0);   // con signo
+            k = k + 1;
+        }
+        k = 0;
+        while (k < params.len()) {
+            let pb = params[k].to_bytes();
+            out = out + lenc_of(pb.len()) + bytes_to_ints(pb);
+            k = k + 1;
+        }
+    }
+    let _ = write_packet(c, out)?;
+    read_packet(c)
+}
+
+// COM_STMT_CLOSE (0x19): libera la sentencia en el servidor. No hay respuesta.
+fn stmt_close(c: Conn, stmt_id: int) {
+    c.seq = 0;
+    let _ = write_packet(c, [25, stmt_id & 255, (stmt_id >> 8) & 255, (stmt_id >> 16) & 255, (stmt_id >> 24) & 255]);
+}
+
+// El tipo y los flags de una definición de columna (lo único que necesita la fila binaria).
+// Layout: 6 strings lenc (catálogo/esquema/tabla/tabla orig/nombre/nombre orig) + lenc del bloque
+// fijo (0x0c) + charset:2 + longitud:4 + TIPO:1 + FLAGS:2 + decimales:1 + relleno:2.
+fn col_type_flags(p: [int]) -> (int, int) {
+    var i = 0;
+    var k = 0;
+    while (k < 6) {
+        let ln = lenc_int(p, i);
+        i = i + ln.1 + ln.0;
+        k = k + 1;
+    }
+    let fl = lenc_int(p, i);
+    i = i + fl.1 + 2 + 4; // bloque fijo + charset + longitud de columna
+    return (p[i], p[i + 1] | (p[i + 2] << 8));
+}
+
+// int → float (exacto hasta 2^53; los operandos aquí caben de sobra).
+fn to_f(n: int) -> float {
+    return match (parse_float(to_string(n))) {
+        Option.Some(f) => f,
+        Option.None => 0.0,
+    };
+}
+
+// Entero LE SIN signo de hasta 4 octetos.
+fn int_le(p: [int], i: int, w: int) -> int {
+    var v = 0;
+    var k = 0;
+    while (k < w) {
+        v = v | (p[i + k] << (8 * k));
+        k = k + 1;
+    }
+    v
+}
+
+// Una celda entera de ancho w (1/2/4), con o sin signo → (texto, nueva posición).
+fn int_cell(p: [int], i: int, w: int, unsigned: bool) -> (string, int) {
+    var v = int_le(p, i, w);
+    if (!unsigned) {
+        let lim = 1 << (8 * w - 1);
+        if (v >= lim) {
+            v = v - lim * 2;
+        }
+    }
+    return (to_string(v), i + w);
+}
+
+// Reconstruye un f32 desde sus 4 octetos (raylang solo tiene bits de f64): la aritmética
+// (mantisa + 2^exp) es exacta en f64 para cualquier f32.
+fn f32_of(bits: int) -> float {
+    let neg = ((bits >> 31) & 1) == 1;
+    let e = (bits >> 23) & 255;
+    let m = bits & 8388607;
+    var v = 0.0;
+    if (e == 255) {
+        // Inf/NaN: se construye el f64 equivalente por bits.
+        if (m == 0) {
+            v = math.float_from_bits(9218868437227405312); // +inf
+        } else {
+            v = math.float_from_bits(9221120237041090560); // NaN
+        }
+    } else {
+        if (e == 0) {
+            v = to_f(m) * math.pow(2.0, 0.0 - 149.0); // subnormal
+        } else {
+            v = (to_f(m) + 8388608.0) * math.pow(2.0, to_f(e - 150));
+        }
+    }
+    if (neg) { 0.0 - v } else { v }
+}
+
+fn pad2(n: int) -> string {
+    if (n < 10) { "0" + to_string(n) } else { to_string(n) }
+}
+
+fn pad4(n: int) -> string {
+    if (n < 10) { return "000" + to_string(n); }
+    if (n < 100) { return "00" + to_string(n); }
+    if (n < 1000) { return "0" + to_string(n); }
+    to_string(n)
+}
+
+fn pad6(n: int) -> string {
+    var s = to_string(n);
+    while (s.len() < 6) {
+        s = "0" + s;
+    }
+    s
+}
+
+// DATE binaria: [len][year:2][month][day]; len 0 = fecha cero.
+fn dec_date(p: [int], i: int, ln: int) -> string {
+    if (ln < 4) {
+        return "0000-00-00";
+    }
+    pad4(p[i] | (p[i + 1] << 8)) + "-" + pad2(p[i + 2]) + "-" + pad2(p[i + 3])
+}
+
+// DATETIME/TIMESTAMP binarios: fecha + [hour][min][sec] (len>=7) + [micro:4] (len=11).
+fn dec_datetime(p: [int], i: int, ln: int) -> string {
+    var s = dec_date(p, i, ln) + " ";
+    if (ln >= 7) {
+        s = s + pad2(p[i + 4]) + ":" + pad2(p[i + 5]) + ":" + pad2(p[i + 6]);
+    } else {
+        s = s + "00:00:00";
+    }
+    if (ln >= 11) {
+        s = s + "." + pad6(int_le(p, i + 7, 4));
+    }
+    s
+}
+
+// TIME binario: [len][neg][days:4][hour][min][sec] (+ [micro:4]); las horas acumulan los días.
+fn dec_time(p: [int], i: int, ln: int) -> string {
+    if (ln == 0) {
+        return "00:00:00";
+    }
+    let sign = if (p[i] == 1) { "-" } else { "" };
+    let hours = int_le(p, i + 1, 4) * 24 + p[i + 5];
+    var s = sign + pad2(hours) + ":" + pad2(p[i + 6]) + ":" + pad2(p[i + 7]);
+    if (ln >= 12) {
+        s = s + "." + pad6(int_le(p, i + 8, 4));
+    }
+    s
+}
+
+// Una celda de la fila binaria, por tipo de columna → (texto, nueva posición).
+fn bin_cell(p: [int], i: int, t: int, flags: int) -> (string, int) {
+    let unsigned = (flags & 32) != 0;
+    if (t == 1) { return int_cell(p, i, 1, unsigned); }          // TINY
+    if (t == 2 || t == 13) { return int_cell(p, i, 2, unsigned); } // SHORT / YEAR
+    if (t == 3 || t == 9) { return int_cell(p, i, 4, unsigned); }  // LONG / INT24
+    if (t == 8) {
+        // LONGLONG: por mitades (b7<<56 desbordaría). Un BIGINT UNSIGNED ≥ 2^63 no cabe en el
+        // int de raylang y se muestra envuelto (limitación documentada).
+        let lo = int_le(p, i, 4);
+        var hi = int_le(p, i + 4, 4);
+        if (!unsigned && hi >= 2147483648) {
+            hi = hi - 4294967296;
+        }
+        return (to_string(hi * 4294967296 + lo), i + 8);
+    }
+    if (t == 4) {
+        // FLOAT (f32)
+        let cell = (to_string(f32_of(int_le(p, i, 4))), i + 4);
+        return cell;
+    }
+    if (t == 5) {
+        // DOUBLE (f64): por mitades → bits → float.
+        let lo = int_le(p, i, 4);
+        var hi = int_le(p, i + 4, 4);
+        if (hi >= 2147483648) {
+            hi = hi - 4294967296;
+        }
+        return (to_string(math.float_from_bits(hi * 4294967296 + lo)), i + 8);
+    }
+    if (t == 10) {
+        let ln = p[i];
+        return (dec_date(p, i + 1, ln), i + 1 + ln);
+    }
+    if (t == 7 || t == 12) {
+        // TIMESTAMP / DATETIME
+        let ln = p[i];
+        return (dec_datetime(p, i + 1, ln), i + 1 + ln);
+    }
+    if (t == 11) {
+        let ln = p[i];
+        return (dec_time(p, i + 1, ln), i + 1 + ln);
+    }
+    // El resto (DECIMAL/NEWDECIMAL/VARCHAR/BIT/ENUM/SET/BLOB/TEXT/STRING/JSON…): length-encoded.
+    let ln = lenc_int(p, i);
+    var cell: [int] = [];
+    var j = 0;
+    while (j < ln.0) {
+        cell.push(p[i + ln.1 + j]);
+        j = j + 1;
+    }
+    let s = match (from_utf8(bytes_of(cell))) {
+        Result.Ok(x) => x,
+        Result.Err(_) => "",
+    };
+    return (s, i + ln.1 + ln.0);
+}
+
+// SELECT preparado: execute → definiciones de columna (capturando tipo+flags) → filas binarias.
+fn query_prepared(c: Conn, sql: string, params: [string]) -> Result<[[string]], string> {
+    let pr = stmt_prepare(c, sql)?;
+    let first = stmt_execute(c, pr.0, params)?;
+    if (first[0] == 255) {
+        stmt_close(c, pr.0);
+        return Result.Err(err_msg(first));
+    }
+    if (first[0] == 0) {
+        stmt_close(c, pr.0);
+        return Result.Err("mysql: la consulta no devuelve filas; usa exec");
+    }
+    let nc = lenc_int(first, 0);
+    let ncols = nc.0;
+    var types: [int] = [];
+    var cflags: [int] = [];
+    var k = 0;
+    while (k < ncols) {
+        let cd = read_packet(c)?;
+        let tf = col_type_flags(cd);
+        types.push(tf.0);
+        cflags.push(tf.1);
+        k = k + 1;
+    }
+    let eof1 = read_packet(c)?;
+    if (!is_eof(eof1)) {
+        stmt_close(c, pr.0);
+        return Result.Err("mysql: se esperaba EOF tras las columnas");
+    }
+    var rows: [[string]] = [];
+    var seguir = true;
+    while (seguir) {
+        let p = read_packet(c)?;
+        if (is_eof(p)) {
+            seguir = false;
+        } else {
+            if (p[0] == 255) {
+                stmt_close(c, pr.0);
+                return Result.Err(err_msg(p));
+            }
+            // Fila binaria: [0x00][bitmap de NULLs, desplazado 2 bits][valores por tipo].
+            var row: [string] = [];
+            var i = 1 + (ncols + 9) / 8;
+            var col = 0;
+            while (col < ncols) {
+                let bit = col + 2;
+                if (((p[1 + bit / 8] >> (bit % 8)) & 1) == 1) {
+                    row.push(""); // NULL
+                } else {
+                    let cell = bin_cell(p, i, types[col], cflags[col]);
+                    row.push(cell.0);
+                    i = cell.1;
+                }
+                col = col + 1;
+            }
+            rows.push(row);
+        }
+    }
+    stmt_close(c, pr.0);
+    Result.Ok(rows)
+}
+
+// Sentencia sin filas preparada: la respuesta al execute es un OK ordinario.
+fn exec_prepared(c: Conn, sql: string, params: [string]) -> Result<int, string> {
+    let pr = stmt_prepare(c, sql)?;
+    let first = stmt_execute(c, pr.0, params)?;
+    stmt_close(c, pr.0);
+    if (first[0] == 255) {
+        return Result.Err(err_msg(first));
+    }
+    if (first[0] != 0) {
+        return Result.Err("mysql: la sentencia devuelve filas; usa query");
+    }
+    let af = lenc_int(first, 1);
     Result.Ok(af.0)
 }
 

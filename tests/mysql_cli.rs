@@ -68,8 +68,12 @@ fn lenc(s: &str) -> Vec<u8> {
     v
 }
 
-/// Una definición de columna mínima (el cliente se la salta, pero ha de ser un paquete).
+/// Una definición de columna mínima (el cliente de texto se la salta; el binario lee tipo+flags).
 fn col_def(nombre: &str) -> Vec<u8> {
+    col_def_tipo(nombre, 0xfd)
+}
+
+fn col_def_tipo(nombre: &str, tipo: u8) -> Vec<u8> {
     let mut p = Vec::new();
     p.extend_from_slice(&lenc("def")); // catálogo
     for _ in 0..3 {
@@ -80,7 +84,7 @@ fn col_def(nombre: &str) -> Vec<u8> {
     p.push(0x0c); // longitud del bloque fijo
     p.extend_from_slice(&[33, 0]); // charset
     p.extend_from_slice(&[255, 0, 0, 0]); // longitud de columna
-    p.push(0xfd); // tipo VAR_STRING
+    p.push(tipo);
     p.extend_from_slice(&[0, 0]); // flags
     p.push(0); // decimales
     p.extend_from_slice(&[0, 0]); // relleno
@@ -116,6 +120,8 @@ fn atender(mut s: TcpStream) {
 
 /// La fase de comandos (COM_QUERY/COM_QUIT), genérica sobre el flujo (TCP plano o rustls::Stream).
 fn fase_comandos<S: Read + Write>(s: &mut S) {
+    let mut prep_sql = String::new();
+    let mut prep_nparams = 0usize;
     loop {
         let mut hdr = [0u8; 4];
         if s.read_exact(&mut hdr).is_err() {
@@ -126,6 +132,75 @@ fn fase_comandos<S: Read + Write>(s: &mut S) {
         s.read_exact(&mut payload).unwrap();
         match payload.first() {
             Some(1) => return, // COM_QUIT
+            Some(0x16) => {
+                // COM_STMT_PREPARE: id fijo 7; nº de params = los '?' del SQL; 0 columnas en el
+                // prepare (las reales van en la respuesta al execute).
+                prep_sql = String::from_utf8_lossy(&payload[1..]).into_owned();
+                prep_nparams = prep_sql.bytes().filter(|b| *b == b'?').count();
+                let mut ok = vec![0u8, 7, 0, 0, 0, 0, 0];
+                ok.push(prep_nparams as u8);
+                ok.push(0);
+                ok.extend_from_slice(&[0, 0, 0]); // filler + warnings
+                s.write_all(&pkt(1, &ok)).unwrap();
+                let mut seq = 2u8;
+                for _ in 0..prep_nparams {
+                    s.write_all(&pkt(seq, &col_def("?"))).unwrap();
+                    seq += 1;
+                }
+                if prep_nparams > 0 {
+                    s.write_all(&pkt(seq, &EOF)).unwrap();
+                }
+                let _ = s.flush();
+            }
+            Some(0x17) => {
+                // COM_STMT_EXECUTE: [id:4][flags][iter:4][bitmap][bound][tipos][valores lenc].
+                let id = u32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]);
+                assert_eq!(id, 7, "stmt id");
+                let mut params: Vec<String> = Vec::new();
+                if prep_nparams > 0 {
+                    let mut i = 1 + 4 + 1 + 4 + (prep_nparams + 7) / 8;
+                    assert_eq!(payload[i], 1, "new-params-bound");
+                    i += 1 + prep_nparams * 2; // tipos (2 por parámetro)
+                    for _ in 0..prep_nparams {
+                        let l = payload[i] as usize; // lenc corto (los tests no pasan de 250)
+                        i += 1;
+                        params.push(String::from_utf8_lossy(&payload[i..i + l]).into_owned());
+                        i += l;
+                    }
+                }
+                if prep_sql.starts_with("BOOM") {
+                    let mut err = vec![0xffu8, 0x7a, 0x04];
+                    err.extend_from_slice(b"#42S02la tabla no existe");
+                    s.write_all(&pkt(1, &err)).unwrap();
+                } else if prep_sql.starts_with("SELECT") {
+                    // Result set BINARIO: 4 columnas que ejercitan la decodificación por tipo.
+                    s.write_all(&pkt(1, &[4])).unwrap();
+                    s.write_all(&pkt(2, &col_def_tipo("nombre", 0xfd))).unwrap(); // VAR_STRING
+                    s.write_all(&pkt(3, &col_def_tipo("nota", 8))).unwrap(); // LONGLONG
+                    s.write_all(&pkt(4, &col_def_tipo("media", 5))).unwrap(); // DOUBLE
+                    s.write_all(&pkt(5, &col_def_tipo("creado", 12))).unwrap(); // DATETIME
+                    s.write_all(&pkt(6, &EOF)).unwrap();
+                    // Fila 1: eco del primer parámetro + -5 + 2.5 + 2026-07-09 12:34:56.
+                    let eco = params.first().cloned().unwrap_or_default();
+                    let mut f1 = vec![0u8, 0]; // header + bitmap (sin NULLs)
+                    f1.extend_from_slice(&lenc(&eco));
+                    f1.extend_from_slice(&(-5i64).to_le_bytes());
+                    f1.extend_from_slice(&2.5f64.to_le_bytes());
+                    f1.extend_from_slice(&[7, 0xEA, 0x07, 7, 9, 12, 34, 56]);
+                    s.write_all(&pkt(7, &f1)).unwrap();
+                    // Fila 2: nota y media NULL (bits 3 y 4 del bitmap) + datetime cero (len 0).
+                    let mut f2 = vec![0u8, 0b0001_1000];
+                    f2.extend_from_slice(&lenc("fija"));
+                    f2.push(0); // DATETIME len 0
+                    s.write_all(&pkt(8, &f2)).unwrap();
+                    s.write_all(&pkt(9, &EOF)).unwrap();
+                } else {
+                    // INSERT/UPDATE/…: OK con 4 filas afectadas.
+                    s.write_all(&pkt(1, &[0x00, 4, 0, 0, 0, 0, 0])).unwrap();
+                }
+                let _ = s.flush();
+            }
+            Some(0x19) => {} // COM_STMT_CLOSE: sin respuesta
             Some(3) => {
                 let sql = String::from_utf8_lossy(&payload[1..]).into_owned();
                 if sql.starts_with("SELECT") {
@@ -188,7 +263,7 @@ fn main() -> int {{
         Result.Ok(conn) => conn,
         Result.Err(e) => {{ print(e); return 1; }},
     }};
-    match (mysql.query(c, "SELECT nombre, nota FROM alumnos")) {{
+    match (mysql.query(c, "SELECT nombre, nota FROM alumnos", [])) {{
         Result.Ok(rows) => {{
             var i = 0;
             while (i < rows.len()) {{
@@ -198,11 +273,11 @@ fn main() -> int {{
         }},
         Result.Err(e) => {{ print(e); return 1; }},
     }}
-    match (mysql.exec(c, "INSERT INTO alumnos VALUES (1)")) {{
+    match (mysql.exec(c, "INSERT INTO alumnos VALUES (1)", [])) {{
         Result.Ok(n) => {{ print("afectadas: " + to_string(n)); }},
         Result.Err(e) => {{ print(e); return 1; }},
     }}
-    match (mysql.query(c, "BOOM")) {{
+    match (mysql.query(c, "BOOM", [])) {{
         Result.Ok(_) => {{ print("no debería"); }},
         Result.Err(e) => {{ print(e); }},
     }}
@@ -345,7 +420,7 @@ fn main() -> int {{
         Result.Err(e) => {{ print(e); return 1; }},
     }};
     print("conectado seguro");
-    match (mysql.query(c, "SELECT nombre, nota FROM alumnos")) {{
+    match (mysql.query(c, "SELECT nombre, nota FROM alumnos", [])) {{
         Result.Ok(rows) => {{
             var i = 0;
             while (i < rows.len()) {{
@@ -400,4 +475,78 @@ fn mysql_tls_full_path_de_caching_sha2() {
 
     assert_eq!(correr_tls(&app, &[]), ESPERADO_TLS, "VM");
     assert_eq!(correr_tls(&app, &["--interp"]), ESPERADO_TLS, "intérprete");
+}
+
+// --- Protocolo binario (prepared statements) ---
+
+/// Cliente del protocolo binario: SELECT con parámetro (eco + tipos LONGLONG/DOUBLE/DATETIME +
+/// NULLs por bitmap), INSERT con parámetro, y un error del servidor en el execute.
+fn proyecto_binario(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(
+        app.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ndb = \"path:{}\"\n",
+            db.display()
+        ),
+    )
+    .unwrap();
+    let main = format!(
+        r#"import db/mysql;
+
+fn main() -> int {{
+    var c = match (mysql.connect("127.0.0.1", {port}, "raylang", "secret", "demo")) {{
+        Result.Ok(conn) => conn,
+        Result.Err(e) => {{ print(e); return 1; }},
+    }};
+    // SELECT preparado: el servidor devuelve el parámetro como primera celda (el binding fluye)
+    // y tipos binarios de verdad (LONGLONG con signo, DOUBLE, DATETIME, NULLs por bitmap).
+    match (mysql.query(c, "SELECT nombre, nota, media, creado FROM t WHERE nombre = ?", ["eco"])) {{
+        Result.Ok(rows) => {{
+            var i = 0;
+            while (i < rows.len()) {{
+                print(rows[i].join("|"));
+                i = i + 1;
+            }}
+        }},
+        Result.Err(e) => {{ print(e); return 1; }},
+    }}
+    // INSERT preparado.
+    match (mysql.exec(c, "INSERT INTO t (nombre) VALUES (?)", ["x"])) {{
+        Result.Ok(n) => {{ print("afectadas: " + to_string(n)); }},
+        Result.Err(e) => {{ print(e); return 1; }},
+    }}
+    // Error del servidor en el execute → valor.
+    match (mysql.query(c, "BOOM ?", ["x"])) {{
+        Result.Ok(_) => {{ print("no debería"); }},
+        Result.Err(e) => {{ print(e); }},
+    }}
+    mysql.disconnect(c);
+    0
+}}
+"#
+    );
+    std::fs::write(app.join("src/main.ray"), main).unwrap();
+    app
+}
+
+const ESPERADO_BIN: &str = "eco|-5|2.5|2026-07-09 12:34:56\n\
+fija|||0000-00-00 00:00:00\n\
+afectadas: 4\n\
+mysql: la tabla no existe\n";
+
+#[test]
+fn mysql_protocolo_binario_prepared() {
+    let base = std::env::temp_dir().join("ray_mysql_cli_bin");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let port = lanzar_servidor();
+    let app = proyecto_binario(&base, port);
+
+    let (out_vm, _) = correr(&app, &[]);
+    assert_eq!(out_vm, ESPERADO_BIN, "VM");
+    let (out_interp, _) = correr(&app, &["--interp"]);
+    assert_eq!(out_interp, ESPERADO_BIN, "intérprete");
 }

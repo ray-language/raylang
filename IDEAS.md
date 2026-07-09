@@ -565,10 +565,11 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
 - **Impacto**: todo aditivo; BSON es el grueso (comparable al protobuf de M25 en naturaleza).
 - **Diferidos del arco DB** (consolidado, jul 2026 — ninguno bloquea; el paquete `db` está
   funcionalmente completo para los 4 motores, con transporte cifrado donde importa):
-  - **MySQL**: protocolo binario (prepared statements / parámetros / tipos — hoy solo COM_QUERY
-    texto → sin anti-inyección por binding, a diferencia de postgres/mongo/sqlite); full-path de
-    caching_sha2 **sin** TLS (intercambio de clave pública RSA; con `connect_tls` disponible pierde
-    casi todo el sentido).
+  - **MySQL**: protocolo binario ✅ **CERRADO** (DESIGN §55.5: `query`/`exec` ganan `params` —
+    prepare/execute/close de una ronda, fila binaria decodificada por tipo; con `[]`, texto como
+    siempre). Quedan: sentencias con estado (cachear stmt_id), tipos binarios en los parámetros
+    (hoy texto), full-path de caching_sha2 **sin** TLS (RSA; con `connect_tls` pierde casi todo el
+    sentido), BIGINT UNSIGNED ≥ 2^63 (se muestra envuelto).
   - **Postgres**: parámetros binarios/tipados, sentencias preparadas con estado (hoy anónimas, una
     por ronda), COPY, `sslmode` negociable estilo libpq (hoy: `connect` = nunca TLS /
     `connect_tls` = obligatorio).

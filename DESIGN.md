@@ -7149,3 +7149,32 @@ socket, fuerza el full-auth y **verifica la contraseña en claro** recibida por 
 → ERR cifrado ("acceso denegado"). Después sirve la fase de comandos de siempre, cifrada. Ambos
 motores. **El hilo TLS de los clientes de bases de datos queda CERRADO** (Postgres §57.1 + MySQL
 §57.2; Mongo-TLS sería `tls_connect` desde el arranque — trivial, cuando haga falta).
+
+### 55.5 Protocolo binario de MySQL (prepared statements). ✅ COMPLETO
+
+Cierra la asimetría de seguridad del paquete `db`: MySQL era el único cliente sin anti-inyección
+por binding. **API**: `query(c, sql, params)` / `exec(c, sql, params)` (uniforme con postgres) —
+con `params` la sentencia se **prepara** (protocolo binario, una ronda COM_STMT_PREPARE →
+COM_STMT_EXECUTE → COM_STMT_CLOSE, como el portal anónimo de postgres); con `[]`, el COM_QUERY de
+texto de siempre (cero regresión, sin round-trip extra).
+
+- **Execute**: todos los parámetros se enlazan como `VAR_STRING` (texto; la afinidad del servidor
+  convierte), bitmap de NULLs a cero (la API no distingue NULL de ""), `lenc_of` (el inverso de
+  `lenc_int`).
+- **La fila binaria se decodifica POR TIPO de columna** (leído de su definición,
+  `col_type_flags`): ints de 1/2/4 con/sin signo (flag UNSIGNED), LONGLONG por mitades (b7<<56
+  desbordaría; UNSIGNED ≥ 2^63 se muestra envuelto — documentado), **FLOAT reconstruido desde sus
+  bits f32** (raylang solo tiene bits de f64 → mantisa + `math.pow(2, e)`, exacto), DOUBLE vía
+  `math.float_from_bits`, DATE/DATETIME/TIMESTAMP/TIME **empaquetados** (longitudes 0/4/7/11-12,
+  ceros → "0000-00-00", TIME acumula días en horas, micro `.%06d`), y el resto (DECIMAL/VARCHAR/
+  BLOB/JSON/…) length-encoded. Salida = texto → misma API `[[string]]` que el protocolo de texto.
+- **Gotchas del lenguaje cazados**: (1) un literal `[…]` en cola tras un if-sentencia se parsea
+  como INDEXACIÓN (mismo compromiso que las tuplas-como-llamada, §55.1) → `return` explícito;
+  (2) precedencia estilo C: `&` liga más flojo que `==` → `(flags & 32) != 0` necesita paréntesis.
+
+**Verificación** (`tests/mysql_cli.rs`): el toy server gana los tres comandos — el prepare cuenta
+los `?`, el execute **parsea el binding** (bitmap/tipos/valores lenc) y devuelve el parámetro como
+primera celda (el binding fluye), más una fila binaria con LONGLONG **negativo** (-5), DOUBLE
+(2.5), DATETIME empaquetado (2026-07-09 12:34:56), NULLs por bitmap (bits desplazados 2) y un
+datetime cero; INSERT preparado → OK; BOOM → ERR en el execute. Ambos motores, mismo stdout.
+Diferido: sentencias con estado (cachear el stmt_id), tipos binarios en los PARÁMETROS (hoy texto).

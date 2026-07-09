@@ -50,8 +50,12 @@ fn main() -> int {
   dentro del canal cifrado). Con `connect` plano y caché fría, error claro con el remedio.
 - **TLS**: `connect_tls(...)` (mismos parámetros) — SSLRequest a mitad del handshake, upgrade del
   mismo socket (`net.tls_upgrade`, cert verificado contra `host`) y el resto de la sesión cifrada.
-- **Diferido**: protocolo binario (prepared statements / parámetros / tipos), full-path sin TLS
-  (intercambio RSA).
+- **Parámetros**: `query(c, sql, params)` / `exec(c, sql, params)` — con `params` la sentencia se
+  **prepara** (protocolo binario: los `?` se enlazan aparte del SQL → anti-inyección) y la fila
+  binaria se decodifica por tipo (ints con/sin signo, FLOAT/DOUBLE, DATE/DATETIME/TIME, texto);
+  con `[]` va por el protocolo de texto clásico. Misma API `[[string]]` en ambos casos.
+- **Diferido**: sentencias preparadas con estado (hoy una ronda prepare/execute/close por
+  llamada), full-path sin TLS (intercambio RSA), BIGINT UNSIGNED ≥ 2^63 (se muestra envuelto).
 
 ### `db/postgres` (M53.2)
 

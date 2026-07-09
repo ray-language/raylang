@@ -1,0 +1,331 @@
+// Cliente PostgreSQL v2 (M53.2) — protocolo wire v3 sobre TCP, en raylang puro.
+//
+// Evoluciona el cliente de una-consulta de `net/postgres.ray` (M32.1) a una API con **conexión
+// persistente** y el **protocolo extendido** (Parse/Bind/Describe/Execute/Sync), que trae
+// **parámetros** (`$1`, `$2`, … enlazados aparte del SQL → anti-inyección) y devuelve **todas** las
+// filas. Autentica con SCRAM-SHA-256 (reusa `net/scram`).
+//
+//   - Mensajes: `[tipo:1][longitud:4][carga]` (la longitud incluye sus 4 octetos, no el tipo); el
+//     StartupMessage no lleva octeto de tipo.
+//   - Auth: SCRAM-SHA-256 (AuthenticationSASL → SASLContinue → SASLFinal, con verificación de la
+//     firma del servidor).
+//   - Extendido: los parámetros van en **formato texto** (v1); un parámetro se enlaza como cadena.
+//     El SQL usa marcadores `$1`, `$2`, … El protocolo simple (`net/postgres`) se conserva aparte.
+//
+// API uniforme con `db/mysql`: `connect` → `Conn`, `query`/`exec` (con `params: [string]`),
+// `disconnect`. Las transacciones son SQL corriente: `exec(c, "BEGIN", [])` / `"COMMIT"` / `"ROLLBACK"`.
+
+from net/scram import scram_first, scram_client_first_message, scram_final, scram_verify, Scram;
+import std/net;
+
+/// Una conexión abierta y autenticada, con su búfer de lectura (un mensaje puede partirse entre
+/// lecturas del socket, o venir varios juntos).
+pub struct Conn {
+    handle: int,
+    buf: bytes,
+}
+
+// Un mensaje del servidor: su octeto de tipo y la carga (sin el tipo ni la longitud).
+struct PgMsg {
+    mtype: int,
+    payload: bytes,
+}
+
+// ── Enteros y cadenas del protocolo ──────────────────────────────────────────────────────
+
+fn be32(b: bytes, off: int) -> int {
+    b[off] << 24 | b[off + 1] << 16 | b[off + 2] << 8 | b[off + 3]
+}
+
+fn be32_bytes(n: int) -> [int] {
+    [n >> 24 & 255, n >> 16 & 255, n >> 8 & 255, n & 255]
+}
+
+fn be16_bytes(n: int) -> [int] {
+    [n >> 8 & 255, n & 255]
+}
+
+// Octetos de una cadena terminada en NUL.
+fn cstr(s: string) -> [int] {
+    var o = bytes_to_ints(s.to_bytes());
+    o.push(0);
+    o
+}
+
+fn bytes_to_ints(b: bytes) -> [int] {
+    var out: [int] = [];
+    var i = 0;
+    while (i < b.len()) {
+        out.push(b[i]);
+        i = i + 1;
+    }
+    out
+}
+
+// ── Framing ──────────────────────────────────────────────────────────────────────────────
+
+// Envía un mensaje con octeto de tipo: `[tipo][longitud=4+len(carga)][carga]`.
+fn send(c: Conn, mtype: int, payload: [int]) -> Result<int, string> {
+    var m: [int] = [mtype];
+    m = m + be32_bytes(4 + payload.len()) + payload;
+    net.socket_write_bytes(c.handle, bytes_of(m))
+}
+
+// Lee un mensaje COMPLETO del servidor (acumulando en el búfer lo que haga falta).
+fn read_msg(c: Conn) -> Result<PgMsg, string> {
+    while (true) {
+        if (c.buf.len() >= 5) {
+            let mlen = be32(c.buf, 1); // longitud (incluye sus 4 octetos)
+            let total = 1 + mlen;
+            if (c.buf.len() >= total) {
+                let out = PgMsg { mtype: c.buf[0], payload: c.buf.sub_bytes(5, total) };
+                c.buf = c.buf.sub_bytes(total, c.buf.len());
+                return Result.Ok(out);
+            }
+        }
+        let chunk = net.socket_read_bytes(c.handle)?;
+        if (chunk.len() == 0) {
+            return Result.Err("postgres: el servidor cerró la conexión");
+        }
+        c.buf = c.buf + chunk;
+    }
+    Result.Err("inalcanzable")
+}
+
+// El texto de un ErrorResponse ('E'): campos [tipo:1][valor NUL]…, hasta un tipo 0. El campo 'M'
+// es el mensaje humano.
+fn error_text(payload: bytes) -> string {
+    var i = 0;
+    while (i < payload.len() && payload[i] != 0) {
+        let campo = payload[i];
+        i = i + 1;
+        var val: [int] = [];
+        while (i < payload.len() && payload[i] != 0) {
+            val.push(payload[i]);
+            i = i + 1;
+        }
+        i = i + 1; // NUL
+        if (campo == 77) {
+            // 'M'
+            return match (from_utf8(bytes_of(val))) {
+                Result.Ok(s) => "postgres: " + s,
+                Result.Err(_) => "postgres: error del servidor",
+            };
+        }
+    }
+    "postgres: error del servidor"
+}
+
+// ── DataRow ────────────────────────────────────────────────────────────────────────────────
+
+// Parsea un DataRow ('D'): `[nº columnas:2]` y por columna `[longitud:4][valor]` (-1 = NULL → "").
+fn parse_datarow(payload: bytes) -> [string] {
+    var cols: [string] = [];
+    let ncol = payload[0] << 8 | payload[1];
+    var pos = 2;
+    var i = 0;
+    while (i < ncol) {
+        let vlen = be32(payload, pos);
+        pos = pos + 4;
+        if (vlen < 0) {
+            cols.push(""); // NULL
+        } else {
+            let v = payload.sub_bytes(pos, pos + vlen);
+            cols.push(match (from_utf8(v)) {
+                Result.Ok(s) => s,
+                Result.Err(_) => "",
+            });
+            pos = pos + vlen;
+        }
+        i = i + 1;
+    }
+    cols
+}
+
+// ── Conexión + autenticación SCRAM ─────────────────────────────────────────────────────────
+
+/// Abre una conexión, autentica con SCRAM-SHA-256 y la deja lista para consultas. `nonce` es el
+/// nonce del cliente (usa uno aleatorio en producción).
+pub fn connect(host: string, port: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
+    let handle = net.tcp_connect(host, port)?;
+    let c = Conn { handle: handle, buf: b"" };
+
+    // StartupMessage (sin octeto de tipo): [longitud][versión 3.0 = 196608][params NUL][0].
+    var body = be32_bytes(196608) + cstr("user") + cstr(user) + cstr("database") + cstr(database);
+    body.push(0);
+    var startup = be32_bytes(4 + body.len()) + body;
+    let _ = net.socket_write_bytes(handle, bytes_of(startup))?;
+
+    // Bucle de handshake hasta ReadyForQuery.
+    let sc = scram_first(user, nonce);
+    while (true) {
+        let msg = read_msg(c)?;
+        if (msg.mtype == 82) {
+            // 'R' Authentication
+            let code = be32(msg.payload, 0);
+            if (code == 10) {
+                // AuthenticationSASL → SASLInitialResponse ('p')
+                let cf = scram_client_first_message(sc);
+                let pl = cstr("SCRAM-SHA-256") + be32_bytes(cf.to_bytes().len()) + bytes_to_ints(cf.to_bytes());
+                let _ = send(c, 112, pl)?;
+            } else {
+                if (code == 11) {
+                    // AuthenticationSASLContinue (server-first) → SASLResponse
+                    let sf = match (from_utf8(msg.payload.sub_bytes(4, msg.payload.len()))) {
+                        Result.Ok(s) => s,
+                        Result.Err(_) => { close(handle); return Result.Err("postgres: server-first no es UTF-8"); },
+                    };
+                    let final_msg = match (scram_final(sc, password, sf)) {
+                        Result.Ok(f) => f,
+                        Result.Err(e) => { close(handle); return Result.Err(e); },
+                    };
+                    let _ = send(c, 112, bytes_to_ints(final_msg.to_bytes()))?;
+                } else {
+                    if (code == 12) {
+                        // AuthenticationSASLFinal (server-final): verificar la firma del servidor.
+                        let sfin = match (from_utf8(msg.payload.sub_bytes(4, msg.payload.len()))) {
+                            Result.Ok(s) => s,
+                            Result.Err(_) => { close(handle); return Result.Err("postgres: server-final no es UTF-8"); },
+                        };
+                        if (!scram_verify(sc, sfin)) {
+                            close(handle);
+                            return Result.Err("postgres: la firma del servidor no verifica (autenticación fallida)");
+                        }
+                    }
+                    // code 0 = AuthenticationOk: nada que hacer.
+                }
+            }
+        } else {
+            if (msg.mtype == 90) {
+                // 'Z' ReadyForQuery → listo.
+                return Result.Ok(c);
+            } else {
+                if (msg.mtype == 69) {
+                    // 'E' ErrorResponse
+                    close(handle);
+                    return Result.Err(error_text(msg.payload));
+                }
+                // 'S' ParameterStatus, 'K' BackendKeyData, 'N' NoticeResponse: se ignoran.
+            }
+        }
+    }
+    Result.Err("inalcanzable")
+}
+
+// ── Protocolo extendido: Parse / Bind / Describe / Execute / Sync ───────────────────────────
+
+// Manda la secuencia extendida para `sql` con `params` (formato texto). El nombre de sentencia y
+// portal quedan vacíos (anónimos): una consulta por ronda, sin estado de sentencia preparada.
+fn send_extended(c: Conn, sql: string, params: [string]) -> Result<int, string> {
+    // Parse ('P'): [nombre NUL][query NUL][nº tipos param:2 = 0].
+    let parse_pl = cstr("") + cstr(sql) + be16_bytes(0);
+    let _ = send(c, 80, parse_pl)?;
+
+    // Bind ('B'): [portal NUL][sentencia NUL][nº formatos:2 = 0 (todos texto)]
+    //             [nº params:2][por param: longitud:4 + valor][nº formatos de resultado:2 = 0].
+    var bind_pl = cstr("") + cstr("") + be16_bytes(0) + be16_bytes(params.len());
+    var i = 0;
+    while (i < params.len()) {
+        let pb = params[i].to_bytes();
+        bind_pl = bind_pl + be32_bytes(pb.len()) + bytes_to_ints(pb);
+        i = i + 1;
+    }
+    bind_pl = bind_pl + be16_bytes(0);
+    let _ = send(c, 66, bind_pl)?;
+
+    // Describe ('D') del portal ('P') anónimo → obtenemos RowDescription (o NoData).
+    let _ = send(c, 68, cstr("P"))?;
+    // Execute ('E'): [portal NUL][máx filas:4 = 0 (todas)].
+    let _ = send(c, 69, cstr("") + be32_bytes(0))?;
+    // Sync ('S').
+    send(c, 83, [])
+}
+
+// El nº de filas afectadas del tag de CommandComplete: "INSERT 0 3" / "UPDATE 5" / "SELECT 2" → el
+// último entero del tag; 0 si no lo hay.
+fn affected_from_tag(payload: bytes) -> int {
+    // El tag lleva un NUL final: recórtalo a nivel de octetos antes de decodificar.
+    var fin = payload.len();
+    if (fin > 0 && payload[fin - 1] == 0) {
+        fin = fin - 1;
+    }
+    let tag = match (from_utf8(payload.sub_bytes(0, fin))) {
+        Result.Ok(s) => s,
+        Result.Err(_) => "",
+    };
+    let partes = tag.split(" ");
+    if (partes.len() == 0) {
+        return 0;
+    }
+    match (parse_int(partes[partes.len() - 1])) {
+        Option.Some(n) => n,
+        Option.None => 0,
+    }
+}
+
+// Recorre la respuesta a una consulta extendida hasta ReadyForQuery, recogiendo filas y el tag.
+// Devuelve (filas, filas_afectadas).
+fn collect_response(c: Conn) -> Result<([[string]], int), string> {
+    var rows: [[string]] = [];
+    var affected = 0;
+    while (true) {
+        let msg = read_msg(c)?;
+        if (msg.mtype == 68) {
+            // 'D' DataRow
+            rows.push(parse_datarow(msg.payload));
+        } else {
+            if (msg.mtype == 67) {
+                // 'C' CommandComplete
+                affected = affected_from_tag(msg.payload);
+            } else {
+                if (msg.mtype == 69) {
+                    // 'E' ErrorResponse: hay que drenar hasta ReadyForQuery igualmente.
+                    let e = error_text(msg.payload);
+                    let _ = drain_until_ready(c);
+                    return Result.Err(e);
+                } else {
+                    if (msg.mtype == 90) {
+                        // 'Z' ReadyForQuery → fin de la ronda.
+                        return Result.Ok((rows, affected));
+                    }
+                    // '1' ParseComplete, '2' BindComplete, 'T' RowDescription, 'n' NoData: se ignoran.
+                }
+            }
+        }
+    }
+    Result.Err("inalcanzable")
+}
+
+fn drain_until_ready(c: Conn) -> Result<int, string> {
+    while (true) {
+        let msg = read_msg(c)?;
+        if (msg.mtype == 90) {
+            return Result.Ok(0);
+        }
+    }
+    Result.Ok(0)
+}
+
+// ── API pública de consulta ─────────────────────────────────────────────────────────────────
+
+/// Ejecuta una consulta con filas (SELECT…) y parámetros (`$1`, `$2`, … enlazados aparte, en
+/// formato texto → anti-inyección). Devuelve **todas** las filas; un NULL llega como "".
+pub fn query(c: Conn, sql: string, params: [string]) -> Result<[[string]], string> {
+    let _ = send_extended(c, sql, params)?;
+    let r = collect_response(c)?;
+    Result.Ok(r.0)
+}
+
+/// Ejecuta una sentencia sin filas (INSERT/UPDATE/DELETE/DDL, o BEGIN/COMMIT/ROLLBACK) con
+/// parámetros, y devuelve las filas afectadas (0 para DDL/transacciones).
+pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
+    let _ = send_extended(c, sql, params)?;
+    let r = collect_response(c)?;
+    Result.Ok(r.1)
+}
+
+/// Cierra la sesión (Terminate 'X') y el socket.
+pub fn disconnect(c: Conn) {
+    let _ = send(c, 88, []); // 'X' Terminate
+    close(c.handle);
+}

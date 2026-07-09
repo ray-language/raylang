@@ -50,10 +50,44 @@ fn main() -> int {
   de conexión, que `std/net` aún no ofrece → error claro con el remedio.
 - **Diferido**: protocolo binario (prepared statements / parámetros / tipos), TLS.
 
+### `db/postgres` (M53.2)
+
+Cliente del protocolo wire v3 de PostgreSQL con **conexión persistente**, autenticación
+**SCRAM-SHA-256** (reusa `net/scram`) y el **protocolo extendido** (Parse/Bind/Describe/Execute/
+Sync) — que trae **parámetros** (`$1`, `$2`, … enlazados aparte del SQL → anti-inyección) y devuelve
+**todas** las filas:
+
+```raylang
+import db/postgres;
+
+fn main() -> int {
+    var c = match (postgres.connect("127.0.0.1", 5432, "usuario", "clave", "basedatos", "nonce")) {
+        Result.Ok(conn) => conn,
+        Result.Err(e) => { print(e); return 1; },
+    };
+    match (postgres.query(c, "SELECT nombre FROM alumnos WHERE nota > $1", ["5"])) {
+        Result.Ok(rows) => { for f in rows { print(f.join(" | ")); } },
+        Result.Err(e) => { print(e); },
+    }
+    let _ = postgres.exec(c, "BEGIN", []);
+    let _ = postgres.exec(c, "INSERT INTO alumnos (nombre) VALUES ($1)", ["ada"]);
+    let _ = postgres.exec(c, "COMMIT", []);
+    postgres.disconnect(c);
+    0
+}
+```
+
+- **API**: `connect(host, port, user, password, database, nonce) -> Result<Conn, string>` ·
+  `query(c, sql, params) -> Result<[[string]], string>` · `exec(c, sql, params) -> Result<int, string>`
+  (filas afectadas) · `disconnect(c)`. Las **transacciones** son SQL corriente (`exec(c, "BEGIN", [])`
+  / `"COMMIT"` / `"ROLLBACK"`).
+- **Parámetros** en formato texto (v1); usa `$1`, `$2`, … en el SQL. `nonce` = nonce del cliente
+  (aleatorio en producción). El cliente de una-consulta de `net/postgres` (protocolo simple) se
+  conserva aparte.
+- **Diferido**: parámetros binarios/tipados, sentencias preparadas con estado, TLS, COPY.
+
 ### Próximos (plan M53, IDEAS §14)
 
-- `db/postgres` (M53.2) — evolución del cliente de `packages/net`: conexión persistente +
-  protocolo extendido (parámetros).
 - `db/sqlite` (M53.4) — vía FFI a `libsqlite3` (tras los out-params del FFI, M53.3).
 
 ## Verificación

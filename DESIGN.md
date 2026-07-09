@@ -6878,3 +6878,36 @@ protocolo binario (prepared statements/parámetros/tipos), TLS, multi-result set
 
 Siguiente: **M53.2** (Postgres v2: conexión persistente + protocolo extendido) y **M53.3/53.4** (FFI
 out-params + SQLite).
+
+### 55.2 M53.2 — cliente PostgreSQL v2 (protocolo extendido). ✅ COMPLETO
+
+`packages/db/postgres.ray` evoluciona el cliente de una-consulta de `net/postgres.ray` (M32.1, simple
+query protocol, devolvía la primera fila) a una API con **conexión persistente** y el **protocolo
+extendido**:
+
+- **Conexión persistente**: `connect` hace startup + handshake SCRAM-SHA-256 (reusa `net/scram`:
+  AuthenticationSASL → SASLContinue → SASLFinal, verificando la firma del servidor) y deja la `Conn`
+  lista; `query`/`exec` la reusan; `disconnect` manda Terminate ('X'). El búfer de lectura va en la
+  `Conn` (un mensaje puede partirse entre lecturas, o venir varios juntos).
+- **Protocolo extendido** (`send_extended`): por consulta manda **Parse** ('P', el SQL con marcadores
+  `$1`/`$2`/…) → **Bind** ('B', los parámetros en **formato texto**, enlazados aparte del SQL →
+  **anti-inyección**) → **Describe** ('D', portal) → **Execute** ('E') → **Sync** ('S'); `collect_response`
+  drena '1'/'2'/'T' y recoge los **DataRow** ('D') hasta CommandComplete ('C') + ReadyForQuery ('Z').
+  `query` devuelve **todas** las filas (`[[string]]`, NULL → ""); `exec` saca las filas afectadas del tag
+  de CommandComplete ("INSERT 0 N"/"UPDATE N"/… → el último entero). Un ErrorResponse ('E') se decodifica
+  (campo 'M') y se drena hasta ReadyForQuery para no dejar la conexión a medias.
+- **Transacciones**: SQL corriente sobre la misma conexión (`exec(c, "BEGIN", [])` / `"COMMIT"` /
+  `"ROLLBACK"`) — la persistencia es lo que las hace útiles.
+- **Dependencia entre paquetes**: `db/postgres` importa `net/scram`. Con path-deps, el loader añade el
+  **padre** de la dep (`packages/`) como raíz de módulos, así `net/scram` resuelve como cápsula hermana
+  sin que el consumidor declare `net` aparte (ambas viven bajo `packages/`).
+
+**Verificación** (`tests/postgres_v2_cli.rs`): servidor PostgreSQL **de juguete** que hace SCRAM con los
+mismos valores **precomputados** que `postgres_cli.rs` y habla el protocolo extendido — **parsea el Bind,
+extrae los parámetros y los devuelve como primera fila** (prueba que el binding fluye: anti-inyección),
+sirve una segunda fila fija, un CommandComplete con filas afectadas para `exec`, y un ErrorResponse para
+"BOOM". El cliente corre por **ambos motores** con stdout idéntico (query multi-fila con params +
+BEGIN + INSERT con param + error). **Diferido**: parámetros binarios/tipados, sentencias preparadas con
+estado, TLS, COPY, multi-statement.
+
+Siguiente: **M53.3** (extensión FFI para out-params de doble puntero) + **M53.4** (SQLite sobre libsqlite3).

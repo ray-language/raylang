@@ -512,9 +512,11 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
 - **Fases**: **M53.1** MySQL ✅ **COMPLETO** (DESIGN §55.1: `db/mysql.ray` — handshake v10 +
   mysql_native_password completa + caching_sha2 fast-path + AuthSwitchRequest + COM_QUERY texto;
   `connect/query/exec/disconnect`; toy server con auth precomputada + oráculo ambos motores en
-  `tests/mysql_cli.rs`) · **M53.2** Postgres v2
-  (conexión persistente + protocolo extendido Parse/Bind/Execute → parámetros/anti-inyección +
-  transacciones) · **M53.3** FFI out-params (cierra diferido de M41; superficie por decidir: retorno
+  `tests/mysql_cli.rs`) · **M53.2** Postgres v2 ✅ **COMPLETO**
+  (DESIGN §55.2: `db/postgres.ray` — conexión persistente + SCRAM + protocolo extendido Parse/Bind/
+  Describe/Execute/Sync → parámetros `$1`/`$2` en texto/anti-inyección + todas las filas + transacciones
+  vía SQL; reusa `net/scram` como cápsula hermana; toy server con eco de params + oráculo ambos motores en
+  `tests/postgres_v2_cli.rs`) · **M53.3** FFI out-params (cierra diferido de M41; superficie por decidir: retorno
   extra en tupla vs. slot explícito) · **M53.4** SQLite sobre M53.3 (test condicionado a libsqlite3;
   macOS la trae) · **M53.5** opcional: libro + ejemplo CRUD integrador.
 - **Impacto**: 53.1/53.2 cero compilador (librería pura). 53.3 toca checker+FFI+ambos motores

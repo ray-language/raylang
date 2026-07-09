@@ -189,6 +189,11 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // closures sintéticos (diccionarios anidados) con `id` provisional; el intérprete y la VM
     // exigen ids **densos** (`collect_fn_exprs`). Esta pasada final los reasigna en orden.
     renumber_fn_exprs(program);
+    // Paso 8 (M52): inlining de forwarders triviales — una llamada a un método manglado cuyo
+    // cuerpo es exactamente `__builtin(params en orden)` (los impls-para-builtins de M48.4,
+    // p. ej. `[T]#push`) se reescribe a la llamada al builtin directamente, recuperando el
+    // opcode directo en la VM (y ahorrando el marco en el intérprete). Semántica idéntica.
+    inline_forwarders(program);
     Ok(())
 }
 
@@ -4622,6 +4627,310 @@ fn renumber_expr(expr: &mut Expr, next: &mut usize) {
     }
 }
 
+/// M52: **inlining de forwarders triviales**. Los impls-para-builtins de M48.4 (`impl<T> Push<T>
+/// for [T] { fn push(self, x) { __push(self, x) } }`) hacen que cada `a.push(i)` pague una llamada
+/// VM completa (marco + call + return) para ejecutar UN opcode — medido: arrays/gcnested +38-39 %
+/// respecto al opcode directo pre-M48.4 (IDEAS §11). Este pase detecta las funciones **manglada**
+/// (`Tipo#metodo`; un local no puede llamarse así → reescribir el callee es seguro) cuyo cuerpo es
+/// **exactamente una llamada a builtin pasando sus params en orden**, y reescribe cada sitio de
+/// llamada `Tipo#metodo(args)` a `__builtin(args)`. Los args se evalúan igual y en el mismo orden →
+/// semántica idéntica en ambos motores (el oráculo no se toca). El forwarder NO se elimina: puede
+/// seguir referenciado como valor (vtables de `dyn`, diccionarios de bounds).
+fn inline_forwarders(program: &mut Program) {
+    // 1. Mapa método-manglado → builtin. Solo funciones sin bounds (con bounds,
+    //    `append_dict_params` ya les añadió params-diccionario y el patrón no casa).
+    let user_fns: HashSet<&str> = program.functions.iter().map(|f| f.name.as_str()).collect();
+    let mut fwd: HashMap<String, String> = HashMap::new();
+    for f in &program.functions {
+        if !f.name.contains('#') || !f.bounds.is_empty() || !f.body.statements.is_empty() {
+            continue;
+        }
+        let Some(tail) = &f.body.tail else { continue };
+        let ExprKind::Call { callee, args } = &tail.kind else { continue };
+        let ExprKind::Ident(b) = &callee.kind else { continue };
+        // Debe ser un builtin de verdad (y no taparlo una función del programa homónima).
+        if crate::builtins::lookup(b).is_none() || user_fns.contains(b.as_str()) {
+            continue;
+        }
+        let en_orden = args.len() == f.params.len()
+            && args
+                .iter()
+                .zip(&f.params)
+                .all(|(a, p)| matches!(&a.kind, ExprKind::Ident(n) if *n == p.name));
+        if en_orden {
+            fwd.insert(f.name.clone(), b.clone());
+        }
+    }
+    if fwd.is_empty() {
+        return;
+    }
+    // 1b. Sonoridad: el compilador resuelve variable-local ANTES que builtin, así que si en algún
+    //     sitio del programa hay una variable ligada con el nombre de un builtin objetivo (un
+    //     `let __push = …`, legal aunque exótico), reescribir hacia ese nombre podría capturarla.
+    //     Aproximación conservadora: se excluye ese builtin del inlining en TODO el programa
+    //     (coste cero en la práctica: nadie liga nombres `__*`).
+    let mut bound: HashSet<String> = HashSet::new();
+    for f in &program.functions {
+        for p in &f.params {
+            bound.insert(p.name.clone());
+        }
+        collect_bound_names_block(&f.body, &mut bound);
+    }
+    fwd.retain(|_, b| !bound.contains(b));
+    if fwd.is_empty() {
+        return;
+    }
+    // 2. Reescribir los sitios de llamada en todo el AST (incluidos cuerpos de fn-exprs).
+    for f in &mut program.functions {
+        inline_forwarders_block(&mut f.body, &fwd);
+    }
+}
+
+/// M52: recolecta todos los nombres que el programa liga como **variables** (let/var, tuplas,
+/// `for`, bindings de `match`, params de fn anónimas) — soporte de la guarda de sonoridad de
+/// `inline_forwarders` (ver arriba). No distingue ámbitos: es una aproximación conservadora.
+fn collect_bound_names_block(block: &Block, bound: &mut HashSet<String>) {
+    for stmt in &block.statements {
+        match &stmt.kind {
+            StmtKind::Let { name, value, .. } => {
+                bound.insert(name.clone());
+                collect_bound_names_expr(value, bound);
+            }
+            StmtKind::LetTuple { names, value, .. } => {
+                for n in names.iter().flatten() {
+                    bound.insert(n.clone());
+                }
+                collect_bound_names_expr(value, bound);
+            }
+            StmtKind::For { pat, iter, body } => {
+                match pat {
+                    ForPat::Single(n) => {
+                        bound.insert(n.clone());
+                    }
+                    ForPat::Tuple(ns) => {
+                        for n in ns.iter().flatten() {
+                            bound.insert(n.clone());
+                        }
+                    }
+                }
+                match iter {
+                    ForIter::Range { start, end } => {
+                        collect_bound_names_expr(start, bound);
+                        collect_bound_names_expr(end, bound);
+                    }
+                    ForIter::In(e) | ForIter::Iter { expr: e, .. } => collect_bound_names_expr(e, bound),
+                }
+                collect_bound_names_block(body, bound);
+            }
+            StmtKind::Assign { target, value } => {
+                collect_bound_names_expr(target, bound);
+                collect_bound_names_expr(value, bound);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    collect_bound_names_expr(v, bound);
+                }
+            }
+            StmtKind::Expr(e) => collect_bound_names_expr(e, bound),
+        }
+    }
+    if let Some(t) = &block.tail {
+        collect_bound_names_expr(t, bound);
+    }
+}
+
+fn collect_bound_names_pattern(pat: &Pattern, bound: &mut HashSet<String>) {
+    match &pat.kind {
+        PatternKind::Binding(n) => {
+            bound.insert(n.clone());
+        }
+        PatternKind::Variant { subpatterns, .. } => {
+            for sp in subpatterns {
+                collect_bound_names_pattern(sp, bound);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_bound_names_expr(expr: &Expr, bound: &mut HashSet<String>) {
+    match &expr.kind {
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } | ExprKind::Try(inner) => {
+            collect_bound_names_expr(inner, bound)
+        }
+        ExprKind::Binary { left, right, .. } => {
+            collect_bound_names_expr(left, bound);
+            collect_bound_names_expr(right, bound);
+        }
+        ExprKind::Call { callee, args } => {
+            collect_bound_names_expr(callee, bound);
+            for a in args {
+                collect_bound_names_expr(a, bound);
+            }
+        }
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
+            for e in elems {
+                collect_bound_names_expr(e, bound);
+            }
+        }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares {
+                collect_bound_names_expr(k, bound);
+                collect_bound_names_expr(v, bound);
+            }
+        }
+        ExprKind::Index { array, index } => {
+            collect_bound_names_expr(array, bound);
+            collect_bound_names_expr(index, bound);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                collect_bound_names_expr(e, bound);
+            }
+        }
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                collect_bound_names_expr(a, bound);
+            }
+        }
+        ExprKind::Field { object, .. } => collect_bound_names_expr(object, bound),
+        ExprKind::Func(fe) => {
+            for p in &fe.params {
+                bound.insert(p.name.clone());
+            }
+            collect_bound_names_block(&fe.body, bound);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_bound_names_expr(scrutinee, bound);
+            for arm in arms {
+                collect_bound_names_pattern(&arm.pattern, bound);
+                collect_bound_names_expr(&arm.body, bound);
+                if let Some(g) = &arm.guard {
+                    collect_bound_names_expr(g, bound);
+                }
+            }
+        }
+        ExprKind::If { cond, then_branch, else_branch } => {
+            collect_bound_names_expr(cond, bound);
+            collect_bound_names_block(then_branch, bound);
+            if let Some(e) = else_branch {
+                collect_bound_names_expr(e, bound);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            collect_bound_names_expr(cond, bound);
+            collect_bound_names_block(body, bound);
+        }
+        ExprKind::Block(b) => collect_bound_names_block(b, bound),
+        _ => {}
+    }
+}
+
+fn inline_forwarders_block(block: &mut Block, fwd: &HashMap<String, String>) {
+    for stmt in &mut block.statements {
+        match &mut stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => inline_forwarders_expr(value, fwd),
+            StmtKind::For { iter, body, .. } => {
+                match iter {
+                    ForIter::Range { start, end } => {
+                        inline_forwarders_expr(start, fwd);
+                        inline_forwarders_expr(end, fwd);
+                    }
+                    ForIter::In(e) => inline_forwarders_expr(e, fwd),
+                    ForIter::Iter { expr, .. } => inline_forwarders_expr(expr, fwd),
+                }
+                inline_forwarders_block(body, fwd);
+            }
+            StmtKind::Assign { target, value } => {
+                inline_forwarders_expr(target, fwd);
+                inline_forwarders_expr(value, fwd);
+            }
+            StmtKind::Return { value } => {
+                if let Some(v) = value {
+                    inline_forwarders_expr(v, fwd);
+                }
+            }
+            StmtKind::Expr(e) => inline_forwarders_expr(e, fwd),
+        }
+    }
+    if let Some(t) = &mut block.tail {
+        inline_forwarders_expr(t, fwd);
+    }
+}
+
+fn inline_forwarders_expr(expr: &mut Expr, fwd: &HashMap<String, String>) {
+    match &mut expr.kind {
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => inline_forwarders_expr(inner, fwd),
+        ExprKind::Binary { left, right, .. } => {
+            inline_forwarders_expr(left, fwd);
+            inline_forwarders_expr(right, fwd);
+        }
+        ExprKind::Call { callee, args } => {
+            // El corazón del pase: renombrar el callee si es un forwarder conocido. Solo en
+            // posición de llamada (una referencia como VALOR debe seguir apuntando a la función).
+            if let ExprKind::Ident(n) = &mut callee.kind
+                && let Some(b) = fwd.get(n)
+            {
+                *n = b.clone();
+            }
+            inline_forwarders_expr(callee, fwd);
+            for a in args {
+                inline_forwarders_expr(a, fwd);
+            }
+        }
+        ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
+            for e in elems {
+                inline_forwarders_expr(e, fwd);
+            }
+        }
+        ExprKind::MapLit(pares) => {
+            for (k, v) in pares {
+                inline_forwarders_expr(k, fwd);
+                inline_forwarders_expr(v, fwd);
+            }
+        }
+        ExprKind::Index { array, index } => {
+            inline_forwarders_expr(array, fwd);
+            inline_forwarders_expr(index, fwd);
+        }
+        ExprKind::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                inline_forwarders_expr(e, fwd);
+            }
+        }
+        ExprKind::EnumLit { args, .. } => {
+            for a in args {
+                inline_forwarders_expr(a, fwd);
+            }
+        }
+        ExprKind::Field { object, .. } => inline_forwarders_expr(object, fwd),
+        ExprKind::Func(fe) => inline_forwarders_block(&mut fe.body, fwd),
+        ExprKind::Match { scrutinee, arms } => {
+            inline_forwarders_expr(scrutinee, fwd);
+            for arm in arms {
+                inline_forwarders_expr(&mut arm.body, fwd);
+                if let Some(g) = &mut arm.guard {
+                    inline_forwarders_expr(g, fwd);
+                }
+            }
+        }
+        ExprKind::Try(inner) => inline_forwarders_expr(inner, fwd),
+        ExprKind::If { cond, then_branch, else_branch } => {
+            inline_forwarders_expr(cond, fwd);
+            inline_forwarders_block(then_branch, fwd);
+            if let Some(e) = else_branch {
+                inline_forwarders_expr(e, fwd);
+            }
+        }
+        ExprKind::While { cond, body } => {
+            inline_forwarders_expr(cond, fwd);
+            inline_forwarders_block(body, fwd);
+        }
+        ExprKind::Block(b) => inline_forwarders_block(b, fwd),
+        _ => {}
+    }
+}
+
 /// M40.2: baja `for x in it` (sobre un iterador) reescribiendo `ForIter::In` a `ForIter::Iter` con
 /// el nombre manglado de `next`, en cada `for` cuya `(línea, col)` esté en `sites`. Recorre todo el
 /// AST (bloques anidados en if/while/match/fn) para alcanzar cualquier `for`.
@@ -5731,6 +6040,93 @@ mod tests {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         let (mut prog, _) = crate::parser::parse_all(tokens);
         member_completion(&mut prog).into_iter().map(|m| m.label).collect()
+    }
+
+    /// M52: recolecta los nombres de callee (Ident) de todas las llamadas del programa verificado.
+    fn call_targets(src: &str) -> Vec<String> {
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        check(&mut prog).expect("check ok");
+        fn walk_block(b: &Block, acc: &mut Vec<String>) {
+            for s in &b.statements {
+                match &s.kind {
+                    StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } | StmtKind::Expr(value) => {
+                        walk_expr(value, acc)
+                    }
+                    StmtKind::Assign { target, value } => {
+                        walk_expr(target, acc);
+                        walk_expr(value, acc);
+                    }
+                    StmtKind::Return { value: Some(v) } => walk_expr(v, acc),
+                    StmtKind::For { body, .. } => walk_block(body, acc),
+                    _ => {}
+                }
+            }
+            if let Some(t) = &b.tail {
+                walk_expr(t, acc);
+            }
+        }
+        fn walk_expr(e: &Expr, acc: &mut Vec<String>) {
+            match &e.kind {
+                ExprKind::Call { callee, args } => {
+                    if let ExprKind::Ident(n) = &callee.kind {
+                        acc.push(n.clone());
+                    }
+                    walk_expr(callee, acc);
+                    for a in args {
+                        walk_expr(a, acc);
+                    }
+                }
+                ExprKind::Binary { left, right, .. } => {
+                    walk_expr(left, acc);
+                    walk_expr(right, acc);
+                }
+                ExprKind::While { cond, body } => {
+                    walk_expr(cond, acc);
+                    walk_block(body, acc);
+                }
+                ExprKind::Block(b) => walk_block(b, acc),
+                ExprKind::If { cond, then_branch, else_branch } => {
+                    walk_expr(cond, acc);
+                    walk_block(then_branch, acc);
+                    if let Some(e2) = else_branch {
+                        walk_expr(e2, acc);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Solo `main`: el prelude contiene los cuerpos forwarder (que llaman `__x` legítimamente).
+        let mut acc = Vec::new();
+        for f in prog.functions.iter().filter(|f| f.name == "main") {
+            walk_block(&f.body, &mut acc);
+        }
+        acc
+    }
+
+    #[test]
+    fn inline_forwarders_baja_push_y_len_al_builtin() {
+        // M52: `a.push(i)` / `a.len()` (métodos de trait forwarder de M48.4) deben quedar
+        // reescritos a la llamada al builtin (`__push`/`__len`), no al método manglado.
+        let targets =
+            call_targets("fn main() -> int {\n  var a: [int] = [];\n  a.push(1);\n  a.len()\n}");
+        assert!(targets.iter().any(|t| t == "__push"), "push inlineado: {targets:?}");
+        assert!(targets.iter().any(|t| t == "__len"), "len inlineado: {targets:?}");
+        assert!(!targets.iter().any(|t| t.ends_with("#push") || t.ends_with("#len")),
+            "sin llamadas al forwarder: {targets:?}");
+    }
+
+    #[test]
+    fn inline_forwarders_respeta_un_local_homonimo() {
+        // M52 (guarda de sonoridad): si el programa liga una variable `__push`, el inlining hacia
+        // ese nombre se desactiva (el compilador resuelve local antes que builtin) y la llamada
+        // sigue yendo al método manglado. `__len` no está ligado → sí se inlinea.
+        let targets = call_targets(
+            "fn main() -> int {\n  let __push = 5;\n  var a: [int] = [];\n  a.push(__push);\n  a.len()\n}",
+        );
+        assert!(!targets.iter().any(|t| t == "__push"), "push NO inlineado: {targets:?}");
+        assert!(targets.iter().any(|t| t.ends_with("#push")), "va al forwarder: {targets:?}");
+        assert!(targets.iter().any(|t| t == "__len"), "len sí inlineado: {targets:?}");
     }
 
     #[test]

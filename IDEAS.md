@@ -399,13 +399,18 @@ bloquea nada y se hace de forma incremental, midiendo con `benchmarks/`.
   ya no bajan al opcode directo (`Push`/`Len`) sino al método del trait (`impl<T> Push<T> for [T]`), cuyo
   cuerpo es un *forwarder* de una línea a `__push`/`__len` → cada push/len paga **una llamada VM completa
   (marco + call + return) para ejecutar UN opcode**. M38 exonerado (medido ≈ baseline en `233532f`).
-  - **Plan (M52 — inlining de forwarders triviales)**: pase del compilador (o reescritura en el lowering del
-    checker, que beneficia a AMBOS motores y mantiene el oráculo): si el destino de una llamada es una
-    función cuyo cuerpo es **exactamente una llamada a builtin pasando sus params en orden**
-    (`fn push(self, x) { __push(self, x) }`), emitir el opcode del builtin en el sitio en vez del `Call`.
-    Recupera el rendimiento pre-M48.4 sin revertir el diseño de traits (los traits siguen siendo la
-    superficie; el forwarder solo desaparece del código generado). Verificar con `measure.py` y actualizar
-    `baseline.json`. Alcance acotado: no es inlining general (ROI decreciente), solo el patrón forwarder.
+  - ✅ **M52 — inlining de forwarders triviales, COMPLETO** (jul 2026): pase `inline_forwarders` en el
+    checker (paso 8 de `check`, tras todo el lowering → beneficia a AMBOS motores, oráculo intacto): si el
+    destino de una llamada es un método **manglado** (`Tipo#metodo`; un local no puede llamarse así) cuyo
+    cuerpo es **exactamente una llamada a builtin pasando sus params en orden** (`fn push(self, x) {
+    __push(self, x) }`), el sitio se reescribe a la llamada al builtin (`__push(a, i)`) → la VM emite el
+    opcode directo y el intérprete se ahorra el marco. El forwarder NO se elimina (sigue referenciable como
+    valor: vtables de `dyn`, diccionarios). **Guarda de sonoridad**: el compilador resuelve variable-local
+    antes que builtin → si el programa liga una variable con el nombre de un builtin objetivo (`let __push
+    = …`, legal), ese builtin se excluye del inlining (aproximación programa-completo, coste cero en la
+    práctica). **Medido (`measure.py` mejor-de-15): arrays 0.250 → 0.184 s, gcnested 0.403 → 0.291 s —
+    regresión de M48.4 recuperada al completo** (≈ baseline pre-M48.4; fib/loop sin cambio). Baseline
+    actualizada. Los traits siguen siendo la superficie del lenguaje; solo desaparece del código generado.
 
 ## 12. Asperezas de M3
 

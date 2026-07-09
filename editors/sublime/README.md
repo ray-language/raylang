@@ -32,7 +32,9 @@ nombre `raylang`:
    ```
 
 3. Abre cualquier `.ray`. Abajo a la derecha debería decir **raylang**; si no, elígelo en el
-   selector de sintaxis (o **View → Syntax → raylang**).
+   selector de sintaxis (o **View → Syntax → raylang**). Los templates compilados (`*.ray.html`,
+   M55) usan la sintaxis **raylang template** (HTML + los delimitadores `{{ }}`/`{% %}` con la
+   expresión coloreada como raylang) y reciben los diagnósticos del template desde el mismo LSP.
 
 No hay que compilar nada: el `.sublime-syntax` es declarativo (a diferencia del cliente de
 VSCode, que sí es TypeScript a compilar).
@@ -67,7 +69,7 @@ sin compilar un cliente.
          "command": ["/Users/TU_USUARIO/.local/bin/ray", "lsp"],
          // El instalador (curl|sh) deja el binario ahí; si compilaste a mano, apunta a
          // ".../target/release/ray". Un símlink estable evita tener que reeditar tras recompilar.
-         "selector": "source.raylang"
+         "selector": "source.raylang | text.html.raylang"
        }
      }
    }

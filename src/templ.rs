@@ -20,26 +20,48 @@
 //! lo valida el pipeline entero al compilarse; aquí solo se comprueba que **parsea** para dar el
 //! error temprano contra el template.
 //!
+//! **Posiciones y line map** (soporte del LSP): los errores del template llevan su LÍNEA, y
+//! `generate_with_map` devuelve, junto al fuente generado, un mapa línea-generada → línea-del-
+//! template. Con él, el LSP analiza el módulo generado y **traduce los errores de tipos de vuelta
+//! al template** (el typo en `{{ titluo }}` se subraya en el `.ray.html`).
+//!
 //! El motor runtime (`std/template`: `compile`/`render` con contexto `TVal`) sigue siendo la opción
 //! para plantillas dinámicas (cargadas de disco/BD en caliente).
 
 use std::path::{Path, PathBuf};
 
-// Un token del template (espejo del tokenizador de std/template, en Rust).
+/// Un error del template, con la línea (1-basada) del `.ray.html` donde ocurre.
+#[derive(Debug)]
+pub struct TplError {
+    pub line: usize,
+    pub msg: String,
+}
+
+// Un token del template (espejo del tokenizador de std/template, en Rust), con la línea del
+// template donde empieza.
 enum Tok {
-    Text(String),
-    Var(String),
-    Raw(String),
-    Tag(String),
+    Text(String, usize),
+    Var(String, usize),
+    Raw(String, usize),
+    Tag(String, usize),
+}
+
+impl Tok {
+    fn line(&self) -> usize {
+        match self {
+            Tok::Text(_, l) | Tok::Var(_, l) | Tok::Raw(_, l) | Tok::Tag(_, l) => *l,
+        }
+    }
 }
 
 /// Compila `input` (`*.ray.html`) y escribe el módulo generado al lado (`*.ray`). Devuelve la ruta
-/// generada. `Err` con el archivo y el motivo si el template está mal formado.
+/// generada. `Err` con el archivo, la línea y el motivo si el template está mal formado.
 pub fn generate_file(input: &Path) -> Result<PathBuf, String> {
     let src = std::fs::read_to_string(input)
         .map_err(|e| format!("no se pudo leer '{}': {e}", input.display()))?;
     let name = fn_suffix_of(input)?;
-    let code = generate(&src, &name).map_err(|e| format!("{}: {e}", input.display()))?;
+    let (code, _map) = generate_with_map(&src, &name)
+        .map_err(|e| format!("{}: línea {}: {}", input.display(), e.line, e.msg))?;
     let out_path = output_path(input)?;
     std::fs::write(&out_path, &code)
         .map_err(|e| format!("no se pudo escribir '{}': {e}", out_path.display()))?;
@@ -61,9 +83,10 @@ fn output_path(input: &Path) -> Result<PathBuf, String> {
     Ok(PathBuf::from(format!("{base}.ray")))
 }
 
-// El sufijo del nombre de la función generada: el *stem* del archivo, saneado a identificador
-// (`lista-de-usuarios.ray.html` → `lista_de_usuarios` → `render_lista_de_usuarios`).
-fn fn_suffix_of(input: &Path) -> Result<String, String> {
+/// El sufijo del nombre de la función generada: el *stem* del archivo, saneado a identificador
+/// (`lista-de-usuarios.ray.html` → `lista_de_usuarios` → `render_lista_de_usuarios`). Lo usa
+/// también el LSP para nombrar la función al analizar un buffer `.ray.html`.
+pub fn fn_suffix_of(input: &Path) -> Result<String, String> {
     let s = input
         .file_name()
         .and_then(|n| n.to_str())
@@ -79,18 +102,22 @@ fn fn_suffix_of(input: &Path) -> Result<String, String> {
     Ok(name)
 }
 
-// Tokeniza el template: texto literal, `{{ expr }}`, `{{& expr }}`, `{% tag %}`.
-fn tokenize(tpl: &str) -> Result<Vec<Tok>, String> {
+// Tokeniza el template: texto literal, `{{ expr }}`, `{{& expr }}`, `{% tag %}`. Cada token lleva
+// la línea (1-basada) del template donde empieza.
+fn tokenize(tpl: &str) -> Result<Vec<Tok>, TplError> {
     let cs: Vec<char> = tpl.chars().collect();
     let n = cs.len();
     let mut toks = Vec::new();
     let mut start = 0;
+    let mut start_line = 1usize;
+    let mut line = 1usize;
     let mut i = 0;
     while i < n {
         if i + 1 < n && cs[i] == '{' && (cs[i + 1] == '{' || cs[i + 1] == '%') {
             if i > start {
-                toks.push(Tok::Text(cs[start..i].iter().collect()));
+                toks.push(Tok::Text(cs[start..i].iter().collect(), start_line));
             }
+            let tok_line = line;
             let es_tag = cs[i + 1] == '%';
             let cierre = if es_tag { '%' } else { '}' };
             let ini = i + 2;
@@ -104,25 +131,31 @@ fn tokenize(tpl: &str) -> Result<Vec<Tok>, String> {
                 }
             }
             let Some(fin) = fin else {
-                return Err(if es_tag { "'{%' sin cerrar".into() } else { "'{{' sin cerrar".into() });
+                let que = if es_tag { "'{%' sin cerrar" } else { "'{{' sin cerrar" };
+                return Err(TplError { line: tok_line, msg: que.into() });
             };
             let inner: String = cs[ini..fin].iter().collect();
+            line += inner.matches('\n').count();
             let inner = inner.trim().to_string();
             i = fin + 2;
             start = i;
+            start_line = line;
             if es_tag {
-                toks.push(Tok::Tag(inner));
+                toks.push(Tok::Tag(inner, tok_line));
             } else if let Some(resto) = inner.strip_prefix('&') {
-                toks.push(Tok::Raw(resto.trim().to_string()));
+                toks.push(Tok::Raw(resto.trim().to_string(), tok_line));
             } else {
-                toks.push(Tok::Var(inner));
+                toks.push(Tok::Var(inner, tok_line));
             }
         } else {
+            if cs[i] == '\n' {
+                line += 1;
+            }
             i += 1;
         }
     }
     if n > start {
-        toks.push(Tok::Text(cs[start..n].iter().collect()));
+        toks.push(Tok::Text(cs[start..n].iter().collect(), start_line));
     }
     Ok(toks)
 }
@@ -180,83 +213,93 @@ enum Marco {
     For,
 }
 
-/// Genera el fuente raylang del template. `name` es el sufijo de la función (`render_<name>`).
-fn generate(tpl: &str, name: &str) -> Result<String, String> {
+/// Genera el fuente raylang del template junto con el **line map**: `map[i]` es la línea del
+/// template (1-basada) de la que proviene la línea `i + 1` del generado. Con él, el LSP traduce
+/// los diagnósticos del módulo generado de vuelta al `.ray.html`.
+pub fn generate_with_map(tpl: &str, name: &str) -> Result<(String, Vec<usize>), TplError> {
     let toks = tokenize(tpl)?;
     let mut it = toks.into_iter().peekable();
 
     // La primera directiva debe ser `{% params … %}` (se admite texto en blanco antes).
-    let params = loop {
+    let (params, params_line) = loop {
         match it.peek() {
-            Some(Tok::Text(t)) if t.trim().is_empty() => {
+            Some(Tok::Text(t, _)) if t.trim().is_empty() => {
                 it.next();
             }
-            Some(Tok::Tag(t)) if t.starts_with("params") => {
-                let Some(Tok::Tag(t)) = it.next() else { unreachable!() };
-                break t["params".len()..].trim().to_string();
+            Some(Tok::Tag(t, _)) if t.starts_with("params") => {
+                let Some(Tok::Tag(t, l)) = it.next() else { unreachable!() };
+                break (t["params".len()..].trim().to_string(), l);
             }
-            _ => {
-                return Err("la primera directiva debe ser '{% params nombre: tipo, … %}' (la firma de la función)".into());
+            otro => {
+                let line = otro.map(|t| t.line()).unwrap_or(1);
+                return Err(TplError {
+                    line,
+                    msg: "la primera directiva debe ser '{% params nombre: tipo, … %}' (la firma de la función)".into(),
+                });
             }
         }
     };
     for p in split_params(&params) {
         let Some((nombre, tipo)) = p.split_once(':') else {
-            return Err(format!("parámetro mal formado en params: '{p}' (se espera 'nombre: tipo')"));
+            return Err(TplError { line: params_line, msg: format!("parámetro mal formado en params: '{p}' (se espera 'nombre: tipo')") });
         };
         let nombre = nombre.trim();
         if nombre.is_empty() || tipo.trim().is_empty() || !nombre.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            return Err(format!("parámetro mal formado en params: '{p}'"));
+            return Err(TplError { line: params_line, msg: format!("parámetro mal formado en params: '{p}'") });
         }
     }
     // Si el template continúa con un salto de línea inmediato tras `%}`, se recorta (estética del
     // HTML generado; el resto del espaciado se respeta tal cual).
-    if let Some(Tok::Text(t)) = it.peek()
+    let mut toks: Vec<Tok> = Vec::new();
+    if let Some(Tok::Text(t, l)) = it.peek()
         && let Some(resto) = t.strip_prefix('\n')
     {
-        let resto = resto.to_string();
+        let (resto, l) = (resto.to_string(), *l);
         it.next();
         if !resto.is_empty() {
-            // reinyectar el texto sin el primer salto
-            return generate_body(name, &params, std::iter::once(Tok::Text(resto)).chain(it).collect());
+            toks.push(Tok::Text(resto, l + 1));
         }
-        return generate_body(name, &params, it.collect());
     }
-    generate_body(name, &params, it.collect())
+    toks.extend(it);
+    generate_body(name, &params, params_line, toks)
 }
 
-fn generate_body(name: &str, params: &str, toks: Vec<Tok>) -> Result<String, String> {
-    let mut body = String::new();
+fn generate_body(
+    name: &str,
+    params: &str,
+    params_line: usize,
+    toks: Vec<Tok>,
+) -> Result<(String, Vec<usize>), TplError> {
+    // Cada línea del cuerpo con la línea del template de la que proviene.
+    let mut body: Vec<(usize, String)> = Vec::new();
     let mut depth = 1usize; // dentro de la función
     let mut stack: Vec<Marco> = Vec::new();
-    let linea = |body: &mut String, depth: usize, s: &str| {
-        for _ in 0..depth {
-            body.push_str("    ");
-        }
-        body.push_str(s);
-        body.push('\n');
+    let mut last_line = params_line;
+    let linea = |body: &mut Vec<(usize, String)>, depth: usize, tpl_line: usize, s: String| {
+        body.push((tpl_line, format!("{}{s}", "    ".repeat(depth))));
     };
 
     for tok in toks {
+        last_line = tok.line();
         match tok {
-            Tok::Text(t) => {
+            Tok::Text(t, l) => {
                 if !t.is_empty() {
-                    linea(&mut body, depth, &format!("out.push(\"{}\");", lit(&t)));
+                    linea(&mut body, depth, l, format!("out.push(\"{}\");", lit(&t)));
                 }
             }
-            Tok::Var(e) => {
+            Tok::Var(e, l) => {
                 if e.is_empty() {
-                    return Err("'{{ }}' vacío".into());
+                    return Err(TplError { line: l, msg: "'{{ }}' vacío".into() });
                 }
-                linea(&mut body, depth, &format!("out.push(escape_html(to_string({e})));"));
+                linea(&mut body, depth, l, format!("out.push(escape_html(to_string({e})));"));
             }
-            Tok::Raw(e) => {
+            Tok::Raw(e, l) => {
                 if e.is_empty() {
-                    return Err("'{{& }}' vacío".into());
+                    return Err(TplError { line: l, msg: "'{{& }}' vacío".into() });
                 }
-                linea(&mut body, depth, &format!("out.push(to_string({e}));"));
+                linea(&mut body, depth, l, format!("out.push(to_string({e}));"));
             }
-            Tok::Tag(t) => {
+            Tok::Tag(t, l) => {
                 let (kw, resto) = match t.split_once(char::is_whitespace) {
                     Some((k, r)) => (k, r.trim()),
                     None => (t.as_str(), ""),
@@ -264,61 +307,63 @@ fn generate_body(name: &str, params: &str, toks: Vec<Tok>) -> Result<String, Str
                 match kw {
                     "if" => {
                         if resto.is_empty() {
-                            return Err("'{% if %}' sin condición".into());
+                            return Err(TplError { line: l, msg: "'{% if %}' sin condición".into() });
                         }
-                        linea(&mut body, depth, &format!("if ({resto}) {{"));
+                        linea(&mut body, depth, l, format!("if ({resto}) {{"));
                         depth += 1;
                         stack.push(Marco::If);
                     }
                     "elif" => {
                         if !matches!(stack.last(), Some(Marco::If)) {
-                            return Err("'{% elif %}' fuera de un '{% if %}'".into());
+                            return Err(TplError { line: l, msg: "'{% elif %}' fuera de un '{% if %}'".into() });
                         }
                         if resto.is_empty() {
-                            return Err("'{% elif %}' sin condición".into());
+                            return Err(TplError { line: l, msg: "'{% elif %}' sin condición".into() });
                         }
-                        linea(&mut body, depth - 1, &format!("}} else if ({resto}) {{"));
+                        linea(&mut body, depth - 1, l, format!("}} else if ({resto}) {{"));
                     }
                     "else" => {
                         if !matches!(stack.last(), Some(Marco::If)) {
-                            return Err("'{% else %}' fuera de un '{% if %}'".into());
+                            return Err(TplError { line: l, msg: "'{% else %}' fuera de un '{% if %}'".into() });
                         }
-                        linea(&mut body, depth - 1, "} else {");
+                        linea(&mut body, depth - 1, l, "} else {".to_string());
                     }
                     "endif" => {
                         if !matches!(stack.last(), Some(Marco::If)) {
-                            return Err("'{% endif %}' sin '{% if %}' que cerrar".into());
+                            return Err(TplError { line: l, msg: "'{% endif %}' sin '{% if %}' que cerrar".into() });
                         }
                         stack.pop();
                         depth -= 1;
-                        linea(&mut body, depth, "}");
+                        linea(&mut body, depth, l, "}".to_string());
                     }
                     "for" => {
                         // `for <patrón> in <expr>`: el patrón puede ser `x` o `(k, v)`.
                         let Some(pos) = resto.find(" in ") else {
-                            return Err("'{% for %}' mal formado (se espera 'for x in expr')".into());
+                            return Err(TplError { line: l, msg: "'{% for %}' mal formado (se espera 'for x in expr')".into() });
                         };
                         let patron = resto[..pos].trim();
                         let expr = resto[pos + 4..].trim();
                         if patron.is_empty() || expr.is_empty() {
-                            return Err("'{% for %}' mal formado (se espera 'for x in expr')".into());
+                            return Err(TplError { line: l, msg: "'{% for %}' mal formado (se espera 'for x in expr')".into() });
                         }
-                        linea(&mut body, depth, &format!("for {patron} in {expr} {{"));
+                        linea(&mut body, depth, l, format!("for {patron} in {expr} {{"));
                         depth += 1;
                         stack.push(Marco::For);
                     }
                     "endfor" => {
                         if !matches!(stack.last(), Some(Marco::For)) {
-                            return Err("'{% endfor %}' sin '{% for %}' que cerrar".into());
+                            return Err(TplError { line: l, msg: "'{% endfor %}' sin '{% for %}' que cerrar".into() });
                         }
                         stack.pop();
                         depth -= 1;
-                        linea(&mut body, depth, "}");
+                        linea(&mut body, depth, l, "}".to_string());
                     }
                     "params" => {
-                        return Err("'{% params %}' repetido (solo puede ir una vez, al principio)".into());
+                        return Err(TplError { line: l, msg: "'{% params %}' repetido (solo puede ir una vez, al principio)".into() });
                     }
-                    otro => return Err(format!("etiqueta desconocida: '{otro}'")),
+                    otro => {
+                        return Err(TplError { line: l, msg: format!("etiqueta desconocida: '{otro}'") });
+                    }
                 }
             }
         }
@@ -328,26 +373,40 @@ fn generate_body(name: &str, params: &str, toks: Vec<Tok>) -> Result<String, Str
             Some(Marco::If) => "endif",
             _ => "endfor",
         };
-        return Err(format!("falta un '{{% {falta} %}}' al final del template"));
+        return Err(TplError { line: last_line, msg: format!("falta un '{{% {falta} %}}' al final del template") });
     }
 
-    Ok(format!(
+    // Ensamblado + line map. La cabecera son 7 líneas fijas (mapean a la línea de `params`,
+    // donde vive la firma); el cierre, a la última línea del template.
+    let header = format!(
         "// GENERADO por `ray templ` desde {name}.ray.html — NO editar a mano; regenera con\n\
          // `ray templ <ruta>`. El template es la fuente de verdad.\n\
          from std/template import escape_html;\n\
          \n\
          /// Renders the `{name}` template (generated; the `.ray.html` file is the source of truth).\n\
          pub fn render_{name}({params}) -> string {{\n\
-         \x20   var out: [string] = [];\n\
-         {body}\
-         \x20   out.join(\"\")\n\
-         }}\n"
-    ))
+         \x20   var out: [string] = [];\n"
+    );
+    let mut map: Vec<usize> = vec![params_line; 7];
+    let mut code = header;
+    for (l, linea_src) in &body {
+        map.push(*l);
+        code.push_str(linea_src);
+        code.push('\n');
+    }
+    code.push_str("    out.join(\"\")\n}\n");
+    map.push(last_line);
+    map.push(last_line);
+    Ok((code, map))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn generate(tpl: &str, name: &str) -> Result<String, TplError> {
+        generate_with_map(tpl, name).map(|(c, _)| c)
+    }
 
     #[test]
     fn genera_una_funcion_tipada() {
@@ -373,17 +432,33 @@ mod tests {
     }
 
     #[test]
-    fn errores_del_template() {
-        assert!(generate("<html>", "t").unwrap_err().contains("params"));
-        assert!(generate("{% params x: int %}{% if x %}", "t").unwrap_err().contains("endif"));
-        assert!(generate("{% params x: int %}{% endfor %}", "t").unwrap_err().contains("endfor"));
-        assert!(generate("{% params x: int %}{% bloque %}", "t").unwrap_err().contains("desconocida"));
-        assert!(generate("{% params x %}hola", "t").unwrap_err().contains("mal formado"));
+    fn errores_del_template_con_linea() {
+        assert!(generate("<html>", "t").unwrap_err().msg.contains("params"));
+        let e = generate("{% params x: int %}\n\n{% if x %}", "t").unwrap_err();
+        assert!(e.msg.contains("endif"));
+        assert_eq!(e.line, 3, "el error señala la línea del if sin cerrar");
+        assert!(generate("{% params x: int %}{% endfor %}", "t").unwrap_err().msg.contains("endfor"));
+        assert!(generate("{% params x: int %}{% bloque %}", "t").unwrap_err().msg.contains("desconocida"));
+        assert!(generate("{% params x %}hola", "t").unwrap_err().msg.contains("mal formado"));
     }
 
     #[test]
     fn split_params_respeta_los_anidados() {
         let ps = split_params("m: Map<string, int>, xs: [string], f: fn(int) -> int");
         assert_eq!(ps, vec!["m: Map<string, int>", "xs: [string]", "f: fn(int) -> int"]);
+    }
+
+    #[test]
+    fn el_line_map_traduce_al_template() {
+        let tpl = "{% params t: string %}\n<h1>{{ t }}</h1>\n{% if t != \"\" %}\n<p>{{ t }}</p>\n{% endif %}\n";
+        let (code, map) = generate_with_map(tpl, "v").unwrap();
+        let lines: Vec<&str> = code.lines().collect();
+        assert_eq!(lines.len(), map.len(), "una entrada del mapa por línea generada");
+        // La línea generada del `if` mapea a la línea 3 del template.
+        let (i, _) = lines.iter().enumerate().find(|(_, l)| l.contains("if (t !=")).unwrap();
+        assert_eq!(map[i], 3, "{code}");
+        // Y la del `<p>{{ t }}</p>` a la 4.
+        let (k, _) = lines.iter().enumerate().skip(i).find(|(_, l)| l.contains("escape_html")).unwrap();
+        assert_eq!(map[k], 4, "{code}");
     }
 }

@@ -1,0 +1,46 @@
+%YAML 1.2
+---
+# Sintaxis de los TEMPLATES COMPILADOS de raylang (`.ray.html`, M55) para Sublime Text 4.
+#
+# Extiende la sintaxis de HTML del propio Sublime y añade, vía `prototype` (activo en TODOS los
+# contextos del HTML), los delimitadores del template: `{{ expr }}` / `{{& expr }}` (interpolación,
+# con la expresión coloreada como raylang embebido) y `{% tag … %}` (params/if/elif/else/endif/
+# for/endfor, con la palabra clave resaltada y el resto como raylang). Espejo de la gramática de
+# VSCode (editors/vscode/syntaxes/raylang-template.tmLanguage.json): mismos scopes.
+#
+# Los diagnósticos en vivo (errores del template + errores de tipos del módulo generado, mapeados
+# a la línea del template) los da el Language Server (`ray lsp`) vía el paquete LSP; ver README.md.
+name: raylang template
+file_extensions:
+  - ray.html
+scope: text.html.raylang
+
+extends: Packages/HTML/HTML.sublime-syntax
+
+contexts:
+  prototype:
+    - match: '\{%'
+      scope: punctuation.section.embedded.begin.raylang-template
+      push: template-tag
+    - match: '\{\{&'
+      scope: punctuation.section.embedded.begin.raylang-template keyword.other.raw.raylang-template
+      push: template-expr
+    - match: '\{\{'
+      scope: punctuation.section.embedded.begin.raylang-template
+      push: template-expr
+
+  template-tag:
+    - meta_scope: meta.embedded.block.raylang-template
+    - match: '%\}'
+      scope: punctuation.section.embedded.end.raylang-template
+      pop: true
+    - match: '\b(params|if|elif|else|endif|for|endfor|in)\b'
+      scope: keyword.control.raylang-template
+    - include: scope:source.raylang
+
+  template-expr:
+    - meta_scope: meta.embedded.inline.raylang-template
+    - match: '\}\}'
+      scope: punctuation.section.embedded.end.raylang-template
+      pop: true
+    - include: scope:source.raylang

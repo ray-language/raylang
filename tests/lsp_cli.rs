@@ -249,3 +249,25 @@ fn diagnostica_con_las_dependencias_por_ruta_del_manifiesto() {
         "cero diagnósticos: la path-dep resuelve como en `ray run`\n{out}"
     );
 }
+
+#[test]
+fn diagnostica_templates_ray_html() {
+    // M55: un buffer `.ray.html` se diagnostica con el pipeline de `ray templ`. (1) Un typo en una
+    // variable ({{ titluo }}) genera código que no compila y el error vuelve TRADUCIDO a la línea
+    // del template (línea 2 → 1 en 0-based) con el prefijo "template:". (2) Un error del propio
+    // template (if sin endif) sale con su línea. (3) hover sobre un template devuelve null (no es
+    // fuente raylang).
+    let open_typo = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///vista.ray.html","text":"{% params titulo: string %}\n<h1>{{ titluo }}</h1>\n"}}}"#;
+    let open_sin_endif = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///rota.ray.html","text":"{% params x: int %}\n{% if x > 0 %}abierto\n"}}}"#;
+    let hover = r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///vista.ray.html"},"position":{"line":1,"character":9}}}"#;
+    let entrada = frame(open_typo) + &frame(open_sin_endif) + &frame(hover)
+        + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("titluo"), "el typo llega como diagnóstico\n{out}");
+    assert!(out.contains("template:"), "prefijo de template\n{out}");
+    // El typo está en la línea 2 del template → "line":1 (0-based) en su rango.
+    let seccion_typo = out.split("vista.ray.html").nth(1).unwrap_or("");
+    assert!(seccion_typo.contains("\"line\":1"), "el error mapea a la línea del template\n{out}");
+    assert!(out.contains("endif"), "el if sin cerrar se reporta\n{out}");
+    assert!(out.contains("\"id\":9,\"result\":null"), "hover sobre template = null\n{out}");
+}

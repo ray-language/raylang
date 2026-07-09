@@ -66,7 +66,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // A qué documentos se aplica: los del lenguaje 'raylang'.
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ scheme: "file", language: "raylang" }],
+    documentSelector: [
+      { scheme: "file", language: "raylang" },
+      // M55: los templates compilados (.ray.html) reciben diagnósticos del mismo servidor
+      // (errores del template + errores de tipos del módulo generado, mapeados a sus líneas).
+      { scheme: "file", language: "raylang-template" },
+    ],
   };
 
   client = new LanguageClient(

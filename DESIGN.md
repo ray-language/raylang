@@ -7248,5 +7248,17 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   TVal, cero lookup por nombre en runtime.
 - **Convivencia**: `std/template` (compile/render con contexto `TVal`) sigue para plantillas
   dinámicas (de BD/disco en caliente); `ray templ` es la vía para las vistas del propio código.
+- **Soporte de editor (misma sesión)**: (a) `templ.rs` gana **posiciones** (cada token lleva su
+  línea del template; los errores salen como `TplError { line, msg }`) y un **line map**
+  (`generate_with_map`: línea-generada → línea-del-template); (b) el **LSP** diagnostica los
+  buffers `.ray.html` — errores del propio template con su línea, y errores de TIPOS del módulo
+  generado (analizado con el loader contra la ruta del `.ray` hermano → std/template y path-deps
+  resuelven) **traducidos de vuelta al template** con el mapa: el typo en `{{ titluo }}` se subraya
+  en el HTML (probado en `tests/lsp_cli.rs`); hover/definición/rename/completion/formatting
+  devuelven null sobre un template (no es fuente raylang); (c) **coloreado**: gramática de VSCode
+  `raylang-template` (`text.html.raylang`: HTML base + `{{ }}`/`{% %}` con la expresión embebida
+  como `source.raylang`; el cliente LSP añade el selector) y sintaxis de Sublime
+  (`raylang-template.sublime-syntax`, `extends` HTML + `prototype` con los delimitadores; selector
+  LSP `source.raylang | text.html.raylang` en el README).
 - Diferido: `{% include %}`/layouts entre templates compilados, regeneración automática en
-  `ray build`, `{% let %}` locales.
+  `ray build`, `{% let %}` locales; hover/completion DENTRO de las expresiones del template.

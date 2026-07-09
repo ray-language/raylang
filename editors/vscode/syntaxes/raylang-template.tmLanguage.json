@@ -1,0 +1,47 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "raylang template",
+  "scopeName": "text.html.raylang",
+  "patterns": [
+    { "include": "#template-tag" },
+    { "include": "#template-raw" },
+    { "include": "#template-var" },
+    { "include": "text.html.basic" }
+  ],
+  "repository": {
+    "template-tag": {
+      "comment": "{% params/if/elif/else/endif/for/endfor … %} — la palabra clave + la expresión raylang",
+      "begin": "\\{%",
+      "end": "%\\}",
+      "beginCaptures": { "0": { "name": "punctuation.section.embedded.begin.raylang-template" } },
+      "endCaptures": { "0": { "name": "punctuation.section.embedded.end.raylang-template" } },
+      "name": "meta.embedded.block.raylang-template",
+      "patterns": [
+        {
+          "match": "\\G\\s*(params|elif|if|else|endif|endfor|for|in)\\b",
+          "captures": { "1": { "name": "keyword.control.raylang-template" } }
+        },
+        { "match": "\\b(in)\\b", "name": "keyword.control.raylang-template" },
+        { "include": "source.raylang" }
+      ]
+    },
+    "template-raw": {
+      "comment": "{{& expr }} — interpolación cruda (sin escapar)",
+      "begin": "\\{\\{&",
+      "end": "\\}\\}",
+      "beginCaptures": { "0": { "name": "punctuation.section.embedded.begin.raylang-template keyword.other.raw.raylang-template" } },
+      "endCaptures": { "0": { "name": "punctuation.section.embedded.end.raylang-template" } },
+      "name": "meta.embedded.inline.raylang-template",
+      "patterns": [ { "include": "source.raylang" } ]
+    },
+    "template-var": {
+      "comment": "{{ expr }} — interpolación con autoescape",
+      "begin": "\\{\\{",
+      "end": "\\}\\}",
+      "beginCaptures": { "0": { "name": "punctuation.section.embedded.begin.raylang-template" } },
+      "endCaptures": { "0": { "name": "punctuation.section.embedded.end.raylang-template" } },
+      "name": "meta.embedded.inline.raylang-template",
+      "patterns": [ { "include": "source.raylang" } ]
+    }
+  }
+}

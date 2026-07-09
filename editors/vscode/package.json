@@ -1,8 +1,8 @@
 {
   "name": "raylang",
   "displayName": "raylang",
-  "description": "Soporte para el lenguaje raylang (.ray): resaltado de sintaxis + cliente del Language Server (diagnósticos en vivo).",
-  "version": "0.15.0",
+  "description": "Soporte para el lenguaje raylang (.ray) y sus templates compilados (.ray.html): resaltado de sintaxis + cliente del Language Server (diagnósticos en vivo).",
+  "version": "0.16.0",
   "publisher": "rayala",
   "engines": {
     "vscode": "^1.75.0"
@@ -12,7 +12,8 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "onLanguage:raylang"
+    "onLanguage:raylang",
+    "onLanguage:raylang-template"
   ],
   "contributes": {
     "languages": [
@@ -26,6 +27,16 @@
           ".ray"
         ],
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "raylang-template",
+        "aliases": [
+          "raylang template"
+        ],
+        "extensions": [
+          ".ray.html"
+        ],
+        "configuration": "./template-language-configuration.json"
       }
     ],
     "grammars": [
@@ -33,6 +44,15 @@
         "language": "raylang",
         "scopeName": "source.raylang",
         "path": "./syntaxes/raylang.tmLanguage.json"
+      },
+      {
+        "language": "raylang-template",
+        "scopeName": "text.html.raylang",
+        "path": "./syntaxes/raylang-template.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.raylang": "raylang",
+          "text.html.basic": "html"
+        }
       }
     ],
     "configuration": {

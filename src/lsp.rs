@@ -211,6 +211,9 @@ fn pos_params(msg: &Json) -> Option<(String, usize, usize)> {
 /// identificador bajo el cursor.
 fn hover_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
+    if is_template_uri(&uri) {
+        return Json::Null; // M55: un .ray.html no es fuente raylang
+    }
     let Some(src) = docs.get(&uri) else { return Json::Null };
     // Documentación: se localiza la DECLARACIÓN del símbolo (cruza archivos, como ir-a-definición) y
     // se escanean los `///` que la preceden en su propio archivo. Reusa `raydoc::doc_lines_above`.
@@ -492,6 +495,9 @@ fn range(line0: usize, start: usize, end: usize) -> Json {
 /// donde vive, con su línea local.
 fn definition_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
+    if is_template_uri(&uri) {
+        return Json::Null; // M55: un .ray.html no es fuente raylang
+    }
     let Some(src) = docs.get(&uri) else { return Json::Null };
     let Some((target_uri, def_line0, def_col0, len)) = definition_at(&uri, src, line0, char0) else {
         return Json::Null;
@@ -642,6 +648,9 @@ fn symbol_occurrences(
 /// módulos devuelve sus usos en cada archivo. Lista vacía si no hay símbolo.
 fn references_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Arr(vec![]) };
+    if is_template_uri(&uri) {
+        return Json::Null; // M55: un .ray.html no es fuente raylang
+    }
     let Some(src) = docs.get(&uri) else { return Json::Arr(vec![]) };
     let include_decl = msg.get("params").and_then(|p| p.get("context"))
         .and_then(|c| c.get("includeDeclaration"))
@@ -732,6 +741,9 @@ fn references_cross(uri: &str, src: &str, line0: usize, char0: usize, include_de
 /// + usos) por el nuevo nombre. `null` si no hay símbolo o falta `newName`.
 fn rename_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
+    if is_template_uri(&uri) {
+        return Json::Null; // M55: un .ray.html no es fuente raylang
+    }
     let Some(src) = docs.get(&uri) else { return Json::Null };
     let Some(new_name) = msg.get("params").and_then(|p| p.get("newName")).and_then(|n| n.as_str()) else {
         return Json::Null;
@@ -1550,6 +1562,9 @@ fn module_alias_symbols(uri: Option<&str>, src: &str, receiver: &str) -> Option<
 /// prefijo (el cliente filtra por lo ya escrito); es una completion "de archivo", el primer escalón.
 fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let uri = msg.get("params").and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
+    if uri.is_some_and(is_template_uri) {
+        return Json::Null; // M55: un .ray.html no es fuente raylang
+    }
     let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
     if let Some((line0, char0)) = pos_params(msg).map(|(_, l, c)| (l, c)) {
         // El espacio es un trigger char, pero SOLO ofrece algo en contexto de pipeline (`|> `): así,
@@ -1771,6 +1786,9 @@ fn collect_lets(block: &crate::ast::Block, cursor_line: usize, out: &mut Vec<Str
 /// curso o la función no se conoce.
 fn signature_help_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let Some((uri, line0, char0)) = pos_params(msg) else { return Json::Null };
+    if is_template_uri(&uri) {
+        return Json::Null; // M55: un .ray.html no es fuente raylang
+    }
     let Some(src) = docs.get(&uri) else { return Json::Null };
     // 1. Hallar la llamada en curso: el nombre, cuántas comas la preceden (param activo) y el receptor
     //    si es una llamada por punto (`recv.m(`).
@@ -2159,6 +2177,9 @@ fn as_usize(j: &Json) -> Option<usize> {
 fn formatting_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let params = msg.get("params");
     let uri = params.and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
+    if uri.is_some_and(is_template_uri) {
+        return Json::Null; // M55: un .ray.html no es fuente raylang
+    }
     let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
     // Honramos la preferencia de indentación del EDITOR (LSP `options.tabSize`/`insertSpaces`), en vez
     // de imponer siempre 4 espacios: así "Format File" respeta 2 espacios/tabs si así está el editor
@@ -2396,11 +2417,67 @@ fn method_error(id: Json, method: &str) -> Json {
 
 /// Analiza la fuente y construye la notificación `publishDiagnostics` para ese documento.
 fn diagnostics(uri: &str, src: &str) -> Json {
+    // M55: un buffer `.ray.html` es un TEMPLATE — se diagnostica con su propio pipeline (generar +
+    // analizar el módulo generado + traducir las líneas de vuelta al template con el line map).
+    if is_template_uri(uri) {
+        return template_diagnostics(uri, src);
+    }
     // Soporte de módulos: si el documento es un archivo, se analiza **con el loader** (resolviendo
     // sus imports desde disco) para no marcar errores espurios en proyectos multi-archivo. Si no es
     // un archivo o el buffer ni siquiera parsea, se cae al análisis de un solo archivo (multi-error).
     let diags = analyze_modular(uri, src).unwrap_or_else(|| analyze_all(src));
     let json = diags.iter().map(|d| diagnostic_json(src, d)).collect();
+    publish(uri, json)
+}
+
+/// ¿El documento es un template compilable (`.ray.html`)? Sus diagnósticos van por `ray templ`;
+/// el resto de features del LSP (hover/definición/…) no aplican (devuelven null).
+fn is_template_uri(uri: &str) -> bool {
+    uri.ends_with(".ray.html")
+}
+
+/// Diagnósticos de un template `.ray.html` (M55): (1) los errores del PROPIO template (etiqueta sin
+/// cerrar, params mal formados…) salen con su línea; (2) si el template genera, se analiza el
+/// módulo raylang GENERADO (con el loader, contra la ruta del `.ray` hermano → `std/template` y las
+/// path-deps resuelven) y cada error se TRADUCE de vuelta a su línea del template con el line map —
+/// el typo en `{{ titluo }}` se subraya en el HTML.
+fn template_diagnostics(uri: &str, src: &str) -> Json {
+    let path = uri_to_path(uri);
+    let name = path
+        .as_deref()
+        .and_then(|p| crate::templ::fn_suffix_of(p).ok())
+        .unwrap_or_else(|| "vista".to_string());
+    let (code, map) = match crate::templ::generate_with_map(src, &name) {
+        Err(e) => {
+            let d = Diag { line: e.line, col: 1, len: usize::MAX, message: format!("template: {}", e.msg) };
+            return publish(uri, vec![diagnostic_json(src, &d)]);
+        }
+        Ok(x) => x,
+    };
+    // Analizar el generado: con loader si conocemos la ruta (resuelve `from std/template import …`);
+    // si el buffer no es un archivo, al menos lex+parse del generado (el check daría falsos
+    // positivos sin resolver el import del escape).
+    let gen_diags: Vec<Diag> = match &path {
+        Some(p) => {
+            let gen_path = PathBuf::from(p.to_string_lossy().trim_end_matches(".html").to_string());
+            analyze_modular(&format!("file://{}", gen_path.display()), &code).unwrap_or_else(|| analyze_all(&code))
+        }
+        None => match crate::lexer::lex(&code) {
+            Err(e) => vec![Diag { line: e.line, col: 1, len: usize::MAX, message: e.to_string() }],
+            Ok(tokens) => match crate::parser::parse(tokens) {
+                Err(e) => vec![Diag { line: e.line, col: 1, len: usize::MAX, message: e.to_string() }],
+                Ok(_) => vec![],
+            },
+        },
+    };
+    let json = gen_diags
+        .iter()
+        .map(|d| {
+            let tpl_line = map.get(d.line.saturating_sub(1)).copied().unwrap_or(1).max(1);
+            let td = Diag { line: tpl_line, col: 1, len: usize::MAX, message: format!("template: {}", d.message) };
+            diagnostic_json(src, &td)
+        })
+        .collect();
     publish(uri, json)
 }
 

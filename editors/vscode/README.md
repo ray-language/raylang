@@ -187,3 +187,11 @@ capítulo "El LSP" del libro).
 > e **ir-a-definición** (M10.2b). El cliente `vscode-languageclient` ya soporta hover y definición
 > sin código extra: basta con que el servidor los anuncie. *Completion*, *rename* y *find-references*
 > quedan para el futuro.
+
+## Templates compilados (`.ray.html`, M55)
+
+Los archivos `*.ray.html` se colorean como **raylang template** (HTML + los delimitadores
+`{{ }}`/`{% %}` con la expresión embebida coloreada como raylang) y reciben **diagnósticos en
+vivo** del mismo Language Server: errores del propio template (etiquetas sin cerrar, `params` mal
+formados) y errores de tipos del módulo generado, **mapeados a la línea del template** (un typo en
+`{{ variable }}` se subraya en el HTML). Genera el módulo con `ray templ <dir>`.

@@ -143,13 +143,32 @@ match (bson.decode(b)) {
 `Int` codifica como int64 y decodifica int32 e int64 (el int de raylang es i64). `Double` usa los
 bits IEEE 754 (`math.float_bits`, M54.1a). Diferido: Date/Timestamp/Regex/Decimal128 (error claro).
 
-### `db/mongo` (M54.2, en curso)
+### `db/mongo` (M54)
 
-Cliente MongoDB en raylang puro sobre `db/bson`. Hoy: **conexión autenticada** — framing **OP_MSG**
-(opCode 2013), `connect(host, port, user, password, database, nonce)` con `hello` + **SCRAM-SHA-256
-vía SASL** (reusa `net/scram`, el mismo mecanismo que PostgreSQL; verifica la firma del servidor),
-`run_command(c, doc)` para comandos crudos y `disconnect`. El CRUD (`insert`/`find`/`update`/
-`delete`) llega en M54.3.
+Cliente MongoDB en raylang puro sobre `db/bson`: framing **OP_MSG** (opCode 2013),
+`connect(host, port, user, password, database, nonce)` con `hello` + **SCRAM-SHA-256 vía SASL**
+(reusa `net/scram`, el mismo mecanismo que PostgreSQL; verifica la firma del servidor), CRUD
+completo y `run_command(c, doc)` para cualquier otro comando.
+
+```raylang
+import db/mongo;
+import db/bson;
+
+var c = match (mongo.connect("127.0.0.1", 27017, "usuario", "clave", "test", nonce)) { … };
+let docs = [[bson.field("nombre", bson.Bson.Str("ada")), bson.field("nota", bson.Bson.Int(36))]];
+let _ = mongo.insert(c, "usuarios", docs);          // Result<int> (n; el _id lo asigna el servidor)
+let filter = [bson.field("nombre", bson.Bson.Str("ada"))];
+let rows = mongo.find(c, "usuarios", filter);       // Result<[[bson.Field]]> (firstBatch)
+let set = [bson.field("$set", bson.Bson.Doc([bson.field("nota", bson.Bson.Int(37))]))];
+let _ = mongo.update(c, "usuarios", filter, set, false);  // Result<int> (nModified)
+let _ = mongo.delete(c, "usuarios", filter);        // Result<int> (n)
+mongo.disconnect(c);
+```
+
+- Los filtros y documentos son **BSON estructurado** (`[bson.Field]`), no strings → anti-inyección
+  por construcción. El `$set` del update lo arma el usuario (fiel al protocolo).
+- **Diferido**: cursores `getMore` (v1 devuelve el firstBatch), tipos Date/Timestamp/Decimal128,
+  compresión, TLS.
 
 ## Verificación
 
@@ -161,3 +180,12 @@ un `ERR`. Oráculo conductual: VM e intérprete producen el mismo stdout.
 `tests/sqlite_cli.rs`: sin servidor — `":memory:"` da una base determinista, así que el test es
 un oráculo conductual puro (DDL + INSERT con parámetros + SELECT con `NULL` + transacción con
 `ROLLBACK` + error SQL como valor + uso tras `disconnect`), mismo stdout en ambos motores.
+
+`tests/bson_cli.rs`: la codificación reproduce **byte a byte** los vectores canónicos de
+bsonspec.org; round-trip exacto de todos los tipos v1; errores como valores con la posición.
+
+`tests/mongo_cli.rs`: servidor MongoDB **de juguete** que habla OP_MSG (BSON armado a mano en Rust)
+y reusa las constantes SCRAM **precomputadas** del toy de PostgreSQL. Cubre la conexión, contraseña
+mala (la firma del servidor no verifica → lo detecta el cliente), usuario desconocido (`errmsg`),
+el CRUD completo (verificando que el documento insertado y el `$set` viajan dentro del comando) y
+el error del servidor como valor. Ambos motores, mismo stdout.

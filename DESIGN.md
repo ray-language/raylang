@@ -7030,3 +7030,26 @@ toy de PostgreSQL (mismo user/clave/nonce/sal/i → sin cripto en Rust). Cubre: 
 **usuario desconocido** (el servidor responde `ok: 0.0` + errmsg → el cliente lo surfacea). Ambos
 motores, mismo stdout. Diferido v1: negociación de `hello` (compresión/versiones), checksum OP_MSG,
 más de una sección. Siguiente: **M54.3** (CRUD: insert/find/update/delete + demo).
+
+### 56.3 M54.3 — CRUD. ✅ COMPLETO — **M54 COMPLETO**
+
+Las cuatro operaciones sobre `run_command` (cada una es un comando BSON con la colección en el campo
+homónimo y `$db` de la `Conn`):
+
+- **`insert(c, coll, docs: [[bson.Field]]) -> Result<int, string>`** (`n` insertados; `_id` lo asigna
+  el servidor — decisión de M54: sin ObjectId en cliente → sin aleatoriedad → tests deterministas).
+- **`find(c, coll, filter) -> Result<[[bson.Field]], string>`**: navega `cursor.firstBatch` del reply
+  (v1 sin `getMore`); cada elemento del batch debe ser un documento.
+- **`update(c, coll, filter, u, multi) -> Result<int, string>`** (`nModified`): el documento de
+  actualización lo arma el usuario (`{$set: {...}}` explícito — fiel al protocolo, sin azúcar que
+  esconda semántica).
+- **`delete(c, coll, filter) -> Result<int, string>`** (`n`; `limit: 0` = todas las coincidencias).
+
+Los filtros/documentos son `[bson.Field]` — **anti-inyección por construcción** (no hay string de
+consulta que interpolar). **Verificación** (`tests/mongo_cli.rs`, segundo test): el toy server sirve
+un cursor con firstBatch de dos documentos (uno sin campo → dump distinto), verifica que el documento
+insertado y el `$set` VIAJAN dentro del comando (el binding fluye), y responde `ok: 0.0` + errmsg para
+la colección `no_existe` (error del servidor como valor). Ambos motores, mismo stdout. Demo
+`examples/db/mongo_demo.ray`. **M54 COMPLETO**: el paquete `db` cubre MySQL (wire), PostgreSQL
+(extendido), SQLite (embebido) y MongoDB (documental). Diferido: `getMore`/cursores, tipos BSON
+Date/Timestamp/Decimal128, `char_from_code`+`\uXXXX` y puente Json↔Bson (IDEAS §16), TLS.

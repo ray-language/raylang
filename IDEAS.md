@@ -555,8 +555,11 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
   canónicos de bsonspec.org + round-trip exacto) · **M54.2** ✅ **COMPLETO** (DESIGN §56.2:
   `db/mongo.ray` — framing OP_MSG + `run_command` + `connect` (`hello` + saslStart/saslContinue con
   `net/scram` reusado tal cual, verificación de la firma del servidor) + `disconnect`; toy server
-  OP_MSG con las constantes SCRAM precomputadas de postgres en `tests/mongo_cli.rs`) · **M54.3** CRUD
-  `insert`/`find`/`update`/`delete` + oráculo ambos motores + demo en `examples/db`.
+  OP_MSG con las constantes SCRAM precomputadas de postgres en `tests/mongo_cli.rs`) · **M54.3** ✅
+  **COMPLETO** (DESIGN §56.3: `insert`/`find` (firstBatch)/`update` ($set explícito)/`delete` sobre
+  `run_command`; filtros = documentos BSON → anti-inyección por construcción; toy server extendido +
+  demo `examples/db/mongo_demo.ray`). **M54 COMPLETO** (el paquete `db` cubre los 4: MySQL, PostgreSQL,
+  SQLite, MongoDB). Diferido: `getMore`, Date/Timestamp/Decimal128, puente Json↔Bson (§16), TLS.
 - **Impacto**: todo aditivo; BSON es el grueso (comparable al protobuf de M25 en naturaleza).
 
 ---

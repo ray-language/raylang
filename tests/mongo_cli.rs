@@ -75,6 +75,27 @@ fn elem_bin(name: &str, data: &[u8]) -> Vec<u8> {
     v
 }
 
+fn elem_doc(name: &str, d: &[u8]) -> Vec<u8> {
+    let mut v = vec![3u8];
+    v.extend(cstr(name));
+    v.extend(d);
+    v
+}
+
+fn elem_arr(name: &str, d: &[u8]) -> Vec<u8> {
+    let mut v = vec![4u8];
+    v.extend(cstr(name));
+    v.extend(d);
+    v
+}
+
+fn elem_i64(name: &str, n: i64) -> Vec<u8> {
+    let mut v = vec![18u8];
+    v.extend(cstr(name));
+    v.extend(n.to_le_bytes());
+    v
+}
+
 fn doc(elems: &[Vec<u8>]) -> Vec<u8> {
     let body: Vec<u8> = elems.concat();
     let mut v = ((body.len() + 5) as i32).to_le_bytes().to_vec();
@@ -142,6 +163,35 @@ fn atender(mut s: TcpStream) {
                 elem_bin("payload", SERVER_FINAL),
                 elem_double("ok", 1.0),
             ])
+        } else if contains(&msg, b"no_existe") {
+            // Cualquier operación sobre la colección "no_existe" → error del servidor.
+            doc(&[elem_double("ok", 0.0), elem_str("errmsg", "ns not found"), elem_i32("code", 26)])
+        } else if contains(&msg, b"insert") {
+            // Verifica que el documento insertado VIAJÓ dentro del comando (el binding fluye).
+            if contains(&msg, b"documents") && contains(&msg, b"ada") {
+                doc(&[elem_i32("n", 2), elem_double("ok", 1.0)])
+            } else {
+                doc(&[elem_double("ok", 0.0), elem_str("errmsg", "insert sin documentos")])
+            }
+        } else if contains(&msg, b"find") {
+            // Un cursor con dos documentos en el firstBatch (el segundo sin `nota`).
+            let d0 = doc(&[elem_str("nombre", "ada"), elem_i32("nota", 36)]);
+            let d1 = doc(&[elem_str("nombre", "grace")]);
+            let batch = doc(&[elem_doc("0", &d0), elem_doc("1", &d1)]);
+            let cursor = doc(&[
+                elem_arr("firstBatch", &batch),
+                elem_i64("id", 0),
+                elem_str("ns", "test.usuarios"),
+            ]);
+            doc(&[elem_doc("cursor", &cursor), elem_double("ok", 1.0)])
+        } else if contains(&msg, b"update") {
+            if contains(&msg, b"$set") {
+                doc(&[elem_i32("n", 1), elem_i32("nModified", 1), elem_double("ok", 1.0)])
+            } else {
+                doc(&[elem_double("ok", 0.0), elem_str("errmsg", "update sin $set")])
+            }
+        } else if contains(&msg, b"delete") {
+            doc(&[elem_i32("n", 3), elem_double("ok", 1.0)])
         } else {
             doc(&[elem_double("ok", 0.0), elem_str("errmsg", "comando desconocido")])
         };
@@ -233,4 +283,99 @@ fn mongo_hello_scram_y_errores_de_auth() {
     // VM (motor de producto) e intérprete (oráculo): mismo stdout exacto.
     assert_eq!(correr(&app, &[]), ESPERADO, "VM");
     assert_eq!(correr(&app, &["--interp"]), ESPERADO, "intérprete");
+}
+
+// --- M54.3: CRUD ---
+
+fn proyecto_crud(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(
+        app.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ndb = \"path:{}\"\n",
+            db.display()
+        ),
+    )
+    .unwrap();
+    let main = format!(
+        r#"import db/mongo;
+import db/bson;
+
+fn main() -> int {{
+    var c = match (mongo.connect("127.0.0.1", {port}, "raylang", "secret", "test", "clientnonce123456")) {{
+        Result.Ok(conn) => conn,
+        Result.Err(e) => {{ print(e); return 1; }},
+    }};
+
+    // insert: dos documentos (el _id lo asigna el servidor).
+    let docs = [
+        [bson.field("nombre", bson.Bson.Str("ada")), bson.field("nota", bson.Bson.Int(36))],
+        [bson.field("nombre", bson.Bson.Str("grace"))],
+    ];
+    match (mongo.insert(c, "usuarios", docs)) {{
+        Result.Ok(n) => {{ print("insertados: " + to_string(n)); }},
+        Result.Err(e) => {{ print(e); return 1; }},
+    }}
+
+    // find: el firstBatch del cursor, documento a documento.
+    let filter = [bson.field("nombre", bson.Bson.Str("ada"))];
+    match (mongo.find(c, "usuarios", filter)) {{
+        Result.Ok(rows) => {{
+            var i = 0;
+            while (i < rows.len()) {{
+                print(bson.dump_doc(rows[i]));
+                i = i + 1;
+            }}
+        }},
+        Result.Err(e) => {{ print(e); return 1; }},
+    }}
+
+    // update con $set explícito (fiel al protocolo).
+    let set = [bson.field("$set", bson.Bson.Doc([bson.field("nota", bson.Bson.Int(37))]))];
+    match (mongo.update(c, "usuarios", filter, set, false)) {{
+        Result.Ok(n) => {{ print("modificados: " + to_string(n)); }},
+        Result.Err(e) => {{ print(e); return 1; }},
+    }}
+
+    // delete de todas las coincidencias.
+    match (mongo.delete(c, "usuarios", filter)) {{
+        Result.Ok(n) => {{ print("borrados: " + to_string(n)); }},
+        Result.Err(e) => {{ print(e); return 1; }},
+    }}
+
+    // Error del servidor como valor: colección inexistente.
+    let sin: [bson.Field] = [];
+    match (mongo.find(c, "no_existe", sin)) {{
+        Result.Ok(_) => {{ print("no debería"); return 1; }},
+        Result.Err(e) => {{ print(e); }},
+    }}
+
+    mongo.disconnect(c);
+    0
+}}
+"#
+    );
+    std::fs::write(app.join("src/main.ray"), main).unwrap();
+    app
+}
+
+const ESPERADO_CRUD: &str = "insertados: 2\n\
+{nombre: \"ada\", nota: 36}\n\
+{nombre: \"grace\"}\n\
+modificados: 1\n\
+borrados: 3\n\
+mongo: ns not found\n";
+
+#[test]
+fn mongo_crud_y_error_del_servidor() {
+    let base = std::env::temp_dir().join("ray_mongo_cli_crud");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let port = lanzar_servidor();
+    let app = proyecto_crud(&base, port);
+
+    assert_eq!(correr(&app, &[]), ESPERADO_CRUD, "VM");
+    assert_eq!(correr(&app, &["--interp"]), ESPERADO_CRUD, "intérprete");
 }

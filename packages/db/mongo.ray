@@ -134,14 +134,23 @@ fn payload_str(fields: [bson.Field]) -> Result<string, string> {
     };
 }
 
-fn conversation_id(fields: [bson.Field]) -> int {
-    return match (bson.get(fields, "conversationId")) {
+// Un campo entero de la respuesta (0 si falta o no es entero): conversationId, n, nModified…
+fn int_field(fields: [bson.Field], name: string) -> int {
+    return match (bson.get(fields, name)) {
         Option.Some(v) => match (v) {
             bson.Bson.Int(n) => n,
             _ => 0,
         },
         Option.None => 0,
     };
+}
+
+// Valida `ok` y convierte el fallo en Result.Err con el errmsg del servidor.
+fn check_ok(fields: [bson.Field]) -> Result<int, string> {
+    if (!is_ok(fields)) {
+        return Result.Err("mongo: " + error_of(fields));
+    }
+    Result.Ok(0)
 }
 
 // ── Conexión ─────────────────────────────────────────────────────────────────
@@ -175,7 +184,7 @@ pub fn connect(host: string, port: int, user: string, password: string, database
         close(handle);
         return Result.Err("mongo: " + error_of(r1));
     }
-    let conv = conversation_id(r1);
+    let conv = int_field(r1, "conversationId");
     let server_first = match (payload_str(r1)) {
         Result.Ok(s) => s,
         Result.Err(e) => { close(handle); return Result.Err(e); },
@@ -207,6 +216,100 @@ pub fn connect(host: string, port: int, user: string, password: string, database
         return Result.Err("mongo: la firma del servidor no verifica (autenticación fallida)");
     }
     Result.Ok(c)
+}
+
+// ── CRUD (M54.3) ─────────────────────────────────────────────────────────────
+//
+// Cada operación es un comando (bsonspec + MongoDB command reference) sobre `run_command`; la
+// colección va como valor del campo homónimo y `$db` sale de la `Conn`. Los filtros y documentos
+// son `[bson.Field]` — el usuario arma `{$set: {...}}` y compañía explícitamente (fiel al
+// protocolo, sin azúcar que esconda semántica).
+
+/// Inserts documents into a collection; returns how many were inserted. Leave `_id` out and the
+/// server assigns one.
+pub fn insert(c: Conn, coll: string, docs: [[bson.Field]]) -> Result<int, string> {
+    var arr: [bson.Bson] = [];
+    var i = 0;
+    while (i < docs.len()) {
+        arr.push(bson.Bson.Doc(docs[i]));
+        i = i + 1;
+    }
+    let r = run_command(c, [
+        bson.field("insert", bson.Bson.Str(coll)),
+        bson.field("documents", bson.Bson.Arr(arr)),
+        bson.field("$db", bson.Bson.Str(c.db)),
+    ])?;
+    let _ = check_ok(r)?;
+    Result.Ok(int_field(r, "n"))
+}
+
+/// Finds documents matching the filter (`[]` = all). Returns the cursor's first batch
+/// (v1: no `getMore`, so cap results with the server's default batch size in mind).
+pub fn find(c: Conn, coll: string, filter: [bson.Field]) -> Result<[[bson.Field]], string> {
+    let r = run_command(c, [
+        bson.field("find", bson.Bson.Str(coll)),
+        bson.field("filter", bson.Bson.Doc(filter)),
+        bson.field("$db", bson.Bson.Str(c.db)),
+    ])?;
+    let _ = check_ok(r)?;
+    let cursor = match (bson.get(r, "cursor")) {
+        Option.Some(v) => match (v) {
+            bson.Bson.Doc(f) => f,
+            _ => { return Result.Err("mongo: la respuesta de find no trae cursor"); },
+        },
+        Option.None => { return Result.Err("mongo: la respuesta de find no trae cursor"); },
+    };
+    let batch = match (bson.get(cursor, "firstBatch")) {
+        Option.Some(v) => match (v) {
+            bson.Bson.Arr(items) => items,
+            _ => { return Result.Err("mongo: el cursor no trae firstBatch"); },
+        },
+        Option.None => { return Result.Err("mongo: el cursor no trae firstBatch"); },
+    };
+    var out: [[bson.Field]] = [];
+    var i = 0;
+    while (i < batch.len()) {
+        match (batch[i]) {
+            bson.Bson.Doc(f) => { out.push(f); },
+            _ => { return Result.Err("mongo: el batch trae un elemento que no es documento"); },
+        }
+        i = i + 1;
+    }
+    Result.Ok(out)
+}
+
+/// Updates documents matching the filter with the update document (e.g. a `$set` doc);
+/// returns how many were modified. `multi: true` updates every match, `false` only the first.
+pub fn update(c: Conn, coll: string, filter: [bson.Field], u: [bson.Field], multi: bool) -> Result<int, string> {
+    var arr: [bson.Bson] = [];
+    arr.push(bson.Bson.Doc([
+        bson.field("q", bson.Bson.Doc(filter)),
+        bson.field("u", bson.Bson.Doc(u)),
+        bson.field("multi", bson.Bson.Bool(multi)),
+    ]));
+    let r = run_command(c, [
+        bson.field("update", bson.Bson.Str(coll)),
+        bson.field("updates", bson.Bson.Arr(arr)),
+        bson.field("$db", bson.Bson.Str(c.db)),
+    ])?;
+    let _ = check_ok(r)?;
+    Result.Ok(int_field(r, "nModified"))
+}
+
+/// Deletes every document matching the filter; returns how many were deleted.
+pub fn delete(c: Conn, coll: string, filter: [bson.Field]) -> Result<int, string> {
+    var arr: [bson.Bson] = [];
+    arr.push(bson.Bson.Doc([
+        bson.field("q", bson.Bson.Doc(filter)),
+        bson.field("limit", bson.Bson.Int(0)),
+    ]));
+    let r = run_command(c, [
+        bson.field("delete", bson.Bson.Str(coll)),
+        bson.field("deletes", bson.Bson.Arr(arr)),
+        bson.field("$db", bson.Bson.Str(c.db)),
+    ])?;
+    let _ = check_ok(r)?;
+    Result.Ok(int_field(r, "n"))
 }
 
 /// Closes the connection (no farewell message in the protocol; just the socket).

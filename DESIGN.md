@@ -7071,3 +7071,15 @@ hex, orden de campos perdido) y `doc_from_json(s) -> Result<[Field], string>` �
 para filtros: `mongo.find(c, coll, bson.doc_from_json("{\"nombre\": \"ada\"}")?)`, con el tope
 obligado a objeto. Test `bson_puente_json` (compone con los escapes: `"café"` → `café`).
 Diferido: Extended JSON riguroso ($oid/$numberLong).
+
+### 56.5 Diferido — cursores `getMore`. ✅ COMPLETO
+
+`find` deja de truncarse en el primer batch (el límite real: ~101 documentos con un servidor de
+verdad) y **agota el cursor**: lee `firstBatch` y, mientras el `cursor.id` de la respuesta sea ≠ 0,
+emite `getMore` (`{getMore: <id>, collection, $db}`; el id es un **int64** del wire — 0x12, justo lo
+que codifica nuestro `Int`) acumulando cada `nextBatch`, hasta que el servidor responde id 0 (cursor
+agotado). Refactor: `cursor_of`/`append_batch` (firstBatch y nextBatch comparten la extracción).
+**Verificación**: el toy server pagina en 3 rondas (firstBatch con id 77 → getMore 77 → nextBatch con
+id 88 → getMore 88 → nextBatch final con id 0), verificando que **cada id viaja** como int64 LE en el
+comando siguiente; un id desconocido responde error (código 43, CursorNotFound). Ambos motores.
+Diferido: `batchSize` configurable, `killCursors` (abandonar un cursor a medias).

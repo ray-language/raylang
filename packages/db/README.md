@@ -171,9 +171,11 @@ mongo.disconnect(c);
 ```
 
 - Los filtros y documentos son **BSON estructurado** (`[bson.Field]`), no strings → anti-inyección
-  por construcción. El `$set` del update lo arma el usuario (fiel al protocolo).
-- **Diferido**: cursores `getMore` (v1 devuelve el firstBatch), tipos Date/Timestamp/Decimal128,
-  compresión, TLS.
+  por construcción (o desde un string JSON con `bson.doc_from_json`). El `$set` del update lo arma
+  el usuario (fiel al protocolo).
+- `find` **agota el cursor**: firstBatch + rondas de `getMore` hasta que el servidor reporta id 0 —
+  un resultado grande llega completo, no truncado al primer batch.
+- **Diferido**: tipos Date/Timestamp/Decimal128, `batchSize`/`killCursors`, compresión, TLS.
 
 ## Verificación
 

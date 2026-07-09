@@ -243,30 +243,26 @@ pub fn insert(c: Conn, coll: string, docs: [[bson.Field]]) -> Result<int, string
     Result.Ok(int_field(r, "n"))
 }
 
-/// Finds documents matching the filter (`[]` = all). Returns the cursor's first batch
-/// (v1: no `getMore`, so cap results with the server's default batch size in mind).
-pub fn find(c: Conn, coll: string, filter: [bson.Field]) -> Result<[[bson.Field]], string> {
-    let r = run_command(c, [
-        bson.field("find", bson.Bson.Str(coll)),
-        bson.field("filter", bson.Bson.Doc(filter)),
-        bson.field("$db", bson.Bson.Str(c.db)),
-    ])?;
-    let _ = check_ok(r)?;
-    let cursor = match (bson.get(r, "cursor")) {
+// El documento `cursor` de una respuesta de find/getMore.
+fn cursor_of(fields: [bson.Field]) -> Result<[bson.Field], string> {
+    return match (bson.get(fields, "cursor")) {
         Option.Some(v) => match (v) {
-            bson.Bson.Doc(f) => f,
-            _ => { return Result.Err("mongo: la respuesta de find no trae cursor"); },
+            bson.Bson.Doc(f) => Result.Ok(f),
+            _ => Result.Err("mongo: la respuesta no trae cursor"),
         },
-        Option.None => { return Result.Err("mongo: la respuesta de find no trae cursor"); },
+        Option.None => Result.Err("mongo: la respuesta no trae cursor"),
     };
-    let batch = match (bson.get(cursor, "firstBatch")) {
+}
+
+// Añade a `out` los documentos del batch `key` (firstBatch/nextBatch) del cursor.
+fn append_batch(out: [[bson.Field]], cursor: [bson.Field], key: string) -> Result<int, string> {
+    let batch = match (bson.get(cursor, key)) {
         Option.Some(v) => match (v) {
             bson.Bson.Arr(items) => items,
-            _ => { return Result.Err("mongo: el cursor no trae firstBatch"); },
+            _ => { return Result.Err("mongo: el cursor no trae " + key); },
         },
-        Option.None => { return Result.Err("mongo: el cursor no trae firstBatch"); },
+        Option.None => { return Result.Err("mongo: el cursor no trae " + key); },
     };
-    var out: [[bson.Field]] = [];
     var i = 0;
     while (i < batch.len()) {
         match (batch[i]) {
@@ -274,6 +270,35 @@ pub fn find(c: Conn, coll: string, filter: [bson.Field]) -> Result<[[bson.Field]
             _ => { return Result.Err("mongo: el batch trae un elemento que no es documento"); },
         }
         i = i + 1;
+    }
+    Result.Ok(0)
+}
+
+/// Finds every document matching the filter (`[]` = all). Exhausts the cursor: reads the
+/// `firstBatch` and keeps issuing `getMore` until the server reports cursor id 0.
+pub fn find(c: Conn, coll: string, filter: [bson.Field]) -> Result<[[bson.Field]], string> {
+    let r = run_command(c, [
+        bson.field("find", bson.Bson.Str(coll)),
+        bson.field("filter", bson.Bson.Doc(filter)),
+        bson.field("$db", bson.Bson.Str(c.db)),
+    ])?;
+    let _ = check_ok(r)?;
+    var out: [[bson.Field]] = [];
+    var cursor = cursor_of(r)?;
+    let _ = append_batch(out, cursor, "firstBatch")?;
+    // id != 0 = el cursor sigue vivo en el servidor: pedir el resto por rondas. (El id es un
+    // int64 del wire — 0x12, justo lo que codifica nuestro Int.)
+    var id = int_field(cursor, "id");
+    while (id != 0) {
+        let more = run_command(c, [
+            bson.field("getMore", bson.Bson.Int(id)),
+            bson.field("collection", bson.Bson.Str(coll)),
+            bson.field("$db", bson.Bson.Str(c.db)),
+        ])?;
+        let _ = check_ok(more)?;
+        cursor = cursor_of(more)?;
+        let _ = append_batch(out, cursor, "nextBatch")?;
+        id = int_field(cursor, "id");
     }
     Result.Ok(out)
 }

@@ -173,17 +173,54 @@ fn atender(mut s: TcpStream) {
             } else {
                 doc(&[elem_double("ok", 0.0), elem_str("errmsg", "insert sin documentos")])
             }
+        } else if contains(&msg, b"getMore") {
+            // Paginación multi-ronda: el id 77 pide la segunda página (deja vivo el 88); el 88,
+            // la tercera y última (id 0 = cursor agotado). El id viaja como int64 LE.
+            if contains(&msg, &77i64.to_le_bytes()) {
+                let d = doc(&[elem_str("nombre", "grace")]);
+                let batch = doc(&[elem_doc("0", &d)]);
+                let cursor = doc(&[
+                    elem_arr("nextBatch", &batch),
+                    elem_i64("id", 88),
+                    elem_str("ns", "test.paginada"),
+                ]);
+                doc(&[elem_doc("cursor", &cursor), elem_double("ok", 1.0)])
+            } else if contains(&msg, &88i64.to_le_bytes()) {
+                let d = doc(&[elem_str("nombre", "lin")]);
+                let batch = doc(&[elem_doc("0", &d)]);
+                let cursor = doc(&[
+                    elem_arr("nextBatch", &batch),
+                    elem_i64("id", 0),
+                    elem_str("ns", "test.paginada"),
+                ]);
+                doc(&[elem_doc("cursor", &cursor), elem_double("ok", 1.0)])
+            } else {
+                doc(&[elem_double("ok", 0.0), elem_str("errmsg", "cursor desconocido"), elem_i32("code", 43)])
+            }
         } else if contains(&msg, b"find") {
-            // Un cursor con dos documentos en el firstBatch (el segundo sin `nota`).
-            let d0 = doc(&[elem_str("nombre", "ada"), elem_i32("nota", 36)]);
-            let d1 = doc(&[elem_str("nombre", "grace")]);
-            let batch = doc(&[elem_doc("0", &d0), elem_doc("1", &d1)]);
-            let cursor = doc(&[
-                elem_arr("firstBatch", &batch),
-                elem_i64("id", 0),
-                elem_str("ns", "test.usuarios"),
-            ]);
-            doc(&[elem_doc("cursor", &cursor), elem_double("ok", 1.0)])
+            if contains(&msg, b"paginada") {
+                // El firstBatch trae un documento y deja el cursor VIVO (id 77) → el cliente
+                // debe agotar con getMore.
+                let d = doc(&[elem_str("nombre", "ada")]);
+                let batch = doc(&[elem_doc("0", &d)]);
+                let cursor = doc(&[
+                    elem_arr("firstBatch", &batch),
+                    elem_i64("id", 77),
+                    elem_str("ns", "test.paginada"),
+                ]);
+                doc(&[elem_doc("cursor", &cursor), elem_double("ok", 1.0)])
+            } else {
+                // Un cursor con dos documentos en el firstBatch (el segundo sin `nota`) e id 0.
+                let d0 = doc(&[elem_str("nombre", "ada"), elem_i32("nota", 36)]);
+                let d1 = doc(&[elem_str("nombre", "grace")]);
+                let batch = doc(&[elem_doc("0", &d0), elem_doc("1", &d1)]);
+                let cursor = doc(&[
+                    elem_arr("firstBatch", &batch),
+                    elem_i64("id", 0),
+                    elem_str("ns", "test.usuarios"),
+                ]);
+                doc(&[elem_doc("cursor", &cursor), elem_double("ok", 1.0)])
+            }
         } else if contains(&msg, b"update") {
             if contains(&msg, b"$set") {
                 doc(&[elem_i32("n", 1), elem_i32("nModified", 1), elem_double("ok", 1.0)])
@@ -345,8 +382,21 @@ fn main() -> int {{
         Result.Err(e) => {{ print(e); return 1; }},
     }}
 
-    // Error del servidor como valor: colección inexistente.
+    // Cursor paginado: el firstBatch deja el cursor vivo → find agota con getMore (2 rondas).
     let sin: [bson.Field] = [];
+    match (mongo.find(c, "paginada", sin)) {{
+        Result.Ok(rows) => {{
+            print("paginados: " + to_string(rows.len()));
+            var i = 0;
+            while (i < rows.len()) {{
+                print(bson.dump_doc(rows[i]));
+                i = i + 1;
+            }}
+        }},
+        Result.Err(e) => {{ print(e); return 1; }},
+    }}
+
+    // Error del servidor como valor: colección inexistente.
     match (mongo.find(c, "no_existe", sin)) {{
         Result.Ok(_) => {{ print("no debería"); return 1; }},
         Result.Err(e) => {{ print(e); }},
@@ -366,6 +416,10 @@ const ESPERADO_CRUD: &str = "insertados: 2\n\
 {nombre: \"grace\"}\n\
 modificados: 1\n\
 borrados: 3\n\
+paginados: 3\n\
+{nombre: \"ada\"}\n\
+{nombre: \"grace\"}\n\
+{nombre: \"lin\"}\n\
 mongo: ns not found\n";
 
 #[test]

@@ -10,6 +10,11 @@
 #
 # Los diagnósticos en vivo (errores del template + errores de tipos del módulo generado, mapeados
 # a la línea del template) los da el Language Server (`ray lsp`) vía el paquete LSP; ver README.md.
+#
+# ⚠️ `extends` es una feature de la VERSIÓN 2 del formato .sublime-syntax: sin `version: 2`,
+# Sublime trata el archivo como versión 1, falla al cargarlo (error en la consola) y la sintaxis
+# ni aparece en el selector.
+version: 2
 name: raylang template
 file_extensions:
   - ray.html

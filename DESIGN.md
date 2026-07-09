@@ -7107,3 +7107,21 @@ autofirmado de `tests/fixtures/`) — fase en claro (`STARTTLS` → `GO`), hands
 socket**, eco cifrado, y el doble-upgrade como error-valor. El cliente confía en la CA de prueba vía
 `SSL_CERT_FILE`. Ambos motores, mismo stdout. Siguiente natural (diferido): cablearlo en los
 clientes — `postgres.connect` con `sslRequest` y el full-path de MySQL.
+
+### 57.1 TLS cableado en el cliente PostgreSQL (`connect_tls`). ✅ COMPLETO
+
+Primer consumidor del primitivo: **`postgres.connect_tls(host, port, user, password, database,
+nonce)`**. Manda el **sslRequest** del protocolo por el socket plano (`[longitud=8][código
+80877103]`, sin octeto de tipo), espera el octeto `'S'` (un `'N'` = el servidor no soporta TLS →
+error como valor), hace `net.tls_upgrade(handle, host)` (verificación del cert contra `host`) y
+corre el startup + SCRAM de siempre **sobre el canal cifrado** — refactor: el cuerpo de `connect`
+se extrajo a `startup_and_auth(handle, …)`, compartido por ambos (el I/O se desvía solo por el tipo
+del handle → cero cambios en query/exec/disconnect).
+
+**Verificación** (`tests/postgres_v2_cli.rs`): los helpers del toy server se generalizaron de
+`&mut TcpStream` a `S: Read + Write` (`atender_stream`) → la MISMA sesión de juguete (SCRAM
+precomputado + protocolo extendido con eco de params) se sirve ahora también tras un handshake TLS
+real (rustls + cert de fixtures): el servidor valida el sslRequest octeto a octeto, responde 'S' y
+cifra. Cliente confía vía `SSL_CERT_FILE`. Ambos motores. Diferido: el full-path de
+`caching_sha2_password` de MySQL (mismo primitivo, protocolo distinto) y `sslmode` negociable
+(hoy: `connect` = nunca TLS, `connect_tls` = obligatorio).

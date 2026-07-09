@@ -559,7 +559,7 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
   **COMPLETO** (DESIGN §56.3: `insert`/`find` (firstBatch)/`update` ($set explícito)/`delete` sobre
   `run_command`; filtros = documentos BSON → anti-inyección por construcción; toy server extendido +
   demo `examples/db/mongo_demo.ray`). **M54 COMPLETO** (el paquete `db` cubre los 4: MySQL, PostgreSQL,
-  SQLite, MongoDB). Diferidos restantes: Date/Timestamp/Decimal128, batchSize/killCursors, cablear TLS en los clientes (el primitivo tls_upgrade ✅ DESIGN §57) (getMore ✅ DESIGN §56.5; puente Json↔Bson ✅ §16).
+  SQLite, MongoDB). Diferidos restantes: Date/Timestamp/Decimal128, batchSize/killCursors, cablear TLS en MySQL (Postgres connect_tls ✅ §57.1; el primitivo tls_upgrade ✅ §57) (getMore ✅ DESIGN §56.5; puente Json↔Bson ✅ §16).
 - **Impacto**: todo aditivo; BSON es el grueso (comparable al protobuf de M25 en naturaleza).
 
 ---

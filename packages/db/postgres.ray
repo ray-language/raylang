@@ -148,6 +148,32 @@ fn parse_datarow(payload: bytes) -> [string] {
 /// nonce del cliente (usa uno aleatorio en producción).
 pub fn connect(host: string, port: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
     let handle = net.tcp_connect(host, port)?;
+    startup_and_auth(handle, user, password, database, nonce)
+}
+
+/// Connects over TLS: sends the protocol's sslRequest on the plain socket, expects 'S', upgrades
+/// the SAME handle to a client TLS session (the certificate is verified against `host`), and runs
+/// the normal startup + SCRAM handshake over the encrypted channel.
+pub fn connect_tls(host: string, port: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
+    let handle = net.tcp_connect(host, port)?;
+    // SSLRequest (sin octeto de tipo): [longitud=8][código 80877103]. El servidor responde UN
+    // octeto en claro: 'S' (adelante con TLS) o 'N' (no soporta).
+    let _ = net.socket_write_bytes(handle, bytes_of(be32_bytes(8) + be32_bytes(80877103)))?;
+    let resp = net.socket_read_bytes(handle)?;
+    if (resp.len() < 1 || resp[0] != 83) {
+        close(handle);
+        return Result.Err("postgres: el servidor no acepta TLS (sslRequest rechazado)");
+    }
+    let _ = match (net.tls_upgrade(handle, host)) {
+        Result.Ok(h) => h,
+        Result.Err(e) => { close(handle); return Result.Err("postgres: " + e); },
+    };
+    startup_and_auth(handle, user, password, database, nonce)
+}
+
+// El StartupMessage + handshake SCRAM hasta ReadyForQuery, sobre un handle ya conectado
+// (plano o TLS — el I/O se desvía solo por el tipo del handle).
+fn startup_and_auth(handle: int, user: string, password: string, database: string, nonce: string) -> Result<Conn, string> {
     let c = Conn { handle: handle, buf: b"" };
 
     // StartupMessage (sin octeto de tipo): [longitud][versión 3.0 = 196608][params NUL][0].

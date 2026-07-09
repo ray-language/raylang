@@ -85,7 +85,11 @@ fn main() -> int {
 - **Parámetros** en formato texto (v1); usa `$1`, `$2`, … en el SQL. `nonce` = nonce del cliente
   (aleatorio en producción). El cliente de una-consulta de `net/postgres` (protocolo simple) se
   conserva aparte.
-- **Diferido**: parámetros binarios/tipados, sentencias preparadas con estado, TLS, COPY.
+- **TLS**: `connect_tls(...)` (mismos parámetros) manda el `sslRequest` del protocolo, sube el
+  socket a TLS con `net.tls_upgrade` (cert verificado contra `host`) y corre el startup + SCRAM
+  sobre el canal cifrado. `connect` = nunca TLS; `connect_tls` = obligatorio.
+- **Diferido**: parámetros binarios/tipados, sentencias preparadas con estado, COPY, `sslmode`
+  negociable.
 
 ### `db/sqlite` (M53.4)
 

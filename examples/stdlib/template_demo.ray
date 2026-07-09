@@ -1,12 +1,22 @@
-// Demo del motor de plantillas HTML: interpolación con autoescape, condicional if/else, bucle for, y
-// una interpolación cruda (sin escapar) `{{& … }}`.
-from template import render_template, ctx_str, ctx_int, ctx_bool, ctx_list, val_str, val_int, Bind, TVal;
+// Demo del motor de plantillas HTML: interpolación con autoescape, condicional if/elif/else, bucle
+// for, interpolación cruda (sin escapar) `{{& … }}`, y la API de dos niveles (compile una vez +
+// render N veces — el patrón de SSR).
+from template import compile, render, render_template, ctx_str, ctx_int, ctx_bool, ctx_list, val_str, val_int, Bind, TVal, Template;
 
 fn main() {
-    let tpl = "<h1>Hola, {{ name }}!</h1>\n{% if admin %}<p>admin</p>{% else %}<p>user</p>{% endif %}\n<ul>{% for item in items %}<li>{{ item }}</li>{% endfor %}</ul>\nraw: {{& html }}";
-    let ctx = [ctx_str("name", "<b>Ada</b>"), ctx_bool("admin", true), ctx_list("items", [val_str("a & b"), val_str("c"), val_int(42)]), ctx_str("html", "<i>raw</i>")];
+    let tpl = "<h1>Hola, {{ name }}!</h1>\n{% if admin %}<p>admin</p>{% elif invitado %}<p>invitado</p>{% else %}<p>user</p>{% endif %}\n<ul>{% for item in items %}<li>{{ item }}</li>{% endfor %}</ul>\nraw: {{& html }}";
+    let ctx = [ctx_str("name", "<b>Ada</b>"), ctx_bool("admin", true), ctx_bool("invitado", false), ctx_list("items", [val_str("a & b"), val_str("c"), val_int(42)]), ctx_str("html", "<i>raw</i>")];
     match (render_template(tpl, ctx)) {
         Result.Ok(out) => print(out),
         Result.Err(e) => print("err: " + e),
     }
+    // La rama elif, con la plantilla COMPILADA y dos contextos distintos (compile 1 vez, render 2).
+    let t = match (compile(tpl)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => { print("err: " + e); return; },
+    };
+    let ctx2 = [ctx_str("name", "Eva"), ctx_bool("admin", false), ctx_bool("invitado", true), ctx_list("items", [val_int(1)]), ctx_str("html", "")];
+    let ctx3 = [ctx_str("name", "Leo"), ctx_bool("admin", false), ctx_bool("invitado", false), ctx_list("items", [val_int(2)]), ctx_str("html", "")];
+    print(render(t, ctx2));
+    print(render(t, ctx3));
 }

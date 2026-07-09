@@ -556,6 +556,31 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
 
 ---
 
+## 14b. SSR: std/template optimizado + templates compilados — M55
+
+- **Fase 1 ✅ COMPLETA (jul 2026)** — `std/template` optimizado para SSR (motivado por: es la pieza de
+  server-side rendering junto a `net/webserver`). Medido con una página de 21 KB / 500 filas:
+  **4.6 → 1.3 ms por render (3.5×)**. Cambios: (1) **API de dos niveles** `compile(tpl) -> Result<
+  Template, string>` + `render(t, ctx) -> string` (SSR: compilar al arrancar, renderizar por request;
+  `render_template` queda como azúcar); (2) el tokenizador extrae tramos con `substring` por índices
+  (antes carácter a carácter con `+`, O(n²)); (3) render/`render_val` emiten PARTES en `[string]`
+  compartido + `join` final; (4) `escape_html` sobre los builtins NATIVOS (`contains`×5 como fast
+  path del texto limpio + `replace`×5) — lección medida: **indexar `s[i]` en bucle es O(len) por
+  acceso** (la VM colecta los chars en cada Index) → un escaneo así es cuadrático; o se toma
+  `s.chars()` una vez o se delega en builtins; (5) el binding del `{% for %}` se crea una vez y se
+  MUTA por iteración (antes copiaba el contexto entero por vuelta); (6) **`{% elif %}`** (desazucara
+  a if anidado en la rama else; `SeqResult.stop_tag` conserva la condición). Golden extendido
+  (`tests/template_cli.rs`, ambos motores).
+- **Fase 2 — TEMPLATES COMPILADOS (diseño pendiente con el usuario, dirección aprobada)**: el
+  "PHP bien hecho" — un archivo de plantilla que un paso de build compila a una FUNCIÓN raylang
+  tipada (estilo templ de Go / askama de Rust): parámetros tipados (un typo en `{{ var }}` = error
+  de compilación, no "" silencioso), cero parseo/TVal en runtime, escape decidido en build. Piezas a
+  diseñar: extensión (`.ray.html`), declaración de la firma dentro del template, CLI (`ray templ` o
+  integrado en `ray build`), y si el `for` itera `[T]` tipado en vez de `VList`.
+- Diferido de fase 1: `{% include %}`/parciales (pide diseño de resolución: mapa de parciales en
+  compile vs. filesystem), filtros, `s[i]` O(1) en la VM (cachear los chars del string — optimización
+  del runtime que beneficiaría a todo el ecosistema, no solo templates).
+
 ## 15. Cliente MongoDB — M54, PLAN
 
 Análisis de factibilidad (jul 2026): **raylang puro, tier 2** (`packages/db/mongo.ray`), cero cambios

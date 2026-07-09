@@ -1,10 +1,20 @@
-// Motor de plantillas HTML (M32.3) escrito EN raylang. Cierra la capa web. Puro cómputo, cero runtime.
-// Sintaxis estilo Jinja/Django: interpolación `{{ var }}` (con **autoescape** HTML), sin escapar
-// `{{& var }}`, condicionales `{% if cond %}…{% else %}…{% endif %}` y bucles `{% for x in lista %}…
-// {% endfor %}`. Importable: `from template import render_template, ctx_str, ctx_int, ctx_bool, ctx_list, val_str, val_int, Bind, TVal;`.
+// Motor de plantillas HTML (M32.3; optimizado para SSR jul 2026) escrito EN raylang. Puro cómputo,
+// cero runtime. Sintaxis estilo Jinja/Django: interpolación `{{ var }}` (con **autoescape** HTML),
+// sin escapar `{{& var }}`, condicionales `{% if c %}…{% elif c2 %}…{% else %}…{% endif %}` y bucles
+// `{% for x in lista %}…{% endfor %}`.
+//
+// API en dos niveles (SSR: compilar UNA vez, renderizar por request):
+//   - `compile(tpl) -> Result<Template, string>` + `render(t, ctx) -> string`
+//   - `render_template(tpl, ctx)` = azúcar de una vez (compila + renderiza).
 //
 // El contexto son variables tipadas (`enum TVal`): raylang es estáticamente tipado, así que los valores
 // heterogéneos van en un enum y el contexto es una lista de `(nombre, valor)`.
+//
+// Rendimiento (la lección de la optimización): NADA se acumula con `s = s + trozo` en bucle (eso es
+// O(n²): cada `+` copia el string entero). El tokenizador extrae los tramos con `substring` (un corte
+// por tramo), y el render y el escape emiten PARTES en un `[string]` compartido que se une UNA vez con
+// `join` al final. El binding del `for` se crea una vez y se MUTA por iteración (semántica de
+// referencia), en vez de copiar el contexto entero en cada vuelta.
 // Un valor de plantilla.
 /// A template value: string, int, bool, or list (heterogeneous context values in a typed enum).
 pub enum TVal {
@@ -38,6 +48,13 @@ enum Node {
     NFor(string, string, [Node]),
 }
 
+// Una plantilla COMPILADA (tokenizada + parseada): renderizable N veces sin re-parsear.
+/// A compiled template: parse once with `compile`, then `render` it many times (SSR: compile at
+/// startup, render per request). The tree is opaque; treat this as a handle.
+pub struct Template {
+    nodes: [Node],
+}
+
 // ---- Constructores del contexto (API) ----
 /// Creates a string binding for the template context.
 pub fn ctx_str(name: string, s: string) -> Bind { Bind { name: name, value: TVal.VStr(s) } }
@@ -58,67 +75,58 @@ pub fn val_str(s: string) -> TVal { TVal.VStr(s) }
 pub fn val_int(n: int) -> TVal { TVal.VInt(n) }
 
 // ---- Tokenizador ----
+//
+// Recorre los caracteres UNA vez y extrae cada tramo (texto/hueco/etiqueta) con `substring` sobre
+// los índices (un corte por tramo; nunca carácter a carácter).
+
 fn tokenize(tpl: string) -> Result<[Tok], string> {
     let cs = tpl.chars();
     let n = cs.len();
     var toks: [Tok] = [];
-    var text = "";
+    var start = 0; // inicio del tramo de texto en curso
     var i = 0;
     while (i < n) {
-        if (i + 1 < n && cs[i] == '{' && cs[i + 1] == '{') {
-            if (text != "") {
-                toks.push(Tok.TText(text));
-                text = "";
+        if (i + 1 < n && cs[i] == '{' && (cs[i + 1] == '{' || cs[i + 1] == '%')) {
+            if (i > start) {
+                toks.push(Tok.TText(tpl.substring(start, i)));
             }
-            i = i + 2;
-            var inner = "";
-            var cerrado = false;
-            while (!cerrado && i < n) {
-                if (i + 1 < n && cs[i] == '}' && cs[i + 1] == '}') {
-                    cerrado = true;
-                    i = i + 2;
+            let es_tag = cs[i + 1] == '%';
+            let cierre = if (es_tag) { '%' } else { '}' };
+            let ini = i + 2;
+            // Buscar el par de cierre (`%}` o `}}`) desde `ini`.
+            var fin = 0 - 1;
+            var j = ini;
+            while (fin < 0 && j + 1 < n) {
+                if (cs[j] == cierre && cs[j + 1] == '}') {
+                    fin = j;
                 } else {
-                    inner = inner + to_string(cs[i]);
-                    i = i + 1;
+                    j = j + 1;
                 }
             }
-            if (!cerrado) {
+            if (fin < 0) {
+                if (es_tag) {
+                    return Result.Err("'{%' sin cerrar");
+                }
                 return Result.Err("'{{' sin cerrar");
             }
-            let tr = inner.trim();
-            if (tr.len() > 0 && tr[0] == '&') {
-                toks.push(Tok.TRaw(tr.substring(1, tr.len()).trim()));
+            let inner = tpl.substring(ini, fin).trim();
+            i = fin + 2;
+            start = i;
+            if (es_tag) {
+                toks.push(Tok.TTag(inner));
             } else {
-                toks.push(Tok.TVar(tr));
-            }
-        } else if (i + 1 < n && cs[i] == '{' && cs[i + 1] == '%') {
-            if (text != "") {
-                toks.push(Tok.TText(text));
-                text = "";
-            }
-            i = i + 2;
-            var inner = "";
-            var cerrado = false;
-            while (!cerrado && i < n) {
-                if (i + 1 < n && cs[i] == '%' && cs[i + 1] == '}') {
-                    cerrado = true;
-                    i = i + 2;
+                if (inner.len() > 0 && inner[0] == '&') {
+                    toks.push(Tok.TRaw(inner.substring(1, inner.len()).trim()));
                 } else {
-                    inner = inner + to_string(cs[i]);
-                    i = i + 1;
+                    toks.push(Tok.TVar(inner));
                 }
             }
-            if (!cerrado) {
-                return Result.Err("'{%' sin cerrar");
-            }
-            toks.push(Tok.TTag(inner.trim()));
         } else {
-            text = text + to_string(cs[i]);
             i = i + 1;
         }
     }
-    if (text != "") {
-        toks.push(Tok.TText(text));
+    if (n > start) {
+        toks.push(Tok.TText(tpl.substring(start, n)));
     }
     Result.Ok(toks)
 }
@@ -129,10 +137,12 @@ struct PC {
     pos: int,
 }
 
-// El resultado de parsear una secuencia: los nodos + la etiqueta que la detuvo (else/endif/endfor/"").
+// El resultado de parsear una secuencia: los nodos + la etiqueta que la detuvo (con su texto
+// completo, para leer la condición de un `elif`).
 struct SeqResult {
     nodes: [Node],
     stop: string,
+    stop_tag: string,
 }
 
 fn first_word(s: string) -> string {
@@ -140,9 +150,43 @@ fn first_word(s: string) -> string {
     parts[0]
 }
 
+// Parsea una cadena `if`: el cuerpo hasta elif/else/endif; un `elif` se vuelve un `if` anidado en
+// la rama else (recursivo), así `{% elif %}` no necesita nodo propio.
+fn parse_if(pc: PC, cond: string) -> Result<Node, string> {
+    let thenr = match (parse_seq(pc, ["elif", "else", "endif"])) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            return Result.Err(e);
+        },
+    };
+    var elsebody: [Node] = [];
+    if (thenr.stop == "elif") {
+        let cond2 = thenr.stop_tag.substring(4, thenr.stop_tag.len()).trim();
+        let anidado = match (parse_if(pc, cond2)) {
+            Result.Ok(x) => x,
+            Result.Err(e) => {
+                return Result.Err(e);
+            },
+        };
+        elsebody.push(anidado);
+    } else {
+        if (thenr.stop == "else") {
+            let elser = match (parse_seq(pc, ["endif"])) {
+                Result.Ok(x) => x,
+                Result.Err(e) => {
+                    return Result.Err(e);
+                },
+            };
+            elsebody = elser.nodes;
+        }
+    }
+    Result.Ok(Node.NIf(cond, thenr.nodes, elsebody))
+}
+
 fn parse_seq(pc: PC, stops: [string]) -> Result<SeqResult, string> {
     var nodes: [Node] = [];
     var stop = "";
+    var stop_tag = "";
     var done = false;
     while (!done) {
         if (pc.pos >= pc.toks.len()) {
@@ -167,27 +211,18 @@ fn parse_seq(pc: PC, stops: [string]) -> Result<SeqResult, string> {
                     if (stops.contains(kw)) {
                         pc.pos = pc.pos + 1;
                         stop = kw;
+                        stop_tag = s;
                         done = true;
                     } else if (kw == "if") {
                         pc.pos = pc.pos + 1;
                         let cond = s.substring(2, s.len()).trim();
-                        let thenr = match (parse_seq(pc, ["else", "endif"])) {
+                        let nodo = match (parse_if(pc, cond)) {
                             Result.Ok(x) => x,
                             Result.Err(e) => {
                                 return Result.Err(e);
                             },
                         };
-                        var elsebody: [Node] = [];
-                        if (thenr.stop == "else") {
-                            let elser = match (parse_seq(pc, ["endif"])) {
-                                Result.Ok(x) => x,
-                                Result.Err(e) => {
-                                    return Result.Err(e);
-                                },
-                            };
-                            elsebody = elser.nodes;
-                        }
-                        nodes.push(Node.NIf(cond, thenr.nodes, elsebody));
+                        nodes.push(nodo);
                     } else if (kw == "for") {
                         pc.pos = pc.pos + 1;
                         let parts = s.split(" ");  // ["for", x, "in", lista]
@@ -208,31 +243,20 @@ fn parse_seq(pc: PC, stops: [string]) -> Result<SeqResult, string> {
             }
         }
     }
-    Result.Ok(SeqResult { nodes: nodes, stop: stop })
+    Result.Ok(SeqResult { nodes: nodes, stop: stop, stop_tag: stop_tag })
 }
 
 // ---- Render ----
+
+// Escape HTML apoyado en los builtins NATIVOS (`contains`/`replace` corren en Rust): el caso común
+// (texto limpio) devuelve el string original tras 5 escaneos O(n); el sucio, 5 pasadas de replace.
+// (No iterar `s[i]` en bucle: indexar un string es O(len) por acceso → un bucle así es cuadrático.)
 fn escape_html(s: string) -> string {
-    var out = "";
-    var i = 0;
-    while (i < s.len()) {
-        let c = s[i];
-        if (c == '&') {
-            out = out + "&amp;";
-        } else if (c == '<') {
-            out = out + "&lt;";
-        } else if (c == '>') {
-            out = out + "&gt;";
-        } else if (c == '"') {
-            out = out + "&quot;";
-        } else if (c == '\'') {
-            out = out + "&#39;";
-        } else {
-            out = out + to_string(c);
-        }
-        i = i + 1;
+    if (!(s.contains("&") || s.contains("<") || s.contains(">") || s.contains("\"") || s.contains("'"))) {
+        return s;
     }
-    out
+    // `&` primero (si no, re-escaparía las entidades recién emitidas).
+    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
 }
 
 fn lookup(ctx: [Bind], name: string) -> Option<TVal> {
@@ -244,16 +268,6 @@ fn lookup(ctx: [Bind], name: string) -> Option<TVal> {
         i = i + 1;
     }
     Option.None
-}
-
-fn with_binding(ctx: [Bind], name: string, v: TVal) -> [Bind] {
-    var out: [Bind] = [Bind { name: name, value: v }];
-    var i = 0;
-    while (i < ctx.len()) {
-        out.push(ctx[i]);
-        i = i + 1;
-    }
-    out
 }
 
 fn truthy(v: TVal) -> bool {
@@ -271,73 +285,96 @@ fn render_val(v: TVal) -> string {
         TVal.VInt(n) => to_string(n),
         TVal.VBool(b) => if (b) { "true" } else { "false" },
         TVal.VList(xs) => {
-            var s = "";
+            var out: [string] = [];
             var i = 0;
             while (i < xs.len()) {
                 if (i > 0) {
-                    s = s + ", ";
+                    out.push(", ");
                 }
-                s = s + render_val(xs[i]);
+                out.push(render_val(xs[i]));
                 i = i + 1;
             }
-            s
+            out.join("")
         },
     }
 }
 
-fn render_nodes(nodes: [Node], ctx: [Bind]) -> string {
-    var out = "";
+// Emite los nodos como PARTES en `out` (compartido por referencia); el join final es del llamador.
+fn emit_nodes(nodes: [Node], ctx: [Bind], out: [string]) {
     var i = 0;
     while (i < nodes.len()) {
-        out = out + render_node(nodes[i], ctx);
+        emit_node(nodes[i], ctx, out);
         i = i + 1;
     }
-    out
 }
 
-fn render_node(node: Node, ctx: [Bind]) -> string {
+fn emit_node(node: Node, ctx: [Bind], out: [string]) {
     match (node) {
-        Node.NText(s) => s,
-        Node.NVar(name) => match (lookup(ctx, name)) {
-            Option.Some(v) => escape_html(render_val(v)),
-            Option.None => "",
+        Node.NText(s) => {
+            out.push(s);
         },
-        Node.NRaw(name) => match (lookup(ctx, name)) {
-            Option.Some(v) => render_val(v),
-            Option.None => "",
+        Node.NVar(name) => {
+            match (lookup(ctx, name)) {
+                Option.Some(v) => {
+                    out.push(escape_html(render_val(v)));
+                },
+                Option.None => {},
+            }
+        },
+        Node.NRaw(name) => {
+            match (lookup(ctx, name)) {
+                Option.Some(v) => {
+                    out.push(render_val(v));
+                },
+                Option.None => {},
+            }
         },
         Node.NIf(cond, entonces, sino) => {
             let t = match (lookup(ctx, cond)) {
                 Option.Some(v) => truthy(v),
                 Option.None => false,
             };
-            if (t) { render_nodes(entonces, ctx) } else { render_nodes(sino, ctx) }
+            if (t) {
+                emit_nodes(entonces, ctx, out);
+            } else {
+                emit_nodes(sino, ctx, out);
+            }
         },
         Node.NFor(vname, lname, body) => {
             match (lookup(ctx, lname)) {
-                Option.Some(v) => match (v) {
-                    TVal.VList(xs) => {
-                        var s = "";
-                        var i = 0;
-                        while (i < xs.len()) {
-                            s = s + render_nodes(body, with_binding(ctx, vname, xs[i]));
-                            i = i + 1;
-                        }
-                        s
-                    },
-                    _ => "",
+                Option.Some(v) => {
+                    match (v) {
+                        TVal.VList(xs) => {
+                            // Contexto extendido UNA vez (el binding al frente, para que
+                            // shadowee); por iteración solo se MUTA su valor (referencia).
+                            var ext: [Bind] = [Bind { name: vname, value: TVal.VInt(0) }];
+                            var k = 0;
+                            while (k < ctx.len()) {
+                                ext.push(ctx[k]);
+                                k = k + 1;
+                            }
+                            var i = 0;
+                            while (i < xs.len()) {
+                                ext[0].value = xs[i];
+                                emit_nodes(body, ext, out);
+                                i = i + 1;
+                            }
+                        },
+                        _ => {},
+                    }
                 },
-                Option.None => "",
+                Option.None => {},
             }
         },
     }
 }
 
-// Renderiza `tpl` con el contexto `ctx`. Tokeniza → parsea → renderiza.
-/// Renders a Jinja-style template with the given context: `{{ var }}` interpolation
-/// (HTML-autoescaped), `{{& var }}` raw, `{% if %}…{% else %}…{% endif %}`, and
-/// `{% for x in list %}…{% endfor %}`. Missing variables render as ""; `Err` on syntax errors.
-pub fn render_template(tpl: string, ctx: [Bind]) -> Result<string, string> {
+// ---- API ----
+
+// Compila la plantilla (tokeniza + parsea). En SSR: una vez al arrancar.
+/// Compiles a template (tokenize + parse). For SSR, compile once at startup and `render` per
+/// request — rendering never re-parses.
+pub fn compile(tpl: string) -> Result<Template, string> {
     let toks = match (tokenize(tpl)) {
         Result.Ok(t) => t,
         Result.Err(e) => {
@@ -351,5 +388,28 @@ pub fn render_template(tpl: string, ctx: [Bind]) -> Result<string, string> {
             return Result.Err(e);
         },
     };
-    Result.Ok(render_nodes(seq.nodes, ctx))
+    Result.Ok(Template { nodes: seq.nodes })
+}
+
+// Renderiza una plantilla ya compilada con el contexto dado.
+/// Renders a compiled template with the given context. Missing variables render as `""`.
+pub fn render(t: Template, ctx: [Bind]) -> string {
+    var out: [string] = [];
+    emit_nodes(t.nodes, ctx, out);
+    out.join("")
+}
+
+// Compila y renderiza de una vez (azúcar; para render repetido usa compile + render).
+/// Renders a Jinja-style template with the given context in one shot: `{{ var }}` interpolation
+/// (HTML-autoescaped), `{{& var }}` raw, `{% if %}…{% elif %}…{% else %}…{% endif %}`, and
+/// `{% for x in list %}…{% endfor %}`. Missing variables render as ""; `Err` on syntax errors.
+/// For repeated rendering (SSR), prefer `compile` once + `render` per request.
+pub fn render_template(tpl: string, ctx: [Bind]) -> Result<string, string> {
+    let t = match (compile(tpl)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => {
+            return Result.Err(e);
+        },
+    };
+    Result.Ok(render(t, ctx))
 }

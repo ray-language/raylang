@@ -1,7 +1,8 @@
-//! Prueba del motor de plantillas HTML (`examples/stdlib/template.ray`, M32.3). El demo renderiza una
-//! plantilla con interpolación (autoescape), condicional `{% if %}`, bucle `{% for %}` sobre una lista
-//! heterogénea, y una interpolación cruda `{{& … }}`. El test exige la salida esperada (HTML escapado
-//! donde corresponde) y que ambos motores coincidan.
+//! Prueba del motor de plantillas HTML (`examples/stdlib/template.ray`, M32.3; optimizado jul 2026).
+//! El demo renderiza una plantilla con interpolación (autoescape), `{% if %}`/`{% elif %}`/`{% else %}`,
+//! bucle `{% for %}` sobre una lista heterogénea, interpolación cruda `{{& … }}`, y la API de dos
+//! niveles (compile una vez + render con dos contextos — el patrón de SSR). El test exige la salida
+//! esperada (HTML escapado donde corresponde) y que ambos motores coincidan.
 
 use std::process::Command;
 
@@ -10,6 +11,15 @@ const ESPERADO: &[&str] = &[
     "<p>admin</p>",
     "<ul><li>a &amp; b</li><li>c</li><li>42</li></ul>",
     "raw: <i>raw</i>",
+    // La plantilla COMPILADA, renderizada con dos contextos (elif y else).
+    "<h1>Hola, Eva!</h1>",
+    "<p>invitado</p>",
+    "<ul><li>1</li></ul>",
+    "raw: ",
+    "<h1>Hola, Leo!</h1>",
+    "<p>user</p>",
+    "<ul><li>2</li></ul>",
+    "raw: ",
 ];
 
 fn correr(flags: &[&str]) -> (Vec<String>, bool) {

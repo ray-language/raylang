@@ -418,13 +418,13 @@ fn mvs(name: &str, a: &GitSpec, b: &GitSpec) -> Result<GitSpec, String> {
     ))
 }
 
-/// Parsea un ref semver `vX.Y.Z[-pre]` / `X.Y.Z[-pre]` a una [`crate::index::Version`] completa
+/// Parsea un ref semver `vX.Y.Z[-pre]` / `X.Y.Z[-pre]` a una [`crate::semver::Version`] completa
 /// (M51e: la pre-release ya NO se recorta — `v2.0.0-rc1 < v2.0.0` en el orden de `mvs`, y el
 /// lock-pinning de una rc casa solo contra un requisito que la mencione). `None` si no es semver
 /// (un commit, una rama…).
-pub(crate) fn semver(git_ref: &str) -> Option<crate::index::Version> {
+pub(crate) fn semver(git_ref: &str) -> Option<crate::semver::Version> {
     let core = git_ref.strip_prefix('v').unwrap_or(git_ref);
-    crate::index::parse_version(core)
+    crate::semver::parse_version(core)
 }
 
 /// Las dependencias declaradas en el `ray.toml` de un paquete descargado (su `[dependencies]`),
@@ -571,6 +571,12 @@ fn read_lock(root: &Path) -> Result<std::collections::HashMap<String, LockEntry>
     Ok(map)
 }
 
+/// Los nombres presentes en `ray.lock` (M51f): tras `ray remove` + re-resolver, dice si la caché
+/// `.ray-deps/<nombre>` sigue en uso (el paquete puede seguir siendo transitiva de otra dep).
+pub fn locked_names(root: &Path) -> Vec<String> {
+    read_lock(root).map(|m| m.keys().cloned().collect()).unwrap_or_default()
+}
+
 /// Escribe `ray.lock` en `root` con las entradas **ordenadas por nombre** (determinista → diffs
 /// limpios en control de versiones). El lockfile SÍ se commitea (fija las versiones para el equipo).
 fn write_lock(root: &Path, entries: &mut [LockEntry]) -> Result<(), String> {
@@ -640,7 +646,7 @@ mod tests {
 
     #[test]
     fn parsea_semver() {
-        use crate::index::Version;
+        use crate::semver::Version;
         assert_eq!(semver("v1.2.3"), Some(Version::new(1, 2, 3)));
         assert_eq!(semver("1.2"), Some(Version::new(1, 2, 0)));
         // M51e: la pre-release ya NO se recorta (v2.0.0-rc1 < v2.0.0 para mvs/lock-pinning).

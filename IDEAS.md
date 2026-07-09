@@ -479,8 +479,12 @@ ortogonal y se añade después sobre el mismo índice git).
   clon del tag (resuelve sus deps; `check_all_modulo`, sin exigir `main`); **pre-releases** de verdad
   (`1.0.0-rc1`: orden semver §11 + regla de cargo — solo casan si el requisito las menciona; `latest`/`*`
   eligen finales); y **aviso de dependency confusion** cuando una transitiva declara su propio
-  `[registry] index`. **M51 COMPLETO, revisión de diseño cerrada** (queda diferido: multi-índice,
-  firmas, remove/search — §54.7).
+  `[registry] index`
+  · **51f ergonomía** ✅ (DESIGN §54.5): **`ray remove`** (inversa de add: manifiesto + lock re-resuelto +
+  caché borrada solo si nadie más la usa) y **`ray search [patrón]`** (lista el índice con la versión
+  instalable más alta); limpieza: el semver se extrae de `index.rs` a **`src/semver.rs`** (lo consumen
+  índice, resolutor y CLI). **M51 COMPLETO, revisión de diseño cerrada** (queda diferido: multi-índice,
+  firmas de publicación — §54.7).
 
 **Impacto**: **medio-alto en adopción, cero en runtime y en el lenguaje** — es CLI + resolución en el
 front-end; los motores nunca ven un paquete. Es aditivo (git/`path:` siguen). Diferido: UI/búsqueda web,

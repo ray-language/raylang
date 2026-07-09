@@ -6712,6 +6712,11 @@ versiones del índice y elegir la mayor compatible (MVS: la mínima que satisfac
 - **`ray update`** (M51c) — recomputa el lock a las versiones más nuevas que aún satisfagan los requisitos.
 - **`ray yank <nombre>@<ver>`** (M51c) — marca `yanked = true` (un commit al índice); la resolución **salta**
   las yanked salvo que el `ray.lock` ya las hubiera fijado (no rompe builds existentes).
+- **`ray remove <nombre>`** (M51f) — la inversa de `add`: quita la dep de `ray.toml`, re-resuelve (el lock
+  se reescribe sin ella) y borra `.ray-deps/<nombre>` solo si el lock ya no la lista (podría seguir siendo
+  transitiva de otra dep).
+- **`ray search [patrón]`** (M51f) — lista los paquetes del índice (un `<nombre>.toml` por paquete) cuyo
+  nombre contenga el patrón, con su versión instalable más alta (final, no retirada — como `ray add`).
 
 ### 54.5 Fases
 
@@ -6799,6 +6804,19 @@ versiones del índice y elegir la mayor compatible (MVS: la mínima que satisfac
   nombre; el caret y `ray add` excluyen la rc y el requisito explícito la instala; la transitiva con índice
   propio avisa y corre).
 
+- **M51f — `ray remove` + `ray search` + limpieza de módulos. ✅ COMPLETO.** Cierra los dos diferidos de
+  ergonomía de §54.7: (1) **`ray remove <nombre>`** (`manifest::remove_dependency`, edición mínima línea a
+  línea como `upsert_dependency`) — quita la dep, **re-resuelve** (lock reescrito) y borra la caché
+  `.ray-deps/<nombre>` **solo si el lock ya no la lista** (`deps::locked_names`: la dep podría seguir
+  siendo transitiva de otra). (2) **`ray search [patrón]`** — enumera los `<nombre>.toml` del índice
+  (local o remoto cacheado), filtra por subcadena (case-insensitive) y muestra la versión instalable más
+  alta por paquete (`index::latest`: final, no retirada). (3) **Limpieza**: `index.rs` mezclaba dos
+  responsabilidades → el semver (`Version` + orden §11 + `VersionReq` + parsing, ~250 líneas que también
+  consume `deps.rs` para refs git y el CLI para validar en publish) se extrae a **`src/semver.rs`**;
+  `index.rs` queda solo con el índice (lectura/escritura/resolución). Tests: unit
+  (`remove_quita_la_dep_y_preserva_el_resto`) + 2 de integración offline (`registry_cli`: remove quita
+  manifiesto+lock+caché y falla claro si no está; search con patrón / completo / sin resultados).
+
 ### 54.6 Testing (offline y determinista, como M39c)
 
 El índice de prueba es un **repo git local** servido por `file://` (`git init` + archivos `index/*.toml` +
@@ -6810,7 +6828,8 @@ resolución en el front-end/CLI; los motores nunca ven un paquete.
 
 Búsqueda/UI web del índice; cuentas y **firmas de publicación** (estilo sigstore) sobre el hash ya existente;
 mirrors/proxy; *namespaces* con dueño; `ray.lock` con el propio índice como fuente (hoy fija el commit git);
-`ray remove`/`ray search`; **multi-índice** (hoy el índice es único por proyecto: una dep transitiva por
+**multi-índice** (hoy el índice es único por proyecto: una dep transitiva por
 nombre se resuelve contra el índice del CONSUMIDOR — M51e lo detecta y **avisa** cuando el paquete declara
 un índice propio; mitigan el lock (URL+hash) y la verificación del hash del índice). Los otros límites de la
-revisión de jul 2026 quedaron cerrados: pre-releases (M51e) y check semántico al publicar (M51e).
+revisión de jul 2026 quedaron cerrados: pre-releases (M51e), check semántico al publicar (M51e) y
+`ray remove`/`ray search` (M51f).

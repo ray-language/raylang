@@ -49,6 +49,8 @@ fn run() {
         Some("build") => cmd_build(&rest[1..]),
         Some("test") => cmd_test_sub(&rest[1..]),
         Some("add") => cmd_add(&rest[1..]),
+        Some("remove") => cmd_remove(&rest[1..]),
+        Some("search") => cmd_search(&rest[1..]),
         Some("publish") => cmd_publish(&rest[1..]),
         Some("update") => cmd_update(&rest[1..]),
         Some("yank") => cmd_yank(&rest[1..]),
@@ -78,6 +80,8 @@ Uso: ray <subcomando> [opciones]
   build [archivo]   chequea y compila sin ejecutar (0 ok / 65 error)
   test [archivo]    corre las funciones @test [filtro]
   add <nombre>[@req]  añade una dependencia del índice a ray.toml y la descarga
+  remove <nombre>   elimina una dependencia de ray.toml (y su caché si nadie más la usa)
+  search [patrón]   lista los paquetes del índice (que contengan el patrón)
   publish [--repo S]  publica la versión de este paquete en el índice
   update            re-resuelve las dependencias del índice a las más nuevas compatibles
   yank <nom>@<ver>  retira (o --undo restaura) una versión publicada en el índice
@@ -284,6 +288,111 @@ fn cmd_add(args: &[String]) {
     }
 }
 
+/// `ray remove <nombre>`: elimina una dependencia de `ray.toml` (M51f, la operación inversa de
+/// `ray add`), **re-resuelve** el grafo (reescribe `ray.lock` sin ella) y borra su caché
+/// `.ray-deps/<nombre>` **solo si ya nadie la usa** (podría seguir siendo transitiva de otra dep;
+/// el `ray.lock` recién escrito es quien lo sabe).
+fn cmd_remove(args: &[String]) {
+    let Some(name) = args.first().map(String::as_str) else {
+        eprintln!("uso: ray remove <nombre>");
+        process::exit(64);
+    };
+    if !crate::deps::valid_package_name(name) {
+        eprintln!("nombre de paquete inválido '{name}': solo letras, dígitos, '-' y '_'");
+        process::exit(64);
+    }
+    let Some(m) = load_manifest() else {
+        eprintln!("no hay proyecto: falta 'ray.toml'");
+        process::exit(64);
+    };
+    let toml_path = m.root.join("ray.toml");
+    let src = match fs::read_to_string(&toml_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("no se pudo leer '{}': {e}", toml_path.display());
+            process::exit(66);
+        }
+    };
+    let Some(updated) = crate::manifest::remove_dependency(&src, name) else {
+        eprintln!("la dependencia '{name}' no está declarada en ray.toml");
+        process::exit(65);
+    };
+    if let Err(e) = fs::write(&toml_path, &updated) {
+        eprintln!("no se pudo escribir '{}': {e}", toml_path.display());
+        process::exit(73);
+    }
+    println!("dependencia '{name}' eliminada de ray.toml");
+    // Re-resolver con el manifiesto ya editado: reescribe `ray.lock` sin la dep (o con ella si
+    // sigue siendo transitiva de otra). Después, la caché se borra solo si el lock ya no la lista.
+    match crate::manifest::Manifest::load(&m.root) {
+        Ok(Some(m2)) => {
+            if let Err(e) = crate::deps::ensure(&m2) {
+                eprintln!("error re-resolviendo dependencias: {e}");
+                process::exit(65);
+            }
+            let cache = m.root.join(".ray-deps").join(name);
+            if cache.is_dir() && !crate::deps::locked_names(&m.root).iter().any(|n| n == name) {
+                let _ = fs::remove_dir_all(&cache);
+                println!("caché '.ray-deps/{name}' eliminada");
+            }
+        }
+        Ok(None) | Err(_) => {} // el manifiesto acaba de escribirse; improbable
+    }
+}
+
+/// `ray search [patrón]`: lista los paquetes del **índice** (M51f) cuyo nombre contenga el patrón
+/// (sin patrón, todos), con su versión instalable más alta (final, no retirada — como `ray add`).
+/// El índice se localiza como siempre (`RAY_INDEX`/`[registry] index`; el remoto se clona/cachea).
+fn cmd_search(args: &[String]) {
+    let pattern = args.first().map(|s| s.to_lowercase()).unwrap_or_default();
+    let Some(m) = load_manifest() else {
+        eprintln!("no hay proyecto: falta 'ray.toml' (para localizar el índice)");
+        process::exit(64);
+    };
+    let index = match crate::deps::index_dir(&m) {
+        Ok(Some(dir)) => dir,
+        Ok(None) => {
+            eprintln!("no hay índice configurado ('[registry] index' o RAY_INDEX)");
+            process::exit(65);
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            process::exit(65);
+        }
+    };
+    let entries = match fs::read_dir(&index) {
+        Ok(rd) => rd,
+        Err(e) => {
+            eprintln!("no se pudo listar el índice '{}': {e}", index.display());
+            process::exit(66);
+        }
+    };
+    // Un paquete = un `<nombre>.toml` en el índice (se ignora cualquier otro archivo del repo).
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            let name = (p.extension().is_some_and(|x| x == "toml"))
+                .then(|| p.file_stem()?.to_str().map(str::to_string))
+                .flatten()?;
+            (crate::deps::valid_package_name(&name) && name.to_lowercase().contains(&pattern))
+                .then_some(name)
+        })
+        .collect();
+    names.sort();
+    if names.is_empty() {
+        println!("sin resultados en el índice{}", if pattern.is_empty() { String::new() } else { format!(" para '{pattern}'") });
+        return;
+    }
+    for name in &names {
+        match crate::index::latest(&index, name) {
+            Ok(v) => println!("{name} {v}"),
+            Err(_) => println!("{name} (sin versión instalable)"),
+        }
+    }
+    println!("{} paquete(s)", names.len());
+}
+
 /// `ray publish [--repo <git+URL@ref>]`: publica la versión de este paquete en el índice (M51b).
 /// Valida (name+version semver) y **añade** la entrada de versión al índice, de forma **inmutable**
 /// (no sobrescribe). La spec git de dónde vive el código: `--repo` si se da, o se deriva del remoto
@@ -313,7 +422,7 @@ fn cmd_publish(args: &[String]) {
         eprintln!("nombre de paquete inválido '{}': solo letras, dígitos, '-' y '_'", m.name);
         process::exit(65);
     }
-    if crate::index::parse_version(&m.version).is_none() {
+    if crate::semver::parse_version(&m.version).is_none() {
         eprintln!("la versión del paquete '{}' no es semver válido: '{}'", m.name, m.version);
         process::exit(65);
     }

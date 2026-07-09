@@ -625,3 +625,72 @@ fn transitiva_con_indice_propio_avisa() {
     assert!(out.contains("7"), "{out}");
     assert!(err.contains("declara su propio índice"), "aviso de dependency confusion:\n{err}");
 }
+
+// ── M51f: ray remove + ray search ──
+
+#[test]
+fn ray_remove_elimina_dep_lock_y_cache() {
+    let base = tmp("remove");
+    let index = base.join("index");
+    let geo = publicar(&base, "geo", "1.0.0", "pub fn v() -> int { 9 }\n");
+    let util = publicar(&base, "util", "1.0.0", "pub fn u() -> int { 1 }\n");
+    indexar(&index, "geo", &[("1.0.0", &geo)]);
+    indexar(&index, "util", &[("1.0.0", &util)]);
+    let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"1.0.0\"\nutil = \"1.0.0\"\n",
+    )
+    .unwrap();
+    let (_o, err, code) = ray_idx(&app, &index, &["fetch"]);
+    assert_eq!(code, 0, "fetch inicial\n{err}");
+    assert!(app.join(".ray-deps/util/mod.ray").is_file(), "util en la caché");
+
+    // remove: quita del manifiesto, reescribe el lock y borra la caché (nadie más usa util).
+    let (out, err, code) = ray_idx(&app, &index, &["remove", "util"]);
+    assert_eq!(code, 0, "remove OK\n{err}");
+    assert!(out.contains("eliminada"), "{out}");
+    let toml = std::fs::read_to_string(app.join("ray.toml")).unwrap();
+    assert!(!toml.contains("util"), "fuera del manifiesto:\n{toml}");
+    let lock = std::fs::read_to_string(app.join("ray.lock")).unwrap();
+    assert!(!lock.contains("[util]") && lock.contains("[geo]"), "lock re-resuelto:\n{lock}");
+    assert!(!app.join(".ray-deps/util").exists(), "caché de util borrada");
+    // El programa sigue corriendo con la dep restante.
+    let (out, _e, code) = ray_idx(&app, &index, &["run"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("9"), "{out}");
+
+    // remove de algo no declarado → error claro.
+    let (_o, err, code) = ray_idx(&app, &index, &["remove", "util"]);
+    assert_eq!(code, 65, "remove de una dep inexistente falla");
+    assert!(err.contains("no está declarada"), "{err}");
+}
+
+#[test]
+fn ray_search_lista_el_indice() {
+    let base = tmp("search");
+    let index = base.join("index");
+    let r12 = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 1 }\n");
+    let r13 = publicar(&base, "geo", "1.3.0", "pub fn v() -> int { 2 }\n");
+    let net = publicar(&base, "net-extra", "0.1.0", "pub fn n() -> int { 3 }\n");
+    indexar(&index, "geo", &[("1.2.0", &r12), ("1.3.0", &r13)]);
+    indexar(&index, "net-extra", &[("0.1.0", &net)]);
+    let app = app(&base, "fn main() -> int { 0 }\n");
+
+    // Con patrón: solo los que casan, con su última versión instalable.
+    let (out, err, code) = ray_idx(&app, &index, &["search", "ge"]);
+    assert_eq!(code, 0, "search OK\n{err}");
+    assert!(out.contains("geo 1.3.0"), "geo con su última:\n{out}");
+    assert!(!out.contains("net-extra"), "net-extra no casa 'ge':\n{out}");
+
+    // Sin patrón: todos, ordenados.
+    let (out, _e, code) = ray_idx(&app, &index, &["search"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("geo 1.3.0") && out.contains("net-extra 0.1.0"), "lista completa:\n{out}");
+    assert!(out.contains("2 paquete(s)"), "{out}");
+
+    // Sin resultados → mensaje, código 0 (no es un error).
+    let (out, _e, code) = ray_idx(&app, &index, &["search", "zzz"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("sin resultados"), "{out}");
+}

@@ -195,6 +195,28 @@ pub fn upsert_dependency(src: &str, name: &str, req: &str) -> String {
     out
 }
 
+/// Elimina la entrada `nombre = "…"` de la sección `[dependencies]` (para `ray remove`, M51f).
+/// Devuelve el fuente editado, o `None` si el nombre no estaba declarado. Edición mínima línea a
+/// línea, como `upsert_dependency` (preserva comentarios y el resto de secciones).
+pub fn remove_dependency(src: &str, name: &str) -> Option<String> {
+    let mut lines: Vec<String> = src.lines().map(str::to_string).collect();
+    let start = lines.iter().position(|l| l.trim() == "[dependencies]")?;
+    let end = lines[start + 1..]
+        .iter()
+        .position(|l| l.trim().starts_with('['))
+        .map(|off| start + 1 + off)
+        .unwrap_or(lines.len());
+    let off = lines[start + 1..end]
+        .iter()
+        .position(|l| l.split_once('=').is_some_and(|(k, _)| k.trim() == name))?;
+    lines.remove(start + 1 + off);
+    let mut out = lines.join("\n");
+    if src.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    Some(out)
+}
+
 /// Desenrolla una cadena TOML `"..."` a su contenido. `None` si no está entre comillas.
 /// (Subconjunto: sin escapes; ni las URLs ni los nombres los necesitan.)
 fn unquote_string(s: &str) -> Option<String> {
@@ -262,6 +284,18 @@ util = \"git+https://ejemplo/util@v2.1\"
         let fmt_idx = d.find("[fmt]").unwrap();
         let b_idx = d.find("b = ").unwrap();
         assert!(deps_idx < b_idx && b_idx < fmt_idx, "b va dentro de [dependencies], antes de [fmt]:\n{d}");
+    }
+
+    #[test]
+    fn remove_quita_la_dep_y_preserva_el_resto() {
+        // Quita solo la línea de la dep pedida, sin tocar otras secciones (M51f).
+        let src = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"^1.2\"\nutil = \"1.0.0\"\n\n[fmt]\nindent_size = 2\n";
+        let out = remove_dependency(src, "geo").unwrap();
+        assert!(!out.contains("geo ="), "geo eliminada:\n{out}");
+        assert!(out.contains("util = \"1.0.0\"") && out.contains("[fmt]"), "el resto intacto:\n{out}");
+        // Un nombre no declarado devuelve None (y una clave igual en OTRA sección no cuenta).
+        assert!(remove_dependency(src, "nada").is_none());
+        assert!(remove_dependency("[fmt]\ngeo = \"x\"\n", "geo").is_none());
     }
 
     #[test]

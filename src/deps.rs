@@ -331,7 +331,22 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
 
         // Dependencias transitivas: leer el `ray.toml` del paquete y encolarlas (saltando path-deps).
         // Una transitiva también puede ser del índice (`foo = "^1.2"`) → se resuelve igual.
-        for (dn, ds) in package_deps(&dest)? {
+        let (pkg_deps, pkg_registry) = package_deps(&dest)?;
+        // M51e (aviso de *dependency confusion*, DESIGN §54.7): las deps por nombre de una
+        // transitiva se resuelven contra el índice de ESTE proyecto. Si el paquete declara su
+        // PROPIO índice y difiere, el mismo nombre podría referirse a otro paquete allí → avisar
+        // (solo si de verdad tiene deps por nombre; el lock + hash del índice mitigan después).
+        if let Some(pr) = &pkg_registry
+            && index_raw(manifest).as_deref() != Some(pr.as_str())
+            && pkg_deps.iter().any(|(_, s)| crate::index::is_registry_spec(s) && path_of_path_dep(s).is_none())
+        {
+            eprintln!(
+                "  aviso: '{name}' declara su propio índice ('{pr}'); sus dependencias por nombre \
+                 se resuelven contra el índice de ESTE proyecto (riesgo de dependency confusion \
+                 si los nombres difieren entre índices)"
+            );
+        }
+        for (dn, ds) in pkg_deps {
             // M51d: el `ray.toml` de una transitiva NO es confiable — validar su nombre ANTES de
             // usarlo en cualquier ruta (es la valla contra `../../x` → escape de la caché).
             if !valid_package_name(&dn) {
@@ -403,44 +418,49 @@ fn mvs(name: &str, a: &GitSpec, b: &GitSpec) -> Result<GitSpec, String> {
     ))
 }
 
-/// Parsea un ref semver `vX.Y.Z` / `X.Y.Z` (ignora un sufijo de pre-release tras `-`) a `(mayor,
-/// menor, parche)`. `None` si no es semver (un commit, una rama…). Para ordenar en `mvs`.
-pub(crate) fn semver(git_ref: &str) -> Option<(u64, u64, u64)> {
+/// Parsea un ref semver `vX.Y.Z[-pre]` / `X.Y.Z[-pre]` a una [`crate::index::Version`] completa
+/// (M51e: la pre-release ya NO se recorta — `v2.0.0-rc1 < v2.0.0` en el orden de `mvs`, y el
+/// lock-pinning de una rc casa solo contra un requisito que la mencione). `None` si no es semver
+/// (un commit, una rama…).
+pub(crate) fn semver(git_ref: &str) -> Option<crate::index::Version> {
     let core = git_ref.strip_prefix('v').unwrap_or(git_ref);
-    let core = core.split('-').next().unwrap_or(core); // corta pre-release
-    let mut it = core.split('.');
-    let major = it.next()?.parse().ok()?;
-    let minor = it.next()?.parse().ok()?;
-    let patch = it.next().unwrap_or("0").parse().ok()?;
-    Some((major, minor, patch))
+    crate::index::parse_version(core)
 }
 
-/// Las dependencias declaradas en el `ray.toml` de un paquete descargado (su `[dependencies]`), para
-/// la resolución transitiva. Vacío si el paquete no tiene `ray.toml` (paquete hoja). Lenient: no
+/// Las dependencias declaradas en el `ray.toml` de un paquete descargado (su `[dependencies]`),
+/// para la resolución transitiva, más el índice `[registry] index` que ese paquete declare (M51e:
+/// solo para AVISAR de una posible *dependency confusion*; las transitivas se resuelven contra el
+/// índice del CONSUMIDOR). Vacío si el paquete no tiene `ray.toml` (paquete hoja). Lenient: no
 /// exige `name`/`version` (a un paquete-dependencia solo le miramos sus dependencias).
-fn package_deps(pkg_dir: &Path) -> Result<Vec<(String, String)>, String> {
+type PackageMeta = (Vec<(String, String)>, Option<String>); // (dependencias, índice propio)
+
+fn package_deps(pkg_dir: &Path) -> Result<PackageMeta, String> {
     let Ok(source) = std::fs::read_to_string(pkg_dir.join("ray.toml")) else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     };
     let mut deps = Vec::new();
-    let mut in_deps = false;
+    let mut registry = None;
+    let mut section = String::new();
     for line in source.lines() {
         let line = line.split_once('#').map_or(line, |(a, _)| a).trim();
         if line.is_empty() {
             continue;
         }
-        if let Some(section) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-            in_deps = section.trim() == "dependencies";
+        if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            section = s.trim().to_string();
             continue;
         }
-        if in_deps
-            && let Some((key, value)) = line.split_once('=')
+        if let Some((key, value)) = line.split_once('=')
             && let Some(val) = value.trim().strip_prefix('"').and_then(|v| v.strip_suffix('"'))
         {
-            deps.push((key.trim().to_string(), val.to_string()));
+            match (section.as_str(), key.trim()) {
+                ("dependencies", k) => deps.push((k.to_string(), val.to_string())),
+                ("registry", "index") => registry = Some(val.to_string()),
+                _ => {}
+            }
         }
     }
-    Ok(deps)
+    Ok((deps, registry))
 }
 
 // ── Hash de contenido de un paquete ──────────────────────────────────────────────────
@@ -620,9 +640,15 @@ mod tests {
 
     #[test]
     fn parsea_semver() {
-        assert_eq!(semver("v1.2.3"), Some((1, 2, 3)));
-        assert_eq!(semver("1.2"), Some((1, 2, 0)));
-        assert_eq!(semver("v2.0.0-rc1"), Some((2, 0, 0))); // corta el pre-release
+        use crate::index::Version;
+        assert_eq!(semver("v1.2.3"), Some(Version::new(1, 2, 3)));
+        assert_eq!(semver("1.2"), Some(Version::new(1, 2, 0)));
+        // M51e: la pre-release ya NO se recorta (v2.0.0-rc1 < v2.0.0 para mvs/lock-pinning).
+        assert_eq!(
+            semver("v2.0.0-rc1"),
+            Some(Version { major: 2, minor: 0, patch: 0, pre: Some("rc1".to_string()) })
+        );
+        assert!(semver("v2.0.0-rc1") < semver("v2.0.0"));
         assert_eq!(semver("main"), None);
         assert_eq!(semver("abc123def"), None); // un commit no es semver
     }

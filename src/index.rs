@@ -28,8 +28,63 @@ use std::path::Path;
 
 use crate::deps::{self, GitSpec};
 
-/// Una versión semver `(mayor, menor, parche)`.
-pub type Version = (u64, u64, u64);
+/// Una versión semver: `(mayor, menor, parche)` + **pre-release** opcional (M51e: `1.0.0-rc1`).
+/// El orden es el de semver §11: se compara el triple y, a triple igual, una pre-release es
+/// **menor** que la final (`1.0.0-rc1 < 1.0.0`); dos pre-releases comparan identificador a
+/// identificador (numérico < alfanumérico; numéricos por valor, alfanuméricos ASCII).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Version {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+    /// La parte pre-release (`rc1`, `beta.2`, …), sin el `-`. `None` = versión final.
+    pub pre: Option<String>,
+}
+
+impl Version {
+    pub fn new(major: u64, minor: u64, patch: u64) -> Version {
+        Version { major, minor, patch, pre: None }
+    }
+    fn triple(&self) -> (u64, u64, u64) {
+        (self.major, self.minor, self.patch)
+    }
+}
+
+impl PartialOrd for Version {
+    fn partial_cmp(&self, other: &Version) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Version {
+    fn cmp(&self, other: &Version) -> std::cmp::Ordering {
+        self.triple().cmp(&other.triple()).then_with(|| match (&self.pre, &other.pre) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (Some(_), None) => std::cmp::Ordering::Less, // pre-release < final
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(a), Some(b)) => cmp_pre(a, b),
+        })
+    }
+}
+
+/// Compara dos partes pre-release por identificadores separados por `.` (semver §11.4): un
+/// identificador numérico compara por valor y es menor que uno alfanumérico; los alfanuméricos
+/// comparan ASCII; con prefijo igual, la lista más corta es menor (`rc < rc.1`).
+fn cmp_pre(a: &str, b: &str) -> std::cmp::Ordering {
+    let ids = |s: &str| s.split('.').map(str::to_string).collect::<Vec<_>>();
+    for (x, y) in ids(a).iter().zip(ids(b).iter()) {
+        let ord = match (x.parse::<u64>(), y.parse::<u64>()) {
+            (Ok(nx), Ok(ny)) => nx.cmp(&ny),
+            (Ok(_), Err(_)) => std::cmp::Ordering::Less, // numérico < alfanumérico
+            (Err(_), Ok(_)) => std::cmp::Ordering::Greater,
+            (Err(_), Err(_)) => x.cmp(y),
+        };
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+    }
+    a.split('.').count().cmp(&b.split('.').count())
+}
 
 /// Un requisito de versión declarado en `ray.toml` (`foo = "<req>"`). Semántica (DESIGN §54.3):
 /// - **`1.2.0`** (pelado) o **`=1.2.0`** → exacta (rellena con 0 lo omitido: `1.2` = `1.2.0`).
@@ -57,53 +112,69 @@ impl VersionReq {
         }
         if let Some(rest) = s.strip_prefix('^') {
             let (v, _prec) = parse_partial(rest)?;
-            return Ok(VersionReq::Range(v, caret_upper(v)));
+            let hi = caret_upper(&v);
+            return Ok(VersionReq::Range(v, hi));
         }
         if let Some(rest) = s.strip_prefix('~') {
             let (v, prec) = parse_partial(rest)?;
-            return Ok(VersionReq::Range(v, tilde_upper(v, prec)));
+            let hi = tilde_upper(&v, prec);
+            return Ok(VersionReq::Range(v, hi));
         }
         let core = s.strip_prefix('=').unwrap_or(s);
         let (v, _prec) = parse_partial(core)?;
         Ok(VersionReq::Exact(v))
     }
 
-    /// ¿La versión `v` satisface el requisito?
-    fn matches(&self, v: Version) -> bool {
+    /// ¿La versión `v` satisface el requisito? **Pre-releases** (M51e, regla de cargo): una versión
+    /// pre-release solo casa si el requisito menciona **explícitamente** una pre-release con el
+    /// mismo triple `X.Y.Z` (así `^1.0` jamás elige `1.1.0-rc1` por sorpresa; para probar una rc
+    /// hay que pedirla: `1.1.0-rc1` o `^1.1.0-rc1`).
+    fn matches(&self, v: &Version) -> bool {
         match self {
-            VersionReq::Exact(e) => v == *e,
-            VersionReq::Range(lo, hi) => *lo <= v && v < *hi,
-            VersionReq::Any => true,
+            VersionReq::Exact(e) => v == e,
+            VersionReq::Range(lo, hi) => {
+                if v.pre.is_some() && !(lo.pre.is_some() && v.triple() == lo.triple()) {
+                    return false;
+                }
+                lo <= v && v < hi
+            }
+            VersionReq::Any => v.pre.is_none(),
         }
     }
 }
 
 /// El límite superior (exclusivo) de un requisito *caret* `^X.Y.Z`: sube el componente distinto de
 /// cero más a la izquierda (regla de cargo, que preserva la compatibilidad semver con `0.x`).
-fn caret_upper((major, minor, patch): Version) -> Version {
-    if major > 0 {
-        (major + 1, 0, 0)
-    } else if minor > 0 {
-        (major, minor + 1, 0)
+fn caret_upper(v: &Version) -> Version {
+    if v.major > 0 {
+        Version::new(v.major + 1, 0, 0)
+    } else if v.minor > 0 {
+        Version::new(v.major, v.minor + 1, 0)
     } else {
-        (major, minor, patch + 1)
+        Version::new(v.major, v.minor, v.patch + 1)
     }
 }
 
 /// El límite superior (exclusivo) de un requisito *tilde*: con menor especificado (`~1.2`/`~1.2.3`)
 /// sube el menor; con solo el mayor (`~1`) sube el mayor. `prec` = nº de componentes escritos.
-fn tilde_upper((major, minor, _patch): Version, prec: u8) -> Version {
+fn tilde_upper(v: &Version, prec: u8) -> Version {
     if prec >= 2 {
-        (major, minor + 1, 0)
+        Version::new(v.major, v.minor + 1, 0)
     } else {
-        (major + 1, 0, 0)
+        Version::new(v.major + 1, 0, 0)
     }
 }
 
-/// Parsea `X[.Y[.Z]]` a `(versión, precisión)`, rellenando con 0 lo omitido (`1.2` → `(1,2,0)`,
-/// precisión 2). Rechaza un componente no numérico o vacío.
+/// Parsea `X[.Y[.Z]][-pre]` a `(versión, precisión)`, rellenando con 0 lo omitido (`1.2` → `(1,2,0)`,
+/// precisión 2). Rechaza un componente no numérico o vacío. Una **pre-release** (M51e) exige el
+/// triple completo (`1.0.0-rc1` sí; `1.0-rc1` no: sería ambiguo qué componente rellena el 0).
 fn parse_partial(s: &str) -> Result<(Version, u8), String> {
-    let mut it = s.split('.');
+    let (core, pre) = match s.split_once('-') {
+        Some((c, p)) if !p.trim().is_empty() => (c, Some(p.trim().to_string())),
+        Some(_) => return Err(format!("requisito de versión inválido: '{s}' (pre-release vacía)")),
+        None => (s, None),
+    };
+    let mut it = core.split('.');
     let mut nums = [0u64; 3];
     let mut prec = 0u8;
     for slot in nums.iter_mut() {
@@ -123,7 +194,12 @@ fn parse_partial(s: &str) -> Result<(Version, u8), String> {
     if it.next().is_some() {
         return Err(format!("requisito de versión con demasiados componentes: '{s}'"));
     }
-    Ok(((nums[0], nums[1], nums[2]), prec))
+    if pre.is_some() && prec != 3 {
+        return Err(format!(
+            "requisito de versión inválido: '{s}' (una pre-release exige el triple completo X.Y.Z-pre)"
+        ));
+    }
+    Ok((Version { major: nums[0], minor: nums[1], patch: nums[2], pre }, prec))
 }
 
 /// Una versión publicada de un paquete, leída del índice.
@@ -215,16 +291,24 @@ pub fn read_package(index_dir: &Path, name: &str) -> Result<Vec<IndexEntry>, Str
     Ok(entries)
 }
 
-/// La versión **más alta no retirada** publicada de `name` (para `ray add` sin versión). Error si
-/// no hay ninguna instalable.
+/// La versión **más alta no retirada y FINAL** publicada de `name` (para `ray add` sin versión).
+/// Las pre-releases no cuentan (M51e: instalarlas es opt-in explícito, `ray add foo@1.0.0-rc1`).
+/// Error si no hay ninguna instalable.
 pub fn latest(index_dir: &Path, name: &str) -> Result<String, String> {
     let mut versions = read_package(index_dir, name)?;
-    versions.retain(|e| !e.yanked);
+    let had_pre = versions.iter().any(|e| e.version.pre.is_some() && !e.yanked);
+    versions.retain(|e| !e.yanked && e.version.pre.is_none());
     versions.sort_by(|a, b| a.version.cmp(&b.version));
-    versions
-        .last()
-        .map(|e| e.num.clone())
-        .ok_or_else(|| format!("el paquete '{name}' no tiene versiones publicadas (todas retiradas)"))
+    versions.last().map(|e| e.num.clone()).ok_or_else(|| {
+        if had_pre {
+            format!(
+                "el paquete '{name}' solo tiene pre-releases publicadas; pide una explícita \
+                 (p. ej. 'ray add {name}@<X.Y.Z-pre>')"
+            )
+        } else {
+            format!("el paquete '{name}' no tiene versiones publicadas (todas retiradas)")
+        }
+    })
 }
 
 /// Resuelve `name` con el requisito `req` contra el índice → la `GitSpec` de la versión **más alta
@@ -251,12 +335,12 @@ pub fn resolve_pinned(
     if !update
         && let Some(l) = locked
         && let Some(v) = deps::semver(&l.git_ref)
-        && req_parsed.matches(v)
+        && req_parsed.matches(&v)
     {
         return Ok((l.clone(), None)); // el lock sigue satisfaciendo el requisito → reproducible
     }
     let mut versions = read_package(index_dir, name)?;
-    versions.retain(|e| !e.yanked && req_parsed.matches(e.version));
+    versions.retain(|e| !e.yanked && req_parsed.matches(&e.version));
     versions.sort_by(|a, b| a.version.cmp(&b.version));
     let chosen = versions.last().ok_or_else(|| {
         format!("ninguna versión de '{name}' satisface '{req}' en el índice")
@@ -356,7 +440,12 @@ mod tests {
     use super::*;
 
     fn v(a: u64, b: u64, c: u64) -> Version {
-        (a, b, c)
+        Version::new(a, b, c)
+    }
+
+    /// Una versión con pre-release (M51e): `vpre(1, 0, 0, "rc1")` = `1.0.0-rc1`.
+    fn vpre(a: u64, b: u64, c: u64, pre: &str) -> Version {
+        Version { major: a, minor: b, patch: c, pre: Some(pre.to_string()) }
     }
 
     #[test]
@@ -374,17 +463,45 @@ mod tests {
         assert_eq!(VersionReq::parse("~1").unwrap(), VersionReq::Range(v(1, 0, 0), v(2, 0, 0)));
         assert!(VersionReq::parse("abc").is_err());
         assert!(VersionReq::parse("1.2.3.4").is_err());
+        // M51e: pre-releases — exigen el triple completo.
+        assert_eq!(VersionReq::parse("1.0.0-rc1").unwrap(), VersionReq::Exact(vpre(1, 0, 0, "rc1")));
+        assert!(VersionReq::parse("1.0-rc1").is_err());
+        assert!(VersionReq::parse("1.0.0-").is_err());
     }
 
     #[test]
     fn casa_requisitos() {
-        assert!(VersionReq::parse("^1.2.0").unwrap().matches(v(1, 5, 0)));
-        assert!(!VersionReq::parse("^1.2.0").unwrap().matches(v(2, 0, 0)));
-        assert!(!VersionReq::parse("^1.2.0").unwrap().matches(v(1, 1, 0)));
-        assert!(VersionReq::parse("~1.2.0").unwrap().matches(v(1, 2, 9)));
-        assert!(!VersionReq::parse("~1.2.0").unwrap().matches(v(1, 3, 0)));
-        assert!(VersionReq::parse("1.2.0").unwrap().matches(v(1, 2, 0)));
-        assert!(!VersionReq::parse("1.2.0").unwrap().matches(v(1, 2, 1)));
+        assert!(VersionReq::parse("^1.2.0").unwrap().matches(&v(1, 5, 0)));
+        assert!(!VersionReq::parse("^1.2.0").unwrap().matches(&v(2, 0, 0)));
+        assert!(!VersionReq::parse("^1.2.0").unwrap().matches(&v(1, 1, 0)));
+        assert!(VersionReq::parse("~1.2.0").unwrap().matches(&v(1, 2, 9)));
+        assert!(!VersionReq::parse("~1.2.0").unwrap().matches(&v(1, 3, 0)));
+        assert!(VersionReq::parse("1.2.0").unwrap().matches(&v(1, 2, 0)));
+        assert!(!VersionReq::parse("1.2.0").unwrap().matches(&v(1, 2, 1)));
+    }
+
+    #[test]
+    fn ordena_y_casa_pre_releases() {
+        // Orden semver §11: pre-release < final; identificadores numéricos por valor.
+        assert!(vpre(1, 0, 0, "rc1") < v(1, 0, 0));
+        assert!(v(0, 9, 9) < vpre(1, 0, 0, "rc1"));
+        assert!(vpre(1, 0, 0, "alpha") < vpre(1, 0, 0, "beta"));
+        assert!(vpre(1, 0, 0, "rc.2") < vpre(1, 0, 0, "rc.10")); // numérico: 2 < 10
+        assert!(vpre(1, 0, 0, "rc") < vpre(1, 0, 0, "rc.1")); // prefijo igual: más corta es menor
+        assert!(vpre(1, 0, 0, "1") < vpre(1, 0, 0, "alpha")); // numérico < alfanumérico
+        // Matching (regla de cargo): una pre solo casa si el requisito la menciona (mismo triple).
+        assert!(VersionReq::parse("1.0.0-rc1").unwrap().matches(&vpre(1, 0, 0, "rc1")));
+        assert!(!VersionReq::parse("1.0.0").unwrap().matches(&vpre(1, 0, 0, "rc1")));
+        assert!(!VersionReq::parse("^1.0.0").unwrap().matches(&vpre(1, 1, 0, "rc1")));
+        assert!(!VersionReq::parse("*").unwrap().matches(&vpre(1, 0, 0, "rc1")));
+        // ^1.0.0-rc1: admite esa pre (y posteriores del MISMO triple) y las finales del rango.
+        let caret_pre = VersionReq::parse("^1.0.0-rc1").unwrap();
+        assert!(caret_pre.matches(&vpre(1, 0, 0, "rc1")));
+        assert!(caret_pre.matches(&vpre(1, 0, 0, "rc2")));
+        assert!(!caret_pre.matches(&vpre(1, 1, 0, "rc1"))); // pre de OTRO triple: no
+        assert!(caret_pre.matches(&v(1, 0, 0)));
+        assert!(caret_pre.matches(&v(1, 5, 0)));
+        assert!(!caret_pre.matches(&vpre(1, 0, 0, "rc0"))); // menor que la pedida
     }
 
     #[test]

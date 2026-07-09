@@ -520,3 +520,108 @@ fn indice_remoto_recacheado_si_cambia_la_spec() {
     assert_eq!(code, 0, "corre tras el cambio de índice\n{err}");
     assert!(out.contains("200"), "resolvió geo 2.0.0 del índice 2 (re-clonado)\n{out}\n{err}");
 }
+
+// ── M51e: H5 check semántico en publish · H6 pre-releases · H7 aviso de índice propio ──
+
+#[test]
+fn publish_corre_el_check_semantico() {
+    let base = tmp("publishcheck");
+    let index = base.join("index");
+    std::fs::create_dir_all(&index).unwrap();
+
+    // (a) Un paquete que lexea y parsea pero NO chequea (tipo de retorno mal) → publish falla.
+    let roto = publicar(&base, "roto", "1.0.0", "pub fn v() -> int { true }\n");
+    let repo_spec = format!("git+file://{}@v1.0.0", roto.display());
+    let (_o, err, code) = ray_idx(&roto, &index, &["publish", "--repo", &repo_spec]);
+    assert_eq!(code, 65, "publish de un paquete que no chequea falla\n{err}");
+    assert!(err.contains("no supera el check semántico"), "mensaje claro:\n{err}");
+    assert!(!index.join("roto.toml").exists(), "no se publicó nada");
+
+    // (b) Un paquete CON dependencia por nombre: el check la resuelve (índice) y pasa.
+    let geo = publicar(&base, "geo", "1.0.0", "pub fn v() -> int { 21 }\n");
+    indexar(&index, "geo", &[("1.0.0", &geo)]);
+    let calc = base.join("calc-work");
+    std::fs::create_dir_all(&calc).unwrap();
+    git(&calc, &["init", "-q"]);
+    std::fs::write(calc.join("mod.ray"), "from geo import v;\npub fn doble() -> int { v() * 2 }\n").unwrap();
+    std::fs::write(
+        calc.join("ray.toml"),
+        "[package]\nname = \"calc\"\nversion = \"1.0.0\"\n\n[dependencies]\ngeo = \"1.0.0\"\n",
+    )
+    .unwrap();
+    git(&calc, &["add", "-A"]);
+    git(&calc, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "calc"]);
+    git(&calc, &["tag", "v1.0.0"]);
+    let repo_spec = format!("git+file://{}@v1.0.0", calc.display());
+    let (out, err, code) = ray_idx(&calc, &index, &["publish", "--repo", &repo_spec]);
+    assert_eq!(code, 0, "publish con dep por nombre chequea y pasa\n{err}");
+    assert!(out.contains("publicado calc 1.0.0"), "{out}");
+}
+
+#[test]
+fn pre_releases_son_opt_in() {
+    let base = tmp("prerel");
+    let index = base.join("index");
+    let r120 = publicar(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
+    let rrc = publicar(&base, "geo", "1.3.0-rc1", "pub fn v() -> int { 131 }\n");
+    indexar(&index, "geo", &[("1.2.0", &r120), ("1.3.0-rc1", &rrc)]);
+    let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
+
+    // Un rango (^1.2) NUNCA elige la pre-release por sorpresa.
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"^1.2\"\n",
+    )
+    .unwrap();
+    let (out, err, _c) = ray_idx(&app, &index, &["run"]);
+    assert!(out.contains("120"), "el caret excluye la 1.3.0-rc1\n{out}\n{err}");
+
+    // `ray add geo` (sin versión) también elige la FINAL más alta, no la rc.
+    let (out, err, code) = ray_idx(&app, &index, &["add", "geo"]);
+    assert_eq!(code, 0, "add OK\n{err}");
+    assert!(out.contains("geo = \"^1.2.0\""), "latest ignora la pre-release:\n{out}");
+
+    // Pedirla EXPLÍCITAMENTE sí la instala.
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"1.3.0-rc1\"\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray_idx(&app, &index, &["run"]);
+    assert_eq!(code, 0, "la pre-release explícita corre\n{err}");
+    assert!(out.contains("131"), "instaló la 1.3.0-rc1 pedida\n{out}");
+}
+
+#[test]
+fn transitiva_con_indice_propio_avisa() {
+    let base = tmp("ownidx");
+    let index = base.join("index");
+    let util = publicar(&base, "util", "1.0.0", "pub fn u() -> int { 5 }\n");
+    indexar(&index, "util", &[("1.0.0", &util)]);
+    // `geo` declara su PROPIO índice y una dep por nombre → al consumirla, aviso de confusion.
+    let geo = base.join("geo-repo");
+    std::fs::create_dir_all(&geo).unwrap();
+    git(&geo, &["init", "-q"]);
+    std::fs::write(geo.join("mod.ray"), "pub fn v() -> int { 7 }\n").unwrap();
+    std::fs::write(
+        geo.join("ray.toml"),
+        "[package]\nname = \"geo\"\nversion = \"1.0.0\"\n\n[registry]\nindex = \"git+https://otro.ejemplo/indice\"\n\n[dependencies]\nutil = \"1.0.0\"\n",
+    )
+    .unwrap();
+    git(&geo, &["add", "-A"]);
+    git(&geo, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "geo"]);
+    git(&geo, &["tag", "v1.0.0"]);
+    indexar(&index, "geo", &[("1.0.0", &geo)]);
+
+    let app = app(&base, "from geo import v;\nfn main() -> int { print(v()); 0 }\n");
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ngeo = \"1.0.0\"\n",
+    )
+    .unwrap();
+    // Corre (util se resuelve contra NUESTRO índice) pero avisa del índice propio de geo.
+    let (out, err, code) = ray_idx(&app, &index, &["run"]);
+    assert_eq!(code, 0, "corre pese al aviso\n{err}");
+    assert!(out.contains("7"), "{out}");
+    assert!(err.contains("declara su propio índice"), "aviso de dependency confusion:\n{err}");
+}

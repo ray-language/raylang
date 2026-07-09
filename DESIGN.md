@@ -6702,9 +6702,10 @@ versiones del índice y elegir la mayor compatible (MVS: la mínima que satisfac
 - **`ray add <nombre>[@<req>]`** — resuelve `<req>` (o la última) en el índice, **escribe** la dep en
   `ray.toml` y hace `fetch`. El azúcar de instalación que hoy falta.
 - **`ray publish`** — desde un proyecto: **valida** (tiene `name`/`version` en su `ray.toml`, es importable
-  —`mod.ray`/raíz—, todos los `.ray` lexean+parsean; el check semántico completo del grafo queda diferido,
-  exigiría resolver las deps del paquete al publicar) y calcula el **hash de contenido** (`deps::hash_package`,
-  reusado de M39c-2b) — ambos **sobre un clon limpio del tag publicado** (M51d), no sobre el working tree—,
+  —`mod.ray`/raíz—, todos los `.ray` lexean+parsean, y **supera el check semántico completo** (M51e):
+  se resuelven sus dependencias y la cara se carga+chequea con el checker sin exigir `main`) y calcula el
+  **hash de contenido** (`deps::hash_package`,
+  reusado de M39c-2b) — todo **sobre un clon limpio del tag publicado** (M51d), no sobre el working tree—,
   y **genera la entrada de versión** para el índice. Publicar de verdad = *commit* +
   *push* al repo del índice (acción del autor, con sus credenciales git); el CLI produce/aplica el commit
   sobre un clon del índice. Rechaza sobrescribir una versión existente.
@@ -6774,6 +6775,29 @@ versiones del índice y elegir la mayor compatible (MVS: la mínima que satisfac
   Tests: unit (`valida_nombres_de_paquete`) + 4 de integración offline (`registry_cli`: nombre malicioso
   directo/transitivo, publish con working tree sucio + consumidor verde, hash del índice manipulado corta la
   resolución con mensaje claro, índice re-cacheado al cambiar la spec).
+- **M51e — cierre de límites de v1. ✅ COMPLETO. → M51 COMPLETO (revisión cerrada).** Cierra H5/H6/H7 de
+  la revisión de jul 2026:
+  1. **Check semántico completo en `ray publish`** (cierra el diferido de M51d): `check_publicado`
+     (`cli.rs`) resuelve las **dependencias del clon del tag** (por el índice o git; escriben dentro del
+     temporal, DESPUÉS de calcular el hash), carga la cara con el loader (imports internos + deps + `std/`)
+     y la verifica con `check_all_modulo` (el checker **sin exigir `main`**: un paquete es una librería —el
+     mismo modo que usa el LSP para módulos). Un error se reporta contra su archivo y línea local
+     (`Loaded::locate`): "el paquete no supera el check semántico (mod.ray, línea N): …".
+  2. **Pre-releases** (`1.0.0-rc1`): `Version` pasa de tupla a struct con componente `pre` y orden semver
+     §11 (pre < final a triple igual; identificadores numéricos por valor, alfanuméricos ASCII, prefijo
+     corto menor). **Matching (regla de cargo)**: una pre-release solo casa si el requisito la menciona
+     explícitamente con el mismo triple (`^1.0` jamás elige `1.1.0-rc1`; `1.3.0-rc1` o `^1.3.0-rc1` sí);
+     `*` y `latest`/`ray add` sin versión eligen solo finales (con sugerencia si solo hay pre-releases).
+     `deps::semver` (refs git) deja de recortar la pre → `mvs` y el lock-pinning la ordenan/casan bien.
+     Una pre exige el triple completo (`1.0-rc1` es error: ambiguo).
+  3. **Aviso de *dependency confusion***: si una dependencia descargada declara su **propio**
+     `[registry] index` distinto del de este proyecto Y tiene deps por nombre, `ensure` avisa (sus
+     transitivas se resuelven contra el índice del CONSUMIDOR). Mitigan además el lock (URL+hash) y la
+     verificación del hash del índice (M51d).
+  Tests: unit (orden/matching de pre-releases, `semver` con pre) + 3 de integración offline
+  (`registry_cli`: publish rechaza un paquete que no chequea y acepta uno cuyo check resuelve una dep por
+  nombre; el caret y `ray add` excluyen la rc y el requisito explícito la instala; la transitiva con índice
+  propio avisa y corre).
 
 ### 54.6 Testing (offline y determinista, como M39c)
 
@@ -6786,9 +6810,7 @@ resolución en el front-end/CLI; los motores nunca ven un paquete.
 
 Búsqueda/UI web del índice; cuentas y **firmas de publicación** (estilo sigstore) sobre el hash ya existente;
 mirrors/proxy; *namespaces* con dueño; `ray.lock` con el propio índice como fuente (hoy fija el commit git);
-`ray remove`/`ray search`. **Límites conocidos de v1** (documentados en la revisión de jul 2026): (a) las
-**pre-releases** (`1.0.0-rc1`) no son publicables (el semver de requisitos no las modela; el de refs git las
-recorta); (b) **índice único**: una dep transitiva por nombre se resuelve contra el índice del CONSUMIDOR, no
-el de su autor — con índices privados mezclados, el mismo nombre puede resolver distinto (*dependency
-confusion*); mitiga el lock (fija URL+hash) y la verificación del hash del índice (M51d); (c) el **check
-semántico** del paquete al publicar (solo lexer+parser; el check completo exigiría resolver sus deps).
+`ray remove`/`ray search`; **multi-índice** (hoy el índice es único por proyecto: una dep transitiva por
+nombre se resuelve contra el índice del CONSUMIDOR — M51e lo detecta y **avisa** cuando el paquete declara
+un índice propio; mitigan el lock (URL+hash) y la verificación del hash del índice). Los otros límites de la
+revisión de jul 2026 quedaron cerrados: pre-releases (M51e) y check semántico al publicar (M51e).

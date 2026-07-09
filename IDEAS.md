@@ -474,7 +474,13 @@ ortogonal y se añade después sobre el mismo índice git).
   `../../x` de una transitiva no confiable escapaba de la caché), el **hash del índice se verifica** al
   descargar (antes era decorativo; cierra el TOFU del lock → el índice es raíz de confianza), `ray publish`
   valida+hashea el **tag** publicado (no el working tree), e índice remoto pinneado que se re-clona si su
-  spec cambia (antes quedaba obsoleto en silencio).
+  spec cambia (antes quedaba obsoleto en silencio)
+  · **51e cierre de límites** ✅ (DESIGN §54.5): `ray publish` corre el **check semántico completo** del
+  clon del tag (resuelve sus deps; `check_all_modulo`, sin exigir `main`); **pre-releases** de verdad
+  (`1.0.0-rc1`: orden semver §11 + regla de cargo — solo casan si el requisito las menciona; `latest`/`*`
+  eligen finales); y **aviso de dependency confusion** cuando una transitiva declara su propio
+  `[registry] index`. **M51 COMPLETO, revisión de diseño cerrada** (queda diferido: multi-índice,
+  firmas, remove/search — §54.7).
 
 **Impacto**: **medio-alto en adopción, cero en runtime y en el lenguaje** — es CLI + resolución en el
 front-end; los motores nunca ven un paquete. Es aditivo (git/`path:` siguen). Diferido: UI/búsqueda web,

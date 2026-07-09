@@ -372,10 +372,12 @@ fn cmd_publish(args: &[String]) {
 
 /// M51d: valida y hashea el **contenido publicado** de un paquete: clona el repo local (`m.root`)
 /// haciendo checkout de la ref de `git_spec` en un directorio temporal —exactamente lo que un
-/// consumidor obtendrá—, comprueba que la cara del paquete existe (`mod.ray` o la entrada) y que
-/// **todos** los `.ray` lexean y parsean, y devuelve su `deps::hash_package`. El clon temporal se
-/// borra siempre. (El check semántico completo del grafo queda diferido: exigiría resolver las
-/// dependencias del paquete al publicar; DESIGN §54.7.)
+/// consumidor obtendrá—, comprueba que la cara del paquete existe (`mod.ray` o la entrada), que
+/// **todos** los `.ray` lexean y parsean, y (M51e) que el paquete **supera el check semántico
+/// completo** (carga la cara con el loader —resolviendo antes sus dependencias, si las declara— y
+/// lo verifica con el checker, sin exigir `main`). Devuelve su `deps::hash_package` — calculado
+/// ANTES de resolver las deps del clon, que escriben `.ray-deps/`/`ray.lock` dentro y no son parte
+/// del contenido. El clon temporal se borra siempre.
 fn hash_publicado(m: &crate::manifest::Manifest, git_spec: &str) -> Result<String, String> {
     let spec = crate::deps::parse_spec(git_spec)?;
     let tmp = std::env::temp_dir().join(format!("ray-publish-{}-{}", m.name, process::id()));
@@ -399,7 +401,7 @@ fn hash_publicado(m: &crate::manifest::Manifest, git_spec: &str) -> Result<Strin
                 spec.git_ref, m.entry
             ));
         }
-        // Todos los .ray publicados deben lexear y parsear.
+        // Todos los .ray publicados deben lexear y parsear (también los no importados por la cara).
         let mut files: Vec<(String, std::path::PathBuf)> = Vec::new();
         crate::deps::collect_files(&tmp, &tmp, &mut files)?;
         for (rel, abs) in files.iter().filter(|(r, _)| r.ends_with(".ray")) {
@@ -410,10 +412,58 @@ fn hash_publicado(m: &crate::manifest::Manifest, git_spec: &str) -> Result<Strin
             crate::parser::parse(tokens)
                 .map_err(|e| format!("'{rel}' del contenido publicado no parsea: {e}"))?;
         }
-        crate::deps::hash_package(&tmp)
+        // El hash, ANTES del check: resolver deps escribe `.ray-deps/`/`ray.lock` dentro del clon.
+        let hash = crate::deps::hash_package(&tmp)?;
+        check_publicado(&tmp, &face)?;
+        Ok(hash)
     })();
     let _ = fs::remove_dir_all(&tmp);
     result
+}
+
+/// M51e: el **check semántico completo** del contenido a publicar (cierra el diferido de M51d):
+/// resuelve las dependencias que el clon declare (por el índice o por git; escriben dentro del
+/// clon temporal), carga la cara con el loader (imports internos + deps + `std/` embebida) y la
+/// verifica con `check_all_modulo` (el checker SIN exigir `main`: un paquete es una librería).
+/// Un error se reporta contra su archivo y línea local (vía `Loaded::locate`).
+fn check_publicado(tmp: &Path, face: &Path) -> Result<(), String> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if tmp.join("ray.toml").is_file()
+        && let Ok(Some(mc)) = crate::manifest::Manifest::load(tmp)
+    {
+        if mc.dependencies.iter().any(|(_, s)| crate::deps::path_of_path_dep(s).is_none()) {
+            crate::deps::ensure(&mc).map_err(|e| {
+                format!("no se pudieron resolver las dependencias del paquete para el check: {e}")
+            })?;
+        }
+        let cache = mc.root.join(".ray-deps");
+        if cache.is_dir() {
+            roots.push(cache);
+        }
+        // Path-deps del paquete (raras al publicar, pero el check las honra igual que `ray run`).
+        for (_n, s) in &mc.dependencies {
+            if let Some(p) = crate::deps::path_of_path_dep(s) {
+                let dir = mc.root.join(p);
+                if let Some(parent) = dir.parent().map(Path::to_path_buf)
+                    && dir.exists()
+                    && !roots.contains(&parent)
+                {
+                    roots.push(parent);
+                }
+            }
+        }
+    }
+    let mut loaded = crate::loader::load_with_deps(face, &roots)
+        .map_err(|e| format!("el paquete no carga: {}", e.message))?;
+    let errors = crate::checker::check_all_modulo(&mut loaded.program);
+    if let Some(e) = errors.first() {
+        let (modulo, _fuente, linea) = loaded.locate(e.line);
+        return Err(format!(
+            "el paquete no supera el check semántico ({modulo}.ray, línea {linea}): {}",
+            e.msg
+        ));
+    }
+    Ok(())
 }
 
 /// Deriva la spec git de un paquete a publicar: `git+<origin>@v<version>`, tomando la URL del remoto

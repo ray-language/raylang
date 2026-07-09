@@ -1833,7 +1833,7 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
         list.push(obj(fields));
     }
     let keywords: &[&str] = if is_tag {
-        &["params", "if", "elif", "else", "endif", "for", "endfor", "in", "true", "false"]
+        &["params", "if", "elif", "else", "endif", "for", "endfor", "in", "include", "import", "true", "false"]
     } else {
         &["true", "false"]
     };
@@ -2024,7 +2024,7 @@ type TplOcc = (usize, usize, usize, String, bool);
 /// no ligan. Solo cuenta delimitadores abiertos y cerrados en la misma línea.
 fn template_occurrences(src: &str) -> Vec<TplOcc> {
     let params: Vec<String> = crate::templ::header_params(src).into_iter().map(|(n, _)| n).collect();
-    let keywords = ["params", "if", "elif", "else", "endif", "for", "endfor", "in", "true", "false"];
+    let keywords = ["params", "if", "elif", "else", "endif", "for", "endfor", "in", "include", "import", "true", "false"];
     let mut out: Vec<TplOcc> = Vec::new();
     let mut for_stack: Vec<Vec<(String, String)>> = Vec::new(); // grupos de (var, clave) por bloque
     for (l0, line) in src.lines().enumerate() {
@@ -2063,6 +2063,10 @@ fn template_occurrences(src: &str) -> Vec<TplOcc> {
                 .then(|| idents.iter().position(|(_, n)| *n == "in").unwrap_or(idents.len()))
                 .unwrap_or(0);
             let mut group: Vec<(String, String)> = Vec::new();
+            if is_tag && first_word == "import" {
+                from = close_b + 2;
+                continue; // los segmentos de una ruta de import no son variables
+            }
             for (k, (off, name)) in idents.iter().enumerate() {
                 if content[..*off].trim_end().ends_with('.') {
                     continue; // miembro (`fila.trim`): no liga a variables

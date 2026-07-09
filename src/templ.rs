@@ -222,6 +222,21 @@ fn split_params(s: &str) -> Vec<String> {
     parts
 }
 
+/// Valida el argumento de un `{% import %}`: `ruta/al/modulo [as alias]` — segmentos que sean
+/// identificadores separados por `/`. Evita empalmar texto arbitrario en el `import …;` generado.
+fn valid_import(s: &str) -> bool {
+    let (path, alias) = match s.split_once(" as ") {
+        Some((p, a)) => (p.trim(), Some(a.trim())),
+        None => (s, None),
+    };
+    let seg_ok = |x: &str| {
+        !x.is_empty()
+            && x.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && x.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    !path.is_empty() && path.split('/').all(seg_ok) && alias.map(seg_ok).unwrap_or(true)
+}
+
 // Qué abre/cierra cada etiqueta (para validar el anidamiento y cuadrar las llaves).
 enum Marco {
     If,
@@ -287,6 +302,7 @@ fn generate_body(
 ) -> Result<(String, Vec<usize>), TplError> {
     // Cada línea del cuerpo con la línea del template de la que proviene.
     let mut body: Vec<(usize, String)> = Vec::new();
+    let mut imports: Vec<(String, usize)> = Vec::new(); // `{% import %}` hoisteados a la cabecera
     let mut depth = 1usize; // dentro de la función
     let mut stack: Vec<Marco> = Vec::new();
     let mut last_line = params_line;
@@ -314,6 +330,7 @@ fn generate_body(
                 }
                 linea(&mut body, depth, l, format!("out.push(to_string({e}));"));
             }
+            // (Los casos `import`/`include` de composición van en el match de etiquetas, abajo.)
             Tok::Tag(t, l) => {
                 let (kw, resto) = match t.split_once(char::is_whitespace) {
                     Some((k, r)) => (k, r.trim()),
@@ -373,6 +390,25 @@ fn generate_body(
                         depth -= 1;
                         linea(&mut body, depth, l, "}".to_string());
                     }
+                    // Composición de templates: `{% import vistas/tarjeta [as t] %}` trae otro
+                    // módulo (otro template compilado, o cualquier módulo del proyecto) al ámbito
+                    // del generado. Se HOISTEA a la cabecera (los imports van al frente del módulo),
+                    // esté donde esté en el template.
+                    "import" => {
+                        if !valid_import(resto) {
+                            return Err(TplError { line: l, msg: format!("'{{% import %}}' mal formado: '{resto}' (se espera 'ruta/al/modulo [as alias]')") });
+                        }
+                        imports.push((resto.to_string(), l));
+                    }
+                    // `{% include expr %}`: empalma el string de `expr` SIN escapar — es HTML ya
+                    // renderizado (normalmente el `render_<x>(…)` de otro template). Equivale a
+                    // `{{& expr }}`, con la intención declarada.
+                    "include" => {
+                        if resto.is_empty() {
+                            return Err(TplError { line: l, msg: "'{% include %}' sin expresión (se espera 'include modulo.render_x(args)')".into() });
+                        }
+                        linea(&mut body, depth, l, format!("out.push(to_string({resto}));"));
+                    }
                     "params" => {
                         return Err(TplError { line: l, msg: "'{% params %}' repetido (solo puede ir una vez, al principio)".into() });
                     }
@@ -391,18 +427,26 @@ fn generate_body(
         return Err(TplError { line: last_line, msg: format!("falta un '{{% {falta} %}}' al final del template") });
     }
 
-    // Ensamblado + line map. La cabecera son 7 líneas fijas (mapean a la línea de `params`,
-    // donde vive la firma); el cierre, a la última línea del template.
-    let header = format!(
+    // Ensamblado + line map. La cabecera son 3 líneas fijas + un `import` por cada `{% import %}`
+    // (mapean a SU línea del template) + 4 fijas más (todas las fijas mapean a la línea de
+    // `params`, donde vive la firma); el cierre, a la última línea del template.
+    let mut header = format!(
         "// GENERADO por `ray templ` desde {name}.ray.html — NO editar a mano; regenera con\n\
          // `ray templ <ruta>`. El template es la fuente de verdad.\n\
-         from std/template import escape_html;\n\
-         \n\
+         from std/template import escape_html;\n"
+    );
+    let mut map: Vec<usize> = vec![params_line; 3];
+    for (p, l) in &imports {
+        header.push_str(&format!("import {p};\n"));
+        map.push(*l);
+    }
+    header.push_str(&format!(
+        "\n\
          /// Renders the `{name}` template (generated; the `.ray.html` file is the source of truth).\n\
          pub fn render_{name}({params}) -> string {{\n\
          \x20   var out: [string] = [];\n"
-    );
-    let mut map: Vec<usize> = vec![params_line; 7];
+    ));
+    map.extend([params_line; 4]);
     let mut code = header;
     for (l, linea_src) in &body {
         map.push(*l);
@@ -461,6 +505,29 @@ mod tests {
     fn split_params_respeta_los_anidados() {
         let ps = split_params("m: Map<string, int>, xs: [string], f: fn(int) -> int");
         assert_eq!(ps, vec!["m: Map<string, int>", "xs: [string]", "f: fn(int) -> int"]);
+    }
+
+    #[test]
+    fn import_e_include_componen_templates() {
+        // `{% import %}` se hoistea a la cabecera (con su línea en el map) y `{% include %}`
+        // empalma sin escapar (HTML ya renderizado por otro template).
+        let tpl = "{% params p: string %}\n{% import vistas/tarjeta %}\n{% import util/fmt as f %}\n<div>{% include tarjeta.render_tarjeta(p) %}</div>\n";
+        let (code, map) = generate_with_map(tpl, "pagina").unwrap();
+        assert!(code.contains("import vistas/tarjeta;\n"), "{code}");
+        assert!(code.contains("import util/fmt as f;\n"), "{code}");
+        assert!(code.contains("out.push(to_string(tarjeta.render_tarjeta(p)));"), "{code}");
+        // Los imports van ANTES de la función y su línea del map es la del template.
+        let lines: Vec<&str> = code.lines().collect();
+        let (i, _) = lines.iter().enumerate().find(|(_, l)| l.contains("import vistas/tarjeta")).unwrap();
+        assert!(i < lines.iter().position(|l| l.contains("pub fn")).unwrap());
+        assert_eq!(map[i], 2, "{code}");
+        assert_eq!(lines.len(), map.len());
+        let tokens = crate::lexer::lex(&code).unwrap();
+        assert!(crate::parser::parse(tokens).is_ok());
+        // Errores: import mal formado (no se empalma texto arbitrario) e include vacío.
+        assert!(generate("{% params x: int %}{% import ../fuera %}", "t").unwrap_err().msg.contains("mal formado"));
+        assert!(generate("{% params x: int %}{% import a; drop %}", "t").unwrap_err().msg.contains("mal formado"));
+        assert!(generate("{% params x: int %}{% include %}", "t").unwrap_err().msg.contains("include"));
     }
 
     #[test]

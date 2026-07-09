@@ -135,6 +135,34 @@ fn run_y_build_regeneran_templates_desactualizados() {
 }
 
 #[test]
+fn include_e_import_componen_vistas_y_layout() {
+    // Composición M55: una página {% import %}a un partial y lo {% include %}; un layout es un
+    // template más con param `contenido: string` que envuelve lo ya renderizado.
+    let base = std::env::temp_dir().join("ray_templ_include");
+    let _ = std::fs::remove_dir_all(&base);
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("vistas")).unwrap();
+    std::fs::write(app.join("vistas/tarjeta.ray.html"),
+        "{% params nombre: string %}<div class=\"tarjeta\">{{ nombre }}</div>\n").unwrap();
+    std::fs::write(app.join("vistas/layout.ray.html"),
+        "{% params titulo: string, contenido: string %}<html><title>{{ titulo }}</title><body>{% include contenido %}</body></html>\n").unwrap();
+    std::fs::write(app.join("vistas/pagina.ray.html"),
+        "{% params nombres: [string] %}{% import vistas/tarjeta %}<ul>{% for n in nombres %}{% include tarjeta.render_tarjeta(n) %}{% endfor %}</ul>\n").unwrap();
+    std::fs::write(app.join("main.ray"),
+        "import vistas/pagina;\nimport vistas/layout;\n\nfn main() -> int {\n    print(layout.render_layout(\"Equipo\", pagina.render_pagina([\"Ada\", \"Lin<us\"])));\n    0\n}\n").unwrap();
+
+    // Sin `ray templ` explícito: la regeneración automática de `ray run` compila los tres.
+    let out = Command::new(BIN).args(["run", "main.ray"]).current_dir(&app).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let esperado = "<html><title>Equipo</title><body><ul>\
+        <div class=\"tarjeta\">Ada</div>\n\
+        <div class=\"tarjeta\">Lin&lt;us</div>\n\
+        </ul>\n</body></html>\n\n";
+    assert_eq!(stdout, esperado, "el include NO re-escapa el HTML del partial, pero el partial SÍ escapó su dato");
+}
+
+#[test]
 fn errores_del_template() {
     let base = std::env::temp_dir().join("ray_templ_cli_err");
     let _ = std::fs::remove_dir_all(&base);

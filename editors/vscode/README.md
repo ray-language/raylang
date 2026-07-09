@@ -198,5 +198,8 @@ formados) y errores de tipos del módulo generado, **mapeados a la línea del te
 (los parámetros tipados de la cabecera `{% params %}`, las variables de los `{% for %}` que
 encierran el cursor, las palabras clave del template y, tras un `.`, los **miembros del
 receptor** — métodos y builtins aplicables a su tipo), **hover** con el tipo real de la
-expresión, **ir-a-definición** (un param lleva a su `{% params %}`) y **signature help** al
-escribir los argumentos. Genera el módulo con `ray templ <dir>`.
+expresión, **ir-a-definición** (un param lleva a su `{% params %}`), **signature help** al
+escribir los argumentos, **find-references/rename/highlight** de params y variables de `for`, y
+**outline** (`render_<stem>` con sus params). Los templates componen con `{% import %}` +
+`{% include %}`. No hace falta `ray templ` a mano: `ray run`/`build`/`test` regeneran los
+templates desactualizados.

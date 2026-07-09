@@ -39,7 +39,7 @@ contexts:
     - match: '%\}'
       scope: punctuation.section.embedded.end.raylang-template
       pop: true
-    - match: '\b(params|if|elif|else|endif|for|endfor|in)\b'
+    - match: '\b(params|if|elif|else|endif|for|endfor|in|include|import)\b'
       scope: keyword.control.raylang-template
     - include: scope:source.raylang
 

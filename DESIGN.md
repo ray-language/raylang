@@ -7287,4 +7287,17 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   del programa); template roto → 65 con su error (mejor señal que compilar el generado viejo);
   generados al día → un stat por template. `collect_templates` salta directorios ocultos
   (`.git`, `.ray-deps`).
-- Diferido: `{% include %}`/layouts entre templates compilados, `{% let %}` locales.
+- **Composición de templates (misma sesión, cierra el diferido de include/layouts)**: dos
+  etiquetas nuevas, cero maquinaria — un template compila a una **función en un módulo**, así que
+  componer = importar y llamar. **`{% import vistas/tarjeta [as t] %}`** emite `import …;` en el
+  generado (**hoisteado** a la cabecera con su línea en el line map; el argumento se valida —
+  segmentos identificador separados por `/` — para no empalmar texto arbitrario).
+  **`{% include expr %}`** empalma el string de `expr` **sin escapar** (es HTML ya renderizado,
+  normalmente el `render_<x>(…)` de otro template; equivale a `{{& expr }}` con la intención
+  declarada). El autoescape compone: el partial escapó sus datos al renderizarse; el include no
+  re-escapa. **Layouts sin slots**: el layout es un template más con un param `contenido: string`
+  que hace `{% include contenido %}`; quien compone llama `layout.render_layout(titulo,
+  pagina.render_pagina(…))`. LSP/coloreado al día (keywords `include`/`import`; una ruta de import
+  no liga como variable).
+- Diferido: `{% let %}` locales; slots/bloques de layout (estilo Jinja `{% block %}`) si el patrón
+  `contenido: string` se queda corto.

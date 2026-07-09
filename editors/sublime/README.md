@@ -36,7 +36,8 @@ nombre `raylang`:
    M55) usan la sintaxis **raylang template** (HTML + los delimitadores `{{ }}`/`{% %}` con la
    expresión coloreada como raylang) y reciben del mismo LSP los diagnósticos del template y,
    dentro de `{{ }}`/`{% %}`: autocompletado (params tipados, variables de `for`, y tras un `.`
-   los miembros del receptor), hover con el tipo real, ir-a-definición y signature help.
+   los miembros del receptor), hover con el tipo real, ir-a-definición, signature help,
+   find-references/rename/highlight y outline.
 
 No hay que compilar nada: el `.sublime-syntax` es declarativo (a diferencia del cliente de
 VSCode, que sí es TypeScript a compilar).

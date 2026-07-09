@@ -6702,8 +6702,10 @@ versiones del índice y elegir la mayor compatible (MVS: la mínima que satisfac
 - **`ray add <nombre>[@<req>]`** — resuelve `<req>` (o la última) en el índice, **escribe** la dep en
   `ray.toml` y hace `fetch`. El azúcar de instalación que hoy falta.
 - **`ray publish`** — desde un proyecto: **valida** (tiene `name`/`version` en su `ray.toml`, es importable
-  —`mod.ray`/raíz—, **compila** con `ray build`), calcula el **hash de contenido** (`deps::hash_package`,
-  reusado de M39c-2b) y **genera la entrada de versión** para el índice. Publicar de verdad = *commit* +
+  —`mod.ray`/raíz—, todos los `.ray` lexean+parsean; el check semántico completo del grafo queda diferido,
+  exigiría resolver las deps del paquete al publicar) y calcula el **hash de contenido** (`deps::hash_package`,
+  reusado de M39c-2b) — ambos **sobre un clon limpio del tag publicado** (M51d), no sobre el working tree—,
+  y **genera la entrada de versión** para el índice. Publicar de verdad = *commit* +
   *push* al repo del índice (acción del autor, con sus credenciales git); el CLI produce/aplica el commit
   sobre un clon del índice. Rechaza sobrescribir una versión existente.
 - **`ray update`** (M51c) — recomputa el lock a las versiones más nuevas que aún satisfagan los requisitos.
@@ -6749,6 +6751,30 @@ versiones del índice y elegir la mayor compatible (MVS: la mínima que satisfac
   ya la fijó la sigue usando). Tests offline (`tests/registry_cli.rs`): índice git `file://` clonado, lock
   que fija la versión + `update` que la sube, yank que excluye y `--undo` que restaura.
 
+- **M51d — endurecimiento. ✅ COMPLETO. → cierra la revisión de diseño (jul 2026).** Tres cierres de
+  seguridad/confianza detectados en la revisión del gestor+registro:
+  1. **Nombres de paquete validados** (`deps::valid_package_name`: alfanumérico ASCII + `-`/`_`, empezando
+     por alfanumérico). El nombre construye rutas (`.ray-deps/<nombre>`, `<índice>/<nombre>.toml`) y viene
+     también del `ray.toml` de **transitivas no confiables**: sin la valla, un nombre `../../x` escapaba de
+     la caché (y el camino de re-descarga hace `remove_dir_all` sobre esa ruta). Se valida en `ray add`,
+     en las deps directas, en cada transitiva (señalando al culpable) y en las APIs del índice (defensa en
+     profundidad).
+  2. **El hash del índice se VERIFICA** (antes se publicaba y parseaba pero nadie lo consultaba —decorativo—).
+     `resolve_pinned` devuelve el hash publicado de la versión elegida y `ensure` compara `hash_package` de lo
+     descargado contra él → el índice pasa de "descubrimiento" a **raíz de confianza** (cierra el TOFU del
+     lock, que confía en la primera descarga). Sin hash publicado no hay verificación (compat).
+  3. **`ray publish` valida y hashea el TAG, no el working tree** (`hash_publicado` en `cli.rs`): clona el
+     repo local en la ref publicada a un temporal —exactamente lo que un consumidor descargará—, exige la
+     cara del paquete en el clon, lexea+parsea **todos** los `.ray`, y hashea eso. Antes, cambios sin
+     commitear o archivos sueltos contaminaban el hash (y con la verificación de (2) habrían roto a los
+     consumidores).
+  4. **Índice remoto pinneado que no se queda obsoleto**: la caché `.ray-deps/.index` registra la spec con
+     la que se clonó (`.index.spec`) y **se re-clona si cambia** (URL o ref); `ray update` refresca un índice
+     con `@ref` vía `fetch` + re-checkout (el `git pull` de antes falla en checkout *detached*).
+  Tests: unit (`valida_nombres_de_paquete`) + 4 de integración offline (`registry_cli`: nombre malicioso
+  directo/transitivo, publish con working tree sucio + consumidor verde, hash del índice manipulado corta la
+  resolución con mensaje claro, índice re-cacheado al cambiar la spec).
+
 ### 54.6 Testing (offline y determinista, como M39c)
 
 El índice de prueba es un **repo git local** servido por `file://` (`git init` + archivos `index/*.toml` +
@@ -6759,4 +6785,10 @@ resolución en el front-end/CLI; los motores nunca ven un paquete.
 ### 54.7 Diferido (fuera de M51)
 
 Búsqueda/UI web del índice; cuentas y **firmas de publicación** (estilo sigstore) sobre el hash ya existente;
-mirrors/proxy; *namespaces* con dueño; `ray.lock` con el propio índice como fuente (hoy fija el commit git).
+mirrors/proxy; *namespaces* con dueño; `ray.lock` con el propio índice como fuente (hoy fija el commit git);
+`ray remove`/`ray search`. **Límites conocidos de v1** (documentados en la revisión de jul 2026): (a) las
+**pre-releases** (`1.0.0-rc1`) no son publicables (el semver de requisitos no las modela; el de refs git las
+recorta); (b) **índice único**: una dep transitiva por nombre se resuelve contra el índice del CONSUMIDOR, no
+el de su autor — con índices privados mezclados, el mismo nombre puede resolver distinto (*dependency
+confusion*); mitiga el lock (fija URL+hash) y la verificación del hash del índice (M51d); (c) el **check
+semántico** del paquete al publicar (solo lexer+parser; el check completo exigiría resolver sus deps).

@@ -153,6 +153,11 @@ pub fn is_registry_spec(spec: &str) -> bool {
 /// Lee el archivo de índice de `name` (`<index_dir>/<name>.toml`) y devuelve sus versiones. Error
 /// si el paquete no está en el índice. Ignora entradas sin `git` (malformadas) con un error claro.
 pub fn read_package(index_dir: &Path, name: &str) -> Result<Vec<IndexEntry>, String> {
+    // M51d: el nombre construye una ruta dentro del índice — validarlo (defensa en profundidad;
+    // `deps::ensure` ya validó las deps, pero esta API también la llaman los comandos directamente).
+    if !deps::valid_package_name(name) {
+        return Err(format!("nombre de paquete inválido '{name}' (solo letras, dígitos, '-' y '_')"));
+    }
     let path = index_dir.join(format!("{name}.toml"));
     let source = std::fs::read_to_string(&path).map_err(|_| {
         format!("el paquete '{name}' no está en el índice ({})", index_dir.display())
@@ -225,27 +230,30 @@ pub fn latest(index_dir: &Path, name: &str) -> Result<String, String> {
 /// Resuelve `name` con el requisito `req` contra el índice → la `GitSpec` de la versión **más alta
 /// no retirada** que lo satisface. Error si el paquete no existe o ninguna versión casa.
 pub fn resolve(index_dir: &Path, name: &str, req: &str) -> Result<GitSpec, String> {
-    resolve_pinned(index_dir, name, req, None, true)
+    resolve_pinned(index_dir, name, req, None, true).map(|(spec, _)| spec)
 }
 
 /// Como `resolve`, pero **respeta el lock** (M51c): si `locked` (la versión ya bloqueada de `name`)
 /// sigue satisfaciendo `req` y no se pide `update`, la reusa —build reproducible: un caret no sube
 /// solo porque el índice gane una versión—. Con `update = true` o sin lock válido, re-resuelve la
-/// más alta del índice.
+/// más alta del índice. Devuelve también el **hash publicado** de la versión elegida (M51d): el
+/// llamador lo verifica contra el contenido descargado — el índice pasa de "descubrimiento" a raíz
+/// de confianza (cierra el TOFU del lock, que confía en la primera descarga). `None` en el atajo del
+/// lock (ya verificado en su primera descarga) o si el índice no publicó hash.
 pub fn resolve_pinned(
     index_dir: &Path,
     name: &str,
     req: &str,
     locked: Option<&GitSpec>,
     update: bool,
-) -> Result<GitSpec, String> {
+) -> Result<(GitSpec, Option<String>), String> {
     let req_parsed = VersionReq::parse(req)?;
     if !update
         && let Some(l) = locked
         && let Some(v) = deps::semver(&l.git_ref)
         && req_parsed.matches(v)
     {
-        return Ok(l.clone()); // el lock sigue satisfaciendo el requisito → reproducible
+        return Ok((l.clone(), None)); // el lock sigue satisfaciendo el requisito → reproducible
     }
     let mut versions = read_package(index_dir, name)?;
     versions.retain(|e| !e.yanked && req_parsed.matches(e.version));
@@ -253,15 +261,19 @@ pub fn resolve_pinned(
     let chosen = versions.last().ok_or_else(|| {
         format!("ninguna versión de '{name}' satisface '{req}' en el índice")
     })?;
-    deps::parse_spec(&chosen.git).map_err(|e| {
+    let spec = deps::parse_spec(&chosen.git).map_err(|e| {
         format!("la versión '{}' de '{name}' tiene una spec git inválida en el índice: {e}", chosen.num)
-    })
+    })?;
+    Ok((spec, chosen.hash.clone()))
 }
 
 /// Marca (o desmarca) como **retirada** (`yanked`) la versión `num` de `name` en el índice (M51c,
 /// `ray yank`). Una versión retirada no se elige en nuevas resoluciones, pero un lock que ya la fijó
 /// la sigue usando (no rompe builds existentes). Edición mínima línea a línea (preserva el resto).
 pub fn set_yanked(index_dir: &Path, name: &str, num: &str, yanked: bool) -> Result<(), String> {
+    if !deps::valid_package_name(name) {
+        return Err(format!("nombre de paquete inválido '{name}' (solo letras, dígitos, '-' y '_')"));
+    }
     let (target, _) = parse_partial(num).map_err(|e| format!("versión inválida: {e}"))?;
     let path = index_dir.join(format!("{name}.toml"));
     let source = std::fs::read_to_string(&path)
@@ -306,6 +318,9 @@ pub fn append_version(
     git: &str,
     hash: Option<&str>,
 ) -> Result<(), String> {
+    if !deps::valid_package_name(name) {
+        return Err(format!("nombre de paquete inválido '{name}' (solo letras, dígitos, '-' y '_')"));
+    }
     let (target, _) = parse_partial(num).map_err(|e| format!("versión a publicar inválida: {e}"))?;
     let path = index_dir.join(format!("{name}.toml"));
     if path.exists() {

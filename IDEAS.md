@@ -469,7 +469,12 @@ ortogonal y se añade después sobre el mismo índice git).
 - **`ray.toml` por nombre**: `foo = "1.2.0"` (sin prefijo `git+`/`path:`) → resuelve por el índice.
 - **Subcomandos**: `ray add`, `ray publish` (valida+hashea+añade entrada inmutable), `ray update`, `ray yank`.
 - **Prereq**: rangos semver de verdad (diferido de M39c; el índice mapea un nombre a muchas versiones).
-- **Fases**: 51a leer índice + `ray add` + rangos · 51b `ray publish` · 51c índice remoto + `update`/`yank`.
+- **Fases**: 51a leer índice + `ray add` + rangos · 51b `ray publish` · 51c índice remoto + `update`/`yank`
+  · **51d endurecimiento** ✅ (revisión jul 2026, DESIGN §54.5): nombres de paquete validados (un nombre
+  `../../x` de una transitiva no confiable escapaba de la caché), el **hash del índice se verifica** al
+  descargar (antes era decorativo; cierra el TOFU del lock → el índice es raíz de confianza), `ray publish`
+  valida+hashea el **tag** publicado (no el working tree), e índice remoto pinneado que se re-clona si su
+  spec cambia (antes quedaba obsoleto en silencio).
 
 **Impacto**: **medio-alto en adopción, cero en runtime y en el lenguaje** — es CLI + resolución en el
 front-end; los motores nunca ven un paquete. Es aditivo (git/`path:` siguen). Diferido: UI/búsqueda web,

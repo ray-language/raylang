@@ -534,6 +534,31 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
 
 ---
 
+## 15. Cliente MongoDB — M54, PLAN
+
+Análisis de factibilidad (jul 2026): **raylang puro, tier 2** (`packages/db/mongo.ray`), cero cambios
+de compilador salvo el habilitador de bits de float (M54.1a, ya hecho). Punto fuerte de partida: la
+autenticación de MongoDB moderno es **SCRAM-SHA-256 vía SASL** (`saslStart`/`saslContinue`) — el mismo
+mecanismo que ya usa `db/postgres` → `net/scram` se reusa tal cual. El wire (**OP_MSG**: cabecera 16
+bytes LE + flags + un documento BSON) es más simple que el de MySQL.
+
+- **Superficie elegida**: `enum Bson` recursivo (no JSON strings: no hay parser JSON en el ecosistema
+  y JSON pierde tipos — int64/double/ObjectId/binario). Un puente JSON queda como fase posterior si el
+  ecosistema lo pide.
+- **Cuidados fijados**: `_id` lo asigna el **servidor** (generar ObjectId en cliente exige
+  aleatoriedad+tiempo → rompería el determinismo de los tests); `find` v1 usa `firstBatch` (cursores
+  `getMore` diferidos); sin compresión (`OP_COMPRESSED` diferido); comando `hello` moderno.
+- **Fases**: **M54.1** ✅ **COMPLETO** (DESIGN §56.1: (a) builtins `__float_bits`/`__float_from_bits`
+  + `float_bits`/`float_from_bits` en std/math — habilitador del double IEEE 754, sirve también a
+  protobuf; (b) `packages/db/bson.ray`: `enum Bson` (Double/Str/Doc/Arr/Bin/ObjectId/Bool/Null/Int) +
+  `encode`/`decode` con errores como valores + `dump`; oráculo `tests/bson_cli.rs` contra los vectores
+  canónicos de bsonspec.org + round-trip exacto) · **M54.2** conexión: OP_MSG + `hello` + auth SCRAM
+  (toy server con constantes precomputadas, patrón postgres) · **M54.3** CRUD
+  `insert`/`find`/`update`/`delete` + oráculo ambos motores + demo en `examples/db`.
+- **Impacto**: todo aditivo; BSON es el grueso (comparable al protobuf de M25 en naturaleza).
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

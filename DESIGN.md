@@ -6960,3 +6960,47 @@ consulta con parámetro + transacción con ROLLBACK + error SQL como valor + uso
 caso de ruta inválida (abrir un directorio → `Result.Err`). Demo autónomo `examples/db/sqlite_demo.ray`
 (corre sin servidor). **M53 COMPLETO**: los tres clientes (MySQL wire, PostgreSQL extendido, SQLite
 embebido) con API uniforme. Diferido: tipos nativos (celdas no-texto), `last_insert_rowid`, modo WAL.
+
+## 56. M54 — Cliente MongoDB (`packages/db/mongo`)
+
+Plan y factibilidad en IDEAS.md §15. Resumen: raylang puro (tier 2), auth = **SCRAM-SHA-256 vía SASL**
+(reusa `net/scram`, como Postgres), wire = **OP_MSG** (cabecera 16 bytes LE + flags + un documento
+BSON). La pieza central es BSON (§56.1). Superficie: `enum Bson` recursivo (no JSON strings — no hay
+parser JSON en el ecosistema y JSON pierde tipos). `_id` lo asigna el servidor (determinismo de los
+tests); `find` v1 = `firstBatch`.
+
+### 56.1 M54.1 — BSON. ✅ COMPLETO
+
+**(a) Habilitador — bits de float** (los primeros builtins nuevos tras M53): `__float_bits(float) ->
+int` / `__float_from_bits(int) -> float` (opcodes `FloatBits`/`FloatFromBits`; el f64 de Rust en ambos
+motores → oráculo `float_bits_oraculo`), expuestos como `math.float_bits`/`math.float_from_bits` en
+std/math. Totales (cualquier patrón de bits es un f64 válido). Los pedía el `double` de BSON —
+obligatorio para un cliente: el propio servidor responde `{ ok: 1.0 }` como double — y sirven a
+cualquier formato binario con doubles (protobuf).
+
+**(b) `packages/db/bson.ray`** — codificador/decodificador del formato de documentos de MongoDB
+(bsonspec.org), raylang puro:
+
+- **Representación**: `enum Bson { Double, Str, Doc([Field]), Arr([Bson]), Bin(bytes),
+  ObjectId(bytes), Bool, Null, Int }` + `struct Field { name, value }` + azúcar `field(name, v)`.
+  Recursivo vía el heap (`[Field]`/`[Bson]`).
+- **`Int` único**: codifica como int64 (0x12) y decodifica **ambos** (int32 0x10 e int64) a `Int` —
+  el int de raylang es i64. La fidelidad de round-trip es semántica, no de octetos.
+- **`encode(doc) -> bytes`**: documentos anidados por composición (`enc_doc` devuelve `[int]`); un
+  arreglo ES un documento con claves `"0"`, `"1"`, … (spec). `ObjectId` con longitud ≠ 12 = error del
+  programador → `panic`.
+- **`decode(bytes) -> Result<[Field], string>`**: errores como valores con la **posición del octeto**
+  (truncado, longitudes inválidas, string sin terminador, UTF-8 malo, tipo no soportado, datos
+  sobrantes). Cursor `struct Dec` mutado por referencia. **Gotcha aritmético**: un int64 LE no se arma
+  con `b[7] << 56` (desbordaría el i64) → por mitades `hi (int32 con signo) * 2^32 + lo` (exacto y
+  total); el int32 con signo se corrige restando 2^32.
+- **`dump`/`dump_doc`**: repr JSON-ish determinista (para depuración y el oráculo de los tests).
+
+**Verificación** (`tests/bson_cli.rs`, sin servidor): la codificación de `{"hello": "world"}`
+reproduce **byte a byte** el vector canónico de bsonspec.org; el segundo vector del spec
+(`{"BSON": ["awesome", 5.05, 1986]}`, double + int32) se decodifica; round-trip **exacto en octetos**
+de todos los tipos v1 (anidados, negativos, UTF-8 multi-byte, int64 > 2^53); errores como valores.
+Ambos motores, mismo stdout. Diferido: Date/Timestamp/Regex/Decimal128 (error claro al decodificar;
+se añadirán cuando el cliente los necesite).
+
+Siguiente: **M54.2** (conexión: OP_MSG + `hello` + auth SCRAM con toy server) → **M54.3** (CRUD + demo).

@@ -1,0 +1,391 @@
+// BSON (M54.1) — el formato de documentos de MongoDB (bsonspec.org), en raylang puro.
+//
+// Un documento BSON es: [longitud total: int32 LE][elementos…][0x00], y cada elemento es
+// [tipo: 1 octeto][nombre: cstring][valor]. La representación en raylang es el enum recursivo
+// `Bson` + `Field` (nombre → valor); la superficie es `encode(doc) -> bytes` y
+// `decode(bytes) -> Result<[Field], string>` (errores como valores, con la posición del octeto).
+//
+// Decisiones v1 (plan M54, IDEAS §15):
+//   - `Int` único: se CODIFICA como int64 (0x12) y se DECODIFICAN ambos (int32 0x10 e int64) a
+//     `Int` — el int de raylang es i64; el servidor acepta int64 donde acepta int32. La fidelidad
+//     de round-trip es semántica, no de octetos.
+//   - `Double` usa los bits IEEE 754 (`float_bits`/`float_from_bits` de std/math, M54.1a). Es
+//     obligatorio para un cliente: el propio servidor responde `{ ok: 1.0 }` como double.
+//   - `Bin` decodifica cualquier subtipo (se descarta) y codifica subtipo 0 (genérico).
+//   - Tipos no soportados (Date, Regex, Decimal128, …) → error claro al decodificar; se añadirán
+//     cuando el cliente los necesite (Date probablemente en M54.2+).
+//
+// Gramática (recordatorios): el enum recursivo va por el heap ([Field]/[Bson]); los enteros LE
+// se arman por mitades de 32 bits (b7<<56 desbordaría i64; hi*2^32+lo es exacto y total).
+
+import std/math;
+
+/// A BSON value. `Doc` and `Arr` are recursive; `ObjectId` carries the raw 12 bytes.
+pub enum Bson {
+    Double(float),
+    Str(string),
+    Doc([Field]),
+    Arr([Bson]),
+    Bin(bytes),
+    ObjectId(bytes),
+    Bool(bool),
+    Null,
+    Int(int),
+}
+
+/// One element of a document: a name and its value.
+pub struct Field {
+    name: string,
+    value: Bson,
+}
+
+/// Builds a `Field` (sugar for the struct literal, reads better in call chains).
+pub fn field(name: string, value: Bson) -> Field {
+    Field { name: name, value: value }
+}
+
+// ── Codificación ─────────────────────────────────────────────────────────────
+
+// El octeto de tipo de cada variante (bsonspec.org §element).
+fn type_byte(v: Bson) -> int {
+    return match (v) {
+        Bson.Double(_) => 1,
+        Bson.Str(_) => 2,
+        Bson.Doc(_) => 3,
+        Bson.Arr(_) => 4,
+        Bson.Bin(_) => 5,
+        Bson.ObjectId(_) => 7,
+        Bson.Bool(_) => 8,
+        Bson.Null => 10,
+        Bson.Int(_) => 18,
+    };
+}
+
+fn enc_le32(out: [int], n: int) {
+    out.push(n & 255);
+    out.push((n >> 8) & 255);
+    out.push((n >> 16) & 255);
+    out.push((n >> 24) & 255);
+}
+
+fn enc_le64(out: [int], n: int) {
+    var i = 0;
+    while (i < 8) {
+        out.push((n >> (8 * i)) & 255);
+        i = i + 1;
+    }
+}
+
+// Un cstring: los octetos UTF-8 + el terminador 0. (BSON prohíbe 0x00 dentro de un nombre;
+// no lo validamos: un nombre raylang legítimo no lo trae.)
+fn enc_cstring(out: [int], s: string) {
+    let bs = s.to_bytes();
+    var i = 0;
+    while (i < bs.len()) {
+        out.push(bs[i]);
+        i = i + 1;
+    }
+    out.push(0);
+}
+
+fn enc_bytes(out: [int], b: bytes) {
+    var i = 0;
+    while (i < b.len()) {
+        out.push(b[i]);
+        i = i + 1;
+    }
+}
+
+fn enc_value(out: [int], v: Bson) {
+    match (v) {
+        Bson.Double(f) => { enc_le64(out, math.float_bits(f)); },
+        Bson.Str(s) => {
+            // string: int32 (longitud en octetos + 1) + UTF-8 + 0x00.
+            let bs = s.to_bytes();
+            enc_le32(out, bs.len() + 1);
+            enc_bytes(out, bs);
+            out.push(0);
+        },
+        Bson.Doc(fields) => {
+            let inner = enc_doc(fields);
+            var i = 0;
+            while (i < inner.len()) { out.push(inner[i]); i = i + 1; }
+        },
+        Bson.Arr(items) => {
+            // Un arreglo ES un documento con claves "0", "1", … (así lo define el spec).
+            var fields: [Field] = [];
+            var i = 0;
+            while (i < items.len()) {
+                fields.push(Field { name: to_string(i), value: items[i] });
+                i = i + 1;
+            }
+            let inner = enc_doc(fields);
+            var j = 0;
+            while (j < inner.len()) { out.push(inner[j]); j = j + 1; }
+        },
+        Bson.Bin(b) => {
+            // binary: int32 longitud + subtipo (0 = genérico) + octetos.
+            enc_le32(out, b.len());
+            out.push(0);
+            enc_bytes(out, b);
+        },
+        Bson.ObjectId(b) => {
+            // 12 octetos exactos; menos/más es un error del programador, no un dato → panic.
+            if (b.len() != 12) {
+                panic("ObjectId debe tener 12 octetos, tiene " + to_string(b.len()));
+            }
+            enc_bytes(out, b);
+        },
+        Bson.Bool(x) => { out.push(if (x) { 1 } else { 0 }); },
+        Bson.Null => {},
+        Bson.Int(n) => { enc_le64(out, n); },
+    }
+}
+
+// Codifica un documento completo como [int] (para anidar sin re-copiar bytes).
+fn enc_doc(fields: [Field]) -> [int] {
+    var body: [int] = [];
+    var i = 0;
+    while (i < fields.len()) {
+        let f = fields[i];
+        body.push(type_byte(f.value));
+        enc_cstring(body, f.name);
+        enc_value(body, f.value);
+        i = i + 1;
+    }
+    // longitud total = 4 (la propia longitud) + cuerpo + 1 (el 0x00 final).
+    var out: [int] = [];
+    enc_le32(out, body.len() + 5);
+    var j = 0;
+    while (j < body.len()) { out.push(body[j]); j = j + 1; }
+    out.push(0);
+    out
+}
+
+/// Encodes a document (a list of fields) as BSON bytes.
+pub fn encode(fields: [Field]) -> bytes {
+    bytes_of(enc_doc(fields))
+}
+
+// ── Decodificación ───────────────────────────────────────────────────────────
+
+// El cursor de lectura; se muta por referencia (semántica de referencia de structs).
+struct Dec {
+    b: bytes,
+    pos: int,
+}
+
+fn dec_err(msg: string, pos: int) -> string {
+    "BSON inválido (octeto " + to_string(pos) + "): " + msg
+}
+
+fn rd_u8(d: Dec) -> Result<int, string> {
+    if (d.pos >= d.b.len()) {
+        return Result.Err(dec_err("fin de datos inesperado", d.pos));
+    }
+    let v = d.b[d.pos];
+    d.pos = d.pos + 1;
+    Result.Ok(v)
+}
+
+fn rd_exact(d: Dec, n: int) -> Result<bytes, string> {
+    if (d.pos + n > d.b.len()) {
+        return Result.Err(dec_err("fin de datos inesperado (faltan " + to_string(n) + " octetos)", d.pos));
+    }
+    let out = d.b.sub_bytes(d.pos, d.pos + n);
+    d.pos = d.pos + n;
+    Result.Ok(out)
+}
+
+// int32 LE con signo (complemento a dos).
+fn rd_le32(d: Dec) -> Result<int, string> {
+    let bs = rd_exact(d, 4)?;
+    var v = bs[0] | (bs[1] << 8) | (bs[2] << 16) | (bs[3] << 24);
+    if (v >= 2147483648) {
+        v = v - 4294967296;
+    }
+    Result.Ok(v)
+}
+
+// int64 LE con signo. Por mitades: hi (int32 con signo) * 2^32 + lo (sin signo) es exacto y
+// total; armarlo con b[7] << 56 desbordaría el i64.
+fn rd_le64(d: Dec) -> Result<int, string> {
+    let bs = rd_exact(d, 8)?;
+    let lo = bs[0] | (bs[1] << 8) | (bs[2] << 16) | (bs[3] << 24);
+    var hi = bs[4] | (bs[5] << 8) | (bs[6] << 16) | (bs[7] << 24);
+    if (hi >= 2147483648) {
+        hi = hi - 4294967296;
+    }
+    Result.Ok(hi * 4294967296 + lo)
+}
+
+// cstring: octetos hasta el 0x00 (excluido), decodificados como UTF-8.
+fn rd_cstring(d: Dec) -> Result<string, string> {
+    var end = d.pos;
+    while (end < d.b.len() && d.b[end] != 0) {
+        end = end + 1;
+    }
+    if (end >= d.b.len()) {
+        return Result.Err(dec_err("cstring sin terminador", d.pos));
+    }
+    let raw = d.b.sub_bytes(d.pos, end);
+    d.pos = end + 1;
+    return match (from_utf8(raw)) {
+        Result.Ok(s) => Result.Ok(s),
+        Result.Err(_) => Result.Err(dec_err("cstring no es UTF-8 válido", d.pos)),
+    };
+}
+
+fn rd_string(d: Dec) -> Result<string, string> {
+    let start = d.pos;
+    let n = rd_le32(d)?;
+    if (n < 1) {
+        return Result.Err(dec_err("longitud de string inválida: " + to_string(n), start));
+    }
+    let raw = rd_exact(d, n)?;
+    if (raw[n - 1] != 0) {
+        return Result.Err(dec_err("string sin terminador 0x00", start));
+    }
+    return match (from_utf8(raw.sub_bytes(0, n - 1))) {
+        Result.Ok(s) => Result.Ok(s),
+        Result.Err(_) => Result.Err(dec_err("string no es UTF-8 válido", start)),
+    };
+}
+
+fn rd_value(d: Dec, t: int) -> Result<Bson, string> {
+    if (t == 1) {
+        let bits = rd_le64(d)?;
+        return Result.Ok(Bson.Double(math.float_from_bits(bits)));
+    }
+    if (t == 2) {
+        let s = rd_string(d)?;
+        return Result.Ok(Bson.Str(s));
+    }
+    if (t == 3) {
+        let fields = rd_doc(d)?;
+        return Result.Ok(Bson.Doc(fields));
+    }
+    if (t == 4) {
+        // Un arreglo llega como documento con claves "0", "1", …: se descartan los nombres
+        // (el spec exige ese orden; confiamos en el emisor, como los drivers oficiales).
+        let fields = rd_doc(d)?;
+        var items: [Bson] = [];
+        var i = 0;
+        while (i < fields.len()) {
+            items.push(fields[i].value);
+            i = i + 1;
+        }
+        return Result.Ok(Bson.Arr(items));
+    }
+    if (t == 5) {
+        let start = d.pos;
+        let n = rd_le32(d)?;
+        if (n < 0) {
+            return Result.Err(dec_err("longitud de binario negativa", start));
+        }
+        let _subtype = rd_u8(d)?;
+        let raw = rd_exact(d, n)?;
+        return Result.Ok(Bson.Bin(raw));
+    }
+    if (t == 7) {
+        let raw = rd_exact(d, 12)?;
+        return Result.Ok(Bson.ObjectId(raw));
+    }
+    if (t == 8) {
+        let v = rd_u8(d)?;
+        return Result.Ok(Bson.Bool(v != 0));
+    }
+    if (t == 10) {
+        return Result.Ok(Bson.Null);
+    }
+    if (t == 16) {
+        let v = rd_le32(d)?;
+        return Result.Ok(Bson.Int(v));
+    }
+    if (t == 18) {
+        let v = rd_le64(d)?;
+        return Result.Ok(Bson.Int(v));
+    }
+    Result.Err(dec_err("tipo BSON no soportado: " + to_string(t), d.pos - 1))
+}
+
+fn rd_doc(d: Dec) -> Result<[Field], string> {
+    let start = d.pos;
+    let total = rd_le32(d)?;
+    if (total < 5 || start + total > d.b.len()) {
+        return Result.Err(dec_err("longitud de documento inválida: " + to_string(total), start));
+    }
+    let end = start + total;
+    var fields: [Field] = [];
+    while (d.pos < end - 1) {
+        let t = rd_u8(d)?;
+        let name = rd_cstring(d)?;
+        let v = rd_value(d, t)?;
+        fields.push(Field { name: name, value: v });
+    }
+    let term = rd_u8(d)?;
+    if (term != 0) {
+        return Result.Err(dec_err("documento sin el 0x00 final", end - 1));
+    }
+    Result.Ok(fields)
+}
+
+/// Decodes BSON bytes into a document. Fails as a value (`Result.Err` with the byte offset)
+/// on truncated data, bad lengths, or unsupported types.
+pub fn decode(b: bytes) -> Result<[Field], string> {
+    var d = Dec { b: b, pos: 0 };
+    let fields = rd_doc(d)?;
+    if (d.pos != b.len()) {
+        return Result.Err(dec_err("datos sobrantes tras el documento", d.pos));
+    }
+    Result.Ok(fields)
+}
+
+// ── Volcado para depuración/tests ────────────────────────────────────────────
+
+fn hex_of(b: bytes) -> string {
+    let digits = "0123456789abcdef";
+    var s = "";
+    var i = 0;
+    while (i < b.len()) {
+        s = s + to_string(digits[b[i] >> 4]) + to_string(digits[b[i] & 15]);
+        i = i + 1;
+    }
+    s
+}
+
+/// Renders a value as compact JSON-ish text (deterministic; used by the tests' oracle).
+pub fn dump(v: Bson) -> string {
+    return match (v) {
+        Bson.Double(f) => to_string(f),
+        Bson.Str(s) => "\"" + s + "\"",
+        Bson.Doc(fields) => dump_doc(fields),
+        Bson.Arr(items) => {
+            var s = "[";
+            var i = 0;
+            while (i < items.len()) {
+                if (i > 0) { s = s + ", "; }
+                s = s + dump(items[i]);
+                i = i + 1;
+            }
+            s + "]"
+        },
+        Bson.Bin(b) => "bin(" + hex_of(b) + ")",
+        Bson.ObjectId(b) => "oid(" + hex_of(b) + ")",
+        Bson.Bool(x) => to_string(x),
+        Bson.Null => "null",
+        Bson.Int(n) => to_string(n),
+    };
+}
+
+/// Renders a whole document (see `dump`).
+pub fn dump_doc(fields: [Field]) -> string {
+    var s = "{";
+    var i = 0;
+    while (i < fields.len()) {
+        if (i > 0) { s = s + ", "; }
+        s = s + fields[i].name + ": " + dump(fields[i].value);
+        i = i + 1;
+    }
+    s + "}"
+}

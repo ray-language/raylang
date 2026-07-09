@@ -122,6 +122,27 @@ fn main() -> int {
   crash: el ciclo prepare→step→finalize ocurre entero dentro del host, un statement nunca escapa).
 - **No disponible en el playground web** (wasm no compila la librería C).
 
+### `db/bson` (M54.1)
+
+**BSON** (el formato de documentos de MongoDB, bsonspec.org) en raylang puro — la base del cliente
+MongoDB (M54, en curso). `enum Bson` recursivo (`Double`/`Str`/`Doc`/`Arr`/`Bin`/`ObjectId`/`Bool`/
+`Null`/`Int`) + `encode(doc) -> bytes` y `decode(bytes) -> Result<[Field], string>` (errores como
+valores, con la posición del octeto) + `dump` (repr JSON-ish para depurar).
+
+```raylang
+import db/bson;
+
+let doc = [bson.field("hello", bson.Bson.Str("world"))];
+let b = bson.encode(doc);                     // los bytes del vector canónico del spec
+match (bson.decode(b)) {
+    Result.Ok(fields) => { print(bson.dump_doc(fields)); },  // {hello: "world"}
+    Result.Err(e) => { print(e); },
+}
+```
+
+`Int` codifica como int64 y decodifica int32 e int64 (el int de raylang es i64). `Double` usa los
+bits IEEE 754 (`math.float_bits`, M54.1a). Diferido: Date/Timestamp/Regex/Decimal128 (error claro).
+
 ## Verificación
 
 `tests/mysql_cli.rs`: el cliente corre contra un **servidor MySQL de juguete** (Rust std, TCP

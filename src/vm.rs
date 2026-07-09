@@ -5811,6 +5811,26 @@ mod tests {
     }
 
     #[test]
+    fn print_uint_oraculo() {
+        // jul 2026: print/eprint/to_string aceptan u8/u32/u64 (decimal sin signo, mismo Display en
+        // ambos motores). Incluye la interpolación (desazucara a to_string) y el borde de u64 alto.
+        oracle_program(r#"
+            fn main() -> int {
+                let a: u8 = 200;
+                let b: u32 = 4294967295;
+                var c: u64 = 0;
+                c = c - 1; // wrapping → u64::MAX (el literal no cabe en el lexer, que vive en i64)
+                print(a);
+                print(b);
+                print(c);
+                let s = "${a}-${b}";
+                print(s);
+                if (to_string(a) == "200" && s == "200-4294967295") { 7 } else { -1 }
+            }
+        "#);
+    }
+
+    #[test]
     fn char_from_code_oraculo() {
         // Diferido JSON-1: char_from_code es el char::from_u32 de Rust en ambos motores. Válidos
         // (ASCII, multi-byte, astral) e inválidos (surrogate, fuera de rango, negativo, enorme —

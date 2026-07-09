@@ -196,7 +196,7 @@ print(7 as float);      // 7
 print('A' as int);      // 65  (code point)
 print(66 as char);      // 'B' (valida el code point)
 let w = 300 as u8;      // 44  (enmascara al ancho)
-print(w as int);        // los u8/u32/u64 se imprimen casteados a int
+print(w);               // los u8/u32/u64 se imprimen directo (decimal sin signo)
 ```
 
 ### Sobrecarga de operadores

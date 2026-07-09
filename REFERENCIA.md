@@ -150,9 +150,9 @@ uses; cada uno tiene su envoltorio público en el prelude o en `std/`.
 
 | Función | Firma | Descripción |
 |---|---|---|
-| `print` | `(valor) -> unit` | imprime a stdout + salto de línea (int, float, bool, string, char, bytes→hex, arreglos, tipos con `Show`; los `u*` casteados a int) |
+| `print` | `(valor) -> unit` | imprime a stdout + salto de línea (int, float, bool, string, char, u\*, bytes→hex, arreglos, tipos con `Show`) |
 | `eprint` | `(valor) -> unit` | como `print`, a stderr |
-| `to_string` | `(valor) -> string` | representación textual (misma que `print`) |
+| `to_string` | `(valor) -> string` | representación textual (misma que `print`): int/float/bool/string/char/bytes/u\* |
 | `panic` | `(msg: string) -> unit` | aborta el programa con el mensaje y la posición; para invariantes rotas, no para errores esperables |
 | `args` | `() -> [string]` | argumentos de línea de comandos (tras la ruta del programa) |
 

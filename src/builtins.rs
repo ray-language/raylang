@@ -1326,6 +1326,7 @@ fn printable(t: &Type) -> bool {
         Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Array(_)
             | Type::Struct(_, _) | Type::Fn(_, _) | Type::Enum(_, _) | Type::Var(_)
             | Type::Bytes // diferido de M16: se imprime en hexadecimal (ver `bytes_to_hex`)
+            | Type::UInt(_) // jul 2026: decimal sin signo (ambos motores ya lo formateaban; la SPEC §10 lo prometía)
     )
 }
 
@@ -1384,8 +1385,8 @@ static BUILTINS: &[Builtin] = &[
     // to_string(x) -> string (M11.1a): representación textual de un primitivo imprimible.
     Builtin { name: "to_string", opcode: OpCode::ToString, check: |a| {
         arity(a, 1, "to_string", "")?;
-        if !matches!(a[0], Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes) {
-            return Err((Some(0), format!("to_string solo convierte int/float/bool/string/char/bytes, no {}", a[0])));
+        if !matches!(a[0], Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes | Type::UInt(_)) {
+            return Err((Some(0), format!("to_string solo convierte int/float/bool/string/char/bytes/u*, no {}", a[0])));
         }
         Ok(Type::String)
     } },

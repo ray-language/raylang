@@ -27,13 +27,13 @@ fn main() -> int {
         Result.Ok(conn) => conn,
         Result.Err(e) => { print(e); return 1; },
     };
-    match (mysql.query(c, "SELECT nombre, nota FROM alumnos")) {
+    match (mysql.query(c, "SELECT nombre, nota FROM alumnos WHERE nota > ?", ["5"])) {
         Result.Ok(rows) => {
             for fila in rows { print(fila.join(" | ")); }
         },
         Result.Err(e) => { print(e); },
     }
-    match (mysql.exec(c, "UPDATE alumnos SET nota = 10")) {
+    match (mysql.exec(c, "UPDATE alumnos SET nota = 10", [])) {
         Result.Ok(n) => { print("afectadas: " + to_string(n)); },
         Result.Err(e) => { print(e); },
     }
@@ -43,8 +43,8 @@ fn main() -> int {
 ```
 
 - **API**: `connect(host, port, user, password, database) -> Result<Conn, string>` ·
-  `query(c, sql) -> Result<[[string]], string>` (filas como texto; `NULL` → `""`) ·
-  `exec(c, sql) -> Result<int, string>` (filas afectadas) · `disconnect(c)`.
+  `query(c, sql, params) -> Result<[[string]], string>` (filas como texto; `NULL` → `""`) ·
+  `exec(c, sql, params) -> Result<int, string>` (filas afectadas) · `disconnect(c)`.
 - **Auth**: `mysql_native_password` (completa) y `caching_sha2_password` — el **fast-path** por
   cualquier conexión, y el **full-path** vía `connect_tls` (la contraseña en claro viaja solo
   dentro del canal cifrado). Con `connect` plano y caché fría, error claro con el remedio.
@@ -154,7 +154,8 @@ match (bson.decode(b)) {
 ```
 
 `Int` codifica como int64 y decodifica int32 e int64 (el int de raylang es i64). `Double` usa los
-bits IEEE 754 (`math.float_bits`, M54.1a). Diferido: Date/Timestamp/Regex/Decimal128 (error claro).
+bits IEEE 754 (`math.float_bits`, M54.1a). `Date` (epoch-ms; `dump` = ISO 8601) y `Timestamp`
+(interno) soportados. Diferido: Regex/Decimal128 (error claro al decodificar).
 
 **Puente JSON** (sobre `std/json`): `doc_from_json(s) -> Result<[Field], string>` — la ruta
 ergonómica para filtros (`mongo.find(c, coll, bson.doc_from_json("{\"nombre\": \"ada\"}")?)`) —,

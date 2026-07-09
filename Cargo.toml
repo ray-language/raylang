@@ -46,3 +46,9 @@ ring = "0.17"
 # `bundled` compila SQLite dentro del binario → cero dependencia del sistema, versión determinista.
 # El wrapper de usuario vive en `packages/db/sqlite.ray` sobre los primitivos `__sqlite_*`.
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Perfil release: `strip` reduce el binario (~6.5 MB → menos símbolos que cargar/pagear en el
+# arranque). Los backtraces de release ya no eran simbólicos (sin debug info); el ICE banner y
+# los diagnósticos no dependen de símbolos.
+[profile.release]
+strip = "symbols"

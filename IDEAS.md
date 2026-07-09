@@ -394,6 +394,18 @@ bloquea nada y se hace de forma incremental, midiendo con `benchmarks/`.
     (Opt.1/2/4/7) ya están exprimidas. El salto restante sería algorítmico (locales en la pila estilo clox,
     reducir el coste de llamada/GC), refactor grande de ROI decreciente. **M29.3 cerrado** con el dedup + este
     registro. La VM sigue a ~3.2× del intérprete.
+- **Opt.11 — ARRANQUE (jul 2026)**: benchmark del usuario (hyperfine hello-world vs 7 lenguajes de
+  scripting) situó a `ray run` en 3.9 ms (3.º tras lua 1.6/perl 2.7, por delante de bun/python/node).
+  Desglose medido: piso del binario 1.9 ms + pipeline 2.3 ms, TODO el pipeline dentro de `check()`.
+  **Bug real encontrado**: los accessors de `src/prelude.rs` (`enums()`/`structs()`/`functions()`/
+  `traits()`/`impls()`) re-lexeaban y re-parseaban el prelude ENTERO cada uno → **5 parses completos
+  por check** (en cada arranque del CLI y en cada tecleo del LSP). Fix: un solo parse cacheado en
+  `OnceLock` + accessors que clonan (−0.85 ms). Más `strip = "symbols"` en el perfil release (6.5→5.8
+  MB). **Resultado: 3.9 → 3.0 ms** (−23 %; pipeline 2.3→1.2 ms). El LSP gana lo mismo por tecleo.
+  Reparto restante del pipeline: prepare ~540 µs (clonado del prelude + mangling de impls) +
+  check_program ~365 µs + bajadas/compile ~230 µs — reducirlo más exigiría un prelude pre-chequeado
+  compartido (arquitectural, ROI decreciente). El piso (1.8 ms vs 0.9 de `/usr/bin/true`) es dyld/init
+  de un binario de 5.8 MB (lua es ~300 KB); achicarlo = quitar rusqlite bundled, no vale la pena.
 - **REGRESIÓN detectada (revisión jul 2026, `measure.py` mejor-de-15): arrays +38 % / gcnested +39 %**
   (fib/loop intactos). **Bisecada a M48.4** (builtins de contenedor → métodos de trait): `a.push(i)`/`a.len()`
   ya no bajan al opcode directo (`Push`/`Len`) sino al método del trait (`impl<T> Push<T> for [T]`), cuyo

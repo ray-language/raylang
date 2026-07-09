@@ -727,34 +727,39 @@ fn from_utf8(b: bytes) -> Result<string, string> {
 
 "#;
 
-/// Parsea el prelude una vez. El `expect` no puede fallar: el fuente es una constante
-/// conocida y válida.
-fn parse() -> crate::ast::Program {
-    let tokens = crate::lexer::lex(SOURCE).unwrap_or_else(|e| crate::ice!("el prelude no lexea: {e}"));
-    crate::parser::parse(tokens).unwrap_or_else(|e| crate::ice!("el prelude no parsea: {e}"))
+/// Parsea el prelude UNA vez por proceso y cachea el AST (antes, cada accessor re-lexeaba y
+/// re-parseaba el fuente entero → 5 pasadas completas por `check()`, en cada arranque del CLI y
+/// en cada tecleo del LSP). Los accessors CLONAN del caché: clonar el AST es mucho más barato
+/// que re-parsearlo, y los llamadores necesitan copias propias (las mutan al inyectar).
+fn parsed() -> &'static crate::ast::Program {
+    static P: std::sync::OnceLock<crate::ast::Program> = std::sync::OnceLock::new();
+    P.get_or_init(|| {
+        let tokens = crate::lexer::lex(SOURCE).unwrap_or_else(|e| crate::ice!("el prelude no lexea: {e}"));
+        crate::parser::parse(tokens).unwrap_or_else(|e| crate::ice!("el prelude no parsea: {e}"))
+    })
 }
 
 /// Los enums del prelude (`Option`/`Result`), ya parseados.
 pub fn enums() -> Vec<EnumDef> {
-    parse().enums
+    parsed().enums.clone()
 }
 
 /// Los structs del prelude (`ArrayIter`/`RangeIter` para `.iter()`/`range`, M40.2b), ya parseados.
 pub fn structs() -> Vec<StructDef> {
-    parse().structs
+    parsed().structs.clone()
 }
 
 /// Las funciones del prelude (`map`/`filter`/`fold`), ya parseadas.
 pub fn functions() -> Vec<Function> {
-    parse().functions
+    parsed().functions.clone()
 }
 
 /// Los traits del prelude (`Eq`/`Show`/`Ord`), ya parseados (M10.1).
 pub fn traits() -> Vec<TraitDef> {
-    parse().traits
+    parsed().traits.clone()
 }
 
 /// Los `impl` del prelude (M11.7d: `Ord` para int/float/string/char), ya parseados.
 pub fn impls() -> Vec<crate::ast::ImplBlock> {
-    parse().impls
+    parsed().impls.clone()
 }

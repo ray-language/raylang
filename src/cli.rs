@@ -956,6 +956,8 @@ fn run_file(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u
     runtime::set_program_args(prog_args);
     let (mut program, locate, multi) = load_and_locate(path);
     check_or_exit(&mut program, &locate, multi);
+    if std::env::var("RAYLANG_TIME").is_ok() {
+    }
 
     // Backend: VM por defecto (M35, el motor de producto), intérprete con `--interp`.
     // M35b: el intérprete solo está si la feature `interp` está activa; una release mínima

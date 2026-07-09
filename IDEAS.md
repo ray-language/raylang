@@ -559,8 +559,24 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
   **COMPLETO** (DESIGN §56.3: `insert`/`find` (firstBatch)/`update` ($set explícito)/`delete` sobre
   `run_command`; filtros = documentos BSON → anti-inyección por construcción; toy server extendido +
   demo `examples/db/mongo_demo.ray`). **M54 COMPLETO** (el paquete `db` cubre los 4: MySQL, PostgreSQL,
-  SQLite, MongoDB). Diferidos restantes: Date/Timestamp/Decimal128, batchSize/killCursors, TLS CERRADO (tls_upgrade §57 + Postgres §57.1 + MySQL full-path §57.2) (getMore ✅ DESIGN §56.5; puente Json↔Bson ✅ §16).
+  SQLite, MongoDB). Post-M54 cerrados: getMore ✅ (DESIGN §56.5), puente Json↔Bson ✅ (§16), y el
+  hilo TLS COMPLETO ✅ (primitivo `tls_upgrade` §57 + `postgres.connect_tls` §57.1 +
+  `mysql.connect_tls` con full-path de caching_sha2 §57.2).
 - **Impacto**: todo aditivo; BSON es el grueso (comparable al protobuf de M25 en naturaleza).
+- **Diferidos del arco DB** (consolidado, jul 2026 — ninguno bloquea; el paquete `db` está
+  funcionalmente completo para los 4 motores, con transporte cifrado donde importa):
+  - **MySQL**: protocolo binario (prepared statements / parámetros / tipos — hoy solo COM_QUERY
+    texto → sin anti-inyección por binding, a diferencia de postgres/mongo/sqlite); full-path de
+    caching_sha2 **sin** TLS (intercambio de clave pública RSA; con `connect_tls` disponible pierde
+    casi todo el sentido).
+  - **Postgres**: parámetros binarios/tipados, sentencias preparadas con estado (hoy anónimas, una
+    por ronda), COPY, `sslmode` negociable estilo libpq (hoy: `connect` = nunca TLS /
+    `connect_tls` = obligatorio).
+  - **SQLite**: `last_insert_rowid`, modo WAL, tipos nativos (celdas no-texto).
+  - **MongoDB**: tipos BSON Date/Timestamp/Decimal128 (error claro al decodificar), `batchSize`
+    configurable + `killCursors` (abandonar un cursor a medias), compresión OP_COMPRESSED,
+    Mongo-sobre-TLS (trivial: `tls_connect` desde el arranque, no STARTTLS), Extended JSON
+    riguroso ($oid/$numberLong) en el puente (§16).
 
 ---
 

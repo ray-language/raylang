@@ -19,6 +19,7 @@
 // se arman por mitades de 32 bits (b7<<56 desbordaría i64; hi*2^32+lo es exacto y total).
 
 import std/math;
+from std/json import Json, parse;
 
 /// A BSON value. `Doc` and `Arr` are recursive; `ObjectId` carries the raw 12 bytes.
 pub enum Bson {
@@ -351,6 +352,100 @@ pub fn decode(b: bytes) -> Result<[Field], string> {
         return Result.Err(dec_err("datos sobrantes tras el documento", d.pos));
     }
     Result.Ok(fields)
+}
+
+// ── Puente Json ↔ Bson (diferido JSON-2) ─────────────────────────────────────
+//
+// La ergonomía de "armo mi filtro como string JSON" sin perder la fidelidad del enum. La
+// degradación es EXPLÍCITA y solo en la dirección Bson → Json (JSON no puede representar
+// ObjectId/Bin/int64): ver `to_json`.
+
+/// Converts a JSON value to BSON. JSON numbers become `Double` (JSON has a single number type;
+/// MongoDB compares ints and doubles numerically, so filters still match). Object keys come out
+/// sorted (Json objects are Maps).
+pub fn from_json(j: Json) -> Bson {
+    return match (j) {
+        Json.JNull => Bson.Null,
+        Json.JBool(b) => Bson.Bool(b),
+        Json.JNum(f) => Bson.Double(f),
+        Json.JStr(s) => Bson.Str(s),
+        Json.JArray(items) => {
+            var out: [Bson] = [];
+            var i = 0;
+            while (i < items.len()) {
+                out.push(from_json(items[i]));
+                i = i + 1;
+            }
+            Bson.Arr(out)
+        },
+        Json.JObject(m) => {
+            var fields: [Field] = [];
+            let ks = m.keys();
+            var i = 0;
+            while (i < ks.len()) {
+                match (m.get(ks[i])) {
+                    Option.Some(v) => { fields.push(Field { name: ks[i], value: from_json(v) }); },
+                    Option.None => {},
+                }
+                i = i + 1;
+            }
+            Bson.Doc(fields)
+        },
+    };
+}
+
+/// Parses a JSON string straight into a BSON document — the ergonomic path for filters:
+/// `mongo.find(c, coll, bson.doc_from_json("{\"nombre\": \"ada\"}")?)`. The top-level JSON
+/// value must be an object.
+pub fn doc_from_json(s: string) -> Result<[Field], string> {
+    let j = parse(s)?;
+    return match (from_json(j)) {
+        Bson.Doc(fields) => Result.Ok(fields),
+        _ => Result.Err("el JSON de un documento debe ser un objeto"),
+    };
+}
+
+// int → float vía texto (exacto hasta 2^53; más allá redondea, la degradación documentada).
+fn int_to_float(n: int) -> float {
+    return match (parse_float(to_string(n))) {
+        Option.Some(f) => f,
+        Option.None => 0.0,
+    };
+}
+
+/// Converts BSON to JSON, with documented degradation (JSON is the smaller type system):
+/// `Int` becomes a JSON number (precision loss beyond 2^53), `ObjectId` and `Bin` become hex
+/// strings, and `Doc` field order is lost (Json objects are Maps → keys sorted on output).
+pub fn to_json(v: Bson) -> Json {
+    return match (v) {
+        Bson.Double(f) => Json.JNum(f),
+        Bson.Str(s) => Json.JStr(s),
+        Bson.Doc(fields) => Json.JObject(json_obj_of(fields)),
+        Bson.Arr(items) => {
+            var out: [Json] = [];
+            var i = 0;
+            while (i < items.len()) {
+                out.push(to_json(items[i]));
+                i = i + 1;
+            }
+            Json.JArray(out)
+        },
+        Bson.Bin(b) => Json.JStr(hex_of(b)),
+        Bson.ObjectId(b) => Json.JStr(hex_of(b)),
+        Bson.Bool(x) => Json.JBool(x),
+        Bson.Null => Json.JNull,
+        Bson.Int(n) => Json.JNum(int_to_float(n)),
+    };
+}
+
+fn json_obj_of(fields: [Field]) -> Map<string, Json> {
+    var m: Map<string, Json> = Map.new();
+    var i = 0;
+    while (i < fields.len()) {
+        m.insert(fields[i].name, to_json(fields[i].value));
+        i = i + 1;
+    }
+    m
 }
 
 // ── Volcado para depuración/tests ────────────────────────────────────────────

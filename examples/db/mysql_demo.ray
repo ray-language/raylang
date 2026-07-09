@@ -30,7 +30,7 @@ fn main() -> int {
     print("conectado a MySQL en " + host + ":" + to_string(port));
 
     // 2. Consultar (protocolo de texto; las filas llegan como strings, un NULL como "").
-    match (mysql.query(c, "SELECT id, nombre FROM users ORDER BY id LIMIT 5")) {
+    match (mysql.query(c, "SELECT id, nombre FROM usuarios ORDER BY id LIMIT 5")) {
         Result.Ok(rows) => {
             print("usuarios (" + to_string(rows.len()) + "):");
             for fila in rows {
@@ -41,7 +41,7 @@ fn main() -> int {
     }
 
     // 3. Insertar (sentencia sin filas → nº de filas afectadas).
-    match (mysql.exec(c, "INSERT INTO users (nombre) VALUES ('ada')")) {
+    match (mysql.exec(c, "INSERT INTO usuarios (nombre) VALUES ('ada')")) {
         Result.Ok(n) => { print("filas insertadas: " + to_string(n)); },
         Result.Err(e) => { print("error en el insert: " + e); },
     }

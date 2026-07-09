@@ -130,6 +130,67 @@ rt: true\n\
 trunc: BSON inválido (octeto 0): longitud de documento inválida: 49\n\
 tipo: BSON inválido (octeto 6): tipo BSON no soportado: 14\n";
 
+fn proyecto_puente(base: &std::path::Path) -> std::path::PathBuf {
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(
+        app.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ndb = \"path:{}\"\n",
+            db.display()
+        ),
+    )
+    .unwrap();
+    let main = r#"import db/bson;
+from std/json import stringify;
+
+fn main() -> int {
+    // JSON string → documento BSON (la ruta ergonómica para filtros de mongo).
+    match (bson.doc_from_json("{\"nombre\": \"ada\", \"nota\": 36, \"tags\": [\"a\", null, true]}")) {
+        Result.Ok(fields) => { print("from: " + bson.dump_doc(fields)); },
+        Result.Err(e) => { print("err: " + e); },
+    }
+    // Un escape \uXXXX del JSON llega como el carácter (diferido JSON-1 compone con el puente).
+    match (bson.doc_from_json("{\"s\": \"caf\\u00e9\"}")) {
+        Result.Ok(fields) => { print("uni: " + bson.dump_doc(fields)); },
+        Result.Err(e) => { print("err: " + e); },
+    }
+    // No-objeto en el tope y JSON malformado → errores como valores.
+    match (bson.doc_from_json("[1, 2]")) {
+        Result.Ok(_) => { print("no debería"); },
+        Result.Err(e) => { print("tope: " + e); },
+    }
+    // Bson → Json con degradación documentada: Int → número, ObjectId → hex, claves ordenadas.
+    let doc = [
+        bson.field("n", bson.Bson.Int(42)),
+        bson.field("id", bson.Bson.ObjectId(bytes_of([0,1,2,3,4,5,6,7,8,9,10,11]))),
+        bson.field("sub", bson.Bson.Doc([bson.field("ok", bson.Bson.Double(1.0))])),
+    ];
+    print("to: " + stringify(bson.to_json(bson.Bson.Doc(doc))));
+    0
+}
+"#;
+    std::fs::write(app.join("src/main.ray"), main).unwrap();
+    app
+}
+
+const ESPERADO_PUENTE: &str = "from: {nombre: \"ada\", nota: 36, tags: [\"a\", null, true]}\n\
+uni: {s: \"café\"}\n\
+tope: el JSON de un documento debe ser un objeto\n\
+to: {\"id\":\"000102030405060708090a0b\",\"n\":42,\"sub\":{\"ok\":1}}\n";
+
+#[test]
+fn bson_puente_json() {
+    let base = std::env::temp_dir().join("ray_bson_cli_json");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let app = proyecto_puente(&base);
+
+    assert_eq!(correr(&app, &[]), ESPERADO_PUENTE, "VM");
+    assert_eq!(correr(&app, &["--interp"]), ESPERADO_PUENTE, "intérprete");
+}
+
 #[test]
 fn bson_vectores_del_spec_roundtrip_y_errores() {
     let base = std::env::temp_dir().join("ray_bson_cli");

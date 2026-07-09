@@ -7053,3 +7053,21 @@ la colección `no_existe` (error del servidor como valor). Ambos motores, mismo 
 `examples/db/mongo_demo.ray`. **M54 COMPLETO**: el paquete `db` cubre MySQL (wire), PostgreSQL
 (extendido), SQLite (embebido) y MongoDB (documental). Diferido: `getMore`/cursores, tipos BSON
 Date/Timestamp/Decimal128, `char_from_code`+`\uXXXX` y puente Json↔Bson (IDEAS §16), TLS.
+
+### 56.4 Diferidos JSON (IDEAS §16) — `\uXXXX` + puente Json↔Bson. ✅ COMPLETOS
+
+**(a) Escapes `\uXXXX` en `std/json`.** La causa raíz era un hueco del lenguaje: existía `char_code`
+(M40.3a) pero no su inverso. Nuevo primitivo `__char_from_code(int) -> [char]` (opcode
+`CharFromCode`; `[]` si no es un code point válido — surrogates o fuera de [0, 10FFFF]; **guard de
+rango contra el wrap del cast a u32**: 2^32+65 NO es 'A') + envoltorio `char_from_code ->
+Option<char>` en el prelude. `std/json` parsea `\uXXXX` con **pares surrogate** para los astrales y
+errores como valores (surrogate suelto, par incompleto, dígito no hex). Oráculo
+`char_from_code_oraculo` + `escapes_unicode` en `tests/json_cli.rs`.
+
+**(b) Puente Json↔Bson en `db/bson`** (sobre `std/json`, que SÍ existía — M15.4a, embebido):
+`from_json` (número JSON → `Double`; claves ordenadas, el objeto es Map), `to_json` (degradación
+EXPLÍCITA, JSON es el sistema de tipos menor: `Int` → número con pérdida > 2^53, `ObjectId`/`Bin` →
+hex, orden de campos perdido) y `doc_from_json(s) -> Result<[Field], string>` — la ruta ergonómica
+para filtros: `mongo.find(c, coll, bson.doc_from_json("{\"nombre\": \"ada\"}")?)`, con el tope
+obligado a objeto. Test `bson_puente_json` (compone con los escapes: `"café"` → `café`).
+Diferido: Extended JSON riguroso ($oid/$numberLong).

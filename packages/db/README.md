@@ -143,6 +143,11 @@ match (bson.decode(b)) {
 `Int` codifica como int64 y decodifica int32 e int64 (el int de raylang es i64). `Double` usa los
 bits IEEE 754 (`math.float_bits`, M54.1a). Diferido: Date/Timestamp/Regex/Decimal128 (error claro).
 
+**Puente JSON** (sobre `std/json`): `doc_from_json(s) -> Result<[Field], string>` — la ruta
+ergonómica para filtros (`mongo.find(c, coll, bson.doc_from_json("{\"nombre\": \"ada\"}")?)`) —,
+`from_json(Json) -> Bson` y `to_json(Bson) -> Json` (degradación documentada: `Int` → número JSON
+con pérdida > 2^53, `ObjectId`/`Bin` → hex, orden de campos perdido).
+
 ### `db/mongo` (M54)
 
 Cliente MongoDB en raylang puro sobre `db/bson`: framing **OP_MSG** (opCode 2013),

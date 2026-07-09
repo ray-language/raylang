@@ -579,10 +579,13 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
   APIs web; importa para un puente con BSON (abajo). Cambiarlo rompería a los usuarios del enum →
   decidir solo si el puente lo exige.
 - **Menores**: sin pretty-print (solo compacto); sin helpers de acceso (navegar es a `match` puro).
-- **Puente `Json ↔ Bson`** (fase posterior de M54, opcional): `bson.from_json`/`bson.to_json`
-  (~40 líneas con `std/json` existente) — ergonomía de "filtro como string JSON" sin perder la
-  fidelidad del enum `Bson` (ObjectId/Bin/int64 no son representables en JSON → to_json degrada
-  documentado, estilo Extended JSON si se quiere rigor).
+- ✅ **Puente `Json ↔ Bson`** — CERRADO (jul 2026): `bson.from_json` (número JSON → `Double`; las
+  claves salen ordenadas, el objeto es Map), `bson.to_json` (degradación documentada: `Int` →
+  número con pérdida > 2^53, `ObjectId`/`Bin` → hex, orden de campos perdido) y **`doc_from_json(s)
+  -> Result<[Field], string>`** — la ruta ergonómica para filtros de mongo (`mongo.find(c, coll,
+  bson.doc_from_json("{...}")?)`); el tope debe ser un objeto. Test `bson_puente_json` (compone con
+  los escapes `\uXXXX`). Diferido: Extended JSON riguroso ($oid/$numberLong) si algún consumidor lo
+  exige.
 
 ---
 

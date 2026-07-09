@@ -543,6 +543,16 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
   útil para APIs C con dobles punteros (`f(&handle)`); superficie por decidir (retorno extra en tupla
   vs. slot explícito `out ptr`). Sin fecha: hacerla cuando aparezca la **segunda** librería C que la
   necesite, con un caso de uso real guiando el diseño (SQLite ya no la necesita).
+- **Diferido — FFI v2 con `libffi`** (análisis jul 2026, tras la revisión del FFI): el crate `libffi`
+  construye el *call frame* en runtime para CUALQUIER firma → mataría el catálogo combinatorio de
+  moldes (aridad libre, structs por valor) y su API de **closures** permitiría pasar closures de
+  raylang como callbacks a C (qsort, event loops) — la carencia grande real. Costo: `libffi-sys`
+  compila la libffi de C con autotools (build más frágil que rusqlite, molesto en MSVC). Mismo
+  gatillo que los out-params: la segunda librería C real. Endurecimiento ya hecho (jul 2026): carga
+  migrada a `libloading` (arregla Windows: dlopen no existía en MSVC → el binario no linkeaba) +
+  catálogo de aridad 3 completado (faltaban 5 de 8 combinaciones). Pendiente conocido: las
+  **variádicas** (printf) transmutan "bien" pero son UB en arm64 (la ABI difiere) — sin detección
+  posible desde la firma; documentado como fuera de contrato.
 
 ---
 

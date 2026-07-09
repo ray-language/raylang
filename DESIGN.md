@@ -7197,3 +7197,22 @@ Tres cierres pequeños de la lista consolidada de IDEAS §15:
   la sesión entera (hello + SCRAM + comandos) corre sin cambios sobre el canal (refactor: `connect`/
   `connect_tls` → `session(handle, …)`). Toy server TLS (rustls desde el accept) + find cifrado,
   ambos motores. Con esto los TRES clientes de red del paquete tienen su variante TLS.
+
+## 58. Endurecimiento del FFI (jul 2026) — libloading + catálogo completo
+
+Revisión del FFI de M41 bajo el foco de producción. Dos arreglos y un plan:
+
+- **Carga → `libloading`** (dep nueva, política post-giro): los `dlopen`/`dlsym` declarados a mano
+  no existían en Windows/MSVC — y como `ffi::call` se compila en todo target no-wasm, **el binario
+  de Windows del workflow de release (nunca ejecutado aún) no habría linkeado**. `libloading` es
+  puro Rust sobre las APIs de plataforma (dlopen/LoadLibrary), con los mensajes de error reales del
+  loader. La caché pasa a `&'static libloading::Library` (Box::leak: las librerías viven todo el
+  proceso, los punteros a símbolos que retiene la VM lo exigen); el fallback al handle global del
+  proceso usa `os::{unix,windows}::Library::this()`. Se añade el patrón de nombre `*.dll`.
+- **Catálogo de aridad 3 completado**: cubría `[I,I,I]`, `[I,I,F]` y `[F,F,F]` — un
+  `extern fn f(float, int, int)` legítimo caía en "firma no soportada". Ahora las 8 combinaciones.
+  La LLAMADA sigue con el catálogo de moldes propio (transmute a `extern "C" fn` concreto por
+  firma): sound, probado por el oráculo, suficiente para los consumidores actuales.
+- **FFI v2 (anotado en IDEAS §14, sin fecha)**: `libffi` cuando aparezca la segunda librería C real
+  — aridad libre, structs por valor y **callbacks** (closures de raylang como punteros a función C).
+  Pendiente conocido documentado: variádicas (printf) son UB en arm64; indetectable desde la firma.

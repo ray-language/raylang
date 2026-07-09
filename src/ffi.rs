@@ -12,34 +12,22 @@
 //! (documentada): la mayoría de las APIs C útiles caen en unas pocas formas. M41.1 cubre **primitivos**
 //! (int/float/bool) con aridad 0..=3; `bytes`/punteros llegan en M41.2+.
 //!
-//! `dlopen`/`dlsym` se declaran a mano como `unsafe extern "C"` (patrón de `src/poll.rs`, sin traer el
-//! crate `libc`). El handle de cada librería se cachea. Un nombre de librería (`"m"`) se resuelve al
-//! archivo de plataforma (`libm.dylib`/`libm.so`) y, si falla, al **handle global** del proceso
-//! (`dlopen(NULL)`), donde ya viven libc/libm enlazadas por el propio binario.
+//! La **carga** de librerías va por `libloading` (endurecimiento jul 2026; antes `dlopen`/`dlsym`
+//! declarados a mano, que no existían en Windows/MSVC → el binario no linkeaba allí): puro Rust
+//! sobre las APIs de plataforma (dlopen en Unix, LoadLibrary en Windows), con los mensajes de error
+//! reales del loader. El handle de cada librería se cachea. Un nombre de librería (`"m"`) se
+//! resuelve al archivo de plataforma (`libm.dylib`/`libm.so`/`m.dll`) y, si falla, al **handle
+//! global** del proceso, donde ya viven libc/libm enlazadas por el propio binario.
 
-// M44a: estos imports solo los usa la maquinaria `dlopen` (cfg(not wasm)); en wasm quedarían sin usar.
+// M44a: estos imports solo los usa la maquinaria de carga (cfg(not wasm)); en wasm quedarían sin usar.
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::ffi::c_void;
 #[cfg(not(target_arch = "wasm32"))]
-use std::os::raw::{c_char, c_int};
+use std::os::raw::c_char;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
-
-// --- Declaraciones C crudas (como poll.rs; cero deps de Cargo) ---
-// SAFETY: las firmas coinciden con las de `<dlfcn.h>` (`void *dlopen(const char*, int)`,
-// `void *dlsym(void*, const char*)`), presentes en libc en Linux/macOS. No las llamamos con datos
-// inválidos (los punteros vienen de `CString`s vivas; ver `open_lib`/`resolve_symbol`).
-// M44a: `dlopen`/`dlsym` no existen en `wasm32` (no hay carga dinámica en el navegador) → el FFI entero
-// (esta declaración + `open_lib`/`resolve_symbol`/`call`) es cfg(not wasm); `call` tiene un stub de wasm.
-#[cfg(not(target_arch = "wasm32"))]
-unsafe extern "C" {
-    fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-}
-#[cfg(not(target_arch = "wasm32"))]
-const RTLD_NOW: c_int = 2; // resolución inmediata (igual en Linux y macOS)
 
 /// La clase de un valor en la frontera FFI. `Bool` se marshala como entero C (`int`), pero se
 /// conserva aparte para reconstruir un `bool` de raylang al volver. `Unit` solo como retorno (void).
@@ -236,20 +224,13 @@ fn int_return(desc: &ExternDesc, raw: i64) -> FfiRet {
     }
 }
 
-// Caché de handles de librería abiertos (por nombre corto). El puntero es opaco y válido durante toda
-// la vida del proceso; se comparte entre hilos tras el Mutex (nunca se cierra: las libs viven siempre).
+// Caché de librerías abiertas (por nombre corto). `libloading::Library` es Send+Sync; NUNCA se
+// dropea (fuga deliberada: las librerías —y los punteros a sus símbolos, que la VM puede retener—
+// viven toda la ejecución).
 #[cfg(not(target_arch = "wasm32"))]
-struct Handle(*mut c_void);
-// SAFETY: un handle de `dlopen` es un recurso GLOBAL del proceso; `dlsym` sobre él es thread-safe y
-// nosotros NUNCA desreferenciamos el puntero (solo lo pasamos de vuelta a `dlsym`). Compartirlo entre
-// hilos (tras el `Mutex` de `handles()`) es por tanto seguro, aunque `*mut c_void` no sea `Send` por
-// defecto. No se hace `dlclose` (fuga deliberada: las librerías viven toda la ejecución).
-#[cfg(not(target_arch = "wasm32"))]
-unsafe impl Send for Handle {}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn handles() -> &'static Mutex<HashMap<String, Handle>> {
-    static HANDLES: std::sync::OnceLock<Mutex<HashMap<String, Handle>>> = std::sync::OnceLock::new();
+fn handles() -> &'static Mutex<HashMap<String, &'static libloading::Library>> {
+    static HANDLES: std::sync::OnceLock<Mutex<HashMap<String, &'static libloading::Library>>> =
+        std::sync::OnceLock::new();
     HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -258,50 +239,67 @@ fn handles() -> &'static Mutex<HashMap<String, Handle>> {
 fn lib_filenames(short: &str) -> Vec<String> {
     if cfg!(target_os = "macos") {
         vec![format!("lib{short}.dylib"), format!("{short}.dylib"), short.to_string()]
+    } else if cfg!(target_os = "windows") {
+        vec![format!("{short}.dll"), format!("lib{short}.dll"), short.to_string()]
     } else {
         vec![format!("lib{short}.so"), format!("lib{short}.so.6"), short.to_string()]
+    }
+}
+
+// La librería que representa el PROPIO proceso (símbolos ya enlazados: libc/libm). Es el fallback
+// cuando el nombre corto no resuelve a un archivo.
+#[cfg(not(target_arch = "wasm32"))]
+fn this_process() -> Result<libloading::Library, String> {
+    #[cfg(unix)]
+    {
+        Ok(libloading::os::unix::Library::this().into())
+    }
+    #[cfg(windows)]
+    {
+        libloading::os::windows::Library::this().map(Into::into).map_err(|e| e.to_string())
     }
 }
 
 // Abre (o recupera de caché) el handle de la librería `lib`. Prueba los nombres de plataforma y, si
 // ninguno resuelve, cae al **handle global** del proceso (`dlopen(NULL)`), donde están libc/libm.
 #[cfg(not(target_arch = "wasm32"))]
-fn open_lib(lib: &str) -> Result<*mut c_void, String> {
+fn open_lib(lib: &str) -> Result<&'static libloading::Library, String> {
     let mut map = handles().lock().unwrap();
-    if let Some(h) = map.get(lib) {
-        return Ok(h.0);
+    if let Some(l) = map.get(lib) {
+        return Ok(l);
     }
-    let mut handle = std::ptr::null_mut();
+    let mut opened: Option<libloading::Library> = None;
     for name in lib_filenames(lib) {
-        if let Ok(c) = std::ffi::CString::new(name) {
-            let h = unsafe { dlopen(c.as_ptr(), RTLD_NOW) };
-            if !h.is_null() {
-                handle = h;
-                break;
-            }
+        // SAFETY: cargar una librería puede ejecutar sus inicializadores; es el contrato del FFI
+        // (declarar la extern fn es el acto consciente de abrir la puerta).
+        if let Ok(l) = unsafe { libloading::Library::new(&name) } {
+            opened = Some(l);
+            break;
         }
     }
-    if handle.is_null() {
+    let l = match opened {
+        Some(l) => l,
         // Handle global del proceso: símbolos ya cargados (libc/libm que enlaza el propio binario).
-        handle = unsafe { dlopen(std::ptr::null(), RTLD_NOW) };
-    }
-    if handle.is_null() {
-        return Err(format!("no se pudo cargar la librería '{lib}'"));
-    }
-    map.insert(lib.to_string(), Handle(handle));
-    Ok(handle)
+        None => this_process().map_err(|e| format!("no se pudo cargar la librería '{lib}': {e}"))?,
+    };
+    // La librería vive para siempre (los punteros a símbolos que retiene la VM lo exigen).
+    let l: &'static libloading::Library = Box::leak(Box::new(l));
+    map.insert(lib.to_string(), l);
+    Ok(l)
 }
 
 // Resuelve el puntero de un símbolo en una librería.
 #[cfg(not(target_arch = "wasm32"))]
 fn resolve_symbol(lib: &str, symbol: &str) -> Result<*mut c_void, String> {
-    let handle = open_lib(lib)?;
-    let c = std::ffi::CString::new(symbol).map_err(|_| format!("símbolo inválido '{symbol}'"))?;
-    let sym = unsafe { dlsym(handle, c.as_ptr()) };
-    if sym.is_null() {
-        return Err(format!("no se encontró el símbolo '{symbol}' en la librería '{lib}'"));
-    }
-    Ok(sym)
+    let library = open_lib(lib)?;
+    // SAFETY: pedimos el símbolo como puntero crudo y lo interpretará el catálogo de moldes según la
+    // firma DECLARADA — el mismo contrato de confianza de siempre. La librería es 'static (leak).
+    let sym: libloading::Symbol<'static, *mut c_void> = unsafe {
+        library
+            .get(symbol.as_bytes())
+            .map_err(|e| format!("no se encontró el símbolo '{symbol}' en la librería '{lib}': {e}"))?
+    };
+    Ok(*sym)
 }
 
 /// Llama a la función externa descrita por `desc` con `args` (ya convertidos por el motor). Resuelve
@@ -362,8 +360,15 @@ pub fn call(desc: &ExternDesc, args: &[FfiVal]) -> Result<FfiRet, String> {
         [I, F] => dispatch!((i64, f64), (i(0), f(1))),
         [F, I] => dispatch!((f64, i64), (f(0), i(1))),
         [F, F] => dispatch!((f64, f64), (f(0), f(1))),
+        // Aridad 3: las 8 combinaciones (endurecimiento jul 2026 — faltaban 5 y un
+        // `extern fn f(float, int, int)` legítimo caía en "no soportada").
         [I, I, I] => dispatch!((i64, i64, i64), (i(0), i(1), i(2))),
         [I, I, F] => dispatch!((i64, i64, f64), (i(0), i(1), f(2))),
+        [I, F, I] => dispatch!((i64, f64, i64), (i(0), f(1), i(2))),
+        [I, F, F] => dispatch!((i64, f64, f64), (i(0), f(1), f(2))),
+        [F, I, I] => dispatch!((f64, i64, i64), (f(0), i(1), i(2))),
+        [F, I, F] => dispatch!((f64, i64, f64), (f(0), i(1), f(2))),
+        [F, F, I] => dispatch!((f64, f64, i64), (f(0), f(1), i(2))),
         [F, F, F] => dispatch!((f64, f64, f64), (f(0), f(1), f(2))),
         _ => return Err(format!(
             "la firma de '{}' no está en el catálogo FFI soportado (int/u64/float/bool/puntero, aridad 0..=3)",

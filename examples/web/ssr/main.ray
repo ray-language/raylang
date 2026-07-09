@@ -1,0 +1,60 @@
+// Demo de SSR (server-side rendering) con TEMPLATES COMPILADOS (M55): el servidor web del paquete
+// `net` sirve una página renderizada por la función que `ray templ` generó desde
+// `vistas/vista_inicio.ray.html` — parámetros TIPADOS (un typo en el template no compila) y cero
+// parseo en runtime.
+//
+// La página se construye A PARTIR DE LA PETICIÓN: `/` saluda genérico; `/lang/<nombre>` saluda a ese
+// lenguaje y marca los "populares". Nota de diseño: raylang usa actores de HEAP AISLADO — cada
+// conexión corre en su propia fibra sin estado mutable compartido; por eso el handler es una función
+// PURA de la petición (lo idiomático para SSR), no un contador global.
+//
+// Uso (el .ray generado está commiteado; regenera con `ray templ vistas/` si tocas el .ray.html):
+//   cd examples/web/ssr
+//   ray run                                  # escucha en el puerto 8080
+//   curl http://127.0.0.1:8080/
+//   curl http://127.0.0.1:8080/lang/rust
+
+import net/webserver;
+import vistas/vista_inicio;
+
+// El último segmento de la ruta ("/lang/rust" -> "rust"; "/" -> "").
+fn ultimo_segmento(path: string) -> string {
+    let partes = path.split("/");
+    partes[partes.len() - 1]
+}
+
+fn es_popular(lang: string) -> bool {
+    lang == "rust" || lang == "python" || lang == "javascript"
+}
+
+fn pagina(req: webserver.Request) -> webserver.Response {
+    if (req.path == "/") {
+        let html = vista_inicio.render_vista_inicio(
+            "raylang SSR",
+            "Elige un lenguaje: prueba /lang/rust",
+            false,
+            ["raylang", "rust", "lua", "python"]);
+        return webserver.text(200, html);
+    }
+    if (req.path.starts_with("/lang/")) {
+        let lang = ultimo_segmento(req.path);
+        let html = vista_inicio.render_vista_inicio(
+            "raylang SSR — " + lang,
+            "Estás viendo: " + lang,
+            es_popular(lang),
+            [lang]);
+        return webserver.text(200, html);
+    }
+    webserver.not_found()
+}
+
+fn main() -> int {
+    // El handler es una función pura de la petición (sin estado compartido entre fibras).
+    match (webserver.serve("127.0.0.1", 8080, pagina)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => {
+            eprint("servidor: " + e);
+            1
+        },
+    }
+}

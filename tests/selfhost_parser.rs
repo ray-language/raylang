@@ -737,7 +737,7 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
     // Los ejemplos viven en subdirectorios por categoría (basics/, types/, web/, …) → se recorre
     // `examples/` **recursivamente**. Se saltan los directorios de ejemplos de MÓDULOS (multi-archivo,
     // con fragmentos `mod.ray` no parseables sueltos), que prueba `modules_cli`.
-    const DIRS_EXCLUIDOS: &[&str] = &["capsula", "modulos", "proyecto"];
+    const DIRS_EXCLUIDOS: &[&str] = &["capsula", "modulos", "proyecto", "ssr"];
     fn recolectar(dir: &std::path::Path, fuera: &[&str], difer: &[&str], out: &mut Vec<String>) {
         let mut entradas: Vec<_> = std::fs::read_dir(dir).expect("lee dir").filter_map(|e| e.ok()).map(|e| e.path()).collect();
         entradas.sort();

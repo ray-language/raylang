@@ -6833,3 +6833,48 @@ nombre se resuelve contra el índice del CONSUMIDOR — M51e lo detecta y **avis
 un índice propio; mitigan el lock (URL+hash) y la verificación del hash del índice). Los otros límites de la
 revisión de jul 2026 quedaron cerrados: pre-releases (M51e), check semántico al publicar (M51e) y
 `ray remove`/`ray search` (M51f).
+
+## 55. M53 — Clientes de bases de datos (`packages/db`)
+
+Plan completo y análisis de factibilidad en IDEAS.md §14. Resumen: MySQL (raylang puro, protocolo wire),
+Postgres (evolución del cliente de `packages/net`) y SQLite (vía FFI a `libsqlite3`; exige los out-params
+de doble puntero, extensión M53.3 del FFI de M41). Ubicación: paquete **`packages/db`** (tier 2; SQLite no
+es red → no encaja en `net`), con API uniforme tipada-a-texto v1: `connect -> Result<Conn>`,
+`query(c, sql) -> Result<[[string]]>`, `exec(c, sql) -> Result<int>` y `disconnect(c)` (no `close`: dentro
+del módulo taparía al builtin global que cierra el socket).
+
+### 55.1 M53.1 — cliente MySQL. ✅ COMPLETO
+
+`packages/db/mysql.ray` habla el protocolo cliente/servidor clásico sobre los sockets de `std/net` y la
+cripto de `std/crypto` (SHA1/SHA256, respaldadas por `ring` desde M43):
+
+- **Framing**: paquetes `[longitud:3 LE][secuencia:1][carga]`, sobre un **búfer de lectura** en la `Conn`
+  (`fill`/`take`: los sockets entregan trozos arbitrarios; el framing exige cantidades exactas — el mismo
+  problema que resolvió `redis.ray` con `read_n`, aquí sobre `bytes`). La secuencia se resetea a 0 por
+  comando y se rastrea por paquete leído.
+- **Handshake v10**: se parsea versión/thread-id/capacidades y el **scramble en dos partes** (8 + 12
+  octetos); la respuesta declara `CLIENT_PROTOCOL_41 | SECURE_CONNECTION | PLUGIN_AUTH` (+
+  `CONNECT_WITH_DB` si hay esquema).
+- **Auth**: `mysql_native_password` completa (`SHA1(pass) XOR SHA1(scramble + SHA1(SHA1(pass)))`) y
+  `caching_sha2_password` en su **fast-path** (`SHA256(pass) XOR SHA256(SHA256(SHA256(pass)) + scramble)`;
+  vale con la contraseña ya cacheada en el servidor). Soporta **AuthSwitchRequest** (recomputa para el
+  plugin pedido). El **full-path** de caching_sha2 exige TLS *upgrade* a mitad de conexión (SSLRequest) y
+  `std/net` solo cifra desde el octeto 0 (`tls_connect`) → error claro con el remedio. Diferido: un
+  primitivo `__tls_upgrade(handle)` habilitaría el full-path (y STARTTLS en general).
+- **Consultas**: `COM_QUERY` (protocolo de texto). `query` parsea el result set clásico (columna-count
+  length-encoded, definiciones de columna, EOF, filas de lenc-strings con `0xfb` = NULL → `""`, EOF);
+  `exec` lee el paquete OK (filas afectadas como lenc-int). Errores `ERR` (`0xff`) → `Result.Err` con el
+  mensaje del servidor (saltando el sqlstate).
+- **Gotcha de gramática** (documentado en CLAUDE.md como el struct-literal-vs-bloque): un literal de
+  **tupla en posición de tail tras un `while`** se parsea como *llamada* al bloque (`while {…} (v, 9)`) →
+  `return (v, 9);` explícito.
+
+**Verificación** (`tests/mysql_cli.rs`, patrón de `postgres_cli.rs`): servidor MySQL **de juguete** en el
+test (Rust std, TCP plano, sin cripto: scramble fijo + respuesta de auth **precomputada** con python) que
+verifica la auth octeto a octeto, sirve un result set con NULL, un OK de `exec` (3 filas afectadas) y un
+`ERR`; el cliente corre por **ambos motores** con stdout idéntico (oráculo conductual), más el caso de
+contraseña incorrecta (ERR de acceso denegado visible y exit 1). **Diferido** (fases siguientes o futuras):
+protocolo binario (prepared statements/parámetros/tipos), TLS, multi-result sets, `caching_sha2` full-path.
+
+Siguiente: **M53.2** (Postgres v2: conexión persistente + protocolo extendido) y **M53.3/53.4** (FFI
+out-params + SQLite).

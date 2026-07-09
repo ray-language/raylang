@@ -509,7 +509,10 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
 - **Ubicación**: nuevo paquete **`packages/db`** (SQLite no encaja en `net`; API uniforme para los
   tres: `connect`/`query(conn, sql, params) -> Result<[[string]]>`/`exec`/`close`, tipado-a-texto v1).
   `db` → path-dep a `net` (scram); `net/postgres` se conserva (compat).
-- **Fases**: **M53.1** MySQL (toy server + `#[ignore]` contra server real) · **M53.2** Postgres v2
+- **Fases**: **M53.1** MySQL ✅ **COMPLETO** (DESIGN §55.1: `db/mysql.ray` — handshake v10 +
+  mysql_native_password completa + caching_sha2 fast-path + AuthSwitchRequest + COM_QUERY texto;
+  `connect/query/exec/disconnect`; toy server con auth precomputada + oráculo ambos motores en
+  `tests/mysql_cli.rs`) · **M53.2** Postgres v2
   (conexión persistente + protocolo extendido Parse/Bind/Execute → parámetros/anti-inyección +
   transacciones) · **M53.3** FFI out-params (cierra diferido de M41; superficie por decidir: retorno
   extra en tupla vs. slot explícito) · **M53.4** SQLite sobre M53.3 (test condicionado a libsqlite3;

@@ -1,0 +1,406 @@
+// Cliente MySQL (M53.1) — protocolo wire de MySQL sobre TCP, en raylang puro.
+//
+// Habla el protocolo cliente/servidor clásico (handshake v10 + COM_QUERY en protocolo de texto):
+//   - Framing: paquetes de [longitud:3 LE][secuencia:1][carga].
+//   - Auth: `mysql_native_password` (SHA1, completa) y `caching_sha2_password` SOLO en su
+//     fast-path (SHA256; vale cuando el servidor ya tiene la contraseña en caché). El full-path
+//     de caching_sha2 exige TLS *upgrade* a mitad de conexión (SSLRequest), que los sockets de
+//     `std/net` aún no ofrecen (`tls_connect` cifra desde el octeto 0) → error claro; el remedio
+//     es usar un usuario con `mysql_native_password` o calentar la caché con otro cliente.
+//   - Consultas: `COM_QUERY` (texto). Las filas llegan como strings (un NULL → ""); el protocolo
+//     binario (prepared statements / parámetros) queda diferido a una fase posterior.
+//
+// API (uniforme con el resto de `packages/db`): `connect` → `Conn`, `query` → filas
+// `[[string]]`, `exec` → filas afectadas, `disconnect` (no se llama `close` para no tapar,
+// dentro del módulo, al builtin global `close` que cierra el socket).
+
+import std/net;
+import std/crypto;
+
+/// Una conexión abierta: el socket, la secuencia de paquete en curso y el búfer de lectura
+/// (los sockets entregan trozos arbitrarios; el framing exige leer cantidades exactas).
+pub struct Conn {
+    sock: int,
+    seq: int,
+    buf: [int],
+    pos: int,
+}
+
+// ── Búfer de lectura: cantidades exactas sobre trozos arbitrarios ─────────────────────
+
+// Asegura que el búfer tenga al menos `need` octetos sin consumir (lee del socket si faltan).
+fn fill(c: Conn, need: int) -> Result<int, string> {
+    while (c.buf.len() - c.pos < need) {
+        let chunk = net.socket_read_bytes(c.sock)?;
+        if (chunk.len() == 0) {
+            return Result.Err("mysql: el servidor cerró la conexión");
+        }
+        var i = 0;
+        while (i < chunk.len()) {
+            c.buf.push(chunk[i]);
+            i = i + 1;
+        }
+    }
+    Result.Ok(0)
+}
+
+// Consume exactamente `n` octetos del búfer.
+fn take(c: Conn, n: int) -> Result<[int], string> {
+    let _ = fill(c, n)?;
+    var out: [int] = [];
+    var i = 0;
+    while (i < n) {
+        out.push(c.buf[c.pos + i]);
+        i = i + 1;
+    }
+    c.pos = c.pos + n;
+    Result.Ok(out)
+}
+
+// ── Framing de paquetes ────────────────────────────────────────────────────────────────
+
+// Lee un paquete completo: cabecera [len:3 LE][seq:1] + carga. Actualiza la secuencia esperada.
+fn read_packet(c: Conn) -> Result<[int], string> {
+    let hdr = take(c, 4)?;
+    let len = hdr[0] | hdr[1] << 8 | hdr[2] << 16;
+    c.seq = hdr[3] + 1;
+    take(c, len)
+}
+
+// Escribe un paquete con la secuencia en curso.
+fn write_packet(c: Conn, payload: [int]) -> Result<int, string> {
+    let len = payload.len();
+    let hdr = [len & 255, len >> 8 & 255, len >> 16 & 255, c.seq & 255];
+    c.seq = c.seq + 1;
+    net.socket_write_bytes(c.sock, bytes_of(hdr + payload))
+}
+
+// ── Primitivas del protocolo ───────────────────────────────────────────────────────────
+
+// Entero length-encoded en `p[i]`: (valor, octetos consumidos). 0xfb (NULL) lo trata el llamador.
+fn lenc_int(p: [int], i: int) -> (int, int) {
+    let b = p[i];
+    if (b < 251) {
+        return (b, 1);
+    }
+    if (b == 252) {
+        return (p[i + 1] | p[i + 2] << 8, 3);
+    }
+    if (b == 253) {
+        return (p[i + 1] | p[i + 2] << 8 | p[i + 3] << 16, 4);
+    }
+    // 254: 8 octetos LE.
+    var v = 0;
+    var k = 7;
+    while (k >= 0) {
+        v = v << 8 | p[i + 1 + k];
+        k = k - 1;
+    }
+    return (v, 9);
+}
+
+// String NUL-terminado en `p[i]`: (string, posición tras el NUL). Camino feliz: UTF-8 válido.
+fn nul_str(p: [int], i: int) -> (string, int) {
+    var out: [int] = [];
+    var j = i;
+    while (j < p.len() && p[j] != 0) {
+        out.push(p[j]);
+        j = j + 1;
+    }
+    let s = match (from_utf8(bytes_of(out))) {
+        Result.Ok(t) => t,
+        Result.Err(_) => "",
+    };
+    return (s, j + 1);
+}
+
+// XOR octeto a octeto de dos digests del mismo largo.
+fn xor_digest(a: bytes, b: bytes) -> [int] {
+    var out: [int] = [];
+    var i = 0;
+    while (i < a.len()) {
+        out.push(a[i] ^ b[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn bytes_to_ints(b: bytes) -> [int] {
+    var out: [int] = [];
+    var i = 0;
+    while (i < b.len()) {
+        out.push(b[i]);
+        i = i + 1;
+    }
+    out
+}
+
+// ── Autenticación ──────────────────────────────────────────────────────────────────────
+
+// `mysql_native_password`: SHA1(pass) XOR SHA1(scramble + SHA1(SHA1(pass))). Vacía → vacía.
+fn native_auth(scramble: [int], password: string) -> [int] {
+    if (password.len() == 0) {
+        let empty: [int] = [];
+        return empty;
+    }
+    let h1 = crypto.sha1(password.to_bytes());
+    let h2 = crypto.sha1(h1);
+    let h3 = crypto.sha1(bytes_of(scramble + bytes_to_ints(h2)));
+    xor_digest(h1, h3)
+}
+
+// Fast-path de `caching_sha2_password`: SHA256(pass) XOR SHA256(SHA256(SHA256(pass)) + scramble).
+fn sha2_auth(scramble: [int], password: string) -> [int] {
+    if (password.len() == 0) {
+        let empty: [int] = [];
+        return empty;
+    }
+    let h1 = crypto.sha256(password.to_bytes());
+    let h2 = crypto.sha256(crypto.sha256(h1));
+    let h3 = crypto.sha256(bytes_of(bytes_to_ints(h2) + scramble));
+    xor_digest(h1, h3)
+}
+
+fn auth_for(plugin: string, scramble: [int], password: string) -> Result<[int], string> {
+    if (plugin == "mysql_native_password") {
+        return Result.Ok(native_auth(scramble, password));
+    }
+    if (plugin == "caching_sha2_password") {
+        return Result.Ok(sha2_auth(scramble, password));
+    }
+    Result.Err("mysql: plugin de autenticación no soportado: '" + plugin + "'")
+}
+
+// El mensaje de un paquete ERR: [0xff][código:2][#estado:6][texto].
+fn err_msg(p: [int]) -> string {
+    var i = 3; // 0xff + código
+    if (i < p.len() && p[i] == 35) {
+        i = i + 6; // '#' + 5 de sqlstate
+    }
+    var out: [int] = [];
+    while (i < p.len()) {
+        out.push(p[i]);
+        i = i + 1;
+    }
+    match (from_utf8(bytes_of(out))) {
+        Result.Ok(s) => "mysql: " + s,
+        Result.Err(_) => "mysql: error del servidor",
+    }
+}
+
+// ── Conexión ───────────────────────────────────────────────────────────────────────────
+
+/// Abre una conexión y autentica. `database` puede ser "" (sin esquema por defecto).
+pub fn connect(host: string, port: int, user: string, password: string, database: string) -> Result<Conn, string> {
+    let sock = net.tcp_connect(host, port)?;
+    let empty: [int] = [];
+    let c = Conn { sock: sock, seq: 0, buf: empty, pos: 0 };
+
+    // 1. Handshake inicial v10 del servidor.
+    let hs = read_packet(c)?;
+    if (hs[0] == 255) {
+        return Result.Err(err_msg(hs));
+    }
+    if (hs[0] != 10) {
+        return Result.Err("mysql: versión de protocolo no soportada: " + to_string(hs[0]));
+    }
+    let sv = nul_str(hs, 1); // versión del servidor (informativa)
+    var i = sv.1 + 4;        // thread id
+    var scramble: [int] = [];
+    var k = 0;
+    while (k < 8) {
+        scramble.push(hs[i + k]); // auth-data parte 1
+        k = k + 1;
+    }
+    i = i + 8 + 1 + 2; // parte1 + filler + capacidades bajas
+    var plugin = "mysql_native_password";
+    if (i < hs.len()) {
+        i = i + 1 + 2 + 2; // charset + estado + capacidades altas
+        let auth_len = hs[i];
+        i = i + 1 + 10; // longitud + reservado
+        // Parte 2 del scramble: auth_len - 8 - 1 octetos (el último es un NUL).
+        var p2 = auth_len - 9;
+        if (p2 < 12) {
+            p2 = 12;
+        }
+        k = 0;
+        while (k < p2) {
+            scramble.push(hs[i + k]);
+            k = k + 1;
+        }
+        i = i + p2;
+        if (i < hs.len() && hs[i] == 0) {
+            i = i + 1; // NUL del scramble
+        }
+        if (i < hs.len()) {
+            let pn = nul_str(hs, i);
+            plugin = pn.0;
+        }
+    }
+
+    // 2. Respuesta del handshake (protocolo 41 + conexión segura + plugin auth).
+    var caps = 512 | 32768 | 524288; // CLIENT_PROTOCOL_41 | SECURE_CONNECTION | PLUGIN_AUTH
+    if (database.len() > 0) {
+        caps = caps | 8; // CLIENT_CONNECT_WITH_DB
+    }
+    var out: [int] = [];
+    out.push(caps & 255);
+    out.push(caps >> 8 & 255);
+    out.push(caps >> 16 & 255);
+    out.push(caps >> 24 & 255);
+    out = out + [0, 0, 0, 1]; // paquete máximo 16 MiB (LE)
+    out.push(33); // charset utf8_general_ci
+    k = 0;
+    while (k < 23) {
+        out.push(0); // reservado
+        k = k + 1;
+    }
+    out = out + bytes_to_ints(user.to_bytes()) + [0];
+    let auth = auth_for(plugin, scramble, password)?;
+    out.push(auth.len());
+    out = out + auth;
+    if (database.len() > 0) {
+        out = out + bytes_to_ints(database.to_bytes()) + [0];
+    }
+    out = out + bytes_to_ints(plugin.to_bytes()) + [0];
+    let _ = write_packet(c, out)?;
+
+    // 3. Resultado de la autenticación (con posibles vueltas extra).
+    var vueltas = 0;
+    while (vueltas < 4) {
+        let r = read_packet(c)?;
+        if (r[0] == 0) {
+            return Result.Ok(c); // OK
+        }
+        if (r[0] == 255) {
+            return Result.Err(err_msg(r));
+        }
+        if (r[0] == 254) {
+            // AuthSwitchRequest: [0xfe][plugin NUL][scramble nuevo (con NUL final)].
+            let pn = nul_str(r, 1);
+            var sc: [int] = [];
+            var j = pn.1;
+            while (j < r.len() && r[j] != 0) {
+                sc.push(r[j]);
+                j = j + 1;
+            }
+            let a2 = auth_for(pn.0, sc, password)?;
+            let _ = write_packet(c, a2)?;
+        } else {
+            if (r[0] == 1) {
+                // AuthMoreData (caching_sha2): 0x03 = fast-path OK (sigue un OK), 0x04 = full auth.
+                if (r.len() > 1 && r[1] == 3) {
+                    // sigue el OK en el bucle
+                } else {
+                    return Result.Err(
+                        "mysql: caching_sha2_password exige el full-path (TLS), no soportado; usa un "
+                            + "usuario con mysql_native_password o calienta la caché del servidor con otro cliente");
+                }
+            } else {
+                return Result.Err("mysql: respuesta de autenticación inesperada");
+            }
+        }
+        vueltas = vueltas + 1;
+    }
+    Result.Err("mysql: la autenticación no convergió")
+}
+
+// ── Consultas ──────────────────────────────────────────────────────────────────────────
+
+// ¿El paquete es un EOF clásico? (0xfe con carga corta; los lenc-int de 8 octetos también
+// empiezan por 0xfe, por eso el límite de longitud.)
+fn is_eof(p: [int]) -> bool {
+    p.len() > 0 && p[0] == 254 && p.len() < 9
+}
+
+// Manda COM_QUERY y devuelve el primer paquete de la respuesta.
+fn send_query(c: Conn, sql: string) -> Result<[int], string> {
+    c.seq = 0; // cada comando resetea la secuencia
+    let _ = write_packet(c, [3] + bytes_to_ints(sql.to_bytes()))?;
+    read_packet(c)
+}
+
+/// Ejecuta un SELECT (o cualquier consulta que devuelva filas) y entrega las filas como
+/// strings (protocolo de texto). Un NULL llega como "" (el protocolo binario, diferido,
+/// traerá tipos de verdad).
+pub fn query(c: Conn, sql: string) -> Result<[[string]], string> {
+    let first = send_query(c, sql)?;
+    if (first[0] == 255) {
+        return Result.Err(err_msg(first));
+    }
+    if (first[0] == 0) {
+        return Result.Err("mysql: la consulta no devuelve filas; usa exec");
+    }
+    let nc = lenc_int(first, 0);
+    let ncols = nc.0;
+    // Definiciones de columna + EOF.
+    var k = 0;
+    while (k < ncols) {
+        let _ = read_packet(c)?;
+        k = k + 1;
+    }
+    let eof1 = read_packet(c)?;
+    if (!is_eof(eof1)) {
+        return Result.Err("mysql: se esperaba EOF tras las columnas");
+    }
+    // Filas hasta el EOF final.
+    var rows: [[string]] = [];
+    var seguir = true;
+    while (seguir) {
+        let p = read_packet(c)?;
+        if (is_eof(p)) {
+            seguir = false;
+        } else {
+            if (p[0] == 255) {
+                return Result.Err(err_msg(p));
+            }
+            var row: [string] = [];
+            var i = 0;
+            var col = 0;
+            while (col < ncols) {
+                if (p[i] == 251) {
+                    row.push(""); // NULL
+                    i = i + 1;
+                } else {
+                    let ln = lenc_int(p, i);
+                    i = i + ln.1;
+                    var cell: [int] = [];
+                    var j = 0;
+                    while (j < ln.0) {
+                        cell.push(p[i + j]);
+                        j = j + 1;
+                    }
+                    i = i + ln.0;
+                    row.push(match (from_utf8(bytes_of(cell))) {
+                        Result.Ok(s) => s,
+                        Result.Err(_) => "",
+                    });
+                }
+                col = col + 1;
+            }
+            rows.push(row);
+        }
+    }
+    Result.Ok(rows)
+}
+
+/// Ejecuta una sentencia sin filas (INSERT/UPDATE/DELETE/DDL) y devuelve las filas afectadas.
+pub fn exec(c: Conn, sql: string) -> Result<int, string> {
+    let first = send_query(c, sql)?;
+    if (first[0] == 255) {
+        return Result.Err(err_msg(first));
+    }
+    if (first[0] != 0) {
+        return Result.Err("mysql: la sentencia devuelve filas; usa query");
+    }
+    let af = lenc_int(first, 1); // OK: [0x00][afectadas lenc][last_insert_id lenc]…
+    Result.Ok(af.0)
+}
+
+/// Despide la sesión (COM_QUIT) y cierra el socket. (No se llama `close` para no tapar,
+/// dentro del módulo, al builtin global que cierra el socket.)
+pub fn disconnect(c: Conn) {
+    c.seq = 0;
+    let _ = write_packet(c, [1]); // COM_QUIT (el servidor no responde)
+    close(c.sock);
+}

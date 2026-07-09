@@ -821,34 +821,11 @@ fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
 /// como cápsula; el loader busca ahí tras la raíz del proyecto. Sin proyecto ni caché, `[]`
 /// (comportamiento idéntico a antes: el loader resuelve solo contra la raíz del archivo).
 fn dependency_roots() -> Vec<PathBuf> {
+    // M40.8a: caché `.ray-deps/` + el padre de cada dependencia por ruta. La lógica vive en
+    // `deps::dependency_roots_for` (compartida con el LSP → un archivo diagnostica con las MISMAS
+    // raíces con las que corre). La stdlib no es raíz de disco: va embebida (M40.5).
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let root = Manifest::find(&cwd)
-        .and_then(|toml| toml.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| cwd.clone());
-    let cache = root.join(".ray-deps");
-    let mut roots = Vec::new();
-    if cache.is_dir() {
-        roots.push(cache);
-    }
-    // M40.8a: dependencias por **ruta local** (`nombre = "path:<dir>"`). No se descargan; la carpeta del
-    // paquete se registra como raíz de módulos, así `import <nombre>;` resuelve `<dir>/mod.ray` (cápsula)
-    // como cualquier dependencia. Se añade el **padre** de `<dir>` (el loader busca `<raíz>/<nombre>/…`).
-    if let Ok(Some(m)) = Manifest::load(&cwd) {
-        for (_name, spec) in &m.dependencies {
-            if let Some(p) = crate::deps::path_of_path_dep(spec) {
-                let dir = m.root.join(p);
-                if let Some(parent) = dir.parent().map(Path::to_path_buf)
-                    && dir.exists()
-                    && !roots.contains(&parent)
-                {
-                    roots.push(parent);
-                }
-            }
-        }
-    }
-    // La biblioteca estándar (`import std/…`) ya no es una raíz de disco: desde M40.5 va **embebida**
-    // en el binario (`crate::stdlib`, auto-contención), y el loader la resuelve antes que el filesystem.
-    roots
+    crate::deps::dependency_roots_for(&cwd)
 }
 
 /// Carga el manifiesto del proyecto que contiene el directorio actual. `None` si no hay

@@ -577,6 +577,37 @@ pub fn locked_names(root: &Path) -> Vec<String> {
     read_lock(root).map(|m| m.keys().cloned().collect()).unwrap_or_default()
 }
 
+/// Las raíces de módulos de dependencias para el proyecto que contiene `dir`: el caché
+/// `.ray-deps/` (git/registro, si existe) y el **padre** de cada dependencia por ruta
+/// (`nombre = "path:<dir>"` — el loader busca `<raíz>/<nombre>/…`). No descarga nada: usa lo que
+/// haya en disco (por eso sirve también para el LSP, que no debe tocar la red al diagnosticar).
+/// Compartida por el CLI (`ray run/build/…`) y el LSP → un archivo diagnostica con las MISMAS
+/// raíces con las que corre.
+pub fn dependency_roots_for(dir: &Path) -> Vec<std::path::PathBuf> {
+    let root = Manifest::find(dir)
+        .and_then(|toml| toml.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| dir.to_path_buf());
+    let cache = root.join(".ray-deps");
+    let mut roots = Vec::new();
+    if cache.is_dir() {
+        roots.push(cache);
+    }
+    if let Ok(Some(m)) = Manifest::load(dir) {
+        for (_name, spec) in &m.dependencies {
+            if let Some(p) = path_of_path_dep(spec) {
+                let pdir = m.root.join(p);
+                if let Some(parent) = pdir.parent().map(Path::to_path_buf)
+                    && pdir.exists()
+                    && !roots.contains(&parent)
+                {
+                    roots.push(parent);
+                }
+            }
+        }
+    }
+    roots
+}
+
 /// Escribe `ray.lock` en `root` con las entradas **ordenadas por nombre** (determinista → diffs
 /// limpios en control de versiones). El lockfile SÍ se commitea (fija las versiones para el equipo).
 fn write_lock(root: &Path, entries: &mut [LockEntry]) -> Result<(), String> {

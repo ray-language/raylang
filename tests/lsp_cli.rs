@@ -214,3 +214,38 @@ fn hover_de_tipo_en_literal_de_struct() {
     assert!(out.contains("\"id\":9"), "responde a hover\n{out}");
     assert!(out.contains("struct Punto"), "muestra el tipo del struct\n{out}");
 }
+
+#[test]
+fn diagnostica_con_las_dependencias_por_ruta_del_manifiesto() {
+    // Regresión: un proyecto con una path-dep en su ray.toml (como examples/db) compilaba con
+    // `ray run` pero el LSP marcaba "no se encuentra el módulo" — dep_roots_for solo miraba
+    // `.ray-deps/`, no las dependencias por ruta. Ahora el LSP resuelve con las MISMAS raíces
+    // que el CLI (deps::dependency_roots_for).
+    let base = std::env::temp_dir().join("ray_lsp_pathdep");
+    let _ = std::fs::remove_dir_all(&base);
+    // El paquete: base/paquetes/util/mod.ray con una función pub.
+    std::fs::create_dir_all(base.join("paquetes/util")).unwrap();
+    std::fs::write(base.join("paquetes/util/mod.ray"), "pub fn doble(n: int) -> int { n * 2 }\n").unwrap();
+    // El proyecto: base/app con ray.toml (path-dep) y src/main.ray que la importa.
+    std::fs::create_dir_all(base.join("app/src")).unwrap();
+    std::fs::write(
+        base.join("app/ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nutil = \"path:../paquetes/util\"\n",
+    )
+    .unwrap();
+    let main_path = base.join("app/src/main.ray");
+    std::fs::write(&main_path, "").unwrap(); // el contenido viaja por didOpen
+    let texto = r#"import util;\n\nfn main() -> int {\n    util.doble(21)\n}"#;
+    let open = format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file://{}","text":"{}"}}}}}}"#,
+        main_path.display(),
+        texto
+    );
+    let entrada = frame(&open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
+    let out = lsp(&entrada);
+    assert!(out.contains("publishDiagnostics"), "publica diagnósticos\n{out}");
+    assert!(
+        out.contains("\"diagnostics\":[]"),
+        "cero diagnósticos: la path-dep resuelve como en `ray run`\n{out}"
+    );
+}

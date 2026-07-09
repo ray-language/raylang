@@ -552,10 +552,34 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
   + `float_bits`/`float_from_bits` en std/math — habilitador del double IEEE 754, sirve también a
   protobuf; (b) `packages/db/bson.ray`: `enum Bson` (Double/Str/Doc/Arr/Bin/ObjectId/Bool/Null/Int) +
   `encode`/`decode` con errores como valores + `dump`; oráculo `tests/bson_cli.rs` contra los vectores
-  canónicos de bsonspec.org + round-trip exacto) · **M54.2** conexión: OP_MSG + `hello` + auth SCRAM
-  (toy server con constantes precomputadas, patrón postgres) · **M54.3** CRUD
+  canónicos de bsonspec.org + round-trip exacto) · **M54.2** ✅ **COMPLETO** (DESIGN §56.2:
+  `db/mongo.ray` — framing OP_MSG + `run_command` + `connect` (`hello` + saslStart/saslContinue con
+  `net/scram` reusado tal cual, verificación de la firma del servidor) + `disconnect`; toy server
+  OP_MSG con las constantes SCRAM precomputadas de postgres en `tests/mongo_cli.rs`) · **M54.3** CRUD
   `insert`/`find`/`update`/`delete` + oráculo ambos motores + demo en `examples/db`.
 - **Impacto**: todo aditivo; BSON es el grueso (comparable al protobuf de M25 en naturaleza).
+
+---
+
+## 16. JSON — huecos pendientes de `std/json`
+
+`std/json` EXISTE y está completo en lo esencial (M15.4a, embebido desde `examples/web/json.ray`:
+`enum Json` + `parse -> Result` + `stringify` canónico; lo usa `net/oauth2`). Huecos detectados
+(jul 2026, al analizar la superficie del cliente MongoDB):
+
+- **Escapes `\uXXXX` no soportados** (limitación documentada del módulo). La causa es un hueco del
+  LENGUAJE: existe `char_code(c) -> int` (M40.3a) pero no su inverso. Fix acotado: builtin
+  **`char_from_code(int) -> Option<char>`** (valida el rango de code points; patrón M11.4) + los
+  escapes en `std/json` (~15 líneas, con pares surrogate para los astrales) + vectores de test.
+  Hoy un JSON real de una API con `"é"` da error de parseo.
+- **`JNum` es solo `float`**: fiel a JSON, pero un int64 > 2^53 pierde precisión. Irrelevante para
+  APIs web; importa para un puente con BSON (abajo). Cambiarlo rompería a los usuarios del enum →
+  decidir solo si el puente lo exige.
+- **Menores**: sin pretty-print (solo compacto); sin helpers de acceso (navegar es a `match` puro).
+- **Puente `Json ↔ Bson`** (fase posterior de M54, opcional): `bson.from_json`/`bson.to_json`
+  (~40 líneas con `std/json` existente) — ergonomía de "filtro como string JSON" sin perder la
+  fidelidad del enum `Bson` (ObjectId/Bin/int64 no son representables en JSON → to_json degrada
+  documentado, estilo Extended JSON si se quiere rigor).
 
 ---
 

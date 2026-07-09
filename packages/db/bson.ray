@@ -44,6 +44,18 @@ pub fn field(name: string, value: Bson) -> Field {
     Field { name: name, value: value }
 }
 
+/// Looks up a field by name (first match). The reply-inspection workhorse of the MongoDB client.
+pub fn get(fields: [Field], name: string) -> Option<Bson> {
+    var i = 0;
+    while (i < fields.len()) {
+        if (fields[i].name == name) {
+            return Option.Some(fields[i].value);
+        }
+        i = i + 1;
+    }
+    Option.None
+}
+
 // ── Codificación ─────────────────────────────────────────────────────────────
 
 // El octeto de tipo de cada variante (bsonspec.org §element).

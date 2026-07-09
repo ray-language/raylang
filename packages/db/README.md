@@ -143,6 +143,14 @@ match (bson.decode(b)) {
 `Int` codifica como int64 y decodifica int32 e int64 (el int de raylang es i64). `Double` usa los
 bits IEEE 754 (`math.float_bits`, M54.1a). Diferido: Date/Timestamp/Regex/Decimal128 (error claro).
 
+### `db/mongo` (M54.2, en curso)
+
+Cliente MongoDB en raylang puro sobre `db/bson`. Hoy: **conexión autenticada** — framing **OP_MSG**
+(opCode 2013), `connect(host, port, user, password, database, nonce)` con `hello` + **SCRAM-SHA-256
+vía SASL** (reusa `net/scram`, el mismo mecanismo que PostgreSQL; verifica la firma del servidor),
+`run_command(c, doc)` para comandos crudos y `disconnect`. El CRUD (`insert`/`find`/`update`/
+`delete`) llega en M54.3.
+
 ## Verificación
 
 `tests/mysql_cli.rs`: el cliente corre contra un **servidor MySQL de juguete** (Rust std, TCP

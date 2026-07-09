@@ -7004,3 +7004,29 @@ Ambos motores, mismo stdout. Diferido: Date/Timestamp/Regex/Decimal128 (error cl
 se añadirán cuando el cliente los necesite).
 
 Siguiente: **M54.2** (conexión: OP_MSG + `hello` + auth SCRAM con toy server) → **M54.3** (CRUD + demo).
+
+### 56.2 M54.2 — conexión: OP_MSG + `hello` + auth SCRAM. ✅ COMPLETO
+
+`packages/db/mongo.ray` — la conexión autenticada, raylang puro sobre `db/bson` + `std/net`:
+
+- **Framing OP_MSG** (opCode 2013, MongoDB ≥ 3.6): `[longitud][requestID][responseTo][opCode]
+  [flagBits][kind=0][documento BSON]`. `send_msg` arma el sobre (flags 0, una sección kind 0);
+  `read_msg` acumula en el búfer de la `Conn` (una respuesta puede partirse entre lecturas), valida
+  opCode/kind y decodifica con `bson.decode`. **`run_command(c, doc)`** (pub) = enviar + leer: el
+  ladrillo de toda operación. `bson.get(fields, name)` (helper nuevo en db/bson) inspecciona las
+  respuestas; `ok` llega como **double 1.0** (por eso BSON necesitaba float_bits) y se acepta int.
+- **Auth = `net/scram` reusado tal cual** (la apuesta del plan, confirmada): MongoDB moderno hace
+  SCRAM-SHA-256 vía SASL — el mismo mecanismo que PostgreSQL, solo cambia el **sobre**: client-first/
+  client-final viajan como campo `payload` (binario) de los comandos `saslStart`/`saslContinue`
+  (con `$db`), y server-first/server-final vuelven en el `payload` de las respuestas. `connect` =
+  `hello` (mínimo v1: solo exige ok) → `saslStart` → `saslContinue` → **`scram_verify`** de la firma
+  del servidor (una clave mala se detecta EN EL CLIENTE aunque el servidor mienta con ok).
+- `disconnect` cierra el socket (el protocolo no tiene despedida). `Conn` lleva `req_id` y `db`.
+
+**Verificación** (`tests/mongo_cli.rs`): servidor MongoDB **de juguete** (Rust std, TCP plano) que
+habla OP_MSG con respuestas BSON armadas a mano y reusa las constantes SCRAM **precomputadas** del
+toy de PostgreSQL (mismo user/clave/nonce/sal/i → sin cripto en Rust). Cubre: conexión completa;
+**contraseña mala** (el proof difiere → la firma del servidor no verifica, camino del cliente);
+**usuario desconocido** (el servidor responde `ok: 0.0` + errmsg → el cliente lo surfacea). Ambos
+motores, mismo stdout. Diferido v1: negociación de `hello` (compresión/versiones), checksum OP_MSG,
+más de una sección. Siguiente: **M54.3** (CRUD: insert/find/update/delete + demo).

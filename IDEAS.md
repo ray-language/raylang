@@ -492,6 +492,33 @@ firmas de publicación (sobre el hash existente), mirrors/proxy, namespaces con 
 
 ---
 
+## 14. Clientes de bases de datos (MySQL · PostgreSQL · SQLite) — M53, PLAN
+
+Análisis de factibilidad (jul 2026). Punto de partida: `packages/net` ya tiene **PostgreSQL** (SCRAM +
+protocolo simple, `pg_query`) y redis; el patrón de verificación (servidor de juguete en Rust + oráculo
+ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA1/SHA256/HMAC.
+
+- **Factibilidad**: Postgres = **evolución** de lo existente. MySQL = **factible en raylang puro**
+  (handshake v10; `mysql_native_password` = SHA1 ✓, caching_sha2 fast-path = SHA256 ✓, full-path sobre
+  `tls_connect` ✓; `COM_QUERY` texto). SQLite = **factible SOLO vía FFI** (no es red: librería C
+  embebida; `extern "sqlite3"` resuelve `libsqlite3` del sistema) con UN bloqueador: los *out-params*
+  de doble puntero (`sqlite3_open(path, sqlite3**)`) que el FFI de M41 no marshalea → extensión
+  acotada `out ptr` (M41.5, la ruta recomendada) o el hack `malloc(8)`+`memcpy`+puntero-como-`u64`
+  (spike, no diseño). Reimplementar el formato de archivo en raylang puro: descartado (solo-lectura y
+  enorme).
+- **Ubicación**: nuevo paquete **`packages/db`** (SQLite no encaja en `net`; API uniforme para los
+  tres: `connect`/`query(conn, sql, params) -> Result<[[string]]>`/`exec`/`close`, tipado-a-texto v1).
+  `db` → path-dep a `net` (scram); `net/postgres` se conserva (compat).
+- **Fases**: **M53.1** MySQL (toy server + `#[ignore]` contra server real) · **M53.2** Postgres v2
+  (conexión persistente + protocolo extendido Parse/Bind/Execute → parámetros/anti-inyección +
+  transacciones) · **M53.3** FFI out-params (cierra diferido de M41; superficie por decidir: retorno
+  extra en tupla vs. slot explícito) · **M53.4** SQLite sobre M53.3 (test condicionado a libsqlite3;
+  macOS la trae) · **M53.5** opcional: libro + ejemplo CRUD integrador.
+- **Impacto**: 53.1/53.2 cero compilador (librería pura). 53.3 toca checker+FFI+ambos motores
+  (acotado). Todo aditivo.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

@@ -1819,7 +1819,7 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
         // Fuera de los delimitadores (HTML): NO se compite con la completion de HTML del editor,
         // pero sí se ofrecen los BLOQUES del template como snippets (teclear `for` o `if` inserta
         // el bloque entero con placeholders navegables por Tab).
-        return template_completion_list(template_block_snippets(true, false, None, 0));
+        return template_completion_list(template_block_snippets(true, false, None));
     };
 
     // Kinds LSP: 6 = Variable, 14 = Keyword. Los sortText ponen las variables antes que las keywords.
@@ -1848,10 +1848,12 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
         ]));
     }
     if is_tag {
-        // `for`/`if`/`let` completan el BLOQUE entero (sin el `{%` inicial, que ya está escrito).
-        // El editor auto-cierra `{` con `}`: al teclear `{%` queda `{% |}` — como el snippet trae
-        // su propio cierre, esa `}` huérfana (o un `%}` ya presente) quedaría DUPLICADA; se
-        // localiza justo tras la palabra parcial y el snippet la elimina (additionalTextEdit).
+        // `for`/`if`/`let` completan el BLOQUE entero (sin el `{%` inicial, que ya está escrito),
+        // con un **textEdit explícito** que reemplaza [inicio de la palabra parcial .. cierre
+        // huérfano]: el editor auto-cierra `{` con `}` (al teclear `{%` queda `{% |}`) y, como el
+        // snippet trae su propio cierre, esa `}` (o un `%}` previo) quedaría duplicada — el rango
+        // del textEdit se la come. Explícito a propósito: sin él, cada cliente ADIVINA qué
+        // reemplazar (Sublime recorta el prefijo tecleado y se comía el espacio: `forelem`).
         // (La lista va con `isIncomplete` → el editor re-consulta en cada tecla y estas
         // posiciones nunca se quedan desfasadas por el filtrado en cliente.)
         let chars: Vec<char> = src.lines().nth(line0).unwrap_or("").chars().collect();
@@ -1860,11 +1862,11 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
             end += 1;
         }
         let stray = if chars.get(end) == Some(&'%') && chars.get(end + 1) == Some(&'}') {
-            Some((end, 2))
+            2
         } else if chars.get(end) == Some(&'}') && chars.get(end + 1) != Some(&'}') {
-            Some((end, 1))
+            1
         } else {
-            None
+            0
         };
         // `{%for` (sin espacio tras el delimitador): el snippet antepone el espacio.
         let mut start = char0.min(chars.len());
@@ -1872,7 +1874,7 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
             start -= 1;
         }
         let lead_space = start > 0 && chars[start - 1] == '%';
-        list.extend(template_block_snippets(false, lead_space, stray, line0));
+        list.extend(template_block_snippets(false, lead_space, Some((line0, start, end + stray))));
     }
     template_completion_list(list)
 }
@@ -1889,10 +1891,11 @@ fn template_completion_list(items: Vec<Json>) -> Json {
 /// Los snippets de bloque del template (`{% for %}…{% endfor %}`, `{% if %}…{% endif %}`,
 /// `{% let %}`), con placeholders navegables por Tab. `with_opener` incluye el `{%` inicial (para
 /// ofrecerlos en el HTML, donde aún no hay delimitador); sin él, completan un `{% ` ya escrito.
-/// `lead_space` antepone un espacio (el cursor está pegado al `%` de un `{%`). `stray` =
-/// `(col0, largo)` de un cierre huérfano tras el cursor (la `}` del auto-close del editor, o un
-/// `%}` previo): cada snippet lo borra con un `additionalTextEdit` para no duplicar.
-fn template_block_snippets(with_opener: bool, lead_space: bool, stray: Option<(usize, usize)>, line0: usize) -> Vec<Json> {
+/// `lead_space` antepone un espacio (el cursor está pegado al `%` de un `{%`). `replace` =
+/// `(línea0, col_ini, col_fin)`: el rango que el snippet REEMPLAZA como `textEdit` explícito —
+/// la palabra parcial tecleada + el cierre huérfano del auto-close — para que ningún cliente
+/// tenga que adivinar el reemplazo (cada uno lo hace distinto).
+fn template_block_snippets(with_opener: bool, lead_space: bool, replace: Option<(usize, usize, usize)>) -> Vec<Json> {
     let cases: &[(&str, &str)] = &[
         ("for", "for ${1:elem} in ${2:coleccion} %}$0{% endfor %}"),
         ("if", "if ${1:condicion} %}$0{% endif %}"),
@@ -1913,15 +1916,15 @@ fn template_block_snippets(with_opener: bool, lead_space: bool, stray: Option<(u
             // filterText = la keyword: teclear `for` en el HTML lo ofrece aunque el label lleve {%.
             ("filterText", Json::Str(label.split('/').next().unwrap_or(label).to_string())),
             ("kind", num(15)), // 15 = Snippet
-            ("insertText", Json::Str(insert)),
+            ("insertText", Json::Str(insert.clone())),
             ("insertTextFormat", num(2)), // 2 = Snippet (placeholders ${n:...})
             ("sortText", Json::Str(format!("1{label}"))),
         ];
-        if let Some((col, len)) = stray {
-            fields.push(("additionalTextEdits", Json::Arr(vec![obj(vec![
-                ("range", range(line0, col, col + len)),
-                ("newText", Json::Str(String::new())),
-            ])])));
+        if let Some((l0, ini, fin)) = replace {
+            fields.push(("textEdit", obj(vec![
+                ("range", range(l0, ini, fin)),
+                ("newText", Json::Str(insert)),
+            ])));
         }
         obj(fields)
     }).collect()
@@ -4748,20 +4751,28 @@ mod tests {
         // additionalTextEdits.
         let for_item_of = |items: &Json| items.get("items").unwrap().as_array().unwrap().iter()
             .find(|i| i.get("label").and_then(Json::as_str) == Some("{% for %}")).cloned().unwrap();
+        let edit_of = |item: &Json| {
+            let e = item.get("textEdit").expect("textEdit explícito (sin él cada cliente adivina)");
+            let r = e.get("range").unwrap().serialize();
+            (r, e.get("newText").and_then(Json::as_str).unwrap().to_string())
+        };
+        // `{% f|}`: el textEdit reemplaza la palabra parcial `f` Y la `}` huérfana del auto-close
+        // (cols 3..5) con el bloque entero — sin llave duplicada, en cualquier cliente.
         let tpl2 = "{% params t: string %}\n{% f}\n";
         let items = template_completion_items(tpl2, 1, 4);
         assert!(items.serialize().contains("\"isIncomplete\":true"), "re-consulta por tecla");
-        let for_item = for_item_of(&items);
-        let edits = for_item.get("additionalTextEdits").expect("borra la llave huérfana").serialize();
-        assert!(edits.contains("\"character\":4") && edits.contains("\"newText\":\"\""), "{edits}");
+        let (r, txt) = edit_of(&for_item_of(&items));
+        assert!(r.contains("\"character\":3") && r.contains("\"character\":5"), "{r}");
+        assert!(txt.starts_with("for ") && txt.ends_with("{% endfor %}"), "{txt}");
+        // Sin llave huérfana: el rango cubre solo la palabra (3..4).
         let tpl3 = "{% params t: string %}\n{% f\n";
-        let for_item = for_item_of(&template_completion_items(tpl3, 1, 4));
-        assert!(for_item.get("additionalTextEdits").is_none());
-        // `{%f|}` (sin espacio tras el delimitador): el snippet antepone el espacio Y borra la llave.
+        let (r, _) = edit_of(&for_item_of(&template_completion_items(tpl3, 1, 4)));
+        assert!(r.contains("\"character\":3") && r.contains("\"character\":4"), "{r}");
+        // `{%f|}` (sin espacio tras el delimitador): antepone el espacio Y come la llave (2..4).
         let tpl4 = "{% params t: string %}\n{%f}\n";
-        let for_item = for_item_of(&template_completion_items(tpl4, 1, 3));
-        assert!(for_item.get("insertText").and_then(Json::as_str).unwrap().starts_with(" for "), "{for_item:?}");
-        assert!(for_item.get("additionalTextEdits").is_some());
+        let (r, txt) = edit_of(&for_item_of(&template_completion_items(tpl4, 1, 3)));
+        assert!(txt.starts_with(" for "), "{txt}");
+        assert!(r.contains("\"character\":2") && r.contains("\"character\":4"), "{r}");
 
         // Y el enrutado: un completion sobre una URI `.ray.html` pasa por este camino.
         let uri = "file:///tmp/vista.ray.html";

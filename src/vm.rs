@@ -4100,6 +4100,26 @@ mod tests {
         );
     }
 
+    /// M62.1: terminales `any`/`all`/`count` (lazy, en el trait) + `any`/`all` eager sobre
+    /// arreglos (bucles directos; mismo nombre, despacho por receptor). Cortocircuito incluido.
+    #[test]
+    fn any_all_count_oraculo() {
+        oracle_program(
+            "fn main() -> int {\n\
+             \x20 var n = 0;\n\
+             \x20 if ([1, 2, 3].any(fn(x: int) -> bool { x == 2 })) { n = n + 1; }\n\
+             \x20 if ([1, 2, 3].all(fn(x: int) -> bool { x > 0 })) { n = n + 1; }\n\
+             \x20 if (!([1, 2, 3].all(fn(x: int) -> bool { x < 3 }))) { n = n + 1; }\n\
+             \x20 let vacio: [int] = [];\n\
+             \x20 if (!vacio.any(fn(x: int) -> bool { true }) && vacio.all(fn(x: int) -> bool { false })) { n = n + 1; }\n\
+             \x20 if (range(1, 1000000).map(fn(x: int) -> int { x * 2 }).any(fn(x: int) -> bool { x > 10 })) { n = n + 1; }\n\
+             \x20 n = n + range(0, 50).filter(fn(x: int) -> bool { x % 10 == 0 }).count();\n\
+             \x20 if ([9, 9].iter().all(fn(x: int) -> bool { x == 9 })) { n = n + 1; }\n\
+             \x20 n\n\
+             }",
+        );
+    }
+
     /// M13.2a: `panic` / `assert_eq` que falla → ambos motores cortan con el MISMO mensaje.
     #[test]
     fn panic_y_assert_falla_oraculo() {

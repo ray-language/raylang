@@ -7725,14 +7725,16 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 > 112 ms · eager `xs.map(f).fold(…)` 36 441 ms (¡340×!) · lazy `iter().map().fold()` 13 799 ms ·
 > eager como bucle directo 317 ms.
 
-- **M62.1 — las funciones libres eager vuelven a ser bucles directos**: M40.6 re-fundó
+- **M62.1 — las funciones libres eager vuelven a ser bucles directos** ✅ **COMPLETO**: M40.6 re-fundó
   `map`/`filter`/`fold` (las libres sobre arreglos, la API ergonómica) sobre la maquinaria
   perezosa por "única fuente de verdad" — estético, pero le cargó al camino MÁS USADO el coste
   íntegro de la abstracción (closure + `Option` en el heap del GC + match POR ELEMENTO, más el
-  `collect` intermedio). Vuelven a bucles `while` directos: 36 441 → ~317 ms (115×), semántica
-  idéntica (los tests existentes la fijan). La maquinaria lazy (métodos del trait) no cambia:
-  sigue siendo la forma de FUSIONAR cadenas y cortar trabajo (`take` temprano). De paso:
-  terminales `any`/`all`/`count` (baratos, sobre `next`).
+  `collect` intermedio). Vuelven a bucles `while` directos: **36 441 → 319 ms medidos (114×)**,
+  semántica idéntica (los tests existentes la fijan). La maquinaria lazy (métodos del trait) no
+  cambia: sigue siendo la forma de FUSIONAR cadenas y cortar trabajo (`take` temprano). De paso:
+  terminales `any`/`all`/`count` en el trait (con cortocircuito; verificado sobre una cadena de
+  1M sin colgarse) + `any`/`all` eager sobre arreglos (mismo nombre, despacho por receptor).
+  Oráculo `any_all_count_oraculo` (vm.rs); lib (542) + 8 suites verdes.
 - **M62.2 — documentación de la semántica fina**: (a) `for x in xs` CONGELA la longitud al
   entrar (ambos motores, verificado) pero `for x in xs.iter()` es una vista VIVA (el `step`
   relee `xs.len()`) — mutar el arreglo durante la iteración da resultados distintos entre

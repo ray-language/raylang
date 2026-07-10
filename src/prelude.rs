@@ -408,6 +408,65 @@ trait Iterator<T> {
         }
         acc
     }
+    // TERMINAL (M62.1): ¿algún elemento cumple `pred`? Corta en el primero que sí (no consume
+    // el resto — sobre una cadena perezosa solo se evalúa hasta el primer match).
+    /// Terminal: whether any element satisfies `pred`; stops at the first match.
+    fn any(self, pred: fn(T) -> bool) -> bool {
+        var found = false;
+        var keep_going = true;
+        while (keep_going) {
+            match (self.next()) {
+                Option.Some(x) => {
+                    if (pred(x)) {
+                        found = true;
+                        keep_going = false;
+                    }
+                },
+                Option.None => {
+                    keep_going = false;
+                },
+            }
+        }
+        found
+    }
+    // TERMINAL (M62.1): ¿todos los elementos cumplen `pred`? Corta en el primero que no.
+    /// Terminal: whether every element satisfies `pred`; stops at the first failure.
+    /// True on an empty iterator (vacuous truth).
+    fn all(self, pred: fn(T) -> bool) -> bool {
+        var ok = true;
+        var keep_going = true;
+        while (keep_going) {
+            match (self.next()) {
+                Option.Some(x) => {
+                    if (!pred(x)) {
+                        ok = false;
+                        keep_going = false;
+                    }
+                },
+                Option.None => {
+                    keep_going = false;
+                },
+            }
+        }
+        ok
+    }
+    // TERMINAL (M62.1): número de elementos restantes (consume el iterador).
+    /// Terminal: consumes the iterator and returns how many elements it yielded.
+    fn count(self) -> int {
+        var n = 0;
+        var keep_going = true;
+        while (keep_going) {
+            match (self.next()) {
+                Option.Some(x) => {
+                    n = n + 1;
+                },
+                Option.None => {
+                    keep_going = false;
+                },
+            }
+        }
+        n
+    }
     // TERMINAL: materializa el iterador (perezoso) en un arreglo `[T]`. El puente de vuelta desde la
     // cadena `iter().map().filter()` a un arreglo concreto.
     /// Terminal: consumes the iterator and materializes its elements into a new array `[T]`.
@@ -808,30 +867,78 @@ fn assert_eq<T: Eq + Show>(a: T, b: T) {
     }
 }
 
-// --- map/filter/fold EAGER sobre arreglos (M7.3), re-fundados sobre Iterator (M40.6) ---
+// --- map/filter/fold EAGER sobre arreglos (M7.3) ---
 // Estas funciones libres son la cara ERGONÓMICA de la operación: `xs.map(f)` (con `xs: [T]`) devuelve
-// directamente un `[U]` indexable, sin `.iter()`/`.collect()`. Desde M40.6 NO reimplementan el bucle:
-// delegan en la maquinaria PEREZOSA del trait `Iterator` (`iter(xs).map(f).collect()`), que es la única
-// fuente de verdad de la lógica. El despacho por tipo de receptor evita recursión: dentro de estos
-// cuerpos, `iter(xs)` es un `Iter<T>`, así que `.map`/`.filter`/`.fold` resuelven al MÉTODO del trait
-// (campo→método→UFCS), nunca a estas funciones libres. Cara eager (materializa) vs. cara lazy
-// (`xs.iter().map(f).filter(g).collect()`, fusiona sin arreglos intermedios): ver el libro, m40/iteradores.
+// directamente un `[U]` indexable, sin `.iter()`/`.collect()`. M62.1: son BUCLES DIRECTOS otra vez —
+// M40.6 las había re-fundado sobre la maquinaria perezosa del trait ("única fuente de verdad"), pero
+// eso le cargaba al camino más usado el coste íntegro de la abstracción (closure + `Option` en el
+// heap + match POR ELEMENTO, más el collect intermedio): medido, 36 441 ms vs 317 ms con el bucle
+// (1M elementos, release). La maquinaria lazy (métodos del trait) sigue siendo la forma de FUSIONAR
+// cadenas (`xs.iter().map(f).filter(g).collect()`) y cortar trabajo (`take` temprano).
 // Aplica `f` a cada elemento, devolviendo un arreglo nuevo con los resultados.
 /// Applies `f` to each element of the array and returns a new array with the results (eager).
 fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] {
-    iter(xs).map(f).collect()
+    var out: [U] = [];
+    var i = 0;
+    while (i < xs.len()) {
+        out.push(f(xs[i]));
+        i = i + 1;
+    }
+    out
 }
 
 // Conserva los elementos para los que `pred` es verdadero, en un arreglo nuevo.
 /// Returns a new array with the elements for which `pred` returns true (eager).
 fn filter<T>(xs: [T], pred: fn(T) -> bool) -> [T] {
-    iter(xs).filter(pred).collect()
+    var out: [T] = [];
+    var i = 0;
+    while (i < xs.len()) {
+        if (pred(xs[i])) {
+            out.push(xs[i]);
+        }
+        i = i + 1;
+    }
+    out
 }
 
 // Reduce el arreglo a un único valor, acumulando de izquierda a derecha desde `init`.
 /// Reduces the array to a single value, accumulating left to right from `init` with `f`.
 fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A {
-    iter(xs).fold(init, f)
+    var acc: A = init;
+    var i = 0;
+    while (i < xs.len()) {
+        acc = f(acc, xs[i]);
+        i = i + 1;
+    }
+    acc
+}
+
+// ¿Algún elemento del arreglo cumple `pred`? Corta en el primero que sí (M62.1; el gemelo
+// eager del terminal `any` de Iterator — mismo nombre, despacho por el tipo del receptor).
+/// Whether any element of the array satisfies `pred`; stops at the first match (eager).
+fn any<T>(xs: [T], pred: fn(T) -> bool) -> bool {
+    var i = 0;
+    while (i < xs.len()) {
+        if (pred(xs[i])) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// ¿Todos los elementos del arreglo cumplen `pred`? Corta en el primero que no (M62.1).
+/// Whether every element of the array satisfies `pred`; stops at the first failure (eager).
+/// True on an empty array (vacuous truth).
+fn all<T>(xs: [T], pred: fn(T) -> bool) -> bool {
+    var i = 0;
+    while (i < xs.len()) {
+        if (!pred(xs[i])) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
 }
 
 // --- I/O (M11.2): envoltorios sobre primitivos builtin que devuelven [T] (vacío/único) ---

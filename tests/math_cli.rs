@@ -51,6 +51,29 @@ fn std_math_envoltorios() {
     assert_eq!(o_in, o_vm, "ambos motores coinciden");
 }
 
+/// M65.3 — `clamp` genérica sobre `Ord` (antes solo-int). Retrocompatible (int infiere T=int)
+/// y funciona con float/string/tipo de usuario, como min/max.
+#[test]
+fn clamp_generica() {
+    let src = r#"import std/math;
+fn main() -> int {
+    print(math.clamp(5, 1, 10));       // 5  (int, dentro)
+    print(math.clamp(-3, 1, 10));      // 1  (por debajo)
+    print(math.clamp(99, 1, 10));      // 10 (por encima)
+    print(math.clamp(2.5, 0.0, 1.0));  // 1  (float)
+    print(math.clamp("m", "a", "f"));  // f  (string, Ord lexicográfico)
+    0
+}
+"#;
+    let esperado = "5\n1\n10\n1\nf\n";
+    let (o_in, c_in) = run("m65_clamp_in", src, false);
+    let (o_vm, c_vm) = run("m65_clamp_vm", src, true);
+    assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
+    assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
+    assert_eq!(o_in, esperado, "salida del intérprete");
+    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+}
+
 /// M65.2 — trig inversa y compañía: los envoltorios `math.asin/acos/atan/atan2/log2/trunc`
 /// compilan y corren por ambos motores (el cálculo lo cubre el oráculo de `vm.rs`).
 #[test]

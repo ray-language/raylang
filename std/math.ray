@@ -101,10 +101,11 @@ pub fn sign(x: int) -> int {
     }
 }
 
-/// Clamps `x` to the closed range `[lo, hi]` (assumes `lo <= hi`).
-pub fn clamp(x: int, lo: int, hi: int) -> int {
-    if (x < lo) { lo } else {
-        if (x > hi) { hi } else { x }
+// M65.3: genérica sobre `Ord` (antes solo-int), como min/max. Retrocompatible: int infiere T=int.
+/// Clamps `x` to the closed range `[lo, hi]` (any `Ord` type; assumes `lo <= hi`).
+pub fn clamp<T: Ord>(x: T, lo: T, hi: T) -> T {
+    if (x.less(lo)) { lo } else {
+        if (hi.less(x)) { hi } else { x }
     }
 }
 
@@ -155,7 +156,8 @@ pub fn ipow(base: int, exp: int) -> int {
     }
 }
 
-/// Factorial of `n` (with `n >= 0`). `n < 0` → 0.
+/// Factorial of `n` (with `n >= 0`). `n < 0` → 0. `n > 20` overflows `int` and traps
+/// (checked arithmetic, like `*` itself); `factorial(20)` is the largest that fits.
 pub fn factorial(n: int) -> int {
     if (n < 0) {
         0

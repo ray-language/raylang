@@ -7821,5 +7821,6 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 - **M65.2 — trig inversa y compañía COMPLETO**: `asin`/`acos`/`atan`/`atan2`/`log2`/`trunc` como
   builtins (fila en `BUILTINS` + opcode + impl por motor + envoltorio `__x` en std/math,
   patrón M11.4). `atan2` es el hueco doloroso (ángulo desde coordenadas).
-- **M65.3 — menores**: `clamp<T: Ord>` genérica (retrocompatible) + documentar la frontera
+- **M65.3 — menores COMPLETO**: `clamp<T: Ord>` genérica (retrocompatible) + documentar la frontera
   del int checked (`factorial(n ≥ 21)` / `ipow` con resultado > 2^63-1 = trap).
+  **M65 COMPLETO** (65.1 + 65.2 + 65.3).

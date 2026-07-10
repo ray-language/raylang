@@ -552,24 +552,54 @@ impl Show for char {
     fn show(self) -> string { to_string(self) }
 }
 
-// Ordena ascendente, devolviendo un arreglo NUEVO (insertion sort). `T` debe implementar `Ord`;
-// el bound se baja a paso de diccionarios (M9.2), así que `sort` es front-end puro (cero opcodes).
-/// Sorts ascending and returns a new array (insertion sort). `T` must implement `Ord`.
+// Ordena ascendente, devolviendo un arreglo NUEVO. `T` debe implementar `Ord`; el bound se baja
+// a paso de diccionarios (M9.2), así que `sort` es front-end puro (cero opcodes).
+// M61.2: merge sort BOTTOM-UP (antes insertion sort O(n²): 20k elementos = 23 s). Sin recursión
+// (anchos 1, 2, 4, … fusionando pares de tramos de `src` en `dst`), O(n log n) comparaciones, y
+// ESTABLE: un elemento del tramo derecho solo adelanta al izquierdo si es estrictamente menor.
+/// Sorts ascending and returns a new array (stable bottom-up merge sort, O(n log n)).
+/// `T` must implement `Ord`.
 fn sort<T: Ord>(a: [T]) -> [T] {
-    var out: [T] = [];
+    var src: [T] = [];
     var i: int = 0;
     while (i < a.len()) {
-        let x: T = a[i];
-        out.push(x);
-        var j: int = out.len() - 1;
-        while (j > 0 && x.less(out[j - 1])) {
-            out[j] = out[j - 1];
-            j = j - 1;
-        }
-        out[j] = x;
+        src.push(a[i]);
         i = i + 1;
     }
-    out
+    let n = src.len();
+    var width = 1;
+    while (width < n) {
+        var dst: [T] = [];
+        var lo = 0;
+        while (lo < n) {
+            var mid = lo + width;
+            if (mid > n) { mid = n; }
+            var hi = lo + 2 * width;
+            if (hi > n) { hi = n; }
+            // Fusiona src[lo..mid) con src[mid..hi) en dst.
+            var p = lo;
+            var q = mid;
+            while (p < mid || q < hi) {
+                if (p >= mid) {
+                    dst.push(src[q]);
+                    q = q + 1;
+                } else if (q >= hi) {
+                    dst.push(src[p]);
+                    p = p + 1;
+                } else if (src[q].less(src[p])) {
+                    dst.push(src[q]);
+                    q = q + 1;
+                } else {
+                    dst.push(src[p]);
+                    p = p + 1;
+                }
+            }
+            lo = lo + 2 * width;
+        }
+        src = dst;
+        width = width * 2;
+    }
+    src
 }
 
 // --- Mapas Map<K,V> (M13.1) ---

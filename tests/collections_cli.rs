@@ -72,6 +72,48 @@ fn hash_sin_overflow_ambos_motores() {
     assert_eq!(lineas[5], "true", "hash determinista del struct derivado");
 }
 
+/// M61.2 — `sort` pasó de insertion sort O(n²) a merge sort bottom-up O(n log n). Debe seguir
+/// siendo ESTABLE (claves iguales conservan su orden relativo) y cubrir los bordes.
+#[test]
+fn sort_merge_estable_ambos_motores() {
+    let src = "import std/sort as su;\n\
+        struct Par { k: int, tag: string }\n\
+        impl Ord for Par {\n\
+        \x20 fn less(self, other: Par) -> bool { self.k < other.k }\n\
+        }\n\
+        fn main() {\n\
+        \x20 let v: [int] = [];\n\
+        \x20 print(to_string(sort(v).len()));\n\
+        \x20 print(sort([3, 1, 2, 3, 1]).map(fn(x: int) -> string { to_string(x) }).join(\",\"));\n\
+        \x20 print(sort([5, 4, 3, 2, 1]).map(fn(x: int) -> string { to_string(x) }).join(\",\"));\n\
+        \x20 print(sort([\"pera\", \"kiwi\", \"uva\"]).join(\",\"));\n\
+        \x20 print(su.is_sorted(sort([9, 8, 1, 5, 5, 2])).show());\n\
+        \x20 var ps: [Par] = [];\n\
+        \x20 ps.push(Par { k: 2, tag: \"a\" });\n\
+        \x20 ps.push(Par { k: 1, tag: \"b\" });\n\
+        \x20 ps.push(Par { k: 2, tag: \"c\" });\n\
+        \x20 ps.push(Par { k: 1, tag: \"d\" });\n\
+        \x20 ps.push(Par { k: 2, tag: \"e\" });\n\
+        \x20 let s = sort(ps);\n\
+        \x20 var out = \"\";\n\
+        \x20 var i = 0;\n\
+        \x20 while (i < s.len()) {\n\
+        \x20\x20  out = out + to_string(s[i].k) + s[i].tag;\n\
+        \x20\x20  i = i + 1;\n\
+        \x20 }\n\
+        \x20 print(out);\n\
+        }\n";
+    let path = std::env::temp_dir().join("m61_sort_estable.ray");
+    std::fs::write(&path, src).unwrap();
+    let esperado = "0\n1,1,2,3,3\n1,2,3,4,5\nkiwi,pera,uva\ntrue\n1b1d2a2c2e\n";
+    let (o_in, c_in) = run_file(path.to_str().unwrap(), false);
+    let (o_vm, c_vm) = run_file(path.to_str().unwrap(), true);
+    assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
+    assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
+    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+    assert_eq!(o_in, esperado, "sort correcto y ESTABLE");
+}
+
 #[test]
 fn set_conjunto_ambos_motores() {
     ambos_motores_coinciden(

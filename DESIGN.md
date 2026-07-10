@@ -7694,10 +7694,13 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   (que además enmascara los hashes ENTRANTES de los campos, que pueden ser cualquier i64).
   Tests: hash de string largo, Set<string> con claves reales, derive con int grande (ambos
   motores).
-- **M61.2 — `sort` O(n log n)**: el insertion sort del prelude es O(n²) — medido: 20 000 ints =
-  22 960 ms en release. Reemplazo por **merge sort** en raylang puro (front-end, cero runtime),
-  ESTABLE como el actual; `sort_desc`/`dedup`/`binary_search` de `std/sort` lo heredan. Medir
-  antes/después.
+- **M61.2 — `sort` O(n log n)** ✅ **COMPLETO**: el insertion sort del prelude era O(n²). Reemplazo
+  por **merge sort bottom-up** en raylang puro (front-end, cero runtime; sin recursión — anchos
+  1, 2, 4, … fusionando pares de tramos), ESTABLE (el tramo derecho solo adelanta si es
+  estrictamente menor; verificado con claves repetidas: `1b1d2a2c2e`). **Medido (release,
+  20 000 ints aleatorios): 22 960 → 98 ms (234×)**. `sort_desc`/`dedup`/`binary_search`/`merge`
+  de `std/sort` lo heredan. Test de estabilidad + bordes en `collections_cli` (ambos motores);
+  el prelude del self-hosting conserva su insertion sort (oráculo conductual: mismo output).
 - **M61.3 — ergonomía de Option/Result + Eq/Show de bytes**: funciones libres genéricas
   `unwrap_or`/`is_some`/`is_none`/`expect`/`unwrap`/`ok_or` (+ los análogos de Result que
   procedan) — UFCS gratis (`opt.unwrap_or(0)`); `impl Eq/Show for bytes` (== ya es estructural,

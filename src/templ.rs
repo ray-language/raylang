@@ -325,6 +325,28 @@ fn valid_import(s: &str) -> bool {
     !path.is_empty() && path.split('/').all(seg_ok) && alias.map(seg_ok).unwrap_or(true)
 }
 
+/// ¿El argumento de un `{% include %}` es una **referencia a otro template** `ruta(args)`?
+/// La ruta son segmentos identificador separados por `/` (sin puntos: `m.f(x)` es una expresión
+/// ordinaria y se empalma cruda). Devuelve `(ruta, args)` con `args` = el interior de los
+/// paréntesis EXTERIORES (`a/b(f(x), y)` → `("a/b", "f(x), y")`).
+pub fn template_ref(s: &str) -> Option<(&str, &str)> {
+    let s = s.trim();
+    let abre = s.find('(')?;
+    if !s.ends_with(')') {
+        return None;
+    }
+    let ruta = s[..abre].trim_end();
+    let seg_ok = |x: &str| {
+        !x.is_empty()
+            && x.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && x.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    };
+    if ruta.is_empty() || !ruta.split('/').all(seg_ok) {
+        return None;
+    }
+    Some((ruta, s[abre + 1..s.len() - 1].trim()))
+}
+
 // Qué abre/cierra cada etiqueta (para validar el anidamiento y cuadrar las llaves).
 enum Marco {
     If,
@@ -734,14 +756,26 @@ fn generate_body(
                         }
                         imports.push((resto.to_string(), l));
                     }
-                    // `{% include expr %}`: empalma el string de `expr` SIN escapar — es HTML ya
-                    // renderizado (normalmente el `render_<x>(…)` de otro template). Equivale a
-                    // `{{& expr }}`, con la intención declarada.
+                    // `{% include ruta/al/template(args) %}`: incluye OTRO template. Quien escribe
+                    // el template no tiene por qué conocer el nombre de la función generada: el
+                    // generador importa el módulo (si no está ya) y llama a su `render_<leaf>`.
+                    // La otra forma, `{% include expr %}` (sin la forma `ruta(args)`), empalma el
+                    // string de `expr` SIN escapar — HTML ya renderizado (p. ej. el `contenido`
+                    // de un layout). Para una expresión arbitraria inline está `{{& expr }}`.
                     "include" => {
                         if resto.is_empty() {
-                            return Err(TplError { line: l, msg: "'{% include %}' sin expresión (se espera 'include modulo.render_x(args)')".into() });
+                            return Err(TplError { line: l, msg: "'{% include %}' sin argumento (se espera 'include ruta/al/template(args)' o 'include expr')".into() });
                         }
-                        linea(&mut body, depth, l, format!("out.push(to_string({resto}));"));
+                        if let Some((ruta, args)) = template_ref(resto) {
+                            let leaf = ruta.rsplit('/').next().unwrap_or(ruta);
+                            let f: String = leaf.chars().map(|c| if c == '-' { '_' } else { c }).collect();
+                            if !imports.iter().any(|(p, _)| p == ruta) {
+                                imports.push((ruta.to_string(), l));
+                            }
+                            linea(&mut body, depth, l, format!("out.push(to_string({leaf}.render_{f}({args})));"));
+                        } else {
+                            linea(&mut body, depth, l, format!("out.push(to_string({resto}));"));
+                        }
                     }
                     "params" => {
                         return Err(TplError { line: l, msg: "'{% params %}' repetido (solo puede ir una vez, al principio)".into() });
@@ -842,9 +876,29 @@ mod tests {
     }
 
     #[test]
+    fn include_por_ruta_no_expone_el_nombre_generado() {
+        // `{% include ruta/al/template(args) %}`: quien escribe el template NO conoce el
+        // `render_<x>` generado — el generador importa el módulo solo (dedup con un import
+        // explícito) y llama a la función por él.
+        let tpl = "{% params p: string %}\n<div>{% include vistas/tarjeta(p) %}</div>\n{% include vistas/tarjeta(p + \"!\") %}\n";
+        let (code, _) = generate_with_map(tpl, "pagina").unwrap();
+        assert_eq!(code.matches("import vistas/tarjeta;\n").count(), 1, "auto-import, sin duplicar\n{code}");
+        assert!(code.contains("out.push(to_string(tarjeta.render_tarjeta(p)));"), "{code}");
+        assert!(code.contains("out.push(to_string(tarjeta.render_tarjeta(p + \"!\")));"), "{code}");
+        let tokens = crate::lexer::lex(&code).unwrap();
+        assert!(crate::parser::parse(tokens).is_ok());
+        // template_ref: la forma con `.` NO es referencia (expresión ordinaria, cruda).
+        assert_eq!(template_ref("vistas/tarjeta(p)"), Some(("vistas/tarjeta", "p")));
+        assert_eq!(template_ref("a/b(f(x), y)"), Some(("a/b", "f(x), y")));
+        assert_eq!(template_ref("m.f(x)"), None);
+        assert_eq!(template_ref("contenido"), None);
+    }
+
+    #[test]
     fn import_e_include_componen_templates() {
-        // `{% import %}` se hoistea a la cabecera (con su línea en el map) y `{% include %}`
-        // empalma sin escapar (HTML ya renderizado por otro template).
+        // `{% import %}` se hoistea a la cabecera (con su línea en el map) y el `{% include %}`
+        // de EXPRESIÓN empalma sin escapar (HTML ya renderizado, p. ej. el `contenido` de un
+        // layout o una llamada explícita).
         let tpl = "{% params p: string %}\n{% import vistas/tarjeta %}\n{% import util/fmt as f %}\n<div>{% include tarjeta.render_tarjeta(p) %}</div>\n";
         let (code, map) = generate_with_map(tpl, "pagina").unwrap();
         assert!(code.contains("import vistas/tarjeta;\n"), "{code}");

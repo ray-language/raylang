@@ -29,10 +29,10 @@ una variable **no compila** (a diferencia del motor runtime `std/template`, que 
 
 **Composición**: la vista **hereda** del layout con `{% extends layout %}` + `{% block cuerpo %}`
 (fusión en compilación: la firma es la de la vista, y las variables que el layout usa —`titulo`—
-deben estar en sus params, el checker lo exige); e **incluye** el partial con
-`{% import vistas/tarjeta %}` + `{% include tarjeta.render_tarjeta(lang) %}` (empalma HTML ya
-renderizado, sin re-escapar: cada nivel escapó sus datos). `main.ray` solo llama
-`vista_inicio.render_vista_inicio(…)` — la página ya sale completa.
+deben estar en sus params, el checker lo exige); e **incluye** el partial por su ruta con
+`{% include vistas/tarjeta(lang) %}` — sin imports manuales ni conocer el nombre de la función
+generada (empalma HTML ya renderizado, sin re-escapar: cada nivel escapó sus datos). `main.ray`
+solo llama `vista_inicio.render_vista_inicio(…)` — la página ya sale completa.
 
 ## Correrlo
 

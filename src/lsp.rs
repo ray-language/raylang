@@ -2076,7 +2076,7 @@ fn template_pos_to_generated(src: &str, code: &str, map: &[usize], line0: usize,
         return None; // el cursor está tras el cierre → HTML
     }
     let content = &line[open_b + open_len..close_b];
-    let needle = if is_tag {
+    let mut needle = if is_tag {
         // Sin la palabra clave: `if cond` → `cond`, `for v in e` → `v in e`, `params a: T` → `a: T`
         // (el `elif` se reescribe a `else if` en el generado; la condición sola casa en todos).
         let t = content.trim_start();
@@ -2084,6 +2084,13 @@ fn template_pos_to_generated(src: &str, code: &str, map: &[usize], line0: usize,
     } else {
         content.trim()
     };
+    // `{% include ruta(args) %}`: en el generado la ruta se vuelve `leaf.render_leaf(args)` — solo
+    // los ARGS aparecen verbatim, así que la aguja son los args (se empalman tal cual, recortados).
+    if is_tag && content.trim_start().starts_with("include")
+        && let Some((_, args)) = crate::templ::template_ref(needle)
+    {
+        needle = args;
+    }
     if needle.is_empty() {
         return None;
     }
@@ -2161,7 +2168,19 @@ fn template_occurrences(src: &str) -> Vec<TplOcc> {
                 from = close_b + 2;
                 continue; // rutas de import/extends y nombres de bloque no son variables
             }
+            // En `{% include ruta(args) %}` la RUTA no liga (solo los args son expresión).
+            let idents_desde = if is_tag && first_word == "include"
+                && content.trim_start().strip_prefix("include")
+                    .is_some_and(|r| crate::templ::template_ref(r.trim()).is_some())
+            {
+                content.find('(').map(|i| i + 1).unwrap_or(0)
+            } else {
+                0
+            };
             for (k, (off, name)) in idents.iter().enumerate() {
+                if *off < idents_desde && !(k == 0 && *name == "include") {
+                    continue; // la ruta del include: no liga
+                }
                 if content[..*off].trim_end().ends_with('.') {
                     continue; // miembro (`fila.trim`): no liga a variables
                 }

@@ -146,8 +146,9 @@ fn include_e_import_componen_vistas_y_layout() {
         "{% params nombre: string %}<div class=\"tarjeta\">{{ nombre }}</div>\n").unwrap();
     std::fs::write(app.join("vistas/layout.ray.html"),
         "{% params titulo: string, contenido: string %}<html><title>{{ titulo }}</title><body>{% include contenido %}</body></html>\n").unwrap();
+    // El include por RUTA: sin `{% import %}` manual ni conocer el `render_<x>` generado.
     std::fs::write(app.join("vistas/pagina.ray.html"),
-        "{% params nombres: [string] %}{% import vistas/tarjeta %}<ul>{% for n in nombres %}{% include tarjeta.render_tarjeta(n) %}{% endfor %}</ul>\n").unwrap();
+        "{% params nombres: [string] %}<ul>{% for n in nombres %}{% include vistas/tarjeta(n) %}{% endfor %}</ul>\n").unwrap();
     std::fs::write(app.join("main.ray"),
         "import vistas/pagina;\nimport vistas/layout;\n\nfn main() -> int {\n    print(layout.render_layout(\"Equipo\", pagina.render_pagina([\"Ada\", \"Lin<us\"])));\n    0\n}\n").unwrap();
 

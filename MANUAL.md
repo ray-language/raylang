@@ -997,9 +997,12 @@ let html = lista.render_lista("Informe", filas);
 
 Los `{{ expr }}` admiten expresiones raylang (`{{ p.nombre }}`, `{{ n + 1 }}`) con autoescape HTML
 (`{{& expr }}` crudo); `{% if/elif/else %}`, `{% for %}` y `{% let nombre = expr %}` (local
-inmutable) son los de raylang. Los templates **componen**: `{% import vistas/tarjeta %}` trae otro
-módulo (p. ej. otro template compilado) y `{% include tarjeta.render_tarjeta(n) %}` empalma su
-HTML **sin re-escapar** (el partial ya escapó sus datos). Y **heredan** (estilo Jinja, resuelto en
+inmutable) son los de raylang. Los templates **componen**: `{% include vistas/tarjeta(n) %}`
+incluye otro template **por su ruta** — sin conocer el nombre de la función generada ni importar
+nada (el generador importa y llama al `render_<x>` él) — y empalma su HTML **sin re-escapar** (el
+partial ya escapó sus datos). Un `{% include expr %}` sin la forma `ruta(args)` empalma la
+expresión cruda (p. ej. el `contenido` de un layout); `{% import ruta [as x] %}` sigue disponible
+para usar funciones de otro módulo en las expresiones. Y **heredan** (estilo Jinja, resuelto en
 compilación): el layout marca huecos con `{% block cuerpo %}defecto{% endblock %}` y el hijo hace
 
 ```html

@@ -7293,10 +7293,16 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   componer = importar y llamar. **`{% import vistas/tarjeta [as t] %}`** emite `import …;` en el
   generado (**hoisteado** a la cabecera con su línea en el line map; el argumento se valida —
   segmentos identificador separados por `/` — para no empalmar texto arbitrario).
-  **`{% include expr %}`** empalma el string de `expr` **sin escapar** (es HTML ya renderizado,
-  normalmente el `render_<x>(…)` de otro template; equivale a `{{& expr }}` con la intención
-  declarada). El autoescape compone: el partial escapó sus datos al renderizarse; el include no
-  re-escapa. **Layouts sin slots**: el layout es un template más con un param `contenido: string`
+  **`{% include ruta/al/template(args) %}`** incluye otro template **por su ruta** (misma sesión,
+  a petición del usuario: el nombre `render_<x>` es un artefacto de compilación y quien escribe el
+  template no tiene por qué conocerlo): `template_ref` reconoce la forma `ruta(args)` (segmentos
+  identificador con `/`, sin puntos), el generador **auto-importa** el módulo (dedup con un import
+  explícito) y llama a `leaf.render_<leaf>(args)`. La forma `{% include expr %}` (cualquier otra
+  cosa: `contenido`, `m.f(x)`) empalma la expresión cruda **sin escapar** (HTML ya renderizado;
+  equivale a `{{& expr }}` con la intención declarada). El autoescape compone: el partial escapó
+  sus datos al renderizarse; el include no re-escapa. LSP: en la forma `ruta(args)` la aguja del
+  mapeo de posiciones son los ARGS (la ruta no aparece en el generado) y la ruta no liga como
+  variable en rename/references. **Layouts sin slots**: el layout es un template más con un param `contenido: string`
   que hace `{% include contenido %}`; quien compone llama `layout.render_layout(titulo,
   pagina.render_pagina(…))`. LSP/coloreado al día (keywords `include`/`import`; una ruta de import
   no liga como variable).

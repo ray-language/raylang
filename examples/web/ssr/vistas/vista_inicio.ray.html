@@ -1,6 +1,5 @@
 {% params titulo: string, saludo: string, popular: bool, lenguajes: [string] %}
 {% extends layout %}
-{% import vistas/tarjeta %}
 {% block cuerpo %}
     <h1>{{ titulo }}</h1>
     <p>{{ saludo }}</p>
@@ -11,7 +10,7 @@
     {% endif %}
     <ul>
     {% for lang in lenguajes %}
-        {% include tarjeta.render_tarjeta(lang) %}
+        {% include vistas/tarjeta(lang) %}
     {% endfor %}
     </ul>
 {% endblock %}

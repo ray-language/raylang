@@ -200,6 +200,8 @@ encierran el cursor, las palabras clave del template y, tras un `.`, los **miemb
 receptor** — métodos y builtins aplicables a su tipo), **hover** con el tipo real de la
 expresión, **ir-a-definición** (un param lleva a su `{% params %}`), **signature help** al
 escribir los argumentos, **find-references/rename/highlight** de params y variables de `for`, y
-**outline** (`render_<stem>` con sus params). Los templates componen con `{% import %}` +
-`{% include %}`. No hace falta `ray templ` a mano: `ray run`/`build`/`test` regeneran los
+**outline** (`render_<stem>` con sus params), y **snippets de bloque** (teclear `for`/`if` inserta
+el `{% for %}…{% endfor %}` entero con placeholders navegables por Tab). Los templates componen
+con `{% import %}` + `{% include %}`, heredan con `{% extends %}` + `{% block %}`, y declaran
+locales con `{% let %}`. No hace falta `ray templ` a mano: `ray run`/`build`/`test` regeneran los
 templates desactualizados.

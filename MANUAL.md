@@ -996,12 +996,21 @@ let html = lista.render_lista("Informe", filas);
 ```
 
 Los `{{ expr }}` admiten expresiones raylang (`{{ p.nombre }}`, `{{ n + 1 }}`) con autoescape HTML
-(`{{& expr }}` crudo); `{% if/elif/else %}` y `{% for %}` son los de raylang. Los templates
-**componen**: `{% import vistas/tarjeta %}` trae otro módulo (p. ej. otro template compilado) y
-`{% include tarjeta.render_tarjeta(n) %}` empalma su HTML **sin re-escapar** (el partial ya escapó
-sus datos). Un **layout** es un template más con un param `contenido: string` que hace
-`{% include contenido %}`; se compone llamando `layout.render_layout(titulo,
-pagina.render_pagina(…))`. La ventaja sobre el
+(`{{& expr }}` crudo); `{% if/elif/else %}`, `{% for %}` y `{% let nombre = expr %}` (local
+inmutable) son los de raylang. Los templates **componen**: `{% import vistas/tarjeta %}` trae otro
+módulo (p. ej. otro template compilado) y `{% include tarjeta.render_tarjeta(n) %}` empalma su
+HTML **sin re-escapar** (el partial ya escapó sus datos). Y **heredan** (estilo Jinja, resuelto en
+compilación): el layout marca huecos con `{% block cuerpo %}defecto{% endblock %}` y el hijo hace
+
+```html
+{% params titulo: string, precios: [int] %}
+{% extends base %}
+{% block cuerpo %}<p>{{ precios.len() }} precios</p>{% endblock %}
+```
+
+— la firma es la del hijo (las variables que use el layout deben estar en sus params: el checker
+lo exige), un bloque no sobreescrito conserva su defecto, y el layout compila también standalone.
+La ventaja sobre el
 motor runtime: **un typo en una variable es error de compilación** (no un `""` silencioso) y el
 render es ~2× más rápido (cero parseo en runtime). El motor runtime queda para plantillas dinámicas
 (cargadas de disco/BD en caliente). En el editor (VSCode/Sublime + `ray lsp`), un `.ray.html` tiene

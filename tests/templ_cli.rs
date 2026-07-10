@@ -163,6 +163,38 @@ fn include_e_import_componen_vistas_y_layout() {
 }
 
 #[test]
+fn extends_block_y_let_end_to_end() {
+    // Herencia de layout estilo Jinja (M55): el hijo `{% extends base %}` + `{% block %}`s; el
+    // layout pone la estructura (con defaults) y compila también standalone. `{% let %}` declara
+    // locales del template.
+    let base = std::env::temp_dir().join("ray_templ_extends");
+    let _ = std::fs::remove_dir_all(&base);
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("vistas")).unwrap();
+    std::fs::write(app.join("vistas/base.ray.html"),
+        "{% params titulo: string %}<html><title>{{ titulo }}</title><body>{% block cuerpo %}<p>vacío</p>{% endblock %}<footer>{% block pie %}© raylang{% endblock %}</footer></body></html>\n").unwrap();
+    std::fs::write(app.join("vistas/pagina.ray.html"),
+        "{% params titulo: string, precios: [int] %}\n{% extends base %}\n{% block cuerpo %}{% let cuantos = precios.len() %}<p>{{ cuantos }} precios</p>{% endblock %}\n").unwrap();
+    std::fs::write(app.join("main.ray"),
+        "import vistas/pagina;\n\nfn main() -> int {\n    print(pagina.render_pagina(\"Lista\", [1, 2, 3]));\n    0\n}\n").unwrap();
+
+    let out = Command::new(BIN).args(["run", "main.ray"]).current_dir(&app).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(stdout, "<html><title>Lista</title><body><p>3 precios</p><footer>© raylang</footer></body></html>\n\n",
+        "hereda la estructura, sobreescribe `cuerpo`, conserva el default de `pie`");
+
+    // Un typo en el nombre del bloque es error de compilación con SU línea.
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    std::fs::write(app.join("vistas/pagina.ray.html"),
+        "{% params titulo: string %}\n{% extends base %}\n{% block cuerpu %}x{% endblock %}\n").unwrap();
+    let out = Command::new(BIN).args(["build", "main.ray"]).current_dir(&app).output().unwrap();
+    assert_eq!(out.status.code(), Some(65));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("no declara") && err.contains("cuerpu"), "{err}");
+}
+
+#[test]
 fn errores_del_template() {
     let base = std::env::temp_dir().join("ray_templ_cli_err");
     let _ = std::fs::remove_dir_all(&base);

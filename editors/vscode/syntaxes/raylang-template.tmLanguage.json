@@ -18,7 +18,7 @@
       "name": "meta.embedded.block.raylang-template",
       "patterns": [
         {
-          "match": "\\G\\s*(params|elif|if|else|endif|endfor|for|include|import|in)\\b",
+          "match": "\\G\\s*(params|elif|if|else|endif|endfor|endblock|for|include|import|in|let|extends|block)\\b",
           "captures": { "1": { "name": "keyword.control.raylang-template" } }
         },
         { "match": "\\b(in)\\b", "name": "keyword.control.raylang-template" },

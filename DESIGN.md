@@ -7299,5 +7299,22 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   que hace `{% include contenido %}`; quien compone llama `layout.render_layout(titulo,
   pagina.render_pagina(…))`. LSP/coloreado al día (keywords `include`/`import`; una ruta de import
   no liga como variable).
-- Diferido: `{% let %}` locales; slots/bloques de layout (estilo Jinja `{% block %}`) si el patrón
-  `contenido: string` se queda corto.
+- **`{% let %}` + herencia de layout (misma sesión, cierra los diferidos)**:
+  (a) **`{% let nombre = expr %}`** — local inmutable del template (baja a `let …;`; alcance = el
+  bloque generado: dentro de un for/if muere en su end). (b) **`{% extends ruta %}` +
+  `{% block nombre %}…{% endblock %}`** (estilo Jinja, resuelto **EN COMPILACIÓN**): el hijo
+  declara `extends` como primera etiqueta tras `params` y solo aporta bloques (+ imports); el
+  layout es otro template cuyos `{% block %}` marcan los huecos con contenido por defecto. La
+  fusión es de **tokens** (`resolve_extends`/`merge_layout` en `templ.rs`): se descarta el
+  `{% params %}` del layout (la firma manda la del HIJO; las variables que el layout use deben
+  estar en los params del hijo — **el checker lo exige**, typo = error), cada bloque se sustituye
+  por el del hijo o queda su defecto, y el stream fusionado genera normal. Ruta del layout
+  **relativa al template**; el layout compila **standalone** (los marcadores de bloque son
+  transparentes). Line map: los bloques del hijo mapean exactos; las líneas del layout se
+  atribuyen al `{% extends %}` (degradación honesta). Errores dedicados: bloque que el layout no
+  declara (typo, con su línea), contenido suelto en un hijo con extends, bloques anidados/sin
+  cerrar, herencia encadenada (diferida). (c) **Snippets de bloque en el LSP**: teclear `for`/`if`
+  en el HTML (o la keyword en un `{%`) ofrece el bloque entero con placeholders navegables
+  (`{% for elem in coleccion %}…{% endfor %}`, if/else, let, block) — `template_block_snippets`.
+- Diferido: herencia encadenada (layout que extiende a otro), `{% block %}` con contenido del
+  padre (`super()` de Jinja).

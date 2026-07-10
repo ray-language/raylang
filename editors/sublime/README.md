@@ -37,7 +37,8 @@ nombre `raylang`:
    expresión coloreada como raylang) y reciben del mismo LSP los diagnósticos del template y,
    dentro de `{{ }}`/`{% %}`: autocompletado (params tipados, variables de `for`, y tras un `.`
    los miembros del receptor), hover con el tipo real, ir-a-definición, signature help,
-   find-references/rename/highlight y outline.
+   find-references/rename/highlight, outline y snippets de bloque (`for`/`if` insertan el bloque
+   entero con placeholders).
 
 No hay que compilar nada: el `.sublime-syntax` es declarativo (a diferencia del cliente de
 VSCode, que sí es TypeScript a compilar).

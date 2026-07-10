@@ -1816,7 +1816,10 @@ fn completion_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
 /// template está a medio escribir mientras se pide completion, no se puede tokenizar entero.
 fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
     let Some((is_tag, vars)) = template_scope(src, line0, char0) else {
-        return Json::Arr(vec![]); // el cursor está fuera de los delimitadores (en el HTML)
+        // Fuera de los delimitadores (HTML): NO se compite con la completion de HTML del editor,
+        // pero sí se ofrecen los BLOQUES del template como snippets (teclear `for` o `if` inserta
+        // el bloque entero con placeholders navegables por Tab).
+        return Json::Arr(template_block_snippets(true));
     };
 
     // Kinds LSP: 6 = Variable, 14 = Keyword. Los sortText ponen las variables antes que las keywords.
@@ -1833,7 +1836,7 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
         list.push(obj(fields));
     }
     let keywords: &[&str] = if is_tag {
-        &["params", "if", "elif", "else", "endif", "for", "endfor", "in", "include", "import", "true", "false"]
+        &["params", "elif", "else", "endif", "endfor", "in", "include", "import", "extends", "endblock", "true", "false"]
     } else {
         &["true", "false"]
     };
@@ -1844,7 +1847,36 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
             ("sortText", Json::Str(format!("1{kw}"))),
         ]));
     }
+    if is_tag {
+        // `for`/`if`/`let` completan el BLOQUE entero (sin el `{%` inicial, que ya está escrito).
+        list.extend(template_block_snippets(false));
+    }
     Json::Arr(list)
+}
+
+/// Los snippets de bloque del template (`{% for %}…{% endfor %}`, `{% if %}…{% endif %}`,
+/// `{% let %}`), con placeholders navegables por Tab. `with_opener` incluye el `{%` inicial (para
+/// ofrecerlos en el HTML, donde aún no hay delimitador); sin él, completan un `{% ` ya escrito.
+fn template_block_snippets(with_opener: bool) -> Vec<Json> {
+    let cases: &[(&str, &str)] = &[
+        ("for", "for ${1:elem} in ${2:coleccion} %}$0{% endfor %}"),
+        ("if", "if ${1:condicion} %}$0{% endif %}"),
+        ("if/else", "if ${1:condicion} %}$2{% else %}$0{% endif %}"),
+        ("let", "let ${1:nombre} = ${2:expr} %}$0"),
+        ("block", "block ${1:nombre} %}$0{% endblock %}"),
+    ];
+    cases.iter().map(|(label, body)| {
+        let insert = if with_opener { format!("{{% {body}") } else { body.to_string() };
+        obj(vec![
+            ("label", Json::Str(format!("{{% {label} %}}"))),
+            // filterText = la keyword: teclear `for` en el HTML lo ofrece aunque el label lleve {%.
+            ("filterText", Json::Str(label.split('/').next().unwrap_or(label).to_string())),
+            ("kind", num(15)), // 15 = Snippet
+            ("insertText", Json::Str(insert)),
+            ("insertTextFormat", num(2)), // 2 = Snippet (placeholders ${n:...})
+            ("sortText", Json::Str(format!("1{label}"))),
+        ])
+    }).collect()
 }
 
 /// El ámbito de un template en una posición: `None` si el cursor está FUERA de `{{ … }}`/`{% … %}`
@@ -1876,9 +1908,10 @@ fn template_scope(src: &str, line0: usize, char0: usize) -> Option<(bool, Vec<(S
     }
 
     let params = crate::templ::header_params(src);
-    // Variables de bucle EN ÁMBITO: pila de los `{% for v in expr %}` abiertos (sin `endfor`)
-    // antes del cursor. Solo cuentan las etiquetas completas (cerradas con `%}`) del prefijo.
-    let mut fors: Vec<(String, String)> = Vec::new();
+    // Variables EN ÁMBITO: grupos apilados — la base (los `{% let %}` de nivel superior) nunca se
+    // cierra; cada `{% for %}` abre un grupo (su variable + los `let` de dentro) que muere en su
+    // `endfor`. Solo cuentan las etiquetas completas (cerradas con `%}`) del prefijo.
+    let mut groups: Vec<Vec<(String, String)>> = vec![Vec::new()];
     let mut rest = prefix.as_str();
     while let Some(i) = rest.find("{%") {
         rest = &rest[i + 2..];
@@ -1886,7 +1919,9 @@ fn template_scope(src: &str, line0: usize, char0: usize) -> Option<(bool, Vec<(S
         let tag = rest[..j].trim();
         rest = &rest[j + 2..];
         if tag == "endfor" {
-            fors.pop();
+            if groups.len() > 1 {
+                groups.pop();
+            }
         } else if let Some(cuerpo) = tag.strip_prefix("for ")
             && let Some((v, expr)) = cuerpo.split_once(" in ")
         {
@@ -1899,11 +1934,16 @@ fn template_scope(src: &str, line0: usize, char0: usize) -> Option<(bool, Vec<(S
                     .map(|t| t.trim().to_string())
                     .unwrap_or_default()
             };
-            fors.push((v.trim().to_string(), tipo));
+            groups.push(vec![(v.trim().to_string(), tipo)]);
+        } else if let Some(cuerpo) = tag.strip_prefix("let ")
+            && let Some((v, _)) = cuerpo.split_once('=')
+        {
+            // Tipo desconocido textualmente (el hover semántico vía el generado sí lo da).
+            groups.last_mut().expect("base").push((v.trim().to_string(), String::new()));
         }
     }
     let mut vars = params;
-    vars.extend(fors);
+    vars.extend(groups.into_iter().flatten());
     Some((is_tag, vars))
 }
 
@@ -1941,7 +1981,8 @@ fn template_generated(uri: &str, src: &str) -> Option<(String, Vec<usize>, Strin
         .as_deref()
         .and_then(|p| crate::templ::fn_suffix_of(p).ok())
         .unwrap_or_else(|| "vista".to_string());
-    let (code, map) = crate::templ::generate_with_map(src, &name).ok()?;
+    let dir = path.as_deref().and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let (code, map) = crate::templ::generate_with_map_at(src, &name, dir.as_deref()).ok()?;
     let gen_uri = uri.trim_end_matches(".html").to_string();
     Some((code, map, gen_uri))
 }
@@ -2024,9 +2065,11 @@ type TplOcc = (usize, usize, usize, String, bool);
 /// no ligan. Solo cuenta delimitadores abiertos y cerrados en la misma línea.
 fn template_occurrences(src: &str) -> Vec<TplOcc> {
     let params: Vec<String> = crate::templ::header_params(src).into_iter().map(|(n, _)| n).collect();
-    let keywords = ["params", "if", "elif", "else", "endif", "for", "endfor", "in", "include", "import", "true", "false"];
+    let keywords = ["params", "if", "elif", "else", "endif", "for", "endfor", "in", "include", "import", "let", "extends", "block", "endblock", "true", "false"];
     let mut out: Vec<TplOcc> = Vec::new();
-    let mut for_stack: Vec<Vec<(String, String)>> = Vec::new(); // grupos de (var, clave) por bloque
+    // Grupos de (var, clave) por bloque: la base (los `{% let %}` de nivel superior) nunca se
+    // cierra; cada `for` apila un grupo que su `endfor` cierra (los `let` de dentro van con él).
+    let mut for_stack: Vec<Vec<(String, String)>> = vec![Vec::new()];
     for (l0, line) in src.lines().enumerate() {
         let mut from = 0usize; // byte
         loop {
@@ -2063,9 +2106,9 @@ fn template_occurrences(src: &str) -> Vec<TplOcc> {
                 .then(|| idents.iter().position(|(_, n)| *n == "in").unwrap_or(idents.len()))
                 .unwrap_or(0);
             let mut group: Vec<(String, String)> = Vec::new();
-            if is_tag && first_word == "import" {
+            if is_tag && matches!(first_word, "import" | "extends" | "block") {
                 from = close_b + 2;
-                continue; // los segmentos de una ruta de import no son variables
+                continue; // rutas de import/extends y nombres de bloque no son variables
             }
             for (k, (off, name)) in idents.iter().enumerate() {
                 if content[..*off].trim_end().ends_with('.') {
@@ -2089,6 +2132,14 @@ fn template_occurrences(src: &str) -> Vec<TplOcc> {
                     group.push((name.to_string(), key));
                     continue;
                 }
+                // `{% let x = expr %}`: el ident tras `let` (k==1) es la declaración; vive en el
+                // grupo ABIERTO (nivel superior o el for envolvente), así muere con su endfor.
+                if is_tag && first_word == "let" && k == 1 {
+                    let key = format!("l:{l0}:{col0}");
+                    out.push((l0, col0, len, key.clone(), true));
+                    for_stack.last_mut().expect("base").push((name.to_string(), key));
+                    continue;
+                }
                 if keywords.contains(name) {
                     continue;
                 }
@@ -2101,7 +2152,7 @@ fn template_occurrences(src: &str) -> Vec<TplOcc> {
             }
             if is_tag && first_word == "for" {
                 for_stack.push(group);
-            } else if is_tag && first_word == "endfor" {
+            } else if is_tag && first_word == "endfor" && for_stack.len() > 1 {
                 for_stack.pop();
             }
             from = close_b + 2;
@@ -2938,7 +2989,8 @@ fn template_diagnostics(uri: &str, src: &str) -> Json {
         .as_deref()
         .and_then(|p| crate::templ::fn_suffix_of(p).ok())
         .unwrap_or_else(|| "vista".to_string());
-    let (code, map) = match crate::templ::generate_with_map(src, &name) {
+    let dir = path.as_deref().and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let (code, map) = match crate::templ::generate_with_map_at(src, &name, dir.as_deref()) {
         Err(e) => {
             let d = Diag { line: e.line, col: 1, len: usize::MAX, message: format!("template: {}", e.msg) };
             return publish(uri, vec![diagnostic_json(src, &d)]);
@@ -4637,8 +4689,11 @@ mod tests {
         let en_tag = labels(3, 6);
         assert!(en_tag.iter().any(|(l, _)| l == "total"), "{en_tag:?}");
         assert!(en_tag.iter().any(|(l, _)| l == "endif"), "{en_tag:?}");
-        // Fuera de los delimitadores (línea 5): lista vacía (el HTML no es nuestro).
-        assert!(labels(4, 3).is_empty());
+        // Fuera de los delimitadores (línea 5): NADA de variables (el HTML no es nuestro), solo
+        // los snippets de bloque (`{% for %}`/`{% if %}`/…) para insertar un bloque entero.
+        let en_html = labels(4, 3);
+        assert!(!en_html.iter().any(|(l, _)| l == "titulo"), "{en_html:?}");
+        assert!(en_html.iter().any(|(l, _)| l == "{% for %}"), "{en_html:?}");
 
         // Y el enrutado: un completion sobre una URI `.ray.html` pasa por este camino.
         let uri = "file:///tmp/vista.ray.html";

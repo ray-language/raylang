@@ -58,26 +58,32 @@ sin compilar un cliente.
 
 2. Instala el paquete **LSP** (Package Control → *Install Package* → `LSP`).
 
-3. Abre **Preferences → Package Settings → LSP → Settings** y añade el cliente de raylang
-   dentro de `clients`:
+3. Declara el servidor de raylang. **Desde LSP 2.13 los clientes viven en
+   `Packages/User/LanguageServers.sublime-settings`** (Preferences → Package Settings → LSP →
+   Language Servers); en versiones anteriores iban dentro de `"clients"` en
+   `LSP.sublime-settings` (LSP migra solo el formato viejo). En el archivo nuevo el cliente va
+   al NIVEL SUPERIOR, sin envoltorio `clients`:
 
    ```jsonc
    {
-     "clients": {
-       "raylang": {
-         "enabled": true,
-         // ⚠️ Usa la RUTA ABSOLUTA al binario, no solo "ray"/"raylang". Sublime es una app
-         // de GUI y en macOS/Linux las apps de GUI NO heredan el PATH de tu shell (arrancan
-         // con un PATH mínimo del sistema), así que un comando a secas falla con
-         // "[Errno 2] No such file or directory: 'ray'" aunque tu terminal sí lo encuentre.
-         "command": ["/Users/TU_USUARIO/.local/bin/ray", "lsp"],
-         // El instalador (curl|sh) deja el binario ahí; si compilaste a mano, apunta a
-         // ".../target/release/ray". Un símlink estable evita tener que reeditar tras recompilar.
-         "selector": "source.raylang | text.html.raylang"
-       }
+     "raylang": {
+       "enabled": true,
+       // ⚠️ Usa la RUTA ABSOLUTA al binario, no solo "ray"/"raylang". Sublime es una app
+       // de GUI y en macOS/Linux las apps de GUI NO heredan el PATH de tu shell (arrancan
+       // con un PATH mínimo del sistema), así que un comando a secas falla con
+       // "[Errno 2] No such file or directory: 'ray'" aunque tu terminal sí lo encuentre.
+       "command": ["/Users/TU_USUARIO/.local/bin/ray", "lsp"],
+       // El instalador (curl|sh) deja el binario ahí; si compilaste a mano, apunta a
+       // ".../target/release/ray". Un símlink estable evita tener que reeditar tras recompilar.
+       // El selector cubre los .ray Y los templates compilados .ray.html (M55).
+       "selector": "source.raylang | text.html.raylang"
      }
    }
    ```
+
+   > Si algo no arranca, `LSP: Troubleshoot Server Configuration` muestra el selector y el
+   > comando EFECTIVOS — si no coinciden con lo que escribiste, hay una config vieja migrada
+   > en `LanguageServers.sublime-settings` pisando la tuya.
 
 4. Reabre un `.ray`. El paquete LSP lanza `ray lsp` y subraya los errores que el checker
    reporta (un error a la vez: el compilador es *fail-fast*; al corregirlo aparece el siguiente).

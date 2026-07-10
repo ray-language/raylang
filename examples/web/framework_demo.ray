@@ -8,9 +8,10 @@
 //   curl http://127.0.0.1:8080/
 //   curl http://127.0.0.1:8080/users/42
 //   curl -X POST -d 'eco esto' http://127.0.0.1:8080/echo
+//   curl 'http://127.0.0.1:8080/saluda?nombre=Ada'
 //   curl -i http://127.0.0.1:8080/teapot      (responde 418)
 //   curl -i http://127.0.0.1:8080/nope        (responde 404)
-from framework import new_app, use_mw, GET, POST, listen, param, body, text, json, status, Ctx, Res;
+from framework import new_app, use_mw, GET, POST, listen, param, query, body, text, json, status, Ctx, Res;
 
 // Middleware: registra cada petición (método + ruta) y deja seguir la cadena.
 fn logger(c: Ctx, r: Res) -> bool {
@@ -35,6 +36,13 @@ fn main() -> int {
     // Eco del cuerpo de la petición.
     app.POST("/echo", fn(c: Ctx, r: Res) {
         r.text(c.body());
+    });
+
+    // Parámetro de la query string (M56.2): /saluda?nombre=Ada → c.query("nombre").
+    app.GET("/saluda", fn(c: Ctx, r: Res) {
+        var quien: string = c.query("nombre");
+        if (quien == "") { quien = "mundo"; }
+        r.text("hola, " + quien);
     });
 
     // Estado a medida, encadenado: r.status(418).text(...).

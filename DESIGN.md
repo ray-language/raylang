@@ -7384,9 +7384,18 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   espejo `examples/web/webserver.ray`; test `servidor_aplica_limites_de_seguridad` (4 casos) +
   verificado en vivo sobre el demo SSR (cabecera de 70 KiB → 400, Content-Length gigante → 400
   rechazado en la declaración, el servidor sigue vivo).
-- **M56.2 — query string + percent-decoding**: `Request` gana `query` (y `path` queda SIN query
-  — cambio semántico deliberado; arregla el enrutado del framework). Decode `%XX` del path.
-  Toca framework/demos/tests (mecánico).
+- **M56.2 — query string + percent-decoding** ✅ **COMPLETO**: `Request` gana `query` (la query
+  string CRUDA tras el `?`, "" si no hay) y `path` queda **decodificado y SIN query** — cambio
+  semántico deliberado que arregla el enrutado (antes `GET /u/7?x=1` no casaba ninguna ruta del
+  framework). La línea de petición se parte en el PRIMER `?`; un escape `%XX` inválido en la ruta
+  es `Err` → 400 (no una ruta corrupta silenciosa). Nuevo en `std/url`: **`percent_decode`**
+  (solo `%XX`; el `+` queda literal — la regla de RUTAS; el `+`=espacio es exclusivo de
+  form-urlencoded) y `url_decode` pasa a delegar (`percent_decode(s.replace("+", " "))`).
+  Helpers nuevos: `webserver.query_params(req) -> Map<string,string>` (parsea con
+  `url.parse_query`, decodificada) y `framework.query(ctx, nombre)` (simétrico de `param`, "" si
+  no existe). Demo `/saluda?nombre=Ada` en `framework_demo.ray`. Tests: enrutado con `?` +
+  decodificación de path/query en `webserver_cli` y `framework_cli`; verificado en vivo sobre el
+  SSR (`?utm=x` ya no contamina el último segmento; `/lang/ru%73t` decodifica).
 - **M56.3 — `serve_tls(host, port, cert, key, handler)`**: el accept-loop con `net.tls_accept`
   antes de leer (patrón de `wss_echo.ray`); reusa TODO lo demás. Librería pura.
 - **M56.4 — timeouts** (único toque de runtime real): deadline en `io_parked` + timeout en

@@ -96,6 +96,15 @@ pub fn param(ctx: Ctx, name: string) -> string {
     ""
 }
 
+// El valor de un parámetro de la query string (`?nombre=Ada`), o "" si no existe (M56.2; el
+// enrutado casa por `path`, que ya viene sin query — antes `/u/7?x=1` no casaba ninguna ruta).
+pub fn query(ctx: Ctx, name: string) -> string {
+    match (get(webserver.query_params(ctx.req), name)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    }
+}
+
 // El cuerpo de la petición como texto (UTF-8); "" si no es texto válido.
 pub fn body(ctx: Ctx) -> string {
     match (from_utf8(ctx.req.body)) {

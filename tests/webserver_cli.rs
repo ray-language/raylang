@@ -57,7 +57,8 @@ fn cuerpo(resp: &[u8]) -> &[u8] {
     resp.windows(4).position(|w| w == sep).map(|i| &resp[i + 4..]).unwrap_or(&[])
 }
 
-// Driver: servidor concurrente acotado a 2 conexiones (cada una en su fibra) que enruta /hola.
+// Driver: servidor concurrente acotado a 5 conexiones (cada una en su fibra) que enruta /hola y
+// expone la query (M56.2: `path` viene decodificado y sin query; `query` aparte, cruda).
 const SRV_HTTP: &str = r#"
 import webserver;
 import std/net;
@@ -66,6 +67,12 @@ fn manejar(conn: int) {
         Result.Ok(req) => {
             var resp: webserver.Response = webserver.not_found();
             if (req.path == "/hola") { resp = webserver.ok("hola " + req.method); }
+            if (req.path == "/q") {
+                match (get(webserver.query_params(req), "x")) {
+                    Option.Some(v) => { resp = webserver.ok("x=" + v + " cruda=" + req.query); },
+                    Option.None => { resp = webserver.ok("sin x"); },
+                }
+            }
             match (webserver.send_response(conn, resp)) {
                 Result.Ok(_) => {}, Result.Err(e) => eprint(e),
             }
@@ -80,10 +87,10 @@ fn main() -> int {
             print(net.local_port(srv));
             scope(fn() {
                 var i: int = 0;
-                while (i < 2) {
+                while (i < 5) {
                     match (net.tcp_accept(srv)) {
                         Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
-                        Result.Err(e) => { eprint(e); i = 2; },
+                        Result.Err(e) => { eprint(e); i = 5; },
                     }
                     i = i + 1;
                 }
@@ -107,6 +114,19 @@ fn servidor_http_responde_y_enruta() {
 
     let nf = pedir(port, "GET /otra HTTP/1.1\r\nHost: x\r\n\r\n");
     assert!(nf.contains("404 Not Found"), "esperaba 404, got: {nf}");
+
+    // M56.2: la query NO forma parte del path → la ruta sigue casando.
+    let conq = pedir(port, "GET /hola?x=1 HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(conq.contains("200 OK") && conq.contains("hola GET"), "esperaba que /hola?x=1 casara /hola, got: {conq}");
+
+    // M56.2: query_params decodifica (+ = espacio, %XX) y req.query conserva la cruda.
+    let q = pedir(port, "GET /q?x=Ada+Lovelace%21&y=2 HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(q.contains("x=Ada Lovelace!"), "esperaba el valor decodificado, got: {q}");
+    assert!(q.contains("cruda=x=Ada+Lovelace%21&y=2"), "esperaba la query cruda, got: {q}");
+
+    // M56.2: el path llega percent-decodificado ("/ho%6Ca" = "/hola").
+    let dec = pedir(port, "GET /ho%6Ca HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(dec.contains("hola GET"), "esperaba /ho%6Ca decodificado a /hola, got: {dec}");
 
     let _ = child.wait();
 }

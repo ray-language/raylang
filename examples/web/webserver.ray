@@ -9,12 +9,20 @@
 // no solo texto. Las cabeceras siguen siendo texto (ASCII). Los atajos de respuesta de texto (ok/text/
 // json_response) aceptan string y lo codifican; bytes_response acepta bytes crudos. TLS (https) es M19.4.
 import std/net;
+import std/url;
 
+// M56.2: `path` llega DECODIFICADO (%XX; `+` es literal en rutas) y SIN la query string, que va
+// aparte en `query` (cruda, sin el `?`); `query_params` la parsea a un Map.
 pub struct Request {
     method: string,
     path: string,
+    query: string,
     headers: Map<string, string>,
     body: bytes,
+}
+
+pub fn query_params(req: Request) -> Map<string, string> {
+    url.parse_query(req.query)
 }
 
 // M56.1: límites de la frontera de seguridad (cabeceras/cuerpo/conexiones simultáneas).
@@ -168,13 +176,30 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
         Result.Ok(cabeceras_raw) => {
             let lineas: [string] = cabeceras_raw.split("\r\n");
 
-            // Línea de petición: "GET /ruta HTTP/1.1".
+            // Línea de petición: "GET /ruta?query HTTP/1.1". M56.2: se parte en el PRIMER `?`
+            // (la query cruda va aparte) y la ruta se decodifica (%XX; escape inválido = 400).
             let partes: [string] = lineas[0].split(" ");
             if (partes.len() < 2) {
                 return Result.Err("línea de petición malformada: " + lineas[0]);
             }
             let method: string = partes[0];
-            let path: string = partes[1];
+            let target: string = partes[1];
+            var path_raw: string = target;
+            var query: string = "";
+            match (index_of(target, "?")) {
+                Option.Some(q) => {
+                    path_raw = target.substring(0, q);
+                    query = target.substring(q + 1, target.len());
+                },
+                Option.None => { },
+            }
+            var path: string = path_raw;
+            match (url.percent_decode(path_raw)) {
+                Result.Ok(p) => { path = p; },
+                Result.Err(e) => {
+                    return Result.Err("ruta malformada (" + e + "): " + path_raw);
+                },
+            }
 
             // Cabeceras (nombre en minúsculas para lookup case-insensitive).
             var headers: Map<string, string> = Map.new();
@@ -223,7 +248,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                 Option.None => { },
             }
 
-            Result.Ok(Request { method: method, path: path, headers: headers, body: body })
+            Result.Ok(Request { method: method, path: path, query: query, headers: headers, body: body })
         },
     }
 }

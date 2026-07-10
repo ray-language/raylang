@@ -54,9 +54,12 @@ pub fn url_encode(s: string) -> string {
     out
 }
 
-/// Decodes a percent-encoded string; `+` decodes to a space (application/x-www-form-urlencoded).
+// M56.2: decodifica SOLO los escapes %XX; un `+` queda como `+` literal. Es la regla de las
+// RUTAS de URL (el `+`=espacio es exclusivo de application/x-www-form-urlencoded → `url_decode`).
+/// Decodes percent escapes (`%XX`) only; a `+` stays a literal plus — the rule for URL *paths*
+/// (`+` means space only in application/x-www-form-urlencoded; for that, use `url_decode`).
 /// Returns `Err` on an incomplete or invalid `%XX` escape, or if the bytes are not valid UTF-8.
-pub fn url_decode(s: string) -> Result<string, string> {
+pub fn percent_decode(s: string) -> Result<string, string> {
     var oct: [int] = [];
     let n = s.len();
     var i = 0;
@@ -74,21 +77,24 @@ pub fn url_decode(s: string) -> Result<string, string> {
             oct.push(hi << 4 | lo);
             i = i + 3;
         } else {
-            if (c == '+') {
-                oct.push(32);  // espacio (form-urlencoded)
-                i = i + 1;
-            } else {
-                let b = to_string(c).to_bytes();
-                var j = 0;
-                while (j < b.len()) {
-                    oct.push(b[j]);
-                    j = j + 1;
-                }
-                i = i + 1;
+            let b = to_string(c).to_bytes();
+            var j = 0;
+            while (j < b.len()) {
+                oct.push(b[j]);
+                j = j + 1;
             }
+            i = i + 1;
         }
     }
     from_utf8(bytes_of(oct))
+}
+
+/// Decodes a percent-encoded string; `+` decodes to a space (application/x-www-form-urlencoded).
+/// Returns `Err` on an incomplete or invalid `%XX` escape, or if the bytes are not valid UTF-8.
+pub fn url_decode(s: string) -> Result<string, string> {
+    // Un `+` literal pasa a espacio ANTES de decodificar; el `%2B` (el + codificado) no se toca
+    // (no contiene el carácter `+`), así que decodifica a `+` como debe.
+    percent_decode(s.replace("+", " "))
 }
 
 // `url_decode` tolerante: si la entrada está mal formada, devuelve el texto crudo (no rompe el parseo).

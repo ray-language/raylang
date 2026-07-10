@@ -73,6 +73,16 @@ fn framework_enruta_params_middleware_y_404() {
     assert!(r.contains("200 OK"), "POST /echo estado: {r}");
     assert!(r.ends_with("eco esto"), "POST /echo eco: {r}");
 
+    // M56.2: la query NO forma parte del path → la ruta con :id sigue casando con ?x=1.
+    let r = pedir(port, "GET /users/42?x=1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("\"id\": \"42\""), "ruta con query debe casar: {r}");
+
+    // M56.2: c.query("nombre") lee la query string (decodificada: + = espacio).
+    let r = pedir(port, "GET /saluda?nombre=Ada+Lovelace HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("hola, Ada Lovelace"), "query param: {r}");
+    let r = pedir(port, "GET /saluda HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("hola, mundo"), "query param ausente → default: {r}");
+
     // Estado a medida encadenado.
     let r = pedir(port, "GET /teapot HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("418"), "GET /teapot estado: {r}");

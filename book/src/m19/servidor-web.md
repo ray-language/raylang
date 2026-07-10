@@ -12,16 +12,19 @@ petición, **decidir** qué hacer, y **escribir** una respuesta. La librería la
 gemelos del `Response` del cliente (M15.4b):
 
 ```rust
-pub struct Request  { method: string, path: string, headers: Map<string, string>, body: bytes }
+pub struct Request  { method: string, path: string, query: string, headers: Map<string, string>, body: bytes }
 pub struct Response { status: int, headers: Map<string, string>, body: bytes }
 ```
 
 `read_request(conn)` acumula del socket hasta encontrar el fin de cabeceras (`\r\n\r\n`), parsea la línea
-de petición (`GET /ruta HTTP/1.1`) y las cabeceras (con el nombre en minúsculas para *lookup*
-case-insensitive), y —si hay `Content-Length`— sigue leyendo hasta completar el cuerpo. `send_response`
-hace el camino inverso: serializa la línea de estado, las cabeceras (con `Content-Length` y
+de petición (`GET /ruta?query HTTP/1.1`) y las cabeceras (con el nombre en minúsculas para *lookup*
+case-insensitive), y —si hay `Content-Length`— sigue leyendo hasta completar el cuerpo. El `path` llega
+**percent-decodificado y sin la query string** (M56.2), que va aparte en `query` (cruda; `query_params(req)`
+la parsea a un `Map<string,string>` decodificado). Todo con límites de seguridad por defecto (M56.1:
+cabeceras/cuerpo/conexiones acotados; configurables con `Limits` + las variantes `*_limits`).
+`send_response` hace el camino inverso: serializa la línea de estado, las cabeceras (con `Content-Length` y
 `Connection: close`) y el cuerpo. Sobre eso, atajos para los casos comunes: `ok(body)`, `text(status,
-body)`, `not_found()`, `json_response(body)`.
+body)`, `not_found()`, `json_response(body)`, `html_response(status, body)`.
 
 ## Dos formas de servir
 

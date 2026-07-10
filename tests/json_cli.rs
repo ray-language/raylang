@@ -95,6 +95,31 @@ fn main() -> int {
 }
 
 #[test]
+fn escapes_de_control_rfc8259() {
+    // M59.1 — conformidad con la RFC 8259 §7: (1) \b y \f son escapes LEGALES y el parse los
+    // acepta (antes: "secuencia de escape no soportada"); (2) quote los re-emite cortos; (3) un
+    // control < 0x20 sin escape corto sale como \u00XX (antes: crudo → JSON inválido).
+    let driver = r#"
+from json import parse, stringify;
+fn reporta(s: string) {
+    match (parse(s)) {
+        Result.Ok(j) => { print(stringify(j)); },
+        Result.Err(e) => { print("err: " + e); },
+    }
+}
+fn main() -> int {
+    reporta("\"a\\bb\\fc\"");
+    reporta("\"\\u0008\\u000c\"");
+    reporta("\"\\u0001\\u001f\"");
+    0
+}
+"#;
+    // Los / se canonicalizan a \b/\f; los controles sin escape corto, a \u00XX.
+    let esperado = "\"a\\bb\\fc\"\n\"\\b\\f\"\n\"\\u0001\\u001f\"";
+    check("control", driver, esperado);
+}
+
+#[test]
 fn vacios_y_anidamiento() {
     let driver = r#"
 from json import parse, stringify;

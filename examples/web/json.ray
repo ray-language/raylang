@@ -6,7 +6,9 @@
 // (stringify canónico, round-trip estable). Errores como valores (Result), nunca panic.
 //
 // Los escapes \uXXXX se soportan (diferido JSON-1), incluidos los pares surrogate de los astrales
-// (p. ej. "😀" → 😀), vía char_from_code (el inverso de char_code, del prelude).
+// (p. ej. "😀" → 😀), vía char_from_code (el inverso de char_code, del prelude). M59.1: los nueve
+// escapes de la RFC 8259 §7 (" \ / b f n r t uXXXX) en el parse, y quote escapa TODO control
+// < 0x20 en la salida (\b \f \n \r \t o \u00XX) — nunca emite JSON inválido.
 /// A JSON value: null, bool, number (float), string, array, or object (`Map<string, Json>`).
 /// Objects use a Map, so keys come out sorted when serializing (canonical, stable round-trips).
 pub enum Json {
@@ -115,9 +117,18 @@ fn parse_number(p: P) -> Result<Json, string> {
     }
 }
 
-// El reemplazo de un escape `\<e>`, o None si no se soporta.
+// El string de un code point (para los controles \b/\f, sin literal de escape en raylang).
+fn ctrl(n: int) -> string {
+    match (char_from_code(n)) {
+        Option.Some(c) => to_string(c),
+        Option.None => "",
+    }
+}
+
+// El reemplazo de un escape `\<e>`, o None si no se soporta. Cubre los OCHO escapes de un
+// carácter de la RFC 8259 (§7): " \ / b f n r t (el noveno, \uXXXX, va en parse_u_escape).
 fn unescape(e: char) -> Option<string> {
-    if (e == '"') { Option.Some("\"") } else if (e == '\\') { Option.Some("\\") } else if (e == '/') { Option.Some("/") } else if (e == 'n') { Option.Some("\n") } else if (e == 't') { Option.Some("\t") } else if (e == 'r') { Option.Some("\r") } else { Option.None }
+    if (e == '"') { Option.Some("\"") } else if (e == '\\') { Option.Some("\\") } else if (e == '/') { Option.Some("/") } else if (e == 'n') { Option.Some("\n") } else if (e == 't') { Option.Some("\t") } else if (e == 'r') { Option.Some("\r") } else if (e == 'b') { Option.Some(ctrl(8)) } else if (e == 'f') { Option.Some(ctrl(12)) } else { Option.None }
 }
 
 // El valor de un dígito hex (mayúsculas o minúsculas); -1 si no lo es.
@@ -363,7 +374,14 @@ pub fn parse(s: string) -> Result<Json, string> {
 }
 
 // --- Serialización. Salida canónica: claves de objeto ordenadas. ---
-// Escapa un string y lo envuelve en comillas para la salida JSON.
+// El dígito hex (minúscula) de un valor 0..15 (para escapar controles como \u00XX).
+fn hex_digit(v: int) -> string {
+    "0123456789abcdef".substring(v, v + 1)
+}
+
+// Escapa un string y lo envuelve en comillas para la salida JSON. La RFC 8259 (§7) EXIGE
+// escapar `"`, `\` y todo control < 0x20: los que tienen escape corto salen como \b \f \n
+// \r \t; el resto de controles, como \u00XX (si no, la salida sería JSON inválido).
 fn quote(s: string) -> string {
     var out: string = "\"";
     let cs: [char] = s.chars();
@@ -381,7 +399,16 @@ fn quote(s: string) -> string {
         } else if (c == '\r') {
             out = out + "\\r";
         } else {
-            out = out + to_string(c);
+            let code = char_code(c);
+            if (code == 8) {
+                out = out + "\\b";
+            } else if (code == 12) {
+                out = out + "\\f";
+            } else if (code < 32) {
+                out = out + "\\u00" + hex_digit(code / 16) + hex_digit(code % 16);
+            } else {
+                out = out + to_string(c);
+            }
         }
         i = i + 1;
     }

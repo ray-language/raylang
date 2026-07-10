@@ -1,8 +1,11 @@
 {% params titulo: string, saludo: string, popular: bool, lenguajes: [string] %}
+{% extends layout %}
 {% import vistas/tarjeta %}
+{% block cuerpo %}
   <h1>{{ titulo }}</h1>
   <p>{{ saludo }}</p>
   {% if popular %}<p><strong>¡Un lenguaje popular!</strong></p>{% else %}<p>Un lenguaje de nicho.</p>{% endif %}
   <ul>
   {% for lang in lenguajes %}  {% include tarjeta.render_tarjeta(lang) %}
   {% endfor %}</ul>
+{% endblock %}

@@ -1,8 +1,9 @@
 // Demo de SSR (server-side rendering) con TEMPLATES COMPILADOS (M55): el servidor web del paquete
 // `net` sirve una página renderizada por las funciones que `ray templ` genera desde los
 // `vistas/*.ray.html` — parámetros TIPADOS (un typo en el template no compila) y cero parseo en
-// runtime. Los templates COMPONEN: `layout.ray.html` envuelve la vista (`{% include contenido %}`)
-// y `vista_inicio.ray.html` importa e incluye el partial `tarjeta.ray.html` por cada elemento.
+// runtime. Los templates COMPONEN: `vista_inicio.ray.html` HEREDA de `layout.ray.html`
+// (`{% extends layout %}` + `{% block cuerpo %}`) e importa e incluye el partial
+// `tarjeta.ray.html` por cada elemento.
 //
 // La página se construye A PARTIR DE LA PETICIÓN: `/` saluda genérico; `/lang/<nombre>` saluda a ese
 // lenguaje y marca los "populares". Nota de diseño: raylang usa actores de HEAP AISLADO — cada
@@ -16,7 +17,6 @@
 //   curl http://127.0.0.1:8080/lang/rust
 
 import net/webserver;
-import vistas/layout;
 import vistas/vista_inicio;
 
 // El último segmento de la ruta ("/lang/rust" -> "rust"; "/" -> "").
@@ -29,10 +29,10 @@ fn es_popular(lang: string) -> bool {
     lang == "rust" || lang == "python" || lang == "javascript"
 }
 
-// Composición: el layout envuelve el HTML ya renderizado de la vista (que a su vez incluye el
-// partial `tarjeta` por cada lenguaje). Cada nivel escapó SUS datos; el include no re-escapa.
+// La vista HEREDA del layout en compilación ({% extends %}): render_vista_inicio ya devuelve la
+// página completa (estructura del layout + su bloque `cuerpo` + el partial por lenguaje).
 fn render(titulo: string, saludo: string, popular: bool, lenguajes: [string]) -> string {
-    layout.render_layout(titulo, vista_inicio.render_vista_inicio(titulo, saludo, popular, lenguajes))
+    vista_inicio.render_vista_inicio(titulo, saludo, popular, lenguajes)
 }
 
 fn pagina(req: webserver.Request) -> webserver.Response {

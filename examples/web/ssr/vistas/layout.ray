@@ -3,12 +3,11 @@
 from std/template import escape_html;
 
 /// Renders the `layout` template (generated; the `.ray.html` file is the source of truth).
-pub fn render_layout(titulo: string, contenido: string) -> string {
+pub fn render_layout(titulo: string) -> string {
     var out: [string] = [];
     out.push("<!DOCTYPE html>\n<html>\n<head><title>");
     out.push(escape_html(to_string(titulo)));
     out.push("</title></head>\n<body>\n");
-    out.push(to_string(contenido));
     out.push("\n  <footer>servido por raylang &middot; ");
     out.push(escape_html(to_string(titulo)));
     out.push("</footer>\n</body>\n</html>\n");

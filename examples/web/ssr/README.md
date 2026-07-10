@@ -13,8 +13,8 @@ ssr/
 ├── ray.toml                          # dependencia por ruta a packages/net
 ├── main.ray                          # el servidor (handler puro: petición → HTML)
 └── vistas/                           # los TEMPLATES (fuente de verdad) + sus .ray GENERADOS
-    ├── layout.ray.html               # el layout: envuelve el contenido ({% include contenido %})
-    ├── vista_inicio.ray.html         # la vista: {% import %}a e incluye el partial por elemento
+    ├── layout.ray.html               # el layout: la estructura, con {% block cuerpo %} como hueco
+    ├── vista_inicio.ray.html         # la vista: {% extends layout %} + su bloque; incluye el partial
     └── tarjeta.ray.html              # el partial: un <li> por lenguaje
 ```
 
@@ -27,10 +27,12 @@ Cada template declara su firma en la primera línea:
 y usa `{{ expr }}` (autoescape HTML), `{% if %}`/`{% elif %}`/`{% else %}` y `{% for %}`. Un typo en
 una variable **no compila** (a diferencia del motor runtime `std/template`, que renderiza `""`).
 
-**Composición**: la vista hace `{% import vistas/tarjeta %}` y `{% include
-tarjeta.render_tarjeta(lang) %}` (empalma HTML ya renderizado, sin re-escapar: cada nivel escapó sus
-datos); el layout es un template más con un param `contenido: string`, y `main.ray` compone:
-`layout.render_layout(titulo, vista_inicio.render_vista_inicio(…))`.
+**Composición**: la vista **hereda** del layout con `{% extends layout %}` + `{% block cuerpo %}`
+(fusión en compilación: la firma es la de la vista, y las variables que el layout usa —`titulo`—
+deben estar en sus params, el checker lo exige); e **incluye** el partial con
+`{% import vistas/tarjeta %}` + `{% include tarjeta.render_tarjeta(lang) %}` (empalma HTML ya
+renderizado, sin re-escapar: cada nivel escapó sus datos). `main.ray` solo llama
+`vista_inicio.render_vista_inicio(…)` — la página ya sale completa.
 
 ## Correrlo
 

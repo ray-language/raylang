@@ -975,7 +975,10 @@ fn con_assert() {
 
 Para SSR, además del motor runtime (`std/template`, §12), un template puede **compilarse a una
 función raylang tipada**: el archivo `vistas/lista.ray.html` declara su firma en la primera línea y
-`ray templ` genera `vistas/lista.ray` al lado (commiteable):
+`ray templ` genera `vistas/lista.ray` al lado (commiteable). Reparto de roles: los compilados son
+la opción por defecto (tipados, y solo ellos soportan `{% include %}`/`{% extends %}`/`{% block %}`/
+`{% let %}`); el motor runtime es un subconjunto (interpolación + `if`/`for`) para plantillas
+**dinámicas** — cargadas de disco o BD en caliente — que no existen en build time:
 
 ```html
 {% params titulo: string, filas: [string] %}

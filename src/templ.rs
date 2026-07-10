@@ -186,6 +186,83 @@ fn tokenize(tpl: &str) -> Result<Vec<Tok>, TplError> {
     Ok(toks)
 }
 
+/// Formatea un template `.ray.html` (M55): cada etiqueta **`{% %}` en su propia línea**, con
+/// indentación por la profundidad de bloques del template (`for`/`if`/`block` sangran su
+/// contenido; `elif`/`else` al nivel del abridor); las interpolaciones `{{ }}` quedan **inline**
+/// con su HTML; el espaciado de los delimitadores se normaliza (`{%for x%}` → `{% for x %}`,
+/// `{{titulo}}` → `{{ titulo }}`) sin tocar el interior de la expresión (un string literal con
+/// espacios se respeta). Cada línea se re-indenta al nivel de bloque del template (no se
+/// re-indenta por etiquetas HTML: diferido); las líneas en blanco se conservan. `None` si el
+/// template no tokeniza (no se formatea un buffer roto). El whitespace ENTRE nodos cambia — en
+/// HTML es inocuo (y es el punto de un formateador).
+pub fn format_template(tpl: &str, unit: &str) -> Option<String> {
+    let toks = tokenize(tpl).ok()?;
+    let mut out = String::new();
+    let mut depth = 0usize;
+    let mut buf = String::new(); // la línea de texto/interpolaciones en curso
+    // Tras emitir una línea (de texto o de etiqueta), el siguiente `\n` de la fuente es su
+    // TERMINADOR (se consume en silencio); un `\n` extra sí es una línea en blanco a conservar.
+    let mut pending_terminator = false;
+
+    fn emit(out: &mut String, depth: usize, unit: &str, s: &str) {
+        for _ in 0..depth {
+            out.push_str(unit);
+        }
+        out.push_str(s);
+        out.push('\n');
+    }
+
+    for tok in toks {
+        match tok {
+            Tok::Text(t, _) => {
+                for c in t.chars() {
+                    if c != '\n' {
+                        buf.push(c);
+                        continue;
+                    }
+                    if !buf.trim().is_empty() {
+                        emit(&mut out, depth, unit, buf.trim());
+                        pending_terminator = false;
+                    } else if pending_terminator {
+                        pending_terminator = false; // el fin de línea de lo ya emitido
+                    } else {
+                        out.push('\n'); // línea en blanco real: se conserva
+                    }
+                    buf.clear();
+                }
+            }
+            Tok::Var(e, _) => buf.push_str(&format!("{{{{ {e} }}}}")),
+            Tok::Raw(e, _) => buf.push_str(&format!("{{{{& {e} }}}}")),
+            Tok::Tag(t, _) => {
+                // El texto pendiente de la línea va antes (si es solo espacio, se descarta).
+                if !buf.trim().is_empty() {
+                    emit(&mut out, depth, unit, buf.trim());
+                }
+                buf.clear();
+                let kw = t.split_whitespace().next().unwrap_or("");
+                let at = match kw {
+                    // El cierre y los intermedios se alinean con su abridor.
+                    "endfor" | "endif" | "endblock" => {
+                        depth = depth.saturating_sub(1);
+                        depth
+                    }
+                    "elif" | "else" => depth.saturating_sub(1),
+                    _ => depth,
+                };
+                emit(&mut out, at, unit, &format!("{{% {t} %}}"));
+                if matches!(kw, "for" | "if" | "block") {
+                    depth += 1;
+                }
+                pending_terminator = true;
+            }
+        }
+    }
+    if !buf.trim().is_empty() {
+        emit(&mut out, depth, unit, buf.trim());
+    }
+    Some(out)
+}
+
 // Escapa un texto literal para incrustarlo en un string de raylang: `\ " $` y los controles.
 // El `$` SIEMPRE se escapa (`\$`): un `${` del HTML no debe volverse interpolación del generado.
 fn lit(s: &str) -> String {
@@ -840,6 +917,39 @@ mod tests {
         let e = generate("{% params t: string %}\n{% block a %}x\n", "p").unwrap_err();
         assert!(e.msg.contains("endblock"), "{}", e.msg);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn formatea_el_template() {
+        // Cada `{% %}` en su línea, indentación por bloques, `{{ }}` inline, delimitadores
+        // normalizados, blancos conservados.
+        let tpl = "{% params xs: [string], ok: bool %}\n\
+                   <ul>{% for lang in xs %}  {%include tarjeta.render_tarjeta(lang)%}\n\
+                   {% endfor %}</ul>\n\
+                   \n\
+                   {%if ok%}<p>{{titulo}} y {{& crudo }}</p>{%else%}<i>no</i>{%endif%}\n";
+        let out = format_template(tpl, "    ").unwrap();
+        let esperado = "{% params xs: [string], ok: bool %}\n\
+                        <ul>\n\
+                        {% for lang in xs %}\n\
+                        \x20   {% include tarjeta.render_tarjeta(lang) %}\n\
+                        {% endfor %}\n\
+                        </ul>\n\
+                        \n\
+                        {% if ok %}\n\
+                        \x20   <p>{{ titulo }} y {{& crudo }}</p>\n\
+                        {% else %}\n\
+                        \x20   <i>no</i>\n\
+                        {% endif %}\n";
+        assert_eq!(out, esperado);
+        // Idempotente: formatear lo formateado no cambia nada.
+        assert_eq!(format_template(&out, "    ").unwrap(), out);
+        // Los bloques anidan; el interior de una expresión NO se toca (string con espacios).
+        let tpl = "{% params xs: [[int]] %}{% for fila in xs %}{% for c in fila %}{{ \"dos  espacios\" }}{% endfor %}{% endfor %}\n";
+        let out = format_template(tpl, "  ").unwrap();
+        assert!(out.contains("\n  {% for c in fila %}\n    {{ \"dos  espacios\" }}\n  {% endfor %}\n"), "{out}");
+        // Un buffer roto (delimitador sin cerrar) no se formatea.
+        assert!(format_template("{% params x: int %}\n<p>{{ x </p>\n", "    ").is_none());
     }
 
     #[test]

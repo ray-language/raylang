@@ -9,24 +9,24 @@ pub fn render_vista_inicio(titulo: string, saludo: string, popular: bool, lengua
     out.push("<!DOCTYPE html>\n<html>\n<head><title>");
     out.push(escape_html(to_string(titulo)));
     out.push("</title></head>\n<body>\n");
-    out.push("\n  <h1>");
+    out.push("\n    <h1>");
     out.push(escape_html(to_string(titulo)));
-    out.push("</h1>\n  <p>");
+    out.push("</h1>\n    <p>");
     out.push(escape_html(to_string(saludo)));
-    out.push("</p>\n  ");
+    out.push("</p>\n    ");
     if (popular) {
-        out.push("<p><strong>¡Un lenguaje popular!</strong></p>");
+        out.push("\n        <p><strong>¡Un lenguaje popular!</strong></p>\n    ");
     } else {
-        out.push("<p>Un lenguaje de nicho.</p>");
+        out.push("\n        <p>Un lenguaje de nicho.</p>\n    ");
     }
-    out.push("\n  <ul>\n  ");
+    out.push("\n    <ul>\n    ");
     for lang in lenguajes {
-        out.push("  ");
+        out.push("\n        ");
         out.push(to_string(tarjeta.render_tarjeta(lang)));
-        out.push("\n  ");
+        out.push("\n    ");
     }
-    out.push("</ul>\n");
-    out.push("\n  <footer>servido por raylang &middot; ");
+    out.push("\n    </ul>\n");
+    out.push("\n<footer>servido por raylang &middot; ");
     out.push(escape_html(to_string(titulo)));
     out.push("</footer>\n</body>\n</html>\n");
     out.join("")

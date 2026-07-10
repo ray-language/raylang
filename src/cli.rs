@@ -970,6 +970,18 @@ fn run_tests(path: &str, filter: Option<&str>) {
 /// Formateador (M29.2): imprime la versión canónica o aborta con el error.
 fn format_file(path: &str) {
     let unit = resolve_indent(std::path::Path::new(path));
+    // M55: un template `.ray.html` se formatea con SU formateador (etiquetas en su línea +
+    // indentación por bloques del template), no con el de raylang.
+    if path.ends_with(".ray.html") {
+        match crate::templ::format_template(&read_source(path), &unit) {
+            Some(out) => print!("{}", out),
+            None => {
+                eprintln!("error de formato: el template no tokeniza (delimitador sin cerrar)");
+                process::exit(65);
+            }
+        }
+        return;
+    }
     match crate::fmt::format_source_with_indent(&read_source(path), &unit) {
         Ok(out) => print!("{}", out),
         Err(e) => {

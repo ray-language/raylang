@@ -2721,9 +2721,6 @@ fn as_usize(j: &Json) -> Option<usize> {
 fn formatting_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let params = msg.get("params");
     let uri = params.and_then(|p| p.get("textDocument")).and_then(|t| t.get("uri")).and_then(|u| u.as_str());
-    if uri.is_some_and(is_template_uri) {
-        return Json::Null; // M55: un .ray.html no es fuente raylang
-    }
     let Some(src) = uri.and_then(|u| docs.get(u)) else { return Json::Arr(vec![]) };
     // Honramos la preferencia de indentación del EDITOR (LSP `options.tabSize`/`insertSpaces`), en vez
     // de imponer siempre 4 espacios: así "Format File" respeta 2 espacios/tabs si así está el editor
@@ -2733,7 +2730,19 @@ fn formatting_result(msg: &Json, docs: &HashMap<String, String>) -> Json {
     let insert_spaces = opts.and_then(|o| o.get("insertSpaces")).map(|b| matches!(b, Json::Bool(true))).unwrap_or(true);
     let tab_size = opts.and_then(|o| o.get("tabSize")).and_then(as_usize).filter(|&n| n > 0).unwrap_or(4);
     let unit = if insert_spaces { " ".repeat(tab_size) } else { "\t".to_string() };
-    let Ok(formatted) = crate::fmt::format_source_with_indent(src, &unit) else { return Json::Arr(vec![]) };
+    // M55: un template se formatea con SU formateador (etiquetas en su línea + indentación por
+    // bloques del template); un buffer que no tokeniza no se toca.
+    let formatted = if uri.is_some_and(is_template_uri) {
+        match crate::templ::format_template(src, &unit) {
+            Some(f) => f,
+            None => return Json::Arr(vec![]),
+        }
+    } else {
+        match crate::fmt::format_source_with_indent(src, &unit) {
+            Ok(f) => f,
+            Err(_) => return Json::Arr(vec![]),
+        }
+    };
     if formatted == *src {
         return Json::Arr(vec![]);
     }

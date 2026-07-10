@@ -7254,8 +7254,7 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   buffers `.ray.html` — errores del propio template con su línea, y errores de TIPOS del módulo
   generado (analizado con el loader contra la ruta del `.ray` hermano → std/template y path-deps
   resuelven) **traducidos de vuelta al template** con el mapa: el typo en `{{ titluo }}` se subraya
-  en el HTML (probado en `tests/lsp_cli.rs`); definición/rename/formatting devuelven null sobre
-  un template (no es fuente raylang); (b2) **completion y hover en el template**: dentro de
+  en el HTML (probado en `tests/lsp_cli.rs`); (b2) **completion y hover en el template**: dentro de
   `{{ … }}`/`{% … %}` (y solo ahí — fuera, el HTML es del editor) se ofrecen los **params tipados**
   de la cabecera `{% params %}` (el tipo como detalle), las **variables de los `{% for %}` que
   encierran el cursor** (tipo inferido: `[T]` → `T`, rango → `int`) y, en etiqueta, las palabras
@@ -7318,5 +7317,13 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   cerrar, herencia encadenada (diferida). (c) **Snippets de bloque en el LSP**: teclear `for`/`if`
   en el HTML (o la keyword en un `{%`) ofrece el bloque entero con placeholders navegables
   (`{% for elem in coleccion %}…{% endfor %}`, if/else, let, block) — `template_block_snippets`.
+- **Formateador de templates (misma sesión)**: `templ::format_template` — cada etiqueta `{% %}`
+  en su propia línea, indentación por profundidad de bloques (`for`/`if`/`block` sangran;
+  `elif`/`else` al nivel del abridor), `{{ }}` inline con su HTML, delimitadores normalizados
+  (`{%for x%}` → `{% for x %}`) sin tocar el interior de las expresiones, blancos conservados;
+  idempotente; un buffer que no tokeniza no se toca. Lo usan el **LSP** (`formatting_result`,
+  honrando `tabSize`/`insertSpaces` del editor) y **`ray fmt archivo.ray.html`** (con la
+  indentación de `.editorconfig`/`ray.toml`, canónico 4). El whitespace entre nodos cambia
+  (inocuo en HTML). Diferido: re-indentar también por etiquetas HTML anidadas.
 - Diferido: herencia encadenada (layout que extiende a otro), `{% block %}` con contenido del
   padre (`super()` de Jinja).

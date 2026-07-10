@@ -1017,8 +1017,9 @@ render es ~2× más rápido (cero parseo en runtime). El motor runtime queda par
 diagnósticos en vivo (errores del template y de tipos, mapeados a su línea), **autocompletado
 dentro de `{{ }}`/`{% %}`** (los params tipados de la cabecera, las variables de los `{% for %}`
 en ámbito, y tras un `.` los métodos/builtins del receptor), **hover** con el tipo real de la
-expresión, **ir-a-definición** (un param lleva a su `{% params %}`) y **signature help** al
-escribir los argumentos de una llamada.
+expresión, **ir-a-definición** (un param lleva a su `{% params %}`), **signature help** al
+escribir los argumentos de una llamada, y **formateo** (también `ray fmt archivo.ray.html`):
+cada `{% %}` en su línea con indentación por bloques, `{{ }}` inline.
 
 **Editores**: extensión de VSCode (`editors/vscode`) y paquete de Sublime Text (`editors/sublime`), ambos
 sobre `ray lsp`; Neovim/Helix lo usan directo. **Playground web**: la VM compilada a WASM corre el lenguaje

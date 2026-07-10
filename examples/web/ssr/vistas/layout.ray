@@ -8,7 +8,8 @@ pub fn render_layout(titulo: string) -> string {
     out.push("<!DOCTYPE html>\n<html>\n<head><title>");
     out.push(escape_html(to_string(titulo)));
     out.push("</title></head>\n<body>\n");
-    out.push("\n  <footer>servido por raylang &middot; ");
+    out.push("\n");
+    out.push("\n<footer>servido por raylang &middot; ");
     out.push(escape_html(to_string(titulo)));
     out.push("</footer>\n</body>\n</html>\n");
     out.join("")

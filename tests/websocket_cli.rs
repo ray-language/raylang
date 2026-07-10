@@ -146,3 +146,74 @@ fn echo_server_handshake_y_tramas() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+/// Trama de cliente enmascarada con el bit FIN a elección (para fragmentación, M58.1).
+fn trama_cliente_fin(opcode: u8, payload: &[u8], fin: bool) -> Vec<u8> {
+    let mask = [0x0Au8, 0x0B, 0x0C, 0x0D];
+    let b0 = if fin { 0x80 | opcode } else { opcode };
+    let mut f = vec![b0, 0x80 | (payload.len() as u8)]; // asume len < 126
+    f.extend_from_slice(&mask);
+    for (i, b) in payload.iter().enumerate() {
+        f.push(b ^ mask[i % 4]);
+    }
+    f
+}
+
+#[test]
+fn echo_server_robusto_ante_framing_real() {
+    // M58.1: el lector bufferizado del servidor debe sobrevivir a lo que TCP hace de verdad:
+    // tramas PARTIDAS entre lecturas, tramas PEGADAS en una lectura, pings intercalados y
+    // mensajes FRAGMENTADOS. Antes: partida = OOB (moría la fibra), pegadas = la 2ª se descartaba.
+    let (mut child, port) = lanzar_echo();
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+
+    // Handshake mínimo.
+    let req = "GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+               Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    stream.write_all(req.as_bytes()).expect("envía upgrade");
+    let mut resp = Vec::new();
+    let mut b1 = [0u8; 1];
+    while !resp.ends_with(b"\r\n\r\n") {
+        let n = stream.read(&mut b1).expect("lee handshake");
+        assert!(n > 0, "cerró en el handshake");
+        resp.push(b1[0]);
+    }
+
+    // 1) Trama PARTIDA en dos escrituras (con pausa para forzar dos lecturas del servidor).
+    let f = trama_cliente(0x1, b"partida");
+    stream.write_all(&f[..3]).expect("mitad 1");
+    stream.flush().ok();
+    std::thread::sleep(Duration::from_millis(120));
+    stream.write_all(&f[3..]).expect("mitad 2");
+    let (op, payload) = leer_trama(&mut stream);
+    assert_eq!((op, payload.as_slice()), (0x1, b"partida".as_slice()), "trama partida");
+
+    // 2) Dos tramas PEGADAS en una sola escritura → dos ecos, en orden.
+    let mut dos = trama_cliente(0x1, b"una");
+    dos.extend_from_slice(&trama_cliente(0x1, b"dos"));
+    stream.write_all(&dos).expect("pegadas");
+    let (_, p1) = leer_trama(&mut stream);
+    let (_, p2) = leer_trama(&mut stream);
+    assert_eq!(p1, b"una", "1ª pegada");
+    assert_eq!(p2, b"dos", "2ª pegada (antes se descartaba)");
+
+    // 3) PING → el servidor contesta PONG con la misma carga (antes lo ecoaba como texto).
+    stream.write_all(&trama_cliente(0x9, b"vivo")).expect("ping");
+    let (op_pong, p_pong) = leer_trama(&mut stream);
+    assert_eq!((op_pong, p_pong.as_slice()), (0xA, b"vivo".as_slice()), "pong automático");
+
+    // 4) Mensaje FRAGMENTADO (texto FIN=0 + continuación FIN=1) → un solo eco reensamblado.
+    stream.write_all(&trama_cliente_fin(0x1, b"frag-", false)).expect("fragmento 1");
+    stream.write_all(&trama_cliente_fin(0x0, b"mento", true)).expect("fragmento 2");
+    let (op_fr, p_fr) = leer_trama(&mut stream);
+    assert_eq!((op_fr, p_fr.as_slice()), (0x1, b"frag-mento".as_slice()), "reensamblado");
+
+    // 5) Close → close de cortesía.
+    stream.write_all(&trama_cliente(0x8, b"")).expect("close");
+    let (op_cl, _) = leer_trama(&mut stream);
+    assert_eq!(op_cl, 0x8, "close de cortesía");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}

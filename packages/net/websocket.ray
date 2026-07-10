@@ -1,11 +1,16 @@
 // WebSocket (RFC 6455) sobre `ws://`, escrito EN raylang. Handshake + framing, **cero deps**: usa la
 // criptografía de M19.3b (`sha1`/`base64`) y los operadores bit a bit de M19.3a. Importable.
 //
-// Alcance pedagógico: el camino feliz de un echo server de texto. El framing asume que una trama
-// completa cabe en una sola lectura del socket (suficiente para mensajes cortos), como los servidores
-// `.ray` acotados de M19.1. Sin TLS (`wss` → M19.4), sin fragmentación ni extensiones.
+// M58.1: el framing dejó de asumir "una trama = una lectura" (TCP no lo garantiza: una trama
+// puede llegar PARTIDA o venir PEGADA a otra). El camino robusto es `WsConn` (conexión + buffer
+// de sobrantes) + `read_frame` (acumula hasta tener la trama exacta) + `read_message` (además
+// contesta ping→pong, hace el close-handshake de cortesía y reensambla mensajes FRAGMENTADOS),
+// con límite de payload validado ANTES de leer. `decode_frame` (una trama ya completa) se
+// conserva para quien ya tiene los octetos exactos. Sin extensiones (permessage-deflate).
 from net/crypto import sha1_octets;
 from std/base64 import base64;
+import std/net;
+import std/random;
 
 // --- Handshake ---
 // El GUID mágico del protocolo (RFC 6455 §1.3): se concatena a la clave del cliente antes del SHA-1.
@@ -19,15 +24,16 @@ pub fn accept_key(key: string) -> string {
 }
 
 // Extrae el valor de la cabecera `Sec-WebSocket-Key` de la petición de upgrade (o "" si no aparece).
-/// Extracts the `Sec-WebSocket-Key` header value from an HTTP upgrade request.
-/// Returns the trimmed key, or "" if the header is missing.
+// M58.1: el nombre casa case-insensitive (las cabeceras HTTP lo son; antes solo la grafía exacta).
+/// Extracts the `Sec-WebSocket-Key` header value from an HTTP upgrade request
+/// (header name matched case-insensitively). Returns the trimmed key, or "" if missing.
 pub fn extract_key(request: string) -> string {
     let lineas = request.split("\r\n");
     var clave = "";
     var i = 0;
     while (i < lineas.len()) {
         let linea = lineas[i];
-        if (linea.starts_with("Sec-WebSocket-Key:")) {
+        if (linea.to_lower().starts_with("sec-websocket-key:")) {
             match (index_of(linea, ":")) {
                 Option.Some(idx) => {
                     clave = linea.substring(idx + 1, linea.len()).trim();
@@ -155,4 +161,209 @@ pub fn encode_frame(opcode: int, payload: bytes) -> bytes {
 /// Shortcut: encodes `texto` as an unmasked server text frame (opcode 1, FIN=1).
 pub fn encode_text(texto: string) -> bytes {
     encode_frame(op_text(), texto.to_bytes())
+}
+
+// Codifica una trama del **cliente** (M58.1, movida desde websocket_client): bit MASK activo,
+// clave de 4 octetos aleatorios y carga enmascarada (payload[i] XOR mask[i % 4], RFC 6455 §5.3).
+/// Encodes a client-to-server frame (FIN=1, MASK bit set, random 4-byte masking key,
+/// masked payload — clients MUST mask, RFC 6455 §5.3).
+pub fn encode_frame_masked(opcode: int, payload: bytes) -> bytes {
+    let plen = payload.len();
+    var out: [int] = [];
+    out.push(128 | opcode);  // FIN=1 + opcode
+    if (plen < 126) {
+        out.push(128 | plen);  // bit MASK + longitud
+    } else {
+        if (plen < 65536) {
+            out.push(128 | 126);
+            out.push(plen >> 8 & 255);
+            out.push(plen & 255);
+        } else {
+            out.push(128 | 127);
+            var k = 7;
+            while (k >= 0) {
+                out.push(plen >> k * 8 & 255);
+                k = k - 1;
+            }
+        }
+    }
+    var mask: [int] = [];
+    var i = 0;
+    while (i < 4) {
+        mask.push(random.below(256));
+        i = i + 1;
+    }
+    var m = 0;
+    while (m < 4) {
+        out.push(mask[m]);
+        m = m + 1;
+    }
+    i = 0;
+    while (i < plen) {
+        out.push(payload[i] ^ mask[i % 4]);
+        i = i + 1;
+    }
+    bytes_of(out)
+}
+
+// --- Lectura robusta (M58.1): buffer entre lecturas + control + fragmentación ---
+
+// El estado de una conexión WebSocket: el socket, el buffer de octetos sobrantes (una lectura
+// puede traer media trama o trama y media) y el lado (los frames de control que emitimos —pong,
+// close de cortesía— van enmascarados si somos el cliente).
+/// A WebSocket connection: the socket handle, the buffer of leftover bytes between reads
+/// (a read may deliver half a frame, or one and a half), and which side we are (`mask` = true
+/// for a client: control frames we emit are masked). Create with `server_conn`/`client_conn`.
+pub struct WsConn {
+    conn: int,
+    buf: bytes,
+    mask: bool,
+}
+
+/// Wraps an accepted server-side connection (frames we send are unmasked).
+pub fn server_conn(conn: int) -> WsConn {
+    WsConn { conn: conn, buf: b"", mask: false }
+}
+
+/// Wraps a client-side connection (frames we send are masked). `websocket_client.connect`
+/// returns one of these with the handshake already done.
+pub fn client_conn(conn: int) -> WsConn {
+    WsConn { conn: conn, buf: b"", mask: true }
+}
+
+// El tamaño TOTAL (cabecera + máscara + carga) de la trama al frente de `b`: Ok(total) si la
+// cabecera ya está completa, Ok(-1) si aún faltan octetos de cabecera, Err si la carga declarada
+// excede `max_payload` (se rechaza ANTES de leerla: una longitud hostil de 2^60 no asigna nada).
+fn frame_total(b: bytes, max_payload: int) -> Result<int, string> {
+    if (b.len() < 2) {
+        return Result.Ok(0 - 1);
+    }
+    let masked = (b[1] >> 7 & 1) == 1;
+    let len7 = b[1] & 127;
+    var plen = len7;
+    var off = 2;
+    if (len7 == 126) {
+        if (b.len() < 4) {
+            return Result.Ok(0 - 1);
+        }
+        plen = b[2] << 8 | b[3];
+        off = 4;
+    } else {
+        if (len7 == 127) {
+            if (b.len() < 10) {
+                return Result.Ok(0 - 1);
+            }
+            plen = 0;
+            var k = 0;
+            while (k < 8) {
+                plen = plen << 8 | b[2 + k];
+                k = k + 1;
+            }
+            off = 10;
+        }
+    }
+    if (plen > max_payload || plen < 0) {
+        return Result.Err("trama demasiado grande (" + to_string(plen) + " > " + to_string(max_payload) + " octetos)");
+    }
+    if (masked) {
+        off = off + 4;
+    }
+    Result.Ok(off + plen)
+}
+
+/// Reads exactly ONE frame from the connection, buffering across socket reads (split frames are
+/// accumulated; coalesced frames are kept for the next call). Default 16 MiB payload limit.
+/// Err on read failure, a peer that closes mid-frame, or an oversized declared length.
+pub fn read_frame(ws: WsConn) -> Result<Frame, string> {
+    read_frame_limit(ws, 16777216)
+}
+
+/// Like `read_frame` with an explicit payload limit in bytes (checked against the DECLARED
+/// length before reading the payload).
+pub fn read_frame_limit(ws: WsConn, max_payload: int) -> Result<Frame, string> {
+    while (true) {
+        let total = frame_total(ws.buf, max_payload)?;
+        if (total >= 0 && ws.buf.len() >= total) {
+            let f = decode_frame(ws.buf.sub_bytes(0, total));
+            ws.buf = ws.buf.sub_bytes(total, ws.buf.len());
+            return Result.Ok(f);
+        }
+        match (net.socket_read_bytes(ws.conn)) {
+            Result.Ok(trozo) => {
+                if (trozo.len() == 0) {
+                    if (ws.buf.len() == 0) {
+                        return Result.Err("conexión cerrada");
+                    }
+                    return Result.Err("conexión cerrada a mitad de una trama");
+                }
+                ws.buf = ws.buf + trozo;
+            },
+            Result.Err(e) => {
+                return Result.Err("error al leer la trama: " + e);
+            },
+        }
+    }
+    Result.Err("inalcanzable")
+}
+
+// Emite una trama de control con el enmascarado del lado que somos (best effort).
+fn send_control(ws: WsConn, opcode: int, payload: bytes) {
+    let trama = if (ws.mask) { encode_frame_masked(opcode, payload) } else { encode_frame(opcode, payload) };
+    match (net.socket_write_bytes(ws.conn, trama)) {
+        Result.Ok(_) => { },
+        Result.Err(_) => { },
+    }
+}
+
+/// Reads the next MESSAGE from the connection, handling the protocol chores (RFC 6455):
+/// answers ping with pong (masked on the client side), skips pongs, echoes a close frame
+/// (courtesy close-handshake) and returns it — check `opcode == op_close()` to stop —, and
+/// reassembles FRAGMENTED messages (continuation frames until FIN; control frames may
+/// interleave). The total reassembled payload also respects the 16 MiB limit.
+pub fn read_message(ws: WsConn) -> Result<Frame, string> {
+    read_message_limit(ws, 16777216)
+}
+
+/// Like `read_message` with an explicit payload limit (per frame AND for the reassembled total).
+pub fn read_message_limit(ws: WsConn, max_payload: int) -> Result<Frame, string> {
+    // Mensaje en curso (si el primero llegó con FIN=0): opcode del primero + carga acumulada.
+    var fragmentado = false;
+    var op_msg = 0;
+    var acc: bytes = b"";
+    while (true) {
+        let f = read_frame_limit(ws, max_payload)?;
+        if (f.opcode == op_ping()) {
+            send_control(ws, op_pong(), f.payload);
+        } else if (f.opcode == op_pong()) {
+            // Respuesta a un ping nuestro (o unsolicited): se ignora.
+        } else if (f.opcode == op_close()) {
+            // Close-handshake de cortesía; el llamador decide cerrar el socket.
+            send_control(ws, op_close(), b"");
+            return Result.Ok(f);
+        } else if (f.opcode == 0) {
+            // Continuación de un mensaje fragmentado.
+            if (!fragmentado) {
+                return Result.Err("trama de continuación sin mensaje fragmentado en curso");
+            }
+            if (acc.len() + f.payload.len() > max_payload) {
+                return Result.Err("mensaje fragmentado demasiado grande (> " + to_string(max_payload) + " octetos)");
+            }
+            acc = acc + f.payload;
+            if (f.fin) {
+                return Result.Ok(Frame { opcode: op_msg, payload: acc, fin: true });
+            }
+        } else {
+            // Trama de datos (texto/binario).
+            if (fragmentado) {
+                return Result.Err("trama de datos en medio de un mensaje fragmentado");
+            }
+            if (f.fin) {
+                return Result.Ok(f);
+            }
+            fragmentado = true;
+            op_msg = f.opcode;
+            acc = f.payload;
+        }
+    }
+    Result.Err("inalcanzable")
 }

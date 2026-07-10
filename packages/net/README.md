@@ -70,7 +70,10 @@ fn main() -> int {
 - **`net/dns`** — resolución DNS (7 tipos de registro). Sobre `net/udp`.
 - **`net/dns_cache`** — caché DNS con TTL. Sobre `net/dns`.
 - **`net/websocket`** — handshake + framing WebSocket (`ws://`/`wss://`). Sobre `net/crypto` + `std/base64`.
-- **`net/websocket_client`** — cliente WebSocket. Sobre `net/websocket` + `std/base64`.
+  Lectura robusta (M58.1): `WsConn` + `read_frame`/`read_message` (tramas partidas/pegadas, ping→pong
+  automático, fragmentación reensamblada, límite de payload validado antes de leer).
+- **`net/websocket_client`** — cliente WebSocket. Sobre `net/websocket` + `std/base64`. `connect`/
+  `connect_tls` devuelven un `WsConn` con estado (M58.1).
 - **`net/redis`** — cliente Redis (protocolo RESP). Hoja.
 - **`net/postgres`** — cliente PostgreSQL (protocolo de frontend/backend). Sobre `net/scram`.
 - **`net/oauth2`** — flujo OAuth2 (client credentials, authorization code). Sobre `net/http` + `std/json`

@@ -3,6 +3,7 @@
 // Lo lanza `tests/websocket_client_cli.rs` contra `websocket_echo.ray` (servidor raylang) por ambos
 // motores → cliente raylang hablando con servidor raylang.
 from websocket_client import connect, connect_tls, send_text, recv_text, close_ws;
+from websocket import WsConn;
 
 fn main() -> int {
     let a = args();
@@ -43,8 +44,8 @@ fn main() -> int {
     }
 }
 
-// Envía un mensaje y muestra el eco recibido.
-fn eco(h: int, msg: string) {
+// Envía un mensaje y muestra el eco recibido. (M58.1: la conexión es un WsConn con estado.)
+fn eco(h: WsConn, msg: string) {
     match (send_text(h, msg)) {
         Result.Err(e) => print("ERR send: " + e),
         Result.Ok(_) => {

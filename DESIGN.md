@@ -7546,13 +7546,21 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 > cripto y framing verificados contra vectores RFC (SHA-1/base64, HPACK+Huffman, frames h2);
 > falta la robustez de red que el servidor recibió en M56. Todo librería raylang pura.
 
-- **M58.1 — WebSocket robusto**: lector de tramas BUFFERIZADO — `WsConn { conn, buf, mask }`
-  (estado entre lecturas; una trama puede llegar partida o venir pegada a otra) con
-  `read_frame` (acumula hasta cabecera+longitud exactas, conserva el resto) y `read_message`
-  (auto **ping→pong** con el enmascarado del lado correcto, close-handshake de cortesía,
-  **fragmentación de recepción** —continuations hasta FIN—, límite de payload ANTES de leer).
-  Rompe la API del cliente: `connect`/`connect_tls` devuelven `WsConn` (el estado es necesario);
-  `extract_key` pasa a case-insensitive. Los demos de eco se reescriben encima (más simples).
+- **M58.1 — WebSocket robusto** ✅ **COMPLETO**: lector de tramas BUFFERIZADO — `WsConn { conn,
+  buf, mask }` (`server_conn`/`client_conn`) con `read_frame[_limit]` (acumula hasta
+  cabecera+longitud exactas — `frame_total` valida la longitud DECLARADA contra el límite, 16 MiB
+  por defecto, ANTES de leer la carga — y conserva el sobrante para la siguiente llamada) y
+  `read_message[_limit]` (auto **ping→pong** con el enmascarado del lado correcto, pongs
+  ignorados, close-handshake de cortesía —devuelve el close para que el llamador pare—, y
+  **fragmentación de recepción**: continuations hasta FIN con control intercalado permitido y el
+  total también acotado). `encode_frame_masked` sube del cliente a la librería. **API del cliente
+  rota a propósito**: `connect`/`connect_tls` devuelven `WsConn` (el estado es imprescindible — el
+  buffer sobrevive entre `recv_text`; además `read_handshake` conserva los octetos que lleguen
+  PEGADOS al 101 y siembra el buffer); `recv_text` distingue el close (`Err("conexión cerrada por
+  el peer")`). `extract_key`/`verify_handshake` case-insensitive. Los ecos (`websocket_echo`/
+  `wss_echo`) reescritos encima (más simples). Test `echo_server_robusto_ante_framing_real`: trama
+  partida en dos escrituras (antes: OOB, moría la fibra), dos pegadas en una (antes: la 2ª se
+  descartaba), ping→pong, fragmentado reensamblado, close de cortesía.
 - **M58.2 — cliente HTTP/1.1**: timeout de lectura (`net.set_read_timeout`, M56.4) con default
   sensato, `Host` con puerto no-default, `Accept-Encoding: gzip` (activa el gunzip que ya existe),
   cuerpo de petición en `bytes` (subidas binarias), Content-Length de respuesta verificado

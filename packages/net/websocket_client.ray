@@ -1,14 +1,17 @@
-// Cliente WebSocket (RFC 6455) sobre `ws://`, escrito EN raylang. El espejo del servidor de M19.3c:
-// el CLIENTE debe **enmascarar** las tramas que envía (§5.3) y lee tramas del servidor SIN enmascarar
-// (que `websocket.decode_frame` ya maneja). Importable:
+// Cliente WebSocket (RFC 6455) sobre `ws://`/`wss://`, escrito EN raylang. El espejo del servidor:
+// el CLIENTE debe **enmascarar** las tramas que envía (§5.3) y lee tramas del servidor SIN
+// enmascarar. Importable:
 //   from websocket_client import connect, send_text, recv_text, close_ws;
 //
-// Reusa la cripto del handshake (`sha1`/`base64` vía `accept_key`) y el framing de lectura de
-// `websocket.ray`. Sobre los sockets TCP (M15): funciona en ambos motores (cliente bloqueante). Sin TLS
-// (`wss` añadiría `tls_connect`), sin fragmentación.
+// M58.1: `connect`/`connect_tls` devuelven un **`WsConn`** (no un handle pelado): la lectura
+// robusta necesita ESTADO entre llamadas — el buffer de octetos sobrantes (una lectura puede traer
+// media trama o trama y media; incluso el handshake puede venir con la primera trama pegada). La
+// recepción pasa por `websocket.read_message` (buffering + ping→pong + close-handshake +
+// fragmentación). Reusa la cripto del handshake (`accept_key`) y el framing de `websocket.ray`.
+// Funciona en ambos motores (cliente bloqueante); `wss://` vía el handle TLS (M19.4).
 from std/base64 import base64;
 import std/random;
-from net/websocket import accept_key, decode_frame, Frame, op_text, op_close;
+from net/websocket import accept_key, encode_frame_masked, read_message, client_conn, WsConn, Frame, op_text, op_binary, op_close;
 import std/net;
 
 // --- Handshake del cliente ---
@@ -29,6 +32,7 @@ fn upgrade_request(host: string, path: string, key: string) -> string {
 }
 
 // Verifica la respuesta 101: estado correcto + `Sec-WebSocket-Accept` == base64(SHA-1(key + GUID)).
+// El nombre de la cabecera casa case-insensitive (M58.1).
 fn verify_handshake(response: string, key: string) -> bool {
     if (!response.contains("101")) {
         return false;
@@ -37,7 +41,7 @@ fn verify_handshake(response: string, key: string) -> bool {
     let lineas = response.split("\r\n");
     var i = 0;
     while (i < lineas.len()) {
-        if (lineas[i].starts_with("Sec-WebSocket-Accept:")) {
+        if (lineas[i].to_lower().starts_with("sec-websocket-accept:")) {
             match (index_of(lineas[i], ":")) {
                 Option.Some(idx) => {
                     return lineas[i].substring(idx + 1, lineas[i].len()).trim() == esperado;
@@ -50,42 +54,59 @@ fn verify_handshake(response: string, key: string) -> bool {
     false
 }
 
-// Lee la respuesta del handshake hasta el fin de cabeceras (\r\n\r\n).
-fn read_handshake(h: int) -> Result<string, string> {
+// El resultado de leer el handshake: las cabeceras (texto) + los octetos SOBRANTES tras el
+// `\r\n\r\n` (un servidor puede mandar la primera trama pegada al 101 → van al buffer del WsConn).
+struct HandshakeRead {
+    headers: string,
+    resto: bytes,
+}
+
+// El índice del primer "\r\n\r\n" en bytes, o -1 (escaneo por octetos: lo que sigue es binario).
+fn find_fin_cabeceras(b: bytes) -> int {
+    var i = 0;
+    while (i + 3 < b.len()) {
+        if (b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10) {
+            return i;
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// Lee la respuesta del handshake hasta el fin de cabeceras, conservando lo que venga detrás.
+fn read_handshake(h: int) -> Result<HandshakeRead, string> {
     var acc: bytes = b"";
-    var seguir = true;
-    while (seguir) {
-        match (from_utf8(acc)) {
-            Result.Ok(s) => {
-                match (index_of(s, "\r\n\r\n")) {
-                    Option.Some(_) => {
-                        return Result.Ok(s);
-                    },
-                    Option.None => { },
-                }
-            },
-            Result.Err(_) => { },  // bytes UTF-8 a medias → seguir leyendo
+    while (true) {
+        let sep = find_fin_cabeceras(acc);
+        if (sep >= 0) {
+            match (from_utf8(acc.sub_bytes(0, sep))) {
+                Result.Ok(s) => {
+                    return Result.Ok(HandshakeRead { headers: s, resto: acc.sub_bytes(sep + 4, acc.len()) });
+                },
+                Result.Err(e) => {
+                    return Result.Err("cabeceras del handshake no son UTF-8: " + e);
+                },
+            }
         }
         match (net.socket_read_bytes(h)) {
             Result.Ok(trozo) => {
                 if (trozo.len() == 0) {
-                    seguir = false;
-                } else {
-                    acc = acc + trozo;
+                    return Result.Err("la conexión se cerró durante el handshake");
                 }
+                acc = acc + trozo;
             },
             Result.Err(e) => {
                 return Result.Err("error al leer el handshake: " + e);
             },
         }
     }
-    from_utf8(acc)
+    Result.Err("inalcanzable")
 }
 
 // Hace el handshake de WebSocket sobre un handle ya conectado (TCP o TLS). El I/O usa
-// socket_read_bytes/socket_write_bytes, que para un handle TLS van cifrados (M19.4) → el mismo código
-// sirve para ws:// y wss://.
-fn do_handshake(h: int, host: string, port: int, path: string) -> Result<int, string> {
+// socket_read_bytes/socket_write_bytes, que para un handle TLS van cifrados (M19.4) → el mismo
+// código sirve para ws:// y wss://. Devuelve el WsConn con el buffer sembrado con lo sobrante.
+fn do_handshake(h: int, host: string, port: int, path: string) -> Result<WsConn, string> {
     let key = make_key();
     let req = upgrade_request(host + ":" + to_string(port), path, key);
     match (net.socket_write_bytes(h, req.to_bytes())) {
@@ -99,9 +120,11 @@ fn do_handshake(h: int, host: string, port: int, path: string) -> Result<int, st
                     close(h);
                     Result.Err(e)
                 },
-                Result.Ok(resp) => {
-                    if (verify_handshake(resp, key)) {
-                        Result.Ok(h)
+                Result.Ok(hs) => {
+                    if (verify_handshake(hs.headers, key)) {
+                        let ws = client_conn(h);
+                        ws.buf = hs.resto;
+                        Result.Ok(ws)
                     } else {
                         close(h);
                         Result.Err("handshake de WebSocket inválido")
@@ -112,92 +135,50 @@ fn do_handshake(h: int, host: string, port: int, path: string) -> Result<int, st
     }
 }
 
-// Conecta a `host:port` por TCP (ws://), hace el handshake y devuelve el handle.
+// Conecta a `host:port` por TCP (ws://), hace el handshake y devuelve la conexión.
 /// Opens a plain-TCP WebSocket connection (`ws://`) to `host:port` and performs the
 /// RFC 6455 client handshake on `path`. Blocking network I/O.
-/// Returns `Ok(handle)` on success; `Err(reason)` if the TCP connect or handshake fails.
-pub fn connect(host: string, port: int, path: string) -> Result<int, string> {
+/// Returns `Ok(WsConn)` on success; `Err(reason)` if the TCP connect or handshake fails.
+pub fn connect(host: string, port: int, path: string) -> Result<WsConn, string> {
     match (net.tcp_connect(host, port)) {
         Result.Err(e) => Result.Err("connect: " + e),
         Result.Ok(h) => do_handshake(h, host, port, path),
     }
 }
 
-// Conecta a `host:port` por TLS (wss://), hace el handshake y devuelve el handle. El handle TLS enruta
-// socket_read_bytes/socket_write_bytes/close por la sesión cifrada (M19.4) → el framing no cambia.
+// Conecta a `host:port` por TLS (wss://), hace el handshake y devuelve la conexión. El handle TLS
+// enruta socket_read_bytes/socket_write_bytes/close por la sesión cifrada (M19.4).
 /// Opens a TLS WebSocket connection (`wss://`) to `host:port` and performs the client
-/// handshake on `path`; the returned handle routes all I/O through the encrypted session.
-/// Returns `Ok(handle)` on success; `Err(reason)` if the TLS connect or handshake fails.
-pub fn connect_tls(host: string, port: int, path: string) -> Result<int, string> {
+/// handshake on `path`; all I/O goes through the encrypted session.
+/// Returns `Ok(WsConn)` on success; `Err(reason)` if the TLS connect or handshake fails.
+pub fn connect_tls(host: string, port: int, path: string) -> Result<WsConn, string> {
     match (net.tls_connect(host, port)) {
         Result.Err(e) => Result.Err("tls connect: " + e),
         Result.Ok(h) => do_handshake(h, host, port, path),
     }
 }
 
-// --- Framing del cliente (enmascarado) ---
-// Codifica una trama del CLIENTE: FIN + opcode, bit MASK activo, clave de máscara de 4 octetos
-// aleatorios, y la carga enmascarada (payload[i] XOR mask[i % 4]).
-fn encode_masked(opcode: int, payload: bytes) -> bytes {
-    let plen = payload.len();
-    var out: [int] = [];
-    out.push(128 | opcode);  // FIN=1 + opcode
-    if (plen < 126) {
-        out.push(128 | plen);  // bit MASK + longitud
-    } else {
-        if (plen < 65536) {
-            out.push(128 | 126);
-            out.push(plen >> 8 & 255);
-            out.push(plen & 255);
-        } else {
-            out.push(128 | 127);
-            var k = 7;
-            while (k >= 0) {
-                out.push(plen >> k * 8 & 255);
-                k = k - 1;
-            }
-        }
-    }
-    // Clave de máscara (4 octetos aleatorios).
-    var mask: [int] = [];
-    var i = 0;
-    while (i < 4) {
-        mask.push(random.below(256));
-        i = i + 1;
-    }
-    var m = 0;
-    while (m < 4) {
-        out.push(mask[m]);
-        m = m + 1;
-    }
-    // Carga enmascarada.
-    i = 0;
-    while (i < plen) {
-        out.push(payload[i] ^ mask[i % 4]);
-        i = i + 1;
-    }
-    bytes_of(out)
-}
-
-// Envía un mensaje de texto (trama enmascarada).
+// Envía un mensaje de texto (trama enmascarada, framing compartido de websocket.ray).
 /// Sends `message` as a masked client text frame (clients MUST mask, RFC 6455 §5.3).
 /// Returns the socket write result; `Err(reason)` on I/O failure.
-pub fn send_text(h: int, message: string) -> Result<int, string> {
-    net.socket_write_bytes(h, encode_masked(op_text(), message.to_bytes()))
+pub fn send_text(ws: WsConn, message: string) -> Result<int, string> {
+    net.socket_write_bytes(ws.conn, encode_frame_masked(op_text(), message.to_bytes()))
 }
 
-// Recibe el siguiente mensaje de texto (decodifica una trama; asume una trama por lectura).
-/// Receives the next text message from the server (blocking; assumes one complete frame
-/// per socket read). Returns `Ok(text)`, or `Err(reason)` on read failure, a closed
-/// connection / incomplete frame, or a non-UTF-8 payload.
-pub fn recv_text(h: int) -> Result<string, string> {
-    match (net.socket_read_bytes(h)) {
-        Result.Err(e) => Result.Err("error al leer la trama: " + e),
-        Result.Ok(data) => {
-            if (data.len() < 2) {
-                Result.Err("conexión cerrada o trama incompleta")
+// Recibe el siguiente mensaje de texto. Sobre `read_message` (M58.1): tramas partidas/pegadas,
+// ping→pong automático (enmascarado, somos cliente), fragmentación reensamblada; un close del
+// servidor (ya contestado de cortesía) es `Err("conexión cerrada por el peer")`.
+/// Receives the next text (or binary-decoded-as-UTF-8) message. Robust framing: buffers across
+/// reads, auto-answers pings, reassembles fragmented messages. A close from the server (already
+/// answered) yields `Err("conexión cerrada por el peer")`; non-UTF-8 payloads are an `Err` too.
+pub fn recv_text(ws: WsConn) -> Result<string, string> {
+    match (read_message(ws)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(f) => {
+            if (f.opcode == op_close()) {
+                Result.Err("conexión cerrada por el peer")
             } else {
-                from_utf8(decode_frame(data).payload)
+                from_utf8(f.payload)
             }
         },
     }
@@ -206,10 +187,10 @@ pub fn recv_text(h: int) -> Result<string, string> {
 // Cierra la conexión: envía una trama close (enmascarada) y cierra el socket.
 /// Closes the WebSocket: sends a masked close frame (best-effort, write errors are
 /// ignored) and then closes the underlying socket handle.
-pub fn close_ws(h: int) {
-    match (net.socket_write_bytes(h, encode_masked(op_close(), "".to_bytes()))) {
+pub fn close_ws(ws: WsConn) {
+    match (net.socket_write_bytes(ws.conn, encode_frame_masked(op_close(), "".to_bytes()))) {
         Result.Ok(_) => { },
         Result.Err(_) => { },
     }
-    close(h);
+    close(ws.conn);
 }

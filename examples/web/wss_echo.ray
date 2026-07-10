@@ -38,40 +38,32 @@ fn handshake(conn: int) -> bool {
     }
 }
 
-// Bucle de eco: reenvía cada trama de texto hasta un close o un error.
+// Bucle de eco sobre el lector robusto (M58.1): tramas partidas/pegadas, ping→pong automático,
+// fragmentación reensamblada, close-handshake ya contestado por read_message.
 fn eco(conn: int) {
+    let ws = websocket.server_conn(conn);
     var seguir = true;
     while (seguir) {
-        match (net.socket_read_bytes(conn)) {
+        match (websocket.read_message(ws)) {
             Result.Err(_) => {
                 seguir = false;
             },
-            Result.Ok(datos) => {
-                if (datos.len() < 2) {
+            Result.Ok(f) => {
+                if (f.opcode == websocket.op_close()) {
                     seguir = false;
                 } else {
-                    let f = websocket.decode_frame(datos);
-                    if (f.opcode == websocket.op_close()) {
-                        let cierre = websocket.encode_frame(websocket.op_close(), "".to_bytes());
-                        match (net.socket_write_bytes(conn, cierre)) {
-                            Result.Ok(_) => { },
-                            Result.Err(_) => { },
-                        }
-                        seguir = false;
-                    } else {
-                        match (from_utf8(f.payload)) {
-                            Result.Ok(txt) => {
-                                match (net.socket_write_bytes(conn, websocket.encode_text(txt))) {
-                                    Result.Ok(_) => { },
-                                    Result.Err(_) => {
-                                        seguir = false;
-                                    },
-                                }
-                            },
-                            Result.Err(_) => {
-                                seguir = false;
-                            },
-                        }
+                    match (from_utf8(f.payload)) {
+                        Result.Ok(txt) => {
+                            match (net.socket_write_bytes(conn, websocket.encode_text(txt))) {
+                                Result.Ok(_) => { },
+                                Result.Err(_) => {
+                                    seguir = false;
+                                },
+                            }
+                        },
+                        Result.Err(_) => {
+                            seguir = false;
+                        },
                     }
                 }
             },

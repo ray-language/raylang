@@ -7279,7 +7279,9 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   for como hijas; (c) **coloreado**: gramática de VSCode
   `raylang-template` (`text.html.raylang`: HTML base + `{{ }}`/`{% %}` con la expresión embebida
   como `source.raylang`; el cliente LSP añade el selector) y sintaxis de Sublime
-  (`raylang-template.sublime-syntax`, `extends` HTML + `prototype` con los delimitadores; selector
+  (`raylang template.sublime-syntax` — el nombre de ARCHIVO coincide con el `name:` para que el
+  settings por-sintaxis `raylang template.sublime-settings` con el `auto_complete_selector` del
+  popup lo encuentre —, `extends` HTML + `prototype` con los delimitadores; selector
   LSP `source.raylang | text.html.raylang` en el README).
 - **Regeneración automática** (misma sesión, cierra el diferido): `ray run`/`ray build`/`ray test`
   regeneran antes de compilar cada `.ray.html` bajo el directorio de la entrada cuyo `.ray` falte o

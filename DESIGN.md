@@ -7716,3 +7716,30 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 - **Fuera del arco** (idea aparte, IDEAS §21): posición-del-llamador para `assert`/`panic`
   (hoy un assert fallido reporta la línea del prelude) — exige diseño de runtime (stack trace
   o intrinsic de posición).
+
+## 66. M62 — Iteradores de producción (el camino eager + documentación)
+
+> Revisión jul 2026 (tras M61; clasificación en IDEAS §22). La correctitud del trait
+> `Iterator`/`Iter` (M40.2) es impecable y ambos motores coinciden en toda la batería; los
+> hallazgos son de rendimiento, medidos con 1M de elementos en release: while 107 ms · `for`
+> 112 ms · eager `xs.map(f).fold(…)` 36 441 ms (¡340×!) · lazy `iter().map().fold()` 13 799 ms ·
+> eager como bucle directo 317 ms.
+
+- **M62.1 — las funciones libres eager vuelven a ser bucles directos**: M40.6 re-fundó
+  `map`/`filter`/`fold` (las libres sobre arreglos, la API ergonómica) sobre la maquinaria
+  perezosa por "única fuente de verdad" — estético, pero le cargó al camino MÁS USADO el coste
+  íntegro de la abstracción (closure + `Option` en el heap del GC + match POR ELEMENTO, más el
+  `collect` intermedio). Vuelven a bucles `while` directos: 36 441 → ~317 ms (115×), semántica
+  idéntica (los tests existentes la fijan). La maquinaria lazy (métodos del trait) no cambia:
+  sigue siendo la forma de FUSIONAR cadenas y cortar trabajo (`take` temprano). De paso:
+  terminales `any`/`all`/`count` (baratos, sobre `next`).
+- **M62.2 — documentación de la semántica fina**: (a) `for x in xs` CONGELA la longitud al
+  entrar (ambos motores, verificado) pero `for x in xs.iter()` es una vista VIVA (el `step`
+  relee `xs.len()`) — mutar el arreglo durante la iteración da resultados distintos entre
+  formas; (b) aliasing one-shot (dos adaptadores sobre el mismo `iter()` comparten el avance);
+  (c) `zip` descarta el elemento ya consumido del lado largo al agotarse el corto (como Rust).
+  Va al libro (m40/iteradores) + gotcha en DESIGN §55.
+- **Idea aparte** (IDEAS §22, runtime): abaratar el `next()` (~6 µs/elemento hoy) — `Option`
+  sin alocación (representación inline/sentinela) o devirtualización del `step`. Se hará cuando
+  el throughput lazy importe de verdad; el techo actual no bloquea (el camino eager queda en
+  ~317 ms/1M tras 62.1).

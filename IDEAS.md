@@ -778,6 +778,27 @@ arranque con parse cacheado (`OnceLock`).
 
 ---
 
+## 22. Iteradores (revisión jul 2026) — M62, PLAN
+
+Revisión del trait `Iterator`/`Iter` del prelude + la bajada del `for` (detalle en DESIGN §66).
+Correctitud IMPECABLE (pereza, bordes, zip, iteradores de usuario con adaptadores heredados,
+motores idénticos); el problema es de RENDIMIENTO y está medido (1M elementos, release).
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **M40.6 hizo lento el camino ergonómico**: las funciones libres eager `map`/`filter`/`fold` delegan en la maquinaria perezosa → `xs.map(f).fold(…)` = **36 441 ms** vs 107 ms del while (340×); como bucles directos: **317 ms** (115× de mejora disponible, semántica idéntica) | El código real usa `xs.map(f)`, no cadenas lazy | **62.1**: revertir las libres a bucles directos; lo lazy queda para `iter().…` |
+| Semántica sutil sin documentar: `for x in xs` CONGELA `len` pero `for x in xs.iter()` es vista VIVA (mutar durante la iteración diverge entre formas); aliasing one-shot; `zip` pierde el elemento ya consumido del lado largo | Sorpresas evitables | **62.2** (libro m40 + gotcha en DESIGN; cero código) |
+| **El `next()` cuesta ~6 µs/elemento** (medido: `for x in xs.iter()` pelado = 6 191 ms/1M): llamada a closure + ALOCACIÓN de un `Option` en el heap del GC + match por paso; cada adaptador apila otro tanto | Techo estructural del throughput lazy | **idea aparte** (runtime: `Option` sin alocación o devirtualizar `step`; cuando importe de verdad) |
+| Faltan terminales comunes: `any`/`all`/`count` (3 líneas c/u sobre `next`/`fold`); `find`/`chain`/`min`/`max` a demanda | Ergonomía menor | opcional en 62.1 o diferido |
+
+**Verificados sin hallazgo**: pereza con orden intercalado; `take` corta el consumo del origen;
+`skip`/`take` con bordes (negativo, más allá del final); `enumerate` + `for` con tupla; iterador
+de usuario hereda los adaptadores por defecto y funciona con `for`; la bajada `for_iter_sites`
+por posición. El literal de struct en la cabecera del `for` cae en la ambigüedad
+literal-vs-bloque (consistente con if/while; error claro).
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

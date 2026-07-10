@@ -7838,3 +7838,20 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   (c) `words` separa por **whitespace** (espacio/tab/`\n`/`\r`), no solo espacio — el
   contrato universal de split_whitespace. (d) **`lines(s)`** nueva: parte por `\n` y trata
   `\r\n` (el `\r` final se recorta); toml/csv/http la hand-rolleaban.
+
+## 71. M67 — std/fs de producción (directorios y metadatos)
+
+> Revisión jul 2026 (tras M66; clasificación en IDEAS §27). Sano: errores como valores,
+> list_dir determinista, exists total, handles, I/O binaria. El hallazgo: el módulo era
+> **solo-archivos** — sin mkdir/is_dir/rename, los directorios eran de solo lectura y la
+> escritura atómica imposible.
+
+- **M67 — de una pieza**: 8 primitivos nuevos (patrón M11.4; helpers `fs_*` compartidos en
+  `builtins.rs` que devuelven el arreglo etiquetado ya montado): `__mkdir` (create_dir_all),
+  `__is_dir`/`__is_file` (totales → bool), `__rename`, `__copy_file`, `__remove_dir` (solo
+  vacío; el recursivo es peligroso → a demanda), `__file_size` (`["ok", n]` como `__open`),
+  `__append_file_bytes`. Envoltorios `Result` en `std/fs` (`mkdir`/`is_dir`/`is_file`/
+  `rename`/`copy_file`/`remove_dir`/`file_size`/`append_file_bytes`). Con `rename` queda
+  habilitado el patrón de **escritura atómica** (temp + rename). Tests: integración por
+  subproceso en `io_cli` (I/O real no determinista → no oráculo), ciclo completo
+  mkdir → write → is_dir/is_file → file_size → copy → rename → remove.

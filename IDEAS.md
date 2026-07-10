@@ -865,6 +865,27 @@ consumidores reales (solo el smoke de cli_cli) → cambiar es barato.
 
 ---
 
+## 27. std/fs (revisión jul 2026) — M67, PLAN
+
+Revisión en frío (detalle en DESIGN §71). Sano: errores como valores en todo (mensajes del
+sistema propagados), list_dir determinista, exists total, handles con buffering, I/O binaria.
+El hallazgo: **el módulo es solo-archivos; los directorios son de solo lectura** (verificado
+a ambos niveles: ni envoltorio ni primitivo del host).
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **No hay `mkdir`**: desde raylang no se puede crear un directorio (write_file a un dir inexistente = Err sin remedio) | Scaffolders/cachés/sitios estáticos bloqueados | **M67** |
+| **No hay `is_dir`/`is_file`**: list_dir da solo nombres → no se puede recorrer un árbol | Recorrido imposible | **M67** |
+| **No hay `rename`**: la escritura atómica (temp + rename) es imposible | Toda escritura es ventana de corrupción | **M67** |
+| Sin `copy_file`/`remove_dir`/`file_size`; `append_file_bytes` ausente (append solo-texto) | Kit incompleto | **M67** |
+
+M67 de una pieza: 8 primitivos mecánicos (patrón M11.4; helpers compartidos en builtins.rs)
++ envoltorios Result en std/fs + integración por subproceso en io_cli. `remove_dir` solo
+vacío (el recursivo es peligroso → a demanda). `write_file` sigue devolviendo caracteres
+(documentado, coherente con `len()`).
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

@@ -683,6 +683,37 @@ aditivos.
 
 ---
 
+## 18. Tiempo y fechas — M57, PLAN (revisión jul 2026)
+
+Revisión completa del manejo de tiempo (tras cerrar M56). **El modelo de fondo es sano y no se
+toca**: la moneda universal es `int` = **epoch-ms UTC** (`time.now()`), `monotonic()` para
+intervalos (separación correcta y documentada), y `DateTime` es una *vista civil* para
+formatear/parsear — no un instante (no lleva offset). Solo UTC por diseño (M20.5); sin leap
+seconds (= tiempo Unix); pre-1970 no soportado (documentado).
+
+**Aristas detectadas:**
+
+| Arista | ¿Dónde pega? | Impacto | Sub-fase |
+|---|---|---|---|
+| `parse_iso8601` solo acepta la forma exacta `…Z`: un offset `+02:00` o `.123Z` (JSON de cualquier API) no parsea; campos no numéricos → **0 en silencio**; sin validar rangos | `net/time` (librería pura) | Corrección latente para todo consumidor de JSON | **57.1** (junto a la promoción a `std/time`) |
+| Las fechas civiles viven en el paquete `net` pero las usan net/log, net/sigv4 y db/bson (cruce de paquetes) y no son "web" | Promoción `net/time` → **`std/time`** (política §53: universal/ligera/estable); `net/time` queda como reexport (`pub from`) | Compat total vía reexport | **57.1** |
+| `sleep` bloquea el WORKER (`thread::sleep`, no cede): en M:1 congela todas las fibras; sin timer de fibra no hay timeout-de-handler (diferido M56.5), retries ni cron | **Runtime**: aparcar con deadline SIN fd (la maquinaria de M56.4) | Toque de VM acotado; el intérprete sigue bloqueante (documentado) | **57.2** |
+| `uuid_v4` es aleatorio puro; falta **UUID v7** (timestamp ordenable — claves de DB, trazas) | `std/uuid` (junto al v4; usa `time.now()`) | Ninguno (aditivo) | **57.3** |
+| `monotonic` es por-proceso (origen arbitrario): no comparable entre procesos ni persistible | Solo documentación (es correcto para su propósito) | — | 57.1 (doc) |
+| Hora local (`__local_offset_millis` del SO, sin base IANA) | `std/time` (primitivo pequeño) | Aditivo | diferido a demanda |
+| Webserver sin cabecera `Date:` (SHOULD de la RFC) | `net/webserver` | Ninguno | diferido (extra menor) |
+
+**Candidatos a PACKAGE (tier 2, cuando haya demanda):** `tz` (zonas IANA — pesado, API propia;
+viable en raylang puro leyendo los TZif de `/usr/share/zoneinfo` vía std/fs, cero deps; embeber
+tzdata sería una decisión estilo ring) · `net/ntp` (cliente SNTP sobre net/udp: mide la deriva del
+reloj sin tocar el del SO) · `cron` (expresiones + timers recurrentes, sobre el sleep de fibra de
+57.2) · `dist` (relojes lógicos Lamport/HLC — solo si multi-nodo real).
+
+**Restricción hoy**: nada bloquea. 57.2 es el único toque de runtime (aditivo, mismo esquema de
+deadlines de M56.4). La promoción de 57.1 usa reexports → cero rotura.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

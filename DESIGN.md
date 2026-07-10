@@ -7490,3 +7490,27 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   webserver_cli pasa de 3 a 11 tests). Diferidos menores: trailers de chunked, pipelining
   HTTP/1.1 (los navegadores no lo usan; los octetos de una petición adelantada se descartan),
   Range/cache de estáticos, tope de peticiones por conexión keep-alive.
+
+## 61. M57 — Tiempo y fechas de producción
+
+> Revisión jul 2026 (tras M56; clasificación en IDEAS §18). El modelo actual — **`int` epoch-ms
+> UTC como moneda universal**, `monotonic()` para intervalos, `DateTime` como vista civil sin
+> offset, **solo UTC** — es sano y NO se toca. M57 pule las aristas.
+
+**Reparto std-vs-package fijado con el usuario** (política §53): las fechas civiles se
+**promueven a `std/time`** (universales/ligeras/estables; hoy viven en `net/time` y las usan
+net/log, net/sigv4 y db/bson — cruce de paquetes); `net/time` queda como reexport. Candidatos a
+package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang puro), `net/ntp`
+(SNTP), `cron` (sobre el sleep de fibra), `dist` (HLC/Lamport).
+
+- **M57.1 — promoción a `std/time` + parse endurecido**: fusionar `net/time` en `std/time`
+  (`time.now_utc()`, `time.to_iso8601(dt)`…; `net/time` = `pub from std/time import …`).
+  `parse_iso8601` acepta offsets `±HH:MM`/`Z` y fracción `.mmm` (normaliza a UTC en el epoch-ms),
+  campo no numérico o fuera de rango = `Err` real (antes: 0 en silencio), y documenta que
+  `monotonic` es por-proceso (no persistible).
+- **M57.2 — sleep cooperativo de fibra** (único toque de runtime): `time.sleep` en la VM pasa de
+  `thread::sleep` (bloquea el worker; en M:1 congela todo) a **aparcar la fibra con deadline sin
+  fd** — la misma maquinaria de deadlines de M56.4. Desbloquea timeout-de-handler (diferido de
+  M56.5), retries y cron. El intérprete sigue bloqueante (un hilo, documentado).
+- **M57.3 — UUID v7** en `std/uuid` (timestamp ordenable + aleatorio; claves de DB/trazas), junto
+  al v4.

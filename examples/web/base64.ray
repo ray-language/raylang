@@ -1,6 +1,8 @@
 // base64 (RFC 4648) escrito EN raylang. Cero runtime nuevo: puro cómputo sobre los operadores
 // bit a bit (M19.3a) y la stdlib de strings. Importable: `from base64 import base64;`.
-//
+// M59.5: el encode acumula en StringBuilder (O(n), no O(n²) de `s = s + …`).
+import std/collections/stringbuilder as sb;
+
 // Codifica un arreglo de octetos (`[int]`, cada elemento 0..255) en su representación base64
 // estándar (con relleno `=`). Es lo que el handshake de WebSocket necesita para el digest SHA-1.
 fn alphabet() -> string { "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" }
@@ -14,7 +16,7 @@ fn enc_char(idx: int) -> string {
 /// Encodes a byte array (`[int]`, each 0..255) as standard base64 (RFC 4648) with `=` padding.
 pub fn base64(data: [int]) -> string {
     let n = data.len();
-    var out = "";
+    let b = sb.new();
     // Bloques completos de 3 octetos → 4 caracteres.
     var i = 0;
     while (i + 3 <= n) {
@@ -22,10 +24,7 @@ pub fn base64(data: [int]) -> string {
         let b1 = data[i + 1] & 255;
         let b2 = data[i + 2] & 255;
         let triple = b0 << 16 | b1 << 8 | b2;
-        out = out + enc_char(triple >> 18 & 63);
-        out = out + enc_char(triple >> 12 & 63);
-        out = out + enc_char(triple >> 6 & 63);
-        out = out + enc_char(triple & 63);
+        sb.push(b, enc_char(triple >> 18 & 63) + enc_char(triple >> 12 & 63) + enc_char(triple >> 6 & 63) + enc_char(triple & 63));
         i = i + 3;
     }
     // Cola: 1 o 2 octetos sobrantes se rellenan con '='.
@@ -33,47 +32,24 @@ pub fn base64(data: [int]) -> string {
     if (rem == 1) {
         let b0 = data[i] & 255;
         let triple = b0 << 16;
-        out = out + enc_char(triple >> 18 & 63);
-        out = out + enc_char(triple >> 12 & 63);
-        out = out + "==";
+        sb.push(b, enc_char(triple >> 18 & 63) + enc_char(triple >> 12 & 63) + "==");
     } else {
         if (rem == 2) {
             let b0 = data[i] & 255;
             let b1 = data[i + 1] & 255;
             let triple = b0 << 16 | b1 << 8;
-            out = out + enc_char(triple >> 18 & 63);
-            out = out + enc_char(triple >> 12 & 63);
-            out = out + enc_char(triple >> 6 & 63);
-            out = out + "=";
+            sb.push(b, enc_char(triple >> 18 & 63) + enc_char(triple >> 12 & 63) + enc_char(triple >> 6 & 63) + "=");
         }
     }
-    out
+    sb.build(b)
 }
 
 // --- base64url (RFC 4648 §5): alfabeto URL-safe (`-`/`_` en vez de `+`/`/`) y SIN relleno `=`. ---
 // Es la codificación que usan los JSON Web Tokens (cada segmento es base64url sin padding).
 // Reemplaza los caracteres no-URL-safe y quita el relleno de una cadena base64 estándar.
+// M59.5: con el `replace` nativo (O(n)) en vez del bucle por carácter (O(n²)).
 fn to_url(s: string) -> string {
-    var out = "";
-    var i = 0;
-    while (i < s.len()) {
-        let c = s[i];
-        if (c == '+') {
-            out = out + "-";
-        } else {
-            if (c == '/') {
-                out = out + "_";
-            } else {
-                if (c == '=') {
-                    out = out + "";
-                } else {
-                    out = out + to_string(c);
-                }
-            }
-        }
-        i = i + 1;
-    }
-    out
+    s.replace("+", "-").replace("/", "_").replace("=", "")
 }
 
 // Octetos → base64url (sin relleno). Se reusa `base64` y se transforma el alfabeto.

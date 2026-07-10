@@ -4,6 +4,10 @@
 //
 // El parseo devuelve `[[string]]` (filas de campos como strings): raylang es estáticamente tipado y las
 // columnas son heterogéneas, así que dejar todo como string (y que el usuario convierta) es lo idiomático.
+// M59.5: el writer acumula en StringBuilder (O(n)); en el parser los campos siguen con `+` por
+// carácter — el coste es cuadrático solo en el LARGO DEL CAMPO (cortos en la práctica), y la
+// alternativa (substring por rachas) es peor: substring indexa por carácter y escanea desde 0.
+import std/collections/stringbuilder as sb;
 // Parsea un documento CSV a filas de campos. Los campos entrecomillados (`"..."`) admiten comas, saltos
 // de línea y comillas escapadas como `""`. Acepta finales de línea LF o CRLF.
 /// Parses a CSV document (RFC 4180) into rows of string fields. Quoted fields (`"..."`) may
@@ -84,42 +88,32 @@ fn necesita_comillas(s: string) -> bool {
 }
 
 // Escribe un campo, entrecomillándolo y escapando las comillas si hace falta.
+// M59.5: la comilla interior se escapa duplicando por rachas (replace nativo, O(n)).
 fn write_field(s: string) -> string {
     if (!necesita_comillas(s)) {
         return s;
     }
-    var out = "\"";
-    var i = 0;
-    while (i < s.len()) {
-        let c = s[i];
-        if (c == '"') {
-            out = out + "\"\"";
-        } else {
-            out = out + to_string(c);
-        }
-        i = i + 1;
-    }
-    out + "\""
+    "\"" + s.replace("\"", "\"\"") + "\""
 }
 
 // Serializa filas de campos a un documento CSV (líneas separadas por `\n`).
 /// Serializes rows of fields to a CSV document (`\n` line endings). Fields containing a
 /// comma, quote, CR, or LF are quoted, with inner quotes escaped as `""` (RFC 4180).
 pub fn write_csv(rows: [[string]]) -> string {
-    var out = "";
+    let b = sb.new();
     var r = 0;
     while (r < rows.len()) {
         let fila = rows[r];
         var c = 0;
         while (c < fila.len()) {
             if (c > 0) {
-                out = out + ",";
+                sb.push(b, ",");
             }
-            out = out + write_field(fila[c]);
+            sb.push(b, write_field(fila[c]));
             c = c + 1;
         }
-        out = out + "\n";
+        sb.push(b, "\n");
         r = r + 1;
     }
-    out
+    sb.build(b)
 }

@@ -1,6 +1,9 @@
 // Codificación hexadecimal (RFC 4648 §8) escrita EN raylang. Cero runtime nuevo. Convierte entre
 // un arreglo de octetos (`[int]`, cada uno 0..255) y su representación hexadecimal en minúsculas.
 // Importable: `from hex import hex_encode, hex_decode;`. Útil para digests, claves, fingerprints.
+// M59.5: hex_encode acumula en StringBuilder (O(n), no O(n²) de `s = s + …`).
+import std/collections/stringbuilder as sb;
+
 // El dígito hexadecimal (minúscula) del valor `d` (0..15).
 fn hex_digit(d: int) -> string {
     let digits = "0123456789abcdef";
@@ -20,15 +23,14 @@ fn hex_val(c: char) -> int {
 /// Encodes a byte array (`[int]`, each 0..255) as a lowercase hexadecimal string (RFC 4648 §8).
 /// Each byte produces exactly two hex digits.
 pub fn hex_encode(data: [int]) -> string {
-    var s = "";
+    let b = sb.new();
     var i = 0;
     while (i < data.len()) {
         let o = data[i];
-        s = s + hex_digit(o >> 4 & 15);
-        s = s + hex_digit(o & 15);
+        sb.push(b, hex_digit(o >> 4 & 15) + hex_digit(o & 15));
         i = i + 1;
     }
-    s
+    sb.build(b)
 }
 
 // String hexadecimal → octetos. `Err` si la longitud es impar o hay un carácter no hexadecimal.

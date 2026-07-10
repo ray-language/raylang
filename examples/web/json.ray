@@ -9,6 +9,10 @@
 // (p. ej. "😀" → 😀), vía char_from_code (el inverso de char_code, del prelude). M59.1: los nueve
 // escapes de la RFC 8259 §7 (" \ / b f n r t uXXXX) en el parse, y quote escapa TODO control
 // < 0x20 en la salida (\b \f \n \r \t o \u00XX) — nunca emite JSON inválido.
+// M59.5: los strings se construyen con StringBuilder + rachas (`substring`) en vez de `s = s + c`
+// por carácter (cada `+` copia lo acumulado → O(n²); con payloads de cientos de KB muerde de verdad).
+import std/collections/stringbuilder as sb;
+
 /// A JSON value: null, bool, number (float), string, array, or object (`Map<string, Json>`).
 /// Objects use a Map, so keys come out sorted when serializing (canonical, stable round-trips).
 pub enum Json {
@@ -21,15 +25,17 @@ pub enum Json {
 }
 
 // --- Parser de descenso recursivo. El estado (texto + cursor) se muta por referencia. ---
+// M59.5: el cursor corre sobre `[char]`, NO sobre el string — indexar un string (`s[i]`) es por
+// carácter sobre UTF-8 y escanea desde 0 (O(i)), así que `cur` por carácter hacía el parse O(n²).
 struct P {
-    s: string,
+    cs: [char],
     i: int,
     n: int,
 }
 
 fn at_end(p: P) -> bool { p.i >= p.n }
 
-fn cur(p: P) -> char { p.s[p.i] }
+fn cur(p: P) -> char { p.cs[p.i] }
 
 fn skip_ws(p: P) {
     var seguir: bool = true;
@@ -49,15 +55,20 @@ fn skip_ws(p: P) {
 
 // ¿El texto en el cursor empieza por `kw`? Si sí, avanza el cursor y devuelve true.
 fn lit(p: P, kw: string) -> bool {
-    let m: int = kw.len();
+    let ks = kw.chars();
+    let m: int = ks.len();
     if (p.i + m > p.n) {
-        false
-    } else if (p.s.substring(p.i, p.i + m) == kw) {
-        p.i = p.i + m;
-        true
-    } else {
-        false
+        return false;
     }
+    var k = 0;
+    while (k < m) {
+        if (p.cs[p.i + k] != ks[k]) {
+            return false;
+        }
+        k = k + 1;
+    }
+    p.i = p.i + m;
+    true
 }
 
 fn parse_value(p: P) -> Result<Json, string> {
@@ -110,7 +121,13 @@ fn parse_number(p: P) -> Result<Json, string> {
     if (p.i == inicio) {
         return Result.Err("se esperaba un número");
     }
-    let trozo: string = p.s.substring(inicio, p.i);
+    // El token es corto: reconstruirlo por carácter es O(largo del número).
+    var trozo: string = "";
+    var k = inicio;
+    while (k < p.i) {
+        trozo = trozo + to_string(p.cs[k]);
+        k = k + 1;
+    }
     match (parse_float(trozo)) {
         Option.Some(f) => Result.Ok(Json.JNum(f)),
         Option.None => Result.Err("número inválido: " + trozo),
@@ -196,9 +213,12 @@ fn parse_u_escape(p: P) -> Result<string, string> {
 }
 
 // Lee un string entre comillas (el cursor está en la comilla de apertura). Devuelve el texto crudo.
+// M59.5: acumula en un StringBuilder (push O(1) amortizado + join final) — O(n). Ojo: NO se copia
+// por rachas con `substring(i, j)`: substring indexa por CARÁCTER sobre UTF-8 y escanea desde 0,
+// así que con posiciones grandes vuelve a ser cuadrático (medido: peor que el `+` original).
 fn parse_str_raw(p: P) -> Result<string, string> {
     p.i = p.i + 1;  // saltar la comilla de apertura
-    var out: string = "";
+    let b = sb.new();
     var seguir: bool = true;
     var err: string = "";
     while (seguir) {
@@ -220,7 +240,7 @@ fn parse_str_raw(p: P) -> Result<string, string> {
                     p.i = p.i + 1;
                     match (parse_u_escape(p)) {
                         Result.Ok(rep) => {
-                            out = out + rep;
+                            sb.push(b, rep);
                         },
                         Result.Err(m) => {
                             err = m;
@@ -230,7 +250,7 @@ fn parse_str_raw(p: P) -> Result<string, string> {
                 } else {
                     match (unescape(cur(p))) {
                         Option.Some(rep) => {
-                            out = out + rep;
+                            sb.push(b, rep);
                             p.i = p.i + 1;
                         },
                         Option.None => {
@@ -240,12 +260,12 @@ fn parse_str_raw(p: P) -> Result<string, string> {
                     }
                 }
             } else {
-                out = out + to_string(c);
+                sb.push(b, to_string(c));
                 p.i = p.i + 1;
             }
         }
     }
-    if (err == "") { Result.Ok(out) } else { Result.Err(err) }
+    if (err == "") { Result.Ok(sb.build(b)) } else { Result.Err(err) }
 }
 
 fn parse_string_value(p: P) -> Result<Json, string> {
@@ -363,7 +383,8 @@ fn parse_object(p: P) -> Result<Json, string> {
 /// malformed input or trailing text after the value. `\uXXXX` escapes are supported, including
 /// surrogate pairs for astral code points.
 pub fn parse(s: string) -> Result<Json, string> {
-    var p: P = P { s: s, i: 0, n: s.len() };
+    let cs = s.chars();
+    var p: P = P { cs: cs, i: 0, n: cs.len() };
     match (parse_value(p)) {
         Result.Ok(j) => {
             skip_ws(p);
@@ -379,74 +400,95 @@ fn hex_digit(v: int) -> string {
     "0123456789abcdef".substring(v, v + 1)
 }
 
+// ¿Debe escaparse `c` en la salida JSON? (comilla, barra o control < 0x20).
+fn necesita_escape(c: char) -> bool {
+    c == '"' || c == '\\' || char_code(c) < 32
+}
+
+// El escape JSON de un carácter que lo necesita: corto (\" \\ \n \t \r \b \f) o \u00XX.
+fn escape_de(c: char) -> string {
+    if (c == '"') {
+        "\\\""
+    } else if (c == '\\') {
+        "\\\\"
+    } else if (c == '\n') {
+        "\\n"
+    } else if (c == '\t') {
+        "\\t"
+    } else if (c == '\r') {
+        "\\r"
+    } else {
+        let code = char_code(c);
+        if (code == 8) {
+            "\\b"
+        } else if (code == 12) {
+            "\\f"
+        } else {
+            "\\u00" + hex_digit(code / 16) + hex_digit(code % 16)
+        }
+    }
+}
+
 // Escapa un string y lo envuelve en comillas para la salida JSON. La RFC 8259 (§7) EXIGE
 // escapar `"`, `\` y todo control < 0x20: los que tienen escape corto salen como \b \f \n
 // \r \t; el resto de controles, como \u00XX (si no, la salida sería JSON inválido).
+// M59.5: acumula en un StringBuilder (O(n); ver la nota de parse_str_raw sobre substring).
 fn quote(s: string) -> string {
-    var out: string = "\"";
+    let b = sb.new();
+    sb.push(b, "\"");
     let cs: [char] = s.chars();
+    let n = cs.len();
     var i: int = 0;
-    while (i < cs.len()) {
+    while (i < n) {
         let c: char = cs[i];
-        if (c == '"') {
-            out = out + "\\\"";
-        } else if (c == '\\') {
-            out = out + "\\\\";
-        } else if (c == '\n') {
-            out = out + "\\n";
-        } else if (c == '\t') {
-            out = out + "\\t";
-        } else if (c == '\r') {
-            out = out + "\\r";
+        if (necesita_escape(c)) {
+            sb.push(b, escape_de(c));
         } else {
-            let code = char_code(c);
-            if (code == 8) {
-                out = out + "\\b";
-            } else if (code == 12) {
-                out = out + "\\f";
-            } else if (code < 32) {
-                out = out + "\\u00" + hex_digit(code / 16) + hex_digit(code % 16);
-            } else {
-                out = out + to_string(c);
-            }
+            sb.push(b, to_string(c));
         }
         i = i + 1;
     }
-    out + "\""
+    sb.push(b, "\"");
+    sb.build(b)
 }
 
 fn stringify_array(items: [Json]) -> string {
-    var out: string = "[";
+    let b = sb.new();
+    sb.push(b, "[");
     var i: int = 0;
     while (i < items.len()) {
         if (i > 0) {
-            out = out + ",";
+            sb.push(b, ",");
         }
-        out = out + stringify(items[i]);
+        sb.push(b, stringify(items[i]));
         i = i + 1;
     }
-    out + "]"
+    sb.push(b, "]");
+    sb.build(b)
 }
 
 fn stringify_object(obj: Map<string, Json>) -> string {
-    var out: string = "{";
+    let b = sb.new();
+    sb.push(b, "{");
     let ks: [string] = obj.keys();
     var i: int = 0;
     while (i < ks.len()) {
         if (i > 0) {
-            out = out + ",";
+            sb.push(b, ",");
         }
         let k: string = ks[i];
-        out = out + quote(k) + ":";
+        sb.push(b, quote(k));
+        sb.push(b, ":");
         match (get(obj, k)) {
             Option.Some(v) => {
-                out = out + stringify(v);
+                sb.push(b, stringify(v));
             },
             Option.None => { },
         }
         i = i + 1;
     }
-    out + "}"
+    sb.push(b, "}");
+    sb.build(b)
 }
 
 /// Serializes a `Json` value to compact JSON text (no whitespace).

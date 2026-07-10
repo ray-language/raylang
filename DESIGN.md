@@ -7632,9 +7632,20 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   el raydoc. El soporte real (varint de 10 octetos / zigzag `sint`) sigue diferido a demanda
   (IDEAS §16); el decode de un varint negativo de 10 octetos también. Test del panic en ambos
   motores en `protobuf_cli`.
-- **M59.5 — StringBuilder en los hot paths**: json (`parse_str_raw`/`quote`/stringify), csv,
-  hex y base64 construyen con `s = s + …` por carácter (O(n²)); migrarlos al `StringBuilder`
-  (M40.3c) que existe exactamente para esto, midiendo antes/después. De paso: `clear()` en
-  StringBuilder si hace falta.
+- **M59.5 — StringBuilder + O(n) en los hot paths** ✅ **COMPLETO**. json/csv/hex/base64
+  construían con `s = s + …` por carácter (cada `+` copia lo acumulado → O(n²)). Migrados a
+  `StringBuilder` (push O(1) amortizado + join final): `parse_str_raw`/`quote`/`stringify_*`
+  (json), `write_csv` (csv; `write_field` vía `replace` nativo), `hex_encode`, `base64`
+  (`to_url` vía cadena de `replace`). **Dos gotchas de rendimiento del lenguaje descubiertos
+  midiendo** (documentados en los comentarios): (1) `substring(i, j)` y (2) `s[i]` indexan por
+  CARÁCTER sobre UTF-8 y escanean desde 0 → son **O(i)**, así que "copiar por rachas con
+  substring" y "cursor de parser sobre el string" son cuadráticos — el primer intento con
+  rachas salió PEOR que el original. Fixes: push por carácter al builder, y el parser de json
+  tokeniza sobre **`[char]`** (`P.cs`, indexación O(1); `lit`/`parse_number` sin substring).
+  El parser de csv conserva `field + c` (cuadrático solo en el largo del CAMPO, cortos).
+  **Medidas** (release, misma máquina; ~140k chars json / 4000 filas csv / 60k octetos):
+  json parse **10 096 → 87 ms (116×)**, json quote 329 → 46 ms, base64url **3 527 → 32 ms
+  (110×)**, hex encode 360 → 43 ms, base64 171 → 32 ms, csv write 158 → 64 ms, csv parse
+  igual (46 → 50 ms, sin tocar). `clear()` en StringBuilder no hizo falta.
 - **Decisión aparte (pre-1.0, con el usuario)**: unificar `[int]` → `bytes` en hex/base64/
   PbWriter (APIs pre-M16); rompe ~6 consumidores (jwt, scram, crypto…).

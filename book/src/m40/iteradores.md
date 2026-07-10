@@ -103,31 +103,49 @@ simple; la perezosa gana en coste para las cadenas largas. raylang ofrece las do
 quien escribe. Saber *cuándo* usar cada una —¿es una etapa o cinco?, ¿el resultado se indexa o se vuelve a
 recorrer?— es parte de programar con iteradores.
 
-## Una sola fuente de verdad (M40.6)
+## Una sola fuente de verdad… y su precio (M40.6 → M62.1)
 
 Ofrecer las dos caras no obliga a **implementar** las dos. Tener dos bucles que hacen lo mismo es un olor:
-cada bug o mejora habría que arreglarlo por duplicado. Así que las funciones ansiosas dejaron de tener
-cuerpo propio y pasaron a **delegar en la maquinaria perezosa**:
+cada bug o mejora habría que arreglarlo por duplicado. Así que en M40.6 las funciones ansiosas dejaron de
+tener cuerpo propio y pasaron a **delegar en la maquinaria perezosa**:
 
 ```raylang
-fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] { iter(xs).map(f).collect() }
-fn filter<T>(xs: [T], pred: fn(T) -> bool) -> [T] { iter(xs).filter(pred).collect() }
-fn fold<T, A>(xs: [T], init: A, f: fn(A, T) -> A) -> A { iter(xs).fold(init, f) }
+fn map<T, U>(xs: [T], f: fn(T) -> U) -> [U] { iter(xs).map(f).collect() }   // M40.6
 ```
 
-La lógica de `map`/`filter`/`fold` vive ahora en **un solo sitio** —los métodos del trait—; las funciones
-libres son un envoltorio de una línea que añade el `iter()…collect()` por comodidad. La cara ansiosa
-conserva su firma y su semántica exactas (un `[U]` recién materializado), pero por dentro es la perezosa
-con las tapas puestas.
+Elegante: la lógica en un solo sitio, las libres como envoltorios de una línea. Pero la elegancia tenía un
+precio que nadie midió hasta la revisión de producción (M62.1): **cada `next()` cuesta una llamada a
+closure + un `Option` asignado en el heap del GC + un `match`, POR ELEMENTO** — y la cara ansiosa, la que
+usa todo el código real (`xs.map(f)`), lo pagaba entero más un `collect` intermedio. Medido con un millón
+de elementos: el bucle `while` a mano tardaba 107 ms; `xs.map(f).fold(…)` re-fundado, **36 441 ms** (340×).
 
-¿Y no se recursiona? `map<T,U>(xs)` llama a `iter(xs).map(f)`. Pero `iter(xs)` es un `Iter<T>`, y sobre un
-receptor `Iter` la resolución campo→método→UFCS elige el **método del trait**, nunca la función libre. El
-despacho por tipo de receptor las mantiene separadas sin ambigüedad.
+Así que M62.1 lo revirtió: las funciones libres ansiosas vuelven a ser **bucles directos** (317 ms — 114×
+recuperados), y la maquinaria perezosa queda para lo que de verdad la necesita: fusionar cadenas y cortar
+trabajo (`take` temprano sobre una fuente cara). La duplicación de tres bucles triviales resultó ser el
+menor de los dos males.
 
-Nótese que la cara ansiosa, aun re-fundada, **no fusiona**: `xs.map(f).filter(g)` sigue materializando
-entre etapas, porque cada función libre devuelve un `[T]` completo. Eso es inherente a su firma, no un
-defecto de la implementación: si quieres fusión, entras por `.iter()`. Re-fundar eliminó la *duplicación de
-código*, no la *distinción de coste* —que es real y deliberada—.
+La lección es doble. Primero, la de siempre: **la estética no se come — mide**. Y segundo, una más fina:
+la pereza en raylang **corta trabajo, no acelera el trabajo que sí se hace**. Una cadena
+`iter().map().filter().fold()` evita arreglos intermedios, pero cada elemento que fluye paga el peaje del
+`next()` (~6 µs). Si el cuello es el *throughput* de una sola etapa, el bucle (o la libre ansiosa) gana;
+si el cuello es *cuántos* elementos tocas (un `take(10)` sobre un millón), la perezosa gana por paliza.
+
+## La letra pequeña de la semántica
+
+Tres comportamientos que conviene saber antes de que te sorprendan (los tres verificados, idénticos en
+ambos motores):
+
+- **`for x in xs` congela la longitud; `for x in xs.iter()` es una vista viva.** El `for` directo sobre
+  un arreglo captura `len` al entrar: si el cuerpo hace `push`, los elementos nuevos NO se visitan. El
+  `Iter` de `xs.iter()`, en cambio, relee `xs.len()` en cada paso: los elementos añadidos durante la
+  iteración SÍ se visitan (y un `push` incondicional no termina nunca). Mutar lo que estás recorriendo es
+  mala idea en general; si lo haces, ahora sabes qué hace cada forma.
+- **Un iterador es one-shot y el aliasing se nota.** Dos adaptadores construidos sobre el MISMO `iter()`
+  comparten el cursor: alternar `next()` entre ellos intercala el consumo. Construye un `iter()` nuevo
+  por cadena.
+- **`zip` puede descartar un elemento.** Cuando el lado corto se agota, el elemento que `zip` ya había
+  pedido al lado largo se pierde (igual que en Rust). Si vas a seguir usando el iterador largo después
+  del `zip`, cuenta con ese hueco.
 
 ## El resto del juego
 
@@ -136,7 +154,10 @@ iteradores moderna, todo como métodos por defecto (puro prelude, cero runtime):
 
 - **Perezosos** (devuelven `Iter`): `map`, `filter`, `take(n)` (corta), `skip(n)`, `enumerate()` (pares
   `(int, T)`), `zip(otra)` (pares `(T, U)`).
-- **Terminales** (consumen): `fold(init, f)`, `collect() -> [T]`, y la función libre `sum(it: Iter<int>)`.
+- **Terminales** (consumen): `fold(init, f)`, `collect() -> [T]`, `any(pred)`/`all(pred)` (con
+  cortocircuito: sobre una cadena perezosa solo se evalúa hasta la primera respuesta), `count()`, y las
+  funciones libres `sum(it: Iter<int>)` / `sum_float(it: Iter<float>)`. `any`/`all` existen también como
+  libres ansiosas sobre arreglos (mismo nombre; resuelve el tipo del receptor, como `map`).
 
 `sum` quedó como función libre y no como método por una razón instructiva: un `sum` genérico necesitaría un
 cero y un `+` del tipo del elemento —es decir, un trait `Zero`/`Sum` que raylang no tiene—. Sin él, `sum`

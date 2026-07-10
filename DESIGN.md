@@ -7735,12 +7735,16 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   terminales `any`/`all`/`count` en el trait (con cortocircuito; verificado sobre una cadena de
   1M sin colgarse) + `any`/`all` eager sobre arreglos (mismo nombre, despacho por receptor).
   Oráculo `any_all_count_oraculo` (vm.rs); lib (542) + 8 suites verdes.
-- **M62.2 — documentación de la semántica fina**: (a) `for x in xs` CONGELA la longitud al
+- **M62.2 — documentación de la semántica fina** ✅ **COMPLETO**, **CIERRA M62**: (a) `for x in xs` CONGELA la longitud al
   entrar (ambos motores, verificado) pero `for x in xs.iter()` es una vista VIVA (el `step`
   relee `xs.len()`) — mutar el arreglo durante la iteración da resultados distintos entre
   formas; (b) aliasing one-shot (dos adaptadores sobre el mismo `iter()` comparten el avance);
   (c) `zip` descarta el elemento ya consumido del lado largo al agotarse el corto (como Rust).
-  Va al libro (m40/iteradores) + gotcha en DESIGN §55.
+  Hecho en el libro (m40/iteradores): la sección "Una sola fuente de verdad" se reescribió como
+  "…y su precio (M40.6 → M62.1)" — cuenta el arco estética→medición→reversión con los números, y
+  la moraleja fina (la pereza CORTA trabajo, no acelera el que sí se hace: ~6 µs/`next()`); nueva
+  sección "La letra pequeña de la semántica" (congelado-vs-vivo, one-shot/aliasing, el hueco de
+  `zip`); inventario de terminales actualizado (any/all/count/sum_float).
 - **Idea aparte** (IDEAS §22, runtime): abaratar el `next()` (~6 µs/elemento hoy) — `Option`
   sin alocación (representación inline/sentinela) o devirtualización del `step`. Se hará cuando
   el throughput lazy importe de verdad; el techo actual no bloquea (el camino eager queda en

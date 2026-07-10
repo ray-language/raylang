@@ -4072,6 +4072,34 @@ mod tests {
         );
     }
 
+    /// M61.3: ergonomía de Option/Result (traits `OptionOps`/`ResultOps` del prelude) + Eq/Show
+    /// de bytes y arreglos. Los MISMOS nombres (`unwrap_or`/`expect`/`unwrap`) existen para
+    /// Option y Result: el despacho por punto resuelve por el tipo del receptor.
+    #[test]
+    fn option_result_ergonomia_oraculo() {
+        oracle_program(
+            "fn mitad(x: int) -> Option<int> {\n\
+             \x20 if (x % 2 == 0) { Option.Some(x / 2) } else { Option.None }\n\
+             }\n\
+             fn main() -> int {\n\
+             \x20 var n = 0;\n\
+             \x20 if (mitad(8).is_some() && mitad(3).is_none()) { n = n + 1; }\n\
+             \x20 n = n + mitad(8).unwrap_or(0);\n\
+             \x20 n = n + mitad(3).unwrap_or(100);\n\
+             \x20 n = n + mitad(8).map(fn(x: int) -> int { x * 10 }).unwrap_or(0);\n\
+             \x20 n = n + mitad(8).expect(\"par\");\n\
+             \x20 let r: Result<int, string> = mitad(8).ok_or(\"impar\");\n\
+             \x20 if (r.is_ok()) { n = n + r.unwrap(); }\n\
+             \x20 let e: Result<int, string> = mitad(3).ok_or(\"impar\");\n\
+             \x20 if (e.is_err() && e.ok().is_none()) { n = n + e.unwrap_or(1000); }\n\
+             \x20 if (b\"ab\".eq(b\"ab\") && [1, 2].eq([1, 2]) && !([1].eq([2]))) { n = n + 1; }\n\
+             \x20 if ([1, 2].show() == \"[1, 2]\" && b\"ab\".show() == \"6162\") { n = n + 1; }\n\
+             \x20 if (sum_float([1.5, 2.5].iter()) == 4.0) { n = n + 1; }\n\
+             \x20 n\n\
+             }",
+        );
+    }
+
     /// M13.2a: `panic` / `assert_eq` que falla → ambos motores cortan con el MISMO mensaje.
     #[test]
     fn panic_y_assert_falla_oraculo() {

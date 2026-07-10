@@ -7701,11 +7701,18 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   20 000 ints aleatorios): 22 960 → 98 ms (234×)**. `sort_desc`/`dedup`/`binary_search`/`merge`
   de `std/sort` lo heredan. Test de estabilidad + bordes en `collections_cli` (ambos motores);
   el prelude del self-hosting conserva su insertion sort (oráculo conductual: mismo output).
-- **M61.3 — ergonomía de Option/Result + Eq/Show de bytes**: funciones libres genéricas
-  `unwrap_or`/`is_some`/`is_none`/`expect`/`unwrap`/`ok_or` (+ los análogos de Result que
-  procedan) — UFCS gratis (`opt.unwrap_or(0)`); `impl Eq/Show for bytes` (== ya es estructural,
-  `to_string(bytes)` ya da hex) e `impl<T> Eq for [T]` (== estructural) → `assert_eq` sobre
-  bytes/arreglos.
+- **M61.3 — ergonomía de Option/Result + Eq/Show de bytes/arreglos** ✅ **COMPLETO**. Métodos vía
+  **traits** (`OptionOps<T>`/`ResultOps<T,E>` con impls genéricos, M9.2b), NO funciones libres:
+  así los MISMOS nombres existen para ambos tipos sin sobrecarga (el despacho por punto resuelve
+  por el receptor, como el `Matcher` de regex/M59.2). Option: `is_some`/`is_none`/`unwrap_or`/
+  `expect(msg)`/`unwrap`/`ok_or<E>`/`map<U>`; Result: `is_ok`/`is_err`/`unwrap_or`/`expect`/
+  `unwrap`/`ok`. Además `impl Eq/Show for bytes` (`==`/`to_string` ya operaban), `impl<T: Eq> Eq
+  for [T]` (elemento a elemento — `==` sobre `[T]` RÍGIDO no tipa, gotcha) e `impl<T: Show> Show
+  for [T]` (`"[a, b]"`; diccionarios anidados → `[[int]]` funciona), y `sum_float`. Colisión
+  auditada: `mapa.ray` definía su propio `unwrap_or` libre llamado por UFCS — ahora gana el
+  método del trait con la misma semántica (su fn queda muerta). El pipeline auto-alojado no
+  conoce OptionOps → allí ese mismo call resuelve por UFCS a la fn local (oráculo conductual
+  intacto). Test `option_result_ergonomia_oraculo` (vm.rs) + 15 suites verdes.
 - **Fuera del arco** (idea aparte, IDEAS §21): posición-del-llamador para `assert`/`panic`
   (hoy un assert fallido reporta la línea del prelude) — exige diseño de runtime (stack trace
   o intrinsic de posición).

@@ -552,6 +552,171 @@ impl Show for char {
     fn show(self) -> string { to_string(self) }
 }
 
+// --- Ergonomía de Option/Result (M61.3) ---
+// Métodos vía TRAITS (no funciones libres): así `unwrap_or`/`expect`/`unwrap` pueden existir para
+// Option Y para Result sin sobrecarga — el despacho por punto resuelve por el tipo del receptor
+// (campo → método → UFCS, M9.1). `impl<T> … for Option<T>` es un impl genérico (M9.2b).
+/// Ergonomic accessors for `Option`: query, extract with a default, or panic with context.
+trait OptionOps<T> {
+    /// True when `self` is `Some`.
+    fn is_some(self) -> bool;
+    /// True when `self` is `None`.
+    fn is_none(self) -> bool;
+    /// The contained value, or `default` when `None`.
+    fn unwrap_or(self, default: T) -> T;
+    /// The contained value; panics with `msg` when `None`.
+    fn expect(self, msg: string) -> T;
+    /// The contained value; panics with a generic message when `None`.
+    /// Prefer `expect` (with context) or `unwrap_or` in production code.
+    fn unwrap(self) -> T;
+    /// Converts to a `Result`: `Some(x)` → `Ok(x)`, `None` → `Err(err)`.
+    fn ok_or<E>(self, err: E) -> Result<T, E>;
+    /// Transforms the contained value with `f`, if any: `Some(x)` → `Some(f(x))`.
+    fn map<U>(self, f: fn(T) -> U) -> Option<U>;
+}
+
+impl<T> OptionOps<T> for Option<T> {
+    fn is_some(self) -> bool {
+        match (self) {
+            Option.Some(x) => true,
+            Option.None => false,
+        }
+    }
+
+    fn is_none(self) -> bool { !self.is_some() }
+
+    fn unwrap_or(self, default: T) -> T {
+        match (self) {
+            Option.Some(x) => x,
+            Option.None => default,
+        }
+    }
+
+    fn expect(self, msg: string) -> T {
+        match (self) {
+            Option.Some(x) => x,
+            Option.None => panic(msg),
+        }
+    }
+
+    fn unwrap(self) -> T { self.expect("unwrap de un Option.None") }
+
+    fn ok_or<E>(self, err: E) -> Result<T, E> {
+        match (self) {
+            Option.Some(x) => Result.Ok(x),
+            Option.None => Result.Err(err),
+        }
+    }
+
+    fn map<U>(self, f: fn(T) -> U) -> Option<U> {
+        match (self) {
+            Option.Some(x) => Option.Some(f(x)),
+            Option.None => Option.None,
+        }
+    }
+}
+
+/// Ergonomic accessors for `Result`: query, extract with a default, or panic with context.
+trait ResultOps<T, E> {
+    /// True when `self` is `Ok`.
+    fn is_ok(self) -> bool;
+    /// True when `self` is `Err`.
+    fn is_err(self) -> bool;
+    /// The `Ok` value, or `default` when `Err`.
+    fn unwrap_or(self, default: T) -> T;
+    /// The `Ok` value; panics with `msg` when `Err`.
+    fn expect(self, msg: string) -> T;
+    /// The `Ok` value; panics with a generic message when `Err`.
+    /// Prefer `expect` (with context) or `unwrap_or` in production code.
+    fn unwrap(self) -> T;
+    /// Converts to an `Option`, discarding the error: `Ok(x)` → `Some(x)`.
+    fn ok(self) -> Option<T>;
+}
+
+impl<T, E> ResultOps<T, E> for Result<T, E> {
+    fn is_ok(self) -> bool {
+        match (self) {
+            Result.Ok(x) => true,
+            Result.Err(e) => false,
+        }
+    }
+
+    fn is_err(self) -> bool { !self.is_ok() }
+
+    fn unwrap_or(self, default: T) -> T {
+        match (self) {
+            Result.Ok(x) => x,
+            Result.Err(e) => default,
+        }
+    }
+
+    fn expect(self, msg: string) -> T {
+        match (self) {
+            Result.Ok(x) => x,
+            Result.Err(e) => panic(msg),
+        }
+    }
+
+    fn unwrap(self) -> T { self.expect("unwrap de un Result.Err") }
+
+    fn ok(self) -> Option<T> {
+        match (self) {
+            Result.Ok(x) => Option.Some(x),
+            Result.Err(e) => Option.None,
+        }
+    }
+}
+
+// Eq/Show para bytes (M61.3): `==` ya compara bytes estructuralmente y `to_string(bytes)` ya da
+// hex — estos impls solo lo exponen a los genéricos acotados (`assert_eq(a, b"...")`).
+impl Eq for bytes {
+    fn eq(self, other: bytes) -> bool { self == other }
+}
+
+// Eq/Show para arreglos (M61.3): elemento a elemento vía los impls de `T` (impls genéricos
+// ACOTADOS, M9.2b: el diccionario de T viaja anidado — `[[int]]` también funciona). Exponen los
+// arreglos a los genéricos acotados: `assert_eq([1, 2], [1, 2])`.
+impl<T: Eq> Eq for [T] {
+    fn eq(self, other: [T]) -> bool {
+        if (self.len() != other.len()) {
+            return false;
+        }
+        var i = 0;
+        while (i < self.len()) {
+            if (!self[i].eq(other[i])) {
+                return false;
+            }
+            i = i + 1;
+        }
+        true
+    }
+}
+
+impl<T: Show> Show for [T] {
+    fn show(self) -> string {
+        var out = "[";
+        var i = 0;
+        while (i < self.len()) {
+            if (i > 0) {
+                out = out + ", ";
+            }
+            out = out + self[i].show();
+            i = i + 1;
+        }
+        out + "]"
+    }
+}
+
+impl Show for bytes {
+    fn show(self) -> string { to_string(self) }
+}
+
+// TERMINAL: suma un iterador de flotantes (el gemelo de `sum`, que es de enteros).
+/// Terminal: sums the elements of a float iterator and returns the total.
+fn sum_float(it: Iter<float>) -> float {
+    it.fold(0.0, fn(a: float, x: float) -> float { a + x })
+}
+
 // Ordena ascendente, devolviendo un arreglo NUEVO. `T` debe implementar `Ord`; el bound se baja
 // a paso de diccionarios (M9.2), así que `sort` es front-end puro (cero opcodes).
 // M61.2: merge sort BOTTOM-UP (antes insertion sort O(n²): 20k elementos = 23 s). Sin recursión

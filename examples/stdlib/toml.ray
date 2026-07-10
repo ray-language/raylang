@@ -316,10 +316,41 @@ fn parse_array(t: TS) -> Result<TomlValue, string> {
     Result.Ok(TomlValue.TArray(elems))
 }
 
+// M63.3: tras un valor o una cabecera de tabla solo puede venir espacio, un comentario o el fin
+// de línea — la spec exige un salto de línea entre entradas (`a = 1 b = 2` es error, no dos
+// entradas). El comentario de cola se consume aquí; el `\n` lo consume skip_trivia después.
+fn expect_eol(t: TS, que: string) -> Result<int, string> {
+    skip_spaces(t);
+    if (!ts_end(t) && ts_peek(t) == '#') {
+        while (!ts_end(t) && ts_peek(t) != '\n') {
+            ts_adv(t);
+        }
+    }
+    if (ts_end(t) || ts_peek(t) == '\n' || ts_peek(t) == '\r') {
+        // El '\r' de un CRLF cuenta como fin de línea (lo consume skip_trivia después).
+        return Result.Ok(0);
+    }
+    Result.Err("se esperaba fin de línea tras " + que)
+}
+
+// ¿Ya existe una entrada con esta ruta? (M63.3: la spec prohíbe redefinir una clave.)
+fn clave_repetida(entries: [TomlEntry], key: string) -> bool {
+    var i = 0;
+    while (i < entries.len()) {
+        if (entries[i].key == key) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
 // Parsea un documento TOML a una lista de entradas (ruta con puntos → valor).
 /// Parses a TOML document (subset) into a flat list of entries (dotted key path → value).
-/// Supports `#` comments, `[a.b]` tables, bare keys, and string/int/float/bool/array values.
-/// Not supported: inline tables, arrays of tables, dates, multiline strings. `Err` on malformed input.
+/// Supports `#` comments, `[a.b]` tables, bare keys, and string (basic with full escapes, or
+/// literal `'...'`) / int / float / bool / array values. Strict where it counts: duplicate
+/// keys, an empty table header, or a second entry on the same line are errors.
+/// Not supported: inline tables, arrays of tables, dates, multiline strings.
 pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
     let t = TS { cs: src.chars(), pos: 0 };
     var entries: [TomlEntry] = [];
@@ -329,11 +360,16 @@ pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
         if (ts_peek(t) == '[') {
             ts_adv(t);
             table = parse_key(t);
+            if (table == "") {
+                // M63.3: `[]` reseteaba la tabla a la raíz en silencio.
+                return Result.Err("cabecera de tabla vacía");
+            }
             skip_spaces(t);
             if (ts_end(t) || ts_peek(t) != ']') {
                 return Result.Err("falta ']' en la cabecera de tabla");
             }
             ts_adv(t);
+            expect_eol(t, "la cabecera de tabla [" + table + "]")?;
         } else {
             let key = parse_key(t);
             if (key == "") {
@@ -354,7 +390,12 @@ pub fn parse_toml(src: string) -> Result<[TomlEntry], string> {
             if (table != "") {
                 full = table + "." + key;
             }
+            if (clave_repetida(entries, full)) {
+                // M63.3: antes se aceptaban ambas y toml_get devolvía la PRIMERA.
+                return Result.Err("clave duplicada: '" + full + "'");
+            }
             entries.push(TomlEntry { key: full, value: val });
+            expect_eol(t, "el valor de '" + full + "'")?;
         }
         skip_trivia(t);
     }

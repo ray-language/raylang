@@ -7764,7 +7764,9 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   **strings literales `'...'`** (core TOML, sin escapes — rutas Windows, regex).
 - **M63.2 — números conformes** ✅ **COMPLETO**: separadores `_` (`1_000`, lo más común en configs; validar
   posición: entre dígitos), `inf`/`nan`/`+inf`/`-inf`. Hex/octal/binario: diferido a demanda.
-- **M63.3 — rigor del documento**: clave duplicada = `Err` (hoy se aceptan ambas y `toml_get`
+- **M63.3 — rigor del documento** ✅ **COMPLETO**, **CIERRA M63**: clave duplicada = `Err` (hoy se aceptan ambas y `toml_get`
   devuelve la PRIMERA), cabecera `[]` vacía = `Err` (hoy resetea a raíz en silencio), y salto
   de línea obligatorio tras cada valor (`a = 1 b = 2` hoy pasa como dos entradas).
 - **Diferidos** (documentados en el módulo): inline tables, `[[…]]`, fechas, multilínea.
+- Gotcha cazado por la propia sonda de 63.3: `expect_eol` debía aceptar el `\r` de un CRLF
+  como fin de línea (si no, todo documento con finales Windows fallaba).

@@ -56,4 +56,18 @@ fn main() {
         Result.Ok(entries) => print("no debería parsear"),
         Result.Err(e) => print("err: " + e),
     }
+
+    // M63.3 — rigor: clave duplicada, cabecera vacía y segunda entrada en la misma línea = Err.
+    match (parse_toml("a = 1\na = 2")) {
+        Result.Ok(entries) => print("no debería parsear"),
+        Result.Err(e) => print("err: " + e),
+    }
+    match (parse_toml("[]\na = 1")) {
+        Result.Ok(entries) => print("no debería parsear"),
+        Result.Err(e) => print("err: " + e),
+    }
+    match (parse_toml("a = 1 b = 2")) {
+        Result.Ok(entries) => print("no debería parsear"),
+        Result.Err(e) => print("err: " + e),
+    }
 }

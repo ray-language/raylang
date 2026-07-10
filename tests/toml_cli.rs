@@ -25,6 +25,10 @@ const ESPERADO: &[&str] = &[
     "b = -inf",
     "c = NaN",
     "err: separador '_' mal colocado en el número: 1__0",
+    // M63.3 — rigor del documento: lo que la spec prohíbe ya no pasa en silencio.
+    "err: clave duplicada: 'a'",
+    "err: cabecera de tabla vacía",
+    "err: se esperaba fin de línea tras el valor de 'a'",
 ];
 
 fn correr(flags: &[&str]) -> (Vec<String>, bool) {

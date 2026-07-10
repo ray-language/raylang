@@ -7589,3 +7589,39 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   (RST código 8 → Err con código). Demo `http2_len_demo.ray` (status + longitud). **M58 COMPLETO**
   (58.1–58.3). Diferidos (IDEAS §19): keep-alive/pool del cliente, multiplexado h2,
   fragmentación WS de envío, CONTINUATION.
+
+## 63. M59 — Librerías de datos de la std (conformidad + rigor + rendimiento)
+
+> Revisión jul 2026 (tras M58; clasificación en IDEAS §20). Las 8 librerías de datos
+> (`std/json`, `std/regex`, `std/base64`, `std/hex`, `std/csv`, `std/protobuf`, `std/url`,
+> `std/collections/stringbuilder`) comparten la filosofía correcta (librería raylang pura,
+> errores como valores, tests golden contra referencias externas) y la lógica dura está bien
+> (NFA de Thompson lineal, surrogates `\uXXXX`, RFC 4180). Los huecos son de conformidad en
+> los bordes, rigor de validación y O(n²) por concatenación de strings. Cero runtime.
+
+- **M59.1 — JSON conforme a RFC 8259 (escapes)**: (a) `unescape` acepta `\b` (backspace,
+  U+0008) y `\f` (form feed, U+000C) — son escapes obligatorios de la RFC; hoy el parse
+  rechaza JSON legal de terceros con "secuencia de escape no soportada". (b) `quote` emite
+  `\b`/`\f` para esos caracteres y escapa TODO control < 0x20 restante como `\u00XX` — hoy
+  un string con un control dentro se serializa crudo, produciendo JSON inválido que otro
+  parser rechaza. Round-trip: `parse(stringify(x)) == x` para strings con cualquier control.
+- **M59.2 — regex sin panic + tipo `Regex` compilado**: `compile(pat) -> Result<Regex, string>`
+  (el struct `Regex` envuelve el programa NFA compilado); los 5 `panic` del compilador de
+  patrones pasan a `Err` (la única librería de las 8 que violaba "errores como valores").
+  Métodos sobre `Regex` (`full_match`/`search`/`find`/`find_str`/`find_all`/`replace_all`) que
+  NO recompilan; las funciones libres actuales se conservan delegando (compat; con patrón
+  inválido, ¿comportamiento? → devuelven su valor "no match" o panic como hoy: decidir en la
+  implementación conservando la firma).
+- **M59.3 — base64 estricto en decode**: rechazar (a) datos tras el padding (`"QQ==basura"`),
+  (b) bits sobrantes de la cola ≠ 0 (dos representaciones del mismo payload), (c) longitud
+  inválida. Cierra la maleabilidad de representación bajo JWT/SCRAM (que van sobre base64url).
+- **M59.4 — protobuf: negativos = `Err`**: `encode_varint`/`add_int` con valor negativo hoy
+  emiten octetos corruptos EN SILENCIO (el bucle `v >= 128` no entra con negativos); pasar a
+  error explícito (el soporte real de negativos — varint de 10 octetos / zigzag `sint` — sigue
+  diferido a demanda, IDEAS §16).
+- **M59.5 — StringBuilder en los hot paths**: json (`parse_str_raw`/`quote`/stringify), csv,
+  hex y base64 construyen con `s = s + …` por carácter (O(n²)); migrarlos al `StringBuilder`
+  (M40.3c) que existe exactamente para esto, midiendo antes/después. De paso: `clear()` en
+  StringBuilder si hace falta.
+- **Decisión aparte (pre-1.0, con el usuario)**: unificar `[int]` → `bytes` en hex/base64/
+  PbWriter (APIs pre-M16); rompe ~6 consumidores (jwt, scram, crypto…).

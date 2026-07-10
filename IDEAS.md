@@ -733,6 +733,30 @@ habilita), multiplexado h2 real, fragmentación WS de ENVÍO (la de recepción e
 
 ---
 
+## 20. Librerías de datos de la std (json · regex · base64 · protobuf · csv · hex · url · StringBuilder) — M59, PLAN (revisión jul 2026)
+
+Revisión de las 8 librerías de datos (detalle en DESIGN §63). Patrón común: la lógica dura
+(NFA de Thompson, surrogates, RFC 4180) está bien y con tests golden; los huecos son de
+**conformidad de RFC en los bordes**, **rigor de validación** y **rendimiento O(n²)**. Todo
+librería pura, cero runtime.
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **JSON no conforme a RFC 8259 en escapes**: el parse rechaza `\b`/`\f` (escapes LEGALES → rechaza JSON válido de terceros) y `quote` no escapa `\b`/`\f` ni los controles < 0x20 (un string con U+0001 dentro se serializa CRUDO → **emite JSON inválido**) | Corrección pura; interop real | **59.1** |
+| **regex panica con patrón malformado** (5 sitios: `(` sin cerrar, `\` final…) — la ÚNICA de las 8 que viola "errores como valores"; además el patrón se RECOMPILA en cada llamada (`find_all`/`replace_all` incluidos) | Un patrón de usuario/config inválido tumba la fibra | **59.2**: `compile(pat) -> Result<Regex, string>` + las funciones actuales delegando (compat) |
+| **base64 decode laxo**: ignora todo tras el primer `=` (`"QQ==basura"` → Ok) y no valida los bits sobrantes de la cola (dos encodings distintos → mismo payload) | Maleabilidad de representación bajo JWT/SCRAM | **59.3** (decode estricto) |
+| **protobuf `encode_varint` con negativo = corrupción SILENCIOSA** (el bucle `v >= 128` no entra y emite `v & 127` mal); el diferido "sin negativos" está documentado pero debería ser `Err`, no bytes corruptos | Corrupción de wire sin aviso | **59.4** |
+| **O(n²) transversal**: json/csv/hex/base64 construyen resultados con `s = s + …` por carácter — el `StringBuilder` (M40.3c) existe exactamente para esto y NINGUNA lo usa (son anteriores) | Cuadrático real en payloads de MBs | **59.5** (midiendo antes/después) |
+| Menores: json `parse_number` laxo (`+1`, `01`) y sin límite de profundidad (lo corta `MAX_CALL_DEPTH`, indocumentado); csv separador fijo `,` (sin `;`/TSV) y basura tras comilla de cierre tolerada; regex sin grupos de captura/`{n,m}`/lazy; StringBuilder sin `clear()`; url `parse_query` last-wins con claves repetidas (documentado) | — | dentro de su sub-fase o diferido |
+| **Decisión de API aparte (¿pre-1.0?)**: hex/base64/PbWriter hablan `[int]`, no `bytes` (pre-M16) — conversiones por doquier en jwt/scram/crypto y sin garantía 0..255; unificar rompe API de ~6 consumidores | Consistencia del ecosistema | decisión con el usuario |
+
+**Verificados sin hallazgo**: floats de json round-trip limpios (`42.0` → `"42"`, sin notación
+científica), surrogates `\uXXXX`, salida canónica (claves ordenadas); url ya endurecida en M56.2.
+**Bonus de lenguaje** (fuera del arco): el lexer NO soporta literales float con exponente (`1e21`
+es error de sintaxis) — anotar como idea aparte si algún consumidor lo pide.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

@@ -86,7 +86,10 @@ fn main() -> int {
   `serve`/`serve_tls` mantienen la conexión viva entre peticiones (M56.6: keep-alive HTTP/1.1;
   honran `Connection: close` y el ocio lo corta el read timeout); `serve_raw` sigue siendo
   una-petición-y-cerrar (el handler crudo posee la conexión — SSE). Varias cookies por respuesta
-  con `Response.set_cookie`/`with_cookie` (M56.7: una línea `Set-Cookie` por cookie).
+  con `Response.set_cookie`/`with_cookie` (M56.7: una línea `Set-Cookie` por cookie). Cuerpos
+  `Transfer-Encoding: chunked` entrantes decodificados, archivos estáticos con
+  `static_response(dir, req.path)` (saneo de `..`, mime por extensión, `index.html`), y HEAD
+  responde cabeceras sin cuerpo (M56.8).
 
 ### Observabilidad
 

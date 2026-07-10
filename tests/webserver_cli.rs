@@ -550,6 +550,127 @@ fn respuesta_con_varias_cookies() {
 }
 
 #[test]
+fn head_devuelve_cabeceras_sin_cuerpo() {
+    // M56.8: a un HEAD, el camino `serve` responde las cabeceras del GET (incl. Content-Length)
+    // pero SIN el cuerpo. Reusa el driver keep-alive (handler: "hola " + path).
+    let (mut child, port) = lanzar_servidor("head", SRV_KEEPALIVE);
+
+    let r = pedir(port, "HEAD /a HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("200 OK"), "esperaba 200 a HEAD, got: {r}");
+    assert!(r.contains("Content-Length: 7"), "esperaba el Content-Length del GET (7), got: {r}");
+    assert!(!r.contains("hola /a"), "un HEAD no debe llevar cuerpo, got: {r}");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn cuerpo_chunked_se_decodifica() {
+    // M56.8: Transfer-Encoding: chunked entrante → el eco devuelve el cuerpo DECODIFICADO
+    // ("hola" + " mundo", con extensión de chunk ignorada). Antes llegaba vacío en silencio.
+    let (mut child, port) = lanzar_servidor("chunked", SRV_ECO_BIN);
+
+    let req = b"POST /eco HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nhola\r\n6;ext=1\r\n mundo\r\n0\r\n\r\n";
+    let resp = pedir_bytes(port, req);
+    assert_eq!(cuerpo(&resp), b"hola mundo", "cuerpo chunked decodificado, got: {:?}", String::from_utf8_lossy(cuerpo(&resp)));
+
+    let _ = child.wait();
+}
+
+// Driver: archivos estáticos (M56.8). El directorio raíz llega por la variable RAY_STATIC_DIR.
+const SRV_STATIC: &str = r#"
+import webserver;
+import std/net;
+fn manejar(conn: int, dir: string) {
+    match (webserver.read_request(conn)) {
+        Result.Ok(req) => {
+            match (webserver.send_response(conn, webserver.static_response(dir, req.path))) {
+                Result.Ok(_) => {}, Result.Err(e) => eprint(e),
+            }
+        },
+        Result.Err(e) => eprint(e),
+    }
+    close(conn);
+}
+fn main() -> int {
+    var dir: string = "";
+    match (env("RAY_STATIC_DIR")) {
+        Option.Some(d) => { dir = d; },
+        Option.None => {
+            eprint("falta RAY_STATIC_DIR");
+            return 1;
+        },
+    }
+    match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Ok(srv) => {
+            print(net.local_port(srv));
+            scope(fn() {
+                var i: int = 0;
+                while (i < 3) {
+                    match (net.tcp_accept(srv)) {
+                        Result.Ok(conn) => { spawn(fn() { manejar(conn, dir) }); },
+                        Result.Err(e) => { eprint(e); i = 3; },
+                    }
+                    i = i + 1;
+                }
+            });
+            close(srv);
+            0
+        },
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+"#;
+
+#[test]
+fn archivos_estaticos_con_saneo() {
+    // Prepara la raíz estática: pub/index.html público y secreto.txt FUERA de la raíz.
+    let mut base = std::env::temp_dir();
+    base.push("ray_web_static_root");
+    let publica = base.join("pub");
+    std::fs::create_dir_all(&publica).expect("crea pub");
+    std::fs::write(publica.join("index.html"), "<h1>hola estática</h1>").expect("escribe index");
+    std::fs::write(base.join("secreto.txt"), "no debe salir").expect("escribe secreto");
+
+    // Lanza el driver con RAY_STATIC_DIR apuntando a la raíz pública.
+    let mut dir = std::env::temp_dir();
+    dir.push("ray_web_static");
+    std::fs::create_dir_all(&dir).expect("crea dir");
+    let src = format!("{}/examples/web/webserver.ray", env!("CARGO_MANIFEST_DIR"));
+    std::fs::copy(&src, dir.join("webserver.ray")).expect("copia webserver.ray");
+    let driver_path = dir.join("main.ray");
+    std::fs::write(&driver_path, SRV_STATIC).expect("escribe driver");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("--vm")
+        .arg(&driver_path)
+        .env("RAY_STATIC_DIR", publica.to_str().unwrap())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("lanza servidor estático");
+    let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
+    let mut linea = String::new();
+    reader.read_line(&mut linea).expect("lee el puerto");
+    let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("puerto inválido: {linea:?}"));
+
+    // "/" sirve index.html con su Content-Type.
+    let r = pedir(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(r.contains("200 OK") && r.contains("hola estática"), "index: {r}");
+    assert!(r.contains("Content-Type: text/html"), "mime del html: {r}");
+
+    // Path traversal → 404 (el secreto vive fuera de la raíz).
+    let tr = pedir(port, "GET /../secreto.txt HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(tr.contains("404 Not Found") && !tr.contains("no debe salir"), "traversal: {tr}");
+
+    // Un archivo que no existe → 404.
+    let nf = pedir(port, "GET /nada.css HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(nf.contains("404 Not Found"), "inexistente: {nf}");
+
+    let _ = child.wait();
+}
+
+#[test]
 fn servidor_eco_cuerpo_binario_intacto() {
     let (mut child, port) = lanzar_servidor("ecobin", SRV_ECO_BIN);
 

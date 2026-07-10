@@ -193,12 +193,14 @@ fn handle(app: App, req: webserver.Request) -> webserver.Response {
         return build_response(res);
     }
 
-    // Enrutado: primera ruta cuyo método y patrón casan.
+    // Enrutado: primera ruta cuyo método y patrón casan. Un HEAD enruta como GET (M56.8: el
+    // webserver ya le quita el cuerpo a la respuesta; RFC 9110 §9.3.2).
+    let metodo: string = if (req.method == "HEAD") { "GET" } else { req.method };
     let path_segs: [string] = split_path(req.path);
     var j: int = 0;
     while (j < app.routes.len()) {
         let rt: Route = app.routes[j];
-        if (rt.method == req.method) {
+        if (rt.method == metodo) {
             match (match_route(rt.segments, path_segs)) {
                 Option.Some(ps) => {
                     ctx.params = ps;

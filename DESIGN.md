@@ -7475,4 +7475,18 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   actualizados los del repo: webserver ×5, framework, metrics_server_demo). Tests:
   `respuesta_con_varias_cookies` (2 líneas Set-Cookie exactas, no fusionadas) y ruta `/entra` del
   framework demo.
-- **M56.8 — extras**: chunked entrante, `serve_static(dir)` con saneo de ruta, HEAD sin cuerpo.
+- **M56.8 — extras** ✅ **COMPLETO** (librería pura), **CIERRA M56**. (a) **Chunked entrante**:
+  un cuerpo `Transfer-Encoding: chunked` se decodifica (`leer_cuerpo_chunked`: tamaños hex con
+  extensiones `;ext` ignoradas, prioridad sobre Content-Length —RFC 7230 §3.3.3—, tamaño
+  DECODIFICADO contra `max_body_bytes`, plazo total respetado; sin trailers). Antes llegaba vacío
+  en silencio. (b) **`static_response(dir, req.path) -> Response`**: sirve archivos estáticos con
+  SANEO — un segmento `..`/`.` es 404 directo (la ruta llega percent-decodificada por M56.2, así
+  que `%2e%2e` cae igual), `/` final sirve `index.html`, Content-Type por extensión (`mime_of`,
+  ~14 tipos comunes; resto octet-stream), archivo ilegible = 404. (c) **HEAD sin cuerpo**: el
+  camino `serve` responde a un HEAD las cabeceras del GET equivalente (incl. su Content-Length)
+  SIN el cuerpo (RFC 9110 §9.3.2; `omit_body` en la escritura); el framework enruta HEAD como GET.
+  Tests: `head_devuelve_cabeceras_sin_cuerpo`, `cuerpo_chunked_se_decodifica` (con extensión de
+  chunk), `archivos_estaticos_con_saneo` (index + traversal + 404). **M56 COMPLETO** (56.1–56.8;
+  webserver_cli pasa de 3 a 11 tests). Diferidos menores: trailers de chunked, pipelining
+  HTTP/1.1 (los navegadores no lo usan; los octetos de una petición adelantada se descartan),
+  Range/cache de estáticos, tope de peticiones por conexión keep-alive.

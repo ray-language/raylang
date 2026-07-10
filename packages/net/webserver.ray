@@ -11,6 +11,7 @@
 import std/net;
 import std/url;
 import std/time;
+import std/fs;
 
 // M56.2: `path` llega DECODIFICADO (%XX; un `+` es literal en rutas) y SIN la query string, que
 // va aparte en `query` (cruda, sin el `?`) — así el enrutado por ruta funciona con `?x=1` y el
@@ -128,6 +129,68 @@ pub fn request_text(req: Request) -> Result<string, string> {
     from_utf8(req.body)
 }
 
+// --- Archivos estáticos (M56.8) ---
+// El Content-Type por extensión del archivo (los tipos comunes de una web; el resto, octet-stream).
+fn mime_of(file: string) -> string {
+    let f = file.to_lower();
+    if (f.ends_with(".html") || f.ends_with(".htm")) { return "text/html; charset=utf-8"; }
+    if (f.ends_with(".css")) { return "text/css; charset=utf-8"; }
+    if (f.ends_with(".js") || f.ends_with(".mjs")) { return "text/javascript; charset=utf-8"; }
+    if (f.ends_with(".json")) { return "application/json; charset=utf-8"; }
+    if (f.ends_with(".txt")) { return "text/plain; charset=utf-8"; }
+    if (f.ends_with(".svg")) { return "image/svg+xml"; }
+    if (f.ends_with(".png")) { return "image/png"; }
+    if (f.ends_with(".jpg") || f.ends_with(".jpeg")) { return "image/jpeg"; }
+    if (f.ends_with(".gif")) { return "image/gif"; }
+    if (f.ends_with(".ico")) { return "image/x-icon"; }
+    if (f.ends_with(".pdf")) { return "application/pdf"; }
+    if (f.ends_with(".wasm")) { return "application/wasm"; }
+    if (f.ends_with(".woff2")) { return "font/woff2"; }
+    "application/octet-stream"
+}
+
+// Sirve un archivo estático de `dir` según la ruta de la petición, con SANEO: un segmento `..` o
+// `.` es 404 directo (nunca se sale de `dir`; el path ya llega percent-decodificado, así que
+// `%2e%2e` también cae aquí). Una ruta que termina en `/` sirve su `index.html`.
+/// Serves a static file from `dir` for the given request path (use inside a handler:
+/// `webserver.static_response("public", req.path)`). Path-traversal safe: any `..`/`.` segment is
+/// a 404 (the path arrives percent-decoded, so `%2e%2e` is covered); a trailing `/` serves the
+/// directory's `index.html`. Sets `Content-Type` by extension; unknown files are octet-stream;
+/// missing/unreadable files are 404.
+pub fn static_response(dir: string, path: string) -> Response {
+    var ruta: string = path;
+    if (ruta.ends_with("/")) {
+        ruta = ruta + "index.html";
+    }
+    let segs: [string] = ruta.split("/");
+    var limpio: [string] = [];
+    var i: int = 0;
+    while (i < segs.len()) {
+        let s: string = segs[i];
+        if (s == ".." || s == ".") {
+            return not_found();
+        }
+        if (s != "") {
+            limpio.push(s);
+        }
+        i = i + 1;
+    }
+    var file: string = dir;
+    var j: int = 0;
+    while (j < limpio.len()) {
+        file = file + "/" + limpio[j];
+        j = j + 1;
+    }
+    match (fs.read_file_bytes(file)) {
+        Result.Ok(datos) => {
+            let r: Response = bytes_response(200, datos);
+            r.headers.insert("Content-Type", mime_of(file));
+            r
+        },
+        Result.Err(_) => not_found(),
+    }
+}
+
 // La frase de estado para los códigos comunes (HTTP la exige tras el número). M56.1: cubre
 // también redirecciones (3xx), auth (401/403), 405/413/429/431 y los 5xx de gateway.
 fn status_text(code: int) -> string {
@@ -186,6 +249,106 @@ fn find_fin_cabeceras(b: bytes, desde: int) -> int {
 /// Uses `default_limits()`; to configure them, use `read_request_limits`.
 pub fn read_request(conn: int) -> Result<Request, string> {
     read_request_limits(conn, default_limits())
+}
+
+// --- Cuerpo chunked entrante (M56.8, Transfer-Encoding: chunked) ---
+// El índice del primer "\r\n" en `b` desde `desde`, o -1 (escaneo por octetos, como el fin de cabeceras).
+fn buscar_crlf(b: bytes, desde: int) -> int {
+    var i: int = desde;
+    while (i + 1 < b.len()) {
+        if (b[i] == 13 && b[i + 1] == 10) {
+            return i;
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// El valor de un dígito hexadecimal (octeto ASCII), o -1.
+fn hex_digito(b: int) -> int {
+    if (b >= 48 && b <= 57) { return b - 48; }        // 0-9
+    if (b >= 97 && b <= 102) { return b - 97 + 10; }  // a-f
+    if (b >= 65 && b <= 70) { return b - 65 + 10; }   // A-F
+    0 - 1
+}
+
+// El tamaño de un chunk: hex desde el inicio de la línea hasta `;` (extensiones, se ignoran) o el
+// fin de línea. -1 si no hay ni un dígito válido.
+fn tam_chunk(b: bytes, ini: int, fin: int) -> int {
+    var n: int = 0;
+    var i: int = ini;
+    var alguno: bool = false;
+    while (i < fin) {
+        if (b[i] == 59) {  // ';' → extensión de chunk: ignorar el resto
+            i = fin;
+        } else {
+            let d: int = hex_digito(b[i]);
+            if (d < 0) {
+                return 0 - 1;
+            }
+            n = n * 16 + d;
+            alguno = true;
+            i = i + 1;
+        }
+    }
+    if (alguno) { n } else { 0 - 1 }
+}
+
+// Decodifica un cuerpo `Transfer-Encoding: chunked`: líneas `tamaño-hex\r\n` + datos + `\r\n`,
+// terminado por el chunk 0 (los trailers, raros, no se soportan: tras el 0 se exige `\r\n`).
+// `inicial` son los octetos que llegaron pegados a las cabeceras; el tamaño DECODIFICADO acumulado
+// respeta `max` y toda la lectura el plazo total.
+fn leer_cuerpo_chunked(conn: int, inicial: bytes, plazo_fin: int, max: int) -> Result<bytes, string> {
+    var acc: bytes = inicial;
+    var out: bytes = b"";
+    var seguir: bool = true;
+    while (seguir) {
+        let nl: int = buscar_crlf(acc, 0);
+        if (nl < 0) {
+            match (leer_con_plazo(conn, plazo_fin)) {
+                Result.Ok(t) => {
+                    if (t.len() == 0) {
+                        return Result.Err("cuerpo chunked incompleto (la conexión se cerró)");
+                    }
+                    acc = acc + t;
+                },
+                Result.Err(e) => {
+                    return Result.Err("error al leer el cuerpo chunked: " + e);
+                },
+            }
+        } else {
+            let n: int = tam_chunk(acc, 0, nl);
+            if (n < 0) {
+                return Result.Err("cuerpo chunked malformado (tamaño no hexadecimal)");
+            }
+            if (n == 0) {
+                seguir = false;
+            } else {
+                if (out.len() + n > max) {
+                    return Result.Err("cuerpo demasiado grande (chunked > " + to_string(max) + ")");
+                }
+                // Asegurar el chunk completo + su \r\n final.
+                var falta: bool = acc.len() < nl + 2 + n + 2;
+                while (falta) {
+                    match (leer_con_plazo(conn, plazo_fin)) {
+                        Result.Ok(t) => {
+                            if (t.len() == 0) {
+                                return Result.Err("cuerpo chunked incompleto (la conexión se cerró)");
+                            }
+                            acc = acc + t;
+                            falta = acc.len() < nl + 2 + n + 2;
+                        },
+                        Result.Err(e) => {
+                            return Result.Err("error al leer el cuerpo chunked: " + e);
+                        },
+                    }
+                }
+                out = out + acc.sub_bytes(nl + 2, nl + 2 + n);
+                acc = acc.sub_bytes(nl + 2 + n + 2, acc.len());
+            }
+        }
+    }
+    Result.Ok(out)
 }
 
 // M56.4: una lectura respetando el plazo TOTAL de la petición (`plazo_fin` en el reloj monotónico;
@@ -309,11 +472,30 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                 i = i + 1;
             }
 
+            // M56.8: un cuerpo `Transfer-Encoding: chunked` se decodifica (antes llegaba vacío en
+            // silencio). Tiene prioridad sobre Content-Length (RFC 7230 §3.3.3).
+            var chunked: bool = false;
+            match (get(headers, "transfer-encoding")) {
+                Option.Some(te) => {
+                    chunked = te.to_lower().contains("chunked");
+                },
+                Option.None => { },
+            }
+            if (chunked) {
+                match (leer_cuerpo_chunked(conn, body, plazo_fin, limits.max_body_bytes)) {
+                    Result.Ok(b2) => {
+                        body = b2;
+                    },
+                    Result.Err(e) => {
+                        return Result.Err(e);
+                    },
+                }
+            }
             // Cuerpo: si hay Content-Length (octetos), completar la lectura hasta esa longitud.
             // M56.1: el tope se comprueba contra lo DECLARADO (antes de leer nada); un peer que
             // cierra sin completar el cuerpo es error (no un Ok truncado); y el cuerpo se recorta
             // a n (un trozo puede traer octetos de más).
-            match (get(headers, "content-length")) {
+            if (!chunked) { match (get(headers, "content-length")) {
                 Option.Some(cl) => {
                     match (parse_int(cl)) {
                         Option.Some(n) => {
@@ -341,7 +523,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                     }
                 },
                 Option.None => { },
-            }
+            } }
 
             // Petición leída: quitar el timeout (el handler puede retener la conexión — SSE — o un
             // handler crudo leer más; que no herede un plazo casi vencido).
@@ -359,12 +541,14 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
 /// Returns the underlying socket write result; Err on write failure. (The keep-alive variant is what
 /// `serve` uses internally, M56.6; raw handlers keep one-response-per-connection semantics.)
 pub fn send_response(conn: int, r: Response) -> Result<int, string> {
-    send_response_keep(conn, r, false)
+    send_response_keep(conn, r, false, false)
 }
 
 // M56.6: la escritura real, con el header `Connection` según si la conexión sigue viva (keep-alive
-// del camino `serve`) o se cierra (el default histórico y el de los handlers crudos).
-fn send_response_keep(conn: int, r: Response, keep: bool) -> Result<int, string> {
+// del camino `serve`) o se cierra (el default histórico y el de los handlers crudos). M56.8:
+// `omit_body` = respuesta a un HEAD — cabeceras completas (incl. el Content-Length que tendría el
+// GET) pero SIN el cuerpo (RFC 9110 §9.3.2).
+fn send_response_keep(conn: int, r: Response, keep: bool, omit_body: bool) -> Result<int, string> {
     // Cabecera = texto (Content-Length en octetos, ya correcto); cuerpo = bytes crudos. Se envía todo
     // junto como bytes para no corromper un cuerpo binario.
     var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
@@ -389,6 +573,9 @@ fn send_response_keep(conn: int, r: Response, keep: bool) -> Result<int, string>
         c = c + 1;
     }
     head = head + "\r\n";
+    if (omit_body) {
+        return net.socket_write_bytes(conn, head.to_bytes());
+    }
     net.socket_write_bytes(conn, head.to_bytes() + r.body)
 }
 
@@ -471,10 +658,12 @@ fn atender_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
         match (read_request_limits(conn, limits)) {
             Result.Ok(req) => {
                 let cerrar: bool = quiere_cerrar(req);
+                // M56.8: a un HEAD se le responden las cabeceras del GET equivalente SIN el cuerpo.
+                let es_head: bool = req.method == "HEAD";
                 let t = spawn(fn() -> Response { handler(req) });
                 match (try_join(t)) {
                     Result.Ok(resp) => {
-                        match (send_response_keep(conn, resp, !cerrar)) {
+                        match (send_response_keep(conn, resp, !cerrar, es_head)) {
                             Result.Ok(_) => { },
                             Result.Err(e) => {
                                 eprint("respuesta: " + e);

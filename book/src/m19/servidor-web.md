@@ -40,6 +40,11 @@ Ambas tienen su gemela **HTTPS** (M56.3): `serve_tls`/`serve_raw_tls(host, port,
 con el certificado y la clave en PEM — cada conexión aceptada se sube a TLS (`net.tls_accept`) en su
 propia fibra antes de leer la petición.
 
+`serve`/`serve_tls` además mantienen la conexión **viva entre peticiones** (M56.6, keep-alive
+HTTP/1.1): honran `Connection: close`, cierran las conexiones ociosas por el read timeout, y un
+handler que panica responde 500 y cierra solo SU conexión (M56.5). `serve_raw` conserva
+una-petición-y-cerrar: el handler crudo posee la conexión (SSE).
+
 ¿Por qué la versión "cruda"? Por SSE.
 
 ## SSE: HTTP que no cierra

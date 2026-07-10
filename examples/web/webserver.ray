@@ -13,11 +13,13 @@ import std/url;
 import std/time;
 
 // M56.2: `path` llega DECODIFICADO (%XX; `+` es literal en rutas) y SIN la query string, que va
-// aparte en `query` (cruda, sin el `?`); `query_params` la parsea a un Map.
+// aparte en `query` (cruda, sin el `?`); `query_params` la parsea a un Map. M56.6: `version` es
+// la de la línea de petición ("HTTP/1.1"; "" si falta) — decide el keep-alive.
 pub struct Request {
     method: string,
     path: string,
     query: string,
+    version: string,
     headers: Map<string, string>,
     body: bytes,
 }
@@ -174,12 +176,19 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                     }
                 },
                 Result.Err(e) => {
+                    // M56.6: EOF/timeout SIN nada recibido = "conexión cerrada" (cierre silencioso).
+                    if (acc.len() == 0) {
+                        return Result.Err("conexión cerrada");
+                    }
                     return Result.Err("error al leer: " + e);
                 },
             }
         }
     }
     if (sep < 0) {
+        if (acc.len() == 0) {
+            return Result.Err("conexión cerrada");
+        }
         return Result.Err("petición incompleta (sin fin de cabeceras)");
     }
     // El tope también sobre el separador encontrado: sin esto, unas cabeceras que llegan en un
@@ -202,6 +211,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             }
             let method: string = partes[0];
             let target: string = partes[1];
+            let version: string = if (partes.len() >= 3) { partes[2] } else { "" };
             var path_raw: string = target;
             var query: string = "";
             match (index_of(target, "?")) {
@@ -270,18 +280,24 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             if (plazo_fin > 0) {
                 net.set_read_timeout(conn, 0);
             }
-            Result.Ok(Request { method: method, path: path, query: query, headers: headers, body: body })
+            Result.Ok(Request { method: method, path: path, query: query, version: version, headers: headers, body: body })
         },
     }
 }
 
 // --- Escritura de la respuesta ---
 pub fn send_response(conn: int, r: Response) -> Result<int, string> {
+    send_response_keep(conn, r, false)
+}
+
+// M56.6: la escritura real, con `Connection` según si la conexión sigue viva (keep-alive de
+// `serve`) o se cierra (el default histórico y el de los handlers crudos).
+fn send_response_keep(conn: int, r: Response, keep: bool) -> Result<int, string> {
     // Cabecera = texto (Content-Length en octetos, ya correcto); cuerpo = bytes crudos. Se envía todo
     // junto como bytes para no corromper un cuerpo binario.
     var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
     head = head + "Content-Length: " + to_string(r.body.len()) + "\r\n";
-    head = head + "Connection: close\r\n";
+    head = head + "Connection: " + (if (keep) { "keep-alive" } else { "close" }) + "\r\n";
     // Cabeceras del usuario (keys() está ordenada → salida determinista).
     let ks: [string] = r.headers.keys();
     var i: int = 0;
@@ -335,12 +351,74 @@ fn atender(conn: int, handler: fn(Request, int), limits: Limits) {
             }
         },
         Result.Err(e) => {
-            eprint("petición: " + e);
-            match (send_response(conn, text(400, "Bad Request"))) {
-                Result.Ok(_) => { },
-                Result.Err(_) => { },
+            // "conexión cerrada" = el peer cerró sin pedir nada (o quedó ocioso): silencio.
+            if (e != "conexión cerrada") {
+                eprint("petición: " + e);
+                match (send_response(conn, text(400, "Bad Request"))) {
+                    Result.Ok(_) => { },
+                    Result.Err(_) => { },
+                }
             }
         },
+    }
+    close(conn);
+}
+
+// ¿La petición pide cerrar tras responder? No-HTTP/1.1 o `Connection: close` (M56.6).
+fn quiere_cerrar(req: Request) -> bool {
+    if (req.version != "HTTP/1.1") {
+        return true;
+    }
+    match (get(req.headers, "connection")) {
+        Option.Some(v) => v.to_lower().contains("close"),
+        Option.None => false,
+    }
+}
+
+// M56.6: el camino ergonómico con KEEP-ALIVE — sirve peticiones en bucle sobre la misma conexión
+// hasta `Connection: close`, cierre del peer, ocio (read_timeout) o fallo. El handler de cada
+// petición corre en su propia tarea (M56.5: panic → 500 + cerrar, sin fugas).
+fn atender_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
+    var seguir: bool = true;
+    while (seguir) {
+        match (read_request_limits(conn, limits)) {
+            Result.Ok(req) => {
+                let cerrar: bool = quiere_cerrar(req);
+                let t = spawn(fn() -> Response { handler(req) });
+                match (try_join(t)) {
+                    Result.Ok(resp) => {
+                        match (send_response_keep(conn, resp, !cerrar)) {
+                            Result.Ok(_) => { },
+                            Result.Err(e) => {
+                                eprint("respuesta: " + e);
+                                seguir = false;
+                            },
+                        }
+                    },
+                    Result.Err(e) => {
+                        eprint("handler: " + e);
+                        match (send_response(conn, text(500, "Internal Server Error"))) {
+                            Result.Ok(_) => { },
+                            Result.Err(_) => { },
+                        }
+                        seguir = false;
+                    },
+                }
+                if (cerrar) {
+                    seguir = false;
+                }
+            },
+            Result.Err(e) => {
+                if (e != "conexión cerrada") {
+                    eprint("petición: " + e);
+                    match (send_response(conn, text(400, "Bad Request"))) {
+                        Result.Ok(_) => { },
+                        Result.Err(_) => { },
+                    }
+                }
+                seguir = false;
+            },
+        }
     }
     close(conn);
 }
@@ -357,13 +435,17 @@ pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<i
 // seguidos sin ningún accept exitoso rinden el bucle).
 pub fn serve_raw_limits(host: string, port: int, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
     // TCP plano: la conexión aceptada se atiende tal cual (preparar = identidad).
-    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, handler)
+    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
+        atender(c, handler, limits);
+    })
 }
 
 // El bucle de accept compartido por TCP plano y TLS (M56.3). `preparar` transforma la conexión
 // recién aceptada antes de atenderla (identidad para HTTP; `net.tls_accept` para HTTPS) y corre
 // DENTRO de la fibra de la conexión: un handshake TLS lento no frena el accept de las demás.
-fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> Result<int, string>, handler: fn(Request, int)) -> Result<int, string> {
+// M56.6: `atender_conn` atiende la conexión preparada (crudo: una petición; ergonómico: bucle
+// keep-alive); debe cerrar la conexión al terminar.
+fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> Result<int, string>, atender_conn: fn(int)) -> Result<int, string> {
     match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
@@ -382,7 +464,7 @@ fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> 
                         spawn(fn() {
                             match (preparar(conn)) {
                                 Result.Ok(c) => {
-                                    atender(c, handler, limits);
+                                    atender_conn(c);
                                 },
                                 Result.Err(e) => {
                                     eprint("conexión: " + e);
@@ -409,26 +491,16 @@ fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> 
     }
 }
 
-// Servidor ergonómico: el handler es petición → respuesta; serve envía la respuesta y cierra. Se define
-// sobre serve_raw. **Solo VM.**
+// Servidor ergonómico: el handler es petición → respuesta; serve escribe la respuesta y —desde
+// M56.6— mantiene la conexión viva entre peticiones (keep-alive HTTP/1.1). **Solo VM.**
 pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Result<int, string> {
     serve_limits(host, port, default_limits(), handler)
 }
 
 pub fn serve_limits(host: string, port: int, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
-    serve_raw_limits(host, port, limits, responder(handler))
-}
-
-// Adapta un handler petición→respuesta al de bajo nivel (enviar la respuesta y loguear el fallo).
-fn responder(handler: fn(Request) -> Response) -> fn(Request, int) {
-    fn(req: Request, conn: int) {
-        match (send_response(conn, handler(req))) {
-            Result.Ok(_) => { },
-            Result.Err(e) => {
-                eprint("respuesta: " + e);
-            },
-        }
-    }
+    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
+        atender_http(c, handler, limits);
+    })
 }
 
 // --- HTTPS (M56.3): el mismo servidor sobre TLS ---
@@ -439,7 +511,11 @@ pub fn serve_tls(host: string, port: int, cert: string, key: string, handler: fn
 }
 
 pub fn serve_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
-    serve_raw_tls_limits(host, port, cert, key, limits, responder(handler))
+    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> {
+        net.tls_accept(c, cert, key)
+    }, fn(c: int) {
+        atender_http(c, handler, limits);
+    })
 }
 
 pub fn serve_raw_tls(host: string, port: int, cert: string, key: string, handler: fn(Request, int)) -> Result<int, string> {
@@ -449,5 +525,7 @@ pub fn serve_raw_tls(host: string, port: int, cert: string, key: string, handler
 pub fn serve_raw_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
     bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> {
         net.tls_accept(c, cert, key)
-    }, handler)
+    }, fn(c: int) {
+        atender(c, handler, limits);
+    })
 }

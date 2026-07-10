@@ -83,6 +83,9 @@ fn main() -> int {
   (`req.query` cruda, `query_params(req)` parseada). HTTPS con `serve_tls`/`serve_raw_tls[_limits]`
   (M56.3: cert/clave en PEM; upgrade TLS por conexión, en su fibra). Un handler que panica responde
   500 y cierra su conexión sin tumbar el servidor ni fugar recursos (M56.5, vía `try_join`).
+  `serve`/`serve_tls` mantienen la conexión viva entre peticiones (M56.6: keep-alive HTTP/1.1;
+  honran `Connection: close` y el ocio lo corta el read timeout); `serve_raw` sigue siendo
+  una-petición-y-cerrar (el handler crudo posee la conexión — SSE).
 
 ### Observabilidad
 

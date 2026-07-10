@@ -7443,9 +7443,24 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   `handler_que_panica_responde_500_y_no_fuga_recursos` (webserver_cli: 4 panics > max_conns=2 → si
   fugara tokens colgaría; el servidor sigue en 200; usa el `serve` REAL, matado por el test).
   Diferido: timeout del handler (componer `try_join` con un timer de cancelación).
-- **M56.6 — keep-alive**: bucle de peticiones por conexión honrando `Connection`; el framing por
-  `Content-Length` ya es correcto. `serve_raw`/SSE conservan su semántica (el handler crudo posee
-  la conexión).
+- **M56.6 — keep-alive** ✅ **COMPLETO** (librería pura). El camino **ergonómico** (`serve`/
+  `serve_tls`, donde el servidor escribe la respuesta) sirve peticiones **en bucle sobre la misma
+  conexión** (`atender_http`): keep-alive por defecto en HTTP/1.1, se cierra con `Connection:
+  close`, con versión ≠ HTTP/1.1 (el keep-alive de 1.0 es opt-in y declinarlo es válido), al
+  fallar algo, o por **ocio** (el `read_timeout_millis` de M56.4 corta la espera de la siguiente
+  petición). `serve_raw`/SSE conservan una-petición-y-cerrar (el handler crudo posee la conexión).
+  Piezas: `Request` gana **`version`** (de la línea de petición); `read_request_limits` distingue
+  **"conexión cerrada"** (EOF/timeout SIN nada recibido — el fin normal de una keep-alive: cierre
+  en silencio, sin 400 ni ruido) de una petición malformada; `send_response_keep(conn, r, keep)`
+  interno parametriza el header `Connection` (el `send_response` público conserva `close`);
+  `bucle_servidor` pasa de recibir el handler a recibir **`atender_conn: fn(int)`** (crudo =
+  `atender`, ergonómico = `atender_http`); el handler de cada petición sigue corriendo en su
+  tarea (M56.5). **El framework se sube gratis**: `listen` pasa de `serve_raw`+`send_response` a
+  `webserver.serve` → keep-alive + límites + panic→500 sin código. Test
+  `servidor_mantiene_la_conexion_viva_entre_peticiones` (2 peticiones por la misma conexión,
+  `Connection: close` honrado con EOF, y cierre silencioso de una ociosa al vencer el timeout);
+  verificado en vivo (curl "Re-using existing connection" sobre el SSR). Diferido: tope de
+  peticiones por conexión (el ocio ya acota; añadir si un consumidor lo pide).
 - **M56.7 — cabeceras múltiples**: decisión de API (lista `[(k,v)]` vs campo extra para
   `Set-Cookie`); romper `Response.headers` se decide aquí.
 - **M56.8 — extras**: chunked entrante, `serve_static(dir)` con saneo de ruta, HEAD sin cuerpo.

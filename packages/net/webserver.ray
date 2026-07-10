@@ -14,15 +14,17 @@ import std/time;
 
 // M56.2: `path` llega DECODIFICADO (%XX; un `+` es literal en rutas) y SIN la query string, que
 // va aparte en `query` (cruda, sin el `?`) — así el enrutado por ruta funciona con `?x=1` y el
-// usuario parsea la query solo si la necesita (`query_params`).
+// usuario parsea la query solo si la necesita (`query_params`). M56.6: `version` es la de la
+// línea de petición ("HTTP/1.1"; "" si falta) — decide el keep-alive.
 /// An incoming HTTP request: method, request path (percent-decoded, WITHOUT the query string),
-/// the raw query string (after `?`, empty if none — parse it with `query_params`), headers
-/// (names lowercased for case-insensitive lookup), and the raw body as bytes (use `request_text`
-/// to decode it as UTF-8).
+/// the raw query string (after `?`, empty if none — parse it with `query_params`), the HTTP
+/// version from the request line ("HTTP/1.1"; "" if absent), headers (names lowercased for
+/// case-insensitive lookup), and the raw body as bytes (use `request_text` to decode it as UTF-8).
 pub struct Request {
     method: string,
     path: string,
     query: string,
+    version: string,
     headers: Map<string, string>,
     body: bytes,
 }
@@ -222,12 +224,21 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                     }
                 },
                 Result.Err(e) => {
+                    // M56.6: EOF/timeout SIN haber recibido nada = el peer no va a pedir más (el
+                    // caso normal de una conexión keep-alive que se cierra u ociosa) — error
+                    // distinguible para que el servidor cierre en silencio, sin 400 ni ruido.
+                    if (acc.len() == 0) {
+                        return Result.Err("conexión cerrada");
+                    }
                     return Result.Err("error al leer: " + e);
                 },
             }
         }
     }
     if (sep < 0) {
+        if (acc.len() == 0) {
+            return Result.Err("conexión cerrada");
+        }
         return Result.Err("petición incompleta (sin fin de cabeceras)");
     }
     // El tope también sobre el separador encontrado: sin esto, unas cabeceras que llegan en un
@@ -251,6 +262,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             }
             let method: string = partes[0];
             let target: string = partes[1];
+            let version: string = if (partes.len() >= 3) { partes[2] } else { "" };
             var path_raw: string = target;
             var query: string = "";
             match (index_of(target, "?")) {
@@ -322,7 +334,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             if (plazo_fin > 0) {
                 net.set_read_timeout(conn, 0);
             }
-            Result.Ok(Request { method: method, path: path, query: query, headers: headers, body: body })
+            Result.Ok(Request { method: method, path: path, query: query, version: version, headers: headers, body: body })
         },
     }
 }
@@ -330,13 +342,20 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
 // --- Escritura de la respuesta ---
 /// Writes response `r` to connection `conn` as an HTTP/1.1 message: status line, automatic `Content-Length`
 /// and `Connection: close`, the user headers (in sorted key order, deterministic), then the raw body bytes.
-/// Returns the underlying socket write result; Err on write failure.
+/// Returns the underlying socket write result; Err on write failure. (The keep-alive variant is what
+/// `serve` uses internally, M56.6; raw handlers keep one-response-per-connection semantics.)
 pub fn send_response(conn: int, r: Response) -> Result<int, string> {
+    send_response_keep(conn, r, false)
+}
+
+// M56.6: la escritura real, con el header `Connection` según si la conexión sigue viva (keep-alive
+// del camino `serve`) o se cierra (el default histórico y el de los handlers crudos).
+fn send_response_keep(conn: int, r: Response, keep: bool) -> Result<int, string> {
     // Cabecera = texto (Content-Length en octetos, ya correcto); cuerpo = bytes crudos. Se envía todo
     // junto como bytes para no corromper un cuerpo binario.
     var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
     head = head + "Content-Length: " + to_string(r.body.len()) + "\r\n";
-    head = head + "Connection: close\r\n";
+    head = head + "Connection: " + (if (keep) { "keep-alive" } else { "close" }) + "\r\n";
     // Cabeceras del usuario (keys() está ordenada → salida determinista).
     let ks: [string] = r.headers.keys();
     var i: int = 0;
@@ -395,12 +414,78 @@ fn atender(conn: int, handler: fn(Request, int), limits: Limits) {
             }
         },
         Result.Err(e) => {
-            eprint("petición: " + e);
-            match (send_response(conn, text(400, "Bad Request"))) {
-                Result.Ok(_) => { },
-                Result.Err(_) => { },
+            // "conexión cerrada" = el peer cerró sin pedir nada (o quedó ocioso): silencio.
+            if (e != "conexión cerrada") {
+                eprint("petición: " + e);
+                match (send_response(conn, text(400, "Bad Request"))) {
+                    Result.Ok(_) => { },
+                    Result.Err(_) => { },
+                }
             }
         },
+    }
+    close(conn);
+}
+
+// ¿La petición pide cerrar la conexión tras responder? Cerramos si no es HTTP/1.1 (el keep-alive
+// de 1.0 es opt-in y declinarlo siempre es válido) o si trae `Connection: close`.
+fn quiere_cerrar(req: Request) -> bool {
+    if (req.version != "HTTP/1.1") {
+        return true;
+    }
+    match (get(req.headers, "connection")) {
+        Option.Some(v) => v.to_lower().contains("close"),
+        Option.None => false,
+    }
+}
+
+// M56.6: atiende una conexión del camino ergonómico (`serve`/`serve_tls`) con **keep-alive**: sirve
+// peticiones en bucle sobre la MISMA conexión (HTTP/1.1) hasta que el cliente pida cerrar
+// (`Connection: close`), cierre él mismo, quede ocioso (vence `read_timeout_millis`) o algo falle.
+// Aquí sí podemos: la respuesta la escribe el servidor (el framing por Content-Length ya es
+// correcto), así que el header `Connection` siempre dice la verdad. Cada petición corre su handler
+// en su PROPIA tarea (M56.5): un panic responde 500 y cierra, sin fugar nada.
+fn atender_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
+    var seguir: bool = true;
+    while (seguir) {
+        match (read_request_limits(conn, limits)) {
+            Result.Ok(req) => {
+                let cerrar: bool = quiere_cerrar(req);
+                let t = spawn(fn() -> Response { handler(req) });
+                match (try_join(t)) {
+                    Result.Ok(resp) => {
+                        match (send_response_keep(conn, resp, !cerrar)) {
+                            Result.Ok(_) => { },
+                            Result.Err(e) => {
+                                eprint("respuesta: " + e);
+                                seguir = false;
+                            },
+                        }
+                    },
+                    Result.Err(e) => {
+                        eprint("handler: " + e);
+                        match (send_response(conn, text(500, "Internal Server Error"))) {
+                            Result.Ok(_) => { },
+                            Result.Err(_) => { },
+                        }
+                        seguir = false;
+                    },
+                }
+                if (cerrar) {
+                    seguir = false;
+                }
+            },
+            Result.Err(e) => {
+                if (e != "conexión cerrada") {
+                    eprint("petición: " + e);
+                    match (send_response(conn, text(400, "Bad Request"))) {
+                        Result.Ok(_) => { },
+                        Result.Err(_) => { },
+                    }
+                }
+                seguir = false;
+            },
+        }
     }
     close(conn);
 }
@@ -427,13 +512,17 @@ pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<i
 /// Transient accept errors are logged and retried; only persistent failure stops the server.
 pub fn serve_raw_limits(host: string, port: int, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
     // TCP plano: la conexión aceptada se atiende tal cual (preparar = identidad).
-    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, handler)
+    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
+        atender(c, handler, limits);
+    })
 }
 
 // El bucle de accept compartido por TCP plano y TLS (M56.3). `preparar` transforma la conexión
 // recién aceptada antes de atenderla (identidad para HTTP; `net.tls_accept` para HTTPS) y corre
 // DENTRO de la fibra de la conexión: un handshake TLS lento no frena el accept de las demás.
-fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> Result<int, string>, handler: fn(Request, int)) -> Result<int, string> {
+// M56.6: `atender_conn` es quien atiende la conexión preparada (una petición y cerrar —crudo— o
+// el bucle keep-alive —ergonómico—); debe CERRAR la conexión al terminar.
+fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> Result<int, string>, atender_conn: fn(int)) -> Result<int, string> {
     match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
@@ -452,7 +541,7 @@ fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> 
                         spawn(fn() {
                             match (preparar(conn)) {
                                 Result.Ok(c) => {
-                                    atender(c, handler, limits);
+                                    atender_conn(c);
                                 },
                                 Result.Err(e) => {
                                     eprint("conexión: " + e);
@@ -479,30 +568,22 @@ fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> 
     }
 }
 
-// Servidor ergonómico: el handler es petición → respuesta; serve envía la respuesta y cierra. Se define
-// sobre serve_raw. **Solo VM.**
-/// Ergonomic concurrent server: the handler maps a Request to a Response, which is sent automatically
-/// and the connection closed. Built on `serve_raw` (one fiber per connection; `default_limits()`).
-/// Blocks forever; VM only.
+// Servidor ergonómico: el handler es petición → respuesta; serve escribe la respuesta y —desde
+// M56.6— mantiene la conexión viva entre peticiones (keep-alive HTTP/1.1; honra `Connection:
+// close` y el ocio lo corta `read_timeout_millis`). **Solo VM.**
+/// Ergonomic concurrent server: the handler maps a Request to a Response, which is sent
+/// automatically. Connections are kept alive between requests (HTTP/1.1 keep-alive; honors
+/// `Connection: close`; idle connections are closed by the read timeout). One fiber per
+/// connection; `default_limits()`. Blocks forever; VM only.
 pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Result<int, string> {
     serve_limits(host, port, default_limits(), handler)
 }
 
 /// Like `serve`, with explicit safety limits (see `Limits`/`serve_raw_limits`).
 pub fn serve_limits(host: string, port: int, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
-    serve_raw_limits(host, port, limits, responder(handler))
-}
-
-// Adapta un handler petición→respuesta al de bajo nivel (enviar la respuesta y loguear el fallo).
-fn responder(handler: fn(Request) -> Response) -> fn(Request, int) {
-    fn(req: Request, conn: int) {
-        match (send_response(conn, handler(req))) {
-            Result.Ok(_) => { },
-            Result.Err(e) => {
-                eprint("respuesta: " + e);
-            },
-        }
-    }
+    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
+        atender_http(c, handler, limits);
+    })
 }
 
 // --- HTTPS (M56.3): el mismo servidor sobre TLS ---
@@ -513,14 +594,18 @@ fn responder(handler: fn(Request) -> Response) -> fn(Request, int) {
 // conexión con error logueado, sin tocar a las demás.
 /// HTTPS server: like `serve`, but each accepted connection is upgraded to server-side TLS with
 /// the given PEM certificate chain and private key (contents, not paths) before reading the
-/// request. Uses `default_limits()`. Blocks forever; VM only.
+/// request. Keep-alive like `serve`. Uses `default_limits()`. Blocks forever; VM only.
 pub fn serve_tls(host: string, port: int, cert: string, key: string, handler: fn(Request) -> Response) -> Result<int, string> {
     serve_tls_limits(host, port, cert, key, default_limits(), handler)
 }
 
 /// Like `serve_tls`, with explicit safety limits (see `Limits`).
 pub fn serve_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
-    serve_raw_tls_limits(host, port, cert, key, limits, responder(handler))
+    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> {
+        net.tls_accept(c, cert, key)
+    }, fn(c: int) {
+        atender_http(c, handler, limits);
+    })
 }
 
 /// Low-level HTTPS server: like `serve_raw` over TLS — the handler receives the request AND the
@@ -533,5 +618,7 @@ pub fn serve_raw_tls(host: string, port: int, cert: string, key: string, handler
 pub fn serve_raw_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
     bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> {
         net.tls_accept(c, cert, key)
-    }, handler)
+    }, fn(c: int) {
+        atender(c, handler, limits);
+    })
 }

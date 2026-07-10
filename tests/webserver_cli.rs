@@ -396,13 +396,102 @@ fn handler_que_panica_responde_500_y_no_fuga_recursos() {
     // semáforo, el servidor dejaría de aceptar a la 3ª y esto colgaría (el timeout del cliente
     // haría fallar el test).
     for i in 0..4 {
-        let r = pedir(port, "GET /boom HTTP/1.1\r\nHost: x\r\n\r\n");
+        let r = pedir(port, "GET /boom HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
         assert!(r.contains("500 Internal Server Error"), "petición {i}: esperaba 500, got: {r}");
     }
 
-    // El servidor sigue vivo y sano.
-    let ok = pedir(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    // El servidor sigue vivo y sano. (Connection: close → serve cierra y read_to_end termina.)
+    let ok = pedir(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(ok.contains("200 OK") && ok.contains("vivo"), "esperaba 200 tras los panics, got: {ok}");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Lee UNA respuesta HTTP completa (cabeceras + cuerpo delimitado por Content-Length) del stream.
+/// Necesaria con keep-alive (M56.6): el servidor NO cierra, así que read_to_end no termina.
+fn leer_una_respuesta(stream: &mut TcpStream) -> String {
+    let mut resp: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 4096];
+    let mut fin_cab: Option<usize> = None;
+    let mut total: Option<usize> = None;
+    loop {
+        if fin_cab.is_none() {
+            if let Some(i) = resp.windows(4).position(|w| w == b"\r\n\r\n") {
+                fin_cab = Some(i);
+                continue;
+            }
+        } else if total.is_none() {
+            let fc = fin_cab.unwrap();
+            let head = String::from_utf8_lossy(&resp[..fc]).to_ascii_lowercase();
+            let cl: usize = head
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length:").map(|v| v.trim().parse().expect("CL numérico")))
+                .expect("respuesta sin Content-Length");
+            total = Some(fc + 4 + cl);
+            continue;
+        } else if resp.len() >= total.unwrap() {
+            break;
+        }
+        let n = stream.read(&mut buf).expect("lee respuesta");
+        assert!(n > 0, "EOF a mitad de respuesta: {:?}", String::from_utf8_lossy(&resp));
+        resp.extend_from_slice(&buf[..n]);
+    }
+    String::from_utf8_lossy(&resp).into_owned()
+}
+
+// Driver: el `serve` real (keep-alive, M56.6) con timeout de ocio corto (500 ms) para verificar
+// también que una conexión keep-alive ociosa se cierra sola.
+const SRV_KEEPALIVE: &str = r#"
+import webserver;
+
+fn pagina(req: webserver.Request) -> webserver.Response {
+    webserver.ok("hola " + req.path)
+}
+
+fn main() -> int {
+    let lim: webserver.Limits = webserver.Limits { max_header_bytes: 65536, max_body_bytes: 1048576, max_conns: 8, read_timeout_millis: 500 };
+    match (webserver.serve_limits("127.0.0.1", 0, lim, pagina)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+"#;
+
+#[test]
+fn servidor_mantiene_la_conexion_viva_entre_peticiones() {
+    let (mut child, port) = lanzar_servidor("keepalive", SRV_KEEPALIVE);
+
+    // Dos peticiones por la MISMA conexión (keep-alive HTTP/1.1 por defecto).
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    stream.write_all(b"GET /a HTTP/1.1\r\nHost: x\r\n\r\n").expect("envía 1ª");
+    let r1 = leer_una_respuesta(&mut stream);
+    assert!(r1.contains("200 OK") && r1.contains("hola /a"), "1ª respuesta: {r1}");
+    assert!(r1.contains("Connection: keep-alive"), "esperaba keep-alive, got: {r1}");
+
+    stream.write_all(b"GET /b HTTP/1.1\r\nHost: x\r\n\r\n").expect("envía 2ª");
+    let r2 = leer_una_respuesta(&mut stream);
+    assert!(r2.contains("hola /b"), "2ª respuesta por la misma conexión: {r2}");
+
+    // `Connection: close` se honra: responde y CIERRA (EOF).
+    stream.write_all(b"GET /c HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").expect("envía 3ª");
+    let r3 = leer_una_respuesta(&mut stream);
+    assert!(r3.contains("hola /c") && r3.contains("Connection: close"), "3ª respuesta: {r3}");
+    let mut extra = [0u8; 16];
+    let n = stream.read(&mut extra).expect("lee tras close");
+    assert_eq!(n, 0, "esperaba EOF tras Connection: close");
+
+    // Una conexión keep-alive OCIOSA se cierra sola al vencer el read timeout (500 ms), en
+    // silencio (sin 400): el servidor no retiene la fibra para siempre.
+    let mut ociosa = TcpStream::connect(("127.0.0.1", port)).expect("conecta ociosa");
+    ociosa.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    ociosa.write_all(b"GET /d HTTP/1.1\r\nHost: x\r\n\r\n").expect("envía");
+    let r4 = leer_una_respuesta(&mut ociosa);
+    assert!(r4.contains("hola /d"), "respuesta antes del ocio: {r4}");
+    let mut fin = Vec::new();
+    ociosa.read_to_end(&mut fin).expect("lee hasta el cierre por ocio");
+    assert!(fin.is_empty(), "esperaba cierre limpio sin datos extra, got: {:?}", String::from_utf8_lossy(&fin));
 
     let _ = child.kill();
     let _ = child.wait();

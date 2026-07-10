@@ -213,6 +213,9 @@ pub enum OpCode {
     /// como UTF-8. Primitivo `__from_utf8`; el prelude → `Result<string, string>` (M16.1b).
     FromUtf8,
     /// M43: hashes de PRODUCCIÓN vía `ring` (bytes -> bytes). Sacan `bytes`, empujan el digest.
+    /// M68.2: saca un `int` (n) y empuja `n` octetos criptográficamente seguros (`bytes`;
+    /// CSPRNG del SO vía ring). Primitivo `__crypto_random_bytes` (→ `crypto.random_bytes`).
+    CryptoRandomBytes,
     Sha256,
     Sha512,
     Sha1,

@@ -4,6 +4,12 @@
 // ChaCha20-Poly1305 whose sizes must match, `open` which also authenticates) return `Option<bytes>`.
 // The functions wrap engine-side primitives (`__sha256`, `__ed25519_sign`, …).
 
+// M68.2: aleatoriedad criptográfica. El PRNG de `std/random` (SplitMix64 sembrado del reloj)
+// es para simulación/jitter; los SECRETOS salen de aquí.
+/// `n` cryptographically secure random bytes from the OS CSPRNG. Use this — not `std/random` —
+/// for session tokens, salts, nonces and keys. `n <= 0` returns empty bytes.
+pub fn random_bytes(n: int) -> bytes { __crypto_random_bytes(n) }
+
 /// SHA-256 digest of `data` (32 bytes).
 pub fn sha256(data: bytes) -> bytes { __sha256(data) }
 

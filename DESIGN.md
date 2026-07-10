@@ -7867,6 +7867,7 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   puro sobre `below` (cero opcodes): `between(lo, hi)` (ambos inclusive; `hi < lo` → `lo`),
   `choice(xs) -> Option<T>` (vacío → None) y `shuffle(xs)` (Fisher-Yates, **in place** por la
   semántica de referencia). Con `seed`, el golden de aleatoriedad es **determinista**.
-- **M68.2 — aleatoriedad criptográfica**: `crypto.random_bytes(n) -> bytes` (primitivo
+- **M68.2 — aleatoriedad criptográfica COMPLETO**: `crypto.random_bytes(n) -> bytes` (primitivo
   `__crypto_random_bytes` sobre `ring::rand::SystemRandom`, dep ya presente desde M43).
   Los `///` de uuid/websocket apuntan a ella para quien necesite no-predecible.
+  **M68 COMPLETO** (68.1 + 68.2).

@@ -457,6 +457,22 @@ pub fn sub_bytes_octets(b: &[u8], i: i64, j: i64) -> Vec<u8> {
 // de wasm inofensivo (vacío/`None`/`false`); el *gating por checker* (M44a-4) hará que un programa que use
 // cripto/red dé un error de compilación claro en el playground, así que estos stubs no se alcanzan.
 
+/// M68.2: `n` octetos **criptográficamente seguros** (`ring::rand::SystemRandom`, el CSPRNG
+/// del SO). Para tokens/salts/nonces — el SplitMix64 de `std/random` se siembra del reloj y
+/// es predecible. `n <= 0` → vacío (total).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn crypto_random_bytes(n: i64) -> Vec<u8> {
+    use ring::rand::SecureRandom;
+    if n <= 0 {
+        return Vec::new();
+    }
+    let mut buf = vec![0u8; n as usize];
+    ring::rand::SystemRandom::new().fill(&mut buf).expect("el CSPRNG del SO no debería fallar");
+    buf
+}
+#[cfg(target_arch = "wasm32")]
+pub fn crypto_random_bytes(_n: i64) -> Vec<u8> { Vec::new() }
+
 /// SHA-256 (32 octetos). El caballo de batalla de HMAC/JWT/firmas.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn sha256(data: &[u8]) -> Vec<u8> {
@@ -1572,6 +1588,12 @@ static BUILTINS: &[Builtin] = &[
         Ok(Type::Int)
     } },
     // M43: hashes de producción vía `ring` (bytes -> bytes). Ver el bloque de helpers arriba.
+    // M68.2: aleatoriedad criptográfica (CSPRNG del SO vía ring) — para tokens/salts/nonces.
+    Builtin { name: "__crypto_random_bytes", opcode: OpCode::CryptoRandomBytes, check: |a| {
+        arity(a, 1, "__crypto_random_bytes", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__crypto_random_bytes espera un int (nº de octetos), no {}", a[0]))); }
+        Ok(Type::Bytes)
+    } },
     Builtin { name: "__sha256", opcode: OpCode::Sha256, check: |a| {
         arity(a, 1, "sha256", "")?;
         if a[0] != Type::Bytes { return Err((Some(0), format!("sha256 espera bytes, no {}", a[0]))); }

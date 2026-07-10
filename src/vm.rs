@@ -1334,6 +1334,11 @@ impl<'a> Vm<'a> {
                     _ => unreachable!("el checker garantiza un string"),
                 },
                 // M43: hashes de producción vía `ring` (helpers compartidos con el intérprete).
+                // M68.2: aleatoriedad criptográfica (CSPRNG del SO).
+                OpCode::CryptoRandomBytes => match self.pop() {
+                    HeapValue::Int(n) => self.push(HeapValue::Bytes(crate::builtins::crypto_random_bytes(n).into())),
+                    _ => unreachable!("el checker garantiza un int"),
+                },
                 OpCode::Sha256 => match self.pop() {
                     HeapValue::Bytes(b) => self.push(HeapValue::Bytes(crate::builtins::sha256(&b))),
                     _ => unreachable!("el checker garantiza bytes"),

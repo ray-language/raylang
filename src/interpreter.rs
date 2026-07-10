@@ -1014,6 +1014,11 @@ impl<'a> Interpreter<'a> {
             },
             // M43: hashes de producción vía `ring`. Delegan en los helpers de `builtins` (compartidos
             // con la VM → salida idéntica, el oráculo se mantiene).
+            // M68.2: aleatoriedad criptográfica (CSPRNG del SO).
+            "__crypto_random_bytes" => match &values[0] {
+                Value::Int(n) => Value::Bytes(Rc::new(crate::builtins::crypto_random_bytes(*n))),
+                _ => unreachable!("el checker garantiza un int"),
+            },
             "__sha256" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha256(b))),
                 _ => unreachable!("el checker garantiza bytes"),

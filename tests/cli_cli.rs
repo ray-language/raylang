@@ -403,6 +403,32 @@ fn stdlib_encoding_hex_base64_url_json() {
     assert!(out.contains("{\"n\":42}"), "json parse+stringify\n{out}");
 }
 
+/// M68.2 — `crypto.random_bytes(n)`: aleatoriedad criptográfica (CSPRNG del SO vía ring).
+/// No determinista → prueba de propiedades: longitud exacta, n<=0 vacío, y dos tiradas de
+/// 32 octetos distintas (iguales por azar = 2^-256).
+#[test]
+fn crypto_random_bytes_propiedades() {
+    let base = tmp("crypto_rand");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "import std/crypto;\n\
+         fn main() -> int {\n\
+             let a = crypto.random_bytes(32);\n\
+             let b = crypto.random_bytes(32);\n\
+             print(a.len());\n\
+             print(crypto.random_bytes(0).len());\n\
+             print(crypto.random_bytes(-5).len());\n\
+             print(to_string(a) != to_string(b));\n\
+             0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con crypto.random_bytes debe salir 0\n{err}");
+    assert_eq!(out, "32\n0\n0\ntrue\n", "longitudes y no-repetición\n{out}");
+}
+
 #[test]
 fn crypto_builtins_hashing_vectores() {
     // M43.5b: la cripto de producción (builtins vía ring) a nivel CLI. sha256/sha512/sha1/hmac_sha256

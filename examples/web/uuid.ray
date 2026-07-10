@@ -18,7 +18,8 @@ fn formato(b: [int]) -> string {
 
 /// Generates a random version-4 UUID (RFC 4122) in the canonical 8-4-4-4-12 lowercase hex
 /// format. 16 random bytes with the version nibble set to 4 and the variant bits to 10.
-/// Uses the runtime PRNG (`random_int`) — not cryptographically secure.
+/// Uses the runtime PRNG (`random_int`) — not cryptographically secure (for unguessable
+/// identifiers, build them from `crypto.random_bytes`, M68.2).
 pub fn uuid_v4() -> string {
     var b: [int] = [];
     var i = 0;

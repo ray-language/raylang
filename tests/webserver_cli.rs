@@ -497,6 +497,58 @@ fn servidor_mantiene_la_conexion_viva_entre_peticiones() {
     let _ = child.wait();
 }
 
+// Driver: una respuesta con DOS cookies (M56.7: `set_cookie` es lista — la única cabecera de
+// respuesta que se repite de verdad; con `headers: Map` era imposible enviar sesión + flash).
+const SRV_COOKIES: &str = r#"
+import webserver;
+from webserver import with_cookie;
+import std/net;
+fn manejar(conn: int) {
+    match (webserver.read_request(conn)) {
+        Result.Ok(req) => {
+            let r = webserver.ok("con cookies")
+                .with_cookie("sesion=abc123; Path=/; HttpOnly")
+                .with_cookie("flash=bienvenido");
+            match (webserver.send_response(conn, r)) {
+                Result.Ok(_) => {}, Result.Err(e) => eprint(e),
+            }
+        },
+        Result.Err(e) => eprint(e),
+    }
+    close(conn);
+}
+fn main() -> int {
+    match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Ok(srv) => {
+            print(net.local_port(srv));
+            scope(fn() {
+                match (net.tcp_accept(srv)) {
+                    Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
+                    Result.Err(e) => eprint(e),
+                }
+            });
+            close(srv);
+            0
+        },
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+"#;
+
+#[test]
+fn respuesta_con_varias_cookies() {
+    let (mut child, port) = lanzar_servidor("cookies", SRV_COOKIES);
+
+    let r = pedir(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(r.contains("200 OK"), "esperaba 200, got: {r}");
+    assert!(r.contains("Set-Cookie: sesion=abc123; Path=/; HttpOnly"), "falta la 1ª cookie: {r}");
+    assert!(r.contains("Set-Cookie: flash=bienvenido"), "falta la 2ª cookie: {r}");
+    // Dos líneas Set-Cookie separadas (no fusionadas con coma, que rompería las cookies).
+    assert_eq!(r.matches("Set-Cookie:").count(), 2, "esperaba exactamente 2 líneas Set-Cookie: {r}");
+
+    let _ = child.wait();
+}
+
 #[test]
 fn servidor_eco_cuerpo_binario_intacto() {
     let (mut child, port) = lanzar_servidor("ecobin", SRV_ECO_BIN);

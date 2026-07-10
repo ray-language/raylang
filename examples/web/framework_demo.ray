@@ -11,7 +11,7 @@
 //   curl 'http://127.0.0.1:8080/saluda?nombre=Ada'
 //   curl -i http://127.0.0.1:8080/teapot      (responde 418)
 //   curl -i http://127.0.0.1:8080/nope        (responde 404)
-from framework import new_app, use_mw, GET, POST, listen, param, query, body, text, json, status, Ctx, Res;
+from framework import new_app, use_mw, GET, POST, listen, param, query, body, text, json, status, cookie, Ctx, Res;
 
 // Middleware: registra cada petición (método + ruta) y deja seguir la cadena.
 fn logger(c: Ctx, r: Res) -> bool {
@@ -48,6 +48,12 @@ fn main() -> int {
     // Estado a medida, encadenado: r.status(418).text(...).
     app.GET("/teapot", fn(c: Ctx, r: Res) {
         r.status(418).text("Soy una tetera");
+    });
+
+    // Cookies (M56.7): varias líneas Set-Cookie en una respuesta, encadenadas.
+    app.GET("/entra", fn(c: Ctx, r: Res) {
+        r.cookie("sesion=abc123; Path=/; HttpOnly").cookie("flash=hola");
+        r.text("sesión iniciada");
     });
 
     match (app.listen("127.0.0.1", 8080)) {

@@ -12,8 +12,8 @@ petición, **decidir** qué hacer, y **escribir** una respuesta. La librería la
 gemelos del `Response` del cliente (M15.4b):
 
 ```rust
-pub struct Request  { method: string, path: string, query: string, headers: Map<string, string>, body: bytes }
-pub struct Response { status: int, headers: Map<string, string>, body: bytes }
+pub struct Request  { method: string, path: string, query: string, version: string, headers: Map<string, string>, body: bytes }
+pub struct Response { status: int, headers: Map<string, string>, set_cookie: [string], body: bytes }
 ```
 
 `read_request(conn)` acumula del socket hasta encontrar el fin de cabeceras (`\r\n\r\n`), parsea la línea

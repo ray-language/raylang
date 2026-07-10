@@ -42,7 +42,7 @@ fn metrics_actor(reg: Registry, ch: Channel<MetricMsg>) {
 fn metrics_response(cuerpo: string) -> Response {
     var h: Map<string, string> = Map.new();
     h.insert("Content-Type", "text/plain; version=0.0.4");
-    Response { status: 200, headers: h, body: cuerpo.to_bytes() }
+    Response { status: 200, headers: h, set_cookie: [], body: cuerpo.to_bytes() }
 }
 
 fn main() -> int {

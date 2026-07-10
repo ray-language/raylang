@@ -7461,6 +7461,18 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   `Connection: close` honrado con EOF, y cierre silencioso de una ociosa al vencer el timeout);
   verificado en vivo (curl "Re-using existing connection" sobre el SSR). Diferido: tope de
   peticiones por conexión (el ocio ya acota; añadir si un consumidor lo pide).
-- **M56.7 — cabeceras múltiples**: decisión de API (lista `[(k,v)]` vs campo extra para
-  `Set-Cookie`); romper `Response.headers` se decide aquí.
+- **M56.7 — cabeceras múltiples (`Set-Cookie`)** ✅ **COMPLETO** (librería pura). **Decisión de
+  API fijada con el usuario**: `Response.headers` sigue siendo `Map<string,string>` (una por
+  nombre, ergonómico) y la ÚNICA cabecera de respuesta que se repite de verdad — `Set-Cookie`
+  (sesión + flash…; hasta la RFC 7230 la trata como caso especial) — gana su campo dedicado
+  **`set_cookie: [string]`** (una línea por cookie, emitida en orden de inserción, nunca fusionada
+  con coma — eso rompería las cookies). Se descartó `headers: [(k,v)]` (más general pero rompe
+  todo uso de `insert`/`get` para un caso que solo es Set-Cookie). Helper **`with_cookie(r, línea)
+  -> Response`** encadenable (`ok(html).with_cookie(…).with_cookie(…)`; ojo: el encadenado por
+  UFCS pide el nombre en ámbito — `from webserver import with_cookie` — o la forma calificada).
+  El framework se suma: `Res` gana `set_cookie` + helper `cookie(res, línea)` encadenable, y
+  `build_response` lo pasa. Rompe los literales `Response { … }` (campo nuevo obligatorio;
+  actualizados los del repo: webserver ×5, framework, metrics_server_demo). Tests:
+  `respuesta_con_varias_cookies` (2 líneas Set-Cookie exactas, no fusionadas) y ruta `/entra` del
+  framework demo.
 - **M56.8 — extras**: chunked entrante, `serve_static(dir)` con saneo de ruta, HEAD sin cuerpo.

@@ -85,7 +85,8 @@ fn main() -> int {
   500 y cierra su conexión sin tumbar el servidor ni fugar recursos (M56.5, vía `try_join`).
   `serve`/`serve_tls` mantienen la conexión viva entre peticiones (M56.6: keep-alive HTTP/1.1;
   honran `Connection: close` y el ocio lo corta el read timeout); `serve_raw` sigue siendo
-  una-petición-y-cerrar (el handler crudo posee la conexión — SSE).
+  una-petición-y-cerrar (el handler crudo posee la conexión — SSE). Varias cookies por respuesta
+  con `Response.set_cookie`/`with_cookie` (M56.7: una línea `Set-Cookie` por cookie).
 
 ### Observabilidad
 

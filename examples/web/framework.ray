@@ -32,6 +32,7 @@ pub struct Res {
     code: int,
     body: bytes,
     content_type: string,
+    set_cookie: [string],
 }
 
 // Una ruta registrada: método HTTP + segmentos del patrón (un segmento ":x" captura un parámetro).
@@ -132,6 +133,13 @@ pub fn json(res: Res, txt: string) {
     res.content_type = "application/json";
 }
 
+// Añade una cookie a la respuesta (una línea Set-Cookie por llamada, M56.7); devuelve `res` para
+// encadenar: `r.cookie("sid=…; HttpOnly").text("hola")`.
+pub fn cookie(res: Res, line: string) -> Res {
+    res.set_cookie.push(line);
+    res
+}
+
 // --- Enrutado ---
 // Parte una ruta en segmentos por "/". Mantiene el vacío inicial (de la "/" inicial) en ambos lados, así
 // el patrón y la ruta se alinean posición a posición (p. ej. "/u/:id" y "/u/7" → 3 segmentos cada uno).
@@ -162,13 +170,13 @@ fn match_route(pat: [string], path: [string]) -> Option<[Param]> {
 fn build_response(res: Res) -> webserver.Response {
     var h: Map<string, string> = Map.new();
     h.insert("Content-Type", res.content_type);
-    webserver.Response { status: res.code, headers: h, body: res.body }
+    webserver.Response { status: res.code, headers: h, set_cookie: res.set_cookie, body: res.body }
 }
 
 // Atiende una petición ya parseada: corre los middlewares, busca la ruta que casa y ejecuta su handler;
 // 404 si ninguna casa. Devuelve la respuesta a enviar.
 fn handle(app: App, req: webserver.Request) -> webserver.Response {
-    let res: Res = Res { code: 200, body: b"", content_type: "text/plain; charset=utf-8" };
+    let res: Res = Res { code: 200, body: b"", content_type: "text/plain; charset=utf-8", set_cookie: [] };
     var ctx: Ctx = Ctx { method: req.method, path: req.path, params: [], req: req };
 
     // Middlewares: si alguno devuelve false, se corta y se responde lo que haya dejado.

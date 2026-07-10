@@ -83,6 +83,11 @@ fn framework_enruta_params_middleware_y_404() {
     let r = pedir(port, "GET /saluda HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("hola, mundo"), "query param ausente → default: {r}");
 
+    // M56.7: dos cookies = dos líneas Set-Cookie en la respuesta.
+    let r = pedir(port, "GET /entra HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    assert!(r.contains("Set-Cookie: sesion=abc123; Path=/; HttpOnly"), "1ª cookie: {r}");
+    assert!(r.contains("Set-Cookie: flash=hola"), "2ª cookie: {r}");
+
     // Estado a medida encadenado.
     let r = pedir(port, "GET /teapot HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
     assert!(r.contains("418"), "GET /teapot estado: {r}");

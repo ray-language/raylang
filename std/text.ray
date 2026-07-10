@@ -28,49 +28,98 @@ pub fn capitalize(s: string) -> string {
 }
 
 /// Reverses the string character by character.
+// M66: acumular en [string] + un join final — concatenar `out + char` en bucle era O(n²)
+// (cada `+` copia el acumulado; 100k chars tardaban 167 ms).
 pub fn reverse(s: string) -> string {
     let cs = s.chars();
-    var out = "";
+    var out: [string] = [];
     var i = cs.len() - 1;
     while (i >= 0) {
-        out = out + to_string(cs[i]);
+        out.push(to_string(cs[i]));
         i = i - 1;
+    }
+    join(out, "")
+}
+
+/// Number of **non-overlapping** occurrences of `sub` in `s` (empty `sub` → 0).
+// M66: búsqueda sobre [char] con offset propio — re-materializar el resto con `substring`
+// por ocurrencia era O(n²) (substring es O(i), gotcha de M59.5; 100k/10k occ = 879 ms).
+pub fn count(s: string, sub: string) -> int {
+    let m = sub.len();
+    if (m == 0) {
+        return 0;
+    }
+    let cs = s.chars();
+    let ps = sub.chars();
+    var n = 0;
+    var i = 0;
+    while (i + m <= cs.len()) {
+        var j = 0;
+        while (j < m && cs[i + j] == ps[j]) {
+            j = j + 1;
+        }
+        if (j == m) {
+            n = n + 1;
+            i = i + m;  // no solapado: salta la ocurrencia entera
+        } else {
+            i = i + 1;
+        }
+    }
+    n
+}
+
+// ¿Es `c` un separador de palabras? (espacio, tab, salto de línea, retorno de carro)
+fn is_space(c: char) -> bool {
+    c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+/// Splits `s` into words separated by whitespace (space, tab, `\n`, `\r`), discarding
+/// empty ones (consecutive separators).
+// M66: antes solo separaba por espacio (`words("a\tb")` daba 1 palabra) — el contrato
+// universal es split_whitespace.
+pub fn words(s: string) -> [string] {
+    let cs = s.chars();
+    var out: [string] = [];
+    var word: [string] = [];
+    var i = 0;
+    while (i < cs.len()) {
+        if (is_space(cs[i])) {
+            if (word.len() > 0) {
+                out.push(join(word, ""));
+                word = [];
+            }
+        } else {
+            word.push(to_string(cs[i]));
+        }
+        i = i + 1;
+    }
+    if (word.len() > 0) {
+        out.push(join(word, ""));
     }
     out
 }
 
-/// Number of **non-overlapping** occurrences of `sub` in `s` (empty `sub` → 0).
-pub fn count(s: string, sub: string) -> int {
-    if (sub.len() == 0) {
-        0
-    } else {
-        var n = 0;
-        var rest = s;
-        var keep_going = true;
-        while (keep_going) {
-            match (index_of(rest, sub)) {
-                Option.Some(i) => {
-                    n = n + 1;
-                    rest = rest.substring(i + sub.len(), rest.len());
-                },
-                Option.None => {
-                    keep_going = false;
-                },
-            }
-        }
-        n
+/// Splits `s` into lines by `\n`, trimming a trailing `\r` from each (so `\r\n` works too).
+/// A trailing newline does not produce an empty last line; `""` → `[]`.
+// M66: la utilidad de texto más pedida — toml/csv/http la hand-rolleaban.
+pub fn lines(s: string) -> [string] {
+    if (s.len() == 0) {
+        return [];
     }
-}
-
-/// Splits `s` into words separated by spaces, discarding empty ones (repeated spaces).
-pub fn words(s: string) -> [string] {
-    let parts = s.split(" ");
+    let partes = s.split("\n");
     var out: [string] = [];
     var i = 0;
-    while (i < parts.len()) {
-        if (parts[i].len() > 0) {
-            out.push(parts[i]);
+    // Un `\n` final produce una última parte vacía → se descarta (convención universal).
+    var n = partes.len();
+    if (n > 0 && partes[n - 1].len() == 0) {
+        n = n - 1;
+    }
+    while (i < n) {
+        var linea = partes[i];
+        if (linea.len() > 0 && linea[linea.len() - 1] == '\r') {
+            linea = linea.substring(0, linea.len() - 1);
         }
+        out.push(linea);
         i = i + 1;
     }
     out

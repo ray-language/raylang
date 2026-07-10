@@ -319,6 +319,37 @@ fn stdlib_text_capitaliza_e_invierte() {
     assert!(out.contains("2"), "count no solapado\n{out}");
 }
 
+/// M66 — std/text de producción: `words` separa por whitespace (no solo espacio), `lines`
+/// parte por `\n` tratando `\r\n` y el salto final, y `reverse`/`count` (reescritas a O(n))
+/// conservan la semántica UTF-8/no-solapado.
+#[test]
+fn stdlib_text_words_y_lines() {
+    let base = tmp("std_text_m66");
+    let archivo = base.join("main.ray");
+    std::fs::write(
+        &archivo,
+        "import std/text;\n\
+         fn main() -> int {\n\
+           let ws = text.words(\" a\\tb\\r\\nc \");\n\
+           print(to_string(ws.len()) + \":\" + join(ws, \",\"));\n\
+           let ls = text.lines(\"uno\\r\\ndos\\ntres\\n\");\n\
+           print(to_string(ls.len()) + \":\" + join(ls, \"|\"));\n\
+           print(to_string(text.lines(\"\").len()));\n\
+           print(to_string(text.lines(\"a\\n\\nb\").len()));\n\
+           print(text.reverse(\"café\"));\n\
+           print(to_string(text.count(\"ñoño\", \"ño\")));\n\
+           0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", archivo.to_str().unwrap()]);
+    assert_eq!(code, 0, "run con std/text M66 debe salir 0\n{err}");
+    assert!(out.contains("3:a,b,c"), "words por whitespace\n{out}");
+    assert!(out.contains("3:uno|dos|tres"), "lines con \\r\\n y salto final\n{out}");
+    assert!(out.contains("éfac"), "reverse UTF-8 multibyte\n{out}");
+    assert!(out.contains("\n2\n"), "count multibyte no solapado\n{out}");
+}
+
 #[test]
 fn stdlib_sort_busca_y_deduplica() {
     let base = tmp("std_sort");

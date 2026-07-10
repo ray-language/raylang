@@ -7831,7 +7831,7 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 > (reverse por carácter con UTF-8 astral, capitalize no-ASCII, count no-solapado, pads por
 > carácter). Un solo paso: dos O(n²) + dos huecos de superficie.
 
-- **M66 — de una pieza**: (a) `reverse` deja de concatenar `out + char` en bucle (O(n²);
+- **M66 — de una pieza COMPLETO**: (a) `reverse` deja de concatenar `out + char` en bucle (O(n²);
   100k chars = 167 ms) → acumula `[string]` y un `join` final (O(n)). (b) `count` deja de
   re-materializar el resto con `substring` por ocurrencia (O(n²) por el `substring` O(i) de
   M59.5; 100k chars / 10k ocurrencias = 879 ms) → busca sobre `[char]` con offset propio.

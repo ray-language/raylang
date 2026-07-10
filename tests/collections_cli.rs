@@ -37,6 +37,41 @@ fn ambos_motores_coinciden(path: &str, esperado: &str) {
     assert_eq!(o_in, esperado, "salida esperada ({path})");
 }
 
+/// M61.1 — el hash NO desborda: el `int` es checked (trap) y el polinomio h*31+c crecía sin
+/// cota → `.hash()` de un string ≥ ~12 chars (o un derive con un campo de valor grande)
+/// reventaba con "desbordamiento aritmético", matando `Set<string>` con claves reales.
+#[test]
+fn hash_sin_overflow_ambos_motores() {
+    let src = "import std/collections/set;\n\
+        @derive(Hash, Eq)\n\
+        struct Q { a: int, b: int, nombre: string }\n\
+        fn main() {\n\
+        \x20 let largo = \"abcdefghijklmnopqrstuvwxyz\".repeat(40);\n\
+        \x20 print(to_string(largo.hash()));\n\
+        \x20 let s: set.Set<string> = set.new();\n\
+        \x20 set.add(s, \"una clave de longitud completamente normal\");\n\
+        \x20 set.add(s, largo);\n\
+        \x20 print(to_string(set.has(s, \"una clave de longitud completamente normal\")));\n\
+        \x20 print(to_string(set.has(s, largo)));\n\
+        \x20 print(to_string(set.has(s, \"ausente\")));\n\
+        \x20 let q = Q { a: 400000000000000000, b: 7, nombre: largo };\n\
+        \x20 print(to_string(q.hash()));\n\
+        \x20 print(to_string(q.hash() == Q { a: 400000000000000000, b: 7, nombre: largo }.hash()));\n\
+        }\n";
+    let path = std::env::temp_dir().join("m61_hash_overflow.ray");
+    std::fs::write(&path, src).unwrap();
+    let (o_in, c_in) = run_file(path.to_str().unwrap(), false);
+    let (o_vm, c_vm) = run_file(path.to_str().unwrap(), true);
+    assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
+    assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
+    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+    let lineas: Vec<&str> = o_in.lines().collect();
+    assert_eq!(lineas[1], "true");
+    assert_eq!(lineas[2], "true");
+    assert_eq!(lineas[3], "false");
+    assert_eq!(lineas[5], "true", "hash determinista del struct derivado");
+}
+
 #[test]
 fn set_conjunto_ambos_motores() {
     ambos_motores_coinciden(

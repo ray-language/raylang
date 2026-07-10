@@ -254,11 +254,14 @@ impl Hash for char {
 
 impl Hash for string {
     fn hash(self) -> int {
+        // M61.1: el int de raylang es CHECKED (desbordar = trap), no wrapping — el polinomio
+        // clásico h*31+c crece exponencialmente y reventaba con ≥ ~12 caracteres. Acotar el
+        // acumulador a 32 bits mantiene el producto en ~2^37, lejos del límite de i64.
         var h = 17;
         let cs = self.chars();
         var i = 0;
         while (i < cs.len()) {
-            h = h * 31 + char_code(cs[i]);
+            h = (h * 31 + char_code(cs[i])) & 4294967295;
             i = i + 1;
         }
         h

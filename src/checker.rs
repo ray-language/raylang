@@ -4333,10 +4333,12 @@ fn parse_derived_impl(trait_name: &str, name: &str, signature: &str, body: &str)
 /// Cuerpo de `hash` para un struct (M40.3a): combina el `.hash()` de cada campo con un polinomio
 /// `h = h*31 + campo.hash()` (arranca en 17). Sin campos → `17`. Cada campo debe implementar `Hash`
 /// (el checker lo exige al verificar el cuerpo generado); un campo no hashable (float/array) → error.
+/// M61.1: el int es checked (trap) → tanto el acumulador como el hash ENTRANTE de cada campo
+/// (que puede ser cualquier i64, p. ej. un int grande que hashea a sí mismo) se acotan a 32 bits.
 fn struct_hash_body(fields: &[(String, Type)]) -> String {
     let mut acc = "17".to_string();
     for (n, _) in fields {
-        acc = format!("({acc} * 31 + self.{n}.hash())");
+        acc = format!("(({acc} * 31 + (self.{n}.hash() & 4294967295)) & 4294967295)");
     }
     format!("        {acc}")
 }
@@ -4353,7 +4355,8 @@ fn enum_hash_body(name: &str, variants: &[VariantDef]) -> String {
             let binds: Vec<String> = (0..k).map(|i| format!("a{i}")).collect();
             let mut acc = format!("{idx}");
             for i in 0..k {
-                acc = format!("({acc} * 31 + a{i}.hash())");
+                // M61.1: acotado a 32 bits, como struct_hash_body (el int es checked).
+                acc = format!("(({acc} * 31 + (a{i}.hash() & 4294967295)) & 4294967295)");
             }
             arms.push_str(&format!(
                 "            {name}.{v}({b}) => {acc},\n",

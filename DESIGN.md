@@ -7686,7 +7686,7 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 > Revisión jul 2026 (tras M60; clasificación en IDEAS §21). Dos defectos verificados con el
 > binario + la ergonomía de Option/Result. Todo front-end puro (prelude + codegen del derive).
 
-- **M61.1 — hash sin overflow**: el `int` de raylang es **checked** (desbordar = trap), pero el
+- **M61.1 — hash sin overflow** ✅ **COMPLETO**: el `int` de raylang es **checked** (desbordar = trap), pero el
   hash clásico `h = h*31 + c` asume **wrapping** → `Hash for string` panica con ≥ ~12 chars
   (mata `Set<string>` con claves reales) y el combinador de `@derive(Hash)` panica con un campo
   de valor grande (p. ej. un int de 4×10¹⁷). Fix: acumular acotado a 32 bits — `h = (h*31 + x) &

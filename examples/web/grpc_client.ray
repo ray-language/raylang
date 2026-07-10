@@ -6,12 +6,14 @@
 // trailers) + DATA (grpc_frame(mensaje)) con END_STREAM; la respuesta trae HEADERS (:status) + DATA
 // (mensaje gRPC-framed) + un HEADERS de **trailers** con `grpc-status`. Importable:
 //   from grpc_client import grpc_call, GrpcResponse;
-from http2 import preface, settings_empty, settings_ack, encode_frame, parse_frame, frame_size, ft_settings, ft_headers, ft_data, ft_goaway, fl_ack, fl_end_stream, fl_end_headers, Http2Frame;
+from http2 import preface, settings_empty, settings_ack, encode_frame, parse_frame, frame_size, window_update_frame, ping_ack, rst_error_code, ft_settings, ft_headers, ft_data, ft_goaway, ft_ping, ft_rst_stream, fl_ack, fl_end_stream, fl_end_headers, Http2Frame;
 from hpack import new_hpack, encode, decode, header, HEntry;
-from protobuf import grpc_frame, grpc_unframe;
+from std/protobuf import grpc_frame, grpc_unframe;
 import std/net;
 
 // La respuesta de una llamada gRPC: el mensaje (bytes protobuf) y el `grpc-status` (0 = OK).
+/// The response of a unary gRPC call: the serialized protobuf response message
+/// and the `grpc-status` code from the trailers (0 = OK).
 pub struct GrpcResponse {
     message: bytes,
     grpc_status: int,
@@ -32,6 +34,9 @@ fn find_header(hs: [HEntry], name: string) -> string {
 
 // Hace una llamada gRPC unaria a `host:port` con la ruta `/paquete.Servicio/Metodo` y el `mensaje`
 // protobuf ya serializado. Devuelve el mensaje de respuesta + el grpc-status.
+/// Performs a unary gRPC call to `host:port` (TLS + ALPN `h2`, blocking I/O): POSTs the
+/// gRPC-framed `mensaje` to `path` ("/package.Service/Method") and reads until END_STREAM.
+/// Err on connect/I-O/HPACK errors, GOAWAY, a non-200 `:status`, or a malformed gRPC frame.
 pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Result<GrpcResponse, string> {
     let h = match (net.tls_connect_h2(host, port)) {
         Result.Ok(x) => x,
@@ -126,6 +131,30 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                         }
                     } else if (fr.ftype == ft_data()) {
                         body = body + fr.payload;
+                        // M58.3 — flow control: devolver la ventana consumida (conexión + stream).
+                        // Best effort: si el peer ya envió todo y cerró, el crédito es irrelevante
+                        // (el EOF/fin de stream sale por la lectura, no por esta escritura).
+                        if (fr.payload.len() > 0) {
+                            let wu = window_update_frame(0, fr.payload.len()) + window_update_frame(fr.stream_id, fr.payload.len());
+                            match (net.socket_write_bytes(h, wu)) {
+                                Result.Ok(x) => { },
+                                Result.Err(x) => { },
+                            }
+                        }
+                    } else if (fr.ftype == ft_ping()) {
+                        // M58.3: ACK del PING del servidor (sonda de vida).
+                        if ((fr.flags & fl_ack()) == 0) {
+                            match (net.socket_write_bytes(h, ping_ack(fr.payload))) {
+                                Result.Ok(x) => { },
+                                Result.Err(x) => { },
+                            }
+                        }
+                    } else if (fr.ftype == ft_rst_stream()) {
+                        // M58.3: stream reseteado = error con causa (antes: leer hasta EOF).
+                        if (fr.stream_id == 1) {
+                            close(h);
+                            return Result.Err("el servidor reseteó el stream (RST_STREAM, código " + to_string(rst_error_code(fr.payload)) + ")");
+                        }
                     } else if (fr.ftype == ft_goaway()) {
                         close(h);
                         return Result.Err("el servidor envió GOAWAY");

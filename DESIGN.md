@@ -7574,6 +7574,18 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   y `absolutizar` ancla a la raíz una Location relativa sin `/`. Tests nuevos (`http_cli`, toy
   servers): captura de la petición (Host:puerto + Accept-Encoding + `Content-Length: 5` para
   "café" + cuerpo entero), servidor mudo → timeout en ~400 ms, y respuesta truncada → Err.
-- **M58.3 — cliente HTTP/2**: **flow control** (WINDOW_UPDATE de conexión y stream al consumir
-  DATA → desbloquea respuestas > 64 KiB), ACK de PING, RST_STREAM = Err con causa. Aplica a
-  `http2_get` y `grpc_call`.
+- **M58.3 — cliente HTTP/2** ✅ **COMPLETO**, **CIERRA M58**. Helpers nuevos en `http2.ray`:
+  `window_update_frame(stream, inc)` / `ping_ack(payload)` / `rst_error_code(payload)`. En los
+  bucles de `http2_get` Y `grpc_call`: **flow control** — por cada DATA se devuelve la ventana
+  consumida (WINDOW_UPDATE de conexión + stream) → desbloquea respuestas > 65535 octetos (antes:
+  cuelgue); **ACK de PING** (sonda de vida en transferencias largas); **RST_STREAM del stream 1 =
+  Err con el código** (antes: leer hasta EOF sin causa). Gotcha real: los WINDOW_UPDATE/ACK son
+  **best-effort** — un peer que ya envió todo y cerró rompe la escritura (Broken pipe), y con TLS
+  el error ni siquiera sale en el write (queda bufferizado en rustls y revienta en la SIGUIENTE
+  lectura); el crédito es una cortesía, su fallo no invalida los datos ya recibidos. Tests
+  (`http2_live_cli`, toy servers h2 a mano sobre rustls): `http2_get_respuesta_grande_con_flow_control`
+  (200 000 octetos con un servidor que RESPETA la ventana — solo avanza con crédito — y exige el
+  ACK de un PING a mitad antes del último chunk) y `http2_get_rst_stream_es_error_con_causa`
+  (RST código 8 → Err con código). Demo `http2_len_demo.ray` (status + longitud). **M58 COMPLETO**
+  (58.1–58.3). Diferidos (IDEAS §19): keep-alive/pool del cliente, multiplexado h2,
+  fragmentación WS de envío, CONTINUATION.

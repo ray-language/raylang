@@ -132,3 +132,33 @@ pub fn data_frame(stream_id: int, payload: bytes, end_stream: bool) -> bytes {
     }
     encode_frame(ft_data(), flags, stream_id, payload)
 }
+
+// Un WINDOW_UPDATE (M58.3): concede `increment` octetos de ventana en el stream dado (0 = la
+// conexión). Es lo que permite al peer seguir enviando más allá de los 65535 iniciales (§6.9).
+/// A WINDOW_UPDATE frame granting `increment` octets of flow-control window on the given
+/// stream (stream 0 = the connection window) — RFC 7540 §6.9.
+pub fn window_update_frame(stream_id: int, increment: int) -> bytes {
+    var p: [int] = [];
+    p.push(increment >> 24 & 127);  // R(1)=0 + 31 bits
+    p.push(increment >> 16 & 255);
+    p.push(increment >> 8 & 255);
+    p.push(increment & 255);
+    encode_frame(ft_window_update(), 0, stream_id, bytes_of(p))
+}
+
+// El ACK de un PING (M58.3): devuelve los 8 octetos opacos del peer (§6.7; sin el ACK, un
+// servidor que sondea vida puede cortar la conexión en transferencias largas).
+/// A PING frame with the ACK flag, echoing the peer's 8 opaque octets (RFC 7540 §6.7).
+pub fn ping_ack(payload: bytes) -> bytes {
+    encode_frame(ft_ping(), fl_ack(), 0, payload)
+}
+
+// El código de error de un RST_STREAM (32 bits BE de su carga); -1 si la carga es corta.
+/// The error code carried by an RST_STREAM frame payload (32-bit big-endian);
+/// -1 if the payload is shorter than 4 octets.
+pub fn rst_error_code(payload: bytes) -> int {
+    if (payload.len() < 4) {
+        return 0 - 1;
+    }
+    payload[0] << 24 | payload[1] << 16 | payload[2] << 8 | payload[3]
+}

@@ -1,0 +1,25 @@
+// Demo del cliente HTTP/2 para cuerpos GRANDES (M58.3): como http2_get_demo pero imprime la
+// LONGITUD del cuerpo (un cuerpo de >64 KiB no cabe razonablemente en un golden de stdout).
+// Recibe host y puerto por argumentos; con un tercer argumento se usa como ruta ("/" por defecto).
+from http2_client import http2_get, Http2Response;
+
+fn main() {
+    let a = args();
+    let host = a[0];
+    var path = "/";
+    if (a.len() > 2) {
+        path = a[2];
+    }
+    match (parse_int(a[1])) {
+        Option.Some(port) => {
+            match (http2_get(host, port, path)) {
+                Result.Ok(resp) => {
+                    print("status: " + to_string(resp.status));
+                    print("len: " + to_string(resp.body.len()));
+                },
+                Result.Err(e) => print("error: " + e),
+            }
+        },
+        Option.None => print("puerto inválido"),
+    }
+}

@@ -6,7 +6,7 @@
 // trailers) + DATA (grpc_frame(mensaje)) con END_STREAM; la respuesta trae HEADERS (:status) + DATA
 // (mensaje gRPC-framed) + un HEADERS de **trailers** con `grpc-status`. Importable:
 //   from grpc_client import grpc_call, GrpcResponse;
-from net/http2 import preface, settings_empty, settings_ack, encode_frame, parse_frame, frame_size, ft_settings, ft_headers, ft_data, ft_goaway, fl_ack, fl_end_stream, fl_end_headers, Http2Frame;
+from net/http2 import preface, settings_empty, settings_ack, encode_frame, parse_frame, frame_size, window_update_frame, ping_ack, rst_error_code, ft_settings, ft_headers, ft_data, ft_goaway, ft_ping, ft_rst_stream, fl_ack, fl_end_stream, fl_end_headers, Http2Frame;
 from net/hpack import new_hpack, encode, decode, header, HEntry;
 from std/protobuf import grpc_frame, grpc_unframe;
 import std/net;
@@ -131,6 +131,30 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                         }
                     } else if (fr.ftype == ft_data()) {
                         body = body + fr.payload;
+                        // M58.3 — flow control: devolver la ventana consumida (conexión + stream).
+                        // Best effort: si el peer ya envió todo y cerró, el crédito es irrelevante
+                        // (el EOF/fin de stream sale por la lectura, no por esta escritura).
+                        if (fr.payload.len() > 0) {
+                            let wu = window_update_frame(0, fr.payload.len()) + window_update_frame(fr.stream_id, fr.payload.len());
+                            match (net.socket_write_bytes(h, wu)) {
+                                Result.Ok(x) => { },
+                                Result.Err(x) => { },
+                            }
+                        }
+                    } else if (fr.ftype == ft_ping()) {
+                        // M58.3: ACK del PING del servidor (sonda de vida).
+                        if ((fr.flags & fl_ack()) == 0) {
+                            match (net.socket_write_bytes(h, ping_ack(fr.payload))) {
+                                Result.Ok(x) => { },
+                                Result.Err(x) => { },
+                            }
+                        }
+                    } else if (fr.ftype == ft_rst_stream()) {
+                        // M58.3: stream reseteado = error con causa (antes: leer hasta EOF).
+                        if (fr.stream_id == 1) {
+                            close(h);
+                            return Result.Err("el servidor reseteó el stream (RST_STREAM, código " + to_string(rst_error_code(fr.payload)) + ")");
+                        }
                     } else if (fr.ftype == ft_goaway()) {
                         close(h);
                         return Result.Err("el servidor envió GOAWAY");

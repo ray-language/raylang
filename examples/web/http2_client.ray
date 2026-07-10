@@ -4,11 +4,13 @@
 // hasta END_STREAM. Importable: `from http2_client import http2_get, Http2Response;`.
 //
 // Es el transporte que necesita un cliente gRPC (M31.3): gRPC = HTTP/2 + framing de mensajes en DATA.
-from http2 import preface, settings_empty, settings_ack, headers_frame, parse_frame, frame_size, ft_settings, ft_headers, ft_data, ft_goaway, fl_ack, fl_end_stream, Http2Frame;
+from http2 import preface, settings_empty, settings_ack, headers_frame, parse_frame, frame_size, window_update_frame, ping_ack, rst_error_code, ft_settings, ft_headers, ft_data, ft_goaway, ft_ping, ft_rst_stream, fl_ack, fl_end_stream, Http2Frame;
 from hpack import new_hpack, encode, decode, header, HEntry;
 import std/net;
 
 // La respuesta: el código de estado (`:status`) y el cuerpo (concatenación de los frames DATA).
+/// An HTTP/2 response: the `:status` pseudo-header value and the body
+/// (the concatenation of all DATA frame payloads on the request stream).
 pub struct Http2Response {
     status: int,
     body: bytes,
@@ -35,6 +37,9 @@ fn extract_status(hs: [HEntry]) -> int {
 }
 
 // Hace un GET sobre HTTP/2 a `host:port` con la ruta dada (por TLS, ALPN `h2`).
+/// Performs a full HTTP/2 GET to `host:port` for `path` over TLS with ALPN `h2` (blocking I/O):
+/// connection preface + SETTINGS exchange + HEADERS on stream 1, reading until END_STREAM.
+/// Err on connect/TLS failure, I/O or HPACK errors, or if the server sends GOAWAY.
 pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response, string> {
     let h = match (net.tls_connect_h2(host, port)) {
         Result.Ok(x) => x,
@@ -105,6 +110,31 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
                         }
                     } else if (fr.ftype == ft_data()) {
                         body = body + fr.payload;
+                        // M58.3 — flow control: devolver la ventana consumida (conexión + stream);
+                        // sin esto, el servidor se para a los 65535 octetos iniciales (§6.9).
+                        // Best effort: si el peer ya envió todo y cerró, el crédito es irrelevante
+                        // (el EOF/fin de stream sale por la lectura, no por esta escritura).
+                        if (fr.payload.len() > 0) {
+                            let wu = window_update_frame(0, fr.payload.len()) + window_update_frame(fr.stream_id, fr.payload.len());
+                            match (net.socket_write_bytes(h, wu)) {
+                                Result.Ok(x) => { },
+                                Result.Err(x) => { },
+                            }
+                        }
+                    } else if (fr.ftype == ft_ping()) {
+                        // M58.3: un PING del servidor exige ACK (sonda de vida en transferencias largas).
+                        if ((fr.flags & fl_ack()) == 0) {
+                            match (net.socket_write_bytes(h, ping_ack(fr.payload))) {
+                                Result.Ok(x) => { },
+                                Result.Err(x) => { },
+                            }
+                        }
+                    } else if (fr.ftype == ft_rst_stream()) {
+                        // M58.3: un stream reseteado es un error con causa (antes: leer hasta EOF).
+                        if (fr.stream_id == 1) {
+                            close(h);
+                            return Result.Err("el servidor reseteó el stream (RST_STREAM, código " + to_string(rst_error_code(fr.payload)) + ")");
+                        }
                     } else if (fr.ftype == ft_goaway()) {
                         close(h);
                         return Result.Err("el servidor envió GOAWAY");

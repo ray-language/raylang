@@ -21,8 +21,15 @@ pub fn writer() -> PbWriter {
     PbWriter { out: [] }
 }
 
-// Codifica un varint (LEB128): 7 bits por octeto, bit alto = continuación. Para valores no negativos.
+// Codifica un varint (LEB128): 7 bits por octeto, bit alto = continuación. Solo valores NO
+// negativos: en el wire real un negativo son 10 octetos (int64 en complemento a dos) y este
+// códec no los emite. M59.4 — con un negativo, panic EXPLÍCITO en vez de octetos corruptos en
+// silencio (antes el bucle no entraba y salía un solo octeto mal). Para enteros con signo usa
+// write_fixed64 (el complemento a dos de 8 octetos LE sí es correcto) o `sint`/zigzag (diferido).
 fn encode_varint(out: [int], value: int) {
+    if (value < 0) {
+        panic("protobuf: varint negativo no soportado (usa write_fixed64, o sint/zigzag — diferido)");
+    }
     var v = value;
     while (v >= 128) {
         out.push(v & 127 | 128);
@@ -45,7 +52,9 @@ fn append_bytes(out: [int], b: bytes) {
 
 // Campo varint (wire 0): int32/int64/uint/bool/enum.
 /// Writes a varint field (wire type 0, LEB128): int32/int64/uint/bool/enum.
-/// Only non-negative values are supported (no sint/zigzag encoding).
+/// Only non-negative values are supported (no sint/zigzag encoding): a negative value
+/// PANICS instead of silently emitting corrupt bytes. For signed integers use
+/// `write_fixed64` (8-byte little-endian two's complement is wire-correct).
 pub fn write_varint(w: PbWriter, field: int, value: int) {
     write_tag(w.out, field, 0);
     encode_varint(w.out, value);

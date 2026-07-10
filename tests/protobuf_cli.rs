@@ -84,3 +84,37 @@ print('WIRE OK')
     );
     assert!(String::from_utf8_lossy(&py.stdout).contains("WIRE OK"));
 }
+
+/// M59.4 — un varint negativo debe PANICAR (antes emitía octetos corruptos en silencio: el
+/// bucle LEB128 no entraba con negativos y salía un solo octeto mal).
+#[test]
+fn varint_negativo_panica_en_vez_de_corromper() {
+    let mut dir = std::env::temp_dir();
+    dir.push("ray_pb_negativo");
+    std::fs::create_dir_all(&dir).expect("crea dir");
+    let driver = dir.join("main.ray");
+    std::fs::write(
+        &driver,
+        r#"
+from std/protobuf import writer, write_varint;
+fn main() {
+    let w = writer();
+    w.write_varint(1, 0 - 1);
+}
+"#,
+    )
+    .expect("escribe driver");
+    for flags in [&[][..], &["--vm"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+            .args(flags)
+            .arg(&driver)
+            .output()
+            .expect("ejecuta driver");
+        assert!(!out.status.success(), "debería fallar (flags {flags:?})");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("protobuf: varint negativo no soportado"),
+            "stderr inesperado (flags {flags:?}): {err}"
+        );
+    }
+}

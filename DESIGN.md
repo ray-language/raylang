@@ -7623,10 +7623,15 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   un solo encoding aceptado por payload — cierra la maleabilidad de representación bajo
   JWT/SCRAM (la firma cubre el ENCODING). Demo `base64_demo.ray` + golden `base64_cli`
   (vectores §10 + 9 rechazos); consumidores (scram/jwt/jwt_eddsa/hmac/websocket) intactos.
-- **M59.4 — protobuf: negativos = `Err`**: `encode_varint`/`add_int` con valor negativo hoy
-  emiten octetos corruptos EN SILENCIO (el bucle `v >= 128` no entra con negativos); pasar a
-  error explícito (el soporte real de negativos — varint de 10 octetos / zigzag `sint` — sigue
-  diferido a demanda, IDEAS §16).
+- **M59.4 — protobuf: negativos = error explícito** ✅ **COMPLETO**: `encode_varint` con valor
+  negativo emitía octetos corruptos EN SILENCIO (el bucle `v >= 128` no entra con negativos y
+  salía un solo octeto mal); ahora PANICA con mensaje claro. Se eligió panic sobre `Result`
+  (decisión): cambiar el builder (`write_varint`…) a `Result` rompía todos los consumidores
+  gRPC por una violación de contrato documentada, y **`write_fixed64` ya codifica negativos
+  bien** (complemento a dos de 8 octetos LE, wire-correcto) — documentado como alternativa en
+  el raydoc. El soporte real (varint de 10 octetos / zigzag `sint`) sigue diferido a demanda
+  (IDEAS §16); el decode de un varint negativo de 10 octetos también. Test del panic en ambos
+  motores en `protobuf_cli`.
 - **M59.5 — StringBuilder en los hot paths**: json (`parse_str_raw`/`quote`/stringify), csv,
   hex y base64 construyen con `s = s + …` por carácter (O(n²)); migrarlos al `StringBuilder`
   (M40.3c) que existe exactamente para esto, midiendo antes/después. De paso: `clear()` en

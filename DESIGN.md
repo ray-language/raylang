@@ -7803,5 +7803,6 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   **64 MiB** por defecto (`default_limit`); el cliente HTTP (`http.ray`, ambos espejos) usa
   `gunzip_limit(..., 64 MiB)`. Patrón `read_message_limit` del WebSocket (M58.1). Goldens:
   tope menor que la salida = Err, tope justo = round-trip OK.
-- **M64.3 — menores a criterio**: validación de Kraft de los árboles, trie de HPACK
-  reusable, crc32 con tabla — o diferir a demanda.
+- **M64.3 — menores DIFERIDOS a demanda**: validación de Kraft de los árboles (no crítica:
+  un árbol sobresuscrito acaba en código inválido → `Err`, cubierto por M64.1), trie de
+  HPACK reusable y crc32 con tabla (perf, no corrección). **M64 COMPLETO** (64.1 + 64.2).

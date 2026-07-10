@@ -886,6 +886,20 @@ vacío (el recursivo es peligroso → a demanda). `write_file` sigue devolviendo
 
 ---
 
+## 28. std/random y aleatoriedad criptográfica (revisión jul 2026) — M68, PLAN
+
+Revisión en frío (detalle en DESIGN §72). Sano: SplitMix64 canónico (53 bits limpios para el
+float), Mutex de proceso (seguro bajo M:N), `below(n<=0)`→0 total, honestidad "no criptográfico"
+en host/módulo/uuid. El sesgo de módulo de `below` (~n/2^64) es inmedible → no se toca.
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **Sin `seed(n)`**: sembrado del reloj, no fijable — simulaciones irreproducibles, semillas no compartibles, tests de aleatoriedad no deterministas | Reproducibilidad imposible | **68.1**: primitivo `__random_seed` + `seed()` |
+| **Falta el kit sobre `below`**: `between(lo,hi)`, `choice(arr)`, `shuffle(arr)` (Fisher-Yates) | Superficie mínima | **68.1**: raylang puro, cero opcodes; con `seed` → goldens deterministas |
+| **Sin aleatoriedad criptográfica en NINGUNA parte**: ring disponible (M43) pero nadie expone SystemRandom — tokens de sesión/salts/nonces solo pueden salir del PRNG de reloj (predecible) | Secretos predecibles | **68.2**: `crypto.random_bytes(n)` (`__crypto_random_bytes` sobre ring::rand) + docs de uuid/websocket apuntando a ella |
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

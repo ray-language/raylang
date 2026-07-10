@@ -7855,3 +7855,18 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   habilitado el patrón de **escritura atómica** (temp + rename). Tests: integración por
   subproceso en `io_cli` (I/O real no determinista → no oráculo), ciclo completo
   mkdir → write → is_dir/is_file → file_size → copy → rename → remove.
+
+## 72. M68 — aleatoriedad de producción
+
+> Revisión jul 2026 (tras M67; clasificación en IDEAS §28). Sano: SplitMix64 canónico, Mutex
+> de proceso (M:N seguro), below total, honestidad "no criptográfico" por doquier; el sesgo
+> de módulo (~n/2^64) es inmedible. Dos huecos: reproducibilidad y secretos.
+
+- **M68.1 — seed + kit**: primitivo `__random_seed(n)` (fija el estado del SplitMix64 —
+  misma semilla, misma secuencia, en ambos motores comparten el PRNG del host) y, en raylang
+  puro sobre `below` (cero opcodes): `between(lo, hi)` (ambos inclusive; `hi < lo` → `lo`),
+  `choice(xs) -> Option<T>` (vacío → None) y `shuffle(xs)` (Fisher-Yates, **in place** por la
+  semántica de referencia). Con `seed`, el golden de aleatoriedad es **determinista**.
+- **M68.2 — aleatoriedad criptográfica**: `crypto.random_bytes(n) -> bytes` (primitivo
+  `__crypto_random_bytes` sobre `ring::rand::SystemRandom`, dep ya presente desde M43).
+  Los `///` de uuid/websocket apuntan a ella para quien necesite no-predecible.

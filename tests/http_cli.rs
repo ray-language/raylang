@@ -110,3 +110,147 @@ fn main() -> int {
         assert_eq!(code, 1);
     }
 }
+
+// --- M58.2: robustez del cliente ---
+
+/// Servidor de juguete que CAPTURA la petición (la envía por el canal) y responde 200 con "ok".
+fn toy_captura() -> (u16, std::sync::mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut acc = Vec::new();
+            let mut buf = [0u8; 2048];
+            // Lee hasta tener cabeceras + (si hay) el cuerpo declarado; para el test basta leer
+            // hasta que la petición pequeña esté completa (dos lecturas como mucho).
+            while !String::from_utf8_lossy(&acc).contains("\r\n\r\n") {
+                match stream.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => acc.extend_from_slice(&buf[..n]),
+                    Err(_) => break,
+                }
+            }
+            // Si hay Content-Length, lee el cuerpo restante.
+            let texto = String::from_utf8_lossy(&acc).into_owned();
+            if let Some(cl) = texto.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))) {
+                let fin_cab = acc.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4).unwrap_or(acc.len());
+                while acc.len() < fin_cab + cl {
+                    match stream.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => acc.extend_from_slice(&buf[..n]),
+                        Err(_) => break,
+                    }
+                }
+            }
+            let _ = tx.send(String::from_utf8_lossy(&acc).into_owned());
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        }
+    });
+    (port, rx)
+}
+
+#[test]
+fn peticion_con_host_puerto_accept_encoding_y_octetos() {
+    // M58.2: Host lleva el puerto no-default, Accept-Encoding: gzip se anuncia, y el
+    // Content-Length cuenta OCTETOS ("café" = 5 octetos UTF-8, no 4 caracteres — antes fallaba).
+    let (port, rx) = toy_captura();
+    let driver = r#"
+from http import request, body_text;
+
+fn main() -> int {
+    match (request("POST", "http://127.0.0.1:__PORT__/api", "café")) {
+        Result.Ok(r) => {
+            match (body_text(r)) {
+                Result.Ok(t) => print(t),
+                Result.Err(e) => print("err: " + e),
+            }
+            0
+        },
+        Result.Err(e) => {
+            print("err: " + e);
+            1
+        },
+    }
+}
+"#
+    .replace("__PORT__", &port.to_string());
+    let (out, code) = run_with_libs("robusto", &driver, true);
+    assert_eq!(code, 0, "driver falló: {out}");
+    assert!(out.contains("ok"), "esperaba el cuerpo ok: {out}");
+
+    let req = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("petición capturada");
+    assert!(req.contains(&format!("Host: 127.0.0.1:{port}")), "Host debe llevar el puerto: {req}");
+    assert!(req.contains("Accept-Encoding: gzip"), "debe anunciar gzip: {req}");
+    assert!(req.contains("Content-Length: 5"), "Content-Length en octetos (café = 5): {req}");
+    assert!(req.ends_with("café"), "el cuerpo debe llegar entero: {req}");
+}
+
+#[test]
+fn cliente_corta_por_timeout_a_servidor_mudo() {
+    // M58.2: un servidor que acepta y no responde ya no cuelga al cliente para siempre.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    thread::spawn(move || {
+        if let Ok((stream, _)) = listener.accept() {
+            thread::sleep(std::time::Duration::from_secs(30)); // mudo
+            drop(stream);
+        }
+    });
+    let driver = r#"
+from http import request_bytes;
+
+fn main() -> int {
+    match (request_bytes("GET", "http://127.0.0.1:__PORT__/", b"", Map.new(), 400)) {
+        Result.Ok(_) => {
+            print("no debería responder");
+            1
+        },
+        Result.Err(e) => {
+            print("err: " + e);
+            0
+        },
+    }
+}
+"#
+    .replace("__PORT__", &port.to_string());
+    let inicio = std::time::Instant::now();
+    let (out, code) = run_with_libs("timeout", &driver, true);
+    assert_eq!(code, 0, "esperaba Err por timeout: {out}");
+    assert!(out.contains("tiempo de espera"), "esperaba el error de timeout: {out}");
+    assert!(inicio.elapsed() < std::time::Duration::from_secs(10), "tardó demasiado (¿sin timeout?)");
+}
+
+#[test]
+fn respuesta_truncada_es_error() {
+    // M58.2: Content-Length declarado 10 pero solo llegan 3 octetos → Err, no un cuerpo a medias.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 2048];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nabc");
+        }
+    });
+    let driver = r#"
+from http import fetch;
+
+fn main() -> int {
+    match (fetch("http://127.0.0.1:__PORT__/")) {
+        Result.Ok(_) => {
+            print("no debería aceptarla");
+            1
+        },
+        Result.Err(e) => {
+            print("err: " + e);
+            0
+        },
+    }
+}
+"#
+    .replace("__PORT__", &port.to_string());
+    let (out, code) = run_with_libs("truncada", &driver, true);
+    assert_eq!(code, 0, "esperaba Err por truncada: {out}");
+    assert!(out.contains("respuesta truncada"), "esperaba el error de truncada: {out}");
+}

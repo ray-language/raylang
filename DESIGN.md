@@ -7561,10 +7561,19 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   `wss_echo`) reescritos encima (más simples). Test `echo_server_robusto_ante_framing_real`: trama
   partida en dos escrituras (antes: OOB, moría la fibra), dos pegadas en una (antes: la 2ª se
   descartaba), ping→pong, fragmentado reensamblado, close de cortesía.
-- **M58.2 — cliente HTTP/1.1**: timeout de lectura (`net.set_read_timeout`, M56.4) con default
-  sensato, `Host` con puerto no-default, `Accept-Encoding: gzip` (activa el gunzip que ya existe),
-  cuerpo de petición en `bytes` (subidas binarias), Content-Length de respuesta verificado
-  (truncado = Err), `absolutizar` con Location relativa sin `/`.
+- **M58.2 — cliente HTTP/1.1** ✅ **COMPLETO**: nueva forma BASE **`request_bytes(method, url,
+  body: bytes, headers, timeout_millis)`** — cuerpo binario y plazo TOTAL de lectura explícito
+  (patrón `leer_con_plazo` de M56.4; `request`/`request_with` delegan con UTF-8 y **30 s**). De
+  paso cayó un bug latente: el Content-Length contaba CARACTERES (`string.len()`), no octetos —
+  mal con cuerpos no-ASCII ("café" = 4 chars, 5 octetos); el camino por bytes lo arregla de raíz.
+  `Host` lleva el puerto no-default (vhosts en `:8080`; el cliente WS ya lo hacía),
+  **`Accept-Encoding: gzip`** se anuncia salvo que el llamador ponga el suyo (el gunzip
+  transparente de M20.10b por fin se activa de verdad), **Content-Length de la respuesta
+  verificado** (menos octetos = `Err("respuesta truncada …")`; de más se recorta; no aplica a
+  chunked — y el orden es correcto: se verifica ANTES de gunzip, sobre los octetos comprimidos),
+  y `absolutizar` ancla a la raíz una Location relativa sin `/`. Tests nuevos (`http_cli`, toy
+  servers): captura de la petición (Host:puerto + Accept-Encoding + `Content-Length: 5` para
+  "café" + cuerpo entero), servidor mudo → timeout en ~400 ms, y respuesta truncada → Err.
 - **M58.3 — cliente HTTP/2**: **flow control** (WINDOW_UPDATE de conexión y stream al consumir
   DATA → desbloquea respuestas > 64 KiB), ACK de PING, RST_STREAM = Err con causa. Aplica a
   `http2_get` y `grpc_call`.

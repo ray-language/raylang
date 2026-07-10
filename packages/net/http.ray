@@ -8,8 +8,14 @@
 // correctas, no solo texto). Las cabeceras siguen siendo texto (ASCII): se decodifican con from_utf8
 // para parsearlas. Para leer el cuerpo como texto, usa `body_text(r)`.
 // M20.10b: descompresión transparente de `Content-Encoding: gzip` (la librería INFLATE en raylang).
+// M58.2: robustez de red — plazo TOTAL de lectura (default 30 s; antes un servidor colgado
+// bloqueaba para siempre), `Host` con el puerto no-default (vhosts en :8080), `Accept-Encoding:
+// gzip` (activa de verdad el gunzip), cuerpo de petición en BYTES (subidas binarias; además el
+// Content-Length ahora cuenta OCTETOS — con string contaba caracteres y fallaba con no-ASCII) y
+// Content-Length de la respuesta verificado (truncada = Err, no un cuerpo a medias en silencio).
 from std/inflate import gunzip;
 import std/net;
+import std/time;
 
 /// An HTTP/1.1 response: status code, headers, and body.
 /// Header names are stored lowercased for case-insensitive lookup; the body is raw bytes
@@ -75,16 +81,37 @@ fn parse_url(url: string) -> Result<Url, string> {
     Result.Ok(Url { host: host, port: port, path: path, tls: tls })
 }
 
-fn build_request(method: string, u: Url, body: string) -> string {
-    build_request_h(method, u, body, Map.new())
+// El valor de la cabecera `Host`: con el puerto cuando no es el default del esquema (RFC 9112;
+// un vhost en :8080 puede servir otra cosa sin él). M58.2 — el cliente WebSocket ya lo hacía.
+fn host_header(u: Url) -> string {
+    let defecto: int = if (u.tls) { 443 } else { 80 };
+    if (u.port == defecto) { u.host } else { u.host + ":" + to_string(u.port) }
 }
 
-// Como `build_request` pero con cabeceras extra (nombre→valor). Las del cliente (Host/Connection/
-// Content-Length) se ponen primero; las extra se añaden tal cual (en orden de clave, determinista).
-fn build_request_h(method: string, u: Url, body: string, extra: Map<string, string>) -> string {
+// ¿Las cabeceras extra ya traen `nombre` (case-insensitive)? Para no pisar las del llamador.
+fn tiene_cabecera(extra: Map<string, string>, nombre: string) -> bool {
+    let ks: [string] = extra.keys();
+    var i: int = 0;
+    while (i < ks.len()) {
+        if (ks[i].to_lower() == nombre) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// Cabeceras extra (nombre→valor). Las del cliente (Host/Connection/Content-Length/Accept-Encoding)
+// van primero; las extra se añaden tal cual (en orden de clave, determinista). El cuerpo va en
+// BYTES → el Content-Length cuenta OCTETOS (con string contaba caracteres: mal con no-ASCII).
+fn build_request_h(method: string, u: Url, body: bytes, extra: Map<string, string>) -> bytes {
     var req: string = method + " " + u.path + " HTTP/1.1\r\n";
-    req = req + "Host: " + u.host + "\r\n";
+    req = req + "Host: " + host_header(u) + "\r\n";
     req = req + "Connection: close\r\n";
+    // M58.2: anuncia gzip (el gunzip transparente existía desde M20.10b pero nunca se pedía).
+    if (!tiene_cabecera(extra, "accept-encoding")) {
+        req = req + "Accept-Encoding: gzip\r\n";
+    }
     if (body.len() > 0) {
         req = req + "Content-Length: " + to_string(body.len()) + "\r\n";
     }
@@ -101,16 +128,29 @@ fn build_request_h(method: string, u: Url, body: string, extra: Map<string, stri
         i = i + 1;
     }
     req = req + "\r\n";
-    req + body
+    req.to_bytes() + body
 }
 
-// Lee del socket hasta que el servidor cierra, acumulando los trozos como bytes (M19.2: binario intacto).
-fn leer_todo(h: int) -> Result<bytes, string> {
+// Una lectura respetando el plazo TOTAL (monotónico; 0 = sin plazo): antes de cada lectura se
+// fija el timeout del socket a lo que RESTA (M56.4/M58.2 — el goteo no renueva el plazo).
+fn leer_con_plazo(h: int, plazo_fin: int) -> Result<bytes, string> {
+    if (plazo_fin > 0) {
+        let restante: int = plazo_fin - time.monotonic();
+        if (restante <= 0) {
+            return Result.Err("tiempo de espera de lectura agotado");
+        }
+        net.set_read_timeout(h, restante);
+    }
+    net.socket_read_bytes(h)
+}
+
+// Lee del socket hasta que el servidor cierra (o vence el plazo), acumulando bytes (binario intacto).
+fn leer_todo(h: int, plazo_fin: int) -> Result<bytes, string> {
     var acc: bytes = b"";
     var seguir: bool = true;
     var err: string = "";
     while (seguir) {
-        match (net.socket_read_bytes(h)) {
+        match (leer_con_plazo(h, plazo_fin)) {
             Result.Ok(trozo) => {
                 if (trozo.len() == 0) {
                     seguir = false;
@@ -277,6 +317,34 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                 },
                 Option.None => { },
             }
+            // M58.2: con Content-Length declarado (y sin chunked), verificar la longitud: menos
+            // octetos = respuesta truncada (el servidor cayó a mitad) → Err, no un cuerpo a
+            // medias en silencio; de más (basura tras el cierre) se recorta a lo declarado.
+            var fue_chunked: bool = false;
+            match (get(headers, "transfer-encoding")) {
+                Option.Some(te2) => {
+                    fue_chunked = te2.to_lower().contains("chunked");
+                },
+                Option.None => { },
+            }
+            if (!fue_chunked) {
+                match (get(headers, "content-length")) {
+                    Option.Some(cl) => {
+                        match (parse_int(cl)) {
+                            Option.Some(n) => {
+                                if (cuerpo_final.len() < n) {
+                                    return Result.Err("respuesta truncada: llegaron " + to_string(cuerpo_final.len()) + " de " + to_string(n) + " octetos");
+                                }
+                                if (cuerpo_final.len() > n) {
+                                    cuerpo_final = cuerpo_final.sub_bytes(0, n);
+                                }
+                            },
+                            Option.None => { },
+                        }
+                    },
+                    Option.None => { },
+                }
+            }
             // Content-Encoding: gzip → descomprimir el cuerpo (M20.10b, librería INFLATE).
             match (get(headers, "content-encoding")) {
                 Option.Some(ce) => {
@@ -323,31 +391,42 @@ fn conectar(u: Url) -> Result<int, string> {
 }
 
 /// Performs an HTTP/1.1 request with the given method, URL, and body (blocking network I/O).
-/// Supports http:// and https:// (TLS); uses "Connection: close" and reads until EOF.
-/// Err on invalid URL, connection failure, I/O error, or a malformed response.
+/// Supports http:// and https:// (TLS); uses "Connection: close" and reads until EOF, with a
+/// 30 s total read timeout. Err on invalid URL, connection failure, I/O error/timeout, or a
+/// malformed/truncated response.
 pub fn request(method: string, url: string, body: string) -> Result<Response, string> {
     request_with(method, url, body, Map.new())
 }
 
-// Como `request` pero con cabeceras extra (Authorization, Accept, Content-Type, …). Es la base de
-// un cliente robusto: método y cabeceras arbitrarios.
+// Como `request` pero con cabeceras extra (Authorization, Accept, Content-Type, …).
 /// Like `request` but with extra headers (Authorization, Accept, Content-Type, ...).
-/// Client headers (Host/Connection/Content-Length) are set first; extras are appended in key order.
-/// Err on invalid URL, connection failure, I/O error, or a malformed response.
+/// Client headers (Host/Connection/Content-Length/Accept-Encoding) are set first; extras are
+/// appended in key order. 30 s total read timeout.
 pub fn request_with(method: string, url: string, body: string, headers: Map<string, string>) -> Result<Response, string> {
+    request_bytes(method, url, body.to_bytes(), headers, 30000)
+}
+
+// La forma BASE (M58.2): cuerpo en bytes (subidas binarias; Content-Length en octetos) y plazo
+// total de lectura explícito en ms (<= 0 = sin plazo). Las demás formas delegan aquí.
+/// The base request form: raw `bytes` body (binary uploads; `Content-Length` counts octets) and
+/// an explicit total read-timeout in ms (`<= 0` = no timeout). `request`/`request_with` delegate
+/// here with a UTF-8 body and 30 s. Err on invalid URL, connect failure, I/O error/timeout, or a
+/// malformed/truncated response.
+pub fn request_bytes(method: string, url: string, body: bytes, headers: Map<string, string>, timeout_millis: int) -> Result<Response, string> {
     match (parse_url(url)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(u) => {
             match (conectar(u)) {
                 Result.Err(e) => Result.Err("no se pudo conectar: " + e),
                 Result.Ok(h) => {
-                    match (net.socket_write_bytes(h, build_request_h(method, u, body, headers).to_bytes())) {
+                    let plazo_fin: int = if (timeout_millis > 0) { time.monotonic() + timeout_millis } else { 0 };
+                    match (net.socket_write_bytes(h, build_request_h(method, u, body, headers))) {
                         Result.Err(e) => {
                             close(h);
                             Result.Err("error al enviar: " + e)
                         },
                         Result.Ok(_) => {
-                            let r = leer_todo(h);
+                            let r = leer_todo(h, plazo_fin);
                             close(h);
                             match (r) {
                                 Result.Err(e) => Result.Err("error al leer: " + e),
@@ -402,6 +481,8 @@ pub fn fetch_follow(url: string, max: int) -> Result<Response, string> {
 }
 
 // Resuelve una Location que puede ser absoluta (`http://…`) o relativa al host actual (`/otra`).
+// M58.2: una relativa SIN `/` inicial (rara; la RFC pide absolutas o absolute-path) se ancla a la
+// raíz — antes se concatenaba sin separador y salía una URL malformada.
 fn absolutizar(base: string, loc: string) -> string {
     if (loc.starts_with("http://") || loc.starts_with("https://")) {
         loc
@@ -410,7 +491,8 @@ fn absolutizar(base: string, loc: string) -> string {
             Result.Ok(u) => {
                 let esquema: string = if (u.tls) { "https://" } else { "http://" };
                 let puerto: string = ":" + to_string(u.port);
-                esquema + u.host + puerto + loc
+                let ruta: string = if (loc.starts_with("/")) { loc } else { "/" + loc };
+                esquema + u.host + puerto + ruta
             },
             Result.Err(_) => loc,
         }

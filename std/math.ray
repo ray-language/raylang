@@ -60,11 +60,13 @@ impl Signed for float {
 /// Absolute value of `x` (any `Signed` type: `int`, `float`, …). Keeps the numeric type.
 pub fn abs<T: Signed>(x: T) -> T { x.abs() }
 
+// M65.1: la comparación va invertida para que el EMPATE caiga en `a`, como promete la doc
+// (antes devolvía `b`; observable con un `impl Ord` de usuario cuyos "iguales" se distingan).
 /// The smaller of `a` and `b` (any `Ord` type: int/float/string/char). Ties return `a`.
-pub fn min<T: Ord>(a: T, b: T) -> T { if (a.less(b)) { a } else { b } }
+pub fn min<T: Ord>(a: T, b: T) -> T { if (b.less(a)) { b } else { a } }
 
 /// The larger of `a` and `b` (any `Ord` type). Ties return `a`.
-pub fn max<T: Ord>(a: T, b: T) -> T { if (b.less(a)) { a } else { b } }
+pub fn max<T: Ord>(a: T, b: T) -> T { if (a.less(b)) { b } else { a } }
 
 /// Absolute value of `x`.
 pub fn iabs(x: int) -> int {
@@ -109,6 +111,7 @@ pub fn lcm(a: int, b: int) -> int {
 }
 
 /// `base` raised to `exp` (with `exp >= 0`) by fast binary exponentiation. `exp < 0` → 0.
+/// A result beyond the `int` range traps (checked arithmetic), like `*` itself.
 pub fn ipow(base: int, exp: int) -> int {
     if (exp < 0) {
         0
@@ -120,8 +123,12 @@ pub fn ipow(base: int, exp: int) -> int {
             if (e % 2 == 1) {
                 result = result * b;
             }
-            b = b * b;
             e = e / 2;
+            // M65.1: solo cuadrar si quedan iteraciones — con el int checked, el cuadrado
+            // final innecesario trap-eaba con resultados que SÍ caben (ipow(2,40) por 2^64).
+            if (e > 0) {
+                b = b * b;
+            }
         }
         result
     }

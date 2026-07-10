@@ -7813,7 +7813,7 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 > totales IEEE (NaN/-inf/inf, sin traps), `round` ties-away-from-zero, `gcd`/`lcm` (divide
 > antes de multiplicar) / `is_prime`, `float_bits` total. Dos defectos reales + huecos.
 
-- **M65.1 — fixes de corrección**: (a) `ipow` — la exponenciación binaria hacía el cuadrado
+- **M65.1 — fixes de corrección COMPLETO**: (a) `ipow` — la exponenciación binaria hacía el cuadrado
   final `b = b*b` que ya no necesita; con el int checked eso trap-ea con resultados que CABEN
   (`ipow(2, 40)` = 1.1e12 reventaba por 2^64). Fix: solo cuadrar cuando quedan iteraciones.
   (b) `min`/`max` — la doc dice "Ties return `a`" pero el código devolvía `b` (observable con

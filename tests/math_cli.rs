@@ -51,6 +51,42 @@ fn std_math_envoltorios() {
     assert_eq!(o_in, o_vm, "ambos motores coinciden");
 }
 
+/// M65.1 — dos fixes de corrección: (a) `ipow` ya no trap-ea con resultados que caben (el
+/// cuadrado final innecesario desbordaba el int checked: ipow(2,40) reventaba por 2^64);
+/// (b) los empates de `min`/`max` devuelven `a`, como promete la doc (antes `b`; observable
+/// con un `impl Ord` de usuario).
+#[test]
+fn ipow_sin_trap_y_empates_min_max() {
+    let src = r#"import std/math;
+@derive(Eq, Show)
+struct P { orden: int, tag: string }
+impl Ord for P {
+    fn less(self, otro: P) -> bool { self.orden < otro.orden }
+}
+fn main() -> int {
+    print(math.ipow(2, 40));      // 1099511627776 (antes: trap)
+    print(math.ipow(2, 62));      // 4611686018427387904 (el mayor 2^n que cabe)
+    print(math.ipow(3, 5));       // 243
+    print(math.ipow(7, 0));       // 1
+    print(math.ipow(5, -1));      // 0 (contrato: exp < 0 → 0)
+    let a = P { orden: 1, tag: "a" };
+    let b = P { orden: 1, tag: "b" };
+    print(math.min(a, b).tag);    // a (empate → a)
+    print(math.max(a, b).tag);    // a (empate → a)
+    print(math.min(3, 8));        // 3 (no-empate intacto)
+    print(math.max(1.5, 9.0));    // 9
+    0
+}
+"#;
+    let esperado = "1099511627776\n4611686018427387904\n243\n1\n0\na\na\n3\n9\n";
+    let (o_in, c_in) = run("m65_ipow_in", src, false);
+    let (o_vm, c_vm) = run("m65_ipow_vm", src, true);
+    assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
+    assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
+    assert_eq!(o_in, esperado, "salida del intérprete");
+    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+}
+
 #[test]
 fn prefijo_global_ya_no_existe() {
     // M49.1a: la forma prefija global se retiró; `sqrt(x)` sin importar `std/math` es un error de tipos.

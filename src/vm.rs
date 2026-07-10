@@ -2359,6 +2359,14 @@ impl<'a> Vm<'a> {
                     HeapValue::Int(n) => self.push(HeapValue::Int(crate::builtins::random_int(n))),
                     _ => unreachable!("el checker garantiza un int"),
                 },
+                // M68.1: fija la semilla del PRNG (reproducibilidad).
+                OpCode::RandomSeed => match self.pop() {
+                    HeapValue::Int(n) => {
+                        crate::builtins::random_seed(n);
+                        self.push(HeapValue::Unit);
+                    }
+                    _ => unreachable!("el checker garantiza un int"),
+                },
 
                 // --- Structs (M3.2) ---
                 OpCode::MakeStruct(idx) => {

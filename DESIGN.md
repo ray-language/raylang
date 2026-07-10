@@ -7862,7 +7862,7 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 > de proceso (M:N seguro), below total, honestidad "no criptográfico" por doquier; el sesgo
 > de módulo (~n/2^64) es inmedible. Dos huecos: reproducibilidad y secretos.
 
-- **M68.1 — seed + kit**: primitivo `__random_seed(n)` (fija el estado del SplitMix64 —
+- **M68.1 — seed + kit COMPLETO**: primitivo `__random_seed(n)` (fija el estado del SplitMix64 —
   misma semilla, misma secuencia, en ambos motores comparten el PRNG del host) y, en raylang
   puro sobre `below` (cero opcodes): `between(lo, hi)` (ambos inclusive; `hi < lo` → `lo`),
   `choice(xs) -> Option<T>` (vacío → None) y `shuffle(xs)` (Fisher-Yates, **in place** por la

@@ -112,6 +112,12 @@ pub fn random_int(n: i64) -> i64 {
     (next_u64() % (n as u64)) as i64
 }
 
+/// M68.1: fija el estado del PRNG — misma semilla, misma secuencia (SplitMix64 es aritmética
+/// entera pura → estable entre plataformas y motores). Primitivo `__random_seed`.
+pub fn random_seed(n: i64) {
+    *rng().lock().expect("RNG no envenenado") = n as u64;
+}
+
 /// Error de tipado de un builtin: `(índice_del_arg, mensaje)`. El índice `None` señala un error
 /// general de la llamada (p. ej. aridad); `Some(i)` el argumento culpable (para ubicar el cursor).
 pub type BuiltinError = (Option<usize>, String);
@@ -2003,6 +2009,12 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__sleep", opcode: OpCode::Sleep, check: |a| {
         arity(a, 1, "__sleep", "")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__sleep espera un int (ms), no {}", a[0]))); }
+        Ok(Type::Unit)
+    } },
+    // M68.1: fija la semilla del PRNG (reproducibilidad; std/random.seed).
+    Builtin { name: "__random_seed", opcode: OpCode::RandomSeed, check: |a| {
+        arity(a, 1, "__random_seed", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__random_seed espera un int (la semilla), no {}", a[0]))); }
         Ok(Type::Unit)
     } },
     Builtin { name: "__random_int", opcode: OpCode::RandomInt, check: |a| {

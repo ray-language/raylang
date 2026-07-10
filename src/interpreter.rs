@@ -1696,6 +1696,14 @@ impl<'a> Interpreter<'a> {
                 Value::Int(n) => Value::Int(crate::builtins::random_int(*n)),
                 _ => unreachable!("el checker garantiza un int"),
             },
+            // M68.1: fija la semilla del PRNG (reproducibilidad).
+            "__random_seed" => match &values[0] {
+                Value::Int(n) => {
+                    crate::builtins::random_seed(*n);
+                    Value::Unit
+                }
+                _ => unreachable!("el checker garantiza un int"),
+            },
             _ => unreachable!("builtin desconocido"),
         }
     }

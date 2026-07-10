@@ -115,3 +115,44 @@ fn main() -> int {
         assert_eq!(out.trim(), "6", "las 6 caras salieron al menos una vez (vm={vm}): {out}");
     }
 }
+
+/// M68.1 — `seed` vuelve el PRNG reproducible (SplitMix64 es aritmética entera pura → la
+/// secuencia es estable entre plataformas y motores) y habilita el kit between/choice/shuffle
+/// con golden DETERMINISTA. Re-sembrar reproduce la secuencia exacta.
+#[test]
+fn seed_reproducible_y_kit() {
+    let src = r#"import std/random;
+fn join_ints(xs: [int]) -> string {
+    var out: [string] = [];
+    var i = 0;
+    while (i < xs.len()) { out.push(to_string(xs[i])); i = i + 1; }
+    join(out, ",")
+}
+fn main() -> int {
+    random.seed(42);
+    print(random.below(100));
+    print(random.below(100));
+    print(random.between(1, 6));
+    print(random.between(5, 5));
+    print(random.between(9, 3));
+    let xs = [1, 2, 3, 4, 5, 6, 7, 8];
+    random.shuffle(xs);
+    print(join_ints(xs));
+    var vacio: [int] = [];
+    match (random.choice(vacio)) {
+        Option.Some(v) => print(v),
+        Option.None => print("None ok"),
+    }
+    random.seed(42);
+    print(random.below(100));
+    0
+}
+"#;
+    let esperado = "13\n91\n1\n5\n9\n1,7,8,6,4,2,5,3\nNone ok\n13\n";
+    let (o_in, c_in) = run("m68_seed_in", src, false);
+    let (o_vm, c_vm) = run("m68_seed_vm", src, true);
+    assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
+    assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
+    assert_eq!(o_in, esperado, "secuencia determinista con seed(42)");
+    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+}

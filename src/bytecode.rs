@@ -462,6 +462,9 @@ pub enum OpCode {
     Random,
     /// Saca `n` (int); empuja un entero en `[0, n)` (`n<=0` → `0`). Builtin `random_int`.
     RandomInt,
+    /// M68.1: saca un `int` (la semilla) y fija el estado del PRNG; empuja unit. Primitivo
+    /// `__random_seed` (→ `random.seed`): misma semilla, misma secuencia (reproducibilidad).
+    RandomSeed,
 
     // --- Cliente TCP (M15.2) ---
     /// Saca `port` (int) y `host` (string); conecta y empuja un `[string]` etiquetado

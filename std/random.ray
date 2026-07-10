@@ -8,3 +8,35 @@ pub fn next() -> float { __random() }
 
 /// A pseudo-random integer in `[0, n)` (so `below(6)` is a fair d6 minus one). `n <= 0` returns `0`.
 pub fn below(n: int) -> int { __random_int(n) }
+
+// --- M68.1: reproducibilidad + el kit estándar sobre `below` (raylang puro, cero opcodes). ---
+
+/// Seeds the generator: the same seed yields the same sequence (reproducible simulations,
+/// shareable game seeds, deterministic tests). Without it, the seed comes from the clock.
+pub fn seed(n: int) {
+    __random_seed(n);
+}
+
+/// A pseudo-random integer in `[lo, hi]` (BOTH inclusive: `between(1, 6)` is a fair d6).
+/// `hi < lo` returns `lo`.
+pub fn between(lo: int, hi: int) -> int {
+    if (hi < lo) { lo } else { lo + below(hi - lo + 1) }
+}
+
+/// A uniformly random element of the array; `None` if it is empty.
+pub fn choice<T>(xs: [T]) -> Option<T> {
+    if (xs.len() == 0) { Option.None } else { Option.Some(xs[below(xs.len())]) }
+}
+
+/// Shuffles the array **in place** (Fisher-Yates; arrays have reference semantics, so the
+/// caller's array is reordered).
+pub fn shuffle<T>(xs: [T]) {
+    var i = xs.len() - 1;
+    while (i > 0) {
+        let j = below(i + 1);
+        let t = xs[i];
+        xs[i] = xs[j];
+        xs[j] = t;
+        i = i - 1;
+    }
+}

@@ -7806,3 +7806,20 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 - **M64.3 — menores DIFERIDOS a demanda**: validación de Kraft de los árboles (no crítica:
   un árbol sobresuscrito acaba en código inválido → `Err`, cubierto por M64.1), trie de
   HPACK reusable y crc32 con tabla (perf, no corrección). **M64 COMPLETO** (64.1 + 64.2).
+
+## 69. M65 — std/math de producción
+
+> Revisión jul 2026 (tras M64; clasificación en IDEAS §25). Verificado sano: dominios float
+> totales IEEE (NaN/-inf/inf, sin traps), `round` ties-away-from-zero, `gcd`/`lcm` (divide
+> antes de multiplicar) / `is_prime`, `float_bits` total. Dos defectos reales + huecos.
+
+- **M65.1 — fixes de corrección**: (a) `ipow` — la exponenciación binaria hacía el cuadrado
+  final `b = b*b` que ya no necesita; con el int checked eso trap-ea con resultados que CABEN
+  (`ipow(2, 40)` = 1.1e12 reventaba por 2^64). Fix: solo cuadrar cuando quedan iteraciones.
+  (b) `min`/`max` — la doc dice "Ties return `a`" pero el código devolvía `b` (observable con
+  `impl Ord` de usuario). Fix: comparación invertida (empate → `a`).
+- **M65.2 — trig inversa y compañía**: `asin`/`acos`/`atan`/`atan2`/`log2`/`trunc` como
+  builtins (fila en `BUILTINS` + opcode + impl por motor + envoltorio `__x` en std/math,
+  patrón M11.4). `atan2` es el hueco doloroso (ángulo desde coordenadas).
+- **M65.3 — menores**: `clamp<T: Ord>` genérica (retrocompatible) + documentar la frontera
+  del int checked (`factorial(n ≥ 21)` / `ipow` con resultado > 2^63-1 = trap).

@@ -833,6 +833,24 @@ que decodifica datos EXTERNOS (el gzip transparente del cliente HTTP, activado e
 
 ---
 
+## 25. std/math (revisión jul 2026) — M65, PLAN
+
+Revisión en frío (detalle en DESIGN §69). Lo verificado sano: dominios float totales IEEE
+(sqrt(-1)→NaN, ln(0)→-inf, sin traps), `round` ties-away-from-zero como documenta, `gcd`/`lcm`
+(divide antes de multiplicar)/`is_prime` correctos, `float_bits` total.
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **`ipow` revienta con resultados que CABEN**: la exponenciación binaria hace el cuadrado final `b = b*b` que ya no necesita; con el int checked, `ipow(2, 40)` (=1.1e12) trap por 2^64 | Cualquier potencia con base²^⌈log e⌉ > 2^63 aunque el resultado quepa | **65.1**: saltar el cuadrado cuando `e` llega a 1 |
+| **`min`/`max` contradicen su doc en empates**: doc "Ties return `a`", código devuelve `b` (observable con tipos de usuario vía `impl Ord`) | Sorpresa semántica; `max` no-estable | **65.1**: invertir la comparación (empate → `a`) |
+| **Falta trig inversa y compañía**: sin `asin`/`acos`/`atan`/**`atan2`** (no se puede recuperar un ángulo de coordenadas), `log2`, `trunc` | Hueco de superficie para geometría/gráficos | **65.2**: 6 builtins mecánicos (fila en BUILTINS + opcode + impl por motor, patrón M11.4) |
+| `clamp` solo-int (min/max ya genéricas `Ord`) | Asimetría menor | **65.3**: `clamp<T: Ord>` (retrocompatible) + docs de frontera (`factorial(≥21)`/`ipow` desbordante = trap del int checked) |
+
+Aparte (ya fichado en §21): la posición del trap de `factorial`/`ipow` apunta dentro de
+std/math, no al llamador — diferido general de posición-del-llamador.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

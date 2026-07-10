@@ -7367,12 +7367,23 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
 
 **Sub-fases** (orden por conveniencia; cada una committeable):
 
-- **M56.1 — frontera de seguridad, parte librería** (cero runtime): límites de cabeceras
-  (~64 KiB) y de cuerpo (por defecto sensato, configurable), escaneo incremental del fin de
-  cabeceras (O(n)), cuerpo truncado → `Err`, accept-loop resiliente (log-y-seguir en errores
-  transitorios), tope de conexiones simultáneas vía **canal acotado como semáforo** (`channel(n)`
-  de M12.2: `send` antes de spawn cede al llenarse → backpressure gratis, sin estado compartido
-  — compatible con los heaps aislados de M38), `status_text` completo.
+- **M56.1 — frontera de seguridad, parte librería** ✅ **COMPLETO** (cero runtime): `struct
+  Limits { max_header_bytes, max_body_bytes, max_conns }` + `default_limits()` (64 KiB / 10 MiB /
+  1024); las firmas existentes no cambian (usan los defaults) y las variantes
+  `serve_limits`/`serve_raw_limits`/`read_request_limits` los configuran. Cabeceras acotadas
+  (el tope se comprueba al acumular Y sobre el separador encontrado — sin eso el límite
+  dependería del troceo de la red), Content-Length acotado ANTES de leer el cuerpo, cuerpo
+  truncado por el peer → `Err` (antes: `Ok` a medias) y recortado a `n` exacto, escaneo
+  incremental del fin de cabeceras (O(n), reanuda 3 octetos atrás por si el `\r\n\r\n` queda
+  partido entre trozos), petición ilegible → **400 best-effort** antes de cerrar, accept-loop
+  resiliente (log-y-seguir; solo 100 errores seguidos rinden), tope de conexiones simultáneas
+  vía **canal acotado como semáforo** (`Channel.bounded(n)` de M12.2: `send` antes de spawn cede
+  al llenarse → backpressure gratis, sin estado compartido — compatible con los heaps aislados de
+  M38; `max_conns <= 0` = sin tope; el token se fuga si el handler panica → lo cierra M56.5),
+  `status_text` completo (3xx/401/403/405/413/429/431/5xx). En `packages/net/webserver.ray` y su
+  espejo `examples/web/webserver.ray`; test `servidor_aplica_limites_de_seguridad` (4 casos) +
+  verificado en vivo sobre el demo SSR (cabecera de 70 KiB → 400, Content-Length gigante → 400
+  rechazado en la declaración, el servidor sigue vivo).
 - **M56.2 — query string + percent-decoding**: `Request` gana `query` (y `path` queda SIN query
   — cambio semántico deliberado; arregla el enrutado del framework). Decode `%XX` del path.
   Toca framework/demos/tests (mecánico).

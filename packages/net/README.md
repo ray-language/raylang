@@ -75,7 +75,9 @@ fn main() -> int {
 - **`net/postgres`** — cliente PostgreSQL (protocolo de frontend/backend). Sobre `net/scram`.
 - **`net/oauth2`** — flujo OAuth2 (client credentials, authorization code). Sobre `net/http` + `std/json`
   + `std/url`.
-- **`net/webserver`** — servidor HTTP async + SSE (sobre el scheduler de fibras). Hoja.
+- **`net/webserver`** — servidor HTTP async + SSE (sobre el scheduler de fibras). Hoja. Con límites
+  de seguridad por defecto (M56.1: cabeceras 64 KiB, cuerpo 10 MiB, 1024 conexiones simultáneas;
+  configurables con `serve_limits`/`serve_raw_limits`/`read_request_limits` + `Limits`).
 
 ### Observabilidad
 

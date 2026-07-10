@@ -196,6 +196,85 @@ fn main() -> int {
 }
 "#;
 
+/// Como `pedir`, pero cierra el lado de escritura tras enviar (el servidor ve EOF) y lee la respuesta.
+fn pedir_con_eof(port: u16, req: &[u8]) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    stream.write_all(req).expect("envía");
+    stream.shutdown(std::net::Shutdown::Write).expect("shutdown write");
+    let mut resp = Vec::new();
+    stream.read_to_end(&mut resp).expect("lee respuesta");
+    String::from_utf8_lossy(&resp).into_owned()
+}
+
+// Driver: servidor con límites PEQUEÑOS (M56.1) — 256 octetos de cabeceras, 16 de cuerpo. Una
+// petición que los viola (o que el peer no completa) es Err → responde 400 y cierra.
+const SRV_LIMITES: &str = r#"
+import webserver;
+import std/net;
+fn manejar(conn: int) {
+    let lim: webserver.Limits = webserver.Limits { max_header_bytes: 256, max_body_bytes: 16, max_conns: 8 };
+    match (webserver.read_request_limits(conn, lim)) {
+        Result.Ok(req) => {
+            match (webserver.send_response(conn, webserver.ok("ok " + to_string(req.body.len())))) {
+                Result.Ok(_) => {}, Result.Err(e) => eprint(e),
+            }
+        },
+        Result.Err(e) => {
+            eprint(e);
+            match (webserver.send_response(conn, webserver.text(400, "Bad Request"))) {
+                Result.Ok(_) => {}, Result.Err(e2) => eprint(e2),
+            }
+        },
+    }
+    close(conn);
+}
+fn main() -> int {
+    match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Ok(srv) => {
+            print(net.local_port(srv));
+            scope(fn() {
+                var i: int = 0;
+                while (i < 4) {
+                    match (net.tcp_accept(srv)) {
+                        Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
+                        Result.Err(e) => { eprint(e); i = 4; },
+                    }
+                    i = i + 1;
+                }
+            });
+            close(srv);
+            0
+        },
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+"#;
+
+#[test]
+fn servidor_aplica_limites_de_seguridad() {
+    let (mut child, port) = lanzar_servidor("limites", SRV_LIMITES);
+
+    // (a) Una petición normal dentro de los límites responde 200.
+    let ok = pedir(port, "POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc");
+    assert!(ok.contains("200 OK") && ok.contains("ok 3"), "esperaba 200 'ok 3', got: {ok}");
+
+    // (b) Cabeceras que exceden el tope (256) → 400, sin esperar a que el cliente termine.
+    let gigante = format!("GET / HTTP/1.1\r\nX-Relleno: {}\r\n\r\n", "a".repeat(400));
+    let hd = pedir(port, &gigante);
+    assert!(hd.contains("400 Bad Request"), "esperaba 400 por cabeceras gigantes, got: {hd}");
+
+    // (c) Content-Length declarado mayor que el tope (16) → 400 ANTES de leer el cuerpo.
+    let cl = pedir(port, "POST / HTTP/1.1\r\nContent-Length: 999\r\n\r\n");
+    assert!(cl.contains("400 Bad Request"), "esperaba 400 por cuerpo declarado gigante, got: {cl}");
+
+    // (d) Cuerpo truncado (declara 10, envía 3 y cierra) → 400, no un Ok silencioso a medias.
+    let tr = pedir_con_eof(port, b"POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc");
+    assert!(tr.contains("400 Bad Request"), "esperaba 400 por cuerpo incompleto, got: {tr}");
+
+    let _ = child.wait();
+}
+
 #[test]
 fn servidor_eco_cuerpo_binario_intacto() {
     let (mut child, port) = lanzar_servidor("ecobin", SRV_ECO_BIN);

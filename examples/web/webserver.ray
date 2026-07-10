@@ -17,6 +17,18 @@ pub struct Request {
     body: bytes,
 }
 
+// M56.1: límites de la frontera de seguridad (cabeceras/cuerpo/conexiones simultáneas).
+// `serve`/`serve_raw` usan `default_limits()`; las variantes `*_limits` los configuran.
+pub struct Limits {
+    max_header_bytes: int,
+    max_body_bytes: int,
+    max_conns: int,
+}
+
+pub fn default_limits() -> Limits {
+    Limits { max_header_bytes: 65536, max_body_bytes: 10485760, max_conns: 1024 }
+}
+
 pub struct Response {
     status: int,
     headers: Map<string, string>,
@@ -54,16 +66,45 @@ pub fn request_text(req: Request) -> Result<string, string> {
     from_utf8(req.body)
 }
 
-// La frase de estado para los códigos comunes (HTTP la exige tras el número).
+// La frase de estado para los códigos comunes (HTTP la exige tras el número). M56.1: cubre
+// también redirecciones (3xx), auth (401/403), 405/413/429/431 y los 5xx de gateway.
 fn status_text(code: int) -> string {
-    if (code == 200) { "OK" } else if (code == 201) { "Created" } else if (code == 204) { "No Content" } else if (code == 400) { "Bad Request" } else if (code == 404) { "Not Found" } else if (code == 500) { "Internal Server Error" } else { "Status" }
+    if (code == 200) { "OK" }
+    else if (code == 201) { "Created" }
+    else if (code == 204) { "No Content" }
+    else if (code == 301) { "Moved Permanently" }
+    else if (code == 302) { "Found" }
+    else if (code == 303) { "See Other" }
+    else if (code == 304) { "Not Modified" }
+    else if (code == 307) { "Temporary Redirect" }
+    else if (code == 308) { "Permanent Redirect" }
+    else if (code == 400) { "Bad Request" }
+    else if (code == 401) { "Unauthorized" }
+    else if (code == 403) { "Forbidden" }
+    else if (code == 404) { "Not Found" }
+    else if (code == 405) { "Method Not Allowed" }
+    else if (code == 409) { "Conflict" }
+    else if (code == 413) { "Content Too Large" }
+    else if (code == 415) { "Unsupported Media Type" }
+    else if (code == 422) { "Unprocessable Content" }
+    else if (code == 429) { "Too Many Requests" }
+    else if (code == 431) { "Request Header Fields Too Large" }
+    else if (code == 500) { "Internal Server Error" }
+    else if (code == 501) { "Not Implemented" }
+    else if (code == 502) { "Bad Gateway" }
+    else if (code == 503) { "Service Unavailable" }
+    else if (code == 504) { "Gateway Timeout" }
+    else { "Status" }
 }
 
 // --- Lectura de la petición ---
-// El índice del primer "\r\n\r\n" (fin de cabeceras) en bytes, o -1. Escanea por octetos (CR=13, LF=10):
-// no se puede usar index_of (es de string) porque el cuerpo binario rompería from_utf8 del buffer entero.
-fn find_fin_cabeceras(b: bytes) -> int {
-    var i: int = 0;
+// El índice del primer "\r\n\r\n" (fin de cabeceras) en bytes desde `desde`, o -1. Escanea por
+// octetos (CR=13, LF=10): no se puede usar index_of (es de string) porque el cuerpo binario
+// rompería from_utf8 del buffer entero. `desde` reanuda el escaneo donde quedó (M56.1: sin él,
+// re-escanear todo el acumulado por trozo es O(n²)).
+fn find_fin_cabeceras(b: bytes, desde: int) -> int {
+    var i: int = desde;
+    if (i < 0) { i = 0; }
     while (i + 3 < b.len()) {
         if (b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10) {
             return i;
@@ -77,15 +118,27 @@ fn find_fin_cabeceras(b: bytes) -> int {
 // decodifica SOLO las cabeceras como texto para parsearlas, y —si hay Content-Length— sigue leyendo
 // hasta completar el cuerpo (bytes crudos, octetos). M19.2: cuerpo binario correcto.
 pub fn read_request(conn: int) -> Result<Request, string> {
+    read_request_limits(conn, default_limits())
+}
+
+// M56.1: la versión con límites (cabeceras acotadas, Content-Length acotado ANTES de leer el
+// cuerpo, y cuerpo que el peer no completa = Err, no un Ok truncado).
+pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string> {
     var acc: bytes = b"";
     var sep: int = 0 - 1;
+    var desde: int = 0;
     var seguir: bool = true;
     while (seguir) {
-        let s: int = find_fin_cabeceras(acc);
+        let s: int = find_fin_cabeceras(acc, desde);
         if (s >= 0) {
             sep = s;
             seguir = false;
         } else {
+            // Reanudar 3 octetos atrás: el "\r\n\r\n" puede quedar partido entre dos trozos.
+            desde = acc.len() - 3;
+            if (acc.len() > limits.max_header_bytes) {
+                return Result.Err("cabeceras demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)");
+            }
             match (net.socket_read_bytes(conn)) {
                 Result.Ok(trozo) => {
                     if (trozo.len() == 0) {
@@ -102,6 +155,11 @@ pub fn read_request(conn: int) -> Result<Request, string> {
     }
     if (sep < 0) {
         return Result.Err("petición incompleta (sin fin de cabeceras)");
+    }
+    // El tope también sobre el separador encontrado: sin esto, unas cabeceras que llegan en un
+    // solo trozo grande pasarían y el límite dependería del troceo de la red (no determinista).
+    if (sep + 4 > limits.max_header_bytes) {
+        return Result.Err("cabeceras demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)");
     }
 
     var body: bytes = acc.sub_bytes(sep + 4, acc.len());
@@ -134,24 +192,29 @@ pub fn read_request(conn: int) -> Result<Request, string> {
             }
 
             // Cuerpo: si hay Content-Length (octetos), completar la lectura hasta esa longitud.
+            // M56.1: tope contra lo declarado, cierre prematuro = Err, y recorte a n.
             match (get(headers, "content-length")) {
                 Option.Some(cl) => {
                     match (parse_int(cl)) {
                         Option.Some(n) => {
-                            var faltan: bool = true;
-                            while (faltan && body.len() < n) {
+                            if (n > limits.max_body_bytes) {
+                                return Result.Err("cuerpo demasiado grande (Content-Length " + to_string(n) + " > " + to_string(limits.max_body_bytes) + ")");
+                            }
+                            while (body.len() < n) {
                                 match (net.socket_read_bytes(conn)) {
                                     Result.Ok(trozo) => {
                                         if (trozo.len() == 0) {
-                                            faltan = false;
-                                        } else {
-                                            body = body + trozo;
+                                            return Result.Err("cuerpo incompleto: la conexión se cerró con " + to_string(body.len()) + " de " + to_string(n) + " octetos");
                                         }
+                                        body = body + trozo;
                                     },
                                     Result.Err(e) => {
                                         return Result.Err("error al leer el cuerpo: " + e);
                                     },
                                 }
+                            }
+                            if (body.len() > n) {
+                                body = body.sub_bytes(0, n);
                             }
                         },
                         Option.None => { },
@@ -206,13 +269,18 @@ pub fn sse_event(conn: int, data: string) -> Result<int, string> {
 // --- El bucle del servidor (concurrente: una fibra por conexión) ---
 // Atiende UNA conexión: lee la petición y se la pasa al handler (que controla la conexión). Cierra al
 // terminar. Lo usa serve_raw; cada conexión corre en su propia fibra.
-fn atender(conn: int, handler: fn(Request, int)) {
-    match (read_request(conn)) {
+// M56.1: una petición ilegible responde 400 antes de cerrar (best effort, sin filtrar el detalle).
+fn atender(conn: int, handler: fn(Request, int), limits: Limits) {
+    match (read_request_limits(conn, limits)) {
         Result.Ok(req) => {
             handler(req, conn);
         },
         Result.Err(e) => {
             eprint("petición: " + e);
+            match (send_response(conn, text(400, "Bad Request"))) {
+                Result.Ok(_) => { },
+                Result.Err(_) => { },
+            }
         },
     }
     close(conn);
@@ -221,19 +289,42 @@ fn atender(conn: int, handler: fn(Request, int)) {
 // Servidor de bajo nivel: el handler recibe la petición Y la conexión (para responder o hacer streaming
 // SSE). Bucle infinito; cada conexión en su fibra. **Solo VM.**
 pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<int, string> {
+    serve_raw_limits(host, port, default_limits(), handler)
+}
+
+// M56.1: la versión con límites. Tope de conexiones simultáneas vía un canal acotado como
+// SEMÁFORO (M12.2: `send` cede la fibra si está lleno → backpressure; `recv` al terminar saca el
+// token), y accept RESILIENTE (un error transitorio se loguea y se sigue; solo 100 errores
+// seguidos sin ningún accept exitoso rinden el bucle).
+pub fn serve_raw_limits(host: string, port: int, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
     match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
             print("escuchando en el puerto " + to_string(net.local_port(srv)));
+            let acotado: bool = limits.max_conns > 0;
+            let sem: Channel<int> = if (acotado) { Channel.bounded(limits.max_conns) } else { Channel.new() };
+            var errores: int = 0;
             var seguir: bool = true;
             while (seguir) {
                 match (net.tcp_accept(srv)) {
                     Result.Ok(conn) => {
-                        spawn(fn() { atender(conn, handler) });
+                        errores = 0;
+                        if (acotado) {
+                            send(sem, 1);
+                        }
+                        spawn(fn() {
+                            atender(conn, handler, limits);
+                            if (acotado) {
+                                recv(sem);
+                            }
+                        });
                     },
                     Result.Err(e) => {
                         eprint("aceptar: " + e);
-                        seguir = false;
+                        errores = errores + 1;
+                        if (errores >= 100) {
+                            seguir = false;
+                        }
                     },
                 }
             }
@@ -246,7 +337,11 @@ pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<i
 // Servidor ergonómico: el handler es petición → respuesta; serve envía la respuesta y cierra. Se define
 // sobre serve_raw. **Solo VM.**
 pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Result<int, string> {
-    serve_raw(host, port, fn(req: Request, conn: int) {
+    serve_limits(host, port, default_limits(), handler)
+}
+
+pub fn serve_limits(host: string, port: int, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
+    serve_raw_limits(host, port, limits, fn(req: Request, conn: int) {
         match (send_response(conn, handler(req))) {
             Result.Ok(_) => { },
             Result.Err(e) => {

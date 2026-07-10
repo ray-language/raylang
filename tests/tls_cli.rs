@@ -195,3 +195,93 @@ fn echo_server_wss_handshake_y_tramas() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+// --- M56.3: servidor HTTPS (`serve_tls` de webserver.ray) — `examples/web/https_server_demo.ray` ---
+
+/// Copia `webserver.ray` + el demo HTTPS (puerto 8443 → 0, efímero) a un temporal y lo lanza con el
+/// cert/clave de prueba; devuelve el proceso + el puerto ("escuchando en el puerto N").
+fn lanzar_https_server() -> (Child, u16) {
+    let raiz = env!("CARGO_MANIFEST_DIR");
+    let mut dir = std::env::temp_dir();
+    dir.push("ray_https_srv");
+    std::fs::create_dir_all(&dir).expect("crea dir");
+    std::fs::copy(format!("{raiz}/examples/web/webserver.ray"), dir.join("webserver.ray")).expect("copia webserver");
+    let demo = std::fs::read_to_string(format!("{raiz}/examples/web/https_server_demo.ray")).expect("lee demo");
+    std::fs::write(dir.join("main.ray"), demo.replace("8443", "0")).expect("escribe demo");
+
+    let cert = format!("{raiz}/tests/fixtures/tls_cert.pem");
+    let key = format!("{raiz}/tests/fixtures/tls_key.pem");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("--vm")
+        .arg(dir.join("main.ray"))
+        .arg(&cert)
+        .arg(&key)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("lanza https_server_demo");
+    let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
+    let mut linea = String::new();
+    reader.read_line(&mut linea).expect("lee el puerto");
+    let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("no se pudo leer el puerto de: {linea:?}"));
+    (child, port)
+}
+
+/// Lee una respuesta HTTP del stream TLS hasta tener las cabeceras + `esperado` en el cuerpo (o EOF).
+fn leer_respuesta_tls(tls: &mut rustls::Stream<ClientConnection, TcpStream>, esperado: &str) -> String {
+    let mut resp = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        match tls.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                resp.extend_from_slice(&buf[..n]);
+                let s = String::from_utf8_lossy(&resp);
+                if s.contains("\r\n\r\n") && s.contains(esperado) {
+                    break;
+                }
+            }
+            // El servidor cierra el socket tras responder (puede no enviar close_notify): lo ya leído vale.
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&resp).into_owned()
+}
+
+#[test]
+fn servidor_https_sirve_sobre_tls() {
+    let (mut child, port) = lanzar_https_server();
+
+    // Petición HTTPS normal (con query: compone con M56.2 — la ruta casa igual).
+    let (mut conn, mut sock) = cliente_tls(port);
+    let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+    tls.write_all(b"GET /hola?x=1 HTTP/1.1\r\nHost: localhost\r\n\r\n").expect("envía petición");
+    let resp = leer_respuesta_tls(&mut tls, "hola https");
+    assert!(resp.contains("200 OK"), "esperaba 200 OK, got: {resp}");
+    assert!(resp.contains("hola https"), "esperaba el cuerpo, got: {resp}");
+
+    // Segunda conexión: 404 (el servidor sigue vivo tras la primera).
+    let (mut conn2, mut sock2) = cliente_tls(port);
+    let mut tls2 = rustls::Stream::new(&mut conn2, &mut sock2);
+    tls2.write_all(b"GET /nope HTTP/1.1\r\nHost: localhost\r\n\r\n").expect("envía 2ª");
+    let resp2 = leer_respuesta_tls(&mut tls2, "Not Found");
+    assert!(resp2.contains("404 Not Found"), "esperaba 404, got: {resp2}");
+
+    // Un cliente que habla HTTP PLANO contra el puerto TLS falla su conexión sin tumbar el servidor.
+    {
+        let mut plano = TcpStream::connect(("127.0.0.1", port)).expect("conecta plano");
+        plano.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        let _ = plano.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        let mut basura = Vec::new();
+        let _ = plano.read_to_end(&mut basura); // el handshake TLS falla → el servidor cierra
+    }
+    let (mut conn3, mut sock3) = cliente_tls(port);
+    let mut tls3 = rustls::Stream::new(&mut conn3, &mut sock3);
+    tls3.write_all(b"GET /hola HTTP/1.1\r\nHost: localhost\r\n\r\n").expect("envía 3ª");
+    let resp3 = leer_respuesta_tls(&mut tls3, "hola https");
+    assert!(resp3.contains("200 OK"), "el servidor debe seguir vivo tras un cliente no-TLS, got: {resp3}");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}

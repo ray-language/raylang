@@ -1,0 +1,48 @@
+// Demo de servidor HTTPS (M56.3): el mismo webserver de M19.1, servido sobre TLS. `serve_tls`
+// acepta cada conexión y la sube a TLS de servidor (`net.tls_accept`, M19.4b) antes de leer la
+// petición; el handler es el mismo petición→respuesta de `serve`. **Solo VM.**
+//
+// Ejecútalo (con un certificado y clave en PEM; los de prueba están en tests/fixtures/):
+//   cargo run -- --vm examples/web/https_server_demo.ray tests/fixtures/tls_cert.pem tests/fixtures/tls_key.pem
+// y pruébalo (-k: el cert de prueba es de una CA local):
+//   curl -k https://localhost:8443/hola
+import webserver;
+import std/fs;
+
+fn pagina(req: webserver.Request) -> webserver.Response {
+    if (req.path == "/hola") {
+        return webserver.ok("hola https");
+    }
+    webserver.not_found()
+}
+
+fn main() -> int {
+    let a = args();
+    if (a.len() < 2) {
+        eprint("uso: https_server_demo <cert.pem> <clave.pem>");
+        return 1;
+    }
+    var cert = "";
+    match (fs.read_file(a[0])) {
+        Result.Ok(c) => { cert = c; },
+        Result.Err(e) => {
+            eprint("certificado: " + e);
+            return 1;
+        },
+    }
+    var key = "";
+    match (fs.read_file(a[1])) {
+        Result.Ok(k) => { key = k; },
+        Result.Err(e) => {
+            eprint("clave: " + e);
+            return 1;
+        },
+    }
+    match (webserver.serve_tls("127.0.0.1", 8443, cert, key, pagina)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => {
+            eprint("servidor: " + e);
+            1
+        },
+    }
+}

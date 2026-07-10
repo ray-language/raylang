@@ -7396,8 +7396,17 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   no existe). Demo `/saluda?nombre=Ada` en `framework_demo.ray`. Tests: enrutado con `?` +
   decodificación de path/query en `webserver_cli` y `framework_cli`; verificado en vivo sobre el
   SSR (`?utm=x` ya no contamina el último segmento; `/lang/ru%73t` decodifica).
-- **M56.3 — `serve_tls(host, port, cert, key, handler)`**: el accept-loop con `net.tls_accept`
-  antes de leer (patrón de `wss_echo.ray`); reusa TODO lo demás. Librería pura.
+- **M56.3 — HTTPS de servidor** ✅ **COMPLETO** (librería pura): `serve_tls`/`serve_tls_limits`/
+  `serve_raw_tls`/`serve_raw_tls_limits` (`cert`/`key` = PEM en contenido, como `net.tls_accept`).
+  Pieza central: el accept-loop se factoriza en **`bucle_servidor(host, port, limits, preparar,
+  handler)`** donde `preparar: fn(int) -> Result<int,string>` transforma la conexión aceptada
+  ANTES de atenderla — identidad para HTTP, `net.tls_accept` para HTTPS — y corre **dentro de la
+  fibra de la conexión** (un handshake lento no frena el accept; un cliente que habla HTTP plano
+  contra el puerto TLS falla SU conexión, logueada, sin tocar a las demás). `responder(handler)`
+  factoriza el adaptador petición→respuesta. Compone con M56.1 (límites/semáforo) y M56.2 (query)
+  sin código extra. Demo `examples/web/https_server_demo.ray` (`curl -k https://localhost:8443/hola`);
+  test `servidor_https_sirve_sobre_tls` en `tls_cli.rs` (petición con query sobre TLS, 404,
+  y resiliencia ante un cliente no-TLS) con los fixtures de CA locales.
 - **M56.4 — timeouts** (único toque de runtime real): deadline en `io_parked` + timeout en
   `poll::wait` para poder despertar una fibra aparcada en un fd que nunca llega — habilita
   timeout de lectura (anti-slowloris) y de handler. Diseño fino al llegar (¿builtin

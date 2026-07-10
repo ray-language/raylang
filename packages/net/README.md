@@ -79,7 +79,8 @@ fn main() -> int {
   Con límites de seguridad por defecto (M56.1: cabeceras 64 KiB, cuerpo 10 MiB, 1024 conexiones
   simultáneas; configurables con `serve_limits`/`serve_raw_limits`/`read_request_limits` + `Limits`).
   El `path` de la petición llega percent-decodificado y sin query string (M56.2); la query va aparte
-  (`req.query` cruda, `query_params(req)` parseada).
+  (`req.query` cruda, `query_params(req)` parseada). HTTPS con `serve_tls`/`serve_raw_tls[_limits]`
+  (M56.3: cert/clave en PEM; upgrade TLS por conexión, en su fibra).
 
 ### Observabilidad
 

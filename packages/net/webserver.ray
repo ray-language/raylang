@@ -383,6 +383,14 @@ pub fn serve_raw(host: string, port: int, handler: fn(Request, int)) -> Result<i
 /// and caps simultaneous connections (accept pauses while at the cap; `max_conns <= 0` = unbounded).
 /// Transient accept errors are logged and retried; only persistent failure stops the server.
 pub fn serve_raw_limits(host: string, port: int, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
+    // TCP plano: la conexión aceptada se atiende tal cual (preparar = identidad).
+    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, handler)
+}
+
+// El bucle de accept compartido por TCP plano y TLS (M56.3). `preparar` transforma la conexión
+// recién aceptada antes de atenderla (identidad para HTTP; `net.tls_accept` para HTTPS) y corre
+// DENTRO de la fibra de la conexión: un handshake TLS lento no frena el accept de las demás.
+fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> Result<int, string>, handler: fn(Request, int)) -> Result<int, string> {
     match (net.tcp_listen(host, port)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(srv) => {
@@ -399,7 +407,15 @@ pub fn serve_raw_limits(host: string, port: int, limits: Limits, handler: fn(Req
                             send(sem, 1);
                         }
                         spawn(fn() {
-                            atender(conn, handler, limits);
+                            match (preparar(conn)) {
+                                Result.Ok(c) => {
+                                    atender(c, handler, limits);
+                                },
+                                Result.Err(e) => {
+                                    eprint("conexión: " + e);
+                                    close(conn);
+                                },
+                            }
                             if (acotado) {
                                 recv(sem);
                             }
@@ -431,12 +447,48 @@ pub fn serve(host: string, port: int, handler: fn(Request) -> Response) -> Resul
 
 /// Like `serve`, with explicit safety limits (see `Limits`/`serve_raw_limits`).
 pub fn serve_limits(host: string, port: int, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
-    serve_raw_limits(host, port, limits, fn(req: Request, conn: int) {
+    serve_raw_limits(host, port, limits, responder(handler))
+}
+
+// Adapta un handler petición→respuesta al de bajo nivel (enviar la respuesta y loguear el fallo).
+fn responder(handler: fn(Request) -> Response) -> fn(Request, int) {
+    fn(req: Request, conn: int) {
         match (send_response(conn, handler(req))) {
             Result.Ok(_) => { },
             Result.Err(e) => {
                 eprint("respuesta: " + e);
             },
         }
-    })
+    }
+}
+
+// --- HTTPS (M56.3): el mismo servidor sobre TLS ---
+// Cierra el hueco "tls_accept existe pero serve_raw no deja insertarlo": el upgrade TLS es el
+// paso `preparar` del bucle compartido, dentro de la fibra de cada conexión. `cert`/`key` son los
+// PEM (contenido, no ruta), como `net.tls_accept`. El handshake real ocurre en la primera I/O
+// (cede al scheduler, M19.4b); un cliente que habla HTTP plano contra el puerto TLS falla su
+// conexión con error logueado, sin tocar a las demás.
+/// HTTPS server: like `serve`, but each accepted connection is upgraded to server-side TLS with
+/// the given PEM certificate chain and private key (contents, not paths) before reading the
+/// request. Uses `default_limits()`. Blocks forever; VM only.
+pub fn serve_tls(host: string, port: int, cert: string, key: string, handler: fn(Request) -> Response) -> Result<int, string> {
+    serve_tls_limits(host, port, cert, key, default_limits(), handler)
+}
+
+/// Like `serve_tls`, with explicit safety limits (see `Limits`).
+pub fn serve_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request) -> Response) -> Result<int, string> {
+    serve_raw_tls_limits(host, port, cert, key, limits, responder(handler))
+}
+
+/// Low-level HTTPS server: like `serve_raw` over TLS — the handler receives the request AND the
+/// (TLS) connection, so it can stream (SSE over HTTPS). Uses `default_limits()`. VM only.
+pub fn serve_raw_tls(host: string, port: int, cert: string, key: string, handler: fn(Request, int)) -> Result<int, string> {
+    serve_raw_tls_limits(host, port, cert, key, default_limits(), handler)
+}
+
+/// Like `serve_raw_tls`, with explicit safety limits (see `Limits`).
+pub fn serve_raw_tls_limits(host: string, port: int, cert: string, key: string, limits: Limits, handler: fn(Request, int)) -> Result<int, string> {
+    bucle_servidor(host, port, limits, fn(c: int) -> Result<int, string> {
+        net.tls_accept(c, cert, key)
+    }, handler)
 }

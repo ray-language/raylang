@@ -36,6 +36,10 @@ fibra por conexión. La librería ofrece dos entradas:
 - `serve_raw(host, port, handler)` con `handler: fn(Request, int)` — el handler recibe la petición **y la
   conexión**, para controlarla él mismo. `serve` se define sobre `serve_raw`.
 
+Ambas tienen su gemela **HTTPS** (M56.3): `serve_tls`/`serve_raw_tls(host, port, cert, key, handler)`,
+con el certificado y la clave en PEM — cada conexión aceptada se sube a TLS (`net.tls_accept`) en su
+propia fibra antes de leer la petición.
+
 ¿Por qué la versión "cruda"? Por SSE.
 
 ## SSE: HTTP que no cierra

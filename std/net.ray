@@ -159,3 +159,13 @@ pub fn tcp_accept(listener: int) -> Result<int, string> {
 pub fn local_port(h: int) -> int {
     __local_port(h)
 }
+
+// M56.4: timeout de lectura. Fija cuánto puede esperar una lectura del socket antes de fallar con
+// "tiempo de espera de lectura agotado" (anti-slowloris del webserver). En la VM lo aplica el
+// scheduler (la fibra aparcada despierta al vencer); en el intérprete, el SO_RCVTIMEO del SO.
+/// Sets (ms > 0) or clears (ms <= 0) the read timeout of socket `h`: a read that waits longer
+/// fails with "tiempo de espera de lectura agotado". Applies to any blocking wait on the handle
+/// (TCP/TLS reads; also accept/UDP receive). Total: non-socket handles are ignored.
+pub fn set_read_timeout(h: int, ms: int) {
+    __socket_set_read_timeout(h, ms);
+}

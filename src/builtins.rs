@@ -616,6 +616,9 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
 /// Cierra el handle (lo quita del registro; el `Drop` del archivo/socket libera el recurso) (M11.8).
 pub fn close_handle(h: i64) {
     registry().lock().unwrap().open.remove(&h);
+    // M56.4: limpia el estado de timeout del socket (los ids no se reusan; es solo higiene).
+    read_timeouts().lock().unwrap().remove(&h);
+    read_expired().lock().unwrap().remove(&h);
 }
 
 // --- SQLite embebido (M53.3, vía rusqlite) ---
@@ -739,8 +742,15 @@ pub fn socket_read(h: i64) -> Result<String, String> {
     use std::io::Read;
     let mut stream = socket_clone(h)?;
     let mut buf = [0u8; 65536];
-    let n = stream.read(&mut buf).map_err(|e| e.to_string())?;
-    Ok(String::from_utf8_lossy(&buf[..n]).into_owned())
+    match stream.read(&mut buf) {
+        Ok(n) => Ok(String::from_utf8_lossy(&buf[..n]).into_owned()),
+        // M56.4: con SO_RCVTIMEO puesto (motor bloqueante), la espera vencida llega como
+        // WouldBlock/TimedOut (según SO) → el mismo mensaje que en la VM.
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(READ_TIMEOUT_MSG.to_string())
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Escribe `s` completo en el socket; `Ok(nº de bytes)` o `Err(mensaje)` (M15.2).
@@ -1001,6 +1011,10 @@ fn tls_flush_writes(tc: &mut TlsConn) -> Result<(), String> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn tls_read_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
     use std::io::Read;
+    // M56.4: la espera de esta lectura venció (marcada por el scheduler) → error de timeout.
+    if take_read_expired(h) {
+        return Err(READ_TIMEOUT_MSG.to_string());
+    }
     let mut reg = registry().lock().unwrap();
     let tc = match reg.open.get_mut(&h) {
         Some(OpenHandle::Tls(tc)) => tc,
@@ -1068,6 +1082,10 @@ pub fn write_file_bytes(path: &str, data: &[u8]) -> std::io::Result<()> {
 /// EOF), `Ok(None)` si aún no hay datos (`WouldBlock` → la VM aparca), `Err` en error real.
 pub fn socket_read_bytes_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
     use std::io::Read;
+    // M56.4: la espera de esta lectura venció (marcada por el scheduler) → error de timeout.
+    if take_read_expired(h) {
+        return Err(READ_TIMEOUT_MSG.to_string());
+    }
     let mut stream = socket_clone(h)?;
     let mut buf = [0u8; 65536];
     match stream.read(&mut buf) {
@@ -1082,14 +1100,23 @@ pub fn socket_read_bytes_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
 pub fn socket_read_bytes_blocking(h: i64) -> Result<Vec<u8>, String> {
     use std::io::Read;
     // M19.4: un handle TLS se lee por la bomba TLS. Sobre el socket bloqueante del intérprete, `read_tls`
-    // bloquea (nunca da WouldBlock), así que `tls_read_nb` actúa como lectura bloqueante.
+    // bloquea (nunca da WouldBlock), así que `tls_read_nb` actúa como lectura bloqueante — salvo con
+    // SO_RCVTIMEO puesto (M56.4): entonces un `Ok(None)` solo puede significar que la espera venció.
     if is_tls_handle(h) {
-        return Ok(tls_read_nb(h)?.unwrap_or_default());
+        return match tls_read_nb(h)? {
+            Some(data) => Ok(data),
+            None => Err(READ_TIMEOUT_MSG.to_string()),
+        };
     }
     let mut stream = socket_clone(h)?;
     let mut buf = [0u8; 65536];
     match stream.read(&mut buf) {
         Ok(n) => Ok(buf[..n].to_vec()),
+        // M56.4: con SO_RCVTIMEO puesto (set_read_timeout, motor bloqueante), la espera vencida
+        // llega como WouldBlock/TimedOut (según SO) → el mismo mensaje que en la VM.
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(READ_TIMEOUT_MSG.to_string())
+        }
         Err(e) => Err(e.to_string()),
     }
 }
@@ -1099,6 +1126,79 @@ pub fn socket_read_bytes_blocking(h: i64) -> Result<Vec<u8>, String> {
 // El intérprete usa los sockets BLOQUEANTES de arriba (un solo hilo). La VM los voltea a NO bloqueantes
 // con `set_nonblocking` y usa estos helpers, que devuelven `Ok(None)` para señalar `WouldBlock` (la VM
 // aparca la fibra y reintenta). Así `tcp_accept`/`socket_read` ceden al scheduler en vez de bloquear.
+
+// --- Timeout de lectura de sockets (M56.4) ---
+//
+// `__socket_set_read_timeout(h, ms)` fija cuánto puede esperar UNA lectura del socket `h` (ms <= 0
+// lo quita). Dos mecanismos según el motor:
+//   - **VM** (sockets no bloqueantes): el timeout vive en `read_timeouts()`; al aparcar una fibra
+//     por lectura, el scheduler calcula su *deadline* (`read_deadline`) y el poller espera como
+//     mucho hasta el más próximo. Al vencer, marca el handle (`mark_read_timeout`) y despierta la
+//     fibra: la lectura re-ejecutada consume la marca (`take_read_expired`) y devuelve el error.
+//   - **Intérprete** (sockets bloqueantes): se aplica el `SO_RCVTIMEO` real del SO; la lectura
+//     bloqueante mapea `WouldBlock`/`TimedOut` al mismo mensaje.
+// En plataformas sin poller (busy-poll de respaldo) el timeout de la VM no vence (cada re-aparcado
+// renueva el deadline): degradación documentada, macOS/Linux tienen poller real.
+
+/// El mensaje del timeout de lectura (idéntico en ambos motores).
+pub const READ_TIMEOUT_MSG: &str = "tiempo de espera de lectura agotado";
+
+/// handle → timeout de lectura en ms (los sockets sin entrada no tienen timeout).
+fn read_timeouts() -> &'static std::sync::Mutex<std::collections::HashMap<i64, u64>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<i64, u64>>> = std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+/// handles cuya espera de lectura venció (marcados por el scheduler, consumidos por la lectura).
+fn read_expired() -> &'static std::sync::Mutex<std::collections::HashSet<i64>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<i64>>> = std::sync::OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+/// Fija (ms > 0) o quita (ms <= 0) el timeout de lectura del socket `h`. Total: un handle que no
+/// es un socket se ignora. Builtin `__socket_set_read_timeout`.
+pub fn socket_set_read_timeout(h: i64, ms: i64) {
+    if ms > 0 {
+        read_timeouts().lock().unwrap().insert(h, ms as u64);
+    } else {
+        read_timeouts().lock().unwrap().remove(&h);
+        read_expired().lock().unwrap().remove(&h);
+    }
+    // El SO_RCVTIMEO real, para los sockets BLOQUEANTES del intérprete (en los no bloqueantes de
+    // la VM no aplica; ponerlo es inofensivo).
+    let dur = if ms > 0 { Some(std::time::Duration::from_millis(ms as u64)) } else { None };
+    let reg = registry().lock().unwrap();
+    match reg.open.get(&h) {
+        Some(OpenHandle::Tcp(s)) => {
+            let _ = s.set_read_timeout(dur);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(OpenHandle::Tls(tc)) => {
+            let _ = tc.sock.set_read_timeout(dur);
+        }
+        _ => {}
+    }
+}
+
+/// El deadline absoluto de la próxima lectura del handle, si tiene timeout (lo consulta la VM al
+/// aparcar una fibra por lectura).
+pub fn read_deadline(h: i64) -> Option<std::time::Instant> {
+    read_timeouts()
+        .lock()
+        .unwrap()
+        .get(&h)
+        .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(*ms))
+}
+
+/// Marca que la espera de lectura del handle venció (la pone el scheduler al expirar el deadline).
+pub fn mark_read_timeout(h: i64) {
+    read_expired().lock().unwrap().insert(h);
+}
+
+/// Consume la marca de timeout del handle (la mira la lectura re-ejecutada al despertar).
+fn take_read_expired(h: i64) -> bool {
+    read_expired().lock().unwrap().remove(&h)
+}
 
 /// Pone el socket (conexión o escucha) del handle `h` en modo **no bloqueante** (M15.5). Lo llama la VM
 /// tras crear el socket; el intérprete nunca, así que sus sockets siguen bloqueantes.
@@ -1137,6 +1237,10 @@ pub fn raw_fd(_h: i64) -> Option<i32> {
 /// (`WouldBlock` → la VM aparca), `Err` en error real (M15.5).
 pub fn socket_read_nb(h: i64) -> Result<Option<String>, String> {
     use std::io::Read;
+    // M56.4: la espera de esta lectura venció (marcada por el scheduler) → error de timeout.
+    if take_read_expired(h) {
+        return Err(READ_TIMEOUT_MSG.to_string());
+    }
     let mut stream = socket_clone(h)?;
     let mut buf = [0u8; 65536];
     match stream.read(&mut buf) {
@@ -1998,6 +2102,14 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "__local_port", "")?;
         if a[0] != Type::Int { return Err((Some(0), format!("local_port espera un int (el handle), no {}", a[0]))); }
         Ok(Type::Int)
+    } },
+    // __socket_set_read_timeout(h, ms) -> unit (M56.4): fija (ms > 0) o quita (ms <= 0) el timeout de
+    // lectura del socket. Total (un handle que no es socket se ignora). Envoltorio net.set_read_timeout.
+    Builtin { name: "__socket_set_read_timeout", opcode: OpCode::SocketSetReadTimeout, check: |a| {
+        arity(a, 2, "__socket_set_read_timeout", " (handle, ms)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_set_read_timeout espera un int (el handle), no {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__socket_set_read_timeout espera un int (ms), no {}", a[1]))); }
+        Ok(Type::Unit)
     } },
     // --- UDP (M20.8) ---
     // __udp_bind(host, port) -> [string]: ["ok", handle] o ["err", msg]. Lib udp.ray → Result<int,string>.

@@ -76,8 +76,9 @@ fn main() -> int {
 - **`net/oauth2`** — flujo OAuth2 (client credentials, authorization code). Sobre `net/http` + `std/json`
   + `std/url`.
 - **`net/webserver`** — servidor HTTP async + SSE (sobre el scheduler de fibras). Sobre `std/url`.
-  Con límites de seguridad por defecto (M56.1: cabeceras 64 KiB, cuerpo 10 MiB, 1024 conexiones
-  simultáneas; configurables con `serve_limits`/`serve_raw_limits`/`read_request_limits` + `Limits`).
+  Con límites de seguridad por defecto (M56.1/M56.4: cabeceras 64 KiB, cuerpo 10 MiB, 1024 conexiones
+  simultáneas, 10 s para leer una petición — anti-slowloris; configurables con
+  `serve_limits`/`serve_raw_limits`/`read_request_limits` + `Limits`).
   El `path` de la petición llega percent-decodificado y sin query string (M56.2); la query va aparte
   (`req.query` cruda, `query_params(req)` parseada). HTTPS con `serve_tls`/`serve_raw_tls[_limits]`
   (M56.3: cert/clave en PEM; upgrade TLS por conexión, en su fibra).

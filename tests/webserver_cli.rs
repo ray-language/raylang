@@ -233,7 +233,7 @@ const SRV_LIMITES: &str = r#"
 import webserver;
 import std/net;
 fn manejar(conn: int) {
-    let lim: webserver.Limits = webserver.Limits { max_header_bytes: 256, max_body_bytes: 16, max_conns: 8 };
+    let lim: webserver.Limits = webserver.Limits { max_header_bytes: 256, max_body_bytes: 16, max_conns: 8, read_timeout_millis: 0 };
     match (webserver.read_request_limits(conn, lim)) {
         Result.Ok(req) => {
             match (webserver.send_response(conn, webserver.ok("ok " + to_string(req.body.len())))) {
@@ -291,6 +291,74 @@ fn servidor_aplica_limites_de_seguridad() {
     // (d) Cuerpo truncado (declara 10, envía 3 y cierra) → 400, no un Ok silencioso a medias.
     let tr = pedir_con_eof(port, b"POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc");
     assert!(tr.contains("400 Bad Request"), "esperaba 400 por cuerpo incompleto, got: {tr}");
+
+    let _ = child.wait();
+}
+
+// Driver: servidor con TIMEOUT de lectura corto (M56.4, 300 ms). Una conexión que no envía la
+// petición completa a tiempo (slowloris) recibe 400 y se cierra; el servidor sigue vivo.
+const SRV_TIMEOUT: &str = r#"
+import webserver;
+import std/net;
+fn manejar(conn: int) {
+    let lim: webserver.Limits = webserver.Limits { max_header_bytes: 65536, max_body_bytes: 1048576, max_conns: 8, read_timeout_millis: 300 };
+    match (webserver.read_request_limits(conn, lim)) {
+        Result.Ok(req) => {
+            match (webserver.send_response(conn, webserver.ok("hola " + req.path))) {
+                Result.Ok(_) => {}, Result.Err(e) => eprint(e),
+            }
+        },
+        Result.Err(e) => {
+            eprint(e);
+            match (webserver.send_response(conn, webserver.text(400, "Bad Request"))) {
+                Result.Ok(_) => {}, Result.Err(e2) => eprint(e2),
+            }
+        },
+    }
+    close(conn);
+}
+fn main() -> int {
+    match (net.tcp_listen("127.0.0.1", 0)) {
+        Result.Ok(srv) => {
+            print(net.local_port(srv));
+            scope(fn() {
+                var i: int = 0;
+                while (i < 2) {
+                    match (net.tcp_accept(srv)) {
+                        Result.Ok(conn) => { spawn(fn() { manejar(conn) }); },
+                        Result.Err(e) => { eprint(e); i = 2; },
+                    }
+                    i = i + 1;
+                }
+            });
+            close(srv);
+            0
+        },
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+"#;
+
+#[test]
+fn servidor_corta_lecturas_lentas_por_timeout() {
+    let (mut child, port) = lanzar_servidor("timeout", SRV_TIMEOUT);
+
+    // Slowloris: abre, envía media petición y se queda callado (sin cerrar). El timeout (300 ms)
+    // debe vencer y responder 400; sin él, esta conexión retendría su fibra para siempre.
+    let inicio = std::time::Instant::now();
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
+    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+    stream.write_all(b"GET /lento HTTP/1.1\r\nX-Goteo: a").expect("envía parcial");
+    let mut resp = Vec::new();
+    stream.read_to_end(&mut resp).expect("lee respuesta");
+    let resp = String::from_utf8_lossy(&resp);
+    assert!(resp.contains("400 Bad Request"), "esperaba 400 por timeout, got: {resp}");
+    assert!(inicio.elapsed() >= Duration::from_millis(250), "respondió antes del plazo (¿timeout no aplicado?)");
+    assert!(inicio.elapsed() < Duration::from_secs(8), "tardó demasiado (¿esperó a EOF en vez del timeout?)");
+
+    // El servidor sigue vivo: una petición normal posterior responde 200 al instante.
+    let ok = pedir(port, "GET /hola HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(ok.contains("200 OK"), "el servidor debe seguir vivo tras el timeout, got: {ok}");
 
     let _ = child.wait();
 }

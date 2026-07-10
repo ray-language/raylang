@@ -445,6 +445,10 @@ pub enum OpCode {
     TcpAccept,
     /// Saca un handle (int); empuja su puerto local (`int`, `0` si no es un socket). Builtin `local_port`.
     LocalPort,
+    /// Saca `ms` (int) y el handle (int); fija (ms > 0) o quita (ms <= 0) el timeout de lectura del
+    /// socket y empuja `unit`. Total. Primitivo `__socket_set_read_timeout` (M56.4); envoltorio
+    /// `net.set_read_timeout` en std/net.
+    SocketSetReadTimeout,
     /// Saca `port` (int) y `host` (string); enlaza un socket UDP y empuja un `[string]` etiquetado.
     /// Primitivo `__udp_bind`; la lib udp.ray → `Result<int,string>` (M20.8).
     UdpBind,

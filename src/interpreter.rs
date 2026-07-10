@@ -1582,6 +1582,14 @@ impl<'a> Interpreter<'a> {
                 Value::Int(h) => Value::Int(crate::builtins::local_port(*h)),
                 _ => unreachable!("el checker garantiza un int"),
             },
+            // M56.4: timeout de lectura del socket (total; en este motor aplica el SO_RCVTIMEO real).
+            "__socket_set_read_timeout" => match (&values[0], &values[1]) {
+                (Value::Int(h), Value::Int(ms)) => {
+                    crate::builtins::socket_set_read_timeout(*h, *ms);
+                    Value::Unit
+                }
+                _ => unreachable!("el checker garantiza int, int"),
+            },
             // M11.8: cierra el handle (total).
             "close" => match &values[0] {
                 Value::Int(h) => {

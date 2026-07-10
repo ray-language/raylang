@@ -228,6 +228,12 @@ struct IoParked {
     /// sea **escribible** para terminar una escritura parcial (cesión en `socket_write`, post-M19.4): el
     /// poller registra `fd` con interés de escritura y, al despertar, el scheduler drena lo que falta.
     pending_write: Option<PendingWrite>,
+    /// M56.4: el handle del socket por el que espera (para marcar su timeout al vencer el deadline).
+    handle: i64,
+    /// M56.4: instante en que la espera de LECTURA vence (`net.set_read_timeout`): `io_wait` espera
+    /// como mucho hasta el deadline más próximo y, al vencer, marca el handle y despierta la fibra
+    /// (la lectura re-ejecutada devuelve el error de timeout). `None` = espera indefinida (default).
+    deadline: Option<std::time::Instant>,
 }
 
 /// Una escritura que bloqueó a medias: el handle del socket y los octetos que aún faltan por enviar.
@@ -1435,7 +1441,7 @@ impl<'a> Vm<'a> {
                                 let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                                 {
                                     let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
-                                    sh.io_parked.push(IoParked { fd, fiber, pending_write: None });
+                                    sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle, deadline: crate::builtins::read_deadline(handle) });
                                     sh.running -= 1; // aparcada por E/S → worker ocioso
                                 }
                                 let (l, c2) = pos!();
@@ -1463,7 +1469,7 @@ impl<'a> Vm<'a> {
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
                                 let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
-                                sh.io_parked.push(IoParked { fd, fiber, pending_write: None });
+                                sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle, deadline: crate::builtins::read_deadline(handle) });
                                 sh.running -= 1; // aparcada por E/S → worker ocioso
                             }
                             let (l, c2) = pos!();
@@ -1978,7 +1984,7 @@ impl<'a> Vm<'a> {
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
                                 let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
-                                sh.io_parked.push(IoParked { fd, fiber, pending_write: None });
+                                sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle, deadline: crate::builtins::read_deadline(handle) });
                                 sh.running -= 1; // aparcada por E/S → worker ocioso
                             }
                             let (l, c2) = pos!();
@@ -2079,7 +2085,7 @@ impl<'a> Vm<'a> {
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
                                 let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
-                                sh.io_parked.push(IoParked { fd, fiber, pending_write: None });
+                                sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle, deadline: crate::builtins::read_deadline(handle) });
                                 sh.running -= 1; // aparcada por E/S → worker ocioso
                             }
                             let (l, c2) = pos!();
@@ -2158,7 +2164,7 @@ impl<'a> Vm<'a> {
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
                                 let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
-                                sh.io_parked.push(IoParked { fd, fiber, pending_write: None });
+                                sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle, deadline: crate::builtins::read_deadline(handle) });
                                 sh.running -= 1; // aparcada por E/S → worker ocioso
                             }
                             let (l, c2) = pos!();
@@ -2170,6 +2176,17 @@ impl<'a> Vm<'a> {
                     HeapValue::Int(h) => self.push(HeapValue::Int(crate::builtins::local_port(h))),
                     _ => unreachable!("el checker garantiza un int"),
                 },
+                // M56.4: timeout de lectura del socket. En la VM el efecto real lo aplica el
+                // scheduler (deadline al aparcar la fibra); aquí solo se registra.
+                OpCode::SocketSetReadTimeout => {
+                    let ms = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Int(ms)) = (handle, ms) else {
+                        unreachable!("el checker garantiza int, int");
+                    };
+                    crate::builtins::socket_set_read_timeout(handle, ms);
+                    self.push(HeapValue::Unit);
+                }
                 OpCode::Close => {
                     // Ad-hoc polimórfico: un handle de archivo (int, M11.8) o un canal (M12.1).
                     match self.pop() {
@@ -2446,7 +2463,7 @@ impl<'a> Vm<'a> {
         {
             let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
             let fiber = Self::take_current_fiber(&mut self.cur);
-            sh.io_parked.push(IoParked { fd, fiber, pending_write: Some(PendingWrite { handle, remaining }) });
+            sh.io_parked.push(IoParked { fd, fiber, pending_write: Some(PendingWrite { handle, remaining }), handle, deadline: None });
             sh.running -= 1; // esta fibra se aparcó → este worker queda ocioso
         }
         if !self.poll_next(line, col)? { self.stop = true; }
@@ -2461,7 +2478,8 @@ impl<'a> Vm<'a> {
             Ok(n) if n == pw.remaining.len() => Ok(()),
             Ok(n) => {
                 pw.remaining.drain(..n); // descarta lo ya enviado y re-aparca el resto
-                shared.io_parked.push(IoParked { fd, fiber, pending_write: Some(pw) });
+                let handle = pw.handle;
+                shared.io_parked.push(IoParked { fd, fiber, pending_write: Some(pw), handle, deadline: None });
                 return;
             }
             Err(e) => Err(e),
@@ -2535,30 +2553,70 @@ impl<'a> Vm<'a> {
     /// fibras de esos descriptores. Si la plataforma no tiene poller (`Unsupported`) o la espera se
     /// interrumpe (`Ready` vacío por EINTR), cae al **busy-poll cooperativo** de M15.5 (duerme ~1 ms y
     /// re-encola todas) → siempre hay progreso. Garantiza dejar al menos una fibra en `ready`.
+    ///
+    /// M56.4 (timeouts): una fibra aparcada puede llevar un `deadline` (`net.set_read_timeout`). El
+    /// poller espera como mucho hasta el más próximo; al vencer, se **marca el handle**
+    /// (`mark_read_timeout`) y se despierta la fibra: su lectura re-ejecutada consume la marca y
+    /// devuelve el error de timeout. Sin deadlines, la espera sigue siendo infinita (idéntico a M17).
     fn io_wait(shared: &mut Shared) {
-        // Cada fibra espera **lectura** (pending_write None) o **escritura** (Some) de su socket.
-        let read_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.pending_write.is_none()).map(|p| p.fd).collect();
-        let write_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.pending_write.is_some()).map(|p| p.fd).collect();
-        if let crate::poll::PollResult::Ready(ready) = crate::poll::wait(&read_fds, &write_fds, -1)
-            && !ready.is_empty()
-        {
-            // Saca las fibras cuyo socket quedó listo; las demás siguen aparcadas.
-            let mut woken: Vec<IoParked> = Vec::new();
+        loop {
+            // 0) Expira los deadlines vencidos: marca el handle y despierta la fibra (re-ejecuta su
+            //    lectura, que verá la marca). Si expiró alguna, ya hay una fibra lista → volver.
+            let now = std::time::Instant::now();
+            let mut expiradas: Vec<IoParked> = Vec::new();
             let mut i = 0;
             while i < shared.io_parked.len() {
-                if ready.contains(&shared.io_parked[i].fd) {
-                    woken.push(shared.io_parked.remove(i));
+                if shared.io_parked[i].deadline.is_some_and(|d| d <= now) {
+                    expiradas.push(shared.io_parked.remove(i));
                 } else {
                     i += 1;
                 }
             }
+            if !expiradas.is_empty() {
+                for p in expiradas {
+                    crate::builtins::mark_read_timeout(p.handle);
+                    shared.ready.push_back(p.fiber);
+                }
+                return;
+            }
+
+            // 1) Espera del poller, acotada por el deadline más próximo (o infinita si no hay).
+            let timeout_ms: i32 = match shared.io_parked.iter().filter_map(|p| p.deadline).min() {
+                // +1: redondeo hacia arriba para no despertar un pelo antes del deadline (y girar).
+                Some(d) => d.saturating_duration_since(now).as_millis().min(i32::MAX as u128 - 1) as i32 + 1,
+                None => -1,
+            };
+            // Cada fibra espera **lectura** (pending_write None) o **escritura** (Some) de su socket.
+            let read_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.pending_write.is_none()).map(|p| p.fd).collect();
+            let write_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.pending_write.is_some()).map(|p| p.fd).collect();
+            if let crate::poll::PollResult::Ready(ready) = crate::poll::wait(&read_fds, &write_fds, timeout_ms) {
+                if !ready.is_empty() {
+                    // Saca las fibras cuyo socket quedó listo; las demás siguen aparcadas.
+                    let mut woken: Vec<IoParked> = Vec::new();
+                    let mut i = 0;
+                    while i < shared.io_parked.len() {
+                        if ready.contains(&shared.io_parked[i].fd) {
+                            woken.push(shared.io_parked.remove(i));
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    Self::wake_parked(shared, woken);
+                    return;
+                }
+                // Despertar vacío CON deadlines pendientes: fue el timeout del poller (o EINTR) →
+                // la próxima vuelta del bucle expira los vencidos. Sin deadlines: EINTR → respaldo.
+                if timeout_ms >= 0 {
+                    continue;
+                }
+            }
+            // Respaldo (sin poller, o EINTR sin deadlines): busy-poll cooperativo de M15.5. Nota:
+            // sin poller los deadlines no vencen (cada re-aparcado los renueva); macOS/Linux no caen aquí.
+            crate::builtins::sleep_millis(1);
+            let woken: Vec<IoParked> = shared.io_parked.drain(..).collect();
             Self::wake_parked(shared, woken);
             return;
         }
-        // Respaldo (sin poller, o despertar vacío): busy-poll cooperativo de M15.5.
-        crate::builtins::sleep_millis(1);
-        let woken: Vec<IoParked> = shared.io_parked.drain(..).collect();
-        Self::wake_parked(shared, woken);
     }
 
     /// Pone listas las fibras despertadas: las de lectura re-ejecutan su opcode (re-pushearon su handle);

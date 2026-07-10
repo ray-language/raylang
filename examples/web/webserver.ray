@@ -10,6 +10,7 @@
 // json_response) aceptan string y lo codifican; bytes_response acepta bytes crudos. TLS (https) es M19.4.
 import std/net;
 import std/url;
+import std/time;
 
 // M56.2: `path` llega DECODIFICADO (%XX; `+` es literal en rutas) y SIN la query string, que va
 // aparte en `query` (cruda, sin el `?`); `query_params` la parsea a un Map.
@@ -25,16 +26,18 @@ pub fn query_params(req: Request) -> Map<string, string> {
     url.parse_query(req.query)
 }
 
-// M56.1: límites de la frontera de seguridad (cabeceras/cuerpo/conexiones simultáneas).
-// `serve`/`serve_raw` usan `default_limits()`; las variantes `*_limits` los configuran.
+// M56.1: límites de la frontera de seguridad (cabeceras/cuerpo/conexiones simultáneas). M56.4:
+// `read_timeout_millis` acota el tiempo TOTAL de leer una petición (anti-slowloris; <= 0 = sin
+// plazo). `serve`/`serve_raw` usan `default_limits()`; las variantes `*_limits` los configuran.
 pub struct Limits {
     max_header_bytes: int,
     max_body_bytes: int,
     max_conns: int,
+    read_timeout_millis: int,
 }
 
 pub fn default_limits() -> Limits {
-    Limits { max_header_bytes: 65536, max_body_bytes: 10485760, max_conns: 1024 }
+    Limits { max_header_bytes: 65536, max_body_bytes: 10485760, max_conns: 1024, read_timeout_millis: 10000 }
 }
 
 pub struct Response {
@@ -129,9 +132,24 @@ pub fn read_request(conn: int) -> Result<Request, string> {
     read_request_limits(conn, default_limits())
 }
 
+// M56.4: una lectura respetando el plazo TOTAL de la petición (0 = sin plazo); antes de cada
+// lectura se fija el timeout del socket a lo que RESTA del plazo.
+fn leer_con_plazo(conn: int, plazo_fin: int) -> Result<bytes, string> {
+    if (plazo_fin > 0) {
+        let restante: int = plazo_fin - time.monotonic();
+        if (restante <= 0) {
+            return Result.Err("tiempo de espera de lectura agotado");
+        }
+        net.set_read_timeout(conn, restante);
+    }
+    net.socket_read_bytes(conn)
+}
+
 // M56.1: la versión con límites (cabeceras acotadas, Content-Length acotado ANTES de leer el
-// cuerpo, y cuerpo que el peer no completa = Err, no un Ok truncado).
+// cuerpo, y cuerpo que el peer no completa = Err, no un Ok truncado). M56.4: leer la petición
+// entera debe caber en `read_timeout_millis`.
 pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string> {
+    let plazo_fin: int = if (limits.read_timeout_millis > 0) { time.monotonic() + limits.read_timeout_millis } else { 0 };
     var acc: bytes = b"";
     var sep: int = 0 - 1;
     var desde: int = 0;
@@ -147,7 +165,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
             if (acc.len() > limits.max_header_bytes) {
                 return Result.Err("cabeceras demasiado grandes (más de " + to_string(limits.max_header_bytes) + " octetos)");
             }
-            match (net.socket_read_bytes(conn)) {
+            match (leer_con_plazo(conn, plazo_fin)) {
                 Result.Ok(trozo) => {
                     if (trozo.len() == 0) {
                         seguir = false;
@@ -226,7 +244,7 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                                 return Result.Err("cuerpo demasiado grande (Content-Length " + to_string(n) + " > " + to_string(limits.max_body_bytes) + ")");
                             }
                             while (body.len() < n) {
-                                match (net.socket_read_bytes(conn)) {
+                                match (leer_con_plazo(conn, plazo_fin)) {
                                     Result.Ok(trozo) => {
                                         if (trozo.len() == 0) {
                                             return Result.Err("cuerpo incompleto: la conexión se cerró con " + to_string(body.len()) + " de " + to_string(n) + " octetos");
@@ -248,6 +266,10 @@ pub fn read_request_limits(conn: int, limits: Limits) -> Result<Request, string>
                 Option.None => { },
             }
 
+            // Petición leída: quitar el timeout (que el handler no herede un plazo casi vencido).
+            if (plazo_fin > 0) {
+                net.set_read_timeout(conn, 0);
+            }
             Result.Ok(Request { method: method, path: path, query: query, headers: headers, body: body })
         },
     }

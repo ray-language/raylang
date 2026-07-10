@@ -7407,10 +7407,26 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   sin código extra. Demo `examples/web/https_server_demo.ray` (`curl -k https://localhost:8443/hola`);
   test `servidor_https_sirve_sobre_tls` en `tls_cli.rs` (petición con query sobre TLS, 404,
   y resiliencia ante un cliente no-TLS) con los fixtures de CA locales.
-- **M56.4 — timeouts** (único toque de runtime real): deadline en `io_parked` + timeout en
-  `poll::wait` para poder despertar una fibra aparcada en un fd que nunca llega — habilita
-  timeout de lectura (anti-slowloris) y de handler. Diseño fino al llegar (¿builtin
-  `__socket_deadline(h, ms)` o timeout del `serve` config?).
+- **M56.4 — timeouts de lectura** ✅ **COMPLETO** (primer toque de runtime del arco; aditivo,
+  oráculo intacto). **Primitivo**: `__socket_set_read_timeout(h, ms)` (total; ms <= 0 lo quita) +
+  envoltorio `net.set_read_timeout` en std/net. **Dos mecanismos según el motor**: en la **VM**
+  (sockets no bloqueantes) el timeout vive en un mapa del host (`read_timeouts`); al aparcar una
+  fibra por E/S, `IoParked` gana `handle` + `deadline` (calculado con `read_deadline(h)`) y
+  `io_wait` espera en el poller **como mucho hasta el deadline más próximo** (antes: infinito);
+  al vencer, marca el handle (`mark_read_timeout`) y despierta la fibra — su lectura re-ejecutada
+  consume la marca (`take_read_expired`) y devuelve el error. En el **intérprete** (bloqueante)
+  se aplica el `SO_RCVTIMEO` real y las lecturas mapean `WouldBlock`/`TimedOut` al MISMO mensaje
+  (`"tiempo de espera de lectura agotado"`). El deadline aplica a cualquier espera aparcada del
+  handle (lecturas TCP/TLS; también accept/UDP — semántica uniforme). Sin timeout puesto, cero
+  cambios (espera infinita, idéntico a M17); en plataformas sin poller (busy-poll) el deadline no
+  vence (documentado; macOS/Linux tienen poller). **Webserver**: `Limits` gana
+  `read_timeout_millis` (default **10 s**, <= 0 = sin plazo) como **plazo TOTAL** de leer una
+  petición — `leer_con_plazo` fija antes de cada lectura el timeout a lo que RESTA del plazo
+  (`time.monotonic()`), así el goteo de octetos NO lo renueva (slowloris real); al completar la
+  petición el timeout se quita (el handler no hereda un plazo casi vencido — SSE). Test
+  `servidor_corta_lecturas_lentas_por_timeout` (petición a medias + silencio → 400 en ~300 ms y
+  el servidor sigue vivo). Diferido: timeout del HANDLER (necesita cancelación por timer;
+  emparejarlo con M56.5/`try_join`).
 - **M56.5 — cierre en panic del handler**: hoy un panic en el handler fuga el fd (no hay
   `recover`). Camino alineado con "errores como valores": **`try_join(t) -> Result<T, string>`**
   (variante de `join` que NO re-lanza; builtin pequeño, generalmente útil) y `atender` corre el

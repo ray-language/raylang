@@ -7749,3 +7749,22 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   sin alocación (representación inline/sentinela) o devirtualización del `step`. Se hará cuando
   el throughput lazy importe de verdad; el techo actual no bloquea (el camino eager queda en
   ~317 ms/1M tras 62.1).
+
+## 67. M63 — std/toml de producción (conformidad del subconjunto)
+
+> Revisión jul 2026 (tras M62; clasificación en IDEAS §23). `ray.toml` NO pasa por aquí
+> (`src/manifest.rs` es un lector Rust aparte, deliberadamente — circular si no): std/toml es
+> la librería de configs del USUARIO. El subconjunto está documentado con honestidad; los
+> hallazgos son conformidad DENTRO del subconjunto: lo que acepta debe ser TOML, y el TOML
+> legal de esa área no debe corromperse en silencio.
+
+- **M63.1 — strings conformes**: (a) escapes completos de la spec — `\b \f \n \r \t \" \\` +
+  `\uXXXX`/`\UXXXXXXXX` (vía `char_from_code`, como json M59.1) — y **escape desconocido =
+  `Err`** (hoy `"café"` → `"cafu00E9"`: traga la barra y corrompe en silencio); (b)
+  **strings literales `'...'`** (core TOML, sin escapes — rutas Windows, regex).
+- **M63.2 — números conformes**: separadores `_` (`1_000`, lo más común en configs; validar
+  posición: entre dígitos), `inf`/`nan`/`+inf`/`-inf`. Hex/octal/binario: diferido a demanda.
+- **M63.3 — rigor del documento**: clave duplicada = `Err` (hoy se aceptan ambas y `toml_get`
+  devuelve la PRIMERA), cabecera `[]` vacía = `Err` (hoy resetea a raíz en silencio), y salto
+  de línea obligatorio tras cada valor (`a = 1 b = 2` hoy pasa como dos entradas).
+- **Diferidos** (documentados en el módulo): inline tables, `[[…]]`, fechas, multilínea.

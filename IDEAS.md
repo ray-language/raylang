@@ -799,6 +799,26 @@ literal-vs-bloque (consistente con if/while; error claro).
 
 ---
 
+## 23. std/toml (revisión jul 2026) — M63, PLAN
+
+Revisión de `std/toml` (detalle en DESIGN §67). Contexto: **`ray.toml` NO usa este parser** (el
+CLI tiene su lector TOML mínimo en Rust, `src/manifest.rs` — circular si no) → librería de
+usuario, no ruta crítica del toolchain. Estructura sana (parser sobre `[char]`, errores como
+valores, subconjunto documentado); los huecos, verificados con sondas:
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **Corrupción silenciosa de strings**: `"caf\u00E9"` → `"cafu00E9"` (el escape desconocido traga la barra y deja el resto); `\q` ilegal → se acepta; faltan `\b \f \uXXXX \UXXXXXXXX` (la clase M59.1 otra vez) | TOML legal corrompido sin aviso | **63.1**: escapes completos, desconocido = `Err`; + strings literales `'...'` (core TOML: rutas Windows, regex) |
+| Números TOML legales rechazados: `1_000` (separadores `_`, lo MÁS común en configs), `inf`/`nan`; hex/octal/bin (menor) | Configs reales no parsean | **63.2** |
+| Laxitudes que la spec prohíbe: `a = 1 b = 2` en una línea (exige salto tras el valor); clave duplicada aceptada y **`toml_get` devuelve la PRIMERA** (se espera error o last-wins); `[]` cabecera vacía resetea a raíz en silencio | Sorpresas silenciosas | **63.3**: duplicada = Err, `[]` = Err, salto obligatorio tras el valor |
+| Menores: O(n²) por carácter (configs pequeños — impacto bajo); control chars crudos en strings; `toml_show` no escapa (debug, documentado) | — | dentro de su sub-fase o diferido |
+
+**Diferidos que siguen** (documentados en el propio módulo): inline tables `{…}`, arrays de
+tablas `[[…]]`, fechas, strings multilínea `"""…"""` — a demanda. Nota de raydoc pendiente: el
+manifiesto usa otro parser.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

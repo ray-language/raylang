@@ -2,9 +2,12 @@
 // entradas `clave = valor`, con la clave como ruta con puntos (`server.port`) para las tablas. Puro
 // cómputo, cero runtime. Importable: `from toml import parse_toml, toml_get, toml_show, TomlValue, TomlEntry;`.
 //
-// Soporta: comentarios `#`, tablas `[a.b]`, claves desnudas, y valores string (`"..."` con escapes),
-// entero, flotante, booleano (`true`/`false`) y arreglo `[v, v, …]` (posiblemente multilínea). Diferido:
-// tablas en línea `{…}`, arreglos de tablas `[[…]]`, fechas, strings multilínea/literales.
+// Soporta: comentarios `#`, tablas `[a.b]`, claves desnudas, y valores string (`"..."` con los escapes
+// completos de la spec — \b \f \n \r \t \" \\ \uXXXX \UXXXXXXXX; escape desconocido = Err, M63.1),
+// string LITERAL `'...'` (sin escapes), entero, flotante, booleano (`true`/`false`) y arreglo
+// `[v, v, …]` (posiblemente multilínea). Diferido: tablas en línea `{…}`, arreglos de tablas `[[…]]`,
+// fechas, strings multilínea. (El manifiesto `ray.toml` NO usa este parser: el CLI trae su lector
+// mínimo propio en Rust, `src/manifest.rs`.)
 // Un valor TOML. Recursivo (los arreglos contienen valores).
 /// A TOML value: string, int, float, bool, or array (recursive).
 pub enum TomlValue {
@@ -78,7 +81,44 @@ fn parse_key(t: TS) -> string {
     k
 }
 
-// Parsea un string básico `"..."` con escapes `\n \t \r \" \\`.
+// El valor de un dígito hex (mayúsculas o minúsculas); -1 si no lo es (para \uXXXX).
+fn hex_val(c: char) -> int {
+    let code = char_code(c);
+    if (code >= 48 && code <= 57) {
+        code - 48
+    } else if (code >= 97 && code <= 102) {
+        code - 87
+    } else if (code >= 65 && code <= 70) {
+        code - 55
+    } else {
+        0 - 1
+    }
+}
+
+// Lee exactamente `n` dígitos hex y construye el carácter del code point (\uXXXX / \UXXXXXXXX).
+fn parse_u_escape(t: TS, n: int) -> Result<string, string> {
+    var v = 0;
+    var k = 0;
+    while (k < n) {
+        if (ts_end(t)) {
+            return Result.Err("escape \\u incompleto");
+        }
+        let d = hex_val(ts_adv(t));
+        if (d < 0) {
+            return Result.Err("escape \\u con dígito no hexadecimal");
+        }
+        v = v * 16 + d;
+        k = k + 1;
+    }
+    match (char_from_code(v)) {
+        Option.Some(c) => Result.Ok(to_string(c)),
+        Option.None => Result.Err("escape \\u con code point inválido"),
+    }
+}
+
+// Parsea un string básico `"..."` con los escapes de la spec: \b \f \n \r \t \" \\ \uXXXX
+// \UXXXXXXXX. M63.1: un escape DESCONOCIDO es error (antes se tragaba la barra y dejaba el
+// resto — `"café"` salía `"cafu00E9"`: corrupción silenciosa de TOML legal).
 fn parse_string(t: TS) -> Result<string, string> {
     ts_adv(t);  // comilla de apertura
     var s = "";
@@ -102,8 +142,16 @@ fn parse_string(t: TS) -> Result<string, string> {
                 s = s + "\"";
             } else if (e == '\\') {
                 s = s + "\\";
+            } else if (e == 'b') {
+                s = s + ctrl(8);
+            } else if (e == 'f') {
+                s = s + ctrl(12);
+            } else if (e == 'u') {
+                s = s + parse_u_escape(t, 4)?;
+            } else if (e == 'U') {
+                s = s + parse_u_escape(t, 8)?;
             } else {
-                s = s + to_string(e);
+                return Result.Err("escape desconocido '\\" + to_string(e) + "' en el string");
             }
         } else {
             s = s + to_string(c);
@@ -113,6 +161,32 @@ fn parse_string(t: TS) -> Result<string, string> {
         return Result.Err("string sin cerrar");
     }
     Result.Ok(s)
+}
+
+// El string de un code point de control (\b/\f, sin literal de escape en raylang).
+fn ctrl(n: int) -> string {
+    match (char_from_code(n)) {
+        Option.Some(c) => to_string(c),
+        Option.None => "",
+    }
+}
+
+// Parsea un string LITERAL `'...'` (M63.1; core TOML): SIN escapes — lo que ves es lo que hay
+// (rutas Windows, regex). Termina en la siguiente comilla simple; no admite saltos de línea.
+fn parse_literal_string(t: TS) -> Result<string, string> {
+    ts_adv(t);  // comilla simple de apertura
+    var s = "";
+    while (!ts_end(t)) {
+        let c = ts_adv(t);
+        if (c == '\'') {
+            return Result.Ok(s);
+        }
+        if (c == '\n') {
+            return Result.Err("salto de línea en un string literal '...'");
+        }
+        s = s + to_string(c);
+    }
+    Result.Err("string literal sin cerrar")
 }
 
 // Clasifica un token escalar (número o booleano) ya leído.
@@ -167,6 +241,11 @@ fn parse_value(t: TS) -> Result<TomlValue, string> {
     let c = ts_peek(t);
     if (c == '"') {
         match (parse_string(t)) {
+            Result.Ok(s) => Result.Ok(TomlValue.TStr(s)),
+            Result.Err(e) => Result.Err(e),
+        }
+    } else if (c == '\'') {
+        match (parse_literal_string(t)) {
             Result.Ok(s) => Result.Ok(TomlValue.TStr(s)),
             Result.Err(e) => Result.Err(e),
         }

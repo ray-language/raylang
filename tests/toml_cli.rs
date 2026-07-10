@@ -12,6 +12,12 @@ const ESPERADO: &[&str] = &[
     "server.ratio = 1.5",
     "server.tags = [\"a\", \"b\", \"c\"]",
     "server.ports = [80, 443, 8080]",
+    // M63.1 — strings conformes: \uXXXX/\UXXXXXXXX (incl. astral), literal '...' sin escapes,
+    // y escape desconocido/incompleto = Err (antes: corrupción silenciosa, "cafu00E9").
+    "s = \"café 😀\"",
+    "p = \"C:\\ruta\\ne\"",
+    "err: escape desconocido '\\q' en el string",
+    "err: escape \\u con dígito no hexadecimal",
 ];
 
 fn correr(flags: &[&str]) -> (Vec<String>, bool) {

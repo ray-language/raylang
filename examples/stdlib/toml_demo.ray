@@ -23,4 +23,21 @@ fn main() {
         },
         Result.Err(e) => print("err: " + e),
     }
+
+    // M63.1 — strings conformes: escapes \uXXXX/\b/\f, literal '...', y escape desconocido = Err.
+    match (parse_toml("s = \"caf\\u00E9 \\U0001F600\"\np = 'C:\\ruta\\ne'\n")) {
+        Result.Ok(entries) => {
+            show_key(entries, "s");
+            show_key(entries, "p");
+        },
+        Result.Err(e) => print("err: " + e),
+    }
+    match (parse_toml("x = \"mal\\q\"")) {
+        Result.Ok(entries) => print("no debería parsear"),
+        Result.Err(e) => print("err: " + e),
+    }
+    match (parse_toml("x = \"corto\\u12\"")) {
+        Result.Ok(entries) => print("no debería parsear"),
+        Result.Err(e) => print("err: " + e),
+    }
 }

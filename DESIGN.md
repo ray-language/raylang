@@ -7758,7 +7758,7 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 > hallazgos son conformidad DENTRO del subconjunto: lo que acepta debe ser TOML, y el TOML
 > legal de esa área no debe corromperse en silencio.
 
-- **M63.1 — strings conformes**: (a) escapes completos de la spec — `\b \f \n \r \t \" \\` +
+- **M63.1 — strings conformes** ✅ **COMPLETO**: (a) escapes completos de la spec — `\b \f \n \r \t \" \\` +
   `\uXXXX`/`\UXXXXXXXX` (vía `char_from_code`, como json M59.1) — y **escape desconocido =
   `Err`** (hoy `"café"` → `"cafu00E9"`: traga la barra y corrompe en silencio); (b)
   **strings literales `'...'`** (core TOML, sin escapes — rutas Windows, regex).

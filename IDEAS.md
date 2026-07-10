@@ -57,6 +57,7 @@
 | **Cripto avanzada** (cifrado + firma asimétrica) | Librería raylang (cómputo) | **M30** | 🚧 DESIGN §36. Hoy hay hashing/HMAC pero **no cifrado**. **M30.1** simétrica ChaCha20-Poly1305/AES-GCM (vectores RFC 8439); **M30.2** asimétrica Ed25519 (RFC 8032; ejercita bignum/`u64`); **M30.3** JWT RS256/ES256 sobre lo anterior |
 | **Cerrar gRPC** (transporte HTTP/2 vivo) | Librería raylang sobre TLS+ALPN | **M31** | 🚧 DESIGN §36. Los diferidos grandes de M26. **M31.1** HPACK-Huffman (tabla 257 del RFC 7541 Ap. B; vectores C.4/C.6); **M31.2** transporte vivo (preface + SETTINGS + streams sobre TLS con ALPN `h2` — requiere exponer ALPN en `tls_connect`); **M31.3** cliente gRPC e2e |
 | **Clientes y formatos** (PostgreSQL · TOML/CSV · plantillas) | Librería raylang | **M32** | 🚧 DESIGN §36. **M32.1** cliente PostgreSQL (protocolo wire + SCRAM-SHA-256, reusa M20); **M32.2** TOML/YAML/CSV; **M32.3** motor de plantillas HTML sobre M27 |
+| **Webserver de producción** (límites/timeouts · query · TLS · keep-alive) | Librería `packages/net/webserver.ray` (casi todo) + 2 toques de runtime acotados (deadline de E/S, `try_join`) | **M56** | 📌 **PLAN FIJADO** (DESIGN §60, detalle en §17 abajo). Revisión jul 2026: núcleo (fibras+poller+multicore) sólido; los huecos son de la capa HTTP. Orden: 56.1 frontera de seguridad (librería pura) → 56.2 query string (bug del enrutado) → 56.3 `serve_tls` → 56.4 timeouts (runtime) → 56.5 panic-cierra-conexión (`try_join`) → 56.6 keep-alive → 56.7 Set-Cookie múltiple → 56.8 extras |
 
 ---
 
@@ -650,6 +651,35 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
   bson.doc_from_json("{...}")?)`); el tope debe ser un objeto. Test `bson_puente_json` (compone con
   los escapes `\uXXXX`). Diferido: Extended JSON riguroso ($oid/$numberLong) si algún consumidor lo
   exige.
+
+---
+
+## 17. Webserver de producción — M56, PLAN (revisión jul 2026)
+
+Revisión completa de la implementación (detalle y sub-fases en DESIGN §60). El **núcleo es
+sólido**: la parte difícil (fibras aparcadas por fd, poller kqueue/epoll real con fallback,
+escritura parcial con interés de escritura, pool M:N multicore de M38 con heaps aislados) vive en
+el runtime genérico y está testeada (`webserver_cli`/`framework_cli`/`metrics_server_cli` +
+concurrencia). HTTP es **librería pura** (`packages/net/webserver.ray` con docs `///` y
+`html_response`; espejo histórico en `examples/web/webserver.ray` que usan tests y framework) →
+casi todo el endurecimiento es raylang, barato y sin tocar el oráculo.
+
+**Clasificación de impacto por hallazgo:**
+
+| Hallazgo | ¿Dónde pega? | Impacto | Sub-fase |
+|---|---|---|---|
+| Sin límites de cabeceras/cuerpo; O(n²) del escaneo; cuerpo truncado silencioso; accept-loop muere al 1er error; sin tope de conexiones | Solo `webserver.ray` | **Ninguno** en runtime/API (límites con default + variante configurable; semáforo = `channel(n)` de M12.2) | **56.1** (primera: mayor ganancia de seguridad, cero decisiones abiertas) |
+| Query pegada a `req.path` (el enrutado del framework NO casa con `?x=1`); sin percent-decoding | `Request` (campo nuevo `query`) + framework/demos | **Cambio semántico deliberado** de `path` (queda sin query); mecánico en consumidores | **56.2** |
+| Sin `serve_tls` (https de servidor) | Solo `webserver.ray` (patrón ya probado en `wss_echo.ray`) | Ninguno | **56.3** |
+| Sin timeouts (slowloris; fibra aparcada para siempre) | **Runtime**: deadline en `io_parked` + timeout en `poll::wait` | Acotado a la VM (el poller ya bloquea; añadir timeout no cambia semántica sin deadline). Diseño fino al llegar | **56.4** |
+| Panic del handler fuga el fd (`close` no corre; no hay `recover`) | **Runtime**: builtin `try_join(t) -> Result<T,string>` (variante de `join` que no re-lanza) + `atender` en tarea | Un builtin pequeño, alineado con "errores como valores"; útil más allá del webserver | **56.5** |
+| Siempre `Connection: close` (un handshake TCP por petición) | Solo `webserver.ray` (bucle por conexión honrando `Connection`) | Ninguno (framing por Content-Length ya correcto); cuidar `serve_raw`/SSE | **56.6** |
+| `Map<string,string>` impide 2 `Set-Cookie`; pisa repetidas entrantes | **API de `Response`** (¿lista `[(k,v)]` o campo extra?) | **Rompe API** → decisión de diseño con el usuario | **56.7** |
+| Chunked entrante, `serve_static` (con saneo `..`), HEAD sin cuerpo, `status_text` incompleto | Solo `webserver.ray` (`status_text` adelantado a 56.1) | Ninguno | **56.8** |
+
+**Restricción hoy**: nada bloquea a nadie; solo 56.7 rompe API (decidir antes de 1.0/M44 para no
+publicar una firma que haya que romper). 56.4/56.5 son los únicos toques de runtime y ambos son
+aditivos.
 
 ---
 

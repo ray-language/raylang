@@ -7336,3 +7336,59 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   (inocuo en HTML). Diferido: re-indentar también por etiquetas HTML anidadas.
 - Diferido: herencia encadenada (layout que extiende a otro), `{% block %}` con contenido del
   padre (`super()` de Jinja).
+
+## 60. M56 — Webserver de producción (endurecimiento + funcionalidad HTTP)
+
+> Revisión completa del webserver (jul 2026). Veredicto: el **núcleo es sólido** — la parte
+> difícil (fibras + poller kqueue/epoll + escritura parcial + multicore M38) vive en el runtime
+> genérico y está bien testeada; HTTP es librería pura (`packages/net/webserver.ray`, espejo en
+> `examples/web/webserver.ray` que usan los tests/framework). Lo que falta está TODO en la capa
+> raylang o son toques acotados de runtime. Clasificación en IDEAS §17.
+
+**Los huecos, por severidad** (hallazgos de la revisión):
+
+1. **Frontera de seguridad** (crítico si "producción real"): sin límite de tamaño de cabeceras ni
+   de cuerpo (memoria ilimitada a petición del cliente), sin timeouts (slowloris deja fibras
+   aparcadas para siempre), fuga de fd si el handler hace panic (el `close(conn)` de `atender` no
+   corre), `find_fin_cabeceras` O(n²) (amplificador del punto 1), cuerpo truncado silencioso
+   (`Ok` con el cuerpo a medias si el peer cierra antes de `Content-Length`), `serve_raw` muere
+   al primer error de `accept` (un `EMFILE` transitorio tumba el servidor), sin tope de
+   conexiones simultáneas.
+2. **Bug funcional**: la query string va pegada a `req.path` (`GET /u/7?x=1` no casa la ruta del
+   framework); sin `req.query` ni percent-decoding (y `url.ray` ya existe, sin integrar).
+3. **HTTPS de servidor**: `net.tls_accept` existe y `wss_echo.ray` demuestra el patrón, pero
+   `serve_raw` acepta y despacha él mismo → no hay dónde insertar el upgrade. Falta `serve_tls`.
+4. **Keep-alive**: siempre `Connection: close` → un handshake TCP por petición (el mayor coste
+   de rendimiento real).
+5. **Cabeceras duplicadas**: `Map<string,string>` impide dos `Set-Cookie` en una respuesta (bloquea
+   sesiones+flash) y pisa repetidas entrantes.
+6. **Menores**: sin chunked entrante, sin helper de archivos estáticos (con saneo de `..`),
+   `status_text` sin 3xx/401/403/405/503, enrutado sin `Option` en `param()`.
+
+**Sub-fases** (orden por conveniencia; cada una committeable):
+
+- **M56.1 — frontera de seguridad, parte librería** (cero runtime): límites de cabeceras
+  (~64 KiB) y de cuerpo (por defecto sensato, configurable), escaneo incremental del fin de
+  cabeceras (O(n)), cuerpo truncado → `Err`, accept-loop resiliente (log-y-seguir en errores
+  transitorios), tope de conexiones simultáneas vía **canal acotado como semáforo** (`channel(n)`
+  de M12.2: `send` antes de spawn cede al llenarse → backpressure gratis, sin estado compartido
+  — compatible con los heaps aislados de M38), `status_text` completo.
+- **M56.2 — query string + percent-decoding**: `Request` gana `query` (y `path` queda SIN query
+  — cambio semántico deliberado; arregla el enrutado del framework). Decode `%XX` del path.
+  Toca framework/demos/tests (mecánico).
+- **M56.3 — `serve_tls(host, port, cert, key, handler)`**: el accept-loop con `net.tls_accept`
+  antes de leer (patrón de `wss_echo.ray`); reusa TODO lo demás. Librería pura.
+- **M56.4 — timeouts** (único toque de runtime real): deadline en `io_parked` + timeout en
+  `poll::wait` para poder despertar una fibra aparcada en un fd que nunca llega — habilita
+  timeout de lectura (anti-slowloris) y de handler. Diseño fino al llegar (¿builtin
+  `__socket_deadline(h, ms)` o timeout del `serve` config?).
+- **M56.5 — cierre en panic del handler**: hoy un panic en el handler fuga el fd (no hay
+  `recover`). Camino alineado con "errores como valores": **`try_join(t) -> Result<T, string>`**
+  (variante de `join` que NO re-lanza; builtin pequeño, generalmente útil) y `atender` corre el
+  handler en una tarea, observa el fallo y **siempre** cierra la conexión.
+- **M56.6 — keep-alive**: bucle de peticiones por conexión honrando `Connection`; el framing por
+  `Content-Length` ya es correcto. `serve_raw`/SSE conservan su semántica (el handler crudo posee
+  la conexión).
+- **M56.7 — cabeceras múltiples**: decisión de API (lista `[(k,v)]` vs campo extra para
+  `Set-Cookie`); romper `Response.headers` se decide aquí.
+- **M56.8 — extras**: chunked entrante, `serve_static(dir)` con saneo de ruta, HEAD sin cuerpo.

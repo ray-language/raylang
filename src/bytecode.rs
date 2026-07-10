@@ -28,6 +28,12 @@ pub enum MathFn {
     Floor,
     Ceil,
     Round,
+    // M65.2: trig inversa y compañía.
+    Asin,
+    Acos,
+    Atan,
+    Log2,
+    Trunc,
 }
 
 /// Una instrucción de la VM. Las que llevan operando (como `Constant`) lo guardan
@@ -405,6 +411,9 @@ pub enum OpCode {
     /// (envuelto por `math.pow`). M49.1b: `abs`/`min`/`max`/`pi`/`e` dejaron de tener opcode (son
     /// funciones puras en `std/math`).
     Pow,
+    /// M65.2: saca `x` y `y` (`float`, `float`); empuja `atan2(y, x)` — el ángulo de (x, y) en
+    /// (-π, π]. Binaria como `Pow` (no cabe en `MathF`). Primitivo `__atan2` (→ `math.atan2`).
+    Atan2,
 
     // --- Reloj y aleatoriedad (M15.1b) ---
     /// No saca nada; empuja los milisegundos desde la época Unix (`int`). Builtin `now`.

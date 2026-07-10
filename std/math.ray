@@ -42,6 +42,27 @@ pub fn ceil(x: float) -> float { __ceil(x) }
 /// `x` rounded to the nearest integer, as a float (ties away from zero).
 pub fn round(x: float) -> float { __round(x) }
 
+// M65.2: trig inversa y compañía. Mismos dominios totales IEEE que el resto
+// (fuera de dominio → NaN, sin traps).
+/// Arcsine of `x`, in radians in [-π/2, π/2]. `|x| > 1` → NaN.
+pub fn asin(x: float) -> float { __asin(x) }
+
+/// Arccosine of `x`, in radians in [0, π]. `|x| > 1` → NaN.
+pub fn acos(x: float) -> float { __acos(x) }
+
+/// Arctangent of `x`, in radians in (-π/2, π/2).
+pub fn atan(x: float) -> float { __atan(x) }
+
+/// The angle of the point `(x, y)` from the positive x-axis, in radians in (-π, π].
+/// Note the argument order: `atan2(y, x)`, as in C and every mainstream language.
+pub fn atan2(y: float, x: float) -> float { __atan2(y, x) }
+
+/// Base-2 logarithm of `x`.
+pub fn log2(x: float) -> float { __log2(x) }
+
+/// The integer part of `x`, as a float (rounds toward zero; `trunc(-3.7)` is `-3`).
+pub fn trunc(x: float) -> float { __trunc(x) }
+
 /// A numeric type that has an absolute value (M49.1b). Implemented for `int` and `float`; a user numeric
 /// type can `impl Signed for T` to work with `math.abs`.
 pub trait Signed {

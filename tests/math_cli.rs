@@ -51,6 +51,31 @@ fn std_math_envoltorios() {
     assert_eq!(o_in, o_vm, "ambos motores coinciden");
 }
 
+/// M65.2 — trig inversa y compañía: los envoltorios `math.asin/acos/atan/atan2/log2/trunc`
+/// compilan y corren por ambos motores (el cálculo lo cubre el oráculo de `vm.rs`).
+#[test]
+fn trig_inversa_y_compania() {
+    let src = r#"import std/math;
+fn main() -> int {
+    print(math.atan2(1.0, 0.0) == math.PI / 2.0);  // true (ángulo de (0,1) = π/2)
+    print(math.asin(1.0) == math.PI / 2.0);        // true
+    print(math.acos(1.0));                         // 0
+    print(math.atan(0.0));                         // 0
+    print(math.log2(1024.0));                      // 10
+    print(math.trunc(3.7));                        // 3
+    print(math.trunc(0.0 - 3.7));                  // -3 (hacia cero, no floor)
+    0
+}
+"#;
+    let esperado = "true\ntrue\n0\n0\n10\n3\n-3\n";
+    let (o_in, c_in) = run("m65_trig_in", src, false);
+    let (o_vm, c_vm) = run("m65_trig_vm", src, true);
+    assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
+    assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
+    assert_eq!(o_in, esperado, "salida del intérprete");
+    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+}
+
 /// M65.1 — dos fixes de corrección: (a) `ipow` ya no trap-ea con resultados que caben (el
 /// cuadrado final innecesario desbordaba el int checked: ipow(2,40) reventaba por 2^64);
 /// (b) los empates de `min`/`max` devuelven `a`, como promete la doc (antes `b`; observable

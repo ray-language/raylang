@@ -2282,6 +2282,15 @@ impl<'a> Vm<'a> {
                     };
                     self.push(HeapValue::Float(base.powf(exp)));
                 }
+                // M65.2: atan2(y, x) — mismo f64::atan2 que el intérprete → el oráculo cuadra.
+                OpCode::Atan2 => {
+                    let x = self.pop();
+                    let y = self.pop();
+                    let (HeapValue::Float(y), HeapValue::Float(x)) = (y, x) else {
+                        unreachable!("el checker garantiza dos floats");
+                    };
+                    self.push(HeapValue::Float(y.atan2(x)));
+                }
                 // M49.1b: abs/min/max/pi/e ya no tienen opcode (funciones puras en `std/math`).
 
                 // --- Reloj y aleatoriedad (M15.1b): delegan en los helpers compartidos. ---
@@ -4202,6 +4211,18 @@ mod tests {
         oracle_int("if (__exp(0.0) == 1.0) { 1 } else { 0 }");
         // Borde: NaN se comporta igual en ambos motores (NaN != NaN → la rama else).
         oracle_int("if (__sqrt(0.0 - 1.0) == __sqrt(0.0 - 1.0)) { 1 } else { 0 }");
+        // M65.2: trig inversa y compañía (valores exactos en f64 → la igualdad vale).
+        oracle_int("if (__asin(1.0) == __acos(0.0)) { 1 } else { 0 }"); // ambas = π/2 exacto
+        oracle_int("if (__asin(0.0) == 0.0) { 1 } else { 0 }");
+        oracle_int("if (__atan(0.0) == 0.0) { 1 } else { 0 }");
+        oracle_int("if (__atan2(0.0, 1.0) == 0.0) { 1 } else { 0 }");
+        oracle_int("if (__atan2(1.0, 0.0) == __asin(1.0)) { 1 } else { 0 }"); // π/2 por ambos caminos
+        oracle_int("if (__atan2(0.0, 0.0 - 1.0) > 3.14) { 1 } else { 0 }"); // π (rama x<0)
+        oracle_int("if (__log2(1024.0) == 10.0) { 1 } else { 0 }");
+        oracle_int("if (__trunc(3.7) == 3.0) { 1 } else { 0 }");
+        oracle_int("if (__trunc(0.0 - 3.7) == 0.0 - 3.0) { 1 } else { 0 }"); // hacia cero, no floor
+        // Fuera de dominio → NaN, igual en ambos motores.
+        oracle_int("if (__asin(2.0) == __asin(2.0)) { 1 } else { 0 }");
     }
 
     /// M27.1: tuplas — retorno múltiple, acceso `.N`, desestructuración (`_`), heterogéneas. Erasure a

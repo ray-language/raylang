@@ -39,6 +39,12 @@ pub fn apply_mathf(f: MathFn, x: f64) -> f64 {
         MathFn::Floor => x.floor(),
         MathFn::Ceil => x.ceil(),
         MathFn::Round => x.round(),
+        // M65.2: trig inversa y compañía (mismos totales IEEE: fuera de dominio → NaN).
+        MathFn::Asin => x.asin(),
+        MathFn::Acos => x.acos(),
+        MathFn::Atan => x.atan(),
+        MathFn::Log2 => x.log2(),
+        MathFn::Trunc => x.trunc(),
     }
 }
 
@@ -1923,11 +1929,24 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__floor", opcode: OpCode::MathF(MathFn::Floor), check: |a| mathf_check(a, "floor") },
     Builtin { name: "__ceil",  opcode: OpCode::MathF(MathFn::Ceil),  check: |a| mathf_check(a, "ceil") },
     Builtin { name: "__round", opcode: OpCode::MathF(MathFn::Round), check: |a| mathf_check(a, "round") },
+    // M65.2: trig inversa y compañía (unarias → mismo opcode parametrizado).
+    Builtin { name: "__asin",  opcode: OpCode::MathF(MathFn::Asin),  check: |a| mathf_check(a, "asin") },
+    Builtin { name: "__acos",  opcode: OpCode::MathF(MathFn::Acos),  check: |a| mathf_check(a, "acos") },
+    Builtin { name: "__atan",  opcode: OpCode::MathF(MathFn::Atan),  check: |a| mathf_check(a, "atan") },
+    Builtin { name: "__log2",  opcode: OpCode::MathF(MathFn::Log2),  check: |a| mathf_check(a, "log2") },
+    Builtin { name: "__trunc", opcode: OpCode::MathF(MathFn::Trunc), check: |a| mathf_check(a, "trunc") },
     // pow(base, exp) -> float.
     Builtin { name: "__pow", opcode: OpCode::Pow, check: |a| {
         arity(a, 2, "pow", " (base, exponente)")?;
         if a[0] != Type::Float { return Err((Some(0), format!("pow espera un float, no {}", a[0]))); }
         if a[1] != Type::Float { return Err((Some(1), format!("pow espera un float, no {}", a[1]))); }
+        Ok(Type::Float)
+    } },
+    // M65.2: atan2(y, x) -> float (binaria, como pow).
+    Builtin { name: "__atan2", opcode: OpCode::Atan2, check: |a| {
+        arity(a, 2, "atan2", " (y, x)")?;
+        if a[0] != Type::Float { return Err((Some(0), format!("atan2 espera un float, no {}", a[0]))); }
+        if a[1] != Type::Float { return Err((Some(1), format!("atan2 espera un float, no {}", a[1]))); }
         Ok(Type::Float)
     } },
     // M49.1b: abs/min/max/pi/e se movieron a `std/math` como funciones puras en raylang (abs vía el

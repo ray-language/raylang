@@ -7818,7 +7818,7 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   (`ipow(2, 40)` = 1.1e12 reventaba por 2^64). Fix: solo cuadrar cuando quedan iteraciones.
   (b) `min`/`max` — la doc dice "Ties return `a`" pero el código devolvía `b` (observable con
   `impl Ord` de usuario). Fix: comparación invertida (empate → `a`).
-- **M65.2 — trig inversa y compañía**: `asin`/`acos`/`atan`/`atan2`/`log2`/`trunc` como
+- **M65.2 — trig inversa y compañía COMPLETO**: `asin`/`acos`/`atan`/`atan2`/`log2`/`trunc` como
   builtins (fila en `BUILTINS` + opcode + impl por motor + envoltorio `__x` en std/math,
   patrón M11.4). `atan2` es el hueco doloroso (ángulo desde coordenadas).
 - **M65.3 — menores**: `clamp<T: Ord>` genérica (retrocompatible) + documentar la frontera

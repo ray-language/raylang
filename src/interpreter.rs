@@ -1601,7 +1601,8 @@ impl<'a> Interpreter<'a> {
             // --- Matemáticas (M15.1a) ---
             // Funciones unarias float -> float: el nombre fija qué MathFn aplicar; el cálculo lo hace
             // `builtins::apply_mathf` (compartido con la VM → el oráculo cuadra, incl. NaN/inf).
-            "__sqrt" | "__sin" | "__cos" | "__tan" | "__ln" | "__log10" | "__exp" | "__floor" | "__ceil" | "__round" => {
+            "__sqrt" | "__sin" | "__cos" | "__tan" | "__ln" | "__log10" | "__exp" | "__floor" | "__ceil" | "__round"
+            | "__asin" | "__acos" | "__atan" | "__log2" | "__trunc" => {
                 let f = match name {
                     "__sqrt" => MathFn::Sqrt,
                     "__sin" => MathFn::Sin,
@@ -1613,6 +1614,12 @@ impl<'a> Interpreter<'a> {
                     "__floor" => MathFn::Floor,
                     "__ceil" => MathFn::Ceil,
                     "__round" => MathFn::Round,
+                    // M65.2
+                    "__asin" => MathFn::Asin,
+                    "__acos" => MathFn::Acos,
+                    "__atan" => MathFn::Atan,
+                    "__log2" => MathFn::Log2,
+                    "__trunc" => MathFn::Trunc,
                     _ => unreachable!(),
                 };
                 match &values[0] {
@@ -1622,6 +1629,11 @@ impl<'a> Interpreter<'a> {
             }
             "__pow" => match (&values[0], &values[1]) {
                 (Value::Float(b), Value::Float(e)) => Value::Float(b.powf(*e)),
+                _ => unreachable!("el checker garantiza dos floats"),
+            },
+            // M65.2: atan2(y, x) — el ángulo de (x, y) en (-π, π].
+            "__atan2" => match (&values[0], &values[1]) {
+                (Value::Float(y), Value::Float(x)) => Value::Float(y.atan2(*x)),
                 _ => unreachable!("el checker garantiza dos floats"),
             },
             // M49.1b: abs/min/max/pi/e ya no son builtins (funciones puras en `std/math`).

@@ -714,6 +714,25 @@ deadlines de M56.4). La promoción de 57.1 usa reexports → cero rotura.
 
 ---
 
+## 19. Clientes web de producción (WebSocket · HTTP/1.1 · HTTP/2) — M58, PLAN (revisión jul 2026)
+
+Revisión de `net/websocket[_client]`, `net/http` y `net/http2[_client]`+`net/hpack`+`net/grpc_client`
+(detalle en DESIGN §62). Patrón común: **la criptografía y el framing (lo difícil) están bien y
+verificados contra vectores RFC**; lo que falta es la robustez de red (buffering, timeouts, flow
+control) que el SERVIDOR ya recibió en M56. Todo librería pura, cero runtime.
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **WS: "una trama = una lectura"** — trama partida = OOB (muere la fibra), tramas juntas = la 2ª se descarta; sin ping→pong (peers estrictos cierran), sin close-handshake, sin límite de payload (longitud declarada de 2⁶⁰ = asignación sin tope), sin fragmentación | El hueco ESTRUCTURAL; rompe bajo condiciones de red reales | **58.1**: lector bufferizado `WsConn`+`read_frame`/`read_message` (rompe la API del cliente: `connect` pasa de devolver handle a `WsConn` — necesita estado entre lecturas) |
+| HTTP/1.1: sin timeouts (cuelga para siempre); `Host` SIN puerto (bug de interop con vhosts `:8080`; el cliente WS sí lo pone); `Accept-Encoding` nunca se envía (el gunzip es código muerto en la práctica); cuerpo de petición `string` (sin binario); Content-Length de respuesta ignorado (truncado = aceptado en silencio) | Asimetría con el servidor M56 | **58.2** (decisión menor: cuerpo `bytes` vía firma nueva o `request_bytes`) |
+| HTTP/2: **sin WINDOW_UPDATE** → respuesta > ~64 KiB (ventana inicial 65535) CUELGA para siempre; PING sin ACK (el servidor corta en transferencias largas); RST_STREAM ignorado (lee hasta EOF en vez de fallar) | Límite duro real de `http2_get`/`grpc_call` | **58.3** |
+| Menores: WS `extract_key` case-sensitive; `recv_text` ignora el opcode; HTTP `absolutizar` con Location relativa sin `/`; cabeceras de respuesta pierden Set-Cookie múltiples; h2 sin CONTINUATION/END_HEADERS; `Http2Response` sin headers | — | dentro de su sub-fase o diferido |
+
+**Diferidos** (a demanda): keep-alive/pool del cliente HTTP (la delimitación por Content-Length lo
+habilita), multiplexado h2 real, fragmentación WS de ENVÍO (la de recepción entra en 58.1).
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

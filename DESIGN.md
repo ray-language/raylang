@@ -7539,3 +7539,24 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   → prefijo `017f22e2-79b0-7`) + orden lexicográfico de ms consecutivos. **M57 COMPLETO**
   (57.1–57.3). Diferidos (a demanda, IDEAS §18): `tz` IANA, `net/ntp`, `cron`, `dist`/HLC,
   `__local_offset_millis`, monotonicidad intra-ms del v7 (contador rand_a).
+
+## 62. M58 — Clientes web de producción (WebSocket · HTTP/1.1 · HTTP/2)
+
+> Revisión jul 2026 (tras M56/M57; clasificación en IDEAS §19). Las tres piezas comparten patrón:
+> cripto y framing verificados contra vectores RFC (SHA-1/base64, HPACK+Huffman, frames h2);
+> falta la robustez de red que el servidor recibió en M56. Todo librería raylang pura.
+
+- **M58.1 — WebSocket robusto**: lector de tramas BUFFERIZADO — `WsConn { conn, buf, mask }`
+  (estado entre lecturas; una trama puede llegar partida o venir pegada a otra) con
+  `read_frame` (acumula hasta cabecera+longitud exactas, conserva el resto) y `read_message`
+  (auto **ping→pong** con el enmascarado del lado correcto, close-handshake de cortesía,
+  **fragmentación de recepción** —continuations hasta FIN—, límite de payload ANTES de leer).
+  Rompe la API del cliente: `connect`/`connect_tls` devuelven `WsConn` (el estado es necesario);
+  `extract_key` pasa a case-insensitive. Los demos de eco se reescriben encima (más simples).
+- **M58.2 — cliente HTTP/1.1**: timeout de lectura (`net.set_read_timeout`, M56.4) con default
+  sensato, `Host` con puerto no-default, `Accept-Encoding: gzip` (activa el gunzip que ya existe),
+  cuerpo de petición en `bytes` (subidas binarias), Content-Length de respuesta verificado
+  (truncado = Err), `absolutizar` con Location relativa sin `/`.
+- **M58.3 — cliente HTTP/2**: **flow control** (WINDOW_UPDATE de conexión y stream al consumir
+  DATA → desbloquea respuestas > 64 KiB), ACK de PING, RST_STREAM = Err con causa. Aplica a
+  `http2_get` y `grpc_call`.

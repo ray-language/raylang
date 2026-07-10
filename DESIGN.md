@@ -7680,3 +7680,29 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 - Sin cambios de golden: todas las salidas son idénticas; las suites de consumidores cubren
   la migración (jwt, jwt_eddsa, scram, websocket, hmac, sha256/512, base64, uuid, cli, oauth2,
   postgres/mongo vía scram).
+
+## 65. M61 — El prelude de producción (hash, sort, ergonomía)
+
+> Revisión jul 2026 (tras M60; clasificación en IDEAS §21). Dos defectos verificados con el
+> binario + la ergonomía de Option/Result. Todo front-end puro (prelude + codegen del derive).
+
+- **M61.1 — hash sin overflow**: el `int` de raylang es **checked** (desbordar = trap), pero el
+  hash clásico `h = h*31 + c` asume **wrapping** → `Hash for string` panica con ≥ ~12 chars
+  (mata `Set<string>` con claves reales) y el combinador de `@derive(Hash)` panica con un campo
+  de valor grande (p. ej. un int de 4×10¹⁷). Fix: acumular acotado a 32 bits — `h = (h*31 + x) &
+  4294967295` (producto máx ~2³⁷ ≪ i64::MAX) — en el impl del prelude y en `generate_derives`
+  (que además enmascara los hashes ENTRANTES de los campos, que pueden ser cualquier i64).
+  Tests: hash de string largo, Set<string> con claves reales, derive con int grande (ambos
+  motores).
+- **M61.2 — `sort` O(n log n)**: el insertion sort del prelude es O(n²) — medido: 20 000 ints =
+  22 960 ms en release. Reemplazo por **merge sort** en raylang puro (front-end, cero runtime),
+  ESTABLE como el actual; `sort_desc`/`dedup`/`binary_search` de `std/sort` lo heredan. Medir
+  antes/después.
+- **M61.3 — ergonomía de Option/Result + Eq/Show de bytes**: funciones libres genéricas
+  `unwrap_or`/`is_some`/`is_none`/`expect`/`unwrap`/`ok_or` (+ los análogos de Result que
+  procedan) — UFCS gratis (`opt.unwrap_or(0)`); `impl Eq/Show for bytes` (== ya es estructural,
+  `to_string(bytes)` ya da hex) e `impl<T> Eq for [T]` (== estructural) → `assert_eq` sobre
+  bytes/arreglos.
+- **Fuera del arco** (idea aparte, IDEAS §21): posición-del-llamador para `assert`/`panic`
+  (hoy un assert fallido reporta la línea del prelude) — exige diseño de runtime (stack trace
+  o intrinsic de posición).

@@ -757,6 +757,27 @@ es error de sintaxis) — anotar como idea aparte si algún consumidor lo pide.
 
 ---
 
+## 21. El prelude (revisión jul 2026) — M61, PLAN
+
+Revisión de `src/prelude.rs` (detalle en DESIGN §65). La arquitectura está bien (todo librería
+raylang, erasure, envoltorios [T]→Option uniformes, iteradores correctos, parse cacheado); los
+hallazgos son dos defectos verificados con el binario y ergonomía faltante.
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **`Hash` DESBORDA y revienta**: `h = h*31 + c` con el `int` checked (trap, no wrapping) → `.hash()` de un string ≥ ~12 chars panica → **`Set<string>` inutilizable con claves reales**; el combinador de `@derive(Hash)` igual (un campo int grande revienta) | Bug que revienta en runtime | **61.1**: acumular con máscara de 32 bits (`& 4294967295`) en el impl del prelude Y en `generate_derives` |
+| **`sort` es insertion sort O(n²)**: 20k ints = **23 s** (medido, release) | El json-O(n²) de M59.5 pero en sort | **61.2**: merge sort en raylang puro (estable; `std/sort.merge` ya existe), midiendo |
+| **Option/Result sin ergonomía**: no hay `unwrap_or`/`is_some`/`is_none`/`expect`/`ok_or` — todo es `match` (los packages están llenos de `match … Some(x) => x`); `bytes` sin `Eq`/`Show` (`assert_eq` sobre bytes no tipa, aunque `==` ya funciona); `[T]` sin `Eq` | La mejora de ergonomía más rentable pendiente | **61.3** (funciones libres genéricas + impls de una línea) |
+| **DX de assert**: un `assert` fallido reporta la posición DEL PRELUDE (579:9), no el sitio del usuario — con varios asserts no sabes cuál falló | Inherente a "prelude = funciones ordinarias"; el fix real es posición-del-llamador o mini stack trace (toca runtime) | **idea aparte** (diseño de runtime; no entra en M61) |
+| Menores: `sum` solo `Iter<int>` (sin float); `Ord` para `bool`/`bytes` ausente | — | dentro de 61.3 o diferido |
+
+**Verificados sin hallazgo**: envoltorios de I/O/Map correctos; `try_join` sin carrera; iteradores
+(map/filter/take/skip/zip/enumerate/fold/collect) con semántica correcta y one-shot como Rust
+(mismo caveat de consumo asimétrico en `zip`); insertion sort ESTABLE (el merge sort debe conservarlo);
+arranque con parse cacheado (`OnceLock`).
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

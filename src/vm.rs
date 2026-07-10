@@ -2284,8 +2284,23 @@ impl<'a> Vm<'a> {
                 OpCode::Monotonic => self.push(HeapValue::Int(crate::builtins::monotonic_millis())),
                 OpCode::Sleep => match self.pop() {
                     HeapValue::Int(ms) => {
-                        crate::builtins::sleep_millis(ms);
+                        // M57.2: dormir es COOPERATIVO — la fibra se aparca con un deadline sin fd
+                        // (la maquinaria de M56.4) y las demás siguen corriendo. Antes:
+                        // `thread::sleep` bloqueaba el worker entero (en M:1, todas las fibras).
+                        // El resultado (unit) se empuja ANTES de aparcar y el ip NO se rebobina:
+                        // al despertar, la fibra continúa tras el sleep (no lo re-ejecuta).
                         self.push(HeapValue::Unit);
+                        if ms > 0 {
+                            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
+                            let fiber = Self::take_current_fiber(&mut self.cur);
+                            {
+                                let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                                sh.io_parked.push(IoParked { fd: -1, fiber, pending_write: None, handle: -1, deadline: Some(deadline) });
+                                sh.running -= 1; // aparcada durmiendo → worker ocioso
+                            }
+                            let (l, c2) = pos!();
+                            if !self.poll_next(l, c2)? { self.stop = true; }
+                        }
                     }
                     _ => unreachable!("el checker garantiza un int"),
                 },
@@ -2595,8 +2610,10 @@ impl<'a> Vm<'a> {
     /// devuelve el error de timeout. Sin deadlines, la espera sigue siendo infinita (idéntico a M17).
     fn io_wait(shared: &mut Shared) {
         loop {
-            // 0) Expira los deadlines vencidos: marca el handle y despierta la fibra (re-ejecuta su
-            //    lectura, que verá la marca). Si expiró alguna, ya hay una fibra lista → volver.
+            // 0) Expira los deadlines vencidos y despierta sus fibras. Una espera de LECTURA
+            //    (handle >= 0) se marca (su lectura re-ejecutada devuelve el timeout); un SLEEP
+            //    (M57.2: fd/handle = -1, sin re-ejecución) simplemente continúa tras dormir.
+            //    Si expiró alguna, ya hay una fibra lista → volver.
             let now = std::time::Instant::now();
             let mut expiradas: Vec<IoParked> = Vec::new();
             let mut i = 0;
@@ -2609,7 +2626,9 @@ impl<'a> Vm<'a> {
             }
             if !expiradas.is_empty() {
                 for p in expiradas {
-                    crate::builtins::mark_read_timeout(p.handle);
+                    if p.handle >= 0 {
+                        crate::builtins::mark_read_timeout(p.handle);
+                    }
                     shared.ready.push_back(p.fiber);
                 }
                 return;
@@ -2621,16 +2640,24 @@ impl<'a> Vm<'a> {
                 Some(d) => d.saturating_duration_since(now).as_millis().min(i32::MAX as u128 - 1) as i32 + 1,
                 None => -1,
             };
-            // Cada fibra espera **lectura** (pending_write None) o **escritura** (Some) de su socket.
-            let read_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.pending_write.is_none()).map(|p| p.fd).collect();
-            let write_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.pending_write.is_some()).map(|p| p.fd).collect();
+            // Cada fibra espera **lectura** (pending_write None) o **escritura** (Some) de su
+            // socket. Las durmientes (fd < 0) no entran al poller: solo cuenta su deadline.
+            let read_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.fd >= 0 && p.pending_write.is_none()).map(|p| p.fd).collect();
+            let write_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.fd >= 0 && p.pending_write.is_some()).map(|p| p.fd).collect();
+            // Solo durmientes (sin fds): el poller con listas vacías retorna al instante (no honra
+            // el timeout) → duerme el hilo hasta el deadline más próximo y expira en la vuelta.
+            // (Un solo worker llega aquí — `running == 0` — así que dormir el hilo es correcto.)
+            if read_fds.is_empty() && write_fds.is_empty() {
+                crate::builtins::sleep_millis(timeout_ms.max(0) as i64);
+                continue;
+            }
             if let crate::poll::PollResult::Ready(ready) = crate::poll::wait(&read_fds, &write_fds, timeout_ms) {
                 if !ready.is_empty() {
                     // Saca las fibras cuyo socket quedó listo; las demás siguen aparcadas.
                     let mut woken: Vec<IoParked> = Vec::new();
                     let mut i = 0;
                     while i < shared.io_parked.len() {
-                        if ready.contains(&shared.io_parked[i].fd) {
+                        if shared.io_parked[i].fd >= 0 && ready.contains(&shared.io_parked[i].fd) {
                             woken.push(shared.io_parked.remove(i));
                         } else {
                             i += 1;
@@ -2645,10 +2672,20 @@ impl<'a> Vm<'a> {
                     continue;
                 }
             }
-            // Respaldo (sin poller, o EINTR sin deadlines): busy-poll cooperativo de M15.5. Nota:
-            // sin poller los deadlines no vencen (cada re-aparcado los renueva); macOS/Linux no caen aquí.
+            // Respaldo (sin poller, o EINTR sin deadlines): busy-poll cooperativo de M15.5 —
+            // despierta solo las fibras CON fd (retry); las durmientes esperan su deadline (las
+            // expira el paso 0 en vueltas siguientes). Nota: sin poller los deadlines de LECTURA
+            // no vencen (cada re-aparcado los renueva); macOS/Linux no caen aquí.
             crate::builtins::sleep_millis(1);
-            let woken: Vec<IoParked> = shared.io_parked.drain(..).collect();
+            let mut woken: Vec<IoParked> = Vec::new();
+            let mut i = 0;
+            while i < shared.io_parked.len() {
+                if shared.io_parked[i].fd >= 0 {
+                    woken.push(shared.io_parked.remove(i));
+                } else {
+                    i += 1;
+                }
+            }
             Self::wake_parked(shared, woken);
             return;
         }

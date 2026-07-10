@@ -18,7 +18,10 @@ pub fn now() -> int { __now() }
 /// NOT comparable across processes and must not be persisted — store `now()` for that.
 pub fn monotonic() -> int { __monotonic() }
 
-/// Suspends the current fiber for `ms` milliseconds (`ms <= 0` returns immediately).
+/// Suspends the current fiber for at least `ms` milliseconds (`ms <= 0` returns immediately).
+/// **Cooperative in the VM** (M57.2): the fiber parks and other fibers keep running — sleeping
+/// inside a server does not stall other connections. In the interpreter (single-threaded oracle)
+/// it blocks the whole program.
 pub fn sleep(ms: int) { __sleep(ms) }
 
 // --- Fechas civiles UTC (M20.5, promovidas en M57.1) ---

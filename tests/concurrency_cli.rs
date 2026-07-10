@@ -600,3 +600,29 @@ fn main() -> int {
     assert_eq!(code, 0, "stderr: {stderr}");
     assert_eq!(stdout, "ok 42\nerr kaboom\nefecto\nunit ok\nsigo vivo\n");
 }
+
+#[test]
+fn sleep_cede_la_fibra() {
+    // M57.2: `time.sleep` es cooperativo en la VM — aparca la fibra con deadline (sin fd) y las
+    // demás siguen corriendo. Antes bloqueaba el worker entero (en M:1, TODAS las fibras): la
+    // hija no habría corrido hasta el join. Márgenes anchos (20 vs 200 ms) → orden estable.
+    let src = r#"
+import std/time;
+
+fn main() -> int {
+    let t = spawn(fn() {
+        print("hija antes");
+        time.sleep(20);
+        print("hija después");
+    });
+    print("main 1");
+    time.sleep(200);
+    print("main 2");
+    join(t);
+    0
+}
+"#;
+    let (stdout, stderr, code) = run("sleep_cede", src, true);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout, "main 1\nhija antes\nhija después\nmain 2\n");
+}

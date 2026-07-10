@@ -7517,9 +7517,19 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   devuelve el `DateTime` normalizado a UTC (fracción truncada a segundos). `monotonic`
   documentado como por-proceso (no persistible). Golden `time_cli` ampliado (10 casos nuevos,
   ambos motores, vectores Python).
-- **M57.2 — sleep cooperativo de fibra** (único toque de runtime): `time.sleep` en la VM pasa de
-  `thread::sleep` (bloquea el worker; en M:1 congela todo) a **aparcar la fibra con deadline sin
-  fd** — la misma maquinaria de deadlines de M56.4. Desbloquea timeout-de-handler (diferido de
-  M56.5), retries y cron. El intérprete sigue bloqueante (un hilo, documentado).
+- **M57.2 — sleep cooperativo de fibra** ✅ **COMPLETO** (único toque de runtime): `time.sleep`
+  en la VM pasa de `thread::sleep` (bloqueaba el worker; en M:1 congelaba TODAS las fibras) a
+  **aparcar la fibra con deadline sin fd** (`IoParked { fd: -1, handle: -1, deadline }` — la
+  maquinaria de M56.4). El resultado (unit) se empuja ANTES de aparcar y el ip NO se rebobina: al
+  despertar, la fibra continúa (no re-ejecuta el sleep). `io_wait`: las durmientes no entran al
+  poller (fd < 0 filtrado); su expiración despierta SIN marcar timeout (la marca es solo para
+  esperas con handle >= 0); si SOLO hay durmientes (sin fds), el poller con listas vacías retorna
+  al instante → se duerme el hilo hasta el deadline más próximo (correcto: `running == 0`, un
+  solo worker llega ahí) — de rebote, el sleep de fibra funciona también en plataformas SIN
+  poller; el busy-poll de respaldo solo despierta las fibras CON fd. El intérprete sigue
+  bloqueante (un hilo, documentado en std/time). Desbloquea timeout-de-handler (diferido de
+  M56.5), retries y el futuro `cron`. Test `sleep_cede_la_fibra` (la hija corre y despierta
+  mientras main duerme — antes no corría hasta el join); la propiedad `sleep >= ms` de
+  `time_random_cli` intacta.
 - **M57.3 — UUID v7** en `std/uuid` (timestamp ordenable + aleatorio; claves de DB/trazas), junto
   al v4.

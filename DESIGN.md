@@ -7599,19 +7599,23 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 > (NFA de Thompson lineal, surrogates `\uXXXX`, RFC 4180). Los huecos son de conformidad en
 > los bordes, rigor de validación y O(n²) por concatenación de strings. Cero runtime.
 
-- **M59.1 — JSON conforme a RFC 8259 (escapes)**: (a) `unescape` acepta `\b` (backspace,
+- **M59.1 — JSON conforme a RFC 8259 (escapes)** ✅ **COMPLETO**: (a) `unescape` acepta `\b` (backspace,
   U+0008) y `\f` (form feed, U+000C) — son escapes obligatorios de la RFC; hoy el parse
   rechaza JSON legal de terceros con "secuencia de escape no soportada". (b) `quote` emite
   `\b`/`\f` para esos caracteres y escapa TODO control < 0x20 restante como `\u00XX` — hoy
   un string con un control dentro se serializa crudo, produciendo JSON inválido que otro
   parser rechaza. Round-trip: `parse(stringify(x)) == x` para strings con cualquier control.
-- **M59.2 — regex sin panic + tipo `Regex` compilado**: `compile(pat) -> Result<Regex, string>`
-  (el struct `Regex` envuelve el programa NFA compilado); los 5 `panic` del compilador de
-  patrones pasan a `Err` (la única librería de las 8 que violaba "errores como valores").
-  Métodos sobre `Regex` (`full_match`/`search`/`find`/`find_str`/`find_all`/`replace_all`) que
-  NO recompilan; las funciones libres actuales se conservan delegando (compat; con patrón
-  inválido, ¿comportamiento? → devuelven su valor "no match" o panic como hoy: decidir en la
-  implementación conservando la firma).
+- **M59.2 — regex sin panic + tipo `Regex` compilado** ✅ **COMPLETO**: el parser del patrón
+  devuelve `Result` (propagación con `?`; los 5 `panic` → `Err` con el mismo mensaje, más un
+  OOB latente cazado: `\` colgante tras el `-` de un rango). `compile(pat) -> Result<Regex,
+  string>` (el struct `Regex` envuelve el `Prog` NFA). **Los mismos seis nombres como métodos
+  vía el trait `Matcher`** (`impl Matcher for Regex`) — raylang no tiene sobrecarga, pero un
+  método de trait GANA a la función libre homónima en la resolución por punto (M9.1), así
+  `re.find(txt)` y `find(pat, txt)` conviven; los métodos no recompilan (el `Regex` trae el
+  programa; motores extraídos a `run_*`). Las funciones libres se conservan delegando en
+  `must_compile` (contrato histórico: patrón malformado = panic, mismo mensaje; documentadas
+  "prefer compile for user-supplied patterns"). Demo + golden `regex_cli` con los 4 errores
+  como valores y la API compilada.
 - **M59.3 — base64 estricto en decode**: rechazar (a) datos tras el padding (`"QQ==basura"`),
   (b) bits sobrantes de la cola ≠ 0 (dos representaciones del mismo payload), (c) longitud
   inválida. Cierra la maleabilidad de representación bajo JWT/SCRAM (que van sobre base64url).

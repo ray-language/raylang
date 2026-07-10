@@ -7,6 +7,10 @@
 //
 // M29.1a (núcleo): literales, `.`, `*` `+` `?`, alternancia `|`, grupos `( )`, concatenación.
 // M29.1b: clases `[...]`/`[^...]` con rangos, escapes `\d`/`\w`/`\s` (y `\D`/`\W`/`\S`), anclas `^`/`$`.
+// M59.2: `compile(pat) -> Result<Regex, string>` (patrón compilado como valor, error como valor)
+// + trait `Matcher` con los mismos seis nombres como métodos (sin recompilar por llamada).
+// Las funciones libres (patrón string) se conservan: compilan en cada llamada y PANICAN con
+// patrón malformado (contrato histórico); para patrones de usuario/config, `compile`.
 // Un rango de caracteres `lo..hi` (ambos inclusive). Un carácter suelto es el rango `c..c`.
 struct Range {
     lo: char,
@@ -114,21 +118,23 @@ fn unescape(e: char) -> char {
     if (e == 'n') { '\n' } else if (e == 't') { '\t' } else if (e == 'r') { '\r' } else { e }
 }
 
-fn parse_alt(p: PS) -> Re {
-    var node = parse_concat(p);
+// M59.2: el parser del patrón devuelve Result (errores como valores); los antiguos `panic`
+// pasan a `Err` con el mismo mensaje. Propagación con `?` fase a fase.
+fn parse_alt(p: PS) -> Result<Re, string> {
+    var node = parse_concat(p)?;
     while (!ps_at_end(p) && ps_peek(p) == '|') {
         ps_advance(p);
-        let rhs = parse_concat(p);
+        let rhs = parse_concat(p)?;
         node = Re.Alt(node, rhs);
     }
-    node
+    Result.Ok(node)
 }
 
-fn parse_concat(p: PS) -> Re {
+fn parse_concat(p: PS) -> Result<Re, string> {
     var node = Re.Empty;
     var primero = true;
     while (!ps_at_end(p) && ps_peek(p) != '|' && ps_peek(p) != ')') {
-        let r = parse_repeat(p);
+        let r = parse_repeat(p)?;
         if (primero) {
             node = r;
             primero = false;
@@ -136,11 +142,11 @@ fn parse_concat(p: PS) -> Re {
             node = Re.Concat(node, r);
         }
     }
-    node
+    Result.Ok(node)
 }
 
-fn parse_repeat(p: PS) -> Re {
-    var node = parse_atom(p);
+fn parse_repeat(p: PS) -> Result<Re, string> {
+    var node = parse_atom(p)?;
     while (!ps_at_end(p) && (ps_peek(p) == '*' || ps_peek(p) == '+' || ps_peek(p) == '?')) {
         let op = ps_advance(p);
         if (op == '*') {
@@ -151,47 +157,47 @@ fn parse_repeat(p: PS) -> Re {
             node = Re.Opt(node);
         }
     }
-    node
+    Result.Ok(node)
 }
 
-fn parse_atom(p: PS) -> Re {
+fn parse_atom(p: PS) -> Result<Re, string> {
     let c = ps_peek(p);
     if (c == '(') {
         ps_advance(p);
-        let inner = parse_alt(p);
+        let inner = parse_alt(p)?;
         if (!ps_at_end(p) && ps_peek(p) == ')') {
             ps_advance(p);
         } else {
-            panic("regex: falta ')'");
+            return Result.Err("regex: falta ')'");
         }
-        return inner;
+        return Result.Ok(inner);
     }
     if (c == '[') {
         ps_advance(p);
-        return Re.ClassRe(parse_class(p));
+        return Result.Ok(Re.ClassRe(parse_class(p)?));
     }
     if (c == '.') {
         ps_advance(p);
-        return Re.Any;
+        return Result.Ok(Re.Any);
     }
     if (c == '^') {
         ps_advance(p);
-        return Re.AnchorStart;
+        return Result.Ok(Re.AnchorStart);
     }
     if (c == '$') {
         ps_advance(p);
-        return Re.AnchorEnd;
+        return Result.Ok(Re.AnchorEnd);
     }
     if (c == '\\') {
         ps_advance(p);  // consume la barra
         if (ps_at_end(p)) {
-            panic("regex: '\\' al final del patrón");
+            return Result.Err("regex: '\\' al final del patrón");
         }
         let e = ps_advance(p);
-        return escape_atom(e);
+        return Result.Ok(escape_atom(e));
     }
     ps_advance(p);
-    Re.Lit(c)
+    Result.Ok(Re.Lit(c))
 }
 
 // Un escape en posición de átomo: clase predefinida (`\d`/`\w`/`\s` y negadas) o literal (`\.` `\n` …).
@@ -200,7 +206,7 @@ fn escape_atom(e: char) -> Re {
 }
 
 // Parsea el interior de `[...]` (el '[' ya se consumió); deja el cursor tras el ']'.
-fn parse_class(p: PS) -> Class {
+fn parse_class(p: PS) -> Result<Class, string> {
     var neg = false;
     if (!ps_at_end(p) && ps_peek(p) == '^') {
         ps_advance(p);
@@ -211,7 +217,7 @@ fn parse_class(p: PS) -> Class {
         if (ps_peek(p) == '\\') {
             ps_advance(p);  // barra
             if (ps_at_end(p)) {
-                panic("regex: '\\' al final de la clase");
+                return Result.Err("regex: '\\' al final de la clase");
             }
             let e = ps_advance(p);
             // Clases predefinidas dentro de la clase: se fusionan sus rangos.
@@ -222,18 +228,18 @@ fn parse_class(p: PS) -> Class {
             } else if (e == 's') {
                 append_all(ranges, ranges_space());
             } else {
-                push_item(p, ranges, unescape(e));
+                push_item(p, ranges, unescape(e))?;
             }
         } else {
             let c = ps_advance(p);
-            push_item(p, ranges, c);
+            push_item(p, ranges, c)?;
         }
     }
     if (ps_at_end(p)) {
-        panic("regex: falta ']' para cerrar la clase");
+        return Result.Err("regex: falta ']' para cerrar la clase");
     }
     ps_advance(p);  // consume ']'
-    Class { neg: neg, ranges: ranges }
+    Result.Ok(Class { neg: neg, ranges: ranges })
 }
 
 fn append_all(dst: [Range], src: [Range]) {
@@ -245,17 +251,23 @@ fn append_all(dst: [Range], src: [Range]) {
 }
 
 // Añade `lo` como rango: si le sigue `-` y el carácter tras el guion no es `]`, es un rango `lo-hi`.
-fn push_item(p: PS, ranges: [Range], lo: char) {
+// (Devuelve Result para propagar el error de un `\` colgante; el Ok(0) es solo relleno —
+// `unit` no es nombrable como argumento de tipo.)
+fn push_item(p: PS, ranges: [Range], lo: char) -> Result<int, string> {
     if (!ps_at_end(p) && ps_peek(p) == '-' && p.pos + 1 < p.pat.len() && ps_peek2(p) != ']') {
         ps_advance(p);  // '-'
         var hi = ps_advance(p);
         if (hi == '\\') {
+            if (ps_at_end(p)) {
+                return Result.Err("regex: '\\' al final de la clase");
+            }
             hi = unescape(ps_advance(p));
         }
         ranges.push(Range { lo: lo, hi: hi });
     } else {
         ranges.push(Range { lo: lo, hi: lo });
     }
+    Result.Ok(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -331,18 +343,47 @@ fn compile_re(re: Re, prog: Prog) {
     }
 }
 
-fn compile_pattern(pattern: string) -> Prog {
+fn compile_pattern(pattern: string) -> Result<Prog, string> {
     let p = PS { pat: pattern.chars(), pos: 0 };
-    let re = parse_alt(p);
+    let re = parse_alt(p)?;
     if (!ps_at_end(p)) {
-        panic("regex: carácter inesperado en el patrón (¿')' de más?)");
+        return Result.Err("regex: carácter inesperado en el patrón (¿')' de más?)");
     }
     var insts: [Inst] = [];
     var classes: [Class] = [];
     let prog = Prog { insts: insts, classes: classes };
     compile_re(re, prog);
     emit(prog, 2, 0, 0, ' ');  // Match final
-    prog
+    Result.Ok(prog)
+}
+
+// M59.2 — el patrón compilado como VALOR: compila una vez, casa muchas (las funciones libres
+// de abajo recompilan el patrón en CADA llamada; con un Regex el coste de compilar se paga una).
+/// A compiled regular expression. Build one with `compile`; then match with the
+/// `Matcher` methods (`full_match`/`search`/`find`/`find_str`/`find_all`/`replace_all`)
+/// without recompiling the pattern on every call.
+pub struct Regex {
+    prog: Prog,
+}
+
+// Compila un patrón a un `Regex`, con el error como VALOR (las funciones libres panican).
+/// Compiles a pattern into a reusable `Regex`. Err (instead of panicking, unlike the
+/// free-function API) on a malformed pattern: unbalanced `(`/`)`, unclosed `[...]`,
+/// or a trailing `\`.
+pub fn compile(pattern: string) -> Result<Regex, string> {
+    match (compile_pattern(pattern)) {
+        Result.Ok(p) => Result.Ok(Regex { prog: p }),
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+// El puente de compat: las funciones libres (patrón como string) compilan en cada llamada y
+// conservan su contrato histórico (patrón malformado = panic, con el mismo mensaje).
+fn must_compile(pattern: string) -> Prog {
+    match (compile_pattern(pattern)) {
+        Result.Ok(p) => p,
+        Result.Err(e) => panic(e),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -444,12 +485,8 @@ fn step(prog: Prog, clist: [int], ch: char, pos_next: int, n: int, seed: bool) -
     nlist
 }
 
-// ¿Casa el patrón con TODO el texto (anclado a ambos extremos)?
-/// Tests whether the pattern matches the ENTIRE text (anchored at both ends).
-/// Thompson NFA simulation — linear time, no backtracking blowup. Supported syntax:
-/// literals, `.`, `*` `+` `?`, `|`, `( )`, `[...]`/`[^...]` with ranges, `\d \w \s` (and negations), `^` `$`.
-pub fn full_match(pattern: string, text: string) -> bool {
-    let prog = compile_pattern(pattern);
+// El motor de full_match sobre un programa YA compilado (lo comparten la función libre y el método).
+fn run_full(prog: Prog, text: string) -> bool {
     let txt = text.chars();
     let n = txt.len();
     var clist: [int] = [];
@@ -463,11 +500,18 @@ pub fn full_match(pattern: string, text: string) -> bool {
     has_match(prog, clist)
 }
 
-// ¿Casa el patrón con ALGÚN substring del texto (búsqueda no anclada)?
-/// Tests whether the pattern matches SOME substring of the text (unanchored search).
-/// Linear time (Thompson NFA); same supported syntax as `full_match`.
-pub fn search(pattern: string, text: string) -> bool {
-    let prog = compile_pattern(pattern);
+// ¿Casa el patrón con TODO el texto (anclado a ambos extremos)?
+/// Tests whether the pattern matches the ENTIRE text (anchored at both ends).
+/// Thompson NFA simulation — linear time, no backtracking blowup. Supported syntax:
+/// literals, `.`, `*` `+` `?`, `|`, `( )`, `[...]`/`[^...]` with ranges, `\d \w \s` (and negations), `^` `$`.
+/// Panics on a malformed pattern (compiles it on every call); prefer `compile` + `Matcher`
+/// for user-supplied patterns or repeated matching.
+pub fn full_match(pattern: string, text: string) -> bool {
+    run_full(must_compile(pattern), text)
+}
+
+// El motor de search sobre un programa ya compilado.
+fn run_search(prog: Prog, text: string) -> bool {
     let txt = text.chars();
     let n = txt.len();
     var clist: [int] = [];
@@ -485,6 +529,14 @@ pub fn search(pattern: string, text: string) -> bool {
         i = i + 1;
     }
     false
+}
+
+// ¿Casa el patrón con ALGÚN substring del texto (búsqueda no anclada)?
+/// Tests whether the pattern matches SOME substring of the text (unanchored search).
+/// Linear time (Thompson NFA); same supported syntax as `full_match`. Panics on a
+/// malformed pattern; prefer `compile` + `Matcher` for user-supplied patterns.
+pub fn search(pattern: string, text: string) -> bool {
+    run_search(must_compile(pattern), text)
 }
 
 // ---------------------------------------------------------------------------
@@ -514,11 +566,8 @@ fn match_at(prog: Prog, txt: [char], s: int, n: int) -> int {
     best
 }
 
-// La primera coincidencia (leftmost): `Some((inicio, fin))` con índices por carácter, o `None`.
-/// Finds the first (leftmost-longest) match. Returns `Some((start, end))` as character
-/// indices (end exclusive), or `None` if the pattern does not match anywhere.
-pub fn find(pattern: string, text: string) -> Option<(int, int)> {
-    let prog = compile_pattern(pattern);
+// El motor de find sobre un programa ya compilado.
+fn run_find(prog: Prog, text: string) -> Option<(int, int)> {
     let txt = text.chars();
     let n = txt.len();
     var s = 0;
@@ -532,6 +581,14 @@ pub fn find(pattern: string, text: string) -> Option<(int, int)> {
     Option.None
 }
 
+// La primera coincidencia (leftmost): `Some((inicio, fin))` con índices por carácter, o `None`.
+/// Finds the first (leftmost-longest) match. Returns `Some((start, end))` as character
+/// indices (end exclusive), or `None` if the pattern does not match anywhere.
+/// Panics on a malformed pattern; prefer `compile` + `Matcher` for user-supplied patterns.
+pub fn find(pattern: string, text: string) -> Option<(int, int)> {
+    run_find(must_compile(pattern), text)
+}
+
 // El substring de la primera coincidencia, o `None`.
 /// Returns the substring of the first match, or `None` if there is no match.
 pub fn find_str(pattern: string, text: string) -> Option<string> {
@@ -541,11 +598,8 @@ pub fn find_str(pattern: string, text: string) -> Option<string> {
     }
 }
 
-// Todas las coincidencias NO solapadas, de izquierda a derecha, como substrings.
-/// Returns all non-overlapping matches, left to right, as substrings.
-/// A zero-width match advances one character to guarantee progress.
-pub fn find_all(pattern: string, text: string) -> [string] {
-    let prog = compile_pattern(pattern);
+// El motor de find_all sobre un programa ya compilado.
+fn run_find_all(prog: Prog, text: string) -> [string] {
     let txt = text.chars();
     let n = txt.len();
     var out: [string] = [];
@@ -566,11 +620,16 @@ pub fn find_all(pattern: string, text: string) -> [string] {
     out
 }
 
-// Reemplaza cada coincidencia NO solapada por `repl` y devuelve el texto resultante.
-/// Replaces every non-overlapping match with `repl` (a plain string, no capture references)
-/// and returns the resulting text.
-pub fn replace_all(pattern: string, text: string, repl: string) -> string {
-    let prog = compile_pattern(pattern);
+// Todas las coincidencias NO solapadas, de izquierda a derecha, como substrings.
+/// Returns all non-overlapping matches, left to right, as substrings.
+/// A zero-width match advances one character to guarantee progress.
+/// Panics on a malformed pattern; prefer `compile` + `Matcher` for user-supplied patterns.
+pub fn find_all(pattern: string, text: string) -> [string] {
+    run_find_all(must_compile(pattern), text)
+}
+
+// El motor de replace_all sobre un programa ya compilado.
+fn run_replace_all(prog: Prog, text: string, repl: string) -> string {
     let txt = text.chars();
     let n = txt.len();
     var out = "";
@@ -592,4 +651,49 @@ pub fn replace_all(pattern: string, text: string, repl: string) -> string {
         }
     }
     out
+}
+
+// Reemplaza cada coincidencia NO solapada por `repl` y devuelve el texto resultante.
+/// Replaces every non-overlapping match with `repl` (a plain string, no capture references)
+/// and returns the resulting text.
+/// Panics on a malformed pattern; prefer `compile` + `Matcher` for user-supplied patterns.
+pub fn replace_all(pattern: string, text: string, repl: string) -> string {
+    run_replace_all(must_compile(pattern), text, repl)
+}
+
+// ---------------------------------------------------------------------------
+// M59.2 — la API compilada: los mismos seis nombres como MÉTODOS de `Regex` (un método de
+// trait gana a la función libre homónima en la resolución por punto, así conviven sin
+// sobrecarga). Ninguno recompila: el `Regex` ya trae el programa.
+// ---------------------------------------------------------------------------
+/// Matching methods over a compiled `Regex` (see `compile`). Same semantics as the
+/// free functions of the same name, but the pattern is compiled once, not per call,
+/// and a malformed pattern was already rejected as a value by `compile`.
+pub trait Matcher {
+    /// Does the pattern match the ENTIRE text (anchored at both ends)?
+    fn full_match(self, text: string) -> bool;
+    /// Does the pattern match SOME substring of the text (unanchored search)?
+    fn search(self, text: string) -> bool;
+    /// First (leftmost-longest) match as `Some((start, end))` character indices, or `None`.
+    fn find(self, text: string) -> Option<(int, int)>;
+    /// The substring of the first match, or `None`.
+    fn find_str(self, text: string) -> Option<string>;
+    /// All non-overlapping matches, left to right, as substrings.
+    fn find_all(self, text: string) -> [string];
+    /// Replaces every non-overlapping match with `repl` (no capture references).
+    fn replace_all(self, text: string, repl: string) -> string;
+}
+
+impl Matcher for Regex {
+    fn full_match(self, text: string) -> bool { run_full(self.prog, text) }
+    fn search(self, text: string) -> bool { run_search(self.prog, text) }
+    fn find(self, text: string) -> Option<(int, int)> { run_find(self.prog, text) }
+    fn find_str(self, text: string) -> Option<string> {
+        match (run_find(self.prog, text)) {
+            Option.Some(par) => Option.Some(text.substring(par.0, par.1)),
+            Option.None => Option.None,
+        }
+    }
+    fn find_all(self, text: string) -> [string] { run_find_all(self.prog, text) }
+    fn replace_all(self, text: string, repl: string) -> string { run_replace_all(self.prog, text, repl) }
 }

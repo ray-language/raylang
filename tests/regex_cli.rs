@@ -61,6 +61,17 @@ const ESPERADO: &[&str] = &[
     "repl  /\\d+/ \"quedan 3 de 10\" -> \"quedan N de N\"",
     "repl  /\\s+/ \"hola   mundo  ya\" -> \"hola_mundo_ya\"",
     "repl  /a/ \"banana\" -> \"b-n-n-\"",
+    // M59.2 — errores como valores (compile) + la API compilada (métodos de Matcher).
+    "comp  /gr(a|e/ = err: regex: falta ')'",
+    "comp  /[a-z/ = err: regex: falta ']' para cerrar la clase",
+    "comp  /abc\\/ = err: regex: '\\' al final del patrón",
+    "comp  /ab)c/ = err: regex: carácter inesperado en el patrón (¿')' de más?)",
+    "re    full 2024 = si",
+    "re    search abc123 = si",
+    "re    find_str = \"123\"",
+    "re    find = (3,6)",
+    "re    all = [12,345,6]",
+    "re    repl = \"quedan N de N\"",
 ];
 
 fn correr(flags: &[&str]) -> (Vec<String>, bool) {

@@ -2,7 +2,7 @@
 //
 // Usa `full_match` (anclado a todo el texto) y `search` (algún substring). Imprime, para cada caso,
 // el patrón, el texto y el veredicto. El test compara la salida y exige que ambos motores coincidan.
-from regex import full_match, search, find_str, find_all, replace_all;
+from regex import full_match, search, find_str, find_all, replace_all, compile, Regex;
 
 fn si(b: bool) -> string {
     if (b) { "si" } else { "no" }
@@ -121,4 +121,36 @@ fn main() {
     caso_replace("\\d+", "quedan 3 de 10", "N");  // "quedan N de N"
     caso_replace("\\s+", "hola   mundo  ya", "_");  // "hola_mundo_ya"
     caso_replace("a", "banana", "-");  // "b-n-n-"
+
+    // M59.2 — patrón malformado: error como VALOR con `compile` (las libres panican).
+    caso_compile("gr(a|e");
+    caso_compile("[a-z");
+    caso_compile("abc\\");
+    caso_compile("ab)c");
+
+    // M59.2 — la API compilada: compila UNA vez, casa muchas con los métodos de `Matcher`.
+    match (compile("\\d+")) {
+        Result.Ok(re) => {
+            print("re    full 2024 = ${si(re.full_match("2024"))}");
+            print("re    search abc123 = ${si(re.search("abc123"))}");
+            match (re.find_str("abc123def")) {
+                Option.Some(m) => print("re    find_str = \"${m}\""),
+                Option.None => print("re    find_str = <none>"),
+            }
+            match (re.find("abc123def")) {
+                Option.Some(par) => print("re    find = (${par.0},${par.1})"),
+                Option.None => print("re    find = <none>"),
+            }
+            print("re    all = [${re.find_all("a12b345c6").join(",")}]");
+            print("re    repl = \"${re.replace_all("quedan 3 de 10", "N")}\"");
+        },
+        Result.Err(e) => print("re    err inesperado: ${e}"),
+    }
+}
+
+fn caso_compile(pat: string) {
+    match (compile(pat)) {
+        Result.Ok(re) => print("comp  /${pat}/ = ok"),
+        Result.Err(e) => print("comp  /${pat}/ = err: ${e}"),
+    }
 }

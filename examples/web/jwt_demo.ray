@@ -1,7 +1,7 @@
 // Demo/verificación de JWT (HS256) y UUID v4 (M20.3). Lo ejecuta `tests/jwt_cli.rs`. La salida es
 // determinista (el JWT con un secreto fijo es reproducible; el UUID se prueba por su FORMA, no su valor).
 from jwt import jwt_sign, jwt_verify;
-from uuid import uuid_v4, is_uuid_v4;
+from uuid import uuid_v4, is_uuid_v4, uuid_v7, uuid_v7_at, is_uuid_v7;
 
 fn main() {
     let secreto = "super-secreto-de-pruebas".to_bytes();
@@ -41,6 +41,13 @@ fn main() {
     let u2 = uuid_v4();
     print(is_uuid_v4(u1) && is_uuid_v4(u2));  // true
     print(u1 != u2);  // true (colisión astronómicamente improbable)
+
+    // UUID v7 (M57.3): válido por su forma, y ORDENABLE por tiempo — el prefijo son los 48 bits
+    // del timestamp en ms, big-endian (vector de la RFC 9562: 2022-02-22T19:22:22Z = 0x017F22E279B0).
+    let s1 = uuid_v7();
+    print(is_uuid_v7(s1));  // true
+    print(uuid_v7_at(1645557742000).starts_with("017f22e2-79b0-7"));  // true (prefijo del vector RFC)
+    print(uuid_v7_at(1645557742000) < uuid_v7_at(1645557742001));  // true (orden lexicográfico = temporal)
 }
 
 // Devuelve un carácter distinto al último de `token` (para invertir la firma sin adivinar hex).

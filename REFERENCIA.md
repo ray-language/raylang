@@ -383,7 +383,7 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/deflate` | `deflate_raw gzip_compress zlib_compress` |
 | `std/huffman` | `huffman_encode huffman_decode` (la tabla HPACK del RFC 7541) |
 | `std/protobuf` | `PbWriter`: `writer write_varint write_string write_bytes write_fixed64 write_fixed32 finish` · `parse -> Result<[PbField], _>` `get_int get_bytes get_string` · framing gRPC: `grpc_frame grpc_unframe` |
-| `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` |
+| `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` · `uuid_v7()`/`uuid_v7_at(ms)` (RFC 9562, ordenables por tiempo) · `is_uuid_v7` |
 
 ## 11. Paquetes adicionales (`net`, `db`)
 

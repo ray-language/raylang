@@ -1,10 +1,20 @@
-// UUID versión 4 (RFC 4122, aleatorios) escritos EN raylang. Apila sobre `random_int` (PRNG del
-// runtime) + `hex`. Importable: `from uuid import uuid_v4, is_uuid_v4;`.
+// UUID versión 4 (RFC 4122, aleatorios) y versión 7 (RFC 9562, ordenables por tiempo) escritos
+// EN raylang. Apilan sobre `random_int` (PRNG del runtime) + `hex` + `std/time` (v7).
+// Importable: `from uuid import uuid_v4, uuid_v7, is_uuid_v4, is_uuid_v7;`.
 //
-// 16 octetos aleatorios con dos campos fijos: los 4 bits altos del octeto 6 = 0100 (versión 4) y los
-// 2 bits altos del octeto 8 = 10 (variante RFC 4122). Formato canónico 8-4-4-4-12 en hex minúscula.
+// v4: 16 octetos aleatorios con la versión (0100) y la variante (10) fijadas.
+// v7 (M57.3): 48 bits de timestamp Unix en ms (big-endian) + 74 bits aleatorios → dos v7 generados
+// en ms distintos ORDENAN lexicográficamente por creación (claves de DB, trazas). Formato canónico
+// 8-4-4-4-12 en hex minúscula en ambos.
 from std/hex import hex_encode;
 import std/random;
+import std/time;
+
+// 16 octetos → el formato canónico 8-4-4-4-12.
+fn formato(b: [int]) -> string {
+    let h = hex_encode(b);  // 32 dígitos hex
+    h.substring(0, 8) + "-" + h.substring(8, 12) + "-" + h.substring(12, 16) + "-" + h.substring(16, 20) + "-" + h.substring(20, 32)
+}
 
 /// Generates a random version-4 UUID (RFC 4122) in the canonical 8-4-4-4-12 lowercase hex
 /// format. 16 random bytes with the version nibble set to 4 and the variant bits to 10.
@@ -18,8 +28,38 @@ pub fn uuid_v4() -> string {
     }
     b[6] = b[6] & 15 | 64;  // versión 4: 0x40 en el nibble alto
     b[8] = b[8] & 63 | 128;  // variante 10xx: 0x80 en los bits altos
-    let h = hex_encode(b);  // 32 dígitos hex
-    h.substring(0, 8) + "-" + h.substring(8, 12) + "-" + h.substring(12, 16) + "-" + h.substring(16, 20) + "-" + h.substring(20, 32)
+    formato(b)
+}
+
+/// Generates a version-7 UUID (RFC 9562): 48-bit Unix timestamp in milliseconds (big-endian) +
+/// 74 random bits — UUIDs from different milliseconds sort lexicographically by creation time
+/// (ideal for database keys and traces). Canonical lowercase format; runtime PRNG (not
+/// cryptographically secure).
+pub fn uuid_v7() -> string {
+    uuid_v7_at(time.now())
+}
+
+// La forma con timestamp explícito (la usa `uuid_v7` con `time.now()`); útil para tests
+// deterministas y para generar ids de un instante dado.
+/// Generates a version-7 UUID for an explicit timestamp (milliseconds since the Unix epoch).
+/// `uuid_v7()` calls this with `time.now()`.
+pub fn uuid_v7_at(ms: int) -> string {
+    var b: [int] = [];
+    // 48 bits de timestamp, big-endian → el orden lexicográfico es el orden temporal.
+    b.push(ms >> 40 & 255);
+    b.push(ms >> 32 & 255);
+    b.push(ms >> 24 & 255);
+    b.push(ms >> 16 & 255);
+    b.push(ms >> 8 & 255);
+    b.push(ms & 255);
+    var i = 6;
+    while (i < 16) {
+        b.push(random.below(256));
+        i = i + 1;
+    }
+    b[6] = b[6] & 15 | 112;  // versión 7: 0x70 en el nibble alto
+    b[8] = b[8] & 63 | 128;  // variante 10xx: 0x80 en los bits altos
+    formato(b)
 }
 
 // ¿Es `c` un dígito hexadecimal en minúscula (0-9 a-f)?
@@ -30,18 +70,16 @@ fn is_hex_lower(c: char) -> bool {
     }
 }
 
-// Valida la forma de un UUID v4 canónico (longitud, guiones, nibble de versión, bits de variante,
-// resto hexadecimal). Permite probar `uuid_v4` de forma determinista pese a su aleatoriedad.
-/// Checks whether `s` is a canonical version-4 UUID: length 36, hyphens at 8/13/18/23,
-/// version digit `4`, variant digit in 8/9/a/b, and lowercase hex everywhere else.
-pub fn is_uuid_v4(s: string) -> bool {
+// Valida la forma canónica común (longitud, guiones, dígito de versión, bits de variante, resto
+// hexadecimal); `ver` es el dígito de versión esperado ('4' o '7').
+fn is_uuid_ver(s: string, ver: char) -> bool {
     if (s.len() != 36) {
         return false;
     }
     if (s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-') {
         return false;
     }
-    if (s[14] != '4') {
+    if (s[14] != ver) {
         // primer dígito del 3.er grupo = versión
         return false;
     }
@@ -60,4 +98,15 @@ pub fn is_uuid_v4(s: string) -> bool {
         i = i + 1;
     }
     true
+}
+
+/// Checks whether `s` is a canonical version-4 UUID: length 36, hyphens at 8/13/18/23,
+/// version digit `4`, variant digit in 8/9/a/b, and lowercase hex everywhere else.
+pub fn is_uuid_v4(s: string) -> bool {
+    is_uuid_ver(s, '4')
+}
+
+/// Checks whether `s` is a canonical version-7 UUID (same shape as v4, version digit `7`).
+pub fn is_uuid_v7(s: string) -> bool {
+    is_uuid_ver(s, '7')
 }

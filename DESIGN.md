@@ -7531,5 +7531,11 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   M56.5), retries y el futuro `cron`. Test `sleep_cede_la_fibra` (la hija corre y despierta
   mientras main duerme — antes no corría hasta el join); la propiedad `sleep >= ms` de
   `time_random_cli` intacta.
-- **M57.3 — UUID v7** en `std/uuid` (timestamp ordenable + aleatorio; claves de DB/trazas), junto
-  al v4.
+- **M57.3 — UUID v7** ✅ **COMPLETO**, **CIERRA M57**: `uuid_v7()` en `std/uuid` (RFC 9562:
+  48 bits de timestamp Unix-ms big-endian + 74 aleatorios → el orden lexicográfico ES el orden
+  temporal; claves de DB/trazas) + `uuid_v7_at(ms)` (timestamp explícito, testeable) +
+  `is_uuid_v7`. La validación y el formato canónico se factorizan con v4 (`is_uuid_ver`/
+  `formato`). Verificado por ambos motores contra el **vector de la RFC 9562** (2022-02-22T19:22:22Z
+  → prefijo `017f22e2-79b0-7`) + orden lexicográfico de ms consecutivos. **M57 COMPLETO**
+  (57.1–57.3). Diferidos (a demanda, IDEAS §18): `tz` IANA, `net/ntp`, `cron`, `dist`/HLC,
+  `__local_offset_millis`, monotonicidad intra-ms del v7 (contador rand_a).

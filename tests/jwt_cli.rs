@@ -15,6 +15,10 @@ const ESPERADO: &[&str] = &[
     "mal formado detectado",
     "true", // is_uuid_v4(u1) && is_uuid_v4(u2)
     "true", // u1 != u2
+    // M57.3: UUID v7 (ordenable por tiempo)
+    "true", // is_uuid_v7
+    "true", // prefijo del vector de la RFC 9562 (timestamp big-endian en hex)
+    "true", // orden lexicográfico = orden temporal (ms consecutivos)
 ];
 
 fn correr(flags: &[&str]) -> Vec<String> {

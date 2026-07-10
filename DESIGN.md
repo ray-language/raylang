@@ -7762,7 +7762,7 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   `\uXXXX`/`\UXXXXXXXX` (vía `char_from_code`, como json M59.1) — y **escape desconocido =
   `Err`** (hoy `"café"` → `"cafu00E9"`: traga la barra y corrompe en silencio); (b)
   **strings literales `'...'`** (core TOML, sin escapes — rutas Windows, regex).
-- **M63.2 — números conformes**: separadores `_` (`1_000`, lo más común en configs; validar
+- **M63.2 — números conformes** ✅ **COMPLETO**: separadores `_` (`1_000`, lo más común en configs; validar
   posición: entre dígitos), `inf`/`nan`/`+inf`/`-inf`. Hex/octal/binario: diferido a demanda.
 - **M63.3 — rigor del documento**: clave duplicada = `Err` (hoy se aceptan ambas y `toml_get`
   devuelve la PRIMERA), cabecera `[]` vacía = `Err` (hoy resetea a raíz en silencio), y salto

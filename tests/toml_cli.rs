@@ -18,6 +18,13 @@ const ESPERADO: &[&str] = &[
     "p = \"C:\\ruta\\ne\"",
     "err: escape desconocido '\\q' en el string",
     "err: escape \\u con dígito no hexadecimal",
+    // M63.2 — números conformes: separadores `_` (entre dígitos) e inf/nan.
+    "n = 1000000",
+    "f = 1024.5",
+    "a = inf",
+    "b = -inf",
+    "c = NaN",
+    "err: separador '_' mal colocado en el número: 1__0",
 ];
 
 fn correr(flags: &[&str]) -> (Vec<String>, bool) {

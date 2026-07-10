@@ -189,7 +189,35 @@ fn parse_literal_string(t: TS) -> Result<string, string> {
     Result.Err("string literal sin cerrar")
 }
 
-// Clasifica un token escalar (número o booleano) ya leído.
+fn es_digito(c: char) -> bool { c >= '0' && c <= '9' }
+
+// M63.2: quita los separadores `_` de un número (`1_000`), validando la regla de la spec —
+// cada `_` debe ir ENTRE dígitos (`_1`, `1_`, `1__0` o `1_.5` son errores).
+fn quitar_separadores(tok: string) -> Result<string, string> {
+    if (!tok.contains("_")) {
+        return Result.Ok(tok);
+    }
+    let cs = tok.chars();
+    var out = "";
+    var i = 0;
+    while (i < cs.len()) {
+        let c = cs[i];
+        if (c == '_') {
+            let antes = i > 0 && es_digito(cs[i - 1]);
+            let despues = i + 1 < cs.len() && es_digito(cs[i + 1]);
+            if (!antes || !despues) {
+                return Result.Err("separador '_' mal colocado en el número: " + tok);
+            }
+        } else {
+            out = out + to_string(c);
+        }
+        i = i + 1;
+    }
+    Result.Ok(out)
+}
+
+// Clasifica un token escalar (número o booleano) ya leído. M63.2: acepta `inf`/`nan` (con
+// signo) como flotantes de la spec y los separadores `_` de los números.
 fn clasificar_escalar(tok: string) -> Result<TomlValue, string> {
     if (tok == "true") {
         return Result.Ok(TomlValue.TBool(true));
@@ -197,23 +225,30 @@ fn clasificar_escalar(tok: string) -> Result<TomlValue, string> {
     if (tok == "false") {
         return Result.Ok(TomlValue.TBool(false));
     }
+    if (tok == "inf" || tok == "+inf" || tok == "-inf" || tok == "nan" || tok == "+nan" || tok == "-nan") {
+        return match (parse_float(tok)) {
+            Option.Some(f) => Result.Ok(TomlValue.TFloat(f)),
+            Option.None => Result.Err("flotante inválido: " + tok),
+        };
+    }
+    let limpio = quitar_separadores(tok)?;
     // ¿Flotante? (tiene '.' o 'e'/'E')
     var es_float = false;
     var i = 0;
-    while (i < tok.len()) {
-        let c = tok[i];
+    while (i < limpio.len()) {
+        let c = limpio[i];
         if (c == '.' || c == 'e' || c == 'E') {
             es_float = true;
         }
         i = i + 1;
     }
     if (es_float) {
-        match (parse_float(tok)) {
+        match (parse_float(limpio)) {
             Option.Some(f) => Result.Ok(TomlValue.TFloat(f)),
             Option.None => Result.Err("flotante inválido: " + tok),
         }
     } else {
-        match (parse_int(tok)) {
+        match (parse_int(limpio)) {
             Option.Some(n) => Result.Ok(TomlValue.TInt(n)),
             Option.None => Result.Err("entero inválido: " + tok),
         }

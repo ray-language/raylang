@@ -40,4 +40,20 @@ fn main() {
         Result.Ok(entries) => print("no debería parsear"),
         Result.Err(e) => print("err: " + e),
     }
+
+    // M63.2 — números conformes: separadores `_` (validados: entre dígitos) e inf/nan.
+    match (parse_toml("n = 1_000_000\nf = 1_024.5\na = inf\nb = -inf\nc = nan\n")) {
+        Result.Ok(entries) => {
+            show_key(entries, "n");
+            show_key(entries, "f");
+            show_key(entries, "a");
+            show_key(entries, "b");
+            show_key(entries, "c");
+        },
+        Result.Err(e) => print("err: " + e),
+    }
+    match (parse_toml("m = 1__0")) {
+        Result.Ok(entries) => print("no debería parsear"),
+        Result.Err(e) => print("err: " + e),
+    }
 }

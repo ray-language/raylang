@@ -1,0 +1,50 @@
+// M59.3 — demo de base64/base64url (`base64.ray`), centrado en el decode ESTRICTO.
+//
+// Vectores de la RFC 4648 §10 (válidos) + los rechazos del decode estricto: datos tras el
+// relleno, longitud inválida, relleno de más, bits sobrantes no nulos (codificación no
+// canónica) y caracteres fuera del alfabeto. El test compara la salida golden por ambos motores.
+from base64 import base64, base64url, base64_decode, base64url_decode;
+
+fn muestra(r: Result<[int], string>) {
+    match (r) {
+        Result.Ok(bs) => {
+            var s = "ok:";
+            var i = 0;
+            while (i < bs.len()) {
+                s = s + " " + to_string(bs[i]);
+                i = i + 1;
+            }
+            print(s);
+        },
+        Result.Err(e) => print("err: " + e),
+    }
+}
+
+fn main() {
+    var f: [int] = [];
+    f.push(102);  // 'f'
+    print(base64(f));     // Zg==
+    print(base64url(f));  // Zg
+
+    // Decode estándar — válidos (RFC 4648 §10).
+    muestra(base64_decode("TWFu"));  // "Man"
+    muestra(base64_decode("Zg=="));
+    muestra(base64_decode("Zm8="));
+    muestra(base64_decode(""));
+
+    // Decode estándar — rechazos del modo estricto (M59.3).
+    muestra(base64_decode("Zg==basura"));  // datos tras el relleno
+    muestra(base64_decode("Zg="));         // longitud no múltiplo de 4
+    muestra(base64_decode("Zg"));          // sin relleno
+    muestra(base64_decode("QR=="));        // bits sobrantes ≠ 0 (canónico: QQ==)
+    muestra(base64_decode("A==="));        // relleno de más
+    muestra(base64_decode("Zg*="));        // carácter fuera del alfabeto
+
+    // base64url (sin relleno) — válidos y rechazos.
+    muestra(base64url_decode("TWFu"));
+    muestra(base64url_decode("Zg"));
+    muestra(base64url_decode("Zm8"));
+    muestra(base64url_decode("QR"));    // bits sobrantes ≠ 0
+    muestra(base64url_decode("A"));     // cola de 1 carácter
+    muestra(base64url_decode("Zg=="));  // '=' no pertenece al alfabeto url
+}

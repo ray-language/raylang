@@ -7616,9 +7616,13 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   `must_compile` (contrato histórico: patrón malformado = panic, mismo mensaje; documentadas
   "prefer compile for user-supplied patterns"). Demo + golden `regex_cli` con los 4 errores
   como valores y la API compilada.
-- **M59.3 — base64 estricto en decode**: rechazar (a) datos tras el padding (`"QQ==basura"`),
-  (b) bits sobrantes de la cola ≠ 0 (dos representaciones del mismo payload), (c) longitud
-  inválida. Cierra la maleabilidad de representación bajo JWT/SCRAM (que van sobre base64url).
+- **M59.3 — base64 estricto en decode** ✅ **COMPLETO**: `base64_decode` rechaza datos tras el
+  relleno (`"Zg==basura"`), longitud no múltiplo de 4, relleno de más (`"A==="`) y bits
+  sobrantes de la cola ≠ 0 (`"QR=="`; canónico: `"QQ=="`); `base64url_decode` rechaza la cola
+  de 1 carácter y los bits sobrantes ≠ 0 (el `=` ya caía fuera del alfabeto). RFC 4648 §3.5:
+  un solo encoding aceptado por payload — cierra la maleabilidad de representación bajo
+  JWT/SCRAM (la firma cubre el ENCODING). Demo `base64_demo.ray` + golden `base64_cli`
+  (vectores §10 + 9 rechazos); consumidores (scram/jwt/jwt_eddsa/hmac/websocket) intactos.
 - **M59.4 — protobuf: negativos = `Err`**: `encode_varint`/`add_int` con valor negativo hoy
   emiten octetos corruptos EN SILENCIO (el bucle `v >= 128` no entra con negativos); pasar a
   error explícito (el soporte real de negativos — varint de 10 octetos / zigzag `sint` — sigue

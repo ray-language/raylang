@@ -116,21 +116,30 @@ fn dec_char_std(c: char) -> int {
     }
 }
 
-// base64 estándar (con relleno `=`) → octetos. `Err` si hay un carácter fuera del alfabeto. El relleno
-// `=` marca el fin de los datos. Lo usa SCRAM/PostgreSQL (M32.1) para el salt y la firma del servidor.
+// base64 estándar (con relleno `=`) → octetos. Lo usa SCRAM/PostgreSQL (M32.1) para el salt y la
+// firma del servidor. M59.3 — decode ESTRICTO (RFC 4648 §3.5): un solo encoding válido por payload
+// (sin maleabilidad de representación, importa bajo credenciales): `Err` con carácter fuera del
+// alfabeto, datos tras el relleno, longitud no múltiplo de 4, relleno de más, o bits sobrantes ≠ 0.
 /// Decodes a standard base64 string (RFC 4648, `+`/`/` alphabet) into a byte array.
-/// `=` padding marks the end of the data. Returns `Err` on a character outside the alphabet.
+/// Strict: rejects characters outside the alphabet, data after the `=` padding, a length
+/// that is not a multiple of 4, over-padding, and non-zero trailing bits (non-canonical
+/// encodings), so each payload has exactly one accepted representation.
 pub fn base64_decode(s: string) -> Result<[int], string> {
     let n = s.len();
     var out: [int] = [];
     var acc = 0;
     var nbits = 0;
     var i = 0;
+    var chars = 0;  // caracteres de datos (sin contar '=')
+    var pad = 0;    // caracteres '=' de relleno
     while (i < n) {
         let c = s[i];
         if (c == '=') {
-            i = n;  // relleno: fin de los datos
+            pad = pad + 1;
         } else {
+            if (pad > 0) {
+                return Result.Err("base64: datos tras el relleno '='");
+            }
             let v = dec_char_std(c);
             if (v < 0) {
                 return Result.Err("carácter base64 inválido");
@@ -141,16 +150,30 @@ pub fn base64_decode(s: string) -> Result<[int], string> {
                 nbits = nbits - 8;
                 out.push(acc >> nbits & 255);
             }
-            i = i + 1;
+            chars = chars + 1;
         }
+        i = i + 1;
+    }
+    if ((chars + pad) % 4 != 0) {
+        return Result.Err("base64: longitud inválida (no es múltiplo de 4)");
+    }
+    if (pad > 2) {
+        return Result.Err("base64: relleno '=' inválido");
+    }
+    if (nbits > 0 && (acc & ((1 << nbits) - 1)) != 0) {
+        return Result.Err("base64: bits sobrantes no nulos (codificación no canónica)");
     }
     Result.Ok(out)
 }
 
-// base64url (sin relleno) → octetos. `Err` si hay un carácter fuera del alfabeto. Decodifica grupos
-// de 4 caracteres (24 bits → 3 octetos); una cola de 2 caracteres da 1 octeto y de 3 da 2 octetos.
+// base64url (sin relleno) → octetos. Decodifica grupos de 4 caracteres (24 bits → 3 octetos); una
+// cola de 2 caracteres da 1 octeto y de 3 da 2. M59.3 — estricto: `Err` con carácter fuera del
+// alfabeto ('=' incluido: aquí no hay relleno), cola de 1 carácter (6 bits: imposible) o bits
+// sobrantes ≠ 0 — bajo JWT, dos representaciones del mismo payload serían maleabilidad de la firma.
 /// Decodes an unpadded base64url string (RFC 4648 §5, `-`/`_` alphabet) into a byte array.
-/// Returns `Err` on a character outside the alphabet.
+/// Strict: rejects characters outside the alphabet (including `=`), a 1-character tail,
+/// and non-zero trailing bits (non-canonical encodings), so each payload has exactly one
+/// accepted representation — this matters for JWT, where the signature covers the encoding.
 pub fn base64url_decode(s: string) -> Result<[int], string> {
     let n = s.len();
     var out: [int] = [];
@@ -169,6 +192,12 @@ pub fn base64url_decode(s: string) -> Result<[int], string> {
             out.push(acc >> nbits & 255);
         }
         i = i + 1;
+    }
+    if (n % 4 == 1) {
+        return Result.Err("base64url: longitud inválida");
+    }
+    if (nbits > 0 && (acc & ((1 << nbits) - 1)) != 0) {
+        return Result.Err("base64url: bits sobrantes no nulos (codificación no canónica)");
     }
     Result.Ok(out)
 }

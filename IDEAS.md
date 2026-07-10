@@ -900,6 +900,22 @@ en host/módulo/uuid. El sesgo de módulo de `below` (~n/2^64) es inmedible → 
 
 ---
 
+## 29. Cliente Redis (revisión jul 2026) — M69, PLAN
+
+Revisión en frío de `net/redis` (detalle en DESIGN §73). Estructura sana (errores como
+valores, framing sobre buffer, recursión para arrays, toy server determinista en el test).
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **El framing RESP cuenta CARACTERES, no octetos** (todo en `string`): `encode_command(["SET","k","ñ"])` declara `$1` pero envía 2 octetos (verificado); `read_n` corta por caracteres el `$n` en octetos del servidor | **Desincronización del protocolo** con cualquier valor no-ASCII (basta una ñ); valores binarios imposibles | **M69**: framing interno 100% `bytes` (la migración M60 que no llegó aquí) |
+| `int_or` tolerante (0 si falla): `$basura`/`:abc` → 0 en silencio | Enmascara errores de protocolo (clase toml pre-M63) | **M69**: `Err` claro |
+| Sin tope de bulk: `$<gigante>` de un servidor roto acumula sin cota | Agotamiento de memoria (clase M64.2) | **M69**: tope generoso + `Err` |
+
+API pública conservada: `command(c, args: [string])` codifica a bytes por dentro y
+`Reply.Str` sigue siendo `string` (decodifica UTF-8; `?` si no) — cero ruptura para texto.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

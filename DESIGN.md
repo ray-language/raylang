@@ -7871,3 +7871,18 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   `__crypto_random_bytes` sobre `ring::rand::SystemRandom`, dep ya presente desde M43).
   Los `///` de uuid/websocket apuntan a ella para quien necesite no-predecible.
   **M68 COMPLETO** (68.1 + 68.2).
+
+## 73. M69 — cliente Redis de producción (framing en octetos)
+
+> Revisión jul 2026 (tras M68; clasificación en IDEAS §29). Estructura sana; el defecto:
+> RESP exige longitudes en OCTETOS y el cliente contaba CARACTERES (todo `string`) —
+> `SET k ñ` declaraba `$1` y enviaba 2 octetos → desincronización del protocolo con
+> cualquier valor no-ASCII; binarios imposibles.
+
+- **M69 — de una pieza**: (a) framing interno 100% **`bytes`** (la migración M60 aplicada
+  aquí): `Conn.buf: bytes`, `socket_read_bytes`/`socket_write_bytes` (M16.1c), `sub_bytes`,
+  `encode_command -> bytes` con `to_bytes().len()`. API pública conservada: `command(c,
+  args: [string])` codifica por dentro; `Reply.Str` sigue `string` (decodifica UTF-8, `?`
+  si no). (b) longitudes RESP malformadas (`$basura`/`:abc`) = `Err` claro (antes `int_or`
+  → 0 en silencio). (c) tope de bulk (64 MiB, como M64.2): `$<gigante>` = `Err`, no
+  agotamiento. Espejos `packages/net/redis.ray` ↔ `examples/web/redis.ray` juntos.

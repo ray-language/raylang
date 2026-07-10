@@ -7796,9 +7796,12 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   base** antes de entregar el valor. Test de regresión `try_err_con_operandos_pendientes_oraculo`
   (verificado: falla sin el fix). Goldens de robustez en `inflate_demo.ray`/`tests/inflate_cli.rs`
   (8 sondas de corrupción + round-trip de control, ambos motores).
-- **M64.2 — límite de salida (anti-bomba)**: `inflate_raw_limit`/`gunzip_limit`/
-  `zlib_inflate_limit(data, max_out)` — la salida acumulada se comprueba contra el tope
-  (las formas sin límite delegan con un tope generoso por defecto); el cliente HTTP usa la
-  forma con límite. Patrón `read_message_limit` del WebSocket (M58.1).
+- **M64.2 — límite de salida (anti-bomba) COMPLETO**: `inflate_raw_limit`/`gunzip_limit`/
+  `zlib_inflate_limit(data, max_out)` — la salida acumulada se comprueba contra el tope en
+  los TRES emisores (literal, tramo LZ77 y bloque almacenado; el chequeo va ANTES de copiar,
+  así unos KB maliciosos no llegan a materializar GB); las formas sin límite delegan con
+  **64 MiB** por defecto (`default_limit`); el cliente HTTP (`http.ray`, ambos espejos) usa
+  `gunzip_limit(..., 64 MiB)`. Patrón `read_message_limit` del WebSocket (M58.1). Goldens:
+  tope menor que la salida = Err, tope justo = round-trip OK.
 - **M64.3 — menores a criterio**: validación de Kraft de los árboles, trie de HPACK
   reusable, crc32 con tabla — o diferir a demanda.

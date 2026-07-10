@@ -13,7 +13,7 @@
 // gzip` (activa de verdad el gunzip), cuerpo de petición en BYTES (subidas binarias; además el
 // Content-Length ahora cuenta OCTETOS — con string contaba caracteres y fallaba con no-ASCII) y
 // Content-Length de la respuesta verificado (truncada = Err, no un cuerpo a medias en silencio).
-from std/inflate import gunzip;
+from std/inflate import gunzip_limit;
 import std/net;
 import std/time;
 
@@ -345,11 +345,11 @@ fn parse_response(raw: bytes) -> Result<Response, string> {
                     Option.None => { },
                 }
             }
-            // Content-Encoding: gzip → descomprimir el cuerpo (M20.10b, librería INFLATE).
+            // Content-Encoding: gzip → descomprimir el cuerpo (M20.10b; M64.2: tope de 64 MiB anti-bomba).
             match (get(headers, "content-encoding")) {
                 Option.Some(ce) => {
                     if (ce.to_lower().contains("gzip")) {
-                        match (gunzip(cuerpo_final)) {
+                        match (gunzip_limit(cuerpo_final, 67108864)) {
                             Result.Ok(d) => {
                                 cuerpo_final = d;
                             },

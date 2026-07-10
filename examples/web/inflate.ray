@@ -7,7 +7,9 @@
 // (almacenado, Huffman fijo, Huffman dinámico). Habilita `Content-Encoding: gzip/deflate` en HTTP.
 // M64.1: procesa datos EXTERNOS → TODO input corrupto/truncado es `Err`, nunca un error de índice
 // (bit-reader con bounds, NLEN verificado, cabecera gzip acotada, FDICT rechazado, hlit/hdist
-// acotados, repeticiones 16/17/18 sin rebasar).
+// acotados, repeticiones 16/17/18 sin rebasar). M64.2: tope de salida anti-bomba — las formas
+// `inflate_raw_limit`/`gunzip_limit`/`zlib_inflate_limit(data, max_out)` acotan la salida; las
+// formas sin límite delegan con 64 MiB por defecto.
 //
 // DEFLATE empaqueta los bits LSB-first dentro de cada octeto, pero los códigos Huffman se leen como
 // si fueran MSB-first → `read_bit` saca el bit menos significativo y `decode` los va acumulando por la
@@ -19,6 +21,14 @@ struct Inflater {
     pos: int,
     bitpos: int,
     out: [int],
+    limit: int,
+}
+
+// Tope por defecto de salida descomprimida (64 MiB). M64.2: DEFLATE comprime hasta ~1000:1 —
+// unos KB corruptos/maliciosos pueden declarar GB de salida (bomba de descompresión). Las formas
+// sin límite delegan con este tope; para más, la forma `_limit` explícita.
+fn default_limit() -> int {
+    67108864
 }
 
 // octeto actual
@@ -157,6 +167,10 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
             return Result.Ok(0);  // fin del bloque
         }
         if (sym < 256) {
+            // M64.2: anti-bomba — la salida acumulada nunca rebasa el tope.
+            if (s.out.len() >= s.limit) {
+                return Result.Err("salida descomprimida excede el límite (posible bomba de descompresión)");
+            }
             s.out.push(sym);  // literal
         } else {
             let li = sym - 257;
@@ -171,6 +185,10 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
             let distance = dbase[dsym] + read_bits(s, dext[dsym])?;
             if (distance > s.out.len()) {
                 return Result.Err("distancia fuera de rango");
+            }
+            // M64.2: anti-bomba — el tramo LZ77 completo debe caber bajo el tope.
+            if (s.out.len() + length > s.limit) {
+                return Result.Err("salida descomprimida excede el límite (posible bomba de descompresión)");
             }
             let start = s.out.len() - distance;
             var k = 0;
@@ -201,6 +219,10 @@ fn stored_block(s: Inflater) -> Result<int, string> {
     s.pos = s.pos + 4;  // salta LEN (2) + NLEN (2)
     if (s.pos + length > s.data.len()) {
         return Result.Err("bloque almacenado truncado (declara más octetos de los que hay)");
+    }
+    // M64.2: anti-bomba — también el bloque almacenado respeta el tope de salida.
+    if (s.out.len() + length > s.limit) {
+        return Result.Err("salida descomprimida excede el límite (posible bomba de descompresión)");
     }
     var k = 0;
     while (k < length) {
@@ -351,8 +373,16 @@ fn inflate_blocks(s: Inflater) -> Result<int, string> {
 /// Decompresses a raw DEFLATE stream (RFC 1951, no wrapper) into the original bytes.
 /// Supports all three block types (stored, fixed Huffman, dynamic Huffman).
 /// Returns `Err` on a corrupt stream (invalid code, out-of-range distance, reserved block type).
+/// The decompressed output is capped at 64 MiB; use `inflate_raw_limit` for a custom cap.
 pub fn inflate_raw(data: bytes) -> Result<bytes, string> {
-    var s = Inflater { data: data, pos: 0, bitpos: 0, out: [] };
+    inflate_raw_limit(data, default_limit())
+}
+
+// M64.2: la forma con tope explícito — anti-bomba de descompresión (DEFLATE llega a ~1000:1).
+/// Like `inflate_raw`, but caps the decompressed output at `max_out` bytes: a stream that
+/// would expand beyond the cap returns `Err` (decompression-bomb protection).
+pub fn inflate_raw_limit(data: bytes, max_out: int) -> Result<bytes, string> {
+    var s = Inflater { data: data, pos: 0, bitpos: 0, out: [], limit: max_out };
     match (inflate_blocks(s)) {
         Result.Ok(_) => Result.Ok(bytes_of(s.out)),
         Result.Err(e) => Result.Err(e),
@@ -385,7 +415,15 @@ pub fn crc32(data: bytes) -> int {
 /// Decompresses a gzip file (RFC 1952): parses the header (including optional FEXTRA/FNAME/
 /// FCOMMENT/FHCRC fields), inflates the DEFLATE body, and verifies the trailer CRC-32.
 /// Returns `Err` on bad magic, unsupported method, corrupt data, or CRC mismatch.
+/// The decompressed output is capped at 64 MiB; use `gunzip_limit` for a custom cap.
 pub fn gunzip(data: bytes) -> Result<bytes, string> {
+    gunzip_limit(data, default_limit())
+}
+
+// M64.2: la forma con tope explícito de salida (anti-bomba).
+/// Like `gunzip`, but caps the decompressed output at `max_out` bytes (decompression-bomb
+/// protection).
+pub fn gunzip_limit(data: bytes, max_out: int) -> Result<bytes, string> {
     if (data.len() < 18) {
         return Result.Err("gzip demasiado corto");
     }
@@ -439,7 +477,7 @@ pub fn gunzip(data: bytes) -> Result<bytes, string> {
         return Result.Err("cabecera gzip truncada");
     }
     let comprimido = data.sub_bytes(pos, data.len() - 8);
-    match (inflate_raw(comprimido)) {
+    match (inflate_raw_limit(comprimido, max_out)) {
         Result.Err(e) => Result.Err(e),
         Result.Ok(salida) => {
             // Verifica el CRC-32 del tráiler (4 octetos LSB-first antes de ISIZE).
@@ -458,7 +496,15 @@ pub fn gunzip(data: bytes) -> Result<bytes, string> {
 // Descomprime un stream zlib (RFC 1950): 2 octetos de cabecera + DEFLATE + Adler-32 (no verificado).
 /// Decompresses a zlib stream (RFC 1950): 2-byte header + DEFLATE body. The trailing
 /// Adler-32 checksum is NOT verified. Returns `Err` on an unsupported method or corrupt data.
+/// The decompressed output is capped at 64 MiB; use `zlib_inflate_limit` for a custom cap.
 pub fn zlib_inflate(data: bytes) -> Result<bytes, string> {
+    zlib_inflate_limit(data, default_limit())
+}
+
+// M64.2: la forma con tope explícito de salida (anti-bomba).
+/// Like `zlib_inflate`, but caps the decompressed output at `max_out` bytes (decompression-bomb
+/// protection).
+pub fn zlib_inflate_limit(data: bytes, max_out: int) -> Result<bytes, string> {
     if (data.len() < 6) {
         return Result.Err("zlib demasiado corto");
     }
@@ -471,5 +517,5 @@ pub fn zlib_inflate(data: bytes) -> Result<bytes, string> {
         return Result.Err("zlib con diccionario preestablecido (FDICT) no soportado");
     }
     let comprimido = data.sub_bytes(2, data.len() - 4);
-    inflate_raw(comprimido)
+    inflate_raw_limit(comprimido, max_out)
 }

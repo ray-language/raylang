@@ -20,6 +20,9 @@ const ESPERADO: &[&str] = &[
     "gzip-truncado: err: gzip demasiado corto",
     "fextra-gigante: err: cabecera gzip truncada (FEXTRA)",
     "zlib-fdict: err: zlib con diccionario preestablecido (FDICT) no soportado",
+    // M64.2 — tope de salida (anti-bomba): gunzip_limit con tope menor que la salida = Err;
+    // con tope justo, el round-trip pasa.
+    "limite-salida: err: salida descomprimida excede el límite (posible bomba de descompresión)",
     "roundtrip: ok (32 octetos)",
 ];
 

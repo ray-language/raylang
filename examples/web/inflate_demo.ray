@@ -2,7 +2,7 @@
 // y comprueba que el texto recuperado es exacto. Cubre los TRES tipos de bloque DEFLATE: almacenado
 // (nivel 0), Huffman fijo (texto corto nivel 9) y Huffman dinámico (texto largo). Lo ejecuta
 // `tests/inflate_cli.rs`. Salida determinista (cómputo puro).
-from inflate import gunzip, inflate_raw, zlib_inflate, crc32;
+from inflate import gunzip, gunzip_limit, inflate_raw, zlib_inflate, crc32;
 from deflate import gzip_compress;
 
 fn main() {
@@ -38,8 +38,10 @@ fn main() {
     caso("fextra-gigante", gunzip(bytes_of([31, 139, 8, 4, 0, 0, 0, 0, 0, 255, 255, 255, 0, 0, 0, 0, 0, 0])));
     // zlib con diccionario preestablecido (FDICT): no soportado, error claro.
     caso("zlib-fdict", zlib_inflate(bytes_of([120, 32, 0, 0, 0, 0, 0, 0, 0, 0])));
-    // Round-trip sano de control: nada de lo anterior rompió el camino feliz.
-    caso("roundtrip", gunzip(g));
+    // Límite de salida (M64.2, anti-bomba): el mismo gzip válido, con tope menor que su salida.
+    caso("limite-salida", gunzip_limit(g, 8));
+    // Round-trip sano de control: nada de lo anterior rompió el camino feliz (y el tope justo pasa).
+    caso("roundtrip", gunzip_limit(g, 32));
 }
 
 // Imprime el resultado de una descompresión: tamaño si Ok, mensaje si Err.

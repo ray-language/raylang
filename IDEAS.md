@@ -851,6 +851,20 @@ std/math, no al llamador — diferido general de posición-del-llamador.
 
 ---
 
+## 26. std/text (revisión jul 2026) — M66, PLAN
+
+Revisión en frío (detalle en DESIGN §70). Corrección SANA (reverse por carácter con UTF-8
+astral, capitalize no-ASCII, count no-solapado, pads por carácter). Módulo casi sin
+consumidores reales (solo el smoke de cli_cli) → cambiar es barato.
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **`reverse` y `count` O(n²)**: reverse concatena `out + char` en bucle (cada `+` copia el acumulado; 100k chars = 167 ms); count re-materializa el resto con `substring` por ocurrencia — y `substring` es O(i), el gotcha de M59.5 (100k chars / 10k ocurrencias = 879 ms) | Texto grande inutilizable | **M66**: acumular en `[string]`+`join` / buscar sobre `[char]` con offset |
+| **`words` solo separa por espacio**: `words("a\tb\nc")` = 1 palabra (doc-honesto pero contradice el split_whitespace universal) | Sorpresa semántica | **M66**: whitespace = espacio/tab/`\n`/`\r` |
+| **Falta `lines(s)`** (partir por `\n` tratando `\r\n`) — toml/csv/http la hand-rollean | La utilidad más pedida ausente | **M66**: `lines` nueva |
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

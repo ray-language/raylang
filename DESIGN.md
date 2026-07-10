@@ -7824,3 +7824,17 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 - **M65.3 — menores COMPLETO**: `clamp<T: Ord>` genérica (retrocompatible) + documentar la frontera
   del int checked (`factorial(n ≥ 21)` / `ipow` con resultado > 2^63-1 = trap).
   **M65 COMPLETO** (65.1 + 65.2 + 65.3).
+
+## 70. M66 — std/text de producción
+
+> Revisión jul 2026 (tras M65; clasificación en IDEAS §26). Corrección verificada SANA
+> (reverse por carácter con UTF-8 astral, capitalize no-ASCII, count no-solapado, pads por
+> carácter). Un solo paso: dos O(n²) + dos huecos de superficie.
+
+- **M66 — de una pieza**: (a) `reverse` deja de concatenar `out + char` en bucle (O(n²);
+  100k chars = 167 ms) → acumula `[string]` y un `join` final (O(n)). (b) `count` deja de
+  re-materializar el resto con `substring` por ocurrencia (O(n²) por el `substring` O(i) de
+  M59.5; 100k chars / 10k ocurrencias = 879 ms) → busca sobre `[char]` con offset propio.
+  (c) `words` separa por **whitespace** (espacio/tab/`\n`/`\r`), no solo espacio — el
+  contrato universal de split_whitespace. (d) **`lines(s)`** nueva: parte por `\n` y trata
+  `\r\n` (el `\r` final se recorta); toml/csv/http la hand-rolleaban.

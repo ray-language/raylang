@@ -20,7 +20,7 @@ fn guid() -> string { "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" }
 /// Computes the `Sec-WebSocket-Accept` value for a client's `Sec-WebSocket-Key` (RFC 6455 §4.2.2).
 /// Returns base64(SHA-1(key + protocol GUID)).
 pub fn accept_key(key: string) -> string {
-    base64(sha1((key + guid()).to_bytes()))
+    base64(bytes_of(sha1((key + guid()).to_bytes())))
 }
 
 // Extrae el valor de la cabecera `Sec-WebSocket-Key` de la petición de upgrade (o "" si no aparece).

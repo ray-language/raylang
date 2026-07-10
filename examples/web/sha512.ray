@@ -142,5 +142,5 @@ pub fn sha512(msg: [int]) -> [int] {
 
 // El digest en hexadecimal.
 pub fn sha512_hex(msg: [int]) -> string {
-    hex_encode(sha512_octets(msg))
+    hex_encode(bytes_of(sha512_octets(msg)))
 }

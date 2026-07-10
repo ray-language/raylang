@@ -5,7 +5,7 @@
 // canónica) y caracteres fuera del alfabeto. El test compara la salida golden por ambos motores.
 from base64 import base64, base64url, base64_decode, base64url_decode;
 
-fn muestra(r: Result<[int], string>) {
+fn muestra(r: Result<bytes, string>) {
     match (r) {
         Result.Ok(bs) => {
             var s = "ok:";
@@ -21,8 +21,7 @@ fn muestra(r: Result<[int], string>) {
 }
 
 fn main() {
-    var f: [int] = [];
-    f.push(102);  // 'f'
+    let f = "f".to_bytes();
     print(base64(f));     // Zg==
     print(base64url(f));  // Zg
 

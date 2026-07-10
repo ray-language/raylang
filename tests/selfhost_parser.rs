@@ -710,10 +710,11 @@ fn parsea_archivos_reales_igual_que_el_oraculo() {
         "mysql_demo.ray", // M53.1: demo del cliente MySQL (examples/db); usa `for` (M27.2, idem)
         "sqlite_demo.ray", // M53.4: demo del cliente SQLite (examples/db); usa `for` (M27.2, idem)
         "mongo_demo.ray", // M54.3: demo del cliente MongoDB (examples/db); usa `for` (M27.2, idem)
-        "sha1.ray", "base64.ray", "crypto_demo.ray",
+        "sha1.ray", "base64.ray", "base64_demo.ray", "crypto_demo.ray",
         "sha256.ray", "sha256_demo.ray", // M20.1: SHA-256, usa `bytes` + bitops
         "hex.ray", "hmac.ray", "hmac_demo.ray", // M20.2: HMAC/hex, usa `bytes` + bitops
         "jwt.ray", "jwt_demo.ray", "uuid.ray", // M20.3: JWT/UUID, usa `bytes` + bitops
+        "jwt_eddsa.ray", // M30.3 (M60): anota `bytes` en posición de tipo (frontera base64url)
         "url.ray", "cookie.ray", "url_demo.ray", // M20.4: url/cookies, usa `bytes` + bitops
         "udp.ray", "udp_demo.ray", "udp_yield_demo.ray", // M20.8/M20.11: UDP, usa `bytes`
         "dns.ray", "dns_demo.ray", // M22: cliente DNS, usa `bytes` + bitops

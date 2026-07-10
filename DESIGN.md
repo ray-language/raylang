@@ -7649,3 +7649,34 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   igual (46 → 50 ms, sin tocar). `clear()` en StringBuilder no hizo falta.
 - **Decisión aparte (pre-1.0, con el usuario)**: unificar `[int]` → `bytes` en hex/base64/
   PbWriter (APIs pre-M16); rompe ~6 consumidores (jwt, scram, crypto…).
+
+## 64. M60 — `bytes` en las fronteras de la std (unificación `[int]` → `bytes`)
+
+> Cierra la "decisión aparte" de M59 (§63), decidida con el usuario: pre-1.0 es la ventana de
+> rotura. Diagnóstico: `std/crypto` (ring, M43) ya hablaba `bytes` de punta a punta; el mundo
+> `[int]` sobrevivía SOLO en `std/hex`/`std/base64` (APIs pre-M16) y en los shims `*_octets` de
+> `net/crypto`, que existían únicamente para traducir entre ambos. La migración mayormente
+> BORRA conversiones. Protobuf no necesitó cambio (su `[int]` es interno; la superficie ya era
+> `bytes`).
+
+- **APIs**: `hex_encode(bytes) -> string`, `hex_decode -> Result<bytes, string>`,
+  `base64/base64url(bytes) -> string`, `base64_decode/base64url_decode -> Result<bytes,
+  string>`. Por dentro siguen acumulando `[int]` + `bytes_of` al final (a `bytes` no se le
+  hace push); indexar `bytes` ya da `int` → los cuerpos casi no cambian.
+- **`net/crypto` queda reducido a los helpers hex** (`sha256_hex`/`hmac_sha256_hex`, que ya
+  eran bytes-nativos; los usa sigv4). Retirados: `octetos`, `sha256_octets`, `sha1_octets`,
+  `hmac_sha256_octets`, `ed_public_key`, `ed_sign`, `ed_verify`.
+- **Consumidores de producto** migrados a `std/crypto` directo: `jwt` (cae `str_octets`;
+  `base64url(crypto.hmac_sha256(...))` sin conversión), `jwt_eddsa` (**API rota a propósito**:
+  `seed`/`pubkey` pasan de `[int]` a `bytes`; seed inválida → segmento de firma vacío),
+  `scram` (**100% bytes**: `Scram.server_sig: bytes`, `xor_bytes`/`pbkdf2_sha256` sobre bytes
+  — desaparecieron TODAS las `bytes_of`/`octetos`), `websocket` (`crypto.sha1` directo),
+  `websocket_client` (`base64(bytes_of(nonce))`), `sigv4` (`crypto.hmac_sha256` directo,
+  borra una doble conversión), `uuid` (frontera `bytes_of`).
+- **Los espejos pedagógicos** (`examples/web/jwt.ray`/`jwt_eddsa.ray`/`scram.ray`/
+  `websocket.ray`) conservan la cripto pura en `[int]` (es su representación didáctica) y
+  convierten con `bytes_of` SOLO en la frontera hex/base64; los demos (`chacha20`, `poly1305`,
+  `ed25519`, `sha512`, `huffman`, `hmac`) igual.
+- Sin cambios de golden: todas las salidas son idénticas; las suites de consumidores cubren
+  la migración (jwt, jwt_eddsa, scram, websocket, hmac, sha256/512, base64, uuid, cli, oauth2,
+  postgres/mongo vía scram).

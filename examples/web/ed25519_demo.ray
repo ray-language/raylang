@@ -10,9 +10,9 @@ fn si(b: bool) -> string {
 
 fn probar(seed: [int], msg: [int]) {
     let pk = ed25519_public_key(seed);
-    print(hex_encode(pk));
+    print(hex_encode(bytes_of(pk)));
     let sig = ed25519_sign(seed, pk, msg);
-    print(hex_encode(sig));
+    print(hex_encode(bytes_of(sig)));
     print(si(ed25519_verify(pk, msg, sig)));
 
     // Manipular la firma (voltear un bit de S) debe hacer que la verificación falle.

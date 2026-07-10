@@ -7,8 +7,8 @@
 // contesta ping→pong, hace el close-handshake de cortesía y reensambla mensajes FRAGMENTADOS),
 // con límite de payload validado ANTES de leer. `decode_frame` (una trama ya completa) se
 // conserva para quien ya tiene los octetos exactos. Sin extensiones (permessage-deflate).
-from net/crypto import sha1_octets;
 from std/base64 import base64;
+import std/crypto;
 import std/net;
 import std/random;
 
@@ -20,7 +20,7 @@ fn guid() -> string { "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" }
 /// Computes the `Sec-WebSocket-Accept` value for a client's `Sec-WebSocket-Key` (RFC 6455 §4.2.2).
 /// Returns base64(SHA-1(key + protocol GUID)).
 pub fn accept_key(key: string) -> string {
-    base64(sha1_octets((key + guid()).to_bytes()))
+    base64(crypto.sha1((key + guid()).to_bytes()))
 }
 
 // Extrae el valor de la cabecera `Sec-WebSocket-Key` de la petición de upgrade (o "" si no aparece).

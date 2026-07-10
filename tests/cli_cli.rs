@@ -353,8 +353,8 @@ fn stdlib_encoding_hex_base64_url_json() {
          import std/url;\n\
          import std/json;\n\
          fn main() -> int {\n\
-             print(hex.hex_encode([255, 0, 171]));\n\
-             print(base64.base64([104, 105]));\n\
+             print(hex.hex_encode(bytes_of([255, 0, 171])));\n\
+             print(base64.base64(\"hi\".to_bytes()));\n\
              print(url.url_encode(\"a b&c\"));\n\
              match (json.parse(\"{\\\"n\\\": 42}\")) {\n\
                  Result.Ok(j) => { print(json.stringify(j)); },\n\

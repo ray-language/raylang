@@ -748,7 +748,7 @@ librería pura, cero runtime.
 | **protobuf `encode_varint` con negativo = corrupción SILENCIOSA** (el bucle `v >= 128` no entra y emite `v & 127` mal); el diferido "sin negativos" está documentado pero debería ser `Err`, no bytes corruptos | Corrupción de wire sin aviso | **59.4** |
 | **O(n²) transversal**: json/csv/hex/base64 construyen resultados con `s = s + …` por carácter — el `StringBuilder` (M40.3c) existe exactamente para esto y NINGUNA lo usa (son anteriores) | Cuadrático real en payloads de MBs | **59.5** (midiendo antes/después) |
 | Menores: json `parse_number` laxo (`+1`, `01`) y sin límite de profundidad (lo corta `MAX_CALL_DEPTH`, indocumentado); csv separador fijo `,` (sin `;`/TSV) y basura tras comilla de cierre tolerada; regex sin grupos de captura/`{n,m}`/lazy; StringBuilder sin `clear()`; url `parse_query` last-wins con claves repetidas (documentado) | — | dentro de su sub-fase o diferido |
-| **Decisión de API aparte (¿pre-1.0?)**: hex/base64/PbWriter hablan `[int]`, no `bytes` (pre-M16) — conversiones por doquier en jwt/scram/crypto y sin garantía 0..255; unificar rompe API de ~6 consumidores | Consistencia del ecosistema | decisión con el usuario |
+| **Decisión de API aparte (¿pre-1.0?)**: hex/base64/PbWriter hablan `[int]`, no `bytes` (pre-M16) — conversiones por doquier en jwt/scram/crypto y sin garantía 0..255; unificar rompe API de ~6 consumidores | Consistencia del ecosistema | **RESUELTA → M60** (DESIGN §64): hex/base64 a `bytes`, shims `*_octets` de net/crypto retirados, consumidores sobre `std/crypto` directo |
 
 **Verificados sin hallazgo**: floats de json round-trip limpios (`42.0` → `"42"`, sin notación
 científica), surrogates `\uXXXX`, salida canónica (claves ordenadas); url ya endurecida en M56.2.

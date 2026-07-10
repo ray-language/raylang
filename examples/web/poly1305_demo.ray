@@ -17,5 +17,5 @@ fn main() {
     let msg = str_bytes("Cryptographic Forum Research Group");
 
     let tag = poly1305_mac(key, msg);
-    print(hex_encode(tag));  // esperado: a8061dc1305136c6c22b8baf0c0127a9
+    print(hex_encode(bytes_of(tag)));  // esperado: a8061dc1305136c6c22b8baf0c0127a9
 }

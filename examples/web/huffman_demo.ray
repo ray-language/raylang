@@ -13,7 +13,7 @@ fn str_bytes(s: string) -> [int] {
 
 fn probar(s: string) {
     let enc = huffman_encode(str_bytes(s));
-    print(hex_encode(enc));
+    print(hex_encode(bytes_of(enc)));
     match (huffman_decode(enc)) {
         Result.Ok(dec) => {
             let orig = str_bytes(s);

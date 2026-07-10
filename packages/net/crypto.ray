@@ -1,30 +1,10 @@
 // Cripto de PRODUCCIÓN para el paquete `net` (M43.5). Adaptadores finos sobre los builtins de `ring`
-// (`sha256`/`sha512`/`sha1`/`hmac_sha256`/`ed25519_*`/`chacha20poly1305_*`) que presentan la API en
-// `[int]`/hex que los módulos del `net` ya consumían de la cripto pura. Reemplaza a esa cripto pura
-// (`examples/web/sha256.ray`, etc.), que queda SOLO como demostración del lenguaje: aquí las operaciones
-// son de **tiempo constante y auditadas** (requisito para tocar secretos reales), no bit-twiddling sobre
-// la VM. Nombres distintos de los builtins a propósito: un builtin gana a una función homónima, así que
-// un envoltorio con el mismo nombre quedaría muerto (por eso `hmac_sha256_octets`, `sha1_octets`, `ed_*`).
-// Octetos (`[int]`) de un `bytes`. El puente entre el mundo `bytes` de los builtins y el `[int]` del `net`.
+// (`sha256`/`hmac_sha256`) que presentan salidas en HEX que los módulos del `net` consumen (sigv4).
+// M60: los shims `*_octets`/`ed_*` (la capa de compat `[int]`↔`bytes`) DESAPARECIERON — hex/base64
+// hablan `bytes` y los consumidores (jwt/jwt_eddsa/scram/websocket) usan `std/crypto` directo.
+// Nombres distintos de los builtins a propósito: un builtin gana a una función homónima, así que
+// un envoltorio con el mismo nombre quedaría muerto.
 import std/crypto;
-
-fn octetos(b: bytes) -> [int] {
-    var out: [int] = [];
-    var i = 0;
-    while (i < b.len()) {
-        out.push(b[i]);
-        i = i + 1;
-    }
-    out
-}
-
-// --- Hashes ---
-// SHA-256 de un mensaje dado como octetos, devuelto como octetos (como el `sha256_octets` pedagógico).
-/// SHA-256 digest of a message given as octets, returned as 32 octets.
-/// Backed by the audited `ring` builtin (constant-time, production-grade).
-pub fn sha256_octets(msg: [int]) -> [int] {
-    octetos(crypto.sha256(bytes_of(msg)))
-}
 
 // SHA-256 en hexadecimal (`to_string` de un `bytes` ya da hex).
 /// SHA-256 digest of `msg` as a lowercase hexadecimal string (64 chars).
@@ -32,52 +12,8 @@ pub fn sha256_hex(msg: bytes) -> string {
     to_string(crypto.sha256(msg))
 }
 
-// SHA-1 (legado; solo para el accept-key de WebSocket, RFC 6455) como octetos.
-/// SHA-1 digest of `msg` as 20 octets. Legacy algorithm: kept ONLY for the WebSocket
-/// accept-key computation (RFC 6455); do not use it for new security purposes.
-pub fn sha1_octets(msg: bytes) -> [int] {
-    octetos(crypto.sha1(msg))
-}
-
-// --- HMAC ---
-// HMAC-SHA256 como octetos (renombrado desde `hmac_sha256` para no chocar con el builtin homónimo).
-/// HMAC-SHA256 of `msg` under `key`, returned as 32 octets.
-/// Named `_octets` because a plain `hmac_sha256` would be shadowed by the builtin.
-pub fn hmac_sha256_octets(key: bytes, msg: bytes) -> [int] {
-    octetos(crypto.hmac_sha256(key, msg))
-}
-
 // HMAC-SHA256 en hexadecimal.
 /// HMAC-SHA256 of `msg` under `key`, as a lowercase hexadecimal string (64 chars).
 pub fn hmac_sha256_hex(key: bytes, msg: bytes) -> string {
     to_string(crypto.hmac_sha256(key, msg))
-}
-
-// --- Ed25519 (API en `[int]`, como la usaba `jwt_eddsa`) ---
-//
-// `ring` deriva la clave pública de la semilla al firmar, así que `ed_sign` NO recibe la clave pública
-// (a diferencia del `ed25519_sign` pedagógico de 3 argumentos). La semilla son 32 octetos; una semilla
-// de mal tamaño da `[]` (degradación honesta; los consumidores pasan semillas válidas).
-/// Derives the Ed25519 public key (32 octets) from a 32-octet private seed.
-/// Returns `[]` if the seed has the wrong length.
-pub fn ed_public_key(seed: [int]) -> [int] {
-    match (crypto.ed25519_public_key(bytes_of(seed))) {
-        Option.Some(pk) => octetos(pk),
-        Option.None => [],
-    }
-}
-
-/// Signs `msg` with Ed25519 using the 32-octet private seed; returns the 64-octet signature.
-/// The public key is derived from the seed internally. Returns `[]` on an invalid seed.
-pub fn ed_sign(seed: [int], msg: [int]) -> [int] {
-    match (crypto.ed25519_sign(bytes_of(seed), bytes_of(msg))) {
-        Option.Some(sig) => octetos(sig),
-        Option.None => [],
-    }
-}
-
-/// Verifies an Ed25519 signature: true iff `sig` is a valid signature of `msg`
-/// under the 32-octet public key `pubkey`.
-pub fn ed_verify(pubkey: [int], msg: [int], sig: [int]) -> bool {
-    crypto.ed25519_verify(bytes_of(pubkey), bytes_of(msg), bytes_of(sig))
 }

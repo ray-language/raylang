@@ -1,5 +1,5 @@
 // Codificación hexadecimal (RFC 4648 §8) escrita EN raylang. Cero runtime nuevo. Convierte entre
-// un arreglo de octetos (`[int]`, cada uno 0..255) y su representación hexadecimal en minúsculas.
+// `bytes` y su representación hexadecimal en minúsculas (M60: la API habla `bytes`, no `[int]`).
 // Importable: `from hex import hex_encode, hex_decode;`. Útil para digests, claves, fingerprints.
 // M59.5: hex_encode acumula en StringBuilder (O(n), no O(n²) de `s = s + …`).
 import std/collections/stringbuilder as sb;
@@ -20,9 +20,9 @@ fn hex_val(c: char) -> int {
 }
 
 // Octetos → string hexadecimal (2 dígitos por octeto, minúsculas).
-/// Encodes a byte array (`[int]`, each 0..255) as a lowercase hexadecimal string (RFC 4648 §8).
+/// Encodes `bytes` as a lowercase hexadecimal string (RFC 4648 §8).
 /// Each byte produces exactly two hex digits.
-pub fn hex_encode(data: [int]) -> string {
+pub fn hex_encode(data: bytes) -> string {
     let b = sb.new();
     var i = 0;
     while (i < data.len()) {
@@ -34,9 +34,9 @@ pub fn hex_encode(data: [int]) -> string {
 }
 
 // String hexadecimal → octetos. `Err` si la longitud es impar o hay un carácter no hexadecimal.
-/// Decodes a hexadecimal string (upper- or lowercase) into a byte array.
+/// Decodes a hexadecimal string (upper- or lowercase) into `bytes`.
 /// Returns `Err` if the string has odd length or contains a non-hex character.
-pub fn hex_decode(s: string) -> Result<[int], string> {
+pub fn hex_decode(s: string) -> Result<bytes, string> {
     let n = s.len();
     if (n % 2 != 0) {
         return Result.Err("longitud hexadecimal impar");
@@ -52,5 +52,5 @@ pub fn hex_decode(s: string) -> Result<[int], string> {
         out.push(hi << 4 | lo);
         i = i + 2;
     }
-    Result.Ok(out)
+    Result.Ok(bytes_of(out))
 }

@@ -30,7 +30,8 @@ fn xor_bytes(a: [int], b: [int]) -> [int] {
 
 // PBKDF2-HMAC-SHA256 con dkLen = 32 (un solo bloque): result = U1 ⊕ U2 ⊕ … ⊕ Uc, con U1 = HMAC(pw,
 // salt‖INT(1)) y Ui = HMAC(pw, U_{i-1}).
-fn pbkdf2_sha256(pw: bytes, salt: [int], iterations: int) -> [int] {
+// M60: el salt llega como `bytes` (base64_decode); indexar bytes da int, el cuerpo no cambia.
+fn pbkdf2_sha256(pw: bytes, salt: bytes, iterations: int) -> [int] {
     var msg: [int] = [];
     var i = 0;
     while (i < salt.len()) {
@@ -108,7 +109,7 @@ pub fn scram_final(sc: Scram, password: string, server_first: string) -> Result<
     let server_key = hmac_sha256(bytes_of(salted), "Server Key".to_bytes());
     sc.server_sig = hmac_sha256(bytes_of(server_key), auth_msg.to_bytes());
 
-    Result.Ok(client_final_noproof + ",p=" + base64(proof))
+    Result.Ok(client_final_noproof + ",p=" + base64(bytes_of(proof)))
 }
 
 // Verifica el `server-final` ("v=<firma en base64>"): la firma debe coincidir con la esperada.

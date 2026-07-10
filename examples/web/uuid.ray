@@ -12,7 +12,7 @@ import std/time;
 
 // 16 octetos → el formato canónico 8-4-4-4-12.
 fn formato(b: [int]) -> string {
-    let h = hex_encode(b);  // 32 dígitos hex
+    let h = hex_encode(bytes_of(b));  // 32 dígitos hex
     h.substring(0, 8) + "-" + h.substring(8, 12) + "-" + h.substring(12, 16) + "-" + h.substring(16, 20) + "-" + h.substring(20, 32)
 }
 

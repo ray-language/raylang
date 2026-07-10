@@ -23,7 +23,7 @@ fn make_key() -> string {
         b.push(random.below(256));
         i = i + 1;
     }
-    base64(b)
+    base64(bytes_of(b))
 }
 
 // La petición de upgrade del cliente.

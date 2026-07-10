@@ -16,11 +16,11 @@ fn main() {
     // 7d5c78edf5aae49e5d1bf1106e250485811585bcad0d78ebbea235d9f320a0dd
     // --- base64url (sin relleno, alfabeto URL-safe) ---
     print(base64url(hex_decode_ok("4d616e")));  // TWFu  ("Man")
-    print(base64url([251, 255, 191]));  // -_-_  (ejerce '-' y '_')
-    print(base64url(str_octets("{\"alg\":\"HS256\"}")));  // eyJhbGciOiJIUzI1NiJ9 (cabecera JWT)
+    print(base64url(bytes_of([251, 255, 191])));  // -_-_  (ejerce '-' y '_')
+    print(base64url("{\"alg\":\"HS256\"}".to_bytes()));  // eyJhbGciOiJIUzI1NiJ9 (cabecera JWT)
 
     // --- round-trip: base64url_decode(base64url(x)) == x ---
-    let original = hmac_sha256("key".to_bytes(), "dato".to_bytes());
+    let original = bytes_of(hmac_sha256("key".to_bytes(), "dato".to_bytes()));
     match (base64url_decode(base64url(original))) {
         Result.Ok(vuelta) => print(hex_encode(vuelta) == hex_encode(original)),  // true
         Result.Err(e) => print(e),
@@ -33,25 +33,14 @@ fn main() {
     }
 }
 
-// Octetos de un string.
-fn str_octets(s: string) -> [int] {
-    let b = s.to_bytes();
-    var out: [int] = [];
-    var i = 0;
-    while (i < b.len()) {
-        out.push(b[i]);
-        i = i + 1;
-    }
-    out
-}
 
 // hex_decode que asume entrada válida (para la demo).
-fn hex_decode_ok(s: string) -> [int] {
+fn hex_decode_ok(s: string) -> bytes {
     match (hex_decode(s)) {
         Result.Ok(o) => o,
         Result.Err(e) => {
             panic(e);
-            []
+            b""
         },
     }
 }

@@ -28,8 +28,8 @@ fn main() {
     let pt = str_bytes("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.");
 
     let sellado = aead_seal(key, nonce, aad, pt);
-    print(hex_encode(sellado.ciphertext));
-    print(hex_encode(sellado.tag));
+    print(hex_encode(bytes_of(sellado.ciphertext)));
+    print(hex_encode(bytes_of(sellado.tag)));
 
     // Abrir el sellado auténtico: recupera el texto.
     match (aead_open(key, nonce, aad, sellado.ciphertext, sellado.tag)) {

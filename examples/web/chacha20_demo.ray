@@ -30,7 +30,7 @@ fn main() {
     let pt = str_bytes(texto);
 
     let ct = chacha20_encrypt(key, counter, nonce, pt);
-    print(hex_encode(ct));
+    print(hex_encode(bytes_of(ct)));
 
     // Round-trip: descifrar (XOR de nuevo) recupera el texto original.
     let back = chacha20_encrypt(key, counter, nonce, ct);

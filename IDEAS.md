@@ -819,6 +819,20 @@ manifiesto usa otro parser.
 
 ---
 
+## 24. Compresión (inflate/deflate/huffman) — M64, PLAN (revisión jul 2026)
+
+Revisión del trío (detalle en DESIGN §68). `deflate` (encoder, datos propios) sólido; `huffman`
+HPACK excelente (trie + errores como valores + relleno EOS validado). El problema es `inflate`,
+que decodifica datos EXTERNOS (el gzip transparente del cliente HTTP, activado en M58.2):
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **Input corrupto/truncado = CRASH, no Err**: `read_bit` indexa sin límites ("asume datos suficientes"); ídem `stored_block`, el bucle FNAME de gunzip (`while (data[pos] != 0)` sin tope) y el salto FEXTRA (xlen del atacante). Verificado: `inflate_raw(b"")` → "índice fuera de rango", muere el programa | Una respuesta gzip corrupta tumba la fibra (misma clase que WS pre-M58.1) | **64.1**: bounds → `Err`; + NLEN verificado, FDICT rechazado, hlit/hdist acotados, repeticiones 16/17/18 sin rebasar |
+| **Bomba de descompresión sin tope**: gzip diminuto → expansión sin cota (LZ77 sobre sí mismo); ISIZE no sirve (atacante); el cliente HTTP descomprime automático | Agotamiento de memoria remoto | **64.2**: `gunzip_limit`/`inflate_raw_limit` (patrón `read_message_limit` del WS) + el cliente HTTP los usa |
+| Menores: árboles sobre-suscritos aceptados (puff valida Kraft; aquí basura en vez de Err, sin OOB); `huffman_decode` reconstruye el trie (~5k nodos) POR string de cabecera h2; crc32 bit a bit (8 it/octeto; con tabla ~8×); huffman/hpack hablan `[int]` entre sí (par interno); `prev` de deflate O(n) vs anillo 32K | — | **64.3** o diferido |
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

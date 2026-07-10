@@ -7770,3 +7770,26 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 - **Diferidos** (documentados en el módulo): inline tables, `[[…]]`, fechas, multilínea.
 - Gotcha cazado por la propia sonda de 63.3: `expect_eol` debía aceptar el `\r` de un CRLF
   como fin de línea (si no, todo documento con finales Windows fallaba).
+
+## 68. M64 — Compresión de producción (inflate robusto)
+
+> Revisión jul 2026 (tras M63; clasificación en IDEAS §24). `deflate` (encoder) y `huffman`
+> (HPACK) salieron bien parados; `inflate` tiene el algoritmo correcto (port de puff.c, CRC
+> verificado) pero CERO robustez ante input corrupto — y descomprime datos EXTERNOS (el gunzip
+> transparente del cliente HTTP, M58.2). Verificado: `inflate_raw(b"")` mata el programa con
+> "índice fuera de rango" en vez de devolver `Err`.
+
+- **M64.1 — inflate robusto (corrupto = `Err`, nunca crash)**: el bit-reader pasa a `Result`
+  (`read_bit`/`read_bits` con bounds; `decode` propaga con `?` y conserva el -1 de código
+  inválido dentro del `Ok`); `stored_block` valida LEN/NLEN contra lo que queda (y **verifica
+  NLEN = ~LEN**, que puff comprueba y aquí faltaba); la cabecera de `gunzip` acota FNAME/
+  FCOMMENT/FEXTRA/FHCRC (xlen del atacante ya no salta fuera) y exige que quede el tráiler;
+  `dynamic_block` acota hlit ≤ 286 / hdist ≤ 30 y rechaza que las repeticiones 16/17/18
+  rebasen hlit+hdist (como puff); zlib rechaza **FDICT** (diccionario preestablecido, no
+  soportado — antes producía basura). API pública intacta (`Result<bytes, string>`).
+- **M64.2 — límite de salida (anti-bomba)**: `inflate_raw_limit`/`gunzip_limit`/
+  `zlib_inflate_limit(data, max_out)` — la salida acumulada se comprueba contra el tope
+  (las formas sin límite delegan con un tope generoso por defecto); el cliente HTTP usa la
+  forma con límite. Patrón `read_message_limit` del WebSocket (M58.1).
+- **M64.3 — menores a criterio**: validación de Kraft de los árboles, trie de HPACK
+  reusable, crc32 con tabla — o diferir a demanda.

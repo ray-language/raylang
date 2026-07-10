@@ -93,7 +93,9 @@ fn main() -> int {
 
 ### Observabilidad
 
-- **`net/time`** — fecha/hora: `now_utc`, `from_epoch_millis`, `to_iso8601`, `date_stamp`. (`now_utc` no
+- **`net/time`** — COMPAT (M57.1): las fechas civiles UTC viven ahora en **`std/time`**; este módulo
+  reexporta (`now_utc`, `from_epoch_millis`, `to_iso8601`, `date_stamp`, …). Para código nuevo,
+  importa `std/time`. (`now_utc` no
   es determinista; el formateo sí.)
 - **`net/log`** — logging estructurado (niveles, campos, JSON). Sobre `net/time`.
 - **`net/metrics`** — métricas estilo Prometheus (counter/gauge/histogram + labels), `render` en formato

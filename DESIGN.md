@@ -7503,11 +7503,20 @@ net/log, net/sigv4 y db/bson — cruce de paquetes); `net/time` queda como reexp
 package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang puro), `net/ntp`
 (SNTP), `cron` (sobre el sleep de fibra), `dist` (HLC/Lamport).
 
-- **M57.1 — promoción a `std/time` + parse endurecido**: fusionar `net/time` en `std/time`
-  (`time.now_utc()`, `time.to_iso8601(dt)`…; `net/time` = `pub from std/time import …`).
-  `parse_iso8601` acepta offsets `±HH:MM`/`Z` y fracción `.mmm` (normaliza a UTC en el epoch-ms),
-  campo no numérico o fuera de rango = `Err` real (antes: 0 en silencio), y documenta que
-  `monotonic` es por-proceso (no persistible).
+- **M57.1 — promoción a `std/time` + parse endurecido** ✅ **COMPLETO**: `std/time` absorbe las
+  fechas civiles (`DateTime` + Hinnant + formatos + `format_duration`); `net/time` y el espejo
+  `examples/web/time.ray` quedan como **reexports** (`pub from std/time import …`, incluido el
+  TIPO `DateTime` — el reexport de tipos y el acceso calificado a través del reexport funcionan;
+  lo verifica `cli_cli` con `import net/time; time.to_iso8601(…)`). **Parse endurecido**: nuevo
+  **`parse_iso8601_millis(s) -> Result<int, string>`** (a la moneda epoch-ms) que acepta
+  `YYYY-MM-DDTHH:MM:SS[.fff…][Z|±HH:MM]` — offset normalizado a UTC, fracción → ms (dígitos de
+  más truncados), `T`/`t`/espacio como separador — y rechaza con `Err` real: campo no numérico
+  (antes: **0 en silencio**), mes/hora fuera de rango, **fecha inexistente** (validación exacta
+  por round-trip civil: 31 de abril y 29-feb no bisiesto caen sin tabla de meses), offset
+  malformado o ausente, texto sobrante, resultado pre-1970. `parse_iso8601` (compat) delega y
+  devuelve el `DateTime` normalizado a UTC (fracción truncada a segundos). `monotonic`
+  documentado como por-proceso (no persistible). Golden `time_cli` ampliado (10 casos nuevos,
+  ambos motores, vectores Python).
 - **M57.2 — sleep cooperativo de fibra** (único toque de runtime): `time.sleep` en la VM pasa de
   `thread::sleep` (bloquea el worker; en M:1 congela todo) a **aparcar la fibra con deadline sin
   fd** — la misma maquinaria de deadlines de M56.4. Desbloquea timeout-de-handler (diferido de

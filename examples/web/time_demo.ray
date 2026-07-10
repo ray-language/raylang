@@ -1,6 +1,6 @@
 // Demo/verificación de fechas/horas UTC (M20.5). Salida determinista (timestamps fijos), la ejecuta
 // `tests/time_cli.rs`. Referencias de `datetime.utcfromtimestamp` (Python).
-from time import from_epoch_millis, to_iso8601, to_rfc1123, to_epoch_millis, parse_iso8601, now_utc, format_duration;
+from time import from_epoch_millis, to_iso8601, to_rfc1123, to_epoch_millis, parse_iso8601, parse_iso8601_millis, now_utc, format_duration;
 import std/time;
 
 fn main() {
@@ -24,6 +24,34 @@ fn main() {
         Result.Err(e) => print(e),
     }
 
+    // --- parse endurecido (M57.1): offsets, fracción y errores reales ---
+    // Un offset +02:00 se normaliza a UTC (10:49:37+02:00 == 08:49:37Z).
+    match (parse_iso8601("1994-11-06T10:49:37+02:00")) {
+        Result.Ok(dt) => print(to_iso8601(dt)),  // 1994-11-06T08:49:37Z
+        Result.Err(e) => print("err: " + e),
+    }
+    // Offset negativo (05:49:37-03:00 == 08:49:37Z).
+    match (parse_iso8601("1994-11-06T05:49:37-03:00")) {
+        Result.Ok(dt) => print(to_iso8601(dt)),  // 1994-11-06T08:49:37Z
+        Result.Err(e) => print("err: " + e),
+    }
+    // La fracción aporta los ms en parse_iso8601_millis (y dígitos de más se truncan).
+    match (parse_iso8601_millis("1970-01-01T00:00:00.123456Z")) {
+        Result.Ok(ms) => print(ms),  // 123
+        Result.Err(e) => print("err: " + e),
+    }
+    // Errores reales (antes: 0 en silencio): mes 13, fecha inexistente, campo no numérico, sin offset.
+    print(es_err(parse_iso8601_millis("2024-13-01T00:00:00Z")));       // true (mes 13)
+    print(es_err(parse_iso8601_millis("2023-02-29T00:00:00Z")));       // true (2023 no es bisiesto)
+    print(es_err(parse_iso8601_millis("2024-0x-01T00:00:00Z")));       // true (no numérico)
+    print(es_err(parse_iso8601_millis("2024-06-30T11:49:37")));        // true (falta el offset)
+    print(es_err(parse_iso8601_millis("2024-06-30T11:49:37Zx")));      // true (texto sobrante)
+    // Y el 29-feb de un año bisiesto SÍ parsea.
+    match (parse_iso8601("2024-02-29T00:00:00Z")) {
+        Result.Ok(dt) => print(to_rfc1123(dt)),  // Thu, 29 Feb 2024 00:00:00 GMT
+        Result.Err(e) => print("err: " + e),
+    }
+
     // --- now_utc coherente con time.now() (propiedad, no valor) ---
     let ahora = now_utc();
     let delta = time.now() - to_epoch_millis(ahora);
@@ -38,3 +66,10 @@ fn main() {
 fn iso(ms: int) -> string { to_iso8601(from_epoch_millis(ms)) }
 
 fn rfc(ms: int) -> string { to_rfc1123(from_epoch_millis(ms)) }
+
+fn es_err(r: Result<int, string>) -> bool {
+    match (r) {
+        Result.Ok(_) => false,
+        Result.Err(_) => true,
+    }
+}

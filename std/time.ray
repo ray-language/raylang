@@ -1,13 +1,316 @@
 // std/time (M49.2b) — the system clock. Import with `import std/time;` and use qualified
 // (`time.now()`, `time.sleep(500)`). Non-deterministic (real time): wraps internal primitives
-// (`__now`/`__monotonic`/`__sleep`). For dates/formatting build on top of `time.now()`.
+// (`__now`/`__monotonic`/`__sleep`).
+//
+// M57.1: también las **fechas civiles UTC** (promovidas desde `net/time`, que queda como
+// reexport): `DateTime` + conversiones epoch↔civil (algoritmo de Hinnant) + formatos ISO 8601 /
+// RFC 1123 / AWS + parse RFC 3339 endurecido. La MONEDA de instantes es el `int` epoch-ms UTC;
+// `DateTime` es una VISTA civil para formatear/parsear (no lleva offset). Solo UTC — no hay base
+// de zonas horarias (una `tz` IANA sería un paquete aparte). Sin leap seconds (= tiempo Unix);
+// fechas desde 1970 (epoch >= 0: la división trunca = floor).
 
 /// The current wall-clock time as **milliseconds since the Unix epoch** (UTC).
 pub fn now() -> int { __now() }
 
-/// A monotonic clock reading in **milliseconds**, from an arbitrary origin: never goes backwards, so
-/// it is the right choice for measuring elapsed intervals (unlike `now`, which can jump).
+/// A monotonic clock reading in **milliseconds**, from an arbitrary origin anchored at process
+/// start: never goes backwards, so it is the right choice for measuring elapsed intervals
+/// (unlike `now`, which can jump). Because the origin is arbitrary and per-process, readings are
+/// NOT comparable across processes and must not be persisted — store `now()` for that.
 pub fn monotonic() -> int { __monotonic() }
 
 /// Suspends the current fiber for `ms` milliseconds (`ms <= 0` returns immediately).
 pub fn sleep(ms: int) { __sleep(ms) }
+
+// --- Fechas civiles UTC (M20.5, promovidas en M57.1) ---
+
+/// A civil UTC date-time: year, month (1..12), day (1..31), hour (0..23), minute/second (0..59)
+/// and weekday (0=Sunday..6=Saturday). A *view* over an instant for formatting/parsing — the
+/// instant itself is the `int` of milliseconds since the Unix epoch (see `from_epoch_millis`/
+/// `to_epoch_millis`). Always UTC; it carries no offset.
+pub struct DateTime {
+    year: int,
+    month: int,
+    day: int,
+    hour: int,
+    minute: int,
+    second: int,
+    weekday: int,
+}
+
+// Convierte días desde el epoch en (año, mes, día) — algoritmo de Hinnant (calendario gregoriano).
+// Devuelve un DateTime con la parte horaria a 0 (la rellena el llamador).
+fn civil_from_days(z: int) -> DateTime {
+    let zz = z + 719468;  // desplaza el epoch al 0000-03-01
+    let era = zz / 146097;
+    let doe = zz - era * 146097;  // día de la era [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;  // año de la era [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);  // día del año (mar=0) [0, 365]
+    let mp = (5 * doy + 2) / 153;  // mes desplazado [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1;  // día [1, 31]
+    var m = mp + 3;
+    if (mp >= 10) {
+        m = mp - 9;
+    }
+    var year = y;
+    if (m <= 2) {
+        year = y + 1;
+    }
+    DateTime { year: year, month: m, day: d, hour: 0, minute: 0, second: 0, weekday: 0 }
+}
+
+// Días desde el epoch a (año, mes, día) — inverso de `civil_from_days`.
+fn days_from_civil(year: int, month: int, day: int) -> int {
+    var y = year;
+    if (month <= 2) {
+        y = year - 1;
+    }
+    let era = y / 400;
+    let yoe = y - era * 400;
+    var mp = month + 9;  // mar=0
+    if (month > 2) {
+        mp = month - 3;
+    }
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+// Construye un DateTime UTC a partir de milisegundos desde el epoch.
+/// Builds a UTC DateTime from milliseconds since the Unix epoch (1970-01-01).
+/// Valid for epoch >= 0 (dates from 1970 on); weekday is computed (0=Sunday..6=Saturday).
+pub fn from_epoch_millis(ms: int) -> DateTime {
+    let secs = ms / 1000;
+    let days = secs / 86400;
+    let rem = secs - days * 86400;  // segundos dentro del día [0, 86399]
+    var dt = civil_from_days(days);
+    dt.hour = rem / 3600;
+    dt.minute = rem % 3600 / 60;
+    dt.second = rem % 60;
+    dt.weekday = (days + 4) % 7;  // 1970-01-01 fue jueves; epoch≥0 → (days+4) mod 7, 0=domingo
+    dt
+}
+
+// El instante actual en UTC.
+/// Returns the current instant as a UTC DateTime (from `now()`).
+pub fn now_utc() -> DateTime {
+    from_epoch_millis(now())
+}
+
+// Milisegundos desde el epoch de un DateTime (inverso de `from_epoch_millis`; ignora `weekday`).
+/// Converts a UTC DateTime back to milliseconds since the Unix epoch
+/// (inverse of `from_epoch_millis`; the `weekday` field is ignored).
+pub fn to_epoch_millis(dt: DateTime) -> int {
+    let days = days_from_civil(dt.year, dt.month, dt.day);
+    let secs = days * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second;
+    secs * 1000
+}
+
+// Rellena un entero no negativo con ceros a la izquierda hasta `ancho` dígitos.
+fn pad(n: int, ancho: int) -> string {
+    var s = to_string(n);
+    while (s.len() < ancho) {
+        s = "0" + s;
+    }
+    s
+}
+
+// Formato ISO 8601 / RFC 3339: `YYYY-MM-DDTHH:MM:SSZ` (Z = UTC).
+/// Formats a DateTime as ISO 8601 / RFC 3339: `YYYY-MM-DDTHH:MM:SSZ` (Z = UTC).
+pub fn to_iso8601(dt: DateTime) -> string {
+    pad(dt.year, 4) + "-" + pad(dt.month, 2) + "-" + pad(dt.day, 2) + "T" + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + "Z"
+}
+
+// Formato ISO 8601 "básico" (sin separadores): `YYYYMMDDTHHMMSSZ`. Es el `X-Amz-Date` de AWS SigV4.
+/// Formats a DateTime as "basic" ISO 8601 (no separators): `YYYYMMDDTHHMMSSZ`.
+/// This is the `X-Amz-Date` format used by AWS Signature V4.
+pub fn to_iso8601_basic(dt: DateTime) -> string {
+    pad(dt.year, 4) + pad(dt.month, 2) + pad(dt.day, 2) + "T" + pad(dt.hour, 2) + pad(dt.minute, 2) + pad(dt.second, 2) + "Z"
+}
+
+// Solo la fecha, sin separadores: `YYYYMMDD` (el "datestamp" del *credential scope* de AWS SigV4).
+/// Formats just the date, no separators: `YYYYMMDD` (the AWS SigV4 credential-scope datestamp).
+pub fn date_stamp(dt: DateTime) -> string {
+    pad(dt.year, 4) + pad(dt.month, 2) + pad(dt.day, 2)
+}
+
+fn weekday_name(w: int) -> string {
+    let nombres = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    nombres[w]
+}
+
+fn month_name(m: int) -> string {
+    let nombres = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    nombres[m]
+}
+
+// Formato RFC 1123 (la cabecera `Date:` de HTTP): `Wdy, DD Mon YYYY HH:MM:SS GMT`.
+/// Formats a DateTime as RFC 1123 (the HTTP `Date:` header): `Wdy, DD Mon YYYY HH:MM:SS GMT`.
+pub fn to_rfc1123(dt: DateTime) -> string {
+    weekday_name(dt.weekday) + ", " + pad(dt.day, 2) + " " + month_name(dt.month) + " " + pad(dt.year, 4) + " " + pad(dt.hour, 2) + ":" + pad(dt.minute, 2) + ":" + pad(dt.second, 2) + " GMT"
+}
+
+// --- Parse RFC 3339 endurecido (M57.1) ---
+// Antes: solo la forma exacta `…Z`, campos no numéricos = 0 EN SILENCIO, sin validar rangos.
+// Ahora: `YYYY-MM-DDTHH:MM:SS[.fff…][Z|±HH:MM]` — acepta offset y fracción (normaliza a UTC),
+// y todo lo malformado o fuera de rango es un Err real.
+
+// Un campo numérico de ancho fijo: Err si algún carácter no es un dígito.
+fn campo(s: string, ini: int, fin: int, nombre: string) -> Result<int, string> {
+    var n = 0;
+    var i = ini;
+    while (i < fin) {
+        let c = s[i];
+        if (c < '0' || c > '9') {
+            return Result.Err("ISO 8601: " + nombre + " no numérico en '" + s + "'");
+        }
+        n = n * 10 + (char_code(c) - 48);
+        i = i + 1;
+    }
+    Result.Ok(n)
+}
+
+// Exige el separador `esperado` en la posición `i`.
+fn separador(s: string, i: int, esperado: char) -> Result<int, string> {
+    if (s[i] != esperado) {
+        return Result.Err("ISO 8601: se esperaba '" + to_string(esperado) + "' en la posición " + to_string(i) + " de '" + s + "'");
+    }
+    Result.Ok(0)
+}
+
+// Parsea un timestamp RFC 3339 a **milisegundos desde el epoch, UTC** (la moneda de instantes):
+// `YYYY-MM-DDTHH:MM:SS[.fff…][Z|±HH:MM]`. El offset se resta (2024-01-01T12:00:00+02:00 =
+// 10:00Z); la fracción aporta los ms (dígitos de más se truncan). Campos no numéricos, rangos
+// inválidos (mes 13, 31 de abril, 29-feb no bisiesto…), offset malformado o texto sobrante = Err.
+/// Parses an RFC 3339 timestamp (`YYYY-MM-DDTHH:MM:SS[.fff…][Z|±HH:MM]`) into **milliseconds
+/// since the Unix epoch, UTC** — the offset is normalized away and the fraction contributes the
+/// milliseconds. Err on non-numeric fields, out-of-range values (month 13, April 31, Feb 29 on a
+/// non-leap year…), a malformed offset, trailing text, or a result before 1970.
+pub fn parse_iso8601_millis(s: string) -> Result<int, string> {
+    if (s.len() < 20) {
+        return Result.Err("ISO 8601 demasiado corto: '" + s + "'");
+    }
+    let year = campo(s, 0, 4, "año")?;
+    separador(s, 4, '-')?;
+    let month = campo(s, 5, 7, "mes")?;
+    separador(s, 7, '-')?;
+    let day = campo(s, 8, 10, "día")?;
+    if (s[10] != 'T' && s[10] != 't' && s[10] != ' ') {
+        return Result.Err("ISO 8601: se esperaba 'T' entre fecha y hora en '" + s + "'");
+    }
+    let hour = campo(s, 11, 13, "hora")?;
+    separador(s, 13, ':')?;
+    let minute = campo(s, 14, 16, "minuto")?;
+    separador(s, 16, ':')?;
+    let second = campo(s, 17, 19, "segundo")?;
+
+    // Rangos: la fecha se valida EXACTA por round-trip civil (rechaza 31 de abril y 29-feb no
+    // bisiesto sin tabla de meses); la hora, por rango simple.
+    if (month < 1 || month > 12) {
+        return Result.Err("ISO 8601: mes fuera de rango (" + to_string(month) + ") en '" + s + "'");
+    }
+    if (day < 1 || day > 31) {
+        return Result.Err("ISO 8601: día fuera de rango (" + to_string(day) + ") en '" + s + "'");
+    }
+    let civil = civil_from_days(days_from_civil(year, month, day));
+    if (civil.year != year || civil.month != month || civil.day != day) {
+        return Result.Err("ISO 8601: fecha inexistente (" + pad(year, 4) + "-" + pad(month, 2) + "-" + pad(day, 2) + ")");
+    }
+    if (hour > 23 || minute > 59 || second > 59) {
+        return Result.Err("ISO 8601: hora fuera de rango en '" + s + "'");
+    }
+
+    // Fracción opcional: `.` + 1+ dígitos; los TRES primeros son los ms (el resto se trunca).
+    var i = 19;
+    var frac_ms = 0;
+    if (i < s.len() && s[i] == '.') {
+        i = i + 1;
+        var digitos = 0;
+        var mult = 100;
+        while (i < s.len() && s[i] >= '0' && s[i] <= '9') {
+            if (digitos < 3) {
+                frac_ms = frac_ms + (char_code(s[i]) - 48) * mult;
+                mult = mult / 10;
+            }
+            digitos = digitos + 1;
+            i = i + 1;
+        }
+        if (digitos == 0) {
+            return Result.Err("ISO 8601: fracción vacía en '" + s + "'");
+        }
+    }
+
+    // Offset obligatorio: `Z` (UTC) o `±HH:MM`.
+    if (i >= s.len()) {
+        return Result.Err("ISO 8601: falta el offset (Z o ±HH:MM) en '" + s + "'");
+    }
+    var offset_ms = 0;
+    var fin = i + 1;
+    if (s[i] == 'Z' || s[i] == 'z') {
+        offset_ms = 0;
+    } else {
+        if (s[i] != '+' && s[i] != '-') {
+            return Result.Err("ISO 8601: offset inválido en '" + s + "'");
+        }
+        if (i + 6 > s.len()) {
+            return Result.Err("ISO 8601: offset incompleto en '" + s + "'");
+        }
+        let oh = campo(s, i + 1, i + 3, "hora del offset")?;
+        separador(s, i + 3, ':')?;
+        let om = campo(s, i + 4, i + 6, "minuto del offset")?;
+        if (oh > 23 || om > 59) {
+            return Result.Err("ISO 8601: offset fuera de rango en '" + s + "'");
+        }
+        offset_ms = (oh * 3600 + om * 60) * 1000;
+        if (s[i] == '-') {
+            offset_ms = 0 - offset_ms;
+        }
+        fin = i + 6;
+    }
+    if (fin != s.len()) {
+        return Result.Err("ISO 8601: texto sobrante tras el offset en '" + s + "'");
+    }
+
+    let civil_ms = to_epoch_millis(DateTime { year: year, month: month, day: day, hour: hour, minute: minute, second: second, weekday: 0 });
+    let epoch = civil_ms + frac_ms - offset_ms;
+    if (epoch < 0) {
+        return Result.Err("ISO 8601: el instante es anterior a 1970 (no soportado)");
+    }
+    Result.Ok(epoch)
+}
+
+// Parsea un timestamp RFC 3339 a DateTime **normalizado a UTC** (la fracción se trunca a
+// segundos; para conservar los ms usa `parse_iso8601_millis`).
+/// Parses an RFC 3339 timestamp into a UTC-normalized DateTime (any offset is applied; the
+/// fraction is truncated to whole seconds — use `parse_iso8601_millis` to keep milliseconds).
+/// Strict: see `parse_iso8601_millis` for the accepted forms and errors.
+pub fn parse_iso8601(s: string) -> Result<DateTime, string> {
+    match (parse_iso8601_millis(s)) {
+        Result.Ok(ms) => Result.Ok(from_epoch_millis(ms)),
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+// Formatea una duración en milisegundos como `1h2m3s` / `45s` / `120ms` (forma compacta, legible).
+/// Formats a duration in milliseconds compactly: `120ms` under one second,
+/// otherwise `1h2m3s`-style with zero components omitted.
+pub fn format_duration(ms: int) -> string {
+    if (ms < 1000) {
+        return to_string(ms) + "ms";
+    }
+    let total = ms / 1000;
+    let h = total / 3600;
+    let m = total % 3600 / 60;
+    let s = total % 60;
+    var out = "";
+    if (h > 0) {
+        out = out + to_string(h) + "h";
+    }
+    if (m > 0) {
+        out = out + to_string(m) + "m";
+    }
+    if (s > 0) {
+        out = out + to_string(s) + "s";
+    }
+    out
+}

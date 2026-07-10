@@ -15,6 +15,16 @@ const ESPERADO: &[&str] = &[
     "Fri, 01 Mar 2024 00:00:00 GMT", // 2024 bisiesto
     "true",                          // round-trip epoch
     "true",                          // parse_iso8601 → epoch
+    // M57.1: parse endurecido (offsets normalizados a UTC, fracción en ms, errores reales)
+    "1994-11-06T08:49:37Z",          // +02:00 normalizado
+    "1994-11-06T08:49:37Z",          // -03:00 normalizado
+    "123",                           // fracción .123456 → 123 ms (truncada)
+    "true",                          // mes 13 = Err
+    "true",                          // 2023-02-29 = Err (no bisiesto)
+    "true",                          // campo no numérico = Err (antes: 0 en silencio)
+    "true",                          // sin offset = Err
+    "true",                          // texto sobrante = Err
+    "Thu, 29 Feb 2024 00:00:00 GMT", // 29-feb bisiesto sí parsea
     "true",                          // now_utc coherente con now()
     "1h2m3s",
     "45s",

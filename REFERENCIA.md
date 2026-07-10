@@ -365,7 +365,7 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/sort` | `is_sorted sort_desc min max binary_search dedup merge` (todas con `T: Ord`) |
 | `std/fs` | `read_file write_file append_file remove_file list_dir exists read_file_bytes write_file_bytes` (→ `Result`) · handles: `open(path, "r"/"w"/"a") -> Result<int, _>` `read_line(h) -> Option<string>` `write(h, s)` + `close(h)` |
 | `std/net` | `tcp_connect tcp_listen tcp_accept local_port` · `socket_read socket_write socket_read_bytes socket_write_bytes` · `tls_connect tls_connect_h2 tls_accept tls_upgrade` (STARTTLS) — todo `Result`; + `close(h)` |
-| `std/time` | `now monotonic sleep` (calificados; fechas/ISO-8601 → `net/time`) |
+| `std/time` | `now monotonic sleep` + fechas civiles UTC (M57.1): `DateTime`, `now_utc`, `from_epoch_millis`/`to_epoch_millis`, `to_iso8601[_basic]`, `date_stamp`, `to_rfc1123`, `parse_iso8601[_millis]` (RFC 3339 con offset/fracción), `format_duration` (`net/time` queda como reexport) |
 | `std/random` | `next() -> float` · `below(n) -> int` |
 | `std/crypto` | los builtins de cripto (§5) con nombre calificado |
 | `std/collections/set` | `Set<T>` (exige `T: Hash + Eq`): `new add has remove size items` → `set.new()`, `set.add(s, x)`… |

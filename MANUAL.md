@@ -1007,9 +1007,12 @@ compilación): el layout marca huecos con `{% block cuerpo %}defecto{% endblock 
 
 ```html
 {% params titulo: string, precios: [int] %}
-{% extends base %}
+{% extends vistas/base %}
 {% block cuerpo %}<p>{{ precios.len() }} precios</p>{% endblock %}
 ```
+
+Las rutas de `{% include %}`, `{% import %}` y `{% extends %}` siguen **una sola convención**:
+desde la **raíz del proyecto** (donde vive `ray.toml`), como los `import` de raylang.
 
 — la firma es la del hijo (las variables que use el layout deben estar en sus params: el checker
 lo exige), un bloque no sobreescrito conserva su defecto, y el layout compila también standalone.

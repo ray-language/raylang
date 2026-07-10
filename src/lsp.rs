@@ -1836,7 +1836,7 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
         list.push(obj(fields));
     }
     let keywords: &[&str] = if is_tag {
-        &["params", "elif", "else", "endif", "endfor", "in", "include", "import", "extends", "endblock", "true", "false"]
+        &["params", "elif", "else", "endif", "endfor", "in", "import", "extends", "endblock", "true", "false"]
     } else {
         &["true", "false"]
     };
@@ -1896,12 +1896,16 @@ fn template_completion_list(items: Vec<Json>) -> Json {
 /// la palabra parcial tecleada + el cierre huérfano del auto-close — para que ningún cliente
 /// tenga que adivinar el reemplazo (cada uno lo hace distinto).
 fn template_block_snippets(with_opener: bool, lead_space: bool, replace: Option<(usize, usize, usize)>) -> Vec<Json> {
+    // Multilínea, con el ESTILO DEL FORMATEADOR (etiqueta en su línea, cuerpo sangrado): el `\t`
+    // del snippet lo traduce el editor a su indentación, y re-indenta las líneas al nivel del
+    // punto de inserción (comportamiento estándar de los snippets LSP).
     let cases: &[(&str, &str)] = &[
-        ("for", "for ${1:elem} in ${2:coleccion} %}$0{% endfor %}"),
-        ("if", "if ${1:condicion} %}$0{% endif %}"),
-        ("if/else", "if ${1:condicion} %}$2{% else %}$0{% endif %}"),
+        ("for", "for ${1:elem} in ${2:coleccion} %}\n\t$0\n{% endfor %}"),
+        ("if", "if ${1:condicion} %}\n\t$0\n{% endif %}"),
+        ("if/else", "if ${1:condicion} %}\n\t$2\n{% else %}\n\t$0\n{% endif %}"),
         ("let", "let ${1:nombre} = ${2:expr} %}$0"),
-        ("block", "block ${1:nombre} %}$0{% endblock %}"),
+        ("include", "include ${1:ruta/al/template}($2) %}$0"),
+        ("block", "block ${1:nombre} %}\n\t$0\n{% endblock %}"),
     ];
     cases.iter().map(|(label, body)| {
         let insert = if with_opener {

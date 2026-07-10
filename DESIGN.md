@@ -7316,8 +7316,11 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   `{% params %}` del layout (la firma manda la del HIJO; las variables que el layout use deben
   estar en los params del hijo — **el checker lo exige**, typo = error), cada bloque se sustituye
   por el del hijo o queda su defecto, y el stream fusionado genera normal. Ruta del layout
-  **relativa al template**; el layout compila **standalone** (los marcadores de bloque son
-  transparentes). Line map: los bloques del hijo mapean exactos; las líneas del layout se
+  **desde la raíz del proyecto** (el `ray.toml` más cercano por encima del template;
+  `project_root_of`) — UNA sola convención de rutas en templates, la misma de import/include —,
+  con fallback al directorio del template (proyectos sin manifiesto / layout hermano); el layout
+  compila **standalone** (los marcadores de bloque son transparentes). Line map: los bloques del
+  hijo mapean exactos; las líneas del layout se
   atribuyen al `{% extends %}` (degradación honesta). Errores dedicados: bloque que el layout no
   declara (typo, con su línea), contenido suelto en un hijo con extends, bloques anidados/sin
   cerrar, herencia encadenada (diferida). (c) **Snippets de bloque en el LSP**: teclear `for`/`if`

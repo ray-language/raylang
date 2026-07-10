@@ -543,9 +543,19 @@ fn resolve_extends(toks: Vec<Tok>, dir: Option<&Path>) -> Result<Vec<Tok>, TplEr
     }
     let (lpath, eline) = layout_ref.expect("hereda");
     let Some(dir) = dir else {
-        return Err(TplError { line: eline, msg: "'{% extends %}' requiere generar desde un archivo (la ruta del layout se resuelve relativa al template)".into() });
+        return Err(TplError { line: eline, msg: "'{% extends %}' requiere generar desde un archivo (la ruta del layout se resuelve desde la raíz del proyecto)".into() });
     };
-    let file = dir.join(format!("{lpath}.ray.html"));
+    // La ruta del layout se resuelve COMO LOS IMPORTS/INCLUDES: desde la **raíz del proyecto**
+    // (el directorio con `ray.toml` más cercano por encima del template) — una sola convención
+    // de rutas en los templates. Fallback: relativa al directorio del template (proyectos sin
+    // manifiesto, o un layout hermano).
+    let file = {
+        let desde_raiz = project_root_of(dir).map(|r| r.join(format!("{lpath}.ray.html")));
+        match desde_raiz {
+            Some(p) if p.is_file() => p,
+            _ => dir.join(format!("{lpath}.ray.html")),
+        }
+    };
     let lsrc = std::fs::read_to_string(&file)
         .map_err(|e| TplError { line: eline, msg: format!("no se pudo leer el layout '{}': {e}", file.display()) })?;
     let ltoks = tokenize(&lsrc)
@@ -572,6 +582,19 @@ fn resolve_extends(toks: Vec<Tok>, dir: Option<&Path>) -> Result<Vec<Tok>, TplEr
         }
     }
     merge_layout(imports, blocks, it.collect(), &lpath, eline)
+}
+
+// La raíz del proyecto: el directorio con `ray.toml` más cercano por encima de `dir` (inclusive).
+fn project_root_of(dir: &Path) -> Option<PathBuf> {
+    let mut d = dir.to_path_buf();
+    loop {
+        if d.join("ray.toml").is_file() {
+            return Some(d);
+        }
+        if !d.pop() {
+            return None;
+        }
+    }
 }
 
 // Sustituye cada `{% block %}` del layout por el bloque del hijo (o deja su defecto) y atribuye
@@ -970,6 +993,17 @@ mod tests {
         assert!(e.msg.contains("solo puede tener"), "{}", e.msg);
         let e = generate("{% params t: string %}\n{% block a %}x\n", "p").unwrap_err();
         assert!(e.msg.contains("endblock"), "{}", e.msg);
+
+        // Resolución desde la RAÍZ del proyecto (donde está `ray.toml`), como los imports: un
+        // template en `sub/` referencia el layout por su ruta completa `sub/base2`.
+        std::fs::write(base.join("ray.toml"), "[package]\nname = \"t\"\nversion = \"0.1.0\"\n").unwrap();
+        std::fs::create_dir_all(base.join("sub")).unwrap();
+        std::fs::write(base.join("sub/base2.ray.html"),
+            "{% params t: string %}<b>{% block cuerpo %}{% endblock %}</b>\n").unwrap();
+        let (code, _) = generate_with_map_at(
+            "{% params t: string %}\n{% extends sub/base2 %}\n{% block cuerpo %}{{ t }}{% endblock %}\n",
+            "p", Some(&base.join("sub"))).unwrap();
+        assert!(code.contains("out.push(escape_html(to_string(t)));"), "{code}");
         let _ = std::fs::remove_dir_all(&base);
     }
 

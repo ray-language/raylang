@@ -3,8 +3,10 @@
 // Tabla hash **bucketed** escrita EN raylang sobre `@derive(Hash)` + `Eq`: `T` debe implementar ambos
 // (los bounds se bajan a diccionarios, M9.2). Con leaf-binding (`import std/collections/set;`) las
 // operaciones se usan calificadas: `set.new()`/`set.add(s, x)`/`set.has(s, x)`/… `set.new()` es un
-// constructor vacío: su `T` lo fija el tipo esperado (inferencia bidireccional en la llamada). Nº de
-// buckets fijo (sin resize aún). Los helpers `bucket`/`in_bucket` no son `pub` (internos).
+// constructor vacío: su `T` lo fija el tipo esperado (inferencia bidireccional en la llamada).
+// M64+: la tabla CRECE (rehash al doble de buckets cuando la carga media supera 2 elementos por
+// bucket) — antes los 16 buckets eran fijos y un Set grande degeneraba a búsqueda lineal O(n/16).
+// Los helpers `bucket`/`in_bucket`/`grow` no son `pub` (internos).
 /// A hash set of `T`, backed by buckets. `T` must implement `Hash` and `Eq`.
 /// Import with `import std/collections/set;` and operate on it with `set.new`, `set.add`, `set.has`, …
 pub struct Set<T> {
@@ -44,9 +46,39 @@ fn in_bucket<T: Eq>(b: [T], x: T) -> bool {
     false
 }
 
-// Añade `x` al conjunto (si no estaba ya). Muta `s`.
-/// Adds `x` to the set if it is not already present. Mutates `s`.
+// Rehace la tabla con el doble de buckets, redistribuyendo los elementos por su hash.
+/// Internal helper: doubles the bucket count and redistributes every element by its hash.
+fn grow<T: Hash>(s: Set<T>) {
+    let n = s.buckets.len() * 2;
+    var bs: [[T]] = [];
+    var i = 0;
+    while (i < n) {
+        var e: [T] = [];
+        bs.push(e);
+        i = i + 1;
+    }
+    i = 0;
+    while (i < s.buckets.len()) {
+        let b = s.buckets[i];
+        var j = 0;
+        while (j < b.len()) {
+            let dest = bs[bucket(b[j], n)];
+            dest.push(b[j]);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    s.buckets = bs;
+}
+
+// Añade `x` al conjunto (si no estaba ya). Muta `s`. Crece la tabla si la carga media
+// supera 2 elementos por bucket (mantiene las operaciones en O(1) amortizado).
+/// Adds `x` to the set if it is not already present. Mutates `s`. The table grows
+/// automatically to keep operations O(1) amortized.
 pub fn add<T: Hash + Eq>(s: Set<T>, x: T) {
+    if (s.count >= s.buckets.len() * 2) {
+        grow(s);
+    }
     let idx = bucket(x, s.buckets.len());
     let b = s.buckets[idx];
     if (!in_bucket(b, x)) {

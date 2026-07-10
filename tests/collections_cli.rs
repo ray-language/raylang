@@ -114,6 +114,39 @@ fn sort_merge_estable_ambos_motores() {
     assert_eq!(o_in, esperado, "sort correcto y ESTABLE");
 }
 
+/// Revisión de collections (post-M64): el Set CRECE — rehash al doble de buckets cuando la carga
+/// media supera 2 elementos/bucket. Antes los 16 buckets eran FIJOS y un Set de n elementos
+/// degeneraba a búsqueda lineal O(n/16) (medido: 20k adds 2235→38 ms, 59×). Corrección bajo
+/// varios rehash: size/has/ausencia/remove intactos, por ambos motores.
+#[test]
+fn set_crece_con_rehash_ambos_motores() {
+    let src = "import std/collections/set;\n\
+        fn main() {\n\
+        \x20 let s: set.Set<int> = set.new();\n\
+        \x20 var i = 0;\n\
+        \x20 while (i < 2000) { set.add(s, i * 7); i = i + 1; }\n\
+        \x20 print(to_string(set.size(s)));\n\
+        \x20 var ok = true;\n\
+        \x20 i = 0;\n\
+        \x20 while (i < 2000) { if (!set.has(s, i * 7)) { ok = false; } i = i + 1; }\n\
+        \x20 print(to_string(ok));\n\
+        \x20 print(to_string(set.has(s, 3)));\n\
+        \x20 i = 0;\n\
+        \x20 while (i < 2000) { set.remove(s, i * 7); i = i + 2; }\n\
+        \x20 print(to_string(set.size(s)));\n\
+        \x20 print(to_string(set.has(s, 0)) + \",\" + to_string(set.has(s, 7)));\n\
+        }\n";
+    let path = std::env::temp_dir().join("set_rehash.ray");
+    std::fs::write(&path, src).unwrap();
+    let esperado = "2000\ntrue\nfalse\n1000\nfalse,true\n";
+    let (o_in, c_in) = run_file(path.to_str().unwrap(), false);
+    let (o_vm, c_vm) = run_file(path.to_str().unwrap(), true);
+    assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
+    assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
+    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+    assert_eq!(o_in, esperado, "el Set con rehash es correcto");
+}
+
 #[test]
 fn set_conjunto_ambos_motores() {
     ambos_motores_coinciden(

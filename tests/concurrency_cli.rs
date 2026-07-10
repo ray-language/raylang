@@ -564,3 +564,39 @@ fn main() -> int {
     assert!(err.contains("externa falla"), "stderr no propaga el fallo: {err}");
     assert_eq!(code, 70);
 }
+
+#[test]
+fn try_join_observa_el_fallo_sin_relanzar() {
+    // M56.5: try_join une una tarea devolviendo su desenlace como VALOR — Ok(valor) si terminó,
+    // Err(mensaje del panic) si falló — a diferencia de join, que re-lanza el fallo. El programa
+    // sigue vivo tras observar un fallo (base del webserver: un handler que panica no tumba nada).
+    let src = r#"
+fn mala() -> int {
+    panic("kaboom");
+    0
+}
+
+fn main() -> int {
+    let a: Task<int> = spawn(fn() -> int { 40 + 2 });
+    match (try_join(a)) {
+        Result.Ok(v) => print("ok " + to_string(v)),
+        Result.Err(e) => print("err " + e),
+    }
+    let b: Task<int> = spawn(fn() -> int { mala() });
+    match (try_join(b)) {
+        Result.Ok(v) => print("ok " + to_string(v)),
+        Result.Err(e) => print("err " + e),
+    }
+    let c = spawn(fn() { print("efecto") });
+    match (try_join(c)) {
+        Result.Ok(_) => print("unit ok"),
+        Result.Err(e) => print("unit err " + e),
+    }
+    print("sigo vivo");
+    0
+}
+"#;
+    let (stdout, stderr, code) = run("try_join_fallo", src, true);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout, "ok 42\nerr kaboom\nefecto\nunit ok\nsigo vivo\n");
+}

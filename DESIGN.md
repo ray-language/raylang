@@ -7427,10 +7427,22 @@ raylang, en la línea de `templ` (Go) / `askama` (Rust).
   `servidor_corta_lecturas_lentas_por_timeout` (petición a medias + silencio → 400 en ~300 ms y
   el servidor sigue vivo). Diferido: timeout del HANDLER (necesita cancelación por timer;
   emparejarlo con M56.5/`try_join`).
-- **M56.5 — cierre en panic del handler**: hoy un panic en el handler fuga el fd (no hay
-  `recover`). Camino alineado con "errores como valores": **`try_join(t) -> Result<T, string>`**
-  (variante de `join` que NO re-lanza; builtin pequeño, generalmente útil) y `atender` corre el
-  handler en una tarea, observa el fallo y **siempre** cierra la conexión.
+- **M56.5 — cierre en panic del handler** ✅ **COMPLETO** (segundo y último toque de runtime del
+  arco; aditivo). **`try_join(t: Task<T>) -> Result<T, string>`** — une una tarea devolviendo su
+  desenlace como VALOR (`Ok(valor)` / `Err(mensaje del panic)`), a diferencia de `join`, que
+  re-lanza. **Cero maquinaria nueva de enums**: el patrón primitivo+prelude de M11.2 — primitivo
+  `__task_failed(t) -> [string]` (opcode `TaskFailed`: espera como TaskJoin —mismo guard único +
+  park `Waiting::Join`— y empuja `[]` si acabó bien / `[msg]` si falló) + envoltorio `try_join` en
+  el prelude que arma el `Result` y reusa `join` para el valor (con la tarea ya terminada ni
+  bloquea ni falla). Intérprete: error limpio "requiere la VM" (junto a spawn/recv). **Webserver**:
+  `atender` corre el handler en su PROPIA tarea y observa el fallo con `try_join` → un panic del
+  handler se loguea, responde **500 best-effort** y SIEMPRE se cierra la conexión — cierra la fuga
+  de fd y la fuga del token del semáforo anotadas en M56.1. Tests:
+  `try_join_observa_el_fallo_sin_relanzar` (concurrency_cli, salida exacta, incl. `Task<unit>` por
+  inferencia — `unit` no es anotable como arg de tipo) y
+  `handler_que_panica_responde_500_y_no_fuga_recursos` (webserver_cli: 4 panics > max_conns=2 → si
+  fugara tokens colgaría; el servidor sigue en 200; usa el `serve` REAL, matado por el test).
+  Diferido: timeout del handler (componer `try_join` con un timer de cancelación).
 - **M56.6 — keep-alive**: bucle de peticiones por conexión honrando `Connection`; el framing por
   `Content-Length` ya es correcto. `serve_raw`/SSE conservan su semántica (el handler crudo posee
   la conexión).

@@ -317,10 +317,22 @@ pub fn sse_event(conn: int, data: string) -> Result<int, string> {
 // Atiende UNA conexión: lee la petición y se la pasa al handler (que controla la conexión). Cierra al
 // terminar. Lo usa serve_raw; cada conexión corre en su propia fibra.
 // M56.1: una petición ilegible responde 400 antes de cerrar (best effort, sin filtrar el detalle).
+// M56.5: el handler corre en su PROPIA tarea (try_join observa el fallo sin re-lanzar) → un panic
+// del handler se loguea, responde 500 best-effort y SIEMPRE cierra (sin fugar fd ni token).
 fn atender(conn: int, handler: fn(Request, int), limits: Limits) {
     match (read_request_limits(conn, limits)) {
         Result.Ok(req) => {
-            handler(req, conn);
+            let t = spawn(fn() { handler(req, conn) });
+            match (try_join(t)) {
+                Result.Ok(_) => { },
+                Result.Err(e) => {
+                    eprint("handler: " + e);
+                    match (send_response(conn, text(500, "Internal Server Error"))) {
+                        Result.Ok(_) => { },
+                        Result.Err(_) => { },
+                    }
+                },
+            }
         },
         Result.Err(e) => {
             eprint("petición: " + e);

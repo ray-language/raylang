@@ -1802,6 +1802,16 @@ static BUILTINS: &[Builtin] = &[
             other => Err((Some(0), format!("spawn espera una función, no {}", other))),
         }
     } },
+    // __task_failed(t) -> [string] (M56.5): bloquea hasta que la tarea termine; [] si acabó bien,
+    // [msg] si falló. El fallo como valor (sin re-lanzar, a diferencia de join); el prelude lo
+    // envuelve en try_join(t) -> Result<T, string>.
+    Builtin { name: "__task_failed", opcode: OpCode::TaskFailed, check: |a| {
+        arity(a, 1, "__task_failed", " (una Task)")?;
+        match &a[0] {
+            Type::Task(_) => Ok(Type::Array(Box::new(Type::String))),
+            other => Err((Some(0), format!("__task_failed espera una Task, no {}", other))),
+        }
+    } },
     // select(chs: [Channel<T>]) -> int: bloquea hasta que algún canal de la lista esté listo para recibir
     // y devuelve el índice del primero listo (M12.4). Luego recv(chs[i]) toma el valor.
     Builtin { name: "select", opcode: OpCode::Select, check: |a| {

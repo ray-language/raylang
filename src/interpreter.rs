@@ -841,7 +841,7 @@ impl<'a> Interpreter<'a> {
                     // `join` NO va aquí: es ad-hoc polimórfico y su forma de strings (M11.7a) corre en el
                     // intérprete; la forma de Task nunca llega (spawn ya da error → no existen Tasks aquí).
                     if name == "spawn" || name == "send" || name == "__recv"
-                        || name == "scope" || name == "select" {
+                        || name == "scope" || name == "select" || name == "__task_failed" {
                         return Err(runtime_error(callee.line, callee.col,
                             "la concurrencia (spawn/channel/send/recv/join/scope/select) requiere la VM; el intérprete es solo el oráculo secuencial (no uses --interp)"));
                     }

@@ -32,7 +32,10 @@ fn lanzar_servidor(name: &str, driver: &str) -> (Child, u16) {
     let mut reader = BufReader::new(child.stdout.take().expect("stdout"));
     let mut linea = String::new();
     reader.read_line(&mut linea).expect("lee el puerto");
-    let port: u16 = linea.trim().parse().unwrap_or_else(|_| panic!("puerto inválido: {linea:?}"));
+    // El último token de la línea: cubre tanto el puerto a secas (drivers manuales) como el
+    // "escuchando en el puerto N" que imprime `serve` (M56.5: tests sobre el serve real).
+    let port: u16 = linea.trim().rsplit(' ').next().and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("puerto inválido: {linea:?}"));
     (child, port)
 }
 
@@ -360,6 +363,48 @@ fn servidor_corta_lecturas_lentas_por_timeout() {
     let ok = pedir(port, "GET /hola HTTP/1.1\r\nHost: x\r\n\r\n");
     assert!(ok.contains("200 OK"), "el servidor debe seguir vivo tras el timeout, got: {ok}");
 
+    let _ = child.wait();
+}
+
+// Driver: el `serve` REAL (bucle infinito; el test mata el proceso) con un handler que PANICA en
+// /boom y max_conns = 2. M56.5: el panic no mata la fibra de la conexión (500 + cierre + token del
+// semáforo liberado); sin la liberación, a la 3ª petición el accept se pararía y el test colgaría.
+const SRV_PANIC: &str = r#"
+import webserver;
+
+fn pagina(req: webserver.Request) -> webserver.Response {
+    if (req.path == "/boom") {
+        panic("kaboom del handler");
+    }
+    webserver.ok("vivo")
+}
+
+fn main() -> int {
+    let lim: webserver.Limits = webserver.Limits { max_header_bytes: 65536, max_body_bytes: 1048576, max_conns: 2, read_timeout_millis: 5000 };
+    match (webserver.serve_limits("127.0.0.1", 0, lim, pagina)) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+"#;
+
+#[test]
+fn handler_que_panica_responde_500_y_no_fuga_recursos() {
+    let (mut child, port) = lanzar_servidor("panic", SRV_PANIC);
+
+    // Más peticiones que panican (4) que max_conns (2): si el panic fugara el fd o el token del
+    // semáforo, el servidor dejaría de aceptar a la 3ª y esto colgaría (el timeout del cliente
+    // haría fallar el test).
+    for i in 0..4 {
+        let r = pedir(port, "GET /boom HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert!(r.contains("500 Internal Server Error"), "petición {i}: esperaba 500, got: {r}");
+    }
+
+    // El servidor sigue vivo y sano.
+    let ok = pedir(port, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(ok.contains("200 OK") && ok.contains("vivo"), "esperaba 200 tras los panics, got: {ok}");
+
+    let _ = child.kill();
     let _ = child.wait();
 }
 

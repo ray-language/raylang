@@ -688,6 +688,19 @@ fn recv<T>(ch: Channel<T>) -> Option<T> {
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
+// M56.5: une una tarea SIN re-lanzar su fallo (errores como valores; join sí re-lanza). Envuelve
+// el primitivo __task_failed (bloquea hasta que termine; [] = bien, [msg] = falló); para el valor
+// reusa join, que con la tarea ya terminada ni bloquea ni falla. Solo la VM.
+/// Waits for the task and returns its outcome as a value: `Ok(its result)` if it finished, or
+/// `Err(panic message)` if it failed — unlike `join`, which re-raises the failure. VM only.
+fn try_join<T>(t: Task<T>) -> Result<T, string> {
+    let f = __task_failed(t);
+    if (f.len() > 0) {
+        return Result.Err(f[0]);
+    }
+    Result.Ok(join(t))
+}
+
 // Valor de una variable de entorno; None si no está definida.
 /// Returns the value of an environment variable, or `None` if it is not set.
 fn env(name: string) -> Option<string> {

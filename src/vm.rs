@@ -1155,6 +1155,41 @@ impl<'a> Vm<'a> {
                         }
                     }
                 }
+                OpCode::TaskFailed => {
+                    // __task_failed (M56.5): espera a que la tarea termine y empuja `[]` (bien) o
+                    // `[msg]` (falló) — el fallo como VALOR, sin re-lanzar. Es la base de `try_join`
+                    // del prelude (que reusa `join` para el valor, ya sin bloquear). Mismo esquema de
+                    // guard único + park que TaskJoin.
+                    let t = self.pop_task();
+                    let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                    let outcome = match &sh.tasks[t].state {
+                        TaskState::Done(_) => Some(None),
+                        TaskState::Failed(msg) => Some(Some(msg.clone())),
+                        TaskState::Pending => None,
+                    };
+                    match outcome {
+                        Some(failed) => {
+                            drop(sh);
+                            let elems = match failed {
+                                None => Vec::new(),
+                                Some(msg) => vec![HeapValue::Str(msg)],
+                            };
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                        }
+                        None => {
+                            // Bloquear hasta que termine, como TaskJoin (re-empuja el handle y rebobina).
+                            self.cur.stack.push(HeapValue::Task(t)); // no `self.push` (guard sostenido)
+                            self.cur.frames.last_mut().unwrap().ip -= 1;
+                            let fiber = Self::take_current_fiber(&mut self.cur);
+                            sh.parked.push(Parked { on: t, fiber, waiting: Waiting::Join });
+                            sh.running -= 1;
+                            drop(sh);
+                            let (l, c2) = pos!();
+                            if !self.poll_next(l, c2)? { self.stop = true; }
+                        }
+                    }
+                }
                 OpCode::ScopeBegin => {
                     // Abre un scope (M12.3): las tareas spawneadas mientras esté activo se le adscriben.
                     self.cur.scopes.push(ScopeFrame { children: Vec::new() });

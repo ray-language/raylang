@@ -308,6 +308,10 @@ pub enum OpCode {
     /// fallo; si sigue pendiente, **bloquea** la fibra hasta que termine (M12.3). Builtin `join` de 1
     /// argumento (el de 2 args es el `Join` de strings); el compilador elige por aridad. Solo VM.
     TaskJoin,
+    /// Saca un `Task<T>`; espera a que la tarea termine y empuja un `[string]`: `[]` si acabó bien,
+    /// `[msg]` si falló — el fallo como VALOR, sin re-lanzar (M56.5). Primitivo `__task_failed`; el
+    /// prelude lo envuelve en `try_join(t) -> Result<T, string>` (que reusa `join` para el valor). Solo VM.
+    TaskFailed,
     /// Saca un **arreglo de canales** `[Channel<T>]`; espera a que **alguno** esté listo para recibir (cola
     /// no vacía, emisor bloqueado, o cerrado) y empuja el **índice** (int) del primero listo. Si ninguno
     /// lo está, **bloquea** la fibra hasta que alguno lo esté (M12.4). Builtin `select`. Solo VM.

@@ -169,6 +169,10 @@ struct CallFrame {
     locals: Vec<Local>,
     /// Upvalues de la closure en ejecución (handles a celdas); vacío si no lo es.
     upvalues: Vec<Handle>,
+    /// Profundidad de la pila de operandos de la fibra al entrar (tras sacar los argumentos).
+    /// `Return` trunca a esta base: un `Return` emitido por `?` en mitad de una expresión deja
+    /// operandos pendientes por encima, y sin truncar corrompen la pila del llamador (M64.1).
+    stack_base: usize,
 }
 
 /// Una **fibra** (green thread, M12.1): el estado suspendido de una tarea — su pila de marcos y su pila de
@@ -367,7 +371,7 @@ impl<'a> Vm<'a> {
         let main = self.program.main;
         let locals = self.new_locals(main);
         let mut main_fiber = std::mem::take(&mut self.cur); // is_main: true, heap con el tope preconfigurado
-        main_fiber.frames.push(CallFrame { function: main, ip: 0, locals, upvalues: Vec::new() });
+        main_fiber.frames.push(CallFrame { function: main, ip: 0, locals, upvalues: Vec::new(), stack_base: 0 });
         self.sched().ready.push_back(main_fiber);
 
         let n = num_workers(self.program);
@@ -515,6 +519,7 @@ impl<'a> Vm<'a> {
             // Robustez: si se acabó el chunk sin Return (no debería), retorna unit.
             if ip >= program.functions[func].chunk.code.len() {
                 if let Some(frame) = self.cur.frames.pop() {
+                    self.cur.stack.truncate(frame.stack_base);
                     self.recycle_locals(frame.locals); // Opt.2
                 }
                 if self.cur.frames.is_empty() {
@@ -974,7 +979,7 @@ impl<'a> Vm<'a> {
                         .map(|&up| transfer_obj(&self.cur.heap, &mut new_heap, up, &mut remap))
                         .collect();
                     let locals = self.new_locals(fn_idx);
-                    let frame = CallFrame { function: fn_idx, ip: 0, locals, upvalues };
+                    let frame = CallFrame { function: fn_idx, ip: 0, locals, upvalues, stack_base: 0 };
                     // M38.3b paso 3: alojar la Task y encolar la fibra hija en UN solo lock (bajo M:N real,
                     // dos `self.sched()` —len y push— tendrían un TOCTOU en el id de la tarea).
                     let task = {
@@ -2370,7 +2375,9 @@ impl<'a> Vm<'a> {
                         let v = self.pop();
                         self.put_arg(&mut locals, i, v);
                     }
-                    self.cur.frames.push(CallFrame { function: *idx, ip: 0, locals, upvalues: Vec::new() });
+                    self.cur.frames.push(CallFrame {
+                        function: *idx, ip: 0, locals, upvalues: Vec::new(), stack_base: self.cur.stack.len(),
+                    });
                 }
                 // M13.3b: llamada en cola — REUTILIZA el marco actual (no crece la pila de marcos).
                 // En posición de cola, el valor de esta llamada es el de la función actual, así que
@@ -2411,7 +2418,9 @@ impl<'a> Vm<'a> {
                     for (j, val) in args_rev.into_iter().enumerate() {
                         self.put_arg(&mut locals, *argc - 1 - j, val);
                     }
-                    self.cur.frames.push(CallFrame { function: fn_idx, ip: 0, locals, upvalues });
+                    self.cur.frames.push(CallFrame {
+                        function: fn_idx, ip: 0, locals, upvalues, stack_base: self.cur.stack.len(),
+                    });
                 }
                 // M13.3b: llamada indirecta en cola — reutiliza el marco actual.
                 OpCode::TailCallValue(argc) => {
@@ -2462,6 +2471,10 @@ impl<'a> Vm<'a> {
                 OpCode::Return => {
                     let result = self.pop();
                     if let Some(frame) = self.cur.frames.pop() {
+                        // El `Return` que baja `?` ocurre en mitad de una expresión: los operandos
+                        // pendientes de este marco quedan por encima de su base y hay que descartarlos,
+                        // o desalinean los argumentos de la siguiente llamada del llamador (M64.1).
+                        self.cur.stack.truncate(frame.stack_base);
                         self.recycle_locals(frame.locals); // Opt.2: el marco se descarta → recicla sus locales
                     }
                     if self.cur.frames.is_empty() {
@@ -3480,6 +3493,34 @@ mod tests {
         let compiled = compile_program(&prog).expect("compila");
         let vm = run_program(&compiled).expect("vm ok");
         assert_eq!(interp, vm, "VM y intérprete difieren");
+    }
+
+    /// M64.1 (regresión): el `Return` que baja `?` ocurre en MITAD de una expresión, con operandos
+    /// pendientes en la pila. Sin truncar la pila a la base del marco, esos operandos huérfanos
+    /// desalineaban los argumentos de la siguiente llamada del llamador (aquí: `caso("b", …)` recibía
+    /// basura como `etiqueta` → ICE "combinación operador/operandos" o divergencia con el intérprete).
+    #[test]
+    fn try_err_con_operandos_pendientes_oraculo() {
+        oracle_program(
+            r#"
+            fn falla() -> Result<int, string> { Result.Err("boom") }
+            fn media(x: int) -> Result<int, string> {
+                let v = x + falla()? * 2; // el `?` retorna con `x` pendiente en la pila
+                Result.Ok(v)
+            }
+            fn caso(etiqueta: string, r: Result<int, string>) -> string {
+                match (r) {
+                    Result.Ok(v) => etiqueta + ": ok",
+                    Result.Err(e) => etiqueta + ": " + e,
+                }
+            }
+            fn main() -> int {
+                let a = caso("a", media(1)); // la etiqueta queda pendiente mientras `media` falla por `?`
+                let b = caso("b", media(2)); // sin el fix, esta segunda llamada leía la pila corrida
+                a.len() + b.len()
+            }
+            "#,
+        );
     }
 
     /// M41: **FFI**. Llamar a funciones C nativas (libm/libc) por `dlopen`/`dlsym`. Determinista

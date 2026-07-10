@@ -11,6 +11,16 @@ const ESPERADO: &[&str] = &[
     "516",                                       // longitud del texto del bloque dinámico
     "El veloz murcielago hindu comia feliz car", // primeros 41 chars del dinámico
     "3421780262",                                // crc32("123456789") = 0xcbf43926
+    // M64.1 — robustez: input corrupto = Err con mensaje (antes: crash por índice fuera de rango).
+    "vacio: err: stream DEFLATE truncado",
+    "un-octeto: err: stream DEFLATE truncado",
+    "stored-truncado: err: bloque almacenado truncado (declara más octetos de los que hay)",
+    "hlit-excesivo: err: demasiados códigos en el bloque dinámico",
+    "fname-sin-nul: err: cabecera gzip truncada (FNAME sin terminar)",
+    "gzip-truncado: err: gzip demasiado corto",
+    "fextra-gigante: err: cabecera gzip truncada (FEXTRA)",
+    "zlib-fdict: err: zlib con diccionario preestablecido (FDICT) no soportado",
+    "roundtrip: ok (32 octetos)",
 ];
 
 fn correr(flags: &[&str]) -> Vec<String> {

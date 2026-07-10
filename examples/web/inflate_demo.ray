@@ -2,7 +2,8 @@
 // y comprueba que el texto recuperado es exacto. Cubre los TRES tipos de bloque DEFLATE: almacenado
 // (nivel 0), Huffman fijo (texto corto nivel 9) y Huffman dinámico (texto largo). Lo ejecuta
 // `tests/inflate_cli.rs`. Salida determinista (cómputo puro).
-from inflate import gunzip, inflate_raw, crc32;
+from inflate import gunzip, inflate_raw, zlib_inflate, crc32;
+from deflate import gzip_compress;
 
 fn main() {
     // --- Bloque Huffman FIJO (BTYPE=1): texto corto comprimido a nivel 9. ---
@@ -21,6 +22,32 @@ fn main() {
 
     // --- CRC-32 (vector estándar: crc32("123456789") = 0xcbf43926 = 3421780262). ---
     print(to_string(crc32("123456789".to_bytes())));
+
+    // --- Robustez (M64.1): input corrupto = Err con mensaje, nunca crash. ---
+    caso("vacio", inflate_raw(b""));                     // stream vacío
+    caso("un-octeto", inflate_raw(bytes_of([5])));       // bloque dinámico truncado tras la cabecera
+    // Bloque almacenado que declara más octetos de los que hay (LEN=65535, payload de 1).
+    caso("stored-truncado", inflate_raw(bytes_of([0, 255, 255, 0, 0, 65])));
+    // Bloque dinámico con HLIT fuera de rango (288 > 286).
+    caso("hlit-excesivo", inflate_raw(bytes_of([253, 255, 255])));
+    // gzip con flag FNAME y sin el NUL terminador (cabecera truncada).
+    caso("fname-sin-nul", gunzip(bytes_of([31, 139, 8, 8, 0, 0, 0, 0, 0, 255, 65, 66, 67, 0, 0, 0, 0, 0])));
+    // gzip válido truncado a la mitad + gzip FEXTRA con xlen que salta más allá del final.
+    let g = gzip_compress("hola mundo hola mundo hola mundo".to_bytes());
+    caso("gzip-truncado", gunzip(g.sub_bytes(0, g.len() / 2)));
+    caso("fextra-gigante", gunzip(bytes_of([31, 139, 8, 4, 0, 0, 0, 0, 0, 255, 255, 255, 0, 0, 0, 0, 0, 0])));
+    // zlib con diccionario preestablecido (FDICT): no soportado, error claro.
+    caso("zlib-fdict", zlib_inflate(bytes_of([120, 32, 0, 0, 0, 0, 0, 0, 0, 0])));
+    // Round-trip sano de control: nada de lo anterior rompió el camino feliz.
+    caso("roundtrip", gunzip(g));
+}
+
+// Imprime el resultado de una descompresión: tamaño si Ok, mensaje si Err.
+fn caso(nombre: string, r: Result<bytes, string>) {
+    match (r) {
+        Result.Ok(b) => print(nombre + ": ok (" + to_string(b.len()) + " octetos)"),
+        Result.Err(e) => print(nombre + ": err: " + e),
+    }
 }
 
 // gunzip + decodifica a texto; aborta con el error si algo falla (la demo asume blobs válidos).

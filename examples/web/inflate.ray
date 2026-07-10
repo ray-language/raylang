@@ -5,6 +5,9 @@
 // Es el algoritmo más complejo de la stdlib de raylang: decodificación Huffman canónica + referencias
 // LZ77 hacia atrás. Port del `puff.c` de referencia de zlib. Soporta los tres tipos de bloque DEFLATE
 // (almacenado, Huffman fijo, Huffman dinámico). Habilita `Content-Encoding: gzip/deflate` en HTTP.
+// M64.1: procesa datos EXTERNOS → TODO input corrupto/truncado es `Err`, nunca un error de índice
+// (bit-reader con bounds, NLEN verificado, cabecera gzip acotada, FDICT rechazado, hlit/hdist
+// acotados, repeticiones 16/17/18 sin rebasar).
 //
 // DEFLATE empaqueta los bits LSB-first dentro de cada octeto, pero los códigos Huffman se leen como
 // si fueran MSB-first → `read_bit` saca el bit menos significativo y `decode` los va acumulando por la
@@ -28,8 +31,12 @@ struct Huff {
     symbols: [int],
 }
 
-// Lee un bit (LSB-first). Asume que hay datos suficientes (un stream bien formado no se pasa).
-fn read_bit(s: Inflater) -> int {
+// Lee un bit (LSB-first). M64.1: con BOUNDS — un stream truncado/corrupto es `Err`, no un
+// índice fuera de rango que mata la fibra (inflate procesa datos EXTERNOS: el gzip de HTTP).
+fn read_bit(s: Inflater) -> Result<int, string> {
+    if (s.pos >= s.data.len()) {
+        return Result.Err("stream DEFLATE truncado");
+    }
     let byte = s.data[s.pos];
     let bit = byte >> s.bitpos & 1;
     s.bitpos = s.bitpos + 1;
@@ -37,18 +44,18 @@ fn read_bit(s: Inflater) -> int {
         s.bitpos = 0;
         s.pos = s.pos + 1;
     }
-    bit
+    Result.Ok(bit)
 }
 
 // Lee `n` bits LSB-first (el primer bit es el menos significativo del resultado).
-fn read_bits(s: Inflater, n: int) -> int {
+fn read_bits(s: Inflater, n: int) -> Result<int, string> {
     var v = 0;
     var i = 0;
     while (i < n) {
-        v = v | read_bit(s) << i;
+        v = v | read_bit(s)? << i;
         i = i + 1;
     }
-    v
+    Result.Ok(v)
 }
 
 // Construye un Huff canónico a partir del arreglo de longitudes de código (símbolo i → lengths[i]).
@@ -96,24 +103,25 @@ fn build_huff(lengths: [int]) -> Huff {
     Huff { counts: counts, symbols: symbols }
 }
 
-// Decodifica un símbolo leyendo bits hasta casar un código canónico; -1 si el código es inválido.
-fn decode(s: Inflater, h: Huff) -> int {
+// Decodifica un símbolo leyendo bits hasta casar un código canónico. Ok(-1) si el código es
+// inválido; Err si el stream se trunca a medias (M64.1).
+fn decode(s: Inflater, h: Huff) -> Result<int, string> {
     var code = 0;
     var first = 0;
     var index = 0;
     var l = 1;
     while (l <= 15) {
-        code = code | read_bit(s);
+        code = code | read_bit(s)?;
         let count = h.counts[l];
         if (code - first < count) {
-            return h.symbols[index + (code - first)];
+            return Result.Ok(h.symbols[index + (code - first)]);
         }
         index = index + count;
         first = first + count << 1;
         code = code << 1;
         l = l + 1;
     }
-    0 - 1
+    Result.Ok(0 - 1)
 }
 
 // Tablas de longitud (códigos 257..285): base + bits extra.
@@ -141,7 +149,7 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
     let dbase = dist_base();
     let dext = dist_extra();
     while (true) {
-        let sym = decode(s, litlen);
+        let sym = decode(s, litlen)?;
         if (sym < 0) {
             return Result.Err("código literal/longitud inválido");
         }
@@ -155,12 +163,12 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
             if (li >= 29) {
                 return Result.Err("código de longitud fuera de rango");
             }
-            let length = lbase[li] + read_bits(s, lext[li]);
-            let dsym = decode(s, dist);
+            let length = lbase[li] + read_bits(s, lext[li])?;
+            let dsym = decode(s, dist)?;
             if (dsym < 0 || dsym >= 30) {
                 return Result.Err("código de distancia inválido");
             }
-            let distance = dbase[dsym] + read_bits(s, dext[dsym]);
+            let distance = dbase[dsym] + read_bits(s, dext[dsym])?;
             if (distance > s.out.len()) {
                 return Result.Err("distancia fuera de rango");
             }
@@ -176,13 +184,24 @@ fn inflate_codes(s: Inflater, litlen: Huff, dist: Huff) -> Result<int, string> {
 }
 
 // Bloque almacenado (sin comprimir): se alinea al octeto, lee LEN/NLEN y copia LEN octetos.
+// M64.1: bounds (truncado = Err) y NLEN verificado (= ~LEN, la integridad que pide la spec).
 fn stored_block(s: Inflater) -> Result<int, string> {
     if (s.bitpos != 0) {
         s.bitpos = 0;
         s.pos = s.pos + 1;  // alinear al siguiente octeto
     }
+    if (s.pos + 4 > s.data.len()) {
+        return Result.Err("bloque almacenado truncado (falta LEN/NLEN)");
+    }
     let length = s.data[s.pos] | s.data[s.pos + 1] << 8;
+    let nlen = s.data[s.pos + 2] | s.data[s.pos + 3] << 8;
+    if ((length ^ nlen) != 65535) {
+        return Result.Err("bloque almacenado corrupto (NLEN no es el complemento de LEN)");
+    }
     s.pos = s.pos + 4;  // salta LEN (2) + NLEN (2)
+    if (s.pos + length > s.data.len()) {
+        return Result.Err("bloque almacenado truncado (declara más octetos de los que hay)");
+    }
     var k = 0;
     while (k < length) {
         s.out.push(s.data[s.pos]);
@@ -227,9 +246,13 @@ fn fixed_dist() -> Huff {
 
 // Bloque con Huffman dinámico: lee los árboles (codificados a su vez con un Huffman de longitudes).
 fn dynamic_block(s: Inflater) -> Result<int, string> {
-    let hlit = read_bits(s, 5) + 257;
-    let hdist = read_bits(s, 5) + 1;
-    let hclen = read_bits(s, 4) + 4;
+    let hlit = read_bits(s, 5)? + 257;
+    let hdist = read_bits(s, 5)? + 1;
+    let hclen = read_bits(s, 4)? + 4;
+    // M64.1: los límites de la spec (como puff): 286 códigos literal/longitud, 30 de distancia.
+    if (hlit > 286 || hdist > 30) {
+        return Result.Err("demasiados códigos en el bloque dinámico");
+    }
     // Longitudes del alfabeto de longitudes de código, en el orden permutado del RFC.
     let order = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
     var cl_lengths: [int] = [];
@@ -240,48 +263,42 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
     }
     i = 0;
     while (i < hclen) {
-        cl_lengths[order[i]] = read_bits(s, 3);
+        cl_lengths[order[i]] = read_bits(s, 3)?;
         i = i + 1;
     }
     let cl_huff = build_huff(cl_lengths);
     // Decodifica las hlit+hdist longitudes (con los códigos de repetición 16/17/18).
     var all_lengths: [int] = [];
     while (all_lengths.len() < hlit + hdist) {
-        let sym = decode(s, cl_huff);
+        let sym = decode(s, cl_huff)?;
         if (sym < 0) {
             return Result.Err("código de longitud de código inválido");
         }
         if (sym < 16) {
             all_lengths.push(sym);
         } else {
+            // M64.1: una repetición no puede rebasar hlit+hdist (la spec lo prohíbe; puff erra).
+            var rep = 0;
+            var relleno = 0;
             if (sym == 16) {
                 if (all_lengths.len() == 0) {
                     return Result.Err("repetición 16 sin longitud previa");
                 }
-                let prev = all_lengths[all_lengths.len() - 1];
-                let rep = read_bits(s, 2) + 3;
-                var k = 0;
-                while (k < rep) {
-                    all_lengths.push(prev);
-                    k = k + 1;
-                }
+                relleno = all_lengths[all_lengths.len() - 1];
+                rep = read_bits(s, 2)? + 3;
+            } else if (sym == 17) {
+                rep = read_bits(s, 3)? + 3;
             } else {
-                if (sym == 17) {
-                    let rep = read_bits(s, 3) + 3;
-                    var k = 0;
-                    while (k < rep) {
-                        all_lengths.push(0);
-                        k = k + 1;
-                    }
-                } else {
-                    // 18
-                    let rep = read_bits(s, 7) + 11;
-                    var k = 0;
-                    while (k < rep) {
-                        all_lengths.push(0);
-                        k = k + 1;
-                    }
-                }
+                // 18
+                rep = read_bits(s, 7)? + 11;
+            }
+            if (all_lengths.len() + rep > hlit + hdist) {
+                return Result.Err("repetición de longitudes rebasa el número de códigos");
+            }
+            var k = 0;
+            while (k < rep) {
+                all_lengths.push(relleno);
+                k = k + 1;
             }
         }
     }
@@ -304,8 +321,8 @@ fn dynamic_block(s: Inflater) -> Result<int, string> {
 fn inflate_blocks(s: Inflater) -> Result<int, string> {
     var last = 0;
     while (last == 0) {
-        last = read_bit(s);
-        let btype = read_bits(s, 2);
+        last = read_bit(s)?;
+        let btype = read_bits(s, 2)?;
         var r: Result<int, string> = Result.Ok(0);
         if (btype == 0) {
             r = stored_block(s);
@@ -379,29 +396,47 @@ pub fn gunzip(data: bytes) -> Result<bytes, string> {
         return Result.Err("método de compresión gzip no soportado");
     }
     let flg = data[3];
+    // M64.1: la cabecera variable se recorre con BOUNDS — el cuerpo + tráiler (8 octetos)
+    // deben caber tras ella; antes, un FNAME sin NUL o un xlen gigante indexaban fuera.
+    let tope = data.len() - 8;  // primer octeto del tráiler: la cabecera debe quedar antes
     var pos = 10;  // cabecera fija de 10 octetos
     if ((flg & 4) != 0) {
         // FEXTRA
+        if (pos + 2 > tope) {
+            return Result.Err("cabecera gzip truncada (FEXTRA)");
+        }
         let xlen = data[pos] | data[pos + 1] << 8;
         pos = pos + 2 + xlen;
+        if (pos > tope) {
+            return Result.Err("cabecera gzip truncada (FEXTRA declara más de lo que hay)");
+        }
     }
     if ((flg & 8) != 0) {
         // FNAME (terminado en NUL)
-        while (data[pos] != 0) {
+        while (pos < tope && data[pos] != 0) {
             pos = pos + 1;
+        }
+        if (pos >= tope) {
+            return Result.Err("cabecera gzip truncada (FNAME sin terminar)");
         }
         pos = pos + 1;
     }
     if ((flg & 16) != 0) {
         // FCOMMENT (terminado en NUL)
-        while (data[pos] != 0) {
+        while (pos < tope && data[pos] != 0) {
             pos = pos + 1;
+        }
+        if (pos >= tope) {
+            return Result.Err("cabecera gzip truncada (FCOMMENT sin terminar)");
         }
         pos = pos + 1;
     }
     if ((flg & 2) != 0) {
         // FHCRC
         pos = pos + 2;
+    }
+    if (pos > tope) {
+        return Result.Err("cabecera gzip truncada");
     }
     let comprimido = data.sub_bytes(pos, data.len() - 8);
     match (inflate_raw(comprimido)) {
@@ -430,6 +465,10 @@ pub fn zlib_inflate(data: bytes) -> Result<bytes, string> {
     // CMF/FLG: el nibble bajo de CMF debe ser 8 (método deflate).
     if ((data[0] & 15) != 8) {
         return Result.Err("método de compresión zlib no soportado");
+    }
+    // M64.1: FDICT (diccionario preestablecido) no está soportado — antes producía basura.
+    if ((data[1] & 32) != 0) {
+        return Result.Err("zlib con diccionario preestablecido (FDICT) no soportado");
     }
     let comprimido = data.sub_bytes(2, data.len() - 4);
     inflate_raw(comprimido)

@@ -7779,7 +7779,7 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 > transparente del cliente HTTP, M58.2). Verificado: `inflate_raw(b"")` mata el programa con
 > "índice fuera de rango" en vez de devolver `Err`.
 
-- **M64.1 — inflate robusto (corrupto = `Err`, nunca crash)**: el bit-reader pasa a `Result`
+- **M64.1 — inflate robusto (corrupto = `Err`, nunca crash) COMPLETO**: el bit-reader pasa a `Result`
   (`read_bit`/`read_bits` con bounds; `decode` propaga con `?` y conserva el -1 de código
   inválido dentro del `Ok`); `stored_block` valida LEN/NLEN contra lo que queda (y **verifica
   NLEN = ~LEN**, que puff comprueba y aquí faltaba); la cabecera de `gunzip` acota FNAME/
@@ -7787,6 +7787,15 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   `dynamic_block` acota hlit ≤ 286 / hdist ≤ 30 y rechaza que las repeticiones 16/17/18
   rebasen hlit+hdist (como puff); zlib rechaza **FDICT** (diccionario preestablecido, no
   soportado — antes producía basura). API pública intacta (`Result<bytes, string>`).
+  **Bonus: ICE de la VM cazado y arreglado** — las sondas de corrupción destaparon un bug
+  LATENTE del core: el `Return` que baja `?` ocurre en mitad de una expresión
+  (`v | read_bit(s)? << i`) y dejaba los operandos pendientes huérfanos en la pila de la
+  fibra; el siguiente Call del llamador con argumentos ya apilados los leía corridos →
+  `unreachable!` en el dispatch binario (o divergencia silenciosa). Fix: `CallFrame` gana
+  `stack_base` (profundidad de la pila de operandos a la entrada) y `Return` **trunca a esa
+  base** antes de entregar el valor. Test de regresión `try_err_con_operandos_pendientes_oraculo`
+  (verificado: falla sin el fix). Goldens de robustez en `inflate_demo.ray`/`tests/inflate_cli.rs`
+  (8 sondas de corrupción + round-trip de control, ambos motores).
 - **M64.2 — límite de salida (anti-bomba)**: `inflate_raw_limit`/`gunzip_limit`/
   `zlib_inflate_limit(data, max_out)` — la salida acumulada se comprueba contra el tope
   (las formas sin límite delegan con un tope generoso por defecto); el cliente HTTP usa la

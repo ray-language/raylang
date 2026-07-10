@@ -1,0 +1,11 @@
+// Ajustes POR SINTAXIS para los templates de raylang (`.ray.html`): Sublime aplica este archivo
+// a toda vista cuya sintaxis se llame "raylang template".
+//
+// El `auto_complete_selector` por defecto de Sublime ("meta.tag, source - …") NO cubre el scope
+// de los templates (`text.html.raylang`), así que al teclear dentro de `{{ }}`/`{% %}` no salta
+// el popup de sugerencias (el paquete LSP consulta al servidor solo cuando Sublime abre el
+// popup). Se amplía al archivo entero: dentro de los delimitadores el servidor ofrece
+// params/vars/snippets, y en el HTML los snippets de bloque.
+{
+	"auto_complete_selector": "text.html.raylang",
+}

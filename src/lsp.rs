@@ -1819,7 +1819,7 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
         // Fuera de los delimitadores (HTML): NO se compite con la completion de HTML del editor,
         // pero sí se ofrecen los BLOQUES del template como snippets (teclear `for` o `if` inserta
         // el bloque entero con placeholders navegables por Tab).
-        return Json::Arr(template_block_snippets(true, None, 0));
+        return template_completion_list(template_block_snippets(true, false, None, 0));
     };
 
     // Kinds LSP: 6 = Variable, 14 = Keyword. Los sortText ponen las variables antes que las keywords.
@@ -1852,31 +1852,47 @@ fn template_completion_items(src: &str, line0: usize, char0: usize) -> Json {
         // El editor auto-cierra `{` con `}`: al teclear `{%` queda `{% |}` — como el snippet trae
         // su propio cierre, esa `}` huérfana (o un `%}` ya presente) quedaría DUPLICADA; se
         // localiza justo tras la palabra parcial y el snippet la elimina (additionalTextEdit).
-        let stray = {
-            let chars: Vec<char> = src.lines().nth(line0).unwrap_or("").chars().collect();
-            let mut end = char0.min(chars.len());
-            while end < chars.len() && is_ident_char(chars[end]) {
-                end += 1;
-            }
-            if chars.get(end) == Some(&'%') && chars.get(end + 1) == Some(&'}') {
-                Some((end, 2))
-            } else if chars.get(end) == Some(&'}') && chars.get(end + 1) != Some(&'}') {
-                Some((end, 1))
-            } else {
-                None
-            }
+        // (La lista va con `isIncomplete` → el editor re-consulta en cada tecla y estas
+        // posiciones nunca se quedan desfasadas por el filtrado en cliente.)
+        let chars: Vec<char> = src.lines().nth(line0).unwrap_or("").chars().collect();
+        let mut end = char0.min(chars.len());
+        while end < chars.len() && is_ident_char(chars[end]) {
+            end += 1;
+        }
+        let stray = if chars.get(end) == Some(&'%') && chars.get(end + 1) == Some(&'}') {
+            Some((end, 2))
+        } else if chars.get(end) == Some(&'}') && chars.get(end + 1) != Some(&'}') {
+            Some((end, 1))
+        } else {
+            None
         };
-        list.extend(template_block_snippets(false, stray, line0));
+        // `{%for` (sin espacio tras el delimitador): el snippet antepone el espacio.
+        let mut start = char0.min(chars.len());
+        while start > 0 && is_ident_char(chars[start - 1]) {
+            start -= 1;
+        }
+        let lead_space = start > 0 && chars[start - 1] == '%';
+        list.extend(template_block_snippets(false, lead_space, stray, line0));
     }
-    Json::Arr(list)
+    template_completion_list(list)
+}
+
+/// Envuelve los ítems de completion de un template en una `CompletionList` con
+/// **`isIncomplete: true`**: el editor re-consulta al servidor en CADA tecla (en vez de cachear la
+/// lista y filtrar en cliente), así los `additionalTextEdits` de los snippets se calculan siempre
+/// contra el documento actual y nunca aplican posiciones desfasadas. El cálculo es textual →
+/// re-consultar es barato.
+fn template_completion_list(items: Vec<Json>) -> Json {
+    obj(vec![("isIncomplete", Json::Bool(true)), ("items", Json::Arr(items))])
 }
 
 /// Los snippets de bloque del template (`{% for %}…{% endfor %}`, `{% if %}…{% endif %}`,
 /// `{% let %}`), con placeholders navegables por Tab. `with_opener` incluye el `{%` inicial (para
 /// ofrecerlos en el HTML, donde aún no hay delimitador); sin él, completan un `{% ` ya escrito.
-/// `stray` = `(col0, largo)` de un cierre huérfano tras el cursor (la `}` del auto-close del
-/// editor, o un `%}` previo): cada snippet lo borra con un `additionalTextEdit` para no duplicar.
-fn template_block_snippets(with_opener: bool, stray: Option<(usize, usize)>, line0: usize) -> Vec<Json> {
+/// `lead_space` antepone un espacio (el cursor está pegado al `%` de un `{%`). `stray` =
+/// `(col0, largo)` de un cierre huérfano tras el cursor (la `}` del auto-close del editor, o un
+/// `%}` previo): cada snippet lo borra con un `additionalTextEdit` para no duplicar.
+fn template_block_snippets(with_opener: bool, lead_space: bool, stray: Option<(usize, usize)>, line0: usize) -> Vec<Json> {
     let cases: &[(&str, &str)] = &[
         ("for", "for ${1:elem} in ${2:coleccion} %}$0{% endfor %}"),
         ("if", "if ${1:condicion} %}$0{% endif %}"),
@@ -1885,7 +1901,13 @@ fn template_block_snippets(with_opener: bool, stray: Option<(usize, usize)>, lin
         ("block", "block ${1:nombre} %}$0{% endblock %}"),
     ];
     cases.iter().map(|(label, body)| {
-        let insert = if with_opener { format!("{{% {body}") } else { body.to_string() };
+        let insert = if with_opener {
+            format!("{{% {body}")
+        } else if lead_space {
+            format!(" {body}")
+        } else {
+            body.to_string()
+        };
         let mut fields = vec![
             ("label", Json::Str(format!("{{% {label} %}}"))),
             // filterText = la keyword: teclear `for` en el HTML lo ofrece aunque el label lleve {%.
@@ -4694,7 +4716,7 @@ mod tests {
                    {% if total > 0 %}<p>hay</p>{% endif %}\n\
                    <p>fuera</p>\n";
         let labels = |line0: usize, char0: usize| -> Vec<(String, Option<String>)> {
-            template_completion_items(tpl, line0, char0).as_array().unwrap().iter()
+            template_completion_items(tpl, line0, char0).get("items").unwrap().as_array().unwrap().iter()
                 .map(|i| (
                     i.get("label").and_then(Json::as_str).unwrap().to_string(),
                     i.get("detail").and_then(Json::as_str).map(|s| s.to_string()),
@@ -4724,17 +4746,22 @@ mod tests {
         // La `}` huérfana del auto-close: en `{% f|}` el snippet de bloque la ELIMINA con un
         // additionalTextEdit (si no, su cierre propio la duplicaría). Sin llave huérfana, no hay
         // additionalTextEdits.
+        let for_item_of = |items: &Json| items.get("items").unwrap().as_array().unwrap().iter()
+            .find(|i| i.get("label").and_then(Json::as_str) == Some("{% for %}")).cloned().unwrap();
         let tpl2 = "{% params t: string %}\n{% f}\n";
         let items = template_completion_items(tpl2, 1, 4);
-        let for_item = items.as_array().unwrap().iter()
-            .find(|i| i.get("label").and_then(Json::as_str) == Some("{% for %}")).cloned().unwrap();
+        assert!(items.serialize().contains("\"isIncomplete\":true"), "re-consulta por tecla");
+        let for_item = for_item_of(&items);
         let edits = for_item.get("additionalTextEdits").expect("borra la llave huérfana").serialize();
         assert!(edits.contains("\"character\":4") && edits.contains("\"newText\":\"\""), "{edits}");
         let tpl3 = "{% params t: string %}\n{% f\n";
-        let items = template_completion_items(tpl3, 1, 4);
-        let for_item = items.as_array().unwrap().iter()
-            .find(|i| i.get("label").and_then(Json::as_str) == Some("{% for %}")).cloned().unwrap();
+        let for_item = for_item_of(&template_completion_items(tpl3, 1, 4));
         assert!(for_item.get("additionalTextEdits").is_none());
+        // `{%f|}` (sin espacio tras el delimitador): el snippet antepone el espacio Y borra la llave.
+        let tpl4 = "{% params t: string %}\n{%f}\n";
+        let for_item = for_item_of(&template_completion_items(tpl4, 1, 3));
+        assert!(for_item.get("insertText").and_then(Json::as_str).unwrap().starts_with(" for "), "{for_item:?}");
+        assert!(for_item.get("additionalTextEdits").is_some());
 
         // Y el enrutado: un completion sobre una URI `.ray.html` pasa por este camino.
         let uri = "file:///tmp/vista.ray.html";
@@ -4744,7 +4771,7 @@ mod tests {
             r#"{{"params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":1,"character":10}}}}}}"#
         )).unwrap();
         let items = completion_result(&msg, &docs);
-        assert!(items.as_array().unwrap().iter()
+        assert!(items.get("items").unwrap().as_array().unwrap().iter()
             .any(|i| i.get("label").and_then(Json::as_str) == Some("titulo")));
 
         // Hover: sobre `ti` de `{{ ti }}`... no hay símbolo; sobre `filas` del for (línea 3,

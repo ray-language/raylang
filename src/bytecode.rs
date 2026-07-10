@@ -14,6 +14,33 @@
 
 use crate::runtime::Value;
 
+/// M67: las operaciones de fs etiquetadas del opcode `FsTagged` (la aridad la da `argc`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FsOp {
+    Mkdir,
+    RemoveDir,
+    FileSize,
+    Rename,
+    CopyFile,
+}
+
+impl FsOp {
+    /// Nº de argumentos string (rutas) que saca de la pila.
+    pub fn argc(self) -> usize {
+        match self {
+            FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize => 1,
+            FsOp::Rename | FsOp::CopyFile => 2,
+        }
+    }
+}
+
+/// M67: los tests totales de fs del opcode `FsTest`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FsTest {
+    IsDir,
+    IsFile,
+}
+
 /// Las funciones matemáticas unarias `float -> float` (M15.1a). Van todas bajo el mismo opcode
 /// `OpCode::MathF(MathFn)`: el opcode dice "aplica una función matemática" y este enum **cuál**.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -388,6 +415,15 @@ pub enum OpCode {
     /// Saca una ruta; empuja un `[string]` etiquetado: `["ok", n0, n1, …]` con los nombres del
     /// directorio, o `["err", msg]`. Primitivo `__list_dir` (M11.7c); el prelude → `Result<[string],…>`.
     ListDir,
+    /// M67: operación de fs etiquetada — saca `op.argc()` strings (rutas) y empuja el `[string]`
+    /// etiquetado `["ok"(, dato)]`/`["err", msg]`. **Un opcode parametrizado** (como `MathF`) para
+    /// las cinco: mkdir/remove_dir/file_size/rename/copy_file; delega en `builtins::fs_tagged`.
+    FsTagged(FsOp),
+    /// M67: test total de fs — saca una ruta y empuja un `bool` (is_dir/is_file, como `Exists`).
+    FsTest(FsTest),
+    /// M67: saca los datos (`bytes`) y la ruta; **añade** al final del archivo y empuja el
+    /// `[string]` etiquetado. Primitivo `__append_file_bytes` (gemelo binario de `AppendFile`).
+    AppendFileBytes,
 
     // --- I/O con buffering: handles de archivo (M11.8) ---
     /// Saca el modo y la ruta; abre el archivo y empuja un `[string]` etiquetado `["ok", handle]`

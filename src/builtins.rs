@@ -21,7 +21,7 @@
 //! propio criterio. Es la razón por la que se eligió esta tabla en Rust frente a un `@builtin fn`.
 
 use crate::ast::Type;
-use crate::bytecode::{MathFn, OpCode};
+use crate::bytecode::{FsOp, FsTest, MathFn, OpCode};
 
 /// Aplica una función matemática unaria `float -> float` (M15.1a). Helper compartido por ambos
 /// motores: el resultado es determinista e idéntico en intérprete y VM, así que vive aquí (como
@@ -358,6 +358,49 @@ pub fn append_to_file(path: &str, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
     f.write_all(contents.as_bytes())
+}
+
+/// M67: gemelo binario de `append_to_file` (primitivo `__append_file_bytes`).
+pub fn append_bytes_to_file(path: &str, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    f.write_all(data)
+}
+
+/// M67: las operaciones de fs etiquetadas (mkdir/remove_dir/file_size/rename/copy_file), compartidas
+/// por ambos motores. Devuelve el arreglo etiquetado ya montado (`["ok"(, dato)]`/`["err", msg]`) —
+/// todas las cargas son strings, así cada motor solo lo convierte a su tipo de valor.
+pub fn fs_tagged(op: crate::bytecode::FsOp, args: &[String]) -> Vec<String> {
+    use crate::bytecode::FsOp;
+    let r = match op {
+        FsOp::Mkdir => std::fs::create_dir_all(&args[0]),
+        // Solo directorios VACÍOS (el borrado recursivo es peligroso → a demanda).
+        FsOp::RemoveDir => std::fs::remove_dir(&args[0]),
+        FsOp::Rename => std::fs::rename(&args[0], &args[1]),
+        FsOp::CopyFile => std::fs::copy(&args[0], &args[1]).map(|_| ()),
+        FsOp::FileSize => {
+            // ["ok", tamaño] (como el handle de `__open`); un directorio no tiene tamaño de archivo.
+            return match std::fs::metadata(&args[0]) {
+                Ok(md) if md.is_file() => vec!["ok".to_string(), md.len().to_string()],
+                Ok(_) => vec!["err".to_string(), "no es un archivo".to_string()],
+                Err(e) => vec!["err".to_string(), e.to_string()],
+            };
+        }
+    };
+    match r {
+        Ok(()) => vec!["ok".to_string()],
+        Err(e) => vec!["err".to_string(), e.to_string()],
+    }
+}
+
+/// M67: los tests totales de fs (`is_dir`/`is_file`), compartidos por ambos motores.
+pub fn fs_test(t: crate::bytecode::FsTest, path: &str) -> bool {
+    use crate::bytecode::FsTest;
+    let p = std::path::Path::new(path);
+    match t {
+        FsTest::IsDir => p.is_dir(),
+        FsTest::IsFile => p.is_file(),
+    }
 }
 
 /// Índice de **carácter** de la primera ocurrencia de `sub` en `s` (M11.7a). Por carácter (no por
@@ -2033,6 +2076,51 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__list_dir", opcode: OpCode::ListDir, check: |a| {
         arity(a, 1, "__list_dir", "")?;
         if a[0] != Type::String { return Err((Some(0), format!("__list_dir espera un string (la ruta), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // M67: directorios y metadatos. Las etiquetadas → [string] (["ok"(, dato)]/["err", msg]);
+    // los tests → bool. std/fs las envuelve en Result/bool.
+    Builtin { name: "__mkdir", opcode: OpCode::FsTagged(FsOp::Mkdir), check: |a| {
+        arity(a, 1, "__mkdir", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__mkdir espera un string (la ruta), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__remove_dir", opcode: OpCode::FsTagged(FsOp::RemoveDir), check: |a| {
+        arity(a, 1, "__remove_dir", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__remove_dir espera un string (la ruta), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__file_size", opcode: OpCode::FsTagged(FsOp::FileSize), check: |a| {
+        arity(a, 1, "__file_size", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__file_size espera un string (la ruta), no {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__rename", opcode: OpCode::FsTagged(FsOp::Rename), check: |a| {
+        arity(a, 2, "__rename", " (origen, destino)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__rename espera un string (el origen), no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__rename espera un string (el destino), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__copy_file", opcode: OpCode::FsTagged(FsOp::CopyFile), check: |a| {
+        arity(a, 2, "__copy_file", " (origen, destino)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__copy_file espera un string (el origen), no {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__copy_file espera un string (el destino), no {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__is_dir", opcode: OpCode::FsTest(FsTest::IsDir), check: |a| {
+        arity(a, 1, "__is_dir", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__is_dir espera un string (la ruta), no {}", a[0]))); }
+        Ok(Type::Bool)
+    } },
+    Builtin { name: "__is_file", opcode: OpCode::FsTest(FsTest::IsFile), check: |a| {
+        arity(a, 1, "__is_file", "")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__is_file espera un string (la ruta), no {}", a[0]))); }
+        Ok(Type::Bool)
+    } },
+    Builtin { name: "__append_file_bytes", opcode: OpCode::AppendFileBytes, check: |a| {
+        arity(a, 2, "__append_file_bytes", " (ruta, datos)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__append_file_bytes espera un string (la ruta), no {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__append_file_bytes espera bytes (los datos), no {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __open(ruta, modo) -> [string] (M11.8): ["ok", handle] o ["err", msg]. Prelude → Result<int,…>.

@@ -78,6 +78,66 @@ pub fn exists(path: string) -> bool {
     __exists(path)
 }
 
+// --- M67: directorios y metadatos. Antes el módulo era solo-archivos: sin mkdir no se podía
+// crear un directorio, sin is_dir/is_file no se podía recorrer un árbol, y sin rename la
+// escritura atómica (temp + rename) era imposible. ---
+
+/// Creates a directory, including any missing parents (like `mkdir -p`); `Ok(0)` or `Err(message)`.
+pub fn mkdir(path: string) -> Result<int, string> {
+    let r = __mkdir(path);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Removes an EMPTY directory; `Ok(0)` or `Err(message)` (non-empty is an error — recursive
+/// removal is deliberately not offered).
+pub fn remove_dir(path: string) -> Result<int, string> {
+    let r = __remove_dir(path);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Whether the path exists and is a directory (total; never fails).
+pub fn is_dir(path: string) -> bool {
+    __is_dir(path)
+}
+
+/// Whether the path exists and is a regular file (total; never fails).
+pub fn is_file(path: string) -> bool {
+    __is_file(path)
+}
+
+/// Renames (moves) a file or directory; `Ok(0)` or `Err(message)`. On the same filesystem this
+/// is atomic — write to a temp file and `rename` it for corruption-safe writes.
+pub fn rename(src: string, dst: string) -> Result<int, string> {
+    let r = __rename(src, dst);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Copies a file (overwriting the destination); `Ok(0)` or `Err(message)`.
+pub fn copy_file(src: string, dst: string) -> Result<int, string> {
+    let r = __copy_file(src, dst);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Size of a file in bytes; `Ok(size)` or `Err(message)` (a directory is an error).
+pub fn file_size(path: string) -> Result<int, string> {
+    let r = __file_size(path);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(n) => Result.Ok(n),
+            Option.None => Result.Err("tamaño inválido"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// Appends raw bytes to the end of the file (creating it if needed); `Ok(byte count)` or
+/// `Err(message)`. Binary twin of `append_file`.
+pub fn append_file_bytes(path: string, data: bytes) -> Result<int, string> {
+    let r = __append_file_bytes(path, data);
+    if (r[0] == "ok") { Result.Ok(data.len()) } else { Result.Err(r[1]) }
+}
+
 // --- I/O con buffering: handles de archivo (M11.8). open/read_line/write/close. ---
 // Abre un archivo (modo "r"/"w"/"a") y devuelve un handle (int); Err(mensaje) si falla.
 /// Opens a file in mode "r" (read), "w" (write) or "a" (append) and returns a

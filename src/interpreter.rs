@@ -1364,6 +1364,50 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // M67: operaciones de fs etiquetadas (mkdir/remove_dir/file_size/rename/copy_file) —
+            // el helper compartido monta el ["ok"(, dato)]/["err", msg]; aquí solo se convierte.
+            "__mkdir" | "__remove_dir" | "__file_size" | "__rename" | "__copy_file" => {
+                use crate::bytecode::FsOp;
+                let op = match name {
+                    "__mkdir" => FsOp::Mkdir,
+                    "__remove_dir" => FsOp::RemoveDir,
+                    "__file_size" => FsOp::FileSize,
+                    "__rename" => FsOp::Rename,
+                    "__copy_file" => FsOp::CopyFile,
+                    _ => unreachable!(),
+                };
+                let args: Vec<String> = values
+                    .iter()
+                    .map(|v| match v {
+                        Value::Str(s) => s.clone(),
+                        _ => unreachable!("el checker garantiza strings"),
+                    })
+                    .collect();
+                let arr = crate::builtins::fs_tagged(op, &args).into_iter().map(Value::Str).collect();
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            // M67: tests totales de fs → bool.
+            "__is_dir" | "__is_file" => {
+                use crate::bytecode::FsTest;
+                let t = if name == "__is_dir" { FsTest::IsDir } else { FsTest::IsFile };
+                match &values[0] {
+                    Value::Str(path) => Value::Bool(crate::builtins::fs_test(t, path)),
+                    _ => unreachable!("el checker garantiza un string"),
+                }
+            }
+            // M67: append binario → ["ok"] o ["err", msg].
+            "__append_file_bytes" => {
+                let arr = match (&values[0], &values[1]) {
+                    (Value::Str(path), Value::Bytes(data)) => {
+                        match crate::builtins::append_bytes_to_file(path, data) {
+                            Ok(()) => vec![Value::Str("ok".to_string())],
+                            Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
+                        }
+                    }
+                    _ => unreachable!("el checker garantiza string, bytes"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M11.7c: borra un archivo → ["ok"] o ["err", msg].
             "__remove_file" => {
                 let arr = match &values[0] {

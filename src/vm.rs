@@ -1821,6 +1821,42 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // M67: operaciones de fs etiquetadas — un solo brazo parametrizado (como MathF);
+                // saca op.argc() strings y delega en el helper compartido con el intérprete.
+                OpCode::FsTagged(op) => {
+                    let mut args = vec![String::new(); op.argc()];
+                    for i in (0..op.argc()).rev() {
+                        args[i] = match self.pop() {
+                            HeapValue::Str(s) => s,
+                            _ => unreachable!("el checker garantiza strings"),
+                        };
+                    }
+                    let elems = crate::builtins::fs_tagged(*op, &args).into_iter().map(HeapValue::Str).collect();
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // M67: tests totales de fs → bool (como Exists).
+                OpCode::FsTest(t) => {
+                    let path = match self.pop() {
+                        HeapValue::Str(p) => p,
+                        _ => unreachable!("el checker garantiza un string"),
+                    };
+                    self.push(HeapValue::Bool(crate::builtins::fs_test(*t, &path)));
+                }
+                // M67: append binario → ["ok"]/["err", msg].
+                OpCode::AppendFileBytes => {
+                    let data = self.pop();
+                    let path = self.pop();
+                    let (HeapValue::Str(path), HeapValue::Bytes(data)) = (path, data) else {
+                        unreachable!("el checker garantiza string, bytes");
+                    };
+                    let elems = match crate::builtins::append_bytes_to_file(&path, &data) {
+                        Ok(()) => vec![HeapValue::Str("ok".to_string())],
+                        Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::ListDir => {
                     let path = match self.pop() {
                         HeapValue::Str(p) => p,

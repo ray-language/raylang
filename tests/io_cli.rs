@@ -331,3 +331,51 @@ fn main() -> int {
     let out = Command::new(env!("CARGO_BIN_EXE_raylang")).arg(&path).output().unwrap();
     assert_eq!(out.status.code(), Some(1), "open de un archivo inexistente en modo r → Err");
 }
+
+/// M67 — std/fs de producción: directorios y metadatos. Ciclo completo mkdir → write →
+/// is_dir/is_file → file_size → append_file_bytes → copy → rename → remove_dir, por ambos
+/// motores. El mensaje de "directorio no vacío" varía por OS → solo se comprueba la etiqueta.
+#[test]
+fn fs_directorios_y_metadatos() {
+    let src = r#"
+import std/fs;
+fn tag(r: Result<int, string>) -> string {
+  match (r) { Result.Ok(n) => "ok " + to_string(n), Result.Err(_) => "err" }
+}
+fn main() -> int {
+  let base = "BASE";
+  let _ = fs.remove_file(base + "/sub/b.txt");
+  let _ = fs.remove_file(base + "/sub/a2.bin");
+  let _ = fs.remove_dir(base + "/sub");
+  let _ = fs.remove_dir(base);
+  print("mkdir: " + tag(fs.mkdir(base + "/sub")));
+  print("is_dir: " + to_string(fs.is_dir(base + "/sub")) + " is_file: " + to_string(fs.is_file(base + "/sub")));
+  let _ = fs.write_file(base + "/sub/a.txt", "hola");
+  print("size: " + tag(fs.file_size(base + "/sub/a.txt")));
+  print("size de dir: " + tag(fs.file_size(base + "/sub")));
+  print("append_bytes: " + tag(fs.append_file_bytes(base + "/sub/a.txt", b"\x00\x01")));
+  print("size tras append: " + tag(fs.file_size(base + "/sub/a.txt")));
+  print("copy: " + tag(fs.copy_file(base + "/sub/a.txt", base + "/sub/a2.bin")));
+  print("rename: " + tag(fs.rename(base + "/sub/a.txt", base + "/sub/b.txt")));
+  print("viejo: " + to_string(fs.is_file(base + "/sub/a.txt")) + " nuevo: " + to_string(fs.is_file(base + "/sub/b.txt")));
+  print("rmdir no vacio: " + tag(fs.remove_dir(base + "/sub")));
+  let _ = fs.remove_file(base + "/sub/b.txt");
+  let _ = fs.remove_file(base + "/sub/a2.bin");
+  print("rmdir: " + tag(fs.remove_dir(base + "/sub")));
+  print("rmdir base: " + tag(fs.remove_dir(base)));
+  print("base existe: " + to_string(fs.exists(base)));
+  0
+}
+"#;
+    let esperado = "mkdir: ok 0\nis_dir: true is_file: false\nsize: ok 4\nsize de dir: err\n\
+        append_bytes: ok 2\nsize tras append: ok 6\ncopy: ok 0\nrename: ok 0\n\
+        viejo: false nuevo: true\nrmdir no vacio: err\nrmdir: ok 0\nrmdir base: ok 0\n\
+        base existe: false\n";
+    for vm in [false, true] {
+        let dir = std::env::temp_dir().join(format!("ray_fs_m67_{}", if vm { "vm" } else { "in" }));
+        let src = src.replace("BASE", dir.to_str().unwrap());
+        let (out, err, code) = run_io(&format!("fs_m67_{vm}"), &src, "", vm);
+        assert_eq!(code, 0, "sale 0 (vm={vm})\n{err}");
+        assert_eq!(out, esperado, "ciclo fs completo (vm={vm})");
+    }
+}

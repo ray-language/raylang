@@ -7846,7 +7846,7 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 > **solo-archivos** — sin mkdir/is_dir/rename, los directorios eran de solo lectura y la
 > escritura atómica imposible.
 
-- **M67 — de una pieza**: 8 primitivos nuevos (patrón M11.4; helpers `fs_*` compartidos en
+- **M67 — de una pieza COMPLETO**: 8 primitivos nuevos (patrón M11.4; helpers `fs_*` compartidos en
   `builtins.rs` que devuelven el arreglo etiquetado ya montado): `__mkdir` (create_dir_all),
   `__is_dir`/`__is_file` (totales → bool), `__rename`, `__copy_file`, `__remove_dir` (solo
   vacío; el recursivo es peligroso → a demanda), `__file_size` (`["ok", n]` como `__open`),

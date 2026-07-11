@@ -1,0 +1,249 @@
+// packages/cron — expresiones cron + timers recurrentes (M86, v1 SOLO UTC).
+//
+// Dos mitades (IDEAS §42):
+// - El núcleo PURO: `parse` (las 5 posiciones `min hora dom mes dow` con `*` `a,b` `a-b`
+//   `*/n` `a-b/n`, y los alias `@hourly/@daily/@weekly/@monthly/@yearly`) y
+//   `next_after(sched, ms) -> Result<int, string>` (el siguiente disparo ESTRICTAMENTE
+//   posterior, al minuto en punto, en UTC) — 100 % determinista y testeable por golden.
+// - El runner cooperativo: `run(sched, job)` duerme hasta cada disparo (`time.sleep`, que
+//   desde M57.2 cede la fibra) y llama `job`, para siempre — úsese dentro de un `spawn`.
+//
+// Semántica fiel a vixie-cron: si DOM y DOW están AMBOS restringidos (ninguno es `*`),
+// el día casa si CUALQUIERA casa (OR); si solo uno está restringido, manda ese (AND).
+// El dow acepta 0-7 con 0 y 7 = domingo. v1 sin nombres (`jan`/`mon`) y sin hora local
+// (un cron local correcto necesita packages/tz y la política de gap/solape → M86b).
+
+import std/time;
+
+// Una expresión compilada: máscaras por campo + si dom/dow eran `*` (para el quirk OR).
+/// A compiled cron expression (five fields: minute, hour, day-of-month, month,
+/// day-of-week). Build with `parse`; query with `next_after`.
+pub struct Schedule {
+    mins: [bool],
+    hours: [bool],
+    dom: [bool],
+    months: [bool],
+    dow: [bool],
+    dom_star: bool,
+    dow_star: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Parse
+// ---------------------------------------------------------------------------
+
+fn mask(n: int) -> [bool] {
+    var m: [bool] = [];
+    var i = 0;
+    while (i < n) {
+        m.push(false);
+        i = i + 1;
+    }
+    m
+}
+
+fn all_set(n: int) -> [bool] {
+    var m: [bool] = [];
+    var i = 0;
+    while (i < n) {
+        m.push(true);
+        i = i + 1;
+    }
+    m
+}
+
+fn parse_int_or(s: string) -> Result<int, string> {
+    match (parse_int(s)) {
+        Option.Some(n) => Result.Ok(n),
+        Option.None => Result.Err("cron: número inválido '" + s + "'"),
+    }
+}
+
+// Parsea UN campo (`*`, `a`, `a-b`, `*/n`, `a-b/n`, y listas `x,y,z` de lo anterior)
+// sobre el rango [lo, hi]. Devuelve la máscara indexada 0..hi (los índices < lo no se usan).
+fn parse_field(field: string, lo: int, hi: int, name: string) -> Result<[bool], string> {
+    var m = mask(hi + 1);
+    let parts = field.split(",");
+    var p = 0;
+    while (p < parts.len()) {
+        let part = parts[p];
+        if (part.len() == 0) {
+            return Result.Err("cron: campo '" + name + "' con un elemento vacío");
+        }
+        // paso: `X/n` (X = `*` o `a-b`)
+        var base = part;
+        var step = 1;
+        let sp = part.split("/");
+        if (sp.len() == 2) {
+            base = sp[0];
+            step = parse_int_or(sp[1])?;
+            if (step <= 0) {
+                return Result.Err("cron: paso inválido en '" + name + "'");
+            }
+        } else if (sp.len() > 2) {
+            return Result.Err("cron: campo '" + name + "' malformado ('" + part + "')");
+        }
+        // base: `*`, `a` o `a-b`
+        var a = lo;
+        var b = hi;
+        if (base != "*") {
+            let r = base.split("-");
+            if (r.len() == 1) {
+                a = parse_int_or(r[0])?;
+                if (sp.len() == 2) {
+                    b = hi;  // `a/n` = de a en adelante (como vixie)
+                } else {
+                    b = a;
+                }
+            } else if (r.len() == 2) {
+                a = parse_int_or(r[0])?;
+                b = parse_int_or(r[1])?;
+            } else {
+                return Result.Err("cron: rango malformado en '" + name + "' ('" + base + "')");
+            }
+        }
+        if (a < lo || b > hi || a > b) {
+            return Result.Err("cron: '" + name + "' fuera de rango [" + to_string(lo) + "-" + to_string(hi) + "] ('" + part + "')");
+        }
+        var v = a;
+        while (v <= b) {
+            m[v] = true;
+            v = v + step;
+        }
+        p = p + 1;
+    }
+    Result.Ok(m)
+}
+
+// Divide por espacios (uno o más) en exactamente los campos no vacíos.
+fn fields_of(expr: string) -> [string] {
+    var out: [string] = [];
+    let parts = expr.trim().split(" ");
+    var i = 0;
+    while (i < parts.len()) {
+        if (parts[i].len() > 0) {
+            out.push(parts[i]);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Compila una expresión cron de 5 campos (o un alias `@…`).
+/// Parses a five-field cron expression (`min hour dom month dow`) or one of the
+/// `@hourly/@daily/@weekly/@monthly/@yearly` aliases into a `Schedule`. Supports
+/// `*`, values, ranges `a-b`, steps `*/n` and `a-b/n`, and comma lists. Day-of-week
+/// is 0-7 with both 0 and 7 meaning Sunday. Errors as values on malformed input.
+pub fn parse(expr: string) -> Result<Schedule, string> {
+    var e = expr.trim();
+    if (e == "@hourly") { e = "0 * * * *"; }
+    if (e == "@daily") { e = "0 0 * * *"; }
+    if (e == "@weekly") { e = "0 0 * * 0"; }
+    if (e == "@monthly") { e = "0 0 1 * *"; }
+    if (e == "@yearly" || e == "@annually") { e = "0 0 1 1 *"; }
+    let fs = fields_of(e);
+    if (fs.len() != 5) {
+        return Result.Err("cron: se esperaban 5 campos (min hora dom mes dow), hay " + to_string(fs.len()));
+    }
+    let mins = parse_field(fs[0], 0, 59, "minuto")?;
+    let hours = parse_field(fs[1], 0, 23, "hora")?;
+    let dom = parse_field(fs[2], 1, 31, "día del mes")?;
+    let months = parse_field(fs[3], 1, 12, "mes")?;
+    var dow = parse_field(fs[4], 0, 7, "día de la semana")?;
+    if (dow[7]) {
+        dow[0] = true;  // 7 = domingo, como el 0
+    }
+    Result.Ok(Schedule {
+        mins: mins,
+        hours: hours,
+        dom: dom,
+        months: months,
+        dow: dow,
+        dom_star: fs[2] == "*",
+        dow_star: fs[4] == "*",
+    })
+}
+
+// ---------------------------------------------------------------------------
+// next_after — el siguiente disparo, saltando por campos (no minuto a minuto).
+// ---------------------------------------------------------------------------
+
+// ¿Casa el DÍA (dom/dow) de `dt`? El quirk de vixie: ambos restringidos → OR.
+fn day_matches(s: Schedule, dt: time.DateTime) -> bool {
+    let by_dom = s.dom[dt.day];
+    let by_dow = s.dow[dt.weekday];
+    if (!s.dom_star && !s.dow_star) {
+        return by_dom || by_dow;
+    }
+    by_dom && by_dow
+}
+
+// El siguiente disparo ESTRICTAMENTE posterior a `ms` (epoch-ms UTC), al minuto en punto.
+// Err si no existe en ~5 años (expresión imposible, p. ej. `0 0 30 2 *`).
+/// The next fire time strictly after `ms` (epoch-ms UTC), on a minute boundary.
+/// Errs if no matching time exists within ~5 years (impossible expressions like
+/// `0 0 30 2 *`). Pure and deterministic — the testable core of the package.
+pub fn next_after(s: Schedule, ms: int) -> Result<int, string> {
+    // Arranca en el SIGUIENTE minuto en punto.
+    var t = (floor_div(ms, 60000) + 1) * 60000;
+    let limit = ms + 5 * 366 * 86400000;
+    while (t <= limit) {
+        let dt = time.from_epoch_millis(t);
+        if (!s.months[dt.month]) {
+            // Salta al día 1 del mes siguiente, 00:00.
+            var y = dt.year;
+            var mo = dt.month + 1;
+            if (mo > 12) {
+                mo = 1;
+                y = y + 1;
+            }
+            t = time.to_epoch_millis(time.DateTime { year: y, month: mo, day: 1, hour: 0, minute: 0, second: 0, weekday: 0 });
+        } else if (!day_matches(s, dt)) {
+            // Salta a las 00:00 del día siguiente.
+            t = (floor_div(t, 86400000) + 1) * 86400000;
+        } else if (!s.hours[dt.hour]) {
+            // Salta a la siguiente hora en punto.
+            t = (floor_div(t, 3600000) + 1) * 3600000;
+        } else if (!s.mins[dt.minute]) {
+            t = t + 60000;
+        } else {
+            return Result.Ok(t);
+        }
+    }
+    Result.Err("cron: la expresión no casa con ninguna fecha (¿día imposible?)")
+}
+
+fn floor_div(a: int, b: int) -> int {
+    let q = a / b;
+    if (a % b != 0 && ((a < 0) != (b < 0))) {
+        return q - 1;
+    }
+    q
+}
+
+// ---------------------------------------------------------------------------
+// El runner cooperativo
+// ---------------------------------------------------------------------------
+
+// Corre `job` en cada disparo de `s`, para siempre (duerme entre disparos cediendo la
+// fibra). Úsese dentro de un `spawn`; si la expresión es imposible, retorna en silencio.
+/// Runs `job` at every fire time of the schedule, forever, sleeping cooperatively
+/// between fires (`time.sleep` yields the fiber since M57.2) — call it inside `spawn`.
+/// Returns silently if the schedule can never fire.
+pub fn run(s: Schedule, job: fn()) {
+    var alive = true;
+    while (alive) {
+        match (next_after(s, time.now())) {
+            Result.Ok(t) => {
+                let delta = t - time.now();
+                if (delta > 0) {
+                    time.sleep(delta);
+                }
+                job();
+            },
+            Result.Err(e) => {
+                alive = false;
+            },
+        }
+    }
+}

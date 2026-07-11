@@ -23,5 +23,8 @@ fn main() {
     observe(reg, "http_duracion_segundos", 0.8);
     observe(reg, "http_duracion_segundos", 2.0);
 
+    // M70: el texto de # HELP se escapa (un salto de línea crudo rompía el scrape entero).
+    register_counter(reg, "raro_total", "linea 1\nlinea 2 con \\ barra");
+
     print(render(reg));
 }

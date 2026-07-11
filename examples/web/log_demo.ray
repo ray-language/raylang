@@ -22,6 +22,19 @@ fn main() {
     let lg2 = with_level(logger("worker"), 2);
     print(filtrado(lg2, info(lg2, "esto se descarta"), ts));  // (filtrado)
     print(filtrado(lg2, error(lg2, "esto pasa"), ts));  // la línea JSON
+
+    // M70: controles crudos < 0x20 (BEL, ESC, \x01) → \uXXXX; \b/\f → escape corto.
+    // Antes emitían JSON INVÁLIDO (el agregador rechazaba justo las entradas con datos raros).
+    let raro = "bel:" + ctrl(7) + " esc:" + ctrl(27) + " bs:" + ctrl(8) + " ff:" + ctrl(12);
+    print(render(info(lg, raro).field("k", "v" + ctrl(1)), ts));
+}
+
+// Un carácter de control por su código (para construir los mensajes "raros" del caso M70).
+fn ctrl(n: int) -> string {
+    match (char_from_code(n)) {
+        Option.Some(c) => to_string(c),
+        Option.None => "",
+    }
 }
 
 // Reproduce el filtro de `emit` de forma determinista (sin la hora del sistema).

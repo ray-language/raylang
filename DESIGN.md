@@ -7893,7 +7893,7 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 > testeable en ambos, labels escapados/ordenados, histograma cumulativo correcto. Tres
 > defectos: JSON inválido con controles, HELP sin escapar, tipo de métrica sin validar.
 
-- **M70 — de una pieza**: (a) el `json_escape` del log cubre **todo control < 0x20** →
+- **M70 — de una pieza COMPLETO**: (a) el `json_escape` del log cubre **todo control < 0x20** →
   `\uXXXX` (RFC 8259, clase M59.1; antes BEL/ESC/\x00 en el mensaje emitían JSON inválido,
   verificado); además `\b`/`\f` con su escape corto. (b) metrics escapa el texto de
   `# HELP` (`\\` y `\n`, como exige el formato de exposición). (c) `add`/`set`/`observe_l`

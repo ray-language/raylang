@@ -21,6 +21,10 @@ const ESPERADO: &[&str] = &[
     r#"http_duracion_segundos_bucket{le="+Inf"} 4"#,
     "http_duracion_segundos_sum 3.15",
     "http_duracion_segundos_count 4",
+    // M70 — el texto de # HELP se escapa (\\ y \n, como exige el formato de exposición):
+    // antes un salto de línea crudo en el help rompía el scrape entero.
+    r#"# HELP raro_total linea 1\nlinea 2 con \\ barra"#,
+    "# TYPE raro_total counter",
 ];
 
 fn correr(flags: &[&str]) -> (Vec<String>, bool) {
@@ -131,4 +135,28 @@ print('FORMATO OK')
         String::from_utf8_lossy(&py.stderr)
     );
     assert!(String::from_utf8_lossy(&py.stdout).contains("FORMATO OK"));
+}
+
+/// M70 — chequeo de tipo: `set` sobre un counter y `observe` sobre un counter panican con
+/// mensaje claro (antes creaban una serie espuria que corrompía la exposición en silencio).
+#[test]
+fn tipo_equivocado_panica() {
+    let src = r#"
+from metrics import registry, register_counter, set, no_labels;
+fn main() {
+    let reg = registry();
+    register_counter(reg, "c_total", "un counter");
+    set(reg, "c_total", no_labels(), 5.0);
+}
+"#;
+    let dir = std::env::temp_dir().join("ray_metrics_m70");
+    std::fs::create_dir_all(&dir).unwrap();
+    // El import `from metrics` resuelve junto al archivo → escribir el demo al lado del módulo.
+    let path = format!("{}/examples/web/m70_tipo_tmp.ray", env!("CARGO_MANIFEST_DIR"));
+    std::fs::write(&path, src).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang")).arg("--vm").arg(&path).output().unwrap();
+    std::fs::remove_file(&path).ok();
+    assert!(!out.status.success(), "set sobre un counter debe panicar");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("no es un gauge"), "mensaje claro de tipo equivocado\n{err}");
 }

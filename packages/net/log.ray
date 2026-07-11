@@ -86,36 +86,46 @@ fn level_name(level: int) -> string {
     }
 }
 
-// Escapa una cadena para incrustarla en JSON (comillas, barra, y los controles comunes).
+// Cuatro dígitos hex en minúscula de `n` (0..65535), para el escape \uXXXX.
+fn hex4(n: int) -> string {
+    let digs = "0123456789abcdef";
+    to_string(digs[n >> 12 & 15]) + to_string(digs[n >> 8 & 15]) + to_string(digs[n >> 4 & 15]) + to_string(digs[n & 15])
+}
+
+// Escapa una cadena para incrustarla en JSON. M70: cubre TODO control < 0x20 (RFC 8259;
+// antes solo \n/\t/\r → un BEL/ESC/\x00 en el mensaje emitía JSON inválido y el agregador
+// rechazaba justo las entradas interesantes). Acumula partes + join (no `out + c`, O(n²)).
 fn json_escape(s: string) -> string {
-    var out = "";
+    let cs = s.chars();
+    var parts: [string] = [];
     var i = 0;
-    while (i < s.len()) {
-        let c = s[i];
+    while (i < cs.len()) {
+        let c = cs[i];
         if (c == '"') {
-            out = out + "\\\"";
+            parts.push("\\\"");
+        } else if (c == '\\') {
+            parts.push("\\\\");
+        } else if (c == '\n') {
+            parts.push("\\n");
+        } else if (c == '\t') {
+            parts.push("\\t");
+        } else if (c == '\r') {
+            parts.push("\\r");
         } else {
-            if (c == '\\') {
-                out = out + "\\\\";
+            let code = char_code(c);
+            if (code == 8) {
+                parts.push("\\b");
+            } else if (code == 12) {
+                parts.push("\\f");
+            } else if (code < 32) {
+                parts.push("\\u" + hex4(code));
             } else {
-                if (c == '\n') {
-                    out = out + "\\n";
-                } else {
-                    if (c == '\t') {
-                        out = out + "\\t";
-                    } else {
-                        if (c == '\r') {
-                            out = out + "\\r";
-                        } else {
-                            out = out + to_string(c);
-                        }
-                    }
-                }
+                parts.push(to_string(c));
             }
         }
         i = i + 1;
     }
-    out
+    join(parts, "")
 }
 
 // Renderiza la entrada como una línea JSON con la marca de tiempo `ts` dada (determinista → testeable).

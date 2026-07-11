@@ -11,6 +11,8 @@ const ESPERADO: &[&str] = &[
     r#"{"ts":"2026-06-30T12:00:00Z","level":"ERROR","service":"api","msg":"fallo \"db\" en\nla conexion","code":"E_CONN"}"#,
     "(filtrado)",
     r#"{"ts":"2026-06-30T12:00:00Z","level":"ERROR","service":"worker","msg":"esto pasa"}"#,
+    // M70 — controles < 0x20 escapados (RFC 8259): antes BEL/ESC/\x01 salían crudos = JSON inválido.
+    r##"{"ts":"2026-06-30T12:00:00Z","level":"INFO","service":"api","msg":"bel:\u0007 esc:\u001b bs:\b ff:\f","k":"v\u0001"}"##,
 ];
 
 fn correr(flags: &[&str]) -> (Vec<String>, bool) {

@@ -57,6 +57,25 @@ pub fn labels2(k1: string, v1: string, k2: string, v2: string) -> Map<string, st
     m
 }
 
+// M70: escapa el texto de `# HELP` (el formato de exposición exige `\\` y `\n`; un help con
+// salto de línea rompía el scrape entero).
+fn help_escape(s: string) -> string {
+    var out = "";
+    var i = 0;
+    while (i < s.len()) {
+        let c = s[i];
+        if (c == '\\') {
+            out = out + "\\\\";
+        } else if (c == '\n') {
+            out = out + "\\n";
+        } else {
+            out = out + to_string(c);
+        }
+        i = i + 1;
+    }
+    out
+}
+
 // Escapa un valor de label (Prometheus: barra, comilla, salto de línea).
 fn label_escape(s: string) -> string {
     var out = "";
@@ -216,11 +235,16 @@ fn ensure_hist_series(reg: Registry, mi: int, name: string, buckets: [float], la
 
 // --- Operaciones ---
 /// Adds `v` to the series of metric `name` with the given labels (creating it at 0 if new).
-/// Panics if the metric was never registered.
+/// Panics if the metric was never registered or is a histogram (use `observe_l`).
 pub fn add(reg: Registry, name: string, labels: Map<string, string>, v: float) {
     let mi = find_metric(reg, name);
     if (mi < 0) {
         panic("métrica no registrada: " + name);
+    }
+    // M70: el tipo debe cuadrar — antes `add` sobre un histograma creaba una serie espuria
+    // (`nombre{}` mezclada con `nombre_bucket{…}`) que corrompía la exposición en silencio.
+    if (reg.kinds[mi] == 2) {
+        panic("'" + name + "' es un histogram; usa observe_l/observe");
     }
     let si = touch_series(reg, mi, name + render_labels(labels));
     reg.s_val[si] = reg.s_val[si] + v;
@@ -232,11 +256,16 @@ pub fn inc(reg: Registry, name: string, labels: Map<string, string>) {
 }
 
 /// Sets a gauge to `v` for the given label set (creating the series if new).
-/// Panics if the metric was never registered.
+/// Panics if the metric was never registered or is not a gauge (a counter only goes up).
 pub fn set(reg: Registry, name: string, labels: Map<string, string>, v: float) {
     let mi = find_metric(reg, name);
     if (mi < 0) {
         panic("métrica no registrada: " + name);
+    }
+    // M70: `set` es de gauges — sobre un counter viola la monotonía; sobre un histograma
+    // crearía una serie espuria.
+    if (reg.kinds[mi] != 1) {
+        panic("'" + name + "' no es un gauge; set solo aplica a gauges");
     }
     let si = touch_series(reg, mi, name + render_labels(labels));
     reg.s_val[si] = v;
@@ -252,6 +281,10 @@ pub fn observe_l(reg: Registry, name: string, labels: Map<string, string>, v: fl
     let mi = find_metric(reg, name);
     if (mi < 0) {
         panic("histograma no registrado: " + name);
+    }
+    // M70: observar un counter/gauge crearía series _bucket espurias.
+    if (reg.kinds[mi] != 2) {
+        panic("'" + name + "' no es un histogram; usa inc/add/set");
     }
     let bks = reg.bucketses[mi];
     ensure_hist_series(reg, mi, name, bks, labels);
@@ -291,7 +324,7 @@ pub fn render(reg: Registry) -> string {
     var out = "";
     var mi = 0;
     while (mi < reg.names.len()) {
-        out = out + "# HELP " + reg.names[mi] + " " + reg.helps[mi] + "\n";
+        out = out + "# HELP " + reg.names[mi] + " " + help_escape(reg.helps[mi]) + "\n";
         out = out + "# TYPE " + reg.names[mi] + " " + kind_name(reg.kinds[mi]) + "\n";
         var si = 0;
         while (si < reg.s_metric.len()) {

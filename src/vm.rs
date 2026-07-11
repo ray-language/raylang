@@ -259,8 +259,10 @@ struct Shared {
     /// cada una con el `fd` de su socket. El scheduler espera readiness real en el poller del SO (M17).
     io_parked: Vec<IoParked>,
     /// M88.1: el canal de `signals()` (singleton) y el fd de LECTURA de su self-pipe.
-    /// `signal_fd >= 0` = fontanería instalada; el fd entra al poller de `io_wait` y
-    /// las fibras aparcadas en el canal NO cuentan como deadlock (esperan al exterior).
+    /// `signal_chan.is_some()` = fontanería instalada (es la FUENTE DE VERDAD; `signal_fd`
+    /// solo es válido entonces — `Shared` deriva `Default`, y el default de `signal_fd`
+    /// sería 0, que NO debe interpretarse como "fd válido"). Instalada, el fd entra al
+    /// poller de `io_wait` y las fibras aparcadas en el canal NO son deadlock (esperan fuera).
     signal_chan: Option<usize>,
     signal_fd: i32,
     /// Canales `Channel<T>` (M12.1): sincronización COMPARTIDA entre actores, fuera del GC de las fibras
@@ -466,7 +468,7 @@ impl<'a> Vm<'a> {
             if sh.running == 0 {
                 // Nadie ejecuta → nadie puede producir trabajo listo. Si hay E/S pendiente, espera readiness
                 // (un solo worker llega aquí, por `running == 0`); si no, es deadlock o fin.
-                if !sh.io_parked.is_empty() || sh.signal_fd >= 0 {
+                if !sh.io_parked.is_empty() || sh.signal_chan.is_some() {
                     // M88.1: con la fontanería de señales instalada, "todo aparcado" no es
                     // deadlock — el exterior puede despertar el programa por el self-pipe.
                     Self::io_wait(&mut sh);
@@ -2789,7 +2791,7 @@ impl<'a> Vm<'a> {
             // socket. Las durmientes (fd < 0) no entran al poller: solo cuenta su deadline.
             let mut read_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.fd >= 0 && p.pending_write.is_none()).map(|p| p.fd).collect();
             // M88.1: el self-pipe de señales siempre en el conjunto de lectura.
-            if shared.signal_fd >= 0 {
+            if shared.signal_chan.is_some() {
                 read_fds.push(shared.signal_fd);
             }
             let write_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.fd >= 0 && p.pending_write.is_some()).map(|p| p.fd).collect();
@@ -2807,7 +2809,7 @@ impl<'a> Vm<'a> {
                     // M88.1: ¿despertó el self-pipe de señales? Drénalo y entrega al canal
                     // (readya receptores); el pipe no está en io_parked, así que no entra
                     // al barrido de abajo.
-                    if shared.signal_fd >= 0 && ready.contains(&shared.signal_fd) {
+                    if shared.signal_chan.is_some() && ready.contains(&shared.signal_fd) {
                         Self::deliver_signals(shared);
                     }
                     // Saca las fibras cuyo socket quedó listo; las demás siguen aparcadas.

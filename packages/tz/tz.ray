@@ -1,0 +1,374 @@
+// packages/tz — hora local IANA (M85): zonas horarias leyendo los TZif del sistema.
+//
+// Parser de **TZif v2/v3** (RFC 8536) en raylang puro sobre `std/fs` (cero deps): lee
+// `/usr/share/zoneinfo/<zona>` (o un archivo arbitrario — fixtures de test), extrae las
+// TRANSICIONES (instantes en que cambia el offset: DST, reformas) y los TIPOS (offset,
+// es-DST, abreviatura), y resuelve por búsqueda binaria.
+//
+// Decisiones (IDEAS §42):
+// - **La ambigüedad del DST es API**: `to_utc(zona, civil)` devuelve `LocalResult` —
+//   `Single(ms)` (lo normal), `Ambiguous(antes, despues)` (el solape de otoño: la hora
+//   civil ocurre DOS veces) o `Gap` (el hueco de primavera: no ocurre nunca).
+// - **Zona del sistema sin primitivo nuevo**: `system()` prueba `env("TZ")` como nombre
+//   y cae a leer `/etc/localtime` POR CONTENIDO (es un TZif válido, aunque sin nombre).
+// - **Windows honesto**: sin zoneinfo, `load` devuelve Err claro; UTC (std/time) sigue.
+// - Alcance v1: transiciones EXPLÍCITAS del archivo (tzdata estándar las trae hasta
+//   ~2037); más allá se extrapola el último tipo. El footer TZ-string (reglas POSIX
+//   perpetuas) queda diferido (M85b). Pre-1970 hereda el límite de std/time.
+//
+// Moneda: instantes en **epoch-ms UTC** (como std/time); offsets en **ms**.
+
+import std/fs;
+import std/time;
+
+// Una zona horaria cargada: transiciones (epoch-SEGUNDOS, ascendentes), el índice de tipo
+// de cada transición, y por tipo su offset (segundos), si es DST y su abreviatura.
+/// A loaded IANA time zone: transition table + offset types, resolved by binary search.
+pub struct Zone {
+    name: string,
+    trans: [int],
+    trans_type: [int],
+    utoffs: [int],
+    isdsts: [bool],
+    abbrevs: [string],
+    // El tipo vigente ANTES de la primera transición (RFC 8536: el primer tipo no-DST,
+    // o el tipo 0). También el usado si no hay transiciones (zonas fijas, p. ej. UTC).
+    first_type: int,
+}
+
+// El resultado de convertir una hora CIVIL local a un instante UTC (la inversa no es
+// total por el DST).
+/// Result of resolving a civil local time to a UTC instant. Spring-forward gaps and
+/// fall-back overlaps make the mapping non-total: `Ambiguous` carries both instants
+/// (earlier first), `Gap` means the civil time never happens in that zone.
+pub enum LocalResult {
+    Single(int),
+    Ambiguous(int, int),
+    Gap,
+}
+
+// ---------------------------------------------------------------------------
+// Carga
+// ---------------------------------------------------------------------------
+
+// ¿Nombre de zona válido? (`Europe/Madrid`, `America/Argentina/Ushuaia`, `UTC`…)
+// Rechaza rutas absolutas y `..` (el nombre indexa dentro de zoneinfo).
+fn valid_name(name: string) -> bool {
+    if (name.len() == 0 || name.starts_with("/") || name.contains("..")) {
+        return false;
+    }
+    var i = 0;
+    let cs = name.chars();
+    while (i < cs.len()) {
+        let c = cs[i];
+        let ok = ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9')
+            || c == '/' || c == '_' || c == '-' || c == '+';
+        if (!ok) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// Carga una zona por su nombre IANA desde el zoneinfo del sistema.
+/// Loads a zone by IANA name (e.g. "Europe/Madrid") from the system zoneinfo database
+/// (`/usr/share/zoneinfo`). Err with a clear message if the database or the zone is
+/// missing (e.g. on Windows) or the file is not a valid TZif.
+pub fn load(name: string) -> Result<Zone, string> {
+    if (!valid_name(name)) {
+        return Result.Err("tz: nombre de zona inválido '" + name + "'");
+    }
+    load_named("/usr/share/zoneinfo/" + name, name)
+}
+
+// Carga una zona desde un archivo TZif arbitrario (fixtures de test, /etc/localtime).
+/// Loads a zone from an arbitrary TZif file path (test fixtures, `/etc/localtime`).
+pub fn load_file(path: string) -> Result<Zone, string> {
+    load_named(path, path)
+}
+
+fn load_named(path: string, name: string) -> Result<Zone, string> {
+    match (fs.read_file_bytes(path)) {
+        Result.Ok(data) => parse_tzif(data, name),
+        Result.Err(e) => Result.Err("tz: no se pudo leer '" + path + "': " + e),
+    }
+}
+
+// La zona del sistema: `TZ` del entorno (como nombre IANA) o `/etc/localtime` (por
+// contenido — es un TZif válido aunque no conozcamos su nombre).
+/// The system's local zone: tries the `TZ` environment variable as an IANA name, then
+/// falls back to reading `/etc/localtime` by content.
+pub fn system() -> Result<Zone, string> {
+    match (env("TZ")) {
+        Option.Some(tz) => {
+            if (tz.len() > 0 && valid_name(tz)) {
+                return load(tz);
+            }
+        },
+        Option.None => { },
+    }
+    load_named("/etc/localtime", "local")
+}
+
+// ---------------------------------------------------------------------------
+// Parser TZif (RFC 8536)
+// ---------------------------------------------------------------------------
+
+// Entero SIN signo de `n` octetos big-endian en `b[at..]`.
+fn be_uint(b: bytes, at: int, n: int) -> int {
+    var v = 0;
+    var i = 0;
+    while (i < n) {
+        v = v * 256 + b[at + i];
+        i = i + 1;
+    }
+    v
+}
+
+// Entero CON signo (complemento a dos) de `n` octetos big-endian: el primer octeto
+// aporta el signo (v arranca negativo) y el resto se acumula — sin desbordar el i64.
+fn be_int(b: bytes, at: int, n: int) -> int {
+    var v = b[at];
+    if (v >= 128) {
+        v = v - 256;
+    }
+    var i = 1;
+    while (i < n) {
+        v = v * 256 + b[at + i];
+        i = i + 1;
+    }
+    v
+}
+
+// La cabecera TZif: los 6 contadores tras el magic. `at` apunta al inicio de la cabecera.
+struct Header {
+    isutcnt: int,
+    isstdcnt: int,
+    leapcnt: int,
+    timecnt: int,
+    typecnt: int,
+    charcnt: int,
+}
+
+fn read_header(b: bytes, at: int) -> Result<Header, string> {
+    if (at + 44 > b.len()) {
+        return Result.Err("tz: TZif truncado (cabecera)");
+    }
+    if (b[at] != 84 || b[at + 1] != 90 || b[at + 2] != 105 || b[at + 3] != 102) {
+        return Result.Err("tz: no es un archivo TZif (magic)");
+    }
+    Result.Ok(Header {
+        isutcnt: be_uint(b, at + 20, 4),
+        isstdcnt: be_uint(b, at + 24, 4),
+        leapcnt: be_uint(b, at + 28, 4),
+        timecnt: be_uint(b, at + 32, 4),
+        typecnt: be_uint(b, at + 36, 4),
+        charcnt: be_uint(b, at + 40, 4),
+    })
+}
+
+// El tamaño del bloque de datos de una cabecera, con tiempos de `tsize` octetos.
+fn block_size(h: Header, tsize: int) -> int {
+    h.timecnt * tsize + h.timecnt + h.typecnt * 6 + h.charcnt
+        + h.leapcnt * (tsize + 4) + h.isstdcnt + h.isutcnt
+}
+
+fn parse_tzif(b: bytes, name: string) -> Result<Zone, string> {
+    let h1 = read_header(b, 0)?;
+    let version = b[4];  // 0 (v1), 50 ('2'), 51 ('3'), 52 ('4')
+    var h = h1;
+    var at = 44;
+    var tsize = 4;
+    if (version >= 50) {
+        // v2+: el bloque v1 se SALTA y se usa el segundo (tiempos de 64 bits).
+        let at2 = 44 + block_size(h1, 4);
+        h = read_header(b, at2)?;
+        at = at2 + 44;
+        tsize = 8;
+    }
+    if (h.typecnt == 0) {
+        return Result.Err("tz: TZif sin tipos de offset");
+    }
+    if (at + block_size(h, tsize) > b.len()) {
+        return Result.Err("tz: TZif truncado (datos)");
+    }
+    // Transiciones (epoch-segundos, ascendentes) y su índice de tipo.
+    var trans: [int] = [];
+    var i = 0;
+    while (i < h.timecnt) {
+        trans.push(be_int(b, at + i * tsize, tsize));
+        i = i + 1;
+    }
+    at = at + h.timecnt * tsize;
+    var trans_type: [int] = [];
+    i = 0;
+    while (i < h.timecnt) {
+        let ti = b[at + i];
+        if (ti >= h.typecnt) {
+            return Result.Err("tz: índice de tipo fuera de rango");
+        }
+        trans_type.push(ti);
+        i = i + 1;
+    }
+    at = at + h.timecnt;
+    // Tipos: (utoff i32, isdst u8, desigidx u8).
+    var utoffs: [int] = [];
+    var isdsts: [bool] = [];
+    var desig: [int] = [];
+    i = 0;
+    while (i < h.typecnt) {
+        let base = at + i * 6;
+        utoffs.push(be_int(b, base, 4));
+        isdsts.push(b[base + 4] != 0);
+        desig.push(b[base + 5]);
+        i = i + 1;
+    }
+    at = at + h.typecnt * 6;
+    // Abreviaturas: charcnt octetos de strings NUL-terminadas; cada tipo apunta por índice.
+    var abbrevs: [string] = [];
+    i = 0;
+    while (i < h.typecnt) {
+        var j = desig[i];
+        var s = "";
+        while (j < h.charcnt && b[at + j] != 0) {
+            match (from_utf8(b.sub_bytes(at + j, at + j + 1))) {
+                Result.Ok(c) => { s = s + c; },
+                Result.Err(e) => { },
+            }
+            j = j + 1;
+        }
+        abbrevs.push(s);
+        i = i + 1;
+    }
+    // El tipo "antes de la primera transición" (RFC 8536 §3.2): el primer tipo no-DST, o el 0.
+    var first = 0;
+    i = 0;
+    var found = false;
+    while (i < h.typecnt && !found) {
+        if (!isdsts[i]) {
+            first = i;
+            found = true;
+        }
+        i = i + 1;
+    }
+    Result.Ok(Zone {
+        name: name,
+        trans: trans,
+        trans_type: trans_type,
+        utoffs: utoffs,
+        isdsts: isdsts,
+        abbrevs: abbrevs,
+        first_type: first,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Resolución
+// ---------------------------------------------------------------------------
+
+// El índice de TIPO vigente en el instante `secs` (epoch-segundos): búsqueda binaria de
+// la última transición <= secs; antes de la primera (o sin transiciones) → first_type.
+fn type_at(z: Zone, secs: int) -> int {
+    if (z.trans.len() == 0 || secs < z.trans[0]) {
+        return z.first_type;
+    }
+    var lo = 0;
+    var hi = z.trans.len() - 1;
+    while (lo < hi) {
+        let mid = (lo + hi + 1) / 2;
+        if (z.trans[mid] <= secs) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    z.trans_type[lo]
+}
+
+// El offset UTC de la zona en un instante, en MILISEGUNDOS (la moneda de std/time).
+/// The zone's UTC offset at `instant_ms` (epoch-ms), in milliseconds.
+pub fn offset_at(z: Zone, instant_ms: int) -> int {
+    z.utoffs[type_at(z, floor_div(instant_ms, 1000))] * 1000
+}
+
+// La abreviatura vigente en un instante (`CET`, `CEST`, `EST`…).
+/// The zone abbreviation in effect at `instant_ms` (e.g. "CET", "CEST").
+pub fn abbrev_at(z: Zone, instant_ms: int) -> string {
+    z.abbrevs[type_at(z, floor_div(instant_ms, 1000))]
+}
+
+// ¿Está la zona en horario de verano en un instante?
+/// Whether daylight saving time is in effect at `instant_ms`.
+pub fn is_dst_at(z: Zone, instant_ms: int) -> bool {
+    z.isdsts[type_at(z, floor_div(instant_ms, 1000))]
+}
+
+// División con REDONDEO HACIA ABAJO (el `/` de raylang trunca hacia cero; para ms
+// negativos la conversión a segundos debe ir al segundo anterior).
+fn floor_div(a: int, b: int) -> int {
+    let q = a / b;
+    if (a % b != 0 && ((a < 0) != (b < 0))) {
+        return q - 1;
+    }
+    q
+}
+
+// La hora CIVIL local de un instante UTC.
+/// Converts a UTC instant (epoch-ms) to the zone's civil local time.
+pub fn to_local(z: Zone, instant_ms: int) -> time.DateTime {
+    time.from_epoch_millis(instant_ms + offset_at(z, instant_ms))
+}
+
+// El instante UTC de una hora CIVIL local — no total por el DST: `Single`, `Ambiguous`
+// (solape de otoño, ambos instantes con el más temprano primero) o `Gap` (hueco de
+// primavera: esa hora civil no existe en la zona).
+/// Resolves a civil local time to a UTC instant. Returns `Single(ms)`, or
+/// `Ambiguous(earlier_ms, later_ms)` during the fall-back overlap, or `Gap` during
+/// the spring-forward gap (that civil time never occurs in this zone).
+pub fn to_utc(z: Zone, civil: time.DateTime) -> LocalResult {
+    let naive = time.to_epoch_millis(civil);  // como si fuera UTC
+    // Los offsets candidatos: los vigentes alrededor del instante ingenuo (un día a
+    // cada lado cubre cualquier transición cercana). Un offset `o` es solución si
+    // offset_at(naive - o) == o.
+    var cands: [int] = [];
+    var offs: [int] = [];
+    offs.push(offset_at(z, naive - 86400000));
+    offs.push(offset_at(z, naive));
+    offs.push(offset_at(z, naive + 86400000));
+    var i = 0;
+    while (i < offs.len()) {
+        let o = offs[i];
+        // dedup (hasta 3 valores, lineal)
+        var vist = false;
+        var j = 0;
+        while (j < i) {
+            if (offs[j] == o) {
+                vist = true;
+            }
+            j = j + 1;
+        }
+        if (!vist) {
+            let t = naive - o;
+            if (offset_at(z, t) == o) {
+                cands.push(t);
+            }
+        }
+        i = i + 1;
+    }
+    if (cands.len() == 0) {
+        return LocalResult.Gap;
+    }
+    if (cands.len() == 1) {
+        return LocalResult.Single(cands[0]);
+    }
+    // Dos candidatos (solape): el más temprano primero.
+    if (cands[0] <= cands[1]) {
+        return LocalResult.Ambiguous(cands[0], cands[1]);
+    }
+    LocalResult.Ambiguous(cands[1], cands[0])
+}
+
+// El nombre con el que se cargó la zona.
+/// The name this zone was loaded under (IANA name, file path, or "local").
+pub fn name(z: Zone) -> string { z.name }

@@ -69,6 +69,11 @@ fn read_packet(c: Conn) -> Result<[int], string> {
     let hdr = take(c, 4)?;
     let len = hdr[0] | hdr[1] << 8 | hdr[2] << 16;
     c.seq = hdr[3] + 1;
+    // Un paquete de carga vacía no aparece en los flujos de este cliente (todo paquete lleva al
+    // menos su octeto de tipo/estado). Rechazarlo evita un trap por `p[0]` en cada consumidor.
+    if (len == 0) {
+        return Result.Err("mysql: paquete de carga vacía del servidor");
+    }
     take(c, len)
 }
 
@@ -82,41 +87,62 @@ fn write_packet(c: Conn, payload: [int]) -> Result<int, string> {
 
 // ── Primitivas del protocolo ───────────────────────────────────────────────────────────
 
-// Entero length-encoded en `p[i]`: (valor, octetos consumidos). 0xfb (NULL) lo trata el llamador.
-fn lenc_int(p: [int], i: int) -> (int, int) {
-    let b = p[i];
-    if (b < 251) {
-        return (b, 1);
+// Lee `p[i]` con chequeo de límites. Los paquetes vienen del servidor (no confiable): una lectura
+// fuera de rango debe ser un error como VALOR, no un trap ("índice fuera de rango") que tumbe al
+// cliente. Toda la decodificación de filas y del handshake pasa por aquí.
+fn at(p: [int], i: int) -> Result<int, string> {
+    if (i < 0 || i >= p.len()) {
+        return Result.Err("mysql: paquete truncado (se pidió el octeto " + to_string(i) + " de " + to_string(p.len()) + ")");
     }
-    if (b == 252) {
-        return (p[i + 1] | p[i + 2] << 8, 3);
-    }
-    if (b == 253) {
-        return (p[i + 1] | p[i + 2] << 8 | p[i + 3] << 16, 4);
-    }
-    // 254: 8 octetos LE.
-    var v = 0;
-    var k = 7;
-    while (k >= 0) {
-        v = v << 8 | p[i + 1 + k];
-        k = k - 1;
-    }
-    return (v, 9);
+    Result.Ok(p[i])
 }
 
-// String NUL-terminado en `p[i]`: (string, posición tras el NUL). Camino feliz: UTF-8 válido.
-fn nul_str(p: [int], i: int) -> (string, int) {
+// Entero length-encoded en `p[i]`: (valor, octetos consumidos). 0xfb (NULL) lo trata el llamador.
+// Falla como valor ante un paquete truncado. El caso de 8 octetos se arma por mitades y rechaza
+// longitudes absurdas (>= 2^32) — evita el desbordamiento del i64 y el OOB posterior.
+fn lenc_int(p: [int], i: int) -> Result<(int, int), string> {
+    let b = at(p, i)?;
+    if (b < 251) {
+        return Result.Ok((b, 1));
+    }
+    if (b == 252) {
+        return Result.Ok((at(p, i + 1)? | at(p, i + 2)? << 8, 3));
+    }
+    if (b == 253) {
+        return Result.Ok((at(p, i + 1)? | at(p, i + 2)? << 8 | at(p, i + 3)? << 16, 4));
+    }
+    // 254: 8 octetos LE, por mitades (hi<<32 + lo desbordaría el i64 al armarlo por shifts).
+    let _ = at(p, i + 8)?; // valida que existan los 8 octetos
+    var lo = 0;
+    var k = 0;
+    while (k < 4) { lo = lo | (p[i + 1 + k] << (8 * k)); k = k + 1; }
+    var hi = 0;
+    k = 0;
+    while (k < 4) { hi = hi | (p[i + 5 + k] << (8 * k)); k = k + 1; }
+    // Una longitud >= 2^32 es imposible en un paquete de <= 16 MiB → paquete corrupto/malicioso.
+    if (hi != 0) {
+        return Result.Err("mysql: longitud length-encoded absurda");
+    }
+    return Result.Ok((lo, 9));
+}
+
+// String NUL-terminado en `p[i]`: (string, posición tras el NUL). Falla si no hay terminador
+// dentro del paquete (evita devolver una posición fuera de rango que el llamador indexaría).
+fn nul_str(p: [int], i: int) -> Result<(string, int), string> {
     var out: [int] = [];
     var j = i;
     while (j < p.len() && p[j] != 0) {
         out.push(p[j]);
         j = j + 1;
     }
+    if (j >= p.len()) {
+        return Result.Err("mysql: cadena sin terminador NUL (paquete truncado)");
+    }
     let s = match (from_utf8(bytes_of(out))) {
         Result.Ok(t) => t,
         Result.Err(_) => "",
     };
-    return (s, j + 1);
+    return Result.Ok((s, j + 1));
 }
 
 // XOR octeto a octeto de dos digests del mismo largo.
@@ -222,19 +248,19 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
     if (hs[0] != 10) {
         return Result.Err("mysql: versión de protocolo no soportada: " + to_string(hs[0]));
     }
-    let sv = nul_str(hs, 1); // versión del servidor (informativa)
-    var i = sv.1 + 4;        // thread id
+    let sv = nul_str(hs, 1)?; // versión del servidor (informativa)
+    var i = sv.1 + 4;         // thread id
     var scramble: [int] = [];
     var k = 0;
     while (k < 8) {
-        scramble.push(hs[i + k]); // auth-data parte 1
+        scramble.push(at(hs, i + k)?); // auth-data parte 1
         k = k + 1;
     }
     i = i + 8 + 1 + 2; // parte1 + filler + capacidades bajas
     var plugin = "mysql_native_password";
     if (i < hs.len()) {
         i = i + 1 + 2 + 2; // charset + estado + capacidades altas
-        let auth_len = hs[i];
+        let auth_len = at(hs, i)?;
         i = i + 1 + 10; // longitud + reservado
         // Parte 2 del scramble: auth_len - 8 - 1 octetos (el último es un NUL).
         var p2 = auth_len - 9;
@@ -243,7 +269,7 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
         }
         k = 0;
         while (k < p2) {
-            scramble.push(hs[i + k]);
+            scramble.push(at(hs, i + k)?);
             k = k + 1;
         }
         i = i + p2;
@@ -251,7 +277,7 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
             i = i + 1; // NUL del scramble
         }
         if (i < hs.len()) {
-            let pn = nul_str(hs, i);
+            let pn = nul_str(hs, i)?;
             plugin = pn.0;
         }
     }
@@ -309,7 +335,7 @@ fn connect_opts(host: string, port: int, user: string, password: string, databas
         }
         if (r[0] == 254) {
             // AuthSwitchRequest: [0xfe][plugin NUL][scramble nuevo (con NUL final)].
-            let pn = nul_str(r, 1);
+            let pn = nul_str(r, 1)?;
             var sc: [int] = [];
             var j = pn.1;
             while (j < r.len() && r[j] != 0) {
@@ -388,7 +414,7 @@ fn query_text(c: Conn, sql: string) -> Result<[[string]], string> {
     if (first[0] == 0) {
         return Result.Err("mysql: la consulta no devuelve filas; usa exec");
     }
-    let nc = lenc_int(first, 0);
+    let nc = lenc_int(first, 0)?;
     let ncols = nc.0;
     // Definiciones de columna + EOF.
     var k = 0;
@@ -415,12 +441,13 @@ fn query_text(c: Conn, sql: string) -> Result<[[string]], string> {
             var i = 0;
             var col = 0;
             while (col < ncols) {
-                if (p[i] == 251) {
+                if (at(p, i)? == 251) {
                     row.push(""); // NULL
                     i = i + 1;
                 } else {
-                    let ln = lenc_int(p, i);
+                    let ln = lenc_int(p, i)?;
                     i = i + ln.1;
+                    let _ = at(p, i + ln.0 - 1)?; // valida el rango del valor (si ln.0 > 0)
                     var cell: [int] = [];
                     var j = 0;
                     while (j < ln.0) {
@@ -450,7 +477,7 @@ fn exec_text(c: Conn, sql: string) -> Result<int, string> {
     if (first[0] != 0) {
         return Result.Err("mysql: la sentencia devuelve filas; usa query");
     }
-    let af = lenc_int(first, 1); // OK: [0x00][afectadas lenc][last_insert_id lenc]…
+    let af = lenc_int(first, 1)?; // OK: [0x00][afectadas lenc][last_insert_id lenc]…
     Result.Ok(af.0)
 }
 
@@ -485,6 +512,11 @@ fn stmt_prepare(c: Conn, sql: string) -> Result<(int, int), string> {
     }
     if (ok[0] != 0) {
         return Result.Err("mysql: respuesta de prepare inesperada");
+    }
+    // El OK de COM_STMT_PREPARE son 12 octetos fijos: [0x00][stmt_id:4][ncols:2][nparams:2]
+    // [filler:1][warnings:2]. Se valida antes de leerlos (paquete truncado = Err, no trap).
+    if (ok.len() < 12) {
+        return Result.Err("mysql: respuesta de prepare truncada");
     }
     let stmt_id = ok[1] | (ok[2] << 8) | (ok[3] << 16) | (ok[4] << 24);
     let ncols = ok[5] | (ok[6] << 8);
@@ -554,17 +586,17 @@ fn stmt_close(c: Conn, stmt_id: int) {
 // El tipo y los flags de una definición de columna (lo único que necesita la fila binaria).
 // Layout: 6 strings lenc (catálogo/esquema/tabla/tabla orig/nombre/nombre orig) + lenc del bloque
 // fijo (0x0c) + charset:2 + longitud:4 + TIPO:1 + FLAGS:2 + decimales:1 + relleno:2.
-fn col_type_flags(p: [int]) -> (int, int) {
+fn col_type_flags(p: [int]) -> Result<(int, int), string> {
     var i = 0;
     var k = 0;
     while (k < 6) {
-        let ln = lenc_int(p, i);
+        let ln = lenc_int(p, i)?;
         i = i + ln.1 + ln.0;
         k = k + 1;
     }
-    let fl = lenc_int(p, i);
+    let fl = lenc_int(p, i)?;
     i = i + fl.1 + 2 + 4; // bloque fijo + charset + longitud de columna
-    return (p[i], p[i + 1] | (p[i + 2] << 8));
+    return Result.Ok((at(p, i)?, at(p, i + 1)? | (at(p, i + 2)? << 8)));
 }
 
 // int → float (exacto hasta 2^53; los operandos aquí caben de sobra).
@@ -575,27 +607,28 @@ fn to_f(n: int) -> float {
     };
 }
 
-// Entero LE SIN signo de hasta 4 octetos.
-fn int_le(p: [int], i: int, w: int) -> int {
+// Entero LE SIN signo de hasta 4 octetos (con chequeo de límites).
+fn int_le(p: [int], i: int, w: int) -> Result<int, string> {
+    let _ = at(p, i + w - 1)?; // valida el rango [i, i+w)
     var v = 0;
     var k = 0;
     while (k < w) {
         v = v | (p[i + k] << (8 * k));
         k = k + 1;
     }
-    v
+    Result.Ok(v)
 }
 
 // Una celda entera de ancho w (1/2/4), con o sin signo → (texto, nueva posición).
-fn int_cell(p: [int], i: int, w: int, unsigned: bool) -> (string, int) {
-    var v = int_le(p, i, w);
+fn int_cell(p: [int], i: int, w: int, unsigned: bool) -> Result<(string, int), string> {
+    var v = int_le(p, i, w)?;
     if (!unsigned) {
         let lim = 1 << (8 * w - 1);
         if (v >= lim) {
             v = v - lim * 2;
         }
     }
-    return (to_string(v), i + w);
+    return Result.Ok((to_string(v), i + w));
 }
 
 // Reconstruye un f32 desde sus 4 octetos (raylang solo tiene bits de f64): la aritmética
@@ -642,43 +675,44 @@ fn pad6(n: int) -> string {
 }
 
 // DATE binaria: [len][year:2][month][day]; len 0 = fecha cero.
-fn dec_date(p: [int], i: int, ln: int) -> string {
+fn dec_date(p: [int], i: int, ln: int) -> Result<string, string> {
     if (ln < 4) {
-        return "0000-00-00";
+        return Result.Ok("0000-00-00");
     }
-    pad4(p[i] | (p[i + 1] << 8)) + "-" + pad2(p[i + 2]) + "-" + pad2(p[i + 3])
+    Result.Ok(pad4(at(p, i)? | (at(p, i + 1)? << 8)) + "-" + pad2(at(p, i + 2)?) + "-" + pad2(at(p, i + 3)?))
 }
 
 // DATETIME/TIMESTAMP binarios: fecha + [hour][min][sec] (len>=7) + [micro:4] (len=11).
-fn dec_datetime(p: [int], i: int, ln: int) -> string {
-    var s = dec_date(p, i, ln) + " ";
+fn dec_datetime(p: [int], i: int, ln: int) -> Result<string, string> {
+    var s = dec_date(p, i, ln)? + " ";
     if (ln >= 7) {
-        s = s + pad2(p[i + 4]) + ":" + pad2(p[i + 5]) + ":" + pad2(p[i + 6]);
+        s = s + pad2(at(p, i + 4)?) + ":" + pad2(at(p, i + 5)?) + ":" + pad2(at(p, i + 6)?);
     } else {
         s = s + "00:00:00";
     }
     if (ln >= 11) {
-        s = s + "." + pad6(int_le(p, i + 7, 4));
+        s = s + "." + pad6(int_le(p, i + 7, 4)?);
     }
-    s
+    Result.Ok(s)
 }
 
 // TIME binario: [len][neg][days:4][hour][min][sec] (+ [micro:4]); las horas acumulan los días.
-fn dec_time(p: [int], i: int, ln: int) -> string {
+fn dec_time(p: [int], i: int, ln: int) -> Result<string, string> {
     if (ln == 0) {
-        return "00:00:00";
+        return Result.Ok("00:00:00");
     }
-    let sign = if (p[i] == 1) { "-" } else { "" };
-    let hours = int_le(p, i + 1, 4) * 24 + p[i + 5];
-    var s = sign + pad2(hours) + ":" + pad2(p[i + 6]) + ":" + pad2(p[i + 7]);
+    let sign = if (at(p, i)? == 1) { "-" } else { "" };
+    let hours = int_le(p, i + 1, 4)? * 24 + at(p, i + 5)?;
+    var s = sign + pad2(hours) + ":" + pad2(at(p, i + 6)?) + ":" + pad2(at(p, i + 7)?);
     if (ln >= 12) {
-        s = s + "." + pad6(int_le(p, i + 8, 4));
+        s = s + "." + pad6(int_le(p, i + 8, 4)?);
     }
-    s
+    Result.Ok(s)
 }
 
-// Una celda de la fila binaria, por tipo de columna → (texto, nueva posición).
-fn bin_cell(p: [int], i: int, t: int, flags: int) -> (string, int) {
+// Una celda de la fila binaria, por tipo de columna → (texto, nueva posición). Falla como valor
+// ante un paquete truncado (toda lectura pasa por `at`/`int_le`/`lenc_int`, que chequean límites).
+fn bin_cell(p: [int], i: int, t: int, flags: int) -> Result<(string, int), string> {
     let unsigned = (flags & 32) != 0;
     if (t == 1) { return int_cell(p, i, 1, unsigned); }          // TINY
     if (t == 2 || t == 13) { return int_cell(p, i, 2, unsigned); } // SHORT / YEAR
@@ -686,42 +720,42 @@ fn bin_cell(p: [int], i: int, t: int, flags: int) -> (string, int) {
     if (t == 8) {
         // LONGLONG: por mitades (b7<<56 desbordaría). Un BIGINT UNSIGNED ≥ 2^63 no cabe en el
         // int de raylang y se muestra envuelto (limitación documentada).
-        let lo = int_le(p, i, 4);
-        var hi = int_le(p, i + 4, 4);
+        let lo = int_le(p, i, 4)?;
+        var hi = int_le(p, i + 4, 4)?;
         if (!unsigned && hi >= 2147483648) {
             hi = hi - 4294967296;
         }
-        return (to_string(hi * 4294967296 + lo), i + 8);
+        return Result.Ok((to_string(hi * 4294967296 + lo), i + 8));
     }
     if (t == 4) {
         // FLOAT (f32)
-        let cell = (to_string(f32_of(int_le(p, i, 4))), i + 4);
-        return cell;
+        return Result.Ok((to_string(f32_of(int_le(p, i, 4)?)), i + 4));
     }
     if (t == 5) {
         // DOUBLE (f64): por mitades → bits → float.
-        let lo = int_le(p, i, 4);
-        var hi = int_le(p, i + 4, 4);
+        let lo = int_le(p, i, 4)?;
+        var hi = int_le(p, i + 4, 4)?;
         if (hi >= 2147483648) {
             hi = hi - 4294967296;
         }
-        return (to_string(math.float_from_bits(hi * 4294967296 + lo)), i + 8);
+        return Result.Ok((to_string(math.float_from_bits(hi * 4294967296 + lo)), i + 8));
     }
     if (t == 10) {
-        let ln = p[i];
-        return (dec_date(p, i + 1, ln), i + 1 + ln);
+        let ln = at(p, i)?;
+        return Result.Ok((dec_date(p, i + 1, ln)?, i + 1 + ln));
     }
     if (t == 7 || t == 12) {
         // TIMESTAMP / DATETIME
-        let ln = p[i];
-        return (dec_datetime(p, i + 1, ln), i + 1 + ln);
+        let ln = at(p, i)?;
+        return Result.Ok((dec_datetime(p, i + 1, ln)?, i + 1 + ln));
     }
     if (t == 11) {
-        let ln = p[i];
-        return (dec_time(p, i + 1, ln), i + 1 + ln);
+        let ln = at(p, i)?;
+        return Result.Ok((dec_time(p, i + 1, ln)?, i + 1 + ln));
     }
     // El resto (DECIMAL/NEWDECIMAL/VARCHAR/BIT/ENUM/SET/BLOB/TEXT/STRING/JSON…): length-encoded.
-    let ln = lenc_int(p, i);
+    let ln = lenc_int(p, i)?;
+    let _ = at(p, i + ln.1 + ln.0 - 1)?; // valida el rango completo del valor (si ln.0 > 0)
     var cell: [int] = [];
     var j = 0;
     while (j < ln.0) {
@@ -732,7 +766,7 @@ fn bin_cell(p: [int], i: int, t: int, flags: int) -> (string, int) {
         Result.Ok(x) => x,
         Result.Err(_) => "",
     };
-    return (s, i + ln.1 + ln.0);
+    return Result.Ok((s, i + ln.1 + ln.0));
 }
 
 // SELECT preparado: execute → definiciones de columna (capturando tipo+flags) → filas binarias.
@@ -747,14 +781,14 @@ fn query_prepared(c: Conn, sql: string, params: [string]) -> Result<[[string]], 
         stmt_close(c, pr.0);
         return Result.Err("mysql: la consulta no devuelve filas; usa exec");
     }
-    let nc = lenc_int(first, 0);
+    let nc = lenc_int(first, 0)?;
     let ncols = nc.0;
     var types: [int] = [];
     var cflags: [int] = [];
     var k = 0;
     while (k < ncols) {
         let cd = read_packet(c)?;
-        let tf = col_type_flags(cd);
+        let tf = col_type_flags(cd)?;
         types.push(tf.0);
         cflags.push(tf.1);
         k = k + 1;
@@ -781,10 +815,10 @@ fn query_prepared(c: Conn, sql: string, params: [string]) -> Result<[[string]], 
             var col = 0;
             while (col < ncols) {
                 let bit = col + 2;
-                if (((p[1 + bit / 8] >> (bit % 8)) & 1) == 1) {
+                if (((at(p, 1 + bit / 8)? >> (bit % 8)) & 1) == 1) {
                     row.push(""); // NULL
                 } else {
-                    let cell = bin_cell(p, i, types[col], cflags[col]);
+                    let cell = bin_cell(p, i, types[col], cflags[col])?;
                     row.push(cell.0);
                     i = cell.1;
                 }
@@ -808,7 +842,7 @@ fn exec_prepared(c: Conn, sql: string, params: [string]) -> Result<int, string> 
     if (first[0] != 0) {
         return Result.Err("mysql: la sentencia devuelve filas; usa query");
     }
-    let af = lenc_int(first, 1);
+    let af = lenc_int(first, 1)?;
     Result.Ok(af.0)
 }
 

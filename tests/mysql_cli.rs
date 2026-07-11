@@ -216,6 +216,14 @@ fn fase_comandos<S: Read + Write>(s: &mut S) {
                     fila2.push(0xfb); // NULL
                     s.write_all(&pkt(6, &fila2)).unwrap();
                     s.write_all(&pkt(7, &EOF)).unwrap();
+                } else if sql.starts_with("TRUNC") {
+                    // M77: fila MALFORMADA — el string length-encoded declara 200 octetos pero el
+                    // paquete solo trae 3. El cliente endurecido debe devolver Err, no reventar.
+                    s.write_all(&pkt(1, &[1])).unwrap(); // 1 columna
+                    s.write_all(&pkt(2, &col_def("x"))).unwrap();
+                    s.write_all(&pkt(3, &EOF)).unwrap();
+                    s.write_all(&pkt(4, &[200, b'a', b'b', b'c'])).unwrap(); // lenc=200, solo 3 octetos
+                    s.write_all(&pkt(5, &EOF)).unwrap();
                 } else if sql.starts_with("INSERT") {
                     // OK con 3 filas afectadas.
                     s.write_all(&pkt(1, &[0x00, 3, 0, 0, 0, 0, 0])).unwrap();
@@ -281,6 +289,11 @@ fn main() -> int {{
         Result.Ok(_) => {{ print("no debería"); }},
         Result.Err(e) => {{ print(e); }},
     }}
+    // M77: una fila con un length-encoded truncado se rechaza como valor, sin reventar el cliente.
+    match (mysql.query(c, "TRUNC", [])) {{
+        Result.Ok(_) => {{ print("no debería (trunc)"); }},
+        Result.Err(_) => {{ print("trunc rechazado"); }},
+    }}
     mysql.disconnect(c);
     0
 }}
@@ -303,7 +316,7 @@ fn correr(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
     (String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code().unwrap_or(-1))
 }
 
-const ESPERADO: &str = "ada|36\ngrace|\nafectadas: 3\nmysql: la tabla no existe\n";
+const ESPERADO: &str = "ada|36\ngrace|\nafectadas: 3\nmysql: la tabla no existe\ntrunc rechazado\n";
 
 #[test]
 fn mysql_handshake_query_exec_y_error() {

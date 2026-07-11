@@ -231,14 +231,37 @@ impl Lexer {
 
         // Es flotante solo si hay '.' Y un dígito tras el punto. Así "1." o
         // "1.metodo()" (futuro UFCS) no se confunden con un flotante.
-        let is_float =
+        let has_dot =
             self.peek() == Some('.') && matches!(self.peek_next(), Some(c) if c.is_ascii_digit());
-        if is_float {
+        if has_dot {
             self.advance(); // consume el '.'
             while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
                 self.advance();
             }
         }
+
+        // M80: exponente opcional `e|E [+|-] dígitos` (`1e21`, `1.5e-3`, `2E+10`); hace el
+        // literal flotante aunque no lleve punto. Guarda conservadora (espeja la del '.'):
+        // el e/E solo se consume si le sigue un dígito, o un signo Y un dígito → `1eabc`
+        // sigue siendo `1` + identificador, y `1e+x` sigue siendo `1` + `e` + `+` + `x`.
+        let has_exp = matches!(self.peek(), Some('e') | Some('E'))
+            && match self.peek_next() {
+                Some(c) if c.is_ascii_digit() => true,
+                Some('+') | Some('-') => {
+                    matches!(self.chars.get(self.pos + 2), Some(c) if c.is_ascii_digit())
+                }
+                _ => false,
+            };
+        if has_exp {
+            self.advance(); // el e/E
+            if matches!(self.peek(), Some('+') | Some('-')) {
+                self.advance();
+            }
+            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
+                self.advance();
+            }
+        }
+        let is_float = has_dot || has_exp;
 
         let text: String = self.chars[start..self.pos].iter().collect();
         if is_float {
@@ -571,6 +594,26 @@ mod tests {
     /// Tokeniza y devuelve solo las clases (sin posiciones), terminadas en Eof.
     fn kinds(src: &str) -> Vec<TokenKind> {
         lex(src).expect("debería tokenizar sin error").into_iter().map(|t| t.kind).collect()
+    }
+
+    #[test]
+    fn flotantes_con_exponente() {
+        // M80: `e|E [+|-] dígitos` hace el literal flotante, con o sin punto.
+        assert_eq!(kinds("1e21"), vec![TokenKind::Float(1e21), TokenKind::Eof]);
+        assert_eq!(kinds("1.5e-3"), vec![TokenKind::Float(1.5e-3), TokenKind::Eof]);
+        assert_eq!(kinds("2E+10"), vec![TokenKind::Float(2e10), TokenKind::Eof]);
+        assert_eq!(kinds("7e0"), vec![TokenKind::Float(7.0), TokenKind::Eof]);
+        // Guarda conservadora: sin dígito tras el e (o tras el signo), NO es exponente.
+        assert_eq!(
+            kinds("1eabc"),
+            vec![TokenKind::Int(1), TokenKind::Ident("eabc".into()), TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds("1e+"),
+            vec![TokenKind::Int(1), TokenKind::Ident("e".into()), TokenKind::Plus, TokenKind::Eof]
+        );
+        // Un exponente que desborda f64 no es error: satura a infinito (semántica de f64).
+        assert_eq!(kinds("1e999"), vec![TokenKind::Float(f64::INFINITY), TokenKind::Eof]);
     }
 
     #[test]

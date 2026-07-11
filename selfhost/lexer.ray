@@ -189,13 +189,26 @@ fn number(lx: Lexer) -> Result<TokKind, LexError> {
     while (!at_end(lx) && is_digit(cur(lx))) {
         advance(lx);
     }
-    let is_float = !at_end(lx) && cur(lx) == '.' && lx.pos + 1 < lx.chars.len() && is_digit(lx.chars[lx.pos + 1]);
-    if (is_float) {
+    let has_dot = !at_end(lx) && cur(lx) == '.' && lx.pos + 1 < lx.chars.len() && is_digit(lx.chars[lx.pos + 1]);
+    if (has_dot) {
         advance(lx);  // el '.'
         while (!at_end(lx) && is_digit(cur(lx))) {
             advance(lx);
         }
     }
+    // M80: exponente opcional `e|E [+|-] dígitos`, espejo del lexer de Rust. Guarda
+    // conservadora: el e/E solo se consume si le sigue un dígito, o un signo Y un dígito.
+    let has_exp = !at_end(lx) && (cur(lx) == 'e' || cur(lx) == 'E') && exp_guard(lx);
+    if (has_exp) {
+        advance(lx);  // el e/E
+        if (!at_end(lx) && (cur(lx) == '+' || cur(lx) == '-')) {
+            advance(lx);
+        }
+        while (!at_end(lx) && is_digit(cur(lx))) {
+            advance(lx);
+        }
+    }
+    let is_float = has_dot || has_exp;
     let text = substr(lx, start, lx.pos);
     if (is_float) {
         match (parse_float(text)) {
@@ -208,6 +221,23 @@ fn number(lx: Lexer) -> Result<TokKind, LexError> {
             Option.None => Result.Err(lex_error(lx, "entero fuera de rango '" + text + "'")),
         }
     }
+}
+
+// M80: ¿lo que sigue al e/E (que está bajo el cursor) es un exponente válido?
+// Un dígito, o un signo seguido de dígito.
+fn exp_guard(lx: Lexer) -> bool {
+    if (lx.pos + 1 >= lx.chars.len()) {
+        return false;
+    }
+    let c1 = lx.chars[lx.pos + 1];
+    if (is_digit(c1)) {
+        return true;
+    }
+    // Ojo (gotcha DESIGN §55): esta cola no puede empezar con '(' tras el if-sentencia.
+    if (c1 == '+' || c1 == '-') {
+        return lx.pos + 2 < lx.chars.len() && is_digit(lx.chars[lx.pos + 2]);
+    }
+    false
 }
 
 // Lee un identificador (su primer carácter ya fue consumido) y lo clasifica.

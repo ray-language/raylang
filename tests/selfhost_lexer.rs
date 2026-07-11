@@ -178,6 +178,14 @@ fn casos_basicos() {
 }
 
 #[test]
+fn flotantes_con_exponente() {
+    // M80: exponente con y sin punto/signo, y las degradaciones de la guarda
+    // conservadora (`1eabc` = Int + Ident; `1e+` = Int + Ident + Plus).
+    comparar("let a = 1e21; let b = 1.5e-3; let c = 2E+10; let d = 7e0;", "sh_exp.ray");
+    comparar("let x = 1eabc; let y = 1e+; let z = 3.14e2;", "sh_exp_guarda.ray");
+}
+
+#[test]
 fn todos_los_operadores_y_puntuacion() {
     comparar(
         "+ - * / % == != < <= > >= && || ! = -> => ? |> @ ( ) { } [ ] , ; : .",

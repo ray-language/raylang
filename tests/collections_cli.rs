@@ -194,3 +194,81 @@ fn import_calificado_de_submodulo() {
                }";
     assert_eq!(run_src("m50_set_ok", src), 2, "set con leaf-binding dedup → size 2");
 }
+
+/// M82 — `std/collections/dict`: mapa hash GENÉRICO (claves de USUARIO vía Hash+Eq),
+/// hermano del Set. Claves struct con @derive(Hash, Eq), reemplazo (last wins), remove
+/// que devuelve el valor, crecimiento con rehash (200 claves) y keys/values alineados.
+#[test]
+fn dict_claves_de_usuario_ambos_motores() {
+    let src = r#"import std/collections/dict;
+
+@derive(Hash, Eq, Show)
+struct Punto {
+    x: int,
+    y: int,
+}
+
+fn main() -> int {
+    // Claves de USUARIO (struct derivado) — el diferido de M13.
+    let d: dict.Dict<Punto, string> = dict.new();
+    dict.insert(d, Punto { x: 1, y: 2 }, "a");
+    dict.insert(d, Punto { x: 3, y: 4 }, "b");
+    match (dict.get(d, Punto { x: 1, y: 2 })) {
+        Option.Some(v) => print("get(1,2) = " + v),
+        Option.None => print("get(1,2) = <none>"),
+    }
+    // Reemplazo (last wins) y size.
+    dict.insert(d, Punto { x: 1, y: 2 }, "A");
+    match (dict.get(d, Punto { x: 1, y: 2 })) {
+        Option.Some(v) => print("tras reemplazo = " + v),
+        Option.None => print("<none>"),
+    }
+    print("size = " + to_string(dict.size(d)));
+    // remove devuelve el valor.
+    match (dict.remove(d, Punto { x: 3, y: 4 })) {
+        Option.Some(v) => print("removed = " + v),
+        Option.None => print("removed = <none>"),
+    }
+    print("has(3,4) = " + to_string(dict.has(d, Punto { x: 3, y: 4 })));
+    print("size = " + to_string(dict.size(d)));
+    // Crecimiento: 200 claves int (rehash x varias) + verificación total.
+    let n: dict.Dict<int, int> = dict.new();
+    var i = 0;
+    while (i < 200) {
+        dict.insert(n, i, i * i);
+        i = i + 1;
+    }
+    var ok = true;
+    i = 0;
+    while (i < 200) {
+        match (dict.get(n, i)) {
+            Option.Some(v) => { if (v != i * i) { ok = false; } },
+            Option.None => { ok = false; },
+        }
+        i = i + 1;
+    }
+    print("crecimiento 200 ok = " + to_string(ok) + ", size = " + to_string(dict.size(n)));
+    print("keys+values casan = " + to_string(dict.keys(n).len() == dict.values(n).len()));
+    0
+}
+"#;
+    let path = std::env::temp_dir().join("m82_dict.ray");
+    std::fs::write(&path, src).unwrap();
+    let (o_in, c_in) = run_file(path.to_str().unwrap(), false);
+    let (o_vm, c_vm) = run_file(path.to_str().unwrap(), true);
+    assert_eq!(c_in, 0, "intérprete sale 0
+{o_in}");
+    assert_eq!(c_vm, 0, "vm sale 0
+{o_vm}");
+    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+    let esperado = "get(1,2) = a
+tras reemplazo = A
+size = 2
+removed = b
+has(3,4) = false
+size = 1
+crecimiento 200 ok = true, size = 200
+keys+values casan = true
+";
+    assert_eq!(o_in, esperado, "salida esperada");
+}

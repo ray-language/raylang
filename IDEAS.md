@@ -1121,8 +1121,8 @@ Cierre de los diferidos de lenguaje acumulados, uno por hito, en orden de coste/
 |---|---|---|
 | **Literales float con exponente** (`1e21`, `1.5e-3`, `2E+10`; venía de §20). Lexer de Rust + lexer auto-alojado EN ESPEJO (oráculo byte-idéntico) + SPEC/DESIGN §3.4. Guarda conservadora: `e` solo con dígito (o signo+dígito) detrás. Bonus: 2 exclusiones pre-existentes que faltaban en el corpus del parser auto-alojado (log.ray bitops M70, redis.ray bytes M69) | lexer ×2 + docs normativos | ✅ **M80** |
 | **Regex II**: grupos de captura (`captures`/`captures_str`, `(?:)` no captura), `{n,m}` (expansión en el parser, tope 512), lazy (`*?` `+?` `??` `{n,m}?`). Motor subido de Thompson a **Pike VM** (hilos con ranuras + prioridad) → semántica **leftmost-first** (Perl); goldens previos intactos. DESIGN §84 | `examples/stdlib/regex` (librería pura) | ✅ **M81** |
-| **Claves de usuario en mapas** (trait `Hash`; venía de M13 "genérica vía Hash sigue diferida") | diseño a fijar (candidato: dict en raylang sobre `.hash()`, cero runtime) | **M82** |
-| **Bytes mutable** (venía de M16) | sigue **a demanda** (sin consumidor; alternativa barata: builder sobre `[int]`) | 💤 |
+| **Claves de usuario en mapas** (trait `Hash`; venía de M13). **Decisión (con el usuario): `std/collections/dict`** — `Dict<K: Hash+Eq, V>` en raylang puro (buckets+rehash, hermano del Set), cero runtime; el `Map` builtin queda para claves primitivas (rápido, `keys()` ordenadas). Regla práctica documentada en el módulo | `std/collections/dict` | ✅ **M82** |
+| **Bytes mutable** (venía de M16) | sigue **a demanda** (decidido con el usuario, jul 2026): sin consumidor real; la señal sería alguien construyendo bytes por concatenación en caliente → entonces un `BytesBuilder` en std/collections (como StringBuilder con el O(n²) de strings), NO mutar el modelo de valores | 💤 |
 
 ---
 

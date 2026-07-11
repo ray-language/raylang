@@ -1,0 +1,195 @@
+// std/collections/dict — mapa hash GENÉRICO (M82): claves de USUARIO vía `Hash` + `Eq`.
+//
+// Cierra el diferido de M13 ("Map genérico vía Hash"): el `Map<K,V>` builtin exige claves
+// primitivas (int/string/char/bool/bytes — hasheadas por el host, con `keys()` ordenadas);
+// `Dict<K,V>` acepta CUALQUIER `K` que implemente `Hash` y `Eq` (p. ej. un struct con
+// `@derive(Hash, Eq)`), a cambio de orden NO especificado y coste raylang (no opcodes).
+// Regla práctica: clave primitiva → `Map` builtin; clave compuesta/de usuario → `Dict`.
+//
+// Tabla hash bucketed EN raylang, hermana de `std/collections/set` (buckets paralelos de
+// entradas, rehash al doble cuando la carga media supera 2 por bucket → O(1) amortizado).
+// Con leaf-binding (`import std/collections/dict;`): `dict.new()`/`dict.insert(d, k, v)`/…
+
+/// One key/value entry of a `Dict`. Exposed so `items` can return the pairs.
+pub struct Entry<K, V> {
+    key: K,
+    val: V,
+}
+
+/// A hash map from `K` to `V`, backed by buckets. `K` must implement `Hash` and `Eq`
+/// (e.g. via `@derive(Hash, Eq)`); iteration order is unspecified. For primitive keys
+/// prefer the built-in `Map<K,V>` (faster, sorted `keys()`).
+pub struct Dict<K, V> {
+    buckets: [[Entry<K, V>]],
+    count: int,
+}
+
+/// Creates an empty dict. Key/value types are fixed by the expected type at the call site.
+pub fn new<K, V>() -> Dict<K, V> {
+    var bs: [[Entry<K, V>]] = [];
+    var i = 0;
+    while (i < 16) {
+        var e: [Entry<K, V>] = [];
+        bs.push(e);
+        i = i + 1;
+    }
+    Dict { buckets: bs, count: 0 }
+}
+
+// Índice de bucket de `k` (hash módulo nº de buckets, normalizado aunque el hash sea negativo).
+/// Internal helper: bucket index for `k` (hash modulo `n`, normalized to be non-negative).
+fn bucket<K: Hash>(k: K, n: int) -> int {
+    let h = k.hash();
+    (h % n + n) % n
+}
+
+// Rehace la tabla con el doble de buckets, redistribuyendo las entradas por su hash.
+/// Internal helper: doubles the bucket count and redistributes every entry by its key hash.
+fn grow<K: Hash, V>(d: Dict<K, V>) {
+    let n = d.buckets.len() * 2;
+    var bs: [[Entry<K, V>]] = [];
+    var i = 0;
+    while (i < n) {
+        var e: [Entry<K, V>] = [];
+        bs.push(e);
+        i = i + 1;
+    }
+    i = 0;
+    while (i < d.buckets.len()) {
+        let b = d.buckets[i];
+        var j = 0;
+        while (j < b.len()) {
+            let dest = bs[bucket(b[j].key, n)];
+            dest.push(b[j]);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    d.buckets = bs;
+}
+
+// Inserta (o REEMPLAZA) el valor de `k`. Muta `d`; crece si la carga media supera 2/bucket.
+/// Inserts `v` under `k`, replacing the previous value if the key was present.
+/// Mutates `d`. The table grows automatically to keep operations O(1) amortized.
+pub fn insert<K: Hash + Eq, V>(d: Dict<K, V>, k: K, v: V) {
+    if (d.count >= d.buckets.len() * 2) {
+        grow(d);
+    }
+    let idx = bucket(k, d.buckets.len());
+    let b = d.buckets[idx];
+    var i = 0;
+    while (i < b.len()) {
+        if (b[i].key.eq(k)) {
+            b[i].val = v;
+            return;
+        }
+        i = i + 1;
+    }
+    b.push(Entry { key: k, val: v });
+    d.count = d.count + 1;
+}
+
+// El valor de `k`, o None si no está.
+/// Returns the value under `k`, or `None` if the key is absent.
+pub fn get<K: Hash + Eq, V>(d: Dict<K, V>, k: K) -> Option<V> {
+    let b = d.buckets[bucket(k, d.buckets.len())];
+    var i = 0;
+    while (i < b.len()) {
+        if (b[i].key.eq(k)) {
+            return Option.Some(b[i].val);
+        }
+        i = i + 1;
+    }
+    Option.None
+}
+
+// ¿Contiene la clave `k`?
+/// Returns true if the dict contains the key `k`.
+pub fn has<K: Hash + Eq, V>(d: Dict<K, V>, k: K) -> bool {
+    match (get(d, k)) {
+        Option.Some(v) => true,
+        Option.None => false,
+    }
+}
+
+// Quita `k` (si estaba) y devuelve su valor. Muta `d` reconstruyendo el bucket.
+/// Removes the entry under `k` if present and returns its value. Mutates `d`.
+pub fn remove<K: Hash + Eq, V>(d: Dict<K, V>, k: K) -> Option<V> {
+    let idx = bucket(k, d.buckets.len());
+    let b = d.buckets[idx];
+    var out: [Entry<K, V>] = [];
+    var found: Option<V> = Option.None;
+    var i = 0;
+    while (i < b.len()) {
+        if (b[i].key.eq(k)) {
+            found = Option.Some(b[i].val);
+        } else {
+            out.push(b[i]);
+        }
+        i = i + 1;
+    }
+    match (found) {
+        Option.Some(v) => {
+            d.buckets[idx] = out;
+            d.count = d.count - 1;
+        },
+        Option.None => { },
+    }
+    found
+}
+
+// Número de entradas.
+/// Returns the number of entries in the dict.
+pub fn size<K, V>(d: Dict<K, V>) -> int { d.count }
+
+// Las claves, en orden NO especificado (por bucket) — a diferencia del Map builtin (ordenadas).
+/// Returns the keys as an array (order unspecified — by bucket), unlike the built-in
+/// `Map`, whose `keys()` are sorted.
+pub fn keys<K, V>(d: Dict<K, V>) -> [K] {
+    var out: [K] = [];
+    var i = 0;
+    while (i < d.buckets.len()) {
+        let b = d.buckets[i];
+        var j = 0;
+        while (j < b.len()) {
+            out.push(b[j].key);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Los valores, en el MISMO orden que `keys` (casan posición a posición).
+/// Returns the values as an array, in the same (unspecified) order as `keys`.
+pub fn values<K, V>(d: Dict<K, V>) -> [V] {
+    var out: [V] = [];
+    var i = 0;
+    while (i < d.buckets.len()) {
+        let b = d.buckets[i];
+        var j = 0;
+        while (j < b.len()) {
+            out.push(b[j].val);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// Las entradas (pares clave/valor), en el mismo orden que `keys`.
+/// Returns the entries (key/value pairs), in the same (unspecified) order as `keys`.
+pub fn items<K, V>(d: Dict<K, V>) -> [Entry<K, V>] {
+    var out: [Entry<K, V>] = [];
+    var i = 0;
+    while (i < d.buckets.len()) {
+        let b = d.buckets[i];
+        var j = 0;
+        while (j < b.len()) {
+            out.push(b[j]);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    out
+}

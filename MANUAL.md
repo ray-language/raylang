@@ -341,12 +341,13 @@ for (nombre, edad) in edades { print("${nombre}: ${edad}"); }
 edades.remove("luis");                 // -> Option<V>
 ```
 
-### `Set<T>`, `Deque<T>`, `StringBuilder`
+### `Set<T>`, `Dict<K,V>`, `Deque<T>`, `StringBuilder`
 
 En `std/collections` (se usan calificados por el leaf):
 
 ```rust
 import std/collections/set;
+import std/collections/dict;
 import std/collections/deque;
 import std/collections/stringbuilder;
 
@@ -354,6 +355,12 @@ fn main() -> int {
     var vistos: set.Set<int> = set.new();      // el tipo, calificado; T necesita Hash + Eq
     set.add(vistos, 7);
     print(set.has(vistos, 7));                 // true
+
+    // Dict<K,V> (M82): claves de USUARIO vía Hash + Eq (p. ej. @derive(Hash, Eq)).
+    // Para claves primitivas prefiere el Map<K,V> builtin (más rápido, keys() ordenadas).
+    var indice: dict.Dict<string, int> = dict.new();
+    dict.insert(indice, "ada", 1815);
+    print(dict.get(indice, "ada"));            // Some(1815)
 
     var cola: deque.Deque<int> = deque.new();
     deque.push_back(cola, 1);

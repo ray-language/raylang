@@ -26,6 +26,8 @@ const MODULES: &[(&str, &str)] = &[
     ("std/collections/set", include_str!("../std/collections/set.ray")),
     ("std/collections/deque", include_str!("../std/collections/deque.ray")),
     ("std/collections/stringbuilder", include_str!("../std/collections/stringbuilder.ray")),
+    // M82: mapa hash genérico (claves de usuario vía Hash+Eq; el Map builtin queda para primitivas).
+    ("std/collections/dict", include_str!("../std/collections/dict.ray")),
     ("std/math", include_str!("../std/math.ray")),
     ("std/random", include_str!("../std/random.ray")), // M49.2a
     ("std/time", include_str!("../std/time.ray")), // M49.2b

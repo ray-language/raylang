@@ -916,6 +916,20 @@ API pública conservada: `command(c, args: [string])` codifica a bytes por dentr
 
 ---
 
+## 30. Observabilidad: log + metrics (revisión jul 2026) — M70, PLAN
+
+Revisión en frío de `net/log` y `net/metrics` (detalle en DESIGN §74). Sano: log con orden
+de claves fijo y `render(e, ts)` determinista/testeable; metrics con labels ordenados,
+salida determinista, histograma cumulativo correcto y modelo lineal honestamente documentado.
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **log: `json_escape` no cubre controles < 0x20** (solo \n/\t/\r): un mensaje con BEL/ESC/\x00 emite **JSON inválido** (verificado con sonda) | El agregador rechaza justo las entradas interesantes (las de datos raros); clase M59.1 | **M70**: controles → `\uXXXX` (RFC 8259) |
+| metrics: el texto de `# HELP` no se escapa (`\\`/`\n` obligatorios en el formato de exposición) | Un help con salto de línea rompe el scrape entero | **M70** |
+| metrics: sin chequeo de tipo — `observe_l` sobre un counter / `inc` sobre un histograma crean una serie espuria que corrompe la exposición en silencio | Corrupción silenciosa (ya hay panic para no-registrada; mismo trato) | **M70** |
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

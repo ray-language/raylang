@@ -7886,3 +7886,17 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   si no). (b) longitudes RESP malformadas (`$basura`/`:abc`) = `Err` claro (antes `int_or`
   → 0 en silencio). (c) tope de bulk (64 MiB, como M64.2): `$<gigante>` = `Err`, no
   agotamiento. Espejos `packages/net/redis.ray` ↔ `examples/web/redis.ray` juntos.
+
+## 74. M70 — observabilidad de producción (log + metrics)
+
+> Revisión jul 2026 (tras M69; clasificación en IDEAS §30). Sano: render determinista y
+> testeable en ambos, labels escapados/ordenados, histograma cumulativo correcto. Tres
+> defectos: JSON inválido con controles, HELP sin escapar, tipo de métrica sin validar.
+
+- **M70 — de una pieza**: (a) el `json_escape` del log cubre **todo control < 0x20** →
+  `\uXXXX` (RFC 8259, clase M59.1; antes BEL/ESC/\x00 en el mensaje emitían JSON inválido,
+  verificado); además `\b`/`\f` con su escape corto. (b) metrics escapa el texto de
+  `# HELP` (`\\` y `\n`, como exige el formato de exposición). (c) `add`/`set`/`observe_l`
+  validan el TIPO de la métrica (counter/gauge/histogram) y panican con mensaje claro si no
+  cuadra — antes creaban una serie espuria que corrompía la exposición en silencio.
+  Espejos `packages/net` ↔ `examples/web` juntos.

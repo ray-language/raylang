@@ -7967,3 +7967,21 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   usa la crypto pedagógica `hmac`/`ed25519` + `from json`, pero la misma lógica de validación).
   Diferido (documentado, no defecto): `jwt_eddsa_sign` con seed de longitud errónea emite firma
   vacía (degradación honesta); `exp`/`nbf` = política de la aplicación sobre el JSON devuelto.
+
+## 79. M75 — SCRAM-SHA-256 de producción (RFC 5802/7677: escapado, nonce, tope de iteraciones)
+
+> Revisión jul 2026 (tras M74; clasificación en IDEAS §35). `net/scram`, el mecanismo de auth que
+> reusan `db/postgres`, `net/postgres` y `db/mongo`. Núcleo sano (bytes de punta a punta, PBKDF2
+> correcto, verify en tiempo constante). Cuatro huecos frente a la RFC.
+
+- **M75 — de una pieza COMPLETO**: (a) **escapado del nombre de usuario** (RFC 5802 §5.1) —
+  `escape_saslname` en `scram_first` (`=` → `=3D` primero, luego `,` → `=2C`; el orden evita
+  re-escapar el `=` que introduce `=2C`) cierra la inyección de atributos vía un usuario con
+  `,`/`=`. (b) **verificación del nonce del servidor** (RFC 5802 §5.1, MUST) — `scram_final` exige
+  que el `r=` del server-first empiece por el nonce del cliente (que vive en `client_first_bare`),
+  si no `Err` (replay/MITM). (c) **tope de iteraciones** — `1 <= i <= 10_000_000` (bomba de CPU si
+  el servidor manda un `i` enorme; no se impone el mínimo 4096 de la RFC para no romper el toy-server
+  a i=64). (d) **guarda de `server_sig` vacío** en `scram_verify` (sin ella, un `v=` vacío casaría a
+  longitud 0). Regresión rápida `scram_reject_demo` (todos los casos retornan antes del PBKDF2) por
+  ambos motores; el vector RFC 7677 (`scram_cli`, `#[ignore]`) sigue byte-idéntico. Espejos
+  `packages/net` ↔ `examples/web` juntos (el espejo usa la crypto pedagógica `hmac`/`sha256`).

@@ -999,6 +999,28 @@ firma vacía (degradación honesta, no puede fallar limpio sin cambiar el tipo d
 
 ---
 
+## 35. SCRAM-SHA-256 (revisión jul 2026) — M75, PLAN
+
+Revisión en frío de `net/scram` (el mecanismo de auth que reusan `db/postgres`, `net/postgres` y
+`db/mongo`). Bien pensado el núcleo: `bytes` de punta a punta, PBKDF2 correcto (INT(1) BE, U1 y
+XOR acumulado), `scram_verify` en tiempo constante (OR-acumulación + chequeo de longitud), orden
+correcto. Pero cuatro huecos frente a RFC 5802/7677:
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **El nombre de usuario NO se escapa** (`scram_first` concatena `"n=" + username` verbatim): RFC 5802 §5.1 exige `,` → `=2C` y `=` → `=3D`. Un usuario con `,`/`=` corrompe el mensaje o **inyecta atributos** (`r=`, `n=`) | Inyección en el protocolo (clase cookie M71) | **M75** |
+| **El nonce del servidor NO se verifica**: RFC 5802 §5.1 (MUST) exige que el `r=` del server-first EMPIECE por el nonce del cliente; `scram_final` lo extrae pero nunca lo comprueba → server-first no ligado a la sesión (replay/MITM) | Salta un MUST de la RFC (replay/MITM) | **M75** |
+| **El recuento de iteraciones no tiene tope**: `i` lo fija el servidor; un valor enorme haría girar PBKDF2 sin fin en el cliente | Bomba de CPU remota (clase M64.2) | **M75** |
+| **`scram_verify` acepta `server_sig` vacío**: si `scram_final` no corrió/falló, la firma esperada es `b""`; un servidor que mande `v=` (base64 vacío) casa con longitud 0 → `true` | Verificación falsa-positiva defensiva | **M75** |
+
+Fix: `escape_saslname` (=3D primero, luego =2C) en `scram_first`; verificar `rnonce.starts_with(
+client_nonce)` (el nonce del cliente vive en `client_first_bare`); acotar `1 <= i <= 10_000_000`
+(no se impone el mínimo 4096 de la RFC para no romper el toy-server a i=64); guarda de `server_sig`
+vacío. Regresión rápida (`scram_reject_demo`, retorna antes del PBKDF2) por ambos motores; el vector
+RFC 7677 (`#[ignore]`) sigue byte-idéntico. Espejos `packages/net` ↔ `examples/web` juntos.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

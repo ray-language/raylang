@@ -7900,3 +7900,19 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   validan el TIPO de la métrica (counter/gauge/histogram) y panican con mensaje claro si no
   cuadra — antes creaban una serie espuria que corrompía la exposición en silencio.
   Espejos `packages/net` ↔ `examples/web` juntos.
+
+## 75. M71 — cookies seguras (inyección de cabeceras + SameSite)
+
+> Revisión jul 2026 (tras M70; clasificación en IDEAS §31). oauth2 sano; sigv4 sólido (un bug
+> de firma menor por espacios, diferido). El defecto real: `net/cookie` era vulnerable a
+> **inyección de cabeceras** — un `\r\n` en el nombre o el Path partía la respuesta HTTP
+> (response splitting; verificado: `Set-Cookie: admin=true` inyectado).
+
+- **M71 — de una pieza**: (a) `set_cookie` rechaza (devuelve `Result`) o sanea los caracteres
+  de control (`\r`/`\n`) y separadores (`;`) en el **nombre** y el **Path** — el valor ya
+  estaba protegido (url-encode). Decisión con el usuario: **saneo silencioso** (quitar los
+  caracteres peligrosos) vs `Result` en la API — se elige el que rompa menos consumidores. (b)
+  `with_same_site(v)` (`"Strict"`/`"Lax"`/`"None"`, validado; `None` implica `Secure`) — el
+  atributo anti-CSRF de facto que faltaba junto a HttpOnly/Secure. (c) sigv4: fichado el
+  colapso de espacios internos en cabeceras canónicas (bug de firma, no seguridad) — se
+  arregla aquí si es barato, o queda en IDEAS §31. Espejos `packages/net` ↔ `examples/web`.

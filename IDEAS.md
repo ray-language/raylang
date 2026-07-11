@@ -930,6 +930,21 @@ salida determinista, histograma cumulativo correcto y modelo lineal honestamente
 
 ---
 
+## 31. Cookies seguras + sigv4 (revisión jul 2026) — M71, PLAN
+
+Revisión en frío de `net/cookie`, `net/sigv4`, `net/oauth2` (detalle en DESIGN §75). oauth2
+sano (errores como valores, state como responsabilidad del llamador, maneja el JSON de error
+de OAuth). sigv4 sólido en lo estructural.
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **cookie: `set_cookie` no valida nombre ni Path** → un `\r\n` inyecta cabeceras (HTTP response splitting; verificado con sonda: `Set-Cookie: admin=true` inyectado). El VALOR sí se url-codifica (protegido) | Vulnerabilidad de inyección si el nombre/path viene de datos externos | **M71** |
+| **cookie: falta `SameSite`** (Strict/Lax/None), el atributo anti-CSRF de facto (HttpOnly/Secure sí están) | Hueco de superficie de seguridad | **M71** |
+| sigv4: los valores de cabecera canónica no colapsan espacios internos (SigV4 exige secuencias→1; solo hace trim) → firma inválida con cabeceras de doble espacio | Bug de FIRMA (403 de AWS), no seguridad | **M71 (menor)** o diferir |
+| sigv4: el path no se URI-encodea (correcto S3, incorrecto el resto) | Corrección de firma no-S3 | DIFERIDO documentado |
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

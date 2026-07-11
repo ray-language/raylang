@@ -1,0 +1,241 @@
+// tools/registry_site.ray — el generador del SITIO del registro (M84), en raylang puro.
+//
+// Dogfooding: la UI web del índice de paquetes (IDEAS §41) es un sitio ESTÁTICO generado
+// desde los TOML del propio índice — sin servidor ni base de datos. Pensado para el CI
+// del repo del índice (regenerar en cada push y publicar en Pages; snippet en PUBLICAR.md).
+//
+//   ray run tools/registry_site.ray <dir-del-índice> <dir-de-salida>
+//
+// Genera `index.html` (lista + búsqueda client-side) y `p/<nombre>.html` (versiones con
+// insignias: retirada/firmada, el dueño si el nombre está reclamado). Salida DETERMINISTA
+// (nombres ordenados, cero relojes) → verificable por golden en ambos motores.
+
+import std/fs;
+import std/collections/stringbuilder;
+
+// Una versión publicada, tal como la lee el mini-parser del índice.
+struct Version {
+    num: string,
+    git: string,
+    hashed: bool,
+    yanked: bool,
+    signed: bool,
+}
+
+struct Package {
+    name: string,
+    versions: [Version],
+    owner: string,     // "" si el nombre no está reclamado
+    claimed: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Mini-parser del formato del índice (secciones [versión] + clave = "valor").
+// Es EL MISMO subconjunto que escribe `ray publish` (src/index.rs); un TOML general
+// (std/toml) trataría `[1.2.0]` como tablas anidadas por los puntos.
+// ---------------------------------------------------------------------------
+
+fn strip_comment(line: string) -> string {
+    match (line.index_of("#")) {
+        Option.Some(i) => line.substring(0, i).trim(),
+        Option.None => line.trim(),
+    }
+}
+
+fn unquote(v: string) -> string {
+    let t = v.trim();
+    if (t.len() >= 2 && t.starts_with("\"") && t.ends_with("\"")) {
+        return t.substring(1, t.len() - 1);
+    }
+    t
+}
+
+fn parse_package(name: string, source: string) -> Package {
+    var versions: [Version] = [];
+    var cur_open = false;
+    var num = "";
+    var git = "";
+    var hashed = false;
+    var yanked = false;
+    var signed = false;
+    let ls = source.split("\n");
+    var i = 0;
+    while (i <= ls.len()) {
+        var line = "";
+        if (i < ls.len()) {
+            line = strip_comment(ls[i]);
+        }
+        let is_header = line.starts_with("[") && line.ends_with("]");
+        if ((is_header || i == ls.len()) && cur_open) {
+            versions.push(Version { num: num, git: git, hashed: hashed, yanked: yanked, signed: signed });
+            cur_open = false;
+        }
+        if (is_header) {
+            num = line.substring(1, line.len() - 1).trim();
+            git = "";
+            hashed = false;
+            yanked = false;
+            signed = false;
+            cur_open = true;
+        } else if (line.len() > 0 && cur_open) {
+            match (line.index_of("=")) {
+                Option.Some(eq) => {
+                    let key = line.substring(0, eq).trim();
+                    let val = unquote(line.substring(eq + 1, line.len()));
+                    if (key == "git") { git = val; }
+                    if (key == "hash") { hashed = true; }
+                    if (key == "yanked") { yanked = val == "true"; }
+                    if (key == "sig") { signed = true; }
+                },
+                Option.None => { },
+            }
+        }
+        i = i + 1;
+    }
+    Package { name: name, versions: versions, owner: "", claimed: false }
+}
+
+// El `owner` del sidecar `<nombre>.owners.toml`, si existe.
+fn read_owner(index_dir: string, name: string) -> (bool, string) {
+    match (fs.read_file(index_dir + "/" + name + ".owners.toml")) {
+        Result.Ok(src) => {
+            var owner = "";
+            let ls = src.split("\n");
+            var i = 0;
+            while (i < ls.len()) {
+                let line = strip_comment(ls[i]);
+                if (line.starts_with("owner")) {
+                    match (line.index_of("=")) {
+                        Option.Some(eq) => { owner = unquote(line.substring(eq + 1, line.len())); },
+                        Option.None => { },
+                    }
+                }
+                i = i + 1;
+            }
+            // Gotcha §55: una tupla en cola tras un while-sentencia parsearía como llamada.
+            return (true, owner);
+        },
+        Result.Err(e) => (false, ""),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HTML (con StringBuilder; los nombres del índice son [A-Za-z0-9_-], sin escapar;
+// lo demás —owner, specs— se escapa).
+// ---------------------------------------------------------------------------
+
+fn esc(s: string) -> string {
+    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+}
+
+fn estilo() -> string {
+    "<style>body{font-family:system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem;color:#222}h1{font-size:1.4rem}a{color:#0b62a4;text-decoration:none}a:hover{text-decoration:underline}input{width:100%;padding:.5rem;font-size:1rem;margin:.5rem 0 1rem;border:1px solid #bbb;border-radius:4px}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.35rem .6rem;border-bottom:1px solid #e5e5e5}code{background:#f4f4f4;padding:.1rem .3rem;border-radius:3px}.badge{font-size:.75rem;padding:.1rem .4rem;border-radius:6px;margin-left:.4rem}.yanked{background:#fde5e5;color:#a02020}.signed{background:#e2f4e5;color:#1c6b2a}.muted{color:#777}</style>"
+}
+
+fn pagina_paquete(p: Package) -> string {
+    let sb = stringbuilder.new();
+    stringbuilder.push(sb, "<meta charset=\"utf-8\"><title>" + p.name + " — registro raylang</title>");
+    stringbuilder.push(sb, estilo());
+    stringbuilder.push(sb, "<p><a href=\"../index.html\">&larr; registro</a></p>");
+    stringbuilder.push(sb, "<h1><code>" + p.name + "</code></h1>");
+    if (p.claimed) {
+        var dueno = "reclamado";
+        if (p.owner.len() > 0) {
+            dueno = "dueño: " + esc(p.owner);
+        }
+        stringbuilder.push(sb, "<p class=\"muted\">" + dueno + " <span class=\"badge signed\">nombre reclamado</span></p>");
+    }
+    stringbuilder.push(sb, "<p>Instalar: <code>ray add " + p.name + "</code></p>");
+    stringbuilder.push(sb, "<table><tr><th>versión</th><th>origen</th><th></th></tr>");
+    // Del más nuevo (última entrada del archivo) al más viejo.
+    var i = p.versions.len() - 1;
+    while (i >= 0) {
+        let v = p.versions[i];
+        var badges = "";
+        if (v.yanked) {
+            badges = badges + "<span class=\"badge yanked\">retirada</span>";
+        }
+        if (v.signed) {
+            badges = badges + "<span class=\"badge signed\">firmada</span>";
+        }
+        stringbuilder.push(sb, "<tr><td><code>" + esc(v.num) + "</code></td><td><code>" + esc(v.git) + "</code></td><td>" + badges + "</td></tr>");
+        i = i - 1;
+    }
+    stringbuilder.push(sb, "</table>");
+    stringbuilder.build(sb)
+}
+
+fn portada(pkgs: [Package]) -> string {
+    let sb = stringbuilder.new();
+    stringbuilder.push(sb, "<meta charset=\"utf-8\"><title>registro de paquetes — raylang</title>");
+    stringbuilder.push(sb, estilo());
+    stringbuilder.push(sb, "<h1>registro de paquetes de raylang</h1>");
+    stringbuilder.push(sb, "<input id=\"q\" type=\"search\" placeholder=\"filtrar por nombre…\" oninput=\"f()\">");
+    stringbuilder.push(sb, "<table id=\"t\"><tr><th>paquete</th><th>última</th><th>versiones</th></tr>");
+    var i = 0;
+    while (i < pkgs.len()) {
+        let p = pkgs[i];
+        var ultima = "";
+        if (p.versions.len() > 0) {
+            ultima = p.versions[p.versions.len() - 1].num;
+        }
+        stringbuilder.push(sb, "<tr><td><a href=\"p/" + p.name + ".html\"><code>" + p.name + "</code></a></td><td><code>" + esc(ultima) + "</code></td><td>" + to_string(p.versions.len()) + "</td></tr>");
+        i = i + 1;
+    }
+    stringbuilder.push(sb, "</table>");
+    stringbuilder.push(sb, "<script>function f(){var q=document.getElementById('q').value.toLowerCase();var rs=document.querySelectorAll('#t tr');for(var i=1;i<rs.length;i++){var n=rs[i].querySelector('code').textContent;rs[i].style.display=n.indexOf(q)>=0?'':'none';}}</script>");
+    stringbuilder.build(sb)
+}
+
+// ---------------------------------------------------------------------------
+
+fn write_or_die(path: string, content: string) {
+    match (fs.write_file(path, content)) {
+        Result.Ok(n) => { },
+        Result.Err(e) => panic("no se pudo escribir '" + path + "': " + e),
+    }
+}
+
+fn main() -> int {
+    let argv = args();
+    if (argv.len() != 2) {
+        eprint("uso: ray run tools/registry_site.ray <dir-del-índice> <dir-de-salida>");
+        return 64;
+    }
+    let index_dir = argv[0];
+    let out_dir = argv[1];
+    let names = match (fs.list_dir(index_dir)) {
+        Result.Ok(ns) => ns,
+        Result.Err(e) => { eprint("no se pudo leer el índice: " + e); return 65; },
+    };
+    // list_dir ya viene ordenada (determinista) → la salida también lo es.
+    var pkgs: [Package] = [];
+    var i = 0;
+    while (i < names.len()) {
+        let n = names[i];
+        if (n.ends_with(".toml") && !n.ends_with(".owners.toml")) {
+            let name = n.substring(0, n.len() - 5);
+            match (fs.read_file(index_dir + "/" + n)) {
+                Result.Ok(src) => {
+                    var p = parse_package(name, src);
+                    let ow = read_owner(index_dir, name);
+                    p.claimed = ow.0;
+                    p.owner = ow.1;
+                    pkgs.push(p);
+                },
+                Result.Err(e) => { eprint("saltando '" + n + "': " + e); },
+            }
+        }
+        i = i + 1;
+    }
+    let _ = fs.mkdir(out_dir);
+    let _ = fs.mkdir(out_dir + "/p");
+    write_or_die(out_dir + "/index.html", portada(pkgs));
+    i = 0;
+    while (i < pkgs.len()) {
+        write_or_die(out_dir + "/p/" + pkgs[i].name + ".html", pagina_paquete(pkgs[i]));
+        i = i + 1;
+    }
+    print("sitio generado: " + to_string(pkgs.len()) + " paquetes en " + out_dir);
+    0
+}

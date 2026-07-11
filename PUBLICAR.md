@@ -54,6 +54,31 @@ export RAY_INDEX=/ruta/al/indice               # override (tests, CI)
 Un índice **remoto** se clona/cachea en `.ray-deps/.index` (lo refresca `ray update`).
 Crear el tuyo es `git init` + push: no hay más ceremonia.
 
+**La UI web del índice** (M84) también es estática y se genera desde los mismos TOML — en
+raylang, con el generador del repo del lenguaje:
+
+```sh
+ray run tools/registry_site.ray <dir-del-índice> <dir-de-salida>   # index.html + p/<nombre>.html
+```
+
+En el CI del repo del índice (GitHub Pages), junto a la auditoría de firmas:
+
+```yaml
+# .github/workflows/site.yml del repo del ÍNDICE
+on: { push: { branches: [main] } }
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    permissions: { pages: write, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - run: curl -sSfL https://raw.githubusercontent.com/roberto-ayala/raylang/main/install.sh | sh
+      - run: ~/.local/bin/ray index-verify .          # la auditoría de firmas (M83)
+      - run: ~/.local/bin/ray run tools/registry_site.ray . _site   # requiere el checkout del lenguaje o el script vendorizado
+      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/deploy-pages@v4
+```
+
 ## 3. `ray publish`, paso a paso
 
 ```sh

@@ -1177,6 +1177,27 @@ casos nuevos en el corpus del oráculo). Cero semántica: solo el mensaje.
 
 ---
 
+## 44. Microservicios nativos (distribuido-ready v1) — arco M88
+
+**Objetivo (fijado con el usuario, jul 2026)**: que raylang sirva DESDE EL PRIMER DÍA para
+microservicios y su comunicación, de forma nativa — **sin salirse del dominio del
+lenguaje**. Base ya existente: transporte completo no bloqueante, webserver endurecido
+(M56), gRPC/h2 cliente, DNS, protobuf/json, cripto, clientes de BD, log+metrics, actores
+M:N y el modo determinista (simulation testing gratis).
+
+**FUERA del arco a propósito** (dominios ajenos o a demanda): consenso/Raft (coordinación
+= usa los clientes de Redis/Postgres: SET NX+TTL, advisory locks — patrón a documentar),
+service discovery más allá de DNS, mTLS (diferido), orquestación, ntp/dist (§42).
+
+| Pieza | Diseño | Hito |
+|---|---|---|
+| **Señales del SO + apagado ordenado** — el hueco nº1 (hoy un servicio no puede drenar al recibir SIGTERM) y el ÚNICO toque de runtime del arco. `signals() -> Channel<int>` (builtin, solo VM como toda la concurrencia): un canal que recibe SIGTERM/SIGINT — compone NATIVO con `select` (drenar el canal de trabajo O apagar). Host: handler `extern "C"` (precedente poll.rs, cero deps) async-signal-safe con **self-pipe** (escribe el signo; el fd del pipe se registra en el poller → despierta el scheduler incluso con todo aparcado; el EINTR ya se maneja de M17); el scheduler drena el pipe y hace send al canal. Fibras aparcadas en el canal de señales NO cuentan como deadlock (esperan al exterior). GC: el canal es raíz como cualquier canal. Intérprete: error limpio (como spawn). + `webserver.serve` gana apagado ordenado (dejar de aceptar, drenar en vuelo con plazo) | **88.1** |
+| **Kit de resiliencia** `std/resilience` — retry con backoff exponencial + jitter (sobre sleep cooperativo + random), circuit breaker, helper de deadline por operación. Raylang puro, genérico sobre `fn() -> Result<T,E>` | **88.2** |
+| **Tracing distribuido** — propagación W3C `traceparent` (cliente http + webserver: Request gana el trace-id entrante o genera uno; el cliente lo propaga) + correlación en `net/log` (campo trace_id). Librería pura | **88.3** |
+| **RPC raylang↔raylang** `packages/rpc` — framing con prefijo de longitud sobre TCP (payload protobuf o json), una fibra por conexión, request/response con id + deadline; servidor `rpc.serve(puerto, handler)` y cliente `rpc.call`. La "comunicación nativa" entre servicios sin el peso de h2-servidor (interop externo entrante: HTTP/1.1+JSON del webserver, que ya está) | **88.4** |
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

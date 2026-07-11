@@ -154,3 +154,40 @@ fn dns_resuelve_todos_los_tipos_vm() {
     let port = toy_dns_server();
     assert_eq!(correr(&["--vm"], port), ESPERADO);
 }
+
+/// M72.1 — robustez: el parser procesa datos EXTERNOS, así que toda respuesta corrupta/truncada
+/// es `Err`, nunca un crash por índice fuera de rango ni un cuelgue por un puntero de compresión
+/// cíclico (ambos verificados antes del fix). Se corre un `.ray` que llama a `parse_full` con
+/// vectores maliciosos, por ambos motores; debe salir 0 tras manejarlos todos.
+#[test]
+fn parse_robusto_ante_respuestas_corruptas() {
+    let src = r#"
+from dns import parse_full;
+fn es_err(data: bytes) -> bool {
+    match (parse_full(data)) { Result.Ok(_) => false, Result.Err(_) => true }
+}
+fn main() -> int {
+    var ok = true;
+    // Respuesta que declara 1 answer pero se corta antes del RDATA.
+    if (!es_err(bytes_of([0,0, 129,128, 0,1, 0,1, 0,0, 0,0,  1,97,0, 0,1, 0,1]))) { ok = false; }
+    // Puntero de compresión que apunta a sí mismo (offset 12) → antes: bucle infinito.
+    if (!es_err(bytes_of([0,0, 129,128, 0,1, 0,1, 0,0, 0,0,  192,12, 0,1, 0,1, 0,0,0,60, 0,4, 1,2,3,4]))) { ok = false; }
+    // Más corta que la cabecera.
+    if (!es_err(b"")) { ok = false; }
+    // RDLENGTH gigante que rebasa el mensaje.
+    if (!es_err(bytes_of([0,0, 129,128, 0,0, 0,1, 0,0, 0,0,  192,12, 0,1, 0,1, 0,0,0,60, 255,255, 1,2]))) { ok = false; }
+    if (ok) { print("robusto"); 0 } else { print("FALLO"); 1 }
+}
+"#;
+    let path = format!("{}/examples/web/dns_robusto_tmp.ray", env!("CARGO_MANIFEST_DIR"));
+    std::fs::write(&path, src).unwrap();
+    for vm in [false, true] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
+        if vm { cmd.arg("--vm"); }
+        let out = cmd.arg(&path).output().expect("ejecuta dns_robusto");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "sale 0 (vm={vm})\n{stdout}{}", String::from_utf8_lossy(&out.stderr));
+        assert!(stdout.contains("robusto"), "todas corruptas = Err (vm={vm})\n{stdout}");
+    }
+    std::fs::remove_file(&path).ok();
+}

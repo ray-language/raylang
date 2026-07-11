@@ -1254,7 +1254,7 @@ limitado.
 | **A2 Opt.14** inlines calientes | `#[inline(always)]` en push/pop/get_local/set_local/put_arg + reserve de la pila | 3-8% | ❌ **DESCARTADA por medición** (A/B espalda-con-espalda: fib +1,4%, resto ruido — presión de registros en el run_loop gigante; el codegen ya elegía bien) |
 | **A5 Opt.15** constantes precomputadas | tabla `Vec<HeapValue>` en el Vm; `Constant` = clone directo | 1-3% | ❌ **DESCARTADA por medición** (A/B plano: el 3% del perfil era CONSTRUIR el HeapValue, que el clone paga igual; y añadía estado duplicado por worker) |
 | **A6 Opt.16** `s[i]` sin collect | `Index` string hacía `chars().collect::<Vec<_>>()` POR ACCESO (alloc O(n)); `nth(i)` la elimina | grande solo string-heavy | ✅ **HECHA** (micro-bench patrón lexer: 0,22 → 0,04 s, **5,5×**; banco general neutro; ambos motores) |
-| **A1 Opt.17** registerizar ip/marco-tope | cachear `(func, ip, chunk)` en locales del lazo; write-back solo en llamadas/saltos-de-fibra/errores | 10-20% | pendiente (tras el paquete barato) |
+| **A1 Opt.17** registerizar ip/marco-tope | cachear `(func, ip, chunk)` en locales del lazo; write-back solo en llamadas/saltos-de-fibra/errores | 10-20% | ❌ **DESCARTADA por medición, premisa refutada**. Implementada completa (whitelist rápida + protocolo legado para aparcados/TailCall; TODA la batería + self-hosting + metacircular verdes → la corrección no fue el problema). A/B: loop −3,3% pero fib **+6,5%**; experimento de atribución (reload por instrucción, sin whitelist): **+9-15% en todo el banco** → leer/escribir `frames[fi]` por instrucción es ~GRATIS en el M3 (store-forwarding+L1) y cualquier rama/reload añadido pierde. El ~20% de `run_worker` del perfil son las ramas fijas (stop/gc/fuel/bounds) + fontanería del outcome, NO las lecturas de marco |
 | **A3** PGO | profile-generate → banco → profile-use; reordena el match gigante | 5-15% | experimento de build |
 | **A4** superinstrucciones ronda 2 | `cmp+JumpIfFalse` → `JumpIfLess…`, `IncLocal`; elegir por HISTOGRAMA de opcodes dinámico, no intuición | 5-15% en bucles | pendiente |
 | **B1** locales en pila (clox) | híbrido: solo fn sin capturas (`captured` ya existe); marco = base en la pila de la fibra | 10-20% call-heavy | clasificada |
@@ -1265,6 +1265,6 @@ limitado.
 | **C2** JIT (cranelift; deps permitidas) | method-JIT numérico con deopt | 5-20× aritmética | 💤 NO recomendado: root-maps, fibras en código JIT, 2 backends × trazas/fuel/deterministic; el nicho es I/O-bound |
 | **C3** GC generacional | pausas YA resueltas (0.12 ms, heap-por-fibra); sweep O(slots) no asoma en perfil | — | 💤 sin síntoma |
 
-**Veredicto del paquete barato**: 1 de 3 sobrevive (Opt.16); las micro del preámbulo ya están exprimidas — lo que queda ahí es ESTRUCTURAL. **Secuencia**: → Opt.17
+**Veredicto del paquete barato**: 1 de 3 sobrevive (Opt.16); las micro del preámbulo ya están exprimidas — lo que queda ahí es ESTRUCTURAL. **Veredicto de Opt.17**: cierra DEFINITIVAMENTE el tier "cachear estado del marco" — en Apple Silicon esos accesos son gratis; la única palanca que reduce el impuesto por instrucción es ejecutar MENOS instrucciones (A4 superinstrucciones) o reordenar las ramas fijas (A3 PGO). **Secuencia**: → Opt.17
 (registerizar ip) → PGO → superinstrucciones con histograma → reevaluar B/C. Branch:
 `feature/opt-vm-ronda2`.

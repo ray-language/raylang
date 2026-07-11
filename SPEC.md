@@ -35,7 +35,10 @@ caracteres. **Ningún token cruza líneas.**
 - **Literales**:
   - *Entero*: dígitos decimales (`42`). Debe caber en `int` (i64); si no, error léxico. No hay
     literales hex/octales/binarios ni separador `_` (diferido).
-  - *Flotante*: `dígitos '.' dígitos` (`3.14`). Un `.` sin dígito decimal no es flotante.
+  - *Flotante*: `dígitos '.' dígitos` (`3.14`), con **exponente** opcional `e|E [+|-] dígitos`
+    (`1e21`, `1.5e-3`, `2E+10`); un exponente hace el literal flotante aunque no lleve punto.
+    Un `.` sin dígito decimal no es flotante; un `e` sin dígito (o sin dígito tras el signo) no
+    es exponente (`1eabc` = entero `1` + identificador).
   - *Cadena*: `"…"` con escapes `\n \t \r \\ \" \$`. No admite saltos de línea literales.
   - *Cadena interpolada*: cualquier cadena `"…${expr}…"`. `${expr}` contiene **una** expresión; el
     `$` solo es especial seguido de `{` (`"$5"`, `"{n}"` son literales; `\${` es un `${` literal).

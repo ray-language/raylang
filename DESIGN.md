@@ -102,7 +102,10 @@ Activadas después: `struct` (M3), `enum` y `match` (M5).
 
 ### 3.4 Literales
 - **Entero**: `[0-9]+` → `int` (entero con signo de 64 bits).
-- **Flotante**: `[0-9]+\.[0-9]+` → `float` (IEEE-754 de 64 bits).
+- **Flotante**: `[0-9]+\.[0-9]+` → `float` (IEEE-754 de 64 bits). **M80**: con **exponente**
+  opcional — `[0-9]+(\.[0-9]+)?[eE][+-]?[0-9]+` (`1e21`, `1.5e-3`, `2E+10`); un exponente hace
+  el literal `float` aunque no lleve punto. Guarda conservadora (espeja la del `.`): el `e`/`E`
+  solo se consume si le sigue dígito, o signo y dígito → `1eabc` sigue siendo `1` + ident `eabc`.
 - **Booleano**: `true` | `false` → `bool`.
 - **Cadena**: `"..."` con escapes `\n \t \\ \"` → `string`.
 

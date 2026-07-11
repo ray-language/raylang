@@ -772,7 +772,7 @@ librería pura, cero runtime.
 **Verificados sin hallazgo**: floats de json round-trip limpios (`42.0` → `"42"`, sin notación
 científica), surrogates `\uXXXX`, salida canónica (claves ordenadas); url ya endurecida en M56.2.
 **Bonus de lenguaje** (fuera del arco): el lexer NO soporta literales float con exponente (`1e21`
-es error de sintaxis) — anotar como idea aparte si algún consumidor lo pide.
+es error de sintaxis) → ✅ **RESUELTO en M80** (§40).
 
 ---
 
@@ -1110,6 +1110,19 @@ sobredimensionado, size-update > 4096 y bomba de varint = `Err`, no crash (`cli_
 `paquete_net_hpack_decode_malformado`); el round-trip legítimo y el e2e HTTP/2 siguen verdes.
 Espejos `packages/net` ↔ `examples/web` juntos. El Huffman de decodificación sigue diferido
 (rechazado con error claro, como antes).
+
+---
+
+## 40. Diferidos de lenguaje (jul 2026) — arco M80+
+
+Cierre de los diferidos de lenguaje acumulados, uno por hito, en orden de coste/beneficio:
+
+| Diferido | Alcance | Hito |
+|---|---|---|
+| **Literales float con exponente** (`1e21`, `1.5e-3`, `2E+10`; venía de §20). Lexer de Rust + lexer auto-alojado EN ESPEJO (oráculo byte-idéntico) + SPEC/DESIGN §3.4. Guarda conservadora: `e` solo con dígito (o signo+dígito) detrás | lexer ×2 + docs normativos | **M80** |
+| **Regex II**: grupos de captura, `{n,m}`, cuantificadores lazy (venía de M59.2). Exige subir el motor de Thompson a **Pike VM** (threads con slots de captura) | `std/regex` (librería pura) | **M81** |
+| **Claves de usuario en mapas** (trait `Hash`; venía de M13 "genérica vía Hash sigue diferida") | diseño a fijar (candidato: dict en raylang sobre `.hash()`, cero runtime) | **M82** |
+| **Bytes mutable** (venía de M16) | sigue **a demanda** (sin consumidor; alternativa barata: builder sobre `[int]`) | 💤 |
 
 ---
 

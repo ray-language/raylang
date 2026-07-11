@@ -1047,6 +1047,29 @@ de amenaza).
 
 ---
 
+## 37. Clientes de BD — MySQL + SQLite (revisión jul 2026) — M77, CIERRA el cluster db
+
+Cierra la revisión en frío de `packages/db` (tras M76). **`sqlite` es SANO**: no parsea binario no
+confiable (rusqlite lo hace en C, memory-safe y probado en batalla), parámetros enlazados aparte
+(anti-inyección), errores como valores; los únicos `p[i]` operan sobre el arreglo etiquetado del
+primitivo del HOST (confiable). Nada que arreglar. **`mysql`** era la excepción del cluster:
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **Lecturas OOB pervasivas ante paquetes malformados del servidor**: ~27 accesos `p[i]` sin chequeo de límites en ambas rutas de fila (texto COM_QUERY + binaria preparada), el handshake, `col_type_flags`, `int_le`, `dec_*`, y el bucle length-encoded de `bin_cell` (`while j < ln.0` con `ln.0` hasta 2^64) → un servidor malicioso/roto o un paquete truncado **tumban al cliente con un trap** ("índice fuera de rango"). El caso de 8 octetos de `lenc_int` además puede desbordar el i64 | DoS por servidor malicioso (trapea seguro, sin corrupción/RCE; acotado a 16 MB por el largo de paquete de 3 octetos) | **M77** |
+
+Fix (refactor de endurecimiento, elegido con el usuario): accesor `at(p, i) -> Result` con chequeo
+de límites; los ~10 helpers de parseo (`lenc_int`/`nul_str`/`int_le`/`int_cell`/`dec_date`/
+`dec_datetime`/`dec_time`/`col_type_flags`/`bin_cell`) pasan a `Result` y propagan con `?` por ambas
+rutas de fila + el handshake; `lenc_int` de 8 octetos se arma por mitades y rechaza longitudes
+absurdas (>= 2^32) → sin overflow ni OOB; `read_packet` rechaza un paquete de carga vacía (cierra los
+`p[0]` de golpe); `stmt_prepare` valida los 12 octetos fijos del OK. Regresión: una fila con un
+length-encoded truncado = `Err`, no crash (`mysql_cli`, rama TRUNC). El NULL binario ya se manejaba
+(bitmap) → no había bug vivo como el de Postgres. **Cluster db CERRADO** (M76 mongo/postgres + M77
+mysql/sqlite). Sin espejos (los paquetes `db` no son embebidos).
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

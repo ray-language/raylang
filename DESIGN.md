@@ -8008,4 +8008,25 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   - Sin espejos (los paquetes `db`/`net` no son embebidos ni tienen twin en `examples/`).
   - Diferido a **M77**: `mysql` (`lenc_int` sin chequeo de límites → OOB en paquete truncado + posible
     overflow del i64 en el caso de 8 octetos; sin bomba ilimitada, el largo de paquete son 3 octetos
-    ≤ 16 MB) y `sqlite` (fichero local → otro modelo de amenaza).
+    ≤ 16 MB) y `sqlite` (fichero local → otro modelo de amenaza). **[Hecho en M77.]**
+
+## 81. M77 — clientes de BD de producción (MySQL: endurecimiento del parseo; SQLite: sano)
+
+> Revisión jul 2026 (tras M76; clasificación en IDEAS §37). Cierra el cluster `packages/db`.
+> `sqlite` es sano (rusqlite parsea el formato en C; params enlazados; errores como valores → nada
+> que arreglar). `mysql` tenía lecturas OOB pervasivas ante paquetes malformados del servidor.
+
+- **M77 — refactor de endurecimiento COMPLETO** (mysql_cli 4, y el resto del cluster sin regresión):
+  el parseo de mysql pasa a ser **robusto ante datos del servidor no confiables**. Accesor
+  `at(p, i) -> Result` con chequeo de límites; los ~10 helpers de decodificación
+  (`lenc_int`/`nul_str`/`int_le`/`int_cell`/`dec_date`/`dec_datetime`/`dec_time`/`col_type_flags`/
+  `bin_cell`) devuelven `Result` y propagan con `?` por las DOS rutas de fila (texto COM_QUERY +
+  binaria preparada) y por el handshake. `lenc_int` de 8 octetos se arma por mitades (hi/lo) y
+  rechaza longitudes >= 2^32 → sin desbordar el i64 ni el OOB posterior. `read_packet` rechaza un
+  paquete de carga vacía (cierra de golpe los `p[0]` de todos los consumidores). `stmt_prepare`
+  valida los 12 octetos fijos del OK. Un paquete truncado/malformado ahora = `Err` como valor, no un
+  trap que tumbe al cliente. Verificado: una fila con un length-encoded truncado = `Err`
+  (`mysql_cli`, rama TRUNC). El NULL binario ya se manejaba (bitmap) → no había bug vivo (a
+  diferencia del NULL de Postgres, M76). Threat model: servidor malicioso; trapeaba seguro (sin
+  corrupción/RCE) y estaba acotado a 16 MB (largo de paquete de 3 octetos). **Cluster db CERRADO**
+  (M76 mongo/postgres + M77 mysql/sqlite). Sin espejos (los paquetes `db` no son embebidos).

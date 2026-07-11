@@ -694,3 +694,134 @@ fn ray_search_lista_el_indice() {
     assert_eq!(code, 0);
     assert!(out.contains("sin resultados"), "{out}");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M83b/c — dueños de nombre + firmas de publicación.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Como `ray_idx` pero con una clave de publicación (`RAY_KEY`) apuntada.
+fn ray_signed(cwd: &Path, index: &Path, key: &Path, args: &[&str]) -> (String, String, i32) {
+    let out = Command::new(BIN)
+        .args(args)
+        .current_dir(cwd)
+        .env("RAY_INDEX", index)
+        .env("RAY_KEY", key)
+        .output()
+        .expect("lanza el binario");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
+/// keygen → publish --sign: reclama el nombre (owners.toml + TOFU de la pubkey), firma la
+/// entrada, y un consumidor resuelve con la firma VERIFICADA. index-verify da OK.
+#[test]
+fn publish_firmado_reclama_verifica_y_audita() {
+    let base = tmp("sign");
+    let index = base.join("index");
+    std::fs::create_dir_all(&index).unwrap();
+    let key = base.join("publish.key");
+    let work = repo_con_origin(&base, "mate", "1.0.0", "pub fn seis() -> int { 6 }\n");
+
+    let (out, err, code) = ray_signed(&work, &index, &key, &["keygen"]);
+    assert_eq!(code, 0, "keygen OK\n{err}");
+    assert!(out.contains("pubkey: ed25519:"), "{out}");
+
+    let (out, err, code) = ray_signed(&work, &index, &key, &["publish", "--sign"]);
+    assert_eq!(code, 0, "publish --sign OK\n{err}");
+    assert!(out.contains("reclamado en el índice"), "primera publicación reclama\n{out}");
+    assert!(out.contains("firma: ed25519"), "{out}");
+    let entry = std::fs::read_to_string(index.join("mate.toml")).unwrap();
+    assert!(entry.contains("sig = \"ed25519:"), "la entrada lleva la firma\n{entry}");
+    let owners = std::fs::read_to_string(index.join("mate.owners.toml")).unwrap();
+    assert!(owners.contains("pubkey = \"ed25519:"), "el sidecar registra la pubkey\n{owners}");
+
+    // El consumidor resuelve (la verificación de firma pasa) y corre.
+    let app = app(&base, "from mate import seis;\nfn main() -> int { print(seis() * 7); 0 }\n");
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nmate = \"1.0.0\"\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray_idx(&app, &index, &["run"]);
+    assert_eq!(code, 0, "el consumidor corre con la firma verificada\n{err}");
+    assert!(out.contains("42"), "{out}");
+
+    // La auditoría del índice (para el CI del repo del índice) está verde.
+    let (out, err, code) = ray_idx(&app, &index, &["index-verify", index.to_str().unwrap()]);
+    assert_eq!(code, 0, "index-verify OK\n{err}");
+    assert!(out.contains("1 firmadas y verificadas"), "{out}");
+}
+
+/// Una firma MANIPULADA (o que no casa con el dueño) rompe la resolución y la auditoría.
+#[test]
+fn firma_manipulada_rompe_resolucion_y_auditoria() {
+    let base = tmp("signtamper");
+    let index = base.join("index");
+    std::fs::create_dir_all(&index).unwrap();
+    let key = base.join("publish.key");
+    let work = repo_con_origin(&base, "mate", "1.0.0", "pub fn v() -> int { 7 }\n");
+    ray_signed(&work, &index, &key, &["keygen"]);
+    let (_o, err, code) = ray_signed(&work, &index, &key, &["publish", "--sign"]);
+    assert_eq!(code, 0, "publish --sign OK\n{err}");
+
+    // Voltear la firma publicada (índice comprometido que avala otra cosa).
+    let path = index.join("mate.toml");
+    let entry = std::fs::read_to_string(&path).unwrap();
+    let tampered: String = entry
+        .lines()
+        .map(|l| {
+            if l.starts_with("sig = ") {
+                format!("sig = \"ed25519:{}\"", "ab".repeat(64))
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&path, tampered).unwrap();
+
+    let app = app(&base, "from mate import v;\nfn main() -> int { print(v()); 0 }\n");
+    std::fs::write(
+        app.join("ray.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nmate = \"1.0.0\"\n",
+    )
+    .unwrap();
+    let (_out, err, code) = ray_idx(&app, &index, &["run"]);
+    assert_ne!(code, 0, "la firma inválida debe romper la resolución");
+    assert!(err.contains("FIRMA") && err.contains("no verifica"), "{err}");
+
+    let (_out, err, code) = ray_idx(&app, &index, &["index-verify", index.to_str().unwrap()]);
+    assert_ne!(code, 0, "index-verify debe fallar\n{err}");
+    assert!(err.contains("FALLO"), "{err}");
+}
+
+/// El nombre reclamado PROTEGE: otra clave no puede publicar --sign sobre él.
+#[test]
+fn otra_clave_no_puede_publicar_un_nombre_reclamado() {
+    let base = tmp("signowner");
+    let index = base.join("index");
+    std::fs::create_dir_all(&index).unwrap();
+    let key1 = base.join("k1.key");
+    let key2 = base.join("k2.key");
+    let work = repo_con_origin(&base, "mate", "1.0.0", "pub fn v() -> int { 7 }\n");
+    ray_signed(&work, &index, &key1, &["keygen"]);
+    ray_signed(&work, &index, &key2, &["keygen", "--out", key2.to_str().unwrap()]);
+    let (_o, err, code) = ray_signed(&work, &index, &key1, &["publish", "--sign"]);
+    assert_eq!(code, 0, "el dueño publica\n{err}");
+
+    // v1.1.0 con OTRA clave → rechazado por el dueño registrado.
+    std::fs::write(
+        work.join("ray.toml"),
+        "[package]\nname = \"mate\"\nversion = \"1.1.0\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    git(&work, &["add", "-A"]);
+    git(&work, &["commit", "-m", "v1.1.0"]);
+    git(&work, &["tag", "v1.1.0"]);
+    let (_out, err, code) = ray_signed(&work, &index, &key2, &["publish", "--sign"]);
+    assert_ne!(code, 0, "otra clave no publica un nombre ajeno");
+    assert!(err.contains("tu clave NO coincide"), "{err}");
+}

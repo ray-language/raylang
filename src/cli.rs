@@ -52,6 +52,8 @@ fn run() {
         Some("remove") => cmd_remove(&rest[1..]),
         Some("search") => cmd_search(&rest[1..]),
         Some("publish") => cmd_publish(&rest[1..]),
+        Some("keygen") => cmd_keygen(&rest[1..]),
+        Some("index-verify") => cmd_index_verify(&rest[1..]),
         Some("update") => cmd_update(&rest[1..]),
         Some("yank") => cmd_yank(&rest[1..]),
         Some("fetch") => cmd_fetch(&rest[1..]),
@@ -83,7 +85,9 @@ Uso: ray <subcomando> [opciones]
   add <nombre>[@req]  añade una dependencia del índice a ray.toml y la descarga
   remove <nombre>   elimina una dependencia de ray.toml (y su caché si nadie más la usa)
   search [patrón]   lista los paquetes del índice (que contengan el patrón)
-  publish [--repo S]  publica la versión de este paquete en el índice
+  publish [--repo S] [--sign]  publica la versión de este paquete en el índice (--sign la firma)
+  keygen [--out F]  genera la clave Ed25519 de publicación (RAY_KEY o ~/.ray/publish.key)
+  index-verify [dir]  audita las firmas de un índice (para el CI del repo del índice)
   update            re-resuelve las dependencias del índice a las más nuevas compatibles
   yank <nom>@<ver>  retira (o --undo restaura) una versión publicada en el índice
   fetch             descarga las dependencias de ray.toml a .ray-deps/
@@ -401,6 +405,180 @@ fn cmd_search(args: &[String]) {
 /// `ray publish [--repo <git+URL@ref>]`: publica la versión de este paquete en el índice (M51b).
 /// Valida (name+version semver) y **añade** la entrada de versión al índice, de forma **inmutable**
 /// (no sobrescribe). La spec git de dónde vive el código: `--repo` si se da, o se deriva del remoto
+
+// ── M83b/c: claves de publicación, firma y auditoría del índice ─────────────────────
+
+/// La ruta del archivo de clave de publicación: `RAY_KEY` (tests/CI) o `~/.ray/publish.key`.
+fn key_path() -> PathBuf {
+    if let Ok(p) = env::var("RAY_KEY")
+        && !p.is_empty()
+    {
+        return PathBuf::from(p);
+    }
+    let home = env::var("HOME").unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join(".ray").join("publish.key")
+}
+
+fn hex_of(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Lee la SEED Ed25519 (32 octetos, hex) del archivo de clave.
+fn load_signing_seed() -> Result<Vec<u8>, String> {
+    let path = key_path();
+    let hex = fs::read_to_string(&path).map_err(|_| {
+        format!(
+            "no hay clave de publicación en '{}' (génerala con 'ray keygen', o apunta RAY_KEY)",
+            path.display()
+        )
+    })?;
+    let seed = crate::index::decode_ed25519(&format!("ed25519:{}", hex.trim()), "la clave")?;
+    if seed.len() != 32 {
+        return Err(format!("la clave de '{}' no tiene 32 octetos", path.display()));
+    }
+    Ok(seed)
+}
+
+/// `ray keygen [--out F]`: genera la clave Ed25519 de publicación (seed de 32 octetos del
+/// CSPRNG, en hex) y muestra la pública. Rechaza pisar una clave existente.
+fn cmd_keygen(args: &[String]) {
+    let out = match args.split_first() {
+        Some((flag, rest)) if flag == "--out" => match rest.first() {
+            Some(p) => PathBuf::from(p),
+            None => {
+                eprintln!("--out requiere una ruta");
+                process::exit(64);
+            }
+        },
+        Some((other, _)) => {
+            eprintln!("argumento no reconocido: '{other}' (uso: ray keygen [--out F])");
+            process::exit(64);
+        }
+        None => key_path(),
+    };
+    if out.exists() {
+        eprintln!("'{}' ya existe (no se pisa una clave; bórrala tú si de verdad quieres otra)", out.display());
+        process::exit(65);
+    }
+    let seed = crate::builtins::crypto_random_bytes(32);
+    if seed.len() != 32 {
+        eprintln!("no hay CSPRNG disponible en esta build");
+        process::exit(70);
+    }
+    let Some(pk) = crate::builtins::ed25519_public_key(&seed) else {
+        eprintln!("no se pudo derivar la clave pública");
+        process::exit(70);
+    };
+    if let Some(parent) = out.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        eprintln!("no se pudo crear '{}': {e}", parent.display());
+        process::exit(73);
+    }
+    if let Err(e) = fs::write(&out, format!("{}\n", hex_of(&seed))) {
+        eprintln!("no se pudo escribir '{}': {e}", out.display());
+        process::exit(73);
+    }
+    println!("clave de publicación generada en {}", out.display());
+    println!("  pubkey: ed25519:{}", hex_of(&pk));
+    println!("guárdala bien: es tu identidad de publicador (la pública se fija en el índice al publicar --sign).");
+}
+
+/// M83c: firma una publicación y reclama (o verifica) el DUEÑO del nombre en el índice.
+/// Primera publicación firmada → escribe `<nombre>.owners.toml` con nuestra pubkey (TOFU).
+/// Nombre ya reclamado → nuestra pubkey debe coincidir con la registrada.
+fn firmar_publicacion(index: &Path, name: &str, version: &str, hash: &str) -> Result<String, String> {
+    let seed = load_signing_seed()?;
+    let pk = crate::builtins::ed25519_public_key(&seed)
+        .ok_or_else(|| "no se pudo derivar la clave pública".to_string())?;
+    let my_pub = format!("ed25519:{}", hex_of(&pk));
+    match crate::index::read_owners(index, name)? {
+        Some(o) => {
+            if o.pubkey != my_pub {
+                return Err(format!(
+                    "'{name}' ya tiene dueño registrado en el índice y tu clave NO coincide \
+                     ('{}.owners.toml'); si el nombre es tuyo, firma con la clave original",
+                    name
+                ));
+            }
+        }
+        None => {
+            // Reclamación (TOFU): el handle informativo sale de git, si está configurado.
+            let owner = git_capture(Path::new("."), &["config", "user.name"]).unwrap_or_default();
+            crate::index::write_owners(
+                index,
+                name,
+                &crate::index::Owners { owner: owner.trim().to_string(), pubkey: my_pub },
+            )?;
+            println!("nombre '{name}' reclamado en el índice ('{name}.owners.toml') — commitéalo junto a la entrada");
+        }
+    }
+    let msg = crate::index::signing_message(name, version, hash);
+    let sig = crate::builtins::ed25519_sign(&seed, msg.as_bytes())
+        .ok_or_else(|| "no se pudo firmar (¿build sin ring?)".to_string())?;
+    Ok(format!("ed25519:{}", hex_of(&sig)))
+}
+
+/// `ray index-verify [dir]`: audita un índice completo — cada entrada firmada debe
+/// verificar contra el dueño registrado de su paquete. Pensado para el CI del repo del
+/// índice (la otra mitad del enforcement — que un PR solo toque paquetes de su autor —
+/// es del hosting: CODEOWNERS/branch protection). Sale 0 si todo verifica; 65 si no.
+fn cmd_index_verify(args: &[String]) {
+    let dir = match args.first() {
+        Some(d) => PathBuf::from(d),
+        None => match load_manifest().and_then(|m| crate::deps::index_dir(&m).ok().flatten()) {
+            Some(d) => d,
+            None => {
+                eprintln!("uso: ray index-verify <dir> (o corre en un proyecto con índice configurado)");
+                process::exit(64);
+            }
+        },
+    };
+    let Ok(entries) = fs::read_dir(&dir) else {
+        eprintln!("no se pudo leer el índice '{}'", dir.display());
+        process::exit(65);
+    };
+    let mut paquetes = 0usize;
+    let mut versiones = 0usize;
+    let mut firmadas = 0usize;
+    let mut problemas: Vec<String> = Vec::new();
+    let mut nombres: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter(|n| n.ends_with(".toml") && !n.ends_with(".owners.toml"))
+        .filter_map(|n| n.strip_suffix(".toml").map(str::to_string))
+        .collect();
+    nombres.sort();
+    for name in &nombres {
+        paquetes += 1;
+        match crate::index::read_package(&dir, name) {
+            Ok(entradas) => {
+                for e in &entradas {
+                    versiones += 1;
+                    if e.sig.is_some() {
+                        firmadas += 1;
+                    }
+                    if let Err(err) = crate::index::check_signature(&dir, name, e) {
+                        problemas.push(err);
+                    }
+                }
+            }
+            Err(e) => problemas.push(e),
+        }
+    }
+    if problemas.is_empty() {
+        println!(
+            "índice OK: {paquetes} paquetes, {versiones} versiones ({firmadas} firmadas y verificadas)"
+        );
+    } else {
+        for p in &problemas {
+            eprintln!("FALLO: {p}");
+        }
+        eprintln!("índice con {} problema(s)", problemas.len());
+        process::exit(65);
+    }
+}
+
 /// `origin` del repo + el tag `v<version>` (que debe existir). **M51d**: la validación (la cara del
 /// paquete existe, todos los `.ray` lexean+parsean) y el **hash de contenido** se calculan sobre un
 /// **clon limpio de la ref publicada** (el tag), NO sobre el working tree — lo que se avala en el
@@ -408,16 +586,25 @@ fn cmd_search(args: &[String]) {
 /// hash). El índice se localiza como en `ray add` (`RAY_INDEX`/`[registry] index`). No hace
 /// commit/push del índice —eso lo hace el autor.
 fn cmd_publish(args: &[String]) {
-    let repo_override = match args.split_first() {
-        Some((flag, rest)) if flag == "--repo" => match rest.first() {
-            Some(spec) => Some(spec.clone()),
-            None => {
-                eprintln!("--repo requiere una spec 'git+<URL>@<ref>'");
+    let mut repo_override: Option<String> = None;
+    let mut sign = false;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--repo" => match it.next() {
+                Some(spec) => repo_override = Some(spec.clone()),
+                None => {
+                    eprintln!("--repo requiere una spec 'git+<URL>@<ref>'");
+                    process::exit(64);
+                }
+            },
+            "--sign" => sign = true, // M83c
+            other => {
+                eprintln!("argumento no reconocido: '{other}' (uso: ray publish [--repo S] [--sign])");
                 process::exit(64);
             }
-        },
-        _ => None,
-    };
+        }
+    }
     let Some(m) = load_manifest() else {
         eprintln!("no hay proyecto: falta 'ray.toml' (crea uno con 'ray new')");
         process::exit(64);
@@ -467,11 +654,25 @@ fn cmd_publish(args: &[String]) {
             process::exit(65);
         }
     };
-    match crate::index::append_version(&index, &m.name, &m.version, &git_spec, Some(&hash)) {
+    // M83b/c: firmar la publicación y reclamar (o verificar) el dueño del nombre.
+    let mut sig: Option<String> = None;
+    if sign {
+        match firmar_publicacion(&index, &m.name, &m.version, &hash) {
+            Ok(sg) => sig = Some(sg),
+            Err(e) => {
+                eprintln!("{e}");
+                process::exit(65);
+            }
+        }
+    }
+    match crate::index::append_version(&index, &m.name, &m.version, &git_spec, Some(&hash), sig.as_deref()) {
         Ok(()) => {
             println!("publicado {} {} en el índice", m.name, m.version);
             println!("  git:  {git_spec}");
             println!("  hash: {hash}");
+            if sig.is_some() {
+                println!("  firma: ed25519 (dueño en '{}.owners.toml')", m.name);
+            }
             println!(
                 "nota: el índice es un repo git; haz commit y push de '{}.toml' para compartirlo.",
                 m.name

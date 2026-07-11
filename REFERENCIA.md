@@ -468,7 +468,9 @@ Fuera de contrato: funciones **variádicas** (`printf` — UB en arm64), structs
 | `ray search [patrón]` | lista paquetes del registro |
 | `ray fetch` | descarga las dependencias a `.ray-deps/` |
 | `ray update` | re-resuelve a las versiones más nuevas compatibles |
-| `ray publish [--repo <spec>]` | publica esta versión en el registro (valida + check semántico + hash) |
+| `ray publish [--repo <spec>] [--sign]` | publica esta versión en el registro (valida + check semántico + hash; `--sign` la firma Ed25519 y reclama/verifica el dueño del nombre) |
+| `ray keygen [--out F]` | genera la clave Ed25519 de publicación (`RAY_KEY` o `~/.ray/publish.key`) |
+| `ray index-verify [dir]` | audita las firmas de un índice contra sus dueños (CI del repo del índice) |
 | `ray yank <nom>@<ver> [--undo]` | retira/restaura una versión publicada |
 | `ray version` | versión |
 

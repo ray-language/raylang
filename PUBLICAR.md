@@ -112,10 +112,33 @@ herramienta para "esta versión tiene un bug/vulnerabilidad — no se la des a n
 - **Índice único por proyecto**: las transitivas por nombre se resuelven contra TU
   índice; si una dependencia declara un índice propio distinto, el CLI **avisa**
   (mitigación de *dependency confusion*).
-- **Límites honestos (hoy)**: el índice no tiene dueños de nombre ni firmas de autor —
-  quien puede escribir en el repo del índice puede publicar cualquier nombre. El diseño
-  para abrirlo a terceros (PR + `owners` + firmas Ed25519) está fijado en IDEAS §41
-  (M83b/M83c); hasta entonces, comparte índice solo con quien confíes.
+- **Dueños y firmas** (M83b/c): ver §6bis — con `--sign`, el nombre queda reclamado y
+  cada versión va firmada; un índice manipulado deja de resolver.
+
+## 6bis. Dueños de nombre y firmas (`--sign`)
+
+Para abrir un índice a varios publicadores:
+
+```sh
+ray keygen                        # una vez: genera tu clave Ed25519 (~/.ray/publish.key o RAY_KEY)
+ray publish --sign                # publica firmado
+```
+
+- **La primera publicación firmada RECLAMA el nombre**: se escribe el sidecar
+  `<nombre>.owners.toml` en el índice (tu handle de `git config user.name` + tu clave
+  pública, fijada por TOFU). Desde entonces, `--sign` con otra clave sobre ese nombre es
+  **error** — commitea el sidecar junto a la entrada.
+- **La firma** es Ed25519 sobre `nombre@versión:hash` y va en la entrada del índice
+  (`sig = "ed25519:…"`). El consumidor la **verifica al resolver**: una firma que no casa
+  con el dueño registrado corta la resolución en seco (protege incluso si el repo del
+  índice se compromete — el atacante puede cambiar URL y hash, pero no firmar por ti).
+  Una entrada sin firma de un paquete con dueño resuelve con **aviso** (transición).
+- **`ray index-verify <dir>`** audita el índice completo (cada firma verifica contra su
+  dueño): es el check de **CI del repo del índice**. La otra mitad del enforcement — que
+  un PR solo toque paquetes de su autor — es del hosting (CODEOWNERS/branch protection +
+  publicación por PR).
+- Guarda la clave: es tu identidad de publicador. No hay revocación v1 (perderla =
+  reclamar un nombre nuevo o editar el sidecar por PR con consenso del índice).
 
 ## 7. Receta mínima de punta a punta
 
@@ -126,12 +149,15 @@ echo 'pub fn shout(s: string) -> string { s.to_upper() + "!" }' > mod.ray
 git init -q && git add -A && git commit -qm "v0.1.0" && git tag v0.1.0
 git remote add origin git@github.com:user/textutils.git && git push -q --tags origin main
 
+# (opcional pero recomendado) tu clave de publicador
+ray keygen
+
 # El índice (una vez)
 git init -q ~/ray-index && (cd ~/ray-index && git commit -qm raiz --allow-empty)
 
 # Publicar
 export RAY_INDEX=~/ray-index
-ray publish
+ray publish --sign
 
 # Consumir (cualquier proyecto con el mismo índice)
 ray add textutils          # ray.toml: textutils = "0.1.0"; descarga y fija en el lock

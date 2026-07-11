@@ -1,0 +1,94 @@
+// packages/cron/local.ray — cron en HORA LOCAL (M86b), sobre packages/tz.
+//
+// Módulo SEPARADO de cron/cron a propósito: el cron UTC no arrastra la dependencia de
+// tz. El consumidor que quiera hora local declara AMBOS paquetes (cron y tz, hermanos
+// de path o del índice) e importa `cron/local`.
+//
+// Política DST (IDEAS §42, fijada en la clasificación):
+// - una hora civil que cae en el HUECO de primavera (no existe) dispara al TERMINAR el
+//   hueco — la primera hora local válida;
+// - una hora civil del SOLAPE de otoño (ocurre dos veces) dispara solo la PRIMERA vez.
+
+import cron/cron;
+import tz/tz;
+import std/time;
+
+// El siguiente disparo del schedule en la hora CIVIL de la zona, como instante UTC
+// (epoch-ms), estrictamente posterior a `ms`.
+/// The next fire time of the schedule evaluated in the zone's CIVIL local time, as a
+/// UTC instant (epoch-ms) strictly after `ms`. DST policy: a civil time falling in the
+/// spring-forward gap fires when the gap ends; one in the fall-back overlap fires only
+/// on its first occurrence.
+pub fn next_after_in(s: cron.Schedule, z: tz.Zone, ms: int) -> Result<int, string> {
+    // El cursor del matcher avanza en tiempo civil NAIVE de la zona.
+    var naive = ms + tz.offset_at(z, ms);
+    var guard = 0;
+    while (guard < 8) {
+        let cand = cron.next_after(s, naive)?;  // el matcher puro, sobre el civil local
+        let civil = time.from_epoch_millis(cand);
+        match (tz.to_utc(z, civil)) {
+            tz.LocalResult.Single(t) => {
+                if (t > ms) {
+                    return Result.Ok(t);
+                }
+            },
+            tz.LocalResult.Ambiguous(a, b) => {
+                // Solo la PRIMERA ocurrencia; si ya pasó, este disparo civil ya corrió
+                // (no se repite en la segunda) → seguir buscando el siguiente.
+                if (a > ms) {
+                    return Result.Ok(a);
+                }
+            },
+            tz.LocalResult.Gap => {
+                // La hora civil no existe: dispara al acabar el hueco (el primer minuto
+                // civil válido después; un hueco real dura minutos u horas, acotamos).
+                var c2 = cand + 60000;
+                var salto = 0;
+                while (salto < 240) {
+                    match (tz.to_utc(z, time.from_epoch_millis(c2))) {
+                        tz.LocalResult.Single(t2) => {
+                            if (t2 > ms) {
+                                return Result.Ok(t2);
+                            }
+                            salto = 240;  // válido pero pasado: fuera del hueco, aborta el escaneo
+                        },
+                        tz.LocalResult.Ambiguous(a2, b2) => {
+                            if (a2 > ms) {
+                                return Result.Ok(a2);
+                            }
+                            salto = 240;
+                        },
+                        tz.LocalResult.Gap => { },
+                    }
+                    c2 = c2 + 60000;
+                    salto = salto + 1;
+                }
+            },
+        }
+        naive = cand;
+        guard = guard + 1;
+    }
+    Result.Err("cron: no se encontró un disparo en hora local (¿expresión imposible?)")
+}
+
+// Corre `job` en cada disparo LOCAL de `s` en la zona `z`, para siempre (cede la fibra
+// entre disparos). Úsese dentro de un `spawn`.
+/// Runs `job` at every LOCAL fire time of the schedule in zone `z`, forever, sleeping
+/// cooperatively between fires — call it inside `spawn`.
+pub fn run_in(s: cron.Schedule, z: tz.Zone, job: fn()) {
+    var alive = true;
+    while (alive) {
+        match (next_after_in(s, z, time.now())) {
+            Result.Ok(t) => {
+                let delta = t - time.now();
+                if (delta > 0) {
+                    time.sleep(delta);
+                }
+                job();
+            },
+            Result.Err(e) => {
+                alive = false;
+            },
+        }
+    }
+}

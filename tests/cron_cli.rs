@@ -109,3 +109,90 @@ fn cron_next_after_ambos_motores() {
     assert_eq!(o_in, o_vm, "ambos motores coinciden");
     assert_eq!(o_in, ESPERADO, "salida esperada");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M86b — cron en HORA LOCAL (cron/local sobre packages/tz, fixture de Madrid).
+// Política DST: hueco de primavera → dispara al acabar el hueco; solape de otoño →
+// solo la primera ocurrencia.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn cron_local_dst_ambos_motores() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let (cron, tz) = (repo.join("packages/cron"), repo.join("packages/tz"));
+    let fixture = tz.join("fixtures/Europe_Madrid.tzif");
+    let base = std::env::temp_dir().join("ray_cron_local_cli");
+    let _ = std::fs::remove_dir_all(&base);
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(
+        app.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ncron = \"path:{}\"\ntz = \"path:{}\"\n",
+            cron.display(),
+            tz.display()
+        ),
+    )
+    .unwrap();
+    let main = format!(
+        r#"import cron/cron;
+import cron/local;
+import tz/tz;
+import std/time;
+
+fn secuencia(z: tz.Zone, expr: string, desde: int, n: int) {{
+    match (cron.parse(expr)) {{
+        Result.Ok(s) => {{
+            var t = desde;
+            var i = 0;
+            var line = expr + " →";
+            while (i < n) {{
+                match (local.next_after_in(s, z, t)) {{
+                    Result.Ok(next) => {{
+                        line = line + " " + time.to_iso8601(time.from_epoch_millis(next)) + "(" + tz.abbrev_at(z, next) + ")";
+                        t = next;
+                    }},
+                    Result.Err(e) => {{
+                        line = line + " ERR:" + e;
+                        i = n;
+                    }},
+                }}
+                i = i + 1;
+            }}
+            print(line);
+        }},
+        Result.Err(e) => print("parse ERR: " + e),
+    }}
+}}
+
+fn main() -> int {{
+    let mad = match (tz.load_file("{fixture}")) {{
+        Result.Ok(z) => z,
+        Result.Err(e) => {{ print("ERR " + e); return 1; }},
+    }};
+    // Día normal: 02:30 local CEST = 00:30 UTC.
+    secuencia(mad, "30 2 * * *", 1783684800000, 1);
+    // El HUECO de primavera (29-03-2026: 02:30 no existe) → dispara al acabar el hueco
+    // (03:00 CEST = 01:00 UTC); el día siguiente, normal (00:30 UTC).
+    secuencia(mad, "30 2 * * *", 1774699200000, 2);
+    // El SOLAPE de otoño (25-10-2026: 02:30 ocurre dos veces) → solo la PRIMERA
+    // (02:30 CEST = 00:30 UTC); el día siguiente ya en CET (01:30 UTC).
+    secuencia(mad, "30 2 * * *", 1792843200000, 2);
+    0
+}}
+"#,
+        fixture = fixture.display()
+    );
+    std::fs::write(app.join("src/main.ray"), main).unwrap();
+
+    let esperado = "30 2 * * * → 2026-07-11T00:30:00Z(CEST)\n\
+30 2 * * * → 2026-03-29T01:00:00Z(CEST) 2026-03-30T00:30:00Z(CEST)\n\
+30 2 * * * → 2026-10-25T00:30:00Z(CEST) 2026-10-26T01:30:00Z(CET)\n";
+
+    let (o_in, c_in) = correr(&app, &[]);
+    let (o_vm, c_vm) = correr(&app, &["--vm"]);
+    assert_eq!(c_in, 0, "intérprete sale 0\n{o_in}");
+    assert_eq!(c_vm, 0, "vm sale 0\n{o_vm}");
+    assert_eq!(o_in, o_vm, "ambos motores coinciden");
+    assert_eq!(o_in, esperado, "salida esperada");
+}

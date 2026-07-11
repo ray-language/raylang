@@ -18,5 +18,8 @@ spawn(fn() { cron.run(s, fn() { print("tick"); }); });   // runner cooperativo
   devuelve `Err` (búsqueda acotada a ~5 años).
 - El runner duerme cediendo la fibra (`time.sleep`, M57.2) → convive con el resto del
   programa bajo `spawn`.
-- **v1 solo UTC**: el cron en hora local necesita `packages/tz` y una política de
-  gap/solape del DST → M86b.
+- **Hora local (M86b)**: `import cron/local;` (+ `packages/tz` como dependencia hermana) —
+  `local.next_after_in(s, zona, ms)` / `local.run_in(s, zona, job)` evalúan el schedule en
+  la hora CIVIL de la zona. Política DST: una hora del **hueco** de primavera dispara al
+  acabar el hueco; una del **solape** de otoño dispara solo la PRIMERA vez. Módulo aparte
+  para que el cron UTC no arrastre la dependencia tz.

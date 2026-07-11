@@ -820,6 +820,43 @@ fn paquete_net_hpack_roundtrip() {
 }
 
 #[test]
+fn paquete_net_hpack_decode_malformado() {
+    // M78: HPACK decodifica bloques del PEER (no confiables). Un entero truncado, un string
+    // sobredimensionado, un size-update > 4096 y una bomba de varint deben dar Err como VALOR,
+    // no un trap que tumbe al cliente. El índice estático legítimo (0x82 = :method GET) sí decodifica.
+    let repo = env!("CARGO_MANIFEST_DIR");
+    let base = tmp("net_hpack_mal");
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    std::fs::write(
+        base.join("ray.toml"),
+        format!("[package]\nname = \"h2m\"\nversion = \"0.1.0\"\n\n[dependencies]\nnet = \"path:{repo}/packages/net\"\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        base.join("src/main.ray"),
+        "import net/hpack;\n\
+         fn probar(data: bytes) {\n\
+         \x20 let h = hpack.new_hpack();\n\
+         \x20 match (hpack.decode(h, data)) {\n\
+         \x20   Result.Ok(_) => { print(\"ok\"); }, Result.Err(_) => { print(\"err\"); },\n\
+         \x20 }\n\
+         }\n\
+         fn main() -> int {\n\
+         \x20 probar(bytes_of([255, 255]));                    // entero truncado\n\
+         \x20 probar(bytes_of([64, 10, 97, 98]));              // string sobredimensionado\n\
+         \x20 probar(bytes_of([63, 233, 38]));                 // size-update a 5000 (> 4096)\n\
+         \x20 probar(bytes_of([255, 255, 255, 255, 255, 255, 255, 255, 255, 255]));  // bomba de varint\n\
+         \x20 probar(bytes_of([130]));                          // legítimo: :method GET\n\
+         \x20 0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run"]);
+    assert_eq!(code, 0, "el cliente sobrevive a HPACK malformado (Err, sin crash)\n{err}");
+    assert_eq!(out, "err\nerr\nerr\nerr\nok\n", "4 rechazos + 1 decodificación válida\n{out}");
+}
+
+#[test]
 fn paquete_net_websocket_accept_key() {
     // M40.8d: transporte/servicios. websocket.accept_key es determinista (RFC 6455) y se apoya en
     // net/crypto (SHA-1 de producción vía ring, M43.5) + std/base64. Deps internas (dns → net/udp) validadas.

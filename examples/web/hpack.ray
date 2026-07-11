@@ -198,17 +198,31 @@ struct IntResult {
     next: int,
 }
 
-fn dec_int(data: bytes, pos: int, prefix_bits: int) -> IntResult {
+// Decodifica un entero con prefijo (RFC 7541 §5.1) sobre datos del PEER (no confiables): falla como
+// valor si el entero está truncado o es absurdamente grande, en vez de leer fuera de rango o
+// desbordar el i64 al desplazar (un bloque de octetos de continuación 0xFF llevaría `shift` a millones).
+fn dec_int(data: bytes, pos: int, prefix_bits: int) -> Result<IntResult, string> {
+    if (pos >= data.len()) {
+        return Result.Err("HPACK: entero truncado");
+    }
     let max = (1 << prefix_bits) - 1;
     let first = data[pos] & max;
     if (first < max) {
-        return IntResult { value: first, next: pos + 1 };
+        return Result.Ok(IntResult { value: first, next: pos + 1 });
     }
     var v = max;
     var shift = 0;
     var p = pos + 1;
     var seguir = true;
     while (seguir) {
+        if (p >= data.len()) {
+            return Result.Err("HPACK: entero truncado (continuación sin fin)");
+        }
+        // Más de ~5 octetos de continuación = entero fuera de cualquier uso legítimo (índice,
+        // longitud acotada por el bloque, tamaño de tabla ≤ 4096) → corta antes de desbordar.
+        if (shift > 28) {
+            return Result.Err("HPACK: entero demasiado grande");
+        }
         let b = data[p];
         p = p + 1;
         v = v + ((b & 127) << shift);
@@ -217,7 +231,7 @@ fn dec_int(data: bytes, pos: int, prefix_bits: int) -> IntResult {
             seguir = false;
         }
     }
-    IntResult { value: v, next: p }
+    Result.Ok(IntResult { value: v, next: p })
 }
 
 struct StrResult {
@@ -226,10 +240,17 @@ struct StrResult {
 }
 
 fn dec_str(data: bytes, pos: int) -> Result<StrResult, string> {
+    if (pos >= data.len()) {
+        return Result.Err("HPACK: literal de string truncado");
+    }
     let huff = data[pos] >> 7 & 1;
-    let lr = dec_int(data, pos, 7);
+    let lr = dec_int(data, pos, 7)?;
     if (huff == 1) {
         return Result.Err("HPACK: literal Huffman no soportado en la decodificación");
+    }
+    // La longitud viene del peer: validar el rango antes de `sub_bytes` (evita el OOB).
+    if (lr.value < 0 || lr.next + lr.value > data.len()) {
+        return Result.Err("HPACK: longitud de string fuera de rango");
     }
     match (from_utf8(data.sub_bytes(lr.next, lr.next + lr.value))) {
         Result.Ok(s) => Result.Ok(StrResult { value: s, next: lr.next + lr.value }),
@@ -258,7 +279,7 @@ pub fn decode(h: Hpack, data: bytes) -> Result<[HEntry], string> {
         let b = data[pos];
         if ((b & 128) != 0) {
             // Campo indexado.
-            let ir = dec_int(data, pos, 7);
+            let ir = dec_int(data, pos, 7)?;
             match (table_lookup(h, ir.value)) {
                 Result.Ok(e) => {
                     headers.push(e);
@@ -271,7 +292,7 @@ pub fn decode(h: Hpack, data: bytes) -> Result<[HEntry], string> {
         } else {
             if ((b & 64) != 0) {
                 // Literal con indexado incremental (prefijo de nombre 6 bits).
-                let ni = dec_int(data, pos, 6);
+                let ni = dec_int(data, pos, 6)?;
                 match (decode_name(h, data, ni)) {
                     Result.Err(er) => {
                         return Result.Err(er);
@@ -292,12 +313,18 @@ pub fn decode(h: Hpack, data: bytes) -> Result<[HEntry], string> {
             } else {
                 if ((b & 32) != 0) {
                     // Actualización del tamaño máximo de la tabla dinámica (prefijo 5 bits).
-                    let ir = dec_int(data, pos, 5);
+                    let ir = dec_int(data, pos, 5)?;
+                    // RFC 7541 §6.3: una actualización no puede exceder el tamaño que el decodificador
+                    // anunció por SETTINGS (por defecto 4096). Sin este tope, un peer sube el máximo y
+                    // la tabla dinámica crece sin evicción a lo largo de la conexión (bomba de memoria).
+                    if (ir.value > 4096) {
+                        return Result.Err("HPACK: actualización de tamaño de tabla excede el máximo (4096)");
+                    }
                     set_max_size(h, ir.value);
                     pos = ir.next;
                 } else {
                     // Literal sin indexado / nunca indexado (prefijo de nombre 4 bits), no toca la tabla.
-                    let ni = dec_int(data, pos, 4);
+                    let ni = dec_int(data, pos, 4)?;
                     match (decode_name(h, data, ni)) {
                         Result.Err(er) => {
                             return Result.Err(er);

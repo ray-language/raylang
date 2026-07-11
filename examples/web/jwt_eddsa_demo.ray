@@ -4,6 +4,7 @@
 // rechaza.
 from jwt_eddsa import jwt_eddsa_sign, jwt_eddsa_verify;
 from ed25519 import ed25519_public_key;
+from base64 import base64url;
 
 fn main() {
     // Seed del firmante (semilla 2 del RFC 8032 §7.1).
@@ -35,5 +36,14 @@ fn main() {
     match (jwt_eddsa_verify(pk, forjado)) {
         Result.Ok(c) => print("manipulado ACEPTADO"),
         Result.Err(e) => print("manipulado rechazado"),
+    }
+
+    // Confusión de algoritmo: header forjado con "alg":"none". La validación de `alg` lo rechaza
+    // (defensa en profundidad simétrica a la de HS256).
+    let hnone = base64url("{\"alg\":\"none\",\"typ\":\"JWT\"}".to_bytes());
+    let pnone = base64url(payload.to_bytes());
+    match (jwt_eddsa_verify(pk, hnone + "." + pnone + ".")) {
+        Result.Ok(c) => print("alg:none ACEPTADO"),
+        Result.Err(e) => print("alg:none rechazado"),
     }
 }

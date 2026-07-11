@@ -13,6 +13,7 @@ const ESPERADO: &[&str] = &[
     "ok: {\"sub\":\"ada\",\"admin\":true}",
     "clave equivocada rechazada",
     "manipulado rechazado",
+    "alg:none rechazado",
 ];
 
 fn correr(flags: &[&str]) -> (Vec<String>, bool) {

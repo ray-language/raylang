@@ -2,6 +2,7 @@
 // determinista (el JWT con un secreto fijo es reproducible; el UUID se prueba por su FORMA, no su valor).
 from jwt import jwt_sign, jwt_verify;
 from uuid import uuid_v4, is_uuid_v4, uuid_v7, uuid_v7_at, is_uuid_v7;
+from base64 import base64url;
 
 fn main() {
     let secreto = "super-secreto-de-pruebas".to_bytes();
@@ -34,6 +35,15 @@ fn main() {
     match (jwt_verify(secreto, "no.es")) {
         Result.Ok(_) => print("ERR"),
         Result.Err(_) => print("mal formado detectado"),
+    }
+
+    // Ataque clásico alg:none — header forjado con "alg":"none" y firma vacía. La validación de `alg`
+    // lo rechaza antes de comparar firma (defensa en profundidad frente a confusión de algoritmo).
+    let hnone = base64url("{\"alg\":\"none\",\"typ\":\"JWT\"}".to_bytes());
+    let pnone = base64url(claims.to_bytes());
+    match (jwt_verify(secreto, hnone + "." + pnone + ".")) {
+        Result.Ok(_) => print("ERR: alg:none aceptado"),
+        Result.Err(_) => print("alg:none rechazado"),
     }
 
     // UUID v4: dos generados son válidos por su forma y distintos entre sí.

@@ -13,6 +13,7 @@ const ESPERADO: &[&str] = &[
     "firma inválida",
     "tamper detectado",
     "mal formado detectado",
+    "alg:none rechazado", // M74: la validación de `alg` rechaza el ataque de confusión de algoritmo
     "true", // is_uuid_v4(u1) && is_uuid_v4(u2)
     "true", // u1 != u2
     // M57.3: UUID v7 (ordenable por tiempo)

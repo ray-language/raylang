@@ -7,6 +7,7 @@
 // se pasa y se devuelve como **string JSON** crudo: raylang es estáticamente tipado y las claims son
 // heterogéneas → dejar el JSON al usuario (que puede armarlo con la librería `json`) es lo idiomático.
 from std/base64 import base64url, base64url_decode;
+from std/json import parse, Json;
 import std/crypto;
 
 // El header canónico de HS256, ya codificado en base64url (constante).
@@ -47,6 +48,27 @@ fn const_eq(a: string, b: string) -> bool {
     diff == 0
 }
 
+// Extrae el algoritmo declarado en el header (`alg`), decodificando base64url → UTF-8 → JSON y
+// exigiendo que `alg` sea una cadena. Sirve para RECHAZAR tokens de otro algoritmo antes de dar por
+// buena la firma: aunque este verificador ya recomputa siempre con HS256 (un `alg:none` o un token
+// de otro algoritmo fallan la comparación), validar `alg` explícitamente es defensa en profundidad —
+// evita que el token cruce propósito y protege ante un refactor que leyera el `alg` del header.
+fn header_alg(header_b64u: string) -> Result<string, string> {
+    let raw = base64url_decode(header_b64u)?;
+    let txt = from_utf8(raw)?;
+    let j = parse(txt)?;
+    match (j) {
+        Json.JObject(m) => match (m.get("alg")) {
+            Option.Some(v) => match (v) {
+                Json.JStr(a) => Result.Ok(a),
+                _ => Result.Err("'alg' no es una cadena"),
+            },
+            Option.None => Result.Err("falta 'alg'"),
+        },
+        _ => Result.Err("el header no es un objeto JSON"),
+    }
+}
+
 // Verifica la firma de un JWT con el secreto. `Ok(payload_json)` si es válida, `Err(motivo)` si no
 // (formato incorrecto, firma que no cuadra, o payload no-UTF-8). NO comprueba `exp`/`nbf` (eso es
 // política de la aplicación, sobre el JSON ya devuelto — necesita la librería de tiempo, M20.5).
@@ -61,6 +83,17 @@ pub fn jwt_verify(secret: bytes, token: string) -> Result<string, string> {
     let h = parts[0];
     let p = parts[1];
     let firma = parts[2];
+    // Defensa en profundidad: el header debe declarar HS256 (rechaza alg:none / confusión de algoritmo).
+    match (header_alg(h)) {
+        Result.Ok(a) => {
+            if (a != "HS256") {
+                return Result.Err("algoritmo no soportado: se esperaba HS256, el token declara " + a);
+            }
+        },
+        Result.Err(e) => {
+            return Result.Err("header JWT inválido: " + e);
+        },
+    }
     let esperada = sign_input(secret, h + "." + p);
     if (!const_eq(firma, esperada)) {
         return Result.Err("firma inválida");

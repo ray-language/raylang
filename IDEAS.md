@@ -1164,6 +1164,19 @@ Análisis de los candidatos diferidos de M57 (§18). Base: `std/time` UTC (Hinna
 
 ---
 
+## 43. DX del checker: diagnóstico del gotcha §55 (jul 2026) — M87
+
+El punto de fricción de gramática MÁS recurrente (mordió 3 veces en una sola sesión
+escribiendo raylang nuevo, y es la clase de error del compromiso literal-vs-bloque): una
+cola que empieza con `(` o `[` tras un if/while/match-sentencia se parsea como LLAMADA /
+INDEXACIÓN de su valor, y el error genérico ("no se puede llamar un valor de tipo unit")
+despista. **M87** ✅: cuando el callee/indexado es una expresión de BLOQUE (if/match/
+while/bloque), el error lleva la pista ("…se parsea como llamada a su valor — sepárala
+con 'return' o 'let'"), **byte-idéntico en ambos checkers** (Rust + auto-alojado, con
+casos nuevos en el corpus del oráculo). Cero semántica: solo el mensaje.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

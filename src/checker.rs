@@ -1577,7 +1577,16 @@ impl Checker {
             Type::String => Ok(Type::Char),
             // M16.1a: indexar bytes da el octeto (0–255) como int.
             Type::Bytes => Ok(Type::Int),
-            other => Err(self.err(array.line, array.col, format!("no se puede indexar un {} (no es un arreglo, string ni bytes)", other))),
+            other => {
+                let mut msg = format!("no se puede indexar un {} (no es un arreglo, string ni bytes)", other);
+                if Self::block_like(array) {
+                    msg.push_str(
+                        "; ojo: una cola que empieza con '[' tras un if/while/match/bloque \
+                         se parsea como indexación de su valor — sepárala con 'return' o 'let'",
+                    );
+                }
+                Err(self.err(array.line, array.col, msg))
+            }
         }
     }
 
@@ -2992,7 +3001,7 @@ impl Checker {
                     if let Some(fty) = self.struct_field_type(sname, targs, name) {
                         // M10.2g: hover del campo-función invocado (un campo no tiene declaración de fn).
                         self.record_field_hover(object.line, object.col, name, &fty, None);
-                        return self.call_type(fty, args, line, col);
+                        return self.call_type(fty, args, false, line, col);
                     }
                 }
                 // M9.1: ¿es un método de trait del tipo concreto del receptor? Tiene
@@ -3032,7 +3041,7 @@ impl Checker {
             // { x })(3)` o `dame_fn()(3)`). (M4.1)
             _ => {
                 let ty = self.check_expr(callee)?;
-                self.call_type(ty, args, line, col)
+                self.call_type(ty, args, Self::block_like(callee), line, col)
             }
         }
     }
@@ -3245,7 +3254,7 @@ impl Checker {
         // (Tapa a una función global con el mismo nombre.)
         if let Some(v) = self.lookup(name) {
             let ty = v.ty.clone();
-            return self.call_type(ty, args, line, col);
+            return self.call_type(ty, args, false, line, col);
         }
 
         // Función de nivel superior: llamada directa.
@@ -3273,14 +3282,34 @@ impl Checker {
 
     /// Verifica una llamada cuyo *callee* es un valor (no un nombre directo): su
     /// tipo debe ser una función, y los argumentos deben encajar con su firma.
-    fn call_type(&mut self, ty: Type, args: &[Expr], line: usize, col: usize) -> Result<Type, TypeError> {
+    /// M87: `pista` = el callee es una expresión de BLOQUE (if/match/while/bloque) —
+    /// casi siempre el gotcha §55 (la cola con '(' tras una sentencia) → el error lo dice.
+    fn call_type(&mut self, ty: Type, args: &[Expr], pista: bool, line: usize, col: usize) -> Result<Type, TypeError> {
         match ty {
             Type::Fn(params, ret) => self.check_args(&params, *ret, args, "la función", line, col),
-            other => Err(self.err(line, col, format!(
-                "no se puede llamar un valor de tipo {} (no es una función)",
-                other
-            ))),
+            other => {
+                let mut msg = format!(
+                    "no se puede llamar un valor de tipo {} (no es una función)",
+                    other
+                );
+                if pista {
+                    msg.push_str(
+                        "; ojo: una cola que empieza con '(' tras un if/while/match/bloque \
+                         se parsea como llamada a su valor — sepárala con 'return' o 'let'",
+                    );
+                }
+                Err(self.err(line, col, msg))
+            }
         }
+    }
+
+    /// M87 (gotcha §55): ¿es una expresión "de bloque"? Una llamada/indexación cuyo
+    /// callee es una de estas es casi siempre la cola mal parseada tras una sentencia.
+    fn block_like(e: &Expr) -> bool {
+        matches!(
+            e.kind,
+            ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::While { .. } | ExprKind::Block(_)
+        )
     }
 
     /// Comprueba aridad y tipos de los argumentos contra una firma `(params -> ret)`

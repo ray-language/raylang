@@ -440,3 +440,21 @@ fn ejemplos_reales_validos() {
         assert_eq!(obtenido, esperado, "el checker auto-alojado difiere del oráculo en {rel}");
     }
 }
+
+/// M87 — el diagnóstico del gotcha §55, byte-idéntico entre checkers: una cola que
+/// empieza con `(`/`[` tras un if/while/match-sentencia se parsea como llamada/indexación
+/// de su valor; el error lo dice, con la pista de separarla con 'return' o 'let'.
+#[test]
+fn gotcha_55_lleva_pista() {
+    // Llamada: el "callee" es un while-expresión (unit).
+    comparar(
+        "fn main() { var i = 0; while (i < 3) { i = i + 1; } (2); }",
+        "sc_g55_call.ray",
+    );
+    // Llamada con un if-sentencia como callee.
+    comparar("fn main() { if (true) { print(1); } (2); }", "sc_g55_if.ray");
+    // Indexación: la cola `[0]` tras el if.
+    comparar("fn main() { if (true) { print(1); } [0]; }", "sc_g55_index.ray");
+    // Control: llamar un valor no-función SIN forma de bloque NO lleva la pista.
+    comparar("fn main() { let x = 3; x(1); }", "sc_g55_plain.ray");
+}

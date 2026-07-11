@@ -1355,7 +1355,7 @@ fn check_call(c: Checker, callee: Expr, cargs: [Expr], expected: Option<Type>, l
         EKind.EField(obj, name) => check_call_field(c, obj, name, cargs, expected, line, col),
         _ => {
             let ty = check_expr(c, callee)?;
-            call_type(c, ty, cargs, line, col)
+            call_type(c, ty, cargs, block_like(callee), line, col)
         },
     }
 }
@@ -1396,7 +1396,7 @@ fn check_call_field(c: Checker, obj: Expr, name: string, cargs: [Expr], expected
         Type.TNamed(sname, targs) => {
             match (struct_field_type(c, sname, targs, name)) {
                 Option.Some(fty) => {
-                    return call_type(c, fty, cargs, line, col);
+                    return call_type(c, fty, cargs, false, line, col);
                 },
                 Option.None => { },
             }
@@ -1828,7 +1828,7 @@ fn check_named_call(c: Checker, name: string, cargs: [Expr], line: int, col: int
     }
     match (lookup(c, name)) {
         Option.Some(v) => {
-            return call_type(c, v.ty, cargs, line, col);
+            return call_type(c, v.ty, cargs, false, line, col);
         },
         Option.None => { },
     }
@@ -2292,10 +2292,30 @@ fn check_values(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, 
     }
 }
 
-fn call_type(c: Checker, ty: Type, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
+// M87: `pista` = el callee es una expresión de BLOQUE (if/match/while/bloque) — casi
+// siempre el gotcha §55 (la cola con '(' tras una sentencia); el mensaje, byte-idéntico
+// al del checker de Rust.
+fn call_type(c: Checker, ty: Type, cargs: [Expr], pista: bool, line: int, col: int) -> Result<Type, TypeError> {
     match (ty) {
         Type.TFn(params, ret) => check_args(c, params, ret, cargs, "la función", line, col),
-        _ => Result.Err(terr(line, col, "no se puede llamar un valor de tipo " + type_str(ty) + " (no es una función)")),
+        _ => {
+            var msg = "no se puede llamar un valor de tipo " + type_str(ty) + " (no es una función)";
+            if (pista) {
+                msg = msg + "; ojo: una cola que empieza con '(' tras un if/while/match/bloque se parsea como llamada a su valor — sepárala con 'return' o 'let'";
+            }
+            Result.Err(terr(line, col, msg))
+        },
+    }
+}
+
+// M87 (gotcha §55): ¿es una expresión "de bloque"?
+fn block_like(e: Expr) -> bool {
+    match (e.kind) {
+        EKind.EIf(cnd, tb, eb) => true,
+        EKind.EMatch(sc, arms) => true,
+        EKind.EWhile(cnd, b) => true,
+        EKind.EBlock(b) => true,
+        _ => false,
     }
 }
 
@@ -2441,7 +2461,13 @@ fn check_index(c: Checker, array: Expr, index: Expr) -> Result<Type, TypeError> 
     match (at) {
         Type.TArray(elem) => Result.Ok(elem),
         Type.TString => Result.Ok(Type.TChar),
-        _ => Result.Err(terr(array.line, array.col, "no se puede indexar un " + type_str(at) + " (no es un arreglo, string ni bytes)")),
+        _ => {
+            var msg = "no se puede indexar un " + type_str(at) + " (no es un arreglo, string ni bytes)";
+            if (block_like(array)) {
+                msg = msg + "; ojo: una cola que empieza con '[' tras un if/while/match/bloque se parsea como indexación de su valor — sepárala con 'return' o 'let'";
+            }
+            Result.Err(terr(array.line, array.col, msg))
+        },
     }
 }
 

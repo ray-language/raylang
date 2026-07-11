@@ -1110,7 +1110,9 @@ Cosas que sorprenden viniendo de otros lenguajes:
   flojo que `==`/`!=`.
 - **Un literal en cola tras un `if`/`while` de sentencia se pega al postfijo.** `if (c) { return a; }`
   seguido de `[1, 2]` en posición de retorno se parsea como *indexación* del if (y una tupla, como
-  *llamada*). Solución: `return [1, 2];` explícito.
+  *llamada*). Solución: `return [1, 2];` explícito. Desde M87 **el checker te lo dice**: el error
+  ("no se puede llamar/indexar…") lleva la pista "…se parsea como llamada a su valor — sepárala
+  con 'return' o 'let'".
 - **Firmas explícitas siempre.** Los parámetros y el retorno de una función se anotan; no se infieren.
 - **Lo indeterminado pide contexto.** `[]`, `Option.None`, `Map.new()`, `Arbol.Hoja` (variante sin payload
   de un enum genérico) no pueden inferir su tipo solos → anótalo (`let t: Arbol<int> = …`) o dáselo el

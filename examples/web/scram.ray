@@ -53,9 +53,16 @@ fn pbkdf2_sha256(pw: bytes, salt: bytes, iterations: int) -> [int] {
     result
 }
 
+// RFC 5802 §5.1: en el nombre de usuario (`n=`), '=' se envía como '=3D' y ',' como '=2C'. Sin esto,
+// un usuario con ',' o '=' corrompería el mensaje SCRAM o inyectaría atributos (`r=`, `n=`, …). El
+// orden importa: escapar '=' ANTES que ',' (si no, el '=' que introduce '=2C' se re-escaparía).
+fn escape_saslname(s: string) -> string {
+    s.replace("=", "=3D").replace(",", "=2C")
+}
+
 // El `client-first-message` completo (a enviar): "n,,n=usuario,r=nonce". `nonce` lo genera el llamador.
 pub fn scram_first(username: string, nonce: string) -> Scram {
-    Scram { client_first_bare: "n=" + username + ",r=" + nonce, server_sig: [] }
+    Scram { client_first_bare: "n=" + escape_saslname(username) + ",r=" + nonce, server_sig: [] }
 }
 
 // El texto GS2+bare que se manda como client-first (con el header "n,,").
@@ -82,6 +89,13 @@ fn attr(msg: string, clave: string) -> string {
 // del servidor esperada para verificarla luego con `scram_verify`.
 pub fn scram_final(sc: Scram, password: string, server_first: string) -> Result<string, string> {
     let rnonce = attr(server_first, "r");  // nonce combinado
+    // RFC 5802 §5.1 (MUST): el nonce del servidor debe EXTENDER el del cliente (empezar por él); si no,
+    // el server-first no está ligado a esta sesión (replay / MITM). El nonce del cliente vive en el
+    // client-first-bare que guardamos.
+    let client_nonce = attr(sc.client_first_bare, "r");
+    if (client_nonce == "" || !rnonce.starts_with(client_nonce)) {
+        return Result.Err("el nonce del servidor no extiende el del cliente (posible replay/MITM)");
+    }
     let salt_b64 = attr(server_first, "s");
     let iter_str = attr(server_first, "i");
     let iterations = match (parse_int(iter_str)) {
@@ -90,6 +104,14 @@ pub fn scram_final(sc: Scram, password: string, server_first: string) -> Result<
             return Result.Err("iteraciones inválidas en server-first");
         },
     };
+    // El recuento de iteraciones lo fija el servidor; un valor enorme haría girar PBKDF2 sin fin en el
+    // cliente (bomba de CPU, clase M64.2). Se acota a un máximo generoso (RFC 7677 exige >= 4096).
+    if (iterations < 1) {
+        return Result.Err("iteraciones inválidas en server-first (debe ser >= 1)");
+    }
+    if (iterations > 10000000) {
+        return Result.Err("iteraciones excesivas del servidor (posible DoS): " + to_string(iterations));
+    }
     let salt = match (base64_decode(salt_b64)) {
         Result.Ok(s) => s,
         Result.Err(e) => {
@@ -114,6 +136,11 @@ pub fn scram_final(sc: Scram, password: string, server_first: string) -> Result<
 
 // Verifica el `server-final` ("v=<firma en base64>"): la firma debe coincidir con la esperada.
 pub fn scram_verify(sc: Scram, server_final: string) -> bool {
+    // Si `scram_final` no se ejecutó (o falló), la firma esperada está vacía: nada que verificar.
+    // Sin esta guarda, un servidor que mandara `v=` (base64 vacío) casaría con longitud 0 → `true`.
+    if (sc.server_sig.len() == 0) {
+        return false;
+    }
     let v = attr(server_final, "v");
     match (base64_decode(v)) {
         Result.Ok(sig) => {

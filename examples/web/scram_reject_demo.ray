@@ -1,0 +1,34 @@
+// Regresión de las salvaguardas de SCRAM añadidas en M75 (revisión en frío). Todos los casos
+// retornan ANTES del PBKDF2 (o no lo alcanzan), así que es rápido y va en la suite por defecto:
+//   - el nombre de usuario se escapa (RFC 5802 §5.1: ',' → =2C, '=' → =3D);
+//   - un server-first cuyo nonce no extiende el del cliente = Err;
+//   - un recuento de iteraciones absurdo = Err (bomba de CPU);
+//   - scram_verify sobre un Scram sin firma esperada (server_sig vacío) = false.
+from scram import scram_first, scram_client_first_message, scram_final, scram_verify, Scram;
+
+fn main() {
+    // Escapado del nombre de usuario.
+    let sc = scram_first("ad,a=x", "clientnonce");
+    print(scram_client_first_message(sc));  // n,,n=ad=2Ca=3Dx,r=clientnonce
+
+    // Nonce del servidor que NO extiende el del cliente → rechazo.
+    let sc2 = scram_first("user", "clientnonce");
+    match (scram_final(sc2, "pw", "r=otrononce,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096")) {
+        Result.Ok(_) => print("nonce ACEPTADO"),
+        Result.Err(_) => print("nonce rechazado"),
+    }
+
+    // Iteraciones absurdas → rechazo antes de PBKDF2 (bomba de CPU).
+    match (scram_final(sc2, "pw", "r=clientnonceX,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=999999999")) {
+        Result.Ok(_) => print("iter ACEPTADO"),
+        Result.Err(_) => print("iter rechazado"),
+    }
+
+    // scram_verify sin haber corrido scram_final (server_sig vacío) + v= vacío → false.
+    let sc3 = scram_first("user", "clientnonce");
+    if (scram_verify(sc3, "v=")) {
+        print("verify VULN");
+    } else {
+        print("verify rechazado");
+    }
+}

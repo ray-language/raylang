@@ -22,6 +22,40 @@ fn correr(flags: &[&str]) -> (Vec<String>, bool) {
     (lineas, out.status.success())
 }
 
+const RECHAZOS: &[&str] = &[
+    "n,,n=ad=2Ca=3Dx,r=clientnonce", // M75: el usuario se escapa (',' → =2C, '=' → =3D)
+    "nonce rechazado",              // el nonce del servidor debe extender el del cliente (RFC 5802 §5.1)
+    "iter rechazado",               // iteraciones absurdas = Err (bomba de CPU)
+    "verify rechazado",             // scram_verify con server_sig vacío = false
+];
+
+fn correr_reject(flags: &[&str]) -> (Vec<String>, bool) {
+    let demo = format!("{}/examples/web/scram_reject_demo.ray", env!("CARGO_MANIFEST_DIR"));
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(flags)
+        .arg(&demo)
+        .output()
+        .expect("ejecuta scram_reject_demo.ray");
+    let lineas = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
+    (lineas, out.status.success())
+}
+
+/// M75 — salvaguardas de la revisión en frío. Rápido (todos los casos retornan antes del PBKDF2), va
+/// en la suite por defecto por ambos motores.
+#[test]
+fn scram_rechazos_interprete() {
+    let (lineas, ok) = correr_reject(&[]);
+    assert!(ok, "scram_reject_demo falló en el intérprete");
+    assert_eq!(lineas, RECHAZOS);
+}
+
+#[test]
+fn scram_rechazos_vm() {
+    let (lineas, ok) = correr_reject(&["--vm"]);
+    assert!(ok, "scram_reject_demo falló en la VM");
+    assert_eq!(lineas, RECHAZOS);
+}
+
 /// Ambos van `#[ignore]`: este test valida SCRAM contra el vector del RFC 7677 con i=4096 (PBKDF2 lento,
 /// ~8–26 s por motor). La cobertura del CÓDIGO SCRAM en la suite por defecto la da `postgres_cli.rs`
 /// (e2e a i=64, rápido); la validación contra el RFC se corre a demanda con `-- --ignored`.

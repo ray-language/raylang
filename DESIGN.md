@@ -8051,3 +8051,54 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
     entero truncado, string sobredimensionado, size-update > 4096 y bomba de varint = `Err`, no
     crash; el round-trip y el e2e HTTP/2 siguen verdes. Espejos `packages/net` ↔ `examples/web`
     juntos. El Huffman de decodificación sigue diferido (rechazado con error claro).
+
+## 83. M79 — stack trace de errores de runtime (posición-del-llamador)
+
+> Jul 2026. Cierra el diferido de DX más transversal (IDEAS §21/§25, DESIGN §65): un `assert`
+> fallido reporta la posición DEL PRELUDE (579:9), no el sitio del usuario; el trap de
+> `factorial`/`ipow` apunta dentro de `std/math`. **Decisión (con el usuario): mini stack trace
+> general** (frente al intrinsic estilo `#[track_caller]`, que solo cubre funciones anotadas y un
+> nivel): cualquier `RuntimeError` lleva la cadena de llamadas, así el usuario ve su sitio en la
+> traza y sirve para todo debugging futuro.
+
+### §83.1 Diseño
+
+- **`RuntimeError.trace: Vec<TraceFrame>`** (`TraceFrame { name, line, col }` en `runtime.rs`).
+  Entrada 0 = el marco más interno (nombre de la función + **posición del error**, redundante con
+  la cabecera a propósito); entrada k = el k-ésimo llamador (nombre + posición de **su llamada en
+  vuelo**). El `Display` de `RuntimeError` **no cambia** (cabecera `error en ejecución en L:C: msg`)
+  → oráculos, runner de `@test`, REPL y tests de self-hosting intactos (comparan `.msg`/stdout).
+- **VM — coste cero en el camino caliente**: no se registra nada por llamada; la traza se
+  construye **solo al capturar el `Err`** en el bucle de `run` (los `frames` siguen intactos ahí,
+  el error no los desenrolla). Nombre = `program.functions[frame.function].name` (los anónimos ya
+  se llaman `<fn#id>`); posición del llamador = `chunk.lines[frame.ip - 1]` (el `ip` guardado ya
+  apunta tras el `Call` en vuelo). Se rellena solo si `trace.is_empty()`.
+- **Intérprete — pila explícita** (es el oráculo de desarrollo; el coste por llamada es
+  aceptable): `call_stack: Vec<TraceFrame>` con (nombre del llamado, posición del sitio de
+  llamada), mantenida por `call_body` (push tras la guardia de desbordamiento / pop al salir;
+  el trampolín TCO **renombra la cima** sin apilar — espeja el `TailCall` de la VM, que reutiliza
+  el marco). `call_function`/`call_index` ganan parámetros (nombre/posición); sitios: `main`
+  (`("main", 0:0)`), llamada nombrada, llamada indirecta (`Function`/`Closure` → nombre por
+  índice), el `next` del `for` sobre iterador. La traza se compone al romper con `Flow::Error`
+  en el `call_body` más interno (`trace.is_empty()` evita rellenos repetidos):
+  `trace[0] = (pila[n-1].name, e.line, e.col)`; `trace[k] = (pila[n-1-k].name, pila[n-k].pos)`.
+- **Equivalencia VM↔intérprete garantizada por oráculo**: test `stack_trace_oraculo` que compara
+  las trazas COMPLETAS (nombres + posiciones) de ambos motores sobre panic/assert/división por
+  cero anidados. (El overflow de recursión compara solo `.msg`, como hoy: la posición de la
+  entrada 0 difiere legítimamente — la VM señala el `Call`, el intérprete el cuerpo.)
+- **Presentación (solo `cli.rs`)**: tras el `diagnostic::render` de la cabecera, una línea por
+  marco — `  en <fn> (<módulo> L:C)` para la entrada 0, `  desde <fn> (<módulo> L:C)` para las
+  demás — localizada por bandas (loader L3). Posición **fuera de banda** (línea local mayor que
+  el fuente del módulo) = el prelude (único fuente inyectado sin banda) → se etiqueta `prelude`.
+  Se imprime solo con ≥ 2 marcos (con 1, la cabecera ya lo dice todo). **Truncado** con recursión
+  profunda: primeros 6 + `… (N marcos omitidos)` + últimos 5.
+- **Frontera de fibras (documentado, v1)**: la traza NO cruza `Task::Failed` (conserva solo el
+  mensaje, como hoy); el `join`/`ScopeEnd` que re-lanza aporta su propia posición. Diferido:
+  transportar la traza de la fibra hija.
+
+### §83.2 Qué NO cambia
+
+`Display` de `RuntimeError` · el formato del runner de `@test` (`e.msg` crudo) · el REPL ·
+exit code 70 · `tests/errors_cli.rs` (prefijo `error en ejecución en L:`) · los oráculos
+existentes (comparan `.msg`) · los tests de self-hosting (stdout+exit; no leen stderr) · el
+pipeline auto-alojado (sin traza: el oráculo conductual no la ve).

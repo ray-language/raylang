@@ -768,7 +768,7 @@ hallazgos son dos defectos verificados con el binario y ergonomía faltante.
 | **`Hash` DESBORDA y revienta**: `h = h*31 + c` con el `int` checked (trap, no wrapping) → `.hash()` de un string ≥ ~12 chars panica → **`Set<string>` inutilizable con claves reales**; el combinador de `@derive(Hash)` igual (un campo int grande revienta) | Bug que revienta en runtime | **61.1**: acumular con máscara de 32 bits (`& 4294967295`) en el impl del prelude Y en `generate_derives` |
 | **`sort` es insertion sort O(n²)**: 20k ints = **23 s** (medido, release) | El json-O(n²) de M59.5 pero en sort | **61.2**: merge sort en raylang puro (estable; `std/sort.merge` ya existe), midiendo |
 | **Option/Result sin ergonomía**: no hay `unwrap_or`/`is_some`/`is_none`/`expect`/`ok_or` — todo es `match` (los packages están llenos de `match … Some(x) => x`); `bytes` sin `Eq`/`Show` (`assert_eq` sobre bytes no tipa, aunque `==` ya funciona); `[T]` sin `Eq` | La mejora de ergonomía más rentable pendiente | **61.3** (funciones libres genéricas + impls de una línea) |
-| **DX de assert**: un `assert` fallido reporta la posición DEL PRELUDE (579:9), no el sitio del usuario — con varios asserts no sabes cuál falló | Inherente a "prelude = funciones ordinarias"; el fix real es posición-del-llamador o mini stack trace (toca runtime) | **idea aparte** (diseño de runtime; no entra en M61) |
+| **DX de assert**: un `assert` fallido reporta la posición DEL PRELUDE (579:9), no el sitio del usuario — con varios asserts no sabes cuál falló | Inherente a "prelude = funciones ordinarias"; el fix real es posición-del-llamador o mini stack trace (toca runtime) | **idea aparte** (diseño de runtime; no entra en M61) → **M79** (stack trace, §39) |
 | Menores: `sum` solo `Iter<int>` (sin float); `Ord` para `bool`/`bytes` ausente | — | dentro de 61.3 o diferido |
 
 **Verificados sin hallazgo**: envoltorios de I/O/Map correctos; `try_join` sin carrera; iteradores
@@ -847,7 +847,7 @@ Revisión en frío (detalle en DESIGN §69). Lo verificado sano: dominios float 
 | `clamp` solo-int (min/max ya genéricas `Ord`) | Asimetría menor | **65.3**: `clamp<T: Ord>` (retrocompatible) + docs de frontera (`factorial(≥21)`/`ipow` desbordante = trap del int checked) |
 
 Aparte (ya fichado en §21): la posición del trap de `factorial`/`ipow` apunta dentro de
-std/math, no al llamador — diferido general de posición-del-llamador.
+std/math, no al llamador — diferido general de posición-del-llamador → **M79** (stack trace, §39).
 
 ---
 
@@ -1102,3 +1102,20 @@ Espejos `packages/net` ↔ `examples/web` juntos. El Huffman de decodificación 
   impacto, no directamente al diseño.
 - Antes de cada hito grande (sobre todo **M2**), revisar este archivo: puede que
   alguna decisión "tardía" deba adelantarse por una restricción de arquitectura.
+
+---
+
+## 39. Posición-del-llamador — stack trace de runtime (jul 2026) — M79
+
+El diferido de DX más transversal ([[§21]]/[[§25]]): `assert` fallido reporta la posición del
+prelude; el trap de `factorial`/`ipow` apunta dentro de `std/math`. **Decisión (con el usuario):
+mini stack trace general** en `RuntimeError` (no el intrinsic `@track_caller`, que solo cubre
+funciones anotadas y un nivel). Diseño completo en DESIGN §83.
+
+| Pieza | Coste | Sub-fase |
+|---|---|---|
+| `RuntimeError.trace` + captura en ambos motores (VM: al capturar el Err, frames intactos, coste cero en caliente; intérprete: pila explícita en `call_body`, TCO renombra la cima) + oráculo de trazas | Runtime acotado; `Display` NO cambia (oráculos/runner/selfhost intactos) | **79a** |
+| Presentación en `cli.rs`: `en <fn> (<módulo> L:C)` / `desde …`, localización por bandas, fuera-de-banda = prelude, truncado 6+…+5, solo con ≥2 marcos | Solo cliente | **79b** |
+
+Diferido: transportar la traza a través de `Task::Failed` (hoy solo cruza el mensaje); nombres
+"bonitos" para métodos manglados (`Tipo#metodo` se muestra tal cual, honesto).

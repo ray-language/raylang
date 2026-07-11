@@ -12,11 +12,20 @@ from std/protobuf import grpc_frame, grpc_unframe;
 import std/net;
 
 // La respuesta de una llamada gRPC: el mensaje (bytes protobuf) y el `grpc-status` (0 = OK).
-/// The response of a unary gRPC call: the serialized protobuf response message
-/// and the `grpc-status` code from the trailers (0 = OK).
 pub struct GrpcResponse {
     message: bytes,
     grpc_status: int,
+}
+
+// M73: topes anti-bomba. Un servidor malicioso/roto podría enviar frames DATA indefinidos (body
+// crece sin cota) o declarar un frame gigante (hasta 16 MB en 24 bits) → agotamiento de memoria.
+// El de respuesta es generoso (64 MiB, como M64.2); el de frame acota lo que se espera acumular.
+fn max_response() -> int {
+    67108864
+}
+
+fn max_frame() -> int {
+    1048576  // 1 MiB por frame — muy por encima del max-frame por defecto de HTTP/2 (16 KiB)
 }
 
 // Extrae un header (por nombre) de una lista decodificada; "" si no está.
@@ -34,9 +43,6 @@ fn find_header(hs: [HEntry], name: string) -> string {
 
 // Hace una llamada gRPC unaria a `host:port` con la ruta `/paquete.Servicio/Metodo` y el `mensaje`
 // protobuf ya serializado. Devuelve el mensaje de respuesta + el grpc-status.
-/// Performs a unary gRPC call to `host:port` (TLS + ALPN `h2`, blocking I/O): POSTs the
-/// gRPC-framed `mensaje` to `path` ("/package.Service/Method") and reads until END_STREAM.
-/// Err on connect/I-O/HPACK errors, GOAWAY, a non-200 `:status`, or a malformed gRPC frame.
 pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Result<GrpcResponse, string> {
     let h = match (net.tls_connect_h2(host, port)) {
         Result.Ok(x) => x,
@@ -79,6 +85,11 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                 close(h);
                 return Result.Err(e);
             },
+        }
+        // M73: un frame que declara más que el tope se rechaza ANTES de acumular sus octetos.
+        if (frame_size(buf) > max_frame()) {
+            close(h);
+            return Result.Err("frame HTTP/2 excede el límite (" + to_string(frame_size(buf)) + " octetos)");
         }
         while (frame_size(buf) > 0 && buf.len() >= frame_size(buf)) {
             let fsz = frame_size(buf);
@@ -130,6 +141,11 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                             },
                         }
                     } else if (fr.ftype == ft_data()) {
+                        // M73: tope de respuesta acumulada (anti-bomba de memoria).
+                        if (body.len() + fr.payload.len() > max_response()) {
+                            close(h);
+                            return Result.Err("respuesta gRPC excede el límite (posible bomba de memoria)");
+                        }
                         body = body + fr.payload;
                         // M58.3 — flow control: devolver la ventana consumida (conexión + stream).
                         // Best effort: si el peer ya envió todo y cerró, el crédito es irrelevante
@@ -174,6 +190,12 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
 
     if (status != 200) {
         return Result.Err("HTTP/2 status " + to_string(status));
+    }
+    // M73: un servidor gRPC SIEMPRE cierra con `grpc-status` en los trailers. Su ausencia
+    // (protocolo violado, trailers truncados) era indistinguible de un OK (`tuvo_grpc_status`
+    // se computaba pero no se leía) → ahora es un error explícito.
+    if (!tuvo_grpc_status) {
+        return Result.Err("respuesta gRPC sin grpc-status en los trailers");
     }
     // Desenmarca el mensaje gRPC de la respuesta.
     match (grpc_unframe(body)) {

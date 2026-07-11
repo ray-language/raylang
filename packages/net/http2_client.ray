@@ -16,6 +16,16 @@ pub struct Http2Response {
     body: bytes,
 }
 
+// M73: topes anti-bomba (como grpc_client). Un servidor malicioso/roto podría enviar frames DATA
+// indefinidos o declarar un frame gigante (24 bits ⇒ hasta 16 MB) → agotamiento de memoria.
+fn max_response() -> int {
+    67108864  // 64 MiB de cuerpo acumulado
+}
+
+fn max_frame() -> int {
+    1048576  // 1 MiB por frame (>> el max-frame por defecto de HTTP/2, 16 KiB)
+}
+
 // Busca el pseudo-header `:status` en una lista de cabeceras decodificadas.
 fn extract_status(hs: [HEntry]) -> int {
     var st = 0;
@@ -81,6 +91,11 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
                 return Result.Err(e);
             },
         }
+        // M73: un frame que declara más que el tope se rechaza antes de acumular sus octetos.
+        if (frame_size(buf) > max_frame()) {
+            close(h);
+            return Result.Err("frame HTTP/2 excede el límite (" + to_string(frame_size(buf)) + " octetos)");
+        }
         while (frame_size(buf) > 0 && buf.len() >= frame_size(buf)) {
             let fsz = frame_size(buf);
             let fbytes = buf.sub_bytes(0, fsz);
@@ -109,6 +124,11 @@ pub fn http2_get(host: string, port: int, path: string) -> Result<Http2Response,
                             },
                         }
                     } else if (fr.ftype == ft_data()) {
+                        // M73: tope de respuesta acumulada (anti-bomba de memoria).
+                        if (body.len() + fr.payload.len() > max_response()) {
+                            close(h);
+                            return Result.Err("respuesta HTTP/2 excede el límite (posible bomba de memoria)");
+                        }
                         body = body + fr.payload;
                         // M58.3 — flow control: devolver la ventana consumida (conexión + stream);
                         // sin esto, el servidor se para a los 65535 octetos iniciales (§6.9).

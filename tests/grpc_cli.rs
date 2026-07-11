@@ -30,6 +30,10 @@ fn frame(ftype: u8, flags: u8, stream: u32, payload: &[u8]) -> Vec<u8> {
 
 /// Servidor gRPC de juguete (una conexión) con ALPN `h2`. Puerto efímero.
 fn lanzar_servidor_grpc() -> u16 {
+    lanzar_servidor_grpc_cfg(true)
+}
+
+fn lanzar_servidor_grpc_cfg(con_grpc_status: bool) -> u16 {
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(CERT_PEM.as_bytes())
         .collect::<Result<_, _>>()
         .expect("cert de prueba");
@@ -70,7 +74,12 @@ fn lanzar_servidor_grpc() -> u16 {
             out.extend_from_slice(&frame(4, 0, 0, &[]));           // SETTINGS del servidor
             out.extend_from_slice(&frame(1, 4, 1, &[0x88]));       // HEADERS END_HEADERS, :status 200
             out.extend_from_slice(&frame(0, 0, 1, &grpc));         // DATA (mensaje gRPC-framed)
-            out.extend_from_slice(&frame(1, 5, 1, &trailer));      // HEADERS END_HEADERS|END_STREAM (trailers)
+            if con_grpc_status {
+                out.extend_from_slice(&frame(1, 5, 1, &trailer));  // HEADERS END_HEADERS|END_STREAM (trailers)
+            } else {
+                // M73: cierra el stream SIN grpc-status (protocolo gRPC violado) → el cliente = Err.
+                out.extend_from_slice(&frame(0, 1, 1, &[]));       // DATA END_STREAM vacío
+            }
             let _ = tls.write_all(&out);
             let _ = tls.flush();
         }
@@ -104,4 +113,28 @@ fn grpc_call_interprete() {
 fn grpc_call_vm() {
     let port = lanzar_servidor_grpc();
     assert_eq!(correr(&["--vm"], port), ESPERADO);
+}
+
+/// M73 — un servidor gRPC que cierra el stream SIN `grpc-status` en los trailers (protocolo
+/// violado) ya no pasa como OK: `grpc_call` devuelve `Err`. Antes `tuvo_grpc_status` se
+/// computaba pero no se leía → `Ok(grpc_status: 0)` indistinguible de un OK legítimo.
+#[test]
+fn grpc_sin_status_es_error() {
+    let port = lanzar_servidor_grpc_cfg(false);
+    let demo = format!("{}/examples/web/grpc_call_demo.ray", env!("CARGO_MANIFEST_DIR"));
+    let ca = format!("{}/tests/fixtures/tls_ca.pem", env!("CARGO_MANIFEST_DIR"));
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg("--vm")
+        .arg(&demo)
+        .arg("localhost")
+        .arg(port.to_string())
+        .env("SSL_CERT_FILE", &ca)
+        .output()
+        .expect("ejecuta grpc_call_demo.ray");
+    // El demo imprime el error de grpc_call y sale != 0 (o imprime un mensaje de error).
+    let salida = String::from_utf8_lossy(&out.stdout) + String::from_utf8_lossy(&out.stderr);
+    assert!(
+        salida.contains("grpc-status"),
+        "sin grpc-status en los trailers = Err mencionándolo\n{salida}"
+    );
 }

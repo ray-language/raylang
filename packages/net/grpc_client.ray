@@ -19,6 +19,17 @@ pub struct GrpcResponse {
     grpc_status: int,
 }
 
+// M73: topes anti-bomba. Un servidor malicioso/roto podría enviar frames DATA indefinidos (body
+// crece sin cota) o declarar un frame gigante (hasta 16 MB en 24 bits) → agotamiento de memoria.
+// El de respuesta es generoso (64 MiB, como M64.2); el de frame acota lo que se espera acumular.
+fn max_response() -> int {
+    67108864
+}
+
+fn max_frame() -> int {
+    1048576  // 1 MiB por frame — muy por encima del max-frame por defecto de HTTP/2 (16 KiB)
+}
+
 // Extrae un header (por nombre) de una lista decodificada; "" si no está.
 fn find_header(hs: [HEntry], name: string) -> string {
     var v = "";
@@ -80,6 +91,11 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                 return Result.Err(e);
             },
         }
+        // M73: un frame que declara más que el tope se rechaza ANTES de acumular sus octetos.
+        if (frame_size(buf) > max_frame()) {
+            close(h);
+            return Result.Err("frame HTTP/2 excede el límite (" + to_string(frame_size(buf)) + " octetos)");
+        }
         while (frame_size(buf) > 0 && buf.len() >= frame_size(buf)) {
             let fsz = frame_size(buf);
             let fbytes = buf.sub_bytes(0, fsz);
@@ -130,6 +146,11 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
                             },
                         }
                     } else if (fr.ftype == ft_data()) {
+                        // M73: tope de respuesta acumulada (anti-bomba de memoria).
+                        if (body.len() + fr.payload.len() > max_response()) {
+                            close(h);
+                            return Result.Err("respuesta gRPC excede el límite (posible bomba de memoria)");
+                        }
                         body = body + fr.payload;
                         // M58.3 — flow control: devolver la ventana consumida (conexión + stream).
                         // Best effort: si el peer ya envió todo y cerró, el crédito es irrelevante
@@ -174,6 +195,12 @@ pub fn grpc_call(host: string, port: int, path: string, mensaje: bytes) -> Resul
 
     if (status != 200) {
         return Result.Err("HTTP/2 status " + to_string(status));
+    }
+    // M73: un servidor gRPC SIEMPRE cierra con `grpc-status` en los trailers. Su ausencia
+    // (protocolo violado, trailers truncados) era indistinguible de un OK (`tuvo_grpc_status`
+    // se computaba pero no se leía) → ahora es un error explícito.
+    if (!tuvo_grpc_status) {
+        return Result.Err("respuesta gRPC sin grpc-status en los trailers");
     }
     // Desenmarca el mensaje gRPC de la respuesta.
     match (grpc_unframe(body)) {

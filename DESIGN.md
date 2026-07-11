@@ -7941,7 +7941,7 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 > PING/RST/GOAWAY (M58.3). Dos defectos: acumulación sin cota (bomba de memoria) y una
 > variable muerta que silencia un error de protocolo.
 
-- **M73 — de una pieza**: (a) tope de respuesta acumulada (64 MiB, como M64.2) en `body` de
+- **M73 — de una pieza COMPLETO**: (a) tope de respuesta acumulada (64 MiB, como M64.2) en `body` de
   `grpc_client` Y `http2_client` (el DATA que lo rebasa = `Err`, no agotamiento); tope de
   frame individual (rechazar un frame cuyo `frame_size` declara más que un máximo razonable,
   antes de esperar sus octetos). (b) `grpc_call` usa `tuvo_grpc_status` (hoy muerto): si la

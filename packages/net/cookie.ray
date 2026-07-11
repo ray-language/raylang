@@ -1,6 +1,6 @@
 // Cookies HTTP escritas EN raylang. Cero runtime nuevo. Parsea la cabecera `Cookie:` de petición y
 // construye valores `Set-Cookie:` de respuesta. Importable:
-//   from cookie import parse_cookies, cookie, set_cookie, with_path, with_max_age, with_http_only, with_secure;
+//   from cookie import parse_cookies, cookie, set_cookie, with_path, with_max_age, with_http_only, with_secure, with_same_site;
 from std/url import url_encode, url_decode;
 
 // `url_decode` tolerante (devuelve el crudo si falla).
@@ -44,14 +44,32 @@ struct Cookie {
     max_age: int,
     http_only: bool,
     secure: bool,
+    same_site: string,
 }
 
-// < 0 = sin Max-Age
+// < 0 = sin Max-Age; same_site "" = sin el atributo
+// M71: quita los caracteres que permitirían inyectar cabeceras (CR, LF) o romper el
+// framing del Set-Cookie (`;`), como el saneo silencioso de `net/http` de Go. El VALOR se
+// protege aparte con url_encode; el nombre y el Path no se codifican, así que se sanean aquí.
+fn sanitize(s: string) -> string {
+    let cs = s.chars();
+    var out: [string] = [];
+    var i = 0;
+    while (i < cs.len()) {
+        let c = cs[i];
+        if (c != '\r' && c != '\n' && c != ';') {
+            out.push(to_string(c));
+        }
+        i = i + 1;
+    }
+    join(out, "")
+}
+
 // Crea una cookie con solo nombre y valor (sin atributos).
 /// Creates a cookie with just a name and value, no attributes set.
 /// Add attributes with the chainable `with_*` setters, e.g. `cookie("sid","abc").with_path("/").with_http_only()`.
 pub fn cookie(name: string, value: string) -> Cookie {
-    Cookie { name: name, value: value, path: "", max_age: 0 - 1, http_only: false, secure: false }
+    Cookie { name: name, value: value, path: "", max_age: 0 - 1, http_only: false, secure: false, same_site: "" }
 }
 
 // Setters encadenables (mutan por referencia y devuelven la cookie). Nombres `with_*` para no chocar
@@ -80,13 +98,29 @@ pub fn with_secure(c: Cookie) -> Cookie {
     c
 }
 
-// Serializa la cookie a un valor de cabecera `Set-Cookie`. El valor se url-codifica.
-/// Serializes the cookie to a `Set-Cookie` header value ("name=value; Path=...; Max-Age=...; HttpOnly; Secure").
-/// The value is URL-encoded; only attributes that were set are emitted.
+// M71: SameSite (Strict/Lax/None), el atributo anti-CSRF de facto. Un valor no reconocido se
+// ignora (se deja "") para no emitir un Set-Cookie inválido.
+/// Sets the cookie's `SameSite` attribute ("Strict", "Lax" or "None"; unrecognized values are
+/// ignored). "None" implies `Secure` (browsers reject `SameSite=None` without it). Chainable.
+pub fn with_same_site(c: Cookie, v: string) -> Cookie {
+    if (v == "Strict" || v == "Lax") {
+        c.same_site = v;
+    } else if (v == "None") {
+        c.same_site = v;
+        c.secure = true;  // los navegadores rechazan SameSite=None sin Secure
+    }
+    c
+}
+
+// Serializa la cookie a un valor de cabecera `Set-Cookie`. El valor se url-codifica; el nombre y
+// el Path se sanean (M71: sin CR/LF/`;` → no se pueden inyectar cabeceras).
+/// Serializes the cookie to a `Set-Cookie` header value ("name=value; Path=...; Max-Age=...;
+/// HttpOnly; Secure; SameSite=..."). The value is URL-encoded and the name/Path are sanitized
+/// (CR/LF/`;` stripped, preventing header injection); only attributes that were set are emitted.
 pub fn set_cookie(c: Cookie) -> string {
-    var s = c.name + "=" + url_encode(c.value);
+    var s = sanitize(c.name) + "=" + url_encode(c.value);
     if (c.path.len() > 0) {
-        s = s + "; Path=" + c.path;
+        s = s + "; Path=" + sanitize(c.path);
     }
     if (c.max_age >= 0) {
         s = s + "; Max-Age=" + to_string(c.max_age);
@@ -96,6 +130,9 @@ pub fn set_cookie(c: Cookie) -> string {
     }
     if (c.secure) {
         s = s + "; Secure";
+    }
+    if (c.same_site.len() > 0) {
+        s = s + "; SameSite=" + c.same_site;
     }
     s
 }

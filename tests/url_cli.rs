@@ -17,6 +17,11 @@ const ESPERADO: &[&str] = &[
     "dark",                                            // cookie theme
     "sid=a%20b%2Fc; Path=/; Max-Age=3600; HttpOnly; Secure", // Set-Cookie encadenado
     "plain=x",                                         // cookie sin atributos
+    // M71 — SameSite (anti-CSRF): None implica Secure; Lax se emite tal cual.
+    "s=1; Secure; SameSite=None",
+    "s=1; SameSite=Lax",
+    // M71 — saneo anti-inyección: el CRLF del nombre se elimina → no hay response splitting.
+    "aSet-Cookie: evil=v",
 ];
 
 fn correr(flags: &[&str]) -> Vec<String> {

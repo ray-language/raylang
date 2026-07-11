@@ -18,6 +18,7 @@ match (tz.to_utc(mad, civil)) {               // la inversa NO es total (DST):
 ```
 
 - **Windows**: sin zoneinfo, `load` devuelve `Err` claro (UTC de `std/time` sigue).
-- **Alcance v1**: transiciones explícitas del archivo (tzdata las trae hasta ~2037);
-  después se extrapola el último tipo. El footer TZ-string (reglas perpetuas) es M85b.
+- **M85b**: pasado el horizonte de transiciones explícitas rigen las **reglas perpetuas
+  del footer** TZ-string (`CET-1CEST,M3.5.0,M10.5.0/3`; solo la forma `Mm.w.d[/hora]`,
+  la que emite zic — un footer no soportado degrada a extrapolar el último tipo).
 - `fixtures/` trae TZif commiteados (tzdata es dominio público) para tests deterministas.

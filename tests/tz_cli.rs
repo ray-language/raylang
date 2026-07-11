@@ -89,6 +89,26 @@ fn main() -> int {{
     }};
     describe(ny, invierno);
     describe(ny, verano);
+    // M85b: más allá de la última transición explícita rigen las reglas del FOOTER
+    // (TZ-string). Invierno/verano 2100 y los dos lados del cambio de primavera
+    // (último domingo de marzo de 2100 = día 28; 01:00 UTC).
+    describe(mad, 4103697600000);
+    describe(mad, 4119336000000);
+    describe(ny, 4103697600000);
+    describe(ny, 4119336000000);
+    describe(mad, 4109878800000 - 1000);
+    describe(mad, 4109878800000);
+    // Y LocalResult sigue funcionando en territorio del footer (gap y solape de 2100).
+    match (tz.to_utc(mad, civil(2100, 3, 28, 2, 30))) {{
+        tz.LocalResult.Single(ms) => print("FALLO: single"),
+        tz.LocalResult.Ambiguous(a, b) => print("FALLO: ambiguous"),
+        tz.LocalResult.Gap => print("gap 2100"),
+    }}
+    match (tz.to_utc(mad, civil(2100, 10, 31, 2, 30))) {{
+        tz.LocalResult.Single(ms) => print("FALLO: single"),
+        tz.LocalResult.Ambiguous(a, b) => print("ambiguous 2100 delta_min=" + to_string((b - a) / 60000)),
+        tz.LocalResult.Gap => print("FALLO: gap"),
+    }}
     // Errores como valores: archivo inexistente y nombre inválido.
     match (tz.load_file("{fixtures}/NoExiste.tzif")) {{
         Result.Ok(z) => print("FALLO: cargó"),
@@ -117,6 +137,14 @@ ambiguous delta_min=60 antes=CEST despues=CET\n\
 utc off=0 UTC\n\
 2026-01-15T06:00:00Z EST dst=false off_h=-5\n\
 2026-07-15T06:00:00Z EDT dst=true off_h=-4\n\
+2100-01-15T13:00:00Z CET dst=false off_h=1\n\
+2100-07-15T14:00:00Z CEST dst=true off_h=2\n\
+2100-01-15T07:00:00Z EST dst=false off_h=-5\n\
+2100-07-15T08:00:00Z EDT dst=true off_h=-4\n\
+2100-03-28T01:59:59Z CET dst=false off_h=1\n\
+2100-03-28T03:00:00Z CEST dst=true off_h=2\n\
+gap 2100\n\
+ambiguous 2100 delta_min=60\n\
 err archivo ok\n\
 err nombre ok\n";
 

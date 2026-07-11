@@ -21,9 +21,27 @@
 import std/fs;
 import std/time;
 
+// M85b: el FOOTER TZ-string del TZif (RFC 8536 §3.3) — las reglas PERPETUAS que rigen
+// después de la última transición explícita (p. ej. `CET-1CEST,M3.5.0,M10.5.0/3`).
+// Solo la forma `Mm.w.d[/hora]` (la que emite zic); un footer que no se entienda deja
+// `valid = false` y la zona degrada al comportamiento v1 (extrapolar el último tipo).
+struct Foot {
+    valid: bool,
+    std_off: int,      // offset UTC en segundos (ya con el signo IANA, no el POSIX)
+    std_abbr: string,
+    has_dst: bool,
+    dst_off: int,
+    dst_abbr: string,
+    // Regla de inicio/fin del DST: mes, semana (1-5; 5 = la última), día (0 = domingo)
+    // y el segundo del día LOCAL en que cambia (default 02:00:00).
+    sm: int, sw: int, sd: int, ssecs: int,
+    em: int, ew: int, ed: int, esecs: int,
+}
+
 // Una zona horaria cargada: transiciones (epoch-SEGUNDOS, ascendentes), el índice de tipo
 // de cada transición, y por tipo su offset (segundos), si es DST y su abreviatura.
-/// A loaded IANA time zone: transition table + offset types, resolved by binary search.
+/// A loaded IANA time zone: transition table + offset types (binary search), plus the
+/// TZif footer rules (M85b) that govern instants past the last explicit transition.
 pub struct Zone {
     name: string,
     trans: [int],
@@ -34,6 +52,7 @@ pub struct Zone {
     // El tipo vigente ANTES de la primera transición (RFC 8536: el primer tipo no-DST,
     // o el tipo 0). También el usado si no hay transiciones (zonas fijas, p. ej. UTC).
     first_type: int,
+    foot: Foot,
 }
 
 // El resultado de convertir una hora CIVIL local a un instante UTC (la inversa no es
@@ -252,6 +271,27 @@ fn parse_tzif(b: bytes, name: string) -> Result<Zone, string> {
         }
         i = i + 1;
     }
+    // M85b: el footer TZ-string (solo v2+): tras el bloque de datos viene "\n<tz>\n".
+    var foot = no_foot();
+    if (version >= 50) {
+        at = at + h.charcnt + h.leapcnt * (tsize + 4) + h.isstdcnt + h.isutcnt;
+        if (at < b.len() && b[at] == 10) {
+            var j = at + 1;
+            var fin = 0 - 1;
+            while (j < b.len() && fin < 0) {
+                if (b[j] == 10) {
+                    fin = j;
+                }
+                j = j + 1;
+            }
+            if (fin > at + 1) {
+                match (from_utf8(b.sub_bytes(at + 1, fin))) {
+                    Result.Ok(tzs) => { foot = parse_foot(tzs); },
+                    Result.Err(e) => { },
+                }
+            }
+        }
+    }
     Result.Ok(Zone {
         name: name,
         trans: trans,
@@ -260,12 +300,222 @@ fn parse_tzif(b: bytes, name: string) -> Result<Zone, string> {
         isdsts: isdsts,
         abbrevs: abbrevs,
         first_type: first,
+        foot: foot,
     })
+}
+
+fn no_foot() -> Foot {
+    Foot { valid: false, std_off: 0, std_abbr: "", has_dst: false, dst_off: 0, dst_abbr: "",
+           sm: 0, sw: 0, sd: 0, ssecs: 0, em: 0, ew: 0, ed: 0, esecs: 0 }
+}
+
+// ---------------------------------------------------------------------------
+// M85b: parser del TZ-string POSIX (el footer). `STD off [DST [off] [,Mm.w.d[/t],Mm.w.d[/t]]]`.
+// El offset POSIX es POSITIVO al oeste de Greenwich → el offset IANA es su negado.
+// ---------------------------------------------------------------------------
+
+struct FP {
+    cs: [char],
+    pos: int,
+    bad: bool,
+}
+
+fn fp_end(p: FP) -> bool { p.pos >= p.cs.len() }
+
+fn fp_peek(p: FP) -> char { p.cs[p.pos] }
+
+fn fp_digit(c: char) -> bool { '0' <= c && c <= '9' }
+
+fn fp_alpha(c: char) -> bool { ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') }
+
+// El nombre de la zona: letras, o `<...>` (nombres con signo, p. ej. `<+07>`).
+fn fp_name(p: FP) -> string {
+    var out = "";
+    if (!fp_end(p) && fp_peek(p) == '<') {
+        p.pos = p.pos + 1;
+        while (!fp_end(p) && fp_peek(p) != '>') {
+            out = out + to_string(fp_peek(p));
+            p.pos = p.pos + 1;
+        }
+        if (fp_end(p)) {
+            p.bad = true;
+        } else {
+            p.pos = p.pos + 1;  // '>'
+        }
+        return out;
+    }
+    while (!fp_end(p) && fp_alpha(fp_peek(p))) {
+        out = out + to_string(fp_peek(p));
+        p.pos = p.pos + 1;
+    }
+    if (out.len() == 0) {
+        p.bad = true;
+    }
+    out
+}
+
+// Un offset/hora `[+|-]h[h][:mm[:ss]]`, en SEGUNDOS (con su signo textual).
+fn fp_secs(p: FP) -> int {
+    var sign = 1;
+    if (!fp_end(p) && (fp_peek(p) == '+' || fp_peek(p) == '-')) {
+        if (fp_peek(p) == '-') {
+            sign = 0 - 1;
+        }
+        p.pos = p.pos + 1;
+    }
+    var h = fp_num(p);
+    var m = 0;
+    var s = 0;
+    if (!fp_end(p) && fp_peek(p) == ':') {
+        p.pos = p.pos + 1;
+        m = fp_num(p);
+        if (!fp_end(p) && fp_peek(p) == ':') {
+            p.pos = p.pos + 1;
+            s = fp_num(p);
+        }
+    }
+    sign * (h * 3600 + m * 60 + s)
+}
+
+fn fp_num(p: FP) -> int {
+    var v = 0;
+    var any = false;
+    while (!fp_end(p) && fp_digit(fp_peek(p))) {
+        v = v * 10 + ((fp_peek(p) as int) - ('0' as int));
+        p.pos = p.pos + 1;
+        any = true;
+    }
+    if (!any) {
+        p.bad = true;
+    }
+    v
+}
+
+// Una regla `Mm.w.d[/hora]`. Devuelve (mes, semana, día, segundos-del-día). Solo la forma M.
+fn fp_rule(p: FP) -> (int, int, int, int) {
+    if (fp_end(p) || fp_peek(p) != 'M') {
+        p.bad = true;
+        return (0, 0, 0, 0);
+    }
+    p.pos = p.pos + 1;
+    let m = fp_num(p);
+    if (fp_end(p) || fp_peek(p) != '.') { p.bad = true; return (0, 0, 0, 0); }
+    p.pos = p.pos + 1;
+    let w = fp_num(p);
+    if (fp_end(p) || fp_peek(p) != '.') { p.bad = true; return (0, 0, 0, 0); }
+    p.pos = p.pos + 1;
+    let d = fp_num(p);
+    var t = 7200;  // default 02:00:00 local
+    if (!fp_end(p) && fp_peek(p) == '/') {
+        p.pos = p.pos + 1;
+        t = fp_secs(p);
+    }
+    return (m, w, d, t);
+}
+
+fn parse_foot(tzs: string) -> Foot {
+    let p = FP { cs: tzs.chars(), pos: 0, bad: false };
+    var f = no_foot();
+    f.std_abbr = fp_name(p);
+    f.std_off = 0 - fp_secs(p);  // POSIX oeste-positivo → IANA
+    if (p.bad) {
+        return no_foot();
+    }
+    if (fp_end(p)) {
+        f.valid = true;  // zona fija (p. ej. `UTC0`, `<+07>-7`)
+        return f;
+    }
+    f.dst_abbr = fp_name(p);
+    f.has_dst = true;
+    f.dst_off = f.std_off + 3600;  // default: STD + 1h
+    if (!fp_end(p) && fp_peek(p) != ',') {
+        f.dst_off = 0 - fp_secs(p);
+    }
+    // Las reglas son obligatorias para nosotros (sin ellas aplicarían los defaults de
+    // POSIX-TZ, que zic nunca emite) → sin coma, footer no soportado.
+    if (fp_end(p) || fp_peek(p) != ',') {
+        return no_foot();
+    }
+    p.pos = p.pos + 1;
+    let sr = fp_rule(p);
+    if (fp_end(p) || fp_peek(p) != ',') {
+        return no_foot();
+    }
+    p.pos = p.pos + 1;
+    let er = fp_rule(p);
+    if (p.bad || !fp_end(p)) {
+        return no_foot();
+    }
+    f.sm = sr.0; f.sw = sr.1; f.sd = sr.2; f.ssecs = sr.3;
+    f.em = er.0; f.ew = er.1; f.ed = er.2; f.esecs = er.3;
+    f.valid = true;
+    f
 }
 
 // ---------------------------------------------------------------------------
 // Resolución
 // ---------------------------------------------------------------------------
+
+// M85b: ¿rigen las reglas del footer en `secs`? (tras la última transición explícita,
+// o sin transiciones — RFC 8536 §3.3).
+fn foot_rules(z: Zone, secs: int) -> bool {
+    z.foot.valid && (z.trans.len() == 0 || secs > z.trans[z.trans.len() - 1])
+}
+
+// (offset IANA en segundos, es-DST, abreviatura) según las reglas perpetuas del footer.
+fn foot_type(z: Zone, secs: int) -> (int, bool, string) {
+    let f = z.foot;
+    if (!f.has_dst) {
+        return (f.std_off, false, f.std_abbr);
+    }
+    // El año LOCAL (en hora estándar) del instante; las reglas se evalúan en ese año.
+    let y = time.from_epoch_millis((secs + f.std_off) * 1000).year;
+    let start = rule_utc(y, f.sm, f.sw, f.sd, f.ssecs, f.std_off);
+    let end = rule_utc(y, f.em, f.ew, f.ed, f.esecs, f.dst_off);
+    var dst = false;
+    if (start < end) {
+        dst = secs >= start && secs < end;   // hemisferio norte
+    } else {
+        dst = secs >= start || secs < end;   // hemisferio sur (el DST cruza el año)
+    }
+    if (dst) {
+        return (f.dst_off, true, f.dst_abbr);
+    }
+    // Gotcha §55: la tupla en cola tras un if-sentencia parsearía como llamada.
+    return (f.std_off, false, f.std_abbr);
+}
+
+// El instante UTC (epoch-segundos) de la regla `Mm.w.d/t` en el año `y`: la hora `t` es
+// LOCAL con el offset vigente ANTES de la transición (`off_before`).
+fn rule_utc(y: int, m: int, w: int, d: int, t: int, off_before: int) -> int {
+    let day = rule_day(y, m, w, d);
+    let naive = time.to_epoch_millis(time.DateTime { year: y, month: m, day: day, hour: 0, minute: 0, second: 0, weekday: 0 }) / 1000;
+    naive + t - off_before
+}
+
+fn days_in_month(y: int, m: int) -> int {
+    if (m == 2) {
+        if (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) {
+            return 29;
+        }
+        return 28;
+    }
+    if (m == 4 || m == 6 || m == 9 || m == 11) {
+        return 30;
+    }
+    31
+}
+
+// El día del mes de la `w`-ésima ocurrencia del día de semana `d` (0 = domingo) en
+// `y`-`m`; `w = 5` es LA ÚLTIMA (aunque sea la cuarta).
+fn rule_day(y: int, m: int, w: int, d: int) -> int {
+    let first = time.from_epoch_millis(time.to_epoch_millis(time.DateTime { year: y, month: m, day: 1, hour: 12, minute: 0, second: 0, weekday: 0 }));
+    var day = 1 + (d - first.weekday + 7) % 7 + (w - 1) * 7;
+    while (day > days_in_month(y, m)) {
+        day = day - 7;
+    }
+    day
+}
 
 // El índice de TIPO vigente en el instante `secs` (epoch-segundos): búsqueda binaria de
 // la última transición <= secs; antes de la primera (o sin transiciones) → first_type.
@@ -287,21 +537,35 @@ fn type_at(z: Zone, secs: int) -> int {
 }
 
 // El offset UTC de la zona en un instante, en MILISEGUNDOS (la moneda de std/time).
-/// The zone's UTC offset at `instant_ms` (epoch-ms), in milliseconds.
+// M85b: pasado el horizonte de transiciones explícitas, rigen las reglas del footer.
+/// The zone's UTC offset at `instant_ms` (epoch-ms), in milliseconds. Past the last
+/// explicit transition, the TZif footer's perpetual rules apply (M85b).
 pub fn offset_at(z: Zone, instant_ms: int) -> int {
-    z.utoffs[type_at(z, floor_div(instant_ms, 1000))] * 1000
+    let secs = floor_div(instant_ms, 1000);
+    if (foot_rules(z, secs)) {
+        return foot_type(z, secs).0 * 1000;
+    }
+    z.utoffs[type_at(z, secs)] * 1000
 }
 
 // La abreviatura vigente en un instante (`CET`, `CEST`, `EST`…).
 /// The zone abbreviation in effect at `instant_ms` (e.g. "CET", "CEST").
 pub fn abbrev_at(z: Zone, instant_ms: int) -> string {
-    z.abbrevs[type_at(z, floor_div(instant_ms, 1000))]
+    let secs = floor_div(instant_ms, 1000);
+    if (foot_rules(z, secs)) {
+        return foot_type(z, secs).2;
+    }
+    z.abbrevs[type_at(z, secs)]
 }
 
 // ¿Está la zona en horario de verano en un instante?
 /// Whether daylight saving time is in effect at `instant_ms`.
 pub fn is_dst_at(z: Zone, instant_ms: int) -> bool {
-    z.isdsts[type_at(z, floor_div(instant_ms, 1000))]
+    let secs = floor_div(instant_ms, 1000);
+    if (foot_rules(z, secs)) {
+        return foot_type(z, secs).1;
+    }
+    z.isdsts[type_at(z, secs)]
 }
 
 // División con REDONDEO HACIA ABAJO (el `/` de raylang trunca hacia cero; para ms

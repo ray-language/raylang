@@ -6829,6 +6829,11 @@ resolución en el front-end/CLI; los motores nunca ven un paquete.
 
 ### 54.7 Diferido (fuera de M51)
 
+> Jul 2026: **análisis de diseño FIJADO en IDEAS §41** (M83 confianza multi-publicador:
+> manual del flujo M83a + owners-sidecar M83b + firmas Ed25519 con TOFU M83c; M84 UI
+> estática generada del índice; mirrors especificados a demanda — el hash ya los hace
+> trustless). Lo de abajo queda como lista original.
+
 Búsqueda/UI web del índice; cuentas y **firmas de publicación** (estilo sigstore) sobre el hash ya existente;
 mirrors/proxy; *namespaces* con dueño; `ray.lock` con el propio índice como fuente (hoy fija el commit git);
 **multi-índice** (hoy el índice es único por proyecto: una dep transitiva por

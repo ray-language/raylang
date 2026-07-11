@@ -1126,6 +1126,29 @@ Cierre de los diferidos de lenguaje acumulados, uno por hito, en orden de coste/
 
 ---
 
+## 41. Registro multi-publicador — análisis de diseño (jul 2026) — M83/M84
+
+Análisis de los diferidos de M51 (§54.7: UI web, firmas, mirrors, namespaces). **La base
+condiciona todo**: el lock verifica sha256 (→ quien SIRVE los bytes no importa, solo quien
+nombra el hash), el historial git del índice es un log append-only (cuasi-transparencia
+gratis), y el parser del índice ignora claves desconocidas DENTRO de `[versión]` (extensible)
+pero **erraría con claves a nivel de archivo** → los metadatos de paquete van en un archivo
+**sidecar**, nunca en el TOML existente.
+
+| Pieza | Diseño fijado | Disparador | Hito |
+|---|---|---|---|
+| **Manual del flujo de publicación** — documentar de punta a punta lo que YA existe: crear un paquete (`ray.toml`, cara pública), versionado semver + pre-releases, `ray publish` (check semántico, tag, hash), `ray add`/`search`/`remove`/`update`/`yank`, índice propio (`RAY_INDEX`/`[registry] index`), el lock y sus garantías. En el MANUAL (§ nueva "Publicar un paquete") o un `PUBLICAR.md` dedicado + capítulo del libro | necesario YA (la maquinaria existe desde M51 y no está contada en ningún sitio) | **M83a** |
+| **Namespaces con dueño** — la propiedad cabalga sobre git hosting (sin cuentas propias): publicar para terceros = **PR al repo del índice**; sidecar `<nombre>.owners.toml` (dueños + claves públicas; la PRIMERA publicación reclama el nombre); enforcement = check de CI del repo del índice (`ray index-verify`: el PR solo toca paquetes cuyo owners incluye al autor) + branch protection. Descartado: scopes sintácticos `@user/pkg` (tocan gramática/imports/manifiesto; el owners-file da lo mismo) | abrir el índice a terceros | **M83b** |
+| **Firmas de publicación** — Ed25519 sobre `(nombre, versión, hash)` (`ring` ya enlazado M43; verificable incluso en raylang puro M30.2), NO sigstore (servicios externos, contra la filosofía). `ray publish --sign` añade `sig = "ed25519:…"` en `[versión]` (los clientes viejos la ignoran); la pubkey vive en el owners.toml de M83b, fijada por **TOFU** en la primera publicación (patrón del hash del índice M51d); el log de transparencia es el historial git. Firmas y namespaces son la MISMA feature de confianza → un solo hito | junto con M83b (paquete "confianza multi-publicador") | **M83c** |
+| **UI/búsqueda web** — sitio ESTÁTICO generado desde el índice (TOMLs + READMEs → HTML + búsqueda client-side), publicado por una Action del repo del índice en Pages; sin servidor ni BD. Oportunidad de dogfooding: el generador EN raylang (templates M55 + std/toml + std/fs + json) | la ola de hosting de M44 (libro+playground+SPEC; la UI es el 4º inquilino) | **M84** |
+| **Mirrors de paquetes** — el hash ya hace los mirrors *trustless* (solo hace falta disponibilidad). Mirror del ÍNDICE ya existe (`RAY_INDEX` a cualquier clon). Falta solo la regla de reescritura `[registry] mirror = "prefijo"` (~30 líneas en `deps::ensure`; el hash verifica igual). OJO: un mirror NO es otro índice (mismo índice, otra URL) — mantener la distinción evita reabrir la dependency-confusion mitigada en M51e | a demanda (CI tras firewall / caída del hosting) | 💤 (especificado, sin construir) |
+
+**Nada de esto es pre-1.0** salvo M83a (documentación de lo existente). Único "hazlo ya"
+negativo: NO poner metadatos a nivel de archivo en los TOML del índice (romperían clientes
+viejos); sidecar cuando llegue.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

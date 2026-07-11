@@ -824,10 +824,17 @@ impl<'a> Vm<'a> {
                             self.push(v);
                         }
                         // M11.4c-2: indexar un string → el carácter en esa posición.
+                        // Opt.16: `nth(i)` en el camino feliz (O(i), sin asignar) — antes se
+                        // hacía collect() de TODOS los chars (asignación O(n)) para leer uno.
+                        // La longitud (O(n)) solo se calcula en el camino de error.
                         HeapValue::Str(s) => {
-                            let chars: Vec<char> = s.chars().collect();
-                            let idx = bounds_check(i, chars.len(), pos!().0, pos!().1)?;
-                            self.push(HeapValue::Char(chars[idx]));
+                            match usize::try_from(i).ok().and_then(|idx| s.chars().nth(idx)) {
+                                Some(c) => self.push(HeapValue::Char(c)),
+                                None => {
+                                    bounds_check(i, s.chars().count(), pos!().0, pos!().1)?;
+                                    unreachable!("bounds_check falla siempre en este camino");
+                                }
+                            }
                         }
                         // M16.1a: indexar bytes → el octeto como int.
                         HeapValue::Bytes(b) => {

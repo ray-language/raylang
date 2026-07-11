@@ -1229,3 +1229,42 @@ manglados tal cual.
 
 Diferido: transportar la traza a través de `Task::Failed` (hoy solo cruza el mensaje); nombres
 "bonitos" para métodos manglados (`Tipo#metodo` se muestra tal cual, honesto).
+
+## 45. Optimización de la VM ronda 2 — análisis post-M88 (jul 2026)
+
+**Datos** (best-of-15, M3 Pro; perfil `sample` con símbolos sobre release): fib35 1.97 s ·
+loop10M 0.96 s · arrays 0.179 s · gcnested 0.282 s. Del CPU real de fib35: `run_loop` (match)
+~53%, **preámbulo por instrucción ~20%** (`run_worker`: stop + should_collect + 3 lecturas de
+marco + fuel + bounds + fetch + write-back de ip + cierre M12.3), `push` ~9% y `get_local` ~5%
+(**no inlineadas** — símbolos propios en el perfil), coste por llamada (`new_locals`/`put_arg`/
+`recycle`) ~8%, `const_to_heap` ~3%.
+
+**Trabas estructurales** (acotan el espacio): (1) el safepoint del GC DEBE estar en frontera de
+instrucción (temporales de Rust sin rootear a mitad de brazo → no se puede mover el check a
+`allocate`); (2) oráculo + goldens = re-validación total ante cualquier backend nuevo; (3) las
+trazas M79 exigen `frames`/`ip` coherentes en todo punto de error → registerizar `ip` obliga a
+sincronizar en errores/cesiones; (4) `Rc` en `HeapValue` es `!Send` y la fibra migra entre
+workers (M38) → strings compartidos = `Arc<str>` o handle del heap, no `Rc`; (5) fuel/
+--deterministic/tope de heap viven en el lazo; (6) §27: solo sobrevive lo que supera el ruido
+3-5%; (7) el nicho es SERVICIOS (I/O-bound) → el techo de valor de acelerar aritmética es
+limitado.
+
+| Opción | Qué | Esperado | Estado |
+|---|---|---|---|
+| **A2 Opt.14** inlines calientes | `#[inline]` en push/pop/get_local/set_local/put_arg + reserve de la pila | 3-8% | 🚧 esta ronda |
+| **A5 Opt.15** constantes precomputadas | `Chunk.constants` → `Vec<HeapValue>` al cargar; `Constant` = clone directo | 1-3% | 🚧 esta ronda |
+| **A6 Opt.16** `s[i]` sin collect | `Index` string hacía `chars().collect::<Vec<_>>()` POR ACCESO (alloc O(n)); `nth(i)` la elimina | grande solo string-heavy | 🚧 esta ronda |
+| **A1 Opt.17** registerizar ip/marco-tope | cachear `(func, ip, chunk)` en locales del lazo; write-back solo en llamadas/saltos-de-fibra/errores | 10-20% | pendiente (tras el paquete barato) |
+| **A3** PGO | profile-generate → banco → profile-use; reordena el match gigante | 5-15% | experimento de build |
+| **A4** superinstrucciones ronda 2 | `cmp+JumpIfFalse` → `JumpIfLess…`, `IncLocal`; elegir por HISTOGRAMA de opcodes dinámico, no intuición | 5-15% en bucles | pendiente |
+| **B1** locales en pila (clox) | híbrido: solo fn sin capturas (`captured` ya existe); marco = base en la pila de la fibra | 10-20% call-heavy | clasificada |
+| **B2** structs por índice | `GetField(String)` → `GetFieldIdx` (el checker anota pre-erasure); instancia `(struct_id, Vec<HeapValue>)` sin nombres repetidos | el estructural con mejor ROI para servicios | clasificada |
+| **B3** strings compartidos | revivir Opt.3 como `Arc<str>` o string-como-Obj (traba 4); re-medir con strings.ray, no fib | data-dependent | clasificada |
+| **B4** throughput de canales | locks por canal / Condvar vs busy-poll 50µs; solo con contención real (send_heavy) | actor-heavy | a demanda |
+| **C1** bytecode de registros | elimina el tráfico de pila (~20%); reescritura compiler+peepholes+revalidación total | 20-40% | 💤 solo si compite en CPU |
+| **C2** JIT (cranelift; deps permitidas) | method-JIT numérico con deopt | 5-20× aritmética | 💤 NO recomendado: root-maps, fibras en código JIT, 2 backends × trazas/fuel/deterministic; el nicho es I/O-bound |
+| **C3** GC generacional | pausas YA resueltas (0.12 ms, heap-por-fibra); sweep O(slots) no asoma en perfil | — | 💤 sin síntoma |
+
+**Secuencia acordada**: paquete barato (Opt.14/15/16, medido pieza a pieza) → Opt.17
+(registerizar ip) → PGO → superinstrucciones con histograma → reevaluar B/C. Branch:
+`feature/opt-vm-ronda2`.

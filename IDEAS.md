@@ -976,6 +976,29 @@ body=body+payload sin cota) → se arregla en paralelo.
 
 ---
 
+## 34. JWT — HS256 y EdDSA (revisión jul 2026) — M74, PLAN
+
+Revisión en frío de `net/jwt` (HS256) y `net/jwt_eddsa` (EdDSA). Sano y bien pensado: el orden
+correcto (verificar la firma ANTES de decodificar/usar el payload), comparación de firmas en
+tiempo casi constante (`const_eq`, recorre toda la longitud sin cortar en el primer byte),
+base64url estricto (M59.3: rechaza bits sobrantes no nulos), y —clave— **ambos verificadores
+recomputan siempre con su algoritmo hardcodeado** (HS256 / EdDSA), así que un `alg:none` o un
+token de otro algoritmo YA fallan la comparación de firma (verificado: `alg:none` forjado →
+`Err`). No había agujero vivo.
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **El campo `alg` del header NUNCA se valida**: se usa el header verbatim en el input de firma pero nunca se decodifica ni se comprueba. La clase de defecto canónica de JWT (raíz de CVE tras CVE: alg-confusion, alg:none). Hoy no explotable (recompute hardcodeado, fail-closed), pero **frágil**: un refactor que leyera el `alg` del header lo volvería catastrófico, y un token de otro propósito/algoritmo se acepta si por casualidad es HS256/EdDSA válido | Fragilidad de seguridad / defensa en profundidad | **M74** |
+
+Fix (defensa en profundidad): decodificar el header (base64url → UTF-8 → JSON con `std/json`) y
+exigir que `alg` sea exactamente el esperado (`"HS256"` / `"EdDSA"`), rechazando con mensaje claro
+antes de dar por buena la firma. Espejos `packages/net` ↔ `examples/web` juntos (jwt + jwt_eddsa).
+Diferido (documentado, no defecto): `jwt_eddsa_sign` con un seed de longitud errónea emite una
+firma vacía (degradación honesta, no puede fallar limpio sin cambiar el tipo de retorno);
+`exp`/`nbf` siguen siendo política de la aplicación sobre el JSON devuelto.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

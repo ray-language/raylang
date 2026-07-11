@@ -7948,3 +7948,22 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   respuesta no trae `grpc-status` en los trailers (protocolo gRPC violado o trailers
   truncados) = `Err`, en vez de devolver `Ok(grpc_status: 0)` indistinguible de un OK.
   Espejos `packages/net` ↔ `examples/web` juntos (grpc + http2_client).
+
+## 78. M74 — JWT de producción (validación del algoritmo del header)
+
+> Revisión jul 2026 (tras M73; clasificación en IDEAS §34). `net/jwt` (HS256) y `net/jwt_eddsa`
+> (EdDSA). Bien pensado: verificar-antes-de-usar, `const_eq` en tiempo casi constante, base64url
+> estricto (M59.3) y —clave— **ambos verificadores recomputan con el algoritmo hardcodeado**, así
+> que `alg:none`/confusión de algoritmo YA fallan (fail-closed; verificado con un token forjado).
+> Un solo hallazgo: el campo `alg` del header nunca se valida — defecto canónico de JWT, hoy no
+> explotable pero frágil ante un refactor y ante tokens de otro propósito.
+
+- **M74 — de una pieza COMPLETO**: validación explícita del `alg` (defensa en profundidad). Un
+  helper `header_alg` decodifica el header (`base64url_decode` → `from_utf8` → `std/json::parse`)
+  y exige que la claim `alg` sea una cadena; `jwt_verify` exige `"HS256"` y `jwt_eddsa_verify`
+  `"EdDSA"`, rechazando con mensaje claro (`algoritmo no soportado: se esperaba …`) ANTES de dar
+  por buena la firma. Regresión: los demos forjan un `alg:none` y comprueban el rechazo por ambos
+  motores (`jwt_demo`/`jwt_eddsa_demo`). Espejos `packages/net` ↔ `examples/web` juntos (el espejo
+  usa la crypto pedagógica `hmac`/`ed25519` + `from json`, pero la misma lógica de validación).
+  Diferido (documentado, no defecto): `jwt_eddsa_sign` con seed de longitud errónea emite firma
+  vacía (degradación honesta); `exp`/`nbf` = política de la aplicación sobre el JSON devuelto.

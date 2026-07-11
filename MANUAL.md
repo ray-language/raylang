@@ -905,6 +905,10 @@ fn main() -> int {
 - `Channel.bounded(n)` — acotado: con la cola llena, `send` **bloquea** (backpressure). `n = 0` =
   rendezvous síncrono.
 - `close(ch)` — los valores pendientes aún se reciben; después `recv` da `None`.
+- `signals() -> Channel<int>` — el canal de **señales del SO** (SIGTERM=15, SIGINT=2), para el
+  **apagado ordenado** de un servicio: compone con `recv`/`select` (drena tu canal de trabajo O
+  apaga). Singleton del proceso; solo VM y unix. Ejemplo completo en
+  [`examples/concurrency/senales.ray`](examples/concurrency/senales.ray).
 - `select([ch1, ch2, …]) -> int` — espera al primero listo y devuelve su índice (el menor listo;
   determinista). Sigue con `recv(chs[i])`. Ojo: un canal cerrado queda "listo" para siempre — sácalo de
   la lista.

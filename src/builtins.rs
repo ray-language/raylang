@@ -266,6 +266,7 @@ pub fn signature(name: &str) -> Option<(Vec<&'static str>, &'static str)> {
         "to_string" => (vec!["value"], "string"),
         "sub_bytes" => (vec!["b: bytes", "i: int", "j: int"], "bytes"),
         "char_code" => (vec!["c: char"], "int"),
+        "signals" => (vec![], "Channel<int>"),
         "push" => (vec!["arr: [T]", "value: T"], "unit"),
         "reverse" => (vec!["arr: [T]"], "[T]"),
         "insert" => (vec!["m: Map<K, V>", "key: K", "value: V"], "unit"),
@@ -349,6 +350,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "send" => "Sends a value into a channel. Blocks if the channel is bounded and full (backpressure).",
         "recv" => "Receives from a channel: blocks while it is empty and open; returns `None` once it is closed and drained.",
         "select" => "Blocks until one of the channels in the array is ready to receive and returns its index (lowest ready index; deterministic). Follow with `recv(chs[i])`.",
+        "signals" => "Returns the process's OS-signal channel (SIGTERM=15, SIGINT=2 arrive as ints) for graceful shutdown. A singleton; composes with `recv`/`select`. VM only; unix only (M88.1).",
         "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`). For a file handle: closes the file.",
         // --- I/O ---
         "__exists" => "Whether a file or directory exists at the given path.",
@@ -2087,6 +2089,12 @@ static BUILTINS: &[Builtin] = &[
         nullary(a, "args")?;
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // M88.1: signals() -> Channel<int> — el canal de señales del SO (SIGTERM/SIGINT).
+    // Singleton del proceso; compone con recv/select como cualquier canal. Solo VM.
+    Builtin { name: "signals", opcode: OpCode::Signals, check: |a| {
+        nullary(a, "signals")?;
+        Ok(Type::Channel(Box::new(Type::Int)))
+    } },
     // __read_file(path) -> [string] (M11.2c): ["ok", contenido] o ["err", msg]. Prelude → Result.
     Builtin { name: "__read_file", opcode: OpCode::ReadFile, check: |a| {
         arity(a, 1, "__read_file", "")?;
@@ -2310,6 +2318,108 @@ static BUILTINS: &[Builtin] = &[
         Ok(Type::Array(Box::new(Type::String)))
     } },
 ];
+
+
+// ---------------------------------------------------------------------------
+// M88.1 — señales del SO (SIGTERM/SIGINT) para el apagado ordenado de servicios.
+//
+// El truco clásico del **self-pipe**: el handler (async-signal-safe: solo un `write`)
+// escribe el número de señal en un pipe; el scheduler de la VM registra el extremo de
+// lectura en su poller y drena/entrega al canal `signals()`. `extern "C"` sin crates
+// (el precedente de `src/poll.rs`, M17): `pipe`/`write`/`read`/`fcntl`/`signal` viven
+// en libc/libSystem, siempre enlazadas.
+// ---------------------------------------------------------------------------
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+mod signals_host {
+    use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+
+    unsafe extern "C" {
+        fn pipe(fds: *mut i32) -> i32;
+        fn write(fd: i32, buf: *const u8, n: usize) -> isize;
+        fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
+        // OJO: fcntl es VARIÁDICA — declararla con aridad fija es UB en arm64 (los
+        // varargs van por la pila en la convención de Apple). La declaración variádica
+        // hace que Rust emita la llamada correcta.
+        fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+        fn signal(sig: i32, handler: usize) -> usize;
+    }
+
+    const SIGINT: i32 = 2;
+    const SIGTERM: i32 = 15;
+    const F_SETFL: i32 = 4;
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    const O_NONBLOCK: i32 = 0x0004;
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    const O_NONBLOCK: i32 = 0o4000;
+
+    static PIPE_W: AtomicI32 = AtomicI32::new(-1);
+    /// Bandera barata que el scheduler consulta en cada conmutación de fibra.
+    pub static PENDING: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn on_signal(sig: i32) {
+        // Async-signal-safe: solo write + stores atómicos.
+        let b = sig as u8;
+        let w = PIPE_W.load(Ordering::Relaxed);
+        if w >= 0 {
+            unsafe {
+                let _ = write(w, &b, 1);
+            }
+        }
+        PENDING.store(true, Ordering::Release);
+    }
+
+    /// Crea el pipe, instala los handlers (SIGTERM+SIGINT) y devuelve el fd de LECTURA
+    /// (no bloqueante), que la VM registra en su poller.
+    pub fn install() -> Result<i32, String> {
+        let mut fds = [0i32; 2];
+        if unsafe { pipe(fds.as_mut_ptr()) } != 0 {
+            return Err("no se pudo crear el pipe de señales".into());
+        }
+        unsafe {
+            let _ = fcntl(fds[0], F_SETFL, O_NONBLOCK);
+            let _ = fcntl(fds[1], F_SETFL, O_NONBLOCK);
+        }
+        PIPE_W.store(fds[1], Ordering::Release);
+        unsafe {
+            signal(SIGTERM, on_signal as *const () as usize);
+            signal(SIGINT, on_signal as *const () as usize);
+        }
+        Ok(fds[0])
+    }
+
+    /// Drena UN octeto del pipe (el número de señal), o None si no hay más.
+    pub fn read_one(fd: i32) -> Option<i32> {
+        let mut b = 0u8;
+        let n = unsafe { read(fd, &mut b, 1) };
+        if n == 1 { Some(b as i32) } else { None }
+    }
+}
+
+/// M88.1: instala la fontanería de señales y devuelve el fd de lectura del self-pipe.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn signals_install() -> Result<i32, String> {
+    signals_host::install()
+}
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+pub fn signals_install() -> Result<i32, String> {
+    Err("signals() no está soportado en esta plataforma".into())
+}
+
+/// M88.1: ¿hay señales pendientes de entregar? (bandera barata para el scheduler).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn signals_pending() -> bool {
+    signals_host::PENDING.swap(false, std::sync::atomic::Ordering::AcqRel)
+}
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+pub fn signals_pending() -> bool { false }
+
+/// M88.1: drena un número de señal del self-pipe, o None si está vacío.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub fn signals_read_one(fd: i32) -> Option<i32> {
+    signals_host::read_one(fd)
+}
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+pub fn signals_read_one(_fd: i32) -> Option<i32> { None }
 
 #[cfg(test)]
 mod tests {

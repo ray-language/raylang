@@ -1,0 +1,39 @@
+// M88.1 — apagado ordenado con `signals()`: el patrón microservicio.
+//
+// `signals()` devuelve el canal de señales del SO (SIGTERM/SIGINT como int; singleton
+// del proceso, solo VM). Compone NATIVO con `select`: el servicio drena su canal de
+// trabajo O apaga — sin polling ni handlers globales. Pruébalo:
+//
+//   ray run examples/concurrency/senales.ray &
+//   kill -TERM %1
+fn main() -> int {
+    let trabajo: Channel<int> = Channel.new();
+    let sig = signals();
+    spawn(fn() {
+        var i = 0;
+        while (i < 3) {
+            send(trabajo, i);
+            i = i + 1;
+        }
+    });
+    var canales: [Channel<int>] = [trabajo, sig];
+    var vivo = true;
+    while (vivo) {
+        let idx = select(canales);
+        if (idx == 0) {
+            match (recv(trabajo)) {
+                Option.Some(x) => print("trabajo " + to_string(x)),
+                Option.None => { },
+            }
+        } else {
+            match (recv(sig)) {
+                Option.Some(n) => {
+                    print("señal " + to_string(n) + ": drenando y apagando");
+                    vivo = false;
+                },
+                Option.None => { vivo = false; },
+            }
+        }
+    }
+    0
+}

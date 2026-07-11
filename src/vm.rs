@@ -258,6 +258,11 @@ struct Shared {
     /// M15.5/M17: fibras aparcadas esperando **E/S de red** (`accept`/`read` que dieron `WouldBlock`),
     /// cada una con el `fd` de su socket. El scheduler espera readiness real en el poller del SO (M17).
     io_parked: Vec<IoParked>,
+    /// M88.1: el canal de `signals()` (singleton) y el fd de LECTURA de su self-pipe.
+    /// `signal_fd >= 0` = fontanería instalada; el fd entra al poller de `io_wait` y
+    /// las fibras aparcadas en el canal NO cuentan como deadlock (esperan al exterior).
+    signal_chan: Option<usize>,
+    signal_fd: i32,
     /// Canales `Channel<T>` (M12.1): sincronización COMPARTIDA entre actores, fuera del GC de las fibras
     /// (§46.2). Se referencian por id vía `HeapValue::Channel(id)`. El GC rootea sus valores en tránsito.
     channels: Vec<VmChannel>,
@@ -447,6 +452,10 @@ impl<'a> Vm<'a> {
             if sh.outcome.is_some() {
                 return Ok(false); // otro worker apagó el programa
             }
+            // M88.1: entrega de señales pendientes en cada conmutación (bandera atómica barata).
+            if crate::builtins::signals_pending() {
+                Self::deliver_signals(&mut sh);
+            }
             if let Some(next) = sh.ready.pop_front() {
                 sh.running += 1;
                 drop(sh);
@@ -457,7 +466,9 @@ impl<'a> Vm<'a> {
             if sh.running == 0 {
                 // Nadie ejecuta → nadie puede producir trabajo listo. Si hay E/S pendiente, espera readiness
                 // (un solo worker llega aquí, por `running == 0`); si no, es deadlock o fin.
-                if !sh.io_parked.is_empty() {
+                if !sh.io_parked.is_empty() || sh.signal_fd >= 0 {
+                    // M88.1: con la fontanería de señales instalada, "todo aparcado" no es
+                    // deadlock — el exterior puede despertar el programa por el self-pipe.
                     Self::io_wait(&mut sh);
                     continue; // io_wait dejó fibras en `ready`; reintenta el pop
                 }
@@ -996,6 +1007,25 @@ impl<'a> Vm<'a> {
                         scope.children.push(task); // M12.3: adscribe la tarea al scope activo
                     }
                     self.push(HeapValue::Task(task)); // el Task<T> es el resultado de spawn
+                }
+                OpCode::Signals => {
+                    // M88.1: el canal de señales del SO — SINGLETON del proceso (la primera
+                    // llamada crea el canal + instala el self-pipe y los handlers; las demás
+                    // devuelven el mismo canal). El fd entra al poller vía io_wait.
+                    let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                    if sh.signal_chan.is_none() {
+                        let fd = match crate::builtins::signals_install() {
+                            Ok(fd) => fd,
+                            Err(e) => return Err(runtime_error(pos!().0, pos!().1, &e)),
+                        };
+                        let id = sh.channels.len();
+                        sh.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: None, heap: Heap::new() });
+                        sh.signal_chan = Some(id);
+                        sh.signal_fd = fd;
+                    }
+                    let id = sh.signal_chan.expect("recién creado");
+                    drop(sh);
+                    self.push(HeapValue::Channel(id));
                 }
                 OpCode::ChannelNew => {
                     // channel() sin argumentos → canal NO acotado (cap = None). M38.1b: en el host.
@@ -2757,7 +2787,11 @@ impl<'a> Vm<'a> {
             };
             // Cada fibra espera **lectura** (pending_write None) o **escritura** (Some) de su
             // socket. Las durmientes (fd < 0) no entran al poller: solo cuenta su deadline.
-            let read_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.fd >= 0 && p.pending_write.is_none()).map(|p| p.fd).collect();
+            let mut read_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.fd >= 0 && p.pending_write.is_none()).map(|p| p.fd).collect();
+            // M88.1: el self-pipe de señales siempre en el conjunto de lectura.
+            if shared.signal_fd >= 0 {
+                read_fds.push(shared.signal_fd);
+            }
             let write_fds: Vec<i32> = shared.io_parked.iter().filter(|p| p.fd >= 0 && p.pending_write.is_some()).map(|p| p.fd).collect();
             // Solo durmientes (sin fds): el poller con listas vacías retorna al instante (no honra
             // el timeout) → duerme el hilo hasta el deadline más próximo y expira en la vuelta.
@@ -2766,8 +2800,16 @@ impl<'a> Vm<'a> {
                 crate::builtins::sleep_millis(timeout_ms.max(0) as i64);
                 continue;
             }
+            // (con solo el fd de señales y sin deadlines, el poller espera indefinido: correcto —
+            // el programa está aparcado esperando al exterior.)
             if let crate::poll::PollResult::Ready(ready) = crate::poll::wait(&read_fds, &write_fds, timeout_ms) {
                 if !ready.is_empty() {
+                    // M88.1: ¿despertó el self-pipe de señales? Drénalo y entrega al canal
+                    // (readya receptores); el pipe no está en io_parked, así que no entra
+                    // al barrido de abajo.
+                    if shared.signal_fd >= 0 && ready.contains(&shared.signal_fd) {
+                        Self::deliver_signals(shared);
+                    }
                     // Saca las fibras cuyo socket quedó listo; las demás siguen aparcadas.
                     let mut woken: Vec<IoParked> = Vec::new();
                     let mut i = 0;
@@ -2894,6 +2936,38 @@ impl<'a> Vm<'a> {
     /// Despierta una fibra bloqueada en `recv`: le deja `values` (envuelto en el `[T]` que devuelve el
     /// primitivo `__recv`) en su pila de operandos y la encola como lista. `[v]` la entrega un `send`; `[]`
     /// (vacío → `None`) la entrega un `close`.
+    /// M88.1: despierta un receptor con un valor PRIMITIVO (una señal, int inline) — no
+    /// hay fibra emisora de la que transferir heap; el `[T]` se aloja directo en el
+    /// heap del receptor.
+    fn wake_recv_primitive(shared: &mut Shared, mut fiber: Fiber, v: HeapValue) {
+        let arr = fiber.heap.allocate(Obj::Array(vec![v]));
+        fiber.stack.push(HeapValue::Obj(arr));
+        shared.ready.push_back(fiber);
+    }
+
+    /// M88.1: drena el self-pipe y entrega cada señal al canal de `signals()`: receptor
+    /// bloqueado → directo (FIFO); si no, a la cola (+ despierta a los `select` que lo
+    /// esperan). Se llama en cada conmutación de fibra (bandera atómica barata) y desde
+    /// `io_wait` cuando el fd del pipe despierta al poller.
+    fn deliver_signals(shared: &mut Shared) {
+        let Some(chan) = shared.signal_chan else { return };
+        let fd = shared.signal_fd;
+        while let Some(signo) = crate::builtins::signals_read_one(fd) {
+            let v = HeapValue::Int(signo as i64);
+            if let Some(pos) = shared
+                .parked
+                .iter()
+                .position(|p| p.on == chan && matches!(p.waiting, Waiting::Recv))
+            {
+                let parked = shared.parked.remove(pos);
+                Self::wake_recv_primitive(shared, parked.fiber, v);
+            } else {
+                shared.channels[chan].queue.push_back(v);
+                Self::wake_select_waiters(shared, chan);
+            }
+        }
+    }
+
     fn wake_recv(cur: &Fiber, shared: &mut Shared, mut fiber: Fiber, values: Vec<HeapValue>) {
         // M38.1b-2: los `values` vienen del heap de la fibra ACTUAL (el emisor en un rendezvous); se
         // transfieren al heap de la fibra que se despierta (el receptor) antes de alojar el `[T]` ahí.

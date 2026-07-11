@@ -166,6 +166,7 @@ uses; cada uno tiene su envoltorio público en el prelude o en `std/`.
 | `send` | `(ch: Channel<T>, v: T) -> unit` | envía; bloquea si el canal acotado está lleno (backpressure) |
 | `recv` | `(ch: Channel<T>) -> Option<T>` | recibe; bloquea si vacío y abierto; `None` al cerrar y drenar |
 | `select` | `(chs: [Channel<T>]) -> int` | bloquea hasta que un canal esté listo; devuelve el índice menor listo (determinista) |
+| `signals` | `() -> Channel<int>` | M88.1: el canal de señales del SO (SIGTERM=15, SIGINT=2); singleton del proceso, para el apagado ordenado — compone con `recv`/`select`. Solo VM, unix |
 | `close` | `(ch \| handle) -> …` | cierra un canal (los valores pendientes aún se reciben) **o** un handle de archivo/socket |
 
 ### Matemáticas, reloj y azar

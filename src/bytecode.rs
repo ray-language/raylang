@@ -223,6 +223,8 @@ pub enum OpCode {
     HmacSha256,
     /// M43.3: Ed25519. Los dos primeros empujan `[bytes]` etiquetado (`[]`/`[valor]`; el prelude →
     /// `Option<bytes>`); `verify` empuja un `bool` (total).
+    /// M88.1: signals() — el canal de señales del SO (singleton; solo VM).
+    Signals,
     Ed25519PublicKey,
     Ed25519Sign,
     Ed25519Verify,

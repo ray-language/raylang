@@ -65,6 +65,12 @@ fn pg_send(c: PgConn, mtype: int, payload: [int]) -> Result<int, string> {
     net.socket_write_bytes(c.handle, bytes_of(m))
 }
 
+// Tope de tamaño de un mensaje del servidor (anti-bomba de memoria): la longitud la fija el
+// servidor y sin cota `pg_read` acumularía octetos del socket sin fin. Se rechaza al leer la cabecera.
+fn max_message() -> int {
+    67108864
+}
+
 // Lee un mensaje COMPLETO del servidor (acumulando en el buffer lo que haga falta).
 fn pg_read(c: PgConn) -> Result<PgMsg, string> {
     var out = PgMsg { mtype: 0, payload: b"" };
@@ -72,6 +78,12 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
     while (!listo) {
         if (c.buf.len() >= 5) {
             let mlen = be32(c.buf, 1);  // longitud (incluye sus 4 octetos)
+            if (mlen < 4) {
+                return Result.Err("longitud de mensaje inválida (" + to_string(mlen) + ")");
+            }
+            if (mlen > max_message()) {
+                return Result.Err("mensaje excede el límite (" + to_string(mlen) + " octetos, posible bomba de memoria)");
+            }
             let total = 1 + mlen;
             if (c.buf.len() >= total) {
                 out = PgMsg { mtype: c.buf[0], payload: c.buf.sub_bytes(5, total) };
@@ -97,17 +109,33 @@ fn pg_read(c: PgConn) -> Result<PgMsg, string> {
 }
 
 // Parsea un DataRow ('D'): `[nº columnas:2]` y por columna `[longitud:4][valor]` (-1 = NULL → "").
-fn parse_datarow(payload: bytes) -> [string] {
+// Falla como valor ante un payload truncado o una longitud fuera de rango (datos del servidor).
+fn parse_datarow(payload: bytes) -> Result<[string], string> {
+    if (payload.len() < 2) {
+        return Result.Err("DataRow truncado (sin cuenta de columnas)");
+    }
     var cols: [string] = [];
     let ncol = payload[0] << 8 | payload[1];
     var pos = 2;
     var i = 0;
     while (i < ncol) {
-        let vlen = be32(payload, pos);
+        if (pos + 4 > payload.len()) {
+            return Result.Err("DataRow truncado (longitud de columna)");
+        }
+        // La longitud es int32 CON SIGNO: -1 (0xFFFFFFFF) marca NULL. `be32` no extiende el signo,
+        // así que hay que reinterpretarlo — sin esto, el NULL se leía como 4294967295 y `sub_bytes`
+        // reventaba el cliente ante CUALQUIER columna NULL.
+        var vlen = be32(payload, pos);
+        if (vlen >= 2147483648) {
+            vlen = vlen - 4294967296;
+        }
         pos = pos + 4;
         if (vlen < 0) {
             cols.push("");
         } else {
+            if (pos + vlen > payload.len()) {
+                return Result.Err("DataRow con longitud de columna fuera de rango");
+            }
             let v = payload.sub_bytes(pos, pos + vlen);
             match (from_utf8(v)) {
                 Result.Ok(s) => {
@@ -121,7 +149,7 @@ fn parse_datarow(payload: bytes) -> [string] {
         }
         i = i + 1;
     }
-    cols
+    Result.Ok(cols)
 }
 
 // Ejecuta `sql` como consulta simple tras autenticar con SCRAM-SHA-256, y devuelve la PRIMERA fila
@@ -278,7 +306,7 @@ pub fn pg_query(host: string, port: int, user: string, db: string, password: str
         } else if (msg.mtype == 68) {
             // 'D' DataRow
             if (!tengo_fila) {
-                fila = parse_datarow(msg.payload);
+                fila = parse_datarow(msg.payload)?;
                 tengo_fila = true;
             }
         } else if (msg.mtype == 69) {

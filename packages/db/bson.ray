@@ -203,6 +203,15 @@ fn dec_err(msg: string, pos: int) -> string {
     "BSON inválido (octeto " + to_string(pos) + "): " + msg
 }
 
+// Tope de anidamiento al decodificar. Un documento con documentos/arreglos anidados sin fin
+// (0x03/0x04 recursivos) haría que `rd_doc`/`rd_value` recurran hasta agotar la pila del proceso
+// → un servidor malicioso/roto podría tumbar al cliente con una respuesta pequeña. Se rechaza como
+// valor (`Err`) en cuanto se cruza. 200 supera con holgura el límite propio de MongoDB (~100) y se
+// queda muy por debajo de la profundidad de pila de raylang.
+fn max_depth() -> int {
+    200
+}
+
 fn rd_u8(d: Dec) -> Result<int, string> {
     if (d.pos >= d.b.len()) {
         return Result.Err(dec_err("fin de datos inesperado", d.pos));
@@ -276,7 +285,7 @@ fn rd_string(d: Dec) -> Result<string, string> {
     };
 }
 
-fn rd_value(d: Dec, t: int) -> Result<Bson, string> {
+fn rd_value(d: Dec, t: int, depth: int) -> Result<Bson, string> {
     if (t == 1) {
         let bits = rd_le64(d)?;
         return Result.Ok(Bson.Double(math.float_from_bits(bits)));
@@ -286,13 +295,13 @@ fn rd_value(d: Dec, t: int) -> Result<Bson, string> {
         return Result.Ok(Bson.Str(s));
     }
     if (t == 3) {
-        let fields = rd_doc(d)?;
+        let fields = rd_doc(d, depth + 1)?;
         return Result.Ok(Bson.Doc(fields));
     }
     if (t == 4) {
         // Un arreglo llega como documento con claves "0", "1", …: se descartan los nombres
         // (el spec exige ese orden; confiamos en el emisor, como los drivers oficiales).
-        let fields = rd_doc(d)?;
+        let fields = rd_doc(d, depth + 1)?;
         var items: [Bson] = [];
         var i = 0;
         while (i < fields.len()) {
@@ -341,7 +350,10 @@ fn rd_value(d: Dec, t: int) -> Result<Bson, string> {
     Result.Err(dec_err("tipo BSON no soportado: " + to_string(t), d.pos - 1))
 }
 
-fn rd_doc(d: Dec) -> Result<[Field], string> {
+fn rd_doc(d: Dec, depth: int) -> Result<[Field], string> {
+    if (depth > max_depth()) {
+        return Result.Err(dec_err("anidamiento demasiado profundo (posible DoS): más de " + to_string(max_depth()) + " niveles", d.pos));
+    }
     let start = d.pos;
     let total = rd_le32(d)?;
     if (total < 5 || start + total > d.b.len()) {
@@ -352,7 +364,7 @@ fn rd_doc(d: Dec) -> Result<[Field], string> {
     while (d.pos < end - 1) {
         let t = rd_u8(d)?;
         let name = rd_cstring(d)?;
-        let v = rd_value(d, t)?;
+        let v = rd_value(d, t, depth)?;
         fields.push(Field { name: name, value: v });
     }
     let term = rd_u8(d)?;
@@ -366,7 +378,7 @@ fn rd_doc(d: Dec) -> Result<[Field], string> {
 /// on truncated data, bad lengths, or unsupported types.
 pub fn decode(b: bytes) -> Result<[Field], string> {
     var d = Dec { b: b, pos: 0 };
-    let fields = rd_doc(d)?;
+    let fields = rd_doc(d, 0)?;
     if (d.pos != b.len()) {
         return Result.Err(dec_err("datos sobrantes tras el documento", d.pos));
     }

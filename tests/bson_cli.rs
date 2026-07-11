@@ -204,3 +204,70 @@ fn bson_vectores_del_spec_roundtrip_y_errores() {
     assert_eq!(correr(&app, &[]), ESPERADO, "VM");
     assert_eq!(correr(&app, &["--interp"]), ESPERADO, "intérprete");
 }
+
+fn proyecto_profundo(base: &std::path::Path) -> std::path::PathBuf {
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(
+        app.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ndb = \"path:{}\"\n",
+            db.display()
+        ),
+    )
+    .unwrap();
+    // Construye un BSON de N documentos anidados y comprueba que decode lo rechaza como VALOR
+    // (Err), sin agotar la pila. 50 y 200 (dentro del tope) deben decodificar; 600 debe fallar.
+    let main = r#"import db/bson;
+
+fn nested(n: int) -> bytes {
+    var cur: [int] = [5, 0, 0, 0, 0];
+    var k = 0;
+    while (k < n) {
+        let l = cur.len() + 8;
+        var next: [int] = [];
+        next.push(l & 255); next.push((l >> 8) & 255);
+        next.push((l >> 16) & 255); next.push((l >> 24) & 255);
+        next.push(3); next.push(97); next.push(0);
+        var i = 0;
+        while (i < cur.len()) { next.push(cur[i]); i = i + 1; }
+        next.push(0);
+        cur = next;
+        k = k + 1;
+    }
+    bytes_of(cur)
+}
+
+fn probar(etiqueta: string, n: int) {
+    match (bson.decode(nested(n))) {
+        Result.Ok(fs) => { print(etiqueta + ": OK"); },
+        Result.Err(e) => { print(etiqueta + ": Err"); },
+    }
+}
+
+fn main() -> int {
+    probar("d50", 50);
+    probar("d200", 200);
+    probar("d600", 600);
+    0
+}
+"#;
+    std::fs::write(app.join("src/main.ray"), main).unwrap();
+    app
+}
+
+/// M76 — un BSON con anidamiento excesivo (documentos/arreglos recursivos) ya NO tumba al cliente
+/// por desbordamiento de pila: se rechaza como valor (`Err`). Antes, ~4.8 KB (600 niveles) abortaban
+/// el proceso con "desbordamiento de pila".
+#[test]
+fn bson_anidamiento_profundo_es_error() {
+    let base = std::env::temp_dir().join("ray_bson_cli_profundo");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let app = proyecto_profundo(&base);
+
+    const ESPERADO_PROFUNDO: &str = "d50: OK\nd200: OK\nd600: Err\n";
+    assert_eq!(correr(&app, &[]), ESPERADO_PROFUNDO, "VM");
+    assert_eq!(correr(&app, &["--interp"]), ESPERADO_PROFUNDO, "intérprete");
+}

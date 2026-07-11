@@ -126,6 +126,21 @@ fn data_row(cols: &[String]) -> Vec<u8> {
     dr
 }
 
+/// DataRow ('D') con columnas que pueden ser NULL (`None` → longitud -1 = 0xFFFFFFFF).
+fn data_row_opt(cols: &[Option<String>]) -> Vec<u8> {
+    let mut dr = vec![(cols.len() >> 8) as u8, cols.len() as u8];
+    for c in cols {
+        match c {
+            Some(v) => {
+                dr.extend_from_slice(&(v.len() as u32).to_be_bytes());
+                dr.extend_from_slice(v.as_bytes());
+            }
+            None => dr.extend_from_slice(&(-1i32).to_be_bytes()), // marcador NULL
+        }
+    }
+    dr
+}
+
 fn command_complete(tag: &str) -> Vec<u8> {
     let mut t = tag.as_bytes().to_vec();
     t.push(0);
@@ -170,6 +185,11 @@ fn atender_stream<S: Read + Write>(s: &mut S) {
             let fija: Vec<String> = (0..ncols).map(|k| format!("fija{k}")).collect();
             s.write_all(&msg(b'D', &data_row(&fija))).unwrap();
             s.write_all(&msg(b'C', &command_complete("SELECT 2"))).unwrap();
+        } else if query.starts_with("NULLTEST") {
+            // Fila con una columna NULL (longitud -1): antes reventaba el cliente (be32 sin signo).
+            s.write_all(&msg(b'T', &row_description(2))).unwrap();
+            s.write_all(&msg(b'D', &data_row_opt(&[Some("hola".to_string()), None]))).unwrap();
+            s.write_all(&msg(b'C', &command_complete("SELECT 1"))).unwrap();
         } else if query.starts_with("BOOM") {
             // ErrorResponse: campos [tipo][valor NUL]… 'M' = mensaje.
             let mut e = Vec::new();
@@ -278,6 +298,11 @@ fn main() -> int {{
         Result.Ok(n) => {{ print("insert: " + to_string(n)); }},
         Result.Err(e) => {{ print(e); return 1; }},
     }}
+    // fila con columna NULL: llega como "" (antes reventaba el cliente).
+    match (postgres.query(c, "NULLTEST", [])) {{
+        Result.Ok(rows) => {{ print("null: [" + rows[0].join("|") + "]"); }},
+        Result.Err(e) => {{ print(e); return 1; }},
+    }}
     // error del servidor.
     match (postgres.query(c, "BOOM", [])) {{
         Result.Ok(_) => {{ print("no debería"); }},
@@ -305,7 +330,7 @@ fn correr(app: &std::path::Path, flags: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-const ESPERADO: &str = "ada|36\nfija0|fija1\nbegin: 0\ninsert: 5\npostgres: relacion inexistente\n";
+const ESPERADO: &str = "ada|36\nfija0|fija1\nbegin: 0\ninsert: 5\nnull: [hola|]\npostgres: relacion inexistente\n";
 
 #[test]
 fn postgres_v2_extendido_params_y_transaccion() {

@@ -74,7 +74,10 @@ fn error_de_ejecucion_muestra_la_traza_de_llamadas() {
         "fn helper(x: int) -> int {\n    assert(x > 0);\n    x\n}\nfn main() -> int {\n    helper(0 - 1) + 0\n}\n",
         "ray_err_trace.ray",
     );
-    assert!(err.contains("aserción falló"), "cabecera\n{err}");
+    // M79c: la cabecera y el `^` se reposicionan al primer marco de USUARIO (el
+    // `assert(x > 0)` de helper), no al `panic` del prelude.
+    assert!(err.contains("error en ejecución en 2:5: aserción falló"), "cabecera repositionada\n{err}");
+    assert!(err.contains("2 |     assert(x > 0);"), "muestra la línea del usuario\n{err}");
     assert!(err.contains("en assert (prelude:"), "marco del prelude etiquetado\n{err}");
     assert!(err.contains("desde helper (ray_err_trace:2:5)"), "sitio del assert en helper\n{err}");
     assert!(err.contains("desde main (ray_err_trace:6:5)"), "sitio de la llamada en main\n{err}");
@@ -86,4 +89,18 @@ fn error_directo_en_main_no_imprime_traza() {
     let err = run_file_stderr("fn main() -> int {\n    let d = 0;\n    10 / d\n}\n", "ray_err_sin_traza.ray");
     assert!(err.contains("error en ejecución en 3:"), "{err}");
     assert!(!err.contains("desde "), "sin traza con un solo marco\n{err}");
+}
+
+#[test]
+fn error_en_la_std_reposiciona_la_cabecera_al_llamador() {
+    // M79c: un trap dentro de `std/math` (factorial(25) desborda el int) apunta la
+    // cabecera al SITIO del usuario; el marco real de la std queda en la traza.
+    let err = run_file_stderr(
+        "import std/math;\n\nfn main() -> int {\n    let x = math.factorial(25);\n    x\n}\n",
+        "ray_err_std_trace.ray",
+    );
+    assert!(err.contains("error en ejecución en 4:13"), "cabecera en el llamador\n{err}");
+    assert!(err.contains("4 |     let x = math.factorial(25);"), "línea del usuario\n{err}");
+    assert!(err.contains("en std::math::factorial (std/math:"), "marco real en la traza\n{err}");
+    assert!(err.contains("desde main (ray_err_std_trace:4:13)"), "llamador en la traza\n{err}");
 }

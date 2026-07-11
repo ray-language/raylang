@@ -466,6 +466,20 @@ assert(x > 0);                     // aborta si es falso
 assert_eq(resultado, esperado);    // aborta mostrando ambos (T: Eq + Show)
 ```
 
+Un error de ejecución imprime, además de la cabecera con su posición, la **traza de
+llamadas** (`en <fn> … desde <fn> …`). Si el error nace en el prelude o en la `std`
+(p. ej. un `assert` fallido), la cabecera y el `^` apuntan a **tu** llamada — el sitio
+real queda igualmente en la traza:
+
+```text
+error en ejecución en 2:5: aserción falló
+  2 |     assert(x > 0);
+    |     ^
+  en assert (prelude:836:9)
+  desde helper (mi_prog:2:5)
+  desde main (mi_prog:8:13)
+```
+
 ## 8. Funciones de orden superior e iteradores
 
 **Closures** (funciones anónimas con captura por referencia del ámbito):

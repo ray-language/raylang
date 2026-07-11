@@ -1095,8 +1095,17 @@ fn run_file(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u
         Ok(Value::Int(code)) => process::exit((code & 0xFF) as i32),
         Ok(_) => process::exit(0),
         Err(mut e) => {
-            let (source, name, local) = locate(e.line);
             let trace = std::mem::take(&mut e.trace);
+            // M79c: si el error cayó en el prelude o en la std (código que el usuario no
+            // tiene delante), la cabecera y el `^` se reposicionan al PRIMER marco de
+            // usuario — el assert fallido apunta al `assert(...)` del usuario, no al
+            // `panic` del prelude. La traza completa se imprime igual (la entrada 0
+            // sigue contando el sitio real). Sin marco de usuario → posición original.
+            if let Some((line, col)) = first_user_frame(&trace, &locate) {
+                e.line = line;
+                e.col = col;
+            }
+            let (source, name, local) = locate(e.line);
             e.line = local;
             let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
             eprintln!("{}", diagnostic::render(&source, local, e.col, 1, &head));
@@ -1106,6 +1115,19 @@ fn run_file(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u
             process::exit(70); // EX_SOFTWARE
         }
     }
+}
+
+/// M79c: el primer marco de la traza que es código de USUARIO — en banda (no el prelude,
+/// el único fuente inyectado sin banda propia) y fuera de la std embebida (`std` /
+/// `std/…`). Devuelve su posición GLOBAL (quien llama la localiza después). `None` si no
+/// hay traza o ningún marco califica.
+fn first_user_frame(trace: &[runtime::TraceFrame], locate: &Locate) -> Option<(usize, usize)> {
+    trace.iter().find_map(|f| {
+        let (source, name, local) = locate(f.line);
+        let in_band = local <= source.lines().count();
+        let is_std = name == "std" || name.starts_with("std/");
+        if in_band && !is_std { Some((f.line, f.col)) } else { None }
+    })
 }
 
 /// M79: renderiza la traza de llamadas de un error de runtime, una línea por marco

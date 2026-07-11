@@ -8110,7 +8110,21 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   truncado >12 marcos (6 + `… (N marcos omitidos)` + 5), nada con <2 marcos. Verificado
   multi-módulo: `desde util::validate (util:2:5)` + `desde main (main:4:5)`.
 
-### §83.3 Qué NO cambia
+### §83.3 M79c — reposición de la cabecera al primer marco de usuario
+
+> Decidido con el usuario tras cerrar 79a/b: la mitad "intrinsic" del diseño original, ahora
+> barata porque la traza ya existe. **Solo presentación (`cli.rs`)**: si la entrada 0 de la
+> traza cae en el prelude (fuera de banda) o en un módulo `std`/`std/…`, la CABECERA (y el
+> `^` del diagnóstico) se reposicionan al **primer marco de usuario** (el primero en banda
+> que no sea std) — el `assert` fallido apunta al `assert(x > 0)` del usuario; el trap de
+> `factorial` al `math.factorial(25)` del llamador. **COMPLETO** (errors_cli 8/8; lib 544;
+> `first_user_frame` en `cli.rs`; MANUAL § panic/assert con el formato). La traza completa se imprime igual
+> (la entrada 0 sigue contando el sitio real) → cero pérdida de información. Sin marco de
+> usuario (traza vacía: fuel/heap/deadlock) → fallback a la posición original. Los motores
+> no cambian (`RuntimeError` intacto). Diferido: saltar también paquetes/deps (`packages/*`,
+> `.ray-deps`) — v1 solo prelude+std, que son los fuentes que el usuario no tiene delante.
+
+### §83.4 Qué NO cambia
 
 `Display` de `RuntimeError` · el formato del runner de `@test` (`e.msg` crudo) · el REPL ·
 exit code 70 · `tests/errors_cli.rs` (prefijo `error en ejecución en L:`) · los oráculos

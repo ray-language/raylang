@@ -4282,6 +4282,54 @@ mod tests {
         }
     }
 
+    /// Opt.12: el plegado de constantes. (a) Una expresión de literales se compila a
+    /// UNA constante (cero opcodes aritméticos en el chunk) con el valor correcto.
+    /// (b) Lo que puede trapear (división por cero, overflow) NO se pliega: sigue
+    /// dando el MISMO error de runtime en ambos motores, con su posición.
+    #[test]
+    fn plegado_de_constantes() {
+        let src = "fn main() -> int { 1 + 2 * 3 - 4 / 2 }";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
+        let compiled = compile_program(&prog).expect("compila");
+        let main = compiled.functions.iter().find(|f| f.name == "main").expect("main");
+        let arith = main
+            .chunk
+            .code
+            .iter()
+            .filter(|op| matches!(op, OpCode::Add | OpCode::Sub | OpCode::Mul | OpCode::Div))
+            .count();
+        assert_eq!(arith, 0, "la expresión de literales debe plegarse: {:?}", main.chunk.code);
+        assert_eq!(run_program(&compiled).expect("corre"), Value::Int(5));
+
+        // Lo trapeante queda para el runtime, idéntico en ambos motores.
+        for (src, msg) in [
+            ("fn main() -> int { 1 / 0 }", "división entera por cero"),
+            ("fn main() -> int { 7 % 0 }", "módulo por cero"),
+            ("fn main() -> int { 9223372036854775807 + 1 }", "desbordamiento aritmético en int"),
+        ] {
+            let tokens = crate::lexer::lex(src).expect("lex ok");
+            let mut prog = crate::parser::parse(tokens).expect("parse ok");
+            crate::checker::check(&mut prog).expect("check ok");
+            let interp = crate::interpreter::run(&prog).expect_err("el intérprete debe errar");
+            let compiled = compile_program(&prog).expect("compila");
+            let vm = run_program(&compiled).expect_err("la VM debe errar");
+            assert_eq!(interp.msg, msg, "intérprete: {}", src);
+            assert_eq!(vm.msg, msg, "vm: {}", src);
+        }
+
+        // Floats y bools también se pliegan, con el resultado del oráculo.
+        let src = "fn main() -> int { if (0.5 * 4.0 == 2.0 && !(1 > 2)) { 42 } else { 0 } }";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
+        let interp = crate::interpreter::run(&prog).expect("interp corre");
+        let compiled = compile_program(&prog).expect("compila");
+        assert_eq!(run_program(&compiled).expect("vm corre"), interp);
+        assert_eq!(interp, Value::Int(42));
+    }
+
     /// M79: la traza de llamadas de un error de runtime debe ser IDÉNTICA (nombres +
     /// posiciones) entre ambos motores: panic anidado (con marcos repetidos por
     /// recursión no-cola), assert del prelude (la traza cruza al fuente inyectado),

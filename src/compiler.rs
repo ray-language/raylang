@@ -751,6 +751,24 @@ impl<'a> Compiler<'a> {
 
     fn emit_expr(&mut self, expr: &Expr) -> Result<(), CompileError> {
         let (line, col) = (expr.line, expr.col);
+        // Opt.12: plegado de constantes. Una (sub)expresión hecha solo de literales y
+        // operaciones que NO pueden fallar en runtime se evalúa en compilación y se
+        // emite como una única constante (`1 + 2` → `3`, `24 * 60 * 60` → `86400`).
+        // Lo que puede trapear (división/módulo por cero, overflow del int checked) se
+        // deja sin plegar → la semántica es idéntica y el oráculo VM↔intérprete no lo ve.
+        if matches!(&expr.kind, ExprKind::Binary { .. } | ExprKind::Unary { .. }) {
+            if let Some(v) = const_fold(expr) {
+                match v {
+                    Value::Bool(true) => self.emit(OpCode::True, line, col),
+                    Value::Bool(false) => self.emit(OpCode::False, line, col),
+                    v => {
+                        let idx = self.cur().chunk.add_constant(v);
+                        self.emit(OpCode::Constant(idx), line, col)
+                    }
+                };
+                return Ok(());
+            }
+        }
         match &expr.kind {
             ExprKind::Int(v) => {
                 let idx = self.cur().chunk.add_constant(Value::Int(*v));
@@ -1124,6 +1142,72 @@ fn returns_immediately(chunk: &Chunk, mut j: usize) -> bool {
 /// de salto** (`Jump`/`JumpIfFalse`, los únicos opcodes con destino de código). Un par NO se fusiona si su
 /// segundo opcode es **destino de un salto** (algo aterrizaría entre medias). Corre tras el TCO (no fusiona
 /// a través de una llamada). El resultado es equivalente: mismos empujes, mismos saltos → oráculo intacto.
+/// Opt.12: evalúa en COMPILACIÓN una expresión hecha solo de literales `int`/`float`/
+/// `bool` y operaciones **totales** (que no pueden fallar en runtime). Devuelve `None`
+/// ante cualquier cosa que deba quedar para el runtime: una sub-expresión no literal,
+/// división/módulo enteros (el 0 y `MIN/-1` deben trapear con su posición), overflow
+/// del `int` checked, y los tipos fuera de alcance (string/uint/char). Cada regla es
+/// la MISMA expresión de Rust que ejecuta el fast-path de la VM (y `apply_binary`) →
+/// plegar no cambia ningún resultado observable y el oráculo VM↔intérprete no lo ve.
+fn const_fold(e: &Expr) -> Option<Value> {
+    use Value::{Bool, Float, Int};
+    match &e.kind {
+        ExprKind::Int(n) => Some(Int(*n)),
+        ExprKind::Float(f) => Some(Float(*f)),
+        ExprKind::Bool(b) => Some(Bool(*b)),
+        ExprKind::Unary { op, expr } => match (op, const_fold(expr)?) {
+            (UnaryOp::Neg, Int(n)) => n.checked_neg().map(Int),
+            (UnaryOp::Neg, Float(f)) => Some(Float(-f)),
+            (UnaryOp::Not, Bool(b)) => Some(Bool(!b)),
+            (UnaryOp::BitNot, Int(n)) => Some(Int(!n)),
+            _ => None,
+        },
+        ExprKind::Binary { op, left, right } => {
+            let (l, r) = (const_fold(left)?, const_fold(right)?);
+            match (op, l, r) {
+                // Aritmética entera: checked — un overflow NO se pliega (trap de runtime).
+                (BinaryOp::Add, Int(a), Int(b)) => a.checked_add(b).map(Int),
+                (BinaryOp::Sub, Int(a), Int(b)) => a.checked_sub(b).map(Int),
+                (BinaryOp::Mul, Int(a), Int(b)) => a.checked_mul(b).map(Int),
+                (BinaryOp::Div, Int(a), Int(b)) if b != 0 => a.checked_div(b).map(Int),
+                (BinaryOp::Rem, Int(a), Int(b)) if b != 0 => a.checked_rem(b).map(Int),
+                // Bit a bit: totales (mismos `wrapping_*` que ambos motores).
+                (BinaryOp::BitAnd, Int(a), Int(b)) => Some(Int(a & b)),
+                (BinaryOp::BitOr, Int(a), Int(b)) => Some(Int(a | b)),
+                (BinaryOp::BitXor, Int(a), Int(b)) => Some(Int(a ^ b)),
+                (BinaryOp::Shl, Int(a), Int(b)) => Some(Int(a.wrapping_shl(b as u32))),
+                (BinaryOp::Shr, Int(a), Int(b)) => Some(Int(a.wrapping_shr(b as u32))),
+                // Aritmética float: total (IEEE; inf/NaN son valores, no errores).
+                (BinaryOp::Add, Float(a), Float(b)) => Some(Float(a + b)),
+                (BinaryOp::Sub, Float(a), Float(b)) => Some(Float(a - b)),
+                (BinaryOp::Mul, Float(a), Float(b)) => Some(Float(a * b)),
+                (BinaryOp::Div, Float(a), Float(b)) => Some(Float(a / b)),
+                (BinaryOp::Rem, Float(a), Float(b)) => Some(Float(a % b)),
+                // Comparaciones e igualdad.
+                (BinaryOp::Lt, Int(a), Int(b)) => Some(Bool(a < b)),
+                (BinaryOp::Le, Int(a), Int(b)) => Some(Bool(a <= b)),
+                (BinaryOp::Gt, Int(a), Int(b)) => Some(Bool(a > b)),
+                (BinaryOp::Ge, Int(a), Int(b)) => Some(Bool(a >= b)),
+                (BinaryOp::Eq, Int(a), Int(b)) => Some(Bool(a == b)),
+                (BinaryOp::Ne, Int(a), Int(b)) => Some(Bool(a != b)),
+                (BinaryOp::Lt, Float(a), Float(b)) => Some(Bool(a < b)),
+                (BinaryOp::Le, Float(a), Float(b)) => Some(Bool(a <= b)),
+                (BinaryOp::Gt, Float(a), Float(b)) => Some(Bool(a > b)),
+                (BinaryOp::Ge, Float(a), Float(b)) => Some(Bool(a >= b)),
+                (BinaryOp::Eq, Float(a), Float(b)) => Some(Bool(a == b)),
+                (BinaryOp::Ne, Float(a), Float(b)) => Some(Bool(a != b)),
+                (BinaryOp::Eq, Bool(a), Bool(b)) => Some(Bool(a == b)),
+                (BinaryOp::Ne, Bool(a), Bool(b)) => Some(Bool(a != b)),
+                // Lógicos: con ambos lados literales el cortocircuito es irrelevante.
+                (BinaryOp::And, Bool(a), Bool(b)) => Some(Bool(a && b)),
+                (BinaryOp::Or, Bool(a), Bool(b)) => Some(Bool(a || b)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 fn fuse_superinstructions(chunk: &mut Chunk) {
     let n = chunk.code.len();
     if n == 0 {

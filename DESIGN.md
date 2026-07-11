@@ -8133,3 +8133,35 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 exit code 70 · `tests/errors_cli.rs` (prefijo `error en ejecución en L:`) · los oráculos
 existentes (comparan `.msg`) · los tests de self-hosting (stdout+exit; no leen stderr) · el
 pipeline auto-alojado (sin traza: el oráculo conductual no la ve).
+
+## 84. M81 — regex II: la Pike VM (capturas, {n,m}, lazy)
+
+> Jul 2026 (IDEAS §40). Cierra los diferidos de M59.2 sobre `examples/stdlib/regex.ray`
+> (librería pura, cero runtime). El salto técnico: la simulación pasa de **conjuntos de pc**
+> (Thompson) a la **Pike VM** — cada hilo lleva sus ranuras de captura y la lista está
+> ordenada por PRIORIDAD, lo que cambia la semántica de leftmost-longest a **leftmost-first**
+> (Perl), la única en la que capturas y cuantificadores lazy tienen sentido. Sigue lineal
+> (dedup por `seen` acota hilos a |insts| por posición).
+
+- **Capturas**: `Group(re, g)` en el AST (el `(` captura, numerado por orden de apertura;
+  `(?:...)` agrupa sin capturar); opcode `8 Save(slot)` (2g/2g+1; el grupo 0 = match entero,
+  Save(0)/Save(1) envuelven el programa). `add_thread` copia las ranuras al pasar por un Save
+  (copy-on-write). API: `captures`/`captures_str -> Option<[Option<(int,int)>]/[Option<string>]>`
+  (un grupo que no participó — rama no tomada de `|` — es None) + los métodos en `Matcher`.
+- **`{n}`/`{n,}`/`{n,m}`**: expandidos EN EL PARSER (n copias + Star / opcionales anidados;
+  los nodos del AST se comparten — compilar dos veces el mismo nodo emite dos copias, sin
+  clonar). Tope 512; `m < n` = Err; un `{` sin dígito detrás es literal (como Perl).
+- **Lazy** (`*?` `+?` `??` `{n,m}?`): solo el ORDEN de los brazos del Split (greedy prefiere
+  el cuerpo, lazy la salida) — la prioridad de la Pike VM hace el resto.
+- **El corazón** (`run_pike(prog, txt, n, start, seed, full)`): procesa la lista por prioridad;
+  un Match registra y CORTA los hilos de menor prioridad (los de mayor ya avanzaron y pueden
+  sobreescribir) → leftmost-first-greedy; `seed` siembra un arranque por posición (búsqueda no
+  anclada, con la MENOR prioridad → leftmost) hasta el primer match; `full` solo acepta Match
+  al consumir todo (un Match prematuro muere sin cortar) → `full_match` exacto. `find`/
+  `find_all`/`replace_all` reconstruidos sobre `find_from` (mismo comportamiento observable;
+  goldens antiguos verdes sin tocar).
+- Verificado: `regex_captures_demo.ray` + golden en `tests/regex_cli.rs` (ambos motores
+  idénticos); los 3 goldens previos intactos. Gotcha reencontrado: `push(Option.None)` no
+  infiere T → materializar con `var nada: Option<T> = Option.None`.
+- Diferido: backreferences (exigen backtracking — rompen la garantía lineal, descartado),
+  clases Unicode, referencias `$1` en `replace_all`.

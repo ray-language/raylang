@@ -110,3 +110,53 @@ fn regex_ambos_motores_coinciden() {
     assert!(ok1 && ok2, "regex_demo falló");
     assert_eq!(interp, vm, "el intérprete y la VM difieren en regex_demo");
 }
+
+// ---------------------------------------------------------------------------
+// M81 — Pike VM: grupos de captura, {n,m} y cuantificadores lazy.
+// ---------------------------------------------------------------------------
+const ESPERADO_M81: &[&str] = &[
+    "caps /(\\d+)-(\\d+)/ ~ \"tel 12-345 fin\" → [0]=12-345 [1]=12 [2]=345",
+    "caps /(a+)(b*)/ ~ \"aab\" → [0]=aab [1]=aa [2]=b",
+    "caps /((a)(b))c/ ~ \"abc\" → [0]=abc [1]=ab [2]=a [3]=b",
+    "caps /(x)|(y)/ ~ \"y\" → [0]=y [1]=<none> [2]=y",
+    "caps /(?:ab)+(c)/ ~ \"ababc\" → [0]=ababc [1]=c",
+    "full  /a{3}/ ~ \"aaa\" = si",
+    "full  /a{3}/ ~ \"aa\" = no",
+    "full  /a{3}/ ~ \"aaaa\" = no",
+    "full  /a{2,}/ ~ \"aaaa\" = si",
+    "full  /a{2,}/ ~ \"a\" = no",
+    "full  /a{2,3}/ ~ \"aaa\" = si",
+    "full  /a{2,3}/ ~ \"aaaa\" = no",
+    "full  /(ab){2}/ ~ \"abab\" = si",
+    "full  /\\d{2,4}/ ~ \"123\" = si",
+    "full  /a{x}/ ~ \"a{x}\" = si",
+    "find  /<.+>/ ~ \"<a><b>\" = (0,6)",
+    "find  /<.+?>/ ~ \"<a><b>\" = (0,3)",
+    "find  /a+?/ ~ \"aaa\" = (0,1)",
+    "caps /\"(.*?)\"/ ~ \"dice \"hola\" y \"adios\"\" → [0]=\"hola\" [1]=hola",
+    "1,22,333",
+    "a_b_c",
+];
+
+fn correr_m81(flags: &[&str]) -> (Vec<String>, bool) {
+    let demo = format!("{}/examples/stdlib/regex_captures_demo.ray", env!("CARGO_MANIFEST_DIR"));
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .args(flags)
+        .arg(&demo)
+        .output()
+        .expect("ejecuta regex_captures_demo.ray");
+    let lineas = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.to_string())
+        .collect();
+    (lineas, out.status.success())
+}
+
+#[test]
+fn regex_capturas_ambos_motores() {
+    let (interp, ok1) = correr_m81(&[]);
+    let (vm, ok2) = correr_m81(&["--vm"]);
+    assert!(ok1 && ok2, "regex_captures_demo falló");
+    assert_eq!(interp, ESPERADO_M81, "intérprete vs golden");
+    assert_eq!(vm, ESPERADO_M81, "VM vs golden");
+}

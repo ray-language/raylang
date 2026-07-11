@@ -1119,8 +1119,8 @@ Cierre de los diferidos de lenguaje acumulados, uno por hito, en orden de coste/
 
 | Diferido | Alcance | Hito |
 |---|---|---|
-| **Literales float con exponente** (`1e21`, `1.5e-3`, `2E+10`; venía de §20). Lexer de Rust + lexer auto-alojado EN ESPEJO (oráculo byte-idéntico) + SPEC/DESIGN §3.4. Guarda conservadora: `e` solo con dígito (o signo+dígito) detrás | lexer ×2 + docs normativos | **M80** |
-| **Regex II**: grupos de captura, `{n,m}`, cuantificadores lazy (venía de M59.2). Exige subir el motor de Thompson a **Pike VM** (threads con slots de captura) | `std/regex` (librería pura) | **M81** |
+| **Literales float con exponente** (`1e21`, `1.5e-3`, `2E+10`; venía de §20). Lexer de Rust + lexer auto-alojado EN ESPEJO (oráculo byte-idéntico) + SPEC/DESIGN §3.4. Guarda conservadora: `e` solo con dígito (o signo+dígito) detrás. Bonus: 2 exclusiones pre-existentes que faltaban en el corpus del parser auto-alojado (log.ray bitops M70, redis.ray bytes M69) | lexer ×2 + docs normativos | ✅ **M80** |
+| **Regex II**: grupos de captura (`captures`/`captures_str`, `(?:)` no captura), `{n,m}` (expansión en el parser, tope 512), lazy (`*?` `+?` `??` `{n,m}?`). Motor subido de Thompson a **Pike VM** (hilos con ranuras + prioridad) → semántica **leftmost-first** (Perl); goldens previos intactos. DESIGN §84 | `examples/stdlib/regex` (librería pura) | ✅ **M81** |
 | **Claves de usuario en mapas** (trait `Hash`; venía de M13 "genérica vía Hash sigue diferida") | diseño a fijar (candidato: dict en raylang sobre `.hash()`, cero runtime) | **M82** |
 | **Bytes mutable** (venía de M16) | sigue **a demanda** (sin consumidor; alternativa barata: builder sobre `[int]`) | 💤 |
 

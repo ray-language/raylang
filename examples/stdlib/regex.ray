@@ -7,6 +7,11 @@
 //
 // M29.1a (núcleo): literales, `.`, `*` `+` `?`, alternancia `|`, grupos `( )`, concatenación.
 // M29.1b: clases `[...]`/`[^...]` con rangos, escapes `\d`/`\w`/`\s` (y `\D`/`\W`/`\S`), anclas `^`/`$`.
+// M81: **Pike VM** — grupos de CAPTURA (`captures`/`captures_str`; `(?:)` no captura),
+// cuantificadores `{n}`/`{n,}`/`{n,m}` (expandidos en el parser, tope 512) y LAZY
+// (`*?` `+?` `??` `{n,m}?`). Semántica **leftmost-first** (Perl): la prioridad de los hilos
+// (orden de brazos del Split) decide, greedy prefiere repetir y lazy salir. (Antes:
+// leftmost-longest; para los patrones habituales greedy coinciden.)
 // M59.2: `compile(pat) -> Result<Regex, string>` (patrón compilado como valor, error como valor)
 // + trait `Matcher` con los mismos seis nombres como métodos (sin recompilar por llamada).
 // Las funciones libres (patrón string) se conservan: compilan en cada llamada y PANICAN con
@@ -32,6 +37,7 @@ struct Class {
 //   5 Class(x):   casa si el carácter satisface `classes[x]`; avanza a pc+1.
 //   6 AssertStart: aserción de ancho cero `^`; el hilo sigue solo en la posición 0.
 //   7 AssertEnd:   aserción de ancho cero `$`; el hilo sigue solo al final del texto.
+//   8 Save(x):     M81 — guarda la posición actual en la ranura de captura `x` (epsilon).
 struct Inst {
     op: int,
     x: int,
@@ -39,14 +45,24 @@ struct Inst {
     c: char,
 }
 
-// El programa compilado: las instrucciones y la tabla de clases (a la que apuntan las Class por índice).
+// El programa compilado: las instrucciones y la tabla de clases (a la que apuntan las Class
+// por índice). M81: `nsaves` = ranuras de captura (2 por grupo, incluido el 0 = match entero);
+// `ngroups` = grupos de captura + 1 (para dimensionar el resultado de `captures`).
 struct Prog {
     insts: [Inst],
     classes: [Class],
+    nsaves: int,
+    ngroups: int,
 }
 
 // El AST del patrón. Recursivo: en raylang los enums son objetos del heap (semántica de referencia),
 // así que un payload puede volver a ser un `Re` sin tamaño infinito.
+// M81: `Star`/`Plus`/`Opt` llevan el flag **lazy** (`*?` `+?` `??`: prefieren salir del
+// bucle antes que repetir — con la Pike VM la pereza es solo el ORDEN de los brazos del
+// Split). `Group(re, g)` es un grupo de CAPTURA con índice `g` (1..; el 0 es el match
+// entero); `(?:...)` agrupa sin capturar (no genera nodo Group). `{n,m}` no tiene nodo:
+// el parser lo EXPANDE (los nodos se comparten — compilar el mismo nodo dos veces emite
+// dos copias, sin clonar).
 enum Re {
     Empty,
     Lit(char),
@@ -56,9 +72,10 @@ enum Re {
     AnchorEnd,
     Concat(Re, Re),
     Alt(Re, Re),
-    Star(Re),
-    Plus(Re),
-    Opt(Re),
+    Star(Re, bool),
+    Plus(Re, bool),
+    Opt(Re, bool),
+    Group(Re, int),
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +115,9 @@ fn ranges_space() -> [Range] {
 struct PS {
     pat: [char],
     pos: int,
+    // M81: contador de grupos de captura (el siguiente índice libre; empieza en 1 —
+    // el 0 es el match entero). Se asigna por orden del '(' de APERTURA, como Perl.
+    ngroups: int,
 }
 
 fn ps_at_end(p: PS) -> bool { p.pos >= p.pat.len() }
@@ -145,30 +165,148 @@ fn parse_concat(p: PS) -> Result<Re, string> {
     Result.Ok(node)
 }
 
+// M81: tras `* + ?` (y `{n,m}`) un `?` extra hace el cuantificador LAZY. Un `{` solo
+// es cuantificador si le sigue un dígito (si no, es un `{` literal, como en Perl).
 fn parse_repeat(p: PS) -> Result<Re, string> {
     var node = parse_atom(p)?;
-    while (!ps_at_end(p) && (ps_peek(p) == '*' || ps_peek(p) == '+' || ps_peek(p) == '?')) {
+    while (!ps_at_end(p) && (ps_peek(p) == '*' || ps_peek(p) == '+' || ps_peek(p) == '?' || rep_abre(p))) {
         let op = ps_advance(p);
-        if (op == '*') {
-            node = Re.Star(node);
-        } else if (op == '+') {
-            node = Re.Plus(node);
+        if (op == '{') {
+            node = parse_bounds(p, node)?;
         } else {
-            node = Re.Opt(node);
+            let lazy = quant_lazy(p);
+            if (op == '*') {
+                node = Re.Star(node, lazy);
+            } else if (op == '+') {
+                node = Re.Plus(node, lazy);
+            } else {
+                node = Re.Opt(node, lazy);
+            }
         }
     }
     Result.Ok(node)
+}
+
+// ¿El cursor está sobre un `{` de cuantificador (`{` + dígito)?
+fn rep_abre(p: PS) -> bool {
+    if (ps_peek(p) != '{') {
+        return false;
+    }
+    p.pos + 1 < p.pat.len() && es_digito(p.pat[p.pos + 1])
+}
+
+fn es_digito(c: char) -> bool { '0' <= c && c <= '9' }
+
+// ¿Sigue un `?` (sufijo lazy)? Lo consume si está.
+fn quant_lazy(p: PS) -> bool {
+    if (!ps_at_end(p) && ps_peek(p) == '?') {
+        ps_advance(p);
+        return true;
+    }
+    false
+}
+
+// Lee un entero decimal del patrón (al menos un dígito, garantizado por el llamador).
+fn parse_num(p: PS) -> int {
+    var v = 0;
+    while (!ps_at_end(p) && es_digito(ps_peek(p))) {
+        let c = ps_advance(p);
+        v = v * 10 + ((c as int) - ('0' as int));
+    }
+    v
+}
+
+// M81: `{n}` / `{n,}` / `{n,m}` (el `{` ya se consumió; el llamador garantizó el dígito).
+// Se EXPANDE en el parser: X{n} = n copias; X{n,} = n copias + X*; X{n,m} = n copias +
+// (m−n) opcionales anidados (X(X(X)?)?…). El sufijo `?` hace lazy los opcionales/estrella.
+// Tope m ≤ 512 (la expansión es código emitido; un tope evita el blowup).
+fn parse_bounds(p: PS, node: Re) -> Result<Re, string> {
+    let n = parse_num(p);
+    var m = n;
+    var abierto = false;  // `{n,}`
+    if (!ps_at_end(p) && ps_peek(p) == ',') {
+        ps_advance(p);
+        if (!ps_at_end(p) && es_digito(ps_peek(p))) {
+            m = parse_num(p);
+        } else {
+            abierto = true;
+        }
+    }
+    if (ps_at_end(p) || ps_peek(p) != '}') {
+        return Result.Err("regex: falta '}' en el cuantificador {n,m}");
+    }
+    ps_advance(p);  // '}'
+    let lazy = quant_lazy(p);
+    if (!abierto && m < n) {
+        return Result.Err("regex: cuantificador {n,m} con m < n");
+    }
+    if (m > 512 || n > 512) {
+        return Result.Err("regex: cuantificador {n,m} demasiado grande (tope 512)");
+    }
+    // n copias obligatorias…
+    var out = Re.Empty;
+    var primero = true;
+    var i = 0;
+    while (i < n) {
+        if (primero) {
+            out = node;
+            primero = false;
+        } else {
+            out = Re.Concat(out, node);
+        }
+        i = i + 1;
+    }
+    // …y la cola: `X*` si es abierto, o (m−n) opcionales anidados de dentro afuera.
+    if (abierto) {
+        let cola = Re.Star(node, lazy);
+        if (primero) {
+            return Result.Ok(cola);
+        }
+        return Result.Ok(Re.Concat(out, cola));
+    }
+    var extra = m - n;
+    var cola = Re.Empty;
+    var hay_cola = false;
+    while (extra > 0) {
+        if (hay_cola) {
+            cola = Re.Opt(Re.Concat(node, cola), lazy);
+        } else {
+            cola = Re.Opt(node, lazy);
+            hay_cola = true;
+        }
+        extra = extra - 1;
+    }
+    if (hay_cola) {
+        if (primero) {
+            return Result.Ok(cola);
+        }
+        return Result.Ok(Re.Concat(out, cola));
+    }
+    Result.Ok(out)
 }
 
 fn parse_atom(p: PS) -> Result<Re, string> {
     let c = ps_peek(p);
     if (c == '(') {
         ps_advance(p);
+        // M81: `(?:...)` agrupa SIN capturar; `(...)` captura con índice por orden
+        // de apertura (1..; el 0 es el match entero).
+        var g = 0 - 1;
+        if (p.pos + 1 < p.pat.len() && ps_peek(p) == '?' && ps_peek2(p) == ':') {
+            ps_advance(p);
+            ps_advance(p);
+        } else {
+            g = p.ngroups;
+            p.ngroups = p.ngroups + 1;
+        }
         let inner = parse_alt(p)?;
         if (!ps_at_end(p) && ps_peek(p) == ')') {
             ps_advance(p);
         } else {
             return Result.Err("regex: falta ')'");
+        }
+        if (g >= 0) {
+            return Result.Ok(Re.Group(inner, g));
         }
         return Result.Ok(inner);
     }
@@ -315,44 +453,75 @@ fn compile_re(re: Re, prog: Prog) {
             let ji = prog.insts[jp];
             ji.x = prog.insts.len();
         },
-        Re.Star(a) => {
-            // L1: Split L2, L3 ; L2: <a> ; Jmp L1 ; L3:
+        // M81: en la Pike VM la prioridad es el ORDEN de los brazos del Split (x antes
+        // que y). Greedy prefiere el cuerpo (repetir); lazy prefiere la salida.
+        Re.Star(a, lazy) => {
+            // L1: Split L2, L3 ; L2: <a> ; Jmp L1 ; L3:   (lazy: Split L3, L2)
             let sp = emit(prog, 4, 0, 0, ' ');
             let si = prog.insts[sp];
-            si.x = prog.insts.len();
+            let cuerpo = prog.insts.len();
             compile_re(a, prog);
             emit(prog, 3, sp, 0, ' ');
-            si.y = prog.insts.len();
+            let salida = prog.insts.len();
+            if (lazy) {
+                si.x = salida;
+                si.y = cuerpo;
+            } else {
+                si.x = cuerpo;
+                si.y = salida;
+            }
         },
-        Re.Plus(a) => {
-            // L1: <a> ; Split L1, L3 ; L3:
+        Re.Plus(a, lazy) => {
+            // L1: <a> ; Split L1, L3 ; L3:   (lazy: Split L3, L1)
             let l1 = prog.insts.len();
             compile_re(a, prog);
             let sp = emit(prog, 4, l1, 0, ' ');
             let si = prog.insts[sp];
-            si.y = prog.insts.len();
+            let salida = prog.insts.len();
+            if (lazy) {
+                si.x = salida;
+                si.y = l1;
+            } else {
+                si.y = salida;
+            }
         },
-        Re.Opt(a) => {
-            // Split L1, L2 ; L1: <a> ; L2:
+        Re.Opt(a, lazy) => {
+            // Split L1, L2 ; L1: <a> ; L2:   (lazy: Split L2, L1)
             let sp = emit(prog, 4, 0, 0, ' ');
             let si = prog.insts[sp];
-            si.x = prog.insts.len();
+            let cuerpo = prog.insts.len();
             compile_re(a, prog);
-            si.y = prog.insts.len();
+            let salida = prog.insts.len();
+            if (lazy) {
+                si.x = salida;
+                si.y = cuerpo;
+            } else {
+                si.x = cuerpo;
+                si.y = salida;
+            }
+        },
+        Re.Group(a, g) => {
+            // Save(2g) ; <a> ; Save(2g+1)
+            emit(prog, 8, 2 * g, 0, ' ');
+            compile_re(a, prog);
+            emit(prog, 8, 2 * g + 1, 0, ' ');
         },
     }
 }
 
 fn compile_pattern(pattern: string) -> Result<Prog, string> {
-    let p = PS { pat: pattern.chars(), pos: 0 };
+    let p = PS { pat: pattern.chars(), pos: 0, ngroups: 1 };
     let re = parse_alt(p)?;
     if (!ps_at_end(p)) {
         return Result.Err("regex: carácter inesperado en el patrón (¿')' de más?)");
     }
     var insts: [Inst] = [];
     var classes: [Class] = [];
-    let prog = Prog { insts: insts, classes: classes };
+    let prog = Prog { insts: insts, classes: classes, nsaves: 2 * p.ngroups, ngroups: p.ngroups };
+    // M81: el match entero es el grupo 0 — Save(0) al entrar, Save(1) antes del Match.
+    emit(prog, 8, 0, 0, ' ');
     compile_re(re, prog);
+    emit(prog, 8, 1, 0, ' ');
     emit(prog, 2, 0, 0, ' ');  // Match final
     Result.Ok(prog)
 }
@@ -412,9 +581,38 @@ fn class_matches(cl: Class, ch: char) -> bool {
     if (cl.neg) { !m } else { m }
 }
 
-// Sigue los epsilon (Jmp/Split) y las aserciones (`^`/`$`, dependen de `pos`) desde `pc`, y añade los
-// pc "consumidores" (Char/Any/Class/Match) a `list`. `seen` evita ciclos de epsilon (p. ej. `(a*)*`).
-fn add_thread(prog: Prog, list: [int], seen: [bool], pc: int, pos: int, n: int) {
+// M81 — la simulación pasa de conjuntos de pc a la **Pike VM**: cada hilo lleva sus
+// ranuras de captura, y la LISTA está ordenada por PRIORIDAD (el hilo k manda sobre el
+// k+1). La prioridad la fija el orden de los brazos de cada Split (greedy/lazy) y da la
+// semántica **leftmost-first** de Perl (antes: leftmost-longest); las capturas y los
+// cuantificadores lazy solo tienen sentido con ella. Sigue siendo tiempo lineal: el
+// dedup por `seen` acota los hilos a |insts| por posición.
+
+// Copia las ranuras de captura de un hilo (copy-on-write en Save).
+fn copy_saves(s: [int]) -> [int] {
+    var out: [int] = [];
+    var i = 0;
+    while (i < s.len()) {
+        out.push(s[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn new_saves(n: int) -> [int] {
+    var s: [int] = [];
+    var i = 0;
+    while (i < n) {
+        s.push(0 - 1);
+        i = i + 1;
+    }
+    s
+}
+
+// Sigue los epsilon (Jmp/Split/Save) y las aserciones (`^`/`$`) desde `pc`, añadiendo los
+// pc "consumidores" (Char/Any/Class/Match) a las listas paralelas `pcs`/`svs` EN ORDEN de
+// prioridad. `seen` deduplica: el primer hilo (mayor prioridad) que llega a un pc gana.
+fn add_thread(prog: Prog, pcs: [int], svs: [[int]], seen: [bool], pc: int, saves: [int], pos: int, n: int) {
     if (seen[pc]) {
         return;
     }
@@ -422,82 +620,107 @@ fn add_thread(prog: Prog, list: [int], seen: [bool], pc: int, pos: int, n: int) 
     let ins = prog.insts[pc];
     if (ins.op == 3) {
         // Jmp
-        add_thread(prog, list, seen, ins.x, pos, n);
+        add_thread(prog, pcs, svs, seen, ins.x, saves, pos, n);
     } else if (ins.op == 4) {
-        // Split
-        add_thread(prog, list, seen, ins.x, pos, n);
-        add_thread(prog, list, seen, ins.y, pos, n);
+        // Split: x primero (mayor prioridad), y después.
+        add_thread(prog, pcs, svs, seen, ins.x, saves, pos, n);
+        add_thread(prog, pcs, svs, seen, ins.y, saves, pos, n);
     } else if (ins.op == 6) {
         // AssertStart `^`
         if (pos == 0) {
-            add_thread(prog, list, seen, pc + 1, pos, n);
+            add_thread(prog, pcs, svs, seen, pc + 1, saves, pos, n);
         }
     } else if (ins.op == 7) {
         // AssertEnd `$`
         if (pos == n) {
-            add_thread(prog, list, seen, pc + 1, pos, n);
+            add_thread(prog, pcs, svs, seen, pc + 1, saves, pos, n);
         }
+    } else if (ins.op == 8) {
+        // Save: copia las ranuras (otros hilos comparten las viejas) y sigue.
+        let ns = copy_saves(saves);
+        ns[ins.x] = pos;
+        add_thread(prog, pcs, svs, seen, pc + 1, ns, pos, n);
     } else {
         // Char / Any / Class / Match
-        list.push(pc);
+        pcs.push(pc);
+        svs.push(saves);
     }
 }
 
-fn has_match(prog: Prog, list: [int]) -> bool {
-    var i = 0;
-    while (i < list.len()) {
-        if (prog.insts[list[i]].op == 2) {
-            return true;
+// El corazón del motor: corre la Pike VM sobre `txt[start..]` y devuelve las ranuras de
+// captura del match (leftmost-first), o None.
+//   `seed`: siembra un hilo nuevo por posición (búsqueda NO anclada) mientras no haya match.
+//   `full`: solo acepta un Match al consumir TODO el texto (full_match) — y entonces un
+//           Match prematuro no corta (el hilo muere; los demás siguen).
+fn run_pike(prog: Prog, txt: [char], n: int, start: int, seed: bool, full: bool) -> Option<[int]> {
+    var pcs: [int] = [];
+    var svs: [[int]] = [];
+    let seen0 = new_bools(prog.insts.len());
+    add_thread(prog, pcs, svs, seen0, 0, new_saves(prog.nsaves), start, n);
+    var matched: Option<[int]> = Option.None;
+    var pos = start;
+    while (true) {
+        var npcs: [int] = [];
+        var nsvs: [[int]] = [];
+        let nseen = new_bools(prog.insts.len());
+        var k = 0;
+        var corta = false;
+        while (k < pcs.len() && !corta) {
+            let pc = pcs[k];
+            let ins = prog.insts[pc];
+            if (ins.op == 2) {
+                // Match. Leftmost-first: registra y CORTA los hilos de menor prioridad
+                // (un match posterior solo puede venir de un hilo de mayor prioridad, que
+                // ya está en `npcs`, y entonces sobreescribe). En modo `full` solo vale al
+                // final del texto; antes, el hilo simplemente muere (sin cortar).
+                if (!full) {
+                    matched = Option.Some(svs[k]);
+                    corta = true;
+                } else if (pos == n) {
+                    matched = Option.Some(svs[k]);
+                    corta = true;
+                }
+            } else if (pos < n) {
+                let ch = txt[pos];
+                var consume = false;
+                if (ins.op == 0 && ins.c == ch) {
+                    consume = true;
+                } else if (ins.op == 1) {
+                    consume = true;
+                } else if (ins.op == 5 && class_matches(prog.classes[ins.x], ch)) {
+                    consume = true;
+                }
+                if (consume) {
+                    add_thread(prog, npcs, nsvs, nseen, pc + 1, svs[k], pos + 1, n);
+                }
+            }
+            k = k + 1;
         }
-        i = i + 1;
-    }
-    false
-}
-
-// Avanza `clist` consumiendo `ch`; los hilos nuevos quedan en la posición `pos_next`. Si `seed`, arranca
-// también un hilo en pc 0 (búsqueda: el match puede empezar aquí).
-fn step(prog: Prog, clist: [int], ch: char, pos_next: int, n: int, seed: bool) -> [int] {
-    var nlist: [int] = [];
-    let nseen = new_bools(prog.insts.len());
-    var k = 0;
-    while (k < clist.len()) {
-        let pc = clist[k];
-        let ins = prog.insts[pc];
-        var consume = false;
-        if (ins.op == 0 && ins.c == ch) {
-            // Char que casa
-            consume = true;
-        } else if (ins.op == 1) {
-            // Any
-            consume = true;
-        } else if (ins.op == 5 && class_matches(prog.classes[ins.x], ch)) {
-            // Class
-            consume = true;
+        if (pos >= n) {
+            return matched;
         }
-        if (consume) {
-            add_thread(prog, nlist, nseen, pc + 1, pos_next, n);
+        // Siembra de búsqueda: un arranque nuevo en pos+1, con MENOR prioridad que todos
+        // los hilos vivos (leftmost). Tras un match ya no se siembra.
+        if (seed && matched.is_none()) {
+            add_thread(prog, npcs, nsvs, nseen, 0, new_saves(prog.nsaves), pos + 1, n);
         }
-        k = k + 1;
+        if (npcs.len() == 0) {
+            return matched;
+        }
+        pcs = npcs;
+        svs = nsvs;
+        pos = pos + 1;
     }
-    if (seed) {
-        add_thread(prog, nlist, nseen, 0, pos_next, n);
-    }
-    nlist
+    Option.None
 }
 
 // El motor de full_match sobre un programa YA compilado (lo comparten la función libre y el método).
 fn run_full(prog: Prog, text: string) -> bool {
     let txt = text.chars();
-    let n = txt.len();
-    var clist: [int] = [];
-    let seen = new_bools(prog.insts.len());
-    add_thread(prog, clist, seen, 0, 0, n);
-    var i = 0;
-    while (i < n) {
-        clist = step(prog, clist, txt[i], i + 1, n, false);  // sin sembrar: anclado al inicio
-        i = i + 1;
+    match (run_pike(prog, txt, txt.len(), 0, false, true)) {
+        Option.Some(sv) => true,
+        Option.None => false,
     }
-    has_match(prog, clist)
 }
 
 // ¿Casa el patrón con TODO el texto (anclado a ambos extremos)?
@@ -513,22 +736,10 @@ pub fn full_match(pattern: string, text: string) -> bool {
 // El motor de search sobre un programa ya compilado.
 fn run_search(prog: Prog, text: string) -> bool {
     let txt = text.chars();
-    let n = txt.len();
-    var clist: [int] = [];
-    let seen = new_bools(prog.insts.len());
-    add_thread(prog, clist, seen, 0, 0, n);
-    if (has_match(prog, clist)) {
-        return true;
+    match (run_pike(prog, txt, txt.len(), 0, true, false)) {
+        Option.Some(sv) => true,
+        Option.None => false,
     }
-    var i = 0;
-    while (i < n) {
-        clist = step(prog, clist, txt[i], i + 1, n, true);  // siembra: el match puede empezar en cualquier posición
-        if (has_match(prog, clist)) {
-            return true;
-        }
-        i = i + 1;
-    }
-    false
 }
 
 // ¿Casa el patrón con ALGÚN substring del texto (búsqueda no anclada)?
@@ -540,49 +751,26 @@ pub fn search(pattern: string, text: string) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// M29.1c — localización: find / find_all / replace_all.
+// M29.1c — localización: find / find_all / replace_all. (M81: sobre la Pike VM,
+// semántica leftmost-first; el span del match sale de las ranuras 0/1.)
 // ---------------------------------------------------------------------------
-// Corre el autómata ANCLADO en la posición `s` y devuelve el índice final del match **más largo**
-// que empieza en `s` (leftmost-longest), o -1 si no hay ninguno. `txt` son los caracteres del texto.
-fn match_at(prog: Prog, txt: [char], s: int, n: int) -> int {
-    var clist: [int] = [];
-    let seen = new_bools(prog.insts.len());
-    add_thread(prog, clist, seen, 0, s, n);
-    var best = 0 - 1;
-    if (has_match(prog, clist)) {
-        best = s;  // match de ancho cero en `s`
-    }
-    var i = s;
-    while (i < n) {
-        clist = step(prog, clist, txt[i], i + 1, n, false);  // anclado: sin sembrar
-        i = i + 1;
-        if (has_match(prog, clist)) {
-            best = i;
-        }
-        if (clist.len() == 0) {
-            return best;  // sin hilos vivos: no puede extenderse más
-        }
-    }
-    best
+// La primera coincidencia buscando desde `s`: sus ranuras de captura, o None.
+fn find_from(prog: Prog, txt: [char], n: int, s: int) -> Option<[int]> {
+    run_pike(prog, txt, n, s, true, false)
 }
 
 // El motor de find sobre un programa ya compilado.
 fn run_find(prog: Prog, text: string) -> Option<(int, int)> {
     let txt = text.chars();
-    let n = txt.len();
-    var s = 0;
-    while (s <= n) {
-        let e = match_at(prog, txt, s, n);
-        if (e >= 0) {
-            return Option.Some((s, e));
-        }
-        s = s + 1;
+    match (find_from(prog, txt, txt.len(), 0)) {
+        Option.Some(sv) => Option.Some((sv[0], sv[1])),
+        Option.None => Option.None,
     }
-    Option.None
 }
 
 // La primera coincidencia (leftmost): `Some((inicio, fin))` con índices por carácter, o `None`.
-/// Finds the first (leftmost-longest) match. Returns `Some((start, end))` as character
+/// Finds the first (leftmost-first, Perl semantics — greedy quantifiers prefer to repeat,
+/// lazy ones to stop) match. Returns `Some((start, end))` as character
 /// indices (end exclusive), or `None` if the pattern does not match anywhere.
 /// Panics on a malformed pattern; prefer `compile` + `Matcher` for user-supplied patterns.
 pub fn find(pattern: string, text: string) -> Option<(int, int)> {
@@ -605,16 +793,20 @@ fn run_find_all(prog: Prog, text: string) -> [string] {
     var out: [string] = [];
     var s = 0;
     while (s <= n) {
-        let e = match_at(prog, txt, s, n);
-        if (e >= 0) {
-            out.push(text.substring(s, e));
-            if (e > s) {
-                s = e;  // continúa tras la coincidencia (no solapada)
-            } else {
-                s = s + 1;  // coincidencia de ancho cero: avanza uno
-            }
-        } else {
-            s = s + 1;
+        match (find_from(prog, txt, n, s)) {
+            Option.Some(sv) => {
+                let a = sv[0];
+                let b = sv[1];
+                out.push(text.substring(a, b));
+                if (b > a) {
+                    s = b;  // continúa tras la coincidencia (no solapada)
+                } else {
+                    s = a + 1;  // coincidencia de ancho cero: avanza uno
+                }
+            },
+            Option.None => {
+                s = n + 1;  // sin más coincidencias
+            },
         }
     }
     out
@@ -635,19 +827,26 @@ fn run_replace_all(prog: Prog, text: string, repl: string) -> string {
     var out = "";
     var s = 0;
     while (s <= n) {
-        let e = match_at(prog, txt, s, n);
-        if (e >= 0 && e > s) {
-            out = out + repl;
-            s = e;
-        } else {
-            // sin coincidencia (o de ancho cero): copia el carácter actual y avanza.
-            if (e >= 0) {
-                out = out + repl;  // coincidencia vacía: inserta el reemplazo
-            }
-            if (s < n) {
-                out = out + text.substring(s, s + 1);
-            }
-            s = s + 1;
+        match (find_from(prog, txt, n, s)) {
+            Option.Some(sv) => {
+                let a = sv[0];
+                let b = sv[1];
+                out = out + text.substring(s, a);  // el tramo sin coincidencia, tal cual
+                out = out + repl;
+                if (b > a) {
+                    s = b;
+                } else {
+                    // coincidencia vacía: copia el carácter actual y avanza uno.
+                    if (a < n) {
+                        out = out + text.substring(a, a + 1);
+                    }
+                    s = a + 1;
+                }
+            },
+            Option.None => {
+                out = out + text.substring(s, n);  // resto sin coincidencias
+                s = n + 1;
+            },
         }
     }
     out
@@ -659,6 +858,77 @@ fn run_replace_all(prog: Prog, text: string, repl: string) -> string {
 /// Panics on a malformed pattern; prefer `compile` + `Matcher` for user-supplied patterns.
 pub fn replace_all(pattern: string, text: string, repl: string) -> string {
     run_replace_all(must_compile(pattern), text, repl)
+}
+
+// ---------------------------------------------------------------------------
+// M81 — grupos de captura.
+// ---------------------------------------------------------------------------
+// Traduce las ranuras a la lista de spans por grupo: el grupo i son las ranuras 2i/2i+1;
+// un grupo que no participó en el match (p. ej. la rama no tomada de un `|`) queda None.
+fn saves_to_groups(prog: Prog, sv: [int]) -> [Option<(int, int)>] {
+    var out: [Option<(int, int)>] = [];
+    var g = 0;
+    while (g < prog.ngroups) {
+        let a = sv[2 * g];
+        let b = sv[2 * g + 1];
+        if (a >= 0 && b >= 0) {
+            out.push(Option.Some((a, b)));
+        } else {
+            // Gotcha: `push(Option.None)` no infiere T → se materializa anotado.
+            var nada: Option<(int, int)> = Option.None;
+            out.push(nada);
+        }
+        g = g + 1;
+    }
+    out
+}
+
+// El motor de captures sobre un programa ya compilado.
+fn run_captures(prog: Prog, text: string) -> Option<[Option<(int, int)>]> {
+    let txt = text.chars();
+    match (find_from(prog, txt, txt.len(), 0)) {
+        Option.Some(sv) => Option.Some(saves_to_groups(prog, sv)),
+        Option.None => Option.None,
+    }
+}
+
+// Los grupos de captura de la primera coincidencia: el grupo 0 es el match entero y
+// cada `( )` numera por orden de apertura; `(?:)` no captura. Índices por carácter.
+/// Capture groups of the first (leftmost-first) match: element 0 is the whole match,
+/// each capturing `( )` gets the next index in order of the opening paren (`(?:...)`
+/// does not capture). Each group is `Some((start, end))` in character indices, or
+/// `None` if the group did not participate in the match. `None` overall if the
+/// pattern does not match. Panics on a malformed pattern; prefer `compile` + `Matcher`.
+pub fn captures(pattern: string, text: string) -> Option<[Option<(int, int)>]> {
+    run_captures(must_compile(pattern), text)
+}
+
+// El motor de captures_str sobre un programa ya compilado.
+fn run_captures_str(prog: Prog, text: string) -> Option<[Option<string>]> {
+    match (run_captures(prog, text)) {
+        Option.Some(grupos) => {
+            var out: [Option<string>] = [];
+            var i = 0;
+            while (i < grupos.len()) {
+                match (grupos[i]) {
+                    Option.Some(par) => { out.push(Option.Some(text.substring(par.0, par.1))); },
+                    Option.None => {
+                        var nada: Option<string> = Option.None;
+                        out.push(nada);
+                    },
+                }
+                i = i + 1;
+            }
+            Option.Some(out)
+        },
+        Option.None => Option.None,
+    }
+}
+
+// Los grupos de la primera coincidencia como substrings (misma numeración que `captures`).
+/// Capture groups of the first match as substrings (same numbering as `captures`).
+pub fn captures_str(pattern: string, text: string) -> Option<[Option<string>]> {
+    run_captures_str(must_compile(pattern), text)
 }
 
 // ---------------------------------------------------------------------------
@@ -674,7 +944,7 @@ pub trait Matcher {
     fn full_match(self, text: string) -> bool;
     /// Does the pattern match SOME substring of the text (unanchored search)?
     fn search(self, text: string) -> bool;
-    /// First (leftmost-longest) match as `Some((start, end))` character indices, or `None`.
+    /// First (leftmost-first) match as `Some((start, end))` character indices, or `None`.
     fn find(self, text: string) -> Option<(int, int)>;
     /// The substring of the first match, or `None`.
     fn find_str(self, text: string) -> Option<string>;
@@ -682,6 +952,11 @@ pub trait Matcher {
     fn find_all(self, text: string) -> [string];
     /// Replaces every non-overlapping match with `repl` (no capture references).
     fn replace_all(self, text: string, repl: string) -> string;
+    /// Capture groups of the first match as `(start, end)` spans (M81). Element 0 is
+    /// the whole match; a group that did not participate is `None`.
+    fn captures(self, text: string) -> Option<[Option<(int, int)>]>;
+    /// Capture groups of the first match as substrings (M81).
+    fn captures_str(self, text: string) -> Option<[Option<string>]>;
 }
 
 impl Matcher for Regex {
@@ -696,4 +971,6 @@ impl Matcher for Regex {
     }
     fn find_all(self, text: string) -> [string] { run_find_all(self.prog, text) }
     fn replace_all(self, text: string, repl: string) -> string { run_replace_all(self.prog, text, repl) }
+    fn captures(self, text: string) -> Option<[Option<(int, int)>]> { run_captures(self.prog, text) }
+    fn captures_str(self, text: string) -> Option<[Option<string>]> { run_captures_str(self.prog, text) }
 }

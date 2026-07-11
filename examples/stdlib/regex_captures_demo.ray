@@ -1,0 +1,65 @@
+// M81 — demo de la Pike VM: grupos de captura, {n,m} y cuantificadores lazy.
+// Lo verifica `tests/regex_cli.rs` (golden, ambos motores).
+from regex import captures_str, find, find_all, replace_all, full_match;
+
+fn show_caps(pat: string, text: string) {
+    match (captures_str(pat, text)) {
+        Option.Some(gs) => {
+            var line = "";
+            var i = 0;
+            while (i < gs.len()) {
+                match (gs[i]) {
+                    Option.Some(s) => { line = line + " [" + to_string(i) + "]=" + s; },
+                    Option.None => { line = line + " [" + to_string(i) + "]=<none>"; },
+                }
+                i = i + 1;
+            }
+            print("caps /" + pat + "/ ~ \"" + text + "\" →" + line);
+        },
+        Option.None => { print("caps /" + pat + "/ ~ \"" + text + "\" → <none>"); },
+    }
+}
+
+fn full(pat: string, text: string) {
+    let r = if (full_match(pat, text)) { "si" } else { "no" };
+    print("full  /" + pat + "/ ~ \"" + text + "\" = " + r);
+}
+
+fn span(pat: string, text: string) {
+    match (find(pat, text)) {
+        Option.Some(p) => print("find  /" + pat + "/ ~ \"" + text + "\" = (" + to_string(p.0) + "," + to_string(p.1) + ")"),
+        Option.None => print("find  /" + pat + "/ ~ \"" + text + "\" = <none>"),
+    }
+}
+
+fn main() -> int {
+    // Grupos de captura: el 0 es el match entero; numeración por '(' de apertura.
+    show_caps("(\\d+)-(\\d+)", "tel 12-345 fin");
+    show_caps("(a+)(b*)", "aab");
+    show_caps("((a)(b))c", "abc");
+    // La rama no tomada de un | no participa → <none>.
+    show_caps("(x)|(y)", "y");
+    // (?:) agrupa sin capturar.
+    show_caps("(?:ab)+(c)", "ababc");
+    // Cuantificadores {n} / {n,} / {n,m} (y sobre grupos).
+    full("a{3}", "aaa");
+    full("a{3}", "aa");
+    full("a{3}", "aaaa");
+    full("a{2,}", "aaaa");
+    full("a{2,}", "a");
+    full("a{2,3}", "aaa");
+    full("a{2,3}", "aaaa");
+    full("(ab){2}", "abab");
+    full("\\d{2,4}", "123");
+    // Un { sin dígito detrás es literal.
+    full("a{x}", "a{x}");
+    // Greedy vs lazy: el greedy toma todo, el lazy lo mínimo.
+    span("<.+>", "<a><b>");
+    span("<.+?>", "<a><b>");
+    span("a+?", "aaa");
+    show_caps("\"(.*?)\"", "dice \"hola\" y \"adios\"");
+    // find_all / replace_all sobre el motor nuevo (compat).
+    print(join(find_all("\\d+", "a1 b22 c333"), ","));
+    print(replace_all("\\s+", "a  b   c", "_"));
+    0
+}

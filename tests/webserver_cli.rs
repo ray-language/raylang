@@ -114,6 +114,16 @@ fn servidor_http_responde_y_enruta() {
     assert!(ok.contains("200 OK"), "esperaba 200 OK, got: {ok}");
     assert!(ok.contains("hola GET"), "esperaba el cuerpo 'hola GET', got: {ok}");
     assert!(ok.contains("Content-Length: 8"), "esperaba Content-Length del cuerpo, got: {ok}");
+    // M85a: la cabecera `Date:` (SHOULD RFC 7231) — presencia y FORMA RFC 1123
+    // (`Wdy, DD Mon YYYY HH:MM:SS GMT`), no el valor (no determinista).
+    let date = ok
+        .lines()
+        .find_map(|l| l.strip_prefix("Date: "))
+        .unwrap_or_else(|| panic!("esperaba la cabecera Date:, got: {ok}"));
+    assert!(
+        date.len() == 29 && date.ends_with(" GMT") && &date[3..5] == ", ",
+        "Date: no tiene forma RFC 1123: {date}"
+    );
 
     let nf = pedir(port, "GET /otra HTTP/1.1\r\nHost: x\r\n\r\n");
     assert!(nf.contains("404 Not Found"), "esperaba 404, got: {nf}");

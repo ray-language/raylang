@@ -1149,6 +1149,21 @@ viejos); sidecar cuando llegue.
 
 ---
 
+## 42. Librerías de tiempo II — hora local y compañía (jul 2026) — M85+
+
+Análisis de los candidatos diferidos de M57 (§18). Base: `std/time` UTC (Hinnant, ISO 8601,
+**RFC 1123 ya existe**), `sleep` cooperativo de fibra (M57.2), `net/udp`, `bytes`.
+
+| Pieza | Diseño fijado | Cuándo | Hito |
+|---|---|---|---|
+| **`Date:` del webserver** (SHOULD RFC 7231) | `time.to_rfc1123(time.now_utc())` en `send_response_keep`, ambos espejos; los tests usan `contains` → solo se añade la aserción de presencia+formato | ya | ✅ **M85a** |
+| **`packages/tz`** — hora local IANA | Parser **TZif v2** en raylang puro leyendo `/usr/share/zoneinfo` vía std/fs (cero deps; formato binario tamaño-DNS). Decisiones: (1) **la ambigüedad DST es API**: `to_utc(civil)` devuelve `enum LocalResult { Single(int), Ambiguous(int,int), Gap }` (estilo chrono; errores como valores); (2) zona del sistema sin primitivo: `env("TZ")` y fallback leer `/etc/localtime` POR CONTENIDO (es un TZif válido); (3) Windows honesto: `load` → Err claro, UTC sigue. Fixtures TZif commiteados + goldens de transiciones DST (determinista, ambos motores). Tier 2 (política §53). Embeber tzdata = decisión estilo ring, solo a demanda | siguiente | **M85** |
+| **`cron`** | dos mitades: `next_after(expr, civil) -> civil` PURO (goldens) + runner sobre spawn+sleep cooperativo. v1 **solo UTC** (la trampa: cron local correcto necesita tz — gap → siguiente hora válida, solape → solo la primera); tz-aware tras M85 | tras tz (o antes, UTC-only) | **M86** |
+| **`ntp`** (SNTP v4 sobre net/udp, ~150 líneas, toy-server como DNS) | especificado | a demanda | 💤 |
+| **`dist`** (HLC ~40 líneas sobre now()) | especificado | multi-nodo real | 💤 |
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

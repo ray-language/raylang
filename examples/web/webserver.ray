@@ -479,6 +479,8 @@ fn send_response_keep(conn: int, r: Response, keep: bool, omit_body: bool) -> Re
     var head: string = "HTTP/1.1 " + to_string(r.status) + " " + status_text(r.status) + "\r\n";
     head = head + "Content-Length: " + to_string(r.body.len()) + "\r\n";
     head = head + "Connection: " + (if (keep) { "keep-alive" } else { "close" }) + "\r\n";
+    // M85a: la cabecera `Date:` (SHOULD de RFC 7231), en RFC 1123 sobre el reloj UTC.
+    head = head + "Date: " + time.to_rfc1123(time.now_utc()) + "\r\n";
     // Cabeceras del usuario (keys() está ordenada → salida determinista).
     let ks: [string] = r.headers.keys();
     var i: int = 0;

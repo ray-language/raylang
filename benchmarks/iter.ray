@@ -1,0 +1,15 @@
+// Opt.13: el coste del next() lazy — 1M de elementos por el camino iter().
+// Compárese con loop.ray (bucle directo) y con `for x in xs` (eager congelado).
+fn main() -> int {
+    var xs: [int] = [];
+    var i = 0;
+    while (i < 1000000) {
+        xs.push(i);
+        i = i + 1;
+    }
+    var acc = 0;
+    for x in xs.iter() {
+        acc = acc + x;
+    }
+    acc % 1000
+}

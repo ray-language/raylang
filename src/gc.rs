@@ -173,6 +173,9 @@ pub struct Heap {
     gray: Vec<Handle>,
     live: usize,
     next_gc: usize,
+    /// Opt.13: elementos escaneados por el ÚLTIMO trazado (lo llena `trace`, lo
+    /// consume `sweep` para amortizar el umbral por trabajo, no solo por conteo).
+    traced_work: usize,
     /// M42.2: **tope de heap** — máximo de objetos vivos permitidos. Junto al fuel (cuenta de
     /// instrucciones), es el otro recurso a acotar para embeber raylang confinado. `usize::MAX` =
     /// **sin límite** (el default): nunca dispara, coste nulo. Al acercarse al tope se fuerza un GC
@@ -191,6 +194,7 @@ impl Default for Heap {
             gray: Vec::new(),
             live: 0,
             next_gc: INITIAL_GC,
+            traced_work: 0,
             max_live: usize::MAX,
             stress: false,
         }
@@ -259,11 +263,33 @@ impl Heap {
     }
 
     /// Propaga la marca: vacía la lista gris marcando los hijos de cada objeto.
+    /// Opt.13: además CONTABILIZA el trabajo de trazado (elementos escaneados), que
+    /// `sweep` usa para amortizar el umbral — un heap con un contenedor grande vivo
+    /// paga O(sus elementos) por recolección aunque haya POCOS objetos, y con el
+    /// umbral por conteo (`live*2`, mínimo 64) el GC corría cada ~50 asignaciones
+    /// re-escaneando el contenedor entero (medido: `for x in xs.iter()` sobre 1M
+    /// costaba 6.8 µs/elemento; el mismo bucle sobre 1k, 0.31 µs → 22×).
     pub fn trace(&mut self) {
+        let mut work = 0usize;
         while let Some(h) = self.gray.pop() {
+            work += self.trace_cost(h);
             for child in self.children(h) {
                 self.mark(child);
             }
+        }
+        self.traced_work = work;
+    }
+
+    /// Opt.13: el coste de trazar un objeto = 1 + los elementos que `children`
+    /// escanea (aunque sean primitivos sin handle: el escaneo se paga igual).
+    fn trace_cost(&self, h: Handle) -> usize {
+        1 + match self.get(h) {
+            Obj::Array(v) => v.len(),
+            Obj::Struct(s) => s.fields.len(),
+            Obj::Closure(c) => c.upvalues.len(),
+            Obj::Enum(e) => e.payload.len(),
+            Obj::Cell(_) => 1,
+            Obj::Map(m) => m.len(),
         }
     }
 
@@ -296,7 +322,12 @@ impl Heap {
                 }
             }
         }
-        // El umbral crece con la población viva (amortiza el costo del GC).
-        self.next_gc = (self.live * 2).max(INITIAL_GC);
+        // El umbral crece con la población viva Y con el TRABAJO de la recolección
+        // recién hecha (Opt.13): tras un trazado que escaneó W elementos se permiten
+        // al menos W/4 asignaciones antes del próximo GC → el coste se amortiza a
+        // O(1) por asignación aunque haya contenedores grandes vivos con pocos
+        // objetos. Contrapartida consciente: más basura transitoria entre GCs
+        // (espacio por tiempo); el tope de heap (`max_live`, M42.2) sigue mandando.
+        self.next_gc = (self.live * 2).max(self.live + self.traced_work / 4).max(INITIAL_GC);
     }
 }

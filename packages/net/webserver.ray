@@ -790,6 +790,179 @@ fn bucle_servidor(host: string, port: int, limits: Limits, preparar: fn(int) -> 
     }
 }
 
+// --- M88.1b: apagado ordenado (graceful shutdown) ---
+//
+// Al llegar la orden de apagado (una señal del SO vía `signals()`, o un valor en cualquier canal
+// `stop`), el servidor (1) DEJA DE ACEPTAR (cierra el listener: un cliente nuevo ve rechazo, no
+// un socket colgado), (2) DRENA las conexiones en vuelo con un plazo (`drain_ms`) y (3) devuelve
+// Ok(0) para que main haga su limpieza y salga. Cero peticiones perdidas en un deploy.
+//
+// Modelo de actores (M38): cero estado mutable compartido. El contador de conexiones activas
+// vive en la fibra del servidor; cada fibra de conexión avisa su fin por el canal `done`; y el
+// accept corre en una BOMBA (fibra propia) que entrega por el canal `conns` — así el bucle
+// principal puede hacer `select` entre stop/conns/done, imposible sobre el accept bloqueante.
+//
+// Keep-alive: el drenaje espera a que las conexiones CIERREN; una ociosa muere por
+// `read_timeout_millis`, así que un `drain_ms` menor puede vencer con ociosas vivas (se cierran
+// al salir el proceso). Solo VM, como serve.
+fn bucle_servidor_drenable(host: string, port: int, limits: Limits, stop: Channel<int>, drain_ms: int, preparar: fn(int) -> Result<int, string>, atender_conn: fn(int)) -> Result<int, string> {
+    match (net.tcp_listen(host, port)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(srv) => {
+            print("escuchando en el puerto " + to_string(net.local_port(srv)));
+            let acotado: bool = limits.max_conns > 0;
+            let sem: Channel<int> = if (acotado) { Channel.bounded(limits.max_conns) } else { Channel.new() };
+            let conns: Channel<int> = Channel.new();
+            let done: Channel<int> = Channel.new();
+            // Se CIERRA al apagar: un canal cerrado queda "listo" para siempre (gotcha de M12.4,
+            // aquí a favor) → despierta a la bomba sin estado compartido.
+            let apagado: Channel<int> = Channel.new();
+            // La bomba de accept. Tras un error (transitorio, o el del cierre del listener en el
+            // apagado) espera 10 ms U observa `apagado`; cerrado gana el select → sale en
+            // silencio en vez de spamear el log con los errores del listener ya cerrado.
+            spawn(fn() {
+                var errores = 0;
+                var seguir = true;
+                while (seguir) {
+                    match (net.tcp_accept(srv)) {
+                        Result.Ok(c) => {
+                            errores = 0;
+                            send(conns, c);
+                        },
+                        Result.Err(e) => {
+                            errores = errores + 1;
+                            if (errores >= 100) {
+                                // Error persistente: rendir el servidor (cerrar `conns` se lo
+                                // comunica al bucle principal, que devuelve como bucle_servidor).
+                                eprint("aceptar: " + e);
+                                close(conns);
+                                seguir = false;
+                            } else {
+                                let pausa: Channel<int> = Channel.new();
+                                spawn(fn() {
+                                    time.sleep(10);
+                                    send(pausa, 1);
+                                });
+                                if (select([apagado, pausa]) == 0) {
+                                    seguir = false;
+                                } else {
+                                    let _ = recv(pausa);
+                                    eprint("aceptar: " + e);
+                                }
+                            }
+                        },
+                    }
+                }
+            });
+            var activos = 0;
+            var conns_abierta = true;
+            var sirviendo = true;
+            while (sirviendo) {
+                let cual = select([stop, conns, done]);
+                if (cual == 0) {
+                    let _ = recv(stop);
+                    sirviendo = false;
+                } else if (cual == 1) {
+                    match (recv(conns)) {
+                        Option.Some(conn) => {
+                            if (acotado) {
+                                send(sem, 1);
+                            }
+                            activos = activos + 1;
+                            spawn(fn() {
+                                match (preparar(conn)) {
+                                    Result.Ok(c) => {
+                                        atender_conn(c);
+                                    },
+                                    Result.Err(e) => {
+                                        eprint("conexión: " + e);
+                                        close(conn);
+                                    },
+                                }
+                                if (acotado) {
+                                    recv(sem);
+                                }
+                                send(done, 1);
+                            });
+                        },
+                        Option.None => {
+                            // La bomba murió por error persistente: rendirse (como bucle_servidor).
+                            conns_abierta = false;
+                            sirviendo = false;
+                        },
+                    }
+                } else {
+                    let _ = recv(done);
+                    activos = activos - 1;
+                }
+            }
+            // Apagado: avisar a la bomba y dejar de aceptar (los clientes nuevos ven rechazo).
+            close(apagado);
+            close(srv);
+            print("apagando: " + to_string(activos) + " conexión(es) en vuelo");
+            // Drenar con plazo. Una conexión aceptada y aún no atendida (ventana mínima entre el
+            // accept de la bomba y este select) se cierra sin respuesta según asoma por `conns`.
+            if (activos > 0 && drain_ms > 0) {
+                let plazo: Channel<int> = Channel.new();
+                spawn(fn() {
+                    time.sleep(drain_ms);
+                    send(plazo, 1);
+                });
+                var esperando = true;
+                while (esperando && activos > 0) {
+                    // Un canal CERRADO siempre está "listo" → si la bomba cerró `conns`, sacarlo
+                    // de la lista del select (el gotcha de M12.4).
+                    let cual = if (conns_abierta) { select([plazo, done, conns]) } else { select([plazo, done]) };
+                    if (cual == 0) {
+                        esperando = false;
+                    } else if (cual == 1) {
+                        let _ = recv(done);
+                        activos = activos - 1;
+                    } else {
+                        match (recv(conns)) {
+                            Option.Some(c) => {
+                                close(c);
+                            },
+                            Option.None => {
+                                conns_abierta = false;
+                            },
+                        }
+                    }
+                }
+                if (activos > 0) {
+                    eprint("apagado: " + to_string(activos) + " conexión(es) en vuelo al vencer el plazo");
+                }
+            }
+            Result.Ok(0)
+        },
+    }
+}
+
+/// Like `serve`, but with graceful shutdown on a channel: when a value arrives on `stop` (or it
+/// is closed), the server stops accepting (new clients are refused), drains in-flight
+/// connections for up to `drain_ms` ms, and returns Ok(0). Wire `stop` to `signals()` — or use
+/// `serve_graceful`, which does exactly that. VM only.
+pub fn serve_shutdown(host: string, port: int, stop: Channel<int>, drain_ms: int, handler: fn(Request) -> Response) -> Result<int, string> {
+    serve_shutdown_limits(host, port, default_limits(), stop, drain_ms, handler)
+}
+
+/// Like `serve_shutdown`, with explicit safety limits (see `Limits`).
+pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Channel<int>, drain_ms: int, handler: fn(Request) -> Response) -> Result<int, string> {
+    bucle_servidor_drenable(host, port, limits, stop, drain_ms, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
+        atender_http(c, handler, limits);
+    })
+}
+
+// El patrón producción en una línea: serve + señales del SO (M88.1). Con SIGTERM (deploy,
+// `kill`) o SIGINT (Ctrl-C) deja de aceptar, drena en vuelo con plazo y devuelve 0 → cero
+// peticiones perdidas al desplegar.
+/// The production pattern: `serve` wired to OS signals (`signals()`, M88.1). On SIGTERM/SIGINT
+/// it stops accepting, drains in-flight connections for up to `drain_ms` ms, and returns Ok(0)
+/// so `main` can clean up and exit — zero dropped requests on deploys. Unix + VM only.
+pub fn serve_graceful(host: string, port: int, drain_ms: int, handler: fn(Request) -> Response) -> Result<int, string> {
+    serve_shutdown(host, port, signals(), drain_ms, handler)
+}
+
 // Servidor ergonómico: el handler es petición → respuesta; serve escribe la respuesta y —desde
 // M56.6— mantiene la conexión viva entre peticiones (keep-alive HTTP/1.1; honra `Connection:
 // close` y el ocio lo corta `read_timeout_millis`). **Solo VM.**

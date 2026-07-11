@@ -396,7 +396,7 @@ Tier 2: **no** van en el binario; se declaran en `ray.toml` (por ruta o git) y s
 
 | Grupo | Módulos |
 |---|---|
-| HTTP | `http` (fetch/request, redirects, chunked, gzip, https) · `http2` + `hpack` (framing/HPACK) · `http2_client` · `webserver` (servidor async + SSE) |
+| HTTP | `http` (fetch/request, redirects, chunked, gzip, https) · `http2` + `hpack` (framing/HPACK) · `http2_client` · `webserver` (servidor async + SSE; apagado ordenado M88.1b: `serve_graceful(host, port, drain_ms, handler)` sobre `signals()`, forma general `serve_shutdown[_limits]` con canal `stop`) |
 | RPC | `grpc_client` (gRPC unario e2e sobre TLS+ALPN h2) |
 | Tiempo real | `websocket` (servidor) · `websocket_client` (ws/wss) |
 | Auth/identidad | `jwt` (HS256) · `jwt_eddsa` (EdDSA) · `oauth2` (client_credentials) · `scram` (SCRAM-SHA-256) · `sigv4` (AWS) · `cookie` |

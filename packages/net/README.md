@@ -92,7 +92,11 @@ fn main() -> int {
   con `Response.set_cookie`/`with_cookie` (M56.7: una línea `Set-Cookie` por cookie). Cuerpos
   `Transfer-Encoding: chunked` entrantes decodificados, archivos estáticos con
   `static_response(dir, req.path)` (saneo de `..`, mime por extensión, `index.html`), y HEAD
-  responde cabeceras sin cuerpo (M56.8).
+  responde cabeceras sin cuerpo (M56.8). **Apagado ordenado** (M88.1b):
+  `serve_graceful(host, port, drain_ms, handler)` — con SIGTERM/SIGINT (vía `signals()`, M88.1)
+  deja de aceptar, drena las conexiones en vuelo con plazo y devuelve 0 (cero peticiones perdidas
+  al desplegar); la forma general `serve_shutdown[_limits]` apaga con cualquier canal `stop`
+  (testeable sin señales).
 
 ### Observabilidad
 

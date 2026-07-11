@@ -961,7 +961,11 @@ fn main() -> int {
 - `signals() -> Channel<int>` — el canal de **señales del SO** (SIGTERM=15, SIGINT=2), para el
   **apagado ordenado** de un servicio: compone con `recv`/`select` (drena tu canal de trabajo O
   apaga). Singleton del proceso; solo VM y unix. Ejemplo completo en
-  [`examples/concurrency/senales.ray`](examples/concurrency/senales.ray).
+  [`examples/concurrency/senales.ray`](examples/concurrency/senales.ray). Para un servidor web no
+  hace falta cablearlo a mano: `webserver.serve_graceful(host, port, drain_ms, handler)` ya lo
+  hace — con SIGTERM deja de aceptar, **drena las peticiones en vuelo** con plazo y devuelve 0
+  (cero peticiones perdidas al desplegar); `serve_shutdown` es la forma general con cualquier
+  canal `stop`.
 - `select([ch1, ch2, …]) -> int` — espera al primero listo y devuelve su índice (el menor listo;
   determinista). Sigue con `recv(chs[i])`. Ojo: un canal cerrado queda "listo" para siempre — sácalo de
   la lista.

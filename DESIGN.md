@@ -7985,3 +7985,27 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   longitud 0). Regresión rápida `scram_reject_demo` (todos los casos retornan antes del PBKDF2) por
   ambos motores; el vector RFC 7677 (`scram_cli`, `#[ignore]`) sigue byte-idéntico. Espejos
   `packages/net` ↔ `examples/web` juntos (el espejo usa la crypto pedagógica `hmac`/`sha256`).
+
+## 80. M76 — clientes de BD de producción (MongoDB + PostgreSQL: anti-bomba, profundidad, NULL)
+
+> Revisión jul 2026 (tras M75; clasificación en IDEAS §36). Parsers de wire de `db/bson`,
+> `db/mongo`, `db/postgres` y `net/postgres` (legacy). Misma clase que Redis (M69)/DNS (M72):
+> datos del servidor sin validar. `bson.decode` acotaba bien sus reads; los huecos estaban en la
+> profundidad de recursión y en el framing de mensajes/filas.
+
+- **M76 — de una pieza COMPLETO** (bson_cli 3, mongo_cli 3, postgres_cli 2, postgres_v2_cli 2):
+  - **bson**: tope de anidamiento (`max_depth`=200; supera el ~100 propio de MongoDB y queda muy por
+    debajo de la pila de raylang). `rd_doc`/`rd_value` llevan `depth`; un doc/arreglo demasiado
+    anidado = `Err` en vez de "desbordamiento de pila". Verificado: 600 niveles (~4.8 KB) → `Err`.
+  - **mongo**: `read_msg` acota el `total` del header a `max_message`=64 MiB (supera el
+    `maxMessageSizeBytes` de 48 MB de MongoDB); rechazo al leer la cabecera → no acumula la bomba.
+  - **postgres (db + net legacy)**: `read_msg`/`pg_read` con el mismo tope; además `mlen >= 4`
+    (evita un `total < 5` que dejaba `sub_bytes` con fin < inicio). `parse_datarow` pasó a
+    `Result` y (1) reinterpreta la longitud de columna como **int32 con signo** — el NULL (−1 =
+    0xFFFFFFFF) lo leía `be32` sin signo como 4294967295 y `sub_bytes` reventaba el cliente ante
+    **cualquier NULL** (bug vivo); (2) valida los límites del payload (columna truncada = `Err`).
+    Regresión: una columna NULL del toy-server llega como "" (`postgres_v2_cli`).
+  - Sin espejos (los paquetes `db`/`net` no son embebidos ni tienen twin en `examples/`).
+  - Diferido a **M77**: `mysql` (`lenc_int` sin chequeo de límites → OOB en paquete truncado + posible
+    overflow del i64 en el caso de 8 octetos; sin bomba ilimitada, el largo de paquete son 3 octetos
+    ≤ 16 MB) y `sqlite` (fichero local → otro modelo de amenaza).

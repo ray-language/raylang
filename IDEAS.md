@@ -1021,6 +1021,32 @@ RFC 7677 (`#[ignore]`) sigue byte-idéntico. Espejos `packages/net` ↔ `example
 
 ---
 
+## 36. Clientes de BD — MongoDB + PostgreSQL (revisión jul 2026) — M76, PLAN
+
+Revisión en frío de los parsers de wire de `db/bson`, `db/mongo`, `db/postgres` y `net/postgres`
+(legacy). La misma clase de defectos que Redis (M69)/DNS (M72): datos del servidor sin validar →
+crash, bomba de memoria o desincronía. Sano: `bson.decode` acota TODOS sus reads contra `b.len()`
+(sin OOB ni bomba de asignación), sin bucle infinito. Pero:
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **`bson.decode` recurre sin límite de profundidad**: doc/arreglo anidados (0x03/0x04) → `rd_doc`↔`rd_value` agotan la pila. Un BSON de ~4.8 KB (600 niveles) tumba al cliente con "desbordamiento de pila" en vez de `Err` | DoS por respuesta pequeña (clase salto-DNS M72) | **M76** |
+| **`mongo.read_msg` sin tope de tamaño**: el `total` del header (hasta ~4.29e9) no se acota → un servidor malicioso declara un `total` gigante y el bucle acumula octetos del socket sin fin | Bomba de memoria remota (clase Redis M69) | **M76** |
+| **`postgres` (db+net) `read_msg` sin tope**: idéntico a mongo (`mlen` del header sin cota → acumulación sin fin); además `mlen < 4` no se valida → `total < 5` deja `sub_bytes(5, total)` con fin < inicio | Bomba de memoria + crash por longitud inválida | **M76** |
+| **`postgres.parse_datarow` NO detecta NULL**: el marcador -1 (0xFFFFFFFF) se lee con `be32` (sin signo) como 4294967295 → la comprobación `vlen < 0` falla → `sub_bytes(pos, pos+4.29e9)` **revienta el cliente ante CUALQUIER columna NULL** (bug vivo, no solo servidor malicioso). Sin chequeos de límites del payload | Crash en uso normal (NULL es ubicuo) + OOB por payload truncado | **M76** |
+
+Fix: tope de profundidad (`max_depth`=200, supera el ~100 de MongoDB) en `bson`; tope de mensaje
+(`max_message`=64 MiB) en `mongo`/`postgres` (rechazo al leer la cabecera, antes de acumular);
+`mlen >= 4`; `parse_datarow` reinterpreta la longitud como int32 CON SIGNO (−1 → NULL → ""), valida
+los límites del payload y **falla como valor** (`Result`). Regresión: BSON de 600 niveles = `Err`
+(bson_cli), y una columna NULL del toy-server postgres = "" (postgres_v2_cli). Sin espejos (los
+paquetes `db`/`net` no son embebidos). **Diferido a M77**: `mysql` (`lenc_int` lee `p[i+1..i+8]` sin
+chequear límites → OOB en paquete truncado; el caso de 8 octetos puede desbordar el i64; sin bomba
+ilimitada porque el largo de paquete son 3 octetos, ≤ 16 MB) y `sqlite` (fichero LOCAL → otro modelo
+de amenaza).
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

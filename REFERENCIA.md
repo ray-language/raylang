@@ -17,7 +17,7 @@ discrepancia, manda la SPEC).
 8. [El prelude](#8-el-prelude)
 9. [Iteradores](#9-iteradores)
 10. [La biblioteca estándar `std/`](#10-la-biblioteca-estándar-std)
-11. [Paquetes adicionales (`net`, `db`)](#11-paquetes-adicionales-net-db)
+11. [Paquetes adicionales (`net`, `rpc`, `db`)](#11-paquetes-adicionales-net-rpc-db)
 12. [Anotaciones](#12-anotaciones)
 13. [FFI: tipos marshalables](#13-ffi-tipos-marshalables)
 14. [El CLI `ray`](#14-el-cli-ray)
@@ -387,7 +387,7 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/protobuf` | `PbWriter`: `writer write_varint write_string write_bytes write_fixed64 write_fixed32 finish` · `parse -> Result<[PbField], _>` `get_int get_bytes get_string` · framing gRPC: `grpc_frame grpc_unframe` |
 | `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` · `uuid_v7()`/`uuid_v7_at(ms)` (RFC 9562, ordenables por tiempo) · `is_uuid_v7` |
 
-## 11. Paquetes adicionales (`net`, `db`)
+## 11. Paquetes adicionales (`net`, `rpc`, `db`)
 
 Tier 2: **no** van en el binario; se declaran en `ray.toml` (por ruta o git) y se importan igual
 (`import net/http;` → `http.fetch(…)`). Viven en `packages/` del repo.
@@ -403,6 +403,14 @@ Tier 2: **no** van en el binario; se declaran en `ray.toml` (por ruta o git) y s
 | Infra | `dns` + `dns_cache` (A/AAAA/MX/CNAME/TXT/NS/SRV) · `udp` · `redis` (RESP2) · `postgres` (consulta simple; el cliente completo está en `db`) |
 | Observabilidad | `log` (JSON estructurado; `with_trace` estampa `trace_id` en cada línea, M88.3) · `metrics` (Prometheus) · `time` (DateTime UTC, ISO 8601/RFC 1123) · `trace` (W3C Trace Context: `Trace`, `new_trace`/`child`/`traceparent`/`parse_traceparent`/`from_headers`; el webserver lo adopta con `trace_of(req)` y el cliente http lo propaga con `request_traced`/`fetch_traced`) |
 | Cripto | `crypto` (adaptadores de los builtins para el resto del paquete) |
+
+### `packages/rpc` — RPC raylang↔raylang (M88.4)
+
+| Pieza | Superficie |
+|---|---|
+| Protocolo | frame = 4 octetos BE de longitud + payload JSON: petición `{"id","method","params"[,"deadline_ms","traceparent"]}` → respuesta `{"id","ok"}` \| `{"id","err"}` (protobuf: diferido) |
+| Servidor | `serve(host, port, handler)` · `serve_graceful(host, port, drain_ms, handler)` (señales + drenado, M88.1b) · `serve_shutdown[_limits](…, stop, drain_ms, …)` · handler `fn(Req) -> Result<Json, string>`; `Req { method, params, deadline_ms, traceparent }`; una fibra por conexión; panic del handler → `err` sin matar la conexión; `Limits { max_frame_bytes }` (10 MiB) |
+| Cliente | `connect(host, port) -> Result<Client, _>` · `call(c, method, params)` · `call_deadline(…, ms)` (acota la espera; tras timeout: reconectar) · `call_full(…, deadline_ms, traceparent)` · `disconnect` — conexión persistente, id correlado y validado |
 
 ### `packages/db` — clientes de bases de datos
 

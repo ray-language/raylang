@@ -1,0 +1,443 @@
+// RPC raylang↔raylang (M88.4) — la comunicación nativa entre servicios, escrita EN raylang.
+// Cero runtime nuevo: framing con prefijo de longitud sobre TCP (std/net) y sobre JSON
+// (std/json) como payload v1 (protobuf: diferido; el framing no cambia — solo el cuerpo).
+//
+// Protocolo (little surface, wire estable):
+//   frame    = [4 octetos big-endian: longitud N] [N octetos de payload JSON UTF-8]
+//   petición = {"id": n, "method": "m", "params": <Json>}
+//              (+ "deadline_ms": n opcional, + "traceparent": "00-…" opcional — el contexto
+//               W3C de net/trace viaja como string opaco: rpc no depende del paquete net)
+//   respuesta= {"id": n, "ok": <Json>}  |  {"id": n, "err": "mensaje"}
+//
+// Servidor: una fibra por conexión (varias peticiones secuenciales por conexión); el handler
+// corre en su propia tarea (try_join, como el webserver M56.5) → un panic responde err sin
+// tumbar la conexión ni el servidor. `serve` = `serve_shutdown` con un canal que nunca llega
+// (UN solo bucle drenable, patrón M88.1b); `serve_graceful` lo cablea a `signals()`.
+// Cliente: request/response secuencial sobre una conexión persistente; el id correla y valida.
+// Deadline: `call_deadline` acota la ESPERA de la respuesta vía el read-timeout del socket y
+// viaja en la petición (el handler lo ve en `Req.deadline_ms` y puede recortarse). Ojo: un
+// deadline vencido deja la conexión desincronizada (la respuesta tardía quedaría en el buffer)
+// → tras un timeout, `disconnect` y reconectar. Solo VM (fibras), como el webserver.
+
+import std/net;
+import std/time;
+from std/json import parse, stringify, Json;
+
+// --- Límites de seguridad ---
+
+/// Safety limits: the maximum frame size in bytes (a hostile or buggy peer cannot make the
+/// server allocate unbounded memory). `serve`/`connect` use `default_limits()`.
+pub struct Limits {
+    max_frame_bytes: int,
+}
+
+/// The default limits: 10 MiB per frame.
+pub fn default_limits() -> Limits {
+    Limits { max_frame_bytes: 10485760 }
+}
+
+// --- El framing: prefijo de longitud de 4 octetos big-endian ---
+
+// Lector bufferizado por conexión (estado mutado por referencia, como el Parser del self-hosting).
+struct Rd {
+    conn: int,
+    buf: bytes,
+}
+
+// Exactamente `n` octetos del socket (acumula lecturas crudas en el buffer).
+fn read_exact(r: Rd, n: int) -> Result<bytes, string> {
+    while (r.buf.len() < n) {
+        let chunk = net.socket_read_bytes(r.conn)?;
+        if (chunk.len() == 0) {
+            return Result.Err("conexión cerrada a mitad de un frame");
+        }
+        r.buf = r.buf + chunk;
+    }
+    let out = r.buf.sub_bytes(0, n);
+    r.buf = r.buf.sub_bytes(n, r.buf.len());
+    Result.Ok(out)
+}
+
+// Envuelve un payload en un frame: prefijo de longitud + cuerpo.
+fn frame(payload: bytes) -> bytes {
+    let n = payload.len();
+    bytes_of([(n >> 24) & 255, (n >> 16) & 255, (n >> 8) & 255, n & 255]) + payload
+}
+
+// Lee un frame completo. `Ok(None)` = EOF LIMPIO (el peer cerró entre frames — fin normal de
+// una conexión); un EOF a mitad de frame o un frame sobre el límite son errores.
+fn read_frame(r: Rd, max: int) -> Result<Option<bytes>, string> {
+    // ¿Fin limpio? Solo si no hay nada a medias en el buffer y la primera lectura da EOF.
+    if (r.buf.len() == 0) {
+        let chunk = net.socket_read_bytes(r.conn)?;
+        if (chunk.len() == 0) {
+            return Result.Ok(Option.None);
+        }
+        r.buf = chunk;
+    }
+    let h = read_exact(r, 4)?;
+    let n = (h[0] << 24) | (h[1] << 16) | (h[2] << 8) | h[3];
+    if (n > max) {
+        return Result.Err("frame demasiado grande (" + to_string(n) + " > " + to_string(max) + " octetos)");
+    }
+    let cuerpo = read_exact(r, n)?;
+    Result.Ok(Option.Some(cuerpo))
+}
+
+// --- El sobre JSON ---
+
+fn obj_field(m: Map<string, Json>, k: string) -> Json {
+    match (m.get(k)) {
+        Option.Some(v) => v,
+        Option.None => Json.JNull,
+    }
+}
+
+fn field_int(m: Map<string, Json>, k: string, def: int) -> int {
+    match (obj_field(m, k)) {
+        Json.JNum(f) => f as int,
+        _ => def,
+    }
+}
+
+fn field_str(m: Map<string, Json>, k: string, def: string) -> string {
+    match (obj_field(m, k)) {
+        Json.JStr(s) => s,
+        _ => def,
+    }
+}
+
+/// An incoming RPC request, as the server handler sees it: the method name, its params (any
+/// JSON value; `JNull` if absent), the caller's remaining budget in ms (`0` = none declared)
+/// and the opaque W3C `traceparent` the caller propagated (`""` if none — parse it with
+/// `net/trace` if you use distributed tracing).
+pub struct Req {
+    method: string,
+    params: Json,
+    deadline_ms: int,
+    traceparent: string,
+}
+
+fn encode_request(id: int, method: string, params: Json, deadline_ms: int, traceparent: string) -> bytes {
+    var m: Map<string, Json> = Map.new();
+    m.insert("id", Json.JNum(id as float));
+    m.insert("method", Json.JStr(method));
+    m.insert("params", params);
+    if (deadline_ms > 0) {
+        m.insert("deadline_ms", Json.JNum(deadline_ms as float));
+    }
+    if (traceparent != "") {
+        m.insert("traceparent", Json.JStr(traceparent));
+    }
+    frame(stringify(Json.JObject(m)).to_bytes())
+}
+
+fn decode_request(b: bytes) -> Result<(int, Req), string> {
+    let s = from_utf8(b)?;
+    let j = parse(s)?;
+    match (j) {
+        Json.JObject(m) => {
+            let id = field_int(m, "id", 0 - 1);
+            let method = field_str(m, "method", "");
+            if (id < 0 || method == "") {
+                return Result.Err("petición sin id o sin method");
+            }
+            Result.Ok((id, Req {
+                method: method,
+                params: obj_field(m, "params"),
+                deadline_ms: field_int(m, "deadline_ms", 0),
+                traceparent: field_str(m, "traceparent", ""),
+            }))
+        },
+        _ => Result.Err("la petición no es un objeto JSON"),
+    }
+}
+
+fn encode_response(id: int, res: Result<Json, string>) -> bytes {
+    var m: Map<string, Json> = Map.new();
+    m.insert("id", Json.JNum(id as float));
+    match (res) {
+        Result.Ok(v) => {
+            m.insert("ok", v);
+        },
+        Result.Err(e) => {
+            m.insert("err", Json.JStr(e));
+        },
+    }
+    frame(stringify(Json.JObject(m)).to_bytes())
+}
+
+fn decode_response(b: bytes) -> Result<(int, Result<Json, string>), string> {
+    let s = from_utf8(b)?;
+    let j = parse(s)?;
+    match (j) {
+        Json.JObject(m) => {
+            let id = field_int(m, "id", 0 - 1);
+            if (id < 0) {
+                return Result.Err("respuesta sin id");
+            }
+            // "err" presente gana; si no, "ok" (JNull si el handler devolvió null).
+            match (m.get("err")) {
+                Option.Some(e) => {
+                    match (e) {
+                        Json.JStr(msg) => {
+                            // Anotado: el esperado no cruza al interior de la tupla.
+                            let fallo: Result<Json, string> = Result.Err(msg);
+                            Result.Ok((id, fallo))
+                        },
+                        _ => Result.Err("el campo err no es string"),
+                    }
+                },
+                Option.None => {
+                    let bien: Result<Json, string> = Result.Ok(obj_field(m, "ok"));
+                    Result.Ok((id, bien))
+                },
+            }
+        },
+        _ => Result.Err("la respuesta no es un objeto JSON"),
+    }
+}
+
+// --- El servidor ---
+
+// Atiende UNA conexión: peticiones secuenciales hasta EOF limpio (o error). El handler corre
+// en su PROPIA tarea (try_join): un panic se responde como err y la conexión sigue viva.
+fn atender_rpc(conn: int, handler: fn(Req) -> Result<Json, string>, limits: Limits) {
+    let r = Rd { conn: conn, buf: b"" };
+    var seguir = true;
+    while (seguir) {
+        match (read_frame(r, limits.max_frame_bytes)) {
+            Result.Ok(of) => {
+                match (of) {
+                    Option.Some(fr) => {
+                        match (decode_request(fr)) {
+                            Result.Ok(par) => {
+                                let id = par.0;
+                                let req = par.1;
+                                let t = spawn(fn() -> Result<Json, string> { handler(req) });
+                                let res: Result<Json, string> = match (try_join(t)) {
+                                    Result.Ok(r2) => r2,
+                                    Result.Err(e) => Result.Err("handler: " + e),
+                                };
+                                match (net.socket_write_bytes(conn, encode_response(id, res))) {
+                                    Result.Ok(_) => { },
+                                    Result.Err(e) => {
+                                        eprint("rpc respuesta: " + e);
+                                        seguir = false;
+                                    },
+                                }
+                            },
+                            Result.Err(e) => {
+                                // Framing/JSON corrupto: no hay id al que responder → cerrar.
+                                eprint("rpc petición: " + e);
+                                seguir = false;
+                            },
+                        }
+                    },
+                    Option.None => {
+                        seguir = false;
+                    },
+                }
+            },
+            Result.Err(e) => {
+                eprint("rpc: " + e);
+                seguir = false;
+            },
+        }
+    }
+    close(conn);
+}
+
+/// RPC server: listens on `host:port` and runs each connection in its own fiber (sequential
+/// requests per connection). The handler maps a `Req` to `Ok(Json)` (→ `ok` on the wire) or
+/// `Err(msg)` (→ `err`); a panicking handler answers `err` without killing the connection.
+/// Prints "rpc escuchando en el puerto N". Blocks forever; VM only.
+pub fn serve(host: string, port: int, handler: fn(Req) -> Result<Json, string>) -> Result<int, string> {
+    // Un canal al que nunca llega nada = servir para siempre (un solo bucle drenable).
+    let nunca: Channel<int> = Channel.new();
+    serve_shutdown(host, port, nunca, 0, handler)
+}
+
+/// Like `serve`, with graceful shutdown (the M88.1b pattern): when a value arrives on `stop`
+/// (or it is closed), the server stops accepting, drains in-flight connections for up to
+/// `drain_ms` ms, and returns Ok(0).
+pub fn serve_shutdown(host: string, port: int, stop: Channel<int>, drain_ms: int, handler: fn(Req) -> Result<Json, string>) -> Result<int, string> {
+    serve_shutdown_limits(host, port, default_limits(), stop, drain_ms, handler)
+}
+
+/// The production pattern: `serve` wired to OS signals (`signals()`). On SIGTERM/SIGINT it
+/// stops accepting, drains in-flight connections for up to `drain_ms` ms and returns Ok(0).
+/// Unix + VM only.
+pub fn serve_graceful(host: string, port: int, drain_ms: int, handler: fn(Req) -> Result<Json, string>) -> Result<int, string> {
+    serve_shutdown(host, port, signals(), drain_ms, handler)
+}
+
+// El bucle drenable, port recortado del de webserver (M88.1b) fiel al modelo de actores (M38):
+// la BOMBA de accept entrega por `conns` (así el select stop/conns/done es posible); el contador
+// de activos vive en ESTA fibra; las conexiones avisan su fin por `done`; la bomba muere en
+// silencio observando el canal `apagado` CERRADO (un canal cerrado queda "listo", M12.4).
+/// Like `serve_shutdown`, with explicit `Limits`.
+pub fn serve_shutdown_limits(host: string, port: int, limits: Limits, stop: Channel<int>, drain_ms: int, handler: fn(Req) -> Result<Json, string>) -> Result<int, string> {
+    match (net.tcp_listen(host, port)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(srv) => {
+            print("rpc escuchando en el puerto " + to_string(net.local_port(srv)));
+            let conns: Channel<int> = Channel.new();
+            let done: Channel<int> = Channel.new();
+            let apagado: Channel<int> = Channel.new();
+            spawn(fn() {
+                var errores = 0;
+                var seguir = true;
+                while (seguir) {
+                    match (net.tcp_accept(srv)) {
+                        Result.Ok(c) => {
+                            errores = 0;
+                            send(conns, c);
+                        },
+                        Result.Err(e) => {
+                            errores = errores + 1;
+                            if (errores >= 100) {
+                                eprint("rpc aceptar: " + e);
+                                close(conns);
+                                seguir = false;
+                            } else {
+                                let pausa: Channel<int> = Channel.new();
+                                spawn(fn() {
+                                    time.sleep(10);
+                                    send(pausa, 1);
+                                });
+                                if (select([apagado, pausa]) == 0) {
+                                    seguir = false;
+                                } else {
+                                    let _ = recv(pausa);
+                                    eprint("rpc aceptar: " + e);
+                                }
+                            }
+                        },
+                    }
+                }
+            });
+            var activos = 0;
+            var conns_abierta = true;
+            var sirviendo = true;
+            while (sirviendo) {
+                let cual = select([stop, conns, done]);
+                if (cual == 0) {
+                    let _ = recv(stop);
+                    sirviendo = false;
+                } else if (cual == 1) {
+                    match (recv(conns)) {
+                        Option.Some(conn) => {
+                            activos = activos + 1;
+                            spawn(fn() {
+                                atender_rpc(conn, handler, limits);
+                                send(done, 1);
+                            });
+                        },
+                        Option.None => {
+                            conns_abierta = false;
+                            sirviendo = false;
+                        },
+                    }
+                } else {
+                    let _ = recv(done);
+                    activos = activos - 1;
+                }
+            }
+            close(apagado);
+            close(srv);
+            print("rpc apagando: " + to_string(activos) + " conexión(es) en vuelo");
+            if (activos > 0 && drain_ms > 0) {
+                let plazo: Channel<int> = Channel.new();
+                spawn(fn() {
+                    time.sleep(drain_ms);
+                    send(plazo, 1);
+                });
+                var esperando = true;
+                while (esperando && activos > 0) {
+                    let cual = if (conns_abierta) { select([plazo, done, conns]) } else { select([plazo, done]) };
+                    if (cual == 0) {
+                        esperando = false;
+                    } else if (cual == 1) {
+                        let _ = recv(done);
+                        activos = activos - 1;
+                    } else {
+                        match (recv(conns)) {
+                            Option.Some(c) => {
+                                close(c);
+                            },
+                            Option.None => {
+                                conns_abierta = false;
+                            },
+                        }
+                    }
+                }
+                if (activos > 0) {
+                    eprint("rpc apagado: " + to_string(activos) + " conexión(es) en vuelo al vencer el plazo");
+                }
+            }
+            Result.Ok(0)
+        },
+    }
+}
+
+// --- El cliente ---
+
+/// An RPC client: one persistent connection, sequential request/response correlated and
+/// validated by id. Build with `connect`, call with `call`/`call_deadline`/`call_full`, and
+/// release with `disconnect`. After a deadline timeout the connection may be out of sync (the
+/// late response stays in flight) — disconnect and reconnect.
+pub struct Client {
+    rd: Rd,
+    next_id: int,
+}
+
+/// Connects to an RPC server. Uses `default_limits()` for response frames.
+pub fn connect(host: string, port: int) -> Result<Client, string> {
+    let conn = net.tcp_connect(host, port)?;
+    Result.Ok(Client { rd: Rd { conn: conn, buf: b"" }, next_id: 0 })
+}
+
+/// Closes the client's connection.
+pub fn disconnect(c: Client) {
+    close(c.rd.conn);
+}
+
+/// Calls `method` with `params` and blocks (yielding the fiber) until the response arrives:
+/// `Ok(json)` from the handler's `Ok`, `Err(msg)` from its `Err`. No deadline, no trace.
+pub fn call(c: Client, method: string, params: Json) -> Result<Json, string> {
+    call_full(c, method, params, 0, "")
+}
+
+/// Like `call`, but bounds the WAIT for the response to `deadline_ms` ms (socket read timeout)
+/// and declares the budget in the request (`Req.deadline_ms`), so the server can shed work it
+/// cannot finish in time. On timeout the call fails AND the connection is out of sync —
+/// `disconnect` and reconnect.
+pub fn call_deadline(c: Client, method: string, params: Json, deadline_ms: int) -> Result<Json, string> {
+    call_full(c, method, params, deadline_ms, "")
+}
+
+/// The full form: deadline (`0` = none) and W3C `traceparent` (`""` = none; build it with
+/// `net/trace` — e.g. `trace.traceparent(trace.child(t))` — it travels as an opaque string).
+pub fn call_full(c: Client, method: string, params: Json, deadline_ms: int, traceparent: string) -> Result<Json, string> {
+    c.next_id = c.next_id + 1;
+    let id = c.next_id;
+    if (deadline_ms > 0) {
+        net.set_read_timeout(c.rd.conn, deadline_ms);
+    }
+    let _ = net.socket_write_bytes(c.rd.conn, encode_request(id, method, params, deadline_ms, traceparent))?;
+    let respuesta = read_frame(c.rd, default_limits().max_frame_bytes);
+    if (deadline_ms > 0) {
+        net.set_read_timeout(c.rd.conn, 0);
+    }
+    match (respuesta?) {
+        Option.None => Result.Err("el servidor cerró la conexión"),
+        Option.Some(fr) => {
+            let par = decode_response(fr)?;
+            if (par.0 != id) {
+                return Result.Err("respuesta con id inesperado (" + to_string(par.0) + " != " + to_string(id) + "); reconecta");
+            }
+            par.1
+        },
+    }
+}

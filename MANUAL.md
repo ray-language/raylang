@@ -844,6 +844,36 @@ fn main() -> int {
 }
 ```
 
+### RPC entre servicios (`packages/rpc`, dependencia)
+
+La comunicación **nativa** servicio-a-servicio (M88.4), sin el peso de HTTP: framing con prefijo
+de longitud sobre TCP + JSON, request/response con id correlado, deadline y traceparent en el
+sobre. Servidor con una fibra por conexión y **apagado ordenado de serie**:
+
+```rust
+import rpc/rpc;
+from std/json import Json;
+
+// Servidor: rpc.serve_graceful("0.0.0.0", 7070, 5000, handler)  (SIGTERM → drena y devuelve)
+// Cliente:
+fn main() -> int {
+    let c = match (rpc.connect("127.0.0.1", 7070)) {
+        Result.Ok(x) => x,
+        Result.Err(e) => { print(e); return 1; },
+    };
+    match (rpc.call(c, "ping", Json.JNull)) {              // → Result<Json, string>
+        Result.Ok(j) => print("respuesta ok"),
+        Result.Err(e) => print("err: " + e),
+    }
+    let r = rpc.call_deadline(c, "consulta", Json.JNull, 500);  // espera acotada a 500 ms
+    rpc.disconnect(c);
+    0
+}
+```
+
+Un handler que devuelve `Err` (o que panica) llega al cliente como `Err` del `call`, sin matar
+la conexión. Interop externo entrante: el webserver (HTTP/1.1 + JSON), que ya está.
+
 ### Bases de datos (`packages/db`, dependencia)
 
 Clientes para **MySQL**, **PostgreSQL**, **SQLite** (embebido, sin servidor) y **MongoDB**, con API

@@ -827,10 +827,10 @@ TLS: `net.tls_connect(host, 443)` (verifica el certificado; CAs extra vía `SSL_
 
 ### La pila de protocolos (`packages/net`, dependencia)
 
-23 módulos en raylang puro: HTTP(S) cliente (`http.fetch` con redirects/chunked/gzip), **servidor web**
+24 módulos en raylang puro: HTTP(S) cliente (`http.fetch` con redirects/chunked/gzip), **servidor web**
 async con SSE (`webserver`), WebSocket (cliente y servidor, ws/wss), HTTP/2 + gRPC, DNS (7 tipos de
 registro + caché), Redis, OAuth2, JWT (HS256/EdDSA), SCRAM, AWS SigV4, cookies, logging JSON, métricas
-Prometheus, fechas UTC. Se declara como dependencia (`net = "path:…"` o git) y:
+Prometheus, fechas UTC, tracing distribuido W3C (`trace`). Se declara como dependencia (`net = "path:…"` o git) y:
 
 ```rust
 import net/http;
@@ -872,6 +872,26 @@ fn main() -> int {
 MySQL/PostgreSQL/MongoDB hablan su protocolo wire en raylang puro, con variantes `connect_tls` (canal
 cifrado) — placeholders `?` (mysql), `$1` (postgres), documentos BSON (mongo). Demos en
 [`examples/db/`](examples/db/).
+
+### Tracing distribuido (`net/trace`, en el paquete `net`)
+
+Para seguir UNA petición a través de varios servicios: el contexto W3C Trace Context
+(`traceparent`) se adopta en el servidor, se estampa en los logs y se propaga en las llamadas
+salientes — cada salto como un *span* hijo (mismo `trace_id`, `span_id` fresco):
+
+```rust
+import net/webserver;
+import net/http;
+import net/log;
+
+fn handler(req: webserver.Request) -> webserver.Response {
+    let t = webserver.trace_of(req);              // adopta el traceparent entrante (o crea uno)
+    let lg = log.with_trace(log.logger("mi-svc"), t.trace_id);
+    log.emit(log.info(lg, "procesando"));         // …,"trace_id":"4bf9…","msg":"procesando"…
+    let r = http.request_traced("GET", "http://otro-svc/dato", "", Map.new(), t);
+    webserver.ok("hecho")                          // el agregador junta los logs por trace_id
+}
+```
 
 ### Resiliencia (`std/resilience`, embebida)
 

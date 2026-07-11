@@ -16,6 +16,7 @@
 from std/inflate import gunzip_limit;
 import std/net;
 import std/time;
+import net/trace;
 
 /// An HTTP/1.1 response: status code, headers, and body.
 /// Header names are stored lowercased for case-insensitive lookup; the body is raw bytes
@@ -404,6 +405,29 @@ pub fn request(method: string, url: string, body: string) -> Result<Response, st
 /// appended in key order. 30 s total read timeout.
 pub fn request_with(method: string, url: string, body: string, headers: Map<string, string>) -> Result<Response, string> {
     request_bytes(method, url, body.to_bytes(), headers, 30000)
+}
+
+// M88.3: propagación del trace W3C. Cada salto viaja como un tramo HIJO (span_id fresco, mismo
+// trace_id): así el receptor distingue QUIÉN le llamó sin perder el hilo de punta a punta.
+/// Like `request_with`, but propagates the W3C trace context: sends a `traceparent` header with
+/// a fresh CHILD span of `t` (same `trace_id`, new `span_id`). Get `t` from
+/// `webserver.trace_of(req)` (adopt the incoming trace) or `trace.new_trace()` (start one).
+pub fn request_traced(method: string, url: string, body: string, headers: Map<string, string>, t: trace.Trace) -> Result<Response, string> {
+    // Copia: los Map van por referencia y el `traceparent` no debe aparecer en el del llamador.
+    var h: Map<string, string> = Map.new();
+    for k in headers.keys() {
+        match (headers.get(k)) {
+            Option.Some(v) => { h.insert(k, v); },
+            Option.None => {},
+        }
+    }
+    h.insert("traceparent", trace.traceparent(trace.child(t)));
+    request_with(method, url, body, h)
+}
+
+/// A traced GET: `request_traced` with no body and no extra headers.
+pub fn fetch_traced(url: string, t: trace.Trace) -> Result<Response, string> {
+    request_traced("GET", url, "", Map.new(), t)
 }
 
 // La forma BASE (M58.2): cuerpo en bytes (subidas binarias; Content-Length en octetos) y plazo

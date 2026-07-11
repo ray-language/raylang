@@ -1,0 +1,127 @@
+// Tracing distribuido (M88.3) — W3C Trace Context (`traceparent`), escrito EN raylang.
+// Cero runtime nuevo. Un `Trace` identifica la petición de punta a punta (`trace_id`, compartido
+// por todos los servicios que toca) y el tramo actual (`span_id`, uno por salto). El formato de
+// cabecera es el W3C: `00-<trace_id 32 hex>-<span_id 16 hex>-<flags 2 hex>`.
+//
+// Piezas: `new_trace` (raíz), `parse_traceparent`/`traceparent` (cabecera ↔ Trace), `child`
+// (tramo hijo para propagar), `from_headers` (el patrón servidor: adopta el trace entrante o
+// arranca uno). El webserver lo expone como `trace_of(req)`; el cliente http lo propaga con
+// `request_traced`/`fetch_traced`; `log.with_trace` correlaciona las líneas de log.
+//
+// Los ids salen del PRNG del runtime (`std/random`, sembrable en tests): identifican, no
+// autentican — no necesitan cripto (mismo criterio que `uuid_v4`).
+
+import std/random;
+
+/// A W3C Trace Context: the end-to-end `trace_id` (32 lowercase hex digits, shared by every
+/// service the request touches), the current hop's `span_id` (16 hex digits) and the `flags`
+/// byte (2 hex digits; "01" = sampled). Build with `new_trace`/`from_headers`, propagate with
+/// `child` + `traceparent`.
+pub struct Trace {
+    trace_id: string,
+    span_id: string,
+    flags: string,
+}
+
+// `n` dígitos hex aleatorios en minúscula, nunca todo-ceros (el W3C los declara inválidos).
+fn random_hex(n: int) -> string {
+    let digs = "0123456789abcdef";
+    var parts: [string] = [];
+    var nonzero = false;
+    var i = 0;
+    while (i < n) {
+        var d = random.below(16);
+        // El último dígito se fuerza no-cero si todo lo anterior fue 0 (prob. ~0, pero inválido).
+        if (i == n - 1 && !nonzero && d == 0) {
+            d = 1 + random.below(15);
+        }
+        if (d != 0) {
+            nonzero = true;
+        }
+        parts.push(to_string(digs[d]));
+        i = i + 1;
+    }
+    join(parts, "")
+}
+
+/// Starts a new root trace: fresh random `trace_id` and `span_id`, flags "01" (sampled).
+pub fn new_trace() -> Trace {
+    Trace { trace_id: random_hex(32), span_id: random_hex(16), flags: "01" }
+}
+
+/// A child span of `t`: same `trace_id` and flags, fresh `span_id`. Use one per outgoing call
+/// so each hop is distinguishable; `request_traced` does this for you.
+pub fn child(t: Trace) -> Trace {
+    Trace { trace_id: t.trace_id, span_id: random_hex(16), flags: t.flags }
+}
+
+/// Renders the W3C `traceparent` header value: `00-<trace_id>-<span_id>-<flags>`.
+pub fn traceparent(t: Trace) -> string {
+    "00-" + t.trace_id + "-" + t.span_id + "-" + t.flags
+}
+
+// ¿Es `s` hex en minúscula? (El W3C exige minúscula; una cabecera en mayúscula es inválida.)
+fn is_lower_hex(s: string) -> bool {
+    let cs = s.chars();
+    var i = 0;
+    while (i < cs.len()) {
+        let c = cs[i];
+        let ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        if (!ok) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn all_zero(s: string) -> bool {
+    let cs = s.chars();
+    var i = 0;
+    while (i < cs.len()) {
+        if (cs[i] != '0') {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+/// Parses a W3C `traceparent` header value. `None` if malformed: wrong shape or lengths
+/// (2-32-16-2 hex, lowercase), unknown version (only "00"; "ff" is forbidden by the spec),
+/// or an all-zero trace/span id (invalid per spec).
+pub fn parse_traceparent(s: string) -> Option<Trace> {
+    let parts = s.trim().split("-");
+    if (parts.len() != 4) {
+        return Option.None;
+    }
+    let version = parts[0];
+    let tid = parts[1];
+    let sid = parts[2];
+    let flags = parts[3];
+    if (version.len() != 2 || tid.len() != 32 || sid.len() != 16 || flags.len() != 2) {
+        return Option.None;
+    }
+    if (!is_lower_hex(version) || !is_lower_hex(tid) || !is_lower_hex(sid) || !is_lower_hex(flags)) {
+        return Option.None;
+    }
+    if (version != "00" || all_zero(tid) || all_zero(sid)) {
+        return Option.None;
+    }
+    Option.Some(Trace { trace_id: tid, span_id: sid, flags: flags })
+}
+
+/// The server-side pattern: adopts the incoming `traceparent` from the headers (names already
+/// lowercased, as the webserver delivers them), or starts a new root trace if absent/malformed.
+/// The webserver wraps this as `webserver.trace_of(req)`.
+pub fn from_headers(headers: Map<string, string>) -> Trace {
+    match (headers.get("traceparent")) {
+        Option.Some(v) => {
+            match (parse_traceparent(v)) {
+                Option.Some(t) => t,
+                Option.None => new_trace(),
+            }
+        },
+        Option.None => new_trace(),
+    }
+}

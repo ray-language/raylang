@@ -100,7 +100,12 @@ fn main() -> int {
   reexporta (`now_utc`, `from_epoch_millis`, `to_iso8601`, `date_stamp`, …). Para código nuevo,
   importa `std/time`. (`now_utc` no
   es determinista; el formateo sí.)
-- **`net/log`** — logging estructurado (niveles, campos, JSON). Sobre `net/time`.
+- **`net/log`** — logging estructurado (niveles, campos, JSON). Sobre `net/time`. M88.3:
+  `with_trace(lg, trace_id)` estampa un campo `trace_id` en cada línea (correlación distribuida).
+- **`net/trace`** (M88.3) — tracing distribuido W3C Trace Context (`traceparent`): `Trace`
+  (`trace_id`/`span_id`/`flags`), `new_trace`, `child`, `traceparent`/`parse_traceparent`,
+  `from_headers`. El webserver adopta el trace entrante con `trace_of(req)`; el cliente http lo
+  propaga con `request_traced`/`fetch_traced` (un span hijo por salto). Hoja (solo `std/random`).
 - **`net/metrics`** — métricas estilo Prometheus (counter/gauge/histogram + labels), `render` en formato
   de exposición. Hoja.
 

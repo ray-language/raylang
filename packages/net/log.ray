@@ -7,11 +7,13 @@
 // Niveles: DEBUG=0, INFO=1, WARN=2, ERROR=3. El logger filtra por debajo de su `min_level`.
 from net/time import now_utc, to_iso8601;
 
-/// A structured JSON logger: a service name plus a minimum level.
+/// A structured JSON logger: a service name, a minimum level, and an optional trace id
+/// (M88.3: "" = none; set it with `with_trace` so every entry carries a `trace_id` field).
 /// Entries below `min_level` are discarded by `emit`. Levels: DEBUG=0, INFO=1, WARN=2, ERROR=3.
 pub struct Logger {
     service: string,
     min_level: int,
+    trace_id: string,
 }
 
 // Un campo estructurado: clave, valor ya formateado, y si va entre comillas (string) o crudo (número/bool).
@@ -33,13 +35,23 @@ pub struct LogEntry {
 
 /// Creates a logger for `service` with minimum level DEBUG (logs everything).
 pub fn logger(service: string) -> Logger {
-    Logger { service: service, min_level: 0 }
+    Logger { service: service, min_level: 0, trace_id: "" }
 }
 
 // Logger con un nivel mínimo (descarta por debajo).
 /// Returns a copy of the logger with the given minimum level; `emit` drops entries below it.
 pub fn with_level(lg: Logger, min_level: int) -> Logger {
-    Logger { service: lg.service, min_level: min_level }
+    Logger { service: lg.service, min_level: min_level, trace_id: lg.trace_id }
+}
+
+// M88.3: correlación con el tracing distribuido. Un logger POR PETICIÓN (copia barata) con el
+// trace_id de `webserver.trace_of(req)` → cada línea de esa petición lleva el mismo trace_id y
+// el agregador las junta de punta a punta entre servicios.
+/// Returns a copy of the logger stamped with a trace id (from `webserver.trace_of(req)` /
+/// `trace.new_trace()`): every entry it emits carries a `trace_id` field, correlating all the
+/// logs of one request across services. Make one per request — copies are cheap.
+pub fn with_trace(lg: Logger, trace_id: string) -> Logger {
+    Logger { service: lg.service, min_level: lg.min_level, trace_id: trace_id }
 }
 
 fn at(lg: Logger, level: int, msg: string) -> LogEntry {
@@ -129,11 +141,17 @@ fn json_escape(s: string) -> string {
 }
 
 // Renderiza la entrada como una línea JSON con la marca de tiempo `ts` dada (determinista → testeable).
-// El orden de claves es fijo: ts, level, service, msg, y luego los campos en orden de adición.
+// El orden de claves es fijo: ts, level, service, [trace_id], msg, y luego los campos en orden de
+// adición. El trace_id (M88.3) solo aparece si el logger lo lleva (`with_trace`) — retrocompatible.
 /// Renders the entry as one JSON line using the given timestamp `ts` (deterministic, testable).
-/// Key order is fixed: ts, level, service, msg, then fields in insertion order; strings are escaped.
+/// Key order is fixed: ts, level, service, trace_id (only when set via `with_trace`), msg, then
+/// fields in insertion order; strings are escaped.
 pub fn render(e: LogEntry, ts: string) -> string {
-    var out = "{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(e.level) + "\",\"service\":\"" + json_escape(e.lg.service) + "\",\"msg\":\"" + json_escape(e.msg) + "\"";
+    var out = "{\"ts\":\"" + ts + "\",\"level\":\"" + level_name(e.level) + "\",\"service\":\"" + json_escape(e.lg.service) + "\"";
+    if (e.lg.trace_id != "") {
+        out = out + ",\"trace_id\":\"" + json_escape(e.lg.trace_id) + "\"";
+    }
+    out = out + ",\"msg\":\"" + json_escape(e.msg) + "\"";
     var i = 0;
     while (i < e.fields.len()) {
         let f = e.fields[i];

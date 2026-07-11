@@ -12,6 +12,7 @@ import std/net;
 import std/url;
 import std/time;
 import std/fs;
+import net/trace;
 
 // M56.2: `path` llega DECODIFICADO (%XX; un `+` es literal en rutas) y SIN la query string, que
 // va aparte en `query` (cruda, sin el `?`) — así el enrutado por ruta funciona con `?x=1` y el
@@ -34,6 +35,16 @@ pub struct Request {
 /// last duplicate key wins, `+` decodes to space). Empty map if there was no query.
 pub fn query_params(req: Request) -> Map<string, string> {
     url.parse_query(req.query)
+}
+
+// M88.3: el lado servidor del tracing distribuido. El handler lo llama una vez y enhebra el
+// Trace a sus logs (`log.with_trace`) y a sus llamadas salientes (`http.request_traced`).
+/// The request's W3C trace context: adopts the incoming `traceparent` header, or starts a new
+/// root trace if absent or malformed. Thread it through your logs (`log.with_trace(lg,
+/// t.trace_id)`) and outgoing calls (`http.request_traced(..., t)`) to correlate a request
+/// end-to-end across services.
+pub fn trace_of(req: Request) -> trace.Trace {
+    trace.from_headers(req.headers)
 }
 
 // M56.1: límites de la frontera de seguridad. Sin ellos, un cliente hostil puede pedir memoria

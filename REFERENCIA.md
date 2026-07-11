@@ -392,7 +392,7 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 Tier 2: **no** van en el binario; se declaran en `ray.toml` (por ruta o git) y se importan igual
 (`import net/http;` → `http.fetch(…)`). Viven en `packages/` del repo.
 
-### `packages/net` — la pila de red (23 módulos, raylang puro)
+### `packages/net` — la pila de red (24 módulos, raylang puro)
 
 | Grupo | Módulos |
 |---|---|
@@ -401,7 +401,7 @@ Tier 2: **no** van en el binario; se declaran en `ray.toml` (por ruta o git) y s
 | Tiempo real | `websocket` (servidor) · `websocket_client` (ws/wss) |
 | Auth/identidad | `jwt` (HS256) · `jwt_eddsa` (EdDSA) · `oauth2` (client_credentials) · `scram` (SCRAM-SHA-256) · `sigv4` (AWS) · `cookie` |
 | Infra | `dns` + `dns_cache` (A/AAAA/MX/CNAME/TXT/NS/SRV) · `udp` · `redis` (RESP2) · `postgres` (consulta simple; el cliente completo está en `db`) |
-| Observabilidad | `log` (JSON estructurado) · `metrics` (Prometheus) · `time` (DateTime UTC, ISO 8601/RFC 1123) |
+| Observabilidad | `log` (JSON estructurado; `with_trace` estampa `trace_id` en cada línea, M88.3) · `metrics` (Prometheus) · `time` (DateTime UTC, ISO 8601/RFC 1123) · `trace` (W3C Trace Context: `Trace`, `new_trace`/`child`/`traceparent`/`parse_traceparent`/`from_headers`; el webserver lo adopta con `trace_of(req)` y el cliente http lo propaga con `request_traced`/`fetch_traced`) |
 | Cripto | `crypto` (adaptadores de los builtins para el resto del paquete) |
 
 ### `packages/db` — clientes de bases de datos

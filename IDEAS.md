@@ -945,6 +945,21 @@ de OAuth). sigv4 sólido en lo estructural.
 
 ---
 
+## 32. Cliente DNS (revisión jul 2026) — M72, PLAN
+
+Revisión en frío de `net/dns`, `net/dns_cache`, `net/udp` (detalle en DESIGN §76). udp sano
+(solo traduce el arreglo etiquetado a Result/Packet). dns_cache sano (TTL respetado, búsqueda
+lineal aceptable para cachés pequeñas). El parser DNS procesa datos EXTERNOS y tiene la misma
+clase de problemas que inflate pre-M64, más un vector de spoofing clásico.
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **Cero bounds en el parser**: `be16`/`be32`/`read_name`/`format_ipv4`/`format_ipv6`/`read_txt` indexan sin comprobar. Verificado: respuesta truncada → crash "índice fuera de rango" | Una respuesta corrupta/truncada tumba la fibra (clase inflate pre-M64) | **72.1**: bounds → `Err`, nunca crash |
+| **`read_name`: bucle infinito con punteros de compresión maliciosos** — un puntero 0xC0 que cicla nunca termina. Verificado: timeout | DoS (respuesta de 20 octetos cuelga el resolver) | **72.1**: límite de saltos de puntero |
+| **ID de transacción FIJO (4660)** + no se valida el ID de la respuesta contra la consulta | Spoofing/cache-poisoning trivial (ahora hay `crypto.random_bytes`, M68.2) | **72.2**: txid aleatorio + validación |
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

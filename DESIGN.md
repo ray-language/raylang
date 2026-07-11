@@ -7916,3 +7916,21 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   atributo anti-CSRF de facto que faltaba junto a HttpOnly/Secure. (c) sigv4: fichado el
   colapso de espacios internos en cabeceras canónicas (bug de firma, no seguridad) — se
   arregla aquí si es barato, o queda en IDEAS §31. Espejos `packages/net` ↔ `examples/web`.
+
+## 76. M72 — cliente DNS de producción (robusto + anti-spoofing)
+
+> Revisión jul 2026 (tras M71; clasificación en IDEAS §32). udp/dns_cache sanos. El parser
+> DNS procesa datos EXTERNOS (resolución de nombres) y tenía la clase inflate pre-M64 (cero
+> bounds → crash con respuesta truncada, verificado) MÁS un DoS (puntero de compresión cíclico
+> → bucle infinito, verificado) MÁS spoofing (txid fijo 0x1234).
+
+- **M72.1 — parser robusto (corrupto = `Err`, nunca crash ni cuelgue)**: helpers `be16`/`be32`
+  con bounds (fin del mensaje = `Err`); `read_name` con **límite de saltos de puntero** (un
+  puntero 0xC0 que cicla o una cadena larga = `Err`, no bucle infinito) y bounds en cada
+  label; `parse_full` valida que cada RR (type/ttl/rdlength/rdata) quepa antes de leerlo;
+  `format_ipv4`/`format_ipv6`/`read_txt`/MX/CNAME/SRV acotados. Un `read_name` que puede
+  fallar devuelve `Result` y se propaga con `?`. El error es un valor, como en M64.1.
+- **M72.2 — anti-spoofing**: `query_full` genera el **transaction ID aleatorio** con
+  `crypto.random_bytes` (M68.2; 16 bits del CSPRNG, impredecible) y **valida** que el ID de la
+  respuesta coincida con el de la consulta (una respuesta con otro ID = `Err`, no se acepta).
+  Cierra el spoofing off-path trivial que el ID fijo 0x1234 permitía.

@@ -8096,7 +8096,21 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   mensaje, como hoy); el `join`/`ScopeEnd` que re-lanza aporta su propia posición. Diferido:
   transportar la traza de la fibra hija.
 
-### §83.2 Qué NO cambia
+### §83.2 Estado
+
+- **M79a COMPLETO** (546 lib + oráculo `stack_trace_oraculo`): `TraceFrame`/`RuntimeError.trace`
+  (`runtime.rs`); la VM compone la traza al capturar el `Err` en el bucle (`build_trace`, marcos
+  intactos, cero coste en caliente); el intérprete mantiene `call_stack` en `call_body` (push tras
+  la guardia de desbordamiento → el overflow se atribuye al llamador como la VM; pop al salir; el
+  trampolín TCO **renombra la cima** — verificado: con recursión de cola la traza tiene UN marco).
+  Oráculo: trazas IDÉNTICAS (nombres+posiciones) en panic anidado no-cola, assert del prelude,
+  división por cero en helper, error dentro de closure (`<fn#0>` casa) y cadena en cola.
+- **M79b COMPLETO** (`errors_cli` 9 verdes): `render_trace` en `cli.rs` — `en <fn> (<mód>:L:C)` /
+  `desde …`, localización por bandas, fuera-de-banda = `prelude` (con su posición original),
+  truncado >12 marcos (6 + `… (N marcos omitidos)` + 5), nada con <2 marcos. Verificado
+  multi-módulo: `desde util::validate (util:2:5)` + `desde main (main:4:5)`.
+
+### §83.3 Qué NO cambia
 
 `Display` de `RuntimeError` · el formato del runner de `@test` (`e.msg` crudo) · el REPL ·
 exit code 70 · `tests/errors_cli.rs` (prefijo `error en ejecución en L:`) · los oráculos

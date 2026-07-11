@@ -1114,8 +1114,10 @@ funciones anotadas y un nivel). Diseño completo en DESIGN §83.
 
 | Pieza | Coste | Sub-fase |
 |---|---|---|
-| `RuntimeError.trace` + captura en ambos motores (VM: al capturar el Err, frames intactos, coste cero en caliente; intérprete: pila explícita en `call_body`, TCO renombra la cima) + oráculo de trazas | Runtime acotado; `Display` NO cambia (oráculos/runner/selfhost intactos) | **79a** |
-| Presentación en `cli.rs`: `en <fn> (<módulo> L:C)` / `desde …`, localización por bandas, fuera-de-banda = prelude, truncado 6+…+5, solo con ≥2 marcos | Solo cliente | **79b** |
+| `RuntimeError.trace` + captura en ambos motores (VM: al capturar el Err, frames intactos, coste cero en caliente; intérprete: pila explícita en `call_body`, TCO renombra la cima) + oráculo de trazas | Runtime acotado; `Display` NO cambia (oráculos/runner/selfhost intactos) | ✅ **79a** |
+| Presentación en `cli.rs`: `en <fn> (<módulo> L:C)` / `desde …`, localización por bandas, fuera-de-banda = prelude, truncado 6+…+5, solo con ≥2 marcos | Solo cliente | ✅ **79b** |
+
+**M79 COMPLETO** (546 lib + `stack_trace_oraculo` + 9 en `errors_cli`).
 
 Diferido: transportar la traza a través de `Task::Failed` (hoy solo cruza el mensaje); nombres
 "bonitos" para métodos manglados (`Tipo#metodo` se muestra tal cual, honesto).

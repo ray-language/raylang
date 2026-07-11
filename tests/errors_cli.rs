@@ -64,3 +64,26 @@ fn el_cli_muestra_todos_los_errores_de_tipos() {
     assert!(err.contains("error de tipos en 2:17"), "segundo error\n{err}");
     assert!(err.contains("int y bool") && err.contains("string y int"), "{err}");
 }
+
+#[test]
+fn error_de_ejecucion_muestra_la_traza_de_llamadas() {
+    // M79: la traza de llamadas — `en <fn>` el marco interno, `desde <fn>` los
+    // llamadores, cada uno con su posición local. El assert del prelude se etiqueta
+    // `prelude` (fuera de banda) y el sitio del USUARIO aparece con su línea real.
+    let err = run_file_stderr(
+        "fn helper(x: int) -> int {\n    assert(x > 0);\n    x\n}\nfn main() -> int {\n    helper(0 - 1) + 0\n}\n",
+        "ray_err_trace.ray",
+    );
+    assert!(err.contains("aserción falló"), "cabecera\n{err}");
+    assert!(err.contains("en assert (prelude:"), "marco del prelude etiquetado\n{err}");
+    assert!(err.contains("desde helper (ray_err_trace:2:5)"), "sitio del assert en helper\n{err}");
+    assert!(err.contains("desde main (ray_err_trace:6:5)"), "sitio de la llamada en main\n{err}");
+}
+
+#[test]
+fn error_directo_en_main_no_imprime_traza() {
+    // M79: con un solo marco la traza no aporta (la cabecera ya lo dice).
+    let err = run_file_stderr("fn main() -> int {\n    let d = 0;\n    10 / d\n}\n", "ray_err_sin_traza.ray");
+    assert!(err.contains("error en ejecución en 3:"), "{err}");
+    assert!(!err.contains("desde "), "sin traza con un solo marco\n{err}");
+}

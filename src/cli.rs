@@ -1096,10 +1096,48 @@ fn run_file(path: &str, prog_args: Vec<String>, use_interp: bool, fuel: Option<u
         Ok(_) => process::exit(0),
         Err(mut e) => {
             let (source, name, local) = locate(e.line);
+            let trace = std::mem::take(&mut e.trace);
             e.line = local;
             let head = if multi { format!("[{}] {}", name, e) } else { e.to_string() };
             eprintln!("{}", diagnostic::render(&source, local, e.col, 1, &head));
+            for l in render_trace(&trace, &locate) {
+                eprintln!("{}", l);
+            }
             process::exit(70); // EX_SOFTWARE
         }
     }
+}
+
+/// M79: renderiza la traza de llamadas de un error de runtime, una línea por marco
+/// (`en <fn> (<módulo>:L:C)` el más interno, `desde …` los llamadores), localizada por
+/// bandas como la cabecera. Una posición **fuera de banda** (línea local mayor que el
+/// fuente del módulo) solo puede venir del prelude —el único fuente inyectado sin banda
+/// propia— y se etiqueta `prelude` con su línea original. Con un solo marco no se
+/// imprime nada (la cabecera ya lo dice todo); con recursión profunda se trunca
+/// (primeros 6 + `…` + últimos 5), la traza completa no aporta.
+fn render_trace(trace: &[runtime::TraceFrame], locate: &Locate) -> Vec<String> {
+    if trace.len() < 2 {
+        return Vec::new();
+    }
+    let render_frame = |prefix: &str, f: &runtime::TraceFrame| {
+        let (source, name, local) = locate(f.line);
+        if local > source.lines().count() {
+            format!("  {} {} (prelude:{}:{})", prefix, f.name, f.line, f.col)
+        } else {
+            format!("  {} {} ({}:{}:{})", prefix, f.name, name, local, f.col)
+        }
+    };
+    let mut out = Vec::new();
+    let n = trace.len();
+    let (head, tail) = if n > 12 { (6, n - 5) } else { (n, n) };
+    for (i, f) in trace.iter().enumerate() {
+        if i >= head && i < tail {
+            if i == head {
+                out.push(format!("  … ({} marcos omitidos)", tail - head));
+            }
+            continue;
+        }
+        out.push(render_frame(if i == 0 { "en" } else { "desde" }, f));
+    }
+    out
 }

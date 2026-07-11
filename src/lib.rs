@@ -80,7 +80,7 @@ const STACK_SIZE: usize = 256 * 1024 * 1024;
 /// tras un check exitoso: es la bajada a bytecode) se presenta como error de ejecución.
 pub fn run_on_vm(program: &ast::Program) -> Result<runtime::Value, runtime::RuntimeError> {
     let compiled = compiler::compile_program(program)
-        .map_err(|e| runtime::RuntimeError { msg: e.msg, line: e.line, col: e.col })?;
+        .map_err(|e| runtime::RuntimeError { msg: e.msg, line: e.line, col: e.col, trace: Vec::new() })?;
     vm::run_program(&compiled)
 }
 

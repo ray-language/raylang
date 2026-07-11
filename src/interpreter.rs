@@ -74,6 +74,7 @@ fn cast_value(v: Value, ty: &Type, line: usize, col: usize) -> Result<Value, Flo
                 msg: format!("{} no es un carácter Unicode válido para 'as char'", n),
                 line,
                 col,
+                trace: Vec::new(),
             })),
         },
         // M28.3: conversiones de/hacia enteros sin signo con tamaño. Enmascaran al ancho destino.
@@ -112,6 +113,12 @@ struct Interpreter<'a> {
     /// al entrar en `call_body` y se decrementa al salir; al alcanzar `MAX_CALL_DEPTH`
     /// se corta con un error en vez de desbordar la pila de Rust.
     depth: usize,
+    /// M79: pila de llamadas activas para la traza de errores. Cada entrada es el
+    /// nombre de la función LLAMADA y la posición del SITIO de llamada en el llamador
+    /// (así la posición de un llamador en la traza es la de su llamada en vuelo, como
+    /// deriva la VM de `lines[ip-1]`). La mantiene `call_body` (push/pop; el trampolín
+    /// TCO renombra la cima sin apilar, espejo del `TailCall` de la VM).
+    call_stack: Vec<crate::runtime::TraceFrame>,
     /// Funciones externas (M41, FFI): nombre → descriptor de llamada. Una llamada a uno de estos
     /// nombres se despacha a `ffi::call` (a la librería C) en vez de ejecutar un cuerpo raylang.
     externs: HashMap<String, crate::ffi::ExternDesc>,
@@ -148,6 +155,7 @@ impl<'a> Interpreter<'a> {
             consts,
             scopes: Vec::new(),
             depth: 0,
+            call_stack: Vec::new(),
             externs,
         }
     }
@@ -155,7 +163,7 @@ impl<'a> Interpreter<'a> {
     fn run_main(&mut self) -> Result<Value, RuntimeError> {
         // El checker ya garantizó que 'main' existe.
         let main = *self.functions.get("main").expect("el checker garantiza 'main'");
-        match self.call_function(main, Vec::new()) {
+        match self.call_function(main, Vec::new(), 0, 0) {
             Ok(v) => Ok(v),
             Err(Flow::Error(e)) => Err(e),
             // Un 'return' nunca debería escapar de call_function, pero por si acaso.
@@ -166,28 +174,33 @@ impl<'a> Interpreter<'a> {
     }
 
     /// Ejecuta una función nombrada con sus argumentos ya evaluados (sin entorno
-    /// capturado).
-    fn call_function(&mut self, func: &'a Function, args: Vec<Value>) -> EvalResult {
-        self.call_body(&func.params, &func.body, args, &[])
+    /// capturado). `(call_line, call_col)` es la posición del sitio de llamada (M79,
+    /// para la traza; `(0, 0)` para `main`, que nadie llama).
+    fn call_function(&mut self, func: &'a Function, args: Vec<Value>, call_line: usize, call_col: usize) -> EvalResult {
+        self.call_body(&func.params, &func.body, args, &[], &func.name, call_line, call_col)
     }
 
     /// Despacha una llamada a través de un índice de la tabla de funciones: `idx`
     /// menor que el número de funciones nombradas es una nombrada; el resto, una
     /// anónima (`idx - N`). `captured` es el entorno de la closure (vacío si es una
     /// función sin captura). (M4.1/M4.2)
-    fn call_index(&mut self, idx: usize, args: Vec<Value>, captured: &[(String, Cell)]) -> EvalResult {
+    fn call_index(&mut self, idx: usize, args: Vec<Value>, captured: &[(String, Cell)], call_line: usize, call_col: usize) -> EvalResult {
         let n = self.named.len();
         if idx < n {
-            self.call_body(&self.named[idx].params, &self.named[idx].body, args, captured)
+            let name = self.named[idx].name.clone();
+            self.call_body(&self.named[idx].params, &self.named[idx].body, args, captured, &name, call_line, call_col)
         } else {
             let fe = self.anon[idx - n];
-            self.call_body(&fe.params, &fe.body, args, captured)
+            // El mismo nombre que da el compilador a las anónimas (la traza debe
+            // coincidir entre motores).
+            let name = format!("<fn#{}>", idx - n);
+            self.call_body(&fe.params, &fe.body, args, captured, &name, call_line, call_col)
         }
     }
 
     /// Ejecuta el cuerpo de una función (nombrada o anónima) con sus argumentos y su
     /// entorno capturado.
-    fn call_body(&mut self, params: &'a [Param], body: &'a Block, args: Vec<Value>, captured: &[(String, Cell)]) -> EvalResult {
+    fn call_body(&mut self, params: &'a [Param], body: &'a Block, args: Vec<Value>, captured: &[(String, Cell)], name: &str, call_line: usize, call_col: usize) -> EvalResult {
         // Guardia de recursión (M13.3a): si ya hay `MAX_CALL_DEPTH` llamadas activas,
         // cortamos con un error limpio en vez de seguir recurriendo sobre la pila de
         // Rust (que acabaría en segfault). La comprobación es ANTES de incrementar,
@@ -201,6 +214,14 @@ impl<'a> Interpreter<'a> {
             ));
         }
         self.depth += 1;
+        // M79: marco de la traza — el nombre del llamado + la posición del sitio de
+        // llamada. Se apila DESPUÉS de la guardia (el desbordamiento se atribuye al
+        // llamador, como la VM, cuyo `Call` no llegó a empujar el marco).
+        self.call_stack.push(crate::runtime::TraceFrame {
+            name: name.to_string(),
+            line: call_line,
+            col: call_col,
+        });
 
         // Scoping léxico: la función arranca con una pila de ámbitos NUEVA, no la de
         // quien llama. Guardamos la actual y la restauramos al volver.
@@ -233,10 +254,25 @@ impl<'a> Interpreter<'a> {
             match self.eval_tail_block(cur_body) {
                 Ok(v) => break Ok(v),                          // el cuerpo cayó a su valor final
                 Err(Flow::Return(v)) => break Ok(v),           // un 'return' temprano: ese es el valor
-                Err(e @ Flow::Error(_)) => break Err(e),       // un error real se propaga
+                // Un error real se propaga; el `call_body` más interno compone la traza
+                // (M79) ANTES de despilar (la pila aún incluye este marco). El chequeo
+                // `is_empty` evita que los envolventes la re-rellenen al desenrollar.
+                Err(Flow::Error(mut e)) => {
+                    if e.trace.is_empty() {
+                        e.trace = self.compose_trace(e.line, e.col);
+                    }
+                    break Err(Flow::Error(e));
+                }
                 // Llamada en cola: reemplaza la función actual y reitera (no recurre).
                 Err(Flow::TailCall { index, args, captured }) => {
                     let (p, b) = self.params_body_of(index);
+                    // M79: el marco se REUTILIZA (como el `TailCall` de la VM, que
+                    // reemplaza `frames[top].function`): se renombra la cima sin apilar;
+                    // la posición del sitio de llamada original se conserva.
+                    let new_name = self.name_of_index_owned(index);
+                    if let Some(top) = self.call_stack.last_mut() {
+                        top.name = new_name;
+                    }
                     cur_params = p;
                     cur_body = b;
                     cur_captured = captured;
@@ -247,7 +283,42 @@ impl<'a> Interpreter<'a> {
 
         self.scopes = saved; // restaurar el entorno de quien llama
         self.depth -= 1; // salimos de esta llamada
+        self.call_stack.pop(); // M79: el marco de la traza sale con la llamada
         result
+    }
+
+    /// M79: el nombre de la función con índice `index` (nombrada, o `<fn#id>` para una
+    /// anónima — la misma grafía que les da el compilador, para que la traza coincida
+    /// entre motores).
+    fn name_of_index_owned(&self, index: usize) -> String {
+        let n = self.named.len();
+        if index < n { self.named[index].name.clone() } else { format!("<fn#{}>", index - n) }
+    }
+
+    /// M79: compone la traza de llamadas en el momento del error. La entrada 0 es el
+    /// marco más interno (su nombre + la posición del error); cada entrada siguiente
+    /// es un llamador con la posición de su llamada en vuelo (que es, precisamente,
+    /// el sitio de llamada guardado en el marco de ENCIMA — la misma derivación que
+    /// hace la VM con `lines[frame.ip - 1]`).
+    fn compose_trace(&self, err_line: usize, err_col: usize) -> Vec<crate::runtime::TraceFrame> {
+        let n = self.call_stack.len();
+        let mut trace = Vec::with_capacity(n);
+        if n == 0 {
+            return trace;
+        }
+        trace.push(crate::runtime::TraceFrame {
+            name: self.call_stack[n - 1].name.clone(),
+            line: err_line,
+            col: err_col,
+        });
+        for k in 1..n {
+            trace.push(crate::runtime::TraceFrame {
+                name: self.call_stack[n - 1 - k].name.clone(),
+                line: self.call_stack[n - k].line,
+                col: self.call_stack[n - k].col,
+            });
+        }
+        trace
     }
 
     /// Los parámetros y el cuerpo de la función con índice `index` (M13.3b, para el trampolín).
@@ -358,6 +429,7 @@ impl<'a> Interpreter<'a> {
                     msg: "ningún brazo del match casó (no debería ocurrir)".into(),
                     line: scrutinee.line,
                     col: scrutinee.col,
+                    trace: Vec::new(),
                 }))
             }
             // Cualquier otra forma no es una llamada en cola: evaluación normal.
@@ -483,7 +555,9 @@ impl<'a> Interpreter<'a> {
                         let it = self.eval_expr(expr)?;
                         let func = *self.functions.get(next_fn.as_str()).expect("el checker garantiza next");
                         loop {
-                            let r = self.call_function(func, vec![it.clone()])?;
+                            // La posición del `for` (la misma que emite el compilador
+                            // para el `Call` a `next` → la traza casa entre motores).
+                            let r = self.call_function(func, vec![it.clone()], stmt.line, stmt.col)?;
                             let inst = match r {
                                 Value::Enum(rc) => rc,
                                 _ => unreachable!("next devuelve Option"),
@@ -776,6 +850,7 @@ impl<'a> Interpreter<'a> {
                     msg: "ningún brazo del match casó (no debería ocurrir)".into(),
                     line: scrutinee.line,
                     col: scrutinee.col,
+                    trace: Vec::new(),
                 }))
             }
 
@@ -869,7 +944,7 @@ impl<'a> Interpreter<'a> {
                     for arg in args {
                         values.push(self.eval_expr(arg)?);
                     }
-                    return self.call_index(idx, values, &[]);
+                    return self.call_index(idx, values, &[], callee.line, callee.col);
                 }
             }
         }
@@ -883,12 +958,12 @@ impl<'a> Interpreter<'a> {
             values.push(self.eval_expr(arg)?);
         }
         match callee_val {
-            Value::Function(idx) => self.call_index(idx, values, &[]),
+            Value::Function(idx) => self.call_index(idx, values, &[], callee.line, callee.col),
             Value::Closure(c) => {
                 // Clonamos el entorno capturado (clona los `Rc` de las celdas, las
                 // comparte) para soltar el préstamo del valor antes de la llamada.
                 let captured = c.upvalues.clone();
-                self.call_index(c.index, values, &captured)
+                self.call_index(c.index, values, &captured, callee.line, callee.col)
             }
             _ => unreachable!("el checker garantiza una función"),
         }
@@ -1911,7 +1986,7 @@ impl<'a> Interpreter<'a> {
 }
 
 fn runtime_error(line: usize, col: usize, msg: &str) -> Flow {
-    Flow::Error(RuntimeError { msg: msg.to_string(), line, col })
+    Flow::Error(RuntimeError { msg: msg.to_string(), line, col, trace: Vec::new() })
 }
 
 /// Convierte un `Value` de raylang a un valor de la frontera FFI (M41). El checker ya garantizó que
@@ -2066,7 +2141,7 @@ mod tests {
         let prog_ref: &'static Program = Box::leak(Box::new(prog));
         let mut interp = Interpreter::new(prog_ref);
         let func = *interp.functions.get(name).expect("la función del test existe");
-        match interp.call_function(func, Vec::new()) {
+        match interp.call_function(func, Vec::new(), 0, 0) {
             Ok(v) => v,
             Err(Flow::Return(v)) => v,
             Err(Flow::Error(e)) => panic!("error de ejecución inesperado: {}", e),

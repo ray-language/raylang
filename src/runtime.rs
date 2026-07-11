@@ -218,12 +218,25 @@ impl std::fmt::Display for Value {
     }
 }
 
-/// Error en tiempo de ejecución (p. ej. división por cero). Lleva ubicación.
+/// M79: un marco de la traza de llamadas de un error de runtime. La entrada 0 es el
+/// marco más interno (nombre de la función + posición del error); cada entrada
+/// siguiente es un llamador, con la posición de su llamada en vuelo.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraceFrame {
+    pub name: String,
+    pub line: usize,
+    pub col: usize,
+}
+
+/// Error en tiempo de ejecución (p. ej. división por cero). Lleva ubicación y, desde
+/// M79, la traza de llamadas (la rellenan los motores al capturar el error; el
+/// `Display` NO la incluye — la presenta solo el cliente CLI).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeError {
     pub msg: String,
     pub line: usize,
     pub col: usize,
+    pub trace: Vec<TraceFrame>,
 }
 
 impl std::fmt::Display for RuntimeError {

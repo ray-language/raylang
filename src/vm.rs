@@ -2551,7 +2551,14 @@ impl<'a> Vm<'a> {
             match outcome {
                 Ok(Some(v)) => return Ok(v),
                 Ok(None) => {}
-                Err(e) => {
+                Err(mut e) => {
+                    // M79: la traza de llamadas se compone AQUÍ, donde los marcos siguen
+                    // intactos (el `Err` no los desenrolla) — coste cero en el camino
+                    // caliente. `is_empty` respeta una traza ya adjunta (no hay hoy, pero
+                    // es la misma disciplina que el intérprete).
+                    if e.trace.is_empty() {
+                        e.trace = Self::build_trace(&self.cur.frames, program, e.line, e.col);
+                    }
                     // Propagación de fallos (M12.3): el error de la fibra HIJA en curso no aborta el
                     // programa; se captura en su `Task` (`Failed`) y se planifica la siguiente. Abortan los
                     // de `main` y los del scheduler (frames vacíos = la fibra ya se aparcó/terminó → el
@@ -2563,6 +2570,43 @@ impl<'a> Vm<'a> {
                 }
             }
         }
+    }
+
+    /// M79: compone la traza de llamadas a partir de los marcos vivos de la fibra en
+    /// curso. La entrada 0 es el marco más interno (su nombre + la posición del error);
+    /// cada llamador aporta su nombre + la posición de su llamada en vuelo: su `ip`
+    /// guardado ya apunta TRAS el `Call` (el avance por defecto ocurre antes de
+    /// ejecutar), así que la llamada es `lines[ip - 1]`. Solo se llama al capturar un
+    /// error — cero coste en el camino caliente.
+    fn build_trace(
+        frames: &[CallFrame],
+        program: &CompiledProgram,
+        err_line: usize,
+        err_col: usize,
+    ) -> Vec<crate::runtime::TraceFrame> {
+        let n = frames.len();
+        let mut trace = Vec::with_capacity(n);
+        if n == 0 {
+            return trace;
+        }
+        trace.push(crate::runtime::TraceFrame {
+            name: program.functions[frames[n - 1].function].name.clone(),
+            line: err_line,
+            col: err_col,
+        });
+        for f in frames[..n - 1].iter().rev() {
+            let (line, col) = f
+                .ip
+                .checked_sub(1)
+                .and_then(|i| program.functions[f.function].chunk.lines.get(i).copied())
+                .unwrap_or((0, 0));
+            trace.push(crate::runtime::TraceFrame {
+                name: program.functions[f.function].name.clone(),
+                line,
+                col,
+            });
+        }
+        trace
     }
 
     // ----- Scheduler de fibras (M12.1 / M12.3) -----
@@ -3434,7 +3478,7 @@ fn transfer_obj(src: &Heap, dst: &mut Heap, h: Handle, remap: &mut HashMap<Handl
 }
 
 fn runtime_error(line: usize, col: usize, msg: &str) -> RuntimeError {
-    RuntimeError { msg: msg.to_string(), line, col }
+    RuntimeError { msg: msg.to_string(), line, col, trace: Vec::new() }
 }
 
 /// Localiza la variante `variant` del enum `Option` del prelude en la tabla compilada, devolviendo
@@ -4236,6 +4280,68 @@ mod tests {
             assert_eq!(interp.msg, expected, "intérprete: {}", src);
             assert_eq!(vm.msg, expected, "vm: {}", src);
         }
+    }
+
+    /// M79: la traza de llamadas de un error de runtime debe ser IDÉNTICA (nombres +
+    /// posiciones) entre ambos motores: panic anidado (con marcos repetidos por
+    /// recursión no-cola), assert del prelude (la traza cruza al fuente inyectado),
+    /// división por cero en un helper, error dentro de una closure, y llamada en cola
+    /// (el marco reutilizado aparece UNA vez, con el nombre final).
+    #[test]
+    fn stack_trace_oraculo() {
+        for src in [
+            // panic anidado con recursión NO-cola (el `+ 0` evita el TCO): main → middle → boom×3
+            "fn boom(n: int) -> int { if (n == 0) { panic(\"boom\"); } boom(n - 1) + 0 }\n\
+             fn middle() -> int { boom(2) }\n\
+             fn main() -> int { middle() }",
+            // assert del prelude: la traza atraviesa `assert` (fuente inyectado)
+            "fn main() -> int { assert(false); 0 }",
+            // división por cero en un helper
+            "fn div(a: int, b: int) -> int { a / b }\nfn main() -> int { div(1, 0) }",
+            // error dentro de una función anónima (el nombre `<fn#0>` debe casar)
+            "fn aplica(f: fn(int) -> int, x: int) -> int { f(x) }\n\
+             fn main() -> int { aplica(fn(n: int) -> int { n / 0 }, 3) }",
+            // llamada en cola: el marco se reutiliza (la traza NO crece con la recursión)
+            "fn cuenta(n: int) -> int { if (n == 0) { panic(\"fin\"); } cuenta(n - 1) }\n\
+             fn main() -> int { cuenta(5) }",
+        ] {
+            let tokens = crate::lexer::lex(src).expect("lex ok");
+            let mut prog = crate::parser::parse(tokens).expect("parse ok");
+            crate::checker::check(&mut prog).expect("check ok");
+            let interp = crate::interpreter::run(&prog).expect_err("el intérprete debe errar");
+            let compiled = compile_program(&prog).expect("compila");
+            let vm = run_program(&compiled).expect_err("la VM debe errar");
+            assert!(!vm.trace.is_empty(), "la VM debe adjuntar traza: {}", src);
+            assert_eq!(interp.trace, vm.trace, "trazas distintas en:\n{}", src);
+            // La cabecera y la entrada 0 cuentan lo mismo (nombre del marco interno aparte).
+            assert_eq!((vm.trace[0].line, vm.trace[0].col), (vm.line, vm.col), "entrada 0 = posición del error: {}", src);
+        }
+
+        // Forma de la traza: los nombres, de dentro afuera. Los `+ 0` hacen NO-cola
+        // cada llamada (sin ellos, el TCO reutiliza los marcos de main/middle y la
+        // traza sería [boom, boom, boom] — verificado por el oráculo de arriba).
+        let src = "fn boom(n: int) -> int { if (n == 0) { panic(\"boom\"); } boom(n - 1) + 0 }\n\
+                   fn middle() -> int { boom(2) + 0 }\n\
+                   fn main() -> int { middle() + 0 }";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
+        let compiled = compile_program(&prog).expect("compila");
+        let vm = run_program(&compiled).expect_err("la VM debe errar");
+        let names: Vec<&str> = vm.trace.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["boom", "boom", "boom", "middle", "main"]);
+
+        // Y con TCO el marco reutilizado aparece UNA vez: `main → cuenta` y toda la
+        // recursión de `cuenta` son colas → UN solo marco, renombrado a `cuenta`.
+        let src = "fn cuenta(n: int) -> int { if (n == 0) { panic(\"fin\"); } cuenta(n - 1) }\n\
+                   fn main() -> int { cuenta(5) }";
+        let tokens = crate::lexer::lex(src).expect("lex ok");
+        let mut prog = crate::parser::parse(tokens).expect("parse ok");
+        crate::checker::check(&mut prog).expect("check ok");
+        let compiled = compile_program(&prog).expect("compila");
+        let vm = run_program(&compiled).expect_err("la VM debe errar");
+        let names: Vec<&str> = vm.trace.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["cuenta"], "TCO: el marco en cola se reutiliza");
     }
 
     /// M15.1a: la stdlib de matemáticas en el oráculo. Las funciones float se enrutan a `int` por la

@@ -1070,6 +1070,30 @@ mysql/sqlite). Sin espejos (los paquetes `db` no son embebidos).
 
 ---
 
+## 38. HPACK — decodificación robusta (revisión jul 2026) — M78
+
+Revisión en frío de `net/hpack` (compresión de cabeceras HTTP/2, RFC 7541). El `decode` procesa
+bloques del PEER (no confiables), lo consumen `http2_client`/`grpc_client`. Sano: la tabla estática
++ dinámica con evicción por tamaño, `table_lookup` acotado, el codificador solo emite literales
+crudos válidos. Pero el decodificador tenía la superficie clásica de bombas de HPACK:
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **`dec_int` sin límites ni tope**: la lectura de continuación `data[p]` no chequea `p < len` (entero truncado → OOB), y `shift` crece 7 por octeto sin cota → un bloque de octetos 0xFF lleva `shift` a millones y `(b & 127) << shift` **desborda el i64** (trap). RFC 7541 §5.1 exige limitar el tamaño del entero | DoS por entero truncado/gigante (trap) | **M78** |
+| **`dec_str` con longitud sin validar**: `sub_bytes(lr.next, lr.next + lr.value)` con `lr.value` del peer → OOB si excede el bloque; además leía `data[pos]` sin chequear el fin | OOB por string sobredimensionado (trap) | **M78** |
+| **Actualización de tamaño de tabla sin tope**: `set_max_size(h, ir.value)` acepta cualquier valor; RFC 7541 §6.3 lo limita al tamaño anunciado por SETTINGS (4096). Sin tope, un peer sube el máximo y la tabla dinámica crece **sin evicción a lo largo de la conexión** | Bomba de memoria de la tabla dinámica | **M78** |
+
+Fix: `dec_int` pasa a `Result`, chequea `p < len` en cada continuación y corta con error si `shift >
+28` (entero fuera de cualquier uso legítimo, antes de desbordar); `dec_str` valida `pos < len` y
+`lr.next + lr.value <= len` antes de `sub_bytes`; la actualización de tamaño rechaza `> 4096`. Los
+llamadores de `dec_int` en `decode` propagan con `?`. Regresión: entero truncado, string
+sobredimensionado, size-update > 4096 y bomba de varint = `Err`, no crash (`cli_cli`,
+`paquete_net_hpack_decode_malformado`); el round-trip legítimo y el e2e HTTP/2 siguen verdes.
+Espejos `packages/net` ↔ `examples/web` juntos. El Huffman de decodificación sigue diferido
+(rechazado con error claro, como antes).
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

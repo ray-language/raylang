@@ -8030,3 +8030,24 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   diferencia del NULL de Postgres, M76). Threat model: servidor malicioso; trapeaba seguro (sin
   corrupción/RCE) y estaba acotado a 16 MB (largo de paquete de 3 octetos). **Cluster db CERRADO**
   (M76 mongo/postgres + M77 mysql/sqlite). Sin espejos (los paquetes `db` no son embebidos).
+
+## 82. M78 — HPACK de producción (decodificación robusta ante bloques del peer)
+
+> Revisión jul 2026 (tras M77; clasificación en IDEAS §38). `net/hpack` (RFC 7541), la compresión de
+> cabeceras HTTP/2 que consumen `http2_client`/`grpc_client`. El `decode` procesa bloques del peer
+> (no confiables). Núcleo sano (tablas estática+dinámica, evicción, `table_lookup` acotado). Tres
+> huecos, la superficie clásica de bombas de HPACK.
+
+- **M78 — de una pieza COMPLETO** (`cli_cli` hpack 2/2, http2_cli e2e sin regresión):
+  - `dec_int` pasa a `Result` y (1) chequea `p < len` en cada octeto de continuación (entero
+    truncado = `Err`, no OOB) y (2) corta si `shift > 28` — un bloque de octetos 0xFF llevaba
+    `shift` a millones y `(b & 127) << shift` desbordaba el i64 (RFC 7541 §5.1 exige limitar el
+    tamaño del entero).
+  - `dec_str` valida `pos < len` y `lr.next + lr.value <= len` antes de `sub_bytes` (string
+    sobredimensionado del peer = `Err`, no OOB).
+  - la actualización de tamaño de la tabla dinámica rechaza `> 4096` (RFC 7541 §6.3): sin tope, un
+    peer subía el máximo y la tabla crecía sin evicción a lo largo de la conexión (bomba de memoria).
+  - Los llamadores en `decode` propagan con `?`. Regresión (`paquete_net_hpack_decode_malformado`):
+    entero truncado, string sobredimensionado, size-update > 4096 y bomba de varint = `Err`, no
+    crash; el round-trip y el e2e HTTP/2 siguen verdes. Espejos `packages/net` ↔ `examples/web`
+    juntos. El Huffman de decodificación sigue diferido (rechazado con error claro).

@@ -9,6 +9,8 @@ recomendaciones. Complementa a los otros documentos:
   operadores con precedencia, builtins, prelude, módulos `std/` y paquetes, con sus firmas.
 - **`book/`** — el libro *Construyendo raylang*: cómo se **construyó** el lenguaje, fase a fase (pedagogía de
   implementación).
+- **[`PUBLICAR.md`](PUBLICAR.md)** — la guía del **publicador**: empaquetar, versionar y publicar
+  en el registro (`ray publish`, índice, yank, garantías del lock).
 - **Este manual** — cómo **usar** raylang para programar.
 
 ## Índice
@@ -726,6 +728,9 @@ ray update                  # re-resuelve a las más nuevas compatibles
 ray remove textutils
 ray publish                 # publica TU paquete en el registro (valida + chequea + hashea)
 ```
+
+El flujo completo del **publicador** (empaquetar, el índice, versionado, `yank`, garantías y
+receta de punta a punta) está en [`PUBLICAR.md`](PUBLICAR.md).
 
 ## 12. La biblioteca estándar
 

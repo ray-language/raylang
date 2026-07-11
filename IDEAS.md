@@ -960,6 +960,22 @@ clase de problemas que inflate pre-M64, más un vector de spoofing clásico.
 
 ---
 
+## 33. Cliente gRPC / HTTP/2 (revisión jul 2026) — M73, PLAN
+
+Revisión en frío de `net/grpc_client` (detalle en DESIGN §77). Sano: framing HTTP/2 (procesa
+solo frames completos), flow control, ACK de PING, RST/GOAWAY=Err con causa (M58.3), errores
+como valores, HPACK.
+
+| Hallazgo | Impacto | Sub-fase |
+|---|---|---|
+| **`body`/`buf` crecen sin cota**: frames DATA indefinidos → agotamiento de memoria; `frame_size` acepta un length de hasta 16 MB (24 bits) sin validar contra el max-frame de 16 KB | Bomba de memoria remota (clase M64.2/read_message_limit) | **M73** |
+| **`tuvo_grpc_status` variable MUERTA**: se computa pero nunca se lee → un servidor que NO manda `grpc-status` en los trailers pasa como `Ok(grpc_status: 0)`, indistinguible de OK | Error de protocolo silenciado | **M73** |
+
+El mismo tope de acumulación aplica al **`http2_client.ray`** hermano (comparte el patrón
+body=body+payload sin cota) → se arregla en paralelo.
+
+---
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

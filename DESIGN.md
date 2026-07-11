@@ -7934,3 +7934,17 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
   `crypto.random_bytes` (M68.2; 16 bits del CSPRNG, impredecible) y **valida** que el ID de la
   respuesta coincida con el de la consulta (una respuesta con otro ID = `Err`, no se acepta).
   Cierra el spoofing off-path trivial que el ID fijo 0x1234 permitía.
+
+## 77. M73 — cliente gRPC / HTTP/2 de producción (anti-bomba + grpc-status)
+
+> Revisión jul 2026 (tras M72; clasificación en IDEAS §33). Sano: framing, flow control,
+> PING/RST/GOAWAY (M58.3). Dos defectos: acumulación sin cota (bomba de memoria) y una
+> variable muerta que silencia un error de protocolo.
+
+- **M73 — de una pieza**: (a) tope de respuesta acumulada (64 MiB, como M64.2) en `body` de
+  `grpc_client` Y `http2_client` (el DATA que lo rebasa = `Err`, no agotamiento); tope de
+  frame individual (rechazar un frame cuyo `frame_size` declara más que un máximo razonable,
+  antes de esperar sus octetos). (b) `grpc_call` usa `tuvo_grpc_status` (hoy muerto): si la
+  respuesta no trae `grpc-status` en los trailers (protocolo gRPC violado o trailers
+  truncados) = `Err`, en vez de devolver `Ok(grpc_status: 0)` indistinguible de un OK.
+  Espejos `packages/net` ↔ `examples/web` juntos (grpc + http2_client).

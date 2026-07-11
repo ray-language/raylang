@@ -32,6 +32,7 @@ const MODULES: &[(&str, &str)] = &[
     ("std/random", include_str!("../std/random.ray")), // M49.2a
     ("std/time", include_str!("../std/time.ray")), // M49.2b
     ("std/crypto", include_str!("../std/crypto.ray")), // M49.3
+    ("std/resilience", include_str!("../std/resilience.ray")), // M88.2
     ("std/text", include_str!("../std/text.ray")),
     ("std/sort", include_str!("../std/sort.ray")),
     // Librerías **promovidas** desde `examples/` (M40.7): se embeben apuntando al archivo original —fuente

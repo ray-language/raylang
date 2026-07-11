@@ -752,8 +752,9 @@ Tres capas (catálogo completo en [`REFERENCIA.md`](REFERENCIA.md#10-la-bibliote
    import std/random;        // random.below(6)
    ```
 
-   El catálogo: `math` `text` `sort` `fs` `net` `time` `random` `crypto` `collections/{set,deque,stringbuilder}`
-   `json` `hex` `base64` `url` `regex` `csv` `toml` `template` `inflate` `deflate` `huffman` `protobuf` `uuid`.
+   El catálogo: `math` `text` `sort` `fs` `net` `time` `random` `crypto` `resilience`
+   `collections/{set,deque,stringbuilder}` `json` `hex` `base64` `url` `regex` `csv` `toml` `template`
+   `inflate` `deflate` `huffman` `protobuf` `uuid`.
 
 3. **Paquetes** (`packages/net`, `packages/db`) — no embebidos; se declaran como dependencia (§14).
 
@@ -871,6 +872,38 @@ fn main() -> int {
 MySQL/PostgreSQL/MongoDB hablan su protocolo wire en raylang puro, con variantes `connect_tls` (canal
 cifrado) — placeholders `?` (mysql), `$1` (postgres), documentos BSON (mongo). Demos en
 [`examples/db/`](examples/db/).
+
+### Resiliencia (`std/resilience`, embebida)
+
+En un servicio los fallos parciales son lo normal; el kit da las tres piezas estándar, genéricas
+sobre cualquier `fn() -> Result<T, E>`:
+
+```rust
+import std/resilience;
+
+fn main() -> int {
+    // Retry con backoff exponencial + jitter (duerme cediendo la fibra).
+    let p = resilience.policy(4, 100, 2000);      // 4 intentos: ~100, 200, 400 ms + jitter
+    let r = resilience.retry(p, fn() -> Result<string, string> { llamada_flaky() });
+
+    // Circuit breaker: 5 fallos seguidos lo ABREN 10 s (falla en seco sin llamar).
+    let b = resilience.breaker(5, 10000);
+    let r2 = resilience.guard(b, "circuito abierto", fn() -> Result<string, string> {
+        llamada_flaky()
+    });
+
+    // Deadline: un presupuesto de tiempo que se enhebra por las llamadas.
+    let d = resilience.deadline(1500);
+    if (!resilience.expired(d)) {
+        // … y a la E/S de verdad: net.set_read_timeout(h, resilience.remaining(d))
+    }
+    0
+}
+```
+
+Sin preempción (el modelo es cooperativo), un deadline no corta una llamada bloqueada "desde
+fuera": es un **presupuesto** que consultas (`remaining`/`expired`) y aplicas de verdad en la E/S
+con `net.set_read_timeout`.
 
 ## 15. Concurrencia
 

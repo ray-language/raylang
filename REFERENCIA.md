@@ -369,6 +369,7 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/time` | `now monotonic sleep` + fechas civiles UTC (M57.1): `DateTime`, `now_utc`, `from_epoch_millis`/`to_epoch_millis`, `to_iso8601[_basic]`, `date_stamp`, `to_rfc1123`, `parse_iso8601[_millis]` (RFC 3339 con offset/fracción), `format_duration` (`net/time` queda como reexport) |
 | `std/random` | `next() -> float` · `below(n) -> int` |
 | `std/crypto` | los builtins de cripto (§5) con nombre calificado |
+| `std/resilience` | M88.2, el kit de resiliencia para servicios: `Retry`/`policy(attempts, base_ms, max_ms)` + `retry<T,E>(p, f)` (backoff exponencial + jitter; devuelve el primer `Ok` o el último `Err`) · `Breaker`/`breaker(threshold, cooldown_ms)` + `guard<T,E>(b, err_open, f)` (circuit breaker fail-fast; el error de circuito abierto lo aporta el llamador) + `is_open` · `Deadline`/`deadline(ms)` + `remaining expired` (presupuesto de tiempo monótono; aplícalo a la E/S con `net.set_read_timeout(h, remaining(d))`) |
 | `std/collections/set` | `Set<T>` (exige `T: Hash + Eq`): `new add has remove size items` → `set.new()`, `set.add(s, x)`… |
 | `std/collections/deque` | `Deque<T>`: `new len is_empty push_back push_front pop_front pop_back peek_front` |
 | `std/collections/stringbuilder` | `StringBuilder`: `new push build count` (une una vez; evita el O(n²) de `+` en bucle) |

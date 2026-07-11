@@ -1,0 +1,140 @@
+// std/resilience — el kit de RESILIENCIA para servicios (M88.2): retry con backoff
+// exponencial + jitter, circuit breaker y presupuestos de tiempo (deadline).
+//
+// Raylang puro sobre lo que ya existe: `time.sleep` (cooperativo desde M57.2: dormir
+// cede la fibra), `time.monotonic` (medir sin sustos del reloj) y `random.between`
+// (jitter). Es la diferencia entre "programar en red" y "programar distribuido": los
+// fallos PARCIALES son lo normal, y cada servicio necesita estas tres piezas.
+//
+// Sin preempción (el modelo es cooperativo), un deadline NO puede cortar una `f` que
+// bloquea: `Deadline` es un PRESUPUESTO que se enhebra por las llamadas (y se aplica de
+// verdad en la E/S vía `net.set_read_timeout`); honesto y componible.
+
+import std/time;
+import std/random;
+
+// ---------------------------------------------------------------------------
+// Retry con backoff exponencial + jitter.
+// ---------------------------------------------------------------------------
+
+// Una política de reintentos: hasta `attempts` intentos, esperando entre ellos
+// `base_ms * 2^i` acotado a `max_ms`, con jitter uniforme [0, espera) sumado.
+/// A retry policy: up to `attempts` tries, sleeping `base_ms * 2^i` (capped at
+/// `max_ms`) plus uniform jitter between tries. Build with `policy`.
+pub struct Retry {
+    attempts: int,
+    base_ms: int,
+    max_ms: int,
+}
+
+/// Builds a retry policy. `attempts` ≥ 1; `base_ms` is the first backoff, doubling
+/// each try and capped at `max_ms`.
+pub fn policy(attempts: int, base_ms: int, max_ms: int) -> Retry {
+    Retry { attempts: attempts, base_ms: base_ms, max_ms: max_ms }
+}
+
+// El backoff del intento `i` (0-based), acotado; el jitter evita el "thundering herd"
+// (todos los clientes reintentando al unísono).
+fn backoff_ms(p: Retry, i: int) -> int {
+    var espera = p.base_ms;
+    var k = 0;
+    while (k < i && espera < p.max_ms) {
+        espera = espera * 2;
+        k = k + 1;
+    }
+    if (espera > p.max_ms) {
+        espera = p.max_ms;
+    }
+    espera + random.between(0, espera + 1)
+}
+
+// Ejecuta `f` con reintentos: devuelve el primer Ok, o el ÚLTIMO Err si se agotan.
+// Duerme (cediendo la fibra) entre intentos según la política.
+/// Runs `f` with retries: returns the first Ok, or the LAST Err once attempts are
+/// exhausted. Sleeps cooperatively (backoff + jitter) between tries.
+pub fn retry<T, E>(p: Retry, f: fn() -> Result<T, E>) -> Result<T, E> {
+    var i = 0;
+    var out = f();
+    while (i + 1 < p.attempts && out.is_err()) {
+        time.sleep(backoff_ms(p, i));
+        out = f();
+        i = i + 1;
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Circuit breaker: tras `threshold` fallos seguidos, ABRE (rechaza en seco) durante
+// `cooldown_ms`; después prueba de nuevo (semiabierto) — un éxito lo cierra.
+// ---------------------------------------------------------------------------
+
+/// A circuit breaker: after `threshold` consecutive failures it OPENS (fails fast)
+/// for `cooldown_ms`, then lets one try through (half-open) — a success closes it.
+/// Build with `breaker`; guard calls with `guard`.
+pub struct Breaker {
+    threshold: int,
+    cooldown_ms: int,
+    fallos: int,
+    abierto_hasta: int,
+}
+
+/// Builds a circuit breaker (see `Breaker`).
+pub fn breaker(threshold: int, cooldown_ms: int) -> Breaker {
+    Breaker { threshold: threshold, cooldown_ms: cooldown_ms, fallos: 0, abierto_hasta: 0 }
+}
+
+/// Is the breaker currently OPEN (failing fast)?
+pub fn is_open(b: Breaker) -> bool {
+    time.monotonic() < b.abierto_hasta
+}
+
+// Ejecuta `f` bajo el breaker. Abierto → devuelve `err_abierto` SIN llamar a `f`
+// (fail-fast: no castigar a un servicio caído con más tráfico). El error del circuito
+// lo aporta el llamador porque `E` es suyo (no hay un tipo de error universal).
+/// Runs `f` under the breaker. If OPEN, returns `err_open` WITHOUT calling `f`
+/// (fail-fast). The caller provides the open-circuit error because `E` is theirs.
+pub fn guard<T, E>(b: Breaker, err_open: E, f: fn() -> Result<T, E>) -> Result<T, E> {
+    if (is_open(b)) {
+        return Result.Err(err_open);
+    }
+    let out = f();
+    if (out.is_err()) {
+        b.fallos = b.fallos + 1;
+        if (b.fallos >= b.threshold) {
+            b.abierto_hasta = time.monotonic() + b.cooldown_ms;
+            b.fallos = 0;
+        }
+    } else {
+        b.fallos = 0;
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Deadline: un presupuesto de tiempo que se enhebra por las llamadas.
+// ---------------------------------------------------------------------------
+
+/// A time budget threaded through calls. Check with `remaining`/`expired`; apply it
+/// to real I/O via `net.set_read_timeout(handle, resilience.remaining(d))`.
+pub struct Deadline {
+    hasta: int,
+}
+
+/// A deadline `ms` from now (monotonic clock).
+pub fn deadline(ms: int) -> Deadline {
+    Deadline { hasta: time.monotonic() + ms }
+}
+
+/// Milliseconds left in the budget (0 if expired — never negative).
+pub fn remaining(d: Deadline) -> int {
+    let r = d.hasta - time.monotonic();
+    if (r < 0) {
+        return 0;
+    }
+    r
+}
+
+/// Has the budget run out?
+pub fn expired(d: Deadline) -> bool {
+    remaining(d) == 0
+}

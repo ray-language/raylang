@@ -45,6 +45,10 @@ con `ray doc std/math.ray` (que lee el archivo directamente).
   `net.tls_connect`/`tls_connect_h2`/`tls_accept`, `net.socket_read`/`socket_write`/`socket_read_bytes`/
   `socket_write_bytes`, `net.local_port`. Los sockets se cierran con `close` (global). UDP vive aparte en
   el módulo `net/udp` del paquete `net`.
+- **`std/resilience`** (M88.2) — el kit de resiliencia para servicios, genérico sobre
+  `fn() -> Result<T, E>`: `policy`/`retry` (backoff exponencial + jitter, sobre el sleep cooperativo),
+  `breaker`/`guard`/`is_open` (circuit breaker fail-fast) y `deadline`/`remaining`/`expired`
+  (presupuesto de tiempo monótono; aplícalo a la E/S con `net.set_read_timeout`).
 - **`std/collections/{set,deque,stringbuilder}`** (M50.2) — estructuras de datos puras en raylang, en
   submódulos (leaf-binding): `import std/collections/set;` → `set.new`/`add`/`has`/`remove`/`size`/`items`
   (hash set sobre `Hash`+`Eq`); `import std/collections/deque;` → `deque.new`/`push_back`/`push_front`/

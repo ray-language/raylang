@@ -62,3 +62,7 @@ fuerza el gate ignorando la huella.
 un portátil (el gate false-positivea); a **mejor-de-15** baja a ~1-1.5 %, dejando ~3.5 % de
 holgura bajo el umbral del 5 %. Es la misma N que `measure.py` necesitó para destapar señales
 pequeñas. En un runner de CI dedicado (más silencioso) el 5 % es holgado.
+
+`iter.ray` (Opt.13) mide el camino **lazy** (`for x in xs.iter()` sobre 1M): es sensible al
+**pacing del GC** (un contenedor grande vivo + umbral por conteo re-escaneaba el arreglo cada
+~50 asignaciones → 6.8 s; con el umbral amortizado por trabajo trazado, 0.4 s).

@@ -7879,7 +7879,7 @@ package (a demanda): `tz` (IANA, leyendo TZif de /usr/share/zoneinfo en raylang 
 > `SET k ñ` declaraba `$1` y enviaba 2 octetos → desincronización del protocolo con
 > cualquier valor no-ASCII; binarios imposibles.
 
-- **M69 — de una pieza**: (a) framing interno 100% **`bytes`** (la migración M60 aplicada
+- **M69 — de una pieza COMPLETO**: (a) framing interno 100% **`bytes`** (la migración M60 aplicada
   aquí): `Conn.buf: bytes`, `socket_read_bytes`/`socket_write_bytes` (M16.1c), `sub_bytes`,
   `encode_command -> bytes` con `to_bytes().len()`. API pública conservada: `command(c,
   args: [string])` codifica por dentro; `Reply.Str` sigue `string` (decodifica UTF-8, `?`

@@ -104,6 +104,9 @@ fn atender(mut stream: TcpStream) {
 
 const ESPERADO: &[&str] = &[
     "PONG", "OK", "valor", "(nil)", "1", "2", "3", "[a, b, c]", "1",
+    // M69 — round-trip multibyte: el framing RESP cuenta octetos (pre-M69 contaba caracteres:
+    // "añejo ñandú" declaraba $12 en vez de $14 y desincronizaba el protocolo).
+    "OK", "añejo ñandú",
 ];
 
 fn correr(flags: &[&str]) -> Vec<String> {

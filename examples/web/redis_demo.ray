@@ -22,6 +22,10 @@ fn main() -> int {
             print(reply_str(ejec(c, ["RPUSH", "lista", "a", "b", "c"])));  // 3
             print(reply_str(ejec(c, ["LRANGE", "lista", "0", "-1"])));  // [a, b, c]
             print(reply_str(ejec(c, ["DEL", "clave"])));  // 1
+            // M69: round-trip multibyte — el framing cuenta OCTETOS ("añejo ñandú" = 12 chars,
+            // 14 octetos; la versión pre-M69 declaraba $12 y desincronizaba el protocolo).
+            print(reply_str(ejec(c, ["SET", "múlti", "añejo ñandú"])));  // OK
+            print(reply_str(ejec(c, ["GET", "múlti"])));  // añejo ñandú
             close_conn(c);
             0
         },

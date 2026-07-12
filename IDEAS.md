@@ -662,7 +662,12 @@ bytes LE + flags + un documento BSON) es más simple que el de MySQL.
 - **`JNum` es solo `float`**: fiel a JSON, pero un int64 > 2^53 pierde precisión. Irrelevante para
   APIs web; importa para un puente con BSON (abajo). Cambiarlo rompería a los usuarios del enum →
   decidir solo si el puente lo exige.
-- **Menores**: sin pretty-print (solo compacto); sin helpers de acceso (navegar es a `match` puro).
+- ✅ **Pretty-print + helpers de acceso** — CERRADO (**M90.3**): `stringify_pretty(j, indent)`
+  (multilínea con sangría, claves ordenadas como `stringify`, hojas compactas) y navegación sin
+  `match` anidado: `member`/`at` (bajan un nivel → `Option<Json>`), `as_string`/`as_float`/`as_int`
+  (integral, `3.5 → None`)/`as_bool`/`as_array`/`as_object`/`is_null` (extraen el payload), y los
+  combinados `get_string`/`get_float`/`get_int`/`get_bool`/`get_array`/`get_object` (campo tipado
+  de un objeto). UFCS: `j.get_string("nombre")`. Tests golden en `json_cli.rs`.
 - ✅ **Puente `Json ↔ Bson`** — CERRADO (jul 2026): `bson.from_json` (número JSON → `Double`; las
   claves salen ordenadas, el objeto es Map), `bson.to_json` (degradación documentada: `Int` →
   número con pérdida > 2^53, `ObjectId`/`Bin` → hex, orden de campos perdido) y **`doc_from_json(s)

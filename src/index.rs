@@ -287,6 +287,15 @@ pub fn check_signature(index_dir: &Path, name: &str, entry: &IndexEntry) -> Resu
             let hash = entry.hash.as_deref().ok_or_else(|| {
                 format!("la versión '{}' de '{name}' está firmada pero no publica hash", entry.num)
             })?;
+            // M89.2: fail-closed HONESTO — un binario sin 'net-tls' no puede verificar la
+            // firma; el error lo dice (en vez del engañoso "no verifica: ¿índice manipulado?").
+            if !crate::builtins::net_tls_available() {
+                return Err(format!(
+                    "'{name}@{}' está firmado y este binario no puede verificar firmas: {}",
+                    entry.num,
+                    crate::builtins::NET_TLS_UNAVAILABLE
+                ));
+            }
             let pk = decode_ed25519(&o.pubkey, &format!("la pubkey de '{name}'"))?;
             let sg = decode_ed25519(sig, &format!("la firma de '{name}@{}'", entry.num))?;
             let msg = signing_message(name, &entry.num, hash);

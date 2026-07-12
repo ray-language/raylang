@@ -75,6 +75,27 @@ impl Ord for char {
     fn less(self, other: char) -> bool { self < other }
 }
 
+impl Ord for bool {
+    // M90.5: false < true (como en Rust; consistente con Hash: 0 y 1).
+    fn less(self, other: bool) -> bool { !self && other }
+}
+
+impl Ord for bytes {
+    // M90.5: orden lexicográfico por octeto (un prefijo ordena antes que su extensión).
+    fn less(self, other: bytes) -> bool {
+        let na = self.len();
+        let nb = other.len();
+        var i = 0;
+        while (i < na && i < nb) {
+            if (self[i] != other[i]) {
+                return self[i] < other[i];
+            }
+            i = i + 1;
+        }
+        na < nb
+    }
+}
+
 // Longitud (M48.4): número de elementos/caracteres/entradas/octetos de una colección. Los tipos
 // incorporados lo implementan vía el primitivo `__len` (mismo opcode que el antiguo builtin `len`);
 // un tipo del usuario puede implementarlo para su propia colección y usarse con `fn f<T: Len>(...)`.
@@ -450,6 +471,41 @@ trait Iterator<T> {
         }
         ok
     }
+    // TERMINAL (M90.5): el primer elemento que cumple `pred`, o None. Corta en el primero
+    // que sí (no consume el resto — sobre una cadena perezosa solo se evalúa hasta el match).
+    /// Terminal: returns the first element satisfying `pred`, or None if none does;
+    /// stops at the first match.
+    fn find(self, pred: fn(T) -> bool) -> Option<T> {
+        var res: Option<T> = Option.None;
+        var keep_going = true;
+        while (keep_going) {
+            match (self.next()) {
+                Option.Some(x) => {
+                    if (pred(x)) {
+                        res = Option.Some(x);
+                        keep_going = false;
+                    }
+                },
+                Option.None => {
+                    keep_going = false;
+                },
+            }
+        }
+        res
+    }
+    // Perezoso (M90.5): este iterador seguido de `other`, en secuencia. Como en `zip`, `other`
+    // es un `Iter<T>` (los adaptadores devuelven `Iter`; un arreglo se convierte con `.iter()`).
+    // Sin bandera de agotamiento: un iterador agotado sigue devolviendo None, así que re-sondear
+    // el primero es correcto (y O(1)).
+    /// Lazily yields all elements of this iterator, then all elements of `other`.
+    fn chain(self, other: Iter<T>) -> Iter<T> {
+        Iter { step: fn() -> Option<T> {
+    match (self.next()) {
+        Option.Some(x) => Option.Some(x),
+        Option.None => other.next(),
+    }
+} }
+    }
     // TERMINAL (M62.1): número de elementos restantes (consume el iterador).
     /// Terminal: consumes the iterator and returns how many elements it yielded.
     fn count(self) -> int {
@@ -539,6 +595,50 @@ fn range(start: int, end: int) -> Iter<int> {
 /// Terminal: sums the elements of an integer iterator and returns the total.
 fn sum(it: Iter<int>) -> int {
     it.fold(0, fn(a: int, x: int) -> int { a + x })
+}
+
+// TERMINAL (M90.5): el mínimo de un iterador, o None si está vacío. Genérico acotado
+// (`T: Ord`, como `sort`): vale para int/float/string/char/bool/bytes y tipos con `impl Ord`.
+/// Terminal: the smallest element of the iterator, or None if it is empty.
+fn min<T: Ord>(it: Iter<T>) -> Option<T> {
+    var best: Option<T> = Option.None;
+    var keep_going = true;
+    while (keep_going) {
+        match (it.next()) {
+            Option.Some(x) => {
+                best = match (best) {
+                    Option.None => Option.Some(x),
+                    Option.Some(m) => if (x.less(m)) { Option.Some(x) } else { Option.Some(m) },
+                };
+            },
+            Option.None => {
+                keep_going = false;
+            },
+        }
+    }
+    best
+}
+
+// TERMINAL (M90.5): el máximo de un iterador, o None si está vacío. Ante empates devuelve
+// el PRIMERO (solo cambia con tipos de usuario cuyo `less` no distinga valores distintos).
+/// Terminal: the largest element of the iterator, or None if it is empty.
+fn max<T: Ord>(it: Iter<T>) -> Option<T> {
+    var best: Option<T> = Option.None;
+    var keep_going = true;
+    while (keep_going) {
+        match (it.next()) {
+            Option.Some(x) => {
+                best = match (best) {
+                    Option.None => Option.Some(x),
+                    Option.Some(m) => if (m.less(x)) { Option.Some(x) } else { Option.Some(m) },
+                };
+            },
+            Option.None => {
+                keep_going = false;
+            },
+        }
+    }
+    best
 }
 
 // Traits de sobrecarga de operadores (M28.1): un tipo que implemente estos traits puede usar los

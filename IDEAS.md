@@ -598,8 +598,10 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
   runtime optimizado, 7.7× sobre el original). Diferido: include/layouts, regeneración en `ray
   build`, `{% let %}`.
 - Diferido de fase 1: `{% include %}`/parciales (pide diseño de resolución: mapa de parciales en
-  compile vs. filesystem), filtros, `s[i]` O(1) en la VM (cachear los chars del string — optimización
-  del runtime que beneficiaría a todo el ecosistema, no solo templates).
+  compile vs. filesystem), filtros. ~~`s[i]` O(1) en la VM~~ → ✅ **M90.6** (en AMBOS motores, sin
+  cachear ni tocar la representación —la Opt.3 `Rc<str>` ya se midió y revirtió—: se elimina el
+  `Vec<char>` completo que se asignaba POR ACCESO; ASCII indexa el byte en O(1) —también `len`—,
+  no-ASCII escanea hasta `i` sin asignar; bucle `s[i]` sobre 64k chars: 37,9 s → 1,16 s, ~33×).
 
 ## 15. Cliente MongoDB — M54, PLAN
 

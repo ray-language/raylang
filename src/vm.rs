@@ -824,10 +824,23 @@ impl<'a> Vm<'a> {
                             self.push(v);
                         }
                         // M11.4c-2: indexar un string → el carácter en esa posición.
+                        // M90.6: sin materializar los chars (antes un `Vec<char>` COMPLETO por
+                        // acceso): un string ASCII indexa el byte en O(1); uno no-ASCII escanea
+                        // hasta `i` sin asignar. El conteo total solo se paga al errar.
                         HeapValue::Str(s) => {
-                            let chars: Vec<char> = s.chars().collect();
-                            let idx = bounds_check(i, chars.len(), pos!().0, pos!().1)?;
-                            self.push(HeapValue::Char(chars[idx]));
+                            let c = if s.is_ascii() {
+                                let idx = bounds_check(i, s.len(), pos!().0, pos!().1)?;
+                                s.as_bytes()[idx] as char
+                            } else {
+                                match usize::try_from(i).ok().and_then(|idx| s.chars().nth(idx)) {
+                                    Some(c) => c,
+                                    None => {
+                                        bounds_check(i, s.chars().count(), pos!().0, pos!().1)?;
+                                        unreachable!("nth falló ⇒ índice fuera de rango")
+                                    }
+                                }
+                            };
+                            self.push(HeapValue::Char(c));
                         }
                         // M16.1a: indexar bytes → el octeto como int.
                         HeapValue::Bytes(b) => {
@@ -847,7 +860,10 @@ impl<'a> Vm<'a> {
                 OpCode::Len => {
                     // M11.1a: len de arreglo o string; M13.1: len de Map (nº de entradas).
                     let len = match self.pop() {
-                        HeapValue::Str(s) => s.chars().count() as i64,
+                        // M90.6: ASCII → nº de chars == nº de bytes (O(1) tras el is_ascii vectorizado).
+                        HeapValue::Str(s) => {
+                            if s.is_ascii() { s.len() as i64 } else { s.chars().count() as i64 }
+                        }
                         // M16.1a: len de bytes = nº de octetos.
                         HeapValue::Bytes(b) => b.len() as i64,
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {

@@ -1256,7 +1256,7 @@ limitado.
 | **A6 Opt.16** `s[i]` sin collect | `Index` string hacía `chars().collect::<Vec<_>>()` POR ACCESO (alloc O(n)); `nth(i)` la elimina | grande solo string-heavy | ✅ **HECHA** (micro-bench patrón lexer: 0,22 → 0,04 s, **5,5×**; banco general neutro; ambos motores) |
 | **A1 Opt.17** registerizar ip/marco-tope | cachear `(func, ip, chunk)` en locales del lazo; write-back solo en llamadas/saltos-de-fibra/errores | 10-20% | ❌ **DESCARTADA por medición, premisa refutada**. Implementada completa (whitelist rápida + protocolo legado para aparcados/TailCall; TODA la batería + self-hosting + metacircular verdes → la corrección no fue el problema). A/B: loop −3,3% pero fib **+6,5%**; experimento de atribución (reload por instrucción, sin whitelist): **+9-15% en todo el banco** → leer/escribir `frames[fi]` por instrucción es ~GRATIS en el M3 (store-forwarding+L1) y cualquier rama/reload añadido pierde. El ~20% de `run_worker` del perfil son las ramas fijas (stop/gc/fuel/bounds) + fontanería del outcome, NO las lecturas de marco |
 | **A3** PGO | profile-generate → banco → profile-use; reordena el match gigante | 5-15% | ✅ **HECHA** (`tools/pgo.sh`: instrumentado → entrenamiento con banco+strings+iter+parse-selfhost+concurrencia → merge → build final en `target/release`). Medido intercalado best-of-15: **fib −5,2% · loop −5,4% · arrays −8,7% · gcnested −6,0%** — consistente, sobre el ruido; encaja con la atribución de Opt.17 (reordena las ramas fijas del lazo). Para cortar releases; el ciclo de dev sigue con cargo a secas (RUSTFLAGS invalida la caché) |
-| **A4** superinstrucciones ronda 2 | `cmp+JumpIfFalse` → `JumpIfLess…`, `IncLocal`; elegir por HISTOGRAMA de opcodes dinámico, no intuición | 5-15% en bucles | pendiente |
+| **A4** superinstrucciones ronda 2 | elegidas por HISTOGRAMA dinámico de pares (instrumentación temporal, revertida): la guarda de todo if/while era `[GetLocalConst, Cmp, JumpIfFalse, Pop]` (30M en fib) y la asignación-sentencia emitía `[Unit, Pop]` (10M en loop) | 5-15% en bucles | ✅ **HECHA — el win grande de la ronda** (pase `fuse_round2`): `[Unit,Pop]` eliminado · `[Cmp,JumpIfFalse(t),Pop]` con `code[t]==Pop` → `CmpJump(op,t+1)` · `[GetLocalConst,Add\|Sub]` → `Add/SubLocalConst` (posición del error = la del Add/Sub → byte-idéntico). A/B: **fib −18,9% · loop −24,8% · arrays −27,5% · gcnested −26,7%**. Batería + selfhost + metacircular verdes |
 | **B1** locales en pila (clox) | híbrido: solo fn sin capturas (`captured` ya existe); marco = base en la pila de la fibra | 10-20% call-heavy | clasificada |
 | **B2** structs por índice | `GetField(String)` → `GetFieldIdx` (el checker anota pre-erasure); instancia `(struct_id, Vec<HeapValue>)` sin nombres repetidos | el estructural con mejor ROI para servicios | clasificada |
 | **B3** strings compartidos | revivir Opt.3 como `Arc<str>` o string-como-Obj (traba 4); re-medir con strings.ray, no fib | data-dependent | clasificada |
@@ -1265,6 +1265,15 @@ limitado.
 | **C2** JIT (cranelift; deps permitidas) | method-JIT numérico con deopt | 5-20× aritmética | 💤 NO recomendado: root-maps, fibras en código JIT, 2 backends × trazas/fuel/deterministic; el nicho es I/O-bound |
 | **C3** GC generacional | pausas YA resueltas (0.12 ms, heap-por-fibra); sweep O(slots) no asoma en perfil | — | 💤 sin síntoma |
 
-**Veredicto del paquete barato**: 1 de 3 sobrevive (Opt.16); las micro del preámbulo ya están exprimidas — lo que queda ahí es ESTRUCTURAL. **Veredicto de Opt.17**: cierra DEFINITIVAMENTE el tier "cachear estado del marco" — en Apple Silicon esos accesos son gratis; la única palanca que reduce el impuesto por instrucción es ejecutar MENOS instrucciones (A4 superinstrucciones) o reordenar las ramas fijas (A3 PGO). **Secuencia**: → Opt.17
+**Veredicto del paquete barato**: 1 de 3 sobrevive (Opt.16); las micro del preámbulo ya están exprimidas — lo que queda ahí es ESTRUCTURAL. **Veredicto de Opt.17**: cierra DEFINITIVAMENTE el tier "cachear estado del marco" — en Apple Silicon esos accesos son gratis; la única palanca que reduce el impuesto por instrucción es ejecutar MENOS instrucciones (A4 superinstrucciones) o reordenar las ramas fijas (A3 PGO).
+
+**CIERRE DE LA RONDA 2 (jul 2026)**: sobreviven **Opt.16** (s[i] 5,5×), **A3 PGO** (−5 a −9%,
+`tools/pgo.sh`) y **A4 superinstrucciones** (−19 a −28%). **Acumulado vs la baseline de
+arranque: fib −25,5% · loop −28,0% · arrays −32,4% · gcnested −32,9%** (con PGO encima; la
+baseline.json guarda el release PLANO post-A4). La moraleja que deja la ronda, confirmada dos
+veces (Opt.17 refutada, A4 ganadora): en Apple Silicon los accesos a memoria caliente son
+gratis y las ramas fijas del lazo son el impuesto — solo paga ejecutar MENOS instrucciones
+(fusiones por histograma) o reordenar ramas por frecuencia real (PGO). Siguientes palancas si
+alguna vez hacen falta: más fusiones del histograma (Call/Return-heavy), B1/B2 estructurales. **Secuencia**: → Opt.17
 (registerizar ip) → PGO → superinstrucciones con histograma → reevaluar B/C. Branch:
 `feature/opt-vm-ronda2`.

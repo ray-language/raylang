@@ -28,8 +28,8 @@ use std::collections::HashMap;
 
 use crate::ast::*;
 use crate::bytecode::{
-    CastTarget, Chunk, CompiledEnum, CompiledFn, CompiledProgram, CompiledStruct, CompiledVariant, OpCode,
-    UpvalueRef, UpvalueSource,
+    CastTarget, Chunk, CmpOp, CompiledEnum, CompiledFn, CompiledProgram, CompiledStruct, CompiledVariant,
+    OpCode, UpvalueRef, UpvalueSource,
 };
 use crate::runtime::Value;
 
@@ -225,6 +225,7 @@ impl<'a> Compiler<'a> {
         optimize_tail_calls(&mut self.cur().chunk);
         // M36.1: superinstrucciones (tras el TCO → no fusiona a través de una llamada).
         fuse_superinstructions(&mut self.cur().chunk);
+        fuse_round2(&mut self.cur().chunk); // A4: guardas y aritmética local-const
 
         let mut scope = self.scopes.pop().expect("acabamos de empujar el ámbito");
         scope.captured_slots.resize(scope.max_slots, false);
@@ -1250,6 +1251,97 @@ fn fuse_superinstructions(chunk: &mut Chunk) {
     for op in &mut code {
         match op {
             OpCode::Jump(t) | OpCode::JumpIfFalse(t) => *t = viejo_a_nuevo[*t],
+            _ => {}
+        }
+    }
+    chunk.code = code;
+    chunk.lines = lines;
+}
+
+/// A4 (ronda 2, elegida por HISTOGRAMA dinámico de pares): fusiones sobre la salida del pase 1.
+///   - `[Unit, Pop]` → se ELIMINA (la asignación-como-sentencia empuja unit y lo tira; un salto
+///     que caiga en el `Unit` queda bien remapeado a la siguiente instrucción — unit+pop = no-op).
+///   - `[Cmp, JumpIfFalse(t), Pop]` con `code[t] == Pop` → `CmpJump(op, t+1)`: la guarda de todo
+///     `if`/`while` en UNA instrucción; el bool nunca toca la pila y el salto brinca el Pop del
+///     lado else (que sigue existiendo para otros saltos que lo usen).
+///   - `[GetLocalConst(s, c), Add|Sub]` → `AddLocalConst`/`SubLocalConst` (el `i + 1`, `n - 1`).
+///     La posición registrada es la del Add/Sub (ahí puede nacer el error de desbordamiento).
+/// Mismo esquema de remapeo que el pase 1; los índices consumidos no pueden ser destino de salto.
+fn fuse_round2(chunk: &mut Chunk) {
+    let n = chunk.code.len();
+    if n == 0 {
+        return;
+    }
+    let mut es_destino = vec![false; n];
+    for op in &chunk.code {
+        match op {
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) => es_destino[*t] = true,
+            _ => {}
+        }
+    }
+    // n+1 entradas: una CmpJump puede apuntar a `t+1 == n` (el Pop era la última instrucción).
+    let mut viejo_a_nuevo = vec![0usize; n + 1];
+    let mut code = Vec::with_capacity(n);
+    let mut lines = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        viejo_a_nuevo[i] = code.len();
+        // [Cmp, JumpIfFalse(t), Pop] con code[t] == Pop → CmpJump(op, t+1)
+        if i + 2 < n && !es_destino[i + 1] && !es_destino[i + 2] {
+            let cmp = match &chunk.code[i] {
+                OpCode::Less => Some(CmpOp::Less),
+                OpCode::LessEqual => Some(CmpOp::LessEqual),
+                OpCode::Greater => Some(CmpOp::Greater),
+                OpCode::GreaterEqual => Some(CmpOp::GreaterEqual),
+                OpCode::Equal => Some(CmpOp::Equal),
+                OpCode::NotEqual => Some(CmpOp::NotEqual),
+                _ => None,
+            };
+            if let (Some(op), OpCode::JumpIfFalse(t), OpCode::Pop) =
+                (cmp, &chunk.code[i + 1], &chunk.code[i + 2])
+            {
+                if matches!(chunk.code.get(*t), Some(OpCode::Pop)) {
+                    code.push(OpCode::CmpJump(op, *t + 1)); // en coordenadas VIEJAS; se remapea abajo
+                    lines.push(chunk.lines[i]);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        if i + 1 < n && !es_destino[i + 1] {
+            // [GetLocalConst, Add|Sub] → AddLocalConst/SubLocalConst
+            if let OpCode::GetLocalConst(s2, c) = &chunk.code[i] {
+                let fusion = match &chunk.code[i + 1] {
+                    OpCode::Add => Some(OpCode::AddLocalConst(*s2, *c)),
+                    OpCode::Sub => Some(OpCode::SubLocalConst(*s2, *c)),
+                    _ => None,
+                };
+                if let Some(f) = fusion {
+                    code.push(f);
+                    lines.push(chunk.lines[i + 1]); // la posición del Add/Sub (el error nace ahí)
+                    i += 2;
+                    continue;
+                }
+            }
+            // [Unit, Pop] → nada (unit+pop es un no-op; ver la nota de arriba)
+            if matches!(
+                (&chunk.code[i], &chunk.code[i + 1]),
+                (OpCode::Unit, OpCode::Pop)
+            ) {
+                i += 2;
+                continue;
+            }
+        }
+        code.push(chunk.code[i].clone());
+        lines.push(chunk.lines[i]);
+        i += 1;
+    }
+    viejo_a_nuevo[n] = code.len();
+    for op in &mut code {
+        match op {
+            OpCode::Jump(t) | OpCode::JumpIfFalse(t) | OpCode::CmpJump(_, t) => {
+                *t = viejo_a_nuevo[*t]
+            }
             _ => {}
         }
     }

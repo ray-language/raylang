@@ -20,7 +20,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::bytecode::{CastTarget, Chunk, CompiledEnum, CompiledFn, CompiledProgram, OpCode, UpvalueSource};
+use crate::bytecode::{CastTarget, Chunk, CmpOp, CompiledEnum, CompiledFn, CompiledProgram, OpCode, UpvalueSource};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -703,6 +703,67 @@ impl<'a> Vm<'a> {
                 OpCode::SetLocal(slot) => {
                     let v = self.pop();
                     self.set_local(fi, *slot, v);
+                }
+                // A4 (ronda 2): la guarda de if/while en UNA instrucción. Semántica idéntica a
+                // [Cmp, JumpIfFalse(t), Pop]: saca ambos operandos, compara, y si es falso salta
+                // (el destino ya viene ajustado tras el Pop del lado else). El bool nunca se apila.
+                OpCode::CmpJump(op, target) => {
+                    let right = self.pop();
+                    let left = self.pop();
+                    let res = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
+                        // Fast-path entero (el caso dominante: i < n, x == 0, …).
+                        match op {
+                            CmpOp::Less => a < b,
+                            CmpOp::LessEqual => a <= b,
+                            CmpOp::Greater => a > b,
+                            CmpOp::GreaterEqual => a >= b,
+                            CmpOp::Equal => a == b,
+                            CmpOp::NotEqual => a != b,
+                        }
+                    } else {
+                        let legacy = match op {
+                            CmpOp::Less => &OpCode::Less,
+                            CmpOp::LessEqual => &OpCode::LessEqual,
+                            CmpOp::Greater => &OpCode::Greater,
+                            CmpOp::GreaterEqual => &OpCode::GreaterEqual,
+                            CmpOp::Equal => &OpCode::Equal,
+                            CmpOp::NotEqual => &OpCode::NotEqual,
+                        };
+                        match self.apply_binary(legacy, left, right, pos!().0, pos!().1)? {
+                            HeapValue::Bool(b) => b,
+                            _ => unreachable!("una comparación produce bool"),
+                        }
+                    };
+                    if !res {
+                        self.cur.frames[fi].ip = *target;
+                    }
+                }
+                // A4 (ronda 2): local[s] + const / local[s] - const, en una instrucción.
+                OpCode::AddLocalConst(s, c) => {
+                    let left = self.get_local(fi, *s);
+                    let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
+                        HeapValue::Int(a.checked_add(*b).ok_or_else(|| {
+                            let (l, c2) = pos!();
+                            runtime_error(l, c2, "desbordamiento aritmético en int")
+                        })?)
+                    } else {
+                        self.apply_binary(&OpCode::Add, left, right, pos!().0, pos!().1)?
+                    };
+                    self.push(r);
+                }
+                OpCode::SubLocalConst(s, c) => {
+                    let left = self.get_local(fi, *s);
+                    let right = const_to_heap(&self.program.functions[func].chunk.constants[*c]);
+                    let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
+                        HeapValue::Int(a.checked_sub(*b).ok_or_else(|| {
+                            let (l, c2) = pos!();
+                            runtime_error(l, c2, "desbordamiento aritmético en int")
+                        })?)
+                    } else {
+                        self.apply_binary(&OpCode::Sub, left, right, pos!().0, pos!().1)?
+                    };
+                    self.push(r);
                 }
                 OpCode::InitLocal(slot) => {
                     // Declaración: si el slot está boxeado, estrena celda (shadowing

@@ -70,6 +70,8 @@ fn main() -> int {
 
 - **`net/udp`** — sockets UDP: `bind`/`send_to`/`recv_from`. Hoja.
 - **`net/dns`** — resolución DNS (7 tipos de registro). Sobre `net/udp`.
+- **`net/ntp`** — cliente SNTP v4 (RFC 4330): `query(host, port)` → hora del servidor + offset/delay
+  del reloj local (ms Unix) + stratum. Sobre `net/udp` (M90.7).
 - **`net/dns_cache`** — caché DNS con TTL. Sobre `net/dns`.
 - **`net/websocket`** — handshake + framing WebSocket (`ws://`/`wss://`). Sobre `net/crypto` + `std/base64`.
   Lectura robusta (M58.1): `WsConn` + `read_frame`/`read_message` (tramas partidas/pegadas, ping→pong

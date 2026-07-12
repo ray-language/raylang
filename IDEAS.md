@@ -747,8 +747,13 @@ control) que el SERVIDOR ya recibió en M56. Todo librería pura, cero runtime.
 | HTTP/2: **sin WINDOW_UPDATE** → respuesta > ~64 KiB (ventana inicial 65535) CUELGA para siempre; PING sin ACK (el servidor corta en transferencias largas); RST_STREAM ignorado (lee hasta EOF en vez de fallar) | Límite duro real de `http2_get`/`grpc_call` | **58.3** |
 | Menores: WS `extract_key` case-sensitive; `recv_text` ignora el opcode; HTTP `absolutizar` con Location relativa sin `/`; cabeceras de respuesta pierden Set-Cookie múltiples; h2 sin CONTINUATION/END_HEADERS; `Http2Response` sin headers | — | dentro de su sub-fase o diferido |
 
-**Diferidos** (a demanda): keep-alive/pool del cliente HTTP (la delimitación por Content-Length lo
-habilita), multiplexado h2 real, fragmentación WS de ENVÍO (la de recepción entra en 58.1).
+**Diferidos** (a demanda): ~~keep-alive/pool del cliente HTTP~~ → ✅ **M90.2**: conexión persistente
+explícita (`struct Conn` + `connect`/`conn_request`/`conn_request_bytes`/`conn_close`, patrón `Rd` del
+RPC): delimita cada respuesta por Content-Length/chunked incremental (sin EOF) guardando los sobrantes,
+honra `Connection: close`, reconecta perezoso y reintenta UNA vez transparente en la carrera del
+keep-alive ocioso (el servidor cerró sin entregar ningún octeto). La API one-shot (`fetch`/`request*`)
+sigue con `Connection: close`. Quedan a demanda: multiplexado h2 real, fragmentación WS de ENVÍO (la de
+recepción entra en 58.1), y un pool multi-conexión sobre `Conn` si aparece un consumidor concurrente.
 
 ---
 

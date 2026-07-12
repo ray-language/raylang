@@ -57,7 +57,9 @@ fn main() -> int {
 ### HTTP y HTTP/2
 
 - **`net/http`** — cliente/servidor HTTP/1.1 en `bytes` (habla `https://` vía el TLS del runtime). Sobre
-  `std/inflate` (gunzip).
+  `std/inflate` (gunzip). M90.2: conexiones persistentes (keep-alive) con `connect`/`conn_request`/
+  `conn_close` — reusa el socket entre peticiones al mismo servidor (delimitación por
+  Content-Length/chunked, reconexión y reintento transparente).
 - **`net/http2`** — framing HTTP/2 (preface, SETTINGS, frames). Hoja.
 - **`net/hpack`** — compresión de cabeceras HPACK (RFC 7541): `header`, `encode`, `decode` + tabla
   dinámica. Determinista. Hoja.

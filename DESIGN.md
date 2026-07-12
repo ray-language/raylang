@@ -6832,7 +6832,10 @@ resolución en el front-end/CLI; los motores nunca ven un paquete.
 > Jul 2026: **análisis de diseño FIJADO en IDEAS §41** (M83 confianza multi-publicador:
 > manual del flujo M83a + owners-sidecar M83b + firmas Ed25519 con TOFU M83c; M84 UI
 > estática generada del índice; mirrors especificados a demanda — el hash ya los hace
-> trustless). Lo de abajo queda como lista original.
+> trustless). **Mirrors CERRADOS en M90.1**: `[registry] mirror = "prefijo"` (o `RAY_MIRROR`)
+> reescribe la descarga de cada paquete a `prefijo/<url-sin-esquema>`, con fallback a la URL
+> original; el lock y el MVS siguen viendo la URL original (transporte, no identidad).
+> Lo de abajo queda como lista original.
 
 Búsqueda/UI web del índice; cuentas y **firmas de publicación** (estilo sigstore) sobre el hash ya existente;
 mirrors/proxy; *namespaces* con dueño; `ray.lock` con el propio índice como fuente (hoy fija el commit git);

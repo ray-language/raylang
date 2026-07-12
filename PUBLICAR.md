@@ -52,6 +52,17 @@ export RAY_INDEX=/ruta/al/indice               # override (tests, CI)
 ```
 
 Un índice **remoto** se clona/cachea en `.ray-deps/.index` (lo refresca `ray update`).
+
+**Mirror de paquetes** (M90.1) — para CI tras un firewall o caída del hosting: un prefijo
+de URL que reescribe la descarga de cada paquete a `prefijo/<url-sin-esquema>` (estilo
+proxy de Go: el mirror sirve los mismos repos bajo su prefijo). NO es otro índice (mismo
+índice, otra URL); el hash publicado verifica el contenido venga de donde venga, y si el
+mirror falla se cae a la URL original con un aviso.
+
+```toml
+[registry]
+mirror = "https://mirror.corp/git"             # o export RAY_MIRROR=… (prioridad)
+```
 Crear el tuyo es `git init` + push: no hay más ceremonia.
 
 **La UI web del índice** (M84) también es estática y se genera desde los mismos TOML — en

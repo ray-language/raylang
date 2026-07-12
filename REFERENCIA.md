@@ -494,7 +494,7 @@ Flags de `run`:
 | `--heap N` | tope de objetos vivos del heap (fuerza GC; si no basta, aborta) |
 
 Variables de entorno: `SSL_CERT_FILE` (CAs extra para TLS), `RAY_INDEX` (registro de paquetes),
-`RAYLANG_THREADS`.
+`RAY_MIRROR` (mirror de descarga de paquetes), `RAYLANG_THREADS`.
 
 ## 15. Códigos de salida
 

@@ -442,6 +442,11 @@ fn load_signing_seed() -> Result<Vec<u8>, String> {
 /// `ray keygen [--out F]`: genera la clave Ed25519 de publicación (seed de 32 octetos del
 /// CSPRNG, en hex) y muestra la pública. Rechaza pisar una clave existente.
 fn cmd_keygen(args: &[String]) {
+    // M89.2: las firmas usan Ed25519 (ring); un binario slim no puede generarlas.
+    if !crate::builtins::net_tls_available() {
+        eprintln!("ray keygen: {}", crate::builtins::NET_TLS_UNAVAILABLE);
+        process::exit(69);
+    }
     let out = match args.split_first() {
         Some((flag, rest)) if flag == "--out" => match rest.first() {
             Some(p) => PathBuf::from(p),
@@ -488,6 +493,10 @@ fn cmd_keygen(args: &[String]) {
 /// Primera publicación firmada → escribe `<nombre>.owners.toml` con nuestra pubkey (TOFU).
 /// Nombre ya reclamado → nuestra pubkey debe coincidir con la registrada.
 fn firmar_publicacion(index: &Path, name: &str, version: &str, hash: &str) -> Result<String, String> {
+    // M89.2: sin 'net-tls' no hay Ed25519 → error claro (no una firma vacía).
+    if !crate::builtins::net_tls_available() {
+        return Err(crate::builtins::NET_TLS_UNAVAILABLE.to_string());
+    }
     let seed = load_signing_seed()?;
     let pk = crate::builtins::ed25519_public_key(&seed)
         .ok_or_else(|| "no se pudo derivar la clave pública".to_string())?;
@@ -524,6 +533,11 @@ fn firmar_publicacion(index: &Path, name: &str, version: &str, hash: &str) -> Re
 /// índice (la otra mitad del enforcement — que un PR solo toque paquetes de su autor —
 /// es del hosting: CODEOWNERS/branch protection). Sale 0 si todo verifica; 65 si no.
 fn cmd_index_verify(args: &[String]) {
+    // M89.2: auditar firmas exige Ed25519 (ring); un binario slim no puede.
+    if !crate::builtins::net_tls_available() {
+        eprintln!("ray index-verify: {}", crate::builtins::NET_TLS_UNAVAILABLE);
+        process::exit(69);
+    }
     let dir = match args.first() {
         Some(d) => PathBuf::from(d),
         None => match load_manifest().and_then(|m| crate::deps::index_dir(&m).ok().flatten()) {

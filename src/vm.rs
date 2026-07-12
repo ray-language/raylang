@@ -1365,6 +1365,19 @@ impl<'a> Vm<'a> {
                     HeapValue::Str(s) => self.push(HeapValue::Bytes(s.into_bytes())),
                     _ => unreachable!("el checker garantiza un string"),
                 },
+                // M89.2: guardia — la cripto de ring en un binario sin la feature 'net-tls'
+                // ABORTA con un error claro (nunca un hash vacío ni una firma que falla en
+                // silencio). El TLS no va aquí: ya es falible (Result) y degrada como Err-valor
+                // desde su stub (el programa puede hacer fallback, como con sqlite). Con la
+                // feature activa el guard es false constante y el compilador elimina el brazo.
+                OpCode::CryptoRandomBytes | OpCode::Sha256 | OpCode::Sha512 | OpCode::Sha1
+                | OpCode::HmacSha256 | OpCode::Ed25519PublicKey | OpCode::Ed25519Sign
+                | OpCode::Ed25519Verify | OpCode::ChaChaPolySeal | OpCode::ChaChaPolyOpen
+                    if !crate::builtins::net_tls_available() =>
+                {
+                    let (l, c) = pos!();
+                    return Err(runtime_error(l, c, crate::builtins::NET_TLS_UNAVAILABLE));
+                }
                 // M43: hashes de producción vía `ring` (helpers compartidos con el intérprete).
                 // M68.2: aleatoriedad criptográfica (CSPRNG del SO).
                 OpCode::CryptoRandomBytes => match self.pop() {

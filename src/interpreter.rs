@@ -921,6 +921,19 @@ impl<'a> Interpreter<'a> {
                         return Err(runtime_error(callee.line, callee.col,
                             "la concurrencia (spawn/channel/send/recv/join/scope/select) requiere la VM; el intérprete es solo el oráculo secuencial (no uses --interp)"));
                     }
+                    // M89.2: la cripto de ring en un binario sin la feature 'net-tls' ABORTA
+                    // con un error claro (nunca un hash vacío ni una firma que falla en
+                    // silencio); el TLS degrada como Err-valor desde su stub. Espejo de la VM.
+                    if !crate::builtins::net_tls_available()
+                        && matches!(name.as_str(),
+                            "__crypto_random_bytes" | "__sha256" | "__sha512" | "__sha1"
+                            | "__hmac_sha256" | "__ed25519_public_key" | "__ed25519_sign"
+                            | "__ed25519_verify" | "__chacha20poly1305_seal"
+                            | "__chacha20poly1305_open")
+                    {
+                        return Err(runtime_error(callee.line, callee.col,
+                            crate::builtins::NET_TLS_UNAVAILABLE));
+                    }
                     return Ok(self.eval_builtin(name, values));
                 }
                 // M41: función externa (FFI). Se despacha a la librería C vía `ffi::call`. La frontera

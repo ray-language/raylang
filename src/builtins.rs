@@ -611,8 +611,8 @@ enum OpenHandle {
     Udp(std::net::UdpSocket),
     /// M53.3: una conexión SQLite embebida (rusqlite). En el mismo registro: `close(h)` la quita del
     /// mapa y el `Drop` de `Connection` cierra la base (statements ya finalizados: nunca escapan del
-    /// helper). No existe en `wasm32` (rusqlite compila C).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// helper). No existe en `wasm32` (rusqlite compila C) ni sin la feature `sqlite` (M89: build slim).
+    #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
     Sqlite(rusqlite::Connection),
 }
 
@@ -681,6 +681,7 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
         Some(OpenHandle::Tls(_)) => Err("el handle es una conexión TLS; usa socket_write".to_string()),
         Some(OpenHandle::Udp(_)) => Err("el handle es un socket UDP; usa udp_send_to".to_string()),
         #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
         Some(OpenHandle::Sqlite(_)) => Err("el handle es una conexión SQLite; usa db/sqlite".to_string()),
         None => Err(format!("handle de archivo inválido: {}", h)),
     }
@@ -706,7 +707,7 @@ pub fn close_handle(h: i64) {
 // del registro se retiene durante la consulta. Aceptable: es I/O local, y serializa entre fibras.
 
 /// Convierte una celda SQLite a su representación de texto para la API `[[string]]`.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 fn sqlite_value_str(v: rusqlite::types::ValueRef<'_>) -> String {
     use rusqlite::types::ValueRef;
     match v {
@@ -719,7 +720,7 @@ fn sqlite_value_str(v: rusqlite::types::ValueRef<'_>) -> String {
 }
 
 /// Abre (o crea) la base en `path` (`":memory:"` = en memoria) y devuelve un handle (M53.3).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 pub fn sqlite_open(path: &str) -> Result<i64, String> {
     let conn = rusqlite::Connection::open(path).map_err(|e| e.to_string())?;
     let mut reg = registry().lock().unwrap();
@@ -728,11 +729,18 @@ pub fn sqlite_open(path: &str) -> Result<i64, String> {
     reg.open.insert(id, OpenHandle::Sqlite(conn));
     Ok(id)
 }
-#[cfg(target_arch = "wasm32")]
-pub fn sqlite_open(_path: &str) -> Result<i64, String> { Err("SQLite no disponible en el playground web (wasm)".to_string()) }
+// El mensaje del stub distingue el motivo: el playground web (wasm) o un binario slim (M89).
+#[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
+const SQLITE_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
+    "SQLite no disponible en el playground web (wasm)"
+} else {
+    "este binario se compiló sin soporte de SQLite (recompila con la feature 'sqlite')"
+};
+#[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
+pub fn sqlite_open(_path: &str) -> Result<i64, String> { Err(SQLITE_UNAVAILABLE.to_string()) }
 
 /// Recupera la conexión del handle o el error apropiado. Factoriza la validación de exec/query.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 fn sqlite_conn(reg: &mut FileRegistry, h: i64) -> Result<&mut rusqlite::Connection, String> {
     match reg.open.get_mut(&h) {
         Some(OpenHandle::Sqlite(conn)) => Ok(conn),
@@ -743,7 +751,7 @@ fn sqlite_conn(reg: &mut FileRegistry, h: i64) -> Result<&mut rusqlite::Connecti
 
 /// Ejecuta una sentencia sin filas (INSERT/UPDATE/DDL/BEGIN/…) con parámetros posicionales (`?1`…)
 /// enlazados como texto; devuelve el número de filas afectadas (M53.3).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 pub fn sqlite_exec(h: i64, sql: &str, params: &[String]) -> Result<i64, String> {
     let mut reg = registry().lock().unwrap();
     let conn = sqlite_conn(&mut reg, h)?;
@@ -751,12 +759,12 @@ pub fn sqlite_exec(h: i64, sql: &str, params: &[String]) -> Result<i64, String> 
         .map(|n| n as i64)
         .map_err(|e| e.to_string())
 }
-#[cfg(target_arch = "wasm32")]
-pub fn sqlite_exec(_h: i64, _sql: &str, _params: &[String]) -> Result<i64, String> { Err("SQLite no disponible en el playground web (wasm)".to_string()) }
+#[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
+pub fn sqlite_exec(_h: i64, _sql: &str, _params: &[String]) -> Result<i64, String> { Err(SQLITE_UNAVAILABLE.to_string()) }
 
 /// Ejecuta una consulta con filas; devuelve `(ncols, celdas)` con las celdas aplanadas fila a fila
 /// (el envoltorio raylang reconstruye el `[[string]]`) (M53.3).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 pub fn sqlite_query(h: i64, sql: &str, params: &[String]) -> Result<(usize, Vec<String>), String> {
     let mut reg = registry().lock().unwrap();
     let conn = sqlite_conn(&mut reg, h)?;
@@ -779,8 +787,8 @@ pub fn sqlite_query(h: i64, sql: &str, params: &[String]) -> Result<(usize, Vec<
     }
     Ok((ncols, out))
 }
-#[cfg(target_arch = "wasm32")]
-pub fn sqlite_query(_h: i64, _sql: &str, _params: &[String]) -> Result<(usize, Vec<String>), String> { Err("SQLite no disponible en el playground web (wasm)".to_string()) }
+#[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
+pub fn sqlite_query(_h: i64, _sql: &str, _params: &[String]) -> Result<(usize, Vec<String>), String> { Err(SQLITE_UNAVAILABLE.to_string()) }
 
 // --- Cliente TCP (M15.2) ---
 //
@@ -2482,6 +2490,8 @@ mod tests {
 
     /// M53.3: los helpers de SQLite (rusqlite) — abrir en memoria, exec con parámetros, query con
     /// celdas aplanadas (NULL → ""), error SQL como valor, y close vía el registro común.
+    /// M89: solo con la feature `sqlite` (el build slim compila los stubs).
+    #[cfg(feature = "sqlite")]
     #[test]
     fn sqlite_abre_ejecuta_y_consulta() {
         let h = sqlite_open(":memory:").unwrap();

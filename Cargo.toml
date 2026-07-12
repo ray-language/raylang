@@ -21,8 +21,14 @@ crate-type = ["cdylib", "rlib"]
 # producto es la VM (M35a); el intérprete existe como **oráculo de desarrollo** (validación
 # cruzada) y como `--interp`. Una *release* mínima puede excluirlo con `--no-default-features`,
 # quedándose solo con la VM. El modelo de valores (`runtime`) se compila siempre.
-default = ["interp"]
+default = ["interp", "sqlite"]
 interp = []
+# M89 (IDEAS §47): SQLite embebido tras una feature (activa por defecto → el binario normal es
+# idéntico). Un build "slim" para contenedores/embedding la excluye (--no-default-features
+# --features interp): sin el C de SQLite dentro, menos peso y menos superficie de ataque. Un
+# programa que use db/sqlite contra un binario slim recibe un Err claro en connect (errores como
+# valores; el checker acepta el programa — la tabla BUILTINS se registra siempre).
+sqlite = ["dep:rusqlite"]
 
 # M44a — TLS/cripto SOLO para targets NO-wasm. `ring`/`rustls` no compilan a `wasm32-unknown-unknown`
 # (asm/C específico de arquitectura), y el **playground web** (M44) embarca solo el lenguaje NÚCLEO
@@ -45,7 +51,7 @@ ring = "0.17"
 # (FFI + dobles punteros + lifetimes de statements) es peor ingeniería que delegar en el binding maduro.
 # `bundled` compila SQLite dentro del binario → cero dependencia del sistema, versión determinista.
 # El wrapper de usuario vive en `packages/db/sqlite.ray` sobre los primitivos `__sqlite_*`.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 # Endurecimiento FFI (jul 2026) — la CARGA de librerías pasa de dlopen/dlsym a mano a `libloading`
 # (puro Rust sobre las APIs de plataforma): arregla Windows (dlopen no existe en MSVC → el binario no
 # linkeaba) y da los mensajes de error reales del loader. La LLAMADA sigue con el catálogo de moldes

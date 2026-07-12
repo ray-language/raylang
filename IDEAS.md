@@ -1221,6 +1221,28 @@ con lo que `match` ya hace, sin token nuevo ni conflicto con `?`. Matices a reso
 hace: dangling-else, interacción con el gotcha §55, formateador, y el mismo costo doble de
 gramática (por eso queda a demanda, no comprometida).
 
+## 47. Features de compilación — el binario slim (arco M89, jul 2026)
+
+**Contexto (decisión de arquitectura, con el usuario)**: se evaluó separar el proyecto estilo
+Rust (VM / gestor de paquetes / LSP como binarios o repos aparte) vs mantener el monolito.
+**Decisión: mantener el binario único auto-contenido** — es una feature deliberada (M40.5,
+prioridad DX; el modelo Deno/Zig/Go, no el de Rust, cuyo split fue histórico y le costó que
+rust-analyzer reimplementara el front-end; aquí el LSP reusa el checker REAL y el version-skew
+es irrepresentable). La separación lógica ya existe por disciplina (patrón "cliente externo"
+desde M8) → la opción de partir en crates queda abierta y barata. Disparadores para revisitar:
+compilación >30 s, consumidor real de embedding, colaborador regular. El paso intermedio con
+mejor costo/beneficio: **features de Cargo** (precedentes: `interp`, y el build wasm que ya
+excluye ring/rustls/rusqlite por target).
+
+| Feature | Qué excluye | Estado |
+|---|---|---|
+| **`sqlite`** (default ON) | rusqlite bundled (el C de SQLite entero). Slim: `cargo build --release --no-default-features --features interp`. Un programa con `db/sqlite` contra un binario slim recibe **Err como valor** en `connect` ("este binario se compiló sin soporte de SQLite (recompila con la feature 'sqlite')"); el checker acepta el programa (la tabla BUILTINS se registra siempre; solo los stubs cambian — mismo molde que el playground wasm). Medido: **6,09 → 4,41 MB (−28%)**. El check `--no-default-features` del CI ya ejercita el build sin sqlite (guardia anti-bitrot gratis) | ✅ **89.1** |
+| **`net-tls`** (rustls+ring: TLS + cripto de producción) | el otro bloque C/asm pesado; sin él tampoco hay https/wss/sha-de-ring. Más invasivo (la cripto la usan jwt/scram/sigv4/registry —`ray publish --sign`—): mapear consumidores antes | 💤 **89.2** a demanda |
+| **`ffi`** (libloading + extern) | carga de librerías nativas — la propiedad "este binario NO puede cargar código nativo" es valiosa en contenedores endurecidos | 💤 **89.3** a demanda |
+
+Fuera del arco: multi-binario `ray-run` (solo si un deploy real lo pide; las features ya dan el
+80%), workspace de crates (ver disparadores arriba).
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

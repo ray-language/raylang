@@ -21,7 +21,7 @@ crate-type = ["cdylib", "rlib"]
 # producto es la VM (M35a); el intérprete existe como **oráculo de desarrollo** (validación
 # cruzada) y como `--interp`. Una *release* mínima puede excluirlo con `--no-default-features`,
 # quedándose solo con la VM. El modelo de valores (`runtime`) se compila siempre.
-default = ["interp", "sqlite", "net-tls"]
+default = ["interp", "sqlite", "net-tls", "ffi"]
 interp = []
 # M89 (IDEAS §47): SQLite embebido tras una feature (activa por defecto → el binario normal es
 # idéntico). Un build "slim" para contenedores/embedding la excluye (--no-default-features
@@ -35,6 +35,10 @@ sqlite = ["dep:rusqlite"]
 # lo dice explícito — nunca una verificación que "pasa" en silencio). El hash de integridad del
 # lockfile NO depende de esto (src/sha256.rs es Rust puro).
 net-tls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types", "dep:ring"]
+# M89.3: la carga de librerías nativas (extern/FFI, libloading) tras una feature (activa por
+# defecto). El slim sin ella tiene la propiedad "no puede cargar código nativo" (contenedores
+# endurecidos); un `extern fn` chequea igual y su llamada da un error de ejecución claro.
+ffi = ["dep:libloading"]
 
 # M44a — TLS/cripto SOLO para targets NO-wasm. `ring`/`rustls` no compilan a `wasm32-unknown-unknown`
 # (asm/C específico de arquitectura), y el **playground web** (M44) embarca solo el lenguaje NÚCLEO
@@ -62,7 +66,7 @@ rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 # (puro Rust sobre las APIs de plataforma): arregla Windows (dlopen no existe en MSVC → el binario no
 # linkeaba) y da los mensajes de error reales del loader. La LLAMADA sigue con el catálogo de moldes
 # propio (libffi queda anotado para un FFI v2 con consumidor real; IDEAS §14).
-libloading = "0.8"
+libloading = { version = "0.8", optional = true }
 
 # Perfil release: `strip` reduce el binario (~6.5 MB → menos símbolos que cargar/pagear en el
 # arranque). Los backtraces de release ya no eran simbólicos (sin debug info); el ICE banner y

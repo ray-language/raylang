@@ -1198,6 +1198,29 @@ service discovery más allá de DNS, mTLS (diferido), orquestación, ntp/dist (�
 
 ---
 
+## 46. Operador ternario — considerado y DESCARTADO (jul 2026, decisión con el usuario)
+
+Propuesta: `cond ? a : b` como azúcar del if. **Descartado** por:
+
+1. **El if YA es expresión** (§0, orientación a expresiones): `let x = if (c) { a } else { b };`
+   cubre el 100% de los casos — el ternario sería un segundo dialecto para lo mismo (misma
+   razón por la que Rust/Kotlin lo rechazaron).
+2. **Conflicto duro con `?`**: el token está ocupado por la propagación postfija (Try, M6.3).
+   La desambiguación "si tras `?` arranca expresión, es ternario" NO funciona: `x? - 1` hoy es
+   `(x?) - 1` y `-` también arranca expresión → misparse; resolverlo exige backtracking o
+   lookahead no acotado ("¿hay un `:` más adelante?") en DOS parsers de descenso recursivo
+   (Rust + selfhost) con errores byte-idénticos.
+3. **Costo doble del self-hosting**: cada producción se paga en ambos front-ends + SPEC + fmt +
+   LSP + resaltados, a perpetuidad — no se justifica para un alias.
+4. **Dos formas canónicas** de lo mismo (contra la línea del proyecto: sin sobrecarga, una forma).
+
+**Alternativa clasificada (💤 a demanda): if-expresión sin llaves para ramas simples** —
+`if (c) a else b`. Precedente YA en el lenguaje (señalado por el usuario): los brazos de
+`match` son expresiones simples sin llaves (`Option.Some(n) => n,`); esto alinearía el `if`
+con lo que `match` ya hace, sin token nuevo ni conflicto con `?`. Matices a resolver si se
+hace: dangling-else, interacción con el gotcha §55, formateador, y el mismo costo doble de
+gramática (por eso queda a demanda, no comprometida).
+
 ## Cómo usar este archivo
 
 - Cuando una idea madure y se comprometa, se **mueve** a [DESIGN.md](DESIGN.md)

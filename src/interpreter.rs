@@ -711,8 +711,8 @@ impl<'a> Interpreter<'a> {
                         Ok(rc.borrow()[idx].clone())
                     }
                     // M11.4c-2: indexar un string → el carácter en esa posición.
-                    // M90.6: sin materializar los chars (como en la VM): ASCII indexa el byte
-                    // en O(1); no-ASCII escanea hasta `i` sin asignar.
+                    // M90.6 (superset de Opt.16): sin materializar los chars (como en la VM):
+                    // ASCII indexa el byte en O(1); no-ASCII escanea hasta `i` sin asignar.
                     Value::Str(s) => {
                         if s.is_ascii() {
                             let idx = check_bounds(i, s.len(), index.line, index.col)?;

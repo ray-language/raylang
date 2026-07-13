@@ -134,6 +134,15 @@ pub enum OpCode {
     /// **Superinstrucción** (M36.1): empuja `local[s]` y luego `constants[c]`. Fusiona `GetLocal(s);
     /// Constant(c)` (el patrón de `x op <literal>`, `i < N`, …). Semántica idéntica.
     GetLocalConst(usize, usize),
+    /// A4 (ronda 2): comparación + salto-si-falso + pop, en UNA instrucción. Fusiona el
+    /// patrón de TODA guarda de `if`/`while` (`[Cmp, JumpIfFalse(t), Pop]` con `code[t] == Pop`):
+    /// saca los dos operandos, compara, y si es falso salta a `t+1` (tras el Pop del lado else,
+    /// que la fusión ya consumió conceptualmente — el bool nunca llega a la pila).
+    CmpJump(CmpOp, usize),
+    /// A4 (ronda 2): `local[slot] + const` en una instrucción (`[GetLocalConst, Add]`).
+    AddLocalConst(usize, usize),
+    /// A4 (ronda 2): `local[slot] - const` en una instrucción (`[GetLocalConst, Sub]`).
+    SubLocalConst(usize, usize),
     /// **Declara** un slot local (M4.2): saca la cima y la guarda inicializando el
     /// slot. Distinto de `SetLocal` porque si el slot está *boxeado* (capturado por
     /// una closure), crea una **celda nueva** — cada declaración estrena celda, lo
@@ -545,6 +554,17 @@ pub enum OpCode {
 
     /// Termina la ejecución del chunk; el valor de retorno es la cima de la pila.
     Return,
+}
+
+/// A4: el comparador de una `CmpJump` (los seis de la familia de comparación).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CmpOp {
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    Equal,
+    NotEqual,
 }
 
 /// Un bloque de bytecode compilado: las instrucciones, la tabla de constantes, y

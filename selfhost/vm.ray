@@ -32,7 +32,7 @@ fn no_cells() -> [Cell] { [] }
 fn pop_val(stack: [Value]) -> Value {
     match (pop(stack)) {
         Option.Some(v) => v,
-        Option.None => panic("VM: pila de operandos vacía"),
+        Option.None => panic("VM: empty operand stack"),
     }
 }
 
@@ -96,7 +96,7 @@ fn find_main(cp: CProgram) -> int {
 fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
     let main_idx = find_main(cp);
     if (main_idx < 0) {
-        return Result.Err(Flow.FError(rt_error(0, 0, "no hay función 'main'")));
+        return Result.Err(Flow.FError(rt_error(0, 0, "no 'main' function")));
     }
     var frames: [Frame] = [new_frame(cp, main_idx, no_vals(), no_cells())];
 
@@ -237,7 +237,7 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                 let args = pop_n(fr.stack, argc);
                 match (pop_val(fr.stack)) {
                     Value.VVmClosure(idx, cells) => frames.push(new_frame(cp, idx, args, cells)),
-                    _ => panic("VM: llamada a un valor what no es función"),
+                    _ => panic("VM: call to a value that is not a function"),
                 };
             },
             Op.OTry => {
@@ -258,7 +258,7 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                             }
                         }
                     },
-                    _ => panic("VM: ? about un valor what no es Result/Option"),
+                    _ => panic("VM: ? on a value that is not Result/Option"),
                 };
             },
             // --- M14.5d: despacho dinámico de `recv.fname(args)` (resolución por etiqueta en runtime) ---
@@ -284,7 +284,7 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                     Value.VVmClosure(idx, cells) => {
                         frames[frames.len() - 1] = new_frame(cp, idx, args, cells);
                     },
-                    _ => panic("VM: llamada a un valor what no es función"),
+                    _ => panic("VM: call to a value that is not a function"),
                 };
             },
             Op.OTailDispatch(fname, argc) => {
@@ -330,7 +330,7 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
                         }
                         elems[i] = v;  // muta el arreglo compartido (referencia del host)
                     },
-                    _ => panic("VM: asignar índice about un no-array"),
+                    _ => panic("VM: index assignment on a non-array"),
                 }
             },
             Op.OMakeStruct(name, fnames) => {
@@ -346,14 +346,14 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
             Op.OGetField(name) => {
                 match (pop_val(fr.stack)) {
                     Value.VStruct(_, fields) => fr.stack.push(struct_get(fields, name)),
-                    _ => panic("VM: access a campo about un no-struct"),
+                    _ => panic("VM: field access on a non-struct"),
                 };
             },
             Op.OSetField(name) => {
                 let v = pop_val(fr.stack);
                 match (pop_val(fr.stack)) {
                     Value.VStruct(_, fields) => struct_set(fields, name, v),
-                    _ => panic("VM: asignar campo about un no-struct"),
+                    _ => panic("VM: field assignment on a non-struct"),
                 };
             },
             Op.OMakeEnum(en, variant, arity) => {
@@ -363,17 +363,17 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
             Op.OEnumTagEq(variant) => {
                 match (pop_val(fr.stack)) {
                     Value.VEnum(_, v2, _) => fr.stack.push(Value.VBool(v2 == variant)),
-                    _ => panic("VM: EnumTagEq about un no-enum"),
+                    _ => panic("VM: EnumTagEq on a non-enum"),
                 };
             },
             Op.OGetEnumField(i) => {
                 match (pop_val(fr.stack)) {
                     Value.VEnum(_, _, payload) => fr.stack.push(payload[i]),
-                    _ => panic("VM: GetEnumField about un no-enum"),
+                    _ => panic("VM: GetEnumField on a non-enum"),
                 };
             },
             Op.OMatchFail => {
-                return Result.Err(Flow.FError(rt_error(0, 0, "ningún branch del match casó (no debería ocurrir)")));
+                return Result.Err(Flow.FError(rt_error(0, 0, "no match branch matched (should not happen)")));
             },
         }
     }
@@ -383,7 +383,7 @@ fn vm_loop(cp: CProgram, prog_args: [string]) -> Result<Value, Flow> {
 // Índice fuera de rango (mismo mensaje que el intérprete/Rust; la posición no entra en el oráculo
 // conductual → 0,0). La VM no porta los `(línea, col)` de los nodos al bytecode.
 fn vm_oob(i: int, n: int) -> RuntimeError {
-    rt_error(0, 0, "índice " + to_string(i) + " outside de range (length " + to_string(n) + ")")
+    rt_error(0, 0, "index " + to_string(i) + " out of range (length " + to_string(n) + ")")
 }
 
 // Indexar un arreglo (→ elemento) o un string (→ char). Fuera de rango = error de ejecución.
@@ -402,7 +402,7 @@ fn vm_index(target: Value, i: int) -> Result<Value, Flow> {
             }
             Result.Ok(Value.VChar(cs[i]))
         },
-        _ => panic("VM: index about un no-array/string"),
+        _ => panic("VM: index on a non-array/string"),
     }
 }
 
@@ -410,14 +410,14 @@ fn negate(v: Value) -> Value {
     match (v) {
         Value.VInt(n) => Value.VInt(0 - n),
         Value.VFloat(f) => Value.VFloat(0.0 - f),
-        _ => panic("VM: negación de un no-número"),
+        _ => panic("VM: negation of a non-number"),
     }
 }
 
 fn not_val(v: Value) -> Value {
     match (v) {
         Value.VBool(b) => Value.VBool(!b),
-        _ => panic("VM: ! de un no-booleano"),
+        _ => panic("VM: ! of a non-boolean"),
     }
 }
 
@@ -440,7 +440,7 @@ fn resolve_dispatch(cp: CProgram, prog_args: [string], recv: Value, fname: strin
             if (struct_has_field(fields, fname)) {
                 let d = match (struct_get(fields, fname)) {
                     Value.VVmClosure(idx, cells) => Dispatch.DFrame(idx, args, cells),
-                    _ => panic("VM: el campo '" + fname + "' no es one función"),
+                    _ => panic("VM: field '" + fname + "' is not a function"),
                 };
                 return Result.Ok(d);
             }
@@ -476,7 +476,7 @@ fn resolve_dispatch(cp: CProgram, prog_args: [string], recv: Value, fname: strin
         let v = dispatch_builtin(prog_args, fname, prepend(recv, args), 0, 0)?;
         return Result.Ok(Dispatch.DValue(v));
     }
-    panic("VM: no se pudo resolver '" + fname + "' about el receptor")
+    panic("VM: could not resolve '" + fname + "' on the receiver")
 }
 
 // Ejecuta el programa compilado; traduce el canal `Flow` al `RuntimeError` público (como el intérprete).

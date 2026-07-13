@@ -91,7 +91,7 @@ fn rng() -> &'static std::sync::Mutex<u64> {
 
 /// Avanza el generador y devuelve los siguientes 64 bits (SplitMix64).
 fn next_u64() -> u64 {
-    let mut estado = rng().lock().expect("RNG no envenenado");
+    let mut estado = rng().lock().expect("RNG not poisoned");
     *estado = estado.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = *estado;
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -115,7 +115,7 @@ pub fn random_int(n: i64) -> i64 {
 /// M68.1: fija el estado del PRNG — misma semilla, misma secuencia (SplitMix64 es aritmética
 /// entera pura → estable entre plataformas y motores). Primitivo `__random_seed`.
 pub fn random_seed(n: i64) {
-    *rng().lock().expect("RNG no envenenado") = n as u64;
+    *rng().lock().expect("RNG not poisoned") = n as u64;
 }
 
 /// Error de tipado de un builtin: `(índice_del_arg, mensaje)`. El índice `None` señala un error
@@ -469,7 +469,7 @@ pub fn crypto_random_bytes(n: i64) -> Vec<u8> {
         return Vec::new();
     }
     let mut buf = vec![0u8; n as usize];
-    ring::rand::SystemRandom::new().fill(&mut buf).expect("el CSPRNG del SO no debería fallar");
+    ring::rand::SystemRandom::new().fill(&mut buf).expect("the OS CSPRNG should not fail");
     buf
 }
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
@@ -642,7 +642,7 @@ pub fn open_file(path: &str, mode: &str) -> Result<i64, String> {
         "r" => std::fs::File::open(path).map(|f| OpenHandle::Reader(std::io::BufReader::new(f))),
         "w" => std::fs::File::create(path).map(OpenHandle::Writer),
         "a" => std::fs::OpenOptions::new().create(true).append(true).open(path).map(OpenHandle::Writer),
-        _ => return Err(format!("mode de apertura inválido: '{}' (uses \"r\", \"w\" o \"a\")", mode)),
+        _ => return Err(format!("invalid open mode: '{}' (use \"r\", \"w\" or \"a\")", mode)),
     }
     .map_err(|e| e.to_string())?;
     let mut reg = registry().lock().unwrap();
@@ -674,16 +674,16 @@ pub fn write_handle(h: i64, s: &str) -> Result<usize, String> {
     let mut reg = registry().lock().unwrap();
     match reg.open.get_mut(&h) {
         Some(OpenHandle::Writer(f)) => f.write_all(s.as_bytes()).map(|_| s.chars().count()).map_err(|e| e.to_string()),
-        Some(OpenHandle::Reader(_)) => Err("el handle está abierto para lectura, no escritura".to_string()),
-        Some(OpenHandle::Tcp(_)) => Err("el handle es un socket; uses socket_write".to_string()),
-        Some(OpenHandle::Listener(_)) => Err("el handle es un socket de escucha, no escribible".to_string()),
+        Some(OpenHandle::Reader(_)) => Err("the handle is open for reading, not writing".to_string()),
+        Some(OpenHandle::Tcp(_)) => Err("the handle is a socket; use socket_write".to_string()),
+        Some(OpenHandle::Listener(_)) => Err("the handle is a listening socket, not writable".to_string()),
         #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
-        Some(OpenHandle::Tls(_)) => Err("el handle es one conexión TLS; uses socket_write".to_string()),
-        Some(OpenHandle::Udp(_)) => Err("el handle es un socket UDP; uses udp_send_to".to_string()),
+        Some(OpenHandle::Tls(_)) => Err("the handle is a TLS connection; use socket_write".to_string()),
+        Some(OpenHandle::Udp(_)) => Err("the handle is a UDP socket; use udp_send_to".to_string()),
         #[cfg(not(target_arch = "wasm32"))]
         #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
-        Some(OpenHandle::Sqlite(_)) => Err("el handle es one conexión SQLite; uses db/sqlite".to_string()),
-        None => Err(format!("handle de file inválido: {}", h)),
+        Some(OpenHandle::Sqlite(_)) => Err("the handle is a SQLite connection; use db/sqlite".to_string()),
+        None => Err(format!("invalid file handle: {}", h)),
     }
 }
 
@@ -703,9 +703,9 @@ pub fn net_tls_available() -> bool {
 
 /// El mensaje del stub/guardia, por motivo: el playground web (wasm) o un binario slim (M89.2).
 pub const NET_TLS_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
-    "cripto/TLS no disponible en el playground web (wasm)"
+    "crypto/TLS not available in the web playground (wasm)"
 } else {
-    "este binary se compiló sin soporte de cripto/TLS (recompila con la feature 'net-tls')"
+    "this binary was built without crypto/TLS support (rebuild with the 'net-tls' feature)"
 };
 
 // --- SQLite embebido (M53.3, vía rusqlite) ---
@@ -745,9 +745,9 @@ pub fn sqlite_open(path: &str) -> Result<i64, String> {
 // El mensaje del stub distingue el motivo: el playground web (wasm) o un binario slim (M89).
 #[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
 const SQLITE_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
-    "SQLite no disponible en el playground web (wasm)"
+    "SQLite not available in the web playground (wasm)"
 } else {
-    "este binary se compiló sin soporte de SQLite (recompila con la feature 'sqlite')"
+    "this binary was built without SQLite support (rebuild with the 'sqlite' feature)"
 };
 #[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
 pub fn sqlite_open(_path: &str) -> Result<i64, String> { Err(SQLITE_UNAVAILABLE.to_string()) }
@@ -757,8 +757,8 @@ pub fn sqlite_open(_path: &str) -> Result<i64, String> { Err(SQLITE_UNAVAILABLE.
 fn sqlite_conn(reg: &mut FileRegistry, h: i64) -> Result<&mut rusqlite::Connection, String> {
     match reg.open.get_mut(&h) {
         Some(OpenHandle::Sqlite(conn)) => Ok(conn),
-        Some(_) => Err("el handle no es one conexión SQLite".to_string()),
-        None => Err("handle inválido o ya closed".to_string()),
+        Some(_) => Err("the handle is not a SQLite connection".to_string()),
+        None => Err("invalid or already closed handle".to_string()),
     }
 }
 
@@ -825,8 +825,8 @@ fn socket_clone(h: i64) -> Result<std::net::TcpStream, String> {
     let reg = registry().lock().unwrap();
     match reg.open.get(&h) {
         Some(OpenHandle::Tcp(s)) => s.try_clone().map_err(|e| e.to_string()),
-        Some(_) => Err(format!("el handle {} no es un socket", h)),
-        None => Err(format!("handle inválido: {}", h)),
+        Some(_) => Err(format!("handle {} is not a socket", h)),
+        None => Err(format!("invalid handle: {}", h)),
     }
 }
 
@@ -869,7 +869,7 @@ pub fn socket_write_raw(h: i64, bytes: &[u8]) -> Result<usize, String> {
     let mut off = 0;
     while off < bytes.len() {
         match stream.write(&bytes[off..]) {
-            Ok(0) => return Err("la conexión se cerró durante la escritura".to_string()),
+            Ok(0) => return Err("the connection closed during the write".to_string()),
             Ok(n) => off += n,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::yield_now(),
             Err(e) => return Err(e.to_string()),
@@ -888,7 +888,7 @@ pub fn socket_write_nb(h: i64, bytes: &[u8]) -> Result<usize, String> {
     let mut off = 0;
     while off < bytes.len() {
         match stream.write(&bytes[off..]) {
-            Ok(0) => return Err("la conexión se cerró durante la escritura".to_string()),
+            Ok(0) => return Err("the connection closed during the write".to_string()),
             Ok(n) => off += n,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
             Err(e) => return Err(e.to_string()),
@@ -941,7 +941,7 @@ fn tls_client_config() -> std::sync::Arc<rustls::ClientConfig> {
 #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
 pub fn tls_connect(host: &str, port: i64) -> Result<i64, String> {
     let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
-        .map_err(|_| format!("name de servidor inválido para TLS: {host}"))?;
+        .map_err(|_| format!("invalid server name for TLS: {host}"))?;
     let client = rustls::ClientConnection::new(tls_client_config(), server_name)
         .map_err(|e| e.to_string())?;
     let sock = std::net::TcpStream::connect((host, port as u16)).map_err(|e| e.to_string())?;
@@ -976,7 +976,7 @@ pub fn tls_connect_h2(host: &str, port: i64) -> Result<i64, String> {
     cfg.alpn_protocols = vec![b"h2".to_vec()];
 
     let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
-        .map_err(|_| format!("name de servidor inválido para TLS: {host}"))?;
+        .map_err(|_| format!("invalid server name for TLS: {host}"))?;
     let mut client = rustls::ClientConnection::new(std::sync::Arc::new(cfg), server_name)
         .map_err(|e| e.to_string())?;
     let mut sock = std::net::TcpStream::connect((host, port as u16)).map_err(|e| e.to_string())?;
@@ -986,7 +986,7 @@ pub fn tls_connect_h2(host: &str, port: i64) -> Result<i64, String> {
     }
     match client.alpn_protocol() {
         Some(p) if p == b"h2" => {}
-        _ => return Err("el servidor no negoció HTTP/2 (ALPN 'h2')".to_string()),
+        _ => return Err("the server did not negotiate HTTP/2 (ALPN 'h2')".to_string()),
     }
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
@@ -1005,12 +1005,12 @@ fn tls_server_config(cert_pem: &str, key_pem: &str) -> Result<std::sync::Arc<rus
     let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
         rustls::pki_types::CertificateDer::pem_slice_iter(cert_pem.as_bytes())
             .collect::<Result<_, _>>()
-            .map_err(|e| format!("certificado inválido: {e}"))?;
+            .map_err(|e| format!("invalid certificate: {e}"))?;
     if certs.is_empty() {
-        return Err("el PEM no contiene ningún certificado".to_string());
+        return Err("the PEM contains no certificate".to_string());
     }
     let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
-        .map_err(|e| format!("clave privada inválida: {e}"))?;
+        .map_err(|e| format!("invalid private key: {e}"))?;
     let cfg = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
@@ -1028,8 +1028,8 @@ pub fn tls_accept(h: i64, cert_pem: &str, key_pem: &str) -> Result<i64, String> 
     let mut reg = registry().lock().unwrap();
     let sock = match reg.open.remove(&h) {
         Some(OpenHandle::Tcp(s)) => s,
-        Some(other) => { reg.open.insert(h, other); return Err(format!("el handle {h} no es un socket TCP aceptado")); }
-        None => return Err(format!("handle inválido: {h}")),
+        Some(other) => { reg.open.insert(h, other); return Err(format!("handle {h} is not an accepted TCP socket")); }
+        None => return Err(format!("invalid handle: {h}")),
     };
     reg.open.insert(h, OpenHandle::Tls(Box::new(TlsConn { conn: rustls::Connection::Server(server), sock })));
     Ok(h)
@@ -1046,14 +1046,14 @@ pub fn tls_accept(_h: i64, _cert_pem: &str, _key_pem: &str) -> Result<i64, Strin
 #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
 pub fn tls_upgrade(h: i64, host: &str) -> Result<i64, String> {
     let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
-        .map_err(|_| format!("name de servidor inválido para TLS: {host}"))?;
+        .map_err(|_| format!("invalid server name for TLS: {host}"))?;
     let client = rustls::ClientConnection::new(tls_client_config(), server_name)
         .map_err(|e| e.to_string())?;
     let mut reg = registry().lock().unwrap();
     let sock = match reg.open.remove(&h) {
         Some(OpenHandle::Tcp(s)) => s,
-        Some(other) => { reg.open.insert(h, other); return Err(format!("el handle {h} no es un socket TCP plano")); }
-        None => return Err(format!("handle inválido: {h}")),
+        Some(other) => { reg.open.insert(h, other); return Err(format!("handle {h} is not a plain TCP socket")); }
+        None => return Err(format!("invalid handle: {h}")),
     };
     reg.open.insert(h, OpenHandle::Tls(Box::new(TlsConn { conn: rustls::Connection::Client(client), sock })));
     Ok(h)
@@ -1078,7 +1078,7 @@ pub fn tls_set_nonblocking(h: i64) -> Result<(), String> {
     let reg = registry().lock().unwrap();
     match reg.open.get(&h) {
         Some(OpenHandle::Tls(tc)) => tc.sock.set_nonblocking(true).map_err(|e| e.to_string()),
-        _ => Err(format!("el handle {h} no es one conexión TLS")),
+        _ => Err(format!("handle {h} is not a TLS connection")),
     }
 }
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
@@ -1112,7 +1112,7 @@ pub fn tls_read_nb(h: i64) -> Result<Option<Vec<u8>>, String> {
     let mut reg = registry().lock().unwrap();
     let tc = match reg.open.get_mut(&h) {
         Some(OpenHandle::Tls(tc)) => tc,
-        _ => return Err(format!("el handle {h} no es one conexión TLS")),
+        _ => return Err(format!("handle {h} is not a TLS connection")),
     };
     loop {
         // 1) Enviar lo pendiente (ServerHello, datos…) antes de esperar al peer; si no, deadlock.
@@ -1149,7 +1149,7 @@ pub fn tls_write_nb(h: i64, bytes: &[u8]) -> Result<usize, String> {
     let mut reg = registry().lock().unwrap();
     let tc = match reg.open.get_mut(&h) {
         Some(OpenHandle::Tls(tc)) => tc,
-        _ => return Err(format!("el handle {h} no es one conexión TLS")),
+        _ => return Err(format!("handle {h} is not a TLS connection")),
     };
     // Antes de cifrar datos de aplicación, asegúrate de que el handshake terminó (drena sus registros).
     tls_flush_writes(tc)?;
@@ -1302,7 +1302,7 @@ pub fn set_nonblocking(h: i64) -> Result<(), String> {
         Some(OpenHandle::Tcp(s)) => s.set_nonblocking(true).map_err(|e| e.to_string()),
         Some(OpenHandle::Listener(l)) => l.set_nonblocking(true).map_err(|e| e.to_string()),
         Some(OpenHandle::Udp(s)) => s.set_nonblocking(true).map_err(|e| e.to_string()),
-        _ => Err(format!("el handle {} no es un socket", h)),
+        _ => Err(format!("handle {} is not a socket", h)),
     }
 }
 
@@ -1352,8 +1352,8 @@ pub fn tcp_accept_nb(h: i64) -> Result<Option<i64>, String> {
         let reg = registry().lock().unwrap();
         match reg.open.get(&h) {
             Some(OpenHandle::Listener(l)) => l.try_clone().map_err(|e| e.to_string())?,
-            Some(_) => return Err(format!("el handle {} no es un socket de escucha", h)),
-            None => return Err(format!("handle inválido: {}", h)),
+            Some(_) => return Err(format!("handle {} is not a listening socket", h)),
+            None => return Err(format!("invalid handle: {}", h)),
         }
     };
     match listener.accept() {
@@ -1390,8 +1390,8 @@ pub fn tcp_accept(h: i64) -> Result<i64, String> {
         let reg = registry().lock().unwrap();
         match reg.open.get(&h) {
             Some(OpenHandle::Listener(l)) => l.try_clone().map_err(|e| e.to_string())?,
-            Some(_) => return Err(format!("el handle {} no es un socket de escucha", h)),
-            None => return Err(format!("handle inválido: {}", h)),
+            Some(_) => return Err(format!("handle {} is not a listening socket", h)),
+            None => return Err(format!("invalid handle: {}", h)),
         }
     };
     let (stream, _addr) = listener.accept().map_err(|e| e.to_string())?;
@@ -1435,8 +1435,8 @@ pub fn udp_send_to(h: i64, host: &str, port: i64, data: &[u8]) -> Result<usize, 
     let reg = registry().lock().unwrap();
     match reg.open.get(&h) {
         Some(OpenHandle::Udp(s)) => s.send_to(data, (host, port as u16)).map_err(|e| e.to_string()),
-        Some(_) => Err(format!("el handle {} no es un socket UDP", h)),
-        None => Err(format!("handle inválido: {}", h)),
+        Some(_) => Err(format!("handle {} is not a UDP socket", h)),
+        None => Err(format!("invalid handle: {}", h)),
     }
 }
 
@@ -1447,8 +1447,8 @@ pub fn udp_recv_from(h: i64) -> Result<(String, i64, Vec<u8>), String> {
         let reg = registry().lock().unwrap();
         match reg.open.get(&h) {
             Some(OpenHandle::Udp(s)) => s.try_clone().map_err(|e| e.to_string())?,
-            Some(_) => return Err(format!("el handle {} no es un socket UDP", h)),
-            None => return Err(format!("handle inválido: {}", h)),
+            Some(_) => return Err(format!("handle {} is not a UDP socket", h)),
+            None => return Err(format!("invalid handle: {}", h)),
         }
     };
     let mut buf = vec![0u8; 65536]; // un datagrama UDP cabe de sobra en 64 KiB
@@ -1464,8 +1464,8 @@ pub fn udp_recv_from_nb(h: i64) -> Result<Option<(String, i64, Vec<u8>)>, String
         let reg = registry().lock().unwrap();
         match reg.open.get(&h) {
             Some(OpenHandle::Udp(s)) => s.try_clone().map_err(|e| e.to_string())?,
-            Some(_) => return Err(format!("el handle {} no es un socket UDP", h)),
-            None => return Err(format!("handle inválido: {}", h)),
+            Some(_) => return Err(format!("handle {} is not a UDP socket", h)),
+            None => return Err(format!("invalid handle: {}", h)),
         }
     };
     let mut buf = vec![0u8; 65536];
@@ -1615,49 +1615,49 @@ static BUILTINS: &[Builtin] = &[
     // M68.2: aleatoriedad criptográfica (CSPRNG del SO vía ring) — para tokens/salts/nonces.
     Builtin { name: "__crypto_random_bytes", opcode: OpCode::CryptoRandomBytes, check: |a| {
         arity(a, 1, "__crypto_random_bytes", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__crypto_random_bytes espera un int (nº de octetos), no {}", a[0]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__crypto_random_bytes expects an int (number of bytes), not {}", a[0]))); }
         Ok(Type::Bytes)
     } },
     Builtin { name: "__sha256", opcode: OpCode::Sha256, check: |a| {
         arity(a, 1, "sha256", "")?;
-        if a[0] != Type::Bytes { return Err((Some(0), format!("sha256 espera bytes, no {}", a[0]))); }
+        if a[0] != Type::Bytes { return Err((Some(0), format!("sha256 expects bytes, not {}", a[0]))); }
         Ok(Type::Bytes)
     } },
     Builtin { name: "__sha512", opcode: OpCode::Sha512, check: |a| {
         arity(a, 1, "sha512", "")?;
-        if a[0] != Type::Bytes { return Err((Some(0), format!("sha512 espera bytes, no {}", a[0]))); }
+        if a[0] != Type::Bytes { return Err((Some(0), format!("sha512 expects bytes, not {}", a[0]))); }
         Ok(Type::Bytes)
     } },
     Builtin { name: "__sha1", opcode: OpCode::Sha1, check: |a| {
         arity(a, 1, "sha1", "")?;
-        if a[0] != Type::Bytes { return Err((Some(0), format!("sha1 espera bytes, no {}", a[0]))); }
+        if a[0] != Type::Bytes { return Err((Some(0), format!("sha1 expects bytes, not {}", a[0]))); }
         Ok(Type::Bytes)
     } },
     // M43.2: HMAC-SHA256 (clave, mensaje) -> etiqueta de 32 octetos.
     Builtin { name: "__hmac_sha256", opcode: OpCode::HmacSha256, check: |a| {
         arity(a, 2, "hmac_sha256", "")?;
-        if a[0] != Type::Bytes { return Err((Some(0), format!("hmac_sha256 espera bytes (clave), no {}", a[0]))); }
-        if a[1] != Type::Bytes { return Err((Some(1), format!("hmac_sha256 espera bytes (mensaje), no {}", a[1]))); }
+        if a[0] != Type::Bytes { return Err((Some(0), format!("hmac_sha256 expects bytes (key), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("hmac_sha256 expects bytes (message), not {}", a[1]))); }
         Ok(Type::Bytes)
     } },
     // M43.3: Ed25519. Los fallibles (semilla de 32 octetos) son primitivos `[bytes]` etiquetados
     // (vacío/único); el prelude los envuelve en Option<bytes>. `verify` es total → bool directo.
     Builtin { name: "__ed25519_public_key", opcode: OpCode::Ed25519PublicKey, check: |a| {
         arity(a, 1, "__ed25519_public_key", "")?;
-        if a[0] != Type::Bytes { return Err((Some(0), format!("ed25519_public_key espera bytes (seed), no {}", a[0]))); }
+        if a[0] != Type::Bytes { return Err((Some(0), format!("ed25519_public_key expects bytes (seed), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     Builtin { name: "__ed25519_sign", opcode: OpCode::Ed25519Sign, check: |a| {
         arity(a, 2, "__ed25519_sign", "")?;
-        if a[0] != Type::Bytes { return Err((Some(0), format!("ed25519_sign espera bytes (seed), no {}", a[0]))); }
-        if a[1] != Type::Bytes { return Err((Some(1), format!("ed25519_sign espera bytes (mensaje), no {}", a[1]))); }
+        if a[0] != Type::Bytes { return Err((Some(0), format!("ed25519_sign expects bytes (seed), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("ed25519_sign expects bytes (message), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     Builtin { name: "__ed25519_verify", opcode: OpCode::Ed25519Verify, check: |a| {
         arity(a, 3, "ed25519_verify", "")?;
-        if a[0] != Type::Bytes { return Err((Some(0), format!("ed25519_verify espera bytes (clave pública), no {}", a[0]))); }
-        if a[1] != Type::Bytes { return Err((Some(1), format!("ed25519_verify espera bytes (mensaje), no {}", a[1]))); }
-        if a[2] != Type::Bytes { return Err((Some(2), format!("ed25519_verify espera bytes (signature), no {}", a[2]))); }
+        if a[0] != Type::Bytes { return Err((Some(0), format!("ed25519_verify expects bytes (public key), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("ed25519_verify expects bytes (message), not {}", a[1]))); }
+        if a[2] != Type::Bytes { return Err((Some(2), format!("ed25519_verify expects bytes (signature), not {}", a[2]))); }
         Ok(Type::Bool)
     } },
     // M43.4: ChaCha20-Poly1305 AEAD. seal/open (clave, nonce, aad, dato) -> [bytes] etiquetado; el
@@ -1665,14 +1665,14 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__chacha20poly1305_seal", opcode: OpCode::ChaChaPolySeal, check: |a| {
         arity(a, 4, "__chacha20poly1305_seal", "")?;
         for (i, etiqueta) in ["clave", "nonce", "aad", "text plano"].iter().enumerate() {
-            if a[i] != Type::Bytes { return Err((Some(i), format!("chacha20poly1305_seal espera bytes ({etiqueta}), no {}", a[i]))); }
+            if a[i] != Type::Bytes { return Err((Some(i), format!("chacha20poly1305_seal expects bytes ({etiqueta}), not {}", a[i]))); }
         }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     Builtin { name: "__chacha20poly1305_open", opcode: OpCode::ChaChaPolyOpen, check: |a| {
         arity(a, 4, "__chacha20poly1305_open", "")?;
         for (i, etiqueta) in ["clave", "nonce", "aad", "text cifrado"].iter().enumerate() {
-            if a[i] != Type::Bytes { return Err((Some(i), format!("chacha20poly1305_open espera bytes ({etiqueta}), no {}", a[i]))); }
+            if a[i] != Type::Bytes { return Err((Some(i), format!("chacha20poly1305_open expects bytes ({etiqueta}), not {}", a[i]))); }
         }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
@@ -1685,69 +1685,69 @@ static BUILTINS: &[Builtin] = &[
     } },
     // --- Bits de float (M54.1): primitivos totales; `std/math` → float_bits/float_from_bits. ---
     Builtin { name: "__float_bits", opcode: OpCode::FloatBits, check: |a| {
-        arity(a, 1, "__float_bits", " (el float)")?;
-        if a[0] != Type::Float { return Err((Some(0), format!("__float_bits espera un float, no {}", a[0]))); }
+        arity(a, 1, "__float_bits", " (the float)")?;
+        if a[0] != Type::Float { return Err((Some(0), format!("__float_bits expects a float, not {}", a[0]))); }
         Ok(Type::Int)
     } },
     Builtin { name: "__float_from_bits", opcode: OpCode::FloatFromBits, check: |a| {
-        arity(a, 1, "__float_from_bits", " (los 64 bits como int)")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__float_from_bits espera un int, no {}", a[0]))); }
+        arity(a, 1, "__float_from_bits", " (the 64 bits as int)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__float_from_bits expects an int, not {}", a[0]))); }
         Ok(Type::Float)
     } },
     // --- SQLite embebido (M53.3): primitivos con arreglo etiquetado; `db/sqlite` → Result. ---
     // __sqlite_open(path) -> [string]: ["ok", handle] o ["err", msg].
     Builtin { name: "__sqlite_open", opcode: OpCode::SqliteOpen, check: |a| {
-        arity(a, 1, "__sqlite_open", " (la path de la base)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__sqlite_open espera un string (la path), no {}", a[0]))); }
+        arity(a, 1, "__sqlite_open", " (the database path)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__sqlite_open expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __sqlite_exec(h, sql, params) -> [string]: ["ok", n_afectadas] o ["err", msg].
     Builtin { name: "__sqlite_exec", opcode: OpCode::SqliteExec, check: |a| {
         arity(a, 3, "__sqlite_exec", " (handle, sql, params)")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__sqlite_exec espera un int (el handle), no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__sqlite_exec espera un string (el SQL), no {}", a[1]))); }
-        if a[2] != Type::Array(Box::new(Type::String)) { return Err((Some(2), format!("__sqlite_exec espera un [string] (los parámetros), no {}", a[2]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__sqlite_exec expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__sqlite_exec expects a string (the SQL), not {}", a[1]))); }
+        if a[2] != Type::Array(Box::new(Type::String)) { return Err((Some(2), format!("__sqlite_exec expects a [string] (the parameters), not {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __sqlite_query(h, sql, params) -> [string]: ["ok", ncols, celdas…] o ["err", msg].
     Builtin { name: "__sqlite_query", opcode: OpCode::SqliteQuery, check: |a| {
         arity(a, 3, "__sqlite_query", " (handle, sql, params)")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__sqlite_query espera un int (el handle), no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__sqlite_query espera un string (el SQL), no {}", a[1]))); }
-        if a[2] != Type::Array(Box::new(Type::String)) { return Err((Some(2), format!("__sqlite_query espera un [string] (los parámetros), no {}", a[2]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__sqlite_query expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__sqlite_query expects a string (the SQL), not {}", a[1]))); }
+        if a[2] != Type::Array(Box::new(Type::String)) { return Err((Some(2), format!("__sqlite_query expects a [string] (the parameters), not {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __from_utf8(b) -> [string] (M16.1b): ["ok", s] o ["err", msg]. El prelude → Result<string,string>.
     Builtin { name: "__from_utf8", opcode: OpCode::FromUtf8, check: |a| {
         arity(a, 1, "__from_utf8", "")?;
-        if a[0] != Type::Bytes { return Err((Some(0), format!("__from_utf8 espera bytes, no {}", a[0]))); }
+        if a[0] != Type::Bytes { return Err((Some(0), format!("__from_utf8 expects bytes, not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // --- I/O binaria (M16.1c). Lecturas → [bytes] etiquetado; escrituras → [string]. ---
     // __read_file_bytes(ruta) -> [bytes]: [b"ok", datos] o [b"err", msg]. El prelude → Result<bytes,string>.
     Builtin { name: "__read_file_bytes", opcode: OpCode::ReadFileBytes, check: |a| {
         arity(a, 1, "__read_file_bytes", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__read_file_bytes espera un string (la path), no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__read_file_bytes expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     // __write_file_bytes(ruta, datos) -> [string]: ["ok"] o ["err", msg]. El prelude → Result<int,string>.
     Builtin { name: "__write_file_bytes", opcode: OpCode::WriteFileBytes, check: |a| {
         arity(a, 2, "__write_file_bytes", " (path, data)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__write_file_bytes espera un string (la path), no {}", a[0]))); }
-        if a[1] != Type::Bytes { return Err((Some(1), format!("__write_file_bytes espera bytes (los data), no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__write_file_bytes expects a string (the path), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__write_file_bytes expects bytes (the data), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __socket_read_bytes(h) -> [bytes]: [b"ok", datos] o [b"err", msg]. El prelude → Result<bytes,string>.
     Builtin { name: "__socket_read_bytes", opcode: OpCode::SocketReadBytes, check: |a| {
         arity(a, 1, "__socket_read_bytes", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__socket_read_bytes espera un int (el handle), no {}", a[0]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_read_bytes expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     // __socket_write_bytes(h, datos) -> [string]: ["ok", ""] o ["err", msg]. El prelude → Result<int,string>.
     Builtin { name: "__socket_write_bytes", opcode: OpCode::SocketWriteBytes, check: |a| {
         arity(a, 2, "__socket_write_bytes", " (handle, data)")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__socket_write_bytes espera un int (el handle), no {}", a[0]))); }
-        if a[1] != Type::Bytes { return Err((Some(1), format!("__socket_write_bytes espera bytes (los data), no {}", a[1]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_write_bytes expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__socket_write_bytes expects bytes (the data), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // M48.4e-1: primitivos internos de `StrOps`/`BytesOps` (mismos opcodes que los builtins públicos,
@@ -1812,24 +1812,24 @@ static BUILTINS: &[Builtin] = &[
     } },
     Builtin { name: "__to_bytes", opcode: OpCode::ToBytes, check: |a| {
         arity(a, 1, "__to_bytes", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__to_bytes espera un string, no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__to_bytes expects a string, not {}", a[0]))); }
         Ok(Type::Bytes)
     } },
     Builtin { name: "__sub_bytes", opcode: OpCode::SubBytes, check: |a| {
         arity(a, 3, "__sub_bytes", " (bytes, start, fin)")?;
-        if a[0] != Type::Bytes { return Err((Some(0), format!("__sub_bytes espera bytes, no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("__sub_bytes espera un int como start, no {}", a[1]))); }
-        if a[2] != Type::Int { return Err((Some(2), format!("__sub_bytes espera un int como fin, no {}", a[2]))); }
+        if a[0] != Type::Bytes { return Err((Some(0), format!("__sub_bytes expects bytes, not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__sub_bytes expects an int as start, not {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__sub_bytes expects an int as end, not {}", a[2]))); }
         Ok(Type::Bytes)
     } },
     // bytes_of(xs) -> bytes (M19.3c): construye bytes a partir de un [int] (cada elemento se trunca a
     // octeto con `& 255`). Es el **dual del indexado** `b[i]` (que ya lee un octeto como int, M16.1a):
     // permite *construir* datos binarios octeto a octeto (tramas de WebSocket, cabeceras).
     Builtin { name: "bytes_of", opcode: OpCode::BytesOf, check: |a| {
-        arity(a, 1, "bytes_of", " (array de int)")?;
+        arity(a, 1, "bytes_of", " (array of int)")?;
         match &a[0] {
             Type::Array(el) if **el == Type::Int => Ok(Type::Bytes),
-            _ => Err((Some(0), format!("bytes_of espera un [int], no {}", a[0]))),
+            _ => Err((Some(0), format!("bytes_of expects an [int], not {}", a[0]))),
         }
     } },
     // __index_of(s, sub) -> [int] (M11.7a): [] o [i] (índice de carácter). El prelude → Option<int>.
@@ -2054,18 +2054,18 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__random",  opcode: OpCode::Random,    check: |a| { nullary(a, "__random")?; Ok(Type::Float) } },
     Builtin { name: "__sleep", opcode: OpCode::Sleep, check: |a| {
         arity(a, 1, "__sleep", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__sleep espera un int (ms), no {}", a[0]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__sleep expects an int (ms), not {}", a[0]))); }
         Ok(Type::Unit)
     } },
     // M68.1: fija la semilla del PRNG (reproducibilidad; std/random.seed).
     Builtin { name: "__random_seed", opcode: OpCode::RandomSeed, check: |a| {
         arity(a, 1, "__random_seed", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__random_seed espera un int (la seed), no {}", a[0]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__random_seed expects an int (the seed), not {}", a[0]))); }
         Ok(Type::Unit)
     } },
     Builtin { name: "__random_int", opcode: OpCode::RandomInt, check: |a| {
         arity(a, 1, "__random_int", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__random_int espera un int, no {}", a[0]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__random_int expects an int, not {}", a[0]))); }
         Ok(Type::Int)
     } },
 
@@ -2133,86 +2133,86 @@ static BUILTINS: &[Builtin] = &[
     // __remove_file(ruta) -> [string] (M11.7c): ["ok"] o ["err", msg]. Prelude → Result<int,string>.
     Builtin { name: "__remove_file", opcode: OpCode::RemoveFile, check: |a| {
         arity(a, 1, "__remove_file", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__remove_file espera un string (la path), no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__remove_file expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __list_dir(ruta) -> [string] (M11.7c): ["ok", n0, …] o ["err", msg]. Prelude → Result<[string],…>.
     Builtin { name: "__list_dir", opcode: OpCode::ListDir, check: |a| {
         arity(a, 1, "__list_dir", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__list_dir espera un string (la path), no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__list_dir expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // M67: directorios y metadatos. Las etiquetadas → [string] (["ok"(, dato)]/["err", msg]);
     // los tests → bool. std/fs las envuelve en Result/bool.
     Builtin { name: "__mkdir", opcode: OpCode::FsTagged(FsOp::Mkdir), check: |a| {
         arity(a, 1, "__mkdir", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__mkdir espera un string (la path), no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__mkdir expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     Builtin { name: "__remove_dir", opcode: OpCode::FsTagged(FsOp::RemoveDir), check: |a| {
         arity(a, 1, "__remove_dir", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__remove_dir espera un string (la path), no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__remove_dir expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     Builtin { name: "__file_size", opcode: OpCode::FsTagged(FsOp::FileSize), check: |a| {
         arity(a, 1, "__file_size", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__file_size espera un string (la path), no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__file_size expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     Builtin { name: "__rename", opcode: OpCode::FsTagged(FsOp::Rename), check: |a| {
         arity(a, 2, "__rename", " (origen, target)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__rename espera un string (el origen), no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__rename espera un string (el target), no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__rename expects a string (the source), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__rename expects a string (the target), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     Builtin { name: "__copy_file", opcode: OpCode::FsTagged(FsOp::CopyFile), check: |a| {
         arity(a, 2, "__copy_file", " (origen, target)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__copy_file espera un string (el origen), no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__copy_file espera un string (el target), no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__copy_file expects a string (the source), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__copy_file expects a string (the target), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     Builtin { name: "__is_dir", opcode: OpCode::FsTest(FsTest::IsDir), check: |a| {
         arity(a, 1, "__is_dir", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__is_dir espera un string (la path), no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__is_dir expects a string (the path), not {}", a[0]))); }
         Ok(Type::Bool)
     } },
     Builtin { name: "__is_file", opcode: OpCode::FsTest(FsTest::IsFile), check: |a| {
         arity(a, 1, "__is_file", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__is_file espera un string (la path), no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__is_file expects a string (the path), not {}", a[0]))); }
         Ok(Type::Bool)
     } },
     Builtin { name: "__append_file_bytes", opcode: OpCode::AppendFileBytes, check: |a| {
         arity(a, 2, "__append_file_bytes", " (path, data)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__append_file_bytes espera un string (la path), no {}", a[0]))); }
-        if a[1] != Type::Bytes { return Err((Some(1), format!("__append_file_bytes espera bytes (los data), no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__append_file_bytes expects a string (the path), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__append_file_bytes expects bytes (the data), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __open(ruta, modo) -> [string] (M11.8): ["ok", handle] o ["err", msg]. Prelude → Result<int,…>.
     Builtin { name: "__open", opcode: OpCode::Open, check: |a| {
         arity(a, 2, "__open", " (path, mode)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__open espera un string (la path), no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__open espera un string (el mode), no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__open expects a string (the path), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__open expects a string (the mode), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __read_line_handle(h) -> [string] (M11.8): [] (EOF) o [linea]. Prelude → Option<string>.
     Builtin { name: "__read_line_handle", opcode: OpCode::ReadLineHandle, check: |a| {
         arity(a, 1, "__read_line_handle", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__read_line_handle espera un int (el handle), no {}", a[0]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__read_line_handle expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __write_handle(h, s) -> [string] (M11.8): ["ok"] o ["err", msg]. Prelude → Result<int,string>.
     Builtin { name: "__write_handle", opcode: OpCode::WriteHandle, check: |a| {
         arity(a, 2, "__write_handle", " (handle, contenido)")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__write_handle espera un int (el handle), no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__write_handle espera un string (el contenido), no {}", a[1]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__write_handle expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__write_handle expects a string (the content), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // --- Cliente TCP (M15.2): primitivos con arreglo etiquetado; el prelude → Result. ---
     // __tcp_connect(host, port) -> [string]: ["ok", handle] o ["err", msg]. Prelude → Result<int,string>.
     Builtin { name: "__tcp_connect", opcode: OpCode::TcpConnect, check: |a| {
         arity(a, 2, "__tcp_connect", " (host, port)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__tcp_connect espera un string (el host), no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("__tcp_connect espera un int (el port), no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__tcp_connect expects a string (the host), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__tcp_connect expects an int (the port), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __tls_connect(host, puerto) -> [string] (M19.4a): ["ok", handle] o ["err", msg]. Prelude →
@@ -2220,100 +2220,100 @@ static BUILTINS: &[Builtin] = &[
     // con socket_read_bytes/socket_write_bytes (que desvían a TLS) y se cierra con close.
     Builtin { name: "__tls_connect", opcode: OpCode::TlsConnect, check: |a| {
         arity(a, 2, "__tls_connect", " (host, port)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__tls_connect espera un string (el host), no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("__tls_connect espera un int (el port), no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__tls_connect expects a string (the host), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__tls_connect expects an int (the port), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __tls_connect_h2(host, puerto) -> [string] (M31.2a): como __tls_connect pero ofreciendo ALPN 'h2';
     // exige que el servidor negocie HTTP/2. ["ok", handle] o ["err", msg]. Prelude → Result<int,string>.
     Builtin { name: "__tls_connect_h2", opcode: OpCode::TlsConnectH2, check: |a| {
         arity(a, 2, "__tls_connect_h2", " (host, port)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__tls_connect_h2 espera un string (el host), no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("__tls_connect_h2 espera un int (el port), no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__tls_connect_h2 expects a string (the host), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__tls_connect_h2 expects an int (the port), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __tls_accept(handle, cert, clave) -> [string] (M19.4b): envuelve un socket TCP ya aceptado en una
     // sesión TLS de servidor con el certificado/clave PEM dados. ["ok", handle] o ["err", msg]. Prelude
     // → Result<int,string>. El mismo handle se lee/escribe con socket_read_bytes/socket_write_bytes.
     Builtin { name: "__tls_accept", opcode: OpCode::TlsAccept, check: |a| {
-        arity(a, 3, "__tls_accept", " (handle, cert, clave)")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__tls_accept espera un int (el handle), no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__tls_accept espera un string (el certificado PEM), no {}", a[1]))); }
-        if a[2] != Type::String { return Err((Some(2), format!("__tls_accept espera un string (la clave PEM), no {}", a[2]))); }
+        arity(a, 3, "__tls_accept", " (handle, cert, key)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__tls_accept expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__tls_accept expects a string (the PEM certificate), not {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__tls_accept expects a string (the PEM key), not {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __tls_upgrade(h, host) -> [string] (diferido TLS): STARTTLS de cliente sobre un TCP plano;
     // ["ok", handle] (el MISMO handle) o ["err", msg]. std/net → tls_upgrade.
     Builtin { name: "__tls_upgrade", opcode: OpCode::TlsUpgrade, check: |a| {
         arity(a, 2, "__tls_upgrade", " (handle, host)")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__tls_upgrade espera un int (el handle), no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__tls_upgrade espera un string (el host), no {}", a[1]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__tls_upgrade expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__tls_upgrade expects a string (the host), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __socket_read(h) -> [string]: ["ok", datos] o ["err", msg]. Prelude → Result<string,string>.
     Builtin { name: "__socket_read", opcode: OpCode::SocketRead, check: |a| {
         arity(a, 1, "__socket_read", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__socket_read espera un int (el handle), no {}", a[0]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_read expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __socket_write(h, s) -> [string]: ["ok", ""] o ["err", msg]. Prelude → Result<int,string>.
     Builtin { name: "__socket_write", opcode: OpCode::SocketWrite, check: |a| {
         arity(a, 2, "__socket_write", " (handle, contenido)")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__socket_write espera un int (el handle), no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__socket_write espera un string (el contenido), no {}", a[1]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_write expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__socket_write expects a string (the content), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // --- Servidor TCP (M15.3) ---
     // __tcp_listen(host, port) -> [string]: ["ok", handle] o ["err", msg]. Prelude → Result<int,string>.
     Builtin { name: "__tcp_listen", opcode: OpCode::TcpListen, check: |a| {
         arity(a, 2, "__tcp_listen", " (host, port)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__tcp_listen espera un string (el host), no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("__tcp_listen espera un int (el port), no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__tcp_listen expects a string (the host), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__tcp_listen expects an int (the port), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __tcp_accept(listener) -> [string]: ["ok", handle] o ["err", msg]. Prelude → Result<int,string>.
     Builtin { name: "__tcp_accept", opcode: OpCode::TcpAccept, check: |a| {
         arity(a, 1, "__tcp_accept", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__tcp_accept espera un int (el handle de escucha), no {}", a[0]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__tcp_accept expects an int (the listening handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __local_port(h) -> int (M15.3; M50.3: __x): el puerto local del socket (0 si no aplica). Total.
     // Envoltorio net.local_port en std/net.
     Builtin { name: "__local_port", opcode: OpCode::LocalPort, check: |a| {
         arity(a, 1, "__local_port", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("local_port espera un int (el handle), no {}", a[0]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("local_port expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Int)
     } },
     // __socket_set_read_timeout(h, ms) -> unit (M56.4): fija (ms > 0) o quita (ms <= 0) el timeout de
     // lectura del socket. Total (un handle que no es socket se ignora). Envoltorio net.set_read_timeout.
     Builtin { name: "__socket_set_read_timeout", opcode: OpCode::SocketSetReadTimeout, check: |a| {
         arity(a, 2, "__socket_set_read_timeout", " (handle, ms)")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__socket_set_read_timeout espera un int (el handle), no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("__socket_set_read_timeout espera un int (ms), no {}", a[1]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__socket_set_read_timeout expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__socket_set_read_timeout expects an int (ms), not {}", a[1]))); }
         Ok(Type::Unit)
     } },
     // --- UDP (M20.8) ---
     // __udp_bind(host, port) -> [string]: ["ok", handle] o ["err", msg]. Lib udp.ray → Result<int,string>.
     Builtin { name: "__udp_bind", opcode: OpCode::UdpBind, check: |a| {
         arity(a, 2, "__udp_bind", " (host, port)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__udp_bind espera un string (el host), no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("__udp_bind espera un int (el port), no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__udp_bind expects a string (the host), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__udp_bind expects an int (the port), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __udp_send_to(h, host, port, datos) -> [string]: ["ok", n] o ["err", msg]. Lib → Result<int,string>.
     Builtin { name: "__udp_send_to", opcode: OpCode::UdpSendTo, check: |a| {
         arity(a, 4, "__udp_send_to", " (handle, host, port, data)")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__udp_send_to espera un int (el handle), no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__udp_send_to espera un string (el host), no {}", a[1]))); }
-        if a[2] != Type::Int { return Err((Some(2), format!("__udp_send_to espera un int (el port), no {}", a[2]))); }
-        if a[3] != Type::Bytes { return Err((Some(3), format!("__udp_send_to espera bytes (los data), no {}", a[3]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__udp_send_to expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__udp_send_to expects a string (the host), not {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__udp_send_to expects an int (the port), not {}", a[2]))); }
+        if a[3] != Type::Bytes { return Err((Some(3), format!("__udp_send_to expects bytes (the data), not {}", a[3]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __udp_recv_from(h) -> [bytes]: [b"ok", host, puerto, datos] o [b"err", msg] (todo en bytes, homogéneo).
     // Lib → Result<Packet,string> con Packet{host,port,data}.
     Builtin { name: "__udp_recv_from", opcode: OpCode::UdpRecvFrom, check: |a| {
         arity(a, 1, "__udp_recv_from", "")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__udp_recv_from espera un int (el handle), no {}", a[0]))); }
+        if a[0] != Type::Int { return Err((Some(0), format!("__udp_recv_from expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     // close: ad-hoc polimórfico. close(h: int) -> int (M11.8 archivo / M15.2 socket, devuelve 0) o
@@ -2335,8 +2335,8 @@ static BUILTINS: &[Builtin] = &[
     // __append_file(path, contenido) -> [string] (M11.4b): ["ok"] o ["err", msg]. Prelude → Result.
     Builtin { name: "__append_file", opcode: OpCode::AppendFile, check: |a| {
         arity(a, 2, "__append_file", " (path, contenido)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__append_file espera un string (la path), no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__append_file espera un string (el contenido), no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__append_file expects a string (the path), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__append_file expects a string (the content), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
 ];
@@ -2395,7 +2395,7 @@ mod signals_host {
     pub fn install() -> Result<i32, String> {
         let mut fds = [0i32; 2];
         if unsafe { pipe(fds.as_mut_ptr()) } != 0 {
-            return Err("no se pudo crear el pipe de señales".into());
+            return Err("could not create the signal pipe".into());
         }
         unsafe {
             let _ = fcntl(fds[0], F_SETFL, O_NONBLOCK);
@@ -2424,7 +2424,7 @@ pub fn signals_install() -> Result<i32, String> {
 }
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
 pub fn signals_install() -> Result<i32, String> {
-    Err("signals() no está soportado en esta plataforma".into())
+    Err("signals() is not supported on this platform".into())
 }
 
 /// M88.1: ¿hay señales pendientes de entregar? (bandera barata para el scheduler).
@@ -2519,7 +2519,7 @@ mod tests {
         // Error SQL = valor, no panic; handle cerrado = error claro.
         assert!(sqlite_query(h, "SELECT * FROM no_existe", &[]).unwrap_err().contains("no_existe"));
         close_handle(h);
-        assert!(sqlite_exec(h, "SELECT 1", &[]).unwrap_err().contains("inválido o ya closed"));
+        assert!(sqlite_exec(h, "SELECT 1", &[]).unwrap_err().contains("invalid or already closed"));
     }
 
     #[test]

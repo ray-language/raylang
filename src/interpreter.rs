@@ -71,7 +71,7 @@ fn cast_value(v: Value, ty: &Type, line: usize, col: usize) -> Result<Value, Flo
         (Value::Int(n), Type::Char) => match u32::try_from(*n).ok().and_then(char::from_u32) {
             Some(c) => Ok(Value::Char(c)),
             None => Err(Flow::Error(RuntimeError {
-                msg: format!("{} no es un carácter Unicode válido para 'as char'", n),
+                msg: format!("{} is not a valid Unicode character for 'as char'", n),
                 line,
                 col,
                 trace: Vec::new(),
@@ -162,14 +162,14 @@ impl<'a> Interpreter<'a> {
 
     fn run_main(&mut self) -> Result<Value, RuntimeError> {
         // El checker ya garantizó que 'main' existe.
-        let main = *self.functions.get("main").expect("el checker garantiza 'main'");
+        let main = *self.functions.get("main").expect("the checker guarantees 'main'");
         match self.call_function(main, Vec::new(), 0, 0) {
             Ok(v) => Ok(v),
             Err(Flow::Error(e)) => Err(e),
             // Un 'return' nunca debería escapar de call_function, pero por si acaso.
             Err(Flow::Return(v)) => Ok(v),
             // Una llamada en cola siempre la consume el trampolín de call_body; no escapa.
-            Err(Flow::TailCall { .. }) => unreachable!("one llamada en cola no escapa de call_body"),
+            Err(Flow::TailCall { .. }) => unreachable!("a tail call does not escape call_body"),
         }
     }
 
@@ -210,7 +210,7 @@ impl<'a> Interpreter<'a> {
             return Err(runtime_error(
                 body.line,
                 body.col,
-                "desbordamiento de pila (recursión demasiado profunda)",
+                "stack overflow (recursion too deep)",
             ));
         }
         self.depth += 1;
@@ -390,7 +390,7 @@ impl<'a> Interpreter<'a> {
                 match callee_val {
                     Value::Function(idx) => Err(Flow::TailCall { index: idx, args: values, captured: Vec::new() }),
                     Value::Closure(c) => Err(Flow::TailCall { index: c.index, args: values, captured: c.upvalues.clone() }),
-                    _ => unreachable!("el checker garantiza one función"),
+                    _ => unreachable!("the checker guarantees a function"),
                 }
             }
             ExprKind::If { cond, then_branch, else_branch } => {
@@ -426,7 +426,7 @@ impl<'a> Interpreter<'a> {
                     }
                 }
                 Err(Flow::Error(RuntimeError {
-                    msg: "ningún branch del match casó (no debería ocurrir)".into(),
+                    msg: "no match branch matched (should not happen)".into(),
                     line: scrutinee.line,
                     col: scrutinee.col,
                     trace: Vec::new(),
@@ -475,7 +475,7 @@ impl<'a> Interpreter<'a> {
                 let v = self.eval_expr(value)?;
                 let rc = match v {
                     Value::Array(rc) => rc,
-                    _ => unreachable!("el checker garantiza one tupla (array)"),
+                    _ => unreachable!("the checker guarantees a tuple (array)"),
                 };
                 let elems = rc.borrow();
                 for (i, n) in names.iter().enumerate() {
@@ -537,7 +537,7 @@ impl<'a> Interpreter<'a> {
                                 let mut ks: Vec<MapKey> = rc.borrow().keys().cloned().collect();
                                 ks.sort();
                                 for k in ks {
-                                    let val = rc.borrow().get(&k).cloned().expect("clave presente");
+                                    let val = rc.borrow().get(&k).cloned().expect("key present");
                                     self.scopes.push(HashMap::new());
                                     if let Some(n) = &kn { self.define(n, k.to_value()); }
                                     if let Some(n) = &vn { self.define(n, val); }
@@ -546,14 +546,14 @@ impl<'a> Interpreter<'a> {
                                     r?;
                                 }
                             }
-                            _ => unreachable!("el checker garantiza array/string/Map"),
+                            _ => unreachable!("the checker guarantees array/string/Map"),
                         }
                     }
                     // M40.2: iterador de usuario. Evaluamos el iterable una vez (semántica de referencia
                     // → `next` muta su estado interno) y llamamos a `next` hasta `None`.
                     ForIter::Iter { expr, next_fn } => {
                         let it = self.eval_expr(expr)?;
-                        let func = *self.functions.get(next_fn.as_str()).expect("el checker garantiza next");
+                        let func = *self.functions.get(next_fn.as_str()).expect("the checker guarantees next");
                         loop {
                             // La posición del `for` (la misma que emite el compilador
                             // para el `Call` a `next` → la traza casa entre motores).
@@ -574,7 +574,7 @@ impl<'a> Interpreter<'a> {
                                 ForPat::Tuple(names) => {
                                     let comps = match &item {
                                         Value::Array(rc) => rc.borrow().clone(),
-                                        _ => unreachable!("el checker garantiza un elemento tupla"),
+                                        _ => unreachable!("the checker guarantees a tuple element"),
                                     };
                                     for (name, v) in names.iter().zip(comps) {
                                         if let Some(n) = name { self.define(n, v); }
@@ -604,10 +604,10 @@ impl<'a> Interpreter<'a> {
                         let rc = self.eval_struct(object)?;
                         let mut s = rc.borrow_mut();
                         let slot = s.fields.iter_mut().find(|(n, _)| n == name)
-                            .expect("el checker garantiza el campo");
+                            .expect("the checker guarantees the field");
                         slot.1 = v;
                     }
-                    _ => unreachable!("el checker garantiza un lvalue"),
+                    _ => unreachable!("the checker guarantees an lvalue"),
                 }
                 Ok(())
             }
@@ -648,7 +648,7 @@ impl<'a> Interpreter<'a> {
                         return Ok(v.clone());
                     }
                     // No es una variable ni constante: un nombre de función usado como valor.
-                    let idx = *self.named_index.get(name).expect("el checker garantiza el name");
+                    let idx = *self.named_index.get(name).expect("the checker guarantees the name");
                     Ok(Value::Function(idx))
                 }
             },
@@ -658,13 +658,13 @@ impl<'a> Interpreter<'a> {
                 Ok(match (op, v) {
                     // -i64::MIN desborda (M34, SPEC §8): error, como la aritmética binaria.
                     (UnaryOp::Neg, Value::Int(n)) => Value::Int(
-                        n.checked_neg().ok_or_else(|| runtime_error(expr.line, expr.col, "desbordamiento aritmético en int"))?,
+                        n.checked_neg().ok_or_else(|| runtime_error(expr.line, expr.col, "arithmetic overflow on int"))?,
                     ),
                     (UnaryOp::Neg, Value::Float(x)) => Value::Float(-x),
                     (UnaryOp::Not, Value::Bool(b)) => Value::Bool(!b),
                     (UnaryOp::BitNot, Value::Int(n)) => Value::Int(!n), // M19.3a: NOT bit a bit
                     (UnaryOp::BitNot, Value::UInt(n, w)) => make_uint(!n, w), // M28.3: NOT sobre uint (enmascarado)
-                    _ => unreachable!("el checker garantiza operandos válidos para el unario"),
+                    _ => unreachable!("the checker guarantees valid operands for the unary"),
                 })
             }
 
@@ -722,7 +722,7 @@ impl<'a> Interpreter<'a> {
                                 Some(c) => Ok(Value::Char(c)),
                                 None => {
                                     check_bounds(i, s.chars().count(), index.line, index.col)?;
-                                    unreachable!("nth falló ⇒ índice outside de range")
+                                    unreachable!("nth failed ⇒ index out of range")
                                 }
                             }
                         }
@@ -732,7 +732,7 @@ impl<'a> Interpreter<'a> {
                         let idx = check_bounds(i, b.len(), index.line, index.col)?;
                         Ok(Value::Int(b[idx] as i64))
                     }
-                    _ => unreachable!("el checker garantiza un array, un string o bytes"),
+                    _ => unreachable!("the checker guarantees an array, a string or bytes"),
                 }
             }
 
@@ -742,7 +742,7 @@ impl<'a> Interpreter<'a> {
                 let field_names: Vec<String> = self
                     .structs
                     .get(name.as_str())
-                    .expect("el checker registró el struct")
+                    .expect("the checker registered the struct")
                     .fields
                     .iter()
                     .map(|(n, _)| n.clone())
@@ -753,7 +753,7 @@ impl<'a> Interpreter<'a> {
                         .iter()
                         .find(|(n, _)| n == fname)
                         .map(|(_, e)| e)
-                        .expect("el checker garantiza what el campo está presente");
+                        .expect("the checker guarantees that the field is present");
                     let v = self.eval_expr(value_expr)?;
                     built.push((fname.clone(), v));
                 }
@@ -782,7 +782,7 @@ impl<'a> Interpreter<'a> {
                     if let Value::Array(rc) = v {
                         return Ok(rc.borrow()[idx].clone());
                     }
-                    unreachable!("el checker garantiza one tupla para el access .N");
+                    unreachable!("the checker guarantees a tuple for the .N access");
                 }
                 let rc = self.eval_struct(object)?;
                 let v = rc
@@ -791,7 +791,7 @@ impl<'a> Interpreter<'a> {
                     .iter()
                     .find(|(n, _)| n == name)
                     .map(|(_, v)| v.clone())
-                    .expect("el checker garantiza el campo");
+                    .expect("the checker guarantees the field");
                 Ok(v)
             }
 
@@ -858,7 +858,7 @@ impl<'a> Interpreter<'a> {
                     }
                 }
                 Err(Flow::Error(RuntimeError {
-                    msg: "ningún branch del match casó (no debería ocurrir)".into(),
+                    msg: "no match branch matched (should not happen)".into(),
                     line: scrutinee.line,
                     col: scrutinee.col,
                     trace: Vec::new(),
@@ -875,7 +875,7 @@ impl<'a> Interpreter<'a> {
                     }
                     // Err(e) / None: retornar ese mismo valor desde la función actual.
                     Value::Enum(_) => Err(Flow::Return(value)),
-                    _ => unreachable!("el checker garantiza un Result o un Option"),
+                    _ => unreachable!("the checker guarantees a Result or an Option"),
                 }
             }
 
@@ -893,7 +893,7 @@ impl<'a> Interpreter<'a> {
                         return Ok(Value::Map(Rc::new(RefCell::new(HashMap::new()))));
                     }
                     return Err(runtime_error(callee.line, callee.col,
-                        "la concurrencia (spawn/channel/send/recv/join/scope/select) requiere la VM; el intérprete es solo el oráculo secuencial (no uses --interp)"));
+                        "concurrency (spawn/channel/send/recv/join/scope/select) requires the VM; the interpreter is only the sequential oracle (do not use --interp)"));
                 }
             }
         }
@@ -916,7 +916,7 @@ impl<'a> Interpreter<'a> {
                     if name == "panic" {
                         let msg = match &values[0] {
                             Value::Str(s) => s.clone(),
-                            _ => unreachable!("el checker garantiza un string"),
+                            _ => unreachable!("the checker guarantees a string"),
                         };
                         return Err(runtime_error(callee.line, callee.col, &msg));
                     }
@@ -930,7 +930,7 @@ impl<'a> Interpreter<'a> {
                         || name == "scope" || name == "select" || name == "__task_failed"
                         || name == "signals" {
                         return Err(runtime_error(callee.line, callee.col,
-                            "la concurrencia (spawn/channel/send/recv/join/scope/select) requiere la VM; el intérprete es solo el oráculo secuencial (no uses --interp)"));
+                            "concurrency (spawn/channel/send/recv/join/scope/select) requires the VM; the interpreter is only the sequential oracle (do not use --interp)"));
                     }
                     // M89.2: la cripto de ring en un binario sin la feature 'net-tls' ABORTA
                     // con un error claro (nunca un hash vacío ni una firma que falla en
@@ -990,7 +990,7 @@ impl<'a> Interpreter<'a> {
                 let captured = c.upvalues.clone();
                 self.call_index(c.index, values, &captured, callee.line, callee.col)
             }
-            _ => unreachable!("el checker garantiza one función"),
+            _ => unreachable!("the checker guarantees a function"),
         }
     }
 
@@ -1015,7 +1015,7 @@ impl<'a> Interpreter<'a> {
                 Value::Map(rc) => Value::Int(rc.borrow().len() as i64),
                 // M16.1a: len de bytes = nº de octetos.
                 Value::Bytes(b) => Value::Int(b.len() as i64),
-                _ => unreachable!("el checker garantiza un array, string, Map o bytes"),
+                _ => unreachable!("the checker guarantees an array, string, Map or bytes"),
             },
             // --- Mapas (M13.1) --- (`Map.new()` es una función asociada, M48.1: se evalúa en `eval_call`)
             // M48.4c: los `__*` son los primitivos internos a los que baja el trait `MapOps`.
@@ -1024,13 +1024,13 @@ impl<'a> Interpreter<'a> {
                     Value::Map(rc) => {
                         rc.borrow_mut().insert(MapKey::from_value(&values[1]), values[2].clone());
                     }
-                    _ => unreachable!("el checker garantiza un Map"),
+                    _ => unreachable!("the checker guarantees a Map"),
                 }
                 Value::Unit
             }
             "__contains_key" => match &values[0] {
                 Value::Map(rc) => Value::Bool(rc.borrow().contains_key(&MapKey::from_value(&values[1]))),
-                _ => unreachable!("el checker garantiza un Map"),
+                _ => unreachable!("the checker guarantees a Map"),
             },
             // Primitivo: [] o [v]; el prelude lo envuelve en Option<V>.
             "__map_get" => match &values[0] {
@@ -1041,7 +1041,7 @@ impl<'a> Interpreter<'a> {
                     };
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
-                _ => unreachable!("el checker garantiza un Map"),
+                _ => unreachable!("the checker guarantees a Map"),
             },
             // M13.1b: quita y devuelve [] o [v]; el prelude → Option<V>.
             "__map_remove" => match &values[0] {
@@ -1052,7 +1052,7 @@ impl<'a> Interpreter<'a> {
                     };
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
-                _ => unreachable!("el checker garantiza un Map"),
+                _ => unreachable!("the checker guarantees a Map"),
             },
             // M13.1b: claves ordenadas (determinista).
             "__keys" => match &values[0] {
@@ -1062,7 +1062,7 @@ impl<'a> Interpreter<'a> {
                     let elems: Vec<Value> = ks.iter().map(|k| k.to_value()).collect();
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
-                _ => unreachable!("el checker garantiza un Map"),
+                _ => unreachable!("the checker guarantees a Map"),
             },
             // M13.1b: valores en orden de clave ordenada (casa posición a posición con keys).
             "__values" => match &values[0] {
@@ -1073,14 +1073,14 @@ impl<'a> Interpreter<'a> {
                     let elems: Vec<Value> = pairs.iter().map(|(_, v)| (*v).clone()).collect();
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
-                _ => unreachable!("el checker garantiza un Map"),
+                _ => unreachable!("the checker guarantees a Map"),
             },
             // M48.4b: `__push`/`__reverse`/`__contains` son los primitivos internos a los que bajan
             // los traits `Push`/`Reverse`/`Contains`; idénticos a sus públicos.
             "__push" => {
                 match &values[0] {
                     Value::Array(rc) => rc.borrow_mut().push(values[1].clone()),
-                    _ => unreachable!("el checker garantiza un array"),
+                    _ => unreachable!("the checker guarantees an array"),
                 }
                 Value::Unit
             }
@@ -1089,7 +1089,7 @@ impl<'a> Interpreter<'a> {
             // M11.1b: recorta los extremos.
             "__trim" => match &values[0] {
                 Value::Str(s) => Value::Str(s.trim().to_string()),
-                _ => unreachable!("el checker garantiza un string"),
+                _ => unreachable!("the checker guarantees a string"),
             },
             // M11.1b: parte por el separador → arreglo de strings.
             "__split" => match (&values[0], &values[1]) {
@@ -1097,7 +1097,7 @@ impl<'a> Interpreter<'a> {
                     let parts: Vec<Value> = s.split(sep.as_str()).map(|p| Value::Str(p.to_string())).collect();
                     Value::Array(Rc::new(RefCell::new(parts)))
                 }
-                _ => unreachable!("el checker garantiza dos strings"),
+                _ => unreachable!("the checker guarantees two strings"),
             },
             // M11.4c-2: los caracteres del string → arreglo de char.
             "__chars" => match &values[0] {
@@ -1105,40 +1105,40 @@ impl<'a> Interpreter<'a> {
                     let cs: Vec<Value> = s.chars().map(Value::Char).collect();
                     Value::Array(Rc::new(RefCell::new(cs)))
                 }
-                _ => unreachable!("el checker garantiza un string"),
+                _ => unreachable!("the checker guarantees a string"),
             },
             // M40.3a: el code point Unicode de un char → int.
             "char_code" => match &values[0] {
                 Value::Char(c) => Value::Int(*c as i64),
-                _ => unreachable!("el checker garantiza un char"),
+                _ => unreachable!("the checker guarantees a char"),
             },
             // M16.1b: los octetos UTF-8 del string → bytes.
             "__to_bytes" => match &values[0] {
                 Value::Str(s) => Value::Bytes(Rc::new(s.clone().into_bytes())),
-                _ => unreachable!("el checker garantiza un string"),
+                _ => unreachable!("the checker guarantees a string"),
             },
             // M43: hashes de producción vía `ring`. Delegan en los helpers de `builtins` (compartidos
             // con la VM → salida idéntica, el oráculo se mantiene).
             // M68.2: aleatoriedad criptográfica (CSPRNG del SO).
             "__crypto_random_bytes" => match &values[0] {
                 Value::Int(n) => Value::Bytes(Rc::new(crate::builtins::crypto_random_bytes(*n))),
-                _ => unreachable!("el checker garantiza un int"),
+                _ => unreachable!("the checker guarantees an int"),
             },
             "__sha256" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha256(b))),
-                _ => unreachable!("el checker garantiza bytes"),
+                _ => unreachable!("the checker guarantees bytes"),
             },
             "__sha512" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha512(b))),
-                _ => unreachable!("el checker garantiza bytes"),
+                _ => unreachable!("the checker guarantees bytes"),
             },
             "__sha1" => match &values[0] {
                 Value::Bytes(b) => Value::Bytes(Rc::new(crate::builtins::sha1(b))),
-                _ => unreachable!("el checker garantiza bytes"),
+                _ => unreachable!("the checker guarantees bytes"),
             },
             "__hmac_sha256" => match (&values[0], &values[1]) {
                 (Value::Bytes(k), Value::Bytes(m)) => Value::Bytes(Rc::new(crate::builtins::hmac_sha256(k, m))),
-                _ => unreachable!("el checker garantiza bytes, bytes"),
+                _ => unreachable!("the checker guarantees bytes, bytes"),
             },
             // M43.3: Ed25519. Los fallibles devuelven `[bytes]` etiquetado (vacío/único); el prelude → Option.
             "__ed25519_public_key" => match &values[0] {
@@ -1149,7 +1149,7 @@ impl<'a> Interpreter<'a> {
                     };
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
-                _ => unreachable!("el checker garantiza bytes"),
+                _ => unreachable!("the checker guarantees bytes"),
             },
             "__ed25519_sign" => match (&values[0], &values[1]) {
                 (Value::Bytes(seed), Value::Bytes(msg)) => {
@@ -1159,13 +1159,13 @@ impl<'a> Interpreter<'a> {
                     };
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
-                _ => unreachable!("el checker garantiza bytes, bytes"),
+                _ => unreachable!("the checker guarantees bytes, bytes"),
             },
             "__ed25519_verify" => match (&values[0], &values[1], &values[2]) {
                 (Value::Bytes(pk), Value::Bytes(msg), Value::Bytes(sig)) => {
                     Value::Bool(crate::builtins::ed25519_verify(pk, msg, sig))
                 }
-                _ => unreachable!("el checker garantiza bytes, bytes, bytes"),
+                _ => unreachable!("the checker guarantees bytes, bytes, bytes"),
             },
             // M43.4: ChaCha20-Poly1305 AEAD. seal/open devuelven `[bytes]` etiquetado; el prelude → Option.
             "__chacha20poly1305_seal" | "__chacha20poly1305_open" => {
@@ -1182,7 +1182,7 @@ impl<'a> Interpreter<'a> {
                         };
                         Value::Array(Rc::new(RefCell::new(elems)))
                     }
-                    _ => unreachable!("el checker garantiza cuatro bytes"),
+                    _ => unreachable!("the checker guarantees four bytes"),
                 }
             }
             // M16.1b: decodifica bytes como UTF-8 → ["ok", s] o ["err", msg]. El prelude → Result.
@@ -1192,7 +1192,7 @@ impl<'a> Interpreter<'a> {
                         Ok(s) => vec![Value::Str("ok".to_string()), Value::Str(s.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
                     },
-                    _ => unreachable!("el checker garantiza bytes"),
+                    _ => unreachable!("the checker guarantees bytes"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1204,7 +1204,7 @@ impl<'a> Interpreter<'a> {
                         Ok(data) => vec![bytes_tag("ok"), Value::Bytes(Rc::new(data))],
                         Err(e) => vec![bytes_tag("err"), bytes_of_str(&e.to_string())],
                     },
-                    _ => unreachable!("el checker garantiza un string"),
+                    _ => unreachable!("the checker guarantees a string"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1215,7 +1215,7 @@ impl<'a> Interpreter<'a> {
                         Ok(()) => vec![Value::Str("ok".to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
                     },
-                    _ => unreachable!("el checker garantiza string, bytes"),
+                    _ => unreachable!("the checker guarantees string, bytes"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1226,7 +1226,7 @@ impl<'a> Interpreter<'a> {
                         Ok(data) => vec![bytes_tag("ok"), Value::Bytes(Rc::new(data))],
                         Err(e) => vec![bytes_tag("err"), bytes_of_str(&e)],
                     },
-                    _ => unreachable!("el checker garantiza un int"),
+                    _ => unreachable!("the checker guarantees an int"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1237,7 +1237,7 @@ impl<'a> Interpreter<'a> {
                         Ok(_) => vec![Value::Str("ok".to_string()), Value::Str(String::new())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza int, bytes"),
+                    _ => unreachable!("the checker guarantees int, bytes"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1248,7 +1248,7 @@ impl<'a> Interpreter<'a> {
                         Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza string, int"),
+                    _ => unreachable!("the checker guarantees string, int"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1261,7 +1261,7 @@ impl<'a> Interpreter<'a> {
                             Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                         }
                     }
-                    _ => unreachable!("el checker garantiza int, string, int, bytes"),
+                    _ => unreachable!("the checker guarantees int, string, int, bytes"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1277,7 +1277,7 @@ impl<'a> Interpreter<'a> {
                         ],
                         Err(e) => vec![bytes_tag("err"), bytes_of_str(&e)],
                     },
-                    _ => unreachable!("el checker garantiza un int"),
+                    _ => unreachable!("the checker guarantees an int"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1285,61 +1285,61 @@ impl<'a> Interpreter<'a> {
             "__contains" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(sub)) => Value::Bool(s.contains(sub.as_str())),
                 (Value::Array(rc), x) => Value::Bool(rc.borrow().iter().any(|e| e == x)),
-                _ => unreachable!("el checker garantiza string+string o array+elemento"),
+                _ => unreachable!("the checker guarantees string+string or array+element"),
             },
             // M11.4a: reemplaza todas las ocurrencias de `de` por `a`.
             "__replace" => match (&values[0], &values[1], &values[2]) {
                 (Value::Str(s), Value::Str(de), Value::Str(a)) => {
                     Value::Str(s.replace(de.as_str(), a.as_str()))
                 }
-                _ => unreachable!("el checker garantiza tres strings"),
+                _ => unreachable!("the checker guarantees three strings"),
             },
             // M11.7a: ¿empieza/termina con la subcadena?
             "__starts_with" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(p)) => Value::Bool(s.starts_with(p.as_str())),
-                _ => unreachable!("el checker garantiza dos strings"),
+                _ => unreachable!("the checker guarantees two strings"),
             },
             "__ends_with" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Str(p)) => Value::Bool(s.ends_with(p.as_str())),
-                _ => unreachable!("el checker garantiza dos strings"),
+                _ => unreachable!("the checker guarantees two strings"),
             },
             // M11.7a: mayúsculas/minúsculas.
             "__to_upper" => match &values[0] {
                 Value::Str(s) => Value::Str(s.to_uppercase()),
-                _ => unreachable!("el checker garantiza un string"),
+                _ => unreachable!("the checker guarantees a string"),
             },
             "__to_lower" => match &values[0] {
                 Value::Str(s) => Value::Str(s.to_lowercase()),
-                _ => unreachable!("el checker garantiza un string"),
+                _ => unreachable!("the checker guarantees a string"),
             },
             // M11.7a: subcadena por índice de carácter (con clamp); repetir.
             "__substring" => match (&values[0], &values[1], &values[2]) {
                 (Value::Str(s), Value::Int(i), Value::Int(j)) => {
                     Value::Str(crate::builtins::substring_chars(s, *i, *j))
                 }
-                _ => unreachable!("el checker garantiza string, int, int"),
+                _ => unreachable!("the checker guarantees string, int, int"),
             },
             // M19.2: sub-secuencia de bytes por octeto (con clamp).
             "__sub_bytes" => match (&values[0], &values[1], &values[2]) {
                 (Value::Bytes(b), Value::Int(i), Value::Int(j)) => {
                     Value::Bytes(Rc::new(crate::builtins::sub_bytes_octets(b, *i, *j)))
                 }
-                _ => unreachable!("el checker garantiza bytes, int, int"),
+                _ => unreachable!("the checker guarantees bytes, int, int"),
             },
             // bytes_of (M19.3c): [int] → bytes, cada elemento truncado a octeto (`& 255`).
             "bytes_of" => match &values[0] {
                 Value::Array(xs) => {
                     let octets: Vec<u8> = xs.borrow().iter().map(|v| match v {
                         Value::Int(n) => (*n & 0xff) as u8,
-                        _ => unreachable!("el checker garantiza [int]"),
+                        _ => unreachable!("the checker guarantees [int]"),
                     }).collect();
                     Value::Bytes(Rc::new(octets))
                 }
-                _ => unreachable!("el checker garantiza un array"),
+                _ => unreachable!("the checker guarantees an array"),
             },
             "__repeat" => match (&values[0], &values[1]) {
                 (Value::Str(s), Value::Int(n)) => Value::Str(crate::builtins::repeat_str(s, *n)),
-                _ => unreachable!("el checker garantiza string, int"),
+                _ => unreachable!("the checker guarantees string, int"),
             },
             // M11.7a: primitivo de búsqueda → [] o [i] (índice de carácter). El prelude → Option<int>.
             "__index_of" => match (&values[0], &values[1]) {
@@ -1350,18 +1350,18 @@ impl<'a> Interpreter<'a> {
                     };
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
-                _ => unreachable!("el checker garantiza dos strings"),
+                _ => unreachable!("the checker guarantees two strings"),
             },
             // M11.7a: une un [string] con el separador.
             "join" => match (&values[0], &values[1]) {
                 (Value::Array(rc), Value::Str(sep)) => {
                     let parts: Vec<String> = rc.borrow().iter().map(|v| match v {
                         Value::Str(s) => s.clone(),
-                        _ => unreachable!("el checker garantiza [string]"),
+                        _ => unreachable!("the checker guarantees [string]"),
                     }).collect();
                     Value::Str(parts.join(sep.as_str()))
                 }
-                _ => unreachable!("el checker garantiza [string], string"),
+                _ => unreachable!("the checker guarantees [string], string"),
             },
             // M11.7b: arreglo nuevo en orden inverso.
             "__reverse" => match &values[0] {
@@ -1370,7 +1370,7 @@ impl<'a> Interpreter<'a> {
                     v.reverse();
                     Value::Array(Rc::new(RefCell::new(v)))
                 }
-                _ => unreachable!("el checker garantiza un array"),
+                _ => unreachable!("the checker guarantees an array"),
             },
             // M11.7b: primitivo que muta el arreglo quitando el último → [] o [x]. Prelude → Option<T>.
             "__pop" => match &values[0] {
@@ -1379,7 +1379,7 @@ impl<'a> Interpreter<'a> {
                     let elems = popped.map(|v| vec![v]).unwrap_or_default();
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
-                _ => unreachable!("el checker garantiza un array"),
+                _ => unreachable!("the checker guarantees an array"),
             },
             // M11.7b: primitivo de búsqueda en arreglo → [] o [i]. Prelude → Option<int>.
             "__position" => match (&values[0], &values[1]) {
@@ -1388,7 +1388,7 @@ impl<'a> Interpreter<'a> {
                     let elems = idx.map(|i| vec![Value::Int(i as i64)]).unwrap_or_default();
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
-                _ => unreachable!("el checker garantiza array+elemento"),
+                _ => unreachable!("the checker guarantees array+element"),
             },
             // M11.2a: como print, pero a stderr.
             "eprint" => {
@@ -1401,7 +1401,7 @@ impl<'a> Interpreter<'a> {
                     Ok(n) => Value::Array(Rc::new(RefCell::new(vec![Value::Int(n)]))),
                     Err(_) => Value::Array(Rc::new(RefCell::new(vec![]))),
                 },
-                _ => unreachable!("el checker garantiza un string"),
+                _ => unreachable!("the checker guarantees a string"),
             },
             // M14: parseo de flotante (lo pide el lexer auto-alojado). [] o [f].
             "__parse_float" => match &values[0] {
@@ -1409,7 +1409,7 @@ impl<'a> Interpreter<'a> {
                     Ok(f) => Value::Array(Rc::new(RefCell::new(vec![Value::Float(f)]))),
                     Err(_) => Value::Array(Rc::new(RefCell::new(vec![]))),
                 },
-                _ => unreachable!("el checker garantiza un string"),
+                _ => unreachable!("the checker guarantees a string"),
             },
             // M11.2a: primitivo de lectura de línea → [] en EOF, [linea] si no (sin el '\n').
             "__read_line" => {
@@ -1429,7 +1429,7 @@ impl<'a> Interpreter<'a> {
                     Ok(v) => Value::Array(Rc::new(RefCell::new(vec![Value::Str(v)]))),
                     Err(_) => Value::Array(Rc::new(RefCell::new(vec![]))),
                 },
-                _ => unreachable!("el checker garantiza un string"),
+                _ => unreachable!("the checker guarantees a string"),
             },
             // M11.2b: argumentos del programa (del almacén de proceso; [] si no se fijaron).
             "args" => {
@@ -1443,7 +1443,7 @@ impl<'a> Interpreter<'a> {
                         Ok(c) => vec![Value::Str("ok".to_string()), Value::Str(c)],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
                     },
-                    _ => unreachable!("el checker garantiza un string"),
+                    _ => unreachable!("the checker guarantees a string"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1454,14 +1454,14 @@ impl<'a> Interpreter<'a> {
                         Ok(()) => vec![Value::Str("ok".to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
                     },
-                    _ => unreachable!("el checker garantiza dos strings"),
+                    _ => unreachable!("the checker guarantees two strings"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M11.4b (M50.1: __x): ¿existe la ruta? (total, no falla).
             "__exists" => match &values[0] {
                 Value::Str(path) => Value::Bool(std::path::Path::new(path).exists()),
-                _ => unreachable!("el checker garantiza un string"),
+                _ => unreachable!("the checker guarantees a string"),
             },
             // M11.4b: añade al final del archivo (lo crea si no existe) → ["ok"] o ["err", msg].
             "__append_file" => {
@@ -1470,7 +1470,7 @@ impl<'a> Interpreter<'a> {
                         Ok(()) => vec![Value::Str("ok".to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
                     },
-                    _ => unreachable!("el checker garantiza dos strings"),
+                    _ => unreachable!("the checker guarantees two strings"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1490,7 +1490,7 @@ impl<'a> Interpreter<'a> {
                     .iter()
                     .map(|v| match v {
                         Value::Str(s) => s.clone(),
-                        _ => unreachable!("el checker garantiza strings"),
+                        _ => unreachable!("the checker guarantees strings"),
                     })
                     .collect();
                 let arr = crate::builtins::fs_tagged(op, &args).into_iter().map(Value::Str).collect();
@@ -1502,7 +1502,7 @@ impl<'a> Interpreter<'a> {
                 let t = if name == "__is_dir" { FsTest::IsDir } else { FsTest::IsFile };
                 match &values[0] {
                     Value::Str(path) => Value::Bool(crate::builtins::fs_test(t, path)),
-                    _ => unreachable!("el checker garantiza un string"),
+                    _ => unreachable!("the checker guarantees a string"),
                 }
             }
             // M67: append binario → ["ok"] o ["err", msg].
@@ -1514,7 +1514,7 @@ impl<'a> Interpreter<'a> {
                             Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
                         }
                     }
-                    _ => unreachable!("el checker garantiza string, bytes"),
+                    _ => unreachable!("the checker guarantees string, bytes"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1525,7 +1525,7 @@ impl<'a> Interpreter<'a> {
                         Ok(()) => vec![Value::Str("ok".to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
                     },
-                    _ => unreachable!("el checker garantiza un string"),
+                    _ => unreachable!("the checker guarantees a string"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1540,7 +1540,7 @@ impl<'a> Interpreter<'a> {
                         }
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e.to_string())],
                     },
-                    _ => unreachable!("el checker garantiza un string"),
+                    _ => unreachable!("the checker guarantees a string"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1551,7 +1551,7 @@ impl<'a> Interpreter<'a> {
                         Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza dos strings"),
+                    _ => unreachable!("the checker guarantees two strings"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1561,7 +1561,7 @@ impl<'a> Interpreter<'a> {
                     let elems = crate::builtins::read_line_handle(*h).map(|l| vec![Value::Str(l)]).unwrap_or_default();
                     Value::Array(Rc::new(RefCell::new(elems)))
                 }
-                _ => unreachable!("el checker garantiza un int"),
+                _ => unreachable!("the checker guarantees an int"),
             },
             // M11.8: escribe en el handle → ["ok"] o ["err", msg].
             "__write_handle" => {
@@ -1570,7 +1570,7 @@ impl<'a> Interpreter<'a> {
                         Ok(_) => vec![Value::Str("ok".to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza int, string"),
+                    _ => unreachable!("the checker guarantees int, string"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1586,16 +1586,16 @@ impl<'a> Interpreter<'a> {
                     };
                     Value::Array(Rc::new(RefCell::new(arr)))
                 }
-                _ => unreachable!("el checker garantiza un int"),
+                _ => unreachable!("the checker guarantees an int"),
             },
             // M54.1: bits IEEE 754 de un float, y el inverso. Totales.
             "__float_bits" => match &values[0] {
                 Value::Float(f) => Value::Int(f.to_bits() as i64),
-                _ => unreachable!("el checker garantiza un float"),
+                _ => unreachable!("the checker guarantees a float"),
             },
             "__float_from_bits" => match &values[0] {
                 Value::Int(n) => Value::Float(f64::from_bits(*n as u64)),
-                _ => unreachable!("el checker garantiza un int"),
+                _ => unreachable!("the checker guarantees an int"),
             },
             // M53.3: SQLite embebido → arreglo etiquetado; el paquete `db/sqlite` lo traduce a Result.
             "__sqlite_open" => {
@@ -1604,17 +1604,17 @@ impl<'a> Interpreter<'a> {
                         Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza un string"),
+                    _ => unreachable!("the checker guarantees a string"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             "__sqlite_exec" | "__sqlite_query" => {
                 let (Value::Int(h), Value::Str(sql), Value::Array(ps)) = (&values[0], &values[1], &values[2]) else {
-                    unreachable!("el checker garantiza int, string, [string]");
+                    unreachable!("the checker guarantees int, string, [string]");
                 };
                 let params: Vec<String> = ps.borrow().iter().map(|v| match v {
                     Value::Str(s) => s.clone(),
-                    _ => unreachable!("el checker garantiza [string]"),
+                    _ => unreachable!("the checker guarantees [string]"),
                 }).collect();
                 let arr = if name == "__sqlite_exec" {
                     match crate::builtins::sqlite_exec(*h, sql, &params) {
@@ -1639,7 +1639,7 @@ impl<'a> Interpreter<'a> {
                         Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza string, int"),
+                    _ => unreachable!("the checker guarantees string, int"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1650,7 +1650,7 @@ impl<'a> Interpreter<'a> {
                         Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza string, int"),
+                    _ => unreachable!("the checker guarantees string, int"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1661,7 +1661,7 @@ impl<'a> Interpreter<'a> {
                         Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza string, int"),
+                    _ => unreachable!("the checker guarantees string, int"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1672,7 +1672,7 @@ impl<'a> Interpreter<'a> {
                         Ok(nh) => vec![Value::Str("ok".to_string()), Value::Str(nh.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza int, string, string"),
+                    _ => unreachable!("the checker guarantees int, string, string"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1683,7 +1683,7 @@ impl<'a> Interpreter<'a> {
                         Ok(nh) => vec![Value::Str("ok".to_string()), Value::Str(nh.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza int, string"),
+                    _ => unreachable!("the checker guarantees int, string"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1694,7 +1694,7 @@ impl<'a> Interpreter<'a> {
                         Ok(s) => vec![Value::Str("ok".to_string()), Value::Str(s)],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza un int"),
+                    _ => unreachable!("the checker guarantees an int"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1705,7 +1705,7 @@ impl<'a> Interpreter<'a> {
                         Ok(_) => vec![Value::Str("ok".to_string()), Value::Str(String::new())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza int, string"),
+                    _ => unreachable!("the checker guarantees int, string"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1716,7 +1716,7 @@ impl<'a> Interpreter<'a> {
                         Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza string, int"),
+                    _ => unreachable!("the checker guarantees string, int"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
@@ -1727,14 +1727,14 @@ impl<'a> Interpreter<'a> {
                         Ok(c) => vec![Value::Str("ok".to_string()), Value::Str(c.to_string())],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
-                    _ => unreachable!("el checker garantiza un int"),
+                    _ => unreachable!("the checker guarantees an int"),
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M15.3 (M50.3: __x): puerto local del socket (total).
             "__local_port" => match &values[0] {
                 Value::Int(h) => Value::Int(crate::builtins::local_port(*h)),
-                _ => unreachable!("el checker garantiza un int"),
+                _ => unreachable!("the checker guarantees an int"),
             },
             // M56.4: timeout de lectura del socket (total; en este motor aplica el SO_RCVTIMEO real).
             "__socket_set_read_timeout" => match (&values[0], &values[1]) {
@@ -1742,7 +1742,7 @@ impl<'a> Interpreter<'a> {
                     crate::builtins::socket_set_read_timeout(*h, *ms);
                     Value::Unit
                 }
-                _ => unreachable!("el checker garantiza int, int"),
+                _ => unreachable!("the checker guarantees int, int"),
             },
             // M11.8: cierra el handle (total).
             "close" => match &values[0] {
@@ -1750,7 +1750,7 @@ impl<'a> Interpreter<'a> {
                     crate::builtins::close_handle(*h);
                     Value::Int(0)
                 }
-                _ => unreachable!("el checker garantiza un int"),
+                _ => unreachable!("the checker guarantees an int"),
             },
             // --- Matemáticas (M15.1a) ---
             // Funciones unarias float -> float: el nombre fija qué MathFn aplicar; el cálculo lo hace
@@ -1778,17 +1778,17 @@ impl<'a> Interpreter<'a> {
                 };
                 match &values[0] {
                     Value::Float(x) => Value::Float(crate::builtins::apply_mathf(f, *x)),
-                    _ => unreachable!("el checker garantiza un float"),
+                    _ => unreachable!("the checker guarantees a float"),
                 }
             }
             "__pow" => match (&values[0], &values[1]) {
                 (Value::Float(b), Value::Float(e)) => Value::Float(b.powf(*e)),
-                _ => unreachable!("el checker garantiza dos floats"),
+                _ => unreachable!("the checker guarantees two floats"),
             },
             // M65.2: atan2(y, x) — el ángulo de (x, y) en (-π, π].
             "__atan2" => match (&values[0], &values[1]) {
                 (Value::Float(y), Value::Float(x)) => Value::Float(y.atan2(*x)),
-                _ => unreachable!("el checker garantiza dos floats"),
+                _ => unreachable!("the checker guarantees two floats"),
             },
             // M49.1b: abs/min/max/pi/e ya no son builtins (funciones puras en `std/math`).
             // --- Reloj y aleatoriedad (M15.1b): no deterministas, delegan en los helpers compartidos. ---
@@ -1799,12 +1799,12 @@ impl<'a> Interpreter<'a> {
                     crate::builtins::sleep_millis(*ms);
                     Value::Unit
                 }
-                _ => unreachable!("el checker garantiza un int"),
+                _ => unreachable!("the checker guarantees an int"),
             },
             "__random" => Value::Float(crate::builtins::random_f64()),
             "__random_int" => match &values[0] {
                 Value::Int(n) => Value::Int(crate::builtins::random_int(*n)),
-                _ => unreachable!("el checker garantiza un int"),
+                _ => unreachable!("the checker guarantees an int"),
             },
             // M68.1: fija la semilla del PRNG (reproducibilidad).
             "__random_seed" => match &values[0] {
@@ -1812,7 +1812,7 @@ impl<'a> Interpreter<'a> {
                     crate::builtins::random_seed(*n);
                     Value::Unit
                 }
-                _ => unreachable!("el checker garantiza un int"),
+                _ => unreachable!("the checker guarantees an int"),
             },
             _ => unreachable!("builtin unknown"),
         }
@@ -1868,21 +1868,21 @@ impl<'a> Interpreter<'a> {
             // coherente con la división por cero y con el eje "seguro" — antes el
             // comportamiento dependía del build del compilador (panic en debug, wrap en
             // release). Los u8/u32/u64 siguen con wrapping POR DISEÑO (M28.3).
-            (Add, Int(a), Int(b)) => Int(a.checked_add(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?),
-            (Sub, Int(a), Int(b)) => Int(a.checked_sub(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?),
-            (Mul, Int(a), Int(b)) => Int(a.checked_mul(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?),
+            (Add, Int(a), Int(b)) => Int(a.checked_add(b).ok_or_else(|| runtime_error(line, col, "arithmetic overflow on int"))?),
+            (Sub, Int(a), Int(b)) => Int(a.checked_sub(b).ok_or_else(|| runtime_error(line, col, "arithmetic overflow on int"))?),
+            (Mul, Int(a), Int(b)) => Int(a.checked_mul(b).ok_or_else(|| runtime_error(line, col, "arithmetic overflow on int"))?),
             (Div, Int(a), Int(b)) => {
                 if b == 0 {
-                    return Err(runtime_error(line, col, "división entera por cero"));
+                    return Err(runtime_error(line, col, "integer division by zero"));
                 }
                 // El único desbordamiento de división: i64::MIN / -1.
-                Int(a.checked_div(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?)
+                Int(a.checked_div(b).ok_or_else(|| runtime_error(line, col, "arithmetic overflow on int"))?)
             }
             (Rem, Int(a), Int(b)) => {
                 if b == 0 {
-                    return Err(runtime_error(line, col, "módulo por cero"));
+                    return Err(runtime_error(line, col, "modulo by zero"));
                 }
-                Int(a.checked_rem(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?)
+                Int(a.checked_rem(b).ok_or_else(|| runtime_error(line, col, "arithmetic overflow on int"))?)
             }
             // Aritmética flotante (división por cero da inf/NaN, como IEEE-754).
             (Add, Float(a), Float(b)) => Float(a + b),
@@ -1926,11 +1926,11 @@ impl<'a> Interpreter<'a> {
             (Sub, UInt(a, w), UInt(b, _)) => make_uint(a.wrapping_sub(b), w),
             (Mul, UInt(a, w), UInt(b, _)) => make_uint(a.wrapping_mul(b), w),
             (Div, UInt(a, w), UInt(b, _)) => {
-                if b == 0 { return Err(runtime_error(line, col, "división entera por cero")); }
+                if b == 0 { return Err(runtime_error(line, col, "integer division by zero")); }
                 make_uint(a / b, w)
             }
             (Rem, UInt(a, w), UInt(b, _)) => {
-                if b == 0 { return Err(runtime_error(line, col, "módulo por cero")); }
+                if b == 0 { return Err(runtime_error(line, col, "modulo by zero")); }
                 make_uint(a % b, w)
             }
             (Lt, UInt(a, _), UInt(b, _)) => Bool(a < b),
@@ -1942,7 +1942,7 @@ impl<'a> Interpreter<'a> {
             (BitXor, UInt(a, w), UInt(b, _)) => make_uint(a ^ b, w),
             (Shl, UInt(a, w), UInt(b, _)) => make_uint(a.wrapping_shl(b as u32), w),
             (Shr, UInt(a, w), UInt(b, _)) => make_uint(a.wrapping_shr(b as u32), w),
-            _ => unreachable!("combinación de operador/operandos what el checker debió rechazar"),
+            _ => unreachable!("operator/operand combination that the checker should have rejected"),
         })
     }
 
@@ -1952,7 +1952,7 @@ impl<'a> Interpreter<'a> {
     fn eval_bool(&mut self, expr: &'a Expr) -> Result<bool, Flow> {
         match self.eval_expr(expr)? {
             Value::Bool(b) => Ok(b),
-            _ => unreachable!("el checker garantiza one condición booleana"),
+            _ => unreachable!("the checker guarantees a boolean condition"),
         }
     }
 
@@ -1960,7 +1960,7 @@ impl<'a> Interpreter<'a> {
     fn eval_int(&mut self, expr: &'a Expr) -> Result<i64, Flow> {
         match self.eval_expr(expr)? {
             Value::Int(n) => Ok(n),
-            _ => unreachable!("el checker garantiza un int"),
+            _ => unreachable!("the checker guarantees an int"),
         }
     }
 
@@ -1969,7 +1969,7 @@ impl<'a> Interpreter<'a> {
     fn eval_array(&mut self, expr: &'a Expr) -> Result<Rc<RefCell<Vec<Value>>>, Flow> {
         match self.eval_expr(expr)? {
             Value::Array(rc) => Ok(rc),
-            _ => unreachable!("el checker garantiza un array"),
+            _ => unreachable!("the checker guarantees an array"),
         }
     }
 
@@ -1977,7 +1977,7 @@ impl<'a> Interpreter<'a> {
     fn eval_struct(&mut self, expr: &'a Expr) -> Result<Rc<RefCell<StructInstance>>, Flow> {
         match self.eval_expr(expr)? {
             Value::Struct(rc) => Ok(rc),
-            _ => unreachable!("el checker garantiza un struct"),
+            _ => unreachable!("the checker guarantees a struct"),
         }
     }
 
@@ -1987,7 +1987,7 @@ impl<'a> Interpreter<'a> {
     fn define(&mut self, name: &str, value: Value) {
         self.scopes
             .last_mut()
-            .expect("siempre hay un ámbito activo")
+            .expect("there is always an active scope")
             .insert(name.to_string(), Rc::new(RefCell::new(value)));
     }
 
@@ -2011,7 +2011,7 @@ impl<'a> Interpreter<'a> {
                 return;
             }
         }
-        unreachable!("el checker garantiza what '{}' está declarada", name)
+        unreachable!("the checker guarantees that '{}' is declared", name)
     }
 }
 
@@ -2030,7 +2030,7 @@ fn value_to_ffi(v: &Value) -> crate::ffi::FfiVal<'_> {
         Value::Str(s) => crate::ffi::FfiVal::Str(s.as_str()),      // M41.2: → char* (NUL-terminado en ffi::call)
         Value::Bytes(b) => crate::ffi::FfiVal::Bytes(b.as_slice()), // M41.2: → puntero al buffer crudo
         Value::Ptr(p) => crate::ffi::FfiVal::Int(*p),              // M41.4b: la dirección opaca por registro
-        _ => unreachable!("el checker garantiza un type marshalable en la frontera FFI"),
+        _ => unreachable!("the checker guarantees a type marshalable at the FFI boundary"),
     }
 }
 
@@ -2062,7 +2062,7 @@ fn ffi_to_value(r: crate::ffi::FfiRet, ret: crate::ffi::CKind, line: usize, col:
                 match String::from_utf8(bytes) {
                     Ok(s) => Value::Str(s),
                     Err(_) => return Err(runtime_error(line, col,
-                        "la función C devolvió bytes what no son UTF-8 válido (declara Option<bytes> para recibirlos crudos)")),
+                        "the C function returned bytes that are not valid UTF-8 (declare Option<bytes> to receive them raw)")),
                 }
             } else {
                 Value::Bytes(Rc::new(bytes))
@@ -2078,7 +2078,7 @@ fn ffi_to_value(r: crate::ffi::FfiRet, ret: crate::ffi::CKind, line: usize, col:
 /// Comprueba que `i` es un índice válido en `0..len`; si no, error de ejecución.
 fn check_bounds(i: i64, len: usize, line: usize, col: usize) -> Result<usize, Flow> {
     if i < 0 || (i as usize) >= len {
-        return Err(runtime_error(line, col, &format!("índice {} outside de range (length {})", i, len)));
+        return Err(runtime_error(line, col, &format!("index {} out of range (length {})", i, len)));
     }
     Ok(i as usize)
 }
@@ -2149,7 +2149,7 @@ mod tests {
         let tokens = crate::lexer::lex(src).expect("lex ok");
         let mut prog = crate::parser::parse(tokens).expect("parse ok");
         crate::checker::check(&mut prog).expect("check ok");
-        run(&prog).expect("ejecución sin error")
+        run(&prog).expect("execution without error")
     }
 
     fn run_err(src: &str) -> RuntimeError {
@@ -2175,7 +2175,7 @@ mod tests {
             Ok(v) => v,
             Err(Flow::Return(v)) => v,
             Err(Flow::Error(e)) => panic!("error de ejecución inesperado: {}", e),
-            Err(Flow::TailCall { .. }) => unreachable!("one llamada en cola no escapa de call_body"),
+            Err(Flow::TailCall { .. }) => unreachable!("a tail call does not escape call_body"),
         }
     }
 
@@ -2313,9 +2313,9 @@ fn main() -> int {
     #[test]
     fn division_por_cero_es_error_de_execution() {
         let e = run_err("fn main() -> int { 10 / 0 }");
-        assert!(e.msg.contains("división"));
+        assert!(e.msg.contains("division"));
         let e = run_err("fn main() -> int { 10 % 0 }");
-        assert!(e.msg.contains("módulo"));
+        assert!(e.msg.contains("modulo"));
     }
 
     // ----- M5.2: match (ejecución en el intérprete) -----

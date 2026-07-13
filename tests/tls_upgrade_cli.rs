@@ -103,7 +103,7 @@ fn main() -> int {
 }
 "#;
 
-const ESPERADO: &str = "claro: GO\ntls: hello-seguro\ndouble: el handle 1 no es un socket TCP plano\n";
+const ESPERADO: &str = "claro: GO\ntls: hello-seguro\ndouble: handle 1 is not a plain TCP socket\n";
 
 fn run(port: u16, flags: &[&str]) -> String {
     let dir = std::env::temp_dir().join(format!("ray_tls_upgrade_{}", flags.join("_")));

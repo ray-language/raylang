@@ -63,7 +63,7 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
     for (i, f) in program.functions.iter().enumerate() {
         indices.insert(f.name.clone(), i);
     }
-    let main = *indices.get("main").expect("el checker garantiza 'main'");
+    let main = *indices.get("main").expect("the checker guarantees 'main'");
 
     // Tabla de structs + mapa nombre → (índice, nombres de campo en orden).
     let mut struct_table = Vec::new();
@@ -409,7 +409,7 @@ impl<'a> Compiler<'a> {
             // M40.2: iterador de usuario. Evaluamos el iterable una vez (semántica de referencia →
             // `next` muta su estado) y llamamos a `next` hasta que devuelva `None` (tag 1 de Option).
             ForIter::Iter { expr, next_fn } => {
-                let &idx = self.indices.get(next_fn).expect("el checker garantiza next");
+                let &idx = self.indices.get(next_fn).expect("the checker guarantees next");
                 self.emit_expr(expr)?;
                 let it_slot = self.declare_local("$it");
                 self.emit(OpCode::InitLocal(it_slot), line, col);
@@ -731,7 +731,7 @@ impl<'a> Compiler<'a> {
                     self.emit_expr(value)?;
                     self.emit(OpCode::SetField(name.clone()), line, col);
                 }
-                _ => unreachable!("el checker garantiza un lvalue"),
+                _ => unreachable!("the checker guarantees an lvalue"),
             },
             StmtKind::Return { value } => {
                 match value {
@@ -811,7 +811,7 @@ impl<'a> Compiler<'a> {
                         self.emit(OpCode::Constant(cidx), line, col);
                     } else {
                         // No es variable ni upvalue ni constante: un nombre de función como valor.
-                        let idx = *self.indices.get(name).expect("el checker garantiza el name");
+                        let idx = *self.indices.get(name).expect("the checker guarantees the name");
                         self.emit(OpCode::Function(idx), line, col);
                     }
                 }
@@ -956,7 +956,7 @@ impl<'a> Compiler<'a> {
             }
 
             ExprKind::StructLit { name, fields } => {
-                let (idx, field_names) = self.structs.get(name).expect("el checker registró el struct");
+                let (idx, field_names) = self.structs.get(name).expect("the checker registered the struct");
                 let idx = *idx;
                 let field_names = field_names.clone(); // suelta el préstamo de self
                 // Emitimos los valores en ORDEN DE DECLARACIÓN (así MakeStruct los
@@ -966,7 +966,7 @@ impl<'a> Compiler<'a> {
                         .iter()
                         .find(|(n, _)| n == fname)
                         .map(|(_, e)| e)
-                        .expect("el checker garantiza el campo");
+                        .expect("the checker guarantees the field");
                     self.emit_expr(value_expr)?;
                 }
                 self.emit(OpCode::MakeStruct(idx), line, col);

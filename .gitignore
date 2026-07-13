@@ -32,3 +32,4 @@ playground/*.wasm
 # --- mdBook ---
 # Salida compilada del libro (se regenera con `mdbook build`).
 book/book/
+tools/__pycache__/

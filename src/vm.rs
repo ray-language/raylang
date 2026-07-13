@@ -362,7 +362,7 @@ impl<'a> Vm<'a> {
     /// M38.3b paso 2: bloquea el estado compartido del scheduler. Una operación del scheduler llama esto
     /// UNA vez y usa el guard (`&mut *sh`) para toda su cadena de helpers → sin reentrancia ni deadlock.
     fn sched(&self) -> MutexGuard<'_, Shared> {
-        self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado") // ice-ok: invariante
+        self.shared.lock().expect("the scheduler Mutex should not be poisoned") // ice-ok: invariante
     }
 
     /// M38.3b paso 3: **orquestador** del scheduler M:N. Arma la fibra de `main`, la encola en `ready` y
@@ -408,7 +408,7 @@ impl<'a> Vm<'a> {
                             let mut w = Vm::worker(prog.0, shared);
                             w.run_worker();
                         })
-                        .expect("no se pudo launch el hilo worker"); // ice-ok: fallo del SO al crear hilo
+                        .expect("could not launch the worker thread"); // ice-ok: fallo del SO al crear hilo
                 }
             });
         }
@@ -427,7 +427,7 @@ impl<'a> Vm<'a> {
             Ok(false) => return,    // el programa ya terminó (outcome fijado por otro)
             Err(e) => {
                 // Sin fibras ejecutables desde el arranque (no debería con main en cola): registra el fatal.
-                let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                 if sh.outcome.is_none() { sh.outcome = Some(Err(e)); }
                 return;
             }
@@ -435,7 +435,7 @@ impl<'a> Vm<'a> {
         let res = self.run_loop();
         // Si nos detuvimos porque otro worker ya fijó el outcome (`stop`), no lo pisamos.
         if !self.stop {
-            let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+            let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
             if sh.outcome.is_none() { sh.outcome = Some(res); }
         }
     }
@@ -450,7 +450,7 @@ impl<'a> Vm<'a> {
     /// entrar → nunca se espera; el camino es idéntico al viejo `schedule_next`.
     fn poll_next(&mut self, line: usize, col: usize) -> Result<bool, RuntimeError> {
         loop {
-            let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+            let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
             if sh.outcome.is_some() {
                 return Ok(false); // otro worker apagó el programa
             }
@@ -475,9 +475,9 @@ impl<'a> Vm<'a> {
                     continue; // io_wait dejó fibras en `ready`; reintenta el pop
                 }
                 let msg = if !sh.parked.is_empty() {
-                    "deadlock: todas las fibras están bloqueadas esperando un canal o one tarea"
+                    "deadlock: all fibers are blocked waiting on a channel or a task"
                 } else {
-                    "no hay fibras ejecutables"
+                    "no runnable fibers"
                 };
                 let e = runtime_error(line, col, msg);
                 sh.outcome = Some(Err(e.clone())); // apaga a los demás workers
@@ -513,7 +513,7 @@ impl<'a> Vm<'a> {
                     let func = self.cur.frames[fi].function;
                     let ip = self.cur.frames[fi].ip;
                     let (l, c) = program.functions[func].chunk.lines.get(ip).copied().unwrap_or((0, 0));
-                    return Err(runtime_error(l, c, "límite de memoria agotado (tope de heap)"));
+                    return Err(runtime_error(l, c, "memory limit exhausted (heap cap)"));
                 }
             }
 
@@ -525,7 +525,7 @@ impl<'a> Vm<'a> {
             // posición es la de la instrucción en curso (para el diagnóstico).
             if self.fuel == 0 {
                 let (l, c) = program.functions[func].chunk.lines.get(ip).copied().unwrap_or((0, 0));
-                return Err(runtime_error(l, c, "límite de instrucciones agotado (fuel)"));
+                return Err(runtime_error(l, c, "instruction limit exhausted (fuel)"));
             }
             self.fuel -= 1;
 
@@ -576,17 +576,17 @@ impl<'a> Vm<'a> {
                         // -i64::MIN desborda (M34, SPEC §8): error, como la aritmética binaria.
                         HeapValue::Int(n) => HeapValue::Int(n.checked_neg().ok_or_else(|| {
                             let (l, c) = pos!();
-                            runtime_error(l, c, "desbordamiento aritmético en int")
+                            runtime_error(l, c, "arithmetic overflow on int")
                         })?),
                         HeapValue::Float(x) => HeapValue::Float(-x),
-                        _ => unreachable!("el checker garantiza un número"),
+                        _ => unreachable!("the checker guarantees a number"),
                     });
                 }
                 OpCode::Not => {
                     let v = self.pop();
                     self.push(match v {
                         HeapValue::Bool(b) => HeapValue::Bool(!b),
-                        _ => unreachable!("el checker garantiza un bool"),
+                        _ => unreachable!("the checker guarantees a bool"),
                     });
                 }
                 OpCode::BitNot => {
@@ -594,7 +594,7 @@ impl<'a> Vm<'a> {
                     self.push(match v {
                         HeapValue::Int(n) => HeapValue::Int(!n), // M19.3a: complemento a uno
                         HeapValue::UInt(n, w) => uint_heap(!n, w), // M28.3: NOT sobre uint (enmascarado)
-                        _ => unreachable!("el checker garantiza un int"),
+                        _ => unreachable!("the checker guarantees an int"),
                     });
                 }
 
@@ -626,7 +626,7 @@ impl<'a> Vm<'a> {
                         let (a, b) = (*a, *b);
                         let ovf = || {
                             let (l, c) = pos!();
-                            runtime_error(l, c, "desbordamiento aritmético en int")
+                            runtime_error(l, c, "arithmetic overflow on int")
                         };
                         let r = match bin {
                             OpCode::Add => HeapValue::Int(a.checked_add(b).ok_or_else(ovf)?),
@@ -634,13 +634,13 @@ impl<'a> Vm<'a> {
                             OpCode::Mul => HeapValue::Int(a.checked_mul(b).ok_or_else(ovf)?),
                             OpCode::Div => {
                                 if b == 0 {
-                                    return Err(runtime_error(pos!().0, pos!().1, "división entera por cero"));
+                                    return Err(runtime_error(pos!().0, pos!().1, "integer division by zero"));
                                 }
                                 HeapValue::Int(a.checked_div(b).ok_or_else(ovf)?)
                             }
                             OpCode::Rem => {
                                 if b == 0 {
-                                    return Err(runtime_error(pos!().0, pos!().1, "módulo por cero"));
+                                    return Err(runtime_error(pos!().0, pos!().1, "modulo by zero"));
                                 }
                                 HeapValue::Int(a.checked_rem(b).ok_or_else(ovf)?)
                             }
@@ -656,7 +656,7 @@ impl<'a> Vm<'a> {
                             OpCode::BitXor => HeapValue::Int(a ^ b),
                             OpCode::Shl => HeapValue::Int(a.wrapping_shl(b as u32)),
                             OpCode::Shr => HeapValue::Int(a.wrapping_shr(b as u32)),
-                            _ => unreachable!("el grupo `bin` solo trae operators binarios"),
+                            _ => unreachable!("the `bin` group only holds binary operators"),
                         };
                         self.push(r);
                     }
@@ -731,7 +731,7 @@ impl<'a> Vm<'a> {
                         };
                         match self.apply_binary(legacy, left, right, pos!().0, pos!().1)? {
                             HeapValue::Bool(b) => b,
-                            _ => unreachable!("one comparación produce bool"),
+                            _ => unreachable!("a comparison produces bool"),
                         }
                     };
                     if !res {
@@ -745,7 +745,7 @@ impl<'a> Vm<'a> {
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         HeapValue::Int(a.checked_add(*b).ok_or_else(|| {
                             let (l, c2) = pos!();
-                            runtime_error(l, c2, "desbordamiento aritmético en int")
+                            runtime_error(l, c2, "arithmetic overflow on int")
                         })?)
                     } else {
                         self.apply_binary(&OpCode::Add, left, right, pos!().0, pos!().1)?
@@ -758,7 +758,7 @@ impl<'a> Vm<'a> {
                     let r = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
                         HeapValue::Int(a.checked_sub(*b).ok_or_else(|| {
                             let (l, c2) = pos!();
-                            runtime_error(l, c2, "desbordamiento aritmético en int")
+                            runtime_error(l, c2, "arithmetic overflow on int")
                         })?)
                     } else {
                         self.apply_binary(&OpCode::Sub, left, right, pos!().0, pos!().1)?
@@ -814,7 +814,7 @@ impl<'a> Vm<'a> {
                             HeapValue::Bytes(b) => crate::ffi::FfiVal::Bytes(b.as_slice()),
                             HeapValue::Ptr(p) => crate::ffi::FfiVal::Int(*p), // M41.4b
                             _ => return Err(runtime_error(pos!().0, pos!().1,
-                                "argumento no marshalable en la frontera FFI")),
+                                "non-marshalable argument at the FFI boundary")),
                         });
                     }
                     let r = crate::ffi::call(desc, &cargs)
@@ -834,7 +834,7 @@ impl<'a> Vm<'a> {
                                         match String::from_utf8(bytes) {
                                             Ok(s) => HeapValue::Str(s),
                                             Err(_) => return Err(runtime_error(pos!().0, pos!().1,
-                                                "la función C devolvió bytes what no son UTF-8 válido (declara Option<bytes> para recibirlos crudos)")),
+                                                "the C function returned bytes that are not valid UTF-8 (declare Option<bytes> to receive them raw)")),
                                         }
                                     } else {
                                         HeapValue::Bytes(bytes)
@@ -843,7 +843,7 @@ impl<'a> Vm<'a> {
                                 }
                             };
                             let (eid, tag) = option_variant(&program.enums, variant).ok_or_else(||
-                                runtime_error(pos!().0, pos!().1, "el enum Option del prelude no está disponible para el return_val FFI"))?;
+                                runtime_error(pos!().0, pos!().1, "the prelude Option enum is not available for the FFI return_val"))?;
                             let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: eid, tag, payload }));
                             HeapValue::Obj(h)
                         }
@@ -855,7 +855,7 @@ impl<'a> Vm<'a> {
                                 Some(p) => ("Some", vec![HeapValue::Ptr(p)]),
                             };
                             let (eid, tag) = option_variant(&program.enums, variant).ok_or_else(||
-                                runtime_error(pos!().0, pos!().1, "el enum Option del prelude no está disponible para el return_val FFI"))?;
+                                runtime_error(pos!().0, pos!().1, "the prelude Option enum is not available for the FFI return_val"))?;
                             let h = self.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: eid, tag, payload }));
                             HeapValue::Obj(h)
                         }
@@ -898,7 +898,7 @@ impl<'a> Vm<'a> {
                                     Some(c) => c,
                                     None => {
                                         bounds_check(i, s.chars().count(), pos!().0, pos!().1)?;
-                                        unreachable!("nth falló ⇒ índice outside de range")
+                                        unreachable!("nth failed ⇒ index out of range")
                                     }
                                 }
                             };
@@ -909,7 +909,7 @@ impl<'a> Vm<'a> {
                             let idx = bounds_check(i, b.len(), pos!().0, pos!().1)?;
                             self.push(HeapValue::Int(b[idx] as i64));
                         }
-                        _ => unreachable!("el checker garantiza un array, string o bytes"),
+                        _ => unreachable!("the checker guarantees an array, string or bytes"),
                     }
                 }
                 OpCode::SetIndex => {
@@ -931,9 +931,9 @@ impl<'a> Vm<'a> {
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Array(v) => v.len() as i64,
                             Obj::Map(m) => m.len() as i64,
-                            _ => unreachable!("el checker garantiza un array o Map"),
+                            _ => unreachable!("the checker guarantees an array or Map"),
                         },
-                        _ => unreachable!("el checker garantiza un array, string, Map o bytes"),
+                        _ => unreachable!("the checker guarantees an array, string, Map or bytes"),
                     };
                     self.push(HeapValue::Int(len));
                 }
@@ -949,7 +949,7 @@ impl<'a> Vm<'a> {
                                 Some(c) => HeapValue::Char(c),
                                 None => {
                                     return Err(runtime_error(pos!().0, pos!().1,
-                                        &format!("{} no es un carácter Unicode válido para 'as char'", n)));
+                                        &format!("{} is not a valid Unicode character for 'as char'", n)));
                                 }
                             }
                         }
@@ -975,7 +975,7 @@ impl<'a> Vm<'a> {
                     let h = self.pop_obj();
                     match self.cur.heap.get_mut(h) {
                         Obj::Map(m) => { m.insert(k, v); }
-                        _ => unreachable!("el checker garantiza un Map"),
+                        _ => unreachable!("the checker guarantees a Map"),
                     }
                     self.push(HeapValue::Unit);
                 }
@@ -984,7 +984,7 @@ impl<'a> Vm<'a> {
                     let h = self.pop_obj();
                     let present = match self.cur.heap.get(h) {
                         Obj::Map(m) => m.contains_key(&k),
-                        _ => unreachable!("el checker garantiza un Map"),
+                        _ => unreachable!("the checker guarantees a Map"),
                     };
                     self.push(HeapValue::Bool(present));
                 }
@@ -997,7 +997,7 @@ impl<'a> Vm<'a> {
                             Some(v) => vec![v.clone()],
                             None => vec![],
                         },
-                        _ => unreachable!("el checker garantiza un Map"),
+                        _ => unreachable!("the checker guarantees a Map"),
                     };
                     let arr = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(arr));
@@ -1011,7 +1011,7 @@ impl<'a> Vm<'a> {
                             Some(v) => vec![v],
                             None => vec![],
                         },
-                        _ => unreachable!("el checker garantiza un Map"),
+                        _ => unreachable!("the checker guarantees a Map"),
                     };
                     let arr = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(arr));
@@ -1021,7 +1021,7 @@ impl<'a> Vm<'a> {
                     let h = self.pop_obj();
                     let mut ks: Vec<MapKey> = match self.cur.heap.get(h) {
                         Obj::Map(m) => m.keys().cloned().collect(),
-                        _ => unreachable!("el checker garantiza un Map"),
+                        _ => unreachable!("the checker guarantees a Map"),
                     };
                     ks.sort();
                     let elems: Vec<HeapValue> = ks.iter().map(key_to_heap).collect();
@@ -1037,7 +1037,7 @@ impl<'a> Vm<'a> {
                             pairs.sort_by(|a, b| a.0.cmp(b.0));
                             pairs.iter().map(|(_, v)| (*v).clone()).collect()
                         }
-                        _ => unreachable!("el checker garantiza un Map"),
+                        _ => unreachable!("the checker guarantees a Map"),
                     };
                     let arr = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(arr));
@@ -1057,9 +1057,9 @@ impl<'a> Vm<'a> {
                         HeapValue::Function(i) => (i, Vec::new()),
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Closure(c) => (c.index, c.upvalues.clone()),
-                            _ => unreachable!("el checker garantiza one función"),
+                            _ => unreachable!("the checker guarantees a function"),
                         },
-                        _ => unreachable!("el checker garantiza one función"),
+                        _ => unreachable!("the checker guarantees a function"),
                     };
                     // M38.1b-2: la fibra hija tiene su PROPIO heap; las capturas (upvalues) del closure
                     // viven en el heap del spawner → se transfieren al heap nuevo (aislamiento por actores).
@@ -1074,7 +1074,7 @@ impl<'a> Vm<'a> {
                     // M38.3b paso 3: alojar la Task y encolar la fibra hija en UN solo lock (bajo M:N real,
                     // dos `self.sched()` —len y push— tendrían un TOCTOU en el id de la tarea).
                     let task = {
-                        let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                        let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                         let task = sh.tasks.len();
                         sh.tasks.push(VmTask { state: TaskState::Pending, heap: Heap::new() });
                         sh.ready.push_back(Fiber {
@@ -1092,7 +1092,7 @@ impl<'a> Vm<'a> {
                     // M88.1: el canal de señales del SO — SINGLETON del proceso (la primera
                     // llamada crea el canal + instala el self-pipe y los handlers; las demás
                     // devuelven el mismo canal). El fd entra al poller vía io_wait.
-                    let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                     if sh.signal_chan.is_none() {
                         let fd = match crate::builtins::signals_install() {
                             Ok(fd) => fd,
@@ -1103,7 +1103,7 @@ impl<'a> Vm<'a> {
                         sh.signal_chan = Some(id);
                         sh.signal_fd = fd;
                     }
-                    let id = sh.signal_chan.expect("recién creado");
+                    let id = sh.signal_chan.expect("just created");
                     drop(sh);
                     self.push(HeapValue::Channel(id));
                 }
@@ -1111,7 +1111,7 @@ impl<'a> Vm<'a> {
                     // channel() sin argumentos → canal NO acotado (cap = None). M38.1b: en el host.
                     // M38.3b paso 3: id + push en UN solo lock (TOCTOU bajo M:N real).
                     let id = {
-                        let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                        let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                         let id = sh.channels.len();
                         sh.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: None, heap: Heap::new() });
                         id
@@ -1122,13 +1122,13 @@ impl<'a> Vm<'a> {
                     // channel(n) → canal acotado a la capacidad n ≥ 0 (n = 0 rendezvous), M12.2.
                     let n = match self.pop() {
                         HeapValue::Int(n) => n,
-                        _ => unreachable!("el checker garantiza un int"),
+                        _ => unreachable!("the checker guarantees an int"),
                     };
                     if n < 0 {
-                        return Err(runtime_error(pos!().0, pos!().1, "la capacidad de un canal no can ser negativa"));
+                        return Err(runtime_error(pos!().0, pos!().1, "a channel capacity cannot be negative"));
                     }
                     let id = {
-                        let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                        let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                         let id = sh.channels.len();
                         sh.channels.push(VmChannel { queue: VecDeque::new(), closed: false, cap: Some(n as usize), heap: Heap::new() });
                         id
@@ -1142,11 +1142,11 @@ impl<'a> Vm<'a> {
                     // DIRECTAMENTE (no vía `self.sched()`, que tomaría `&self` entero) para que el guard
                     // preste solo el campo `self.shared`; así `self.cur.*` (campo disjunto) sigue accesible
                     // bajo el guard sostenido.
-                    let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                     let c = &sh.channels[h];
                     let (closed, len, cap) = (c.closed, c.queue.len(), c.cap);
                     if closed {
-                        return Err(runtime_error(pos!().0, pos!().1, "send about un canal closed"));
+                        return Err(runtime_error(pos!().0, pos!().1, "send on a closed channel"));
                     }
                     // (1) ¿Hay un receptor bloqueado en este canal? Entrégaselo directo (rendezvous) y
                     // despiértalo (el primero, FIFO → determinista).
@@ -1183,7 +1183,7 @@ impl<'a> Vm<'a> {
                 OpCode::ChanRecv => {
                     let h = self.pop_channel();
                     // M38.3b paso 2: lock-once (ver ChanSend).
-                    let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                     // (1) ¿Valor en la cola? Sácalo; al liberar un hueco, si hay un emisor bloqueado en este
                     // canal, su valor entra a la cola (ya hay sitio) y se le despierta.
                     let from_queue = sh.channels[h].queue.pop_front();
@@ -1240,7 +1240,7 @@ impl<'a> Vm<'a> {
                     // Pending y luego aparcar en dos locks separados perdería el wake si la tarea completa en
                     // medio → cuelgue).
                     let t = self.pop_task();
-                    let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                     let outcome = match &sh.tasks[t].state {
                         TaskState::Done(v) => Some(Ok(v.clone())),
                         TaskState::Failed(msg) => Some(Err(msg.clone())),
@@ -1276,7 +1276,7 @@ impl<'a> Vm<'a> {
                     // del prelude (que reusa `join` para el valor, ya sin bloquear). Mismo esquema de
                     // guard único + park que TaskJoin.
                     let t = self.pop_task();
-                    let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                     let outcome = match &sh.tasks[t].state {
                         TaskState::Done(_) => Some(None),
                         TaskState::Failed(msg) => Some(Some(msg.clone())),
@@ -1314,8 +1314,8 @@ impl<'a> Vm<'a> {
                     // M38.3b paso 3: UN solo guard a través de comprobar-fallo/pendiente + aparcar (como
                     // TaskJoin: evita perder el wake si una hija completa entre el chequeo y el park).
                     let children: Vec<usize> =
-                        self.cur.scopes.last().expect("ScopeEnd sin ScopeBegin").children.clone();
-                    let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                        self.cur.scopes.last().expect("ScopeEnd without ScopeBegin").children.clone();
+                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                     // (1) ¿Alguna hija FALLÓ? Cancela a las hermanas que sigan pendientes y propaga el fallo
                     // ORIGINAL de inmediato, sin esperar a las demás (M12.5: cancelación de hermanas).
                     let failure = children.iter().find_map(|&c| match &sh.tasks[c].state {
@@ -1356,14 +1356,14 @@ impl<'a> Vm<'a> {
                             HeapValue::Channel(id) => Some(*id),
                             _ => None,
                         }).collect(),
-                        _ => unreachable!("el checker garantiza un array de canales"),
+                        _ => unreachable!("the checker guarantees an array of channels"),
                     };
                     // M38.3b paso 3: un ÚNICO guard sostenido a través del escaneo Y el park. Es reentrante-
                     // seguro (un solo lock, sin re-entrar `self.sched()`) y —clave bajo M:N real— atómico:
                     // escanear "ninguno listo" y aparcar deben ser indivisibles, o un canal que se vuelve
                     // listo entre medias dispararía `wake_select_waiters` antes de que estemos aparcados →
                     // wake perdido → cuelgue.
-                    let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                     let mut ready_idx = None;
                     for (i, &c) in chans.iter().enumerate() {
                         let ch = &sh.channels[c];
@@ -1405,14 +1405,14 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::Trim => match self.pop() {
                     HeapValue::Str(s) => self.push(HeapValue::Str(s.trim().to_string())),
-                    _ => unreachable!("el checker garantiza un string"),
+                    _ => unreachable!("the checker guarantees a string"),
                 },
                 OpCode::Split => {
                     // El separador está encima del string (orden de los argumentos).
                     let sep = self.pop();
                     let s = self.pop();
                     let (HeapValue::Str(s), HeapValue::Str(sep)) = (s, sep) else {
-                        unreachable!("el checker garantiza dos strings");
+                        unreachable!("the checker guarantees two strings");
                     };
                     let parts: Vec<HeapValue> =
                         s.split(sep.as_str()).map(|p| HeapValue::Str(p.to_string())).collect();
@@ -1423,7 +1423,7 @@ impl<'a> Vm<'a> {
                 OpCode::Chars => {
                     let s = match self.pop() {
                         HeapValue::Str(s) => s,
-                        _ => unreachable!("el checker garantiza un string"),
+                        _ => unreachable!("the checker guarantees a string"),
                     };
                     let cs: Vec<HeapValue> = s.chars().map(HeapValue::Char).collect();
                     // El arreglo es un objeto del heap; los Char son inline, sin handles que rootear.
@@ -1434,14 +1434,14 @@ impl<'a> Vm<'a> {
                 OpCode::CharCode => {
                     let c = match self.pop() {
                         HeapValue::Char(c) => c,
-                        _ => unreachable!("el checker garantiza un char"),
+                        _ => unreachable!("the checker guarantees a char"),
                     };
                     self.push(HeapValue::Int(c as i64));
                 }
                 // M16.1b: los octetos UTF-8 del string → bytes (inline, no objeto del heap).
                 OpCode::ToBytes => match self.pop() {
                     HeapValue::Str(s) => self.push(HeapValue::Bytes(s.into_bytes())),
-                    _ => unreachable!("el checker garantiza un string"),
+                    _ => unreachable!("the checker guarantees a string"),
                 },
                 // M89.2: guardia — la cripto de ring en un binario sin la feature 'net-tls'
                 // ABORTA con un error claro (nunca un hash vacío ni una firma que falla en
@@ -1460,25 +1460,25 @@ impl<'a> Vm<'a> {
                 // M68.2: aleatoriedad criptográfica (CSPRNG del SO).
                 OpCode::CryptoRandomBytes => match self.pop() {
                     HeapValue::Int(n) => self.push(HeapValue::Bytes(crate::builtins::crypto_random_bytes(n).into())),
-                    _ => unreachable!("el checker garantiza un int"),
+                    _ => unreachable!("the checker guarantees an int"),
                 },
                 OpCode::Sha256 => match self.pop() {
                     HeapValue::Bytes(b) => self.push(HeapValue::Bytes(crate::builtins::sha256(&b))),
-                    _ => unreachable!("el checker garantiza bytes"),
+                    _ => unreachable!("the checker guarantees bytes"),
                 },
                 OpCode::Sha512 => match self.pop() {
                     HeapValue::Bytes(b) => self.push(HeapValue::Bytes(crate::builtins::sha512(&b))),
-                    _ => unreachable!("el checker garantiza bytes"),
+                    _ => unreachable!("the checker guarantees bytes"),
                 },
                 OpCode::Sha1 => match self.pop() {
                     HeapValue::Bytes(b) => self.push(HeapValue::Bytes(crate::builtins::sha1(&b))),
-                    _ => unreachable!("el checker garantiza bytes"),
+                    _ => unreachable!("the checker guarantees bytes"),
                 },
                 OpCode::HmacSha256 => {
                     let m = self.pop();
                     let k = self.pop();
                     let (HeapValue::Bytes(k), HeapValue::Bytes(m)) = (k, m) else {
-                        unreachable!("el checker garantiza bytes, bytes");
+                        unreachable!("the checker guarantees bytes, bytes");
                     };
                     self.push(HeapValue::Bytes(crate::builtins::hmac_sha256(&k, &m)));
                 }
@@ -1486,7 +1486,7 @@ impl<'a> Vm<'a> {
                 OpCode::Ed25519PublicKey => {
                     let seed = match self.pop() {
                         HeapValue::Bytes(b) => b,
-                        _ => unreachable!("el checker garantiza bytes"),
+                        _ => unreachable!("the checker guarantees bytes"),
                     };
                     let elems = match crate::builtins::ed25519_public_key(&seed) {
                         Some(pk) => vec![HeapValue::Bytes(pk)],
@@ -1499,7 +1499,7 @@ impl<'a> Vm<'a> {
                     let msg = self.pop();
                     let seed = self.pop();
                     let (HeapValue::Bytes(seed), HeapValue::Bytes(msg)) = (seed, msg) else {
-                        unreachable!("el checker garantiza bytes, bytes");
+                        unreachable!("the checker guarantees bytes, bytes");
                     };
                     let elems = match crate::builtins::ed25519_sign(&seed, &msg) {
                         Some(sig) => vec![HeapValue::Bytes(sig)],
@@ -1513,7 +1513,7 @@ impl<'a> Vm<'a> {
                     let msg = self.pop();
                     let pk = self.pop();
                     let (HeapValue::Bytes(pk), HeapValue::Bytes(msg), HeapValue::Bytes(sig)) = (pk, msg, sig) else {
-                        unreachable!("el checker garantiza bytes, bytes, bytes");
+                        unreachable!("the checker guarantees bytes, bytes, bytes");
                     };
                     self.push(HeapValue::Bool(crate::builtins::ed25519_verify(&pk, &msg, &sig)));
                 }
@@ -1526,7 +1526,7 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Bytes(key), HeapValue::Bytes(nonce), HeapValue::Bytes(aad), HeapValue::Bytes(data)) =
                         (key, nonce, aad, data)
                     else {
-                        unreachable!("el checker garantiza cuatro bytes");
+                        unreachable!("the checker guarantees four bytes");
                     };
                     let res = if matches!(op, OpCode::ChaChaPolySeal) {
                         crate::builtins::chacha20poly1305_seal(&key, &nonce, &aad, &data)
@@ -1544,7 +1544,7 @@ impl<'a> Vm<'a> {
                 OpCode::FromUtf8 => {
                     let b = match self.pop() {
                         HeapValue::Bytes(b) => b,
-                        _ => unreachable!("el checker garantiza bytes"),
+                        _ => unreachable!("the checker guarantees bytes"),
                     };
                     let elems = match String::from_utf8(b) {
                         Ok(s) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(s)],
@@ -1559,7 +1559,7 @@ impl<'a> Vm<'a> {
                 OpCode::ReadFileBytes => {
                     let path = match self.pop() {
                         HeapValue::Str(s) => s,
-                        _ => unreachable!("el checker garantiza un string"),
+                        _ => unreachable!("the checker guarantees a string"),
                     };
                     let elems = match crate::builtins::read_file_bytes(&path) {
                         Ok(data) => vec![HeapValue::Bytes(b"ok".to_vec()), HeapValue::Bytes(data)],
@@ -1572,7 +1572,7 @@ impl<'a> Vm<'a> {
                     let data = self.pop();
                     let path = self.pop();
                     let (HeapValue::Str(path), HeapValue::Bytes(data)) = (path, data) else {
-                        unreachable!("el checker garantiza string, bytes");
+                        unreachable!("the checker guarantees string, bytes");
                     };
                     let elems = match crate::builtins::write_file_bytes(&path, &data) {
                         Ok(()) => vec![HeapValue::Str("ok".to_string())],
@@ -1585,7 +1585,7 @@ impl<'a> Vm<'a> {
                 OpCode::SocketReadBytes => {
                     let handle = match self.pop() {
                         HeapValue::Int(h) => h,
-                        _ => unreachable!("el checker garantiza un int"),
+                        _ => unreachable!("the checker guarantees an int"),
                     };
                     // M19.4b: una conexión TLS se lee con su bomba no bloqueante (conduce el handshake/
                     // descifrado); si bloquearía leyendo del peer, se aparca la fibra en el fd subyacente,
@@ -1608,7 +1608,7 @@ impl<'a> Vm<'a> {
                                 let fiber = Self::take_current_fiber(&mut self.cur);
                                 let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                                 {
-                                    let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                                    let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                                     sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle, deadline: crate::builtins::read_deadline(handle) });
                                     sh.running -= 1; // aparcada por E/S → worker ocioso
                                 }
@@ -1636,7 +1636,7 @@ impl<'a> Vm<'a> {
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
-                                let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                                let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                                 sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle, deadline: crate::builtins::read_deadline(handle) });
                                 sh.running -= 1; // aparcada por E/S → worker ocioso
                             }
@@ -1649,7 +1649,7 @@ impl<'a> Vm<'a> {
                     let data = self.pop();
                     let handle = self.pop();
                     let (HeapValue::Int(handle), HeapValue::Bytes(data)) = (handle, data) else {
-                        unreachable!("el checker garantiza int, bytes");
+                        unreachable!("the checker guarantees int, bytes");
                     };
                     if crate::builtins::is_tls_handle(handle) {
                         // M19.4b: las escrituras TLS cifran por su propia bomba (busy-spin en el raro bloqueo).
@@ -1691,7 +1691,7 @@ impl<'a> Vm<'a> {
                         (HeapValue::Obj(h), _) => {
                             self.as_array(*h).iter().any(|e| values_equal(&self.cur.heap, e, &x))
                         }
-                        _ => unreachable!("el checker garantiza string+string o array+elemento"),
+                        _ => unreachable!("the checker guarantees string+string or array+element"),
                     };
                     self.push(HeapValue::Bool(res));
                 }
@@ -1701,7 +1701,7 @@ impl<'a> Vm<'a> {
                     let de = self.pop();
                     let s = self.pop();
                     let (HeapValue::Str(s), HeapValue::Str(de), HeapValue::Str(a)) = (s, de, a) else {
-                        unreachable!("el checker garantiza tres strings");
+                        unreachable!("the checker guarantees three strings");
                     };
                     self.push(HeapValue::Str(s.replace(de.as_str(), a.as_str())));
                 }
@@ -1711,7 +1711,7 @@ impl<'a> Vm<'a> {
                     let p = self.pop();
                     let s = self.pop();
                     let (HeapValue::Str(s), HeapValue::Str(p)) = (s, p) else {
-                        unreachable!("el checker garantiza dos strings");
+                        unreachable!("the checker guarantees two strings");
                     };
                     self.push(HeapValue::Bool(s.starts_with(p.as_str())));
                 }
@@ -1719,17 +1719,17 @@ impl<'a> Vm<'a> {
                     let p = self.pop();
                     let s = self.pop();
                     let (HeapValue::Str(s), HeapValue::Str(p)) = (s, p) else {
-                        unreachable!("el checker garantiza dos strings");
+                        unreachable!("the checker guarantees two strings");
                     };
                     self.push(HeapValue::Bool(s.ends_with(p.as_str())));
                 }
                 OpCode::ToUpper => match self.pop() {
                     HeapValue::Str(s) => self.push(HeapValue::Str(s.to_uppercase())),
-                    _ => unreachable!("el checker garantiza un string"),
+                    _ => unreachable!("the checker guarantees a string"),
                 },
                 OpCode::ToLower => match self.pop() {
                     HeapValue::Str(s) => self.push(HeapValue::Str(s.to_lowercase())),
-                    _ => unreachable!("el checker garantiza un string"),
+                    _ => unreachable!("the checker guarantees a string"),
                 },
                 OpCode::Substring => {
                     // Orden en la pila: s, i, j → se sacan en inverso.
@@ -1737,7 +1737,7 @@ impl<'a> Vm<'a> {
                     let i = self.pop();
                     let s = self.pop();
                     let (HeapValue::Str(s), HeapValue::Int(i), HeapValue::Int(j)) = (s, i, j) else {
-                        unreachable!("el checker garantiza string, int, int");
+                        unreachable!("the checker guarantees string, int, int");
                     };
                     self.push(HeapValue::Str(crate::builtins::substring_chars(&s, i, j)));
                 }
@@ -1747,18 +1747,18 @@ impl<'a> Vm<'a> {
                     let i = self.pop();
                     let b = self.pop();
                     let (HeapValue::Bytes(b), HeapValue::Int(i), HeapValue::Int(j)) = (b, i, j) else {
-                        unreachable!("el checker garantiza bytes, int, int");
+                        unreachable!("the checker guarantees bytes, int, int");
                     };
                     self.push(HeapValue::Bytes(crate::builtins::sub_bytes_octets(&b, i, j)));
                 }
                 // M19.3c: construye bytes a partir de un [int] (objeto del heap), truncando a octeto.
                 OpCode::BytesOf => {
                     let HeapValue::Obj(h) = self.pop() else {
-                        unreachable!("el checker garantiza un array");
+                        unreachable!("the checker guarantees an array");
                     };
                     let octets: Vec<u8> = self.as_array(h).iter().map(|v| match v {
                         HeapValue::Int(n) => (*n & 0xff) as u8,
-                        _ => unreachable!("el checker garantiza [int]"),
+                        _ => unreachable!("the checker guarantees [int]"),
                     }).collect();
                     self.push(HeapValue::Bytes(octets));
                 }
@@ -1766,7 +1766,7 @@ impl<'a> Vm<'a> {
                     let n = self.pop();
                     let s = self.pop();
                     let (HeapValue::Str(s), HeapValue::Int(n)) = (s, n) else {
-                        unreachable!("el checker garantiza string, int");
+                        unreachable!("the checker guarantees string, int");
                     };
                     self.push(HeapValue::Str(crate::builtins::repeat_str(&s, n)));
                 }
@@ -1775,7 +1775,7 @@ impl<'a> Vm<'a> {
                     let sub = self.pop();
                     let s = self.pop();
                     let (HeapValue::Str(s), HeapValue::Str(sub)) = (s, sub) else {
-                        unreachable!("el checker garantiza dos strings");
+                        unreachable!("the checker guarantees two strings");
                     };
                     let elems = match crate::builtins::char_index_of(&s, &sub) {
                         Some(i) => vec![HeapValue::Int(i as i64)],
@@ -1789,11 +1789,11 @@ impl<'a> Vm<'a> {
                     let sep = self.pop();
                     let arr = self.pop();
                     let (HeapValue::Obj(h), HeapValue::Str(sep)) = (arr, sep) else {
-                        unreachable!("el checker garantiza [string], string");
+                        unreachable!("the checker guarantees [string], string");
                     };
                     let parts: Vec<String> = self.as_array(h).iter().map(|v| match v {
                         HeapValue::Str(s) => s.clone(),
-                        _ => unreachable!("el checker garantiza [string]"),
+                        _ => unreachable!("the checker guarantees [string]"),
                     }).collect();
                     self.push(HeapValue::Str(parts.join(sep.as_str())));
                 }
@@ -1829,7 +1829,7 @@ impl<'a> Vm<'a> {
                 OpCode::Panic => {
                     let msg = match self.pop() {
                         HeapValue::Str(s) => s,
-                        _ => unreachable!("el checker garantiza un string"),
+                        _ => unreachable!("the checker guarantees a string"),
                     };
                     return Err(runtime_error(pos!().0, pos!().1, &msg));
                 }
@@ -1845,7 +1845,7 @@ impl<'a> Vm<'a> {
                             Ok(n) => vec![HeapValue::Int(n)],
                             Err(_) => vec![],
                         },
-                        _ => unreachable!("el checker garantiza un string"),
+                        _ => unreachable!("the checker guarantees a string"),
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -1857,7 +1857,7 @@ impl<'a> Vm<'a> {
                             Ok(f) => vec![HeapValue::Float(f)],
                             Err(_) => vec![],
                         },
-                        _ => unreachable!("el checker garantiza un string"),
+                        _ => unreachable!("the checker guarantees a string"),
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -1879,7 +1879,7 @@ impl<'a> Vm<'a> {
                             Ok(v) => vec![HeapValue::Str(v)],
                             Err(_) => vec![],
                         },
-                        _ => unreachable!("el checker garantiza un string"),
+                        _ => unreachable!("the checker guarantees a string"),
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -1900,7 +1900,7 @@ impl<'a> Vm<'a> {
                             Ok(c) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(c)],
                             Err(e) => vec![HeapValue::Str("err".to_string()), HeapValue::Str(e.to_string())],
                         },
-                        _ => unreachable!("el checker garantiza un string"),
+                        _ => unreachable!("the checker guarantees a string"),
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
@@ -1910,7 +1910,7 @@ impl<'a> Vm<'a> {
                     let contents = self.pop();
                     let path = self.pop();
                     let (HeapValue::Str(path), HeapValue::Str(contents)) = (path, contents) else {
-                        unreachable!("el checker garantiza dos strings");
+                        unreachable!("the checker guarantees two strings");
                     };
                     let elems = match std::fs::write(path.as_str(), contents.as_str()) {
                         Ok(()) => vec![HeapValue::Str("ok".to_string())],
@@ -1921,14 +1921,14 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::Exists => match self.pop() {
                     HeapValue::Str(path) => self.push(HeapValue::Bool(std::path::Path::new(path.as_str()).exists())),
-                    _ => unreachable!("el checker garantiza un string"),
+                    _ => unreachable!("the checker guarantees a string"),
                 },
                 OpCode::AppendFile => {
                     // El contenido está encima de la ruta (orden de los argumentos).
                     let contents = self.pop();
                     let path = self.pop();
                     let (HeapValue::Str(path), HeapValue::Str(contents)) = (path, contents) else {
-                        unreachable!("el checker garantiza dos strings");
+                        unreachable!("the checker guarantees two strings");
                     };
                     let elems = match crate::builtins::append_to_file(path.as_str(), contents.as_str()) {
                         Ok(()) => vec![HeapValue::Str("ok".to_string())],
@@ -1940,7 +1940,7 @@ impl<'a> Vm<'a> {
                 OpCode::RemoveFile => {
                     let path = match self.pop() {
                         HeapValue::Str(p) => p,
-                        _ => unreachable!("el checker garantiza un string"),
+                        _ => unreachable!("the checker guarantees a string"),
                     };
                     let elems = match std::fs::remove_file(&path) {
                         Ok(()) => vec![HeapValue::Str("ok".to_string())],
@@ -1956,7 +1956,7 @@ impl<'a> Vm<'a> {
                     for i in (0..op.argc()).rev() {
                         args[i] = match self.pop() {
                             HeapValue::Str(s) => s,
-                            _ => unreachable!("el checker garantiza strings"),
+                            _ => unreachable!("the checker guarantees strings"),
                         };
                     }
                     let elems = crate::builtins::fs_tagged(*op, &args).into_iter().map(HeapValue::Str).collect();
@@ -1967,7 +1967,7 @@ impl<'a> Vm<'a> {
                 OpCode::FsTest(t) => {
                     let path = match self.pop() {
                         HeapValue::Str(p) => p,
-                        _ => unreachable!("el checker garantiza un string"),
+                        _ => unreachable!("the checker guarantees a string"),
                     };
                     self.push(HeapValue::Bool(crate::builtins::fs_test(*t, &path)));
                 }
@@ -1976,7 +1976,7 @@ impl<'a> Vm<'a> {
                     let data = self.pop();
                     let path = self.pop();
                     let (HeapValue::Str(path), HeapValue::Bytes(data)) = (path, data) else {
-                        unreachable!("el checker garantiza string, bytes");
+                        unreachable!("the checker guarantees string, bytes");
                     };
                     let elems = match crate::builtins::append_bytes_to_file(&path, &data) {
                         Ok(()) => vec![HeapValue::Str("ok".to_string())],
@@ -1988,7 +1988,7 @@ impl<'a> Vm<'a> {
                 OpCode::ListDir => {
                     let path = match self.pop() {
                         HeapValue::Str(p) => p,
-                        _ => unreachable!("el checker garantiza un string"),
+                        _ => unreachable!("the checker guarantees a string"),
                     };
                     let elems = match crate::builtins::list_dir(&path) {
                         Ok(names) => {
@@ -2004,7 +2004,7 @@ impl<'a> Vm<'a> {
 
                 // Diferido JSON-1: code point → [char] de 0/1 (vacío si inválido).
                 OpCode::CharFromCode => {
-                    let HeapValue::Int(n) = self.pop() else { unreachable!("el checker garantiza un int") };
+                    let HeapValue::Int(n) = self.pop() else { unreachable!("the checker guarantees an int") };
                     // El guard de rango evita que un int enorme haga wrap al castear a u32.
                     let elems = if (0..=0x10FFFF).contains(&n) {
                         char::from_u32(n as u32).map(|c| vec![HeapValue::Char(c)]).unwrap_or_default()
@@ -2017,11 +2017,11 @@ impl<'a> Vm<'a> {
 
                 // --- Bits de float (M54.1): totales, sin heap. ---
                 OpCode::FloatBits => {
-                    let HeapValue::Float(f) = self.pop() else { unreachable!("el checker garantiza un float") };
+                    let HeapValue::Float(f) = self.pop() else { unreachable!("the checker guarantees a float") };
                     self.push(HeapValue::Int(f.to_bits() as i64));
                 }
                 OpCode::FloatFromBits => {
-                    let HeapValue::Int(n) = self.pop() else { unreachable!("el checker garantiza un int") };
+                    let HeapValue::Int(n) = self.pop() else { unreachable!("the checker guarantees an int") };
                     self.push(HeapValue::Float(f64::from_bits(n as u64)));
                 }
 
@@ -2029,7 +2029,7 @@ impl<'a> Vm<'a> {
                 OpCode::SqliteOpen => {
                     let path = self.pop();
                     let HeapValue::Str(path) = path else {
-                        unreachable!("el checker garantiza un string");
+                        unreachable!("the checker guarantees a string");
                     };
                     let elems = match crate::builtins::sqlite_open(&path) {
                         Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
@@ -2044,11 +2044,11 @@ impl<'a> Vm<'a> {
                     let sql = self.pop();
                     let handle = self.pop();
                     let (HeapValue::Int(handle), HeapValue::Str(sql), HeapValue::Obj(ph)) = (handle, sql, ps) else {
-                        unreachable!("el checker garantiza int, string, [string]");
+                        unreachable!("the checker guarantees int, string, [string]");
                     };
                     let params: Vec<String> = self.as_array(ph).iter().map(|v| match v {
                         HeapValue::Str(s) => s.clone(),
-                        _ => unreachable!("el checker garantiza [string]"),
+                        _ => unreachable!("the checker guarantees [string]"),
                     }).collect();
                     let elems = if matches!(instr, OpCode::SqliteExec) {
                         match crate::builtins::sqlite_exec(handle, &sql, &params) {
@@ -2074,7 +2074,7 @@ impl<'a> Vm<'a> {
                     let mode = self.pop();
                     let path = self.pop();
                     let (HeapValue::Str(path), HeapValue::Str(mode)) = (path, mode) else {
-                        unreachable!("el checker garantiza dos strings");
+                        unreachable!("the checker guarantees two strings");
                     };
                     let elems = match crate::builtins::open_file(&path, &mode) {
                         Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
@@ -2086,7 +2086,7 @@ impl<'a> Vm<'a> {
                 OpCode::ReadLineHandle => {
                     let handle = match self.pop() {
                         HeapValue::Int(h) => h,
-                        _ => unreachable!("el checker garantiza un int"),
+                        _ => unreachable!("the checker guarantees an int"),
                     };
                     let elems = crate::builtins::read_line_handle(handle).map(|l| vec![HeapValue::Str(l)]).unwrap_or_default();
                     let h = self.cur.heap.allocate(Obj::Array(elems));
@@ -2096,7 +2096,7 @@ impl<'a> Vm<'a> {
                     let s = self.pop();
                     let handle = self.pop();
                     let (HeapValue::Int(handle), HeapValue::Str(s)) = (handle, s) else {
-                        unreachable!("el checker garantiza int, string");
+                        unreachable!("the checker guarantees int, string");
                     };
                     let elems = match crate::builtins::write_handle(handle, &s) {
                         Ok(_) => vec![HeapValue::Str("ok".to_string())],
@@ -2110,7 +2110,7 @@ impl<'a> Vm<'a> {
                     let port = self.pop();
                     let host = self.pop();
                     let (HeapValue::Str(host), HeapValue::Int(port)) = (host, port) else {
-                        unreachable!("el checker garantiza string, int");
+                        unreachable!("the checker guarantees string, int");
                     };
                     let elems = match crate::builtins::tcp_connect(&host, port) {
                         Ok(h) => {
@@ -2128,7 +2128,7 @@ impl<'a> Vm<'a> {
                     let port = self.pop();
                     let host = self.pop();
                     let (HeapValue::Str(host), HeapValue::Int(port)) = (host, port) else {
-                        unreachable!("el checker garantiza string, int");
+                        unreachable!("the checker guarantees string, int");
                     };
                     let elems = match crate::builtins::udp_bind(&host, port) {
                         Ok(h) => {
@@ -2149,7 +2149,7 @@ impl<'a> Vm<'a> {
                     let (HeapValue::Int(handle), HeapValue::Str(host), HeapValue::Int(port), HeapValue::Bytes(data)) =
                         (handle, host, port, data)
                     else {
-                        unreachable!("el checker garantiza int, string, int, bytes");
+                        unreachable!("the checker guarantees int, string, int, bytes");
                     };
                     let elems = match crate::builtins::udp_send_to(handle, &host, port, &data) {
                         Ok(n) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(n.to_string())],
@@ -2162,7 +2162,7 @@ impl<'a> Vm<'a> {
                 OpCode::UdpRecvFrom => {
                     let handle = match self.pop() {
                         HeapValue::Int(h) => h,
-                        _ => unreachable!("el checker garantiza un int"),
+                        _ => unreachable!("the checker guarantees an int"),
                     };
                     match crate::builtins::udp_recv_from_nb(handle) {
                         Ok(Some((host, port, data))) => {
@@ -2187,7 +2187,7 @@ impl<'a> Vm<'a> {
                             let fiber = Self::take_current_fiber(&mut self.cur);
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
-                                let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                                let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                                 sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle, deadline: crate::builtins::read_deadline(handle) });
                                 sh.running -= 1; // aparcada por E/S → worker ocioso
                             }
@@ -2202,7 +2202,7 @@ impl<'a> Vm<'a> {
                     let port = self.pop();
                     let host = self.pop();
                     let (HeapValue::Str(host), HeapValue::Int(port)) = (host, port) else {
-                        unreachable!("el checker garantiza string, int");
+                        unreachable!("the checker guarantees string, int");
                     };
                     let elems = match crate::builtins::tls_connect(&host, port) {
                         Ok(h) => {
@@ -2220,7 +2220,7 @@ impl<'a> Vm<'a> {
                     let port = self.pop();
                     let host = self.pop();
                     let (HeapValue::Str(host), HeapValue::Int(port)) = (host, port) else {
-                        unreachable!("el checker garantiza string, int");
+                        unreachable!("the checker guarantees string, int");
                     };
                     let elems = match crate::builtins::tls_connect_h2(&host, port) {
                         Ok(h) => {
@@ -2239,7 +2239,7 @@ impl<'a> Vm<'a> {
                     let cert = self.pop();
                     let handle = self.pop();
                     let (HeapValue::Int(handle), HeapValue::Str(cert), HeapValue::Str(key)) = (handle, cert, key) else {
-                        unreachable!("el checker garantiza int, string, string");
+                        unreachable!("the checker guarantees int, string, string");
                     };
                     let elems = match crate::builtins::tls_accept(handle, &cert, &key) {
                         Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
@@ -2254,7 +2254,7 @@ impl<'a> Vm<'a> {
                     let host = self.pop();
                     let handle = self.pop();
                     let (HeapValue::Int(handle), HeapValue::Str(host)) = (handle, host) else {
-                        unreachable!("el checker garantiza int, string");
+                        unreachable!("the checker guarantees int, string");
                     };
                     let elems = match crate::builtins::tls_upgrade(handle, &host) {
                         Ok(h) => vec![HeapValue::Str("ok".to_string()), HeapValue::Str(h.to_string())],
@@ -2266,7 +2266,7 @@ impl<'a> Vm<'a> {
                 OpCode::SocketRead => {
                     let handle = match self.pop() {
                         HeapValue::Int(h) => h,
-                        _ => unreachable!("el checker garantiza un int"),
+                        _ => unreachable!("the checker guarantees an int"),
                     };
                     // M15.5: lectura no bloqueante. WouldBlock (Ok(None)) → aparcar la fibra y reintentar.
                     match crate::builtins::socket_read_nb(handle) {
@@ -2288,7 +2288,7 @@ impl<'a> Vm<'a> {
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
-                                let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                                let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                                 sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle, deadline: crate::builtins::read_deadline(handle) });
                                 sh.running -= 1; // aparcada por E/S → worker ocioso
                             }
@@ -2301,7 +2301,7 @@ impl<'a> Vm<'a> {
                     let s = self.pop();
                     let handle = self.pop();
                     let (HeapValue::Int(handle), HeapValue::Str(s)) = (handle, s) else {
-                        unreachable!("el checker garantiza int, string");
+                        unreachable!("the checker guarantees int, string");
                     };
                     // Cesión en `socket_write` (como SocketWriteBytes): escritura parcial de los octetos
                     // UTF-8; si el buffer se llena, cede la fibra (el resto pendiente vive en bytes, lo que
@@ -2330,7 +2330,7 @@ impl<'a> Vm<'a> {
                     let port = self.pop();
                     let host = self.pop();
                     let (HeapValue::Str(host), HeapValue::Int(port)) = (host, port) else {
-                        unreachable!("el checker garantiza string, int");
+                        unreachable!("the checker guarantees string, int");
                     };
                     let elems = match crate::builtins::tcp_listen(&host, port) {
                         Ok(h) => {
@@ -2346,7 +2346,7 @@ impl<'a> Vm<'a> {
                 OpCode::TcpAccept => {
                     let handle = match self.pop() {
                         HeapValue::Int(h) => h,
-                        _ => unreachable!("el checker garantiza un int"),
+                        _ => unreachable!("the checker guarantees an int"),
                     };
                     // M15.5: accept no bloqueante. WouldBlock (Ok(None)) → aparcar y reintentar.
                     match crate::builtins::tcp_accept_nb(handle) {
@@ -2367,7 +2367,7 @@ impl<'a> Vm<'a> {
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
-                                let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                                let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                                 sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle, deadline: crate::builtins::read_deadline(handle) });
                                 sh.running -= 1; // aparcada por E/S → worker ocioso
                             }
@@ -2378,7 +2378,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::LocalPort => match self.pop() {
                     HeapValue::Int(h) => self.push(HeapValue::Int(crate::builtins::local_port(h))),
-                    _ => unreachable!("el checker garantiza un int"),
+                    _ => unreachable!("the checker guarantees an int"),
                 },
                 // M56.4: timeout de lectura del socket. En la VM el efecto real lo aplica el
                 // scheduler (deadline al aparcar la fibra); aquí solo se registra.
@@ -2386,7 +2386,7 @@ impl<'a> Vm<'a> {
                     let ms = self.pop();
                     let handle = self.pop();
                     let (HeapValue::Int(handle), HeapValue::Int(ms)) = (handle, ms) else {
-                        unreachable!("el checker garantiza int, int");
+                        unreachable!("the checker guarantees int, int");
                     };
                     crate::builtins::socket_set_read_timeout(handle, ms);
                     self.push(HeapValue::Unit);
@@ -2407,12 +2407,12 @@ impl<'a> Vm<'a> {
                             // M38.3b paso 2: un ÚNICO lock para todo el cierre. El `if ... && matches!(...)`
                             // hacía dos `self.sched()` en la misma condición con guards solapados → doble-lock
                             // del Mutex no reentrante = DEADLOCK cuando el canal tenía un receptor aparcado.
-                            let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                            let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                             if sh.parked.iter().any(
                                 |p| p.on == ch && matches!(p.waiting, Waiting::Send(_)))
                             {
                                 return Err(runtime_error(pos!().0, pos!().1,
-                                    "close about un canal con un emisor bloqueado"));
+                                    "close on a channel with a blocked sender"));
                             }
                             sh.channels[ch].closed = true;
                             let mut i = 0;
@@ -2427,7 +2427,7 @@ impl<'a> Vm<'a> {
                             Self::wake_select_waiters(&mut sh, ch); // M12.4: un canal cerrado está "listo" para un select
                             self.cur.stack.push(HeapValue::Unit);
                         }
-                        _ => unreachable!("el checker garantiza un handle (int) o un Channel"),
+                        _ => unreachable!("the checker guarantees a handle (int) or a Channel"),
                     }
                 }
 
@@ -2436,13 +2436,13 @@ impl<'a> Vm<'a> {
                 // con el intérprete (mismo cálculo → oráculo cuadra, incl. NaN/inf).
                 OpCode::MathF(f) => match self.pop() {
                     HeapValue::Float(x) => self.push(HeapValue::Float(crate::builtins::apply_mathf(*f, x))),
-                    _ => unreachable!("el checker garantiza un float"),
+                    _ => unreachable!("the checker guarantees a float"),
                 },
                 OpCode::Pow => {
                     let exp = self.pop();
                     let base = self.pop();
                     let (HeapValue::Float(base), HeapValue::Float(exp)) = (base, exp) else {
-                        unreachable!("el checker garantiza dos floats");
+                        unreachable!("the checker guarantees two floats");
                     };
                     self.push(HeapValue::Float(base.powf(exp)));
                 }
@@ -2451,7 +2451,7 @@ impl<'a> Vm<'a> {
                     let x = self.pop();
                     let y = self.pop();
                     let (HeapValue::Float(y), HeapValue::Float(x)) = (y, x) else {
-                        unreachable!("el checker garantiza dos floats");
+                        unreachable!("the checker guarantees two floats");
                     };
                     self.push(HeapValue::Float(y.atan2(x)));
                 }
@@ -2472,7 +2472,7 @@ impl<'a> Vm<'a> {
                             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
                             let fiber = Self::take_current_fiber(&mut self.cur);
                             {
-                                let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+                                let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                                 sh.io_parked.push(IoParked { fd: -1, fiber, pending_write: None, handle: -1, deadline: Some(deadline) });
                                 sh.running -= 1; // aparcada durmiendo → worker ocioso
                             }
@@ -2480,12 +2480,12 @@ impl<'a> Vm<'a> {
                             if !self.poll_next(l, c2)? { self.stop = true; }
                         }
                     }
-                    _ => unreachable!("el checker garantiza un int"),
+                    _ => unreachable!("the checker guarantees an int"),
                 },
                 OpCode::Random => self.push(HeapValue::Float(crate::builtins::random_f64())),
                 OpCode::RandomInt => match self.pop() {
                     HeapValue::Int(n) => self.push(HeapValue::Int(crate::builtins::random_int(n))),
-                    _ => unreachable!("el checker garantiza un int"),
+                    _ => unreachable!("the checker guarantees an int"),
                 },
                 // M68.1: fija la semilla del PRNG (reproducibilidad).
                 OpCode::RandomSeed => match self.pop() {
@@ -2493,7 +2493,7 @@ impl<'a> Vm<'a> {
                         crate::builtins::random_seed(n);
                         self.push(HeapValue::Unit);
                     }
-                    _ => unreachable!("el checker garantiza un int"),
+                    _ => unreachable!("the checker guarantees an int"),
                 },
 
                 // --- Structs (M3.2) ---
@@ -2531,25 +2531,25 @@ impl<'a> Vm<'a> {
                     self.push(v);
                 }
                 OpCode::MatchFail => {
-                    return Err(runtime_error(pos!().0, pos!().1, "ningún branch del match casó (no debería ocurrir)"));
+                    return Err(runtime_error(pos!().0, pos!().1, "no match branch matched (should not happen)"));
                 }
                 OpCode::GetField(name) => {
                     let h = self.pop_obj();
                     let v = self.as_struct(h).fields.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone())
-                        .expect("el checker garantiza el campo");
+                        .expect("the checker guarantees the field");
                     self.push(v);
                 }
                 OpCode::SetField(name) => {
                     let v = self.pop();
                     let h = self.pop_obj();
                     let s = self.as_struct_mut(h);
-                    let slot = s.fields.iter_mut().find(|(n, _)| n == name).expect("el checker garantiza el campo");
+                    let slot = s.fields.iter_mut().find(|(n, _)| n == name).expect("the checker guarantees the field");
                     slot.1 = v;
                 }
 
                 OpCode::Call(idx, argc) => {
                     if self.cur.frames.len() >= MAX_FRAMES {
-                        return Err(runtime_error(pos!().0, pos!().1, "desbordamiento de pila (recursión demasiado profunda)"));
+                        return Err(runtime_error(pos!().0, pos!().1, "stack overflow (recursion too deep)"));
                     }
                     let mut locals = self.new_locals(*idx);
                     for i in (0..*argc).rev() {
@@ -2581,7 +2581,7 @@ impl<'a> Vm<'a> {
                 OpCode::Function(idx) => self.push(HeapValue::Function(*idx)),
                 OpCode::CallValue(argc) => {
                     if self.cur.frames.len() >= MAX_FRAMES {
-                        return Err(runtime_error(pos!().0, pos!().1, "desbordamiento de pila (recursión demasiado profunda)"));
+                        return Err(runtime_error(pos!().0, pos!().1, "stack overflow (recursion too deep)"));
                     }
                     let mut args_rev = Vec::with_capacity(*argc);
                     for _ in 0..*argc {
@@ -2591,9 +2591,9 @@ impl<'a> Vm<'a> {
                         HeapValue::Function(i) => (i, Vec::new()),
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Closure(c) => (c.index, c.upvalues.clone()),
-                            _ => unreachable!("el checker garantiza one función"),
+                            _ => unreachable!("the checker guarantees a function"),
                         },
-                        _ => unreachable!("el checker garantiza one función"),
+                        _ => unreachable!("the checker guarantees a function"),
                     };
                     let mut locals = self.new_locals(fn_idx);
                     for (j, val) in args_rev.into_iter().enumerate() {
@@ -2613,9 +2613,9 @@ impl<'a> Vm<'a> {
                         HeapValue::Function(i) => (i, Vec::new()),
                         HeapValue::Obj(h) => match self.cur.heap.get(h) {
                             Obj::Closure(c) => (c.index, c.upvalues.clone()),
-                            _ => unreachable!("el checker garantiza one función"),
+                            _ => unreachable!("the checker guarantees a function"),
                         },
-                        _ => unreachable!("el checker garantiza one función"),
+                        _ => unreachable!("the checker guarantees a function"),
                     };
                     let mut locals = self.new_locals(fn_idx);
                     for (j, val) in args_rev.into_iter().enumerate() {
@@ -2639,7 +2639,7 @@ impl<'a> Vm<'a> {
                         let cell = match d.source {
                             UpvalueSource::Local(slot) => match &self.cur.frames[fi].locals[slot] {
                                 Local::Boxed(h) => *h,
-                                Local::Plain(_) => unreachable!("un local capturado must estar boxeado"),
+                                Local::Plain(_) => unreachable!("a captured local must be boxed"),
                             },
                             UpvalueSource::Upvalue(u) => self.cur.frames[fi].upvalues[u],
                         };
@@ -2749,7 +2749,7 @@ impl<'a> Vm<'a> {
     fn park_write(&mut self, handle: i64, remaining: Vec<u8>, line: usize, col: usize) -> Result<(), RuntimeError> {
         let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
         {
-            let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+            let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
             let fiber = Self::take_current_fiber(&mut self.cur);
             sh.io_parked.push(IoParked { fd, fiber, pending_write: Some(PendingWrite { handle, remaining }), handle, deadline: None });
             sh.running -= 1; // esta fibra se aparcó → este worker queda ocioso
@@ -2793,7 +2793,7 @@ impl<'a> Vm<'a> {
             return Ok(Some(result));
         }
         {
-            let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+            let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
             if let Some(task) = self.cur.task.take() {
                 // M38.1b-2: el resultado vive en el heap de ESTA fibra (que se descarta al terminar) → se
                 // transfiere al heap de la tarea, donde `join` lo recogerá.
@@ -2815,7 +2815,7 @@ impl<'a> Vm<'a> {
     /// nadie ni la posee un `scope`. M38.3b paso 3: método `&mut self` (park bajo guard + `poll_next`).
     fn fail_current_fiber(&mut self, e: RuntimeError) -> Result<(), RuntimeError> {
         {
-            let mut sh = self.shared.lock().expect("el Mutex del scheduler no debería estar envenenado");
+            let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
             if let Some(task) = self.cur.task.take() {
                 let msg = e.msg.clone(); // solo el mensaje; el join que lo observe le pone su propia posición
                 sh.tasks[task].state = TaskState::Failed(msg);
@@ -2999,7 +2999,7 @@ impl<'a> Vm<'a> {
     fn cancel_task(shared: &mut Shared, task: usize) {
         match &mut shared.tasks[task].state {
             estado @ TaskState::Pending => {
-                *estado = TaskState::Failed("tarea cancelada (one hermana falló)".to_string());
+                *estado = TaskState::Failed("task cancelled (a sibling failed)".to_string());
             }
             _ => return, // ya terminó (Done/Failed) → nada que cancelar
         }
@@ -3213,14 +3213,14 @@ impl<'a> Vm<'a> {
     fn cell_get(&self, h: Handle) -> HeapValue {
         match self.cur.heap.get(h) {
             Obj::Cell(v) => v.clone(),
-            _ => unreachable!("se esperaba one celda"),
+            _ => unreachable!("expected a cell"),
         }
     }
 
     fn cell_set(&mut self, h: Handle, v: HeapValue) {
         match self.cur.heap.get_mut(h) {
             Obj::Cell(slot) => *slot = v,
-            _ => unreachable!("se esperaba one celda"),
+            _ => unreachable!("expected a cell"),
         }
     }
 
@@ -3229,35 +3229,35 @@ impl<'a> Vm<'a> {
     fn as_array(&self, h: Handle) -> &Vec<HeapValue> {
         match self.cur.heap.get(h) {
             Obj::Array(v) => v,
-            _ => unreachable!("el checker garantiza un array"),
+            _ => unreachable!("the checker guarantees an array"),
         }
     }
 
     fn as_array_mut(&mut self, h: Handle) -> &mut Vec<HeapValue> {
         match self.cur.heap.get_mut(h) {
             Obj::Array(v) => v,
-            _ => unreachable!("el checker garantiza un array"),
+            _ => unreachable!("the checker guarantees an array"),
         }
     }
 
     fn as_struct(&self, h: Handle) -> &VmStruct {
         match self.cur.heap.get(h) {
             Obj::Struct(s) => s,
-            _ => unreachable!("el checker garantiza un struct"),
+            _ => unreachable!("the checker guarantees a struct"),
         }
     }
 
     fn as_struct_mut(&mut self, h: Handle) -> &mut VmStruct {
         match self.cur.heap.get_mut(h) {
             Obj::Struct(s) => s,
-            _ => unreachable!("el checker garantiza un struct"),
+            _ => unreachable!("the checker guarantees a struct"),
         }
     }
 
     fn as_enum(&self, h: Handle) -> &VmEnum {
         match self.cur.heap.get(h) {
             Obj::Enum(e) => e,
-            _ => unreachable!("el checker garantiza un enum"),
+            _ => unreachable!("the checker guarantees an enum"),
         }
     }
 
@@ -3268,24 +3268,24 @@ impl<'a> Vm<'a> {
     }
 
     fn pop(&mut self) -> HeapValue {
-        self.cur.stack.pop().expect("pila vacía: bytecode mal formado")
+        self.cur.stack.pop().expect("empty stack: malformed bytecode")
     }
 
     fn peek(&self) -> &HeapValue {
-        self.cur.stack.last().expect("pila vacía: bytecode mal formado")
+        self.cur.stack.last().expect("empty stack: malformed bytecode")
     }
 
     fn pop_int(&mut self) -> i64 {
         match self.pop() {
             HeapValue::Int(n) => n,
-            _ => unreachable!("el checker garantiza un int"),
+            _ => unreachable!("the checker guarantees an int"),
         }
     }
 
     fn pop_obj(&mut self) -> Handle {
         match self.pop() {
             HeapValue::Obj(h) => h,
-            _ => unreachable!("el checker garantiza un objeto"),
+            _ => unreachable!("the checker guarantees an object"),
         }
     }
 
@@ -3293,7 +3293,7 @@ impl<'a> Vm<'a> {
     fn pop_channel(&mut self) -> usize {
         match self.pop() {
             HeapValue::Channel(id) => id,
-            _ => unreachable!("el checker garantiza un canal"),
+            _ => unreachable!("the checker guarantees a channel"),
         }
     }
 
@@ -3301,7 +3301,7 @@ impl<'a> Vm<'a> {
     fn pop_task(&mut self) -> usize {
         match self.pop() {
             HeapValue::Task(id) => id,
-            _ => unreachable!("el checker garantiza one tarea"),
+            _ => unreachable!("the checker guarantees a task"),
         }
     }
 
@@ -3327,20 +3327,20 @@ impl<'a> Vm<'a> {
                 Bytes(v)
             }
             // Desbordamiento de int = error de ejecución (M34, SPEC §8), como en el intérprete.
-            (Add, Int(a), Int(b)) => Int(a.checked_add(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?),
-            (Sub, Int(a), Int(b)) => Int(a.checked_sub(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?),
-            (Mul, Int(a), Int(b)) => Int(a.checked_mul(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?),
+            (Add, Int(a), Int(b)) => Int(a.checked_add(b).ok_or_else(|| runtime_error(line, col, "arithmetic overflow on int"))?),
+            (Sub, Int(a), Int(b)) => Int(a.checked_sub(b).ok_or_else(|| runtime_error(line, col, "arithmetic overflow on int"))?),
+            (Mul, Int(a), Int(b)) => Int(a.checked_mul(b).ok_or_else(|| runtime_error(line, col, "arithmetic overflow on int"))?),
             (Div, Int(a), Int(b)) => {
                 if b == 0 {
-                    return Err(runtime_error(line, col, "división entera por cero"));
+                    return Err(runtime_error(line, col, "integer division by zero"));
                 }
-                Int(a.checked_div(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?)
+                Int(a.checked_div(b).ok_or_else(|| runtime_error(line, col, "arithmetic overflow on int"))?)
             }
             (Rem, Int(a), Int(b)) => {
                 if b == 0 {
-                    return Err(runtime_error(line, col, "módulo por cero"));
+                    return Err(runtime_error(line, col, "modulo by zero"));
                 }
-                Int(a.checked_rem(b).ok_or_else(|| runtime_error(line, col, "desbordamiento aritmético en int"))?)
+                Int(a.checked_rem(b).ok_or_else(|| runtime_error(line, col, "arithmetic overflow on int"))?)
             }
             (Add, Float(a), Float(b)) => Float(a + b),
             (Sub, Float(a), Float(b)) => Float(a - b),
@@ -3370,11 +3370,11 @@ impl<'a> Vm<'a> {
             (Sub, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_sub(b), w),
             (Mul, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_mul(b), w),
             (Div, UInt(a, w), UInt(b, _)) => {
-                if b == 0 { return Err(runtime_error(line, col, "división entera por cero")); }
+                if b == 0 { return Err(runtime_error(line, col, "integer division by zero")); }
                 uint_heap(a / b, w)
             }
             (Rem, UInt(a, w), UInt(b, _)) => {
-                if b == 0 { return Err(runtime_error(line, col, "módulo por cero")); }
+                if b == 0 { return Err(runtime_error(line, col, "modulo by zero")); }
                 uint_heap(a % b, w)
             }
             (Less, UInt(a, _), UInt(b, _)) => Bool(a < b),
@@ -3386,7 +3386,7 @@ impl<'a> Vm<'a> {
             (BitXor, UInt(a, w), UInt(b, _)) => uint_heap(a ^ b, w),
             (Shl, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_shl(b as u32), w),
             (Shr, UInt(a, w), UInt(b, _)) => uint_heap(a.wrapping_shr(b as u32), w),
-            _ => unreachable!("combinación operador/operandos what el checker debió rechazar"),
+            _ => unreachable!("operator/operand combination that the checker should have rejected"),
         })
     }
 }
@@ -3409,7 +3409,7 @@ fn const_to_heap(v: &Value) -> HeapValue {
         Value::UInt(n, w) => HeapValue::UInt(*n, *w), // M28.3
         Value::Bytes(b) => HeapValue::Bytes((**b).clone()),
         Value::Unit => HeapValue::Unit,
-        _ => unreachable!("las constantes del chunk son primitivas"),
+        _ => unreachable!("chunk constants are primitive"),
     }
 }
 
@@ -3548,8 +3548,8 @@ fn to_value(heap: &Heap, enums: &[CompiledEnum], v: &HeapValue) -> Value {
         },
         // M38.1b: un canal/tarea (host) nunca es el resultado del programa ni cruza al intérprete
         // (main devuelve int/unit; no hay oráculo concurrente).
-        HeapValue::Channel(_) => unreachable!("un canal nunca es el resultado del program"),
-        HeapValue::Task(_) => unreachable!("one tarea nunca es el resultado del program"),
+        HeapValue::Channel(_) => unreachable!("a channel is never the program result"),
+        HeapValue::Task(_) => unreachable!("a task is never the program result"),
     }
 }
 
@@ -3693,7 +3693,7 @@ fn heap_to_key(v: &HeapValue) -> MapKey {
         HeapValue::Char(c) => MapKey::Char(*c),
         HeapValue::Bool(b) => MapKey::Bool(*b),
         HeapValue::Bytes(b) => MapKey::Bytes(b.clone()),
-        _ => unreachable!("el checker garantiza one clave hashable (int/string/char/bool/bytes)"),
+        _ => unreachable!("the checker guarantees a hashable key (int/string/char/bool/bytes)"),
     }
 }
 
@@ -3711,7 +3711,7 @@ fn key_to_heap(k: &MapKey) -> HeapValue {
 /// Comprueba que `i` es un índice válido en `0..len`; si no, error de ejecución.
 fn bounds_check(i: i64, len: usize, line: usize, col: usize) -> Result<usize, RuntimeError> {
     if i < 0 || (i as usize) >= len {
-        return Err(runtime_error(line, col, &format!("índice {} outside de range (length {})", i, len)));
+        return Err(runtime_error(line, col, &format!("index {} out of range (length {})", i, len)));
     }
     Ok(i as usize)
 }
@@ -3729,7 +3729,7 @@ mod tests {
         let prog_src = format!("fn v() {{ {} }}", src);
         let tokens = crate::lexer::lex(&prog_src).expect("lex ok");
         let prog = crate::parser::parse(tokens).expect("parse ok");
-        *prog.functions[0].body.tail.clone().expect("expresión en posición tail")
+        *prog.functions[0].body.tail.clone().expect("expression in tail position")
     }
 
     fn run_vm(src: &str) -> Value {
@@ -4150,7 +4150,7 @@ mod tests {
     #[test]
     fn division_por_cero_es_error() {
         let chunk = compile_expr(&expr_of("10 / 0")).unwrap();
-        assert!(run(&chunk).unwrap_err().msg.contains("división"));
+        assert!(run(&chunk).unwrap_err().msg.contains("division"));
     }
 
     #[test]
@@ -4245,7 +4245,7 @@ mod tests {
             let interp = crate::interpreter::run(&prog).expect_err("el intérprete must errar");
             let compiled = compile_program(&prog).expect("compila");
             let vm = run_program(&compiled).expect_err("la VM must errar");
-            assert!(interp.msg.contains("desbordamiento aritmético en int"), "interp: {} ({src})", interp.msg);
+            assert!(interp.msg.contains("arithmetic overflow on int"), "interp: {} ({src})", interp.msg);
             assert_eq!(interp.msg, vm.msg, "ambos engines idénticos ({src})");
         }
         // Y la aritmética al borde SIN desbordar sigue funcionando igual en ambos.
@@ -4344,7 +4344,7 @@ mod tests {
             "fn main() -> int { var xs: [[int]] = []; var i = 0; while (i < 100000) { xs.push([i]); i = i + 1; } 0 }",
         );
         let err = run_program_with_limit(&crece, None, Some(1_000)).expect_err("must rebasar el tope");
-        assert!(err.msg.contains("tope de heap"), "mensaje de tope: {}", err.msg);
+        assert!(err.msg.contains("heap cap"), "mensaje de tope: {}", err.msg);
         // Un programa frugal (no retiene) termina normal aun con tope bajo: el GC recicla la basura.
         let frugal = compile("fn main() -> int { var s = 0; var i = 0; while (i < 10000) { s = s + i; i = i + 1; } s }");
         assert_eq!(run_program_with_limit(&frugal, None, Some(1_000)).unwrap(), Value::Int(49995000));
@@ -4363,8 +4363,8 @@ mod tests {
             let vm = run_program(&compiled).expect_err("la VM must errar");
             (interp.msg, vm.msg)
         });
-        assert!(interp_msg.contains("desbordamiento de pila"), "intérprete: {interp_msg}");
-        assert!(vm_msg.contains("desbordamiento de pila"), "vm: {vm_msg}");
+        assert!(interp_msg.contains("stack overflow"), "intérprete: {interp_msg}");
+        assert!(vm_msg.contains("stack overflow"), "vm: {vm_msg}");
         // Ambos motores reportan exactamente el mismo mensaje.
         assert_eq!(interp_msg, vm_msg, "los dos engines difieren en el mensaje");
     }
@@ -4511,9 +4511,9 @@ mod tests {
 
         // Lo trapeante queda para el runtime, idéntico en ambos motores.
         for (src, msg) in [
-            ("fn main() -> int { 1 / 0 }", "división entera por cero"),
-            ("fn main() -> int { 7 % 0 }", "módulo por cero"),
-            ("fn main() -> int { 9223372036854775807 + 1 }", "desbordamiento aritmético en int"),
+            ("fn main() -> int { 1 / 0 }", "integer division by zero"),
+            ("fn main() -> int { 7 % 0 }", "modulo by zero"),
+            ("fn main() -> int { 9223372036854775807 + 1 }", "arithmetic overflow on int"),
         ] {
             let tokens = crate::lexer::lex(src).expect("lex ok");
             let mut prog = crate::parser::parse(tokens).expect("parse ok");
@@ -5240,7 +5240,7 @@ mod tests {
         let mut prog = crate::parser::parse(tokens).unwrap();
         crate::checker::check(&mut prog).unwrap();
         let compiled = compile_program(&prog).unwrap();
-        assert!(run_program(&compiled).unwrap_err().msg.contains("outside de range"));
+        assert!(run_program(&compiled).unwrap_err().msg.contains("out of range"));
     }
 
     // ----- M3.2: structs -----

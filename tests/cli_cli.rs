@@ -943,5 +943,5 @@ fn tope_de_heap_abort_un_program_glotón() {
     .unwrap();
     let (_out, err, code) = ray(&base, &["run", "--heap", "5000", file.to_str().unwrap()]);
     assert_eq!(code, 70, "un program glotón con tope de heap abort (EX_SOFTWARE)\n{err}");
-    assert!(err.contains("tope de heap"), "el error menciona el tope de heap\n{err}");
+    assert!(err.contains("heap cap"), "el error menciona el tope de heap\n{err}");
 }

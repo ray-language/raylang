@@ -98,7 +98,7 @@ fn run(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
     (String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code().unwrap_or(-1))
 }
 
-const ESPERADO: &str = "afectadas: 1\nrowid: 2\nada|36\ngrace|\nnota de ada: 36\nafter rollback: 2\nsqlite: no such table: no_existe\ncerrada: handle inválido o ya closed\n";
+const ESPERADO: &str = "afectadas: 1\nrowid: 2\nada|36\ngrace|\nnota de ada: 36\nafter rollback: 2\nsqlite: no such table: no_existe\ncerrada: invalid or already closed handle\n";
 
 #[test]
 fn sqlite_crud_transaccion_y_errors() {

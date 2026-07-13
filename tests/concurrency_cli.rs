@@ -157,7 +157,7 @@ fn main() -> int {
 }
 "#;
     let (_out, err, code) = run("conc_send_closed", src, true);
-    assert!(err.contains("canal closed"), "stderr no menciona canal closed: {err}");
+    assert!(err.contains("closed channel"), "stderr no menciona canal closed: {err}");
     assert_eq!(code, 70);
 }
 
@@ -172,7 +172,7 @@ fn main() -> int {
 }
 "#;
     let (_out, err, code) = run("conc_interp", src, false);
-    assert!(err.contains("requiere la VM"), "stderr no asks la VM: {err}");
+    assert!(err.contains("requires the VM"), "stderr no asks la VM: {err}");
     assert_eq!(code, 70);
 }
 
@@ -287,7 +287,7 @@ fn main() -> int {
 }
 "#;
     let (_out, err, code) = run("conc_close_emisor", src, true);
-    assert!(err.contains("emisor bloqueado"), "stderr no menciona emisor bloqueado: {err}");
+    assert!(err.contains("blocked sender"), "stderr no menciona emisor bloqueado: {err}");
     assert_eq!(code, 70);
 }
 

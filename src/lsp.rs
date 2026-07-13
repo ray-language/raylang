@@ -1450,7 +1450,8 @@ fn pipeline_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: 
     // Reconstruye `LEFT |> __raycomplete__`. En posición de sentencia hace falta `;` (o el bloque no
     // parsea); en posición de expresión NO —el delimitador que sigue ya la cierra— (como en `recv.`).
     let next = chars[end..].iter().find(|c| !c.is_whitespace()).copied();
-    let in_expression = matches!(next, Some(')') | Some(']') | Some('}') | Some(',') | Some('('));
+    // M91.7b: un `;` ya presente también cierra la expresión (añadir otro haría `;;` → no parsea).
+    let in_expression = matches!(next, Some(')') | Some(']') | Some('}') | Some(',') | Some('(') | Some(';'));
     let mut new_line: String = chars[..start].iter().collect();
     new_line.push_str(crate::checker::COMPLETION_SENTINEL);
     if !in_expression {
@@ -1500,7 +1501,8 @@ fn member_completion_items(uri: Option<&str>, src: &str, line0: usize, char0: us
     // `sum(x.)`, `[x.]`, `{ x. }`) NO se añade `;` —rompería la llamada/lista—: el delimitador que
     // sigue ya cierra la expresión. Se decide por el siguiente carácter no-espacio de la línea.
     let next = chars[end..].iter().find(|c| !c.is_whitespace()).copied();
-    let in_expression = matches!(next, Some(')') | Some(']') | Some('}') | Some(',') | Some('('));
+    // M91.7b: un `;` ya presente también cierra la expresión (añadir otro haría `;;` → no parsea).
+    let in_expression = matches!(next, Some(')') | Some(']') | Some('}') | Some(',') | Some('(') | Some(';'));
     let mut new_line: String = chars[..start].iter().collect();
     new_line.push_str(crate::checker::COMPLETION_SENTINEL);
     if !in_expression {
@@ -4321,6 +4323,46 @@ mod tests {
         docs.insert("file:///t.ray".to_string(), src_no.to_string());
         let arr_no = completion_result(&msg_no, &docs);
         assert!(arr_no.as_array().unwrap().is_empty(), "espacio fuera de pipeline → vacío");
+    }
+
+    #[test]
+    fn completion_doc_de_metodo_de_impl() {
+        // M91.7a: un método de un `impl` del usuario con doc `///` la trae en el completion.
+        let src = "struct P { x: int }\ntrait Ver { fn ver(self) -> int; }\nimpl Ver for P {\n    /// La coordenada x.\n    fn ver(self) -> int { self.x }\n}\nfn main() -> int {\n    let p = P { x: 1 };\n    p.\n    0\n}\n";
+        let msg = json::parse(
+            r#"{"params":{"textDocument":{"uri":"file:///t.ray"},"position":{"line":8,"character":6}}}"#
+        ).unwrap();
+        let mut docs = HashMap::new();
+        docs.insert("file:///t.ray".to_string(), src.to_string());
+        let items = completion_result(&msg, &docs);
+        let ver = items.as_array().unwrap().iter()
+            .find(|i| i.get("label").and_then(|l| l.as_str()) == Some("ver")).expect("ver");
+        let doc = ver.get("documentation").and_then(|d| d.get("value")).and_then(|v| v.as_str()).unwrap_or("");
+        assert!(doc.contains("La coordenada x"), "doc /// del método de impl: {doc:?}");
+    }
+
+    #[test]
+    fn completion_con_receptor_expresion() {
+        // M91.7b: el receptor puede ser una EXPRESIÓN (`f(x).`, `xs[0].`), no solo un identificador.
+        let src = "struct P { x: int }\nfn hacer(n: int) -> P { P { x: n } }\nfn main() -> int {\n    let y = hacer(1).\n    0\n}\n";
+        let labels = completion_labels(src, 3, 21); // tras "hacer(1)." (sin nada detrás)
+        assert!(labels.contains(&"x".to_string()), "campo tras receptor-llamada: {labels:?}");
+        let src2 = "fn main() -> int {\n    let xs = [\"a\", \"b\"];\n    let y = xs[0].;\n    0\n}\n";
+        let labels2 = completion_labels(src2, 2, 18); // tras "xs[0]." (con el ';' ya escrito)
+        assert!(labels2.contains(&"trim".to_string()), "builtin tras receptor-índice: {labels2:?}");
+    }
+
+    #[test]
+    fn completion_ufcs_de_usuario_sobre_primitivos() {
+        // M91.7c: una función del USUARIO cuyo primer parámetro es un primitivo SÍ se ofrece en
+        // `n.` (a diferencia de las del prelude/E/S, que tratan el primitivo como dato).
+        let src = "fn doblar(n: int) -> int { n * 2 }\nfn main() -> int {\n    let v = 5;\n    v.\n    0\n}\n";
+        let labels = completion_labels(src, 3, 6);
+        assert!(labels.contains(&"doblar".to_string()), "UFCS del usuario sobre int: {labels:?}");
+        // Las de E/S del prelude sobre string siguen FUERA (tratan el string como dato).
+        let s = "fn main() -> int {\n    let s = \"h\";\n    s.\n    0\n}\n";
+        let ls = completion_labels(s, 2, 6);
+        assert!(!ls.contains(&"read_file".to_string()), "sin E/S del prelude sobre string: {ls:?}");
     }
 
     #[test]

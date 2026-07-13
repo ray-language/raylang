@@ -1172,6 +1172,13 @@ pub fn functions() -> Vec<Function> {
     parsed().functions.clone()
 }
 
+/// Los NOMBRES de las funciones del prelude, cacheados (M91.7c: el completion de miembros los
+/// consulta para distinguir una función UFCS del usuario de una del prelude sin clonar el AST).
+pub fn function_names() -> &'static std::collections::HashSet<String> {
+    static N: std::sync::OnceLock<std::collections::HashSet<String>> = std::sync::OnceLock::new();
+    N.get_or_init(|| parsed().functions.iter().map(|f| f.name.clone()).collect())
+}
+
 /// Los traits del prelude (`Eq`/`Show`/`Ord`), ya parseados (M10.1).
 pub fn traits() -> Vec<TraitDef> {
     parsed().traits.clone()

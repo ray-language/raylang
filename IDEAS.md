@@ -225,8 +225,14 @@ Soporte de los archivos `.ray` en editores. Tiene dos mitades muy distintas:
     símbolos `pub`; `import …` rutas de módulo con encapsulación, DESIGN §47.2). El de miembros: campos/métodos/builtins/UFCS del tipo del
     receptor; DESIGN §47). Repara la fuente con un centinela (`recv.__raycomplete__;`) y consulta
     `checker::member_completion`; incluye los **builtins de string/array/map** y el orden superior
-    del prelude (`map`/`filter`/`fold`/`sort`). Diferido: docs `///` de métodos de impl del usuario,
-    receptores que son expresiones (`f(x).`), UFCS del usuario sobre primitivos.
+    del prelude (`map`/`filter`/`fold`/`sort`). ~~Diferido: docs `///` de métodos de impl del
+    usuario, receptores que son expresiones (`f(x).`), UFCS del usuario sobre primitivos~~ →
+    ✅ **M91.7**: (a) las docs de métodos de impl YA funcionaban (vía `fn_defs` del manglado; fila
+    obsoleta — regresión añadida); (b) receptor-expresión (`f(x).`, `xs[0].`) arreglado — el bug
+    era que un `;` ya escrito tras el punto producía `;;` al reparar (el `;` entra en
+    `in_expression`, ambos caminos `recv.` y `|>`); (c) UFCS del usuario sobre primitivos SÍ se
+    ofrece (`v.doblar()`), excluyendo el prelude vía `prelude::function_names()` cacheado (las de
+    E/S siguen fuera: tratan el primitivo como dato).
   - **Completion type-aware tras `|>`** (pipeline) — el `|>` no tiene tratamiento propio en la
     completion: sin un `.` delante, cae al camino **de archivo** (ofrece TODAS las funciones, no
     filtradas). Idea: en `x |> ` filtrar a las funciones libres cuyo **primer parámetro** acepte el

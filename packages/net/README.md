@@ -76,7 +76,9 @@ fn main() -> int {
 - **`net/dns_cache`** — caché DNS con TTL. Sobre `net/dns`.
 - **`net/websocket`** — handshake + framing WebSocket (`ws://`/`wss://`). Sobre `net/crypto` + `std/base64`.
   Lectura robusta (M58.1): `WsConn` + `read_frame`/`read_message` (tramas partidas/pegadas, ping→pong
-  automático, fragmentación reensamblada, límite de payload validado antes de leer).
+  automático, fragmentación reensamblada, límite de payload validado antes de leer). Envío
+  fragmentado (M91.4): `send_message(ws, opcode, payload, max_frame)` trocea mensajes grandes en
+  tramas de continuación (control nunca se fragmenta).
 - **`net/websocket_client`** — cliente WebSocket. Sobre `net/websocket` + `std/base64`. `connect`/
   `connect_tls` devuelven un `WsConn` con estado (M58.1).
 - **`net/redis`** — cliente Redis (protocolo RESP). Hoja.

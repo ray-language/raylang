@@ -760,8 +760,13 @@ explícita (`struct Conn` + `connect`/`conn_request`/`conn_request_bytes`/`conn_
 RPC): delimita cada respuesta por Content-Length/chunked incremental (sin EOF) guardando los sobrantes,
 honra `Connection: close`, reconecta perezoso y reintenta UNA vez transparente en la carrera del
 keep-alive ocioso (el servidor cerró sin entregar ningún octeto). La API one-shot (`fetch`/`request*`)
-sigue con `Connection: close`. Quedan a demanda: multiplexado h2 real, fragmentación WS de ENVÍO (la de
-recepción entra en 58.1), y un pool multi-conexión sobre `Conn` si aparece un consumidor concurrente.
+sigue con `Connection: close`. ~~Fragmentación WS de ENVÍO~~ → ✅ **M91.4**: `send_message(ws, opcode,
+payload, max_frame)` trocea en tramas de ≤ `max_frame` octetos (1.ª con el opcode y FIN=0,
+continuaciones opcode 0, la última FIN=1; control nunca se fragmenta, RFC 6455), enmascarando según
+el lado (`ws.mask`); `encode_frame[_masked]` delegan en variantes `_fin` internas. Test e2e
+`envio_fragmentado_reensamblado_por_el_servidor` (cliente raylang fragmenta con max_frame=16 →
+`read_message` del echo-server reensambla). Quedan a demanda: multiplexado h2 real y un pool
+multi-conexión sobre `Conn` si aparece un consumidor concurrente.
 
 ---
 

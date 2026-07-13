@@ -187,6 +187,7 @@ fn cmd_dev(args: &[String]) {
         })
         .unwrap_or(cwd);
     eprintln!("[dev] vigilando {} (.ray, .ray.html, ray.toml); Ctrl-C para salir", root.display());
+    instalar_limpieza_al_morir();
 
     let mut snapshot = scan_sources(&root);
     loop {
@@ -199,6 +200,7 @@ fn cmd_dev(args: &[String]) {
                 process::exit(70);
             }
         };
+        DEV_CHILD.store(child.id() as i32, std::sync::atomic::Ordering::SeqCst);
         // Vigila hasta el próximo cambio; si el programa termina solo, sigue vigilando sin él.
         let mut running = true;
         let cambio = loop {
@@ -238,6 +240,15 @@ fn scan_sources(root: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
                 }
                 pending.push(path);
             } else if name.ends_with(".ray") || name.ends_with(".ray.html") || name == "ray.toml" {
+                // Un `.ray` con un `.ray.html` hermano es el módulo GENERADO por `ray templ`
+                // (derivado): se vigila el fuente (el .html), no el artefacto — si no, cada
+                // edición de template causaría un segundo reinicio al regenerarlo el hijo.
+                if name.ends_with(".ray") && !name.ends_with(".ray.html") {
+                    let html = path.with_extension("ray.html");
+                    if html.exists() {
+                        continue;
+                    }
+                }
                 if let Ok(meta) = entry.metadata()
                     && let Ok(mtime) = meta.modified()
                 {
@@ -271,6 +282,41 @@ fn primer_cambio(
         .iter()
         .find(|(p, _)| !nuevos.contains_key(p))
         .map(|(p, _)| format!("{} (borrado)", p.display()))
+}
+
+/// El pid del hijo en curso de `ray dev` (0 = ninguno), para que el handler de señales del PADRE
+/// lo arrastre al morir: un `kill` al supervisor no debe dejar al programa huérfano reteniendo el
+/// puerto (Ctrl-C de terminal ya mata al grupo; esto cubre el kill por pid).
+static DEV_CHILD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// Instala el handler SIGTERM/SIGINT del supervisor: reenvía SIGTERM al hijo y sale. Solo unix
+/// (el mismo alcance que `signals()`, M88.1); async-signal-safe (kill + _exit, sin asignar).
+fn instalar_limpieza_al_morir() {
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            fn signal(sig: i32, handler: usize) -> usize;
+        }
+        extern "C" fn al_morir(_sig: i32) {
+            unsafe extern "C" {
+                fn kill(pid: i32, sig: i32) -> i32;
+                fn _exit(code: i32) -> !;
+            }
+            let pid = DEV_CHILD.load(std::sync::atomic::Ordering::SeqCst);
+            if pid > 0 {
+                unsafe {
+                    kill(pid, 15); // SIGTERM: el hijo drena (serve_graceful) o muere por defecto
+                }
+            }
+            unsafe { _exit(130) }
+        }
+        const SIGINT: i32 = 2;
+        const SIGTERM: i32 = 15;
+        unsafe {
+            signal(SIGINT, al_morir as *const () as usize);
+            signal(SIGTERM, al_morir as *const () as usize);
+        }
+    }
 }
 
 /// Termina el hijo con SIGTERM (drenado ordenado vía `serve_graceful`) y, si a los ~3 s sigue

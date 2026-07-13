@@ -187,7 +187,7 @@ fn cmd_dev(args: &[String]) {
         })
         .unwrap_or(cwd);
     eprintln!("[dev] vigilando {} (.ray, .ray.html, ray.toml); Ctrl-C para salir", root.display());
-    instalar_limpieza_al_morir();
+    install_cleanup_on_death();
 
     let mut snapshot = scan_sources(&root);
     loop {
@@ -203,10 +203,10 @@ fn cmd_dev(args: &[String]) {
         DEV_CHILD.store(child.id() as i32, std::sync::atomic::Ordering::SeqCst);
         // Vigila hasta el próximo cambio; si el programa termina solo, sigue vigilando sin él.
         let mut running = true;
-        let cambio = loop {
+        let change = loop {
             std::thread::sleep(std::time::Duration::from_millis(200));
             let actual = scan_sources(&root);
-            if let Some(c) = primer_cambio(&snapshot, &actual) {
+            if let Some(c) = first_change(&snapshot, &actual) {
                 snapshot = actual;
                 break c;
             }
@@ -215,7 +215,7 @@ fn cmd_dev(args: &[String]) {
                 eprintln!("[dev] el programa terminó ({status}); esperando cambios…");
             }
         };
-        eprintln!("[dev] cambio en {cambio}: reiniciando…");
+        eprintln!("[dev] cambio en {change}: reiniciando…");
         if running {
             terminate_gracefully(&mut child);
         }
@@ -263,7 +263,7 @@ fn scan_sources(root: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
 
 /// El primer archivo que difiere entre dos snapshots (nuevo, borrado o con otro mtime), para el
 /// mensaje de reinicio. `None` si son idénticos.
-fn primer_cambio(
+fn first_change(
     antes: &[(PathBuf, std::time::SystemTime)],
     ahora: &[(PathBuf, std::time::SystemTime)],
 ) -> Option<String> {
@@ -291,13 +291,13 @@ static DEV_CHILD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::n
 
 /// Instala el handler SIGTERM/SIGINT del supervisor: reenvía SIGTERM al hijo y sale. Solo unix
 /// (el mismo alcance que `signals()`, M88.1); async-signal-safe (kill + _exit, sin asignar).
-fn instalar_limpieza_al_morir() {
+fn install_cleanup_on_death() {
     #[cfg(unix)]
     {
         unsafe extern "C" {
             fn signal(sig: i32, handler: usize) -> usize;
         }
-        extern "C" fn al_morir(_sig: i32) {
+        extern "C" fn on_death(_sig: i32) {
             unsafe extern "C" {
                 fn kill(pid: i32, sig: i32) -> i32;
                 fn _exit(code: i32) -> !;
@@ -313,8 +313,8 @@ fn instalar_limpieza_al_morir() {
         const SIGINT: i32 = 2;
         const SIGTERM: i32 = 15;
         unsafe {
-            signal(SIGINT, al_morir as *const () as usize);
-            signal(SIGTERM, al_morir as *const () as usize);
+            signal(SIGINT, on_death as *const () as usize);
+            signal(SIGTERM, on_death as *const () as usize);
         }
     }
 }
@@ -674,7 +674,7 @@ fn cmd_keygen(args: &[String]) {
 /// M83c: firma una publicación y reclama (o verifica) el DUEÑO del nombre en el índice.
 /// Primera publicación firmada → escribe `<nombre>.owners.toml` con nuestra pubkey (TOFU).
 /// Nombre ya reclamado → nuestra pubkey debe coincidir con la registrada.
-fn firmar_publicacion(index: &Path, name: &str, version: &str, hash: &str) -> Result<String, String> {
+fn sign_publication(index: &Path, name: &str, version: &str, hash: &str) -> Result<String, String> {
     // M89.2: sin 'net-tls' no hay Ed25519 → error claro (no una firma vacía).
     if !crate::builtins::net_tls_available() {
         return Err(crate::builtins::NET_TLS_UNAVAILABLE.to_string());
@@ -734,25 +734,25 @@ fn cmd_index_verify(args: &[String]) {
         eprintln!("no se pudo leer el índice '{}'", dir.display());
         process::exit(65);
     };
-    let mut paquetes = 0usize;
-    let mut versiones = 0usize;
-    let mut firmadas = 0usize;
+    let mut packages = 0usize;
+    let mut versions = 0usize;
+    let mut signed = 0usize;
     let mut problemas: Vec<String> = Vec::new();
-    let mut nombres: Vec<String> = entries
+    let mut names: Vec<String> = entries
         .filter_map(|e| e.ok())
         .filter_map(|e| e.file_name().to_str().map(str::to_string))
         .filter(|n| n.ends_with(".toml") && !n.ends_with(".owners.toml"))
         .filter_map(|n| n.strip_suffix(".toml").map(str::to_string))
         .collect();
-    nombres.sort();
-    for name in &nombres {
-        paquetes += 1;
+    names.sort();
+    for name in &names {
+        packages += 1;
         match crate::index::read_package(&dir, name) {
-            Ok(entradas) => {
-                for e in &entradas {
-                    versiones += 1;
+            Ok(pkg_entries) => {
+                for e in &pkg_entries {
+                    versions += 1;
                     if e.sig.is_some() {
-                        firmadas += 1;
+                        signed += 1;
                     }
                     if let Err(err) = crate::index::check_signature(&dir, name, e) {
                         problemas.push(err);
@@ -764,7 +764,7 @@ fn cmd_index_verify(args: &[String]) {
     }
     if problemas.is_empty() {
         println!(
-            "índice OK: {paquetes} paquetes, {versiones} versiones ({firmadas} firmadas y verificadas)"
+            "índice OK: {packages} paquetes, {versions} versiones ({signed} firmadas y verificadas)"
         );
     } else {
         for p in &problemas {
@@ -843,7 +843,7 @@ fn cmd_publish(args: &[String]) {
     // M51d: validar y hashear el **contenido de la ref publicada** (clon limpio del repo local en
     // el tag), no el working tree — el hash del índice debe corresponder a lo que el consumidor
     // descargará; cambios sin commitear o archivos sueltos no cuentan.
-    let hash = match hash_publicado(&m, &git_spec) {
+    let hash = match published_hash(&m, &git_spec) {
         Ok(h) => h,
         Err(e) => {
             eprintln!("{e}");
@@ -853,7 +853,7 @@ fn cmd_publish(args: &[String]) {
     // M83b/c: firmar la publicación y reclamar (o verificar) el dueño del nombre.
     let mut sig: Option<String> = None;
     if sign {
-        match firmar_publicacion(&index, &m.name, &m.version, &hash) {
+        match sign_publication(&index, &m.name, &m.version, &hash) {
             Ok(sg) => sig = Some(sg),
             Err(e) => {
                 eprintln!("{e}");
@@ -889,7 +889,7 @@ fn cmd_publish(args: &[String]) {
 /// lo verifica con el checker, sin exigir `main`). Devuelve su `deps::hash_package` — calculado
 /// ANTES de resolver las deps del clon, que escriben `.ray-deps/`/`ray.lock` dentro y no son parte
 /// del contenido. El clon temporal se borra siempre.
-fn hash_publicado(m: &crate::manifest::Manifest, git_spec: &str) -> Result<String, String> {
+fn published_hash(m: &crate::manifest::Manifest, git_spec: &str) -> Result<String, String> {
     let spec = crate::deps::parse_spec(git_spec)?;
     let tmp = std::env::temp_dir().join(format!("ray-publish-{}-{}", m.name, process::id()));
     let _ = fs::remove_dir_all(&tmp);
@@ -925,7 +925,7 @@ fn hash_publicado(m: &crate::manifest::Manifest, git_spec: &str) -> Result<Strin
         }
         // El hash, ANTES del check: resolver deps escribe `.ray-deps/`/`ray.lock` dentro del clon.
         let hash = crate::deps::hash_package(&tmp)?;
-        check_publicado(&tmp, &face)?;
+        check_published(&tmp, &face)?;
         Ok(hash)
     })();
     let _ = fs::remove_dir_all(&tmp);
@@ -937,7 +937,7 @@ fn hash_publicado(m: &crate::manifest::Manifest, git_spec: &str) -> Result<Strin
 /// clon temporal), carga la cara con el loader (imports internos + deps + `std/` embebida) y la
 /// verifica con `check_all_modulo` (el checker SIN exigir `main`: un paquete es una librería).
 /// Un error se reporta contra su archivo y línea local (vía `Loaded::locate`).
-fn check_publicado(tmp: &Path, face: &Path) -> Result<(), String> {
+fn check_published(tmp: &Path, face: &Path) -> Result<(), String> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if tmp.join("ray.toml").is_file()
         && let Ok(Some(mc)) = crate::manifest::Manifest::load(tmp)
@@ -1112,24 +1112,24 @@ fn cmd_templ(args: &[String]) {
         eprintln!("uso: ray templ <archivo.ray.html | directorio>...");
         process::exit(64);
     }
-    let mut entradas: Vec<PathBuf> = Vec::new();
+    let mut entries: Vec<PathBuf> = Vec::new();
     for a in args {
         let p = Path::new(a);
         if p.is_dir() {
-            collect_templates(p, &mut entradas);
+            collect_templates(p, &mut entries);
         } else if a.ends_with(".ray.html") {
-            entradas.push(p.to_path_buf());
+            entries.push(p.to_path_buf());
         } else {
             eprintln!("'{a}' no es un .ray.html ni un directorio");
             process::exit(64);
         }
     }
-    entradas.sort();
-    if entradas.is_empty() {
+    entries.sort();
+    if entries.is_empty() {
         eprintln!("no se encontraron templates .ray.html");
         process::exit(64);
     }
-    for e in &entradas {
+    for e in &entries {
         match crate::templ::generate_file(e) {
             Ok(out) => println!("generado: {}", out.display()),
             Err(msg) => {

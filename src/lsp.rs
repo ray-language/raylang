@@ -1994,7 +1994,10 @@ fn template_scope(src: &str, line0: usize, char0: usize) -> Option<(bool, Vec<(S
             && let Some((v, _)) = cuerpo.split_once('=')
         {
             // Tipo desconocido textualmente (el hover semántico vía el generado sí lo da).
-            groups.last_mut().expect("base").push((v.trim().to_string(), String::new()));
+            groups
+                .last_mut()
+                .unwrap_or_else(|| crate::ice!("groups se inicializa con el grupo base"))
+                .push((v.trim().to_string(), String::new()));
         }
     }
     let mut vars = params;
@@ -2211,7 +2214,10 @@ fn template_occurrences(src: &str) -> Vec<TplOcc> {
                 if is_tag && first_word == "let" && k == 1 {
                     let key = format!("l:{l0}:{col0}");
                     out.push((l0, col0, len, key.clone(), true));
-                    for_stack.last_mut().expect("base").push((name.to_string(), key));
+                    for_stack
+                        .last_mut()
+                        .unwrap_or_else(|| crate::ice!("for_stack se inicializa con el marco base"))
+                        .push((name.to_string(), key));
                     continue;
                 }
                 if keywords.contains(name) {

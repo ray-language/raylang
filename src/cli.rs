@@ -46,6 +46,7 @@ fn run() {
     match rest.first().map(String::as_str) {
         Some("new") => cmd_new(&rest[1..]),
         Some("run") => cmd_run(&rest[1..]),
+        Some("dev") => cmd_dev(&rest[1..]),
         Some("build") => cmd_build(&rest[1..]),
         Some("test") => cmd_test_sub(&rest[1..]),
         Some("add") => cmd_add(&rest[1..]),
@@ -80,6 +81,7 @@ Uso: ray <subcomando> [opciones]
 
   new <nombre>      crea un proyecto nuevo (ray.toml + src/main.ray)
   run [archivo]     ejecuta (por defecto src/main.ray) [--interp] [--deterministic] [--fuel N] [--heap N] [args...]
+  dev [archivo]     como run, pero REINICIA ante cambios en .ray/.ray.html/ray.toml (modo desarrollo)
   build [archivo]   chequea y compila sin ejecutar (0 ok / 65 error)
   test [archivo]    corre las funciones @test [filtro]
   add <nombre>[@req]  añade una dependencia del índice a ray.toml y la descarga
@@ -159,6 +161,186 @@ fn cmd_run(args: &[String]) {
     let path = resolve_entry(explicit, false);
     regen_stale_templates(Path::new(&path)); // M55: los .ray.html desactualizados, al día
     run_file(&path, prog_args, use_interp, fuel, heap.map(|n| n as usize));
+}
+
+// ── `ray dev` (M92.1): modo desarrollo — watcher + reinicio con drenado ─────────────────────
+
+/// `ray dev [archivo] [flags de run] [args...]`: corre el programa como `ray run` y lo REINICIA
+/// ante cambios en los fuentes del proyecto (`.ray`, `.ray.html`, `ray.toml`). El watcher es
+/// POLLING de mtimes (~200 ms): portable y cero deps — el mismo mecanismo que la regeneración de
+/// templates, que el hijo ejecuta al arrancar (un `.ray.html` editado dispara reinicio → regen).
+/// El reinicio manda **SIGTERM** — un servidor con `serve_graceful` (M88.1b) drena sus conexiones
+/// antes de morir — y escala a SIGKILL a los 3 s. Un programa que termina solo (un CLI, un crash)
+/// queda a la espera y se relanza al siguiente cambio.
+fn cmd_dev(args: &[String]) {
+    let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from("ray"));
+    // La raíz vigilada: la del proyecto (manifiesto hacia arriba desde el cwd); sin manifiesto,
+    // el directorio de la entrada explícita, o el cwd.
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let root = Manifest::find(&cwd)
+        .and_then(|toml| toml.parent().map(Path::to_path_buf))
+        .or_else(|| {
+            args.iter()
+                .find(|a| !a.starts_with("--"))
+                .and_then(|a| Path::new(a).parent().map(Path::to_path_buf))
+                .filter(|p| p.as_os_str().len() > 0)
+        })
+        .unwrap_or(cwd);
+    eprintln!("[dev] vigilando {} (.ray, .ray.html, ray.toml); Ctrl-C para salir", root.display());
+    instalar_limpieza_al_morir();
+
+    let mut snapshot = scan_sources(&root);
+    loop {
+        // Lanza el programa como `ray run <args...>` (mismo binario): hereda la resolución de
+        // entrada, la regeneración de templates y los flags (--interp/--fuel/…).
+        let mut child = match process::Command::new(&exe).arg("run").args(args).spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[dev] no se pudo lanzar el programa: {e}");
+                process::exit(70);
+            }
+        };
+        DEV_CHILD.store(child.id() as i32, std::sync::atomic::Ordering::SeqCst);
+        // Vigila hasta el próximo cambio; si el programa termina solo, sigue vigilando sin él.
+        let mut running = true;
+        let cambio = loop {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let actual = scan_sources(&root);
+            if let Some(c) = primer_cambio(&snapshot, &actual) {
+                snapshot = actual;
+                break c;
+            }
+            if running && let Ok(Some(status)) = child.try_wait() {
+                running = false;
+                eprintln!("[dev] el programa terminó ({status}); esperando cambios…");
+            }
+        };
+        eprintln!("[dev] cambio en {cambio}: reiniciando…");
+        if running {
+            terminate_gracefully(&mut child);
+        }
+    }
+}
+
+/// Los fuentes vigilados bajo `root`: `(ruta, mtime)` de cada `.ray`/`.ray.html`/`ray.toml`,
+/// ordenados (comparable como snapshot). Salta las carpetas de artefactos y las ocultas.
+fn scan_sources(root: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
+    let mut out = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if path.is_dir() {
+                // `.ray-deps` (caché), `.git`, `target`, `node_modules` y ocultas: fuera.
+                if name.starts_with('.') || name == "target" || name == "node_modules" {
+                    continue;
+                }
+                pending.push(path);
+            } else if name.ends_with(".ray") || name.ends_with(".ray.html") || name == "ray.toml" {
+                // Un `.ray` con un `.ray.html` hermano es el módulo GENERADO por `ray templ`
+                // (derivado): se vigila el fuente (el .html), no el artefacto — si no, cada
+                // edición de template causaría un segundo reinicio al regenerarlo el hijo.
+                if name.ends_with(".ray") && !name.ends_with(".ray.html") {
+                    let html = path.with_extension("ray.html");
+                    if html.exists() {
+                        continue;
+                    }
+                }
+                if let Ok(meta) = entry.metadata()
+                    && let Ok(mtime) = meta.modified()
+                {
+                    out.push((path, mtime));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// El primer archivo que difiere entre dos snapshots (nuevo, borrado o con otro mtime), para el
+/// mensaje de reinicio. `None` si son idénticos.
+fn primer_cambio(
+    antes: &[(PathBuf, std::time::SystemTime)],
+    ahora: &[(PathBuf, std::time::SystemTime)],
+) -> Option<String> {
+    if antes == ahora {
+        return None;
+    }
+    let viejos: std::collections::HashMap<_, _> = antes.iter().cloned().collect();
+    for (p, m) in ahora {
+        if viejos.get(p) != Some(m) {
+            return Some(p.display().to_string());
+        }
+    }
+    // Nada nuevo ni tocado pero difieren → algo se borró.
+    let nuevos: std::collections::HashMap<_, _> = ahora.iter().cloned().collect();
+    antes
+        .iter()
+        .find(|(p, _)| !nuevos.contains_key(p))
+        .map(|(p, _)| format!("{} (borrado)", p.display()))
+}
+
+/// El pid del hijo en curso de `ray dev` (0 = ninguno), para que el handler de señales del PADRE
+/// lo arrastre al morir: un `kill` al supervisor no debe dejar al programa huérfano reteniendo el
+/// puerto (Ctrl-C de terminal ya mata al grupo; esto cubre el kill por pid).
+static DEV_CHILD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// Instala el handler SIGTERM/SIGINT del supervisor: reenvía SIGTERM al hijo y sale. Solo unix
+/// (el mismo alcance que `signals()`, M88.1); async-signal-safe (kill + _exit, sin asignar).
+fn instalar_limpieza_al_morir() {
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            fn signal(sig: i32, handler: usize) -> usize;
+        }
+        extern "C" fn al_morir(_sig: i32) {
+            unsafe extern "C" {
+                fn kill(pid: i32, sig: i32) -> i32;
+                fn _exit(code: i32) -> !;
+            }
+            let pid = DEV_CHILD.load(std::sync::atomic::Ordering::SeqCst);
+            if pid > 0 {
+                unsafe {
+                    kill(pid, 15); // SIGTERM: el hijo drena (serve_graceful) o muere por defecto
+                }
+            }
+            unsafe { _exit(130) }
+        }
+        const SIGINT: i32 = 2;
+        const SIGTERM: i32 = 15;
+        unsafe {
+            signal(SIGINT, al_morir as *const () as usize);
+            signal(SIGTERM, al_morir as *const () as usize);
+        }
+    }
+}
+
+/// Termina el hijo con SIGTERM (drenado ordenado vía `serve_graceful`) y, si a los ~3 s sigue
+/// vivo, escala a SIGKILL. En no-unix va directo al kill duro de std.
+fn terminate_gracefully(child: &mut process::Child) {
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        const SIGTERM: i32 = 15;
+        unsafe {
+            kill(child.id() as i32, SIGTERM);
+        }
+        for _ in 0..30 {
+            if let Ok(Some(_)) = child.try_wait() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        eprintln!("[dev] el programa no drenó a tiempo; terminación forzosa");
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Separa una opción `--flag <N>` inicial con valor entero. La usan `--fuel` (M42.1, límite de

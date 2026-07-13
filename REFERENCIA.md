@@ -466,6 +466,7 @@ Fuera de contrato: funciones **variádicas** (`printf` — UB en arm64), structs
 |---|---|
 | `ray new <nombre>` | crea un proyecto (ray.toml + src/main.ray + .gitignore) |
 | `ray run [archivo] [args…]` | ejecuta (por defecto `src/main.ray`); resuelve dependencias |
+| `ray dev [archivo] [args…]` | como `run`, pero reinicia ante cambios en `.ray`/`.ray.html`/`ray.toml` (SIGTERM → drenado con `serve_graceful`) |
 | `ray build [archivo]` | chequea y compila sin ejecutar (0 ok / 65 error) |
 | `ray test [archivo] [filtro]` | corre las `@test` (filtro por subcadena del nombre) |
 | `ray fmt <archivo>` | imprime la versión canónica |

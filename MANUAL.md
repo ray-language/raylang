@@ -1064,6 +1064,7 @@ Reglas (tabla completa en [`REFERENCIA.md` §13](REFERENCIA.md#13-ffi-tipos-mars
 ## 17. Herramientas
 
 ```sh
+ray dev [archivo]        # modo desarrollo: como run, pero REINICIA ante cambios (M92.1)
 ray fmt archivo.ray      # formatea (canónico e idempotente)
 ray test [archivo]       # corre las funciones @test (filtro opcional por nombre)
 ray doc archivo.ray      # documentación Markdown desde ///
@@ -1071,6 +1072,12 @@ ray repl                 # REPL interactivo
 ray lsp                  # servidor LSP (diagnósticos, hover, definición, rename, completion…)
 ray build                # chequea + compila sin ejecutar (para CI: 0 ok / 65 error)
 ```
+
+**Modo desarrollo** (`ray dev`): vigila los fuentes del proyecto (`.ray`, `.ray.html`, `ray.toml`)
+y ante un cambio reinicia el programa — un template editado se regenera al relanzar, y un servidor
+con `serve_graceful` **drena** sus conexiones antes de morir (el reinicio manda SIGTERM). Con la
+compilación en milisegundos, el ciclo editar→ver es de decenas de ms. Un programa que termina solo
+queda a la espera del siguiente cambio.
 
 Pruebas con `@test` (una función `() -> bool` o `() -> unit` que usa `assert`); cada test corre
 **aislado** (un panic no tumba la batería):

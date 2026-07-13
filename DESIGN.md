@@ -2086,6 +2086,11 @@ clasificación valor-vs-tipo de M11.3c para el reexport. Runtime intacto.
    (error si **ambos** existen → una sola forma canónica, evitando el lío histórico de Rust). La
    identidad del módulo sigue siendo la ruta `P` (prefijo `ns_prefix(P)`). Así `import geo;` resuelve
    `geo/mod.ray` y sus ítems quedan `geo::…`.
+   *M91.8 — auto-referencia*: si `P` no resuelve en ninguna raíz y su **primer segmento coincide con
+   el nombre del directorio raíz** (editar/correr `packages/net/http.ray` con `import net/trace;`),
+   se prueba contra el **padre** de la raíz — la misma vista que tiene un consumidor del paquete
+   (dependencia por ruta o caché `.ray-deps/`, cuya raíz de módulos es ese padre). Los fuentes de un
+   paquete se desarrollan así sin proyecto consumidor, y el LSP los diagnostica igual que corren.
 2. **AST/Parser**: `FromImport.is_pub: bool`; el parser acepta `pub from … import …;` (lookahead
    `Pub`+`From` en el bucle de `parse`, antes del camino `[anns][pub] item`).
 3. **Superficie pública con globals**. Hoy `recolectar_pub_fns/tipos` devuelve `módulo → {nombres}` y

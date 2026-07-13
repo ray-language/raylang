@@ -192,10 +192,29 @@ fn load_impl(entry: &Path, dep_roots: &[PathBuf], entry_source: Option<&str>, pr
                     pending.push((dep.clone(), PathBuf::from(format!("<std>/{dep}.ray")), false));
                     continue;
                 }
-                match resolve_module_path(&roots, dep) {
+                // AUTO-REFERENCIA (M91.8): dentro de un paquete, sus propios módulos se importan
+                // por el nombre del paquete (`import net/trace;` desde packages/net/http.ray).
+                // Si el primer segmento del import coincide con el NOMBRE del directorio raíz,
+                // se prueba también contra el PADRE — la misma vista que tiene un consumidor del
+                // paquete (dependencia por ruta o caché, cuya raíz de módulos es ese padre). Así
+                // editar/correr los fuentes de un paquete en el repo no exige un proyecto aparte.
+                let self_root = project_root
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .filter(|dir| dep == *dir || dep.starts_with(&format!("{dir}/")))
+                    .and_then(|_| project_root.parent().map(|p| vec![p.to_path_buf()]));
+                let resolved = match resolve_module_path(&roots, dep) {
                     Err(msg) => return Err(render(&source, line, col, 1, &name, &msg)),
-                    Ok(Some(mp)) => pending.push((dep.clone(), mp, false)),
-                    Ok(None) => return Err(render(&source, line, col, 1, &name, &format!(
+                    Ok(Some(mp)) => Some(mp),
+                    Ok(None) => match self_root.as_deref().map(|r| resolve_module_path(r, dep)) {
+                        Some(Err(msg)) => return Err(render(&source, line, col, 1, &name, &msg)),
+                        Some(Ok(mp)) => mp,
+                        None => None,
+                    },
+                };
+                match resolved {
+                    Some(mp) => pending.push((dep.clone(), mp, false)),
+                    None => return Err(render(&source, line, col, 1, &name, &format!(
                         "no se encuentra el módulo '{}' (se esperaba '{}.ray' o '{}/mod.ray' en: {})",
                         dep, dep, dep,
                         roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")

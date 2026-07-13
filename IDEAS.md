@@ -1121,8 +1121,15 @@ Fix: `dec_int` pasa a `Result`, chequea `p < len` en cada continuación y corta 
 llamadores de `dec_int` en `decode` propagan con `?`. Regresión: entero truncado, string
 sobredimensionado, size-update > 4096 y bomba de varint = `Err`, no crash (`cli_cli`,
 `paquete_net_hpack_decode_malformado`); el round-trip legítimo y el e2e HTTP/2 siguen verdes.
-Espejos `packages/net` ↔ `examples/web` juntos. El Huffman de decodificación sigue diferido
-(rechazado con error claro, como antes).
+Espejos `packages/net` ↔ `examples/web` juntos. ~~El Huffman de decodificación sigue diferido~~ →
+✅ **M91.2**: el decodificador entiende literales Huffman (cierra el bloqueo nº 1 de interop h2:
+casi todos los servidores reales comprimen sus cabeceras de respuesta). Truco de tamaño: el código
+del Apéndice B es **canónico** (códigos crecientes por longitud y, dentro de una longitud, por
+símbolo) → solo se transcribe la tabla de 257 LONGITUDES (extraída y verificada contra el RFC) y
+las bases (primer código/símbolo por longitud) se reconstruyen en runtime. Reglas §5.2: relleno
+final ≤ 7 bits todo unos (prefijo del EOS), EOS explícito = error. El codificador sigue emitiendo
+literales crudos (válidos). Vectores oficiales C.4 (tabla compartida) y C.6 (max 256, evicciones)
+en `hpack_huffman_vectores_c4_y_c6`, ambos motores. (El M31.1 de la tabla vieja queda cubierto.)
 
 ---
 

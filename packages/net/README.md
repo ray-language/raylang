@@ -62,7 +62,8 @@ fn main() -> int {
   Content-Length/chunked, reconexión y reintento transparente).
 - **`net/http2`** — framing HTTP/2 (preface, SETTINGS, frames). Hoja.
 - **`net/hpack`** — compresión de cabeceras HPACK (RFC 7541): `header`, `encode`, `decode` + tabla
-  dinámica. Determinista. Hoja.
+  dinámica. El decodificador entiende literales **Huffman** (Apéndice B, M91.2); el codificador
+  emite crudos (válido). Determinista. Hoja.
 - **`net/http2_client`** — cliente HTTP/2 sobre `net/http2` + `net/hpack`.
 - **`net/grpc_client`** — cliente gRPC sobre `net/http2` + `net/hpack` + `std/protobuf`.
 

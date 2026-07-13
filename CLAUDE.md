@@ -69,6 +69,12 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
   (La **limpieza de identificadores a inglés** L1+L2+L3 está **COMPLETA** — todo el
   core Rust, el core raylang y los métodos Eq/Show/Ord; ver
   `docs/limpieza-nombres-en-ingles.md`.)
+  - **Alcance del inglés (decisión jul 2026)**: aplica a TODO el código de `src/`,
+    `tests/`, `selfhost/`, `packages/` y `benchmarks/` — **incluidos los nombres de
+    funciones de test y los snippets raylang embebidos en tests**. `examples/` y
+    `book/` son flexibles (código de usuario / didáctico). Lo vigila el check CI
+    `tests/naming_policy.rs` (wordlist `tests/naming_policy_es.txt`; excepción
+    puntual con `// es-ok`).
 - **Comentarios y documentación en español**, en el propio código.
 - Cada fase lleva sus tests (`#[cfg(test)] mod tests` en su archivo).
 - **Todo token/nodo lleva `(línea, columna)`**; los errores siempre reportan

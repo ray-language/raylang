@@ -24,6 +24,10 @@ tipado, orientado a expresiones, sintaxis de llaves.
 > ⚠️ Rust se instaló vía rustup y **no está en el PATH por defecto**. Antes de
 > cualquier `cargo`, ejecuta: `source "$HOME/.cargo/env"`
 
+- **`make help`** lista todos los comandos del proyecto unificados (el `Makefile` ya
+  exporta el PATH de cargo): build/run/test/clippy/ci, release/slim/pgo, bench,
+  book, playground, vscode, install.
+
 - Tests: `cargo test`
 - Ejecutar un programa: `cargo run --quiet -- examples/basics/fib.ray` (corre en la **VM**, el
   motor de producto desde M35). `--interp` fuerza el intérprete (oráculo de desarrollo); `--vm`

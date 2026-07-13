@@ -29,6 +29,16 @@ const ESPERADO: &[&str] = &[
     "err: clave duplicada: 'a'",
     "err: cabecera de tabla vacía",
     "err: se esperaba fin de línea tras el valor de 'a'",
+    // M91.3 — tablas en línea (aplanadas / como valor en arreglos) y arreglos de tablas [[t]].
+    "point.x = 1",
+    "point.meta.tag = \"a\"",
+    "puntos = [{x = 1}, {x = 2}]",
+    "fruit.0.name = \"apple\"",
+    "fruit.0.physical.color = \"red\"",
+    "fruit.0.variety.0.vname = \"red delicious\"",
+    "fruit.1.name = \"banana\"",
+    "fruit.1.variety.0.vname = \"plantain\"",
+    "err: salto de línea dentro de una tabla en línea {…}",
 ];
 
 fn correr(flags: &[&str]) -> (Vec<String>, bool) {

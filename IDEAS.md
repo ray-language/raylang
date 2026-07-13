@@ -845,9 +845,14 @@ valores, subconjunto documentado); los huecos, verificados con sondas:
 | Laxitudes que la spec prohíbe: `a = 1 b = 2` en una línea (exige salto tras el valor); clave duplicada aceptada y **`toml_get` devuelve la PRIMERA** (se espera error o last-wins); `[]` cabecera vacía resetea a raíz en silencio | Sorpresas silenciosas | **63.3**: duplicada = Err, `[]` = Err, salto obligatorio tras el valor |
 | Menores: O(n²) por carácter (configs pequeños — impacto bajo); control chars crudos en strings; `toml_show` no escapa (debug, documentado) | — | dentro de su sub-fase o diferido |
 
-**Diferidos que siguen** (documentados en el propio módulo): inline tables `{…}`, arrays de
-tablas `[[…]]`, fechas, strings multilínea `"""…"""` — a demanda. Nota de raydoc pendiente: el
-manifiesto usa otro parser.
+**Diferidos que siguen** (documentados en el propio módulo): ~~inline tables `{…}`, arrays de
+tablas `[[…]]`~~ → ✅ **M91.3**: tablas en línea `{k = v, …}` (como valor de entrada se APLANAN a
+rutas con puntos — la semántica de la spec; dentro de un arreglo viven como variante nueva
+`TTable([TomlEntry])`; una línea, sin coma final) y `[[t]]` con rutas INDEXADAS (`t.0`, `t.1`, …;
+`resolver_tabla` reescribe cabeceras posteriores a través del último elemento — el ejemplo `fruit`
+de la spec con `[fruit.physical]` y `[[fruit.variety]]` anidado resuelve como manda). Golden en
+`toml_cli` ampliado. Quedan a demanda: fechas, strings multilínea `"""…"""`. Nota de raydoc
+pendiente: el manifiesto usa otro parser.
 
 ---
 

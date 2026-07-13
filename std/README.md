@@ -89,7 +89,9 @@ Operan sobre `bytes` (convierte un `string` con el builtin `to_bytes`).
 - **`std/regex`** — motor NFA lineal (Thompson): `full_match`, `search`, `find`, `find_str`, `find_all`,
   `replace_all`.
 - **`std/csv`** — `parse_csv(src) -> Result<[[string]], string>`, `write_csv(rows) -> string`.
-- **`std/toml`** — `enum TomlValue`, `parse_toml`, `toml_get`, `toml_show` (subconjunto de TOML).
+- **`std/toml`** — `enum TomlValue`, `parse_toml`, `toml_get`, `toml_show` (subconjunto de TOML;
+  M91.3: tablas en línea `{…}` aplanadas a rutas con puntos y arreglos de tablas `[[t]]` con rutas
+  indexadas `t.0`, `t.1`, …; quedan fechas y strings multilínea).
 - **`std/template`** — motor de plantillas HTML con autoescape: `enum TVal`, `ctx_*`, `render`.
 
 ### Criptografía y serialización (M40.7e)

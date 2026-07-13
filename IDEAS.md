@@ -598,8 +598,14 @@ ambos motores, `tests/postgres_cli.rs`) está probado; `std/` trae TCP/TLS + SHA
   typo en una variable = error de compilación (probado); **0.6 ms por render** (2× sobre el motor
   runtime optimizado, 7.7× sobre el original). Diferido: include/layouts, regeneración en `ray
   build`, `{% let %}`.
-- Diferido de fase 1: `{% include %}`/parciales (pide diseño de resolución: mapa de parciales en
-  compile vs. filesystem), filtros. ~~`s[i]` O(1) en la VM~~ → ✅ **M90.6** (en AMBOS motores, sin
+- Diferido de fase 1: ~~`{% include %}`/parciales~~ (✅ cerrado en el arco M55: `{% include
+  ruta/al/template(args) %}` por ruta desde la raíz + herencia `{% extends %}`/`{% block %}`; esta
+  fila quedó desactualizada). ~~Filtros~~ → ✅ **M91.6, resuelto SIN sintaxis nueva** (decisión
+  estilo §46-ternario: el `|` de Jinja chocaría con el OR binario): un filtro ES una expresión
+  raylang que `{{ }}` ya empalma — cadena de métodos (`{{ x.trim().to_upper() }}`, UFCS) o pipeline
+  a función libre (`{{ x |> text.capitalize() }}` con `{% import std/text %}`). Documentado en
+  MANUAL; regresión `filtros_via_metodos_y_pipelines` en `templ_cli`, ambos motores.
+  ~~`s[i]` O(1) en la VM~~ → ✅ **M90.6** (en AMBOS motores, sin
   cachear ni tocar la representación —la Opt.3 `Rc<str>` ya se midió y revirtió—: se elimina el
   `Vec<char>` completo que se asignaba POR ACCESO; ASCII indexa el byte en O(1) —también `len`—,
   no-ASCII escanea hasta `i` sin asignar; bucle `s[i]` sobre 64k chars: 37,9 s → 1,16 s, ~33×).

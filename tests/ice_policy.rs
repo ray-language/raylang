@@ -94,7 +94,7 @@ fn la_red_central_presenta_el_ice() {
         .expect("ejecuta el subproceso");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(101), "código 101 (convención Rust)\n{stderr}");
-    assert!(stderr.contains("error internal del compilador (ICE)"), "{stderr}");
+    assert!(stderr.contains("internal compiler error (ICE)"), "{stderr}");
     assert!(stderr.contains("invariante rota de prueba"), "el payload del pánico\n{stderr}");
-    assert!(stderr.contains("repórtalo"), "asks el reporte\n{stderr}");
+    assert!(stderr.contains("report it"), "asks el reporte\n{stderr}");
 }

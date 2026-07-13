@@ -1504,8 +1504,8 @@ pub fn repeat_str(s: &str, n: i64) -> String {
 /// Error de aridad "espera N argumento(s), se le pasaron M".
 fn arity(a: &[Type], n: usize, name: &str, detalle: &str) -> Result<(), BuiltinError> {
     if a.len() != n {
-        let plural = if n == 1 { "argumento" } else { "argumentos" };
-        return Err((None, format!("{} espera {} {}{}, se le pasaron {}", name, n, plural, detalle, a.len())));
+        let plural = if n == 1 { "argument" } else { "arguments" };
+        return Err((None, format!("{} expects {} {}{}, received {}", name, n, plural, detalle, a.len())));
     }
     Ok(())
 }
@@ -1513,7 +1513,7 @@ fn arity(a: &[Type], n: usize, name: &str, detalle: &str) -> Result<(), BuiltinE
 /// Error de aridad para builtins sin argumentos.
 fn nullary(a: &[Type], name: &str) -> Result<(), BuiltinError> {
     if !a.is_empty() {
-        return Err((None, format!("{} no espera argumentos, se le pasaron {}", name, a.len())));
+        return Err((None, format!("{} expects no arguments, received {}", name, a.len())));
     }
     Ok(())
 }
@@ -1544,7 +1544,7 @@ pub fn bytes_to_hex(b: &[u8]) -> String {
 fn mathf_check(a: &[Type], name: &str) -> Result<Type, BuiltinError> {
     arity(a, 1, name, "")?;
     if a[0] != Type::Float {
-        return Err((Some(0), format!("{} espera un float, no {}", name, a[0])));
+        return Err((Some(0), format!("{} expects a float, not {}", name, a[0])));
     }
     Ok(Type::Float)
 }
@@ -1557,7 +1557,7 @@ static BUILTINS: &[Builtin] = &[
     // print(x) -> unit: imprime un imprimible a stdout.
     Builtin { name: "print", opcode: OpCode::Print, check: |a| {
         arity(a, 1, "print", "")?;
-        if !printable(&a[0]) { return Err((Some(0), format!("print no can imprimir un {}", a[0]))); }
+        if !printable(&a[0]) { return Err((Some(0), format!("print cannot print a {}", a[0]))); }
         Ok(Type::Unit)
     } },
     // M48.4: `__len` — primitivo interno de `len`, al que baja el trait `Len` (`impl Len for [T]` etc.
@@ -1565,19 +1565,19 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "__len", opcode: OpCode::Len, check: |a| {
         arity(a, 1, "__len", "")?;
         if !matches!(a[0], Type::Array(_) | Type::String | Type::Map(_, _) | Type::Bytes) {
-            return Err((Some(0), format!("__len espera un array, un string, un Map o bytes, no {}", a[0])));
+            return Err((Some(0), format!("__len expects an array, a string, a Map or bytes, not {}", a[0])));
         }
         Ok(Type::Int)
     } },
     // M48.4b: `__push` — primitivo interno de `push`, al que baja `impl<T> Push<T> for [T]`.
     Builtin { name: "__push", opcode: OpCode::Push, check: |a| {
-        arity(a, 2, "__push", " (array, valor)")?;
+        arity(a, 2, "__push", " (array, value)")?;
         let elem = match &a[0] {
             Type::Array(e) => (**e).clone(),
-            other => return Err((Some(0), format!("__push espera un array como primer argumento, no {}", other))),
+            other => return Err((Some(0), format!("__push expects an array as first argument, not {}", other))),
         };
         if a[1] != elem {
-            return Err((Some(1), format!("__push: el array es de {} pero se empuja {}", elem, a[1])));
+            return Err((Some(1), format!("__push: the array is of {} but got {}", elem, a[1])));
         }
         Ok(Type::Unit)
     } },
@@ -1585,22 +1585,22 @@ static BUILTINS: &[Builtin] = &[
     Builtin { name: "to_string", opcode: OpCode::ToString, check: |a| {
         arity(a, 1, "to_string", "")?;
         if !matches!(a[0], Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes | Type::UInt(_)) {
-            return Err((Some(0), format!("to_string solo convierte int/float/bool/string/char/bytes/u*, no {}", a[0])));
+            return Err((Some(0), format!("to_string only converts int/float/bool/string/char/bytes/u*, not {}", a[0])));
         }
         Ok(Type::String)
     } },
     // M48.4b: `__contains` — primitivo interno de `contains`, al que bajan los impls de `Contains<T>`
     // (subcadena en string, pertenencia en arreglo). Bytes queda fuera (el builtin tampoco lo cubre).
     Builtin { name: "__contains", opcode: OpCode::Contains, check: |a| {
-        arity(a, 2, "__contains", " (string/array, valor)")?;
+        arity(a, 2, "__contains", " (string/array, value)")?;
         match &a[0] {
             Type::String => {
-                if a[1] != Type::String { return Err((Some(1), format!("__contains espera un string como subcadena, no {}", a[1]))); }
+                if a[1] != Type::String { return Err((Some(1), format!("__contains expects a string as substring, not {}", a[1]))); }
             }
             Type::Array(elem) => {
-                if a[1] != **elem { return Err((Some(1), format!("__contains: el array es de {} pero se busca {}", elem, a[1]))); }
+                if a[1] != **elem { return Err((Some(1), format!("__contains: the array is of {} but looking for {}", elem, a[1]))); }
             }
-            _ => return Err((Some(0), format!("__contains espera un string o un array, no {}", a[0]))),
+            _ => return Err((Some(0), format!("__contains expects a string or an array, not {}", a[0]))),
         }
         Ok(Type::Bool)
     } },
@@ -1608,7 +1608,7 @@ static BUILTINS: &[Builtin] = &[
     // en raylang (para `Hash`) y ordenar por code point.
     Builtin { name: "char_code", opcode: OpCode::CharCode, check: |a| {
         arity(a, 1, "char_code", "")?;
-        if a[0] != Type::Char { return Err((Some(0), format!("char_code espera un char, no {}", a[0]))); }
+        if a[0] != Type::Char { return Err((Some(0), format!("char_code expects a char, not {}", a[0]))); }
         Ok(Type::Int)
     } },
     // M43: hashes de producción vía `ring` (bytes -> bytes). Ver el bloque de helpers arriba.
@@ -1679,8 +1679,8 @@ static BUILTINS: &[Builtin] = &[
     // __char_from_code(n) -> [char] (diferido JSON-1): [] si n no es un code point válido.
     // El prelude → char_from_code -> Option<char>. El inverso de char_code.
     Builtin { name: "__char_from_code", opcode: OpCode::CharFromCode, check: |a| {
-        arity(a, 1, "__char_from_code", " (el code point)")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__char_from_code espera un int, no {}", a[0]))); }
+        arity(a, 1, "__char_from_code", " (the code point)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__char_from_code expects an int, not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Char)))
     } },
     // --- Bits de float (M54.1): primitivos totales; `std/math` → float_bits/float_from_bits. ---
@@ -1754,60 +1754,60 @@ static BUILTINS: &[Builtin] = &[
     // ocultos). Los cuerpos de sus impls (M48.4d) los llaman; sobreviven al retiro de los públicos (e-3).
     Builtin { name: "__trim", opcode: OpCode::Trim, check: |a| {
         arity(a, 1, "__trim", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__trim espera un string, no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__trim expects a string, not {}", a[0]))); }
         Ok(Type::String)
     } },
     Builtin { name: "__split", opcode: OpCode::Split, check: |a| {
         arity(a, 2, "__split", " (string, separador)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__split espera un string, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__split espera un string como separador, no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__split expects a string, not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__split expects a string as separator, not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     Builtin { name: "__replace", opcode: OpCode::Replace, check: |a| {
-        arity(a, 3, "__replace", " (string, de, a)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__replace espera un string, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__replace espera un string en 'de', no {}", a[1]))); }
-        if a[2] != Type::String { return Err((Some(2), format!("__replace espera un string en 'a', no {}", a[2]))); }
+        arity(a, 3, "__replace", " (string, from, to)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__replace expects a string, not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__replace expects a string in 'from', not {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__replace expects a string in 'to', not {}", a[2]))); }
         Ok(Type::String)
     } },
     Builtin { name: "__chars", opcode: OpCode::Chars, check: |a| {
         arity(a, 1, "__chars", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__chars espera un string, no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__chars expects a string, not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Char)))
     } },
     Builtin { name: "__starts_with", opcode: OpCode::StartsWith, check: |a| {
         arity(a, 2, "__starts_with", " (string, prefijo)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__starts_with espera un string, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__starts_with espera un string como prefijo, no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__starts_with expects a string, not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__starts_with expects a string as prefix, not {}", a[1]))); }
         Ok(Type::Bool)
     } },
     Builtin { name: "__ends_with", opcode: OpCode::EndsWith, check: |a| {
         arity(a, 2, "__ends_with", " (string, sufijo)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__ends_with espera un string, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__ends_with espera un string como sufijo, no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__ends_with expects a string, not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__ends_with expects a string as suffix, not {}", a[1]))); }
         Ok(Type::Bool)
     } },
     Builtin { name: "__to_upper", opcode: OpCode::ToUpper, check: |a| {
         arity(a, 1, "__to_upper", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__to_upper espera un string, no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__to_upper expects a string, not {}", a[0]))); }
         Ok(Type::String)
     } },
     Builtin { name: "__to_lower", opcode: OpCode::ToLower, check: |a| {
         arity(a, 1, "__to_lower", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__to_lower espera un string, no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__to_lower expects a string, not {}", a[0]))); }
         Ok(Type::String)
     } },
     Builtin { name: "__substring", opcode: OpCode::Substring, check: |a| {
         arity(a, 3, "__substring", " (string, start, fin)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__substring espera un string, no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("__substring espera un int como start, no {}", a[1]))); }
-        if a[2] != Type::Int { return Err((Some(2), format!("__substring espera un int como fin, no {}", a[2]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__substring expects a string, not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__substring expects an int as start, not {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__substring expects an int as end, not {}", a[2]))); }
         Ok(Type::String)
     } },
     Builtin { name: "__repeat", opcode: OpCode::Repeat, check: |a| {
         arity(a, 2, "__repeat", " (string, veces)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__repeat espera un string, no {}", a[0]))); }
-        if a[1] != Type::Int { return Err((Some(1), format!("__repeat espera un int como nº de veces, no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__repeat expects a string, not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__repeat expects an int as the repeat count, not {}", a[1]))); }
         Ok(Type::String)
     } },
     Builtin { name: "__to_bytes", opcode: OpCode::ToBytes, check: |a| {
@@ -1835,8 +1835,8 @@ static BUILTINS: &[Builtin] = &[
     // __index_of(s, sub) -> [int] (M11.7a): [] o [i] (índice de carácter). El prelude → Option<int>.
     Builtin { name: "__index_of", opcode: OpCode::IndexOf, check: |a| {
         arity(a, 2, "__index_of", " (string, subcadena)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__index_of espera un string como primer argumento, no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__index_of espera un string como subcadena, no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__index_of expects a string as first argument, not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__index_of expects a string as substring, not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::Int)))
     } },
     // join(arr, sep) -> string (M11.7a): une un [string] con el separador `sep`.
@@ -1851,11 +1851,11 @@ static BUILTINS: &[Builtin] = &[
                 _ => unreachable!(),
             }
         }
-        arity(a, 2, "join", " (array de string, separador)")?;
+        arity(a, 2, "join", " (array of string, separator)")?;
         if a[0] != Type::Array(Box::new(Type::String)) {
-            return Err((Some(0), format!("join espera un [string] o one Task como primer argumento, no {}", a[0])));
+            return Err((Some(0), format!("join expects a [string] or a Task as first argument, not {}", a[0])));
         }
-        if a[1] != Type::String { return Err((Some(1), format!("join espera un string como separador, no {}", a[1]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("join expects a string as separator, not {}", a[1]))); }
         Ok(Type::String)
     } },
     // M48.4b: `__reverse` — primitivo interno de `reverse`, al que baja `impl<T> Reverse for [T]`.
@@ -1863,7 +1863,7 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "__reverse", "")?;
         match &a[0] {
             Type::Array(_) => Ok(a[0].clone()),
-            other => Err((Some(0), format!("__reverse espera un array, no {}", other))),
+            other => Err((Some(0), format!("__reverse expects an array, not {}", other))),
         }
     } },
     // __pop(a) -> [T] (M11.7b): muta `a` quitando el último; [] si vacío, [x] si no. Prelude → Option<T>.
@@ -1871,17 +1871,17 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "__pop", "")?;
         match &a[0] {
             Type::Array(elem) => Ok(Type::Array(elem.clone())),
-            other => Err((Some(0), format!("__pop espera un array, no {}", other))),
+            other => Err((Some(0), format!("__pop expects an array, not {}", other))),
         }
     } },
     // __position(a, x) -> [int] (M11.7b): [] o [i] (índice de la 1ª ocurrencia). Prelude → Option<int>.
     Builtin { name: "__position", opcode: OpCode::Position, check: |a| {
-        arity(a, 2, "__position", " (array, valor)")?;
+        arity(a, 2, "__position", " (array, value)")?;
         match &a[0] {
             Type::Array(elem) => {
-                if a[1] != **elem { return Err((Some(1), format!("__position: el array es de {} pero se busca {}", elem, a[1]))); }
+                if a[1] != **elem { return Err((Some(1), format!("__position: the array is of {} but looking for {}", elem, a[1]))); }
             }
-            other => return Err((Some(0), format!("__position espera un array, no {}", other))),
+            other => return Err((Some(0), format!("__position expects an array, not {}", other))),
         }
         Ok(Type::Array(Box::new(Type::Int)))
     } },
@@ -1896,11 +1896,11 @@ static BUILTINS: &[Builtin] = &[
     // spawn(f: fn() -> T) -> Task<T>: lanza f (sin parámetros) como green thread y devuelve su handle
     // (M12.3; en M12.1/M12.2 devolvía unit y el handle no existía).
     Builtin { name: "spawn", opcode: OpCode::Spawn, check: |a| {
-        arity(a, 1, "spawn", " (one función sin parámetros)")?;
+        arity(a, 1, "spawn", " (a function with no parameters)")?;
         match &a[0] {
             Type::Fn(params, ret) if params.is_empty() => Ok(Type::Task(ret.clone())),
-            Type::Fn(_, _) => Err((Some(0), "spawn requiere one función SIN parámetros (fn() -> T)".into())),
-            other => Err((Some(0), format!("spawn espera one función, no {}", other))),
+            Type::Fn(_, _) => Err((Some(0), "spawn requires a function WITHOUT parameters (fn() -> T)".into())),
+            other => Err((Some(0), format!("spawn expects a function, not {}", other))),
         }
     } },
     // __task_failed(t) -> [string] (M56.5): bloquea hasta que la tarea termine; [] si acabó bien,
@@ -1910,26 +1910,26 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "__task_failed", " (one Task)")?;
         match &a[0] {
             Type::Task(_) => Ok(Type::Array(Box::new(Type::String))),
-            other => Err((Some(0), format!("__task_failed espera one Task, no {}", other))),
+            other => Err((Some(0), format!("__task_failed expects a Task, not {}", other))),
         }
     } },
     // select(chs: [Channel<T>]) -> int: bloquea hasta que algún canal de la lista esté listo para recibir
     // y devuelve el índice del primero listo (M12.4). Luego recv(chs[i]) toma el valor.
     Builtin { name: "select", opcode: OpCode::Select, check: |a| {
-        arity(a, 1, "select", " (un array de canales)")?;
+        arity(a, 1, "select", " (an array of channels)")?;
         match &a[0] {
             Type::Array(el) if matches!(&**el, Type::Channel(_)) => Ok(Type::Int),
-            other => Err((Some(0), format!("select espera un [Channel<T>], no {}", other))),
+            other => Err((Some(0), format!("select expects a [Channel<T>], not {}", other))),
         }
     } },
     // scope(body: fn() -> R) -> R: corre body; al volver, une todas las tareas lanzadas dentro y propaga
     // un fallo si lo hubo (M12.3 structured concurrency). El compilador lo baja con ScopeBegin/ScopeEnd.
     Builtin { name: "scope", opcode: OpCode::ScopeBegin, check: |a| {
-        arity(a, 1, "scope", " (one función sin parámetros)")?;
+        arity(a, 1, "scope", " (a function with no parameters)")?;
         match &a[0] {
             Type::Fn(params, ret) if params.is_empty() => Ok((**ret).clone()),
-            Type::Fn(_, _) => Err((Some(0), "scope requiere one función SIN parámetros (fn() -> R)".into())),
-            other => Err((Some(0), format!("scope espera one función, no {}", other))),
+            Type::Fn(_, _) => Err((Some(0), "scope requires a function WITHOUT parameters (fn() -> R)".into())),
+            other => Err((Some(0), format!("scope expects a function, not {}", other))),
         }
     } },
     // `Channel.new()` / `Channel.bounded(n)` (M48.1): crear un canal es una **función asociada**
@@ -1937,12 +1937,12 @@ static BUILTINS: &[Builtin] = &[
     // emite el compilador para la asociada (no acotado / acotado a la capacidad `n: int ≥ 0`).
     // send(ch, v) -> unit: envía v por el canal ch.
     Builtin { name: "send", opcode: OpCode::ChanSend, check: |a| {
-        arity(a, 2, "send", " (canal, valor)")?;
+        arity(a, 2, "send", " (channel, value)")?;
         let et = match &a[0] {
             Type::Channel(t) => (**t).clone(),
-            other => return Err((Some(0), format!("send espera un Channel como primer argumento, no {}", other))),
+            other => return Err((Some(0), format!("send expects a Channel as first argument, not {}", other))),
         };
-        if a[1] != et { return Err((Some(1), format!("send: el canal es de {} pero se pasó {}", et, a[1]))); }
+        if a[1] != et { return Err((Some(1), format!("send: the channel is of {} but got {}", et, a[1]))); }
         Ok(Type::Unit)
     } },
     // __recv(ch) -> [T]: recibe (primitivo). [v] si hay valor, [] si cerrado+vacío; bloquea si vacío+abierto.
@@ -1951,7 +1951,7 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "__recv", " (canal)")?;
         match &a[0] {
             Type::Channel(t) => Ok(Type::Array(Box::new((**t).clone()))),
-            other => Err((Some(0), format!("__recv espera un Channel, no {}", other))),
+            other => Err((Some(0), format!("__recv expects a Channel, not {}", other))),
         }
     } },
     // close: ad-hoc polimórfico (cerrar un recurso). Un Channel (M12.1) → unit; un handle de archivo
@@ -1960,56 +1960,56 @@ static BUILTINS: &[Builtin] = &[
 
     // M48.4c: primitivos internos de los métodos de `MapOps` (mismos opcodes que los públicos, ocultos).
     Builtin { name: "__insert", opcode: OpCode::MapInsert, check: |a| {
-        arity(a, 3, "__insert", " (mapa, clave, valor)")?;
+        arity(a, 3, "__insert", " (map, key, value)")?;
         let (kt, vt) = match &a[0] {
             Type::Map(k, v) => ((**k).clone(), (**v).clone()),
-            other => return Err((Some(0), format!("__insert espera un Map como primer argumento, no {}", other))),
+            other => return Err((Some(0), format!("__insert expects a Map as first argument, not {}", other))),
         };
-        if a[1] != kt { return Err((Some(1), format!("__insert: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
-        if a[2] != vt { return Err((Some(2), format!("__insert: el valor del Map es {} pero se pasó {}", vt, a[2]))); }
+        if a[1] != kt { return Err((Some(1), format!("__insert: the Map key is {} but got {}", kt, a[1]))); }
+        if a[2] != vt { return Err((Some(2), format!("__insert: the Map value is {} but got {}", vt, a[2]))); }
         Ok(Type::Unit)
     } },
     Builtin { name: "__contains_key", opcode: OpCode::MapContainsKey, check: |a| {
-        arity(a, 2, "__contains_key", " (mapa, clave)")?;
+        arity(a, 2, "__contains_key", " (map, key)")?;
         let kt = match &a[0] {
             Type::Map(k, _) => (**k).clone(),
-            other => return Err((Some(0), format!("__contains_key espera un Map como primer argumento, no {}", other))),
+            other => return Err((Some(0), format!("__contains_key expects a Map as first argument, not {}", other))),
         };
-        if a[1] != kt { return Err((Some(1), format!("__contains_key: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
+        if a[1] != kt { return Err((Some(1), format!("__contains_key: the Map key is {} but got {}", kt, a[1]))); }
         Ok(Type::Bool)
     } },
     Builtin { name: "__keys", opcode: OpCode::MapKeys, check: |a| {
         arity(a, 1, "__keys", " (mapa)")?;
         match &a[0] {
             Type::Map(k, _) => Ok(Type::Array(k.clone())),
-            other => Err((Some(0), format!("__keys espera un Map, no {}", other))),
+            other => Err((Some(0), format!("__keys expects a Map, not {}", other))),
         }
     } },
     Builtin { name: "__values", opcode: OpCode::MapValues, check: |a| {
         arity(a, 1, "__values", " (mapa)")?;
         match &a[0] {
             Type::Map(_, v) => Ok(Type::Array(v.clone())),
-            other => Err((Some(0), format!("__values espera un Map, no {}", other))),
+            other => Err((Some(0), format!("__values expects a Map, not {}", other))),
         }
     } },
     // __map_get(m, k) -> [V]: [] si la clave no está, [v] si está. El prelude → Option<V>.
     Builtin { name: "__map_get", opcode: OpCode::MapGet, check: |a| {
-        arity(a, 2, "__map_get", " (mapa, clave)")?;
+        arity(a, 2, "__map_get", " (map, key)")?;
         let (kt, vt) = match &a[0] {
             Type::Map(k, v) => ((**k).clone(), (**v).clone()),
-            other => return Err((Some(0), format!("__map_get espera un Map como primer argumento, no {}", other))),
+            other => return Err((Some(0), format!("__map_get expects a Map as first argument, not {}", other))),
         };
-        if a[1] != kt { return Err((Some(1), format!("__map_get: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
+        if a[1] != kt { return Err((Some(1), format!("__map_get: the Map key is {} but got {}", kt, a[1]))); }
         Ok(Type::Array(Box::new(vt)))
     } },
     // __map_remove(m, k) -> [V] (M13.1b): quita k del mapa; [] si no estaba, [v] si sí. Prelude → Option.
     Builtin { name: "__map_remove", opcode: OpCode::MapRemove, check: |a| {
-        arity(a, 2, "__map_remove", " (mapa, clave)")?;
+        arity(a, 2, "__map_remove", " (map, key)")?;
         let (kt, vt) = match &a[0] {
             Type::Map(k, v) => ((**k).clone(), (**v).clone()),
-            other => return Err((Some(0), format!("__map_remove espera un Map como primer argumento, no {}", other))),
+            other => return Err((Some(0), format!("__map_remove expects a Map as first argument, not {}", other))),
         };
-        if a[1] != kt { return Err((Some(1), format!("__map_remove: la clave del Map es {} pero se pasó {}", kt, a[1]))); }
+        if a[1] != kt { return Err((Some(1), format!("__map_remove: the Map key is {} but got {}", kt, a[1]))); }
         Ok(Type::Array(Box::new(vt)))
     } },
     // --- Matemáticas (M15.1a) ---
@@ -2033,15 +2033,15 @@ static BUILTINS: &[Builtin] = &[
     // pow(base, exp) -> float.
     Builtin { name: "__pow", opcode: OpCode::Pow, check: |a| {
         arity(a, 2, "pow", " (base, exponente)")?;
-        if a[0] != Type::Float { return Err((Some(0), format!("pow espera un float, no {}", a[0]))); }
-        if a[1] != Type::Float { return Err((Some(1), format!("pow espera un float, no {}", a[1]))); }
+        if a[0] != Type::Float { return Err((Some(0), format!("pow expects a float, not {}", a[0]))); }
+        if a[1] != Type::Float { return Err((Some(1), format!("pow expects a float, not {}", a[1]))); }
         Ok(Type::Float)
     } },
     // M65.2: atan2(y, x) -> float (binaria, como pow).
     Builtin { name: "__atan2", opcode: OpCode::Atan2, check: |a| {
         arity(a, 2, "atan2", " (y, x)")?;
-        if a[0] != Type::Float { return Err((Some(0), format!("atan2 espera un float, no {}", a[0]))); }
-        if a[1] != Type::Float { return Err((Some(1), format!("atan2 espera un float, no {}", a[1]))); }
+        if a[0] != Type::Float { return Err((Some(0), format!("atan2 expects a float, not {}", a[0]))); }
+        if a[1] != Type::Float { return Err((Some(1), format!("atan2 expects a float, not {}", a[1]))); }
         Ok(Type::Float)
     } },
     // M49.1b: abs/min/max/pi/e se movieron a `std/math` como funciones puras en raylang (abs vía el
@@ -2074,25 +2074,25 @@ static BUILTINS: &[Builtin] = &[
     // retorna), lo que aprovecha el análisis de divergencia del checker.
     Builtin { name: "panic", opcode: OpCode::Panic, check: |a| {
         arity(a, 1, "panic", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("panic espera un string, no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("panic expects a string, not {}", a[0]))); }
         Ok(Type::Unit)
     } },
     // eprint(x) -> unit (M11.2a): como print, pero a stderr.
     Builtin { name: "eprint", opcode: OpCode::EPrint, check: |a| {
         arity(a, 1, "eprint", "")?;
-        if !printable(&a[0]) { return Err((Some(0), format!("eprint no can imprimir un {}", a[0]))); }
+        if !printable(&a[0]) { return Err((Some(0), format!("eprint cannot print a {}", a[0]))); }
         Ok(Type::Unit)
     } },
     // __parse_int(s) -> [int] (M11.2a): [] si no parsea, [n] si sí. El prelude → Option<int>.
     Builtin { name: "__parse_int", opcode: OpCode::ParseInt, check: |a| {
         arity(a, 1, "__parse_int", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__parse_int espera un string, no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__parse_int expects a string, not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Int)))
     } },
     // __parse_float(s) -> [float] (M14): [] si no parsea, [f] si sí. El prelude → Option<float>.
     Builtin { name: "__parse_float", opcode: OpCode::ParseFloat, check: |a| {
         arity(a, 1, "__parse_float", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__parse_float espera un string, no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__parse_float expects a string, not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::Float)))
     } },
     // __read_line() -> [string] (M11.2a): [] en EOF, [linea] si no. El prelude → Option<string>.
@@ -2103,7 +2103,7 @@ static BUILTINS: &[Builtin] = &[
     // __env(s) -> [string] (M11.2b): [] si no existe, [valor] si sí. El prelude → Option<string>.
     Builtin { name: "__env", opcode: OpCode::Env, check: |a| {
         arity(a, 1, "__env", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__env espera un string, no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__env expects a string, not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // args() -> [string] (M11.2b): argumentos de la línea de comandos del programa.
@@ -2120,14 +2120,14 @@ static BUILTINS: &[Builtin] = &[
     // __read_file(path) -> [string] (M11.2c): ["ok", contenido] o ["err", msg]. Prelude → Result.
     Builtin { name: "__read_file", opcode: OpCode::ReadFile, check: |a| {
         arity(a, 1, "__read_file", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__read_file espera un string (la path), no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__read_file expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __write_file(path, contenido) -> [string] (M11.2c): ["ok"] o ["err", msg]. Prelude → Result.
     Builtin { name: "__write_file", opcode: OpCode::WriteFile, check: |a| {
         arity(a, 2, "__write_file", " (path, contenido)")?;
-        if a[0] != Type::String { return Err((Some(0), format!("__write_file espera un string (la path), no {}", a[0]))); }
-        if a[1] != Type::String { return Err((Some(1), format!("__write_file espera un string (el contenido), no {}", a[1]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("__write_file expects a string (the path), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__write_file expects a string (the contents), not {}", a[1]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __remove_file(ruta) -> [string] (M11.7c): ["ok"] o ["err", msg]. Prelude → Result<int,string>.
@@ -2323,13 +2323,13 @@ static BUILTINS: &[Builtin] = &[
         match &a[0] {
             Type::Int => Ok(Type::Int),
             Type::Channel(_) => Ok(Type::Unit),
-            other => Err((Some(0), format!("close espera un handle (int) o un Channel, no {}", other))),
+            other => Err((Some(0), format!("close expects a handle (int) or a Channel, not {}", other))),
         }
     } },
     // __exists(ruta) -> bool (M11.4b; M50.1 lo renombra a __x): ¿existe la ruta? Total. Envoltorio fs.exists.
     Builtin { name: "__exists", opcode: OpCode::Exists, check: |a| {
         arity(a, 1, "__exists", "")?;
-        if a[0] != Type::String { return Err((Some(0), format!("exists espera un string (la path), no {}", a[0]))); }
+        if a[0] != Type::String { return Err((Some(0), format!("exists expects a string (the path), not {}", a[0]))); }
         Ok(Type::Bool)
     } },
     // __append_file(path, contenido) -> [string] (M11.4b): ["ok"] o ["err", msg]. Prelude → Result.

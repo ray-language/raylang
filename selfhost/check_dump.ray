@@ -32,17 +32,17 @@ fn main() -> int {
                                     print("ok");
                                 },
                                 Result.Err(te) => {
-                                    print("error de types en " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
+                                    print("type error at " + to_string(te.line) + ":" + to_string(te.col) + ": " + te.msg);
                                 },
                             }
                         },
                         Result.Err(pe) => {
-                            print("error de syntax en " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
+                            print("syntax error at " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
                         },
                     }
                 },
                 Result.Err(le) => {
-                    print("error léxico en " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg);
+                    print("lex error at " + to_string(le.line) + ":" + to_string(le.col) + ": " + le.msg);
                 },
             }
             0

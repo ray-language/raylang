@@ -79,7 +79,7 @@ fn build_compila_ok_y_reports_errors() {
     std::fs::write(base.join("mal.ray"), "fn main() -> int { 1 + true }\n").unwrap();
     let (_o, err, code) = ray(&base, &["build", "mal.ray"]);
     assert_eq!(code, 65, "build de un program con error sale 65\n{err}");
-    assert!(err.contains("error de types"), "{err}");
+    assert!(err.contains("type error"), "{err}");
 }
 
 #[test]

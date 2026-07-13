@@ -77,8 +77,8 @@ fn compare_pos(src: &str, name_tmp: &str) {
     let expected = canonical(src);
     let obtained = check_dump(src, name_tmp);
     let pos = |s: &str| s.split(": ").next().unwrap_or("").to_string();
-    assert!(expected.starts_with("error de types en"), "el oráculo no rechazó:\n{src}\n  {expected}");
-    assert!(obtained.starts_with("error de types en"), "el auto-alojado no rechazó:\n{src}\n  {obtained}");
+    assert!(expected.starts_with("type error at"), "el oráculo no rechazó:\n{src}\n  {expected}");
+    assert!(obtained.starts_with("type error at"), "el auto-alojado no rechazó:\n{src}\n  {obtained}");
     assert_eq!(pos(&obtained), pos(&expected),
         "posición del rechazo difiere para:\n{src}\n  auto: {obtained}\n  rust: {expected}");
 }

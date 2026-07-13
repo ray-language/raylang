@@ -124,7 +124,7 @@ fn kind_str(k: &TokenKind) -> String {
 
 /// La salida canónica del lexer de Rust (el oráculo) para una fuente. En el caso feliz, los
 /// tokens (uno por línea); ante un error léxico, el `Display` de `LexError`
-/// (`error léxico en <l>:<c>: <msg>`) — exactamente lo que imprime `lex_dump.ray`.
+/// (`lex error at <l>:<c>: <msg>`) — exactamente lo que imprime `lex_dump.ray`.
 fn canonical(src: &str) -> String {
     match raylang::lexer::lex(src) {
         Ok(tokens) => tokens
@@ -228,7 +228,7 @@ fn positions_multilinea() {
 /// producir el MISMO mensaje y ubicación que el de Rust (no abortar con `panic`).
 #[test]
 fn errors_lexicos_equal_what_el_oracle() {
-    compare("#", "sh_err_inesperado.ray"); // carácter inesperado '#'
+    compare("#", "sh_err_inesperado.ray"); // unexpected character '#'
     compare("\"sin close", "sh_err_str_abierta.ray"); // cadena sin cerrar
     compare("\"rota\nlinea\"", "sh_err_str_nl.ray"); // salto de línea en cadena
     compare("\"mal\\q\"", "sh_err_escape.ray"); // secuencia de escape inválida '\q'

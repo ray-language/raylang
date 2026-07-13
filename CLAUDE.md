@@ -82,6 +82,13 @@ El **front-end (lexer/parser/checker) se comparte**; M2 reescribirá solo el
     `tests/naming_policy.rs` (wordlist `tests/naming_policy_es.txt`; excepción
     puntual con `// es-ok`).
 - **Comentarios y documentación en español**, en el propio código.
+- **Mensajes de diagnóstico de cara al usuario: en INGLÉS** (decisión 13 jul 2026;
+  cabeceras `type error at L:C:`, `syntax error at`, `lex error at`). Los mensajes
+  `expect()`/descripciones de asserts en tests son internos → siguen en español.
+  La migración va por lotes con `tools/spanglish.py` (lote 1 compilador COMPLETO;
+  pendientes: runtime, tooling, stdlib/paquetes). ⚠️ El espejo selfhost
+  (`selfhost/checker.ray` etc.) debe emitir mensajes byte-idénticos a Rust: todo
+  cambio de mensaje va en tándem con su espejo y con los tests que lo aseveran.
 - Cada fase lleva sus tests (`#[cfg(test)] mod tests` en su archivo).
 - **Todo token/nodo lleva `(línea, columna)`**; los errores siempre reportan
   ubicación. Es un principio, no un extra.

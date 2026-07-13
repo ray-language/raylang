@@ -33,9 +33,9 @@ macro_rules! ice {
 /// `ice!` o el de un pánico no auditado, p. ej. un índice fuera de rango).
 pub fn ice_banner(detail: &str) -> String {
     format!(
-        "error internal del compilador (ICE): {detail}\n\
-         Esto es un bug de raylang, no de tu program. Por favor repórtalo\n\
-         junto con el source what lo causó."
+        "internal compiler error (ICE): {detail}\n\
+         This is a bug in raylang, not in your program. Please report it\n\
+         along with the source that caused it."
     )
 }
 
@@ -163,9 +163,9 @@ error de syntax en 1:13: se esperaba one expresión, se encontró While
     #[test]
     fn el_banner_asks_reporte() {
         let b = ice_banner("ICE: algo se rompió");
-        assert!(b.starts_with("error internal del compilador (ICE): ICE: algo se rompió"));
-        assert!(b.contains("bug de raylang"), "{b}");
-        assert!(b.contains("repórtalo"), "{b}");
+        assert!(b.starts_with("internal compiler error (ICE): ICE: algo se rompió"));
+        assert!(b.contains("bug in raylang"), "{b}");
+        assert!(b.contains("report it"), "{b}");
     }
 
     #[test]

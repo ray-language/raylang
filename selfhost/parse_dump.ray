@@ -395,7 +395,7 @@ fn dump_from_import(fi: FromImport) -> string {
 fn lex_or_die(src: string) -> [Token] {
     match (lex(src)) {
         Result.Ok(toks) => toks,
-        Result.Err(e) => panic("error léxico: " + e.msg),
+        Result.Err(e) => panic("lex error: " + e.msg),
     }
 }
 
@@ -460,7 +460,7 @@ fn main() -> int {
                     dump_program(prog);
                 },
                 Result.Err(pe) => {
-                    print("error de syntax en " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
+                    print("syntax error at " + to_string(pe.line) + ":" + to_string(pe.col) + ": " + pe.msg);
                 },
             }
             0

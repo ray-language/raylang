@@ -21,7 +21,7 @@ fn run_file_stderr(src: &str, name: &str) -> String {
 #[test]
 fn error_de_types_shows_linea_y_cursor() {
     let err = run_file_stderr("fn main() -> int {\n    let x = 1 + true;\n    x\n}\n", "ray_err_ty.ray");
-    assert!(err.contains("error de types en 2:"), "header con ubicación\n{err}");
+    assert!(err.contains("type error at 2:"), "header con ubicación\n{err}");
     assert!(err.contains("2 |     let x = 1 + true;"), "shows la línea de source\n{err}");
     assert!(err.contains("|             ^"), "dibuja el cursor alineado\n{err}");
 }
@@ -38,7 +38,7 @@ fn error_de_execution_shows_context() {
 fn error_de_syntax_underscores_el_token_complete() {
     // M33a: el token ofensor se subraya entero (^^^^), no solo su primer carácter.
     let err = run_file_stderr("fn main() -> int {\n    let x = enum;\n    x\n}\n", "ray_err_span.ray");
-    assert!(err.contains("error de syntax en 2:13"), "header con ubicación\n{err}");
+    assert!(err.contains("syntax error at 2:13"), "header con ubicación\n{err}");
     assert!(err.contains("2 |     let x = enum;"), "shows la línea de source\n{err}");
     assert!(err.contains("|             ^^^^"), "underscores los 4 chars de 'enum'\n{err}");
     assert!(!err.contains("^^^^^"), "y no más de 4\n{err}");
@@ -48,7 +48,7 @@ fn error_de_syntax_underscores_el_token_complete() {
 fn error_de_types_underscores_la_expression_complete() {
     // M33a-2: el checker subraya la expresión entera, no solo su inicio.
     let err = run_file_stderr("fn main() -> int {\n    let x = 1 + true;\n    x\n}\n", "ray_err_span_expr.ray");
-    assert!(err.contains("error de types en 2:13"), "header\n{err}");
+    assert!(err.contains("type error at 2:13"), "header\n{err}");
     assert!(err.contains("|             ^^^^^^^^"), "underscores '1 + true' (8 chars)\n{err}");
     assert!(!err.contains("^^^^^^^^^"), "y no más de 8\n{err}");
 }
@@ -60,9 +60,9 @@ fn el_cli_shows_all_los_errors_de_types() {
         "fn f() -> int { 1 + true }\nfn g() -> int { \"x\" * 2 }\nfn main() -> int { f() + g() }\n",
         "ray_err_multi.ray",
     );
-    assert!(err.contains("error de types en 1:17"), "primer error\n{err}");
-    assert!(err.contains("error de types en 2:17"), "segundo error\n{err}");
-    assert!(err.contains("int y bool") && err.contains("string y int"), "{err}");
+    assert!(err.contains("type error at 1:17"), "primer error\n{err}");
+    assert!(err.contains("type error at 2:17"), "segundo error\n{err}");
+    assert!(err.contains("int and bool") && err.contains("string and int"), "{err}");
 }
 
 #[test]

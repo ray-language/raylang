@@ -34,7 +34,7 @@ pub struct ParseError {
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "error de syntax en {}:{}: {}", self.line, self.col, self.msg)
+        write!(f, "syntax error at {}:{}: {}", self.line, self.col, self.msg)
     }
 }
 
@@ -203,14 +203,14 @@ impl Parser {
         let pub_tok = if self.check(&TokenKind::Pub) { Some(self.advance()) } else { None };
         if self.check(&TokenKind::Const) {
             // M27.5: `const NAME: T = <literal>;`.
-            self.no_annotations(&anns, "one constante")?;
+            self.no_annotations(&anns, "a constant")?;
             let kw = self.advance();
-            let (name, _, _) = self.expect_ident("el name de la constante")?;
-            self.expect(&TokenKind::Colon, "':' after el name de la constante")?;
+            let (name, _, _) = self.expect_ident("the constant name")?;
+            self.expect(&TokenKind::Colon, "':' after the constant name")?;
             let ty = self.parse_type()?;
-            self.expect(&TokenKind::Eq, "'=' en la constante")?;
+            self.expect(&TokenKind::Eq, "'=' in the constant")?;
             let value = self.expression()?;
-            self.expect(&TokenKind::Semicolon, "';' al final de la constante")?;
+            self.expect(&TokenKind::Semicolon, "';' at the end of the constant")?;
             acc.consts.push(ConstDef { name, ty, value, is_pub: pub_tok.is_some(), line: kw.line, col: kw.col });
         } else if self.check(&TokenKind::Struct) {
             let mut s = self.struct_def()?;
@@ -223,13 +223,13 @@ impl Parser {
             e.is_pub = pub_tok.is_some();
             acc.enums.push(e);
         } else if self.check(&TokenKind::Trait) {
-            self.no_annotations(&anns, "un trait")?;
+            self.no_annotations(&anns, "a trait")?;
             let mut t = self.trait_def()?;
             t.is_pub = pub_tok.is_some();
             acc.traits.push(t);
         } else if self.check(&TokenKind::Impl) {
-            self.no_pub(&pub_tok, "un impl")?;
-            self.no_annotations(&anns, "un impl")?;
+            self.no_pub(&pub_tok, "an impl")?;
+            self.no_annotations(&anns, "an impl")?;
             acc.impls.push(self.impl_block()?);
         } else {
             let mut f = self.function()?;
@@ -246,7 +246,7 @@ impl Parser {
         let kw = self.expect(&TokenKind::Import, "'import'")?;
         let (module, _, _) = self.module_path()?;
         let alias = if self.eat(&TokenKind::As) {
-            Some(self.expect_ident("el alias after 'as'")?.0)
+            Some(self.expect_ident("the alias after 'as'")?.0)
         } else {
             None
         };
@@ -258,10 +258,10 @@ impl Parser {
     /// Dentro de un `import`/`from` no hay división, así que `/` se reinterpreta sin ambigüedad como
     /// separador de directorios. Devuelve la ruta unida con `/` y la posición del primer segmento.
     fn module_path(&mut self) -> Result<(String, usize, usize), ParseError> {
-        let (first, line, col) = self.expect_ident("el name del módulo a importar")?;
+        let (first, line, col) = self.expect_ident("the module name to import")?;
         let mut path = first;
         while self.eat(&TokenKind::Slash) {
-            let (seg, _, _) = self.expect_ident("un segmento de la path after '/'")?;
+            let (seg, _, _) = self.expect_ident("a path segment after '/'")?;
             path.push('/');
             path.push_str(&seg);
         }
@@ -277,9 +277,9 @@ impl Parser {
         self.expect(&TokenKind::Import, "'import' after 'from M'")?;
         let mut names = Vec::new();
         loop {
-            let (name, line, col) = self.expect_ident("un name a importar")?;
+            let (name, line, col) = self.expect_ident("a name to import")?;
             let alias = if self.eat(&TokenKind::As) {
-                Some(self.expect_ident("el alias after 'as'")?.0)
+                Some(self.expect_ident("the alias after 'as'")?.0)
             } else {
                 None
             };
@@ -288,7 +288,7 @@ impl Parser {
                 break;
             }
         }
-        self.expect(&TokenKind::Semicolon, "';' para close el 'from M import …'")?;
+        self.expect(&TokenKind::Semicolon, "';' to close the 'from M import …'")?;
         Ok(FromImport { module, names, is_pub, line: kw.line, col: kw.col })
     }
 
@@ -298,7 +298,7 @@ impl Parser {
         match pub_tok {
             None => Ok(()),
             Some(t) => Err(ParseError {
-                msg: format!("'pub' no se admite en {} (exporta el trait/type, no el impl)", context),
+                msg: format!("'pub' is not allowed on {} (export the trait/type, not the impl)", context),
                 line: t.line,
                 col: t.col,
                 len: t.len,
@@ -312,19 +312,19 @@ impl Parser {
         let mut anns = Vec::new();
         while self.check(&TokenKind::At) {
             let at = self.advance();
-            let (name, _, _) = self.expect_ident("el name de la anotación after '@'")?;
+            let (name, _, _) = self.expect_ident("the annotation name after '@'")?;
             let mut args = Vec::new();
             if self.eat(&TokenKind::LParen) {
                 if !self.check(&TokenKind::RParen) {
                     loop {
-                        let (a, _, _) = self.expect_ident("un argumento de la anotación")?;
+                        let (a, _, _) = self.expect_ident("an annotation argument")?;
                         args.push(a);
                         if !self.eat(&TokenKind::Comma) {
                             break;
                         }
                     }
                 }
-                self.expect(&TokenKind::RParen, "')' para close los argumentos de la anotación")?;
+                self.expect(&TokenKind::RParen, "')' to close the annotation arguments")?;
             }
             anns.push(Annotation { name, args, line: at.line, col: at.col });
         }
@@ -336,7 +336,7 @@ impl Parser {
         match anns.first() {
             None => Ok(()),
             Some(a) => Err(ParseError {
-                msg: format!("no se permiten annotations about {}", context),
+                msg: format!("annotations are not allowed on {}", context),
                 line: a.line,
                 col: a.col,
                 len: 1, // la anotación no guarda su extensión; el '@' basta
@@ -351,12 +351,12 @@ impl Parser {
     /// paréntesis, la variante es *unit*.
     fn enum_def(&mut self) -> Result<EnumDef, ParseError> {
         let kw = self.expect(&TokenKind::Enum, "'enum'")?;
-        let (name, _, _) = self.expect_ident("el name del enum")?;
+        let (name, _, _) = self.expect_ident("the enum name")?;
         let (type_params, bounds) = self.type_params_with_bounds()?; // M9.4: bounds en `<T: Trait>`
-        self.expect(&TokenKind::LBrace, "'{' after el name del enum")?;
+        self.expect(&TokenKind::LBrace, "'{' after the enum name")?;
         let mut variants = Vec::new();
         while !self.check(&TokenKind::RBrace) {
-            let (vname, vline, vcol) = self.expect_ident("el name de one variant")?;
+            let (vname, vline, vcol) = self.expect_ident("a variant name")?;
             let mut payload = Vec::new();
             if self.eat(&TokenKind::LParen) {
                 // Lista de tipos del payload; al menos uno (un '()' vacío no aporta).
@@ -366,14 +366,14 @@ impl Parser {
                         break;
                     }
                 }
-                self.expect(&TokenKind::RParen, "')' para close el payload de la variant")?;
+                self.expect(&TokenKind::RParen, "')' to close the variant payload")?;
             }
             variants.push(VariantDef { name: vname, payload, line: vline, col: vcol });
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
         }
-        self.expect(&TokenKind::RBrace, "'}' para close el enum")?;
+        self.expect(&TokenKind::RBrace, "'}' to close the enum")?;
         Ok(EnumDef { annotations: Vec::new(), is_pub: false, name, type_params, bounds, variants, line: kw.line, col: kw.col })
     }
 
@@ -381,20 +381,20 @@ impl Parser {
     /// field      = IDENT ':' type
     fn struct_def(&mut self) -> Result<StructDef, ParseError> {
         let kw = self.expect(&TokenKind::Struct, "'struct'")?;
-        let (name, _, _) = self.expect_ident("el name del struct")?;
+        let (name, _, _) = self.expect_ident("the struct name")?;
         let (type_params, bounds) = self.type_params_with_bounds()?; // M9.4: bounds en `<T: Trait>`
-        self.expect(&TokenKind::LBrace, "'{' after el name del struct")?;
+        self.expect(&TokenKind::LBrace, "'{' after the struct name")?;
         let mut fields = Vec::new();
         while !self.check(&TokenKind::RBrace) {
-            let (fname, _, _) = self.expect_ident("el name de un campo")?;
-            self.expect(&TokenKind::Colon, "':' after el name del campo")?;
+            let (fname, _, _) = self.expect_ident("a field name")?;
+            self.expect(&TokenKind::Colon, "':' after the field name")?;
             let ty = self.parse_type()?;
             fields.push((fname, ty));
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
         }
-        self.expect(&TokenKind::RBrace, "'}' para close el struct")?;
+        self.expect(&TokenKind::RBrace, "'}' to close the struct")?;
         Ok(StructDef { annotations: Vec::new(), is_pub: false, name, type_params, bounds, fields, line: kw.line, col: kw.col })
     }
 
@@ -403,9 +403,9 @@ impl Parser {
     /// tparam   = IDENT [ ':' IDENT { '+' IDENT } ]    (el bound, M9.2)
     fn function(&mut self) -> Result<Function, ParseError> {
         let kw = self.expect(&TokenKind::Fn, "'fn'")?;
-        let (name, _, _) = self.expect_ident("el name de la función")?;
+        let (name, _, _) = self.expect_ident("the function name")?;
         let (type_params, bounds) = self.type_params_with_bounds()?;
-        self.expect(&TokenKind::LParen, "'(' after el name de la función")?;
+        self.expect(&TokenKind::LParen, "'(' after the function name")?;
         let params = if self.check(&TokenKind::RParen) {
             Vec::new()
         } else {
@@ -447,22 +447,22 @@ impl Parser {
         let lib = match &lib_tok.kind {
             TokenKind::Str(s) => s.clone(),
             _ => return Err(ParseError {
-                msg: "se esperaba el name de la librería como string after 'extern' (p. ej. extern \"m\")".into(),
+                msg: "expected the library name as a string after 'extern' (e.g. extern \"m\")".into(),
                 line: lib_tok.line, col: lib_tok.col, len: 1,
             }),
         };
         self.expect(&TokenKind::LBrace, "'{' after extern \"lib\"")?;
         while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
-            let kw = self.expect(&TokenKind::Fn, "'fn' en el block extern")?;
-            let (name, _, _) = self.expect_ident("el name de la función externa")?;
-            self.expect(&TokenKind::LParen, "'(' after el name de la función externa")?;
+            let kw = self.expect(&TokenKind::Fn, "'fn' in the extern block")?;
+            let (name, _, _) = self.expect_ident("the extern function name")?;
+            self.expect(&TokenKind::LParen, "'(' after the extern function name")?;
             let params = if self.check(&TokenKind::RParen) { Vec::new() } else { self.params()? };
             self.expect(&TokenKind::RParen, "')'")?;
             let return_type = if self.eat(&TokenKind::Arrow) { self.parse_type()? } else { Type::Unit };
-            self.expect(&TokenKind::Semicolon, "';' al final de la signature externa (no lleva body)")?;
+            self.expect(&TokenKind::Semicolon, "';' at the end of the extern signature (it has no body)")?;
             acc.externs.push(ExternFn { name, lib: lib.clone(), params, return_type, line: kw.line, col: kw.col });
         }
-        self.expect(&TokenKind::RBrace, "'}' para close el block extern")?;
+        self.expect(&TokenKind::RBrace, "'}' to close the extern block")?;
         Ok(())
     }
 
@@ -472,15 +472,15 @@ impl Parser {
     /// métodos por defecto (con cuerpo) se difieren a M9.3.
     fn trait_def(&mut self) -> Result<TraitDef, ParseError> {
         let kw = self.expect(&TokenKind::Trait, "'trait'")?;
-        let (name, _, _) = self.expect_ident("el name del trait")?;
+        let (name, _, _) = self.expect_ident("the trait name")?;
         // M28.2: parámetros de tipo del trait, `trait From<S>`. Sin `<`, vacío (trait de M9).
         let (type_params, _) = self.type_params_with_bounds()?;
-        self.expect(&TokenKind::LBrace, "'{' after el name del trait")?;
+        self.expect(&TokenKind::LBrace, "'{' after the trait name")?;
         let mut methods = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
             methods.push(self.method_sig()?);
         }
-        self.expect(&TokenKind::RBrace, "'}' para close el trait")?;
+        self.expect(&TokenKind::RBrace, "'}' to close the trait")?;
         Ok(TraitDef { is_pub: false, name, type_params, methods, line: kw.line, col: kw.col })
     }
 
@@ -489,11 +489,11 @@ impl Parser {
     /// Termina en `;` (método **requerido**) o en un bloque (método **por defecto**,
     /// M9.3a): el cuerpo que un impl hereda si no lo redefine.
     fn method_sig(&mut self) -> Result<MethodSig, ParseError> {
-        let kw = self.expect(&TokenKind::Fn, "'fn' en one signature de método")?;
-        let (name, _, _) = self.expect_ident("el name del método")?;
+        let kw = self.expect(&TokenKind::Fn, "'fn' in a method signature")?;
+        let (name, _, _) = self.expect_ident("the method name")?;
         // M40.2c: parámetros de tipo propios del método, `fn map<U>(self, ...)`. Sin `<`, vacío.
         let (type_params, bounds) = self.type_params_with_bounds()?;
-        self.expect(&TokenKind::LParen, "'(' after el name del método")?;
+        self.expect(&TokenKind::LParen, "'(' after the method name")?;
         let params = self.method_params()?;
         self.expect(&TokenKind::RParen, "')'")?;
         let return_type = if self.eat(&TokenKind::Arrow) {
@@ -505,7 +505,7 @@ impl Parser {
         let default_body = if self.check(&TokenKind::LBrace) {
             Some(self.block()?)
         } else {
-            self.expect(&TokenKind::Semicolon, "';' o un body '{ ... }' para el método")?;
+            self.expect(&TokenKind::Semicolon, "';' or a '{ ... }' body for the method")?;
             None
         };
         Ok(MethodSig { name, type_params, bounds, params, return_type, default_body, line: kw.line, col: kw.col })
@@ -520,7 +520,7 @@ impl Parser {
         // Parámetros de tipo del impl (M9.2b): `impl<T: A + B> Trait for Caja<T>`. Sin `<`,
         // ambos quedan vacíos (impl concreto de M9.1).
         let (type_params, bounds) = self.type_params_with_bounds()?;
-        let (trait_name, _, _) = self.expect_ident("el name del trait")?;
+        let (trait_name, _, _) = self.expect_ident("the trait name")?;
         // M28.2: argumentos de tipo del trait, `impl From<string> for E`. Sin `<`, vacío.
         let trait_args = self.type_args()?;
         // `for` es palabra clave desde M27.2 (antes era un identificador aquí). Se conserva el mensaje de
@@ -534,15 +534,15 @@ impl Parser {
                 TokenKind::Ident(n) => n.clone(),
                 other => format!("{:?}", other),
             };
-            return Err(ParseError { msg: format!("se esperaba 'for', no '{}'", found), line: fline, col: fcol, len: flen });
+            return Err(ParseError { msg: format!("expected 'for', not '{}'", found), line: fline, col: fcol, len: flen });
         }
         let target = self.parse_type()?;
-        self.expect(&TokenKind::LBrace, "'{' para abrir el body del impl")?;
+        self.expect(&TokenKind::LBrace, "'{' to open the impl body")?;
         let mut methods = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
             methods.push(self.impl_method()?);
         }
-        self.expect(&TokenKind::RBrace, "'}' para close el impl")?;
+        self.expect(&TokenKind::RBrace, "'}' to close the impl")?;
         Ok(ImplBlock { trait_name, trait_args, type_params, bounds, target, methods, line: kw.line, col: kw.col })
     }
 
@@ -551,10 +551,10 @@ impl Parser {
     /// Como `function()` pero con `method_params` (admite `self`). M40.2c: admite parámetros de
     /// tipo propios del método (`fn map<U>(self, ...)`), para casar con la firma del trait.
     fn impl_method(&mut self) -> Result<Function, ParseError> {
-        let kw = self.expect(&TokenKind::Fn, "'fn' en un método de impl")?;
-        let (name, _, _) = self.expect_ident("el name del método")?;
+        let kw = self.expect(&TokenKind::Fn, "'fn' in an impl method")?;
+        let (name, _, _) = self.expect_ident("the method name")?;
         let (type_params, bounds) = self.type_params_with_bounds()?;
-        self.expect(&TokenKind::LParen, "'(' after el name del método")?;
+        self.expect(&TokenKind::LParen, "'(' after the method name")?;
         let params = self.method_params()?;
         self.expect(&TokenKind::RParen, "')'")?;
         let return_type = if self.eat(&TokenKind::Arrow) {
@@ -600,8 +600,8 @@ impl Parser {
         }
         // Resto: param { ',' param }, igual que `params()`.
         loop {
-            let (name, line, col) = self.expect_ident("el name de un parámetro")?;
-            self.expect(&TokenKind::Colon, "':' after el name del parámetro")?;
+            let (name, line, col) = self.expect_ident("a parameter name")?;
+            self.expect(&TokenKind::Colon, "':' after the parameter name")?;
             let ty = self.parse_type()?;
             params.push(Param { name, ty, line, col });
             if !self.eat(&TokenKind::Comma) {
@@ -619,11 +619,11 @@ impl Parser {
         let mut bounds = Vec::new();
         if self.eat(&TokenKind::Lt) {
             loop {
-                let (name, _, _) = self.expect_ident("el name de un parámetro de type")?;
+                let (name, _, _) = self.expect_ident("a type parameter name")?;
                 // Bound opcional: ': Trait { + Trait }'.
                 if self.eat(&TokenKind::Colon) {
                     loop {
-                        let (tr, _, _) = self.expect_ident("el name de un trait en el bound")?;
+                        let (tr, _, _) = self.expect_ident("a trait name in the bound")?;
                         bounds.push((name.clone(), tr));
                         if !self.eat(&TokenKind::Plus) {
                             break;
@@ -635,7 +635,7 @@ impl Parser {
                     break;
                 }
             }
-            self.close_type_angle("'>' para close los parámetros de type")?;
+            self.close_type_angle("'>' to close the type parameters")?;
         }
         Ok((params, bounds))
     }
@@ -652,7 +652,7 @@ impl Parser {
                     break;
                 }
             }
-            self.close_type_angle("'>' para close los argumentos de type")?;
+            self.close_type_angle("'>' to close the type arguments")?;
         }
         Ok(args)
     }
@@ -661,8 +661,8 @@ impl Parser {
     fn params(&mut self) -> Result<Vec<Param>, ParseError> {
         let mut params = Vec::new();
         loop {
-            let (name, line, col) = self.expect_ident("el name de un parámetro")?;
-            self.expect(&TokenKind::Colon, "':' after el name del parámetro")?;
+            let (name, line, col) = self.expect_ident("a parameter name")?;
+            self.expect(&TokenKind::Colon, "':' after the parameter name")?;
             let ty = self.parse_type()?;
             params.push(Param { name, ty, line, col });
             if !self.eat(&TokenKind::Comma) {
@@ -687,7 +687,7 @@ impl Parser {
         if self.eat(&TokenKind::Dyn) {
             let mut traits = Vec::new();
             loop {
-                let (name, _, _) = self.expect_ident("el name del trait after 'dyn'")?;
+                let (name, _, _) = self.expect_ident("the trait name after 'dyn'")?;
                 traits.push(name);
                 if !self.eat(&TokenKind::Plus) {
                     break;
@@ -701,7 +701,7 @@ impl Parser {
         if self.check(&TokenKind::LBracket) {
             self.advance();
             let elem = self.parse_type()?;
-            self.expect(&TokenKind::RBracket, "']' para close el type de array")?;
+            self.expect(&TokenKind::RBracket, "']' to close the array type")?;
             return Ok(Type::Array(Box::new(elem)));
         }
         // Tupla: (T1, T2, …). Un `(T)` de un solo elemento es solo un paréntesis → el tipo interior.
@@ -719,16 +719,16 @@ impl Parser {
                     }
                 }
             }
-            self.expect(&TokenKind::RParen, "')' para close el type tupla")?;
+            self.expect(&TokenKind::RParen, "')' to close the tuple type")?;
             if elems.len() == 1 {
-                return Ok(elems.into_iter().next().unwrap_or_else(|| crate::ice!("tupla de 1 elemento sin elemento")));
+                return Ok(elems.into_iter().next().unwrap_or_else(|| crate::ice!("1-element tuple without an element")));
             }
             return Ok(Type::Tuple(elems));
         }
         // Tipo función: fn(T1, T2) -> R  (el '-> R' es opcional; ausente = unit).
         if self.check(&TokenKind::Fn) {
             self.advance();
-            self.expect(&TokenKind::LParen, "'(' after 'fn' en un type función")?;
+            self.expect(&TokenKind::LParen, "'(' after 'fn' in a function type")?;
             let mut params = Vec::new();
             if !self.check(&TokenKind::RParen) {
                 loop {
@@ -738,7 +738,7 @@ impl Parser {
                     }
                 }
             }
-            self.expect(&TokenKind::RParen, "')' para close el type función")?;
+            self.expect(&TokenKind::RParen, "')' to close the function type")?;
             let ret = if self.eat(&TokenKind::Arrow) {
                 self.parse_type()?
             } else {
@@ -755,7 +755,7 @@ impl Parser {
             // el loader lo resuelve a `M::Tipo` (validando `import M;` + `pub`). Sin loader (REPL,
             // un solo archivo) un `M.Tipo` no resuelve y el checker lo rechaza.
             if self.eat(&TokenKind::Dot) {
-                let (ty, _, _) = self.expect_ident("el name del type after 'M.'")?;
+                let (ty, _, _) = self.expect_ident("the type name after 'M.'")?;
                 name = format!("{}.{}", name, ty);
             }
             let args = self.type_args()?;
@@ -772,7 +772,7 @@ impl Parser {
             TokenKind::UIntType(w) => Type::UInt(*w),
             // Nota: el mensaje conserva su texto original (sin u8/u32/u64) para no romper el oráculo del
             // parser auto-alojado (`selfhost/parser.ray`), que aún no conoce los enteros con tamaño.
-            _ => return Err(self.error_here("se esperaba un type (int, float, bool, string, char, bytes, [T] o un struct)".into())),
+            _ => return Err(self.error_here("expected a type (int, float, bool, string, char, bytes, [T] or a struct)".into())),
         };
         self.advance();
         Ok(ty)
@@ -818,10 +818,10 @@ impl Parser {
             // `x == y` ya se consumió como expresión y no se confunde con esto.
             if self.eat(&TokenKind::Eq) {
                 if !is_lvalue(&expr) {
-                    return Err(self.error_here("el lado izquierdo de '=' no es asignable".into()));
+                    return Err(self.error_here("the left-hand side of '=' is not assignable".into()));
                 }
                 let value = self.expression()?;
-                self.expect(&TokenKind::Semicolon, "';' al final de la asignación")?;
+                self.expect(&TokenKind::Semicolon, "';' at the end of the assignment")?;
                 statements.push(Stmt { kind: StmtKind::Assign { target: expr, value }, line, col });
                 continue;
             }
@@ -839,11 +839,11 @@ impl Parser {
                 // necesita `;` (DESIGN.md §6).
                 statements.push(Stmt { kind: StmtKind::Expr(expr), line, col });
             } else {
-                return Err(self.error_here("se esperaba ';' después de la expresión".into()));
+                return Err(self.error_here("expected ';' after the expression".into()));
             }
         }
 
-        let close = self.expect(&TokenKind::RBrace, "'}' para close el block")?;
+        let close = self.expect(&TokenKind::RBrace, "'}' to close the block")?;
         Ok(Block {
             statements,
             tail,
@@ -866,7 +866,7 @@ impl Parser {
             self.advance();
             let mut names = Vec::new();
             loop {
-                let (n, _, _) = self.expect_ident("un name en la desestructuración")?;
+                let (n, _, _) = self.expect_ident("a name in the destructuring")?;
                 names.push(if n == "_" { None } else { Some(n) }); // `_` descarta esa posición
                 if !self.eat(&TokenKind::Comma) {
                     break;
@@ -875,25 +875,25 @@ impl Parser {
                     break;
                 }
             }
-            self.expect(&TokenKind::RParen, "')' para close la desestructuración")?;
-            self.expect(&TokenKind::Eq, "'=' en la desestructuración")?;
+            self.expect(&TokenKind::RParen, "')' to close the destructuring")?;
+            self.expect(&TokenKind::Eq, "'=' in the destructuring")?;
             let value = self.expression()?;
-            self.expect(&TokenKind::Semicolon, "';' al final de la declaración")?;
+            self.expect(&TokenKind::Semicolon, "';' at the end of the declaration")?;
             return Ok(Stmt {
                 kind: StmtKind::LetTuple { names, value, mutable },
                 line: kw.line,
                 col: kw.col,
             });
         }
-        let (name, _, _) = self.expect_ident("el name de la variable")?;
+        let (name, _, _) = self.expect_ident("the variable name")?;
         let ty = if self.eat(&TokenKind::Colon) {
             Some(self.parse_type()?)
         } else {
             None
         };
-        self.expect(&TokenKind::Eq, "'=' en la declaración")?;
+        self.expect(&TokenKind::Eq, "'=' in the declaration")?;
         let value = self.expression()?;
-        self.expect(&TokenKind::Semicolon, "';' al final de la declaración")?;
+        self.expect(&TokenKind::Semicolon, "';' at the end of the declaration")?;
         Ok(Stmt {
             kind: StmtKind::Let { name, ty, value, mutable },
             line: kw.line,
@@ -921,12 +921,12 @@ impl Parser {
                     // sub-AST nace con posiciones de la fuente (no las de la cadena) → el LSP da
                     // hover sobre los identificadores dentro de `${…}`.
                     let toks = crate::lexer::lex_at(&src, el, ec)
-                        .map_err(|e| ParseError { msg: format!("en la interpolación: {}", e.msg), line: el, col: ec, len: 1 })?;
+                        .map_err(|e| ParseError { msg: format!("in the interpolation: {}", e.msg), line: el, col: ec, len: 1 })?;
                     let mut sub = Parser::new(toks);
                     let e = sub.expression()
-                        .map_err(|e| ParseError { msg: format!("en la interpolación: {}", e.msg), line: el, col: ec, len: 1 })?;
+                        .map_err(|e| ParseError { msg: format!("in the interpolation: {}", e.msg), line: el, col: ec, len: 1 })?;
                     if !sub.is_at_end() {
-                        return Err(ParseError { msg: "la interpolación must ser one sola expresión".into(), line: el, col: ec, len: 1 });
+                        return Err(ParseError { msg: "an interpolation must be a single expression".into(), line: el, col: ec, len: 1 });
                     }
                     // El azúcar de una expresión anidada (interpolación/pipeline dentro de `${…}`) vive en
                     // el sub-parser → se fusiona para no perderlo al formatear.
@@ -947,7 +947,7 @@ impl Parser {
                 },
             });
         }
-        let root = acc.unwrap_or_else(|| crate::ice!("one string interpolada llegó sin parts del lexer"));
+        let root = acc.unwrap_or_else(|| crate::ice!("an interpolated string arrived without parts from the lexer"));
         // Indexado por la posición del nodo RAÍZ desazucarado (el propio `to_string` si es un solo `${e}`,
         // o el `+` externo si hay literales). El formateador lo consulta ahí para reemitir la cadena.
         self.interp_sites.insert((root.line, root.col), segs);
@@ -971,7 +971,7 @@ impl Parser {
             self.advance();
             let mut names = Vec::new();
             loop {
-                let (n, _, _) = self.expect_ident("un name en el patrón del for")?;
+                let (n, _, _) = self.expect_ident("a name in the for pattern")?;
                 names.push(if n == "_" { None } else { Some(n) });
                 if !self.eat(&TokenKind::Comma) {
                     break;
@@ -980,13 +980,13 @@ impl Parser {
                     break;
                 }
             }
-            self.expect(&TokenKind::RParen, "')' para close el patrón del for")?;
+            self.expect(&TokenKind::RParen, "')' to close the for pattern")?;
             ForPat::Tuple(names)
         } else {
-            let (n, _, _) = self.expect_ident("el name de la variable del for")?;
+            let (n, _, _) = self.expect_ident("the for variable name")?;
             ForPat::Single(n)
         };
-        self.expect(&TokenKind::In, "'in' en el for")?;
+        self.expect(&TokenKind::In, "'in' in the for")?;
         // El iterable. La condición del bloque va sin paréntesis (como if/while), así que el literal de
         // struct está prohibido aquí (mismo compromiso): se usa `no_struct` en la expresión.
         let start = self.expr_no_struct()?;
@@ -1012,7 +1012,7 @@ impl Parser {
         } else {
             Some(self.expression()?)
         };
-        self.expect(&TokenKind::Semicolon, "';' al final del return")?;
+        self.expect(&TokenKind::Semicolon, "';' at the end of the return")?;
         Ok(Stmt {
             kind: StmtKind::Return { value },
             line: kw.line,
@@ -1046,7 +1046,7 @@ impl Parser {
         self.depth += 1;
         if self.depth > MAX_PARSE_DEPTH {
             return Err(self.error_here(format!(
-                "nesting demasiado profundo (límite: {MAX_PARSE_DEPTH} niveles)"
+                "nesting too deep (limit: {MAX_PARSE_DEPTH} levels)"
             )));
         }
         Ok(())
@@ -1279,7 +1279,7 @@ impl Parser {
                 } else {
                     self.args()?
                 };
-                self.expect(&TokenKind::RParen, "')' para close la llamada")?;
+                self.expect(&TokenKind::RParen, "')' to close the call")?;
                 expr = Expr {
                     kind: ExprKind::Call { callee: Box::new(expr), args },
                     line,
@@ -1288,7 +1288,7 @@ impl Parser {
             } else if self.check(&TokenKind::LBracket) {
                 self.advance(); // '['
                 let index = self.expression()?;
-                self.expect(&TokenKind::RBracket, "']' para close la indexación")?;
+                self.expect(&TokenKind::RBracket, "']' to close the indexing")?;
                 expr = Expr {
                     kind: ExprKind::Index { array: Box::new(expr), index: Box::new(index) },
                     line,
@@ -1308,7 +1308,7 @@ impl Parser {
                     };
                     continue;
                 }
-                let (name, nl, nc) = self.expect_ident("el name del campo after '.'")?;
+                let (name, nl, nc) = self.expect_ident("the field name after '.'")?;
                 // Posición del nombre del campo/método, para el hover del LSP (M10.2g).
                 self.field_name_pos.entry((line, col, name.clone())).or_default().push((nl, nc));
                 // `M.Tipo { ... }`: literal de struct calificado por módulo (M11.3c-3). Solo si el
@@ -1408,15 +1408,15 @@ impl Parser {
                             }
                         }
                     }
-                    self.expect(&TokenKind::RParen, "')' para close la tupla")?;
+                    self.expect(&TokenKind::RParen, "')' to close the tuple")?;
                     return Ok(Expr { kind: ExprKind::TupleLit(elems), line: tok.line, col: tok.col });
                 }
-                self.expect(&TokenKind::RParen, "')' para close el paréntesis")?;
+                self.expect(&TokenKind::RParen, "')' to close the parenthesis")?;
                 return Ok(Expr { kind: first.kind, line: tok.line, col: tok.col });
             }
             other => {
                 return Err(ParseError {
-                    msg: format!("se esperaba one expresión, se encontró {:?}", other),
+                    msg: format!("expected an expression, found {:?}", other),
                     line: tok.line,
                     col: tok.col,
                     len: tok.len,
@@ -1436,7 +1436,7 @@ impl Parser {
         }
         self.expect(&TokenKind::LParen, "'(' after 'if'")?;
         let cond = self.expression()?;
-        self.expect(&TokenKind::RParen, "')' after la condición")?;
+        self.expect(&TokenKind::RParen, "')' after the condition")?;
         let then_branch = self.block()?;
 
         let else_branch = if self.eat(&TokenKind::Else) {
@@ -1464,7 +1464,7 @@ impl Parser {
     /// misma gramática que el match (variantes **calificadas**: `if let Option.Some(v) = o { … }`).
     fn if_let_expr(&mut self, line: usize, col: usize) -> Result<Expr, ParseError> {
         let pattern = self.pattern()?;
-        self.expect(&TokenKind::Eq, "'=' en 'if let <patrón> = <expr>'")?;
+        self.expect(&TokenKind::Eq, "'=' in 'if let <pattern> = <expr>'")?;
         // El escrutinio va sin paréntesis hasta el `{`; `no_struct_lit` evita tomar `Nombre {` como
         // literal de struct (el `{` abre el bloque del `then`), igual que en la cabecera de un `for`.
         let saved = self.no_struct_lit;
@@ -1547,7 +1547,7 @@ impl Parser {
         let kw = self.expect(&TokenKind::While, "'while'")?;
         self.expect(&TokenKind::LParen, "'(' after 'while'")?;
         let cond = self.expression()?;
-        self.expect(&TokenKind::RParen, "')' after la condición")?;
+        self.expect(&TokenKind::RParen, "')' after the condition")?;
         let body = self.block()?;
         Ok(Expr {
             kind: ExprKind::While { cond: Box::new(cond), body },
@@ -1565,8 +1565,8 @@ impl Parser {
         let kw = self.expect(&TokenKind::Match, "'match'")?;
         self.expect(&TokenKind::LParen, "'(' after 'match'")?;
         let scrutinee = self.expression()?;
-        self.expect(&TokenKind::RParen, "')' after la expresión de match")?;
-        self.expect(&TokenKind::LBrace, "'{' para abrir los brazos del match")?;
+        self.expect(&TokenKind::RParen, "')' after the match expression")?;
+        self.expect(&TokenKind::LBrace, "'{' to open the match arms")?;
         let mut arms = Vec::new();
         while !self.check(&TokenKind::RBrace) {
             arms.push(self.match_arm()?);
@@ -1574,7 +1574,7 @@ impl Parser {
                 break;
             }
         }
-        self.expect(&TokenKind::RBrace, "'}' para close el match")?;
+        self.expect(&TokenKind::RBrace, "'}' to close the match")?;
         Ok(Expr {
             kind: ExprKind::Match { scrutinee: Box::new(scrutinee), arms },
             line: kw.line,
@@ -1592,7 +1592,7 @@ impl Parser {
         } else {
             None
         };
-        self.expect(&TokenKind::FatArrow, "'=>' after el patrón")?;
+        self.expect(&TokenKind::FatArrow, "'=>' after the pattern")?;
         let body = self.expression()?;
         Ok(MatchArm { pattern, guard, body, line, col })
     }
@@ -1604,19 +1604,19 @@ impl Parser {
     /// un identificador seguido de `.` es una variante; uno suelto, un binding; `_`,
     /// el comodín.
     fn pattern(&mut self) -> Result<Pattern, ParseError> {
-        let (name, line, col) = self.expect_ident("un patrón (variant, name o '_')")?;
+        let (name, line, col) = self.expect_ident("a pattern (variant, name or '_')")?;
         // Comodín.
         if name == "_" {
             return Ok(Pattern { kind: PatternKind::Wildcard, line, col });
         }
         // Variante cualificada: `Enum.Variante[(sub-bindings)]`.
         if self.eat(&TokenKind::Dot) {
-            let (mut variant, _, _) = self.expect_ident("el name de la variant")?;
+            let (mut variant, _, _) = self.expect_ident("the variant name")?;
             // Variante calificada por módulo: `M.Enum.Variante` (M11.3c-3). El `enum_name` guarda
             // el `M.Enum` (con `.`), que el loader resuelve a `M::Enum`.
             let mut enum_name = name;
             if self.eat(&TokenKind::Dot) {
-                let (real, _, _) = self.expect_ident("el name de la variant after 'M.Enum.'")?;
+                let (real, _, _) = self.expect_ident("the variant name after 'M.Enum.'")?;
                 enum_name = format!("{}.{}", enum_name, variant);
                 variant = real;
             }
@@ -1629,7 +1629,7 @@ impl Parser {
                         break;
                     }
                 }
-                self.expect(&TokenKind::RParen, "')' para close el patrón de variant")?;
+                self.expect(&TokenKind::RParen, "')' to close the variant pattern")?;
             }
             return Ok(Pattern {
                 kind: PatternKind::Variant { enum_name, variant, subpatterns },
@@ -1643,7 +1643,7 @@ impl Parser {
         if self.eat(&TokenKind::LBrace) {
             let mut fields = Vec::new();
             while !self.check(&TokenKind::RBrace) {
-                let (field_name, fl, fc) = self.expect_ident("el name de un campo")?;
+                let (field_name, fl, fc) = self.expect_ident("a field name")?;
                 // Forma larga `campo: <patrón>` o corta `campo` (≡ `campo: campo`, un binding).
                 let sub = if self.eat(&TokenKind::Colon) {
                     self.pattern()?
@@ -1655,7 +1655,7 @@ impl Parser {
                     break;
                 }
             }
-            self.expect(&TokenKind::RBrace, "'}' para close el patrón de struct")?;
+            self.expect(&TokenKind::RBrace, "'}' to close the struct pattern")?;
             return Ok(Pattern { kind: PatternKind::Struct { name, fields }, line, col });
         }
         // Identificador suelto: binding catch-all.
@@ -1670,7 +1670,7 @@ impl Parser {
         // `[:]` — el Map vacío (indeterminado). El `:` justo tras `[` solo puede ser esto.
         if self.check(&TokenKind::Colon) {
             self.advance(); // ':'
-            self.expect(&TokenKind::RBracket, "']' para close el Map vacío '[:]'")?;
+            self.expect(&TokenKind::RBracket, "']' to close the empty Map '[:]'")?;
             return Ok(Expr { kind: ExprKind::MapLit(Vec::new()), line: open.line, col: open.col });
         }
         // `[]` — el arreglo vacío.
@@ -1688,10 +1688,10 @@ impl Parser {
                     break; // coma final `[a: 1,]`
                 }
                 let k = self.expression()?;
-                self.expect(&TokenKind::Colon, "':' between la clave y el valor del Map")?;
+                self.expect(&TokenKind::Colon, "':' between the Map key and value")?;
                 pairs.push((k, self.expression()?));
             }
-            self.expect(&TokenKind::RBracket, "']' para close el Map")?;
+            self.expect(&TokenKind::RBracket, "']' to close the Map")?;
             return Ok(Expr { kind: ExprKind::MapLit(pairs), line: open.line, col: open.col });
         }
         // Arreglo: el resto de elementos separados por comas.
@@ -1702,7 +1702,7 @@ impl Parser {
             }
             elems.push(self.expression()?);
         }
-        self.expect(&TokenKind::RBracket, "']' para close el array")?;
+        self.expect(&TokenKind::RBracket, "']' to close the array")?;
         Ok(Expr { kind: ExprKind::ArrayLit(elems), line: open.line, col: open.col })
     }
 
@@ -1712,15 +1712,15 @@ impl Parser {
         self.expect(&TokenKind::LBrace, "'{'")?;
         let mut fields = Vec::new();
         while !self.check(&TokenKind::RBrace) {
-            let (fname, _, _) = self.expect_ident("el name de un campo")?;
-            self.expect(&TokenKind::Colon, "':' after el name del campo")?;
+            let (fname, _, _) = self.expect_ident("a field name")?;
+            self.expect(&TokenKind::Colon, "':' after the field name")?;
             let value = self.expression()?;
             fields.push((fname, value));
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
         }
-        self.expect(&TokenKind::RBrace, "'}' para close el literal de struct")?;
+        self.expect(&TokenKind::RBrace, "'}' to close the struct literal")?;
         Ok(Expr { kind: ExprKind::StructLit { name, fields }, line, col })
     }
 
@@ -1777,7 +1777,7 @@ impl Parser {
         if self.check(kind) {
             Ok(self.advance())
         } else {
-            Err(self.error_here(format!("se esperaba {}", what)))
+            Err(self.error_here(format!("expected {}", what)))
         }
     }
 
@@ -1799,7 +1799,7 @@ impl Parser {
             self.tokens[self.pos] = Token::new(TokenKind::Gt, t.line, t.col + 1, 1);
             Ok(())
         } else {
-            Err(self.error_here(format!("se esperaba {}", what)))
+            Err(self.error_here(format!("expected {}", what)))
         }
     }
 
@@ -1810,7 +1810,7 @@ impl Parser {
             self.advance();
             Ok((name, tok.line, tok.col))
         } else {
-            Err(self.error_here(format!("se esperaba {}", what)))
+            Err(self.error_here(format!("expected {}", what)))
         }
     }
 
@@ -1926,7 +1926,7 @@ mod tests {
                 let n = 2000;
                 let src = format!("fn main() -> int {{ {}1{} }}", abre.repeat(n), cierra.repeat(n));
                 let e = parse(crate::lexer::lex(&src).expect("lex ok")).unwrap_err();
-                assert!(e.msg.contains("nesting demasiado profundo"), "{abre}: {}", e.msg);
+                assert!(e.msg.contains("nesting too deep"), "{abre}: {}", e.msg);
             }
             // Y el anidamiento razonable sigue pasando.
             let src = format!("fn main() -> int {{ {}1{} }}", "(".repeat(500), ")".repeat(500));
@@ -1939,7 +1939,7 @@ mod tests {
         // M33a: el error lleva la extensión del token que lo provocó.
         let tokens = crate::lexer::lex("fn main() -> int { let x = enum; x }").expect("lex ok");
         let e = parse(tokens).unwrap_err();
-        assert!(e.msg.contains("se esperaba one expresión"), "{}", e.msg);
+        assert!(e.msg.contains("expected an expression"), "{}", e.msg);
         assert_eq!(e.len, 4, "'enum' mide 4 caracteres");
         // Un identificador ofensor mide su nombre entero.
         let tokens = crate::lexer::lex("fn main() -> int { 1 nombrelargo }").expect("lex ok");
@@ -2508,7 +2508,7 @@ fn main() -> int {
     fn impl_sin_for_es_error() {
         let tokens = crate::lexer::lex("impl T S { } fn main() -> int { 0 }").expect("lex ok");
         let err = parse(tokens).expect_err("falta 'for'");
-        assert!(err.msg.contains("se esperaba 'for'"), "mensaje: {}", err.msg);
+        assert!(err.msg.contains("expected 'for'"), "mensaje: {}", err.msg);
     }
 
     #[test]
@@ -2535,7 +2535,7 @@ fn main() -> int {
     fn parse_annotation_about_impl_es_error() {
         let tokens = crate::lexer::lex("@test\ntrait T { fn f(self) -> int; }").expect("lex ok");
         let err = parse(tokens).expect_err("anotación about trait");
-        assert!(err.msg.contains("no se permiten annotations"), "mensaje: {}", err.msg);
+        assert!(err.msg.contains("annotations are not allowed"), "mensaje: {}", err.msg);
     }
 
     #[test]

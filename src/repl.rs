@@ -392,6 +392,6 @@ mod tests {
     fn lo_indeterminado_asks_annotation() {
         let mut s = Session::new();
         let e = s.eval("let xs = []").unwrap_err();
-        assert!(e.contains("no se can inferir"), "mensaje: {}", e);
+        assert!(e.contains("cannot infer"), "mensaje: {}", e);
     }
 }

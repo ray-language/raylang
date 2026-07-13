@@ -269,7 +269,7 @@ fn error_en_modulo_no_entry_se_atribuye() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert_ne!(out.status.code(), Some(0), "el error de types must fallar");
     assert!(err.contains("[mates]"), "atribuido al módulo mates\n{err}");
-    assert!(err.contains("en 2:"), "con su línea local (2), no la global\n{err}");
+    assert!(err.contains("at 2:"), "con su línea local (2), no la global\n{err}");
     // M33a-2: el span de la expresión viaja con la banda de líneas del módulo — el
     // subrayado cubre `n + "x"` entero (7 chars). Si el shift de la tabla se rompiera,
     // la clave no casaría y se dibujaría un solo `^`.

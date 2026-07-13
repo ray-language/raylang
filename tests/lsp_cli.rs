@@ -167,7 +167,7 @@ fn public_diagnostic_al_redefine_un_builtin() {
     let entry = frame(open) + &frame(r#"{"jsonrpc":"2.0","method":"exit"}"#);
     let out = lsp(&entry);
     assert!(out.contains("textDocument/publishDiagnostics"), "public diagnósticos\n{out}");
-    assert!(out.contains("es un builtin del lenguaje"), "mensaje del footgun\n{out}");
+    assert!(out.contains("is a language builtin"), "mensaje del footgun\n{out}");
 }
 
 #[test]
